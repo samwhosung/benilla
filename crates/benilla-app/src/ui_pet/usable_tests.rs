@@ -561,19 +561,17 @@ fn icon_is_grey(rig: &mut Rig, icon: &str) -> bool {
     })
 }
 
-/// A left click on `PetActionButton1`, at its own centre, and the frame's script calls applied.
+/// A left click on `PetActionButton1`, at its own centre, with the host lent as the input pass
+/// lends it.
 fn click_first_button(rig: &mut Rig) {
     let (x, y): (f32, f32) = ui(rig, |s| {
         s.eval("return PetActionButton1:GetCenter()").unwrap()
     });
-    ui(rig, |s| {
+    crate::script_calls::with_hosted_vm(rig.app.world_mut(), |s| {
+        let s = s.expect("a VM");
         s.mouse_button(x, y, "LeftButton", true);
         s.mouse_button(x, y, "LeftButton", false);
     });
-    rig.app
-        .world_mut()
-        .run_system_once(crate::script_calls::apply_script_calls)
-        .expect("the frame's script calls apply");
 }
 
 /// With the default UI loaded, the stock bar reads `GetPetActionsUsable` for its icons and clicks

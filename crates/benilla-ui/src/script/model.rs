@@ -418,13 +418,15 @@ pub(crate) struct Model {
     pub(crate) cancel_aura_requests: Vec<u32>,
     /// The player's active tracking aura, behind `GetTrackingTexture`.
     pub(crate) tracking: Option<super::aura::TrackingState>,
-    /// The calls that touch the selection, the cast or the targeting cursor, in call order.
+    /// The calls that touch the selection, the cast or the targeting cursor made while the host
+    /// was out, in call order, for it to apply as soon as it is back.
     pub(crate) script_calls: Vec<super::calls::QueuedCall>,
     /// How many drains of [`Self::script_calls`] are running, each inside a call the one outside
     /// it applied ([`super::calls::submit`]).
     pub(crate) call_depth: u8,
-    /// Calls made past the nesting bound, for the next frame's drain.
-    pub(crate) deferred_calls: Vec<super::calls::QueuedCall>,
+    /// A harness's VM keeps the calls made with no host lent here ([`super::UiScript::keep_calls`]);
+    /// `None` refuses them.
+    pub(crate) kept_calls: Option<Vec<super::ScriptCall>>,
     /// The binding functions' queue and mouselook state.
     pub(crate) input: super::input_verbs::InputState,
     /// The selection change a script call made and the input events it ran under, for the event
@@ -1551,7 +1553,7 @@ impl Model {
             tracking: None,
             script_calls: Vec::new(),
             call_depth: 0,
-            deferred_calls: Vec::new(),
+            kept_calls: None,
             input: Default::default(),
             protected: Default::default(),
             selection_cause: None,

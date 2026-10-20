@@ -1,8 +1,9 @@
-//! The lent call host: the engine half of the script calls, which an entry that holds it lends the
-//! VM for the length of a Lua call ([`UiScript::hosted`]), so a verb's call applies inside the verb
-//! as the reference's does. `CastSpellByName` (`0x4b4ab0`) reaches `ArmCastTargets 0x6e5250`
-//! through direct calls, so `SpellIsTargeting()` (`0x6e6cd0`) on the script's next line reads the
-//! armed word. With no host lent, a call waits in the queue for the host's next drain.
+//! The lent call host: the engine half of the script calls, which every entry that runs Lua lends
+//! the VM for the length of it ([`UiScript::hosted`]), so a verb's call applies inside the verb as
+//! the reference's does, whatever entry the script came in by. `CastSpellByName` (`0x4b4ab0`)
+//! reaches `ArmCastTargets 0x6e5250` through direct calls, so `SpellIsTargeting()` (`0x6e6cd0`) on
+//! the script's next line reads the armed word. The reference has no queue between a verb and its
+//! effect, so a call made with no host lent is refused with a Lua error.
 
 use std::cell::Cell;
 use std::ptr::NonNull;
@@ -14,24 +15,30 @@ use super::{ScriptCall, UiScript};
 /// The engine half of the script calls: what applies a call to the state outside the VM.
 pub trait CallHost {
     /// Apply `call`, with the input events it was made under raised. The host is out of the VM
-    /// while this runs, so a call a handler makes meanwhile queues, and the drain applies it next,
-    /// ahead of any call queued after this one. Whatever must run Lua with the host back in place
-    /// (an event this call signals, a macro's lines) is returned as the tail.
+    /// while this runs, so a call a handler makes meanwhile waits, and applies next, ahead of any
+    /// made after this one. Whatever must run Lua with the host back in place (an event this call
+    /// signals, a macro's lines) is returned as the tail.
     fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail>;
 }
 
 /// What a call leaves for the VM to run once its host is back in the VM.
 pub type CallTail = Box<dyn FnOnce(&mut UiScript)>;
 
-/// The lent host, while one is lent and not out applying a call.
+/// The host's place in the VM.
 ///
-/// The invariant that makes [`lend`] and [`with_host`] sound: a pointer in the slot is valid and
+/// The invariant that makes [`lend`] and [`with_host`] sound: a pointer in `host` is valid and
 /// unaliased. [`lend`] puts it there from a `&mut` that it holds borrowed until it returns, and
 /// takes it out again before it returns or unwinds; [`with_host`] takes it out of the slot before
 /// it makes the one `&mut` it hands on, and puts it back after. So no pointer outlives the borrow
-/// it came from, and no two `&mut` to the host exist at once.
+/// it came from, and no two `&mut` to the host exist at once. `open` holds no pointer.
 #[derive(Default)]
-struct HostSlot(Cell<Option<NonNull<dyn CallHost + 'static>>>);
+struct HostSlot {
+    /// The lent host, while one is lent and not out applying a call.
+    host: Cell<Option<NonNull<dyn CallHost + 'static>>>,
+    /// The lends and the engine turns ([`UiScript::host_out`]) running now. While any is, a call
+    /// is the host's: it applies at once with the host in the slot, else as soon as it is back.
+    open: Cell<u32>,
+}
 
 /// Install the empty slot at the VM's birth: app data is never inserted while any is borrowed
 /// (`handler_prof::install`), and a lend may come while a verb holds the model.
@@ -46,6 +53,23 @@ fn slot(lua: &Lua) -> mlua::AppDataRef<'_, HostSlot> {
         .expect("the host slot is installed at the VM's birth")
 }
 
+/// Hold the slot open while it lives: a call made meanwhile waits for the host rather than being
+/// refused.
+struct Open<'a>(mlua::AppDataRef<'a, HostSlot>);
+
+impl<'a> Open<'a> {
+    fn new(slot: mlua::AppDataRef<'a, HostSlot>) -> Self {
+        slot.open.set(slot.open.get() + 1);
+        Open(slot)
+    }
+}
+
+impl Drop for Open<'_> {
+    fn drop(&mut self) {
+        self.0.open.set(self.0.open.get() - 1);
+    }
+}
+
 /// Lend `host` to the VM of `lua` while `f` runs, then take it back, `f` unwinding included. A
 /// host lent already is put back after.
 pub(crate) fn lend<R>(lua: &Lua, host: &mut dyn CallHost, f: impl FnOnce() -> R) -> R {
@@ -55,15 +79,16 @@ pub(crate) fn lend<R>(lua: &Lua, host: &mut dyn CallHost, f: impl FnOnce() -> R)
     }
     impl Drop for Restore<'_> {
         fn drop(&mut self) {
-            self.slot.0.set(self.before);
+            self.slot.host.set(self.before);
         }
     }
     let lent: NonNull<dyn CallHost + '_> = NonNull::from(host);
     // SAFETY: only the lifetime bound changes; the slot's invariant (above) keeps the pointer from
     // being used past this call, which holds `host` borrowed throughout.
     let lent: NonNull<dyn CallHost + 'static> = unsafe { std::mem::transmute(lent) };
+    let _open = Open::new(slot(lua));
     let slot = slot(lua);
-    let before = slot.0.replace(Some(lent));
+    let before = slot.host.replace(Some(lent));
     let _restore = Restore { slot, before };
     f()
 }
@@ -77,11 +102,11 @@ pub(crate) fn with_host<R>(lua: &Lua, f: impl FnOnce(&mut dyn CallHost) -> R) ->
     }
     impl Drop for PutBack<'_> {
         fn drop(&mut self) {
-            self.slot.0.set(Some(self.host));
+            self.slot.host.set(Some(self.host));
         }
     }
     let slot = slot(lua);
-    let host = slot.0.take()?;
+    let host = slot.host.take()?;
     let _back = PutBack { slot, host };
     // SAFETY: the pointer came out of the slot, so by its invariant it is valid, and this is the
     // only `&mut` made from it until it goes back.
@@ -90,20 +115,46 @@ pub(crate) fn with_host<R>(lua: &Lua, f: impl FnOnce(&mut dyn CallHost) -> R) ->
 
 /// Whether a host is lent and in the slot, so a call submitted now applies at once.
 pub(crate) fn free(lua: &Lua) -> bool {
-    slot(lua).0.get().is_some()
+    slot(lua).host.get().is_some()
+}
+
+/// Whether a call made now is the host's: a lend or an engine turn is running.
+pub(crate) fn open(lua: &Lua) -> bool {
+    slot(lua).open.get() > 0
 }
 
 impl UiScript {
     /// Run `f` with `host` lent to the VM: each script call a verb makes meanwhile applies before
     /// the verb returns, in call order, through [`CallHost::apply`], as the reference's verbs do.
-    /// What an entry with no host left queued (an `OnUpdate`, an event's handler) was made before
-    /// `f` runs, so it applies first, each call under its own events.
+    /// What an engine turn of this entry left ([`Self::host_out`]) applies first, each call under
+    /// its own events. When the outermost lend ends, nothing waits.
     pub fn hosted<R>(&mut self, host: &mut dyn CallHost, f: impl FnOnce(&mut UiScript) -> R) -> R {
         let lua = self.lua().clone();
-        lend(&lua, host, || {
+        let r = lend(&lua, host, || {
             super::calls::drain(&lua);
             f(self)
-        })
+        });
+        if !open(&lua) {
+            super::calls::refuse_waiting(&lua);
+        }
+        r
+    }
+
+    /// Run `f` as an engine turn: the app's half of a verb or an engine step that holds the host's
+    /// own state alongside the VM, so it cannot lend the host meanwhile. A call the Lua `f` runs
+    /// makes waits, as one made while the host applies a call does; the entry lends the host when
+    /// the turn ends ([`Self::hosted`]), which applies it, or drops it with
+    /// [`Self::refuse_waiting`] when it has none to lend.
+    pub fn host_out<R>(&mut self, f: impl FnOnce(&mut UiScript) -> R) -> R {
+        let lua = self.lua().clone();
+        let _open = Open::new(slot(&lua));
+        f(self)
+    }
+
+    /// Drop the calls an engine turn left with no host to apply them, a harness without the
+    /// engine's half; the count dropped.
+    pub fn refuse_waiting(&mut self) -> usize {
+        super::calls::refuse_waiting(self.lua())
     }
 
     /// Whether a host is lent and free to apply a call now.
@@ -112,7 +163,6 @@ impl UiScript {
     }
 }
 
-/// A host that records the calls it applies, for the verbs' tests.
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::{CallHost, CallTail, ScriptCall, UiScript};

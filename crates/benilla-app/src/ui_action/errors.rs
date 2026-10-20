@@ -972,6 +972,7 @@ mod message_input_tests {
     #[test]
     fn a_shown_line_signals_its_event_under_the_events_it_carries() {
         let mut script = UiScript::new().unwrap();
+        script.keep_calls();
         script.set_spellbook(benilla_ui::script::SpellBookState {
             tabs: vec![benilla_ui::script::SpellTabView {
                 name: "Fire".into(),

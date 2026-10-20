@@ -78,6 +78,7 @@ fn show_bars(s: &UiScript, bars: &[u32]) {
 fn shipped_multibars_drive_end_to_end() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     let frames = load_action_bar(&s, &[]);
     benilla_ui::assert_near!(
@@ -254,6 +255,8 @@ fn shipped_stance_bar_drives_end_to_end() {
     use benilla_ui::script::ShapeshiftFormView;
 
     let mut s = UiScript::new().unwrap();
+
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // `ShapeshiftBarFrame` is parented to `MainMenuBar` and its update calls
     // `CooldownFrame_SetTimer` (BonusActionBarFrame.lua:201), so both load first.

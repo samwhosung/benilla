@@ -146,90 +146,93 @@ fn honor_snapshot(store: &ObjectStore) -> Option<HonorState> {
 
 /// Push the self snapshot and the inspect reply, and drain the pane's request.
 pub(crate) fn feed_honor(
-    script: Option<NonSendMut<UiScript>>,
+    // The selection, read before the VM runs with the host lent, which a call may move.
+    mut hosted: ParamSet<(Res<crate::target::Selection>, crate::script_calls::HostedVm)>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     inspect_target: Res<crate::ui_inspect::InspectTarget>,
-    selection: Res<crate::target::Selection>,
     group: Res<crate::ui_party::GroupState>,
     mut inspect_honor: ResMut<InspectHonor>,
     mut state: ResMut<HonorFeedState>,
     commands: Res<NetCommands>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let memo = state.vm.get(&script);
+    let selection = *hosted.p0();
+    hosted.p1().run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        let memo = state.vm.get(&script);
 
-    // --- the self snapshot -------------------------------------------------------------------
-    if let Ok(store) = self_store.single() {
-        if let Some(fresh) = honor_snapshot(store) {
-            if memo.last.as_ref() != Some(&fresh) {
-                script.set_honor(Some(fresh));
-                memo.last = Some(fresh);
+        // --- the self snapshot -------------------------------------------------------------------
+        if let Ok(store) = self_store.single() {
+            if let Some(fresh) = honor_snapshot(store) {
+                if memo.last.as_ref() != Some(&fresh) {
+                    script.set_honor(Some(fresh));
+                    memo.last = Some(fresh);
+                }
             }
         }
-    }
 
-    // --- the inspect reply -------------------------------------------------------------------
-    // The reference's latch clears only at `0x4c6f70`, from a `NotifyInspect` naming another
-    // player, and on `ClearInspectPlayer`. Deviation: we clear it whenever the inspected token's
-    // guid moves, because our window re-resolves its token each frame and both tabs read it, so
-    // the reference's rule would let the two tabs show different players. `ClearInspectPlayer`
-    // drops the token, which clears the slot here too.
-    let inspected = inspect_target
-        .token
-        .as_deref()
-        .and_then(|t| crate::ui_unit::player_token_guid(t, &selection, &group));
-    if inspect_honor
-        .0
-        .as_ref()
-        .is_some_and(|reply| Some(reply.player_guid) != inspected)
-    {
-        // Dropped from the resource, so `HasInspectHonorData` and this store agree.
-        inspect_honor.0 = None;
-    }
-    let held = inspect_honor.0.as_ref().map(|r| r.player_guid);
-    if memo.last_inspect != held {
-        script.set_inspect_honor(inspect_honor.0.as_ref().map(|r| {
-            let (session_hk, session_dk) = r.session_kills();
-            InspectHonorData {
-                guid: r.player_guid,
-                session_hk,
-                session_dk,
-                yesterday_hk: r.yesterday_hk,
-                yesterday_honor: r.yesterday_honor,
-                this_week_hk: r.this_week_hk,
-                this_week_honor: r.this_week_honor,
-                last_week_hk: r.last_week_hk,
-                last_week_honor: r.last_week_honor,
-                last_week_standing: r.last_week_rank,
-                lifetime_hk: r.lifetime_hk,
-                lifetime_dk: r.lifetime_dhk,
-                highest_rank: r.highest_rank,
-                rank_bar: r.rank_bar,
-            }
-        }));
-        memo.last_inspect = held;
-        // Fired on a clear too, so the pane stops showing the previous player's numbers.
-        script.fire_event("INSPECT_HONOR_UPDATE", Vec::<ScriptValue>::new());
-    }
-
-    // --- the pane's request ------------------------------------------------------------------
-    // `RequestInspectHonorData()` takes no argument: it asks about the inspected token's guid now,
-    // so a re-target before the Honor tab opens asks about the new player.
-    let requests = script.take_inspect_honor_requests();
-    if requests > 0 {
-        match inspected {
-            Some(guid) => {
-                debug!("honor: inspect-honor request -> {guid:#x}");
-                let _ = commands
-                    .0
-                    .send(ClientCommand::InspectHonorStats { target: guid });
-            }
-            // Nothing to ask about; the pane asks again from its next `OnShow`.
-            None => debug!("honor: inspect-honor request with no resolvable target — not sent"),
+        // --- the inspect reply -------------------------------------------------------------------
+        // The reference's latch clears only at `0x4c6f70`, from a `NotifyInspect` naming another
+        // player, and on `ClearInspectPlayer`. Deviation: we clear it whenever the inspected token's
+        // guid moves, because our window re-resolves its token each frame and both tabs read it, so
+        // the reference's rule would let the two tabs show different players. `ClearInspectPlayer`
+        // drops the token, which clears the slot here too.
+        let inspected = inspect_target
+            .token
+            .as_deref()
+            .and_then(|t| crate::ui_unit::player_token_guid(t, &selection, &group));
+        if inspect_honor
+            .0
+            .as_ref()
+            .is_some_and(|reply| Some(reply.player_guid) != inspected)
+        {
+            // Dropped from the resource, so `HasInspectHonorData` and this store agree.
+            inspect_honor.0 = None;
         }
-    }
+        let held = inspect_honor.0.as_ref().map(|r| r.player_guid);
+        if memo.last_inspect != held {
+            script.set_inspect_honor(inspect_honor.0.as_ref().map(|r| {
+                let (session_hk, session_dk) = r.session_kills();
+                InspectHonorData {
+                    guid: r.player_guid,
+                    session_hk,
+                    session_dk,
+                    yesterday_hk: r.yesterday_hk,
+                    yesterday_honor: r.yesterday_honor,
+                    this_week_hk: r.this_week_hk,
+                    this_week_honor: r.this_week_honor,
+                    last_week_hk: r.last_week_hk,
+                    last_week_honor: r.last_week_honor,
+                    last_week_standing: r.last_week_rank,
+                    lifetime_hk: r.lifetime_hk,
+                    lifetime_dk: r.lifetime_dhk,
+                    highest_rank: r.highest_rank,
+                    rank_bar: r.rank_bar,
+                }
+            }));
+            memo.last_inspect = held;
+            // Fired on a clear too, so the pane stops showing the previous player's numbers.
+            script.fire_event("INSPECT_HONOR_UPDATE", Vec::<ScriptValue>::new());
+        }
+
+        // --- the pane's request ------------------------------------------------------------------
+        // `RequestInspectHonorData()` takes no argument: it asks about the inspected token's guid now,
+        // so a re-target before the Honor tab opens asks about the new player.
+        let requests = script.take_inspect_honor_requests();
+        if requests > 0 {
+            match inspected {
+                Some(guid) => {
+                    debug!("honor: inspect-honor request -> {guid:#x}");
+                    let _ = commands
+                        .0
+                        .send(ClientCommand::InspectHonorStats { target: guid });
+                }
+                // Nothing to ask about; the pane asks again from its next `OnShow`.
+                None => debug!("honor: inspect-honor request with no resolvable target — not sent"),
+            }
+        }
+    })
 }
 
 #[cfg(test)]

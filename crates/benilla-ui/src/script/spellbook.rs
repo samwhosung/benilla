@@ -635,7 +635,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                                 may_cast,
                             }
                         },
-                    );
+                    )?;
                 }
                 Ok(())
             },
@@ -744,7 +744,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         on_self,
                         may_cast,
                     },
-                );
+                )?;
             }
             Ok(())
         })?,
@@ -778,7 +778,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 .cast_view
                 .stoppable();
             if may_stop && stoppable {
-                super::calls::submit(lua, ScriptCall::SpellStopCasting);
+                super::calls::submit(lua, ScriptCall::SpellStopCasting)?;
                 Ok(Value::Integer(1))
             } else {
                 Ok(Value::Nil)
@@ -829,7 +829,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 .expect("model app_data")
                 .spell_targeting;
             if may_stop && targeting {
-                super::calls::submit(lua, ScriptCall::SpellStopTargeting);
+                super::calls::submit(lua, ScriptCall::SpellStopTargeting)?;
                 Ok(Value::Integer(1))
             } else {
                 Ok(Value::Nil)
@@ -1221,6 +1221,7 @@ mod tests {
     #[test]
     fn passive_refuses_the_cast_but_active_queues_it() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_spellbook(book());
 
         s.run(r#"CastSpell(1, BOOKTYPE_SPELL)"#).unwrap(); // Fireball: active
@@ -1242,6 +1243,7 @@ mod tests {
     #[test]
     fn cast_spell_by_name_reads_on_self_as_the_reference_coerces_it() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_spellbook(book());
         for (arg, on_self) in [
             ("", false),
@@ -1275,6 +1277,7 @@ mod tests {
     #[test]
     fn cast_spell_reads_on_self_from_its_third_argument() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_spellbook(book());
         s.set_pet_book(pet_book());
         for (arg, on_self) in [
@@ -1535,6 +1538,7 @@ mod tests {
     #[test]
     fn a_pet_cast_queues_apart_from_a_player_cast() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_spellbook(book());
         s.set_pet_book(pet_book());
 

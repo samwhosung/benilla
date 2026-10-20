@@ -8,7 +8,7 @@
 //! delays the popup rather than dropping it; the reference reads it off the streamed player and
 //! fires nothing without one (`0x4d4a72`).
 
-use benilla_ui::script::{DuelRequest, ScriptValue, UiScript};
+use benilla_ui::script::{DuelRequest, ScriptValue};
 use bevy::prelude::*;
 
 use crate::names::NameCache;
@@ -364,55 +364,60 @@ fn tick_countdown(time: Res<Time>, mut duel: ResMut<DuelState>, mut started: Loc
 
 /// Drain the duel verbs' intents into their sends.
 fn drain_duel(
-    script: Option<NonSendMut<UiScript>>,
+    // What the host also reaches, read before the VM runs with the host lent.
+    mut hosted: ParamSet<(Res<Selection>, crate::script_calls::HostedVm)>,
     duel: Res<DuelState>,
     spells: Option<Res<Spells>>,
     actions: Res<crate::ui_action::PlayerActions>,
-    selection: Res<Selection>,
     index: Res<GuidIndex>,
     self_q: Query<&Guid, With<SelfPlayer>>,
     commands: Res<NetCommands>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let requests = script.take_duel_requests();
-    if requests.is_empty() {
-        return;
-    }
-    let self_guid = self_q.iter().next().map(|g| g.0);
-    for req in requests {
-        match req {
-            DuelRequest::Accept => {
-                if duel.arbiter != 0 {
-                    let _ = commands.0.send(ClientCommand::DuelAccepted {
-                        arbiter: duel.arbiter,
-                    });
+    let p = hosted.p0();
+    let selection = *p;
+    drop(p);
+    hosted.p1().run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        let requests = script.take_duel_requests();
+        if requests.is_empty() {
+            return;
+        }
+        let self_guid = self_q.iter().next().map(|g| g.0);
+        for req in requests {
+            match req {
+                DuelRequest::Accept => {
+                    if duel.arbiter != 0 {
+                        let _ = commands.0.send(ClientCommand::DuelAccepted {
+                            arbiter: duel.arbiter,
+                        });
+                    }
                 }
-            }
-            DuelRequest::Cancel => {
-                if duel.arbiter != 0 {
-                    let _ = commands.0.send(ClientCommand::DuelCancelled {
-                        arbiter: duel.arbiter,
-                    });
+                DuelRequest::Cancel => {
+                    if duel.arbiter != 0 {
+                        let _ = commands.0.send(ClientCommand::DuelCancelled {
+                            arbiter: duel.arbiter,
+                        });
+                    }
                 }
-            }
-            DuelRequest::StartByUnit(token) => {
-                // `StartDuelUnit` (`0x4d4c90`) resolves the token through `0x515970`, with no
-                // player gate; these are the tokens the unit popup passes.
-                let guid = match token.as_str() {
-                    "target" => selection.guid,
-                    "player" => self_guid,
-                    _ => None,
-                };
-                challenge(guid, self_guid, &index, &spells, &actions, &commands);
-            }
-            DuelRequest::StartByGuid(guid) => {
-                // `/duel <name>`: the binding resolved the name through `0x493aa0` (`0x4d4c6d`).
-                challenge(Some(guid), self_guid, &index, &spells, &actions, &commands);
+                DuelRequest::StartByUnit(token) => {
+                    // `StartDuelUnit` (`0x4d4c90`) resolves the token through `0x515970`, with no
+                    // player gate; these are the tokens the unit popup passes.
+                    let guid = match token.as_str() {
+                        "target" => selection.guid,
+                        "player" => self_guid,
+                        _ => None,
+                    };
+                    challenge(guid, self_guid, &index, &spells, &actions, &commands);
+                }
+                DuelRequest::StartByGuid(guid) => {
+                    // `/duel <name>`: the binding resolved the name through `0x493aa0` (`0x4d4c6d`).
+                    challenge(Some(guid), self_guid, &index, &spells, &actions, &commands);
+                }
             }
         }
-    }
+    })
 }
 
 /// A streamed player by name, case-insensitive, for a typed `/duel` argument.
@@ -497,6 +502,7 @@ impl Plugin for UiDuelPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use benilla_ui::script::UiScript;
 
     /// The challenge looks its challenger's name up once, as its packet's; the frames the popup
     /// waits through read. A refused name is asked by no frame after it, only by the next

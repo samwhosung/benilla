@@ -1371,11 +1371,11 @@ pub(crate) fn run_feed_units_once(world: &mut World) {
 }
 
 fn feed_units(
-    script: Option<NonSendMut<UiScript>>,
+    // What the host also reaches, read before the VM runs with the host lent.
+    mut hosted: ParamSet<(Res<Selection>, crate::script_calls::HostedVm)>,
     tables: SnapshotTables,
 
     self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
-    selection: Res<Selection>,
     // `Option`, as `factions`, `interact` and `entered_world`: a UI-only harness lacks their
     // plugins, and a bare `Res` is a system-validation panic.
     index: Option<Res<crate::net::GuidIndex>>,
@@ -1391,339 +1391,343 @@ fn feed_units(
     mut guild: ResMut<crate::ui_guild::GuildState>,
     interact: Option<Res<crate::ui_session::InteractNpc>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let chr = tables.unit_names();
-    let types = tables.types(&names);
-    // One reborrow, so the memo and `warned_sideless` borrow disjointly rather than alias.
-    let feed = &mut *feed;
-    let (memo, vm_reset) = feed.vm.get_reset(&script);
+    let p = hosted.p0();
+    let selection_changed = p.is_changed();
+    let selection = *p;
+    hosted.p1().run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        let chr = tables.unit_names();
+        let types = tables.types(&names);
+        // One reborrow, so the memo and `warned_sideless` borrow disjointly rather than alias.
+        let feed = &mut *feed;
+        let (memo, vm_reset) = feed.vm.get_reset(&script);
 
-    // The gate: every input read below, despawns included (invisible to `Changed`).
-    let names_moved = memo.names_generation.moved(names.generation());
-    let guild_moved = memo.guild_generation.moved(guild.identity_generation());
-    let selection_changed = selection.is_changed();
-    let stores_changed = !stores.changed.is_empty();
-    let stores_removed = !stores.removed.is_empty();
-    let group_changed = group.is_changed();
-    let relations_changed = world.inputs_changed();
-    // The interaction NPC moves when nothing else does, and `MERCHANT_SHOW` reads `"npc"`.
-    let interact_changed = interact.as_ref().is_some_and(|r| r.is_changed());
-    // A selection call showed its pick as `"target"` inside its chunk, past this memo.
-    let target_view_moved = script.take_target_view_moved();
-    gate::trace(
-        "feed_units",
-        &[
-            ("vm_reset", vm_reset),
-            ("names", names_moved),
-            ("guild", guild_moved),
-            ("selection", selection_changed),
-            ("stores", stores_changed),
-            ("removed", stores_removed),
-            ("group", group_changed),
-            ("relations", relations_changed),
-            ("interact", interact_changed),
-            ("target_view", target_view_moved),
-        ],
-    );
-    let gate = gate::Gate::new(
-        vm_reset
-            || names_moved
-            || guild_moved
-            || selection_changed
-            || stores_changed
-            || stores_removed
-            || group_changed
-            || relations_changed
-            || interact_changed
-            || target_view_moved,
-    );
-    stores.removed.clear();
-    if gate.skip() {
-        return;
-    }
-
-    // A missing unit is `None`, which `set_unit` clears; a name miss lands on a later frame.
-    let self_pair = self_q.iter().next();
-    let player = self_pair.map(|(store, guid)| {
-        player_snapshot(
-            store,
-            guid.0,
-            &tables,
-            &names,
-            &commands,
-            &group,
-            world.factions(),
-            &mut guild,
-        )
-    });
-    // Log once when our template names no side, almost always GM mode (vmangos forces template
-    // 35, group mask 0): every `UnitFactionGroup` surface loses its side, as in the reference.
-    if let Some(p) = &player {
-        let sideless = p.faction_group.is_none();
-        if sideless && !feed.warned_sideless {
-            warn!(
-                "faction: our own template names no side (usually GM mode — vmangos forces \
-                 template 35, group mask 0). Every UnitFactionGroup-derived surface loses its \
-                 side while this holds — the PvP flag icon stays hidden however flagged you are. \
-                 `.gm off` restores it. (The Honor tab's rank title is NOT one of these: its team \
-                 digit comes from your race, not your template.)"
-            );
+        // The gate: every input read below, despawns included (invisible to `Changed`).
+        let names_moved = memo.names_generation.moved(names.generation());
+        let guild_moved = memo.guild_generation.moved(guild.identity_generation());
+        let stores_changed = !stores.changed.is_empty();
+        let stores_removed = !stores.removed.is_empty();
+        let group_changed = group.is_changed();
+        let relations_changed = world.inputs_changed();
+        // The interaction NPC moves when nothing else does, and `MERCHANT_SHOW` reads `"npc"`.
+        let interact_changed = interact.as_ref().is_some_and(|r| r.is_changed());
+        // A selection call showed its pick as `"target"` inside its chunk, past this memo.
+        let target_view_moved = script.take_target_view_moved();
+        gate::trace(
+            "feed_units",
+            &[
+                ("vm_reset", vm_reset),
+                ("names", names_moved),
+                ("guild", guild_moved),
+                ("selection", selection_changed),
+                ("stores", stores_changed),
+                ("removed", stores_removed),
+                ("group", group_changed),
+                ("relations", relations_changed),
+                ("interact", interact_changed),
+                ("target_view", target_view_moved),
+            ],
+        );
+        let gate = gate::Gate::new(
+            vm_reset
+                || names_moved
+                || guild_moved
+                || selection_changed
+                || stores_changed
+                || stores_removed
+                || group_changed
+                || relations_changed
+                || interact_changed
+                || target_view_moved,
+        );
+        stores.removed.clear();
+        if gate.skip() {
+            return;
         }
-        feed.warned_sideless = sideless;
-    }
-    // What the three snapshots below (target, target-of-target, NPC) read besides a descriptor.
-    let object = |guid: u64| {
-        let entity = *index.as_ref()?.0.get(&guid)?;
-        stores.all.get(entity).ok()
-    };
-    let held = held::HeldUnits {
-        names: &names,
-        commands: &commands,
-        group: &group,
-        self_store: self_pair.map(|(s, _)| s),
-        unit_names: chr,
-        types,
-        rel: world.get(),
-        me: world.me(),
-        tooltip: tooltip_facts::TooltipSources {
+
+        // A missing unit is `None`, which `set_unit` clears; a name miss lands on a later frame.
+        let self_pair = self_q.iter().next();
+        let player = self_pair.map(|(store, guid)| {
+            player_snapshot(
+                store,
+                guid.0,
+                &tables,
+                &names,
+                &commands,
+                &group,
+                world.factions(),
+                &mut guild,
+            )
+        });
+        // Log once when our template names no side, almost always GM mode (vmangos forces template
+        // 35, group mask 0): every `UnitFactionGroup` surface loses its side, as in the reference.
+        if let Some(p) = &player {
+            let sideless = p.faction_group.is_none();
+            if sideless && !feed.warned_sideless {
+                warn!(
+                    "faction: our own template names no side (usually GM mode — vmangos forces \
+                     template 35, group mask 0). Every UnitFactionGroup-derived surface loses its \
+                     side while this holds — the PvP flag icon stays hidden however flagged you are. \
+                     `.gm off` restores it. (The Honor tab's rank title is NOT one of these: its team \
+                     digit comes from your race, not your template.)"
+                );
+            }
+            feed.warned_sideless = sideless;
+        }
+        // What the three snapshots below (target, target-of-target, NPC) read besides a descriptor.
+        let object = |guid: u64| {
+            let entity = *index.as_ref()?.0.get(&guid)?;
+            stores.all.get(entity).ok()
+        };
+        let held = held::HeldUnits {
             names: &names,
-            catalog: tables.catalog(),
-            object: &object,
-            study: tables.study(),
-        },
-    };
-    let target = selection.target.zip(selection.guid).and_then(|(e, guid)| {
-        let store = stores.all.get(e).ok()?;
-        let mut s = held.state(store, guid);
-        s.guild = crate::ui_guild::unit_guild(&store.0, &mut guild, &commands);
-        Some(s)
-    });
+            commands: &commands,
+            group: &group,
+            self_store: self_pair.map(|(s, _)| s),
+            unit_names: chr,
+            types,
+            rel: world.get(),
+            me: world.me(),
+            tooltip: tooltip_facts::TooltipSources {
+                names: &names,
+                catalog: tables.catalog(),
+                object: &object,
+                study: tables.study(),
+            },
+        };
+        let target = selection.target.zip(selection.guid).and_then(|(e, guid)| {
+            let store = stores.all.get(e).ok()?;
+            let mut s = held.state(store, guid);
+            s.guild = crate::ui_guild::unit_guild(&store.0, &mut guild, &commands);
+            Some(s)
+        });
 
-    // `"targettarget"`: one hop off the target's `UNIT_FIELD_TARGET`, streamed guids only, for the
-    // stock frame's poll (`TargetofTarget_OnUpdate`, `TargetFrame.lua:494-538`): no unit event
-    // carries the hop, whose token is none of `0x515c50`'s. No guild leg: nothing asks it for one,
-    // and a lazy-cache miss sends a query.
-    let tot = selection
-        .target
-        .and_then(|e| stores.all.get(e).ok())
-        .and_then(|s| s.0.unit_target())
-        .filter(|guid| *guid != 0)
-        .and_then(|guid| Some((*index.as_ref()?.0.get(&guid)?, guid)))
-        .and_then(|(entity, guid)| Some(held.state(stores.all.get(entity).ok()?, guid)));
+        // `"targettarget"`: one hop off the target's `UNIT_FIELD_TARGET`, streamed guids only, for the
+        // stock frame's poll (`TargetofTarget_OnUpdate`, `TargetFrame.lua:494-538`): no unit event
+        // carries the hop, whose token is none of `0x515c50`'s. No guild leg: nothing asks it for one,
+        // and a lazy-cache miss sends a query.
+        let tot = selection
+            .target
+            .and_then(|e| stores.all.get(e).ok())
+            .and_then(|s| s.0.unit_target())
+            .filter(|guid| *guid != 0)
+            .and_then(|guid| Some((*index.as_ref()?.0.get(&guid)?, guid)))
+            .and_then(|(entity, guid)| Some(held.state(stores.all.get(entity).ok()?, guid)));
 
-    // `"player"` is pushed only while its descriptor exists: the roster seat stands in before
-    // arrival, and `PLAYER_LOGOUT` handlers still read `UnitName("player")`, as the reference's do.
-    // `"target"` pushes its absence too; both diff against the event loop's memo.
-    if let Some(cur) = &player {
-        if memo.last.get("player") != Some(cur) {
-            gate.audit("feed_units", "the player snapshot");
-            script.set_unit("player", player.clone());
+        // `"player"` is pushed only while its descriptor exists: the roster seat stands in before
+        // arrival, and `PLAYER_LOGOUT` handlers still read `UnitName("player")`, as the reference's do.
+        // `"target"` pushes its absence too; both diff against the event loop's memo.
+        if let Some(cur) = &player {
+            if memo.last.get("player") != Some(cur) {
+                gate.audit("feed_units", "the player snapshot");
+                script.set_unit("player", player.clone());
+            }
         }
-    }
-    let target_dirty = target_view_moved
-        || match (&target, memo.last.get("target")) {
+        let target_dirty = target_view_moved
+            || match (&target, memo.last.get("target")) {
+                (Some(cur), Some(prev)) => cur != prev,
+                (None, None) => false,
+                _ => true,
+            };
+        if target_dirty {
+            gate.audit("feed_units", "the target snapshot");
+            script.set_unit("target", target.clone());
+        }
+        // Absence is data here too: the target dropping its target clears the token.
+        let tot_dirty = match (&tot, memo.last.get("targettarget")) {
             (Some(cur), Some(prev)) => cur != prev,
             (None, None) => false,
             _ => true,
         };
-    if target_dirty {
-        gate.audit("feed_units", "the target snapshot");
-        script.set_unit("target", target.clone());
-    }
-    // Absence is data here too: the target dropping its target clears the token.
-    let tot_dirty = match (&tot, memo.last.get("targettarget")) {
-        (Some(cur), Some(prev)) => cur != prev,
-        (None, None) => false,
-        _ => true,
-    };
-    if tot_dirty {
-        gate.audit("feed_units", "the target-of-target snapshot");
-        script.set_unit("targettarget", tot.clone());
-    }
+        if tot_dirty {
+            gate.audit("feed_units", "the target-of-target snapshot");
+            script.set_unit("targettarget", tot.clone());
+        }
 
-    // `"npc"`: the interaction NPC, the reference's `[0xb4e2d0]` that `CGGameUI::SetInteractNPC`
-    // (`0x4930d0`) writes, which `InteractNpc` models. No guild leg, as for `"targettarget"`.
-    let npc = interact
-        .as_deref()
-        .and_then(|i| Some((i.0?, i.1?)))
-        .and_then(|(entity, guid)| Some(held.state(stores.all.get(entity).ok()?, guid)));
-    // Closing the window must clear the token, so the memo is written here, not only read.
-    let npc_dirty = match (&npc, memo.last.get("npc")) {
-        (Some(cur), Some(prev)) => cur != prev,
-        (None, None) => false,
-        _ => true,
-    };
-    if npc_dirty {
-        gate.audit("feed_units", "the interaction-NPC snapshot");
-        script.set_unit("npc", npc.clone());
-        match &npc {
-            Some(cur) => {
-                memo.last.insert("npc".to_string(), cur.clone());
-            }
-            None => {
-                memo.last.remove("npc");
+        // `"npc"`: the interaction NPC, the reference's `[0xb4e2d0]` that `CGGameUI::SetInteractNPC`
+        // (`0x4930d0`) writes, which `InteractNpc` models. No guild leg, as for `"targettarget"`.
+        let npc = interact
+            .as_deref()
+            .and_then(|i| Some((i.0?, i.1?)))
+            .and_then(|(entity, guid)| Some(held.state(stores.all.get(entity).ok()?, guid)));
+        // Closing the window must clear the token, so the memo is written here, not only read.
+        let npc_dirty = match (&npc, memo.last.get("npc")) {
+            (Some(cur), Some(prev)) => cur != prev,
+            (None, None) => false,
+            _ => true,
+        };
+        if npc_dirty {
+            gate.audit("feed_units", "the interaction-NPC snapshot");
+            script.set_unit("npc", npc.clone());
+            match &npc {
+                Some(cur) => {
+                    memo.last.insert("npc".to_string(), cur.clone());
+                }
+                None => {
+                    memo.last.remove("npc");
+                }
             }
         }
-    }
 
-    // The XP pair and the rest snapshot (rest-state byte, pool, `PLAYER_FLAGS`), pushed ahead of
-    // the world-enter events so `PLAYER_LOGIN` and `PLAYER_ENTERING_WORLD` handlers read real
-    // values. Pushing fires nothing: `PLAYER_XP_UPDATE` and `UPDATE_EXHAUSTION` are field watches
-    // (`0x5ddb24`-`0x5ddb72`, `0x5de4e0`), and so are the `PLAYER_FLAGS` arms
-    // (`crate::field_watch`), fired by `field_events` after this push.
-    if let Some((store, _)) = self_q.iter().next() {
-        let xp = xp_pair(store);
-        let rest = (
-            store.0.player_rest_state().unwrap_or(0),
-            store.0.player_rest_state_experience().unwrap_or(0),
-            store.0.player_flags(),
-        );
-        if memo.last_xp != Some(xp) {
-            gate.audit("feed_units", "the XP pair");
-            memo.last_xp = Some(xp);
-            script.set_player_xp(xp.0, xp.1);
-        }
-        if memo.last_rest != Some(rest) {
-            gate.audit("feed_units", "the rest snapshot");
-            memo.last_rest = Some(rest);
-            script.set_rest_state(rest.0, rest.1, rest.2 & PLAYER_FLAGS_RESTING != 0);
-            // The play-time bits share the dword and the memo; only the events split by bit.
-            script.set_play_time(
-                rest.2 & PLAYER_FLAGS_PARTIAL_PLAY_TIME != 0,
-                rest.2 & PLAYER_FLAGS_NO_PLAY_TIME != 0,
+        // The XP pair and the rest snapshot (rest-state byte, pool, `PLAYER_FLAGS`), pushed ahead of
+        // the world-enter events so `PLAYER_LOGIN` and `PLAYER_ENTERING_WORLD` handlers read real
+        // values. Pushing fires nothing: `PLAYER_XP_UPDATE` and `UPDATE_EXHAUSTION` are field watches
+        // (`0x5ddb24`-`0x5ddb72`, `0x5de4e0`), and so are the `PLAYER_FLAGS` arms
+        // (`crate::field_watch`), fired by `field_events` after this push.
+        if let Some((store, _)) = self_q.iter().next() {
+            let xp = xp_pair(store);
+            let rest = (
+                store.0.player_rest_state().unwrap_or(0),
+                store.0.player_rest_state_experience().unwrap_or(0),
+                store.0.player_flags(),
             );
-        }
-    }
-
-    // `PLAYER_LEVEL_UP` on any level change off the descriptor, demotions included (vmangos
-    // `GiveLevel` sends `SMSG_LEVELUP_INFO` for those too); the reference's trigger is untraced.
-    if let Some((store, _)) = self_q.iter().next() {
-        if let Some(level) = store.0.unit_level() {
-            let prev = memo.last_level.replace(level);
-            if prev.is_some_and(|p| level != p) {
-                gate.audit("feed_units", "the level edge");
-                // All nine, as the reference formats them (`%d` nine times) and
-                // `ChatFrame.lua:1283-1320` reads them; missing gains are zeros, since stock's
-                // `if ( argN > 0 )` raises on nil.
-                let (info, talent_points) = sink.chat.take_level_up_gains(level).unzip();
-                let gain = |f: fn(&benilla_protocol::messages::LevelUpInfo) -> i32| {
-                    ScriptValue::Int(i64::from(info.as_ref().map_or(0, f)))
-                };
-                script.fire_event(
-                    "PLAYER_LEVEL_UP",
-                    vec![
-                        ScriptValue::Int(i64::from(level)),
-                        gain(|l| l.health),
-                        gain(|l| l.powers[0]),
-                        ScriptValue::Int(i64::from(talent_points.unwrap_or(0))),
-                        gain(|l| l.stats[0]),
-                        gain(|l| l.stats[1]),
-                        gain(|l| l.stats[2]),
-                        gain(|l| l.stats[3]),
-                        gain(|l| l.stats[4]),
-                    ],
+            if memo.last_xp != Some(xp) {
+                gate.audit("feed_units", "the XP pair");
+                memo.last_xp = Some(xp);
+                script.set_player_xp(xp.0, xp.1);
+            }
+            if memo.last_rest != Some(rest) {
+                gate.audit("feed_units", "the rest snapshot");
+                memo.last_rest = Some(rest);
+                script.set_rest_state(rest.0, rest.1, rest.2 & PLAYER_FLAGS_RESTING != 0);
+                // The play-time bits share the dword and the memo; only the events split by bit.
+                script.set_play_time(
+                    rest.2 & PLAYER_FLAGS_PARTIAL_PLAY_TIME != 0,
+                    rest.2 & PLAYER_FLAGS_NO_PLAY_TIME != 0,
                 );
             }
         }
-    }
 
-    // `PLAYER_FIELD_BYTES` byte 2, the four extra bars, on the edge: the reference never writes the
-    // cell (its one access is the read at `0x4e768c`) or watches it (`0x468070`), and stock reads
-    // it once, at `PLAYER_ENTERING_WORLD` (`UIParent.lua:364`), so this goes ahead of that fire. No
-    // player and a zero byte share the four-nil branch (`0x4e7684`).
-    if let Some((store, _)) = self_q.iter().next() {
-        let toggles = store.0.player_action_bar_toggles().unwrap_or(0);
-        if memo.action_bar_toggles != Some(toggles) {
-            gate.audit("feed_units", "the action-bar toggle byte");
-            memo.action_bar_toggles = Some(toggles);
-            script.set_action_bar_toggles(toggles);
-        }
-    }
-
-    // The world-enter cascade's events once per world entry, after our descriptor lands and the
-    // pushes above seat it: the reference runs the cascade from the local player's own create
-    // (`0x5deb60 call 0x4908c0`) and, on a `/reload`, from `UI_Init` (`0x490168`), the player in
-    // the world both times. `PLAYER_LOGIN` only when this VM's load armed it, so a worldport's
-    // re-entry fires `PLAYER_ENTERING_WORLD` alone. At world exit, re-arm the entry and forget the
-    // player-global memos so the next character seeds them.
-    if let Some((_, me)) = self_pair {
-        if !memo.entered_world {
-            gate.audit("feed_units", "the world-enter events");
-            // `"player"` names us when the cascade runs, from our own create: the stock windows
-            // bind their model panes to it here (`PaperDollFrame.lua:39`), so it is seated ahead
-            // of the aura feed's full resolver push, which this feed is not ordered against.
-            script.seat_player_guid(me.0);
-            script.fire_world_enter();
-            memo.entered_world = true;
-        }
-    } else if memo.entered_world {
-        gate.audit("feed_units", "the world-exit disarm");
-        memo.entered_world = false;
-        memo.last_xp = None;
-        memo.last_rest = None;
-        memo.last_level = None;
-        memo.last_combo = None;
-        // Edge-only pushes: a stale memo would skip a new character whose values match it.
-        memo.worn_hidden = None;
-        memo.action_bar_toggles = None;
-    }
-
-    // The memo the pushes above diff against. Pushing fires nothing: a unit's events are its own
-    // changes' (`crate::field_watch`), and a token that comes to name another unit is announced by
-    // `PLAYER_TARGET_CHANGED` below alone (`0x493540` signals only that, `0x49389c`).
-    for (token, snap) in [
-        ("player", &player),
-        ("target", &target),
-        ("targettarget", &tot),
-    ] {
-        match snap {
-            Some(cur) => {
-                if memo.last.get(token) != Some(cur) {
-                    memo.last.insert(token.to_string(), cur.clone());
+        // `PLAYER_LEVEL_UP` on any level change off the descriptor, demotions included (vmangos
+        // `GiveLevel` sends `SMSG_LEVELUP_INFO` for those too); the reference's trigger is untraced.
+        if let Some((store, _)) = self_q.iter().next() {
+            if let Some(level) = store.0.unit_level() {
+                let prev = memo.last_level.replace(level);
+                if prev.is_some_and(|p| level != p) {
+                    gate.audit("feed_units", "the level edge");
+                    // All nine, as the reference formats them (`%d` nine times) and
+                    // `ChatFrame.lua:1283-1320` reads them; missing gains are zeros, since stock's
+                    // `if ( argN > 0 )` raises on nil.
+                    let (info, talent_points) = sink.chat.take_level_up_gains(level).unzip();
+                    let gain = |f: fn(&benilla_protocol::messages::LevelUpInfo) -> i32| {
+                        ScriptValue::Int(i64::from(info.as_ref().map_or(0, f)))
+                    };
+                    script.fire_event(
+                        "PLAYER_LEVEL_UP",
+                        vec![
+                            ScriptValue::Int(i64::from(level)),
+                            gain(|l| l.health),
+                            gain(|l| l.powers[0]),
+                            ScriptValue::Int(i64::from(talent_points.unwrap_or(0))),
+                            gain(|l| l.stats[0]),
+                            gain(|l| l.stats[1]),
+                            gain(|l| l.stats[2]),
+                            gain(|l| l.stats[3]),
+                            gain(|l| l.stats[4]),
+                        ],
+                    );
                 }
             }
-            None => {
-                memo.last.remove(token);
+        }
+
+        // `PLAYER_FIELD_BYTES` byte 2, the four extra bars, on the edge: the reference never writes the
+        // cell (its one access is the read at `0x4e768c`) or watches it (`0x468070`), and stock reads
+        // it once, at `PLAYER_ENTERING_WORLD` (`UIParent.lua:364`), so this goes ahead of that fire. No
+        // player and a zero byte share the four-nil branch (`0x4e7684`).
+        if let Some((store, _)) = self_q.iter().next() {
+            let toggles = store.0.player_action_bar_toggles().unwrap_or(0);
+            if memo.action_bar_toggles != Some(toggles) {
+                gate.audit("feed_units", "the action-bar toggle byte");
+                memo.action_bar_toggles = Some(toggles);
+                script.set_action_bar_toggles(toggles);
             }
         }
-    }
 
-    // `PLAYER_TARGET_CHANGED`, argless, when the selection changes, owed to
-    // [`fire_unit_events`]. A `/reload`'s fresh memo finds none: the shutdown dropped the target
-    // and told the dying VM (`0x490bdf`).
-    if selection.guid != memo.target_guid {
-        gate.audit("feed_units", "the PLAYER_TARGET_CHANGED edge");
-        memo.target_guid = selection.guid;
-        memo.pending.target_changed = true;
-    }
-
-    // The hide bits for `ShowingHelm()`/`ShowingCloak()`, on the edge only: the setter flips the
-    // VM's belief on the click, and a stale push before the server answers would undo it.
-    if let Some((store, _)) = self_pair {
-        let hidden = (store.0.player_hides_helm(), store.0.player_hides_cloak());
-        if memo.worn_hidden != Some(hidden) {
-            gate.audit("feed_units", "the worn-display pair");
-            memo.worn_hidden = Some(hidden);
-            script.set_worn_display(!hidden.0, !hidden.1);
+        // The world-enter cascade's events once per world entry, after our descriptor lands and the
+        // pushes above seat it: the reference runs the cascade from the local player's own create
+        // (`0x5deb60 call 0x4908c0`) and, on a `/reload`, from `UI_Init` (`0x490168`), the player in
+        // the world both times. `PLAYER_LOGIN` only when this VM's load armed it, so a worldport's
+        // re-entry fires `PLAYER_ENTERING_WORLD` alone. At world exit, re-arm the entry and forget the
+        // player-global memos so the next character seeds them.
+        if let Some((_, me)) = self_pair {
+            if !memo.entered_world {
+                gate.audit("feed_units", "the world-enter events");
+                // `"player"` names us when the cascade runs, from our own create: the stock windows
+                // bind their model panes to it here (`PaperDollFrame.lua:39`), so it is seated ahead
+                // of the aura feed's full resolver push, which this feed is not ordered against.
+                script.seat_player_guid(me.0);
+                script.fire_world_enter();
+                memo.entered_world = true;
+            }
+        } else if memo.entered_world {
+            gate.audit("feed_units", "the world-exit disarm");
+            memo.entered_world = false;
+            memo.last_xp = None;
+            memo.last_rest = None;
+            memo.last_level = None;
+            memo.last_combo = None;
+            // Edge-only pushes: a stale memo would skip a new character whose values match it.
+            memo.worn_hidden = None;
+            memo.action_bar_toggles = None;
         }
-    }
 
-    // The combo count and its banked target, pushed as a pair since `GetComboPoints` reads both;
-    // only the count owes `PLAYER_COMBO_POINTS` (`0x5ddff0`), to [`fire_unit_events`].
-    if let Some((store, _)) = self_q.iter().next() {
-        let banked = (
-            store.0.player_combo_points().unwrap_or(0),
-            store.0.player_combo_target(),
-        );
-        if let Some(fire) = combo_edge(memo.last_combo, banked) {
-            gate.audit("feed_units", "the combo-point edge");
-            memo.last_combo = Some(banked);
-            script.set_combo_points(banked.0, banked.1);
-            memo.pending.combo_points |= fire;
+        // The memo the pushes above diff against. Pushing fires nothing: a unit's events are its own
+        // changes' (`crate::field_watch`), and a token that comes to name another unit is announced by
+        // `PLAYER_TARGET_CHANGED` below alone (`0x493540` signals only that, `0x49389c`).
+        for (token, snap) in [
+            ("player", &player),
+            ("target", &target),
+            ("targettarget", &tot),
+        ] {
+            match snap {
+                Some(cur) => {
+                    if memo.last.get(token) != Some(cur) {
+                        memo.last.insert(token.to_string(), cur.clone());
+                    }
+                }
+                None => {
+                    memo.last.remove(token);
+                }
+            }
         }
-    }
+
+        // `PLAYER_TARGET_CHANGED`, argless, when the selection changes, owed to
+        // [`fire_unit_events`]. A `/reload`'s fresh memo finds none: the shutdown dropped the target
+        // and told the dying VM (`0x490bdf`).
+        if selection.guid != memo.target_guid {
+            gate.audit("feed_units", "the PLAYER_TARGET_CHANGED edge");
+            memo.target_guid = selection.guid;
+            memo.pending.target_changed = true;
+        }
+
+        // The hide bits for `ShowingHelm()`/`ShowingCloak()`, on the edge only: the setter flips the
+        // VM's belief on the click, and a stale push before the server answers would undo it.
+        if let Some((store, _)) = self_pair {
+            let hidden = (store.0.player_hides_helm(), store.0.player_hides_cloak());
+            if memo.worn_hidden != Some(hidden) {
+                gate.audit("feed_units", "the worn-display pair");
+                memo.worn_hidden = Some(hidden);
+                script.set_worn_display(!hidden.0, !hidden.1);
+            }
+        }
+
+        // The combo count and its banked target, pushed as a pair since `GetComboPoints` reads both;
+        // only the count owes `PLAYER_COMBO_POINTS` (`0x5ddff0`), to [`fire_unit_events`].
+        if let Some((store, _)) = self_q.iter().next() {
+            let banked = (
+                store.0.player_combo_points().unwrap_or(0),
+                store.0.player_combo_target(),
+            );
+            if let Some(fire) = combo_edge(memo.last_combo, banked) {
+                gate.audit("feed_units", "the combo-point edge");
+                memo.last_combo = Some(banked);
+                script.set_combo_points(banked.0, banked.1);
+                memo.pending.combo_points |= fire;
+            }
+        }
+    })
 }
 
 /// The events [`feed_units`]' pushes owe, signalled after the action feed's usable refresh as the
@@ -1732,25 +1736,29 @@ fn feed_units(
 /// `0x493a73`); the combo-point watch refreshes (`0x5ddff0`) before `PLAYER_COMBO_POINTS`
 /// (`0x5ddffa`). A usable handler reads the new target and count, and hears these after it.
 fn fire_unit_events(
-    script: Option<NonSendMut<UiScript>>,
-    selection: Res<Selection>,
+    // What the host also reaches, read before the VM runs with the host lent.
+    mut hosted: ParamSet<(Res<Selection>, crate::script_calls::HostedVm)>,
     mut feed: ResMut<UnitFeedState>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let pending = std::mem::take(&mut feed.vm.get(&script).pending);
-    if pending.target_changed {
-        // The reference signals it inside `SetSelection`, so inside the key or click whose call
-        // moved the selection; a change that call made hears it under that call's input events.
-        let cause = script.take_selection_cause(selection.guid);
-        script.with_input_events(cause, |script| {
-            script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
-        });
-    }
-    if pending.combo_points {
-        script.fire_event("PLAYER_COMBO_POINTS", vec![]);
-    }
+    let selection = *hosted.p0();
+    hosted.p1().run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        let pending = std::mem::take(&mut feed.vm.get(&script).pending);
+        if pending.target_changed {
+            // The reference signals it inside `SetSelection`, so inside the key or click whose
+            // call moved the selection; a change that call made hears it under that call's input
+            // events.
+            let cause = script.take_selection_cause(selection.guid);
+            script.with_input_events(cause, |script| {
+                script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+            });
+        }
+        if pending.combo_points {
+            script.fire_event("PLAYER_COMBO_POINTS", vec![]);
+        }
+    })
 }
 
 /// The combo feed's edge: `None` when nothing moved, else whether `PLAYER_COMBO_POINTS` fires.
@@ -3671,7 +3679,10 @@ mod tests {
             .init_resource::<crate::ui_guild::GuildState>();
         let (tx, _rx) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
-        app.insert_non_send_resource(UiScript::new().unwrap());
+        // No engine behind it: the VM keeps its calls, and none is applied.
+        let mut script = UiScript::new().unwrap();
+        script.keep_calls();
+        app.insert_non_send_resource(script);
         let mut names = NameCache::default();
         names.insert_creature(
             69,
@@ -3743,7 +3754,7 @@ mod tests {
             .world_mut()
             .non_send_resource_mut::<UiScript>()
             .take_script_calls();
-        assert_eq!(dropped.len(), 1, "the call queued for the commit");
+        assert_eq!(dropped.len(), 1, "the call, never applied");
         app.update();
         assert_eq!(
             target_name(&mut app, "").as_deref(),

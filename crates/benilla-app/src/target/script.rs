@@ -155,7 +155,10 @@ mod tests {
         world.init_resource::<crate::names::NameCache>();
         world.init_resource::<scan::TabHistory>();
         world.init_resource::<Time>();
-        world.insert_non_send_resource(UiScript::new().expect("a bare VM"));
+        // No engine behind it: the VM keeps its calls for the test to apply.
+        let mut script = UiScript::new().expect("a bare VM");
+        script.keep_calls();
+        world.insert_non_send_resource(script);
         world
     }
 
@@ -555,7 +558,9 @@ mod tests {
         let unit = || ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(2, 0x09)]));
 
         let mut world = script_world();
-        world.insert_non_send_resource(crate::ui_script::chat_tests::chat_frame());
+        let mut chat = crate::ui_script::chat_tests::chat_frame();
+        chat.keep_calls();
+        world.insert_non_send_resource(chat);
         world.spawn((SelfPlayer, Guid(ME), unit()));
         let vendor = world.spawn((Guid(VENDOR), unit())).id();
         world

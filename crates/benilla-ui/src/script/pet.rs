@@ -466,7 +466,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 true
             });
             if pressed {
-                super::calls::submit(lua, super::ScriptCall::PetAction(i));
+                super::calls::submit(lua, super::ScriptCall::PetAction(i))?;
             }
             Ok(())
         })?,
@@ -681,7 +681,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     model.pet_bar.has_bar
                 });
                 if pressed {
-                    super::calls::submit(lua, super::ScriptCall::PetOrder(packed));
+                    super::calls::submit(lua, super::ScriptCall::PetOrder(packed))?;
                 }
                 Ok(())
             })?,
@@ -908,6 +908,7 @@ mod tests {
     #[test]
     fn intents_queue_and_the_meaningless_ones_are_dropped() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_pet_actions(true, true, true, slots());
 
         s.run("CastPetAction(1) CastPetAction(3) CastPetAction(9)")
@@ -1063,6 +1064,7 @@ mod tests {
     #[test]
     fn the_pet_one_shots_synthesize_the_bars_slot_words() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.run("PetAttack(); PetFollow(); PetWait(); PetPassiveMode()")
             .unwrap();
         assert!(s.take_pet_orders().is_empty(), "no bar, no order");
@@ -1108,6 +1110,7 @@ mod tests {
             token("PET_ACTION_ATTACK", 0x0700_0002),
         ];
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_pet_actions(true, true, true, bar.clone());
         s.set_pet_state(1 << 8 | 1);
         s.run("function LIT(i) local _, _, _, _, a = GetPetActionInfo(i) return a or 0 end")

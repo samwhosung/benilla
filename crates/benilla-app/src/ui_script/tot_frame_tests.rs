@@ -32,6 +32,7 @@ fn unit(name: &str, guid: u64, health: u32) -> UnitState {
 /// already allows the frame.
 fn load_tot() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");

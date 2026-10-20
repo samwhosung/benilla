@@ -10,6 +10,7 @@ fn action_ids(s: &mut UiScript) -> Vec<u32> {
 fn shipped_action_bar_drives_end_to_end() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // The three stock bar files, counted as they load; `ExhaustionTick_Update` reads
     // `ReputationWatchBar`, which ReputationFrame.xml declares.
@@ -743,6 +744,7 @@ fn a_cooldown_count_draws_over_the_bonus_bars_sweep() {
 fn a_right_click_on_an_action_button_uses_the_action() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_action_bar(&s);
 
@@ -1179,6 +1181,8 @@ fn shipped_bag_frame_drives_end_to_end() {
     use benilla_ui::script::{ContainerSlot, ContainerState};
 
     let mut s = UiScript::new().unwrap();
+
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // `ContainerFrameItemButton_OnClick` reads `StackSplitFrame` and `MerchantFrame`
     // (ContainerFrame.lua:581, 586), which the bag kit leaves to its caller.
@@ -1793,6 +1797,7 @@ fn the_main_bar_pages_and_a_bonus_page_still_outranks_it() {
 fn bonus_bar_slides_up_with_sound_and_down_without() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     super::test_ui::load_ui(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     super::test_ui::load_ui(&s, "Interface\\FrameXML\\Fonts.xml");

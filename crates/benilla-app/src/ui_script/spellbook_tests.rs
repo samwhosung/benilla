@@ -82,6 +82,7 @@ pub(super) fn spellbook_ui(w: f32, h: f32) -> UiScript {
 /// [`spellbook_ui`] with `extra` files merged into it in the production order.
 pub(super) fn spellbook_ui_with(w: f32, h: f32, extra: &[&str]) -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(w, h);
     for f in super::test_ui::production_order(&[
         &[
@@ -611,6 +612,7 @@ fn the_pet_tab_switches_books_and_renders_the_pets_spells() {
 fn the_macro_editor_takes_a_shift_click_and_only_a_shift_click() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     s.run(
         r#"

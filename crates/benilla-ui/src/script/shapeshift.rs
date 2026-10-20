@@ -153,7 +153,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 super::calls::submit(
                     lua,
                     super::ScriptCall::CastShapeshiftForm { spell_id, may_cast },
-                );
+                )?;
             }
             Ok(())
         })?,
@@ -248,6 +248,7 @@ mod tests {
     #[test]
     fn cast_queues_the_form_spell_and_ignores_out_of_range() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_shapeshift_forms(forms());
 
         s.run("CastShapeshiftForm(2)").unwrap();

@@ -124,8 +124,8 @@ fn push(lua: &Lua, input: BindingInput) {
     model.input.queue.push(input);
 }
 
-fn push_call(lua: &Lua, call: ScriptCall) {
-    super::calls::submit(lua, call);
+fn push_call(lua: &Lua, call: ScriptCall) -> mlua::Result<()> {
+    super::calls::submit(lua, call)
 }
 
 /// A zoom's optional amount: `0x6f34d0` (is-number, a numeric string passes) then `0x6f3620`,
@@ -338,7 +338,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         reverse,
                         may_cast,
                     },
-                );
+                )?;
                 Ok(())
             })?,
         )?;
@@ -348,7 +348,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "TargetLastTarget",
         lua.create_function(|lua, _: MultiValue| {
             let may_cast = protected::select_may_cast(lua);
-            push_call(lua, ScriptCall::TargetLastTarget { may_cast });
+            push_call(lua, ScriptCall::TargetLastTarget { may_cast })?;
             Ok(())
         })?,
     )?;
@@ -359,7 +359,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // of the attack has no gate.
             let may_pick = protected::gate(lua, Tag::TARGET);
             let may_cast = protected::select_may_cast(lua);
-            push_call(lua, ScriptCall::AttackTarget { may_pick, may_cast });
+            push_call(lua, ScriptCall::AttackTarget { may_pick, may_cast })?;
             Ok(())
         })?,
     )?;
@@ -439,7 +439,8 @@ mod tests {
 
     #[test]
     fn every_binding_function_is_a_global_that_answers() {
-        let s = UiScript::new().unwrap();
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         for name in NAMES {
             let kind: String = s.eval(&format!("return type({name})")).unwrap();
             assert_eq!(kind, "function", "{name}");
@@ -551,6 +552,7 @@ mod tests {
     #[test]
     fn the_targeting_calls_join_the_call_queue_in_order() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.run(r#"TargetNearestEnemy(1) TargetLastTarget() AttackTarget() ClearTarget()"#)
             .unwrap();
         assert_eq!(

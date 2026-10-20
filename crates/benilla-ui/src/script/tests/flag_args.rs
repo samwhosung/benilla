@@ -279,6 +279,7 @@ fn get_num_guild_members_flag_counts_the_whole_roster() {
 #[test]
 fn queued_verbs_read_their_flags_through_get_bool_or_default() {
     let mut s = script();
+    s.keep_calls();
     s.set_guild(GuildState::default());
 
     // SetWhoToUI(flag) 0x5ad877, default 0.

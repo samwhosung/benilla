@@ -12,6 +12,7 @@ use super::test_ui::{bag_open, load_ui as load_xml, BAG_UI};
 /// with `extra` in its way and the layer's reshaping, each file once, in the production order.
 fn harness_with(extra: &[&str]) -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     const MENU: &[&str] = &[
         "Interface\\FrameXML\\GlobalStrings.lua",

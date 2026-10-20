@@ -109,7 +109,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     request: super::SelectionRequest::AssistByName(name),
                     may_cast,
                 },
-            );
+            )?;
             Ok(())
         })?,
     )?;
@@ -215,6 +215,7 @@ mod tests {
     #[test]
     fn assist_and_uninvite_by_name_queue_their_names() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.run("AssistByName('Alice') AssistByName('') UninviteByName('Carol') UninviteByName()")
             .unwrap();
         assert_eq!(

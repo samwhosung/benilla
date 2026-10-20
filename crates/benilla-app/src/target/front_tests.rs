@@ -119,13 +119,12 @@ impl Fix {
         e
     }
 
-    /// One TAB from a key's body, applied.
+    /// One TAB from a key's body, with the host lent as the bindings pass lends it.
     pub(super) fn tab(&mut self) {
-        self.app
-            .world_mut()
-            .non_send_resource_mut::<benilla_ui::script::UiScript>()
-            .run_binding("TargetNearestEnemy()")
-            .expect("the key runs");
+        crate::script_calls::with_hosted_vm(self.app.world_mut(), |s| {
+            s.expect("a VM").run_binding("TargetNearestEnemy()")
+        })
+        .expect("the key runs");
         self.bind();
     }
 
@@ -148,12 +147,12 @@ impl Fix {
         }
     }
 
-    /// The calls pass, whose head binds what the writers parked.
+    /// The target chain's bind of what the writers parked.
     pub(super) fn bind(&mut self) {
         self.app
             .world_mut()
-            .run_system_once(crate::script_calls::apply_script_calls)
-            .expect("the calls apply as a one-shot system");
+            .run_system_once(crate::script_calls::bind_parked_picks)
+            .expect("the bind runs as a one-shot system");
     }
 
     /// What went on the wire: the casts' targets and the selections.
@@ -311,8 +310,11 @@ fn a_charmed_player_is_refused_by_every_selector() {
             false,
             |f| {
                 let script = benilla_ui::script::UiScript::new().expect("a VM");
-                script.run("ClearTarget()").expect("the script runs");
                 f.app.world_mut().insert_non_send_resource(script);
+                crate::script_calls::with_hosted_vm(f.app.world_mut(), |s| {
+                    s.expect("a VM").run("ClearTarget()")
+                })
+                .expect("the script runs");
                 f.bind();
             },
             None,

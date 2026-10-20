@@ -120,7 +120,7 @@ impl Plugin for UiPetPlugin {
                 // toggles, stops and writes.
                 drain_pet_actions
                     .after(UiInput)
-                    .after(crate::script_calls::apply_script_calls),
+                    .after(crate::script_calls::bind_parked_picks),
                 drain_pet_menu.after(UiInput),
             ),
         );

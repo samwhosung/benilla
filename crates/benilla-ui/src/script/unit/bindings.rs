@@ -927,7 +927,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                         request: SelectionRequest::Unit(token),
                         may_cast,
                     },
-                );
+                )?;
             }
             Ok(())
         })?,
@@ -949,7 +949,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                         request: SelectionRequest::Assist(token),
                         may_cast,
                     },
-                );
+                )?;
             }
             Ok(())
         })?,
@@ -967,7 +967,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                     request: SelectionRequest::LastEnemy,
                     may_cast,
                 },
-            );
+            )?;
             Ok(())
         })?,
     )?;
@@ -1009,7 +1009,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                     exact,
                     may_cast,
                 },
-            );
+            )?;
             Ok(())
         })?,
     )?;
@@ -1058,7 +1058,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(());
             }
             check_unit_token(&Some(token.clone()))?;
-            submit(lua, ScriptCall::SpellTargetUnit(token));
+            submit(lua, ScriptCall::SpellTargetUnit(token))?;
             Ok(())
         })?,
     )?;
@@ -1080,7 +1080,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 }
                 had
             };
-            submit(lua, ScriptCall::ClearTarget);
+            submit(lua, ScriptCall::ClearTarget)?;
             Ok(flag(had))
         })?,
     )?;

@@ -772,8 +772,9 @@ pub(super) fn drain_container_destroys(
     })
 }
 
-/// The bag clicks as the frame applies them: the repair-mode drain, then the queued
-/// `UseContainerItem` calls through their applier.
+/// The bag clicks of a harness's VM ([`UiScript::keep_calls`]): the repair-mode drain, then the
+/// kept `UseContainerItem` calls through their applier, as the app's host applies each inside its
+/// verb.
 #[cfg(test)]
 fn run_container_clicks(world: &mut World) {
     use benilla_ui::script::ScriptCall;
@@ -782,14 +783,22 @@ fn run_container_clicks(world: &mut World) {
     world
         .run_system_once(
             |mut script: NonSendMut<UiScript>, mut items: ScriptItemUse| {
-                crate::script_calls::in_call_order(&mut script, |script, call| {
+                for call in script.take_script_calls() {
                     if let ScriptCall::UseContainerItem(call) = call {
-                        items.use_container_item(script, call);
+                        items.use_container_item(&mut script, call);
                     }
-                });
+                }
             },
         )
         .unwrap();
+}
+
+/// A VM with no engine behind it, which keeps its calls for the harness to apply.
+#[cfg(test)]
+fn harness_vm() -> UiScript {
+    let mut script = UiScript::new().unwrap();
+    script.keep_calls();
+    script
 }
 
 #[cfg(test)]
@@ -861,7 +870,7 @@ mod tests {
             }),
         );
 
-        app.insert_non_send_resource(UiScript::new().unwrap());
+        app.insert_non_send_resource(harness_vm());
         feed_clam(&mut app);
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
@@ -1338,16 +1347,16 @@ mod tests {
             app.world_mut()
                 .run_system_once(
                     |mut script: NonSendMut<UiScript>, mut items: ScriptItemUse| {
-                        crate::script_calls::in_call_order(&mut script, |script, call| {
+                        for call in script.take_script_calls() {
                             if let benilla_ui::script::ScriptCall::UseInventoryItem {
                                 slot: id,
                                 on_self,
                                 ..
                             } = call
                             {
-                                items.use_inventory_item(script, id, on_self);
+                                items.use_inventory_item(&mut script, id, on_self);
                             }
-                        });
+                        }
                     },
                 )
                 .unwrap();
@@ -1866,7 +1875,7 @@ mod bind_confirm_tests {
             }),
         );
 
-        let mut script = UiScript::new().unwrap();
+        let mut script = harness_vm();
         script.set_screen_size(1024.0, 768.0);
         load_ui(&script);
         script.set_container(0, Some(bag_with_the_axe(quality)));
@@ -2127,7 +2136,7 @@ mod bind_confirm_tests {
                 ..crate::items::test_template("Flurry Axe")
             }),
         );
-        let mut script = UiScript::new().unwrap();
+        let mut script = harness_vm();
         script.set_screen_size(1024.0, 768.0);
         load_ui(&script);
         script.set_container(0, Some(bag_with_the_axe(4)));
@@ -2235,7 +2244,7 @@ mod bind_confirm_tests {
                 ..crate::items::test_template("Flurry Axe")
             }),
         );
-        let mut script = UiScript::new().unwrap();
+        let mut script = harness_vm();
         script.set_screen_size(1024.0, 768.0);
         load_ui(&script);
         script.set_container(0, Some(bag_with_the_axe(4)));
@@ -2398,7 +2407,7 @@ mod bind_confirm_tests {
             app.world_mut()
                 .resource_mut::<Items>()
                 .insert_template(FLURRY_AXE, Some(template));
-            let mut script = UiScript::new().unwrap();
+            let mut script = harness_vm();
             script.set_container(0, Some(bag_with_the_axe(1)));
             script.run(chunk).unwrap();
             app.insert_non_send_resource(script);
@@ -2466,7 +2475,7 @@ mod bind_confirm_tests {
         }
         items.insert_template(FLURRY_AXE, Some(template));
 
-        let mut script = UiScript::new().unwrap();
+        let mut script = harness_vm();
         script.set_screen_size(1024.0, 768.0);
         load_ui(&script);
         script.set_container(0, Some(bag_with_the_axe(3)));
@@ -2574,7 +2583,7 @@ mod bind_confirm_tests {
                 ..crate::items::test_template("Flurry Axe")
             }),
         );
-        let mut script = UiScript::new().unwrap();
+        let mut script = harness_vm();
         script.set_screen_size(1024.0, 768.0);
         load_ui(&script);
         let mut bag = bag_with_the_axe(4);

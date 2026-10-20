@@ -434,7 +434,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         item_locks,
                         may_cast,
                     }),
-                );
+                )?;
             }
             Ok(())
         })?,
@@ -759,6 +759,7 @@ mod tests {
     #[test]
     fn use_actions_third_argument_is_the_self_cast_modifier() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.run("UseAction(1)").unwrap();
         s.run("UseAction(2, 0)").unwrap();
         s.run("UseAction(3, 0, 0)").unwrap();
@@ -792,6 +793,7 @@ mod tests {
     #[test]
     fn action_snapshot_reads_and_use_queues() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert!(!s.eval::<bool>("return HasAction(73)").unwrap());
         assert!(s
             .eval::<bool>("return GetActionTexture(73) == nil")
@@ -850,6 +852,8 @@ mod tests {
         use crate::script::cursor::{CursorAction, CursorPayload};
 
         let mut s = UiScript::new().unwrap();
+
+        s.keep_calls();
         s.set_cursor_for_test(CursorPayload::Action(CursorAction {
             src_slot: 1,
             kind: 0x00,

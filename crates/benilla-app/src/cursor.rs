@@ -191,122 +191,130 @@ pub(crate) struct DisplayedCursor(pub(crate) crate::target::WorldCursor);
 /// (`SetCursor`, `ResetCursor`, `ShowContainerSellCursor`, `ShowInspectCursor`). Between writes
 /// the last value stands, so a frame that calls no cursor function changes nothing.
 fn drive_displayed_cursor(
+    // What the host also reaches, read before the VM runs with the host lent.
+    mut hosted: ParamSet<(
+        Res<crate::spell::targeting::SpellTargeting>,
+        crate::script_calls::HostedVm,
+    )>,
     world: Res<crate::target::WorldCursor>,
     over_ui: Res<crate::ui_script::PointerOverUi>,
-    targeting: Res<crate::spell::targeting::SpellTargeting>,
-    script: Option<bevy::ecs::system::NonSendMut<benilla_ui::script::UiScript>>,
     // The base last restored on entering the UI; `None` over the world, so re-entry restores.
     mut last: Local<crate::ui_script::VmMemo<Option<crate::target::WorldCursor>>>,
     mut displayed: ResMut<DisplayedCursor>,
     mut custom: ResMut<CustomCursorName>,
     screen: Res<crate::loading_screen::LoadingScreen>,
 ) {
-    use crate::target::{CursorKind, WorldCursor};
-    use benilla_ui::script::UiCursorMode;
+    let p = hosted.p0();
+    let targeting_active = p.active();
+    drop(p);
+    hosted.p1().run(|script| {
+        use crate::target::{CursorKind, WorldCursor};
+        use benilla_ui::script::UiCursorMode;
 
-    // This runs with no VM too (the character screen); `get_for` treats that as its own session,
-    // so the restore re-arms once on each side of the glue phase.
-    let last = last.get_for(script.as_deref());
+        // This runs with no VM too (the character screen); `get_for` treats that as its own session,
+        // so the restore re-arms once on each side of the glue phase.
+        let last = last.get_for(script.as_deref());
 
-    // Under the loading cover the cursor is the plain arrow, ahead of every other arm: the
-    // reference parks index 1 unconditionally before raising the screen (`0x6e49f5`).
-    if screen.covering() {
-        displayed.0 = WorldCursor::default();
-        *last = None;
-        return;
-    }
-
-    // The base cell (`0xbe2c4c`) is mutable and `ResetCursor` restores its value, not Point.
-    // While a spell awaits its click it is Cast(2), so the UI reads blue whatever the hovered item:
-    // 1.12 has no hover-time validity verdict. `ShowContainerSellCursor` (`0x4fa460`) bails unless
-    // the base is Point.
-    let repair = script.as_ref().is_some_and(|s| s.repair_mode());
-    let base = if repair {
-        // `ShowRepairCursor` (`0x4fbcc0`) parks the base at Repair while it holds.
-        WorldCursor {
-            kind: CursorKind::Repair,
-            unable: false,
-        }
-    } else if targeting.active()
-        || script
-            .as_ref()
-            .is_some_and(|s| s.gift_wrap_armed().is_some())
-    {
-        // An armed gift wrap sets both cells to Cast(2) (`0x5edea0`: `SetCursorBaseMode(2)`,
-        // `CursorSetMode(2)`), so its cursor survives the pointer crossing the world.
-        WorldCursor {
-            kind: CursorKind::Cast,
-            unable: false,
-        }
-    } else {
-        WorldCursor::default()
-    };
-
-    if let Some(mut script) = script {
-        if let Some(write) = script.take_cursor_write() {
-            displayed.0 = match write {
-                Some(UiCursorMode::Buy) => WorldCursor {
-                    kind: CursorKind::Buy,
-                    unable: false,
-                },
-                Some(UiCursorMode::UnableBuy) => WorldCursor {
-                    kind: CursorKind::Buy,
-                    unable: true,
-                },
-                Some(UiCursorMode::Inspect) => WorldCursor {
-                    kind: CursorKind::Inspect,
-                    unable: false,
-                },
-                Some(UiCursorMode::Cast) => WorldCursor {
-                    kind: CursorKind::Cast,
-                    unable: false,
-                },
-                Some(UiCursorMode::CastError) => WorldCursor {
-                    kind: CursorKind::Cast,
-                    unable: true,
-                },
-                Some(UiCursorMode::Point) => WorldCursor::default(),
-                Some(UiCursorMode::UnablePoint) => WorldCursor {
-                    kind: CursorKind::Point,
-                    unable: true,
-                },
-                Some(UiCursorMode::Attack) => WorldCursor {
-                    kind: CursorKind::Attack,
-                    unable: false,
-                },
-                Some(UiCursorMode::UnableAttack) => WorldCursor {
-                    kind: CursorKind::Attack,
-                    unable: true,
-                },
-                Some(UiCursorMode::Custom) => {
-                    let name = script.custom_cursor_name();
-                    if custom.0 != name {
-                        custom.0 = name;
-                    }
-                    WorldCursor {
-                        kind: CursorKind::Custom,
-                        unable: false,
-                    }
-                }
-                // `ResetCursor`: back to the base mode, Repair included.
-                None => base,
-            };
-            *last = Some(base);
+        // Under the loading cover the cursor is the plain arrow, ahead of every other arm: the
+        // reference parks index 1 unconditionally before raising the screen (`0x6e49f5`).
+        if screen.covering() {
+            displayed.0 = WorldCursor::default();
+            *last = None;
             return;
         }
-    }
-    if !over_ui.0 {
-        displayed.0 = *world;
-        *last = None;
-        return;
-    }
-    // Over UI with no FrameXML write: crossing in, or a base change, restores the base once. This
-    // one edge stands for the `ResetCursor()` that ends nearly every reference hover handler and
-    // the classifier's no-hover restore (`0x523d30`).
-    if *last != Some(base) {
-        *last = Some(base);
-        displayed.0 = base;
-    }
+
+        // The base cell (`0xbe2c4c`) is mutable and `ResetCursor` restores its value, not Point.
+        // While a spell awaits its click it is Cast(2), so the UI reads blue whatever the hovered item:
+        // 1.12 has no hover-time validity verdict. `ShowContainerSellCursor` (`0x4fa460`) bails unless
+        // the base is Point.
+        let repair = script.as_ref().is_some_and(|s| s.repair_mode());
+        let base = if repair {
+            // `ShowRepairCursor` (`0x4fbcc0`) parks the base at Repair while it holds.
+            WorldCursor {
+                kind: CursorKind::Repair,
+                unable: false,
+            }
+        } else if targeting_active
+            || script
+                .as_ref()
+                .is_some_and(|s| s.gift_wrap_armed().is_some())
+        {
+            // An armed gift wrap sets both cells to Cast(2) (`0x5edea0`: `SetCursorBaseMode(2)`,
+            // `CursorSetMode(2)`), so its cursor survives the pointer crossing the world.
+            WorldCursor {
+                kind: CursorKind::Cast,
+                unable: false,
+            }
+        } else {
+            WorldCursor::default()
+        };
+
+        if let Some(script) = script {
+            if let Some(write) = script.take_cursor_write() {
+                displayed.0 = match write {
+                    Some(UiCursorMode::Buy) => WorldCursor {
+                        kind: CursorKind::Buy,
+                        unable: false,
+                    },
+                    Some(UiCursorMode::UnableBuy) => WorldCursor {
+                        kind: CursorKind::Buy,
+                        unable: true,
+                    },
+                    Some(UiCursorMode::Inspect) => WorldCursor {
+                        kind: CursorKind::Inspect,
+                        unable: false,
+                    },
+                    Some(UiCursorMode::Cast) => WorldCursor {
+                        kind: CursorKind::Cast,
+                        unable: false,
+                    },
+                    Some(UiCursorMode::CastError) => WorldCursor {
+                        kind: CursorKind::Cast,
+                        unable: true,
+                    },
+                    Some(UiCursorMode::Point) => WorldCursor::default(),
+                    Some(UiCursorMode::UnablePoint) => WorldCursor {
+                        kind: CursorKind::Point,
+                        unable: true,
+                    },
+                    Some(UiCursorMode::Attack) => WorldCursor {
+                        kind: CursorKind::Attack,
+                        unable: false,
+                    },
+                    Some(UiCursorMode::UnableAttack) => WorldCursor {
+                        kind: CursorKind::Attack,
+                        unable: true,
+                    },
+                    Some(UiCursorMode::Custom) => {
+                        let name = script.custom_cursor_name();
+                        if custom.0 != name {
+                            custom.0 = name;
+                        }
+                        WorldCursor {
+                            kind: CursorKind::Custom,
+                            unable: false,
+                        }
+                    }
+                    // `ResetCursor`: back to the base mode, Repair included.
+                    None => base,
+                };
+                *last = Some(base);
+                return;
+            }
+        }
+        if !over_ui.0 {
+            displayed.0 = *world;
+            *last = None;
+            return;
+        }
+        // Over UI with no FrameXML write: crossing in, or a base change, restores the base once. This
+        // one edge stands for the `ResetCursor()` that ends nearly every reference hover handler and
+        // the classifier's no-hover restore (`0x523d30`).
+        if *last != Some(base) {
+            *last = Some(base);
+            displayed.0 = base;
+        }
+    })
 }
 
 pub(crate) struct CursorPlugin;

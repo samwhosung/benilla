@@ -438,6 +438,7 @@ const VERBS: &[Verb] = &[
 /// and book, a cast in flight, a targeting cursor and a Down-and-Up button for the events.
 fn verbs_world(security: AddonSecurity) -> UiScript {
     let mut s = walker(security);
+    s.keep_calls();
     event_frames(&mut s);
     s.set_spellbook(SpellBookState {
         tabs: vec![SpellTabView {

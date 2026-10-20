@@ -222,6 +222,7 @@ fn the_shipped_pet_bar_drives_end_to_end() {
 fn clicks_route_through_the_attack_toggle_fork() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_pet_bar(&s);
     declare_token_strings(&s);
@@ -544,6 +545,7 @@ fn shift_clicking_a_pet_button_picks_it_up_rather_than_casting() {
 fn the_keybind_pair_pushes_and_casts_without_the_clicks_forks() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_pet_bar(&s);
     declare_token_strings(&s);

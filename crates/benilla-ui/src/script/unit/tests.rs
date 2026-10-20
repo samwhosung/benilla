@@ -27,6 +27,7 @@ fn player() -> UnitState {
 #[test]
 fn spell_target_unit_checks_in_the_references_order() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     let usage = |s: &mut UiScript, call: &str| {
         let err = s.run(call).expect_err(call).to_string();
         assert!(
@@ -328,6 +329,7 @@ fn unit_is_trivial_is_the_grey_test_and_never_a_player() {
 fn target_unit_queues_the_token_for_the_app_to_resolve() {
     use crate::script::SelectionRequest;
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     assert!(s.take_selection_requests().is_empty());
     // A nil token is not queued.
     s.eval::<()>(r#"TargetUnit("player")"#).unwrap();
@@ -348,6 +350,7 @@ fn target_unit_queues_the_token_for_the_app_to_resolve() {
 fn the_selection_queue_carries_all_three_verbs_in_call_order() {
     use crate::script::SelectionRequest;
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.eval::<()>(r#"TargetUnit("party1")"#).unwrap();
     s.eval::<()>(r#"AssistUnit("target")"#).unwrap();
     s.eval::<()>(r#"AssistUnit(nil)"#).unwrap();
@@ -369,6 +372,7 @@ fn the_selection_queue_carries_all_three_verbs_in_call_order() {
 fn target_nearest_queues_its_mode_and_reverse_flag() {
     use crate::script::NearestMode::{Enemy, Friend, PartyMember, RaidMember};
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     assert!(s.take_target_nearest_requests().is_empty());
     s.eval::<()>("TargetNearestFriend()").unwrap();
     s.eval::<()>("TargetNearestFriend(1)").unwrap();
@@ -839,6 +843,7 @@ fn unit_affecting_combat_raises_on_a_bad_argument() {
 #[test]
 fn target_by_name_queues_the_name_and_the_exact_flag() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     assert!(s.take_target_by_name_requests().is_empty());
 
     s.run(r#"TargetByName("Rag")"#).unwrap();
@@ -900,6 +905,7 @@ fn unselectable(guid: u64, name: &str, dist2: f32) -> crate::script::NameCandida
 fn target_by_name_shows_its_pick_to_the_rest_of_the_chunk() {
     const OLD: u64 = 0x21;
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_unit(
         "target",
         Some(UnitState {
@@ -982,6 +988,7 @@ fn target_by_name_shows_its_pick_to_the_rest_of_the_chunk() {
 #[test]
 fn clear_target_and_target_unit_show_their_outcome_to_the_rest_of_the_chunk() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_unit_guids(&UnitGuids {
         player: 0x10,
         party: [0x22, 0x23, 0, 0],
@@ -1038,6 +1045,7 @@ fn clear_target_and_target_unit_show_their_outcome_to_the_rest_of_the_chunk() {
 fn target_unit_and_by_name_leave_the_view_while_the_cursor_is_up() {
     let script = |targeting| {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_unit_guids(&UnitGuids {
             player: 0x10,
             party: [0x22, 0, 0, 0],
@@ -1077,6 +1085,7 @@ fn target_unit_and_by_name_leave_the_view_while_the_cursor_is_up() {
 fn the_selection_verbs_leave_the_view_for_a_charmed_player() {
     let script = |charmed| {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_unit_guids(&UnitGuids {
             player: 0x10,
             party: [0x22, 0, 0, 0],
@@ -1118,6 +1127,7 @@ fn the_selection_verbs_leave_the_view_for_a_charmed_player() {
 fn target_by_name_leaves_the_view_when_its_pick_is_not_selectable() {
     const OLD: u64 = 0x21;
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     let old = candidate(OLD, "Old Mob", 1.0).state;
     s.set_unit("target", Some(old));
     s.set_name_candidate(0x31, Some(unselectable(0x31, "Red Affinity", 4.0)));
@@ -1147,6 +1157,7 @@ fn target_by_name_leaves_the_view_when_its_pick_is_not_selectable() {
 #[test]
 fn target_unit_leaves_the_view_when_the_held_unit_is_not_selectable() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_unit_guids(&UnitGuids {
         player: 0x10,
         party: [0x22, 0, 0, 0],

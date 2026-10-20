@@ -556,17 +556,22 @@ pub(crate) fn world_drop_click(model: &mut Model) -> bool {
 /// clears with `ClearCursor(1,1)` (`0x4fa078`), whatever is held, stops spell targeting
 /// (`0x4fa07d`, `0x6e4900`), then picks up ([`pick_up_item`], `0x4fa0aa`), so its handlers see
 /// two clears and the set. Returns whether anything was picked up.
-pub(crate) fn split_container_item(lua: &Lua, bag: i64, slot: u32, count: i64) -> bool {
+pub(crate) fn split_container_item(
+    lua: &Lua,
+    bag: i64,
+    slot: u32,
+    count: i64,
+) -> mlua::Result<bool> {
     let item = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
         let Some(s) = model.containers.get(&bag).and_then(|c| c.slots.get(&slot)) else {
-            return false;
+            return Ok(false);
         };
         if s.item_id == 0 || item_locked(&model, s.guid) {
-            return false;
+            return Ok(false);
         }
         if count < 1 || count > i64::from(s.count) {
-            return false;
+            return Ok(false);
         }
         let n = count as u32;
         let whole = n == s.count;
@@ -591,10 +596,10 @@ pub(crate) fn split_container_item(lua: &Lua, bag: i64, slot: u32, count: i64) -
     });
     // `StopTargeting` ends an armed spell's targeting, as `SpellStopTargeting` does.
     if targeting {
-        super::calls::submit(lua, super::ScriptCall::SpellStopTargeting);
+        super::calls::submit(lua, super::ScriptCall::SpellStopTargeting)?;
     }
     pick_up_item(lua, item);
-    true
+    Ok(true)
 }
 
 /// `DeleteCursorItem()` (`0x4897b0`), the delete popup's accept: a held item queues its
@@ -955,7 +960,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 count,
                 "Usage: SplitContainerItem(index, slot, amount)",
             )?);
-            split_container_item(lua, bag, slot, count);
+            split_container_item(lua, bag, slot, count)?;
             Ok(())
         })?,
     )?;
@@ -1490,7 +1495,7 @@ mod tests {
     fn split_of_the_whole_stack_degrades_to_a_plain_pickup() {
         let mut s = UiScript::new().unwrap();
         s.set_container(0, Some(one_item_backpack())); // slot 1: a 5-stack
-        assert!(split_container_item(&s.lua, 0, 1, 5));
+        assert!(split_container_item(&s.lua, 0, 1, 5).unwrap());
         let held = s.cursor_item().expect("picked up");
         assert_eq!(held.count, None, "count == stack ⇒ whole-stack pickup");
     }
@@ -1502,6 +1507,7 @@ mod tests {
     #[test]
     fn a_clear_with_coins_held_signals_player_money() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_money(1_000);
         s.set_container(0, Some(one_item_backpack()));
         heard::listen(

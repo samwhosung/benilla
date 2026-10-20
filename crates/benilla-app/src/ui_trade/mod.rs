@@ -862,7 +862,7 @@ fn resignal_trade_items(
 /// Push the trade into the VM and fire its events on a change, diffed against `Local` memory;
 /// `TRADE_ACCEPT_UPDATE` fires after `TRADE_SHOW`, whose handler hides the highlights.
 fn feed_trade(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut trade: ResMut<TradeSession>,
     items: Res<Items>,
     icons: Option<Res<ItemDisplays>>,
@@ -880,7 +880,8 @@ fn feed_trade(
     mut last_their_gold: crate::ui_script::WindowMemo<u32>,
     mut closes: CoreCloses,
 ) {
-    let Some(mut script) = script else {
+    hosted_vm.run(|script| {
+    let Some(script) = script else {
         return;
     };
     let last = last.get(&script);
@@ -1057,6 +1058,7 @@ fn feed_trade(
 
     *last = fresh;
     *last_open = trade.is_open();
+})
 }
 
 /// `TRADE_UPDATE`, whose one producer is the callback `0x4c0340` (`0x4c034f`) that the item
@@ -1089,17 +1091,21 @@ fn run_record_callbacks(
 /// Drain the Lua intents into the trade `CMSG`s; `CloseTrade` runs the close core. The item
 /// getters' record callbacks ([`run_record_callbacks`]) ride the same after-the-tick pass.
 fn drain_trade(
-    script: Option<NonSendMut<UiScript>>,
+    // What the host also reaches, read before the VM runs with the host lent.
+    mut hosted: ParamSet<(Res<Selection>, crate::script_calls::HostedVm)>,
     mut notices: MessageReader<crate::item_watch::ItemNotice>,
     mut trade: ResMut<TradeSession>,
     mut world_commands: Commands,
     commands: Res<NetCommands>,
-    selection: Res<Selection>,
     group: Res<GroupState>,
     objects: Objects,
     items: Res<Items>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
 ) {
+    let p = hosted.p0();
+    let selection = *p;
+    drop(p);
+    hosted.p1().run(|script| {
     let Some(mut script) = script else {
         return;
     };
@@ -1185,6 +1191,7 @@ fn drain_trade(
     if script.take_trade_cancel() {
         let _ = commands.0.send(ClientCommand::CancelTrade);
     }
+})
 }
 
 /// The coinage-change reflex (`0x5ddf30`): an offer above the purse is trimmed to the purse.

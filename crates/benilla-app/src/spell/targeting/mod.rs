@@ -670,6 +670,7 @@ mod tests {
             ..Default::default()
         });
         let mut script = UiScript::new().expect("a VM");
+        script.keep_calls();
         script.set_spell_targeting(true);
         world.insert_non_send_resource(script);
         (world, rx, ally)

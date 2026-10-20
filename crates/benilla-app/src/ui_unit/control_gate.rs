@@ -234,6 +234,7 @@ mod tests {
             })
             .add_systems(Update, feed_control_bypass);
         let mut script = UiScript::new().unwrap();
+        script.keep_calls();
         script.set_container(
             0,
             Some(ContainerState {

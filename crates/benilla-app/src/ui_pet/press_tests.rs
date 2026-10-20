@@ -118,9 +118,11 @@ pub(super) struct Rig {
     pub(super) feed: Schedule,
 }
 
-/// A VM whose listener records every event the pet's lists fire into `SEEN`, in order.
+/// A VM whose listener records every event the pet's lists fire into `SEEN`, in order. No engine
+/// is behind it, so it keeps the calls its verbs make; the rig applies a press itself.
 pub(super) fn listening_vm() -> benilla_ui::script::UiScript {
-    let script = benilla_ui::script::UiScript::new().expect("a VM");
+    let mut script = benilla_ui::script::UiScript::new().expect("a VM");
+    script.keep_calls();
     listen(&script);
     script
 }
@@ -632,15 +634,10 @@ fn a_pet_attack_with_the_cursor_up_casts_before_the_pet_acts() {
         0x0002,
     );
     rig.frame();
-    rig.app
-        .world_mut()
-        .non_send_resource_mut::<benilla_ui::script::UiScript>()
-        .run_binding("PetAttack()")
-        .expect("the key runs");
-    rig.app
-        .world_mut()
-        .run_system_once(crate::script_calls::apply_script_calls)
-        .expect("the calls apply as a one-shot system");
+    crate::script_calls::with_hosted_vm(rig.app.world_mut(), |s| {
+        s.expect("a VM").run_binding("PetAttack()")
+    })
+    .expect("the key runs");
 
     let sent = rig.sent();
     assert!(

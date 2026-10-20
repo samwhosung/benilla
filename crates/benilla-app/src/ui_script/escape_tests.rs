@@ -185,6 +185,7 @@ fn escape_is_consumed_by_a_focused_editbox_and_leaves_windows_open() {
 fn escape_closes_the_options_window_before_opening_the_menu() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -332,6 +333,7 @@ fn escape_ladder_cast_then_windows_then_target_one_eater_per_press() {
 
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for file in crate::ui_script::test_ui::production_order(&[
         BAG_UI,
@@ -444,6 +446,7 @@ fn escape_ladder_cast_then_windows_then_target_one_eater_per_press() {
 fn escape_ladder_targeting_rung_after_cast_before_windows() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for file in crate::ui_script::test_ui::production_order(&[
         BAG_UI,
@@ -512,6 +515,7 @@ fn escape_ladder_targeting_rung_after_cast_before_windows() {
 fn an_addon_frame_registered_in_uispecialframes_closes_on_escape() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");

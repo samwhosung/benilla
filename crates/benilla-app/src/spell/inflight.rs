@@ -960,17 +960,22 @@ mod tests {
             app.world_mut().run_system_once(local_self_cancel).unwrap();
         }
 
-        /// Apply the `SpellStopCasting()` calls the VM queued, as `crate::script_calls` does.
-        fn apply_stops(app: &mut App) {
+        /// `SpellStopCasting()`, its answer, with the cast's cancel lent as the host, which applies
+        /// the call inside the verb as `crate::script_calls` does.
+        fn stop_casting(app: &mut App) -> Option<i64> {
             app.world_mut()
                 .run_system_once(|mut script: NonSendMut<UiScript>, mut cancel: SelfCancel| {
-                    crate::script_calls::in_call_order(&mut script, |_, call| {
+                    let mut host = crate::script_calls::FnHost(|_: &mut UiScript, call| {
                         if call == ScriptCall::SpellStopCasting {
                             cancel.stop_casting();
                         }
                     });
+                    script.hosted(&mut host, |s| {
+                        s.eval::<Option<i64>>("return SpellStopCasting()")
+                    })
                 })
-                .unwrap();
+                .unwrap()
+                .unwrap()
         }
 
         #[test]
@@ -1117,14 +1122,10 @@ mod tests {
 
             app.world_mut().run_system_once(feed_cast_reports).unwrap();
             assert_eq!(
-                app.world()
-                    .non_send_resource::<UiScript>()
-                    .eval::<Option<i64>>("return SpellStopCasting()")
-                    .unwrap(),
+                stop_casting(&mut app),
                 None,
                 "mid-channel the binding answers nil — the vanilla /stopcasting quirk"
             );
-            apply_stops(&mut app);
             assert!(
                 rx.try_recv().is_err(),
                 "no wire cancel — channels break only on the movement path"
@@ -1149,14 +1150,7 @@ mod tests {
 
             // Press 1 stops the auto-repeat only.
             app.world_mut().run_system_once(feed_cast_reports).unwrap();
-            assert_eq!(
-                app.world()
-                    .non_send_resource::<UiScript>()
-                    .eval::<Option<i64>>("return SpellStopCasting()")
-                    .unwrap(),
-                Some(1)
-            );
-            apply_stops(&mut app);
+            assert_eq!(stop_casting(&mut app), Some(1));
             assert!(
                 matches!(
                     rx.try_recv(),
@@ -1177,14 +1171,7 @@ mod tests {
 
             // Press 2 cancels the cast.
             app.world_mut().run_system_once(feed_cast_reports).unwrap();
-            assert_eq!(
-                app.world()
-                    .non_send_resource::<UiScript>()
-                    .eval::<Option<i64>>("return SpellStopCasting()")
-                    .unwrap(),
-                Some(1)
-            );
-            apply_stops(&mut app);
+            assert_eq!(stop_casting(&mut app), Some(1));
             assert!(
                 matches!(
                     rx.try_recv(),
@@ -1214,15 +1201,11 @@ mod tests {
 
             app.world_mut().run_system_once(feed_cast_reports).unwrap();
             assert_eq!(
-                app.world()
-                    .non_send_resource::<UiScript>()
-                    .eval::<Option<i64>>("return SpellStopCasting()")
-                    .unwrap(),
+                stop_casting(&mut app),
                 Some(1),
                 "the queued strike makes IsCasting true, so the binding EATS the press — which \
                  is what spares the target three rungs further down the ladder"
             );
-            apply_stops(&mut app);
             assert!(
                 matches!(
                     rx.try_recv(),
@@ -1280,14 +1263,10 @@ mod tests {
 
             app.world_mut().run_system_once(feed_cast_reports).unwrap();
             assert_eq!(
-                app.world()
-                    .non_send_resource::<UiScript>()
-                    .eval::<Option<i64>>("return SpellStopCasting()")
-                    .unwrap(),
+                stop_casting(&mut app),
                 Some(1),
                 "the targeting spell is in flight, so IsCasting is true and the press is eaten"
             );
-            apply_stops(&mut app);
 
             assert!(
                 !app.world()
@@ -1388,14 +1367,7 @@ mod tests {
             mark_casting(&mut app, FIREBALL);
 
             app.world_mut().run_system_once(feed_cast_reports).unwrap();
-            assert_eq!(
-                app.world()
-                    .non_send_resource::<UiScript>()
-                    .eval::<Option<i64>>("return SpellStopCasting()")
-                    .unwrap(),
-                Some(1)
-            );
-            apply_stops(&mut app);
+            assert_eq!(stop_casting(&mut app), Some(1));
             assert!(
                 matches!(
                     rx.try_recv(),
@@ -1418,14 +1390,10 @@ mod tests {
             // Press 2: the pop put the strike back in the slot.
             app.world_mut().run_system_once(feed_cast_reports).unwrap();
             assert_eq!(
-                app.world()
-                    .non_send_resource::<UiScript>()
-                    .eval::<Option<i64>>("return SpellStopCasting()")
-                    .unwrap(),
+                stop_casting(&mut app),
                 Some(1),
                 "still stoppable — so this press is eaten too, and the target still survives"
             );
-            apply_stops(&mut app);
             assert!(matches!(
                 rx.try_recv(),
                 Ok(crate::net::ClientCommand::CancelCast {
@@ -1445,14 +1413,7 @@ mod tests {
 
             // Press 3, still inside the round trip: the same again.
             app.world_mut().run_system_once(feed_cast_reports).unwrap();
-            assert_eq!(
-                app.world()
-                    .non_send_resource::<UiScript>()
-                    .eval::<Option<i64>>("return SpellStopCasting()")
-                    .unwrap(),
-                Some(1)
-            );
-            apply_stops(&mut app);
+            assert_eq!(stop_casting(&mut app), Some(1));
             assert!(matches!(
                 rx.try_recv(),
                 Ok(crate::net::ClientCommand::CancelCast {

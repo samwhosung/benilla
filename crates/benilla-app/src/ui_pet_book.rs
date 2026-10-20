@@ -42,7 +42,7 @@ impl Plugin for UiPetBookPlugin {
                 // `PetBar`, whose next feed carries the mirrored autocast bit.
                 drain_pet_book
                     .after(UiInput)
-                    .after(crate::script_calls::apply_script_calls),
+                    .after(crate::script_calls::bind_parked_picks),
             ),
         );
     }

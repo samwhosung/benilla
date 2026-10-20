@@ -8,6 +8,7 @@ use benilla_ui::script::{
 
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     super::test_ui::load_social_ui(&mut s);
     s

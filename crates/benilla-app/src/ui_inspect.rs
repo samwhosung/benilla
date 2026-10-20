@@ -11,7 +11,7 @@
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{InspectView, InvSlotView, InventorySlots, ScriptValue, UiScript};
+use benilla_ui::script::{InspectView, InvSlotView, InventorySlots, ScriptValue};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
@@ -105,7 +105,8 @@ fn inspect_slot_view(
 }
 
 fn feed_inspect(
-    script: Option<NonSendMut<UiScript>>,
+    // What the host also reaches, read before the VM runs with the host lent.
+    mut hosted: ParamSet<(Res<crate::target::Selection>, crate::script_calls::HostedVm)>,
     mut target: ResMut<InspectTarget>,
     mut feed: ResMut<InspectFeedState>,
     items: Res<Items>,
@@ -118,93 +119,98 @@ fn feed_inspect(
     commands: Res<NetCommands>,
     index: Res<GuidIndex>,
     stores: Query<&ObjectStore>,
-    selection: Res<crate::target::Selection>,
     group: Res<crate::ui_party::GroupState>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    // A `/reload` keeps the latched token, and the fresh memo re-pushes the view.
-    let memo = feed.vm.get(&script);
+    let p = hosted.p0();
+    let selection = *p;
+    drop(p);
+    hosted.p1().run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        // A `/reload` keeps the latched token, and the fresh memo re-pushes the view.
+        let memo = feed.vm.get(&script);
 
-    // `NotifyInspect(unit)`: send `CMSG_INSPECT` for the unit's guid and latch its token.
-    let mut notified = false;
-    for token in script.take_inspect_notifies() {
-        match crate::ui_unit::player_token_guid(&token, &selection, &group) {
-            Some(guid) => {
-                debug!("inspect: {token:?} -> {guid:#x}; sending CMSG_INSPECT");
-                let _ = commands.0.send(ClientCommand::Inspect { target: guid });
-                target.token = Some(token);
-                notified = true;
-            }
-            None => {
-                debug!("inspect: {token:?} did not resolve to a player guid — nothing sent");
+        // `NotifyInspect(unit)`: send `CMSG_INSPECT` for the unit's guid and latch its token.
+        let mut notified = false;
+        for token in script.take_inspect_notifies() {
+            match crate::ui_unit::player_token_guid(&token, &selection, &group) {
+                Some(guid) => {
+                    debug!("inspect: {token:?} -> {guid:#x}; sending CMSG_INSPECT");
+                    let _ = commands.0.send(ClientCommand::Inspect { target: guid });
+                    target.token = Some(token);
+                    notified = true;
+                }
+                None => {
+                    debug!("inspect: {token:?} did not resolve to a player guid — nothing sent");
+                }
             }
         }
-    }
-    // `ClearInspectPlayer()`, from `InspectFrame_OnHide`: the resolve stops.
-    if script.take_inspect_clear() {
-        target.token = None;
-    }
-
-    // Re-resolve the latched token every frame, so the window follows a retarget as the
-    // reference's `PLAYER_TARGET_CHANGED` arm does.
-    let resolved = target.token.as_ref().and_then(|token| {
-        let guid = crate::ui_unit::player_token_guid(token, &selection, &group)?;
-        let entity = *index.0.get(&guid)?;
-        Some((token.clone(), guid, entity))
-    });
-
-    let Some((token, guid, entity)) = resolved else {
-        // Nothing inspected, or the target is not streamed: clear the view.
-        if memo.last.is_some() {
-            script.set_inspect(None);
-            memo.last = None;
+        // `ClearInspectPlayer()`, from `InspectFrame_OnHide`: the resolve stops.
+        if script.take_inspect_clear() {
+            target.token = None;
         }
-        return;
-    };
 
-    let Ok(store) = stores.get(entity) else {
-        return;
-    };
-    // The frame's show and a new inspectee are its slots' getter calls, whose lookups pass a
-    // callback (`0x4c83ce`); the frames between only see a slot change, which the visible item's
-    // own lookup asked (`0x5ed764`).
-    let shown = notified || memo.last.as_ref().map(|v| v.guid) != Some(guid);
-    let ask = Ask::at(shown, &commands);
-    let mut slots: InventorySlots = Default::default();
-    for slot in 1..=19u8 {
-        slots[usize::from(slot)] = inspect_slot_view(
-            store,
-            &items,
-            icons.as_deref(),
-            crate::items::RollCatalogs {
-                enchants: catalogs.0.as_deref(),
-                props: catalogs.1.as_deref(),
-            },
-            ask,
-            slot - 1,
-        );
-    }
-    let view = InspectView {
-        unit: token.clone(),
-        guid,
-        slots,
-    };
-    if memo.last.as_ref() != Some(&view) {
-        script.set_inspect(Some(view.clone()));
-        memo.last = Some(view);
-        // `InspectPaperDollItemSlotButton_OnEvent` filters it on `arg1` being the inspected unit.
-        script.fire_event(
-            "UNIT_INVENTORY_CHANGED",
-            vec![ScriptValue::Str(token.clone())],
-        );
-    }
+        // Re-resolve the latched token every frame, so the window follows a retarget as the
+        // reference's `PLAYER_TARGET_CHANGED` arm does.
+        let resolved = target.token.as_ref().and_then(|token| {
+            let guid = crate::ui_unit::player_token_guid(token, &selection, &group)?;
+            let entity = *index.0.get(&guid)?;
+            Some((token.clone(), guid, entity))
+        });
+
+        let Some((token, guid, entity)) = resolved else {
+            // Nothing inspected, or the target is not streamed: clear the view.
+            if memo.last.is_some() {
+                script.set_inspect(None);
+                memo.last = None;
+            }
+            return;
+        };
+
+        let Ok(store) = stores.get(entity) else {
+            return;
+        };
+        // The frame's show and a new inspectee are its slots' getter calls, whose lookups pass a
+        // callback (`0x4c83ce`); the frames between only see a slot change, which the visible item's
+        // own lookup asked (`0x5ed764`).
+        let shown = notified || memo.last.as_ref().map(|v| v.guid) != Some(guid);
+        let ask = Ask::at(shown, &commands);
+        let mut slots: InventorySlots = Default::default();
+        for slot in 1..=19u8 {
+            slots[usize::from(slot)] = inspect_slot_view(
+                store,
+                &items,
+                icons.as_deref(),
+                crate::items::RollCatalogs {
+                    enchants: catalogs.0.as_deref(),
+                    props: catalogs.1.as_deref(),
+                },
+                ask,
+                slot - 1,
+            );
+        }
+        let view = InspectView {
+            unit: token.clone(),
+            guid,
+            slots,
+        };
+        if memo.last.as_ref() != Some(&view) {
+            script.set_inspect(Some(view.clone()));
+            memo.last = Some(view);
+            // `InspectPaperDollItemSlotButton_OnEvent` filters it on `arg1` being the inspected unit.
+            script.fire_event(
+                "UNIT_INVENTORY_CHANGED",
+                vec![ScriptValue::Str(token.clone())],
+            );
+        }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use benilla_ui::script::UiScript;
     use bevy::ecs::system::RunSystemOnce;
 
     /// The inspect's show and a new inspectee stand for the slots' getter calls, whose lookups

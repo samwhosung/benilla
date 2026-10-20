@@ -1464,7 +1464,7 @@ fn dead_may_send(kind: super::edit::SendType) -> bool {
 /// `"/dance"` says six characters. An empty line of any type but AFK and DND sends nothing and
 /// prints nothing.
 pub(crate) fn drain_addon_chat_sends(
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     commands: Res<NetCommands>,
     chat_log: Res<super::feed::ChatLog>,
     mut tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
@@ -1477,117 +1477,122 @@ pub(crate) fn drain_addon_chat_sends(
     channels: Res<super::edit::ChannelState>,
     errors: Res<crate::ui_action::UiErrorKeys>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for mut send in script.take_chat_sends() {
-        // The binding has raised on any other token (`0x49f27f`), so none reaches here.
-        let Some(mut kind) = super::edit::SendType::from_token(&send.chat_type) else {
-            continue;
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
         };
-        // An empty line of any type but AFK and DND ends the call here, ahead of the target
-        // checks, the AFK clear and the tutorial acknowledge (`0x49f2a1`).
-        if send.ends_at_empty_line() {
-            continue;
-        }
-        // The group gates and the leader promotion, ahead of the AFK clear and the tutorial
-        // acknowledge, which a refused line never reaches.
-        match group_gate(kind, script.chat_group()) {
-            Ok(promoted) => kind = promoted,
-            Err(key) => {
-                errors.push(crate::ui_action::UiError::key(key));
+        for mut send in script.take_chat_sends() {
+            // The binding has raised on any other token (`0x49f27f`), so none reaches here.
+            let Some(mut kind) = super::edit::SendType::from_token(&send.chat_type) else {
+                continue;
+            };
+            // An empty line of any type but AFK and DND ends the call here, ahead of the target
+            // checks, the AFK clear and the tutorial acknowledge (`0x49f2a1`).
+            if send.ends_at_empty_line() {
                 continue;
             }
-        }
-        // A channel target is a slot number, sent as that slot's name; with no such slot the call
-        // ends here (`0x49f4ea`), ahead of the AFK clear and the tutorial acknowledge.
-        if kind == super::edit::SendType::Channel {
-            let name = send.target.as_deref().and_then(|t| channels.send_target(t));
-            if name.is_none() {
-                debug!(
-                    "chat: SendChatMessage names no joined channel {:?}; not sent",
-                    send.target
-                );
-                continue;
+            // The group gates and the leader promotion, ahead of the AFK clear and the tutorial
+            // acknowledge, which a refused line never reaches.
+            match group_gate(kind, script.chat_group()) {
+                Ok(promoted) => kind = promoted,
+                Err(key) => {
+                    errors.push(crate::ui_action::UiError::key(key));
+                    continue;
+                }
             }
-            send.target = name;
-        }
-        // `SendChatMessage`'s tutorial acknowledge (`0x49f5fc`) covers the twelve social types,
-        // not say, yell or emote.
-        if !matches!(
-            kind,
-            super::edit::SendType::Say | super::edit::SendType::Yell | super::edit::SendType::Emote
-        ) {
-            if let Some(t) = tutorials.as_mut() {
-                t.write(crate::tutorial::TutorialEvent::Acknowledge {
-                    id: crate::tutorial::id::CHATTING,
-                });
+            // A channel target is a slot number, sent as that slot's name; with no such slot the call
+            // ends here (`0x49f4ea`), ahead of the AFK clear and the tutorial acknowledge.
+            if kind == super::edit::SendType::Channel {
+                let name = send.target.as_deref().and_then(|t| channels.send_target(t));
+                if name.is_none() {
+                    debug!(
+                        "chat: SendChatMessage names no joined channel {:?}; not sent",
+                        send.target
+                    );
+                    continue;
+                }
+                send.target = name;
             }
-        }
-        // ── The away commands, and the AFK clear the other sends carry ───────────────────────
-        //
-        // `SendChatMessage` (`0x49f1e0`): every type but AFK (`0x14`) first clears a standing AFK
-        // (`0x49f4f6 jne 0x49f3c7`), `/dnd` included; then AFK and DND each have an arm ahead of
-        // the generic send. The system lines, the default text and the mirror are `super::away`'s.
-        let strings = |key: &str| crate::ui_chat::combat::global_string(&script, key);
-        let wire = kind.wire();
-        if !matches!(wire, crate::net::ChatKind::Afk) {
-            if let Some(line) =
-                super::away::auto_clear_line(*mirror, auto_clear_afk(&cvars), &strings)
+            // `SendChatMessage`'s tutorial acknowledge (`0x49f5fc`) covers the twelve social types,
+            // not say, yell or emote.
+            if !matches!(
+                kind,
+                super::edit::SendType::Say
+                    | super::edit::SendType::Yell
+                    | super::edit::SendType::Emote
+            ) {
+                if let Some(t) = tutorials.as_mut() {
+                    t.write(crate::tutorial::TutorialEvent::Acknowledge {
+                        id: crate::tutorial::id::CHATTING,
+                    });
+                }
+            }
+            // ── The away commands, and the AFK clear the other sends carry ───────────────────────
+            //
+            // `SendChatMessage` (`0x49f1e0`): every type but AFK (`0x14`) first clears a standing AFK
+            // (`0x49f4f6 jne 0x49f3c7`), `/dnd` included; then AFK and DND each have an arm ahead of
+            // the generic send. The system lines, the default text and the mirror are `super::away`'s.
+            let strings = |key: &str| crate::ui_chat::combat::global_string(&script, key);
+            let wire = kind.wire();
+            if !matches!(wire, crate::net::ChatKind::Afk) {
+                if let Some(line) =
+                    super::away::auto_clear_line(*mirror, auto_clear_afk(&cvars), &strings)
+                {
+                    super::away::push_system(&chat_log, line);
+                    mirror.0 = 0;
+                    // The empty `0x14` that tells the server, ahead of the message's own packet.
+                    let _ = commands.0.send(ClientCommand::Chat {
+                        kind: crate::net::ChatKind::Afk,
+                        target: None,
+                        text: String::new(),
+                        language: None,
+                    });
+                }
+            }
+            // A dead or ghost player's line is refused after the AFK clear (`0x49f592`-`0x49f5e4`,
+            // `0x605f30`) unless its type is on the allowed chain (`0x49f5a3`-`0x49f5da`).
+            if !dead_may_send(kind) && self_q.iter().next().is_some_and(|s| s.0.is_dead_or_ghost())
             {
-                super::away::push_system(&chat_log, line);
-                mirror.0 = 0;
-                // The empty `0x14` that tells the server, ahead of the message's own packet.
-                let _ = commands.0.send(ClientCommand::Chat {
-                    kind: crate::net::ChatKind::Afk,
-                    target: None,
-                    text: String::new(),
-                    language: None,
-                });
+                errors.push(crate::ui_action::UiError::key("ERR_CHAT_WHILE_DEAD"));
+                continue;
+            }
+            let text = match wire {
+                crate::net::ChatKind::Afk => {
+                    let out = super::away::afk_line(&send.text, *mirror, &strings);
+                    if let Some(line) = out.line {
+                        super::away::push_system(&chat_log, line);
+                    }
+                    if let Some(v) = out.mirror {
+                        mirror.0 = v;
+                    }
+                    out.body
+                }
+                crate::net::ChatKind::Dnd => {
+                    // DND has no mirror (`0x49f3f0`): the live descriptor bit.
+                    let out = super::away::dnd_line(&send.text, is_dnd(&self_q), &strings);
+                    if let Some(line) = out.line {
+                        super::away::push_system(&chat_log, line);
+                    }
+                    out.body
+                }
+                _ => send.text,
+            };
+            let cmd = ClientCommand::Chat {
+                kind: wire,
+                target: send.target,
+                text,
+                // Every type but AFK carries the language the binding resolved (`0x49f6f9`); the AFK
+                // arm's own builder, `SetAFK` (`0x5eb740`), never reads the argument.
+                language: match wire {
+                    crate::net::ChatKind::Afk => None,
+                    _ => send.language,
+                },
+            };
+            if commands.0.send(cmd).is_err() {
+                warn!("chat: not connected; addon line dropped");
             }
         }
-        // A dead or ghost player's line is refused after the AFK clear (`0x49f592`-`0x49f5e4`,
-        // `0x605f30`) unless its type is on the allowed chain (`0x49f5a3`-`0x49f5da`).
-        if !dead_may_send(kind) && self_q.iter().next().is_some_and(|s| s.0.is_dead_or_ghost()) {
-            errors.push(crate::ui_action::UiError::key("ERR_CHAT_WHILE_DEAD"));
-            continue;
-        }
-        let text = match wire {
-            crate::net::ChatKind::Afk => {
-                let out = super::away::afk_line(&send.text, *mirror, &strings);
-                if let Some(line) = out.line {
-                    super::away::push_system(&chat_log, line);
-                }
-                if let Some(v) = out.mirror {
-                    mirror.0 = v;
-                }
-                out.body
-            }
-            crate::net::ChatKind::Dnd => {
-                // DND has no mirror (`0x49f3f0`): the live descriptor bit.
-                let out = super::away::dnd_line(&send.text, is_dnd(&self_q), &strings);
-                if let Some(line) = out.line {
-                    super::away::push_system(&chat_log, line);
-                }
-                out.body
-            }
-            _ => send.text,
-        };
-        let cmd = ClientCommand::Chat {
-            kind: wire,
-            target: send.target,
-            text,
-            // Every type but AFK carries the language the binding resolved (`0x49f6f9`); the AFK
-            // arm's own builder, `SetAFK` (`0x5eb740`), never reads the argument.
-            language: match wire {
-                crate::net::ChatKind::Afk => None,
-                _ => send.language,
-            },
-        };
-        if commands.0.send(cmd).is_err() {
-            warn!("chat: not connected; addon line dropped");
-        }
-    }
+    })
 }
 
 /// Turn `SendAddonMessage` calls into sends. The binding has already applied the reference's
