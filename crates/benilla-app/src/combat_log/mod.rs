@@ -56,8 +56,6 @@ pub(crate) struct Ctx<'w> {
     names: Option<Res<'w, NameCache>>,
     skill_lines: Option<Res<'w, crate::ui_spellbook::SkillLines>>,
     enchants: Option<Res<'w, crate::items::Enchants>>,
-    items: Option<Res<'w, crate::items::Items>>,
-    gameobjects: Option<Res<'w, crate::go_templates::GameObjectTemplates>>,
     /// The eight display ranges.
     ranges: Res<'w, CombatLogRanges>,
     /// `CombatLogPeriodicSpells`.
@@ -76,12 +74,21 @@ impl Ctx<'_> {
             names: self.names.as_deref(),
             skill_lines: self.skill_lines.as_deref().map(|s| &s.catalog),
             enchants: self.enchants.as_deref().map(|e| &e.0),
-            items: self.items.as_deref(),
-            gameobjects: self.gameobjects.as_deref(),
+            items: None,
+            gameobjects: None,
             ranges: &self.ranges,
             periodic: self.periodic.0,
         }
     }
+}
+
+/// The caches `LogOpenLock` reads (`0xc0e2a0`, `0xc0e318`). They stay out of [`Ctx`] because
+/// `on_missile_miss` runs in `Update` with it, and the sound systems that write the item cache run
+/// there too: a claim on a cache no line of that leg reads would only add undeclared orders.
+#[derive(SystemParam)]
+struct LockCaches<'w> {
+    items: Option<Res<'w, crate::items::Items>>,
+    gameobjects: Option<Res<'w, crate::go_templates::GameObjectTemplates>>,
 }
 
 /// What the two legs resolve endpoints through and write to.
@@ -385,9 +392,13 @@ fn on_enchantment_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     }
 }
 
-fn on_spell_log_execute(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
+fn on_spell_log_execute(In(ev): In<SessionEvent>, c: Ctx, caches: LockCaches, mut l: Sinks) {
     if let SessionEvent::SpellLogExecute(x) = ev {
-        let ctx = c.ctx();
+        let ctx = chat::ChatCtx {
+            items: caches.items.as_deref(),
+            gameobjects: caches.gameobjects.as_deref(),
+            ..c.ctx()
+        };
         chat::spell_log_execute(&x, &ctx, &l.stores, &l.poses, &mut l.log);
     }
 }
