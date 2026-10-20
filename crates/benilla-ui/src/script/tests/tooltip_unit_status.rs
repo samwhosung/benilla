@@ -454,3 +454,46 @@ fn a_party_member_out_of_sight_reads_offline_or_its_zone() {
     assert_eq!(lines(&s), ["[LEVEL_TYPE 20 [PLAYER]]"]);
     assert!(s.take_errors().is_empty());
 }
+
+/// The game object builder tints a tooltip that has a backdrop `0xff002e5a` (`0x52aa92`-
+/// `0x52aaaa`); the corpse builder does not, and its one line is white (`0x52afa7`), where the
+/// object's name is gold.
+#[test]
+fn a_world_objects_tooltip_tints_its_backdrop_and_a_corpses_does_not() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local up = CreateFrame("Frame", "UIParent"); up:SetAllPoints()
+        local tt = CreateFrame("GameTooltip", "GameTooltip", nil, "TestTooltipTemplate")
+        tt:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background" })
+        tt:SetBackdropColor(0.09, 0.09, 0.19)
+    "#,
+    )
+    .unwrap();
+    let backdrop = |s: &UiScript| -> (u8, u8, u8) {
+        let (r, g, b): (f32, f32, f32) = s.eval("return GameTooltip:GetBackdropColor()").unwrap();
+        let q = |c: f32| (c * 255.0).round() as u8;
+        (q(r), q(g), q(b))
+    };
+    let text_rgb = |s: &UiScript| -> (u8, u8, u8) {
+        let (r, g, b): (f32, f32, f32) = s
+            .eval("return GameTooltipTextLeft1:GetTextColor()")
+            .unwrap();
+        let q = |c: f32| (c * 255.0).round() as u8;
+        (q(r), q(g), q(b))
+    };
+    s.publish_world_mouseover(Some(1));
+    assert!(s.world_tooltip_corpse("Corpse of Bob"));
+    assert_eq!(
+        backdrop(&s),
+        (23, 23, 48),
+        "the corpse leaves the backdrop alone"
+    );
+    assert_eq!(text_rgb(&s), (255, 255, 255), "the corpse line is white");
+    s.publish_world_mouseover(Some(2));
+    assert!(s.world_tooltip_gameobject("Mailbox", &[], false));
+    assert_eq!(backdrop(&s), (0, 46, 90), "0xff002e5a");
+    assert_eq!(text_rgb(&s), (255, 210, 0), "the object's name is gold");
+    assert!(s.take_errors().is_empty());
+}

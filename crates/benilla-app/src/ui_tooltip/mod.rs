@@ -247,7 +247,7 @@ fn drive_mouseover_tooltip(
             return;
         };
         script.publish_world_mouseover(Some(guid));
-        script.world_tooltip_gameobject(&plate, &[], false);
+        script.world_tooltip_corpse(&plate);
         return;
     }
     if let Some((entity, guid)) = go {

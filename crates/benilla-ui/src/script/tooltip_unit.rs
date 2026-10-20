@@ -108,6 +108,8 @@ const RED: [f32; 4] = [1.0, 32.0 / 255.0, 32.0 / 255.0, 1.0];
 const LOCK_OPEN: [f32; 4] = [64.0 / 255.0, 192.0 / 255.0, 64.0 / 255.0, 1.0];
 /// `0xffffd200`, the unit name's colour until FrameXML recolours it by reaction.
 const GOLD: [f32; 4] = [1.0, 210.0 / 255.0, 0.0, 1.0];
+/// `0xc0d3bc` = `0xff002e5a` (`0x529010`), a game object tooltip's backdrop.
+const OBJECT_BACKDROP: crate::color::Rgba8 = crate::color::Rgba8::rgba(0, 0x2e, 0x5a, 0xff);
 
 /// A GameObject tooltip line's colour, as the builder `0x52aa20` picks it; the app picks the tint
 /// for each line.
@@ -461,17 +463,53 @@ impl super::UiScript {
         shown
     }
 
-    /// Show the world-mouseover GameObject tooltip (builder `0x52aa20`): the name in gold, then
-    /// the caller's lock lines. The anchor forks on the object's `[vtbl+0x5c]`: true (`0x492a01`)
-    /// owns it by `UIParent` in mode 6, `ANCHOR_CURSOR` (`0x52ffe0(UIParent, 6, 0, 0)` at
-    /// `0x492a1e`), which the tooltip's own update then keeps on the cursor; false (`0x492a42`)
-    /// fires `OnTooltipSetDefaultAnchor` for the default corner, as units (`0x492983`) always do.
-    /// `cursor` is that verdict.
+    /// Show the world-mouseover GameObject tooltip (builder `0x52aa20`): the backdrop tinted, the
+    /// name in gold, then the caller's lock lines. The anchor forks on the object's
+    /// `[vtbl+0x5c]`: true (`0x492a01`) owns it by `UIParent` in mode 6, `ANCHOR_CURSOR`
+    /// (`0x52ffe0(UIParent, 6, 0, 0)` at `0x492a1e`), which the tooltip's own update then keeps on
+    /// the cursor; false (`0x492a42`) fires `OnTooltipSetDefaultAnchor` for the default corner, as
+    /// units (`0x492983`) always do. `cursor` is that verdict.
     pub fn world_tooltip_gameobject(
         &mut self,
         name: &str,
         lines: &[(String, TooltipTint)],
         cursor: bool,
+    ) -> bool {
+        self.world_plate(cursor, |lua, this, h| {
+            // A tooltip with a backdrop takes `SetBackdropColor` of `0xc0d3bc`, the `0xff002e5a`
+            // `0x529010` writes (`0x52aa92`-`0x52aaaa`); `GameTooltip_OnHide` restores the
+            // default.
+            {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                super::backdrop::set_color(&mut model, h, false, OBJECT_BACKDROP);
+            }
+            append_line(lua, this, (name.to_string(), GOLD), None, false)?;
+            for (text, tint) in lines {
+                let colour = match *tint {
+                    TooltipTint::White => WHITE,
+                    TooltipTint::Red => RED,
+                    TooltipTint::LockOpen => LOCK_OPEN,
+                };
+                append_line(lua, this, (text.clone(), colour), None, false)?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Show the world-mouseover corpse tooltip (builder `0x52aef0`): its one line, white
+    /// (`0x52afa7`), at the default corner (`0x492a7d`).
+    pub fn world_tooltip_corpse(&mut self, text: &str) -> bool {
+        self.world_plate(false, |lua, this, _| {
+            append_line(lua, this, (text.to_string(), WHITE), None, false)
+        })
+    }
+
+    /// Seat `GameTooltip` as a world plate (the cursor, else the default-anchor script), clear it
+    /// (`0x530050`), let `fill` add the lines, and show what it holds.
+    fn world_plate(
+        &mut self,
+        cursor: bool,
+        fill: impl FnOnce(&Lua, &Table, FrameHandle) -> mlua::Result<()>,
     ) -> bool {
         let (h, id, root) = {
             let mut model = self.model_mut();
@@ -497,20 +535,8 @@ impl super::UiScript {
                 return false;
             }
         };
-        let render = || -> mlua::Result<()> {
-            clear(&self.lua, h);
-            append_line(&self.lua, &wrapper, (name.to_string(), GOLD), None, false)?;
-            for (text, tint) in lines {
-                let colour = match tint {
-                    TooltipTint::White => WHITE,
-                    TooltipTint::Red => RED,
-                    TooltipTint::LockOpen => LOCK_OPEN,
-                };
-                append_line(&self.lua, &wrapper, (text.clone(), colour), None, false)?;
-            }
-            Ok(())
-        };
-        if let Err(e) = render() {
+        clear(&self.lua, h);
+        if let Err(e) = fill(&self.lua, &wrapper, h) {
             self.push_error(e);
             return false;
         }
