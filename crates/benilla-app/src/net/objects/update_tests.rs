@@ -527,6 +527,43 @@ fn a_destroy_frees_a_released_object() {
     assert!(notices(world).contains(&FieldNotice::Global { id: 376 }));
 }
 
+/// A block brings back the object that left (`0x464530`), not a new one, so the bit an XP award set
+/// in its flags word (`0x60a0e6`), which only the constructor clears (`0x5fae7a`), is still set;
+/// a unit made new after its destroy is a new object, and has none.
+#[test]
+fn a_released_unit_keeps_its_xp_mark() {
+    use crate::ui_chat::combat::watch::XpAwarded;
+    const OTHER: u64 = 0xF130_0000_1234_0002;
+    let mut app = client();
+    let world = app.world_mut();
+    world.resource_mut::<SelfGuid>().0 = Some(ME);
+    send(
+        world,
+        [unit(MOB, &[(ENTRY, 299)]), unit(OTHER, &[(ENTRY, 299)])],
+    );
+    let marked = |world: &World, guid: u64| {
+        let e = world.resource::<GuidIndex>().0[&guid];
+        world.get::<XpAwarded>(e).is_some()
+    };
+    let e = world.resource::<GuidIndex>().0[&MOB];
+    world.entity_mut(e).insert(XpAwarded);
+
+    send(world, [out_of_range(&[MOB, OTHER])]);
+    send(
+        world,
+        [values(MOB, &[(STAT0, 6)]), values(OTHER, &[(STAT0, 6)])],
+    );
+    assert!(marked(world, MOB), "the marked unit came back marked");
+    assert!(
+        !marked(world, OTHER),
+        "control: an unmarked one did not gain it"
+    );
+
+    super::super::handlers::dispatch(world, vec![SessionEvent::ObjectDestroyed(MOB)]);
+    send(world, [unit(MOB, &[(ENTRY, 299)])]);
+    assert!(!marked(world, MOB), "a destroyed unit's next create is new");
+}
+
 /// An out-of-range list releases only as a packet's first block (`0x4651e1`); in any other place
 /// the notify pass skips it (`0x465fd0`) and nothing is released.
 #[test]
