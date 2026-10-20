@@ -110,6 +110,10 @@ pub(crate) use benilla_ui::messages::MsgKind;
 pub(crate) enum FillArg {
     S(String),
     D(i64),
+    /// The text of the VM global of this name, read when the line is shown (`0x703bf0`, the
+    /// empty string when missing): for a line queued while the VM in hand is not the loaded
+    /// interface's, which defines none of the strings the reference reads at its own display.
+    Global(String),
 }
 
 /// One `DisplayError` (`0x496720`) message, whatever its surface: a GlobalStrings key and the
@@ -151,7 +155,7 @@ impl UiError {
     pub(crate) fn arg_s(&self) -> Option<&str> {
         self.args.iter().find_map(|a| match a {
             FillArg::S(s) => Some(s.as_str()),
-            FillArg::D(_) => None,
+            FillArg::D(_) | FillArg::Global(_) => None,
         })
     }
 
@@ -160,7 +164,7 @@ impl UiError {
     pub(crate) fn arg_d(&self) -> Option<i64> {
         self.args.iter().find_map(|a| match a {
             FillArg::D(d) => Some(*d),
-            FillArg::S(_) => None,
+            FillArg::S(_) | FillArg::Global(_) => None,
         })
     }
 }
@@ -194,12 +198,22 @@ impl UiErrorTexts {
 /// between `0x4967d7` and `0x496842`), because a blank line is worse than none; only a chain
 /// missing a stock key reaches it.
 pub(crate) fn ui_error_text(e: &UiError, get: &dyn Fn(&str) -> Option<String>) -> Option<String> {
-    let args: Vec<benilla_ui::strings::Arg<'_>> = e
+    let words: Vec<String> = e
         .args
         .iter()
         .map(|a| match a {
+            FillArg::Global(key) => get(key).unwrap_or_default(),
+            FillArg::S(_) | FillArg::D(_) => String::new(),
+        })
+        .collect();
+    let args: Vec<benilla_ui::strings::Arg<'_>> = e
+        .args
+        .iter()
+        .zip(&words)
+        .map(|(a, word)| match a {
             FillArg::S(s) => benilla_ui::strings::Arg::S(s),
             FillArg::D(d) => benilla_ui::strings::Arg::D(*d),
+            FillArg::Global(_) => benilla_ui::strings::Arg::S(word),
         })
         .collect();
     let text = benilla_ui::strings::fill(&get(e.key)?, &args);

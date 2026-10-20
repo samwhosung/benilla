@@ -9,7 +9,7 @@ use bevy::prelude::*;
 
 use benilla_protocol::{SessionEvent, SessionEventKind};
 
-use super::{GroupState, ListText, GROUPTYPE_RAID};
+use super::{GroupState, GROUPTYPE_RAID};
 use crate::names::NameCache;
 use crate::net::{ClientCommand, GuidIndex, NetCommands, NetHandlerApp, ObjectStore, SelfGuid};
 use crate::query_cache::Ask;
@@ -103,7 +103,6 @@ fn on_list(
     index: Res<GuidIndex>,
     commands: Res<NetCommands>,
     tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
-    script: Option<NonSend<UiScript>>,
 ) {
     if let SessionEvent::GroupList {
         group_type,
@@ -136,7 +135,6 @@ fn on_list(
             &names,
             &index,
             &commands,
-            script.as_deref(),
         );
     }
 }
@@ -277,7 +275,6 @@ fn list(
     names: &NameCache,
     index: &GuidIndex,
     net_commands: &NetCommands,
-    script: Option<&UiScript>,
 ) {
     // The lookups with a callback, which ask a refused name again; a miss waits for the answer.
     // A party list seats every member and a raid list rows every one, so each is asked.
@@ -286,15 +283,8 @@ fn list(
             .resolve_player(guid, Ask::Event(net_commands))
             .map(str::to_string)
     };
-    // What the loot setter reads as the packet lands: the player-name cache with no callback
-    // (`0x4e878f`), and the VM's `ITEM_QUALITY<n>_DESC` (`0x4e87c9`, `0x703bf0`), empty when no VM
-    // holds the global.
+    // The loot master's name as the setter reads it, from the cache with no callback (`0x4e878f`).
     let cached_name = |guid: u64| names.resolve_player(guid, Ask::Read).map(str::to_string);
-    let quality = |n: u8| {
-        script.map_or_else(String::new, |s| {
-            s.global_text(&format!("ITEM_QUALITY{n}_DESC"))
-        })
-    };
     // Taken before `apply_list` consumes the list; `seat_new_records` then treats a member with
     // no record as new, the reference's `srcRec == 0`.
     let seats: Vec<(u64, bool)> = members
@@ -309,10 +299,7 @@ fn list(
         loot,
         self_guid.0,
         &lookup,
-        &ListText {
-            cached_name: &cached_name,
-            quality: &quality,
-        },
+        &cached_name,
     );
     push_group_lines(errors, shown.lines);
     if shown.invite_accept {
@@ -478,7 +465,6 @@ mod tests {
                 names,
                 &GuidIndex::default(),
                 &net,
-                None,
             );
         };
         send(&names);
@@ -521,7 +507,6 @@ mod tests {
             &names,
             &GuidIndex::default(),
             &net,
-            None,
         );
 
         let asked: Vec<u64> = rx
@@ -553,7 +538,6 @@ mod tests {
             &names,
             &GuidIndex::default(),
             &net,
-            None,
         );
         assert!(
             rx.try_iter()
@@ -592,7 +576,6 @@ mod tests {
                 names,
                 &GuidIndex::default(),
                 &net,
-                None,
             );
             let signals = group.signals.since(0);
             signals
@@ -657,7 +640,6 @@ mod tests {
                 &names,
                 &GuidIndex::default(),
                 &net,
-                None,
             );
         };
 
@@ -1052,7 +1034,6 @@ mod tests {
                 &names,
                 &index,
                 &net,
-                None,
             );
         };
 
@@ -1125,7 +1106,6 @@ mod tests {
                 &names,
                 &GuidIndex::default(),
                 &net,
-                None,
             );
         };
 
@@ -1322,17 +1302,18 @@ mod tests {
         );
     }
 
-    /// The loot setter's lines are read where the reference reads them, as the packet lands: the
-    /// new master's name from the player cache, which a miss leaves unasked (`0x4e878f`), and the
-    /// threshold's word from the VM's `ITEM_QUALITY<n>_DESC` (`0x4e87c9`, `0x703bf0`).
+    /// A login's group list lands while the VM in hand is not the loaded interface's (the glue's,
+    /// the parked one, a bare entry VM), which defines none of `ITEM_QUALITY<n>_DESC`: the
+    /// threshold line keeps the global's key and takes the word from the VM that shows it
+    /// (`0x4e87c9`, `0x703bf0`). The master's name is read as the packet lands, from the player
+    /// cache with no callback, which a miss leaves unasked (`0x4e878f`).
     #[test]
-    fn a_group_list_prints_the_loot_lines_with_the_names_the_cache_and_the_vm_hold() {
+    fn a_login_lists_loot_threshold_reads_its_word_from_the_vm_that_shows_it() {
         use super::super::pets::tests::{app_with, ME};
         use bevy::ecs::system::RunSystemOnce;
 
-        let script = benilla_ui::script::UiScript::new().unwrap();
-        script.run("ITEM_QUALITY3_DESC = 'Rare'").unwrap();
-        let mut app = app_with(script);
+        // The bare VM the packet lands on: no GlobalStrings at all.
+        let mut app = app_with(benilla_ui::script::UiScript::new().unwrap());
         let (tx, rx) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
         app.init_resource::<UiErrorKeys>()
@@ -1346,7 +1327,7 @@ mod tests {
         app.world_mut()
             .resource_mut::<NameCache>()
             .insert_player(aldwyn, "Aldwyn".into(), None);
-        let mut send = |master: u64, loot_method: u8| {
+        let mut send = |master: u64| {
             app.world_mut()
                 .run_system_once_with(
                     on_list,
@@ -1356,7 +1337,7 @@ mod tests {
                         members: vec![member(aldwyn, "Aldwyn"), member(brisca, "Brisca")],
                         leader: aldwyn,
                         loot: Some(GroupLootInfo {
-                            method: loot_method,
+                            method: 2,
                             master,
                             threshold: 3,
                         }),
@@ -1365,20 +1346,38 @@ mod tests {
                 .expect("the group-list handler");
             std::mem::take(&mut app.world_mut().resource_mut::<UiErrorKeys>().0)
         };
+        let lines = send(aldwyn);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+
+        // The interface comes up; the chat feed resolves the queued lines against it.
+        let real = benilla_ui::script::UiScript::new().unwrap();
+        real.run(
+            r#"
+            ERR_SET_LOOT_MASTER = "Looting changed to master looter."
+            ERR_NEW_LOOT_MASTER_S = "%s is now the loot master."
+            ERR_SET_LOOT_THRESHOLD_S = "Loot threshold set to %s"
+            ITEM_QUALITY3_DESC = "Rare"
+            "#,
+        )
+        .unwrap();
+        let shown: Vec<Option<String>> = lines
+            .iter()
+            .map(|e| {
+                crate::ui_action::ui_error_text(e, &|k| real.lua().globals().get::<String>(k).ok())
+            })
+            .collect();
         assert_eq!(
-            send(aldwyn, 2),
+            shown,
             [
-                UiError::key("ERR_SET_LOOT_MASTER"),
-                UiError::s("ERR_NEW_LOOT_MASTER_S", "Aldwyn"),
-                UiError::s("ERR_SET_LOOT_THRESHOLD_S", "Rare"),
+                Some("Looting changed to master looter.".to_string()),
+                Some("Aldwyn is now the loot master.".to_string()),
+                Some("Loot threshold set to Rare".to_string()),
             ]
         );
-        assert_eq!(send(aldwyn, 2), [], "nothing moved");
-        let _ = crate::query_cache::queries(&rx);
 
         // A master the cache does not hold is no line, and no query from this lookup.
-        let lines = send(stranger, 2);
-        assert_eq!(lines, []);
+        let _ = crate::query_cache::queries(&rx);
+        assert_eq!(send(stranger), []);
         assert!(
             crate::query_cache::queries(&rx).is_empty(),
             "the loot lookup carries no callback, so it asks nothing"

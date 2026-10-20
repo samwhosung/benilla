@@ -1239,19 +1239,8 @@ fn set_test_subgroup(group: &mut GroupState, self_guid: Option<u64>, index: u32,
     }
 }
 
-/// `ITEM_QUALITY0_DESC` to `ITEM_QUALITY6_DESC`, the words the sandbox's threshold line names.
-const SANDBOX_QUALITIES: [&str; 7] = [
-    "Poor",
-    "Common",
-    "Uncommon",
-    "Rare",
-    "Epic",
-    "Legendary",
-    "Artifact",
-];
-
-/// A list for a sandbox, whose cache and VM are not behind it: the loot lines name the master by
-/// the roster's own name and the threshold by [`SANDBOX_QUALITIES`].
+/// A list for a sandbox, whose cache is not behind it: the loot lines name the master by the
+/// roster's own name.
 fn apply_sandbox_list(
     group: &mut GroupState,
     (group_type, own_flags): (u8, u8),
@@ -1267,11 +1256,6 @@ fn apply_sandbox_list(
             .find(|(g, _)| *g == guid)
             .map(|(_, name)| name.clone())
     };
-    let quality = |n: u8| {
-        SANDBOX_QUALITIES
-            .get(usize::from(n))
-            .map_or_else(String::new, |word| (*word).to_string())
-    };
     group
         .apply_list_awaiting(
             group_type,
@@ -1281,10 +1265,7 @@ fn apply_sandbox_list(
             Some(loot),
             self_guid,
             &|_| Some(String::new()),
-            &super::ListText {
-                cached_name: &cached_name,
-                quality: &quality,
-            },
+            &cached_name,
         )
         .lines
 }
