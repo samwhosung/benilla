@@ -281,3 +281,35 @@ fn the_closed_map_keeps_its_slots() {
     assert!(sent.is_empty(), "{sent:?}");
     assert_eq!(shown, ["taxi no such path"]);
 }
+
+/// The leave-world leg `0x4db700` frees the slots before the close (`0x4db630`, the count to 0 at
+/// `0x4db6bf`): nothing is listed, and a take finds no slot (`0x4dc8df`).
+#[test]
+fn the_leave_world_leg_frees_the_slots() {
+    let data = benilla_formats::wow_data_or_skip!();
+    let (mut app, rx) = taxi_app(&data, 2, &[2, 4], 1, 0);
+    app.world_mut().run_system_once(feed_taxi).unwrap();
+    let sentinel = slot_of(&mut app, "Sentinel Hill, Westfall");
+    leave_world(app.world_mut());
+    assert_eq!(eval::<i64>(&mut app, "return NumTaxiNodes()"), 0);
+    let (sent, shown) = take(&mut app, &rx, sentinel);
+    assert!(sent.is_empty(), "{sent:?}");
+    assert!(shown.is_empty(), "{shown:?}");
+}
+
+/// An open resets the slots before it builds (`0x4db748`): a map from another flight master
+/// that builds none (`0x4dba40`, `0x4dbab0`) lists nothing of the last one's, and a take finds no
+/// slot.
+#[test]
+fn an_open_drops_the_last_map_s_slots() {
+    let data = benilla_formats::wow_data_or_skip!();
+    let (mut app, rx) = taxi_app(&data, 2, &[2, 4], 1, 0);
+    app.world_mut().run_system_once(feed_taxi).unwrap();
+    let sentinel = slot_of(&mut app, "Sentinel Hill, Westfall");
+    open_map(app.world_mut(), MASTER + 1, 2, TaxiMask::default());
+    app.world_mut().run_system_once(feed_taxi).unwrap();
+    assert_eq!(eval::<i64>(&mut app, "return NumTaxiNodes()"), 0);
+    let (sent, shown) = take(&mut app, &rx, sentinel);
+    assert!(sent.is_empty(), "{sent:?}");
+    assert!(shown.is_empty(), "{shown:?}");
+}

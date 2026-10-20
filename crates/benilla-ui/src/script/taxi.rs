@@ -73,6 +73,25 @@ impl super::UiScript {
         self.model_mut().taxi = state;
     }
 
+    /// The close (`0x4dc0f0`) clears the flight master's cell but keeps the slot count
+    /// (`0xbb4aa8`): the nodes, their types, routes and lines stay, and every fare reads 0 with no
+    /// flight master (`0x4dc423`).
+    pub fn close_taxi(&mut self) {
+        if let Some(taxi) = &mut self.model_mut().taxi {
+            for node in &mut taxi.nodes {
+                node.cost = 0;
+            }
+        }
+    }
+
+    /// An open's reset before its build: no slot (`0x4db748`) and no line (`0x4db793`-`0x4db7d6`),
+    /// the map art kept (`0xbb4a78`).
+    pub fn reset_taxi_slots(&mut self) {
+        if let Some(taxi) = &mut self.model_mut().taxi {
+            taxi.nodes.clear();
+        }
+    }
+
     /// Whether the player is riding a taxi, for `UnitOnTaxi("player")`.
     pub fn set_on_taxi(&mut self, riding: bool) {
         self.model_mut().taxi_riding = riding;
