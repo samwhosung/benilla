@@ -240,6 +240,11 @@ pub(crate) struct VmWith<'w, 's, P: SystemParam + 'static> {
 }
 
 impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
+    /// Whether there is a VM to run on.
+    pub(crate) fn has_vm(&self) -> bool {
+        self.script.is_some()
+    }
+
     /// `P`, read or written outside any Lua.
     pub(crate) fn own(&mut self) -> bevy::ecs::system::SystemParamItem<'_, '_, P> {
         self.set.p0()
@@ -3102,6 +3107,61 @@ mod tests {
         assert_eq!(global(&mut f, "FIRST"), Some(1), "armed on the next line");
         assert_eq!(global(&mut f, "SECOND"), None, "bound and sent");
         assert_eq!(casts(&f), vec![(MOTW, Some(NEW))]);
+    }
+
+    /// The chat drain's `UNIT_COMBAT` lists its unit's tokens as it signals (`SignalUnitCombat`
+    /// `0x494600`): a line's handler earlier in the same drain clears the target inside its call,
+    /// so the flash after it on the old target fires no `"target"`.
+    #[test]
+    fn the_chat_drains_unit_combat_names_the_target_as_it_signals() {
+        let mut f = frame(true);
+        f.app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run(
+                r#"ORDER = {}
+                local e = CreateFrame("Frame")
+                e:RegisterEvent("UNIT_COMBAT")
+                e:RegisterEvent("CHAT_MSG_SYSTEM")
+                e:SetScript("OnEvent", function()
+                    if event == "UNIT_COMBAT" then
+                        table.insert(ORDER, arg1 .. " " .. arg2)
+                    else
+                        table.insert(ORDER, event)
+                        ClearTarget()
+                    end
+                end)"#,
+            )
+            .expect("the frame builds");
+        let flash = |action| crate::ui_unit::UnitCombatFeedback {
+            guid: OLD,
+            action,
+            flags: "",
+            amount: 0,
+            school: 0,
+        };
+        {
+            let log = f.app.world().resource::<crate::ui_chat::ChatLog>();
+            log.push_unit_combat(flash("DODGE"));
+            log.push_event(crate::ui_chat::ChatEvent::text_only(
+                crate::ui_chat::ChatEventKind::System,
+                "a line".into(),
+            ));
+            log.push_unit_combat(flash("PARRY"));
+        }
+        crate::ui_chat::feed_chat_once(f.app.world_mut());
+        assert_eq!(
+            selected(&f),
+            None,
+            "the handler's ClearTarget applied in its call"
+        );
+        let order = f
+            .app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .eval::<Vec<String>>("return ORDER")
+            .expect("the order reads");
+        assert_eq!(order, ["target DODGE", "CHAT_MSG_SYSTEM"]);
     }
 
     /// The systems of `app` that write the VM, and those of them whose declared access does not
