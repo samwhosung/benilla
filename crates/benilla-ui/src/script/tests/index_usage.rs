@@ -695,6 +695,22 @@ fn a_non_number_index_raises_the_bindings_own_usage_line() {
         ),
         ("SetRaidTarget({}, 1)", "Usage: SetRaidTarget(unit, index)"),
         (
+            "IdxTip:SetUnitBuff({}, 1)",
+            r#"Usage: SetUnitBuff("unit", index [,raidFilter])"#,
+        ),
+        (
+            r#"IdxTip:SetUnitBuff("player", {})"#,
+            r#"Usage: SetUnitBuff("unit", index [,raidFilter])"#,
+        ),
+        (
+            "IdxTip:SetUnitDebuff({}, 1)",
+            r#"Usage: SetUnitDebuff("unit", index [,raidFilter])"#,
+        ),
+        (
+            r#"IdxTip:SetUnitDebuff("player", {})"#,
+            r#"Usage: SetUnitDebuff("unit", index [,raidFilter])"#,
+        ),
+        (
             r#"SetRaidTarget("player", {})"#,
             "Usage: SetRaidTarget(unit, index)",
         ),
@@ -1034,6 +1050,8 @@ fn a_negative_index_is_read_and_never_a_conversion_error() {
         "IdxTip:SetLootRollItem(-1)",
         "IdxTip:SetPetAction(-1)",
         "IdxTip:SetPlayerBuff(-1)",
+        r#"IdxTip:SetUnitBuff("player", -1)"#,
+        r#"IdxTip:SetUnitDebuff("player", -1)"#,
         "IdxTip:SetShapeshift(-1)",
         "IdxTip:SetTalent(-1, 1)",
         "IdxTip:SetTalent(1, -1)",

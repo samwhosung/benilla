@@ -539,8 +539,8 @@ fn unit_buff_and_debuff_hover_render_the_aura_variant_without_remaining() {
 }
 
 /// `SetPlayerBuff` takes a 1.12 cache position, the `GetPlayerBuff` family's index space:
-/// `BuffFrame.lua:105` passes that return straight in. A miss, `-1` included, clears the plate,
-/// and a surplus filter argument is ignored.
+/// `BuffFrame.lua:105` passes that return straight in, and a surplus filter argument is ignored.
+/// After `SetOwner`'s clear, a position past the cache leaves no plate.
 #[test]
 fn player_buff_hover_indexes_the_cache_position_not_a_filtered_ordinal() {
     let mut s = script();
@@ -596,13 +596,83 @@ fn player_buff_hover_indexes_the_cache_position_not_a_filtered_ordinal() {
         assert(at(GetPlayerBuff(0, "HARMFUL")) == "Shadow Word: Pain", "round-trip through GetPlayerBuff")
         -- A surplus filter argument is ignored, as the reference's binding ignores it.
         assert(at(1, "HELPFUL|HARMFUL") == "Battle Stance", "surplus argument must be ignored")
-        -- Misses CLEAR (Loatheb's scan terminates on a nil first line) rather than leaving a plate.
+        -- SetOwner clears, and a miss adds nothing (a scan that stops on a nil first line ends).
         tt:SetOwner(a, "ANCHOR_RIGHT"); tt:SetPlayerBuff(3)
         assert(tt:NumLines() == 0 and not tt:IsShown(), "past the cache: no plate")
         tt:SetOwner(a, "ANCHOR_RIGHT"); tt:SetPlayerBuff(-1)
         assert(tt:NumLines() == 0 and not tt:IsShown(), "-1 must clear, not show the first buff")
         tt:SetOwner(a, "ANCHOR_RIGHT"); tt:SetPlayerBuff(GetPlayerBuff(9, "HARMFUL"))
         assert(tt:NumLines() == 0 and not tt:IsShown(), "an unguarded -1 from GetPlayerBuff clears")
+    "#,
+    )
+    .unwrap();
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}
+
+/// The aura setters' misses return before the builder and leave the tooltip as it was: an index
+/// out of `SetUnitBuff`'s 32 or `SetUnitDebuff`'s 16 (`0x534bcb`, `0x534f3e`) or past the unit's
+/// list (`0x534c9c`, `0x53501d`), a position outside the 48 buff records (`0x532bbd`), and no
+/// tracking spell (`0x532cda`). A unit that is not a string or an index that is not a number
+/// raises the binding's usage line (`0x534dd2`).
+#[test]
+fn an_aura_setters_miss_leaves_the_tooltip_as_it_was() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    for (id, name) in [(1126, "Mark of the Wild"), (589, "Shadow Word: Pain")] {
+        s.set_spell_tooltip(
+            id,
+            SpellTooltipView {
+                name: name.into(),
+                ..Default::default()
+            },
+        );
+    }
+    s.set_unit_guids(&crate::script::UnitGuids {
+        target: 7,
+        ..Default::default()
+    });
+    let auras = vec![
+        AuraState {
+            spell_id: 1126,
+            name: Some("Mark of the Wild".into()),
+            helpful: true,
+            ..Default::default()
+        },
+        AuraState {
+            spell_id: 589,
+            name: Some("Shadow Word: Pain".into()),
+            helpful: false,
+            ..Default::default()
+        },
+    ];
+    s.set_unit_auras(7, Some(auras.clone()));
+    s.set_player_auras(auras);
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "TF1"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        tt:SetOwner(a, "ANCHOR_BOTTOMRIGHT")
+        tt:SetUnitDebuff("target", 1)
+        local function kept(call)
+            assert(tt:IsShown() and tt:NumLines() == 1, call .. ": " .. tt:NumLines() .. " lines")
+            assert(TTTextLeft1:GetText() == "Shadow Word: Pain",
+                call .. " drew " .. tostring(TTTextLeft1:GetText()))
+        end
+        kept("the debuff")
+        tt:SetUnitBuff("target", 0); kept("buff 0")
+        tt:SetUnitBuff("target", -3); kept("buff -3")
+        tt:SetUnitBuff("target", 2); kept("past the buffs")
+        tt:SetUnitBuff("target", 33); kept("buff 33")
+        tt:SetUnitDebuff("target", 17); kept("debuff 17")
+        tt:SetPlayerBuff(-1); kept("record -1")
+        tt:SetPlayerBuff(48); kept("record 48")
+        tt:SetTrackingSpell(); kept("no tracking")
+        tt:SetUnitBuff("target", "1"); assert(TTTextLeft1:GetText() == "Mark of the Wild",
+            "a numeric string is a number")
+        assert(not pcall(tt.SetUnitBuff, tt, "target"), "a nil index raises")
+        local ok, err = pcall(tt.SetUnitDebuff, tt, {}, 1)
+        assert(not ok and string.find(err, 'Usage: SetUnitDebuff("unit", index [,raidFilter])', 1, true),
+            tostring(err))
     "#,
     )
     .unwrap();

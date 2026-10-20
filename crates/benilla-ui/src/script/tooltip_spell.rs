@@ -325,6 +325,10 @@ pub(super) struct TalentLines {
     pub learn: bool,
 }
 
+/// The player's buff cache holds 48 records (`0xbc6040`), the positions `GetBuffRecord 0x4e4430`
+/// answers.
+const PLAYER_BUFF_RECORDS: usize = 48;
+
 /// The talent learn hint's green, `0xff00ff00`.
 const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 /// The unmet-requirement red, `0xffff2020` (`0xc0d390`, the item builder's red).
@@ -812,11 +816,11 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             Ok(flag(remaining_ms > 0 && live))
         })?,
     )?;
-    // GameTooltip:SetPlayerBuff(buffIndex): the aura variant plus the time-remaining line only
-    // this entry appends, its text `0x52fa50`'s (`tooltip::duration_text`). The argument is the
-    // 0-based cache position `GetPlayerBuff` returns (`BuffFrame.lua:105`), not a filtered
-    // ordinal. A miss, negative included, clears and hides the plate as `SetUnitBuff`'s does; a
-    // surplus argument is ignored, as in the reference.
+    // GameTooltip:SetPlayerBuff(buffIndex) (`0x532b00`): the aura variant plus the time-remaining
+    // line only this entry appends, its text `0x52fa50`'s (`tooltip::duration_text`). The argument
+    // is the 0-based cache position `GetPlayerBuff` returns (`BuffFrame.lua:105`), not a filtered
+    // ordinal; one outside the cache's 48 records returns at once, leaving the tooltip as it was
+    // (`GetBuffRecord 0x4e4430`, `0x532bbd`). A surplus argument is ignored, as in the reference.
     m.set(
         "SetPlayerBuff",
         lua.create_function(|lua, (this, index): (Table, Value)| {
@@ -827,12 +831,15 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 "Usage: SetPlayerBuff(buffIndex)",
             )?);
             let now = crate::script::clock::now(lua);
+            let Some(pos) = usize::try_from(index)
+                .ok()
+                .filter(|&pos| pos < PLAYER_BUFF_RECORDS)
+            else {
+                return Ok(());
+            };
             let (spell_id, name, remaining_ms) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
-                let hit = usize::try_from(index)
-                    .ok()
-                    .and_then(|pos| model.player_auras.get(pos));
-                match hit {
+                match model.player_auras.get(pos) {
                     Some(a) => {
                         // The gate is `untilCancelled`, not a known duration: `0x532b00` skips
                         // the line when the record's `+0xc` is set (`0x532bdf`), a DBC flag that
@@ -847,8 +854,8 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         });
                         (a.spell_id, a.name.clone(), ms)
                     }
-                    // A miss clears: an addon scan that stops when `TextLeft1` reads nil would
-                    // otherwise never end.
+                    // An empty record: spell 0, which the builder clears and hides on
+                    // (`0x52f8ae`).
                     None => (0, None, None),
                 }
             };
@@ -872,35 +879,58 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             )
         })?,
     )?;
-    // GameTooltip:SetUnitBuff/SetUnitDebuff(unit, index): the aura variant with no time line; the
-    // 1-based index counts within the helpful or harmful list, as `UnitBuff` does.
-    for (verb, helpful) in [("SetUnitBuff", true), ("SetUnitDebuff", false)] {
+    // GameTooltip:SetUnitBuff/SetUnitDebuff(unit, index [, raidFilter]) (`0x534ac0`, `0x534e30`):
+    // the aura variant with no time line, the index counted within the unit's buffs (its first 32
+    // aura slots) or debuffs (the 16 after them). An index out of that range, or one that finds no
+    // aura, returns before the builder, leaving the tooltip as it was (`0x534bcb`, `0x534c9c`;
+    // `0x534f3e`, `0x534f47`, `0x53501d`).
+    for (verb, usage, helpful, slots) in [
+        (
+            "SetUnitBuff",
+            r#"Usage: SetUnitBuff("unit", index [,raidFilter])"#,
+            true,
+            32,
+        ),
+        (
+            "SetUnitDebuff",
+            r#"Usage: SetUnitDebuff("unit", index [,raidFilter])"#,
+            false,
+            16,
+        ),
+    ] {
         m.set(
             verb,
-            // `index` is a `Value`: the reference's `lua_tonumber` reads nil as 0, which finds no
-            // aura, where an `i64` would raise.
-            lua.create_function(move |lua, (this, token, index): (Table, String, Value)| {
-                let index = match &index {
-                    Value::Integer(i) => *i,
-                    Value::Number(n) => *n as i64,
-                    Value::String(s) => s
-                        .to_str()
-                        .ok()
-                        .and_then(|t| t.parse::<i64>().ok())
-                        .unwrap_or(0),
-                    _ => 0,
+            lua.create_function(move |lua, (this, token, index): (Table, Value, Value)| {
+                // `is-string` on the unit and `is-number` on the index, both before either is
+                // read, else the usage line (`0x534b5c`, `0x534b70`, `0x534dd2`; `0x855528` for
+                // the debuff).
+                let (Some(token), Some(index)) =
+                    (lua.coerce_string(token)?, lua.coerce_number(index)?)
+                else {
+                    return Err(mlua::Error::RuntimeError(usage.into()));
                 };
-                // The token resolves as `UnitBuff`'s does (`0x515970`, called at `0x534b8b`).
+                let token = token.to_string_lossy();
+                // The token resolves before the index is read (`0x534b8b`), as `UnitBuff`'s does,
+                // so an unknown one raises at any index.
                 let hit = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    let idx = usize::try_from(index.max(1) - 1).unwrap_or(0);
-                    crate::script::aura::auras_of(&model, &token)?
-                        .and_then(|a| a.iter().filter(|a| a.helpful == helpful).nth(idx))
-                        .map(|a| (a.spell_id, a.name.clone()))
+                    let list = crate::script::aura::auras_of(&model, &token)?;
+                    // `_ftol`, then `index - 1` compared unsigned, so 0 and a negative index are
+                    // past the range (`0x534bc4`).
+                    let ordinal = binding_abi::ftol(index).wrapping_sub(1) as u32;
+                    if ordinal >= slots {
+                        return Ok(());
+                    }
+                    list.and_then(|a| {
+                        a.iter()
+                            .filter(|a| a.helpful == helpful)
+                            .nth(ordinal as usize)
+                    })
+                    .map(|a| (a.spell_id, a.name.clone()))
                 };
-                // A miss goes through with spell id 0, which clears and hides the plate and
-                // records no ask.
-                let (spell_id, name) = hit.unwrap_or((0, None));
+                let Some((spell_id, name)) = hit else {
+                    return Ok(());
+                };
                 set_spell_by_id(
                     lua,
                     &this,
@@ -915,9 +945,9 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             })?,
         )?;
     }
-    // GameTooltip:SetTrackingSpell(): the tracking icon's hover, the name gold over the white
-    // aura description, as the reference shows "Find Minerals" and as the aura builder's gold
-    // wrapper `0x530380` writes it; `0x532c50` itself is untraced. No tracking clears and hides.
+    // GameTooltip:SetTrackingSpell() (`0x532c50`): the tracking icon's hover, the name gold over
+    // the white aura description, as the aura builder's gold wrapper `0x530380` writes it. With no
+    // tracking spell (`0xbc6378`) it returns at once, leaving the tooltip as it was (`0x532cda`).
     m.set(
         "SetTrackingSpell",
         lua.create_function(|lua, this: Table| {
@@ -928,7 +958,9 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     .as_ref()
                     .map(|t| (t.spell_id, t.name.clone()))
             };
-            let (spell_id, fallback_name) = hit.unwrap_or((0, None));
+            let Some((spell_id, fallback_name)) = hit.filter(|(id, _)| *id != 0) else {
+                return Ok(());
+            };
             let h = frame_handle_of(lua, &this)?;
             clear(lua, h);
             match spell_view_of(lua, spell_id, false) {
