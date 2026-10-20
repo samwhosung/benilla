@@ -285,32 +285,36 @@ fn feed_stable(
 /// Drain the Lua intents into the four stable verbs, each aimed at the open session's NPC; a close
 /// runs the core, as there is no close opcode.
 fn drain_stable(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     open: Res<StableOpen>,
     commands: Res<NetCommands>,
     mut world_commands: Commands,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for intent in script.take_stable_intents() {
-        let Some(npc) = open.npc else {
-            debug!("ui_stable: {intent:?} with no open stable — ignored");
-            continue;
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
         };
-        debug!("ui_stable: {intent:?} (stable master {npc:#x})");
-        let command = match intent {
-            StableIntent::Stable => ClientCommand::StablePet { npc },
-            StableIntent::Unstable(pet_number) => ClientCommand::UnstablePet { npc, pet_number },
-            StableIntent::Swap(pet_number) => ClientCommand::StableSwapPet { npc, pet_number },
-            StableIntent::BuySlot => ClientCommand::BuyStableSlot { npc },
-        };
-        let _ = commands.0.send(command);
-    }
-    if script.take_stable_close() {
-        debug!("ui_stable: client-side close (no packet)");
-        crate::ui_session::queue(&mut world_commands, close_core);
-    }
+        for intent in script.take_stable_intents() {
+            let Some(npc) = open.npc else {
+                debug!("ui_stable: {intent:?} with no open stable — ignored");
+                continue;
+            };
+            debug!("ui_stable: {intent:?} (stable master {npc:#x})");
+            let command = match intent {
+                StableIntent::Stable => ClientCommand::StablePet { npc },
+                StableIntent::Unstable(pet_number) => {
+                    ClientCommand::UnstablePet { npc, pet_number }
+                }
+                StableIntent::Swap(pet_number) => ClientCommand::StableSwapPet { npc, pet_number },
+                StableIntent::BuySlot => ClientCommand::BuyStableSlot { npc },
+            };
+            let _ = commands.0.send(command);
+        }
+        if script.take_stable_close() {
+            debug!("ui_stable: client-side close (no packet)");
+            crate::ui_session::queue(&mut world_commands, close_core);
+        }
+    })
 }
 
 /// Stable refusals as message keys: only `ERR_NOT_ENOUGH_MONEY`, `DisplayError(0x25)` in the

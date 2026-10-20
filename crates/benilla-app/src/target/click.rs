@@ -17,20 +17,22 @@ pub(super) fn world_right_click_payload(
     // The press pick: this leg and [`act_on_right_click`] must classify the same pick.
     press: Res<PressPick>,
     me: Query<&ObjectStore, With<SelfPlayer>>,
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
 ) {
-    if right_clicks.read().last().is_none() {
-        return;
-    }
-    let Some(mut script) = script else {
-        return;
-    };
-    let charmed = me.iter().any(|me| me.0.unit_charmed_by().is_some());
-    if press.over_object() && !charmed {
-        script.clear_preview_payload();
-    } else {
-        script.clear_cursor_payload();
-    }
+    hosted_vm.run(|script| {
+        if right_clicks.read().last().is_none() {
+            return;
+        }
+        let Some(script) = script else {
+            return;
+        };
+        let charmed = me.iter().any(|me| me.0.unit_charmed_by().is_some());
+        if press.over_object() && !charmed {
+            script.clear_preview_payload();
+        } else {
+            script.clear_cursor_payload();
+        }
+    })
 }
 
 /// A right-click begun on a nameplate, replayed for [`act_on_interact`]: the plate's click slot

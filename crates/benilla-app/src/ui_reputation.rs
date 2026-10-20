@@ -22,7 +22,7 @@
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{FactionEntry, ReputationSend, ReputationState, UiScript};
+use benilla_ui::script::{FactionEntry, ReputationSend, ReputationState};
 
 use crate::net::{ClientCommand, NetCommands, ObjectStore, Reputations, SelfPlayer};
 use crate::target::Factions;
@@ -238,67 +238,69 @@ type ReputationInputs = Option<(u8, u8, Option<u32>)>;
 /// the frame the world-enter cascade runs over it, whose rebuild signals with the player seated
 /// (`crate::ui_unit::WorldEnterSeats`).
 pub(crate) fn feed_reputation(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     reputations: Res<Reputations>,
     factions: Option<Res<Factions>>,
     mut last: Local<crate::ui_script::VmMemo<Option<ReputationState>>>,
     mut last_inputs: Local<crate::ui_script::VmMemo<ReputationInputs>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let last = last.get(&script);
-    let last_inputs = last_inputs.get(&script);
-    let (Ok(store), Some(factions_res)) = (self_store.single(), factions.as_ref()) else {
-        return;
-    };
-    let catalog = factions_res.catalog();
-    let (race, class) = (
-        store.0.unit_race().unwrap_or(0),
-        store.0.unit_class().unwrap_or(0),
-    );
-    let watched = store
-        .0
-        .player_watched_faction()
-        .and_then(|i| u32::try_from(i).ok());
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        let last = last.get(&script);
+        let last_inputs = last_inputs.get(&script);
+        let (Ok(store), Some(factions_res)) = (self_store.single(), factions.as_ref()) else {
+            return;
+        };
+        let catalog = factions_res.catalog();
+        let (race, class) = (
+            store.0.unit_race().unwrap_or(0),
+            store.0.unit_class().unwrap_or(0),
+        );
+        let watched = store
+            .0
+            .player_watched_faction()
+            .and_then(|i| u32::try_from(i).ok());
 
-    let inputs = (race, class, watched);
-    let moved = reputations.is_changed()
-        || factions_res.is_changed()
-        || last_inputs.as_ref() != Some(&inputs)
-        || last.is_none();
-    if !moved {
-        return;
-    }
-    *last_inputs = Some(inputs);
-    script.set_faction_standings(faction_standings(catalog, &reputations, race, class));
-
-    let mut entries = Vec::new();
-    for (faction_id, info) in catalog.reputation_factions() {
-        // An uncovered slot reads `(0, 0)`, unmet, and its row stays: a header's name rides on it.
-        let (flags, wire) = usize::try_from(info.rep_index)
-            .ok()
-            .and_then(|i| reputations.slots.get(i))
-            .copied()
-            .unwrap_or((0, 0));
-        if let Some(row) = reputation_row(faction_id, info, catalog, flags, wire, race, class) {
-            entries.push(row);
+        let inputs = (race, class, watched);
+        let moved = reputations.is_changed()
+            || factions_res.is_changed()
+            || last_inputs.as_ref() != Some(&inputs)
+            || last.is_none();
+        if !moved {
+            return;
         }
-    }
-    // Sorted before the equality check, so a map reshuffle is not a change.
-    entries.sort_by_key(|e| e.faction_id);
+        *last_inputs = Some(inputs);
+        script.set_faction_standings(faction_standings(catalog, &reputations, race, class));
 
-    let fresh = ReputationState { entries, watched };
-    if last.as_ref() == Some(&fresh) {
-        return;
-    }
-    let bare = faction_fires(last.as_ref(), &fresh);
-    script.set_reputation(fresh.clone());
-    *last = Some(fresh);
-    for _ in 0..bare {
-        script.fire_event("UPDATE_FACTION", vec![]);
-    }
+        let mut entries = Vec::new();
+        for (faction_id, info) in catalog.reputation_factions() {
+            // An uncovered slot reads `(0, 0)`, unmet, and its row stays: a header's name rides on it.
+            let (flags, wire) = usize::try_from(info.rep_index)
+                .ok()
+                .and_then(|i| reputations.slots.get(i))
+                .copied()
+                .unwrap_or((0, 0));
+            if let Some(row) = reputation_row(faction_id, info, catalog, flags, wire, race, class) {
+                entries.push(row);
+            }
+        }
+        // Sorted before the equality check, so a map reshuffle is not a change.
+        entries.sort_by_key(|e| e.faction_id);
+
+        let fresh = ReputationState { entries, watched };
+        if last.as_ref() == Some(&fresh) {
+            return;
+        }
+        let bare = faction_fires(last.as_ref(), &fresh);
+        script.set_reputation(fresh.clone());
+        *last = Some(fresh);
+        for _ in 0..bare {
+            script.fire_event("UPDATE_FACTION", vec![]);
+        }
+    })
 }
 
 /// `GetFactionStanding 0x4d6370` for one faction: the base for `race`/`class` plus its wire slot,
@@ -355,40 +357,47 @@ fn faction_fires(prev: Option<&ReputationState>, fresh: &ReputationState) -> usi
 }
 
 /// Send the pane's queued verbs; none is acked, and the engine already holds its own copy.
-fn drain_reputation_sends(script: Option<NonSendMut<UiScript>>, commands: Res<NetCommands>) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for send in script.take_reputation_sends() {
-        let cmd = match send {
-            ReputationSend::AtWar {
-                rep_list_id,
-                at_war,
-            } => ClientCommand::SetFactionAtWar {
-                rep_list_id,
-                at_war,
-            },
-            ReputationSend::Inactive {
-                rep_list_id,
-                inactive,
-            } => ClientCommand::SetFactionInactive {
-                rep_list_id,
-                inactive,
-            },
-            // No watch is -1 on the wire: slot 0 is the Bloodsail Buccaneers.
-            ReputationSend::Watch(slot) => ClientCommand::SetWatchedFaction {
-                rep_list_id: slot.map_or(benilla_protocol::messages::WATCHED_FACTION_NONE, |s| {
-                    s as i32
-                }),
-            },
+fn drain_reputation_sends(
+    mut hosted_vm: crate::script_calls::HostedVm,
+    commands: Res<NetCommands>,
+) {
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
         };
-        let _ = commands.0.send(cmd);
-    }
+        for send in script.take_reputation_sends() {
+            let cmd = match send {
+                ReputationSend::AtWar {
+                    rep_list_id,
+                    at_war,
+                } => ClientCommand::SetFactionAtWar {
+                    rep_list_id,
+                    at_war,
+                },
+                ReputationSend::Inactive {
+                    rep_list_id,
+                    inactive,
+                } => ClientCommand::SetFactionInactive {
+                    rep_list_id,
+                    inactive,
+                },
+                // No watch is -1 on the wire: slot 0 is the Bloodsail Buccaneers.
+                ReputationSend::Watch(slot) => ClientCommand::SetWatchedFaction {
+                    rep_list_id: slot
+                        .map_or(benilla_protocol::messages::WATCHED_FACTION_NONE, |s| {
+                            s as i32
+                        }),
+                },
+            };
+            let _ = commands.0.send(cmd);
+        }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use benilla_ui::script::UiScript;
 
     /// A live feed over an empty catalog: the first push and a watched-index change are pushed
     /// with no signal, the world-enter rebuild's and the watch's to fire.

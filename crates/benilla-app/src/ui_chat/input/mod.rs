@@ -1599,30 +1599,32 @@ pub(crate) fn drain_addon_chat_sends(
 /// raid), so nothing is refused here. This writes the outbound half of the `addon` trace tag and
 /// `ui_chat::net` the inbound: `WOW_MOVE_TRACE=<path> WOW_MOVE_TRACE_TAGS=addon` logs both.
 pub(super) fn drain_addon_message_sends(
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     commands: Res<NetCommands>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for send in script.take_addon_sends() {
-        debug!(
-            "chat: addon broadcast on {} — {:?}",
-            send.distribution.token(),
-            send.text
-        );
-        if benilla_assets::trace::enabled() {
-            benilla_assets::trace::line(
-                "addon",
-                &format!("-> {} {:?}", send.distribution.token(), send.text),
-            );
-        }
-        let cmd = ClientCommand::AddonMessage {
-            distribution: send.distribution,
-            text: send.text,
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
         };
-        if commands.0.send(cmd).is_err() {
-            warn!("chat: not connected; addon broadcast dropped");
+        for send in script.take_addon_sends() {
+            debug!(
+                "chat: addon broadcast on {} — {:?}",
+                send.distribution.token(),
+                send.text
+            );
+            if benilla_assets::trace::enabled() {
+                benilla_assets::trace::line(
+                    "addon",
+                    &format!("-> {} {:?}", send.distribution.token(), send.text),
+                );
+            }
+            let cmd = ClientCommand::AddonMessage {
+                distribution: send.distribution,
+                text: send.text,
+            };
+            if commands.0.send(cmd).is_err() {
+                warn!("chat: not connected; addon broadcast dropped");
+            }
         }
-    }
+    })
 }

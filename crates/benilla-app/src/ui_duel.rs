@@ -272,7 +272,7 @@ fn clear_duel_on_leave_world(mut duel: ResMut<DuelState>) {
 
 /// Fire the four duel events on [`DuelState`]'s edges.
 fn feed_duel(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut duel: ResMut<DuelState>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
@@ -281,55 +281,57 @@ fn feed_duel(
     // Apart from the bounds: the leave-world sweep drops the arbiter with no `DUEL_FINISHED`.
     mut fed_held: crate::ui_script::WindowMemo<bool>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let fed = fed.get(&script);
-    let fed_held = fed_held.get(&script);
-
-    // Lines before events: a line describes the transition its event announces.
-    let owed = std::mem::take(&mut duel.owed);
-    let lines: Vec<crate::ui_action::Shown> = {
-        let get = |key: &str| script.lua().globals().get::<String>(key).ok();
-        owed.iter()
-            .filter_map(|line| {
-                owed_text(line, &get).map(|text| {
-                    crate::ui_action::Shown::unkeyed(benilla_ui::messages::MsgKind::Chat, text)
-                })
-            })
-            .collect()
-    };
-    crate::ui_action::show_messages(&mut script, &mut sink, "ui_duel", lines);
-
-    // `DUEL_REQUESTED(name)`, held until the name resolves (the module's deviation).
-    if let Some(guid) = duel.challenger {
-        let ask = Ask::at(
-            !std::mem::replace(&mut duel.challenger_asked, true),
-            &commands,
-        );
-        if let Some(name) = names.resolve_player(guid, ask).map(str::to_string) {
-            script.fire_event("DUEL_REQUESTED", vec![ScriptValue::Str(name)]);
-            duel.challenger = None;
-        }
-    }
-
-    // `DUEL_FINISHED` when the arbiter clears (`0x4d4b51`).
-    let held = duel.arbiter != 0;
-    if *fed_held && !held {
-        script.fire_event("DUEL_FINISHED", Vec::new());
-    }
-    *fed_held = held;
-
-    // The bounds pair (`0x4d4aa0`, `0x4d4ac0`).
-    if fed.out_of_bounds != duel.out_of_bounds {
-        fed.out_of_bounds = duel.out_of_bounds;
-        let event = if duel.out_of_bounds {
-            "DUEL_OUTOFBOUNDS"
-        } else {
-            "DUEL_INBOUNDS"
+    hosted_vm.run(|script| {
+        let Some(mut script) = script else {
+            return;
         };
-        script.fire_event(event, Vec::new());
-    }
+        let fed = fed.get(&script);
+        let fed_held = fed_held.get(&script);
+
+        // Lines before events: a line describes the transition its event announces.
+        let owed = std::mem::take(&mut duel.owed);
+        let lines: Vec<crate::ui_action::Shown> = {
+            let get = |key: &str| script.lua().globals().get::<String>(key).ok();
+            owed.iter()
+                .filter_map(|line| {
+                    owed_text(line, &get).map(|text| {
+                        crate::ui_action::Shown::unkeyed(benilla_ui::messages::MsgKind::Chat, text)
+                    })
+                })
+                .collect()
+        };
+        crate::ui_action::show_messages(&mut script, &mut sink, "ui_duel", lines);
+
+        // `DUEL_REQUESTED(name)`, held until the name resolves (the module's deviation).
+        if let Some(guid) = duel.challenger {
+            let ask = Ask::at(
+                !std::mem::replace(&mut duel.challenger_asked, true),
+                &commands,
+            );
+            if let Some(name) = names.resolve_player(guid, ask).map(str::to_string) {
+                script.fire_event("DUEL_REQUESTED", vec![ScriptValue::Str(name)]);
+                duel.challenger = None;
+            }
+        }
+
+        // `DUEL_FINISHED` when the arbiter clears (`0x4d4b51`).
+        let held = duel.arbiter != 0;
+        if *fed_held && !held {
+            script.fire_event("DUEL_FINISHED", Vec::new());
+        }
+        *fed_held = held;
+
+        // The bounds pair (`0x4d4aa0`, `0x4d4ac0`).
+        if fed.out_of_bounds != duel.out_of_bounds {
+            fed.out_of_bounds = duel.out_of_bounds;
+            let event = if duel.out_of_bounds {
+                "DUEL_OUTOFBOUNDS"
+            } else {
+                "DUEL_INBOUNDS"
+            };
+            script.fire_event(event, Vec::new());
+        }
+    })
 }
 
 /// What [`feed_duel`] last announced.

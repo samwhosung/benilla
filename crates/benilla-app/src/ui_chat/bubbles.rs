@@ -10,10 +10,12 @@ use crate::chat_bubble::BubbleFeed;
 pub(crate) fn feed_bubbles(
     feed: Res<BubbleFeed>,
     // `None` in a run with no UI VM.
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
 ) {
-    let (Some(mut script), Some(geometry)) = (script, feed.geometry) else {
-        return;
-    };
-    script.sync_chat_bubbles(geometry, &feed.states);
+    hosted_vm.run(|script| {
+        let (Some(script), Some(geometry)) = (script, feed.geometry) else {
+            return;
+        };
+        script.sync_chat_bubbles(geometry, &feed.states);
+    })
 }

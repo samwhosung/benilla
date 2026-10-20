@@ -26,7 +26,7 @@ pub(crate) struct FieldNoticeCursor(MessageCursor<FieldNotice>);
 /// Fire this frame's field notices in the order the packets wrote them. Under the unit feed's
 /// gate, so only while the in-game interface is up; [`drop_field_notices`] takes them otherwise.
 pub(crate) fn fire_field_notices(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     notices: Res<Messages<FieldNotice>>,
     mut cursor: ResMut<FieldNoticeCursor>,
     mut sink: crate::ui_action::MessageSink,
@@ -34,27 +34,29 @@ pub(crate) fn fire_field_notices(
     me: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
     mut tutorials: Option<ResMut<crate::tutorial::Tutorials>>,
 ) {
-    let fresh: Vec<FieldNotice> = cursor.0.read(&notices).copied().collect();
-    // No VM, nobody to hear them: they are dropped, as below.
-    let Some(mut script) = script else {
-        return;
-    };
-    for notice in fresh {
-        if notice == FieldNotice::QuestLog {
-            if let Some(store) = me.iter().next() {
-                script.quest_log_changed(crate::ui_quest_log::slot_views(&store.0));
+    hosted_vm.run(|script| {
+        let fresh: Vec<FieldNotice> = cursor.0.read(&notices).copied().collect();
+        // No VM, nobody to hear them: they are dropped, as below.
+        let Some(mut script) = script else {
+            return;
+        };
+        for notice in fresh {
+            if notice == FieldNotice::QuestLog {
+                if let Some(store) = me.iter().next() {
+                    script.quest_log_changed(crate::ui_quest_log::slot_views(&store.0));
+                }
+                continue;
             }
-            continue;
-        }
-        if let FieldNotice::Tutorial { id } = notice {
-            // `0x4b5390` with no delay, inside the watcher's run.
-            if let Some(published) = tutorials.as_mut().and_then(|t| t.fire_now(id)) {
-                crate::tutorial::fire_published(&mut script, &sink.sounds, published);
+            if let FieldNotice::Tutorial { id } = notice {
+                // `0x4b5390` with no delay, inside the watcher's run.
+                if let Some(published) = tutorials.as_mut().and_then(|t| t.fire_now(id)) {
+                    crate::tutorial::fire_published(&mut script, &sink.sounds, published);
+                }
+                continue;
             }
-            continue;
+            fire(&mut script, &mut sink, notice);
         }
-        fire(&mut script, &mut sink, notice);
-    }
+    })
 }
 
 /// The field notices' second reader and its position: [`drop_field_notices`] under the exact

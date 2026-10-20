@@ -9,7 +9,7 @@
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{CharacterPaneFrame, UiScript};
+use benilla_ui::script::CharacterPaneFrame;
 use benilla_ui::widget::FrameHandle;
 
 /// Every visible character pane, as the VM listed it this frame, and the VM it belongs to: a new
@@ -35,37 +35,39 @@ pub(crate) struct PaneAnswers {
 
 /// Hand the VM the booths' answers, then list its panes.
 pub(crate) fn feed_character_panes(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut panes: ResMut<CharacterPanes>,
     mut answers: ResMut<PaneAnswers>,
 ) {
-    let Some(mut script) = script else {
-        panes.session = 0;
-        panes.rows.clear();
-        answers.built.clear();
-        answers.missed.clear();
-        answers.finished.clear();
-        return;
-    };
-    let session = script.session();
-    let answers = &mut *answers;
-    // An answer for another VM's rows names a handle this one may have reissued.
-    let current = answers.session == session;
-    for (h, build) in answers.built.drain(..) {
-        if current {
-            script.character_copy_built(h, build);
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            panes.session = 0;
+            panes.rows.clear();
+            answers.built.clear();
+            answers.missed.clear();
+            answers.finished.clear();
+            return;
+        };
+        let session = script.session();
+        let answers = &mut *answers;
+        // An answer for another VM's rows names a handle this one may have reissued.
+        let current = answers.session == session;
+        for (h, build) in answers.built.drain(..) {
+            if current {
+                script.character_copy_built(h, build);
+            }
         }
-    }
-    for (h, build) in answers.missed.drain(..) {
-        if current {
-            script.character_copy_missed(h, build);
+        for (h, build) in answers.missed.drain(..) {
+            if current {
+                script.character_copy_missed(h, build);
+            }
         }
-    }
-    for (h, build, serial) in answers.finished.drain(..) {
-        if current {
-            script.character_arm_finished(h, build, serial);
+        for (h, build, serial) in answers.finished.drain(..) {
+            if current {
+                script.character_arm_finished(h, build, serial);
+            }
         }
-    }
-    panes.session = session;
-    panes.rows = script.character_panes();
+        panes.session = session;
+        panes.rows = script.character_panes();
+    })
 }

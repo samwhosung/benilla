@@ -205,91 +205,97 @@ fn parse_anchor_form(text: &str) -> Vec<AnchorLayout> {
 /// built and the load-time `UIParent_ManageFramePositions()` pass has run, which skips
 /// user-placed frames on every later pass (`UIParent.lua:1692`).
 pub(crate) fn load_layout(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     roster: Res<crate::glue_session::roster::Roster>,
     mut file: ResMut<LayoutFile>,
 ) {
-    let Some(mut script) = script else { return };
-    let Some(id) = crate::ui_macro::identity(&roster) else {
-        return;
-    };
-    if file.identity.get(&script).as_ref() == Some(&id) {
-        return; // already restored into the live VM
-    }
-    file.path = crate::local_state::layout_character_path(&id.0, &id.1);
-    *file.identity.get(&script) = Some(id);
-    // A fresh VM has nothing placed and owes no write.
-    *file.dirty.get(&script) = false;
-    file.last_change = None;
+    hosted_vm.run(|script| {
+        let Some(script) = script else { return };
+        let Some(id) = crate::ui_macro::identity(&roster) else {
+            return;
+        };
+        if file.identity.get(&script).as_ref() == Some(&id) {
+            return; // already restored into the live VM
+        }
+        file.path = crate::local_state::layout_character_path(&id.0, &id.1);
+        *file.identity.get(&script) = Some(id);
+        // A fresh VM has nothing placed and owes no write.
+        *file.dirty.get(&script) = false;
+        file.last_change = None;
 
-    let Some(path) = file.path.clone() else {
-        return; // hermetic capture or no state folder: session-only
-    };
-    let text = match std::fs::read_to_string(&path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
-        Err(e) => {
-            warn!("layout: cannot read {}: {e}", path.display());
+        let Some(path) = file.path.clone() else {
+            return; // hermetic capture or no state folder: session-only
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) => {
+                warn!("layout: cannot read {}: {e}", path.display());
+                return;
+            }
+        };
+        let (count, anchor_form) = match parse(&text) {
+            Layout::Rect(frames) => {
+                let n = frames.len();
+                script.restore_user_placed_layouts(frames);
+                (n, false)
+            }
+            Layout::Anchors(frames) => {
+                let n = frames.len();
+                script.restore_anchor_layouts(frames);
+                (n, true)
+            }
+        };
+        if count == 0 {
             return;
         }
-    };
-    let (count, anchor_form) = match parse(&text) {
-        Layout::Rect(frames) => {
-            let n = frames.len();
-            script.restore_user_placed_layouts(frames);
-            (n, false)
+        info!("layout: {count} frames restored from {}", path.display());
+        // Drain the dirty bit the restore set, so the first save does not rewrite what was just read.
+        script.take_user_placed_change();
+        if anchor_form {
+            // The anchor form is read once: the autosave rewrites it in the rect form once the
+            // restored windows have settled.
+            *file.dirty.get(&script) = true;
+            file.last_change = Some(std::time::Instant::now());
         }
-        Layout::Anchors(frames) => {
-            let n = frames.len();
-            script.restore_anchor_layouts(frames);
-            (n, true)
-        }
-    };
-    if count == 0 {
-        return;
-    }
-    info!("layout: {count} frames restored from {}", path.display());
-    // Drain the dirty bit the restore set, so the first save does not rewrite what was just read.
-    script.take_user_placed_change();
-    if anchor_form {
-        // The anchor form is read once: the autosave rewrites it in the rect form once the
-        // restored windows have settled.
-        *file.dirty.get(&script) = true;
-        file.last_change = Some(std::time::Instant::now());
-    }
+    })
 }
 
 /// Drain the engine's user-placed-frame-moved bit into the dirty flag.
-fn watch_layout(script: Option<NonSendMut<UiScript>>, mut file: ResMut<LayoutFile>) {
-    let Some(mut script) = script else { return };
-    if !script.take_user_placed_change() {
-        return;
-    }
-    *file.dirty.get(&script) = true;
-    file.last_change = Some(std::time::Instant::now());
+fn watch_layout(mut hosted_vm: crate::script_calls::HostedVm, mut file: ResMut<LayoutFile>) {
+    hosted_vm.run(|script| {
+        let Some(script) = script else { return };
+        if !script.take_user_placed_change() {
+            return;
+        }
+        *file.dirty.get(&script) = true;
+        file.last_change = Some(std::time::Instant::now());
+    })
 }
 
 /// The autosave: dirty and one quiet second rewrite the file atomically. Every orderly end is
 /// [`save_now`]'s.
-fn save_layout(script: Option<NonSendMut<UiScript>>, mut file: ResMut<LayoutFile>) {
-    let Some(script) = script else { return };
-    if !*file.dirty.get(&script) {
-        return;
-    }
-    if !file.last_change.is_none_or(|t| t.elapsed() >= SAVE_QUIET) {
-        return;
-    }
-    let Some(path) = file.path.clone() else {
-        // Hermetic or session-only: nothing to write, stop retrying.
+fn save_layout(mut hosted_vm: crate::script_calls::HostedVm, mut file: ResMut<LayoutFile>) {
+    hosted_vm.run(|script| {
+        let Some(script) = script else { return };
+        if !*file.dirty.get(&script) {
+            return;
+        }
+        if !file.last_change.is_none_or(|t| t.elapsed() >= SAVE_QUIET) {
+            return;
+        }
+        let Some(path) = file.path.clone() else {
+            // Hermetic or session-only: nothing to write, stop retrying.
+            *file.dirty.get(&script) = false;
+            return;
+        };
+        let body = render(&script.user_placed_layouts());
+        if let Err(e) = crate::local_state::write_atomic(&path, &body) {
+            // The flag clears below anyway, so a failing write is not retried every frame.
+            warn!("layout: cannot write {}: {e}", path.display());
+        }
         *file.dirty.get(&script) = false;
-        return;
-    };
-    let body = render(&script.user_placed_layouts());
-    if let Err(e) = crate::local_state::write_atomic(&path, &body) {
-        // The flag clears below anyway, so a failing write is not retried every frame.
-        warn!("layout: cannot write {}: {e}", path.display());
-    }
-    *file.dirty.get(&script) = false;
+    })
 }
 
 /// The reference's step of the UI shutdown (`0x490c79`, after `PLAYER_LOGOUT`, before the flat

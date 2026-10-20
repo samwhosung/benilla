@@ -105,81 +105,85 @@ fn parent_zone(areas: &AreaTableRes, id: u32) -> Option<u32> {
 /// lands the frame it decodes.
 pub(super) fn feed_broadcasts(
     log: Res<ChatLog>,
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     channels: Res<ChannelState>,
     areas: Option<Res<AreaTableRes>>,
     messages: Option<Res<ServerMessages>>,
     world: benilla_world::world_point::WorldPoint,
 ) {
-    if log.broadcasts_pending() == 0 {
-        return;
-    }
-    // The format string lives in the VM, so the queue waits for one; it clears at session end.
-    let Some(script) = script else { return };
-    // The player's zone, the reference's `[0xb6e5d0]`; `top_zone` is the single-hop parent on
-    // 5875 data.
-    let player_zone = areas
-        .as_ref()
-        .and_then(|a| world.area().and_then(|leaf| a.0.top_zone(leaf)));
-    for item in log.take_broadcasts() {
-        match item {
-            Broadcast::ZoneUnderAttack { area_id } => {
-                // No catalog, template or row: with no name there is no line.
-                let Some((areas, fmt)) = areas
-                    .as_ref()
-                    .zip(super::combat::global_string(&script, "ZONE_UNDER_ATTACK"))
-                else {
-                    continue;
-                };
-                let (Some(name), Some(zone)) = (areas.0.name(area_id), parent_zone(areas, area_id))
-                else {
-                    debug!("chat: ZONE_UNDER_ATTACK for unknown area {area_id}");
-                    continue;
-                };
-                let text = zone_under_attack_line(&fmt, name);
-                push_channel_lines(&log, &channels, zone, player_zone, &text);
-            }
-            Broadcast::Defense { zone_id, text } => {
-                // The wire text stands on its own, so an unresolvable zone only costs the remap.
-                let zone = areas
-                    .as_ref()
-                    .and_then(|a| parent_zone(a, zone_id))
-                    .unwrap_or(zone_id);
-                push_channel_lines(&log, &channels, zone, player_zone, &text);
-            }
-            Broadcast::ChatRestricted => {
-                // Its row is a chat row (tested below), so it is written as a system line here.
-                // Deviation: a missing global prints nothing, where the reference prints an empty
-                // line (`0x703c02`), because benilla's other `DisplayError` routes do the same.
-                if let Some(text) = super::combat::global_string(&script, "ERR_CHAT_RESTRICTED") {
-                    log.push_event(ChatEvent::text_only(ChatEventKind::System, text));
+    hosted_vm.run(|script| {
+        if log.broadcasts_pending() == 0 {
+            return;
+        }
+        // The format string lives in the VM, so the queue waits for one; it clears at session end.
+        let Some(script) = script else { return };
+        // The player's zone, the reference's `[0xb6e5d0]`; `top_zone` is the single-hop parent on
+        // 5875 data.
+        let player_zone = areas
+            .as_ref()
+            .and_then(|a| world.area().and_then(|leaf| a.0.top_zone(leaf)));
+        for item in log.take_broadcasts() {
+            match item {
+                Broadcast::ZoneUnderAttack { area_id } => {
+                    // No catalog, template or row: with no name there is no line.
+                    let Some((areas, fmt)) = areas
+                        .as_ref()
+                        .zip(super::combat::global_string(&script, "ZONE_UNDER_ATTACK"))
+                    else {
+                        continue;
+                    };
+                    let (Some(name), Some(zone)) =
+                        (areas.0.name(area_id), parent_zone(areas, area_id))
+                    else {
+                        debug!("chat: ZONE_UNDER_ATTACK for unknown area {area_id}");
+                        continue;
+                    };
+                    let text = zone_under_attack_line(&fmt, name);
+                    push_channel_lines(&log, &channels, zone, player_zone, &text);
                 }
-            }
-            Broadcast::TransferAborted { reason } => {
-                let get = |key: &str| {
-                    script
-                        .lua()
-                        .globals()
-                        .get::<Option<String>>(key)
-                        .ok()
-                        .flatten()
-                };
-                if let Some(text) = transfer_abort_line(reason, get) {
-                    log.push_event(ChatEvent::text_only(ChatEventKind::System, text));
+                Broadcast::Defense { zone_id, text } => {
+                    // The wire text stands on its own, so an unresolvable zone only costs the remap.
+                    let zone = areas
+                        .as_ref()
+                        .and_then(|a| parent_zone(a, zone_id))
+                        .unwrap_or(zone_id);
+                    push_channel_lines(&log, &channels, zone, player_zone, &text);
                 }
-            }
-            Broadcast::Server { message_type, text } => {
-                let Some(messages) = messages.as_ref() else {
-                    debug!("chat: SMSG_SERVER_MESSAGE {message_type} dropped: no catalog");
-                    continue;
-                };
-                log.push_event(ChatEvent::text_only(
-                    ChatEventKind::System,
-                    messages.0.compose(message_type, &text),
-                ));
+                Broadcast::ChatRestricted => {
+                    // Its row is a chat row (tested below), so it is written as a system line here.
+                    // Deviation: a missing global prints nothing, where the reference prints an empty
+                    // line (`0x703c02`), because benilla's other `DisplayError` routes do the same.
+                    if let Some(text) = super::combat::global_string(&script, "ERR_CHAT_RESTRICTED")
+                    {
+                        log.push_event(ChatEvent::text_only(ChatEventKind::System, text));
+                    }
+                }
+                Broadcast::TransferAborted { reason } => {
+                    let get = |key: &str| {
+                        script
+                            .lua()
+                            .globals()
+                            .get::<Option<String>>(key)
+                            .ok()
+                            .flatten()
+                    };
+                    if let Some(text) = transfer_abort_line(reason, get) {
+                        log.push_event(ChatEvent::text_only(ChatEventKind::System, text));
+                    }
+                }
+                Broadcast::Server { message_type, text } => {
+                    let Some(messages) = messages.as_ref() else {
+                        debug!("chat: SMSG_SERVER_MESSAGE {message_type} dropped: no catalog");
+                        continue;
+                    };
+                    log.push_event(ChatEvent::text_only(
+                        ChatEventKind::System,
+                        messages.0.compose(message_type, &text),
+                    ));
+                }
             }
         }
-    }
+    })
 }
 
 /// `SMSG_TRANSFER_ABORTED`'s system line (`0x4019a0`): reasons 1, 2, 3 and 5 name a string by the

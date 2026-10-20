@@ -35,14 +35,13 @@ mod dots;
 
 pub(super) use dots::{emit_party_dots, emit_quest_dots, emit_tracking_dots, SelfTracking};
 
-use bevy::ecs::system::NonSendMut;
 use bevy::math::Rect;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use benilla_assets::coords::bevy_to_wow;
 use benilla_formats::{AreaPoi, AreaPoiCatalog};
-use benilla_ui::script::{MinimapRimArrow, UiScript};
+use benilla_ui::script::MinimapRimArrow;
 
 use crate::go_templates::GameObjectTemplates;
 use crate::names::NameCache;
@@ -391,46 +390,48 @@ pub(super) fn group_arrow_records<F: bevy::ecs::query::QueryFilter>(
 /// was held hides `GameTooltip`, whoever holds it (`0x4eb55f`). The cursor off the Minimap is the
 /// walk's: the probe's miss and the Minimap's leave.
 pub(super) fn drive_blip_tooltip(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     hover: Res<MinimapBlipHover>,
     names: Res<NameCache>,
     objects: crate::net::Objects,
     commands: Res<NetCommands>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    if !script.minimap_probed() {
-        return;
-    }
-    let show = match &*hover {
-        MinimapBlipHover::None => None,
-        MinimapBlipHover::Landmark(name) => Some((name.clone(), false)),
-        // A live object names itself through its name method (`0x4eb31a`, vtable slot 28,
-        // `GetUnitName` with a callback), which every probe runs, so a refused name is asked
-        // again about once per answer; a guid with no object only reads (`0x4eb33c`), and so does
-        // a creature's record (`0x60934b`).
-        MinimapBlipHover::Npc(npc, grey) => {
-            let ask = if objects.store(*npc).is_some() {
-                Ask::Event(&commands)
-            } else {
-                Ask::Read
-            };
-            names
-                .resolve(&objects, *npc, ask)
-                .map(|n| (n.to_string(), *grey))
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        if !script.minimap_probed() {
+            return;
         }
-        MinimapBlipHover::TrackedGo(name, grey) => Some((name.clone(), *grey)),
-    };
-    match (show, script.minimap_blip()) {
-        // Same blip: the plate, owned in mode 6, follows the cursor in its own update.
-        (Some((t, _)), Some(held)) if t == held => {}
-        (Some((t, grey)), _) => {
-            script.minimap_tooltip(&t, grey);
+        let show = match &*hover {
+            MinimapBlipHover::None => None,
+            MinimapBlipHover::Landmark(name) => Some((name.clone(), false)),
+            // A live object names itself through its name method (`0x4eb31a`, vtable slot 28,
+            // `GetUnitName` with a callback), which every probe runs, so a refused name is asked
+            // again about once per answer; a guid with no object only reads (`0x4eb33c`), and so does
+            // a creature's record (`0x60934b`).
+            MinimapBlipHover::Npc(npc, grey) => {
+                let ask = if objects.store(*npc).is_some() {
+                    Ask::Event(&commands)
+                } else {
+                    Ask::Read
+                };
+                names
+                    .resolve(&objects, *npc, ask)
+                    .map(|n| (n.to_string(), *grey))
+            }
+            MinimapBlipHover::TrackedGo(name, grey) => Some((name.clone(), *grey)),
+        };
+        match (show, script.minimap_blip()) {
+            // Same blip: the plate, owned in mode 6, follows the cursor in its own update.
+            (Some((t, _)), Some(held)) if t == held => {}
+            (Some((t, grey)), _) => {
+                script.minimap_tooltip(&t, grey);
+            }
+            (None, Some(_)) => script.minimap_blip_lost(),
+            (None, None) => {}
         }
-        (None, Some(_)) => script.minimap_blip_lost(),
-        (None, None) => {}
-    }
+    })
 }
 
 #[cfg(test)]

@@ -13,9 +13,7 @@ use std::collections::BTreeSet;
 use bevy::prelude::*;
 
 use benilla_formats::{Talent, TalentCatalog};
-use benilla_ui::script::{
-    ScriptValue, TalentPrereqView, TalentTabView, TalentUiState, TalentView, UiScript,
-};
+use benilla_ui::script::{ScriptValue, TalentPrereqView, TalentTabView, TalentUiState, TalentView};
 use benilla_ui::strings::{fill, Arg};
 
 use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfPlayer};
@@ -71,7 +69,7 @@ struct FeedMemory {
 }
 
 fn feed_talents(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     talents: Option<Res<Talents>>,
     actions: Res<PlayerActions>,
     spells: Option<Res<Spells>>,
@@ -79,97 +77,99 @@ fn feed_talents(
     changed_self: Query<(), (With<SelfPlayer>, Changed<ObjectStore>)>,
     mut memory: Local<crate::ui_script::VmMemo<FeedMemory>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let (memory, vm_reset) = memory.get_reset(&script);
-    // Reopened by every input the build reads: the known spells, both catalogs (their landing
-    // counts as a change) and the self descriptor.
-    let self_changed = !changed_self.is_empty();
-    let actions_changed = actions.is_changed();
-    let talents_changed = talents.as_ref().is_some_and(|r| r.is_changed());
-    let spells_changed = spells.as_ref().is_some_and(|r| r.is_changed());
-    gate::trace(
-        "feed_talents",
-        &[
-            ("vm_reset", vm_reset),
-            ("self", self_changed),
-            ("actions", actions_changed),
-            ("talents", talents_changed),
-            ("spells", spells_changed),
-        ],
-    );
-    let gate = gate::Gate::new(
-        vm_reset || self_changed || actions_changed || talents_changed || spells_changed,
-    );
-    if gate.skip() {
-        return;
-    }
-    let (Some(talents), Some(spells)) = (talents.as_deref(), spells.as_deref()) else {
-        return;
-    };
-    let Ok(store) = self_q.single() else {
-        return;
-    };
-    let race = store.0.unit_race().unwrap_or(0);
-    let class = store.0.unit_class().unwrap_or(0);
-    let points = (
-        store.0.player_talent_points().unwrap_or(0),
-        store.0.player_free_professions().unwrap_or(0),
-    );
-    // Scoped: the `GlobalStrings.lua` lookup borrows the VM, which the push needs mutably.
-    let fresh = {
-        let get = |key: &str| {
-            script
-                .lua()
-                .globals()
-                .get::<String>(key)
-                .ok()
-                .filter(|t| !t.is_empty())
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
         };
-        build_pages(
-            &talents.catalog,
-            &actions.spells,
-            &spells.catalog,
-            race,
-            class,
-            points,
-            &get,
-        )
-    };
-    if fresh != memory.pushed {
-        gate.audit("feed_talents", "the talent pages");
-        debug!(
-            "ui_talent: fed {} tab(s), {} points",
-            fresh.tabs.len(),
-            points.0
-        );
-        script.set_talents(fresh.clone());
-        memory.pushed = fresh;
-        // The talent and profession point deltas, as the reference's `SignalEvent2` sends them:
-        // `ChatFrame.lua:1326` tests `arg2 > 0` unguarded, so an argless fire raises.
-        // `memory.points` still holds the previous pair here.
-        let (talent_delta, profession_delta) = match memory.points {
-            Some((old_talent, old_professions)) => (
-                i64::from(points.0) - i64::from(old_talent),
-                i64::from(points.1) - i64::from(old_professions),
-            ),
-            None => (0, 0),
-        };
-        script.fire_event(
-            "CHARACTER_POINTS_CHANGED",
-            vec![
-                ScriptValue::Int(talent_delta),
-                ScriptValue::Int(profession_delta),
+        let (memory, vm_reset) = memory.get_reset(&script);
+        // Reopened by every input the build reads: the known spells, both catalogs (their landing
+        // counts as a change) and the self descriptor.
+        let self_changed = !changed_self.is_empty();
+        let actions_changed = actions.is_changed();
+        let talents_changed = talents.as_ref().is_some_and(|r| r.is_changed());
+        let spells_changed = spells.as_ref().is_some_and(|r| r.is_changed());
+        gate::trace(
+            "feed_talents",
+            &[
+                ("vm_reset", vm_reset),
+                ("self", self_changed),
+                ("actions", actions_changed),
+                ("talents", talents_changed),
+                ("spells", spells_changed),
             ],
         );
-    }
-    // The free-professions line must not be composed here: the stock `ChatFrame_OnEvent` arm
-    // (`ChatFrame.lua:1324-1334`) prints `LEVEL_UP_SKILL_POINTS` itself on `arg2 > 0`.
-    if memory.points != Some(points) {
-        gate.audit("feed_talents", "the points memo");
-        memory.points = Some(points);
-    }
+        let gate = gate::Gate::new(
+            vm_reset || self_changed || actions_changed || talents_changed || spells_changed,
+        );
+        if gate.skip() {
+            return;
+        }
+        let (Some(talents), Some(spells)) = (talents.as_deref(), spells.as_deref()) else {
+            return;
+        };
+        let Ok(store) = self_q.single() else {
+            return;
+        };
+        let race = store.0.unit_race().unwrap_or(0);
+        let class = store.0.unit_class().unwrap_or(0);
+        let points = (
+            store.0.player_talent_points().unwrap_or(0),
+            store.0.player_free_professions().unwrap_or(0),
+        );
+        // Scoped: the `GlobalStrings.lua` lookup borrows the VM, which the push needs mutably.
+        let fresh = {
+            let get = |key: &str| {
+                script
+                    .lua()
+                    .globals()
+                    .get::<String>(key)
+                    .ok()
+                    .filter(|t| !t.is_empty())
+            };
+            build_pages(
+                &talents.catalog,
+                &actions.spells,
+                &spells.catalog,
+                race,
+                class,
+                points,
+                &get,
+            )
+        };
+        if fresh != memory.pushed {
+            gate.audit("feed_talents", "the talent pages");
+            debug!(
+                "ui_talent: fed {} tab(s), {} points",
+                fresh.tabs.len(),
+                points.0
+            );
+            script.set_talents(fresh.clone());
+            memory.pushed = fresh;
+            // The talent and profession point deltas, as the reference's `SignalEvent2` sends them:
+            // `ChatFrame.lua:1326` tests `arg2 > 0` unguarded, so an argless fire raises.
+            // `memory.points` still holds the previous pair here.
+            let (talent_delta, profession_delta) = match memory.points {
+                Some((old_talent, old_professions)) => (
+                    i64::from(points.0) - i64::from(old_talent),
+                    i64::from(points.1) - i64::from(old_professions),
+                ),
+                None => (0, 0),
+            };
+            script.fire_event(
+                "CHARACTER_POINTS_CHANGED",
+                vec![
+                    ScriptValue::Int(talent_delta),
+                    ScriptValue::Int(profession_delta),
+                ],
+            );
+        }
+        // The free-professions line must not be composed here: the stock `ChatFrame_OnEvent` arm
+        // (`ChatFrame.lua:1324-1334`) prints `LEVEL_UP_SKILL_POINTS` itself on `arg2 > 0`.
+        if memory.points != Some(points) {
+            gate.audit("feed_talents", "the points memo");
+            memory.points = Some(points);
+        }
+    })
 }
 
 /// A talent's rank: the highest rank whose spell is known.
@@ -289,59 +289,62 @@ pub(crate) fn build_pages(
 /// Drains `LearnTalent(tab, index)` clicks into `CMSG_LEARN_TALENT` for the current rank count,
 /// the 0-based next rank, which vmangos learns up to.
 fn drain_talent_learns(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     talents: Option<Res<Talents>>,
     actions: Res<PlayerActions>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     commands: Res<NetCommands>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let clicks = script.take_talent_learns();
-    if clicks.is_empty() {
-        return;
-    }
-    let Some(talents) = talents.as_deref() else {
-        return;
-    };
-    let Ok(store) = self_q.single() else {
-        return;
-    };
-    let race = store.0.unit_race().unwrap_or(0);
-    let class = store.0.unit_class().unwrap_or(0);
-    let tabs = talents.catalog.tabs_for_class(race, class);
-    for (tab, index) in clicks {
-        // 1-based Lua-facing pair; a 0 from a stray script is a miss, never an underflow.
-        let Some(t) = (tab as usize)
-            .checked_sub(1)
-            .and_then(|i| tabs.get(i))
-            .and_then(|tab| {
-                (index as usize)
-                    .checked_sub(1)
-                    .and_then(|i| talents.catalog.talents_in_tab(tab.id).get(i))
-            })
-        else {
-            continue;
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
         };
-        let rank = rank_of(t, &actions.spells);
-        // Not at max is the client's only send gate (`LearnTalent` `0x4f36a0`); points and
-        // prereqs are the server's to enforce.
-        if rank >= t.max_rank() {
-            continue;
+        let clicks = script.take_talent_learns();
+        if clicks.is_empty() {
+            return;
         }
-        debug!("ui_talent: learn talent {} rank {}", t.id, rank);
-        let _ = commands.0.send(ClientCommand::LearnTalent {
-            talent_id: t.id,
-            rank,
-        });
-    }
+        let Some(talents) = talents.as_deref() else {
+            return;
+        };
+        let Ok(store) = self_q.single() else {
+            return;
+        };
+        let race = store.0.unit_race().unwrap_or(0);
+        let class = store.0.unit_class().unwrap_or(0);
+        let tabs = talents.catalog.tabs_for_class(race, class);
+        for (tab, index) in clicks {
+            // 1-based Lua-facing pair; a 0 from a stray script is a miss, never an underflow.
+            let Some(t) = (tab as usize)
+                .checked_sub(1)
+                .and_then(|i| tabs.get(i))
+                .and_then(|tab| {
+                    (index as usize)
+                        .checked_sub(1)
+                        .and_then(|i| talents.catalog.talents_in_tab(tab.id).get(i))
+                })
+            else {
+                continue;
+            };
+            let rank = rank_of(t, &actions.spells);
+            // Not at max is the client's only send gate (`LearnTalent` `0x4f36a0`); points and
+            // prereqs are the server's to enforce.
+            if rank >= t.max_rank() {
+                continue;
+            }
+            debug!("ui_talent: learn talent {} rank {}", t.id, rank);
+            let _ = commands.0.send(ClientCommand::LearnTalent {
+                talent_id: t.id,
+                rank,
+            });
+        }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use benilla_formats::MAX_TALENT_RANK;
+    use benilla_ui::script::UiScript;
 
     fn talent(id: u32, tab: u32, row: u32, col: u32, ranks: &[u32]) -> Talent {
         let mut r = [0u32; MAX_TALENT_RANK];

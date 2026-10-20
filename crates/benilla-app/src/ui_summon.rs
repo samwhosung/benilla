@@ -17,7 +17,7 @@
 //! nothing, so no stale or zero guid reaches the server. The reference never clears the guid or
 //! zone, only the deadline (`0x49014a`), so its `ConfirmSummon()` sends whatever is left.
 
-use benilla_ui::script::{SummonConfirmUiState, UiScript};
+use benilla_ui::script::SummonConfirmUiState;
 use bevy::prelude::*;
 
 use crate::area::AreaTableRes;
@@ -65,7 +65,7 @@ impl SummonState {
 /// Push the three getters' answers every frame, and fire `CONFIRM_SUMMON` (no arguments) for an
 /// owed question.
 fn feed_summon(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut summon: ResMut<SummonState>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
@@ -73,56 +73,58 @@ fn feed_summon(
     // Real: the deadline was stamped on this clock.
     time: Res<Time<Real>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
 
-    // The getters' defaults already answer a zeroed bank. Not `pending()`: a zero-guid request
-    // still latches and fires in the reference, and must not leave `ask` owed.
-    if summon.summoner == 0 && !summon.ask {
-        return;
-    }
+        // The getters' defaults already answer a zeroed bank. Not `pending()`: a zero-guid request
+        // still latches and fires in the reference, and must not leave `ask` owed.
+        if summon.summoner == 0 && !summon.ask {
+            return;
+        }
 
-    // The getter's calls are its lookups with the callback `0x48b710` (`0x48b6e1`): the popup's
-    // `OnUpdate` makes one a frame (`StaticPopup.lua:1746`), so a miss is asked while it shows and
-    // a refused name again, once per answer. The push itself only reads; a zero guid names nobody
-    // and is never asked about.
-    let looked_up = script.take_summon_summoner_lookups() > 0;
-    let summoner_name = match summon.pending() {
-        Some(guid) => names
-            .resolve_player(
-                guid,
-                if looked_up {
-                    Ask::Event(&commands)
-                } else {
-                    Ask::Read
-                },
-            )
-            .unwrap_or_default()
-            .to_string(),
-        None => String::new(),
-    };
-    script.set_summon_confirm(SummonConfirmUiState {
-        summoner: summoner_name,
-        area: area_name(summon.zone, areas.as_deref()),
-        time_left_ms: summon.time_left_ms(time.elapsed_secs_f64()),
-    });
+        // The getter's calls are its lookups with the callback `0x48b710` (`0x48b6e1`): the popup's
+        // `OnUpdate` makes one a frame (`StaticPopup.lua:1746`), so a miss is asked while it shows and
+        // a refused name again, once per answer. The push itself only reads; a zero guid names nobody
+        // and is never asked about.
+        let looked_up = script.take_summon_summoner_lookups() > 0;
+        let summoner_name = match summon.pending() {
+            Some(guid) => names
+                .resolve_player(
+                    guid,
+                    if looked_up {
+                        Ask::Event(&commands)
+                    } else {
+                        Ask::Read
+                    },
+                )
+                .unwrap_or_default()
+                .to_string(),
+            None => String::new(),
+        };
+        script.set_summon_confirm(SummonConfirmUiState {
+            summoner: summoner_name,
+            area: area_name(summon.zone, areas.as_deref()),
+            time_left_ms: summon.time_left_ms(time.elapsed_secs_f64()),
+        });
 
-    if !summon.ask {
-        return;
-    }
-    summon.ask = false;
-    // The `summon` trace's middle link, between the packet and the response.
-    if benilla_assets::trace::enabled_for("summon") {
-        benilla_assets::trace::line(
-            "summon",
-            &format!(
-                "fire CONFIRM_SUMMON summoner={:#x} zone={}",
-                summon.summoner, summon.zone
-            ),
-        );
-    }
-    script.fire_event("CONFIRM_SUMMON", Vec::new());
+        if !summon.ask {
+            return;
+        }
+        summon.ask = false;
+        // The `summon` trace's middle link, between the packet and the response.
+        if benilla_assets::trace::enabled_for("summon") {
+            benilla_assets::trace::line(
+                "summon",
+                &format!(
+                    "fire CONFIRM_SUMMON summoner={:#x} zone={}",
+                    summon.summoner, summon.zone
+                ),
+            );
+        }
+        script.fire_event("CONFIRM_SUMMON", Vec::new());
+    })
 }
 
 /// `GetSummonConfirmAreaName()` (`0x48b720`): the summoner's bare `AreaTable.dbc` row name or
@@ -136,30 +138,32 @@ fn area_name(zone: u32, areas: Option<&AreaTableRes>) -> String {
 
 /// Turn each Accept into `CMSG_SUMMON_RESPONSE`, gated on a latched summoner, never the deadline.
 fn drain_summon(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     summon: Res<SummonState>,
     commands: Res<NetCommands>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let confirms = script.take_summon_confirms();
-    if confirms == 0 {
-        return;
-    }
-    let Some(summoner) = summon.pending() else {
-        debug!("ui_summon: ConfirmSummon() with nothing latched — nothing to answer with");
-        return;
-    };
-    if benilla_assets::trace::enabled_for("summon") {
-        benilla_assets::trace::line(
-            "summon",
-            &format!("SEND CMSG_SUMMON_RESPONSE summoner={summoner:#x} n={confirms}"),
-        );
-    }
-    for _ in 0..confirms {
-        let _ = commands.0.send(ClientCommand::SummonResponse { summoner });
-    }
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        let confirms = script.take_summon_confirms();
+        if confirms == 0 {
+            return;
+        }
+        let Some(summoner) = summon.pending() else {
+            debug!("ui_summon: ConfirmSummon() with nothing latched — nothing to answer with");
+            return;
+        };
+        if benilla_assets::trace::enabled_for("summon") {
+            benilla_assets::trace::line(
+                "summon",
+                &format!("SEND CMSG_SUMMON_RESPONSE summoner={summoner:#x} n={confirms}"),
+            );
+        }
+        for _ in 0..confirms {
+            let _ = commands.0.send(ClientCommand::SummonResponse { summoner });
+        }
+    })
 }
 
 /// The latch dies with the session (the module's deviation), on `DisconnectedMessage`, which a
@@ -268,6 +272,7 @@ impl Plugin for UiSummonPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use benilla_ui::script::UiScript;
 
     /// The getter's calls are the lookups (`0x48b6e1`, callback `0x48b710`), which the popup's
     /// `OnUpdate` makes every frame: the packet and the frames without a call ask nothing, a call

@@ -1593,6 +1593,8 @@ pub(crate) mod schedule_tests {
          "`SMSG_BINDER_CONFIRM` only answers the innkeeper's gossip line"),
         ("ui_char.rs", "feed_char", Because::MemoLatched,
          "`feed.vm: VmMemo<CharFeedMemo>`; `vm_reset` fires every transition on a fresh memo"),
+        ("ui_chat/feed.rs", "played_time_bridge", Because::FilledByVm,
+         "the answer it takes follows `RequestTimePlayed()`, Lua's own ask, which a frameless VM never makes"),
         ("ui_dialog_verbs.rs", "feed_meeting_stone", Because::SelfHealing,
          "the query waits for the world-enter cascade (`meeting_stone_enter_world`), our own create a server round trip past the login edge, and every `/reload` re-asks onto its new VM"),
         ("ui_duel.rs", "feed_duel", Because::PlayerRoundTrip,
@@ -1666,7 +1668,7 @@ pub(crate) mod schedule_tests {
         }
     }
 
-    /// A consumer (a system taking `NonSend[Mut]<UiScript>` whose body has a [`CONSUMES`]
+    /// A consumer (a system taking `NonSend[Mut]<UiScript>` or a `HostedVm`, whose body has a [`CONSUMES`]
     /// marker) passes if the schedule shows `ingame_ui_up` on it or a set above it, if it is a
     /// `fire_event` driven by a `VmMemo` parameter, or if [`EXEMPT`] argues it. Read off the
     /// schedule, where a gate on a set, a tuple or the member all look alike. A stale `EXEMPT`
@@ -1677,13 +1679,14 @@ pub(crate) mod schedule_tests {
         let mut consumers = Vec::new();
         for file in rust_files(&src_dir()) {
             let text = std::fs::read_to_string(&file).expect("readable source");
-            if !text.contains("UiScript") {
+            if !text.contains("UiScript") && !text.contains("HostedVm") {
                 continue;
             }
             let rel = rel_path(&file);
             for f in fn_items(&text) {
                 let holds_vm = f.params.contains("NonSendMut<UiScript>")
-                    || f.params.contains("NonSend<UiScript>");
+                    || f.params.contains("NonSend<UiScript>")
+                    || f.params.contains("HostedVm");
                 if !holds_vm || !CONSUMES.iter().any(|m| f.body.contains(m)) {
                     continue;
                 }

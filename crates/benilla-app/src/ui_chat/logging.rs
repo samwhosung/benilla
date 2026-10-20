@@ -9,8 +9,6 @@ use std::io::Write as _;
 
 use bevy::prelude::*;
 
-use benilla_ui::script::UiScript;
-
 /// The open log files, kept on the chat windows since every line passes [`super::frames::route`].
 #[derive(Default)]
 pub(crate) struct ChatLogFiles {
@@ -128,16 +126,18 @@ fn local_fields(secs: i64) -> [u32; 5] {
 
 /// The VM's two flags → the two files, on the frame either flag moves.
 pub(super) fn sync_chat_logging(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut windows: ResMut<super::frames::ChatWindows>,
 ) {
-    let Some(mut script) = script else { return };
-    if !script.take_logging_changes() {
-        return;
-    }
-    let (chat, combat) = script.logging_flags();
-    windows.logs.set(false, chat);
-    windows.logs.set(true, combat);
+    hosted_vm.run(|script| {
+        let Some(script) = script else { return };
+        if !script.take_logging_changes() {
+            return;
+        }
+        let (chat, combat) = script.logging_flags();
+        windows.logs.set(false, chat);
+        windows.logs.set(true, combat);
+    })
 }
 
 pub(super) fn plugin(app: &mut App) {

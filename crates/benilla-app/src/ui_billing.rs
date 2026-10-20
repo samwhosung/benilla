@@ -6,7 +6,7 @@
 //! `IGR_BILLING_NAG_DIALOG` once, at 600 or fewer, and no line.
 
 use benilla_protocol::messages::Billing;
-use benilla_ui::script::{ScriptValue, UiScript};
+use benilla_ui::script::ScriptValue;
 use bevy::prelude::*;
 
 use crate::net::SessionBilling;
@@ -141,37 +141,39 @@ pub(crate) fn arm_at_world_entry(world: &mut World) {
 /// The per-frame poll: each dialog is the stock `UIParent.lua` popup's event, each line a
 /// `CHAT_MSG_SYSTEM` of the template `GetText` picks by the minutes (`0x49575a`-`0x495775`).
 fn poll_play_time(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut warning: ResMut<PlayTimeWarning>,
     billing: Res<SessionBilling>,
     chat: Res<ChatLog>,
     time: Res<Time<Real>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for nag in warning.poll(now_ms(&time), billing.0.plan_flags) {
-        match nag {
-            Nag::Dialog(minutes) => script.fire_event(
-                "BILLING_NAG_DIALOG",
-                vec![ScriptValue::Int(i64::from(minutes))],
-            ),
-            Nag::IgrDialog => script.fire_event("IGR_BILLING_NAG_DIALOG", vec![]),
-            Nag::Line(minutes) => {
-                let get = |key: &str| script.lua().globals().get::<String>(key).ok();
-                let Some(template) =
-                    benilla_ui::strings::plural("BILLING_NAG_WARNING", Some(minutes), &get)
-                else {
-                    continue;
-                };
-                let text = benilla_ui::strings::fill(
-                    &template,
-                    &[benilla_ui::strings::Arg::D(i64::from(minutes))],
-                );
-                chat.push_event(ChatEvent::text_only(ChatEventKind::System, text));
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        for nag in warning.poll(now_ms(&time), billing.0.plan_flags) {
+            match nag {
+                Nag::Dialog(minutes) => script.fire_event(
+                    "BILLING_NAG_DIALOG",
+                    vec![ScriptValue::Int(i64::from(minutes))],
+                ),
+                Nag::IgrDialog => script.fire_event("IGR_BILLING_NAG_DIALOG", vec![]),
+                Nag::Line(minutes) => {
+                    let get = |key: &str| script.lua().globals().get::<String>(key).ok();
+                    let Some(template) =
+                        benilla_ui::strings::plural("BILLING_NAG_WARNING", Some(minutes), &get)
+                    else {
+                        continue;
+                    };
+                    let text = benilla_ui::strings::fill(
+                        &template,
+                        &[benilla_ui::strings::Arg::D(i64::from(minutes))],
+                    );
+                    chat.push_event(ChatEvent::text_only(ChatEventKind::System, text));
+                }
             }
         }
-    }
+    })
 }
 
 pub(crate) struct UiBillingPlugin;
@@ -193,6 +195,7 @@ impl Plugin for UiBillingPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use benilla_ui::script::UiScript;
 
     fn billing(time_remaining: u32, plan_flags: u8) -> Billing {
         Billing {

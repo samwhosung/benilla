@@ -5,7 +5,7 @@
 //! There is no fit check: the reference previews whatever it is handed (`DressUpFrame.lua:2-16`).
 
 use benilla_protocol::CharEnumItem;
-use benilla_ui::script::{DressUpIntent, UiScript};
+use benilla_ui::script::DressUpIntent;
 use bevy::prelude::*;
 
 use crate::entities::equip_slot;
@@ -179,7 +179,7 @@ impl Plugin for DressUpUiPlugin {
 }
 
 fn feed_dressup(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut room: ResMut<DressUpRoom>,
     mut preview: ResMut<DressUpPreview>,
     items: Res<Items>,
@@ -188,35 +188,43 @@ fn feed_dressup(
     // A miss sends the `CMSG_GUILD_QUERY` whose answer paints the tabard.
     guilds: Res<crate::ui_guild::GuildState>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for intent in script.take_dressup_intents() {
-        room.apply(intent);
-    }
-    // The room empties when neither the dressing room nor the auction house's
-    // `AuctionDressUpFrame` is shown, read off the frames (the stock files carry no hook of ours).
-    // The reference's widget keeps its state while hidden, but `DressUpItem` re-issues
-    // `SetUnit("player")` on a hidden frame, so the kept state is never seen.
-    if room.open
-        && !script.frame_visible("DressUpFrame")
-        && !script.frame_visible("AuctionDressUpFrame")
-    {
-        room.apply(DressUpIntent::Close);
-    }
-    room.resolve_pending(&items, &commands);
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        for intent in script.take_dressup_intents() {
+            room.apply(intent);
+        }
+        // The room empties when neither the dressing room nor the auction house's
+        // `AuctionDressUpFrame` is shown, read off the frames (the stock files carry no hook of ours).
+        // The reference's widget keeps its state while hidden, but `DressUpItem` re-issues
+        // `SetUnit("player")` on a hidden frame, so the kept state is never seen.
+        if room.open
+            && !script.frame_visible("DressUpFrame")
+            && !script.frame_visible("AuctionDressUpFrame")
+        {
+            room.apply(DressUpIntent::Close);
+        }
+        room.resolve_pending(&items, &commands);
 
-    // The crest comes off the guild cache this system holds, not the outfit `player_look` builds.
-    let look = match (room.open, self_q.single().ok()) {
-        (true, Some((store, net))) => player_look(store, net, &room, &items).map(|l| DressUpLook {
-            emblem: crate::ui_guild::unit_guild_emblem(&store.0, &guilds, Ask::New(&commands)),
-            ..l
-        }),
-        _ => None,
-    };
-    if preview.look != look {
-        preview.look = look;
-    }
+        // The crest comes off the guild cache this system holds, not the outfit `player_look` builds.
+        let look = match (room.open, self_q.single().ok()) {
+            (true, Some((store, net))) => {
+                player_look(store, net, &room, &items).map(|l| DressUpLook {
+                    emblem: crate::ui_guild::unit_guild_emblem(
+                        &store.0,
+                        &guilds,
+                        Ask::New(&commands),
+                    ),
+                    ..l
+                })
+            }
+            _ => None,
+        };
+        if preview.look != look {
+            preview.look = look;
+        }
+    })
 }
 
 /// The player's own look with the room's substitutions written in.

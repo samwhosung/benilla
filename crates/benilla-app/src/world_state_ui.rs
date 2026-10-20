@@ -13,11 +13,10 @@
 //! The world-PvP rows (Eastern Plaguelands, Silithus) are all `Type` 1, so leaving the zone
 //! defense channel hides them; the map icons, gated on the states themselves, stay.
 
-use bevy::ecs::system::NonSendMut;
 use bevy::prelude::*;
 
 use benilla_formats::{chat_channel_flags as chan, WorldStateUiCatalog, WorldStateUiRow};
-use benilla_ui::script::{UiScript, WorldStateUiView};
+use benilla_ui::script::WorldStateUiView;
 
 use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 
@@ -150,27 +149,29 @@ fn resolve(row: &WorldStateUiRow, states: &WorldStates) -> WorldStateUiView {
 /// Pushes the readout when a world-state packet arrives or the defense-channel flag flips, the
 /// reference's two rebuild triggers.
 fn feed_world_state_ui(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     catalog: Option<Res<WorldStateUiRes>>,
     states: Res<WorldStates>,
     channels: Res<crate::ui_chat::ChannelState>,
     mut defense_channel: Local<bool>,
     mut last: Local<crate::ui_script::VmMemo<Option<(u64, bool)>>>,
 ) {
-    // Only when the roster moves; a first run sees it changed.
-    if channels.is_changed() {
-        *defense_channel = defense_channel_joined(&channels);
-    }
-    let defense_channel = *defense_channel;
-    let (Some(mut script), Some(catalog)) = (script, catalog) else {
-        return;
-    };
-    let key = (states.generation(), defense_channel);
-    if *last.get(&script) == Some(key) {
-        return;
-    }
-    *last.get(&script) = Some(key);
-    script.set_world_state_ui(build(&catalog.0, &states, defense_channel));
+    hosted_vm.run(|script| {
+        // Only when the roster moves; a first run sees it changed.
+        if channels.is_changed() {
+            *defense_channel = defense_channel_joined(&channels);
+        }
+        let defense_channel = *defense_channel;
+        let (Some(script), Some(catalog)) = (script, catalog) else {
+            return;
+        };
+        let key = (states.generation(), defense_channel);
+        if *last.get(&script) == Some(key) {
+            return;
+        }
+        *last.get(&script) = Some(key);
+        script.set_world_state_ui(build(&catalog.0, &states, defense_channel));
+    })
 }
 
 pub(crate) struct WorldStateUiPlugin;

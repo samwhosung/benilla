@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use benilla_assets::MapCatalogRes;
 use benilla_formats::MapCatalog;
 use benilla_protocol::messages::{BattlefieldList, BattlefieldStatus};
-use benilla_ui::script::{BattlefieldListView, BattlefieldMapInfo, BattlefieldQueueSlot, UiScript};
+use benilla_ui::script::{BattlefieldListView, BattlefieldMapInfo, BattlefieldQueueSlot};
 
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands, WorldEnterCascadeMessage};
@@ -190,7 +190,7 @@ fn group_fits(catalog: Option<&MapCatalog>, map_id: u32, group: Option<&GroupSta
 /// Runs before the dialog and score feeds fire `UPDATE_BATTLEFIELD_STATUS` and
 /// `UPDATE_BATTLEFIELD_SCORE`, so their handlers read this frame's list and slots.
 fn feed_battlefield(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut state: ResMut<Battlefield>,
     queue: Res<BattlefieldQueue>,
     maps: Option<Res<MapCatalogRes>>,
@@ -199,122 +199,131 @@ fn feed_battlefield(
     commands: Res<NetCommands>,
     mut sink: crate::ui_action::MessageSink,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let catalog = maps.as_deref().map(|m| &m.0);
-    let now = Instant::now();
+    hosted_vm.run(|script| {
+        let Some(mut script) = script else {
+            return;
+        };
+        let catalog = maps.as_deref().map(|m| &m.0);
+        let now = Instant::now();
 
-    if std::mem::take(&mut state.dirty) {
-        // The description's side: the player's faction group (`0x5efe00`).
-        let faction = script
-            .eval::<Option<String>>(r#"return (UnitFactionGroup("player"))"#)
-            .ok()
-            .flatten();
-        let view = list_view(&state, catalog, faction.as_deref());
-        script.set_battlefield_list(view);
-    }
-
-    let slots = queue
-        .slots()
-        .each_ref()
-        .map(|s| slot_view(s.as_ref(), catalog, now));
-    script.set_battlefield_queue(slots, queue.instance_expiration_ms(now));
-
-    if std::mem::take(&mut state.show) {
-        script.fire_event("BATTLEFIELDS_SHOW", vec![]);
-        // The anchor is written after the event, from the live position (`0x4aa6c0`).
-        state.anchor = Some(player.pos);
-    }
-
-    // The leash (`0x4aa090`): strictly beyond the radius, the anchor clears, then the event.
-    if let Some(anchor) = state.anchor {
-        if anchor.length_squared() > DEGENERATE_ANCHOR
-            && player.pos.distance_squared(anchor) > LEASH_RADIUS_YD * LEASH_RADIUS_YD
-        {
-            state.anchor = None;
-            script.fire_event("BATTLEFIELDS_CLOSED", vec![]);
+        if std::mem::take(&mut state.dirty) {
+            // The description's side: the player's faction group (`0x5efe00`).
+            let faction = script
+                .eval::<Option<String>>(r#"return (UnitFactionGroup("player"))"#)
+                .ok()
+                .flatten();
+            let view = list_view(&state, catalog, faction.as_deref());
+            script.set_battlefield_list(view);
         }
-    }
 
-    let mut lines = Vec::new();
-    for result in std::mem::take(&mut state.verdicts) {
-        let line = if result == GROUP_JOIN_DESERTERS {
-            crate::ui_action::keyed_line(&script, "ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS")
-        } else if let Some(name) = catalog.and_then(|c| c.name(result)) {
-            crate::ui_action::keyed_line_s(&script, "ERR_GROUP_JOIN_BATTLEGROUND_S", &[name])
-        } else {
-            crate::ui_action::keyed_line(&script, "ERR_GROUP_JOIN_BATTLEGROUND_FAIL")
-        };
-        lines.extend(line);
-    }
-    let pending = std::mem::take(&mut state.players);
-    let asked = std::mem::take(&mut state.players_asked);
-    for (i, (guid, joined)) in pending.into_iter().enumerate() {
-        let Some(name) = names
-            .resolve_player(guid, Ask::at(i >= asked, &commands))
-            .map(str::to_string)
-        else {
-            state.players.push((guid, joined));
-            continue;
-        };
-        let line = if joined {
-            crate::ui_action::keyed_line_s(&script, "ERR_BG_PLAYER_JOINED_SS", &[&name, &name])
-        } else {
-            crate::ui_action::keyed_line_s(&script, "ERR_BG_PLAYER_LEFT_S", &[&name])
-        };
-        lines.extend(line);
-    }
-    state.players_asked = state.players.len();
-    if !lines.is_empty() {
-        crate::ui_action::show_messages(&mut script, &mut sink, "ui_battlefield", lines);
-    }
+        let slots = queue
+            .slots()
+            .each_ref()
+            .map(|s| slot_view(s.as_ref(), catalog, now));
+        script.set_battlefield_queue(slots, queue.instance_expiration_ms(now));
+
+        if std::mem::take(&mut state.show) {
+            script.fire_event("BATTLEFIELDS_SHOW", vec![]);
+            // The anchor is written after the event, from the live position (`0x4aa6c0`).
+            state.anchor = Some(player.pos);
+        }
+
+        // The leash (`0x4aa090`): strictly beyond the radius, the anchor clears, then the event.
+        if let Some(anchor) = state.anchor {
+            if anchor.length_squared() > DEGENERATE_ANCHOR
+                && player.pos.distance_squared(anchor) > LEASH_RADIUS_YD * LEASH_RADIUS_YD
+            {
+                state.anchor = None;
+                script.fire_event("BATTLEFIELDS_CLOSED", vec![]);
+            }
+        }
+
+        let mut lines = Vec::new();
+        for result in std::mem::take(&mut state.verdicts) {
+            let line = if result == GROUP_JOIN_DESERTERS {
+                crate::ui_action::keyed_line(&script, "ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS")
+            } else if let Some(name) = catalog.and_then(|c| c.name(result)) {
+                crate::ui_action::keyed_line_s(&script, "ERR_GROUP_JOIN_BATTLEGROUND_S", &[name])
+            } else {
+                crate::ui_action::keyed_line(&script, "ERR_GROUP_JOIN_BATTLEGROUND_FAIL")
+            };
+            lines.extend(line);
+        }
+        let pending = std::mem::take(&mut state.players);
+        let asked = std::mem::take(&mut state.players_asked);
+        for (i, (guid, joined)) in pending.into_iter().enumerate() {
+            let Some(name) = names
+                .resolve_player(guid, Ask::at(i >= asked, &commands))
+                .map(str::to_string)
+            else {
+                state.players.push((guid, joined));
+                continue;
+            };
+            let line = if joined {
+                crate::ui_action::keyed_line_s(&script, "ERR_BG_PLAYER_JOINED_SS", &[&name, &name])
+            } else {
+                crate::ui_action::keyed_line_s(&script, "ERR_BG_PLAYER_LEFT_S", &[&name])
+            };
+            lines.extend(line);
+        }
+        state.players_asked = state.players.len();
+        if !lines.is_empty() {
+            crate::ui_action::show_messages(&mut script, &mut sink, "ui_battlefield", lines);
+        }
+    })
 }
 
 /// `JoinBattlefield`'s sends, `CMSG_BATTLEMASTER_JOIN` with a battlemaster and
 /// `CMSG_BATTLEFIELD_JOIN` without (`0x4a9f60`), and `ShowBattlefieldList`'s.
 fn drain_battlefield(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     state: Res<Battlefield>,
     maps: Option<Res<MapCatalogRes>>,
     group: Option<Res<GroupState>>,
     commands: Res<NetCommands>,
     mut sink: crate::ui_action::MessageSink,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let catalog = maps.as_deref().map(|m| &m.0);
-    let map_id = state.map_id();
-    for (instance_id, as_group) in script.take_battlefield_join_requests() {
-        if as_group && !group_fits(catalog, map_id, group.as_deref()) {
-            if let Some(line) =
-                crate::ui_action::keyed_line(&script, "ERR_GROUP_JOIN_BATTLEGROUND_TOO_MANY")
-            {
-                crate::ui_action::show_messages(&mut script, &mut sink, "ui_battlefield", [line]);
-            }
-            continue;
-        }
-        let battlemaster = state.list.as_ref().map_or(0, |l| l.battlemaster);
-        let command = if battlemaster != 0 {
-            ClientCommand::BattlemasterJoin {
-                battlemaster,
-                map_id,
-                instance_id,
-                as_group,
-            }
-        } else {
-            ClientCommand::BattlefieldJoin {
-                map_id,
-                instance_id,
-                as_group,
-            }
+    hosted_vm.run(|script| {
+        let Some(mut script) = script else {
+            return;
         };
-        let _ = commands.0.send(command);
-    }
-    for map_id in script.take_battlefield_list_requests() {
-        let _ = commands.0.send(ClientCommand::BattlefieldList { map_id });
-    }
+        let catalog = maps.as_deref().map(|m| &m.0);
+        let map_id = state.map_id();
+        for (instance_id, as_group) in script.take_battlefield_join_requests() {
+            if as_group && !group_fits(catalog, map_id, group.as_deref()) {
+                if let Some(line) =
+                    crate::ui_action::keyed_line(&script, "ERR_GROUP_JOIN_BATTLEGROUND_TOO_MANY")
+                {
+                    crate::ui_action::show_messages(
+                        &mut script,
+                        &mut sink,
+                        "ui_battlefield",
+                        [line],
+                    );
+                }
+                continue;
+            }
+            let battlemaster = state.list.as_ref().map_or(0, |l| l.battlemaster);
+            let command = if battlemaster != 0 {
+                ClientCommand::BattlemasterJoin {
+                    battlemaster,
+                    map_id,
+                    instance_id,
+                    as_group,
+                }
+            } else {
+                ClientCommand::BattlefieldJoin {
+                    map_id,
+                    instance_id,
+                    as_group,
+                }
+            };
+            let _ = commands.0.send(command);
+        }
+        for map_id in script.take_battlefield_list_requests() {
+            let _ = commands.0.send(ClientCommand::BattlefieldList { map_id });
+        }
+    })
 }
 
 /// The world-enter cascade's battlefield init (`0x4909fb` → `0x4a9db0`), after the mail query: the
@@ -323,17 +332,19 @@ fn drain_battlefield(
 pub(crate) fn reset_on_world_enter(
     mut cascades: MessageReader<WorldEnterCascadeMessage>,
     mut state: ResMut<Battlefield>,
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     commands: Res<NetCommands>,
 ) {
-    if cascades.read().next().is_none() {
-        return;
-    }
-    state.clear_session();
-    if let Some(mut script) = script {
-        script.reset_battlefield_selection();
-    }
-    let _ = commands.0.send(ClientCommand::BattlefieldStatusRequest);
+    hosted_vm.run(|script| {
+        if cascades.read().next().is_none() {
+            return;
+        }
+        state.clear_session();
+        if let Some(script) = script {
+            script.reset_battlefield_selection();
+        }
+        let _ = commands.0.send(ClientCommand::BattlefieldStatusRequest);
+    })
 }
 
 /// The battlemaster window's packet handlers.
@@ -388,6 +399,7 @@ impl Plugin for BattlefieldPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use benilla_ui::script::UiScript;
 
     /// A joined or left packet looks its player's name up with a callback (`0x4aae50`); the
     /// frames its line waits through read. A refused name is asked by no frame after it, only by

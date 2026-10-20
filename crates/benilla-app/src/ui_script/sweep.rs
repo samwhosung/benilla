@@ -150,10 +150,12 @@ fn unsilence(script: Option<NonSend<UiScript>>) {
 /// Deviation: on a worldport it fires with our descriptor present, so `UnitExists("player")`
 /// answers true where the reference's (`0x515970`) misses, because matching it breaks
 /// `UnitExists` for no stock reader.
-fn fire_player_leaving_world(script: Option<NonSendMut<UiScript>>) {
-    if let Some(mut script) = script {
-        script.fire_event("PLAYER_LEAVING_WORLD", Vec::new());
-    }
+fn fire_player_leaving_world(mut hosted_vm: crate::script_calls::HostedVm) {
+    hosted_vm.run(|script| {
+        if let Some(script) = script {
+            script.fire_event("PLAYER_LEAVING_WORLD", Vec::new());
+        }
+    })
 }
 
 /// Registering the sweep's legs.

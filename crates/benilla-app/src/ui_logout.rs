@@ -13,7 +13,7 @@
 //! the stock dialogs hang off (`UIParent.lua:304-315`). Quit is a logout that exits the process on
 //! completion; the QUIT dialog has an "Exit now" button and CAMP has none.
 
-use benilla_ui::script::{SessionRequest, UiScript};
+use benilla_ui::script::SessionRequest;
 use bevy::prelude::*;
 
 use crate::net::{ClientCommand, LoggedOutMessage, NetCommands, SelfGuid};
@@ -89,29 +89,31 @@ impl LogoutState {
 /// Fire the signals in wire order: the events the stock CAMP and QUIT dialogs hang off, and the
 /// refusal line.
 fn feed_logout(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut logout: ResMut<LogoutState>,
     mut sink: crate::ui_action::MessageSink,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for signal in std::mem::take(&mut logout.signals) {
-        match signal {
-            LogoutSignal::Camping => script.fire_event("PLAYER_CAMPING", Vec::new()),
-            LogoutSignal::Quiting => script.fire_event("PLAYER_QUITING", Vec::new()),
-            LogoutSignal::Cancelled => script.fire_event("LOGOUT_CANCEL", Vec::new()),
-            LogoutSignal::Refused => {
-                let line = crate::ui_action::keyed_line(&script, LOGOUT_FAILED_KEY);
-                crate::ui_action::show_messages(&mut script, &mut sink, "ui_logout", line);
+    hosted_vm.run(|script| {
+        let Some(mut script) = script else {
+            return;
+        };
+        for signal in std::mem::take(&mut logout.signals) {
+            match signal {
+                LogoutSignal::Camping => script.fire_event("PLAYER_CAMPING", Vec::new()),
+                LogoutSignal::Quiting => script.fire_event("PLAYER_QUITING", Vec::new()),
+                LogoutSignal::Cancelled => script.fire_event("LOGOUT_CANCEL", Vec::new()),
+                LogoutSignal::Refused => {
+                    let line = crate::ui_action::keyed_line(&script, LOGOUT_FAILED_KEY);
+                    crate::ui_action::show_messages(&mut script, &mut sink, "ui_logout", line);
+                }
             }
         }
-    }
+    })
 }
 
 /// Turn the Lua intents into packets; a forced quit, or a quit with no world session, exits.
 pub(crate) fn drain_logout(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut logout: ResMut<LogoutState>,
     self_guid: Res<SelfGuid>,
     commands: Res<NetCommands>,
@@ -119,66 +121,68 @@ pub(crate) fn drain_logout(
     mut reload: ResMut<crate::ui_script::ReloadUiPending>,
     mut cinematic: ResMut<crate::cinematic::Cinematic>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for request in script.take_session_requests() {
-        match request {
-            SessionRequest::Logout | SessionRequest::Quit => {
-                // `0x5ab000` bails silently while a request is pending, before the quit byte is
-                // stored (`0x5ab053`), so a second ask cannot turn a camp into a quit.
-                if logout.pending {
-                    continue;
-                }
-                logout.quitting = request == SessionRequest::Quit;
-                // No world session: a quit just exits, as the reference's glue-screen `Quit()`
-                // does, and a logout does nothing.
-                if self_guid.0.is_none() || commands.0.send(ClientCommand::Logout).is_err() {
-                    if logout.quitting {
-                        info!("logout: quit with no world session — exiting");
-                        exit.write(AppExit::Success);
-                    } else {
-                        warn!("logout: no world session — logout dropped");
-                        logout.quitting = false;
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        for request in script.take_session_requests() {
+            match request {
+                SessionRequest::Logout | SessionRequest::Quit => {
+                    // `0x5ab000` bails silently while a request is pending, before the quit byte is
+                    // stored (`0x5ab053`), so a second ask cannot turn a camp into a quit.
+                    if logout.pending {
+                        continue;
                     }
-                } else {
-                    logout.pending = true;
-                    // Logged: instant or timed is the server's call.
-                    info!(
-                        "logout: requested (quitting={}) — awaiting SMSG_LOGOUT_RESPONSE",
-                        logout.quitting
-                    );
+                    logout.quitting = request == SessionRequest::Quit;
+                    // No world session: a quit just exits, as the reference's glue-screen `Quit()`
+                    // does, and a logout does nothing.
+                    if self_guid.0.is_none() || commands.0.send(ClientCommand::Logout).is_err() {
+                        if logout.quitting {
+                            info!("logout: quit with no world session — exiting");
+                            exit.write(AppExit::Success);
+                        } else {
+                            warn!("logout: no world session — logout dropped");
+                            logout.quitting = false;
+                        }
+                    } else {
+                        logout.pending = true;
+                        // Logged: instant or timed is the server's call.
+                        info!(
+                            "logout: requested (quitting={}) — awaiting SMSG_LOGOUT_RESPONSE",
+                            logout.quitting
+                        );
+                    }
                 }
-            }
-            SessionRequest::CancelLogout => {
-                // The stock dialogs' `OnHide` sends this on every early close, even after a cancel
-                // landed, so a stray cancel is normal. `quitting` clears here, not on the ack, so a
-                // dead socket cannot leave a quit armed.
-                logout.quitting = false;
-                logout.pending = false;
-                let _ = commands.0.send(ClientCommand::LogoutCancel);
-            }
-            SessionRequest::ForceQuit => {
-                info!("logout: force quit");
-                exit.write(AppExit::Success);
-            }
-            // `CMSG_PLAYER_LOGOUT`, only with a world session: `0x5aaff0` calls `0x5ab000` with
-            // force 1, which skips the pending bail and does not set the latch.
-            SessionRequest::ForceLogout => {
-                if self_guid.0.is_some() {
-                    info!("logout: forced");
-                    let _ = commands.0.send(ClientCommand::ForceLogout);
+                SessionRequest::CancelLogout => {
+                    // The stock dialogs' `OnHide` sends this on every early close, even after a cancel
+                    // landed, so a stray cancel is normal. `quitting` clears here, not on the ack, so a
+                    // dead socket cannot leave a quit armed.
+                    logout.quitting = false;
+                    logout.pending = false;
+                    let _ = commands.0.send(ClientCommand::LogoutCancel);
                 }
-            }
-            // The rebuild is `ui_script::run_pending_reload`'s, at the top of the next frame.
-            SessionRequest::ReloadUi => reload.0 = true,
-            // Esc out of a cinematic: the reference's `StopCinematic` has no binding and no native
-            // caller, as `CinematicFrame.xml:37-44`'s `OnKeyDown` is the whole skip path.
-            SessionRequest::StopCinematic => {
-                crate::cinematic::stop(&mut cinematic, Some(&commands));
+                SessionRequest::ForceQuit => {
+                    info!("logout: force quit");
+                    exit.write(AppExit::Success);
+                }
+                // `CMSG_PLAYER_LOGOUT`, only with a world session: `0x5aaff0` calls `0x5ab000` with
+                // force 1, which skips the pending bail and does not set the latch.
+                SessionRequest::ForceLogout => {
+                    if self_guid.0.is_some() {
+                        info!("logout: forced");
+                        let _ = commands.0.send(ClientCommand::ForceLogout);
+                    }
+                }
+                // The rebuild is `ui_script::run_pending_reload`'s, at the top of the next frame.
+                SessionRequest::ReloadUi => reload.0 = true,
+                // Esc out of a cinematic: the reference's `StopCinematic` has no binding and no native
+                // caller, as `CinematicFrame.xml:37-44`'s `OnKeyDown` is the whole skip path.
+                SessionRequest::StopCinematic => {
+                    crate::cinematic::stop(&mut cinematic, Some(&commands));
+                }
             }
         }
-    }
+    })
 }
 
 /// `SMSG_LOGOUT_COMPLETE` returns to character select, or ends the process for Exit Game.
@@ -248,6 +252,7 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
     use super::*;
+    use benilla_ui::script::UiScript;
 
     #[test]
     fn the_response_decides_which_dialog_if_any() {

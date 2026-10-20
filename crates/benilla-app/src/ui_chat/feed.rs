@@ -914,7 +914,7 @@ pub(super) fn gesture_prevented(tries: u16, speaker_flags: Option<u32>) -> bool 
 
 /// Drain [`ChatLog`]: resolve names (ask-once, bounded), build the events and [`route`] them.
 pub(super) fn feed_chat(
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     log: Res<ChatLog>,
     mut windows: ResMut<ChatWindows>,
     mut channels: ResMut<ChannelState>,
@@ -941,6 +941,7 @@ pub(super) fn feed_chat(
     // The spam and profanity filters, which run in the reference's display function `0x49a870`.
     mut text_filter: crate::text_filter::ChatTextFilter,
 ) {
+    hosted_vm.run(|script| {
     let Some(mut script) = script else {
         return;
     };
@@ -1434,6 +1435,7 @@ pub(super) fn feed_chat(
         }
     }
     log.park_again(still);
+})
 }
 
 /// Whether a wire chat type carries a player guid to name (not a monster's inline name).
@@ -1466,26 +1468,28 @@ fn needs_name(chat_type: u8) -> bool {
 /// `TIME_PLAYED_TOTAL` and `TIME_PLAYED_LEVEL` lines (`ChatFrame.lua:1279`), so the English lines
 /// `ui_chat::net::played_time` also prints are a duplicate.
 pub(crate) fn played_time_bridge(
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     commands: Res<NetCommands>,
     answer: Option<ResMut<crate::net::PlayedTimeAnswer>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for _ in 0..script.take_played_time_asks() {
-        let _ = commands.0.send(crate::net::ClientCommand::PlayedTime);
-    }
-    let Some(mut answer) = answer else {
-        return;
-    };
-    if let Some((total, level)) = answer.0.take() {
-        script.fire_event(
-            "TIME_PLAYED_MSG",
-            vec![
-                benilla_ui::script::ScriptValue::Int(i64::from(total)),
-                benilla_ui::script::ScriptValue::Int(i64::from(level)),
-            ],
-        );
-    }
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        for _ in 0..script.take_played_time_asks() {
+            let _ = commands.0.send(crate::net::ClientCommand::PlayedTime);
+        }
+        let Some(mut answer) = answer else {
+            return;
+        };
+        if let Some((total, level)) = answer.0.take() {
+            script.fire_event(
+                "TIME_PLAYED_MSG",
+                vec![
+                    benilla_ui::script::ScriptValue::Int(i64::from(total)),
+                    benilla_ui::script::ScriptValue::Int(i64::from(level)),
+                ],
+            );
+        }
+    })
 }

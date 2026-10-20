@@ -114,7 +114,7 @@ fn wheel_for_world(
 /// [`WorldWheel`], which the bindings pass runs. After [`feed_ui_input`], so the frame's clicks
 /// and keys have landed.
 pub(super) fn feed_ui_wheel(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     window: Query<&Window, With<PrimaryWindow>>,
     keys: Res<ButtonInput<KeyCode>>,
     scroll: Res<AccumulatedMouseScroll>,
@@ -126,28 +126,30 @@ pub(super) fn feed_ui_wheel(
         Res<super::CapturePointerPinned>,
     ),
 ) {
-    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-    let window = window.single().ok();
-    // The same cursor the mouse half feeds.
-    let cursor = window.and_then(|w| {
-        w.cursor_position()
-            .or_else(crate::target::hover_probe_point)
-            .filter(|_| !(synthetic.0 || capture_pinned.0))
-            .map(|c| super::window_to_ui(w.height(), c))
-    });
-    let travel = (
-        scroll.unit,
-        crate::bindings::notch_travel(scroll.delta.x, scroll.delta.y, shift),
-    );
-    let mut script = script;
-    world_wheel.0 = wheel_for_world(
-        script.as_deref_mut(),
-        cursor,
-        &mut notches,
-        travel,
-        |up| crate::bindings::world_takes_wheel(dispatch.as_deref(), &keys, up),
-        egui.is_some_and(|e| e.0),
-    );
+    hosted_vm.run(|script| {
+        let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+        let window = window.single().ok();
+        // The same cursor the mouse half feeds.
+        let cursor = window.and_then(|w| {
+            w.cursor_position()
+                .or_else(crate::target::hover_probe_point)
+                .filter(|_| !(synthetic.0 || capture_pinned.0))
+                .map(|c| super::window_to_ui(w.height(), c))
+        });
+        let travel = (
+            scroll.unit,
+            crate::bindings::notch_travel(scroll.delta.x, scroll.delta.y, shift),
+        );
+        let mut script = script;
+        world_wheel.0 = wheel_for_world(
+            script.as_deref_mut(),
+            cursor,
+            &mut notches,
+            travel,
+            |up| crate::bindings::world_takes_wheel(dispatch.as_deref(), &keys, up),
+            egui.is_some_and(|e| e.0),
+        );
+    })
 }
 
 /// Feeds cursor, buttons, wheel and keys into the UI engine, publishing [`PlayerUiHover`] (the

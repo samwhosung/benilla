@@ -33,11 +33,9 @@
 //! `GetZonePVPInfo`'s type and faction show only on a PvP realm or in one of the six capitals
 //! (zone Flags `0x10`); elsewhere they are nil and the stock zone texts stay uncoloured.
 
-use bevy::ecs::system::NonSendMut;
 use bevy::prelude::*;
 
 use benilla_formats::{AreaTableCatalog, AreaTableRow};
-use benilla_ui::script::UiScript;
 
 use crate::net::{ObjectStore, SelfPlayer};
 use crate::target::Factions;
@@ -106,7 +104,7 @@ fn elect_event(cache: &ZoneCache, next: &ZoneSignal) -> Option<&'static str> {
 /// Resolves the texts and PvP info, pushes the zone caches, then fires the elected zone event and,
 /// independently, `MINIMAP_ZONE_CHANGED`.
 fn feed_zone_events(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     world: benilla_world::world_point::WorldPoint,
     areas: Option<Res<AreaTableRes>>,
     factions: Option<Res<Factions>>,
@@ -114,136 +112,138 @@ fn feed_zone_events(
     realm_pvp: Option<Res<RealmPvp>>,
     mut cache: Local<crate::ui_script::VmMemo<ZoneCache>>,
 ) {
-    let (Some(mut script), Some(areas)) = (script, areas) else {
-        return;
-    };
-    let cache = cache.get(&script);
-    let Some(leaf) = world.area() else { return };
-    let Some(leaf_row) = areas.0.get(leaf) else {
-        // An unknown id keeps the last state, as the resolver does for areaId 0.
-        return;
-    };
-    let zone = if leaf_row.zone_id == 0 {
-        leaf
-    } else {
-        leaf_row.zone_id
-    };
-    let real_zone_text = areas.0.name(zone).unwrap_or_default().to_string();
-    let indoor = world.area_interior().is_some();
+    hosted_vm.run(|script| {
+        let (Some(script), Some(areas)) = (script, areas) else {
+            return;
+        };
+        let cache = cache.get(&script);
+        let Some(leaf) = world.area() else { return };
+        let Some(leaf_row) = areas.0.get(leaf) else {
+            // An unknown id keeps the last state, as the resolver does for areaId 0.
+            return;
+        };
+        let zone = if leaf_row.zone_id == 0 {
+            leaf
+        } else {
+            leaf_row.zone_id
+        };
+        let real_zone_text = areas.0.name(zone).unwrap_or_default().to_string();
+        let indoor = world.area_interior().is_some();
 
-    // The outdoor texts `0x67e670` starts from.
-    let mut zone_text = real_zone_text.clone();
-    let mut subzone_text = if leaf == zone {
-        String::new()
-    } else {
-        leaf_row.name.clone()
-    };
+        // The outdoor texts `0x67e670` starts from.
+        let mut zone_text = real_zone_text.clone();
+        let mut subzone_text = if leaf == zone {
+            String::new()
+        } else {
+            leaf_row.name.clone()
+        };
 
-    let mut wmo_group = 0u32;
-    if let Some((k, group, default)) = world.area_interior_rows() {
-        // The client keys `[groupRec+0x7c]`, nonzero-gated; see the module doc's deviation.
-        wmo_group = k.group_area_id;
-        if cache.indoor
-            && k.group_area_id != 0
-            && (cache.wmo_id, cache.wmo_group) == (k.wmo_id, wmo_group)
-        {
+        let mut wmo_group = 0u32;
+        if let Some((k, group, default)) = world.area_interior_rows() {
+            // The client keys `[groupRec+0x7c]`, nonzero-gated; see the module doc's deviation.
+            wmo_group = k.group_area_id;
+            if cache.indoor
+                && k.group_area_id != 0
+                && (cache.wmo_id, cache.wmo_group) == (k.wmo_id, wmo_group)
+            {
+                return;
+            }
+            cache.wmo_id = k.wmo_id;
+            // The whole-WMO -1 row. An unnamed one with `AreaTableID` 0 takes the leaf's name, which
+            // is the terrain areaId the client's area-0 arm reads.
+            let a_name = default.as_ref().map(|d| {
+                if !d.name.is_empty() {
+                    d.name.clone()
+                } else if d.area_table_id != 0 {
+                    areas
+                        .0
+                        .name(d.area_table_id)
+                        .unwrap_or_default()
+                        .to_string()
+                } else {
+                    leaf_row.name.clone()
+                }
+            });
+            if let Some(a) = a_name.filter(|n| !n.is_empty()) {
+                if a != subzone_text {
+                    zone_text = a;
+                    subzone_text = String::new();
+                }
+            }
+            // The hit group's own row refills the subzone.
+            if let Some(b) = group
+                .as_ref()
+                .map(|r| r.name.as_str())
+                .filter(|n| !n.is_empty())
+            {
+                subzone_text = b.to_string();
+            }
+        }
+        let signal = ZoneSignal {
+            zone_id: zone,
+            zone_text,
+            subzone_text,
+            indoor,
+        };
+        let minimap_text = if signal.subzone_text.is_empty() {
+            signal.zone_text.clone()
+        } else {
+            signal.subzone_text.clone()
+        };
+
+        let event = elect_event(cache, &signal);
+        let minimap_changed = cache.minimap_text != minimap_text;
+        if event.is_none() && !minimap_changed {
             return;
         }
-        cache.wmo_id = k.wmo_id;
-        // The whole-WMO -1 row. An unnamed one with `AreaTableID` 0 takes the leaf's name, which
-        // is the terrain areaId the client's area-0 arm reads.
-        let a_name = default.as_ref().map(|d| {
-            if !d.name.is_empty() {
-                d.name.clone()
-            } else if d.area_table_id != 0 {
-                areas
-                    .0
-                    .name(d.area_table_id)
-                    .unwrap_or_default()
-                    .to_string()
-            } else {
-                leaf_row.name.clone()
-            }
+
+        let zone_row = areas.0.get(zone);
+        let template = factions
+            .as_ref()
+            .zip(self_store.single().ok())
+            .and_then(|(f, store)| f.catalog().template(store.0.unit_faction_template()?))
+            .map(|t| (t.friend_group_mask, t.enemy_group_mask));
+        let realm_pvp = realm_pvp.is_some_and(|r| r.0);
+        let (ty, is_arena) = zone_pvp_info(realm_pvp, leaf_row, zone_row, template);
+        // factionName is FactionGroup.dbc's Name for the zone's mask bit.
+        let pvp = ty.map(|ty| {
+            let mask = zone_row.map_or(0, |r| r.faction_group_mask);
+            let name = factions
+                .as_ref()
+                .and_then(|f| f.catalog().faction_group_name(mask))
+                .unwrap_or("");
+            (ty, name)
         });
-        if let Some(a) = a_name.filter(|n| !n.is_empty()) {
-            if a != subzone_text {
-                zone_text = a;
-                subzone_text = String::new();
-            }
+        let pvp_type = pvp.map_or("", |(ty, _)| ty);
+
+        script.set_zone_texts(benilla_ui::script::ZoneTexts {
+            zone: signal.zone_text.clone(),
+            real_zone: real_zone_text,
+            subzone: signal.subzone_text.clone(),
+            minimap: minimap_text.clone(),
+            pvp_type: pvp.map(|(ty, _)| ty.to_string()),
+            pvp_faction: pvp_faction_text(pvp),
+            is_arena,
+        });
+
+        if let Some(event) = event {
+            script.fire_event(event, vec![]);
+            debug!(
+                "area: {event} → zone {:?} / sub {:?} ({pvp_type})",
+                signal.zone_text, signal.subzone_text
+            );
         }
-        // The hit group's own row refills the subzone.
-        if let Some(b) = group
-            .as_ref()
-            .map(|r| r.name.as_str())
-            .filter(|n| !n.is_empty())
-        {
-            subzone_text = b.to_string();
+        if minimap_changed {
+            script.fire_event("MINIMAP_ZONE_CHANGED", vec![]);
+            debug!("area: minimap zone text → {minimap_text:?}");
         }
-    }
-    let signal = ZoneSignal {
-        zone_id: zone,
-        zone_text,
-        subzone_text,
-        indoor,
-    };
-    let minimap_text = if signal.subzone_text.is_empty() {
-        signal.zone_text.clone()
-    } else {
-        signal.subzone_text.clone()
-    };
-
-    let event = elect_event(cache, &signal);
-    let minimap_changed = cache.minimap_text != minimap_text;
-    if event.is_none() && !minimap_changed {
-        return;
-    }
-
-    let zone_row = areas.0.get(zone);
-    let template = factions
-        .as_ref()
-        .zip(self_store.single().ok())
-        .and_then(|(f, store)| f.catalog().template(store.0.unit_faction_template()?))
-        .map(|t| (t.friend_group_mask, t.enemy_group_mask));
-    let realm_pvp = realm_pvp.is_some_and(|r| r.0);
-    let (ty, is_arena) = zone_pvp_info(realm_pvp, leaf_row, zone_row, template);
-    // factionName is FactionGroup.dbc's Name for the zone's mask bit.
-    let pvp = ty.map(|ty| {
-        let mask = zone_row.map_or(0, |r| r.faction_group_mask);
-        let name = factions
-            .as_ref()
-            .and_then(|f| f.catalog().faction_group_name(mask))
-            .unwrap_or("");
-        (ty, name)
-    });
-    let pvp_type = pvp.map_or("", |(ty, _)| ty);
-
-    script.set_zone_texts(benilla_ui::script::ZoneTexts {
-        zone: signal.zone_text.clone(),
-        real_zone: real_zone_text,
-        subzone: signal.subzone_text.clone(),
-        minimap: minimap_text.clone(),
-        pvp_type: pvp.map(|(ty, _)| ty.to_string()),
-        pvp_faction: pvp_faction_text(pvp),
-        is_arena,
-    });
-
-    if let Some(event) = event {
-        script.fire_event(event, vec![]);
-        debug!(
-            "area: {event} → zone {:?} / sub {:?} ({pvp_type})",
-            signal.zone_text, signal.subzone_text
-        );
-    }
-    if minimap_changed {
-        script.fire_event("MINIMAP_ZONE_CHANGED", vec![]);
-        debug!("area: minimap zone text → {minimap_text:?}");
-    }
-    cache.zone_id = Some(signal.zone_id);
-    cache.zone_text = signal.zone_text;
-    cache.subzone_text = signal.subzone_text;
-    cache.minimap_text = minimap_text;
-    cache.indoor = signal.indoor;
-    cache.wmo_group = wmo_group;
+        cache.zone_id = Some(signal.zone_id);
+        cache.zone_text = signal.zone_text;
+        cache.subzone_text = signal.subzone_text;
+        cache.minimap_text = minimap_text;
+        cache.indoor = signal.indoor;
+        cache.wmo_group = wmo_group;
+    })
 }
 
 /// `GetZonePVPInfo`'s second value: with a type answered, the faction name is always a string,

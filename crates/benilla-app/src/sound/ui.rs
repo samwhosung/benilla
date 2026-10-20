@@ -26,58 +26,60 @@ use crate::query_cache::Ask;
 /// Drain the VM's queued `PlaySound` intents into the kit player; drained even with no catalog,
 /// so the queue cannot grow unbounded.
 fn drain_ui_sounds(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     kits: Option<ResMut<SoundKits>>,
     assets: Option<Res<WorldAssets>>,
     mut out: NonSendMut<SoundOutput>,
     config: Res<SoundConfig>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let requests = script.take_sounds();
-    if requests.is_empty() {
-        return;
-    }
-    let (Some(mut kits), Some(assets)) = (kits, assets) else {
-        debug!(
-            "sound(ui): {} play(s) dropped — no kit catalog",
-            requests.len()
-        );
-        return;
-    };
-    for req in requests {
-        let kit_ref = match &req {
-            SoundRequest::KitName(name) => KitRef::Name(name),
-            SoundRequest::File(path) => {
-                // `PlaySoundFile`: by path, with no kit gates or variation.
-                if let Err(e) = kit::play_file(
-                    &mut kits,
-                    &assets,
-                    &mut out,
-                    &config,
-                    path,
-                    kit::SoundCategory::Sfx,
-                ) {
-                    debug!("sound(ui): {req:?} — {e:#}");
-                }
-                continue;
-            }
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
         };
-        // 2D, on the SFX slider (the client's SoundVolume bucket).
-        if let Err(e) = kit::play_kit(
-            &mut kits,
-            &assets,
-            &mut out,
-            &config,
-            Vec3::ZERO,
-            kit_ref,
-            None,
-            kit::SoundCategory::Sfx,
-        ) {
-            debug!("sound(ui): {req:?} — {e:#}");
+        let requests = script.take_sounds();
+        if requests.is_empty() {
+            return;
         }
-    }
+        let (Some(mut kits), Some(assets)) = (kits, assets) else {
+            debug!(
+                "sound(ui): {} play(s) dropped — no kit catalog",
+                requests.len()
+            );
+            return;
+        };
+        for req in requests {
+            let kit_ref = match &req {
+                SoundRequest::KitName(name) => KitRef::Name(name),
+                SoundRequest::File(path) => {
+                    // `PlaySoundFile`: by path, with no kit gates or variation.
+                    if let Err(e) = kit::play_file(
+                        &mut kits,
+                        &assets,
+                        &mut out,
+                        &config,
+                        path,
+                        kit::SoundCategory::Sfx,
+                    ) {
+                        debug!("sound(ui): {req:?} — {e:#}");
+                    }
+                    continue;
+                }
+            };
+            // 2D, on the SFX slider (the client's SoundVolume bucket).
+            if let Err(e) = kit::play_kit(
+                &mut kits,
+                &assets,
+                &mut out,
+                &config,
+                Vec3::ZERO,
+                kit_ref,
+                None,
+                kit::SoundCategory::Sfx,
+            ) {
+                debug!("sound(ui): {req:?} — {e:#}");
+            }
+        }
+    })
 }
 
 /// The `ItemGroupSounds.dbc` catalog: the pickup, put-down and use kits per item sound group.

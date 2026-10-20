@@ -129,7 +129,7 @@ fn plan(
 /// The VM runs it on the plan pushed here, inside `SetGuildRecruitmentMode(1)` or for this
 /// system's retry and watcher; its joins and leaves come back for the slot table and the wire.
 pub(super) fn guild_recruitment_cascade(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut state: ResMut<GuildRecruitmentCascade>,
     mut channels: ResMut<ChannelState>,
     walk: Res<ZoneChannelWalk>,
@@ -137,29 +137,31 @@ pub(super) fn guild_recruitment_cascade(
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     commands: Res<NetCommands>,
 ) {
-    let Some(mut script) = script else { return };
-    apply_runs(&mut script, &mut channels, &commands);
-    // A `SetGuildRecruitmentMode(1)` whose cascade could not act leaves the run owed.
-    if script.take_guild_recruitment_cascade() {
-        state.request();
-    }
-    // Only while the avatar is streamed: a despawned body has not "left the guild". With no
-    // player object the verb's cascade returns owing nothing (`0x49eac3`).
-    let Some(guild_id) = self_q.iter().next().map(|s| s.0.player_guild_id()) else {
-        script.set_guild_recruitment_plan(RecruitmentPlan::NoPlayer);
-        return;
-    };
-    state.observe_guild_id(guild_id);
-    script.set_guild_recruitment_plan(plan(guild_id, &channels, &walk, areas.as_deref()));
-    if !state.pending {
-        return;
-    }
-    // STANDARD: nothing, not even the retry (`0x49ea96`).
-    if script.guild_recruitment_mode() == 1 && !script.run_guild_recruitment_cascade() {
-        return;
-    }
-    state.pending = false;
-    apply_runs(&mut script, &mut channels, &commands);
+    hosted_vm.run(|script| {
+        let Some(mut script) = script else { return };
+        apply_runs(&mut script, &mut channels, &commands);
+        // A `SetGuildRecruitmentMode(1)` whose cascade could not act leaves the run owed.
+        if script.take_guild_recruitment_cascade() {
+            state.request();
+        }
+        // Only while the avatar is streamed: a despawned body has not "left the guild". With no
+        // player object the verb's cascade returns owing nothing (`0x49eac3`).
+        let Some(guild_id) = self_q.iter().next().map(|s| s.0.player_guild_id()) else {
+            script.set_guild_recruitment_plan(RecruitmentPlan::NoPlayer);
+            return;
+        };
+        state.observe_guild_id(guild_id);
+        script.set_guild_recruitment_plan(plan(guild_id, &channels, &walk, areas.as_deref()));
+        if !state.pending {
+            return;
+        }
+        // STANDARD: nothing, not even the retry (`0x49ea96`).
+        if script.guild_recruitment_mode() == 1 && !script.run_guild_recruitment_cascade() {
+            return;
+        }
+        state.pending = false;
+        apply_runs(&mut script, &mut channels, &commands);
+    })
 }
 
 /// The app's halves of the cascade's runs: a join's slot (`0x49b980`, by name) and its send, which

@@ -24,7 +24,6 @@
 use bevy::prelude::*;
 
 use benilla_assets::coords::bevy_to_wow;
-use benilla_ui::script::UiScript;
 
 use crate::net::{ClientCommand, Guid, NetCommands, SelfPlayer};
 use crate::player::Player;
@@ -49,37 +48,39 @@ impl MinimapPing {
 /// Push the player's position, seat a new VM's stored ping, and apply the members' pings, each
 /// signalling `MINIMAP_PING` with its sender's unit token. Runs before the script tick.
 pub(super) fn drive_minimap_ping(
-    script: Option<bevy::ecs::system::NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut ping: ResMut<MinimapPing>,
     player: Res<Player>,
     group: Res<crate::ui_party::GroupState>,
     self_q: Query<&Guid, With<SelfPlayer>>,
     mut seated: Local<crate::ui_script::VmMemo<bool>>,
 ) {
-    let Some(mut script) = script else { return };
-    let wow = bevy_to_wow(player.pos);
-    script.set_minimap_player(player.active.then_some((wow[0], wow[1])));
-    let seated = seated.get(&script);
-    if !*seated {
-        script.set_minimap_ping_point(ping.world);
-        *seated = true;
-    }
-    // The token (`0x4ee330`): ourselves, else the sender's party slot (`party%d`, `0x4ee412`),
-    // else its raid row (`raid%d`, `0x4ee41b`), the party scan first; a sender in neither leaves
-    // `player`.
-    let self_guid = self_q.iter().next().map(|g| g.0);
-    for (world, sender) in std::mem::take(&mut ping.inbound) {
-        let token = if Some(sender) == self_guid {
-            "player".to_string()
-        } else if let Some(i) = group.party_slots().position(|m| m.guid == sender) {
-            format!("party{}", i + 1)
-        } else if let Some(i) = group.raid_rows().position(|g| g == sender) {
-            format!("raid{}", i + 1)
-        } else {
-            "player".to_string()
-        };
-        script.apply_minimap_ping(world, &token);
-    }
+    hosted_vm.run(|script| {
+        let Some(script) = script else { return };
+        let wow = bevy_to_wow(player.pos);
+        script.set_minimap_player(player.active.then_some((wow[0], wow[1])));
+        let seated = seated.get(&script);
+        if !*seated {
+            script.set_minimap_ping_point(ping.world);
+            *seated = true;
+        }
+        // The token (`0x4ee330`): ourselves, else the sender's party slot (`party%d`, `0x4ee412`),
+        // else its raid row (`raid%d`, `0x4ee41b`), the party scan first; a sender in neither leaves
+        // `player`.
+        let self_guid = self_q.iter().next().map(|g| g.0);
+        for (world, sender) in std::mem::take(&mut ping.inbound) {
+            let token = if Some(sender) == self_guid {
+                "player".to_string()
+            } else if let Some(i) = group.party_slots().position(|m| m.guid == sender) {
+                format!("party{}", i + 1)
+            } else if let Some(i) = group.raid_rows().position(|g| g == sender) {
+                format!("raid{}", i + 1)
+            } else {
+                "player".to_string()
+            };
+            script.apply_minimap_ping(world, &token);
+        }
+    })
 }
 
 /// No in-game UI: a member's ping has no player object to land on, so it applies nowhere.
@@ -90,18 +91,20 @@ pub(super) fn drop_inbound_pings(mut ping: ResMut<MinimapPing>) {
 /// Our own `PingLocation` calls, after the tick that made them: each is the process's ping now,
 /// and goes on the wire when grouped (`0x4eef15`, `0x4eef26`, `0x4eef72`).
 pub(super) fn send_own_pings(
-    script: Option<bevy::ecs::system::NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut ping: ResMut<MinimapPing>,
     group: Res<crate::ui_party::GroupState>,
     commands: Res<NetCommands>,
 ) {
-    let Some(mut script) = script else { return };
-    for (x, y) in script.take_minimap_pings_sent() {
-        ping.world = (x, y);
-        if group.in_group {
-            let _ = commands.0.send(ClientCommand::MinimapPing { x, y });
+    hosted_vm.run(|script| {
+        let Some(script) = script else { return };
+        for (x, y) in script.take_minimap_pings_sent() {
+            ping.world = (x, y);
+            if group.in_group {
+                let _ = commands.0.send(ClientCommand::MinimapPing { x, y });
+            }
         }
-    }
+    })
 }
 
 /// Register the ping's packet handler.
@@ -123,6 +126,7 @@ fn on_minimap_ping(In(ev): In<benilla_protocol::SessionEvent>, mut ping: ResMut<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use benilla_ui::script::UiScript;
 
     /// The two ping systems over a VM with a Minimap and a `MINIMAP_PING` listener, the player at
     /// WoW (100, 200) and in a group.

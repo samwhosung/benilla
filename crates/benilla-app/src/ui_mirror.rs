@@ -7,7 +7,7 @@
 //! liquid checks and ships a value and a signed rate, so there is no local underwater predicate to
 //! disagree with the drowning damage that follows.
 
-use benilla_ui::script::{ScriptValue, UiScript};
+use benilla_ui::script::ScriptValue;
 use bevy::prelude::*;
 
 use benilla_protocol::messages::{MirrorTimerKind, MirrorTimerStart};
@@ -67,80 +67,82 @@ fn caption(
 /// fires it as `"UNKNOWN"` (`0x5e7ae0`) and `MirrorTimer_Show` errors on its nil colour before
 /// `Show()`. vmangos's `NUM_CLIENT_TIMERS` keeps its fourth timer off the wire.
 fn feed_mirror_timers(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut feed: ResMut<MirrorTimerFeed>,
     spells: Option<Res<Spells>>,
     mut tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
 ) {
-    let Some(mut script) = script else {
-        // No VM (a capture or headless run): drop the edges so the queue stays bounded.
-        feed.0.clear();
-        return;
-    };
-    // The VM has no spell-catalog binding, so the owning spell's name resolves here; 0 is none.
-    let spell_name = |id: u32| -> Option<String> {
-        (id != 0)
-            .then(|| spells.as_ref()?.catalog.get(id).map(|d| d.name.clone()))
-            .flatten()
-    };
-    for edge in feed.0.drain(..) {
-        let raw = match edge {
-            MirrorTimerEdge::Start(start) => start.kind,
-            MirrorTimerEdge::Pause { kind, .. } | MirrorTimerEdge::Stop { kind } => kind,
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            // No VM (a capture or headless run): drop the edges so the queue stays bounded.
+            feed.0.clear();
+            return;
         };
-        let Some(kind) = MirrorTimerKind::from_wire(raw) else {
-            continue;
+        // The VM has no spell-catalog binding, so the owning spell's name resolves here; 0 is none.
+        let spell_name = |id: u32| -> Option<String> {
+            (id != 0)
+                .then(|| spells.as_ref()?.catalog.get(id).map(|d| d.name.clone()))
+                .flatten()
         };
-        // The handler's two tutorial arms: type 0 (`0x5e7ab0`) and type 1 (`0x5e7acd`).
-        if matches!(edge, MirrorTimerEdge::Start(_)) {
-            match kind {
-                MirrorTimerKind::Fatigue => {
-                    if let Some(t) = tutorials.as_mut() {
-                        t.write(crate::tutorial::TutorialEvent::trigger(
-                            crate::tutorial::id::FATIGUE,
-                        ));
+        for edge in feed.0.drain(..) {
+            let raw = match edge {
+                MirrorTimerEdge::Start(start) => start.kind,
+                MirrorTimerEdge::Pause { kind, .. } | MirrorTimerEdge::Stop { kind } => kind,
+            };
+            let Some(kind) = MirrorTimerKind::from_wire(raw) else {
+                continue;
+            };
+            // The handler's two tutorial arms: type 0 (`0x5e7ab0`) and type 1 (`0x5e7acd`).
+            if matches!(edge, MirrorTimerEdge::Start(_)) {
+                match kind {
+                    MirrorTimerKind::Fatigue => {
+                        if let Some(t) = tutorials.as_mut() {
+                            t.write(crate::tutorial::TutorialEvent::trigger(
+                                crate::tutorial::id::FATIGUE,
+                            ));
+                        }
                     }
-                }
-                MirrorTimerKind::Breath => {
-                    if let Some(t) = tutorials.as_mut() {
-                        t.write(crate::tutorial::TutorialEvent::trigger(
-                            crate::tutorial::id::BREATH,
-                        ));
+                    MirrorTimerKind::Breath => {
+                        if let Some(t) = tutorials.as_mut() {
+                            t.write(crate::tutorial::TutorialEvent::trigger(
+                                crate::tutorial::id::BREATH,
+                            ));
+                        }
                     }
+                    _ => {}
                 }
-                _ => {}
             }
+            let name = ScriptValue::Str(script_name(kind).into());
+            let (event, args): (&str, Vec<ScriptValue>) = match edge {
+                MirrorTimerEdge::Start(start) => (
+                    "MIRROR_TIMER_START",
+                    vec![
+                        name,
+                        ScriptValue::Int(i64::from(start.remaining_ms)),
+                        ScriptValue::Int(i64::from(start.duration_ms)),
+                        ScriptValue::Int(i64::from(start.scale)),
+                        ScriptValue::Int(i64::from(start.paused)),
+                        ScriptValue::Str(caption(
+                            kind,
+                            spell_name(start.spell_id).as_deref(),
+                            &|key| benilla_ui::strings::global(script.lua(), key),
+                        )),
+                    ],
+                ),
+                // The stock handler raises on this: it matches `arg1` as the timer name, then tests
+                // `arg1 > 0` (`MirrorTimer.lua:84-88`), 1.12's own bug. vmangos never sends it
+                // (`Player::SendMirrorTimers`); a repair belongs over the stock body, not here.
+                MirrorTimerEdge::Pause { paused, .. } => (
+                    "MIRROR_TIMER_PAUSE",
+                    vec![name, ScriptValue::Int(i64::from(paused))],
+                ),
+                MirrorTimerEdge::Stop { .. } => ("MIRROR_TIMER_STOP", vec![name]),
+            };
+            // One log line per edge: the bars live inside the VM, so this is their only outside trace.
+            debug!("net: mirror timer {event} {edge:?}");
+            script.fire_event(event, args);
         }
-        let name = ScriptValue::Str(script_name(kind).into());
-        let (event, args): (&str, Vec<ScriptValue>) = match edge {
-            MirrorTimerEdge::Start(start) => (
-                "MIRROR_TIMER_START",
-                vec![
-                    name,
-                    ScriptValue::Int(i64::from(start.remaining_ms)),
-                    ScriptValue::Int(i64::from(start.duration_ms)),
-                    ScriptValue::Int(i64::from(start.scale)),
-                    ScriptValue::Int(i64::from(start.paused)),
-                    ScriptValue::Str(caption(
-                        kind,
-                        spell_name(start.spell_id).as_deref(),
-                        &|key| benilla_ui::strings::global(script.lua(), key),
-                    )),
-                ],
-            ),
-            // The stock handler raises on this: it matches `arg1` as the timer name, then tests
-            // `arg1 > 0` (`MirrorTimer.lua:84-88`), 1.12's own bug. vmangos never sends it
-            // (`Player::SendMirrorTimers`); a repair belongs over the stock body, not here.
-            MirrorTimerEdge::Pause { paused, .. } => (
-                "MIRROR_TIMER_PAUSE",
-                vec![name, ScriptValue::Int(i64::from(paused))],
-            ),
-            MirrorTimerEdge::Stop { .. } => ("MIRROR_TIMER_STOP", vec![name]),
-        };
-        // One log line per edge: the bars live inside the VM, so this is their only outside trace.
-        debug!("net: mirror timer {event} {edge:?}");
-        script.fire_event(event, args);
-    }
+    })
 }
 
 /// The mirror timers' packet handlers, which only queue. The drain runs before the VM ticks, so

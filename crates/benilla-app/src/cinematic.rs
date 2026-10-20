@@ -28,7 +28,6 @@ use std::time::Duration;
 
 use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 use benilla_formats::{CinematicCatalog, CinematicPath};
-use benilla_ui::script::UiScript;
 use benilla_world::schedule::WorldStage;
 use benilla_world::view::WorldCamera;
 use bevy::prelude::*;
@@ -533,21 +532,23 @@ pub(crate) fn stop(cine: &mut Cinematic, net: Option<&NetCommands>) {
 /// outside the sweep's sound scope: a cinematic in flight (`[0xb4e310]`) is dropped, the VM the
 /// sweep runs in told `CINEMATIC_STOP` (`0x490b77`), with no `CMSG_COMPLETE_CINEMATIC`.
 fn abandon_cinematic_on_leave_world(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut cine: ResMut<Cinematic>,
     mut fade: ResMut<crate::screen_fade::ScreenFade>,
 ) {
-    if !cine.is_playing() {
-        return;
-    }
-    // The world-ready latch (`0xc4d75c`) is another cell, which the sweep leaves.
-    let pending = cine.pending;
-    abandon(&mut cine, &mut fade);
-    cine.pending = pending;
-    if let Some(mut script) = script {
-        script.set_in_cinematic(false);
-        script.fire_event("CINEMATIC_STOP", vec![]);
-    }
+    hosted_vm.run(|script| {
+        if !cine.is_playing() {
+            return;
+        }
+        // The world-ready latch (`0xc4d75c`) is another cell, which the sweep leaves.
+        let pending = cine.pending;
+        abandon(&mut cine, &mut fade);
+        cine.pending = pending;
+        if let Some(script) = script {
+            script.set_in_cinematic(false);
+            script.fire_event("CINEMATIC_STOP", vec![]);
+        }
+    })
 }
 
 /// Leaving the world drops a cinematic without acking; the socket goes with it.
@@ -574,47 +575,54 @@ fn abandon(cine: &mut Cinematic, fade: &mut crate::screen_fade::ScreenFade) {
 /// is per VM and per world: the leave-world sweep drops a cinematic and tells the VM itself.
 fn feed_ui(
     cine: Res<Cinematic>,
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut published: crate::ui_script::WindowMemo<Option<bool>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let playing = cine.is_playing();
-    let published = published.get(&script);
-    if *published == Some(playing) {
-        return;
-    }
-    // A fresh VM is already out of a cinematic: seed the memo rather than fire a `CINEMATIC_STOP`
-    // the reference never sends unedged.
-    if published.is_none() && !playing {
-        *published = Some(false);
-        return;
-    }
-    *published = Some(playing);
-    script.set_in_cinematic(playing);
-    script.fire_event(
-        if playing {
-            "CINEMATIC_START"
-        } else {
-            "CINEMATIC_STOP"
-        },
-        vec![],
-    );
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        let playing = cine.is_playing();
+        let published = published.get(&script);
+        if *published == Some(playing) {
+            return;
+        }
+        // A fresh VM is already out of a cinematic: seed the memo rather than fire a `CINEMATIC_STOP`
+        // the reference never sends unedged.
+        if published.is_none() && !playing {
+            *published = Some(false);
+            return;
+        }
+        *published = Some(playing);
+        script.set_in_cinematic(playing);
+        script.fire_event(
+            if playing {
+                "CINEMATIC_START"
+            } else {
+                "CINEMATIC_STOP"
+            },
+            vec![],
+        );
+    })
 }
 
 /// Each Lua `OpeningCinematic()` is one empty `CMSG_OPENING_CINEMATIC` (`0x48c8c0`); the server
 /// answers, if at all, with the `SMSG_TRIGGER_CINEMATIC` [`take_trigger`] plays.
-fn send_opening_cinematic(script: Option<NonSendMut<UiScript>>, net: Option<Res<NetCommands>>) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let asks = script.take_opening_cinematic_asks();
-    if let Some(net) = net {
-        for _ in 0..asks {
-            let _ = net.0.send(ClientCommand::OpeningCinematic);
+fn send_opening_cinematic(
+    mut hosted_vm: crate::script_calls::HostedVm,
+    net: Option<Res<NetCommands>>,
+) {
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        let asks = script.take_opening_cinematic_asks();
+        if let Some(net) = net {
+            for _ in 0..asks {
+                let _ = net.0.send(ClientCommand::OpeningCinematic);
+            }
         }
-    }
+    })
 }
 
 fn ack(net: Option<&NetCommands>) {
@@ -911,6 +919,7 @@ mod settling_under_black {
 #[cfg(test)]
 mod opening_cinematic {
     use super::*;
+    use benilla_ui::script::UiScript;
 
     #[test]
     fn each_call_sends_one_opening_cinematic() {

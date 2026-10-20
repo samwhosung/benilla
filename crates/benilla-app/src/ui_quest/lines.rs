@@ -6,8 +6,6 @@
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
-use benilla_ui::script::UiScript;
-
 use crate::items::Items;
 use crate::net::{NetCommands, NetHandlerApp};
 use crate::query_cache::Ask;
@@ -74,40 +72,42 @@ fn on_session_end(In(_): In<SessionEvent>, mut lines: ResMut<QuestLines>) {
 
 /// Show every line whose record is here, in the order raised; the rest wait.
 fn feed_quest_lines(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut lines: ResMut<QuestLines>,
     quest_log: Res<QuestLog>,
     items: Res<Items>,
     commands: Res<NetCommands>,
     mut sink: MessageSink,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    if lines.0.is_empty() {
-        return;
-    }
-    let get = |key: &str| benilla_ui::strings::global(script.lua(), key);
-    let mut shown = Vec::new();
-    // A line's first read is its handler's lookup with a callback; a waiting line asks no more.
-    let mut read = 0;
-    let fed = lines.1;
-    lines.0.retain(|&line| {
-        let ask = Ask::at(read >= fed, &commands);
-        read += 1;
-        match resolve(line, &quest_log, &items, ask, &get) {
-            Resolved::Show(msg) => {
-                if let Some(text) = ui_error_text(&msg, &get) {
-                    shown.push(Shown::keyed(msg.key, text));
-                }
-                false
-            }
-            Resolved::Wait => true,
-            Resolved::Drop => false,
+    hosted_vm.run(|script| {
+        let Some(mut script) = script else {
+            return;
+        };
+        if lines.0.is_empty() {
+            return;
         }
-    });
-    lines.1 = lines.0.len();
-    show_messages(&mut script, &mut sink, "ui_quest", shown);
+        let get = |key: &str| benilla_ui::strings::global(script.lua(), key);
+        let mut shown = Vec::new();
+        // A line's first read is its handler's lookup with a callback; a waiting line asks no more.
+        let mut read = 0;
+        let fed = lines.1;
+        lines.0.retain(|&line| {
+            let ask = Ask::at(read >= fed, &commands);
+            read += 1;
+            match resolve(line, &quest_log, &items, ask, &get) {
+                Resolved::Show(msg) => {
+                    if let Some(text) = ui_error_text(&msg, &get) {
+                        shown.push(Shown::keyed(msg.key, text));
+                    }
+                    false
+                }
+                Resolved::Wait => true,
+                Resolved::Drop => false,
+            }
+        });
+        lines.1 = lines.0.len();
+        show_messages(&mut script, &mut sink, "ui_quest", shown);
+    })
 }
 
 fn resolve(
@@ -224,6 +224,7 @@ pub(crate) fn test_template(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use benilla_ui::script::UiScript;
 
     use crate::net::ClientCommand;
 

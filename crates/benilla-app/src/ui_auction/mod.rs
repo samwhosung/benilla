@@ -527,7 +527,7 @@ type AuctionCatalogs<'w> = (
 
 /// Push the auction house into the VM and fire its events on a change, diffed against `VmMemo`s.
 fn feed_auction(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut auction: ResMut<AuctionOpen>,
     items: Res<Items>,
     icons: Option<Res<ItemDisplays>>,
@@ -544,140 +544,142 @@ fn feed_auction(
     mut last_classes: Local<crate::ui_script::VmMemo<Vec<AuctionCategory>>>,
     mut closes: CoreCloses,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let last = last.get(&script);
-    let last_open = last_open.get(&script);
-    if closes.since_last(&script, NpcWindow::Auction) {
-        *last = None;
-        *last_open = None;
-    }
-    let last_can_query = last_can_query.get(&script);
-
-    // The class tree needs no session: the stock `AuctionFrameBrowse_OnLoad` reads
-    // `GetAuctionItemClasses()` when the addon loads (`Blizzard_AuctionUI.lua:174`).
-    let classes_now = categories(catalogs.0.as_deref(), catalogs.1.as_deref());
-    let last_classes = last_classes.get(&script);
-    if *last_classes != classes_now {
-        *last_classes = classes_now.clone();
-        script.set_auction_item_classes(classes_now);
-    }
-
-    // A `_S` line whose item is not cached yet stays queued, as the reference defers it through
-    // `0x4cd190`; the `items.template` call below asks for it.
-    {
-        let mut deferred = Vec::new();
-        let mut lines = Vec::new();
-        let asked = std::mem::take(&mut auction.messages_asked);
-        for (i, msg) in std::mem::take(&mut auction.messages)
-            .into_iter()
-            .enumerate()
-        {
-            let fill = match msg.item {
-                None => None,
-                Some(entry) => match items.template(entry, 0, Ask::at(i >= asked, &commands)) {
-                    Some(t) => Some(t.name.clone()),
-                    None => {
-                        deferred.push(msg);
-                        continue;
-                    }
-                },
-            };
-            let get = |key: &str| script.lua().globals().get::<String>(key).ok();
-            let err = match fill {
-                Some(s) => UiError::s(msg.key, s),
-                None => UiError::key(msg.key),
-            };
-            if let Some(text) = ui_error_text(&err, &get) {
-                lines.push(Shown::keyed(msg.key, text));
-            }
+    hosted_vm.run(|script| {
+        let Some(mut script) = script else {
+            return;
+        };
+        let last = last.get(&script);
+        let last_open = last_open.get(&script);
+        if closes.since_last(&script, NpcWindow::Auction) {
+            *last = None;
+            *last_open = None;
         }
-        auction.messages_asked = deferred.len();
-        auction.messages = deferred;
-        show_messages(&mut script, &mut sink, "ui_auction", lines);
-    }
+        let last_can_query = last_can_query.get(&script);
 
-    let self_guid = self_q.iter().next().map(|g| g.0);
-    let rolls = crate::items::RollCatalogs {
-        props: catalogs.2.as_deref(),
-        enchants: catalogs.3.as_deref(),
-    };
-    // A list's result, and the window's show, are the frames the stock tabs call their getters on.
-    let shown = last_open.is_none() || auction.show_requested;
-    let fresh = auction.auctioneer.map(|_| {
-        let lists = [LIST, BIDDER, OWNER].map(|i| {
-            let slot = &auction.lists[i];
-            let ask = Ask::at(shown || auction.list_result_landed[i], &commands);
-            let rows = rows_for(
-                i,
-                slot,
-                self_guid,
-                &items,
-                icons.as_deref(),
-                &names,
-                ask,
-                rolls,
-            );
-            AuctionListState {
-                rows: rows.iter().map(to_script_row).collect(),
-                total: slot.total.max(rows.len() as u32),
-                sort: slot.sort.pairs(),
+        // The class tree needs no session: the stock `AuctionFrameBrowse_OnLoad` reads
+        // `GetAuctionItemClasses()` when the addon loads (`Blizzard_AuctionUI.lua:174`).
+        let classes_now = categories(catalogs.0.as_deref(), catalogs.1.as_deref());
+        let last_classes = last_classes.get(&script);
+        if *last_classes != classes_now {
+            *last_classes = classes_now.clone();
+            script.set_auction_item_classes(classes_now);
+        }
+
+        // A `_S` line whose item is not cached yet stays queued, as the reference defers it through
+        // `0x4cd190`; the `items.template` call below asks for it.
+        {
+            let mut deferred = Vec::new();
+            let mut lines = Vec::new();
+            let asked = std::mem::take(&mut auction.messages_asked);
+            for (i, msg) in std::mem::take(&mut auction.messages)
+                .into_iter()
+                .enumerate()
+            {
+                let fill = match msg.item {
+                    None => None,
+                    Some(entry) => match items.template(entry, 0, Ask::at(i >= asked, &commands)) {
+                        Some(t) => Some(t.name.clone()),
+                        None => {
+                            deferred.push(msg);
+                            continue;
+                        }
+                    },
+                };
+                let get = |key: &str| script.lua().globals().get::<String>(key).ok();
+                let err = match fill {
+                    Some(s) => UiError::s(msg.key, s),
+                    None => UiError::key(msg.key),
+                };
+                if let Some(text) = ui_error_text(&err, &get) {
+                    lines.push(Shown::keyed(msg.key, text));
+                }
+            }
+            auction.messages_asked = deferred.len();
+            auction.messages = deferred;
+            show_messages(&mut script, &mut sink, "ui_auction", lines);
+        }
+
+        let self_guid = self_q.iter().next().map(|g| g.0);
+        let rolls = crate::items::RollCatalogs {
+            props: catalogs.2.as_deref(),
+            enchants: catalogs.3.as_deref(),
+        };
+        // A list's result, and the window's show, are the frames the stock tabs call their getters on.
+        let shown = last_open.is_none() || auction.show_requested;
+        let fresh = auction.auctioneer.map(|_| {
+            let lists = [LIST, BIDDER, OWNER].map(|i| {
+                let slot = &auction.lists[i];
+                let ask = Ask::at(shown || auction.list_result_landed[i], &commands);
+                let rows = rows_for(
+                    i,
+                    slot,
+                    self_guid,
+                    &items,
+                    icons.as_deref(),
+                    &names,
+                    ask,
+                    rolls,
+                );
+                AuctionListState {
+                    rows: rows.iter().map(to_script_row).collect(),
+                    total: slot.total.max(rows.len() as u32),
+                    sort: slot.sort.pairs(),
+                }
+            });
+            AuctionState {
+                lists,
+                deposit_percent: houses
+                    .as_deref()
+                    .and_then(|h| h.0.deposit_percent(auction.house_id))
+                    .unwrap_or(0),
             }
         });
-        AuctionState {
-            lists,
-            deposit_percent: houses
-                .as_deref()
-                .and_then(|h| h.0.deposit_percent(auction.house_id))
-                .unwrap_or(0),
-        }
-    });
 
-    // A close is the core's, which told the VM; a disconnect's clear tells it nothing.
-    let opened = last_open.is_none() && auction.auctioneer.is_some();
-    let show_requested = std::mem::take(&mut auction.show_requested);
-    let landed = std::mem::take(&mut auction.list_result_landed);
-    let changed = fresh != *last;
-    // Owed per list: a result landed, or an async name or template filled one of its rows.
-    let owed: [bool; 3] = std::array::from_fn(|i| {
-        landed[i] || fresh.as_ref().map(|s| &s.lists[i]) != last.as_ref().map(|s| &s.lists[i])
-    });
-    if changed {
-        script.set_auction(fresh.clone());
-    }
-    if opened {
-        script.fire_event("AUCTION_HOUSE_SHOW", vec![]);
-    } else if auction.auctioneer.is_some() {
-        if show_requested {
+        // A close is the core's, which told the VM; a disconnect's clear tells it nothing.
+        let opened = last_open.is_none() && auction.auctioneer.is_some();
+        let show_requested = std::mem::take(&mut auction.show_requested);
+        let landed = std::mem::take(&mut auction.list_result_landed);
+        let changed = fresh != *last;
+        // Owed per list: a result landed, or an async name or template filled one of its rows.
+        let owed: [bool; 3] = std::array::from_fn(|i| {
+            landed[i] || fresh.as_ref().map(|s| &s.lists[i]) != last.as_ref().map(|s| &s.lists[i])
+        });
+        if changed {
+            script.set_auction(fresh.clone());
+        }
+        if opened {
             script.fire_event("AUCTION_HOUSE_SHOW", vec![]);
+        } else if auction.auctioneer.is_some() {
+            if show_requested {
+                script.fire_event("AUCTION_HOUSE_SHOW", vec![]);
+            }
+            // Literal names, not a loop: `reference_ui`'s producer test finds fire sites by literal.
+            if owed[LIST] {
+                script.fire_event("AUCTION_ITEM_LIST_UPDATE", vec![]);
+            }
+            if owed[BIDDER] {
+                script.fire_event("AUCTION_BIDDER_LIST_UPDATE", vec![]);
+            }
+            if owed[OWNER] {
+                script.fire_event("AUCTION_OWNED_LIST_UPDATE", vec![]);
+            }
         }
-        // Literal names, not a loop: `reference_ui`'s producer test finds fire sites by literal.
-        if owed[LIST] {
-            script.fire_event("AUCTION_ITEM_LIST_UPDATE", vec![]);
-        }
-        if owed[BIDDER] {
-            script.fire_event("AUCTION_BIDDER_LIST_UPDATE", vec![]);
-        }
-        if owed[OWNER] {
-            script.fire_event("AUCTION_OWNED_LIST_UPDATE", vec![]);
-        }
-    }
-    *last = fresh;
-    *last_open = auction.auctioneer;
+        *last = fresh;
+        *last_open = auction.auctioneer;
 
-    // The browse gate, pushed when it changes; the Search button polls it every frame.
-    let now = time.elapsed_secs_f64();
-    let can_query = auction.query_gate.is_none_or(|gate| now >= gate);
-    if can_query != *last_can_query {
-        script.set_auction_can_query(can_query);
-        *last_can_query = can_query;
-    }
+        // The browse gate, pushed when it changes; the Search button polls it every frame.
+        let now = time.elapsed_secs_f64();
+        let can_query = auction.query_gate.is_none_or(|gate| now >= gate);
+        if can_query != *last_can_query {
+            script.set_auction_can_query(can_query);
+            *last_can_query = can_query;
+        }
+    })
 }
 
 /// Drain the Lua intents into the auction `CMSG`s.
 fn drain_auction(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut auction: ResMut<AuctionOpen>,
     mut world_commands: Commands,
     commands: Res<NetCommands>,
@@ -689,146 +691,148 @@ fn drain_auction(
     props: Option<Res<crate::items::RandomProperties>>,
     enchants: Option<Res<crate::items::Enchants>>,
 ) {
-    let rolls = crate::items::RollCatalogs {
-        props: props.as_deref(),
-        enchants: enchants.as_deref(),
-    };
-    let Some(mut script) = script else {
-        return;
-    };
-    let Some(auctioneer) = auction.auctioneer else {
-        // No session: a stray close finds no cell (`0x4cd5fb`); every other intent is dropped.
-        let _ = script.take_auction_close();
-        let _ = script.take_auction_query();
-        let _ = script.take_auction_owner_query();
-        let _ = script.take_auction_bidder_query();
-        let _ = script.take_auction_bids();
-        let _ = script.take_auction_cancels();
-        let _ = script.take_auction_starts();
-        let _ = script.take_auction_sorts();
-        return;
-    };
+    hosted_vm.run(|script| {
+        let rolls = crate::items::RollCatalogs {
+            props: props.as_deref(),
+            enchants: enchants.as_deref(),
+        };
+        let Some(script) = script else {
+            return;
+        };
+        let Some(auctioneer) = auction.auctioneer else {
+            // No session: a stray close finds no cell (`0x4cd5fb`); every other intent is dropped.
+            let _ = script.take_auction_close();
+            let _ = script.take_auction_query();
+            let _ = script.take_auction_owner_query();
+            let _ = script.take_auction_bidder_query();
+            let _ = script.take_auction_bids();
+            let _ = script.take_auction_cancels();
+            let _ = script.take_auction_starts();
+            let _ = script.take_auction_sorts();
+            return;
+        };
 
-    // The browse query, behind the gate the Search button reads.
-    if let Some(q) = script.take_auction_query() {
-        let now = time.elapsed_secs_f64();
-        if auction.query_gate.is_none_or(|gate| now >= gate) {
-            auction.query_gate = Some(now + QUERY_THROTTLE_SECS);
-            auction.wire.browse_sent += 1;
-            let _ = commands.0.send(ClientCommand::AuctionListItems {
+        // The browse query, behind the gate the Search button reads.
+        if let Some(q) = script.take_auction_query() {
+            let now = time.elapsed_secs_f64();
+            if auction.query_gate.is_none_or(|gate| now >= gate) {
+                auction.query_gate = Some(now + QUERY_THROTTLE_SECS);
+                auction.wire.browse_sent += 1;
+                let _ = commands.0.send(ClientCommand::AuctionListItems {
+                    auctioneer,
+                    list_from: q.page.saturating_mul(50),
+                    searched_name: q.name,
+                    level_min: u8::try_from(q.min_level).unwrap_or(u8::MAX),
+                    level_max: u8::try_from(q.max_level).unwrap_or(u8::MAX),
+                    slot_id: q.inv_type.unwrap_or(auction_filter::ANY),
+                    // Already ids: the binding maps menu positions as `0x4ce980` does.
+                    main_category: q.class.unwrap_or(auction_filter::ANY),
+                    sub_category: q.sub_class.unwrap_or(auction_filter::ANY),
+                    quality: q.quality.unwrap_or(auction_filter::ANY),
+                    usable: u8::from(q.usable_only),
+                });
+            }
+        }
+
+        if std::mem::take(&mut auction.pending_owner_refresh) {
+            let _ = commands.0.send(ClientCommand::AuctionListOwnerItems {
                 auctioneer,
-                list_from: q.page.saturating_mul(50),
-                searched_name: q.name,
-                level_min: u8::try_from(q.min_level).unwrap_or(u8::MAX),
-                level_max: u8::try_from(q.max_level).unwrap_or(u8::MAX),
-                slot_id: q.inv_type.unwrap_or(auction_filter::ANY),
-                // Already ids: the binding maps menu positions as `0x4ce980` does.
-                main_category: q.class.unwrap_or(auction_filter::ANY),
-                sub_category: q.sub_class.unwrap_or(auction_filter::ANY),
-                quality: q.quality.unwrap_or(auction_filter::ANY),
-                usable: u8::from(q.usable_only),
+                list_from: 0,
             });
         }
-    }
+        if std::mem::take(&mut auction.pending_bidder_refresh) {
+            let _ = commands.0.send(ClientCommand::AuctionListBidderItems {
+                auctioneer,
+                list_from: 0,
+                auction_ids: Vec::new(),
+            });
+        }
 
-    if std::mem::take(&mut auction.pending_owner_refresh) {
-        let _ = commands.0.send(ClientCommand::AuctionListOwnerItems {
-            auctioneer,
-            list_from: 0,
-        });
-    }
-    if std::mem::take(&mut auction.pending_bidder_refresh) {
-        let _ = commands.0.send(ClientCommand::AuctionListBidderItems {
-            auctioneer,
-            list_from: 0,
-            auction_ids: Vec::new(),
-        });
-    }
+        if let Some(page) = script.take_auction_owner_query() {
+            let _ = commands.0.send(ClientCommand::AuctionListOwnerItems {
+                auctioneer,
+                list_from: page.saturating_mul(50),
+            });
+        }
+        if let Some(page) = script.take_auction_bidder_query() {
+            // An empty refresh set: the reference sends the ids it was outbid on (it keeps eight),
+            // which this does not track, so only the auctions we lead are listed.
+            let _ = commands.0.send(ClientCommand::AuctionListBidderItems {
+                auctioneer,
+                list_from: page.saturating_mul(50),
+                auction_ids: Vec::new(),
+            });
+        }
 
-    if let Some(page) = script.take_auction_owner_query() {
-        let _ = commands.0.send(ClientCommand::AuctionListOwnerItems {
-            auctioneer,
-            list_from: page.saturating_mul(50),
-        });
-    }
-    if let Some(page) = script.take_auction_bidder_query() {
-        // An empty refresh set: the reference sends the ids it was outbid on (it keeps eight),
-        // which this does not track, so only the auctions we lead are listed.
-        let _ = commands.0.send(ClientCommand::AuctionListBidderItems {
-            auctioneer,
-            list_from: page.saturating_mul(50),
-            auction_ids: Vec::new(),
-        });
-    }
-
-    // Bids and cancels map the clicked row through the sorted view the feed pushed, roll included,
-    // reading the caches as the verbs do (`0x4cf879`).
-    let self_guid = self_q.iter().next().map(|g| g.0);
-    let bids = script.take_auction_bids();
-    let cancels = script.take_auction_cancels();
-    if !bids.is_empty() || !cancels.is_empty() {
-        for bid in bids {
-            let rows = rows_for(
-                bid.list,
-                &auction.lists[bid.list],
-                self_guid,
-                &items,
-                icons.as_deref(),
-                &names,
-                Ask::Read,
-                rolls,
-            );
-            if let Some(auction_id) = AuctionOpen::auction_id_at(bid.index, &rows) {
-                let _ = commands.0.send(ClientCommand::AuctionPlaceBid {
-                    auctioneer,
-                    auction_id,
-                    price: bid.amount,
-                });
+        // Bids and cancels map the clicked row through the sorted view the feed pushed, roll included,
+        // reading the caches as the verbs do (`0x4cf879`).
+        let self_guid = self_q.iter().next().map(|g| g.0);
+        let bids = script.take_auction_bids();
+        let cancels = script.take_auction_cancels();
+        if !bids.is_empty() || !cancels.is_empty() {
+            for bid in bids {
+                let rows = rows_for(
+                    bid.list,
+                    &auction.lists[bid.list],
+                    self_guid,
+                    &items,
+                    icons.as_deref(),
+                    &names,
+                    Ask::Read,
+                    rolls,
+                );
+                if let Some(auction_id) = AuctionOpen::auction_id_at(bid.index, &rows) {
+                    let _ = commands.0.send(ClientCommand::AuctionPlaceBid {
+                        auctioneer,
+                        auction_id,
+                        price: bid.amount,
+                    });
+                }
+            }
+            for index in cancels {
+                let rows = rows_for(
+                    OWNER,
+                    &auction.lists[OWNER],
+                    self_guid,
+                    &items,
+                    icons.as_deref(),
+                    &names,
+                    Ask::Read,
+                    rolls,
+                );
+                if let Some(auction_id) = AuctionOpen::auction_id_at(index, &rows) {
+                    let _ = commands.0.send(ClientCommand::AuctionRemoveItem {
+                        auctioneer,
+                        auction_id,
+                    });
+                }
             }
         }
-        for index in cancels {
-            let rows = rows_for(
-                OWNER,
-                &auction.lists[OWNER],
-                self_guid,
-                &items,
-                icons.as_deref(),
-                &names,
-                Ask::Read,
-                rolls,
-            );
-            if let Some(auction_id) = AuctionOpen::auction_id_at(index, &rows) {
-                let _ = commands.0.send(ClientCommand::AuctionRemoveItem {
-                    auctioneer,
-                    auction_id,
-                });
+
+        // `StartAuction` emptied the sell slot in the verb (`0x4ce92a`); it sends the guid the attach
+        // stored (`0x4ce8f3`), wherever the item has since gone.
+        for req in script.take_auction_starts() {
+            let _ = commands.0.send(ClientCommand::AuctionSellItem {
+                auctioneer,
+                item_guid: req.item_guid,
+                bid: req.min_bid,
+                buyout: req.buyout,
+                etime_minutes: req.duration,
+            });
+        }
+
+        // Header clicks last: a row pick above indexes last frame's order, so sorting first would
+        // point it at another auction. A sort sends nothing.
+        for (which, key) in script.take_auction_sorts() {
+            if let Some(slot) = auction.lists.get_mut(which) {
+                slot.sort.click(&key);
             }
         }
-    }
 
-    // `StartAuction` emptied the sell slot in the verb (`0x4ce92a`); it sends the guid the attach
-    // stored (`0x4ce8f3`), wherever the item has since gone.
-    for req in script.take_auction_starts() {
-        let _ = commands.0.send(ClientCommand::AuctionSellItem {
-            auctioneer,
-            item_guid: req.item_guid,
-            bid: req.min_bid,
-            buyout: req.buyout,
-            etime_minutes: req.duration,
-        });
-    }
-
-    // Header clicks last: a row pick above indexes last frame's order, so sorting first would
-    // point it at another auction. A sort sends nothing.
-    for (which, key) in script.take_auction_sorts() {
-        if let Some(slot) = auction.lists.get_mut(which) {
-            slot.sort.click(&key);
+        if script.take_auction_close() {
+            crate::ui_session::queue(&mut world_commands, close_core);
         }
-    }
-
-    if script.take_auction_close() {
-        crate::ui_session::queue(&mut world_commands, close_core);
-    }
+    })
 }
 
 #[cfg(test)]

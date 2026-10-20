@@ -4,7 +4,7 @@
 
 use benilla_formats::AreaTableCatalog;
 use benilla_protocol::messages::WhoEntry;
-use benilla_ui::script::{FriendInfo, SocialRequest, SocialState as VmSocial, UiScript, WhoInfo};
+use benilla_ui::script::{FriendInfo, SocialRequest, SocialState as VmSocial, WhoInfo};
 use bevy::prelude::*;
 
 use crate::area::AreaTableRes;
@@ -43,7 +43,7 @@ pub(super) struct FedSocial {
 
 /// Push the display snapshot to the VM, fire the list events, and print the owed result lines.
 pub(super) fn feed_social(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut social: ResMut<SocialState>,
     names: Res<NameCache>,
     areas: Option<Res<AreaTableRes>>,
@@ -53,97 +53,99 @@ pub(super) fn feed_social(
     mut sink: MessageSink,
     mut fed: Local<crate::ui_script::VmMemo<FedSocial>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let fed = fed.get(&script);
-    let areas = areas.as_deref().map(|a| &a.0);
-    // A name is asked at its packet's lookup ([`SocialState::name_events`]), and the frames between
-    // ask only a name the cache holds nothing for; a new VM's first feed stands for every list's
-    // packet.
-    let first = !fed.seeded;
-    // Taken in the frame before the interface is up too, deliberately: it marks only the ask,
-    // which goes to the server, not the VM.
-    let name_events = std::mem::take(&mut social.name_events);
-    let ask = |guid: u64| Ask::at(first || name_events.contains(&guid), &commands);
-    if !fed.lfg_pushed {
-        if let Some(d) = dungeons.as_deref() {
-            script.set_lfg_dungeons(d.0.clone());
-            fed.lfg_pushed = true;
+    hosted_vm.run(|script| {
+        let Some(mut script) = script else {
+            return;
+        };
+        let fed = fed.get(&script);
+        let areas = areas.as_deref().map(|a| &a.0);
+        // A name is asked at its packet's lookup ([`SocialState::name_events`]), and the frames between
+        // ask only a name the cache holds nothing for; a new VM's first feed stands for every list's
+        // packet.
+        let first = !fed.seeded;
+        // Taken in the frame before the interface is up too, deliberately: it marks only the ask,
+        // which goes to the server, not the VM.
+        let name_events = std::mem::take(&mut social.name_events);
+        let ask = |guid: u64| Ask::at(first || name_events.contains(&guid), &commands);
+        if !fed.lfg_pushed {
+            if let Some(d) = dungeons.as_deref() {
+                script.set_lfg_dungeons(d.0.clone());
+                fed.lfg_pushed = true;
+            }
         }
-    }
 
-    // Everything that reads the VM's own string table, resolved under one borrow of it.
-    let (owed, friends, display_order) = {
-        let get = |key: &str| script.lua().globals().get::<String>(key).ok();
-        // Keyed, so the surface and the sound come from the catalog row (`ERR_FRIEND_ONLINE_SS`
-        // plays `FRIENDJOINGAME`).
-        let owed: Vec<Shown> = drain_result_lines(&mut social, &names, &ask)
-            .iter()
-            .filter_map(|e| {
-                crate::ui_action::ui_error_text(e, &get).map(|text| Shown::keyed(e.key, text))
-            })
-            .collect();
-        let away = |status: u8| status_flag_key(status).and_then(&get).unwrap_or_default();
-        let (friends, display_order) =
-            friend_rows(&social, &names, &ask, areas, unit_names.get(), &away);
-        (owed, friends, display_order)
-    };
+        // Everything that reads the VM's own string table, resolved under one borrow of it.
+        let (owed, friends, display_order) = {
+            let get = |key: &str| script.lua().globals().get::<String>(key).ok();
+            // Keyed, so the surface and the sound come from the catalog row (`ERR_FRIEND_ONLINE_SS`
+            // plays `FRIENDJOINGAME`).
+            let owed: Vec<Shown> = drain_result_lines(&mut social, &names, &ask)
+                .iter()
+                .filter_map(|e| {
+                    crate::ui_action::ui_error_text(e, &get).map(|text| Shown::keyed(e.key, text))
+                })
+                .collect();
+            let away = |status: u8| status_flag_key(status).and_then(&get).unwrap_or_default();
+            let (friends, display_order) =
+                friend_rows(&social, &names, &ask, areas, unit_names.get(), &away);
+            (owed, friends, display_order)
+        };
 
-    // The owed lines first, so a friend's offline line lands before the update that clears their
-    // zone.
-    crate::ui_action::show_messages(&mut script, &mut sink, "ui_social", owed);
+        // The owed lines first, so a friend's offline line lands before the update that clears their
+        // zone.
+        crate::ui_action::show_messages(&mut script, &mut sink, "ui_social", owed);
 
-    let (ignores, ignore_order) = ignore_rows(&social, &names, &ask);
-    let who = who_rows(&social, areas, unit_names.get());
+        let (ignores, ignore_order) = ignore_rows(&social, &names, &ask);
+        let who = who_rows(&social, areas, unit_names.get());
 
-    let selected_friend = index_of(&display_order, social.selected_friend);
-    let selected_ignore = index_of(&ignore_order, social.selected_ignore);
-    social.display_order = display_order;
-    social.ignore_display_order = ignore_order;
+        let selected_friend = index_of(&display_order, social.selected_friend);
+        let selected_ignore = index_of(&ignore_order, social.selected_ignore);
+        social.display_order = display_order;
+        social.ignore_display_order = ignore_order;
 
-    script.set_social(VmSocial {
-        friends,
-        selected_friend,
-        ignores,
-        selected_ignore,
-        who,
-        who_total: social.who_total,
-        // The chain rides along: `SortWho` re-sorts inside the binding.
-        who_sort: social.who_sort.clone(),
-    });
+        script.set_social(VmSocial {
+            friends,
+            selected_friend,
+            ignores,
+            selected_ignore,
+            who,
+            who_total: social.who_total,
+            // The chain rides along: `SortWho` re-sorts inside the binding.
+            who_sort: social.who_sort.clone(),
+        });
 
-    fed.seeded = true;
-    if social.friends_dirty || first {
-        social.friends_dirty = false;
-        // The list ends in `FRIENDLIST_UPDATE` (`0x5ae867`), after `ShowFriends` too; the event
-        // table has no `FRIENDLIST_SHOW`.
-        script.fire_event("FRIENDLIST_UPDATE", Vec::new());
-    }
-    if social.ignores_dirty || first {
-        social.ignores_dirty = false;
-        script.fire_event("IGNORELIST_UPDATE", Vec::new());
-    }
-    // `SMSG_WHO`'s two exits ([`WHO_CHAT_MAX`]); a sort fires its own event inside `SortWho`.
-    if social.who_dirty {
-        social.who_dirty = false;
-        if answer_goes_to_the_frame(social.who_to_ui, social.who.len()) {
-            script.fire_event("WHO_LIST_UPDATE", Vec::new());
-        } else {
-            // In wire order: each line is composed inside the parse loop (`0x5ae0a1`), before the
-            // `qsort` at `0x5ae0e2` orders the array `GetWhoInfo` reads.
-            let printed = {
-                let get = |key: &str| script.lua().globals().get::<String>(key).ok();
-                let wire_order: Vec<WhoInfo> = social
-                    .who
-                    .iter()
-                    .map(|e| who_row(e, areas, unit_names.get()))
-                    .collect();
-                who_lines(&wire_order, social.who_total, &get)
-            };
-            crate::ui_action::show_messages(&mut script, &mut sink, "ui_social", printed);
+        fed.seeded = true;
+        if social.friends_dirty || first {
+            social.friends_dirty = false;
+            // The list ends in `FRIENDLIST_UPDATE` (`0x5ae867`), after `ShowFriends` too; the event
+            // table has no `FRIENDLIST_SHOW`.
+            script.fire_event("FRIENDLIST_UPDATE", Vec::new());
         }
-    }
+        if social.ignores_dirty || first {
+            social.ignores_dirty = false;
+            script.fire_event("IGNORELIST_UPDATE", Vec::new());
+        }
+        // `SMSG_WHO`'s two exits ([`WHO_CHAT_MAX`]); a sort fires its own event inside `SortWho`.
+        if social.who_dirty {
+            social.who_dirty = false;
+            if answer_goes_to_the_frame(social.who_to_ui, social.who.len()) {
+                script.fire_event("WHO_LIST_UPDATE", Vec::new());
+            } else {
+                // In wire order: each line is composed inside the parse loop (`0x5ae0a1`), before the
+                // `qsort` at `0x5ae0e2` orders the array `GetWhoInfo` reads.
+                let printed = {
+                    let get = |key: &str| script.lua().globals().get::<String>(key).ok();
+                    let wire_order: Vec<WhoInfo> = social
+                        .who
+                        .iter()
+                        .map(|e| who_row(e, areas, unit_names.get()))
+                        .collect();
+                    who_lines(&wire_order, social.who_total, &get)
+                };
+                crate::ui_action::show_messages(&mut script, &mut sink, "ui_social", printed);
+            }
+        }
+    })
 }
 
 /// Whether an `SMSG_WHO` answer fires `WHO_LIST_UPDATE` (true) or prints chat lines (false).
@@ -361,7 +363,7 @@ fn index_of(order: &[u64], guid: u64) -> u32 {
 /// Turn the Lua API's social intents into their sends. By-index intents resolve through the order
 /// the feed published, by-name ones through the resolved names, since the wire removes by guid.
 pub(super) fn drain_social(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut social: ResMut<SocialState>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
@@ -369,85 +371,88 @@ pub(super) fn drain_social(
     unit_names: NameTables,
     mut tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let requests = script.take_social_requests();
-    if requests.is_empty() {
-        return;
-    }
-    for request in requests {
-        match request {
-            SocialRequest::RefreshFriends => {
-                let _ = commands.0.send(ClientCommand::FriendListRequest);
-            }
-            SocialRequest::AddFriend(name) => {
-                // `0x5ae67c`: the Friends tutorial is acknowledged just before the send.
-                if let Some(t) = tutorials.as_mut() {
-                    t.write(crate::tutorial::TutorialEvent::Acknowledge {
-                        id: crate::tutorial::id::FRIENDS,
-                    });
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        let requests = script.take_social_requests();
+        if requests.is_empty() {
+            return;
+        }
+        for request in requests {
+            match request {
+                SocialRequest::RefreshFriends => {
+                    let _ = commands.0.send(ClientCommand::FriendListRequest);
                 }
-                let _ = commands.0.send(ClientCommand::AddFriend { name });
-            }
-            SocialRequest::SetLookingForGroup { slots, comment } => {
-                let _ = commands
-                    .0
-                    .send(ClientCommand::SetLookingForGroup { slots, comment });
-            }
-            SocialRequest::LfgQuery { criterion, class } => {
-                let _ = commands
-                    .0
-                    .send(ClientCommand::LfgQuery { criterion, class });
-            }
-            SocialRequest::RemoveFriendIndex(index) => {
-                if let Some(guid) = row_guid(&social.display_order, index) {
-                    let _ = commands.0.send(ClientCommand::DelFriend { guid });
+                SocialRequest::AddFriend(name) => {
+                    // `0x5ae67c`: the Friends tutorial is acknowledged just before the send.
+                    if let Some(t) = tutorials.as_mut() {
+                        t.write(crate::tutorial::TutorialEvent::Acknowledge {
+                            id: crate::tutorial::id::FRIENDS,
+                        });
+                    }
+                    let _ = commands.0.send(ClientCommand::AddFriend { name });
                 }
-            }
-            SocialRequest::RemoveFriendName(name) => {
-                if let Some(guid) = guid_named(&social.display_order, &name, &names) {
-                    let _ = commands.0.send(ClientCommand::DelFriend { guid });
+                SocialRequest::SetLookingForGroup { slots, comment } => {
+                    let _ = commands
+                        .0
+                        .send(ClientCommand::SetLookingForGroup { slots, comment });
                 }
-            }
-            SocialRequest::AddIgnore(name) => {
-                let _ = commands.0.send(ClientCommand::AddIgnore { name });
-            }
-            SocialRequest::DelIgnore(name) => {
-                if let Some(guid) = guid_named(&social.ignore_display_order, &name, &names) {
-                    let _ = commands.0.send(ClientCommand::DelIgnore { guid });
+                SocialRequest::LfgQuery { criterion, class } => {
+                    let _ = commands
+                        .0
+                        .send(ClientCommand::LfgQuery { criterion, class });
                 }
-            }
-            SocialRequest::ToggleIgnore(name) => {
-                // `/ignore <name>`: un-ignore someone listed, else ignore them.
-                match guid_named(&social.ignore_display_order, &name, &names) {
-                    Some(guid) => {
+                SocialRequest::RemoveFriendIndex(index) => {
+                    if let Some(guid) = row_guid(&social.display_order, index) {
+                        let _ = commands.0.send(ClientCommand::DelFriend { guid });
+                    }
+                }
+                SocialRequest::RemoveFriendName(name) => {
+                    if let Some(guid) = guid_named(&social.display_order, &name, &names) {
+                        let _ = commands.0.send(ClientCommand::DelFriend { guid });
+                    }
+                }
+                SocialRequest::AddIgnore(name) => {
+                    let _ = commands.0.send(ClientCommand::AddIgnore { name });
+                }
+                SocialRequest::DelIgnore(name) => {
+                    if let Some(guid) = guid_named(&social.ignore_display_order, &name, &names) {
                         let _ = commands.0.send(ClientCommand::DelIgnore { guid });
                     }
-                    None => {
-                        let _ = commands.0.send(ClientCommand::AddIgnore { name });
+                }
+                SocialRequest::ToggleIgnore(name) => {
+                    // `/ignore <name>`: un-ignore someone listed, else ignore them.
+                    match guid_named(&social.ignore_display_order, &name, &names) {
+                        Some(guid) => {
+                            let _ = commands.0.send(ClientCommand::DelIgnore { guid });
+                        }
+                        None => {
+                            let _ = commands.0.send(ClientCommand::AddIgnore { name });
+                        }
                     }
                 }
+                SocialRequest::SelectFriend(index) => {
+                    social.selected_friend = row_guid(&social.display_order, index).unwrap_or(0);
+                }
+                SocialRequest::SelectIgnore(index) => {
+                    social.selected_ignore =
+                        row_guid(&social.ignore_display_order, index).unwrap_or(0);
+                }
+                SocialRequest::Who(filter) => {
+                    let request =
+                        super::who_query(&filter, areas.as_deref().map(|a| &a.0), unit_names.get());
+                    let _ = commands.0.send(ClientCommand::Who {
+                        request: Box::new(request),
+                    });
+                }
+                // Mirror the click the binding applied to the VM's chain. No `who_dirty`: `SortWho`
+                // already fired `WHO_LIST_UPDATE`, once per click as the reference does.
+                SocialRequest::SortWho(sort_type) => social.who_sort.promote(&sort_type),
+                SocialRequest::SetWhoToUi(on) => social.who_to_ui = on,
             }
-            SocialRequest::SelectFriend(index) => {
-                social.selected_friend = row_guid(&social.display_order, index).unwrap_or(0);
-            }
-            SocialRequest::SelectIgnore(index) => {
-                social.selected_ignore = row_guid(&social.ignore_display_order, index).unwrap_or(0);
-            }
-            SocialRequest::Who(filter) => {
-                let request =
-                    super::who_query(&filter, areas.as_deref().map(|a| &a.0), unit_names.get());
-                let _ = commands.0.send(ClientCommand::Who {
-                    request: Box::new(request),
-                });
-            }
-            // Mirror the click the binding applied to the VM's chain. No `who_dirty`: `SortWho`
-            // already fired `WHO_LIST_UPDATE`, once per click as the reference does.
-            SocialRequest::SortWho(sort_type) => social.who_sort.promote(&sort_type),
-            SocialRequest::SetWhoToUi(on) => social.who_to_ui = on,
         }
-    }
+    })
 }
 
 /// The guid at a 1-based display row.
@@ -473,6 +478,7 @@ mod tests {
     use benilla_protocol::messages::{
         friend_result, friend_status, FriendEntry, FriendStatusUpdate, WhoResults,
     };
+    use benilla_ui::script::UiScript;
 
     fn entry(name: &str, level: u32, guild: &str) -> WhoEntry {
         WhoEntry {

@@ -20,7 +20,7 @@
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{CameraViewRequest, UiScript, CAMERA_VIEW_COUNT};
+use benilla_ui::script::{CameraViewRequest, CAMERA_VIEW_COUNT};
 use benilla_world::view::WorldCamera;
 
 use crate::creature_anim::wrap_pi;
@@ -194,101 +194,103 @@ struct ViewTargets<'w, 's> {
 
 /// Drain the Lua queue into the rig, before [`super::control`] seats this frame's camera.
 fn drain_view_requests(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut cvars: ResMut<crate::cvars::Cvars>,
     mut targets: ViewTargets,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let requests = script.take_camera_view_requests();
-    if requests.is_empty() {
-        return;
-    }
-    let Ok(mut cam) = targets.cam.single_mut() else {
-        return; // no camera: a silent drop, as the reference's `0x4818f0` miss
-    };
-    let face_yaw = targets.player.facing();
-    // Written to the CVars after the batch: the slots a save or reset moved, and the live index.
-    let mut write_slots: Vec<usize> = Vec::new();
-    let mut write_active = false;
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        let requests = script.take_camera_view_requests();
+        if requests.is_empty() {
+            return;
+        }
+        let Ok(mut cam) = targets.cam.single_mut() else {
+            return; // no camera: a silent drop, as the reference's `0x4818f0` miss
+        };
+        let face_yaw = targets.player.facing();
+        // Written to the CVars after the batch: the slots a save or reset moved, and the live index.
+        let mut write_slots: Vec<usize> = Vec::new();
+        let mut write_active = false;
 
-    for request in requests {
-        match request {
-            CameraViewRequest::Set(n) => {
-                write_active |= apply(
-                    &mut targets.views,
-                    &mut targets.rig,
-                    &mut cam,
-                    face_yaw,
-                    usize::from(n),
-                );
-            }
-            CameraViewRequest::Save(n) => {
-                let view = usize::from(n);
-                targets.views.save(
-                    view,
-                    ViewPose {
-                        // The target zoom, not the collision-pulled arm (`cam+0x198`).
-                        distance: targets.rig.target_distance,
-                        pitch: cam.pitch,
-                        yaw: wrap_pi(cam.yaw - face_yaw),
-                    },
-                );
-                write_slots.push(view);
-            }
-            CameraViewRequest::Reset(n) => {
-                let view = usize::from(n);
-                if targets.views.reset(view) {
-                    apply(
-                        &mut targets.views,
-                        &mut targets.rig,
-                        &mut cam,
-                        face_yaw,
-                        view,
-                    );
-                }
-                write_slots.push(view);
-            }
-            CameraViewRequest::Next | CameraViewRequest::Prev => {
-                let forward = request == CameraViewRequest::Next;
-                if let Some(view) = targets.views.step(forward) {
+        for request in requests {
+            match request {
+                CameraViewRequest::Set(n) => {
                     write_active |= apply(
                         &mut targets.views,
                         &mut targets.rig,
                         &mut cam,
                         face_yaw,
-                        view,
+                        usize::from(n),
                     );
                 }
-            }
-            CameraViewRequest::FlipYaw(degrees) => {
-                // `cam[+0x100] += arg * pi/180` (`0x50b6a0`). The reference keeps the flip in its
-                // own yaw field, added outside the follow channel (`0x50f7de`), so it survives
-                // re-centring; the rig has one yaw, so auto-follow reels the flip back in on Smart
-                // and Always.
-                cam.yaw = wrap_pi(cam.yaw + degrees.to_radians());
+                CameraViewRequest::Save(n) => {
+                    let view = usize::from(n);
+                    targets.views.save(
+                        view,
+                        ViewPose {
+                            // The target zoom, not the collision-pulled arm (`cam+0x198`).
+                            distance: targets.rig.target_distance,
+                            pitch: cam.pitch,
+                            yaw: wrap_pi(cam.yaw - face_yaw),
+                        },
+                    );
+                    write_slots.push(view);
+                }
+                CameraViewRequest::Reset(n) => {
+                    let view = usize::from(n);
+                    if targets.views.reset(view) {
+                        apply(
+                            &mut targets.views,
+                            &mut targets.rig,
+                            &mut cam,
+                            face_yaw,
+                            view,
+                        );
+                    }
+                    write_slots.push(view);
+                }
+                CameraViewRequest::Next | CameraViewRequest::Prev => {
+                    let forward = request == CameraViewRequest::Next;
+                    if let Some(view) = targets.views.step(forward) {
+                        write_active |= apply(
+                            &mut targets.views,
+                            &mut targets.rig,
+                            &mut cam,
+                            face_yaw,
+                            view,
+                        );
+                    }
+                }
+                CameraViewRequest::FlipYaw(degrees) => {
+                    // `cam[+0x100] += arg * pi/180` (`0x50b6a0`). The reference keeps the flip in its
+                    // own yaw field, added outside the follow channel (`0x50f7de`), so it survives
+                    // re-centring; the rig has one yaw, so auto-follow reels the flip back in on Smart
+                    // and Always.
+                    cam.yaw = wrap_pi(cam.yaw + degrees.to_radians());
+                }
             }
         }
-    }
 
-    // Mirror into the registry so the change reaches `config.toml`.
-    for view in write_slots {
-        // A reset writes the default string verbatim, so the diff-shaped file drops the key.
-        let reset_to_default = targets.views.pose(view) == ViewPose::shipped(view);
-        let rendered = targets.views.pose(view).to_reference();
-        for field in 0..3 {
-            let value = if reset_to_default {
-                VIEW_DEFAULTS[view][field]
-            } else {
-                rendered[field].as_str()
-            };
-            cvars.set(VIEW_CVARS[view][field], value);
+        // Mirror into the registry so the change reaches `config.toml`.
+        for view in write_slots {
+            // A reset writes the default string verbatim, so the diff-shaped file drops the key.
+            let reset_to_default = targets.views.pose(view) == ViewPose::shipped(view);
+            let rendered = targets.views.pose(view).to_reference();
+            for field in 0..3 {
+                let value = if reset_to_default {
+                    VIEW_DEFAULTS[view][field]
+                } else {
+                    rendered[field].as_str()
+                };
+                cvars.set(VIEW_CVARS[view][field], value);
+            }
         }
-    }
-    if write_active {
-        cvars.set(CVAR_ACTIVE_VIEW, &targets.views.current.to_string());
-    }
+        if write_active {
+            cvars.set(CVAR_ACTIVE_VIEW, &targets.views.current.to_string());
+        }
+    })
 }
 
 /// Seat one view; the distance glides through `target_distance`. `true` when the live index moved.

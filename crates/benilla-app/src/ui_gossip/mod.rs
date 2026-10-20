@@ -256,7 +256,7 @@ fn snapshot(state: &GossipState) -> Option<GossipMenu> {
 /// Push the menu into the VM and fire `GOSSIP_SHOW` on a change; the close is the core's
 /// ([`close_core`]).
 fn feed_gossip(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     state: Res<GossipState>,
     self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
     names: Res<NameCache>,
@@ -268,53 +268,55 @@ fn feed_gossip(
     mut last_name: crate::ui_script::WindowMemo<Option<String>>,
     mut closes: CoreCloses,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let last = last.get(&script);
-    let last_name = last_name.get(&script);
-    if closes.since_last(&script, NpcWindow::Gossip) {
-        *last = None;
-        *last_name = None;
-    }
-    // `GOSSIP_SHOW` carries no argument (`SignalEvent` `0x4e22b5`) and the stock window titles with
-    // `UnitName("npc")` (`GossipFrame.lua:33`), so the name's landing alone re-fires it. Asked
-    // before the hold, so the name query goes out beside the text query; `UnitName` looks it up
-    // with a callback (`0x5171b8`), at the show a gossip packet brings.
-    let ask = Ask::at(last.is_none() || state.is_changed(), &commands);
-    let npc_name = state
-        .npc
-        .and_then(|g| names.resolve(&objects, g, ask).map(str::to_string));
-    // While the text query is out, fire nothing and keep the last snapshot: the reference returns
-    // at `0x4e2068` with no write and no event, so its frame keeps what it last showed. Reading
-    // the hold as a close would flash an open window.
-    if state.text_pending() {
-        return;
-    }
-    let mut fresh = snapshot(&state);
-    // Expand the greeting's `$N`/`$B`/`$G`/`$<n>w` macros client-side, as the reference does.
-    if let Some(greeting) = fresh.as_mut().map(|m| &mut m.greeting) {
-        let player = crate::npc_text::player_identity(&self_q, &names, unit_names.get());
-        *greeting = crate::npc_text::substitute(
-            greeting,
-            &crate::npc_text::MacroContext {
-                subject: player.as_ref(),
-                states: &states,
-            },
-        );
-    }
-    let name_changed = *last_name != npc_name;
-    if fresh == *last && !name_changed {
-        return;
-    }
-    script.set_gossip(fresh.clone());
-    // Opened, or changed while open; a close is the core's, and a disconnect's clear tells the
-    // VM nothing.
-    if fresh.is_some() {
-        script.fire_event("GOSSIP_SHOW", vec![]);
-    }
-    *last = fresh;
-    *last_name = npc_name;
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        let last = last.get(&script);
+        let last_name = last_name.get(&script);
+        if closes.since_last(&script, NpcWindow::Gossip) {
+            *last = None;
+            *last_name = None;
+        }
+        // `GOSSIP_SHOW` carries no argument (`SignalEvent` `0x4e22b5`) and the stock window titles with
+        // `UnitName("npc")` (`GossipFrame.lua:33`), so the name's landing alone re-fires it. Asked
+        // before the hold, so the name query goes out beside the text query; `UnitName` looks it up
+        // with a callback (`0x5171b8`), at the show a gossip packet brings.
+        let ask = Ask::at(last.is_none() || state.is_changed(), &commands);
+        let npc_name = state
+            .npc
+            .and_then(|g| names.resolve(&objects, g, ask).map(str::to_string));
+        // While the text query is out, fire nothing and keep the last snapshot: the reference returns
+        // at `0x4e2068` with no write and no event, so its frame keeps what it last showed. Reading
+        // the hold as a close would flash an open window.
+        if state.text_pending() {
+            return;
+        }
+        let mut fresh = snapshot(&state);
+        // Expand the greeting's `$N`/`$B`/`$G`/`$<n>w` macros client-side, as the reference does.
+        if let Some(greeting) = fresh.as_mut().map(|m| &mut m.greeting) {
+            let player = crate::npc_text::player_identity(&self_q, &names, unit_names.get());
+            *greeting = crate::npc_text::substitute(
+                greeting,
+                &crate::npc_text::MacroContext {
+                    subject: player.as_ref(),
+                    states: &states,
+                },
+            );
+        }
+        let name_changed = *last_name != npc_name;
+        if fresh == *last && !name_changed {
+            return;
+        }
+        script.set_gossip(fresh.clone());
+        // Opened, or changed while open; a close is the core's, and a disconnect's clear tells the
+        // VM nothing.
+        if fresh.is_some() {
+            script.fire_event("GOSSIP_SHOW", vec![]);
+        }
+        *last = fresh;
+        *last_name = npc_name;
+    })
 }
 
 /// Drain the Lua intents: an option sends `CMSG_GOSSIP_SELECT_OPTION` with its wire `index`, a
@@ -322,74 +324,80 @@ fn feed_gossip(
 /// A coded option is not sent: the reference's code prompt (`GOSSIP_ENTER_CODE`, `0x4e237e`) is
 /// not built.
 fn drain_gossip(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     state: Res<GossipState>,
     commands: Res<NetCommands>,
     mut world_commands: Commands,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for pos in script.take_gossip_selects() {
-        let Some(npc) = state.npc else { continue };
-        // Refused while the text query is out, as the reference's `SelectGossipOption`
-        // (`0x4e2320`) refuses under the latch `0xbbb670`.
-        if state.text_pending() {
-            debug!(
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        for pos in script.take_gossip_selects() {
+            let Some(npc) = state.npc else { continue };
+            // Refused while the text query is out, as the reference's `SelectGossipOption`
+            // (`0x4e2320`) refuses under the latch `0xbbb670`.
+            if state.text_pending() {
+                debug!(
                 "ui_gossip: SelectGossipOption({pos}) while the text query is in flight — refused"
             );
-            continue;
-        }
-        // Lua position is 1-based; resolve it to the option's wire `index`.
-        match pos
-            .checked_sub(1)
-            .and_then(|i| state.options.get(i as usize))
-        {
-            Some(opt) if !opt.coded => {
-                debug!("ui_gossip: select option {} (index {})", pos, opt.index);
-                let _ = commands.0.send(ClientCommand::GossipSelectOption {
-                    guid: npc,
-                    option: opt.index,
-                });
+                continue;
             }
-            Some(_) => debug!("ui_gossip: ignoring coded option {pos} (coded options are greyed)"),
-            None => debug!("ui_gossip: SelectGossipOption({pos}) out of range — ignored"),
+            // Lua position is 1-based; resolve it to the option's wire `index`.
+            match pos
+                .checked_sub(1)
+                .and_then(|i| state.options.get(i as usize))
+            {
+                Some(opt) if !opt.coded => {
+                    debug!("ui_gossip: select option {} (index {})", pos, opt.index);
+                    let _ = commands.0.send(ClientCommand::GossipSelectOption {
+                        guid: npc,
+                        option: opt.index,
+                    });
+                }
+                Some(_) => {
+                    debug!("ui_gossip: ignoring coded option {pos} (coded options are greyed)")
+                }
+                None => debug!("ui_gossip: SelectGossipOption({pos}) out of range — ignored"),
+            }
         }
-    }
-    // Quest-row clicks: the 1-based row picks the quest.
-    for pos in script.take_gossip_quest_selects() {
-        let Some(npc) = state.npc else { continue };
-        // Refused while pending too; the reference's latch is traced for option selects only.
-        if state.text_pending() {
-            debug!(
+        // Quest-row clicks: the 1-based row picks the quest.
+        for pos in script.take_gossip_quest_selects() {
+            let Some(npc) = state.npc else { continue };
+            // Refused while pending too; the reference's latch is traced for option selects only.
+            if state.text_pending() {
+                debug!(
                 "ui_gossip: SelectGossipQuest({pos}) while the text query is in flight — refused"
             );
-            continue;
-        }
-        match pos
-            .checked_sub(1)
-            .and_then(|i| state.quests.get(i as usize))
-        {
-            Some((quest_id, icon, _level, _title)) => {
-                let (quest, icon) = (*quest_id, *icon);
-                let active = row_is_active(icon);
-                // As on the quest greeting panel: an active row is a turn-in, and so is an
-                // available one with its one-click flag.
-                let cmd = if active || row_is_one_click(icon) {
-                    ClientCommand::QuestgiverComplete { npc, quest }
-                } else {
-                    ClientCommand::QuestgiverQuery { npc, quest }
-                };
-                debug!("ui_gossip: quest row {pos} (quest {quest}, icon {icon}, active {active})");
-                let _ = commands.0.send(cmd);
+                continue;
             }
-            None => debug!("ui_gossip: SelectGossipQuest({pos}) out of range — ignored"),
+            match pos
+                .checked_sub(1)
+                .and_then(|i| state.quests.get(i as usize))
+            {
+                Some((quest_id, icon, _level, _title)) => {
+                    let (quest, icon) = (*quest_id, *icon);
+                    let active = row_is_active(icon);
+                    // As on the quest greeting panel: an active row is a turn-in, and so is an
+                    // available one with its one-click flag.
+                    let cmd = if active || row_is_one_click(icon) {
+                        ClientCommand::QuestgiverComplete { npc, quest }
+                    } else {
+                        ClientCommand::QuestgiverQuery { npc, quest }
+                    };
+                    debug!(
+                        "ui_gossip: quest row {pos} (quest {quest}, icon {icon}, active {active})"
+                    );
+                    let _ = commands.0.send(cmd);
+                }
+                None => debug!("ui_gossip: SelectGossipQuest({pos}) out of range — ignored"),
+            }
         }
-    }
-    if script.take_gossip_close() {
-        debug!("ui_gossip: client-side close (no packet)");
-        crate::ui_session::queue(&mut world_commands, close_core);
-    }
+        if script.take_gossip_close() {
+            debug!("ui_gossip: client-side close (no packet)");
+            crate::ui_session::queue(&mut world_commands, close_core);
+        }
+    })
 }
 
 #[cfg(test)]

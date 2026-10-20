@@ -100,33 +100,35 @@ impl ScriptMemoryWatch {
 /// reload's byte (`0x49565b`). Its events fire in place, as `FrameScript_SignalEvent` runs every
 /// listener before it returns.
 pub(crate) fn watch_script_memory(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     entered: Res<LeavingWorldArmed>,
     mut watch: ResMut<ScriptMemoryWatch>,
     time: Res<Time<Real>>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    if !entered.is_armed() {
-        return;
-    }
-    // A VM with no such record reads 0, the watch off.
-    let limit = script.cvar_int(CVAR_SCRIPT_MEMORY).unwrap_or(0);
-    let now = crate::ui_billing::now_ms(&time);
-    match watch.poll(limit, now, &mut *script) {
-        None => {}
-        Some(MemoryVerdict::Exhausted(mb)) => {
-            warn!("ui: the interface is over its script memory ({mb} MB)");
-            script.fire_event("MEMORY_EXHAUSTED", vec![ScriptValue::Int(i64::from(mb))]);
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        if !entered.is_armed() {
+            return;
         }
-        Some(MemoryVerdict::Recovered) => script.fire_event("MEMORY_RECOVERED", vec![]),
-        Some(MemoryVerdict::Quit) => {
-            warn!("ui: still over the script memory 15 s on — quitting, as 1.12.1 does");
-            exit.write(AppExit::Success);
+        // A VM with no such record reads 0, the watch off.
+        let limit = script.cvar_int(CVAR_SCRIPT_MEMORY).unwrap_or(0);
+        let now = crate::ui_billing::now_ms(&time);
+        match watch.poll(limit, now, &mut *script) {
+            None => {}
+            Some(MemoryVerdict::Exhausted(mb)) => {
+                warn!("ui: the interface is over its script memory ({mb} MB)");
+                script.fire_event("MEMORY_EXHAUSTED", vec![ScriptValue::Int(i64::from(mb))]);
+            }
+            Some(MemoryVerdict::Recovered) => script.fire_event("MEMORY_RECOVERED", vec![]),
+            Some(MemoryVerdict::Quit) => {
+                warn!("ui: still over the script memory 15 s on — quitting, as 1.12.1 does");
+                exit.write(AppExit::Success);
+            }
         }
-    }
+    })
 }
 
 pub(crate) struct UiMemoryPlugin;

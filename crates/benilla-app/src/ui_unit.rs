@@ -253,7 +253,7 @@ pub(crate) fn known_languages(
 }
 
 fn feed_known_languages(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     actions: Option<Res<crate::ui_action::PlayerActions>>,
     spells: Option<Res<crate::ui_action::Spells>>,
     skill_lines: Option<Res<crate::ui_spellbook::SkillLines>>,
@@ -261,42 +261,44 @@ fn feed_known_languages(
     self_q: Query<Ref<ObjectStore>, With<SelfPlayer>>,
     mut pushed: Local<crate::ui_script::VmMemo<Option<Vec<String>>>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let (Some(actions), Some(spells), Some(languages)) = (actions, spells, languages) else {
-        return;
-    };
-    let pushed = pushed.get(&script);
-    let store = self_q.iter().next();
-    // With no input moved since this VM's push, a rebuild could only reproduce the memo.
-    let inputs_moved = store.as_ref().is_some_and(|s| s.is_changed())
-        || actions.is_changed()
-        || spells.is_changed()
-        || languages.is_changed()
-        || skill_lines.as_ref().is_some_and(|l| l.is_changed());
-    if pushed.is_some() && !inputs_moved {
-        return;
-    }
-    let store: Option<&ObjectStore> = store.as_deref();
-    let has_skill_line = |line: u32| {
-        store.is_some_and(|s| {
-            (0..benilla_protocol::messages::PLAYER_SKILL_SLOTS)
-                .filter_map(|i| s.0.player_skill(i))
-                .any(|slot| u32::from(slot.skill_id) == line)
-        })
-    };
-    let names = known_languages(
-        actions.spells.iter().copied(),
-        &spells.catalog,
-        skill_lines.as_deref().map(|s| &s.catalog),
-        has_skill_line,
-        &languages.0,
-    );
-    if pushed.as_ref() != Some(&names) {
-        script.set_known_languages(names.clone());
-        *pushed = Some(names);
-    }
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        let (Some(actions), Some(spells), Some(languages)) = (actions, spells, languages) else {
+            return;
+        };
+        let pushed = pushed.get(&script);
+        let store = self_q.iter().next();
+        // With no input moved since this VM's push, a rebuild could only reproduce the memo.
+        let inputs_moved = store.as_ref().is_some_and(|s| s.is_changed())
+            || actions.is_changed()
+            || spells.is_changed()
+            || languages.is_changed()
+            || skill_lines.as_ref().is_some_and(|l| l.is_changed());
+        if pushed.is_some() && !inputs_moved {
+            return;
+        }
+        let store: Option<&ObjectStore> = store.as_deref();
+        let has_skill_line = |line: u32| {
+            store.is_some_and(|s| {
+                (0..benilla_protocol::messages::PLAYER_SKILL_SLOTS)
+                    .filter_map(|i| s.0.player_skill(i))
+                    .any(|slot| u32::from(slot.skill_id) == line)
+            })
+        };
+        let names = known_languages(
+            actions.spells.iter().copied(),
+            &spells.catalog,
+            skill_lines.as_deref().map(|s| &s.catalog),
+            has_skill_line,
+            &languages.0,
+        );
+        if pushed.as_ref() != Some(&names) {
+            script.set_known_languages(names.clone());
+            *pushed = Some(names);
+        }
+    })
 }
 
 fn load_default_languages(
@@ -353,56 +355,62 @@ pub(crate) fn seed_language_table(world: &World, script: &mut UiScript) {
 /// Push `GetDefaultLanguage()`'s string on a change of race; `None` is the reference's zero value.
 /// The name is the install's locale column (`[0xc0e080]`).
 fn feed_default_language(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     langs: Option<Res<DefaultLanguagesRes>>,
     mut pushed: Local<crate::ui_script::VmMemo<Option<Option<String>>>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let pushed = pushed.get(&script);
-    let name = self_q
-        .iter()
-        .next()
-        .and_then(|store| store.0.unit_race())
-        .zip(langs.as_ref())
-        .and_then(|(race, langs)| langs.0.name(u32::from(race)))
-        .map(str::to_string);
-    if pushed.as_ref() != Some(&name) {
-        script.set_default_language(name.clone());
-        *pushed = Some(name);
-    }
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        let pushed = pushed.get(&script);
+        let name = self_q
+            .iter()
+            .next()
+            .and_then(|store| store.0.unit_race())
+            .zip(langs.as_ref())
+            .and_then(|(race, langs)| langs.0.name(u32::from(race)))
+            .map(str::to_string);
+        if pushed.as_ref() != Some(&name) {
+            script.set_default_language(name.clone());
+            *pushed = Some(name);
+        }
+    })
 }
 
 /// Seed each VM's `Exhaustion.dbc` table; a failed load keeps the shipped-table fallback.
 fn load_exhaustion_rows(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     assets: Option<Res<benilla_assets::WorldAssets>>,
     mut seeded: Local<crate::ui_script::VmMemo<bool>>,
 ) {
-    let (Some(mut script), Some(assets)) = (script, assets) else {
-        return;
-    };
-    if !seeded.claim(&script) {
-        return;
-    }
-    let loaded = {
-        use benilla_assets::LockRecover;
-        let mut chain = assets.chain.lock_recover();
-        benilla_formats::load_exhaustion(&mut chain)
-    };
-    match loaded {
-        Ok(rows) => {
-            info!("ui_unit: {} Exhaustion.dbc rest states", rows.len());
-            script.set_exhaustion_rows(
-                rows.into_iter()
-                    .map(|r| (r.id as u8, r.name, f64::from(r.factor)))
-                    .collect(),
-            );
+    hosted_vm.run(|script| {
+        let (Some(script), Some(assets)) = (script, assets) else {
+            return;
+        };
+        if !seeded.claim(&script) {
+            return;
         }
-        Err(e) => error!("ui_unit: Exhaustion.dbc failed — shipped-table fallback holds: {e:#}"),
-    }
+        let loaded = {
+            use benilla_assets::LockRecover;
+            let mut chain = assets.chain.lock_recover();
+            benilla_formats::load_exhaustion(&mut chain)
+        };
+        match loaded {
+            Ok(rows) => {
+                info!("ui_unit: {} Exhaustion.dbc rest states", rows.len());
+                script.set_exhaustion_rows(
+                    rows.into_iter()
+                        .map(|r| (r.id as u8, r.name, f64::from(r.factor)))
+                        .collect(),
+                );
+            }
+            Err(e) => {
+                error!("ui_unit: Exhaustion.dbc failed — shipped-table fallback holds: {e:#}")
+            }
+        }
+    })
 }
 
 /// A swing's `UNIT_COMBAT` on its victim, as `FloatSwingResult 0x6243e0` raises it (`0x4946d0`, at
@@ -795,68 +803,74 @@ fn dist_sq(q: Vec3, p: Vec3) -> f64 {
 /// ([`UiScript::bound_unit_tokens`]), the fan-out `0x515c50` builds; the first sight of a VM only
 /// seats the count, since a table that landed before it signalled no interface that exists now.
 fn fire_faction_on_forced_table(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     reputations: Res<Reputations>,
     mut seen: Local<crate::ui_script::VmMemo<Option<u64>>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let arrivals = reputations.forced_arrivals();
-    let seen = seen.get(&script);
-    let arrived = seen.is_some_and(|last| last != arrivals);
-    *seen = Some(arrivals);
-    if !arrived {
-        return;
-    }
-    for token in script.bound_unit_tokens() {
-        script.fire_event("UNIT_FACTION", vec![ScriptValue::Str(token)]);
-    }
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        let arrivals = reputations.forced_arrivals();
+        let seen = seen.get(&script);
+        let arrived = seen.is_some_and(|last| last != arrivals);
+        *seen = Some(arrivals);
+        if !arrived {
+            return;
+        }
+        for token in script.bound_unit_tokens() {
+            script.fire_event("UNIT_FACTION", vec![ScriptValue::Str(token)]);
+        }
+    })
 }
 
 /// `PLAYER_CONTROL_LOST`/`GAINED` on a change of the flag `SMSG_CLIENT_CONTROL_UPDATE` writes
 /// (`0x4958e0`), for our own character only (`0x5fa6d0`); the boot value, and a fresh VM's memo, is in control (`0x48f626`).
 fn feed_player_control(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     own_control: Option<Res<crate::player::OwnControlLost>>,
     mut lost: Local<crate::ui_script::VmMemo<bool>>,
 ) {
-    let (Some(mut script), Some(own_control)) = (script, own_control) else {
-        return;
-    };
-    let lost = lost.get(&script);
-    if *lost != own_control.0 {
-        *lost = own_control.0;
-        // `HasFullControl`'s flag rides the same edge.
-        script.set_player_control(!own_control.0);
-        let event = if own_control.0 {
-            "PLAYER_CONTROL_LOST"
-        } else {
-            "PLAYER_CONTROL_GAINED"
+    hosted_vm.run(|script| {
+        let (Some(script), Some(own_control)) = (script, own_control) else {
+            return;
         };
-        script.fire_event(event, vec![]);
-    }
+        let lost = lost.get(&script);
+        if *lost != own_control.0 {
+            *lost = own_control.0;
+            // `HasFullControl`'s flag rides the same edge.
+            script.set_player_control(!own_control.0);
+            let event = if own_control.0 {
+                "PLAYER_CONTROL_LOST"
+            } else {
+                "PLAYER_CONTROL_GAINED"
+            };
+            script.fire_event(event, vec![]);
+        }
+    })
 }
 
 /// `PLAYER_FARSIGHT_FOCUS_CHANGED`: the `PLAYER_FARSIGHT` field callback (`0x5de0d0`) fires it on
 /// every change, whether or not the new guid resolves, so this diffs the field, never the pose.
 fn feed_farsight_focus(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     mut focus: Local<crate::ui_script::VmMemo<Option<u64>>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let Some(store) = self_q.iter().next() else {
-        return;
-    };
-    let anchor = store.0.player_farsight();
-    let focus = focus.get(&script);
-    if *focus != anchor {
-        *focus = anchor;
-        script.fire_event("PLAYER_FARSIGHT_FOCUS_CHANGED", vec![]);
-    }
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        let Some(store) = self_q.iter().next() else {
+            return;
+        };
+        let anchor = store.0.player_farsight();
+        let focus = focus.get(&script);
+        if *focus != anchor {
+            *focus = anchor;
+            script.fire_event("PLAYER_FARSIGHT_FOCUS_CHANGED", vec![]);
+        }
+    })
 }
 
 /// Feed the unit reach map: per held unit a token can name, its squared distance and whether it
@@ -1151,40 +1165,52 @@ pub(crate) fn enrich_unit(
 }
 
 /// Drain `TogglePVP` into `CMSG_TOGGLE_PVP`; `/pvp` is the reference's only caller.
-fn drain_pvp_toggles(script: Option<NonSendMut<UiScript>>, commands: Res<NetCommands>) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for _ in 0..script.take_pvp_toggles() {
-        let _ = commands.0.send(crate::net::ClientCommand::TogglePvp);
-    }
+fn drain_pvp_toggles(mut hosted_vm: crate::script_calls::HostedVm, commands: Res<NetCommands>) {
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        for _ in 0..script.take_pvp_toggles() {
+            let _ = commands.0.send(crate::net::ClientCommand::TogglePvp);
+        }
+    })
 }
 
 /// Drain the `ShowHelm`/`ShowCloak` flips into `CMSG_TOGGLE_HELM`/`CMSG_TOGGLE_CLOAK`; the VM,
 /// which alone knows what the Options row did, has already decided each is needed.
-fn drain_worn_display_toggles(script: Option<NonSendMut<UiScript>>, commands: Res<NetCommands>) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for which in script.take_worn_display_toggles() {
-        let _ = commands.0.send(match which {
-            WornDisplay::Helm => crate::net::ClientCommand::ToggleHelm,
-            WornDisplay::Cloak => crate::net::ClientCommand::ToggleCloak,
-        });
-    }
+fn drain_worn_display_toggles(
+    mut hosted_vm: crate::script_calls::HostedVm,
+    commands: Res<NetCommands>,
+) {
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        for which in script.take_worn_display_toggles() {
+            let _ = commands.0.send(match which {
+                WornDisplay::Helm => crate::net::ClientCommand::ToggleHelm,
+                WornDisplay::Cloak => crate::net::ClientCommand::ToggleCloak,
+            });
+        }
+    })
 }
 
 /// Drain `SetActionBarToggles` into `CMSG_SET_ACTIONBAR_TOGGLES` (sent at `0x4e771d`), one packet
 /// per call: the reference binding neither checks for a change nor coalesces.
-fn drain_action_bar_toggles(script: Option<NonSendMut<UiScript>>, commands: Res<NetCommands>) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for toggles in script.take_action_bar_toggle_sends() {
-        let _ = commands
-            .0
-            .send(crate::net::ClientCommand::SetActionBarToggles { toggles });
-    }
+fn drain_action_bar_toggles(
+    mut hosted_vm: crate::script_calls::HostedVm,
+    commands: Res<NetCommands>,
+) {
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        for toggles in script.take_action_bar_toggle_sends() {
+            let _ = commands
+                .0
+                .send(crate::net::ClientCommand::SetActionBarToggles { toggles });
+        }
+    })
 }
 
 /// Inside a rest area (vmangos `Player.h:320`), the bit `IsResting` (`0x516ea0`) tests.

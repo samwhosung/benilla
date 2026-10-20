@@ -25,8 +25,6 @@ use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::tasks::IoTaskPool;
 
-use benilla_ui::script::UiScript;
-
 use crate::ui_script::{UiFeed, UiInput};
 
 /// The reference's file stem.
@@ -98,16 +96,23 @@ impl ScreenshotState {
 /// this frame's: that order is the one-frame hold (module doc).
 fn ask_for_captures(
     mut commands: Commands,
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut state: ResMut<ScreenshotState>,
 ) {
+    hosted_vm.run(|script| {
+        spawn_pending(&mut commands, &mut state);
+        if let Some(script) = script {
+            state.pending += script.take_screenshot_asks();
+        }
+    })
+}
+
+/// The captures last frame asked for, each a screenshot of the primary window.
+fn spawn_pending(commands: &mut Commands, state: &mut ScreenshotState) {
     for _ in 0..std::mem::take(&mut state.pending) {
         commands
             .spawn(Screenshot::primary_window())
             .observe(write_capture);
-    }
-    if let Some(mut script) = script {
-        state.pending += script.take_screenshot_asks();
     }
 }
 
@@ -151,25 +156,27 @@ fn write_capture(captured: On<ScreenshotCaptured>, mut state: ResMut<ScreenshotS
 
 /// Answers finished writes with the VM's success or failure event, always a frame after the
 /// capture, so the status cannot be in the picture.
-fn report_captures(script: Option<NonSendMut<UiScript>>, state: Res<ScreenshotState>) {
-    let Some(mut script) = script else {
-        return;
-    };
-    while let Ok(outcome) = state.rx.try_recv() {
-        match outcome {
-            Outcome::Saved(path) => {
-                // At info: the folder is not where WoW puts it.
-                info!("screenshot: wrote {}", path.display());
-                let event = script.screenshot_event(true);
-                script.fire_event(event, Vec::new());
-            }
-            Outcome::Failed(why) => {
-                warn!("screenshot: FAILED — {why}");
-                let event = script.screenshot_event(false);
-                script.fire_event(event, Vec::new());
+fn report_captures(mut hosted_vm: crate::script_calls::HostedVm, state: Res<ScreenshotState>) {
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        while let Ok(outcome) = state.rx.try_recv() {
+            match outcome {
+                Outcome::Saved(path) => {
+                    // At info: the folder is not where WoW puts it.
+                    info!("screenshot: wrote {}", path.display());
+                    let event = script.screenshot_event(true);
+                    script.fire_event(event, Vec::new());
+                }
+                Outcome::Failed(why) => {
+                    warn!("screenshot: FAILED — {why}");
+                    let event = script.screenshot_event(false);
+                    script.fire_event(event, Vec::new());
+                }
             }
         }
-    }
+    })
 }
 
 pub(crate) struct ScreenshotPlugin;
@@ -191,6 +198,7 @@ impl Plugin for ScreenshotPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use benilla_ui::script::UiScript;
 
     #[test]
     fn names_follow_the_reference_and_never_collide() {
@@ -303,7 +311,7 @@ mod tests {
     }
 
     /// The real [`ask_for_captures`] with no VM, as at character select.
-    fn spawn_pending_only(commands: Commands, state: ResMut<ScreenshotState>) {
-        ask_for_captures(commands, None, state);
+    fn spawn_pending_only(mut commands: Commands, mut state: ResMut<ScreenshotState>) {
+        spawn_pending(&mut commands, &mut state);
     }
 }

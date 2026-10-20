@@ -5,6 +5,7 @@ use super::*;
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
 use crate::ui_action::{real_spells, PlayerActions, Spells};
+use benilla_ui::script::UiScript;
 
 /// The view alone, read through the shipped strings, for the cell tests; the feed keeps what it
 /// read beside it.

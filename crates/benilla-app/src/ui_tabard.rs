@@ -161,7 +161,7 @@ pub(crate) fn preflight(
 }
 
 fn feed_tabard(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut open: ResMut<TabardOpen>,
     mut design: ResMut<TabardDesign>,
     guilds: Res<GuildState>,
@@ -169,49 +169,51 @@ fn feed_tabard(
     mut last_host: Local<crate::ui_script::VmMemo<Option<TabardHost>>>,
     mut sink: crate::ui_action::MessageSink,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    // Our guild's cached record and the latch, pushed on change.
-    let guild_id = self_q.iter().next().map_or(0, |s| s.0.player_guild_id());
-    let host = TabardHost {
-        guild_record: guilds.own_emblem_record(guild_id),
-        save_pending: open.save_pending,
-    };
-    let last = last_host.get(&script);
-    if *last != Some(host) {
-        *last = Some(host);
-        script.set_tabard_host(host);
-    }
+    hosted_vm.run(|script| {
+        let Some(mut script) = script else {
+            return;
+        };
+        // Our guild's cached record and the latch, pushed on change.
+        let guild_id = self_q.iter().next().map_or(0, |s| s.0.player_guild_id());
+        let host = TabardHost {
+            guild_record: guilds.own_emblem_record(guild_id),
+            save_pending: open.save_pending,
+        };
+        let last = last_host.get(&script);
+        if *last != Some(host) {
+            *last = Some(host);
+            script.set_tabard_host(host);
+        }
 
-    // The events, in the reference's order.
-    if std::mem::take(&mut open.open_event) {
-        script.fire_event("OPEN_TABARD_FRAME", vec![]);
-    }
-    for _ in 0..std::mem::take(&mut open.pending_events) {
-        script.fire_event("TABARD_SAVE_PENDING", vec![]);
-    }
-    // `TABARD_CANSAVE_CHANGED` is `RefreshGuildTag`'s (`0x5e0902`), raised by its callers
-    // ([`crate::field_watch::guild_tag`]); a guild record landing or dropped raises nothing.
+        // The events, in the reference's order.
+        if std::mem::take(&mut open.open_event) {
+            script.fire_event("OPEN_TABARD_FRAME", vec![]);
+        }
+        for _ in 0..std::mem::take(&mut open.pending_events) {
+            script.fire_event("TABARD_SAVE_PENDING", vec![]);
+        }
+        // `TABARD_CANSAVE_CHANGED` is `RefreshGuildTag`'s (`0x5e0902`), raised by its callers
+        // ([`crate::field_watch::guild_tag`]); a guild record landing or dropped raises nothing.
 
-    let lines: Vec<_> = open
-        .lines
-        .drain(..)
-        .filter_map(|key| crate::ui_action::keyed_line(&script, key))
-        .collect();
-    crate::ui_action::show_messages(&mut script, &mut sink, "ui_tabard", lines);
+        let lines: Vec<_> = open
+            .lines
+            .drain(..)
+            .filter_map(|key| crate::ui_action::keyed_line(&script, key))
+            .collect();
+        crate::ui_action::show_messages(&mut script, &mut sink, "ui_tabard", lines);
 
-    // The body wears the pane's design while the designer is open; `TabardModel:SetUnit("player")`
-    // mirrors that body.
-    let shown = open.vendor.is_some() && script.frame_visible("TabardFrame");
-    let current = shown.then(|| script.tabard_design()).flatten();
-    if design.0 != current {
-        design.0 = current;
-    }
+        // The body wears the pane's design while the designer is open; `TabardModel:SetUnit("player")`
+        // mirrors that body.
+        let shown = open.vendor.is_some() && script.frame_visible("TabardFrame");
+        let current = shown.then(|| script.tabard_design()).flatten();
+        if design.0 != current {
+            design.0 = current;
+        }
+    })
 }
 
 fn drain_tabard(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut open: ResMut<TabardOpen>,
     mut world_commands: Commands,
     guilds: Res<GuildState>,
@@ -219,51 +221,53 @@ fn drain_tabard(
     commands: Res<NetCommands>,
     mut sink: crate::ui_action::MessageSink,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for intent in script.take_tabard_intents() {
-        match intent {
-            TabardIntent::Close => crate::ui_session::queue(&mut world_commands, close_core),
-            TabardIntent::Save(design) => {
-                // The reference sends the global interaction target (`0x502a60` reads
-                // `[0xb4e2d0]`), which the open set to this vendor: the same guid.
-                let Some(vendor) = open.vendor else {
-                    continue;
-                };
-                let store = self_q.iter().next();
-                let guild_id = store.map_or(0, |s| s.0.player_guild_id());
-                let record = guilds.own_emblem_record(guild_id);
-                let rank = store.map_or(0, |s| s.0.player_guild_rank());
-                let purse = store.and_then(|s| s.0.player_money()).unwrap_or(0);
-                match preflight(design, record, rank, purse) {
-                    Err(key) => {
-                        if let Some(line) = crate::ui_action::keyed_line(&script, key) {
-                            crate::ui_action::show_messages(
-                                &mut script,
-                                &mut sink,
-                                "ui_tabard",
-                                [line],
-                            );
+    hosted_vm.run(|script| {
+        let Some(mut script) = script else {
+            return;
+        };
+        for intent in script.take_tabard_intents() {
+            match intent {
+                TabardIntent::Close => crate::ui_session::queue(&mut world_commands, close_core),
+                TabardIntent::Save(design) => {
+                    // The reference sends the global interaction target (`0x502a60` reads
+                    // `[0xb4e2d0]`), which the open set to this vendor: the same guid.
+                    let Some(vendor) = open.vendor else {
+                        continue;
+                    };
+                    let store = self_q.iter().next();
+                    let guild_id = store.map_or(0, |s| s.0.player_guild_id());
+                    let record = guilds.own_emblem_record(guild_id);
+                    let rank = store.map_or(0, |s| s.0.player_guild_rank());
+                    let purse = store.and_then(|s| s.0.player_money()).unwrap_or(0);
+                    match preflight(design, record, rank, purse) {
+                        Err(key) => {
+                            if let Some(line) = crate::ui_action::keyed_line(&script, key) {
+                                crate::ui_action::show_messages(
+                                    &mut script,
+                                    &mut sink,
+                                    "ui_tabard",
+                                    [line],
+                                );
+                            }
                         }
-                    }
-                    Ok(design) => {
-                        let _ = commands
-                            .0
-                            .send(ClientCommand::SaveGuildEmblem { vendor, design });
-                        // The latch, then the event (`0x5e05f5`, `0x5e05fc`): a handler
-                        // calling `CanSaveTabardNow()` already sees nil.
-                        open.save_pending = true;
-                        script.set_tabard_host(TabardHost {
-                            guild_record: record,
-                            save_pending: true,
-                        });
-                        script.fire_event("TABARD_SAVE_PENDING", vec![]);
+                        Ok(design) => {
+                            let _ = commands
+                                .0
+                                .send(ClientCommand::SaveGuildEmblem { vendor, design });
+                            // The latch, then the event (`0x5e05f5`, `0x5e05fc`): a handler
+                            // calling `CanSaveTabardNow()` already sees nil.
+                            open.save_pending = true;
+                            script.set_tabard_host(TabardHost {
+                                guild_record: record,
+                                save_pending: true,
+                            });
+                            script.fire_event("TABARD_SAVE_PENDING", vec![]);
+                        }
                     }
                 }
             }
         }
-    }
+    })
 }
 
 fn reset_on_world_enter(

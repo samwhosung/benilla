@@ -15,7 +15,7 @@
 //! (`SkillHandler.cpp:52`), which the 1.12 client takes as its Accept and answers, looping; this
 //! drops a zero-guid question, because it means there is nothing to ask.
 
-use benilla_ui::script::{ScriptValue, UiScript};
+use benilla_ui::script::ScriptValue;
 use bevy::prelude::*;
 
 use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfPlayer};
@@ -72,81 +72,88 @@ impl NpcSession for TalentWipeState {
 
 /// Publishes `CheckTalentMasterDist()` every frame and fires `CONFIRM_TALENT_WIPE(cost)` for a
 /// question still owed.
-fn feed_talent_wipe(script: Option<NonSendMut<UiScript>>, mut wipe: ResMut<TalentWipeState>) {
-    let Some(mut script) = script else {
-        return;
-    };
-    script.set_talent_master_pending(wipe.pending().is_some());
+fn feed_talent_wipe(
+    mut hosted_vm: crate::script_calls::HostedVm,
+    mut wipe: ResMut<TalentWipeState>,
+) {
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        script.set_talent_master_pending(wipe.pending().is_some());
 
-    if !wipe.ask {
-        return;
-    }
-    wipe.ask = false;
-    // The cost in copper as a number, the reference's `"%d"` fire (`0x5dfa3f`), which the
-    // dialog's `MoneyFrame_Update` takes.
-    script.fire_event(
-        "CONFIRM_TALENT_WIPE",
-        vec![ScriptValue::Int(i64::from(wipe.cost))],
-    );
+        if !wipe.ask {
+            return;
+        }
+        wipe.ask = false;
+        // The cost in copper as a number, the reference's `"%d"` fire (`0x5dfa3f`), which the
+        // dialog's `MoneyFrame_Update` takes.
+        script.fire_event(
+            "CONFIRM_TALENT_WIPE",
+            vec![ScriptValue::Int(i64::from(wipe.cost))],
+        );
+    })
 }
 
 /// Turns the dialog's Accept into the outbound `MSG_TALENT_WIPE_CONFIRM`, or the reference's
 /// not-enough-money line, only while a question is pending: with no guid latched, the reference
 /// finds no unit and sends nothing (`0x5df9be`).
 fn drain_talent_wipe(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut wipe: ResMut<TalentWipeState>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     commands: Res<NetCommands>,
     mut sink: crate::ui_action::MessageSink,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let confirms = script.take_talent_wipe_confirms();
-    if confirms == 0 {
-        return;
-    }
-    let Some(npc) = wipe.pending() else {
-        return;
-    };
-    // The client's purse check (`0x5dfa79`): over budget is a red line and no packet.
-    let money = self_q
-        .single()
-        .ok()
-        .and_then(|store| store.0.player_money())
-        .unwrap_or(0);
-    if wipe.cost > money {
-        debug!(
-            "ui_talent_wipe: respec costs {} copper, purse holds {money} — refused client-side",
-            wipe.cost
-        );
-        // `DisplayError(0x25)` at `0x5dfa81`, `ERR_NOT_ENOUGH_MONEY`: the red line and, as that
-        // row's `+0x0c` is `0x28`, the spoken one.
-        let text = script
-            .lua()
-            .globals()
-            .get::<String>("ERR_NOT_ENOUGH_MONEY")
-            .unwrap_or_default();
-        if !text.is_empty() {
-            crate::ui_action::show_messages(
-                &mut script,
-                &mut sink,
-                "ui_talent_wipe",
-                [crate::ui_action::Shown::keyed("ERR_NOT_ENOUGH_MONEY", text)],
-            );
+    hosted_vm.run(|script| {
+        let Some(mut script) = script else {
+            return;
+        };
+        let confirms = script.take_talent_wipe_confirms();
+        if confirms == 0 {
+            return;
         }
-        return;
-    }
-    for _ in 0..confirms {
-        debug!("ui_talent_wipe: confirming the wipe at trainer {npc:#x}");
-        let _ = commands
-            .0
-            .send(ClientCommand::TalentWipeConfirm { trainer: npc });
-    }
-    // Deviation: the reference never clears its latch (`0xc4d7a0`); this does once the answer is
-    // sent, because the reference's dialog is gone by then and a second Accept would reset twice.
-    wipe.clear();
+        let Some(npc) = wipe.pending() else {
+            return;
+        };
+        // The client's purse check (`0x5dfa79`): over budget is a red line and no packet.
+        let money = self_q
+            .single()
+            .ok()
+            .and_then(|store| store.0.player_money())
+            .unwrap_or(0);
+        if wipe.cost > money {
+            debug!(
+                "ui_talent_wipe: respec costs {} copper, purse holds {money} — refused client-side",
+                wipe.cost
+            );
+            // `DisplayError(0x25)` at `0x5dfa81`, `ERR_NOT_ENOUGH_MONEY`: the red line and, as that
+            // row's `+0x0c` is `0x28`, the spoken one.
+            let text = script
+                .lua()
+                .globals()
+                .get::<String>("ERR_NOT_ENOUGH_MONEY")
+                .unwrap_or_default();
+            if !text.is_empty() {
+                crate::ui_action::show_messages(
+                    &mut script,
+                    &mut sink,
+                    "ui_talent_wipe",
+                    [crate::ui_action::Shown::keyed("ERR_NOT_ENOUGH_MONEY", text)],
+                );
+            }
+            return;
+        }
+        for _ in 0..confirms {
+            debug!("ui_talent_wipe: confirming the wipe at trainer {npc:#x}");
+            let _ = commands
+                .0
+                .send(ClientCommand::TalentWipeConfirm { trainer: npc });
+        }
+        // Deviation: the reference never clears its latch (`0xc4d7a0`); this does once the answer is
+        // sent, because the reference's dialog is gone by then and a second Accept would reset twice.
+        wipe.clear();
+    })
 }
 
 /// The talent-wipe question's packet handler.

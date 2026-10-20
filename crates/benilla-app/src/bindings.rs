@@ -278,31 +278,33 @@ fn read_diff(path: &Option<std::path::PathBuf>) -> Option<Vec<(String, Vec<Strin
 
 /// Drain the VM's binding requests: `SaveBindings` writes the set's diff; saving the account set
 /// deletes the character file.
-fn drain_binding_requests(script: Option<NonSendMut<UiScript>>, files: Res<BindingFiles>) {
-    let Some(mut script) = script else { return };
-    for req in script.take_keybind_requests() {
-        let KeybindRequest::Save(which) = req;
-        let text = store::to_diff(&script.keybind_snapshot(), &script.default_bindings());
-        let path = match which {
-            1 => &files.account,
-            2 => &files.character,
-            _ => continue,
-        };
-        if let Some(path) = path {
-            if let Err(e) = crate::local_state::write_atomic(path, &text) {
-                warn!("bindings: saving {}: {e}", path.display());
+fn drain_binding_requests(mut hosted_vm: crate::script_calls::HostedVm, files: Res<BindingFiles>) {
+    hosted_vm.run(|script| {
+        let Some(script) = script else { return };
+        for req in script.take_keybind_requests() {
+            let KeybindRequest::Save(which) = req;
+            let text = store::to_diff(&script.keybind_snapshot(), &script.default_bindings());
+            let path = match which {
+                1 => &files.account,
+                2 => &files.character,
+                _ => continue,
+            };
+            if let Some(path) = path {
+                if let Err(e) = crate::local_state::write_atomic(path, &text) {
+                    warn!("bindings: saving {}: {e}", path.display());
+                }
             }
-        }
-        if which == 1 {
-            if let Some(chr) = &files.character {
-                match std::fs::remove_file(chr) {
-                    Ok(()) => info!("bindings: character-specific set deleted"),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => warn!("bindings: deleting {}: {e}", chr.display()),
+            if which == 1 {
+                if let Some(chr) = &files.character {
+                    match std::fs::remove_file(chr) {
+                        Ok(()) => info!("bindings: character-specific set deleted"),
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => warn!("bindings: deleting {}: {e}", chr.display()),
+                    }
                 }
             }
         }
-    }
+    })
 }
 
 /// Rebuild the dispatch map when the engine table moved (a rebind, a set switch, the seed, a
@@ -310,24 +312,29 @@ fn drain_binding_requests(script: Option<NonSendMut<UiScript>>, files: Res<Bindi
 /// consumers (the action bar's hotkey corners) repaint. The reference signals it from `SetBinding`
 /// (`0x4b805b`), which signals in place, and from the copy of a set into the live table
 /// (`0x4b649d`); reading a `Bindings.xml` (`0x4b6f70`) signals nothing.
-fn sync_dispatch(script: Option<NonSendMut<UiScript>>, mut dispatch: ResMut<BindingDispatch>) {
-    let Some(mut script) = script else { return };
-    let generation = script.keybinds_generation();
-    if *dispatch.seen_generation.get(&script) != Some(generation) {
-        *dispatch.seen_generation.get(&script) = Some(generation);
-        dispatch.map.clear();
-        for (key, command) in script.binding_keys() {
-            match Chord::parse(&key) {
-                Some(ch) => {
-                    dispatch.map.insert(ch, command);
+fn sync_dispatch(
+    mut hosted_vm: crate::script_calls::HostedVm,
+    mut dispatch: ResMut<BindingDispatch>,
+) {
+    hosted_vm.run(|script| {
+        let Some(script) = script else { return };
+        let generation = script.keybinds_generation();
+        if *dispatch.seen_generation.get(&script) != Some(generation) {
+            *dispatch.seen_generation.get(&script) = Some(generation);
+            dispatch.map.clear();
+            for (key, command) in script.binding_keys() {
+                match Chord::parse(&key) {
+                    Some(ch) => {
+                        dispatch.map.insert(ch, command);
+                    }
+                    None => warn!("bindings: {command}: unpressable chord '{key}' (unknown token)"),
                 }
-                None => warn!("bindings: {command}: unpressable chord '{key}' (unknown token)"),
             }
         }
-    }
-    if script.take_keybinds_signal_owed() {
-        script.fire_event("UPDATE_BINDINGS", vec![]);
-    }
+        if script.take_keybinds_signal_owed() {
+            script.fire_event("UPDATE_BINDINGS", vec![]);
+        }
+    })
 }
 
 /// A wheel delta in lines (notches), whatever unit the OS reported: a trackpad's `Pixel` deltas

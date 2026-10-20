@@ -793,7 +793,7 @@ fn drain_trade_touches(world: &mut World) {
 /// (`0x4674cf` → `0x464920`), so the clears and `TRADE_PLAYER_ITEM_CHANGED` belong ahead of the
 /// close, not a stage after it.
 fn resignal_trade_items(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut cursor: ResMut<TradeTouchCursor>,
     messages: Res<Messages<crate::item_watch::ItemNotice>>,
     mut trade: ResMut<TradeSession>,
@@ -803,13 +803,14 @@ fn resignal_trade_items(
     icons: Option<Res<ItemDisplays>>,
     names: Res<NameCache>,
 ) {
+    hosted_vm.run(|script| {
     use crate::item_watch::TradeTouch;
     let touches: Vec<TradeTouch> = cursor
         .0
         .read(&messages)
         .filter_map(crate::item_watch::ItemNotice::trade)
         .collect();
-    let Some(mut script) = script else {
+    let Some(script) = script else {
         return;
     };
     for touch in touches {
@@ -857,6 +858,7 @@ fn resignal_trade_items(
             }
         }
     }
+})
 }
 
 /// Push the trade into the VM and fire its events on a change, diffed against `Local` memory;

@@ -23,20 +23,22 @@ pub(crate) struct ChatWindows {
 /// `CHAT_MSG_SYSTEM` fired inside the call, as the reference's does, so the log files and the
 /// row's sound are what is left.
 pub(crate) fn tee_shown_lines(
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut windows: ResMut<ChatWindows>,
     sounds: Res<crate::sound::MessageSounds>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for (key, line) in script.take_shown_chat_lines() {
-        if let Some(record) = benilla_ui::messages::by_key(key) {
-            sounds.push(record);
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        for (key, line) in script.take_shown_chat_lines() {
+            if let Some(record) = benilla_ui::messages::by_key(key) {
+                sounds.push(record);
+            }
+            // A system line is composed verbatim (`ChatFrame.lua:1395`).
+            windows.logs.record(false, &line);
         }
-        // A system line is composed verbatim (`ChatFrame.lua:1395`).
-        windows.logs.record(false, &line);
-    }
+    })
 }
 
 /// Fire one event's `CHAT_MSG_*` at the VM, where the stock `ChatFrame_OnEvent` prints it, and

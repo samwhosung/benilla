@@ -531,29 +531,31 @@ fn money_split(money: i32) -> (u32, u32) {
 /// is 0 (`0x4de3d3`). Each response after the VM's first frame signals `QUEST_LOG_UPDATE` once
 /// (`0x4def1b`).
 fn feed_server_clock(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     clock: Res<crate::net::ServerWallClock>,
     mut seen: Local<crate::ui_script::VmMemo<Option<u64>>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let samples = clock.samples();
-    let seen = seen.get(&script);
-    let synced = seen.map_or(0, |was| samples.saturating_sub(was));
-    *seen = Some(samples);
-    let Some(now) = clock.now_unix() else {
-        let local = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0.0, |d| d.as_secs_f64());
-        script.set_local_unix_time(local);
-        return;
-    };
-    script.set_server_unix_time(now);
-    script.set_clock_sync_zero(clock.zero_offset());
-    for _ in 0..synced {
-        script.quest_log_clock_synced();
-    }
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        let samples = clock.samples();
+        let seen = seen.get(&script);
+        let synced = seen.map_or(0, |was| samples.saturating_sub(was));
+        *seen = Some(samples);
+        let Some(now) = clock.now_unix() else {
+            let local = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0.0, |d| d.as_secs_f64());
+            script.set_local_unix_time(local);
+            return;
+        };
+        script.set_server_unix_time(now);
+        script.set_clock_sync_zero(clock.zero_offset());
+        for _ in 0..synced {
+            script.quest_log_clock_synced();
+        }
+    })
 }
 
 /// The reference's header for `zoneOrSort` 0 (`0x84b4ec`). Only a cached template makes a header
@@ -718,7 +720,7 @@ pub(crate) struct QuestLogReads<'w, 's> {
 /// (`0x4df7b0`) for each item notice that carries it, fires the callbacks whose records landed,
 /// and shows the quest-update toasts. An idle frame does none of it.
 pub(crate) fn feed_quest_log(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     reads: QuestLogReads,
     mut quest_log: ResMut<QuestLog>,
     // The toasts are message-catalog rows, whose surface and sound the sink reads.
@@ -731,205 +733,211 @@ pub(crate) fn feed_quest_log(
     mut field_notices: MessageReader<FieldNotice>,
     mut memo: Local<crate::ui_script::VmMemo<FeedMemo>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let memo = memo.get(&script);
-    let Some((store, guid)) = reads.self_q.iter().next() else {
-        if memo.player.take().is_some() {
-            script.set_quest_log_player(false);
+    hosted_vm.run(|script| {
+        let Some(mut script) = script else {
+            return;
+        };
+        let memo = memo.get(&script);
+        let Some((store, guid)) = reads.self_q.iter().next() else {
+            if memo.player.take().is_some() {
+                script.set_quest_log_player(false);
+            }
+            return;
+        };
+        let store = &store.0;
+        let slots_moved = field_notices
+            .read()
+            .any(|n| matches!(n, FieldNotice::QuestLog));
+        let mut item_changes: Vec<u32> = Vec::new();
+        let mut bags_moved = !reads.changed_items.is_empty();
+        for notice in item_notices.read() {
+            bags_moved = true;
+            // `0x4df7b0`'s three callers: the record set up, the stack count, the deactivation.
+            if let ItemNotice::Record { entry, .. }
+            | ItemNotice::StackCount { entry, .. }
+            | ItemNotice::Destroyed { entry, .. } = *notice
+            {
+                item_changes.push(entry);
+            }
         }
-        return;
-    };
-    let store = &store.0;
-    let slots_moved = field_notices
-        .read()
-        .any(|n| matches!(n, FieldNotice::QuestLog));
-    let mut item_changes: Vec<u32> = Vec::new();
-    let mut bags_moved = !reads.changed_items.is_empty();
-    for notice in item_notices.read() {
-        bags_moved = true;
-        // `0x4df7b0`'s three callers: the record set up, the stack count, the deactivation.
-        if let ItemNotice::Record { entry, .. }
-        | ItemNotice::StackCount { entry, .. }
-        | ItemNotice::Destroyed { entry, .. } = *notice
-        {
-            item_changes.push(entry);
-        }
-    }
 
-    let seat = memo.player != Some(guid.0);
-    // The rebuild's misses, each looked up with a callback (`0x4de65f`) below.
-    let asks = script.take_quest_record_asks();
-    let landing = !quest_log.fresh.is_empty() || !asks.is_empty();
-    // The macro inputs, read when a record is to be built or a name may have landed.
-    let subject = (seat || landing || reads.names.is_changed() || reads.states.is_changed())
-        .then(|| {
-            crate::npc_text::player_identity(&reads.self_q, &reads.names, reads.unit_names.get())
-        })
-        .flatten();
-    let macros = crate::npc_text::MacroContext {
-        subject: subject.as_ref(),
-        states: &reads.states,
-    };
-    let tables = RecordTables {
-        headers: reads.header_names.as_deref(),
-        tags: reads.tag_names.as_deref(),
-        macros: &macros,
-        spells: reads.spells.as_deref(),
-        factions: reads
-            .factions
-            .as_deref()
-            .map(crate::target::Factions::catalog),
-    };
-    let key: Option<SubjectKey> = subject
-        .as_ref()
-        .map(|s| (s.name.clone(), s.race.clone(), s.class.clone(), s.gender));
+        let seat = memo.player != Some(guid.0);
+        // The rebuild's misses, each looked up with a callback (`0x4de65f`) below.
+        let asks = script.take_quest_record_asks();
+        let landing = !quest_log.fresh.is_empty() || !asks.is_empty();
+        // The macro inputs, read when a record is to be built or a name may have landed.
+        let subject = (seat || landing || reads.names.is_changed() || reads.states.is_changed())
+            .then(|| {
+                crate::npc_text::player_identity(
+                    &reads.self_q,
+                    &reads.names,
+                    reads.unit_names.get(),
+                )
+            })
+            .flatten();
+        let macros = crate::npc_text::MacroContext {
+            subject: subject.as_ref(),
+            states: &reads.states,
+        };
+        let tables = RecordTables {
+            headers: reads.header_names.as_deref(),
+            tags: reads.tag_names.as_deref(),
+            macros: &macros,
+            spells: reads.spells.as_deref(),
+            factions: reads
+                .factions
+                .as_deref()
+                .map(crate::target::Factions::catalog),
+        };
+        let key: Option<SubjectKey> = subject
+            .as_ref()
+            .map(|s| (s.name.clone(), s.race.clone(), s.class.clone(), s.gender));
 
-    if seat {
-        // The reference's records and slots outlive a `/reload` in its caches and descriptor; a
-        // new VM is seated with both before its world-enter cascade rebuilds the list.
-        // So are the creature names, which the leaderboard reads off the cache (`0xc0e354`).
-        memo.player = Some(guid.0);
-        script.set_quest_log_player(true);
-        for (&id, t) in quest_log.templates.iter() {
-            script.seed_quest_record(id, record_view(t, &tables));
-        }
-        for (entry, name) in reads.names.creature_names() {
-            script.set_quest_creature_name(entry, name.to_string());
-        }
-        memo.creatures_seen = reads.names.creatures_landed_since(usize::MAX).1;
-        script.set_quest_slots(slot_views(store));
-        memo.prior = None;
-        memo.subject = key;
-    } else if (subject.is_some() && memo.subject != key)
-        || (reads.states.is_changed()
-            && quest_log.templates.iter().any(|(_, t)| {
-                has_world_state_token(&t.details) || has_world_state_token(&t.objectives_text)
-            }))
-    {
-        // The text expands against the player: a name that lands, or a world state a quest's text
-        // reads, expands the held records again, with nothing waiting on them.
-        if subject.is_some() {
+        if seat {
+            // The reference's records and slots outlive a `/reload` in its caches and descriptor; a
+            // new VM is seated with both before its world-enter cascade rebuilds the list.
+            // So are the creature names, which the leaderboard reads off the cache (`0xc0e354`).
+            memo.player = Some(guid.0);
+            script.set_quest_log_player(true);
+            for (&id, t) in quest_log.templates.iter() {
+                script.seed_quest_record(id, record_view(t, &tables));
+            }
+            for (entry, name) in reads.names.creature_names() {
+                script.set_quest_creature_name(entry, name.to_string());
+            }
+            memo.creatures_seen = reads.names.creatures_landed_since(usize::MAX).1;
+            script.set_quest_slots(slot_views(store));
+            memo.prior = None;
             memo.subject = key;
-        }
-        for (&id, t) in quest_log.templates.iter() {
-            script.seed_quest_record(id, record_view(t, &tables));
-        }
-    }
-
-    // The templates the packets landed: all held, then the rebuild callbacks they carry.
-    let landed: Vec<(u32, QuestRecordView)> = std::mem::take(&mut quest_log.fresh)
-        .into_iter()
-        .filter_map(|id| Some((id, record_view(quest_log.templates.get(id)?, &tables))))
-        .collect();
-    let records_landed = !landed.is_empty();
-    if records_landed {
-        script.land_quest_records(landed);
-    }
-    for id in std::mem::take(&mut quest_log.refused) {
-        script.refuse_quest_record(id);
-    }
-    let held_now: Vec<(u32, QuestRecordView)> = asks
-        .into_iter()
-        .filter_map(|id| {
-            let t = quest_log.template(id, Ask::Event(&reads.commands))?;
-            Some((id, record_view(t, &tables)))
-        })
-        .collect();
-    let records_landed = records_landed || !held_now.is_empty();
-    if !held_now.is_empty() {
-        script.land_quest_records(held_now);
-    }
-
-    // Every creature name that lands goes to the engine unprompted, as the reference's leaderboard
-    // reads the one cache; a miss is asked, and its refusal only logs (`0x4e07dc`).
-    let (landed, seen) = reads.names.creatures_landed_since(memo.creatures_seen);
-    for &entry in landed {
-        if let Some(name) = reads.names.resolve_creature(entry, 0, Ask::Read) {
-            script.set_quest_creature_name(entry, name.to_string());
-        }
-        quest_log.creature_waits.remove(&entry);
-    }
-    memo.creatures_seen = seen;
-    for entry in script.take_quest_creature_asks() {
-        match reads
-            .names
-            .resolve_creature(entry, 0, Ask::Event(&reads.commands))
+        } else if (subject.is_some() && memo.subject != key)
+            || (reads.states.is_changed()
+                && quest_log.templates.iter().any(|(_, t)| {
+                    has_world_state_token(&t.details) || has_world_state_token(&t.objectives_text)
+                }))
         {
-            Some(name) => script.set_quest_creature_name(entry, name.to_string()),
-            None => {
-                quest_log.creature_waits.insert(entry);
+            // The text expands against the player: a name that lands, or a world state a quest's text
+            // reads, expands the held records again, with nothing waiting on them.
+            if subject.is_some() {
+                memo.subject = key;
+            }
+            for (&id, t) in quest_log.templates.iter() {
+                script.seed_quest_record(id, record_view(t, &tables));
             }
         }
-    }
-    if !quest_log.creature_waits.is_empty() {
-        let names = &reads.names;
-        let mut refused = Vec::new();
-        quest_log.creature_waits.retain(|&entry| {
-            let gone = names.creature_answered_unknown(entry);
-            if gone {
-                refused.push(entry);
-            }
-            !gone
-        });
-        for entry in refused {
-            script.refuse_quest_creature(entry);
-        }
-    }
 
-    // The slot watcher's accept line, whose catalog row carries `QUESTADDED`. The seat is silent:
-    // the initial create fills the whole log.
-    if seat || slots_moved {
-        let now: SlotStates = std::array::from_fn(|slot| {
-            store
-                .player_quest_log(slot as u8)
-                .map_or((0, 0), |s| (s.quest_id, s.state))
-        });
-        if let Some(prior) = memo.prior.as_ref() {
-            for quest_id in accepted_quests(prior, &now) {
-                quest_lines.push(crate::ui_quest::QuestLine::Accepted(quest_id));
-            }
-        }
-        memo.prior = Some(now);
-    }
-
-    // The held counts the item lines read (`0x622130`), current before the field notices fire.
-    if seat || slots_moved || bags_moved || records_landed {
-        let held: HashMap<u32, u32> = (0..PLAYER_QUEST_LOG_SLOTS)
-            .filter_map(|slot| store.player_quest_log(slot))
-            .filter_map(|s| quest_log.templates.get(s.quest_id))
-            .flat_map(|t| t.objectives.iter().map(|o| o.item_id))
-            .filter(|&id| id != 0)
-            .collect::<HashSet<u32>>()
+        // The templates the packets landed: all held, then the rebuild callbacks they carry.
+        let landed: Vec<(u32, QuestRecordView)> = std::mem::take(&mut quest_log.fresh)
             .into_iter()
-            .map(|id| {
-                let count = count_of(store, &reads.objects, id, InventoryScope::QUEST_ITEMS);
-                (id, count)
+            .filter_map(|id| Some((id, record_view(quest_log.templates.get(id)?, &tables))))
+            .collect();
+        let records_landed = !landed.is_empty();
+        if records_landed {
+            script.land_quest_records(landed);
+        }
+        for id in std::mem::take(&mut quest_log.refused) {
+            script.refuse_quest_record(id);
+        }
+        let held_now: Vec<(u32, QuestRecordView)> = asks
+            .into_iter()
+            .filter_map(|id| {
+                let t = quest_log.template(id, Ask::Event(&reads.commands))?;
+                Some((id, record_view(t, &tables)))
             })
             .collect();
-        if held != memo.held {
-            script.set_quest_item_counts(held.clone());
-            memo.held = held;
+        let records_landed = records_landed || !held_now.is_empty();
+        if !held_now.is_empty() {
+            script.land_quest_records(held_now);
         }
-    }
 
-    for _ in 0..std::mem::take(&mut quest_log.faction_rank_moves) {
-        script.quest_log_faction_rank_changed();
-    }
-    // What the expiry latch owes the givers (`0x4df531`).
-    if script.take_quest_giver_refreshes() > 0 {
-        quest_giver.bump_reask();
-    }
-    // The update packets lead the object updates they report (vmangos `Player.cpp:10249`, and the
-    // kill's counter `:14570` before `:14575`), so the toasts go first.
-    if !quest_log.toasts.is_empty() {
-        show_toasts(&mut quest_log, &mut script, &mut sink);
-    }
-    for entry in item_changes {
-        script.quest_item_changed(entry);
-    }
-    script.flush_quest_log_refires();
+        // Every creature name that lands goes to the engine unprompted, as the reference's leaderboard
+        // reads the one cache; a miss is asked, and its refusal only logs (`0x4e07dc`).
+        let (landed, seen) = reads.names.creatures_landed_since(memo.creatures_seen);
+        for &entry in landed {
+            if let Some(name) = reads.names.resolve_creature(entry, 0, Ask::Read) {
+                script.set_quest_creature_name(entry, name.to_string());
+            }
+            quest_log.creature_waits.remove(&entry);
+        }
+        memo.creatures_seen = seen;
+        for entry in script.take_quest_creature_asks() {
+            match reads
+                .names
+                .resolve_creature(entry, 0, Ask::Event(&reads.commands))
+            {
+                Some(name) => script.set_quest_creature_name(entry, name.to_string()),
+                None => {
+                    quest_log.creature_waits.insert(entry);
+                }
+            }
+        }
+        if !quest_log.creature_waits.is_empty() {
+            let names = &reads.names;
+            let mut refused = Vec::new();
+            quest_log.creature_waits.retain(|&entry| {
+                let gone = names.creature_answered_unknown(entry);
+                if gone {
+                    refused.push(entry);
+                }
+                !gone
+            });
+            for entry in refused {
+                script.refuse_quest_creature(entry);
+            }
+        }
+
+        // The slot watcher's accept line, whose catalog row carries `QUESTADDED`. The seat is silent:
+        // the initial create fills the whole log.
+        if seat || slots_moved {
+            let now: SlotStates = std::array::from_fn(|slot| {
+                store
+                    .player_quest_log(slot as u8)
+                    .map_or((0, 0), |s| (s.quest_id, s.state))
+            });
+            if let Some(prior) = memo.prior.as_ref() {
+                for quest_id in accepted_quests(prior, &now) {
+                    quest_lines.push(crate::ui_quest::QuestLine::Accepted(quest_id));
+                }
+            }
+            memo.prior = Some(now);
+        }
+
+        // The held counts the item lines read (`0x622130`), current before the field notices fire.
+        if seat || slots_moved || bags_moved || records_landed {
+            let held: HashMap<u32, u32> = (0..PLAYER_QUEST_LOG_SLOTS)
+                .filter_map(|slot| store.player_quest_log(slot))
+                .filter_map(|s| quest_log.templates.get(s.quest_id))
+                .flat_map(|t| t.objectives.iter().map(|o| o.item_id))
+                .filter(|&id| id != 0)
+                .collect::<HashSet<u32>>()
+                .into_iter()
+                .map(|id| {
+                    let count = count_of(store, &reads.objects, id, InventoryScope::QUEST_ITEMS);
+                    (id, count)
+                })
+                .collect();
+            if held != memo.held {
+                script.set_quest_item_counts(held.clone());
+                memo.held = held;
+            }
+        }
+
+        for _ in 0..std::mem::take(&mut quest_log.faction_rank_moves) {
+            script.quest_log_faction_rank_changed();
+        }
+        // What the expiry latch owes the givers (`0x4df531`).
+        if script.take_quest_giver_refreshes() > 0 {
+            quest_giver.bump_reask();
+        }
+        // The update packets lead the object updates they report (vmangos `Player.cpp:10249`, and the
+        // kill's counter `:14570` before `:14575`), so the toasts go first.
+        if !quest_log.toasts.is_empty() {
+            show_toasts(&mut quest_log, &mut script, &mut sink);
+        }
+        for entry in item_changes {
+            script.quest_item_changed(entry);
+        }
+        script.flush_quest_log_refires();
+    })
 }
 
 /// The quest-update toasts the handlers resolved, each its catalog row, then `QUEST_WATCH_UPDATE`
@@ -1019,26 +1027,36 @@ fn load_quest_tag_names(mut commands: Commands, assets: Option<Res<benilla_asset
 }
 
 /// `QuestLogPushQuest()`: the quest id taken at the click goes out; the server finds the party.
-fn drain_quest_log_pushes(script: Option<NonSendMut<UiScript>>, commands: Res<NetCommands>) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for quest in script.take_quest_log_pushes() {
-        debug!("ui_quest_log: sharing quest {quest} with the party");
-        let _ = commands.0.send(ClientCommand::PushQuestToParty { quest });
-    }
+fn drain_quest_log_pushes(
+    mut hosted_vm: crate::script_calls::HostedVm,
+    commands: Res<NetCommands>,
+) {
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        for quest in script.take_quest_log_pushes() {
+            debug!("ui_quest_log: sharing quest {quest} with the party");
+            let _ = commands.0.send(ClientCommand::PushQuestToParty { quest });
+        }
+    })
 }
 
 /// `AbandonQuest()`'s sends: the slot of the row the engine found for the marked quest
 /// (`0x4df070`).
-fn drain_quest_log_abandons(script: Option<NonSendMut<UiScript>>, commands: Res<NetCommands>) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for slot in script.take_quest_log_abandons() {
-        debug!("ui_quest_log: abandon slot {slot}");
-        let _ = commands.0.send(ClientCommand::QuestlogRemove { slot });
-    }
+fn drain_quest_log_abandons(
+    mut hosted_vm: crate::script_calls::HostedVm,
+    commands: Res<NetCommands>,
+) {
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        for slot in script.take_quest_log_abandons() {
+            debug!("ui_quest_log: abandon slot {slot}");
+            let _ = commands.0.send(ClientCommand::QuestlogRemove { slot });
+        }
+    })
 }
 
 /// Quest-log fixtures for a bare VM: records and slots seated as the feed seats them.

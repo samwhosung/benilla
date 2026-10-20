@@ -182,41 +182,43 @@ pub(crate) fn reconcile_afk_mirror(
 pub(crate) fn movement_clears_afk(
     binds: Res<crate::bindings::BindingsState>,
     cvars: Res<crate::cvars::Cvars>,
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     commands: Res<crate::net::NetCommands>,
     chat: Res<ChatLog>,
     mut mirror: ResMut<AfkMirror>,
 ) {
-    use crate::bindings::Input;
-    if !mirror.is_afk() || cvars.flag("autoClearAFK") == Some(false) {
-        return;
-    }
-    let moved = [
-        Input::Jump,
-        Input::MoveForward,
-        Input::MoveBackward,
-        Input::StrafeLeft,
-        Input::StrafeRight,
-        Input::TurnLeft,
-        Input::TurnRight,
-    ]
-    .iter()
-    .any(|&c| binds.just_pressed(c));
-    if !moved {
-        return;
-    }
-    let line = script
-        .and_then(|s| super::combat::global_string(&s, "CLEARED_AFK"))
-        .unwrap_or_default();
-    push_system(&chat, line);
-    mirror.0 = 0;
-    // `ClearAFK`'s own packet: the empty `0x14` the command path sends.
-    let _ = commands.0.send(crate::net::ClientCommand::Chat {
-        kind: crate::net::ChatKind::Afk,
-        target: None,
-        text: String::new(),
-        language: None,
-    });
+    hosted_vm.run(|script| {
+        use crate::bindings::Input;
+        if !mirror.is_afk() || cvars.flag("autoClearAFK") == Some(false) {
+            return;
+        }
+        let moved = [
+            Input::Jump,
+            Input::MoveForward,
+            Input::MoveBackward,
+            Input::StrafeLeft,
+            Input::StrafeRight,
+            Input::TurnLeft,
+            Input::TurnRight,
+        ]
+        .iter()
+        .any(|&c| binds.just_pressed(c));
+        if !moved {
+            return;
+        }
+        let line = script
+            .and_then(|s| super::combat::global_string(&s, "CLEARED_AFK"))
+            .unwrap_or_default();
+        push_system(&chat, line);
+        mirror.0 = 0;
+        // `ClearAFK`'s own packet: the empty `0x14` the command path sends.
+        let _ = commands.0.send(crate::net::ClientCommand::Chat {
+            kind: crate::net::ChatKind::Afk,
+            target: None,
+            text: String::new(),
+            language: None,
+        });
+    })
 }
 
 #[cfg(test)]

@@ -906,7 +906,7 @@ fn fade_out_ambience(zone: &mut ZoneAudio, fade_ms: u64) {
 /// The Lua music slot: this frame's queued verbs, the loop, the slider and the watch.
 /// Unconditional: the stream is the caller's, not the world soundscape's.
 fn lua_music(
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut zone: NonSendMut<ZoneAudio>,
     mut out: NonSendMut<SoundOutput>,
     assets: Option<Res<WorldAssets>>,
@@ -916,49 +916,51 @@ fn lua_music(
     // Wall time for the stream watch.
     real: Res<Time<bevy::time::Real>>,
 ) {
-    let zone = &mut *zone;
-    let now = time.elapsed_secs_f64();
-    let requests = script.map(|mut s| s.take_music()).unwrap_or_default();
-    for req in requests {
-        match req {
-            // The NULL arm always lands, and moves the pump's clock even from cold.
-            benilla_ui::script::MusicRequest::Stop => {
-                set_lua_music(zone, &mut out, None, &config, None, now)
-            }
-            benilla_ui::script::MusicRequest::Play(path) => {
-                // Under the loading cover a start is dropped, not deferred: the reference's
-                // blocking load plays nothing.
-                let Some(assets) = assets.as_deref().filter(|_| !config.world_hold) else {
-                    debug!("Lua music: {path} dropped — no assets, or the loading cover is up");
-                    continue;
-                };
-                set_lua_music(zone, &mut out, Some(assets), &config, Some(&path), now);
+    hosted_vm.run(|script| {
+        let zone = &mut *zone;
+        let now = time.elapsed_secs_f64();
+        let requests = script.map(|s| s.take_music()).unwrap_or_default();
+        for req in requests {
+            match req {
+                // The NULL arm always lands, and moves the pump's clock even from cold.
+                benilla_ui::script::MusicRequest::Stop => {
+                    set_lua_music(zone, &mut out, None, &config, None, now)
+                }
+                benilla_ui::script::MusicRequest::Play(path) => {
+                    // Under the loading cover a start is dropped, not deferred: the reference's
+                    // blocking load plays nothing.
+                    let Some(assets) = assets.as_deref().filter(|_| !config.world_hold) else {
+                        debug!("Lua music: {path} dropped — no assets, or the loading cover is up");
+                        continue;
+                    };
+                    set_lua_music(zone, &mut out, Some(assets), &config, Some(&path), now);
+                }
             }
         }
-    }
 
-    // The loop: `SetLoopCount(-1)` in the reference, an explicit restart here.
-    if zone
-        .lua_music
-        .as_ref()
-        .is_some_and(|h| h.state() == kira::sound::PlaybackState::Stopped)
-    {
-        zone.lua_music = None;
-        if let (Some(path), Some(assets)) = (zone.lua_music_path.clone(), assets.as_deref()) {
-            open_lua_music(zone, &mut out, assets, &config, &path);
+        // The loop: `SetLoopCount(-1)` in the reference, an explicit restart here.
+        if zone
+            .lua_music
+            .as_ref()
+            .is_some_and(|h| h.state() == kira::sound::PlaybackState::Stopped)
+        {
+            zone.lua_music = None;
+            if let (Some(path), Some(assets)) = (zone.lua_music_path.clone(), assets.as_deref()) {
+                open_lua_music(zone, &mut out, assets, &config, &path);
+            }
         }
-    }
 
-    // The Music slider is live here too (`0x7a6660(ecx=2)`, the MusicVolume re-apply walker).
-    if let Some(h) = zone.lua_music.as_mut() {
-        h.set_volume(
-            mixer::amp_to_db(config.category_amp(SoundCategory::Music) * LUA_MUSIC_VOLUME),
-            mixer::glide(),
-        );
-    }
-    if let Some(h) = zone.lua_music.as_ref() {
-        zone.lua_music_watch.feed(h, f64::from(real.delta_secs()));
-    }
+        // The Music slider is live here too (`0x7a6660(ecx=2)`, the MusicVolume re-apply walker).
+        if let Some(h) = zone.lua_music.as_mut() {
+            h.set_volume(
+                mixer::amp_to_db(config.category_amp(SoundCategory::Music) * LUA_MUSIC_VOLUME),
+                mixer::glide(),
+            );
+        }
+        if let Some(h) = zone.lua_music.as_ref() {
+            zone.lua_music_watch.feed(h, f64::from(real.delta_secs()));
+        }
+    })
 }
 
 /// Server-pushed sounds (`SMSG_PLAY_SOUND`/`PLAY_MUSIC`/`PLAY_OBJECT_SOUND`): kits go through

@@ -111,47 +111,49 @@ pub(crate) fn identity(roster: &crate::glue_session::roster::Roster) -> Option<(
 
 /// Seed the engine's macro table from disk, once per character per VM.
 fn load_macros(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     roster: Res<crate::glue_session::roster::Roster>,
     actions: Res<crate::ui_action::PlayerActions>,
     mut files: ResMut<MacroFiles>,
 ) {
-    let Some(mut script) = script else { return };
-    let Some(id) = identity(&roster) else { return };
-    if files.identity.get(&script).as_ref() == Some(&id) {
-        return; // already loaded into this VM
-    }
-    let (realm, character) = (&id.0, &id.1);
-    files.account = crate::local_state::macros_account_path();
-    files.character = crate::local_state::macros_character_path(realm, character);
-    *files.identity.get(&script) = Some(id.clone());
-
-    let read = |path: &Option<std::path::PathBuf>| -> Vec<benilla_ui::script::MacroView> {
-        let Some(path) = path else { return Vec::new() };
-        match std::fs::read_to_string(path) {
-            Ok(text) => store::parse(&text),
-            // Absent is the first run, not a failure.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => {
-                warn!("ui_macro: reading {}: {e}", path.display());
-                Vec::new()
-            }
+    hosted_vm.run(|script| {
+        let Some(script) = script else { return };
+        let Some(id) = identity(&roster) else { return };
+        if files.identity.get(script).as_ref() == Some(&id) {
+            return; // already loaded into this VM
         }
-    };
-    let character_records = read(&files.character);
-    let moves = store::legacy_character_words(&character_records);
-    let state = MacroState::from_scopes(read(&files.account), character_records);
-    info!(
-        "ui_macro: {} account + {} character macros for {character} on {realm}",
-        state.count(false),
-        state.count(true)
-    );
-    if !moves.is_empty() {
-        migrate_character_bar(&mut script, &actions, &state, &files, &moves);
-    }
-    script.set_macros(state);
-    // `UPDATE_MACROS` (string at `0x852460`): the macro frame redraws on it, as after an edit.
-    script.fire_event("UPDATE_MACROS", vec![]);
+        let (realm, character) = (&id.0, &id.1);
+        files.account = crate::local_state::macros_account_path();
+        files.character = crate::local_state::macros_character_path(realm, character);
+        *files.identity.get(script) = Some(id.clone());
+
+        let read = |path: &Option<std::path::PathBuf>| -> Vec<benilla_ui::script::MacroView> {
+            let Some(path) = path else { return Vec::new() };
+            match std::fs::read_to_string(path) {
+                Ok(text) => store::parse(&text),
+                // Absent is the first run, not a failure.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(e) => {
+                    warn!("ui_macro: reading {}: {e}", path.display());
+                    Vec::new()
+                }
+            }
+        };
+        let character_records = read(&files.character);
+        let moves = store::legacy_character_words(&character_records);
+        let state = MacroState::from_scopes(read(&files.account), character_records);
+        info!(
+            "ui_macro: {} account + {} character macros for {character} on {realm}",
+            state.count(false),
+            state.count(true)
+        );
+        if !moves.is_empty() {
+            migrate_character_bar(script, &actions, &state, &files, &moves);
+        }
+        script.set_macros(state);
+        // `UPDATE_MACROS` (string at `0x852460`): the macro frame redraws on it, as after an edit.
+        script.fire_event("UPDATE_MACROS", vec![]);
+    })
 }
 
 /// The one-time move of this character's macro buttons off the numbering of the builds that held a
@@ -202,21 +204,23 @@ fn migrate_character_bar(
 }
 
 /// Persist on the engine's dirty edge, and fire `UPDATE_MACROS`.
-fn save_dirty_macros(script: Option<NonSendMut<UiScript>>, files: Res<MacroFiles>) {
-    let Some(mut script) = script else { return };
-    if !script.take_macros_dirty() {
-        return;
-    }
-    let state = script.macros();
-    // Fire first: the redraw must not depend on the write landing.
-    script.fire_event("UPDATE_MACROS", vec![]);
-    for (path, per_character) in [(&files.account, false), (&files.character, true)] {
-        let Some(path) = path else { continue };
-        let text = store::write(state.saved(per_character).into_iter());
-        if let Err(e) = crate::local_state::write_atomic(path, &text) {
-            warn!("ui_macro: saving {}: {e}", path.display());
+fn save_dirty_macros(mut hosted_vm: crate::script_calls::HostedVm, files: Res<MacroFiles>) {
+    hosted_vm.run(|script| {
+        let Some(script) = script else { return };
+        if !script.take_macros_dirty() {
+            return;
         }
-    }
+        let state = script.macros();
+        // Fire first: the redraw must not depend on the write landing.
+        script.fire_event("UPDATE_MACROS", vec![]);
+        for (path, per_character) in [(&files.account, false), (&files.character, true)] {
+            let Some(path) = path else { continue };
+            let text = store::write(state.saved(per_character).into_iter());
+            if let Err(e) = crate::local_state::write_atomic(path, &text) {
+                warn!("ui_macro: saving {}: {e}", path.display());
+            }
+        }
+    })
 }
 
 /// What [`rebind_macro_spells`] last saw, per VM: a fresh VM restarts both counters at 0, which a
@@ -235,76 +239,78 @@ struct BindingsSeen {
 /// reference keeps it until the macro is edited, where the next table or bar change here derives
 /// it again.
 fn rebind_macro_spells(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     actions: Res<crate::ui_action::PlayerActions>,
     table: Option<Res<crate::ui_chat::commands::SlashCommands>>,
     mut bound: ResMut<MacroBoundSpells>,
     mut seen: Local<crate::ui_script::VmMemo<BindingsSeen>>,
 ) {
-    let (Some(mut script), Some(table)) = (script, table) else {
-        return;
-    };
-    let seen = seen.get(&script);
-    let first = seen.macros.is_none();
-    let generation = script.macros_generation();
-    let pet_generation = script.pet_book_generation();
-    let table_moved = seen.macros != Some(generation) || actions.is_changed();
-    let pet_moved = seen.pet_book != Some(pet_generation);
-    if !table_moved && !pet_moved {
-        return;
-    }
-    seen.macros = Some(generation);
-    seen.pet_book = Some(pet_generation);
-
-    let (macros, book, pet_book) = (script.macros(), script.spellbook(), script.pet_spellbook());
-    let mut fresh = std::collections::HashMap::new();
-    for m in macros.views() {
-        // The records are new on a VM's first pass, with no book selector to keep.
-        let was = bound
-            .0
-            .get(&m.id)
-            .copied()
-            .filter(|_| !first)
-            .unwrap_or_default();
-        let next = if table_moved || was.follows_the_pet_book() {
-            run::bound_spell(&table, &m.body, &book, &pet_book, was)
-        } else {
-            was
+    hosted_vm.run(|script| {
+        let (Some(script), Some(table)) = (script, table) else {
+            return;
         };
-        fresh.insert(m.id, next);
-    }
-    // The engine's copy, for `GetActionAutocast`, re-pushed on every recompute so a fresh VM has
-    // it.
-    script.set_macro_bindings(
-        fresh
-            .iter()
-            .map(|(&id, b)| {
-                let spell = match b.spell {
-                    BoundSpell::None => 0,
-                    BoundSpell::Unresolved => -1,
-                    BoundSpell::Spell(id) => id as i32,
-                };
-                (
-                    id,
-                    benilla_ui::script::MacroBinding {
-                        spell,
-                        pet_book: b.pet_book,
-                    },
-                )
-            })
-            .collect(),
-    );
-    if fresh != bound.0 {
-        let spells = fresh
-            .values()
-            .filter(|b| matches!(b.spell, BoundSpell::Spell(_)))
-            .count();
-        debug!(
-            "ui_macro: {} macro(s), {spells} bound to a spell",
-            fresh.len()
+        let seen = seen.get(script);
+        let first = seen.macros.is_none();
+        let generation = script.macros_generation();
+        let pet_generation = script.pet_book_generation();
+        let table_moved = seen.macros != Some(generation) || actions.is_changed();
+        let pet_moved = seen.pet_book != Some(pet_generation);
+        if !table_moved && !pet_moved {
+            return;
+        }
+        seen.macros = Some(generation);
+        seen.pet_book = Some(pet_generation);
+
+        let (macros, book, pet_book) = (script.macros(), script.spellbook(), script.pet_spellbook());
+        let mut fresh = std::collections::HashMap::new();
+        for m in macros.views() {
+            // The records are new on a VM's first pass, with no book selector to keep.
+            let was = bound
+                .0
+                .get(&m.id)
+                .copied()
+                .filter(|_| !first)
+                .unwrap_or_default();
+            let next = if table_moved || was.follows_the_pet_book() {
+                run::bound_spell(&table, &m.body, &book, &pet_book, was)
+            } else {
+                was
+            };
+            fresh.insert(m.id, next);
+        }
+        // The engine's copy, for `GetActionAutocast`, re-pushed on every recompute so a fresh VM has
+        // it.
+        script.set_macro_bindings(
+            fresh
+                .iter()
+                .map(|(&id, b)| {
+                    let spell = match b.spell {
+                        BoundSpell::None => 0,
+                        BoundSpell::Unresolved => -1,
+                        BoundSpell::Spell(id) => id as i32,
+                    };
+                    (
+                        id,
+                        benilla_ui::script::MacroBinding {
+                            spell,
+                            pet_book: b.pet_book,
+                        },
+                    )
+                })
+                .collect(),
         );
-        bound.0 = fresh;
-    }
+        if fresh != bound.0 {
+            let spells = fresh
+                .values()
+                .filter(|b| matches!(b.spell, BoundSpell::Spell(_)))
+                .count();
+            debug!(
+                "ui_macro: {} macro(s), {spells} bound to a spell",
+                fresh.len()
+            );
+            bound.0 = fresh;
+        }
+    })
 }
 
 /// The event each macro line is fired as: id `0x188`, whose registry slot `0xbe17b8` is written

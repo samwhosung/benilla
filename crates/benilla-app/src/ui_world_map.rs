@@ -8,7 +8,6 @@
 //!   from, pushed when they change.
 //! - [`dev_map_jump`]: Alt+click the map to go there.
 
-use bevy::ecs::system::NonSendMut;
 use bevy::prelude::*;
 
 use benilla_assets::coords::bevy_to_wow;
@@ -531,7 +530,7 @@ struct FeedMemos {
 }
 
 fn feed_world_map(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     data: Option<Res<WorldMapUiData>>,
     player: Res<Player>,
     map: Option<Res<CurrentMap>>,
@@ -547,168 +546,172 @@ fn feed_world_map(
     world_states: Res<crate::world_state::WorldStates>,
     mut memo: Local<crate::ui_script::VmMemo<FeedMemos>>,
 ) {
-    let (Some(mut script), Some(data), Some(map), Some(areas)) = (script, data, map, areas) else {
-        return;
-    };
-    // PLAYER_EXPLORED_ZONES, pushed on change; the setter queues WORLD_MAP_UPDATE for newly
-    // explored art.
-    let explored: Vec<u32> = self_q
-        .iter()
-        .next()
-        .map(|store| {
-            (0..benilla_protocol::messages::PLAYER_EXPLORED_ZONES_SLOTS)
-                .map(|i| store.0.player_explored_zone_slot(i))
-                .collect()
-        })
-        .unwrap_or_default();
-    {
-        let memo = memo.get(&script);
-        if !explored.is_empty() && memo.explored.as_ref() != Some(&explored) {
-            memo.explored = Some(explored.clone());
-            script.set_world_map_explored(explored.clone());
-        }
-    }
-    let wow = bevy_to_wow(player.pos);
-    let (wx, wy) = (wow[0], wow[1]);
-
-    // CurrentArea is the MCNK leaf; its top zone is the zone-level area the reference matches.
-    let top_zone = world.area().and_then(|aid| areas.0.top_zone(aid));
-    let player_sel = resolve_player_selection(&data, map.0, top_zone);
-
-    // `GetWorldLocMapPosition` and the setter's landmark pass project synchronously with the
-    // engine's own selection, so the engine holds the projection over its own copy of the catalog.
-    {
-        let memo = memo.get(&script);
-        if !memo.projector || data.is_changed() {
-            memo.projector = true;
-            install_world_loc_projector(&mut script, &data);
-        }
-    }
-
-    // First world enter: the zone updater `0x494780` (`crate::area`), finding the cached zone id
-    // 0, selects the player's zone itself through `0x4a6650` and the setter `0x4a67a0` before any
-    // Lua asks. Once per VM, each login being a first enter.
-    {
-        let memo = memo.get(&script);
-        if let Some(sel) = world_enter_selection(memo.map_synced, top_zone, player_sel) {
-            memo.map_synced = true;
-            let (c, z) = sel.zone.unwrap_or((0, 0));
-            script.sync_world_map_to_player_zone(c, z, sel.direct);
-        }
-    }
-
-    let selection = script.world_map_selection();
-    let project =
-        |pos_map: u32, px: f32, py: f32| project_on_displayed(&data, selection, pos_map, px, py);
-    let uv = project(map.0, wx, wy);
-    // The corpse at the query answer's display position, a dungeon corpse at its entrance.
-    let corpse_uv = death_net.corpse.and_then(|cp| {
-        project(
-            u32::try_from(cp.display_map).unwrap_or(u32::MAX),
-            cp.position[0],
-            cp.position[1],
-        )
-    });
-
-    // The landmark sources, rebuilt only when a `LandmarkKey` input moves; the engine projects
-    // them onto each selection it stores.
-    let marker = poi_marker
-        .on_map(map.0)
-        .map(|m| (m.continent_id, m.pos.map(f32::to_bits), m.icon));
-    let states_gen = world_states.generation();
-    let unchanged = memo
-        .get(&script)
-        .landmarks
-        .as_ref()
-        .is_some_and(|k| k.matches(map.0, states_gen, &explored, marker));
-    if !unchanged {
-        // The DBC rows first, in file order, the Lua landmark index (`0x4a6819`'s walk of
-        // `[0xc0e054]`).
-        let mut sources: Vec<WorldMapLandmarkSource> = pois
-            .as_ref()
-            .map(|pois| {
-                pois.0
-                    .rows()
-                    .filter_map(|(_, poi)| {
-                        let icons = LEVELS.map(|level| {
-                            landmark_gates_pass(poi, level, &areas.0, &explored, &world_states)
-                                .then(|| landmark_texture_index(poi, level))
-                        });
-                        icons
-                            .iter()
-                            .any(Option::is_some)
-                            .then(|| WorldMapLandmarkSource {
-                                name: poi.name.clone(),
-                                description: poi.description.clone(),
-                                map: poi.continent_id,
-                                pos: (poi.pos[0], poi.pos[1]),
-                                icons,
-                            })
-                    })
+    hosted_vm.run(|script| {
+        let (Some(mut script), Some(data), Some(map), Some(areas)) = (script, data, map, areas)
+        else {
+            return;
+        };
+        // PLAYER_EXPLORED_ZONES, pushed on change; the setter queues WORLD_MAP_UPDATE for newly
+        // explored art.
+        let explored: Vec<u32> = self_q
+            .iter()
+            .next()
+            .map(|store| {
+                (0..benilla_protocol::messages::PLAYER_EXPLORED_ZONES_SLOTS)
+                    .map(|i| store.0.player_explored_zone_slot(i))
                     .collect()
             })
             .unwrap_or_default();
-        // Then the guard-directions marker, last (`0x4a69c7`): no gate and no icon substitution,
-        // only the near-zero skip.
-        if let Some(poi) = poi_marker.on_map(map.0) {
-            sources.push(WorldMapLandmarkSource {
-                name: poi.name.clone(),
-                description: poi.description.clone(),
-                map: poi.continent_id,
-                pos: (poi.pos[0], poi.pos[1]),
-                icons: [Some(poi.icon); 3],
-            });
+        {
+            let memo = memo.get(&script);
+            if !explored.is_empty() && memo.explored.as_ref() != Some(&explored) {
+                memo.explored = Some(explored.clone());
+                script.set_world_map_explored(explored.clone());
+            }
         }
-        memo.get(&script).landmarks = Some(LandmarkKey {
-            map: map.0,
-            states: states_gen,
-            explored: explored.clone(),
-            marker,
+        let wow = bevy_to_wow(player.pos);
+        let (wx, wy) = (wow[0], wow[1]);
+
+        // CurrentArea is the MCNK leaf; its top zone is the zone-level area the reference matches.
+        let top_zone = world.area().and_then(|aid| areas.0.top_zone(aid));
+        let player_sel = resolve_player_selection(&data, map.0, top_zone);
+
+        // `GetWorldLocMapPosition` and the setter's landmark pass project synchronously with the
+        // engine's own selection, so the engine holds the projection over its own copy of the catalog.
+        {
+            let memo = memo.get(&script);
+            if !memo.projector || data.is_changed() {
+                memo.projector = true;
+                install_world_loc_projector(&mut script, &data);
+            }
+        }
+
+        // First world enter: the zone updater `0x494780` (`crate::area`), finding the cached zone id
+        // 0, selects the player's zone itself through `0x4a6650` and the setter `0x4a67a0` before any
+        // Lua asks. Once per VM, each login being a first enter.
+        {
+            let memo = memo.get(&script);
+            if let Some(sel) = world_enter_selection(memo.map_synced, top_zone, player_sel) {
+                memo.map_synced = true;
+                let (c, z) = sel.zone.unwrap_or((0, 0));
+                script.sync_world_map_to_player_zone(c, z, sel.direct);
+            }
+        }
+
+        let selection = script.world_map_selection();
+        let project = |pos_map: u32, px: f32, py: f32| {
+            project_on_displayed(&data, selection, pos_map, px, py)
+        };
+        let uv = project(map.0, wx, wy);
+        // The corpse at the query answer's display position, a dungeon corpse at its entrance.
+        let corpse_uv = death_net.corpse.and_then(|cp| {
+            project(
+                u32::try_from(cp.display_map).unwrap_or(u32::MAX),
+                cp.position[0],
+                cp.position[1],
+            )
         });
-        script.set_world_map_landmark_sources(sources);
-    }
 
-    // The `party1..4` blips: a streamed member's transform, else the `i16` position from
-    // `SMSG_PARTY_MEMBER_STATS`. That packet carries a zone, not a map, so the map is the
-    // continent owning that zone, else ours.
-    let member_uv = |m: &benilla_protocol::messages::GroupMemberEntry| {
-        let (px, py) = crate::minimap::party_member_pos(m, &group, &guids, &unit_pos)?;
-        let member_map = group
-            .stats
-            .get(&m.guid)
-            .and_then(|st| st.zone)
-            .and_then(|zone| {
-                data.continents
-                    .iter()
-                    .find(|cont| cont.zones.iter().any(|z| z.area_id == u32::from(zone)))
-                    .map(|cont| cont.map_id)
+        // The landmark sources, rebuilt only when a `LandmarkKey` input moves; the engine projects
+        // them onto each selection it stores.
+        let marker = poi_marker
+            .on_map(map.0)
+            .map(|m| (m.continent_id, m.pos.map(f32::to_bits), m.icon));
+        let states_gen = world_states.generation();
+        let unchanged = memo
+            .get(&script)
+            .landmarks
+            .as_ref()
+            .is_some_and(|k| k.matches(map.0, states_gen, &explored, marker));
+        if !unchanged {
+            // The DBC rows first, in file order, the Lua landmark index (`0x4a6819`'s walk of
+            // `[0xc0e054]`).
+            let mut sources: Vec<WorldMapLandmarkSource> = pois
+                .as_ref()
+                .map(|pois| {
+                    pois.0
+                        .rows()
+                        .filter_map(|(_, poi)| {
+                            let icons = LEVELS.map(|level| {
+                                landmark_gates_pass(poi, level, &areas.0, &explored, &world_states)
+                                    .then(|| landmark_texture_index(poi, level))
+                            });
+                            icons
+                                .iter()
+                                .any(Option::is_some)
+                                .then(|| WorldMapLandmarkSource {
+                                    name: poi.name.clone(),
+                                    description: poi.description.clone(),
+                                    map: poi.continent_id,
+                                    pos: (poi.pos[0], poi.pos[1]),
+                                    icons,
+                                })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            // Then the guard-directions marker, last (`0x4a69c7`): no gate and no icon substitution,
+            // only the near-zero skip.
+            if let Some(poi) = poi_marker.on_map(map.0) {
+                sources.push(WorldMapLandmarkSource {
+                    name: poi.name.clone(),
+                    description: poi.description.clone(),
+                    map: poi.continent_id,
+                    pos: (poi.pos[0], poi.pos[1]),
+                    icons: [Some(poi.icon); 3],
+                });
+            }
+            memo.get(&script).landmarks = Some(LandmarkKey {
+                map: map.0,
+                states: states_gen,
+                explored: explored.clone(),
+                marker,
+            });
+            script.set_world_map_landmark_sources(sources);
+        }
+
+        // The `party1..4` blips: a streamed member's transform, else the `i16` position from
+        // `SMSG_PARTY_MEMBER_STATS`. That packet carries a zone, not a map, so the map is the
+        // continent owning that zone, else ours.
+        let member_uv = |m: &benilla_protocol::messages::GroupMemberEntry| {
+            let (px, py) = crate::minimap::party_member_pos(m, &group, &guids, &unit_pos)?;
+            let member_map = group
+                .stats
+                .get(&m.guid)
+                .and_then(|st| st.zone)
+                .and_then(|zone| {
+                    data.continents
+                        .iter()
+                        .find(|cont| cont.zones.iter().any(|z| z.area_id == u32::from(zone)))
+                        .map(|cont| cont.map_id)
+                })
+                .unwrap_or(map.0);
+            project(member_map, px, py).filter(|uv| *uv != (0.0, 0.0))
+        };
+        let party_uv: Vec<Option<(f32, f32)>> = group.party_slots().map(member_uv).collect();
+
+        // The `raid1..40` blips in the raid roster's order, so `raidN` matches: the members, then our
+        // own row; the stock map skips our own slot by `UnitIsUnit` (`WorldMapFrame.lua:381`).
+        let raid_uv: Vec<Option<(f32, f32)>> = group
+            .raid_rows()
+            .map(|guid| match group.members.iter().find(|m| m.guid == guid) {
+                Some(m) => member_uv(m),
+                None => uv,
             })
-            .unwrap_or(map.0);
-        project(member_map, px, py).filter(|uv| *uv != (0.0, 0.0))
-    };
-    let party_uv: Vec<Option<(f32, f32)>> = group.party_slots().map(member_uv).collect();
+            .collect();
 
-    // The `raid1..40` blips in the raid roster's order, so `raidN` matches: the members, then our
-    // own row; the stock map skips our own slot by `UnitIsUnit` (`WorldMapFrame.lua:381`).
-    let raid_uv: Vec<Option<(f32, f32)>> = group
-        .raid_rows()
-        .map(|guid| match group.members.iter().find(|m| m.guid == guid) {
-            Some(m) => member_uv(m),
-            None => uv,
-        })
-        .collect();
-
-    script.set_world_map_feed(
-        player_sel.zone,
-        uv,
-        player.facing(),
-        corpse_uv,
-        party_uv,
-        raid_uv,
-    );
-    // The instance-map leg for `SetMapToCurrentZone`, which the battlefield minimap calls on
-    // `PLAYER_ENTERING_WORLD` (`Blizzard_BattlefieldMinimap.lua:58-62`).
-    script.set_world_map_player_direct_area(player_sel.direct);
+        script.set_world_map_feed(
+            player_sel.zone,
+            uv,
+            player.facing(),
+            corpse_uv,
+            party_uv,
+            raid_uv,
+        );
+        // The instance-map leg for `SetMapToCurrentZone`, which the battlefield minimap calls on
+        // `PLAYER_ENTERING_WORLD` (`Blizzard_BattlefieldMinimap.lua:58-62`).
+        script.set_world_map_player_direct_area(player_sel.direct);
+    })
 }
 
 /// Alt+click the world map to go there, a dev jump: the click's UV back through the displayed
@@ -720,68 +723,70 @@ fn dev_map_jump(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     data: Option<Res<WorldMapUiData>>,
     net: Res<crate::net::NetCommands>,
 ) {
-    // A dev affordance compiled into every build, so gated at run time.
-    if !crate::run_mode::dev_affordances() {
-        return;
-    }
-    let alt = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
-    if !alt || !buttons.just_pressed(MouseButton::Left) {
-        return;
-    }
-    let (Some(script), Some(data), Ok(window)) = (script, data, windows.single()) else {
-        return;
-    };
-    let Some(cursor) = window.cursor_position() else {
-        return;
-    };
-    // Window px (y-down) to the VM's y-up root units, as the pointer feed converts them.
-    let at = crate::ui_script::window_to_ui(window.height(), cursor);
-    let Some((u, v)) = script.world_map_uv_at(at.x, at.y) else {
-        return;
-    };
-    let (c, z, direct) = script.world_map_selection();
-    // An instance map inverts like a zone, through `0x4a7100`'s zone mode.
-    let (rect, map_id) = match direct {
-        Some(id) => match data.direct.iter().find(|d| d.id == id) {
-            Some(d) => (d.rect, d.map_id),
-            None => return,
-        },
-        None => {
-            let Some(cont) = c
-                .checked_sub(1)
-                .and_then(|i| data.continents.get(i as usize))
-            else {
-                info!(
-                    "map-jump: no exact click→world law at the world level — zoom into a \
-                     continent first"
-                );
-                return;
-            };
-            let rect = match z.checked_sub(1) {
-                None => cont.rect,
-                Some(i) => match cont.zones.get(i as usize) {
-                    Some(zone) => zone.rect,
-                    None => return,
-                },
-            };
-            (rect, cont.map_id)
+    hosted_vm.run(|script| {
+        // A dev affordance compiled into every build, so gated at run time.
+        if !crate::run_mode::dev_affordances() {
+            return;
         }
-    };
-    // `zone_world` lerps both axes by one `t`, the reference's shape, so it runs once per axis.
-    let (_, wy) = map_proj::zone_world(rect, u);
-    let (wx, _) = map_proj::zone_world(rect, v);
-    let text = format!(".go xy {wx:.2} {wy:.2} {map_id}");
-    info!("map-jump: {text}");
-    let _ = net.0.send(crate::net::ClientCommand::Chat {
-        kind: crate::net::ChatKind::Say,
-        target: None,
-        text,
-        language: None,
-    });
+        let alt = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
+        if !alt || !buttons.just_pressed(MouseButton::Left) {
+            return;
+        }
+        let (Some(script), Some(data), Ok(window)) = (script, data, windows.single()) else {
+            return;
+        };
+        let Some(cursor) = window.cursor_position() else {
+            return;
+        };
+        // Window px (y-down) to the VM's y-up root units, as the pointer feed converts them.
+        let at = crate::ui_script::window_to_ui(window.height(), cursor);
+        let Some((u, v)) = script.world_map_uv_at(at.x, at.y) else {
+            return;
+        };
+        let (c, z, direct) = script.world_map_selection();
+        // An instance map inverts like a zone, through `0x4a7100`'s zone mode.
+        let (rect, map_id) = match direct {
+            Some(id) => match data.direct.iter().find(|d| d.id == id) {
+                Some(d) => (d.rect, d.map_id),
+                None => return,
+            },
+            None => {
+                let Some(cont) = c
+                    .checked_sub(1)
+                    .and_then(|i| data.continents.get(i as usize))
+                else {
+                    info!(
+                        "map-jump: no exact click→world law at the world level — zoom into a \
+                     continent first"
+                    );
+                    return;
+                };
+                let rect = match z.checked_sub(1) {
+                    None => cont.rect,
+                    Some(i) => match cont.zones.get(i as usize) {
+                        Some(zone) => zone.rect,
+                        None => return,
+                    },
+                };
+                (rect, cont.map_id)
+            }
+        };
+        // `zone_world` lerps both axes by one `t`, the reference's shape, so it runs once per axis.
+        let (_, wy) = map_proj::zone_world(rect, u);
+        let (wx, _) = map_proj::zone_world(rect, v);
+        let text = format!(".go xy {wx:.2} {wy:.2} {map_id}");
+        info!("map-jump: {text}");
+        let _ = net.0.send(crate::net::ClientCommand::Chat {
+            kind: crate::net::ChatKind::Say,
+            target: None,
+            text,
+            language: None,
+        });
+    })
 }
 
 /// The world-map data feed.

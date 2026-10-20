@@ -210,6 +210,37 @@ pub(crate) fn lent<R>(
     }
 }
 
+/// The VM a system runs Lua on, with the call host to lend it ([`HostedVm::run`]): the param a
+/// system that holds the VM takes, so whatever Lua it runs (an event's handlers, a widget's
+/// script, an `OnUpdate`, a chunk) makes calls that apply inside the verb.
+#[derive(SystemParam)]
+pub(crate) struct HostedVm<'w, 's> {
+    script: Option<NonSendMut<'w, UiScript>>,
+    host: Option<ScriptCallHost<'w, 's>>,
+}
+
+impl HostedVm<'_, '_> {
+    /// Run `f` on the VM with the host lent around all of it ([`hosted`]); `f` gets `None` with
+    /// no VM.
+    pub(crate) fn run<R>(&mut self, f: impl FnOnce(Option<&mut UiScript>) -> R) -> R {
+        hosted(&mut self.script, &mut self.host, f)
+    }
+}
+
+/// Run a VM system's body with the host lent around all of it, so every Lua call its feeds,
+/// events and scripts make applies inside the verb: the reference has no queue between a verb and
+/// its effect, whatever entry the script came in by. `f` gets the VM, `None` with no VM.
+pub(crate) fn hosted<R>(
+    script: &mut Option<NonSendMut<UiScript>>,
+    host: &mut Option<ScriptCallHost>,
+    f: impl FnOnce(Option<&mut UiScript>) -> R,
+) -> R {
+    match script.as_deref_mut() {
+        Some(script) => lent(script, host.as_mut(), |script| f(Some(script))),
+        None => f(None),
+    }
+}
+
 /// Apply the calls queued where no host was lent, in call order, in the target chain after the
 /// world clicks: once a frame, through the host the input pass lends.
 pub(crate) fn apply_script_calls(script: Option<NonSendMut<UiScript>>, mut host: ScriptCallHost) {

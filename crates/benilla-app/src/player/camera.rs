@@ -700,40 +700,42 @@ pub(super) fn latch_world_mouse(
     mut rig: ResMut<CameraControl>,
     cameras: Query<&Camera, With<FlyCam>>,
     window: Single<&Window, With<PrimaryWindow>>,
-    mut script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     cover: Option<Res<crate::loading_screen::LoadingScreen>>,
 ) {
-    let calls = script
-        .as_mut()
-        .map(|s| s.take_mouselook_calls())
-        .unwrap_or_default();
-    let Ok(camera) = cameras.single() else {
-        return;
-    };
-    let over_ui = pointer_over_ui.0 || press_consumed.is_some_and(|c| c.0);
-    let world_press = rig.look.is_some() || (cursor_in_viewport(&window, camera) && !over_ui);
-    let wm = &mut rig.world_mouse;
-    wm.update(&buttons, world_press);
-    // The script's calls, made since the last latch, before this frame's release.
-    for on in calls {
-        wm.mouselook(on);
-    }
-    // The right button's release ends a scripted channel too, wherever its press went: in
-    // freelook every button event goes to the `WorldFrame` (`0x492b50`), whose TURNORACTION up
-    // runs `TurnOrActionStop` (`0x514160`), `0x515090(1, 0, …)`.
-    if buttons.just_released(MouseButton::Right) {
-        wm.scripted = false;
-    }
-    // The world enter behind the cover clears the whole word (`0x5144c0` → `0x514b70(-1, …)`).
-    // A window deactivate clears none of it (`0x5144a3 and eax,0xfffff00f` keeps the low bits):
-    // the session outlives the focus, and only the OS cursor goes back ([`sync_look_focus`]).
-    if cover.is_some_and(|c| c.covering()) {
-        wm.scripted = false;
-    }
-    // `IsMouselooking` (`0x514270`) reads `[InputControl+4] & 1`, the TurnOrAction channel.
-    if let Some(mut script) = script {
-        script.set_turn_or_action_held(rig.world_mouse.turn());
-    }
+    hosted_vm.run(|mut script| {
+        let calls = script
+            .as_mut()
+            .map(|s| s.take_mouselook_calls())
+            .unwrap_or_default();
+        let Ok(camera) = cameras.single() else {
+            return;
+        };
+        let over_ui = pointer_over_ui.0 || press_consumed.is_some_and(|c| c.0);
+        let world_press = rig.look.is_some() || (cursor_in_viewport(&window, camera) && !over_ui);
+        let wm = &mut rig.world_mouse;
+        wm.update(&buttons, world_press);
+        // The script's calls, made since the last latch, before this frame's release.
+        for on in calls {
+            wm.mouselook(on);
+        }
+        // The right button's release ends a scripted channel too, wherever its press went: in
+        // freelook every button event goes to the `WorldFrame` (`0x492b50`), whose TURNORACTION up
+        // runs `TurnOrActionStop` (`0x514160`), `0x515090(1, 0, …)`.
+        if buttons.just_released(MouseButton::Right) {
+            wm.scripted = false;
+        }
+        // The world enter behind the cover clears the whole word (`0x5144c0` → `0x514b70(-1, …)`).
+        // A window deactivate clears none of it (`0x5144a3 and eax,0xfffff00f` keeps the low bits):
+        // the session outlives the focus, and only the OS cursor goes back ([`sync_look_focus`]).
+        if cover.is_some_and(|c| c.covering()) {
+            wm.scripted = false;
+        }
+        // `IsMouselooking` (`0x514270`) reads `[InputControl+4] & 1`, the TurnOrAction channel.
+        if let Some(script) = script {
+            script.set_turn_or_action_held(rig.world_mouse.turn());
+        }
+    })
 }
 
 /// The right button's down edge in the world, before the press is judged a click or a drag:

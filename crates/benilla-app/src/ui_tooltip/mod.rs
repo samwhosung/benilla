@@ -10,7 +10,7 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use benilla_ui::script::{TooltipTint, UiScript, UnitState};
+use benilla_ui::script::{TooltipTint, UnitState};
 use benilla_ui::strings::Arg;
 
 use crate::names::NameCache;
@@ -183,7 +183,7 @@ fn go_lock_lines(
 }
 
 fn drive_mouseover_tooltip(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     hovered: Res<Hovered>,
     hovered_go: Res<HoveredObject>,
     // Seats the cursor-anchored GameObject plate.
@@ -205,242 +205,245 @@ fn drive_mouseover_tooltip(
     // reads.
     tables: SnapshotTables,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let (last_lines, trace) = (&mut memo.last_lines, &mut *memo.trace);
-    let last_lines = last_lines.get(&script);
-    // The publisher's change check (`0x482090`) compares against the VM's last publish.
-    let last = script.world_mouseover();
-    let published = memo.published.get(&script);
-    let self_store = self_q.iter().next();
-    let chr = tables.unit_names();
-    let types = tables.types(&names);
-
-    // A plate's pick stands for its enter's publish (`0x7cb850`), so it holds only while that plate
-    // holds the hover: a plate retired after the pick was taken has run its leave (`0x7cb8b0`),
-    // which published the loss, and the hover re-picks to the WorldFrame.
-    if hovered.plate && script.hovered_nameplate() != hovered.guid {
-        if std::mem::take(published) {
-            script.set_unit("mouseover", None);
-        }
-        script.publish_world_mouseover(None);
-        return;
-    }
-    let hover: HoverKey = (
-        hovered.mouseover(&hovered_go).map(|(_, guid)| guid),
-        hovered.corpse_guid,
-        hovered_go.guid,
-    );
-    let ask = Ask::at(memo.hovering.replace(hover) != Some(hover), &commands);
-    let unit = hovered.mouseover(&hovered_go).and_then(|(entity, guid)| {
-        let store = stores.get(entity).ok()?;
-        let name = names
-            .resolve_unit(guid, Some(store), ask)
-            .map(str::to_string);
-        let (rel, me) = (relations.get(), relations.me());
-        let subject = relations.unit_of(guid, store);
-        let reaction = unit_reaction(&rel, &subject, me.as_ref());
-        // The hovered guid, the pair `0x492890` writes to `0xb4e2c8`/`0xb4e2cc` and the token
-        // resolver `0x515970` reads for `"mouseover"`, so `UnitIsUnit` can match it.
-        let mut s = snapshot(store, guid, name, reaction, chr, types);
-        s.player_reaction = player_reaction(&rel, &subject, me.as_ref());
-        enrich_unit(
-            &mut s,
-            guid,
-            &names,
-            store,
-            relations.factions(),
-            self_store,
-        );
-        let object = |g: u64| stores.get(tables.entity(g)?).ok();
-        let sources = crate::ui_unit::tooltip_facts::TooltipSources {
-            names: &names,
-            catalog: tables.catalog(),
-            object: &object,
-            study: tables.study(),
-        };
-        s.tooltip = crate::ui_unit::tooltip_facts::tooltip_facts(store, s.creature_type, &sources);
-        Some((guid, s))
-    });
-    // The hovered GameObject, when nothing else was picked or it is nearer. Not gated on
-    // highlightability: the publisher `0x492890` sends every object to the builder by kind, so a
-    // signpost or an in-use object shows its plate with no interact cursor.
-    let go = hovered_go.target.zip(hovered_go.guid).filter(|_| {
-        (unit.is_none() && hovered.corpse.is_none()) || go_is_nearest(&hovered, &hovered_go)
-    });
-
-    if let Some((guid, state)) = unit {
-        // Publish, which tears the old hover down, then push: the builder reads the token. Rebuild
-        // on a new target or a late name or creature answer, which rebuilds under the same hover
-        // with no teardown; health and power stay out of the key, since the watcher drives the bar.
-        let key = lines_view(&state);
-        let changed = script.publish_world_mouseover(Some(guid));
-        script.set_unit("mouseover", Some(state));
-        *published = true;
-        if changed || last_lines.as_ref() != Some(&key) {
-            script.world_tooltip_unit("mouseover");
-            *last_lines = Some(key);
-        }
-        return;
-    }
-    // No unit won the pick: the publisher's teardown zeroes the mouseover pair (`0x4928e8`,
-    // `0x4928f2`) and writes a null, corpse or GameObject guid, none of which resolves as a unit,
-    // so `"mouseover"` names nobody from this frame. A fading plate keeps its lines and its bar,
-    // which follows the unit's guid, not the token; the null publish fires no event (the sole
-    // `UPDATE_MOUSEOVER_UNIT` is the unit arm's, `0x4929b3`).
-    if std::mem::take(published) {
-        script.set_unit("mouseover", None);
-    }
-    // The corpse plate, "Corpse of <owner>" (`0x52aef0`): a name and nothing else, corner-seated.
-    // The publisher fires no event for a corpse, so `UnitName("mouseover")` on one stays nil.
-    if let Some((entity, guid)) = hovered
-        .corpse
-        .zip(hovered.corpse_guid)
-        .filter(|_| go.is_none())
-    {
-        let Some(store) = stores.get(entity).ok() else {
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
             return;
         };
-        // A bone pile with nothing to take publishes no mouseover: no plate, no brighten.
-        if !crate::target::corpse_mouseover_eligible(store) {
+        let (last_lines, trace) = (&mut memo.last_lines, &mut *memo.trace);
+        let last_lines = last_lines.get(&script);
+        // The publisher's change check (`0x482090`) compares against the VM's last publish.
+        let last = script.world_mouseover();
+        let published = memo.published.get(&script);
+        let self_store = self_q.iter().next();
+        let chr = tables.unit_names();
+        let types = tables.types(&names);
+
+        // A plate's pick stands for its enter's publish (`0x7cb850`), so it holds only while that plate
+        // holds the hover: a plate retired after the pick was taken has run its leave (`0x7cb8b0`),
+        // which published the loss, and the hover re-picks to the WorldFrame.
+        if hovered.plate && script.hovered_nameplate() != hovered.guid {
+            if std::mem::take(published) {
+                script.set_unit("mouseover", None);
+            }
             script.publish_world_mouseover(None);
             return;
         }
-        if last == Some(guid) {
-            return; // already up; a corner plate never re-seats
-        }
-        // A corpse carries `CORPSE_FIELD_OWNER`, not a name; the plate waits for the name query.
-        let Some(owner) = store.0.corpse_owner() else {
-            return;
-        };
-        let Some(name) = names.resolve_player(owner, ask).map(str::to_string) else {
-            return;
-        };
-        // `CORPSE_TOOLTIP`, the builder's key; no string, no plate.
-        let Some(plate) = keyed(
-            &|key: &str| benilla_ui::strings::global(script.lua(), key),
-            "CORPSE_TOOLTIP",
-            &[Arg::S(&name)],
-        ) else {
-            return;
-        };
-        script.publish_world_mouseover(Some(guid));
-        script.world_tooltip_corpse(&plate);
-        return;
-    }
-    if let Some((entity, guid)) = go {
-        // The plate follows the cursor iff `[vtbl+0x5c]` (`0x5f8630`) finds
-        // `data[0x621b00(type, 0x13)]` set, and semantic `0x13` exists only for GENERIC(5), at
-        // `data[0]`. `data[1]` (`0x5f4830`) is whether it can be hovered, not where it sits.
-        let go_fields = stores.get(entity).ok().map(|s| &s.0);
-        let cursor_seated = go_fields.map(|f| f.gameobject_type_id()) == Some(GO_TYPE_GENERIC)
-            && go_fields
-                .and_then(|f| go_inputs.templates.of(f))
-                .is_some_and(|t| t.floating_tooltip);
-        // Window px to the VM's y-up root units, as the input seam converts.
-        let cursor_ui = cursor_seated
-            .then(|| {
-                window.iter().next().and_then(|w| {
-                    // The hover probe's aim stands in for a missing cursor; a real pointer wins.
-                    w.cursor_position()
-                        .or_else(crate::target::hover_probe_point)
-                        .map(|c| {
-                            let at = crate::ui_script::window_to_ui(w.height(), c);
-                            (at.x, at.y)
-                        })
-                })
-            })
-            .flatten();
-        if last == Some(guid) {
-            if crate::target::hover_probe_armed() {
-                let line = format!("held Go({guid:#x})");
-                if *trace != line {
-                    info!("hover probe/tooltip: {line}");
-                    *trace = line;
-                }
-            }
-            // A cursor-seated plate follows the pointer in its own update (mode 6); the corner arm
-            // has nothing to re-seat.
-            return;
-        }
-        if cursor_seated && cursor_ui.is_none() {
-            return; // cursor off-window: nothing to seat the plate against
-        }
-        if crate::target::hover_probe_armed() {
-            info!(
-                "hover probe/tooltip: guid {guid:#x} cursor_seated {cursor_seated} cursor_ui \
-                 {cursor_ui:?} template {:?}",
-                go_fields
-                    .and_then(|f| go_inputs.templates.of(f))
-                    .map(|t| t.name.clone()),
-            );
-        }
-        let Some(fields) = go_fields else {
-            return; // not streamed: no descriptor, no entry
-        };
-        // The builder reads the record its create asked for (`0x5f7d81`, `0x5f8100`): an object
-        // whose template has not landed shows when it does.
-        let Some(template) = go_inputs.templates.of(fields).cloned() else {
-            return;
-        };
-        // The builder's lock lines ([`go_lock_lines`]).
-        let go_store = stores.get(entity).ok();
-        let flags = go_store.map_or(0, |s| s.0.gameobject_flags());
-        let flag_locked = flags & GO_FLAG_LOCKED != 0;
-        let state = go_store.map_or(benilla_formats::GO_STATE_ACTIVE, |s| {
-            crate::go_anim::go_state(anims.get(entity).ok(), s)
-        });
-        let slots = go_inputs
-            .locks
-            .as_ref()
-            .filter(|_| template.lock_id != 0)
-            .and_then(|l| l.0.slots(template.lock_id));
-        // The resolver the click uses (`0x5f83d0`), which the builder asks for both lines
-        // (`0x52ab14`, `0x52abc6`): its verdict and the opener it last matched.
-        let facts = crate::target::lock::go_facts(go_store.map(|s| (s, state)));
-        let mut matched = None;
-        let outcome = slots.map(|slots| {
-            crate::target::lock::resolve_lock(
-                slots,
-                &player_actions.spells,
-                go_inputs.spells.as_deref(),
-                go_inputs.skill_lines.as_ref().map(|s| &s.catalog),
-                self_store,
-                &go_inputs.objects,
-                facts,
-                &mut matched,
-            )
-        });
-        let lines = go_lock_lines(
-            GoLock {
-                slots,
-                state,
-                flag_locked,
-                outcome,
-                matched,
-            },
-            &|entry| {
-                go_inputs
-                    .items
-                    .template(entry, 0, ask)
-                    .map(|t| t.name.clone())
-            },
-            &|index| {
-                go_inputs
-                    .lock_types
-                    .as_deref()
-                    .and_then(|c| c.0.row_name(index))
-                    .map(str::to_string)
-            },
-            &|key: &str| benilla_ui::strings::global(script.lua(), key),
+        let hover: HoverKey = (
+            hovered.mouseover(&hovered_go).map(|(_, guid)| guid),
+            hovered.corpse_guid,
+            hovered_go.guid,
         );
-        script.publish_world_mouseover(Some(guid));
-        script.world_tooltip_gameobject(&template.name, &lines, cursor_seated);
-        return;
-    }
-    // Hover lost: the same teardown, with no plate after it.
-    script.publish_world_mouseover(None);
+        let ask = Ask::at(memo.hovering.replace(hover) != Some(hover), &commands);
+        let unit = hovered.mouseover(&hovered_go).and_then(|(entity, guid)| {
+            let store = stores.get(entity).ok()?;
+            let name = names
+                .resolve_unit(guid, Some(store), ask)
+                .map(str::to_string);
+            let (rel, me) = (relations.get(), relations.me());
+            let subject = relations.unit_of(guid, store);
+            let reaction = unit_reaction(&rel, &subject, me.as_ref());
+            // The hovered guid, the pair `0x492890` writes to `0xb4e2c8`/`0xb4e2cc` and the token
+            // resolver `0x515970` reads for `"mouseover"`, so `UnitIsUnit` can match it.
+            let mut s = snapshot(store, guid, name, reaction, chr, types);
+            s.player_reaction = player_reaction(&rel, &subject, me.as_ref());
+            enrich_unit(
+                &mut s,
+                guid,
+                &names,
+                store,
+                relations.factions(),
+                self_store,
+            );
+            let object = |g: u64| stores.get(tables.entity(g)?).ok();
+            let sources = crate::ui_unit::tooltip_facts::TooltipSources {
+                names: &names,
+                catalog: tables.catalog(),
+                object: &object,
+                study: tables.study(),
+            };
+            s.tooltip =
+                crate::ui_unit::tooltip_facts::tooltip_facts(store, s.creature_type, &sources);
+            Some((guid, s))
+        });
+        // The hovered GameObject, when nothing else was picked or it is nearer. Not gated on
+        // highlightability: the publisher `0x492890` sends every object to the builder by kind, so a
+        // signpost or an in-use object shows its plate with no interact cursor.
+        let go = hovered_go.target.zip(hovered_go.guid).filter(|_| {
+            (unit.is_none() && hovered.corpse.is_none()) || go_is_nearest(&hovered, &hovered_go)
+        });
+
+        if let Some((guid, state)) = unit {
+            // Publish, which tears the old hover down, then push: the builder reads the token. Rebuild
+            // on a new target or a late name or creature answer, which rebuilds under the same hover
+            // with no teardown; health and power stay out of the key, since the watcher drives the bar.
+            let key = lines_view(&state);
+            let changed = script.publish_world_mouseover(Some(guid));
+            script.set_unit("mouseover", Some(state));
+            *published = true;
+            if changed || last_lines.as_ref() != Some(&key) {
+                script.world_tooltip_unit("mouseover");
+                *last_lines = Some(key);
+            }
+            return;
+        }
+        // No unit won the pick: the publisher's teardown zeroes the mouseover pair (`0x4928e8`,
+        // `0x4928f2`) and writes a null, corpse or GameObject guid, none of which resolves as a unit,
+        // so `"mouseover"` names nobody from this frame. A fading plate keeps its lines and its bar,
+        // which follows the unit's guid, not the token; the null publish fires no event (the sole
+        // `UPDATE_MOUSEOVER_UNIT` is the unit arm's, `0x4929b3`).
+        if std::mem::take(published) {
+            script.set_unit("mouseover", None);
+        }
+        // The corpse plate, "Corpse of <owner>" (`0x52aef0`): a name and nothing else, corner-seated.
+        // The publisher fires no event for a corpse, so `UnitName("mouseover")` on one stays nil.
+        if let Some((entity, guid)) = hovered
+            .corpse
+            .zip(hovered.corpse_guid)
+            .filter(|_| go.is_none())
+        {
+            let Some(store) = stores.get(entity).ok() else {
+                return;
+            };
+            // A bone pile with nothing to take publishes no mouseover: no plate, no brighten.
+            if !crate::target::corpse_mouseover_eligible(store) {
+                script.publish_world_mouseover(None);
+                return;
+            }
+            if last == Some(guid) {
+                return; // already up; a corner plate never re-seats
+            }
+            // A corpse carries `CORPSE_FIELD_OWNER`, not a name; the plate waits for the name query.
+            let Some(owner) = store.0.corpse_owner() else {
+                return;
+            };
+            let Some(name) = names.resolve_player(owner, ask).map(str::to_string) else {
+                return;
+            };
+            // `CORPSE_TOOLTIP`, the builder's key; no string, no plate.
+            let Some(plate) = keyed(
+                &|key: &str| benilla_ui::strings::global(script.lua(), key),
+                "CORPSE_TOOLTIP",
+                &[Arg::S(&name)],
+            ) else {
+                return;
+            };
+            script.publish_world_mouseover(Some(guid));
+            script.world_tooltip_corpse(&plate);
+            return;
+        }
+        if let Some((entity, guid)) = go {
+            // The plate follows the cursor iff `[vtbl+0x5c]` (`0x5f8630`) finds
+            // `data[0x621b00(type, 0x13)]` set, and semantic `0x13` exists only for GENERIC(5), at
+            // `data[0]`. `data[1]` (`0x5f4830`) is whether it can be hovered, not where it sits.
+            let go_fields = stores.get(entity).ok().map(|s| &s.0);
+            let cursor_seated = go_fields.map(|f| f.gameobject_type_id()) == Some(GO_TYPE_GENERIC)
+                && go_fields
+                    .and_then(|f| go_inputs.templates.of(f))
+                    .is_some_and(|t| t.floating_tooltip);
+            // Window px to the VM's y-up root units, as the input seam converts.
+            let cursor_ui = cursor_seated
+                .then(|| {
+                    window.iter().next().and_then(|w| {
+                        // The hover probe's aim stands in for a missing cursor; a real pointer wins.
+                        w.cursor_position()
+                            .or_else(crate::target::hover_probe_point)
+                            .map(|c| {
+                                let at = crate::ui_script::window_to_ui(w.height(), c);
+                                (at.x, at.y)
+                            })
+                    })
+                })
+                .flatten();
+            if last == Some(guid) {
+                if crate::target::hover_probe_armed() {
+                    let line = format!("held Go({guid:#x})");
+                    if *trace != line {
+                        info!("hover probe/tooltip: {line}");
+                        *trace = line;
+                    }
+                }
+                // A cursor-seated plate follows the pointer in its own update (mode 6); the corner arm
+                // has nothing to re-seat.
+                return;
+            }
+            if cursor_seated && cursor_ui.is_none() {
+                return; // cursor off-window: nothing to seat the plate against
+            }
+            if crate::target::hover_probe_armed() {
+                info!(
+                    "hover probe/tooltip: guid {guid:#x} cursor_seated {cursor_seated} cursor_ui \
+                 {cursor_ui:?} template {:?}",
+                    go_fields
+                        .and_then(|f| go_inputs.templates.of(f))
+                        .map(|t| t.name.clone()),
+                );
+            }
+            let Some(fields) = go_fields else {
+                return; // not streamed: no descriptor, no entry
+            };
+            // The builder reads the record its create asked for (`0x5f7d81`, `0x5f8100`): an object
+            // whose template has not landed shows when it does.
+            let Some(template) = go_inputs.templates.of(fields).cloned() else {
+                return;
+            };
+            // The builder's lock lines ([`go_lock_lines`]).
+            let go_store = stores.get(entity).ok();
+            let flags = go_store.map_or(0, |s| s.0.gameobject_flags());
+            let flag_locked = flags & GO_FLAG_LOCKED != 0;
+            let state = go_store.map_or(benilla_formats::GO_STATE_ACTIVE, |s| {
+                crate::go_anim::go_state(anims.get(entity).ok(), s)
+            });
+            let slots = go_inputs
+                .locks
+                .as_ref()
+                .filter(|_| template.lock_id != 0)
+                .and_then(|l| l.0.slots(template.lock_id));
+            // The resolver the click uses (`0x5f83d0`), which the builder asks for both lines
+            // (`0x52ab14`, `0x52abc6`): its verdict and the opener it last matched.
+            let facts = crate::target::lock::go_facts(go_store.map(|s| (s, state)));
+            let mut matched = None;
+            let outcome = slots.map(|slots| {
+                crate::target::lock::resolve_lock(
+                    slots,
+                    &player_actions.spells,
+                    go_inputs.spells.as_deref(),
+                    go_inputs.skill_lines.as_ref().map(|s| &s.catalog),
+                    self_store,
+                    &go_inputs.objects,
+                    facts,
+                    &mut matched,
+                )
+            });
+            let lines = go_lock_lines(
+                GoLock {
+                    slots,
+                    state,
+                    flag_locked,
+                    outcome,
+                    matched,
+                },
+                &|entry| {
+                    go_inputs
+                        .items
+                        .template(entry, 0, ask)
+                        .map(|t| t.name.clone())
+                },
+                &|index| {
+                    go_inputs
+                        .lock_types
+                        .as_deref()
+                        .and_then(|c| c.0.row_name(index))
+                        .map(str::to_string)
+                },
+                &|key: &str| benilla_ui::strings::global(script.lua(), key),
+            );
+            script.publish_world_mouseover(Some(guid));
+            script.world_tooltip_gameobject(&template.name, &lines, cursor_seated);
+            return;
+        }
+        // Hover lost: the same teardown, with no plate after it.
+        script.publish_world_mouseover(None);
+    })
 }
 
 #[cfg(test)]

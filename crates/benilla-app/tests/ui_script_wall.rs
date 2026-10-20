@@ -3,7 +3,7 @@
 //! values.
 //!
 //! A file counts if it contains the identifier `UiScript` anywhere (a type, a `use`, a doc
-//! comment). `CEILING` is the standing count of gameplay files and `SLACK` how far under it the
+//! comment), or `HostedVm`, the system param that is the VM with its call host. `CEILING` is the standing count of gameplay files and `SLACK` how far under it the
 //! count may sit, as in `world_api_wall.rs`. `WOW_UISCRIPT_DUMP=1` prints the files.
 //!
 //! Window feeds (`ui_*`), `capture/` probes, `devtools/` instruments and test modules are reported;
@@ -59,7 +59,8 @@ fn the_vm_is_named_by_no_more_files_than_the_ceiling_says() {
                 return None;
             }
             let text = std::fs::read_to_string(&p).ok()?;
-            names_ident(&text, "UiScript").then(|| (family(&rel), rel))
+            (names_ident(&text, "UiScript") || names_ident(&text, "HostedVm"))
+                .then(|| (family(&rel), rel))
         })
         .collect();
     files.sort();

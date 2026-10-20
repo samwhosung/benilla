@@ -7,8 +7,6 @@
 
 use bevy::prelude::*;
 
-use benilla_ui::script::UiScript;
-
 use benilla_assets::LockRecover;
 
 use crate::net::PingShared;
@@ -22,18 +20,20 @@ impl Plugin for UiNetPlugin {
     }
 }
 
-fn feed_net_stats(script: Option<NonSendMut<UiScript>>, ping: Res<PingShared>) {
-    let Some(mut script) = script else { return };
-    // Recovered, not unwrapped: a panic on a net thread holding this lock ends the connection,
-    // not the app.
-    let (latency, rates) = {
-        let clock = ping.0.lock_recover();
-        let rates = clock
-            .traffic
-            .as_ref()
-            .map_or((0.0, 0.0), |t| t.rates_kbps());
-        (clock.avg_latency_ms(), rates)
-    };
-    script.set_latency_ms(latency);
-    script.set_bandwidth_kbps(rates.0, rates.1);
+fn feed_net_stats(mut hosted_vm: crate::script_calls::HostedVm, ping: Res<PingShared>) {
+    hosted_vm.run(|script| {
+        let Some(script) = script else { return };
+        // Recovered, not unwrapped: a panic on a net thread holding this lock ends the connection,
+        // not the app.
+        let (latency, rates) = {
+            let clock = ping.0.lock_recover();
+            let rates = clock
+                .traffic
+                .as_ref()
+                .map_or((0.0, 0.0), |t| t.rates_kbps());
+            (clock.avg_latency_ms(), rates)
+        };
+        script.set_latency_ms(latency);
+        script.set_bandwidth_kbps(rates.0, rates.1);
+    })
 }

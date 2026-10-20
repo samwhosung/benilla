@@ -648,40 +648,44 @@ pub(crate) fn open_trainer(
 /// `CMSG_TRAINER_LIST` for the player after the close core; `CloseTrainer` runs the core and
 /// sends nothing.
 fn drain_trainer(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     open: Res<TrainerOpen>,
     commands: Res<NetCommands>,
     mut world_commands: Commands,
     me: Query<&Guid, With<SelfPlayer>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for spell_id in script.take_trainer_buys() {
-        let Some(trainer) = open.trainer else {
-            debug!(
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        for spell_id in script.take_trainer_buys() {
+            let Some(trainer) = open.trainer else {
+                debug!(
                 "ui_trainer: BuyTrainerService(spell {spell_id}) with no open trainer — ignored"
             );
-            continue;
-        };
-        debug!("ui_trainer: buy service (trainer {trainer:#x}, spell {spell_id})");
-        let _ = commands
-            .0
-            .send(ClientCommand::TrainerBuySpell { trainer, spell_id });
-    }
-    // `OpenTrainer` closes the window and then asks for the player's own list (`0x5df680`), which
-    // the server answers with nothing for a player. All of it waits on the player (`0x4d8d24`).
-    if script.take_trainer_open_own() {
-        if let Ok(&Guid(trainer)) = me.single() {
-            debug!("ui_trainer: OpenTrainer closes the window and asks for the player's own list");
-            crate::ui_session::queue(&mut world_commands, close_core);
-            let _ = commands.0.send(ClientCommand::TrainerList { trainer });
+                continue;
+            };
+            debug!("ui_trainer: buy service (trainer {trainer:#x}, spell {spell_id})");
+            let _ = commands
+                .0
+                .send(ClientCommand::TrainerBuySpell { trainer, spell_id });
         }
-    }
-    if script.take_trainer_close() {
-        debug!("ui_trainer: client-side close (no packet)");
-        crate::ui_session::queue(&mut world_commands, close_core);
-    }
+        // `OpenTrainer` closes the window and then asks for the player's own list (`0x5df680`), which
+        // the server answers with nothing for a player. All of it waits on the player (`0x4d8d24`).
+        if script.take_trainer_open_own() {
+            if let Ok(&Guid(trainer)) = me.single() {
+                debug!(
+                    "ui_trainer: OpenTrainer closes the window and asks for the player's own list"
+                );
+                crate::ui_session::queue(&mut world_commands, close_core);
+                let _ = commands.0.send(ClientCommand::TrainerList { trainer });
+            }
+        }
+        if script.take_trainer_close() {
+            debug!("ui_trainer: client-side close (no packet)");
+            crate::ui_session::queue(&mut world_commands, close_core);
+        }
+    })
 }
 
 mod law;

@@ -33,7 +33,7 @@
 use benilla_protocol::messages::{roll_vote, LootAllPassed, LootRoll, LootRollWon, LootStartRoll};
 use bevy::prelude::*;
 
-use benilla_ui::script::{LootRollEntry, LootRollsState, ScriptValue, UiScript};
+use benilla_ui::script::{LootRollEntry, LootRollsState, ScriptValue};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
@@ -541,7 +541,7 @@ fn snapshot(
 
 /// Tick the open rolls, push them into the VM, fire their events and post their chat lines.
 fn feed_loot_rolls(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut rolls: ResMut<LootRolls>,
     items: Res<Items>,
     names: Res<NameCache>,
@@ -557,113 +557,118 @@ fn feed_loot_rolls(
     // (`0x61ba3a`, `0x61bafe`, `0x61c0b9`).
     loot: Res<crate::ui_loot::LootConfig>,
 ) {
-    rolls.tick(time.delta().as_millis() as u32);
+    hosted_vm.run(|script| {
+        rolls.tick(time.delta().as_millis() as u32);
 
-    let Some(mut script) = script else {
-        return;
-    };
-    let last = last.get(&script);
-    let catalogs = crate::items::RollCatalogs {
-        props: props.as_deref(),
-        enchants: enchants.as_deref(),
-    };
-    drain_lines(
-        &mut rolls,
-        self_guid.0,
-        &items,
-        &names,
-        &commands,
-        &chat,
-        catalogs,
-        loot.show_loot_spam,
-    );
+        let Some(script) = script else {
+            return;
+        };
+        let last = last.get(&script);
+        let catalogs = crate::items::RollCatalogs {
+            props: props.as_deref(),
+            enchants: enchants.as_deref(),
+        };
+        drain_lines(
+            &mut rolls,
+            self_guid.0,
+            &items,
+            &names,
+            &commands,
+            &chat,
+            catalogs,
+            loot.show_loot_spam,
+        );
 
-    for r in rolls.active.iter_mut().filter(|r| !r.asked) {
-        items.template(r.item_id, 0, Ask::Event(&commands));
-        r.asked = true;
-    }
-    // The snapshot goes in before the events: a `GroupLootFrame`'s `OnShow` reads its item from it.
-    let fresh = snapshot(&rolls, &items, icons.as_deref(), catalogs);
-    if fresh != *last {
-        script.set_loot_rolls(fresh.clone());
-        *last = fresh;
-    }
+        for r in rolls.active.iter_mut().filter(|r| !r.asked) {
+            items.template(r.item_id, 0, Ask::Event(&commands));
+            r.asked = true;
+        }
+        // The snapshot goes in before the events: a `GroupLootFrame`'s `OnShow` reads its item from it.
+        let fresh = snapshot(&rolls, &items, icons.as_deref(), catalogs);
+        if fresh != *last {
+            script.set_loot_rolls(fresh.clone());
+            *last = fresh;
+        }
 
-    // The hold: a fresh roll reaches `0x61b430` once its template is in the snapshot above, and
-    // takes a free slot or is deferred.
-    rolls.reach_ready(|r| {
-        if items.template(r.item_id, 0, Ask::Read).is_none() {
-            // The module doc's deviation: an entry the server does not know, or an expired hold.
-            let unknown = items.template_answered_unknown(r.item_id);
-            if !unknown && r.held_ms < TEMPLATE_HOLD_MAX_MS {
-                return false;
-            }
-            debug!(
-                "ui_loot_roll: roll {} opening unresolved ({})",
-                r.roll_id,
-                if unknown {
-                    "the server does not know the entry"
-                } else {
-                    "template hold expired"
+        // The hold: a fresh roll reaches `0x61b430` once its template is in the snapshot above, and
+        // takes a free slot or is deferred.
+        rolls.reach_ready(|r| {
+            if items.template(r.item_id, 0, Ask::Read).is_none() {
+                // The module doc's deviation: an entry the server does not know, or an expired hold.
+                let unknown = items.template_answered_unknown(r.item_id);
+                if !unknown && r.held_ms < TEMPLATE_HOLD_MAX_MS {
+                    return false;
                 }
+                debug!(
+                    "ui_loot_roll: roll {} opening unresolved ({})",
+                    r.roll_id,
+                    if unknown {
+                        "the server does not know the entry"
+                    } else {
+                        "template hold expired"
+                    }
+                );
+            }
+            true
+        });
+        // Closes first: a promoted roll's frame needs the closed one's free, or the stock four-frame
+        // `GroupLootFrame_OpenNewFrame` drops it.
+        for roll_id in std::mem::take(&mut rolls.cancelled) {
+            debug!("ui_loot_roll: roll {roll_id} cancelled");
+            script.fire_event("CANCEL_LOOT_ROLL", vec![ScriptValue::Int(roll_id as i64)]);
+        }
+        for r in &mut rolls.active {
+            if r.phase != Phase::Starting {
+                continue;
+            }
+            r.phase = Phase::Open;
+            debug!(
+                "ui_loot_roll: roll {} opened ({} ms, held {} ms)",
+                r.roll_id, r.countdown_ms, r.held_ms
+            );
+            script.fire_event(
+                "START_LOOT_ROLL",
+                vec![
+                    ScriptValue::Int(r.roll_id as i64),
+                    ScriptValue::Int(r.countdown_ms as i64),
+                ],
             );
         }
-        true
-    });
-    // Closes first: a promoted roll's frame needs the closed one's free, or the stock four-frame
-    // `GroupLootFrame_OpenNewFrame` drops it.
-    for roll_id in std::mem::take(&mut rolls.cancelled) {
-        debug!("ui_loot_roll: roll {roll_id} cancelled");
-        script.fire_event("CANCEL_LOOT_ROLL", vec![ScriptValue::Int(roll_id as i64)]);
-    }
-    for r in &mut rolls.active {
-        if r.phase != Phase::Starting {
-            continue;
-        }
-        r.phase = Phase::Open;
-        debug!(
-            "ui_loot_roll: roll {} opened ({} ms, held {} ms)",
-            r.roll_id, r.countdown_ms, r.held_ms
-        );
-        script.fire_event(
-            "START_LOOT_ROLL",
-            vec![
-                ScriptValue::Int(r.roll_id as i64),
-                ScriptValue::Int(r.countdown_ms as i64),
-            ],
-        );
-    }
+    })
 }
 
 /// Drain the Lua votes: each `RollOnLoot` is one `CMSG_LOOT_ROLL` and closes our frame.
 fn drain_loot_rolls(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut rolls: ResMut<LootRolls>,
     commands: Res<NetCommands>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    // The VM signalled each vote's `CANCEL_LOOT_ROLL`, and a bind-on-pickup Need or Greed's
-    // `CONFIRM_LOOT_ROLL`, inside the verb (`0x61bf2a`, `0x61be8b`).
-    for (roll_id, roll_type) in script.take_loot_roll_votes() {
-        match rolls.vote(roll_id) {
-            Some((looted_target, item_slot)) => {
-                debug!("ui_loot_roll: vote {roll_type} on roll {roll_id}");
-                let _ = commands.0.send(ClientCommand::LootRoll {
-                    looted_target,
-                    item_slot,
-                    roll_type,
-                });
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        // The VM signalled each vote's `CANCEL_LOOT_ROLL`, and a bind-on-pickup Need or Greed's
+        // `CONFIRM_LOOT_ROLL`, inside the verb (`0x61bf2a`, `0x61be8b`).
+        for (roll_id, roll_type) in script.take_loot_roll_votes() {
+            match rolls.vote(roll_id) {
+                Some((looted_target, item_slot)) => {
+                    debug!("ui_loot_roll: vote {roll_type} on roll {roll_id}");
+                    let _ = commands.0.send(ClientCommand::LootRoll {
+                        looted_target,
+                        item_slot,
+                        roll_type,
+                    });
+                }
+                None => debug!("ui_loot_roll: RollOnLoot({roll_id}) — no such roll, ignored"),
             }
-            None => debug!("ui_loot_roll: RollOnLoot({roll_id}) — no such roll, ignored"),
         }
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use benilla_ui::script::UiScript;
 
     fn start(target: u64, slot: u32, item_id: u32) -> LootStartRoll {
         LootStartRoll {

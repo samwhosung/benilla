@@ -122,7 +122,7 @@ fn bank_slot_error_key(result: u32) -> Option<&'static str> {
 /// `BANKFRAME_OPENED` has no arguments: the reference fires it bare (`0x4f8522`), and stock
 /// `BankFrame.lua:127` titles with `UnitName("npc")`.
 fn feed_bank(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     open: Res<BankOpen>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     prices: Option<Res<BankPrices>>,
@@ -131,66 +131,72 @@ fn feed_bank(
     mut closes: CoreCloses,
     mut sink: crate::ui_action::MessageSink,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let last = last.get(&script);
-    if closes.since_last(&script, NpcWindow::Bank) {
-        *last = None;
-    }
-    // Refusals show, and speak, as their message rows say: insufficient funds is speech `0x16`.
-    let lines: Vec<_> = errors
-        .0
-        .drain(..)
-        .filter_map(|result| crate::ui_action::keyed_line(&script, bank_slot_error_key(result)?))
-        .collect();
-    crate::ui_action::show_messages(&mut script, &mut sink, "ui_bank", lines);
-    let store = self_q.iter().next();
-    let purchased = store
-        .and_then(|s| s.0.player_bank_bag_slots_purchased())
-        .unwrap_or(0);
-    let fresh = open.banker.map(|_| BankState {
-        num_purchased: u32::from(purchased),
-        next_cost: prices
-            .as_ref()
-            .and_then(|p| p.0.next_slot_price(purchased))
-            .unwrap_or(0),
-    });
-    if fresh == *last {
-        return;
-    }
-    script.set_bank(fresh.clone());
-    match (&*last, &fresh) {
-        (None, Some(_)) => script.fire_event("BANKFRAME_OPENED", vec![]),
-        // The bought count moved: a bought slot has no reply packet, so this confirms it.
-        (Some(_), Some(_)) => script.fire_event("PLAYERBANKBAGSLOTS_CHANGED", vec![]),
-        // The core told the VM; a disconnect's clear tells it nothing.
-        (Some(_), None) | (None, None) => {}
-    }
-    *last = fresh;
+    hosted_vm.run(|script| {
+        let Some(mut script) = script else {
+            return;
+        };
+        let last = last.get(&script);
+        if closes.since_last(&script, NpcWindow::Bank) {
+            *last = None;
+        }
+        // Refusals show, and speak, as their message rows say: insufficient funds is speech `0x16`.
+        let lines: Vec<_> = errors
+            .0
+            .drain(..)
+            .filter_map(|result| {
+                crate::ui_action::keyed_line(&script, bank_slot_error_key(result)?)
+            })
+            .collect();
+        crate::ui_action::show_messages(&mut script, &mut sink, "ui_bank", lines);
+        let store = self_q.iter().next();
+        let purchased = store
+            .and_then(|s| s.0.player_bank_bag_slots_purchased())
+            .unwrap_or(0);
+        let fresh = open.banker.map(|_| BankState {
+            num_purchased: u32::from(purchased),
+            next_cost: prices
+                .as_ref()
+                .and_then(|p| p.0.next_slot_price(purchased))
+                .unwrap_or(0),
+        });
+        if fresh == *last {
+            return;
+        }
+        script.set_bank(fresh.clone());
+        match (&*last, &fresh) {
+            (None, Some(_)) => script.fire_event("BANKFRAME_OPENED", vec![]),
+            // The bought count moved: a bought slot has no reply packet, so this confirms it.
+            (Some(_), Some(_)) => script.fire_event("PLAYERBANKBAGSLOTS_CHANGED", vec![]),
+            // The core told the VM; a disconnect's clear tells it nothing.
+            (Some(_), None) | (None, None) => {}
+        }
+        *last = fresh;
+    })
 }
 
 /// Drain the Lua intents: `PurchaseSlot()` sends the buy, `CloseBankFrame()` runs the core,
 /// sending nothing.
 fn drain_bank(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     open: Res<BankOpen>,
     net: Res<NetCommands>,
     mut commands: Commands,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    if script.take_bank_purchase() {
-        if let Some(banker) = open.banker {
-            debug!("bank: purchase next bag slot at {banker:#x}");
-            let _ = net.0.send(ClientCommand::BuyBankSlot { guid: banker });
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        if script.take_bank_purchase() {
+            if let Some(banker) = open.banker {
+                debug!("bank: purchase next bag slot at {banker:#x}");
+                let _ = net.0.send(ClientCommand::BuyBankSlot { guid: banker });
+            }
         }
-    }
-    if script.take_bank_close() {
-        debug!("bank: CloseBankFrame");
-        crate::ui_session::queue(&mut commands, close_core);
-    }
+        if script.take_bank_close() {
+            debug!("bank: CloseBankFrame");
+            crate::ui_session::queue(&mut commands, close_core);
+        }
+    })
 }
 
 #[cfg(test)]

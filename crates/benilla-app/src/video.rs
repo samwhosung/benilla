@@ -496,12 +496,13 @@ pub(crate) struct GxRestarts(u32);
 /// where the reference's restart calls `CVar::Update` (`0x63e060`) on each; `GetCVar` answers the
 /// applied value until then.
 fn drain_restart_gx(
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut restarts: ResMut<GxRestarts>,
     mut cvars: ResMut<crate::cvars::Cvars>,
     mut commands: Commands,
 ) {
-    let Some(mut script) = script else {
+    hosted_vm.run(|script| {
+    let Some(script) = script else {
         return;
     };
     let asks = script.take_restart_gx_asks();
@@ -517,6 +518,7 @@ fn drain_restart_gx(
         }
     }
     info!("video: RestartGx — {committed} staged setting(s) committed; re-asserting the display mode and present mode");
+})
 }
 
 /// The reference's three filters on the resolution list (`0x48bcfa` to `0x48bd18`): keep when
@@ -557,51 +559,53 @@ type PublishedModes = Option<(Vec<ScreenResolution>, Option<ScreenResolution>)>;
 /// needs. Deviation: sizes are logical px, because `gxResolution` is a logical inner size here.
 /// The list is recomputed on change; the reference builds its list once and never invalidates it.
 fn publish_display_modes(
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     windows: Query<&Window, With<PrimaryWindow>>,
     monitors: Query<&bevy::window::Monitor>,
     mut last: Local<crate::ui_script::VmMemo<PublishedModes>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let res = &window.resolution;
-    let current = Some(ScreenResolution {
-        width: res.width() as u32,
-        height: res.height() as u32,
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        let Ok(window) = windows.single() else {
+            return;
+        };
+        let res = &window.resolution;
+        let current = Some(ScreenResolution {
+            width: res.width() as u32,
+            height: res.height() as u32,
+        })
+        .filter(|r| r.width > 0 && r.height > 0);
+        let mut offered: Vec<ScreenResolution> = Vec::new();
+        for m in &monitors {
+            // The monitor's own scale, not the window's: these rows describe the panel.
+            let scale = if m.scale_factor > 0.0 {
+                m.scale_factor
+            } else {
+                1.0
+            };
+            let logical = |size: UVec2| ScreenResolution {
+                width: (size.x as f64 / scale).round() as u32,
+                height: (size.y as f64 / scale).round() as u32,
+            };
+            offered.push(logical(m.physical_size()));
+            offered.extend(m.video_modes.iter().map(|v| logical(v.physical_size)));
+        }
+        offered.retain(|r| offerable(*r));
+        if offered.is_empty() {
+            offered.extend(SCREEN_FALLBACK);
+        }
+        offered.sort_by_key(|r| (u64::from(r.width) * u64::from(r.height), r.width, r.height));
+        offered.dedup();
+        // Keyed by VM: a `ReloadUI` VM has been pushed nothing, so a plain `Local` would skip it.
+        let memo = last.get(&script);
+        if memo.as_ref() == Some(&(offered.clone(), current)) {
+            return;
+        }
+        *memo = Some((offered.clone(), current));
+        script.set_screen_resolutions(offered, current);
     })
-    .filter(|r| r.width > 0 && r.height > 0);
-    let mut offered: Vec<ScreenResolution> = Vec::new();
-    for m in &monitors {
-        // The monitor's own scale, not the window's: these rows describe the panel.
-        let scale = if m.scale_factor > 0.0 {
-            m.scale_factor
-        } else {
-            1.0
-        };
-        let logical = |size: UVec2| ScreenResolution {
-            width: (size.x as f64 / scale).round() as u32,
-            height: (size.y as f64 / scale).round() as u32,
-        };
-        offered.push(logical(m.physical_size()));
-        offered.extend(m.video_modes.iter().map(|v| logical(v.physical_size)));
-    }
-    offered.retain(|r| offerable(*r));
-    if offered.is_empty() {
-        offered.extend(SCREEN_FALLBACK);
-    }
-    offered.sort_by_key(|r| (u64::from(r.width) * u64::from(r.height), r.width, r.height));
-    offered.dedup();
-    // Keyed by VM: a `ReloadUI` VM has been pushed nothing, so a plain `Local` would skip it.
-    let memo = last.get(&script);
-    if memo.as_ref() == Some(&(offered.clone(), current)) {
-        return;
-    }
-    *memo = Some((offered.clone(), current));
-    script.set_screen_resolutions(offered, current);
 }
 
 /// Check the window got the size `$WOW_WIN` asked for: the window manager may clamp it to the

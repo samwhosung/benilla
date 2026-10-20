@@ -206,25 +206,27 @@ pub(crate) fn text_px(h: f32, basis: f32) -> f32 {
 
 /// Every frame: fold the plate verbs' writes into the bits, in the order the VM made them.
 pub(crate) fn apply_plate_verbs(
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut mode: ResMut<VPlateMode>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let writes = script.take_nameplate_bit_writes();
-    if writes.is_empty() {
-        return;
-    }
-    let now = VPlateMode::from_bits(writes.apply(mode.bits()));
-    if *mode != now {
-        info!(
-            "nameplates: enemy {}, friendly {}",
-            if now.enemies { "ON" } else { "OFF" },
-            if now.friends { "ON" } else { "OFF" }
-        );
-        *mode = now;
-    }
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        let writes = script.take_nameplate_bit_writes();
+        if writes.is_empty() {
+            return;
+        }
+        let now = VPlateMode::from_bits(writes.apply(mode.bits()));
+        if *mode != now {
+            info!(
+                "nameplates: enemy {}, friendly {}",
+                if now.enemies { "ON" } else { "OFF" },
+                if now.friends { "ON" } else { "OFF" }
+            );
+            *mode = now;
+        }
+    })
 }
 
 /// The world-entry clear of both script bits (`0x60394b`, `0x603952`, in `0x6033c0`), which the

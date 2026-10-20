@@ -21,7 +21,7 @@ const ACTION_SLOTS: std::ops::RangeInclusive<u32> = 1..=120;
 /// Run our own player's arrival pass, if it arrived, then the recounts the frame's item notices
 /// owe, in their order.
 pub(crate) fn recount_item_actions(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut notices: MessageReader<ItemNotice>,
     mut arrivals: MessageReader<WorldEnterCascadeMessage>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
@@ -29,24 +29,26 @@ pub(crate) fn recount_item_actions(
     items: Res<Items>,
     commands: Res<NetCommands>,
 ) {
-    let arrived = arrivals.read().count() > 0;
-    let notices: Vec<ItemNotice> = notices.read().cloned().collect();
-    let Some(mut script) = script else {
-        return;
-    };
-    let store = self_q.iter().next();
-    let counter = Counter {
-        store,
-        objects: &objects,
-        items: &items,
-        commands: &commands,
-    };
-    if arrived {
-        arrival_counts(&mut script, &counter);
-    }
-    for entry in notices.iter().flat_map(ItemNotice::recounts) {
-        recount(&mut script, &counter, entry);
-    }
+    hosted_vm.run(|script| {
+        let arrived = arrivals.read().count() > 0;
+        let notices: Vec<ItemNotice> = notices.read().cloned().collect();
+        let Some(mut script) = script else {
+            return;
+        };
+        let store = self_q.iter().next();
+        let counter = Counter {
+            store,
+            objects: &objects,
+            items: &items,
+            commands: &commands,
+        };
+        if arrived {
+            arrival_counts(&mut script, &counter);
+        }
+        for entry in notices.iter().flat_map(ItemNotice::recounts) {
+            recount(&mut script, &counter, entry);
+        }
+    })
 }
 
 /// Our own player's arrival (`0x5dea50`, its manager flag `+0xc8` always clear) writes the bar's

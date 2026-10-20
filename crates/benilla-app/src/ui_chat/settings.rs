@@ -518,17 +518,22 @@ pub(crate) fn restore_chat_looks(world: &mut World, script: &mut UiScript) {
 }
 
 /// Arm the debounce when Lua writes the chat state.
-fn watch_chat_looks(script: Option<NonSendMut<UiScript>>, mut file: ResMut<ChatWindowFile>) {
-    let Some(mut script) = script else { return };
-    let moved = !script.take_chat_window_changes().is_empty();
-    let coloured = script.take_chat_color_changes();
-    // `SetGuildRecruitmentMode` persists here too; a Lua call arms this, the login seat never.
-    let recruitment = script.take_guild_recruitment_change();
-    if !(moved || coloured || recruitment) {
-        return;
-    }
-    *file.dirty.get(&script) = true;
-    file.last_change = Some(std::time::Instant::now());
+fn watch_chat_looks(
+    mut hosted_vm: crate::script_calls::HostedVm,
+    mut file: ResMut<ChatWindowFile>,
+) {
+    hosted_vm.run(|script| {
+        let Some(script) = script else { return };
+        let moved = !script.take_chat_window_changes().is_empty();
+        let coloured = script.take_chat_color_changes();
+        // `SetGuildRecruitmentMode` persists here too; a Lua call arms this, the login seat never.
+        let recruitment = script.take_guild_recruitment_change();
+        if !(moved || coloured || recruitment) {
+            return;
+        }
+        *file.dirty.get(&script) = true;
+        file.last_change = Some(std::time::Instant::now());
+    })
 }
 
 fn write(script: &UiScript, channels: &super::edit::ChannelState, path: &std::path::Path) {
@@ -590,14 +595,16 @@ fn flush(
 
 /// The debounced save, and the `AppExit` flush.
 fn save_chat_looks(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     channels: Res<super::edit::ChannelState>,
     mut file: ResMut<ChatWindowFile>,
     mut exits: MessageReader<AppExit>,
 ) {
-    let exiting = exits.read().next().is_some();
-    let Some(script) = script else { return };
-    flush(&script, &channels, &mut file, exiting);
+    hosted_vm.run(|script| {
+        let exiting = exits.read().next().is_some();
+        let Some(script) = script else { return };
+        flush(&script, &channels, &mut file, exiting);
+    })
 }
 
 /// The session-end flush, the reference's chat teardown (`0x499a80` from `0x490c55`), called from

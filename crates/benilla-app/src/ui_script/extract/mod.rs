@@ -432,7 +432,7 @@ pub(crate) fn seat_text_measurer(script: &mut UiScript, atlas: &UiFontAtlas, sea
 /// screen size, `tick`, the measure round-trip, `resolve` and the script errors. The quads are
 /// [`paint_script`]'s, after the camera that places the `WorldFrame` nameplates.
 pub(super) fn tick_script(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     window: Query<&Window, With<PrimaryWindow>>,
     // The paced frame step, unclamped, as 1.12.1 hands `OnUpdate` its frame time (`0x76b2c0`):
     // not `Time<Real>`, which pipelined rendering mis-splits, nor `Time<Virtual>`, which clamps a
@@ -456,189 +456,192 @@ pub(super) fn tick_script(
     mut ui_cost: ResMut<super::UiFrameCost>,
     mut pass: ResMut<super::UiPassState>,
 ) {
-    pass.live = false;
-    let Some(mut script) = script else {
-        // No VM, no UI sampling a booth pane: a stranded pane would keep its camera rendering
-        // behind a dead UI.
-        booths.panes.0.clear();
-        booths.character.reset(0);
-        return;
-    };
-    let Ok(window) = window.single() else {
-        booths.panes.0.clear();
-        booths.character.reset(0);
-        return;
-    };
-    let (w, h) = (window.width(), window.height());
-    // The client's UI space is 768 units tall at every aspect (`f(screenH) = 768`, `0x41ad10`; the
-    // caret's `H_px/192`, `0x77b8c0`), the dial being `UIParent`'s scale inside it. The VM lives in
-    // it: quads scale ×s out, and the mouse and the measures ÷s in.
-    let s = super::seam_scale(h);
-    // A moved seam scale or DPI stales every text metric the engine caches: integer-stepped
-    // advances do not rescale, and the size snap moves a string's width by several percent,
-    // enough for the ellipsis to eat fitting text. A monitor hop moves the DPI alone.
-    let dpi = window.scale_factor();
-    // The tile renderer sizes its cells in device pixels off this.
-    booths.tiles.dpi = dpi;
-    let seam_moved = *last_seam != s || *last_dpi != dpi;
-    if seam_moved {
-        if *last_seam != 0.0 {
-            script.invalidate_text_measures();
-        }
-        *last_seam = s;
-        *last_dpi = dpi;
-    }
-    // Re-seat the VM's measurer on the same edge, before the tick so the first update has it.
-    if let Some(atlas) = font_atlas.as_deref() {
-        if seam_moved || !script.has_text_measurer() {
-            seat_text_measurer(&mut script, atlas, s);
-        }
-    }
-    // The phase marks feed the `[ui-cost]` line and the hover recorder (`hover_log`).
-    let printing = ui_cost_enabled();
-    let cost_on = printing || ui_cost_wanted.0;
-    let solves_before = cost_on.then(|| script.layout_solves());
-    let derives_before = cost_on.then(|| script.layout_derivations());
-    // Per frame: both halves' measure passes add to these, and only this zeroes them.
-    ui_cost.measured = 0;
-    ui_cost.measured_texts.clear();
-    let mut t_mark = cost_on.then(std::time::Instant::now);
-    // μs since the previous mark, re-armed; nothing with the meter off.
-    let mut lap = move || -> u128 {
-        if !cost_on {
-            return 0;
-        }
-        t_mark
-            .replace(std::time::Instant::now())
-            .map_or(0, |t| t.elapsed().as_micros())
-    };
-    {
-        let _span = bevy::log::info_span!("ui_script: tick").entered();
-        let resized = script.set_window_size(w, h);
-        // The UI scale is `UIParent`'s, which only the in-game state has; the glue lays out on
-        // the root alone (`0x46dd30`).
-        if script.vm_kind() == benilla_ui::script::VmKind::InGame {
-            // A display change re-applies the UI scale (`0x492e90`), whose narrow-aspect cap
-            // follows the window; a moved dial applies once, as its CVar callback does
-            // (`0x490770`). Deviation: the reference then re-reads the aspect (`0x492f13`), and on
-            // a change of 0.001 or more calls `0x491380`, which sets the reload trigger
-            // (`[0xb4b3f4]`) when the script-context check `0x494a50(0xa)` allows it; here a
-            // resize re-lays out the live UI, the chat bubbles' window-derived `BubbleGeometry`
-            // with it, because the window resizes freely and a reload on each resize would tear
-            // down every addon's state mid-play.
-            if resized {
-                let display = (w.round() as u32, h.round() as u32);
-                let mut none = None;
-                let cache = auto_cache.as_deref_mut().map_or(&mut none, |c| &mut c.0);
-                script.apply_ui_scale(display, cache);
+    hosted_vm.run(|script| {
+        pass.live = false;
+        let Some(mut script) = script else {
+            // No VM, no UI sampling a booth pane: a stranded pane would keep its camera rendering
+            // behind a dead UI.
+            booths.panes.0.clear();
+            booths.character.reset(0);
+            return;
+        };
+        let Ok(window) = window.single() else {
+            booths.panes.0.clear();
+            booths.character.reset(0);
+            return;
+        };
+        let (w, h) = (window.width(), window.height());
+        // The client's UI space is 768 units tall at every aspect (`f(screenH) = 768`, `0x41ad10`; the
+        // caret's `H_px/192`, `0x77b8c0`), the dial being `UIParent`'s scale inside it. The VM lives in
+        // it: quads scale ×s out, and the mouse and the measures ÷s in.
+        let s = super::seam_scale(h);
+        // A moved seam scale or DPI stales every text metric the engine caches: integer-stepped
+        // advances do not rescale, and the size snap moves a string's width by several percent,
+        // enough for the ellipsis to eat fitting text. A monitor hop moves the DPI alone.
+        let dpi = window.scale_factor();
+        // The tile renderer sizes its cells in device pixels off this.
+        booths.tiles.dpi = dpi;
+        let seam_moved = *last_seam != s || *last_dpi != dpi;
+        if seam_moved {
+            if *last_seam != 0.0 {
+                script.invalidate_text_measures();
             }
-            let rescaled = script.set_ui_scale(ui_scale.0);
-            // Either re-runs what the interface computed from the old `GetScreenHeight()`.
-            if resized || rescaled {
-                super::manifest::on_screen_resized(&script);
-            }
-        } else if resized && script.vm_kind() == benilla_ui::script::VmKind::Glue {
-            super::glue::on_glue_screen_resized(&script);
+            *last_seam = s;
+            *last_dpi = dpi;
         }
-        script.tick(step.delta.as_secs_f32());
-    }
-    // The VM's clock anchored at the instant the paced clock stands at, which moves by the same
-    // steps; every `Instant` to `GetTime` conversion goes through this pair, never `Instant::now()`.
-    *ui_clock = super::UiClock {
-        anchor: step.at,
-        ui_now: script.now(),
-    };
-    let us_tick = lap();
-    // ── The FontString measure round-trip, before the resolve ────────────────────────────────
-    // A request reads only region data, never a resolved rect, and `resolve` writes no region's
-    // size, so measuring first lets the resolve below see the answers. The tick drained the layout
-    // after its walk; this resolve takes the measures and what the tick's tail moved.
-    let mut measured_any = false;
-    if let Some(atlas) = font_atlas.as_deref_mut() {
-        measured_any = measure_fontstrings(&mut script, atlas, s, &mut ui_cost, ui_cost_wanted.0);
-    }
-    {
-        let _span = bevy::log::info_span!("ui_script: resolve").entered();
-        script.resolve();
-    }
-    // Only a frame that measured can have a fresh request the pass above missed.
-    if measured_any {
+        // Re-seat the VM's measurer on the same edge, before the tick so the first update has it.
+        if let Some(atlas) = font_atlas.as_deref() {
+            if seam_moved || !script.has_text_measurer() {
+                seat_text_measurer(&mut script, atlas, s);
+            }
+        }
+        // The phase marks feed the `[ui-cost]` line and the hover recorder (`hover_log`).
+        let printing = ui_cost_enabled();
+        let cost_on = printing || ui_cost_wanted.0;
+        let solves_before = cost_on.then(|| script.layout_solves());
+        let derives_before = cost_on.then(|| script.layout_derivations());
+        // Per frame: both halves' measure passes add to these, and only this zeroes them.
+        ui_cost.measured = 0;
+        ui_cost.measured_texts.clear();
+        let mut t_mark = cost_on.then(std::time::Instant::now);
+        // μs since the previous mark, re-armed; nothing with the meter off.
+        let mut lap = move || -> u128 {
+            if !cost_on {
+                return 0;
+            }
+            t_mark
+                .replace(std::time::Instant::now())
+                .map_or(0, |t| t.elapsed().as_micros())
+        };
+        {
+            let _span = bevy::log::info_span!("ui_script: tick").entered();
+            let resized = script.set_window_size(w, h);
+            // The UI scale is `UIParent`'s, which only the in-game state has; the glue lays out on
+            // the root alone (`0x46dd30`).
+            if script.vm_kind() == benilla_ui::script::VmKind::InGame {
+                // A display change re-applies the UI scale (`0x492e90`), whose narrow-aspect cap
+                // follows the window; a moved dial applies once, as its CVar callback does
+                // (`0x490770`). Deviation: the reference then re-reads the aspect (`0x492f13`), and on
+                // a change of 0.001 or more calls `0x491380`, which sets the reload trigger
+                // (`[0xb4b3f4]`) when the script-context check `0x494a50(0xa)` allows it; here a
+                // resize re-lays out the live UI, the chat bubbles' window-derived `BubbleGeometry`
+                // with it, because the window resizes freely and a reload on each resize would tear
+                // down every addon's state mid-play.
+                if resized {
+                    let display = (w.round() as u32, h.round() as u32);
+                    let mut none = None;
+                    let cache = auto_cache.as_deref_mut().map_or(&mut none, |c| &mut c.0);
+                    script.apply_ui_scale(display, cache);
+                }
+                let rescaled = script.set_ui_scale(ui_scale.0);
+                // Either re-runs what the interface computed from the old `GetScreenHeight()`.
+                if resized || rescaled {
+                    super::manifest::on_screen_resized(&script);
+                }
+            } else if resized && script.vm_kind() == benilla_ui::script::VmKind::Glue {
+                super::glue::on_glue_screen_resized(&script);
+            }
+            script.tick(step.delta.as_secs_f32());
+        }
+        // The VM's clock anchored at the instant the paced clock stands at, which moves by the same
+        // steps; every `Instant` to `GetTime` conversion goes through this pair, never `Instant::now()`.
+        *ui_clock = super::UiClock {
+            anchor: step.at,
+            ui_now: script.now(),
+        };
+        let us_tick = lap();
+        // ── The FontString measure round-trip, before the resolve ────────────────────────────────
+        // A request reads only region data, never a resolved rect, and `resolve` writes no region's
+        // size, so measuring first lets the resolve below see the answers. The tick drained the layout
+        // after its walk; this resolve takes the measures and what the tick's tail moved.
+        let mut measured_any = false;
         if let Some(atlas) = font_atlas.as_deref_mut() {
-            if measure_fontstrings(&mut script, atlas, s, &mut ui_cost, ui_cost_wanted.0) {
-                script.resolve();
+            measured_any =
+                measure_fontstrings(&mut script, atlas, s, &mut ui_cost, ui_cost_wanted.0);
+        }
+        {
+            let _span = bevy::log::info_span!("ui_script: resolve").entered();
+            script.resolve();
+        }
+        // Only a frame that measured can have a fresh request the pass above missed.
+        if measured_any {
+            if let Some(atlas) = font_atlas.as_deref_mut() {
+                if measure_fontstrings(&mut script, atlas, s, &mut ui_cost, ui_cost_wanted.0) {
+                    script.resolve();
+                }
             }
         }
-    }
-    let us_resolve = lap();
-    let measure_span = bevy::log::info_span!("ui_script: measure").entered();
-    // Message lines ask for their wrapped row count at the frame's width, so a long line pushes
-    // older ones up; no re-resolve, as rows move only the bands, never the anchors.
-    if let Some(atlas) = font_atlas.as_deref_mut() {
-        let requests = script.message_lines_needing_measure();
-        if !requests.is_empty() {
-            let rows: Vec<(u32, u32, u16, u64)> = requests
-                .iter()
-                .map(|r| {
-                    let n = crate::ui_text::measure_wrapped_rows(
-                        &mut atlas.lock(),
-                        &r.text,
-                        // The resolved width carries the frame scale; the font height does not.
-                        r.wrap_width * s,
-                        crate::ui_text::FontSpec {
-                            path: r.font.as_deref(),
-                            height: crate::ui_text::drawn_px(r.height, None, s * r.scale),
-                            outline: r.outline, // the outline biases the stepped width
-                            monochrome: false,
-                            spacing: 0.0, // the gap moves rows, never counts them
-                            // The drawn shadow seeds each row, as the draw's does.
-                            shadow_x: r.shadow_x * s * r.scale,
-                            alpha_gradient: None,
-                            non_space_wrap: false,
-                            max_lines: 0,
-                        },
-                    );
-                    (r.frame, r.index, n, r.key)
-                })
-                .collect();
-            script.set_message_line_rows(&rows);
+        let us_resolve = lap();
+        let measure_span = bevy::log::info_span!("ui_script: measure").entered();
+        // Message lines ask for their wrapped row count at the frame's width, so a long line pushes
+        // older ones up; no re-resolve, as rows move only the bands, never the anchors.
+        if let Some(atlas) = font_atlas.as_deref_mut() {
+            let requests = script.message_lines_needing_measure();
+            if !requests.is_empty() {
+                let rows: Vec<(u32, u32, u16, u64)> = requests
+                    .iter()
+                    .map(|r| {
+                        let n = crate::ui_text::measure_wrapped_rows(
+                            &mut atlas.lock(),
+                            &r.text,
+                            // The resolved width carries the frame scale; the font height does not.
+                            r.wrap_width * s,
+                            crate::ui_text::FontSpec {
+                                path: r.font.as_deref(),
+                                height: crate::ui_text::drawn_px(r.height, None, s * r.scale),
+                                outline: r.outline, // the outline biases the stepped width
+                                monochrome: false,
+                                spacing: 0.0, // the gap moves rows, never counts them
+                                // The drawn shadow seeds each row, as the draw's does.
+                                shadow_x: r.shadow_x * s * r.scale,
+                                alpha_gradient: None,
+                                non_space_wrap: false,
+                                max_lines: 0,
+                            },
+                        );
+                        (r.frame, r.index, n, r.key)
+                    })
+                    .collect();
+                script.set_message_line_rows(&rows);
+            }
         }
-    }
-    drop(measure_span);
-    let us_measure = lap();
-    // Script errors reach the Lua handler (`_ERRORMESSAGE`, `BasicControls.xml:16`) before the
-    // log, so a failing handler lands in this frame's drain.
-    script.dispatch_script_errors_to_handler();
-    for err in script.take_errors() {
-        warn!("ui_script: {err}");
-    }
-    for w in script.take_warnings() {
-        warn!("ui_script: {w}");
-    }
-    // A runtime `LoadAddOn`'s record, appended to `Logs\FrameXML.log`; the glue has none, but
-    // whatever its VM drains is the glue log's.
-    let writes = script.take_load_log_writes();
-    match script.vm_kind() {
-        benilla_ui::script::VmKind::InGame => super::load_log::write(writes),
-        benilla_ui::script::VmKind::Glue => super::load_log::write_glue(writes),
-    }
+        drop(measure_span);
+        let us_measure = lap();
+        // Script errors reach the Lua handler (`_ERRORMESSAGE`, `BasicControls.xml:16`) before the
+        // log, so a failing handler lands in this frame's drain.
+        script.dispatch_script_errors_to_handler();
+        for err in script.take_errors() {
+            warn!("ui_script: {err}");
+        }
+        for w in script.take_warnings() {
+            warn!("ui_script: {w}");
+        }
+        // A runtime `LoadAddOn`'s record, appended to `Logs\FrameXML.log`; the glue has none, but
+        // whatever its VM drains is the glue log's.
+        let writes = script.take_load_log_writes();
+        match script.vm_kind() {
+            benilla_ui::script::VmKind::InGame => super::load_log::write(writes),
+            benilla_ui::script::VmKind::Glue => super::load_log::write_glue(writes),
+        }
 
-    // ── The handover ────────────────────────────────────────────────────────────────────────
-    *pass = super::UiPassState {
-        live: true,
-        seam: s,
-        dpi,
-        us_tick,
-        us_resolve,
-        us_measure,
-        solves_before: solves_before.unwrap_or(0),
-        derives_before: derives_before.unwrap_or(0),
-    };
+        // ── The handover ────────────────────────────────────────────────────────────────────────
+        *pass = super::UiPassState {
+            live: true,
+            seam: s,
+            dpi,
+            us_tick,
+            us_resolve,
+            us_measure,
+            solves_before: solves_before.unwrap_or(0),
+            derives_before: derives_before.unwrap_or(0),
+        };
+    })
 }
 
 /// The UI pass's second half, after the camera and the plate driver: an incremental measure and
 /// `resolve` for what was written since the tick, the walk, and the conversion into [`UiQuads`].
 pub(super) fn paint_script(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     window: Query<&Window, With<PrimaryWindow>>,
     mut quads: ResMut<UiQuads>,
     world_assets: Option<ResMut<WorldAssets>>,
@@ -662,6 +665,7 @@ pub(super) fn paint_script(
     mut ui_cost: ResMut<super::UiFrameCost>,
     pass: Res<super::UiPassState>,
 ) {
+    hosted_vm.run(|script| {
     let (capture, ui_cost_wanted) = run;
     // Stand down with the tick half, which already cleared the booth panes.
     if !pass.live {
@@ -1121,6 +1125,7 @@ pub(super) fn paint_script(
             );
         }
     }
+})
 }
 
 /// One extracted entry to its screen quads, plus the side channels some arms write: link spans,

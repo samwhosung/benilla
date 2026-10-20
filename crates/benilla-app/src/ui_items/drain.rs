@@ -94,10 +94,11 @@ pub(super) fn drain_container_autoequips(
 /// and the server picks the slot. A split carry sends `CMSG_SPLIT_ITEM` instead (the reference's
 /// fork on `[0xb4b40c]`). Takes no pending lock.
 pub(super) fn drain_bag_autostores(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     commands: Res<NetCommands>,
 ) {
-    let Some(mut script) = script else {
+    hosted_vm.run(|script| {
+    let Some(script) = script else {
         return;
     };
     for a in script.take_bag_autostores() {
@@ -136,6 +137,7 @@ pub(super) fn drain_bag_autostores(
             }
         }
     }
+})
 }
 
 /// What a `UseContainerItem` or `UseInventoryItem` call reads and writes.
@@ -468,62 +470,66 @@ fn arm_locked(arm: UseArm) -> bool {
 
 /// Sends the repair-mode clicks, bag and paper doll, as `CMSG_REPAIR_ITEM`.
 pub(super) fn drain_container_repairs(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     merchant: Res<crate::ui_merchant::MerchantOpen>,
     objects: Objects,
     commands: Res<NetCommands>,
     mut purse: crate::ui_merchant::RepairPurse,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let me = self_q.iter().next();
-    // Repair-mode clicks (the reference's `0x4f9c7b` route) repair the one item: the purse test
-    // first (`0x4f9cc8`), then `ITEM_REPAIR` as it goes out (`0x4f9ce4`).
-    for (bag, slot) in script.take_container_repairs() {
-        let (Some(vendor), Some(me)) = (merchant.vendor, me) else {
-            continue;
+    hosted_vm.run(|script| {
+        let Some(mut script) = script else {
+            return;
         };
-        let slot0 = u8::try_from(slot.saturating_sub(1)).unwrap_or(0);
-        match slot_guid(&me.0, bag, slot0, &objects) {
-            Some(guid) => {
-                if purse.refuses(&mut script, &merchant, me, [guid]) {
-                    continue;
+        let me = self_q.iter().next();
+        // Repair-mode clicks (the reference's `0x4f9c7b` route) repair the one item: the purse test
+        // first (`0x4f9cc8`), then `ITEM_REPAIR` as it goes out (`0x4f9ce4`).
+        for (bag, slot) in script.take_container_repairs() {
+            let (Some(vendor), Some(me)) = (merchant.vendor, me) else {
+                continue;
+            };
+            let slot0 = u8::try_from(slot.saturating_sub(1)).unwrap_or(0);
+            match slot_guid(&me.0, bag, slot0, &objects) {
+                Some(guid) => {
+                    if purse.refuses(&mut script, &merchant, me, [guid]) {
+                        continue;
+                    }
+                    debug!("ui_items: repair lua bag {bag} slot {slot} (item {guid:#x})");
+                    script.queue_sound_kit("ITEM_REPAIR");
+                    let _ = commands.0.send(ClientCommand::RepairItem {
+                        vendor,
+                        item_guid: guid,
+                    });
                 }
-                debug!("ui_items: repair lua bag {bag} slot {slot} (item {guid:#x})");
-                script.queue_sound_kit("ITEM_REPAIR");
-                let _ = commands.0.send(ClientCommand::RepairItem {
-                    vendor,
-                    item_guid: guid,
-                });
+                None => debug!("ui_items: repair on empty slot (bag {bag} slot {slot}) — ignored"),
             }
-            None => debug!("ui_items: repair on empty slot (bag {bag} slot {slot}) — ignored"),
         }
-    }
-    // The paper doll's repair clicks (`0x4c7714`, `0x4c79c4`), the same arm on a worn item.
-    for id in script.take_inventory_repairs() {
-        let (Some(vendor), Some(me)) = (merchant.vendor, me) else {
-            continue;
-        };
-        let item_guid = u8::try_from(id.wrapping_sub(1))
-            .ok()
-            .and_then(|slot0| slot_guid(&me.0, EQUIPMENT_BAG, slot0, &objects));
-        match item_guid {
-            Some(guid) if (1..=19).contains(&id) => {
-                if purse.refuses(&mut script, &merchant, me, [guid]) {
-                    continue;
+        // The paper doll's repair clicks (`0x4c7714`, `0x4c79c4`), the same arm on a worn item.
+        for id in script.take_inventory_repairs() {
+            let (Some(vendor), Some(me)) = (merchant.vendor, me) else {
+                continue;
+            };
+            let item_guid = u8::try_from(id.wrapping_sub(1))
+                .ok()
+                .and_then(|slot0| slot_guid(&me.0, EQUIPMENT_BAG, slot0, &objects));
+            match item_guid {
+                Some(guid) if (1..=19).contains(&id) => {
+                    if purse.refuses(&mut script, &merchant, me, [guid]) {
+                        continue;
+                    }
+                    debug!("ui_items: repair worn lua slot {id} (item {guid:#x})");
+                    script.queue_sound_kit("ITEM_REPAIR");
+                    let _ = commands.0.send(ClientCommand::RepairItem {
+                        vendor,
+                        item_guid: guid,
+                    });
                 }
-                debug!("ui_items: repair worn lua slot {id} (item {guid:#x})");
-                script.queue_sound_kit("ITEM_REPAIR");
-                let _ = commands.0.send(ClientCommand::RepairItem {
-                    vendor,
-                    item_guid: guid,
-                });
+                _ => debug!(
+                    "ui_items: repair on worn lua slot {id}, empty or out of range — ignored"
+                ),
             }
-            _ => debug!("ui_items: repair on worn lua slot {id}, empty or out of range — ignored"),
         }
-    }
+    })
 }
 
 /// The clicked item's send data, read at the drain.
@@ -743,25 +749,27 @@ pub(crate) fn send_container_move(
 /// Sends the destroys `DeleteCursorItem` queued as `CMSG_DESTROYITEM` (count 0 is the whole stack
 /// on both sides); the verb relocked the item (`0x4898bc`).
 pub(super) fn drain_container_destroys(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     commands: Res<NetCommands>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for (bag, slot, count) in script.take_container_destroys() {
-        let Some((bag_index, wire_slot)) = wire_pos(bag, slot) else {
-            debug!("ui_items: destroy ({bag}, {slot}) out of range — ignored");
-            continue;
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
         };
-        let count = count.min(u32::from(u8::MAX)) as u8;
-        debug!("ui_items: destroy lua {bag}/{slot} × {count} (wire {bag_index}/{wire_slot})");
-        let _ = commands.0.send(ClientCommand::DestroyItem {
-            bag_index,
-            slot: wire_slot,
-            count,
-        });
-    }
+        for (bag, slot, count) in script.take_container_destroys() {
+            let Some((bag_index, wire_slot)) = wire_pos(bag, slot) else {
+                debug!("ui_items: destroy ({bag}, {slot}) out of range — ignored");
+                continue;
+            };
+            let count = count.min(u32::from(u8::MAX)) as u8;
+            debug!("ui_items: destroy lua {bag}/{slot} × {count} (wire {bag_index}/{wire_slot})");
+            let _ = commands.0.send(ClientCommand::DestroyItem {
+                bag_index,
+                slot: wire_slot,
+                count,
+            });
+        }
+    })
 }
 
 /// The bag clicks as the frame applies them: the repair-mode drain, then the queued

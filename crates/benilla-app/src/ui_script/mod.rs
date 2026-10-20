@@ -543,225 +543,231 @@ pub(crate) use lifecycle::{
 struct WorldFrameTimes(benilla_ui::script::FrameTimeRing);
 
 /// `GetFramerate()`'s rate as the ring stands, for the tick about to run.
-fn feed_framerate(script: Option<NonSendMut<UiScript>>, times: Res<WorldFrameTimes>) {
-    if let Some(mut script) = script {
-        script.set_framerate(times.0.rate());
-    }
+fn feed_framerate(mut hosted_vm: crate::script_calls::HostedVm, times: Res<WorldFrameTimes>) {
+    hosted_vm.run(|script| {
+        if let Some(script) = script {
+            script.set_framerate(times.0.rate());
+        }
+    })
 }
 
 /// One world frame's step into the ring (`0x672700`), the elapsed every `OnUpdate` was handed.
 fn record_world_frame_time(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     step: Res<benilla_world::frame_pace::FrameStep>,
     mut times: ResMut<WorldFrameTimes>,
 ) {
-    times.0.push(step.delta.as_secs_f32());
-    if let Some(mut script) = script {
-        script.set_framerate(times.0.rate());
-    }
+    hosted_vm.run(|script| {
+        times.0.push(step.delta.as_secs_f32());
+        if let Some(script) = script {
+            script.set_framerate(times.0.rate());
+        }
+    })
 }
 
 /// Synthetic player and target snapshots for a server-less UI capture, and its first events once.
-fn demo_unit_feed(script: Option<NonSendMut<UiScript>>, mut fired: Local<VmMemo<bool>>) {
-    /// The synthetic target's guid: a creature high part; only its distinctness matters.
-    const DEMO_TARGET_GUID: u64 = 0xF130_0000_0000_0001;
+fn demo_unit_feed(mut hosted_vm: crate::script_calls::HostedVm, mut fired: Local<VmMemo<bool>>) {
+    hosted_vm.run(|script| {
+        /// The synthetic target's guid: a creature high part; only its distinctness matters.
+        const DEMO_TARGET_GUID: u64 = 0xF130_0000_0000_0001;
 
-    let Some(mut script) = script else {
-        return;
-    };
-    // Session-keyed: a fresh VM needs the one-shot events and bar seeds again.
-    let fired = fired.get(&script);
-    // Debug (`WOW_CAPTURE_REHOVER=1`): re-fire the world hover every frame, a flapping raycast.
-    if std::env::var("WOW_CAPTURE_REHOVER").as_deref() == Ok("1") {
-        script.world_tooltip_unit("mouseover");
-    }
-    script.set_unit(
-        "player",
-        Some(UnitState {
-            exists: true,
-            name: Some("Benilla".into()),
-            health: 72,
-            max_health: 100,
-            level: 12,
-            power_type: 0, // mana
-            power: 45,
-            max_power: 80,
-            dead: false,
-            reaction: 0, // own avatar: no reaction to itself
-            // Race/class so the ui-char capture's level line reads "Level 12 Night Elf Warrior".
-            race: Some("Night Elf".into()),
-            race_file: Some("NightElf".into()),
-            class: Some("Warrior".into()),
-            class_file: Some("WARRIOR".into()),
-            sex: 2,
-            is_player: true,
-            player_controlled: true,
-            ..Default::default()
-        }),
-    );
-    script.set_unit(
-        "target",
-        Some(UnitState {
-            exists: true,
-            name: Some("Young Wolf".into()),
-            health: 30,
-            max_health: 50,
-            level: 3,
-            // A powerless beast (maxPower 0): exercises the power-bar-hide path in the capture.
-            power_type: 0,
-            power: 0,
-            max_power: 0,
-            dead: false,
-            reaction: 4, // neutral: yellow (UnitReactionColor[4])
-            // A beast: no race/class tokens (UnitRace/UnitClass report the absent shape).
-            race: None,
-            race_file: None,
-            class: None,
-            class_file: None,
-            sex: 0,
-            // The tooltip's level line reads "Level 3 Beast".
-            creature_type_name: Some("Beast".into()),
-            // `GetComboPoints` reports only points banked on the current target's guid.
-            guid: DEMO_TARGET_GUID,
-            ..Default::default()
-        }),
-    );
-    // The combo dots need a rogue and banked points, seeded only for `ui-combopoints`.
-    if std::env::var("WOW_CAPTURE").as_deref() == Ok("ui-combopoints") {
-        script.set_player_req_state(benilla_ui::script::PlayerReqState {
-            level: 12,
-            class_id: 4, // rogue
-            ..Default::default()
-        });
-        script.set_combo_points(4, DEMO_TARGET_GUID);
-        script.fire_event("PLAYER_COMBO_POINTS", vec![]);
-    }
-    if !*fired {
-        // Battle-stance page slots (actions 73..); slot 80 is a consumable stack of 5, since stock
-        // `ActionButton_UpdateCount` shows only a consumable's count (`ActionButton.lua:287`).
-        script.set_bonus_bar_offset(1);
-        // A macro on button 4; a capture has no character for `ui_macro::load_macros` to read.
-        script.set_macros(benilla_ui::script::MacroState::from_scopes(
-            vec![benilla_ui::script::MacroView {
-                name: "spawn".into(),
-                texture: Some("Interface\\Icons\\Ability_Racial_Cannibalize".into()),
-                body: ".spawn 16032".into(),
+        let Some(script) = script else {
+            return;
+        };
+        // Session-keyed: a fresh VM needs the one-shot events and bar seeds again.
+        let fired = fired.get(&script);
+        // Debug (`WOW_CAPTURE_REHOVER=1`): re-fire the world hover every frame, a flapping raycast.
+        if std::env::var("WOW_CAPTURE_REHOVER").as_deref() == Ok("1") {
+            script.world_tooltip_unit("mouseover");
+        }
+        script.set_unit(
+            "player",
+            Some(UnitState {
+                exists: true,
+                name: Some("Benilla".into()),
+                health: 72,
+                max_health: 100,
+                level: 12,
+                power_type: 0, // mana
+                power: 45,
+                max_power: 80,
+                dead: false,
+                reaction: 0, // own avatar: no reaction to itself
+                // Race/class so the ui-char capture's level line reads "Level 12 Night Elf Warrior".
+                race: Some("Night Elf".into()),
+                race_file: Some("NightElf".into()),
+                class: Some("Warrior".into()),
+                class_file: Some("WARRIOR".into()),
+                sex: 2,
+                is_player: true,
+                player_controlled: true,
                 ..Default::default()
-            }],
-            Vec::new(),
-        ));
-        for (action, icon, kind, id, count) in [
-            (
-                73,
-                "Interface\\Icons\\Ability_SteelMelee",
-                0x00u8,
-                100u32,
-                0u32,
-            ),
-            (74, "Interface\\Icons\\Ability_Rogue_Ambush", 0x00, 101, 0),
-            (
-                75,
-                "Interface\\Icons\\Ability_Warrior_BattleShout",
-                0x00,
-                102,
-                0,
-            ),
-            (
-                76,
-                "Interface\\Icons\\Ability_Racial_Cannibalize",
-                0x40,
-                1,
-                0,
-            ),
-            (80, "Interface\\Icons\\INV_Misc_Food_16", 0x80, 117, 5),
-            (84, "Interface\\Icons\\Spell_Holy_SealOfMight", 0x00, 103, 0),
-            // BottomLeft is actions 61..72, BottomRight 49..60; an empty multibar well hides.
-            (
-                61,
-                "Interface\\Icons\\Spell_Nature_Regenerate",
-                0x00,
-                104,
-                0,
-            ),
-            (62, "Interface\\Icons\\Spell_Shadow_Curse", 0x00, 105, 0),
-            (
-                72,
-                "Interface\\Icons\\Spell_Frost_FrostBolt02",
-                0x00,
-                106,
-                0,
-            ),
-            (49, "Interface\\Icons\\Spell_Fire_FlameBolt", 0x00, 107, 0),
-            (60, "Interface\\Icons\\Spell_Holy_Heal", 0x00, 108, 0),
-        ] {
-            script.set_action(
-                action,
-                Some(ActionSlot {
-                    texture: Some(icon.into()),
-                    kind,
-                    action: id,
-                    count,
-                    // The seed's only item slot is the food stack, which is consumable.
-                    consumable: kind == 0x80,
-                    use_spell: None,
-                }),
-            );
-            // Server-less a slot has no usable state; a live bar's resting state is usable.
-            script.set_action_state(
-                action,
-                Some(benilla_ui::script::ActionState {
-                    usable: true,
+            }),
+        );
+        script.set_unit(
+            "target",
+            Some(UnitState {
+                exists: true,
+                name: Some("Young Wolf".into()),
+                health: 30,
+                max_health: 50,
+                level: 3,
+                // A powerless beast (maxPower 0): exercises the power-bar-hide path in the capture.
+                power_type: 0,
+                power: 0,
+                max_power: 0,
+                dead: false,
+                reaction: 4, // neutral: yellow (UnitReactionColor[4])
+                // A beast: no race/class tokens (UnitRace/UnitClass report the absent shape).
+                race: None,
+                race_file: None,
+                class: None,
+                class_file: None,
+                sex: 0,
+                // The tooltip's level line reads "Level 3 Beast".
+                creature_type_name: Some("Beast".into()),
+                // `GetComboPoints` reports only points banked on the current target's guid.
+                guid: DEMO_TARGET_GUID,
+                ..Default::default()
+            }),
+        );
+        // The combo dots need a rogue and banked points, seeded only for `ui-combopoints`.
+        if std::env::var("WOW_CAPTURE").as_deref() == Ok("ui-combopoints") {
+            script.set_player_req_state(benilla_ui::script::PlayerReqState {
+                level: 12,
+                class_id: 4, // rogue
+                ..Default::default()
+            });
+            script.set_combo_points(4, DEMO_TARGET_GUID);
+            script.fire_event("PLAYER_COMBO_POINTS", vec![]);
+        }
+        if !*fired {
+            // Battle-stance page slots (actions 73..); slot 80 is a consumable stack of 5, since stock
+            // `ActionButton_UpdateCount` shows only a consumable's count (`ActionButton.lua:287`).
+            script.set_bonus_bar_offset(1);
+            // A macro on button 4; a capture has no character for `ui_macro::load_macros` to read.
+            script.set_macros(benilla_ui::script::MacroState::from_scopes(
+                vec![benilla_ui::script::MacroView {
+                    name: "spawn".into(),
+                    texture: Some("Interface\\Icons\\Ability_Racial_Cannibalize".into()),
+                    body: ".spawn 16032".into(),
                     ..Default::default()
-                }),
-            );
-        }
-        // The stance bar: battle active (bonus offset 1), defensive uncastable, berserker cooling.
-        script.set_shapeshift_forms(vec![
-            benilla_ui::script::ShapeshiftFormView {
-                spell_id: 2457,
-                texture: Some("Interface\\Icons\\Ability_Warrior_OffensiveStance".into()),
-                name: "Battle Stance".into(),
-                active: true,
-                castable: true,
-                cooldown: None,
-            },
-            benilla_ui::script::ShapeshiftFormView {
-                spell_id: 71,
-                texture: Some("Interface\\Icons\\Ability_Warrior_DefensiveStance".into()),
-                name: "Defensive Stance".into(),
-                active: false,
-                castable: false,
-                cooldown: None,
-            },
-            benilla_ui::script::ShapeshiftFormView {
-                spell_id: 2458,
-                texture: Some("Interface\\Icons\\Ability_Racial_Avatar".into()),
-                name: "Berserker Stance".into(),
-                active: false,
-                castable: true,
-                cooldown: Some((900, 1500, true)),
-            },
-        ]);
-        script.fire_event("UPDATE_SHAPESHIFT_FORMS", vec![]);
-        // 70% XP, set before the world-enter events so the bar's first update reads it.
-        script.set_player_xp(4200, 6000);
-        script.fire_world_enter();
-        // The bottom multibars ship off and a capture has no toggle byte, so raise them as the
-        // Options rows do; `WOW_DEMO_BOTTOM_BARS=0` leaves them down for the stance shelf art,
-        // which `ShapeshiftBar_UpdatePosition` hides under the bottom-left bar.
-        if std::env::var("WOW_DEMO_BOTTOM_BARS").as_deref() != Ok("0") {
-            let _ = script.run(
-                "SHOW_MULTI_ACTIONBAR_1 = 1 SHOW_MULTI_ACTIONBAR_2 = 1 \
+                }],
+                Vec::new(),
+            ));
+            for (action, icon, kind, id, count) in [
+                (
+                    73,
+                    "Interface\\Icons\\Ability_SteelMelee",
+                    0x00u8,
+                    100u32,
+                    0u32,
+                ),
+                (74, "Interface\\Icons\\Ability_Rogue_Ambush", 0x00, 101, 0),
+                (
+                    75,
+                    "Interface\\Icons\\Ability_Warrior_BattleShout",
+                    0x00,
+                    102,
+                    0,
+                ),
+                (
+                    76,
+                    "Interface\\Icons\\Ability_Racial_Cannibalize",
+                    0x40,
+                    1,
+                    0,
+                ),
+                (80, "Interface\\Icons\\INV_Misc_Food_16", 0x80, 117, 5),
+                (84, "Interface\\Icons\\Spell_Holy_SealOfMight", 0x00, 103, 0),
+                // BottomLeft is actions 61..72, BottomRight 49..60; an empty multibar well hides.
+                (
+                    61,
+                    "Interface\\Icons\\Spell_Nature_Regenerate",
+                    0x00,
+                    104,
+                    0,
+                ),
+                (62, "Interface\\Icons\\Spell_Shadow_Curse", 0x00, 105, 0),
+                (
+                    72,
+                    "Interface\\Icons\\Spell_Frost_FrostBolt02",
+                    0x00,
+                    106,
+                    0,
+                ),
+                (49, "Interface\\Icons\\Spell_Fire_FlameBolt", 0x00, 107, 0),
+                (60, "Interface\\Icons\\Spell_Holy_Heal", 0x00, 108, 0),
+            ] {
+                script.set_action(
+                    action,
+                    Some(ActionSlot {
+                        texture: Some(icon.into()),
+                        kind,
+                        action: id,
+                        count,
+                        // The seed's only item slot is the food stack, which is consumable.
+                        consumable: kind == 0x80,
+                        use_spell: None,
+                    }),
+                );
+                // Server-less a slot has no usable state; a live bar's resting state is usable.
+                script.set_action_state(
+                    action,
+                    Some(benilla_ui::script::ActionState {
+                        usable: true,
+                        ..Default::default()
+                    }),
+                );
+            }
+            // The stance bar: battle active (bonus offset 1), defensive uncastable, berserker cooling.
+            script.set_shapeshift_forms(vec![
+                benilla_ui::script::ShapeshiftFormView {
+                    spell_id: 2457,
+                    texture: Some("Interface\\Icons\\Ability_Warrior_OffensiveStance".into()),
+                    name: "Battle Stance".into(),
+                    active: true,
+                    castable: true,
+                    cooldown: None,
+                },
+                benilla_ui::script::ShapeshiftFormView {
+                    spell_id: 71,
+                    texture: Some("Interface\\Icons\\Ability_Warrior_DefensiveStance".into()),
+                    name: "Defensive Stance".into(),
+                    active: false,
+                    castable: false,
+                    cooldown: None,
+                },
+                benilla_ui::script::ShapeshiftFormView {
+                    spell_id: 2458,
+                    texture: Some("Interface\\Icons\\Ability_Racial_Avatar".into()),
+                    name: "Berserker Stance".into(),
+                    active: false,
+                    castable: true,
+                    cooldown: Some((900, 1500, true)),
+                },
+            ]);
+            script.fire_event("UPDATE_SHAPESHIFT_FORMS", vec![]);
+            // 70% XP, set before the world-enter events so the bar's first update reads it.
+            script.set_player_xp(4200, 6000);
+            script.fire_world_enter();
+            // The bottom multibars ship off and a capture has no toggle byte, so raise them as the
+            // Options rows do; `WOW_DEMO_BOTTOM_BARS=0` leaves them down for the stance shelf art,
+            // which `ShapeshiftBar_UpdatePosition` hides under the bottom-left bar.
+            if std::env::var("WOW_DEMO_BOTTOM_BARS").as_deref() != Ok("0") {
+                let _ = script.run(
+                    "SHOW_MULTI_ACTIONBAR_1 = 1 SHOW_MULTI_ACTIONBAR_2 = 1 \
                  if MultiActionBar_Update then MultiActionBar_Update() end",
-            );
+                );
+            }
+            script.fire_event("PLAYER_XP_UPDATE", vec![ScriptValue::Str("player".into())]);
+            for token in ["player", "target"] {
+                script.fire_event("UNIT_HEALTH", vec![ScriptValue::Str(token.into())]);
+            }
+            script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+            *fired = true;
         }
-        script.fire_event("PLAYER_XP_UPDATE", vec![ScriptValue::Str("player".into())]);
-        for token in ["player", "target"] {
-            script.fire_event("UNIT_HEALTH", vec![ScriptValue::Str(token.into())]);
-        }
-        script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
-        *fired = true;
-    }
+    })
 }
 
 /// A test font engine: every character `.0` wide, 12 tall per line, greedily wrapped.

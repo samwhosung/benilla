@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{NameCandidate, UiScript, UnitState};
+use benilla_ui::script::{NameCandidate, UnitState};
 
 use super::{
     enrich_unit, faction_group, faction_group_localized, player_reaction, snapshot, unit_reaction,
@@ -93,7 +93,7 @@ pub(super) struct ChainMemo {
 /// held as anything but a unit gets no snapshot. A token without a hop reads its own push, not
 /// these.
 pub(super) fn feed_chain_units(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     tables: super::SnapshotTables,
     // The object manager's lookup (`0x468460`) on its own, not through [`super::UnitTokens`],
     // whose pet-bar read would order this feed against the pet feed it does not depend on.
@@ -108,87 +108,89 @@ pub(super) fn feed_chain_units(
     mut removed: RemovedComponents<Guid>,
     mut memo: Local<VmMemo<ChainMemo>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    // The names `UnitName` read off a unit with no object and missed, asked as its lookup with a
-    // callback asks (`0x5171eb`), whatever the gate below says.
-    for guid in script.take_unit_name_asks() {
-        let _ = names.resolve_player(guid, Ask::Event(&commands));
-    }
-    let (memo, vm_reset) = memo.get_reset(&script);
-    let ends = script.chain_end_guids();
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        // The names `UnitName` read off a unit with no object and missed, asked as its lookup with a
+        // callback asks (`0x5171eb`), whatever the gate below says.
+        for guid in script.take_unit_name_asks() {
+            let _ = names.resolve_player(guid, Ask::Event(&commands));
+        }
+        let (memo, vm_reset) = memo.get_reset(&script);
+        let ends = script.chain_end_guids();
 
-    // The gate: every input read below, despawns included (invisible to `Changed`), and the
-    // guids themselves, which move with the selection, the hover, the group and every held
-    // unit's target.
-    let names_moved = memo.names_generation.moved(names.generation());
-    let ends_moved = memo.ends != ends;
-    let stores_changed = !changed.is_empty();
-    let stores_removed = !removed.is_empty();
-    let group_changed = group.is_changed();
-    let relations_changed = world.inputs_changed();
-    removed.clear();
-    let gate = gate::Gate::new(
-        vm_reset
-            || names_moved
-            || ends_moved
-            || stores_changed
-            || stores_removed
-            || group_changed
-            || relations_changed,
-    );
-    if gate.skip() {
-        return;
-    }
+        // The gate: every input read below, despawns included (invisible to `Changed`), and the
+        // guids themselves, which move with the selection, the hover, the group and every held
+        // unit's target.
+        let names_moved = memo.names_generation.moved(names.generation());
+        let ends_moved = memo.ends != ends;
+        let stores_changed = !changed.is_empty();
+        let stores_removed = !removed.is_empty();
+        let group_changed = group.is_changed();
+        let relations_changed = world.inputs_changed();
+        removed.clear();
+        let gate = gate::Gate::new(
+            vm_reset
+                || names_moved
+                || ends_moved
+                || stores_changed
+                || stores_removed
+                || group_changed
+                || relations_changed,
+        );
+        if gate.skip() {
+            return;
+        }
 
-    let object = |guid: u64| {
-        let entity = *index.as_ref()?.0.get(&guid)?;
-        stores.get(entity).ok()
-    };
-    let held = HeldUnits {
-        names: &names,
-        commands: &commands,
-        group: &group,
-        self_store: self_q.iter().next(),
-        unit_names: tables.unit_names(),
-        types: tables.types(&names),
-        rel: world.get(),
-        me: world.me(),
-        tooltip: super::tooltip_facts::TooltipSources {
+        let object = |guid: u64| {
+            let entity = *index.as_ref()?.0.get(&guid)?;
+            stores.get(entity).ok()
+        };
+        let held = HeldUnits {
             names: &names,
-            catalog: tables.catalog(),
-            object: &object,
-            study: tables.study(),
-        },
-    };
-    let built: HashMap<u64, UnitState> = ends
-        .iter()
-        .filter_map(|&guid| {
-            let Some(&entity) = index.as_ref().and_then(|i| i.0.get(&guid)) else {
-                return Some((guid, unheld_state(&names, &group, guid)));
-            };
-            let store = stores.get(entity).ok().filter(|s| s.is_unit())?;
-            Some((guid, held.state(store, guid)))
-        })
-        .collect();
+            commands: &commands,
+            group: &group,
+            self_store: self_q.iter().next(),
+            unit_names: tables.unit_names(),
+            types: tables.types(&names),
+            rel: world.get(),
+            me: world.me(),
+            tooltip: super::tooltip_facts::TooltipSources {
+                names: &names,
+                catalog: tables.catalog(),
+                object: &object,
+                study: tables.study(),
+            },
+        };
+        let built: HashMap<u64, UnitState> = ends
+            .iter()
+            .filter_map(|&guid| {
+                let Some(&entity) = index.as_ref().and_then(|i| i.0.get(&guid)) else {
+                    return Some((guid, unheld_state(&names, &group, guid)));
+                };
+                let store = stores.get(entity).ok().filter(|s| s.is_unit())?;
+                Some((guid, held.state(store, guid)))
+            })
+            .collect();
 
-    memo.pushed.retain(|guid, _| {
-        let keep = built.contains_key(guid);
-        if !keep {
-            gate.audit("feed_chain_units", "a chain end's clear");
-            script.set_unit_by_guid(*guid, None);
+        memo.pushed.retain(|guid, _| {
+            let keep = built.contains_key(guid);
+            if !keep {
+                gate.audit("feed_chain_units", "a chain end's clear");
+                script.set_unit_by_guid(*guid, None);
+            }
+            keep
+        });
+        for (guid, state) in built {
+            if memo.pushed.get(&guid) != Some(&state) {
+                gate.audit("feed_chain_units", "a chain end's snapshot");
+                script.set_unit_by_guid(guid, Some(state.clone()));
+                memo.pushed.insert(guid, state);
+            }
         }
-        keep
-    });
-    for (guid, state) in built {
-        if memo.pushed.get(&guid) != Some(&state) {
-            gate.audit("feed_chain_units", "a chain end's snapshot");
-            script.set_unit_by_guid(guid, Some(state.clone()));
-            memo.pushed.insert(guid, state);
-        }
-    }
-    memo.ends = ends;
+        memo.ends = ends;
+    })
 }
 
 /// A chain end the object manager does not hold, as the getters read a guid with no object: the
@@ -229,7 +231,7 @@ pub(crate) struct CandidateMemo {
 /// change until the unit's next update. Without an active player object nothing is a candidate,
 /// as the reference resolves nothing then (`0x493ae0`).
 pub(crate) fn feed_name_candidates(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     tables: super::SnapshotTables,
     // [`GlobalTransform`], as [`crate::target::PlayerLookup`] reads it: `Transform` would put
     // this feed in an undeclared order against every system that moves a unit.
@@ -243,102 +245,104 @@ pub(crate) fn feed_name_candidates(
     index: Option<Res<crate::net::GuidIndex>>,
     mut memo: Local<VmMemo<CandidateMemo>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let (memo, vm_reset) = memo.get_reset(&script);
-    let rebuild = vm_reset || group.is_changed() || world.inputs_changed();
-    let me = self_q.single().ok();
-    let object = |guid: u64| {
-        let entity = *index.as_ref()?.0.get(&guid)?;
-        units.get(entity).ok()?.2.map(Ref::into_inner)
-    };
-    let held = HeldUnits {
-        names: &names,
-        commands: &commands,
-        group: &group,
-        self_store: me.and_then(|(_, _, s)| s),
-        unit_names: tables.unit_names(),
-        types: tables.types(&names),
-        rel: world.get(),
-        me: world.me(),
-        tooltip: super::tooltip_facts::TooltipSources {
-            names: &names,
-            catalog: tables.catalog(),
-            object: &object,
-            study: tables.study(),
-        },
-    };
-    memo.seen.clear();
-    let origin = me.map(|(_, tf, _)| tf.translation());
-    let self_guid = me.map(|(g, _, _)| g.0);
-    for (guid, tf, store) in origin.iter().flat_map(|_| &units) {
-        let guid = guid.0;
-        let Candidacy::Named(name) = NameSearch::AnyUnit.candidacy(&names, guid) else {
-            continue;
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
         };
-        memo.seen.insert(guid);
-        let dist2 = origin.map_or(0.0, |o| tf.translation().distance_squared(o));
-        let record = store
-            .as_ref()
-            .and_then(|s| s.0.object_entry())
-            .filter(|&e| e != 0)
-            .is_some_and(|e| names.creature_record(e).is_some());
-        let fresh = rebuild
-            || store.as_ref().is_some_and(|s| s.is_changed())
-            || memo
-                .pushed
-                .get(&guid)
-                .is_none_or(|(n, r)| n != name || *r != record);
-        if !fresh {
-            script.set_name_candidate_dist2(guid, dist2);
-            continue;
-        }
-        let state = match store.as_deref() {
-            // The name as the target feed reads it off the descriptor, from the cache alone.
-            Some(store) => {
-                let named = names
-                    .resolve_unit(guid, Some(store), Ask::Read)
-                    .map(str::to_string);
-                held.state_named(store, guid, named)
-            }
-            None => UnitState {
-                exists: true,
-                has_object: true,
-                is_connected: true,
-                guid,
-                name: Some(name.to_string()),
-                is_player: benilla_protocol::guid::is_player(guid),
-                ..Default::default()
+        let (memo, vm_reset) = memo.get_reset(&script);
+        let rebuild = vm_reset || group.is_changed() || world.inputs_changed();
+        let me = self_q.single().ok();
+        let object = |guid: u64| {
+            let entity = *index.as_ref()?.0.get(&guid)?;
+            units.get(entity).ok()?.2.map(Ref::into_inner)
+        };
+        let held = HeldUnits {
+            names: &names,
+            commands: &commands,
+            group: &group,
+            self_store: me.and_then(|(_, _, s)| s),
+            unit_names: tables.unit_names(),
+            types: tables.types(&names),
+            rel: world.get(),
+            me: world.me(),
+            tooltip: super::tooltip_facts::TooltipSources {
+                names: &names,
+                catalog: tables.catalog(),
+                object: &object,
+                study: tables.study(),
             },
         };
-        let unit = store
-            .as_deref()
-            .map(|s| (RelUnit::of(guid, s).with_record(s, &names), s));
-        script.set_name_candidate(
-            guid,
-            Some(NameCandidate {
-                name: name.to_string(),
-                dist2,
-                state,
-                selectable: crate::target::is_selectable(store.as_deref(), self_guid),
-                assistable_alive: crate::target::assistable_alive(
-                    &held.rel,
-                    held.me.as_ref(),
-                    unit.as_ref().map(|(u, s)| (u, *s)),
-                ),
-            }),
-        );
-        memo.pushed.insert(guid, (name.to_string(), record));
-    }
-    let seen = &memo.seen;
-    memo.pushed.retain(|guid, _| {
-        let keep = seen.contains(guid);
-        if !keep {
-            script.set_name_candidate(*guid, None);
+        memo.seen.clear();
+        let origin = me.map(|(_, tf, _)| tf.translation());
+        let self_guid = me.map(|(g, _, _)| g.0);
+        for (guid, tf, store) in origin.iter().flat_map(|_| &units) {
+            let guid = guid.0;
+            let Candidacy::Named(name) = NameSearch::AnyUnit.candidacy(&names, guid) else {
+                continue;
+            };
+            memo.seen.insert(guid);
+            let dist2 = origin.map_or(0.0, |o| tf.translation().distance_squared(o));
+            let record = store
+                .as_ref()
+                .and_then(|s| s.0.object_entry())
+                .filter(|&e| e != 0)
+                .is_some_and(|e| names.creature_record(e).is_some());
+            let fresh = rebuild
+                || store.as_ref().is_some_and(|s| s.is_changed())
+                || memo
+                    .pushed
+                    .get(&guid)
+                    .is_none_or(|(n, r)| n != name || *r != record);
+            if !fresh {
+                script.set_name_candidate_dist2(guid, dist2);
+                continue;
+            }
+            let state = match store.as_deref() {
+                // The name as the target feed reads it off the descriptor, from the cache alone.
+                Some(store) => {
+                    let named = names
+                        .resolve_unit(guid, Some(store), Ask::Read)
+                        .map(str::to_string);
+                    held.state_named(store, guid, named)
+                }
+                None => UnitState {
+                    exists: true,
+                    has_object: true,
+                    is_connected: true,
+                    guid,
+                    name: Some(name.to_string()),
+                    is_player: benilla_protocol::guid::is_player(guid),
+                    ..Default::default()
+                },
+            };
+            let unit = store
+                .as_deref()
+                .map(|s| (RelUnit::of(guid, s).with_record(s, &names), s));
+            script.set_name_candidate(
+                guid,
+                Some(NameCandidate {
+                    name: name.to_string(),
+                    dist2,
+                    state,
+                    selectable: crate::target::is_selectable(store.as_deref(), self_guid),
+                    assistable_alive: crate::target::assistable_alive(
+                        &held.rel,
+                        held.me.as_ref(),
+                        unit.as_ref().map(|(u, s)| (u, *s)),
+                    ),
+                }),
+            );
+            memo.pushed.insert(guid, (name.to_string(), record));
         }
-        keep
-    });
+        let seen = &memo.seen;
+        memo.pushed.retain(|guid, _| {
+            let keep = seen.contains(guid);
+            if !keep {
+                script.set_name_candidate(*guid, None);
+            }
+            keep
+        });
+    })
 }
 
 #[cfg(test)]
@@ -350,6 +354,7 @@ mod tests {
     use crate::ui_party::{GroupState, GROUPTYPE_RAID};
     use benilla_protocol::messages::{member_status, GroupMemberEntry};
     use benilla_protocol::ObjectFields;
+    use benilla_ui::script::UiScript;
 
     const ME: u64 = 0x10;
     /// party1 and raid1, party2 and raid2, party3 and raid3; we are raid4.

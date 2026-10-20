@@ -756,29 +756,33 @@ fn join_duration(
 /// sends no durations at login to overwrite a kept stamp (`SMSG_UPDATE_AURA_DURATION` is an empty
 /// placeholder in `Player::SendInitialPacketsBeforeAddToMap`, `Player.cpp:19248`).
 fn end_session_aura_state(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut durations: ResMut<AuraDurations>,
     mut cache: ResMut<PlayerAuraCache>,
 ) {
-    if let Some(mut script) = script {
-        script.clear_auras();
-        script.set_unit_guids(&Default::default());
-        script.set_tracking(None);
-    }
-    cache.auras.clear();
-    durations.by_slot.clear();
-    // No `AuraFeedMemory` reset: its edge keys die with the VM.
+    hosted_vm.run(|script| {
+        if let Some(script) = script {
+            script.clear_auras();
+            script.set_unit_guids(&Default::default());
+            script.set_tracking(None);
+        }
+        cache.auras.clear();
+        durations.by_slot.clear();
+        // No `AuraFeedMemory` reset: its edge keys die with the VM.
+    })
 }
 
 /// A `CMSG_CANCEL_AURA` per queued `CancelPlayerBuff` or `CancelTrackingBuff`, naming the spell,
 /// not the slot (`0x6e7040`).
-fn drain_aura_cancels(script: Option<NonSendMut<UiScript>>, net: Res<NetCommands>) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for spell_id in script.take_cancel_aura_requests() {
-        let _ = net.0.send(ClientCommand::CancelAura { spell_id });
-    }
+fn drain_aura_cancels(mut hosted_vm: crate::script_calls::HostedVm, net: Res<NetCommands>) {
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        for spell_id in script.take_cancel_aura_requests() {
+            let _ = net.0.send(ClientCommand::CancelAura { spell_id });
+        }
+    })
 }
 
 #[cfg(test)]

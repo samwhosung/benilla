@@ -74,15 +74,17 @@ pub(crate) fn seed_repeat(world: &World, script: &mut UiScript) {
 /// `0x4909c4`) on each cascade, the worldport's included, whose VM survives: the lists and
 /// selections go and the armed spell disarms silently, the repeat count kept.
 pub(crate) fn reset_crafts_on_world_enter(
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut cascades: MessageReader<crate::net::WorldEnterCascadeMessage>,
 ) {
-    if cascades.read().next().is_none() {
-        return;
-    }
-    if let Some(mut script) = script {
-        script.reset_crafts_on_world_enter();
-    }
+    hosted_vm.run(|script| {
+        if cascades.read().next().is_none() {
+            return;
+        }
+        if let Some(script) = script {
+            script.reset_crafts_on_world_enter();
+        }
+    })
 }
 
 /// `SpellFocusObject.dbc`, the names on a "Requires: Anvil" line.
