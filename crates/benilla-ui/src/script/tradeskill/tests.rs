@@ -617,9 +617,18 @@ fn no_snapshot_shapes_unknown_line_and_nil_info() {
     s.run("DoTradeSkill(1, 1)").unwrap();
     assert!(s.take_trade_skill_dos().is_empty(), "no window, no intent");
 
-    s.run("CollapseTradeSkillSubClass(0) ExpandTradeSkillSubClass(1) SelectTradeSkill(1)")
+    s.run("CollapseTradeSkillSubClass(0) SelectTradeSkill(1)")
         .unwrap();
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 0);
+    // Row 1 is past an empty list, so `0x4fd650` finds no header and the fold raises.
+    let e = s
+        .run("ExpandTradeSkillSubClass(1)")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.contains("Bad skill line in ExpandTradeSkillSubClass"),
+        "{e}"
+    );
 }
 
 #[test]
