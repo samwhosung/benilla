@@ -281,6 +281,15 @@ impl SpellTargeting {
         self.0.as_ref().filter(|t| t.in_slot).map(|t| t.spell_id)
     }
 
+    /// The guid of the item whose cast holds the in-flight slot from the cursor (`0xcecab0`): the
+    /// attempt pushed it with its spell (`0x6e5026`).
+    pub(crate) fn in_slot_item(&self) -> Option<u64> {
+        self.0
+            .as_ref()
+            .filter(|t| t.in_slot)
+            .and_then(|t| t.commit.item_guid())
+    }
+
     /// `GetTargetingSpellId 0x6e48e0`, whatever the word wants: for the bar's checked state, the
     /// re-press toggle and the `CURRENT_SPELL_CAST_CHANGED` edge. A seam reads [`Self::spell_for`].
     pub(crate) fn spell(&self) -> Option<u32> {

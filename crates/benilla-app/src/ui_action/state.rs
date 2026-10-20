@@ -279,6 +279,9 @@ pub(super) fn feed_action_state(
                 let use_spell = items
                     .template(button.action, 0, Ask::New(&commands))
                     .and_then(|t| t.use_spell);
+                // `IsCurrentAction`'s item arm holds the entry against the in-flight item
+                // (`0x4e53fc`-`0x4e5428`).
+                st.item = Some(button.action);
                 // `GetItemCooldown 0x6e2ed0` queries only an item whose record is cached and has an
                 // on-use spell (`0x6e2f14`, `0x6e2f20`-`0x6e2f34`).
                 st.no_cooldown_query = use_spell.is_none();

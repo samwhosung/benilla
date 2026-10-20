@@ -268,6 +268,22 @@ pub(crate) fn inflight(
         .or_else(|| queued_melee.current().map(Inflight::Strike))
 }
 
+/// The guid of the item the in-flight slot's cast came from (`0xcecab0`, which `0x6e3d20` reads),
+/// with the slot's own precedence: the cursor's commit, else the outstanding cast's. A strike has
+/// none, and a cast pushed over one keeps its own, the strike's coming back with the pop
+/// (`0x6e4ad0`, the save at `0xcecb20`).
+fn inflight_item(
+    pending: &PendingCast,
+    queued_melee: &QueuedMeleeSpell,
+    targeting: &SpellTargeting,
+) -> Option<u64> {
+    match inflight(pending, queued_melee, targeting)? {
+        Inflight::Targeting(_) => targeting.in_slot_item(),
+        Inflight::Cast(_) => pending.item(),
+        Inflight::Strike(_) => None,
+    }
+}
+
 /// The player's cast state as the VM reads it ([`CastView`]): what the action bar's checked tests
 /// and `SpellStopCasting` hold the slots against, pushed each frame and after every script call.
 #[derive(bevy::ecs::system::SystemParam)]
@@ -277,6 +293,10 @@ pub(crate) struct CastState<'w, 's> {
     targeting: Res<'w, SpellTargeting>,
     auto_repeat: Res<'w, AutoRepeatActive>,
     me: Query<'w, 's, SelfCastFacts, With<crate::net::SelfPlayer>>,
+    /// The in-flight item's object, found by guid as an item (`0x4e53e1`); a harness without the
+    /// index holds none.
+    index: Option<Res<'w, GuidIndex>>,
+    stores: Query<'w, 's, &'static crate::net::ObjectStore>,
 }
 
 /// The player's own cast facts: the attack flag and the form byte's store.
@@ -298,8 +318,17 @@ impl CastState<'_, '_> {
             form: me
                 .and_then(|(_, store)| store)
                 .map_or(0, |store| store.0.unit_shapeshift_form()),
-            item: None,
+            item: self.inflight_item_entry(),
         }
+    }
+
+    /// The in-flight item's entry (`0x4e53ef`), its object looked up live with the item type mask
+    /// (`0x4e53e1`): none once the object is gone.
+    fn inflight_item_entry(&self) -> Option<u32> {
+        let guid = inflight_item(&self.pending, &self.queued_melee, &self.targeting)?;
+        let entity = *self.index.as_deref()?.0.get(&guid)?;
+        let fields = &self.stores.get(entity).ok()?.0;
+        fields.is_item().then(|| fields.object_entry()).flatten()
     }
 }
 

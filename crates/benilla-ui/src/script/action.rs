@@ -97,13 +97,17 @@ pub struct OpenProfessions {
 }
 
 impl ActionState {
-    /// `ActionSlotIsCurrent 0x4e53a0` against the cast state as it stands: the Attack slot while
-    /// attacking (`0x4e5467`), else the slot's spell when it is in flight or awaiting its target
-    /// (`0x4e54c1`, `0x4e54d0`), when it opens the profession window that is open
-    /// (`0x4e54fe`-`0x4e5549`), or when its form is the player's (`0x4e558b`). It reads no
+    /// `ActionSlotIsCurrent 0x4e53a0` against the cast state as it stands: an item slot while the
+    /// in-flight cast's item has its entry, and by that arm alone (`0x4e53c8`-`0x4e5428`); the
+    /// Attack slot while attacking (`0x4e5467`), else the slot's spell when it is in flight or
+    /// awaiting its target (`0x4e54c1`, `0x4e54d0`), when it opens the profession window that is
+    /// open (`0x4e54fe`-`0x4e5549`), or when its form is the player's (`0x4e558b`). It reads no
     /// channel: a channel leaves the in-flight slot at its cast result, so its button unchecks as
     /// it begins.
     pub fn is_current(&self, view: &CastView, open: OpenProfessions) -> bool {
+        if let Some(entry) = self.item {
+            return view.item == Some(entry);
+        }
         if self.is_attack {
             return view.attacking;
         }
