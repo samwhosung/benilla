@@ -154,7 +154,7 @@ fn feed_death(
         if !status.connected {
             return;
         }
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         let Some(guid) = self_guid.0 else {
@@ -240,10 +240,10 @@ fn feed_death(
         }
 
         // ── The VM edges: a fresh VM's memo is empty, so reloading dead re-fires PLAYER_DEAD.
-        let memo = feed.vm.get(&script);
+        let memo = feed.vm.get(script);
         let prev = memo.last.filter(|&(g, ..)| g == guid);
         memo.last = Some((guid, dead, ghost));
-        fire_vm_edges(&mut script, prev.map(|(_, d, g)| (d, g)), dead, ghost);
+        fire_vm_edges(script, prev.map(|(_, d, g)| (d, g)), dead, ghost);
 
         // ── The offer and confirm announcements ──
         let ask = Ask::at(
@@ -449,6 +449,7 @@ pub(crate) fn ghost_probe() -> Option<bool> {
 }
 
 /// Map the queued Lua death intents onto the wire, after `UiInput` so a click drains that frame.
+#[allow(clippy::type_complexity)] // a Bevy system's full input set
 pub(crate) fn drain_death(
     mut vm: crate::script_calls::VmWith<(
         crate::spell::cast_target::CastTargeting<'static, 'static>,
@@ -467,7 +468,7 @@ pub(crate) fn drain_death(
     ui_errors: Res<crate::ui_action::UiErrorKeys>,
 ) {
     vm.turn(|script, (targeting, mut cast, mut gate)| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         for action in script.take_death_actions() {
@@ -521,7 +522,7 @@ pub(crate) fn drain_death(
                             // Its failed flag disarms the trade-skill repeat on every branch
                             // (`0x6e4abc`-`0x6e4ac2` into `0x4fd790`), queued with its event.
                             cast.p1().abort_cast();
-                            if crate::ui_items::item_use_refused(&script, Some(guid)) {
+                            if crate::ui_items::item_use_refused(script, Some(guid)) {
                                 debug!("death: soulstone {guid:#x} is locked — refused");
                                 Ok(())
                             } else {
@@ -550,7 +551,7 @@ pub(crate) fn drain_death(
                                     it,
                                     &targeting.context(),
                                     &mut ladder,
-                                    &mut script,
+                                    script,
                                     &mut gate,
                                     false,
                                     &ui_errors,

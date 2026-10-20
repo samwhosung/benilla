@@ -323,15 +323,15 @@ fn feed_tutorials(
 
         tutorials.tick(now);
 
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         for published in std::mem::take(&mut tutorials.fired) {
-            fire_published(&mut script, &sounds, published);
+            fire_published(script, &sounds, published);
         }
         // The bank is owed to every VM: what it has been told is per VM, so a `/reload`'s fresh VM
         // is told again.
-        let told = told.get(&script);
+        let told = told.get(script);
         if *told != tutorials.acknowledged {
             told.clone_from(&tutorials.acknowledged);
             script.set_tutorial_bank(tutorials.acknowledged.clone());

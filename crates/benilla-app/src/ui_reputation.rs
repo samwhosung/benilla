@@ -249,8 +249,8 @@ pub(crate) fn feed_reputation(
         let Some(script) = script else {
             return;
         };
-        let last = last.get(&script);
-        let last_inputs = last_inputs.get(&script);
+        let last = last.get(script);
+        let last_inputs = last_inputs.get(script);
         let (Ok(store), Some(factions_res)) = (self_store.single(), factions.as_ref()) else {
             return;
         };

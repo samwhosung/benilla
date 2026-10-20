@@ -94,7 +94,7 @@ fn feed_logout(
     mut sink: crate::ui_action::MessageSink,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         for signal in std::mem::take(&mut logout.signals) {
@@ -103,8 +103,8 @@ fn feed_logout(
                 LogoutSignal::Quiting => script.fire_event("PLAYER_QUITING", Vec::new()),
                 LogoutSignal::Cancelled => script.fire_event("LOGOUT_CANCEL", Vec::new()),
                 LogoutSignal::Refused => {
-                    let line = crate::ui_action::keyed_line(&script, LOGOUT_FAILED_KEY);
-                    crate::ui_action::show_messages(&mut script, &mut sink, "ui_logout", line);
+                    let line = crate::ui_action::keyed_line(script, LOGOUT_FAILED_KEY);
+                    crate::ui_action::show_messages(script, &mut sink, "ui_logout", line);
                 }
             }
         }

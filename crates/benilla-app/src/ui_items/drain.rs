@@ -58,12 +58,12 @@ pub(super) fn drain_container_autoequips(
     commands: Res<NetCommands>,
 ) {
     vm.turn(|script, mut gate| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         for (bag, slot, guid) in script.take_container_equip_asks() {
             gate.defer_equip(
-                &mut script,
+                script,
                 crate::ui_bind_confirm::PendingEquip::AutoEquip { bag, slot, guid },
             );
         }
@@ -78,13 +78,7 @@ pub(super) fn drain_container_autoequips(
                 .next()
                 .and_then(|store| slot_guid(&store.0, bag, slot0, &objects));
             send_auto_equip(
-                &mut script,
-                &objects,
-                &items,
-                &commands,
-                bag_index,
-                wire_slot,
-                guid,
+                script, &objects, &items, &commands, bag_index, wire_slot, guid,
             );
         }
     })
@@ -479,7 +473,7 @@ pub(super) fn drain_container_repairs(
     mut purse: crate::ui_merchant::RepairPurse,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         let me = self_q.iter().next();
@@ -492,7 +486,7 @@ pub(super) fn drain_container_repairs(
             let slot0 = u8::try_from(slot.saturating_sub(1)).unwrap_or(0);
             match slot_guid(&me.0, bag, slot0, &objects) {
                 Some(guid) => {
-                    if purse.refuses(&mut script, &merchant, me, [guid]) {
+                    if purse.refuses(script, &merchant, me, [guid]) {
                         continue;
                     }
                     debug!("ui_items: repair lua bag {bag} slot {slot} (item {guid:#x})");
@@ -515,7 +509,7 @@ pub(super) fn drain_container_repairs(
                 .and_then(|slot0| slot_guid(&me.0, EQUIPMENT_BAG, slot0, &objects));
             match item_guid {
                 Some(guid) if (1..=19).contains(&id) => {
-                    if purse.refuses(&mut script, &merchant, me, [guid]) {
+                    if purse.refuses(script, &merchant, me, [guid]) {
                         continue;
                     }
                     debug!("ui_items: repair worn lua slot {id} (item {guid:#x})");
@@ -603,7 +597,7 @@ pub(super) fn drain_container_moves(
     items: Res<Items>,
 ) {
     vm.turn(|script, mut gate| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         let store = self_q.iter().next();
@@ -632,14 +626,7 @@ pub(super) fn drain_container_moves(
         }
         for mv in script.take_container_moves() {
             send_container_move(
-                &mut script,
-                &mut gate,
-                &objects,
-                &items,
-                &commands,
-                store,
-                mv,
-                false,
+                script, &mut gate, &objects, &items, &commands, store, mv, false,
             );
         }
     })
@@ -1619,7 +1606,7 @@ pub(super) fn drain_bind_confirm_answers(
     commands: Res<NetCommands>,
 ) {
     vm.turn(|script, (mut gate, mut equip_sound)| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         let store = self_q.iter().next();
@@ -1662,7 +1649,7 @@ pub(super) fn drain_bind_confirm_answers(
                     dst_slot,
                 } => {
                     send_container_move(
-                        &mut script,
+                        script,
                         &mut gate,
                         &objects,
                         &items,
@@ -1688,7 +1675,7 @@ pub(super) fn drain_bind_confirm_answers(
                     {
                         if let Some((bag_index, wire_slot)) = wire_pos(bag, slot) {
                             send_auto_equip(
-                                &mut script,
+                                script,
                                 &objects,
                                 &items,
                                 &commands,
@@ -1725,7 +1712,7 @@ pub(super) fn drain_bind_on_use_confirms(
     ui_errors: Res<crate::ui_action::UiErrorKeys>,
 ) {
     vm.turn(|script, (targeting, mut ladder, mut gate)| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         // The first accept spends the pending use, whatever the protected-action gate said; the cast
@@ -1736,7 +1723,7 @@ pub(super) fn drain_bind_on_use_confirms(
         let Some(it) = gate.on_use.0.take() else {
             return;
         };
-        if super::item_use_refused(&script, it.guid) {
+        if super::item_use_refused(script, it.guid) {
             debug!("ui_items: bind-on-use confirmed on a locked item — refused");
             return;
         }
@@ -1749,7 +1736,7 @@ pub(super) fn drain_bind_on_use_confirms(
             it,
             &targeting.context(),
             &mut ladder,
-            &mut script,
+            script,
             &mut gate,
             true,
             &ui_errors,

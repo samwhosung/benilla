@@ -274,7 +274,7 @@ fn feed_known_languages(
         let (Some(actions), Some(spells), Some(languages)) = (actions, spells, languages) else {
             return;
         };
-        let pushed = pushed.get(&script);
+        let pushed = pushed.get(script);
         let store = self_q.iter().next();
         // With no input moved since this VM's push, a rebuild could only reproduce the memo.
         let inputs_moved = store.as_ref().is_some_and(|s| s.is_changed())
@@ -370,7 +370,7 @@ fn feed_default_language(
         let Some(script) = script else {
             return;
         };
-        let pushed = pushed.get(&script);
+        let pushed = pushed.get(script);
         let name = self_q
             .iter()
             .next()
@@ -395,7 +395,7 @@ fn load_exhaustion_rows(
         let (Some(script), Some(assets)) = (script, assets) else {
             return;
         };
-        if !seeded.claim(&script) {
+        if !seeded.claim(script) {
             return;
         }
         let loaded = {
@@ -827,7 +827,7 @@ fn fire_faction_on_forced_table(
             return;
         };
         let arrivals = reputations.forced_arrivals();
-        let seen = seen.get(&script);
+        let seen = seen.get(script);
         let arrived = seen.is_some_and(|last| last != arrivals);
         *seen = Some(arrivals);
         if !arrived {
@@ -850,7 +850,7 @@ fn feed_player_control(
         let (Some(script), Some(own_control)) = (script, own_control) else {
             return;
         };
-        let lost = lost.get(&script);
+        let lost = lost.get(script);
         if *lost != own_control.0 {
             *lost = own_control.0;
             // `HasFullControl`'s flag rides the same edge.
@@ -880,7 +880,7 @@ fn feed_farsight_focus(
             return;
         };
         let anchor = store.0.player_farsight();
-        let focus = focus.get(&script);
+        let focus = focus.get(script);
         if *focus != anchor {
             *focus = anchor;
             script.fire_event("PLAYER_FARSIGHT_FOCUS_CHANGED", vec![]);
@@ -1418,7 +1418,7 @@ fn feed_units(
         let types = tables.types(&names);
         // One reborrow, so the memo and `warned_sideless` borrow disjointly rather than alias.
         let feed = &mut *feed;
-        let (memo, vm_reset) = feed.vm.get_reset(&script);
+        let (memo, vm_reset) = feed.vm.get_reset(script);
 
         // The gate: every input read below, despawns included (invisible to `Changed`).
         let names_moved = memo.names_generation.moved(names.generation());
@@ -1817,7 +1817,7 @@ mod tests {
     /// returns past it for a swing `0x625e40` hides (`0x624414`).
     #[test]
     fn a_swing_flashes_only_a_unit_and_only_when_displayed() {
-        let mut log = crate::ui_chat::ChatLog::default();
+        let log = crate::ui_chat::ChatLog::default();
         let swing = |displayed| crate::creature_anim::SwingMessage {
             attacker: Entity::PLACEHOLDER,
             victim: None,
@@ -1831,11 +1831,11 @@ mod tests {
             crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(2, kind)]))
         };
         let (player, object) = (store(0x19), store(0x21));
-        melee_unit_combat(&mut log, &swing(false), Some((1, &player)));
-        melee_unit_combat(&mut log, &swing(true), Some((1, &object)));
-        melee_unit_combat(&mut log, &swing(true), None);
+        melee_unit_combat(&log, &swing(false), Some((1, &player)));
+        melee_unit_combat(&log, &swing(true), Some((1, &object)));
+        melee_unit_combat(&log, &swing(true), None);
         assert!(log.pending_unit_combat().is_empty());
-        melee_unit_combat(&mut log, &swing(true), Some((1, &player)));
+        melee_unit_combat(&log, &swing(true), Some((1, &player)));
         assert_eq!(
             log.pending_unit_combat(),
             [UnitCombatFeedback {

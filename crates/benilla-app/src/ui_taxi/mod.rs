@@ -137,12 +137,12 @@ fn feed_taxi(
     mut sink: crate::ui_action::MessageSink,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
-        let last = last.get(&script);
-        let last_name = last_name.get(&script);
-        if closes.since_last(&script, NpcWindow::Taxi) {
+        let last = last.get(script);
+        let last_name = last_name.get(script);
+        if closes.since_last(script, NpcWindow::Taxi) {
             *last = None;
             *last_name = None;
         }
@@ -158,7 +158,7 @@ fn feed_taxi(
                     .unwrap_or_default();
                 if !text.is_empty() {
                     crate::ui_action::show_messages(
-                        &mut script,
+                        script,
                         &mut sink,
                         "ui_taxi",
                         [crate::ui_action::Shown::keyed(key, text)],
@@ -178,7 +178,7 @@ fn feed_taxi(
                 .unwrap_or_default();
             if !text.is_empty() {
                 crate::ui_action::show_messages(
-                    &mut script,
+                    script,
                     &mut sink,
                     "ui_taxi",
                     [crate::ui_action::Shown::keyed("ERR_NEWTAXIPATH", text)],
@@ -262,7 +262,7 @@ fn feed_on_taxi(
         let Some(script) = script else {
             return;
         };
-        let last = last.get(&script);
+        let last = last.get(script);
         let on_taxi = self_q
             .iter()
             .next()

@@ -87,6 +87,7 @@ const TRAINER_BLACKSMITH: TrainerSeed = TrainerSeed {
 /// Seeds the fixture window's state once the scene is resident; the real feeds push it into the VM
 /// during the settle window as live wire data would. Icons resolve through the offline
 /// `ItemDisplayCatalog`, and names go straight into the caches.
+#[allow(clippy::type_complexity)] // a Bevy system's full input set
 pub(super) fn seed_ui_fixture(
     mut vm: crate::script_calls::VmWith<(
         ResMut<'static, crate::ui_merchant::MerchantOpen>,
@@ -755,23 +756,23 @@ pub(super) fn seed_ui_fixture(
                 );
             }
             UiFixture::Bag => {
-                let Some(mut script) = script else {
+                let Some(script) = script else {
                     return;
                 };
-                seed_bag_window(&mut script, icons.as_deref());
-                seed_equipped_bags(&mut script, icons.as_deref());
+                seed_bag_window(script, icons.as_deref());
+                seed_equipped_bags(script, icons.as_deref());
             }
             UiFixture::Cooldown => {
-                let Some(mut script) = script else {
+                let Some(script) = script else {
                     return;
                 };
-                seed_cooldown_filmstrip(&mut script, icons.as_deref());
+                seed_cooldown_filmstrip(script, icons.as_deref());
             }
             UiFixture::CooldownShine => {
-                let Some(mut script) = script else {
+                let Some(script) = script else {
                     return;
                 };
-                seed_cooldown_filmstrip(&mut script, icons.as_deref());
+                seed_cooldown_filmstrip(script, icons.as_deref());
                 // The pet bar's autocast shine, raised by hand, as no pet is fed.
                 if let Err(e) = script.run(
                     "PetActionBarFrame:Show()\n\
@@ -807,10 +808,10 @@ pub(super) fn seed_ui_fixture(
                 }
             }
             UiFixture::Tooltip => {
-                let Some(mut script) = script else {
+                let Some(script) = script else {
                     return;
                 };
-                seed_bag_window(&mut script, icons.as_deref());
+                seed_bag_window(script, icons.as_deref());
                 // The hovered shield's full template and a player under its level requirement: quality
                 // name, bind, slot and type, armor and block, stats, durability, a red requirement, a
                 // long green Use: line that wraps, a charges line after it, and the flavor text.

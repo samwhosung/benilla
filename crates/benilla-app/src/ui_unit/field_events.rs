@@ -37,7 +37,7 @@ pub(crate) fn fire_field_notices(
     hosted_vm.run(|script| {
         let fresh: Vec<FieldNotice> = cursor.0.read(&notices).copied().collect();
         // No VM, nobody to hear them: they are dropped, as below.
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         for notice in fresh {
@@ -50,11 +50,11 @@ pub(crate) fn fire_field_notices(
             if let FieldNotice::Tutorial { id } = notice {
                 // `0x4b5390` with no delay, inside the watcher's run.
                 if let Some(published) = tutorials.as_mut().and_then(|t| t.fire_now(id)) {
-                    crate::tutorial::fire_published(&mut script, &sink.sounds, published);
+                    crate::tutorial::fire_published(script, &sink.sounds, published);
                 }
                 continue;
             }
-            fire(&mut script, &mut sink, notice);
+            fire(script, &mut sink, notice);
         }
     })
 }

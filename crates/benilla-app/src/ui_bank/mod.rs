@@ -135,22 +135,20 @@ fn feed_bank(
     mut sink: crate::ui_action::MessageSink,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
-        let last = last.get(&script);
-        if closes.since_last(&script, NpcWindow::Bank) {
+        let last = last.get(script);
+        if closes.since_last(script, NpcWindow::Bank) {
             *last = None;
         }
         // Refusals show, and speak, as their message rows say: insufficient funds is speech `0x16`.
         let lines: Vec<_> = errors
             .0
             .drain(..)
-            .filter_map(|result| {
-                crate::ui_action::keyed_line(&script, bank_slot_error_key(result)?)
-            })
+            .filter_map(|result| crate::ui_action::keyed_line(script, bank_slot_error_key(result)?))
             .collect();
-        crate::ui_action::show_messages(&mut script, &mut sink, "ui_bank", lines);
+        crate::ui_action::show_messages(script, &mut sink, "ui_bank", lines);
         let store = self_q.iter().next();
         let purchased = store
             .and_then(|s| s.0.player_bank_bag_slots_purchased())

@@ -101,7 +101,7 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
         let mut stack: Vec<NodeId> = graph
             .system_sets
             .iter()
-            .filter(|(_, set, _)| phases.iter().any(|p| *p == *set))
+            .filter(|(_, set, _)| phases.contains(set))
             .map(|(key, _, _)| NodeId::Set(key))
             .collect();
         while let Some(n) = stack.pop() {

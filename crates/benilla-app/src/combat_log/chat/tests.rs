@@ -76,8 +76,8 @@ fn a_standing_packet_prints_its_first_entry_only_and_never_a_hidden_one() {
     let factions = Factions::from_catalog(catalog);
     let packet = [(booty, 100), (gadget, 50), (ratchet, 50)];
     let kinds = |reps: &Reputations, deltas: &[(u32, i32)]| {
-        let mut log = ChatLog::default();
-        super::faction_standing(deltas, reps, Some(&factions), &mut log);
+        let log = ChatLog::default();
+        super::faction_standing(deltas, reps, Some(&factions), &log);
         log.pending_kinds()
     };
 

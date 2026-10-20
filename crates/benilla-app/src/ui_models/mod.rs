@@ -853,7 +853,7 @@ fn sync_tiles(
     vm.turn(|script, (mut cams, mut pane_cams, mut roots)| {
         state.frame += 1;
         let frame = state.frame;
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             // No VM: the edge retired the tiles; composite nothing and leave no camera live.
             bridge.cells.clear();
             set_camera_active(&mut cams, false);
@@ -864,7 +864,7 @@ fn sync_tiles(
         };
 
         // ── 1. Facts: answered now if the file is resident, else when it lands ───────────────────
-        for want in state.answer_facts(&mut script) {
+        for want in state.answer_facts(script) {
             if trace_on() {
                 info!(
                     "tile-trace: facts for {} wanted — loading the file",

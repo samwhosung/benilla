@@ -160,7 +160,7 @@ pub(crate) fn feed_honor(
         let Some(script) = script else {
             return;
         };
-        let memo = state.vm.get(&script);
+        let memo = state.vm.get(script);
 
         // --- the self snapshot -------------------------------------------------------------------
         if let Ok(store) = self_store.single() {

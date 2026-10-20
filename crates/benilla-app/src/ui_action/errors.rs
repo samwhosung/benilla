@@ -743,8 +743,8 @@ mod attack_actor_tests {
     }
 
     fn refusal(store: Option<&ObjectStore>, self_guid: Option<u64>) -> Option<&'static str> {
-        let mut errors = UiErrorKeys::default();
-        let refused = attack_actor_refusal(store, self_guid, &mut errors);
+        let errors = UiErrorKeys::default();
+        let refused = attack_actor_refusal(store, self_guid, &errors);
         assert_eq!(
             refused,
             !errors.is_empty(),

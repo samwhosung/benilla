@@ -151,9 +151,7 @@ fn feed_shapeshift_bar(
     let Some((fresh, form_byte)) = vm.turn(|script, (cooldowns, selection)| {
         // No VM, no bar.
         script?;
-        let Some(spells) = spells else {
-            return None;
-        };
+        let spells = spells?;
         let store = self_q.iter().next();
         let form_byte = store.map(|s| s.0.unit_shapeshift_form()).unwrap_or(0);
         let now = Instant::now();

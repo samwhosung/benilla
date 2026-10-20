@@ -90,7 +90,7 @@ pub(super) fn feed_control_bypass(
             }
             _ => HashSet::new(),
         };
-        let pushed = pushed.get(&script);
+        let pushed = pushed.get(script);
         if *pushed != want {
             *pushed = want.clone();
             script.set_control_bypass(want);

@@ -1103,7 +1103,7 @@ fn a_session_end_empties_the_window_and_the_boxs_memory() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = chat_vm();
     let mut windows = super::frames::ChatWindows::default();
-    let mut log = super::ChatLog::default();
+    let log = super::ChatLog::default();
 
     super::frames::route(&mut s, &mut windows, &ev(K::Say, "hi there", "Bob"));
     super::frames::route(&mut s, &mut windows, &ev(K::Whisper, "psst", "Ann"));
@@ -1114,7 +1114,7 @@ fn a_session_end_empties_the_window_and_the_boxs_memory() {
         "the window has this session's lines"
     );
 
-    super::end_chat_session(Some(&mut s), &mut log);
+    super::end_chat_session(Some(&mut s), &log);
 
     assert_eq!(
         lines_in_window(&s),

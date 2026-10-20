@@ -35,7 +35,7 @@ fn feed_follow(
         let Some(script) = script else {
             return;
         };
-        let memo = feed.vm.get(&script);
+        let memo = feed.vm.get(script);
         match (follow.guid, memo.told) {
             // Started, or switched subject: a switch fires END first, as the reference's arm routine
             // (`0x611130`) calls the canceller (`0x61113e`) before arming.

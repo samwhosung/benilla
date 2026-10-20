@@ -752,7 +752,7 @@ impl Dispatch<'_, '_> {
                 debug!("right-click interact: {guid:#x} (spirit guide — adopting, 0x2E2)");
                 let outcome = self.service.spirit.click_guide(guid);
                 if outcome.cancel_aura {
-                    if let Some(script) = script.as_deref_mut() {
+                    if let Some(script) = script {
                         script.fire_event("AREA_SPIRIT_HEALER_OUT_OF_RANGE", vec![]);
                     }
                     let _ = self.seam.net.0.send(ClientCommand::CancelAura {
@@ -1113,10 +1113,11 @@ fn interact(
 pub struct Interact(pub Entity);
 
 /// Each nameplate right-click's unit interact (`0x492881`), then each [`Interact`], its object
-/// classified as a press over it would be. Runs after the head of the script calls' pass, which
-/// binds a standing cursor's parked picks: a plate's `SelectTarget` gave its unit to the cast, and
-/// the interact that follows finds the cursor's word empty, so its attack leg selects the unit
-/// and its service leg talks, after the cast on the wire.
+/// classified as a press over it would be. Runs after the bind of a standing cursor's parked picks
+/// ([`crate::script_calls::bind_parked_picks`]): a plate's `SelectTarget` gave its unit to the
+/// cast, and the interact that follows finds the cursor's word empty, so its attack leg selects
+/// the unit and its service leg talks, after the cast on the wire.
+#[allow(clippy::type_complexity)] // a Bevy system's full input set
 pub(super) fn act_on_interact(
     mut requests: MessageReader<Interact>,
     mut plate_clicks: MessageReader<PlateRightClick>,

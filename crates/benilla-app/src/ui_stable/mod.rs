@@ -220,11 +220,11 @@ fn feed_stable(
     mut sink: crate::ui_action::MessageSink,
 ) {
     vm.feed(|script, bar, fires| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
-        let last = last.get(&script);
-        if closes.since_last(&script, NpcWindow::Stable) {
+        let last = last.get(script);
+        if closes.since_last(script, NpcWindow::Stable) {
             *last = None;
         }
         // Refusals show, and speak, as their message rows say.
@@ -236,7 +236,7 @@ fn feed_stable(
                 (!text.is_empty()).then(|| crate::ui_action::Shown::keyed(key, text))
             })
             .collect();
-        crate::ui_action::show_messages(&mut script, &mut sink, "ui_stable", lines);
+        crate::ui_action::show_messages(script, &mut sink, "ui_stable", lines);
 
         // The next slot's price: `StableSlotPrices.dbc` row `purchased + 1`, 0 past the table.
         let next_slot_cost = prices

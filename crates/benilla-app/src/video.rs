@@ -599,7 +599,7 @@ fn publish_display_modes(
         offered.sort_by_key(|r| (u64::from(r.width) * u64::from(r.height), r.width, r.height));
         offered.dedup();
         // Keyed by VM: a `ReloadUI` VM has been pushed nothing, so a plain `Local` would skip it.
-        let memo = last.get(&script);
+        let memo = last.get(script);
         if memo.as_ref() == Some(&(offered.clone(), current)) {
             return;
         }

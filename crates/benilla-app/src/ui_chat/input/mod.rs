@@ -161,6 +161,7 @@ fn manual_join_or_leave(
     }
 }
 
+#[allow(clippy::type_complexity)] // a Bevy system's full input set
 pub(super) fn drain_chat_input(
     mut vm: crate::script_calls::VmWith<(
         Res<'static, Selection>,
@@ -1536,7 +1537,7 @@ pub(crate) fn drain_addon_chat_sends(
             // `SendChatMessage` (`0x49f1e0`): every type but AFK (`0x14`) first clears a standing AFK
             // (`0x49f4f6 jne 0x49f3c7`), `/dnd` included; then AFK and DND each have an arm ahead of
             // the generic send. The system lines, the default text and the mirror are `super::away`'s.
-            let strings = |key: &str| crate::ui_chat::combat::global_string(&script, key);
+            let strings = |key: &str| crate::ui_chat::combat::global_string(script, key);
             let wire = kind.wire();
             if !matches!(wire, crate::net::ChatKind::Afk) {
                 if let Some(line) =

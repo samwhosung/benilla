@@ -214,13 +214,13 @@ pub(crate) fn load_layout(
         let Some(id) = crate::ui_macro::identity(&roster) else {
             return;
         };
-        if file.identity.get(&script).as_ref() == Some(&id) {
+        if file.identity.get(script).as_ref() == Some(&id) {
             return; // already restored into the live VM
         }
         file.path = crate::local_state::layout_character_path(&id.0, &id.1);
-        *file.identity.get(&script) = Some(id);
+        *file.identity.get(script) = Some(id);
         // A fresh VM has nothing placed and owes no write.
-        *file.dirty.get(&script) = false;
+        *file.dirty.get(script) = false;
         file.last_change = None;
 
         let Some(path) = file.path.clone() else {
@@ -255,7 +255,7 @@ pub(crate) fn load_layout(
         if anchor_form {
             // The anchor form is read once: the autosave rewrites it in the rect form once the
             // restored windows have settled.
-            *file.dirty.get(&script) = true;
+            *file.dirty.get(script) = true;
             file.last_change = Some(std::time::Instant::now());
         }
     })
@@ -268,7 +268,7 @@ fn watch_layout(mut hosted_vm: crate::script_calls::HostedVm, mut file: ResMut<L
         if !script.take_user_placed_change() {
             return;
         }
-        *file.dirty.get(&script) = true;
+        *file.dirty.get(script) = true;
         file.last_change = Some(std::time::Instant::now());
     })
 }
@@ -278,7 +278,7 @@ fn watch_layout(mut hosted_vm: crate::script_calls::HostedVm, mut file: ResMut<L
 fn save_layout(mut hosted_vm: crate::script_calls::HostedVm, mut file: ResMut<LayoutFile>) {
     hosted_vm.run(|script| {
         let Some(script) = script else { return };
-        if !*file.dirty.get(&script) {
+        if !*file.dirty.get(script) {
             return;
         }
         if !file.last_change.is_none_or(|t| t.elapsed() >= SAVE_QUIET) {
@@ -286,7 +286,7 @@ fn save_layout(mut hosted_vm: crate::script_calls::HostedVm, mut file: ResMut<La
         }
         let Some(path) = file.path.clone() else {
             // Hermetic or session-only: nothing to write, stop retrying.
-            *file.dirty.get(&script) = false;
+            *file.dirty.get(script) = false;
             return;
         };
         let body = render(&script.user_placed_layouts());
@@ -294,7 +294,7 @@ fn save_layout(mut hosted_vm: crate::script_calls::HostedVm, mut file: ResMut<La
             // The flag clears below anyway, so a failing write is not retried every frame.
             warn!("layout: cannot write {}: {e}", path.display());
         }
-        *file.dirty.get(&script) = false;
+        *file.dirty.get(script) = false;
     })
 }
 

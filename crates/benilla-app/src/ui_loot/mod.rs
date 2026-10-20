@@ -758,10 +758,10 @@ fn feed_loot(
     objects: LootSourceObjects,
 ) {
     vm.turn(|script, (mut loot, mut moving)| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
-        let last = last.get(&script);
+        let last = last.get(script);
         let rolls = RollCatalogs {
             props: props.as_deref(),
             enchants: enchants.as_deref(),
@@ -772,12 +772,12 @@ fn feed_loot(
             icons.as_deref(),
             &commands,
             &chat,
-            &mut script,
+            script,
             rolls,
         );
 
         if std::mem::take(&mut loot.sweep_owed) && loot.source.is_some() {
-            sweep_rows(&mut loot, &items, &commands, &mut script, &mut pickup);
+            sweep_rows(&mut loot, &items, &commands, script, &mut pickup);
         }
 
         let who = Candidates {
@@ -810,7 +810,7 @@ fn feed_loot(
                 // sends, and emptying the window auto-releases it.
                 let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
                 if cfg.auto_loot != shift {
-                    sweep_rows(&mut loot, &items, &commands, &mut script, &mut pickup);
+                    sweep_rows(&mut loot, &items, &commands, script, &mut pickup);
                 }
                 // The response's tail (`0x5ebc3a`-`0x5ebc51`) closes a window that opened while we
                 // move, after the copier's open and sweep and in the same handler: `LOOT_CLOSED` fires
@@ -939,8 +939,8 @@ pub(crate) fn close_loot_on_leave_world(
     vm.turn(|script, (mut loot, mut latch)| {
         if loot.disenchant_holds() {
             let LegSweepInputs { items, mut pickup } = sweep;
-            if let Some(mut script) = script {
-                sweep_rows(&mut loot, &items, &commands, &mut script, &mut pickup);
+            if let Some(script) = script {
+                sweep_rows(&mut loot, &items, &commands, script, &mut pickup);
             } else {
                 loot.owe_sweep();
             }
@@ -950,8 +950,8 @@ pub(crate) fn close_loot_on_leave_world(
         if closed.is_none() {
             return;
         }
-        if let Some(mut script) = script {
-            announce_loot_closed(&mut script, &mut loot, &objects);
+        if let Some(script) = script {
+            announce_loot_closed(script, &mut loot, &objects);
         }
         dead.after_close(closed);
     })
@@ -971,8 +971,8 @@ pub(crate) fn tell_loot_closed(
     objects: crate::net::Objects,
 ) {
     vm.turn(|script, mut loot| {
-        if let Some(mut script) = script {
-            announce_loot_closed(&mut script, &mut loot, &objects);
+        if let Some(script) = script {
+            announce_loot_closed(script, &mut loot, &objects);
         }
     })
 }
@@ -1080,7 +1080,7 @@ fn drain_loot(
         if std::mem::take(&mut move_start.0) {
             dead.after_close(close_on_move_start(&mut loot, &mut latch, &commands));
         }
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         for index in script.take_loot_picks() {
@@ -1186,7 +1186,7 @@ fn drain_loot(
         if let Some(failed) = script.take_loot_close() {
             if loot.disenchant_holds() {
                 debug!("ui_loot: CloseLoot on a disenchant window with rows left — sweeping it");
-                sweep_rows(&mut loot, &items, &commands, &mut script, &mut pickup);
+                sweep_rows(&mut loot, &items, &commands, script, &mut pickup);
             } else {
                 // Past the no-loot and disenchant returns, a set flag shows `ERR_LOOT_NO_UI`
                 // (`0x48f272`-`0x48f280`, `DisplayError(0x87)`) before the release.

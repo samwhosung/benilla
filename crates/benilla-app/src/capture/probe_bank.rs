@@ -376,7 +376,7 @@ fn bank_probe(
                             since: now,
                             teleported: false,
                             bought: false,
-                            events_baseline: events_len(&script),
+                            events_baseline: events_len(script),
                         };
                         return;
                     }
@@ -419,7 +419,7 @@ fn bank_probe(
                             since: now,
                             teleported: false,
                             bought: false,
-                            events_baseline: events_len(&script),
+                            events_baseline: events_len(script),
                         };
                         return;
                     }
@@ -447,7 +447,7 @@ fn bank_probe(
                         since: now,
                         teleported: false,
                         bought: false,
-                        events_baseline: events_len(&script),
+                        events_baseline: events_len(script),
                     };
                 } else if now - since > ACTION_TIMEOUT_SECS {
                     error!(
@@ -461,7 +461,7 @@ fn bank_probe(
                         since: now,
                         teleported: false,
                         bought: false,
-                        events_baseline: events_len(&script),
+                        events_baseline: events_len(script),
                     };
                 }
             }
@@ -514,9 +514,9 @@ fn bank_probe(
                     };
                     return;
                 }
-                let seen = events_len(&script);
+                let seen = events_len(script);
                 if seen > events_baseline {
-                    let text = last_event(&script);
+                    let text = last_event(script);
                     if text.to_lowercase().contains("banker") {
                         info!("PROBE_BANK: PASS (6 refusal) — surfaced error: {text:?}");
                         probe.passes += 1;

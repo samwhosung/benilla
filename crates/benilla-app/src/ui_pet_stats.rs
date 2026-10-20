@@ -170,7 +170,7 @@ pub(crate) fn feed_pet_stats(
         let Some(script) = script else {
             return;
         };
-        let last = last.get(&script);
+        let last = last.get(script);
         let store = pet.store(bar.spells.pet_guid);
         let family = family_for(store, &names, family_tables.as_deref());
         let fresh = stats_for(store, self_store.iter().next(), tables.as_deref(), family);

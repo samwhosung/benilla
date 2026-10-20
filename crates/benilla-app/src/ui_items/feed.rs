@@ -376,8 +376,8 @@ pub(super) fn feed_item_sets(
         let Some(script) = script else {
             return;
         };
-        let pending = pending.get(&script);
-        let mod_sensitive = mod_sensitive.get(&script);
+        let pending = pending.get(script);
+        let mod_sensitive = mod_sensitive.get(script);
         let me = self_q.single().ok();
         // The build's asks are its lookups with a callback (`0x52bf60`): their members are asked,
         // a refused one again; a set carried since only reads.
@@ -388,8 +388,8 @@ pub(super) fn feed_item_sets(
         // The `$`-tokens follow the player's skills and gender.
         let reads = token_reads(me);
         let gender = reads.1;
-        let reads_changed = last_reads.get(&script).as_ref() != Some(&reads);
-        *last_reads.get(&script) = Some(reads);
+        let reads_changed = last_reads.get(script).as_ref() != Some(&reads);
+        *last_reads.get(script) = Some(reads);
         if spell_mods.is_changed() || reads_changed {
             for &id in mod_sensitive.iter() {
                 pending.entry(id).or_default();
@@ -491,17 +491,17 @@ pub(super) fn feed_random_properties(
         // The enchant names a link's bare id reads (`0x52c9f2`): every named row, as the builder's
         // loop tests no flag before it prints the name (`0x52ca23`..`0x52ca8b`).
         if let Some(enchants) = enchants.as_deref() {
-            if !*names_pushed.get(&script) {
+            if !*names_pushed.get(script) {
                 let names: std::collections::HashMap<u32, String> = enchants
                     .0
                     .iter_names()
                     .map(|(id, name)| (id, name.to_string()))
                     .collect();
                 script.set_enchant_names(names);
-                *names_pushed.get(&script) = true;
+                *names_pushed.get(script) = true;
             }
         }
-        if *pushed.get(&script) {
+        if *pushed.get(script) {
             return;
         }
         // Without the enchant catalog every row would push empty, never to be retried.
@@ -515,7 +515,7 @@ pub(super) fn feed_random_properties(
             rows.len()
         );
         script.set_random_properties(rows);
-        *pushed.get(&script) = true;
+        *pushed.get(script) = true;
     })
 }
 
@@ -552,18 +552,18 @@ pub(super) fn feed_item_stats(
         let Some(script) = script else {
             return;
         };
-        let (pending, new_vm) = pending.get_reset(&script);
+        let (pending, new_vm) = pending.get_reset(script);
         if new_vm {
             pending.extend(items.cached_template_ids());
         }
-        let reads_player = reads_player.get(&script);
-        let last_home = last_home.get(&script);
+        let reads_player = reads_player.get(script);
+        let last_home = last_home.get(script);
         let me = self_q.single().ok();
         // The `$`-tokens follow the player's skills and gender.
         let reads = token_reads(me);
         let gender = reads.1;
-        let reads_changed = last_reads.get(&script).as_ref() != Some(&reads);
-        *last_reads.get(&script) = Some(reads);
+        let reads_changed = last_reads.get(script).as_ref() != Some(&reads);
+        *last_reads.get(script) = Some(reads);
         // `GetBindLocation()`'s push, here so it and the `$z` token share one name, and ahead of the
         // pending gate below: the bind point can arrive while the feed idles.
         let home_area: Option<&str> = home_bind
@@ -685,7 +685,7 @@ pub(super) fn feed_player_req(
         let Some(script) = script else {
             return;
         };
-        let (last, vm_reset) = last.get_reset(&script);
+        let (last, vm_reset) = last.get_reset(script);
         // The state is a function of these inputs alone.
         let self_changed = !changed_self.is_empty();
         let prof_changed = proficiencies.is_changed();

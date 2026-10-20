@@ -354,7 +354,7 @@ fn fire_probe_lua(
             return;
         }
         if probe.logged_vm != script.session() {
-            install_probe_log(&script);
+            install_probe_log(script);
             probe.logged_vm = script.session();
         }
         if !probe_lua_due(&probe, now) {
@@ -567,7 +567,7 @@ fn fire_probe_hover(
         probe.next = now + probe.step;
         let name = probe.names[probe.i % probe.names.len()].clone();
         probe.i += 1;
-        match frame_centre(&script, &name) {
+        match frame_centre(script, &name) {
             Some((x, y)) => {
                 if !probe.announced {
                     probe.announced = true;
@@ -700,8 +700,8 @@ fn fire_probe_drag(
         match probe.phase {
             0 => {
                 let (Some(from), Some(to)) = (
-                    frame_centre(&script, &from_name),
-                    frame_centre(&script, &to_name),
+                    frame_centre(script, &from_name),
+                    frame_centre(script, &to_name),
                 ) else {
                     warn!("probe-drag: {from_name} > {to_name} — no resolved rect, skipping");
                     probe.pair += 1;
@@ -742,7 +742,7 @@ fn fire_probe_drag(
             // Self-check: hover the source where it now draws and ask the hit test who is there, to
             // catch a hit rect that has parted from the drawn one.
             7 => {
-                if let Some((x, y)) = frame_centre(&script, &from_name) {
+                if let Some((x, y)) = frame_centre(script, &from_name) {
                     script.mouse_move(x, y);
                     let focus = script
                         .eval::<String>(

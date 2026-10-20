@@ -454,12 +454,12 @@ pub(crate) fn feed_quest(
     mut closes: CoreCloses,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
-        let last = last.get(&script);
-        let last_name = last_name.get(&script);
-        if closes.since_last(&script, NpcWindow::Quest) {
+        let last = last.get(script);
+        let last_name = last_name.get(script);
+        if closes.since_last(script, NpcWindow::Quest) {
             *last = None;
             *last_name = None;
         }
@@ -475,7 +475,7 @@ pub(crate) fn feed_quest(
                 ui_error_text(&msg, &get).map(|text| Shown::keyed(msg.key, text))
             })
             .collect();
-        show_messages(&mut script, &mut sink, "ui_quest", lines);
+        show_messages(script, &mut sink, "ui_quest", lines);
         let player = crate::npc_text::player_identity(&self_q, &names, unit_names.get());
         // A panel's publish, or a window this VM has not shown, is the stock frame's getter calls.
         let ask = Ask::at(

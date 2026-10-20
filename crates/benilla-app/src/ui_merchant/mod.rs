@@ -507,7 +507,7 @@ fn feed_repair_costs(
         let Some(script) = script else {
             return;
         };
-        let (memo, vm_reset) = memo.get_reset(&script);
+        let (memo, vm_reset) = memo.get_reset(script);
         // No self store at logout: keep the last push, as `feed_char` does.
         let Some(player) = inv.self_store.iter().next() else {
             return;
@@ -612,13 +612,13 @@ fn feed_merchant(
     mut sink: crate::ui_action::MessageSink,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
-        let last = last.get(&script);
-        let last_money = last_money.get(&script);
-        let last_name = last_name.get(&script);
-        if closes.since_last(&script, NpcWindow::Merchant) {
+        let last = last.get(script);
+        let last_money = last_money.get(script);
+        let last_name = last_name.get(script);
+        if closes.since_last(script, NpcWindow::Merchant) {
             *last = None;
             *last_name = None;
         }
@@ -631,10 +631,10 @@ fn feed_merchant(
                     MerchantRefusal::Buy(r) => buy_error_key(r)?,
                     MerchantRefusal::Sell(r) => sell_error_key(r)?,
                 };
-                crate::ui_action::keyed_line(&script, key)
+                crate::ui_action::keyed_line(script, key)
             })
             .collect();
-        crate::ui_action::show_messages(&mut script, &mut sink, "ui_merchant", refusals);
+        crate::ui_action::show_messages(script, &mut sink, "ui_merchant", refusals);
         // The purse (`PLAYER_FIELD_COINAGE`): on a change, push it and fire `PLAYER_MONEY`, which the
         // money frames repaint on.
         if let Some(store) = self_q.iter().next() {
@@ -753,7 +753,7 @@ fn drain_merchant(
     mut commands_q: Commands,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         let self_pair = self_q.iter().next();
@@ -782,7 +782,7 @@ fn drain_merchant(
                 // `RepairAllItems` (`0x4fbfe0`) prices only the equipped slots 0-18 for its purse test
                 // (`0x4fc026`–`0x4fc063`), not the bags `GetRepairAllCost` also sweeps.
                 let worn = (0..19u8).filter_map(|i| me.0.player_inv_slot(i));
-                if !purse.refuses(&mut script, &open, me, worn) {
+                if !purse.refuses(script, &open, me, worn) {
                     debug!("ui_merchant: repair all");
                     let _ = commands.0.send(ClientCommand::RepairItem {
                         vendor,

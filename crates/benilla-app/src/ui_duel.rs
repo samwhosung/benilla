@@ -278,11 +278,11 @@ fn feed_duel(
     mut fed_held: crate::ui_script::WindowMemo<bool>,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
-        let fed = fed.get(&script);
-        let fed_held = fed_held.get(&script);
+        let fed = fed.get(script);
+        let fed_held = fed_held.get(script);
 
         // Lines before events: a line describes the transition its event announces.
         let owed = std::mem::take(&mut duel.owed);
@@ -296,7 +296,7 @@ fn feed_duel(
                 })
                 .collect()
         };
-        crate::ui_action::show_messages(&mut script, &mut sink, "ui_duel", lines);
+        crate::ui_action::show_messages(script, &mut sink, "ui_duel", lines);
 
         // `DUEL_REQUESTED(name)`, held until the name resolves (the module's deviation).
         if let Some(guid) = duel.challenger {
@@ -375,7 +375,6 @@ fn drain_duel(
 ) {
     let p = hosted.p0();
     let selection = *p;
-    drop(p);
     hosted.p1().run(|script| {
         let Some(script) = script else {
             return;

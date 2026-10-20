@@ -275,9 +275,9 @@ fn feed_gossip(
         let Some(script) = script else {
             return;
         };
-        let last = last.get(&script);
-        let last_name = last_name.get(&script);
-        if closes.since_last(&script, NpcWindow::Gossip) {
+        let last = last.get(script);
+        let last_name = last_name.get(script);
+        if closes.since_last(script, NpcWindow::Gossip) {
             *last = None;
             *last_name = None;
         }

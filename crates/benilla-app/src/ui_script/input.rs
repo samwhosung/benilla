@@ -140,9 +140,8 @@ pub(super) fn feed_ui_wheel(
             scroll.unit,
             crate::bindings::notch_travel(scroll.delta.x, scroll.delta.y, shift),
         );
-        let mut script = script;
         world_wheel.0 = wheel_for_world(
-            script.as_deref_mut(),
+            script,
             cursor,
             &mut notches,
             travel,

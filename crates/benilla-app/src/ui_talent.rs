@@ -81,7 +81,7 @@ fn feed_talents(
         let Some(script) = script else {
             return;
         };
-        let (memory, vm_reset) = memory.get_reset(&script);
+        let (memory, vm_reset) = memory.get_reset(script);
         // Reopened by every input the build reads: the known spells, both catalogs (their landing
         // counts as a change) and the self descriptor.
         let self_changed = !changed_self.is_empty();

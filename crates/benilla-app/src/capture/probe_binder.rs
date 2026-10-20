@@ -279,7 +279,7 @@ fn binder_probe(
                 let open = gossip.npc == Some(innkeeper) && !gossip.options.is_empty();
                 // Wait for the feed's push as well as the parse: step 3 reads the icon type back out
                 // of the VM, so the snapshot must already be there.
-                let pushed = vm_gossip_values(&script) as usize == gossip.options.len() * 2;
+                let pushed = vm_gossip_values(script) as usize == gossip.options.len() * 2;
                 if open && pushed {
                     info!(
                         "PROBE_BINDER: PASS (2 menu) — {} option(s) open on {innkeeper:#x}: {}",
@@ -292,14 +292,14 @@ fn binder_probe(
                             .join(" ")
                     );
                     probe.passes += 1;
-                    assert_icon_and_select(&mut probe, &gossip, &script, &net, innkeeper, now);
+                    assert_icon_and_select(&mut probe, &gossip, script, &net, innkeeper, now);
                 } else if now - sent_at > MENU_TIMEOUT_SECS {
                     error!(
                         "PROBE_BINDER: FAIL (2 menu) — no gossip menu for {innkeeper:#x} within \
                          {MENU_TIMEOUT_SECS}s (parsed npc={:?} options={} vm_values={})",
                         gossip.npc,
                         gossip.options.len(),
-                        vm_gossip_values(&script)
+                        vm_gossip_values(script)
                     );
                     probe.fails += 1;
                     probe.phase = Phase::Done;
@@ -314,8 +314,8 @@ fn binder_probe(
                     return;
                 };
                 let pending = binder.npc() == Some(innkeeper);
-                let fired = events_len(&script) > events_baseline;
-                let area = last_event(&script);
+                let fired = events_len(script) > events_baseline;
+                let area = last_event(script);
                 if pending && fired && !area.is_empty() {
                     info!(
                         "PROBE_BINDER: PASS (5 confirm) — SMSG_BINDER_CONFIRM parked on \
@@ -370,7 +370,7 @@ fn binder_probe(
                     .and_then(|id| areas.as_deref()?.0.name(id))
                     .unwrap_or_default()
                     .to_string();
-                let vm = vm_bind_location(&script);
+                let vm = vm_bind_location(script);
                 if !name.is_empty() && vm == name {
                     info!(
                         "PROBE_BINDER: PASS (6 bind) — HomeBind repopulated to area {:?} = {name:?} \
@@ -394,7 +394,7 @@ fn binder_probe(
             Phase::Line { since } => {
                 // `SMSG_PLAYERBOUND` prints `ERR_DEATHBIND_SUCCESS_S` as a system line (`0x5e3d3f`).
                 let want = bound_line(&probe.bound_name);
-                let lines = system_lines(&script);
+                let lines = system_lines(script);
                 if lines.iter().any(|l| l == &want) {
                     info!("PROBE_BINDER: PASS (7 line) — the bind announced itself: {want:?}");
                     probe.passes += 1;

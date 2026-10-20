@@ -270,7 +270,7 @@ fn chest_probe(
                 probe.phase = Phase::WaitLoot { since: now };
             }
             Phase::WaitLoot { since } => {
-                if window_open(&script, &loot) {
+                if window_open(script, &loot) {
                     info!(
                         "PROBE_CHEST: loot window up on {:#x} — sampling {SAMPLE_FRAMES} frames OPEN",
                         loot.source().unwrap_or_default()
@@ -296,7 +296,7 @@ fn chest_probe(
                 }
             }
             Phase::WaitClosed { since } => {
-                if !window_open(&script, &loot) {
+                if !window_open(script, &loot) {
                     info!("PROBE_CHEST: window closed — sampling {SAMPLE_FRAMES} frames AFTER");
                     probe.phase = Phase::After;
                 } else if now - since > CLOSE_TIMEOUT_SECS {

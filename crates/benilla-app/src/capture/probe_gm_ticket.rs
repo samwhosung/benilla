@@ -278,8 +278,8 @@ fn gm_ticket_probe(
                 if now - since < SETTLE_SECS {
                     return;
                 }
-                let baseline = status_answers(&script).len();
-                if !run_or_skip(&mut probe, &script, "1 queue", "GetGMStatus()") {
+                let baseline = status_answers(script).len();
+                if !run_or_skip(&mut probe, script, "1 queue", "GetGMStatus()") {
                     return;
                 }
                 probe.phase = Phase::Queue {
@@ -290,7 +290,7 @@ fn gm_ticket_probe(
 
             // Step 1, the queue status: no event at all means the round trip is dead.
             Phase::Queue { since, baseline } => {
-                let seen = status_answers(&script);
+                let seen = status_answers(script);
                 let Some(i) = matching(&seen, baseline, |_| true) else {
                     if now - since > ANSWER_TIMEOUT_SECS {
                         error!(
@@ -324,7 +324,7 @@ fn gm_ticket_probe(
                  gate opens)"
                 );
                 probe.passes += 1;
-                if !run_or_skip(&mut probe, &script, "2 clean", "DeleteGMTicket()") {
+                if !run_or_skip(&mut probe, script, "2 clean", "DeleteGMTicket()") {
                     return;
                 }
                 probe.phase = Phase::CleanGap { since: now };
@@ -336,8 +336,8 @@ fn gm_ticket_probe(
                 if now - since < WRITE_GAP_SECS {
                     return;
                 }
-                let baseline = ticket_answers(&script).len();
-                if !run_or_skip(&mut probe, &script, "2 clean", "GetGMTicket()") {
+                let baseline = ticket_answers(script).len();
+                if !run_or_skip(&mut probe, script, "2 clean", "GetGMTicket()") {
                     return;
                 }
                 probe.phase = Phase::CleanGet {
@@ -346,7 +346,7 @@ fn gm_ticket_probe(
                 };
             }
             Phase::CleanGet { since, baseline } => {
-                let seen = ticket_answers(&script);
+                let seen = ticket_answers(script);
                 if matching(&seen, baseline, |(c, _)| *c == NO_TICKET).is_some() {
                     info!(
                     "PROBE_GMTICKET: PASS (2 clean) — UPDATE_TICKET fired with arg1 == 0: no open \
@@ -402,7 +402,7 @@ fn gm_ticket_probe(
                 probe.create_map = map.map(|m| m.0).unwrap_or(0);
                 if !run_or_skip(
                     &mut probe,
-                    &script,
+                    script,
                     "3 create",
                     &format!("NewGMTicket({CATEGORY_ITEM}, \"{text}\")"),
                 ) {
@@ -429,8 +429,8 @@ fn gm_ticket_probe(
                 if now - since < WRITE_GAP_SECS {
                     return;
                 }
-                let baseline = ticket_answers(&script).len();
-                if !run_or_skip(&mut probe, &script, "3 create", "GetGMTicket()") {
+                let baseline = ticket_answers(script).len();
+                if !run_or_skip(&mut probe, script, "3 create", "GetGMTicket()") {
                     return;
                 }
                 probe.phase = Phase::CreateGet {
@@ -439,7 +439,7 @@ fn gm_ticket_probe(
                 };
             }
             Phase::CreateGet { since, baseline } => {
-                let seen = ticket_answers(&script);
+                let seen = ticket_answers(script);
                 let want = probe.create_text.clone();
                 if let Some(i) = matching(&seen, baseline, |(_, t)| *t == want) {
                     let (cat, text) = &seen[i];
@@ -471,7 +471,7 @@ fn gm_ticket_probe(
                     let text = unique_text(" edited");
                     if !run_or_skip(
                         &mut probe,
-                        &script,
+                        script,
                         "5 edit",
                         &format!("UpdateGMTicket({CATEGORY_ITEM}, \"{text}\")"),
                     ) {
@@ -499,8 +499,8 @@ fn gm_ticket_probe(
                 if now - since < WRITE_GAP_SECS {
                     return;
                 }
-                let baseline = ticket_answers(&script).len();
-                if !run_or_skip(&mut probe, &script, "5 edit", "GetGMTicket()") {
+                let baseline = ticket_answers(script).len();
+                if !run_or_skip(&mut probe, script, "5 edit", "GetGMTicket()") {
                     return;
                 }
                 probe.phase = Phase::EditGet {
@@ -509,7 +509,7 @@ fn gm_ticket_probe(
                 };
             }
             Phase::EditGet { since, baseline } => {
-                let seen = ticket_answers(&script);
+                let seen = ticket_answers(script);
                 let want = probe.edit_text.clone();
                 // Equality, never `contains`: a stray leading byte is the failure this step catches.
                 if let Some(i) = matching(&seen, baseline, |(_, t)| *t == want) {
@@ -522,7 +522,7 @@ fn gm_ticket_probe(
                 );
                     probe.passes += 1;
                     report_db_expectation(&probe, "after edit", &want);
-                    if !run_or_skip(&mut probe, &script, "6 abandon", "DeleteGMTicket()") {
+                    if !run_or_skip(&mut probe, script, "6 abandon", "DeleteGMTicket()") {
                         return;
                     }
                     probe.phase = Phase::AbandonGap { since: now };
@@ -549,8 +549,8 @@ fn gm_ticket_probe(
                 if now - since < WRITE_GAP_SECS {
                     return;
                 }
-                let baseline = ticket_answers(&script).len();
-                if !run_or_skip(&mut probe, &script, "6 abandon", "GetGMTicket()") {
+                let baseline = ticket_answers(script).len();
+                if !run_or_skip(&mut probe, script, "6 abandon", "GetGMTicket()") {
                     return;
                 }
                 probe.phase = Phase::AbandonGet {
@@ -559,7 +559,7 @@ fn gm_ticket_probe(
                 };
             }
             Phase::AbandonGet { since, baseline } => {
-                let seen = ticket_answers(&script);
+                let seen = ticket_answers(script);
                 if matching(&seen, baseline, |(c, _)| *c == NO_TICKET).is_some() {
                     info!(
                     "PROBE_GMTICKET: PASS (6 abandon) — UPDATE_TICKET fired with arg1 == 0 again: \

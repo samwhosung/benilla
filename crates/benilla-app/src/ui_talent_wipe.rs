@@ -106,7 +106,7 @@ fn drain_talent_wipe(
     mut sink: crate::ui_action::MessageSink,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         let confirms = script.take_talent_wipe_confirms();
@@ -136,7 +136,7 @@ fn drain_talent_wipe(
                 .unwrap_or_default();
             if !text.is_empty() {
                 crate::ui_action::show_messages(
-                    &mut script,
+                    script,
                     &mut sink,
                     "ui_talent_wipe",
                     [crate::ui_action::Shown::keyed("ERR_NOT_ENOUGH_MONEY", text)],

@@ -276,10 +276,10 @@ fn book_probe(
                 }
             }
             Phase::WaitReady { since } => {
-                let (shown, chars) = reader_state(&script);
+                let (shown, chars) = reader_state(script);
                 if shown && chars > 0 {
                     probe.page_chars = chars;
-                    probe.fails += report_render(&script);
+                    probe.fails += report_render(script);
                     info!("PROBE_BOOK: reader painted a {chars}-char body — sampling {SAMPLE_FRAMES} frames with it OPEN");
                     probe.phase = Phase::Open;
                 } else if now - since > READY_TIMEOUT_SECS {

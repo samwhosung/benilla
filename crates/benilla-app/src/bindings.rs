@@ -316,8 +316,8 @@ fn sync_dispatch(
     hosted_vm.run(|script| {
         let Some(script) = script else { return };
         let generation = script.keybinds_generation();
-        if *dispatch.seen_generation.get(&script) != Some(generation) {
-            *dispatch.seen_generation.get(&script) = Some(generation);
+        if *dispatch.seen_generation.get(script) != Some(generation) {
+            *dispatch.seen_generation.get(script) = Some(generation);
             dispatch.map.clear();
             for (key, command) in script.binding_keys() {
                 match Chord::parse(&key) {

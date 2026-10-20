@@ -624,7 +624,7 @@ fn feed_mail(
     extras: MailFeedExtras,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         let MailFeedExtras {
@@ -639,7 +639,7 @@ fn feed_mail(
             mut inbox_updated,
         } = extras;
         if let Some(packages) = packages.as_deref() {
-            let pushed = packages_pushed.get(&script);
+            let pushed = packages_pushed.get(script);
             if !*pushed {
                 *pushed = true;
                 script.set_mail_packages(packages.0.iter().map(package_view).collect());
@@ -649,10 +649,10 @@ fn feed_mail(
             props: props.as_deref(),
             enchants: enchants.as_deref(),
         };
-        let last = last.get(&script);
-        let last_mailbox = last_mailbox.get(&script);
-        let last_has_new_mail = last_has_new_mail.get(&script);
-        if closes.since_last(&script, NpcWindow::Mail) {
+        let last = last.get(script);
+        let last_mailbox = last_mailbox.get(script);
+        let last_has_new_mail = last_has_new_mail.get(script);
+        if closes.since_last(script, NpcWindow::Mail) {
             *last = None;
             *last_mailbox = None;
         }
@@ -669,7 +669,7 @@ fn feed_mail(
         // The frames the stock inbox calls its getters on: `MAIL_SHOW` and the `MAIL_INBOX_UPDATE` of
         // a list or a result arm, with the list's subject parse (`0x4ad5a0`) besides, and the frame
         // after the diff's own `MAIL_INBOX_UPDATE`.
-        let inbox_updated = inbox_updated.get(&script);
+        let inbox_updated = inbox_updated.get(script);
         let rows_event = opened
             || mail.show_requested
             || mail.list_results > 0
@@ -699,15 +699,14 @@ fn feed_mail(
         // A request refused before it went out, on the surface and voice its message row names.
         let refusals: Vec<_> = std::mem::take(&mut mail.errors)
             .into_iter()
-            .filter_map(|key| crate::ui_action::keyed_line(&script, key))
+            .filter_map(|key| crate::ui_action::keyed_line(script, key))
             .collect();
-        crate::ui_action::show_messages(&mut script, &mut sink, "ui_mail", refusals);
+        crate::ui_action::show_messages(script, &mut sink, "ui_mail", refusals);
         // The results read the rows as their arms left them (`0x4ad6e8`, `0x4ad7e8`, `0x4ad933`).
-        let arm_updates = announce_results(
-            &mut script,
-            std::mem::take(&mut mail.results),
-            |script, line| crate::ui_action::show_messages(script, &mut sink, "ui_mail", line),
-        );
+        let arm_updates =
+            announce_results(script, std::mem::take(&mut mail.results), |script, line| {
+                crate::ui_action::show_messages(script, &mut sink, "ui_mail", line)
+            });
         // The usable stationery is asked ahead of any mailbox so the list is whole when
         // `SendMailFrame_Reset` selects row 1 on show; an empty list leaves every send unsent. Only
         // with a player: an ask sent before the socket exists is dropped and never re-asked.
@@ -716,7 +715,7 @@ fn feed_mail(
             .filter(|_| !self_q.is_empty())
             .map(|catalog| stationeries(catalog, &self_q, &objects, &items, icons.as_deref()))
             .unwrap_or_default();
-        let memo = last_stationeries.get(&script);
+        let memo = last_stationeries.get(script);
         if *memo != usable {
             *memo = usable.clone();
             script.set_mail_stationeries(usable);
@@ -746,7 +745,7 @@ fn feed_mail(
         }
         // Every list result ends its parse in the event (`0x4ad5c6`-`0x4ad5d6`), changed or not, and
         // whether or not the window is up.
-        announce_lists(&mut script, lists);
+        announce_lists(script, lists);
         // A result a same-frame close dropped still lifts the lock (the flag outlives the close).
         if std::mem::take(&mut mail.request_resolved) {
             script.mail_request_resolved();

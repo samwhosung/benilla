@@ -313,14 +313,14 @@ pub(crate) fn apply_item_releases(
                     }),
             );
         }
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             queued.0.clear();
             return;
         };
         let watch = &mut *watch;
         let (Some(store), Some(me)) = (inv.self_store.iter().next(), me.0) else {
             *watch = LockWatch::default();
-            queued.apply(&mut script);
+            queued.apply(script);
             return;
         };
         // The arrival unlock fires from the item's create (`0x5d8300`), never from a seat a moved bag
@@ -396,7 +396,7 @@ pub(crate) fn apply_item_releases(
             watch.arrivals = waiting;
         }
         queued.0.splice(0..0, out);
-        queued.apply(&mut script);
+        queued.apply(script);
     })
 }
 

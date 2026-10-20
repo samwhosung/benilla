@@ -996,7 +996,7 @@ pub(crate) fn sync_cvars(
         if cvars.has_console_lines() {
             cvars.log_console_lines();
         }
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             // Nothing to mirror into; a later VM is seeded from the table, which carries it all.
             if cvars.has_outbox() {
                 cvars.take_outbox();
@@ -1012,11 +1012,11 @@ pub(crate) fn sync_cvars(
         // first would overwrite the mirror with the older value. Read before taking, so a quiet frame
         // never deref-muts the registry.
         if script.has_cvar_traffic() || script.cvar_lua_created() != cvars.lua_created {
-            cvars.drain_vm(&mut script);
+            cvars.drain_vm(script);
             cvars.log_console_lines();
         }
-        if seeded.claim(&script) {
-            cvars.seed_vm(&mut script);
+        if seeded.claim(script) {
+            cvars.seed_vm(script);
             if cvars.has_outbox() {
                 cvars.take_outbox(); // the seed just carried everything
             }

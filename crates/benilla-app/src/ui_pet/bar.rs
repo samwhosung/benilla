@@ -184,7 +184,7 @@ pub(super) fn feed_pet_bar(
         let Some(script) = script else {
             return;
         };
-        let memory = memory.get(&script);
+        let memory = memory.get(script);
         let now = Instant::now();
         let (anchor, ui_now) = (clock.anchor, clock.ui_now);
         let has_bar = bar.has_bar();

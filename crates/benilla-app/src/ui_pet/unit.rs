@@ -47,10 +47,10 @@ pub(crate) fn feed_pet_unit(
     mut memory: Local<crate::ui_script::VmMemo<PetUnitMemory>>,
 ) {
     vm.feed(|script, (bar, mut names), fires| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
-        let (memory, vm_reset) = memory.get_reset(&script);
+        let (memory, vm_reset) = memory.get_reset(script);
         let names_moved = memory.names_generation.moved(names.generation());
         let bar_changed = bar.is_changed();
         let stores_changed = !changed_stores.is_empty();
@@ -73,7 +73,7 @@ pub(crate) fn feed_pet_unit(
             return;
         }
         let pet_guid = bar.spells.pet_guid;
-        watch_name_timestamp(pet_guid, &mut script, &pet, &mut names, memory);
+        watch_name_timestamp(pet_guid, script, &pet, &mut names, memory);
         // An unstreamed pet pushes nothing: `UnitExists("pet")` reads false and the frame hides.
         let fresh = (pet_guid != 0)
             .then(|| pet.store(pet_guid))

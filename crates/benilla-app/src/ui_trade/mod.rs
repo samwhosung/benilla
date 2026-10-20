@@ -884,12 +884,12 @@ fn feed_trade(
         let Some(script) = script else {
             return;
         };
-        let last = last.get(&script);
-        let last_open = last_open.get(&script);
-        let last_accept = last_accept.get(&script);
-        let last_player_gold = last_player_gold.get(&script);
-        let last_their_gold = last_their_gold.get(&script);
-        if closes.since_last(&script, NpcWindow::Trade) {
+        let last = last.get(script);
+        let last_open = last_open.get(script);
+        let last_accept = last_accept.get(script);
+        let last_player_gold = last_player_gold.get(script);
+        let last_their_gold = last_their_gold.get(script);
+        if closes.since_last(script, NpcWindow::Trade) {
             *last = None;
             *last_open = false;
             *last_accept = (false, false);
@@ -1104,12 +1104,11 @@ fn drain_trade(
 ) {
     let p = hosted.p0();
     let selection = *p;
-    drop(p);
     hosted.p1().run(|script| {
-    let Some(mut script) = script else {
+    let Some(script) = script else {
         return;
     };
-    run_record_callbacks(&mut script, &items, &commands, &mut notices);
+    run_record_callbacks(script, &items, &commands, &mut notices);
     // Our bag contents, for the own-column item resolve.
     let store = self_q.iter().next();
 

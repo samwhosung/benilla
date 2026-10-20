@@ -61,11 +61,11 @@ pub(super) fn feed_petition(
     mut closes: CoreCloses,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
-        let fed_registrar = fed_registrar.get(&script);
-        if closes.since_last(&script, NpcWindow::Registrar) {
+        let fed_registrar = fed_registrar.get(script);
+        if closes.since_last(script, NpcWindow::Registrar) {
             *fed_registrar = None;
         }
 
@@ -81,7 +81,7 @@ pub(super) fn feed_petition(
                 .map(|text| crate::ui_action::Shown::keyed(e.key, text))
             })
             .collect();
-        crate::ui_action::show_messages(&mut script, &mut sink, "ui_petition", resolved);
+        crate::ui_action::show_messages(script, &mut sink, "ui_petition", resolved);
 
         // Rebuilt every frame: reading the caches issues their queries, so a landing sets no flag and
         // only a rebuild sees it.
@@ -197,7 +197,6 @@ pub(super) fn drain_petition(
 ) {
     let p = hosted.p0();
     let selection = *p;
-    drop(p);
     hosted.p1().run(|script| {
         let Some(script) = script else {
             return;

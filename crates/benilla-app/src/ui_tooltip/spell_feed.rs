@@ -732,7 +732,7 @@ pub(super) fn feed_spell_tooltips(
         let Some(script) = script else {
             return;
         };
-        let memory = memory.get(&script);
+        let memory = memory.get(script);
         let Some(spells) = spells.as_deref() else {
             return;
         };

@@ -247,7 +247,7 @@ fn stone_probe(
                 }
             }
             Phase::Control => {
-                let (queued, _, shown) = vm_state(&script);
+                let (queued, _, shown) = vm_state(script);
                 probe.fails += check(
                     "CONTROL",
                     "unqueued icon=false",
@@ -293,7 +293,7 @@ fn stone_probe(
                 if now - since < REFUSAL_WINDOW_SECS {
                     return;
                 }
-                let (queued, _, shown) = vm_state(&script);
+                let (queued, _, shown) = vm_state(script);
                 probe.fails += check(
                     "REFUSED",
                     "area=0 unqueued icon=false",
@@ -333,7 +333,7 @@ fn stone_probe(
                 }
             }
             Phase::Joined => {
-                let (queued, text, shown) = vm_state(&script);
+                let (queued, text, shown) = vm_state(script);
                 probe.status_text = text.clone();
                 probe.icon_shown = shown;
                 let area = probe.tmpl.map_or(0, |t| t.area);
@@ -356,7 +356,7 @@ fn stone_probe(
             }
             Phase::WaitLeft { since } => {
                 if queue.area == 0 {
-                    let (queued, _, shown) = vm_state(&script);
+                    let (queued, _, shown) = vm_state(script);
                     probe.fails += check(
                         "LEFT",
                         "area=0 unqueued icon=false",

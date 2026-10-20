@@ -128,7 +128,7 @@ pub(super) fn feed_broadcasts(
                     // No catalog, template or row: with no name there is no line.
                     let Some((areas, fmt)) = areas
                         .as_ref()
-                        .zip(super::combat::global_string(&script, "ZONE_UNDER_ATTACK"))
+                        .zip(super::combat::global_string(script, "ZONE_UNDER_ATTACK"))
                     else {
                         continue;
                     };
@@ -153,7 +153,7 @@ pub(super) fn feed_broadcasts(
                     // Its row is a chat row (tested below), so it is written as a system line here.
                     // Deviation: a missing global prints nothing, where the reference prints an empty
                     // line (`0x703c02`), because benilla's other `DisplayError` routes do the same.
-                    if let Some(text) = super::combat::global_string(&script, "ERR_CHAT_RESTRICTED")
+                    if let Some(text) = super::combat::global_string(script, "ERR_CHAT_RESTRICTED")
                     {
                         log.push_event(ChatEvent::text_only(ChatEventKind::System, text));
                     }

@@ -546,8 +546,7 @@ fn feed_world_map(
     mut memo: Local<crate::ui_script::VmMemo<FeedMemos>>,
 ) {
     hosted_vm.run(|script| {
-        let (Some(mut script), Some(data), Some(map), Some(areas)) = (script, data, map, areas)
-        else {
+        let (Some(script), Some(data), Some(map), Some(areas)) = (script, data, map, areas) else {
             return;
         };
         // PLAYER_EXPLORED_ZONES, pushed on change; the setter queues WORLD_MAP_UPDATE for newly
@@ -562,7 +561,7 @@ fn feed_world_map(
             })
             .unwrap_or_default();
         {
-            let memo = memo.get(&script);
+            let memo = memo.get(script);
             if !explored.is_empty() && memo.explored.as_ref() != Some(&explored) {
                 memo.explored = Some(explored.clone());
                 script.set_world_map_explored(explored.clone());
@@ -578,10 +577,10 @@ fn feed_world_map(
         // `GetWorldLocMapPosition` and the setter's landmark pass project synchronously with the
         // engine's own selection, so the engine holds the projection over its own copy of the catalog.
         {
-            let memo = memo.get(&script);
+            let memo = memo.get(script);
             if !memo.projector || data.is_changed() {
                 memo.projector = true;
-                install_world_loc_projector(&mut script, &data);
+                install_world_loc_projector(script, &data);
             }
         }
 
@@ -589,7 +588,7 @@ fn feed_world_map(
         // 0, selects the player's zone itself through `0x4a6650` and the setter `0x4a67a0` before any
         // Lua asks. Once per VM, each login being a first enter.
         {
-            let memo = memo.get(&script);
+            let memo = memo.get(script);
             if let Some(sel) = world_enter_selection(memo.map_synced, top_zone, player_sel) {
                 memo.map_synced = true;
                 let (c, z) = sel.zone.unwrap_or((0, 0));
@@ -618,7 +617,7 @@ fn feed_world_map(
             .map(|m| (m.continent_id, m.pos.map(f32::to_bits), m.icon));
         let states_gen = world_states.generation();
         let unchanged = memo
-            .get(&script)
+            .get(script)
             .landmarks
             .as_ref()
             .is_some_and(|k| k.matches(map.0, states_gen, &explored, marker));
@@ -660,7 +659,7 @@ fn feed_world_map(
                     icons: [Some(poi.icon); 3],
                 });
             }
-            memo.get(&script).landmarks = Some(LandmarkKey {
+            memo.get(script).landmarks = Some(LandmarkKey {
                 map: map.0,
                 states: states_gen,
                 explored: explored.clone(),

@@ -65,7 +65,7 @@ pub(crate) fn feed_pet_book(
         let Some(script) = script else {
             return;
         };
-        let memory = memory.get(&script);
+        let memory = memory.get(script);
         // Without `Spell.dbc` the book has no slots at all; try again once it lands.
         let Some(spells) = spells.as_deref() else {
             return;

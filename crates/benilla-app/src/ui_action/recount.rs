@@ -32,7 +32,7 @@ pub(crate) fn recount_item_actions(
     hosted_vm.run(|script| {
         let arrived = arrivals.read().count() > 0;
         let notices: Vec<ItemNotice> = notices.read().cloned().collect();
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         let store = self_q.iter().next();
@@ -43,10 +43,10 @@ pub(crate) fn recount_item_actions(
             commands: &commands,
         };
         if arrived {
-            arrival_counts(&mut script, &counter);
+            arrival_counts(script, &counter);
         }
         for entry in notices.iter().flat_map(ItemNotice::recounts) {
-            recount(&mut script, &counter, entry);
+            recount(script, &counter, entry);
         }
     })
 }

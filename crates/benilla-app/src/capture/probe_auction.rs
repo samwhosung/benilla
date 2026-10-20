@@ -471,7 +471,7 @@ fn auction_probe(
                     info!("PROBE_AUCTION: (2 greet) MSG_AUCTION_HELLO sent — the window opens on the REPLY, not on this");
                     probe.phase = Phase::Greet {
                         sent_at: now,
-                        show_baseline: event_count(&script, "AUCTION_HOUSE_SHOW"),
+                        show_baseline: event_count(script, "AUCTION_HOUSE_SHOW"),
                     };
                 } else if now - sent_at > SCAN_TIMEOUT_SECS {
                     match nearest {
@@ -496,7 +496,7 @@ fn auction_probe(
                 show_baseline,
             } => {
                 let opened = auction.auctioneer.is_some();
-                let show_fired = event_count(&script, "AUCTION_HOUSE_SHOW") > show_baseline;
+                let show_fired = event_count(script, "AUCTION_HOUSE_SHOW") > show_baseline;
                 let next = |auction: &AuctionOpen, script: &UiScript| Phase::Browse {
                     since: now,
                     sent: false,
@@ -515,7 +515,7 @@ fn auction_probe(
                         );
                         probe.passes += 1;
                         // The arc's red-line tally starts here.
-                        probe.red_baseline = red_count(&script);
+                        probe.red_baseline = red_count(script);
                     } else {
                         error!(
                             "PROBE_AUCTION: FAIL (2 greet) — the session opened, but on {:?} (we \
@@ -524,7 +524,7 @@ fn auction_probe(
                         );
                         probe.fails += 1;
                     }
-                    probe.phase = next(&auction, &script);
+                    probe.phase = next(&auction, script);
                 } else if now - sent_at > HELLO_TIMEOUT_SECS {
                     if opened {
                         error!(
@@ -534,7 +534,7 @@ fn auction_probe(
                             auction.auctioneer, auction.house_id
                         );
                         probe.fails += 1;
-                        probe.phase = next(&auction, &script);
+                        probe.phase = next(&auction, script);
                     } else {
                         error!(
                             "PROBE_AUCTION: FAIL (2 greet) — no MSG_AUCTION_HELLO reply within \
@@ -601,7 +601,7 @@ fn auction_probe(
                 since,
                 event_baseline,
             } => {
-                if event_count(&script, "AUCTION_ITEM_LIST_UPDATE") > event_baseline {
+                if event_count(script, "AUCTION_ITEM_LIST_UPDATE") > event_baseline {
                     info!("PROBE_AUCTION: PASS (3b list-event) — AUCTION_ITEM_LIST_UPDATE fired for the result");
                     probe.passes += 1;
                 } else if now - since > EVENT_GRACE_SECS {
@@ -832,7 +832,7 @@ fn auction_probe(
                     probe.min_bid = min_bid;
                     probe.buyout = buyout;
                     probe.baseline_money = money;
-                    probe.owned_event_baseline = event_count(&script, "AUCTION_OWNED_LIST_UPDATE");
+                    probe.owned_event_baseline = event_count(script, "AUCTION_OWNED_LIST_UPDATE");
                     if let Err(e) = script.run(&format!(
                         "StartAuction({min_bid}, {buyout}, {DURATION_MINUTES})"
                     )) {
@@ -871,7 +871,7 @@ fn auction_probe(
                             "PROBE_AUCTION: FAIL (5 sell) — SMSG_AUCTION_COMMAND_RESULT \
                                  action=STARTED error={} ({error}); surfaced line: {:?}",
                             error_name(error),
-                            last_error(&script)
+                            last_error(script)
                         );
                         probe.fails += 1;
                         probe.phase = Phase::Done;
@@ -1035,8 +1035,8 @@ fn auction_probe(
                         );
                         probe.fails += 1;
                     }
-                    owner_money_check(&script, &mut probe);
-                    started_chat_check(&script, &mut probe);
+                    owner_money_check(script, &mut probe);
+                    started_chat_check(script, &mut probe);
                     probe.phase = Phase::OwnerEvent {
                         since: now,
                         event_baseline,
@@ -1065,7 +1065,7 @@ fn auction_probe(
                     } else {
                         "GetOwnerAuctionItems()"
                     };
-                    crate::ui_script::run_or_warn(&script, ask);
+                    crate::ui_script::run_or_warn(script, ask);
                     probe.phase = Phase::OwnerList {
                         since,
                         last_ask: now,
@@ -1077,7 +1077,7 @@ fn auction_probe(
                 since,
                 event_baseline,
             } => {
-                if event_count(&script, "AUCTION_OWNED_LIST_UPDATE") > event_baseline {
+                if event_count(script, "AUCTION_OWNED_LIST_UPDATE") > event_baseline {
                     info!("PROBE_AUCTION: PASS (6b owned-event) — AUCTION_OWNED_LIST_UPDATE fired for the new listing");
                     probe.passes += 1;
                 } else if now - since > EVENT_GRACE_SECS {
@@ -1147,7 +1147,7 @@ fn auction_probe(
                                     "PROBE_AUCTION: FAIL (7 cancel) — action=REMOVED error={} \
                                      ({error}); surfaced line: {:?}. The auction is LEFT LISTED",
                                     error_name(error),
-                                    last_error(&script)
+                                    last_error(script)
                                 );
                                 probe.fails += 1;
                                 probe.phase = Phase::Done;
@@ -1187,7 +1187,7 @@ fn auction_probe(
                 // Re-ask on the cadence; writing `removed` back keeps its verdict from re-printing.
                 let ask = last_ask == 0.0 || now - last_ask > OWNER_REASK_SECS;
                 if ask {
-                    crate::ui_script::run_or_warn(&script, "GetOwnerAuctionItems()");
+                    crate::ui_script::run_or_warn(script, "GetOwnerAuctionItems()");
                 }
                 probe.phase = Phase::Cancel {
                     since,

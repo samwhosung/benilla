@@ -43,7 +43,7 @@ pub(crate) fn feed_pet_doll(
         let Some(script) = script else {
             return;
         };
-        let last = last.get(&script);
+        let last = last.get(script);
         let pet_guid = bar.spells.pet_guid;
         let store = (pet_guid != 0).then(|| pet.store(pet_guid)).flatten();
 

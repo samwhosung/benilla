@@ -23,7 +23,7 @@ pub(super) fn feed_lock_rows(
         let Some(script) = script else {
             return;
         };
-        if *pushed.get(&script) {
+        if *pushed.get(script) {
             return;
         }
         let Some(locks) = locks else {
@@ -38,7 +38,7 @@ pub(super) fn feed_lock_rows(
                 .map(|(id, name)| (id, name.to_string()))
                 .collect(),
         );
-        *pushed.get(&script) = true;
+        *pushed.get(script) = true;
     })
 }
 
@@ -97,7 +97,7 @@ pub(super) fn feed_lock_openers(
         let Some(script) = script else {
             return;
         };
-        let (last, vm_reset) = last.get_reset(&script);
+        let (last, vm_reset) = last.get_reset(script);
         // The state is a function of these inputs alone: the carried items (the object index and the
         // descriptor slots that point at them), the book, the spell catalog, and the skills the
         // opening spells' values scale by (the descriptor).

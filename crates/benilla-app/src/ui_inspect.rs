@@ -123,13 +123,12 @@ fn feed_inspect(
 ) {
     let p = hosted.p0();
     let selection = *p;
-    drop(p);
     hosted.p1().run(|script| {
         let Some(script) = script else {
             return;
         };
         // A `/reload` keeps the latched token, and the fresh memo re-pushes the view.
-        let memo = feed.vm.get(&script);
+        let memo = feed.vm.get(script);
 
         // `NotifyInspect(unit)`: send `CMSG_INSPECT` for the unit's guid and latch its token.
         let mut notified = false;

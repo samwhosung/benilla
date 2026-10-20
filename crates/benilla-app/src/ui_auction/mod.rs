@@ -545,21 +545,21 @@ fn feed_auction(
     mut closes: CoreCloses,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
-        let last = last.get(&script);
-        let last_open = last_open.get(&script);
-        if closes.since_last(&script, NpcWindow::Auction) {
+        let last = last.get(script);
+        let last_open = last_open.get(script);
+        if closes.since_last(script, NpcWindow::Auction) {
             *last = None;
             *last_open = None;
         }
-        let last_can_query = last_can_query.get(&script);
+        let last_can_query = last_can_query.get(script);
 
         // The class tree needs no session: the stock `AuctionFrameBrowse_OnLoad` reads
         // `GetAuctionItemClasses()` when the addon loads (`Blizzard_AuctionUI.lua:174`).
         let classes_now = categories(catalogs.0.as_deref(), catalogs.1.as_deref());
-        let last_classes = last_classes.get(&script);
+        let last_classes = last_classes.get(script);
         if *last_classes != classes_now {
             *last_classes = classes_now.clone();
             script.set_auction_item_classes(classes_now);
@@ -596,7 +596,7 @@ fn feed_auction(
             }
             auction.messages_asked = deferred.len();
             auction.messages = deferred;
-            show_messages(&mut script, &mut sink, "ui_auction", lines);
+            show_messages(script, &mut sink, "ui_auction", lines);
         }
 
         let self_guid = self_q.iter().next().map(|g| g.0);

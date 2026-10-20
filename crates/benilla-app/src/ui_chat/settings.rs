@@ -531,7 +531,7 @@ fn watch_chat_looks(
         if !(moved || coloured || recruitment) {
             return;
         }
-        *file.dirty.get(&script) = true;
+        *file.dirty.get(script) = true;
         file.last_change = Some(std::time::Instant::now());
     })
 }
@@ -603,7 +603,7 @@ fn save_chat_looks(
     hosted_vm.run(|script| {
         let exiting = exits.read().next().is_some();
         let Some(script) = script else { return };
-        flush(&script, &channels, &mut file, exiting);
+        flush(script, &channels, &mut file, exiting);
     })
 }
 

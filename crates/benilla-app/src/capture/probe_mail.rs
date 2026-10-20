@@ -469,9 +469,9 @@ fn mail_probe(
                             info!("PROBE_MAIL: PASS (b3) — the reader painted the letter body (title/creator/text via ITEM_TEXT_BEGIN→READY)");
                             probe.passes += 1;
                             // Cleanup: close the reader, destroy the copy (else bags gain one per run).
-                            crate::ui_script::run_or_warn(&script, "ItemTextCloseButton:Click()");
+                            crate::ui_script::run_or_warn(script, "ItemTextCloseButton:Click()");
                             crate::ui_script::run_or_warn(
-                                &script,
+                                script,
                                 &format!("PickupContainerItem({bag}, {lslot}) DeleteCursorItem()"),
                             );
                             probe.phase = Phase::TakeMoney {
@@ -546,7 +546,7 @@ fn mail_probe(
                 let next = Phase::SendSelf {
                     since: now,
                     sent: false,
-                    baseline: events_len(&script),
+                    baseline: events_len(script),
                 };
                 match taken {
                     None => match find_by(&mail, |e| e.item.is_some()) {
@@ -602,7 +602,7 @@ fn mail_probe(
                         probe.phase = Phase::SendBad {
                             since: now,
                             sent: false,
-                            baseline: events_len(&script),
+                            baseline: events_len(script),
                         };
                         return;
                     }
@@ -614,9 +614,9 @@ fn mail_probe(
                     };
                     return;
                 }
-                let seen = events_len(&script);
+                let seen = events_len(script);
                 if seen > baseline {
-                    let text = last_event(&script);
+                    let text = last_event(script);
                     if text.to_lowercase().contains("yourself") {
                         info!("PROBE_MAIL: PASS (e) — surfaced error: {text:?}");
                         probe.passes += 1;
@@ -627,7 +627,7 @@ fn mail_probe(
                     probe.phase = Phase::SendBad {
                         since: now,
                         sent: false,
-                        baseline: events_len(&script),
+                        baseline: events_len(script),
                     };
                 } else if now - since > ACTION_TIMEOUT_SECS {
                     error!("PROBE_MAIL: FAIL (e) — no UI_ERROR_MESSAGE observed within {ACTION_TIMEOUT_SECS}s");
@@ -635,7 +635,7 @@ fn mail_probe(
                     probe.phase = Phase::SendBad {
                         since: now,
                         sent: false,
-                        baseline: events_len(&script),
+                        baseline: events_len(script),
                     };
                 }
             }
@@ -664,9 +664,9 @@ fn mail_probe(
                     };
                     return;
                 }
-                let seen = events_len(&script);
+                let seen = events_len(script);
                 if seen > baseline {
-                    let text = last_event(&script);
+                    let text = last_event(script);
                     if text.to_lowercase().contains("recipient") {
                         info!("PROBE_MAIL: PASS (f) — surfaced error: {text:?}");
                         probe.passes += 1;

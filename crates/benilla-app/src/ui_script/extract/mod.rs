@@ -458,7 +458,7 @@ pub(super) fn tick_script(
 ) {
     hosted_vm.run(|script| {
         pass.live = false;
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             // No VM, no UI sampling a booth pane: a stranded pane would keep its camera rendering
             // behind a dead UI.
             booths.panes.0.clear();
@@ -492,7 +492,7 @@ pub(super) fn tick_script(
         // Re-seat the VM's measurer on the same edge, before the tick so the first update has it.
         if let Some(atlas) = font_atlas.as_deref() {
             if seam_moved || !script.has_text_measurer() {
-                seat_text_measurer(&mut script, atlas, s);
+                seat_text_measurer(script, atlas, s);
             }
         }
         // The phase marks feed the `[ui-cost]` line and the hover recorder (`hover_log`).
@@ -536,10 +536,10 @@ pub(super) fn tick_script(
                 let rescaled = script.set_ui_scale(ui_scale.0);
                 // Either re-runs what the interface computed from the old `GetScreenHeight()`.
                 if resized || rescaled {
-                    super::manifest::on_screen_resized(&script);
+                    super::manifest::on_screen_resized(script);
                 }
             } else if resized && script.vm_kind() == benilla_ui::script::VmKind::Glue {
-                super::glue::on_glue_screen_resized(&script);
+                super::glue::on_glue_screen_resized(script);
             }
             script.tick(step.delta.as_secs_f32());
         }
@@ -556,8 +556,7 @@ pub(super) fn tick_script(
         // after its walk; this resolve takes the measures and what the tick's tail moved.
         let mut measured_any = false;
         if let Some(atlas) = font_atlas.as_deref_mut() {
-            measured_any =
-                measure_fontstrings(&mut script, atlas, s, &mut ui_cost, ui_cost_wanted.0);
+            measured_any = measure_fontstrings(script, atlas, s, &mut ui_cost, ui_cost_wanted.0);
         }
         {
             let _span = bevy::log::info_span!("ui_script: resolve").entered();
@@ -566,7 +565,7 @@ pub(super) fn tick_script(
         // Only a frame that measured can have a fresh request the pass above missed.
         if measured_any {
             if let Some(atlas) = font_atlas.as_deref_mut() {
-                if measure_fontstrings(&mut script, atlas, s, &mut ui_cost, ui_cost_wanted.0) {
+                if measure_fontstrings(script, atlas, s, &mut ui_cost, ui_cost_wanted.0) {
                     script.resolve();
                 }
             }
@@ -671,10 +670,10 @@ pub(super) fn paint_script(
         if !pass.live {
             return;
         }
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
-        let prev = prev.get(&script);
+        let prev = prev.get(script);
         let Ok(window) = window.single() else {
             return;
         };
@@ -698,7 +697,7 @@ pub(super) fn paint_script(
         // camera (`vplates::drive_vplates`); a renamed plate needs its measure too.
         let mut measured_any = false;
         if let Some(atlas) = font_atlas.as_deref_mut() {
-            measured_any = measure_fontstrings(&mut script, atlas, s, &mut ui_cost, ui_cost_wanted.0);
+            measured_any = measure_fontstrings(script, atlas, s, &mut ui_cost, ui_cost_wanted.0);
         }
         {
             let _span = bevy::log::info_span!("ui_script: resolve").entered();
@@ -706,7 +705,7 @@ pub(super) fn paint_script(
         }
         if measured_any {
             if let Some(atlas) = font_atlas.as_deref_mut() {
-                if measure_fontstrings(&mut script, atlas, s, &mut ui_cost, ui_cost_wanted.0) {
+                if measure_fontstrings(script, atlas, s, &mut ui_cost, ui_cost_wanted.0) {
                     script.resolve();
                 }
             }
@@ -785,7 +784,7 @@ pub(super) fn paint_script(
         }
         if gate_log_enabled() {
             report_gate_miss(
-                &script,
+                script,
                 &extracted,
                 &prev.extracted,
                 prev.dims == Some(dims),
@@ -968,7 +967,7 @@ pub(super) fn paint_script(
                     &mut booths,
                     text_ui.as_ref(),
                     capture.is_some(),
-                    &script,
+                    script,
                 );
             }
             drop(extract_span);

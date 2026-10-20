@@ -207,7 +207,7 @@ pub(crate) fn movement_clears_afk(
             return;
         }
         let line = script
-            .and_then(|s| super::combat::global_string(&s, "CLEARED_AFK"))
+            .and_then(|s| super::combat::global_string(s, "CLEARED_AFK"))
             .unwrap_or_default();
         push_system(&chat, line);
         mirror.0 = 0;

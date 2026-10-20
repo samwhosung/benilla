@@ -455,8 +455,8 @@ pub(crate) fn feed_targeting_to_vm(
     checks: BindChecks,
 ) {
     vm.turn(|script, (targeting, tokens)| {
-        if let Some(mut script) = script {
-            push_targeting_view(&mut script, &targeting, &checks, &tokens);
+        if let Some(script) = script {
+            push_targeting_view(script, &targeting, &checks, &tokens);
         }
     })
 }

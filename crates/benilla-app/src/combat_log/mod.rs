@@ -324,7 +324,7 @@ fn on_missile_miss(
     c: Ctx,
     stores: Query<&ObjectStore>,
     poses: Query<&Transform>,
-    mut log: Res<ChatLog>,
+    log: Res<ChatLog>,
 ) {
     for arrival in arrivals.read() {
         let Ok(&Guid(target)) = guids.get(arrival.anchor) else {
@@ -340,7 +340,7 @@ fn on_missile_miss(
             &ctx,
             &stores,
             &poses,
-            &mut log,
+            &log,
         );
     }
 }

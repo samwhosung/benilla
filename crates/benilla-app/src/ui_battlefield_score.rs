@@ -127,7 +127,7 @@ pub(crate) fn feed_battlefield_score(
                 columns,
             })
         });
-        let last = last.get(&script);
+        let last = last.get(script);
         // A held-back board is the reference's pending names: the VM's rebuild waits on it.
         script.set_battlefield_score_names_pending(board.log.is_some() && fresh.is_none());
         if queue.take_score_dirty() {

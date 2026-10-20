@@ -166,10 +166,10 @@ fn feed_world_state_ui(
             return;
         };
         let key = (states.generation(), defense_channel);
-        if *last.get(&script) == Some(key) {
+        if *last.get(script) == Some(key) {
             return;
         }
-        *last.get(&script) = Some(key);
+        *last.get(script) = Some(key);
         script.set_world_state_ui(build(&catalog.0, &states, defense_channel));
     })
 }

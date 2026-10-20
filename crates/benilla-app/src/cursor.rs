@@ -206,7 +206,6 @@ fn drive_displayed_cursor(
 ) {
     let p = hosted.p0();
     let targeting_active = p.active();
-    drop(p);
     hosted.p1().run(|script| {
         use crate::target::{CursorKind, WorldCursor};
         use benilla_ui::script::UiCursorMode;

@@ -80,7 +80,7 @@ fn feed_quest_lines(
     mut sink: MessageSink,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         if lines.0.is_empty() {
@@ -106,7 +106,7 @@ fn feed_quest_lines(
             }
         });
         lines.1 = lines.0.len();
-        show_messages(&mut script, &mut sink, "ui_quest", shown);
+        show_messages(script, &mut sink, "ui_quest", shown);
     })
 }
 

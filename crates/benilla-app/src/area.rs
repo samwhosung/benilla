@@ -116,7 +116,7 @@ fn feed_zone_events(
         let (Some(script), Some(areas)) = (script, areas) else {
             return;
         };
-        let cache = cache.get(&script);
+        let cache = cache.get(script);
         let Some(leaf) = world.area() else { return };
         let Some(leaf_row) = areas.0.get(leaf) else {
             // An unknown id keeps the last state, as the resolver does for areaId 0.

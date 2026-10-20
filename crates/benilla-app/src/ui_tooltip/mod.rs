@@ -210,10 +210,10 @@ fn drive_mouseover_tooltip(
             return;
         };
         let (last_lines, trace) = (&mut memo.last_lines, &mut *memo.trace);
-        let last_lines = last_lines.get(&script);
+        let last_lines = last_lines.get(script);
         // The publisher's change check (`0x482090`) compares against the VM's last publish.
         let last = script.world_mouseover();
-        let published = memo.published.get(&script);
+        let published = memo.published.get(script);
         let self_store = self_q.iter().next();
         let chr = tables.unit_names();
         let types = tables.types(&names);

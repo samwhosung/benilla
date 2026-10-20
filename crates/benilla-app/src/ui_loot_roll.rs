@@ -563,7 +563,7 @@ fn feed_loot_rolls(
         let Some(script) = script else {
             return;
         };
-        let last = last.get(&script);
+        let last = last.get(script);
         let catalogs = crate::items::RollCatalogs {
             props: props.as_deref(),
             enchants: enchants.as_deref(),

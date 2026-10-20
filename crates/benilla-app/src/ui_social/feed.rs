@@ -54,10 +54,10 @@ pub(super) fn feed_social(
     mut fed: Local<crate::ui_script::VmMemo<FedSocial>>,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
-        let fed = fed.get(&script);
+        let fed = fed.get(script);
         let areas = areas.as_deref().map(|a| &a.0);
         // A name is asked at its packet's lookup ([`SocialState::name_events`]), and the frames between
         // ask only a name the cache holds nothing for; a new VM's first feed stands for every list's
@@ -93,7 +93,7 @@ pub(super) fn feed_social(
 
         // The owed lines first, so a friend's offline line lands before the update that clears their
         // zone.
-        crate::ui_action::show_messages(&mut script, &mut sink, "ui_social", owed);
+        crate::ui_action::show_messages(script, &mut sink, "ui_social", owed);
 
         let (ignores, ignore_order) = ignore_rows(&social, &names, &ask);
         let who = who_rows(&social, areas, unit_names.get());
@@ -142,7 +142,7 @@ pub(super) fn feed_social(
                         .collect();
                     who_lines(&wire_order, social.who_total, &get)
                 };
-                crate::ui_action::show_messages(&mut script, &mut sink, "ui_social", printed);
+                crate::ui_action::show_messages(script, &mut sink, "ui_social", printed);
             }
         }
     })

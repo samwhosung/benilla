@@ -109,9 +109,9 @@ pub(super) fn toggle(
         demand.inspector = ins.open;
         if ins.open {
             ins.expr = OPEN_EXPR.into();
-            evaluate(&mut ins, &script);
+            evaluate(&mut ins, script);
         } else {
-            release_root(&mut ins, &script);
+            release_root(&mut ins, script);
         }
     })
 }
@@ -223,7 +223,7 @@ pub(super) fn panel_ui(
             ins.root = None;
             ins.owners_epoch = None;
             ins.names.clear();
-            evaluate(&mut ins, &script);
+            evaluate(&mut ins, script);
         }
         let ctx = contexts.ctx_mut()?;
         let Some((root_id, _)) = ins.root else {
@@ -241,7 +241,7 @@ pub(super) fn panel_ui(
         if let Some((slot, text)) = asks.commit {
             let lua = script.lua();
             let held = lua.with_vm(|vm| slot.holds().map(|v| vm.root(v)));
-            let r = run_bounded(&script, &text);
+            let r = run_bounded(script, &text);
             ins.status = Some(lua.with_vm(|vm| {
                 let status = match r {
                     Ok(v) => match write(vm, slot, v.unwrap_or(Value::Nil)) {
@@ -257,7 +257,7 @@ pub(super) fn panel_ui(
             }));
         }
         if asks.evaluate {
-            evaluate(&mut ins, &script);
+            evaluate(&mut ins, script);
         }
         Ok(())
     })

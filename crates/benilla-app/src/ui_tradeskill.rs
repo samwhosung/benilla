@@ -367,7 +367,7 @@ fn feed_trade_skill(
         let Some(script) = script else {
             return;
         };
-        let last = last.get(&script);
+        let last = last.get(script);
         // The list's build looks every record up with the callback `0x4fc8e0` (`0x4fcd4d`) at the
         // window's show; the rebuilds between read, as the getters' lookups stand for the stock
         // frame's calls (`0x4fdba8`), which the asks below make.
@@ -465,7 +465,7 @@ fn drain_trade_skill(
     mut open: ResMut<TradeSkillOpen>,
 ) {
     vm.turn(|script, (mut cast_events, targeting, mut ladder)| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
 
@@ -481,7 +481,7 @@ fn drain_trade_skill(
             if Some(ev.entity) != self_entity {
                 continue;
             }
-            if let Some(spell_id) = repeat_edge(&mut script, ev) {
+            if let Some(spell_id) = repeat_edge(script, ev) {
                 debug!(
                     "ui_tradeskill: recast {spell_id} ({} left)",
                     script.trade_skill_repeat().1

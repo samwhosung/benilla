@@ -650,14 +650,14 @@ fn bg_probe(
                 if now < next_census {
                     return;
                 }
-                let Some(mut script) = script else {
+                let Some(script) = script else {
                     error!("PROBE bg: FAILURE — the VM went away inside the battleground");
                     finish(&mut probe, &net);
                     return;
                 };
                 // Drained here, not in `census`, so the tap's self-heal can reach `probe`.
                 let mut events = std::mem::take(&mut probe.pending_events);
-                events.push_str(&drain_events(&mut probe, &mut script));
+                events.push_str(&drain_events(&mut probe, script));
                 let tap_broken = probe.tap_broken;
                 census(
                     now - entered_at,
@@ -671,7 +671,7 @@ fn bg_probe(
                     &dropped,
                     &go_templates,
                     &queue,
-                    &mut script,
+                    script,
                     &events,
                     tap_broken,
                 );
@@ -767,7 +767,7 @@ fn bg_probe(
                 if now - at < f64::from(samples + 1) * 3.0 {
                     return;
                 }
-                let Some(mut script) = script else {
+                let Some(script) = script else {
                     error!("PROBE bg: FAILURE — the VM went away during the flag leg");
                     finish(&mut probe, &net);
                     return;
@@ -788,7 +788,7 @@ fn bg_probe(
                         "#,
                     )
                     .unwrap_or_else(|e| format!("<raised: {e}>"));
-                let events = drain_events(&mut probe, &mut script);
+                let events = drain_events(&mut probe, script);
                 info!(
                     "PROBE bg: FLAG t={:.0}s ws2338={} ws2339={} captures={}/{} buffs=[{}]{}",
                     now - at,
@@ -836,7 +836,7 @@ fn bg_probe(
                 if now < next_sample {
                     return;
                 }
-                let Some(mut script) = script else {
+                let Some(script) = script else {
                     finish(&mut probe, &net);
                     return;
                 };
@@ -857,7 +857,7 @@ fn bg_probe(
                          tostring(StaticPopup_Visible and StaticPopup_Visible(\"AREA_SPIRIT_HEAL\"))",
                     )
                     .unwrap_or_else(|e| format!("<raised: {e}>"));
-                let events = drain_events(&mut probe, &mut script);
+                let events = drain_events(&mut probe, script);
                 info!(
                     "PROBE bg: GHOST t={:.0}s ghost={ghost} pos=({:.0},{:.0},{:.0}) area={:?} guide={} wave={wave}{}",
                     now - released_at,
@@ -879,7 +879,7 @@ fn bg_probe(
                         Ok(()) => info!("PROBE bg: GHOST AcceptAreaSpiritHeal() sent"),
                         Err(e) => error!("PROBE bg: GHOST AcceptAreaSpiritHeal() raised: {e}"),
                     }
-                    report(arena, &net, &queue, &mut script);
+                    report(arena, &net, &queue, script);
                     finish(&mut probe, &net);
                 } else {
                     probe.phase = Phase::Ghost {

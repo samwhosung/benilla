@@ -71,7 +71,7 @@ pub(super) fn poll(
         let now = time.elapsed_secs();
         if now >= hr.next_poll {
             hr.next_poll = now + POLL_SECS;
-            refresh(hr, &script, &root);
+            refresh(hr, script, &root);
         }
         let n = hr.watch.len();
         if n == 0 {
@@ -98,11 +98,11 @@ pub(super) fn poll(
         }
         for (id, path) in changed {
             let (line, ok) = match id {
-                Some(id) => reload(&script, &root, id, &path, hr.ran.get(&path)),
-                None => reload_xml(&script, &root, &path, &mut hr.xml),
+                Some(id) => reload(script, &root, id, &path, hr.ran.get(&path)),
+                None => reload_xml(script, &root, &path, &mut hr.xml),
             };
             info!("devtools: {line}");
-            chat(&script, &line, ok);
+            chat(script, &line, ok);
             hr.log.push_back((now, line, ok));
             while hr.log.len() > LOG_LINES {
                 hr.log.pop_front();

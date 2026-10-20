@@ -85,7 +85,7 @@ pub(super) fn seed_channels(
         let Some(script) = script else {
             return;
         };
-        if seeded.claim(&script) {
+        if seeded.claim(script) {
             script.set_joined_channels(channels.names());
         }
     })

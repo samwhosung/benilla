@@ -425,7 +425,7 @@ mod tests {
             list(
                 &mut group,
                 &errors,
-                &mut MessageSounds::default(),
+                &MessageSounds::default(),
                 &mut quest,
                 0,
                 0,
@@ -467,7 +467,7 @@ mod tests {
         list(
             &mut group,
             &errors,
-            &mut MessageSounds::default(),
+            &MessageSounds::default(),
             &mut quest,
             0,
             0,
@@ -498,7 +498,7 @@ mod tests {
         list(
             &mut group,
             &errors,
-            &mut MessageSounds::default(),
+            &MessageSounds::default(),
             &mut quest,
             0,
             0,
@@ -536,7 +536,7 @@ mod tests {
             list(
                 group,
                 &errors,
-                &mut MessageSounds::default(),
+                &MessageSounds::default(),
                 &mut quest,
                 group_type,
                 0,
@@ -994,7 +994,7 @@ mod tests {
             list(
                 group,
                 &errors,
-                &mut MessageSounds::default(),
+                &MessageSounds::default(),
                 &mut quest,
                 0,
                 0,
@@ -1066,7 +1066,7 @@ mod tests {
             list(
                 group,
                 &errors,
-                &mut MessageSounds::default(),
+                &MessageSounds::default(),
                 &mut quest,
                 0,
                 0,

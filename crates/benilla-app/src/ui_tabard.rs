@@ -170,7 +170,7 @@ fn feed_tabard(
     mut sink: crate::ui_action::MessageSink,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         // Our guild's cached record and the latch, pushed on change.
@@ -179,7 +179,7 @@ fn feed_tabard(
             guild_record: guilds.own_emblem_record(guild_id),
             save_pending: open.save_pending,
         };
-        let last = last_host.get(&script);
+        let last = last_host.get(script);
         if *last != Some(host) {
             *last = Some(host);
             script.set_tabard_host(host);
@@ -198,9 +198,9 @@ fn feed_tabard(
         let lines: Vec<_> = open
             .lines
             .drain(..)
-            .filter_map(|key| crate::ui_action::keyed_line(&script, key))
+            .filter_map(|key| crate::ui_action::keyed_line(script, key))
             .collect();
-        crate::ui_action::show_messages(&mut script, &mut sink, "ui_tabard", lines);
+        crate::ui_action::show_messages(script, &mut sink, "ui_tabard", lines);
 
         // The body wears the pane's design while the designer is open; `TabardModel:SetUnit("player")`
         // mirrors that body.
@@ -222,7 +222,7 @@ fn drain_tabard(
     mut sink: crate::ui_action::MessageSink,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         for intent in script.take_tabard_intents() {
@@ -241,9 +241,9 @@ fn drain_tabard(
                     let purse = store.and_then(|s| s.0.player_money()).unwrap_or(0);
                     match preflight(design, record, rank, purse) {
                         Err(key) => {
-                            if let Some(line) = crate::ui_action::keyed_line(&script, key) {
+                            if let Some(line) = crate::ui_action::keyed_line(script, key) {
                                 crate::ui_action::show_messages(
-                                    &mut script,
+                                    script,
                                     &mut sink,
                                     "ui_tabard",
                                     [line],

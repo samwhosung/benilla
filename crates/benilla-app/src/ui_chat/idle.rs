@@ -178,7 +178,7 @@ pub(crate) fn idle_handler(
             stand.write(crate::player::StandStateRequest { state: 1 });
         }
 
-        let strings = |key: &str| crate::ui_chat::combat::global_string(&script, key);
+        let strings = |key: &str| crate::ui_chat::combat::global_string(script, key);
         if action.afk {
             // `SetAFK(NULL)` is `/afk` with an empty message and a clear mirror, so it shares that
             // path: the `DEFAULT_AFK_MESSAGE` echo and body, and the optimistic mirror.

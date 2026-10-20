@@ -148,7 +148,7 @@ fn watch_skill_ups(
         let Some(script) = script else {
             return;
         };
-        let prev = prev.get(&script);
+        let prev = prev.get(script);
         let mut cur = std::collections::HashMap::new();
         for i in 0..PLAYER_SKILL_SLOTS {
             if let Some(s) = store.0.player_skill(i) {
@@ -201,7 +201,7 @@ fn watch_skill_ups(
                                 if announces() {
                                     debug!("chat: skill-up announced ({name} {old}→{value})");
                                     skill_line(
-                                        &script,
+                                        script,
                                         &chat,
                                         "ERR_SKILL_UP_SI",
                                         &[Arg::S(&name), Arg::D(i64::from(value))],
@@ -216,7 +216,7 @@ fn watch_skill_ups(
                             if let Some(name) = name() {
                                 if announces() {
                                     debug!("chat: skill-gain announced ({name} at {value})");
-                                    skill_line(&script, &chat, "ERR_SKILL_GAINED_S", &[Arg::S(&name)]);
+                                    skill_line(script, &chat, "ERR_SKILL_GAINED_S", &[Arg::S(&name)]);
                                 } else {
                                     debug!(
                                         "chat: skill-gain silenced ({name} at {value}, the 0x402 gate)"
@@ -249,14 +249,14 @@ fn feed_skills(
             return;
         };
         // The cost table, once per VM.
-        let pushed = tiers_pushed.get(&script);
+        let pushed = tiers_pushed.get(script);
         if !*pushed {
             if let Some(tiers) = tiers.as_deref() {
                 script.set_skill_tiers(tiers.0.tiers());
                 *pushed = true;
             }
         }
-        let last = last.get(&script);
+        let last = last.get(script);
         let lines_moved = skill_lines.as_ref().is_some_and(|l| l.is_changed());
         let (Ok(store), Some(skill_lines)) = (self_store.single(), skill_lines.as_deref()) else {
             return;
@@ -798,7 +798,7 @@ pub(crate) fn feed_char(
             return;
         };
         // Per VM: after a `/reload` both snapshots re-push, and `UNIT_INVENTORY_CHANGED` re-fires.
-        let (memo, vm_reset) = feed.vm.get_reset(&script);
+        let (memo, vm_reset) = feed.vm.get_reset(script);
 
         let Some(store) = inv.self_store.iter().next() else {
             // No self store is no data, not an empty inventory: it happens in the logout frames, where

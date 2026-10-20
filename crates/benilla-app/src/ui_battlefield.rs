@@ -200,7 +200,7 @@ fn feed_battlefield(
     mut sink: crate::ui_action::MessageSink,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         let catalog = maps.as_deref().map(|m| &m.0);
@@ -241,11 +241,11 @@ fn feed_battlefield(
         let mut lines = Vec::new();
         for result in std::mem::take(&mut state.verdicts) {
             let line = if result == GROUP_JOIN_DESERTERS {
-                crate::ui_action::keyed_line(&script, "ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS")
+                crate::ui_action::keyed_line(script, "ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS")
             } else if let Some(name) = catalog.and_then(|c| c.name(result)) {
-                crate::ui_action::keyed_line_s(&script, "ERR_GROUP_JOIN_BATTLEGROUND_S", &[name])
+                crate::ui_action::keyed_line_s(script, "ERR_GROUP_JOIN_BATTLEGROUND_S", &[name])
             } else {
-                crate::ui_action::keyed_line(&script, "ERR_GROUP_JOIN_BATTLEGROUND_FAIL")
+                crate::ui_action::keyed_line(script, "ERR_GROUP_JOIN_BATTLEGROUND_FAIL")
             };
             lines.extend(line);
         }
@@ -260,15 +260,15 @@ fn feed_battlefield(
                 continue;
             };
             let line = if joined {
-                crate::ui_action::keyed_line_s(&script, "ERR_BG_PLAYER_JOINED_SS", &[&name, &name])
+                crate::ui_action::keyed_line_s(script, "ERR_BG_PLAYER_JOINED_SS", &[&name, &name])
             } else {
-                crate::ui_action::keyed_line_s(&script, "ERR_BG_PLAYER_LEFT_S", &[&name])
+                crate::ui_action::keyed_line_s(script, "ERR_BG_PLAYER_LEFT_S", &[&name])
             };
             lines.extend(line);
         }
         state.players_asked = state.players.len();
         if !lines.is_empty() {
-            crate::ui_action::show_messages(&mut script, &mut sink, "ui_battlefield", lines);
+            crate::ui_action::show_messages(script, &mut sink, "ui_battlefield", lines);
         }
     })
 }
@@ -284,7 +284,7 @@ fn drain_battlefield(
     mut sink: crate::ui_action::MessageSink,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         let catalog = maps.as_deref().map(|m| &m.0);
@@ -292,14 +292,9 @@ fn drain_battlefield(
         for (instance_id, as_group) in script.take_battlefield_join_requests() {
             if as_group && !group_fits(catalog, map_id, group.as_deref()) {
                 if let Some(line) =
-                    crate::ui_action::keyed_line(&script, "ERR_GROUP_JOIN_BATTLEGROUND_TOO_MANY")
+                    crate::ui_action::keyed_line(script, "ERR_GROUP_JOIN_BATTLEGROUND_TOO_MANY")
                 {
-                    crate::ui_action::show_messages(
-                        &mut script,
-                        &mut sink,
-                        "ui_battlefield",
-                        [line],
-                    );
+                    crate::ui_action::show_messages(script, &mut sink, "ui_battlefield", [line]);
                 }
                 continue;
             }

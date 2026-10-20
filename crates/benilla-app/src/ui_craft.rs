@@ -114,7 +114,7 @@ fn feed_craft(
         let Some(script) = script else {
             return;
         };
-        let last = last.get(&script);
+        let last = last.get(script);
         // The show stands for the stock frame's getter calls, whose lookups pass the callback
         // `0x4f7710` (`0x4f75f2`, `0x4f7a0a`); the rebuilds between read.
         let ask = Ask::at(last.is_none() || open.is_changed(), &commands);

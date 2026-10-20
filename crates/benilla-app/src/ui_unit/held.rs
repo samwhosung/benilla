@@ -117,7 +117,7 @@ pub(super) fn feed_chain_units(
         for guid in script.take_unit_name_asks() {
             let _ = names.resolve_player(guid, Ask::Event(&commands));
         }
-        let (memo, vm_reset) = memo.get_reset(&script);
+        let (memo, vm_reset) = memo.get_reset(script);
         let ends = script.chain_end_guids();
 
         // The gate: every input read below, despawns included (invisible to `Changed`), and the
@@ -249,7 +249,7 @@ pub(crate) fn feed_name_candidates(
         let Some(script) = script else {
             return;
         };
-        let (memo, vm_reset) = memo.get_reset(&script);
+        let (memo, vm_reset) = memo.get_reset(script);
         let rebuild = vm_reset || group.is_changed() || world.inputs_changed();
         let me = self_q.single().ok();
         let object = |guid: u64| {

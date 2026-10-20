@@ -583,7 +583,7 @@ fn feed_ui(
             return;
         };
         let playing = cine.is_playing();
-        let published = published.get(&script);
+        let published = published.get(script);
         if *published == Some(playing) {
             return;
         }

@@ -540,7 +540,7 @@ fn feed_server_clock(
             return;
         };
         let samples = clock.samples();
-        let seen = seen.get(&script);
+        let seen = seen.get(script);
         let synced = seen.map_or(0, |was| samples.saturating_sub(was));
         *seen = Some(samples);
         let Some(now) = clock.now_unix() else {
@@ -734,10 +734,10 @@ pub(crate) fn feed_quest_log(
     mut memo: Local<crate::ui_script::VmMemo<FeedMemo>>,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
-        let memo = memo.get(&script);
+        let memo = memo.get(script);
         let Some((store, guid)) = reads.self_q.iter().next() else {
             if memo.player.take().is_some() {
                 script.set_quest_log_player(false);
@@ -931,7 +931,7 @@ pub(crate) fn feed_quest_log(
         // The update packets lead the object updates they report (vmangos `Player.cpp:10249`, and the
         // kill's counter `:14570` before `:14575`), so the toasts go first.
         if !quest_log.toasts.is_empty() {
-            show_toasts(&mut quest_log, &mut script, &mut sink);
+            show_toasts(&mut quest_log, script, &mut sink);
         }
         for entry in item_changes {
             script.quest_item_changed(entry);

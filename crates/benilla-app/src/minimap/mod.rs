@@ -720,9 +720,9 @@ fn feed_minimap_inside(
         let inside = minimap_interior(&player, &instances, &wmos, &world, &asset_server).is_some();
         inside_res.0 = inside;
         let Some(script) = script else { return };
-        if *was_inside.get(&script) != Some(inside) {
+        if *was_inside.get(script) != Some(inside) {
             script.set_minimap_inside(inside);
-            *was_inside.get(&script) = Some(inside);
+            *was_inside.get(script) = Some(inside);
             script.fire_event("MINIMAP_UPDATE_ZOOM", vec![]);
         }
     })
@@ -769,7 +769,7 @@ fn feed_minimap_art(
             return;
         };
         let mut world_assets = world_assets;
-        let applied = applied.get(&script);
+        let applied = applied.get(script);
         for slot in [
             MinimapArtSlot::Mask,
             MinimapArtSlot::Icons,
@@ -885,7 +885,7 @@ fn feed_minimap_arrows(
             radius,
         );
         let (rim, keys) = blips::rim_arrow_records(&sel, wx, wy);
-        let last = listed.get(&script);
+        let last = listed.get(script);
         let rebuilt = last.as_ref() != Some(&keys);
         if rebuilt {
             *last = Some(keys);
@@ -916,7 +916,7 @@ fn feed_game_time(
 ) {
     hosted_vm.run(|script| {
         let Some(script) = script else { return };
-        let last = last.get(&script);
+        let last = last.get(script);
         let now = (time.0.hour(), time.0.minute());
         if *last == Some(now) {
             return;

@@ -432,11 +432,11 @@ fn feed_item_text(
             return;
         };
         // The begin ([`begin_item_text`]) fires first, latching the reader.
-        if sess.told.get(&script).ready || !sess.told.get(&script).begun {
+        if sess.told.get(script).ready || !sess.told.get(script).begun {
             return;
         }
         let ask = Ask::at(
-            !std::mem::replace(&mut sess.told.get(&script).asked, true),
+            !std::mem::replace(&mut sess.told.get(script).asked, true),
             &commands,
         );
         let Some(readable) = readable(
@@ -513,7 +513,7 @@ fn feed_item_text(
             material: readable.material,
         }));
         fires.post("ITEM_TEXT_READY", vec![]);
-        sess.told.get(&script).ready = true;
+        sess.told.get(script).ready = true;
     })
 }
 
@@ -541,7 +541,7 @@ fn drain_item_text(
             };
             if turn_page(visited, delta, |id| pages.pages.get(id).map(|p| p.next)) {
                 // Repaint on the next feed without re-firing BEGIN; the show asks for the new page.
-                let told = sess.told.get(&script);
+                let told = sess.told.get(script);
                 told.ready = false;
                 told.asked = false;
             }

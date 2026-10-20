@@ -431,7 +431,7 @@ fn feed_meeting_stone(
     mut sink: crate::ui_action::MessageSink,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         let areas = inputs.areas.as_deref();
@@ -439,7 +439,7 @@ fn feed_meeting_stone(
 
         for (old, status) in std::mem::take(&mut stone.updates) {
             let new = stone.area;
-            lines.extend(stone_line(&script, areas, old, new, status));
+            lines.extend(stone_line(script, areas, old, new, status));
             if status == 1 && new != old {
                 // Status 1's extra block (`0x4ca363`): `Effect_C` kind `0xc` on the local player,
                 // then the Meeting Stones tutorial.
@@ -458,7 +458,7 @@ fn feed_meeting_stone(
             }
             // Every status, silent or out of range, rebuilds and fires. The globals reach the VM
             // first: the stock handler's first call is `IsInMeetingStoneQueue()` (`Minimap.xml:222`).
-            let text = build_stone_text(&script, areas, new);
+            let text = build_stone_text(script, areas, new);
             stone.text = StoneText::Built(text.clone());
             stone.dirty = false;
             script.set_meeting_stone(new, Some(text));
@@ -469,13 +469,13 @@ fn feed_meeting_stone(
             match notice {
                 MeetingStoneNotice::Success => {
                     lines.extend(crate::ui_action::keyed_line(
-                        &script,
+                        script,
                         "ERR_MEETING_STONE_SUCCESS",
                     ));
                 }
                 MeetingStoneNotice::InProgress => {
                     lines.extend(crate::ui_action::keyed_line(
-                        &script,
+                        script,
                         "ERR_MEETING_STONE_IN_PROGRESS",
                     ));
                 }
@@ -487,7 +487,7 @@ fn feed_meeting_stone(
                         3 => "ERR_MEETING_STONE_NO_RAID_GROUP",
                         _ => continue,
                     };
-                    lines.extend(crate::ui_action::keyed_line(&script, key));
+                    lines.extend(crate::ui_action::keyed_line(script, key));
                 }
             }
         }
@@ -501,7 +501,7 @@ fn feed_meeting_stone(
                 .map(str::to_string)
             {
                 Some(name) => lines.extend(crate::ui_action::keyed_line_s(
-                    &script,
+                    script,
                     "ERR_MEETING_STONE_MEMBER_ADDED_S",
                     &[&name],
                 )),
@@ -510,13 +510,13 @@ fn feed_meeting_stone(
         }
         stone.members_asked = stone.pending_members.len();
         if !lines.is_empty() {
-            crate::ui_action::show_messages(&mut script, &mut sink, "ui_dialog_verbs", lines);
+            crate::ui_action::show_messages(script, &mut sink, "ui_dialog_verbs", lines);
         }
 
         if std::mem::take(&mut stone.dirty) {
             let text = match &stone.text {
                 StoneText::None => None,
-                StoneText::Unknown => Some(global_text(&script, "UNKNOWN")),
+                StoneText::Unknown => Some(global_text(script, "UNKNOWN")),
                 StoneText::Built(t) => Some(t.clone()),
             };
             script.set_meeting_stone(stone.area, text);
@@ -614,7 +614,7 @@ fn drain_meeting_stone_joins(
     mut sink: crate::ui_action::MessageSink,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             uses.clear();
             return;
         };
@@ -642,7 +642,7 @@ fn drain_meeting_stone_joins(
             }
             match verdict {
                 StoneJoin::Silent => {}
-                StoneJoin::Refuse(key) => lines.extend(crate::ui_action::keyed_line(&script, key)),
+                StoneJoin::Refuse(key) => lines.extend(crate::ui_action::keyed_line(script, key)),
                 StoneJoin::Send => {
                     debug!("meeting stone: join {go_guid:#x}");
                     let _ = commands.0.send(ClientCommand::MeetingStoneJoin { go_guid });
@@ -650,7 +650,7 @@ fn drain_meeting_stone_joins(
             }
         }
         if !lines.is_empty() {
-            crate::ui_action::show_messages(&mut script, &mut sink, "ui_dialog_verbs", lines);
+            crate::ui_action::show_messages(script, &mut sink, "ui_dialog_verbs", lines);
         }
     })
 }
@@ -677,7 +677,7 @@ pub(crate) fn feed_dialog_verbs(
     mut tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         let now = Instant::now();
@@ -700,10 +700,10 @@ pub(crate) fn feed_dialog_verbs(
         }
         let lines: Vec<_> = std::mem::take(&mut boot.errors)
             .into_iter()
-            .filter_map(|key| crate::ui_action::keyed_line(&script, key))
+            .filter_map(|key| crate::ui_action::keyed_line(script, key))
             .collect();
         if !lines.is_empty() {
-            crate::ui_action::show_messages(&mut script, &mut sink, "ui_dialog_verbs", lines);
+            crate::ui_action::show_messages(script, &mut sink, "ui_dialog_verbs", lines);
         }
 
         let secs = spirit.secs(now);
@@ -733,7 +733,7 @@ fn drain_latch_verbs(
     mut sink: crate::ui_action::MessageSink,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
 
@@ -747,11 +747,10 @@ fn drain_latch_verbs(
                     .and_then(|store| store.0.player_money())
                     .unwrap_or(0);
                 if pet.cost > money {
-                    if let Some(line) =
-                        crate::ui_action::keyed_line(&script, "ERR_NOT_ENOUGH_MONEY")
+                    if let Some(line) = crate::ui_action::keyed_line(script, "ERR_NOT_ENOUGH_MONEY")
                     {
                         crate::ui_action::show_messages(
-                            &mut script,
+                            script,
                             &mut sink,
                             "ui_dialog_verbs",
                             [line],
@@ -787,7 +786,7 @@ fn drain_queue_verbs(
     mut sink: crate::ui_action::MessageSink,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
 
@@ -808,14 +807,9 @@ fn drain_queue_verbs(
                 .is_some_and(|g| g.in_group && Some(g.leader) != self_guid.0);
             if not_leader {
                 if let Some(line) =
-                    crate::ui_action::keyed_line(&script, "ERR_MEETING_STONE_NOT_LEADER")
+                    crate::ui_action::keyed_line(script, "ERR_MEETING_STONE_NOT_LEADER")
                 {
-                    crate::ui_action::show_messages(
-                        &mut script,
-                        &mut sink,
-                        "ui_dialog_verbs",
-                        [line],
-                    );
+                    crate::ui_action::show_messages(script, &mut sink, "ui_dialog_verbs", [line]);
                 }
             } else {
                 for _ in 0..cancels {

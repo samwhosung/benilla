@@ -172,7 +172,7 @@ fn feed_quest_share(
     mut sink: MessageSink,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
 
@@ -214,7 +214,7 @@ fn feed_quest_share(
             }
         }
         share.verdicts = waiting;
-        show_messages(&mut script, &mut sink, "ui_quest_share", lines);
+        show_messages(script, &mut sink, "ui_quest_share", lines);
 
         // The escort confirm, once the member's name lands: player first, then title, as
         // `QUEST_ACCEPT` fills them.

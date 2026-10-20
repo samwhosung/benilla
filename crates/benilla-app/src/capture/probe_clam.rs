@@ -190,7 +190,7 @@ fn clam_probe(
         let Ok(store) = self_store.single() else {
             return; // not in-world yet
         };
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return; // no UI VM in this build, so nothing to drive
         };
         let now = time.elapsed_secs_f64();
@@ -232,21 +232,21 @@ fn clam_probe(
                 }
             }
             Phase::Before => {
-                probe.control.push(window_open(&script, &loot));
+                probe.control.push(window_open(script, &loot));
                 if probe.control.len() < CONTROL_FRAMES {
                     return;
                 }
-                click(&mut script, &mut probe, 0);
+                click(script, &mut probe, 0);
                 probe.phase = Phase::WaitOpen {
                     since: now,
                     round: 0,
                 };
             }
             Phase::WaitOpen { since, round } => {
-                if window_open(&script, &loot) {
+                if window_open(script, &loot) {
                     let slot = probe.slot;
                     let source = loot.source();
-                    let grey = slot_grey(&script, slot);
+                    let grey = slot_grey(script, slot);
                     info!(
                     "PROBE_CLAM: round {round} — window up on {:?} (latch {:?}, slot grey {grey})",
                     source.map(|g| format!("{g:#x}")),
@@ -257,7 +257,7 @@ fn clam_probe(
                     let _ = script.eval::<()>("CloseLoot()");
                     probe.phase = Phase::WaitClosed { since: now, round };
                 } else if now - since > OPEN_TIMEOUT_SECS {
-                    let grey = slot_grey(&script, probe.slot);
+                    let grey = slot_grey(script, probe.slot);
                     error!(
                     "PROBE_CLAM: round {round} FAIL — no loot window within {OPEN_TIMEOUT_SECS}s \
                      of the click (latch {:?}, slot grey {grey}). A grey slot with no window is \
@@ -274,12 +274,12 @@ fn clam_probe(
             Phase::Settling { since, round } => {
                 if now - since >= REOPEN_SETTLE_SECS {
                     info!("PROBE_CLAM: re-clicking the same item (round {round})");
-                    click(&mut script, &mut probe, round);
+                    click(script, &mut probe, round);
                     probe.phase = Phase::WaitOpen { since: now, round };
                 }
             }
             Phase::WaitClosed { since, round } => {
-                if !window_open(&script, &loot) {
+                if !window_open(script, &loot) {
                     probe.cleared.push(latch.0.is_none());
                     let next = round + 1;
                     if next < ROUNDS {

@@ -366,8 +366,8 @@ fn drive_vplates(
         // Plates stop taking the mouse in freelook (`0x60f830`, called from `0x483e80`/`0x483e70` on
         // the transitions), written on the edge per VM.
         let looking = rig.is_looking();
-        if *mouse_told.get(&script) != Some(looking) {
-            *mouse_told.get(&script) = Some(looking);
+        if *mouse_told.get(script) != Some(looking) {
+            *mouse_told.get(script) = Some(looking);
             script.set_nameplate_mouse(!looking);
         }
         // While a ground-targeted spell is armed (`0x6e6320`'s `flag & 0x60`), plates refuse the hit

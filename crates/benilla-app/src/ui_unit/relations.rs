@@ -34,7 +34,7 @@ pub(super) fn feed_unit_relations(
         let Some(script) = script else {
             return;
         };
-        let (memo, vm_reset) = memo.get_reset(&script);
+        let (memo, vm_reset) = memo.get_reset(script);
         let reread = world.records_changed();
         let mut moved = false;
         let mut held = 0;

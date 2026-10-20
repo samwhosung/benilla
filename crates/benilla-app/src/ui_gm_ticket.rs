@@ -97,7 +97,7 @@ fn feed_gm_ticket(
         let Some(script) = script else {
             return;
         };
-        let fed = feed.vm.get(&script);
+        let fed = feed.vm.get(script);
 
         if !fed.categories_pushed {
             if let Some(categories) = categories.as_deref() {

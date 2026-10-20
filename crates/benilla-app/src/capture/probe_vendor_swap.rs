@@ -215,7 +215,7 @@ fn vendor_swap_probe(
                      CMSG_LIST_INVENTORY to Brog",
                         dobbins.expect("named")
                     );
-                    clear_log(&script);
+                    clear_log(script);
                     let _ = net.0.send(ClientCommand::ListInventory { guid: brog });
                     probe.phase = Phase::Open { since: now };
                 } else if now - sent_at > SCAN_TIMEOUT_SECS {
@@ -235,7 +235,7 @@ fn vendor_swap_probe(
                     .resolve_unit(brog, None, Ask::Read)
                     .unwrap_or("")
                     .to_string();
-                match (merchant.vendor == Some(brog), first_show(&script)) {
+                match (merchant.vendor == Some(brog), first_show(script)) {
                     (true, Some((npc, title))) => {
                         if npc == expect && title == expect {
                             info!(
@@ -286,7 +286,7 @@ fn vendor_swap_probe(
                 }
                 let dobbins = probe.dobbins.expect("set at Settle");
                 info!("PROBE_VENDOR_SWAP: CMSG_LIST_INVENTORY to Dobbins over Brog's open window");
-                clear_log(&script);
+                clear_log(script);
                 let _ = net.0.send(ClientCommand::ListInventory { guid: dobbins });
                 probe.phase = Phase::Swap { since: now };
             }
@@ -296,7 +296,7 @@ fn vendor_swap_probe(
                     .resolve_unit(dobbins, None, Ask::Read)
                     .unwrap_or("")
                     .to_string();
-                match (merchant.vendor == Some(dobbins), first_show(&script)) {
+                match (merchant.vendor == Some(dobbins), first_show(script)) {
                     (true, Some((npc, title))) => {
                         if npc == expect && title == expect {
                             info!(

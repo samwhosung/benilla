@@ -132,10 +132,10 @@ pub(crate) fn feed_party(
     chat: Res<crate::ui_chat::ChatLog>,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
-        let (fed, vm_reset) = fed.get_reset(&script);
+        let (fed, vm_reset) = fed.get_reset(script);
         // The ready-check summary lines the timeout tick composed, pushed as system chat ahead of the
         // gate: the tick runs on the frame clock, which the gate does not watch.
         for line in script.take_ready_check_lines() {
@@ -355,7 +355,7 @@ pub(crate) fn feed_party(
         for (i, token) in PARTY_PET_TOKENS.iter().enumerate() {
             let owner = slots.get(i).map_or(0, |m| m.guid);
             let now = pets::member_pet(&look, &group, owner, look.store(owner), Roster::Party);
-            pets::feed_token(&mut script, &gate, &mut fed.pets.party[i], token, now);
+            pets::feed_token(script, &gate, &mut fed.pets.party[i], token, now);
         }
 
         // ── raid1..raid40 ──────────────────────────────────────────────────────
@@ -426,7 +426,7 @@ pub(crate) fn feed_party(
                 look.store(owner)
             };
             let now = pets::member_pet(&look, &group, owner, held, Roster::Raid);
-            pets::feed_token(&mut script, &gate, &mut fed.pets.raid[i], token, now);
+            pets::feed_token(script, &gate, &mut fed.pets.raid[i], token, now);
         }
 
         // ── The group events ────────────────────────────────────────────────────

@@ -122,14 +122,14 @@ fn feed_battlefield_positions(
         let looked_up = script.take_battlefield_position_lookups();
         let (Some(map), Some(packet)) = (active, packet.as_ref()) else {
             let key = Some((false, icon_scale.to_bits()));
-            let last = last_empty.get(&script);
+            let last = last_empty.get(script);
             if *last != key {
                 *last = key;
                 script.set_battlefield_positions(Vec::new(), None, icon_scale);
             }
             return;
         };
-        *last_empty.get(&script) = Some((true, icon_scale.to_bits()));
+        *last_empty.get(script) = Some((true, icon_scale.to_bits()));
 
         let selection = script.world_map_selection();
         let project = |x: f32, y: f32| {

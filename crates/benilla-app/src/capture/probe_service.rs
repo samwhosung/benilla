@@ -658,7 +658,7 @@ fn service_probe(
                     probe.phase = Phase::Done;
                     return;
                 };
-                let Some((bag, slot)) = find_item_slot(&script) else {
+                let Some((bag, slot)) = find_item_slot(script) else {
                     if now - since > BAG_TIMEOUT_SECS {
                         warn!(
                             "PROBE_SERVICE: SKIP (vendor fork, held cursor) — item {SELL_ITEM_ENTRY} \

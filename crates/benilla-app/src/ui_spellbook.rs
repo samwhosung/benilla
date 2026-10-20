@@ -112,10 +112,8 @@ fn feed_spellbook(
     // The book, read off the host's cooldowns and pushed; its events signal with the host lent.
     let Some((book_changed, learned, tab_lines, race, class)) =
         vm.turn(|script, cooldowns| {
-            let Some(script) = script else {
-                return None;
-            };
-            let (memory, vm_reset) = memory.get_reset(&script);
+            let script = script?;
+            let (memory, vm_reset) = memory.get_reset(script);
             // The book depends on these inputs alone. `UiClock` is not one: a running read's `ui_triple`
             // is frame-stable per arm (a held read's start is the query's `anchor`, so it moves with
             // `ui_now`, but nothing held moves an input), and expiry moves the store's `feed_epoch`.
@@ -170,9 +168,7 @@ fn feed_spellbook(
             }
             // Drained before a later return can strand it; an unresolved id fires nothing, as in 1.12.
             let learned = std::mem::take(&mut learned.0);
-            let Some(spells) = spells.as_deref() else {
-                return None;
-            };
+            let spells = spells.as_deref()?;
             // Race and class drive the General collapse; 0/0 before the descriptor skips it.
             let store = inv.self_store.single().ok();
             let (race, class) = store

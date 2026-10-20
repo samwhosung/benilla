@@ -59,7 +59,7 @@ pub(super) fn drive_minimap_ping(
         let Some(script) = script else { return };
         let wow = bevy_to_wow(player.pos);
         script.set_minimap_player(player.active.then_some((wow[0], wow[1])));
-        let seated = seated.get(&script);
+        let seated = seated.get(script);
         if !*seated {
             script.set_minimap_ping_point(ping.world);
             *seated = true;

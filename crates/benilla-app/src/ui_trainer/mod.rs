@@ -369,9 +369,9 @@ pub(crate) fn feed_trainer(
         let Some(script) = script else {
             return;
         };
-        let last = last.get(&script);
-        let last_name = last_name.get(&script);
-        if closes.since_last(&script, NpcWindow::Trainer) {
+        let last = last.get(script);
+        let last_name = last_name.get(script);
+        if closes.since_last(script, NpcWindow::Trainer) {
             *last = None;
             *last_name = None;
         }

@@ -46,10 +46,10 @@ pub(super) fn feed_guild(
     mut fed: Local<crate::ui_script::VmMemo<FedGuild>>,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
-        let fed = fed.get(&script);
+        let fed = fed.get(script);
 
         // Our guild id and rank come from our own descriptor, mirrored only while the avatar is
         // streamed: the frames between logout despawn and teardown must not read as leaving the guild.
@@ -151,10 +151,10 @@ pub(super) fn feed_guild(
         // `/ginfo`'s two lines, resolved here because their templates are not catalog rows.
         let info_lines: Vec<crate::ui_action::Shown> = std::mem::take(&mut guild.pending_info)
             .iter()
-            .flat_map(|info| ginfo_lines(&script, info))
+            .flat_map(|info| ginfo_lines(script, info))
             .collect();
         if !info_lines.is_empty() {
-            crate::ui_action::show_messages(&mut script, &mut sink, "ui_guild", info_lines);
+            crate::ui_action::show_messages(script, &mut sink, "ui_guild", info_lines);
         }
     })
 }

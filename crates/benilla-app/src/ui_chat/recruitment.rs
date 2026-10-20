@@ -138,8 +138,8 @@ pub(super) fn guild_recruitment_cascade(
     commands: Res<NetCommands>,
 ) {
     hosted_vm.run(|script| {
-        let Some(mut script) = script else { return };
-        apply_runs(&mut script, &mut channels, &commands);
+        let Some(script) = script else { return };
+        apply_runs(script, &mut channels, &commands);
         // A `SetGuildRecruitmentMode(1)` whose cascade could not act leaves the run owed.
         if script.take_guild_recruitment_cascade() {
             state.request();
@@ -160,7 +160,7 @@ pub(super) fn guild_recruitment_cascade(
             return;
         }
         state.pending = false;
-        apply_runs(&mut script, &mut channels, &commands);
+        apply_runs(script, &mut channels, &commands);
     })
 }
 

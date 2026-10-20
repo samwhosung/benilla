@@ -534,7 +534,7 @@ fn feed_auras(
     mut mem: ResMut<AuraFeedMemory>,
 ) {
     vm.feed(|script, units, fires| {
-        let Some(mut script) = script else {
+        let Some(script) = script else {
             return;
         };
         let Ok((store, self_guid)) = self_q.single() else {
@@ -608,7 +608,7 @@ fn feed_auras(
         if let Some(period) = trace_period() {
             if bevy_now - mem.traced_at >= period {
                 mem.traced_at = bevy_now;
-                trace_timers(&script, &cache.auras, &list, bevy_now);
+                trace_timers(script, &cache.auras, &list, bevy_now);
             }
         }
 
@@ -635,7 +635,7 @@ fn feed_auras(
             );
         }
         // This VM's keys: a `/reload`'s new VM starts empty, so every edge re-fires.
-        let memo = mem.vm.get(&script);
+        let memo = mem.vm.get(script);
 
         // Fire on a discrete change, never on the countdown; a tracking switch counts.
         let projection = projection_of(&list);
@@ -687,7 +687,7 @@ fn feed_auras(
             .filter(|&guid| held(guid).is_some_and(|s| s.is_unit()))
             .unwrap_or(0);
         let unit_changed = memo.units.feed(
-            &mut script,
+            script,
             units::Inputs {
                 group: units.group.as_deref(),
                 me: self_guid.0,
