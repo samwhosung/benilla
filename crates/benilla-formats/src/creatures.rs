@@ -584,7 +584,11 @@ mod tests {
         assert!(!cat.display_records_differ(13, 10), "the same sound row");
         assert!(cat.display_records_differ(14, 10), "no own sound row");
         assert!(!cat.display_records_differ(21, 20), "nothing differs");
-        assert_eq!(cat.records_row(999), Some(10), "an unknown display: the first row");
+        assert_eq!(
+            cat.records_row(999),
+            Some(10),
+            "an unknown display: the first row"
+        );
         assert_eq!(cat.records_row(12), Some(12));
     }
 

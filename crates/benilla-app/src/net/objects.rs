@@ -1858,7 +1858,9 @@ mod tests {
         );
         assert_eq!(record_asks(&rx), (1, 0), "the creature's create hook alone");
         // Refused: the next lookup with a callback asks at once.
-        world.resource_mut::<NameCache>().insert_creature(ENTRY, None);
+        world
+            .resource_mut::<NameCache>()
+            .insert_creature(ENTRY, None);
 
         display(world, mob, 12);
         assert_eq!(record_asks(&rx), (0, 0), "12 names 10's records");
@@ -1898,10 +1900,14 @@ mod tests {
             world,
             super::wire(vec![displayed(mob, EntityKind::Unit, 9, 10)]),
         );
-        world.resource_mut::<NameCache>().insert_creature(ENTRY, None);
+        world
+            .resource_mut::<NameCache>()
+            .insert_creature(ENTRY, None);
         let _ = record_asks(&rx);
 
-        let tables = world.remove_resource::<crate::entities::Creatures>().unwrap();
+        let tables = world
+            .remove_resource::<crate::entities::Creatures>()
+            .unwrap();
         values(world, &[(FIELD_UNIT_DISPLAYID, 11)]);
         world.insert_resource(tables);
         values(world, &[(FIELD_UNIT_HEALTH, 0)]);
