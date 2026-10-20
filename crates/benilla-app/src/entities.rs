@@ -881,6 +881,19 @@ fn setup_entities(
             f.err().or(p.err()).expect("at least one of the two failed")
         ),
     }
+    // The unit tooltip's studied-creature block: without `Resistances.dbc` the armor line reads
+    // the reference's no-school slot, and without `CreatureSpellData.dbc` no ability line shows.
+    let armor_school = benilla_formats::load_armor_school(&mut chain)
+        .map_err(|e| warn!("Resistances.dbc unavailable, no armor school: {e:#}"))
+        .ok()
+        .flatten();
+    let pet_spells = benilla_formats::load_creature_spell_data(&mut chain)
+        .map_err(|e| warn!("CreatureSpellData.dbc unavailable, no pet abilities: {e:#}"))
+        .ok();
+    commands.insert_resource(crate::ui_unit::tooltip_facts::StudyTables {
+        armor_school,
+        pet_spells,
+    });
     match CharacterGeosets::load(&mut chain) {
         Ok(geosets) => commands.insert_resource(Characters(geosets)),
         Err(e) => warn!("character geosets unavailable, players show every geoset: {e:#}"),

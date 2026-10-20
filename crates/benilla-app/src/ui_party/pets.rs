@@ -57,6 +57,7 @@ pub(super) struct Lookup<'a, 'w, 's, 'q> {
     types: CreatureTypeSources<'a>,
     /// `Spell.dbc`, which the tooltip's owner line reads a creating spell from.
     catalog: Option<&'a benilla_formats::SpellCatalog>,
+    study: crate::ui_unit::tooltip_facts::StudySources<'a>,
 }
 
 impl<'a, 'w, 's, 'q> Lookup<'a, 'w, 's, 'q> {
@@ -66,6 +67,7 @@ impl<'a, 'w, 's, 'q> Lookup<'a, 'w, 's, 'q> {
         names: &'a Names,
         types: CreatureTypeSources<'a>,
         catalog: Option<&'a benilla_formats::SpellCatalog>,
+        study: crate::ui_unit::tooltip_facts::StudySources<'a>,
     ) -> Self {
         Self {
             index,
@@ -74,6 +76,7 @@ impl<'a, 'w, 's, 'q> Lookup<'a, 'w, 's, 'q> {
             commands: &names.commands,
             types,
             catalog,
+            study,
         }
     }
 
@@ -150,6 +153,7 @@ pub(super) fn member_pet(
                 names: look.names,
                 catalog: look.catalog,
                 object: &object,
+                study: look.study,
             };
             s.tooltip =
                 crate::ui_unit::tooltip_facts::tooltip_facts(store, s.creature_type, &sources);

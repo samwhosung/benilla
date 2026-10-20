@@ -533,3 +533,129 @@ fn a_skill_tinted_lock_line_draws_the_ramps_colour() {
     assert_eq!(rgb(&mut s, 200), (128, 128, 128));
     assert!(s.take_errors().is_empty());
 }
+
+/// Marked stand-ins for the studied-creature block's keys; school 5's name is blank.
+fn seed_studied(s: &mut UiScript) {
+    s.run(
+        r#"
+        DAMAGE_TEMPLATE        = "[DMG %d-%d]"
+        SINGLE_DAMAGE_TEMPLATE = "[DMG %d]"
+        ARMOR_TEMPLATE         = "[ARMOR %d]"
+        HP_TEMPLATE            = "[HP %d]"
+        RESISTANCE_TEMPLATE    = "[RES %d %s]"
+        RESISTANCE0_NAME       = "[R0]"
+        RESISTANCE1_NAME       = "[R1]"
+        RESISTANCE2_NAME       = "[R2]"
+        RESISTANCE3_NAME       = "[R3]"
+        RESISTANCE4_NAME       = "[R4]"
+        RESISTANCE5_NAME       = ""
+        RESISTANCE6_NAME       = "[R6]"
+        PET_DIET_TEMPLATE      = "[DIET %s]"
+        TAMEABLE               = "[TAMEABLE]"
+        NOT_TAMEABLE           = "[NOT_TAMEABLE]"
+        PET_SPELLS_TEMPLATE    = "[SPELLS %s]"
+    "#,
+    )
+    .unwrap();
+}
+
+fn studied_target(s: &mut UiScript, dynamic_flags: u32, health: u32, studied: StudiedCreature) {
+    s.set_unit(
+        "target",
+        Some(UnitState {
+            dynamic_flags,
+            // Skinnable, so the block's place before `UNIT_SKINNABLE` shows.
+            flags: 0x0400_0000,
+            skinnable: true,
+            tooltip: UnitTooltipFacts {
+                health,
+                studied: Some(Box::new(studied)),
+                ..Default::default()
+            },
+            ..creature()
+        }),
+    );
+}
+
+/// A studied beast (`UNIT_DYNAMIC_FLAGS` bit 4, `0x52a8ea`) reads `0x529a40`'s block between
+/// `RESURRECTABLE` and `UNIT_SKINNABLE`: the damage with the minimum truncated and the maximum
+/// rounded up (`0x529a55`-`0x529a7b`), the armor school's slot, the raw health, each other school
+/// above 0 with a name (`0x529b83`, `0x529baa`), the diet and abilities joined by `", "`
+/// (`0x84480c`), a rank in `" (%s)"` (`0x854820`).
+#[test]
+fn a_studied_creature_reads_the_beast_lore_block() {
+    let mut s = viewer_script(30, 0, Relations::default());
+    seed_studied(&mut s);
+    let studied = StudiedCreature {
+        min_damage: 10.7,
+        max_damage: 15.2,
+        resistances: [300, 0, 25, 0, -5, 40, 12],
+        armor_school: Some(0),
+        armor: 300,
+        diet: vec!["Meat".into(), "Fish".into()],
+        tameable: Some(vec![
+            PetAbility {
+                name: "Claw".into(),
+                rank: "Rank 1".into(),
+            },
+            PetAbility {
+                name: "Dash".into(),
+                rank: String::new(),
+            },
+        ]),
+    };
+    studied_target(&mut s, 0x10, 1234, studied.clone());
+    let l = lines(&s);
+    let block = [
+        "[DMG 10-16]",
+        "[ARMOR 300]",
+        "[HP 1234]",
+        "[RES 25 [R2]]",
+        "[RES 12 [R6]]",
+        "[DIET Meat, Fish]",
+        "[TAMEABLE]",
+        "[SPELLS Claw (Rank 1), Dash]",
+        "[SKINNABLE]",
+    ];
+    assert!(l.ends_with(&block.map(String::from)), "{l:?}");
+
+    // The flag gates the block.
+    studied_target(&mut s, 0, 1234, studied);
+    let l = lines(&s);
+    assert!(!l.iter().any(|t| t.starts_with("[DMG")), "{l:?}");
+    assert!(s.take_errors().is_empty());
+}
+
+/// Equal ends take `SINGLE_DAMAGE_TEMPLATE` (`0x529a8a`), armor not above 0 reads 0
+/// (`0x529aef`), with no school flagged none is skipped, an empty diet adds no line, and a
+/// creature that is not tameable ends on `NOT_TAMEABLE` (`0x529eaa`).
+#[test]
+fn an_untameable_studied_creature_ends_on_not_tameable() {
+    let mut s = viewer_script(30, 0, Relations::default());
+    seed_studied(&mut s);
+    studied_target(
+        &mut s,
+        0x10,
+        80,
+        StudiedCreature {
+            min_damage: 12.0,
+            max_damage: 11.5,
+            resistances: [7, 0, 0, 0, 0, 0, 0],
+            armor_school: None,
+            armor: -3,
+            diet: Vec::new(),
+            tameable: None,
+        },
+    );
+    let l = lines(&s);
+    let block = [
+        "[DMG 12]",
+        "[ARMOR 0]",
+        "[HP 80]",
+        "[RES 7 [R0]]",
+        "[NOT_TAMEABLE]",
+        "[SKINNABLE]",
+    ];
+    assert!(l.ends_with(&block.map(String::from)), "{l:?}");
+    assert!(s.take_errors().is_empty());
+}

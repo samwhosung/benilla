@@ -1,9 +1,9 @@
 //! The engine unit tooltip, in `0x529fe0`'s line order: the name (gold, decorated by `0x609370`
-//! as `UnitPVPName`'s is; FrameXML recolours it by reaction), the creature subtitle, the level
-//! line, the faction name, then `PVP_ENABLED`, `RESURRECTABLE`, `UNIT_SKINNABLE`,
-//! `PVP_RANK_CIVILIAN` and `PVP_RANK_LEADER`, with health on the `<name>StatusBar` child. The
-//! world mouseover drives it through [`super::UiScript::world_tooltip_unit`]; unit-frame hovers
-//! call `SetUnit` from Lua.
+//! as `UnitPVPName`'s is; FrameXML recolours it by reaction), the creature subtitle, the owner
+//! line, the level line, the faction name, then `PVP_ENABLED`, `RESURRECTABLE`, the
+//! studied-creature block, `UNIT_SKINNABLE`, `PVP_RANK_CIVILIAN` and `PVP_RANK_LEADER`, with
+//! health on the `<name>StatusBar` child. The world mouseover drives it through
+//! [`super::UiScript::world_tooltip_unit`]; unit-frame hovers call `SetUnit` from Lua.
 
 use mlua::{Lua, Table};
 
@@ -26,6 +26,9 @@ pub struct UnitTooltipFacts {
     /// The party member record the builder finds by guid (`0x496400`, `0x52a02b`), `None` off
     /// our party.
     pub party: Option<PartyRecord>,
+    /// The studied-creature block's facts ([`super::tooltip_studied`]), filled while the unit's
+    /// `UNIT_DYNAMIC_FLAGS` bit 4 is set.
+    pub studied: Option<Box<super::StudiedCreature>>,
 }
 
 /// What the builder reads of a party member's record (`0x4e8820`).
@@ -300,6 +303,12 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
             && viewer.as_ref().is_some_and(|v| v.can_assist)
         {
             keyed_line(lua, this, "RESURRECTABLE", GREEN)?;
+        }
+        // The studied-creature block (`0x529a40`), for `UNIT_DYNAMIC_FLAGS` bit 4 (`0x52a8ea`).
+        if u.dynamic_flags & super::tooltip_studied::UNIT_DYNFLAG_SPECIALINFO != 0 {
+            if let Some(studied) = &u.tooltip.studied {
+                super::tooltip_studied::studied_lines(lua, this, u.tooltip.health, studied)?;
+            }
         }
         // `UNIT_SKINNABLE` (`0x529ed0`): unit flags bit 26 off a creature (`0x52a914`,
         // `0x52a924`), red but for a player with the skinning spell (`0x529eed`-`0x529f86`).

@@ -159,6 +159,7 @@ pub(super) fn feed_chain_units(
             names: &names,
             catalog: tables.catalog(),
             object: &object,
+            study: tables.study(),
         },
     };
     let built: HashMap<u64, UnitState> = ends
@@ -265,6 +266,7 @@ pub(crate) fn feed_name_candidates(
             names: &names,
             catalog: tables.catalog(),
             object: &object,
+            study: tables.study(),
         },
     };
     memo.seen.clear();

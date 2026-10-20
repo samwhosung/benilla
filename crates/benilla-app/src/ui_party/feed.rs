@@ -148,7 +148,14 @@ pub(crate) fn feed_party(
     let area_moved = fed.area.moved(here.area().map_or(u64::MAX, u64::from));
     let group_changed = group.is_changed();
     let index_changed = index.is_changed();
-    let look = pets::Lookup::new(&index, &stores, &names, types, tables.catalog());
+    let look = pets::Lookup::new(
+        &index,
+        &stores,
+        &names,
+        types,
+        tables.catalog(),
+        tables.study(),
+    );
     // Only the stores the merged view reads: a crowd's other stores change every frame. The
     // members' pets are the group's too, `partypetN` and `raidpetN` reading their descriptors.
     let stores_changed = self_q

@@ -258,6 +258,7 @@ fn drive_mouseover_tooltip(
             names: &names,
             catalog: tables.catalog(),
             object: &object,
+            study: tables.study(),
         };
         s.tooltip = crate::ui_unit::tooltip_facts::tooltip_facts(store, s.creature_type, &sources);
         Some((guid, s))

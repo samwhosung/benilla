@@ -954,6 +954,9 @@ pub(crate) struct SnapshotTables<'w> {
     creature_types: Option<Res<'w, crate::target::CreatureTypes>>,
     /// The object manager's index, which the tooltip's owner line finds the owner through.
     index: Option<Res<'w, crate::net::GuidIndex>>,
+    /// What the tooltip's studied-creature block reads.
+    study: Option<Res<'w, tooltip_facts::StudyTables>>,
+    families: Option<Res<'w, crate::ui_pet_stats::PetFamilyTables>>,
 }
 
 impl SnapshotTables<'_> {
@@ -966,6 +969,14 @@ impl SnapshotTables<'_> {
     /// `Spell.dbc`, absent without game data.
     pub(crate) fn catalog(&self) -> Option<&benilla_formats::SpellCatalog> {
         self.spells.as_deref().map(|s| &s.catalog)
+    }
+
+    /// The studied-creature block's tables.
+    pub(crate) fn study(&self) -> tooltip_facts::StudySources<'_> {
+        tooltip_facts::StudySources {
+            tables: self.study.as_deref(),
+            families: self.families.as_deref(),
+        }
     }
 
     /// The entity the object manager holds under `guid`.
@@ -1475,6 +1486,7 @@ fn feed_units(
             names: &names,
             catalog: tables.catalog(),
             object: &object,
+            study: tables.study(),
         },
     };
     let target = selection.target.zip(selection.guid).and_then(|(e, guid)| {
