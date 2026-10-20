@@ -629,4 +629,63 @@ mod emitters {
         assert!(lines.is_empty());
         assert!(execute(CLEANSE, 99, vec![(28, vec![row(ME)])]).is_empty());
     }
+
+    /// `0x5e7f90` tests no record itself: only the formatters handed the packet's spell
+    /// (`[ebp-0x14]`) return for one with none. Create item (`0x62d8d0`), feed pet (`0x62d800`) and
+    /// dismiss pet (`0x62e360`) take no spell, and interrupt (`0x626a10`) takes the row's
+    /// (`0x5e8268`); power drain, extra attacks and durability damage write nothing.
+    #[test]
+    fn an_unknown_spell_drops_only_the_arms_that_name_it() {
+        const UNKNOWN: u32 = 424_242;
+        let lines = execute(
+            UNKNOWN,
+            ME,
+            vec![
+                (24, vec![ExecuteLog::CreateItem { item_entry: 2589 }]),
+                (101, vec![ExecuteLog::FeedPet { item_entry: 2589 }]),
+                (102, vec![row(MOB)]),
+                (
+                    68,
+                    vec![ExecuteLog::InterruptCast {
+                        target: MOB,
+                        spell_id: CLEANSE,
+                    }],
+                ),
+                (
+                    8,
+                    vec![ExecuteLog::PowerDrain {
+                        target: MOB,
+                        amount: 40,
+                        power: 0,
+                        multiplier: 1.0,
+                    }],
+                ),
+                (
+                    19,
+                    vec![ExecuteLog::ExtraAttacks {
+                        target: ME,
+                        count: 1,
+                    }],
+                ),
+                (
+                    111,
+                    vec![ExecuteLog::DurabilityDamage {
+                        target: MOB,
+                        item_entry: -1,
+                        slot: -1,
+                    }],
+                ),
+                (28, vec![row(MOB)]),
+            ],
+        );
+        assert_eq!(
+            stems(&lines),
+            [
+                "TRADESKILL_LOG",
+                "FEEDPET_LOG",
+                "SPELLDISMISSPET",
+                "SPELLINTERRUPT"
+            ]
+        );
+    }
 }

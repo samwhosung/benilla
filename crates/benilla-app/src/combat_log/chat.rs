@@ -436,13 +436,10 @@ pub(super) fn spell_log_execute(
     use benilla_protocol::messages::ExecuteLog as E;
 
     let caster = ctx.classify(s.caster, stores);
-    let Some(spell) = ctx.spell_name(s.spell_id) else {
-        return;
-    };
-    let spell_fill = || Fills {
-        spell: spell.clone(),
-        ..Default::default()
-    };
+    // Only the arms that pass the packet's spell (`[ebp-0x14]`) to their formatter test it: power
+    // drain, extra attacks, open lock, durability damage and the cast line. Create item, feed pet
+    // and dismiss pet name no spell, and interrupt names the row's.
+    let spell = || ctx.spell_name(s.spell_id);
     let cast_line = |log: &mut ChatLog, target: Option<u64>| {
         spell_cast_line(
             log,
@@ -469,6 +466,7 @@ pub(super) fn spell_log_execute(
                     power,
                     multiplier,
                 } => {
+                    let Some(spell) = spell() else { continue };
                     let victim = ctx.classify(target, stores);
                     power_drain_line(
                         log,
@@ -488,6 +486,7 @@ pub(super) fn spell_log_execute(
                 // Effect 19 ADD_EXTRA_ATTACKS: no caster in the sentence (`0x62d9f0`), only the
                 // unit that gained the attacks.
                 E::ExtraAttacks { target, count } => {
+                    let Some(spell) = spell() else { continue };
                     let victim = ctx.classify(target, stores);
                     let Some(kind) = combat::spell_kind(victim, victim, false) else {
                         continue;
@@ -505,7 +504,7 @@ pub(super) fn spell_log_execute(
                         (target, victim),
                         (target, victim),
                         Fills {
-                            spell: spell.clone(),
+                            spell,
                             amount: i64::from(count),
                             ..Default::default()
                         },
@@ -566,6 +565,11 @@ pub(super) fn spell_log_execute(
                     item_entry,
                     slot,
                 } => {
+                    let Some(spell) = spell() else { continue };
+                    let spell_fill = || Fills {
+                        spell: spell.clone(),
+                        ..Default::default()
+                    };
                     let victim = ctx.classify(target, stores);
                     let Some(kind) = combat::spell_kind(caster, victim, false) else {
                         continue;
