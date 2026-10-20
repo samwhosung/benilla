@@ -5,7 +5,6 @@
 //! server, 6-byte client), bodies never, starting with `SMSG_AUTH_RESPONSE`.
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::sync::OnceLock;
 
 use anyhow::{anyhow, Result};
@@ -26,26 +25,44 @@ pub use writer::WorldWriter;
 /// The stock `mangosd` port, for probes that dial the world server without a realm list.
 pub const WORLD_PORT: u16 = 8085;
 
+/// One frame off the world socket: its opcode and body, the header decrypted when `decrypter` is
+/// set (`None` only for `SMSG_AUTH_CHALLENGE`). The size header counts the 2-byte opcode and the
+/// body, big-endian; the opcode is little-endian.
+pub(super) fn read_frame(
+    r: &mut impl Read,
+    mut decrypter: Option<&mut DecrypterHalf>,
+) -> Result<(u16, Vec<u8>)> {
+    let mut header = [0u8; 4];
+    read_header_bytes(r, &mut decrypter, &mut header)
+        .map_err(|e| anyhow!("reading world header: {e}"))?;
+    let size = usize::from(u16::from_be_bytes([header[0], header[1]]));
+    let opcode = u16::from_le_bytes([header[2], header[3]]);
+    let body_len = size.saturating_sub(2);
+    let mut body = vec![0u8; body_len];
+    r.read_exact(&mut body)
+        .map_err(|e| anyhow!("reading world body (opcode {opcode:#x}, {body_len} bytes): {e}"))?;
+    Ok((opcode, body))
+}
+
+/// Read `buf.len()` header bytes and decrypt them in place, the cipher running byte by byte.
+fn read_header_bytes(
+    r: &mut impl Read,
+    decrypter: &mut Option<&mut DecrypterHalf>,
+    buf: &mut [u8],
+) -> std::io::Result<()> {
+    r.read_exact(buf)?;
+    if let Some(d) = decrypter.as_deref_mut() {
+        d.decrypt(buf);
+    }
+    Ok(())
+}
+
 /// Read, decrypt and parse one packet; `decrypter` is `None` only for `SMSG_AUTH_CHALLENGE`.
 pub(super) fn recv_packet(
-    stream: &mut TcpStream,
+    stream: &mut impl Read,
     decrypter: Option<&mut DecrypterHalf>,
 ) -> Result<ServerPacket> {
-    let mut header = [0u8; 4];
-    stream
-        .read_exact(&mut header)
-        .map_err(|e| anyhow!("reading world header: {e}"))?;
-    if let Some(d) = decrypter {
-        d.decrypt(&mut header);
-    }
-    // size is big-endian and counts the opcode (2) but not the size field; opcode is little-endian.
-    let size = u16::from_be_bytes([header[0], header[1]]);
-    let opcode = u16::from_le_bytes([header[2], header[3]]);
-    let body_len = size.saturating_sub(2) as usize;
-    let mut body = vec![0u8; body_len];
-    stream
-        .read_exact(&mut body)
-        .map_err(|e| anyhow!("reading world body (opcode {opcode:#x}, {body_len} bytes): {e}"))?;
+    let (opcode, body) = read_frame(stream, decrypter)?;
     messages::parse_server(opcode, &body).map_err(|e| {
         Unparsed {
             opcode,
@@ -85,27 +102,33 @@ pub fn observe_sends(observer: SendObserver) {
     let _ = SEND_OBSERVER.set(observer);
 }
 
-/// Write one client packet: a 6-byte header, its size counting opcode and body, then the body.
-/// The sole write path of the world socket, so the one place [`observe_sends`] reports from.
+/// A client header: the size, counting the 4-byte opcode and the body, big-endian, then the
+/// opcode widened to four bytes little-endian. Returns the header and its length.
+fn client_header(opcode: u16, body_len: usize) -> ([u8; 7], usize) {
+    let size = (body_len + 4) as u16;
+    let mut header = [0u8; 7];
+    header[..2].copy_from_slice(&size.to_be_bytes());
+    header[2..6].copy_from_slice(&u32::from(opcode).to_le_bytes());
+    (header, 6)
+}
+
+/// Write one client packet: its header ([`client_header`]), encrypted when `encrypter` is set,
+/// then the body. The sole write path of the world socket, so the one place [`observe_sends`]
+/// reports from.
 pub(super) fn send_packet(
-    stream: &mut TcpStream,
+    stream: &mut impl Write,
     encrypter: Option<&mut EncrypterHalf>,
     opcode: u16,
     body: &[u8],
 ) -> Result<()> {
-    let size = (body.len() + 4) as u16;
-    let mut header = {
-        let s = size.to_be_bytes();
-        // The client header's opcode field is 4 bytes wide; widen the 16-bit opcode to fill it.
-        let o = u32::from(opcode).to_le_bytes();
-        [s[0], s[1], o[0], o[1], o[2], o[3]]
-    };
+    let (mut header, header_len) = client_header(opcode, body.len());
+    let header = &mut header[..header_len];
     if let Some(e) = encrypter {
-        e.encrypt(&mut header);
+        e.encrypt(header);
     }
     // One write, not two: header and body leave as one segment.
     let mut packet = Vec::with_capacity(header.len() + body.len());
-    packet.extend_from_slice(&header);
+    packet.extend_from_slice(header);
     packet.extend_from_slice(body);
     stream
         .write_all(&packet)

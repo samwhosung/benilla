@@ -1,4 +1,3 @@
-use std::io::Read;
 use std::net::TcpStream;
 
 use anyhow::{anyhow, Result};
@@ -6,7 +5,7 @@ use benilla_srp::vanilla_header::DecrypterHalf;
 
 use crate::messages::{self, ServerPacket};
 
-use super::recv_packet;
+use super::{read_frame, recv_packet};
 
 /// The read half of a split [`WorldSession`](super::WorldSession): cloned socket and decrypter,
 /// and what the connection learned before the split, for
@@ -26,18 +25,8 @@ impl WorldReader {
     /// Read one packet and decode it into a [`crate::Poll`]; errors only when the socket fails. The
     /// whole body is read before parsing, so an unparseable packet is skipped, the stream aligned.
     pub fn poll(&mut self) -> Result<crate::Poll> {
-        let mut header = [0u8; 4];
-        if let Err(e) = self.stream.read_exact(&mut header) {
-            return Err(anyhow!("world stream closed: {e}"));
-        }
-        self.decrypter.decrypt(&mut header);
-        let size = u16::from_be_bytes([header[0], header[1]]);
-        let opcode = u16::from_le_bytes([header[2], header[3]]);
-        let body_len = size.saturating_sub(2) as usize;
-        let mut body = vec![0u8; body_len];
-        if let Err(e) = self.stream.read_exact(&mut body) {
-            return Err(anyhow!("world stream closed: {e}"));
-        }
+        let (opcode, body) = read_frame(&mut self.stream, Some(&mut self.decrypter))
+            .map_err(|e| anyhow!("world stream closed: {e}"))?;
         match messages::parse_server_with_tail(opcode, &body) {
             Ok((packet, tail)) => Ok(crate::Poll::Events {
                 opcode,
@@ -48,8 +37,9 @@ impl WorldReader {
             Err(e) => Ok(crate::Poll::Skipped {
                 opcode,
                 reason: format!(
-                    "opcode {opcode:#06x} ({}): {e} [{body_len}B: {}]",
+                    "opcode {opcode:#06x} ({}): {e} [{}B: {}]",
                     messages::opcode_name(opcode).unwrap_or("?"),
+                    body.len(),
                     hex_preview(&body, 64)
                 ),
                 body,
