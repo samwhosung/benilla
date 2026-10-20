@@ -6,7 +6,7 @@
 //! spell's `SPELL_ACTIVE` ([`super::reactive`]). `IsCurrentAction` reads the cast state
 //! live, and its pair (`0x4b3250`) is signalled where the cast changes ([`crate::ui_cast`]).
 //! Usability is `IsSpellUsableNow 0x6e3d60` ([`crate::spell::usable`]), auto-repeat the `0xceac30`
-//! key, and range the squared distance against `GetMinMaxRange 0x6e3480`.
+//! key, and range the pre-check `0x6e4440` on the selection ([`crate::spell::range_check`]).
 
 use crate::ui_items::stack_counts;
 use std::collections::HashMap;
@@ -22,7 +22,6 @@ use crate::creature_anim::Engaged;
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, SelfPlayer};
 use crate::spell::Cooldowns;
-use crate::target::Selection;
 
 use super::{PlayerActions, Spells};
 use crate::query_cache::Ask;
@@ -120,7 +119,8 @@ pub(super) fn feed_action_state(
         Query<(), Added<SelfPlayer>>,
     ),
     self_q: Query<(&ObjectStore, &Transform, Has<Engaged>), With<SelfPlayer>>,
-    selection: Res<Selection>,
+    // The selection and the relations and positions `IsActionInRange`'s pre-check reads.
+    targeting: crate::spell::cast_target::CastTargeting,
     // One param for the guid index and the item store, for the same ceiling.
     objects: crate::net::Objects,
     units: Query<(&ObjectStore, &Transform), Without<SelfPlayer>>,
@@ -161,18 +161,12 @@ pub(super) fn feed_action_state(
         .unwrap_or_default();
     let engaged = me.is_some_and(|(_, _, e)| e);
     let caster = range_units.caster();
-    let self_pos = me.map(|(_, t, _)| t.translation);
-    // The target's reach, motion and squared distance (the reference tests dx²+dy²+dz²,
-    // `0x6e47b0`).
-    let target_entity = selection.guid.and_then(|g| objects.entity(g));
-    let target = target_entity.and_then(|e| units.get(e).ok());
-    let target_unit = target_entity
-        .filter(|_| target.is_some())
-        .and_then(|e| range_units.unit(e));
-    let dist_sq = match (self_pos, target) {
-        (Some(a), Some((_, t))) => Some(a.distance_squared(t.translation)),
-        _ => None,
-    };
+    let selection = &targeting.selection;
+    let target = selection
+        .guid
+        .and_then(|g| objects.entity(g))
+        .and_then(|e| units.get(e).ok());
+    let cast_ctx = targeting.context();
 
     let mut fresh: HashMap<u32, ActionState> = HashMap::new();
     for (&slot, button) in &actions.buttons {
@@ -243,22 +237,13 @@ pub(super) fn feed_action_state(
                 st.has_range = spell_mods
                     .min_max_range(d, row, caster, RangeTargets::default())
                     .is_some_and(|(min, max)| min.abs() > f32::EPSILON || max.abs() > f32::EPSILON);
-                // `IsActionInRange 0x4e56f0` runs `CanTargetUnit 0x6e4440`, which binds the selected
-                // target, then `IsTargetInRange 0x6e47b0`, which hands `GetMinMaxRange` that target
-                // (`0x6e47ca`): its reach pads a ranged row, and its motion with the caster's earns
-                // the moving bonus. Nil without a target.
-                st.in_range = match dist_sq {
-                    Some(d2) if st.has_range => {
-                        let targets = RangeTargets {
-                            target: target_unit,
-                            attack_target: None,
-                        };
-                        spell_mods
-                            .min_max_range(d, row, caster, targets)
-                            .map(|(min, max)| d2 >= min * min && d2 <= max * max)
-                    }
-                    _ => None,
-                };
+                // `IsActionInRange 0x4e56f0`: nil with no player (`0x4e572b`), else the pre-check
+                // `0x6e4440` on the selection, whose compare `0x6e47b0` hands `GetMinMaxRange` that
+                // target (`0x6e47ca`): its reach pads a ranged row, and its motion with the caster's
+                // earns the moving bonus.
+                st.in_range = me.and_then(|_| {
+                    crate::spell::range_check::action_in_range(d, &cast_ctx, row, spell_mods)
+                });
                 let info = cooldowns.info(button.action, 0, Some(d), now);
                 st.cooldown = info.ui_triple(anchor, ui_now);
                 if st.cooldown.is_some() && trace_cd {

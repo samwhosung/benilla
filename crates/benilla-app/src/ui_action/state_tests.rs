@@ -1,6 +1,7 @@
 //! [`super::feed_action_state`] through a real Lua VM, and its helpers.
 
 use super::*;
+use crate::target::Selection;
 use benilla_formats::SpellDisplay;
 
 /// A player (`OBJECT_FIELD_TYPE` 0x19) under its own control (`UNIT_FIELD_FLAGS` 0x8), alive, with
