@@ -193,9 +193,9 @@ fn toggle_refused(fields: Option<&ObjectFields>, gates: ToggleGates) -> bool {
 }
 
 /// The stand state's local apply, the reference's `0x6127b0`, reached from `SetStandState` after
-/// its send and from `SMSG_STANDSTATE_UPDATE` (`0x603e50`); it sends nothing itself
-/// ([`local_apply`]). Not built: movement re-run on a stand (`0x5f07ba`) and follow-camera
-/// re-acquire each call (`0x48ec90`).
+/// its send and from `SMSG_STANDSTATE_UPDATE` (`0x603e50`), doing what [`local_apply`] decides.
+/// Not built: the input resume on a stand (`0x5f07ba`) and the follow-camera re-acquire each call
+/// (`0x48ec90`).
 fn apply_locally(
     player: &mut Player,
     s: u8,

@@ -81,6 +81,7 @@ pub(crate) struct SheathRequest {
     /// The requested state: 0 stowed, 1 melee drawn, 2 ranged drawn.
     pub(crate) state: u8,
     /// Play the draw/stow ceremony (the manual toggle's `bInstant = 0`); everything else snaps.
+    /// The toggle's model tests ([`model_refuses_toggle`]) meet such a request first.
     pub(crate) ceremony: bool,
 }
 
