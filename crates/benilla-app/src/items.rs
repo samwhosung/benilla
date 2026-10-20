@@ -647,9 +647,10 @@ pub(crate) fn test_spawn_object(world: &mut World, guid: u64, fields: ObjectFiel
     e
 }
 
-/// `EQUIPMENT_SLOT_MAINHAND` / `_OFFHAND` (vmangos `EquipmentSlots`).
+/// `EQUIPMENT_SLOT_MAINHAND` / `_OFFHAND` / `_RANGED` (vmangos `EquipmentSlots`).
 pub(crate) const EQUIPMENT_SLOT_MAINHAND: u8 = 15;
 pub(crate) const EQUIPMENT_SLOT_OFFHAND: u8 = 16;
+pub(crate) const EQUIPMENT_SLOT_RANGED: u8 = 17;
 
 /// Whether the disarm flag is up (`UNIT_FIELD_FLAGS & UNIT_FLAG_DISARMED`), which hides one hand
 /// from the equipped-item search.

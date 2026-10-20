@@ -127,6 +127,14 @@ impl ObjectFields {
             .unwrap_or(0)
             & 0xffff
     }
+    /// The high half of slot `i`'s `PLAYER_VISIBLE_ITEM_<slot>_PROPERTIES` dword (block `+0x2a`):
+    /// `GetVirtualItem 0x5ec240` takes bit 0 set as no weapon in the hand (`0x5ec2ee`).
+    pub fn player_visible_item_flags(&self, i: u8) -> u16 {
+        (i < 19)
+            .then(|| self.get_u32(FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR + 10 + 12 * u16::from(i)))
+            .flatten()
+            .map_or(0, |v| (v >> 16) as u16)
+    }
     /// `PLAYER_FIELD_INV_SLOT_HEAD + 2i`: our equipment (0-18) and equipped-bag (19-22) guids.
     pub fn player_inv_slot(&self, i: u8) -> Option<u64> {
         (i < 23).then(|| self.get_guid(FIELD_PLAYER_INV_SLOT_HEAD + 2 * u16::from(i)))?

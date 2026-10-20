@@ -3,11 +3,12 @@
 //!
 //! The rungs: the auto-repeat toggle-off (the reference's action-button handler, ahead of TryCast;
 //! its order against the profession intercept is unobservable), the profession intercept, dead or a
-//! ghost, the targeting abort, in-flight, reagents and totems, the equipped item and its ammo, combo
-//! points, the attack pick, target binding and range, then the validator `0x6094f0` (not-ready and
-//! GCD, power, then [`validator::caster_refusal`]'s rungs), the deferred cast-arm refusal and the
-//! targeting cursor. The commit tail follows: ranged stance, auto-repeat arm, the send, the auto-attack start,
-//! the GCD. A refusal is local and pre-commit: no packet, no GCD, no pending arm, only the red line.
+//! ghost, the loot window, the targeting abort, in-flight, reagents and totems, the equipped item
+//! and its ammo, the ranged weapon, combo points, the attack pick, target binding and range, then
+//! the validator `0x6094f0` (not-ready and GCD, power, then [`validator::caster_refusal`]'s rungs),
+//! the deferred cast-arm refusal and the targeting cursor. The commit tail follows: ranged stance,
+//! auto-repeat arm, the send, the auto-attack start, the GCD. A refusal is local and pre-commit: no
+//! packet, no GCD, no pending arm, only the red line.
 //!
 //! An item use takes the same ladder: `CGItem::Use 0x5d8d00` calls `0x6e5a90`, whose body is
 //! `call 0x6e4b60` with the item as TryCast's third argument (read at `6e4d76` and `6e4f33`). Three
@@ -624,6 +625,25 @@ fn send_spell_cast(
                 debug!("ui_action: cast {spell_id} refused locally — no ammo of type {ammo_type}");
                 refuse!(CastFail::local_arg(spell_id, 0x2f, ammo_type));
             }
+        }
+    }
+    // The ranged rung (`0x6e4e13`-`0x6e4e3e`): `Attributes & 0x2` (`SPELL_ATTR_RANGED`) with no
+    // ranged weapon, `GetVirtualItem 0x5ec240` (slot 38, hand 2, `raw` 0) finding no visible
+    // entry in slot 17 (`0x5ec300`) or one whose flag half has bit 0 (`0x5ec2ee`), refuses `0x18`
+    // `SPELL_FAILED_EQUIPPED_ITEM`.
+    if let (Some(d), Some(store)) = (def, ctx.rel.self_store) {
+        let ranged_weapon = store
+            .0
+            .player_visible_item_entry(crate::items::EQUIPMENT_SLOT_RANGED)
+            .is_some()
+            && store
+                .0
+                .player_visible_item_flags(crate::items::EQUIPMENT_SLOT_RANGED)
+                & 0x1
+                == 0;
+        if d.ranged_slot() && !ranged_weapon {
+            debug!("ui_action: cast {spell_id} refused locally — no ranged weapon (0x18)");
+            refuse!(CastFail::local(spell_id, 0x18));
         }
     }
     // The finisher rung (`6e4e50`–`6e4ecd`), above the attack pick: a finishing move
