@@ -22,7 +22,7 @@ use mlua::Lua;
 
 use super::{ActionUse, Model, SelectionRequest, UiScript};
 
-/// One queued call, in the reference's terms.
+/// One script call a verb hands the host, in the reference's terms.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ScriptCall {
     /// `TargetUnit`, `AssistUnit`, `AssistByName` and `TargetLastEnemy`.

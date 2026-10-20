@@ -981,8 +981,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // shows `0x127` ERR_UNIT_NOT_FOUND, or `0xb8` ERR_GENERIC_NO_TARGET for an empty name
     // (`0x489dbd`, `0x489dcf`), from the app's commit. The pick is shown as `"target"` at once,
     // from the app's candidates (`by_name`), so `UnitName("target")` on the next line names it,
-    // unless it is not selectable and `SetSelection` returns (`0x4935ee`); the queued call still
-    // commits it.
+    // unless it is not selectable and `SetSelection` returns (`0x4935ee`); the call still commits
+    // it.
     g.set(
         "TargetByName",
         lua.create_function(|lua, (name, exact): (Value, Option<Value>)| {
