@@ -164,8 +164,10 @@ impl super::Model {
 }
 
 /// How deep calls made while applying a call may nest: a macro whose line presses a macro, and so
-/// on. Past it (a macro that presses itself) the verb raises an error, as the reference's
-/// recursion ends in Lua's own stack overflow, so a frame always ends.
+/// on. A call made at the ninth level (a macro that presses itself) is not applied: its verb
+/// raises [`TOO_DEEP`] in the Lua that made it, which reports it as that script's error, and the
+/// eight calls under it stand applied. So such a chain always ends inside its frame. The
+/// reference's own bound on it is not read.
 pub(crate) const MAX_NESTING: u8 = 8;
 
 /// What a verb raises when no host is lent: an entry ran Lua without lending one.
