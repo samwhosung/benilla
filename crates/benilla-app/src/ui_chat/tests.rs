@@ -3658,7 +3658,7 @@ fn unit_combat_fires_at_its_place_in_the_drain() {
         log.push_xp_gain(0, 10, 10, 1.0);
         log.push_unit_combat(flash(7, "PARRY"));
         log.push_unit_combat(flash(8, "MISS"));
-        log.push_signal("PLAYER_LEAVE_COMBAT");
+        log.push_combat_edge(false);
     }
     feed.drain();
     let order = feed.script().eval::<Vec<String>>("return Order").unwrap();

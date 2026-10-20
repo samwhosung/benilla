@@ -45,10 +45,9 @@ pub(super) fn load_emote_texts(mut commands: Commands, assets: Option<Res<WorldA
 enum Pending {
     /// A `UNIT_COMBAT`, fired at its place among the lines its handler raised beside it.
     UnitCombat(crate::ui_unit::UnitCombatFeedback),
-    /// An argless event a packet handler signals among its lines (`FrameScript_SignalEvent
-    /// 0x703e50`), fired at its place: the attack handler's `PLAYER_ENTER_COMBAT` and
-    /// `PLAYER_LEAVE_COMBAT` (`0x6256ff`, `0x625778`).
-    Signal(&'static str),
+    /// The attack handler's `PLAYER_ENTER_COMBAT` or `PLAYER_LEAVE_COMBAT` (`0x6256ff`,
+    /// `0x625778`), argless, fired at its place among the lines its packet raised.
+    CombatEdge { entered: bool },
     /// A decoded `SMSG_MESSAGECHAT`; the player types wait on the sender's name.
     Wire { msg: ChatMessage, tries: u16 },
     /// A channel notice with guids to name (`b_guid` is a kick's or ban's actor, 0 when absent).
@@ -340,10 +339,11 @@ impl ChatLog {
         self.q().pending.push(Pending::UnitCombat(ev));
     }
 
-    /// Queue an argless `event` behind what is already queued, so it fires in the order its
-    /// packet handler signalled it against the lines and `UNIT_COMBAT`s around it.
-    pub(crate) fn push_signal(&self, event: &'static str) {
-        self.q().pending.push(Pending::Signal(event));
+    /// Queue the active player's combat edge, `entered` for `PLAYER_ENTER_COMBAT`, behind what is
+    /// already queued, so it fires in the order its packet handler signalled it against the lines
+    /// and `UNIT_COMBAT`s around it.
+    pub(crate) fn push_combat_edge(&self, entered: bool) {
+        self.q().pending.push(Pending::CombatEdge { entered });
     }
 
     /// Write a combat-log line no name waits on where its formatter runs: `AddCombatLogLine
@@ -437,7 +437,8 @@ impl ChatLog {
                 Pending::XpGain { .. } => "xp",
                 Pending::XpLoss { .. } => "xp loss",
                 Pending::UnitCombat(_) => "unit combat",
-                Pending::Signal(event) => event,
+                Pending::CombatEdge { entered: true } => "PLAYER_ENTER_COMBAT",
+                Pending::CombatEdge { entered: false } => "PLAYER_LEAVE_COMBAT",
                 Pending::HonorGain { .. } => "honor",
                 Pending::TextEmote { .. } => "emote",
                 Pending::Discovery { .. } => "discovery",
@@ -1020,7 +1021,14 @@ pub(super) fn feed_chat(
                         is_target,
                     );
                 }
-                Pending::Signal(event) => script.fire_event(event, vec![]),
+                Pending::CombatEdge { entered } => {
+                    let combat_edge = if entered {
+                        "PLAYER_ENTER_COMBAT"
+                    } else {
+                        "PLAYER_LEAVE_COMBAT"
+                    };
+                    script.fire_event(combat_edge, vec![]);
+                }
                 Pending::Tee { combat, line } => windows.logs.record(combat, &line),
                 Pending::Event(mut event) => {
                     deliver(script, &mut windows, &mut channels, &mut event);

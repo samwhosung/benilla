@@ -4,7 +4,7 @@
 //! (`net_handler_ahead`): `0x62578d` flushes and dispatches the victim's feedback before it
 //! writes the packet's line, last (`0x625a2c`, `0x625a78`). The attack start and stop signal the
 //! active player's combat events in their packet, queued among the lines and feedback around
-//! them ([`crate::ui_chat::ChatLog::push_signal`]).
+//! them ([`crate::ui_chat::ChatLog::push_combat_edge`]).
 
 use benilla_protocol::messages::{AttackSwingError, AttackerState, EnvironmentalDamageLog};
 use benilla_protocol::{SessionEvent, SessionEventKind};
@@ -193,7 +193,7 @@ fn attack_start(
         // A held attacker that is the active player (`0x6256f1` → `0x5fa6d0`) signals
         // `PLAYER_ENTER_COMBAT` inside the packet (`0x6256ff`).
         if self_guid.0 == Some(attacker) {
-            log.push_signal("PLAYER_ENTER_COMBAT");
+            log.push_combat_edge(true);
         }
     }
 }
@@ -215,7 +215,7 @@ fn attack_stop(
         // After `StopAttack`'s swing flush (`0x625763` → `0x624e40`), the active player's
         // `PLAYER_LEAVE_COMBAT` (`0x62576a` → `0x5fa6d0`, `0x625778`).
         if self_guid.0 == Some(attacker) {
-            log.push_signal("PLAYER_LEAVE_COMBAT");
+            log.push_combat_edge(false);
         }
     }
 }
