@@ -246,7 +246,9 @@ pub(super) fn spell_insta_kill_log(
 }
 
 /// `SMSG_PROCRESIST` ("%s resists %s's %s.") and `SMSG_SPELLORDAMAGE_IMMUNE` ("%s is immune to
-/// %s's %s."), both worded target first and typed off the (caster, target) pair.
+/// %s's %s."), both worded target first and typed off the (caster, target) pair. When the target,
+/// the second unit, is you, each line raises its word with the spell's name: `PROC_RESISTED`
+/// (`0x628b8a`-`0x628b96`) or `SPELL_IMMUNE` (`0x62d3ab`-`0x62d3b9`).
 ///
 /// `IMMUNESPELL`'s `log_format` byte is the periodic flag: `0x62d25f` in `0x62d240` gates that
 /// formatter alone on `CombatLogPeriodicSpells` when the byte is set; `PROCRESIST` is ungated.
@@ -273,22 +275,25 @@ pub(super) fn spell_outcome_log(
     let Some(kind) = combat::spell_kind(caster, target, buff) else {
         return;
     };
-    queue(
+    let (family, word) = if immune {
+        (combat::IMMUNESPELL, "SPELL_IMMUNE")
+    } else {
+        (combat::PROCRESIST, "PROC_RESISTED")
+    };
+    let word = to_me(target, LineWord::with(word, &spell));
+    queue_worded(
         log,
         ctx,
         poses,
         kind,
-        if immune {
-            combat::IMMUNESPELL
-        } else {
-            combat::PROCRESIST
-        },
+        family,
         (s.caster, caster),
         (s.target, target),
         Fills {
             spell,
             ..Default::default()
         },
+        word,
     );
 }
 
