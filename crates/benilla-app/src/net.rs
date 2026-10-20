@@ -25,6 +25,8 @@ pub(crate) mod io;
 pub(crate) mod motion;
 mod objects;
 pub(crate) use objects::tear_down;
+#[cfg(test)]
+pub(crate) use objects::wire;
 mod session;
 mod world;
 

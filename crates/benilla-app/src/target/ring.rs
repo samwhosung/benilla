@@ -820,7 +820,7 @@ mod tests {
                 ))
                 .id();
             world.resource_mut::<GuidIndex>().0.insert(ME, me);
-            crate::net::handlers::dispatch(world, vec![create(MOB)]);
+            crate::net::handlers::dispatch(world, crate::net::wire(vec![create(MOB)]));
             let mob = world.resource::<GuidIndex>().0[&MOB];
             *world.resource_mut::<Selection>() = Selection {
                 target: Some(mob),
@@ -844,7 +844,7 @@ mod tests {
         fn selection_cleared_at(teardown: SessionEvent) {
             let (mut app, mob, rx) = client_with_selected_mob();
             let world = app.world_mut();
-            crate::net::handlers::dispatch(world, vec![teardown]);
+            crate::net::handlers::dispatch(world, crate::net::wire(vec![teardown]));
             assert!(
                 world.get_entity(mob).is_ok(),
                 "the model outlives the object"
@@ -900,7 +900,10 @@ mod tests {
                 Some(MOB),
                 "control: the live mob is acquired"
             );
-            crate::net::handlers::dispatch(world, vec![SessionEvent::ObjectsRemoved(vec![MOB])]);
+            crate::net::handlers::dispatch(
+                world,
+                crate::net::wire(vec![SessionEvent::ObjectsRemoved(vec![MOB])]),
+            );
             assert_eq!(acquire(world), None, "the fading model is not a candidate");
         }
 
@@ -912,7 +915,7 @@ mod tests {
             let world = app.world_mut();
             crate::net::handlers::dispatch(
                 world,
-                vec![SessionEvent::ObjectDestroyed(MOB), create(MOB)],
+                crate::net::wire(vec![SessionEvent::ObjectDestroyed(MOB), create(MOB)]),
             );
             let fresh = world.resource::<GuidIndex>().0[&MOB];
             assert_ne!(fresh, old, "a fresh entity for the fresh object");

@@ -68,6 +68,8 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::ObjectValues, on_object_values)
         .net_handler(K::ObjectDestroyed, on_object_destroyed)
         .net_handler(K::ObjectsRemoved, on_objects_removed)
+        .net_handler(K::ObjectsNear, on_objects_near)
+        .net_handler(K::ObjectUpdateEnd, on_update_end)
         .net_handler(K::MonsterMove, on_monster_move)
         .net_handler(K::GameObjectInfo, on_gameobject_info)
         .net_handler(K::GameObjectUnknown, on_gameobject_unknown)
@@ -519,6 +521,12 @@ fn on_objects_removed(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<No
         objects_removed(guids, &mut sc.commands, &mut sc.index);
     }
 }
+
+/// A near-objects block names objects already held.
+fn on_objects_near(In(_): In<SessionEvent>) {}
+
+/// The end of an update packet.
+fn on_update_end(In(_): In<SessionEvent>) {}
 
 fn on_monster_move(In(ev): In<SessionEvent>, mut sc: Scene) {
     if let SessionEvent::MonsterMove {
@@ -1353,6 +1361,36 @@ fn speed_changed(
     }
 }
 
+/// One update packet's events, as the protocol decodes them: its blocks, then its end.
+#[cfg(test)]
+pub(crate) fn packet(blocks: impl IntoIterator<Item = SessionEvent>) -> Vec<SessionEvent> {
+    blocks
+        .into_iter()
+        .chain([SessionEvent::ObjectUpdateEnd])
+        .collect()
+}
+
+/// `events` as the wire brings them one packet each: every update block closed as its own packet,
+/// any other event as it is.
+#[cfg(test)]
+pub(crate) fn wire(events: impl IntoIterator<Item = SessionEvent>) -> Vec<SessionEvent> {
+    events
+        .into_iter()
+        .flat_map(|ev| {
+            let block = matches!(
+                ev,
+                SessionEvent::ObjectCreate { .. }
+                    | SessionEvent::ItemCreate { .. }
+                    | SessionEvent::ObjectValues { .. }
+                    | SessionEvent::ObjectMove { .. }
+                    | SessionEvent::ObjectsRemoved(_)
+                    | SessionEvent::ObjectsNear(_)
+            );
+            std::iter::once(ev).chain(block.then_some(SessionEvent::ObjectUpdateEnd))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod update_tests;
 
@@ -1405,7 +1443,7 @@ mod tests {
         let pack_1 = FIELD_PLAYER_INV_SLOT_HEAD + 2 * 23;
         super::super::handlers::dispatch(
             world,
-            vec![
+            super::wire(vec![
                 create(POTIONS, POTION, ME),
                 create(SCROLL, SCROLL_ID, ME),
                 create(THEIRS, POTION, 0x8),
@@ -1434,7 +1472,7 @@ mod tests {
                 },
                 SessionEvent::ObjectDestroyed(POTIONS),
                 SessionEvent::ObjectDestroyed(THEIRS),
-            ],
+            ]),
         );
         let notices: Vec<ItemNotice> = world
             .resource_mut::<Messages<ItemNotice>>()
@@ -1485,7 +1523,10 @@ mod tests {
             entry,
             info: ok.then(|| Box::new(crate::items::test_template("Thing"))),
         };
-        super::super::handlers::dispatch(world, vec![answer(4306, true), answer(7777, false)]);
+        super::super::handlers::dispatch(
+            world,
+            super::wire(vec![answer(4306, true), answer(7777, false)]),
+        );
         let notices: Vec<ItemNotice> = world
             .resource_mut::<Messages<ItemNotice>>()
             .drain()
@@ -1499,14 +1540,17 @@ mod tests {
             "one per call that asked, none for the refusal"
         );
         // The callbacks are spent: a second answer, or the refused entry's later one, runs none.
-        super::super::handlers::dispatch(world, vec![answer(4306, true), answer(7777, true)]);
+        super::super::handlers::dispatch(
+            world,
+            super::wire(vec![answer(4306, true), answer(7777, true)]),
+        );
         assert!(world
             .resource_mut::<Messages<ItemNotice>>()
             .drain()
             .next()
             .is_none());
         // The one still waiting runs on its own answer.
-        super::super::handlers::dispatch(world, vec![answer(2592, true)]);
+        super::super::handlers::dispatch(world, super::wire(vec![answer(2592, true)]));
         assert_eq!(
             world
                 .resource_mut::<Messages<ItemNotice>>()
@@ -1563,10 +1607,10 @@ mod tests {
         };
         super::super::handlers::dispatch(
             world,
-            vec![
+            super::wire(vec![
                 create(ME, EntityKind::Player, &[(STAT0, 20), (XP, 10)]),
                 create(MOB, EntityKind::Unit, &[(STAT0, 5)]),
-            ],
+            ]),
         );
         assert_eq!(
             drain(world),
@@ -1575,7 +1619,7 @@ mod tests {
         );
         super::super::handlers::dispatch(
             world,
-            vec![
+            super::wire(vec![
                 values(ME, &[(XP, 30)]),
                 values(MOB, &[(STAT0, 6), (STAT0 + 1, 2)]),
                 // Two blocks on one watch: two runs.
@@ -1583,7 +1627,7 @@ mod tests {
                 values(ME, &[(STAT0, 21), (XP, 40)]),
                 // A re-create compares like a values block.
                 create(ME, EntityKind::Player, &[(STAT0, 21), (XP, 50)]),
-            ],
+            ]),
         );
         assert_eq!(
             drain(world),
@@ -1650,7 +1694,7 @@ mod tests {
                 .collect()
         };
         let mate = [(HEALTH, 100), (MAXHEALTH, 200), (LEVEL, 60)];
-        super::super::handlers::dispatch(world, vec![create(MATE, &mate)]);
+        super::super::handlers::dispatch(world, super::wire(vec![create(MATE, &mate)]));
         let signal = |id| FieldNotice::Signal { guid: MATE, id };
         assert_eq!(
             drain(world),
@@ -1658,13 +1702,13 @@ mod tests {
             "the guild tag, then the maximum differs"
         );
         // Written back nothing, so a re-create of the same descriptor signals the same again.
-        super::super::handlers::dispatch(world, vec![create(MATE, &mate)]);
+        super::super::handlers::dispatch(world, super::wire(vec![create(MATE, &mate)]));
         assert_eq!(drain(world), [signal(22)]);
         assert_eq!(
             world.resource::<crate::ui_party::GroupState>().stats[&MATE],
             record
         );
-        super::super::handlers::dispatch(world, vec![create(ME, &mate)]);
+        super::super::handlers::dispatch(world, super::wire(vec![create(ME, &mate)]));
         assert_eq!(
             drain(world),
             crate::field_watch::guild_tag(ME),
@@ -1691,9 +1735,8 @@ mod tests {
             .insert_template(118, Some(crate::items::test_template("Potion")));
         let creates = items
             .iter()
-            .map(|&(guid, entry, container)| watched_item(guid, entry, container))
-            .collect();
-        super::super::handlers::dispatch(world, creates);
+            .map(|&(guid, entry, container)| watched_item(guid, entry, container));
+        super::super::handlers::dispatch(world, super::wire(creates));
         drain_notices(world);
         app
     }
@@ -1754,7 +1797,7 @@ mod tests {
                 .collect()
         };
         let dispatch = |app: &mut App, ev: SessionEvent| {
-            super::super::handlers::dispatch(app.world_mut(), vec![ev]);
+            super::super::handlers::dispatch(app.world_mut(), super::wire(vec![ev]));
         };
         dispatch(&mut app, watched_item(A, 955, false));
         assert_eq!(asked(&rx), [955], "the create asks");
@@ -1798,7 +1841,7 @@ mod tests {
             entry,
             info: known.then(|| Box::new(crate::items::test_template("Scroll"))),
         };
-        super::super::handlers::dispatch(world, vec![to(955), answer(955, true)]);
+        super::super::handlers::dispatch(world, super::wire(vec![to(955), answer(955, true)]));
         assert_eq!(
             drain_notices(world),
             [
@@ -1814,7 +1857,7 @@ mod tests {
                 },
             ]
         );
-        super::super::handlers::dispatch(world, vec![to(956), answer(956, false)]);
+        super::super::handlers::dispatch(world, super::wire(vec![to(956), answer(956, false)]));
         assert_eq!(
             drain_notices(world),
             [ItemNotice::Entry {
@@ -1848,7 +1891,7 @@ mod tests {
 
         super::super::handlers::dispatch(
             world,
-            vec![SessionEvent::GameObjectUnknown { entry: ENTRY }],
+            super::wire(vec![SessionEvent::GameObjectUnknown { entry: ENTRY }]),
         );
         let templates = world.resource::<GameObjectTemplates>();
         assert!(
@@ -1912,14 +1955,14 @@ mod tests {
             |counter: u64| counter | (u64::from(ENTRY) << 24) | (u64::from(guid::HIGH_UNIT) << 48);
         let (a, b) = (unit(1), unit(2));
 
-        super::super::handlers::dispatch(app.world_mut(), vec![create(a)]);
+        super::super::handlers::dispatch(app.world_mut(), super::wire(vec![create(a)]));
         assert_eq!(creature_asks(&rx), 1, "the create asks");
         app.world_mut()
             .resource_mut::<NameCache>()
             .insert_creature(ENTRY, None);
         assert_eq!(creature_asks(&rx), 0, "the refusal itself asks nothing");
 
-        super::super::handlers::dispatch(app.world_mut(), vec![create(b)]);
+        super::super::handlers::dispatch(app.world_mut(), super::wire(vec![create(b)]));
         assert_eq!(creature_asks(&rx), 1, "a new unit of it asks again");
     }
 
@@ -1935,7 +1978,7 @@ mod tests {
         let mob = (u64::from(OLD) << 24) | (u64::from(guid::HIGH_UNIT) << 48) | 1;
         super::super::handlers::dispatch(
             app.world_mut(),
-            vec![SessionEvent::ObjectCreate {
+            super::wire(vec![SessionEvent::ObjectCreate {
                 guid: mob,
                 kind: EntityKind::Unit,
                 display_id: None,
@@ -1949,15 +1992,15 @@ mod tests {
                 spline: None,
                 fields: ObjectFields::from_pairs(&[(3, OLD)])
                     .into_created(benilla_protocol::messages::ObjectType::Unit),
-            }],
+            }]),
         );
         let _ = rx.try_iter().count();
         super::super::handlers::dispatch(
             app.world_mut(),
-            vec![SessionEvent::ObjectValues {
+            super::wire(vec![SessionEvent::ObjectValues {
                 guid: mob,
                 fields: ObjectFields::from_pairs(&[(3, NEW)]),
-            }],
+            }]),
         );
         assert!(
             rx.try_iter().any(
@@ -1987,7 +2030,7 @@ mod tests {
             container: false,
             fields: fields.into_created(ObjectType::Item),
         };
-        super::super::handlers::dispatch(world, vec![again]);
+        super::super::handlers::dispatch(world, super::wire(vec![again]));
         assert_eq!(
             drain_notices(world),
             [ItemNotice::StackCount {
@@ -2007,7 +2050,7 @@ mod tests {
         let world = app.world_mut();
         super::super::handlers::dispatch(
             world,
-            vec![SessionEvent::ObjectsRemoved(vec![WATCH_ME, POTIONS])],
+            super::wire(vec![SessionEvent::ObjectsRemoved(vec![WATCH_ME, POTIONS])]),
         );
         assert_eq!(
             drain_notices(world),
@@ -2038,7 +2081,7 @@ mod tests {
         let bag_seat = FIELD_PLAYER_INV_SLOT_HEAD + 2 * 19;
         super::super::handlers::dispatch(
             world,
-            vec![
+            super::wire(vec![
                 seat(1, POTIONS),
                 SessionEvent::ObjectValues {
                     guid: WATCH_ME,
@@ -2049,7 +2092,7 @@ mod tests {
                 },
                 seat(1, 0),
                 seat(2, POTIONS),
-            ],
+            ]),
         );
         assert_eq!(
             drain_notices(world),
@@ -2091,14 +2134,14 @@ mod tests {
         // No active player: the enchant update has nowhere to wait.
         super::super::handlers::dispatch(
             world,
-            vec![
+            super::wire(vec![
                 SessionEvent::ItemEnchantTime {
                     item_guid: STONE,
                     slot: 1,
                     seconds: 60,
                 },
                 create(STONE),
-            ],
+            ]),
         );
         assert_eq!(
             cells(world, STONE),
@@ -2112,7 +2155,7 @@ mod tests {
         world.resource_mut::<SelfGuid>().0 = Some(ME);
         super::super::handlers::dispatch(
             world,
-            vec![
+            super::wire(vec![
                 SessionEvent::ItemEnchantTime {
                     item_guid: SWORD,
                     slot: 1,
@@ -2122,10 +2165,10 @@ mod tests {
                     item_guid: SWORD,
                     seconds: 600,
                 },
-            ],
+            ]),
         );
         assert_eq!(cells(world, SWORD), None, "nothing held yet");
-        super::super::handlers::dispatch(world, vec![create(SWORD)]);
+        super::super::handlers::dispatch(world, super::wire(vec![create(SWORD)]));
         let c = cells(world, SWORD).expect("the create spawned the item with its cells");
         assert!(
             c.enchant_remaining_ms(1)
@@ -2141,7 +2184,7 @@ mod tests {
         // Held now: both arms write the cells directly; a slot past the array writes nothing.
         super::super::handlers::dispatch(
             world,
-            vec![
+            super::wire(vec![
                 SessionEvent::ItemTime {
                     item_guid: SWORD,
                     seconds: 600,
@@ -2151,7 +2194,7 @@ mod tests {
                     slot: 9,
                     seconds: 30,
                 },
-            ],
+            ]),
         );
         let c = cells(world, SWORD).unwrap();
         assert!(c.lifetime_remaining_ms().is_some());
@@ -2159,7 +2202,10 @@ mod tests {
 
         // The destroy takes the object and its cells with it.
         let e = world.resource::<GuidIndex>().0[&SWORD];
-        super::super::handlers::dispatch(world, vec![SessionEvent::ObjectDestroyed(SWORD)]);
+        super::super::handlers::dispatch(
+            world,
+            super::wire(vec![SessionEvent::ObjectDestroyed(SWORD)]),
+        );
         assert!(!world.resource::<GuidIndex>().0.contains_key(&SWORD));
         assert!(world.get_entity(e).is_err(), "the cells died with the item");
     }

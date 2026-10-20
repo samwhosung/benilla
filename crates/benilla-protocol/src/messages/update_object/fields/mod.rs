@@ -652,7 +652,7 @@ impl ObjectFields {
             .flatten()
     }
 
-    /// No fields carried; the codec skips an empty `Values` delta.
+    /// No fields carried.
     pub fn is_empty(&self) -> bool {
         self.present.iter().all(|&w| w == 0)
     }

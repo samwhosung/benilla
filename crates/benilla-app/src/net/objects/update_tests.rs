@@ -26,7 +26,10 @@ fn an_out_of_range_block_never_releases_the_active_player() {
     let me = indexed(world, ME);
     let mob = indexed(world, MOB);
 
-    super::super::handlers::dispatch(world, vec![SessionEvent::ObjectsRemoved(vec![MOB, ME])]);
+    super::super::handlers::dispatch(
+        world,
+        super::wire(vec![SessionEvent::ObjectsRemoved(vec![MOB, ME])]),
+    );
 
     let index = &world.resource::<GuidIndex>().0;
     assert_eq!(index.get(&ME), Some(&me), "the player stays indexed");
@@ -63,12 +66,12 @@ fn a_movement_block_for_the_unit_we_move_is_dropped() {
 
     super::super::handlers::dispatch(
         world,
-        vec![
+        super::wire(vec![
             moved(ME),
             moved(0xF130_0000_0000_0002),
             moved(MOB),
             moved(0xF130_0000_0000_0003),
-        ],
+        ]),
     );
 
     let at = |world: &World, e: Entity| world.get::<Transform>(e).unwrap().translation;
@@ -116,7 +119,7 @@ fn a_gameobject_create_asks_its_template_by_the_entry_field() {
         *fields =
             ObjectFields::from_pairs(&[(benilla_protocol::field::FIELD_OBJECT_ENTRY, BOAT_ENTRY)]);
     }
-    super::super::handlers::dispatch(world, vec![boat]);
+    super::super::handlers::dispatch(world, super::wire(vec![boat]));
     let asked: Vec<_> = rx
         .try_iter()
         .filter_map(|c| match c {
@@ -142,10 +145,10 @@ fn a_recreate_re_poses_units_only() {
     };
     super::super::handlers::dispatch(
         world,
-        vec![
+        super::wire(vec![
             create(MOB, EntityKind::Unit, [1.0, 2.0, 3.0]),
             create(GO, EntityKind::GameObject, [1.0, 2.0, 3.0]),
-        ],
+        ]),
     );
     let first = wow_to_bevy([1.0, 2.0, 3.0]);
     assert_eq!(
@@ -157,10 +160,10 @@ fn a_recreate_re_poses_units_only() {
 
     super::super::handlers::dispatch(
         world,
-        vec![
+        super::wire(vec![
             create(MOB, EntityKind::Unit, [10.0, 20.0, 30.0]),
             create(GO, EntityKind::GameObject, [10.0, 20.0, 30.0]),
-        ],
+        ]),
     );
     assert_eq!(
         at(world, MOB),

@@ -75,7 +75,7 @@ fn drained(events: Vec<SessionEvent>) -> (Vec<(u16, u32)>, MoveSpeeds, UnitMoveM
     let mut app = crate::game_plugins::schedule_tests::headless_client();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetEvents(rx));
-    for ev in events {
+    for ev in crate::net::wire(events) {
         tx.send(ev).unwrap();
     }
     let world = app.world_mut();
@@ -174,7 +174,7 @@ fn speeds_after(events: Vec<SessionEvent>) -> Option<MoveSpeeds> {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetEvents(rx));
-    for ev in events {
+    for ev in crate::net::wire(events) {
         tx.send(ev).unwrap();
     }
     let world = app.world_mut();

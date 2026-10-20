@@ -274,10 +274,18 @@ pub enum SessionEvent {
         jump: Option<JumpInfo>,
         transport: Option<TransportPose>,
     },
-    /// A descriptor `Values` delta, only the changed fields; never empty (the codec drops those).
+    /// A descriptor `Values` block: the fields it sends, possibly none.
     ObjectValues { guid: u64, fields: ObjectFields },
-    /// Left view range (`OutOfRange`); the reference keeps them in a staging table for re-create.
+    /// Left view range (`OutOfRange`); the reference keeps them in a released table, fields and
+    /// all, for a later block to bring back (`0x464920`).
     ObjectsRemoved(Vec<u64>),
+    /// A near-objects block: guids the server names as near, which brings a released one back
+    /// (`0x467230`).
+    ObjectsNear(Vec<u64>),
+    /// The end of one `SMSG_UPDATE_OBJECT`, plain or compressed: the object events since the last
+    /// one are its blocks, in packet order. The reference writes every block of a packet before
+    /// it notifies any (`0x4651a0`).
+    ObjectUpdateEnd,
     /// `SMSG_DESTROY_OBJECT`: the reference frees it at once, no fade; a respawn is a fresh create.
     ObjectDestroyed(u64),
     /// `SMSG_TRIGGER_CINEMATIC`. Until `CMSG_COMPLETE_CINEMATIC` vmangos anchors visibility to the

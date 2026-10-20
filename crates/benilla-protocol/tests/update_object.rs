@@ -244,7 +244,8 @@ fn item_and_container_creates_decode() {
     }
     let packet = messages::parse_server(messages::opcode::SMSG_UPDATE_OBJECT, &body).unwrap();
     let events = decode(packet);
-    assert_eq!(events.len(), 2, "both creates decode, nothing spatial");
+    assert_eq!(events.len(), 3, "both creates decode, nothing spatial");
+    assert!(matches!(events[2], SessionEvent::ObjectUpdateEnd));
     match &events[0] {
         SessionEvent::ItemCreate {
             guid: 0x42,
@@ -310,7 +311,7 @@ fn gameobject_create_surfaces_transport_progress_and_position_fallback() {
             transport_progress,
             transport,
             ..
-        }] => {
+        }, SessionEvent::ObjectUpdateEnd] => {
             assert_eq!(*g, guid);
             assert_eq!(*kind, EntityKind::GameObject);
             assert_eq!(*display_id, Some(3015));
@@ -383,7 +384,7 @@ fn unit_living_block_surfaces_on_transport_rider_pose() {
             transport_progress,
             transport,
             ..
-        }] => {
+        }, SessionEvent::ObjectUpdateEnd] => {
             assert_eq!(*position, [100.0, 200.0, 5.0], "the unit's own world pose");
             assert_eq!(*orientation, 1.0);
             assert_eq!(
@@ -448,7 +449,7 @@ fn unit_living_block_surfaces_the_swim_it_is_already_in() {
             mover,
             speeds,
             ..
-        }] => {
+        }, SessionEvent::ObjectUpdateEnd] => {
             assert_eq!(*orientation, 2.0);
             assert_eq!(
                 mover,
@@ -489,7 +490,7 @@ fn a_dry_living_block_has_no_pitch_tail_and_reads_level() {
 
     let packet = messages::parse_server(messages::opcode::SMSG_UPDATE_OBJECT, &body).unwrap();
     match decode(packet).as_slice() {
-        [SessionEvent::ObjectCreate { mover, speeds, .. }] => {
+        [SessionEvent::ObjectCreate { mover, speeds, .. }, SessionEvent::ObjectUpdateEnd] => {
             assert_eq!(
                 mover,
                 &Some(benilla_protocol::MoverState { flags, pitch: 0.0 }),
@@ -572,7 +573,7 @@ fn unit_living_block_surfaces_the_walk_it_is_already_on() {
             position,
             spline,
             ..
-        }] => {
+        }, SessionEvent::ObjectUpdateEnd] => {
             let s = spline.as_ref().expect("the create block's live spline");
             assert_eq!(
                 s.path, path,
@@ -626,7 +627,7 @@ fn gameobject_create_is_placed_by_the_block_over_its_position_fields() {
             orientation,
             display_id,
             ..
-        }] => {
+        }, SessionEvent::ObjectUpdateEnd] => {
             assert_eq!(*display_id, Some(3015), "control: the fields were sent");
             assert_eq!(*position, [5000.0, 6000.0, 15.0], "the block wins");
             assert_eq!(*orientation, 2.0);
@@ -684,7 +685,7 @@ fn create_spline_reads_each_final_facing_field_its_bit_names() {
                 display_id,
                 spline,
                 ..
-            }] => {
+            }, SessionEvent::ObjectUpdateEnd] => {
                 let s = spline.as_ref().expect("the spline");
                 assert_eq!(s.id, 42, "{name}: the id is read where the facing ends");
                 assert_eq!(s.time_passed_ms, 3_000, "{name}");
@@ -722,7 +723,9 @@ fn unit_living_block_without_the_spline_flag_carries_no_walk() {
 
     let packet = messages::parse_server(messages::opcode::SMSG_UPDATE_OBJECT, &body).unwrap();
     match decode(packet).as_slice() {
-        [SessionEvent::ObjectCreate { spline, .. }] => assert!(spline.is_none()),
+        [SessionEvent::ObjectCreate { spline, .. }, SessionEvent::ObjectUpdateEnd] => {
+            assert!(spline.is_none())
+        }
         other => panic!("expected one ObjectCreate, got {other:?}"),
     }
 }

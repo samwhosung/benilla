@@ -1102,7 +1102,8 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
     }
 }
 
-/// Fan an object-update list out into create/move/remove/values events, moving each mask.
+/// Fan an object-update list out into create/move/remove/values events, moving each mask, closed
+/// by [`SessionEvent::ObjectUpdateEnd`].
 fn decode_objects(objects: Vec<Object>) -> Vec<SessionEvent> {
     let mut out = Vec::new();
     for object in objects {
@@ -1157,16 +1158,15 @@ fn decode_objects(objects: Vec<Object>) -> Vec<SessionEvent> {
             Object::OutOfRange { guids } => {
                 out.push(SessionEvent::ObjectsRemoved(guids));
             }
-            // `Values`: a descriptor delta with no position.
+            // `Values`: a descriptor delta with no position. An empty one still writes: it brings
+            // a released object back and copies every watched range (`0x46720f`).
             Object::Values { guid, mask } => {
-                if !mask.is_empty() {
-                    out.push(SessionEvent::ObjectValues { guid, fields: mask });
-                }
+                out.push(SessionEvent::ObjectValues { guid, fields: mask });
             }
-            // `Near` is a guid pre-announce; no state.
-            Object::Near { .. } => {}
+            Object::Near { guids } => out.push(SessionEvent::ObjectsNear(guids)),
         }
     }
+    out.push(SessionEvent::ObjectUpdateEnd);
     out
 }
 
