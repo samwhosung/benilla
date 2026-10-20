@@ -17,7 +17,7 @@ use crate::ui_spellbook::SkillLines;
 
 /// Re-points each spell slot at the highest known rank of its chain and sends the move, so the
 /// server's stored copy is fixed too. Runs on `dirty`, before the feed consumes it.
-pub(super) fn normalize_action_ranks(
+pub(crate) fn normalize_action_ranks(
     mut actions: ResMut<PlayerActions>,
     skill_lines: Option<Res<SkillLines>>,
     commands: Res<NetCommands>,

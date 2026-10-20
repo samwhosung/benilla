@@ -47,10 +47,13 @@ impl Plugin for UiMacroPlugin {
                     rebind_macro_spells
                         .in_set(crate::ui_script::UiFeed)
                         .before(crate::ui_unit::UnitFeed),
-                    // In-world only: the per-character file needs the character.
+                    // In-world only: the per-character file needs the character. Ahead of the
+                    // rank pass, which rewrites the bar's words too, as the one-time move of a
+                    // character's old buttons does.
                     load_macros
                         .in_set(crate::ui_script::UiFeed)
-                        .in_set(InWorldGated),
+                        .in_set(InWorldGated)
+                        .before(crate::ui_action::normalize_action_ranks),
                     // Every frame, in or out of world, so a `/logout` never strands an edit; after
                     // the script tick that dirtied the table.
                     save_dirty_macros.after(crate::ui_script::UiInput),
@@ -109,6 +112,7 @@ pub(crate) fn identity(roster: &crate::glue_session::roster::Roster) -> Option<(
 fn load_macros(
     script: Option<NonSendMut<UiScript>>,
     roster: Res<crate::glue_session::roster::Roster>,
+    actions: Res<crate::ui_action::PlayerActions>,
     mut files: ResMut<MacroFiles>,
 ) {
     let Some(mut script) = script else { return };
@@ -133,15 +137,62 @@ fn load_macros(
             }
         }
     };
-    let state = MacroState::from_scopes(read(&files.account), read(&files.character));
+    let character_records = read(&files.character);
+    let moves = store::legacy_character_words(&character_records);
+    let state = MacroState::from_scopes(read(&files.account), character_records);
     info!(
         "ui_macro: {} account + {} character macros for {character} on {realm}",
         state.count(false),
         state.count(true)
     );
+    if !moves.is_empty() {
+        migrate_character_bar(&mut script, &actions, &state, &files, &moves);
+    }
     script.set_macros(state);
     // `UPDATE_MACROS` (string at `0x852460`): the macro frame redraws on it, as after an edit.
     script.fire_event("UPDATE_MACROS", vec![]);
+}
+
+/// The one-time move of this character's macro buttons off the numbering of the builds that held a
+/// macro's position in its slot. They placed a character macro as `0x40000000 | (18 + n)`, n its
+/// place in the character file in id order (19 to 36), where a slot holds the macro's id now, and
+/// this build reads those words as account macros 19 to 36. `moves` pairs each such word with the
+/// word of the same macro under its id (`store::legacy_character_words`), and runs only for a
+/// character file of those builds, whose ids sit below the character scope's base.
+///
+/// The file goes first, rewritten in this build's numbering, so the next load finds no old ids and
+/// the buttons move once: afterwards a word in 19 to 36 can be an account macro's. If the write
+/// fails nothing moves and the next load tries again. Each button then goes out as a placement's
+/// does, through the VM's queue to `drain_action_sets`, which stores it and sends
+/// `CMSG_SET_ACTION_BUTTON`. A button whose old place holds no macro is left as it is.
+fn migrate_character_bar(
+    script: &mut UiScript,
+    actions: &crate::ui_action::PlayerActions,
+    state: &MacroState,
+    files: &MacroFiles,
+    moves: &[(u32, u32)],
+) {
+    let Some(path) = &files.character else { return };
+    let text = store::write(state.saved(true).into_iter());
+    if let Err(e) = crate::local_state::write_atomic(path, &text) {
+        warn!("ui_macro: renumbering {}: {e}", path.display());
+        return;
+    }
+    let mut writes: Vec<(u32, u32)> = actions
+        .buttons
+        .iter()
+        .filter_map(|(&slot, b)| {
+            let word = (u32::from(b.kind) << 24) | b.action;
+            let (_, new) = moves.iter().find(|(old, _)| *old == word)?;
+            Some((u32::from(slot) + 1, *new))
+        })
+        .collect();
+    writes.sort_unstable();
+    info!(
+        "ui_macro: {} character macro button(s) moved to macro ids",
+        writes.len()
+    );
+    script.queue_action_sets(writes);
 }
 
 /// Persist on the engine's dirty edge, and fire `UPDATE_MACROS`.
@@ -155,7 +206,7 @@ fn save_dirty_macros(script: Option<NonSendMut<UiScript>>, files: Res<MacroFiles
     script.fire_event("UPDATE_MACROS", vec![]);
     for (path, per_character) in [(&files.account, false), (&files.character, true)] {
         let Some(path) = path else { continue };
-        let text = store::write(state.scope(per_character));
+        let text = store::write(state.saved(per_character).into_iter());
         if let Err(e) = crate::local_state::write_atomic(path, &text) {
             warn!("ui_macro: saving {}: {e}", path.display());
         }
@@ -170,11 +221,13 @@ struct BindingsSeen {
     pet_book: Option<u64>,
 }
 
-/// Derive every macro's bound spell when the macro table or the player's book changes (gated on
-/// the engine's macro generation and on change detection over the action store), and again for
-/// the bindings that follow the pet's book when its spell list changes: `0x4f0ce0` derives only a
-/// `/cast` that did not resolve and a spell bound out of the pet's book (`0x4f0cfb`-`0x4f0d11`),
-/// so a `CastSpellByName` that missed keeps its 0 until the macro is edited.
+/// Derive every macro's bound spell again on any change to the macro table (the engine's macro
+/// generation) or to the action store (change detection), as the first pass of a VM does. When only
+/// the pet's spell list changes, derive the records that follow the pet's book alone, as `0x4f0ce0`
+/// does: a `/cast` that did not resolve and any record whose book selector is the pet's
+/// (`0x4f0cfb`-`0x4f0d11`). A `CastSpellByName` that missed keeps its 0 through that alone; the
+/// reference keeps it until the macro is edited, where the next table or bar change here derives
+/// it again.
 fn rebind_macro_spells(
     script: Option<NonSendMut<UiScript>>,
     actions: Res<crate::ui_action::PlayerActions>,

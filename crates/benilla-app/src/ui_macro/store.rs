@@ -2,11 +2,12 @@
 //! lines and a bare `END`, in `macros-cache.txt` and `macros-local.txt` (`0x85de74`, `0x85de88`).
 //! benilla ends lines with `\n` where the reference writes `\r\n`, and reads either, so a 1.12
 //! `macros-cache.txt` drops into `benilla-config/macros/`. The number is the macro's id, which an
-//! action slot holds; the records keep the file's order, the list order the reference's sort and
-//! name lookups start from (`MacroState`). A name holding a `"` runs from the first quote to the
-//! last, since the reference's `"%s"` is unescaped.
+//! action slot holds. A save writes a scope in name order, the sorted table's (`0x4f0ad0`); a load
+//! keeps the file's order as the list order the reference's sort and name lookups start from
+//! (`MacroState`). A name holding a `"` runs from the first quote to the last, since the
+//! reference's `"%s"` is unescaped.
 
-use benilla_ui::script::MacroView;
+use benilla_ui::script::{macro_slot_word, MacroView, CHARACTER_ID_BASE, MAX_MACROS};
 
 /// The path prefix the client prepends to a stored icon basename (`0x84ca64`).
 pub(super) const ICON_PREFIX: &str = "Interface\\Icons\\";
@@ -58,6 +59,37 @@ fn parse_header(rest: &str) -> Option<(u32, String, Option<String>)> {
     let name = rest[..close].to_string();
     let icon = rest[close + 1..].trim();
     Some((id, name, (!icon.is_empty()).then(|| icon.to_string())))
+}
+
+/// The bar words of the builds that numbered macros by position, in the character file's terms
+/// (`(old word, new word)`, empty when the file is not such a build's).
+///
+/// Those builds wrote the character file with ids 1..n and read it back sorted by the id column,
+/// keeping 18. A character macro's button held `0x40000000 | n`, n the macro's place in that order
+/// plus 18, so 19 to 36: the account scope's ids as this build reads them, and the old place of the
+/// character macro whose id is now its file id plus [`CHARACTER_ID_BASE`]. A file with an id below
+/// the base is such a build's: this build writes the full id.
+pub(super) fn legacy_character_words(records: &[MacroView]) -> Vec<(u32, u32)> {
+    if records.iter().all(|m| m.id >= CHARACTER_ID_BASE) {
+        return Vec::new();
+    }
+    let mut by_id: Vec<&MacroView> = records.iter().collect();
+    by_id.sort_by_key(|m| m.id);
+    by_id
+        .into_iter()
+        .take(MAX_MACROS)
+        .enumerate()
+        .map(|(place, m)| {
+            let id = if m.id < CHARACTER_ID_BASE {
+                m.id + CHARACTER_ID_BASE
+            } else {
+                m.id
+            };
+            let (kind, action) = macro_slot_word(id);
+            let old = 0x4000_0000 | (MAX_MACROS + 1 + place) as u32;
+            (old, (u32::from(kind) << 24) | action)
+        })
+        .collect()
 }
 
 /// Serialize a scope's macros back into the reference's format, in the order given.
@@ -211,7 +243,7 @@ mod tests {
     fn a_character_file_with_small_ids_is_rebased_and_saved_with_the_full_id() {
         let text = "MACRO 1 \"mine\" Ability_Ambush\n/say hi\nEND\n";
         let state = MacroState::from_scopes(Vec::new(), parse(text));
-        let saved = write(state.scope(true));
+        let saved = write(state.saved(true).into_iter());
         assert!(
             saved.starts_with("MACRO 16777217 \"mine\" Ability_Ambush\n"),
             "{saved}"

@@ -197,6 +197,15 @@ fn the_verbs_keep_a_63_byte_name_and_a_256_character_body() {
         .unwrap();
     assert_eq!((name.len(), body.len()), (63, 256));
 
+    // A cut inside a character stops at its boundary: 62 of the 63 bytes of 40 two-byte characters
+    // (the deviation of `cut_name`).
+    s.run(&format!(r#"EditMacro(1, "{}")"#, "\u{e9}".repeat(40)))
+        .unwrap();
+    assert_eq!(
+        s.eval::<String>("return GetMacroInfo(1)").unwrap(),
+        "\u{e9}".repeat(31)
+    );
+
     // Not trimmed, and an empty name is a name: the worker copies whatever string it is given.
     s.run(r#"EditMacro(1, "  padded  ")"#).unwrap();
     assert_eq!(
@@ -207,21 +216,25 @@ fn the_verbs_keep_a_63_byte_name_and_a_256_character_body() {
     assert_eq!(s.eval::<String>("return GetMacroInfo(1)").unwrap(), "");
 }
 
-/// A body is copied through 0x400 bytes before the characters are counted (`0x4f1556`), so 300
-/// four-byte characters keep 255 whole ones, the cut remainder of the 256th dropped where the
-/// reference counts it as a malformed character (the deviation of `cut_bytes`).
+/// A body is copied through 0x400 bytes (`0x4f1556`) and then counted to 256 characters. 255
+/// four-byte characters and two more fit the 1023 bytes, so the 256th character is kept and the
+/// 257th cut; 300 four-byte characters do not, and the 256th, cut in its fourth byte, is dropped
+/// whole, because the decoder returns -1 at the NUL inside it (`0x41ab69` into `0x41aada`).
 #[test]
 fn a_body_is_cut_to_1023_bytes_before_it_is_counted() {
     let s = script();
-    s.run(&format!(
-        r#"CreateMacro("m", 1, "{}")"#,
-        "\u{1F600}".repeat(300)
-    ))
-    .unwrap();
-    let body = s
-        .eval::<String>("local _, _, b = GetMacroInfo(1) return b")
-        .unwrap();
-    assert_eq!(body.chars().count(), 255);
+    let kept = |body: String| {
+        s.run(&format!(r#"CreateMacro("m", 1, "{body}")"#)).unwrap();
+        let kept = s
+            .eval::<String>("local _, _, b = GetMacroInfo(1) return b")
+            .unwrap();
+        s.run("DeleteMacro(1)").unwrap();
+        kept
+    };
+    let emoji = "\u{1F600}";
+    let fits = kept(format!("{}ab", emoji.repeat(255)));
+    assert_eq!(fits, format!("{}a", emoji.repeat(255)));
+    assert_eq!(kept(emoji.repeat(300)), emoji.repeat(255));
 }
 
 /// `EditMacro` raises its usage text unless argument 1 is a number or a numeric string

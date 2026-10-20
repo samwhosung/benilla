@@ -32,8 +32,16 @@ fn a_saved_macro_table_round_trips_through_benilla_macros() {
         vec![macro_view("Ambush", "/cast Ambush\n/say pew")],
         vec![macro_view("Charge", "/cast Charge")],
     );
-    crate::local_state::write_atomic(&account, &super::store::write(state.scope(false))).unwrap();
-    crate::local_state::write_atomic(&character, &super::store::write(state.scope(true))).unwrap();
+    crate::local_state::write_atomic(
+        &account,
+        &super::store::write(state.saved(false).into_iter()),
+    )
+    .unwrap();
+    crate::local_state::write_atomic(
+        &character,
+        &super::store::write(state.saved(true).into_iter()),
+    )
+    .unwrap();
 
     // The reference's format, with `\n` line ends.
     assert_eq!(
@@ -339,7 +347,7 @@ fn book_slot(spell_id: u32, name: &str) -> benilla_ui::script::SpellSlotView {
 /// spell is below 0 or whose book selector is the pet's (`0x4f0cfb`-`0x4f0d11`), and a miss leaves
 /// the selector (`0x4eff81` stores the spell alone). So a `/cast` that missed binds when the pet's
 /// spell arrives; a `CastSpellByName` that was bound to it and lost it binds again when the pet
-/// returns; and one made while the pet was away keeps its 0 until the macro is edited. The
+/// returns; and one made while the pet was away keeps its 0 through the pet's list alone. The
 /// engine's copy carries the book, which `GetActionAutocast` reads.
 #[test]
 fn the_pets_spell_list_rebinds_the_failed_and_the_pet_bound_macros_only() {
@@ -457,6 +465,183 @@ fn the_pets_spell_list_rebinds_the_failed_and_the_pet_bound_macros_only() {
             bound(&app, 4)
         ),
         (pet_spell, pet_spell, shadow_bolt, Bound::default()),
-        "a CastSpellByName that missed keeps its 0 until the macro is edited"
+        "a CastSpellByName that missed keeps its 0 through the pet's list alone"
     );
+}
+
+/// The save walks the sorted table, not the list (`0x4f0ad0`-`0x4f0aeb`), and the file loads as
+/// the list, so a tie the sort left reversed is sorted again by the next load: `b` made before `B`
+/// sits second, is written second, and is the first after the load.
+#[test]
+fn a_save_writes_the_sorted_table_and_a_load_sorts_it_again() {
+    use bevy::prelude::*;
+
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let tmp = std::env::temp_dir().join(format!("benilla-macros-order-{}", std::process::id()));
+    std::fs::remove_dir_all(&tmp).ok();
+    let _c = EnvGuard::unset("WOW_CAPTURE");
+    let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
+    let account = crate::local_state::macros_account_path().unwrap();
+
+    let mut script = UiScript::new().unwrap();
+    script.set_macro_icons(vec!["Interface\\Icons\\Ability_Ambush".into()]);
+    script
+        .run(r#"CreateMacro("b", 1, "/say b") CreateMacro("B", 1, "/say B")"#)
+        .unwrap();
+    assert_eq!(
+        script.eval::<String>("return GetMacroInfo(1)").unwrap(),
+        "B"
+    );
+    let mut app = App::new();
+    app.insert_resource(super::MacroFiles {
+        account: Some(account.clone()),
+        ..Default::default()
+    })
+    .insert_non_send_resource(script)
+    .add_systems(Update, super::save_dirty_macros);
+    app.update();
+
+    let text = std::fs::read_to_string(&account).unwrap();
+    assert!(
+        text.starts_with("MACRO 2 \"B\""),
+        "the table's order: {text}"
+    );
+    let loaded = MacroState::from_scopes(super::store::parse(&text), Vec::new());
+    assert_eq!(loaded.get(1).unwrap().name, "b");
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// A character file of the builds that numbered by position, with buttons placed under those
+/// numbers, moves once: its macros take their ids in the file, their buttons the words of those
+/// ids, each sent as a placement is, and a load after it moves nothing, because a word from 19 to 36
+/// is then an account macro's.
+#[test]
+fn a_position_numbered_character_bar_moves_to_macro_ids_once() {
+    use crate::ui_action::PlayerActions;
+    use benilla_protocol::messages::ActionButton;
+    use bevy::prelude::*;
+
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let tmp = std::env::temp_dir().join(format!("benilla-macros-move-{}", std::process::id()));
+    std::fs::remove_dir_all(&tmp).ok();
+    let _c = EnvGuard::unset("WOW_CAPTURE");
+    let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
+    let character = crate::local_state::macros_character_path("Realm", "Probeone").unwrap();
+
+    // Written in the order they were made, ids 2, 1, 3: the old build read them back by id, so
+    // Alpha (1) sat first, Bravo (2) second and Charlie (3) third, buttons 19, 20 and 21.
+    crate::local_state::write_atomic(
+        &character,
+        "MACRO 2 \"Bravo\" Ability_Ambush\n/say b\nEND\n\
+         MACRO 1 \"Alpha\" Ability_Ambush\n/say a\nEND\n\
+         MACRO 3 \"Charlie\" Ability_Ambush\n/say c\nEND\n",
+    )
+    .unwrap();
+    // `(wire slot, word)`: three character macros, one past the last, a spell, an account macro,
+    // and a word past 36.
+    let placed = [
+        (0u8, 0x4000_0013u32),
+        (1, 0x4000_0015),
+        (2, 0x4000_0014),
+        (3, 0x4000_0016),
+        (4, 133),
+        (5, 0x4000_0001),
+        (6, 0x4000_0025),
+    ];
+    let mut actions = PlayerActions::default();
+    for (slot, word) in placed {
+        actions.buttons.insert(
+            slot,
+            ActionButton {
+                slot,
+                action: word & 0x00ff_ffff,
+                kind: (word >> 24) as u8,
+            },
+        );
+    }
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let mut app = App::new();
+    app.insert_resource(actions)
+        .insert_resource(crate::net::NetCommands(tx))
+        .insert_resource(crate::glue_session::roster::Roster::with_pending_pick(
+            vec![crate::glue_session::roster::test_character(7, "Probeone")],
+            7,
+        ))
+        .init_resource::<super::MacroFiles>()
+        .insert_non_send_resource(UiScript::new().unwrap())
+        .add_systems(
+            Update,
+            (super::load_macros, crate::ui_action::drain_action_sets).chain(),
+        );
+    let sent = |rx: &crossbeam_channel::Receiver<crate::net::ClientCommand>| {
+        rx.try_iter()
+            .map(|c| match c {
+                crate::net::ClientCommand::SetActionButton { button, packed } => (button, packed),
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect::<Vec<_>>()
+    };
+
+    app.update();
+    assert_eq!(
+        sent(&rx),
+        [(0, 0x4100_0001), (1, 0x4100_0003), (2, 0x4100_0002)],
+        "Alpha, Charlie and Bravo by their ids, each once"
+    );
+    let word = |app: &App, slot: u8| {
+        let b = app.world().resource::<PlayerActions>().buttons[&slot];
+        (u32::from(b.kind) << 24) | b.action
+    };
+    let held: Vec<u32> = (0..7).map(|slot| word(&app, slot)).collect();
+    assert_eq!(
+        held,
+        [
+            0x4100_0001,
+            0x4100_0003,
+            0x4100_0002,
+            0x4000_0016,
+            133,
+            0x4000_0001,
+            0x4000_0025
+        ],
+        "the local store follows; a button with no macro behind it and the rest stay"
+    );
+    let file = std::fs::read_to_string(&character).unwrap();
+    assert!(
+        file.starts_with("MACRO 16777217 \"Alpha\""),
+        "the file is renumbered, in name order: {file}"
+    );
+    let state = app.world().non_send_resource::<UiScript>().macros();
+    assert_eq!(state.by_id(0x100_0003).unwrap().name, "Charlie");
+
+    // The next session: a fresh VM loads the renumbered file. A button at 0x40000013 is now the
+    // account macro of that id, and nothing moves it.
+    app.world_mut()
+        .resource_mut::<PlayerActions>()
+        .buttons
+        .insert(
+            9,
+            ActionButton {
+                slot: 9,
+                action: 19,
+                kind: 0x40,
+            },
+        );
+    app.insert_non_send_resource(UiScript::new().unwrap());
+    app.update();
+    assert!(sent(&rx).is_empty(), "nothing is sent again");
+    assert_eq!(word(&app, 9), 0x4000_0013);
+    assert_eq!(
+        app.world()
+            .non_send_resource::<UiScript>()
+            .macros()
+            .count(true),
+        3,
+        "and the renumbered file loaded"
+    );
+    std::fs::remove_dir_all(&tmp).ok();
 }

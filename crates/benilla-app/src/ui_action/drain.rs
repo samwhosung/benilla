@@ -425,7 +425,7 @@ pub(crate) fn use_action(
 
 /// Applies the queued `PickupAction`/`PlaceAction` writes (packed 0 clears) to the store, which
 /// the VM already mirrors, marks it dirty for the feed and sends each as `CMSG_SET_ACTION_BUTTON`.
-pub(super) fn drain_action_sets(
+pub(crate) fn drain_action_sets(
     script: Option<NonSendMut<UiScript>>,
     mut actions: ResMut<PlayerActions>,
     commands: Res<NetCommands>,

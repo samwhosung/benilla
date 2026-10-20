@@ -1966,41 +1966,45 @@ fn a_macro_bound_to_a_pet_spell_reads_the_pets_gate_power_and_history() {
         effect_implicit_target_a: [6, 0, 0],
         ..Default::default()
     };
-    let mut app = feed_app(
-        &[(0, 1, MACRO_BAR)],
-        catalog(vec![(SPELL_LOCK, lock())], &[(4, 0.0, 35.0)]),
-        10.0,
-    );
-    app.world_mut().resource_mut::<MacroBoundSpells>().0.insert(
-        1,
-        Bound {
-            spell: BoundSpell::Spell(SPELL_LOCK),
-            pet_book: true,
-        },
-    );
-    let pet = app
-        .world_mut()
-        .spawn((
-            crate::net::Guid(PET),
-            Transform::default(),
-            pet_fields(150, 0),
-        ))
-        .id();
-    app.world_mut()
-        .resource_mut::<crate::net::GuidIndex>()
-        .0
-        .insert(PET, pet);
-    let mut bar = PetBar::default();
-    bar.spells.pet_guid = PET;
-    bar.cooldowns
-        .start_spell(SPELL_LOCK, &lock(), 0, Instant::now(), None);
-    app.insert_resource(bar);
-    // A hostile in range, where a player's own Spell Lock would read a range.
-    select(&mut app, Some(OTHER));
-
-    let read = |app: &App| {
-        let script = app.world().non_send_resource::<UiScript>();
-        script
+    // One fresh client per pet state, read after its first frame, which is a refresh of the usable
+    // cache (`0x4e5c00`, the new VM's). `IsUsableAction` answers that cache (`0x4e7403` into
+    // `0x4e5230`), and the power watch refreshes it only for the active player (`0x60486b`), so
+    // what this asserts is what a refresh finds, not that the button follows the pet's power.
+    let at_a_refresh = |power: u32, flags: u32| {
+        let mut app = feed_app(
+            &[(0, 1, MACRO_BAR)],
+            catalog(vec![(SPELL_LOCK, lock())], &[(4, 0.0, 35.0)]),
+            10.0,
+        );
+        app.world_mut().resource_mut::<MacroBoundSpells>().0.insert(
+            1,
+            Bound {
+                spell: BoundSpell::Spell(SPELL_LOCK),
+                pet_book: true,
+            },
+        );
+        let pet = app
+            .world_mut()
+            .spawn((
+                crate::net::Guid(PET),
+                Transform::default(),
+                pet_fields(power, flags),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(PET, pet);
+        let mut bar = PetBar::default();
+        bar.spells.pet_guid = PET;
+        bar.cooldowns
+            .start_spell(SPELL_LOCK, &lock(), 0, Instant::now(), None);
+        app.insert_resource(bar);
+        // A hostile in range, where a player's own Spell Lock would read a range.
+        select(&mut app, Some(OTHER));
+        app.update();
+        app.world()
+            .non_send_resource::<UiScript>()
             .eval::<(Option<i64>, Option<i64>, Option<i64>, Option<i64>, f64)>(
                 "local u, oom = IsUsableAction(1) \
                  local _, d = GetActionCooldown(1) \
@@ -2008,14 +2012,8 @@ fn a_macro_bound_to_a_pet_spell_reads_the_pets_gate_power_and_history() {
             )
             .unwrap()
     };
-    let set_pet = |app: &mut App, power: u32, flags: u32| {
-        app.world_mut()
-            .entity_mut(pet)
-            .insert(pet_fields(power, flags));
-        app.update();
-    };
-    app.update();
-    let (usable, oom, has_range, in_range, duration) = read(&app);
+
+    let (usable, oom, has_range, in_range, duration) = at_a_refresh(150, 0);
     assert_eq!(
         (usable, oom),
         (Some(1), None),
@@ -2026,18 +2024,14 @@ fn a_macro_bound_to_a_pet_spell_reads_the_pets_gate_power_and_history() {
         duration, 24.0,
         "the pet's history, which the player's list lacks"
     );
-
-    set_pet(&mut app, 100, 0);
-    assert_eq!(read(&app).0, Some(1), "equal passes");
-    set_pet(&mut app, 99, 0);
-    let (usable, oom, ..) = read(&app);
+    assert_eq!(at_a_refresh(100, 0).0, Some(1), "equal passes");
+    let (usable, oom, ..) = at_a_refresh(99, 0);
     assert_eq!(
         (usable, oom),
         (None, Some(1)),
         "only the power gate sets notEnoughMana"
     );
     // Stunned (0x40000): the gate fails before the cost is read, so nothing is out of power.
-    set_pet(&mut app, 500, 0x4_0000);
-    let (usable, oom, ..) = read(&app);
+    let (usable, oom, ..) = at_a_refresh(500, 0x4_0000);
     assert_eq!((usable, oom), (None, None));
 }

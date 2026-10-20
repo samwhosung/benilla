@@ -281,6 +281,12 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().action_sets)
     }
 
+    /// Queue `(lua action id, packed)` writes behind the ones a placement queued, for the app's
+    /// drain to store and send the same way: a write the host makes to the bar, not a script's.
+    pub fn queue_action_sets(&mut self, writes: impl IntoIterator<Item = (u32, u32)>) {
+        self.model_mut().action_sets.extend(writes);
+    }
+
     /// Drain the GlobalStrings keys of engine-side refusals; the app fires `UI_ERROR_MESSAGE` for
     /// each, where the reference calls `CGGameUI::DisplayError` inline.
     pub fn take_ui_errors(&mut self) -> Vec<&'static str> {

@@ -40,9 +40,12 @@ pub const MAX_MACRO_BODY: usize = 0x100;
 /// (`0x4f1556`) before it counts characters.
 const BODY_COPY_BYTES: usize = 0x3ff;
 
-/// Where each scope's ids start, the counters' initial values (`0x807b8c`, `0x4eff90`): the first
-/// id a scope hands out is one more.
-const SCOPE_BASE: [u32; 2] = [0, 0x100_0000];
+/// Where the character scope's ids start, its counter's initial value (`0x807b90`, `0x4eff90`):
+/// the first id it hands out is one more. The account scope's start at 0 (`0x807b8c`).
+pub const CHARACTER_ID_BASE: u32 = 0x100_0000;
+
+/// Where each scope's ids start.
+const SCOPE_BASE: [u32; 2] = [0, CHARACTER_ID_BASE];
 
 /// One macro, as `GetMacroInfo` reports it.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -98,8 +101,7 @@ impl Default for MacroState {
     }
 }
 
-/// `SStrCopy`'s cut of `s` to at most `max` bytes. Deviation: it stops at a character boundary
-/// where the reference's byte copy can end inside one, because a `String` must stay UTF-8.
+/// `SStrCopy`'s cut of `s` to at most `max` bytes, backed up to a character boundary.
 fn cut_bytes(s: &str, max: usize) -> &str {
     let mut end = max.min(s.len());
     while !s.is_char_boundary(end) {
@@ -109,12 +111,16 @@ fn cut_bytes(s: &str, max: usize) -> &str {
 }
 
 /// A name as `SStrCopy` keeps it (`0x4f11fc`): its first [`MAX_MACRO_NAME`] bytes, not trimmed.
+/// Deviation: the reference's byte copy can end inside a character and keep the stray bytes; a
+/// `String` must stay UTF-8, so the cut stops at the character boundary.
 fn cut_name(name: &str) -> String {
     cut_bytes(name, MAX_MACRO_NAME).to_string()
 }
 
 /// A body as `0x4f1550` keeps it: the first 0x3ff bytes, cut again after [`MAX_MACRO_BODY`]
-/// characters.
+/// characters. A character the byte cut splits is not kept: its decoder (`0x41aab0`) returns -1 at
+/// the NUL inside the sequence (`0x41ab69` into `0x41aada`), which ends the count (`0x4f1577`) and
+/// puts the terminator where the character began, as the boundary cut does.
 fn cut_body(body: &str) -> String {
     cut_bytes(body, BODY_COPY_BYTES)
         .chars()
@@ -157,12 +163,22 @@ impl MacroState {
         state
     }
 
-    /// A scope's macros in list order, which is how the reference's save walks them.
-    pub fn scope(&self, per_character: bool) -> impl Iterator<Item = &MacroView> {
+    /// A scope's macros in list order.
+    fn scope(&self, per_character: bool) -> impl Iterator<Item = &MacroView> {
         self.list
             .iter()
             .filter(move |r| r.per_character == per_character)
             .map(|r| &r.view)
+    }
+
+    /// A scope's macros in the order the reference saves them: by position in the sorted table
+    /// (`0x4f0ad0`-`0x4f0aeb` walk `0xbdcc60 + scope * 0x48`), not in list order. The file then
+    /// loads as the list, so a tie the sort left reversed is sorted again on the next load.
+    pub fn saved(&self, per_character: bool) -> Vec<&MacroView> {
+        self.table(per_character)
+            .into_iter()
+            .filter_map(|id| self.by_id(id))
+            .collect()
     }
 
     /// How many macros a scope holds (`0xbdcc00`).
