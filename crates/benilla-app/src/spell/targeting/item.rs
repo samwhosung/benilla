@@ -422,6 +422,69 @@ mod tests {
         }
     }
 
+    /// The bind confirm is signalled inside the click (`0x495d60` raises `BIND_ENCHANT` at
+    /// `0x4960a3`), and its Yes reruns the gate inside `BindEnchant` (`0x48d2e0`), which binds and
+    /// sends before it returns: one chunk hears the popup's event, answers it and reads
+    /// targeting over.
+    #[test]
+    fn the_bind_confirm_and_its_yes_apply_inside_their_calls() {
+        const ENCHANT: u32 = 1900;
+        let (mut app, rx) = item_targeting(true);
+        let world = app.world_mut();
+        world.resource_mut::<crate::items::Items>().insert_template(
+            ENTRY,
+            Some(benilla_protocol::ItemInfo {
+                inventory_type: 13,
+                ..crate::items::test_template("Runed Blade")
+            }),
+        );
+        world.insert_resource(crate::ui_action::Spells {
+            catalog: benilla_formats::SpellCatalog::from_displays(
+                [(
+                    SPELL,
+                    benilla_formats::SpellDisplay {
+                        effects: [benilla_formats::SPELL_EFFECT_ENCHANT_ITEM, 0, 0],
+                        effect_misc_value: [ENCHANT as i32, 0, 0],
+                        ..Default::default()
+                    },
+                )]
+                .into(),
+            ),
+            ..crate::ui_action::Spells::empty_for_tests()
+        });
+        // A row whose `Flags & 1` binds the item.
+        world.insert_resource(crate::items::Enchants(
+            benilla_formats::EnchantCatalog::from_rows(
+                Default::default(),
+                Default::default(),
+                [(ENCHANT, 1)].into(),
+            ),
+        ));
+        let mut script = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
+        script.set_spell_targeting(true);
+        script
+            .run(
+                r#"local f = CreateFrame("Frame")
+                f:RegisterEvent("BIND_ENCHANT")
+                f:SetScript("OnEvent", function() Heard = (Heard or 0) + 1 end)"#,
+            )
+            .unwrap();
+        let (heard, targeting) = crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+            s.expect("a VM").eval::<(Option<i64>, Option<i64>)>(
+                "PickupContainerItem(0, 1) local heard = Heard BindEnchant() \
+                 return heard, SpellIsTargeting()",
+            )
+        })
+        .unwrap();
+        assert_eq!(heard, Some(1), "BIND_ENCHANT fired inside the click");
+        assert_eq!(targeting, None, "the Yes bound and sent inside its call");
+        let sent = rx
+            .try_iter()
+            .filter(|c| matches!(c, ClientCommand::CastSpellItem { .. }))
+            .count();
+        assert_eq!(sent, 1);
+    }
+
     /// `ReplaceEnchant` binds the parked item through `BindSpellTargetObject` directly (`0x48d300`
     /// → `0x6e5b40`), behind the same gate.
     #[test]
