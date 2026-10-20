@@ -6,13 +6,17 @@ use super::*;
 use crate::query_cache::Ask;
 
 /// The right-click payload leg of the reference's click router (`0x481f60`, clean clicks only,
-/// `0x514ae0`): over terrain (`0x492c90`) or nothing (`0x492d30`) any payload clears, silently.
-/// Over a world object this keeps every payload; the reference's object leg `0x492ce0` there
-/// clears one that sets `[0xb4b41c]` (mode 5 vendor row, mode 7 bar item, mode 9 ammo).
+/// `0x514ae0`), for a payload still held at the release: the hook that clears one at the press
+/// (`benilla_ui::script::UiScript::mouse_button`, `0x492b50`) has already run unless a pickup came
+/// after it. Over terrain (`0x492c90`) or nothing (`0x492d30`) any payload clears, silently. Over
+/// an object (a unit, a corpse, a GameObject: `0x492ce0`) only a preview one clears, the vendor
+/// row or bar item that sets `[0xb4b41c]`. A charmed player's click is the nothing leg
+/// (`0x481f98`). A nameplate's right-click does not come through here (`0x4949f0`).
 pub(super) fn world_right_click_payload(
     mut right_clicks: MessageReader<WorldRightClick>,
     // The press pick: this leg and [`act_on_right_click`] must classify the same pick.
     press: Res<PressPick>,
+    me: Query<&ObjectStore, With<SelfPlayer>>,
     script: Option<NonSendMut<UiScript>>,
 ) {
     if right_clicks.read().last().is_none() {
@@ -21,21 +25,32 @@ pub(super) fn world_right_click_payload(
     let Some(mut script) = script else {
         return;
     };
-    if press.hovered.target.is_some() || press.object.target.is_some() {
-        return;
+    let charmed = me.iter().any(|me| me.0.unit_charmed_by().is_some());
+    if press.over_object() && !charmed {
+        script.clear_preview_payload();
+    } else {
+        script.clear_cursor_payload();
     }
-    script.clear_cursor_payload();
 }
+
+/// A right-click begun on a nameplate, replayed for [`act_on_right_click`]: the plate's
+/// click slot (`0x7cb910`) goes to `0x4949f0` and so to `InteractWithObjectByClick` (`0x492820`),
+/// not through the world click router (`0x481f60`), whose charmed return and payload legs it
+/// skips.
+#[derive(Message, Clone, Copy)]
+pub(super) struct PlateRightClick;
 
 /// A plate click is a click on its unit (the click slot `0x7cb910`). The left button carries the
 /// plate's unit, as a scripted `plate:Click()` (pfUI, `nameplates.lua:1228`) has no cursor; the
-/// right replays [`WorldRightClick`] only when the press pick names it, so a scripted one does
+/// right replays [`PlateRightClick`] only when the press pick names it, so a scripted one does
 /// nothing yet. A physical right-click arrives only here: `0x7cb910` → `0x4949f0` → `0x492820`.
 ///
 /// The left click is the body click's select (`0x4949f0` action 1 → `0x4925d0` → `SelectTarget`
 /// `0x49280c`), so with the targeting cursor up the unit goes to the cast's bind and the target
-/// stays ([`super::front`]). The right is dropped while the cursor is up: its `0x492820` also binds
-/// (`0x492870`) and then interacts, which is not built.
+/// stays ([`super::front`]). The right is the interact (`0x492820`), whose `SelectTarget`
+/// (`0x492870`) binds the same way and then runs the unit's interact either way
+/// ([`act_on_right_click`]); the plate's press never reached the world frame's right-press
+/// targeting cancel (`0x492c20`), so the cursor stands up to here.
 pub(super) fn select_on_plate_click(
     mut plate: ResMut<crate::vplates::PlateClicks>,
     press: Res<PressPick>,
@@ -44,7 +59,7 @@ pub(super) fn select_on_plate_click(
     mut front: super::front::SelectFront,
     self_q: Query<(&Guid, Has<Engaged>), With<SelfPlayer>>,
     mut greeting: MessageWriter<crate::sound::NpcGreetingRequest>,
-    mut right_clicks: MessageWriter<WorldRightClick>,
+    mut right_clicks: MessageWriter<PlateRightClick>,
     units: Query<(&Guid, Option<&ObjectStore>)>,
 ) {
     let (left, right) = (
@@ -78,10 +93,8 @@ pub(super) fn select_on_plate_click(
             attack,
         );
     }
-    if !seam.slots.targeting().active()
-        && right.into_iter().any(|e| press.hovered.target == Some(e))
-    {
-        right_clicks.write(WorldRightClick);
+    if right.into_iter().any(|e| press.hovered.target == Some(e)) {
+        right_clicks.write(PlateRightClick);
     }
 }
 
@@ -719,22 +732,30 @@ impl Dispatch<'_, '_> {
     }
 }
 
-/// On a clean right-click, the INTERACT leg `0x492820` on the press pick: select it, then
-/// [`interact`].
+/// The right-click on the press pick, by the entry it came in by. A nameplate's click enters at
+/// `0x4949f0` and is the INTERACT leg `0x492820` alone: select the unit, which a charmed player or
+/// a standing targeting cursor takes in its place, then [`interact`] either way. A world click
+/// goes through the router (`0x481f60`): a charmed player takes the nothing leg with zero points
+/// (`0x481f98`, `0x48204e`), so nothing is selected, interacted with or walked to; otherwise the
+/// ground and the sky walk (`0x5e0378`, `0x492d50`) and an object takes `0x492820`.
 pub(super) fn act_on_right_click(
     mut clicks: MessageReader<WorldRightClick>,
+    mut plate_clicks: MessageReader<PlateRightClick>,
     // The press pick: the reference picks once, on the down edge (`0x481f00`).
     press: Res<PressPick>,
     mut selection: ResMut<Selection>,
     mut dispatch: Dispatch,
     payload_held: Res<crate::ui_script::CursorPayloadHeld>,
 ) {
-    if clicks.read().last().is_none() {
+    if plate_clicks.read().last().is_some() {
+        interact(&mut dispatch, &press, Select::First(&mut selection));
+    }
+    if clicks.read().last().is_none() || dispatch.seam.player_is_charmed() {
         return;
     }
-    // The router's other legs (`0x481f60`): the world hit walks there (`0x5e0378`), and nothing
-    // walks along the ray when the cursor is empty (`0x492d50`).
-    if press.hovered.any().is_none() && !press.hovered.refused && press.object.target.is_none() {
+    // The router's other legs: the world hit walks there (`0x5e0378`), and nothing walks along the
+    // ray when the cursor is empty (`0x492d50`).
+    if !press.over_object() {
         match (press.occlusion.point, press.occlusion.ray) {
             (Some(at), _) => {
                 dispatch.auto.walk_to_ground(at);
@@ -2157,6 +2178,7 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(NetCommands(tx));
         world.init_resource::<Messages<WorldRightClick>>();
+        world.init_resource::<Messages<PlateRightClick>>();
         world.init_resource::<PressPick>();
         world.init_resource::<Selection>();
         world.init_resource::<crate::spell::SpellTargeting>();
@@ -2423,8 +2445,8 @@ mod tests {
             ..PressPick::default()
         };
         world
-            .resource_mut::<Messages<WorldRightClick>>()
-            .write(WorldRightClick);
+            .resource_mut::<Messages<PlateRightClick>>()
+            .write(PlateRightClick);
         world.run_system_once(act_on_right_click).unwrap();
         assert_eq!(
             world.resource::<Selection>().guid,

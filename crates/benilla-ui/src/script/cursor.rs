@@ -804,6 +804,19 @@ impl super::UiScript {
         clear_cursor(&mut self.model_mut());
     }
 
+    /// The world click router's object leg (`0x492ce0`): `ClearCursor(1, 1)` only while a preview
+    /// payload is held, `[0xb4b41c]` set, which is a vendor row (mode 5) or an item action lifted
+    /// off the bar (mode 7); any other payload stays held.
+    pub fn clear_preview_payload(&mut self) {
+        let preview = matches!(
+            self.model_ref().cursor,
+            Some(CursorPayload::Merchant(_) | CursorPayload::Action(_))
+        );
+        if preview {
+            clear_cursor(&mut self.model_mut());
+        }
+    }
+
     /// Test-only: set the payload directly, bypassing the Lua bindings.
     #[cfg(test)]
     pub(crate) fn set_cursor_for_test(&mut self, payload: CursorPayload) {

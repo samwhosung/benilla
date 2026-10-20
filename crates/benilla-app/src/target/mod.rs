@@ -187,6 +187,13 @@ pub(crate) struct PressPick {
 }
 
 impl PressPick {
+    /// The router's pick state is an object (`[this+0x350]` 2, `0x481fb8`): a unit, a corpse, a
+    /// unit the `IsSelectable` grader refused (an object hit that selects nothing) or a
+    /// GameObject. Anything else is the ground or the sky.
+    pub(crate) fn over_object(&self) -> bool {
+        self.hovered.any().is_some() || self.hovered.refused || self.object.target.is_some()
+    }
+
     /// Whether the press was an Attack-cursor press, for `0x5ecb70`'s new-target validation.
     pub(crate) fn attack(&self) -> bool {
         self.cursor.kind == cursor_mode::CursorKind::Attack
@@ -300,6 +307,7 @@ impl Plugin for TargetPlugin {
             .add_message::<TargetByNameRequest>()
             .add_message::<AssistRequest>()
             .add_message::<click::DeselectGuid>()
+            .add_message::<click::PlateRightClick>()
             .add_message::<Interact>()
             .add_systems(
                 Startup,
