@@ -680,7 +680,7 @@ impl Dispatch<'_, '_> {
     ) {
         if self.shapeshifted_from_npcs() {
             debug!("right-click interact: {guid:#x} — refused, shapeshifted");
-            self.feedback.errors.0.push(crate::ui_action::UiError::key(
+            self.feedback.errors.push(crate::ui_action::UiError::key(
                 "ERR_CANT_INTERACT_SHAPESHIFTED",
             ));
             return;

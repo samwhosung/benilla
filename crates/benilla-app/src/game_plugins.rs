@@ -1044,7 +1044,7 @@ pub(crate) mod schedule_tests {
     /// ([`crate::vm_pass::order_the_pass`]), so a link's commands wait for the first barrier past
     /// the chain. The count may not rise past the ceiling, and the ceiling follows it down. Read
     /// on the dev build, whose schedule holds every system the player build does.
-    const UPDATE_SYNC_POINT_CEILING: usize = 51;
+    const UPDATE_SYNC_POINT_CEILING: usize = 54;
     const UPDATE_SYNC_POINT_SLACK: usize = 4;
 
     #[test]
@@ -1420,9 +1420,9 @@ pub(crate) mod schedule_tests {
 
     /// A nameplate's right-click is `SelectTarget` (`0x492870`), which with a targeting cursor up
     /// binds the cast and returns, and then the unit's interact (`0x492881`), so the cast goes out
-    /// ahead of what the interact does. The click's select parks the unit; the script calls'
-    /// pass binds it at its head; the interact runs after that, or its attack leg would swing
-    /// before the cast and select nothing.
+    /// ahead of what the interact does. The click's select parks the unit; the target chain's bind
+    /// gives it to the cast; the interact runs after that, or its attack leg would swing before the
+    /// cast and select nothing.
     #[test]
     fn a_plates_interact_runs_after_the_bind_of_the_unit_its_click_parked() {
         let mut app = headless_client();
@@ -1442,7 +1442,7 @@ pub(crate) mod schedule_tests {
         };
         let (select, bind, interact) = (
             one("::target::click::select_on_plate_click"),
-            one("::script_calls::apply_script_calls"),
+            one("::script_calls::bind_parked_picks"),
             one("::target::click::act_on_interact"),
         );
         let mut succ: HashMap<SystemKey, Vec<SystemKey>> = HashMap::new();
@@ -1463,11 +1463,11 @@ pub(crate) mod schedule_tests {
         };
         assert!(
             runs_before(select, bind),
-            "the click parks before the pass binds"
+            "the click parks before the chain binds"
         );
         assert!(
             runs_before(bind, interact),
-            "the interact runs after the pass's bind"
+            "the interact runs after the chain's bind"
         );
     }
 

@@ -22,7 +22,7 @@ pub(crate) struct ScriptSelect<'w, 's> {
     commit: SelectCommit<'w, 's>,
     by_name: ByNameScan<'w, 's>,
     /// Where a name that finds nobody shows its line.
-    errors: ResMut<'w, crate::ui_action::UiErrorKeys>,
+    errors: Res<'w, crate::ui_action::UiErrorKeys>,
     /// The TAB cycler's inputs, for the `TargetNearest*` calls.
     scan: scan::TargetScan<'w, 's>,
     history: ResMut<'w, scan::TabHistory>,
@@ -83,13 +83,7 @@ impl ScriptSelect<'_, '_> {
 
     /// `TargetByName(name, exactMatch)` (`0x489d60`), the stock `/target`.
     pub(crate) fn target_by_name(&mut self, name: &str, exact: bool) {
-        by_name::target_named(
-            &self.by_name,
-            &mut self.commit,
-            &mut self.errors,
-            name,
-            exact,
-        );
+        by_name::target_named(&self.by_name, &mut self.commit, &self.errors, name, exact);
     }
 
     /// `TargetNearest*([reverse])` (`0x489a80`/`0x489aa0`/`0x489ac0`/`0x489ae0` →

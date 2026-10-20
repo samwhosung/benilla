@@ -429,7 +429,7 @@ impl PlayerLookup<'_, '_> {
 pub(super) fn target_named(
     scan_params: &ByNameScan,
     commit: &mut SelectCommit,
-    errors: &mut crate::ui_action::UiErrorKeys,
+    errors: &crate::ui_action::UiErrorKeys,
     name: &str,
     exact: bool,
 ) {
@@ -448,7 +448,7 @@ pub(super) fn target_named(
         } else {
             "ERR_UNIT_NOT_FOUND"
         };
-        errors.0.push(crate::ui_action::UiError::key(key));
+        errors.push(crate::ui_action::UiError::key(key));
         return;
     };
     commit.commit(entity, guid);
@@ -487,10 +487,10 @@ pub(super) fn target_by_name_requests(
     mut requests: MessageReader<TargetByNameRequest>,
     scan_params: ByNameScan,
     mut commit: SelectCommit,
-    mut errors: ResMut<crate::ui_action::UiErrorKeys>,
+    errors: Res<crate::ui_action::UiErrorKeys>,
 ) {
     for request in requests.read() {
-        target_named(&scan_params, &mut commit, &mut errors, &request.name, false);
+        target_named(&scan_params, &mut commit, &errors, &request.name, false);
     }
 }
 

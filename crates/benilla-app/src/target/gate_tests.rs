@@ -155,7 +155,7 @@ impl Fix {
         self.app
             .world()
             .resource::<UiErrorKeys>()
-            .0
+            .snapshot()
             .iter()
             .map(|e| e.key)
             .collect()
