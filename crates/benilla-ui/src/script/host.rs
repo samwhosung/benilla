@@ -222,6 +222,19 @@ mod tests {
         assert!(s.lua().app_data_ref::<HostSlot>().is_some());
     }
 
+    /// A fork is a VM of its own with its own slot: a host lent to it applies the fork's verbs,
+    /// and the original's slot stays empty.
+    #[test]
+    fn a_fork_takes_a_lent_host_and_applies_its_verbs() {
+        let original = UiScript::new().unwrap();
+        let mut fork = original.fork();
+        let mut host = Count(0);
+        fork.hosted(&mut host, |s| s.run("ClearTarget() ClearTarget()"))
+            .unwrap();
+        assert_eq!(host.0, 2);
+        assert!(!original.host_free());
+    }
+
     #[test]
     fn a_host_is_out_of_the_slot_while_it_applies() {
         let mut s = UiScript::new().unwrap();
