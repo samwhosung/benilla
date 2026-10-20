@@ -152,6 +152,11 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
                     item_watch(index, stores, &sc.self_guid, &sc.items)
                         .record_landed(entry, held, &waiters)
                 };
+                for notice in &notices {
+                    if let crate::item_watch::ItemNotice::Record { guid, .. } = *notice {
+                        replay_enchant_times(&mut sc.items, &mut sc.countdowns, &sc.index, guid);
+                    }
+                }
                 sc.item_notices.write_batch(notices);
             }
             // The trade getters' callbacks run for a ready record only (`0x4c0343`).
@@ -200,6 +205,28 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             _ => debug!("enchant timer: {item_guid:#x} unheld and no player to queue on — dropped"),
         },
         _ => {}
+    }
+}
+
+/// `CGItem_C::ApplyRecord`'s replay (`0x5ebde0` at `0x5d85b7`): the enchant times queued on the
+/// active player while the item was not held, set as of now. The record set-up reaches it only
+/// for our item while in the world (`0x5d8504`, `0x5d8521`), as [`ItemNotice::Record`] runs.
+///
+/// [`ItemNotice::Record`]: crate::item_watch::ItemNotice::Record
+fn replay_enchant_times(
+    items: &mut Items,
+    countdowns: &mut Query<&mut crate::items::Countdowns>,
+    index: &GuidIndex,
+    guid: u64,
+) {
+    let queued = items.take_enchant_times(guid);
+    let Some(mut cells) = index.0.get(&guid).and_then(|&e| countdowns.get_mut(e).ok()) else {
+        return;
+    };
+    for (slot, seconds) in queued {
+        if !cells.set_enchant(slot, seconds) {
+            debug!("enchant timer: queued slot {slot} for {guid:#x} is past the seventh — refused");
+        }
     }
 }
 
@@ -1852,8 +1879,9 @@ mod tests {
         );
     }
 
-    /// `0x1EB` for an unheld item waits on the active player and replays at its create; `0x1EA`
-    /// for one is dropped; the destroy takes the cells.
+    /// `0x1EB` for an unheld item waits on the active player, for the item's record to replay it
+    /// ([`a_queued_enchant_time_replays_when_the_items_record_applies`]); `0x1EA` for one is
+    /// dropped; the destroy takes the cells.
     #[test]
     fn item_countdowns_live_on_the_item_and_a_queued_enchant_waits_for_it() {
         use crate::items::Countdowns;
@@ -1911,10 +1939,10 @@ mod tests {
         assert_eq!(cells(world, SWORD), None, "nothing held yet");
         super::super::handlers::dispatch(world, super::wire(vec![create(SWORD)]));
         let c = cells(world, SWORD).expect("the create spawned the item with its cells");
-        assert!(
-            c.enchant_remaining_ms(1)
-                .is_some_and(|ms| (89_000..=90_000).contains(&ms)),
-            "the queued enchant replayed as of the create"
+        assert_eq!(
+            c.enchant_remaining_ms(1),
+            None,
+            "the enchant waits on the record, which no one has sent"
         );
         assert_eq!(
             c.lifetime_remaining_ms(),
@@ -1929,6 +1957,11 @@ mod tests {
                 SessionEvent::ItemTime {
                     item_guid: SWORD,
                     seconds: 600,
+                },
+                SessionEvent::ItemEnchantTime {
+                    item_guid: SWORD,
+                    slot: 1,
+                    seconds: 30,
                 },
                 SessionEvent::ItemEnchantTime {
                     item_guid: SWORD,

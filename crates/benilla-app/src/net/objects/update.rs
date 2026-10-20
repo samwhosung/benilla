@@ -375,19 +375,7 @@ fn on_item_create(In(ev): In<SessionEvent>, mut sc: Scene) {
         }
         (None, None) => {
             allocate(&mut sc, guid, item_type(container));
-            let e =
-                crate::items::spawn_item(&mut sc.commands, &mut sc.index, guid, fields, container);
-            // Replay the enchant times queued while it was not held (`0x5ebde0`), as of now.
-            let queued = sc.items.take_enchant_times(guid);
-            if !queued.is_empty() {
-                let mut countdowns = crate::items::Countdowns::default();
-                for (slot, seconds) in queued {
-                    if !countdowns.set_enchant(slot, seconds) {
-                        debug!("enchant timer: queued slot {slot} for {guid:#x} is past the seventh — refused");
-                    }
-                }
-                sc.commands.entity(e).insert(countdowns);
-            }
+            crate::items::spawn_item(&mut sc.commands, &mut sc.index, guid, fields, container);
             sc.pass.unshown.insert(guid);
             Vec::new()
         }
@@ -902,6 +890,9 @@ fn create_hook(sc: &mut Scene, guid: u64, kind: Created, script: Option<&UiScrip
             // `0x5d8390` (`0x5d8300` into `0x55ba30`): the readers of a held item only read it.
             if let Some(entry) = fields.object_entry() {
                 sc.items.template(entry, guid, Ask::Event(&sc.net));
+            }
+            if let Some(crate::item_watch::ItemNotice::Record { guid, .. }) = hook {
+                super::replay_enchant_times(&mut sc.items, &mut sc.countdowns, &sc.index, guid);
             }
             sc.item_notices.write_batch(hook);
         }
