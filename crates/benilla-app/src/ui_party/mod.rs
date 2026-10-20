@@ -221,6 +221,19 @@ impl SignalLog {
     }
 }
 
+/// The message each loot method 0 to 4 shows when it changes, `0xe6` to `0xea` through the jump
+/// table `0x4e880c`.
+const LOOT_METHOD_KEYS: [&str; 5] = [
+    "ERR_SET_LOOT_FREEFORALL",
+    "ERR_SET_LOOT_ROUNDROBIN",
+    "ERR_SET_LOOT_MASTER",
+    "ERR_SET_LOOT_GROUP",
+    "ERR_SET_LOOT_NBG",
+];
+
+/// Master loot, the only method whose looter the setter names (`0x4e8773`).
+const LOOT_METHOD_MASTER: u8 = 2;
+
 /// What the list handler reads from the rest of the client at the moment the packet lands, beyond
 /// the roster's name lookups ([`GroupState::apply_list_awaiting`]'s `lookup`).
 pub struct ListText<'a> {
@@ -232,6 +245,7 @@ pub struct ListText<'a> {
     pub quality: &'a dyn Fn(u8) -> String,
 }
 
+#[cfg(test)]
 impl Default for ListText<'_> {
     /// Every name held, as the empty string, and the quality named by its global's key.
     fn default() -> Self {
@@ -247,6 +261,7 @@ impl GroupState {
     /// slots' joins, the new-group line, the party slots' leaves, then the raid roster's lines.
     /// Kick, leave (`0x5e690b`) and disband lines come from their opcodes. Every name is taken as
     /// held, as the empty string: [`Self::apply_list_awaiting`] is the one that says otherwise.
+    #[cfg(test)]
     pub fn apply_list(
         &mut self,
         group_type: u8,
@@ -282,7 +297,7 @@ impl GroupState {
         loot: Option<GroupLootInfo>,
         self_guid: Option<u64>,
         lookup: &dyn Fn(u64) -> Option<String>,
-        _text: &ListText<'_>,
+        text: &ListText<'_>,
     ) -> ListOutcome {
         let missed = |guid: u64| lookup(guid).is_none();
         // Every path of the handler reaches the event (`0x5e6c66`), the leave list and a party's
@@ -345,9 +360,10 @@ impl GroupState {
             }
         }
         // The loot store (`0x5e6e52` into `0x4e86f0`) runs for a list with members, the one that
-        // carries the loot tail (`0x5e6e12`), and signals whatever the tail says (`0x4e87fa`),
-        // ahead of the raid legs.
-        if loot.is_some() {
+        // carries the loot tail (`0x5e6e12`): the lines of what the tail changes, then the event,
+        // which it signals whatever the tail says (`0x4e87fa`), ahead of the raid legs.
+        if let Some(loot) = loot {
+            out.lines.extend(self.store_loot(loot, text));
             self.signal(GroupSignal::LootMethodChanged);
         }
         if raid {
@@ -444,6 +460,35 @@ impl GroupState {
         // A real list ends the sandbox; `synthetic_roster` re-raises the flag after its own call.
         self.test = false;
         out
+    }
+
+    /// The loot setter `0x4e86f0`: each of the method, the master and the threshold that differs
+    /// from its stored cell shows its message, in that order, and is stored. The method has a
+    /// message for 0 to 4 (`0x4e880c`), none above. A master shows only when it is nonzero, the
+    /// method is master loot (`0x4e8773`) and the cache holds its name (`0x4e8794`); the cell is
+    /// stored either way (`0x4e87a6`).
+    fn store_loot(&mut self, new: GroupLootInfo, text: &ListText<'_>) -> Vec<UiError> {
+        let old = std::mem::replace(&mut self.loot_stored, new);
+        let mut lines = Vec::new();
+        if new.method != old.method {
+            lines.extend(
+                LOOT_METHOD_KEYS
+                    .get(usize::from(new.method))
+                    .map(|k| UiError::key(k)),
+            );
+        }
+        if new.master != old.master && new.master != 0 && new.method == LOOT_METHOD_MASTER {
+            if let Some(name) = (text.cached_name)(new.master) {
+                lines.push(UiError::s("ERR_NEW_LOOT_MASTER_S", name));
+            }
+        }
+        if new.threshold != old.threshold {
+            lines.push(UiError::s(
+                "ERR_SET_LOOT_THRESHOLD_S",
+                (text.quality)(new.threshold),
+            ));
+        }
+        lines
     }
 
     /// Log one event where its handler signals it, behind every signal before it.
@@ -732,8 +777,12 @@ impl GroupState {
     pub fn clear_session(&mut self) {
         let mut signals = std::mem::take(&mut self.signals);
         signals.clear();
+        // The loot cells are the process's, not the session's: the reference's only writer
+        // (`0x4e86f0`) is the list handler, and nothing resets them.
+        let loot_stored = self.loot_stored;
         *self = GroupState {
             signals,
+            loot_stored,
             ..GroupState::default()
         };
     }
@@ -1921,6 +1970,18 @@ mod tests {
         list(&mut g, 1, &[("Alice", 1)], 1);
         list(&mut g, 1, &[("Alice", 1), ("Dave", 4)], 1);
         list(&mut g, 1, &[("Alice", 1)], 1);
+        // The loot setter, through each method's row, a master and a threshold.
+        for (method, master, threshold) in [(1, 0, 2), (2, 1, 3), (3, 1, 3), (4, 1, 3), (0, 0, 3)] {
+            let loot = GroupLootInfo {
+                method,
+                master,
+                threshold,
+            };
+            lines.extend(
+                g.apply_list(1, 0, vec![member("Alice", 1)], 1, Some(loot), None)
+                    .lines,
+            );
+        }
         lines.extend(g.apply_invited("Bob"));
         lines.extend(g.apply_declined("Carol"));
         lines.extend(g.apply_leader_changed("Alice", Some("Us")));
@@ -1945,14 +2006,21 @@ mod tests {
                 "ERR_LEFT_GROUP_S",
                 "ERR_NEW_LEADER_S",
                 "ERR_NEW_LEADER_YOU",
+                "ERR_NEW_LOOT_MASTER_S",
                 "ERR_RAID_LEADER_READY_CHECK_START_S",
                 "ERR_RAID_MEMBER_ADDED_S",
                 "ERR_RAID_MEMBER_REMOVED_S",
                 "ERR_RAID_YOU_JOINED",
                 "ERR_RAID_YOU_LEFT",
+                "ERR_SET_LOOT_FREEFORALL",
+                "ERR_SET_LOOT_GROUP",
+                "ERR_SET_LOOT_MASTER",
+                "ERR_SET_LOOT_NBG",
+                "ERR_SET_LOOT_ROUNDROBIN",
+                "ERR_SET_LOOT_THRESHOLD_S",
                 "ERR_UNINVITE_YOU",
             ],
-            "all thirteen keys this window can raise are exercised below"
+            "all twenty keys this window can raise are exercised below"
         );
 
         for msg in &lines {

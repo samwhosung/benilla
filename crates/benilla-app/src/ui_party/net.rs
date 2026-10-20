@@ -103,6 +103,7 @@ fn on_list(
     index: Res<GuidIndex>,
     commands: Res<NetCommands>,
     tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
+    script: Option<NonSend<UiScript>>,
 ) {
     if let SessionEvent::GroupList {
         group_type,
@@ -135,6 +136,7 @@ fn on_list(
             &names,
             &index,
             &commands,
+            script.as_deref(),
         );
     }
 }
@@ -275,6 +277,7 @@ fn list(
     names: &NameCache,
     index: &GuidIndex,
     net_commands: &NetCommands,
+    script: Option<&UiScript>,
 ) {
     // The lookups with a callback, which ask a refused name again; a miss waits for the answer.
     // A party list seats every member and a raid list rows every one, so each is asked.
@@ -282,6 +285,15 @@ fn list(
         names
             .resolve_player(guid, Ask::Event(net_commands))
             .map(str::to_string)
+    };
+    // What the loot setter reads as the packet lands: the player-name cache with no callback
+    // (`0x4e878f`), and the VM's `ITEM_QUALITY<n>_DESC` (`0x4e87c9`, `0x703bf0`), empty when no VM
+    // holds the global.
+    let cached_name = |guid: u64| names.resolve_player(guid, Ask::Read).map(str::to_string);
+    let quality = |n: u8| {
+        script.map_or_else(String::new, |s| {
+            s.global_text(&format!("ITEM_QUALITY{n}_DESC"))
+        })
     };
     // Taken before `apply_list` consumes the list; `seat_new_records` then treats a member with
     // no record as new, the reference's `srcRec == 0`.
@@ -297,7 +309,10 @@ fn list(
         loot,
         self_guid.0,
         &lookup,
-        &ListText::default(),
+        &ListText {
+            cached_name: &cached_name,
+            quality: &quality,
+        },
     );
     push_group_lines(errors, shown.lines);
     if shown.invite_accept {
@@ -463,6 +478,7 @@ mod tests {
                 names,
                 &GuidIndex::default(),
                 &net,
+                None,
             );
         };
         send(&names);
@@ -505,6 +521,7 @@ mod tests {
             &names,
             &GuidIndex::default(),
             &net,
+            None,
         );
 
         let asked: Vec<u64> = rx
@@ -536,6 +553,7 @@ mod tests {
             &names,
             &GuidIndex::default(),
             &net,
+            None,
         );
         assert!(
             rx.try_iter()
@@ -574,6 +592,7 @@ mod tests {
                 names,
                 &GuidIndex::default(),
                 &net,
+                None,
             );
             let signals = group.signals.since(0);
             signals
@@ -638,6 +657,7 @@ mod tests {
                 &names,
                 &GuidIndex::default(),
                 &net,
+                None,
             );
         };
 
@@ -1032,6 +1052,7 @@ mod tests {
                 &names,
                 &index,
                 &net,
+                None,
             );
         };
 
@@ -1104,6 +1125,7 @@ mod tests {
                 &names,
                 &GuidIndex::default(),
                 &net,
+                None,
             );
         };
 

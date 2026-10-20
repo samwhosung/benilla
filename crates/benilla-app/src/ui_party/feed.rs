@@ -1215,6 +1215,56 @@ fn set_test_subgroup(group: &mut GroupState, self_guid: Option<u64>, index: u32,
     }
 }
 
+/// `ITEM_QUALITY0_DESC` to `ITEM_QUALITY6_DESC`, the words the sandbox's threshold line names.
+const SANDBOX_QUALITIES: [&str; 7] = [
+    "Poor",
+    "Common",
+    "Uncommon",
+    "Rare",
+    "Epic",
+    "Legendary",
+    "Artifact",
+];
+
+/// A list for a sandbox, whose cache and VM are not behind it: the loot lines name the master by
+/// the roster's own name and the threshold by [`SANDBOX_QUALITIES`].
+fn apply_sandbox_list(
+    group: &mut GroupState,
+    (group_type, own_flags): (u8, u8),
+    members: Vec<GroupMemberEntry>,
+    leader: u64,
+    loot: GroupLootInfo,
+    self_guid: Option<u64>,
+) -> Vec<crate::ui_action::UiError> {
+    let roster: Vec<(u64, String)> = members.iter().map(|m| (m.guid, m.name.clone())).collect();
+    let cached_name = |guid: u64| {
+        roster
+            .iter()
+            .find(|(g, _)| *g == guid)
+            .map(|(_, name)| name.clone())
+    };
+    let quality = |n: u8| {
+        SANDBOX_QUALITIES
+            .get(usize::from(n))
+            .map_or_else(String::new, |word| (*word).to_string())
+    };
+    group
+        .apply_list_awaiting(
+            group_type,
+            own_flags,
+            members,
+            leader,
+            Some(loot),
+            self_guid,
+            &|_| Some(String::new()),
+            &super::ListText {
+                cached_name: &cached_name,
+                quality: &quality,
+            },
+        )
+        .lines
+}
+
 /// The `/partytest` roster: four unstreamed synthetic members with mixed statuses and records,
 /// through the real apply path, so every party frame state shows with no server. `player_xy` (our
 /// live WoW position) places their minimap blips: Alice 30 yd out (dot), Bob 80 yd (dot, a rim
@@ -1249,20 +1299,18 @@ pub(crate) fn synthetic_roster(
             flags: 0,
         },
     ];
-    let lines = group
-        .apply_list(
-            0,
-            0,
-            members,
-            0xF001,
-            Some(GroupLootInfo {
-                method: 2,
-                master: 0xF003,
-                threshold: 3,
-            }),
-            None,
-        )
-        .lines;
+    let lines = apply_sandbox_list(
+        group,
+        (0, 0),
+        members,
+        0xF001,
+        GroupLootInfo {
+            method: 2,
+            master: 0xF003,
+            threshold: 3,
+        },
+        None,
+    );
     // Blip offsets from us on WoW axes (+x north, +y west), truncated to `i16` as on the wire.
     let seat = |dx: f32, dy: f32| player_xy.map(|(px, py)| ((px + dx) as i16, (py + dy) as i16));
     for (guid, hp, max, level, power_type, pos) in [
@@ -1359,20 +1407,19 @@ pub(crate) fn synthetic_raid(
     }
     // A raid we lead, so `IsRaidLeader()` is true and the leader-only controls are live.
     let leader = self_guid.unwrap_or(0);
-    let lines = group
-        .apply_list(
-            1,
-            0, // our flags: subgroup 1 (0-based 0), no assistant bit
-            members,
-            leader,
-            Some(GroupLootInfo {
-                method: 2,
-                master: leader,
-                threshold: 3,
-            }),
-            self_guid,
-        )
-        .lines;
+    let lines = apply_sandbox_list(
+        group,
+        // Raid; our flags: subgroup 1 (0-based 0), no assistant bit.
+        (1, 0),
+        members,
+        leader,
+        GroupLootInfo {
+            method: 2,
+            master: leader,
+            threshold: 3,
+        },
+        self_guid,
+    );
     // Records for every member: fake guids never stream, so the merged view shows these.
     for (i, _) in ROSTER.iter().enumerate() {
         let guid = 0xF100 + i as u64;
