@@ -445,6 +445,40 @@ fn a_values_movement_or_near_block_brings_a_released_object_back() {
     assert_eq!(field(world, MOB, ENTRY), Some(299));
 }
 
+/// The movement block compares its guid with the active mover before the lookup that would bring
+/// a released object back (`0x4670a5`-`0x4670bb`, ahead of `0x4670c2`): a released unit we drive
+/// stays released, and a later values block still finds it in the table.
+#[test]
+fn a_movement_block_for_the_mover_brings_nothing_back() {
+    let mut app = client();
+    let world = app.world_mut();
+    world.resource_mut::<SelfGuid>().0 = Some(ME);
+    send(world, [unit(MOB, &[(ENTRY, 299)])]);
+    send(world, [out_of_range(&[MOB])]);
+    world.init_resource::<crate::player::Player>();
+    world.resource_mut::<crate::player::Player>().foreign_mover = Some(MOB);
+
+    send(world, [moved(MOB)]);
+    assert!(!held(world, MOB), "the mover's block is dropped");
+    send(world, [values(MOB, &[])]);
+    assert!(held(world, MOB), "and the object is still released");
+    let e = world.resource::<GuidIndex>().0[&MOB];
+    assert_ne!(
+        world.get::<Transform>(e).unwrap().translation,
+        wow_to_bevy([10.0, 20.0, 30.0]),
+        "with the pose it left at"
+    );
+
+    // Control lost zeroes the mover (`0x5fa600`), and the block brings the unit back.
+    send(world, [out_of_range(&[MOB])]);
+    world.resource_mut::<crate::player::Player>().control_lost = true;
+    send(world, [moved(MOB)]);
+    assert!(
+        held(world, MOB),
+        "control: no mover, the block brings it back"
+    );
+}
+
 /// A new object takes the oldest released one of its type, which goes for good (`0x466e55` reads
 /// the head of the type's reuse list, which a release appends to at `0x464a83`): a values block
 /// for its guid finds nothing, and its create is a first one again, hook and all. Another type's
