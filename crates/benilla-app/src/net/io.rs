@@ -1933,6 +1933,22 @@ mod rtt_tests {
         assert_eq!(clock.avg_latency_ms(), None);
     }
 
+    /// `CMSG_PING`'s sequence `+0x1a68` is zeroed once, when the one `NetClient` is built
+    /// (`0x53745e`), and only incremented after (`0x537e69`), so a new link's first ping goes on
+    /// from the last link's; the stale pong is still dropped, its send stamp gone.
+    #[test]
+    fn the_ping_sequence_carries_across_a_reconnect() {
+        let mut clock = PingClock::default();
+        sent(&mut clock, 3);
+        clock.clear();
+        assert_eq!(clock.sequence, 3, "the next link's first ping is 4");
+        assert_eq!(
+            clock.record_pong(3),
+            None,
+            "the dead socket's echo is dropped"
+        );
+    }
+
     /// The byte counts belong to the link: only the next connect replaces them (`0x537b90`), so the
     /// world entry's reset of the round trips keeps them, and `GetNetStats` reads the link's rates
     /// from its connect.
