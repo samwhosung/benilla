@@ -206,7 +206,10 @@ impl QueuedMeleeSpell {
 /// runs and shows its bar.
 ///
 /// A cast started over a queued strike pushes the strike into the save `0xcecaa8`, so the cast
-/// comes first and the first Esc takes it, the second the strike ([`QueuedMeleeSpell`]).
+/// comes first and the first Esc takes it. Its pop copies the strike back from the save, which
+/// keeps it, so a second Esc cancels the strike and leaves it in the slot, and the server's echo
+/// of the first cancel, which ends the melee slot too (vmangos `HandleCancelCastOpcode`), pops it
+/// ([`QueuedMeleeSpell`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Inflight {
     /// An ordinary cast, with a guard, a bar and a `Casting` to reap.
@@ -344,7 +347,8 @@ pub(crate) struct LocalMoveStart(pub(crate) bool);
 ///
 /// vmangos answers the cancel with `SMSG_SPELL_FAILED_OTHER` and a failing `SMSG_CAST_RESULT`
 /// 0x23, whose report finds nothing in flight and fires `SPELLCAST_INTERRUPTED` itself
-/// (`0x6e2245`, [`super::CastCore::report`]), a round trip after the STOP. The stock
+/// (`0x6e2245`, [`super::CastCore::report`]), a round trip after the STOP; a strike the pop
+/// restored is in flight, and the report fires nothing (`0x6e2228`). The stock
 /// `CastingBarFrame.lua:132-139` steps the flash once per OnUpdate after the 1 s hold, followed
 /// by the fade.
 pub(super) fn local_self_cancel(mut moved: ResMut<LocalMoveStart>, mut cancel: SelfCancel) {
@@ -405,20 +409,11 @@ impl SelfCancel<'_, '_> {
 
     /// `CancelCast(failed, 1, 0x1c)` ([`super::CastCore::cancel`]), then a popped cast's local
     /// teardown: its self `Casting` reaped with a `Fail` cast event, as `spell_failed_other`'s
-    /// echo would, run early so the echo finds it done.
-    ///
-    /// Deviation: a strike in the slot that the save also holds, one a cast popped back over,
-    /// leaves the slot here, where the reference's pop copies it back from the save (`0x6e4b2c`)
-    /// and a second Esc sends its cancel again, until the server's echo pops it. vmangos drops the
-    /// melee slot on the first cancel whatever its id (`HandleCancelCastOpcode`), and both clients
-    /// converge on that echo.
+    /// echo would, run early so the echo finds it done. A strike a cast popped back over is in the
+    /// slot and the save, so its pop copies it back (`0x6e4b2c`): it stays in flight, and each
+    /// press until the server's echo sends its cancel again (`0x6e6eb4`).
     fn cancel_inflight(&mut self, failed: bool, why: &str) {
         let self_e = self.self_entity();
-        if let Some(strike) = self.queued_melee.current() {
-            if self.pending.current().is_none() && !self.ground.active() {
-                self.queued_melee.clear_save_if(strike);
-            }
-        }
         let Self {
             pending,
             queued_melee,
@@ -1256,8 +1251,10 @@ mod tests {
         }
 
         /// A cast nested over a queued strike (`PushPopNestedCast 0x6e4ad0`) dies on the first
-        /// Esc, the strike on the second, and only the first fires an event: one record, one
-        /// caster word.
+        /// Esc, whose pop copies the strike back from the save (`0x6e4b2c`); the second finds it
+        /// in flight (`0x6e6eb4`), is eaten, and sends its cancel, and the pop copies it back
+        /// again, so a third does the same. Only the first fires an event: one record, one caster
+        /// word.
         #[test]
         fn esc_takes_the_cast_first_and_the_strike_on_the_next_press() {
             let (mut app, rx) = harness(HashMap::new());
@@ -1318,12 +1315,34 @@ mod tests {
                     spell_id: HEROIC_STRIKE
                 })
             ));
-            assert_eq!(app.world().resource::<QueuedMeleeSpell>().current(), None);
+            assert_eq!(
+                app.world().resource::<QueuedMeleeSpell>().current(),
+                Some(HEROIC_STRIKE),
+                "the pop copied the strike back: the save keeps it"
+            );
             assert!(
                 app.world().resource::<CastReports>().edges().is_empty(),
                 "the first press's event cleared the caster word (`0x6e4a5a`), so the second \
                  fires none (`0x6e4a1e`); only the strike's pop signals"
             );
+
+            // Press 3, still inside the round trip: the same again.
+            app.world_mut().run_system_once(feed_cast_reports).unwrap();
+            assert_eq!(
+                app.world()
+                    .non_send_resource::<UiScript>()
+                    .eval::<Option<i64>>("return SpellStopCasting()")
+                    .unwrap(),
+                Some(1)
+            );
+            apply_stops(&mut app);
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(crate::net::ClientCommand::CancelCast {
+                    spell_id: HEROIC_STRIKE
+                })
+            ));
+            assert!(rx.try_recv().is_err());
         }
 
         /// `0x6e9b70` sends the cancel and fires no event, clearing nothing local.

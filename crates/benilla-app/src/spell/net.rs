@@ -2186,6 +2186,60 @@ mod tests {
         assert_eq!(s.app.world().resource::<QueuedMeleeSpell>().current(), None);
     }
 
+    /// Esc over a cast nested on a queued strike, then a second Esc inside the round trip: the
+    /// first cancels the cast and its pop copies the strike back from the save (`0x6e4b2c`); the
+    /// second cancels the strike and its pop copies it back again. vmangos answers the first
+    /// cancel for both, the cast and the melee slot (`HandleCancelCastOpcode`): the cast's report
+    /// finds the strike in flight and fires nothing (`0x6e2228`), the strike's pops it twice, with
+    /// no event, as the first press's STOP spent the caster word.
+    #[test]
+    fn a_second_esc_resends_the_strikes_cancel_and_the_echoes_fire_nothing() {
+        use crate::net::ClientCommand;
+        const HEROIC_STRIKE: u32 = 78;
+        let mut s = CastSeq::new();
+        s.app.init_resource::<crate::creature_anim::PlaySeq>();
+        s.push(HEROIC_STRIKE, crate::spell::Held::Strike);
+        s.commit(FIREBALL, None);
+        let esc = |s: &mut CastSeq| {
+            s.app
+                .world_mut()
+                .run_system_once(|mut cancel: crate::spell::SelfCancel| cancel.stop_casting())
+                .unwrap();
+        };
+        let queued = |s: &CastSeq| {
+            let q = s.app.world().resource::<QueuedMeleeSpell>();
+            (q.current(), q.saved())
+        };
+        esc(&mut s);
+        assert!(matches!(
+            s.sent()[..],
+            [ClientCommand::CancelCast { spell_id: FIREBALL }]
+        ));
+        assert_eq!(s.stream(), ["CHANGED", "STOP"]);
+        assert_eq!(queued(&s), (Some(HEROIC_STRIKE), Some(HEROIC_STRIKE)));
+        esc(&mut s);
+        assert!(matches!(
+            s.sent()[..],
+            [ClientCommand::CancelCast {
+                spell_id: HEROIC_STRIKE
+            }]
+        ));
+        assert_eq!(s.stream(), ["CHANGED"]);
+        assert_eq!(
+            queued(&s),
+            (Some(HEROIC_STRIKE), Some(HEROIC_STRIKE)),
+            "still in flight"
+        );
+        s.failed_other(FIREBALL);
+        s.result(FIREBALL, Some(0x23));
+        assert_eq!(s.stream(), ["REFUSED 0x23"], "no SPELLCAST_INTERRUPTED");
+        s.failed_other(HEROIC_STRIKE);
+        s.result(HEROIC_STRIKE, Some(0x23));
+        assert_eq!(s.stream(), ["REFUSED 0x23", "CHANGED", "CHANGED"]);
+        assert_eq!(queued(&s), (None, None));
+        assert!(s.sent().is_empty());
+    }
+
     /// A strike a cast popped back over is in the slot and the save (`0x6e4b2c` copies, never
     /// clears): its failure pops twice, the report's pop copying it back (`0x6e2218`), the save
     /// clear (`0x6e73ee`), then the handler's own pop (`0x6e741a`).
