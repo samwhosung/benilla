@@ -341,10 +341,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_guild
 
-- A script's 16-letter name, which the reference's bindings pass (1 to 16 units, `0x4d20d0`, `0x4d2210`), is dropped rather than sent or truncated, because vmangos would kick the session. ([`src/ui_guild/feed.rs:412`](../crates/benilla-app/src/ui_guild/feed.rs#L412))
-- Bounded at the ten slots, because the reference's read (`0x4c93e7`) runs past its array. ([`src/ui_guild/mod.rs:44`](../crates/benilla-app/src/ui_guild/mod.rs#L44))
-- Clamped to ten, because the reference's unbounded loop (`0x4d0bb0`) overruns its ten-slot array on a hostile `rankCount >= 12`. ([`src/ui_guild/mod.rs:279`](../crates/benilla-app/src/ui_guild/mod.rs#L279))
-- The identity cache goes too, where the reference keeps it in `guildcache.wdb`, because a renamed guild would otherwise show its old name. ([`src/ui_guild/mod.rs:584`](../crates/benilla-app/src/ui_guild/mod.rs#L584))
+- A script's 16-letter name, which the reference's bindings pass (1 to 16 units, `0x4d20d0`, `0x4d2210`), is dropped rather than sent or truncated, because vmangos would kick the session. ([`src/ui_guild/feed.rs:415`](../crates/benilla-app/src/ui_guild/feed.rs#L415))
+- Bounded at the ten slots, because the reference's read (`0x4c93e7`) runs past its array. ([`src/ui_guild/mod.rs:46`](../crates/benilla-app/src/ui_guild/mod.rs#L46))
+- Clamped to ten, because the reference's unbounded loop (`0x4d0bb0`) overruns its ten-slot array on a hostile `rankCount >= 12`. ([`src/ui_guild/mod.rs:365`](../crates/benilla-app/src/ui_guild/mod.rs#L365))
+- The identity cache goes too, where the reference keeps it in `guildcache.wdb`, because a renamed guild would otherwise show its old name. ([`src/ui_guild/mod.rs:720`](../crates/benilla-app/src/ui_guild/mod.rs#L720))
 - An exact tie is `Equal` where the reference answers ±1, and a NaN has a place (`total_cmp`), because Rust's sort requires a total order. ([`src/ui_guild/sort.rs:72`](../crates/benilla-app/src/ui_guild/sort.rs#L72))
 - The reference ties a miss with a hit (`0x4d0e27`, `0x4d0ea1`), no total order. ([`src/ui_guild/sort.rs:89`](../crates/benilla-app/src/ui_guild/sort.rs#L89))
 
@@ -601,7 +601,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### events
 
-- `benilla::spell_mods` refuses an out-of-range pair, because the reference would overrun it. ([`src/events.rs:673`](../crates/benilla-protocol/src/events.rs#L673))
+- `benilla::spell_mods` refuses an out-of-range pair, because the reference would overrun it. ([`src/events.rs:681`](../crates/benilla-protocol/src/events.rs#L681))
 
 #### examples
 
