@@ -643,11 +643,15 @@ mod tests {
                 ..Default::default()
             });
         }
+        // A Troll (8) Hunter (3), female (1), as the name query answered.
         app.world_mut().resource_mut::<NameCache>().insert_player(
             STRANGER,
             "Wanderer".into(),
-            None,
+            Some((8, 3, 1)),
         );
+        let tables = crate::ui_unit::TestNames::english();
+        app.insert_resource(crate::chr_classes::ChrRaceTable(tables.races))
+            .insert_resource(crate::chr_classes::ChrClassTable(tables.classes));
         let asked = |rx: &crossbeam_channel::Receiver<crate::net::ClientCommand>| -> Vec<u64> {
             rx.try_iter()
                 .filter_map(|c| match c {
@@ -702,11 +706,26 @@ mod tests {
             "a pending name is asked once"
         );
 
-        // A player out of view: the cached name, and still no unit.
+        // A player out of view: the cached name, race, class and sex (`0x5182d9`, `0x518429`,
+        // `0x517f80`), and still no unit.
         retarget_boss(&mut app, STRANGER);
         assert_eq!(name(&app, chain).as_deref(), Some("Wanderer"));
         assert_eq!(asked(&rx), Vec::<u64>::new(), "a cached name is not asked");
         nil(&app, &["UnitExists", "UnitIsPlayer", "UnitPVPName"]);
+        let pair = |getter: &str| -> (Option<String>, Option<String>) {
+            script(&app)
+                .eval(&format!("return {getter}({chain:?})"))
+                .unwrap()
+        };
+        assert_eq!(
+            pair("UnitRace"),
+            (Some("Troll".into()), Some("Troll".into()))
+        );
+        assert_eq!(
+            pair("UnitClass"),
+            (Some("Hunter".into()), Some("HUNTER".into()))
+        );
+        assert_eq!(number(&app, "UnitSex", chain), 3);
 
         // A party member out of view: what `party4` reads, off the record.
         let mut entries: Vec<GroupMemberEntry> =

@@ -318,6 +318,7 @@ pub(crate) fn feed_party(
                     index.0.get(&m.guid).and_then(|e| stores.get(*e).ok()),
                     &group,
                     own_group.clone(),
+                    &names,
                     chr,
                     types,
                 );
@@ -401,6 +402,7 @@ pub(crate) fn feed_party(
                         index.0.get(guid).and_then(|e| stores.get(*e).ok()),
                         &group,
                         own_group.clone(),
+                        &names,
                         chr,
                         types,
                     );
@@ -716,6 +718,8 @@ fn member_unit_state(
     store: Option<&ObjectStore>,
     group: &GroupState,
     own_group: Option<String>,
+    // The name cache, whose record answers race, class and sex for a member with no object.
+    _names: &NameCache,
     // `ChrRaces.dbc` and `ChrClasses.dbc`: the names and the relic slot, which only the live leg
     // has a class byte to key by, so an unstreamed paladin reads no relic slot.
     classes: crate::ui_unit::UnitNames<'_>,
@@ -1526,6 +1530,7 @@ mod tests {
             None,
             &GroupState::default(),
             None,
+            &NameCache::default(),
             Default::default(),
             Default::default(),
         );
@@ -1549,11 +1554,65 @@ mod tests {
             None,
             &GroupState::default(),
             None,
+            &NameCache::default(),
             Default::default(),
             Default::default(),
         );
         assert_eq!((bare.health, bare.max_health, bare.power), (0, 0, 0));
         assert!(bare.exists);
+    }
+
+    /// A member out of view answers race, class and sex from the name cache record of its guid,
+    /// read with no callback (`UnitRace` `0x5182bc`-`0x5182d9`, `+0x138`; `UnitClass` `0x518429`,
+    /// `+0x140`; `UnitSex` `0x517f80`, `+0x13c` through `{2, 3, 1, 6}` at `0x808be4`); a miss
+    /// leaves them unset, nil and `UnitSex` 2 (`0x517f95`). A held member reads its descriptor.
+    #[test]
+    fn an_out_of_view_member_reads_race_class_and_sex_from_the_name_cache() {
+        let m = GroupMemberEntry {
+            name: "Brisca".into(),
+            guid: 0x1234,
+            status: member_status::ONLINE,
+            flags: 0,
+        };
+        let tables = crate::ui_unit::TestNames::english();
+        let mut names = NameCache::default();
+        let state = |names: &NameCache, store: Option<&ObjectStore>| {
+            member_unit_state(
+                &m,
+                None,
+                store,
+                &GroupState::default(),
+                None,
+                names,
+                tables.names(),
+                Default::default(),
+            )
+        };
+        let s = state(&names, None);
+        assert_eq!((s.race, s.class, s.sex), (None, None, 0), "no record");
+        // Night Elf (4) Priest (5), female (1).
+        names.insert_player(0x1234, "Brisca".into(), Some((4, 5, 1)));
+        let s = state(&names, None);
+        assert_eq!(
+            (s.race.as_deref(), s.race_file.as_deref()),
+            (Some("Night Elf"), Some("NightElf"))
+        );
+        assert_eq!(
+            (s.class.as_deref(), s.class_file.as_deref()),
+            (Some("Priest"), Some("PRIEST"))
+        );
+        assert_eq!(s.sex, 3, "female");
+        // Held, a Human (1) Warrior (1), male: the descriptor's, not the cache's.
+        const BYTES_0: u16 = 36;
+        let held = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
+            BYTES_0,
+            1 | (1 << 8),
+        )]));
+        let s = state(&names, Some(&held));
+        assert_eq!(
+            (s.race.as_deref(), s.class.as_deref(), s.sex),
+            (Some("Human"), Some("Warrior"), 2)
+        );
     }
 
     /// The tooltip's group record (`0x496400`): the party's for a member of our own slots, else the
@@ -1612,6 +1671,7 @@ mod tests {
             None,
             &GroupState::default(),
             None,
+            &NameCache::default(),
             Default::default(),
             Default::default(),
         );
@@ -1631,6 +1691,7 @@ mod tests {
             None,
             &GroupState::default(),
             None,
+            &NameCache::default(),
             Default::default(),
             Default::default(),
         );
@@ -1653,6 +1714,7 @@ mod tests {
             None,
             &GroupState::default(),
             None,
+            &NameCache::default(),
             Default::default(),
             Default::default(),
         );
@@ -1672,6 +1734,7 @@ mod tests {
             None,
             &GroupState::default(),
             None,
+            &NameCache::default(),
             Default::default(),
             Default::default(),
         );
