@@ -393,20 +393,16 @@ fn a_released_player_comes_back_with_its_fields_and_no_create_hook() {
     assert!(held(world, MATE));
     assert_eq!(
         notices(world),
-        [
-            FieldNotice::Unit {
-                guid: MATE,
-                id: 144
-            },
-            signal(22)
-        ],
-        "the moved field's watch, then the packet end's party record; no guild tag"
+        [signal(22)],
+        "no bridge until its slot 3 (`0x5fbc44`, `0x5fbe36`), then the packet end's party \
+         record; no guild tag"
     );
     assert_eq!(edges(world), [(MATE, STAT0, 5, 7)]);
 }
 
 /// A values block for a released guid brings the object back (`0x467160` → `0x464530`) with the
-/// fields it kept, and its watches run as for a live one; a movement block (`0x4670bf`) and a
+/// fields it kept; its field bridge, dropped by the release (`0x5fbc44`), runs again from the next
+/// packet, once slot 3 has added it back (`0x5fbe36`). A movement block (`0x4670bf`) and a
 /// near-objects block (`0x4672c8`) bring one back the same way.
 #[test]
 fn a_values_movement_or_near_block_brings_a_released_object_back() {
@@ -422,12 +418,21 @@ fn a_values_movement_or_near_block_brings_a_released_object_back() {
     assert!(held(world, MOB), "a values block");
     assert_eq!(field(world, MOB, ENTRY), Some(299), "the kept fields");
     assert_eq!(field(world, MOB, STAT0), Some(6));
-    assert_eq!(notices(world), [FieldNotice::Unit { guid: MOB, id: 144 }]);
+    assert!(
+        notices(world).is_empty(),
+        "no bridge in the packet that brings it back"
+    );
+    send(world, [values(MOB, &[(STAT0, 7)])]);
+    assert_eq!(
+        notices(world),
+        [FieldNotice::Unit { guid: MOB, id: 144 }],
+        "the next packet's block runs it"
+    );
 
     send(world, [out_of_range(&[MOB])]);
     send(world, [moved(MOB)]);
     assert!(held(world, MOB), "a movement block");
-    assert_eq!(field(world, MOB, STAT0), Some(6));
+    assert_eq!(field(world, MOB, STAT0), Some(7));
     let e = world.resource::<GuidIndex>().0[&MOB];
     assert_eq!(
         world.get::<Transform>(e).unwrap().translation,
