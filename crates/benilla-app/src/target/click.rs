@@ -596,9 +596,29 @@ impl Dispatch<'_, '_> {
             });
     }
 
-    /// `0x5f0130`: the NPC-service ladder. Out of the 5.5556 yd reach it walks there when `walk`,
-    /// returning before the ladder and the gesture (`0x5f022f`), and otherwise sends nothing.
+    /// Whether the player's form bars NPCs (`IsShapeShifted`, `0x60e9f0`, and the form row's flag
+    /// `0x8`, `0x5f017f`).
+    fn shapeshifted_from_npcs(&self) -> bool {
+        let form = self.self_store().map_or(0, |s| s.0.unit_shapeshift_form());
+        self.go_inputs
+            .spells
+            .as_deref()
+            .is_some_and(|spells| crate::ui_session::form_bars_interaction(&spells.forms, form))
+    }
+
+    /// `0x5f0130`: the NPC-service ladder. It opens with the form test (`0x5f0150`): a player in a
+    /// form that bars NPCs gets `ERR_CANT_INTERACT_SHAPESHIFTED` (`0x5f0185`, message 351) and
+    /// nothing else, no walk and no gesture, in reach or not. Out of the 5.5556 yd reach it then
+    /// walks there when `walk`, returning before the ladder and the gesture (`0x5f022f`), and
+    /// otherwise sends nothing.
     fn talk(&mut self, entity: Entity, guid: u64, in_reach: bool, walk: bool) {
+        if self.shapeshifted_from_npcs() {
+            debug!("right-click interact: {guid:#x} — refused, shapeshifted");
+            self.feedback.errors.0.push(crate::ui_action::UiError::key(
+                "ERR_CANT_INTERACT_SHAPESHIFTED",
+            ));
+            return;
+        }
         if !in_reach {
             if walk {
                 self.approach(

@@ -8,7 +8,7 @@ use benilla_protocol::field::{FIELD_UNIT_BYTES_1, FIELD_UNIT_HEALTH};
 use benilla_protocol::messages::ObjectType;
 
 use super::latch_tests::{harness, latch, open, vocals, BANKER, VENDOR};
-use super::release::{form_releases, release_on_field_edges};
+use super::release::{form_bars_interaction, release_on_field_edges};
 use super::{LatchVocal, NpcWindow};
 use crate::net::{FieldChanged, SelfPlayer};
 use crate::ui_action::Spells;
@@ -211,7 +211,7 @@ fn the_shipped_forms_split_into_those_that_close_the_window_and_those_that_do_no
     let Some(spells) = crate::ui_action::real_spells() else {
         return;
     };
-    let closes = |id: u8| form_releases(&spells.forms, id);
+    let closes = |id: u8| form_bars_interaction(&spells.forms, id);
     for (id, name) in [
         (1, "Cat"),
         (2, "Tree"),

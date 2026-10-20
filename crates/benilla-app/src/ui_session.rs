@@ -25,6 +25,7 @@ pub(crate) use latch::{
     dispatch, fire, note_closed, queue, register, release, with_script, CoreCloses, InteractLatch,
     LatchApp, LatchVocal, LatchedWindow, NpcWindow,
 };
+pub(crate) use release::form_bars_interaction;
 
 /// Owns [`InteractLatch`], its watchdog and [`InteractNpc`], read by the `"npc"` portrait and the
 /// interaction face-me.
