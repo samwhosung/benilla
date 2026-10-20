@@ -332,6 +332,11 @@ impl ObjectFields {
     pub fn player_rest_state_experience(&self) -> Option<u32> {
         self.get_u32(FIELD_PLAYER_REST_STATE_EXPERIENCE)
     }
+    /// `PLAYER_BYTES_3` byte 0: the player's gender, 1 female, which `CGPlayer_C::GetGender`
+    /// (`0x5ed5b0`) reads for the active player in place of `UNIT_FIELD_BYTES_0` byte 2.
+    pub fn player_gender(&self) -> Option<u8> {
+        self.get_u32(FIELD_PLAYER_BYTES_3).map(|v| v as u8)
+    }
     /// `PLAYER_BYTES_3` byte 1: drunkenness, the high byte of `drunk & 0xFFFE` in the low half
     /// (`SetDrunkValue`); the reference clamps it to 100 and scales by 0.01 (`0x5e2a90`).
     pub fn player_drunk_byte(&self) -> Option<u8> {

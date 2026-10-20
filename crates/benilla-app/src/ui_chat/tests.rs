@@ -3329,3 +3329,54 @@ fn unit_combat_fires_at_its_place_in_the_drain() {
         ]
     );
 }
+
+/// The honor line's rank title genders off the active player's own descriptor, `PLAYER_BYTES_3`
+/// byte 0 (`0x612bf0` on the active player calls `0x5ed5b0`), not the name cache.
+#[test]
+fn the_honor_title_genders_off_the_active_players_bytes() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut feed = super::notice_tests::Feed::new();
+    feed.script()
+        .run(
+            r#"
+            PVP_RANK_8_0 = "Sergeant Sir"
+            PVP_RANK_8_0_FEMALE = "Sergeant Madam"
+            Honor = {}
+            Hon = CreateFrame("Frame", "BenillaHonorTitleSpy")
+            Hon:SetScript("OnEvent", function() table.insert(Honor, arg1) end)
+            Hon:RegisterEvent("CHAT_MSG_COMBAT_HONOR_GAIN")
+        "#,
+        )
+        .unwrap();
+    const ME: u64 = 7;
+    const VICTIM: u64 = 8;
+    let me = feed
+        .world
+        .spawn(crate::net::ObjectStore(
+            benilla_protocol::ObjectFields::from_pairs(&[(2, 0x19), (195, 1)]),
+        ))
+        .id();
+    let victim = feed
+        .world
+        .spawn(crate::net::ObjectStore(
+            benilla_protocol::ObjectFields::from_pairs(&[(2, 0x19)]),
+        ))
+        .id();
+    {
+        let mut index = feed.world.resource_mut::<crate::net::GuidIndex>();
+        index.0.insert(ME, me);
+        index.0.insert(VICTIM, victim);
+    }
+    feed.world.resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
+    // The name cache says male; the descriptor wins.
+    feed.world
+        .resource_mut::<crate::names::NameCache>()
+        .insert_player(ME, "Probe".into(), Some((1, 1, 0)));
+    feed.world
+        .resource_mut::<super::ChatLog>()
+        .push_pvp_credit(30, VICTIM, 8, 0);
+    feed.drain();
+    let lines = feed.script().eval::<Vec<String>>("return Honor").unwrap();
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].contains("Sergeant Madam"), "{lines:?}");
+}
