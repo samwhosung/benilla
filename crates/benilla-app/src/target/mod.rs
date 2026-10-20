@@ -23,6 +23,8 @@ mod flash;
 mod front;
 #[cfg(test)]
 mod front_tests;
+#[cfg(test)]
+mod gate_tests;
 mod highlight;
 pub(crate) mod hover;
 mod hover_probe;

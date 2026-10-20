@@ -11,23 +11,23 @@ use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, SelfG
 use crate::vplates::PlateClicks;
 use benilla_world::interact::WorldClick;
 
-const ME: u64 = 0x10;
+pub(super) const ME: u64 = 0x10;
 /// Selected before each writer runs.
-const OLD: u64 = 0x21;
+pub(super) const OLD: u64 = 0x21;
 /// The unit each writer finds: the plate, the click, the attacker.
-const MOB: u64 = 0x31;
+pub(super) const MOB: u64 = 0x31;
 /// A spell the library does not know, so any unit binds under its `TARGET_FLAG_UNIT` word.
-const HEAL: u32 = 2050;
+pub(super) const HEAL: u32 = 2050;
 
-struct Fix {
-    app: App,
-    rx: Receiver<ClientCommand>,
-    mob: Entity,
+pub(super) struct Fix {
+    pub(super) app: App,
+    pub(super) rx: Receiver<ClientCommand>,
+    pub(super) mob: Entity,
 }
 
 /// The whole client, headless, with us, `OLD` selected and `MOB` beside; `charmed` has someone
 /// charm us (`UNIT_FIELD_CHARMEDBY`, a guid of two fields).
-fn fix(charmed: bool) -> Fix {
+pub(super) fn fix(charmed: bool) -> Fix {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
@@ -70,25 +70,25 @@ fn fix(charmed: bool) -> Fix {
 }
 
 impl Fix {
-    fn cursor_up(&mut self) {
+    pub(super) fn cursor_up(&mut self) {
         self.app
             .world_mut()
             .resource_mut::<crate::spell::SpellTargeting>()
             .enter(HEAL, crate::spell::CastCommit::Spell, 0x0002);
     }
 
-    fn cursor_is_up(&self) -> bool {
+    pub(super) fn cursor_is_up(&self) -> bool {
         self.app
             .world()
             .resource::<crate::spell::SpellTargeting>()
             .active()
     }
 
-    fn selected(&self) -> Option<u64> {
+    pub(super) fn selected(&self) -> Option<u64> {
         self.app.world().resource::<Selection>().guid
     }
 
-    fn click(&mut self, pick: Hovered) {
+    pub(super) fn click(&mut self, pick: Hovered) {
         let world = self.app.world_mut();
         world.resource_mut::<PressPick>().hovered = pick;
         world
@@ -97,7 +97,7 @@ impl Fix {
     }
 
     /// A unit the TAB scan can pick, `x` yards along.
-    fn scannable_at(&mut self, guid: u64, x: f32) -> Entity {
+    pub(super) fn scannable_at(&mut self, guid: u64, x: f32) -> Entity {
         let world = self.app.world_mut();
         let e = world
             .spawn((
@@ -120,7 +120,7 @@ impl Fix {
     }
 
     /// One TAB from a key's body, applied.
-    fn tab(&mut self) {
+    pub(super) fn tab(&mut self) {
         self.app
             .world_mut()
             .non_send_resource_mut::<benilla_ui::script::UiScript>()
@@ -130,7 +130,7 @@ impl Fix {
     }
 
     /// The `NpcGreetingRequest`s written since the last look.
-    fn greetings(&mut self) -> Vec<Entity> {
+    pub(super) fn greetings(&mut self) -> Vec<Entity> {
         self.app
             .world_mut()
             .resource_mut::<Messages<crate::sound::NpcGreetingRequest>>()
@@ -139,7 +139,7 @@ impl Fix {
             .collect()
     }
 
-    fn over_the_mob(&self) -> Hovered {
+    pub(super) fn over_the_mob(&self) -> Hovered {
         Hovered {
             target: Some(self.mob),
             guid: Some(MOB),
@@ -149,7 +149,7 @@ impl Fix {
     }
 
     /// The calls pass, whose head binds what the writers parked.
-    fn bind(&mut self) {
+    pub(super) fn bind(&mut self) {
         self.app
             .world_mut()
             .run_system_once(crate::script_calls::apply_script_calls)
@@ -157,7 +157,7 @@ impl Fix {
     }
 
     /// What went on the wire: the casts' targets and the selections.
-    fn wire(&self) -> (Vec<Option<u64>>, Vec<u64>) {
+    pub(super) fn wire(&self) -> (Vec<Option<u64>>, Vec<u64>) {
         let sent: Vec<_> = self.rx.try_iter().collect();
         let casts = sent
             .iter()

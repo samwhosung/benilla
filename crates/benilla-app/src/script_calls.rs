@@ -1109,6 +1109,71 @@ mod tests {
         }
     }
 
+    /// `0x6131a0` stops a running attack only with `[0xb4b3e4]` set (`0x6131ce`); without control
+    /// it falls to the start (`0x5ecb70`), which returns at the same flag (`0x5ecbc0`) before the
+    /// stand, the swing and the sheath: the press neither stops nor swings.
+    #[test]
+    fn attack_without_control_neither_stops_nor_swings() {
+        for engaged in [true, false] {
+            let mut f = frame(true);
+            with_factions(&mut f, FOE, &[(HEALTH, 100)]);
+            let world = f.app.world_mut();
+            world.init_resource::<crate::player::Player>();
+            world
+                .resource_mut::<crate::player::Player>()
+                .own_control_lost = true;
+            if engaged {
+                let me = world.resource::<GuidIndex>().0[&ME];
+                world
+                    .entity_mut(me)
+                    .insert(crate::creature_anim::Engaged(OLD));
+            }
+            run(&mut f, "AttackTarget()");
+            assert_eq!(swings(&f), (vec![], false), "engaged {engaged}");
+        }
+    }
+
+    /// TryCast's tail starts the swing of a cast that initiates combat through `0x6131a0`
+    /// (`0x6e51b5`), whose start returns at a clear `[0xb4b3e4]`: the cast goes out, the swing
+    /// does not.
+    #[test]
+    fn an_on_next_swing_cast_without_control_sends_no_swing() {
+        const STRIKE: u32 = 78;
+        for lost in [false, true] {
+            let mut f = frame(true);
+            with_factions(&mut f, FOE, &[(HEALTH, 100)]);
+            with_book_spell(
+                &mut f,
+                STRIKE,
+                "Strike",
+                benilla_formats::SpellDisplay {
+                    targets: 0x2,
+                    attributes: 0x404,
+                    ..Default::default()
+                },
+            );
+            let world = f.app.world_mut();
+            world.init_resource::<crate::player::Player>();
+            world
+                .resource_mut::<crate::player::Player>()
+                .own_control_lost = lost;
+            run(&mut f, r#"CastSpellByName("Strike")"#);
+            let sent: Vec<_> = f.rx.try_iter().collect();
+            assert!(
+                sent.iter().any(
+                    |c| matches!(c, ClientCommand::CastSpell { spell_id, .. } if *spell_id == STRIKE)
+                ),
+                "lost {lost}: the cast goes out: {sent:?}"
+            );
+            assert_eq!(
+                sent.iter()
+                    .any(|c| matches!(c, ClientCommand::AttackSwing { guid } if *guid == OLD)),
+                !lost,
+                "lost {lost}: {sent:?}"
+            );
+        }
+    }
+
     /// A macro's lines run inside `UseAction` (`0x4e6098 call 0x4f1460`), so what they call lands
     /// before the calls the pressing script makes after it: the macro's cast goes to the old
     /// target, then the script's `TargetUnit` moves the selection.

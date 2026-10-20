@@ -1118,6 +1118,56 @@ mod tests {
         assert_eq!(drain(&mut world, unit("target")), no_target, "no mover");
     }
 
+    /// The start gate refuses a follow with `ERR_TOOBUSYTOFOLLOW` while the mover's
+    /// `UNIT_CHANNEL_SPELL` is set (`0x60ffb9`, the unit block's word at `+0x228`): a channel
+    /// refuses it for as long as it lasts, a hard cast in flight does not.
+    #[test]
+    fn a_channel_refuses_a_follow_and_a_cast_in_flight_does_not() {
+        use crate::target::relations::fixture::{player, HUMAN};
+        /// `UNIT_CHANNEL_SPELL`.
+        const CHANNEL_SPELL: u16 = 144;
+        const DRAIN_LIFE: u32 = 689;
+
+        // (channelling, a cast in flight, followed)
+        for (channel, cast, followed) in [
+            (false, false, true),
+            (true, false, false),
+            (false, true, true),
+        ] {
+            let (mut world, t) = follow_world(player(ME, HUMAN), player(THEM, HUMAN), false);
+            select(&mut world, Some((t, THEM)));
+            if channel {
+                let me = world.resource::<GuidIndex>().0[&ME];
+                world
+                    .entity_mut(me)
+                    .get_mut::<ObjectStore>()
+                    .expect("our descriptor")
+                    .0
+                    .merge(benilla_protocol::ObjectFields::from_pairs(&[(
+                        CHANNEL_SPELL,
+                        DRAIN_LIFE,
+                    )]));
+            }
+            if cast {
+                world.resource_mut::<crate::spell::PendingCast>().push(
+                    DRAIN_LIFE,
+                    None,
+                    std::time::Instant::now(),
+                );
+            }
+            let want: (Vec<&str>, Option<u64>) = if followed {
+                (Vec::new(), Some(THEM))
+            } else {
+                (vec!["ERR_TOOBUSYTOFOLLOW"], None)
+            };
+            assert_eq!(
+                drain(&mut world, unit("target")),
+                want,
+                "channel {channel}, cast in flight {cast}"
+            );
+        }
+    }
+
     /// `DoEmote`'s search (`0x49fde9`, typemask 0x10, mode 0) runs the roster passes: a groupmate
     /// with no object answers to a prefix, and a streamed player nearer than the roster's
     /// placeholder distance with an equal prefix answers instead.

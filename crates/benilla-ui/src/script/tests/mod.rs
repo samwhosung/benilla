@@ -102,6 +102,7 @@ mod visibility;
 mod wheel;
 mod widget_args;
 mod widget_surface;
+mod world_press_hook;
 mod worldframe;
 mod worldmap;
 
