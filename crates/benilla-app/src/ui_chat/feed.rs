@@ -109,7 +109,7 @@ enum Pending {
         female: bool,
     },
     /// One combat-log line, classified at the packet; it waits only on an item's name, as the
-    /// reference's deferred queue (`0xc4e208`) does.
+    /// reference's deferred queue (`0xc4e208`) does, until the cache answers.
     Combat(Box<super::combat::PendingCombat>),
     /// A ready event (client-composed lines; name-carrying notices).
     Event(ChatEvent),
@@ -1310,7 +1310,10 @@ pub(super) fn feed_chat(
             }
             Pending::Combat(mut line) => {
                 // Names looked up with a callback as the line's (`0x6265a7`, `0x6265e0`), and
-                // asked again only on its first drain; a line waits on an item alone.
+                // asked again only on its first drain; a line waits on an item alone, and as long
+                // as the cache takes to answer: the reference's list has no timer or count, and
+                // only the answer or the session's end removes an entry (`0x6293a0`, `0x6294cc`,
+                // `0x629a90`).
                 let ask = Ask::at(line.tries == 0, &commands);
                 let sources = super::combat::NameSources {
                     names: &names,
@@ -1336,10 +1339,8 @@ pub(super) fn feed_chat(
                     },
                 );
                 if !ready {
-                    if line.tries < NAME_MAX_TRIES {
-                        line.tries += 1;
-                        still.push(Pending::Combat(line));
-                    }
+                    line.tries = line.tries.saturating_add(1);
+                    still.push(Pending::Combat(line));
                     continue;
                 }
                 write_combat_line(&mut script, &mut windows, &line);

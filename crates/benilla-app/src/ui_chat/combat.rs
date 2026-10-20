@@ -988,6 +988,7 @@ pub(crate) struct PendingCombat {
     /// Everything the template needs but the names, which are filled at drain.
     pub fills: Fills,
     pub named: Named,
+    /// The drains that found the line waiting; the first asks for its names, the rest only read.
     pub tries: u16,
     /// The `COMBAT_TEXT_UPDATE` the formatter raises once the line is written, and only then: a
     /// missing template, range or spell writes neither.
