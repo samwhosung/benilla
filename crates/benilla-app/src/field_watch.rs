@@ -24,6 +24,8 @@ use benilla_protocol::messages::ObjectType;
 use benilla_protocol::{ObjectFields, OwnerFallback};
 use bevy::prelude::*;
 
+use crate::tutorial::id as tutorial;
+
 /// One signal a reference callback raised, in the order the packets raised them.
 #[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FieldNotice {
@@ -428,6 +430,15 @@ pub(crate) fn values(
         }
         if flipped & 0x1000 != 0 {
             pass.reaction(at, guid, fields, around);
+            // The PvP tutorial for the active player now flagged (`0x5ff732`-`0x5ff756`).
+            if around.me == Some(guid) && flags & 0x1000 != 0 {
+                pass.push(
+                    at,
+                    FieldNotice::Tutorial {
+                        id: tutorial::PVP_COMBAT,
+                    },
+                );
+            }
         }
         // 0x800 on a unit whose charmer, else summoner, is the active player (`0x5ff75e`-
         // `0x5ff784`): `PET_ATTACK_START` when now set, else `PET_ATTACK_STOP` (`0x5ff79f`).
@@ -491,8 +502,26 @@ pub(crate) fn values(
             // against the new flags.
             if around.me == Some(guid) {
                 let flags = fields.player_flags();
-                // 0x20, resting: `PLAYER_UPDATE_RESTING` on either edge (`0x5eead0`, `0x5eeaf2`).
+                // 0x10, the ghost state (`0x5eeab4` → `0x5de9c0`): its tutorial when now set.
+                if flipped & 0x10 != 0 && flags & 0x10 != 0 {
+                    pass.push(
+                        at,
+                        FieldNotice::Tutorial {
+                            id: tutorial::DEATH,
+                        },
+                    );
+                }
+                // 0x20, resting: the rest tutorial when now set (`0x5eeae6`-`0x5eeaed`), then
+                // `PLAYER_UPDATE_RESTING` on either edge (`0x5eead0`, `0x5eeaf2`).
                 if flipped & 0x20 != 0 {
+                    if flags & 0x20 != 0 {
+                        pass.push(
+                            at,
+                            FieldNotice::Tutorial {
+                                id: tutorial::RESTING,
+                            },
+                        );
+                    }
                     let id = id::PLAYER_UPDATE_RESTING;
                     pass.push(at, FieldNotice::Global { id });
                 }
@@ -549,6 +578,15 @@ pub(crate) fn values(
             let byte = |v: u32| (v >> (8 * (REST_STATE % 4))) as u8;
             let (old, new) = (byte(old), byte(new));
             pass.push(at, FieldNotice::RestState { old, new });
+            // State 1's row names the rested tutorial (`0x80af50`: `0x15a`, `0x19`; `0x5de542`).
+            if new == 1 {
+                pass.push(
+                    at,
+                    FieldNotice::Tutorial {
+                        id: tutorial::RESTED,
+                    },
+                );
+            }
         }
         for (offset, len, id) in PLAYER_EVENT_WATCHES {
             if let Some(at) = at(PLAYER_SECTION, (offset, len), List::Object) {
@@ -1112,14 +1150,17 @@ mod tests {
         let flags = pf(PLAYER_FLAGS.0);
         let changed = signal(ME, 407);
         let resting = FieldNotice::Global { id: 405 };
+        let rest_tutorial = FieldNotice::Tutorial {
+            id: tutorial::RESTING,
+        };
         let playtime = FieldNotice::Global { id: 530 };
         let mut me = player();
         // `PLAYER_FLAGS_HIDE_HELM`, a bit no arm tests.
         assert_eq!(block(&mut me, Some(ME), ME, &[(flags, 0x400)]), [changed]);
-        // The resting bit, both edges (`0x5eead0`).
+        // The resting bit, both edges (`0x5eead0`), its tutorial on the set one (`0x5eeae6`).
         assert_eq!(
             block(&mut me, Some(ME), ME, &[(flags, 0x420)]),
-            [changed, resting]
+            [changed, rest_tutorial, resting]
         );
         assert_eq!(
             block(&mut me, Some(ME), ME, &[(flags, 0x400)]),
@@ -1144,6 +1185,7 @@ mod tests {
             block(&mut me, Some(ME), ME, &[(flags, 0x420)]),
             [
                 changed,
+                rest_tutorial,
                 resting,
                 FieldNotice::PvpPreference { on: false },
                 playtime

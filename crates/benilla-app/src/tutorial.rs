@@ -14,7 +14,9 @@
 //!
 //! The reference has fifty-one trigger sites and seven acknowledge sites (the callers of
 //! `0x4b5390` and `0x4b54c0`); the ones this app can produce reach here through
-//! [`TutorialEvent`] or the self-descriptor edges below.
+//! [`TutorialEvent`], the polled edges below, or a field watcher's
+//! [`crate::field_watch::FieldNotice::Tutorial`], fired in the watcher's place
+//! ([`Tutorials::fire_now`]).
 
 use std::time::{Duration, Instant};
 
@@ -159,19 +161,26 @@ impl Tutorials {
 
     /// `TriggerTutorial(id, delayMs)` (`0x4b5390`).
     pub(crate) fn trigger(&mut self, id: u32, delay_ms: u32, now: Instant) {
-        let Some(bank) = self.fire_once.as_mut() else {
-            return; // no bank yet: silent
+        let Some(published) = self.fire_now(id) else {
+            return;
         };
-        match bank_bit(bank, id) {
-            Some(false) => set_bank_bit(bank, id),
-            _ => return, // already set, or past the bank (the reference would overrun)
-        }
         if delay_ms == 0 {
-            self.fired.push(id + 1);
+            self.fired.push(published);
         } else {
             self.timers
                 .push((id, now + Duration::from_millis(u64::from(delay_ms))));
         }
+    }
+
+    /// `0x4b5390`'s fire-once test: bank A's bit for `id` tested and set, and the published id
+    /// (`id + 1`) for the caller to fire, at once with no delay ([`fire_published`]). `None` with
+    /// no bank yet, the bit already set, or an id past the bank (the reference would overrun).
+    pub(crate) fn fire_now(&mut self, id: u32) -> Option<u32> {
+        let bank = self.fire_once.as_mut()?;
+        (bank_bit(bank, id) == Some(false)).then(|| {
+            set_bank_bit(bank, id);
+            id + 1
+        })
     }
 
     /// `SetTutorialFlag(id)` (`0x4b54c0`): bank B's bit gates, both banks set, the id's timer
@@ -241,20 +250,14 @@ impl Tutorials {
     }
 }
 
-/// The self descriptor's last-seen fields, for the edge-triggered `0x4b5390` sites: the level-up
-/// arm, the ghost flag, the resting flag, the PvP flag, the rest state.
+/// The last-seen level and swimming state, for the edge-triggered `0x4b5390` sites polled here.
+/// The ghost, resting, PvP and rested tutorials ride their field watchers
+/// ([`crate::field_watch`]).
 #[derive(Default)]
 struct SelfWatch {
     level: Option<u32>,
-    player_flags: Option<u32>,
-    unit_flags: Option<u32>,
-    rest_state: Option<u8>,
     swimming: Option<bool>,
 }
-
-const PLAYER_FLAGS_GHOST: u32 = 0x10;
-const PLAYER_FLAGS_RESTING: u32 = 0x20;
-const UNIT_FLAG_PVP_ATTACKABLE: u32 = 0x1000;
 
 /// The hearthstone's item entry (`0x1b24`).
 const HEARTHSTONE: u32 = 6948;
@@ -318,11 +321,7 @@ fn feed_tutorials(
         return;
     };
     for published in std::mem::take(&mut tutorials.fired) {
-        sounds.push_cue(TUTORIAL_POPUP_SOUND);
-        script.fire_event(
-            "TUTORIAL_TRIGGER",
-            vec![ScriptValue::Int(i64::from(published))],
-        );
+        fire_published(&mut script, &mut sounds, published);
     }
     // The bank is owed to every VM: what it has been told is per VM, so a `/reload`'s fresh VM
     // is told again.
@@ -333,10 +332,22 @@ fn feed_tutorials(
     }
 }
 
-/// The self descriptor's `0x4b5390` edge sites: the `SMSG_LEVELUP_INFO` arm on the level rising,
-/// the ghost and resting flags, the PvP flag, the rested table's one live row, and the mover
-/// entering water. Each fires on a change, never on the login descriptor; the bring-up resets the
-/// memory.
+/// `0x4b5390`'s firing of a published id: the `TutorialPopup` cue, then `TUTORIAL_TRIGGER`.
+pub(crate) fn fire_published(
+    script: &mut UiScript,
+    sounds: &mut crate::sound::MessageSounds,
+    published: u32,
+) {
+    sounds.push_cue(TUTORIAL_POPUP_SOUND);
+    script.fire_event(
+        "TUTORIAL_TRIGGER",
+        vec![ScriptValue::Int(i64::from(published))],
+    );
+}
+
+/// The polled `0x4b5390` edge sites: the `SMSG_LEVELUP_INFO` arm on the level rising, and the
+/// mover entering water. Each fires on a change, never on the login descriptor; the bring-up
+/// resets the memory.
 fn watch_self(
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     player: Res<Player>,
@@ -350,9 +361,6 @@ fn watch_self(
     // The first sight of each field arms silently.
     if let Ok(store) = self_q.single() {
         let level = store.0.unit_level();
-        let player_flags = store.0.player_flags();
-        let unit_flags = store.0.unit_flags();
-        let rest_state = store.0.player_rest_state();
         if let (Some(prev), Some(new)) = (watch.level, level) {
             if new > prev {
                 for (threshold, id) in LEVEL_TRIGGERS {
@@ -362,30 +370,7 @@ fn watch_self(
                 }
             }
         }
-        if let Some(prev) = watch.player_flags {
-            let rose = |bit: u32| prev & bit == 0 && player_flags & bit != 0;
-            if rose(PLAYER_FLAGS_GHOST) {
-                asks.write(TutorialEvent::trigger(id::DEATH));
-            }
-            if rose(PLAYER_FLAGS_RESTING) {
-                asks.write(TutorialEvent::trigger(id::RESTING));
-            }
-        }
-        if let Some(prev) = watch.unit_flags {
-            if prev & UNIT_FLAG_PVP_ATTACKABLE == 0 && unit_flags & UNIT_FLAG_PVP_ATTACKABLE != 0 {
-                asks.write(TutorialEvent::trigger(id::PVP_COMBAT));
-            }
-        }
-        if let (Some(prev), Some(new)) = (watch.rest_state, rest_state) {
-            // Only rest state 1 names a tutorial; the other rows carry the sentinel.
-            if new != prev && new == 1 {
-                asks.write(TutorialEvent::trigger(id::RESTED));
-            }
-        }
         watch.level = level;
-        watch.player_flags = Some(player_flags);
-        watch.unit_flags = Some(unit_flags);
-        watch.rest_state = rest_state;
     }
     if let Some(prev) = watch.swimming {
         if !prev && player.swimming {

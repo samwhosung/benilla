@@ -32,6 +32,7 @@ pub(crate) fn fire_field_notices(
     mut sink: crate::ui_action::MessageSink,
     // The quest log's watcher reads the slots.
     me: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
+    mut tutorials: Option<ResMut<crate::tutorial::Tutorials>>,
 ) {
     let fresh: Vec<FieldNotice> = cursor.0.read(&notices).copied().collect();
     // No VM, nobody to hear them: they are dropped, as below.
@@ -42,6 +43,13 @@ pub(crate) fn fire_field_notices(
         if notice == FieldNotice::QuestLog {
             if let Some(store) = me.iter().next() {
                 script.quest_log_changed(crate::ui_quest_log::slot_views(&store.0));
+            }
+            continue;
+        }
+        if let FieldNotice::Tutorial { id } = notice {
+            // `0x4b5390` with no delay, inside the watcher's run.
+            if let Some(published) = tutorials.as_mut().and_then(|t| t.fire_now(id)) {
+                crate::tutorial::fire_published(&mut script, &mut sink.sounds, published);
             }
             continue;
         }
@@ -114,9 +122,8 @@ fn fire(script: &mut UiScript, sink: &mut crate::ui_action::MessageSink, notice:
                 script.fire_event(global, vec![]);
             }
         }
-        // Fired by [`fire_field_notices`], which holds the slots.
-        FieldNotice::QuestLog => {}
-        FieldNotice::Tutorial { .. } => {}
+        // Fired by [`fire_field_notices`], which holds the slots and the banks.
+        FieldNotice::QuestLog | FieldNotice::Tutorial { .. } => {}
         FieldNotice::PvpPreference { on } => {
             let (toast, verbose) = super::pvp_announcement(on);
             // The verbose sentence is no catalog row, so it goes `unkeyed` to chat:
