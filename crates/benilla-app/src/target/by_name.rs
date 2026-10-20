@@ -100,7 +100,7 @@ pub(crate) struct AssistRequest {
 /// | `CanCooperate` with the followee (`0x606ba0`) | `0x60ff6a` | `0x128`, the same line |
 /// | we are alive | `0x60ff7c` | `0x7e` `ERR_PLAYER_DEAD` |
 /// | we are not stunned (`UNIT_FIELD_FLAGS & 0x40000`) | `0x60ff95` | `0x191` `ERR_GENERIC_STUNNED` |
-/// | we are not casting | `0x60ffb9` | `0x134` `ERR_TOOBUSYTOFOLLOW` |
+/// | we are not channelling (`UNIT_CHANNEL_SPELL`, the unit block's `+0x228`) | `0x60ffb9` | `0x134` `ERR_TOOBUSYTOFOLLOW` |
 ///
 /// There is no followee-alive check (the per-tick death test ends a follow) and no distance check:
 /// follow's row in `0x860a58` has a `0.0` threshold, so `ERR_AUTOFOLLOW_TOO_FAR` (`0x6110a0`)
@@ -110,7 +110,7 @@ fn follow_refusal_key(
     we_cooperate: bool,
     we_are_dead: bool,
     we_are_stunned: bool,
-    we_are_casting: bool,
+    we_are_channelling: bool,
 ) -> Option<&'static str> {
     if !followee_is_player || !we_cooperate {
         return Some("ERR_INVALID_FOLLOW_TARGET");
@@ -121,7 +121,7 @@ fn follow_refusal_key(
     if we_are_stunned {
         return Some("ERR_GENERIC_STUNNED");
     }
-    if we_are_casting {
+    if we_are_channelling {
         return Some("ERR_TOOBUSYTOFOLLOW");
     }
     None
@@ -191,13 +191,14 @@ impl ByNameScan<'_, '_> {
     ///
     /// The gate's two other silent arms, a `this` that is not the active mover (`0x60fef7`) and a
     /// followee with no object (`0x60ff25`), never fire from these callers: both found those
-    /// objects first.
+    /// objects first. Its channel test reads the mover's own `UNIT_CHANNEL_SPELL` (`0x60ffb9`),
+    /// not the cast slot: a hard cast in flight does not refuse, a channel does for as long as it
+    /// lasts.
     fn follow_refusal(
         &self,
         mover: Option<(u64, &ObjectStore)>,
         followee: Option<(u64, &ObjectStore)>,
         missing: &'static str,
-        casting: bool,
     ) -> Option<FollowRefusal> {
         let Some((guid, store)) = followee else {
             return Some(FollowRefusal::Line(missing));
@@ -219,7 +220,7 @@ impl ByNameScan<'_, '_> {
             self.relations.get().can_cooperate(&mover, &unit),
             mover_store.0.unit_is_dead(),
             mover_store.0.unit_flags() & crate::player::UNIT_FLAG_STUNNED != 0,
-            casting,
+            mover_store.0.unit_channel_spell() != 0,
         )
         .map(FollowRefusal::Line)
     }
@@ -510,7 +511,6 @@ pub(super) fn follow_requests(
     selection: Res<Selection>,
     tokens: crate::ui_unit::UnitTokens,
     mover: Query<(&Guid, &ObjectStore), With<crate::net::ActiveMover>>,
-    cast: Res<crate::spell::PendingCast>,
     mut errors: ResMut<crate::ui_action::UiErrorKeys>,
     mut follow: ResMut<crate::player::FollowState>,
     mut approach: ResMut<crate::player::Approach>,
@@ -550,8 +550,7 @@ pub(super) fn follow_requests(
             Some((guid, store.filter(|s| s.is_unit())?))
         });
         let mover = mover.iter().next().map(|(guid, store)| (guid.0, store));
-        let casting = cast.in_flight();
-        match scan_params.follow_refusal(mover, followee, missing, casting) {
+        match scan_params.follow_refusal(mover, followee, missing) {
             // A refusal leaves a follow in progress alone: the gate returns before `0x611130`.
             Some(FollowRefusal::Line(key)) => {
                 info!("follow: refused — {key}");

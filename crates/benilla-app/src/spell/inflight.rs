@@ -61,6 +61,7 @@ struct PendingCastState {
 
 impl PendingCast {
     /// A cast is outstanding: the next press meets `0x6e4d97`'s refusal.
+    #[cfg(test)]
     pub(crate) fn in_flight(&self) -> bool {
         self.current().is_some()
     }
