@@ -30,6 +30,7 @@ mod net;
 mod body_pose;
 pub(crate) mod camera;
 mod camera_channel;
+mod camera_clip;
 pub(crate) mod camera_dynamics;
 pub(crate) mod camera_zoom;
 mod controller;
@@ -221,6 +222,7 @@ impl Plugin for PlayerPlugin {
         net::register(app);
         follow::plugin(app);
         approach::plugin(app);
+        camera_clip::plugin(app);
         camera_saved::plugin(app);
         camera_view::plugin(app);
         // The stream focus is published after `control`'s teleport snap and before the stream
