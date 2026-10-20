@@ -91,6 +91,14 @@ impl MapCatalog {
         c
     }
 
+    /// This catalog with `MapName_Lang` names for `(id, name)` pairs, for tests and fixtures.
+    pub fn with_names<'a>(mut self, names: impl IntoIterator<Item = (u32, &'a str)>) -> Self {
+        for (id, name) in names {
+            self.names.insert(id, name.to_string());
+        }
+        self
+    }
+
     /// The MPQ directory name (`Directory`) for `map_id`, as `MapTiles::load(chain, dir)` takes it.
     pub fn directory(&self, map_id: u32) -> Option<&str> {
         self.dirs.get(&map_id).map(String::as_str)

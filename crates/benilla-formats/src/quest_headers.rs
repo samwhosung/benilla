@@ -16,6 +16,17 @@ pub struct QuestHeaderNames {
 }
 
 impl QuestHeaderNames {
+    /// A table of `AreaTable.dbc` names alone, for tests that run without an install.
+    pub fn from_zones<'a>(zones: impl IntoIterator<Item = (u32, &'a str)>) -> Self {
+        Self {
+            zones: zones
+                .into_iter()
+                .map(|(id, name)| (id, name.to_string()))
+                .collect(),
+            sorts: HashMap::new(),
+        }
+    }
+
     /// The header title; `None` for 0 or an unknown id, where the caller picks its own bucket.
     pub fn resolve(&self, zone_or_sort: i32) -> Option<&str> {
         if zone_or_sort > 0 {

@@ -267,6 +267,21 @@ impl SkillLineCatalog {
         false
     }
 
+    /// `spell_id` and each later rank of its chain, in order: what the item tooltip's known-recipe
+    /// test asks `0x60c740` and `KnownHigherRank` (`0x60c8d0`) of, together.
+    pub fn rank_and_later(&self, spell_id: u32) -> Vec<u32> {
+        let mut ranks = vec![spell_id];
+        let mut cur = spell_id;
+        for _ in 0..MAX_RANK_CHAIN {
+            let Some(next) = self.rank_successor(cur) else {
+                break;
+            };
+            ranks.push(next);
+            cur = next;
+        }
+        ranks
+    }
+
     /// A catalog of ability rows only, for tests.
     pub fn from_abilities(abilities: impl IntoIterator<Item = (u32, SlaInfo)>) -> Self {
         let abilities: HashMap<u32, SlaInfo> = abilities.into_iter().collect();

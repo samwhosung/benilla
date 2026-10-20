@@ -168,26 +168,35 @@ pub(crate) fn queue_standing_lines(
     }
 }
 
-/// `0x62c670`'s sentence: `FACTION_STANDING_CHANGED` filled with the rank label and the faction
-/// name. The label is `FACTION_STANDING_LABEL<rank + 1>` gendered by `0x612bf0`: a female player
-/// tries the `_FEMALE` twin and, when that is absent or empty, the bare key (`0x612c36`). A label
-/// absent altogether is an empty string, not a missing line: `0x703bf0` never returns NULL, and
-/// `0x62c670` prints with whatever it gave. Only a missing template prints nothing here, where the
-/// reference would send an empty string to the chat composer.
+/// `FACTION_STANDING_LABEL<rank + 1>` gendered by `0x612bf0`: a female player tries the
+/// `_FEMALE` twin and, when that is absent or empty, the bare key (`0x612c36`). A label absent
+/// altogether is the empty string, as `0x703bf0` never returns NULL.
+pub(crate) fn standing_label(
+    get: &dyn Fn(&str) -> Option<String>,
+    rank: u32,
+    female: bool,
+) -> String {
+    let key = format!("FACTION_STANDING_LABEL{}", rank.wrapping_add(1));
+    let defined = |k: &str| get(k).filter(|v| !v.is_empty());
+    female
+        .then(|| defined(&format!("{key}_FEMALE")))
+        .flatten()
+        .or_else(|| defined(&key))
+        .unwrap_or_default()
+}
+
+/// `0x62c670`'s sentence: `FACTION_STANDING_CHANGED` filled with the [`standing_label`] and the
+/// faction name. An absent label is an empty one, not a missing line: `0x62c670` prints with
+/// whatever `0x703bf0` gave. Only a missing template prints nothing here, where the reference
+/// would send an empty string to the chat composer.
 pub(crate) fn standing_text(
     get: &dyn Fn(&str) -> Option<String>,
     rank: u8,
     female: bool,
     faction_name: &str,
 ) -> Option<String> {
-    let key = format!("FACTION_STANDING_LABEL{}", rank.min(7) + 1);
-    let defined = |k: &str| get(k).filter(|v| !v.is_empty());
-    let label = female
-        .then(|| defined(&format!("{key}_FEMALE")))
-        .flatten()
-        .or_else(|| defined(&key))
-        .unwrap_or_default();
-    let template = defined("FACTION_STANDING_CHANGED")?;
+    let label = standing_label(get, u32::from(rank.min(7)), female);
+    let template = get("FACTION_STANDING_CHANGED").filter(|v| !v.is_empty())?;
     Some(benilla_ui::strings::fill(
         &template,
         &[
