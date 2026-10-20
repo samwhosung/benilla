@@ -151,17 +151,31 @@ fn hyperlink_enchant_spell(link: &str) -> Option<u32> {
     tail[..end].parse().ok().filter(|&id: &u32| id != 0)
 }
 
-fn hyperlink_item_fields(link: &str) -> Option<(u32, u32, u32)> {
+/// A link's `item:<id>:<enchant>:<random property>` fields, each read by `atoi` (`0x64ac60`), so
+/// the enchant keeps its sign.
+fn hyperlink_item_fields(link: &str) -> Option<(u32, i32, u32)> {
     let at = link.find("item:")? + 5;
     let tail = &link[at..];
     let end = tail.find("|h").unwrap_or(tail.len());
-    let mut fields = tail[..end]
-        .split(':')
-        .map(|f| f.trim().parse().unwrap_or(0));
-    let item_id: u32 = fields.next()?;
-    let enchant_id = fields.next().unwrap_or(0);
-    let random_property_id = fields.next().unwrap_or(0);
+    let mut fields = tail[..end].split(':').map(str::trim);
+    let item_id: u32 = fields.next()?.parse().unwrap_or(0);
+    let enchant_id: i32 = fields.next().and_then(|f| f.parse().ok()).unwrap_or(0);
+    let random_property_id = fields.next().and_then(|f| f.parse().ok()).unwrap_or(0);
     (item_id != 0).then_some((item_id, enchant_id, random_property_id))
+}
+
+/// A block's bare enchant id in `slot` as its line (`0x52c9f2`..`0x52ca46`): `abs(id)` names the
+/// `SpellItemEnchantment` row, and a negative id paints slots 0 and 1 red. An id with no named row
+/// adds nothing.
+fn block_enchant(lua: &Lua, slot: u8, id: i32) -> Option<crate::script::EnchantView> {
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    let name = model.enchant_names.get(&id.unsigned_abs())?.clone();
+    (id != 0).then_some(crate::script::EnchantView {
+        slot,
+        negative: id < 0,
+        name,
+        ..Default::default()
+    })
 }
 
 /// A bag slot's item as the builder's live item object: the name off the link (the reference
@@ -450,23 +464,23 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     None,
                 );
             }
-            let Some((id, _enchant_id, roll)) = hyperlink_item_fields(&link) else {
+            let Some((id, enchant_id, roll)) = hyperlink_item_fields(&link) else {
                 return Ok(());
             };
             let h = frame_handle_of(lua, &this)?;
             // The reference's format is `"%s|Hitem:%d:%d:%d:%d|h[%s]|h%s"` (`0x8549c8`), and
             // `SetHyperlink` (`0x532181`) parses it into a block (p6=1): the enchant id to slot 0
-            // (`+0x3d0`), the roll to `+0x424` (expanded into slots 2..6 by `0x52b7bf`), the
-            // unique id to `+0x420`, unread; a missing field is 0. So a link shows its roll's
-            // lines, never the placeholder (`0x52cc33`). The name is the link's own, built with
-            // the suffix joined (`0x5d8b00`). The enchant id is parsed, not rendered: naming it
-            // needs its `SpellItemEnchantment` row, and no link benilla composes carries one.
-            // The block's creator and giver are zeroed (`0x5321ad`, `0x5321b3`), so a link never
-            // shows a maker line.
+            // (`+0x3d0`, `0x5321d3`), the roll to `+0x424` (expanded into slots 2..6 by
+            // `0x52b7bf`), the unique id to `+0x420`, unread; a missing field is 0. So a link
+            // shows its enchant and its roll's lines, never the placeholder (`0x52cc33`). The name
+            // is the link's own, built with the suffix joined (`0x5d8b00`). The block's creator and
+            // giver are zeroed (`0x5321ad`, `0x5321b3`), so a link never shows a maker line.
             let name = link_name(&link).map(str::to_string);
+            let mut enchants: Vec<_> = block_enchant(lua, 0, enchant_id).into_iter().collect();
+            enchants.extend(roll_enchants(lua, roll));
             let inst = render::ItemInstance {
                 name: name.clone(),
-                enchants: roll_enchants(lua, roll),
+                enchants,
                 ..Default::default()
             };
             let in_flight = match name {
