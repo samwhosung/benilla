@@ -18,7 +18,11 @@ const FIREBALL: u32 = 133;
 /// `UNIT_FIELD_AURASTATE`, whose bit 0 is the defense state Revenge needs.
 const AURA_STATE: u16 = 125;
 
-/// The book holds the three, the bar nothing; the player alive, its aura state `aura_state`.
+/// The player's guid.
+const ME: u64 = 0x10;
+
+/// The book holds the three, the bar nothing; the player alive, its aura state 0, the feed's
+/// first frame run.
 fn app() -> App {
     let revenge = |id, rank: &str| {
         (
@@ -75,10 +79,26 @@ fn app() -> App {
         // The leave-world sweep's latch and count, as the app holds them.
         .init_resource::<crate::ui_script::LeavingWorldArmed>()
         .init_resource::<crate::ui_script::SweptWorlds>()
-        .insert_resource(NetCommands(tx));
+        .insert_resource(NetCommands(tx))
+        // The usable refresh's callers and the cast targeting the walk reads.
+        .add_message::<crate::net::FieldChanged>()
+        .add_message::<crate::item_watch::ItemNotice>()
+        .add_message::<crate::net::WorldEnterCascadeMessage>()
+        .insert_resource(crate::net::SelfGuid(Some(ME)))
+        .init_resource::<crate::spell::AutoSelfCast>()
+        .init_resource::<super::state::ActionEvents>();
     seat(&mut app);
     app.insert_non_send_resource(listener());
-    app.add_systems(Update, super::state::feed_action_state);
+    app.add_systems(
+        Update,
+        (
+            super::state::feed_action_state,
+            super::state::fire_action_events,
+        )
+            .chain(),
+    );
+    // The VM's first frame, which meets the state as it stands and hears no refresh.
+    app.update();
     app
 }
 
@@ -117,13 +137,25 @@ fn listener() -> UiScript {
     script
 }
 
-/// Set the player's aura state and run the feed once: what the VM heard.
+/// Set the player's aura state, its watch's edge (`0x6048b6`, a caller of the usable refresh) on a
+/// change, and run the feed once: what the VM heard.
 fn step(app: &mut App, aura_state: u32) -> Vec<String> {
     let mut q = app
         .world_mut()
-        .query_filtered::<&mut ObjectStore, With<SelfPlayer>>();
-    let mut store = q.single_mut(app.world_mut()).unwrap();
+        .query_filtered::<(Entity, &mut ObjectStore), With<SelfPlayer>>();
+    let (entity, mut store) = q.single_mut(app.world_mut()).unwrap();
+    let old = store.0.unit_aura_state();
     store.0 = ObjectFields::from_pairs(&[(22, 100), (23, 500), (AURA_STATE, aura_state)]);
+    if old != aura_state {
+        app.world_mut().write_message(crate::net::FieldChanged {
+            entity,
+            guid: ME,
+            kind: benilla_protocol::messages::ObjectType::Player,
+            index: AURA_STATE,
+            old,
+            new: aura_state,
+        });
+    }
     app.update();
     let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
     s.resolve();
@@ -211,5 +243,30 @@ fn the_reactive_list_keeps_a_spell_the_book_lost() {
         step(&mut app, 0),
         ["SPELL_UPDATE_USABLE"],
         "the kept entry still checks"
+    );
+}
+
+/// The re-check is `0x4b31c0`'s own loop (`0x4b31d7`-`0x4b323d`), so it runs inside each of the
+/// refresh's callers and nowhere else: a reactive spell that turns usable with no caller raises
+/// nothing until one runs, here the target's select (`0x493892`), and then raises its
+/// `SPELL_ACTIVE` ahead of the refresh's `SPELL_UPDATE_USABLE`.
+#[test]
+fn the_reactive_re_check_runs_inside_each_usable_refresh_alone() {
+    let mut app = app();
+    let mut q = app
+        .world_mut()
+        .query_filtered::<&mut ObjectStore, With<SelfPlayer>>();
+    q.single_mut(app.world_mut()).unwrap().0 =
+        ObjectFields::from_pairs(&[(22, 100), (23, 500), (AURA_STATE, 0x1)]);
+    assert!(step(&mut app, 0x1).is_empty(), "no caller: no re-check");
+    app.insert_resource(crate::target::Selection {
+        target: None,
+        guid: Some(0x20),
+        last: None,
+    });
+    assert_eq!(
+        step(&mut app, 0x1),
+        ["SPELL_ACTIVE Revenge", "SPELL_UPDATE_USABLE"],
+        "the select's refresh re-checks the list"
     );
 }
