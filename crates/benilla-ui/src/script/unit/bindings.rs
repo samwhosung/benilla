@@ -10,7 +10,7 @@ use super::super::calls::{submit, ScriptCall};
 use super::super::protected::select_may_cast;
 use super::super::Model;
 use super::{
-    check_unit_token, classification_word, grey_band, level_reads_unknown, unit_is_grey,
+    check_unit_token, classification_word, grey_band, level_is_hidden, unit_is_grey,
     unit_predicate, unknownobject, with_unit, PlayerRecord, SelectionRequest,
 };
 
@@ -174,9 +174,10 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // UnitLevel (`0x517fc0`): the raw level (a raw 0 stays 0), or -1 for a world boss or a unit
-    // hostile to the player 10 or more levels above it; else, for a unit the drunk player can
-    // attack (`0x518092`-`0x5180b1`), the level its drunkenness lowers (`0x5180b3`-`0x5180ec`).
+    // UnitLevel (`0x517fc0`): -1 for a world boss or a unit hostile to the player 10 or more levels
+    // above it, tested first, so a world boss at level 0 reads -1 ([`level_is_hidden`]); then a
+    // level of 0 or less as it is (`0x518092`); else, for a unit the drunk player can attack
+    // (`0x518096`-`0x5180b1`), the level its drunkenness lowers (`0x5180b3`-`0x5180ec`).
     g.set(
         "UnitLevel",
         lua.create_function(|lua, token: Value| {
@@ -190,11 +191,11 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(u) = token.as_ref().and_then(|t| model.unit(t)) else {
                 return Ok(0i64);
             };
+            if level_is_hidden(u, model.player_req.level) {
+                return Ok(-1);
+            }
             if u.level == 0 {
                 return Ok(0);
-            }
-            if level_reads_unknown(u, model.player_req.level) {
-                return Ok(-1);
             }
             // The drunk leg needs the unit's object and the active player (`0x518096`).
             let me = model.unit_guids.player;

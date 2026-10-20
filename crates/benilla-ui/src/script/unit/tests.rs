@@ -183,6 +183,19 @@ fn unit_level_reads_minus_one_when_the_level_cant_be_told() {
         }),
     );
     assert_eq!(s.eval::<i64>(r#"return UnitLevel("target")"#).unwrap(), 0);
+    // But the rank test runs before the level's (`0x51807d`-`0x518087`, then `0x518092`): a world
+    // boss at level 0 reads -1.
+    s.set_unit(
+        "target",
+        Some(UnitState {
+            exists: true,
+            level: 0,
+            reaction: 4,
+            rank: 3,
+            ..Default::default()
+        }),
+    );
+    assert_eq!(s.eval::<i64>(r#"return UnitLevel("target")"#).unwrap(), -1);
 }
 
 #[test]

@@ -264,15 +264,19 @@ pub fn is_civilian_kill(u: &UnitState, player_level: u32) -> bool {
     u.civilian && u.pvp && u.reaction != 0 && u.reaction <= 2 && unit_is_grey(player_level, u.level)
 }
 
-/// The tooltip's "??" level gate (`0x529fe0`): level 0, world-boss rank 3 (`0x52a373`), or a unit
-/// whose reaction toward the player is 1 or less (`0x52a342`-`0x52a34a`, `UnitReaction` <= 2 here)
-/// at least 10 levels above the player (`0x52a361`-`0x52a366`), players among them: neither this
-/// path nor `UnitLevel`'s (`0x517fc0`, `0x518057`-`0x51807b`) tests the unit's type. `UnitLevel`
-/// answers the boss and hostile legs with -1, but returns a level of 0 as is.
+/// The tooltip's "??" level gate (`0x529fe0`): level 0, or [`level_is_hidden`].
 pub fn level_reads_unknown(u: &UnitState, player_level: u32) -> bool {
+    u.level == 0 || level_is_hidden(u, player_level)
+}
+
+/// The two legs `UnitLevel` (`0x517fc0`) answers -1 on, as the tooltip reads them too: a unit whose
+/// reaction toward the player is 1 or less (`0x518057`-`0x51807b`, `0x52a342`-`0x52a34a`;
+/// `UnitReaction` <= 2 here) at least 10 levels above the player, players among them, since
+/// neither path tests the unit's type; and world-boss rank 3 (`0x51807d`-`0x518087`, `0x52a373`).
+pub fn level_is_hidden(u: &UnitState, player_level: u32) -> bool {
     let much_higher_hostile =
         u.reaction != 0 && u.reaction <= 2 && u.level >= player_level.saturating_add(10);
-    u.level == 0 || u.rank == 3 || much_higher_hostile
+    u.rank == 3 || much_higher_hostile
 }
 
 /// The level a drunk player sees on a unit it can attack, the unit tooltip's arithmetic
