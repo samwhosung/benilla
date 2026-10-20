@@ -152,6 +152,12 @@ impl PendingCast {
         self.caster_is_player = true;
     }
 
+    /// [`Self::fill_record`] for a caster other than the active player (the pet bar's presses
+    /// through `0x6e4b60`, `0x4bd385`): the caster word names that unit, so no cancel event fires.
+    pub(crate) fn fill_unit_record(&mut self) {
+        self.caster_is_player = false;
+    }
+
     /// The gate of `AbortCast 0x6e4940`'s events: `SPELLCAST_STOP`, `_FAILED` or `_INTERRUPTED`
     /// fires only while the caster word is the active player's (`0x6e4a04`–`0x6e4a1e`), and firing
     /// clears it (`0x6e4a5a`), so one record fires at most once whatever pops after it.

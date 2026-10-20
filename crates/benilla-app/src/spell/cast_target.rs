@@ -327,6 +327,11 @@ pub(crate) struct CastTargeting<'w, 's> {
     /// The player's answer to the entity outdoors test, which the place rungs read; absent
     /// outside the world.
     outdoors: Option<Res<'w, crate::player::PlayerOutdoors>>,
+    /// The entity outdoors test itself, asked of a unit caster where it stands; absent in a
+    /// harness without the world.
+    entity_outdoors: Option<benilla_world::wmo_portal::EntityOutdoors<'w, 's>>,
+    /// World positions: a mounted unit's `Transform` is seat-relative.
+    global_transforms: Query<'w, 's, &'static GlobalTransform>,
 }
 
 impl CastTargeting<'_, '_> {
@@ -343,6 +348,76 @@ impl CastTargeting<'_, '_> {
     /// enemy bit.
     pub(crate) fn context_at(&self, entity: Entity, guid: u64) -> CastContext<'_> {
         self.context_on(Some(entity), Some(guid))
+    }
+
+    /// The context for an attempt whose caster is a unit other than the active player, the pet
+    /// bar's client-targeted and possessed presses (`0x4bd385`: `0x6e4b60(unit, spell, 0, guid)`),
+    /// at `guid`, the press's target. The attempt reads that caster wherever it reads one: the dead
+    /// rung (`0x6e4c49`), the range test (`0x6e4f26` → `0x6e4440`), the relations the bind asks
+    /// (`CanAssist 0x6066f0`, `CanAttack 0x606980`) and the validator's state rungs (`0x6094f0`,
+    /// called on the caster at `0x6e4f3b`), its place rungs asking where that caster stands. A
+    /// unit caster has no main hand to bind (`0x6e5361`), and its movement is its own unit's.
+    /// `None` while the caster is not streamed.
+    pub(crate) fn context_for_caster(
+        &self,
+        caster_guid: u64,
+        guid: Option<u64>,
+    ) -> Option<CastContext<'_>> {
+        let index = self.index.as_deref()?;
+        let caster = *index.0.get(&caster_guid)?;
+        let self_store = self.stores.get(caster).ok()?;
+        let target = guid.and_then(|g| index.0.get(&g).copied());
+        let target_store = target.and_then(|e| self.stores.get(e).ok());
+        let owner_store = |store| owner_store(store, Some(index), &self.stores);
+        let caster_unit = self.range_units.unit(caster);
+        Some(CastContext {
+            selection_guid: guid,
+            self_guid: Some(caster_guid),
+            auto_self_cast: self.auto_self_cast.0,
+            rel: TargetRelations {
+                target_store,
+                target_owner_store: owner_store(target_store),
+                self_store: Some(self_store),
+                factions: self.factions.as_deref(),
+                reputations: &self.reputations,
+                types: CreatureTypeSources {
+                    names: self.names.as_deref(),
+                    forms: self.spells.as_deref().map(|s| &s.forms),
+                    ..Default::default()
+                },
+                group: GroupInputs {
+                    self_guid: Some(caster_guid),
+                    target_guid: guid,
+                    self_owner_store: owner_store(Some(self_store)),
+                    roster: self.roster.as_deref(),
+                },
+            },
+            range: RangeInputs {
+                self_pos: self.transforms.get(caster).ok().map(|t| t.translation),
+                target_pos: target
+                    .and_then(|e| self.transforms.get(e).ok())
+                    .map(|t| t.translation),
+                caster: caster_unit
+                    .unwrap_or(benilla_formats::RangeUnit::still(super::DEFAULT_REACH)),
+                target: target.and_then(|e| self.range_units.unit(e)),
+            },
+            main_hand_item: None,
+            self_move_flags: caster_unit.map_or(0, |u| u.motion.flags),
+            // A unit's `GetStandState`, its vtable slot 41 (`0x60be50`), reads its descriptor's
+            // `UNIT_FIELD_BYTES_1` byte 0; only the active player's (`0x5ed570`) keeps a local state.
+            self_stand_state: self_store.0.unit_stand_state(),
+            // `[unit+0xd40]`, which only the active player's setter `0x611cf0` moves ahead of the
+            // echo: a unit's is its descriptor's `UNIT_FIELD_BYTES_2` byte 0.
+            self_sheathe_state: self_store.0.unit_sheath_state().unwrap_or(0),
+            daytime: self.clock.as_deref().is_some_and(|c| c.0.is_daytime()),
+            // `0x612cc0` asks the caster's own node (`[unit+0xe0]` → `0x6706f0`), never the
+            // player's; with no world to ask it reads outdoors, as a null entity does (`0x6706fa`).
+            self_outdoors: match (&self.entity_outdoors, self.global_transforms.get(caster)) {
+                (Some(test), Ok(at)) => test.at(at.translation()),
+                _ => true,
+            },
+            self_control_lost: self.own_control.as_deref().is_some_and(|c| c.0),
+        })
     }
 
     fn context_on(&self, target: Option<Entity>, guid: Option<u64>) -> CastContext<'_> {

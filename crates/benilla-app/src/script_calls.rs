@@ -34,13 +34,18 @@ macro_rules! attack_in_order {
 }
 
 /// The pet bar's Attack (`0x4bd40d`) runs the same validator, so a cast it binds to a standing
-/// targeting cursor goes out ahead of the `CMSG_PET_ACTION` it validated.
+/// targeting cursor goes out ahead of the `CMSG_PET_ACTION` it validated. A spell press the bar
+/// hands to the attempt (`0x4bd385`) casts through the ladder instead.
 macro_rules! pet_in_order {
     ($appliers:expr, $begin:ident($arg:expr)) => {{
-        let send = $appliers.p6().$begin($arg);
+        let step = $appliers.p6().$begin($arg);
         $appliers.p1().bind_parked();
-        if let Some(send) = send {
-            $appliers.p6().finish_press(send);
+        match step {
+            Some(crate::ui_pet::PetStep::Order(send)) => $appliers.p6().finish_press(send),
+            Some(crate::ui_pet::PetStep::Cast(cast)) => {
+                crate::ui_pet::cast_pet_press(&mut $appliers.p3(), cast)
+            }
+            None => {}
         }
     }};
 }

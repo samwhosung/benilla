@@ -367,14 +367,23 @@ fn only_a_possessed_units_attack_press_raises_the_latch() {
 }
 
 /// `0x5ee5a0` asks for the unit we possess, not the one we own.
+/// `0x5ee5a0` answers the player's far-sight unit (`PLAYER_FARSIGHT`, `0x5ee5e9`) when it is
+/// possessed (`0x5ee626`) and charmed, else created, by the player (`0x5ee62f`): possession, not
+/// ownership, and only of the unit the player's view is on.
 #[test]
 fn the_latch_gate_is_possession_not_ownership() {
     const FLAGS: u16 = 46;
     const CHARMEDBY: u16 = 10;
     const CREATEDBY: u16 = 14;
+    /// `PLAYER_FARSIGHT`, low word.
+    const FARSIGHT: u16 = 712;
+    const UNIT: u64 = 0x2A;
     let unit =
         |pairs: &[(u16, u32)]| ObjectStore(benilla_protocol::ObjectFields::from_pairs(pairs));
     let me = Some(0x77u64);
+    let viewing = |guid: u64| unit(&[(FARSIGHT, guid as u32), (FARSIGHT + 1, 0)]);
+    let player = viewing(UNIT);
+    let possessing = |store: Option<&ObjectStore>| possessing(UNIT, store, Some(&player), me);
 
     // An ordinary hunter pet: ours, in combat, not possessed.
     let hunter_pet = unit(&[
@@ -383,7 +392,7 @@ fn the_latch_gate_is_possession_not_ownership() {
         // The in-combat bit, which `0x5ee5a0` does not read.
         (FLAGS, 0x800),
     ]);
-    assert!(!possessing(Some(&hunter_pet), me));
+    assert!(!possessing(Some(&hunter_pet)));
 
     // The same pet under Eyes of the Beast.
     let driven = unit(&[
@@ -391,11 +400,11 @@ fn the_latch_gate_is_possession_not_ownership() {
         (CREATEDBY + 1, 0),
         (FLAGS, UNIT_FLAG_POSSESSED),
     ]);
-    assert!(possessing(Some(&driven), me));
+    assert!(possessing(Some(&driven)));
 
     // A mind-controlled mob: CHARMEDBY comes first, so it needs no CREATEDBY.
     let charmed = unit(&[(CHARMEDBY, 0x77), (CHARMEDBY + 1, 0), (FLAGS, 0x0100_0000)]);
-    assert!(possessing(Some(&charmed), me));
+    assert!(possessing(Some(&charmed)));
 
     // Another player's possessed unit.
     let theirs = unit(&[
@@ -403,9 +412,24 @@ fn the_latch_gate_is_possession_not_ownership() {
         (CHARMEDBY + 1, 0),
         (FLAGS, UNIT_FLAG_POSSESSED),
     ]);
-    assert!(!possessing(Some(&theirs), me));
+    assert!(!possessing(Some(&theirs)));
 
-    assert!(!possessing(None, me));
+    assert!(!possessing(None));
+
+    // Ours and possessed, but the player's view is elsewhere, or nowhere.
+    assert!(!super::drain::possessing(
+        UNIT,
+        Some(&charmed),
+        Some(&viewing(0x99)),
+        me
+    ));
+    assert!(!super::drain::possessing(
+        UNIT,
+        Some(&charmed),
+        Some(&viewing(0)),
+        me
+    ));
+    assert!(!super::drain::possessing(UNIT, Some(&charmed), None, me));
 }
 
 #[test]

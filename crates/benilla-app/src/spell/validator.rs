@@ -273,15 +273,16 @@ impl Refusal {
     }
 }
 
-/// The caster as the validator's rungs past its power test read it: the active player, the only
-/// caster [`super::cast_send`]'s ladder casts for.
+/// The caster as the validator's rungs past its power test read it: the active player, or the
+/// pet bar's unit the attempt passes (`0x6e4f3b`).
 pub(crate) struct CasterState<'a> {
     /// Its descriptor.
     pub(crate) fields: &'a ObjectFields,
-    /// Its guid, which the charm arm compares the charmer with (`0x60995e`).
+    /// The active player's guid (`0x60994d` asks `0x468550`), which the charm arm compares the
+    /// caster's charmer with (`0x60995e`).
     pub(crate) guid: Option<u64>,
     /// `GetStandState`, the caster's vtable slot 41 (`0x609cad`): the active player's local state
-    /// (`0x5ed570`).
+    /// (`0x5ed570`), a unit's descriptor byte (`0x60be50`).
     pub(crate) stand_state: u8,
     /// The sheathe state `[unit+0xd40]`: 0 away, 1 melee, 2 ranged (`0x609ba9`).
     pub(crate) sheathe_state: u8,

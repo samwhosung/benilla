@@ -1103,6 +1103,14 @@ pub(crate) enum ClientCommand {
         packed: u32,
         target_guid: u64,
     },
+    /// `CMSG_PET_CAST_SPELL`: a cast the ladder sent with the pet or a possessed unit as its
+    /// caster (`SendCast 0x6e54f0`, `0x6e5816`), the bar's client-targeted and possessed presses
+    /// (`0x4bd385`). A refusal comes back as `SMSG_PET_CAST_FAILED`.
+    PetCastSpell {
+        caster_guid: u64,
+        spell_id: u32,
+        target: benilla_protocol::messages::UseItemTarget,
+    },
     /// `CMSG_PET_SET_ACTION`: one or two `(position, word)` pairs. The bar's autocast toggle is
     /// one entry with bit 30 flipped.
     PetSetAction {

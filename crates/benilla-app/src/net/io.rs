@@ -1394,6 +1394,11 @@ pub(super) fn writer_loop(
                         packed,
                         target_guid,
                     } => w.pet_action(pet_guid, packed, target_guid),
+                    ClientCommand::PetCastSpell {
+                        caster_guid,
+                        spell_id,
+                        target,
+                    } => w.pet_cast_spell(caster_guid, spell_id, target),
                     ClientCommand::PetSetAction { pet_guid, entries } => {
                         w.pet_set_action(pet_guid, &entries)
                     }

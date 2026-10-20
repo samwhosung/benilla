@@ -28,7 +28,7 @@ use bar::{feed_pet_bar, fire_pet_cooldown_events};
 pub(crate) use drain::drain_pet_actions;
 // A pet bar press, applied in call order by `crate::script_calls`.
 pub(crate) use drain::pet_stop_on_old_target_clear;
-pub(crate) use drain::PetPress;
+pub(crate) use drain::{cast_pet_press, PetPress, PetStep};
 use menu::{drain_pet_menu, feed_pet_menu};
 pub(crate) use unit::feed_pet_unit;
 
@@ -97,6 +97,10 @@ impl Plugin for UiPetPlugin {
                 // clear precedes the bar feed so Attack
                 // goes dark the frame the selection moves.
                 pet_stop_on_old_target_clear
+                    .in_set(UnitFeed)
+                    .before(feed_pet_bar),
+                // The GCDs the attempt's sends owe the pet's list, in before the bar reads it.
+                drain::arm_owed_pet_gcds
                     .in_set(UnitFeed)
                     .before(feed_pet_bar),
                 // After the pet snapshot: these feeds' events reach Lua at once, and their
