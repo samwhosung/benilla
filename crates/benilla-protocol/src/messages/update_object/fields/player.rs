@@ -403,6 +403,11 @@ impl ObjectFields {
     pub fn player_guild_rank(&self) -> u32 {
         self.get_u32(FIELD_PLAYER_GUILDRANK).unwrap_or(0)
     }
+    /// `PLAYER_GUILD_TIMESTAMP` (field 197): public, a stamp the server moves to make every client
+    /// re-ask the player's guild record (`0x5e2890`).
+    pub fn player_guild_timestamp(&self) -> u32 {
+        self.get_u32(FIELD_PLAYER_GUILD_TIMESTAMP).unwrap_or(0)
+    }
     /// `PLAYER_FIELD_BYTES` byte 0 bit `0x08`, `PLAYER_FIELD_BYTE_RELEASE_TIMER`: set at death
     /// outside instances, where the server releases the spirit after 6 minutes; the client arms
     /// its own `now + 360000` ms, and with the bit clear `GetReleaseTimeRemaining()` is -1.

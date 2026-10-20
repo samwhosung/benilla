@@ -293,6 +293,8 @@ const FIELD_PLAYER_DUEL_TEAM: u16 = 196;
 // visible player; a guild id of 0 is guildless.
 const FIELD_PLAYER_GUILDID: u16 = 191;
 const FIELD_PLAYER_GUILDRANK: u16 = 192;
+// Block +0x24, the stamp the guild record's watcher keys its refresh on (`0x5e28c1`).
+const FIELD_PLAYER_GUILD_TIMESTAMP: u16 = 197;
 // `GetComboPoints` (`0x51a190`) reads the target at block +0x838 and the count byte at +0x1029.
 const FIELD_PLAYER_FIELD_COMBO_TARGET: u16 = 714;
 const FIELD_PLAYER_FIELD_BYTES: u16 = 1222; // UNIT_END+0x40A: flags, combo points, action bars,
