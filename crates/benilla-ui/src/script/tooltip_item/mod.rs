@@ -468,6 +468,18 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 return Ok(());
             };
             let h = frame_handle_of(lua, &this)?;
+            // The item the shown tooltip holds hides it instead (`0x5320c7`..`0x5320e9`): the
+            // shown bit (`+0xd0`) and the kept entry (`+0x398`), so the same link clicked twice
+            // closes the plate, whatever its other fields.
+            let holds = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                let shown = model.arena.frame(h).is_some_and(|f| f.shown);
+                shown && model.item_builds.get(&h).is_some_and(|b| b.item_id == id)
+            };
+            if holds {
+                super::visibility::set_shown(lua, h, false);
+                return Ok(());
+            }
             // The reference's format is `"%s|Hitem:%d:%d:%d:%d|h[%s]|h%s"` (`0x8549c8`), and
             // `SetHyperlink` (`0x532181`) parses it into a block (p6=1): the enchant id to slot 0
             // (`+0x3d0`, `0x5321d3`), the roll to `+0x424` (expanded into slots 2..6 by
