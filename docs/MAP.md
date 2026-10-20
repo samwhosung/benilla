@@ -535,11 +535,13 @@
 - `api-coverage.sh` — Addon-API coverage: how much of the 1.12.1 client's global surface benilla's UI VM presents.
 - `check.sh` — The in-loop verify: fmt everywhere, clippy and test on the changed crates and their dependents.
 - `cine.sh` — Play one cinematic on the probe and print what happened, as a timeline.
+- `doc-tests.sh` — The doctests `scripts/unit-tests.sh` leaves to `cargo test` under cargo-nextest, which runs none: those of the library packages among the ones named, …
 - `gates.sh` — The land gate chain: every gate in order, stopping at the first failure.
 - `genmap.sh` — Generate docs/MAP.md, the map of what is built, and docs/DEVIATIONS.md, where benilla differs from 1.12.1, both from what is on disk.
 - `probe-identity.sh` — Who a scripted run logs in as; sourced by smoke.sh, cine.sh and summon-live.sh, never run alone.
 - `smoke.sh` — The clean-run gate: boot the real client, log out, re-enter, walk the realm list, check the log.
 - `soundprobe.sh` — Start the client in sound measuring mode: record the mix before and after the output limiter.
 - `summon-live.sh` — Two-client live summon probe: a second account summons this checkout's character, which accepts.
+- `unit-tests.sh` — The test gates' runner: the tests of every target the cargo package and target flags it is given select, all run, a failure not stopping the rest.
 - `visual.sh` — Visual A/B harness: capture deterministic screenshots and diff them against a baseline.
 
