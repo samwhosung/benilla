@@ -314,6 +314,10 @@ fn player_field_bytes_splits_into_combo_points_toggles_and_honor_rank() {
     assert_eq!(ObjectFields::default().player_honor_rank(), None);
     assert_eq!(ObjectFields::default().player_action_bar_toggles(), None);
     assert_eq!(ObjectFields::default().player_combo_points(), None);
+    // Byte 0's flags: 0x4 is the logging-out bit the cast validator reads (`0x60982b`).
+    assert!(ObjectFields::from_pairs(&[(1222, 0x04)]).player_logging_out());
+    assert!(!f.player_logging_out(), "0x01 alone is not logging out");
+    assert!(!ObjectFields::from_pairs(&[(1222, 0x0400)]).player_logging_out());
 }
 
 /// The nonzero drunk byte catches a wrong shift; the current rank (field 195) and the highest

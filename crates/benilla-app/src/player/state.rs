@@ -564,6 +564,13 @@ impl Player {
         self.move_flags
     }
 
+    /// `CGPlayer_C::GetStandState` (`0x5ed570`) for the active player: the local state
+    /// `[player+0x1d68]`, a committed change ahead of its echo, else `descriptor`, the
+    /// `UNIT_FIELD_BYTES_1` byte 0 it tracks.
+    pub(crate) fn stand_state(&self, descriptor: u8) -> u8 {
+        self.stand_pending.unwrap_or(descriptor)
+    }
+
     /// The states on this resource that stop WASD, comma-joined, or `"none"`: an instrument for the
     /// log after a session boundary, not a gate. A stun lives on the descriptor and does not show.
     pub(crate) fn movement_suppressors(&self) -> String {

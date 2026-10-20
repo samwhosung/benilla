@@ -125,6 +125,9 @@ pub(crate) struct CastLadder<'w, 's> {
         Query<'w, 's, (Entity, Has<crate::creature_anim::Engaged>), With<SelfPlayer>>,
     pub(crate) spells: Option<Res<'w, Spells>>,
     pub(crate) items: Res<'w, Items>,
+    /// `ItemSubClass.dbc`, whose `Flags` bit `0x10` lets a weapon fire without ammo (`0x6e4264`);
+    /// absent when the data did not load.
+    pub(crate) sub_classes: Option<Res<'w, crate::ui_items::ItemSubClasses>>,
     /// The reagent check walks the bags through it; the item arms resolve an instance guid here.
     pub(crate) objects: Objects<'w, 's>,
     pub(crate) sheath: MessageWriter<'w, crate::creature_anim::SheathRequest>,
@@ -404,6 +407,7 @@ impl CastLadder<'_, '_> {
             self.spells.as_deref(),
             &self.objects,
             &self.items,
+            self.sub_classes.as_deref().map(|s| &s.0),
             &mut self.sheath,
             &mut self.stand,
             &self.edits,
@@ -498,6 +502,7 @@ fn send_spell_cast(
     spells: Option<&Spells>,
     objects: &Objects,
     items: &Items,
+    sub_classes: Option<&benilla_formats::ItemSubClassCatalog>,
     sheath: &mut MessageWriter<crate::creature_anim::SheathRequest>,
     stand: &mut MessageWriter<crate::player::StandStateRequest>,
     edits: &crate::creature_anim::UnitEdits,
@@ -575,6 +580,12 @@ fn send_spell_cast(
                 let reason = super::usable::equipped_item_reason(d);
                 debug!("ui_action: cast {spell_id} refused locally — equipped item ({reason:#x})");
                 refuse!(CastFail::local(spell_id, reason));
+            }
+            // Its ammo leg, the request passing the ammo flag (`0x6e4dfd`).
+            let flags = |class, subclass| sub_classes.map_or(0, |c| c.flags(class, subclass));
+            if let Some(ammo_type) = super::usable::ammo_refusal(d, store, objects, items, &flags) {
+                debug!("ui_action: cast {spell_id} refused locally — no ammo of type {ammo_type}");
+                refuse!(CastFail::local_arg(spell_id, 0x2f, ammo_type));
             }
         }
     }
@@ -725,95 +736,67 @@ fn send_spell_cast(
             }
         }
     }
-    // The validator's six crowd-control arms sit above its mounted block: a stunned mounted
-    // caster reads the stun.
-    let self_fields = ctx.rel.self_store.map(|s| &s.0);
-    if let Some(reason) = validator::cast_cc_refusal(
-        self_fields.map_or(0, |f| f.unit_flags()),
-        self_fields.and_then(|f| f.unit_health()),
-        // The charm arm refuses only when someone else holds the charm (`60994d`).
-        self_fields
-            .and_then(|f| f.unit_charmed_by())
-            .is_some_and(|charmer| Some(charmer) != ctx.self_guid),
-        def,
-        // The exemption scan reads the caster's raw aura slot ids, unfiltered, as the reference.
-        &mut |aura_types: &[u32]| {
-            let Some((d, fields)) = def.zip(self_fields) else {
-                return benilla_formats::CcExemption::default();
-            };
-            let catalog = spells.as_ref().map(|s| &s.catalog);
-            aura_types
-                .iter()
-                .map(|&ty| {
-                    benilla_formats::cc_exemption(d, fields.unit_aura_ids(), ty, |id| {
-                        catalog.and_then(|c| c.get(id))
-                    })
-                })
-                // The reference takes the first rejection and stops; exempt only on an accepted
-                // match.
-                .reduce(|a, b| if a.mechanic != 0 || a.exempt { a } else { b })
-                .unwrap_or_default()
-        },
-    ) {
-        let (reason, mechanic) = reason;
-        debug!(
-            "ui_action: cast {spell_id} refused locally — crowd control ({reason:#x}, \
-             mechanic {mechanic:?})"
-        );
-        match mechanic {
-            Some(m) => refuse!(CastFail::local_arg(spell_id, reason, m)),
-            None => refuse!(CastFail::local(spell_id, reason)),
-        }
-    }
-    // The mounted block (`0x609c6c`): a live `UNIT_FIELD_MOUNTDISPLAYID` refuses 0x39 "You are
-    // mounted" unless `Attributes & 0x01000000`. Local, because vmangos silently dismounts
-    // instead. The range gate runs first, so mounted and out of range reads "Out of range.".
-    if validator::cast_mounted_refusal(
-        ctx.rel
-            .self_store
-            .is_some_and(|s| s.0.unit_mount_display_id() > 0),
-        def,
-    ) {
-        debug!("ui_action: cast {spell_id} refused locally — mounted (0x39)");
-        refuse!(CastFail::local(spell_id, 0x39));
-    }
-    // The water leg (`0x609d39–0x609d7b`): 0x50 "Cannot use while swimming" for mounts, Travel
-    // Form and food, 0x58 "Can only use while swimming" for Aquatic Form. Local, because vmangos's
-    // CheckCast has no such arm and would grant Aquatic Form on land.
-    if let Some(reason) = validator::cast_water_refusal(ctx.self_move_flags, def) {
-        debug!("ui_action: cast {spell_id} refused locally — water side ({reason:#x})");
-        refuse!(CastFail::local(spell_id, reason));
-    }
-    // The moving leg (`0x609de3`): a cast-time press while moving refuses 0x2e. Local, because
-    // vmangos accepts the cast and then interrupts it mid-bar.
-    if let Some(d) = def {
+    // The rungs after power (`0x6096b3`-`0x60a02d`), in the validator's order
+    // ([`validator::caster_refusal`]). Each is local because vmangos accepts the cast or answers
+    // otherwise: it dismounts instead of refusing, grants Aquatic Form on land, and interrupts a
+    // moving cast mid-bar.
+    let no_fields = benilla_protocol::ObjectFields::default();
+    let self_fields = ctx.rel.self_store.map_or(&no_fields, |s| &s.0);
+    let caster = validator::CasterState {
+        fields: self_fields,
+        guid: ctx.self_guid,
+        stand_state: ctx.self_stand_state,
+        sheathe_state: ctx.self_sheathe_state,
+        move_flags: ctx.self_move_flags,
+        daytime: ctx.daytime,
+    };
+    let cast_time_ms = def.map_or(0, |d| {
         let level = crate::spell::SpellLevel::Player {
             me: ctx.rel.self_store,
             skill_lines,
         };
         let player = ctx.rel.self_store.map(|s| &s.0);
-        let cast_time_ms = spells.map_or(0, |s| s.cast_time_ms(d, player, level, spell_mods));
-        if validator::cast_moving_refusal(ctx.self_move_flags, cast_time_ms, def) {
-            debug!("ui_action: cast {spell_id} refused locally — moving (0x2e)");
-            refuse!(CastFail::local(spell_id, 0x2e));
-        }
-    }
-    // The form leg (`0x609e49` → `0x612480`; `0x609ca2` is the posture gate): 0x3d "Can't do that
-    // while shapeshifted" or 0x56 needs-a-form (vmangos `GetErrorAtShapeshiftedCast`).
-    if let Some(d) = def {
-        let form = ctx
-            .rel
-            .self_store
-            .map(|s| s.0.unit_shapeshift_form())
-            .unwrap_or(0);
-        let form_is_stance = spells
-            .and_then(|s| s.forms.get(&u32::from(form)))
-            .is_some_and(|f| f.is_stance());
-        if let Some(refusal) = d.form_refusal(form, form_is_stance) {
-            let reason = refusal.reason();
-            debug!("ui_action: cast {spell_id} refused locally — the form gate ({reason:#x})");
-            refuse!(CastFail::local(spell_id, reason));
-        }
+        spells.map_or(0, |s| s.cast_time_ms(d, player, level, spell_mods))
+    });
+    let form_is_stance = spells
+        .and_then(|s| s.forms.get(&u32::from(self_fields.unit_shapeshift_form())))
+        .is_some_and(|f| f.is_stance());
+    // `GetFactionStanding 0x4d6370`: the player's base for its race and class plus the wire.
+    let standing = |faction: u32| {
+        ctx.rel.factions.map_or(0, |f| {
+            crate::ui_reputation::faction_standing(
+                f.catalog(),
+                ctx.rel.reputations,
+                self_fields.unit_race().unwrap_or(0),
+                self_fields.unit_class().unwrap_or(0),
+                faction,
+            )
+        })
+    };
+    let inputs = validator::SpellInputs {
+        cast_time_ms,
+        form_is_stance,
+        standing: &standing,
+    };
+    // The crowd-control scan `0x6e9ca0` for one aura type, over the caster's raw aura slot ids,
+    // unfiltered, as the reference reads them.
+    let catalog = spells.map(|s| &s.catalog);
+    let mut scan = |aura_type: u32| {
+        def.map_or_else(benilla_formats::CcExemption::default, |d| {
+            benilla_formats::cc_exemption(d, self_fields.unit_aura_ids(), aura_type, |id| {
+                catalog.and_then(|c| c.get(id))
+            })
+        })
+    };
+    if let Some(refusal) = validator::caster_refusal(def, &caster, &inputs, &mut scan) {
+        debug!(
+            "ui_action: cast {spell_id} refused locally — the validator ({:#x}, arg {:?})",
+            refusal.reason, refusal.arg
+        );
+        refuse!(match refusal.arg {
+            Some(arg) => CastFail::local_arg(spell_id, refusal.reason, arg),
+            None => CastFail::local(spell_id, refusal.reason),
+        });
     }
     // Every rung passed: the attempt fills the pending record with the player as its caster
     // (`0x6e4fb1`), ahead of the arm and whatever it decides.
@@ -1022,6 +1005,9 @@ mod tests {
             range: cast_target::RangeInputs::default(),
             main_hand_item: None,
             self_move_flags: 0,
+            self_stand_state: 0,
+            self_sheathe_state: 0,
+            daytime: false,
             self_control_lost: false,
         }
     }
@@ -2231,6 +2217,163 @@ mod tests {
             "an item press is never power-gated"
         );
         assert!(world.resource::<CastReports>().refusals().is_empty());
+    }
+
+    /// The no-target refusal is the attempt's tail after the arm (`0x6e5064`), and the validator
+    /// runs before the arm (`0x6e4f3b`): a Fireball pressed with nothing selected says the
+    /// validator's line when a rung of it fails, seated `0x3e`, on cooldown `0x3c`.
+    #[test]
+    fn the_validator_speaks_before_the_arms_no_target_refusal() {
+        use benilla_formats::SpellDisplay;
+        const FIREBALL: u32 = 133;
+        let (mut world, rx) = world();
+        let mut spells = crate::ui_action::Spells::empty_for_tests();
+        spells.catalog = benilla_formats::SpellCatalog::from_displays(
+            [(
+                FIREBALL,
+                SpellDisplay {
+                    implicit_target_a1: 6,
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        );
+        world.insert_resource(spells);
+
+        world
+            .run_system_once(move |mut ladder: CastLadder| {
+                let seated = cast_target::CastContext {
+                    self_stand_state: 1,
+                    ..ctx()
+                };
+                ladder.send(FIREBALL, &seated, CastCommit::Spell);
+            })
+            .expect("one-shot");
+        assert!(rx.try_recv().is_err(), "refused before the push: no cancel");
+        assert_eq!(
+            world.resource_mut::<CastReports>().take_refusals(),
+            vec![CastFail::local(FIREBALL, 0x3e)]
+        );
+
+        let use_spell = benilla_protocol::messages::ItemUseSpell {
+            spell_id: FIREBALL,
+            cooldown_ms: 60_000,
+            category: 0,
+            category_cooldown_ms: 0,
+        };
+        world.resource_mut::<crate::spell::Cooldowns>().start_item(
+            0,
+            &use_spell,
+            None,
+            Instant::now(),
+        );
+        send(&mut world, FIREBALL, CastCommit::Spell);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(
+            world.resource_mut::<CastReports>().take_refusals(),
+            vec![CastFail::local(FIREBALL, 0x3c)],
+            "\"Spell is not ready yet\", not \"You have no target\""
+        );
+    }
+
+    /// The equipped-item check's ammo leg (`0x6e40e0` with the ammo flag, `0x6e4dfd`): a shot with
+    /// a bow worn and no arrows loaded is refused `0x2f` with the ammo type (`0x6e4373`), ahead of
+    /// the arm's no-target refusal, which it reaches once arrows are loaded and carried.
+    #[test]
+    fn a_shot_without_ammo_is_refused_before_the_arm() {
+        use crate::net::ObjectStore;
+        use benilla_formats::SpellDisplay;
+        use benilla_protocol::ObjectFields;
+        const SHOT: u32 = 3044;
+        const BOW: u64 = 0x2a;
+        const ARROWS: u64 = 0x2b;
+        const BOW_ENTRY: u32 = 2504;
+        const ARROW_ENTRY: u32 = 2512;
+        // `PLAYER_FIELD_INV_SLOT_HEAD` + 2 × slot: the ranged slot 17 and backpack slot 23.
+        const INV_RANGED: u16 = 486 + 2 * 17;
+        const INV_BACKPACK: u16 = 486 + 2 * 23;
+        const AMMO_ID: u16 = 1223;
+
+        let (mut world, rx) = world();
+        let mut spells = crate::ui_action::Spells::empty_for_tests();
+        spells.catalog = benilla_formats::SpellCatalog::from_displays(
+            [(
+                SHOT,
+                SpellDisplay {
+                    implicit_target_a1: 6,
+                    equipped_item_class: 2,
+                    equipped_item_subclass_mask: 1 << 2,
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        );
+        world.insert_resource(spells);
+        crate::items::test_spawn_item(&mut world, BOW, ObjectFields::from_pairs(&[(3, BOW_ENTRY)]), false);
+        crate::items::test_spawn_item(
+            &mut world,
+            ARROWS,
+            ObjectFields::from_pairs(&[(3, ARROW_ENTRY)]),
+            false,
+        );
+        {
+            let mut items = world.resource_mut::<Items>();
+            items.insert_template(
+                BOW_ENTRY,
+                Some(benilla_protocol::messages::ItemInfo {
+                    class: 2,
+                    subclass: 2,
+                    ammo_type: 2,
+                    ..crate::items::test_template("Bow")
+                }),
+            );
+            items.insert_template(
+                ARROW_ENTRY,
+                Some(benilla_protocol::messages::ItemInfo {
+                    class: 6,
+                    subclass: 2,
+                    ..crate::items::test_template("Arrow")
+                }),
+            );
+        }
+        let press = |world: &mut World, ammo_id: u32| {
+            let store: &'static ObjectStore =
+                Box::leak(Box::new(ObjectStore(ObjectFields::from_pairs(&[
+                    (22, 100),
+                    (INV_RANGED, BOW as u32),
+                    (INV_BACKPACK, ARROWS as u32),
+                    (AMMO_ID, ammo_id),
+                ]))));
+            world
+                .run_system_once(move |mut ladder: CastLadder| {
+                    let base = ctx();
+                    let with_store = cast_target::CastContext {
+                        rel: cast_target::TargetRelations {
+                            self_store: Some(store),
+                            ..base.rel
+                        },
+                        ..base
+                    };
+                    ladder.send(SHOT, &with_store, CastCommit::Spell);
+                })
+                .expect("one-shot");
+        };
+
+        press(&mut world, 0);
+        assert!(rx.try_recv().is_err(), "an empty quiver never sends");
+        assert_eq!(
+            world.resource_mut::<CastReports>().take_refusals(),
+            vec![CastFail::local_arg(SHOT, 0x2f, 2)]
+        );
+        press(&mut world, ARROW_ENTRY);
+        assert_eq!(
+            world.resource_mut::<CastReports>().take_refusals(),
+            vec![CastFail::local(SHOT, cast_target::ERR_NO_TARGET)],
+            "loaded and carried: the arm's line"
+        );
+        let _ = rx.try_iter().count();
     }
 
     /// TryCast's IsCasting refusal (`0x61`) precedes the not-ready rung.

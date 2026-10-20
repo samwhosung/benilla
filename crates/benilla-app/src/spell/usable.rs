@@ -142,6 +142,22 @@ pub(crate) fn equipped_item_fits(
     )
 }
 
+/// The ammo leg of `0x6e40e0` (`0x6e41f6`-`0x6e4373`), which the cast request and the usable walk
+/// run, both with the ammo flag set (`0x6e4dfd`, `0x6e3e65`); the spell tooltip searches the worn
+/// items alone (`0x52ef73`). `Some(ammo type)` refuses, `0x2f` `SPELL_FAILED_NEED_AMMO` with the
+/// type as its argument (`0x6e434d`, `0x6e4372`). `subclass_flags` is `ItemSubClass.dbc`'s
+/// `Flags` for a class and subclass, 0 for no row.
+pub(crate) fn ammo_refusal(
+    d: &SpellDisplay,
+    store: &ObjectStore,
+    objects: &Objects,
+    items: &Items,
+    subclass_flags: &dyn Fn(u32, u32) -> u32,
+) -> Option<u32> {
+    let _ = (d, store, objects, items, subclass_flags);
+    None
+}
+
 /// The worn item `guid` names from the cached records alone: `None` while its object or its
 /// template has not streamed.
 fn worn_item_cached(guid: u64, objects: &Objects, items: &Items) -> Option<WornItem> {
@@ -763,6 +779,179 @@ mod tests {
         assert!(!fits(ATTR_EX3_MAIN_HAND_ONLY, true));
         assert!(fits(ATTR_EX3_OFF_HAND_ONLY, true));
         assert!(fits(0, true));
+    }
+
+    /// `0x6e40e0`'s ammo leg: a weapon whose record names an ammo type (`+0x114`) fires only with
+    /// `PLAYER_AMMO_ID` set (`0x6e42db`) and a carried projectile of that entry, class 6 and that
+    /// subclass (`0x6e43a0`); an `ItemSubClass.dbc` row with flag `0x10` (Thrown), a weapon of
+    /// ammo type 0 and a record not cached pass (`0x6e4264`, `0x6e42a7`, `0x6e4296`).
+    #[test]
+    fn a_ranged_weapon_needs_its_ammo_loaded_and_carried() {
+        use crate::items::TestDeps;
+        use benilla_protocol::messages::ItemInfo;
+
+        const INV_RANGED: u16 = 486 + 2 * 17;
+        const INV_BACKPACK: u16 = 486 + 2 * 23;
+        const AMMO_ID: u16 = 1223;
+        const BOW: u64 = 0x2a;
+        const ARROWS: u64 = 0x2b;
+        const BOW_ENTRY: u32 = 2504;
+        const ARROW_ENTRY: u32 = 2512;
+
+        let shot = SpellDisplay {
+            equipped_item_class: 2,
+            equipped_item_subclass_mask: 1 << 2 | 1 << 3 | 1 << 16 | 1 << 18,
+            ..Default::default()
+        };
+        struct Case {
+            ammo_type: u32,
+            ammo_id: u32,
+            carried: bool,
+            projectile: (u32, u32),
+            flags: u32,
+            cached: bool,
+        }
+        let base = Case {
+            ammo_type: 2,
+            ammo_id: ARROW_ENTRY,
+            carried: true,
+            projectile: (6, 2),
+            flags: 0,
+            cached: true,
+        };
+        let refusal = |c: Case| {
+            let mut deps = TestDeps::new();
+            deps.spawn_item(BOW, ObjectFields::from_pairs(&[(3, BOW_ENTRY)]));
+            if c.cached {
+                deps.items.insert_template(
+                    BOW_ENTRY,
+                    Some(ItemInfo {
+                        class: 2,
+                        subclass: 2,
+                        ammo_type: c.ammo_type,
+                        ..crate::items::test_template("Bow")
+                    }),
+                );
+            }
+            deps.items.insert_template(
+                ARROW_ENTRY,
+                Some(ItemInfo {
+                    class: c.projectile.0,
+                    subclass: c.projectile.1,
+                    ..crate::items::test_template("Arrow")
+                }),
+            );
+            let mut pairs = vec![(INV_RANGED, BOW as u32), (AMMO_ID, c.ammo_id)];
+            if c.carried {
+                deps.spawn_item(ARROWS, ObjectFields::from_pairs(&[(3, ARROW_ENTRY)]));
+                pairs.push((INV_BACKPACK, ARROWS as u32));
+            }
+            let store = ObjectStore(ObjectFields::from_pairs(&pairs));
+            let flags = c.flags;
+            deps.with_objects(|objects, items, _| {
+                ammo_refusal(&shot, &store, objects, items, &|class, subclass| {
+                    if (class, subclass) == (2, 2) {
+                        flags
+                    } else {
+                        0
+                    }
+                })
+            })
+        };
+
+        assert_eq!(refusal(Case { ..base }), None, "loaded and carried");
+        assert_eq!(
+            refusal(Case {
+                ammo_id: 0,
+                ..base
+            }),
+            Some(2),
+            "nothing loaded"
+        );
+        assert_eq!(
+            refusal(Case {
+                carried: false,
+                ..base
+            }),
+            Some(2),
+            "loaded but none carried"
+        );
+        assert_eq!(
+            refusal(Case {
+                projectile: (6, 3),
+                ..base
+            }),
+            Some(2),
+            "bullets for a bow"
+        );
+        assert_eq!(
+            refusal(Case {
+                projectile: (15, 2),
+                ..base
+            }),
+            Some(2),
+            "not a projectile"
+        );
+        assert_eq!(
+            refusal(Case {
+                ammo_id: 0,
+                flags: 0x10,
+                ..base
+            }),
+            None,
+            "a subclass flagged 0x10"
+        );
+        assert_eq!(
+            refusal(Case {
+                ammo_id: 0,
+                ammo_type: 0,
+                ..base
+            }),
+            None,
+            "no ammo type"
+        );
+        assert_eq!(
+            refusal(Case {
+                ammo_id: 0,
+                cached: false,
+                ..base
+            }),
+            None,
+            "no record yet"
+        );
+    }
+
+    /// The spell tooltip's requirement line searches the worn items alone (`0x52ef73`): an empty
+    /// quiver leaves the bow's requirement met.
+    #[test]
+    fn the_worn_item_search_reads_no_ammo() {
+        use crate::items::TestDeps;
+        let mut deps = TestDeps::new();
+        deps.spawn_item(0x2a, ObjectFields::from_pairs(&[(3, 2504)]));
+        deps.items.insert_template(
+            2504,
+            Some(benilla_protocol::messages::ItemInfo {
+                class: 2,
+                subclass: 2,
+                ammo_type: 2,
+                ..crate::items::test_template("Bow")
+            }),
+        );
+        let store = ObjectStore(ObjectFields::from_pairs(&[(486 + 2 * 17, 0x2a)]));
+        let shot = SpellDisplay {
+            equipped_item_class: 2,
+            equipped_item_subclass_mask: 1 << 2,
+            ..Default::default()
+        };
+        deps.with_objects(|objects, items, _| {
+            assert!(equipped_item_fits(
+                &shot,
+                &store,
+                objects,
+                items,
+                &mut Unrecorded
+            ));
+        });
     }
 
     /// The relation functions with nothing held and no catalog: every faction leg neutral.

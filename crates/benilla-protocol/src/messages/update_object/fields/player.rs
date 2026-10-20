@@ -206,6 +206,11 @@ impl ObjectFields {
     pub fn player_track_stealthed(&self) -> bool {
         self.get_u32(FIELD_PLAYER_FIELD_BYTES).unwrap_or(0) & 0x2 != 0
     }
+    /// `PLAYER_FIELD_BYTES` byte 0 bit `0x4` (vmangos `PLAYER_FIELD_BYTE_LOGGING_OUT`): the cast
+    /// validator refuses a living player with it `0x61` (`0x60982b`, `[+0xe68]+0x1028`).
+    pub fn player_logging_out(&self) -> bool {
+        self.get_u32(FIELD_PLAYER_FIELD_BYTES).unwrap_or(0) & 0x4 != 0
+    }
     /// `PLAYER_QUEST_LOG_<slot+1>_*`: one quest-log slot, `quest_id == 0` when the server cleared
     /// it; the count-state and timer are written with the id (`Player.h:1094-1099`).
     pub fn player_quest_log(&self, slot: u8) -> Option<QuestLogSlot> {

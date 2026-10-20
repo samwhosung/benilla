@@ -103,6 +103,18 @@ impl GameTime {
         self.live
     }
 
+    /// `IsDaytime 0x60a050`: `WowTime::InRange` of the clock from 05:30 to 21:00, both encoded with
+    /// every other field unset (`0x60a060`, `0x60a081`), so only the hour and minute compare. An
+    /// unset clock reads night.
+    pub(crate) fn is_daytime(&self) -> bool {
+        let at = |hour, minute| WowTime {
+            minute,
+            hour,
+            ..WowTime::UNSET
+        };
+        in_range(&self.time, &at(5, 30), &at(21, 0))
+    }
+
     /// `0x6424c0`: the minute of day the light state is stamped with, hour · 60 + minute, 0 when
     /// either is unset.
     pub(crate) fn minute_of_day(&self) -> u32 {
@@ -293,6 +305,35 @@ impl GameTime {
             SessionEvent::GameTimeSet { time } => Some(self.game_time_set(time, tick)),
             _ => None,
         }
+    }
+}
+
+/// The fields `WowTime`'s comparisons walk, year first (`+0x14` down to `+0x00`).
+fn fields_high_first(t: &WowTime) -> [i32; 6] {
+    [t.year, t.month, t.day, t.weekday, t.hour, t.minute]
+}
+
+/// The first field set in both whose values differ, compared, `None` when none does: the walk of
+/// `0x642a10`, `0x642770` and `0x6428c0`, which skip a field unset (negative) in either.
+fn first_difference(a: &WowTime, b: &WowTime) -> Option<std::cmp::Ordering> {
+    fields_high_first(a)
+        .into_iter()
+        .zip(fields_high_first(b))
+        .filter(|&(x, y)| x >= 0 && y >= 0)
+        .map(|(x, y)| x.cmp(&y))
+        .find(|o| o.is_ne())
+}
+
+/// `WowTime::InRange` (`0x642710`): `a <= t < b` when `a <= b` (`0x642880`), else the wrap, `t >= a`
+/// or `t < b`. Equal is no field differing (`0x642a10`), so a wildcard equals anything.
+fn in_range(t: &WowTime, a: &WowTime, b: &WowTime) -> bool {
+    use std::cmp::Ordering::{Greater, Less};
+    let at_least = |x: &WowTime, y: &WowTime| first_difference(x, y) != Some(Less);
+    let below = |x: &WowTime, y: &WowTime| first_difference(x, y) == Some(Less);
+    if first_difference(a, b) != Some(Greater) {
+        at_least(t, a) && below(t, b)
+    } else {
+        at_least(t, a) || below(t, b)
     }
 }
 
@@ -507,6 +548,47 @@ mod tests {
         // sixtieth is a minute into the day.
         assert_eq!(clock.phase(7), 0.0);
         assert!((clock.phase(60_007) * 1440.0 - 1.0).abs() < 1e-5);
+    }
+
+    /// `IsDaytime 0x60a050`: `InRange(clock, 05:30, 21:00)` (`0x642710`), the start in and the end
+    /// out, the date ignored because the bounds leave it unset; an unset clock is night.
+    #[test]
+    fn daytime_runs_from_half_past_five_to_nine() {
+        for (hour, minute, day) in [
+            (5, 29, false),
+            (5, 30, true),
+            (12, 0, true),
+            (20, 59, true),
+            (21, 0, false),
+            (23, 59, false),
+            (0, 0, false),
+        ] {
+            assert_eq!(
+                at(hour, minute).is_daytime(),
+                day,
+                "{hour:02}:{minute:02} is {}",
+                if day { "day" } else { "night" }
+            );
+        }
+        assert!(!GameTime::new(0).is_daytime(), "an unset clock reads night");
+    }
+
+    /// `InRange`'s wrapped leg (`0x64274f`): a start after the end takes either side, and a field
+    /// unset in a bound matches every value (`0x642a10`).
+    #[test]
+    fn a_wrapped_range_takes_either_side_of_midnight() {
+        let hm = |hour, minute| WowTime {
+            minute,
+            hour,
+            ..WowTime::UNSET
+        };
+        let (night_from, night_to) = (hm(21, 0), hm(5, 30));
+        assert!(in_range(&sunday(23, 0), &night_from, &night_to));
+        assert!(in_range(&sunday(2, 0), &night_from, &night_to));
+        assert!(!in_range(&sunday(12, 0), &night_from, &night_to));
+        // An hour-only bound: 05:xx all equal 05:-1, so the whole hour is in.
+        assert!(in_range(&sunday(5, 0), &hm(5, -1), &hm(6, -1)));
+        assert!(!in_range(&sunday(6, 0), &hm(5, -1), &hm(6, -1)));
     }
 
     /// `0x6434d0`: the sent hour and minute come back; the step back and the step forward cancel.

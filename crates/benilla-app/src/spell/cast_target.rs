@@ -220,6 +220,14 @@ pub(crate) struct CastContext<'a> {
     /// The caster's movement flags (the client's `[unit+0x9e8]`), read by the requirement
     /// validator's moving gate.
     pub(crate) self_move_flags: u32,
+    /// The caster's stand state as `GetStandState 0x5ed570` reads it for the active player, the
+    /// validator's standing rung's input (`0x609cad`).
+    pub(crate) self_stand_state: u8,
+    /// The caster's sheathe state `[unit+0xd40]`, the validator's unsheathed rung's input
+    /// (`0x609ba9`).
+    pub(crate) self_sheathe_state: u8,
+    /// `IsDaytime 0x60a050` on the game clock, the validator's day and night rungs' input.
+    pub(crate) daytime: bool,
     /// `[0xb4b3e4]` is clear: the start of melee the cast's tail makes returns at it
     /// (`0x5ecbc0`).
     pub(crate) self_control_lost: bool,
@@ -309,6 +317,10 @@ pub(crate) struct CastTargeting<'w, 's> {
     own_control: Option<Res<'w, crate::player::OwnControlLost>>,
     /// The caster's and the selection's reach and motion, for the range gate.
     range_units: super::RangeUnits<'w, 's>,
+    /// The caster's animation driver, which keeps its sheathe state.
+    self_driver: Query<'w, 's, &'static crate::creature_anim::AnimDriver, With<SelfPlayer>>,
+    /// The game clock the day and night rungs read; absent in a harness without one.
+    clock: Option<Res<'w, crate::net::ServerTime>>,
 }
 
 impl CastTargeting<'_, '_> {
@@ -368,6 +380,20 @@ impl CastTargeting<'_, '_> {
                 .and_then(|s| s.0.player_inv_slot(EQUIPMENT_SLOT_MAINHAND))
                 .filter(|&g| g != 0),
             self_move_flags: self.player.as_deref().map_or(0, |p| p.move_flags()),
+            self_stand_state: {
+                let byte = self_store.map_or(0, |s| s.0.unit_stand_state());
+                self.player.as_deref().map_or(byte, |p| p.stand_state(byte))
+            },
+            // The cached state, seeded from `UNIT_FIELD_BYTES_2` byte 0 and moved by the local
+            // setter `0x611cf0` ahead of its echo; the descriptor's byte until it is driven.
+            self_sheathe_state: self
+                .self_driver
+                .iter()
+                .next()
+                .and_then(|d| d.sheath_state())
+                .or_else(|| self_store.and_then(|s| s.0.unit_sheath_state()))
+                .unwrap_or(0),
+            daytime: self.clock.as_deref().is_some_and(|c| c.0.is_daytime()),
             self_control_lost: self.own_control.as_deref().is_some_and(|c| c.0),
         }
     }
@@ -451,9 +477,16 @@ fn clear_satisfied_bits(word: u16, is_self: bool, rel: &TargetRelations) -> u16 
     word
 }
 
-/// Whether the unit arm's relation checks clear the whole standing word for this unit.
+/// The word `BindTarget`'s unit branch leaves when an arm binds this unit, `None` when none does.
+fn bind_arm(word: u16, is_self: bool, rel: &TargetRelations) -> Option<u16> {
+    let left = clear_satisfied_bits(word, is_self, rel);
+    (left != word).then_some(left)
+}
+
+/// Whether an arm binds this unit and leaves the standing word empty, which commits the cast
+/// (`0x6e60c1`).
 fn unit_word_binds(word: u16, is_self: bool, rel: &TargetRelations) -> bool {
-    word & UNIT_BITS != 0 && clear_satisfied_bits(word, is_self, rel) == 0
+    word & UNIT_BITS != 0 && bind_arm(word, is_self, rel) == Some(0)
 }
 
 /// Whether `BindTarget 0x6e5b40`'s unit branch binds this unit under the standing word: the gates
@@ -914,6 +947,49 @@ mod tests {
                 "a living unit keeps the bit, self {is_self}"
             );
         }
+    }
+
+    /// `BindTarget`'s unit branch is one else-if chain (`0x6e5cad`-`0x6e5ee7`): the first arm whose
+    /// test holds clears its own bit, and on a dead unit `0x400`, or `0x8600` for the `0x2` arm;
+    /// with none holding the unit binds nothing (`0x6e60dc`).
+    #[test]
+    fn the_unit_branch_binds_through_the_first_arm_that_holds() {
+        use benilla_protocol::ObjectFields;
+        // Fields 2 `OBJECT_FIELD_TYPE` (0x19, a player), 22 health, 46 `UNIT_FIELD_FLAGS`, 139
+        // `UNIT_FIELD_PETNUMBER`.
+        let unit = |pairs: &[(u16, u32)]| ObjectStore(ObjectFields::from_pairs(pairs));
+        let rel = |target| TargetRelations {
+            target_store: Some(target),
+            ..rel_none()
+        };
+        // The 0x2 arm: `UNIT_FLAG_IMMUNE_TO_PLAYER` refuses it (`0x6e5e03`), Dispel Magic at a
+        // companion pet.
+        let immune = unit(&[(22, 100), (46, 0x100)]);
+        let plain = unit(&[(22, 100)]);
+        assert!(!unit_word_binds(0x2, false, &rel(&immune)));
+        assert!(unit_word_binds(0x2, false, &rel(&plain)));
+        // Its dead leg clears 0x8600 (`0x6e5e33`): Revive's 0x8002 on a corpse nobody assists.
+        let corpse = unit(&[(22, 0)]);
+        assert!(unit_word_binds(0x8002, false, &rel(&corpse)));
+        // A bare 0x400 has no arm.
+        assert!(!unit_word_binds(0x400, false, &rel(&corpse)));
+        // 0x8000: dead, and a player or a pet (`0x6e5e5c`-`0x6e5e72`), then `CanAssist`, so
+        // Resurrection binds no dead guard.
+        let dead_player = unit(&[(2, 0x19), (22, 0)]);
+        let dead_pet = unit(&[(22, 0), (139, 3)]);
+        assert!(!unit_word_binds(0x8000, true, &rel(&corpse)), "a creature");
+        assert!(unit_word_binds(0x8000, true, &rel(&dead_player)));
+        assert!(unit_word_binds(0x8000, true, &rel(&dead_pet)));
+        // 0x200: dead, a player, and `CanAssist` refused (`0x6e5ead`-`0x6e5ee7`).
+        assert!(unit_word_binds(0x200, false, &rel(&dead_player)));
+        assert!(!unit_word_binds(0x200, false, &rel(&corpse)), "not a player");
+        assert!(!unit_word_binds(0x200, true, &rel(&dead_player)), "assistable");
+        // The 0x8000 arm's refusal ends the walk before 0x200 (`0x6e5e7f`).
+        assert!(!unit_word_binds(0x8200, false, &rel(&dead_player)));
+        // The first arm wins: the assist arm binds and leaves 0x2 standing, so nothing commits.
+        let me = unit(&[(2, 0x19), (22, 100)]);
+        assert_eq!(bind_arm(0x0102, true, &rel(&me)), Some(0x0002));
+        assert!(!unit_word_binds(0x0102, true, &rel(&me)));
     }
 
     fn rel_none() -> TargetRelations<'static> {

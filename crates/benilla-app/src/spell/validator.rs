@@ -1,11 +1,13 @@
 //! The requirement validator `0x6094f0`: the press-time gates `TryCast 0x6e4b60` runs between
 //! the target bind and the commit, plus the range compare `IsTargetInRange 0x6e47b0` that
 //! `CanTargetUnit 0x6e4440` runs before it. Pure predicates answering the reference's reason codes,
-//! called by [`super::cast_send`]'s ladder in its order. Only `TryCast` reaches `0x6094f0`, never
-//! the greying walk `0x6e3d60`.
+//! called by [`super::cast_send`]'s ladder in its order: the cooldown and power rungs there, the
+//! rest through [`caster_refusal`]. Only `TryCast` reaches `0x6094f0`, never the greying walk
+//! `0x6e3d60`.
 
 use super::SpellModifiers;
-use benilla_formats::{RangeUnit, SpellDisplay, SpellRange};
+use benilla_formats::{CcExemption, RangeUnit, SpellDisplay, SpellRange};
+use benilla_protocol::ObjectFields;
 
 /// The range refusals `CanTargetUnit 0x6e4440` emits: "Out of range." and "Target too close".
 pub(super) const ERR_OUT_OF_RANGE: u8 = 0x59;
@@ -57,22 +59,22 @@ const PREVENTION_PACIFY: u32 = 2;
 /// | 5 | FLEEING | bit 23 | `0x1e` |
 /// | 6 | CONFUSED | bit 22 | `0x16` |
 ///
-/// A dead caster skips all six (`0x60980d`). Only `TryCast` calls this, so stun, silence and
-/// pacify refuse on the press without greying a button; the greying walk's own copy of these
-/// helpers (fear, confuse, charm) is not built. SILENCED reads `test ah,0x20`, invisible to a
-/// dword-immediate scan.
+/// [`caster_refusal`] runs it for a living caster only (`0x60980d`). Only `TryCast` calls this, so
+/// stun, silence and pacify refuse on the press without greying a button; the greying walk's own
+/// copy of these helpers (fear, confuse, charm) is not built. SILENCED reads `test ah,0x20`,
+/// invisible to a dword-immediate scan.
 ///
 /// Each arm first scans the caster's `UNIT_FIELD_AURA[0..47]` for auras of its own types (charm
 /// `{6, 177, 2}`, stun `{12}`, silence `{27, 12, 60}`, pacify `{25, 12, 60}`, fear `{7}`, confuse
-/// `{5}`) and asks [`benilla_formats::grants_immunity`] of each: a hit lifts the refusal; a named
-/// blocking mechanic turns the reason into `0x8d`.
+/// `{5}`), `scan` answering for one type ([`benilla_formats::cc_exemption`], `0x6e9ca0`) and
+/// [`cc_exemption_over`] joining them: an exemption lifts the refusal; a named blocking mechanic
+/// turns the reason into `0x8d`.
 pub(crate) fn cast_cc_refusal(
     unit_flags: u32,
-    health: Option<u32>,
     charmed_by_other: bool,
     spell: Option<&SpellDisplay>,
-    exempt: &mut impl FnMut(&[u32]) -> benilla_formats::CcExemption,
-) -> Option<(u8, Option<u32>)> {
+    scan: &mut dyn FnMut(u32) -> CcExemption,
+) -> Option<Refusal> {
     use crate::player::UNIT_FLAG_STUNNED;
     /// `UNIT_FIELD_FLAGS` bits 13, 17, 22 and 23 (vmangos `UnitDefines.h`).
     const UNIT_FLAG_SILENCED: u32 = 0x0000_2000;
@@ -80,23 +82,22 @@ pub(crate) fn cast_cc_refusal(
     const UNIT_FLAG_CONFUSED: u32 = 0x0040_0000;
     const UNIT_FLAG_FLEEING: u32 = 0x0080_0000;
 
-    // A dead caster skips the leg (`0x60980d`); an earlier rung refuses a corpse.
-    if health == Some(0) {
-        return None;
-    }
     let prevention = spell.map_or(0, |d| d.prevention_type);
     // An exempt scan skips the arm; otherwise `0x8d` when it named a mechanic, else the arm's own
     // reason.
-    let mut arm = |aura_types: &[u32], own_reason: u8| -> Option<(u8, Option<u32>)> {
-        let scan = exempt(aura_types);
-        if scan.exempt {
+    let mut arm = |aura_types: &[u32], own_reason: u8| -> Option<Refusal> {
+        let over = cc_exemption_over(aura_types, scan);
+        if over.exempt {
             return None;
         }
-        Some(if scan.mechanic != 0 {
+        Some(if over.mechanic != 0 {
             // The mechanic is the message's `%s`, the one local refusal with an argument word.
-            (REASON_PREVENTED_BY_MECHANIC, Some(scan.mechanic))
+            Refusal {
+                reason: REASON_PREVENTED_BY_MECHANIC,
+                arg: Some(over.mechanic),
+            }
         } else {
-            (own_reason, None)
+            Refusal::of(own_reason)
         })
     };
 
@@ -131,6 +132,19 @@ pub(crate) fn cast_cc_refusal(
         }
     }
     None
+}
+
+/// The wrappers over the scan `0x6e9ca0` (`0x6e9c80`, `0x6e9e60`, `0x6e9ec0`, `0x6e9f20`,
+/// `0x6e9f40`, `0x6e9f60`): one scan per aura type in order, joined into the arm's answer.
+pub(crate) fn cc_exemption_over(
+    aura_types: &[u32],
+    scan: &mut dyn FnMut(u32) -> CcExemption,
+) -> CcExemption {
+    aura_types
+        .iter()
+        .map(|&ty| scan(ty))
+        .reduce(|a, b| if a.mechanic != 0 || a.exempt { a } else { b })
+        .unwrap_or_default()
 }
 
 /// `SPELL_FAILED_PREVENTED_BY_MECHANIC`, "Can't do that while %s" with the blocking aura's
@@ -227,6 +241,87 @@ pub(super) fn cast_moving_refusal(
         && (cast_time_ms != 0
             || d.aura_interrupt_flags & AURA_INTERRUPT_MOVING_TURNING != 0
             || d.channel_interrupt_flags & AURA_INTERRUPT_MOVING_TURNING != 0)
+}
+
+/// One refusal of the validator: the reason `ReportCastFailure 0x6e1a00` is passed, and the
+/// argument word it pushes first, which only the crowd-control rename carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Refusal {
+    pub(crate) reason: u8,
+    pub(crate) arg: Option<u32>,
+}
+
+impl Refusal {
+    const fn of(reason: u8) -> Self {
+        Self { reason, arg: None }
+    }
+}
+
+/// The caster as the validator's rungs past its power test read it: the active player, the only
+/// caster [`super::cast_send`]'s ladder casts for.
+pub(crate) struct CasterState<'a> {
+    /// Its descriptor.
+    pub(crate) fields: &'a ObjectFields,
+    /// Its guid, which the charm arm compares the charmer with (`0x60995e`).
+    pub(crate) guid: Option<u64>,
+    /// `GetStandState`, the caster's vtable slot 41 (`0x609cad`): the active player's local state
+    /// (`0x5ed570`).
+    pub(crate) stand_state: u8,
+    /// The sheathe state `[unit+0xd40]`: 0 away, 1 melee, 2 ranged (`0x609ba9`).
+    pub(crate) sheathe_state: u8,
+    /// The mover's flags `[[unit+0x118]+0x40]`, which the water and moving rungs read.
+    pub(crate) move_flags: u32,
+    /// `IsDaytime 0x60a050` on the game clock.
+    pub(crate) daytime: bool,
+}
+
+/// What the rungs read beyond the record and the caster: the cast time the moving rung asks
+/// `0x6e3340` for, whether the caster's form counts as a stance (`0x612480`), and the player's
+/// standing with a faction (`GetFactionStanding 0x4d6370`).
+pub(crate) struct SpellInputs<'a> {
+    pub(crate) cast_time_ms: u32,
+    pub(crate) form_is_stance: bool,
+    pub(crate) standing: &'a dyn Fn(u32) -> i32,
+}
+
+/// The rungs of `0x6094f0` after its cooldown and power tests, in its order, the first that fails
+/// answering (castgates, "Rung order"). `scan` is the crowd-control scan `0x6e9ca0` for one aura
+/// type. A spell with no record takes no rung that needs one of its bits to apply.
+pub(crate) fn caster_refusal(
+    spell: Option<&SpellDisplay>,
+    caster: &CasterState,
+    inputs: &SpellInputs,
+    scan: &mut dyn FnMut(u32) -> CcExemption,
+) -> Option<Refusal> {
+    let fields = caster.fields;
+    // A caster with health 0 or below skips the control block (`0x60980d jle`); no health field
+    // yet is not death.
+    let alive = fields.unit_health().is_none_or(|h| h as i32 > 0);
+    if alive {
+        // The charm arm refuses only when someone else holds the charm (`0x60995e`).
+        let charmed_by_other = fields
+            .unit_charmed_by()
+            .is_some_and(|charmer| Some(charmer) != caster.guid);
+        if let Some(r) = cast_cc_refusal(fields.unit_flags(), charmed_by_other, spell, scan) {
+            return Some(r);
+        }
+    }
+    if cast_mounted_refusal(fields.unit_mount_display_id() > 0, spell) {
+        return Some(Refusal::of(0x39));
+    }
+    if let Some(reason) = cast_water_refusal(caster.move_flags, spell) {
+        return Some(Refusal::of(reason));
+    }
+    if cast_moving_refusal(caster.move_flags, inputs.cast_time_ms, spell) {
+        return Some(Refusal::of(0x2e));
+    }
+    if let Some(d) = spell {
+        let form = fields.unit_shapeshift_form();
+        if let Some(refusal) = d.form_refusal(form, inputs.form_is_stance) {
+            return Some(Refusal::of(refusal.reason()));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -554,248 +649,5 @@ mod tests {
 }
 
 #[cfg(test)]
-mod cc_refusal_tests {
-    use super::*;
-
-    const STUNNED: u32 = 0x0004_0000;
-    const SILENCED: u32 = 0x0000_2000;
-    const PACIFIED: u32 = 0x0002_0000;
-    const CONFUSED: u32 = 0x0040_0000;
-    const FLEEING: u32 = 0x0080_0000;
-
-    fn spell(prevention_type: u32) -> SpellDisplay {
-        SpellDisplay {
-            prevention_type,
-            ..Default::default()
-        }
-    }
-
-    /// A scan that finds no aura: every arm answers its own reason.
-    fn no_auras() -> impl FnMut(&[u32]) -> benilla_formats::CcExemption {
-        |_: &[u32]| benilla_formats::CcExemption::default()
-    }
-
-    /// The reason alone, dropping the mechanic.
-    fn reason_of(v: Option<(u8, Option<u32>)>) -> Option<u8> {
-        v.map(|(r, _)| r)
-    }
-
-    /// A live caster, nobody else at the reins, no auras.
-    fn cc(flags: u32, d: &SpellDisplay) -> Option<u8> {
-        cast_cc_refusal(flags, Some(100), false, Some(d), &mut no_auras()).map(|(r, _)| r)
-    }
-
-    /// Stun, fear, charm and confuse refuse every spell; silence and pacify only the rows whose
-    /// `PreventionType` names them.
-    #[test]
-    fn crowd_control_refuses_by_prevention_type_except_the_unconditional_arms() {
-        // Fireball's shape (silence), Heroic Strike's (pacify), auto-attack's (neither).
-        let cast = spell(1);
-        let melee = spell(2);
-        let neither = spell(0);
-
-        // The arms with no per-spell gate refuse every row.
-        for (flags, reason) in [(STUNNED, 0x64), (FLEEING, 0x1e), (CONFUSED, 0x16)] {
-            for d in [&cast, &melee, &neither] {
-                assert_eq!(cc(flags, d), Some(reason), "flags {flags:#x}");
-            }
-        }
-        // Charm: somebody else holds the reins.
-        assert_eq!(
-            reason_of(cast_cc_refusal(
-                0,
-                Some(100),
-                true,
-                Some(&neither),
-                &mut no_auras()
-            )),
-            Some(0x14)
-        );
-
-        assert_eq!(cc(SILENCED, &cast), Some(0x60));
-        assert_eq!(cc(SILENCED, &melee), None);
-        assert_eq!(cc(SILENCED, &neither), None);
-
-        assert_eq!(cc(PACIFIED, &melee), Some(0x5a));
-        assert_eq!(cc(PACIFIED, &cast), None);
-
-        // No record claims no prevention.
-        assert_eq!(cc(0, &cast), None);
-        assert_eq!(
-            reason_of(cast_cc_refusal(
-                SILENCED,
-                Some(100),
-                false,
-                None,
-                &mut no_auras()
-            )),
-            None
-        );
-        assert_eq!(
-            reason_of(cast_cc_refusal(
-                STUNNED,
-                Some(100),
-                false,
-                None,
-                &mut no_auras()
-            )),
-            Some(0x64),
-            "the stun needs no record"
-        );
-    }
-
-    /// The reference's order, first match wins.
-    #[test]
-    fn the_arms_are_tried_in_the_references_order() {
-        let cast = spell(1);
-        // Charm (1) beats a stun.
-        assert_eq!(
-            reason_of(cast_cc_refusal(
-                STUNNED | SILENCED,
-                Some(100),
-                true,
-                Some(&cast),
-                &mut no_auras()
-            )),
-            Some(0x14)
-        );
-        // Stun (2) beats everything below it.
-        assert_eq!(
-            cc(STUNNED | SILENCED | PACIFIED | FLEEING | CONFUSED, &cast),
-            Some(0x64)
-        );
-        // Silence (3) beats fear (5) and confuse (6).
-        assert_eq!(cc(SILENCED | FLEEING | CONFUSED, &cast), Some(0x60));
-        // Out of silence's reach, fear takes it before confuse.
-        assert_eq!(cc(SILENCED | FLEEING | CONFUSED, &spell(0)), Some(0x1e));
-    }
-
-    /// The exemption's three outcomes at an arm.
-    #[test]
-    fn the_exemption_skips_an_arm_or_renames_its_refusal() {
-        let cast = spell(1);
-        let scan = |exempt: bool, mechanic: u32| {
-            move |_: &[u32]| benilla_formats::CcExemption { exempt, mechanic }
-        };
-
-        // No aura of the arm's type: its own reason.
-        assert_eq!(
-            reason_of(cast_cc_refusal(
-                STUNNED,
-                Some(100),
-                false,
-                Some(&cast),
-                &mut scan(false, 0)
-            )),
-            Some(0x64)
-        );
-        // A blocking aura the cast does not counter: renamed to `0x8d`.
-        assert_eq!(
-            reason_of(cast_cc_refusal(
-                STUNNED,
-                Some(100),
-                false,
-                Some(&cast),
-                &mut scan(false, 12)
-            )),
-            Some(0x8d)
-        );
-        // The cast grants immunity (Ice Block while stunned): the arm is skipped.
-        assert_eq!(
-            reason_of(cast_cc_refusal(
-                STUNNED,
-                Some(100),
-                false,
-                Some(&cast),
-                &mut scan(true, 0)
-            )),
-            None
-        );
-        // Skipping the stun arm still leaves silence below it.
-        assert_eq!(
-            reason_of(cast_cc_refusal(
-                STUNNED | SILENCED,
-                Some(100),
-                false,
-                Some(&cast),
-                &mut |types: &[u32]| {
-                    // Exempt from the stun arm `{12}` only.
-                    benilla_formats::CcExemption {
-                        exempt: types == [12],
-                        mechanic: 0,
-                    }
-                }
-            )),
-            Some(0x60)
-        );
-    }
-
-    /// Only the renamed refusal carries the mechanic.
-    #[test]
-    fn the_renamed_refusal_carries_the_mechanic_and_the_others_carry_nothing() {
-        let cast = spell(1);
-        let scan = |exempt: bool, mechanic: u32| {
-            move |_: &[u32]| benilla_formats::CcExemption { exempt, mechanic }
-        };
-
-        assert_eq!(
-            cast_cc_refusal(STUNNED, Some(100), false, Some(&cast), &mut scan(false, 12)),
-            Some((0x8d, Some(12)))
-        );
-        assert_eq!(
-            cast_cc_refusal(STUNNED, Some(100), false, Some(&cast), &mut scan(false, 0)),
-            Some((0x64, None))
-        );
-        assert_eq!(
-            cast_cc_refusal(STUNNED, Some(100), false, Some(&cast), &mut scan(true, 0)),
-            None
-        );
-    }
-
-    /// A dead caster skips all six arms (`0x60980d`'s `jle` on `UNIT_FIELD_HEALTH`).
-    #[test]
-    fn a_dead_caster_takes_no_crowd_control_refusal() {
-        let cast = spell(1);
-        assert_eq!(
-            reason_of(cast_cc_refusal(
-                STUNNED,
-                Some(0),
-                false,
-                Some(&cast),
-                &mut no_auras()
-            )),
-            None
-        );
-        assert_eq!(
-            reason_of(cast_cc_refusal(
-                0,
-                Some(0),
-                true,
-                Some(&cast),
-                &mut no_auras()
-            )),
-            None
-        );
-        assert_eq!(
-            reason_of(cast_cc_refusal(
-                STUNNED,
-                Some(1),
-                false,
-                Some(&cast),
-                &mut no_auras()
-            )),
-            Some(0x64)
-        );
-        // No health field yet is not death.
-        assert_eq!(
-            reason_of(cast_cc_refusal(
-                STUNNED,
-                None,
-                false,
-                Some(&cast),
-                &mut no_auras()
-            )),
-            Some(0x64)
-        );
-    }
-}
+#[path = "validator_tests.rs"]
+mod caster_tests;
