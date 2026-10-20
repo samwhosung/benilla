@@ -13,6 +13,11 @@
 //! the three-byte-a-pixel buffer `0x5a3820` allocates and never zeroes, so the rest of the colours
 //! are heap garbage; a 32-bit map is read a byte an entry short and the pixels start inside it.
 //!
+//! Deviation: a truecolour image whose depth less its alpha bits is 24, but whose depth is not 24
+//! or 32, is refused where the reference crashes. The check `0x5a37e0` admits it (25 to 31 bits
+//! with 1 to 7 alpha bits, 33 to 39 with 9 to 15), then `0x5a41f0` returns 0 for a depth that is
+//! not 32, and the copy at `0x4492c4` reads through that null pointer: there is no result to match.
+//!
 //! [`tga_to_rgba`] checks the header before the pixels, so it can serve as the fallback after a
 //! failed `BLP2` sniff: TGA has no magic.
 
@@ -29,7 +34,8 @@ fn reference_map_entry_bytes(bits: u8) -> usize {
 /// succeeding on any byte it gets, `0x64853b`-`0x64854a`) and `0x448450` makes the device texture
 /// at the header's size, refusing a width or height that is not a power of two below 1024
 /// (`0x4484ae`-`0x4484d0`). The pixels decode later, in `0x44a260`: a file [`tga_to_rgba`] refuses
-/// still has this texture, filled opaque white (`0x44a2eb`). A size of zero draws nothing.
+/// still has this texture, filled opaque white (`0x44a2eb`). A zero size passes the gate and draws
+/// nothing.
 pub fn tga_texture_size(bytes: &[u8]) -> Option<(u32, u32)> {
     let header = bytes.get(..18)?;
     let id_length = usize::from(header[0]);
@@ -48,7 +54,8 @@ pub fn tga_texture_size(bytes: &[u8]) -> Option<(u32, u32)> {
     }
     let width = u32::from(u16::from_le_bytes([header[12], header[13]]));
     let height = u32::from(u16::from_le_bytes([header[14], header[15]]));
-    let fits = |n: u32| n.is_power_of_two() && n < 1024;
+    // `test ebx, ebx-1` lets 0 through (`0x44849d`), so a zero size passes.
+    let fits = |n: u32| n & n.wrapping_sub(1) == 0 && n < 1024;
     (fits(width) && fits(height)).then_some((width, height))
 }
 
@@ -90,9 +97,7 @@ pub fn tga_to_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
         );
     }
     // A colour-mapped pixel is an index, its palette entry a width of its own (`0x5a3b40`). The
-    // other pairs `0x5a37e0` admits (25 to 31 bits with 1 to 7 alpha bits, 33 to 39 with 9 to 15)
-    // reach `0x5a41f0`, which wants 32 and returns null to the copy at `0x4492c4`: no image is
-    // decoded there, so they are refused.
+    // truecolour depths other than 24 and 32 are refused, the crash pairs by the third Deviation.
     let bytes_per_pixel = match (bpp, paletted, grayscale) {
         (8, true, _) => 1,
         (24, false, false) => 3,
