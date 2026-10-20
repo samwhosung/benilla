@@ -751,6 +751,8 @@ fn cost_and_cast_cells_on_real_data() {
 /// `_PER_TIME` form with its 0, and the per-second cost scales by the level (`0x6e3300`).
 #[test]
 fn the_cost_cell_tests_the_divided_values() {
+    // The cells fill the install's `GlobalStrings.lua`.
+    let _data = benilla_formats::wow_data_or_skip!();
     use benilla_formats::SpellDisplay;
     use benilla_protocol::messages::FIELD_PLAYER_SKILL_INFO_1_1;
     let mut spells = Spells::empty_for_tests();
@@ -867,6 +869,8 @@ fn the_reputation_line_reads_the_players_standing() {
 /// per-second cost and the cast time alike, each a read of that line.
 #[test]
 fn the_per_level_terms_read_the_skill_not_the_level() {
+    // The cells fill the install's `GlobalStrings.lua`.
+    let _data = benilla_formats::wow_data_or_skip!();
     use benilla_formats::SpellDisplay;
     use benilla_protocol::messages::FIELD_PLAYER_SKILL_INFO_1_1;
     let mut spells = Spells::empty_for_tests();
