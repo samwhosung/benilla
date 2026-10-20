@@ -217,10 +217,17 @@ fn on_logged_out(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
 }
 
 /// The bridge's half of the session end; each window's own listener runs after it.
-fn on_disconnected(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
+fn on_disconnected(
+    In(ev): In<SessionEvent>,
+    mut e: Edges,
+    mut b: Bridge,
+    mut released: ResMut<super::objects::Released>,
+) {
     if let SessionEvent::Disconnected { reason, end } = ev {
         // The same teardown as `on_logged_out`'s.
         b.reputations.clear_forced();
+        // Leaving the world frees the released objects with the live ones (`0x467700`).
+        released.clear();
         disconnected(
             reason,
             end,
@@ -273,6 +280,7 @@ fn on_worldport(
     mut b: Bridge,
     mut group: ResMut<crate::ui_party::GroupState>,
     script: Option<NonSend<benilla_ui::script::UiScript>>,
+    mut released: ResMut<super::objects::Released>,
 ) {
     if let SessionEvent::Worldport {
         map_id,
@@ -301,6 +309,8 @@ fn on_worldport(
             &b.transports,
             &mut e.worldports,
         );
+        // Loading a new world frees the released objects with the live ones (`0x467700`).
+        released.clear();
     }
 }
 

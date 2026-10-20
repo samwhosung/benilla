@@ -255,9 +255,10 @@ impl ObjectStore {
     }
 }
 
-/// One descriptor dword moved on a streamed object, the reference's `CMirrorHandler` edge: the
-/// values notifier (`0x465330`) diffs live against a shadow copy and passes the old value
-/// (`0x465570`). A first create fires nothing; a re-create of a live guid fires like a delta.
+/// One descriptor dword moved on a streamed object, the reference's `CMirrorHandler` edge: an
+/// update packet's notify pass (`0x465330`) diffs the object against the copy its last write in
+/// the packet took (`0x46664b`) and passes the old value (`0x465570`). A first create fires
+/// nothing; a create of an object shown before fires every dword it moved, an omitted one cleared.
 ///
 /// `kind` is the store's class from its create block, since a raw index differs per class (`36`
 /// is a unit's `BYTES_0` and a corpse's `DYNAMIC_FLAGS`).
@@ -287,30 +288,18 @@ impl FieldChanged {
     }
 }
 
-/// Merge a descriptor update into a store and emit its [`FieldChanged`] edges; the drain and the
-/// test harness share it.
-pub(crate) fn merge_store_fields(
-    store: &mut ObjectFields,
-    delta: ObjectFields,
-    entity: Entity,
-    guid: u64,
-    mut emit: impl FnMut(FieldChanged),
-) {
-    let Some(kind) = store.created_as() else {
-        // A bare delta with no create: nothing for the reference to notify on; the fields land.
+/// A block's write into a held store (`0x466590` with its copy flag clear): a create's delta
+/// replaces the store, clearing what it omits (`0x466582`); a values delta lands on top. The
+/// dwords it moved come back as `(index, old, new)`. A store no create made has no type to
+/// notify by, and the fields land with none.
+pub(crate) fn write_fields(store: &mut ObjectFields, delta: ObjectFields) -> Vec<(u16, u32, u32)> {
+    let mut moved = Vec::new();
+    if store.created_as().is_none() {
         store.merge(delta);
-        return;
-    };
-    store.merge_diff(delta, |index, old, new| {
-        emit(FieldChanged {
-            entity,
-            guid,
-            kind,
-            index,
-            old,
-            new,
-        });
-    });
+    } else {
+        store.merge_diff(delta, |index, old, new| moved.push((index, old, new)));
+    }
+    moved
 }
 
 /// Apply a descriptor update the way the drain does. The first one must be
@@ -320,7 +309,19 @@ pub(crate) fn apply_fields_for_test(world: &mut World, entity: Entity, delta: Ob
     let guid = world.get::<Guid>(entity).map_or(0, |g| g.0);
     let mut edges = Vec::new();
     match world.get_mut::<ObjectStore>(entity) {
-        Some(mut store) => merge_store_fields(&mut store.0, delta, entity, guid, |e| edges.push(e)),
+        Some(mut store) => {
+            let moved = write_fields(&mut store.0, delta);
+            if let Some(kind) = store.0.created_as() {
+                edges.extend(moved.into_iter().map(|(index, old, new)| FieldChanged {
+                    entity,
+                    guid,
+                    kind,
+                    index,
+                    old,
+                    new,
+                }));
+            }
+        }
         None => {
             assert!(
                 delta.created_as().is_some(),

@@ -3,10 +3,11 @@
 //! in wire order, and the systems that care read the stream instead of diffing snapshots: the
 //! action bar recounts (`0x4e5c70`) and the trade re-signals its slot (`0x4bfb10`, `0x4bfb60`).
 //!
-//! A values block runs each watcher whose watched bytes now differ from the copy taken before the
-//! block was written, once, at the first sent field of its range (`0x465570` sets the record's
-//! countdown to 1), so the notices of one block come out in field order. A first create runs no
-//! watcher; a re-create of a live guid merges like a values block ([`crate::net::FieldChanged`]).
+//! A block's notify runs each watcher whose watched bytes now differ from the copy its object's last
+//! write in the packet took, once, at the first field of its range the block visits (`0x465570`
+//! sets the record's countdown to 1), so the notices of one block come out in field order. A first
+//! create runs no watcher; a create of an object already shown runs them over every field
+//! ([`crate::field_watch::Notified`]).
 //! One notice belongs to no item: the landing of a record a trade getter asked for
 //! ([`ItemNotice::TradeRecord`]), which signals `TRADE_UPDATE`.
 
@@ -189,25 +190,20 @@ where
         fields.is_item() && self.me.is_some() && fields.item_owner() == self.me
     }
 
-    /// The notices of one values block on `guid`: `fields` is the store after the merge and
-    /// `edges` the changed dwords as `(index, old, new)`, ascending.
+    /// The notices of one block's notify on `guid` ([`crate::field_watch::Notified`]): `fields`
+    /// is the store now.
     pub(crate) fn values(
         &self,
         guid: u64,
         kind: ObjectType,
         fields: &ObjectFields,
-        edges: &[(u16, u32, u32)],
+        block: &crate::field_watch::Notified,
     ) -> Vec<ItemNotice> {
-        if edges.is_empty() {
+        if block.is_quiet() {
             return Vec::new();
         }
-        let old_of = |index: u16, now: u32| {
-            edges
-                .iter()
-                .find(|&&(i, _, _)| i == index)
-                .map_or(now, |&(_, old, _)| old)
-        };
-        let moved = |range: std::ops::Range<u16>| edges.iter().any(|(i, _, _)| range.contains(i));
+        let old_of = |index: u16, now: u32| block.edge(index).map_or(now, |(old, _)| old);
+        let moved = |range: std::ops::Range<u16>| block.runs(range);
         // `(first index of the watched range, notice)`, sorted at the end.
         let mut out: Vec<(u16, ItemNotice)> = Vec::new();
         match kind {
@@ -497,16 +493,19 @@ mod tests {
             }
         }
 
-        /// Merge `delta` into `guid`'s store and run the watchers on what moved.
+        /// Merge `delta` into `guid`'s store and run the watchers on what moved, as a packet of
+        /// this one values block does.
         fn values(&mut self, guid: u64, delta: &[(u16, u32)]) -> Vec<ItemNotice> {
-            let mut edges = Vec::new();
+            use crate::field_watch::{Notified, Sent};
+            let delta = ObjectFields::from_pairs(delta);
+            let sent: Vec<u16> = delta.raw_fields().map(|(i, _)| i).collect();
+            let mut moved = Vec::new();
             let store = self.objects.get_mut(&guid).expect("a live object");
             let kind = store.created_as().expect("created");
-            store.merge_diff(ObjectFields::from_pairs(delta), |i, o, n| {
-                edges.push((i, o, n))
-            });
+            store.merge_diff(delta, |i, o, n| moved.push((i, o, n)));
             let fields = self.objects[&guid].clone();
-            self.watch().values(guid, kind, &fields, &edges)
+            let block = Notified::new(Sent::Fields(&sent), &moved);
+            self.watch().values(guid, kind, &fields, &block)
         }
     }
 

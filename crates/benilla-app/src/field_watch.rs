@@ -5,14 +5,14 @@
 //! nothing else: not a login, not a `/reload`, not a value read for the first time, not a token
 //! that comes to name another unit.
 //!
-//! A values block runs each watch whose bytes now differ from the copy taken before the block was
-//! written, once, at the first sent field of its range (`0x465570` sets the record's countdown to
-//! 1; `repz cmpsb` at `0x4655bb`), so the notices of one block come out in field order. At one
-//! field the notify pass splices the type watchers' list ahead of the object's own (`0x46544a`,
-//! `0x465463`), each appended at the pending list's tail (`0x465a14`) behind the watches a lower
-//! field already spliced. The notify pass `0x465330` has two callers, a values block (`0x465277`)
-//! and a create of an object that already exists (`0x465d8e`); a first create runs none
-//! (`0x465d80 je 0x465d98`), and a `/reload` receives no update at all.
+//! A block's notify runs each watch whose bytes now differ from the copy its object's last write
+//! in the packet took, once, at the first field of its range the block visits (`0x465570` sets the
+//! record's countdown to 1; `repz cmpsb` at `0x4655bb`), so the notices of one block come out in
+//! field order ([`Notified`]). At one field the notify pass splices the type watchers' list ahead
+//! of the object's own (`0x46544a`, `0x465463`), each appended at the pending list's tail
+//! (`0x465a14`) behind the watches a lower field already spliced. The notify pass `0x465330` has
+//! two callers, a values block (`0x465277`) and a create of an object already shown (`0x465d8e`);
+//! a first create runs none (`0x465d80 je 0x465d98`), and a `/reload` receives no update at all.
 //!
 //! The watches here: the unit-field bridge `0x51bbb0` on every unit with token flags; the unit
 //! type watchers `0x6041f0` and the player type watchers `0x5e2510` whose callbacks signal; the
@@ -236,28 +236,61 @@ pub(crate) struct Around<'a> {
     pub(crate) pet_bar: u64,
 }
 
-/// One values block's changed dwords, `(index, old, new)` ascending, as the store's merge reports
-/// them; an absent dword did not change.
-struct Block<'a>(&'a [(u16, u32, u32)]);
+/// One block as the notify pass reads it again (`0x465330`): the fields it visits against the dwords
+/// its object's last write in the packet moved, `(index, copy, now)` ascending. Every write of a
+/// held object re-copies each of its watched ranges first (`0x46664b`-`0x4666b6`, over every field
+/// below the count, sent or not), so an earlier block of the packet compares against the copy the
+/// last write took.
+#[derive(Clone, Copy)]
+pub(crate) struct Notified<'a> {
+    sent: Sent<'a>,
+    moved: &'a [(u16, u32, u32)],
+}
 
-impl Block<'_> {
-    /// The dword `index` before and after the block, when it changed.
-    fn edge(&self, index: u16) -> Option<(u32, u32)> {
-        self.0
-            .binary_search_by_key(&index, |&(i, _, _)| i)
-            .ok()
-            .map(|at| (self.0[at].1, self.0[at].2))
+/// The fields a block's notify visits: it runs the pending watches at each (`0x4654a4`).
+#[derive(Clone, Copy)]
+pub(crate) enum Sent<'a> {
+    /// The set bits of a values block's mask, ascending.
+    Fields(&'a [u16]),
+    /// Every field, set or clear: the create notify of an object already shown (`dl = 1`,
+    /// `0x465d8a`).
+    All,
+}
+
+impl<'a> Notified<'a> {
+    pub(crate) fn new(sent: Sent<'a>, moved: &'a [(u16, u32, u32)]) -> Self {
+        Self { sent, moved }
     }
 
-    /// The bits of dword `index` the block flipped.
+    /// Whether nothing a watch could compare moved.
+    pub(crate) fn is_quiet(&self) -> bool {
+        self.moved.is_empty()
+    }
+
+    /// Whether the block visits field `index`.
+    fn visits(&self, index: u16) -> bool {
+        match self.sent {
+            Sent::All => true,
+            Sent::Fields(sent) => sent.binary_search(&index).is_ok(),
+        }
+    }
+
+    /// The dword `index` in the copy and now, when it moved.
+    pub(crate) fn edge(&self, index: u16) -> Option<(u32, u32)> {
+        self.moved
+            .binary_search_by_key(&index, |&(i, _, _)| i)
+            .ok()
+            .map(|at| (self.moved[at].1, self.moved[at].2))
+    }
+
+    /// The bits of dword `index` that moved.
     fn flipped(&self, index: u16) -> u32 {
         self.edge(index).map_or(0, |(old, new)| old ^ new)
     }
 
     /// The field a watch of `len` bytes at byte `offset` of the section starting at field `base`
-    /// runs at, when any of its bytes differs from the copy taken before the block (the watch's
-    /// `repz cmpsb`, `0x4655bb`): the first sent field of its range, for which the first changed
-    /// dword stands.
+    /// runs at: the first field of its range the block visits, when any byte of the range differs
+    /// from the copy (the watch's `repz cmpsb`, `0x4655bb`).
     fn fired(&self, base: u16, offset: u16, len: u16) -> Option<u16> {
         let (start, end) = (u32::from(offset), u32::from(offset) + u32::from(len));
         let below = |n: u32| {
@@ -272,14 +305,32 @@ impl Block<'_> {
         let mut at = start & !3;
         while at < end {
             let field = base + (at / 4) as u16;
+            if first.is_none() && self.visits(field) {
+                first = Some(field);
+            }
             if let Some((old, new)) = self.edge(field) {
-                first.get_or_insert(field);
                 let mask = below(end.min(at + 4) - at) & !below(start.max(at) - at);
                 moved |= (old ^ new) & mask != 0;
             }
             at += 4;
         }
         first.filter(|_| moved)
+    }
+
+    /// Whether a watch over the whole dwords of `range` runs: the block visits one of them and
+    /// one of them moved.
+    pub(crate) fn runs(&self, range: std::ops::Range<u16>) -> bool {
+        self.moved.iter().any(|(i, _, _)| range.contains(i))
+            && range.into_iter().any(|i| self.visits(i))
+    }
+
+    /// The moved dwords the block visits, as `(index, copy, now)`: the edges
+    /// [`crate::net::FieldChanged`] carries.
+    pub(crate) fn edges(&self) -> impl Iterator<Item = (u16, u32, u32)> + '_ {
+        self.moved
+            .iter()
+            .copied()
+            .filter(|&(i, _, _)| self.visits(i))
     }
 }
 
@@ -326,17 +377,15 @@ impl Pass {
     }
 }
 
-/// The notices of one values block on `guid`, created as `kind`: `fields` is the store after the
-/// merge and `edges` the changed dwords as `(index, old, new)`, ascending.
+/// The notices of one block's notify on `guid`, created as `kind`: `fields` is the store now.
 pub(crate) fn values(
     around: &Around,
     guid: u64,
     kind: ObjectType,
     fields: &ObjectFields,
-    edges: &[(u16, u32, u32)],
+    block: &Notified,
 ) -> Vec<FieldNotice> {
-    let block = Block(edges);
-    if edges.is_empty() || !matches!(kind, ObjectType::Unit | ObjectType::Player) {
+    if block.is_quiet() || !matches!(kind, ObjectType::Unit | ObjectType::Player) {
         return Vec::new();
     }
     let at = |base: u16, (offset, len): (u16, u16), list: List| -> Option<Place> {
@@ -495,16 +544,11 @@ pub(crate) fn values(
         if let Some(at) = at(PLAYER_SECTION, QUEST_LOG_WATCH, List::Object) {
             pass.push(at, FieldNotice::QuestLog);
         }
-        let rest = PLAYER_SECTION + REST_STATE / 4;
-        if let Some((old, new)) = block.edge(rest) {
+        if let Some(at) = at(PLAYER_SECTION, (REST_STATE, 1), List::Object) {
+            let (old, new) = block.edge(at.0).unwrap_or_default();
             let byte = |v: u32| (v >> (8 * (REST_STATE % 4))) as u8;
-            if byte(old) != byte(new) {
-                let (old, new) = (byte(old), byte(new));
-                pass.push(
-                    (rest, rest, List::Object),
-                    FieldNotice::RestState { old, new },
-                );
-            }
+            let (old, new) = (byte(old), byte(new));
+            pass.push(at, FieldNotice::RestState { old, new });
         }
         for (offset, len, id) in PLAYER_EVENT_WATCHES {
             if let Some(at) = at(PLAYER_SECTION, (offset, len), List::Object) {
@@ -576,30 +620,21 @@ mod tests {
     const ME: u64 = 0x07;
     const MOB: u64 = 0xF130_0000_0000_0001;
 
-    /// Merge `delta` into `store` and run the watches on what moved, as the object handlers do.
+    /// Merge `delta` into `store` and run the watches on what moved, as a packet of this one
+    /// values block does.
     fn block(
         store: &mut ObjectFields,
         me: Option<u64>,
         guid: u64,
         delta: &[(u16, u32)],
     ) -> Vec<FieldNotice> {
-        let mut edges = Vec::new();
-        store.merge_diff(ObjectFields::from_pairs(delta), |i, o, n| {
-            edges.push((i, o, n))
-        });
-        let kind = store.created_as().expect("created");
-        values(
-            &Around {
-                me,
-                creature_lookup: &|_| false,
-                others: &Vec::new,
-                pet_bar: 0,
-            },
-            guid,
-            kind,
-            store,
-            &edges,
-        )
+        let around = Around {
+            me,
+            creature_lookup: &|_| false,
+            others: &Vec::new,
+            pet_bar: 0,
+        };
+        block_around(store, &around, guid, delta)
     }
 
     fn player() -> ObjectFields {
@@ -816,12 +851,18 @@ mod tests {
         guid: u64,
         delta: &[(u16, u32)],
     ) -> Vec<FieldNotice> {
-        let mut edges = Vec::new();
-        store.merge_diff(ObjectFields::from_pairs(delta), |i, o, n| {
-            edges.push((i, o, n))
-        });
+        let delta = ObjectFields::from_pairs(delta);
+        let sent: Vec<u16> = delta.raw_fields().map(|(i, _)| i).collect();
+        let mut moved = Vec::new();
+        store.merge_diff(delta, |i, o, n| moved.push((i, o, n)));
         let kind = store.created_as().expect("created");
-        values(around, guid, kind, store, &edges)
+        values(
+            around,
+            guid,
+            kind,
+            store,
+            &Notified::new(Sent::Fields(&sent), &moved),
+        )
     }
 
     fn signal(guid: u64, id: u16) -> FieldNotice {

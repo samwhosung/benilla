@@ -1220,7 +1220,10 @@ fn a_values_block_moves_the_target_health_bar_and_a_retarget_fires_no_unit_event
             WOLF,
             ObjectType::Unit,
             &store.0,
-            &edges,
+            &crate::field_watch::Notified::new(
+                crate::field_watch::Sent::Fields(&[FIELD_UNIT_HEALTH]),
+                &edges,
+            ),
         )
     };
     app.world_mut()
@@ -1248,7 +1251,10 @@ fn a_values_block_moves_the_target_health_bar_and_a_retarget_fires_no_unit_event
             BOAR,
             ObjectType::Unit,
             &store.0,
-            &edges,
+            &crate::field_watch::Notified::new(
+                crate::field_watch::Sent::Fields(&[FIELD_UNIT_HEALTH]),
+                &edges,
+            ),
         )
     };
     app.world_mut()

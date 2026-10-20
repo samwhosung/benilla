@@ -674,7 +674,7 @@ mod tests {
             ME,
             benilla_protocol::messages::ObjectType::Player,
             &fields,
-            &edges,
+            &crate::field_watch::Notified::new(crate::field_watch::Sent::Fields(&[XP]), &edges),
         );
         app.world_mut()
             .resource_mut::<Messages<FieldNotice>>()

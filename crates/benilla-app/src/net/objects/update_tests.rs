@@ -440,9 +440,10 @@ fn a_values_movement_or_near_block_brings_a_released_object_back() {
     assert_eq!(field(world, MOB, ENTRY), Some(299));
 }
 
-/// A new object of a type first frees the oldest released one of that type (`0x466e55`, the
-/// head of the type's reuse list, which a release appends to at `0x464a83`): a create of the
-/// freed guid is a first create again, hook and all. Another type's create frees nothing.
+/// A new object takes the oldest released one of its type, which goes for good (`0x466e55` reads
+/// the head of the type's reuse list, which a release appends to at `0x464a83`): a values block
+/// for its guid finds nothing, and its create is a first one again, hook and all. Another type's
+/// create takes nothing, and every allocation takes one, so the next released player stays.
 #[test]
 fn a_new_object_frees_the_oldest_released_one_of_its_type() {
     use crate::field_watch::FieldNotice;
@@ -452,23 +453,23 @@ fn a_new_object_frees_the_oldest_released_one_of_its_type() {
     let mut app = client();
     let world = app.world_mut();
     world.resource_mut::<SelfGuid>().0 = Some(ME);
-    let tagged = |n: &[FieldNotice], guid: u64| {
-        n.contains(&FieldNotice::Signal {
-            guid,
-            id: crate::field_watch::id::PLAYER_GUILD_UPDATE,
-        })
-    };
     send(world, [player(P1, &[]), player(P2, &[])]);
     send(world, [out_of_range(&[P1, P2])]);
     send(world, [unit(MOB, &[(ENTRY, 299)])]);
-    notices(world);
     send(world, [player(P3, &[])]);
+    send(world, [values(P1, &[]), values(P2, &[])]);
+    assert!(!held(world, P1), "the oldest released player went to P3");
+    assert!(held(world, P2), "the next one was kept, and comes back");
     notices(world);
 
     send(world, [player(P1, &[])]);
-    assert!(tagged(&notices(world), P1), "freed: a first create");
-    send(world, [player(P2, &[])]);
-    assert!(!tagged(&notices(world), P2), "still released: no hook");
+    assert!(
+        notices(world).contains(&FieldNotice::Signal {
+            guid: P1,
+            id: crate::field_watch::id::PLAYER_GUILD_UPDATE,
+        }),
+        "freed: a first create"
+    );
 }
 
 /// `SMSG_DESTROY_OBJECT` frees an object the out-of-range list released (`0x467521`), so its

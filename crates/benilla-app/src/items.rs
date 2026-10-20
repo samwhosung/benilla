@@ -24,8 +24,8 @@ pub(crate) struct ItemObject {
     pub(crate) container: bool,
 }
 
-/// Spawn an item object into the index. The seed is never merged, so the create raises no field
-/// notify; a re-create of a live guid takes the handler's values path instead.
+/// Spawn an item object into the index with `fields` as its store, notifying nothing: the update
+/// pass runs its create hook or its watches ([`crate::net::FieldChanged`]).
 pub(crate) fn spawn_item(
     commands: &mut Commands,
     index: &mut GuidIndex,
