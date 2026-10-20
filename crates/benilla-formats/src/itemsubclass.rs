@@ -47,6 +47,22 @@ pub struct ItemSubClassCatalog {
 }
 
 impl ItemSubClassCatalog {
+    /// A catalog of `rows` in the order given, with no names and no mask groups.
+    pub fn from_rows(rows: impl IntoIterator<Item = ((u32, u32), ItemSubClassInfo)>) -> Self {
+        let mut catalog = Self {
+            rows: HashMap::new(),
+            names: HashMap::new(),
+            display_names: HashMap::new(),
+            order: Vec::new(),
+            mask_groups: Vec::new(),
+        };
+        for (key, info) in rows {
+            catalog.order.push(key);
+            catalog.rows.insert(key, info);
+        }
+        catalog
+    }
+
     /// The alternate proficiency subclass, the builder's walk: the prerequisite, then the
     /// postrequisite. A weapon without its own proficiency is usable with the alternate's.
     pub fn proficiency_alt(&self, class: u32, subclass: u32) -> Option<u32> {

@@ -775,6 +775,77 @@ fn a_broken_worn_weapon_draws_no_equipped_border() {
     );
 }
 
+/// The bar's usable walk hands the ammo leg of `0x6e40e0` the `ItemSubClass.dbc` flags
+/// (`0x6e4264`): a ranged weapon whose subclass row carries `0x10` (Thrown) fires without ammo,
+/// so its shot lights with nothing loaded, and the same weapon under a row without the flag greys.
+#[test]
+fn the_bars_ammo_leg_reads_the_subclass_flags() {
+    use benilla_protocol::messages::ItemInfo;
+    use benilla_protocol::ObjectFields;
+    // Player slot 17, the ranged seat.
+    const INV_RANGED: u16 = 486 + 2 * 17;
+    const KNIFE: u64 = 0xF0;
+    const KNIFE_ENTRY: u32 = 2946;
+    const THROW: u32 = 2764;
+
+    let lit = |flags: u32| {
+        let throw = SpellDisplay {
+            equipped_item_class: 2,
+            equipped_item_subclass_mask: 1 << 16,
+            ..Default::default()
+        };
+        let mut app = feed_app(
+            &[(0, THROW, ACTION_KIND_SPELL)],
+            catalog(vec![(THROW, throw)], &[]),
+            5.0,
+        );
+        app.insert_resource(crate::ui_items::ItemSubClasses(
+            benilla_formats::ItemSubClassCatalog::from_rows([(
+                (2, 16),
+                benilla_formats::ItemSubClassInfo {
+                    prerequisite_proficiency: -1,
+                    postrequisite_proficiency: -1,
+                    flags,
+                    display_flags: 0,
+                    weapon_swing_size: 0,
+                },
+            )]),
+        ));
+        // A Thrown weapon whose record names an ammo type, and no ammo loaded or carried.
+        app.world_mut().resource_mut::<Items>().insert_template(
+            KNIFE_ENTRY,
+            Some(ItemInfo {
+                class: 2,
+                subclass: 16,
+                ammo_type: 2,
+                ..crate::items::test_template("Throwing Knife")
+            }),
+        );
+        crate::items::test_spawn_item(
+            app.world_mut(),
+            KNIFE,
+            ObjectFields::from_pairs(&[(3, KNIFE_ENTRY)]),
+            false,
+        );
+        let me = app.world().resource::<crate::net::GuidIndex>().0[&ME];
+        app.world_mut()
+            .get_mut::<ObjectStore>(me)
+            .unwrap()
+            .0
+            .merge_diff(
+                ObjectFields::from_pairs(&[(INV_RANGED, KNIFE as u32)]),
+                |_, _, _| {},
+            );
+        app.update();
+        app.world()
+            .non_send_resource::<UiScript>()
+            .eval::<bool>("return (IsUsableAction(1)) and true or false")
+            .unwrap()
+    };
+    assert!(lit(0x10), "a subclass that fires no ammo");
+    assert!(!lit(0), "the same weapon, needing its ammo");
+}
+
 /// `SMSG_CLIENT_CONTROL_UPDATE` clears `[0xb4b3e4]` (`0x4958e0`), and `IsUsableAction` answers
 /// nil for every spell button and spell-less macro but the spell whose immunity covers the fear
 /// (`0x6e3dc3`-`0x6e3e4c`, `0x4e50f4`); control back, they all light.
