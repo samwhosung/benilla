@@ -37,12 +37,14 @@ pub(super) struct HeldUnits<'a> {
     pub(super) me: Option<RelUnit>,
     /// What the unit tooltip's own lines read.
     pub(super) tooltip: super::tooltip_facts::TooltipSources<'a>,
+    /// The guild cache, which the guild leg reads without asking.
+    pub(super) guild: &'a crate::ui_guild::GuildState,
 }
 
 impl HeldUnits<'_> {
     /// The snapshot of the held unit `guid`, whose descriptor is `store`, as a token naming a unit
-    /// other than the player carries it. It has no guild leg, so `GetGuildInfo` on a chain answers
-    /// nothing, where the reference resolves the token and reads the object's guild (`0x4c9330`).
+    /// other than the player carries it, however the token spells it: `GetGuildInfo` resolves the
+    /// token and reads that object's guild (`0x4c9330`), so the guild leg is every held unit's.
     pub(super) fn state(&self, store: &ObjectStore, guid: u64) -> UnitState {
         // The unit's create looked its name up with a callback (`0x5dec12`); a frame asks only
         // a name the cache holds nothing for, as one invalidated since, and a refused one waits
@@ -66,6 +68,8 @@ impl HeldUnits<'_> {
         s.faction_group_localized = faction_group_localized(store, factions);
         enrich_unit(&mut s, guid, self.names, store, factions, self.self_store);
         s.tooltip = super::tooltip_facts::tooltip_facts(store, s.creature_type, &self.tooltip);
+        // `[[unit+0xe68]+0xc]` (`0x4c93a3`) against the cache; a miss is `GetGuildInfo`'s to ask.
+        s.guild = crate::ui_guild::cached_unit_guild(&store.0, self.guild);
         s
     }
 }
@@ -74,6 +78,7 @@ impl HeldUnits<'_> {
 #[derive(Default)]
 pub(super) struct ChainMemo {
     names_generation: gate::Watch,
+    guild_generation: gate::Watch,
     /// The guids the last build covered, sorted.
     ends: Vec<u64>,
     /// What each was last pushed as.
@@ -103,6 +108,7 @@ pub(super) fn feed_chain_units(
     commands: Res<NetCommands>,
     world: crate::target::RelationWorld,
     group: Res<crate::ui_party::GroupState>,
+    guild: Res<crate::ui_guild::GuildState>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     changed: Query<(), (Changed<ObjectStore>, Without<crate::items::ItemObject>)>,
     mut removed: RemovedComponents<Guid>,
@@ -124,6 +130,7 @@ pub(super) fn feed_chain_units(
         // guids themselves, which move with the selection, the hover, the group and every held
         // unit's target.
         let names_moved = memo.names_generation.moved(names.generation());
+        let guild_moved = memo.guild_generation.moved(guild.identity_generation());
         let ends_moved = memo.ends != ends;
         let stores_changed = !changed.is_empty();
         let stores_removed = !removed.is_empty();
@@ -133,6 +140,7 @@ pub(super) fn feed_chain_units(
         let gate = gate::Gate::new(
             vm_reset
                 || names_moved
+                || guild_moved
                 || ends_moved
                 || stores_changed
                 || stores_removed
@@ -162,6 +170,7 @@ pub(super) fn feed_chain_units(
                 object: &object,
                 study: tables.study(),
             },
+            guild: &guild,
         };
         let built: HashMap<u64, UnitState> = ends
             .iter()
@@ -216,6 +225,8 @@ pub(crate) struct CandidateMemo {
     /// entry's creature record had answered. A creature's name is its record, but a pet's name
     /// and its record (the creature type the snapshot reads) come back apart.
     pushed: HashMap<u64, (String, bool)>,
+    /// The guild cache's generation the snapshots read, every one's guild leg.
+    guild_generation: gate::Watch,
     /// This frame's candidates, kept between frames so the walk allocates nothing.
     seen: HashSet<u64>,
 }
@@ -225,8 +236,8 @@ pub(crate) struct CandidateMemo {
 /// returns: the by-name scan's candidates (typemask 8, a cached name, no query sent) with their
 /// distance each frame, and each one's snapshot when it is new, its descriptor, name or creature
 /// record moved, or an input every snapshot reads did; another name's answer rebuilds nothing.
-/// The snapshot has no guild leg, as a chain end's; it is a view for the rest of a chunk, which
-/// [`super::feed_units`] replaces with the committed selection's next frame.
+/// It is a view for the rest of a chunk, which [`super::feed_units`] replaces with the committed
+/// selection's next frame.
 /// A move of our own descriptor does not rebuild the rest, so a reaction can lag our own faction
 /// change until the unit's next update. Without an active player object nothing is a candidate,
 /// as the reference resolves nothing then (`0x493ae0`).
@@ -241,6 +252,7 @@ pub(crate) fn feed_name_candidates(
     commands: Res<NetCommands>,
     world: crate::target::RelationWorld,
     group: Res<crate::ui_party::GroupState>,
+    guild: Res<crate::ui_guild::GuildState>,
     // The object manager's lookup, which the tooltip's owner line names an owner through.
     index: Option<Res<crate::net::GuidIndex>>,
     mut memo: Local<VmMemo<CandidateMemo>>,
@@ -250,7 +262,8 @@ pub(crate) fn feed_name_candidates(
             return;
         };
         let (memo, vm_reset) = memo.get_reset(script);
-        let rebuild = vm_reset || group.is_changed() || world.inputs_changed();
+        let guild_moved = memo.guild_generation.moved(guild.identity_generation());
+        let rebuild = vm_reset || group.is_changed() || world.inputs_changed() || guild_moved;
         let me = self_q.single().ok();
         let object = |guid: u64| {
             let entity = *index.as_ref()?.0.get(&guid)?;
@@ -271,6 +284,7 @@ pub(crate) fn feed_name_candidates(
                 object: &object,
                 study: tables.study(),
             },
+            guild: &guild,
         };
         memo.seen.clear();
         let origin = me.map(|(_, tf, _)| tf.translation());

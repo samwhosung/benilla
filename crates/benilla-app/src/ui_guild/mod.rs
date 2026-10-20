@@ -516,20 +516,30 @@ pub(crate) fn last_online(days: f32) -> LastOnline {
     }
 }
 
-/// `GetGuildInfo(unit)`: the unit's public guild fields joined against the identity cache, asking
-/// on a miss. `None` for a guildless unit, a creature or an unanswered query, one nil path in the
-/// reference (`0x4c93d7`, `0x4c943c`). The getter's lookup passes the callback `0x4c9470`
-/// (`0x4c93d2`) on the stock frames' events, which no event here marks: a guild is asked when it
-/// first shows, and a refused one again at the guild id's next change (the equipment resolver's
-/// lookup, `0x5e078f`).
+/// `GetGuildInfo("player")`'s leg: our public guild fields joined against the identity cache,
+/// asking on a miss. `None` for a guildless unit, a creature or an unanswered query, one nil path
+/// in the reference (`0x4c93d7`, `0x4c943c`). The getter's own lookup asks with the callback
+/// `0x4c9470` (`0x4c93d2`); this one asks when the guild first shows, and a refused one again at
+/// the guild id's next change (the equipment resolver's lookup, `0x5e078f`).
 pub(crate) fn unit_guild(
     fields: &ObjectFields,
     guild: &mut GuildState,
     commands: &NetCommands,
 ) -> Option<UnitGuild> {
+    guild_of(fields, guild, Ask::New(commands))
+}
+
+/// [`unit_guild`] from the cache alone, asking nothing: the guild leg of a held unit's snapshot,
+/// whose `GetGuildInfo` asks a miss itself, with a waiter of its own (`0x4c93d2`,
+/// [`benilla_ui::script::GuildRequest::InfoMiss`]).
+pub(crate) fn cached_unit_guild(fields: &ObjectFields, guild: &GuildState) -> Option<UnitGuild> {
+    guild_of(fields, guild, Ask::Read)
+}
+
+fn guild_of(fields: &ObjectFields, guild: &GuildState, ask: Ask<'_>) -> Option<UnitGuild> {
     let guild_id = fields.player_guild_id();
     let rank_index = fields.player_guild_rank();
-    let identity = guild.resolve_identity(guild_id, Ask::New(commands))?;
+    let identity = guild.resolve_identity(guild_id, ask)?;
     Some(UnitGuild {
         name: identity.name.clone(),
         rank_name: identity.rank_name(rank_index).to_string(),

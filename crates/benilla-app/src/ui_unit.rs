@@ -1512,18 +1512,16 @@ fn feed_units(
                 object: &object,
                 study: tables.study(),
             },
+            guild: &guild,
         };
-        let target = selection.target.zip(selection.guid).and_then(|(e, guid)| {
-            let store = stores.all.get(e).ok()?;
-            let mut s = held.state(store, guid);
-            s.guild = crate::ui_guild::unit_guild(&store.0, &mut guild, &commands);
-            Some(s)
-        });
+        let target = selection
+            .target
+            .zip(selection.guid)
+            .and_then(|(e, guid)| Some(held.state(stores.all.get(e).ok()?, guid)));
 
         // `"targettarget"`: one hop off the target's `UNIT_FIELD_TARGET`, streamed guids only, for
         // the stock frame's poll (`TargetofTarget_OnUpdate`, `TargetFrame.lua:494-538`): no unit
-        // event carries the hop, whose token is none of `0x515c50`'s. No guild leg: nothing asks it
-        // for one, and a lazy-cache miss sends a query.
+        // event carries the hop, whose token is none of `0x515c50`'s.
         let tot = selection
             .target
             .and_then(|e| stores.all.get(e).ok())
@@ -1563,8 +1561,7 @@ fn feed_units(
         }
 
         // `"npc"`: the interaction NPC, the reference's `[0xb4e2d0]` that
-        // `CGGameUI::SetInteractNPC` (`0x4930d0`) writes, which `InteractNpc` models. No guild leg,
-        // as for `"targettarget"`.
+        // `CGGameUI::SetInteractNPC` (`0x4930d0`) writes, which `InteractNpc` models.
         let npc = interact
             .as_deref()
             .and_then(|i| Some((i.0?, i.1?)))
