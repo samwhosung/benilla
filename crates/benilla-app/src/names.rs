@@ -231,13 +231,8 @@ impl NameCache {
         unit: &ObjectFields,
         commands: &NetCommands,
     ) {
-        // Every object's create carries its mask; a descriptor without one (0, as absent reads) is
-        // a player by its guid.
-        let creature = unit
-            .object_type_mask()
-            .filter(|&mask| mask != 0)
-            .map_or(!guid::is_player(guid_val), |mask| mask == 9);
-        if !creature {
+        // A descriptor with no mask reads 0, which is not 9: no ask.
+        if unit.object_type_mask() != Some(9) {
             return;
         }
         if let Some(entry) = unit.object_entry() {
@@ -1313,7 +1308,7 @@ mod tests {
         let mut cache = NameCache::default();
         let wolf_a = compose(guid::HIGH_UNIT, 1234, 1);
         let wolf_b = compose(guid::HIGH_UNIT, 1234, 2);
-        let store = unit(&[(ENTRY, 1234)]);
+        let store = unit(&[(TYPE, CREATURE), (ENTRY, 1234)]);
 
         cache.lookup_fields(wolf_a, &store.0, &cmds);
         assert!(matches!(
@@ -1415,6 +1410,10 @@ mod tests {
     /// `OBJECT_FIELD_ENTRY` and `UNIT_FIELD_PETNUMBER`, absolute descriptor indices.
     const ENTRY: u16 = 3;
     const PETNUMBER: u16 = 139;
+    /// `OBJECT_FIELD_TYPE` and a creature's or a pet's mask, which the display resolve's ask
+    /// needs (`0x60b134`).
+    const TYPE: u16 = 2;
+    const CREATURE: u32 = 9;
 
     fn unit(fields: &[(u16, u32)]) -> ObjectStore {
         ObjectStore(benilla_protocol::ObjectFields::from_pairs(fields))
@@ -1467,7 +1466,7 @@ mod tests {
         let (cmds, rx) = commands();
         let mut cache = NameCache::default();
         let wolf = compose(guid::HIGH_UNIT, 299, 4);
-        let store = unit(&[(ENTRY, 2_671)]);
+        let store = unit(&[(TYPE, CREATURE), (ENTRY, 2_671)]);
         cache.insert_creature(299, Some(record("Guid Bits")));
         cache.insert_creature(2_671, Some(record("Field Entry")));
         assert_eq!(
@@ -1546,12 +1545,29 @@ mod tests {
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
     }
 
+    /// The display resolve asks only for mask 9 (`0x60b134`): a descriptor with no
+    /// `OBJECT_FIELD_TYPE` reads 0 and asks nothing, nor does a player's `0x19`.
+    #[test]
+    fn only_a_creatures_mask_asks_its_record() {
+        let (cmds, rx) = commands();
+        let cache = NameCache::default();
+        let wolf = compose(guid::HIGH_UNIT, 1234, 1);
+        cache.ask_creature_record(wolf, &unit(&[(ENTRY, 1234)]).0, &cmds);
+        cache.ask_creature_record(wolf, &unit(&[(TYPE, 0x19), (ENTRY, 1234)]).0, &cmds);
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        cache.ask_creature_record(wolf, &unit(&[(TYPE, CREATURE), (ENTRY, 1234)]).0, &cmds);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::CreatureQuery { entry: 1234, .. })
+        ));
+    }
+
     #[test]
     fn a_cold_companion_pet_is_asked_by_the_creature_query_at_its_create() {
         let (cmds, rx) = commands();
         let cache = NameCache::default();
         let squirrel = compose(guid::HIGH_PET, 5_021, 3);
-        let store = unit(&[(ENTRY, 2_671)]);
+        let store = unit(&[(TYPE, CREATURE), (ENTRY, 2_671)]);
 
         cache.lookup_fields(squirrel, &store.0, &cmds);
         assert!(matches!(

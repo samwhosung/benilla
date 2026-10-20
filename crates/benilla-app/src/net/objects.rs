@@ -1619,7 +1619,7 @@ mod tests {
             transport_progress: None,
             transport: None,
             spline: None,
-            fields: ObjectFields::from_pairs(&[(3, ENTRY)])
+            fields: ObjectFields::from_pairs(&[(2, 9), (3, ENTRY)])
                 .into_created(benilla_protocol::messages::ObjectType::Unit),
         };
         let creature_asks = |rx: &crossbeam_channel::Receiver<ClientCommand>| {
@@ -1707,7 +1707,7 @@ mod tests {
             create(
                 unit,
                 EntityKind::Unit,
-                ObjectFields::from_pairs(&[(3, entry)]).into_created(ObjectType::Unit),
+                ObjectFields::from_pairs(&[(2, 9), (3, entry)]).into_created(ObjectType::Unit),
             ),
             create(
                 go,
