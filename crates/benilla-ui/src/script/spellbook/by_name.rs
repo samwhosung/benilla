@@ -142,9 +142,17 @@ mod tests {
         assert_eq!(sgetu8("é".as_bytes()), Some((0xe9, 2)));
         assert_eq!(sgetu8("€".as_bytes()), Some((0x20ac, 3)));
         assert_eq!(sgetu8(b"\xc0\xa9"), Some((0x29, 2)), "overlong");
-        assert_eq!(sgetu8(b"\xa9)"), Some((0x8000_0000, 1)), "a stray continuation");
+        assert_eq!(
+            sgetu8(b"\xa9)"),
+            Some((0x8000_0000, 1)),
+            "a stray continuation"
+        );
         assert_eq!(sgetu8(b"\xff"), Some((0x8000_0000, 1)));
-        assert_eq!(sgetu8(b"\xc3)"), Some((0x8000_0000, 2)), "the `)` is read with it");
+        assert_eq!(
+            sgetu8(b"\xc3)"),
+            Some((0x8000_0000, 2)),
+            "the `)` is read with it"
+        );
         assert_eq!(sgetu8(b"\xe2\x82"), None, "the end inside a sequence");
     }
 

@@ -94,7 +94,10 @@ fn cast_spell_by_name_parses_the_name_as_the_reference_does() {
 fn the_name_is_a_c_string_in_a_kilobyte_buffer_walked_by_utf8_character() {
     let mut s = vm(ranked(), PetBookState::default());
     assert_eq!(casts(&mut s, r#""Fireball\0(Rank 1)""#), vec![(145, false)]);
-    assert_eq!(casts(&mut s, r#""Fireball(Rank 1\192\169""#), vec![(133, false)]);
+    assert_eq!(
+        casts(&mut s, r#""Fireball(Rank 1\192\169""#),
+        vec![(133, false)]
+    );
     // `Fireball(Rank 1)`, padding to 1023 bytes and beyond, then a last `(`: the copy drops it.
     assert_eq!(
         casts(
@@ -105,7 +108,10 @@ fn the_name_is_a_c_string_in_a_kilobyte_buffer_walked_by_utf8_character() {
     );
     // Within the copy, the same last `(` names a spell no book holds.
     assert_eq!(
-        casts(&mut s, r#""Fireball(Rank 1)" .. string.rep("x", 900) .. "(Rank 2)""#),
+        casts(
+            &mut s,
+            r#""Fireball(Rank 1)" .. string.rep("x", 900) .. "(Rank 2)""#
+        ),
         vec![]
     );
 }
@@ -169,7 +175,11 @@ fn a_passive_is_matched_by_name_like_any_spell() {
 #[test]
 fn cast_spell_by_name_takes_a_string_or_a_number() {
     let mut s = vm(ranked(), PetBookState::default());
-    for bad in ["CastSpellByName()", "CastSpellByName(nil)", "CastSpellByName({})"] {
+    for bad in [
+        "CastSpellByName()",
+        "CastSpellByName(nil)",
+        "CastSpellByName({})",
+    ] {
         let err = s.run(bad).expect_err(bad).to_string();
         assert!(
             err.contains("Usage: CastSpellByName(name [, onSelf])"),
@@ -191,9 +201,8 @@ fn the_bound_spell_resolves_through_the_same_parse() {
         slots: vec![slot(6358, "Seduction", Some("Rank 1"))],
     };
     let player = ranked();
-    let resolve = |text: &str| {
-        resolve_spell_in_books(&player, &pet, text).map(|n| (n.spell_id, n.pet))
-    };
+    let resolve =
+        |text: &str| resolve_spell_in_books(&player, &pet, text).map(|n| (n.spell_id, n.pet));
     assert_eq!(resolve("Fireball"), Some((145, false)));
     assert_eq!(resolve("Fireball(Rank 1"), Some((133, false)));
     assert_eq!(resolve("Fireball (Rank 1)"), None);

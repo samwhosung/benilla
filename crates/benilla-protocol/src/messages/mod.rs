@@ -182,11 +182,11 @@ pub use packet::{CreatureQueryInfo, MonsterMoveFacing, ServerPacket};
 pub use page_text::page_text_query;
 pub use parse::{parse_server, parse_server_with_tail};
 pub use pet::{
-    pet_abandon, pet_action, pet_cancel_aura, pet_cast_spell, pet_rename, pet_set_action, pet_spell_autocast,
-    pet_stop_attack, pet_tame_failure_key, pet_unlearn, PetActionEntry, PetMode, PetSpellCooldown,
-    PetSpells, PetUnlearnConfirm, PET_ACTION_SLOTS, PET_ACT_COMMAND, PET_ACT_DISABLED,
-    PET_ACT_ENABLED, PET_ACT_PASSIVE, PET_ACT_REACTION, PET_AUTOCAST_ALLOWED, PET_AUTOCAST_ON,
-    PET_COMMAND_ATTACK, PET_COMMAND_DISMISS, PET_COMMAND_FOLLOW, PET_COMMAND_STAY,
+    pet_abandon, pet_action, pet_cancel_aura, pet_cast_spell, pet_rename, pet_set_action,
+    pet_spell_autocast, pet_stop_attack, pet_tame_failure_key, pet_unlearn, PetActionEntry,
+    PetMode, PetSpellCooldown, PetSpells, PetUnlearnConfirm, PET_ACTION_SLOTS, PET_ACT_COMMAND,
+    PET_ACT_DISABLED, PET_ACT_ENABLED, PET_ACT_PASSIVE, PET_ACT_REACTION, PET_AUTOCAST_ALLOWED,
+    PET_AUTOCAST_ON, PET_COMMAND_ATTACK, PET_COMMAND_DISMISS, PET_COMMAND_FOLLOW, PET_COMMAND_STAY,
     PET_COOLDOWN_PERMANENT, PET_REACT_AGGRESSIVE, PET_REACT_DEFENSIVE, PET_REACT_PASSIVE,
     PET_STATE_BAR_DISABLED, PET_TALK_ATTACK, PET_TALK_ORDER, PET_TYPE_SPELL_FIRST,
     PET_TYPE_SPELL_LAST, PET_UNUSABLE_UNIT_FLAGS,
