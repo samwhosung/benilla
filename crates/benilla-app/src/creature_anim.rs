@@ -254,6 +254,8 @@ pub(crate) fn start_attack_local(
         state: 1,
         ceremony: false,
     });
+    // `0x60fc50` (`0x5ecd87`): the precast's busy bit, its spell kept.
+    edits.push(UnitEdit::EndPrecastBusy(entity));
     cancel_auto_repeat_local(Some(entity), auto_repeat, edits, net);
 }
 

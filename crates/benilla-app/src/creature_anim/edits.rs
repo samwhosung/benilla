@@ -156,15 +156,17 @@ fn apply(world: &mut World, edits: Vec<UnitEdit>) {
                 }
             }
             UnitEdit::ClearAutoRepeat { entity, spell_id } => {
-                let _ = spell_id;
                 if let Ok(mut unit) = world.get_entity_mut(entity) {
-                    unit.remove::<(AutoRepeatArmed, super::Precast, NockedAmmo, NockLatch)>();
+                    unit.remove::<(AutoRepeatArmed, NockedAmmo, NockLatch)>();
                 }
+                precast::end(world, entity, Some(spell_id));
             }
-            UnitEdit::StartPrecast { .. }
-            | UnitEdit::SendPrecast { .. }
-            | UnitEdit::EndPrecast { .. }
-            | UnitEdit::EndPrecastBusy(_) => {}
+            UnitEdit::StartPrecast { entity, spell_id } => precast::start(world, entity, spell_id),
+            UnitEdit::SendPrecast { entity, spell_id } => {
+                precast::start_at_send(world, entity, spell_id);
+            }
+            UnitEdit::EndPrecast { entity, spell_id } => precast::end(world, entity, spell_id),
+            UnitEdit::EndPrecastBusy(entity) => precast::end_busy(world, entity),
         }
     }
 }

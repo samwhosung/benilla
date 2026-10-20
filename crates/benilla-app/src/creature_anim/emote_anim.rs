@@ -75,8 +75,7 @@ pub(super) fn receive_eligible(stand_state: u8, swimming: bool) -> bool {
 /// the driver's `armed_id`.
 fn player_eligible(anim_id: u32, channeling: bool, precast: bool, in_combat: bool) -> bool {
     let exempt = anim_id == u32::from(select::LIFT_OFF) || anim_id == u32::from(select::LAND);
-    let _ = precast;
-    !channeling && (exempt || !in_combat)
+    !channeling && !precast && (exempt || !in_combat)
 }
 
 /// The whole gate for one unit, as both producers call it; `engaged` stands for the client's

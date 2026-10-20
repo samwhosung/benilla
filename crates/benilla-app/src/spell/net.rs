@@ -663,6 +663,12 @@ fn cast_result(
                     spell_id,
                 });
             }
+            // The report's player cleanup ends the precast of the failed spell (`0x6e1c7f`,
+            // `0x6e1c8e`).
+            edits.push(crate::creature_anim::UnitEdit::EndPrecast {
+                entity: e,
+                spell_id: Some(spell_id),
+            });
             cast_events.write(CastEvent {
                 entity: e,
                 spell_id,
@@ -724,6 +730,7 @@ fn cast_result(
         {
             if Some(next) == auto_repeat.0 {
                 core.pending.fill_record();
+                core.pending.fill_record_spell(next);
             } else {
                 debug!("net: cast result {spell_id} chains modalNextSpell {next}");
                 return Some(next);
@@ -822,7 +829,12 @@ fn spell_start(
         } else {
             cast_flags & 0x1 == 0
         };
-        let _ = (precasts, edits);
+        if precasts {
+            edits.push(crate::creature_anim::UnitEdit::StartPrecast {
+                entity: e,
+                spell_id,
+            });
+        }
         // The precast edge, instants included: their GO follows at once and reaps the hold.
         cast_events.write(CastEvent {
             entity: e,
@@ -1059,6 +1071,11 @@ fn spell_go(
         if casting.get(e).is_ok_and(|c| c.spell_id == spell_id) {
             commands.entity(e).remove::<Casting>();
         }
+        // The precast ends with its own spell's GO (`0x60d040` at `0x6e7fc5`).
+        edits.push(crate::creature_anim::UnitEdit::EndPrecast {
+            entity: e,
+            spell_id: Some(spell_id),
+        });
         // The GO's chain-hop fill (`0x6e800d`), the producer for non-channelled chain spells. It
         // must precede the CastEvent: the cast kit's chain proc consumes it the same frame. The
         // reference gates it on the attribute predicate `0x6e4870`, whose role here is untraced;
@@ -1124,7 +1141,10 @@ fn spell_failed_other(
         if casting.get(e).is_ok_and(|c| c.spell_id == spell_id) {
             commands.entity(e).remove::<Casting>();
         }
-        let _ = edits;
+        edits.push(crate::creature_anim::UnitEdit::EndPrecast {
+            entity: e,
+            spell_id: Some(spell_id),
+        });
         cast_events.write(CastEvent {
             entity: e,
             spell_id,

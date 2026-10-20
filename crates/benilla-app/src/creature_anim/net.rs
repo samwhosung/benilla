@@ -171,10 +171,7 @@ fn attack_start(attacker: u64, victim: u64, commands: &mut Commands, index: &Gui
     debug!("net: attack start {attacker:#x} → {victim:#x}");
     if let Some(&e) = index.0.get(&attacker) {
         // The precast is not touched: only the local StartAttack clears its bit (`0x5ecd87`).
-        commands
-            .entity(e)
-            .insert(Engaged(victim))
-            .remove::<super::Precast>();
+        commands.entity(e).insert(Engaged(victim));
     }
 }
 

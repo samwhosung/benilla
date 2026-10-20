@@ -70,7 +70,7 @@ pub(super) fn control(
         // Our own `[0xb4b3e4]`, which a control verdict on our character writes.
         ResMut<super::OwnControlLost>,
         // The body's precast spell, which the posture verbs refuse on.
-        Query<Has<crate::creature_anim::Casting>, (With<Embodied>, Without<FlyCam>)>,
+        Query<Has<crate::creature_anim::Precast>, (With<Embodied>, Without<FlyCam>)>,
         // `ChrClasses.dbc`, whose relic flag the sheath toggle's ranged candidate reads.
         Option<Res<crate::chr_classes::ChrClassTable>>,
     ),

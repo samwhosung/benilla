@@ -685,14 +685,6 @@ pub(super) fn route_cast_visuals(
                         .catalog
                         .get(ev.spell_id)
                         .is_some_and(|d| d.ranged_slot());
-                    if ranged {
-                        commands.entity(ev.entity).try_insert(super::Precast {
-                            spell_id: ev.spell_id,
-                            busy: true,
-                        });
-                    } else {
-                        commands.entity(ev.entity).try_remove::<super::Precast>();
-                    }
                     // The hold resolver takes only an id above 0 (`0x612a0a jle`). Fallible:
                     // `model_fade::apply_despawn_fade` is unordered against this chain and can
                     // despawn the unit before these commands apply.
@@ -761,18 +753,6 @@ pub(super) fn route_cast_visuals(
                     |s| s.cast,
                     || weapon_src.caster(ev.entity),
                 ) {
-                    if spells
-                        .catalog
-                        .get(ev.spell_id)
-                        .is_some_and(|d| d.ranged_slot())
-                    {
-                        commands.entity(ev.entity).try_insert(super::Precast {
-                            spell_id: ev.spell_id,
-                            busy: true,
-                        });
-                    } else {
-                        commands.entity(ev.entity).try_remove::<super::Precast>();
-                    }
                     play_kit(
                         ev.entity,
                         ev.spell_id,

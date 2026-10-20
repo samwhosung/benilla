@@ -316,8 +316,7 @@ pub(super) fn stream_self_movement(
     // leaves no catch-up `SET_FACING` behind.
     player.last_facing = facing;
     player.move_flags = wire_flags;
-    let _ = precast_ended;
-    false
+    precast_ended
 }
 
 /// `CMSG_MOVE_TIME_SKIPPED`: the milliseconds the mover advanced through without integrating. The

@@ -307,6 +307,8 @@ impl CastLadder<'_, '_> {
         self.reports.changed();
         let _ = self.commands.0.send(cmd);
         // The send's precast and own signal (`0x6e5898`, `0x6e589d`), as the attempt's send.
+        let me = self.self_player.single().ok().map(|(e, _)| e);
+        crate::creature_anim::precast_at_send(me, spell_id, &self.edits);
         self.reports.changed();
         let auto_repeat = self
             .spells
@@ -859,6 +861,7 @@ fn send_spell_cast(
     // Every rung passed: the attempt fills the pending record with the spell (`0x6e4f88`) and the
     // player as its caster (`0x6e4fb1`), ahead of the arm and whatever it decides.
     core.pending.fill_record();
+    core.pending.fill_record_spell(spell_id);
     // The push (`0x6e5026` → `0x6e4ad0`), which signals: the same spell bailed above, so the slot
     // never holds it here. The arm signals whatever it then decides (`0x6e5333`).
     let held = held(items, commit, def, pending_word.is_some());
@@ -950,6 +953,8 @@ fn send_spell_cast(
     // already precasts (`0x6e588f`, its `[+0xc8c]`); that test reads the unit, which the edit
     // applies after the pass, so benilla signals every send. The visual starts at the
     // `SMSG_SPELL_START` (#1583).
+    let me = self_player.single().ok().map(|(e, _)| e);
+    crate::creature_anim::precast_at_send(me, spell_id, edits);
     core.reports.changed();
     // The GCD arms at the send (`0x6e2de0` from `0x6e58fb`), after the packet; a failed cast
     // result clears it (`0x6e1630`).
