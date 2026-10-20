@@ -5,6 +5,8 @@
 
 use bevy::prelude::*;
 
+use benilla_ui::strings::{fill_exact, Arg};
+
 use crate::names::NameCache;
 use crate::ui_chat::event::ChatEventKind;
 
@@ -731,10 +733,10 @@ fn append_trailers(lua: &benilla_ui::script::UiScript, line: &mut String, t: Tra
             return;
         };
         let args = match arg {
-            Some(n) => vec![Arg::Num(n)],
+            Some(n) => vec![Arg::D(n)],
             None => Vec::new(),
         };
-        match fill(&template, &args) {
+        match fill_exact(&template, &args) {
             Some(text) => line.push_str(&text),
             None => warn!("combat log: {key} does not match its trailer shape"),
         }
@@ -781,7 +783,12 @@ pub(crate) struct Fills {
 
 /// Resolve a family and variant to a finished line; `None`, silently, when the key is absent,
 /// where the reference prints a not-found warning line (`0x6269f0`) for any key but a missing
-/// `…SELFSELF`. The fill is `vsnprintf` over a fixed argument list, as at `0x626850`.
+/// `…SELFSELF`. The fill is Storm's ordered printf over a fixed argument list
+/// ([`benilla_ui::strings::fill_exact`]): `0x626850` formats through `SStrVPrintf` (`0x64a8b0`),
+/// which takes `vsnoprintf` (`0x6697d0`) once option `0xa` is set, as the client does at start
+/// (`0x402141`, `0x64ede9`). It binds a numbered hole (`%2$d`, the deDE templates': `Ihr trefft
+/// %1$s. Schaden: %2$d.`) to its argument in the list enUS fills in sequence, and prints a
+/// template that leaves an argument out.
 pub(crate) fn compose_line(
     lua: &benilla_ui::script::UiScript,
     family: Family,
@@ -802,19 +809,19 @@ pub(crate) fn compose_line(
     let mut args: Vec<Arg> = Vec::with_capacity(family.slots.len());
     for slot in family.slots {
         match slot {
-            Slot::Attacker if family.names_subject(variant) => args.push(Arg::Str(&fills.attacker)),
-            Slot::Victim if family.names_object(variant) => args.push(Arg::Str(&fills.victim)),
+            Slot::Attacker if family.names_subject(variant) => args.push(Arg::S(&fills.attacker)),
+            Slot::Victim if family.names_object(variant) => args.push(Arg::S(&fills.victim)),
             Slot::Attacker | Slot::Victim => {}
-            Slot::Named => args.push(Arg::Str(&fills.named)),
-            Slot::Spell => args.push(Arg::Str(&fills.spell)),
-            Slot::School => args.push(Arg::Str(school.as_deref()?)),
-            Slot::Power => args.push(Arg::Str(power.as_deref()?)),
-            Slot::Power2 => args.push(Arg::Str(power2.as_deref()?)),
-            Slot::Amount => args.push(Arg::Num(fills.amount)),
-            Slot::Amount2 => args.push(Arg::Num(fills.amount2)),
+            Slot::Named => args.push(Arg::S(&fills.named)),
+            Slot::Spell => args.push(Arg::S(&fills.spell)),
+            Slot::School => args.push(Arg::S(school.as_deref()?)),
+            Slot::Power => args.push(Arg::S(power.as_deref()?)),
+            Slot::Power2 => args.push(Arg::S(power2.as_deref()?)),
+            Slot::Amount => args.push(Arg::D(fills.amount)),
+            Slot::Amount2 => args.push(Arg::D(fills.amount2)),
         }
     }
-    match fill(&template, &args) {
+    match fill_exact(&template, &args) {
         Some(mut line) => {
             if let Some(t) = fills.trailers {
                 append_trailers(lua, &mut line, t);
@@ -830,55 +837,6 @@ pub(crate) fn compose_line(
             None
         }
     }
-}
-
-/// One `vsnprintf` argument.
-enum Arg<'a> {
-    Str(&'a str),
-    Num(i64),
-}
-
-/// The line's formatter over the `%s`/`%d` subset the combat-log templates use. `0x626850` formats
-/// through `SStrVPrintf 0x64a8b0`, which takes Storm's ordered printf (`0x6697d0`) once option
-/// `0xa` is set, as the client does at start (`0x402141`, `0x64ede9`); that printf reads `%N$`
-/// (`0x669af2`), so a numbered hole (`%2$d`, the deDE templates') names its argument in the list
-/// enUS fills in sequence (`Ihr trefft %1$s. Schaden: %2$d.`). `None` on any mismatch, an unused
-/// argument included.
-fn fill(template: &str, args: &[Arg<'_>]) -> Option<String> {
-    let mut out = String::with_capacity(template.len() + 32);
-    let mut used = vec![false; args.len()];
-    let mut cursor = 0;
-    let mut chars = template.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c != '%' {
-            out.push(c);
-            continue;
-        }
-        if chars.next_if_eq(&'%').is_some() {
-            out.push('%');
-            continue;
-        }
-        let mut number = String::new();
-        while let Some(d) = chars.next_if(char::is_ascii_digit) {
-            number.push(d);
-        }
-        let index = if number.is_empty() {
-            cursor += 1;
-            cursor - 1
-        } else {
-            chars.next_if_eq(&'$')?;
-            number.parse::<usize>().ok()?.checked_sub(1)?
-        };
-        let arg = args.get(index)?;
-        used[index] = true;
-        match (chars.next(), arg) {
-            (Some('s'), Arg::Str(s)) => out.push_str(s),
-            (Some('d'), Arg::Num(n)) => out.push_str(&n.to_string()),
-            // Any other conversion is a mismatch, never a half-filled sentence.
-            _ => return None,
-        }
-    }
-    used.iter().all(|&u| u).then_some(out)
 }
 
 /// A GlobalString off the VM's globals, `None` when absent or empty: the two tests `0x703bf0`'s

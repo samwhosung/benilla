@@ -1,9 +1,14 @@
 //! Fills the `%` holes of a `GlobalStrings.lua` or `GlueStrings.lua` template read at runtime, as
-//! the client's `SStrPrintf` does: `%s`, `%d`, `%c`, `%f` and `%g` take the next argument left to
-//! right, `%N$s` takes argument N without moving that cursor (`DUEL_WINNER_RETREAT` reorders its
-//! two names), `%%` is `%`, and the precision is the template's. A hole with no argument, or one
-//! this does not know, is copied through literally so a mis-modelled template shows. Reals are the
-//! MSVC CRT's behind `SStrPrintf` ([`crt_float`]).
+//! the client's `SStrPrintf` does. Storm's ordered formatter `vsnoprintf` (`0x6697d0`), which
+//! `ClientMain` switches on (`0x402141`), binds each hole to an argument before it prints: a plain
+//! hole takes the running index, `%N$` sets that index to N - 1 (`0x669af7`-`0x669b0b`, N = 0 gives
+//! 0), and after any hole that takes an argument the running index is its index plus one
+//! (`0x669892`-`0x669895`). So `%2$s` then `%s` takes arguments 2 and 3 (`DUEL_WINNER_RETREAT`
+//! reorders its two names). An argument no hole names is skipped. `%s`, `%d`, `%c`, `%f` and `%g`
+//! print their argument, `%%` is `%`, and the precision is the template's. [`fill`] copies a hole
+//! with no argument, or one this does not know, through literally so a mis-modelled template
+//! shows; [`fill_exact`] refuses the line instead. Reals are the MSVC CRT's behind `SStrPrintf`
+//! ([`crt_float`]).
 
 use std::fmt::Write as _;
 
@@ -143,6 +148,14 @@ impl From<f64> for Arg<'_> {
 }
 
 impl Arg<'_> {
+    /// Whether this is the kind a `conv` hole prints as itself, for [`fill_exact`].
+    fn fits(&self, conv: char) -> bool {
+        matches!(
+            (conv, self),
+            ('s' | 'c', Arg::S(_)) | ('d', Arg::D(_)) | ('f' | 'g', Arg::F(_))
+        )
+    }
+
     /// `%s` and `%c`.
     fn as_s(&self, out: &mut String) {
         match self {
@@ -289,10 +302,26 @@ pub fn plural(
 
 /// Fill a reference template, by the rules in the module doc.
 pub fn fill(template: &str, args: &[Arg<'_>]) -> String {
+    run(template, args, false).unwrap_or_default()
+}
+
+/// [`fill`] for a caller whose arguments are the template's by construction: `None`, for no line,
+/// when a hole has no argument, meets one of another kind (`%s` and `%c` take text, `%d` a
+/// number, `%f` and `%g` a real) or is one this does not know. The reference reads each argument
+/// by its hole's kind up to the highest index a hole names (`0x6698b5`-`0x669919`), with no check
+/// against the arguments it was given, so such a template has no sentence to match: a defect to
+/// show. An argument no hole names is not one.
+pub fn fill_exact(template: &str, args: &[Arg<'_>]) -> Option<String> {
+    run(template, args, true)
+}
+
+/// The walk both fills share; `exact` picks the refusal over the literal copy.
+fn run(template: &str, args: &[Arg<'_>], exact: bool) -> Option<String> {
     let mut out = String::with_capacity(template.len() + 16);
     let chars: Vec<char> = template.chars().collect();
     let mut i = 0;
-    let mut next = 0usize; // the sequential cursor
+    // The running index, `[ebp-0x8]` of `0x6697d0`.
+    let mut next = 0usize;
     while i < chars.len() {
         if chars[i] != '%' {
             out.push(chars[i]);
@@ -305,34 +334,31 @@ pub fn fill(template: &str, args: &[Arg<'_>]) -> String {
             continue;
         }
         let Some(spec) = parse_spec(&chars, i + 1) else {
+            if exact {
+                return None;
+            }
             // Unknown: copy the `%` and rescan from the next char, so `50% off` survives.
             out.push('%');
             i += 1;
             continue;
         };
-        // A positional does not move the sequential cursor.
-        let idx = match spec.positional {
-            Some(n) => n.checked_sub(1),
-            None => Some(next),
-        };
-        match idx.and_then(|k| args.get(k)) {
-            Some(a) => {
-                match spec.conv {
-                    's' | 'c' => a.as_s(&mut out),
-                    'd' => a.as_d(&mut out),
-                    'f' => a.as_f(spec.precision, &mut out),
-                    _ => a.as_g(spec.precision, &mut out),
-                }
-                if spec.positional.is_none() {
-                    next += 1;
-                }
-            }
+        let idx = spec.positional.map_or(next, |n| n.saturating_sub(1));
+        next = idx + 1;
+        match args.get(idx) {
+            Some(a) if exact && !a.fits(spec.conv) => return None,
+            Some(a) => match spec.conv {
+                's' | 'c' => a.as_s(&mut out),
+                'd' => a.as_d(&mut out),
+                'f' => a.as_f(spec.precision, &mut out),
+                _ => a.as_g(spec.precision, &mut out),
+            },
+            None if exact => return None,
             // Starved: copy the specifier through so a mis-modelled template shows.
             None => out.extend(&chars[i..spec.end]),
         }
         i = spec.end;
     }
-    out
+    Some(out)
 }
 
 #[cfg(test)]
@@ -425,7 +451,7 @@ mod tests {
 
     /// The duel pair, `GlobalStrings.lua:958-959`.
     #[test]
-    fn positional_specifiers_reorder_rather_than_consume() {
+    fn positional_specifiers_reorder_the_arguments() {
         let (a, b) = (Arg::S("Alice"), Arg::S("Bob"));
         assert_eq!(
             fill("%1$s has defeated %2$s in a duel", &[a, b]),
@@ -450,6 +476,37 @@ mod tests {
         assert_eq!(fill("%0$s", &[a]), "A");
         // A hole with no argument still moves the index: the plain hole after it is starved too.
         assert_eq!(fill("%3$s %s", &[a, b]), "%3$s %s");
+    }
+
+    /// [`fill_exact`] binds as [`fill`] does and skips an argument no hole names
+    /// (`0x6698b5`-`0x669919`), but refuses a hole it cannot fill: none left, of another kind, or
+    /// one it does not know.
+    #[test]
+    fn an_exact_fill_skips_unnamed_arguments_and_refuses_a_hole_it_cannot_fill() {
+        let (name, number) = (Arg::S("Ragnaros"), Arg::D(12));
+        let exact = |template| fill_exact(template, &[name, number]);
+        assert_eq!(
+            exact("You hit %s for %d.").as_deref(),
+            Some("You hit Ragnaros for 12.")
+        );
+        assert_eq!(
+            exact("For %2$d.").as_deref(),
+            Some("For 12."),
+            "the name is unused"
+        );
+        assert_eq!(
+            exact("%2$d, %1$s: 100%%").as_deref(),
+            Some("12, Ragnaros: 100%")
+        );
+        assert_eq!(
+            exact("%1$s hits you for %d.").as_deref(),
+            Some("Ragnaros hits you for 12.")
+        );
+        assert_eq!(exact("%3$s"), None, "no third argument");
+        assert_eq!(exact("%1$d"), None, "text in a number's hole");
+        assert_eq!(exact("%2$s"), None, "a number in a text hole");
+        assert_eq!(exact("50% off"), None, "a hole it does not know");
+        assert_eq!(exact("%s %d %d"), None, "starved after two");
     }
 
     #[test]

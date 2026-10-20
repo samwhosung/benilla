@@ -3,8 +3,9 @@
 
 use super::*;
 
-/// A template's `%s`/`%d` conversions by argument, a numbered hole (`%2$d`, deDE's) at its number;
-/// two templates with the same one take the same arguments.
+/// A template's `%s`/`%d` conversions by argument, bound as `vsnoprintf` binds them (`0x669892`):
+/// a numbered hole (`%2$d`, deDE's) at its number, a plain one at the running index, which every
+/// hole leaves one past its own; two templates with the same one take the same arguments.
 fn signature(template: &str) -> Vec<char> {
     let mut out = Vec::new();
     let mut cursor = 0;
@@ -18,14 +19,14 @@ fn signature(template: &str) -> Vec<char> {
             number.push(d);
         }
         let index = if number.is_empty() {
-            cursor += 1;
-            cursor - 1
+            cursor
         } else {
             chars.next_if_eq(&'$');
             number
                 .parse::<usize>()
                 .map_or(usize::MAX, |n| n.saturating_sub(1))
         };
+        cursor = index.saturating_add(1);
         let Some(k) = chars.next() else { break };
         if index >= out.len() {
             out.resize(index.saturating_add(1).min(64), '?');
@@ -38,35 +39,39 @@ fn signature(template: &str) -> Vec<char> {
 }
 
 /// deDE numbers its holes in the argument order enUS fills in sequence, so both read one list; a
-/// hole past the list, a wrong type or an unused argument stays a mismatch.
+/// hole past the list or of the wrong type stays a mismatch, an argument no hole names does not.
 #[test]
 fn numbered_holes_fill_from_the_same_argument_list() {
-    let hit = [Arg::Str("Ragnaros"), Arg::Num(1000)];
+    let hit = [Arg::S("Ragnaros"), Arg::D(1000)];
     assert_eq!(
-        fill("You hit %s for %d.", &hit).as_deref(),
+        fill_exact("You hit %s for %d.", &hit).as_deref(),
         Some("You hit Ragnaros for 1000.")
     );
     assert_eq!(
-        fill("Ihr trefft %1$s. Schaden: %2$d.", &hit).as_deref(),
+        fill_exact("Ihr trefft %1$s. Schaden: %2$d.", &hit).as_deref(),
         Some("Ihr trefft Ragnaros. Schaden: 1000.")
     );
-    let reflect = [Arg::Num(50), Arg::Str("Feuer"), Arg::Str("Ragnaros")];
+    let reflect = [Arg::D(50), Arg::S("Feuer"), Arg::S("Ragnaros")];
     assert_eq!(
-        fill("Ihr reflektiert %1$d %2$sschaden auf %3$s.", &reflect).as_deref(),
+        fill_exact("Ihr reflektiert %1$d %2$sschaden auf %3$s.", &reflect).as_deref(),
         Some("Ihr reflektiert 50 Feuerschaden auf Ragnaros.")
     );
     assert_eq!(
-        fill("%2$s von %1$s", &[Arg::Str("A"), Arg::Str("B")]).as_deref(),
+        fill_exact("%2$s von %1$s", &[Arg::S("A"), Arg::S("B")]).as_deref(),
         Some("B von A")
     );
     assert_eq!(
-        fill("100%% %1$s", &[Arg::Str("x")]).as_deref(),
+        fill_exact("100%% %1$s", &[Arg::S("x")]).as_deref(),
         Some("100% x")
     );
-    assert_eq!(fill("%3$s", &[Arg::Str("a")]), None);
-    assert_eq!(fill("%1$d", &[Arg::Str("a")]), None);
-    assert_eq!(fill("%1$s", &[Arg::Str("a"), Arg::Num(1)]), None);
-    assert_eq!(fill("%0$s", &[Arg::Str("a")]), None);
+    assert_eq!(fill_exact("%3$s", &[Arg::S("a")]), None);
+    assert_eq!(fill_exact("%1$d", &[Arg::S("a")]), None);
+    assert_eq!(
+        fill_exact("%1$s", &[Arg::S("a"), Arg::D(1)]).as_deref(),
+        Some("a"),
+        "an argument no hole names is skipped"
+    );
+    assert_eq!(fill_exact("%0$s", &[Arg::S("a")]).as_deref(), Some("a"));
 }
 
 /// `vsnoprintf` prints the arguments the template names, in the template's own binding, and
@@ -301,24 +306,26 @@ fn the_reported_sentences_read_correctly() {
     );
 }
 
+/// The fill refuses a hole with nothing to print (`fill_exact`), and skips an argument no hole
+/// names (`0x6698b5`-`0x669919`).
 #[test]
-fn the_fill_is_vsnprintf_and_refuses_a_mismatch() {
+fn the_fill_is_vsnoprintf_and_refuses_a_hole_it_cannot_print() {
     fn s(v: &str) -> Arg<'_> {
-        Arg::Str(v)
+        Arg::S(v)
     }
     assert_eq!(
-        fill("%s hits %s for %d.", &[s("A"), s("B"), Arg::Num(7)]).as_deref(),
+        fill_exact("%s hits %s for %d.", &[s("A"), s("B"), Arg::D(7)]).as_deref(),
         Some("A hits B for 7.")
     );
-    assert_eq!(fill("100%% sure", &[]).as_deref(), Some("100% sure"));
+    assert_eq!(fill_exact("100%% sure", &[]).as_deref(), Some("100% sure"));
     // A `%d` where a string is queued, and vice versa.
-    assert_eq!(fill("%d", &[s("A")]), None);
-    assert_eq!(fill("%s", &[Arg::Num(1)]), None);
-    // Too few, and too many.
-    assert_eq!(fill("%s %s", &[s("A")]), None);
-    assert_eq!(fill("%s", &[s("A"), s("B")]), None);
+    assert_eq!(fill_exact("%d", &[s("A")]), None);
+    assert_eq!(fill_exact("%s", &[Arg::D(1)]), None);
+    // Too few holes' arguments is a mismatch; too many is not.
+    assert_eq!(fill_exact("%s %s", &[s("A")]), None);
+    assert_eq!(fill_exact("%s", &[s("A"), s("B")]).as_deref(), Some("A"));
     // A conversion outside the vocabulary is a mismatch, not a passthrough.
-    assert_eq!(fill("%f", &[Arg::Num(1)]), None);
+    assert_eq!(fill_exact("%f", &[Arg::D(1)]), None);
 }
 
 /// The melee msgType matrix of `0x62a0d0`/`0x62a2e0`, through the 94-entry type table at
