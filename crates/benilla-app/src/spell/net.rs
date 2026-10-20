@@ -10,10 +10,7 @@ use benilla_protocol::messages::{ActionButton, SpellCooldown};
 use bevy::prelude::*;
 
 use super::cast_target::CastTargeting;
-use super::{
-    ActiveChannel, AutoRepeatActive, CastCommit, CastLadder, Cooldowns, PendingCast,
-    QueuedMeleeSpell,
-};
+use super::{ActiveChannel, AutoRepeatActive, CastCommit, CastLadder, Cooldowns, PendingCast};
 use crate::creature_anim::{CastEvent, CastEventKind, Casting, SpellGoTargets};
 use crate::ui_action::{PlayerActions, Spells, UiError, UiErrorKeys};
 use crate::ui_aura::AuraDurations;
@@ -65,7 +62,6 @@ pub(crate) struct Lifecycle<'w> {
     learned_in_tab: ResMut<'w, LearnedInTab>,
     reports: ResMut<'w, CastReports>,
     pending: ResMut<'w, PendingCast>,
-    queued_melee: ResMut<'w, QueuedMeleeSpell>,
     cooldowns: ResMut<'w, Cooldowns>,
     auto_repeat: ResMut<'w, AutoRepeatActive>,
     channel: ResMut<'w, ActiveChannel>,
@@ -276,7 +272,6 @@ fn on_spell_go(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
             &mut sc.go_targets,
             &l.self_guid,
             &sc.stores,
-            &mut l.queued_melee,
             &mut sc.text,
             *sc.damage_text,
             &mut sc.go_lid,
@@ -839,7 +834,6 @@ fn spell_go(
     go_targets: &mut MessageWriter<SpellGoTargets>,
     self_guid: &SelfGuid,
     stores: &Query<&mut ObjectStore>,
-    queued_melee: &mut QueuedMeleeSpell,
     text: &mut MessageWriter<crate::combat_text::CombatTextSpawn>,
     // The floating-text CVars, read inside the word emitter `0x607140`: they gate miss words too.
     text_gates: crate::combat_text::DamageTextGates,
@@ -923,10 +917,9 @@ fn spell_go(
         if *crate::net::CAST_TRACE {
             info!("cast-trace: RECV SPELL_GO — spell {spell_id} (self)");
         }
-        // The in-flight slot is not popped here: only the spell's `SMSG_CAST_RESULT` pops it
-        // (`0x6e7408` → `0x6e741a`), and vmangos sends that result ahead of the GO.
-        // The queued strike fired on this swing: the queue opens here, like the in-flight finish.
-        queued_melee.clear_if(spell_id);
+        // The in-flight slot is not touched here, a queued strike's included: `0x6e7a70` reads
+        // neither `0xceca88` nor its save, and only the spell's `SMSG_CAST_RESULT` pops it
+        // (`0x6e7408` → `0x6e741a`), which vmangos sends ahead of the GO (`Spell::cast`).
 
         // The GO-deferred auto-attack start (`0x6e83c0`), the complement of
         // [`crate::spell::cast_send`]'s send-time tail: an `AttributesEx2 & 0x100000` spell (the
@@ -1358,6 +1351,7 @@ fn spell_chain_targets(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spell::QueuedMeleeSpell;
     use benilla_protocol::messages::ACTION_KIND_SPELL;
 
     /// `SMSG_COOLDOWN_EVENT` (`0x6e9670`): the event moves the held record's one start, which the
@@ -1843,7 +1837,6 @@ mod tests {
                           mut go_targets: MessageWriter<SpellGoTargets>,
                           self_guid: Res<SelfGuid>,
                           stores: Query<&mut ObjectStore>,
-                          mut queued_melee: ResMut<QueuedMeleeSpell>,
                           mut text: MessageWriter<CombatTextSpawn>,
                           mut go_lid: MessageWriter<GoLidOpen>,
                           mut cooldowns: ResMut<Cooldowns>,
@@ -1869,7 +1862,6 @@ mod tests {
                             &mut go_targets,
                             &self_guid,
                             &stores,
-                            &mut queued_melee,
                             &mut text,
                             crate::combat_text::DamageTextGates::default(),
                             &mut go_lid,
@@ -2177,6 +2169,35 @@ mod tests {
         assert!(s.sent().is_empty());
     }
 
+    /// A strike that fired on its swing leaves the slot at its `SMSG_CAST_RESULT` (`0x6e7408` →
+    /// `0x6e741a`), which vmangos sends ahead of the GO (`Spell::cast`); the GO handler `0x6e7a70`
+    /// reads neither the slot nor its save, so a GO alone leaves the strike queued and signals
+    /// nothing.
+    #[test]
+    fn a_strikes_go_leaves_the_slot_to_its_result() {
+        const HEROIC_STRIKE: u32 = 78;
+        let mut s = CastSeq::new();
+        s.push(HEROIC_STRIKE, crate::spell::Held::Strike);
+        s.go(HEROIC_STRIKE);
+        assert_eq!(s.stream(), Vec::<String>::new());
+        assert_eq!(
+            s.app.world().resource::<QueuedMeleeSpell>().current(),
+            Some(HEROIC_STRIKE),
+            "the GO pops nothing"
+        );
+        // Under a cast, in the save: a GO leaves the save too, which the cast's pop restores.
+        s.commit(FORTITUDE, None);
+        s.go(HEROIC_STRIKE);
+        s.result(FORTITUDE, None);
+        assert_eq!(
+            s.app.world().resource::<QueuedMeleeSpell>().current(),
+            Some(HEROIC_STRIKE),
+            "the cast popped the strike back in"
+        );
+        s.result(HEROIC_STRIKE, None);
+        assert_eq!(s.app.world().resource::<QueuedMeleeSpell>().current(), None);
+    }
+
     /// A strike a cast popped back over is in the slot and the save (`0x6e4b2c` copies, never
     /// clears): its failure pops twice, the report's pop copying it back (`0x6e2218`), the save
     /// clear (`0x6e73ee`), then the handler's own pop (`0x6e741a`).
@@ -2440,7 +2461,6 @@ mod tests {
                           mut go_targets: MessageWriter<SpellGoTargets>,
                           self_guid: Res<SelfGuid>,
                           stores: Query<&mut ObjectStore>,
-                          mut queued_melee: ResMut<QueuedMeleeSpell>,
                           mut text: MessageWriter<CombatTextSpawn>,
                           mut go_lid: MessageWriter<GoLidOpen>,
                           mut cooldowns: ResMut<Cooldowns>,
@@ -2466,7 +2486,6 @@ mod tests {
                             &mut go_targets,
                             &self_guid,
                             &stores,
-                            &mut queued_melee,
                             &mut text,
                             gates,
                             &mut go_lid,
@@ -2602,7 +2621,6 @@ mod tests {
                       mut go_targets: MessageWriter<SpellGoTargets>,
                       self_guid: Res<SelfGuid>,
                       stores: Query<&mut ObjectStore>,
-                      mut queued_melee: ResMut<QueuedMeleeSpell>,
                       mut text: MessageWriter<CombatTextSpawn>,
                       mut go_lid: MessageWriter<GoLidOpen>,
                       mut cooldowns: ResMut<Cooldowns>,
@@ -2628,7 +2646,6 @@ mod tests {
                         &mut go_targets,
                         &self_guid,
                         &stores,
-                        &mut queued_melee,
                         &mut text,
                         crate::combat_text::DamageTextGates::default(),
                         &mut go_lid,
@@ -2806,7 +2823,6 @@ mod tests {
                       mut go_targets: MessageWriter<SpellGoTargets>,
                       self_guid: Res<SelfGuid>,
                       stores: Query<&mut ObjectStore>,
-                      mut queued_melee: ResMut<QueuedMeleeSpell>,
                       mut text: MessageWriter<CombatTextSpawn>,
                       mut go_lid: MessageWriter<GoLidOpen>,
                       mut cooldowns: ResMut<Cooldowns>,
@@ -2832,7 +2848,6 @@ mod tests {
                         &mut go_targets,
                         &self_guid,
                         &stores,
-                        &mut queued_melee,
                         &mut text,
                         crate::combat_text::DamageTextGates::default(),
                         &mut go_lid,
@@ -3183,7 +3198,6 @@ mod tests {
                           mut go_targets: MessageWriter<SpellGoTargets>,
                           self_guid: Res<SelfGuid>,
                           stores: Query<&mut ObjectStore>,
-                          mut queued_melee: ResMut<QueuedMeleeSpell>,
                           mut text: MessageWriter<CombatTextSpawn>,
                           mut go_lid: MessageWriter<GoLidOpen>,
                           mut cooldowns: ResMut<Cooldowns>,
@@ -3210,7 +3224,6 @@ mod tests {
                             &mut go_targets,
                             &self_guid,
                             &stores,
-                            &mut queued_melee,
                             &mut text,
                             crate::combat_text::DamageTextGates::default(),
                             &mut go_lid,

@@ -190,13 +190,6 @@ impl QueuedMeleeSpell {
     pub(super) fn take_save(&mut self) -> Option<u32> {
         self.save.take()
     }
-
-    /// The strike out of the slot, keyed on its id.
-    pub(crate) fn clear_if(&mut self, spell_id: u32) {
-        if self.slot == Some(spell_id) {
-            self.slot = None;
-        }
-    }
 }
 
 /// What the reference's one inflight id `0xceca88` holds, joined from our slots: `IsCasting
@@ -709,27 +702,6 @@ mod tests {
             "refined to 1.5s + slack, the guard has opened by t+4s (it would still be shut at the \
              5s provisional)"
         );
-    }
-
-    #[test]
-    fn queued_melee_spell_is_wire_cleared_and_single_slot() {
-        const HEROIC_STRIKE: u32 = 78;
-        const CLEAVE: u32 = 845;
-        let mut q = QueuedMeleeSpell::default();
-        assert_eq!(q.current(), None);
-
-        q.arm(HEROIC_STRIKE);
-        assert_eq!(q.current(), Some(HEROIC_STRIKE), "queued and checked");
-
-        // Rend's GO while Heroic Strike waits.
-        q.clear_if(772);
-        assert_eq!(q.current(), Some(HEROIC_STRIKE));
-
-        q.arm(CLEAVE);
-        assert_eq!(q.current(), Some(CLEAVE));
-
-        q.clear_if(CLEAVE);
-        assert_eq!(q.current(), None, "the wire resolution opened the queue");
     }
 
     /// [`local_self_cancel`] in a small App, and the Esc cancel: the Esc tests insert a VM, call
