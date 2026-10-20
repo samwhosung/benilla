@@ -363,10 +363,13 @@ impl Plugin for UiActionPlugin {
                         .before(crate::ui_aura::AuraEvents),
                     // A seat: the world-enter events' handlers read the slots' state, which the
                     // reference's arrival stores before its enter cascade (`0x5deafc`, `0x5deb60`).
+                    // After the bag feed, so each `BAG_UPDATE`'s cache refresh (`0x4f9374`) lands
+                    // in its own frame.
                     state::feed_action_state
                         .in_set(UnitFeed)
                         .in_set(crate::ui_unit::WorldEnterSeats)
                         .after(crate::player::ControlRestore)
+                        .after(crate::ui_items::feed::feed_containers)
                         .after(feed::feed_actions),
                     // After the unit snapshots, which its handlers read (the target stored at
                     // `0x4936e2`, a watched field written before its watch runs), and ahead of the

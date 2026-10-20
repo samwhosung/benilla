@@ -1017,8 +1017,9 @@ impl Plugin for UiItemsPlugin {
                         .in_set(crate::ui_script::UiFeed)
                         .before(feed_containers)
                         .before(crate::ui_char::feed_char),
-                    // The slot cooldowns must be in the VM before `feed_action_state`'s
-                    // synchronous `BAG_UPDATE_COOLDOWN` makes the bag handlers re-read them.
+                    // The slot cooldowns must be in the VM before the action feed's
+                    // `BAG_UPDATE_COOLDOWN` makes the bag handlers re-read them, and the action
+                    // feed counts this feed's `BAG_UPDATE`s (`crate::ui_action`'s schedule).
                     feed_containers
                         .in_set(UnitFeed)
                         .before(crate::ui_action::CooldownEvents),
