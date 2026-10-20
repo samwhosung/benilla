@@ -1019,6 +1019,19 @@ impl LineWord {
         }
     }
 
+    /// The type, a text and a number (`0x626890`).
+    pub(crate) fn text_number(
+        message_type: &'static str,
+        text: impl ToString,
+        n: impl ToString,
+    ) -> Self {
+        Self {
+            message_type,
+            data: WordText::Text(Some(text.to_string())),
+            extra: Some(n.to_string()),
+        }
+    }
+
     /// The type, the name the line gives its subject, and a number (`0x626890`).
     pub(crate) fn named(message_type: &'static str, extra: impl ToString) -> Self {
         Self {

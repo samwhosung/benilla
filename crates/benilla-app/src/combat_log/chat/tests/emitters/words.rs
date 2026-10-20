@@ -293,6 +293,12 @@ fn a_standing_change_raises_faction() {
                 .collect::<Vec<_>>(),
         )
     };
-    assert_eq!(word(25), [Some(LineWord::pair("FACTION", &name, 25))]);
-    assert_eq!(word(-40), [Some(LineWord::pair("FACTION", &name, -40))]);
+    assert_eq!(
+        word(25),
+        [Some(LineWord::text_number("FACTION", &name, 25))]
+    );
+    assert_eq!(
+        word(-40),
+        [Some(LineWord::text_number("FACTION", &name, -40))]
+    );
 }

@@ -839,7 +839,9 @@ const ENV_DAMAGE_SCHOOLS: [u32; 6] = [0, 0, 0, 2, 3, 2];
 /// its faction is not `HIDDEN`: the handler passes `0x4d6330` its print argument as
 /// `index == 0 && !(flags & 4)` (`0x4d57dd`-`0x4d57ea`), so the spill-over entries of one kill
 /// update silently. No range gate or classifier: the chat type is the literal `0x55`
-/// `COMBAT_FACTION_CHANGE`. The wire's list id is `Faction.dbc`'s `rep_index`.
+/// `COMBAT_FACTION_CHANGE`. The wire's list id is `Faction.dbc`'s `rep_index`. The line
+/// (`0x62c5f0`) raises `FACTION` with the faction's name and the signed change, whoever's line it
+/// is (`0x62c661`-`0x62c667`).
 pub(crate) fn faction_standing(
     deltas: &[(u32, i32)],
     reputations: &Reputations,
@@ -890,7 +892,7 @@ pub(crate) fn faction_standing(
             },
             named: combat::Named::Ready,
             tries: 0,
-            word: None,
+            word: Some(LineWord::text_number("FACTION", name, delta)),
         });
     }
 }
