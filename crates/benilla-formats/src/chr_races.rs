@@ -23,6 +23,9 @@ const CHR_RACES_FIELDS: usize = 29;
 /// Field 15, the file string (`+0x3c`).
 const FILE_FIELD: usize = 0x3c / 4;
 
+/// Field 16, `CinematicSequenceID` (`+0x40`).
+const INTRO_FIELD: usize = 0x40 / 4;
+
 /// Field 17, the first of the eight `Name_Lang` columns (`+0x44`).
 const NAME_FIELD: usize = 0x44 / 4;
 
@@ -31,6 +34,8 @@ const NAME_FIELD: usize = 0x44 / 4;
 struct Row {
     name: String,
     file: String,
+    /// `CinematicSequenceID` (`+0x40`).
+    intro: u32,
 }
 
 /// `ChrRaces.dbc`'s read columns by race id.
@@ -44,7 +49,8 @@ impl ChrRaces {
             rows.into_iter()
                 .map(|(id, name, file)| {
                     let (name, file) = (name.to_string(), file.to_string());
-                    (id, Row { name, file })
+                    let intro = 0;
+                    (id, Row { name, file, intro })
                 })
                 .collect(),
         )
@@ -56,6 +62,19 @@ impl ChrRaces {
         self.0
             .get(&race)
             .map(|r| (r.name.as_str(), r.file.as_str()))
+    }
+
+    /// The race row's `CinematicSequenceID` (`+0x40`), the intro cinematic the first-login camera
+    /// looks up (`0x46c2f8`); a race with no row has none.
+    pub fn intro_sequence(&self, _race: u32) -> Option<u32> {
+        None
+    }
+
+    /// A table for tests of what reads the intro column: `race` holds `sequence`.
+    #[cfg(test)]
+    pub(crate) fn with_intro_sequence(mut self, race: u32, sequence: u32) -> Self {
+        self.0.entry(race).or_default().intro = sequence;
+        self
     }
 
     pub fn is_empty(&self) -> bool {
@@ -98,6 +117,7 @@ fn table_from_bytes(bytes: &[u8], locale: Locale) -> Result<ChrRaces> {
             Row {
                 name: loc_str(&rs, r, NAME_FIELD, locale).unwrap_or_default(),
                 file: str_at(&rs, r, FILE_FIELD).unwrap_or_default(),
+                intro: u32_at(r, INTRO_FIELD).unwrap_or(0),
             },
         );
     }
@@ -130,6 +150,7 @@ mod tests {
         let mut rows: Vec<Vec<u32>> = Vec::new();
         let mut row = vec![0u32; CHR_RACES_FIELDS];
         row[0] = 4;
+        row[INTRO_FIELD] = 61;
         row[FILE_FIELD] = put("NightElf", &mut strings);
         for (i, n) in names.iter().enumerate() {
             row[NAME_FIELD + i] = put(n, &mut strings);
@@ -188,6 +209,16 @@ mod tests {
         assert_eq!(blank.names(9), Some(("", "Goblin")));
         assert_eq!(blank.names(3), None);
         assert_eq!(blank.names(0), None);
+    }
+
+    /// `CinematicSequenceID` is the row's field 16 (`+0x40`, read at `0x46c2f8`): a row whose column
+    /// is 0 holds 0, and a race with no row holds nothing.
+    #[test]
+    fn a_race_row_holds_its_intro_sequence() {
+        let table = table_from_bytes(&synthetic(), Locale::from_index(0).unwrap()).unwrap();
+        assert_eq!(table.intro_sequence(4), Some(61));
+        assert_eq!(table.intro_sequence(9), Some(0));
+        assert_eq!(table.intro_sequence(3), None);
     }
 
     /// The shipped table at the install's locale: the eight playable races and the Goblin row.
