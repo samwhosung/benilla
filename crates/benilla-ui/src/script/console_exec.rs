@@ -58,7 +58,7 @@ const VALUE_BYTES: usize = 0x100;
 ///   (`0x64af4e`).
 ///
 /// Empty input is the empty token.
-pub(super) fn s_str_tokenize(s: &mut &[u8], size: usize, delims: &[u8]) -> Vec<u8> {
+pub fn s_str_tokenize(s: &mut &[u8], size: usize, delims: &[u8]) -> Vec<u8> {
     let quotes = delims.contains(&b'"');
     let mut i = 0;
     let mut in_quote = false;
