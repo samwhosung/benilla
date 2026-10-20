@@ -87,6 +87,7 @@ fn get_num_routes_reads_a_non_number_as_zero() {
                 pos: (0.5, 0.6),
                 cost: 0,
                 routes: vec![],
+                num_routes: 0,
             },
             TaxiUiNode {
                 name: "B".into(),
@@ -94,6 +95,7 @@ fn get_num_routes_reads_a_non_number_as_zero() {
                 pos: (0.55, 0.8),
                 cost: 110,
                 routes: vec![[0.5, 0.6, 0.55, 0.8]],
+                num_routes: 1,
             },
         ],
     }));

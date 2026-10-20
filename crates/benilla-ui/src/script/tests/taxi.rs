@@ -17,6 +17,7 @@ fn taxi_snapshot_surfaces_and_intents_drain() {
                 pos: (0.5, 0.6),
                 cost: 0,
                 routes: vec![],
+                num_routes: 0,
             },
             TaxiUiNode {
                 name: "Orgrimmar, Durotar".into(),
@@ -24,6 +25,7 @@ fn taxi_snapshot_surfaces_and_intents_drain() {
                 pos: (0.55, 0.8),
                 cost: 110,
                 routes: vec![[0.5, 0.6, 0.55, 0.8]],
+                num_routes: 1,
             },
         ],
     }));

@@ -9,26 +9,31 @@ use super::binding_abi;
 use super::region::region_handle_of;
 use super::Model;
 
-/// A visible node's icon state (`TaxiNodeGetType`): green, white or yellow in the reference.
+/// A listed node's type (`TaxiNodeGetType`, `0x4dc4e0`): the green, white or yellow icon in the
+/// reference, or no button.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TaxiNodeType {
     /// The flight master's own node, "You are here".
     Current,
-    /// Known and routable from the current node; clickable.
+    /// Known and routed from the current node; clickable.
     #[default]
     Reachable,
-    /// Known but unroutable. Never produced: the reference's DISTANT branch is dead and an
-    /// unroutable node does not render; the variant stays because `TaxiButtonTypes` names it.
+    /// Known with its bit clear in the stored mask. Never produced: every listed node's bit is set
+    /// (`0x4dc545`); the variant stays because `TaxiButtonTypes` names it.
     Distant,
+    /// `NONE`: listed, but the route search never reached it (`0x4dc512`); stock `TaxiFrame.lua`
+    /// hides its button.
+    Unrouted,
 }
 
 impl TaxiNodeType {
-    /// The type string, a `TaxiButtonTypes` key.
+    /// The type string, a `TaxiButtonTypes` key, or `NONE`.
     fn era_str(self) -> &'static str {
         match self {
             TaxiNodeType::Current => "CURRENT",
             TaxiNodeType::Reachable => "REACHABLE",
             TaxiNodeType::Distant => "DISTANT",
+            TaxiNodeType::Unrouted => "NONE",
         }
     }
 }
@@ -38,15 +43,19 @@ impl TaxiNodeType {
 pub struct TaxiUiNode {
     /// `TaxiNodeName`, the DBC's localized name.
     pub name: String,
-    /// `TaxiNodeGetType`; a node the reference types `"NONE"` is not pushed.
+    /// `TaxiNodeGetType`.
     pub node_type: TaxiNodeType,
     /// `TaxiNodePosition`: normalized `(x, y)` on the map art, from the bottom-left.
     pub pos: (f32, f32),
     /// `TaxiNodeCost`: the fare in copper, 0 for the current node.
     pub cost: u32,
-    /// The hover route's hops as `[src_x, src_y, dest_x, dest_y]` in the same space, for
-    /// `GetNumRoutes` and `TaxiGetSrcX` to `TaxiGetDestY`; empty for the current node.
+    /// The hover route's lines as `[src_x, src_y, dest_x, dest_y]` in the same space, for
+    /// `TaxiGetSrcX` to `TaxiGetDestY` (`0x4dc5c0`); empty for the current node and an unrouted
+    /// one.
     pub routes: Vec<[f32; 4]>,
+    /// `GetNumRoutes` (`0x4dc170`): 1 with a direct path from the current node, else the route's
+    /// node count less 1, so 0 for the current node and 999998 for one never routed.
+    pub num_routes: u32,
 }
 
 /// The open taxi map: the continent art and the visible nodes.
@@ -179,7 +188,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, i: Value| {
             let i = i64::from(binding_abi::ftol(binding_abi::coerced_number(lua, Some(i))));
             let model = lua.app_data_ref::<Model>().expect("model");
-            Ok(node(&model, i).map_or(0, |n| n.routes.len()) as i64)
+            Ok(node(&model, i).map_or(0, |n| i64::from(n.num_routes)))
         })?,
     )?;
 

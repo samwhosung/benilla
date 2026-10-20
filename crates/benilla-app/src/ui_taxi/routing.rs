@@ -61,6 +61,9 @@ pub(super) fn load_taxi_catalogs(
     }
 }
 
+/// The fare sum and node count of a slot no route reached (`0x4db9d5`, `0x4db9db`).
+const UNROUTED: u32 = 999_999;
+
 /// The length of a path with no points (`0x4dbc5d`, the float at `0x807668`).
 const NO_POINTS: f32 = 99_999_997_952.0;
 
@@ -247,7 +250,8 @@ fn shown_fare(price: u32, discount: f64) -> u32 {
 }
 
 /// A listed node's route for `drain_taxi`, which sends the direct activate when a path joins the
-/// chain's ends and the express with the chain and its raw fare sum otherwise (`0x4dc8d0`).
+/// chain's ends, the express with the chain and its raw fare sum otherwise (`0x4dc8d0`), and
+/// nothing for an empty chain.
 pub(super) struct ResolvedTaxiNode {
     pub(super) chain: Vec<u32>,
     pub(super) cost: u32,
@@ -261,14 +265,14 @@ pub(super) struct TaxiRouteCache(pub(super) Vec<ResolvedTaxiNode>);
 /// whose `TaxiNodes` row lies on the current node's continent and inside its taxi rect, ends
 /// included, in id order (`0x4db8a0`-`0x4dba17`); no slot, no row for the current node or its
 /// continent, or a rect of zero span builds no map. The route search ([`search`]) runs over the
-/// slots alone. The current node is `Current`, a routed one `Reachable` with its fare and route
-/// lines, and an unrouted one is left out, where the reference keeps it typed `NONE`, which stock
-/// `TaxiFrame.lua` hides; its `DISTANT` type is never produced. Returns the continent's map id,
-/// the Lua nodes and their routes, in one order.
+/// slots alone. The current node is `Current`, a routed one `Reachable` and one the search never
+/// reached `Unrouted`, `NONE`, which stock `TaxiFrame.lua` hides; `DISTANT` is never produced.
+/// Returns the continent's map id, the Lua nodes and their routes, in one order.
 ///
-/// A node with a direct path from the current node shows that path's price and draws its one
-/// segment (`0x4dc44f`, `0x4dc643`) whatever the search routed; any other shows its route's fare
-/// sum and one segment per hop. A Lua node's fare takes the flight master's price `discount`
+/// A node with a direct path from the current node shows that path's price, draws its one
+/// segment once routed and counts one route (`0x4dc44f`, `0x4dc643`, `0x4dc185`), whatever the
+/// search routed; any other shows its route's fare sum and one segment per hop, or 999999 and
+/// none unrouted. A Lua node's fare takes the flight master's price `discount`
 /// ([`shown_fare`]), and is 0 with none, when the flight master or the player does not resolve
 /// (`0x4dc3fa`, `0x4dc423`); the route's fare stays the raw sum, which
 /// `CMSG_ACTIVATETAXIEXPRESS` carries (`0x4dc96f`).
@@ -312,23 +316,33 @@ pub(super) fn build_nodes_for(
     let mut ui = Vec::with_capacity(slots.len());
     let mut resolved = Vec::with_capacity(slots.len());
     for (n, route) in slots.into_iter().zip(routes) {
-        let Some(route) = route else {
-            continue; // unrouted: left out
-        };
+        // The no-path byte `+0x0c` (`0x4db99f`).
         let direct = cat.paths.between(current.id, n.id);
+        // `0x4dc504` tests the current node before the route flag (`0x4dc51a`).
         let node_type = if n.id == current.id {
             TaxiNodeType::Current
-        } else {
+        } else if route.is_some() {
             TaxiNodeType::Reachable
+        } else {
+            TaxiNodeType::Unrouted
         };
-        let (price, routes) = match direct {
-            Some(path) => (path.cost, vec![line(cont, current, n)]),
-            None => {
-                let lines = route.chain.windows(2).filter_map(|hop| {
-                    Some(line(cont, cat.nodes.get(hop[0])?, cat.nodes.get(hop[1])?))
-                });
-                (route.fare, lines.collect())
-            }
+        // The fare sum and node count an unrouted slot keeps from the builder.
+        let (fare, count) = route
+            .as_ref()
+            .map_or((UNROUTED, UNROUTED), |r| (r.fare, r.chain.len() as u32));
+        let (price, num_routes) = match direct {
+            Some(path) => (path.cost, 1),
+            None => (fare, count.wrapping_sub(1)),
+        };
+        // `0x4dc5c0`: nothing unrouted, the direct segment, else one per hop.
+        let routes = match (&route, direct) {
+            (None, _) => Vec::new(),
+            (Some(_), Some(_)) => vec![line(cont, current, n)],
+            (Some(route), None) => route
+                .chain
+                .windows(2)
+                .filter_map(|hop| Some(line(cont, cat.nodes.get(hop[0])?, cat.nodes.get(hop[1])?)))
+                .collect(),
         };
         ui.push(TaxiUiNode {
             name: n.name.clone(),
@@ -336,11 +350,16 @@ pub(super) fn build_nodes_for(
             pos: project(cont, n.pos[0], n.pos[1]),
             cost: discount.map_or(0, |d| shown_fare(price, d)),
             routes,
+            num_routes,
         });
-        resolved.push(ResolvedTaxiNode {
-            chain: route.chain,
-            cost: route.fare,
-        });
+        // `TakeTaxiNode` (`0x4dc8d0`): a direct path activates whether or not routed, a route goes
+        // express, and an unrouted slot without a path sends nothing.
+        let chain = match (route, direct) {
+            (Some(route), _) => route.chain,
+            (None, Some(_)) => vec![current.id, n.id],
+            (None, None) => Vec::new(),
+        };
+        resolved.push(ResolvedTaxiNode { chain, cost: fare });
     }
     Some((current.map_id, ui, resolved))
 }

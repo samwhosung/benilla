@@ -50,6 +50,7 @@ fn menu() -> TaxiUiState {
                 pos: (0.43, 0.33),
                 cost: 0,
                 routes: vec![],
+                num_routes: 0,
             },
             TaxiUiNode {
                 name: "Sentinel Hill, Westfall".into(),
@@ -57,6 +58,7 @@ fn menu() -> TaxiUiState {
                 pos: (0.41, 0.25),
                 cost: 110,
                 routes: vec![[0.43, 0.33, 0.41, 0.25]],
+                num_routes: 1,
             },
         ],
     }
@@ -119,6 +121,7 @@ fn no_single_hop_destination_posts_the_error_and_closes() {
             pos: (0.43, 0.33),
             cost: 0,
             routes: vec![],
+            num_routes: 0,
         }],
     }));
     seat_flight_master(&mut s, "Dungar Longdrink");

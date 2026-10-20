@@ -112,7 +112,8 @@ fn real_taxi_projection_matches_geography() {
 }
 
 /// The real Stormwind (2) to Sentinel Hill (4) hop, `TaxiPath` id 6 at 110 copper; with every
-/// node known, the ones Stormwind cannot route to are left out.
+/// node known, every Eastern Kingdoms row inside the rect is listed, Programmer Isle (3) outside
+/// it is not, and the Horde stops Stormwind never reaches are `NONE`.
 #[test]
 fn build_nodes_classifies_a_real_known_hop() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -144,21 +145,23 @@ fn build_nodes_classifies_a_real_known_hop() {
     assert_eq!(resolved[sh_idx].chain, vec![2, 4]);
     assert_eq!(resolved[sh_idx].cost, 110);
 
-    // Every node known: the Horde-only stops (Grom'gol, Kargath) have no route from Stormwind.
-    let all_known = TaxiMask([u32::MAX; 8]);
+    // Every node known.
     let open = TaxiOpen {
         flightmaster: 0x42,
         nearest_node: 2,
-        known: all_known,
+        known: TaxiMask([u32::MAX; 8]),
     };
     let (_, ui, _) = build_nodes(&open, &cat, Some(0.0)).expect("map builds");
-    let ek_known_total = cat.nodes.rows().filter(|n| n.map_id == 0).count();
-    assert!(
-        ui.len() < ek_known_total,
-        "some all-known EK nodes are unroutable from Stormwind and must be dropped \
-         ({} shown of {ek_known_total})",
-        ui.len()
-    );
+    let inside_rect = cat
+        .nodes
+        .rows()
+        .filter(|n| n.map_id == 0 && n.id != 3)
+        .count();
+    assert_eq!(ui.len(), inside_rect);
+    assert!(!ui.iter().any(|n| n.name == "Programmer Isle"));
+    for name in ["Grom'gol, Stranglethorn", "Kargath, Badlands"] {
+        assert_eq!(ui[index_of(&ui, name)].node_type, TaxiNodeType::Unrouted);
+    }
     assert!(
         ui.iter().all(|n| n.node_type != TaxiNodeType::Distant),
         "the DISTANT classification is a dead branch — never produced"
