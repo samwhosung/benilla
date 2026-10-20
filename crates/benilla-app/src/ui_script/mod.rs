@@ -390,7 +390,7 @@ impl Plugin for UiScriptPlugin {
             )
             // The UI phases in order: feeds after the net drain, the tick and the input pass, then
             // the paint; the drains of what the Lua asked after the input pass, and after every
-            // later host the VM pass can put them behind (`crate::vm_pass`).
+            // later host the VM pass can put them behind, before the paint (`crate::vm_pass`).
             .configure_sets(
                 Update,
                 (

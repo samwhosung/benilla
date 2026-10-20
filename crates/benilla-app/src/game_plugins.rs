@@ -1044,7 +1044,7 @@ pub(crate) mod schedule_tests {
     /// ([`crate::vm_pass::order_the_pass`]), so a link's commands wait for the first barrier past
     /// the chain. The count may not rise past the ceiling, and the ceiling follows it down. Read
     /// on the dev build, whose schedule holds every system the player build does.
-    const UPDATE_SYNC_POINT_CEILING: usize = 49;
+    const UPDATE_SYNC_POINT_CEILING: usize = 51;
     const UPDATE_SYNC_POINT_SLACK: usize = 4;
 
     #[test]

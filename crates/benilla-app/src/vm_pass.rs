@@ -9,7 +9,8 @@
 //!
 //! The order is the schedule's own: the phases' sets and every declared edge; then the drains of
 //! what the Lua asked ([`crate::ui_script::UiDrain`]) after every other system they are free to
-//! follow, so an ask made anywhere in the pass is drained the frame it is made; then, where nothing
+//! follow and before the paint, so an ask made anywhere ahead of the paint is drained, and what
+//! the drain queued applied, before the frame paints; then, where nothing
 //! is declared (the reference's order among them is not known), the order the app registers them
 //! in, which only a changed registration moves. The reference's tick runs its due timers, then the
 //! queued window input (`0x423920`, called at `0x420d23`), each record whole through its
@@ -56,6 +57,10 @@ struct PassLink(usize);
 /// An empty set after a drain a host follows and before the world's input stage.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct DrainBeforeInput(usize);
+
+/// An empty set after a drain no host follows and before the paint.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct DrainBeforePaint(usize);
 
 /// Orders the pass once every plugin has added its systems, the probes' included.
 pub(crate) struct VmPassPlugin;
@@ -151,8 +156,9 @@ pub(crate) fn shared_sinks(world: &World) -> Vec<ComponentId> {
 /// Chains the pass of `label` in a linear extension of the schedule's declared order, with
 /// [`VmPass::Start`] before them all and [`VmPass::End`] after; returns their names in that order.
 /// Where the declared order leaves it free: a drain that no declared order puts ahead of another
-/// system of the chain runs after every other, a drain one does (the input pass's readers wait on
-/// it) runs before the world's input stage, and the rest go by sync depth, then registration. The
+/// system of the chain runs after every other but the paint and what follows it, with a sync point
+/// before the paint; a drain one does (the input pass's readers wait on it) runs before the
+/// world's input stage; and the rest go by sync depth, then registration. The
 /// chain takes every host; every system of the UI's phases or of [`VmPass::Member`] whose access
 /// meets the host's; and every user of a [`shared_sinks`] sink not already wholly before
 /// [`VmPass::Start`] or after [`VmPass::End`]. One that shares its function's set with another
@@ -302,6 +308,11 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
                 *set == &benilla_world::schedule::WorldStage::Input as &dyn SystemSet
             })
             .map(|(key, _, _)| node(NodeId::Set(key)));
+        let paint = graph
+            .system_sets
+            .iter()
+            .find(|(_, set, _)| *set == &crate::ui_script::UiPaint as &dyn SystemSet)
+            .map(|(key, _, _)| node(NodeId::Set(key)));
         let nodes = keys.len() + 2 * set_nodes.len();
         for i in (keys.len()..nodes).step_by(2) {
             edges.push((i, i + 1));
@@ -372,7 +383,8 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
         };
         // A drain that some other link follows in the declared order (one the reference's order
         // or a same-frame reader puts before a host) keeps that place; every other drain runs
-        // after every host, so an ask made anywhere in the pass is drained the frame it is made.
+        // after every host the paint does not hold back, so an ask made anywhere ahead of the
+        // paint is drained the frame it is made.
         let late: Vec<bool> = (0..keys.len())
             .map(|i| {
                 drain[i] && links[i].is_some() && {
@@ -381,11 +393,23 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
                 }
             })
             .collect();
+        // A drain no host follows runs before the paint, and a sync point between applies the
+        // world commands it queued (a window's close), so the frame paints what the asks left.
+        let after_paint = paint.map(|(_, at)| reach(at, true));
+        let after_input = input.map(|(_, at)| reach(at, true));
+        let mut before_paint: Vec<InternedSystemSet> = Vec::new();
+        if let (Some((paint_start, _)), Some(after_paint)) = (paint, after_paint) {
+            for i in 0..keys.len() {
+                if let (true, false, Some(set)) = (late[i], after_paint[i], links[i]) {
+                    edges.push((i, paint_start));
+                    before_paint.push(set);
+                }
+            }
+        }
         // A drain a host follows serves the input pass's asks: it runs before the world's input
         // stage reads them, where its declared order lets it.
         let mut early: Vec<(InternedSystemSet, usize)> = Vec::new();
-        if let Some((input_start, input_end)) = input {
-            let after_input = reach(input_end, true);
+        if let (Some((input_start, _)), Some(after_input)) = (input, after_input) {
             for i in 0..keys.len() {
                 if let (true, false, false, Some(set)) =
                     (drain[i], late[i], after_input[i], links[i])
@@ -412,7 +436,8 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
             waits[y] += 1;
         }
         // A set's own nodes go first, as they hold no system; then every system but a late drain,
-        // so one waits for every link; each by sync depth, then registration.
+        // so one waits for every link the paint does not follow; each by sync depth, then
+        // registration.
         let rank = |i: usize| (i < keys.len(), i < keys.len() && late[i], depth[i], i);
         let mut ready: BinaryHeap<Reverse<(bool, bool, u32, usize)>> = (0..nodes)
             .filter(|&i| waits[i] == 0)
@@ -520,6 +545,13 @@ pub(crate) fn order_the_pass(world: &mut World, label: impl ScheduleLabel) -> Ve
                 DrainBeforeInput(n)
                     .after(set)
                     .before(benilla_world::schedule::WorldStage::Input),
+            );
+        }
+        for (n, set) in before_paint.into_iter().enumerate() {
+            schedule.configure_sets(
+                DrainBeforePaint(n)
+                    .after(set)
+                    .before(crate::ui_script::UiPaint),
             );
         }
         schedule.configure_sets(VmPass::Start.before(first));
@@ -849,9 +881,9 @@ mod tests {
 
     /// What a host's Lua asks is drained the frame it is made, a world click's included: a drain
     /// in the pass runs ahead of a host that follows the world's input stage (the click chain, the
-    /// cinematic's feed, the paint) only where the declared order puts it there, as it does for a
-    /// drain whose output the input stage reads. So a click's target change plays the target
-    /// frame's sound, and a `PlayMusic` it starts lands, the frame it is made.
+    /// cinematic's feed) only where the declared order puts it there, as it does for a drain whose
+    /// output the input stage reads or one the paint follows. So a click's target change plays
+    /// the target frame's sound, and a `PlayMusic` it starts lands, the frame it is made.
     #[test]
     fn a_world_clicks_ask_is_drained_the_frame_it_is_made() {
         let mut app = headless_client();
@@ -894,14 +926,88 @@ mod tests {
             early.join("\n  ")
         );
         let asks = [at(&order, "::drain_ui_sounds"), at(&order, "::lua_music")];
-        for host in [
-            "::act_on_interact",
-            "::cinematic::feed_ui",
-            "::paint_script",
-        ] {
+        for host in ["::act_on_interact", "::cinematic::feed_ui"] {
             let host = at(&order, host);
             assert!(asks.iter().all(|a| host < *a), "{order:?}");
         }
+        let paint = at(&order, "::paint_script");
+        assert!(asks.iter().all(|a| *a < paint), "{order:?}");
+    }
+
+    /// The one system of `census` whose name ends with `suffix`.
+    fn one(census: &Census, suffix: &str) -> SystemKey {
+        let mut hits = census
+            .systems
+            .iter()
+            .filter(|(_, s)| s.name.ends_with(suffix));
+        match (hits.next(), hits.next()) {
+            (Some((key, _)), None) => *key,
+            _ => panic!("exactly one system named `…{suffix}` in Update"),
+        }
+    }
+
+    /// A window the Lua closes hides before the frame paints: the drains that take a close
+    /// (`CloseGossip()` and its kin) queue it as a world command, which a sync point applies
+    /// ahead of the paint, so the frame the call is made never paints the window.
+    #[test]
+    fn a_window_the_lua_closes_is_hidden_before_the_paint() {
+        let mut app = headless_client();
+        if pass_order(&app).is_none() {
+            return;
+        }
+        let built = census(&mut app, Update, SyncPoints::Built);
+        let paint = one(&built, "::paint_script");
+        let late: Vec<&str> = [
+            "ui_gossip::drain_gossip",
+            "ui_merchant::drain_merchant",
+            "ui_trade::drain_trade",
+            "ui_bank::drain_bank",
+            "ui_quest::drain_quest",
+        ]
+        .into_iter()
+        .filter(|drain| !built.applies_before(one(&built, drain), paint))
+        .collect();
+        assert!(
+            late.is_empty(),
+            "drains whose closes apply after the paint: {late:?}"
+        );
+    }
+
+    /// A follow the Lua asks (`FollowUnit`, `FollowByName`) starts the frame it is made: the
+    /// request's reader runs after the drain that writes it.
+    #[test]
+    fn a_follow_the_lua_asks_starts_the_frame_it_is_made() {
+        let mut app = headless_client();
+        if pass_order(&app).is_none() {
+            return;
+        }
+        let update = census(&mut app, Update, SyncPoints::Declared);
+        let next = successors(&update);
+        let drain = one(&update, "ui_follow::drain_follow");
+        let reader = one(&update, "by_name::follow_requests");
+        assert!(
+            after(&next, drain).contains(&reader),
+            "`follow_requests` reads the `FollowRequest` before `drain_follow` writes it"
+        );
+    }
+
+    /// A `SetCVar` the input pass makes moves the camera the frame it is made: the registry's
+    /// sync triggers the observers (the camera's look, zoom and follow knobs) and a sync point
+    /// runs them ahead of the controller, as the reference's `CVar::Set` (`0x63df50`) calls the
+    /// change callback inside the call (`0x63df7d`).
+    #[test]
+    fn a_set_cvar_reaches_the_camera_the_frame_it_is_made() {
+        let mut app = headless_client();
+        if pass_order(&app).is_none() {
+            return;
+        }
+        let built = census(&mut app, Update, SyncPoints::Built);
+        let sync = one(&built, "cvars::sync_cvars");
+        let control = one(&built, "controller::control");
+        assert!(
+            built.applies_before(sync, control),
+            "the CVar observers run after the controller reads their knobs"
+        );
     }
 
     /// The stream focus's publish and the post-snap hold's release, which write the player's

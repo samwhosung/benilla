@@ -59,7 +59,7 @@ fn feed_follow(
     })
 }
 
-fn drain_follow(
+pub(crate) fn drain_follow(
     mut hosted_vm: crate::script_calls::HostedVm,
     mut out: MessageWriter<FollowRequest>,
 ) {
