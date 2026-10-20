@@ -6,9 +6,9 @@
 //!   target from the spell's implicit targeting.
 //! - `Attributes & 0x200`: the candidate is the equipped main hand (`0x6e5361`), bound as an item
 //!   with no cursor; an empty hand refuses with "Your weapon hand is empty" (`0x6e504b`).
-//! - otherwise the selection meets `BindTarget`'s gates ([`bind_gates`]), then each bit is cleared
-//!   by its relation check; then the player behind `autoSelfCast` (`0x6e53d7`) does the same. Only a
-//!   fully cleared word commits, as a unit guid.
+//! - otherwise the selection meets `BindTarget`'s gates ([`bind_gates`]), then its relation arms,
+//!   the first that holds clearing its bit; then the player behind `autoSelfCast` (`0x6e53d7`) does
+//!   the same. Only a word the arm leaves empty commits, as a unit guid.
 //! - a word with item, lock, GameObject or location bits enters the targeting cursor carrying
 //!   the whole word: its location (`0x6e6320`, `& 0x60`), item (`0x6e6330`, `& 0x4010`),
 //!   GameObject (`0x6e62d0`, `& 0x4800`) and unit (`0x6e6460`) predicates can hold at once, and
@@ -434,53 +434,65 @@ pub(crate) fn cast_target_mask(def: &SpellDisplay) -> u16 {
     word
 }
 
-/// `BindTarget 0x6e5b40`'s unit branch past the gates: clear every flag-word bit the candidate
-/// satisfies.
+/// `UNIT_FIELD_FLAGS & 0x100` (vmangos `UNIT_FLAG_IMMUNE_TO_PLAYER`, `UnitDefines.h:553`), which
+/// refuses the `0x2` arm (`0x6e5df2`-`0x6e5e03`).
+const UNIT_FLAG_IMMUNE_TO_PLAYER: u32 = 0x0000_0100;
+
+/// `BindTarget 0x6e5b40`'s unit branch past the gates, one else-if chain (`0x6e5cad`-`0x6e5ee7`)
+/// that `SpellCanTargetObject 0x6e6460` asks in the same order (`0x6e65b1`-`0x6e66dc`). The first
+/// arm whose test holds clears its own bit, and on a dead unit `0x400`, or `0x8600` for the `0x2`
+/// arm, and the word left is returned; `None` when no arm holds, and when the `0x8000` arm's
+/// `CanAssist` refuses, which ends the walk (`0x6e5e7f`).
 ///
-/// The assist bit asks `CanAssist 0x6066f0`: selectable, friendly or better, and an NPC's owner
-/// (or the NPC itself) PvP-enabled. This keeps friendly ambient NPCs and critters unbindable.
-/// The enemy bit asks `CanAttack` (`0x606980`). The party bit needs `0x606c20` and then `CanAssist`
-/// (`6e5cad`-`6e5cec`): the player, a member of his party, or a unit that answers to one. The raid
-/// bit needs `0x606d20` and `CanAssist` (`6e5cf1`-`6e5d2f`): the same, with the raid roster
-/// counting as well as the party slots. The corpse check (`0x6067d0`) is assistable with health 0
-/// here.
-fn clear_satisfied_bits(word: u16, is_self: bool, rel: &TargetRelations) -> u16 {
-    let mut word = word;
-    let assist = rel.assistable(is_self);
-    let dead = rel.target_store.is_some_and(|s| !unit_alive(&s.0));
-    if word & TF_UNIT_PARTY != 0 && assist && rel.in_party(is_self) {
-        word &= !TF_UNIT_PARTY;
+/// | order | bit | the arm's test |
+/// |---|---|---|
+/// | 1 | `0x8` | `0x606c20`, then `CanAssist 0x6066f0` |
+/// | 2 | `0x4` | `0x606d20`, then `CanAssist` |
+/// | 3 | `0x100` | `CanAssist` |
+/// | 4 | `0x80` | `CanAttack 0x606980` |
+/// | 5 | `0x2` | [`UNIT_FLAG_IMMUNE_TO_PLAYER`] clear |
+/// | 6 | `0x8000` | dead, and a player or `UNIT_FIELD_PETNUMBER` set; then `CanAssist` |
+/// | 7 | `0x200` | dead, a player, and `CanAssist` refused |
+///
+/// `CanAssist` asks selectable, friendly or better, and an NPC's owner (or the NPC itself)
+/// PvP-enabled, which keeps friendly ambient NPCs and critters unbindable. The party test is the
+/// player, a member of his party or a unit that answers to one; the raid test counts the raid
+/// roster as well as the party slots. A unit with no streamed descriptor reads alive, no player
+/// and no flags.
+fn bind_arm(word: u16, is_self: bool, rel: &TargetRelations) -> Option<u16> {
+    let fields = rel.target_store.map(|s| &s.0);
+    let dead = fields.is_some_and(|f| !unit_alive(f));
+    let player = fields.is_some_and(|f| {
+        f.object_type() == Some(benilla_protocol::messages::ObjectType::Player)
+    });
+    let pet = fields.is_some_and(|f| f.unit_pet_number() != 0);
+    let flags = fields.map_or(0, |f| f.unit_flags());
+    // Arms 1 to 4 clear `0x400` beside their bit on a dead unit (`0x6e5ddb`, `0x6e5d89`).
+    let bind = |bit: u16| Some(word & !(if dead { bit | TF_EXPLICIT_GATE } else { bit }));
+    if word & TF_UNIT_PARTY != 0 && rel.in_party(is_self) && rel.assistable(is_self) {
+        return bind(TF_UNIT_PARTY);
     }
-    if word & TF_UNIT_RAID != 0 && assist && rel.in_group(is_self) {
-        word &= !TF_UNIT_RAID;
+    if word & TF_UNIT_RAID != 0 && rel.in_group(is_self) && rel.assistable(is_self) {
+        return bind(TF_UNIT_RAID);
     }
-    if word & TF_UNIT_ASSIST != 0 && assist {
-        word &= !TF_UNIT_ASSIST;
+    if word & TF_UNIT_ASSIST != 0 && rel.assistable(is_self) {
+        return bind(TF_UNIT_ASSIST);
     }
     if word & TF_UNIT_ENEMY != 0 && rel.attackable(is_self) {
-        word &= !TF_UNIT_ENEMY;
+        return bind(TF_UNIT_ENEMY);
     }
-    // Bit 1 has no relation check: any unit binds. A dead unit's bind clears bit 10 (`6e5d89`,
-    // `6e5ddb`); the gate refuses a living unit under that word before it gets here.
-    if word & TF_UNIT != 0 {
-        word &= !TF_UNIT;
+    if word & TF_UNIT != 0 && flags & UNIT_FLAG_IMMUNE_TO_PLAYER == 0 {
+        return Some(word & !(if dead { TF_UNIT | CORPSE_WORD_BITS } else { TF_UNIT }));
     }
-    if word & TF_EXPLICIT_GATE != 0 && dead {
-        word &= !TF_EXPLICIT_GATE;
+    if word & TF_CORPSE_ALLY != 0 && dead && (player || pet) {
+        return rel
+            .assistable(is_self)
+            .then_some(word & !TF_CORPSE_ALLY);
     }
-    if word & TF_CORPSE_ALLY != 0 && assist && dead {
-        word &= !TF_CORPSE_ALLY;
+    if word & TF_CORPSE_ENEMY != 0 && dead && player && !rel.assistable(is_self) {
+        return Some(word & !TF_CORPSE_ENEMY);
     }
-    if word & TF_CORPSE_ENEMY != 0 && !is_self && dead {
-        word &= !TF_CORPSE_ENEMY;
-    }
-    word
-}
-
-/// The word `BindTarget`'s unit branch leaves when an arm binds this unit, `None` when none does.
-fn bind_arm(word: u16, is_self: bool, rel: &TargetRelations) -> Option<u16> {
-    let left = clear_satisfied_bits(word, is_self, rel);
-    (left != word).then_some(left)
+    None
 }
 
 /// Whether an arm binds this unit and leaves the standing word empty, which commits the cast
