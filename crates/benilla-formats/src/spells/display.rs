@@ -136,7 +136,8 @@ pub struct SpellDisplay {
     /// `EquippedItemSubClassMask` (column 59): the allowed subclasses, `1 << subclass` each.
     pub equipped_item_subclass_mask: u32,
     /// `EquippedItemInventoryTypeMask` (column 60): `1 << InventoryType` each; the item-target
-    /// gate's last leg (`0x495d60`), whose mismatch is the local "Invalid target" (`0x0a`).
+    /// gate's last leg (`0x495d60`), whose mismatch is the local `0x0a`, "That item is not a valid
+    /// target." for a spell with `Targets & 0x10` (`0x6e1bfa`).
     pub equipped_item_inventory_type_mask: u32,
     /// `RequiresSpellFocus` (column 15): the `SpellFocusObject.dbc` object needed nearby.
     pub requires_spell_focus: u32,
