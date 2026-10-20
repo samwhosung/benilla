@@ -1186,6 +1186,9 @@ mod tests {
         "Interface\\FrameXML\\PlayerFrame.xml",
         "Interface\\FrameXML\\PartyFrame.xml",
         "Interface\\FrameXML\\TargetFrame.xml",
+        // `StaticPopup_Hide`, which UIParent's `PLAYER_UNGHOST` arm calls (`UIParent.lua:251-257`)
+        // at a live arrival.
+        "Interface\\FrameXML\\StaticPopup.xml",
     ];
 
     /// [`tabbed_world`] under the stock `ui` files, with the unit feed and both creatures named.
