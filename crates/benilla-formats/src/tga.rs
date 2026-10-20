@@ -6,6 +6,13 @@
 //! Deviation: grayscale types 3 and 11 decode where the reference refuses them, because no shipped
 //! or addon file is one and removing working code would buy nothing.
 //!
+//! Deviation: colour maps of 15, 16 and 32 bits decode at the entry width the file declares, where
+//! the reference has no defined result to copy for 15 and 16 bits and only a garble for 32. It
+//! sizes an entry as `(min(bits / 3, 8) · 3) >> 3` bytes (`0x5a3b40`): 3 for 24 and 32 bits, 1 for
+//! 15 and 16. A 16-bit map is read short and copied one byte a pixel (`0x5a3890`-`0x5a38fa`) into
+//! the three-byte-a-pixel buffer `0x5a3820` allocates and never zeroes, so the rest of the colours
+//! are heap garbage; a 32-bit map is read a byte an entry short and the pixels start inside it.
+//!
 //! [`tga_to_rgba`] checks the header before the pixels, so it can serve as the fallback after a
 //! failed `BLP2` sniff: TGA has no magic.
 
@@ -205,8 +212,9 @@ mod tests {
         let mut out = vec![0u8; 18];
         out[1] = 1; // colour-map type: present
         out[2] = image_type;
-        out[5..7]
-            .copy_from_slice(&((palette.len() / (entry_bits as usize / 8)) as u16).to_le_bytes());
+        out[5..7].copy_from_slice(
+            &((palette.len() / (entry_bits as usize).div_ceil(8)) as u16).to_le_bytes(),
+        );
         out[7] = entry_bits;
         out[12..14].copy_from_slice(&w.to_le_bytes());
         out[14..16].copy_from_slice(&h.to_le_bytes());
@@ -246,6 +254,32 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("outside the map"));
+    }
+
+    /// The module's second Deviation: maps of 15, 16 and 32 bits decode at the width the file
+    /// declares. The reference sizes their entries 1, 1 and 3 bytes (`0x5a3b40`).
+    #[test]
+    fn colour_maps_of_15_16_and_32_bits_decode_at_their_own_width() {
+        // 16 bits, `ARRRRRGG GGGBBBBB` little-endian: opaque red, opaque green, clear blue.
+        let pal16 = [0x00, 0xfc, 0xe0, 0x83, 0x1f, 0x00];
+        let raw = tga_paletted(1, 3, 1, &pal16, 16, &[0, 1, 2]);
+        assert_eq!(
+            tga_to_rgba(&raw).unwrap().2,
+            vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 0]
+        );
+        // 15 bits: the top bit is no alpha, so the blue is opaque.
+        let raw = tga_paletted(1, 3, 1, &pal16, 15, &[0, 1, 2]);
+        assert_eq!(
+            tga_to_rgba(&raw).unwrap().2,
+            vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255]
+        );
+        // 32 bits, BGRA: byte 3 is alpha.
+        let pal32 = [0, 0, 255, 255, 0, 255, 0, 128];
+        let raw = tga_paletted(9, 2, 1, &pal32, 32, &[0x01, 0, 1]);
+        assert_eq!(
+            tga_to_rgba(&raw).unwrap().2,
+            vec![255, 0, 0, 255, 0, 255, 0, 128]
+        );
     }
 
     /// A minimal TGA: an 18-byte header and pixels.
