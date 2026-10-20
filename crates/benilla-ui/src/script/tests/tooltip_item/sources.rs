@@ -228,3 +228,110 @@ fn the_same_item_link_twice_hides_the_tooltip() {
     .unwrap();
     assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
 }
+
+/// The trade window's slot 7 carries the spell cast on it (`0x534397`, `0x53459a`, the instance
+/// block's `+0x40c`), and the builder adds `ITEM_PROPOSED_ENCHANT` with its name in green and
+/// `ITEM_ENCHANT_DISCLAIMER` in pure red after the enchant slots (`0x52cb72`..`0x52cc2c`). Every
+/// other slot leaves the id 0.
+#[test]
+fn the_trade_enchant_slot_shows_the_proposed_enchant() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        ITEM_PROPOSED_ENCHANT   = "[PROPOSED %s]"
+        ITEM_ENCHANT_DISCLAIMER = "[DISCLAIMER]"
+        TT = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        "#,
+    )
+    .unwrap();
+    s.set_item_template(
+        9400,
+        ItemTemplateView {
+            name: "Plain Gloves".into(),
+            quality: 1,
+            ..Default::default()
+        },
+    );
+    let slot = |object_flags, enchantment: Option<&str>| TradeSlotItem {
+        item_id: 9400,
+        name: Some("Plain Gloves".into()),
+        count: 1,
+        quality: Some(1),
+        object_flags,
+        enchantment: enchantment.map(str::to_string),
+        ..Default::default()
+    };
+    let mut trade = TradeState::default();
+    trade.player.slots[0] = Some(slot(Some(0), None));
+    trade.player.slots[6] = Some(slot(Some(0), Some("Enchant Gloves - Agility")));
+    trade.target.slots[6] = Some(slot(None, Some("Enchant Gloves - Mining")));
+    s.set_trade(Some(trade));
+    let ours = texts_after(&mut s, "TT:SetTradePlayerItem(7)");
+    assert_eq!(
+        ours,
+        [
+            "Plain Gloves",
+            "[PROPOSED Enchant Gloves - Agility]",
+            "[DISCLAIMER]"
+        ]
+    );
+    let lines = lines_of(&mut s);
+    assert_eq!(lines[1].1, [0.0, 1.0, 0.0, 1.0], "the proposal is green");
+    assert_eq!(lines[2].1, [1.0, 0.0, 0.0, 1.0], "the disclaimer is pure red");
+    let theirs = texts_after(&mut s, "TT:SetTradeTargetItem(7)");
+    assert_eq!(
+        theirs,
+        [
+            "Plain Gloves",
+            "[PROPOSED Enchant Gloves - Mining]",
+            "[DISCLAIMER]"
+        ]
+    );
+    let plain = texts_after(&mut s, "TT:SetTradePlayerItem(1)");
+    assert_eq!(plain, ["Plain Gloves"]);
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}
+
+/// The partner's slot block carries the item's creator (`+0x410`, from `0xb71680`,
+/// `0x53453e`..`0x53454f`), and the builder's no-object arm reads it (`0x52e1d5`); the player's
+/// own slot is the item object, whose `ITEM_FIELD_CREATOR` the object arm reads (`0x52e247`). A
+/// crafted item shows its maker on both sides, and an unresolved name waits for the cache.
+#[test]
+fn a_traded_crafted_item_names_its_maker() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(r#"TT = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")"#)
+        .unwrap();
+    s.set_item_template(
+        9401,
+        ItemTemplateView {
+            name: "Runecloth Bag".into(),
+            quality: 2,
+            ..Default::default()
+        },
+    );
+    let slot = |object_flags, creator: Option<&str>| TradeSlotItem {
+        item_id: 9401,
+        name: Some("Runecloth Bag".into()),
+        count: 1,
+        quality: Some(2),
+        object_flags,
+        creator: creator.map(str::to_string),
+        creator_guid: 0x77,
+        ..Default::default()
+    };
+    let mut trade = TradeState::default();
+    trade.player.slots[0] = Some(slot(Some(0), Some("Tailor")));
+    trade.target.slots[0] = Some(slot(None, Some("Weaver")));
+    trade.target.slots[1] = Some(slot(None, None));
+    s.set_trade(Some(trade));
+    let ours = texts_after(&mut s, "TT:SetTradePlayerItem(1)");
+    assert_eq!(ours, ["Runecloth Bag", "|cff00ff00[CREATED_BY Tailor]|r"]);
+    let theirs = texts_after(&mut s, "TT:SetTradeTargetItem(1)");
+    assert_eq!(theirs, ["Runecloth Bag", "|cff00ff00[CREATED_BY Weaver]|r"]);
+    let waiting = texts_after(&mut s, "TT:SetTradeTargetItem(2)");
+    assert_eq!(waiting, ["Runecloth Bag"], "no line while the name is in flight");
+    assert_eq!(s.take_item_name_asks(), [0x77], "the build asks the creator's name");
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}

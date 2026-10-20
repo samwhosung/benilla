@@ -199,6 +199,7 @@ fn slot_instance(s: &crate::script::ContainerSlot, openable_source: bool) -> ren
         object: true,
         block_lock_id: 0,
         block_wrapped: false,
+        proposed_enchant: None,
         cooldown_ms: 0,
     }
 }

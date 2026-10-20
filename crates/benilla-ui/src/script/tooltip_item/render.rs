@@ -70,6 +70,9 @@ pub(in crate::script) struct ItemInstance {
     /// takes the gift arm and the no-id-source fork like an object's WRAPPED flag (`0x52b789`,
     /// `0x52c991`).
     pub block_wrapped: bool,
+    /// The name of the spell proposed on the item (`[this+0x40c]` names a `Spell.dbc` row), which
+    /// only the trade window's seventh slot sets (`0x534397`, `0x53459a`).
+    pub proposed_enchant: Option<String>,
     /// The remaining use cooldown in ms (`[this+0x408]`, `start + duration - now`), 0 for none. Only
     /// the three setters that query the item's cooldown fill it, `SetBagItem` (`0x53488c`),
     /// `SetInventoryItem` (`0x533226`) and `SetAction`'s item leg (`0x5324d5`), and each does so

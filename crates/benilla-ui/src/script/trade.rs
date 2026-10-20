@@ -48,8 +48,16 @@ pub struct TradeSlotItem {
     /// The giver's guid, 0 for none: with no [`Self::gift_creator`] yet, the name the tooltip
     /// waits for.
     pub gift_creator_guid: u64,
+    /// The resolved name of the item's creator (`ITEM_FIELD_CREATOR` on the player's side, the
+    /// block's `+0x410` on the partner's, `0x53453e`), the "Made by" line; `None` while unresolved
+    /// or when the guid is 0.
+    pub creator: Option<String>,
+    /// The creator's guid, 0 for none: with no [`Self::creator`] yet, the name the tooltip waits
+    /// for.
+    pub creator_guid: u64,
     /// Slot 7 only: the name of the spell being cast on the item, which stock shows in green
-    /// (`TradeFrame.lua:62`); `None` on every other slot and while nothing is cast.
+    /// (`TradeFrame.lua:62`) and the slot's tooltip proposes (`0x534397`, `0x53459a`); `None` on
+    /// every other slot and while nothing is cast.
     pub enchantment: Option<String>,
     /// The escaped item link the link verbs answer; `None` while the template is in flight, since
     /// it embeds the name and the quality.
@@ -490,6 +498,8 @@ fn trade_slot_item(model: &Model, item: &cursor::CursorItem) -> TradeSlotItem {
             wrapped: s.flags & 0x8 != 0,
             gift_creator: s.gift_creator.clone(),
             gift_creator_guid: s.gift_creator_guid,
+            creator: s.creator.clone(),
+            creator_guid: s.creator_guid,
             enchantment: None,
             link: s.link.clone(),
         })
@@ -794,6 +804,8 @@ mod tests {
             wrapped: false,
             gift_creator: None,
             gift_creator_guid: 0,
+            creator: None,
+            creator_guid: 0,
             enchantment: None,
             link: Some(format!(
                 "|cffffffff|Hitem:{item_id}:0:0:0|h[Linen Cloth]|h|r"
@@ -841,6 +853,8 @@ mod tests {
             wrapped: false,
             gift_creator: None,
             gift_creator_guid: 0,
+            creator: None,
+            creator_guid: 0,
             enchantment: None,
             link: None,
         });
