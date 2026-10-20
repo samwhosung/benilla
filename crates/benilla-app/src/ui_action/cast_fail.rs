@@ -1792,6 +1792,21 @@ mod tests {
             .text,
             "Requires Shadowglen Moonwell"
         );
+        // The pet's arm reads the word, 0 on a short packet (`0x6e9161`), and never the spell.
+        // 5875's file has no row 0, so the map's slot is null and the line silent (`0x6e9385`).
+        assert_eq!(focus.name(0), None, "SpellFocusObject.dbc has no row 0");
+        let pet = |args: FailArgs| {
+            cast_fail_text(Caster::Pet, 0x5E, Some(&filling), args, &g).map(|l| l.text)
+        };
+        assert_eq!(
+            pet(FailArgs {
+                focus: Some(&focus),
+                ..FailArgs::default()
+            }),
+            None,
+            "the pet's short packet names no focus"
+        );
+        assert_eq!(pet(args(1)).as_deref(), Some("Requires Anvil"));
 
         // The chain and the `_PET` flag on shipped rows and strings.
         let said = |reason: u8, spell_id: u32| {

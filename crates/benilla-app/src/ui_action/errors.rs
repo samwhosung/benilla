@@ -647,9 +647,10 @@ mod ui_error_tests {
         UiError::args(key, args)
     }
 
-    /// `%s` then `%d`; an absent or empty key shows nothing.
+    /// `%s` then `%d`; a missing key reads as `""`, as `FrameScript_GetText` (`0x703bf0`) returns
+    /// it, and an empty text is still a line, whose sound plays.
     #[test]
-    fn fills_substitute_and_absent_keys_are_silent() {
+    fn fills_substitute_and_a_missing_key_reads_empty() {
         let get = |key: &str| match key {
             "REQ_S" => Some("Requires %s".to_string()),
             "REQ_SI" => Some("Requires %s %d".to_string()),
@@ -670,8 +671,8 @@ mod ui_error_tests {
             t(&UiError::key("PLAIN")).as_deref(),
             Some("Can't attack while mounted.")
         );
-        assert_eq!(t(&UiError::key("EMPTY")), None);
-        assert_eq!(t(&UiError::key("ABSENT")), None);
+        assert_eq!(t(&UiError::key("EMPTY")).as_deref(), Some(""));
+        assert_eq!(t(&UiError::key("ABSENT")).as_deref(), Some(""));
     }
 
     /// The lock-refusal keys (the use sender `0x5f33e0`) against the shipped file.
@@ -1023,5 +1024,62 @@ mod message_input_tests {
                 .collect();
             assert_eq!(casts, vec![want], "events: {events:?}");
         }
+    }
+
+    /// `DisplayError` sounds a message before it reads the key or the text (`0x49673d`-`0x4967ab`),
+    /// and `FrameScript_GetText` reads a missing global as `""` (`0x703bf0`), so an emptied or
+    /// removed string still sounds. Only the text goes: `AddErrorMessage` drops an empty one
+    /// (`0x4945b4`), and an empty chat line is the module's deviation.
+    #[test]
+    fn an_empty_or_missing_string_still_sounds_its_record() {
+        let mut script = UiScript::new().unwrap();
+        script
+            .run(
+                r#"ERR_OUT_OF_RANGE = ""
+                   ERR_NEWTAXIPATH = ""
+                   ERR_RECEIVE_ITEM_S = ""
+                   ERR_LOOT_LOCKED = nil
+                   SEEN = 0
+                   local f = CreateFrame("Frame")
+                   f:RegisterEvent("UI_ERROR_MESSAGE")
+                   f:RegisterEvent("UI_INFO_MESSAGE")
+                   f:SetScript("OnEvent", function() SEEN = SEEN + 1 end)"#,
+            )
+            .unwrap();
+        let get = |k: &str| script.lua().globals().get::<String>(k).ok();
+        let missing = UiError::key("ERR_LOOT_LOCKED");
+        let lines: Vec<Shown> = ["ERR_OUT_OF_RANGE", "ERR_NEWTAXIPATH", "ERR_RECEIVE_ITEM_S"]
+            .into_iter()
+            .filter_map(|key| keyed_line(&script, key))
+            .chain(ui_error_text(&missing, &get).map(|t| Shown::keyed(missing.key, t)))
+            .collect();
+        let mut world = World::new();
+        world.init_resource::<ChatLog>();
+        world.init_resource::<MessageSounds>();
+        let mut state = bevy::ecs::system::SystemState::<MessageSink>::new(&mut world);
+        show_messages(&mut script, &mut state.get_mut(&mut world), "test", lines);
+
+        let sounded: Vec<&str> = world
+            .resource::<MessageSounds>()
+            .queued()
+            .iter()
+            .map(|r| r.key)
+            .collect();
+        assert_eq!(
+            sounded,
+            [
+                "ERR_OUT_OF_RANGE",
+                "ERR_NEWTAXIPATH",
+                "ERR_RECEIVE_ITEM_S",
+                "ERR_LOOT_LOCKED"
+            ],
+            "an error, an info, a chat row and a missing string, each sounded"
+        );
+        assert_eq!(script.eval::<i64>("return SEEN").unwrap(), 0, "no event");
+        assert_eq!(
+            world.resource::<ChatLog>().pending_len(),
+            0,
+            "no blank chat line"
+        );
     }
 }
