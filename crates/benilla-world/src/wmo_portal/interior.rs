@@ -157,9 +157,9 @@ pub(super) fn track_area_interior(
     mut outdoors: ResMut<PlayerOutdoors>,
 ) {
     // The player node's outdoors answer; with no body there is no entity (`0x6706fa`).
-    let now_outdoors = viewer
-        .at
-        .is_none_or(|feet| entity_outdoors_at(&wmos, &instances, &streamer, &adt_tiles, feet));
+    let now_outdoors = viewer.at.is_none_or(|feet| {
+        entity_outdoors_at(&wmos, instances.iter(), &streamer, &adt_tiles, feet)
+    });
     if outdoors.0 != now_outdoors {
         outdoors.0 = now_outdoors;
     }
