@@ -101,6 +101,10 @@ mod creature_families;
 pub use creature_families::{
     load_creature_families, load_pet_food_names, CreatureFamilies, CreatureFamily, PetFoodNames,
 };
+mod creature_spell_data;
+pub use creature_spell_data::{load_creature_spell_data, CreatureSpellData};
+mod resistances;
+pub use resistances::load_armor_school;
 mod gameobjects;
 pub use gameobjects::{
     go_sound_slot, load_gameobject_catalog, load_gameobject_sounds, GameObjectCatalog,
