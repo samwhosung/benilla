@@ -434,12 +434,22 @@ fn on_level_up(In(ev): In<SessionEvent>, mut l: Sinks) {
 }
 
 /// An honor credit (`0x625270`): the combat-log line, which raises the `HONOR_GAINED` word once
-/// written. A kill needs its victim held as a unit (`0x62529f`, `0x6252ab`), and an honorable one
-/// a victim on a side ([`honor_side`]); otherwise nothing at all.
+/// written. The packet's handler writes nothing unless the client holds the active player
+/// (`0x48f703`, type mask `0x10`; `0x48f708`). A kill needs its victim held as a unit (`0x62529f`,
+/// `0x6252ab`), and an honorable one a victim on a side ([`honor_side`]); otherwise nothing at all.
 fn on_pvp_credit(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     let SessionEvent::PvpCredit(credit) = ev else {
         return;
     };
+    let me_held = c
+        .self_guid
+        .0
+        .and_then(|g| c.index.0.get(&g))
+        .and_then(|&e| l.stores.get(e).ok())
+        .is_some_and(|s| s.0.object_type() == Some(benilla_protocol::messages::ObjectType::Player));
+    if !me_held {
+        return;
+    }
     let rank = u8::try_from(credit.victim_rank).unwrap_or(0);
     let side = if credit.victim_guid == 0 {
         0
@@ -815,6 +825,26 @@ mod tests {
         assert_eq!(credit(NEUTRAL, -40), [(NEUTRAL, -40, 8, 0)]);
         assert!(credit(77, 120).is_empty(), "not held");
         assert_eq!(credit(0, 25), [(0, 25, 8, 0)]);
+    }
+
+    /// `0x48f690` hands the credit on only when the client holds the active player (`0x48f708`):
+    /// with no player object, not even an award writes a line.
+    #[test]
+    fn an_honor_credit_needs_the_active_player_held() {
+        let credit = |held: &[u64]| {
+            let mut app = world(held);
+            let packet = SessionEvent::PvpCredit(benilla_protocol::messages::PvpCredit {
+                honor: 25,
+                victim_guid: 0,
+                victim_rank: 0,
+            });
+            app.world_mut()
+                .run_system_once_with(on_pvp_credit, packet)
+                .unwrap();
+            app.world().resource::<ChatLog>().pending_honor().len()
+        };
+        assert_eq!(credit(&[ME, MOB]), 1);
+        assert_eq!(credit(&[MOB]), 0);
     }
 
     /// `0x637ec0`: a kill of a held unit is named, and floats; a zero one there writes and
