@@ -363,6 +363,9 @@ impl Plugin for UiTaxiPlugin {
 }
 
 #[cfg(test)]
+mod drain_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use benilla_protocol::field::FIELD_UNIT_FLAGS;

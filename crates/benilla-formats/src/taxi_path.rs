@@ -92,6 +92,20 @@ pub fn load_taxi_paths(chain: &mut Chain) -> Result<TaxiPaths> {
 mod tests {
     use super::*;
 
+    /// The path table keeps the first row of a pair: `0x4db387` walks the rows from the last, each
+    /// overwriting the pair's cell (`0x4db3e2`).
+    #[test]
+    fn a_duplicated_pair_keeps_its_first_row() {
+        let hop = |id, cost| TaxiPath {
+            id,
+            from: 1,
+            to: 2,
+            cost,
+        };
+        let cat = TaxiPaths::from_rows([hop(7, 10), hop(9, 20)]);
+        assert_eq!(cat.between(1, 2).map(|p| (p.id, p.cost)), Some((7, 10)));
+    }
+
     /// Hop 6 runs Stormwind (node 2) to Sentinel Hill (node 4) for 110 copper.
     #[test]
     fn real_taxi_path_layout_sanity() {

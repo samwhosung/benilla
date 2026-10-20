@@ -121,3 +121,66 @@ fn out_of_range_taxi_slots_raise_or_answer_invalid() {
         "Crossroads, The Barrens"
     );
 }
+
+/// `TaxiGetSrcX` to `TaxiGetDestY` read both arguments with a bare `lua_tonumber` and `_ftol`
+/// (`0x4dcd9d`-`0x4dcdbb`): a non-number is 0, so no slot and a 0 answer, and 2.9 is 2.
+#[test]
+fn route_line_coordinates_read_their_arguments_as_bare_numbers() {
+    let mut s = script();
+    s.set_taxi(Some(TaxiUiState {
+        art: String::new(),
+        nodes: vec![
+            TaxiUiNode {
+                name: "A".into(),
+                node_type: TaxiNodeType::Current,
+                ..Default::default()
+            },
+            TaxiUiNode {
+                name: "B".into(),
+                routes: vec![[0.25, 0.5, 0.75, 1.0]],
+                num_routes: 1,
+                ..Default::default()
+            },
+        ],
+    }));
+    s.run(
+        r#"
+        assert(TaxiGetSrcX(nil, 1) == 0 and TaxiGetSrcY("x", {}) == 0 and TaxiGetDestX() == 0)
+        assert(TaxiGetDestY(2, nil) == 0)
+        assert(TaxiGetSrcX(2.9, 1.5) == 0.25 and TaxiGetSrcY("2", "1") == 0.5)
+        assert(TaxiGetDestX(2, 1) == 0.75 and TaxiGetDestY(2, 1) == 1)
+    "#,
+    )
+    .unwrap();
+}
+
+/// `SetTaxiMap` does nothing before a map's texture has loaded (`0x4dca5c`), whatever it is
+/// handed; with one it resolves its receiver as a member function does: a non-table raises
+/// `0x847ef8`, a table with no object `0x847ec0`, and an object that is no Texture `0x847e98`.
+#[test]
+fn set_taxi_map_tests_the_map_texture_before_its_receiver() {
+    let mut s = script();
+    s.run("SetTaxiMap(nil) SetTaxiMap({}) SetTaxiMap(5)")
+        .unwrap();
+    s.set_taxi(Some(TaxiUiState {
+        art: "Interface\\TaxiFrame\\TAXIMAP1".into(),
+        nodes: vec![],
+    }));
+    for (arg, want) in [
+        (
+            "nil",
+            "Attempt to find 'this' in non-table object (used '.' instead of ':' ?)",
+        ),
+        ("{}", "Attempt to find 'this' in non-framescript object"),
+        (
+            "CreateFrame(\"Frame\")",
+            "Wrong object type for member function",
+        ),
+    ] {
+        let e = s
+            .run(&format!("SetTaxiMap({arg})"))
+            .expect_err("raises")
+            .to_string();
+        assert!(e.contains(want), "SetTaxiMap({arg}): {e}");
+    }
+}
