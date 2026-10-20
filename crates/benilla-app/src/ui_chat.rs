@@ -19,6 +19,8 @@ pub(crate) mod bubbles;
 mod channels;
 /// The combat log's chat lines: classification, chat type and each sentence's GlobalString key.
 pub(crate) mod combat;
+#[cfg(test)]
+mod combat_drain_tests;
 pub(crate) mod commands;
 /// The edit box's send path: the chat-type token passed to `SendChatMessage` and its wire kind.
 /// `pub(crate)` for `ui_script::chat_tests`, which joins the stock file's token to this resolve.

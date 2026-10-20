@@ -438,6 +438,20 @@ mod tests {
         assert_eq!(fill("%1$s vs %1$s", &[a]), "Alice vs Alice");
     }
 
+    /// `vsnoprintf` binds each hole before it prints (`0x6697d0`): after a hole that takes an
+    /// argument the running index is that hole's index plus one (`0x669892`), so a plain hole
+    /// after `%N$` takes argument N + 1, and `%0$` is the first argument (`0x669afa`-`0x669b0b`).
+    #[test]
+    fn a_plain_hole_after_a_positional_takes_the_next_argument() {
+        let (a, b, c) = (Arg::S("A"), Arg::S("B"), Arg::S("C"));
+        assert_eq!(fill("%2$s then %s", &[a, b, c]), "B then C");
+        assert_eq!(fill("%1$s then %s", &[a, b]), "A then B");
+        assert_eq!(fill("%s, %s, %1$s, %s", &[a, b, c]), "A, B, A, B");
+        assert_eq!(fill("%0$s", &[a]), "A");
+        // A hole with no argument still moves the index: the plain hole after it is starved too.
+        assert_eq!(fill("%3$s %s", &[a, b]), "%3$s %s");
+    }
+
     #[test]
     fn each_hole_takes_its_own_argument() {
         assert_eq!(

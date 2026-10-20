@@ -119,6 +119,7 @@ mod emitters {
 
     use super::super::ChatCtx;
 
+    mod lines;
     mod words;
 
     const ME: u64 = 1;
@@ -141,6 +142,8 @@ mod emitters {
     const HIDDEN: u32 = 20_001;
     /// `Attributes & 0x80` alone: no line, but its `UNIT_COMBAT` fires.
     const UNDISPLAYED: u32 = 20_002;
+    /// `Targets & 0x80`, the enemy flag: `GetSpellHostility` answers 2.
+    const HOSTILE: u32 = 20_003;
 
     /// Fireball with no duration row, the two heals with theirs, and the casts.
     fn spells() -> crate::ui_action::Spells {
@@ -187,6 +190,15 @@ mod emitters {
                     cast(PICK_LOCK, "Pick Lock", 0, 0, 33),
                     cast(HIDDEN, "Hidden", 0x100, 0, 0),
                     cast(UNDISPLAYED, "Undisplayed", 0x80, 0, 0),
+                    (
+                        HOSTILE,
+                        benilla_formats::SpellDisplay {
+                            id: HOSTILE,
+                            name: "Venom".into(),
+                            targets: 0x80,
+                            ..Default::default()
+                        },
+                    ),
                 ]
                 .into_iter()
                 .collect(),

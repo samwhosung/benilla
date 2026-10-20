@@ -69,6 +69,37 @@ fn numbered_holes_fill_from_the_same_argument_list() {
     assert_eq!(fill("%0$s", &[Arg::Str("a")]), None);
 }
 
+/// `vsnoprintf` prints the arguments the template names, in the template's own binding, and
+/// skips one no hole takes (`0x6698b5`-`0x669919`); a plain hole after `%N$` takes argument N + 1
+/// (`0x669892`). So a template that leaves a name out, or mixes the two hole forms, still prints.
+#[test]
+fn a_template_that_omits_an_argument_or_mixes_hole_forms_still_prints() {
+    let script = benilla_ui::script::UiScript::new().expect("VM");
+    script
+        .run(
+            r#"
+            COMBATHITSELFOTHER = "You land a blow for %2$d."
+            COMBATHITOTHERSELF = "%1$s hits you for %d."
+        "#,
+        )
+        .unwrap();
+    let fills = Fills {
+        attacker: "Ragnaros".into(),
+        victim: "Ragnaros".into(),
+        amount: 12,
+        ..Default::default()
+    };
+    let line = |variant| compose_line(&script, COMBATHIT, variant, &fills);
+    assert_eq!(
+        line(Variant::SelfOther).as_deref(),
+        Some("You land a blow for 12.")
+    );
+    assert_eq!(
+        line(Variant::OtherSelf).as_deref(),
+        Some("Ragnaros hits you for 12.")
+    );
+}
+
 /// The signature a family's declared slots give for one variant; `Attacker` and `Victim` count
 /// only where the variant names them.
 fn declared_signature(family: Family, variant: Variant) -> Vec<char> {

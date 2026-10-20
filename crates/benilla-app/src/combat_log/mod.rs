@@ -26,6 +26,8 @@ use crate::ui_chat::combat::{CombatLogRanges, LogPeriodicSpells};
 use crate::ui_chat::ChatLog;
 
 pub(crate) mod chat;
+#[cfg(test)]
+mod death_tests;
 pub(crate) mod feedback;
 pub(crate) mod text;
 
