@@ -1469,23 +1469,32 @@ mod tests {
     }
 
     /// `0x60e0a0` ends the mover's precast (`0x60e15d`) ahead of each move it does not send at
-    /// once (`0x60e408` class 0): a start, a heartbeat and the knockback ack do; a stop, a turn and
-    /// a facing change do not, nor the at-rest position report, which the reference never sends.
+    /// once (`0x60e408` class 0): a start, the jump and the knockback ack do; a stop, a turn and a
+    /// facing change do not. Nor do the heartbeats and the landing, which go to `0x600a30` without
+    /// passing it (`0x616755`, `0x615e47`, `0x617162`, `0x5e221e`; `0x602e13`).
     #[test]
     fn the_moves_the_send_does_not_exempt_end_the_precast() {
+        #[derive(Clone, Copy, PartialEq)]
+        enum Edge {
+            None,
+            Knock,
+            Jump,
+            Land,
+        }
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut player = Player::default();
-        let frame = |player: &mut Player, flags: u32, now: f32, knock: bool| {
+        let frame = |player: &mut Player, flags: u32, now: f32, edge: Edge| {
+            let knock = edge == Edge::Knock;
             let ended = stream_self_movement(
                 &tx,
                 player,
                 flags,
                 0.0,
                 ArcEdges {
-                    jumped: false,
+                    jumped: edge == Edge::Jump,
                     wire_launch: knock,
                     air_nudged: false,
-                    landed: false,
+                    landed: edge == Edge::Land,
                     fall_time: 0,
                 },
                 now,
@@ -1507,32 +1516,48 @@ mod tests {
             assert!(!sent.is_empty(), "the frame at {now} sends something");
             ended
         };
+        let falling = move_flags::FALLING;
         assert!(
-            frame(&mut player, move_flags::FORWARD, 0.0, false),
+            frame(&mut player, move_flags::FORWARD, 0.0, Edge::None),
             "start forward"
         );
-        assert!(!frame(&mut player, 0, 0.1, false), "the stop");
+        assert!(!frame(&mut player, 0, 0.1, Edge::None), "the stop");
         assert!(
-            !frame(&mut player, move_flags::TURN_LEFT, 0.2, false),
+            !frame(&mut player, move_flags::TURN_LEFT, 0.2, Edge::None),
             "a turn"
         );
-        assert!(!frame(&mut player, 0, 0.3, false), "the turn's stop");
+        assert!(!frame(&mut player, 0, 0.3, Edge::None), "the turn's stop");
         assert!(
-            frame(&mut player, move_flags::FORWARD, 1.0, false),
+            frame(&mut player, move_flags::FORWARD, 1.0, Edge::None),
             "start again"
         );
         assert!(
-            frame(&mut player, move_flags::FORWARD, 1.6, false),
-            "the heartbeat"
+            !frame(&mut player, move_flags::FORWARD, 1.6, Edge::None),
+            "the running heartbeat (0x616755)"
         );
-        assert!(!frame(&mut player, 0, 2.0, false), "the stop");
+        assert!(!frame(&mut player, 0, 2.0, Edge::None), "the stop");
         player.face_yaw += 0.5;
-        assert!(!frame(&mut player, 0, 2.1, false), "a facing change");
+        assert!(!frame(&mut player, 0, 2.1, Edge::None), "a facing change");
         player.pos.x += 0.01;
         assert!(
-            !frame(&mut player, 0, 2.2, false),
+            !frame(&mut player, 0, 2.2, Edge::None),
             "the at-rest position report"
         );
-        assert!(frame(&mut player, 0, 2.3, true), "the knockback ack (0xf0)");
+        assert!(
+            frame(&mut player, falling, 3.0, Edge::Jump),
+            "the jump (0xbb, 0x615ed1)"
+        );
+        assert!(
+            !frame(&mut player, falling, 3.6, Edge::None),
+            "the falling heartbeat"
+        );
+        assert!(
+            !frame(&mut player, 0, 3.8, Edge::Land),
+            "the landing (0xc9, 0x602e13)"
+        );
+        assert!(
+            frame(&mut player, 0, 4.0, Edge::Knock),
+            "the knockback ack (0xf0)"
+        );
     }
 }
