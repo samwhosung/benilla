@@ -451,10 +451,11 @@ fn held(
     })
 }
 
-/// Run the ladder for one cast and commit it. The commit tail (`0x6e54f0`): a ranged spell arms the
-/// ranged stance (`0x6e5930`, `SetSheatheState(2,1,1)`; the echoed START re-requests it), an
-/// auto-repeat spell sets the sticky armed state (`0x6e593b`, `|= 0x200`, the Load/Hold idle's
-/// gate), and the packet goes out.
+/// Run the ladder for one cast and commit it. The commit tail (`0x6e54f0`): the packet goes out,
+/// then the GCD, then a ranged spell arms the ranged stance (`0x6e5930`,
+/// `SetSheatheState(2,1,1)`; the echoed START re-requests it), and an auto-repeat spell sets the
+/// sticky armed state (`0x6e593b`, `|= 0x200`, the Load/Hold idle's gate), stops the attack and
+/// leaves the slot.
 ///
 /// The `pending` guard is TryCast's IsCasting refusal (`6e4d97`, [`crate::spell::PendingCast`]):
 /// any press while a cast is in flight is refused locally. The spell awaiting its click is in
@@ -844,30 +845,8 @@ fn send_spell_cast(
             crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, ecs, commands);
         }
     }
-    if let Some(d) = def {
-        if let Ok((e, engaged)) = self_player.single() {
-            if d.ranged_attack() {
-                sheath.write(crate::creature_anim::SheathRequest {
-                    entity: e,
-                    state: 2,
-                    ceremony: false,
-                });
-            }
-            if d.auto_repeat() {
-                ecs.entity(e).insert(crate::creature_anim::AutoRepeatArmed);
-                // The autorepeat key (`0xceac30`, written at `0x6e5947`) the button's checked
-                // state reads.
-                auto_repeat.0 = Some(spell_id);
-                // The commit's StopAttack (`0x6e5976` → `0x5ecac0`), gated only on the caster
-                // being the active player (`0x6e5957`–`0x6e5972`): starting a repeat ends the
-                // melee swing and its queued strike, which the repeat's push moved into the save,
-                // so its cancel is the packet alone. This is where melee and auto-repeat are kept
-                // exclusive. It runs after the arm above, so it never cancels this repeat.
-                crate::creature_anim::stop_attack_local(engaged, core);
-            }
-        }
-    }
-    // `SendCast 0x6e54f0`: one targets block, two opcodes.
+    // `SendCast 0x6e54f0`: one targets block, two opcodes, sent first (`0x6e5872`); everything the
+    // send does after it follows the packet.
     let _ = commands.0.send(match commit {
         CastCommit::Spell => match (explicit_object, item_target) {
             // A lock opener bound by its click; `BindTarget`'s GameObject arm fills the block.
@@ -902,9 +881,39 @@ fn send_spell_cast(
     // precast already plays (`0x6e588f`, the unit's `[+0xc8c]`, which `0x6ec220` sets through
     // `0x60d020`); benilla starts no precast at the send (#1583), so it signals every send.
     core.reports.changed();
+    // The GCD arms at the send (`0x6e2de0` from `0x6e58fb`), after the packet; a failed cast
+    // result clears it (`0x6e1630`).
+    if let Some(d) = def {
+        cooldowns.start_gcd(spell_id, d, now, spell_mods);
+    }
+    if let Some(d) = def {
+        if let Ok((e, engaged)) = self_player.single() {
+            // The ranged stance (`0x6e5930`, `SetSheatheState(2, 1, 1)`) for a ranged or
+            // auto-repeat spell (`0x6e591c`, `0x6e5922`).
+            if d.ranged_attack() {
+                sheath.write(crate::creature_anim::SheathRequest {
+                    entity: e,
+                    state: 2,
+                    ceremony: false,
+                });
+            }
+            if d.auto_repeat() {
+                // The sticky armed state (`0x6e593b`, `|= 0x200`) and the autorepeat key
+                // (`0xceac30`, written at `0x6e594c`) the button's checked state reads.
+                ecs.entity(e).insert(crate::creature_anim::AutoRepeatArmed);
+                auto_repeat.0 = Some(spell_id);
+                // StopAttack (`0x6e5976` → `0x5ecac0`), gated only on the caster being the active
+                // player (`0x6e5957`–`0x6e5972`): starting a repeat ends the melee swing and its
+                // queued strike, which the repeat's push moved into the save, so its cancel is
+                // the packet alone. This is where melee and auto-repeat are kept exclusive. It
+                // runs after the arm above, so it never cancels this repeat.
+                crate::creature_anim::stop_attack_local(engaged, core);
+            }
+        }
+    }
     // The in-flight slot (`0xceca88`, `0x6e5026`): every cast holds it until its result, a ranged
-    // shot included; only an auto-repeat spell is popped after the send, which signals
-    // (`0x6e5989`).
+    // shot included; only an auto-repeat spell is popped after the send, last, which signals
+    // (`0x6e597b`-`0x6e5989`).
     if def.is_some_and(|d| d.auto_repeat()) {
         core.pop_if(spell_id);
     }
@@ -935,11 +944,6 @@ fn send_spell_cast(
                 }
             }
         }
-    }
-    // The GCD arms at send (`0x6e2de0` from `0x6e58fb`); a failed cast result clears it
-    // (`0x6e1630`).
-    if let Some(d) = def {
-        cooldowns.start_gcd(spell_id, d, now, spell_mods);
     }
     // The attempt signals as it returns (`0x6e51e3`).
     core.reports.changed();
@@ -1346,8 +1350,8 @@ mod tests {
 
     // ── Melee and auto-repeat exclusion ──
     //
-    // The auto-repeat commit calls StopAttack (`0x6e5976` → `0x5ecac0` → `CancelQueuedCast
-    // 0x6e6f30`), and the attack-start's tail (`0x5ecd78`–`0x5ecd95`) cancels the running repeat.
+    // The auto-repeat send calls StopAttack after its packet (`0x6e5976` → `0x5ecac0` →
+    // `CancelQueuedCast 0x6e6f30`), and the attack-start's tail (`0x5ecd78`–`0x5ecd95`) cancels the running repeat.
 
     const AUTO_SHOT: u32 = 75;
     const AIMED_SHOT: u32 = 19434;
@@ -1664,8 +1668,10 @@ mod tests {
         }
     }
 
-    /// The commit's StopAttack (`0x6e5976`): `CMSG_ATTACKSTOP` (`0x624370`), then `CancelQueuedCast
-    /// 0x6e6f30` hands the queued strike to `CancelCast 0x6e4940(dl=1)` and its `CMSG_CANCEL_CAST`.
+    /// The send's StopAttack (`0x6e5976`), after the packet (`0x6e5872`) and the auto-repeat arm:
+    /// `CMSG_ATTACKSTOP` (`0x624370`), then `CancelQueuedCast 0x6e6f30`, whose save leg sends the
+    /// queued strike's `CMSG_CANCEL_CAST`; the pop comes last (`0x6e5989`), so the save it copies
+    /// back is already empty.
     #[test]
     fn an_auto_repeat_press_stops_the_attack_and_takes_the_queued_strike_with_it() {
         let (mut world, rx) = combat_world(true);
@@ -1676,17 +1682,18 @@ mod tests {
         send_at(&mut world, AUTO_SHOT, MOB);
 
         assert!(
+            matches!(rx.try_recv(), Ok(ClientCommand::CastSpell { spell_id, .. }) if spell_id == AUTO_SHOT),
+            "the shot leaves first"
+        );
+        assert!(
             matches!(rx.try_recv(), Ok(ClientCommand::AttackStop)),
-            "the auto-repeat arm calls StopAttack before the cast leaves"
+            "then the send's StopAttack"
         );
         assert!(
             matches!(rx.try_recv(), Ok(ClientCommand::CancelCast { spell_id }) if spell_id == RAPTOR_STRIKE),
-            "the StopAttack tail cancels the queued strike by id"
+            "whose tail cancels the queued strike by id"
         );
-        assert!(
-            matches!(rx.try_recv(), Ok(ClientCommand::CastSpell { spell_id, .. }) if spell_id == AUTO_SHOT),
-            "and then the shot itself commits"
-        );
+        assert!(rx.try_recv().is_err(), "and nothing else");
         assert_eq!(
             world.resource::<crate::spell::QueuedMeleeSpell>().current(),
             None,
