@@ -6,13 +6,17 @@
 //! so no flinch or blood, unless an impact key consumed the record first. A whiff plays the rest
 //! of the attacker's swing at half speed (`0x624ca0` → `0x712910(bone 0, 0.5)`). A superseding
 //! swing or `SMSG_ATTACKSTOP` flushes the old record as floating text only, a `text_only`
-//! [`SwingImpact`]. A clip with no impact key never fires: there is no timer fallback.
+//! [`SwingImpact`], in its packet's handler ([`receive_swing`], [`stop_swing`]). A clip with no
+//! impact key never fires: there is no timer fallback. Each feedback queues the victim's
+//! `UNIT_COMBAT` where it fires ([`ImpactSinks::fire`]).
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use super::events::AnimSoundEvent;
 use super::SwingMessage;
-use crate::net::ObjectStore;
+use crate::net::{Guid, ObjectStore};
+use crate::ui_chat::ChatLog;
 
 /// The victim dispatcher's lootable gate (`0x624552`, `UNIT_DYNAMIC_FLAGS` bit `0x1`): `0x624530`
 /// bails before every consequence it owns, the floating number (`0x624566`) included, so a corpse
@@ -38,9 +42,80 @@ pub(crate) struct SwingImpact {
     pub(crate) pos: Option<Vec3>,
 }
 
-/// `SMSG_ATTACKSTOP`'s flush of a pending record (`0x624e40`); death and stun arrive as it.
-#[derive(Message, Clone, Copy)]
-pub(crate) struct SwingFlush(pub(crate) Entity);
+/// Where a swing's victim feedback goes: the [`SwingImpact`] its float, blood, sound and flinch
+/// read, and its `UNIT_COMBAT`, queued in the chat drain at once
+/// ([`crate::ui_unit::melee_unit_combat`]).
+#[derive(SystemParam)]
+pub(crate) struct ImpactSinks<'w, 's> {
+    out: MessageWriter<'w, SwingImpact>,
+    log: ResMut<'w, ChatLog>,
+    guids: Query<'w, 's, &'static Guid>,
+    pub(crate) stores: Query<'w, 's, &'static ObjectStore>,
+}
+
+impl ImpactSinks<'_, '_> {
+    /// One feedback, at the moment its caller of `0x6243e0` reaches it.
+    pub(crate) fn fire(&mut self, impact: SwingImpact) {
+        let victim = impact
+            .swing
+            .victim
+            .and_then(|v| Some((self.guids.get(v).ok()?.0, self.stores.get(v).ok()?)));
+        crate::ui_unit::melee_unit_combat(&mut self.log, &impact.swing, victim);
+        self.out.write(impact);
+    }
+}
+
+/// A held attacker's swing at receive (`0x62583f`-`0x6258d5`): its one slot takes the record, and
+/// the record it held flushes first as text only (`0x625893`), before the packet's line.
+pub(crate) fn receive_swing(
+    swing: SwingMessage,
+    pending: &mut PendingImpacts,
+    sinks: &mut ImpactSinks,
+) {
+    let old = pending.0.insert(
+        swing.attacker,
+        PendingSwing {
+            swing,
+            defended: false,
+        },
+    );
+    if let Some(old) = old {
+        if benilla_assets::trace::enabled() {
+            benilla_assets::trace::line(
+                "fct",
+                &format!(
+                    "flush supersede atk={:?} dmg={}",
+                    swing.attacker, old.swing.damage
+                ),
+            );
+        }
+        sinks.fire(SwingImpact {
+            swing: old.swing,
+            text_only: true,
+            natural: None,
+            pos: None,
+        });
+    }
+}
+
+/// `SMSG_ATTACKSTOP`'s `0x624e40` on the attacker: its pending record flushes as text only
+/// (`0x624ea7`) and the slot clears; death and stun arrive as this packet.
+pub(crate) fn stop_swing(attacker: Entity, pending: &mut PendingImpacts, sinks: &mut ImpactSinks) {
+    if let Some(p) = pending.0.remove(&attacker) {
+        if benilla_assets::trace::enabled() {
+            benilla_assets::trace::line(
+                "fct",
+                &format!("flush stop atk={:?} dmg={}", attacker, p.swing.damage),
+            );
+        }
+        sinks.fire(SwingImpact {
+            swing: p.swing,
+            text_only: true,
+            natural: None,
+            pos: None,
+        });
+    }
+}
 
 /// The victim's defense clip (`$CPP`, `0x624a01`), resolved in the driver by
 /// [`super::select::defense_anim`], which requires the victim alive, as the client does.
@@ -83,45 +158,16 @@ fn is_whiff(victim_state: u32) -> bool {
     matches!(victim_state, 0 | 2 | 6)
 }
 
-/// Cache swings, fire them on their impact keys and flush them. Runs after
-/// [`super::events::fire_anim_events`] so a key fires the frame it is crossed.
+/// Fire cached swings on their impact keys. Runs after [`super::events::fire_anim_events`] so a
+/// key fires, and queues its `UNIT_COMBAT`, the frame it is crossed.
 pub(super) fn route_swing_impacts(
-    mut swings: MessageReader<SwingMessage>,
     mut events: MessageReader<AnimSoundEvent>,
-    mut flushes: MessageReader<SwingFlush>,
     mut pending: ResMut<PendingImpacts>,
     entities: Query<(), With<crate::net::NetEntity>>,
-    stores: Query<&ObjectStore>,
-    mut out: MessageWriter<SwingImpact>,
+    mut sinks: ImpactSinks,
     mut defenses: MessageWriter<DefenseAnim>,
     mut slows: MessageWriter<SwingSlowdown>,
 ) {
-    for s in swings.read() {
-        // One slot per attacker: a superseded record flushes as text only (`0x6243e0` alone).
-        if let Some(old) = pending.0.insert(
-            s.attacker,
-            PendingSwing {
-                swing: *s,
-                defended: false,
-            },
-        ) {
-            if benilla_assets::trace::enabled() {
-                benilla_assets::trace::line(
-                    "fct",
-                    &format!(
-                        "flush supersede atk={:?} dmg={}",
-                        s.attacker, old.swing.damage
-                    ),
-                );
-            }
-            out.write(SwingImpact {
-                swing: old.swing,
-                text_only: true,
-                natural: None,
-                pos: None,
-            });
-        }
-    }
     for ev in events.read() {
         if let Some(natural) = impact_tag(&ev.ident) {
             // The key consumes the record (`0x6247d0` clears it after the dispatch).
@@ -143,10 +189,10 @@ pub(super) fn route_swing_impacts(
                 }
                 // A lootable victim takes nothing, not even the number; the record is consumed
                 // all the same, as `0x6247d0` clears it whatever the dispatcher does.
-                if lootable_victim(&stores, p.swing.victim) {
+                if lootable_victim(&sinks.stores, p.swing.victim) {
                     continue;
                 }
-                out.write(SwingImpact {
+                sinks.fire(SwingImpact {
                     swing: p.swing,
                     text_only: false,
                     natural,
@@ -181,23 +227,6 @@ pub(super) fn route_swing_impacts(
             }
         }
     }
-    for SwingFlush(attacker) in flushes.read() {
-        // `0x624e40`: flush as text only and clear.
-        if let Some(p) = pending.0.remove(attacker) {
-            if benilla_assets::trace::enabled() {
-                benilla_assets::trace::line(
-                    "fct",
-                    &format!("flush stop atk={:?} dmg={}", attacker, p.swing.damage),
-                );
-            }
-            out.write(SwingImpact {
-                swing: p.swing,
-                text_only: true,
-                natural: None,
-                pos: None,
-            });
-        }
-    }
     // A despawned attacker's record drops without a flush, as the client's destructor clears it.
     if !pending.0.is_empty() {
         pending.0.retain(|e, _| entities.contains(*e));
@@ -207,6 +236,7 @@ pub(super) fn route_swing_impacts(
 #[cfg(test)]
 mod tests {
     use bevy::ecs::message::MessageCursor;
+    use bevy::ecs::system::RunSystemOnce;
 
     use super::*;
 
@@ -225,14 +255,37 @@ mod tests {
     fn app() -> App {
         let mut app = App::new();
         app.init_resource::<PendingImpacts>();
-        app.add_message::<SwingMessage>();
+        app.init_resource::<ChatLog>();
         app.add_message::<AnimSoundEvent>();
-        app.add_message::<SwingFlush>();
         app.add_message::<SwingImpact>();
         app.add_message::<DefenseAnim>();
         app.add_message::<SwingSlowdown>();
         app.add_systems(Update, route_swing_impacts);
         app
+    }
+
+    /// `SMSG_ATTACKERSTATEUPDATE`'s receive for a held attacker, as its handler runs it.
+    fn receive(app: &mut App, s: SwingMessage) {
+        app.world_mut()
+            .run_system_once(
+                move |mut pending: ResMut<PendingImpacts>, mut sinks: ImpactSinks| {
+                    receive_swing(s, &mut pending, &mut sinks);
+                },
+            )
+            .unwrap();
+        app.update();
+    }
+
+    /// `SMSG_ATTACKSTOP` on `attacker`, as its handler runs it.
+    fn stop(app: &mut App, attacker: Entity) {
+        app.world_mut()
+            .run_system_once(
+                move |mut pending: ResMut<PendingImpacts>, mut sinks: ImpactSinks| {
+                    stop_swing(attacker, &mut pending, &mut sinks);
+                },
+            )
+            .unwrap();
+        app.update();
     }
 
     fn unit(app: &mut App) -> Entity {
@@ -309,9 +362,7 @@ mod tests {
         let (attacker, victim) = (unit(&mut app), unit(&mut app));
         dynamic_flags(&mut app, victim, 0x1);
         let mut cursor = MessageCursor::<SwingImpact>::default();
-        app.world_mut()
-            .write_message(swing(attacker, Some(victim), 1));
-        app.update();
+        receive(&mut app, swing(attacker, Some(victim), 1));
         drain(&mut app, &mut cursor);
 
         tag(&mut app, attacker, *b"$CAH");
@@ -334,9 +385,7 @@ mod tests {
         let (attacker, victim) = (unit(&mut app), unit(&mut app));
         dynamic_flags(&mut app, victim, 0x20); // dead-looking, not lootable
         let mut cursor = MessageCursor::<SwingImpact>::default();
-        app.world_mut()
-            .write_message(swing(attacker, Some(victim), 1));
-        app.update();
+        receive(&mut app, swing(attacker, Some(victim), 1));
         drain(&mut app, &mut cursor);
 
         tag(&mut app, attacker, *b"$CAH");
@@ -352,13 +401,9 @@ mod tests {
         let mut cursor = MessageCursor::<SwingImpact>::default();
 
         // The second swing supersedes the first, which flushes as text only.
-        app.world_mut()
-            .write_message(swing(attacker, Some(victim), 1));
-        app.update();
+        receive(&mut app, swing(attacker, Some(victim), 1));
         drain(&mut app, &mut cursor);
-        app.world_mut()
-            .write_message(swing(attacker, Some(victim), 1));
-        app.update();
+        receive(&mut app, swing(attacker, Some(victim), 1));
         assert_eq!(
             drain(&mut app, &mut cursor),
             vec![(0x2, 1, true, None)],
@@ -366,8 +411,7 @@ mod tests {
         );
 
         // `SMSG_ATTACKSTOP` flushes the survivor the same way.
-        app.world_mut().write_message(SwingFlush(attacker));
-        app.update();
+        stop(&mut app, attacker);
         assert_eq!(drain(&mut app, &mut cursor), vec![(0x2, 1, true, None)]);
     }
 
@@ -379,9 +423,7 @@ mod tests {
         dynamic_flags(&mut app, victim, 0x1);
         let mut impacts = MessageCursor::<SwingImpact>::default();
         let mut slows = MessageCursor::<SwingSlowdown>::default();
-        app.world_mut()
-            .write_message(swing(attacker, Some(victim), 2)); // dodged
-        app.update();
+        receive(&mut app, swing(attacker, Some(victim), 2)); // dodged
         drain(&mut app, &mut impacts);
         drain_slows(&mut app, &mut slows);
 
@@ -403,8 +445,7 @@ mod tests {
         let mut app = app();
         let mut cursor = MessageCursor::<SwingImpact>::default();
         let a = unit(&mut app);
-        app.world_mut().write_message(swing(a, None, 1));
-        app.update();
+        receive(&mut app, swing(a, None, 1));
         tag(&mut app, a, *b"$CSS");
         tag(&mut app, a, *b"$HIT");
         assert_eq!(
@@ -426,8 +467,7 @@ mod tests {
         let mut d_cursor = MessageCursor::<DefenseAnim>::default();
         let a = unit(&mut app);
         let v = unit(&mut app);
-        app.world_mut().write_message(swing(a, Some(v), 3));
-        app.update();
+        receive(&mut app, swing(a, Some(v), 3));
         tag(&mut app, a, *b"$CPP");
         assert_eq!(drain_defenses(&mut app, &mut d_cursor), vec![3]);
         tag(&mut app, a, *b"$CPP");
@@ -451,8 +491,7 @@ mod tests {
         let mut d_cursor = MessageCursor::<DefenseAnim>::default();
         let a = unit(&mut app);
         let v = unit(&mut app);
-        app.world_mut().write_message(swing(a, Some(v), 5));
-        app.update();
+        receive(&mut app, swing(a, Some(v), 5));
         tag(&mut app, a, *b"$CAH");
         assert_eq!(drain(&mut app, &mut cursor), vec![(0x2, 5, false, None)]);
         tag(&mut app, a, *b"$CPP");
@@ -469,12 +508,10 @@ mod tests {
         let mut s_cursor = MessageCursor::<SwingSlowdown>::default();
         let a = unit(&mut app);
         let v = unit(&mut app);
-        app.world_mut().write_message(swing(a, Some(v), 2));
-        app.update();
+        receive(&mut app, swing(a, Some(v), 2));
         tag(&mut app, a, *b"$AH1");
         assert_eq!(drain_slows(&mut app, &mut s_cursor), 1, "a dodge slows");
-        app.world_mut().write_message(swing(a, Some(v), 1));
-        app.update();
+        receive(&mut app, swing(a, Some(v), 1));
         tag(&mut app, a, *b"$AH1");
         assert_eq!(drain_slows(&mut app, &mut s_cursor), 0, "a hit never slows");
     }
@@ -485,13 +522,54 @@ mod tests {
         let mut app = app();
         let mut cursor = MessageCursor::<SwingImpact>::default();
         let a = unit(&mut app);
-        app.world_mut().write_message(swing(a, None, 1));
-        app.update();
-        app.world_mut().write_message(swing(a, None, 5));
-        app.update();
+        receive(&mut app, swing(a, None, 1));
+        receive(&mut app, swing(a, None, 5));
         assert_eq!(drain(&mut app, &mut cursor), vec![(0x2, 1, true, None)]);
         tag(&mut app, a, *b"$AH1");
         assert_eq!(drain(&mut app, &mut cursor), vec![(0x2, 5, false, Some(1))]);
+    }
+
+    /// A victim the client holds as a unit, with its guid.
+    fn held_unit(app: &mut App, guid: u64) -> Entity {
+        let e = unit(app);
+        let store = benilla_protocol::messages::ObjectFields::from_pairs(&[(2, 0x9)]);
+        app.world_mut()
+            .entity_mut(e)
+            .insert((Guid(guid), ObjectStore(store)));
+        e
+    }
+
+    fn kinds(app: &App) -> Vec<&'static str> {
+        app.world().resource::<ChatLog>().pending_kinds()
+    }
+
+    /// The key's `UNIT_COMBAT` is queued the frame the key is crossed (`0x6249bb` → `0x624530` →
+    /// `0x6243e0`), behind what is queued already and ahead of the next packets' lines.
+    #[test]
+    fn a_key_queues_its_unit_combat_the_frame_it_is_crossed() {
+        let mut app = app();
+        let (a, v) = (unit(&mut app), held_unit(&mut app, 7));
+        receive(&mut app, swing(a, Some(v), 1));
+        app.world_mut()
+            .resource_mut::<ChatLog>()
+            .push_xp_gain(0, 10, 10);
+        tag(&mut app, a, *b"$CAH");
+        assert_eq!(kinds(&app), ["xp", "unit combat"]);
+        let flashed = app.world().resource::<ChatLog>().pending_unit_combat();
+        assert_eq!(flashed[0].guid, 7);
+    }
+
+    /// The flushes queue theirs in the packet's handler (`0x625893`, `0x624ea7`).
+    #[test]
+    fn a_flush_queues_its_unit_combat_at_the_packet() {
+        let mut app = app();
+        let (a, v) = (unit(&mut app), held_unit(&mut app, 7));
+        receive(&mut app, swing(a, Some(v), 1));
+        assert!(kinds(&app).is_empty(), "the record waits for its key");
+        receive(&mut app, swing(a, Some(v), 1));
+        assert_eq!(kinds(&app), ["unit combat"], "superseded");
+        stop(&mut app, a);
+        assert_eq!(kinds(&app), ["unit combat", "unit combat"], "stopped");
     }
 
     /// An untagged record with no stop waits: there is no timer fallback.
@@ -500,12 +578,10 @@ mod tests {
         let mut app = app();
         let mut cursor = MessageCursor::<SwingImpact>::default();
         let a = unit(&mut app);
-        app.world_mut().write_message(swing(a, None, 1));
-        app.update();
+        receive(&mut app, swing(a, None, 1));
         app.update();
         assert!(drain(&mut app, &mut cursor).is_empty(), "no timer fallback");
-        app.world_mut().write_message(SwingFlush(a));
-        app.update();
+        stop(&mut app, a);
         assert_eq!(drain(&mut app, &mut cursor), vec![(0x2, 1, true, None)]);
     }
 }

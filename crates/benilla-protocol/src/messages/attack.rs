@@ -37,8 +37,9 @@ pub struct AttackerState {
 }
 
 impl AttackerState {
-    /// `0x625e40`: whether the swing gets a combat-log line (`0x629b10`) and a floating number
-    /// (`0x6243e0`). A dodged or parried Heroic Strike gets neither, yet still animates and sounds.
+    /// `0x625e40`: whether the swing gets a combat-log line (`0x629b10`), and a floating number
+    /// and `UNIT_COMBAT` (`0x6243e0`). A dodged or parried Heroic Strike gets none, yet still
+    /// animates and sounds.
     #[must_use]
     pub fn displayed(&self) -> bool {
         self.melee_spell_id == 0 || self.victim_state == 1

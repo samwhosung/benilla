@@ -442,8 +442,9 @@ pub(crate) struct SwingMessage {
     /// 8 deflect.
     pub(crate) victim_state: u32,
     pub(crate) damage: u32,
-    /// `0x625e40`'s display verdict: it gates only the floating number (`0x62440d`); animation,
-    /// flinch, blood, sounds and timers run regardless.
+    /// `0x625e40`'s display verdict: it gates the floating number and the victim's `UNIT_COMBAT`
+    /// (`0x62440d`, returning past both at `0x624414`); animation, flinch, blood, sounds and
+    /// timers run regardless.
     pub(crate) displayed: bool,
     /// `PlaySeq` stamp, in packet order.
     pub(crate) seq: u64,
@@ -571,7 +572,7 @@ use breath::{classify_breath, fire_breath};
 
 mod impact;
 use impact::route_swing_impacts;
-pub(crate) use impact::{DefenseAnim, PendingImpacts, SwingFlush, SwingImpact, SwingSlowdown};
+pub(crate) use impact::{DefenseAnim, PendingImpacts, SwingImpact, SwingSlowdown};
 
 /// The melee blood spurt.
 mod blood;
@@ -813,7 +814,6 @@ impl Plugin for CreatureAnimPlugin {
         app.add_message::<AnimSoundEvent>()
             .add_message::<SwingMessage>()
             .add_message::<SwingImpact>()
-            .add_message::<SwingFlush>()
             .add_message::<DefenseAnim>()
             .add_message::<SwingSlowdown>()
             .init_resource::<PendingImpacts>()

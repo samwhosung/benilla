@@ -45,8 +45,8 @@ pub(crate) struct UnitSnapshots;
 /// self-suppression and no CVar gate; `type` is the school on the melee and spell-damage paths, 0
 /// from the miss and heal wrappers, and the 1.12 binary never emits `ENERGIZE`. Each rides the chat
 /// drain's queue ([`crate::ui_chat::ChatLog::push_unit_combat`]), so it reaches Lua at its place
-/// among the combat-log lines raised beside it. The melee victim event waits for the impact
-/// keyframe (`0x6243e0`, reached only from `0x624530`).
+/// among the combat-log lines raised beside it. A melee victim's comes from `0x6243e0`
+/// ([`melee_unit_combat`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct UnitCombatFeedback {
     /// The unit, by the guid `0x494600` is handed.
@@ -148,7 +148,6 @@ impl Plugin for UiUnitPlugin {
                 // After the control edge, whose flag the exemption is asked for.
                 control_gate::feed_control_bypass,
                 feed_farsight_focus,
-                melee_unit_combat,
             )
                 .chain()
                 .in_set(UnitFeed),
@@ -422,28 +421,32 @@ fn melee_feedback(hit_info: u32, victim_state: u32, damage: u32) -> (&'static st
     }
 }
 
-/// The melee `UNIT_COMBAT` producer, on the swing's impact keyframe, `text_only` flushes included,
-/// queued behind the lines already written; the swing's `COMBAT_TEXT_UPDATE` rides its combat-log
-/// line, at packet parse.
-fn melee_unit_combat(
-    mut impacts: MessageReader<crate::creature_anim::SwingImpact>,
-    guids: Query<&crate::net::Guid>,
-    mut log: ResMut<crate::ui_chat::ChatLog>,
+/// A swing's `UNIT_COMBAT` on its victim, as `FloatSwingResult 0x6243e0` raises it (`0x4946d0`, at
+/// `0x6244bf` and `0x624518`), queued in the chat drain where its caller stands: for a displayed
+/// swing only (`0x625e40`, which returns at `0x624414` past both the number and the event), on a
+/// victim held as a unit (each caller's `0x468460`, mask 8; `victim` is its guid and store). The
+/// callers are the impact key (`0x6249bb` → `0x624530`), an unheld attacker's swing at receive
+/// (`0x625a6d` → `0x624530`), and the flushes of a superseded (`0x625893`) or stopped (`0x624ea7`)
+/// record. The swing's `COMBAT_TEXT_UPDATE` rides its combat-log line instead.
+pub(crate) fn melee_unit_combat(
+    log: &mut crate::ui_chat::ChatLog,
+    s: &crate::creature_anim::SwingMessage,
+    victim: Option<(u64, &crate::net::ObjectStore)>,
 ) {
-    for crate::creature_anim::SwingImpact { swing: s, .. } in impacts.read() {
-        let Some(victim) = s.victim else { continue };
-        let Ok(&crate::net::Guid(guid)) = guids.get(victim) else {
-            continue;
-        };
-        let (action, flags) = melee_feedback(s.hit_info, s.victim_state, s.damage);
-        log.push_unit_combat(UnitCombatFeedback {
-            guid,
-            action,
-            flags,
-            amount: s.damage,
-            school: 0, // the reference passes sub-damage 0's school (`0x4946fc`), not carried here
-        });
+    if !s.displayed {
+        return;
     }
+    let Some((guid, _)) = victim.filter(|(_, store)| crate::ui_chat::combat::is_unit(store)) else {
+        return;
+    };
+    let (action, flags) = melee_feedback(s.hit_info, s.victim_state, s.damage);
+    log.push_unit_combat(UnitCombatFeedback {
+        guid,
+        action,
+        flags,
+        amount: s.damage,
+        school: 0, // the reference passes sub-damage 0's school (`0x4946fc`), not carried here
+    });
 }
 
 /// `COMBAT_TEXT_UPDATE(messageType, data, extra)` (event `0x21e`, through the five helpers
@@ -1711,37 +1714,29 @@ pub(crate) fn add_unit_feed(app: &mut App) {
 mod tests {
     use super::*;
 
-    /// The swing's victim flash joins the chat drain's queue behind the lines already in it, so
-    /// the swing's line, queued at the packet, reaches Lua first.
+    /// `0x6243e0` raises `UNIT_COMBAT` for a displayed swing on a victim held as a unit, and
+    /// returns past it for a swing `0x625e40` hides (`0x624414`).
     #[test]
-    fn a_swing_impact_queues_its_unit_combat_behind_the_lines() {
-        use bevy::ecs::system::RunSystemOnce;
-        let mut app = App::new();
-        app.add_message::<crate::creature_anim::SwingImpact>()
-            .init_resource::<crate::ui_chat::ChatLog>();
-        let attacker = app.world_mut().spawn(crate::net::Guid(2)).id();
-        let victim = app.world_mut().spawn(crate::net::Guid(1)).id();
-        app.world_mut()
-            .resource_mut::<crate::ui_chat::ChatLog>()
-            .push_xp_gain(0, 10, 10);
-        app.world_mut()
-            .write_message(crate::creature_anim::SwingImpact {
-                swing: crate::creature_anim::SwingMessage {
-                    attacker,
-                    victim: Some(victim),
-                    hit_info: 0x80,
-                    victim_state: 1,
-                    damage: 40,
-                    displayed: true,
-                    seq: 0,
-                },
-                text_only: false,
-                natural: None,
-                pos: None,
-            });
-        app.world_mut().run_system_once(melee_unit_combat).unwrap();
-        let log = app.world().resource::<crate::ui_chat::ChatLog>();
-        assert_eq!(log.pending_kinds(), ["xp", "unit combat"]);
+    fn a_swing_flashes_only_a_unit_and_only_when_displayed() {
+        let mut log = crate::ui_chat::ChatLog::default();
+        let swing = |displayed| crate::creature_anim::SwingMessage {
+            attacker: Entity::PLACEHOLDER,
+            victim: None,
+            hit_info: 0x80,
+            victim_state: 1,
+            damage: 40,
+            displayed,
+            seq: 0,
+        };
+        let store = |kind| {
+            crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(2, kind)]))
+        };
+        let (player, object) = (store(0x19), store(0x21));
+        melee_unit_combat(&mut log, &swing(false), Some((1, &player)));
+        melee_unit_combat(&mut log, &swing(true), Some((1, &object)));
+        melee_unit_combat(&mut log, &swing(true), None);
+        assert!(log.pending_unit_combat().is_empty());
+        melee_unit_combat(&mut log, &swing(true), Some((1, &player)));
         assert_eq!(
             log.pending_unit_combat(),
             [UnitCombatFeedback {

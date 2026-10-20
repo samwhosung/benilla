@@ -112,7 +112,8 @@ impl PluginGroup for GamePlugins {
             .add(QuestMarkersPlugin)
             .add(crate::pipe_warm::plugin)
             .add(EntitiesPlugin)
-            // The combat log, ahead of the animation layer, whose two shared kinds run second.
+            // The combat log, ahead of the animation layer, whose environmental-damage handler runs
+            // second; its swing handler registers ahead of the line (`net_handler_ahead`).
             .add(crate::combat_log::CombatLogPlugin)
             .add(CreatureAnimPlugin)
             // The blob shadow (`0x6d7920`), sized from the Stand box (`playableAnimationLookup[0]`,

@@ -90,7 +90,8 @@ pub(crate) struct Sinks<'w, 's> {
 }
 
 /// The combat log's handler registration. Added ahead of
-/// [`crate::creature_anim::CreatureAnimPlugin`], so a shared kind runs the line first.
+/// [`crate::creature_anim::CreatureAnimPlugin`], so the environmental-damage log runs the line
+/// first; the swing's animation half registers ahead of this one's line.
 pub(crate) struct CombatLogPlugin;
 
 impl Plugin for CombatLogPlugin {
@@ -893,6 +894,73 @@ mod tests {
             gain(ME, 60, true),
             (vec![], vec!["xp loss"], 0),
             "your own guid"
+        );
+    }
+
+    /// The two `SMSG_ATTACKERSTATEUPDATE` halves as the client registers them: the combat log's
+    /// line first, then the animation layer's, which runs ahead of it.
+    fn swing_world(held: &[u64]) -> App {
+        let mut app = world(held);
+        app.add_message::<crate::creature_anim::SwingMessage>()
+            .add_message::<crate::creature_anim::SwingImpact>()
+            .add_message::<crate::creature_anim::SheathRequest>()
+            .add_message::<crate::swing_refusal::SwingRefusalEdge>()
+            .init_resource::<crate::creature_anim::PendingImpacts>()
+            .init_resource::<crate::creature_anim::PlaySeq>()
+            .add_plugins(CombatLogPlugin);
+        crate::creature_anim::net::register(&mut app);
+        app
+    }
+
+    /// The creature hits you for 30.
+    fn mob_hits_me() -> SessionEvent {
+        SessionEvent::AttackerState(benilla_protocol::messages::AttackerState {
+            attacker: MOB,
+            victim: ME,
+            hit_info: 0x2,
+            damage: 30,
+            victim_state: 1,
+            absorb: 0,
+            resist: 0,
+            blocked: 0,
+            melee_spell_id: 0,
+            school: 0,
+        })
+    }
+
+    fn kinds(app: &App) -> Vec<&'static str> {
+        app.world().resource::<ChatLog>().pending_kinds()
+    }
+
+    /// `0x62578d` writes the packet's line last (`0x625a2c`, `0x625a78`): an attacker the client
+    /// does not hold flashes its victim first (`0x625a6d` → `0x624530`), and a held attacker's
+    /// superseded record flushes first (`0x625893`). `SMSG_ATTACKSTOP` flushes the survivor
+    /// (`0x624ea7`).
+    #[test]
+    fn a_swings_receive_time_flashes_queue_ahead_of_its_line() {
+        let mut app = swing_world(&[ME]);
+        crate::net::handlers::dispatch(app.world_mut(), vec![mob_hits_me()]);
+        assert_eq!(kinds(&app), ["unit combat", "combat"], "an unheld attacker");
+
+        let mut app = swing_world(&[ME, MOB]);
+        crate::net::handlers::dispatch(app.world_mut(), vec![mob_hits_me()]);
+        assert_eq!(kinds(&app), ["combat"], "the record waits for its key");
+        crate::net::handlers::dispatch(app.world_mut(), vec![mob_hits_me()]);
+        assert_eq!(
+            kinds(&app),
+            ["combat", "unit combat", "combat"],
+            "the superseded record, then the new line"
+        );
+        crate::net::handlers::dispatch(
+            app.world_mut(),
+            vec![SessionEvent::AttackStop {
+                attacker: MOB,
+                victim: ME,
+            }],
+        );
+        assert_eq!(
+            kinds(&app),
+            ["combat", "unit combat", "combat", "unit combat"]
         );
     }
 }

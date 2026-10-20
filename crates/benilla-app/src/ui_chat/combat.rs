@@ -49,7 +49,7 @@ pub(crate) fn holds_unit(guid: u64, index: &GuidIndex, stores: &impl Stores) -> 
 }
 
 /// Whether a held object is a unit, type bit 3 of `OBJECT_FIELD_TYPE`: a player or a creature.
-fn is_unit(store: &ObjectStore) -> bool {
+pub(crate) fn is_unit(store: &ObjectStore) -> bool {
     use benilla_protocol::messages::ObjectType;
     matches!(
         store.0.object_type(),
