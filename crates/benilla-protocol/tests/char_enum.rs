@@ -122,6 +122,37 @@ fn char_enum_roster_parses_and_decodes() {
     }
 }
 
+/// The character list parse stores level 1 for a record read with level 0 and sets the record's
+/// new-character byte `+0x10a` (`0x5b44e8` `test al,al`, `0x5b44f2` the store of 1, `0x5b44f9` the
+/// flag); any other level is kept and clears the byte (`0x5b4502`). The first-login wire byte
+/// (`+0x109`, 1 in every entry here) has no part in it.
+#[test]
+fn a_level_zero_record_is_stored_as_level_one_and_flagged_new() {
+    let mut body = vec![3u8];
+    for (guid, level) in [(1, 0), (2, 1), (3, 60)] {
+        body.extend(enum_entry(
+            guid,
+            "Lv",
+            1,
+            1,
+            0,
+            level,
+            0,
+            [1.0, 2.0, 3.0],
+            0,
+        ));
+    }
+    let p = messages::parse_server(messages::opcode::SMSG_CHAR_ENUM, &body).unwrap();
+    let ServerPacket::CharEnum { characters } = p else {
+        panic!("char enum")
+    };
+    let read: Vec<_> = characters
+        .iter()
+        .map(|c| (c.guid, c.level, c.new_character))
+        .collect();
+    assert_eq!(read, [(1, 1, true), (2, 1, false), (3, 60, false)]);
+}
+
 #[test]
 fn logout_complete_decodes_to_logged_out() {
     let p = messages::parse_server(messages::opcode::SMSG_LOGOUT_COMPLETE, &[]).unwrap();

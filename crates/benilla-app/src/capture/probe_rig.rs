@@ -801,6 +801,7 @@ mod tests {
             guid,
             name: name.into(),
             level,
+            new_character: false,
             race: 0,
             class: 0,
             gender: 0,

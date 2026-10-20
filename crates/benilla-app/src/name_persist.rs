@@ -148,6 +148,7 @@ mod tests {
                 hair_color: 0,
                 facial_hair: 0,
                 level: 1,
+                new_character: false,
                 zone: 0,
                 map: 0,
                 position: benilla_protocol::wire::Vector3d {

@@ -69,6 +69,8 @@ pub struct Character {
     pub hair_color: u8,
     pub facial_hair: u8,
     pub level: u8,
+    /// The record's new-character byte (`+0x10a`, `m_newCharacter`).
+    pub new_character: bool,
     /// `AreaTable.dbc` id of the character's zone.
     pub zone: u32,
     pub map: u32,
@@ -127,6 +129,7 @@ impl Character {
             hair_color,
             facial_hair,
             level,
+            new_character: false,
             zone,
             map,
             position,
