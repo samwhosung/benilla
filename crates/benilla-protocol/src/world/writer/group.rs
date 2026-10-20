@@ -33,7 +33,8 @@ impl WorldWriter {
         )
     }
 
-    /// Kick a group member by guid (`CMSG_GROUP_UNINVITE_GUID`), the raid frame's kick.
+    /// Kick a group member by guid (`CMSG_GROUP_UNINVITE_GUID`): what `0x5e9510` sends for a
+    /// player whose object the client does not hold (`0x5e953e`); a held one is kicked by name.
     pub fn group_uninvite_guid(&mut self, guid: u64) -> Result<()> {
         self.send(
             opcode::CMSG_GROUP_UNINVITE_GUID,

@@ -551,7 +551,8 @@ pub fn group_uninvite(member_name: &str) -> Vec<u8> {
     body
 }
 
-/// `CMSG_GROUP_UNINVITE_GUID` body, the raid frame's kick: a full guid (`Group.cpp:14-17`).
+/// `CMSG_GROUP_UNINVITE_GUID` body, the kick `0x5e9510` sends for a player whose object the client
+/// does not hold (`0x5e953e`): a full guid (`Group.cpp:14-17`).
 pub fn group_uninvite_guid(guid: u64) -> Vec<u8> {
     guid.to_le_bytes().to_vec()
 }
