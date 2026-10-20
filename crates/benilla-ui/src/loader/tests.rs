@@ -251,8 +251,10 @@ mod loader_tests {
         assert!(report.errors.is_empty(), "{:?}", report.errors);
         for (frame, global) in [("OnTexture", "ParentTexture"), ("OnFont", "ParentFont")] {
             assert!(
-                s.eval::<bool>(&format!("return {frame} ~= nil and {frame}:GetParent() == nil"))
-                    .unwrap(),
+                s.eval::<bool>(&format!(
+                    "return {frame} ~= nil and {frame}:GetParent() == nil"
+                ))
+                .unwrap(),
                 "{frame} is built parentless"
             );
             let want = format!("Couldn't find frame parent: {global}");

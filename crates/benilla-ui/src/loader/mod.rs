@@ -778,25 +778,25 @@ impl Loader<'_> {
         //      the default parent (`0x6ee3ef`), so the frame is built parentless (`0x6ee408`); an
         //      empty `parent=""` keeps the default parent silently (`0x6ee3c7`).
         //      `None`: no attribute, or an empty one. `Some(None)`: a miss, parentless and logged.
-        let attr_parent: Option<Option<Table>> =
-            el.attr("parent")
-                .filter(|name| !name.is_empty())
-                .map(|name| {
-                    // Only a frame counts: `0x76c760` asks the object at `[0]` for the Frame id
-                    // (`0x6ee3c9`), so a global holding another object, a region or a Font, or
-                    // none is a miss.
-                    let hit = self.lua().globals().get::<Table>(name).ok().filter(|t| {
-                        crate::script::object::decode_id(t)
-                            .is_ok_and(|id| self.model().id_to_frame.contains_key(&id))
-                    });
-                    if hit.is_none() {
-                        // The reference's wording (`0x8710f0`).
-                        self.report
-                            .warnings
-                            .push(format!("Couldn't find frame parent: {name}"));
-                    }
-                    hit
+        let attr_parent: Option<Option<Table>> = el
+            .attr("parent")
+            .filter(|name| !name.is_empty())
+            .map(|name| {
+                // Only a frame counts: `0x76c760` asks the object at `[0]` for the Frame id
+                // (`0x6ee3c9`), so a global holding another object, a region or a Font, or
+                // none is a miss.
+                let hit = self.lua().globals().get::<Table>(name).ok().filter(|t| {
+                    crate::script::object::decode_id(t)
+                        .is_ok_and(|id| self.model().id_to_frame.contains_key(&id))
                 });
+                if hit.is_none() {
+                    // The reference's wording (`0x8710f0`).
+                    self.report
+                        .warnings
+                        .push(format!("Couldn't find frame parent: {name}"));
+                }
+                hit
+            });
         let parent = match &attr_parent {
             Some(resolved) => resolved.as_ref(),
             None => parent,

@@ -1262,6 +1262,9 @@ fn a_font_objects_handle_is_a_light_userdata() {
         "CreateFrame('Frame'):CreateFontString():SetFontObject({ [0] = 0 })",
     ] {
         let e = s.run(code).unwrap_err().to_string();
-        assert!(e.contains("Couldn't find 'this' in font object"), "{code}: {e}");
+        assert!(
+            e.contains("Couldn't find 'this' in font object"),
+            "{code}: {e}"
+        );
     }
 }
