@@ -29,10 +29,28 @@ const PET_TOKEN_FALLBACK: &str = "PET";
 /// [`SpellBookState::slots`], computed by the app.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SpellTabView {
-    pub name: String,
+    pub name: SpellTabName,
     pub texture: Option<String>,
     pub offset: u32,
     pub num_spells: u32,
+}
+
+/// A tab's name as `GetSpellTabInfo` (`0x4b3ce0`) answers it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum SpellTabName {
+    /// The General tab, line 0: the `GENERAL` string read at the call (`0x4b3d4d`-`0x4b3d52`).
+    #[default]
+    General,
+    /// A skill line's `SkillLine.dbc` name (`0x4b3d8b`).
+    Line(String),
+    /// A skill line with no `SkillLine.dbc` row: nil, and a nil texture (`0x4b3dbd`).
+    Missing,
+}
+
+impl From<&str> for SpellTabName {
+    fn from(name: &str) -> Self {
+        Self::Line(name.to_string())
+    }
 }
 
 /// One spell in the flat book, every field resolved by the app.
@@ -381,19 +399,23 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetSpellTabInfo(i) -> name, texture, offset, numSpells, four values on every path
     // (`0x4b3ce0`). Out of range, 0 and negatives included (`0x4b3d26`), is `nil, nil, 0, 0`
     // (`0x4b3e12`): `SpellBookFrame.lua:295` and `:328` compare `id > (offset + numSpells)`
-    // unguarded, so the zeros hide every button where a nil would raise. In range, the reference
-    // answers a nil name and texture for a skill line with no DBC row (`0x4b3dbd`) and a nil
-    // texture for one with no icon (SkillLine 733, 753, 754); here the name is always a string.
-    // The index is truncated before the decrement, unlike in `0x4b3ec0`, so 0.5 is out of range.
+    // unguarded, so the zeros hide every button where a nil would raise. In range, the General
+    // tab's name is the `GENERAL` string read now (`0x4b3d4d`), a skill line with no DBC row
+    // answers a nil name and texture (`0x4b3dbd`), and one with no icon a nil texture (SkillLine
+    // 733, 753, 754). The index is truncated before the decrement, unlike in `0x4b3ec0`, so 0.5
+    // is out of range.
     g.set(
         "GetSpellTabInfo",
         lua.create_function(|lua, i: Value| {
             let i = super::binding_abi::number_arg(lua, i, "Usage: GetSpellTabInfo(index)")?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
             // Zero or a negative fails `usize::try_from`, as the unsigned compare fails it.
-            let tab = usize::try_from(i64::from(i) - 1)
-                .ok()
-                .and_then(|n| model.spellbook.tabs.get(n));
+            let tab = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                usize::try_from(i64::from(i) - 1)
+                    .ok()
+                    .and_then(|n| model.spellbook.tabs.get(n))
+                    .cloned()
+            };
             let Some(tab) = tab else {
                 return Ok(MultiValue::from_vec(vec![
                     Value::Nil,
@@ -406,8 +428,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Some(t) => Value::String(lua.create_string(t)?),
                 None => Value::Nil,
             };
+            // A `GlobalStrings` read runs an `_G` `__index`, made with the Model released;
+            // `GetText` answers a missing key with its empty string (`0x703bf0`).
+            let name = match &tab.name {
+                SpellTabName::General => Value::String(
+                    lua.create_string(crate::strings::global(lua, "GENERAL").unwrap_or_default())?,
+                ),
+                SpellTabName::Line(name) => Value::String(lua.create_string(name)?),
+                SpellTabName::Missing => Value::Nil,
+            };
             Ok(MultiValue::from_vec(vec![
-                Value::String(lua.create_string(&tab.name)?),
+                name,
                 texture,
                 Value::Integer(i64::from(tab.offset)),
                 Value::Integer(i64::from(tab.num_spells)),
@@ -752,7 +783,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{pickup_spell, PetBookState, SpellBookState, SpellSlotView, SpellTabView};
+    use super::{
+        pickup_spell, PetBookState, SpellBookState, SpellSlotView, SpellTabName, SpellTabView,
+    };
     use crate::script::cursor::{CursorAction, CursorPayload};
     use crate::script::UiScript;
 
@@ -926,6 +959,40 @@ mod tests {
 
         // Out of range: nil first.
         assert!(s.eval::<bool>("return GetSpellTabInfo(3) == nil").unwrap());
+    }
+
+    /// The General tab's name is `GENERAL` read at the call (`0x4b3d4d`), so a rewrite reaches
+    /// the next call, and empty without it (`0x703bf0`); a line with no DBC row answers a nil name
+    /// and texture (`0x4b3dbd`).
+    #[test]
+    fn the_general_tab_reads_its_name_at_each_call() {
+        let mut s = UiScript::new().unwrap();
+        s.set_spellbook(SpellBookState {
+            tabs: vec![
+                SpellTabView {
+                    name: SpellTabName::General,
+                    texture: Some("Interface\\Icons\\Ability_Kick".into()),
+                    offset: 0,
+                    num_spells: 1,
+                },
+                SpellTabView {
+                    name: SpellTabName::Missing,
+                    texture: None,
+                    offset: 1,
+                    num_spells: 1,
+                },
+            ],
+            slots: Vec::new(),
+        });
+        let first = |s: &UiScript| s.eval::<String>("return (GetSpellTabInfo(1))").unwrap();
+        assert_eq!(first(&s), "");
+        s.run(r#"GENERAL = "Allgemein""#).unwrap();
+        assert_eq!(first(&s), "Allgemein");
+        s.run(r#"GENERAL = "General""#).unwrap();
+        assert_eq!(first(&s), "General");
+        assert!(s
+            .eval::<bool>("local n, t = GetSpellTabInfo(2) return n == nil and t == nil")
+            .unwrap());
     }
 
     /// The reference's marshaller, `0x4b3ec0`.

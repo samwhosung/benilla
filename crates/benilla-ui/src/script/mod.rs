@@ -344,7 +344,7 @@ pub use skills::{SkillEntry, SkillsState};
 pub use social::{FriendInfo, SocialRequest, SocialState, WhoInfo};
 pub use sound::{MusicRequest, SoundRequest};
 pub use spellbook::{
-    resolve_spell_by_name, PetBookState, SpellBookState, SpellSlotView, SpellTabView,
+    resolve_spell_by_name, PetBookState, SpellBookState, SpellSlotView, SpellTabName, SpellTabView,
 };
 pub use stable::{StableIntent, StablePetSlot, StableState, NUM_STABLE_SLOTS};
 pub use summon::SummonConfirmUiState;

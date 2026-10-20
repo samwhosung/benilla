@@ -16,7 +16,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy::prelude::*;
 
 use benilla_formats::{SkillLineCatalog, SpellCatalog};
-use benilla_ui::script::{ScriptValue, SpellBookState, SpellSlotView, SpellTabView, UiScript};
+use benilla_ui::script::{
+    ScriptValue, SpellBookState, SpellSlotView, SpellTabName, SpellTabView, UiScript,
+};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
@@ -335,23 +337,32 @@ fn build_book(
         by_line.entry(tab).or_default().push(spell_id);
     }
 
-    // General first with its fixed name and icon, then by `SkillLine.dbc` name; an unresolved
-    // line reads "General" with no icon.
-    let mut lines: Vec<(u32, String, Option<String>, Vec<u32>)> = by_line
+    // General first with its fixed icon, named by `GENERAL` when `GetSpellTabInfo` asks, then by
+    // `SkillLine.dbc` name; an unresolved line answers no name and no icon (`0x4b3dbd`) and sorts
+    // where a line named "General" would.
+    let mut lines: Vec<(u32, SpellTabName, Option<String>, Vec<u32>)> = by_line
         .into_iter()
         .map(|(line_id, spell_ids)| {
             let (name, texture) = if line_id == NO_LINE {
-                ("General".to_string(), Some(GENERAL_TAB_ICON.to_string()))
+                (SpellTabName::General, Some(GENERAL_TAB_ICON.to_string()))
             } else {
                 match skill_lines.and_then(|c| c.line(line_id)) {
-                    Some(info) => (info.name.clone(), info.icon.clone()),
-                    None => ("General".to_string(), None),
+                    Some(info) => (SpellTabName::Line(info.name.clone()), info.icon.clone()),
+                    None => (SpellTabName::Missing, None),
                 }
             };
             (line_id, name, texture, spell_ids)
         })
         .collect();
-    lines.sort_by(|a, b| (a.0 != NO_LINE).cmp(&(b.0 != NO_LINE)).then(a.1.cmp(&b.1)));
+    let sort_name = |n: &SpellTabName| match n {
+        SpellTabName::Line(name) => name.clone(),
+        SpellTabName::General | SpellTabName::Missing => "General".to_string(),
+    };
+    lines.sort_by(|a, b| {
+        (a.0 != NO_LINE)
+            .cmp(&(b.0 != NO_LINE))
+            .then(sort_name(&a.1).cmp(&sort_name(&b.1)))
+    });
 
     let mut tabs = Vec::with_capacity(lines.len());
     let mut tab_lines = Vec::with_capacity(lines.len());
@@ -583,7 +594,7 @@ mod tests {
         let book = build_book(&known, &catalog, None, 1, 1, None, None).0;
 
         assert_eq!(book.tabs.len(), 1);
-        assert_eq!(book.tabs[0].name, "General");
+        assert_eq!(book.tabs[0].name, SpellTabName::General);
         assert_eq!(book.tabs[0].texture.as_deref(), Some(GENERAL_TAB_ICON));
         assert_eq!(book.tabs[0].num_spells, 3);
         let order: Vec<(&str, Option<&str>)> = book
