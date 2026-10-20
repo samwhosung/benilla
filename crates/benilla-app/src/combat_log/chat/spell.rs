@@ -375,6 +375,68 @@ pub(in crate::combat_log) fn spell_log_miss(
     }
 }
 
+/// `SMSG_SPELL_GO`'s miss list (`0x6e7d65`-`0x6e7e71`): one miss line per entry, with the
+/// ordinary spell chat types (flag 0, `0x6e7d83`), then for a reflect with an outcome
+/// (`0x6e7ded`-`0x6e7dfb`) the reflected spell's line, its outcome on the caster
+/// (`0x6e7dfd`-`0x6e7e14`). The line's caster is the packet's first guid for a unit or object
+/// caster, else the caster unit (`0x6e7d1c`-`0x6e7d4b`), which is the event's resolved caster.
+pub(in crate::combat_log) fn spell_go_misses(
+    caster: u64,
+    spell_id: u32,
+    misses: &[benilla_protocol::messages::SpellGoMiss],
+    ctx: &ChatCtx,
+    stores: &impl Stores,
+    poses: &impl Poses,
+    log: &mut ChatLog,
+) {
+    let Some(spell) = ctx.spell_name(spell_id) else {
+        return;
+    };
+    let caster = (caster, ctx.classify(caster, stores));
+    for m in misses {
+        let target = (m.target, ctx.classify(m.target, stores));
+        spell_miss(
+            log, ctx, poses, &spell, spell_id, caster, target, m.info, false, None,
+        );
+        if m.info == super::super::text::SPELL_MISS_REFLECT && m.reflect_result != 0 {
+            spell_miss(
+                log,
+                ctx,
+                poses,
+                &spell,
+                spell_id,
+                caster,
+                caster,
+                m.reflect_result,
+                false,
+                None,
+            );
+        }
+    }
+}
+
+/// A travelling spell's missed arrival on a live target (`0x61dd50`): its miss line, with the
+/// ordinary spell chat types (`0x61ddeb`, flag 0), from the missile's caster to its target.
+pub(in crate::combat_log) fn missile_miss(
+    caster: u64,
+    target: u64,
+    spell_id: u32,
+    code: u8,
+    ctx: &ChatCtx,
+    stores: &impl Stores,
+    poses: &impl Poses,
+    log: &mut ChatLog,
+) {
+    let Some(spell) = ctx.spell_name(spell_id) else {
+        return;
+    };
+    let caster = (caster, ctx.classify(caster, stores));
+    let target = (target, ctx.classify(target, stores));
+    spell_miss(
+        log, ctx, poses, &spell, spell_id, caster, target, code, false, None,
+    );
+}
+
 /// `SMSG_SPELLHEALLOG`: a heal line, a BUFF type (`0x62c770`), worded `HEAL` or `HEAL_CRIT` with
 /// the healer's name and the amount (`0x62c8ea`).
 pub(in crate::combat_log) fn spell_heal_log(

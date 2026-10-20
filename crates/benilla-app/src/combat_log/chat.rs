@@ -23,7 +23,8 @@ use crate::net::{GuidIndex, Reputations, SelfGuid};
 mod spell;
 use spell::power_drain_line;
 pub(super) use spell::{
-    periodic_aura_log, spell_damage_log, spell_energize_log, spell_heal_log, spell_log_miss,
+    missile_miss, periodic_aura_log, spell_damage_log, spell_energize_log, spell_go_misses,
+    spell_heal_log, spell_log_miss,
 };
 
 /// The classification inputs every line needs, built per packet from `super::Ctx`.

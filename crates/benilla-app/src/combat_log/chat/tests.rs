@@ -459,6 +459,7 @@ mod emitters {
             let s = SpellLogMiss {
                 spell_id: FIREBALL,
                 caster: MOB,
+                extended: false,
                 misses: vec![(ME, code)],
             };
             Bench::new()
@@ -468,5 +469,29 @@ mod emitters {
         let immune = miss(7);
         assert_eq!(stems(&immune), ["SPELLIMMUNE"]);
         assert_eq!(words(&immune), [named("SPELL_IMMUNE")]);
+    }
+
+    /// The GO's reflect leg logs the reflected spell's outcome on its caster, the caster on both
+    /// sides (`0x6e7dfd`-`0x6e7e14`), after the entry's own line; a reflect with no outcome has
+    /// its line alone (`0x6e7dfb`).
+    #[test]
+    fn a_go_reflect_logs_the_outcome_on_the_caster() {
+        use benilla_protocol::messages::SpellGoMiss;
+        let entry = |reflect_result| SpellGoMiss {
+            target: MOB,
+            info: 11,
+            reflect_result,
+        };
+        let misses = [entry(2), entry(0)];
+        let lines = Bench::new().lines(|ctx, st, po, log| {
+            super::super::spell_go_misses(ME, FIREBALL, &misses, ctx, st, po, log)
+        });
+        assert_eq!(
+            stems(&lines),
+            ["SPELLREFLECT", "SPELLRESIST", "SPELLREFLECT"]
+        );
+        let ends: Vec<_> = lines.iter().map(|l| (l.subject, l.object)).collect();
+        assert_eq!(ends, [(ME, MOB), (ME, ME), (ME, MOB)]);
+        assert_eq!(words(&lines), [None, named("SPELL_RESISTED"), None]);
     }
 }

@@ -343,7 +343,7 @@ fn attack_swing_refusal_wire() {
 /// `Server/Packets/Spell.cpp:54-58`.
 #[test]
 fn spell_visual_wire_golden() {
-    use benilla_protocol::messages::{SpellCastTargets, SpellGo, SpellStart};
+    use benilla_protocol::messages::{SpellCastTargets, SpellGo, SpellGoMiss, SpellStart};
 
     let creature = 0xF130_0000_4500_002Au64; // packs with mask 0xC9
 
@@ -423,6 +423,14 @@ fn spell_visual_wire_golden() {
     }
 
     // SMSG_SPELL_GO: only a SPELL_MISS_REFLECT miss carries the extra reflectResult byte.
+    let go_misses = || {
+        let miss = |target, info, reflect_result| SpellGoMiss {
+            target,
+            info,
+            reflect_result,
+        };
+        vec![miss(0xCC, 2, 0), miss(0xDD, 11, 2)]
+    };
     let body = hx(concat!(
         "0101",             // item_or_caster pguid: guid 1
         "c92a4530f1",       // caster pguid: the creature
@@ -453,7 +461,7 @@ fn spell_visual_wire_golden() {
                     spell_id: 75,
                     cast_flags: 0x120,
                     hits: vec![0xAA, 0xBB],
-                    misses: vec![(0xCC, 2), (0xDD, 11)],
+                    misses: go_misses(),
                     targets: SpellCastTargets {
                         mask: 0x2,
                         unit_target: Some(0xEE),
@@ -483,7 +491,7 @@ fn spell_visual_wire_golden() {
             assert_eq!(spell_id, 75);
             assert_eq!(cast_flags, 0x120);
             assert_eq!(hits, vec![0xAA, 0xBB]);
-            assert_eq!(misses, vec![(0xCC, 2), (0xDD, 11)]);
+            assert_eq!(misses, go_misses());
             assert_eq!(target, Some(0xEE));
             assert_eq!(go_target, None); // a unit-targeted cast leaves the GO target empty
             assert_eq!(dest, None); // …and the ground point empty (mask 0x2, no 0x40)
@@ -920,6 +928,7 @@ fn combat_log_wire_golden() {
                 &SpellLogMiss {
                     spell_id: 133,
                     caster: 0x42,
+                    extended: false,
                     misses: vec![(0xAA, 3), (0xBB, 11)],
                 }
             );

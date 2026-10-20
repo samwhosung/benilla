@@ -359,7 +359,8 @@ fn source_class(
 
 /// A travelling spell's miss word, floated when the projectile lands. `0x6e7a70` skips its inline
 /// emit when Speed (`SpellRec+0x94`) is nonzero (`0x6e7d4e`); the arrival re-resolves the record
-/// from `[missile+0x18]` and calls `0x607140`, so the word takes the spell's colour.
+/// from `[missile+0x18]` and calls `0x607140` for a record without `Attributes & 0x100`
+/// (`0x61dda3`), so the word takes the spell's colour.
 fn missile_miss_text(
     mut arrivals: MessageReader<crate::entities::MissileMiss>,
     self_player: Query<(), With<crate::net::SelfPlayer>>,
@@ -376,10 +377,12 @@ fn missile_miss_text(
         let Some(source) = source_class(arrival.caster, &self_player, &self_guid, &stores) else {
             continue; // K = other: never drawn
         };
-        let display = spells
-            .as_ref()
-            .and_then(|s| s.catalog.get(arrival.spell_id));
-        let Some(color) = damage_color(*gates, source, melee_styled(display)) else {
+        let Some(display) =
+            crate::ui_chat::combat::feedback_spell(spells.as_deref(), arrival.spell_id)
+        else {
+            continue;
+        };
+        let Some(color) = damage_color(*gates, source, melee_styled(Some(display))) else {
             continue; // the CombatDamage and Pet* gates, read inside `0x607140`
         };
         if let Some((word, category)) = miss_word(arrival.code) {

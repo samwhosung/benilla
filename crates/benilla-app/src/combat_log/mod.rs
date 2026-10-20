@@ -13,9 +13,10 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use crate::combat_text::{CombatTextSpawn, DamageTextGates};
+use crate::entities::MissileMiss;
 use crate::names::NameCache;
 use crate::net::{
-    GuidIndex, NetHandlerApp, ObjectStore, Reputations, SelfGuid, ServerSoundMessage,
+    Guid, GuidIndex, NetHandlerApp, ObjectStore, Reputations, SelfGuid, ServerSoundMessage,
 };
 use crate::ui_chat::combat::{CombatLogRanges, LogPeriodicSpells};
 use crate::ui_chat::ChatLog;
@@ -84,6 +85,7 @@ impl Plugin for CombatLogPlugin {
             .net_handler(K::SpellEnergizeLog, on_spell_energize_log)
             .net_handler(K::DamageShield, on_damage_shield)
             .net_handler(K::SpellLogMiss, on_spell_log_miss)
+            .net_handler(K::SpellGo, on_spell_go)
             .net_handler(K::PartyKillLog, on_party_kill_log)
             .net_handler(K::SpellInstaKillLog, on_spell_insta_kill_log)
             .net_handler(K::ProcResist, on_spell_outcome_log)
@@ -96,7 +98,10 @@ impl Plugin for CombatLogPlugin {
             .net_handler(K::XpGain, on_xp_gain)
             .net_handler(K::ExplorationXp, on_exploration_xp)
             .net_handler(K::LevelUp, on_level_up)
-            .net_handler(K::PvpCredit, on_pvp_credit);
+            .net_handler(K::PvpCredit, on_pvp_credit)
+            // Written by the missile flight; declared here too, as registering is idempotent.
+            .add_message::<MissileMiss>()
+            .add_systems(Update, on_missile_miss);
     }
 }
 
@@ -179,8 +184,12 @@ fn on_damage_shield(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     }
 }
 
+/// An extended packet hands its entries' floats to a hook and emits nothing (`0x5e7ec1`).
 fn on_spell_log_miss(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     if let SessionEvent::SpellLogMiss(s) = ev {
+        if s.extended {
+            return;
+        }
         let ctx = c.ctx();
         chat::spell_log_miss(&s, &ctx, &l.stores, &l.poses, &mut l.log);
         text::spell_log_miss(
@@ -192,6 +201,79 @@ fn on_spell_log_miss(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
             *l.damage_text,
             &mut l.text,
             &mut l.feedback,
+        );
+    }
+}
+
+/// `SMSG_SPELL_GO`'s miss list, for a spell with a record (`0x6e7cf7`) whose Speed is 0
+/// (`0x6e7d4e`-`0x6e7d5f`): a travelling spell's misses wait for its missile
+/// ([`on_missile_miss`]).
+fn on_spell_go(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
+    let SessionEvent::SpellGo {
+        caster,
+        spell_id,
+        misses,
+        ..
+    } = ev
+    else {
+        return;
+    };
+    let spells = c.spells.as_deref();
+    let Some(display) = spells.and_then(|s| s.catalog.get(spell_id)) else {
+        return;
+    };
+    if misses.is_empty() || display.speed != 0.0 {
+        return;
+    }
+    let ctx = c.ctx();
+    chat::spell_go_misses(
+        caster, spell_id, &misses, &ctx, &l.stores, &l.poses, &mut l.log,
+    );
+    text::spell_go_misses(
+        caster,
+        spell_id,
+        &misses,
+        &c.index,
+        &c.self_guid,
+        &l.stores,
+        spells,
+        *l.damage_text,
+        &mut l.text,
+        &mut l.feedback,
+    );
+}
+
+/// A travelling spell's missed arrival on a live target (`0x61dd50`): its `UNIT_COMBAT`, then its
+/// line. The missile holds its caster by entity; one gone mid-flight is the line's unresolved
+/// endpoint.
+fn on_missile_miss(
+    mut arrivals: MessageReader<MissileMiss>,
+    guids: Query<&Guid>,
+    c: Ctx,
+    mut l: Sinks,
+) {
+    for arrival in arrivals.read() {
+        let Ok(&Guid(target)) = guids.get(arrival.anchor) else {
+            continue;
+        };
+        let caster = guids.get(arrival.caster).map_or(0, |g| g.0);
+        text::missile_miss(
+            arrival.anchor,
+            arrival.spell_id,
+            arrival.code,
+            c.spells.as_deref(),
+            &mut l.feedback,
+        );
+        let ctx = c.ctx();
+        chat::missile_miss(
+            caster,
+            target,
+            arrival.spell_id,
+            arrival.code,
+            &ctx,
+            &l.stores,
+            &l.poses,
+            &mut l.log,
         );
     }
 }
@@ -313,6 +395,10 @@ mod tests {
     const ME: u64 = 1;
     const MOB: u64 = 2;
     const CORRUPTION: u32 = 172;
+    /// Speed 0: an instant ability.
+    const STRIKE: u32 = 11976;
+    /// Speed 24: it travels.
+    const FROSTBOLT: u32 = 116;
 
     /// The handler's world: you and a creature held, Corruption known, the log empty.
     fn world(held: &[u64]) -> App {
@@ -327,24 +413,36 @@ mod tests {
             .init_resource::<ChatLog>()
             .insert_resource(SelfGuid(Some(ME)))
             .insert_resource(LogPeriodicSpells(true))
+            .add_message::<MissileMiss>()
             .insert_resource(crate::ui_action::Spells {
                 catalog: benilla_formats::SpellCatalog::from_displays(
-                    [(
-                        CORRUPTION,
-                        benilla_formats::SpellDisplay {
-                            id: CORRUPTION,
-                            name: "Corruption".into(),
-                            ..Default::default()
-                        },
-                    )]
+                    [
+                        (CORRUPTION, "Corruption", 0.0),
+                        (STRIKE, "Strike", 0.0),
+                        (FROSTBOLT, "Frostbolt", 24.0),
+                    ]
                     .into_iter()
+                    .map(|(id, name, speed)| {
+                        (
+                            id,
+                            benilla_formats::SpellDisplay {
+                                id,
+                                name: name.into(),
+                                speed,
+                                ..Default::default()
+                            },
+                        )
+                    })
                     .collect(),
                 ),
                 ..crate::ui_action::Spells::empty_for_tests()
             });
         for unit in [player(ME, HUMAN), creature(MOB, ORC)] {
             if held.contains(&unit.guid) {
-                let e = app.world_mut().spawn(store_of(&unit)).id();
+                let e = app
+                    .world_mut()
+                    .spawn((Guid(unit.guid), store_of(&unit)))
+                    .id();
                 app.world_mut()
                     .resource_mut::<GuidIndex>()
                     .0
@@ -387,5 +485,96 @@ mod tests {
     fn a_periodic_tick_on_a_target_not_held_leaves_nothing() {
         assert_eq!(tick(&[ME, MOB]), (1, 1));
         assert_eq!(tick(&[ME]), (0, 0));
+    }
+
+    /// What a world left after one packet: the parked lines and the flashes.
+    fn left(app: &mut App) -> (usize, usize) {
+        let lines = app.world().resource::<ChatLog>().pending_kinds().len();
+        let flashes = app
+            .world_mut()
+            .resource_mut::<Messages<UnitCombatFeedback>>()
+            .drain()
+            .count();
+        (lines, flashes)
+    }
+
+    /// The creature's `spell_id` missing you in its `SMSG_SPELL_GO`.
+    fn go_miss(spell_id: u32) -> (usize, usize) {
+        let mut app = world(&[ME, MOB]);
+        let packet = SessionEvent::SpellGo {
+            caster: MOB,
+            spell_id,
+            cast_flags: 0,
+            hits: vec![],
+            misses: vec![benilla_protocol::messages::SpellGoMiss {
+                target: ME,
+                info: 3,
+                reflect_result: 0,
+            }],
+            target: Some(ME),
+            go_target: None,
+            dest: None,
+            ammo_display_id: None,
+            item_caster: None,
+        };
+        app.world_mut()
+            .run_system_once_with(on_spell_go, packet)
+            .unwrap();
+        left(&mut app)
+    }
+
+    /// `0x6e7a70` runs its miss list only for a spell with a record (`0x6e7cf7`) and Speed 0
+    /// (`0x6e7d4e`): an instant's dodge has its line and flash at the packet, a travelling spell's
+    /// wait for the missile, and an unknown spell's never come.
+    #[test]
+    fn a_go_miss_logs_at_the_packet_only_for_an_instant_spell() {
+        assert_eq!(go_miss(STRIKE), (1, 1));
+        assert_eq!(go_miss(FROSTBOLT), (0, 0));
+        assert_eq!(go_miss(24_000), (0, 0));
+    }
+
+    /// An extended `SMSG_SPELLLOGMISS` hands its floats to a hook and emits nothing (`0x5e7ec1`).
+    #[test]
+    fn an_extended_spell_log_miss_emits_nothing() {
+        let miss = |extended| {
+            let mut app = world(&[ME, MOB]);
+            let packet = SessionEvent::SpellLogMiss(benilla_protocol::messages::SpellLogMiss {
+                spell_id: STRIKE,
+                caster: MOB,
+                extended,
+                misses: vec![(ME, 6)],
+            });
+            app.world_mut()
+                .run_system_once_with(on_spell_log_miss, packet)
+                .unwrap();
+            left(&mut app)
+        };
+        assert_eq!(miss(false), (1, 1));
+        assert_eq!(miss(true), (0, 0));
+    }
+
+    /// A travelling spell's miss logs on arrival (`0x61dd50`): its flash (`0x61ddcc`), then its
+    /// line (`0x61ddeb`), the missile's caster to its target.
+    #[test]
+    fn a_missile_miss_logs_on_arrival() {
+        let mut app = world(&[ME, MOB]);
+        let entity = |app: &App, guid| app.world().resource::<GuidIndex>().0[&guid];
+        let (caster, anchor) = (entity(&app, MOB), entity(&app, ME));
+        app.world_mut().write_message(MissileMiss {
+            caster,
+            anchor,
+            spell_id: FROSTBOLT,
+            code: 2,
+        });
+        app.world_mut().run_system_once(on_missile_miss).unwrap();
+        let lines: Vec<_> = app
+            .world()
+            .resource::<ChatLog>()
+            .pending_combat()
+            .iter()
+            .map(|l| (l.family.stem, l.subject, l.object))
+            .collect();
+        assert_eq!(lines, [("SPELLRESIST", MOB, ME)]);
+        assert_eq!(left(&mut app).1, 1);
     }
 }

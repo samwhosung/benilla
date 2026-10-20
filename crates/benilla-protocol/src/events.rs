@@ -623,7 +623,7 @@ pub enum SessionEvent {
         spell_id: u32,
         cast_flags: u16,
         hits: Vec<u64>,
-        misses: Vec<(u64, u8)>,
+        misses: Vec<crate::messages::SpellGoMiss>,
         target: Option<u64>,
         /// The GameObject an open-lock cast targets (`TARGET_FLAG_GAMEOBJECT`), a chest or door.
         go_target: Option<u64>,

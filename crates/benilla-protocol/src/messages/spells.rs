@@ -170,10 +170,19 @@ pub struct SpellGo {
     pub spell_id: u32,
     pub cast_flags: u16,
     pub hits: Vec<u64>,
-    /// `(guid, SpellMissInfo)`; a reflect's trailing outcome byte is dropped.
-    pub misses: Vec<(u64, u8)>,
+    pub misses: Vec<SpellGoMiss>,
     pub targets: SpellCastTargets,
     pub ammo_display_id: Option<u32>,
+}
+
+/// One `SMSG_SPELL_GO` miss entry: the target and its `SpellMissInfo`, and for a reflect (11) the
+/// reflected spell's outcome on its caster, 0 otherwise (the client's `[ebp-0x68]` array, read
+/// by `0x6e7df3`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpellGoMiss {
+    pub target: u64,
+    pub info: u8,
+    pub reflect_result: u8,
 }
 
 pub(super) fn read_spell_go(r: &mut impl Read) -> io::Result<SpellGo> {
@@ -191,12 +200,18 @@ pub(super) fn read_spell_go(r: &mut impl Read) -> io::Result<SpellGo> {
     let miss_count = read_u8(r)?;
     let mut misses = Vec::with_capacity(capacity_hint(miss_count, usize::from(u8::MAX)));
     for _ in 0..miss_count {
-        let guid = read_u64_le(r)?;
-        let reason = read_u8(r)?;
-        if reason == SPELL_MISS_REFLECT {
-            let _reflect_result = read_u8(r)?;
-        }
-        misses.push((guid, reason));
+        let target = read_u64_le(r)?;
+        let info = read_u8(r)?;
+        let reflect_result = if info == SPELL_MISS_REFLECT {
+            read_u8(r)?
+        } else {
+            0
+        };
+        misses.push(SpellGoMiss {
+            target,
+            info,
+            reflect_result,
+        });
     }
 
     let targets = read_spell_cast_targets(r)?;

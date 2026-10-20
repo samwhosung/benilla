@@ -291,16 +291,16 @@ fn ensure_ammo_model(
     Some(key)
 }
 
-/// A travelling spell's deferred miss word. `SMSG_SPELL_GO` skips its inline word when the
+/// A travelling spell's deferred miss. `SMSG_SPELL_GO` skips its inline miss list when the
 /// `Spell.dbc` Speed is nonzero (`0x6e7d4e`); the arrival re-resolves the spell from
-/// `[missile+0x18]` and calls the same emitter `0x607140`. Its source class, CVar gates and colour
-/// are `crate::combat_text::missile_miss_text`'s.
+/// `[missile+0x18]` and calls the same emitters: the word `0x607140`
+/// (`crate::combat_text::missile_miss_text`), `UNIT_COMBAT` and the line (`crate::combat_log`).
 #[derive(Message, Clone, Copy)]
 pub(crate) struct MissileMiss {
-    /// The colour law's source class (`K`).
+    /// The colour law's source class (`K`), and the line's caster.
     pub(crate) caster: Entity,
-    /// Always the missed target (`0x61ddb3`; `0x61d9dc`'s is the per-entry target). Unlike the
-    /// inline site the arrival floats Reflect over the target, and the caster's word belongs to
+    /// Always the missed target (`0x61ddb3`; `0x61d9dc`'s is the per-entry target). Reflect
+    /// floats over the target, as at the inline site (`0x6e7dd4`); the caster's word belongs to
     /// the re-launched flight, which is not built.
     pub(crate) anchor: Entity,
     /// The colour law's `B` bit resolves off its record.

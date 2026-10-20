@@ -229,7 +229,7 @@ pub use spellbook::SpellCooldown;
 pub use spells::{
     cancel_aura, cast_spell, cast_spell_at_dest, cast_spell_at_source, cast_spell_corpse,
     cast_spell_gameobject, cast_spell_item, CastOutcome, CorpseTarget, SpellCastTargets,
-    SpellChainTargets, SpellGo, SpellStart,
+    SpellChainTargets, SpellGo, SpellGoMiss, SpellStart,
 };
 pub use stable::{
     buy_stable_slot, list_stabled_pets, stable_pet, stable_result, stable_swap_pet, unstable_pet,

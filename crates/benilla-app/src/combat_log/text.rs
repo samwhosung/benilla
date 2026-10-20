@@ -54,12 +54,6 @@ pub(crate) fn classify_source(
 // The melee number and word (`SMSG_ATTACKERSTATEUPDATE`) spawn at the swing's impact keyframe
 // (`crate::combat_text::melee_impact_text`), not here.
 
-/// The colour law's `B` bit for a spell-packet emit, from the spell's record via
-/// [`crate::combat_text::melee_styled`]: a ranged basic shot floats white, a spell gold.
-fn melee_styled(spells: Option<&crate::ui_action::Spells>, spell_id: u32) -> bool {
-    crate::combat_text::melee_styled(spells.and_then(|s| s.catalog.get(spell_id)))
-}
-
 /// `UNIT_COMBAT`'s descriptor, as its one emitter `0x494600` picks it from the packet's flags:
 /// with an amount, `CRITICAL` (`0x80`), `GLANCING` (`0x4000`), `CRUSHING` (`0x8000`); without one,
 /// `ABSORB` (`0x20`), `BLOCK` (`0x800`), `RESIST` (`0x40`); else empty, which the stock portrait
@@ -303,10 +297,11 @@ pub(super) fn spell_heal_log(
     }
 }
 
-/// Miss code (vmangos `SpellMissInfo`, 1 to 11) to the `UNIT_COMBAT` action word, the worldtext
-/// words' table in the event's uppercase keys (`CombatFeedbackText`).
+/// Miss code (vmangos `SpellMissInfo`) to the `UNIT_COMBAT` action word, the table `0x86582c` that
+/// `0x494720` indexes for a code from 0 to 11, `NONE` first; any other code fires nothing.
 fn miss_action(code: u8) -> Option<&'static str> {
     Some(match code {
+        0 => "NONE",
         1 => "MISS",
         2 => "RESIST",
         3 => "DODGE",
@@ -321,9 +316,63 @@ fn miss_action(code: u8) -> Option<&'static str> {
     })
 }
 
-/// `SMSG_SPELLLOGMISS`: one outcome word per missed target (`0x5e7e00`); vmangos sends only
-/// impact-time outcomes (immune, evade) here. Coloured by the same law as a number: `0x5e7f66`
-/// pushes the resolved spell record, not NULL, so the words are spell gold.
+/// `0x494720(unit, code)`: a miss's `UNIT_COMBAT`, amount, school and flags all 0.
+fn miss_feedback(unit: Entity, code: u8, feedback: &mut MessageWriter<UnitCombatFeedback>) {
+    if let Some(action) = miss_action(code) {
+        feedback.write(UnitCombatFeedback {
+            unit,
+            action,
+            flags: "",
+            amount: 0,
+            school: 0,
+        });
+    }
+}
+
+/// The colour a spell's miss words take, or `None` where `0x607140` draws nothing: the same
+/// source class and three CVars as the number emitter, `CombatDamage` (`0x60718f`),
+/// `PetSpellDamage` (`0x6071a6`) and `PetMeleeDamage` (`0x6071c5`), with the spell's record pushed,
+/// so the words are spell gold.
+fn miss_color(
+    caster: u64,
+    display: &benilla_formats::SpellDisplay,
+    index: &GuidIndex,
+    self_guid: &SelfGuid,
+    stores: &Query<&mut ObjectStore>,
+    gates: DamageTextGates,
+) -> Option<Option<u32>> {
+    let source = classify_source(caster, index, self_guid, stores)?;
+    damage_color(
+        gates,
+        source,
+        crate::combat_text::melee_styled(Some(display)),
+    )
+}
+
+/// `0x607140`'s miss word over `guid`, a unit the client holds and not you (Gate A).
+fn miss_float(
+    guid: u64,
+    code: u8,
+    color: Option<Option<u32>>,
+    index: &GuidIndex,
+    self_guid: &SelfGuid,
+    text: &mut MessageWriter<CombatTextSpawn>,
+) {
+    if let (Some(color), Some(anchor), Some((word, category))) =
+        (color, gated_anchor(guid, index, self_guid), miss_word(code))
+    {
+        text.write(CombatTextSpawn {
+            anchor,
+            text: word.to_string(),
+            category,
+            color,
+        });
+    }
+}
+
+/// `SMSG_SPELLLOGMISS` (`0x5e7e00`), per missed target of a spell with a record and no
+/// `Attributes & 0x100` (`0x5e7f0b`-`0x5e7f18`): `UNIT_COMBAT` (`0x5e7f23`), then, after the line,
+/// the word over the target (`0x5e7f6e`).
 pub(super) fn spell_log_miss(
     s: SpellLogMiss,
     index: &GuidIndex,
@@ -334,37 +383,68 @@ pub(super) fn spell_log_miss(
     text: &mut MessageWriter<CombatTextSpawn>,
     feedback: &mut MessageWriter<UnitCombatFeedback>,
 ) {
-    // UNIT_COMBAT for each missed target, any source.
+    let Some(display) = combat::feedback_spell(spells, s.spell_id) else {
+        return;
+    };
+    let color = miss_color(s.caster, display, index, self_guid, stores, gates);
     for &(target, code) in &s.misses {
-        if let (Some(&unit), Some(action)) = (index.0.get(&target), miss_action(code)) {
-            feedback.write(UnitCombatFeedback {
-                unit,
-                action,
-                flags: "",
-                amount: 0,
-                school: 0,
-            });
+        if let Some(&unit) = index.0.get(&target) {
+            miss_feedback(unit, code, feedback);
+        }
+        miss_float(target, code, color, index, self_guid, text);
+    }
+}
+
+/// `SMSG_SPELL_GO`'s miss list (`0x6e7d65`-`0x6e7e71`), for a spell with a record and no
+/// `Attributes & 0x100` (`0x6e7d9a`): per entry, after its line, the word over the target
+/// (`0x6e7dd4`) and its `UNIT_COMBAT` (`0x6e7de5`); a reflect with an outcome then words that
+/// outcome over the caster (`0x6e7e51`) and flashes it on the caster (`0x6e7e5f`).
+pub(super) fn spell_go_misses(
+    caster: u64,
+    spell_id: u32,
+    misses: &[benilla_protocol::messages::SpellGoMiss],
+    index: &GuidIndex,
+    self_guid: &SelfGuid,
+    stores: &Query<&mut ObjectStore>,
+    spells: Option<&crate::ui_action::Spells>,
+    gates: DamageTextGates,
+    text: &mut MessageWriter<CombatTextSpawn>,
+    feedback: &mut MessageWriter<UnitCombatFeedback>,
+) {
+    let Some(display) = combat::feedback_spell(spells, spell_id) else {
+        return;
+    };
+    let color = miss_color(caster, display, index, self_guid, stores, gates);
+    let mut emit = |guid: u64, code: u8| {
+        miss_float(guid, code, color, index, self_guid, text);
+        if let Some(&unit) = index.0.get(&guid) {
+            miss_feedback(unit, code, feedback);
+        }
+    };
+    for m in misses {
+        emit(m.target, m.info);
+        if m.info == SPELL_MISS_REFLECT && m.reflect_result != 0 {
+            emit(caster, m.reflect_result);
         }
     }
-    // The word emitter `0x607140` checks the same three CVars as the number emitter `0x6128b0`:
-    // `CombatDamage` (`0x60718f`), `PetSpellDamage` (`0x6071a6`), `PetMeleeDamage` (`0x6071c5`).
-    let Some(source) = classify_source(s.caster, index, self_guid, stores) else {
-        return; // K = other: never drawn
-    };
-    let Some(color) = damage_color(gates, source, melee_styled(spells, s.spell_id)) else {
-        return; // the CombatDamage / Pet* gates
-    };
-    for &(target, code) in &s.misses {
-        if let (Some(anchor), Some((word, category))) =
-            (gated_anchor(target, index, self_guid), miss_word(code))
-        {
-            text.write(CombatTextSpawn {
-                anchor,
-                text: word.to_string(),
-                category,
-                color,
-            });
-        }
+}
+
+/// vmangos `SPELL_MISS_REFLECT` (`SpellDefines.h:173`), the code the GO's reflect leg tests
+/// (`0x6e7ded`).
+pub(super) const SPELL_MISS_REFLECT: u8 = 11;
+
+/// A travelling spell's missed arrival on a live target (`0x61dd50`): `UNIT_COMBAT` with the
+/// missile's code for a spell with a record and no `Attributes & 0x100` (`0x61dda3`, `0x61ddcc`).
+/// Its word is [`crate::combat_text`]'s.
+pub(super) fn missile_miss(
+    target: Entity,
+    spell_id: u32,
+    code: u8,
+    spells: Option<&crate::ui_action::Spells>,
+    feedback: &mut MessageWriter<UnitCombatFeedback>,
+) {
+    if combat::feedback_spell(spells, spell_id).is_some() {
+        miss_feedback(target, code, feedback);
     }
 }
 
@@ -510,6 +590,7 @@ mod tests {
                         SpellLogMiss {
                             spell_id: IMMOLATE,
                             caster: 10,
+                            extended: false,
                             misses: vec![(20, 7)], // IMMUNE, an outcome vmangos sends here
                         },
                         &index,
@@ -785,5 +866,103 @@ mod tests {
             )
         );
         assert_eq!(leg.run(tick(HIDDEN)), (vec![], vec![]));
+    }
+
+    impl Packet for SpellLogMiss {
+        fn emit(
+            self,
+            index: &GuidIndex,
+            self_guid: &SelfGuid,
+            stores: &Query<&mut ObjectStore>,
+            spells: &crate::ui_action::Spells,
+            text: &mut MessageWriter<CombatTextSpawn>,
+            feedback: &mut MessageWriter<UnitCombatFeedback>,
+        ) {
+            spell_log_miss(
+                self,
+                index,
+                self_guid,
+                stores,
+                Some(spells),
+                DamageTextGates::default(),
+                text,
+                feedback,
+            );
+        }
+    }
+
+    /// One `SMSG_SPELL_GO` miss list: the caster, the spell, the entries.
+    struct GoMisses(u64, u32, Vec<benilla_protocol::messages::SpellGoMiss>);
+
+    impl Packet for GoMisses {
+        fn emit(
+            self,
+            index: &GuidIndex,
+            self_guid: &SelfGuid,
+            stores: &Query<&mut ObjectStore>,
+            spells: &crate::ui_action::Spells,
+            text: &mut MessageWriter<CombatTextSpawn>,
+            feedback: &mut MessageWriter<UnitCombatFeedback>,
+        ) {
+            spell_go_misses(
+                self.0,
+                self.1,
+                &self.2,
+                index,
+                self_guid,
+                stores,
+                Some(spells),
+                DamageTextGates::default(),
+                text,
+                feedback,
+            );
+        }
+    }
+
+    /// The GO's miss list words and flashes each target (`0x6e7dd4`, `0x6e7de5`), Reflect over
+    /// the target too, and a reflect's outcome on the caster (`0x6e7e51`, `0x6e7e5f`), which over
+    /// you is no float (Gate A); a hidden spell does neither (`0x6e7d9a`).
+    #[test]
+    fn a_go_miss_list_flashes_and_floats_each_entry_and_the_reflected_outcome() {
+        let mut leg = Leg::new();
+        let entry = |target, info, reflect_result| benilla_protocol::messages::SpellGoMiss {
+            target,
+            info,
+            reflect_result,
+        };
+        assert_eq!(
+            leg.run(GoMisses(ME, FIREBALL, vec![entry(MOB, 11, 2)])),
+            (
+                vec![("REFLECT", "", 0), ("RESIST", "", 0)],
+                vec!["Reflect".to_string()]
+            )
+        );
+        assert_eq!(
+            leg.run(GoMisses(ME, FIREBALL, vec![entry(MOB, 3, 0)])),
+            (vec![("DODGE", "", 0)], vec!["Dodge".to_string()])
+        );
+        assert_eq!(
+            leg.run(GoMisses(ME, HIDDEN, vec![entry(MOB, 3, 0)])),
+            (vec![], vec![])
+        );
+    }
+
+    /// `0x494720` flashes code 0 too, as `NONE` (table `0x86582c`), under the same
+    /// `Attributes & 0x100` gate as the word (`0x5e7f15`).
+    #[test]
+    fn a_spell_log_miss_flashes_code_zero_as_none_for_a_logged_spell() {
+        let mut leg = Leg::new();
+        let miss = |spell_id, code| SpellLogMiss {
+            spell_id,
+            caster: ME,
+            extended: false,
+            misses: vec![(MOB, code)],
+        };
+        assert_eq!(leg.run(miss(FIREBALL, 0)), (vec![("NONE", "", 0)], vec![]));
+        assert_eq!(
+            leg.run(miss(FIREBALL, 7)),
+            (vec![("IMMUNE", "", 0)], vec!["Immune".to_string()])
+        );
+        assert_eq!(leg.run(miss(HIDDEN, 7)), (vec![], vec![]));
     }
 }
