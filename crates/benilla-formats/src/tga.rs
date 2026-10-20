@@ -437,8 +437,22 @@ mod tests {
                 "type {image_type}: {err}"
             );
         }
-        // Any other pair that does not leave 24 is refused, whatever the bytes could mean.
-        for (bpp, alpha_bits) in [(32, 4), (32, 1), (24, 4), (24, 1), (16, 0), (16, 1)] {
+        // Any other pair that does not leave 24 is refused, whatever the bytes could mean. So are
+        // the pairs that do, bar 24 and 32 bits: `0x5a37e0` admits them and the reference crashes
+        // at `0x4492c4` (the module's third Deviation).
+        for (bpp, alpha_bits) in [
+            (32, 4),
+            (32, 1),
+            (24, 4),
+            (24, 1),
+            (16, 0),
+            (16, 1),
+            (25, 1),
+            (28, 4),
+            (31, 7),
+            (33, 9),
+            (39, 15),
+        ] {
             assert!(
                 tga_to_rgba(&tga(2, 1, 1, bpp, 0x20 | alpha_bits, &bgra)).is_err(),
                 "{bpp} bits, {alpha_bits} alpha bits"
@@ -520,16 +534,11 @@ mod tests {
             Some((512, 1))
         );
 
-        // A size that is not a power of two below 1024 makes no texture, nor does a zero one.
-        for (w, h) in [
-            (3, 2),
-            (4, 1024),
-            (1024, 4),
-            (0, 4),
-            (4, 0),
-            (65535, 2),
-            (6, 6),
-        ] {
+        // A zero size passes `0x44849d`'s test; a size that is not a power of two below 1024
+        // makes no texture.
+        assert_eq!(tga_texture_size(&tga(2, 0, 4, 32, 0x28, &[])), Some((0, 4)));
+        assert_eq!(tga_texture_size(&tga(2, 4, 0, 32, 0x28, &[])), Some((4, 0)));
+        for (w, h) in [(3, 2), (4, 1024), (1024, 4), (65535, 2), (6, 6)] {
             assert_eq!(
                 tga_texture_size(&tga(2, w, h, 32, 0x28, &[0; 8])),
                 None,

@@ -1311,7 +1311,30 @@ mod tests {
         assert!(rgba.iter().all(|&b| b == 0xff));
         // A load that is not `TextureCreate`'s still gets no pixels.
         assert!(decode_sprite(&chain, &loose, icon, LooseOpen::Index).is_none());
-        assert!(sprite_found(&chain, &loose, odd));
-        assert_eq!(sprite_dimensions(&chain, &loose, odd), None);
+        // Not a size `0x448450` makes (`0x4484ae`-`0x4484d0`): `TextureCreate` fails the candidate
+        // whether its pixels decode or not, and `SetTexture` answers nil.
+        std::fs::write(dir.join("Wide.tga"), decodable_tga(6, 1)).unwrap();
+        std::fs::write(dir.join("Fine.tga"), decodable_tga(2, 1)).unwrap();
+        for (name, found, size) in [
+            ("Odd", false, None),
+            ("Wide", false, None),
+            ("Fine", true, Some((2, 1))),
+        ] {
+            let path = format!("Interface\\AddOns\\Foo\\{name}");
+            assert_eq!(sprite_found(&chain, &loose, &path), found, "{name}");
+            assert_eq!(sprite_dimensions(&chain, &loose, &path), size, "{name}");
+        }
+        // A zero size passes the gate (`0x44849d`, `test ebx, ebx-1`), and draws nothing.
+        std::fs::write(dir.join("Zero.tga"), refused_tga(0, 4, &[])).unwrap();
+        let zero = "Interface\\AddOns\\Foo\\Zero";
+        assert!(sprite_found(&chain, &loose, zero));
+        assert_eq!(sprite_dimensions(&chain, &loose, zero), None);
+    }
+
+    /// A 32-bit TGA with 8 alpha bits, `w` by `h`, that the decoder reads.
+    fn decodable_tga(w: u16, h: u16) -> Vec<u8> {
+        let mut out = refused_tga(w, h, &vec![9; usize::from(w) * usize::from(h) * 4]);
+        out[17] = 0x28;
+        out
     }
 }
