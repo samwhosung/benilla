@@ -54,8 +54,9 @@ struct Inputs {
     lines: u128,
     /// The `SpellFamilyFlags` bits whose cells hold a modifier.
     bits: u64,
-    /// A run of the player's fields, `(first, count)`, all set to [`POKE`], whatever they hold.
-    poke: Option<(u16, u16)>,
+    /// A run of at most 64 of the player's fields, `(first, count, skip)`, each set to [`POKE`],
+    /// whatever it holds, but those whose bit of `skip` (from `first`) is set.
+    poke: Option<(u16, u16, u64)>,
 }
 
 /// What a poked field is set to: 2.5 as a float, and a large number as an integer.
@@ -188,10 +189,10 @@ impl Inputs {
                 parts.push((format!("the player's {name}"), only));
             }
         }
-        if let Some((first, count)) = self.poke {
-            for field in first..first + count {
+        if let Some((first, count, skip)) = self.poke {
+            for field in (first..first + count).filter(|f| skip >> (f - first) & 1 == 0) {
                 let only = Inputs {
-                    poke: Some((field, 1)),
+                    poke: Some((field, 1, 0)),
                     ..alone
                 };
                 parts.push((format!("the player's field {field}"), only));
@@ -384,13 +385,11 @@ fn mat(layout: &Layout, inputs: Inputs, p: Params) -> Mat {
     } else {
         UnitMotion::default()
     };
-    let mut slot = 0;
     for (i, &line) in layout.lines.iter().enumerate() {
-        if inputs.lines >> i & 1 == 1 {
-            let base = 718 + 3 * slot;
+        if let Some(base) = skill_fields(layout, inputs, line) {
+            debug_assert!(inputs.lines >> i & 1 == 1);
             pairs.push((base, line));
             pairs.push((base + 1, 300 | 300 << 16));
-            slot += 1;
         }
     }
     for s in (0..EQUIPMENT_SLOTS.into()).filter(|s| inputs.worn >> s & 1 == 1) {
@@ -398,8 +397,12 @@ fn mat(layout: &Layout, inputs: Inputs, p: Params) -> Mat {
         pairs.push((486 + 2 * s as u16, guid as u32));
         pairs.push((487 + 2 * s as u16, (guid >> 32) as u32));
     }
-    if let Some((first, count)) = inputs.poke {
-        pairs.extend((first..first + count).map(|field| (field, POKE)));
+    if let Some((first, count, skip)) = inputs.poke {
+        pairs.extend(
+            (first..first + count)
+                .filter(|f| skip >> (f - first) & 1 == 0)
+                .map(|field| (field, POKE)),
+        );
     }
     let mut mods = SpellModifiers::default();
     mods.set_class_family(p.family);
@@ -428,6 +431,56 @@ fn mat(layout: &Layout, inputs: Inputs, p: Params) -> Mat {
         }),
         form,
     }
+}
+
+/// The first of the three skill-table fields (`PLAYER_SKILL_INFO_1_1`, 718, on) that hold `line`
+/// in the scenario `inputs` makes, the present lines packed from slot 0 in layout order.
+fn skill_fields(layout: &Layout, inputs: Inputs, line: u32) -> Option<u16> {
+    let i = layout.lines.iter().position(|&l| l == line)?;
+    if inputs.lines >> i & 1 == 0 {
+        return None;
+    }
+    let slot = (inputs.lines & ((1u128 << i) - 1)).count_ones() as u16;
+    Some(718 + 3 * slot)
+}
+
+/// The player's unit fields each [`UnitField`] bit is, by bit: level, base mana, base health,
+/// ranged attack time, cast speed.
+const UNIT_FIELD_INDICES: [u16; 5] = [34, 162, 163, 128, 145];
+
+/// The player fields a view's records watch in the scenario `inputs` makes: the ones a poke is
+/// covered by. The form and gender are bytes of fields 138 and 36, the disarm flag a bit of 46.
+fn recorded_fields(layout: &Layout, inputs: Inputs, deps: &Deps) -> Vec<u16> {
+    let mut fields: Vec<u16> = UNIT_FIELD_INDICES
+        .iter()
+        .enumerate()
+        .filter(|(bit, _)| deps.unit >> bit & 1 == 1)
+        .map(|(_, &field)| field)
+        .collect();
+    for (read, field) in [
+        (deps.gender, 36),
+        (deps.form, 138),
+        (deps.disarm, 46),
+        (deps.range_units, 130),
+    ] {
+        if read {
+            fields.push(field);
+        }
+    }
+    fields.extend(
+        (0..4)
+            .filter(|i| deps.avoidance >> i & 1 == 1)
+            .map(|i| 1106 + i),
+    );
+    for slot in (0..u16::from(EQUIPMENT_SLOTS)).filter(|s| deps.worn >> s & 1 == 1) {
+        fields.extend([486 + 2 * slot, 487 + 2 * slot]);
+    }
+    for &line in &deps.skill_lines {
+        if let Some(base) = skill_fields(layout, inputs, line) {
+            fields.extend([base, base + 1, base + 2]);
+        }
+    }
+    fields
 }
 
 /// What differs between two scenarios, through the feed's own diffs.
@@ -649,9 +702,27 @@ fn sweep(rig: &mut Rig, base: Inputs, only: Only, params: ParamsOf, flip: FlipOf
             continue;
         }
         out.moved += 1;
-        if hit {
-            continue;
-        }
+        // A poked run is judged field by field: one the records cover can hit the change for its
+        // neighbours, so the run poked again without the recorded fields must not move the view.
+        let moved = match moved.poke {
+            Some((first, count, skip)) if hit => {
+                let recorded = recorded_fields(layout, base, &deps);
+                let skip = (first..first + count)
+                    .filter(|f| recorded.contains(f))
+                    .fold(skip, |mask, f| mask | 1 << (f - first));
+                let rest = Inputs {
+                    poke: Some((first, count, skip)),
+                    ..moved
+                };
+                let alone = mat(layout, base.xor(rest), p);
+                if build(t, &objects, spells, aura, id, &alone).is_some_and(|(v, _)| v == view) {
+                    continue;
+                }
+                rest
+            }
+            _ if hit => continue,
+            _ => moved,
+        };
         // Name what moved it: each input alone.
         let culprits: Vec<String> = moved
             .parts(layout)
@@ -1127,8 +1198,9 @@ fn the_pets_cost_bases_are_its_inputs_and_its_max_pools_are_not() {
 }
 
 /// Every field of the pet's unit that moves a pet view is one of the pet inputs the feed rebuilds
-/// the pet views on. The fields go 48 at a time; a view that moves without a pet input moving is
-/// then narrowed to the fields that move it.
+/// the pet views on. The fields go 48 at a time, each judged on its own: a batch poked without the
+/// pet inputs' fields must leave every view as it was, and a view it moves is narrowed to the
+/// fields that move it.
 #[test]
 fn no_pet_field_moves_a_pet_view_unwatched() {
     let Some(mut rig) = Rig::new() else { return };
@@ -1150,14 +1222,21 @@ fn no_pet_field_moves_a_pet_view_unwatched() {
             family: 1,
         },
     );
-    // Level, reach, base mana, base health.
-    let base_pairs: Vec<(u16, u32)> =
-        vec![(34, 30), (130, 2.0f32.to_bits()), (162, 900), (163, 600)];
-    let pet_with = |poke: std::ops::Range<u16>| {
+    // Level, reach, cast speed, base mana, base health.
+    let base_pairs: Vec<(u16, u32)> = vec![
+        (34, 30),
+        (130, 2.0f32.to_bits()),
+        (145, 1.0f32.to_bits()),
+        (162, 900),
+        (163, 600),
+    ];
+    let pet_with = |poke: &mut dyn Iterator<Item = u16>| {
         let mut pairs = base_pairs.clone();
         pairs.extend(poke.map(|field| (field, POKE)));
         ObjectFields::from_pairs(&pairs)
     };
+    // The fields `PetInputs` reads: level, reach, cast speed, form, base mana, base health.
+    const PET_INPUT_FIELDS: [u16; 6] = [34, 130, 145, 138, 162, 163];
     let build_one = |t: &mut TestCtx, id: u32, pet: &ObjectFields| {
         t.spell_mods = player.mods.clone();
         let mut ctx = t.ctx_for(
@@ -1175,21 +1254,35 @@ fn no_pet_field_moves_a_pet_view_unwatched() {
         let unit = RangeUnit::still(pet.unit_combat_reach());
         PetInputs::of(None, Some(pet), RangeSeen::of(&unit, None))
     };
-    let base = pet_with(0..0);
+    let base = pet_with(&mut std::iter::empty());
+    for field in PET_INPUT_FIELDS {
+        assert!(
+            pet_inputs(&pet_with(&mut std::iter::once(field))) != pet_inputs(&base),
+            "field {field} is a pet input"
+        );
+    }
     let before: Vec<_> = ids.iter().map(|&id| build_one(t, id, &base)).collect();
     let (mut moved, mut misses) = (0, Vec::new());
     for first in (0..192u16).step_by(48) {
-        let pet = pet_with(first..first + 48);
+        let pet = pet_with(&mut (first..first + 48));
+        let unwatched = || (first..first + 48).filter(|f| !PET_INPUT_FIELDS.contains(f));
+        let rest = pet_with(&mut unwatched());
+        assert!(
+            pet_inputs(&rest) == pet_inputs(&base),
+            "fields {first}..: the pet inputs are these fields"
+        );
         for (&id, before) in ids.iter().zip(&before) {
             if *before == build_one(t, id, &pet) {
                 continue;
             }
             moved += 1;
-            if pet_inputs(&pet) != pet_inputs(&base) {
+            if *before == build_one(t, id, &rest) {
                 continue;
             }
-            let culprits: Vec<u16> = (first..first + 48)
-                .filter(|&field| *before != build_one(t, id, &pet_with(field..field + 1)))
+            let culprits: Vec<u16> = unwatched()
+                .filter(|&field| {
+                    *before != build_one(t, id, &pet_with(&mut std::iter::once(field)))
+                })
                 .collect();
             let name = spells.catalog.get(id).map(|d| d.name.as_str());
             misses.push(format!(
@@ -1221,7 +1314,7 @@ fn no_player_field_moves_a_view_unwatched() {
         },
     ] {
         for first in (0..1400u16).step_by(64) {
-            let poke = Some((first, 64.min(1400 - first)));
+            let poke = Some((first, 64.min(1400 - first), 0));
             let flip = move |_: &Layout, _: &Deps| Inputs {
                 poke,
                 ..Inputs::default()
