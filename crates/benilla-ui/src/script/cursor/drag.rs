@@ -652,8 +652,8 @@ mod tests {
     }
 
     /// A press whose frame hid (the removal cleared the capture, `0x764cad`) reaches no one on the
-    /// release: `0x766420` dispatches to the capture alone, and the world hook `0x492b50` runs
-    /// only in freelook, so the world click `0x495300` never runs.
+    /// release: `0x766420` dispatches to the capture alone, and the world hook `0x492b50` sends
+    /// a release to the world frame only in freelook, so the world click `0x495300` never runs.
     #[test]
     fn a_press_whose_frame_hid_is_not_a_world_drop() {
         let mut s = drag_script();

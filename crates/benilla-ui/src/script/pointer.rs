@@ -16,6 +16,7 @@ use crate::order;
 use crate::widget::{ButtonState, FrameHandle};
 
 use super::clip::{hit_clip, hit_rect};
+use super::tick::verb;
 use super::{button, cursor, editbox, event, protected, Model, UiScript};
 
 /// The double-click interval, 300 ms, a constant in the Button mouse-up dispatcher `0x7792d0`
@@ -353,7 +354,7 @@ impl UiScript {
         // it and returns before its sweep (`0x766164`), and the hover stays the frame it was when
         // the drag began.
         let mut release_lost = false;
-        let press_target: Option<crate::widget::FrameHandle> = if down {
+        let (press_target, hooked): (Option<crate::widget::FrameHandle>, bool) = if down {
             let mut model = self.model_mut();
             // A press for a button still held means its release never came (a focus loss); the
             // reference's capture never loses one. That frame gets the release edge so it does not
@@ -376,10 +377,24 @@ impl UiScript {
             } else {
                 hit_id.and_then(|id| model.id_to_frame.get(&id).copied())
             };
-            held.or(hover)
+            // The world input hook `0x492b50`, which the handler runs on the event record before
+            // it picks a frame, and only with no capture held (`0x76635c`-`0x766370`): a right
+            // press with a payload on the cursor or a gift wrap pending clears the cursor and is
+            // consumed.
+            let hooked = held.is_none()
+                && button == "RightButton"
+                && (model.cursor.is_some() || model.pending_wrap.is_some());
+            (held.or(hover), hooked)
         } else {
-            None
+            (None, false)
         };
+        if hooked {
+            // `ClearCursor(1, 1)` at `0x492bb5`; the handler returns without a capture, a raise or
+            // a press slot, so no frame sees this press and its release finds none to go to.
+            self.model_mut().cursor_pos = (x, y);
+            verb(&self.lua, cursor::clear_cursor);
+            return true;
+        }
         let press_id: Option<u32> =
             press_target.and_then(|h| self.model_ref().frame_to_id.get(&h).copied());
         // ── The raise, first ────────────────────────────────────────────────────────────────────
