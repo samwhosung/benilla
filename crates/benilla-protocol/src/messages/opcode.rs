@@ -1,6 +1,16 @@
 //! The 1.12.1 world opcode numbers (vmangos `Opcodes_1_12_1.h`). A client packet's header holds
 //! the opcode in 4 bytes, but every value fits `u16`; the senders widen it.
 
+/// `worldport`'s send (`0x404fc8`): `u32` clock, `u32` map, then x, y, z and the facing as floats.
+pub const CMSG_WORLD_TELEPORT: u16 = 0x0008;
+/// `port <name>`'s send (`0x404b31`): the argument text as a cstring.
+pub const CMSG_TELEPORT_TO_UNIT: u16 = 0x0009;
+/// `whois`'s send (`0x5adf1f`): the argument text as a cstring.
+pub const CMSG_WHOIS: u16 = 0x0064;
+/// `port <x y>`'s send (`0x404cdc`): x, y, z and the facing as floats.
+pub const MSG_MOVE_TELEPORT_CHEAT: u16 = 0x00C6;
+/// `setrawpos`'s send (`0x4051e4`): x, y, z and the facing as floats.
+pub const CMSG_MOVE_SET_RAW_POSITION: u16 = 0x00E1;
 pub const SMSG_CHAR_CREATE: u16 = 0x003A;
 pub const SMSG_CHAR_ENUM: u16 = 0x003B;
 // Character delete: CMSG a full u64 guid, SMSG one result byte (`CHAR_DELETE_SUCCESS` = 0x39).

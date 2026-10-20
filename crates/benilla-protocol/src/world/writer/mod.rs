@@ -17,6 +17,7 @@ mod battlefield;
 mod binder;
 mod channel;
 mod chat;
+mod console_commands;
 mod death;
 mod duel;
 mod gameobject;

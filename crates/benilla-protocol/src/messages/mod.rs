@@ -14,6 +14,7 @@ mod channel;
 mod chat;
 mod client;
 mod combat_log;
+mod console_commands;
 mod death;
 mod duel;
 mod game_time;
@@ -107,6 +108,7 @@ pub use combat_log::{
     PeriodicAuraLog, PeriodicTick, SpellDamageLog, SpellDispelLog, SpellEnergizeLog, SpellHealLog,
     SpellInstaKillLog, SpellLogExecute, SpellLogMiss, SpellOutcomeLog,
 };
+pub use console_commands::{raw_position, teleport_to_unit, whois, world_teleport};
 pub use death::{
     area_spirit_healer, reclaim_corpse, resurrect_response, spirit_healer_activate,
     AreaSpiritHealerTime, CorpseLocation, ResurrectRequestBody,
