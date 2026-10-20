@@ -2,7 +2,8 @@
 //! `IsCurrentAction` and `GetActionCooldown`, diff-pushed into the VM with the reference's events
 //! on each change: the cooldown trio (`0x4b31b0`, `0x4f93d0`), the usable pair (`0x4b31c0`, on a
 //! cache change only, `0x4e5c00`), combat enter and leave (`0x6256ff`, `0x625778`), and
-//! autorepeat start and stop (`0x6e5952`, `0x6ea170`). `IsCurrentAction` reads the cast state
+//! autorepeat start and stop (`0x6e5952`, `0x6ea170`), and between the usable pair each reactive
+//! spell's `SPELL_ACTIVE` ([`super::reactive`]). `IsCurrentAction` reads the cast state
 //! live, and its pair (`0x4b3250`) is signalled where the cast changes ([`crate::ui_cast`]).
 //! Usability is `IsSpellUsableNow 0x6e3d60` ([`crate::spell::usable`]), auto-repeat the `0xceac30`
 //! key, and range the squared distance against `GetMinMaxRange 0x6e3480`.
@@ -122,6 +123,11 @@ pub(super) fn feed_action_state(
     items: Res<Items>,
     commands: Res<NetCommands>,
     mut memory: Local<crate::ui_script::VmMemo<StateMemory>>,
+    // The reactive list, which lives for a world, not a VM, and the sweeps that end one.
+    mut reactive: (
+        Local<super::reactive::ReactiveList>,
+        Option<Res<crate::ui_script::SweptWorlds>>,
+    ),
 ) {
     let Some(mut script) = script else {
         return;
@@ -353,14 +359,49 @@ pub(super) fn feed_action_state(
     }
     memory.pushed = fresh;
 
+    // The reactive list's re-check (`0x4b31d7`-`0x4b323d`), on the walk the bar takes.
+    let (list, swept) = &mut reactive;
+    let arrived = list.arrive(swept.as_deref().map_or(0, |s| s.0));
+    if let Some(sp) = spells.as_deref() {
+        if arrived || actions.is_changed() || spells.as_ref().is_some_and(|s| s.is_changed()) {
+            list.sync(&actions.spells, &sp.catalog);
+        }
+    }
+    let reactive = match (me, spells.as_deref()) {
+        (Some((store, _, _)), Some(sp)) => {
+            let ctx = usable::UsableCtx {
+                store,
+                target: selection.guid.zip(target.map(|(s, _)| s)),
+                rel: relations.get(),
+                cooldowns: &cooldowns,
+                stacks: &stacks,
+                spell_mods,
+                control_lost,
+            };
+            list.refresh(|id| {
+                sp.catalog
+                    .get(id)
+                    .is_some_and(|d| usable::spell_usable(id, d, sp, &ctx, &objects, &items).0)
+            })
+        }
+        _ => super::reactive::Refresh::default(),
+    };
+
     // The events in the reference's flush order, the `ACTIONBAR_*` one first.
     if gen_changed {
         script.fire_event("ACTIONBAR_UPDATE_COOLDOWN", vec![]);
         script.fire_event("SPELL_UPDATE_COOLDOWN", vec![]);
         script.fire_event("BAG_UPDATE_COOLDOWN", vec![]);
     }
+    // `0x4b31c0`: the bar's event on a slot change (`0x4e5c53`), each reactive spell's word as it
+    // turns usable (`0x4b3226`), then the spells' event (`0x4b3246`).
     if usable_changed {
         script.fire_event("ACTIONBAR_UPDATE_USABLE", vec![]);
+    }
+    for name in reactive.activated {
+        crate::ui_unit::fire_combat_text(&mut script, "SPELL_ACTIVE", Some(name), None);
+    }
+    if usable_changed || reactive.changed {
         script.fire_event("SPELL_UPDATE_USABLE", vec![]);
     }
     if engaged != memory.engaged {
