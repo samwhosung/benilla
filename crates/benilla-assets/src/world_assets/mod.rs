@@ -14,6 +14,7 @@ use crate::materials::{WowModelExt, WowModelMaterial, VANILLA_ALPHA_KEY_REF};
 use crate::SpatialCache;
 use benilla_formats::{
     blp_to_rgba, read_texture_native_chain, tga_texture_size, tga_to_rgba, Chain, ModelBlend,
+    TGA_GATE_PREFIX,
 };
 pub use benilla_formats::{LooseFile, LooseIndex, LooseIndexCell, LooseOpen};
 
@@ -211,9 +212,15 @@ pub fn sprite_found(chain: &Mutex<Chain>, loose: &LooseFiles, path: &str) -> boo
     SpriteProbe::default().found(chain, loose, path)
 }
 
-/// `SetTexture`'s 1|nil probe ([`sprite_found`]).
+/// `SetTexture`'s 1|nil probe ([`sprite_found`]), which keeps the size gate's answer for each
+/// resolved file it has read: an addon sets an icon from its `OnUpdate`, every frame, and the
+/// install and the addons' files do not change while the client runs. A file that will not read
+/// is asked again, and whether a name opens at all is asked each time, since the loose index
+/// can change.
 #[derive(Default)]
 pub struct SpriteProbe {
+    /// The gate's answer by resolved file ([`source_key`]).
+    gate: std::cell::RefCell<HashMap<String, bool>>,
     /// How many TGA headers [`Self::found`] has read.
     header_reads: std::cell::Cell<usize>,
 }
@@ -235,7 +242,7 @@ impl SpriteProbe {
                 None => format!("chain:{candidate}"),
             };
             self.gate(&key, candidate, || match hit {
-                Some(file) => file.read(),
+                Some(file) => file.read_prefix(TGA_GATE_PREFIX),
                 None => chain.lock_recover().read_file(candidate).ok(),
             })
         })
@@ -243,9 +250,17 @@ impl SpriteProbe {
 
     /// Whether a `.tga` candidate makes a texture, from the bytes `read` gives, for the resolved
     /// file `key` names.
-    fn gate(&self, _key: &str, candidate: &str, read: impl FnOnce() -> Option<Vec<u8>>) -> bool {
+    fn gate(&self, key: &str, candidate: &str, read: impl FnOnce() -> Option<Vec<u8>>) -> bool {
+        if let Some(&answer) = self.gate.borrow().get(key) {
+            return answer;
+        }
         self.header_reads.set(self.header_reads.get() + 1);
-        read().is_some_and(|bytes| makes_texture(candidate, &bytes))
+        let Some(bytes) = read() else {
+            return false;
+        };
+        let answer = makes_texture(candidate, &bytes);
+        self.gate.borrow_mut().insert(key.to_string(), answer);
+        answer
     }
 }
 
