@@ -415,6 +415,21 @@ fn durability_damage_death_is_an_empty_body_cue() {
     ));
 }
 
+/// `SMSG_PLAYER_SKINNED` (0x2BC): one byte, which the handler reads (`0x5e7d4a`) and hands on as
+/// its truth (`0x5e7d52` `setne`) to `PLAYER_SKINNED` (`0x48f400`). vmangos sends `freeRepop` 0
+/// (`Packets/Misc.h:815`).
+#[test]
+fn player_skinned_decodes_its_byte_as_a_truth() {
+    for (body, free_repop) in [(hx("00"), false), (hx("01"), true), (hx("80"), true)] {
+        let pkt = messages::parse_server(0x2BC, &body).unwrap();
+        let events: Vec<String> = decode(pkt).iter().map(|e| format!("{e:?}")).collect();
+        assert_eq!(
+            events,
+            [format!("PlayerSkinned {{ free_repop: {free_repop} }}")]
+        );
+    }
+}
+
 /// u32 mapId, then u32 transportEntry + u32 oldMapId when the player rides a transport through
 /// (vmangos `Misc.cpp:493-501`).
 #[test]
