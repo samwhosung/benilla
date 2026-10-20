@@ -1354,7 +1354,15 @@ mod tests {
     fn rename_character_with_a_failing_name_fires_the_checks_key() {
         struct Reserved;
         impl super::super::NameLists for Reserved {
-            fn matches(&self, name: &str) -> bool {
+            fn names_profanity(&self, _: &str) -> bool {
+                false
+            }
+
+            fn chat_profanity(&self, _: &str) -> bool {
+                false
+            }
+
+            fn names_reserved(&self, name: &str) -> bool {
                 name.eq_ignore_ascii_case("thrall")
             }
         }

@@ -563,9 +563,9 @@ mod tests {
             reserved: PatternList::empty(),
         };
         use benilla_ui::script::NameLists as _;
-        assert!(lists.matches("Thrall"));
-        assert!(!lists.matches("Thralls"));
-        assert!(lists.matches("ыThrallы"));
+        assert!(lists.names_profanity("Thrall"));
+        assert!(!lists.names_profanity("Thralls"));
+        assert!(lists.names_profanity("ыThrallы"));
     }
 
     /// A transcript of the reference's masker: in place, length-preserving, caseless, the phase
@@ -759,12 +759,19 @@ impl NameLists {
     }
 }
 
+/// Each a caseless, unanchored search of the name as typed (`0x71fc70`, one match per call): any
+/// row of that list.
 impl benilla_ui::script::NameLists for NameLists {
-    /// A caseless, unanchored search of the name as typed (`0x71fc70`, one match per call): any
-    /// row of any list.
-    fn matches(&self, name: &str) -> bool {
-        let subject = ascii_lower(name);
-        self.names.any(&subject) || self.chat.any(&subject) || self.reserved.any(&subject)
+    fn names_profanity(&self, name: &str) -> bool {
+        self.names.any(&ascii_lower(name))
+    }
+
+    fn chat_profanity(&self, name: &str) -> bool {
+        self.chat.any(&ascii_lower(name))
+    }
+
+    fn names_reserved(&self, name: &str) -> bool {
+        self.reserved.any(&ascii_lower(name))
     }
 }
 
@@ -774,8 +781,16 @@ impl benilla_ui::script::NameLists for NameLists {
 pub(crate) struct NameFilter(pub(crate) Arc<NameLists>);
 
 impl benilla_ui::script::NameLists for NameFilter {
-    fn matches(&self, name: &str) -> bool {
-        benilla_ui::script::NameLists::matches(&*self.0, name)
+    fn names_profanity(&self, name: &str) -> bool {
+        benilla_ui::script::NameLists::names_profanity(&*self.0, name)
+    }
+
+    fn chat_profanity(&self, name: &str) -> bool {
+        benilla_ui::script::NameLists::chat_profanity(&*self.0, name)
+    }
+
+    fn names_reserved(&self, name: &str) -> bool {
+        benilla_ui::script::NameLists::names_reserved(&*self.0, name)
     }
 }
 

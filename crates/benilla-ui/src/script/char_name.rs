@@ -28,19 +28,32 @@
 
 mod hangul;
 
-/// The three lists the check searches, each row a PCRE compiled caseless (the shipped
+/// The three lists the validator can search, each row a PCRE compiled caseless (the shipped
 /// `NamesProfanity.dbc`, `ChatProfanity.dbc` and `NamesReserved.dbc`), matched unanchored against
-/// the name as typed, in UTF-8 (`0x71fc70` with `edx` the name, `0x6c9925`).
+/// the name as typed, in UTF-8 (`0x71fc70` with `edx` the name, `0x6c9925`). The validator takes a
+/// flag per list (`0x6c9909`, `0x6c9977`, `0x6c99e1`), so each is asked on its own.
 pub trait NameLists {
-    /// Whether any row of any of the three lists matches `name`.
-    fn matches(&self, name: &str) -> bool;
+    /// Whether a row of `NamesProfanity` (the list at `0xce8948`) matches `name`.
+    fn names_profanity(&self, name: &str) -> bool;
+    /// Whether a row of `ChatProfanity` (`0xce893c`) matches `name`.
+    fn chat_profanity(&self, name: &str) -> bool;
+    /// Whether a row of `NamesReserved` (`0xce8930`) matches `name`.
+    fn names_reserved(&self, name: &str) -> bool;
 }
 
 /// No lists, for a VM whose host seated none: nothing is reserved.
 pub struct NoNameLists;
 
 impl NameLists for NoNameLists {
-    fn matches(&self, _: &str) -> bool {
+    fn names_profanity(&self, _: &str) -> bool {
+        false
+    }
+
+    fn chat_profanity(&self, _: &str) -> bool {
+        false
+    }
+
+    fn names_reserved(&self, _: &str) -> bool {
         false
     }
 }
@@ -170,7 +183,7 @@ fn validate(name: Option<&str>, lists: &dyn NameLists, charsets: NameCharsets) -
     if units.len() == 1 {
         return TOO_SHORT;
     }
-    if lists.matches(name) {
+    if lists.names_profanity(name) || lists.chat_profanity(name) || lists.names_reserved(name) {
         return RESERVED;
     }
     let cap = match chosen {
@@ -215,7 +228,15 @@ mod tests {
     struct Words(&'static [&'static str]);
 
     impl NameLists for Words {
-        fn matches(&self, name: &str) -> bool {
+        fn names_profanity(&self, _: &str) -> bool {
+            false
+        }
+
+        fn chat_profanity(&self, _: &str) -> bool {
+            false
+        }
+
+        fn names_reserved(&self, name: &str) -> bool {
             let name = name.to_ascii_lowercase();
             self.0.iter().any(|w| name.contains(w))
         }
