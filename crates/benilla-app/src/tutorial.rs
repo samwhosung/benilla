@@ -86,6 +86,11 @@ pub(crate) const TARGETING_DELAY_MS: u32 = 10_000;
 /// after world enter with no movement input; what the stamp (`0x5143e0`) holds is untraced.
 const MOVEMENT_SILENCE: Duration = Duration::from_millis(90_000);
 
+/// The banks' frame: the world-entry bring-up, then the sites' triggers fired. A field watcher's
+/// tutorial tests the same fire-once bank after it ([`Tutorials::fire_now`]).
+#[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct TutorialFeed;
+
 /// A site's ask of the tutorial system, written from wherever the reference's site lives.
 #[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TutorialEvent {
@@ -552,6 +557,7 @@ impl Plugin for TutorialPlugin {
                     // simply waits for the first frame with an interface.
                     feed_tutorials
                         .in_set(UiFeed)
+                        .in_set(TutorialFeed)
                         .run_if(crate::ui_script::ingame_ui_up),
                     drain_tutorials.after(UiInput),
                 ),
