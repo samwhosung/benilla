@@ -172,7 +172,8 @@ impl Plugin for UiUnitPlugin {
                 .in_set(UnitFeed),
         )
         // The relation functions the six relation verbs ask, ahead of every feed whose events a
-        // handler asks them in: the unit snapshots' `PLAYER_TARGET_CHANGED` and the aura feed's.
+        // handler asks them in: the usable refresh's and `PLAYER_TARGET_CHANGED`, both after the
+        // unit snapshots, and the aura feed's.
         .add_systems(
             Update,
             relations::feed_unit_relations
