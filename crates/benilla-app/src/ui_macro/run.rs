@@ -49,8 +49,9 @@ pub(crate) fn macro_lines(body: &str) -> impl Iterator<Item = &str> {
 }
 
 /// The spell name a macro body casts (`0x4efe00`): the first `/cast`-alias line, or line holding
-/// `CastSpellByName(` with a quoted argument. Deviation: the `/cast` argument is trimmed, because
-/// the reference binds `/cast  Fireball` (two spaces) to a name that never resolves.
+/// `CastSpellByName(` and then a quote, whose text is the name even when it is empty
+/// ([`quoted_call_argument`]). Deviation: the `/cast` argument is trimmed, because the reference
+/// binds `/cast  Fireball` (two spaces) to a name that never resolves.
 pub(crate) fn cast_name(table: &SlashCommands, body: &str) -> Option<(CastArm, String)> {
     for line in macro_lines(body) {
         // Arm A: the alias folds ASCII case (`_strnicmp`, `0x414310`, as `SlashCommands::lookup`
@@ -66,7 +67,8 @@ pub(crate) fn cast_name(table: &SlashCommands, body: &str) -> Option<(CastArm, S
                 continue;
             }
         }
-        // Arm B, second, on the same line (`0x4efed5`).
+        // Arm B, second, on the same line (`0x4efed5`): its quote decides the binding, so the walk
+        // ends here whatever the name is or resolves to.
         if let Some(name) = quoted_call_argument(line) {
             return Some((CastArm::ByName, name));
         }
@@ -74,16 +76,17 @@ pub(crate) fn cast_name(table: &SlashCommands, body: &str) -> Option<(CastArm, S
     None
 }
 
-/// `… CastSpellByName("Fireball" …) …` gives `Fireball`: only a non-empty, double-quoted first
-/// argument is read. The reference reads from the first quote anywhere after the call (`0x4efef0`)
-/// and binds even an empty name, which ends its walk on that line.
+/// The text of the first quote after `CastSpellByName(` on the line: from the first `"` at or
+/// after the match (`0x4efef0`-`0x4efefb`, the literal holds none) to the next `"` or the line's
+/// end (`0x4eff58`-`0x4eff6d`). Whatever stands between the parenthesis and the quote is skipped,
+/// so `CastSpellByName(IsShiftKeyDown() and "Frostbolt(Rank 1)" or "Frostbolt")` gives
+/// `Frostbolt(Rank 1)`. A line with no such quote gives nothing and the walk goes on (`0x4efefd`);
+/// an empty name is a name, which `0x4b3bc0` answers 0.
 fn quoted_call_argument(line: &str) -> Option<String> {
-    let after = line.find(CAST_BY_NAME_CALL)? + CAST_BY_NAME_CALL.len();
-    let rest = line.get(after..)?.trim_start();
-    let rest = rest.strip_prefix('"')?;
-    let close = rest.find('"')?;
-    let name = &rest[..close];
-    (!name.is_empty()).then(|| name.to_string())
+    let after_call = &line[line.find(CAST_BY_NAME_CALL)?..];
+    let open = after_call.find('"')?;
+    let rest = &after_call[open + 1..];
+    Some(rest.split('"').next().unwrap_or_default().to_string())
 }
 
 /// The macro's bound spell: [`cast_name`] resolved as `CastSpellByName` resolves
