@@ -789,8 +789,10 @@ pub(crate) mod schedule_tests {
     ///   would, off the same clock;
     /// - the area-spirit-healer poll over `Transform` and `NetEntity`: it is level-triggered, so a
     ///   unit seen a frame early or late is decided again next frame;
-    /// - the cursor classifier against `world_focus`'s focus publish and settle release over
-    ///   `Player`: it reads `own_control_lost`, and they write only `settling` and `world_stale`;
+    /// - the cursor classifier and the selection writers that hold the attack seam
+    ///   (`creature_anim::AttackSeam`, whose StartAttack gate reads `own_control_lost`) against
+    ///   `world_focus`'s focus publish and settle release over `Player`: the readers take the
+    ///   control flag, and those writers touch only `settling` and `world_stale`;
     /// - `ui_quest::lines::feed_quest_lines` and the reader's begin and feed
     ///   (`ui_item_text::begin_item_text`, `feed_item_text`) against `ui_items::feed_item_stats`
     ///   and `ui_tooltip::feed_spell_tooltips` over `Items` and the VM: they only read templates,
@@ -854,7 +856,7 @@ pub(crate) mod schedule_tests {
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 3_090;
+    const UPDATE_ACTIONABLE_CEILING: usize = 3_100;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
