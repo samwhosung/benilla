@@ -315,6 +315,8 @@ pub(super) fn feed_action_state(
     relations: crate::target::RelationWorld,
     // The item cache and the channel its misses query on, one param for the same ceiling.
     (items, commands): (Res<Items>, Res<NetCommands>),
+    // `ItemSubClass.dbc`, whose flags the walk's ammo leg reads.
+    sub_classes: Option<Res<crate::ui_items::ItemSubClasses>>,
     // The usable refresh's field-watch callers, the spell charges watcher, the enter cascade,
     // the bag feed's `BAG_UPDATE`s, the events owed and the memory about the VM.
     (mut edges, mut item_notices, mut entries, bag_updates, mut owed, mut memory): (
@@ -353,6 +355,7 @@ pub(super) fn feed_action_state(
 
         let (bound, spell_mods, range_units, own_control, skill_lines, created) = &cast_state;
         let skill_catalog = skill_lines.as_deref().map(|s| &s.catalog);
+        let sub_classes = sub_classes.as_deref().map(|s| &s.0);
         let me = self_q.iter().next();
         let control_lost = own_control.as_ref().is_some_and(|c| c.0);
         // The bags, walked once per frame for every reagent and totem count below.
@@ -495,6 +498,7 @@ pub(super) fn feed_action_state(
                             spell_mods,
                             control_lost,
                             skill_lines: skill_catalog,
+                            sub_classes,
                         };
                         let (u, oom) =
                             usable::spell_usable(button.action, d, sp, &ctx, &objects, &items);
@@ -583,6 +587,7 @@ pub(super) fn feed_action_state(
                             spell_mods,
                             control_lost,
                             skill_lines: skill_catalog,
+                            sub_classes,
                         };
                         let (u, oom) = usable::item_usable(
                             button.action,
@@ -682,6 +687,7 @@ pub(super) fn feed_action_state(
                     spell_mods,
                     control_lost,
                     skill_lines: skill_catalog,
+                    sub_classes,
                 };
                 list.refresh(|id| {
                     sp.catalog

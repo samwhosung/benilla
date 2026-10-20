@@ -53,6 +53,8 @@ pub(crate) struct UsableCtx<'a> {
     pub(crate) stacks: &'a std::collections::HashMap<u32, u32>,
     /// The skill lines leg 12's cost finds its level through ([`SpellLevel::Player`]).
     pub(crate) skill_lines: Option<&'a benilla_formats::SkillLineCatalog>,
+    /// `ItemSubClass.dbc`, whose `Flags` leg 4's ammo leg reads; absent when it did not load.
+    pub(crate) sub_classes: Option<&'a benilla_formats::ItemSubClassCatalog>,
 }
 
 /// The search covers equipment indices `0..=22` (`0x5f0c50`'s `cmp ebx,0x17; jl`): the 19 worn
@@ -956,6 +958,65 @@ mod tests {
         );
     }
 
+    /// The usable walk runs the equipped-item check with the ammo flag (`0x6e3e67`), so a bow
+    /// with no arrows loaded greys the shot, and loaded arrows the bags hold light it.
+    #[test]
+    fn a_shot_without_ammo_greys_its_button() {
+        use crate::items::TestDeps;
+        use benilla_protocol::messages::ItemInfo;
+        const INV_RANGED: u16 = 486 + 2 * 17;
+        const INV_BACKPACK: u16 = 486 + 2 * 23;
+        const AMMO_ID: u16 = 1223;
+        const BOW: u64 = 0x2a;
+        const ARROWS: u64 = 0x2b;
+        const BOW_ENTRY: u32 = 2504;
+        const ARROW_ENTRY: u32 = 2512;
+
+        let shot = SpellDisplay {
+            equipped_item_class: 2,
+            equipped_item_subclass_mask: 1 << 2,
+            ..Default::default()
+        };
+        let lit = |ammo_id: u32| {
+            let mut deps = TestDeps::new();
+            deps.spawn_item(BOW, ObjectFields::from_pairs(&[(3, BOW_ENTRY)]));
+            deps.spawn_item(ARROWS, ObjectFields::from_pairs(&[(3, ARROW_ENTRY), (14, 200)]));
+            deps.items.insert_template(
+                BOW_ENTRY,
+                Some(ItemInfo {
+                    class: 2,
+                    subclass: 2,
+                    ammo_type: 2,
+                    ..crate::items::test_template("Bow")
+                }),
+            );
+            deps.items.insert_template(
+                ARROW_ENTRY,
+                Some(ItemInfo {
+                    class: 6,
+                    subclass: 2,
+                    ..crate::items::test_template("Arrow")
+                }),
+            );
+            let store = player(&[
+                (INV_RANGED, BOW as u32),
+                (INV_BACKPACK, ARROWS as u32),
+                (AMMO_ID, ammo_id),
+            ]);
+            let cooldowns = Cooldowns::default();
+            let reputations = Reputations::default();
+            let spells = Spells::empty_for_tests();
+            let spell_mods = SpellModifiers::default();
+            deps.with_objects(|objects, items, _| {
+                let stacks = crate::ui_items::stack_counts(&store.0, objects);
+                let ctx = ctx(&store, &cooldowns, &reputations, &stacks, &spell_mods);
+                spell_usable(3044, &shot, &spells, &ctx, objects, items)
+            })
+        };
+        assert_eq!(lit(0), (false, false), "nothing loaded");
+        assert_eq!(lit(ARROW_ENTRY), (true, false), "loaded and carried");
+    }
+
     /// The spell tooltip's requirement line searches the worn items alone (`0x52ef73`): an empty
     /// quiver leaves the bow's requirement met.
     #[test]
@@ -1016,6 +1077,7 @@ mod tests {
             spell_mods,
             control_lost: false,
             skill_lines: None,
+            sub_classes: None,
         }
     }
 
@@ -1345,6 +1407,7 @@ mod tests {
                 spell_mods: &SpellModifiers::default(),
                 control_lost: false,
                 skill_lines: None,
+                sub_classes: None,
             };
             assert_eq!(
                 spell_usable(1, &friend_spell, &spells, &ctx, &objects, &items).0,
@@ -1392,6 +1455,7 @@ mod tests {
                 spell_mods: &SpellModifiers::default(),
                 control_lost: false,
                 skill_lines: None,
+                sub_classes: None,
             };
             assert_eq!(
                 spell_usable(5308, &execute, &spells, &ctx, &objects, &items),

@@ -289,6 +289,8 @@ pub(crate) struct CasterState<'a> {
     pub(crate) move_flags: u32,
     /// `IsDaytime 0x60a050` on the game clock.
     pub(crate) daytime: bool,
+    /// `0x612cc0`: the entity outdoors test `0x6706f0` on the caster's world node.
+    pub(crate) outdoors: bool,
 }
 
 /// What the rungs read beyond the record and the caster: the cast time the moving rung asks

@@ -34,7 +34,8 @@ pub use interior::{
 pub(crate) use interior::{surface_terrain_sample, WmoAreas, POSITION_PROBE_LIFT};
 use interior::{track_area_interior, track_current_interior, track_unit_interiors};
 pub use interior::{
-    CurrentAreaInterior, CurrentWmoInterior, PlayerWmoRoom, UnitWmoRoom, WmoInteriorKeys,
+    CurrentAreaInterior, CurrentWmoInterior, PlayerOutdoors, PlayerWmoRoom, UnitWmoRoom,
+    WmoInteriorKeys,
 };
 use probe::TraceLog;
 pub use probe::WmoCullProbe;
@@ -245,6 +246,7 @@ impl Plugin for WmoPortalPlugin {
         .init_resource::<CurrentWmoInterior>()
         .init_resource::<PlayerWmoRoom>()
         .init_resource::<CurrentAreaInterior>()
+        .init_resource::<PlayerOutdoors>()
         .init_resource::<CameraWmoFog>()
         .init_resource::<CameraInteriorClaim>()
         .init_resource::<ExteriorWindows>()

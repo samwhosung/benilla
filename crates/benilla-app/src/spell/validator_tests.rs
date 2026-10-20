@@ -54,7 +54,8 @@ fn cc(flags: u32, d: &SpellDisplay) -> Option<u8> {
     cast_cc_refusal(flags, false, Some(d), &mut no_auras()).map(|r| r.reason)
 }
 
-/// The caster the rungs read: health 100 unless set, standing, weapons away, still, at day.
+/// The caster the rungs read: health 100 unless set, standing, weapons away, still, outdoors, at
+/// day.
 #[derive(Clone)]
 struct Me {
     pairs: Vec<(u16, u32)>,
@@ -62,6 +63,7 @@ struct Me {
     sheathe: u8,
     move_flags: u32,
     daytime: bool,
+    outdoors: bool,
     standing: i32,
     cast_ms: u32,
 }
@@ -74,6 +76,7 @@ impl Default for Me {
             sheathe: 0,
             move_flags: 0,
             daytime: true,
+            outdoors: true,
             standing: 0,
             cast_ms: 0,
         }
@@ -105,6 +108,7 @@ impl Me {
             sheathe_state: self.sheathe,
             move_flags: self.move_flags,
             daytime: self.daytime,
+            outdoors: self.outdoors,
         };
         let standing = |_: u32| self.standing;
         let inputs = SpellInputs {
@@ -632,4 +636,53 @@ fn the_stealth_combat_aura_state_and_reputation_rungs_in_order() {
         .refuse(&moving_ambush),
         Some(0x2e)
     );
+}
+
+// ── The place rungs (`0x609f59`-`0x609fd0`) ──
+
+/// `Attributes` bit 14 refuses `0x52` outdoors and bit 15 indoors, the one answer of `0x612cc0`:
+/// `0x4b` for a spell whose effect applies the mounted aura (`Effect` 6 with aura 78, the same
+/// effect), else `0x55`. A spell with both bits is refused on either answer. They follow the
+/// reputation rung.
+#[test]
+fn the_place_rungs_ask_the_outdoors_test_after_reputation() {
+    let place = |attributes: u32| SpellDisplay {
+        attributes,
+        ..Default::default()
+    };
+    let outside = Me::default();
+    let inside = Me {
+        outdoors: false,
+        ..Me::default()
+    };
+    assert_eq!(outside.refuse(&place(0x4000)), Some(0x52));
+    assert_eq!(inside.refuse(&place(0x4000)), None);
+    assert_eq!(inside.refuse(&place(0x8000)), Some(0x55));
+    assert_eq!(outside.refuse(&place(0x8000)), None);
+    assert_eq!(outside.refuse(&place(0xc000)), Some(0x52));
+    assert_eq!(inside.refuse(&place(0xc000)), Some(0x55));
+    assert_eq!(inside.refuse(&place(0)), None, "neither bit asks nothing");
+
+    let mount = |effects: [u32; 3], auras: [u32; 3]| SpellDisplay {
+        attributes: 0x8000,
+        effects,
+        effect_apply_aura: auras,
+        ..Default::default()
+    };
+    assert_eq!(inside.refuse(&mount([6, 0, 0], [78, 0, 0])), Some(0x4b));
+    assert_eq!(inside.refuse(&mount([0, 0, 6], [0, 0, 78])), Some(0x4b), "any of the three");
+    assert_eq!(
+        inside.refuse(&mount([6, 0, 0], [0, 78, 0])),
+        Some(0x55),
+        "the aura of the same effect"
+    );
+    assert_eq!(inside.refuse(&mount([0, 0, 0], [78, 0, 0])), Some(0x55));
+
+    let unknown_rank = SpellDisplay {
+        attributes: 0x4000,
+        min_faction_id: 47,
+        min_reputation: 4,
+        ..Default::default()
+    };
+    assert_eq!(outside.refuse(&unknown_rank), Some(0x8f), "reputation first");
 }

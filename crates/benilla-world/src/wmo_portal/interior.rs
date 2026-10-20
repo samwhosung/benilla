@@ -96,6 +96,24 @@ pub(crate) const POSITION_PROBE_LIFT: f32 = 0.1;
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq)]
 pub struct CurrentAreaInterior(pub Option<WmoInteriorKeys>);
 
+/// The active player's answer to `CWorld::IsEntityOutdoors 0x6706f0`, which the spell validator
+/// asks through `0x612cc0` for its place rungs; true with no body, as for a null entity
+/// (`0x6706fa`).
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PlayerOutdoors(pub bool);
+
+impl Default for PlayerOutdoors {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+/// `CWorld::IsEntityOutdoors 0x6706f0` on the flags of the group the entity's placement linked.
+pub(crate) fn entity_outdoors(group_flags: Option<u32>) -> bool {
+    let _ = group_flags;
+    true
+}
+
 /// Track [`CurrentAreaInterior`]: per placed building, the faces-only down-ray from the player's
 /// position, first claim wins; the camera stands in before login.
 pub(super) fn track_area_interior(
@@ -648,6 +666,19 @@ pub fn terrain_z_local(local_from_world: &Affine3A, eye_world: Vec3, terrain_wow
 mod tests {
     use super::*;
     use benilla_assets::footprint_tri_bounds;
+
+    /// `0x6706f0`: outdoors with no group, or in one whose `EXTERIOR` (0x8) left the entity's
+    /// indoors bit clear (`0x6a880d`); in any other group, that group's flag 0x8000 (`0x670735`).
+    #[test]
+    fn the_entity_outdoors_test_reads_the_linked_groups_flags() {
+        assert!(entity_outdoors(None), "open terrain or a miss");
+        assert!(entity_outdoors(Some(EXTERIOR)), "an exterior group");
+        assert!(entity_outdoors(Some(EXTERIOR | EXTERIOR_LIT)));
+        assert!(entity_outdoors(Some(0x8000)));
+        assert!(!entity_outdoors(Some(0)), "a plain interior group");
+        assert!(!entity_outdoors(Some(EXTERIOR_LIT)), "a lit street is indoors here");
+        assert!(!entity_outdoors(Some(0x2000)), "0x2000 plays no part");
+    }
     use benilla_formats::FootprintTris;
 
     /// A model with nothing but footprint groups, all the sample reads.

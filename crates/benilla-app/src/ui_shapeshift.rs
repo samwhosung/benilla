@@ -144,6 +144,8 @@ fn feed_shapeshift_bar(
     own_control: Option<Res<crate::player::OwnControlLost>>,
     // The skill lines the walk's cost finds its level through.
     skill_lines: Option<Res<crate::ui_spellbook::SkillLines>>,
+    // `ItemSubClass.dbc`, whose flags the walk's ammo leg reads.
+    sub_classes: Option<Res<crate::ui_items::ItemSubClasses>>,
     mut memory: Local<crate::ui_script::VmMemo<StanceMemory>>,
 ) {
     // The forms, read off the host's cooldowns and selection; their push signals, so it runs
@@ -205,6 +207,7 @@ fn feed_shapeshift_bar(
                             spell_mods: &spell_mods,
                             control_lost: own_control.as_ref().is_some_and(|c| c.0),
                             skill_lines: skill_lines.as_deref().map(|s| &s.catalog),
+                            sub_classes: sub_classes.as_deref().map(|s| &s.0),
                         };
                         usable::spell_usable(id, d, &spells, &ctx, &objects, &items).0
                     });

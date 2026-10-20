@@ -749,6 +749,7 @@ fn send_spell_cast(
         sheathe_state: ctx.self_sheathe_state,
         move_flags: ctx.self_move_flags,
         daytime: ctx.daytime,
+        outdoors: ctx.self_outdoors,
     };
     let cast_time_ms = def.map_or(0, |d| {
         let level = crate::spell::SpellLevel::Player {
@@ -1008,6 +1009,7 @@ mod tests {
             self_stand_state: 0,
             self_sheathe_state: 0,
             daytime: false,
+            self_outdoors: true,
             self_control_lost: false,
         }
     }
@@ -2379,6 +2381,118 @@ mod tests {
             "loaded and carried: the arm's line"
         );
         let _ = rx.try_iter().count();
+    }
+
+    /// With a loot window latched (`GetLootGuid 0x6126f0`, `[player+0x1d28]`) TryCast refuses by
+    /// the spell's first effect, right after its dead rung (`0x6e4ca2`-`0x6e4d31`): Disenchant
+    /// (99) `0x82`, effect 127 `0x83`, and the enchants (53, 54, 92) `0x61`. With nothing latched
+    /// the cast goes on.
+    #[test]
+    fn a_latched_loot_window_refuses_disenchants_and_enchants() {
+        use benilla_formats::SpellDisplay;
+        const DISENCHANT: u32 = 13262;
+        let rows: [(u32, u32, u8); 5] = [
+            (DISENCHANT, 99, 0x82),
+            (901, 127, 0x83),
+            (902, 53, 0x61),
+            (903, 54, 0x61),
+            (904, 92, 0x61),
+        ];
+        let (mut world, rx) = world();
+        let mut spells = crate::ui_action::Spells::empty_for_tests();
+        spells.catalog = benilla_formats::SpellCatalog::from_displays(
+            rows.iter()
+                .map(|&(id, effect, _)| {
+                    let d = SpellDisplay {
+                        effects: [effect, 0, 0],
+                        ..Default::default()
+                    };
+                    (id, d)
+                })
+                .collect(),
+        );
+        world.insert_resource(spells);
+        world.insert_resource(crate::ui_loot::LootLatch(Some(0xF110_0000_0000_0042)));
+        for (id, effect, reason) in rows {
+            send(&mut world, id, CastCommit::Spell);
+            assert!(rx.try_recv().is_err(), "effect {effect} never sends");
+            assert_eq!(
+                world.resource_mut::<CastReports>().take_refusals(),
+                vec![CastFail::local(id, reason)],
+                "effect {effect}"
+            );
+        }
+        world.insert_resource(crate::ui_loot::LootLatch(None));
+        send(&mut world, DISENCHANT, CastCommit::Spell);
+        assert!(world.resource_mut::<CastReports>().take_refusals().is_empty());
+        assert!(
+            matches!(rx.try_recv(), Ok(ClientCommand::CastSpell { spell_id, .. }) if spell_id == DISENCHANT),
+            "nothing latched: the rung passes"
+        );
+    }
+
+    /// TryCast's ranged rung (`0x6e4e13`-`0x6e4e3e`): a spell with `Attributes & 0x2` refuses
+    /// `0x18` when `GetVirtualItem 0x5ec240` finds no ranged weapon, no visible entry in slot 17
+    /// or one whose flag half has bit 0 (`0x5ec2ee`).
+    #[test]
+    fn a_ranged_spell_without_a_ranged_weapon_is_refused() {
+        use crate::net::ObjectStore;
+        use benilla_formats::SpellDisplay;
+        use benilla_protocol::ObjectFields;
+        const RANGED: u32 = 905;
+        // `PLAYER_VISIBLE_ITEM_18`: the entry at block +2, the properties dword at +10.
+        const VISIBLE_RANGED_ENTRY: u16 = 258 + 12 * 17 + 2;
+        const VISIBLE_RANGED_PROPERTIES: u16 = 258 + 12 * 17 + 10;
+        let (mut world, rx) = world();
+        let mut spells = crate::ui_action::Spells::empty_for_tests();
+        spells.catalog = benilla_formats::SpellCatalog::from_displays(
+            [(
+                RANGED,
+                SpellDisplay {
+                    attributes: 0x2,
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        );
+        world.insert_resource(spells);
+        let press = |world: &mut World, pairs: &[(u16, u32)]| {
+            let mut all = vec![(22u16, 100u32)];
+            all.extend_from_slice(pairs);
+            let store: &'static ObjectStore =
+                Box::leak(Box::new(ObjectStore(ObjectFields::from_pairs(&all))));
+            world
+                .run_system_once(move |mut ladder: CastLadder| {
+                    let base = ctx();
+                    let with_store = cast_target::CastContext {
+                        rel: cast_target::TargetRelations {
+                            self_store: Some(store),
+                            ..base.rel
+                        },
+                        ..base
+                    };
+                    ladder.send(RANGED, &with_store, CastCommit::Spell);
+                })
+                .expect("one-shot");
+            world.resource_mut::<CastReports>().take_refusals()
+        };
+        assert_eq!(press(&mut world, &[]), vec![CastFail::local(RANGED, 0x18)]);
+        assert!(rx.try_recv().is_err(), "refused before the send");
+        assert_eq!(
+            press(
+                &mut world,
+                &[(VISIBLE_RANGED_ENTRY, 2504), (VISIBLE_RANGED_PROPERTIES, 0x0001_0000)]
+            ),
+            vec![CastFail::local(RANGED, 0x18)],
+            "the flag half's bit 0 hides the weapon"
+        );
+        assert!(press(&mut world, &[(VISIBLE_RANGED_ENTRY, 2504)]).is_empty());
+        assert!(
+            rx.try_iter()
+                .any(|c| matches!(c, ClientCommand::CastSpell { spell_id, .. } if spell_id == RANGED)),
+            "a bow in the slot passes the rung"
+        );
     }
 
     /// TryCast's IsCasting refusal (`0x61`) precedes the not-ready rung.

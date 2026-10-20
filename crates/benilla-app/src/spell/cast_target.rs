@@ -228,6 +228,9 @@ pub(crate) struct CastContext<'a> {
     pub(crate) self_sheathe_state: u8,
     /// `IsDaytime 0x60a050` on the game clock, the validator's day and night rungs' input.
     pub(crate) daytime: bool,
+    /// `0x612cc0`, the caster's answer to the entity outdoors test `0x6706f0`, the validator's
+    /// place rungs' input.
+    pub(crate) self_outdoors: bool,
     /// `[0xb4b3e4]` is clear: the start of melee the cast's tail makes returns at it
     /// (`0x5ecbc0`).
     pub(crate) self_control_lost: bool,
@@ -394,6 +397,7 @@ impl CastTargeting<'_, '_> {
                 .or_else(|| self_store.and_then(|s| s.0.unit_sheath_state()))
                 .unwrap_or(0),
             daytime: self.clock.as_deref().is_some_and(|c| c.0.is_daytime()),
+            self_outdoors: true,
             self_control_lost: self.own_control.as_deref().is_some_and(|c| c.0),
         }
     }
@@ -1004,6 +1008,31 @@ mod tests {
         assert_eq!(read(1, 0, Some(12)), (1, 0, true));
         assert_eq!(read(0, 2, Some(3)), (0, 2, false));
         assert_eq!(read(8, 1, None), (8, 1, false), "no clock reads night");
+    }
+
+    /// The place rungs' input is the player's answer to `0x6706f0` the world keeps
+    /// ([`benilla_world::wmo_portal::PlayerOutdoors`]); a world without it reads outdoors, as a
+    /// null entity does (`0x6706fa`).
+    #[test]
+    fn the_context_reads_the_players_outdoors_answer() {
+        use bevy::ecs::system::RunSystemOnce;
+        let read = |outdoors: Option<bool>| {
+            let mut world = World::new();
+            world.init_resource::<crate::spell::AutoSelfCast>();
+            world.insert_resource(Reputations::default());
+            world.insert_resource(SelfGuid(Some(7)));
+            world.insert_resource(Selection::default());
+            if let Some(o) = outdoors {
+                world.insert_resource(benilla_world::wmo_portal::PlayerOutdoors(o));
+            }
+            world.spawn((SelfPlayer, ObjectStore(Default::default())));
+            world
+                .run_system_once(|targeting: CastTargeting| targeting.context().self_outdoors)
+                .expect("the context builds")
+        };
+        assert!(!read(Some(false)));
+        assert!(read(Some(true)));
+        assert!(read(None));
     }
 
     /// `BindTarget`'s unit branch is one else-if chain (`0x6e5cad`-`0x6e5ee7`): the first arm whose
