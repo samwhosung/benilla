@@ -72,9 +72,9 @@ pub(super) fn plugin(app: &mut App) {
     // `None` on a hermetic capture, which still gets the watchdog. The folder is created only
     // when there is a sample to write.
     let dir = crate::local_state::diagnostics_dir();
+    // Every app beats. The watchdog's state is the statics above, so a process starts one: a test
+    // binary builds many apps, and the first one's watchdog watches every app's beat.
     app.add_systems(Last, beat);
-    // One watchdog per process, its state the statics above: an app built after the first (a test
-    // binary builds many) beats the heartbeat the running one watches.
     if START.set(Instant::now()).is_err() {
         return;
     }
