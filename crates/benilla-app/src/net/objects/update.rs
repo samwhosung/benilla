@@ -615,6 +615,8 @@ fn on_update_end(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<NonSend
     let SessionEvent::ObjectUpdateEnd = ev else {
         return;
     };
+    // The packet's own pass, taken whole: nothing here publishes to the VM, which only names a
+    // party member's pet ([`compare_party_record`]).
     let UpdatePass {
         blocks,
         copies,
