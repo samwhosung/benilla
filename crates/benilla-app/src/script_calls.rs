@@ -3091,13 +3091,13 @@ mod tests {
         f
     }
 
-    /// A feed's event handler casts inside its call: the feed pushes as an engine turn, then
-    /// signals its events with the host lent, each handler run in place (`SignalEvent`
-    /// `0x703e50`). Here the action feed's first `ACTIONBAR_UPDATE_COOLDOWN`.
+    /// A feed's event handler casts inside its call: the action feed pushes as an engine turn,
+    /// and the events it owes are signalled with the host lent, each handler run in place
+    /// (`SignalEvent` `0x703e50`). Here the bar's first `ACTIONBAR_UPDATE_COOLDOWN`.
     #[test]
     fn a_feeds_event_handler_casts_and_binds_inside_its_call() {
         let mut f = cork_on("ACTIONBAR_UPDATE_COOLDOWN");
-        crate::ui_action::run_feed_action_state_once(f.app.world_mut());
+        crate::ui_action::run_action_events_once(f.app.world_mut());
         assert_eq!(global(&mut f, "RAN"), Some(1), "the handler ran");
         assert_eq!(global(&mut f, "FIRST"), Some(1), "armed on the next line");
         assert_eq!(global(&mut f, "SECOND"), None, "bound and sent");

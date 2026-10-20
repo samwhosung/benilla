@@ -1315,7 +1315,7 @@ mod tests {
                     },
                 )
                 .expect("the group-list handler");
-            std::mem::take(&mut app.world_mut().resource_mut::<UiErrorKeys>().0)
+            app.world().resource::<UiErrorKeys>().take()
         };
         let lines = send(aldwyn);
         assert_eq!(lines.len(), 3, "{lines:?}");

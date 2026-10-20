@@ -508,7 +508,9 @@ pub(super) fn feed_action_state(
                     // melee arm falls back to cannot move that: its max is at least the 5.0 floor.
                     st.has_range = spell_mods
                         .min_max_range(d, row, caster, RangeTargets::default())
-                        .is_some_and(|(min, max)| min.abs() > f32::EPSILON || max.abs() > f32::EPSILON);
+                        .is_some_and(|(min, max)| {
+                            min.abs() > f32::EPSILON || max.abs() > f32::EPSILON
+                        });
                     // `IsActionInRange 0x4e56f0`: nil with no player (`0x4e572b`), else the pre-check
                     // `0x6e4440` on the selection, whose compare `0x6e47b0` hands `GetMinMaxRange` that
                     // target (`0x6e47ca`): its reach pads a ranged row, and its motion with the caster's
@@ -593,7 +595,8 @@ pub(super) fn feed_action_state(
                     }
                     if let Some(u) = use_spell {
                         let d = spells.as_ref().and_then(|s| s.catalog.get(u.spell_id));
-                        let info = cooldowns.info_item(u.spell_id, button.action, u.category, d, now);
+                        let info =
+                            cooldowns.info_item(u.spell_id, button.action, u.category, d, now);
                         st.cooldown = info.ui_triple(anchor, ui_now);
                         // The callback queries again and flushes while the cooldown ends after now.
                         record_flush |= awaited && info.remaining_ms > 0;

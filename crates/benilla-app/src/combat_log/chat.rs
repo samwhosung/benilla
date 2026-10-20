@@ -727,7 +727,7 @@ fn cast_names_target(effect: u32) -> bool {
 /// caster, typed by the caster against itself through the spell's hostility (`0x627d30`). No word
 /// follows.
 fn open_lock_line(
-    log: &mut ChatLog,
+    log: &ChatLog,
     ctx: &ChatCtx,
     stores: &impl Stores,
     poses: &impl Poses,

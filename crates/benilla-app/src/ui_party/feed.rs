@@ -8,7 +8,7 @@ use benilla_protocol::messages::{
 };
 use benilla_ui::script::{
     PartyMemberInfo, PartyRequest, PartyState, RaidMemberInfo, SavedInstanceInfo, ScriptValue,
-    UnitState,
+    UiScript, UnitState,
 };
 use bevy::prelude::*;
 

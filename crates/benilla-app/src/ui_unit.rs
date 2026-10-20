@@ -1761,7 +1761,7 @@ fn fire_unit_events(
         let Some(script) = script else {
             return;
         };
-        let pending = std::mem::take(&mut feed.vm.get(&script).pending);
+        let pending = std::mem::take(&mut feed.vm.get(script).pending);
         if pending.target_changed {
             // The reference signals it inside `SetSelection`, so inside the key or click whose
             // call moved the selection; a change that call made hears it under that call's input

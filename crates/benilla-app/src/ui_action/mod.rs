@@ -226,6 +226,16 @@ pub(crate) fn run_feed_action_state_once(world: &mut World) {
         .expect("the action-state feed runs as a one-shot system");
 }
 
+/// One pass of the action-state feed and the events it owes, for a test that hears them.
+#[cfg(test)]
+pub(crate) fn run_action_events_once(world: &mut World) {
+    use bevy::ecs::system::RunSystemOnce;
+    run_feed_action_state_once(world);
+    world
+        .run_system_once(state::fire_action_events)
+        .expect("the action events run as a one-shot system");
+}
+
 /// The 5875 spell data; `None` skips where the install is absent.
 #[cfg(test)]
 pub(crate) fn real_spells() -> Option<Spells> {
