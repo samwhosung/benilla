@@ -308,10 +308,13 @@ impl FailArgs<'_> {
     /// The `%s` fill for the arms this module owns; `replace` matches the reference's printf
     /// because each template has one `%s`. `0x5e` (`0x6e1f62`) and `0x5d` (`0x6e1fad`) read the
     /// wire's argument word, never `Spell.dbc`, and name a `SpellFocusObject` or `AreaTable` row.
-    /// Deviation: `0x5e` with no word falls back to the spell's own `RequiresSpellFocus`, which
-    /// the reference never reads here, because it is the id vmangos sends (`Spell.cpp:4426`).
-    /// `0x5d` has no such stand-in: vmangos takes its area from its own `spell_area` table
-    /// (`Spell.cpp:4429`), which `Spell.dbc` does not carry.
+    /// Deviation: the player's `0x5e` with no word falls back to the spell's own
+    /// `RequiresSpellFocus`, which the reference never reads here, because it is the id vmangos
+    /// sends (`Spell.cpp:4426`). `0x5d` has no such stand-in: vmangos takes its area from its own
+    /// `spell_area` table (`Spell.cpp:4429`), which `Spell.dbc` does not carry. The pet's arm keeps
+    /// the reference's read: a short packet, which vmangos's always is (`Packets/Pet.cpp:127`),
+    /// leaves the word 0 (`0x6e9161`), and with no row 0 in `SpellFocusObject.dbc` the line is
+    /// silent (`0x6e9385`).
     fn fill(&self, caster: Caster, reason: u8, spell: Option<&SpellDisplay>) -> Fill {
         let named = |name: Option<&str>| match (name, caster) {
             (Some(name), _) => Fill::Filled(name.to_string()),
@@ -326,11 +329,12 @@ impl FailArgs<'_> {
             0x8D => named(self.arg.and_then(|id| self.mechanics?.name(id))),
             0x5D => named(self.arg.and_then(|id| self.areas?.name(id))),
             0x5E => {
-                let id = self
-                    .arg
-                    .filter(|&id| id != 0)
-                    .or_else(|| spell.map(|d| d.requires_spell_focus).filter(|&id| id != 0));
-                named(id.and_then(|id| self.focus?.name(id)))
+                let word = self.arg.unwrap_or(0);
+                let id = match caster {
+                    Caster::Player if word == 0 => spell.map_or(0, |d| d.requires_spell_focus),
+                    _ => word,
+                };
+                named(self.focus.and_then(|f| f.name(id)))
             }
             0x56 => self.shapeshift_forms(caster, spell),
             // The world arms; the pet's table has the subclass arm alone (`0x6e904d`).
