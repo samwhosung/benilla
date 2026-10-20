@@ -164,8 +164,8 @@ fn passive_body(description: &str) -> SpellTooltipView {
         range: Some("30 yd range".into()),
         cast_time: Some("Instant".into()),
         cooldown: Some("6 sec cooldown".into()),
-        requires_item: Some("Requires One-Handed Axes".into()),
-        requires_form: Some("Requires Battle Stance".into()),
+        requires_item: Some("One-Handed Axes".into()),
+        requires_form: Some("Battle Stance".into()),
         reagents: Some("Reagents: Light Feather".into()),
         chance: Some("2.62% chance to dodge".into()),
         description: description.into(),
@@ -246,13 +246,14 @@ fn set_talent_on_an_exceptional_talent_keeps_the_spell_body() {
             name: "Holy Shield".into(),
             cost: Some("150 Mana".into()),
             cast_time: Some("Instant cast".into()),
-            requires_item: Some("Requires Shields".into()),
+            requires_item: Some("Shields".into()),
             description: "Increases chance to block by 30% for 10 sec.".into(),
             ..Default::default()
         },
     );
     s.run(
         r#"
+        SPELL_EQUIPPED_ITEM = "Requires %s"
         local a = CreateFrame("Button", "TB3"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
         local tt = CreateFrame("GameTooltip", "TT3", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT")

@@ -531,8 +531,9 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // `statusBarText` (`0x48fc34`, record `[0xb4d904]`, no engine reader), read by
     // `TextStatusBar.lua:47,97`: "0" shows the numbers on hover only.
     same("statusBarText", "0"),
-    // Enhanced Tooltips (`UIOptionsFrame.lua:15`), registered "1" at `0x48fddd` (`0x82e748`); read
-    // only by the stock interface.
+    // Enhanced Tooltips (`UIOptionsFrame.lua:15`), registered "1" at `0x48fddd` (`0x82e748`): the
+    // stock interface's binding-line gate, and `SetAction` and `SetShapeshift`'s compact spell
+    // tooltip when 0 (`0x532622`, `0x532a35`).
     same("UberTooltips", "1"),
     // Registered at `0x603280`: `ChatBubbles` "1", `ChatBubblesParty` "0".
     same("ChatBubbles", "1"),

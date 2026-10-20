@@ -358,7 +358,7 @@ fn a_spell_tooltip_with_a_live_line_arms_the_stock_refresh() {
         name: "Shield Wall".into(),
         cast_time: Some(cast.into()),
         recovery_ms,
-        chance: chance.map(str::to_string),
+        chance: chance.map(Into::into),
         ..Default::default()
     };
     // The value the stock button saved from the setter's answer.

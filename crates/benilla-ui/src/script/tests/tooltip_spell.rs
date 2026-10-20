@@ -61,6 +61,66 @@ fn spellbook_hover_renders_the_verified_shape() {
     assert!(s.take_errors().is_empty());
 }
 
+/// Every cell's template is read at the hover (`0x703bf0` at each call, `0x52ea4c` for
+/// `SPELL_RANGE`), not when the view was pushed: a string rewritten after the push reaches the
+/// next hover, the description's token templates too.
+#[test]
+fn a_rewritten_global_string_reaches_the_next_hover() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    let secs = TextPart::Keyed {
+        key: "INT_SPELL_DURATION_SEC".into(),
+        ordinal: Some(8),
+        args: Some(vec![KeyedArg::D(8)]),
+        or: "$d".into(),
+    };
+    s.set_spell_tooltip(
+        133,
+        SpellTooltipView {
+            name: "Fireball".into(),
+            cost: Some(TooltipText::keyed("MANA_COST", vec![KeyedArg::D(30)])),
+            range: Some(TooltipText::keyed(
+                "SPELL_RANGE",
+                vec![KeyedArg::S("35".into())],
+            )),
+            reagents: Some(TooltipText::copied("SPELL_REAGENTS").then("Rune")),
+            description: TooltipText(vec![TextPart::Text("Burns for ".into()), secs]),
+            ..Default::default()
+        },
+    );
+    s.set_spellbook(SpellBookState {
+        tabs: Vec::new(),
+        slots: vec![SpellSlotView {
+            spell_id: 133,
+            name: "Fireball".into(),
+            ..Default::default()
+        }],
+    });
+    s.run(
+        r#"
+        MANA_COST = "%d Mana"; SPELL_RANGE = "%s yd range"; SPELL_REAGENTS = "Reagents: "
+        INT_SPELL_DURATION_SEC = "%d sec"; INT_SPELL_DURATION_SEC_P1 = "%d sec"
+        local a = CreateFrame("Button", "SBR"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        TT = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        TT:SetOwner(a, "ANCHOR_RIGHT")
+        TT:SetSpell(1, "spell")
+        assert(TTTextLeft2:GetText() == "30 Mana", tostring(TTTextLeft2:GetText()))
+        assert(TTTextRight2:GetText() == "35 yd range")
+        assert(TTTextLeft3:GetText() == "Reagents: Rune")
+        assert(TTTextLeft4:GetText() == "Burns for 8 sec")
+        MANA_COST = "Mana: %d"; SPELL_RANGE = "Range: %s yards"; SPELL_REAGENTS = "Uses "
+        INT_SPELL_DURATION_SEC_P1 = "%d seconds"
+        TT:SetSpell(1, "spell")
+        assert(TTTextLeft2:GetText() == "Mana: 30", tostring(TTTextLeft2:GetText()))
+        assert(TTTextRight2:GetText() == "Range: 35 yards")
+        assert(TTTextLeft3:GetText() == "Uses Rune")
+        assert(TTTextLeft4:GetText() == "Burns for 8 seconds")
+    "#,
+    )
+    .unwrap();
+    assert!(s.take_errors().is_empty());
+}
+
 /// `SetSpell`'s `bookType` picks the book (`0x532d10` forks at `0x532e1c`, `0x532e2a`: the pet's
 /// slots at `0xb6f098`, the player's at `0xb700f0`); both books hold a different spell at slot 1.
 #[test]
@@ -360,7 +420,7 @@ fn requirement_and_reagent_lines_render_in_law_order() {
             name: "Shoot".into(),
             range: Some("30 yd range".into()),
             cast_time: Some("Instant".into()),
-            requires_item: Some("Requires Wands".into()),
+            requires_item: Some("Wands".into()),
             item_met: false,
             reagents: Some("Reagents: |cffff2020Light Feather|r".into()),
             description: "Attack with an equipped wand.".into(),
@@ -377,6 +437,7 @@ fn requirement_and_reagent_lines_render_in_law_order() {
     });
     s.run(
         r#"
+        SPELL_EQUIPPED_ITEM = "Requires %s"
         local a = CreateFrame("Button", "SB2"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
         local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT")
@@ -1527,5 +1588,180 @@ fn a_wait_replaced_by_an_earlier_re_render_is_not_replayed() {
         s.eval::<String>("return ATextLeft1:GetText()").unwrap(),
         "Firebolt"
     );
+    assert!(s.take_errors().is_empty());
+}
+
+/// Distinct stand-ins for the requirement keys and their compact `_NOSPACE` forms.
+fn seed_requirement_strings(s: &UiScript) {
+    s.run(
+        r#"
+        SPELL_EQUIPPED_ITEM = "[ITEM %s]"; SPELL_EQUIPPED_ITEM_NOSPACE = "[ITEM_NS %s]"
+        SPELL_REQUIRED_FORM = "[FORM %s]"; SPELL_REQUIRED_FORM_NOSPACE = "[FORM_NS %s]"
+        SPELL_TOTEMS = "[TOOLS] "; SPELL_REAGENTS = "[REAGENTS] "; SPELL_USE_ALL_MANA = "[ALL 100% MANA]"
+        local a = CreateFrame("Button", "SBC"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        TT = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        function Lines()
+            local out = {}
+            for i = 1, TT:NumLines() do
+                local l, r = getglobal("TTTextLeft" .. i):GetText(), getglobal("TTTextRight" .. i)
+                local right = r:IsShown() and r:GetText() or nil
+                table.insert(out, (l or "") .. (right and (" | " .. right) or ""))
+            end
+            return table.concat(out, "\n")
+        end
+    "#,
+    )
+    .unwrap();
+}
+
+/// Every line a full build can hold, the tools met, the item unmet, the form met, a reagent short.
+fn holy_light() -> SpellTooltipView {
+    SpellTooltipView {
+        name: "Lay on Hands".into(),
+        rank: Some("Rank 2".into()),
+        cost: Some("0 Mana".into()),
+        range: Some("40 yd range".into()),
+        cast_time: Some("Instant cast".into()),
+        cooldown: Some("60 min cooldown".into()),
+        totems: Some(TooltipText::copied("SPELL_TOTEMS").then("Fire Totem")),
+        totems_met: true,
+        requires_item: Some("Wands".into()),
+        item_met: false,
+        requires_form: Some("Bear Form".into()),
+        form_met: true,
+        reagents: Some(TooltipText::copied("SPELL_REAGENTS").then("|cffff2020Rune|r")),
+        reagents_met: false,
+        chance: Some("5.00% chance to crit".into()),
+        use_all: Some(TooltipText::copied("SPELL_USE_ALL_MANA")),
+        description: "Heals a friendly target.".into(),
+        ..Default::default()
+    }
+}
+
+/// The full builder's order: tools after the cast line, before the item requirement
+/// (`0x52ed43`-`0x52eea2`), and the drain-all line after the chance line, before the description
+/// (`0x52f697`-`0x52f6e3`), copied with its `%` sign.
+#[test]
+fn the_tools_and_drain_all_lines_sit_in_the_builders_order() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    seed_requirement_strings(&s);
+    s.set_spell_tooltip(633, holy_light());
+    s.set_action(
+        1,
+        Some(ActionSlot {
+            kind: 0,
+            action: 633,
+            ..Default::default()
+        }),
+    );
+    let lines: String = s
+        .eval(r#"TT:SetOwner(SBC, "ANCHOR_RIGHT"); TT:SetAction(1); return Lines()"#)
+        .unwrap();
+    assert_eq!(
+        lines,
+        "Lay on Hands | Rank 2\n0 Mana | 40 yd range\nInstant cast | 60 min cooldown\n\
+         [TOOLS] Fire Totem\n[ITEM Wands]\n[FORM Bear Form]\n[REAGENTS] |cffff2020Rune|r\n\
+         5.00% chance to crit\n[ALL 100% MANA]\nHeals a friendly target."
+    );
+    assert!(s.take_errors().is_empty());
+}
+
+/// `UberTooltips` 0 makes `SetAction` and `SetShapeshift` compact (`0x532622`-`0x532632`): the
+/// name with its rank, an unmet requirement in its `_NOSPACE` form, a short reagent, and nothing
+/// after the cooldown remaining (`0x52f589`); met tools and forms drop. Other setters stay full.
+#[test]
+fn enhanced_tooltips_off_shortens_the_action_and_stance_tooltips() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    seed_requirement_strings(&s);
+    s.set_spell_tooltip(633, holy_light());
+    s.set_action(
+        1,
+        Some(ActionSlot {
+            kind: 0,
+            action: 633,
+            ..Default::default()
+        }),
+    );
+    s.set_shapeshift_forms(vec![ShapeshiftFormView {
+        spell_id: 633,
+        name: "Lay on Hands".into(),
+        ..Default::default()
+    }]);
+    s.set_spellbook(SpellBookState {
+        tabs: Vec::new(),
+        slots: vec![SpellSlotView {
+            spell_id: 633,
+            name: "Lay on Hands".into(),
+            ..Default::default()
+        }],
+    });
+    s.run(r#"SetCVar("UberTooltips", "0")"#).unwrap();
+    let compact = "Lay on Hands | Rank 2\n[ITEM_NS Wands]\n[REAGENTS] |cffff2020Rune|r";
+    for call in ["TT:SetAction(1)", "TT:SetShapeshift(1)"] {
+        let lines: String = s
+            .eval(&format!(
+                r#"TT:SetOwner(SBC, "ANCHOR_RIGHT"); {call}; return Lines()"#
+            ))
+            .unwrap();
+        assert_eq!(lines, compact, "{call}");
+    }
+    let book: String = s
+        .eval(r#"TT:SetOwner(SBC, "ANCHOR_RIGHT"); TT:SetSpell(1, "spell"); return Lines()"#)
+        .unwrap();
+    assert!(book.ends_with("Heals a friendly target."), "{book}");
+    assert!(s.take_errors().is_empty());
+}
+
+/// `SetShapeshift` and `SetPetAction` pass the rank flag (`0x532ab3`, `0x532886`), as `SetAction`
+/// does; `SetSpell` does not.
+#[test]
+fn the_stance_and_pet_bars_show_the_rank() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    seed_requirement_strings(&s);
+    let stealth = SpellTooltipView {
+        name: "Stealth".into(),
+        rank: Some("Rank 1".into()),
+        ..Default::default()
+    };
+    s.set_spell_tooltip(1784, stealth.clone());
+    s.set_pet_spell_tooltip(1784, stealth);
+    s.set_shapeshift_forms(vec![ShapeshiftFormView {
+        spell_id: 1784,
+        name: "Stealth".into(),
+        ..Default::default()
+    }]);
+    s.set_pet_actions(
+        true,
+        true,
+        true,
+        vec![PetActionView {
+            name: Some("Stealth".into()),
+            spell_id: Some(1784),
+            ..Default::default()
+        }],
+    );
+    s.set_spellbook(SpellBookState {
+        tabs: Vec::new(),
+        slots: vec![SpellSlotView {
+            spell_id: 1784,
+            name: "Stealth".into(),
+            ..Default::default()
+        }],
+    });
+    for (call, want) in [
+        ("TT:SetShapeshift(1)", "Stealth | Rank 1"),
+        ("TT:SetPetAction(1)", "Stealth | Rank 1"),
+        ("TT:SetSpell(1, 'spell')", "Stealth"),
+    ] {
+        let lines: String = s
+            .eval(&format!(
+                r#"TT:SetOwner(SBC, "ANCHOR_RIGHT"); {call}; return Lines()"#
+            ))
+            .unwrap();
+        assert_eq!(lines, want, "{call}");
+    }
     assert!(s.take_errors().is_empty());
 }

@@ -3327,10 +3327,6 @@ mod tests {
                 "statusBarText",
                 "TextStatusBar.lua reads it on each CVAR_UPDATE",
             ),
-            (
-                "UberTooltips",
-                "GameTooltip's binding-line gate, stock and pfUI",
-            ),
             ("gxApi", "pfUI's system tooltip names the backend"),
             (
                 "cameraPitchSmoothSpeed",

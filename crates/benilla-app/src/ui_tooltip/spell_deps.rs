@@ -131,7 +131,8 @@ pub(super) struct Deps {
     pub(super) mod_bits: u64,
     /// The skill lines read, through the view's own spell and each one its text cross-references.
     pub(super) skill_lines: Vec<u32>,
-    /// The reagent entries the reagents line lists.
+    /// The item entries the tools and reagents lines list, whose carried counts and names the
+    /// lines read.
     reagents: Vec<u32>,
 }
 
@@ -162,7 +163,7 @@ impl Deps {
         }
     }
 
-    /// The reagent entries the view lists.
+    /// The tool and reagent entries the view lists.
     pub(super) fn reagents(&self) -> &[u32] {
         &self.reagents
     }

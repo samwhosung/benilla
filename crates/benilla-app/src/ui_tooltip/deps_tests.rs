@@ -463,8 +463,9 @@ impl Rig {
                 layout.kinds.push(kind);
             }
         }
+        // The bag items the tools and reagents lines name.
         let reagents: BTreeSet<u32> = displays()
-            .flat_map(|d| d.reagents.iter().map(|&(entry, _)| entry))
+            .flat_map(|d| d.reagents.iter().map(|&(entry, _)| entry).chain(d.totems))
             .filter(|&entry| entry != 0)
             .collect();
         let families: BTreeSet<u32> = displays()
@@ -854,8 +855,8 @@ fn every_view_that_moves_with_an_input_is_requeued_by_that_input() {
     eprintln!("{}", report.join("\n"));
 }
 
-/// The reagents line: a name streaming in re-queues every view that lists a reagent, and a count
-/// moving re-queues only the spells that list the entry.
+/// The tools and reagents lines: a name streaming in re-queues every view that lists the item,
+/// and a count moving re-queues only the spells that list the entry.
 #[test]
 fn a_reagent_moving_requeues_the_views_that_list_it() {
     let Some(mut rig) = Rig::new() else { return };
@@ -871,10 +872,9 @@ fn a_reagent_moving_requeues_the_views_that_list_it() {
         .iter()
         .copied()
         .filter(|&id| {
-            spells
-                .catalog
-                .get(id)
-                .is_some_and(|d| d.reagents.iter().any(|&(entry, _)| entry != 0))
+            spells.catalog.get(id).is_some_and(|d| {
+                d.reagents.iter().any(|&(entry, _)| entry != 0) || d.totems.iter().any(|&e| e != 0)
+            })
         })
         .collect();
     assert!(
@@ -955,10 +955,16 @@ fn a_reagent_moving_requeues_the_views_that_list_it() {
         }
     }
     assert!(moved >= 100, "only {moved} views showed a carried reagent");
-    // Each view records exactly the entries its spell lists.
+    // Each view records exactly the entries its spell lists, its tools among them.
     for (&id, (_, deps)) in listing.iter().zip(&plain) {
         let d = spells.catalog.get(id).expect("listed");
-        let mut want: Vec<u32> = d.reagents.iter().map(|r| r.0).filter(|&e| e != 0).collect();
+        let mut want: Vec<u32> = d
+            .reagents
+            .iter()
+            .map(|r| r.0)
+            .chain(d.totems)
+            .filter(|&e| e != 0)
+            .collect();
         want.sort_unstable();
         want.dedup();
         let mut got = deps.reagents().to_vec();
@@ -1267,7 +1273,6 @@ fn the_search_answers_the_same_wherever_the_watched_state_is_the_same() {
     let (tx, _rx) = crossbeam_channel::unbounded();
     let commands = NetCommands(tx);
     let mods = SpellModifiers::default();
-    let get: &dyn Fn(&str) -> Option<String> = &|_| None;
 
     // (spell, the watched state of the slots it reads, the disarm flag if it reads it) to its
     // `item_met`, and the verdicts each spell reached.
@@ -1305,7 +1310,6 @@ fn the_search_answers_the_same_wherever_the_watched_state_is_the_same() {
                             sub_classes: None,
                             skill_lines: None,
                             spell_mods: &mods,
-                            get,
                         };
                         let (view, deps) = build_view(id, &spells, &mut vctx).expect("a spec");
                         assert!(

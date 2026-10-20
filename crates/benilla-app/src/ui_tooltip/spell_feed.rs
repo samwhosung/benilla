@@ -8,10 +8,8 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-use benilla_ui::script::UiScript;
-use benilla_ui::strings::Arg;
+use benilla_ui::script::{KeyedArg, TextPart, TooltipText, UiScript};
 
-use super::keyed;
 use super::spell_deps::{Chance, Changes, Deps, RangeSeen, Reagents, Seen, UnitField};
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
@@ -59,14 +57,12 @@ pub(super) struct ViewCtx<'a, 'w, 's> {
     pub(super) skill_lines: Option<&'a benilla_formats::SkillLineCatalog>,
     /// The talent spell-modifier tables: the cost cell shows the modified cost (`power_cost`).
     pub(super) spell_mods: &'a crate::spell::SpellModifiers,
-    /// The VM's `GlobalStrings.lua`, where the keyed cells and the `$` tokens' templates resolve.
-    pub(super) get: &'a dyn Fn(&str) -> Option<String>,
 }
 
-/// Build one spell's tooltip view, every cell resolved here where the catalogs live, and what it
-/// read ([`Deps`]). The range, cast, cooldown, form and item cells fill their `GlobalStrings.lua`
-/// keys; the cost, reagents and chance cells are composed in English, where the reference fills
-/// `MANA_COST` and its kin, `SPELL_REAGENTS` and `CHANCE_TO_*`.
+/// Build one spell's tooltip view, its data resolved here where the catalogs live, and what it
+/// read ([`Deps`]). Every `GlobalStrings.lua` template a cell or a `$` token names is left by key
+/// to the render, which reads `_G` as the builder does at each call (`0x703bf0`), so no string a
+/// view holds goes stale.
 pub(super) fn build_view(
     spell_id: u32,
     spells: &Spells,
@@ -119,7 +115,8 @@ pub(super) fn build_view(
         unmodified_points: false,
         gender: &gender,
         home_area: &home_area,
-        global: vctx.get,
+        // Never read: the parts leave each template to the render.
+        global: &|_| None,
         printf: &crate::ui_script::token_printf,
     };
     // The aura tooltip `0x52f880` expands the aura text with the points' modifiers off (`52f940`).
@@ -155,24 +152,26 @@ pub(super) fn build_view(
     let cost = {
         // The shared per-type divisor (`0x6e7130`), never a local `power_type == 1` test.
         let div = benilla_protocol::messages::power_display_scale(d.power_type);
-        let unit = match d.power_type {
-            0 => "Mana",
-            1 => "Rage",
-            2 => "Focus",
-            3 => "Energy",
-            4 => "Happiness",
-            _ => "Health",
+        // The key table `0x85416c` for types 0 to 4, `HEALTH_COST` (`0x854fc8`) past them.
+        let key = match d.power_type {
+            0 => "MANA_COST",
+            1 => "RAGE_COST",
+            2 => "FOCUS_COST",
+            3 => "ENERGY_COST",
+            4 => "HAPPINESS_COST",
+            _ => "HEALTH_COST",
         };
+        let amount = KeyedArg::D(i64::from(resolved_cost / div));
         if resolved_cost == 0 && d.mana_per_second == 0 {
             None
         } else if d.mana_per_second > 0 {
-            Some(format!(
-                "{} {unit}, plus {} per sec",
-                resolved_cost / div,
-                d.mana_per_second / div
+            // `"%s_PER_TIME"` of the key (`0x854fbc`, `0x52e925`).
+            Some(TooltipText::keyed(
+                format!("{key}_PER_TIME"),
+                vec![amount, KeyedArg::D(i64::from(d.mana_per_second / div))],
             ))
         } else {
-            Some(format!("{} {unit}", resolved_cost / div))
+            Some(TooltipText::keyed(key, vec![amount]))
         }
     };
     // The range cell: two attribute gates, `GetMinMaxRange` (`0x6e3480`, `0x52e9c2`), then
@@ -207,7 +206,7 @@ pub(super) fn build_view(
             } else {
                 format!("{}", yd(max))
             };
-            keyed(vctx.get, "SPELL_RANGE", &[Arg::S(&yards)])
+            Some(TooltipText::keyed("SPELL_RANGE", vec![KeyedArg::S(yards)]))
         })
         .flatten();
     // The cast line: gate `0x52eb15` also omits it for a TRADE_SKILL or ATTACK `Effect[0]`; then
@@ -239,7 +238,7 @@ pub(super) fn build_view(
             } else {
                 ("SPELL_CAST_TIME_SEC", f64::from(base) / 1000.0)
             };
-            keyed(vctx.get, key, &[Arg::F(v)])
+            Some(TooltipText::keyed(key, vec![KeyedArg::F(v)]))
         } else {
             let key = if base < 0 {
                 "SPELL_CAST_TIME_INSTANT"
@@ -254,7 +253,7 @@ pub(super) fn build_view(
             } else {
                 "SPELL_CAST_TIME_INSTANT_NO_MANA"
             };
-            keyed(vctx.get, key, &[])
+            Some(TooltipText::keyed(key, Vec::new()))
         }
     };
     // The larger recovery column (`0x52eada`): op 11 follows the ranged-speed category pad. The
@@ -277,7 +276,7 @@ pub(super) fn build_view(
             } else {
                 ("SPELL_RECAST_TIME_SEC", secs)
             };
-            keyed(vctx.get, key, &[Arg::F(v)])
+            Some(TooltipText::keyed(key, vec![KeyedArg::F(v)]))
         })
         .flatten();
     // The required-form line (`0x52f10a`-`0x52f2ae`). With `AttributesEx2` bit 19 set the mask is
@@ -289,15 +288,7 @@ pub(super) fn build_view(
                 .filter_map(|b| spells.forms.get(&(b + 1)).map(|f| f.name.as_str()))
                 .filter(|n| !n.is_empty())
                 .collect();
-            (!names.is_empty())
-                .then(|| {
-                    keyed(
-                        vctx.get,
-                        "SPELL_REQUIRED_FORM",
-                        &[Arg::S(&names.join(", "))],
-                    )
-                })
-                .flatten()
+            (!names.is_empty()).then(|| names.join(", "))
         })
         .flatten();
     // No caster unit passes the form test (`0x52f1e8`). A spell with no stance mask fails it for
@@ -314,8 +305,7 @@ pub(super) fn build_view(
             vctx.sub_classes?
                 .requirement_name(d.equipped_item_class as u32, d.equipped_item_subclass_mask)
         })
-        .flatten()
-        .and_then(|name| keyed(vctx.get, "SPELL_EQUIPPED_ITEM", &[Arg::S(&name)]));
+        .flatten();
     let chance = chance_line(d, vctx.store, &mut deps.borrow_mut());
     // The unit selector passes the item test outright (`0x52f07f`).
     if matches!(caster, ViewCaster::Player) {
@@ -325,12 +315,14 @@ pub(super) fn build_view(
         || vctx
             .store
             .is_none_or(|s| usable::equipped_item_fits(d, s, vctx.objects, vctx.items));
-    // Reagents (`SPELL_REAGENTS`, `0x854e54`), red when short; one whose template has not
-    // streamed is absent until `feed_spell_tooltips` re-pushes on its arrival. A build is the
-    // reference's, which looks each reagent up with a callback (`0x52f3f4`).
-    let reagents = {
+    // The tools (`SPELL_TOTEMS`, `0x854ec4`) and the reagents (`SPELL_REAGENTS`, `0x854e54`),
+    // each the player does not carry red. One whose template has not streamed is absent until
+    // `feed_spell_tooltips` re-pushes on its arrival, as the reference looks each up with a
+    // callback (`0x52eda4`, `0x52f3f4`) and builds again when the last answers.
+    let item_line = |head: &str, items: &mut dyn Iterator<Item = (u32, u32)>| {
         let mut parts: Vec<String> = Vec::new();
-        for (entry, count) in d.reagents.iter().copied().filter(|&(e, _)| e != 0) {
+        let mut met = true;
+        for (entry, count) in items.filter(|&(e, _)| e != 0) {
             deps.borrow_mut().reagent(entry);
             let Some(name) = vctx
                 .items
@@ -339,24 +331,45 @@ pub(super) fn build_view(
             else {
                 continue;
             };
+            // `"%s (%d)"` above one (`0x854b30`, `0x52f461`); a tool has no count.
             let text = if count > 1 {
                 format!("{name} ({count})")
             } else {
                 name
             };
-            // Red only when no copy is found at all (`0x52f49f`, `0x622270` at mask 0 returning
-            // null at `0x52f4a6`); the count in the line is shown, never compared.
+            // Red only when no copy is found at all (`0x622270` at mask 0, `0x52ee12`,
+            // `0x52f49f`); the count in the line is shown, never compared.
             let short = vctx.store.is_some_and(|s| {
                 find_item(&s.0, vctx.objects, entry, ItemSearch::default()).is_none()
             });
+            met &= !short;
             parts.push(if short {
                 format!("|cffff2020{text}|r")
             } else {
                 text
             });
         }
-        (!parts.is_empty()).then(|| format!("Reagents: {}", parts.join(", ")))
+        // The head copied, then the names joined by `", "` (`0x52edc6`-`0x52edfc`,
+        // `0x52f416`-`0x52f44c`).
+        let line = (!parts.is_empty()).then(|| TooltipText::copied(head).then(parts.join(", ")));
+        (line, met)
     };
+    let (totems, totems_met) = item_line(
+        "SPELL_TOTEMS",
+        &mut d.totems.iter().map(|&entry| (entry, 1)),
+    );
+    let (reagents, reagents_met) = item_line("SPELL_REAGENTS", &mut d.reagents.iter().copied());
+    // The drain-all line (`0x52f697`): `AttributesEx` bit `0x2`, keyed by power type.
+    let use_all = (d.attributes_ex & ATTR_EX_USE_ALL_POWER != 0).then(|| {
+        TooltipText::copied(match d.power_type {
+            0 => "SPELL_USE_ALL_MANA",
+            1 => "SPELL_USE_ALL_RAGE",
+            2 => "SPELL_USE_ALL_FOCUS",
+            3 => "SPELL_USE_ALL_ENERGY",
+            4 => "SPELL_USE_ALL_HAPPINESS",
+            _ => "SPELL_USE_ALL_HEALTH",
+        })
+    });
     let view = benilla_ui::script::SpellTooltipView {
         name: d.name.clone(),
         rank: d.rank.clone(),
@@ -372,20 +385,75 @@ pub(super) fn build_view(
         requires_form,
         form_met,
         chance,
+        totems,
+        totems_met,
         reagents,
+        reagents_met,
+        use_all,
         description: d
             .description
             .as_deref()
-            .map(|t| benilla_formats::substitute(t, d, &ctx))
+            .map(|t| {
+                tooltip_text(benilla_formats::substitute_parts(
+                    t,
+                    d,
+                    &ctx,
+                    Default::default(),
+                ))
+            })
             .unwrap_or_default(),
         aura_description: d
             .aura_description
             .as_deref()
-            .map(|t| benilla_formats::substitute(t, d, &aura_ctx))
+            .map(|t| {
+                tooltip_text(benilla_formats::substitute_parts(
+                    t,
+                    d,
+                    &aura_ctx,
+                    Default::default(),
+                ))
+            })
             .unwrap_or_default(),
     };
     Some((view, deps.into_inner()))
 }
+
+/// The token engine's parts as the render reads them: each template it names by key, its stand-in
+/// the token as written.
+pub(super) fn tooltip_text(parts: Vec<benilla_formats::TokenPart>) -> TooltipText {
+    use benilla_formats::{TokenNumber, TokenPart};
+    TooltipText(
+        parts
+            .into_iter()
+            .map(|p| match p {
+                TokenPart::Text(t) => TextPart::Text(t),
+                TokenPart::Keyed {
+                    key,
+                    ordinal,
+                    args,
+                    raw,
+                } => TextPart::Keyed {
+                    key,
+                    // A negative ordinal reads as none, the bare key (`0x703c89`).
+                    ordinal: ordinal.and_then(|n| u32::try_from(n).ok()),
+                    args: Some(
+                        args.into_iter()
+                            .map(|a| match a {
+                                TokenNumber::Int(n) => KeyedArg::D(n),
+                                TokenNumber::Float(x) => KeyedArg::F(x),
+                            })
+                            .collect(),
+                    ),
+                    or: raw,
+                },
+            })
+            .collect(),
+    )
+}
+
+/// `AttributesEx` bit `0x2`, vmangos `SPELL_ATTR_EX_USE_ALL_MANA` (`SpellDefines.h:833`): the
+/// drain-all line (`0x52f697`).
+const ATTR_EX_USE_ALL_POWER: u32 = 0x2;
 
 /// `Targets` bit `0x10` (name inferred): set, the required-item line is skipped (`0x52eeaa`).
 const TARGET_ITEM: u32 = 0x10;
@@ -402,17 +470,21 @@ fn chance_line(
     d: &benilla_formats::SpellDisplay,
     store: Option<&ObjectStore>,
     deps: &mut Deps,
-) -> Option<String> {
-    let (which, label) = match d.effects[0] {
-        EFFECT_ATTACK => (Chance::Crit, "crit"),
-        EFFECT_DODGE if d.passive => (Chance::Dodge, "dodge"),
-        EFFECT_PARRY if d.passive => (Chance::Parry, "parry"),
-        EFFECT_BLOCK if d.passive => (Chance::Block, "block"),
+) -> Option<TooltipText> {
+    let (which, key) = match d.effects[0] {
+        EFFECT_ATTACK => (Chance::Crit, "CHANCE_TO_CRIT"),
+        EFFECT_DODGE if d.passive => (Chance::Dodge, "CHANCE_TO_DODGE"),
+        EFFECT_PARRY if d.passive => (Chance::Parry, "CHANCE_TO_PARRY"),
+        EFFECT_BLOCK if d.passive => (Chance::Block, "CHANCE_TO_BLOCK"),
         _ => return None,
     };
     deps.chance(which);
-    // The enUS text of the reference's `CHANCE_TO_*` keys (`%.2f%% chance to crit`).
-    Some(format!("{:.2}% chance to {label}", which.read(&store?.0)?))
+    // The player block's float widened to a double (`0x52f652`) into the key's `%.2f%%`.
+    let percent = which.read(&store?.0)?;
+    Some(TooltipText::keyed(
+        key,
+        vec![KeyedArg::F(f64::from(percent))],
+    ))
 }
 
 /// What the feed knows of the views it has pushed: what each was built from and what the inputs
@@ -680,9 +752,7 @@ pub(super) fn feed_spell_tooltips(
     wanted.dedup();
     wanted_pet.sort_unstable();
     wanted_pet.dedup();
-    // Build, then push: the build's borrow of the VM's strings ends before the store is written.
     let (built, built_pet) = {
-        let get = |key: &str| benilla_ui::strings::global(script.lua(), key);
         let mut vctx = ViewCtx {
             home_area: home_area.as_deref(),
             form: self_store.map_or(0, |s| s.0.unit_shapeshift_form()),
@@ -696,7 +766,6 @@ pub(super) fn feed_spell_tooltips(
             sub_classes: sub_classes.as_deref().map(|c| &c.0),
             skill_lines: skill_lines.as_deref().map(|s| &s.catalog),
             spell_mods,
-            get: &get,
         };
         let built = build_views(wanted, spells, &mut vctx, memory, false);
         // The pet views read the pet's form and reach where the player's read the player's.

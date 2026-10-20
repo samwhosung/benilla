@@ -46,8 +46,11 @@ fn tooltip_line_xml(i: usize, font: &str) -> String {
     )
 }
 
+/// A VM with the tooltip template and the `UberTooltips` option the client registers at its
+/// default "1" (`0x48fddd`), which `SetAction` and `SetShapeshift` read.
 pub(super) fn script() -> UiScript {
     let s = UiScript::new().expect("construct UiScript");
     load_tooltip_template(&s);
+    s.register_cvars([("UberTooltips", "1")]);
     s
 }

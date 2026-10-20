@@ -1,11 +1,13 @@
 //! The spell and aura tooltip content, in the line order of the spell builder `0x52e610` and the
 //! aura builder `0x52f880`: name and rank; cost and range; cast time and cooldown (omitted for a
-//! passive spell, with no "Passive" line); the required item class, then form, white when met and
-//! red when not; reagents, a missing one inline red; the description, gold (white on an aura).
-//! Only `SetPlayerBuff` adds the gold time-remaining line.
+//! passive spell, with no "Passive" line); the tools, the required item class, then form, white
+//! when met and red when not; reagents, a missing one inline red; the cooldown remaining; the
+//! chance and drain-all lines; the description, gold (white on an aura). Only `SetPlayerBuff`
+//! adds the gold time-remaining line.
 //!
 //! The app resolves each spell into a [`SpellTooltipView`] (`$`-tokens, cast, range and duration
-//! text), kept in an ask-once store by spell id and pushed ahead of a hover: one store for the
+//! data, each `GlobalStrings.lua` template by key, read at the render), kept in an ask-once store
+//! by spell id and pushed ahead of a hover: one store for the
 //! views built against the player and one for those built against its pet, which the builder's
 //! unit selector asks for. A miss records the id; a `set_spell_by_id` miss also waits, and the
 //! app's answer re-renders that tooltip a frame after the hover. That frame is a known difference
@@ -18,7 +20,8 @@ use mlua::{Lua, Table, Value};
 use super::binding_abi::{self, flag};
 use super::object::{frame_handle_of, frame_wrapper};
 use super::tooltip::{append_line, clear, clear_silent, tip_mut};
-use super::{CraftTooltip, Model, TrainerTooltip};
+use super::{CraftTooltip, Model, TooltipText, TrainerTooltip};
+use crate::strings::Arg;
 use crate::widget::FrameHandle;
 
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
@@ -27,7 +30,8 @@ const GRAY: [f32; 4] = [128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0];
 /// The description gold, `0xffffd200`.
 const GOLD: [f32; 4] = [1.0, 210.0 / 255.0, 0.0, 1.0];
 
-/// One spell's tooltip, every string resolved by the app.
+/// One spell's tooltip, prepared by the app: the data resolved, each `GlobalStrings.lua` template
+/// named by key and read at the render ([`TooltipText`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SpellTooltipView {
     pub name: String,
@@ -36,39 +40,52 @@ pub struct SpellTooltipView {
     /// The aura variant's gold right column (`0x52f8e5`): the `SpellDispelType.dbc` name, such as
     /// "Magic", when that row's `[+0x28]` flag is set, so Stealth has none.
     pub dispel_type: Option<String>,
-    /// The cost cell, such as "35 Mana" or "11 Health, plus 5 per sec": the resolved cost through
-    /// the power-type keys, falling back to health.
-    pub cost: Option<String>,
-    pub range: Option<String>,
-    /// The cast cell ("1.5 sec cast", "Instant", "Next melee", "Channeled"); `None` is a passive
-    /// spell, whose cast and cooldown line is omitted.
-    pub cast_time: Option<String>,
+    /// The cost cell (`0x52e8f9`-`0x52e99f`): `MANA_COST` and its kin by power type (the key
+    /// table `0x85416c`), `HEALTH_COST` past them, the `_PER_TIME` form with a cost per second.
+    pub cost: Option<TooltipText>,
+    /// `SPELL_RANGE` of the yards (`0x52ea4c`).
+    pub range: Option<TooltipText>,
+    /// The cast cell (`SPELL_CAST_TIME_*`, `SPELL_ON_NEXT_*`, `SPELL_CAST_CHANNELED`); `None` is a
+    /// passive spell, whose cast and cooldown line is omitted.
+    pub cast_time: Option<TooltipText>,
     /// The cooldown cell (`SPELL_RECAST_TIME_SEC 0x854ed4`): `max(RecoveryTime,
     /// CategoryRecoveryTime)`, as Charge's 15 s is in the category column.
-    pub cooldown: Option<String>,
+    pub cooldown: Option<TooltipText>,
     /// The same larger recovery column in milliseconds (the builder's `[ebp-0x38]`, `0x52eb0d`):
     /// the live "Cooldown remaining" line and the setters' return flag need it at 60 000 or more.
     pub recovery_ms: u32,
-    /// "Requires Wands" (`SPELL_EQUIPPED_ITEM 0x854e94`), from `EquippedItemClass` and
-    /// `EquippedItemSubClassMask`.
+    /// `SPELL_TOTEMS` (`0x854ec4`) and the tools of `Totem` (`+0xa0`), each the player does not
+    /// carry wrapped in the inline `|cffff2020` escape (`0x52ed43`-`0x52eea2`).
+    pub totems: Option<TooltipText>,
+    /// The player carries every tool, which leaves the line out of a compact build.
+    pub totems_met: bool,
+    /// The required item's name, "Wands", that `SPELL_EQUIPPED_ITEM` (`0x854e94`) takes, from
+    /// `EquippedItemClass` and `EquippedItemSubClassMask`.
     pub requires_item: Option<String>,
     /// A worn item matches the class and subclass mask; re-pushed on an equipment change.
     pub item_met: bool,
-    /// "Requires Battle Stance" (`SPELL_REQUIRED_FORM 0x854e64`), from the `Stances` mask.
+    /// The allowed forms' names joined, "Battle Stance", that `SPELL_REQUIRED_FORM` (`0x854e64`)
+    /// takes, from the `Stances` mask.
     pub requires_form: Option<String>,
     /// The current shapeshift form matches the mask; the app re-pushes on a form change.
     pub form_met: bool,
-    /// "Reagents: Light Feather" (`SPELL_REAGENTS 0x854e54` and the eight reagent slots); the app
-    /// writes a missing reagent's inline `|cffff2020` escape.
-    pub reagents: Option<String>,
-    /// "2.62% chance to dodge" (`CHANCE_TO_DODGE 0x854e44` and its siblings, by `Effect[0]`),
-    /// from the player's live stat, which the app re-pushes as it moves.
-    pub chance: Option<String>,
+    /// `SPELL_REAGENTS` (`0x854e54`) and the reagents; the app writes a missing reagent's inline
+    /// `|cffff2020` escape.
+    pub reagents: Option<TooltipText>,
+    /// The player carries every reagent, which leaves the line out of a compact build.
+    pub reagents_met: bool,
+    /// `CHANCE_TO_DODGE` (`0x854e44`) and its siblings, by `Effect[0]`, of the player's live stat,
+    /// which the app re-pushes as it moves.
+    pub chance: Option<TooltipText>,
+    /// The drain-all line of a spell with `AttributesEx` bit `0x2`: `SPELL_USE_ALL_MANA` and its
+    /// kin by power type (the key table `0x854180`), `SPELL_USE_ALL_HEALTH` past them (`0x854dfc`),
+    /// copied (`0x52f697`-`0x52f6e3`).
+    pub use_all: Option<TooltipText>,
     /// The `$`-substituted description.
-    pub description: String,
+    pub description: TooltipText,
     /// The `$`-substituted `AuraDescription`, which the aura builder reads; `description` stands in
     /// when it is empty.
-    pub aura_description: String,
+    pub aura_description: TooltipText,
 }
 
 impl super::UiScript {
@@ -304,7 +321,7 @@ pub(super) struct TalentLines {
     pub reqs: Vec<String>,
     /// The next rank's spell id, 0 for none, asked from the store while `next_desc` is missing.
     pub next_spell: u32,
-    pub next_desc: Option<String>,
+    pub next_desc: Option<TooltipText>,
     pub learn: bool,
 }
 
@@ -313,25 +330,45 @@ const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 /// The unmet-requirement red, `0xffff2020` (`0xc0d390`, the item builder's red).
 const RED: [f32; 4] = [1.0, 32.0 / 255.0, 32.0 / 255.0, 1.0];
 
-/// The spell builder's options (`0x52e610`'s parameters); `Default` is the plain spell hover.
+/// The spell builder's options (`0x52e610`'s stack arguments after the spell id, `p2` to `p5`);
+/// `Default` is the plain spell hover.
 #[derive(Clone, Copy, Default)]
 pub(super) struct SpellRenderOpts {
     /// The aura builder (`0x52f880`): gold name, white description, the dispel class at right.
     pub(super) aura: bool,
-    /// `param6` showRank, the gray "Rank N" column: `SetSpell` passes 0, `SetAction` 1.
+    /// `p2` compact, which `SetAction` and `SetShapeshift` pass when the `UberTooltips` option is
+    /// 0 or missing ([`compact_tooltips`]): the rank shows (`0x52e7fe`), the cost, range and cast
+    /// lines drop (`0x52e8b4`, `0x52eb15`), so do met totem, item, form and reagent lines, an unmet
+    /// item or form takes its `_NOSPACE` key, and the build ends after the cooldown remaining
+    /// (`0x52f589`), with no chance, use-all or description line.
+    pub(super) compact: bool,
+    /// `p5` showRank, the gray "Rank N" column (`0x52e809`): `SetAction`, `SetShapeshift` and
+    /// `SetPetAction` pass 1, every other setter 0.
     pub(super) show_rank: bool,
-    /// `param5` altCaster, the unit selector: the view is the one built against the player's
-    /// charm, else its summon (`0x6e3130`, `0x6e31b0`, `0x6e3340`), and the totem and reagent
-    /// lines drop (`0x52ed43`, `0x52f393`). `SetPetAction` sets it (`0x532888`), `SetSpell` on the
-    /// pet book (`0x532e23`) and `SetTrainerService` for a `LEARN_PET_SPELL` service (`0x533a7f`).
+    /// `p4` altCaster, the unit selector: the view is the one built against the player's charm,
+    /// else its summon (`0x6e3130`, `0x6e31b0`, `0x6e3340`), the totem and reagent lines drop
+    /// (`0x52ed50`, `0x52f398`) and the item requirement counts as met (`0x52f07f`).
+    /// `SetPetAction` sets it (`0x532888`), `SetSpell` on the pet book (`0x532e23`) and
+    /// `SetTrainerService` for a `LEARN_PET_SPELL` service (`0x533a7f`).
     pub(super) alt_caster: bool,
-    /// `param4`, the live cooldown left in ms (`start + duration - now`), 0 for none: the setter
-    /// takes it from the cooldown query (`0x6e2ea0`) and passes it only while that cooldown runs
+    /// `p3`, the live cooldown left in ms (`start + duration - now`), 0 for none: the setter takes
+    /// it from the cooldown query (`0x6e2ea0`) and passes it only while that cooldown runs
     /// (enabled, with a start and a duration), as `0x532e55`..`0x532e81` does.
     pub(super) remaining_ms: u32,
 }
 
-/// The live cooldown left in ms for the builder's `param4`, from a `(start, duration, enabled)`
+/// `SetAction` and `SetShapeshift`'s `p2`: the `UberTooltips` option looked up by name
+/// (`0x63de30`, `0x532622`, `0x532a35`), compact when it is missing or its integer is 0
+/// (`0x532627`-`0x532632`).
+fn compact_tooltips(lua: &Lua) -> bool {
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    model
+        .cvars
+        .get("ubertooltips")
+        .is_none_or(|s| binding_abi::s_str_to_int(&s.value) == 0)
+}
+
+/// The live cooldown left in ms for the builder's `p3`, from a `(start, duration, enabled)`
 /// triple in `GetTime` seconds: nonzero only while the cooldown runs, enabled with a start and a
 /// duration (`0x532e5a`..`0x532e81`, `0x5328aa`), else 0. An item action's block takes the same
 /// number (`0x5324d5`).
@@ -347,7 +384,7 @@ pub(super) fn live_remaining_ms(cooldown: Option<(f64, f64, bool)>, now: f64) ->
         .clamp(0.0, f64::from(u32::MAX)) as u32
 }
 
-/// Whether the spell builder draws ITEM_COOLDOWN_TIME and sets its return value: `param4` nonzero
+/// Whether the spell builder draws ITEM_COOLDOWN_TIME and sets its return value: `p3` nonzero
 /// and a recovery column of a minute or more (`0x52f537`..`0x52f581`). A shorter cooldown shows
 /// only in the recast cell.
 fn cooldown_countdown(v: &SpellTooltipView, opts: SpellRenderOpts) -> bool {
@@ -368,6 +405,7 @@ fn render_spell(
 ) -> mlua::Result<bool> {
     let SpellRenderOpts {
         aura,
+        compact,
         show_rank,
         alt_caster,
         ..
@@ -378,7 +416,11 @@ fn render_spell(
     let right = if aura {
         v.dispel_type.clone().map(|t| (t, GOLD))
     } else {
-        v.rank.clone().filter(|_| show_rank).map(|t| (t, GRAY))
+        // The rank when compact or asked for (`0x52e7fe`, `0x52e809`).
+        v.rank
+            .clone()
+            .filter(|_| compact || show_rank)
+            .map(|t| (t, GRAY))
     };
     append_line(lua, this, (v.name.clone(), name_color), right, false)?;
     let talent_builder = talent.is_some_and(|t| !t.exceptional);
@@ -391,43 +433,68 @@ fn render_spell(
             append_line(lua, this, (req.clone(), RED), None, true)?;
         }
     }
-    if !aura && !talent_builder {
-        match (&v.cost, &v.range) {
-            (Some(c), Some(r)) => append_line(
-                lua,
-                this,
-                (c.clone(), WHITE),
-                Some((r.clone(), WHITE)),
-                false,
-            )?,
-            (Some(c), None) => append_line(lua, this, (c.clone(), WHITE), None, false)?,
-            (None, Some(r)) => append_line(lua, this, (r.clone(), WHITE), None, false)?,
+    // Each cell's templates, read now (`0x703bf0` at the call); an empty one is no cell.
+    let cell = |t: &Option<TooltipText>| t.as_ref().and_then(|t| t.line(lua));
+    // A compact build has no cost, range or cast line (`0x52e8b4`, `0x52eb15`).
+    if !aura && !talent_builder && !compact {
+        match (cell(&v.cost), cell(&v.range)) {
+            (Some(c), Some(r)) => append_line(lua, this, (c, WHITE), Some((r, WHITE)), false)?,
+            // With no cost the range takes the left cell (`0x52ea94`-`0x52eaae`).
+            (Some(c), None) | (None, Some(c)) => append_line(lua, this, (c, WHITE), None, false)?,
             (None, None) => {}
         }
-        if let Some(ct) = &v.cast_time {
-            match &v.cooldown {
-                Some(cd) => append_line(
-                    lua,
-                    this,
-                    (ct.clone(), WHITE),
-                    Some((cd.clone(), WHITE)),
-                    false,
-                )?,
-                None => append_line(lua, this, (ct.clone(), WHITE), None, false)?,
+        // The cast line, only for a spell with a cast cell (`0x52eb15`-`0x52eb3f`); the recast
+        // cell alone is no line.
+        if v.cast_time.is_some() {
+            match (cell(&v.cast_time), cell(&v.cooldown)) {
+                (Some(ct), cd) => {
+                    append_line(lua, this, (ct, WHITE), cd.map(|cd| (cd, WHITE)), false)?
+                }
+                // An empty cast cell keeps the recast cell at the right (`0x530270`).
+                (None, Some(cd)) => {
+                    append_line(lua, this, (String::new(), WHITE), Some((cd, WHITE)), false)?
+                }
+                (None, None) => {}
             }
         }
-        if let Some(req) = &v.requires_item {
-            let color = if v.item_met { WHITE } else { RED };
-            append_line(lua, this, (req.clone(), color), None, false)?;
+    }
+    if !aura && !talent_builder {
+        // The tools, white and unwrapped, unless altCaster drops them (`0x52ed50`) or a compact
+        // build has them all (`0x52ee83`-`0x52ee8f`).
+        if let Some(totems) = cell(&v.totems)
+            .filter(|_| !alt_caster)
+            .filter(|_| !(compact && v.totems_met))
+        {
+            append_line(lua, this, (totems, WHITE), None, false)?;
         }
-        if let Some(req) = &v.requires_form {
-            let color = if v.form_met { WHITE } else { RED };
-            append_line(lua, this, (req.clone(), color), None, false)?;
+        // The item and form requirements (`0x52f084`-`0x52f102`, `0x52f22b`-`0x52f2a6`): a
+        // compact build leaves a met one out and words an unmet one with the `_NOSPACE` key. The
+        // pet's item requirement counts as met (`0x52f07f`).
+        let requirement = |key: &str, name: &str, met: bool| match (compact, met) {
+            (true, true) => None,
+            (true, false) => keyed_line(lua, &format!("{key}_NOSPACE"), name),
+            (false, _) => keyed_line(lua, key, name),
+        };
+        if let Some(name) = &v.requires_item {
+            let met = v.item_met || alt_caster;
+            if let Some(text) = requirement("SPELL_EQUIPPED_ITEM", name, met) {
+                let color = if met { WHITE } else { RED };
+                append_line(lua, this, (text, color), None, true)?;
+            }
         }
-        // Reagents, white and wrapped, unless altCaster drops them; the totem line it also drops
-        // is not built.
-        if let Some(reagents) = v.reagents.as_ref().filter(|_| !alt_caster) {
-            append_line(lua, this, (reagents.clone(), WHITE), None, true)?;
+        if let Some(names) = &v.requires_form {
+            if let Some(text) = requirement("SPELL_REQUIRED_FORM", names, v.form_met) {
+                let color = if v.form_met { WHITE } else { RED };
+                append_line(lua, this, (text, color), None, false)?;
+            }
+        }
+        // Reagents, white and wrapped, unless altCaster drops them (`0x52f398`) or a compact
+        // build has them all (`0x52f513`-`0x52f51f`).
+        if let Some(reagents) = cell(&v.reagents)
+            .filter(|_| !alt_caster)
+            .filter(|_| !(compact && v.reagents_met))
+        {
+            append_line(lua, this, (reagents, WHITE), None, true)?;
         }
         // ITEM_COOLDOWN_TIME (`0x854adc`), white and unwrapped, after the reagents and before the
         // chance line (`0x52f537`..`0x52f577`), through `0x52fa50`'s round-up ladder.
@@ -442,10 +509,21 @@ fn render_spell(
                 append_line(lua, this, (line, WHITE), None, false)?;
             }
         }
-        // The chance line, white and unwrapped, between the reagents and the description.
-        if let Some(chance) = &v.chance {
-            append_line(lua, this, (chance.clone(), WHITE), None, false)?;
+        // A compact build ends here, shown (`0x52f589`-`0x52f5ae`).
+        if compact {
+            return Ok(cooldown_countdown(v, opts));
+        }
+        // The chance line, white and unwrapped, between the reagents and the description. Its
+        // presence sets the return value (`0x52f68c`).
+        if v.chance.is_some() {
+            if let Some(chance) = cell(&v.chance) {
+                append_line(lua, this, (chance, WHITE), None, false)?;
+            }
             live = true;
+        }
+        // The drain-all line, white and unwrapped, before the description (`0x52f6e3`).
+        if let Some(use_all) = cell(&v.use_all) {
+            append_line(lua, this, (use_all, WHITE), None, false)?;
         }
     }
     let desc = if aura && !v.aura_description.is_empty() {
@@ -453,9 +531,9 @@ fn render_spell(
     } else {
         &v.description
     };
-    if !desc.is_empty() {
+    if let Some(text) = desc.line(lua) {
         let color = if aura { WHITE } else { GOLD };
-        append_line(lua, this, (desc.clone(), color), None, true)?;
+        append_line(lua, this, (text, color), None, true)?;
     }
     // The talent tail: the white `TOOLTIP_TALENT_NEXT_RANK` header (`0x854a10`, pushed at
     // `0x52b2cd`) over the next rank's gold description, then the green `TOOLTIP_TALENT_LEARN`
@@ -474,7 +552,9 @@ fn render_spell(
             if let Some(header) = crate::strings::global(lua, "TOOLTIP_TALENT_NEXT_RANK") {
                 append_line(lua, this, (header, WHITE), None, false)?;
             }
-            append_line(lua, this, (next.clone(), GOLD), None, true)?;
+            if let Some(next) = next.line(lua) {
+                append_line(lua, this, (next, GOLD), None, true)?;
+            }
         }
         if t.learn {
             if let Some(hint) = crate::strings::global(lua, "TOOLTIP_TALENT_LEARN") {
@@ -488,6 +568,12 @@ fn render_spell(
         append_line(lua, this, (rem, GOLD), None, false)?;
     }
     Ok(live || (!talent_builder && cooldown_countdown(v, opts)))
+}
+
+/// A requirement line: `key`'s template of `name`, read now; none when the key is missing.
+fn keyed_line(lua: &Lua, key: &str, name: &str) -> Option<String> {
+    let template = crate::strings::global(lua, key)?;
+    Some(crate::strings::fill(&template, &[Arg::S(name)])).filter(|t| !t.is_empty())
 }
 
 /// `GameTooltip:SetTalent`'s render: the talent's spell plus its talent lines; a missing next-rank
@@ -673,7 +759,11 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     None => return Ok(Value::Nil),
                 }
             };
+            // Both legs pass the rank and the `UberTooltips` compact flag (`0x532a62`-`0x532a84`,
+            // `0x532aaf`-`0x532abe`).
             let opts = SpellRenderOpts {
+                compact: compact_tooltips(lua),
+                show_rank: true,
                 remaining_ms,
                 ..Default::default()
             };
@@ -709,8 +799,10 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     None => return Ok(Value::Nil),
                 }
             };
+            // The unit selector and the rank on both legs (`0x532886`, `0x5328ce`).
             let opts = SpellRenderOpts {
                 alt_caster: true,
+                show_rank: true,
                 remaining_ms,
                 ..Default::default()
             };
@@ -847,8 +939,8 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     } else {
                         &v.description
                     };
-                    if !desc.is_empty() {
-                        append_line(lua, &this, (desc.clone(), WHITE), None, true)?;
+                    if let Some(desc) = desc.line(lua) {
+                        append_line(lua, &this, (desc, WHITE), None, true)?;
                     }
                 }
                 None => {
@@ -933,6 +1025,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         a.action,
                         None,
                         SpellRenderOpts {
+                            compact: compact_tooltips(lua),
                             show_rank: true,
                             remaining_ms,
                             ..Default::default()

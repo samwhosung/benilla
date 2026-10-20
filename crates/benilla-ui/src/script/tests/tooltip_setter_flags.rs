@@ -18,7 +18,7 @@ fn view(recovery_ms: u32, chance: Option<&str>) -> SpellTooltipView {
         name: "Shield Wall".into(),
         cast_time: Some("Instant".into()),
         recovery_ms,
-        chance: chance.map(str::to_string),
+        chance: chance.map(Into::into),
         ..Default::default()
     }
 }

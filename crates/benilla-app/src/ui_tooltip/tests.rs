@@ -6,13 +6,80 @@ use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
 use crate::ui_action::{real_spells, PlayerActions, Spells};
 
-/// The view alone, for the cell tests; the feed keeps what it read beside it.
-fn spell_tooltip_view(
-    spell_id: u32,
-    spells: &Spells,
-    vctx: &mut ViewCtx,
-) -> Option<benilla_ui::script::SpellTooltipView> {
-    build_view(spell_id, spells, vctx).map(|(view, _)| view)
+/// The view alone, read through the shipped strings, for the cell tests; the feed keeps what it
+/// read beside it.
+fn spell_tooltip_view(spell_id: u32, spells: &Spells, vctx: &mut ViewCtx) -> Option<Shown> {
+    build_view(spell_id, spells, vctx).map(|(view, _)| Shown::of(&view))
+}
+
+thread_local! {
+    /// A VM holding the shipped `GlobalStrings.lua`, which the render reads a view's cells through.
+    static STRINGS: benilla_ui::script::UiScript = {
+        let vm = benilla_ui::script::UiScript::new().expect("VM");
+        crate::ui_script::load_ui_for_test(&vm, "Interface\\FrameXML\\GlobalStrings.lua");
+        vm
+    };
+}
+
+/// A key's shipped string, as the render reads it.
+pub(super) fn shipped(key: &str) -> Option<String> {
+    STRINGS.with(|vm| benilla_ui::strings::global(vm.lua(), key))
+}
+
+/// A view's cells as the render shows them with the shipped strings.
+#[derive(Debug)]
+pub(super) struct Shown {
+    pub(super) name: String,
+    pub(super) rank: Option<String>,
+    pub(super) cost: Option<String>,
+    pub(super) range: Option<String>,
+    pub(super) cast_time: Option<String>,
+    pub(super) cooldown: Option<String>,
+    pub(super) recovery_ms: u32,
+    pub(super) requires_item: Option<String>,
+    pub(super) item_met: bool,
+    pub(super) requires_form: Option<String>,
+    pub(super) form_met: bool,
+    pub(super) totems: Option<String>,
+    pub(super) totems_met: bool,
+    pub(super) reagents: Option<String>,
+    pub(super) reagents_met: bool,
+    pub(super) chance: Option<String>,
+    pub(super) use_all: Option<String>,
+    pub(super) description: String,
+    pub(super) aura_description: String,
+}
+
+impl Shown {
+    pub(super) fn of(v: &benilla_ui::script::SpellTooltipView) -> Self {
+        let text = |t: &benilla_ui::script::TooltipText| t.text(&shipped);
+        let cell = |t: &Option<benilla_ui::script::TooltipText>| t.as_ref().map(text);
+        let line = |key: &str, name: &Option<String>| {
+            name.as_ref()
+                .map(|n| benilla_ui::strings::fill(&shipped(key).expect(key), &[Arg::S(n)]))
+        };
+        Self {
+            name: v.name.clone(),
+            rank: v.rank.clone(),
+            cost: cell(&v.cost),
+            range: cell(&v.range),
+            cast_time: cell(&v.cast_time),
+            cooldown: cell(&v.cooldown),
+            recovery_ms: v.recovery_ms,
+            requires_item: line("SPELL_EQUIPPED_ITEM", &v.requires_item),
+            item_met: v.item_met,
+            requires_form: line("SPELL_REQUIRED_FORM", &v.requires_form),
+            form_met: v.form_met,
+            totems: cell(&v.totems),
+            totems_met: v.totems_met,
+            reagents: cell(&v.reagents),
+            reagents_met: v.reagents_met,
+            chance: cell(&v.chance),
+            use_all: cell(&v.use_all),
+            description: text(&v.description),
+            aura_description: text(&v.aura_description),
+        }
+    }
 }
 
 /// A view context with no player state, the DBC-only half of the builder.
@@ -20,27 +87,19 @@ pub(super) struct TestCtx {
     pub(super) items: Items,
     pub(super) commands: NetCommands,
     _rx: crossbeam_channel::Receiver<crate::net::ClientCommand>,
-    /// The builder's lookup over the shipped `GlobalStrings.lua`: a stub would pass on wording
-    /// the client never shows.
-    get: Box<Getter>,
     /// Empty by default; modifier tests populate it explicitly.
     pub(super) spell_mods: crate::spell::SpellModifiers,
     /// Absent by default: every spell's skill level reads 0.
     pub(super) skill_lines: Option<benilla_formats::SkillLineCatalog>,
 }
 
-type Getter = dyn Fn(&str) -> Option<String>;
-
 impl TestCtx {
     pub(super) fn new() -> Self {
         let (tx, rx) = crossbeam_channel::unbounded();
-        let vm = benilla_ui::script::UiScript::new().expect("VM");
-        crate::ui_script::load_ui_for_test(&vm, "Interface\\FrameXML\\GlobalStrings.lua");
         Self {
             items: Items::default(),
             commands: NetCommands(tx),
             _rx: rx,
-            get: Box::new(move |key| benilla_ui::strings::global(vm.lua(), key)),
             spell_mods: crate::spell::SpellModifiers::default(),
             skill_lines: None,
         }
@@ -88,7 +147,6 @@ impl TestCtx {
             sub_classes,
             skill_lines: self.skill_lines.as_ref(),
             spell_mods: &self.spell_mods,
-            get: self.get.as_ref(),
         }
     }
 
@@ -121,7 +179,7 @@ fn a_pet_view_scales_sacrifice_by_the_pets_level() {
     let mut objs = no_objects();
     let objects = objs.get();
     let player = ObjectStore(unit(60, 1373));
-    let absorb = |v: benilla_ui::script::SpellTooltipView, n: u32| {
+    let absorb = |v: Shown, n: u32| {
         assert!(
             v.description.contains(&format!("absorb {n} damage")),
             "{n}: {}",
@@ -829,6 +887,41 @@ fn the_required_item_chance_and_reagent_lines_on_real_data() {
         Some("Reagents: |cffff2020Light Feather|r"),
         "count 1 prints no (N); unowned wraps in the builder's inline red"
     );
+    assert!(!v.reagents_met);
+}
+
+/// Searing Totem (3599) names its tool, Fire Totem (5176), in `SPELL_TOTEMS`, red while it is not
+/// carried and absent until its template lands (`0x52ed43`-`0x52eea2`); Lay on Hands (633,
+/// `AttributesEx` `0x2`, mana) reads `SPELL_USE_ALL_MANA` (`0x52f697`), and Fireball none.
+#[test]
+fn the_tools_and_drain_all_lines_on_real_data() {
+    let Some(spells) = real_spells() else { return };
+    let mut t = TestCtx::new();
+    let mut objs = no_objects();
+    let objects = objs.get();
+    let store = empty_player();
+    let d = spells.catalog.get(3599).expect("Searing Totem 3599");
+    assert_eq!(d.totems, [5176, 0], "the Fire Totem tool");
+    let view = |t: &mut TestCtx, id| {
+        spell_tooltip_view(id, &spells, &mut t.ctx_for(&objects, 0, None, Some(&store)))
+            .expect("a view")
+    };
+    assert_eq!(
+        view(&mut t, 3599).totems,
+        None,
+        "the template has not landed"
+    );
+    t.items
+        .insert_template(5176, Some(crate::items::test_template("Fire Totem")));
+    let v = view(&mut t, 3599);
+    assert_eq!(v.totems.as_deref(), Some("Tools: |cffff2020Fire Totem|r"));
+    assert!(!v.totems_met);
+    assert_eq!(v.use_all, None);
+    let lay_on_hands = spells.catalog.get(633).expect("Lay on Hands 633");
+    assert_eq!(lay_on_hands.attributes_ex & 0x2, 0x2);
+    assert_eq!(lay_on_hands.power_type, 0);
+    assert_eq!(view(&mut t, 633).use_all.as_deref(), Some("Uses 100% mana"));
+    assert_eq!(view(&mut t, 133).use_all, None);
 }
 
 /// Red only when the resolver finds no opener; a key, no requirement and no `Lock.dbc` row read
