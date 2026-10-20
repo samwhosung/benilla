@@ -291,10 +291,10 @@ pub(super) struct FailArgs<'a> {
     pub(super) power: Option<u8>,
 }
 
-/// What an argument arm produced, and when nothing, which exit the reference takes: every arm
-/// but `0x56` declines to the shared default `0x6e21d8`, which still displays the template, while
-/// `0x56` spends `edi` as its loop counter and exits to the epilogue `0x6e224f`, past the display,
-/// the log and the cast abort `0x6e4940`.
+/// What an argument arm produced, and when nothing, which exit the reference takes: every player
+/// arm but `0x56` declines to the shared default `0x6e21d8`, which still displays the template,
+/// while `0x56` spends `edi` as its loop counter and exits to the epilogue `0x6e224f`, past the
+/// display, the log and the cast abort `0x6e4940`. Every pet arm declines past its display.
 pub(super) enum Fill {
     /// The name for the template's `%s`.
     Filled(String),
@@ -313,9 +313,12 @@ impl FailArgs<'_> {
     /// `0x5d` has no such stand-in: vmangos takes its area from its own `spell_area` table
     /// (`Spell.cpp:4429`), which `Spell.dbc` does not carry.
     fn fill(&self, caster: Caster, reason: u8, spell: Option<&SpellDisplay>) -> Fill {
-        let named = |name: Option<&str>| match name {
-            Some(name) => Fill::Filled(name.to_string()),
-            None => Fill::Template,
+        let named = |name: Option<&str>| match (name, caster) {
+            (Some(name), _) => Fill::Filled(name.to_string()),
+            (None, Caster::Player) => Fill::Template,
+            // The pet's id arms leave at `0x6e9385` on a bad id or a missing row, its subclass
+            // arm at `0x6e90d2`: no line.
+            (None, Caster::Pet) => Fill::Nothing,
         };
         match reason {
             // `0x8d` (`0x6e2190`), "Can't do that while stunned": the word is the local
@@ -426,14 +429,16 @@ pub(super) fn cast_fail_text(
         )));
     };
     // The errorId `[ebp-0x8]`, `0x2c` until an arm stores one (`0x6e1a45`). With no record the
-    // player's chain and its `_PET` flag are skipped (`0x6e1a7c`).
+    // player's chain and its `_PET` flag are skipped (`0x6e1a7c`), and the pet's handler leaves
+    // (`0x6e8f04`).
     let (mut error, pet_text) = match (caster, spell) {
         (Caster::Player, Some(d)) => (
             player_error_key(reason, d),
             !args.redisplay && trains_pet(d),
         ),
         (Caster::Player, None) => (None, false),
-        (Caster::Pet, _) => (pet_error_key(reason, spell), false),
+        (Caster::Pet, None) => return None,
+        (Caster::Pet, Some(_)) => (pet_error_key(reason, spell), false),
     };
     // The first layer `[ebp-0x488]`: `<key>_PET` when flagged and not empty (`0x6e1d54`), else the
     // key's own string; empty when 1.12 ships no such key.
