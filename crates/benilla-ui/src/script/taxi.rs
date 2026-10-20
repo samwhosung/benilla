@@ -3,10 +3,9 @@
 //! intents the app drains. Positions are normalized 0..1 from the map's bottom-left, which the Lua
 //! scales by the 316x352 map.
 
-use mlua::{Lua, Table, Value};
+use mlua::{Lua, Value};
 
 use super::binding_abi;
-use super::region::region_handle_of;
 use super::Model;
 
 /// A listed node's type (`TaxiNodeGetType`, `0x4dc4e0`): the green, white or yellow icon in the
@@ -219,7 +218,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // One coordinate of 1-based hop `hop`, for the reference's `DrawRouteLine` loop.
+    // One coordinate of 1-based segment `hop` of slot `i`, for the stock `DrawRouteLine` loop: both
+    // arguments a bare `lua_tonumber` and `_ftol`, the segment's read first (`0x4dcd9d`-`0x4dcdbb`),
+    // so a non-number is 0 and misses, as any slot or segment out of range answers 0 (`0x4dca3a`).
     for (name, pick) in [
         ("TaxiGetSrcX", 0usize),
         ("TaxiGetSrcY", 1),
@@ -228,7 +229,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     ] {
         g.set(
             name,
-            lua.create_function(move |lua, (i, hop): (i64, i64)| {
+            lua.create_function(move |lua, (i, hop): (Value, Value)| {
+                let index =
+                    |v| i64::from(binding_abi::ftol(binding_abi::coerced_number(lua, Some(v))));
+                let (hop, i) = (index(hop), index(i));
                 let model = lua.app_data_ref::<Model>().expect("model");
                 let coord = node(&model, i)
                     .zip(usize::try_from(hop).ok().and_then(|h| h.checked_sub(1)))
@@ -266,17 +270,23 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The open map's continent art (`TAXIMAP<map>`, the app's pick) onto the given texture.
+    // The map's continent art (`TAXIMAP<map>`, the app's pick) onto the given texture. With no
+    // art loaded it returns before reading its argument (`0x4dca5c`); else the argument resolves
+    // as a member function's receiver, a Texture (`0x4dca8b`-`0x4dcad9`).
     g.set(
         "SetTaxiMap",
-        lua.create_function(|lua, this: Table| {
-            let rh = region_handle_of(lua, &this)?;
+        lua.create_function(|lua, this: Value| {
+            let art = {
+                let model = lua.app_data_ref::<Model>().expect("model");
+                model.taxi.as_ref().map(|t| t.art.clone())
+            };
+            let Some(art) = art else {
+                return Ok(());
+            };
+            let rh = super::region::this_texture(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
-            let art = model.taxi.as_ref().map(|t| t.art.clone());
-            if let Some(art) = art {
-                model.set_texel(rh, crate::script::texel::TexSet::File(art));
-                model.note_art(rh);
-            }
+            model.set_texel(rh, crate::script::texel::TexSet::File(art));
+            model.note_art(rh);
             Ok(())
         })?,
     )?;
