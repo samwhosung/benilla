@@ -142,7 +142,7 @@ pub(super) fn move_axes(
     //   emit; ours is `state::may_translate`. The server-ride term is benilla's own.
     // A jump, a chat EditBox taking focus and a zone change leave it set; mounting is untraced and
     // leaves it set here. A focused chat box releases nothing, so W held through ENTER still runs.
-    let both_buttons_engaged = (both_buttons && rig.world_mouse.rose()) || binds.steering_began();
+    let both_buttons_engaged = both_engaged(binds, rig, both_buttons);
     if state::autorun_cancelled(
         binds.just_pressed(crate::bindings::Input::MoveForward),
         binds.just_pressed(crate::bindings::Input::MoveBackward),
@@ -201,15 +201,31 @@ pub(super) fn move_axes(
     }
 }
 
+/// The transition into both mouse bits held (`0x514a73`, `0x5150e2`): a channel rose with the
+/// other held, or MOVEANDSTEER began.
+pub(super) fn both_engaged(
+    binds: &crate::bindings::BindingsState,
+    rig: &CameraControl,
+    both_buttons: bool,
+) -> bool {
+    (both_buttons && rig.world_mouse.rose()) || binds.steering_began()
+}
+
 /// Whether this frame's input cancels the cast in flight, as the press handler `0x515090` and
 /// `Script::Jump` (`0x513c43`) decide it: a press that newly set forward, back, strafe or autorun
 /// (the mask `0x10f0` at `0x5150ce`; a Start on a held bit is no edge, `0x51484c`), the press that
 /// completed both mouse bits (`0x5150e2`), or the Jump command, which cancels ahead of its own
-/// checks. It reads the commands alone: nothing between the press and the cancel tests root or
-/// stun, as the tick `0x514640` that applies them runs after (`0x5151a0`). The turn and pitch bits
-/// (`0x100`-`0x800`) never cancel, even while the right button makes a turn key strafe, and
-/// follow's forward is set past the handler (`0x60e790`).
-pub(super) fn cancels_cast(binds: &crate::bindings::BindingsState, axes: &MoveAxes) -> bool {
+/// checks once the mover exists (`0x513c02`). It reads the commands alone: nothing between the
+/// press and the cancel tests root or stun, as the tick `0x514640` that applies them runs after
+/// (`0x5151a0`). The turn and pitch bits (`0x100`-`0x800`) never cancel, even while the right
+/// button makes a turn key strafe, and neither does follow's forward, which presses `0x100000`
+/// through the same handler (`0x60e7ab`), outside the mask and no mouse bit.
+pub(super) fn cancels_cast(
+    binds: &crate::bindings::BindingsState,
+    autorun_on: bool,
+    both_engaged: bool,
+    has_mover: bool,
+) -> bool {
     use crate::bindings::Input;
     [
         Input::MoveForward,
@@ -219,9 +235,9 @@ pub(super) fn cancels_cast(binds: &crate::bindings::BindingsState, axes: &MoveAx
     ]
     .into_iter()
     .any(|i| binds.just_pressed(i))
-        || axes.autorun_armed
-        || axes.both_engaged
-        || binds.fired(Input::Jump)
+        || autorun_on
+        || both_engaged
+        || has_mover && binds.fired(Input::Jump)
 }
 
 #[cfg(test)]
@@ -233,8 +249,8 @@ mod tests {
 
     use BindingInput::{Fire, Start};
 
-    /// One frame's verdict after `earlier`'s calls, on the axes as the controller builds them,
-    /// under a root or not.
+    /// One frame's verdict after `earlier`'s calls, with the mover there, and the autorun latch
+    /// run as the controller runs it.
     fn cancels(
         earlier: Vec<BindingInput>,
         now: Vec<BindingInput>,
@@ -242,16 +258,19 @@ mod tests {
         rooted: bool,
     ) -> bool {
         let binds = BindingsState::after_calls(earlier, now);
-        let axes = move_axes(
+        let rig = CameraControl::default();
+        let autorun_on = binds.fired(crate::bindings::Input::ToggleAutoRun) && !player.autorun;
+        let both = both_engaged(&binds, &rig, binds.steering());
+        move_axes(
             &binds,
             &ButtonInput::default(),
             player,
-            &CameraControl::default(),
+            &rig,
             binds.steering(),
             !rooted,
             true,
         );
-        cancels_cast(&binds, &axes)
+        cancels_cast(&binds, autorun_on, both, true)
     }
 
     /// `0x515090` cancels on the command press (`0x5150ce`), and nothing between the press and
@@ -312,7 +331,8 @@ mod tests {
         ));
     }
 
-    /// Follow's forward is set through `0x60e790`, not `0x515090`, so its start cancels nothing.
+    /// Follow's forward presses `0x100000` through `0x515090` (`0x60e7ab`), outside the mask and
+    /// no mouse bit, so its start cancels nothing.
     #[test]
     fn the_follow_forward_does_not_cancel() {
         let mut player = Player {

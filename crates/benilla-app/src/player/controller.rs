@@ -5,6 +5,9 @@
 
 use super::*;
 
+#[cfg(test)]
+mod tests;
+
 /// Free-flies until the server places us, then drives the avatar and streams its movement as the
 /// mover; the dev chord with `F` toggles free fly.
 #[allow(clippy::type_complexity)]
@@ -750,8 +753,11 @@ pub(super) fn control(
         // count: vmangos breaks a channel on the caster's own movement (`Spell::update`), so a
         // possessed creature's steps must not end Mind Control.
         let steering_ourselves = player.foreign_mover.is_none();
-        if steering_ourselves && input::cancels_cast(binds, &axes) {
-            net.7 .0 = true;
+        if steering_ourselves
+            && input::cancels_cast(binds, axes.autorun_armed, axes.both_engaged, true)
+        {
+            net.7.pressed = true;
+            net.7.mover_is_player = true;
         }
         // The loot window's walk-away, the movement-start guard `0x60e990`: forward, back, strafe,
         // keyboard turn, pitch and jump close it, mouse-look facing does not, and only for our

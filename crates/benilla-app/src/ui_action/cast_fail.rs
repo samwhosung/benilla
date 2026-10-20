@@ -283,6 +283,9 @@ pub(super) struct FailArgs<'a> {
     pub(super) found: Option<&'a str>,
     /// The item-cache callback `0x6e29b0`, which formats the plain key, never the `_PET` one.
     pub(super) redisplay: bool,
+    /// The active player's power type, `UNIT_FIELD_BYTES_0` byte 3, for `0x02`; `None` with no
+    /// player.
+    pub(super) power: Option<u8>,
 }
 
 /// What an argument arm produced, and when nothing, which exit the reference takes: every arm
@@ -660,6 +663,7 @@ mod tests {
             let args = FailArgs {
                 forms: Some(&forms),
                 found: Some("Name"),
+                power: Some(0),
                 ..FailArgs::default()
             };
             cast_fail_text(Caster::Player, reason, Some(d), args, &g)
@@ -957,15 +961,16 @@ mod tests {
         }
     }
 
-    /// The pet's `0x32` raises `0x151`, `ERR_PET_SPELL_NOPATH`; the player's is a passthrough.
+    /// The pet's `0x32` raises `0x151`, `ERR_PET_SPELL_NOPATH`, whose empty format shows nothing;
+    /// the player's is a passthrough.
     #[test]
     fn the_pets_nopath_is_silent_because_5875_ships_no_string() {
         let m = gs();
         let g = getter(&m);
-        assert_eq!(
-            cast_fail_text(Caster::Pet, 0x32, None, FailArgs::default(), &g),
-            None
-        );
+        let nopath = cast_fail_text(Caster::Pet, 0x32, Some(&record()), FailArgs::default(), &g)
+            .expect("the display runs");
+        assert_eq!(nopath.key, "ERR_PET_SPELL_NOPATH");
+        assert_eq!(nopath.text, "");
         assert_eq!(
             cast_fail_text(Caster::Player, 0x32, None, FailArgs::default(), &g)
                 .unwrap()
@@ -1041,12 +1046,13 @@ mod tests {
         let m = gs();
         let g = getter(&m);
         assert!(!m.contains_key("SPELL_FAILED_DONT_REPORT"));
-        for caster in [Caster::Player, Caster::Pet] {
-            assert_eq!(
-                cast_fail_text(caster, 0x17, None, FailArgs::default(), &g),
-                None
-            );
-        }
+        let line = |caster| cast_fail_text(caster, 0x17, Some(&record()), FailArgs::default(), &g);
+        assert_eq!(line(Caster::Player), None, "past the display (`0x6e1cfa`)");
+        assert_eq!(
+            line(Caster::Pet).map(|l| l.text).as_deref(),
+            Some(""),
+            "an empty format"
+        );
     }
 
     /// `ERR_SPELL_FAILED_NOTUNSHEATHED` (id 320) has kind 1, the yellow `UI_INFO_MESSAGE`.
@@ -1243,20 +1249,118 @@ mod tests {
         assert!(!reagents.logged().contains('%'));
     }
 
+    /// `0x6e211f` names the active player's own power (`[[player+0x110]+0x7b]`), whatever the
+    /// spell's, and leaves past the display and the log on a byte of 5 or more (`0x6e2131`) or
+    /// an empty noun (`0x6e2176`).
     #[test]
-    fn already_at_full_power_logs_the_bare_power_noun() {
+    fn already_at_full_power_names_the_players_own_power() {
         let mut m = gs();
         m.insert(
             "ERR_SPELL_FAILED_ALREADY_AT_FULL_POWER_S",
             "You are already at full %s.",
         );
+        m.insert("MANA", "Mana");
         m.insert("RAGE", "Rage");
+        m.insert("ENERGY", "Energy");
         let g = getter(&m);
-        let rage = spell(1, 0, 0);
-        let line =
-            cast_fail_text(Caster::Player, 0x02, Some(&rage), FailArgs::default(), &g).unwrap();
-        assert_eq!(line.text, "You are already at full Rage.");
-        assert_eq!(line.logged(), "Rage");
+        // A mana-typed spell, as an item's restore is.
+        let mana_spell = spell(0, 0, 0);
+        let line = |power| {
+            let args = FailArgs {
+                power,
+                ..FailArgs::default()
+            };
+            cast_fail_text(Caster::Player, 0x02, Some(&mana_spell), args, &g)
+        };
+        let rage = line(Some(1)).expect("a line");
+        assert_eq!(rage.text, "You are already at full Rage.");
+        assert_eq!(rage.logged(), "Rage");
+        assert_eq!(
+            line(Some(3)).map(|l| l.text).as_deref(),
+            Some("You are already at full Energy.")
+        );
+        assert_eq!(line(Some(5)), None, "a byte past happiness");
+        assert_eq!(
+            line(Some(2)),
+            None,
+            "an empty noun: FOCUS has no string here"
+        );
+        assert_eq!(line(None), None, "no active player");
+    }
+
+    /// `DisplayError` formats every id through its key's live global (`0x4967d7`), the default
+    /// `0x2c` too, so an addon's `ERR_SPELL_FAILED_S` changes the line and not the log.
+    #[test]
+    fn the_default_message_formats_through_its_key() {
+        let mut m = gs();
+        m.insert("ERR_SPELL_FAILED_S", "Failed: %s");
+        let g = getter(&m);
+        let line = cast_fail_text(
+            Caster::Player,
+            0x5F,
+            Some(&record()),
+            FailArgs::default(),
+            &g,
+        )
+        .expect("a line");
+        assert_eq!(line.text, "Failed: You are unable to move");
+        assert_eq!(line.logged(), "You are unable to move");
+    }
+
+    /// An empty format shows nothing (`0x4945b0` drops an empty text), and the log still writes
+    /// the text (`0x6e21e2`-`0x6e21fc` run whatever `0x496720` showed).
+    #[test]
+    fn an_empty_format_shows_nothing_and_still_logs() {
+        let mut m = gs();
+        m.insert("ERR_SPELL_FAILED_S", "");
+        m.remove("ERR_SPELL_OUT_OF_RANGE");
+        let g = getter(&m);
+        for (reason, logged) in [(0x5F, "You are unable to move"), (0x59, "Out of range")] {
+            let line = cast_fail_text(
+                Caster::Player,
+                reason,
+                Some(&record()),
+                FailArgs::default(),
+                &g,
+            )
+            .expect("the log's line");
+            assert_eq!(line.text, "", "{reason:#04x}");
+            assert_eq!(line.logged(), logged, "{reason:#04x}");
+        }
+    }
+
+    /// The pet's handler leaves with no record (`0x6e8f04`), and when an arm's lookup misses: the
+    /// id arms at `0x6e9385`, the subclass arm at `0x6e90d2`. The player's declined arms keep
+    /// their template.
+    #[test]
+    fn the_pet_shows_nothing_without_a_record_or_a_name() {
+        let mut m = gs();
+        m.insert("SPELL_FAILED_REQUIRES_AREA", "You need to be in %s");
+        m.insert("SPELL_FAILED_REQUIRES_SPELL_FOCUS", "Requires %s");
+        m.insert(
+            "SPELL_FAILED_PREVENTED_BY_MECHANIC",
+            "Can't do that while %s",
+        );
+        let g = getter(&m);
+        let say = |caster, reason, spell: Option<&SpellDisplay>| {
+            cast_fail_text(caster, reason, spell, FailArgs::default(), &g).map(|l| l.text)
+        };
+        assert_eq!(say(Caster::Pet, 0x59, None), None, "no record");
+        for reason in [0x19, 0x1A, 0x1B, 0x5D, 0x5E, 0x8D] {
+            assert_eq!(
+                say(Caster::Pet, reason, Some(&record())),
+                None,
+                "pet {reason:#04x}"
+            );
+        }
+        assert_eq!(
+            say(Caster::Player, 0x5D, Some(&record())).as_deref(),
+            Some("You need to be in")
+        );
+        assert_eq!(
+            say(Caster::Player, 0x19, Some(&record())).as_deref(),
+            Some("Must have a equipped")
+        );
     }
 
     fn forms<const N: usize>(
@@ -1399,8 +1503,10 @@ mod tests {
             None
         );
         assert_eq!(
-            cast_fail_text(Caster::Player, 0x08, None, FailArgs::default(), &g),
-            None
+            cast_fail_text(Caster::Player, 0x08, None, FailArgs::default(), &g)
+                .map(|l| l.text)
+                .as_deref(),
+            Some("")
         );
         assert_eq!(
             cast_fail_text(Caster::Player, 0x92, None, FailArgs::default(), &g)
@@ -1478,14 +1584,15 @@ mod tests {
             "Can only use while swimming"
         );
         // Keys 1.12 does not ship show nothing.
-        assert_eq!(
-            cast_fail_text(Caster::Player, 0x08, None, FailArgs::default(), &g),
-            None
-        );
-        assert_eq!(
-            cast_fail_text(Caster::Player, 0x21, None, FailArgs::default(), &g),
-            None
-        );
+        for unshipped in [0x08, 0x21] {
+            assert_eq!(
+                cast_fail_text(Caster::Player, unshipped, None, FailArgs::default(), &g)
+                    .map(|l| l.text)
+                    .as_deref(),
+                Some(""),
+                "{unshipped:#04x}"
+            );
+        }
 
         // The pet's six and its unshipped NOPATH key, against the shipped file.
         for (reason, pet, player) in [
@@ -1505,11 +1612,22 @@ mod tests {
             (0x65, "Your pet\'s target is dead.", "Your target is dead"),
         ] {
             assert_eq!(
-                cast_fail_text(Caster::Pet, reason, None, FailArgs::default(), &g)
-                    .map(|l| l.text)
-                    .as_deref(),
+                cast_fail_text(
+                    Caster::Pet,
+                    reason,
+                    Some(&record()),
+                    FailArgs::default(),
+                    &g
+                )
+                .map(|l| l.text)
+                .as_deref(),
                 Some(pet),
                 "pet {reason:#04x}"
+            );
+            assert_eq!(
+                cast_fail_text(Caster::Pet, reason, None, FailArgs::default(), &g),
+                None,
+                "pet {reason:#04x} with no record (`0x6e8f04`)"
             );
             assert_eq!(
                 cast_fail_text(
@@ -1526,8 +1644,10 @@ mod tests {
             );
         }
         assert_eq!(
-            cast_fail_text(Caster::Pet, 0x32, None, FailArgs::default(), &g),
-            None,
+            cast_fail_text(Caster::Pet, 0x32, Some(&record()), FailArgs::default(), &g)
+                .map(|l| l.text)
+                .as_deref(),
+            Some(""),
             "5875 ships no ERR_PET_SPELL_NOPATH, so the reference shows nothing"
         );
         assert!(

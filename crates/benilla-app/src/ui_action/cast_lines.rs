@@ -47,6 +47,7 @@ impl FailNameTables<'_> {
             forms: spells.map(|s| &s.forms),
             found: None,
             redisplay: false,
+            power: None,
         }
     }
 }
