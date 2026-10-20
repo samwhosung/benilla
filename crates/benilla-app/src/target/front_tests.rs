@@ -430,6 +430,86 @@ fn a_tab_goes_on_past_a_unit_the_cursor_refused() {
     assert_eq!(f.selected(), Some(OLD), "the target never moved");
 }
 
+/// A left click with the cursor up and no object under the press: the terrain leg
+/// (`HandleGroundClick 0x492580`) tries `BindLocation 0x6e60f0`, which for a word with no location
+/// bit signals (`0x6e615d`) and returns 0, so the click falls to `OnWorldClick 0x5e0320` and
+/// deselects (`0x5e03cf`), sending `CMSG_SET_SELECTION` 0 with the cursor still up; the sky's
+/// nothing leg deselects with no signal (`0x492e5d`). A word with a location bit binds and keeps
+/// the target.
+#[test]
+fn a_click_the_cursor_cannot_bind_deselects() {
+    for (label, point, word, deselects, changes) in [
+        (
+            "terrain, a unit word",
+            Some(Vec3::new(1.0, 2.0, 3.0)),
+            0x0002,
+            true,
+            1,
+        ),
+        ("the sky, a unit word", None, 0x0002, true, 0),
+        (
+            "terrain, a location word",
+            Some(Vec3::new(1.0, 2.0, 3.0)),
+            0x0040,
+            false,
+            2,
+        ),
+    ] {
+        let mut f = fix(false);
+        let world = f.app.world_mut();
+        world.resource_mut::<crate::spell::SpellTargeting>().enter(
+            HEAL,
+            crate::spell::CastCommit::Spell,
+            word,
+        );
+        world.resource_mut::<PressPick>().occlusion = super::PickOcclusion {
+            distance: if point.is_some() { 5.0 } else { f32::INFINITY },
+            point,
+            ray: None,
+        };
+        world
+            .resource_mut::<crate::ui_cast::CastReports>()
+            .0
+            .clear();
+        f.click(Hovered::default());
+        f.app
+            .world_mut()
+            .run_system_once(click::select_on_click)
+            .expect("the click runs");
+        f.app
+            .world_mut()
+            .run_system_once(crate::spell::targeting::commit_ground_cast_on_click)
+            .expect("the terrain commit runs");
+        let sent: Vec<_> = f.rx.try_iter().collect();
+        let selections: Vec<_> = sent
+            .iter()
+            .filter_map(|c| match c {
+                ClientCommand::SetSelection { guid } => Some(*guid),
+                _ => None,
+            })
+            .collect();
+        let reports = &f.app.world().resource::<crate::ui_cast::CastReports>().0;
+        let signalled = reports
+            .iter()
+            .filter(|r| matches!(r, crate::ui_cast::CastReport::Changed))
+            .count();
+        if deselects {
+            assert_eq!(f.selected(), None, "{label}");
+            assert_eq!(selections, [0], "{label}");
+            assert!(f.cursor_is_up(), "{label}: the cursor stays");
+        } else {
+            assert_eq!(f.selected(), Some(OLD), "{label}");
+            assert!(selections.is_empty(), "{label}");
+            assert!(
+                sent.iter()
+                    .any(|c| matches!(c, ClientCommand::CastSpellAtDest { .. })),
+                "{label}: the bind sends"
+            );
+        }
+        assert_eq!(signalled, changes, "{label}");
+    }
+}
+
 /// The greeter (`PlayGreetingSound`, `0x60c270`) runs at `0x4927fd` for every unit a body click
 /// names, ahead of `SelectTarget`, with nothing in between that tests targeting: a click the
 /// cursor binds greets too. The click router returns for a charmed player first (`0x481f98`), so

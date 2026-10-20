@@ -87,7 +87,9 @@ pub(super) fn select_on_plate_click(
 
 /// On a [`WorldClick`], select the press pick's unit or deselect on empty world, except on nothing
 /// (the sky) with a payload held (`0x492d30`); the terrain leg deselects regardless (`0x5e03bb`).
-/// The press pick, since the hover is empty through a camera drag, as in the reference's freelook.
+/// With the targeting cursor up, the object it picks binds instead and a terrain click its word
+/// can bind binds, while the rest still deselect. The press pick, since the hover is empty
+/// through a camera drag, as in the reference's freelook.
 pub(super) fn select_on_click(
     mut clicks: MessageReader<WorldClick>,
     inspect: Res<InspectMode>,
@@ -110,18 +112,32 @@ pub(super) fn select_on_click(
     if seam.player_is_charmed() {
         return;
     }
-    // The ground cursor owns the click (`0x492580`); its commit system runs after this one. The
-    // greeter runs ahead of `SelectTarget` for every unit the click names (`0x4927fd`) and nothing
-    // before it tests targeting, so the unit the cursor's click binds is greeted as well, unless a
-    // nearer GameObject takes the click.
+    // With the cursor up, an object the press picked takes the object leg (`0x4925d0` →
+    // `SelectTarget 0x493540`), whose word test (`0x4935ca`) binds it in the select's place; the
+    // commit systems run after this one. The greeter runs ahead of `SelectTarget` for every unit
+    // the click names (`0x4927fd`) and nothing before it tests targeting, so the unit the cursor's
+    // click binds is greeted as well, unless a nearer GameObject takes the click. The terrain leg
+    // (`0x492580`) tries `BindLocation 0x6e60f0`, which binds a word with a location bit and
+    // returns 1; for any other word it signals (`0x6e615d`) and returns 0, and the click falls to
+    // `OnWorldClick 0x5e0320`'s deselect (`0x5e03cf`). The nothing leg deselects as ever
+    // (`0x492e5d`): neither tests the word.
     let ground = seam.slots.targeting();
     if ground.active() {
         let object_click = ground.wants(crate::spell::TargetingWants::GameObject)
             && go_is_nearest(&hovered, &press.object);
-        if let Some(entity) = hovered.target.filter(|_| !object_click) {
-            greeting.write(crate::sound::NpcGreetingRequest { npc: entity });
+        if object_click || hovered.corpse.is_some() || hovered.refused {
+            return;
         }
-        return;
+        if let Some(entity) = hovered.target {
+            greeting.write(crate::sound::NpcGreetingRequest { npc: entity });
+            return;
+        }
+        if occlusion.point.is_some() {
+            if ground.wants(crate::spell::TargetingWants::Location) {
+                return;
+            }
+            seam.slots.core(&seam.net).reports.changed();
+        }
     }
     let (self_guid, engaged) = self_q
         .single()

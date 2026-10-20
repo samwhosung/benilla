@@ -25,11 +25,11 @@ use super::TargetingWants;
 
 /// The terrain leg (`0x492c90` → `0x492580`), a left click the press found no object under: bind
 /// the press's ground point and send, with no range check and no error path, then arm the pending
-/// cast and GCD and end the mode. A word without a location bit binds nothing and the mode stays,
-/// but `BindLocation 0x6e60f0` still signals (`0x6e615d`, ahead of its bound test). No ground hit
-/// (sky) is the nothing leg (`0x492d30`), which never calls it.
-/// [`crate::target::click::select_on_click`] holds off while targeting, so the click neither
-/// selects nor deselects.
+/// cast and GCD and end the mode. A word without a location bit binds nothing and the mode stays:
+/// `BindLocation 0x6e60f0` signals (`0x6e615d`, ahead of its bound test) and returns 0, and the
+/// click falls to `OnWorldClick 0x5e0320`, which deselects; both are
+/// [`crate::target::click::select_on_click`]'s, which runs first. No ground hit (sky) is the
+/// nothing leg (`0x492d30`), which never calls it.
 ///
 /// Runs after `select_on_click`, which reads the mode this clears.
 pub(crate) fn commit_ground_cast_on_click(
@@ -70,7 +70,6 @@ pub(crate) fn commit_ground_cast_on_click(
         ladder.ground.location_bind(at),
     ) else {
         debug!("ui_action: a terrain click binds nothing the word wants — the cursor stays");
-        ladder.reports.changed();
         return;
     };
     debug!(
@@ -272,12 +271,12 @@ mod tests {
         ));
     }
 
-    /// `0x492580` calls `BindLocation 0x6e60f0` on every terrain click while a word stands, and
-    /// it signals (`0x6e615d`) whether or not the click binds: a unit word's terrain click sends
-    /// nothing and keeps the cursor, with one pair; a sky click (the nothing leg) and a click on
-    /// a unit the press picked (the object leg) never reach it.
+    /// A unit word's terrain click binds nothing here: it sends nothing and keeps the cursor, and
+    /// its `BindLocation` signal (`0x6e615d`) and the deselect it falls to are the select's
+    /// ([`crate::target::click::select_on_click`]), so the commit adds no pair; a sky click (the
+    /// nothing leg) and a click on a unit the press picked (the object leg) never reach it.
     #[test]
-    fn a_terrain_click_that_binds_nothing_still_signals_once() {
+    fn a_terrain_click_that_binds_nothing_leaves_the_rest_to_the_select() {
         const HEAL: u32 = 2050;
         let commit = crate::spell::cast_send::CastCommit::Spell;
         let changes = |world: &mut World| {
@@ -288,10 +287,10 @@ mod tests {
                 .filter(|r| matches!(r, crate::ui_cast::CastReport::Changed))
                 .count()
         };
-        for (label, point, unit, pairs) in [
-            ("terrain", Some(Vec3::new(1.0, 2.0, 3.0)), false, 1),
-            ("sky", None, false, 0),
-            ("a unit", Some(Vec3::new(1.0, 2.0, 3.0)), true, 0),
+        for (label, point, unit) in [
+            ("terrain", Some(Vec3::new(1.0, 2.0, 3.0)), false),
+            ("sky", None, false),
+            ("a unit", Some(Vec3::new(1.0, 2.0, 3.0)), true),
         ] {
             let (mut world, rx, _) = fixture();
             let id = world.register_system(commit_ground_cast_on_click);
@@ -316,7 +315,7 @@ mod tests {
                 .resource_mut::<Messages<WorldClick>>()
                 .write(WorldClick);
             world.run_system(id).expect("the ground commit runs");
-            assert_eq!(changes(&mut world), pairs, "{label}");
+            assert_eq!(changes(&mut world), 0, "{label}");
             assert!(rx.try_recv().is_err(), "{label}: nothing sent");
             assert!(
                 world.resource::<super::super::SpellTargeting>().active(),
