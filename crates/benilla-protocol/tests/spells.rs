@@ -1249,7 +1249,7 @@ fn kill_outcome_dispel_enchantment_and_execute_logs_parse() {
         "0000000000000000", // caster 0: the enchant faded
         "0b00000000000000", // owner 11
         "d2040000",         // itemEntry 1234
-        "39050000",         // spellId 1337
+        "39050000",         // enchantment 1337
         "00",               // showAffiliation false
     ));
     match messages::parse_server(messages::opcode::SMSG_ENCHANTMENTLOG, &body).unwrap() {
@@ -1259,7 +1259,7 @@ fn kill_outcome_dispel_enchantment_and_execute_logs_parse() {
                 caster: 0,
                 owner: 11,
                 item_entry: 1234,
-                spell_id: 1337,
+                enchant_id: 1337,
                 show_affiliation: false,
             }
         ),

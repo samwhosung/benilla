@@ -46,6 +46,7 @@ fn a_spell_with_no_record_writes_no_line() {
         spells: Some(&spells),
         names: None,
         skill_lines: None,
+        enchants: None,
         ranges: &ranges,
         periodic: true,
     };
@@ -204,6 +205,7 @@ mod emitters {
         stores: HashMap<Entity, ObjectStore>,
         factions: Factions,
         spells: crate::ui_action::Spells,
+        enchants: benilla_formats::EnchantCatalog,
     }
 
     impl Bench {
@@ -214,6 +216,11 @@ mod emitters {
                 stores: HashMap::new(),
                 factions: factions(),
                 spells: spells(),
+                enchants: benilla_formats::EnchantCatalog::from_rows(
+                    HashMap::new(),
+                    [(CRUSADER, "Crusader".to_string())].into(),
+                    [(CRUSADER, 0), (ROCKBITER, 0x2)].into(),
+                ),
             };
             bench.hold(&player(ME, HUMAN));
             bench.hold(&creature(MOB, ORC));
@@ -245,6 +252,7 @@ mod emitters {
                 spells: Some(&self.spells),
                 names: None,
                 skill_lines: None,
+                enchants: Some(&self.enchants),
                 ranges: &ranges,
                 periodic: true,
             };
@@ -687,5 +695,69 @@ mod emitters {
                 "SPELLINTERRUPT"
             ]
         );
+    }
+
+    /// `SpellItemEnchantment` rows: one named, one with `Flags & 0x2`.
+    const CRUSADER: u32 = 1900;
+    const ROCKBITER: u32 = 29;
+
+    fn enchant(caster: u64, owner: u64, enchant_id: u32) -> Vec<PendingCombat> {
+        let s = benilla_protocol::messages::EnchantmentLog {
+            caster,
+            owner,
+            item_entry: 2589,
+            enchant_id,
+            show_affiliation: false,
+        };
+        Bench::new().lines(|ctx, st, po, log| super::super::enchantment_log(s, ctx, st, po, log))
+    }
+
+    /// The packet's id names a `SpellItemEnchantment` row through `0xc0d7d8` (`0x62922d`,
+    /// `0x6290d3`), never a spell; a row with `Flags & 0x2` writes nothing (`0x62923e`,
+    /// `0x6290e4`). The word carries the enchantment's name when the item is yours (`0x62937a`,
+    /// `0x6291b6`).
+    #[test]
+    fn an_enchantment_line_names_its_enchantment_row() {
+        let added = enchant(ME, ME, CRUSADER);
+        assert_eq!(stems(&added), ["ITEMENCHANTMENTADD"]);
+        assert_eq!(added[0].fills.spell, "Crusader");
+        assert_eq!(
+            words(&added),
+            [Some(LineWord::with("ENCHANTMENT_ADDED", "Crusader"))]
+        );
+        let faded = enchant(0, ME, CRUSADER);
+        assert_eq!(stems(&faded), ["ITEMENCHANTMENTREMOVE"]);
+        assert_eq!(
+            words(&faded),
+            [Some(LineWord::with("ENCHANTMENT_REMOVED", "Crusader"))]
+        );
+        assert_eq!(words(&enchant(ME, MOB, CRUSADER)), [None], "not your item");
+        assert!(enchant(ME, ME, ROCKBITER).is_empty(), "Flags & 0x2");
+        assert!(enchant(0, ME, ROCKBITER).is_empty(), "Flags & 0x2");
+        assert!(enchant(ME, ME, FIREBALL).is_empty(), "a spell id, no row");
+        // A fade's owner must be held as a unit (`0x62902c`): your own trap, a game object the
+        // classifier counts as yours, writes nothing.
+        const TRAP: u64 = 7;
+        let mut bench = Bench::new();
+        let e = bench.world.spawn_empty().id();
+        bench.index.0.insert(TRAP, e);
+        bench.stores.insert(
+            e,
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (2, 0x21),
+                (6, ME as u32),
+                (7, (ME >> 32) as u32),
+            ])),
+        );
+        let fade = benilla_protocol::messages::EnchantmentLog {
+            caster: 0,
+            owner: TRAP,
+            item_entry: 2589,
+            enchant_id: CRUSADER,
+            show_affiliation: false,
+        };
+        let lines =
+            bench.lines(|ctx, st, po, log| super::super::enchantment_log(fade, ctx, st, po, log));
+        assert!(lines.is_empty(), "a fade's owner held as no unit");
     }
 }

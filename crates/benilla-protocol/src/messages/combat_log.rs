@@ -368,7 +368,9 @@ pub struct EnchantmentLog {
     pub caster: u64,
     pub owner: u64,
     pub item_entry: u32,
-    pub spell_id: u32,
+    /// A `SpellItemEnchantment.dbc` row, though vmangos names it `spellId`: every caller passes
+    /// the item's enchantment id (`Objects/Item.cpp:1040`, `:1043`, `:1079`).
+    pub enchant_id: u32,
     /// False on the owner's copy, true on everyone else's; the 1.12 client picks the
     /// enchant-added message by it.
     pub show_affiliation: bool,
@@ -379,7 +381,7 @@ pub(super) fn read_enchantment_log(r: &mut impl Read) -> io::Result<EnchantmentL
         caster: read_u64_le(r)?,
         owner: read_u64_le(r)?,
         item_entry: read_u32_le(r)?,
-        spell_id: read_u32_le(r)?,
+        enchant_id: read_u32_le(r)?,
         show_affiliation: read_u8(r)? != 0,
     })
 }

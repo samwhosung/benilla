@@ -90,6 +90,14 @@ impl EnchantCatalog {
         self.flag(enchant_id, FLAG_TOOLTIP_HIDES_NAME)
     }
 
+    /// The name the combat log's enchantment lines print: `None` for an id with no row, or with
+    /// `Flags & 0x2`, where both formatters return (`0x6290d3`-`0x6290e8`, `0x62922d`-`0x629242`);
+    /// a row with an empty name prints it empty.
+    pub fn logged_name(&self, enchant_id: u32) -> Option<&str> {
+        (self.has_row(enchant_id) && !self.flag(enchant_id, FLAG_TOOLTIP_HIDES_NAME))
+            .then(|| self.name(enchant_id).unwrap_or(""))
+    }
+
     fn flag(&self, enchant_id: u32, bit: u32) -> bool {
         self.flags.get(&enchant_id).is_some_and(|f| f & bit != 0)
     }

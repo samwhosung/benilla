@@ -39,6 +39,8 @@ pub(crate) struct ChatCtx<'a> {
     pub names: Option<&'a crate::names::NameCache>,
     /// The spell-to-skill-line hop of the caster level `0x6e3130`.
     pub skill_lines: Option<&'a benilla_formats::SkillLineCatalog>,
+    /// `SpellItemEnchantment.dbc` (`0xc0d7d8`), which the enchantment lines name.
+    pub enchants: Option<&'a benilla_formats::EnchantCatalog>,
     /// The display ranges: the reference's `0x8629e0` table, CVar-backed.
     pub ranges: &'a combat::CombatLogRanges,
     /// `CombatLogPeriodicSpells`, for its two chat-only read sites; the whole-packet gate is in
@@ -361,12 +363,17 @@ pub(super) fn dispel_failed(
     }
 }
 
-/// `SMSG_ENCHANTMENTLOG`: "You cast %s on your %s." or "%s has faded from your %s.". An empty
-/// caster guid means the enchant faded (`0x628f40`); the fade names only the owner. The item name,
-/// the last `%s`, comes from the item cache, so an uncached entry waits.
+/// `SMSG_ENCHANTMENTLOG` (`0x628f40`): "You cast %s on your %s." (`0x6291d0`) or "%s has faded
+/// from your %s." (`0x628ff0`, an empty caster guid). The first `%s` is the enchantment's name,
+/// read through `0xc0d7d8` by the packet's id; no row, or `Flags & 0x2`, and neither writes
+/// anything. The item name, the last `%s`, comes from the item cache, so an uncached entry
+/// waits. Each raises its word, `ENCHANTMENT_ADDED` or `ENCHANTMENT_REMOVED` with the
+/// enchantment's name, when the item is yours (`0x62937a`, `0x6291b6`).
 ///
-/// The chat type is the literal `0x44` `SPELL_ITEM_ENCHANTMENTS` for a fade and for the owner's
-/// copy (`show_affiliation` clear); the broadcast copy takes the BUFF selector.
+/// The fade needs its owner held as a unit (`0x62902c`) within its class's range; an added line
+/// takes the two-sided gate. The chat type is the literal `0x44` `SPELL_ITEM_ENCHANTMENTS` for a
+/// fade and for the owner's copy (`show_affiliation` clear); the broadcast copy takes the BUFF
+/// matrix (`0x62934e`).
 pub(super) fn enchantment_log(
     s: EnchantmentLog,
     ctx: &ChatCtx,
@@ -376,17 +383,20 @@ pub(super) fn enchantment_log(
 ) {
     let owner = ctx.classify(s.owner, stores);
     let caster = ctx.classify(s.caster, stores);
-    let Some(spell) = ctx.spell_name(s.spell_id) else {
+    let Some(name) = ctx.enchants.and_then(|e| e.logged_name(s.enchant_id)) else {
         return;
     };
     let fills = Fills {
-        spell,
+        spell: name.to_string(),
         ..Default::default()
     };
     let enchantments = crate::ui_chat::ChatEventKind::SpellItemEnchantments;
     if s.caster == 0 {
+        if !ctx.holds_unit(s.owner, stores) {
+            return;
+        }
         // A fade: the owner is the only endpoint, in both the key and the range gate.
-        return queue_named(
+        queue_reported(
             log,
             ctx,
             poses,
@@ -396,7 +406,9 @@ pub(super) fn enchantment_log(
             (s.owner, owner),
             fills,
             combat::Named::Item(s.item_entry),
+            to_me(owner, LineWord::with("ENCHANTMENT_REMOVED", name)),
         );
+        return;
     }
     let kind = if s.show_affiliation {
         match combat::spell_kind(caster, owner, true) {
@@ -406,7 +418,7 @@ pub(super) fn enchantment_log(
     } else {
         enchantments
     };
-    queue_named(
+    queue_reported(
         log,
         ctx,
         poses,
@@ -416,6 +428,7 @@ pub(super) fn enchantment_log(
         (s.owner, owner),
         fills,
         combat::Named::Item(s.item_entry),
+        to_me(owner, LineWord::with("ENCHANTMENT_ADDED", name)),
     );
 }
 
