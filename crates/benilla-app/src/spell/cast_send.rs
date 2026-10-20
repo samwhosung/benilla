@@ -2481,7 +2481,10 @@ mod tests {
         }
         world.insert_resource(crate::ui_loot::LootLatch(None));
         send(&mut world, DISENCHANT, CastCommit::Spell);
-        assert!(world.resource_mut::<CastReports>().take_refusals().is_empty());
+        assert!(world
+            .resource_mut::<CastReports>()
+            .take_refusals()
+            .is_empty());
         assert!(
             matches!(rx.try_recv(), Ok(ClientCommand::CastSpell { spell_id, .. }) if spell_id == DISENCHANT),
             "nothing latched: the rung passes"
@@ -2539,15 +2542,19 @@ mod tests {
         assert_eq!(
             press(
                 &mut world,
-                &[(VISIBLE_RANGED_ENTRY, 2504), (VISIBLE_RANGED_PROPERTIES, 0x0001_0000)]
+                &[
+                    (VISIBLE_RANGED_ENTRY, 2504),
+                    (VISIBLE_RANGED_PROPERTIES, 0x0001_0000)
+                ]
             ),
             vec![CastFail::local(RANGED, 0x18)],
             "the flag half's bit 0 hides the weapon"
         );
         assert!(press(&mut world, &[(VISIBLE_RANGED_ENTRY, 2504)]).is_empty());
         assert!(
-            rx.try_iter()
-                .any(|c| matches!(c, ClientCommand::CastSpell { spell_id, .. } if spell_id == RANGED)),
+            rx.try_iter().any(
+                |c| matches!(c, ClientCommand::CastSpell { spell_id, .. } if spell_id == RANGED)
+            ),
             "a bow in the slot passes the rung"
         );
     }

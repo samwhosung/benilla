@@ -992,7 +992,10 @@ mod tests {
         let lit = |ammo_id: u32| {
             let mut deps = TestDeps::new();
             deps.spawn_item(BOW, ObjectFields::from_pairs(&[(3, BOW_ENTRY)]));
-            deps.spawn_item(ARROWS, ObjectFields::from_pairs(&[(3, ARROW_ENTRY), (14, 200)]));
+            deps.spawn_item(
+                ARROWS,
+                ObjectFields::from_pairs(&[(3, ARROW_ENTRY), (14, 200)]),
+            );
             deps.items.insert_template(
                 BOW_ENTRY,
                 Some(ItemInfo {

@@ -670,7 +670,11 @@ fn the_place_rungs_ask_the_outdoors_test_after_reputation() {
         ..Default::default()
     };
     assert_eq!(inside.refuse(&mount([6, 0, 0], [78, 0, 0])), Some(0x4b));
-    assert_eq!(inside.refuse(&mount([0, 0, 6], [0, 0, 78])), Some(0x4b), "any of the three");
+    assert_eq!(
+        inside.refuse(&mount([0, 0, 6], [0, 0, 78])),
+        Some(0x4b),
+        "any of the three"
+    );
     assert_eq!(
         inside.refuse(&mount([6, 0, 0], [0, 78, 0])),
         Some(0x55),
@@ -684,5 +688,9 @@ fn the_place_rungs_ask_the_outdoors_test_after_reputation() {
         min_reputation: 4,
         ..Default::default()
     };
-    assert_eq!(outside.refuse(&unknown_rank), Some(0x8f), "reputation first");
+    assert_eq!(
+        outside.refuse(&unknown_rank),
+        Some(0x8f),
+        "reputation first"
+    );
 }

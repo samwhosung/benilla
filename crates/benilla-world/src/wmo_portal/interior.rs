@@ -157,9 +157,9 @@ pub(super) fn track_area_interior(
     mut outdoors: ResMut<PlayerOutdoors>,
 ) {
     // The player node's outdoors answer; with no body there is no entity (`0x6706fa`).
-    let now_outdoors = viewer.at.is_none_or(|feet| {
-        entity_outdoors_at(&wmos, &instances, &streamer, &adt_tiles, feet)
-    });
+    let now_outdoors = viewer
+        .at
+        .is_none_or(|feet| entity_outdoors_at(&wmos, &instances, &streamer, &adt_tiles, feet));
     if outdoors.0 != now_outdoors {
         outdoors.0 = now_outdoors;
     }
@@ -515,7 +515,13 @@ pub fn indoor_verdict_at<'a, K: Copy>(
 
 /// The winning claim of [`nearest_claim`], with its model, its placement and the probe in the
 /// model's space.
-type NearestClaim<'m, 'a, K> = (DownRayClaim, &'m WmoModel, &'a WmoPortalInstance, [f32; 3], K);
+type NearestClaim<'m, 'a, K> = (
+    DownRayClaim,
+    &'m WmoModel,
+    &'a WmoPortalInstance,
+    [f32; 3],
+    K,
+);
 
 /// An attach ray's one global nearest hit (`0x6a8a20`, `0x6a8840`): each placement's claim from
 /// `probe_world`, classified under `mask`, the nearest across placements winning.
@@ -740,7 +746,10 @@ mod tests {
         assert!(entity_outdoors(Some(EXTERIOR | EXTERIOR_LIT)));
         assert!(entity_outdoors(Some(0x8000)));
         assert!(!entity_outdoors(Some(0)), "a plain interior group");
-        assert!(!entity_outdoors(Some(EXTERIOR_LIT)), "a lit street is indoors here");
+        assert!(
+            !entity_outdoors(Some(EXTERIOR_LIT)),
+            "a lit street is indoors here"
+        );
         assert!(!entity_outdoors(Some(0x2000)), "0x2000 plays no part");
     }
     use benilla_formats::FootprintTris;
