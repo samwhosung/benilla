@@ -32,6 +32,17 @@ fn player_record_arm<T>(
     Some(f(&model.player_record))
 }
 
+/// `SStrCmpI(a, b, 0x7fffffff) == 0` (`0x64a4c0` through `__strnicmp`, `0x414310`): `A` to `Z`
+/// fold, every other byte exact, and a NUL in either string ends the compare.
+fn c_str_eq_ignore_case(a: &str, b: &str) -> bool {
+    fn c_str(s: &str) -> &[u8] {
+        let bytes = s.as_bytes();
+        let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+        &bytes[..end]
+    }
+    c_str(a).eq_ignore_ascii_case(c_str(b))
+}
+
 /// The class ids `GetComboPoints` (`0x51a190`) accepts: it compares the class, `UNIT_FIELD_BYTES_0`
 /// byte 1, with 4 and 0xb.
 const CLASS_ROGUE: u32 = 4;
@@ -349,35 +360,38 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // UnitIsUnit(a, b): both units exist and are the same token or share a nonzero GUID.
+    // UnitIsUnit(a, b) (`0x516070`): two strings equal without regard to case answer 1 before
+    // either is resolved (`SStrCmpI`, `0x5160c4`; `0x5160cd`); otherwise both resolve
+    // (`0x5160e8`, `0x5160f4`) and a shared nonzero GUID answers 1 (`0x516100`), held or not.
     g.set(
         "UnitIsUnit",
         lua.create_function(|lua, (a, b): (Value, Value)| {
             // Both arguments are `lua_isstring`-gated, so either one nil raises.
-            let a = Some(crate::script::binding_abi::string_arg(
+            let a = crate::script::binding_abi::string_arg(
                 lua,
                 a,
                 r#"Usage: UnitIsUnit("unit", "otherUnit")"#,
-            )?);
-            let b = Some(crate::script::binding_abi::string_arg(
+            )?;
+            let b = crate::script::binding_abi::string_arg(
                 lua,
                 b,
                 r#"Usage: UnitIsUnit("unit", "otherUnit")"#,
-            )?);
+            )?;
+            if c_str_eq_ignore_case(&a, &b) {
+                return Ok(flag(true));
+            }
+            let (a, b) = (Some(a), Some(b));
             // Both go through the resolver, so either one unrecognised raises.
             check_unit_token(&a)?;
             check_unit_token(&b)?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let (Some(a), Some(b)) = (a, b) else {
-                return Ok(Value::Nil);
+            let guid = |t: &Option<String>| {
+                t.as_deref()
+                    .and_then(|t| model.unit(t))
+                    .map_or(0, |u| u.guid)
             };
-            let (Some(ua), Some(ub)) = (model.unit(&a), model.unit(&b)) else {
-                return Ok(Value::Nil);
-            };
-            if !ua.exists || !ub.exists {
-                return Ok(Value::Nil);
-            }
-            Ok(flag(a == b || (ua.guid != 0 && ua.guid == ub.guid)))
+            let (ga, gb) = (guid(&a), guid(&b));
+            Ok(flag(ga != 0 && ga == gb))
         })?,
     )?;
 

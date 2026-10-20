@@ -1986,9 +1986,10 @@ fn every_unit_predicate_is_one_or_nil_and_never_a_boolean() {
                 ..Default::default()
             },
         ),
+        // The GUID leg: the mouseover, seated on both legs, shares the live target's GUID.
         (
             "UnitIsUnit",
-            r#"UnitIsUnit("target", "target")"#,
+            r#"UnitIsUnit("target", "mouseover")"#,
             UnitState {
                 exists: true,
                 guid: 42,
@@ -1997,9 +1998,15 @@ fn every_unit_predicate_is_one_or_nil_and_never_a_boolean() {
         ),
     ];
 
+    let mouseover = || UnitState {
+        exists: true,
+        guid: 42,
+        ..Default::default()
+    };
     for (name, call, live) in table {
         let mut s = UiScript::new().unwrap();
         s.set_unit("player", Some(player()));
+        s.set_unit("mouseover", Some(mouseover()));
         s.set_unit("target", Some(live));
 
         assert_eq!(
@@ -2029,6 +2036,7 @@ fn every_unit_predicate_is_one_or_nil_and_never_a_boolean() {
         // The false leg: nil, one value. Clearing the token also covers the absent-unit arm.
         let mut s = UiScript::new().unwrap();
         s.set_unit("player", Some(player()));
+        s.set_unit("mouseover", Some(mouseover()));
         s.set_unit("target", None);
 
         assert!(
