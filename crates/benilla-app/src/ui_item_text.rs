@@ -410,8 +410,7 @@ fn readable(
 /// Drive the begun session to `ITEM_TEXT_READY`, which shows the window, once the body and any
 /// creator line are in.
 fn feed_item_text(
-    script: Option<NonSendMut<UiScript>>,
-    mut open: ResMut<ItemTextOpen>,
+    mut vm: crate::script_calls::VmWith<ResMut<'static, ItemTextOpen>>,
     mail: Res<MailOpen>,
     pages: Res<PageTexts>,
     objects: Objects,
@@ -425,95 +424,97 @@ fn feed_item_text(
     states: Res<crate::world_state::WorldStates>,
     unit_names: crate::ui_unit::NameTables,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let Some(sess) = open.pending.as_mut() else {
-        return;
-    };
-    // The begin ([`begin_item_text`]) fires first, latching the reader.
-    if sess.told.get(&script).ready || !sess.told.get(&script).begun {
-        return;
-    }
-    let ask = Ask::at(
-        !std::mem::replace(&mut sess.told.get(&script).asked, true),
-        &commands,
-    );
-    let Some(readable) = readable(
-        sess.object_guid,
-        &objects,
-        &items,
-        &go_templates,
-        materials.as_deref(),
-        ask,
-    ) else {
-        return; // template in flight; the reference re-enters the open when it lands
-    };
-
-    let (creator, text, page, has_next) = match &mut sess.source {
-        ReadSource::Letter { text_id } => {
-            let creator_guid = objects
-                .object(sess.object_guid)
-                .and_then(|o| o.item_creator());
-            let creator = match creator_guid {
-                None => None, // authorless
-                Some(guid) => match names.resolve_player(guid, ask) {
-                    Some(name) => Some(name.to_string()),
-                    None => return, // name query in flight
-                },
-            };
-            // The body, from the client's one item-text cache, which mail shares.
-            let body = mail
-                .bodies
-                .read(*text_id, ask, |commands| {
-                    let _ = commands.0.send(ClientCommand::ItemTextQuery {
-                        text_id: *text_id,
-                        mail_id: 0,
-                    });
-                })
-                .cloned();
-            let Some(text) = body else {
-                return; // body query in flight
-            };
-            (creator, text, 1, false)
+    vm.feed(|script, mut open, fires| {
+        let Some(script) = script else {
+            return;
+        };
+        let Some(sess) = open.pending.as_mut() else {
+            return;
+        };
+        // The begin ([`begin_item_text`]) fires first, latching the reader.
+        if sess.told.get(&script).ready || !sess.told.get(&script).begun {
+            return;
         }
-        ReadSource::Pages { visited } => {
-            if visited.is_empty() {
-                visited.push(readable.page_head);
+        let ask = Ask::at(
+            !std::mem::replace(&mut sess.told.get(&script).asked, true),
+            &commands,
+        );
+        let Some(readable) = readable(
+            sess.object_guid,
+            &objects,
+            &items,
+            &go_templates,
+            materials.as_deref(),
+            ask,
+        ) else {
+            return; // template in flight; the reference re-enters the open when it lands
+        };
+
+        let (creator, text, page, has_next) = match &mut sess.source {
+            ReadSource::Letter { text_id } => {
+                let creator_guid = objects
+                    .object(sess.object_guid)
+                    .and_then(|o| o.item_creator());
+                let creator = match creator_guid {
+                    None => None, // authorless
+                    Some(guid) => match names.resolve_player(guid, ask) {
+                        Some(name) => Some(name.to_string()),
+                        None => return, // name query in flight
+                    },
+                };
+                // The body, from the client's one item-text cache, which mail shares.
+                let body = mail
+                    .bodies
+                    .read(*text_id, ask, |commands| {
+                        let _ = commands.0.send(ClientCommand::ItemTextQuery {
+                            text_id: *text_id,
+                            mail_id: 0,
+                        });
+                    })
+                    .cloned();
+                let Some(text) = body else {
+                    return; // body query in flight
+                };
+                (creator, text, 1, false)
             }
-            let page_id = *visited.last().expect("seeded just above");
-            let Some(page) = pages.page(page_id, sess.object_guid, ask) else {
-                return; // page query in flight
-            };
-            // A book has no creator line.
-            (
-                None,
-                page.text.clone(),
-                visited.len() as u32,
-                page.next != 0,
-            )
-        }
-    };
+            ReadSource::Pages { visited } => {
+                if visited.is_empty() {
+                    visited.push(readable.page_head);
+                }
+                let page_id = *visited.last().expect("seeded just above");
+                let Some(page) = pages.page(page_id, sess.object_guid, ask) else {
+                    return; // page query in flight
+                };
+                // A book has no creator line.
+                (
+                    None,
+                    page.text.clone(),
+                    visited.len() as u32,
+                    page.next != 0,
+                )
+            }
+        };
 
-    // Server-authored text runs the `$`-macro expander, as in the reference's `ItemTextFrame.cpp`.
-    let subject = crate::npc_text::player_identity(&self_q, &names, unit_names.get());
-    let text = crate::npc_text::substitute(
-        &text,
-        &crate::npc_text::MacroContext {
-            subject: subject.as_ref(),
-            states: &states,
-        },
-    );
-    script.set_item_text(Some(ItemTextState {
-        item: readable.title,
-        creator,
-        text,
-        page,
-        has_next,
-        material: readable.material,
-    }));
-    script.fire_event("ITEM_TEXT_READY", vec![]);
-    sess.told.get(&script).ready = true;
+        // Server-authored text runs the `$`-macro expander, as in the reference's `ItemTextFrame.cpp`.
+        let subject = crate::npc_text::player_identity(&self_q, &names, unit_names.get());
+        let text = crate::npc_text::substitute(
+            &text,
+            &crate::npc_text::MacroContext {
+                subject: subject.as_ref(),
+                states: &states,
+            },
+        );
+        script.set_item_text(Some(ItemTextState {
+            item: readable.title,
+            creator,
+            text,
+            page,
+            has_next,
+            material: readable.material,
+        }));
+        fires.post("ITEM_TEXT_READY", vec![]);
+        sess.told.get(&script).ready = true;
+    })
 }
 
 /// `PageTextMaterial.dbc`; absent without client data, leaving every reader on Parchment.
@@ -523,31 +524,32 @@ pub(crate) struct PageMaterials(pub(crate) benilla_formats::PageTextMaterialCata
 /// Drain the reader's intents: `CloseItemText()` runs the core; a page turn re-runs the feed from
 /// `ITEM_TEXT_READY`, as the reference does not re-fire BEGIN.
 fn drain_item_text(
-    script: Option<NonSendMut<UiScript>>,
-    mut open: ResMut<ItemTextOpen>,
+    mut vm: crate::script_calls::VmWith<ResMut<'static, ItemTextOpen>>,
     pages: Res<PageTexts>,
     mut world_commands: Commands,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for delta in script.take_item_text_page_turns() {
-        let Some(sess) = open.pending.as_mut() else {
-            continue;
+    vm.turn(|script, mut open| {
+        let Some(script) = script else {
+            return;
         };
-        let ReadSource::Pages { visited } = &mut sess.source else {
-            continue; // a letter has no pages; its buttons never show
-        };
-        if turn_page(visited, delta, |id| pages.pages.get(id).map(|p| p.next)) {
-            // Repaint on the next feed without re-firing BEGIN; the show asks for the new page.
-            let told = sess.told.get(&script);
-            told.ready = false;
-            told.asked = false;
+        for delta in script.take_item_text_page_turns() {
+            let Some(sess) = open.pending.as_mut() else {
+                continue;
+            };
+            let ReadSource::Pages { visited } = &mut sess.source else {
+                continue; // a letter has no pages; its buttons never show
+            };
+            if turn_page(visited, delta, |id| pages.pages.get(id).map(|p| p.next)) {
+                // Repaint on the next feed without re-firing BEGIN; the show asks for the new page.
+                let told = sess.told.get(&script);
+                told.ready = false;
+                told.asked = false;
+            }
         }
-    }
-    if script.take_item_text_close() {
-        crate::ui_session::queue(&mut world_commands, close_core);
-    }
+        if script.take_item_text_close() {
+            crate::ui_session::queue(&mut world_commands, close_core);
+        }
+    })
 }
 
 /// Walk the trail one step: Next pushes the page's `nextPageId` from `next_of`, the cache, and

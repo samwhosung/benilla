@@ -214,26 +214,27 @@ fn unique_text(suffix: &str) -> String {
 fn gm_ticket_probe(
     time: ProbeClock,
     mut probe: ResMut<GmTicketProbe>,
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     self_player: Query<(), With<SelfPlayer>>,
     player: Res<Player>,
     map: Option<Res<benilla_world::world_map::CurrentMap>>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    if self_player.is_empty() {
-        return; // not in-world yet
-    }
-    let Some(script) = script else {
-        return; // no UI VM in a headless build
-    };
-    let now = time.elapsed_secs_f64();
-    let phase = probe.phase;
+    hosted_vm.run(|script| {
+        if self_player.is_empty() {
+            return; // not in-world yet
+        }
+        let Some(script) = script else {
+            return; // no UI VM in a headless build
+        };
+        let now = time.elapsed_secs_f64();
+        let phase = probe.phase;
 
-    match phase {
-        Phase::Wait => {
-            // The hook goes in before any ask, so it sees the unsolicited answers too.
-            if let Err(e) = script.run(
-                r#"
+        match phase {
+            Phase::Wait => {
+                // The hook goes in before any ask, so it sees the unsolicited answers too.
+                if let Err(e) = script.run(
+                    r#"
                 if not ProbeGmTicketHooked then
                     ProbeGmTicketHooked = true
                     ProbeGmTicketCat = {}
@@ -257,345 +258,348 @@ fn gm_ticket_probe(
                     end)
                 end
                 "#,
-            ) {
-                // Without the hook nothing is observable, so stop rather than FAIL every step.
-                warn!(
+                ) {
+                    // Without the hook nothing is observable, so stop rather than FAIL every step.
+                    warn!(
                     "PROBE_GMTICKET: SKIP (0 hook) — the UPDATE_TICKET/UPDATE_GM_STATUS hook would \
                      not install in the live VM: {e}. Nothing can be observed, so no step below \
                      could be trusted (environmental, not a wire failure)."
                 );
-                probe.phase = Phase::Done;
-                return;
+                    probe.phase = Phase::Done;
+                    return;
+                }
+                info!(
+                    "PROBE_GMTICKET: hook installed; settling {SETTLE_SECS}s before the first ask"
+                );
+                probe.phase = Phase::Settling { since: now };
             }
-            info!("PROBE_GMTICKET: hook installed; settling {SETTLE_SECS}s before the first ask");
-            probe.phase = Phase::Settling { since: now };
-        }
 
-        Phase::Settling { since } => {
-            if now - since < SETTLE_SECS {
-                return;
+            Phase::Settling { since } => {
+                if now - since < SETTLE_SECS {
+                    return;
+                }
+                let baseline = status_answers(&script).len();
+                if !run_or_skip(&mut probe, &script, "1 queue", "GetGMStatus()") {
+                    return;
+                }
+                probe.phase = Phase::Queue {
+                    since: now,
+                    baseline,
+                };
             }
-            let baseline = status_answers(&script).len();
-            if !run_or_skip(&mut probe, &script, "1 queue", "GetGMStatus()") {
-                return;
-            }
-            probe.phase = Phase::Queue {
-                since: now,
-                baseline,
-            };
-        }
 
-        // Step 1, the queue status: no event at all means the round trip is dead.
-        Phase::Queue { since, baseline } => {
-            let seen = status_answers(&script);
-            let Some(i) = matching(&seen, baseline, |_| true) else {
-                if now - since > ANSWER_TIMEOUT_SECS {
-                    error!(
-                        "PROBE_GMTICKET: FAIL (1 queue) — no UPDATE_GM_STATUS within \
+            // Step 1, the queue status: no event at all means the round trip is dead.
+            Phase::Queue { since, baseline } => {
+                let seen = status_answers(&script);
+                let Some(i) = matching(&seen, baseline, |_| true) else {
+                    if now - since > ANSWER_TIMEOUT_SECS {
+                        error!(
+                            "PROBE_GMTICKET: FAIL (1 queue) — no UPDATE_GM_STATUS within \
                          {ANSWER_TIMEOUT_SECS}s of GetGMStatus(). The CMSG_GMTICKET_SYSTEMSTATUS \
                          → SMSG_GMTICKETSYSTEMSTATUS round trip is dead: either the send never \
                          reached the wire or the answer never decoded. (values seen this run: \
                          {seen:?})"
-                    );
-                    probe.fails += 1;
-                    probe.phase = Phase::Done;
-                }
-                return;
-            };
-            let status = seen[i];
-            if status != QUEUE_ENABLED {
-                warn!(
-                    "PROBE_GMTICKET: SKIP (1 queue) — the round trip WORKS (UPDATE_GM_STATUS \
+                        );
+                        probe.fails += 1;
+                        probe.phase = Phase::Done;
+                    }
+                    return;
+                };
+                let status = seen[i];
+                if status != QUEUE_ENABLED {
+                    warn!(
+                        "PROBE_GMTICKET: SKIP (1 queue) — the round trip WORKS (UPDATE_GM_STATUS \
                      fired carrying {status}), but the server's ticket queue is not enabled. \
                      vmangos then answers create with silence (GMTicketHandler.cpp: \
                      `GetStatus() == GMTICKET_QUEUE_STATUS_DISABLED` → return), so every later \
                      step would fail for a server setting rather than a client defect. Set \
                      GMTickets.Enable = 1 and re-run."
-                );
-                probe.phase = Phase::Done;
-                return;
-            }
-            info!(
-                "PROBE_GMTICKET: PASS (1 queue) — UPDATE_GM_STATUS fired carrying \
+                    );
+                    probe.phase = Phase::Done;
+                    return;
+                }
+                info!(
+                    "PROBE_GMTICKET: PASS (1 queue) — UPDATE_GM_STATUS fired carrying \
                  {QUEUE_ENABLED} (the petition queue is up; the window's PETITION_QUEUE_ACTIVE \
                  gate opens)"
-            );
-            probe.passes += 1;
-            if !run_or_skip(&mut probe, &script, "2 clean", "DeleteGMTicket()") {
-                return;
+                );
+                probe.passes += 1;
+                if !run_or_skip(&mut probe, &script, "2 clean", "DeleteGMTicket()") {
+                    return;
+                }
+                probe.phase = Phase::CleanGap { since: now };
             }
-            probe.phase = Phase::CleanGap { since: now };
-        }
 
-        // Step 2, the clean slate. The delete is not waited on: with no ticket vmangos sends
-        // nothing.
-        Phase::CleanGap { since } => {
-            if now - since < WRITE_GAP_SECS {
-                return;
+            // Step 2, the clean slate. The delete is not waited on: with no ticket vmangos sends
+            // nothing.
+            Phase::CleanGap { since } => {
+                if now - since < WRITE_GAP_SECS {
+                    return;
+                }
+                let baseline = ticket_answers(&script).len();
+                if !run_or_skip(&mut probe, &script, "2 clean", "GetGMTicket()") {
+                    return;
+                }
+                probe.phase = Phase::CleanGet {
+                    since: now,
+                    baseline,
+                };
             }
-            let baseline = ticket_answers(&script).len();
-            if !run_or_skip(&mut probe, &script, "2 clean", "GetGMTicket()") {
-                return;
-            }
-            probe.phase = Phase::CleanGet {
-                since: now,
-                baseline,
-            };
-        }
-        Phase::CleanGet { since, baseline } => {
-            let seen = ticket_answers(&script);
-            if matching(&seen, baseline, |(c, _)| *c == NO_TICKET).is_some() {
-                info!(
+            Phase::CleanGet { since, baseline } => {
+                let seen = ticket_answers(&script);
+                if matching(&seen, baseline, |(c, _)| *c == NO_TICKET).is_some() {
+                    info!(
                     "PROBE_GMTICKET: PASS (2 clean) — UPDATE_TICKET fired with arg1 == 0: no open \
                      ticket, and the 4-byte GMTICKET_STATUS_DEFAULT answer decodes"
                 );
-                probe.passes += 1;
-                probe.phase = Phase::Rest {
-                    since: now,
-                    last: bevy_to_wow(player.pos),
-                    still_since: now,
-                };
-            } else if now - since > ANSWER_TIMEOUT_SECS {
-                error!(
-                    "PROBE_GMTICKET: FAIL (2 clean) — no UPDATE_TICKET with arg1 == 0 within \
+                    probe.passes += 1;
+                    probe.phase = Phase::Rest {
+                        since: now,
+                        last: bevy_to_wow(player.pos),
+                        still_since: now,
+                    };
+                } else if now - since > ANSWER_TIMEOUT_SECS {
+                    error!(
+                        "PROBE_GMTICKET: FAIL (2 clean) — no UPDATE_TICKET with arg1 == 0 within \
                      {ANSWER_TIMEOUT_SECS}s of DeleteGMTicket() + GetGMTicket(). Answers seen \
                      after the baseline: {:?}. A leftover ticket that refuses to clear, or a \
                      GETTICKET round trip that never answers.",
-                    &seen[baseline.min(seen.len())..]
-                );
-                probe.fails += 1;
-                probe.phase = Phase::Done;
+                        &seen[baseline.min(seen.len())..]
+                    );
+                    probe.fails += 1;
+                    probe.phase = Phase::Done;
+                }
             }
-        }
 
-        // The rest gate: a ticket records the position, so file it from a body at rest.
-        Phase::Rest {
-            since,
-            last,
-            still_since,
-        } => {
-            let here = bevy_to_wow(player.pos);
-            if distance(here, last) > REST_EPS {
-                probe.phase = Phase::Rest {
-                    since,
-                    last: here,
-                    still_since: now,
-                };
-                return;
-            }
-            let timed_out = now - since > REST_TIMEOUT_SECS;
-            if !timed_out && now - still_since < REST_HOLD_SECS {
-                return;
-            }
-            if timed_out {
-                warn!(
-                    "PROBE_GMTICKET: (3 create) the body never came to rest within \
+            // The rest gate: a ticket records the position, so file it from a body at rest.
+            Phase::Rest {
+                since,
+                last,
+                still_since,
+            } => {
+                let here = bevy_to_wow(player.pos);
+                if distance(here, last) > REST_EPS {
+                    probe.phase = Phase::Rest {
+                        since,
+                        last: here,
+                        still_since: now,
+                    };
+                    return;
+                }
+                let timed_out = now - since > REST_TIMEOUT_SECS;
+                if !timed_out && now - still_since < REST_HOLD_SECS {
+                    return;
+                }
+                if timed_out {
+                    warn!(
+                        "PROBE_GMTICKET: (3 create) the body never came to rest within \
                      {REST_TIMEOUT_SECS}s (still at {here:?}); filing anyway — the wire is still \
                      testable, but treat the db-expect position as approximate."
-                );
+                    );
+                }
+                let text = unique_text("");
+                probe.create_pos = here;
+                probe.create_map = map.map(|m| m.0).unwrap_or(0);
+                if !run_or_skip(
+                    &mut probe,
+                    &script,
+                    "3 create",
+                    &format!("NewGMTicket({CATEGORY_ITEM}, \"{text}\")"),
+                ) {
+                    return;
+                }
+                probe.create_text = text;
+                probe.phase = Phase::CreateGap { since: now };
             }
-            let text = unique_text("");
-            probe.create_pos = here;
-            probe.create_map = map.map(|m| m.0).unwrap_or(0);
-            if !run_or_skip(
-                &mut probe,
-                &script,
-                "3 create",
-                &format!("NewGMTicket({CATEGORY_ITEM}, \"{text}\")"),
-            ) {
-                return;
-            }
-            probe.create_text = text;
-            probe.phase = Phase::CreateGap { since: now };
-        }
 
-        // Step 3: the create body's layout, proven by the echo.
-        Phase::CreateGap { since } => {
-            // The first tick after the create call is the last frame the drain can stamp the
-            // packet in, so the drift is measured here and not at the later db-expect print.
-            if probe.stamp_drift.is_none() {
-                let drift = distance(bevy_to_wow(player.pos), probe.create_pos);
-                probe.stamp_drift = Some(drift);
-                if drift > STAMP_DRIFT_EPS {
-                    warn!(
+            // Step 3: the create body's layout, proven by the echo.
+            Phase::CreateGap { since } => {
+                // The first tick after the create call is the last frame the drain can stamp the
+                // packet in, so the drift is measured here and not at the later db-expect print.
+                if probe.stamp_drift.is_none() {
+                    let drift = distance(bevy_to_wow(player.pos), probe.create_pos);
+                    probe.stamp_drift = Some(drift);
+                    if drift > STAMP_DRIFT_EPS {
+                        warn!(
                         "PROBE_GMTICKET: (3 create) the body moved {drift:.3} yd in the frame the \
                          packet was stamped; the db-expect position below is good only to that."
                     );
+                    }
                 }
+                if now - since < WRITE_GAP_SECS {
+                    return;
+                }
+                let baseline = ticket_answers(&script).len();
+                if !run_or_skip(&mut probe, &script, "3 create", "GetGMTicket()") {
+                    return;
+                }
+                probe.phase = Phase::CreateGet {
+                    since: now,
+                    baseline,
+                };
             }
-            if now - since < WRITE_GAP_SECS {
-                return;
-            }
-            let baseline = ticket_answers(&script).len();
-            if !run_or_skip(&mut probe, &script, "3 create", "GetGMTicket()") {
-                return;
-            }
-            probe.phase = Phase::CreateGet {
-                since: now,
-                baseline,
-            };
-        }
-        Phase::CreateGet { since, baseline } => {
-            let seen = ticket_answers(&script);
-            let want = probe.create_text.clone();
-            if let Some(i) = matching(&seen, baseline, |(_, t)| *t == want) {
-                let (cat, text) = &seen[i];
-                if *cat != f64::from(CATEGORY_ITEM) {
-                    error!(
+            Phase::CreateGet { since, baseline } => {
+                let seen = ticket_answers(&script);
+                let want = probe.create_text.clone();
+                if let Some(i) = matching(&seen, baseline, |(_, t)| *t == want) {
+                    let (cat, text) = &seen[i];
+                    if *cat != f64::from(CATEGORY_ITEM) {
+                        error!(
                         "PROBE_GMTICKET: FAIL (3 create) — the ticket came back with the right \
                          text but category {cat}, wanted {CATEGORY_ITEM}. The category byte is \
                          the head of CMSG_GMTICKET_CREATE; a wrong value there shifts the map id \
                          and the whole position."
                     );
-                    probe.fails += 1;
-                    probe.phase = Phase::Done;
-                    return;
-                }
-                info!(
+                        probe.fails += 1;
+                        probe.phase = Phase::Done;
+                        return;
+                    }
+                    info!(
                     "PROBE_GMTICKET: PASS (3 create) — the server filed and echoed the ticket: \
                      arg1 == {cat} (Item) and arg2 == {text:?} byte for byte. The u8 category, \
                      the map/position block, the text and the trailing \"Reserved for future \
                      use\" cstring are all laid out the way vmangos reads them."
                 );
-                probe.passes += 1;
-                report_db_expectation(&probe, "after create", &want);
-                warn!(
-                    "PROBE_GMTICKET: SKIP (4 db) — operator step, by design: the client never \
+                    probe.passes += 1;
+                    report_db_expectation(&probe, "after create", &want);
+                    warn!(
+                        "PROBE_GMTICKET: SKIP (4 db) — operator step, by design: the client never \
                      reads map/position back, so only the server's own row proves they landed. \
                      After the run, against the server's `characters` database: {DB_QUERY} — \
                      and compare against the db-expect line(s)."
-                );
-                let text = unique_text(" edited");
-                if !run_or_skip(
-                    &mut probe,
-                    &script,
-                    "5 edit",
-                    &format!("UpdateGMTicket({CATEGORY_ITEM}, \"{text}\")"),
-                ) {
-                    return;
-                }
-                probe.edit_text = text;
-                probe.phase = Phase::EditGap { since: now };
-            } else if now - since > ANSWER_TIMEOUT_SECS {
-                error!(
-                    "PROBE_GMTICKET: FAIL (3 create) — the ticket never came back within \
+                    );
+                    let text = unique_text(" edited");
+                    if !run_or_skip(
+                        &mut probe,
+                        &script,
+                        "5 edit",
+                        &format!("UpdateGMTicket({CATEGORY_ITEM}, \"{text}\")"),
+                    ) {
+                        return;
+                    }
+                    probe.edit_text = text;
+                    probe.phase = Phase::EditGap { since: now };
+                } else if now - since > ANSWER_TIMEOUT_SECS {
+                    error!(
+                        "PROBE_GMTICKET: FAIL (3 create) — the ticket never came back within \
                      {ANSWER_TIMEOUT_SECS}s. Wanted arg2 == {want:?}; answers seen after the \
                      baseline: {:?}. vmangos answers a REFUSED create with silence — queue off, \
                      under GMTickets.MinLevel, or category >= 11 — and a malformed body reads as \
                      exactly this. Step 1 already proved the queue is up, so a wrong create body \
                      is the live suspect.",
-                    &seen[baseline.min(seen.len())..]
-                );
-                probe.fails += 1;
-                probe.phase = Phase::Done;
+                        &seen[baseline.min(seen.len())..]
+                    );
+                    probe.fails += 1;
+                    probe.phase = Phase::Done;
+                }
             }
-        }
 
-        // Step 5: the edit, and with it the category byte on CMSG_GMTICKET_UPDATETEXT.
-        Phase::EditGap { since } => {
-            if now - since < WRITE_GAP_SECS {
-                return;
+            // Step 5: the edit, and with it the category byte on CMSG_GMTICKET_UPDATETEXT.
+            Phase::EditGap { since } => {
+                if now - since < WRITE_GAP_SECS {
+                    return;
+                }
+                let baseline = ticket_answers(&script).len();
+                if !run_or_skip(&mut probe, &script, "5 edit", "GetGMTicket()") {
+                    return;
+                }
+                probe.phase = Phase::EditGet {
+                    since: now,
+                    baseline,
+                };
             }
-            let baseline = ticket_answers(&script).len();
-            if !run_or_skip(&mut probe, &script, "5 edit", "GetGMTicket()") {
-                return;
-            }
-            probe.phase = Phase::EditGet {
-                since: now,
-                baseline,
-            };
-        }
-        Phase::EditGet { since, baseline } => {
-            let seen = ticket_answers(&script);
-            let want = probe.edit_text.clone();
-            // Equality, never `contains`: a stray leading byte is the failure this step catches.
-            if let Some(i) = matching(&seen, baseline, |(_, t)| *t == want) {
-                let (cat, text) = &seen[i];
-                info!(
+            Phase::EditGet { since, baseline } => {
+                let seen = ticket_answers(&script);
+                let want = probe.edit_text.clone();
+                // Equality, never `contains`: a stray leading byte is the failure this step catches.
+                if let Some(i) = matching(&seen, baseline, |(_, t)| *t == want) {
+                    let (cat, text) = &seen[i];
+                    info!(
                     "PROBE_GMTICKET: PASS (5 edit) — the edit landed and echoed EXACTLY: arg2 == \
                      {text:?} (arg1 == {cat}). No stray leading byte, so the server read our \
                      category as a category and the text as text — CMSG_GMTICKET_UPDATETEXT's \
                      `u8 type; cstring text` is right for this server."
                 );
-                probe.passes += 1;
-                report_db_expectation(&probe, "after edit", &want);
-                if !run_or_skip(&mut probe, &script, "6 abandon", "DeleteGMTicket()") {
-                    return;
-                }
-                probe.phase = Phase::AbandonGap { since: now };
-            } else if now - since > ANSWER_TIMEOUT_SECS {
-                let stray = seen
-                    .iter()
-                    .skip(baseline)
-                    .any(|(_, t)| t.len() > want.len() && t.ends_with(&want));
-                error!(
-                    "PROBE_GMTICKET: FAIL (5 edit) — the edited text never came back within \
+                    probe.passes += 1;
+                    report_db_expectation(&probe, "after edit", &want);
+                    if !run_or_skip(&mut probe, &script, "6 abandon", "DeleteGMTicket()") {
+                        return;
+                    }
+                    probe.phase = Phase::AbandonGap { since: now };
+                } else if now - since > ANSWER_TIMEOUT_SECS {
+                    let stray = seen
+                        .iter()
+                        .skip(baseline)
+                        .any(|(_, t)| t.len() > want.len() && t.ends_with(&want));
+                    error!(
+                        "PROBE_GMTICKET: FAIL (5 edit) — the edited text never came back within \
                      {ANSWER_TIMEOUT_SECS}s. Wanted arg2 == {want:?}; answers seen after the \
                      baseline: {:?}. leading-byte-swallowed={stray} — if that is true, the server \
                      read our category byte as the first character of the text, which is the \
                      cmangos-classic behaviour.",
-                    &seen[baseline.min(seen.len())..]
-                );
-                probe.fails += 1;
-                probe.phase = Phase::Done;
+                        &seen[baseline.min(seen.len())..]
+                    );
+                    probe.fails += 1;
+                    probe.phase = Phase::Done;
+                }
             }
-        }
 
-        // Step 6, abandon. vmangos's `CloseTicket` keeps the row, so step 4's query still finds it.
-        Phase::AbandonGap { since } => {
-            if now - since < WRITE_GAP_SECS {
-                return;
+            // Step 6, abandon. vmangos's `CloseTicket` keeps the row, so step 4's query still finds it.
+            Phase::AbandonGap { since } => {
+                if now - since < WRITE_GAP_SECS {
+                    return;
+                }
+                let baseline = ticket_answers(&script).len();
+                if !run_or_skip(&mut probe, &script, "6 abandon", "GetGMTicket()") {
+                    return;
+                }
+                probe.phase = Phase::AbandonGet {
+                    since: now,
+                    baseline,
+                };
             }
-            let baseline = ticket_answers(&script).len();
-            if !run_or_skip(&mut probe, &script, "6 abandon", "GetGMTicket()") {
-                return;
-            }
-            probe.phase = Phase::AbandonGet {
-                since: now,
-                baseline,
-            };
-        }
-        Phase::AbandonGet { since, baseline } => {
-            let seen = ticket_answers(&script);
-            if matching(&seen, baseline, |(c, _)| *c == NO_TICKET).is_some() {
-                info!(
+            Phase::AbandonGet { since, baseline } => {
+                let seen = ticket_answers(&script);
+                if matching(&seen, baseline, |(c, _)| *c == NO_TICKET).is_some() {
+                    info!(
                     "PROBE_GMTICKET: PASS (6 abandon) — UPDATE_TICKET fired with arg1 == 0 again: \
                      the ticket is gone from the player's view (vmangos marks it closed_by and \
                      keeps the row, so the db-expect rows above still resolve)"
                 );
-                probe.passes += 1;
-            } else if now - since > ANSWER_TIMEOUT_SECS {
-                error!(
-                    "PROBE_GMTICKET: FAIL (6 abandon) — still holding a ticket \
+                    probe.passes += 1;
+                } else if now - since > ANSWER_TIMEOUT_SECS {
+                    error!(
+                        "PROBE_GMTICKET: FAIL (6 abandon) — still holding a ticket \
                      {ANSWER_TIMEOUT_SECS}s after DeleteGMTicket() + GetGMTicket(). Answers seen \
                      after the baseline: {:?}",
-                    &seen[baseline.min(seen.len())..]
-                );
-                probe.fails += 1;
-            } else {
-                return;
+                        &seen[baseline.min(seen.len())..]
+                    );
+                    probe.fails += 1;
+                } else {
+                    return;
+                }
+                probe.phase = Phase::Done;
             }
-            probe.phase = Phase::Done;
-        }
 
-        Phase::Done => {
-            if probe.exited {
-                return;
+            Phase::Done => {
+                if probe.exited {
+                    return;
+                }
+                probe.exited = true;
+                info!(
+                    "PROBE_GMTICKET: DONE pass={} fail={}",
+                    probe.passes, probe.fails
+                );
+                // AppExit plus a hard-exit backstop, so a teardown hang cannot keep the account held.
+                exit.write(AppExit::Success);
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    warn!("PROBE_GMTICKET: still alive 5s after AppExit — hard exit");
+                    std::process::exit(0);
+                });
             }
-            probe.exited = true;
-            info!(
-                "PROBE_GMTICKET: DONE pass={} fail={}",
-                probe.passes, probe.fails
-            );
-            // AppExit plus a hard-exit backstop, so a teardown hang cannot keep the account held.
-            exit.write(AppExit::Success);
-            std::thread::spawn(|| {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                warn!("PROBE_GMTICKET: still alive 5s after AppExit — hard exit");
-                std::process::exit(0);
-            });
         }
-    }
+    })
 }
 
 /// Runs one binding in the live VM, or SKIPs the whole probe and returns `false`: a binding that

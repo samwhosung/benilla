@@ -186,13 +186,14 @@ fn binder_probe(
     binder: Res<BinderState>,
     mut home: ResMut<HomeBind>,
     areas: Option<Res<AreaTableRes>>,
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     self_player: Query<(), With<SelfPlayer>>,
     player: Res<Player>,
     units: Query<(&Guid, &NetEntity, &ObjectStore, &Transform), Without<SelfPlayer>>,
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    hosted_vm.run(|script| {
     if self_player.is_empty() {
         return; // not in-world yet
     }
@@ -426,6 +427,7 @@ fn binder_probe(
             });
         }
     }
+})
 }
 
 /// Steps 3 and 4: the bind row's icon, then the click. Sets `probe.phase` on every path.

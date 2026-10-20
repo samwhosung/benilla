@@ -282,6 +282,7 @@ fn open_window(
 }
 
 fn service_probe(
+    mut vm: crate::script_calls::VmWith<ResMut<'static, MerchantOpen>>,
     time: ProbeClock,
     mut probe: ResMut<ServiceProbe>,
     mut gossip: ResMut<GossipState>,
@@ -289,10 +290,6 @@ fn service_probe(
     mut trainer: ResMut<TrainerOpen>,
     // `[0xb4e2d0]`'s mirror, what the re-click gate reads: armed by a window and only by one.
     interact: Res<InteractNpc>,
-    // The vendor fork: the merchant window, the VM the held-cursor leg picks up in, and what
-    // turns a (bag, slot) into the item guid.
-    mut merchant: ResMut<MerchantOpen>,
-    script: Option<NonSendMut<UiScript>>,
     objects: crate::net::Objects,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     self_player: Query<(), With<SelfPlayer>>,
@@ -301,6 +298,7 @@ fn service_probe(
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    vm.turn(|script, mut merchant| {
     if self_player.is_empty() {
         return; // not in-world yet
     }
@@ -654,7 +652,7 @@ fn service_probe(
             }
         }
         Phase::VendorArm { since, guid } => {
-            let Some(mut script) = script else {
+            let Some(script) = script else {
                 warn!("PROBE_SERVICE: SKIP (vendor fork, held cursor) — no UI VM in this build");
                 probe.skips += 1;
                 probe.phase = Phase::Done;
@@ -786,6 +784,7 @@ fn service_probe(
             });
         }
     }
+})
 }
 
 /// The open quest panel's shape, for the PASS line.

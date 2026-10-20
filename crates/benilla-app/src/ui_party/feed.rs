@@ -8,7 +8,7 @@ use benilla_protocol::messages::{
 };
 use benilla_ui::script::{
     PartyMemberInfo, PartyRequest, PartyState, RaidMemberInfo, SavedInstanceInfo, ScriptValue,
-    UiScript, UnitState,
+    UnitState,
 };
 use bevy::prelude::*;
 
@@ -800,9 +800,7 @@ fn member_for_token<'a>(group: &'a GroupState, token: &str) -> Option<&'a GroupM
 
 /// Drain the Lua party intents into their `CMSG_*` sends.
 pub(crate) fn drain_party(
-    script: Option<NonSendMut<UiScript>>,
-    mut group: ResMut<GroupState>,
-    selection: Res<Selection>,
+    mut vm: crate::script_calls::VmWith<(ResMut<'static, GroupState>, Res<'static, Selection>)>,
     names: Res<NameCache>,
     index: Res<GuidIndex>,
     stores: Query<&ObjectStore>,
@@ -810,56 +808,34 @@ pub(crate) fn drain_party(
     commands: Res<NetCommands>,
     mut tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
 ) {
-    // Every frame, VM or none: what the feed has fired goes ([`super::SignalLog`]). Not a change
-    // the feed's gate should open on.
-    group.bypass_change_detection().signals.age();
-    let Some(mut script) = script else {
-        return;
-    };
-    let self_guid = self_q.iter().next().map(|g| g.0);
-    let held = |guid: u64| index.0.get(&guid).and_then(|e| stores.get(*e).ok());
-    for req in script.take_party_requests() {
-        // In the sandbox the server holds no group, so the group-changing intents apply to the
-        // mirror as its echo would. Invites and accept/decline stay real: a real group ends it.
-        if group.test && test_apply_local(&mut group, &req, self_guid, selection.guid) {
-            continue;
-        }
-        match req {
-            PartyRequest::Accept => {
-                let _ = commands.0.send(ClientCommand::GroupAccept);
-                group.pending_invite = None;
+    vm.turn(|script, (mut group, selection)| {
+        // Every frame, VM or none: what the feed has fired goes ([`super::SignalLog`]). Not a change
+        // the feed's gate should open on.
+        group.bypass_change_detection().signals.age();
+        let Some(script) = script else {
+            return;
+        };
+        let self_guid = self_q.iter().next().map(|g| g.0);
+        let held = |guid: u64| index.0.get(&guid).and_then(|e| stores.get(*e).ok());
+        for req in script.take_party_requests() {
+            // In the sandbox the server holds no group, so the group-changing intents apply to the
+            // mirror as its echo would. Invites and accept/decline stay real: a real group ends it.
+            if group.test && test_apply_local(&mut group, &req, self_guid, selection.guid) {
+                continue;
             }
-            PartyRequest::Decline => {
-                let _ = commands.0.send(ClientCommand::GroupDecline);
-                group.pending_invite = None;
-            }
-            PartyRequest::Leave => {
-                let _ = commands.0.send(ClientCommand::GroupLeave);
-            }
-            PartyRequest::InviteName(name) => {
-                if let Some(t) = tutorials.as_mut() {
-                    t.write(crate::tutorial::TutorialEvent::Acknowledge {
-                        id: crate::tutorial::id::GROUPING,
-                    });
+            match req {
+                PartyRequest::Accept => {
+                    let _ = commands.0.send(ClientCommand::GroupAccept);
+                    group.pending_invite = None;
                 }
-                let _ = commands.0.send(ClientCommand::GroupInvite { name });
-            }
-            PartyRequest::InviteUnit(token) => {
-                // `target` resolves through the selection when it is a player
-                // (`InviteToParty(unit)`); a roster token already has a name.
-                let name = if token == "target" {
-                    selection
-                        .guid
-                        .filter(|g| benilla_protocol::guid::is_player(*g))
-                        .and_then(|g| {
-                            names
-                                .resolve_player(g, Ask::Event(&commands))
-                                .map(str::to_string)
-                        })
-                } else {
-                    member_for_token(&group, &token).map(|m| m.name.clone())
-                };
-                if let Some(name) = name {
+                PartyRequest::Decline => {
+                    let _ = commands.0.send(ClientCommand::GroupDecline);
+                    group.pending_invite = None;
+                }
+                PartyRequest::Leave => {
+                    let _ = commands.0.send(ClientCommand::GroupLeave);
+                }
+                PartyRequest::InviteName(name) => {
                     if let Some(t) = tutorials.as_mut() {
                         t.write(crate::tutorial::TutorialEvent::Acknowledge {
                             id: crate::tutorial::id::GROUPING,
@@ -867,129 +843,153 @@ pub(crate) fn drain_party(
                     }
                     let _ = commands.0.send(ClientCommand::GroupInvite { name });
                 }
-            }
-            PartyRequest::UninviteUnit(token) => {
-                if let Some(guid) = member_for_token(&group, &token).map(|m| m.guid) {
-                    uninvite_by_guid(guid, held(guid), &names, &commands, &script);
-                }
-            }
-            PartyRequest::PromoteUnit(token) => {
-                if let Some(m) = member_for_token(&group, &token) {
-                    let _ = commands
-                        .0
-                        .send(ClientCommand::GroupSetLeader { guid: m.guid });
-                }
-            }
-            // The binding resolved the method, the master and the threshold (`0x4e92a0`).
-            PartyRequest::LootMethod {
-                method,
-                master,
-                threshold,
-            } => {
-                let _ = commands.0.send(ClientCommand::LootMethod {
-                    method,
-                    master,
-                    threshold,
-                });
-            }
-            PartyRequest::SetRaidTarget { unit, index } => {
-                // Us, the selection or a roster slot; an unresolvable token is a no-op.
-                let guid = match unit.as_str() {
-                    "player" => self_q.iter().next().map(|g| g.0),
-                    "target" => selection.guid,
-                    t => member_for_token(&group, t).map(|m| m.guid),
-                };
-                let Some(guid) = guid else { continue };
-                // Lua marks 1..8 are wire icons 0..7. Setting sends (mark - 1, guid) and the
-                // server clears the unit's old icon (`Group::SetTargetIcon`); clearing re-sends
-                // the unit's current icon with guid 0, since the wire has no clear by unit.
-                if index >= 1 {
-                    let _ = commands.0.send(ClientCommand::SetRaidTarget {
-                        icon: index - 1,
-                        guid,
-                    });
-                } else {
-                    let current = group.raid_target_index(guid);
-                    if current >= 1 {
-                        let _ = commands.0.send(ClientCommand::SetRaidTarget {
-                            icon: current - 1,
-                            guid: 0,
-                        });
+                PartyRequest::InviteUnit(token) => {
+                    // `target` resolves through the selection when it is a player
+                    // (`InviteToParty(unit)`); a roster token already has a name.
+                    let name = if token == "target" {
+                        selection
+                            .guid
+                            .filter(|g| benilla_protocol::guid::is_player(*g))
+                            .and_then(|g| {
+                                names
+                                    .resolve_player(g, Ask::Event(&commands))
+                                    .map(str::to_string)
+                            })
+                    } else {
+                        member_for_token(&group, &token).map(|m| m.name.clone())
+                    };
+                    if let Some(name) = name {
+                        if let Some(t) = tutorials.as_mut() {
+                            t.write(crate::tutorial::TutorialEvent::Acknowledge {
+                                id: crate::tutorial::id::GROUPING,
+                            });
+                        }
+                        let _ = commands.0.send(ClientCommand::GroupInvite { name });
                     }
                 }
-            }
-            PartyRequest::LootThreshold(threshold) => {
-                let (method, master) = group
-                    .loot
-                    .map_or((3, 0), |l| (u32::from(l.method), l.master));
-                let _ = commands.0.send(ClientCommand::LootMethod {
+                PartyRequest::UninviteUnit(token) => {
+                    if let Some(guid) = member_for_token(&group, &token).map(|m| m.guid) {
+                        uninvite_by_guid(guid, held(guid), &names, &commands, script);
+                    }
+                }
+                PartyRequest::PromoteUnit(token) => {
+                    if let Some(m) = member_for_token(&group, &token) {
+                        let _ = commands
+                            .0
+                            .send(ClientCommand::GroupSetLeader { guid: m.guid });
+                    }
+                }
+                // The binding resolved the method, the master and the threshold (`0x4e92a0`).
+                PartyRequest::LootMethod {
                     method,
                     master,
                     threshold,
-                });
-            }
-            // ── The raid-management verbs ────────────────────────────────────
-            //
-            // The RaidFrame names rows by index, UnitPopup by name. A row that is not there sends
-            // nothing, as in the reference's bindings (`UninviteFromRaid`, `0x48a5c9`).
-            PartyRequest::ConvertToRaid => {
-                let _ = commands.0.send(ClientCommand::GroupRaidConvert);
-            }
-            PartyRequest::SetSubgroup { index, group: sub } => {
-                // Lua subgroups 1..8 are wire 0..7, the flags' bits 0-2
-                // (`Server/Packets/Group.cpp:158`); out-of-range ones are dropped, never wrapped.
-                let Some(sub) = (1..=8).contains(&sub).then(|| (sub - 1) as u8) else {
-                    continue;
-                };
-                let Some(name) = raid_guid_at(&group, index)
-                    .and_then(|g| raid_name_of(&group, self_guid, &names, g))
-                else {
-                    continue;
-                };
-                let _ = commands
-                    .0
-                    .send(ClientCommand::GroupChangeSubGroup { name, group: sub });
-            }
-            PartyRequest::SwapSubgroup { index, other } => {
-                let pair = raid_guid_at(&group, index)
-                    .zip(raid_guid_at(&group, other))
-                    .and_then(|(a, b)| {
-                        Some((
-                            raid_name_of(&group, self_guid, &names, a)?,
-                            raid_name_of(&group, self_guid, &names, b)?,
-                        ))
+                } => {
+                    let _ = commands.0.send(ClientCommand::LootMethod {
+                        method,
+                        master,
+                        threshold,
                     });
-                if let Some((name, other)) = pair {
+                }
+                PartyRequest::SetRaidTarget { unit, index } => {
+                    // Us, the selection or a roster slot; an unresolvable token is a no-op.
+                    let guid = match unit.as_str() {
+                        "player" => self_q.iter().next().map(|g| g.0),
+                        "target" => selection.guid,
+                        t => member_for_token(&group, t).map(|m| m.guid),
+                    };
+                    let Some(guid) = guid else { continue };
+                    // Lua marks 1..8 are wire icons 0..7. Setting sends (mark - 1, guid) and the
+                    // server clears the unit's old icon (`Group::SetTargetIcon`); clearing re-sends
+                    // the unit's current icon with guid 0, since the wire has no clear by unit.
+                    if index >= 1 {
+                        let _ = commands.0.send(ClientCommand::SetRaidTarget {
+                            icon: index - 1,
+                            guid,
+                        });
+                    } else {
+                        let current = group.raid_target_index(guid);
+                        if current >= 1 {
+                            let _ = commands.0.send(ClientCommand::SetRaidTarget {
+                                icon: current - 1,
+                                guid: 0,
+                            });
+                        }
+                    }
+                }
+                PartyRequest::LootThreshold(threshold) => {
+                    let (method, master) = group
+                        .loot
+                        .map_or((3, 0), |l| (u32::from(l.method), l.master));
+                    let _ = commands.0.send(ClientCommand::LootMethod {
+                        method,
+                        master,
+                        threshold,
+                    });
+                }
+                // ── The raid-management verbs ────────────────────────────────────
+                //
+                // The RaidFrame names rows by index, UnitPopup by name. A row that is not there sends
+                // nothing, as in the reference's bindings (`UninviteFromRaid`, `0x48a5c9`).
+                PartyRequest::ConvertToRaid => {
+                    let _ = commands.0.send(ClientCommand::GroupRaidConvert);
+                }
+                PartyRequest::SetSubgroup { index, group: sub } => {
+                    // Lua subgroups 1..8 are wire 0..7, the flags' bits 0-2
+                    // (`Server/Packets/Group.cpp:158`); out-of-range ones are dropped, never wrapped.
+                    let Some(sub) = (1..=8).contains(&sub).then(|| (sub - 1) as u8) else {
+                        continue;
+                    };
+                    let Some(name) = raid_guid_at(&group, index)
+                        .and_then(|g| raid_name_of(&group, self_guid, &names, g))
+                    else {
+                        continue;
+                    };
                     let _ = commands
                         .0
-                        .send(ClientCommand::GroupSwapSubGroup { name, other });
+                        .send(ClientCommand::GroupChangeSubGroup { name, group: sub });
                 }
-            }
-            // The binding resolved the name (`0x48a86a`, `0x4bbd6b`, `0x4bbe3b`).
-            PartyRequest::PromoteGuid(guid) => {
-                let _ = commands.0.send(ClientCommand::GroupSetLeader { guid });
-            }
-            PartyRequest::AssistantLeader { guid, grant } => {
-                let _ = commands
-                    .0
-                    .send(ClientCommand::GroupAssistantLeader { guid, grant });
-            }
-            PartyRequest::UninviteRaid(row) => {
-                if let Some(guid) = raid_guid_at(&group, row) {
-                    uninvite_by_guid(guid, held(guid), &names, &commands, &script);
+                PartyRequest::SwapSubgroup { index, other } => {
+                    let pair = raid_guid_at(&group, index)
+                        .zip(raid_guid_at(&group, other))
+                        .and_then(|(a, b)| {
+                            Some((
+                                raid_name_of(&group, self_guid, &names, a)?,
+                                raid_name_of(&group, self_guid, &names, b)?,
+                            ))
+                        });
+                    if let Some((name, other)) = pair {
+                        let _ = commands
+                            .0
+                            .send(ClientCommand::GroupSwapSubGroup { name, other });
+                    }
                 }
-            }
-            PartyRequest::ReadyCheckStart => {
-                let _ = commands.0.send(ClientCommand::ReadyCheckStart);
-            }
-            PartyRequest::ReadyCheckAnswer(ready) => {
-                let _ = commands.0.send(ClientCommand::ReadyCheckAnswer { ready });
-            }
-            PartyRequest::RequestRaidInfo => {
-                let _ = commands.0.send(ClientCommand::RequestRaidInfo);
+                // The binding resolved the name (`0x48a86a`, `0x4bbd6b`, `0x4bbe3b`).
+                PartyRequest::PromoteGuid(guid) => {
+                    let _ = commands.0.send(ClientCommand::GroupSetLeader { guid });
+                }
+                PartyRequest::AssistantLeader { guid, grant } => {
+                    let _ = commands
+                        .0
+                        .send(ClientCommand::GroupAssistantLeader { guid, grant });
+                }
+                PartyRequest::UninviteRaid(row) => {
+                    if let Some(guid) = raid_guid_at(&group, row) {
+                        uninvite_by_guid(guid, held(guid), &names, &commands, script);
+                    }
+                }
+                PartyRequest::ReadyCheckStart => {
+                    let _ = commands.0.send(ClientCommand::ReadyCheckStart);
+                }
+                PartyRequest::ReadyCheckAnswer(ready) => {
+                    let _ = commands.0.send(ClientCommand::ReadyCheckAnswer { ready });
+                }
+                PartyRequest::RequestRaidInfo => {
+                    let _ = commands.0.send(ClientCommand::RequestRaidInfo);
+                }
             }
         }
-    }
+    })
 }
 
 /// `UninviteByGuid` (`0x5e9510`), the sender `UninviteFromParty` (`0x48a560`) and
@@ -1493,6 +1493,7 @@ mod roster_update_tests;
 mod tests {
     use super::super::pets::tests::{app, app_with, flag, frame, member, party, stream, ME};
     use super::*;
+    use benilla_ui::script::UiScript;
 
     #[test]
     fn an_out_of_range_member_reads_the_record_and_divides_its_rage() {

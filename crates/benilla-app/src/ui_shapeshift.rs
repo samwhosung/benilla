@@ -130,12 +130,10 @@ impl Plugin for UiShapeshiftPlugin {
 /// Build the bar from the known spells and the catalog (module doc), and diff-push it.
 #[allow(clippy::type_complexity)] // a Bevy system's full input set
 fn feed_shapeshift_bar(
-    script: Option<NonSendMut<UiScript>>,
+    mut vm: crate::script_calls::VmWith<(Res<'static, Cooldowns>, Res<'static, Selection>)>,
     actions: Res<PlayerActions>,
     spells: Option<Res<Spells>>,
-    cooldowns: Res<Cooldowns>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    selection: Res<Selection>,
     // The selection's guid index, and the bag walk behind each form's reagent leg.
     objects: Objects,
     units: Query<&ObjectStore, Without<SelfPlayer>>,
@@ -148,89 +146,100 @@ fn feed_shapeshift_bar(
     skill_lines: Option<Res<crate::ui_spellbook::SkillLines>>,
     mut memory: Local<crate::ui_script::VmMemo<StanceMemory>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let memory = memory.get(&script);
-    let Some(spells) = spells else {
-        return;
-    };
-    let store = self_q.iter().next();
-    let form_byte = store.map(|s| s.0.unit_shapeshift_form()).unwrap_or(0);
-    let now = Instant::now();
-    // The frame's clock pair: a local `Instant::now()` would wobble the derived start.
-    let (anchor, ui_now) = (clock.anchor, clock.ui_now);
-    // The usable walk's target leg (Execute) reads the current target.
-    let target_store = selection
-        .guid
-        .and_then(|g| objects.entity(g))
-        .and_then(|e| units.get(e).ok());
-
-    // Admission and order (module doc).
-    let mut rows: Vec<(u32, &benilla_formats::SpellDisplay)> = actions
-        .spells
-        .iter()
-        .filter_map(|&id| {
-            let d = spells.catalog.get(id)?;
-            let admitted = d.attributes_ex2 & ATTR_EX2_STANCE_BAR_EXCLUDE == 0
-                && (d.shapeshift_form.is_some()
-                    || d.attributes_ex2 & ATTR_EX2_STANCE_BAR_FORCE != 0);
-            admitted.then_some((id, d))
-        })
-        .collect();
-    rows.sort_by_key(|&(id, d)| {
-        let order = if d.stance_bar_order < 0 {
-            i64::MAX
-        } else {
-            i64::from(d.stance_bar_order)
+    // The forms, read off the host's cooldowns and selection; their push signals, so it runs
+    // with the host lent.
+    let Some((fresh, form_byte)) = vm.turn(|script, (cooldowns, selection)| {
+        // No VM, no bar.
+        script?;
+        let Some(spells) = spells else {
+            return None;
         };
-        (order, id)
-    });
+        let store = self_q.iter().next();
+        let form_byte = store.map(|s| s.0.unit_shapeshift_form()).unwrap_or(0);
+        let now = Instant::now();
+        // The frame's clock pair: a local `Instant::now()` would wobble the derived start.
+        let (anchor, ui_now) = (clock.anchor, clock.ui_now);
+        // The usable walk's target leg (Execute) reads the current target.
+        let target_store = selection
+            .guid
+            .and_then(|g| objects.entity(g))
+            .and_then(|e| units.get(e).ok());
 
-    // The bags, walked once for every form's reagent leg.
-    let stacks = store
-        .map(|s| crate::ui_items::stack_counts(&s.0, &objects))
-        .unwrap_or_default();
-    let fresh: Vec<ShapeshiftFormView> = rows
-        .into_iter()
-        .map(|(id, d)| {
-            let active = form_active(id, d, form_byte, store);
-            // `isCastable`: true for the active form, else the `0x6e3d60` walk the action bar's
-            // `IsUsableAction` runs.
-            let castable = active
-                || store.is_none_or(|s| {
-                    let ctx = usable::UsableCtx {
-                        store: s,
-                        target: selection.guid.zip(target_store),
-                        rel: relations.get(),
-                        cooldowns: &cooldowns,
-                        stacks: &stacks,
-                        spell_mods: &spell_mods,
-                        control_lost: own_control.as_ref().is_some_and(|c| c.0),
-                        skill_lines: skill_lines.as_deref().map(|s| &s.catalog),
-                    };
-                    usable::spell_usable(id, d, &spells, &ctx, &objects, &items).0
-                });
-            let texture = form_texture(d, active);
-            let cooldown = cooldowns
-                .info(id, 0, Some(d), now)
-                .ui_triple(anchor, ui_now);
-            ShapeshiftFormView {
-                spell_id: id,
-                texture,
-                name: d.name.clone(),
-                active,
-                castable,
-                cooldown,
-            }
-        })
-        .collect();
+        // Admission and order (module doc).
+        let mut rows: Vec<(u32, &benilla_formats::SpellDisplay)> = actions
+            .spells
+            .iter()
+            .filter_map(|&id| {
+                let d = spells.catalog.get(id)?;
+                let admitted = d.attributes_ex2 & ATTR_EX2_STANCE_BAR_EXCLUDE == 0
+                    && (d.shapeshift_form.is_some()
+                        || d.attributes_ex2 & ATTR_EX2_STANCE_BAR_FORCE != 0);
+                admitted.then_some((id, d))
+            })
+            .collect();
+        rows.sort_by_key(|&(id, d)| {
+            let order = if d.stance_bar_order < 0 {
+                i64::MAX
+            } else {
+                i64::from(d.stance_bar_order)
+            };
+            (order, id)
+        });
 
-    let count = fresh.len();
-    let edge = push_forms(&mut script, memory, fresh);
-    if edge != FormsEdge::Unchanged {
-        debug!("ui_shapeshift: {count} form(s), active form byte {form_byte}, {edge:?} edge");
-    }
+        // The bags, walked once for every form's reagent leg.
+        let stacks = store
+            .map(|s| crate::ui_items::stack_counts(&s.0, &objects))
+            .unwrap_or_default();
+        let fresh: Vec<ShapeshiftFormView> = rows
+            .into_iter()
+            .map(|(id, d)| {
+                let active = form_active(id, d, form_byte, store);
+                // `isCastable`: true for the active form, else the `0x6e3d60` walk the action bar's
+                // `IsUsableAction` runs.
+                let castable = active
+                    || store.is_none_or(|s| {
+                        let ctx = usable::UsableCtx {
+                            store: s,
+                            target: selection.guid.zip(target_store),
+                            rel: relations.get(),
+                            cooldowns: &cooldowns,
+                            stacks: &stacks,
+                            spell_mods: &spell_mods,
+                            control_lost: own_control.as_ref().is_some_and(|c| c.0),
+                            skill_lines: skill_lines.as_deref().map(|s| &s.catalog),
+                        };
+                        usable::spell_usable(id, d, &spells, &ctx, &objects, &items).0
+                    });
+                let texture = form_texture(d, active);
+                let cooldown = cooldowns
+                    .info(id, 0, Some(d), now)
+                    .ui_triple(anchor, ui_now);
+                ShapeshiftFormView {
+                    spell_id: id,
+                    texture,
+                    name: d.name.clone(),
+                    active,
+                    castable,
+                    cooldown,
+                }
+            })
+            .collect();
+
+        Some((fresh, form_byte))
+    }) else {
+        return;
+    };
+    vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        let memory = memory.get(script);
+        let count = fresh.len();
+        let edge = push_forms(script, memory, fresh);
+        if edge != FormsEdge::Unchanged {
+            debug!("ui_shapeshift: {count} form(s), active form byte {form_byte}, {edge:?} edge");
+        }
+    })
 }
 
 /// `CastShapeshiftForm` (`0x4b4810`), forked on the form id like the info call: the active form

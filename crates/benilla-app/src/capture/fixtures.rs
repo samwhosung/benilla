@@ -88,35 +88,35 @@ const TRAINER_BLACKSMITH: TrainerSeed = TrainerSeed {
 /// during the settle window as live wire data would. Icons resolve through the offline
 /// `ItemDisplayCatalog`, and names go straight into the caches.
 pub(super) fn seed_ui_fixture(
+    mut vm: crate::script_calls::VmWith<(
+        ResMut<'static, crate::ui_merchant::MerchantOpen>,
+        ResMut<'static, crate::ui_loot::LootState>,
+        ResMut<'static, crate::names::NameCache>,
+        ResMut<'static, crate::target::Selection>,
+        ResMut<'static, crate::player::Player>,
+        (
+            ResMut<'static, crate::items::Items>,
+            ResMut<'static, crate::net::GuidIndex>,
+            ResMut<'static, crate::net::HomeBind>,
+        ),
+        (
+            ResMut<'static, crate::ui_action::PlayerActions>,
+            ResMut<'static, crate::ui_bank::BankOpen>,
+            MessageWriter<'static, AppExit>,
+            ResMut<'static, crate::loading_screen::LoadingScreen>,
+        ),
+    )>,
     mut ctx: ResMut<CaptureCtx>,
     mut commands: Commands,
     progress: Res<WorldLoadProgress>,
-    mut merchant: ResMut<crate::ui_merchant::MerchantOpen>,
     mut gossip: ResMut<crate::ui_gossip::GossipState>,
     mut quest: ResMut<crate::ui_quest::QuestGiver>,
     mut quest_log: ResMut<crate::ui_quest_log::QuestLog>,
-    mut loot: ResMut<crate::ui_loot::LootState>,
     mut trainer: ResMut<crate::ui_trainer::TrainerOpen>,
-    // One param under Bevy's 16-param cap: item objects are entities in the index, spawned as
-    // the wire does; the hearthstone bind (`SMSG_BINDPOINTUPDATE`) rides along for the `$z` token.
-    store: (
-        ResMut<crate::items::Items>,
-        ResMut<crate::net::GuidIndex>,
-        ResMut<crate::net::HomeBind>,
-    ),
-    mut names: ResMut<crate::names::NameCache>,
     icons: Option<Res<crate::entities::ItemDisplays>>,
-    mut script: Option<NonSendMut<benilla_ui::script::UiScript>>,
-    mut selection: ResMut<crate::target::Selection>,
-    mut player: ResMut<crate::player::Player>,
-    // A nested tuple, one param under Bevy's 16-param cap.
-    (mut actions, mut bank, mut exit, mut loading): (
-        ResMut<crate::ui_action::PlayerActions>,
-        ResMut<crate::ui_bank::BankOpen>,
-        MessageWriter<AppExit>,
-        ResMut<crate::loading_screen::LoadingScreen>,
-    ),
 ) {
+    vm.turn(|mut script, (mut merchant, mut loot, mut names, mut selection, mut player, store, rest)| {
+    let (mut actions, mut bank, mut exit, mut loading) = rest;
     let (mut items, mut index, mut home_bind) = store;
     // A glue-screen capture has no world scenario, and no glue screen opens a UI fixture.
     let Some(scenario) = ctx.scenario else {
@@ -784,7 +784,7 @@ pub(super) fn seed_ui_fixture(
             }
         }
         UiFixture::WorldMap => {
-            let Some(mut script) = script else {
+            let Some(script) = script else {
                 return;
             };
             // At the default origin the player is off every zone rect and the arrow hides, so park
@@ -893,7 +893,7 @@ pub(super) fn seed_ui_fixture(
             }
         }
         UiFixture::TooltipWorld => {
-            let Some(mut script) = script else {
+            let Some(script) = script else {
                 return;
             };
             // A PvP-flagged friendly guard under the cursor, pushed as the mouseover feed does,
@@ -922,7 +922,7 @@ pub(super) fn seed_ui_fixture(
             }
         }
         UiFixture::TooltipRank => {
-            let Some(mut script) = script else {
+            let Some(script) = script else {
                 return;
             };
             // A ranked player under the cursor, pushed as the mouseover feed does, then the call
@@ -1561,6 +1561,7 @@ pub(super) fn seed_ui_fixture(
             set_enemy_plates(script.as_deref(), false);
         }
     }
+})
 }
 
 /// The `GetTime()` the cooldown filmstrip pins the VM's session clock at, seconds. Large, as

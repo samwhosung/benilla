@@ -296,3 +296,98 @@ impl Plugin for DevProbesPlugin {
         }
     }
 }
+
+/// Every instrument and probe the binary can add, whatever the environment, for the tests that
+/// read the whole client's schedule; nothing in a player build. The capture harness is left out:
+/// it builds its scenario from `WOW_CAPTURE`.
+#[cfg(test)]
+#[cfg_attr(not(feature = "dev"), allow(unused_variables))]
+pub(crate) fn add_every_instrument(app: &mut App) {
+    #[cfg(feature = "dev")]
+    {
+        app.add_plugins(DevToolsPlugin);
+        app.add_plugins(crate::capture::LiveShotPlugin);
+        app.add_plugins(crate::capture::ProbeRigPlugin);
+        app.add_plugins(crate::capture::ProbeFocusPlugin);
+        app.add_plugins(crate::capture::ProbeChatPlugin);
+        app.add_plugins(crate::capture::ProbeLuaPlugin);
+        app.add_plugins(crate::capture::ProbeGlueLuaPlugin);
+        app.add_plugins(crate::capture::ProbeDragPlugin);
+        app.add_plugins(crate::capture::ProbeHoverPlugin);
+        app.add_plugins(crate::capture::ProbeKeyPlugin);
+        app.add_plugins(crate::capture::ProbeExitPlugin);
+        app.add_plugins(crate::capture::PickProbePlugin);
+        app.add_plugins(crate::capture::PhaseProbePlugin);
+        app.add_plugins(crate::capture::DepthProbePlugin);
+        app.add_plugins(crate::capture::NodeProbePlugin);
+        app.add_plugins(crate::capture::ProbeResizePlugin);
+        app.add_plugins(crate::capture::ParticleCensusPlugin);
+        app.add_plugins(crate::capture::GroundCensusPlugin);
+        app.add_plugins(crate::capture::LiftCensusPlugin);
+        app.add_plugins(crate::capture::StallPlugin);
+        app.add_plugins(crate::capture::TrailCensusPlugin);
+        app.add_plugins(crate::capture::UnitVisualsPlugin);
+        app.add_plugins(crate::capture::JitterMeterPlugin);
+        app.add_plugins(crate::capture::DressCensusPlugin);
+        app.add_plugins(crate::capture::RevealAuditPlugin);
+        app.add_plugins(crate::capture::EntityCensusPlugin);
+        app.add_plugins(crate::capture::SchedCensusPlugin);
+        app.add_plugins(crate::capture::ProbeMeleePlugin);
+        app.add_plugins(crate::capture::ProbePartnerPlugin);
+        app.add_plugins(crate::capture::ProbeCrossingPlugin);
+        app.add_plugins(crate::capture::ProbeTaxiPlugin);
+        app.add_plugins(crate::capture::ProbeGuardPoiPlugin);
+        app.add_plugins(crate::capture::ProbeBgQueuePlugin);
+        app.add_plugins(crate::capture::ProbeBgPlugin);
+        app.add_plugins(crate::capture::ProbeMailPlugin);
+        app.add_plugins(crate::capture::ProbeAuctionPlugin);
+        app.add_plugins(crate::capture::ProbeBankPlugin);
+        app.add_plugins(crate::capture::ProbeBinderPlugin);
+        app.add_plugins(crate::capture::ProbeServicePlugin);
+        app.add_plugins(crate::capture::ProbeVendorSwapPlugin);
+        app.add_plugins(crate::capture::ProbeModelCameraPlugin);
+        app.add_plugins(crate::capture::ProbeGmTicketPlugin);
+        app.add_plugins(crate::capture::ProbeCharterPlugin);
+        app.add_plugins(crate::capture::ProbeBookPlugin);
+        app.add_plugins(crate::capture::ProbeStonePlugin);
+        app.add_plugins(crate::capture::ProbeChestPlugin);
+        app.add_plugins(crate::capture::ProbeGoQuestPlugin);
+        app.add_plugins(crate::capture::ProbeClamPlugin);
+        app.add_plugins(crate::capture::ProbeCastCancelPlugin);
+        app.add_plugins(crate::capture::ProbeCharCreatePlugin);
+        app.add_plugins(crate::capture::LiveFpsPlugin);
+        app.add_plugins(crate::capture::ProbeLookPlugin);
+        app.add_plugins(crate::capture::ProbePitchPlugin);
+        app.add_plugins(crate::capture::ProbeCamPlugin);
+    }
+}
+
+#[cfg(all(test, feature = "dev"))]
+mod tests {
+    /// [`super::add_every_instrument`] adds every probe [`super::DevProbesPlugin`] can add but the
+    /// capture harness, so a test over it reads the fleet as the binary can build it.
+    #[test]
+    fn every_instrument_lists_the_whole_probe_fleet() {
+        let src = include_str!("dev.rs");
+        let plugins = |from: &str, to: &str| -> std::collections::BTreeSet<&str> {
+            let at = src.find(from).expect("the start marker");
+            let body = &src[at..at + src[at..].find(to).expect("the end marker")];
+            body.match_indices("crate::capture::")
+                .map(|(i, m)| {
+                    let rest = &body[i + m.len()..];
+                    &rest[..rest
+                        .find(|c: char| !c.is_alphanumeric())
+                        .unwrap_or(rest.len())]
+                })
+                .filter(|n| n.ends_with("Plugin"))
+                .collect()
+        };
+        let mut fleet = plugins("impl Plugin for DevProbesPlugin", "\n/// Every instrument");
+        fleet.remove("CapturePlugin");
+        let listed = plugins("pub(crate) fn add_every_instrument", "\n}\n");
+        assert_eq!(
+            fleet, listed,
+            "`add_every_instrument` lists the probe fleet"
+        );
+    }
+}

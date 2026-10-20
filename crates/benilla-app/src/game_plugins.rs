@@ -265,6 +265,12 @@ pub(crate) mod schedule_tests {
     /// or GPU (`backends: None`, so no render app), then the engine, then the game. Every
     /// plugin's `build` and `finish` runs and no schedule does, which fixes the schedule graph.
     pub(crate) fn headless_client() -> App {
+        headless_client_with(|_| {})
+    }
+
+    /// [`headless_client`] with `more` added before it finishes, as the binary adds its
+    /// instruments and probes.
+    pub(crate) fn headless_client_with(more: impl FnOnce(&mut App)) -> App {
         let mut app = App::new();
         app.add_plugins(
             benilla_world::boot::tuned_default_plugins(Window::default())
@@ -289,6 +295,7 @@ pub(crate) mod schedule_tests {
             connect: false,
             start: crate::client_state::ClientState::Login,
         });
+        more(&mut app);
         app.finish();
         app.cleanup();
         app
@@ -1544,8 +1551,9 @@ pub(crate) mod schedule_tests {
     }
 
     /// The consumer markers: a VM holder that does one of these to host state has spent
-    /// something this frame that nothing can re-spend.
-    const CONSUMES: &[&str] = &["fire_event(", "mem::take(", ".drain("];
+    /// something this frame that nothing can re-spend. A feed posts its events
+    /// (`script_calls::Fires::post`) to fire once its pushes are in.
+    const CONSUMES: &[&str] = &["fire_event(", "fires.post(", "mem::take(", ".drain("];
 
     /// Why an ungated one-shot consumer holding the VM loses nothing in the one-frame window
     /// where the wire is in world and the glue VM is still live.
@@ -1571,6 +1579,8 @@ pub(crate) mod schedule_tests {
          "`seen_generation` is a `VmMemo`: a new VM reads `None` and rebuilds, and its seed's load owes the UPDATE_BINDINGS"),
         ("capture/probe_bg.rs", "bg_probe", Because::SelfHealing,
          "the battleground probe: dev-only (`WOW_PROBE_BG`, `cfg(feature = \"dev\")`) so it is not in a player build at all, and its `mem::take` is of its OWN pending-events string, not a queue anything else fills. Its one real VM dependency is the Lua event tap, which self-heals: `EVENT_DRAIN` returns a `<tap-gone>` sentinel when the tap's globals are missing — the case this window causes, since a tap installed in the glue VM is discarded when `mint_entry_vm` builds the interface — and the probe re-installs on the next frame"),
+        ("capture/probes/act.rs", "fire_probe_drag", Because::FilledByVm,
+         "the drag probe: dev-only (`WOW_PROBE_DRAG`), it starts past `WOW_PROBE_DRAG_AT` with the player's body in the world, and its `.drain(..)` is of the VM's own script errors, raised by the gesture it just made"),
         ("death/mod.rs", "feed_death", Because::MemoLatched,
          "`feed.vm: VmMemo<DeathAnnounced>`: a fresh memo makes the first snapshot an edge and re-announces a held offer, confirm and corpse range"),
         ("net/objects/update.rs", "on_update_end", Because::Deliberate,
@@ -1579,6 +1589,8 @@ pub(crate) mod schedule_tests {
          "`pending` holds only the VM's own `Screenshot()` asks, and the take spawns a capture, publishing nothing"),
         ("screenshot.rs", "report_captures", Because::FilledByVm,
          "the outcome chain starts with the VM's own `Screenshot()` call"),
+        ("spell/targeting/item.rs", "commit_item_cast_on_pick", Because::FilledByVm,
+         "the picks and answers are the VM's own: a bag or paper-doll click with an item-targeting spell on the cursor, and the bind and replace popups' `BindEnchant` and `ReplaceEnchant`; the two events it fires answer them"),
         ("tutorial.rs", "drain_tutorials", Because::FilledByVm,
          "`sends` exist only after Lua acknowledged, cleared or reset a flag, and go to the wire"),
         ("ui_action/drain.rs", "drain_click_casts", Because::FilledByVm,
@@ -1668,7 +1680,7 @@ pub(crate) mod schedule_tests {
         }
     }
 
-    /// A consumer (a system taking `NonSend[Mut]<UiScript>` or a `HostedVm`, whose body has a [`CONSUMES`]
+    /// A consumer (a system taking `NonSend[Mut]<UiScript>`, a `HostedVm` or a `VmWith`, whose body has a [`CONSUMES`]
     /// marker) passes if the schedule shows `ingame_ui_up` on it or a set above it, if it is a
     /// `fire_event` driven by a `VmMemo` parameter, or if [`EXEMPT`] argues it. Read off the
     /// schedule, where a gate on a set, a tuple or the member all look alike. A stale `EXEMPT`
@@ -1684,9 +1696,12 @@ pub(crate) mod schedule_tests {
             }
             let rel = rel_path(&file);
             for f in fn_items(&text) {
-                let holds_vm = f.params.contains("NonSendMut<UiScript>")
-                    || f.params.contains("NonSend<UiScript>")
-                    || f.params.contains("HostedVm");
+                let holds_vm = ["NonSendMut<", "NonSend<"].iter().any(|t| {
+                    f.params.contains(&format!("{t}UiScript>"))
+                        || f.params
+                            .contains(&format!("{t}benilla_ui::script::UiScript>"))
+                }) || f.params.contains("HostedVm")
+                    || f.params.contains("VmWith<");
                 if !holds_vm || !CONSUMES.iter().any(|m| f.body.contains(m)) {
                     continue;
                 }

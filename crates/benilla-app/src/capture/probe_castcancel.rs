@@ -93,48 +93,50 @@ fn cast_cancel_probe(
     time: ProbeClock,
     mut probe: ResMut<ProbeCastCancel>,
     self_player: Query<(), With<SelfPlayer>>,
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut keys: ResMut<ButtonInput<KeyCode>>,
 ) {
-    if self_player.is_empty() {
-        return;
-    }
-    let entered = *probe.entered.get_or_insert(time.elapsed_secs());
-    let t = time.elapsed_secs() - entered;
-    match probe.phase {
-        0 if t >= 3.0 => {
-            let Some(script) = script else {
-                probe.phase = 99;
-                error!("castcancel probe: no UI VM — cannot use the Hearthstone");
-                return;
-            };
-            match script.eval::<bool>(USE_HEARTH_CHUNK) {
-                Ok(true) => {
-                    probe.phase = 1;
-                    probe.used_at = Some(t);
-                    info!("castcancel probe: using the Hearthstone (10 s cast opens the bar)");
-                }
-                Ok(false) if t >= 10.0 => {
+    hosted_vm.run(|script| {
+        if self_player.is_empty() {
+            return;
+        }
+        let entered = *probe.entered.get_or_insert(time.elapsed_secs());
+        let t = time.elapsed_secs() - entered;
+        match probe.phase {
+            0 if t >= 3.0 => {
+                let Some(script) = script else {
                     probe.phase = 99;
-                    error!("castcancel probe: no Hearthstone link resolved by t+10 s");
-                }
-                Ok(false) => {} // still resolving, retry next frame
-                Err(e) => {
-                    probe.phase = 99;
-                    error!("castcancel probe: {e}");
+                    error!("castcancel probe: no UI VM — cannot use the Hearthstone");
+                    return;
+                };
+                match script.eval::<bool>(USE_HEARTH_CHUNK) {
+                    Ok(true) => {
+                        probe.phase = 1;
+                        probe.used_at = Some(t);
+                        info!("castcancel probe: using the Hearthstone (10 s cast opens the bar)");
+                    }
+                    Ok(false) if t >= 10.0 => {
+                        probe.phase = 99;
+                        error!("castcancel probe: no Hearthstone link resolved by t+10 s");
+                    }
+                    Ok(false) => {} // still resolving, retry next frame
+                    Err(e) => {
+                        probe.phase = 99;
+                        error!("castcancel probe: {e}");
+                    }
                 }
             }
+            1 if t >= probe.used_at.unwrap_or(f32::MAX) + 2.0 => {
+                probe.phase = 2;
+                info!("castcancel probe: pressing W mid-cast — the local cancel should fire NOW");
+                keys.press(KeyCode::KeyW);
+            }
+            2 if t >= probe.used_at.unwrap_or(f32::MAX) + 2.3 => {
+                probe.phase = 3;
+                info!("castcancel probe: releasing W — read the cast-trace for the verdict");
+                keys.release(KeyCode::KeyW);
+            }
+            _ => {}
         }
-        1 if t >= probe.used_at.unwrap_or(f32::MAX) + 2.0 => {
-            probe.phase = 2;
-            info!("castcancel probe: pressing W mid-cast — the local cancel should fire NOW");
-            keys.press(KeyCode::KeyW);
-        }
-        2 if t >= probe.used_at.unwrap_or(f32::MAX) + 2.3 => {
-            probe.phase = 3;
-            info!("castcancel probe: releasing W — read the cast-trace for the verdict");
-            keys.release(KeyCode::KeyW);
-        }
-        _ => {}
-    }
+    })
 }

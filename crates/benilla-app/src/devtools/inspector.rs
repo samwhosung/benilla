@@ -96,22 +96,24 @@ const NAME_REFRESHES: u32 = 16;
 
 pub(super) fn toggle(
     keys: Res<ButtonInput<KeyCode>>,
-    script: Option<NonSend<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut ins: ResMut<LuaInspector>,
     mut demand: ResMut<EguiDemand>,
 ) {
-    if !dev_chord(&keys, KeyCode::KeyE) {
-        return;
-    }
-    let Some(script) = script else { return };
-    ins.open = !ins.open;
-    demand.inspector = ins.open;
-    if ins.open {
-        ins.expr = OPEN_EXPR.into();
-        evaluate(&mut ins, &script);
-    } else {
-        release_root(&mut ins, &script);
-    }
+    hosted_vm.run(|script| {
+        if !dev_chord(&keys, KeyCode::KeyE) {
+            return;
+        }
+        let Some(script) = script else { return };
+        ins.open = !ins.open;
+        demand.inspector = ins.open;
+        if ins.open {
+            ins.expr = OPEN_EXPR.into();
+            evaluate(&mut ins, &script);
+        } else {
+            release_root(&mut ins, &script);
+        }
+    })
 }
 
 fn release_root(ins: &mut LuaInspector, script: &UiScript) {
@@ -208,55 +210,57 @@ fn frame_info(cx: &mut Cx, t: TableRef) -> Option<(String, Vec<(String, Value)>)
 
 pub(super) fn panel_ui(
     mut contexts: EguiContexts,
-    script: Option<NonSend<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut ins: ResMut<LuaInspector>,
 ) -> Result {
-    if !ins.open {
-        return Ok(());
-    }
-    let Some(script) = script else { return Ok(()) };
-    // A new VM (a world entry, a `/reload`) dropped the old root with the old heap.
-    if ins.root.is_some_and(|(_, s)| s != script.session()) {
-        ins.root = None;
-        ins.owners_epoch = None;
-        ins.names.clear();
-        evaluate(&mut ins, &script);
-    }
-    let ctx = contexts.ctx_mut()?;
-    let Some((root_id, _)) = ins.root else {
-        return Ok(());
-    };
-    // Drawing runs Lua: the frame helper, whose `GetName` and `GetScript` an addon may override.
-    script.set_instruction_budget(crate::ui_script::addons::LOAD_INSTRUCTION_BUDGET);
-    let session = script.session();
-    let mut asks = Asks::default();
-    script
-        .lua()
-        .with_vm(|vm| draw(ctx, vm, &mut ins, root_id, session, &mut asks));
-    script.clear_instruction_budget();
+    hosted_vm.run(|script| {
+        if !ins.open {
+            return Ok(());
+        }
+        let Some(script) = script else { return Ok(()) };
+        // A new VM (a world entry, a `/reload`) dropped the old root with the old heap.
+        if ins.root.is_some_and(|(_, s)| s != script.session()) {
+            ins.root = None;
+            ins.owners_epoch = None;
+            ins.names.clear();
+            evaluate(&mut ins, &script);
+        }
+        let ctx = contexts.ctx_mut()?;
+        let Some((root_id, _)) = ins.root else {
+            return Ok(());
+        };
+        // Drawing runs Lua: the frame helper, whose `GetName` and `GetScript` an addon may override.
+        script.set_instruction_budget(crate::ui_script::addons::LOAD_INSTRUCTION_BUDGET);
+        let session = script.session();
+        let mut asks = Asks::default();
+        script
+            .lua()
+            .with_vm(|vm| draw(ctx, vm, &mut ins, root_id, session, &mut asks));
+        script.clear_instruction_budget();
 
-    if let Some((slot, text)) = asks.commit {
-        let lua = script.lua();
-        let held = lua.with_vm(|vm| slot.holds().map(|v| vm.root(v)));
-        let r = run_bounded(&script, &text);
-        ins.status = Some(lua.with_vm(|vm| {
-            let status = match r {
-                Ok(v) => match write(vm, slot, v.unwrap_or(Value::Nil)) {
-                    Ok(()) => (format!("wrote {text}"), true),
+        if let Some((slot, text)) = asks.commit {
+            let lua = script.lua();
+            let held = lua.with_vm(|vm| slot.holds().map(|v| vm.root(v)));
+            let r = run_bounded(&script, &text);
+            ins.status = Some(lua.with_vm(|vm| {
+                let status = match r {
+                    Ok(v) => match write(vm, slot, v.unwrap_or(Value::Nil)) {
+                        Ok(()) => (format!("wrote {text}"), true),
+                        Err(e) => (e, false),
+                    },
                     Err(e) => (e, false),
-                },
-                Err(e) => (e, false),
-            };
-            for id in held {
-                vm.unroot(id);
-            }
-            status
-        }));
-    }
-    if asks.evaluate {
-        evaluate(&mut ins, &script);
-    }
-    Ok(())
+                };
+                for id in held {
+                    vm.unroot(id);
+                }
+                status
+            }));
+        }
+        if asks.evaluate {
+            evaluate(&mut ins, &script);
+        }
+        Ok(())
+    })
 }
 
 /// The window, drawn with the VM lent for it: the frame helper's Lua runs through `vm`.

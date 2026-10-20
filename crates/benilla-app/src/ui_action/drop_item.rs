@@ -7,7 +7,7 @@
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{CursorPayload, UiScript};
+use benilla_ui::script::CursorPayload;
 
 use crate::spell::{CastCommit, TargetedBind};
 
@@ -30,71 +30,76 @@ fn feedable_pet(
 /// `DropItemOnUnit("pet")`, and a left click on the pet's model with an item held (`0x4927e8`,
 /// in the world click's object leg `0x4925d0`, where the click still selects).
 pub(crate) fn drop_item_on_unit(
-    script: Option<NonSendMut<UiScript>>,
+    mut vm: crate::script_calls::VmWith<(
+        Res<'static, crate::ui_pet::PetBar>,
+        crate::spell::CastLadder<'static, 'static>,
+    )>,
     self_q: Query<(&crate::net::Guid, &crate::net::ObjectStore), With<crate::net::SelfPlayer>>,
     stores: Query<&crate::net::ObjectStore>,
     index: Res<crate::net::GuidIndex>,
-    pet_bar: Res<crate::ui_pet::PetBar>,
     learned: Res<super::LearnedAbilities>,
     press: Res<crate::target::PressPick>,
     mut clicks: MessageReader<benilla_world::interact::WorldClick>,
-    mut ladder: crate::spell::CastLadder,
 ) {
-    let Some(mut script) = script else {
-        clicks.clear();
-        return;
-    };
-    let hovered = press.hovered;
-    let mut tokens = script.take_drop_item_on_unit();
-    // The world entry: a click whose press-time pick is the pet. That is the pick the click
-    // selects from; the live hover can differ after a drag.
-    let clicked_pet = clicks.read().count() > 0
-        && pet_bar.spells.pet_guid != 0
-        && hovered.guid == Some(pet_bar.spells.pet_guid);
-    if clicked_pet {
-        tokens.push("pet".to_string());
-    }
-    if tokens.is_empty() {
-        return;
-    }
-    let Some((self_guid, self_store)) = self_q.iter().next() else {
-        return;
-    };
-    for token in tokens {
-        // Only the "pet" token is the pet; any other unit takes the unbuilt trade leg.
-        if token != "pet" {
-            debug!("DropItemOnUnit({token}) — only the pet leg is modelled; refused, payload kept");
-            continue;
+    vm.turn(|script, (pet_bar, mut ladder)| {
+        let Some(script) = script else {
+            clicks.clear();
+            return;
+        };
+        let hovered = press.hovered;
+        let mut tokens = script.take_drop_item_on_unit();
+        // The world entry: a click whose press-time pick is the pet. That is the pick the click
+        // selects from; the live hover can differ after a drag.
+        let clicked_pet = clicks.read().count() > 0
+            && pet_bar.spells.pet_guid != 0
+            && hovered.guid == Some(pet_bar.spells.pet_guid);
+        if clicked_pet {
+            tokens.push("pet".to_string());
         }
-        let Some(pet_fields) = (pet_bar.spells.pet_guid != 0)
-            .then(|| index.0.get(&pet_bar.spells.pet_guid))
-            .flatten()
-            .and_then(|&e| stores.get(e).ok())
-        else {
-            continue; // no pet, or not streamed in: silent, payload kept
-        };
-        let Some(spell_id) = learned.feed_pet else {
-            continue; // gate 3 fails outright: we never learned Feed Pet
-        };
-        if !feedable_pet(&pet_fields.0, self_guid.0, true) {
-            debug!("DropItemOnUnit(\"pet\") — not a pet I summoned; refused, payload kept");
-            continue;
+        if tokens.is_empty() {
+            return;
         }
-        // The food: the held item's live guid. Only an item payload can be dropped on a unit.
-        let Some(CursorPayload::Item(held)) = script.cursor_payload() else {
-            continue;
+        let Some((self_guid, self_store)) = self_q.iter().next() else {
+            return;
         };
-        let slot0 = u8::try_from(held.slot.saturating_sub(1)).unwrap_or(0);
-        let Some(item_guid) =
-            crate::ui_items::slot_guid(&self_store.0, held.bag, slot0, &ladder.objects)
-        else {
-            continue; // the slot emptied: silent, as every refusal here is
-        };
-        debug!("DropItemOnUnit(\"pet\") — Feed Pet {spell_id} at item {item_guid:#x}");
-        ladder.commit_targeted(spell_id, CastCommit::Spell, TargetedBind::Item(item_guid));
-        // `ClearCursor(1,1)`, on success only.
-        script.clear_cursor_payload();
-    }
+        for token in tokens {
+            // Only the "pet" token is the pet; any other unit takes the unbuilt trade leg.
+            if token != "pet" {
+                debug!(
+                    "DropItemOnUnit({token}) — only the pet leg is modelled; refused, payload kept"
+                );
+                continue;
+            }
+            let Some(pet_fields) = (pet_bar.spells.pet_guid != 0)
+                .then(|| index.0.get(&pet_bar.spells.pet_guid))
+                .flatten()
+                .and_then(|&e| stores.get(e).ok())
+            else {
+                continue; // no pet, or not streamed in: silent, payload kept
+            };
+            let Some(spell_id) = learned.feed_pet else {
+                continue; // gate 3 fails outright: we never learned Feed Pet
+            };
+            if !feedable_pet(&pet_fields.0, self_guid.0, true) {
+                debug!("DropItemOnUnit(\"pet\") — not a pet I summoned; refused, payload kept");
+                continue;
+            }
+            // The food: the held item's live guid. Only an item payload can be dropped on a unit.
+            let Some(CursorPayload::Item(held)) = script.cursor_payload() else {
+                continue;
+            };
+            let slot0 = u8::try_from(held.slot.saturating_sub(1)).unwrap_or(0);
+            let Some(item_guid) =
+                crate::ui_items::slot_guid(&self_store.0, held.bag, slot0, &ladder.objects)
+            else {
+                continue; // the slot emptied: silent, as every refusal here is
+            };
+            debug!("DropItemOnUnit(\"pet\") — Feed Pet {spell_id} at item {item_guid:#x}");
+            ladder.commit_targeted(spell_id, CastCommit::Spell, TargetedBind::Item(item_guid));
+            // `ClearCursor(1,1)`, on success only.
+            script.clear_cursor_payload();
+        }
+    })
 }
 
 #[cfg(test)]

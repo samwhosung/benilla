@@ -13,7 +13,7 @@
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{UiScript, UnitCombatStats};
+use benilla_ui::script::UnitCombatStats;
 
 use crate::ui_char::unit_combat_stats;
 use crate::ui_pet::{PetBar, PetUnit};
@@ -35,32 +35,33 @@ impl Plugin for UiPetDollPlugin {
 }
 
 pub(crate) fn feed_pet_doll(
-    script: Option<NonSendMut<UiScript>>,
-    bar: Res<PetBar>,
+    mut vm: crate::script_calls::VmWith<Res<'static, PetBar>>,
     pet: PetUnit,
     mut last: Local<crate::ui_script::VmMemo<Option<UnitCombatStats>>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let last = last.get(&script);
-    let pet_guid = bar.spells.pet_guid;
-    let store = (pet_guid != 0).then(|| pet.store(pet_guid)).flatten();
+    vm.turn(|script, bar| {
+        let Some(script) = script else {
+            return;
+        };
+        let last = last.get(&script);
+        let pet_guid = bar.spells.pet_guid;
+        let store = (pet_guid != 0).then(|| pet.store(pet_guid)).flatten();
 
-    let fresh = store.map(unit_combat_stats);
-    // Push only on change; the page repaints off the bridge's `UNIT_*` events.
-    if *last == fresh {
-        return;
-    }
-    if let (None, Some(stats)) = (&*last, &fresh) {
-        debug!(
-            "ui_pet_doll: pet stats resolved — {} armor, {}-{} damage",
-            stats.resistances[0], stats.min_damage, stats.max_damage
-        );
-    }
-    script.set_pet_combat_stats(fresh.clone());
-    // A pet going away fires nothing here: the page hides on `crate::ui_pet`'s `UNIT_PET`.
-    *last = fresh;
+        let fresh = store.map(unit_combat_stats);
+        // Push only on change; the page repaints off the bridge's `UNIT_*` events.
+        if *last == fresh {
+            return;
+        }
+        if let (None, Some(stats)) = (&*last, &fresh) {
+            debug!(
+                "ui_pet_doll: pet stats resolved — {} armor, {}-{} damage",
+                stats.resistances[0], stats.min_damage, stats.max_damage
+            );
+        }
+        script.set_pet_combat_stats(fresh.clone());
+        // A pet going away fires nothing here: the page hides on `crate::ui_pet`'s `UNIT_PET`.
+        *last = fresh;
+    })
 }
 
 #[cfg(test)]

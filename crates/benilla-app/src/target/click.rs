@@ -226,8 +226,6 @@ pub(crate) struct ServiceArms<'w> {
     pub(crate) spirit: ResMut<'w, crate::ui_dialog_verbs::AreaSpiritHealer>,
     /// The NPC whose window is open (`[0xb4e2d0]`), checked before the ladder.
     pub(crate) interact: Res<'w, crate::ui_session::InteractNpc>,
-    /// The cursor, for the vendor arm's sell fork (`0x5df5d7`); `None` when no VM is mounted.
-    pub(crate) script: Option<NonSendMut<'w, benilla_ui::script::UiScript>>,
 }
 
 /// The re-click gate (`0x5f0251`), before the ladder: a right-click on the NPC whose window is
@@ -668,8 +666,15 @@ impl Dispatch<'_, '_> {
     /// form that bars NPCs gets `ERR_CANT_INTERACT_SHAPESHIFTED` (`0x5f0185`, message 351) and
     /// nothing else, no walk and no gesture, in reach or not. Out of the 5.5556 yd reach it then
     /// walks there when `walk`, returning before the ladder and the gesture (`0x5f022f`), and
-    /// otherwise sends nothing.
-    fn talk(&mut self, entity: Entity, guid: u64, walk: bool) {
+    /// otherwise sends nothing. `script` is the VM, for the vendor arm's sell fork (`0x5df5d7`) and
+    /// the spirit guide's event; `None` when no VM is mounted.
+    fn talk(
+        &mut self,
+        mut script: Option<&mut benilla_ui::script::UiScript>,
+        entity: Entity,
+        guid: u64,
+        walk: bool,
+    ) {
         if self.shapeshifted_from_npcs() {
             debug!("right-click interact: {guid:#x} — refused, shapeshifted");
             self.feedback.errors.0.push(crate::ui_action::UiError::key(
@@ -705,9 +710,7 @@ impl Dispatch<'_, '_> {
         // Peeked, not taken: the cursor clears only once a sale goes out. The reference sends the
         // cursor's stored guid; we resolve the held `(bag, slot)`, which a pickup locks, and a slot
         // with no guid opens the list instead.
-        let cursor_sale = self
-            .service
-            .script
+        let cursor_sale = script
             .as_deref()
             .and_then(|s| s.cursor_item())
             .and_then(|item| {
@@ -731,7 +734,7 @@ impl Dispatch<'_, '_> {
                 debug!("right-click interact: {guid:#x} (vendor — selling the held item)");
                 let _ = self.seam.net.0.send(cmd);
                 // The sell clear: the slot stays greyed until the server's update.
-                if let Some(script) = self.service.script.as_deref_mut() {
+                if let Some(script) = script.as_deref_mut() {
                     script.take_cursor_item_for_sale();
                 }
             }
@@ -749,7 +752,7 @@ impl Dispatch<'_, '_> {
                 debug!("right-click interact: {guid:#x} (spirit guide — adopting, 0x2E2)");
                 let outcome = self.service.spirit.click_guide(guid);
                 if outcome.cancel_aura {
-                    if let Some(script) = self.service.script.as_deref_mut() {
+                    if let Some(script) = script.as_deref_mut() {
                         script.fire_event("AREA_SPIRIT_HEALER_OUT_OF_RANGE", vec![]);
                     }
                     let _ = self.seam.net.0.send(ClientCommand::CancelAura {
@@ -786,28 +789,30 @@ pub(super) fn act_on_right_click(
     mut clicks: MessageReader<WorldRightClick>,
     // The press pick: the reference picks once, on the down edge (`0x481f00`).
     press: Res<PressPick>,
-    mut selection: ResMut<Selection>,
-    mut dispatch: Dispatch,
+    // The dispatchers and the selection, which the host's calls also reach: an engine turn.
+    mut vm: crate::script_calls::VmWith<(Dispatch<'static, 'static>, ResMut<'static, Selection>)>,
     payload_held: Res<crate::ui_script::CursorPayloadHeld>,
 ) {
-    if clicks.read().last().is_none() || dispatch.seam.player_is_charmed() {
+    if clicks.read().last().is_none() || vm.own().0.seam.player_is_charmed() {
         return;
     }
-    // The router's other legs: the world hit walks there (`0x5e0378`), and nothing walks along the
-    // ray when the cursor is empty (`0x492d50`).
-    if !press.over_object() {
-        match (press.occlusion.point, press.occlusion.ray) {
-            (Some(at), _) => {
-                dispatch.auto.walk_to_ground(at);
+    vm.turn(|script, (mut dispatch, mut selection)| {
+        // The router's other legs: the world hit walks there (`0x5e0378`), and nothing walks along
+        // the ray when the cursor is empty (`0x492d50`).
+        if !press.over_object() {
+            match (press.occlusion.point, press.occlusion.ray) {
+                (Some(at), _) => {
+                    dispatch.auto.walk_to_ground(at);
+                }
+                (None, Some(ray)) if !payload_held.0 => {
+                    dispatch.auto.walk_toward_sky(*ray);
+                }
+                _ => {}
             }
-            (None, Some(ray)) if !payload_held.0 => {
-                dispatch.auto.walk_toward_sky(*ray);
-            }
-            _ => {}
+            return;
         }
-        return;
-    }
-    interact(&mut dispatch, &press, Select::First(&mut selection));
+        interact(&mut dispatch, script, &press, Select::First(&mut selection));
+    })
 }
 
 /// Where [`interact`] selects its unit, if it does: the world click's entry (`0x492820`) selects
@@ -839,7 +844,12 @@ impl<'a, 'w> Select<'a, 'w> {
 /// the press latched (`unable`). Out of reach every send but attack is suppressed, the server
 /// holds attack until in reach; with Click to Move on, each dispatcher walks there instead
 /// (`CanAutoInteract` is their approach flag, `0x60c170`, `0x5d6c6f`).
-fn interact(dispatch: &mut Dispatch, press: &PressPick, mut select: Select) {
+fn interact(
+    dispatch: &mut Dispatch,
+    script: Option<&mut benilla_ui::script::UiScript>,
+    press: &PressPick,
+    mut select: Select,
+) {
     let (hovered, hovered_object, cursor) = (&press.hovered, &press.object, &press.cursor);
     let walk = dispatch.auto.can_auto_interact();
     let self_mounted = dispatch.mounted();
@@ -1091,7 +1101,7 @@ fn interact(dispatch: &mut Dispatch, press: &PressPick, mut select: Select) {
         UnitBranch::Dead(DeadUnitLeg::Nothing) => {
             debug!("right-click unit {guid:#x}: dead fork took no leg — nothing sent");
         }
-        UnitBranch::Service => dispatch.talk(entity, guid, walk),
+        UnitBranch::Service => dispatch.talk(script, entity, guid, walk),
     }
 }
 
@@ -1111,48 +1121,80 @@ pub(super) fn act_on_interact(
     mut requests: MessageReader<Interact>,
     mut plate_clicks: MessageReader<PlateRightClick>,
     press: Res<PressPick>,
-    mut selection: ResMut<Selection>,
     kinds: Query<(&Guid, &crate::net::NetEntity)>,
-    mut set: ParamSet<(cursor_mode::CursorInputs, Dispatch)>,
+    // The classifier, the dispatchers and the selection, which the host's calls also reach: an
+    // engine turn.
+    mut vm: crate::script_calls::VmWith<(
+        ParamSet<
+            'static,
+            'static,
+            (
+                cursor_mode::CursorInputs<'static, 'static>,
+                Dispatch<'static, 'static>,
+            ),
+        >,
+        ResMut<'static, Selection>,
+    )>,
 ) {
     use benilla_protocol::EntityKind;
-    for &PlateRightClick { selected } in plate_clicks.read() {
-        interact(
-            &mut set.p1(),
-            &press,
-            Select::Done(&mut selection, selected),
-        );
+    if requests.is_empty() && plate_clicks.is_empty() {
+        return;
     }
-    for &Interact(entity) in requests.read() {
-        let Ok((guid, net)) = kinds.get(entity) else {
-            continue;
-        };
-        let mut pick = PressPick::default();
-        match net.kind {
-            EntityKind::Unit | EntityKind::Player => {
-                (pick.hovered.target, pick.hovered.guid) = (Some(entity), Some(guid.0));
-            }
-            EntityKind::Corpse => {
-                (pick.hovered.corpse, pick.hovered.corpse_guid) = (Some(entity), Some(guid.0));
-            }
-            EntityKind::GameObject => {
-                (pick.object.target, pick.object.guid) = (Some(entity), Some(guid.0));
-            }
-            EntityKind::DynamicObject | EntityKind::Other => continue,
+    vm.turn(|mut script, (mut set, mut selection)| {
+        for &PlateRightClick { selected } in plate_clicks.read() {
+            interact(
+                &mut set.p1(),
+                script.as_deref_mut(),
+                &press,
+                Select::Done(&mut selection, selected),
+            );
         }
-        (pick.cursor, pick.attack_fork) =
-            cursor_mode::classify(&set.p0(), &pick.hovered, &pick.object);
-        interact(&mut set.p1(), &pick, Select::OnAttack(&mut selection));
-    }
+        for &Interact(entity) in requests.read() {
+            let Ok((guid, net)) = kinds.get(entity) else {
+                continue;
+            };
+            let mut pick = PressPick::default();
+            match net.kind {
+                EntityKind::Unit | EntityKind::Player => {
+                    (pick.hovered.target, pick.hovered.guid) = (Some(entity), Some(guid.0));
+                }
+                EntityKind::Corpse => {
+                    (pick.hovered.corpse, pick.hovered.corpse_guid) = (Some(entity), Some(guid.0));
+                }
+                EntityKind::GameObject => {
+                    (pick.object.target, pick.object.guid) = (Some(entity), Some(guid.0));
+                }
+                EntityKind::DynamicObject | EntityKind::Other => continue,
+            }
+            (pick.cursor, pick.attack_fork) =
+                cursor_mode::classify(&set.p0(), &pick.hovered, &pick.object);
+            interact(
+                &mut set.p1(),
+                script.as_deref_mut(),
+                &pick,
+                Select::OnAttack(&mut selection),
+            );
+        }
+    })
 }
 
 /// The verb an approach owed, once it arrived (`0x60fa20`, run at the stop): the dispatcher alone,
 /// with no select, no cursor and no walk but Use's. Each looks its object up by type (`0x468460`),
 /// and the loot's asks for a unit (`0x60fa41`), so a corpse object walked to is not looted.
 pub(super) fn act_on_arrival(
-    mut dispatch: Dispatch,
+    // The dispatchers, which the host's calls also reach: an engine turn.
+    mut vm: crate::script_calls::VmWith<Dispatch<'static, 'static>>,
     index: Res<crate::net::GuidIndex>,
     kinds: Query<&crate::net::NetEntity>,
+) {
+    vm.turn(|script, mut dispatch| act_on_arrival_with(&mut dispatch, script, &index, &kinds));
+}
+
+fn act_on_arrival_with(
+    dispatch: &mut Dispatch,
+    script: Option<&mut benilla_ui::script::UiScript>,
+    index: &crate::net::GuidIndex,
+    kinds: &Query<&crate::net::NetEntity>,
 ) {
     use crate::player::{ApproachVerb, Subject};
     use benilla_protocol::EntityKind;
@@ -1178,7 +1220,7 @@ pub(super) fn act_on_arrival(
         d2.sqrt()
     );
     match verb {
-        ApproachVerb::Talk if unit => dispatch.talk(entity, guid, false),
+        ApproachVerb::Talk if unit => dispatch.talk(script, entity, guid, false),
         // `0x5df2a0`'s own lootable test (`0x6003a0`), which the click's dead fork made earlier.
         ApproachVerb::Loot if unit => {
             if dispatch

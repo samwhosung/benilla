@@ -202,10 +202,9 @@ fn snapshot(
 /// Push the stable into the VM and fire its events on a change; the close is the core's
 /// ([`close_core`]).
 fn feed_stable(
-    script: Option<NonSendMut<UiScript>>,
+    mut vm: crate::script_calls::VmWith<Res<'static, crate::ui_pet::PetBar>>,
     // Mutable only to take the fresh-list latch.
     mut open: ResMut<StableOpen>,
-    bar: Res<crate::ui_pet::PetBar>,
     pet: crate::ui_pet::PetUnit,
     families: Option<Res<PetFamilyTables>>,
     stats: Option<Res<PetStatTables>>,
@@ -217,69 +216,71 @@ fn feed_stable(
     mut closes: CoreCloses,
     mut sink: crate::ui_action::MessageSink,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let last = last.get(&script);
-    if closes.since_last(&script, NpcWindow::Stable) {
-        *last = None;
-    }
-    // Refusals show, and speak, as their message rows say.
-    let lines: Vec<_> = errors
-        .0
-        .drain(..)
-        .filter_map(|key| {
-            let text = script.lua().globals().get::<String>(key).ok()?;
-            (!text.is_empty()).then(|| crate::ui_action::Shown::keyed(key, text))
-        })
-        .collect();
-    crate::ui_action::show_messages(&mut script, &mut sink, "ui_stable", lines);
+    vm.feed(|script, bar, fires| {
+        let Some(mut script) = script else {
+            return;
+        };
+        let last = last.get(&script);
+        if closes.since_last(&script, NpcWindow::Stable) {
+            *last = None;
+        }
+        // Refusals show, and speak, as their message rows say.
+        let lines: Vec<_> = errors
+            .0
+            .drain(..)
+            .filter_map(|key| {
+                let text = script.lua().globals().get::<String>(key).ok()?;
+                (!text.is_empty()).then(|| crate::ui_action::Shown::keyed(key, text))
+            })
+            .collect();
+        crate::ui_action::show_messages(&mut script, &mut sink, "ui_stable", lines);
 
-    // The next slot's price: `StableSlotPrices.dbc` row `purchased + 1`, 0 past the table.
-    let next_slot_cost = prices
-        .as_deref()
-        .and_then(|p| p.0.next_slot_price(open.num_stable_slots))
-        .unwrap_or(0);
+        // The next slot's price: `StableSlotPrices.dbc` row `purchased + 1`, 0 past the table.
+        let next_slot_cost = prices
+            .as_deref()
+            .and_then(|p| p.0.next_slot_price(open.num_stable_slots))
+            .unwrap_or(0);
 
-    // The reference's live-pet test, `[0xb714a0]|[0xb714a4]`; a dismissed pet fails it.
-    let has_live_pet = bar.spells.pet_guid != 0;
-    // The summoned pet's cache record while its object is held, `[unit+0xb30]` (`0x60b131`): the
-    // template's display, which `0x505a70` reads at `[rec+0x2c]`. Apart from the snapshot, so it
-    // fires nothing.
-    let live_pet_display = has_live_pet
-        .then(|| pet.store(bar.spells.pet_guid))
-        .flatten()
-        .and_then(|s| s.0.object_entry())
-        .and_then(|entry| names.creature_record(entry))
-        .map(|r| r.display_id);
-    script.set_stable_live_pet_display(live_pet_display);
-    // Every list fires `PET_STABLE_SHOW`, on which the stock window calls its getters.
-    let fresh_list = std::mem::take(&mut open.fresh_list);
-    let fresh = snapshot(
-        &open,
-        &names,
-        families.as_deref(),
-        stats.as_deref(),
-        next_slot_cost,
-        has_live_pet,
-        Ask::at(fresh_list || last.is_none(), &commands),
-    );
-    if fresh == *last && !fresh_list {
-        return;
-    }
-    // Push before firing: `fire_event` runs the Lua handlers synchronously.
-    script.set_stable(fresh.clone());
-    if fresh_list && fresh.is_some() {
-        // Every list fires `PET_STABLE_SHOW` (`0x4cac9b`); on the visible window it only repaints.
-        script.fire_event("PET_STABLE_SHOW", vec![]);
-    } else if last.is_some() && fresh.is_some() {
-        // A change with no new list is a creature-query answer, the reference's callback edge. A
-        // close is the core's, which told the VM, and a disconnect's clear tells it nothing; a
-        // first snapshot always comes with the list latch.
-        script.fire_event("PET_STABLE_UPDATE", vec![]);
-        script.fire_event("PET_STABLE_UPDATE_PAPERDOLL", vec![]);
-    }
-    *last = fresh;
+        // The reference's live-pet test, `[0xb714a0]|[0xb714a4]`; a dismissed pet fails it.
+        let has_live_pet = bar.spells.pet_guid != 0;
+        // The summoned pet's cache record while its object is held, `[unit+0xb30]` (`0x60b131`): the
+        // template's display, which `0x505a70` reads at `[rec+0x2c]`. Apart from the snapshot, so it
+        // fires nothing.
+        let live_pet_display = has_live_pet
+            .then(|| pet.store(bar.spells.pet_guid))
+            .flatten()
+            .and_then(|s| s.0.object_entry())
+            .and_then(|entry| names.creature_record(entry))
+            .map(|r| r.display_id);
+        script.set_stable_live_pet_display(live_pet_display);
+        // Every list fires `PET_STABLE_SHOW`, on which the stock window calls its getters.
+        let fresh_list = std::mem::take(&mut open.fresh_list);
+        let fresh = snapshot(
+            &open,
+            &names,
+            families.as_deref(),
+            stats.as_deref(),
+            next_slot_cost,
+            has_live_pet,
+            Ask::at(fresh_list || last.is_none(), &commands),
+        );
+        if fresh == *last && !fresh_list {
+            return;
+        }
+        // Push before firing: `fire_event` runs the Lua handlers synchronously.
+        script.set_stable(fresh.clone());
+        if fresh_list && fresh.is_some() {
+            // Every list fires `PET_STABLE_SHOW` (`0x4cac9b`); on the visible window it only repaints.
+            fires.post("PET_STABLE_SHOW", vec![]);
+        } else if last.is_some() && fresh.is_some() {
+            // A change with no new list is a creature-query answer, the reference's callback edge. A
+            // close is the core's, which told the VM, and a disconnect's clear tells it nothing; a
+            // first snapshot always comes with the list latch.
+            fires.post("PET_STABLE_UPDATE", vec![]);
+            fires.post("PET_STABLE_UPDATE_PAPERDOLL", vec![]);
+        }
+        *last = fresh;
+    })
 }
 
 /// Drain the Lua intents into the four stable verbs, each aimed at the open session's NPC; a close

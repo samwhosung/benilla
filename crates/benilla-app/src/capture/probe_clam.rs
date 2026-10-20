@@ -176,159 +176,161 @@ fn find_in_backpack(
 }
 
 fn clam_probe(
+    mut vm: crate::script_calls::VmWith<(Res<'static, LootState>, Res<'static, LootLatch>)>,
     time: ProbeClock,
     mut probe: ResMut<ClamProbe>,
-    script: Option<NonSendMut<UiScript>>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     objects: Objects,
     items: Res<Items>,
     mut cfg: ResMut<LootConfig>,
-    loot: Res<LootState>,
-    latch: Res<LootLatch>,
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    let Ok(store) = self_store.single() else {
-        return; // not in-world yet
-    };
-    let Some(mut script) = script else {
-        return; // no UI VM in this build, so nothing to drive
-    };
-    let now = time.elapsed_secs_f64();
-    let entry = target_entry();
+    vm.turn(|script, (loot, latch)| {
+        let Ok(store) = self_store.single() else {
+            return; // not in-world yet
+        };
+        let Some(mut script) = script else {
+            return; // no UI VM in this build, so nothing to drive
+        };
+        let now = time.elapsed_secs_f64();
+        let entry = target_entry();
 
-    match probe.phase {
-        Phase::Wait => {
-            // The window must survive to be looked at: with auto-loot on, the single row is taken
-            // at the open edge and the last-row auto-release shuts it again immediately.
-            cfg.auto_loot = false;
-            info!("PROBE_CLAM: stocking one openable item (entry {entry}) — auto-loot forced off");
-            let _ = net.0.send(ClientCommand::Chat {
-                kind: ChatKind::Say,
-                target: None,
-                text: format!(".additem {entry}"),
-                language: None,
-            });
-            probe.phase = Phase::Stocking { sent_at: now };
-        }
-        Phase::Stocking { sent_at } => {
-            if let Some((guid, slot)) = find_in_backpack(store, entry, &objects, &items, &net) {
+        match probe.phase {
+            Phase::Wait => {
+                // The window must survive to be looked at: with auto-loot on, the single row is taken
+                // at the open edge and the last-row auto-release shuts it again immediately.
+                cfg.auto_loot = false;
                 info!(
-                    "PROBE_CLAM: item {entry} is guid {guid:#x} in backpack slot {slot} — \
-                     sampling {CONTROL_FRAMES} control frames with it UNCLICKED"
+                    "PROBE_CLAM: stocking one openable item (entry {entry}) — auto-loot forced off"
                 );
-                probe.clam = Some(guid);
-                probe.slot = slot;
-                probe.phase = Phase::Before;
-            } else if now - sent_at > STOCK_TIMEOUT_SECS {
-                error!(
+                let _ = net.0.send(ClientCommand::Chat {
+                    kind: ChatKind::Say,
+                    target: None,
+                    text: format!(".additem {entry}"),
+                    language: None,
+                });
+                probe.phase = Phase::Stocking { sent_at: now };
+            }
+            Phase::Stocking { sent_at } => {
+                if let Some((guid, slot)) = find_in_backpack(store, entry, &objects, &items, &net) {
+                    info!(
+                        "PROBE_CLAM: item {entry} is guid {guid:#x} in backpack slot {slot} — \
+                     sampling {CONTROL_FRAMES} control frames with it UNCLICKED"
+                    );
+                    probe.clam = Some(guid);
+                    probe.slot = slot;
+                    probe.phase = Phase::Before;
+                } else if now - sent_at > STOCK_TIMEOUT_SECS {
+                    error!(
                     "PROBE_CLAM: FAIL — no LOOTABLE item {entry} with a landed template in the \
                      backpack within {STOCK_TIMEOUT_SECS}s. `.additem` needs a GM account, and it \
                      refuses silently when the backpack is full. This is NOT a passing run"
                 );
-                probe.fails += 1;
-                probe.phase = Phase::Done; // nothing was stocked, so nothing to clean up
+                    probe.fails += 1;
+                    probe.phase = Phase::Done; // nothing was stocked, so nothing to clean up
+                }
             }
-        }
-        Phase::Before => {
-            probe.control.push(window_open(&script, &loot));
-            if probe.control.len() < CONTROL_FRAMES {
-                return;
+            Phase::Before => {
+                probe.control.push(window_open(&script, &loot));
+                if probe.control.len() < CONTROL_FRAMES {
+                    return;
+                }
+                click(&mut script, &mut probe, 0);
+                probe.phase = Phase::WaitOpen {
+                    since: now,
+                    round: 0,
+                };
             }
-            click(&mut script, &mut probe, 0);
-            probe.phase = Phase::WaitOpen {
-                since: now,
-                round: 0,
-            };
-        }
-        Phase::WaitOpen { since, round } => {
-            if window_open(&script, &loot) {
-                let slot = probe.slot;
-                let source = loot.source();
-                let grey = slot_grey(&script, slot);
-                info!(
+            Phase::WaitOpen { since, round } => {
+                if window_open(&script, &loot) {
+                    let slot = probe.slot;
+                    let source = loot.source();
+                    let grey = slot_grey(&script, slot);
+                    info!(
                     "PROBE_CLAM: round {round} — window up on {:?} (latch {:?}, slot grey {grey})",
                     source.map(|g| format!("{g:#x}")),
                     latch.0.map(|g| format!("{g:#x}")),
                 );
-                probe.opened.push(source);
-                probe.greyed.push(grey);
-                let _ = script.eval::<()>("CloseLoot()");
-                probe.phase = Phase::WaitClosed { since: now, round };
-            } else if now - since > OPEN_TIMEOUT_SECS {
-                let grey = slot_grey(&script, probe.slot);
-                error!(
+                    probe.opened.push(source);
+                    probe.greyed.push(grey);
+                    let _ = script.eval::<()>("CloseLoot()");
+                    probe.phase = Phase::WaitClosed { since: now, round };
+                } else if now - since > OPEN_TIMEOUT_SECS {
+                    let grey = slot_grey(&script, probe.slot);
+                    error!(
                     "PROBE_CLAM: round {round} FAIL — no loot window within {OPEN_TIMEOUT_SECS}s \
                      of the click (latch {:?}, slot grey {grey}). A grey slot with no window is \
                      the refused type-1 response: the CMSG_OPEN_ITEM arm never latched the item \
                      guid",
                     latch.0.map(|g| format!("{g:#x}")),
                 );
-                probe.fails += 1;
-                probe.opened.push(None);
-                probe.greyed.push(grey);
-                probe.phase = finish(&net, entry, now);
-            }
-        }
-        Phase::Settling { since, round } => {
-            if now - since >= REOPEN_SETTLE_SECS {
-                info!("PROBE_CLAM: re-clicking the same item (round {round})");
-                click(&mut script, &mut probe, round);
-                probe.phase = Phase::WaitOpen { since: now, round };
-            }
-        }
-        Phase::WaitClosed { since, round } => {
-            if !window_open(&script, &loot) {
-                probe.cleared.push(latch.0.is_none());
-                let next = round + 1;
-                if next < ROUNDS {
-                    probe.phase = Phase::Settling {
-                        since: now,
-                        round: next,
-                    };
-                } else {
+                    probe.fails += 1;
+                    probe.opened.push(None);
+                    probe.greyed.push(grey);
                     probe.phase = finish(&net, entry, now);
                 }
-            } else if now - since > CLOSE_TIMEOUT_SECS {
-                error!(
+            }
+            Phase::Settling { since, round } => {
+                if now - since >= REOPEN_SETTLE_SECS {
+                    info!("PROBE_CLAM: re-clicking the same item (round {round})");
+                    click(&mut script, &mut probe, round);
+                    probe.phase = Phase::WaitOpen { since: now, round };
+                }
+            }
+            Phase::WaitClosed { since, round } => {
+                if !window_open(&script, &loot) {
+                    probe.cleared.push(latch.0.is_none());
+                    let next = round + 1;
+                    if next < ROUNDS {
+                        probe.phase = Phase::Settling {
+                            since: now,
+                            round: next,
+                        };
+                    } else {
+                        probe.phase = finish(&net, entry, now);
+                    }
+                } else if now - since > CLOSE_TIMEOUT_SECS {
+                    error!(
                     "PROBE_CLAM: FAIL — the loot window never closed within {CLOSE_TIMEOUT_SECS}s"
                 );
-                probe.fails += 1;
-                probe.phase = finish(&net, entry, now);
+                    probe.fails += 1;
+                    probe.phase = finish(&net, entry, now);
+                }
             }
-        }
-        Phase::Cleanup { since } => {
-            // Wait for the removal to land: `AppExit` tears the net thread down within a frame or
-            // two, so a `.additem -1` sent on the way out never reaches the wire.
-            let gone = probe
-                .clam
-                .is_some_and(|guid| (0..16u8).all(|i| store.0.player_pack_slot(i) != Some(guid)));
-            if gone {
-                probe.phase = Phase::Done;
-            } else if now - since > CLEANUP_TIMEOUT_SECS {
-                warn!(
-                    "PROBE_CLAM: the probe's own copy of {entry} is still in the bags after \
+            Phase::Cleanup { since } => {
+                // Wait for the removal to land: `AppExit` tears the net thread down within a frame or
+                // two, so a `.additem -1` sent on the way out never reaches the wire.
+                let gone = probe.clam.is_some_and(|guid| {
+                    (0..16u8).all(|i| store.0.player_pack_slot(i) != Some(guid))
+                });
+                if gone {
+                    probe.phase = Phase::Done;
+                } else if now - since > CLEANUP_TIMEOUT_SECS {
+                    warn!(
+                        "PROBE_CLAM: the probe's own copy of {entry} is still in the bags after \
                      {CLEANUP_TIMEOUT_SECS}s — remove it by hand (`.additem {entry} -1`)"
-                );
-                probe.phase = Phase::Done;
+                    );
+                    probe.phase = Phase::Done;
+                }
+            }
+            Phase::Done => {
+                if probe.exited {
+                    return;
+                }
+                probe.exited = true;
+                report(&probe, entry);
+                // `ProbeExitPlugin::fire_probe_exit`'s pattern: `AppExit` plus a hard backstop, so a
+                // teardown hang cannot leave a client holding the probe account.
+                exit.write(AppExit::Success);
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    warn!("PROBE_CLAM: still alive 5s after AppExit — hard exit");
+                    std::process::exit(0);
+                });
             }
         }
-        Phase::Done => {
-            if probe.exited {
-                return;
-            }
-            probe.exited = true;
-            report(&probe, entry);
-            // `ProbeExitPlugin::fire_probe_exit`'s pattern: `AppExit` plus a hard backstop, so a
-            // teardown hang cannot leave a client holding the probe account.
-            exit.write(AppExit::Success);
-            std::thread::spawn(|| {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                warn!("PROBE_CLAM: still alive 5s after AppExit — hard exit");
-                std::process::exit(0);
-            });
-        }
-    }
+    })
 }
 
 /// Right-click the clam through the live VM's `UseContainerItem`, so the real dispatcher

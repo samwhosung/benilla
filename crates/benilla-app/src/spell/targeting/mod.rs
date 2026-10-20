@@ -448,14 +448,17 @@ pub(crate) fn publish_picks_self(
 /// ([`ScriptCursor::push_view`]). The word's changes signal `CURRENT_SPELL_CAST_CHANGED` where they
 /// are made ([`crate::ui_cast::CastReport::Changed`]).
 pub(crate) fn feed_targeting_to_vm(
-    targeting: Res<SpellTargeting>,
+    mut vm: crate::script_calls::VmWith<(
+        Res<'static, SpellTargeting>,
+        crate::ui_unit::UnitTokens<'static, 'static>,
+    )>,
     checks: BindChecks,
-    tokens: crate::ui_unit::UnitTokens,
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
 ) {
-    if let Some(mut script) = script {
-        push_targeting_view(&mut script, &targeting, &checks, &tokens);
-    }
+    vm.turn(|script, (targeting, tokens)| {
+        if let Some(mut script) = script {
+            push_targeting_view(&mut script, &targeting, &checks, &tokens);
+        }
+    })
 }
 
 /// Push what the VM reads of the targeting word: `SpellIsTargeting`, the pickup reroute's item

@@ -559,42 +559,51 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
         Default::default()
     };
     // No sound during the load edge, as in the reference's `UI_Init` (`0x48fbfa` → `0x49016d`).
-    silenced_ui_load(&mut script, |script| {
-        let _ = load_ingame_ui(script, identity.as_ref(), &roster, version_check);
-        crate::ui_chat::commands::register_dev_commands(script, crate::run_mode::dev_affordances());
-        // The new VM's zoom cells from the persisted CVars, which the reference's statics hold
-        // across the load; the world entry's minimap initializer reseeds them from the CVars again.
-        script.set_minimap_zoom(zoom.0, zoom.1);
-        // The saved-variables file is read after the files set their defaults and before
-        // `VARIABLES_LOADED`, the reference's order (`0x4900a3`, `0x4900b2`); reversed, the
-        // defaults always win. The chat cache restores after `VARIABLES_LOADED` and before any chat
-        // is routed: its `UPDATE_CHAT_WINDOWS` registers each chat frame for its `CHAT_MSG_*`
-        // events (`ChatFrame.lua:1261-1273`).
-        finish_ui_load_with(
-            script,
-            // Before `VARIABLES_LOADED`, whose `UIParent_OnEvent` arm runs the first
-            // `UpdateNameplates()` (`UIParent.lua:231-234`).
-            |script| crate::vplates::seat_legacy_settings(script, &legacy_plates),
-            |script| {
-                crate::ui_chat::restore_chat_looks(world, script);
-                // The UI scale lands on `UIParent` once the files, the addons and
-                // `VARIABLES_LOADED` are done, after the chat reader (`0x4900d6`) and before the
-                // `PLAYER_LOGIN` arm (`0x49011d`), through the display handler (`0x49010e` →
-                // `0x492e90`). So every `OnLoad` sees `UIParent` at scale 1 and the root's size.
-                let display = {
-                    let mut q =
-                        world.query_filtered::<&Window, With<bevy::window::PrimaryWindow>>();
-                    q.single(world).map_or((0, 0), |w| {
-                        (w.width().round() as u32, w.height().round() as u32)
-                    })
-                };
-                let mut none = None;
-                let mut cache = world.get_resource_mut::<super::UiAutoScaleCache>();
-                let cache = cache.as_deref_mut().map_or(&mut none, |c| &mut c.0);
-                script.seat_ui_scale(ui_scale, display, cache);
-            },
-        );
+    // The load is an engine turn: it holds the world, so it cannot lend the host meanwhile, and a
+    // call a file or an `ADDON_LOADED`, `VARIABLES_LOADED` or `PLAYER_LOGIN` handler makes applies
+    // as the load returns, through a host built off the world.
+    script.host_out(|script| {
+        silenced_ui_load(script, |script| {
+            let _ = load_ingame_ui(script, identity.as_ref(), &roster, version_check);
+            crate::ui_chat::commands::register_dev_commands(
+                script,
+                crate::run_mode::dev_affordances(),
+            );
+            // The new VM's zoom cells from the persisted CVars, which the reference's statics hold
+            // across the load; the world entry's minimap initializer reseeds them from the CVars again.
+            script.set_minimap_zoom(zoom.0, zoom.1);
+            // The saved-variables file is read after the files set their defaults and before
+            // `VARIABLES_LOADED`, the reference's order (`0x4900a3`, `0x4900b2`); reversed, the
+            // defaults always win. The chat cache restores after `VARIABLES_LOADED` and before any chat
+            // is routed: its `UPDATE_CHAT_WINDOWS` registers each chat frame for its `CHAT_MSG_*`
+            // events (`ChatFrame.lua:1261-1273`).
+            finish_ui_load_with(
+                script,
+                // Before `VARIABLES_LOADED`, whose `UIParent_OnEvent` arm runs the first
+                // `UpdateNameplates()` (`UIParent.lua:231-234`).
+                |script| crate::vplates::seat_legacy_settings(script, &legacy_plates),
+                |script| {
+                    crate::ui_chat::restore_chat_looks(world, script);
+                    // The UI scale lands on `UIParent` once the files, the addons and
+                    // `VARIABLES_LOADED` are done, after the chat reader (`0x4900d6`) and before the
+                    // `PLAYER_LOGIN` arm (`0x49011d`), through the display handler (`0x49010e` →
+                    // `0x492e90`). So every `OnLoad` sees `UIParent` at scale 1 and the root's size.
+                    let display = {
+                        let mut q =
+                            world.query_filtered::<&Window, With<bevy::window::PrimaryWindow>>();
+                        q.single(world).map_or((0, 0), |w| {
+                            (w.width().round() as u32, w.height().round() as u32)
+                        })
+                    };
+                    let mut none = None;
+                    let mut cache = world.get_resource_mut::<super::UiAutoScaleCache>();
+                    let cache = cache.as_deref_mut().map_or(&mut none, |c| &mut c.0);
+                    script.seat_ui_scale(ui_scale, display, cache);
+                },
+            );
+        });
     });
+    crate::script_calls::apply_waiting(world, &mut script);
     // The load's record goes to `Logs\FrameXML.log` (`0x490187`-`0x4901b6`), after any
     // `LoadAddOn` block the load ran; nothing reaches chat.
     script.finish_ui_load_log();
@@ -802,11 +811,13 @@ fn run_ui_shutdown_head(world: &mut World, loud: bool) {
             let _ = world.run_system_cached(crate::ui_loot::tell_loot_closed);
         }
         if deselected {
-            if let Some(mut script) = world.get_non_send_resource_mut::<UiScript>() {
-                script.set_unit("target", None);
-                script.set_unit("targettarget", None);
-                script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
-            }
+            crate::script_calls::with_hosted_vm(world, |script| {
+                if let Some(script) = script {
+                    script.set_unit("target", None);
+                    script.set_unit("targettarget", None);
+                    script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+                }
+            });
         }
     } else {
         let _ = world.run_system_cached(crate::target::clear_selection_on_world_teardown);
@@ -824,9 +835,11 @@ fn cancel_move_action(world: &mut World) {
         .run_system_cached(crate::player::cancel_move_action_on_ui_shutdown)
         .unwrap_or(false);
     if followed {
-        if let Some(mut script) = world.get_non_send_resource_mut::<UiScript>() {
-            script.fire_event("AUTOFOLLOW_END", vec![]);
-        }
+        crate::script_calls::with_hosted_vm(world, |script| {
+            if let Some(script) = script {
+                script.fire_event("AUTOFOLLOW_END", vec![]);
+            }
+        });
     }
 }
 
@@ -903,9 +916,11 @@ fn close_ui_session(world: &mut World, root: ShutdownRoot) {
         .get_resource::<AddOnIdentity>()
         .and_then(|id| id.0.clone());
     if !ui_never_loaded {
-        if let Some(mut script) = world.get_non_send_resource_mut::<UiScript>() {
-            shutdown_ui_state(&mut script, identity.as_ref());
-        }
+        crate::script_calls::with_hosted_vm(world, |script| {
+            if let Some(script) = script {
+                shutdown_ui_state(script, identity.as_ref());
+            }
+        });
     }
     if silenced {
         unsilence_ui_shutdown(world);
@@ -1011,9 +1026,11 @@ pub(crate) fn shutdown_on_exit(
     let identity = world
         .get_resource::<AddOnIdentity>()
         .and_then(|id| id.0.clone());
-    if let Some(mut script) = world.get_non_send_resource_mut::<UiScript>() {
-        shutdown_ui_state(&mut script, identity.as_ref());
-    }
+    crate::script_calls::with_hosted_vm(world, |script| {
+        if let Some(script) = script {
+            shutdown_ui_state(script, identity.as_ref());
+        }
+    });
     if silenced {
         unsilence_ui_shutdown(world);
     }

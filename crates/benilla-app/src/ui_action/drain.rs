@@ -148,58 +148,61 @@ impl AttackPress<'_, '_> {
 /// so every rung applies: a second click on a chest mid-cast is `0x6e4d43`'s silent same-spell
 /// bail, and a skin while another spell is in flight `0x6e4d97`'s 0x61.
 pub(crate) fn drain_click_casts(
+    mut vm: crate::script_calls::VmWith<(
+        cast_target::CastTargeting<'static, 'static>,
+        CastLadder<'static, 'static>,
+        crate::ui_bind_confirm::BindGate<'static>,
+    )>,
     mut queue: ResMut<crate::ui_action::ClickCasts>,
-    script: Option<NonSendMut<UiScript>>,
-    targeting: cast_target::CastTargeting,
-    mut ladder: CastLadder,
     // Not a `CastLadder` field: Bevy panics on a resource reachable twice from one system.
     ui_errors: Res<UiErrorKeys>,
-    mut gate: crate::ui_bind_confirm::BindGate,
 ) {
-    if queue.0.is_empty() {
-        return;
-    }
-    let ctx = targeting.context();
-    let mut script = script;
-    for cast in std::mem::take(&mut queue.0) {
-        match cast {
-            super::ClickCast::AtObject { spell_id, go_guid } => {
-                debug!("ui_action: gameobject opener casts {spell_id} at {go_guid:#x}");
-                ladder.send_at_object(spell_id, &ctx, go_guid);
-            }
-            super::ClickCast::AtUnit {
-                spell_id,
-                entity,
-                guid,
-            } => {
-                debug!("ui_action: right-click casts {spell_id} at {guid:#x}");
-                ladder.send(
+    vm.turn(|script, (targeting, mut ladder, mut gate)| {
+        if queue.0.is_empty() {
+            return;
+        }
+        let ctx = targeting.context();
+        let mut script = script;
+        for cast in std::mem::take(&mut queue.0) {
+            match cast {
+                super::ClickCast::AtObject { spell_id, go_guid } => {
+                    debug!("ui_action: gameobject opener casts {spell_id} at {go_guid:#x}");
+                    ladder.send_at_object(spell_id, &ctx, go_guid);
+                }
+                super::ClickCast::AtUnit {
                     spell_id,
-                    &targeting.context_at(entity, guid),
-                    crate::spell::CastCommit::Spell,
-                );
-            }
-            // The key goes through the shared `CGItem::Use` fork, as a bag click does.
-            super::ClickCast::Key(it) => {
-                let Some(script) = script.as_deref_mut() else {
-                    continue;
-                };
-                debug!(
-                    "ui_action: gameobject opener uses the key at wire {}/{} on {:?}",
-                    it.bag_index, it.slot, it.on_object
-                );
-                crate::ui_items::send_item_use(
-                    it,
-                    &ctx,
-                    &mut ladder,
-                    script,
-                    &mut gate,
-                    false,
-                    &ui_errors,
-                );
+                    entity,
+                    guid,
+                } => {
+                    debug!("ui_action: right-click casts {spell_id} at {guid:#x}");
+                    ladder.send(
+                        spell_id,
+                        &targeting.context_at(entity, guid),
+                        crate::spell::CastCommit::Spell,
+                    );
+                }
+                // The key goes through the shared `CGItem::Use` fork, as a bag click does.
+                super::ClickCast::Key(it) => {
+                    let Some(script) = script.as_deref_mut() else {
+                        continue;
+                    };
+                    debug!(
+                        "ui_action: gameobject opener uses the key at wire {}/{} on {:?}",
+                        it.bag_index, it.slot, it.on_object
+                    );
+                    crate::ui_items::send_item_use(
+                        it,
+                        &ctx,
+                        &mut ladder,
+                        script,
+                        &mut gate,
+                        false,
+                        &ui_errors,
+                    );
+                }
             }
         }
-    }
+    })
 }
 
 /// What a `UseAction` press reads and writes.
@@ -426,37 +429,38 @@ pub(crate) fn use_action(
 /// Applies the queued `PickupAction`/`PlaceAction` writes (packed 0 clears) to the store, which
 /// the VM already mirrors, marks it dirty for the feed and sends each as `CMSG_SET_ACTION_BUTTON`.
 pub(crate) fn drain_action_sets(
-    script: Option<NonSendMut<UiScript>>,
-    mut actions: ResMut<PlayerActions>,
+    mut vm: crate::script_calls::VmWith<ResMut<'static, PlayerActions>>,
     commands: Res<NetCommands>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for (lua_id, packed) in script.take_action_sets() {
-        let Ok(slot) = u8::try_from(lua_id.saturating_sub(1)) else {
-            debug!("ui_action: set_action_button lua id {lua_id} out of range — ignored");
-            continue;
+    vm.turn(|script, mut actions| {
+        let Some(script) = script else {
+            return;
         };
-        if packed == 0 {
-            actions.buttons.remove(&slot);
-        } else {
-            actions.buttons.insert(
-                slot,
-                ActionButton {
+        for (lua_id, packed) in script.take_action_sets() {
+            let Ok(slot) = u8::try_from(lua_id.saturating_sub(1)) else {
+                debug!("ui_action: set_action_button lua id {lua_id} out of range — ignored");
+                continue;
+            };
+            if packed == 0 {
+                actions.buttons.remove(&slot);
+            } else {
+                actions.buttons.insert(
                     slot,
-                    action: packed & 0x00FF_FFFF,
-                    kind: (packed >> 24) as u8,
-                },
-            );
-        }
-        actions.dirty = true;
-        debug!(
+                    ActionButton {
+                        slot,
+                        action: packed & 0x00FF_FFFF,
+                        kind: (packed >> 24) as u8,
+                    },
+                );
+            }
+            actions.dirty = true;
+            debug!(
             "ui_action: set_action_button lua {lua_id} (wire slot {slot}) packed {packed:#010x}"
         );
-        let _ = commands.0.send(ClientCommand::SetActionButton {
-            button: slot,
-            packed,
-        });
-    }
+            let _ = commands.0.send(ClientCommand::SetActionButton {
+                button: slot,
+                packed,
+            });
+        }
+    })
 }

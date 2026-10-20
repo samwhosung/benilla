@@ -286,22 +286,23 @@ pub(crate) fn note_closed(world: &mut World, window: NpcWindow) {
     world.resource_mut::<InteractLatch>().closes[window.index()] += 1;
 }
 
-/// Run `f` on the VM, if one is mounted, with no event: a core's own pushes.
+/// Run `f` on the VM, if one is mounted, with no event: a core's own pushes. The host is lent all
+/// the same, as for every entry that reaches the VM ([`crate::script_calls`]).
 pub(crate) fn with_script(world: &mut World, f: impl FnOnce(&mut UiScript)) {
-    if let Some(mut script) = world.get_non_send_resource_mut::<UiScript>() {
-        f(&mut script);
-    }
+    crate::script_calls::with_hosted_vm(world, |script| {
+        if let Some(script) = script {
+            f(script);
+        }
+    });
 }
 
-/// A core's event: `f` fires it into the VM, then every close verb its handlers called runs, in
-/// `0x493310`'s order, as the reference's verb would have inside the fire. With no VM there is no
-/// handler to call one.
+/// A core's event: `f` fires it into the VM with the host lent, so a handler's script calls apply
+/// inside their verbs; then every close verb its handlers called runs, in `0x493310`'s order, as
+/// the reference's verb would have inside the fire. With no VM there is no handler to call one.
 pub(crate) fn fire(world: &mut World, f: impl FnOnce(&mut UiScript)) {
-    {
-        let Some(mut script) = world.get_non_send_resource_mut::<UiScript>() else {
-            return;
-        };
-        f(&mut script);
+    let fired = crate::script_calls::with_hosted_vm(world, |script| script.map(f).is_some());
+    if !fired {
+        return;
     }
     let depth = {
         let mut latch = world.get_resource_or_init::<InteractLatch>();

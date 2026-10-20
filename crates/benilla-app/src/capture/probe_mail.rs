@@ -176,13 +176,14 @@ fn mail_probe(
     mut probe: ResMut<MailProbe>,
     mail: Res<MailOpen>,
     mut windows: Commands,
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     self_player: Query<(), With<SelfPlayer>>,
     player: Res<Player>,
     objects: Query<(&Guid, &NetEntity, &ObjectStore, &Transform), Without<SelfPlayer>>,
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    hosted_vm.run(|script| {
     if self_player.is_empty() {
         return; // not in-world yet
     }
@@ -740,4 +741,5 @@ fn mail_probe(
             });
         }
     }
+})
 }

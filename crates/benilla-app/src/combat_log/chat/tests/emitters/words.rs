@@ -287,12 +287,7 @@ fn a_standing_change_raises_faction() {
             Some(&factions),
             &mut log,
         );
-        words(
-            &log.pending_combat()
-                .into_iter()
-                .cloned()
-                .collect::<Vec<_>>(),
-        )
+        words(&log.pending_combat())
     };
     assert_eq!(
         word(25),

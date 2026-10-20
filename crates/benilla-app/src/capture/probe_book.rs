@@ -203,18 +203,18 @@ fn report(label: &str, s: &[Sample]) {
 }
 
 fn book_probe(
+    mut vm: crate::script_calls::VmWith<ResMut<'static, ItemTextOpen>>,
     time: ProbeClock,
     mut probe: ResMut<BookProbe>,
     mut wanted: ResMut<UiCostWanted>,
     cost: Res<UiFrameCost>,
-    mut reader: ResMut<ItemTextOpen>,
-    script: Option<NonSendMut<UiScript>>,
     self_player: Query<(), With<SelfPlayer>>,
     player: Res<Player>,
     objects: Query<(&Guid, &NetEntity, &ObjectStore, &Transform), Without<SelfPlayer>>,
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    vm.turn(|script, mut reader| {
     if self_player.is_empty() {
         return; // not in-world yet
     }
@@ -319,4 +319,5 @@ fn book_probe(
             });
         }
     }
+})
 }

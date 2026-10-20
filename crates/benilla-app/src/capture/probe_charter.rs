@@ -330,27 +330,28 @@ fn charter_probe(
     registrar: Res<GuildRegistrarState>,
     objects: Objects,
     items: Res<Items>,
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     player: Res<Player>,
     units: Query<(&Guid, &NetEntity, &ObjectStore, &Transform), Without<SelfPlayer>>,
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    let Ok(store) = self_q.single() else {
-        return; // not in-world yet
-    };
-    let Some(script) = script else {
-        return; // no UI VM (headless net-only)
-    };
-    let now = time.elapsed_secs_f64();
-    let phase = probe.phase;
+    hosted_vm.run(|script| {
+        let Ok(store) = self_q.single() else {
+            return; // not in-world yet
+        };
+        let Some(script) = script else {
+            return; // no UI VM (headless net-only)
+        };
+        let now = time.elapsed_secs_f64();
+        let phase = probe.phase;
 
-    match phase {
-        Phase::Wait => {
-            // The refusal channel, installed before the first verb.
-            if let Err(e) = script.run(
-                r#"
+        match phase {
+            Phase::Wait => {
+                // The refusal channel, installed before the first verb.
+                if let Err(e) = script.run(
+                    r#"
                 if not ProbeCharterHooked then
                     ProbeCharterHooked = true
                     ProbeCharterLines = {}
@@ -362,444 +363,446 @@ fn charter_probe(
                     end)
                 end
                 "#,
-            ) {
-                error!("PROBE_CHARTER: installing the refusal hook: {e}");
-            }
-            // Money first: with a creature selected, `.modify money` answers "no character
-            // selected".
-            let _ = net.0.send(ClientCommand::Chat {
-                kind: ChatKind::Say,
-                target: None,
-                text: format!(".modify money {FUND_COPPER}"),
-                language: None,
-            });
-            info!(
+                ) {
+                    error!("PROBE_CHARTER: installing the refusal hook: {e}");
+                }
+                // Money first: with a creature selected, `.modify money` answers "no character
+                // selected".
+                let _ = net.0.send(ClientCommand::Chat {
+                    kind: ChatKind::Say,
+                    target: None,
+                    text: format!(".modify money {FUND_COPPER}"),
+                    language: None,
+                });
+                info!(
                 "PROBE_CHARTER: 0 (precheck) — funding the body with {FUND_COPPER} copper so the \
                  buy cannot fail for money"
             );
-            probe.phase = Phase::Unguild {
-                since: now,
-                sent: false,
-            };
-        }
-        // ── Step 0: the preconditions ───────────────────────────────────────────────────────
-        // A buy is refused silently while the buyer is in a guild (`PetitionsHandler.cpp:66`), so
-        // any guild an earlier run founded is left first; FAIL if `PLAYER_GUILDID` never clears.
-        Phase::Unguild { since, sent } => {
-            let guild_id = store.0.player_guild_id();
-            if !sent {
-                if guild_id == 0 {
-                    probe.pass(
+                probe.phase = Phase::Unguild {
+                    since: now,
+                    sent: false,
+                };
+            }
+            // ── Step 0: the preconditions ───────────────────────────────────────────────────────
+            // A buy is refused silently while the buyer is in a guild (`PetitionsHandler.cpp:66`), so
+            // any guild an earlier run founded is left first; FAIL if `PLAYER_GUILDID` never clears.
+            Phase::Unguild { since, sent } => {
+                let guild_id = store.0.player_guild_id();
+                if !sent {
+                    if guild_id == 0 {
+                        probe.pass(
                         0,
                         "precheck",
                         "not in a guild — nothing to leave, and the buy's silent guilded-refusal \
                          cannot apply"
                             .to_string(),
                     );
-                    return hop(&mut probe, &net, now);
-                }
-                // A guild master cannot leave (`ERR_GUILD_LEADER_LEAVE`), so rank 0 disbands.
-                // The rank is read off the descriptor, not `IsGuildLeader()`, whose feed can lag
-                // a frame behind on the first frame in-world.
-                let verb = if store.0.player_guild_rank() == 0 {
-                    "GuildDisband()"
-                } else {
-                    "GuildLeave()"
-                };
-                if let Err(e) = script.run(verb) {
+                        return hop(&mut probe, &net, now);
+                    }
+                    // A guild master cannot leave (`ERR_GUILD_LEADER_LEAVE`), so rank 0 disbands.
+                    // The rank is read off the descriptor, not `IsGuildLeader()`, whose feed can lag
+                    // a frame behind on the first frame in-world.
+                    let verb = if store.0.player_guild_rank() == 0 {
+                        "GuildDisband()"
+                    } else {
+                        "GuildLeave()"
+                    };
+                    if let Err(e) = script.run(verb) {
+                        probe.fail(
+                            0,
+                            "precheck",
+                            format!(
+                            "in guild {guild_id} and {verb} would not run in the live VM: {e} — \
+                             the buy in step 5 would be refused silently"
+                        ),
+                        );
+                        probe.phase = Phase::Done;
+                        return;
+                    }
+                    info!(
+                    "PROBE_CHARTER: 0 (precheck) — still in guild {guild_id} from an earlier run; \
+                     {verb} sent through the live VM"
+                );
+                    probe.phase = Phase::Unguild {
+                        since: now,
+                        sent: true,
+                    };
+                } else if guild_id == 0 {
+                    probe.pass(
+                        0,
+                        "precheck",
+                        "the guild an earlier run founded is gone — PLAYER_GUILDID is back to 0"
+                            .to_string(),
+                    );
+                    hop(&mut probe, &net, now);
+                } else if now - since > GUILD_CLEAR_TIMEOUT_SECS {
                     probe.fail(
                         0,
                         "precheck",
                         format!(
-                            "in guild {guild_id} and {verb} would not run in the live VM: {e} — \
-                             the buy in step 5 would be refused silently"
-                        ),
-                    );
-                    probe.phase = Phase::Done;
-                    return;
-                }
-                info!(
-                    "PROBE_CHARTER: 0 (precheck) — still in guild {guild_id} from an earlier run; \
-                     {verb} sent through the live VM"
-                );
-                probe.phase = Phase::Unguild {
-                    since: now,
-                    sent: true,
-                };
-            } else if guild_id == 0 {
-                probe.pass(
-                    0,
-                    "precheck",
-                    "the guild an earlier run founded is gone — PLAYER_GUILDID is back to 0"
-                        .to_string(),
-                );
-                hop(&mut probe, &net, now);
-            } else if now - since > GUILD_CLEAR_TIMEOUT_SECS {
-                probe.fail(
-                    0,
-                    "precheck",
-                    format!(
                         "still in guild {guild_id} {GUILD_CLEAR_TIMEOUT_SECS}s after the leave — \
                          the buy in step 5 would be refused SILENTLY (a bare `return` at \
                          PetitionsHandler.cpp:66), so the run is stopped here rather than \
                          reporting that as a wire failure. Lines seen: {:?}",
                         probe_lines(&script)
                     ),
-                );
-                probe.phase = Phase::Done;
+                    );
+                    probe.phase = Phase::Done;
+                }
             }
-        }
-        // ── Step 1: the hop ─────────────────────────────────────────────────────────────────
-        // A SKIP here is environmental: the `.go` was refused or Stormwind never streamed.
-        Phase::Settling { sent_at } => {
-            if now - sent_at < SETTLE_SECS {
-                return;
-            }
-            let me = player.pos;
-            let found = units.iter().find(|(_, net_e, store, tf)| {
-                net_e.kind == EntityKind::Unit
-                    && (store.0.object_entry() == Some(REGISTRAR_ENTRY)
-                        || store.0.unit_npc_flags() & npc_flags::PETITIONER != 0)
-                    && tf.translation.distance(me) < SCAN_RANGE
-            });
-            if let Some((guid, ..)) = found {
-                probe.pass(
-                    1,
-                    "hop",
-                    format!(
-                        "registrar {:#x} streamed within {SCAN_RANGE}yd of the landing",
-                        guid.0
-                    ),
-                );
-                probe.registrar = Some(guid.0);
-                let _ = net.0.send(ClientCommand::GossipHello { guid: guid.0 });
-                info!("PROBE_CHARTER: 2 (menu) GossipHello({:#x}) sent", guid.0);
-                probe.phase = Phase::Menu { sent_at: now };
-            } else if now - sent_at > SCAN_TIMEOUT_SECS {
-                probe.skip(
-                    1,
-                    "hop",
-                    format!(
+            // ── Step 1: the hop ─────────────────────────────────────────────────────────────────
+            // A SKIP here is environmental: the `.go` was refused or Stormwind never streamed.
+            Phase::Settling { sent_at } => {
+                if now - sent_at < SETTLE_SECS {
+                    return;
+                }
+                let me = player.pos;
+                let found = units.iter().find(|(_, net_e, store, tf)| {
+                    net_e.kind == EntityKind::Unit
+                        && (store.0.object_entry() == Some(REGISTRAR_ENTRY)
+                            || store.0.unit_npc_flags() & npc_flags::PETITIONER != 0)
+                        && tf.translation.distance(me) < SCAN_RANGE
+                });
+                if let Some((guid, ..)) = found {
+                    probe.pass(
+                        1,
+                        "hop",
+                        format!(
+                            "registrar {:#x} streamed within {SCAN_RANGE}yd of the landing",
+                            guid.0
+                        ),
+                    );
+                    probe.registrar = Some(guid.0);
+                    let _ = net.0.send(ClientCommand::GossipHello { guid: guid.0 });
+                    info!("PROBE_CHARTER: 2 (menu) GossipHello({:#x}) sent", guid.0);
+                    probe.phase = Phase::Menu { sent_at: now };
+                } else if now - sent_at > SCAN_TIMEOUT_SECS {
+                    probe.skip(
+                        1,
+                        "hop",
+                        format!(
                         "no entry {REGISTRAR_ENTRY} / petitioner-flagged unit streamed in within \
                          {SCAN_TIMEOUT_SECS}s of the hop (the `.go` may have been refused, or \
                          Stormwind never streamed) — environmental, not a defect"
                     ),
-                );
-                probe.phase = Phase::Done;
-            }
-        }
-        // ── Step 2: the menu ────────────────────────────────────────────────────────────────
-        // Waits for the menu in the VM, not the packet: `ui_gossip` holds a first visit's menu
-        // until `SMSG_NPC_TEXT_UPDATE` answers the greeting query.
-        Phase::Menu { sent_at } => {
-            let Some(npc) = probe.registrar else {
-                probe.phase = Phase::Done;
-                return;
-            };
-            let open = gossip.npc == Some(npc) && !gossip.options.is_empty();
-            let pushed = vm_gossip_values(&script) as usize == gossip.options.len() * 2;
-            if open && pushed {
-                probe.pass(
-                    2,
-                    "menu",
-                    format!(
-                        "{} option(s) open on {npc:#x}: {}",
-                        gossip.options.len(),
-                        gossip
-                            .options
-                            .iter()
-                            .map(|o| format!("[{} icon={} {:?}]", o.index, o.icon, o.message))
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    ),
-                );
-                assert_icon_and_select(&mut probe, &gossip, &script, &net, npc, now);
-            } else if now - sent_at > MENU_TIMEOUT_SECS {
-                probe.fail(
-                    2,
-                    "menu",
-                    format!(
-                        "no gossip menu for {npc:#x} within {MENU_TIMEOUT_SECS}s (parsed \
-                         npc={:?} options={} vm_values={})",
-                        gossip.npc,
-                        gossip.options.len(),
-                        vm_gossip_values(&script)
-                    ),
-                );
-                probe.phase = Phase::Done;
-            }
-        }
-        // ── Step 4's second half: the window ────────────────────────────────────────────────
-        // `SMSG_PETITION_SHOWLIST` must fire `GUILD_REGISTRAR_SHOW`, and `GetGuildCharterCost()`
-        // must read the showlist's `charterCost`, which vmangos always sends as 1000.
-        Phase::Registrar { since } => {
-            let Some(npc) = probe.registrar else {
-                probe.phase = Phase::Done;
-                return;
-            };
-            let parked = registrar.npc() == Some(npc);
-            let visible = vm_visible(&script, "GuildRegistrarFrame");
-            let cost = vm_charter_cost(&script);
-            if parked && visible && cost == CHARTER_COST_COPPER {
-                // The portrait's `"npc"` token is reported, not asserted, and sampled up to
-                // `REGISTRAR_TOKEN_SETTLE_SECS` late: `feed_interact_npc` is unordered against
-                // the apply pass, so it is empty on the frame the window opens.
-                let token = script
-                    .eval::<String>("return UnitName(\"npc\") or \"\"")
-                    .unwrap_or_default();
-                if token.is_empty() && now - since < REGISTRAR_TOKEN_SETTLE_SECS {
-                    return;
+                    );
+                    probe.phase = Phase::Done;
                 }
-                let row = probe.charter_row;
-                probe.pass(
-                    4,
-                    "registrar",
-                    format!(
+            }
+            // ── Step 2: the menu ────────────────────────────────────────────────────────────────
+            // Waits for the menu in the VM, not the packet: `ui_gossip` holds a first visit's menu
+            // until `SMSG_NPC_TEXT_UPDATE` answers the greeting query.
+            Phase::Menu { sent_at } => {
+                let Some(npc) = probe.registrar else {
+                    probe.phase = Phase::Done;
+                    return;
+                };
+                let open = gossip.npc == Some(npc) && !gossip.options.is_empty();
+                let pushed = vm_gossip_values(&script) as usize == gossip.options.len() * 2;
+                if open && pushed {
+                    probe.pass(
+                        2,
+                        "menu",
+                        format!(
+                            "{} option(s) open on {npc:#x}: {}",
+                            gossip.options.len(),
+                            gossip
+                                .options
+                                .iter()
+                                .map(|o| format!("[{} icon={} {:?}]", o.index, o.icon, o.message))
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        ),
+                    );
+                    assert_icon_and_select(&mut probe, &gossip, &script, &net, npc, now);
+                } else if now - sent_at > MENU_TIMEOUT_SECS {
+                    probe.fail(
+                        2,
+                        "menu",
+                        format!(
+                            "no gossip menu for {npc:#x} within {MENU_TIMEOUT_SECS}s (parsed \
+                         npc={:?} options={} vm_values={})",
+                            gossip.npc,
+                            gossip.options.len(),
+                            vm_gossip_values(&script)
+                        ),
+                    );
+                    probe.phase = Phase::Done;
+                }
+            }
+            // ── Step 4's second half: the window ────────────────────────────────────────────────
+            // `SMSG_PETITION_SHOWLIST` must fire `GUILD_REGISTRAR_SHOW`, and `GetGuildCharterCost()`
+            // must read the showlist's `charterCost`, which vmangos always sends as 1000.
+            Phase::Registrar { since } => {
+                let Some(npc) = probe.registrar else {
+                    probe.phase = Phase::Done;
+                    return;
+                };
+                let parked = registrar.npc() == Some(npc);
+                let visible = vm_visible(&script, "GuildRegistrarFrame");
+                let cost = vm_charter_cost(&script);
+                if parked && visible && cost == CHARTER_COST_COPPER {
+                    // The portrait's `"npc"` token is reported, not asserted, and sampled up to
+                    // `REGISTRAR_TOKEN_SETTLE_SECS` late: `feed_interact_npc` is unordered against
+                    // the apply pass, so it is empty on the frame the window opens.
+                    let token = script
+                        .eval::<String>("return UnitName(\"npc\") or \"\"")
+                        .unwrap_or_default();
+                    if token.is_empty() && now - since < REGISTRAR_TOKEN_SETTLE_SECS {
+                        return;
+                    }
+                    let row = probe.charter_row;
+                    probe.pass(
+                        4,
+                        "registrar",
+                        format!(
                         "wire row {row:?} selected: SMSG_PETITION_SHOWLIST parked on {npc:#x}, \
                          GUILD_REGISTRAR_SHOW opened GuildRegistrarFrame, and \
                          GetGuildCharterCost() reads {cost} copper (portrait token \
                          UnitName(\"npc\") = {token:?})"
                     ),
-                );
-                probe.phase = Phase::Buying {
-                    since: now,
-                    sent: false,
-                };
-            } else if parked && visible && cost != CHARTER_COST_COPPER {
-                // The window opened, so the packet parsed: a value bug, not a wire one.
-                probe.fail(
-                    4,
-                    "registrar",
-                    format!(
+                    );
+                    probe.phase = Phase::Buying {
+                        since: now,
+                        sent: false,
+                    };
+                } else if parked && visible && cost != CHARTER_COST_COPPER {
+                    // The window opened, so the packet parsed: a value bug, not a wire one.
+                    probe.fail(
+                        4,
+                        "registrar",
+                        format!(
                         "the registrar opened on {npc:#x} but GetGuildCharterCost() reads {cost}, \
                          not {CHARTER_COST_COPPER} (vmangos GUILD_CHARTER_COST, \
                          PetitionsHandler.cpp:38) — the showlist row's charterCost is not what \
                          the getter reads, or the visible-row `&1` rule picked the wrong row"
                     ),
-                );
-                probe.phase = Phase::Done;
-            } else if now - since > REGISTRAR_TIMEOUT_SECS {
-                probe.fail(
-                    4,
-                    "registrar",
-                    format!(
-                        "no registrar window within {REGISTRAR_TIMEOUT_SECS}s of the select: \
+                    );
+                    probe.phase = Phase::Done;
+                } else if now - since > REGISTRAR_TIMEOUT_SECS {
+                    probe.fail(
+                        4,
+                        "registrar",
+                        format!(
+                            "no registrar window within {REGISTRAR_TIMEOUT_SECS}s of the select: \
                          GuildRegistrarState npc={:?} (wanted {npc:#x}), \
                          GuildRegistrarFrame:IsVisible()={visible}, GetGuildCharterCost()={cost}. \
                          An SMSG_PETITION_SHOWLIST with no parse arm at all \
                          falls through to ServerPacket::Other — that is what this reading looks \
                          like. Lines seen: {:?}",
-                        registrar.npc(),
-                        probe_lines(&script)
-                    ),
-                );
-                probe.phase = Phase::Done;
-            }
-        }
-        // ── Step 5: the buy ─────────────────────────────────────────────────────────────────
-        // `GuildRegistrar_ShowPurchaseFrame()` then the Purchase button's `BuyGuildCharter(name)`.
-        // The stock button also hides the window (`GuildRegistrarFrame.xml:269-270`); the probe
-        // does not, and step 6's `PetitionFrame` displaces it (both left, pushable 0,
-        // `UIParent.lua:33-34`). A successful buy has no reply, only the item
-        // (`PetitionsHandler.cpp:130`); of the refusals only a taken name says anything.
-        Phase::Buying { since, sent } => {
-            if !sent {
-                let name = probe_guild_name("Probe Charter");
-                if let Err(e) = script.run(&format!(
-                    "GuildRegistrar_ShowPurchaseFrame() BuyGuildCharter(\"{name}\")"
-                )) {
-                    probe.skip(
-                        5,
-                        "buy",
-                        format!(
-                            "the purchase chunk would not run in the live VM: {e} \
-                             (environmental, not a wire failure)"
+                            registrar.npc(),
+                            probe_lines(&script)
                         ),
                     );
                     probe.phase = Phase::Done;
-                    return;
                 }
-                info!(
-                    "PROBE_CHARTER: 5 (buy) — GuildRegistrar_ShowPurchaseFrame() then \
+            }
+            // ── Step 5: the buy ─────────────────────────────────────────────────────────────────
+            // `GuildRegistrar_ShowPurchaseFrame()` then the Purchase button's `BuyGuildCharter(name)`.
+            // The stock button also hides the window (`GuildRegistrarFrame.xml:269-270`); the probe
+            // does not, and step 6's `PetitionFrame` displaces it (both left, pushable 0,
+            // `UIParent.lua:33-34`). A successful buy has no reply, only the item
+            // (`PetitionsHandler.cpp:130`); of the refusals only a taken name says anything.
+            Phase::Buying { since, sent } => {
+                if !sent {
+                    let name = probe_guild_name("Probe Charter");
+                    if let Err(e) = script.run(&format!(
+                        "GuildRegistrar_ShowPurchaseFrame() BuyGuildCharter(\"{name}\")"
+                    )) {
+                        probe.skip(
+                            5,
+                            "buy",
+                            format!(
+                                "the purchase chunk would not run in the live VM: {e} \
+                             (environmental, not a wire failure)"
+                            ),
+                        );
+                        probe.phase = Phase::Done;
+                        return;
+                    }
+                    info!(
+                        "PROBE_CHARTER: 5 (buy) — GuildRegistrar_ShowPurchaseFrame() then \
                      BuyGuildCharter({name:?}) run in the live VM; waiting for item \
                      {CHARTER_ITEM_ENTRY} to reach the bags"
+                    );
+                    probe.bought = name;
+                    probe.phase = Phase::Buying {
+                        since: now,
+                        sent: true,
+                    };
+                    return;
+                }
+                let found = find_item(
+                    &store.0,
+                    &objects,
+                    CHARTER_ITEM_ENTRY,
+                    ItemSearch::default(),
                 );
-                probe.bought = name;
-                probe.phase = Phase::Buying {
-                    since: now,
-                    sent: true,
-                };
-                return;
-            }
-            let found = find_item(
-                &store.0,
-                &objects,
-                CHARTER_ITEM_ENTRY,
-                ItemSearch::default(),
-            );
-            // The template must have landed too: the click's charter arm tests its
-            // `ITEM_FLAG_CHARTER`. Folded into one `Option` so a missing template still times out.
-            let ready = found.and_then(|(bag_index, slot, guid)| {
-                items
-                    .template(CHARTER_ITEM_ENTRY, guid, Ask::New(&net))
-                    .map(|t| (bag_index, slot, guid, t.flags))
-            });
-            if let Some((bag_index, slot, guid, flags)) = ready {
-                if flags & ITEM_FLAG_CHARTER == 0 {
-                    probe.fail(
-                        5,
-                        "buy",
-                        format!(
+                // The template must have landed too: the click's charter arm tests its
+                // `ITEM_FLAG_CHARTER`. Folded into one `Option` so a missing template still times out.
+                let ready = found.and_then(|(bag_index, slot, guid)| {
+                    items
+                        .template(CHARTER_ITEM_ENTRY, guid, Ask::New(&net))
+                        .map(|t| (bag_index, slot, guid, t.flags))
+                });
+                if let Some((bag_index, slot, guid, flags)) = ready {
+                    if flags & ITEM_FLAG_CHARTER == 0 {
+                        probe.fail(
+                            5,
+                            "buy",
+                            format!(
                             "item {CHARTER_ITEM_ENTRY} arrived at wire {bag_index}/{slot} but its \
                              template flags are {flags:#x}, with no ITEM_FLAG_CHARTER \
                              ({ITEM_FLAG_CHARTER:#x}) — the live server disagrees with the world \
                              DB's `flags = 8192`, and the item-use fork's charter arm cannot fire"
                         ),
+                        );
+                        probe.charter = Some((bag_index, slot, guid));
+                        probe.phase = Phase::Destroying {
+                            since: now,
+                            sent: false,
+                        };
+                        return;
+                    }
+                    probe.pass(
+                        5,
+                        "buy",
+                        format!(
+                            "charter {guid:#x} (entry {CHARTER_ITEM_ENTRY}, template flags \
+                         {flags:#x}) is in the bags at wire {bag_index}/{slot} — the only \
+                         acknowledgement a successful buy has"
+                        ),
                     );
                     probe.charter = Some((bag_index, slot, guid));
-                    probe.phase = Phase::Destroying {
+                    probe.phase = Phase::Opening {
                         since: now,
                         sent: false,
                     };
-                    return;
-                }
-                probe.pass(
-                    5,
-                    "buy",
-                    format!(
-                        "charter {guid:#x} (entry {CHARTER_ITEM_ENTRY}, template flags \
-                         {flags:#x}) is in the bags at wire {bag_index}/{slot} — the only \
-                         acknowledgement a successful buy has"
-                    ),
-                );
-                probe.charter = Some((bag_index, slot, guid));
-                probe.phase = Phase::Opening {
-                    since: now,
-                    sent: false,
-                };
-            } else if now - since > BUY_TIMEOUT_SECS {
-                let bought = probe.bought.clone();
-                probe.fail(
-                    5,
-                    "buy",
-                    format!(
-                        "no usable item {CHARTER_ITEM_ENTRY} in the bags {BUY_TIMEOUT_SECS}s \
+                } else if now - since > BUY_TIMEOUT_SECS {
+                    let bought = probe.bought.clone();
+                    probe.fail(
+                        5,
+                        "buy",
+                        format!(
+                            "no usable item {CHARTER_ITEM_ENTRY} in the bags {BUY_TIMEOUT_SECS}s \
                          after BuyGuildCharter({bought:?}) — find_item says {found:?} and its \
                          template {}. Nothing acks a buy, so a missing item is either a send that \
                          never happened or one of vmangos's four refusals (already guilded, \
                          already owns a petition, the name is taken/invalid, not enough money); an \
                          item present with no template is the ask-once ItemQuery going \
                          unanswered. Lines seen: {:?}",
-                        if found.is_some() {
-                            "never answered"
-                        } else {
-                            "was never asked for"
-                        },
-                        probe_lines(&script)
-                    ),
-                );
-                // A charter seen without a template still goes to the cleanup.
-                probe.charter = found;
-                probe.phase = if found.is_some() {
-                    Phase::Destroying {
-                        since: now,
-                        sent: false,
-                    }
-                } else {
-                    Phase::Done
-                };
+                            if found.is_some() {
+                                "never answered"
+                            } else {
+                                "was never asked for"
+                            },
+                            probe_lines(&script)
+                        ),
+                    );
+                    // A charter seen without a template still goes to the cleanup.
+                    probe.charter = found;
+                    probe.phase = if found.is_some() {
+                        Phase::Destroying {
+                            since: now,
+                            sent: false,
+                        }
+                    } else {
+                        Phase::Done
+                    };
+                }
             }
-        }
-        // ── Step 6: the item-use fork ───────────────────────────────────────────────────────
-        // A real bag right-click through `UseContainerItem`, so `use_container_item` reaches
-        // `ItemUseRoute::ShowPetition`. A FAIL is either the fork missing the charter arm or
-        // `SMSG_PETITION_SHOW_SIGNATURES` never becoming `PETITION_SHOW`. No getter exposes the
-        // open charter's item guid, so its identity rests on no window being up before the click.
-        Phase::Opening { since, sent } => {
-            let Some((bag_index, slot, guid)) = probe.charter else {
-                probe.phase = Phase::Done;
-                return;
-            };
-            if !sent {
-                // The control: a window already up would make the step meaningless.
-                if vm_visible(&script, "PetitionFrame") {
-                    probe.fail(
+            // ── Step 6: the item-use fork ───────────────────────────────────────────────────────
+            // A real bag right-click through `UseContainerItem`, so `use_container_item` reaches
+            // `ItemUseRoute::ShowPetition`. A FAIL is either the fork missing the charter arm or
+            // `SMSG_PETITION_SHOW_SIGNATURES` never becoming `PETITION_SHOW`. No getter exposes the
+            // open charter's item guid, so its identity rests on no window being up before the click.
+            Phase::Opening { since, sent } => {
+                let Some((bag_index, slot, guid)) = probe.charter else {
+                    probe.phase = Phase::Done;
+                    return;
+                };
+                if !sent {
+                    // The control: a window already up would make the step meaningless.
+                    if vm_visible(&script, "PetitionFrame") {
+                        probe.fail(
                         6,
                         "open",
                         "PetitionFrame was ALREADY visible before the click — the control failed, \
                          so nothing this step could read would be evidence"
                             .to_string(),
                     );
-                    probe.phase = Phase::Destroying {
-                        since: now,
-                        sent: false,
-                    };
-                    return;
-                }
-                let Some((container, lua_slot)) = lua_bag_pos(bag_index, slot) else {
-                    probe.skip(
-                        6,
-                        "open",
-                        format!(
-                            "the charter landed at wire {bag_index}/{slot}, which is not a \
+                        probe.phase = Phase::Destroying {
+                            since: now,
+                            sent: false,
+                        };
+                        return;
+                    }
+                    let Some((container, lua_slot)) = lua_bag_pos(bag_index, slot) else {
+                        probe.skip(
+                            6,
+                            "open",
+                            format!(
+                                "the charter landed at wire {bag_index}/{slot}, which is not a \
                              position a bag right-click can address — refusing to click a slot \
                              the probe cannot name"
-                        ),
-                    );
-                    probe.phase = Phase::Destroying {
-                        since: now,
-                        sent: false,
+                            ),
+                        );
+                        probe.phase = Phase::Destroying {
+                            since: now,
+                            sent: false,
+                        };
+                        return;
                     };
-                    return;
-                };
-                if let Err(e) = script.run(&format!("UseContainerItem({container}, {lua_slot})")) {
-                    probe.skip(
-                        6,
-                        "open",
-                        format!("the click chunk did not run in the live VM: {e}"),
-                    );
-                    probe.phase = Phase::Destroying {
-                        since: now,
-                        sent: false,
-                    };
-                    return;
-                }
-                info!(
+                    if let Err(e) =
+                        script.run(&format!("UseContainerItem({container}, {lua_slot})"))
+                    {
+                        probe.skip(
+                            6,
+                            "open",
+                            format!("the click chunk did not run in the live VM: {e}"),
+                        );
+                        probe.phase = Phase::Destroying {
+                            since: now,
+                            sent: false,
+                        };
+                        return;
+                    }
+                    info!(
                     "PROBE_CHARTER: 6 (open) — UseContainerItem({container}, {lua_slot}) through \
                      the live VM for charter {guid:#x} (wire {bag_index}/{slot})"
                 );
-                probe.phase = Phase::Opening {
-                    since: now,
-                    sent: true,
-                };
-                return;
-            }
-            let visible = vm_visible(&script, "PetitionFrame");
-            let kind = vm_petition_str(&script, 1);
-            let originator = vm_is_originator(&script);
-            let names = vm_num_names(&script);
-            if visible
-                && kind == benilla_ui::script::PETITION_TYPE_CHARTER
-                && originator == 1
-                && names == FRESH_SIGNATURES
-            {
-                let at_open = vm_petition_str(&script, 2);
-                probe.title_at_open = at_open.clone();
-                probe.pass(
-                    6,
-                    "open",
-                    format!(
-                        "the click on charter {guid:#x} opened PetitionFrame: \
+                    probe.phase = Phase::Opening {
+                        since: now,
+                        sent: true,
+                    };
+                    return;
+                }
+                let visible = vm_visible(&script, "PetitionFrame");
+                let kind = vm_petition_str(&script, 1);
+                let originator = vm_is_originator(&script);
+                let names = vm_num_names(&script);
+                if visible
+                    && kind == benilla_ui::script::PETITION_TYPE_CHARTER
+                    && originator == 1
+                    && names == FRESH_SIGNATURES
+                {
+                    let at_open = vm_petition_str(&script, 2);
+                    probe.title_at_open = at_open.clone();
+                    probe.pass(
+                        6,
+                        "open",
+                        format!(
+                            "the click on charter {guid:#x} opened PetitionFrame: \
                          petitionType={kind:?}, isOriginator=1, GetNumPetitionNames()={names} \
                          (the owner is not a signer), title at open {at_open:?}"
-                    ),
-                );
-                probe.phase = Phase::Record { since: now };
-            } else if now - since > PETITION_TIMEOUT_SECS {
-                probe.fail(
-                    6,
-                    "open",
-                    format!(
+                        ),
+                    );
+                    probe.phase = Phase::Record { since: now };
+                } else if now - since > PETITION_TIMEOUT_SECS {
+                    probe.fail(
+                        6,
+                        "open",
+                        format!(
                         "charter {guid:#x} did not open within {PETITION_TIMEOUT_SECS}s of the \
                          click: PetitionFrame:IsVisible()={visible}, petitionType={kind:?}, \
                          isOriginator={originator}, GetNumPetitionNames()={names}. Either the \
@@ -808,232 +811,235 @@ fn charter_probe(
                          failure) or the answer never became a window. Lines seen: {:?}",
                         probe_lines(&script)
                     ),
-                );
-                probe.phase = Phase::Destroying {
-                    since: now,
-                    sent: false,
-                };
+                    );
+                    probe.phase = Phase::Destroying {
+                        since: now,
+                        sent: false,
+                    };
+                }
             }
-        }
-        // ── Step 7: the lazy record fill ────────────────────────────────────────────────────
-        // `SMSG_PETITION_SHOW_SIGNATURES` carries guids and a petition id but no text; the name
-        // arrives on `SMSG_PETITION_QUERY_RESPONSE`, keyed by petition id, and the feed re-fires
-        // `PETITION_SHOW`. A FAIL leaves the window titleless.
-        Phase::Record { since } => {
-            let title = vm_petition_str(&script, 2);
-            let max = vm_petition_max(&script);
-            if title == probe.bought && max == REQUIRED_SIGNATURES {
-                // At open the title was empty or already the bought name (the record beat the
-                // paint); anything else came from another charter's record.
-                let at_open = probe.title_at_open.clone();
-                if at_open.is_empty() || at_open == probe.bought {
-                    probe.pass(
-                        7,
-                        "record",
-                        format!(
+            // ── Step 7: the lazy record fill ────────────────────────────────────────────────────
+            // `SMSG_PETITION_SHOW_SIGNATURES` carries guids and a petition id but no text; the name
+            // arrives on `SMSG_PETITION_QUERY_RESPONSE`, keyed by petition id, and the feed re-fires
+            // `PETITION_SHOW`. A FAIL leaves the window titleless.
+            Phase::Record { since } => {
+                let title = vm_petition_str(&script, 2);
+                let max = vm_petition_max(&script);
+                if title == probe.bought && max == REQUIRED_SIGNATURES {
+                    // At open the title was empty or already the bought name (the record beat the
+                    // paint); anything else came from another charter's record.
+                    let at_open = probe.title_at_open.clone();
+                    if at_open.is_empty() || at_open == probe.bought {
+                        probe.pass(
+                            7,
+                            "record",
+                            format!(
                             "the window opened with title {at_open:?} and filled to {title:?} a \
                              round trip later, maxSignatures={max} — the record cache and its \
                              PETITION_SHOW repaint both working"
                         ),
-                    );
-                } else {
+                        );
+                    } else {
+                        probe.fail(
+                            7,
+                            "record",
+                            format!(
+                                "the title filled to {title:?} correctly, but at open it read \
+                             {at_open:?} — neither empty nor the bought name, so it came from a \
+                             record that is not this charter's"
+                            ),
+                        );
+                    }
+                    probe.phase = Phase::Renaming {
+                        since: now,
+                        sent: false,
+                    };
+                } else if now - since > RECORD_TIMEOUT_SECS {
+                    let bought = probe.bought.clone();
                     probe.fail(
                         7,
                         "record",
                         format!(
-                            "the title filled to {title:?} correctly, but at open it read \
-                             {at_open:?} — neither empty nor the bought name, so it came from a \
-                             record that is not this charter's"
-                        ),
-                    );
-                }
-                probe.phase = Phase::Renaming {
-                    since: now,
-                    sent: false,
-                };
-            } else if now - since > RECORD_TIMEOUT_SECS {
-                let bought = probe.bought.clone();
-                probe.fail(
-                    7,
-                    "record",
-                    format!(
                         "the petition record never landed within {RECORD_TIMEOUT_SECS}s: title \
                          reads {title:?} (wanted {bought:?}), maxSignatures={max} (wanted \
                          {REQUIRED_SIGNATURES} — vmangos hardcodes 9 at \
                          PetitionsHandler.cpp:182-183). The window opens titleless by design, so \
                          this is the lazy CMSG_PETITION_QUERY, its answer, or the repaint edge"
                     ),
-                );
-                probe.phase = Phase::Destroying {
-                    since: now,
-                    sent: false,
-                };
-            }
-        }
-        // ── Step 8: the rename echo ─────────────────────────────────────────────────────────
-        // `RenamePetition(name)`, the `RENAME_GUILD` popup's Accept. vmangos echoes
-        // `MSG_PETITION_RENAME` only on success (`PetitionsHandler.cpp:209-215`), and nothing
-        // re-queries, so the echo must patch the cached record.
-        Phase::Renaming { since, sent } => {
-            if !sent {
-                let name = probe_guild_name("Probe Renamed");
-                if let Err(e) = script.run(&format!("RenamePetition(\"{name}\")")) {
-                    probe.skip(
-                        8,
-                        "rename",
-                        format!("RenamePetition would not run in the live VM: {e}"),
                     );
                     probe.phase = Phase::Destroying {
                         since: now,
                         sent: false,
                     };
+                }
+            }
+            // ── Step 8: the rename echo ─────────────────────────────────────────────────────────
+            // `RenamePetition(name)`, the `RENAME_GUILD` popup's Accept. vmangos echoes
+            // `MSG_PETITION_RENAME` only on success (`PetitionsHandler.cpp:209-215`), and nothing
+            // re-queries, so the echo must patch the cached record.
+            Phase::Renaming { since, sent } => {
+                if !sent {
+                    let name = probe_guild_name("Probe Renamed");
+                    if let Err(e) = script.run(&format!("RenamePetition(\"{name}\")")) {
+                        probe.skip(
+                            8,
+                            "rename",
+                            format!("RenamePetition would not run in the live VM: {e}"),
+                        );
+                        probe.phase = Phase::Destroying {
+                            since: now,
+                            sent: false,
+                        };
+                        return;
+                    }
+                    info!(
+                        "PROBE_CHARTER: 8 (rename) — RenamePetition({name:?}) run in the live VM"
+                    );
+                    probe.renamed = name;
+                    probe.phase = Phase::Renaming {
+                        since: now,
+                        sent: true,
+                    };
                     return;
                 }
-                info!("PROBE_CHARTER: 8 (rename) — RenamePetition({name:?}) run in the live VM");
-                probe.renamed = name;
-                probe.phase = Phase::Renaming {
-                    since: now,
-                    sent: true,
-                };
-                return;
-            }
-            let title = vm_petition_str(&script, 2);
-            // The bag tooltip must reach the same name: it is fed by the container snapshot,
-            // whose rebuild is gated, so it can lag the window.
-            let tip = charter_tooltip_lines(
-                &script,
-                probe.charter.and_then(|(b, sl, _)| lua_bag_pos(b, sl)),
-            );
-            let tip_caught_up = tip.iter().any(|l| l.contains(&probe.renamed));
-            if title == probe.renamed && tip_caught_up {
-                let bought = probe.bought.clone();
-                // The tooltip lines are reported; their wording is pinned by
-                // `charter_lines_sit_between_the_name_and_the_signable_line`.
-                probe.pass(
-                    8,
-                    "rename",
-                    format!(
+                let title = vm_petition_str(&script, 2);
+                // The bag tooltip must reach the same name: it is fed by the container snapshot,
+                // whose rebuild is gated, so it can lag the window.
+                let tip = charter_tooltip_lines(
+                    &script,
+                    probe.charter.and_then(|(b, sl, _)| lua_bag_pos(b, sl)),
+                );
+                let tip_caught_up = tip.iter().any(|l| l.contains(&probe.renamed));
+                if title == probe.renamed && tip_caught_up {
+                    let bought = probe.bought.clone();
+                    // The tooltip lines are reported; their wording is pinned by
+                    // `charter_lines_sit_between_the_name_and_the_signable_line`.
+                    probe.pass(
+                        8,
+                        "rename",
+                        format!(
                         "the title changed from {bought:?} to {title:?} — MSG_PETITION_RENAME's \
                          echo arrived and patched the cached record in place; the bag tooltip \
                          reads {tip:?}"
                     ),
-                );
-                probe.phase = Phase::Destroying {
-                    since: now,
-                    sent: false,
-                };
-            } else if now - since > RENAME_TIMEOUT_SECS {
-                let renamed = probe.renamed.clone();
-                probe.fail(
-                    8,
-                    "rename",
-                    format!(
-                        "the title still reads {title:?} {RENAME_TIMEOUT_SECS}s after \
+                    );
+                    probe.phase = Phase::Destroying {
+                        since: now,
+                        sent: false,
+                    };
+                } else if now - since > RENAME_TIMEOUT_SECS {
+                    let renamed = probe.renamed.clone();
+                    probe.fail(
+                        8,
+                        "rename",
+                        format!(
+                            "the title still reads {title:?} {RENAME_TIMEOUT_SECS}s after \
                          RenamePetition({renamed:?}). The echo is sent ONLY on success, so either \
                          the rename was refused (name taken/invalid/reserved) or the echo did not \
                          patch the record. Lines seen: {:?}",
-                        probe_lines(&script)
-                    ),
-                );
-                probe.phase = Phase::Destroying {
-                    since: now,
-                    sent: false,
-                };
+                            probe_lines(&script)
+                        ),
+                    );
+                    probe.phase = Phase::Destroying {
+                        since: now,
+                        sent: false,
+                    };
+                }
             }
-        }
-        // ── Step 9: the cleanup ─────────────────────────────────────────────────────────────
-        // `CMSG_DESTROYITEM` deletes the petition with the charter (`Player.cpp:10811-10817`);
-        // without it the next run's buy is refused silently (`PetitionsHandler.cpp:70`), so every
-        // exit from steps 5-8 comes here. The destroy is watched to land before `AppExit` tears
-        // the net thread down.
-        Phase::Destroying { since, sent } => {
-            let Some((bag_index, slot, guid)) = probe.charter else {
-                probe.phase = Phase::Done; // nothing was bought
-                return;
-            };
-            if !sent {
-                // The position is read fresh: `count: 0` destroys whatever stack sits there.
-                let Some((bag_index, slot, _)) = find_item(
+            // ── Step 9: the cleanup ─────────────────────────────────────────────────────────────
+            // `CMSG_DESTROYITEM` deletes the petition with the charter (`Player.cpp:10811-10817`);
+            // without it the next run's buy is refused silently (`PetitionsHandler.cpp:70`), so every
+            // exit from steps 5-8 comes here. The destroy is watched to land before `AppExit` tears
+            // the net thread down.
+            Phase::Destroying { since, sent } => {
+                let Some((bag_index, slot, guid)) = probe.charter else {
+                    probe.phase = Phase::Done; // nothing was bought
+                    return;
+                };
+                if !sent {
+                    // The position is read fresh: `count: 0` destroys whatever stack sits there.
+                    let Some((bag_index, slot, _)) = find_item(
+                        &store.0,
+                        &objects,
+                        CHARTER_ITEM_ENTRY,
+                        ItemSearch::default(),
+                    ) else {
+                        probe.pass(
+                            9,
+                            "cleanup",
+                            format!(
+                            "charter {guid:#x} was already out of the bags before the destroy — \
+                             nothing left to clean up (latched at wire {bag_index}/{slot})"
+                        ),
+                        );
+                        probe.phase = Phase::Done;
+                        return;
+                    };
+                    let _ = net.0.send(ClientCommand::DestroyItem {
+                        bag_index,
+                        slot,
+                        count: 0,
+                    });
+                    info!(
+                        "PROBE_CHARTER: 9 (cleanup) — CMSG_DESTROYITEM on wire {bag_index}/{slot} \
+                     (charter {guid:#x}); vmangos deletes the petition with it"
+                    );
+                    probe.phase = Phase::Destroying {
+                        since: now,
+                        sent: true,
+                    };
+                    return;
+                }
+                let still_there = find_item(
                     &store.0,
                     &objects,
                     CHARTER_ITEM_ENTRY,
                     ItemSearch::default(),
-                ) else {
+                );
+                if still_there.is_none() {
                     probe.pass(
                         9,
                         "cleanup",
                         format!(
-                            "charter {guid:#x} was already out of the bags before the destroy — \
-                             nothing left to clean up (latched at wire {bag_index}/{slot})"
-                        ),
-                    );
-                    probe.phase = Phase::Done;
-                    return;
-                };
-                let _ = net.0.send(ClientCommand::DestroyItem {
-                    bag_index,
-                    slot,
-                    count: 0,
-                });
-                info!(
-                    "PROBE_CHARTER: 9 (cleanup) — CMSG_DESTROYITEM on wire {bag_index}/{slot} \
-                     (charter {guid:#x}); vmangos deletes the petition with it"
-                );
-                probe.phase = Phase::Destroying {
-                    since: now,
-                    sent: true,
-                };
-                return;
-            }
-            let still_there = find_item(
-                &store.0,
-                &objects,
-                CHARTER_ITEM_ENTRY,
-                ItemSearch::default(),
-            );
-            if still_there.is_none() {
-                probe.pass(
-                    9,
-                    "cleanup",
-                    format!(
                         "charter {guid:#x} left the bags and its petition went with it — the next \
                          run's buy will not hit the silent already-owns-a-petition refusal"
                     ),
-                );
-                probe.phase = Phase::Done;
-            } else if now - since > DESTROY_TIMEOUT_SECS {
-                probe.fail(
-                    9,
-                    "cleanup",
-                    format!(
-                        "charter {guid:#x} is STILL in the bags {DESTROY_TIMEOUT_SECS}s after \
+                    );
+                    probe.phase = Phase::Done;
+                } else if now - since > DESTROY_TIMEOUT_SECS {
+                    probe.fail(
+                        9,
+                        "cleanup",
+                        format!(
+                            "charter {guid:#x} is STILL in the bags {DESTROY_TIMEOUT_SECS}s after \
                          CMSG_DESTROYITEM. Remove it by hand before the next run — otherwise its \
                          step 5 is refused silently for `the owner already has one` and reads as a \
                          buy that never sent. Lines seen: {:?}",
-                        probe_lines(&script)
-                    ),
+                            probe_lines(&script)
+                        ),
+                    );
+                    probe.phase = Phase::Done;
+                }
+            }
+            Phase::Done => {
+                if probe.exited {
+                    return;
+                }
+                probe.exited = true;
+                info!(
+                    "PROBE_CHARTER: DONE pass={} fail={}",
+                    probe.passes, probe.fails
                 );
-                probe.phase = Phase::Done;
+                // `AppExit` plus a hard-exit thread, so a teardown hang cannot hold the account.
+                exit.write(AppExit::Success);
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    warn!("PROBE_CHARTER: still alive 5s after AppExit — hard exit");
+                    std::process::exit(0);
+                });
             }
         }
-        Phase::Done => {
-            if probe.exited {
-                return;
-            }
-            probe.exited = true;
-            info!(
-                "PROBE_CHARTER: DONE pass={} fail={}",
-                probe.passes, probe.fails
-            );
-            // `AppExit` plus a hard-exit thread, so a teardown hang cannot hold the account.
-            exit.write(AppExit::Success);
-            std::thread::spawn(|| {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                warn!("PROBE_CHARTER: still alive 5s after AppExit — hard exit");
-                std::process::exit(0);
-            });
-        }
-    }
+    })
 }
 
 /// Step 1's send, from both of step 0's exits.

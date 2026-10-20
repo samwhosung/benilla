@@ -444,15 +444,24 @@ pub(crate) fn fire_combat_text(
     data: Option<String>,
     extra: Option<String>,
 ) {
-    let arg = |v: Option<String>| v.map_or(ScriptValue::Nil, ScriptValue::Str);
     script.fire_event(
         "COMBAT_TEXT_UPDATE",
-        vec![
-            ScriptValue::Str(message_type.to_string()),
-            arg(data),
-            arg(extra),
-        ],
+        combat_text_args(message_type, data, extra),
     );
+}
+
+/// [`fire_combat_text`]'s arguments, for a feed that posts the event after its pushes.
+pub(crate) fn combat_text_args(
+    message_type: &str,
+    data: Option<String>,
+    extra: Option<String>,
+) -> Vec<ScriptValue> {
+    let arg = |v: Option<String>| v.map_or(ScriptValue::Nil, ScriptValue::Str);
+    vec![
+        ScriptValue::Str(message_type.to_string()),
+        arg(data),
+        arg(extra),
+    ]
 }
 
 /// Fire one [`UnitCombatFeedback`] as `UNIT_COMBAT` for `"player"` and `"target"` only, the tokens
@@ -883,43 +892,44 @@ fn feed_farsight_focus(
 /// chain reaches, and the VM resolves a verb's token to one of them or to a guid with no entry. Ungated: distances move every
 /// frame, and no event keys off the map.
 fn feed_unit_reach(
-    script: Option<NonSendMut<UiScript>>,
-    tokens: UnitTokens,
+    mut vm: crate::script_calls::VmWith<UnitTokens<'static, 'static>>,
     self_q: Query<(&Transform, &ObjectStore), With<SelfPlayer>>,
     transforms: Query<&Transform>,
     world: crate::target::RelationWorld,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let mut reach = HashMap::new();
-    let (rel, me) = (world.get(), world.me());
-    if let Some((self_tf, _)) = self_q.iter().next() {
-        for guid in script.held_unit_guids() {
-            let Some((entity, _)) = tokens.held(guid) else {
-                continue;
-            };
-            let Ok(tf) = transforms.get(entity) else {
-                continue;
-            };
-            let unit = tokens
-                .stores
-                .get(entity)
-                .ok()
-                .map(|s| world.unit_of(guid, s));
-            let inspectable = unit.zip(me.as_ref()).is_some_and(|(unit, me)| {
-                unit.is_player && (unit.guid == me.guid || rel.can_cooperate(me, &unit))
-            });
-            reach.insert(
-                guid,
-                benilla_ui::script::UnitReach {
-                    dist_sq: dist_sq(tf.translation, self_tf.translation),
-                    inspectable,
-                },
-            );
+    vm.turn(|script, tokens| {
+        let Some(script) = script else {
+            return;
+        };
+        let mut reach = HashMap::new();
+        let (rel, me) = (world.get(), world.me());
+        if let Some((self_tf, _)) = self_q.iter().next() {
+            for guid in script.held_unit_guids() {
+                let Some((entity, _)) = tokens.held(guid) else {
+                    continue;
+                };
+                let Ok(tf) = transforms.get(entity) else {
+                    continue;
+                };
+                let unit = tokens
+                    .stores
+                    .get(entity)
+                    .ok()
+                    .map(|s| world.unit_of(guid, s));
+                let inspectable = unit.zip(me.as_ref()).is_some_and(|(unit, me)| {
+                    unit.is_player && (unit.guid == me.guid || rel.can_cooperate(me, &unit))
+                });
+                reach.insert(
+                    guid,
+                    benilla_ui::script::UnitReach {
+                        dist_sq: dist_sq(tf.translation, self_tf.translation),
+                        inspectable,
+                    },
+                );
+            }
         }
-    }
-    script.set_unit_reach(reach);
+        script.set_unit_reach(reach);
+    })
 }
 
 /// [`feed_units`]' stores and change tracking, grouped to stay under Bevy's 16-parameter limit.

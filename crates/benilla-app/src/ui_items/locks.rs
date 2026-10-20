@@ -292,111 +292,112 @@ pub(crate) struct LockWatch {
 /// with the one still in the descriptor (`0x5ddd42`), so a handler reads the slot as it was.
 #[allow(clippy::too_many_arguments)] // the input set
 pub(crate) fn apply_item_releases(
-    script: Option<NonSendMut<UiScript>>,
+    mut vm: crate::script_calls::VmWith<Option<ResMut<'static, crate::ui_loot::LootState>>>,
     mut inv: crate::items::Inventory,
     created: Query<&crate::net::Guid, Added<crate::items::ItemObject>>,
     me: Res<crate::net::SelfGuid>,
     items: Res<Items>,
     mut queued: ResMut<ItemReleases>,
-    // The loot window's closes and refusals owe theirs on the session.
-    loot: Option<ResMut<crate::ui_loot::LootState>>,
     mut watch: ResMut<LockWatch>,
 ) {
-    // Read before taking, so a frame owing nothing leaves the session unchanged for its feed.
-    if let Some(mut loot) = loot.filter(|l| l.owes_unlocks()) {
-        queued.0.extend(
-            loot.take_item_unlocks()
-                .into_iter()
-                .filter_map(|(guid, live)| {
-                    let resolves = !live || inv.objects.object(guid).is_some_and(|f| f.is_item());
-                    resolves.then_some(Release::Item(guid))
-                }),
-        );
-    }
-    let Some(mut script) = script else {
-        queued.0.clear();
-        return;
-    };
-    let watch = &mut *watch;
-    let (Some(store), Some(me)) = (inv.self_store.iter().next(), me.0) else {
-        *watch = LockWatch::default();
+    vm.turn(|script, loot| {
+        // Read before taking, so a frame owing nothing leaves the session unchanged for its feed.
+        if let Some(mut loot) = loot.filter(|l| l.owes_unlocks()) {
+            queued.0.extend(
+                loot.take_item_unlocks()
+                    .into_iter()
+                    .filter_map(|(guid, live)| {
+                        let resolves =
+                            !live || inv.objects.object(guid).is_some_and(|f| f.is_item());
+                        resolves.then_some(Release::Item(guid))
+                    }),
+            );
+        }
+        let Some(mut script) = script else {
+            queued.0.clear();
+            return;
+        };
+        let watch = &mut *watch;
+        let (Some(store), Some(me)) = (inv.self_store.iter().next(), me.0) else {
+            *watch = LockWatch::default();
+            queued.apply(&mut script);
+            return;
+        };
+        // The arrival unlock fires from the item's create (`0x5d8300`), never from a seat a moved bag
+        // brings into view; the VM's first look owns what already exists.
+        if watch.seen.is_some() {
+            watch.arrivals.extend(created.iter().map(|g| g.0));
+        }
+        let moved = inv.changes.moved() || !inv.self_changed.is_empty();
+        // A template answer moves no item object, so the frame it lands has its own trigger.
+        let templates = items.template_epoch();
+        let answered = watch.templates != templates;
+        watch.templates = templates;
+        let mut out = Vec::new();
+        // Whether an entry stacks past 1 (`[rec+0x60] > 1`, `0x5d857b`, `0x5d947e`); `None` while the
+        // template is unanswered.
+        let stackable = |entry: u32, guid: u64| {
+            items
+                .template(entry, guid, Ask::Read)
+                .map(|t| t.stackable > 1)
+        };
+        let objects = &inv.objects;
+        let release = |guid: u64, entry: u32, walk: Walk, stacks: bool| {
+            if stacks {
+                Release::Entry(kin(&store.0, objects, walk, entry))
+            } else {
+                Release::Item(guid)
+            }
+        };
+        if moved || watch.seen.is_none() {
+            let now = snapshot(&store.0, objects, me);
+            if let Some(was) = watch.seen.replace(now) {
+                let now = watch.seen.as_ref().expect("just stored");
+                out.extend(seat_unlocks(&was, now).into_iter().map(Release::Item));
+                for guid in restacked(&was, now) {
+                    let entry = objects.object(guid).and_then(ObjectFields::object_entry);
+                    // An unanswered template unlocks the item alone (`0x5d947c`).
+                    let stacks = entry.and_then(|e| stackable(e, guid)).unwrap_or(false);
+                    out.push(release(guid, entry.unwrap_or(0), Walk::Stack, stacks));
+                }
+            }
+        }
+        // A locked item whose object went away, or came back as a new one (a cross-map worldport
+        // rebuilds them all), loses the lock silently: it lived on the old object, and the new one
+        // is built unlocked (`0x5d821f`, `0x5d823e`).
+        let mut owners = HashMap::new();
+        for guid in script.item_locks() {
+            let now = objects.entity(guid);
+            let was = watch.lock_owners.get(&guid).copied();
+            match now {
+                Some(e) if was.is_none_or(|w| w == e) => {
+                    owners.insert(guid, e);
+                }
+                _ => script.forget_item_lock(guid),
+            }
+        }
+        watch.lock_owners = owners;
+        if moved || answered {
+            let mut waiting = Vec::new();
+            for guid in std::mem::take(&mut watch.arrivals) {
+                // Ours only (`0x5d851f`); a vanished object owes nothing.
+                let Some(f) = objects.object(guid).filter(|f| f.item_owner() == Some(me)) else {
+                    continue;
+                };
+                let Some(entry) = f.object_entry() else {
+                    waiting.push(guid);
+                    continue;
+                };
+                match stackable(entry, guid) {
+                    Some(stacks) => out.push(release(guid, entry, Walk::Arrival, stacks)),
+                    None => waiting.push(guid),
+                }
+            }
+            watch.arrivals = waiting;
+        }
+        queued.0.splice(0..0, out);
         queued.apply(&mut script);
-        return;
-    };
-    // The arrival unlock fires from the item's create (`0x5d8300`), never from a seat a moved bag
-    // brings into view; the VM's first look owns what already exists.
-    if watch.seen.is_some() {
-        watch.arrivals.extend(created.iter().map(|g| g.0));
-    }
-    let moved = inv.changes.moved() || !inv.self_changed.is_empty();
-    // A template answer moves no item object, so the frame it lands has its own trigger.
-    let templates = items.template_epoch();
-    let answered = watch.templates != templates;
-    watch.templates = templates;
-    let mut out = Vec::new();
-    // Whether an entry stacks past 1 (`[rec+0x60] > 1`, `0x5d857b`, `0x5d947e`); `None` while the
-    // template is unanswered.
-    let stackable = |entry: u32, guid: u64| {
-        items
-            .template(entry, guid, Ask::Read)
-            .map(|t| t.stackable > 1)
-    };
-    let objects = &inv.objects;
-    let release = |guid: u64, entry: u32, walk: Walk, stacks: bool| {
-        if stacks {
-            Release::Entry(kin(&store.0, objects, walk, entry))
-        } else {
-            Release::Item(guid)
-        }
-    };
-    if moved || watch.seen.is_none() {
-        let now = snapshot(&store.0, objects, me);
-        if let Some(was) = watch.seen.replace(now) {
-            let now = watch.seen.as_ref().expect("just stored");
-            out.extend(seat_unlocks(&was, now).into_iter().map(Release::Item));
-            for guid in restacked(&was, now) {
-                let entry = objects.object(guid).and_then(ObjectFields::object_entry);
-                // An unanswered template unlocks the item alone (`0x5d947c`).
-                let stacks = entry.and_then(|e| stackable(e, guid)).unwrap_or(false);
-                out.push(release(guid, entry.unwrap_or(0), Walk::Stack, stacks));
-            }
-        }
-    }
-    // A locked item whose object went away, or came back as a new one (a cross-map worldport
-    // rebuilds them all), loses the lock silently: it lived on the old object, and the new one
-    // is built unlocked (`0x5d821f`, `0x5d823e`).
-    let mut owners = HashMap::new();
-    for guid in script.item_locks() {
-        let now = objects.entity(guid);
-        let was = watch.lock_owners.get(&guid).copied();
-        match now {
-            Some(e) if was.is_none_or(|w| w == e) => {
-                owners.insert(guid, e);
-            }
-            _ => script.forget_item_lock(guid),
-        }
-    }
-    watch.lock_owners = owners;
-    if moved || answered {
-        let mut waiting = Vec::new();
-        for guid in std::mem::take(&mut watch.arrivals) {
-            // Ours only (`0x5d851f`); a vanished object owes nothing.
-            let Some(f) = objects.object(guid).filter(|f| f.item_owner() == Some(me)) else {
-                continue;
-            };
-            let Some(entry) = f.object_entry() else {
-                waiting.push(guid);
-                continue;
-            };
-            match stackable(entry, guid) {
-                Some(stacks) => out.push(release(guid, entry, Walk::Arrival, stacks)),
-                None => waiting.push(guid),
-            }
-        }
-        watch.arrivals = waiting;
-    }
-    queued.0.splice(0..0, out);
-    queued.apply(&mut script);
+    })
 }
 
 #[cfg(test)]

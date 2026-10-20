@@ -450,112 +450,122 @@ pub(crate) fn ghost_probe() -> Option<bool> {
 
 /// Map the queued Lua death intents onto the wire, after `UiInput` so a click drains that frame.
 pub(crate) fn drain_death(
-    script: Option<NonSendMut<UiScript>>,
+    mut vm: crate::script_calls::VmWith<(
+        crate::spell::cast_target::CastTargeting<'static, 'static>,
+        ParamSet<
+            'static,
+            'static,
+            (
+                crate::spell::CastLadder<'static, 'static>,
+                crate::spell::SelfCancel<'static, 'static>,
+            ),
+        >,
+        crate::ui_bind_confirm::BindGate<'static>,
+    )>,
     mut death_net: ResMut<DeathNet>,
     net: Res<NetCommands>,
-    targeting: crate::spell::cast_target::CastTargeting,
-    // The soulstone's item leg cancels the cast in flight first, so the ladder and the cancel
-    // share the cast state through one set.
-    mut cast: ParamSet<(crate::spell::CastLadder, crate::spell::SelfCancel)>,
     ui_errors: Res<crate::ui_action::UiErrorKeys>,
-    // The soulstone's item leg is an item use (`0x5d8d00`), so it carries the bind gate.
-    mut gate: crate::ui_bind_confirm::BindGate,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for action in script.take_death_actions() {
-        let _ = match action {
-            DeathAction::Repop => net.0.send(ClientCommand::RepopRequest),
-            // Else 0: vmangos resolves the corpse through the player and never reads the guid
-            // (`MiscHandler.cpp:573-603`).
-            DeathAction::RetrieveCorpse => net.0.send(ClientCommand::ReclaimCorpse {
-                corpse: death_net.corpse_guid.unwrap_or(0),
-            }),
-            DeathAction::AcceptResurrect | DeathAction::DeclineResurrect => {
-                let accept = action == DeathAction::AcceptResurrect;
-                match death_net.resurrect.take() {
-                    Some(offer) => net.0.send(ClientCommand::ResurrectResponse {
-                        caster: offer.caster,
-                        accept,
-                    }),
-                    None => Ok(()), // the offer timed out; nothing to answer
-                }
-            }
-            DeathAction::AcceptXpLoss => match death_net.spirit_healer.take() {
-                Some(npc) => net.0.send(ClientCommand::SpiritHealerActivate { npc }),
-                None => Ok(()),
-            },
-            // Re-resolved at click time, as the reference's `OnCancel` calls `HasSoulstone()`
-            // again; nothing is cleared here, the server zeroes `PLAYER_SELF_RES_SPELL`.
-            DeathAction::UseSoulstone { may_cast } => {
-                let store = targeting.self_store.single().ok().map(|s| s.0.clone());
-                let res = store.as_ref().and_then(|store| {
-                    let ladder = cast.p0();
-                    resolve_self_res(
-                        store,
-                        &ladder.objects,
-                        &ladder.items,
-                        ladder.spells.as_deref(),
-                    )
-                });
-                match res {
-                    Some(SelfRes::Spell { .. }) => net.0.send(ClientCommand::SelfRes),
-                    // The item leg cancels the cast before the use (`0x48ae6b` into `0x6e4940`,
-                    // cl=1, dl=1, reason `0x1c`), then runs an ordinary item use, `0x5d8d00`
-                    // (called at `0x48ae7d`), like every bag click: a locked stone is refused at
-                    // its first gate (`0x5d8d32`), after the cancel.
-                    Some(SelfRes::Item {
-                        bag_index,
-                        slot,
-                        guid,
-                        entry,
-                        ..
-                    }) => {
-                        // Its failed flag disarms the trade-skill repeat on every branch
-                        // (`0x6e4abc`-`0x6e4ac2` into `0x4fd790`), queued with its event.
-                        cast.p1().abort_cast();
-                        if crate::ui_items::item_use_refused(&script, Some(guid)) {
-                            debug!("death: soulstone {guid:#x} is locked — refused");
-                            Ok(())
-                        } else {
-                            let mut ladder = cast.p0();
-                            // The use reads its record (`0x5d8d57`).
-                            let t = ladder.items.template(entry, guid, Ask::Read).cloned();
-                            let it = crate::ui_items::ItemUse {
-                                guid: Some(guid),
-                                start_quest: t.as_ref().map_or(0, |t| t.start_quest),
-                                bag_index,
-                                slot,
-                                entry,
-                                spell_index: t
-                                    .as_ref()
-                                    .and_then(|t| t.use_spell_index())
-                                    .unwrap_or(0),
-                                use_spell: t.as_ref().and_then(|t| t.use_spell).map(|u| u.spell_id),
-                                on_object: None,
-                                is_charter: false,
-                            };
-                            ladder.permit(may_cast);
-                            crate::ui_items::send_item_use(
-                                it,
-                                &targeting.context(),
-                                &mut ladder,
-                                &mut script,
-                                &mut gate,
-                                false,
-                                &ui_errors,
-                            );
-                            ladder.permit(true);
-                            Ok(())
-                        }
-                    }
-                    // Nothing to spend: the reference returns silently.
-                    None => Ok(()),
-                }
-            }
+    vm.turn(|script, (targeting, mut cast, mut gate)| {
+        let Some(mut script) = script else {
+            return;
         };
-    }
+        for action in script.take_death_actions() {
+            let _ = match action {
+                DeathAction::Repop => net.0.send(ClientCommand::RepopRequest),
+                // Else 0: vmangos resolves the corpse through the player and never reads the guid
+                // (`MiscHandler.cpp:573-603`).
+                DeathAction::RetrieveCorpse => net.0.send(ClientCommand::ReclaimCorpse {
+                    corpse: death_net.corpse_guid.unwrap_or(0),
+                }),
+                DeathAction::AcceptResurrect | DeathAction::DeclineResurrect => {
+                    let accept = action == DeathAction::AcceptResurrect;
+                    match death_net.resurrect.take() {
+                        Some(offer) => net.0.send(ClientCommand::ResurrectResponse {
+                            caster: offer.caster,
+                            accept,
+                        }),
+                        None => Ok(()), // the offer timed out; nothing to answer
+                    }
+                }
+                DeathAction::AcceptXpLoss => match death_net.spirit_healer.take() {
+                    Some(npc) => net.0.send(ClientCommand::SpiritHealerActivate { npc }),
+                    None => Ok(()),
+                },
+                // Re-resolved at click time, as the reference's `OnCancel` calls `HasSoulstone()`
+                // again; nothing is cleared here, the server zeroes `PLAYER_SELF_RES_SPELL`.
+                DeathAction::UseSoulstone { may_cast } => {
+                    let store = targeting.self_store.single().ok().map(|s| s.0.clone());
+                    let res = store.as_ref().and_then(|store| {
+                        let ladder = cast.p0();
+                        resolve_self_res(
+                            store,
+                            &ladder.objects,
+                            &ladder.items,
+                            ladder.spells.as_deref(),
+                        )
+                    });
+                    match res {
+                        Some(SelfRes::Spell { .. }) => net.0.send(ClientCommand::SelfRes),
+                        // The item leg cancels the cast before the use (`0x48ae6b` into `0x6e4940`,
+                        // cl=1, dl=1, reason `0x1c`), then runs an ordinary item use, `0x5d8d00`
+                        // (called at `0x48ae7d`), like every bag click: a locked stone is refused at
+                        // its first gate (`0x5d8d32`), after the cancel.
+                        Some(SelfRes::Item {
+                            bag_index,
+                            slot,
+                            guid,
+                            entry,
+                            ..
+                        }) => {
+                            // Its failed flag disarms the trade-skill repeat on every branch
+                            // (`0x6e4abc`-`0x6e4ac2` into `0x4fd790`), queued with its event.
+                            cast.p1().abort_cast();
+                            if crate::ui_items::item_use_refused(&script, Some(guid)) {
+                                debug!("death: soulstone {guid:#x} is locked — refused");
+                                Ok(())
+                            } else {
+                                let mut ladder = cast.p0();
+                                // The use reads its record (`0x5d8d57`).
+                                let t = ladder.items.template(entry, guid, Ask::Read).cloned();
+                                let it = crate::ui_items::ItemUse {
+                                    guid: Some(guid),
+                                    start_quest: t.as_ref().map_or(0, |t| t.start_quest),
+                                    bag_index,
+                                    slot,
+                                    entry,
+                                    spell_index: t
+                                        .as_ref()
+                                        .and_then(|t| t.use_spell_index())
+                                        .unwrap_or(0),
+                                    use_spell: t
+                                        .as_ref()
+                                        .and_then(|t| t.use_spell)
+                                        .map(|u| u.spell_id),
+                                    on_object: None,
+                                    is_charter: false,
+                                };
+                                ladder.permit(may_cast);
+                                crate::ui_items::send_item_use(
+                                    it,
+                                    &targeting.context(),
+                                    &mut ladder,
+                                    &mut script,
+                                    &mut gate,
+                                    false,
+                                    &ui_errors,
+                                );
+                                ladder.permit(true);
+                                Ok(())
+                            }
+                        }
+                        // Nothing to spend: the reference returns silently.
+                        None => Ok(()),
+                    }
+                }
+            };
+        }
+    })
 }
 
 /// Clear [`DeathFeedState`]'s world scope on `DisconnectedMessage`, the edge [`DeathNet`] resets

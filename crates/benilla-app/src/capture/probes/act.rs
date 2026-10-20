@@ -45,37 +45,39 @@ struct ProbeChat {
 fn fire_probe_chat(
     mut probe: ResMut<ProbeChat>,
     time: ProbeClock,
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     self_player: Query<(), With<crate::net::SelfPlayer>>,
 ) {
-    if probe.lines.is_empty() {
-        return;
-    }
-    if self_player.is_empty() {
-        return; // not in-world yet
-    }
-    let Some(mut script) = script else {
-        return;
-    };
-    // Line N is due at `at + N·every`.
-    loop {
-        let Some(line) = probe
-            .lines
-            .split(';')
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .nth(probe.sent)
-        else {
-            return; // all sent
-        };
-        let due = probe.at + probe.every * probe.sent as f32;
-        if time.elapsed_secs() < due {
+    hosted_vm.run(|script| {
+        if probe.lines.is_empty() {
             return;
         }
-        info!("probe-chat: sending {line:?}");
-        script.push_chat_input(line.to_string());
-        probe.sent += 1;
-    }
+        if self_player.is_empty() {
+            return; // not in-world yet
+        }
+        let Some(script) = script else {
+            return;
+        };
+        // Line N is due at `at + N·every`.
+        loop {
+            let Some(line) = probe
+                .lines
+                .split(';')
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .nth(probe.sent)
+            else {
+                return; // all sent
+            };
+            let due = probe.at + probe.every * probe.sent as f32;
+            if time.elapsed_secs() < due {
+                return;
+            }
+            info!("probe-chat: sending {line:?}");
+            script.push_chat_input(line.to_string());
+            probe.sent += 1;
+        }
+    })
 }
 
 /// `WOW_PROBE_KEY="<key>@<secs>[:<hold>][;…]"`: presses each key at its time once in-world and
@@ -321,50 +323,52 @@ fn install_probe_log(script: &benilla_ui::script::UiScript) {
 fn fire_probe_lua(
     mut probe: ResMut<ProbeLua>,
     time: ProbeClock,
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     self_player: Query<(), With<crate::net::SelfPlayer>>,
     state: Res<State<crate::client_state::ClientState>>,
     entry_ui_pending: Option<Res<crate::ui_script::PendingEntryUiLoad>>,
 ) {
-    if probe.chunk.is_empty() {
-        return;
-    }
-    let Some(script) = script else {
-        // Between the world-entry edge and the entry load the glue VM is parked
-        // (`ui_script::ParkedGlueVm`): not an entry yet.
-        probe.was_ready = false;
-        return;
-    };
-    // Ready means the in-game VM, not the boot one: `InWorld` (the entered-world message and the
-    // first object update can share a drain a frame before the VM is parked), the entry UI load
-    // done, and a self player for `UnitName("player")`.
-    let in_world = *state.get() == crate::client_state::ClientState::InWorld;
-    let ready = in_world && entry_ui_pending.is_none() && !self_player.is_empty();
-    let now = time.elapsed_secs();
-    if ready && !probe.was_ready {
-        probe.entries += 1;
-        probe.ready_at = now;
-        info!("probe-lua: world entry {} at {now:.1}s", probe.entries);
-    }
-    probe.was_ready = ready;
-    if !ready {
-        return;
-    }
-    if probe.logged_vm != script.session() {
-        install_probe_log(&script);
-        probe.logged_vm = script.session();
-    }
-    if !probe_lua_due(&probe, now) {
-        return;
-    }
-    probe.fired = probe.entries;
-    info!(
-        "probe-lua: entry {} at {now:.1}s — running {:?}",
-        probe.entries, probe.chunk
-    );
-    if let Err(e) = script.run(&probe.chunk) {
-        error!("probe-lua: {e}");
-    }
+    hosted_vm.run(|script| {
+        if probe.chunk.is_empty() {
+            return;
+        }
+        let Some(script) = script else {
+            // Between the world-entry edge and the entry load the glue VM is parked
+            // (`ui_script::ParkedGlueVm`): not an entry yet.
+            probe.was_ready = false;
+            return;
+        };
+        // Ready means the in-game VM, not the boot one: `InWorld` (the entered-world message and the
+        // first object update can share a drain a frame before the VM is parked), the entry UI load
+        // done, and a self player for `UnitName("player")`.
+        let in_world = *state.get() == crate::client_state::ClientState::InWorld;
+        let ready = in_world && entry_ui_pending.is_none() && !self_player.is_empty();
+        let now = time.elapsed_secs();
+        if ready && !probe.was_ready {
+            probe.entries += 1;
+            probe.ready_at = now;
+            info!("probe-lua: world entry {} at {now:.1}s", probe.entries);
+        }
+        probe.was_ready = ready;
+        if !ready {
+            return;
+        }
+        if probe.logged_vm != script.session() {
+            install_probe_log(&script);
+            probe.logged_vm = script.session();
+        }
+        if !probe_lua_due(&probe, now) {
+            return;
+        }
+        probe.fired = probe.entries;
+        info!(
+            "probe-lua: entry {} at {now:.1}s — running {:?}",
+            probe.entries, probe.chunk
+        );
+        if let Err(e) = script.run(&probe.chunk) {
+            error!("probe-lua: {e}");
+        }
+    })
 }
 
 /// `WOW_PROBE_GLUE_LUA="<chunk>"`: runs the chunk once in the stock glue VM
@@ -530,51 +534,53 @@ fn fire_probe_hover(
     mut probe: ResMut<ProbeHover>,
     mut synthetic: ResMut<crate::ui_script::SyntheticPointer>,
     time: ProbeClock,
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     self_player: Query<(), With<crate::net::SelfPlayer>>,
 ) {
-    if probe.names.is_empty() {
-        return;
-    }
-    let now = time.elapsed_secs();
-    if now < probe.at || self_player.is_empty() || now < probe.next {
-        return;
-    }
-    let Some(mut script) = script else { return };
-    synthetic.0 = true;
-    // Which half of the duty period this is, and whether it just flipped.
-    if let Some((on, off)) = probe.duty {
-        let period = (on + off).max(1e-3);
-        let parked = (now - probe.at).rem_euclid(period) >= on;
-        let flipped = parked != probe.parked;
-        probe.parked = parked;
-        if parked {
-            probe.next = now + probe.step;
-            if flipped {
-                script.mouse_move(HOVER_PARK_AT.0, HOVER_PARK_AT.1);
-            }
+    hosted_vm.run(|script| {
+        if probe.names.is_empty() {
             return;
         }
-    }
-    probe.next = now + probe.step;
-    let name = probe.names[probe.i % probe.names.len()].clone();
-    probe.i += 1;
-    match frame_centre(&script, &name) {
-        Some((x, y)) => {
-            if !probe.announced {
-                probe.announced = true;
-                info!(
+        let now = time.elapsed_secs();
+        if now < probe.at || self_player.is_empty() || now < probe.next {
+            return;
+        }
+        let Some(script) = script else { return };
+        synthetic.0 = true;
+        // Which half of the duty period this is, and whether it just flipped.
+        if let Some((on, off)) = probe.duty {
+            let period = (on + off).max(1e-3);
+            let parked = (now - probe.at).rem_euclid(period) >= on;
+            let flipped = parked != probe.parked;
+            probe.parked = parked;
+            if parked {
+                probe.next = now + probe.step;
+                if flipped {
+                    script.mouse_move(HOVER_PARK_AT.0, HOVER_PARK_AT.1);
+                }
+                return;
+            }
+        }
+        probe.next = now + probe.step;
+        let name = probe.names[probe.i % probe.names.len()].clone();
+        probe.i += 1;
+        match frame_centre(&script, &name) {
+            Some((x, y)) => {
+                if !probe.announced {
+                    probe.announced = true;
+                    info!(
                     "probe-hover: sweeping {} frame(s) every {:.2}s, first {name} ({x:.0},{y:.0})",
                     probe.names.len(),
                     probe.step
                 );
+                }
+                let (dx, dy) = jitter_offset(probe.jitter, probe.i);
+                script.mouse_move(x + dx, y + dy);
             }
-            let (dx, dy) = jitter_offset(probe.jitter, probe.i);
-            script.mouse_move(x + dx, y + dy);
+            // A sweep over missing frames would read as free hovering, so say so.
+            None => warn!("probe-hover: {name} has no resolved rect — nothing hovered this step"),
         }
-        // A sweep over missing frames would read as free hovering, so say so.
-        None => warn!("probe-hover: {name} has no resolved rect — nothing hovered this step"),
-    }
+    })
 }
 
 /// A deterministic offset inside a `j`-pixel square: the pointer moves every step while the
@@ -665,108 +671,110 @@ fn fire_probe_drag(
     mut probe: ResMut<ProbeDrag>,
     mut synthetic: ResMut<crate::ui_script::SyntheticPointer>,
     time: ProbeClock,
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     self_player: Query<(), With<crate::net::SelfPlayer>>,
 ) {
-    if probe.pairs.is_empty() || probe.pair >= probe.pairs.len() {
-        if synthetic.0 {
-            synthetic.0 = false;
+    hosted_vm.run(|script| {
+        if probe.pairs.is_empty() || probe.pair >= probe.pairs.len() {
+            if synthetic.0 {
+                synthetic.0 = false;
+            }
+            return;
         }
-        return;
-    }
-    let now = time.elapsed_secs();
-    if now < probe.at || self_player.is_empty() {
-        return;
-    }
-    let Some(mut script) = script else { return };
-    if now < probe.next {
-        return;
-    }
-    probe.next = now + probe.step;
-    // The probe owns the pointer from the first step of a gesture to the last, never longer.
-    synthetic.0 = true;
+        let now = time.elapsed_secs();
+        if now < probe.at || self_player.is_empty() {
+            return;
+        }
+        let Some(script) = script else { return };
+        if now < probe.next {
+            return;
+        }
+        probe.next = now + probe.step;
+        // The probe owns the pointer from the first step of a gesture to the last, never longer.
+        synthetic.0 = true;
 
-    let (from_name, to_name) = probe.pairs[probe.pair].clone();
-    match probe.phase {
-        0 => {
-            let (Some(from), Some(to)) = (
-                frame_centre(&script, &from_name),
-                frame_centre(&script, &to_name),
-            ) else {
-                warn!("probe-drag: {from_name} > {to_name} — no resolved rect, skipping");
-                probe.pair += 1;
-                return;
-            };
-            probe.from = from;
-            probe.to = to;
-            info!(
-                "probe-drag: {from_name} ({:.0},{:.0}) > {to_name} ({:.0},{:.0})",
-                from.0, from.1, to.0, to.1
-            );
-            script.mouse_move(from.0, from.1);
-        }
-        1 => {
-            let (x, y) = probe.from;
-            script.mouse_button(x, y, "LeftButton", true);
-        }
-        // Past the 4-px drag threshold: fires `OnDragStart`.
-        2 => {
-            let (x, y) = probe.from;
-            script.mouse_move(x + 8.0, y + 8.0);
-        }
-        // Two waypoints, so the drag spends frames in flight.
-        3 | 4 => {
-            let t = if probe.phase == 3 { 0.4 } else { 0.8 };
-            let (fx, fy) = probe.from;
-            let (tx, ty) = probe.to;
-            script.mouse_move(fx + (tx - fx) * t, fy + (ty - fy) * t);
-        }
-        5 => {
-            let (x, y) = probe.to;
-            script.mouse_move(x, y);
-        }
-        6 => {
-            let (x, y) = probe.to;
-            script.mouse_button(x, y, "LeftButton", false);
-        }
-        // Self-check: hover the source where it now draws and ask the hit test who is there, to
-        // catch a hit rect that has parted from the drawn one.
-        7 => {
-            if let Some((x, y)) = frame_centre(&script, &from_name) {
+        let (from_name, to_name) = probe.pairs[probe.pair].clone();
+        match probe.phase {
+            0 => {
+                let (Some(from), Some(to)) = (
+                    frame_centre(&script, &from_name),
+                    frame_centre(&script, &to_name),
+                ) else {
+                    warn!("probe-drag: {from_name} > {to_name} — no resolved rect, skipping");
+                    probe.pair += 1;
+                    return;
+                };
+                probe.from = from;
+                probe.to = to;
+                info!(
+                    "probe-drag: {from_name} ({:.0},{:.0}) > {to_name} ({:.0},{:.0})",
+                    from.0, from.1, to.0, to.1
+                );
+                script.mouse_move(from.0, from.1);
+            }
+            1 => {
+                let (x, y) = probe.from;
+                script.mouse_button(x, y, "LeftButton", true);
+            }
+            // Past the 4-px drag threshold: fires `OnDragStart`.
+            2 => {
+                let (x, y) = probe.from;
+                script.mouse_move(x + 8.0, y + 8.0);
+            }
+            // Two waypoints, so the drag spends frames in flight.
+            3 | 4 => {
+                let t = if probe.phase == 3 { 0.4 } else { 0.8 };
+                let (fx, fy) = probe.from;
+                let (tx, ty) = probe.to;
+                script.mouse_move(fx + (tx - fx) * t, fy + (ty - fy) * t);
+            }
+            5 => {
+                let (x, y) = probe.to;
                 script.mouse_move(x, y);
-                let focus = script
-                    .eval::<String>(
-                        "return tostring(GetMouseFocus() and GetMouseFocus():GetName())",
-                    )
-                    .unwrap_or_else(|_| "<eval failed>".into());
-                if focus != from_name && !focus.starts_with(&from_name) {
-                    warn!(
+            }
+            6 => {
+                let (x, y) = probe.to;
+                script.mouse_button(x, y, "LeftButton", false);
+            }
+            // Self-check: hover the source where it now draws and ask the hit test who is there, to
+            // catch a hit rect that has parted from the drawn one.
+            7 => {
+                if let Some((x, y)) = frame_centre(&script, &from_name) {
+                    script.mouse_move(x, y);
+                    let focus = script
+                        .eval::<String>(
+                            "return tostring(GetMouseFocus() and GetMouseFocus():GetName())",
+                        )
+                        .unwrap_or_else(|_| "<eval failed>".into());
+                    if focus != from_name && !focus.starts_with(&from_name) {
+                        warn!(
                         "probe-drag: {from_name} draws at ({x:.0},{y:.0}) but the hit test there \
                          says {focus}"
                     );
-                } else {
-                    info!("probe-drag: {from_name} still answers its own rect");
+                    } else {
+                        info!("probe-drag: {from_name} still answers its own rect");
+                    }
                 }
             }
-        }
-        _ => {
-            if !probe.report.is_empty() {
-                match script.eval::<String>(&probe.report) {
-                    Ok(text) => info!("probe-drag: after {from_name} > {to_name}: {text}"),
-                    Err(e) => warn!("probe-drag: report chunk raised: {e}"),
+            _ => {
+                if !probe.report.is_empty() {
+                    match script.eval::<String>(&probe.report) {
+                        Ok(text) => info!("probe-drag: after {from_name} > {to_name}: {text}"),
+                        Err(e) => warn!("probe-drag: report chunk raised: {e}"),
+                    }
                 }
+                for err in script.errors().drain(..) {
+                    warn!("probe-drag: UI error during {from_name} > {to_name}: {err}");
+                }
+                probe.pair += 1;
+                probe.phase = 0;
+                // Hand the pointer back for a frame between gestures, where a stale hover shows.
+                synthetic.0 = false;
+                return;
             }
-            for err in script.errors().drain(..) {
-                warn!("probe-drag: UI error during {from_name} > {to_name}: {err}");
-            }
-            probe.pair += 1;
-            probe.phase = 0;
-            // Hand the pointer back for a frame between gestures, where a stale hover shows.
-            synthetic.0 = false;
-            return;
         }
-    }
-    probe.phase += 1;
+        probe.phase += 1;
+    })
 }
 
 #[cfg(test)]

@@ -795,44 +795,51 @@ fn forget_dead_vm_tiles(
 /// pack the atlas, place every tile at its cell and its play head, and aim the camera.
 #[allow(clippy::type_complexity)] // a Bevy system's full input set
 fn sync_tiles(
+    mut vm: crate::script_calls::VmWith<(
+        Query<
+            'static,
+            'static,
+            (
+                &'static mut Camera,
+                &'static mut RenderTarget,
+                &'static mut Projection,
+                &'static mut Transform,
+            ),
+            (With<TileCamera>, Without<TilePerspectiveCamera>),
+        >,
+        Query<
+            'static,
+            'static,
+            (
+                &'static mut Camera,
+                &'static mut RenderTarget,
+                &'static mut Projection,
+                &'static mut Transform,
+                &'static TilePerspectiveCamera,
+            ),
+            Without<TileCamera>,
+        >,
+        Query<
+            'static,
+            'static,
+            (
+                &'static mut Transform,
+                &'static mut Visibility,
+                Option<&'static mut AnimationPlayer>,
+                Option<&'static mut SceneClock>,
+            ),
+            (
+                With<TileRoot>,
+                Without<TileCamera>,
+                Without<TilePerspectiveCamera>,
+            ),
+        >,
+    )>,
     mut commands: Commands,
-    script: Option<NonSendMut<UiScript>>,
     mut state: NonSendMut<TileState>,
     mut bridge: ResMut<UiModelTiles>,
     mut assets: TileAssets,
     mut render: TileRender,
-    mut cams: Query<
-        (
-            &mut Camera,
-            &mut RenderTarget,
-            &mut Projection,
-            &mut Transform,
-        ),
-        (With<TileCamera>, Without<TilePerspectiveCamera>),
-    >,
-    mut pane_cams: Query<
-        (
-            &mut Camera,
-            &mut RenderTarget,
-            &mut Projection,
-            &mut Transform,
-            &TilePerspectiveCamera,
-        ),
-        Without<TileCamera>,
-    >,
-    mut roots: Query<
-        (
-            &mut Transform,
-            &mut Visibility,
-            Option<&mut AnimationPlayer>,
-            Option<&mut SceneClock>,
-        ),
-        (
-            With<TileRoot>,
-            Without<TileCamera>,
-            Without<TilePerspectiveCamera>,
-        ),
-    >,
     mut parts: Query<
         (&mut MeshTag, &mut Visibility),
         (
@@ -843,6 +850,7 @@ fn sync_tiles(
     >,
     mut emitters: Query<&mut ParticleEmitter>,
 ) {
+    vm.turn(|script, (mut cams, mut pane_cams, mut roots)| {
     state.frame += 1;
     let frame = state.frame;
     let Some(mut script) = script else {
@@ -1390,6 +1398,7 @@ fn sync_tiles(
         &mut cams,
         !bridge.cells.is_empty() && bridge.atlas.is_some(),
     );
+})
 }
 
 /// The orthographic leg's root in camera space, pixels, `y` up: the pane's bottom-left `origin`

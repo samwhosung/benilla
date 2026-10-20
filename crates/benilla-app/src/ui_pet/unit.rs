@@ -31,12 +31,10 @@ pub(crate) struct PetUnitMemory {
 /// `UNIT_PET` does (`SetPet`, `0x4bc7e0`), not our `UNIT_FIELD_SUMMON`, so a charmed unit has a
 /// frame. The reaction is 0: the pet frame reads none.
 pub(crate) fn feed_pet_unit(
-    script: Option<NonSendMut<UiScript>>,
-    bar: Res<PetBar>,
+    mut vm: crate::script_calls::VmWith<(Res<'static, PetBar>, ResMut<'static, NameCache>)>,
     pet: PetUnit,
     changed_stores: Query<(), Changed<ObjectStore>>,
     mut removed_stores: RemovedComponents<ObjectStore>,
-    mut names: ResMut<NameCache>,
     commands: Res<NetCommands>,
     // The form table, the creature-type resolver's first stage, and the type words.
     spells: Option<Res<crate::ui_action::Spells>>,
@@ -48,100 +46,103 @@ pub(crate) fn feed_pet_unit(
     ),
     mut memory: Local<crate::ui_script::VmMemo<PetUnitMemory>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let (memory, vm_reset) = memory.get_reset(&script);
-    let names_moved = memory.names_generation.moved(names.generation());
-    let bar_changed = bar.is_changed();
-    let stores_changed = !changed_stores.is_empty();
-    let stores_removed = !removed_stores.is_empty();
-    gate::trace(
-        "feed_pet_unit",
-        &[
-            ("vm_reset", vm_reset),
-            ("names", names_moved),
-            ("bar", bar_changed),
-            ("stores", stores_changed),
-            ("removed", stores_removed),
-        ],
-    );
-    let gate =
-        gate::Gate::new(vm_reset || names_moved || bar_changed || stores_changed || stores_removed);
-    removed_stores.clear();
-    if gate.skip() {
-        return;
-    }
-    let pet_guid = bar.spells.pet_guid;
-    watch_name_timestamp(pet_guid, &mut script, &pet, &mut names, memory);
-    // An unstreamed pet pushes nothing: `UnitExists("pet")` reads false and the frame hides.
-    let fresh = (pet_guid != 0)
-        .then(|| pet.store(pet_guid))
-        .flatten()
-        .map(|store| {
-            // The unit's create looked its name up with a callback (`0x5dec12`); a frame asks only
-            // a name the cache holds nothing for, as one invalidated since, and a refused one waits
-            // for the next create.
-            let name = names
-                .resolve_unit(pet_guid, Some(store), Ask::New(&commands))
-                .map(str::to_string);
-            // No `ChrClasses.dbc`: the reference reads a class only for TYPEMASK_PLAYER.
-            let types = CreatureTypeSources::of_resources(
-                &names,
-                spells.as_deref(),
-                creature_types.as_deref(),
-            );
-            let mut s = snapshot(store, pet_guid, name, 0, Default::default(), types);
-            let object = |g: u64| pet.store(g);
-            let sources = crate::ui_unit::tooltip_facts::TooltipSources {
-                names: &names,
-                catalog: spells.as_deref().map(|s| &s.catalog),
-                object: &object,
-                study: crate::ui_unit::tooltip_facts::StudySources {
-                    tables: study.0.as_deref(),
-                    families: study.1.as_deref(),
-                },
-            };
-            s.tooltip =
-                crate::ui_unit::tooltip_facts::tooltip_facts(store, s.creature_type, &sources);
-            s
-        });
-
-    let dirty = match (&fresh, &memory.pushed) {
-        (Some(cur), Some(prev)) => cur != prev,
-        (None, None) => false,
-        _ => true,
-    };
-    if dirty {
-        gate.audit("feed_pet_unit", "the pet snapshot");
-        script.set_unit("pet", fresh.clone());
-    }
-    match &fresh {
-        Some(cur) => {
-            if memory.pushed.as_ref() != Some(cur) {
-                if memory.pushed.is_none() {
-                    debug!(
-                        "ui_pet: \"pet\" resolved — {} ({}/{} hp)",
-                        cur.name.as_deref().unwrap_or("<name pending>"),
-                        cur.health,
-                        cur.max_health,
-                    );
-                }
-                memory.pushed = Some(cur.clone());
-            }
+    vm.feed(|script, (bar, mut names), fires| {
+        let Some(mut script) = script else {
+            return;
+        };
+        let (memory, vm_reset) = memory.get_reset(&script);
+        let names_moved = memory.names_generation.moved(names.generation());
+        let bar_changed = bar.is_changed();
+        let stores_changed = !changed_stores.is_empty();
+        let stores_removed = !removed_stores.is_empty();
+        gate::trace(
+            "feed_pet_unit",
+            &[
+                ("vm_reset", vm_reset),
+                ("names", names_moved),
+                ("bar", bar_changed),
+                ("stores", stores_changed),
+                ("removed", stores_removed),
+            ],
+        );
+        let gate = gate::Gate::new(
+            vm_reset || names_moved || bar_changed || stores_changed || stores_removed,
+        );
+        removed_stores.clear();
+        if gate.skip() {
+            return;
         }
-        // Pushing fires nothing: the pet's unit events are its field watches
-        // (`crate::field_watch`), and the frame repaints a new pet on `UNIT_PET`.
-        None => memory.pushed = None,
-    }
+        let pet_guid = bar.spells.pet_guid;
+        watch_name_timestamp(pet_guid, &mut script, &pet, &mut names, memory);
+        // An unstreamed pet pushes nothing: `UnitExists("pet")` reads false and the frame hides.
+        let fresh = (pet_guid != 0)
+            .then(|| pet.store(pet_guid))
+            .flatten()
+            .map(|store| {
+                // The unit's create looked its name up with a callback (`0x5dec12`); a frame asks only
+                // a name the cache holds nothing for, as one invalidated since, and a refused one waits
+                // for the next create.
+                let name = names
+                    .resolve_unit(pet_guid, Some(store), Ask::New(&commands))
+                    .map(str::to_string);
+                // No `ChrClasses.dbc`: the reference reads a class only for TYPEMASK_PLAYER.
+                let types = CreatureTypeSources::of_resources(
+                    &names,
+                    spells.as_deref(),
+                    creature_types.as_deref(),
+                );
+                let mut s = snapshot(store, pet_guid, name, 0, Default::default(), types);
+                let object = |g: u64| pet.store(g);
+                let sources = crate::ui_unit::tooltip_facts::TooltipSources {
+                    names: &names,
+                    catalog: spells.as_deref().map(|s| &s.catalog),
+                    object: &object,
+                    study: crate::ui_unit::tooltip_facts::StudySources {
+                        tables: study.0.as_deref(),
+                        families: study.1.as_deref(),
+                    },
+                };
+                s.tooltip =
+                    crate::ui_unit::tooltip_facts::tooltip_facts(store, s.creature_type, &sources);
+                s
+            });
 
-    // UNIT_PET("player") only on a pet guid change (`0x4bc84f`), not on a same-pet re-send.
-    if memory.guid != Some(pet_guid) {
-        gate.audit("feed_pet_unit", "the UNIT_PET edge");
-        memory.guid = Some(pet_guid);
-        debug!("ui_pet: UNIT_PET — pet is now {pet_guid:#x}");
-        script.fire_event("UNIT_PET", vec![ScriptValue::Str("player".into())]);
-    }
+        let dirty = match (&fresh, &memory.pushed) {
+            (Some(cur), Some(prev)) => cur != prev,
+            (None, None) => false,
+            _ => true,
+        };
+        if dirty {
+            gate.audit("feed_pet_unit", "the pet snapshot");
+            script.set_unit("pet", fresh.clone());
+        }
+        match &fresh {
+            Some(cur) => {
+                if memory.pushed.as_ref() != Some(cur) {
+                    if memory.pushed.is_none() {
+                        debug!(
+                            "ui_pet: \"pet\" resolved — {} ({}/{} hp)",
+                            cur.name.as_deref().unwrap_or("<name pending>"),
+                            cur.health,
+                            cur.max_health,
+                        );
+                    }
+                    memory.pushed = Some(cur.clone());
+                }
+            }
+            // Pushing fires nothing: the pet's unit events are its field watches
+            // (`crate::field_watch`), and the frame repaints a new pet on `UNIT_PET`.
+            None => memory.pushed = None,
+        }
+
+        // UNIT_PET("player") only on a pet guid change (`0x4bc84f`), not on a same-pet re-send.
+        if memory.guid != Some(pet_guid) {
+            gate.audit("feed_pet_unit", "the UNIT_PET edge");
+            memory.guid = Some(pet_guid);
+            debug!("ui_pet: UNIT_PET — pet is now {pet_guid:#x}");
+            fires.post("UNIT_PET", vec![ScriptValue::Str("player".into())]);
+        }
+    })
 }
 
 /// Drop our pet's cached name when its name timestamp moves, as `0x604aa0` does from the field

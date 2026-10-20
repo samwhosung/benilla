@@ -23,7 +23,6 @@
 //! for a run sized by `WOW_PROBE_BG_SAMPLES` to reach a match's end; the rest is
 //! `docs/CONTRIBUTING.md`, "Running it unattended". Non-combat: the probe never attacks.
 
-use bevy::ecs::system::NonSendMut;
 use bevy::prelude::*;
 
 use benilla_ui::script::UiScript;
@@ -365,8 +364,9 @@ fn bg_probe(
     dropped: Res<DroppedOpcodes>,
     go_templates: Res<crate::go_templates::GameObjectTemplates>,
     mut idle: ResMut<crate::ui_chat::idle::LastInput>,
-    mut script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
 ) {
+    hosted_vm.run(|mut script| {
     let Ok(store) = me.single() else {
         return;
     };
@@ -891,6 +891,7 @@ fn bg_probe(
         }
         Phase::Done => {}
     }
+})
 }
 
 /// Ends the process once [`Phase::Done`] is reached and the body has left the battleground map

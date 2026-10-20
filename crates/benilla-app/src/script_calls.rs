@@ -280,6 +280,39 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
         }
         r
     }
+
+    /// A feed: `f` pushes what it read of `P` into the VM as an engine turn ([`Self::turn`]) and
+    /// leaves its events in `fires`, which are signalled in order once it returns, with the host
+    /// lent, so the calls their handlers make apply inside the verb. For a feed whose events end
+    /// its pass, so its handlers read every push it made.
+    pub(crate) fn feed(
+        &mut self,
+        f: impl FnOnce(Option<&mut UiScript>, bevy::ecs::system::SystemParamItem<'_, '_, P>, &mut Fires),
+    ) {
+        let mut fires = Fires::default();
+        self.turn(|script, p| f(script, p, &mut fires));
+        if fires.0.is_empty() {
+            return;
+        }
+        self.run(|script| {
+            if let Some(script) = script {
+                for (event, args) in fires.0 {
+                    script.fire_event(&event, args);
+                }
+            }
+        });
+    }
+}
+
+/// The events a feed's engine turn leaves for [`VmWith::feed`] to signal once it has pushed.
+#[derive(Default)]
+pub(crate) struct Fires(Vec<(String, Vec<benilla_ui::script::ScriptValue>)>);
+
+impl Fires {
+    /// Signal `event` with `args` once the turn's pushes are in, after the ones posted before it.
+    pub(crate) fn post(&mut self, event: &str, args: Vec<benilla_ui::script::ScriptValue>) {
+        self.0.push((event.to_string(), args));
+    }
 }
 
 /// Run `f` on the world's VM with the host lent, for an entry that holds the whole world (a
@@ -293,6 +326,22 @@ pub(crate) fn with_hosted_vm<R>(
     let r = state.get_mut(world).run(f);
     state.apply(world);
     r
+}
+
+/// Apply what an engine turn left waiting on `script`, a VM out of the world (the UI load runs on
+/// one, with the world in hand): through a host built off the world, or dropped with none.
+pub(crate) fn apply_waiting(world: &mut World, script: &mut UiScript) {
+    let mut state = bevy::ecs::system::SystemState::<Option<ScriptCallHost>>::new(world);
+    {
+        let mut host = state.get_mut(world);
+        match host.as_mut() {
+            Some(host) => script.hosted(host, |_| ()),
+            None => {
+                script.refuse_waiting();
+            }
+        }
+    }
+    state.apply(world);
 }
 
 /// Bind the units a selection writer outside the calls (a loot window's select, the chat layer's
@@ -3014,5 +3063,162 @@ mod tests {
         assert_eq!(global(&mut f, "FIRST"), Some(1), "armed on the next line");
         assert_eq!(global(&mut f, "SECOND"), None, "bound and sent");
         assert_eq!(casts(&f), vec![(MOTW, Some(NEW))]);
+    }
+
+    /// A client that knows `MOB` as "Red Affinity", with a frame whose `script` handler (an
+    /// `OnUpdate` or an `OnEvent` for `event`) runs once: it targets the name, and records in
+    /// `SAME` whether its next line reads the new target (`TargetByName` `0x489d60` commits through
+    /// `SetSelection` `0x493540` before it returns).
+    fn targets_by_name_on(script: &str, event: &str) -> Frame {
+        let mut f = frame(true);
+        spawn_mob(&mut f, &[]);
+        let world = f.app.world_mut();
+        world
+            .resource_mut::<crate::names::NameCache>()
+            .insert_player(MOB, "Red Affinity".into(), None);
+        world
+            .run_system_once(crate::ui_unit::feed_name_candidates)
+            .expect("the candidate feed runs as a one-shot system");
+        world
+            .non_send_resource_mut::<UiScript>()
+            .run(&format!(
+                r#"local e = CreateFrame("Frame")
+                if "{event}" ~= "" then e:RegisterEvent("{event}") end
+                e:SetScript("{script}", function()
+                    this:SetScript("{script}", nil)
+                    TargetByName("Red Affinity", true)
+                    if UnitName("target") == "Red Affinity" then SAME = 1 end
+                end)"#
+            ))
+            .expect("the frame builds");
+        f
+    }
+
+    /// The issue's case: an `OnUpdate` that targets by name reads the new target on its next line,
+    /// as the update walk of the pump (`0x765650`) runs the script (`0x704f10`) with nothing
+    /// between a verb and its effect.
+    #[test]
+    fn an_on_update_scripts_target_by_name_reads_the_new_target() {
+        let mut f = targets_by_name_on("OnUpdate", "");
+        let world = f.app.world_mut();
+        world.spawn((Window::default(), bevy::window::PrimaryWindow));
+        crate::ui_script::tick_once(world);
+        assert_eq!(
+            global(&mut f, "SAME"),
+            Some(1),
+            "the next line reads the new target"
+        );
+        assert_eq!(selected(&f), Some(MOB));
+    }
+
+    /// A feed's event handler targets inside its call: the feed pushes as an engine turn, then
+    /// signals its events with the host lent, each handler run in place (`SignalEvent`
+    /// `0x703e50`). Here the action feed's first `ACTIONBAR_UPDATE_COOLDOWN`.
+    #[test]
+    fn a_feeds_event_handler_reads_the_target_it_set() {
+        let mut f = targets_by_name_on("OnEvent", "ACTIONBAR_UPDATE_COOLDOWN");
+        crate::ui_action::run_feed_action_state_once(f.app.world_mut());
+        assert_eq!(
+            global(&mut f, "SAME"),
+            Some(1),
+            "the next line reads the new target"
+        );
+        assert_eq!(selected(&f), Some(MOB));
+    }
+
+    /// A latch core's event handler targets inside its call: the bank's close core (`0x4f84d0`)
+    /// signals `BANKFRAME_CLOSED` (`0x4f84df`), with no test of the cell, from an exclusive entry
+    /// that lends the host around the fire.
+    #[test]
+    fn a_latch_cores_event_handler_reads_the_target_it_set() {
+        let mut f = targets_by_name_on("OnEvent", "BANKFRAME_CLOSED");
+        crate::ui_bank::close_core(f.app.world_mut());
+        assert_eq!(
+            global(&mut f, "SAME"),
+            Some(1),
+            "the next line reads the new target"
+        );
+        assert_eq!(selected(&f), Some(MOB));
+    }
+
+    /// The systems of `app` that write the VM, and those of them whose declared access does not
+    /// cover the call host's, by schedule and name. An exclusive system declares no access and is
+    /// left out.
+    fn vm_writers_and_the_unhosted(app: &mut App) -> (usize, Vec<String>) {
+        use bevy::ecs::system::{IntoSystem, System};
+        let world = app.world_mut();
+        let host = System::initialize(&mut IntoSystem::into_system(|_: ScriptCallHost| {}), world);
+        let labels: Vec<_> = world
+            .resource::<bevy::ecs::schedule::Schedules>()
+            .iter()
+            .map(|(_, s)| s.label())
+            .collect();
+        let (mut writers, mut unhosted) = (0, Vec::new());
+        for label in labels {
+            world.schedule_scope(label, |world, schedule| {
+                schedule.graph_mut().systems.initialize(world);
+                let Some(vm) = world
+                    .components()
+                    .get_resource_id(std::any::TypeId::of::<UiScript>())
+                else {
+                    return;
+                };
+                let graph = schedule.graph();
+                for (key, system, _) in graph.systems.iter() {
+                    let Some(declared) = graph.systems.get(key) else {
+                        continue;
+                    };
+                    let access = declared.access.combined_access();
+                    if system.is_exclusive() || !access.has_resource_write(vm) {
+                        continue;
+                    }
+                    writers += 1;
+                    let mut with_host = declared.access.clone();
+                    with_host.extend(host.clone());
+                    if with_host.combined_access() != access {
+                        unhosted.push(format!("{label:?}: {}", system.name()));
+                    }
+                }
+            });
+        }
+        unhosted.sort();
+        (writers, unhosted)
+    }
+
+    /// Every system that writes the VM holds its call host, so a call its Lua makes applies inside
+    /// the verb whatever entry the script came in by, as `TargetByName` (`0x489d60`) commits
+    /// through `SetSelection` (`0x493540`) before it returns. Read off each system's declared
+    /// access in every schedule of the client with every instrument and probe added, where a
+    /// system whose own parameters collide with the host's also fails to initialize. An exclusive
+    /// entry lends through [`with_hosted_vm`].
+    #[test]
+    fn every_system_that_writes_the_vm_holds_its_call_host() {
+        // The census tells a bare writer from a hosted one.
+        let mut probe = App::new();
+        probe.add_systems(
+            Update,
+            (
+                |_: Option<NonSendMut<UiScript>>| {},
+                |_: HostedVm| {},
+                |_: VmWith<Res<'static, Time>>| {},
+            ),
+        );
+        let (writers, unhosted) = vm_writers_and_the_unhosted(&mut probe);
+        assert_eq!((writers, unhosted.len()), (3, 1), "{unhosted:?}");
+
+        let mut app = crate::game_plugins::schedule_tests::headless_client_with(
+            crate::dev::add_every_instrument,
+        );
+        let (writers, unhosted) = vm_writers_and_the_unhosted(&mut app);
+        assert!(
+            writers > 200,
+            "the census reads the client's VM writers: {writers}"
+        );
+        assert!(
+            unhosted.is_empty(),
+            "these systems write the VM without holding its call host (`HostedVm` or `VmWith`), \
+             so a call their Lua makes is refused:\n  {}",
+            unhosted.join("\n  ")
+        );
     }
 }

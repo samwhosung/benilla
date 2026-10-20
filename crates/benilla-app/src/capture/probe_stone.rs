@@ -165,7 +165,7 @@ fn vm_state(script: &UiScript) -> (bool, Option<String>, bool) {
 fn stone_probe(
     time: ProbeClock,
     mut probe: ResMut<StoneProbe>,
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     player: Res<Player>,
     objects: Query<NearbyObject, Without<SelfPlayer>>,
@@ -175,6 +175,7 @@ fn stone_probe(
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    hosted_vm.run(|script| {
     let Ok(store) = self_store.single() else {
         return; // not in-world yet
     };
@@ -399,4 +400,5 @@ fn stone_probe(
             });
         }
     }
+})
 }

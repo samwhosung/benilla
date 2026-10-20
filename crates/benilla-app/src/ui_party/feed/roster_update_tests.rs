@@ -5,6 +5,7 @@
 
 use super::super::pets::tests::{app, app_with, flag, frame, member, ME};
 use super::*;
+use benilla_ui::script::UiScript;
 
 const ON: u8 = member_status::ONLINE;
 const DEAD: u8 = member_status::ONLINE | member_status::DEAD;

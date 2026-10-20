@@ -11,7 +11,7 @@ use benilla_formats::{
 };
 use benilla_protocol::messages::PLAYER_SKILL_SLOTS;
 use benilla_protocol::{SessionEvent, SessionEventKind};
-use benilla_ui::script::{CraftReagent, CraftRecipe, CraftState, CraftTooltip, UiScript};
+use benilla_ui::script::{CraftReagent, CraftRecipe, CraftState, CraftTooltip};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
@@ -279,34 +279,38 @@ fn feed_craft(
 /// the cursor's item half, a rod craft commits at once. `CloseCraft` closes the window, sends no
 /// packet and leaves an armed pick to the ordinary cancels (Escape, right-click, a new cast).
 fn drain_craft(
-    script: Option<NonSendMut<UiScript>>,
+    mut vm: crate::script_calls::VmWith<(
+        cast_target::CastTargeting<'static, 'static>,
+        CastLadder<'static, 'static>,
+    )>,
     mut open: ResMut<CraftOpen>,
     skill_lines: Option<Res<SkillLines>>,
-    targeting: cast_target::CastTargeting,
-    mut ladder: CastLadder,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let _ = skill_lines; // the feed resolves lines; the drain just casts what it is handed
-    for spell_id in script.take_craft_dos() {
-        if open.line.is_none() {
-            debug!("ui_craft: DoCraft({spell_id}) with no open window — ignored");
-            continue;
+    vm.turn(|script, (targeting, mut ladder)| {
+        let Some(script) = script else {
+            return;
+        };
+        let _ = skill_lines; // the feed resolves lines; the drain just casts what it is handed
+        for spell_id in script.take_craft_dos() {
+            if open.line.is_none() {
+                debug!("ui_craft: DoCraft({spell_id}) with no open window — ignored");
+                continue;
+            }
+            debug!("ui_craft: DoCraft({spell_id})");
+            ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
         }
-        debug!("ui_craft: DoCraft({spell_id})");
-        ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
-    }
-    if script.take_craft_close() {
-        debug!("ui_craft: client-side close (no packet)");
-        open.line = None;
-    }
+        if script.take_craft_close() {
+            debug!("ui_craft: client-side close (no packet)");
+            open.line = None;
+        }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use benilla_formats::SpellDisplay;
+    use benilla_ui::script::UiScript;
 
     /// `CloseCraft` signals `CRAFT_CLOSE` in the verb (`0x4f5fef`), so the feed that finds the
     /// window closed a frame later signals no second close.

@@ -74,7 +74,7 @@ const SWING_ACTIONS: [&str; 9] = [
 /// descriptor off the damage and hit info like every wrapper's. The table index has no bound: a
 /// state past it, which no server sends (vmangos `VictimState` ends at 8,
 /// `Objects/UnitDefines.h:247`), signals nothing here.
-pub(crate) fn swing(log: &mut ChatLog, guid: u64, victim_state: u32, hit_info: u32, damage: u32) {
+pub(crate) fn swing(log: &ChatLog, guid: u64, victim_state: u32, hit_info: u32, damage: u32) {
     let Some(&action) = SWING_ACTIONS.get(victim_state as usize) else {
         return;
     };

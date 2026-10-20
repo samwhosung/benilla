@@ -314,14 +314,12 @@ struct PlateWorld<'w, 's> {
 /// [`PlateState`]s. Runs after the targeting chain, whose selection it reads.
 #[allow(clippy::type_complexity)] // one Bevy system's full input set
 fn drive_vplates(
+    mut vm: crate::script_calls::VmWith<PlateWorld<'static, 'static>>,
     mode: Res<VPlateMode>,
     mut plates: ResMut<VPlates>,
     mut plate_clicks: ResMut<PlateClicks>,
     rig: Res<crate::player::CameraControl>,
-    world: PlateWorld,
     names: Res<NameCache>,
-    // `None` in a run with no UI VM.
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
     anchor_q: (
         Query<&BoneAttach>,
         Query<&benilla_world::rig_anim::RigPose>,
@@ -334,12 +332,13 @@ fn drive_vplates(
     group: Res<crate::ui_party::GroupState>,
     mut mouse_told: Local<crate::ui_script::VmMemo<Option<bool>>>,
 ) {
+    vm.turn(|script, world| {
     plates.0.clear();
     bucket.clear();
     // Every early return retires the plates first, or the widgets stay on screen; the reference
     // hides each live plate and returns it to the pool (`0x608a10`).
-    let retire_all = |script: Option<NonSendMut<benilla_ui::script::UiScript>>| {
-        if let Some(mut script) = script {
+    let retire_all = |script: Option<&mut benilla_ui::script::UiScript>| {
+        if let Some(script) = script {
             script.retire_nameplates();
         }
     };
@@ -353,7 +352,7 @@ fn drive_vplates(
         retire_all(script);
         return;
     };
-    let Some(mut script) = script else {
+    let Some(script) = script else {
         return;
     };
     let cam_tf = GlobalTransform::from(*cam_pose);
@@ -629,6 +628,7 @@ fn drive_vplates(
         },
         &states,
     );
+})
 }
 
 /// The plate driver's set; the overhead-name driver runs after it.

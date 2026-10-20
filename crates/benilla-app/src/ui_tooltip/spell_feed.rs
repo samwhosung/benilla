@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{AuraKey, AuraTooltipView, KeyedArg, TextPart, TooltipText, UiScript};
+use benilla_ui::script::{AuraKey, AuraTooltipView, KeyedArg, TextPart, TooltipText};
 
 use super::spell_deps::{Chance, Changes, Deps, RangeSeen, Reagents, Seen};
 use crate::items::Items;
@@ -700,7 +700,7 @@ pub(super) struct SpellTooltipSources<'w> {
 /// hovered, as the reference reads them all locally; an ask for any other id or aura too.
 #[allow(clippy::type_complexity)] // a Bevy system's full input set
 pub(super) fn feed_spell_tooltips(
-    script: Option<NonSendMut<UiScript>>,
+    mut vm: crate::script_calls::VmWith<ResMut<'static, Items>>,
     actions: Option<Res<PlayerActions>>,
     spell_sources: SpellTooltipSources,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
@@ -710,7 +710,6 @@ pub(super) fn feed_spell_tooltips(
     objects: Objects,
     home_bind: Option<Res<crate::net::HomeBind>>,
     area_names: Option<Res<crate::ui_quest_log::QuestHeaderNamesRes>>,
-    mut items: ResMut<Items>,
     // One tuple param, under Bevy's 16-param ceiling.
     lookups: (
         Option<Res<crate::ui_items::ItemSubClasses>>,
@@ -723,197 +722,197 @@ pub(super) fn feed_spell_tooltips(
     commands: Res<NetCommands>,
     mut memory: Local<crate::ui_script::VmMemo<SpellFeedMemory>>,
 ) {
-    let (sub_classes, spell_mods, skill_lines, factions, reputations) = &lookups;
-    let SpellTooltipSources {
-        spells,
-        trainer_subjects,
-        talents,
-    } = spell_sources;
-    let Some(mut script) = script else {
-        return;
-    };
-    let memory = memory.get(&script);
-    let Some(spells) = spells.as_deref() else {
-        return;
-    };
-    let mut wanted: Vec<u32> = script.take_spell_tooltip_asks();
-    // What the VM holds for a hover: quest rewards and craft subjects.
-    wanted.extend(
-        script
-            .spell_tooltip_subjects()
-            .into_iter()
-            .filter(|s| !memory.pushed.contains_key(s)),
-    );
-    if let Some(actions) = actions.as_deref() {
+    vm.turn(|script, mut items| {
+        let (sub_classes, spell_mods, skill_lines, factions, reputations) = &lookups;
+        let SpellTooltipSources {
+            spells,
+            trainer_subjects,
+            talents,
+        } = spell_sources;
+        let Some(script) = script else {
+            return;
+        };
+        let memory = memory.get(&script);
+        let Some(spells) = spells.as_deref() else {
+            return;
+        };
+        let mut wanted: Vec<u32> = script.take_spell_tooltip_asks();
+        // What the VM holds for a hover: quest rewards and craft subjects.
         wanted.extend(
-            actions
-                .spells
-                .iter()
-                .copied()
+            script
+                .spell_tooltip_subjects()
+                .into_iter()
                 .filter(|s| !memory.pushed.contains_key(s)),
         );
-    }
-    // The aura views: every unit's auras, the tracking spell, and what their setters asked for.
-    let mut wanted_aura: Vec<AuraKey> = script.take_aura_tooltip_asks();
-    wanted_aura.extend(
-        script
-            .aura_tooltip_subjects()
-            .into_iter()
-            .filter(|k| !memory.aura_pushed.contains_key(k)),
-    );
-    // The pet views: the pet's bar and book, and what their setters asked for.
-    let mut wanted_pet: Vec<u32> = script.take_pet_spell_tooltip_asks();
-    wanted_pet.extend(
-        script
-            .pet_spell_tooltip_subjects()
-            .into_iter()
-            .filter(|s| !memory.pet_pushed.contains_key(s)),
-    );
-    // The open trainer's services, which the detail icon's `SetTrainerService` renders, a
-    // pet-learn service's against the pet.
-    if let Some(trainer) = trainer_subjects.as_deref() {
-        wanted.extend(
-            trainer
-                .player
-                .iter()
-                .copied()
-                .filter(|s| !memory.pushed.contains_key(s)),
+        if let Some(actions) = actions.as_deref() {
+            wanted.extend(
+                actions
+                    .spells
+                    .iter()
+                    .copied()
+                    .filter(|s| !memory.pushed.contains_key(s)),
+            );
+        }
+        // The aura views: every unit's auras, the tracking spell, and what their setters asked for.
+        let mut wanted_aura: Vec<AuraKey> = script.take_aura_tooltip_asks();
+        wanted_aura.extend(
+            script
+                .aura_tooltip_subjects()
+                .into_iter()
+                .filter(|k| !memory.aura_pushed.contains_key(k)),
         );
+        // The pet views: the pet's bar and book, and what their setters asked for.
+        let mut wanted_pet: Vec<u32> = script.take_pet_spell_tooltip_asks();
         wanted_pet.extend(
-            trainer
-                .pet
-                .iter()
-                .copied()
+            script
+                .pet_spell_tooltip_subjects()
+                .into_iter()
                 .filter(|s| !memory.pet_pushed.contains_key(s)),
         );
-    }
-    // Every rank of the class's talents: a talent tooltip reads the current and the next rank.
-    if let (Some(talents), Ok(store)) = (talents.as_deref(), self_q.single()) {
-        let race = store.0.unit_race().unwrap_or(0);
-        let class = store.0.unit_class().unwrap_or(0);
-        for tab in talents.catalog.tabs_for_class(race, class) {
-            for t in talents.catalog.talents_in_tab(tab.id) {
-                wanted.extend(
-                    t.ranks
-                        .iter()
-                        .copied()
-                        .filter(|s| *s != 0 && !memory.pushed.contains_key(s)),
-                );
+        // The open trainer's services, which the detail icon's `SetTrainerService` renders, a
+        // pet-learn service's against the pet.
+        if let Some(trainer) = trainer_subjects.as_deref() {
+            wanted.extend(
+                trainer
+                    .player
+                    .iter()
+                    .copied()
+                    .filter(|s| !memory.pushed.contains_key(s)),
+            );
+            wanted_pet.extend(
+                trainer
+                    .pet
+                    .iter()
+                    .copied()
+                    .filter(|s| !memory.pet_pushed.contains_key(s)),
+            );
+        }
+        // Every rank of the class's talents: a talent tooltip reads the current and the next rank.
+        if let (Some(talents), Ok(store)) = (talents.as_deref(), self_q.single()) {
+            let race = store.0.unit_race().unwrap_or(0);
+            let class = store.0.unit_class().unwrap_or(0);
+            for tab in talents.catalog.tabs_for_class(race, class) {
+                for t in talents.catalog.talents_in_tab(tab.id) {
+                    wanted.extend(
+                        t.ranks
+                            .iter()
+                            .copied()
+                            .filter(|s| *s != 0 && !memory.pushed.contains_key(s)),
+                    );
+                }
             }
         }
-    }
-    let home_area: Option<String> = home_bind
-        .as_deref()
-        .and_then(|b| b.0)
-        .and_then(|id| area_names.as_deref()?.0.resolve(id as i32))
-        .map(str::to_string);
-    let self_store = self_q.single().ok();
-    let caster_unit = range_units.caster();
-    let attack_target = range_units.caster_attack_target();
-    // What moved since the last frame, which each pushed view is checked against: the bind
-    // point (Astral Recall's `$z`), the form, the skills, what the equipped-item search learns of
-    // each equipment slot and the disarm flag, the level, cost bases and ranged attack time, the
-    // block, dodge, parry and crit percentages, and the two units the melee range cell reads.
-    let mut seen = Seen::of(
-        self_store,
-        home_area.as_deref(),
-        RangeSeen::of(&caster_unit, attack_target.as_ref()),
-        &objects,
-        &items,
-    );
-    if let Some(reputations) = reputations.as_deref() {
-        seen = seen.with_reputations(reputations);
-    }
-    let mut changes = memory
-        .seen
-        .as_ref()
-        .map(|prev| seen.changes_since(prev))
-        .unwrap_or_default();
-    memory.seen = Some(seen);
-    // The talent tables: the cost, cast, cooldown and range cells and the description's tokens
-    // resolve through them.
-    if let Some(prev) = memory.mods.as_ref().filter(|_| spell_mods.is_changed()) {
-        changes = changes.with_mods(spell_mods.diff(prev));
-    }
-    if memory.mods.is_none() || spell_mods.is_changed() {
-        memory.mods = Some((**spell_mods).clone());
-    }
-    // And the reagents on show: their counts and whether their names have streamed.
-    let reagent_state: Reagents = memory
-        .reagents
-        .keys()
-        .map(|&entry| (entry, reagent_state(entry, self_store, &objects, &items)))
-        .collect();
-    changes = changes.with_reagents(&memory.reagents, &reagent_state);
-    memory.reagents = reagent_state;
-    memory.requeue(&changes, &mut wanted, &mut wanted_pet, &mut wanted_aura);
-    // The pet's inputs: a new pet, or its level, bases, form, reach or motion moving, rebuilds the
-    // pet views alone.
-    let pet_guid = self_store.and_then(|s| s.0.unit_pet_guid());
-    let pet = pet_guid.and_then(|g| objects.object(g));
-    let pet_entity = pet_guid.and_then(|g| objects.entity(g));
-    let pet_unit =
-        pet_entity
-            .and_then(|e| range_units.unit(e))
-            .unwrap_or(benilla_formats::RangeUnit::still(
-                crate::spell::DEFAULT_REACH,
-            ));
-    let pet_target = pet_entity.and_then(|e| range_units.attack_target(e));
-    let pet_inputs = PetInputs::of(pet_guid, pet, RangeSeen::of(&pet_unit, pet_target.as_ref()));
-    if memory.pet != Some(pet_inputs) {
-        memory.pet = Some(pet_inputs);
-        wanted_pet.extend(memory.pet_pushed.drain().map(|(id, _)| id));
-    }
-    // The sources overlap (a self-buff is in the book and on the player): build each id once.
-    wanted.sort_unstable();
-    wanted.dedup();
-    wanted_pet.sort_unstable();
-    wanted_pet.dedup();
-    wanted_aura.sort_unstable();
-    wanted_aura.dedup();
-    let (built, built_aura, built_pet) = {
-        let mut vctx = ViewCtx {
-            factions: factions.as_deref().map(|f| f.catalog()),
-            reputations: reputations.as_deref(),
-            home_area: home_area.as_deref(),
-            form: self_store.map_or(0, |s| s.0.unit_shapeshift_form()),
-            store: self_store,
-            caster: ViewCaster::Player,
-            range_caster: caster_unit,
-            attack_target,
-            objects: &objects,
-            items: &mut items,
-            commands: &commands,
-            sub_classes: sub_classes.as_deref().map(|c| &c.0),
-            skill_lines: skill_lines.as_deref().map(|s| &s.catalog),
-            spell_mods,
-        };
-        let built = build_views(wanted, spells, &mut vctx, memory, false);
-        let built_aura: Vec<(AuraKey, AuraTooltipView)> = wanted_aura
-            .into_iter()
-            .filter_map(|key| {
-                let (view, deps) = build_aura_view(key, spells, &vctx)?;
-                memory.aura_pushed.insert(key, deps);
-                Some((key, view))
-            })
+        let home_area: Option<String> = home_bind
+            .as_deref()
+            .and_then(|b| b.0)
+            .and_then(|id| area_names.as_deref()?.0.resolve(id as i32))
+            .map(str::to_string);
+        let self_store = self_q.single().ok();
+        let caster_unit = range_units.caster();
+        let attack_target = range_units.caster_attack_target();
+        // What moved since the last frame, which each pushed view is checked against: the bind
+        // point (Astral Recall's `$z`), the form, the skills, what the equipped-item search learns of
+        // each equipment slot and the disarm flag, the level, cost bases and ranged attack time, the
+        // block, dodge, parry and crit percentages, and the two units the melee range cell reads.
+        let mut seen = Seen::of(
+            self_store,
+            home_area.as_deref(),
+            RangeSeen::of(&caster_unit, attack_target.as_ref()),
+            &objects,
+            &items,
+        );
+        if let Some(reputations) = reputations.as_deref() {
+            seen = seen.with_reputations(reputations);
+        }
+        let mut changes = memory
+            .seen
+            .as_ref()
+            .map(|prev| seen.changes_since(prev))
+            .unwrap_or_default();
+        memory.seen = Some(seen);
+        // The talent tables: the cost, cast, cooldown and range cells and the description's tokens
+        // resolve through them.
+        if let Some(prev) = memory.mods.as_ref().filter(|_| spell_mods.is_changed()) {
+            changes = changes.with_mods(spell_mods.diff(prev));
+        }
+        if memory.mods.is_none() || spell_mods.is_changed() {
+            memory.mods = Some((**spell_mods).clone());
+        }
+        // And the reagents on show: their counts and whether their names have streamed.
+        let reagent_state: Reagents = memory
+            .reagents
+            .keys()
+            .map(|&entry| (entry, reagent_state(entry, self_store, &objects, &items)))
             .collect();
-        // The pet views read the pet's form and reach where the player's read the player's.
-        vctx.caster = ViewCaster::Pet(pet);
-        vctx.form = pet.map_or(0, |p| p.unit_shapeshift_form());
-        vctx.range_caster = pet_unit;
-        vctx.attack_target = pet_target;
-        let built_pet = build_views(wanted_pet, spells, &mut vctx, memory, true);
-        (built, built_aura, built_pet)
-    };
-    for (id, view) in built {
-        script.set_spell_tooltip(id, view);
-    }
-    for (key, view) in built_aura {
-        script.set_aura_tooltip(key, view);
-    }
-    for (id, view) in built_pet {
-        script.set_pet_spell_tooltip(id, view);
-    }
+        changes = changes.with_reagents(&memory.reagents, &reagent_state);
+        memory.reagents = reagent_state;
+        memory.requeue(&changes, &mut wanted, &mut wanted_pet, &mut wanted_aura);
+        // The pet's inputs: a new pet, or its level, bases, form, reach or motion moving, rebuilds the
+        // pet views alone.
+        let pet_guid = self_store.and_then(|s| s.0.unit_pet_guid());
+        let pet = pet_guid.and_then(|g| objects.object(g));
+        let pet_entity = pet_guid.and_then(|g| objects.entity(g));
+        let pet_unit = pet_entity.and_then(|e| range_units.unit(e)).unwrap_or(
+            benilla_formats::RangeUnit::still(crate::spell::DEFAULT_REACH),
+        );
+        let pet_target = pet_entity.and_then(|e| range_units.attack_target(e));
+        let pet_inputs =
+            PetInputs::of(pet_guid, pet, RangeSeen::of(&pet_unit, pet_target.as_ref()));
+        if memory.pet != Some(pet_inputs) {
+            memory.pet = Some(pet_inputs);
+            wanted_pet.extend(memory.pet_pushed.drain().map(|(id, _)| id));
+        }
+        // The sources overlap (a self-buff is in the book and on the player): build each id once.
+        wanted.sort_unstable();
+        wanted.dedup();
+        wanted_pet.sort_unstable();
+        wanted_pet.dedup();
+        wanted_aura.sort_unstable();
+        wanted_aura.dedup();
+        let (built, built_aura, built_pet) = {
+            let mut vctx = ViewCtx {
+                factions: factions.as_deref().map(|f| f.catalog()),
+                reputations: reputations.as_deref(),
+                home_area: home_area.as_deref(),
+                form: self_store.map_or(0, |s| s.0.unit_shapeshift_form()),
+                store: self_store,
+                caster: ViewCaster::Player,
+                range_caster: caster_unit,
+                attack_target,
+                objects: &objects,
+                items: &mut items,
+                commands: &commands,
+                sub_classes: sub_classes.as_deref().map(|c| &c.0),
+                skill_lines: skill_lines.as_deref().map(|s| &s.catalog),
+                spell_mods,
+            };
+            let built = build_views(wanted, spells, &mut vctx, memory, false);
+            let built_aura: Vec<(AuraKey, AuraTooltipView)> = wanted_aura
+                .into_iter()
+                .filter_map(|key| {
+                    let (view, deps) = build_aura_view(key, spells, &vctx)?;
+                    memory.aura_pushed.insert(key, deps);
+                    Some((key, view))
+                })
+                .collect();
+            // The pet views read the pet's form and reach where the player's read the player's.
+            vctx.caster = ViewCaster::Pet(pet);
+            vctx.form = pet.map_or(0, |p| p.unit_shapeshift_form());
+            vctx.range_caster = pet_unit;
+            vctx.attack_target = pet_target;
+            let built_pet = build_views(wanted_pet, spells, &mut vctx, memory, true);
+            (built, built_aura, built_pet)
+        };
+        for (id, view) in built {
+            script.set_spell_tooltip(id, view);
+        }
+        for (key, view) in built_aura {
+            script.set_aura_tooltip(key, view);
+        }
+        for (id, view) in built_pet {
+            script.set_pet_spell_tooltip(id, view);
+        }
+    })
 }
 
 /// Build the views of `ids` against `vctx`'s caster, recording each with what it read in the

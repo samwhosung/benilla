@@ -171,143 +171,145 @@ fn drive_shield(
     names: Res<NameCache>,
     self_guid: Res<SelfGuid>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
 ) {
-    let entered_world = entered.read().next().is_some();
-    let ours = intent.account().is_some_and(is_probe_account);
-    if !ours || disabled_by_env() {
-        // Still drain, so a later frame never sees a stale backlog.
-        said.read().for_each(drop);
-        shield.report = if ours {
-            ShieldReport::Disabled
-        } else {
-            ShieldReport::NotOurs
-        };
-        if entered_world && ours {
-            warn!(
+    hosted_vm.run(|script| {
+        let entered_world = entered.read().next().is_some();
+        let ours = intent.account().is_some_and(is_probe_account);
+        if !ours || disabled_by_env() {
+            // Still drain, so a later frame never sees a stale backlog.
+            said.read().for_each(drop);
+            shield.report = if ours {
+                ShieldReport::Disabled
+            } else {
+                ShieldReport::NotOurs
+            };
+            if entered_world && ours {
+                warn!(
                 "probe-shield: DISABLED by WOW_GOD=off — this probe character CAN die. That is the \
                  right setting for a death-arc test; unset it for everything else."
             );
+            }
+            return;
         }
-        return;
-    }
 
-    if entered_world {
-        shield.arm_wanted = Some(time.elapsed_secs());
-        shield.was_dead = None;
-        shield.report = ShieldReport::Arming;
-    }
+        if entered_world {
+            shield.arm_wanted = Some(time.elapsed_secs());
+            shield.was_dead = None;
+            shield.report = ShieldReport::Arming;
+        }
 
-    // The server's answer is the only evidence: the flag rides no descriptor field.
-    for msg in said.read() {
-        match god_verdict(&msg.text) {
-            Some(true) => {
-                if shield.report != ShieldReport::Armed {
-                    info!(
+        // The server's answer is the only evidence: the flag rides no descriptor field.
+        for msg in said.read() {
+            match god_verdict(&msg.text) {
+                Some(true) => {
+                    if shield.report != ShieldReport::Armed {
+                        info!(
                         "probe-shield: ARMED — this character cannot die (vmangos `.cheat god`: \
                          damage clamps at 1 hp instead of killing). Hostility, factions, aggro and \
                          environmental damage all stay faithful, unlike GM mode. It is NOT \
                          persisted, so it is re-armed on every world entry."
                     );
+                    }
+                    shield.report = ShieldReport::Armed;
                 }
-                shield.report = ShieldReport::Armed;
-            }
-            Some(false) => {
-                warn!(
+                Some(false) => {
+                    warn!(
                     "probe-shield: the shield was turned OFF — putting it back up. If you meant to \
                      run unshielded, use WOW_GOD=off (which also stops this re-arm) rather than \
                      `.cheat god off`."
                 );
-                rearm(&mut shield, &time, &names, &self_guid);
+                    rearm(&mut shield, &time, &names, &self_guid);
+                }
+                None => {}
             }
-            None => {}
         }
-    }
 
-    // A death proves the shield was down; `.die` clears it silently before killing.
-    if let Ok(store) = self_q.single() {
-        let dead = store.0.unit_is_dead() || store.0.player_is_ghost();
-        match shield.was_dead {
-            None => shield.was_dead = Some(dead), // first read of this entry: a state, not an edge
-            Some(false) if dead => {
-                shield.was_dead = Some(true);
-                warn!(
+        // A death proves the shield was down; `.die` clears it silently before killing.
+        if let Ok(store) = self_q.single() {
+            let dead = store.0.unit_is_dead() || store.0.player_is_ghost();
+            match shield.was_dead {
+                None => shield.was_dead = Some(dead), // first read of this entry: a state, not an edge
+                Some(false) if dead => {
+                    shield.was_dead = Some(true);
+                    warn!(
                     "probe-shield: THE CHARACTER DIED — so the shield was down. `.die` clears it \
                      silently by design; anything else means it never landed. Re-arming now (it \
                      does not revive: send `.revive`)."
                 );
-                rearm(&mut shield, &time, &names, &self_guid);
+                    rearm(&mut shield, &time, &names, &self_guid);
+                }
+                Some(_) => shield.was_dead = Some(dead),
             }
-            Some(_) => shield.was_dead = Some(dead),
         }
-    }
 
-    // Build the batch once the body, and ideally our own name, is there to address.
-    if let Some(wanted_at) = shield.arm_wanted {
-        let Ok(store) = self_q.single() else { return };
-        let name = self_guid
-            .0
-            .and_then(|g| names.resolve_unit(g, None, Ask::Read));
-        let waited = time.elapsed_secs() - wanted_at;
-        if name.is_none() && waited < NAME_WAIT_SECS {
-            return;
-        }
-        if name.is_none() {
-            warn!(
+        // Build the batch once the body, and ideally our own name, is there to address.
+        if let Some(wanted_at) = shield.arm_wanted {
+            let Ok(store) = self_q.single() else { return };
+            let name = self_guid
+                .0
+                .and_then(|g| names.resolve_unit(g, None, Ask::Read));
+            let waited = time.elapsed_secs() - wanted_at;
+            if name.is_none() && waited < NAME_WAIT_SECS {
+                return;
+            }
+            if name.is_none() {
+                warn!(
                 "probe-shield: our own name has not resolved after {NAME_WAIT_SECS:.0}s — arming \
                  without it. `.cheat god` re-targets to the current selection, so this can be \
                  refused with \"Player not found!\" if anything is targeted."
             );
-        }
-        shield.arm_wanted = None;
-        shield.steps.push(god_line(name));
-        shield.confirm_by = time.elapsed_secs() + CONFIRM_SECS;
-        let gm_is_on = store.0.player_flags() & PLAYER_FLAGS_GM != 0;
-        match (gm_is_on, wants_gm_off()) {
-            // The default: GM mode stays on, so nothing aggros a parked body.
-            (false, false) => {
-                info!(
+            }
+            shield.arm_wanted = None;
+            shield.steps.push(god_line(name));
+            shield.confirm_by = time.elapsed_secs() + CONFIRM_SECS;
+            let gm_is_on = store.0.player_flags() & PLAYER_FLAGS_GM != 0;
+            match (gm_is_on, wants_gm_off()) {
+                // The default: GM mode stays on, so nothing aggros a parked body.
+                (false, false) => {
+                    info!(
                     "probe-shield: GM mode is off — turning it back ON, so a parked body is not \
                      permanently mobbed. Readings taken now are faction-35 readings and are wrong \
                      for anything about hostility, colour, threat, aggro, damage or timers \
                      — set WOW_GM=off for those, which is safe: the shield holds."
                 );
-                shield.steps.push(".gm on".into());
-            }
-            (true, true) => {
-                info!(
+                    shield.steps.push(".gm on".into());
+                }
+                (true, true) => {
+                    info!(
                     "probe-shield: WOW_GM=off — turning GM mode OFF so factions, hostility and \
                      damage are faithful. Safe: the shield is what keeps this body alive now."
                 );
-                shield.steps.push(".gm off".into());
+                    shield.steps.push(".gm off".into());
+                }
+                _ => {} // already as asked for
             }
-            _ => {} // already as asked for
+            shield.next_at = time.elapsed_secs();
         }
-        shield.next_at = time.elapsed_secs();
-    }
 
-    // Send the queued lines, one per `STEP_SECS`, god first.
-    if !shield.steps.is_empty() {
-        let Some(mut script) = script else { return };
-        while !shield.steps.is_empty() && time.elapsed_secs() >= shield.next_at {
-            let line = shield.steps.remove(0);
-            debug!("probe-shield: sending {line:?}");
-            script.push_chat_input(line);
-            shield.next_at = time.elapsed_secs() + STEP_SECS;
+        // Send the queued lines, one per `STEP_SECS`, god first.
+        if !shield.steps.is_empty() {
+            let Some(script) = script else { return };
+            while !shield.steps.is_empty() && time.elapsed_secs() >= shield.next_at {
+                let line = shield.steps.remove(0);
+                debug!("probe-shield: sending {line:?}");
+                script.push_chat_input(line);
+                shield.next_at = time.elapsed_secs() + STEP_SECS;
+            }
+            return;
         }
-        return;
-    }
 
-    // Nothing outstanding: a `.cheat god on` that was never answered did not land.
-    if shield.report == ShieldReport::Arming && time.elapsed_secs() > shield.confirm_by {
-        shield.report = ShieldReport::Unconfirmed;
-        warn!(
+        // Nothing outstanding: a `.cheat god on` that was never answered did not land.
+        if shield.report == ShieldReport::Arming && time.elapsed_secs() > shield.confirm_by {
+            shield.report = ShieldReport::Unconfirmed;
+            warn!(
             "probe-shield: NOT CONFIRMED — `.cheat god on` went out and the server never answered \
              it. Treat this character as mortal. Check the account's GM level (`.cheat` needs \
              SEC_GAMEMASTER 3; probe accounts are 6): \
              SELECT gmlevel FROM realmd.account_access WHERE id = <account>."
         );
-    }
+        }
+    })
 }
 
 /// The command, naming the character when known: the bare form acts on the current selection.

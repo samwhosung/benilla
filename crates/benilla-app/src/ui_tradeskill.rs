@@ -347,7 +347,7 @@ fn resolve_recipe(
 
 /// Build the book: the known recipes of the open line, banded against the current rank.
 fn feed_trade_skill(
-    script: Option<NonSendMut<UiScript>>,
+    mut vm: crate::script_calls::VmWith<Res<'static, crate::spell::Cooldowns>>,
     open: Res<TradeSkillOpen>,
     actions: Res<PlayerActions>,
     spells: Option<Res<Spells>>,
@@ -359,139 +359,143 @@ fn feed_trade_skill(
     objects: Objects,
     items: Res<Items>,
     commands: Res<NetCommands>,
-    cooldowns: Res<crate::spell::Cooldowns>,
     clock: Res<crate::ui_script::UiClock>,
     mut last: Local<crate::ui_script::VmMemo<Option<TradeSkillState>>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let last = last.get(&script);
-    // The list's build looks every record up with the callback `0x4fc8e0` (`0x4fcd4d`) at the
-    // window's show; the rebuilds between read, as the getters' lookups stand for the stock
-    // frame's calls (`0x4fdba8`), which the asks below make.
-    let ask = Ask::at(last.is_none() || open.is_changed(), &commands);
-    let fresh = (|| -> Option<TradeSkillState> {
-        let line = open.line?;
-        let spells = spells.as_deref()?;
-        let skill_lines = skill_lines.as_deref()?;
-        let store = self_store.single().ok()?;
-        let (rank, max_rank) = skill_rank(store, line);
-        let line_name = skill_lines
-            .catalog
-            .line(line)
-            .map(|l| l.name.clone())
-            .unwrap_or_else(|| format!("Skill {line}"));
-        let now = (clock.anchor, clock.ui_now);
-        let recipes: Vec<TradeSkillRecipe> = actions
-            .spells
-            .iter()
-            .filter(|&&s| {
-                spells
-                    .catalog
-                    .get(s)
-                    .is_some_and(|d| d.attributes & SPELL_ATTR_IS_TRADESKILL != 0)
-                    && skill_lines.catalog.spell_to_line(s) == Some(line)
+    vm.feed(|script, cooldowns, fires| {
+        let Some(script) = script else {
+            return;
+        };
+        let last = last.get(&script);
+        // The list's build looks every record up with the callback `0x4fc8e0` (`0x4fcd4d`) at the
+        // window's show; the rebuilds between read, as the getters' lookups stand for the stock
+        // frame's calls (`0x4fdba8`), which the asks below make.
+        let ask = Ask::at(last.is_none() || open.is_changed(), &commands);
+        let fresh = (|| -> Option<TradeSkillState> {
+            let line = open.line?;
+            let spells = spells.as_deref()?;
+            let skill_lines = skill_lines.as_deref()?;
+            let store = self_store.single().ok()?;
+            let (rank, max_rank) = skill_rank(store, line);
+            let line_name = skill_lines
+                .catalog
+                .line(line)
+                .map(|l| l.name.clone())
+                .unwrap_or_else(|| format!("Skill {line}"));
+            let now = (clock.anchor, clock.ui_now);
+            let recipes: Vec<TradeSkillRecipe> = actions
+                .spells
+                .iter()
+                .filter(|&&s| {
+                    spells
+                        .catalog
+                        .get(s)
+                        .is_some_and(|d| d.attributes & SPELL_ATTR_IS_TRADESKILL != 0)
+                        && skill_lines.catalog.spell_to_line(s) == Some(line)
+                })
+                .filter_map(|&s| {
+                    resolve_recipe(
+                        s,
+                        rank,
+                        spells,
+                        skill_lines,
+                        focus.as_deref(),
+                        icons.as_deref(),
+                        subclasses.as_deref(),
+                        store,
+                        &objects,
+                        &items,
+                        ask,
+                        &cooldowns,
+                        now,
+                    )
+                })
+                .collect();
+            // No sort here: the engine orders the book (`0x4fd180`).
+            Some(TradeSkillState {
+                line,
+                line_name,
+                rank,
+                max_rank,
+                recipes,
             })
-            .filter_map(|&s| {
-                resolve_recipe(
-                    s,
-                    rank,
-                    spells,
-                    skill_lines,
-                    focus.as_deref(),
-                    icons.as_deref(),
-                    subclasses.as_deref(),
-                    store,
-                    &objects,
-                    &items,
-                    ask,
-                    &cooldowns,
-                    now,
-                )
-            })
-            .collect();
-        // No sort here: the engine orders the book (`0x4fd180`).
-        Some(TradeSkillState {
-            line,
-            line_name,
-            rank,
-            max_rank,
-            recipes,
-        })
-    })();
+        })();
 
-    // `CloseTradeSkill` closes the VM's window and signals `TRADE_SKILL_CLOSE` in the verb
-    // (`0x4fc884`).
-    let closed_in_place = !script.trade_skill_open();
-    if fresh == *last {
-        return;
-    }
-    script.set_trade_skill(fresh.clone());
-    // The link verbs never query, as the client has every template cached by the time the list
-    // shows, so the feed asks for the missing ones here.
-    if let Some(f) = &fresh {
-        script.ask_item_templates(f.recipes.iter().flat_map(|r| {
-            std::iter::once(r.product_item).chain(r.reagents.iter().map(|re| re.item))
-        }));
-    }
-    match (&*last, &fresh) {
-        (None, Some(f)) => {
-            debug!(
-                "ui_tradeskill: window opens — {} recipe(s), first group {:?}",
-                f.recipes.len(),
-                f.recipes.first().and_then(|r| r.group.clone())
-            );
-            script.fire_event("TRADE_SKILL_SHOW", vec![]);
+        // `CloseTradeSkill` closes the VM's window and signals `TRADE_SKILL_CLOSE` in the verb
+        // (`0x4fc884`).
+        let closed_in_place = !script.trade_skill_open();
+        if fresh == *last {
+            return;
         }
-        (Some(_), Some(_)) => script.fire_event("TRADE_SKILL_UPDATE", vec![]),
-        (Some(_), None) if !closed_in_place => script.fire_event("TRADE_SKILL_CLOSE", vec![]),
-        (Some(_), None) | (None, None) => {}
-    }
-    *last = fresh;
+        script.set_trade_skill(fresh.clone());
+        // The link verbs never query, as the client has every template cached by the time the list
+        // shows, so the feed asks for the missing ones here.
+        if let Some(f) = &fresh {
+            script.ask_item_templates(f.recipes.iter().flat_map(|r| {
+                std::iter::once(r.product_item).chain(r.reagents.iter().map(|re| re.item))
+            }));
+        }
+        match (&*last, &fresh) {
+            (None, Some(f)) => {
+                debug!(
+                    "ui_tradeskill: window opens — {} recipe(s), first group {:?}",
+                    f.recipes.len(),
+                    f.recipes.first().and_then(|r| r.group.clone())
+                );
+                fires.post("TRADE_SKILL_SHOW", vec![]);
+            }
+            (Some(_), Some(_)) => fires.post("TRADE_SKILL_UPDATE", vec![]),
+            (Some(_), None) if !closed_in_place => fires.post("TRADE_SKILL_CLOSE", vec![]),
+            (Some(_), None) | (None, None) => {}
+        }
+        *last = fresh;
+    })
 }
 
 /// Drain the Lua intents and feed the VM's repeat (`0x4fd7b0`) our own cast edges: `DoTradeSkill`
 /// arms it in the verb and casts through the one cast-send path, each GO recasts what the hook
 /// answers, and a failure disarms it.
 fn drain_trade_skill(
-    script: Option<NonSendMut<UiScript>>,
+    mut vm: crate::script_calls::VmWith<(
+        MessageReader<'static, 'static, CastEvent>,
+        cast_target::CastTargeting<'static, 'static>,
+        CastLadder<'static, 'static>,
+    )>,
     mut open: ResMut<TradeSkillOpen>,
-    mut cast_events: MessageReader<CastEvent>,
-    targeting: cast_target::CastTargeting,
-    mut ladder: CastLadder,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
+    vm.turn(|script, (mut cast_events, targeting, mut ladder)| {
+        let Some(mut script) = script else {
+            return;
+        };
 
-    // The verb reads the held list, not the open marker (`0x5002e1`, `0x5002e9`), so a recipe
-    // still held after a close casts (`0x500314`).
-    for (spell_id, count) in script.take_trade_skill_dos() {
-        debug!("ui_tradeskill: DoTradeSkill({spell_id}) ×{count}");
-        ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
-    }
-
-    let self_entity = ladder.self_player.single().ok().map(|(e, _)| e);
-    for ev in cast_events.read() {
-        if Some(ev.entity) != self_entity {
-            continue;
-        }
-        if let Some(spell_id) = repeat_edge(&mut script, ev) {
-            debug!(
-                "ui_tradeskill: recast {spell_id} ({} left)",
-                script.trade_skill_repeat().1
-            );
-            // The recast, then its signal (`0x4fd7d7`, `0x4fd7dc`).
+        // The verb reads the held list, not the open marker (`0x5002e1`, `0x5002e9`), so a recipe
+        // still held after a close casts (`0x500314`).
+        for (spell_id, count) in script.take_trade_skill_dos() {
+            debug!("ui_tradeskill: DoTradeSkill({spell_id}) ×{count}");
             ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
-            script.trade_skill_recast_sent();
         }
-    }
 
-    if script.take_trade_skill_close() {
-        debug!("ui_tradeskill: client-side close (no packet)");
-        open.line = None;
-    }
+        let self_entity = ladder.self_player.single().ok().map(|(e, _)| e);
+        for ev in cast_events.read() {
+            if Some(ev.entity) != self_entity {
+                continue;
+            }
+            if let Some(spell_id) = repeat_edge(&mut script, ev) {
+                debug!(
+                    "ui_tradeskill: recast {spell_id} ({} left)",
+                    script.trade_skill_repeat().1
+                );
+                // The recast, then its signal (`0x4fd7d7`, `0x4fd7dc`).
+                ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
+                script.trade_skill_recast_sent();
+            }
+        }
+
+        if script.take_trade_skill_close() {
+            debug!("ui_tradeskill: client-side close (no packet)");
+            open.line = None;
+        }
+    })
 }
 
 /// One of our own cast edges into the VM's repeat: every GO whose first guid is the player, not

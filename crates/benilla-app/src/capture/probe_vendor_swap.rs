@@ -143,7 +143,7 @@ fn vendor_swap_probe(
     time: ProbeClock,
     mut probe: ResMut<VendorSwapProbe>,
     merchant: Res<MerchantOpen>,
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     names: Res<NameCache>,
     panes: Res<BoothPanes>,
     images: Res<PortraitImages>,
@@ -153,262 +153,264 @@ fn vendor_swap_probe(
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    if self_player.is_empty() {
-        return; // not in-world yet
-    }
-    let now = time.elapsed_secs_f64();
-    let Some(script) = script else {
-        return;
-    };
-
-    match probe.phase {
-        Phase::Start => {
-            if let Err(e) = script.run(HOOK) {
-                error!("PROBE_VENDOR_SWAP: installing the merchant hook: {e}");
-                probe.phase = Phase::Done;
-                return;
-            }
-            let [x, y, z] = STAND_AT;
-            info!("PROBE_VENDOR_SWAP: hopping to the Goldshire inn ({x}, {y}, {z}) map {MAP}");
-            let _ = net.0.send(ClientCommand::Chat {
-                kind: ChatKind::Say,
-                target: None,
-                text: format!(".go xyz {x} {y} {z} {MAP}"),
-                language: None,
-            });
-            probe.phase = Phase::Settle { sent_at: now };
+    hosted_vm.run(|script| {
+        if self_player.is_empty() {
+            return; // not in-world yet
         }
-        Phase::Settle { sent_at } => {
-            if now - sent_at < SETTLE_SECS {
-                return;
+        let now = time.elapsed_secs_f64();
+        let Some(script) = script else {
+            return;
+        };
+
+        match probe.phase {
+            Phase::Start => {
+                if let Err(e) = script.run(HOOK) {
+                    error!("PROBE_VENDOR_SWAP: installing the merchant hook: {e}");
+                    probe.phase = Phase::Done;
+                    return;
+                }
+                let [x, y, z] = STAND_AT;
+                info!("PROBE_VENDOR_SWAP: hopping to the Goldshire inn ({x}, {y}, {z}) map {MAP}");
+                let _ = net.0.send(ClientCommand::Chat {
+                    kind: ChatKind::Say,
+                    target: None,
+                    text: format!(".go xyz {x} {y} {z} {MAP}"),
+                    language: None,
+                });
+                probe.phase = Phase::Settle { sent_at: now };
             }
-            let me = player.pos;
-            let find = |entry: u32| {
-                units
-                    .iter()
-                    .find(|(_, net_e, store, tf)| {
-                        net_e.kind == EntityKind::Unit
-                            && store.0.object_entry() == Some(entry)
-                            && tf.translation.distance_squared(me) <= SCAN_RANGE_SQ
-                    })
-                    .map(|(guid, ..)| guid.0)
-            };
-            let (brog, dobbins) = (find(BROG_ENTRY), find(DOBBINS_ENTRY));
-            // Both names must be cached before the legs read them back out of the VM.
-            let named = |g: Option<u64>| {
-                g.is_some_and(|g| {
-                    let store = units
+            Phase::Settle { sent_at } => {
+                if now - sent_at < SETTLE_SECS {
+                    return;
+                }
+                let me = player.pos;
+                let find = |entry: u32| {
+                    units
                         .iter()
-                        .find(|(guid, ..)| guid.0 == g)
-                        .map(|(_, _, s, _)| s);
-                    names.resolve_unit(g, store, Ask::New(&net)).is_some()
-                })
-            };
-            let (brog_named, dobbins_named) = (named(brog), named(dobbins));
-            if brog_named && dobbins_named {
-                probe.brog = brog;
-                probe.dobbins = dobbins;
-                let brog = brog.expect("named");
-                info!(
-                    "PROBE_VENDOR_SWAP: Brog {brog:#x} and Dobbins {:#x} both in reach — \
+                        .find(|(_, net_e, store, tf)| {
+                            net_e.kind == EntityKind::Unit
+                                && store.0.object_entry() == Some(entry)
+                                && tf.translation.distance_squared(me) <= SCAN_RANGE_SQ
+                        })
+                        .map(|(guid, ..)| guid.0)
+                };
+                let (brog, dobbins) = (find(BROG_ENTRY), find(DOBBINS_ENTRY));
+                // Both names must be cached before the legs read them back out of the VM.
+                let named = |g: Option<u64>| {
+                    g.is_some_and(|g| {
+                        let store = units
+                            .iter()
+                            .find(|(guid, ..)| guid.0 == g)
+                            .map(|(_, _, s, _)| s);
+                        names.resolve_unit(g, store, Ask::New(&net)).is_some()
+                    })
+                };
+                let (brog_named, dobbins_named) = (named(brog), named(dobbins));
+                if brog_named && dobbins_named {
+                    probe.brog = brog;
+                    probe.dobbins = dobbins;
+                    let brog = brog.expect("named");
+                    info!(
+                        "PROBE_VENDOR_SWAP: Brog {brog:#x} and Dobbins {:#x} both in reach — \
                      CMSG_LIST_INVENTORY to Brog",
-                    dobbins.expect("named")
-                );
-                clear_log(&script);
-                let _ = net.0.send(ClientCommand::ListInventory { guid: brog });
-                probe.phase = Phase::Open { since: now };
-            } else if now - sent_at > SCAN_TIMEOUT_SECS {
-                warn!(
-                    "PROBE_VENDOR_SWAP: SKIP — vendors in reach: Brog {brog:?}, Dobbins \
+                        dobbins.expect("named")
+                    );
+                    clear_log(&script);
+                    let _ = net.0.send(ClientCommand::ListInventory { guid: brog });
+                    probe.phase = Phase::Open { since: now };
+                } else if now - sent_at > SCAN_TIMEOUT_SECS {
+                    warn!(
+                        "PROBE_VENDOR_SWAP: SKIP — vendors in reach: Brog {brog:?}, Dobbins \
                      {dobbins:?} (names cached: {}/{}). Environmental (the `.go` refused, or the \
                      inn never streamed).",
-                    brog_named, dobbins_named
-                );
-                probe.skips += 1;
-                probe.phase = Phase::Done;
+                        brog_named, dobbins_named
+                    );
+                    probe.skips += 1;
+                    probe.phase = Phase::Done;
+                }
             }
-        }
-        Phase::Open { since } => {
-            let brog = probe.brog.expect("set at Settle");
-            let expect = names
-                .resolve_unit(brog, None, Ask::Read)
-                .unwrap_or("")
-                .to_string();
-            match (merchant.vendor == Some(brog), first_show(&script)) {
-                (true, Some((npc, title))) => {
-                    if npc == expect && title == expect {
-                        info!(
+            Phase::Open { since } => {
+                let brog = probe.brog.expect("set at Settle");
+                let expect = names
+                    .resolve_unit(brog, None, Ask::Read)
+                    .unwrap_or("")
+                    .to_string();
+                match (merchant.vendor == Some(brog), first_show(&script)) {
+                    (true, Some((npc, title))) => {
+                        if npc == expect && title == expect {
+                            info!(
                             "PROBE_VENDOR_SWAP: open PASS — at MERCHANT_SHOW UnitName(\"npc\") \
                              = {npc:?}, title = {title:?}"
                         );
-                        probe.passes += 1;
-                    } else {
-                        error!(
+                            probe.passes += 1;
+                        } else {
+                            error!(
                             "PROBE_VENDOR_SWAP: open FAIL — at MERCHANT_SHOW UnitName(\"npc\") \
                              = {npc:?}, title = {title:?}; expected {expect:?} for both"
                         );
-                        probe.fails += 1;
+                            probe.fails += 1;
+                        }
+                        probe.phase = Phase::Portrait { since: now };
                     }
-                    probe.phase = Phase::Portrait { since: now };
-                }
-                _ if now - since > WINDOW_TIMEOUT_SECS => {
-                    error!(
-                        "PROBE_VENDOR_SWAP: open FAIL — no merchant window + MERCHANT_SHOW on \
+                    _ if now - since > WINDOW_TIMEOUT_SECS => {
+                        error!(
+                            "PROBE_VENDOR_SWAP: open FAIL — no merchant window + MERCHANT_SHOW on \
                          Brog within {WINDOW_TIMEOUT_SECS}s (vendor = {:?})",
-                        merchant.vendor
-                    );
-                    probe.fails += 1;
-                    probe.phase = Phase::Done;
+                            merchant.vendor
+                        );
+                        probe.fails += 1;
+                        probe.phase = Phase::Done;
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
-        }
-        Phase::Portrait { since } => {
-            let sampled = panes.0.contains_key("npc");
-            let baked = matches!(images.0.get("npc"), Some(PortraitSource::Live(_)));
-            if sampled && baked {
-                info!(
-                    "PROBE_VENDOR_SWAP: portrait PASS — the round region samples the \"npc\" \
+            Phase::Portrait { since } => {
+                let sampled = panes.0.contains_key("npc");
+                let baked = matches!(images.0.get("npc"), Some(PortraitSource::Live(_)));
+                if sampled && baked {
+                    info!(
+                        "PROBE_VENDOR_SWAP: portrait PASS — the round region samples the \"npc\" \
                      slot and the booth publishes a live bake for it"
-                );
-                probe.passes += 1;
-            } else if now - since > PORTRAIT_TIMEOUT_SECS {
-                let mut keys: Vec<&String> = panes.0.keys().collect();
-                keys.sort();
-                error!(
+                    );
+                    probe.passes += 1;
+                } else if now - since > PORTRAIT_TIMEOUT_SECS {
+                    let mut keys: Vec<&String> = panes.0.keys().collect();
+                    keys.sort();
+                    error!(
                     "PROBE_VENDOR_SWAP: portrait FAIL — sampled under \"npc\": {sampled}, live \
                      bake: {baked}; pane keys published this frame: {keys:?}"
                 );
-                probe.fails += 1;
-            } else {
-                return;
+                    probe.fails += 1;
+                } else {
+                    return;
+                }
+                let dobbins = probe.dobbins.expect("set at Settle");
+                info!("PROBE_VENDOR_SWAP: CMSG_LIST_INVENTORY to Dobbins over Brog's open window");
+                clear_log(&script);
+                let _ = net.0.send(ClientCommand::ListInventory { guid: dobbins });
+                probe.phase = Phase::Swap { since: now };
             }
-            let dobbins = probe.dobbins.expect("set at Settle");
-            info!("PROBE_VENDOR_SWAP: CMSG_LIST_INVENTORY to Dobbins over Brog's open window");
-            clear_log(&script);
-            let _ = net.0.send(ClientCommand::ListInventory { guid: dobbins });
-            probe.phase = Phase::Swap { since: now };
-        }
-        Phase::Swap { since } => {
-            let dobbins = probe.dobbins.expect("set at Settle");
-            let expect = names
-                .resolve_unit(dobbins, None, Ask::Read)
-                .unwrap_or("")
-                .to_string();
-            match (merchant.vendor == Some(dobbins), first_show(&script)) {
-                (true, Some((npc, title))) => {
-                    if npc == expect && title == expect {
-                        info!(
+            Phase::Swap { since } => {
+                let dobbins = probe.dobbins.expect("set at Settle");
+                let expect = names
+                    .resolve_unit(dobbins, None, Ask::Read)
+                    .unwrap_or("")
+                    .to_string();
+                match (merchant.vendor == Some(dobbins), first_show(&script)) {
+                    (true, Some((npc, title))) => {
+                        if npc == expect && title == expect {
+                            info!(
                             "PROBE_VENDOR_SWAP: swap PASS — at MERCHANT_SHOW UnitName(\"npc\") \
                              = {npc:?}, title = {title:?}"
                         );
-                        probe.passes += 1;
-                    } else {
-                        error!(
+                            probe.passes += 1;
+                        } else {
+                            error!(
                             "PROBE_VENDOR_SWAP: swap FAIL — at MERCHANT_SHOW UnitName(\"npc\") \
                              = {npc:?}, title = {title:?}; expected {expect:?} for both"
                         );
-                        probe.fails += 1;
+                            probe.fails += 1;
+                        }
+                        probe.phase = Phase::Settled { since: now };
                     }
-                    probe.phase = Phase::Settled { since: now };
-                }
-                _ if now - since > WINDOW_TIMEOUT_SECS => {
-                    error!(
-                        "PROBE_VENDOR_SWAP: swap FAIL — no window swap + MERCHANT_SHOW on \
+                    _ if now - since > WINDOW_TIMEOUT_SECS => {
+                        error!(
+                            "PROBE_VENDOR_SWAP: swap FAIL — no window swap + MERCHANT_SHOW on \
                          Dobbins within {WINDOW_TIMEOUT_SECS}s (vendor = {:?})",
-                        merchant.vendor
-                    );
-                    probe.fails += 1;
-                    probe.phase = Phase::Done;
+                            merchant.vendor
+                        );
+                        probe.fails += 1;
+                        probe.phase = Phase::Done;
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
-        }
-        Phase::Settled { since } => {
-            if now - since < SETTLED_SECS {
-                return;
-            }
-            let dobbins = probe.dobbins.expect("set at Settle");
-            let expect = names
-                .resolve_unit(dobbins, None, Ask::Read)
-                .unwrap_or("")
-                .to_string();
-            let title: String = script
-                .eval("return tostring(MerchantNameText:GetText())")
-                .unwrap_or_default();
-            if title == expect {
-                info!("PROBE_VENDOR_SWAP: title PASS — the window settled on {title:?}");
-                probe.passes += 1;
-            } else {
-                error!(
+            Phase::Settled { since } => {
+                if now - since < SETTLED_SECS {
+                    return;
+                }
+                let dobbins = probe.dobbins.expect("set at Settle");
+                let expect = names
+                    .resolve_unit(dobbins, None, Ask::Read)
+                    .unwrap_or("")
+                    .to_string();
+                let title: String = script
+                    .eval("return tostring(MerchantNameText:GetText())")
+                    .unwrap_or_default();
+                if title == expect {
+                    info!("PROBE_VENDOR_SWAP: title PASS — the window settled on {title:?}");
+                    probe.passes += 1;
+                } else {
+                    error!(
                     "PROBE_VENDOR_SWAP: title FAIL — the window settled on {title:?}, expected \
                      {expect:?}"
                 );
-                probe.fails += 1;
-            }
-            if let Err(e) = script.run("HideUIPanel(MerchantFrame)") {
-                error!("PROBE_VENDOR_SWAP: HideUIPanel(MerchantFrame): {e}");
-            }
-            probe.phase = Phase::Clear {
-                since: now,
-                closed_at: None,
-            };
-        }
-        Phase::Clear { since, closed_at } => {
-            match closed_at {
-                None if merchant.vendor.is_none() => {
-                    probe.phase = Phase::Clear {
-                        since,
-                        closed_at: Some(now),
-                    };
-                }
-                None if now - since > WINDOW_TIMEOUT_SECS => {
-                    error!(
-                        "PROBE_VENDOR_SWAP: clear FAIL — the session never cleared after \
-                         HideUIPanel (vendor = {:?})",
-                        merchant.vendor
-                    );
                     probe.fails += 1;
-                    probe.phase = Phase::Done;
                 }
-                None => {}
-                // The unit feed drops the token the frame after the session clears.
-                Some(at) if now - at >= 0.25 => {
-                    // `and 1 or 0` turns `UnitExists`'s `1` or nil into a number.
-                    let exists: i64 = script
-                        .eval(r#"return UnitExists("npc") and 1 or 0"#)
-                        .unwrap_or(1);
-                    if exists == 1 {
+                if let Err(e) = script.run("HideUIPanel(MerchantFrame)") {
+                    error!("PROBE_VENDOR_SWAP: HideUIPanel(MerchantFrame): {e}");
+                }
+                probe.phase = Phase::Clear {
+                    since: now,
+                    closed_at: None,
+                };
+            }
+            Phase::Clear { since, closed_at } => {
+                match closed_at {
+                    None if merchant.vendor.is_none() => {
+                        probe.phase = Phase::Clear {
+                            since,
+                            closed_at: Some(now),
+                        };
+                    }
+                    None if now - since > WINDOW_TIMEOUT_SECS => {
                         error!(
+                            "PROBE_VENDOR_SWAP: clear FAIL — the session never cleared after \
+                         HideUIPanel (vendor = {:?})",
+                            merchant.vendor
+                        );
+                        probe.fails += 1;
+                        probe.phase = Phase::Done;
+                    }
+                    None => {}
+                    // The unit feed drops the token the frame after the session clears.
+                    Some(at) if now - at >= 0.25 => {
+                        // `and 1 or 0` turns `UnitExists`'s `1` or nil into a number.
+                        let exists: i64 = script
+                            .eval(r#"return UnitExists("npc") and 1 or 0"#)
+                            .unwrap_or(1);
+                        if exists == 1 {
+                            error!(
                             "PROBE_VENDOR_SWAP: clear FAIL — UnitExists(\"npc\") is still true \
                              after the window closed"
                         );
-                        probe.fails += 1;
-                    } else {
-                        info!("PROBE_VENDOR_SWAP: clear PASS — UnitExists(\"npc\") is nil");
-                        probe.passes += 1;
+                            probe.fails += 1;
+                        } else {
+                            info!("PROBE_VENDOR_SWAP: clear PASS — UnitExists(\"npc\") is nil");
+                            probe.passes += 1;
+                        }
+                        probe.phase = Phase::Done;
                     }
-                    probe.phase = Phase::Done;
+                    Some(_) => {}
                 }
-                Some(_) => {}
+            }
+            Phase::Done => {
+                if probe.exited {
+                    return;
+                }
+                probe.exited = true;
+                info!(
+                    "PROBE_VENDOR_SWAP: DONE pass={} fail={} skip={}",
+                    probe.passes, probe.fails, probe.skips
+                );
+                // `AppExit` plus a hard backstop, so a teardown hang cannot keep the account held.
+                exit.write(AppExit::Success);
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    warn!("PROBE_VENDOR_SWAP: still alive 5s after AppExit — hard exit");
+                    std::process::exit(0);
+                });
             }
         }
-        Phase::Done => {
-            if probe.exited {
-                return;
-            }
-            probe.exited = true;
-            info!(
-                "PROBE_VENDOR_SWAP: DONE pass={} fail={} skip={}",
-                probe.passes, probe.fails, probe.skips
-            );
-            // `AppExit` plus a hard backstop, so a teardown hang cannot keep the account held.
-            exit.write(AppExit::Success);
-            std::thread::spawn(|| {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                warn!("PROBE_VENDOR_SWAP: still alive 5s after AppExit — hard exit");
-                std::process::exit(0);
-            });
-        }
-    }
+    })
 }

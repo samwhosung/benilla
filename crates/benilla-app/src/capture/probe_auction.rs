@@ -371,13 +371,14 @@ fn auction_probe(
     time: ProbeClock,
     mut probe: ResMut<AuctionProbe>,
     auction: Res<AuctionOpen>,
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     self_player: Query<&ObjectStore, With<SelfPlayer>>,
     player: Res<Player>,
     units: Query<(&Guid, &NetEntity, &ObjectStore, &Transform), Without<SelfPlayer>>,
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    hosted_vm.run(|script| {
     let Ok(store) = self_player.single() else {
         return; // not in-world yet
     };
@@ -1213,4 +1214,5 @@ fn auction_probe(
             });
         }
     }
+})
 }

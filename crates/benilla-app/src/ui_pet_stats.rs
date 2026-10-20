@@ -9,7 +9,7 @@
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{PetStats, ScriptValue, UiScript};
+use benilla_ui::script::{PetStats, ScriptValue};
 
 use crate::names::NameCache;
 use crate::net::ObjectStore;
@@ -158,8 +158,7 @@ fn stats_for(
 }
 
 pub(crate) fn feed_pet_stats(
-    script: Option<NonSendMut<UiScript>>,
-    bar: Res<PetBar>,
+    mut vm: crate::script_calls::VmWith<Res<'static, PetBar>>,
     pet: PetUnit,
     self_store: Query<&ObjectStore, With<crate::net::SelfPlayer>>,
     tables: Option<Res<PetStatTables>>,
@@ -167,61 +166,64 @@ pub(crate) fn feed_pet_stats(
     names: Res<NameCache>,
     mut last: Local<crate::ui_script::VmMemo<Option<(bool, PetStats)>>>,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let last = last.get(&script);
-    let store = pet.store(bar.spells.pet_guid);
-    let family = family_for(store, &names, family_tables.as_deref());
-    let fresh = stats_for(store, self_store.iter().next(), tables.as_deref(), family);
-    if last.as_ref() == Some(&fresh) {
-        return;
-    }
-    // `UNIT_HAPPINESS`, the pet frame's icon repaint (`PetFrame.lua:63`). Deviation: fired when
-    // the bucket or its two tooltip figures change, not on every change of the happiness field as
-    // in the reference, because no stock consumer reads the raw value.
-    let happiness_moved = last.as_ref().map(|(_, s)| {
-        (
-            s.happiness,
-            s.damage_percentage.to_bits(),
-            s.loyalty_rate.to_bits(),
-        )
-    }) != Some((
-        fresh.1.happiness,
-        fresh.1.damage_percentage.to_bits(),
-        fresh.1.loyalty_rate.to_bits(),
-    ));
-    if happiness_moved {
-        debug!(
-            "ui_pet_stats: happiness {:?} ({}% damage), loyalty {:?}",
-            fresh.1.happiness, fresh.1.damage_percentage, fresh.1.loyalty
-        );
-    }
-    // The family lands with the creature-query answer and fires nothing: the pet page registers no
-    // event known to fire then (not the reference's query event, `UNIT_CLASSIFICATION_CHANGED`).
-    // The page's `OnShow` covers an open; a page already open repaints on its next `UNIT_STATS`.
-    if last.as_ref().map(|(_, s)| &s.family) != Some(&fresh.1.family) {
-        debug!(
-            "ui_pet_stats: pet family {:?}, diet {:?}",
-            fresh.1.family, fresh.1.food_types
-        );
-    }
-    *last = Some(fresh.clone());
-    script.set_pet_stats(fresh.0, fresh.1);
-    // Push before firing: dispatch runs the Lua handlers synchronously.
-    if happiness_moved {
-        // `arg1` is the unit token, as on every 1.12 `UNIT_*` event; its handlers gate on it.
-        script.fire_event("UNIT_HAPPINESS", vec![ScriptValue::Str("pet".into())]);
-    }
-    // The pet page's other repaint events, `UNIT_PET_EXPERIENCE` and `UNIT_PET_TRAINING_POINTS`
-    // (`PetPaperDollFrame.lua:9,21`), are the bridge's watches on fields 141/142 and 149
-    // (`crate::field_watch`), fired after this push.
+    vm.feed(|script, bar, fires| {
+        let Some(script) = script else {
+            return;
+        };
+        let last = last.get(&script);
+        let store = pet.store(bar.spells.pet_guid);
+        let family = family_for(store, &names, family_tables.as_deref());
+        let fresh = stats_for(store, self_store.iter().next(), tables.as_deref(), family);
+        if last.as_ref() == Some(&fresh) {
+            return;
+        }
+        // `UNIT_HAPPINESS`, the pet frame's icon repaint (`PetFrame.lua:63`). Deviation: fired when
+        // the bucket or its two tooltip figures change, not on every change of the happiness field as
+        // in the reference, because no stock consumer reads the raw value.
+        let happiness_moved = last.as_ref().map(|(_, s)| {
+            (
+                s.happiness,
+                s.damage_percentage.to_bits(),
+                s.loyalty_rate.to_bits(),
+            )
+        }) != Some((
+            fresh.1.happiness,
+            fresh.1.damage_percentage.to_bits(),
+            fresh.1.loyalty_rate.to_bits(),
+        ));
+        if happiness_moved {
+            debug!(
+                "ui_pet_stats: happiness {:?} ({}% damage), loyalty {:?}",
+                fresh.1.happiness, fresh.1.damage_percentage, fresh.1.loyalty
+            );
+        }
+        // The family lands with the creature-query answer and fires nothing: the pet page registers no
+        // event known to fire then (not the reference's query event, `UNIT_CLASSIFICATION_CHANGED`).
+        // The page's `OnShow` covers an open; a page already open repaints on its next `UNIT_STATS`.
+        if last.as_ref().map(|(_, s)| &s.family) != Some(&fresh.1.family) {
+            debug!(
+                "ui_pet_stats: pet family {:?}, diet {:?}",
+                fresh.1.family, fresh.1.food_types
+            );
+        }
+        *last = Some(fresh.clone());
+        script.set_pet_stats(fresh.0, fresh.1);
+        // Push before firing: dispatch runs the Lua handlers synchronously.
+        if happiness_moved {
+            // `arg1` is the unit token, as on every 1.12 `UNIT_*` event; its handlers gate on it.
+            fires.post("UNIT_HAPPINESS", vec![ScriptValue::Str("pet".into())]);
+        }
+        // The pet page's other repaint events, `UNIT_PET_EXPERIENCE` and `UNIT_PET_TRAINING_POINTS`
+        // (`PetPaperDollFrame.lua:9,21`), are the bridge's watches on fields 141/142 and 149
+        // (`crate::field_watch`), fired after this push.
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use benilla_protocol::ObjectFields;
+    use benilla_ui::script::UiScript;
 
     const BYTES_0: u16 = 36;
     const BYTES_1: u16 = 138;

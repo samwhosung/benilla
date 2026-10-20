@@ -8,7 +8,6 @@
 use bevy::prelude::*;
 
 use benilla_protocol::messages::{PET_ACT_COMMAND, PET_COMMAND_DISMISS};
-use benilla_ui::script::UiScript;
 
 use crate::net::{ClientCommand, NetCommands};
 use crate::ui_action::{UiError, UiErrorKeys};
@@ -37,72 +36,78 @@ pub(super) fn menu_predicates(pet_flags: u32) -> (bool, bool) {
 /// Push the menu's predicates. Their owner test is `UNIT_FIELD_SUMMONEDBY` alone, with no
 /// `CHARMEDBY` leg (`0x4be500`), so a charmed unit gets every row off, and `UnitPopup_ShowMenu`
 /// opens no menu holding only Cancel.
-pub(super) fn feed_pet_menu(script: Option<NonSendMut<UiScript>>, bar: Res<PetBar>, pet: PetUnit) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let flags = (bar.spells.pet_guid != 0)
-        .then(|| pet.store(bar.spells.pet_guid))
-        .flatten()
-        .filter(|store| store.0.unit_summoned_by() == pet.self_guid.0)
-        .map_or(0, |store| store.0.unit_flags());
-    let (can_be_abandoned, can_be_renamed) = menu_predicates(flags);
-    script.set_pet_menu(can_be_abandoned, can_be_renamed);
+pub(super) fn feed_pet_menu(
+    mut vm: crate::script_calls::VmWith<Res<'static, PetBar>>,
+    pet: PetUnit,
+) {
+    vm.turn(|script, bar| {
+        let Some(script) = script else {
+            return;
+        };
+        let flags = (bar.spells.pet_guid != 0)
+            .then(|| pet.store(bar.spells.pet_guid))
+            .flatten()
+            .filter(|store| store.0.unit_summoned_by() == pet.self_guid.0)
+            .map_or(0, |store| store.0.unit_flags());
+        let (can_be_abandoned, can_be_renamed) = menu_predicates(flags);
+        script.set_pet_menu(can_be_abandoned, can_be_renamed);
+    })
 }
 
 /// Send the menu's verbs under [`PetBar`]'s pet guid. Nothing is applied locally: the server
 /// answers by removing the pet or moving its name timestamp.
 pub(super) fn drain_pet_menu(
-    script: Option<NonSendMut<UiScript>>,
-    bar: Res<PetBar>,
+    mut vm: crate::script_calls::VmWith<Res<'static, PetBar>>,
     commands: Res<NetCommands>,
     ui_errors: Res<UiErrorKeys>,
     pet: PetUnit,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let (abandons, dismisses) = script.take_pet_gives_up();
-    let renames = script.take_pet_renames();
-    if abandons == 0 && dismisses == 0 && renames.is_empty() {
-        return;
-    }
-    let pet_guid = bar.spells.pet_guid;
-    if pet_guid == 0 {
-        debug!("ui_pet: dropping a queued menu verb — there is no pet");
-        return;
-    }
+    vm.turn(|script, bar| {
+        let Some(script) = script else {
+            return;
+        };
+        let (abandons, dismisses) = script.take_pet_gives_up();
+        let renames = script.take_pet_renames();
+        if abandons == 0 && dismisses == 0 && renames.is_empty() {
+            return;
+        }
+        let pet_guid = bar.spells.pet_guid;
+        if pet_guid == 0 {
+            debug!("ui_pet: dropping a queued menu verb — there is no pet");
+            return;
+        }
 
-    // Counted, not deduped: the reference sends one per press.
-    for _ in 0..abandons {
-        debug!("ui_pet: abandoning pet {pet_guid:#x}");
-        let _ = commands.0.send(ClientCommand::PetAbandon { pet_guid });
-    }
-    // `0x4bd6e0` stages `0x07000003` at target 0 and enters the dispatcher, whose first act is the
-    // usability predicate (`0x4bd1f2`): a pet that fails it is not sent the word.
-    let dismiss_word = PET_COMMAND_DISMISS | (u32::from(PET_ACT_COMMAND) << 24);
-    for _ in 0..dismisses {
-        if !pet.actions_usable(&bar) {
-            debug!("ui_pet: dismiss refused, the pet's actions are not usable — no packet");
-            continue;
+        // Counted, not deduped: the reference sends one per press.
+        for _ in 0..abandons {
+            debug!("ui_pet: abandoning pet {pet_guid:#x}");
+            let _ = commands.0.send(ClientCommand::PetAbandon { pet_guid });
         }
-        debug!("ui_pet: dismissing pet {pet_guid:#x} ({dismiss_word:#010x})");
-        let _ = commands.0.send(ClientCommand::PetAction {
-            pet_guid,
-            packed: dismiss_word,
-            target_guid: 0,
-        });
-    }
-    for name in renames {
-        // `0x4bd840`: an empty name raises an error and sends nothing; the rest is truncated.
-        if name.is_empty() {
-            ui_errors.push(UiError::key("ERR_NULL_PETNAME"));
-            continue;
+        // `0x4bd6e0` stages `0x07000003` at target 0 and enters the dispatcher, whose first act is the
+        // usability predicate (`0x4bd1f2`): a pet that fails it is not sent the word.
+        let dismiss_word = PET_COMMAND_DISMISS | (u32::from(PET_ACT_COMMAND) << 24);
+        for _ in 0..dismisses {
+            if !pet.actions_usable(&bar) {
+                debug!("ui_pet: dismiss refused, the pet's actions are not usable — no packet");
+                continue;
+            }
+            debug!("ui_pet: dismissing pet {pet_guid:#x} ({dismiss_word:#010x})");
+            let _ = commands.0.send(ClientCommand::PetAction {
+                pet_guid,
+                packed: dismiss_word,
+                target_guid: 0,
+            });
         }
-        let name = clamp_pet_name(&name);
-        debug!("ui_pet: renaming pet {pet_guid:#x} to {name:?}");
-        let _ = commands.0.send(ClientCommand::PetRename { pet_guid, name });
-    }
+        for name in renames {
+            // `0x4bd840`: an empty name raises an error and sends nothing; the rest is truncated.
+            if name.is_empty() {
+                ui_errors.push(UiError::key("ERR_NULL_PETNAME"));
+                continue;
+            }
+            let name = clamp_pet_name(&name);
+            debug!("ui_pet: renaming pet {pet_guid:#x} to {name:?}");
+            let _ = commands.0.send(ClientCommand::PetRename { pet_guid, name });
+        }
+    })
 }
 
 /// [`PET_NAME_MAX`]'s truncation. Deviation: it counts characters where the reference counts

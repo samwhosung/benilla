@@ -10,7 +10,6 @@ use bevy::prelude::*;
 use benilla_protocol::messages::{
     PetActionEntry, PET_COMMAND_ATTACK, PET_COMMAND_FOLLOW, PET_COMMAND_STAY,
 };
-use benilla_ui::script::UiScript;
 
 use crate::net::{ClientCommand, NetCommands, ObjectStore};
 use crate::target::{is_possessed_by, Selection};
@@ -220,67 +219,68 @@ pub(super) fn arm_pet_gcd(
 /// pet it flips nothing and sends nothing. The stops do not (`0x4bd650`); the drag's writes were
 /// gated where the VM applied them (`0x4bc9d0`), on the answer the bar last pushed.
 pub(crate) fn drain_pet_actions(
-    script: Option<NonSendMut<UiScript>>,
-    mut bar: ResMut<PetBar>,
+    mut vm: crate::script_calls::VmWith<ResMut<'static, PetBar>>,
     commands: Res<NetCommands>,
     pet: PetUnit,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let toggles = script.take_pet_autocast_toggles();
-    let stops = script.take_pet_stop_attacks();
-    let writes = script.take_pet_set_actions();
-    if toggles.is_empty() && stops == 0 && writes.is_empty() {
-        return;
-    }
-    let pet_guid = bar.spells.pet_guid;
-    if pet_guid == 0 {
-        debug!("ui_pet: dropping queued pet intents — the bar is gone");
-        return;
-    }
-    // The repaint is `latch_press`'s alone, not every click's: a refused `TogglePetAutocast`
-    // (`0x4bcbf7`: any right-click on a token) signals nothing, so after `OnClick`'s
-    // `SetChecked(0)` that button stays unlit until the next repaint, as in the reference.
-    for slot in toggles {
-        if !pet.actions_usable(&bar) {
-            debug!(
+    vm.turn(|script, mut bar| {
+        let Some(script) = script else {
+            return;
+        };
+        let toggles = script.take_pet_autocast_toggles();
+        let stops = script.take_pet_stop_attacks();
+        let writes = script.take_pet_set_actions();
+        if toggles.is_empty() && stops == 0 && writes.is_empty() {
+            return;
+        }
+        let pet_guid = bar.spells.pet_guid;
+        if pet_guid == 0 {
+            debug!("ui_pet: dropping queued pet intents — the bar is gone");
+            return;
+        }
+        // The repaint is `latch_press`'s alone, not every click's: a refused `TogglePetAutocast`
+        // (`0x4bcbf7`: any right-click on a token) signals nothing, so after `OnClick`'s
+        // `SetChecked(0)` that button stays unlit until the next repaint, as in the reference.
+        for slot in toggles {
+            if !pet.actions_usable(&bar) {
+                debug!(
                 "ui_pet: autocast toggle on slot {slot} refused, the pet's actions are not usable"
             );
-            continue;
+                continue;
+            }
+            let Some(flipped) = toggle_slot_autocast(&mut bar, slot) else {
+                continue;
+            };
+            debug!(
+                "ui_pet: autocast {} for spell {} (slot {slot})",
+                flipped.autocast_on(),
+                flipped.action()
+            );
+            let _ = commands.0.send(ClientCommand::PetSetAction {
+                pet_guid,
+                // Lua slots are 1-based, the wire's 0-based; `slot_entry` already refused 0.
+                entries: vec![(slot - 1, flipped.packed)],
+            });
         }
-        let Some(flipped) = toggle_slot_autocast(&mut bar, slot) else {
-            continue;
-        };
-        debug!(
-            "ui_pet: autocast {} for spell {} (slot {slot})",
-            flipped.autocast_on(),
-            flipped.action()
-        );
-        let _ = commands.0.send(ClientCommand::PetSetAction {
-            pet_guid,
-            // Lua slots are 1-based, the wire's 0-based; `slot_entry` already refused 0.
-            entries: vec![(slot - 1, flipped.packed)],
-        });
-    }
-    for _ in 0..stops {
-        if stop_pet_attack(&mut bar, &commands) {
-            debug!("ui_pet: stop attack");
-        }
-    }
-    // The drag's `(0-based position, word)` pairs: mirrored here and sent as one batch, since the
-    // server tells one pair from two by body size.
-    for entries in writes {
-        for &(position, packed) in &entries {
-            if let Some(e) = bar.spells.bar.get_mut(position as usize) {
-                *e = PetActionEntry::from(packed);
+        for _ in 0..stops {
+            if stop_pet_attack(&mut bar, &commands) {
+                debug!("ui_pet: stop attack");
             }
         }
-        debug!("ui_pet: bar write {entries:?}");
-        let _ = commands
-            .0
-            .send(ClientCommand::PetSetAction { pet_guid, entries });
-    }
+        // The drag's `(0-based position, word)` pairs: mirrored here and sent as one batch, since the
+        // server tells one pair from two by body size.
+        for entries in writes {
+            for &(position, packed) in &entries {
+                if let Some(e) = bar.spells.bar.get_mut(position as usize) {
+                    *e = PetActionEntry::from(packed);
+                }
+            }
+            debug!("ui_pet: bar write {entries:?}");
+            let _ = commands
+                .0
+                .send(ClientCommand::PetSetAction { pet_guid, entries });
+        }
+    })
 }
 
 /// `TogglePetAutocast`'s local half (`0x4bcbb0`): flip bit 30 in place and return the whole word

@@ -165,21 +165,20 @@ fn report(label: &str, expect: u16, seen: &[Option<u16>]) -> u32 {
 }
 
 fn chest_probe(
+    mut vm: crate::script_calls::VmWith<(Res<'static, LootState>, Res<'static, LootLatch>)>,
     time: ProbeClock,
     mut probe: ResMut<ChestProbe>,
-    script: Option<NonSendMut<UiScript>>,
     self_q: Query<&AnimDriver, With<SelfPlayer>>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     player: Res<Player>,
     objects: Query<NearbyObject, Without<SelfPlayer>>,
     mut go_inputs: GoLockInputs,
     actions: Res<crate::ui_action::PlayerActions>,
-    loot: Res<LootState>,
-    latch: Res<LootLatch>,
     kneel: Res<LootKneel>,
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    vm.turn(|script, (loot, latch)| {
     let Ok(driver) = self_q.single() else {
         return; // not in-world yet
     };
@@ -338,4 +337,5 @@ fn chest_probe(
             });
         }
     }
+})
 }

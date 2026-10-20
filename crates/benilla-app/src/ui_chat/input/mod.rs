@@ -162,25 +162,27 @@ fn manual_join_or_leave(
 }
 
 pub(super) fn drain_chat_input(
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut vm: crate::script_calls::VmWith<(
+        Res<'static, Selection>,
+        ResMut<'static, crate::ui_party::GroupState>,
+        ResMut<'static, crate::names::NameCache>,
+        MessageWriter<'static, crate::creature_anim::CastEvent>,
+        ResMut<'static, crate::creature_anim::PlaySeq>,
+        ChatOut<'static, 'static>,
+    )>,
     chat_log: Res<super::feed::ChatLog>,
     // Mutable because an explicit leave clears the channel's `ZONECHANNELS` bit (`0x49f10a` in
     // leave-by-name `0x49ee70`); the zone walk's own leave does not.
     mut channels: ResMut<super::edit::ChannelState>,
     commands: Res<NetCommands>,
     emotes: Option<Res<crate::sound::EmoteSounds>>,
-    selection: Res<Selection>,
-    mut group: ResMut<crate::ui_party::GroupState>,
-    mut names: ResMut<crate::names::NameCache>,
     // Our stand state and move flags for the emote gates; the entity is `/castvis`'s fallback.
     self_player: Query<(Entity, &MovementState, &GlobalTransform), With<SelfPlayer>>,
-    mut cast_events: MessageWriter<crate::creature_anim::CastEvent>,
-    mut play_seq: ResMut<crate::creature_anim::PlaySeq>,
     mut go_targets: MessageWriter<crate::creature_anim::SpellGoTargets>,
     table: Res<super::commands::SlashCommands>,
-    mut chat_out: ChatOut,
     probes: ChatProbes,
 ) {
+    vm.turn(|script, (selection, mut group, mut names, mut cast_events, mut play_seq, mut chat_out)| {
     let ChatProbes {
         camera: world_camera,
         clock,
@@ -970,6 +972,7 @@ pub(super) fn drain_chat_input(
             }
         }
     }
+})
 }
 
 /// `/chattest`: one synthetic line of every renderable form (kinds, flags, the language header,

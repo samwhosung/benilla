@@ -158,7 +158,7 @@ fn bank_probe(
     mut probe: ResMut<BankProbe>,
     open: Res<BankOpen>,
     prices: Option<Res<BankPrices>>,
-    script: Option<NonSendMut<UiScript>>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     self_player: Query<(), With<SelfPlayer>>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     player: Res<Player>,
@@ -166,6 +166,7 @@ fn bank_probe(
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    hosted_vm.run(|script| {
     if self_player.is_empty() {
         return; // not in-world yet
     }
@@ -552,4 +553,5 @@ fn bank_probe(
             });
         }
     }
+})
 }

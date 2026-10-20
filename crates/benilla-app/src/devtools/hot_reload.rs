@@ -47,62 +47,68 @@ pub(crate) struct HotReload {
     pub(super) log: VecDeque<(f32, String, bool)>,
 }
 
-pub(super) fn poll(time: Res<Time>, script: Option<NonSend<UiScript>>, mut hr: ResMut<HotReload>) {
-    let (Some(root), Some(script)) = (crate::ui_script::addons::root(), script) else {
-        return;
-    };
-    let hr = &mut *hr;
-    if hr.session != script.session() {
-        hr.session = script.session();
-        hr.files.clear();
-        hr.epoch = u64::MAX;
-        hr.watch.clear();
-        hr.mtimes.clear();
-        hr.ran.clear();
-        hr.xml.clear();
-        hr.walked.clear();
-        hr.next_poll = 0.0;
-    }
-    let now = time.elapsed_secs();
-    if now >= hr.next_poll {
-        hr.next_poll = now + POLL_SECS;
-        refresh(hr, &script, &root);
-    }
-    let n = hr.watch.len();
-    if n == 0 {
-        return;
-    }
-    let mut changed = Vec::new();
-    for _ in 0..slice_len(n, time.delta_secs()) {
-        hr.cursor = (hr.cursor + 1) % n;
-        let (id, path) = &hr.watch[hr.cursor];
-        let Ok(t) = std::fs::metadata(path).and_then(|m| m.modified()) else {
-            continue;
+pub(super) fn poll(
+    time: Res<Time>,
+    mut hosted_vm: crate::script_calls::HostedVm,
+    mut hr: ResMut<HotReload>,
+) {
+    hosted_vm.run(|script| {
+        let (Some(root), Some(script)) = (crate::ui_script::addons::root(), script) else {
+            return;
         };
-        match hr.mtimes.insert(path.clone(), t) {
-            // A file first seen is recorded, not reloaded.
-            None if id.is_some() => {
-                if let Ok(bytes) = std::fs::read(path) {
-                    let text = benilla_ui::source::chunk(&bytes).to_vec();
-                    hr.ran.insert(path.clone(), text);
+        let hr = &mut *hr;
+        if hr.session != script.session() {
+            hr.session = script.session();
+            hr.files.clear();
+            hr.epoch = u64::MAX;
+            hr.watch.clear();
+            hr.mtimes.clear();
+            hr.ran.clear();
+            hr.xml.clear();
+            hr.walked.clear();
+            hr.next_poll = 0.0;
+        }
+        let now = time.elapsed_secs();
+        if now >= hr.next_poll {
+            hr.next_poll = now + POLL_SECS;
+            refresh(hr, &script, &root);
+        }
+        let n = hr.watch.len();
+        if n == 0 {
+            return;
+        }
+        let mut changed = Vec::new();
+        for _ in 0..slice_len(n, time.delta_secs()) {
+            hr.cursor = (hr.cursor + 1) % n;
+            let (id, path) = &hr.watch[hr.cursor];
+            let Ok(t) = std::fs::metadata(path).and_then(|m| m.modified()) else {
+                continue;
+            };
+            match hr.mtimes.insert(path.clone(), t) {
+                // A file first seen is recorded, not reloaded.
+                None if id.is_some() => {
+                    if let Ok(bytes) = std::fs::read(path) {
+                        let text = benilla_ui::source::chunk(&bytes).to_vec();
+                        hr.ran.insert(path.clone(), text);
+                    }
                 }
+                Some(old) if old != t => changed.push((*id, path.clone())),
+                _ => {}
             }
-            Some(old) if old != t => changed.push((*id, path.clone())),
-            _ => {}
         }
-    }
-    for (id, path) in changed {
-        let (line, ok) = match id {
-            Some(id) => reload(&script, &root, id, &path, hr.ran.get(&path)),
-            None => reload_xml(&script, &root, &path, &mut hr.xml),
-        };
-        info!("devtools: {line}");
-        chat(&script, &line, ok);
-        hr.log.push_back((now, line, ok));
-        while hr.log.len() > LOG_LINES {
-            hr.log.pop_front();
+        for (id, path) in changed {
+            let (line, ok) = match id {
+                Some(id) => reload(&script, &root, id, &path, hr.ran.get(&path)),
+                None => reload_xml(&script, &root, &path, &mut hr.xml),
+            };
+            info!("devtools: {line}");
+            chat(&script, &line, ok);
+            hr.log.push_back((now, line, ok));
+            while hr.log.len() > LOG_LINES {
+                hr.log.pop_front();
+            }
         }
-    }
+    })
 }
 
 /// How many of `n` watched files a frame `dt` long checks, so that each is checked about every

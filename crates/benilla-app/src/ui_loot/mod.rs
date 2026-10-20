@@ -737,8 +737,10 @@ impl LootSourceObjects<'_, '_> {
 }
 
 fn feed_loot(
-    script: Option<NonSendMut<UiScript>>,
-    mut loot: ResMut<LootState>,
+    mut vm: crate::script_calls::VmWith<(
+        ResMut<'static, LootState>,
+        OpenWhileMoving<'static, 'static>,
+    )>,
     items: Res<Items>,
     icons: Option<Res<ItemDisplays>>,
     commands: Res<NetCommands>,
@@ -753,94 +755,96 @@ fn feed_loot(
     group: Res<GroupState>,
     names: Res<NameCache>,
     objects: LootSourceObjects,
-    mut moving: OpenWhileMoving,
 ) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let last = last.get(&script);
-    let rolls = RollCatalogs {
-        props: props.as_deref(),
-        enchants: enchants.as_deref(),
-    };
-    drain_receives(
-        &mut loot,
-        &items,
-        icons.as_deref(),
-        &commands,
-        &chat,
-        &mut script,
-        rolls,
-    );
+    vm.turn(|script, (mut loot, mut moving)| {
+        let Some(mut script) = script else {
+            return;
+        };
+        let last = last.get(&script);
+        let rolls = RollCatalogs {
+            props: props.as_deref(),
+            enchants: enchants.as_deref(),
+        };
+        drain_receives(
+            &mut loot,
+            &items,
+            icons.as_deref(),
+            &commands,
+            &chat,
+            &mut script,
+            rolls,
+        );
 
-    if std::mem::take(&mut loot.sweep_owed) && loot.source.is_some() {
-        sweep_rows(&mut loot, &items, &commands, &mut script, &mut pickup);
-    }
+        if std::mem::take(&mut loot.sweep_owed) && loot.source.is_some() {
+            sweep_rows(&mut loot, &items, &commands, &mut script, &mut pickup);
+        }
 
-    let who = Candidates {
-        group: &group,
-        names: &names,
-    };
-    let ask = if std::mem::take(&mut loot.opened) {
-        Ask::Event(&commands)
-    } else {
-        Ask::Read
-    };
-    let fresh = snapshot(&loot, &items, icons.as_deref(), ask, rolls, who).map(|mut snap| {
-        snap.source_unit = loot.source().is_some_and(|g| objects.is_unit(g));
-        snap
-    });
-    if fresh == *last {
-        return;
-    }
-    script.set_loot(fresh.clone());
-    match (&*last, &fresh) {
-        (None, Some(snap)) => {
-            // No window until every template has landed: the copier fires nothing while a query
-            // is pending (`0x4c1e9f`), and the cache callback `0x4c2ac0` fires `LOOT_OPENED` (or
-            // the auto-loot sweep) at the last answer. Not advancing `last` retries next frame.
-            if templates_outstanding(&items, snap) {
-                return;
-            }
-            script.fire_event("LOOT_OPENED", vec![]);
-            // Auto-loot (`LootConfig`), inverted by a held Shift: every row gets a hand pick's
-            // sends, and emptying the window auto-releases it.
-            let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-            if cfg.auto_loot != shift {
-                sweep_rows(&mut loot, &items, &commands, &mut script, &mut pickup);
-            }
-            // The response's tail (`0x5ebc3a`-`0x5ebc51`) closes a window that opened while we
-            // move, after the copier's open and sweep and in the same handler: `LOOT_CLOSED` fires
-            // in this pass, so the window never paints.
-            if std::mem::take(&mut moving.move_start.0) {
-                let closed = close_on_move_start(&mut loot, &mut moving.latch, &commands);
-                if closed.is_some() {
-                    moving.dead.after_close(closed);
-                    script.set_loot(None);
-                    script.fire_event("LOOT_CLOSED", vec![]);
-                    *last = None;
+        let who = Candidates {
+            group: &group,
+            names: &names,
+        };
+        let ask = if std::mem::take(&mut loot.opened) {
+            Ask::Event(&commands)
+        } else {
+            Ask::Read
+        };
+        let fresh = snapshot(&loot, &items, icons.as_deref(), ask, rolls, who).map(|mut snap| {
+            snap.source_unit = loot.source().is_some_and(|g| objects.is_unit(g));
+            snap
+        });
+        if fresh == *last {
+            return;
+        }
+        script.set_loot(fresh.clone());
+        match (&*last, &fresh) {
+            (None, Some(snap)) => {
+                // No window until every template has landed: the copier fires nothing while a query
+                // is pending (`0x4c1e9f`), and the cache callback `0x4c2ac0` fires `LOOT_OPENED` (or
+                // the auto-loot sweep) at the last answer. Not advancing `last` retries next frame.
+                if templates_outstanding(&items, snap) {
                     return;
                 }
-            }
-        }
-        // One `LOOT_SLOT_CLEARED` per row that went, with its 1-based row: the stock handler hides
-        // that button and pages down when the page empties (`LootFrame.lua:22-50`).
-        (Some(before), Some(after)) => {
-            for (i, was) in before.rows.iter().enumerate() {
-                let gone = was.is_some() && after.rows.get(i).is_none_or(Option::is_none);
-                if gone {
-                    script.fire_event("LOOT_SLOT_CLEARED", vec![ScriptValue::Int(i as i64 + 1)]);
+                script.fire_event("LOOT_OPENED", vec![]);
+                // Auto-loot (`LootConfig`), inverted by a held Shift: every row gets a hand pick's
+                // sends, and emptying the window auto-releases it.
+                let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+                if cfg.auto_loot != shift {
+                    sweep_rows(&mut loot, &items, &commands, &mut script, &mut pickup);
+                }
+                // The response's tail (`0x5ebc3a`-`0x5ebc51`) closes a window that opened while we
+                // move, after the copier's open and sweep and in the same handler: `LOOT_CLOSED` fires
+                // in this pass, so the window never paints.
+                if std::mem::take(&mut moving.move_start.0) {
+                    let closed = close_on_move_start(&mut loot, &mut moving.latch, &commands);
+                    if closed.is_some() {
+                        moving.dead.after_close(closed);
+                        script.set_loot(None);
+                        script.fire_event("LOOT_CLOSED", vec![]);
+                        *last = None;
+                        return;
+                    }
                 }
             }
-            // Refreshes an open dropdown in place (`LootFrame.lua:62-64`).
-            if before.master_candidates != after.master_candidates {
-                script.fire_event("UPDATE_MASTER_LOOT_LIST", vec![]);
+            // One `LOOT_SLOT_CLEARED` per row that went, with its 1-based row: the stock handler hides
+            // that button and pages down when the page empties (`LootFrame.lua:22-50`).
+            (Some(before), Some(after)) => {
+                for (i, was) in before.rows.iter().enumerate() {
+                    let gone = was.is_some() && after.rows.get(i).is_none_or(Option::is_none);
+                    if gone {
+                        script
+                            .fire_event("LOOT_SLOT_CLEARED", vec![ScriptValue::Int(i as i64 + 1)]);
+                    }
+                }
+                // Refreshes an open dropdown in place (`LootFrame.lua:62-64`).
+                if before.master_candidates != after.master_candidates {
+                    script.fire_event("UPDATE_MASTER_LOOT_LIST", vec![]);
+                }
             }
+            (Some(_), None) => script.fire_event("LOOT_CLOSED", vec![]),
+            (None, None) => {}
         }
-        (Some(_), None) => script.fire_event("LOOT_CLOSED", vec![]),
-        (None, None) => {}
-    }
-    *last = fresh;
+        *last = fresh;
+    })
 }
 
 /// The sweep `0x4c1fa0`, auto-loot's and a disenchant hold's: every row gets a hand pick's sends,
@@ -925,31 +929,31 @@ pub(crate) fn close_interaction(
 /// close's last step. A disenchant window with rows left is swept instead
 /// ([`LootState::disenchant_holds`]).
 pub(crate) fn close_loot_on_leave_world(
-    script: Option<NonSendMut<UiScript>>,
-    mut loot: ResMut<LootState>,
-    mut latch: ResMut<LootLatch>,
+    mut vm: crate::script_calls::VmWith<(ResMut<'static, LootState>, ResMut<'static, LootLatch>)>,
     commands: Res<NetCommands>,
     objects: crate::net::Objects,
     mut dead: DeadUnitDeselect,
     sweep: LegSweepInputs,
 ) {
-    if loot.disenchant_holds() {
-        let LegSweepInputs { items, mut pickup } = sweep;
-        if let Some(mut script) = script {
-            sweep_rows(&mut loot, &items, &commands, &mut script, &mut pickup);
-        } else {
-            loot.owe_sweep();
+    vm.turn(|script, (mut loot, mut latch)| {
+        if loot.disenchant_holds() {
+            let LegSweepInputs { items, mut pickup } = sweep;
+            if let Some(mut script) = script {
+                sweep_rows(&mut loot, &items, &commands, &mut script, &mut pickup);
+            } else {
+                loot.owe_sweep();
+            }
+            return;
         }
-        return;
-    }
-    let closed = close_interaction(&mut loot, &mut latch, Some(&commands));
-    if closed.is_none() {
-        return;
-    }
-    if let Some(mut script) = script {
-        announce_loot_closed(&mut script, &mut loot, &objects);
-    }
-    dead.after_close(closed);
+        let closed = close_interaction(&mut loot, &mut latch, Some(&commands));
+        if closed.is_none() {
+            return;
+        }
+        if let Some(mut script) = script {
+            announce_loot_closed(&mut script, &mut loot, &objects);
+        }
+        dead.after_close(closed);
+    })
 }
 
 /// What the loot leg's disenchant hold sweeps with.
@@ -962,13 +966,14 @@ pub(crate) struct LegSweepInputs<'w> {
 /// Tell the VM in the world that a close the feed will not see closed the window: the UI
 /// shutdown's deselect closing the loot on its target (`0x490bdf` → `0x493910` → `0x48f200`).
 pub(crate) fn tell_loot_closed(
-    script: Option<NonSendMut<UiScript>>,
-    mut loot: ResMut<LootState>,
+    mut vm: crate::script_calls::VmWith<ResMut<'static, LootState>>,
     objects: crate::net::Objects,
 ) {
-    if let Some(mut script) = script {
-        announce_loot_closed(&mut script, &mut loot, &objects);
-    }
+    vm.turn(|script, mut loot| {
+        if let Some(mut script) = script {
+            announce_loot_closed(&mut script, &mut loot, &objects);
+        }
+    })
 }
 
 /// The VM's half of a close that runs where the feed cannot report it: an item source's two
@@ -1060,9 +1065,7 @@ struct OpenWhileMoving<'w, 's> {
 /// (a `LootButton`'s own, flag 0) and the `LOOT_BIND` confirm (`LootSlot`, flag 1) stay apart,
 /// so a second click on a bind-on-pickup row asks again.
 fn drain_loot(
-    script: Option<NonSendMut<UiScript>>,
-    mut loot: ResMut<LootState>,
-    mut latch: ResMut<LootLatch>,
+    mut vm: crate::script_calls::VmWith<(ResMut<'static, LootState>, ResMut<'static, LootLatch>)>,
     commands: Res<NetCommands>,
     mut pickup: MessageWriter<crate::sound::LootPickupSound>,
     group: Res<GroupState>,
@@ -1072,136 +1075,140 @@ fn drain_loot(
     mut dead: DeadUnitDeselect,
     errors: Res<UiErrorKeys>,
 ) {
-    if std::mem::take(&mut move_start.0) {
-        dead.after_close(close_on_move_start(&mut loot, &mut latch, &commands));
-    }
-    let Some(mut script) = script else {
-        return;
-    };
-    for index in script.take_loot_picks() {
-        match loot.action_at(index) {
-            Some(LootAction::Money) => {
-                // No sound here: the coinage watcher (`sound::money`) plays it as the purse rises.
-                debug!("ui_loot: loot coin (row {index})");
-                let _ = commands.0.send(ClientCommand::LootMoney);
+    vm.turn(|script, (mut loot, mut latch)| {
+        if std::mem::take(&mut move_start.0) {
+            dead.after_close(close_on_move_start(&mut loot, &mut latch, &commands));
+        }
+        let Some(mut script) = script else {
+            return;
+        };
+        for index in script.take_loot_picks() {
+            match loot.action_at(index) {
+                Some(LootAction::Money) => {
+                    // No sound here: the coinage watcher (`sound::money`) plays it as the purse rises.
+                    debug!("ui_loot: loot coin (row {index})");
+                    let _ = commands.0.send(ClientCommand::LootMoney);
+                }
+                // A master-loot row opens the candidate dropdown instead: the dispatcher branches on
+                // the slot type (`0x4c28a9`), and the Lua `OnClick` has already stashed the anchor.
+                Some(LootAction::Item { slot_type, .. }) if slot_type == slot_type::MASTER => {
+                    debug!("ui_loot: row {index} is master-loot — opening the candidate list");
+                    script.fire_event("OPEN_MASTER_LOOT_LIST", vec![]);
+                }
+                Some(LootAction::Item {
+                    wire_slot,
+                    display_id,
+                    item_id,
+                    ..
+                }) => {
+                    // The bind-on-pickup deferral (`0x4c28f2`-`0x4c2920`): stash the row, fire the
+                    // event, send nothing, not even the pickup sound.
+                    if bind_confirm_required(&items, item_id) {
+                        debug!(
+                            "ui_loot: row {index} (wire {wire_slot}) binds on pickup — confirming"
+                        );
+                        loot.pending_bind_confirm = Some(index);
+                        script.fire_event(
+                            "LOOT_BIND_CONFIRM",
+                            vec![ScriptValue::Int(i64::from(index))],
+                        );
+                        continue;
+                    }
+                    debug!("ui_loot: autostore row {index} (wire slot {wire_slot})");
+                    let _ = commands
+                        .0
+                        .send(ClientCommand::AutostoreLootItem { slot: wire_slot });
+                    // At the click, before any answer (`0x4c2926`): the item's ItemGroupSounds kit 0.
+                    pickup.write(crate::sound::LootPickupSound { display_id });
+                }
+                None => debug!("ui_loot: row {index} clicked out of range — ignored"),
             }
-            // A master-loot row opens the candidate dropdown instead: the dispatcher branches on
-            // the slot type (`0x4c28a9`), and the Lua `OnClick` has already stashed the anchor.
-            Some(LootAction::Item { slot_type, .. }) if slot_type == slot_type::MASTER => {
-                debug!("ui_loot: row {index} is master-loot — opening the candidate list");
-                script.fire_event("OPEN_MASTER_LOOT_LIST", vec![]);
+        }
+
+        // `LootSlot`, the confirm arm (`0x4c27c0`): it sends only for the pending row and clears the
+        // stash on the send (`0x4c281a`), so a doubled OnAccept cannot loot twice.
+        for index in script.take_loot_confirms() {
+            if loot.pending_bind_confirm != Some(index) {
+                debug!("ui_loot: LootSlot({index}) is not the pending bind confirm — ignored");
+                continue;
             }
-            Some(LootAction::Item {
+            let Some(LootAction::Item {
                 wire_slot,
                 display_id,
-                item_id,
                 ..
-            }) => {
-                // The bind-on-pickup deferral (`0x4c28f2`-`0x4c2920`): stash the row, fire the
-                // event, send nothing, not even the pickup sound.
-                if bind_confirm_required(&items, item_id) {
-                    debug!("ui_loot: row {index} (wire {wire_slot}) binds on pickup — confirming");
-                    loot.pending_bind_confirm = Some(index);
-                    script.fire_event(
-                        "LOOT_BIND_CONFIRM",
-                        vec![ScriptValue::Int(i64::from(index))],
-                    );
-                    continue;
+            }) = loot.action_at(index)
+            else {
+                // The row went under the dialog: bail without clearing the stash, as `0x4c27d7` does.
+                debug!("ui_loot: bind confirm for row {index} — the row is gone, nothing sent");
+                continue;
+            };
+            loot.pending_bind_confirm = None;
+            debug!("ui_loot: bind-confirmed row {index} (wire slot {wire_slot})");
+            let _ = commands
+                .0
+                .send(ClientCommand::AutostoreLootItem { slot: wire_slot });
+            pickup.write(crate::sound::LootPickupSound { display_id });
+        }
+        // `GiveMasterLoot(slot, candidateIndex)`, both 1-based; one that does not resolve is dropped.
+        for (index, candidate) in script.take_loot_master_gives() {
+            let Some(guid) = loot.source else {
+                continue;
+            };
+            let (
+                Some(LootAction::Item {
+                    wire_slot,
+                    slot_type,
+                    ..
+                }),
+                Some(target),
+            ) = (
+                loot.action_at(index),
+                loot.master_candidate(candidate, &group),
+            )
+            else {
+                debug!("ui_loot: GiveMasterLoot({index}, {candidate}) unresolvable — ignored");
+                continue;
+            };
+            // Only a master row: the sender `0x4c2940` re-reads the slot type and bails unless it is 2.
+            if slot_type != slot_type::MASTER {
+                debug!("ui_loot: GiveMasterLoot({index}) is not a master row — ignored");
+                continue;
+            }
+            debug!("ui_loot: master-give row {index} (wire slot {wire_slot}) to {target:#x}");
+            let _ = commands.0.send(ClientCommand::LootMasterGive {
+                guid,
+                slot: wire_slot,
+                target,
+            });
+        }
+        // `CloseLoot` (`0x4c2ec0` → `0x48f200(cl=1, dl=0)`), which stock `LootFrame_OnHide` calls.
+        if let Some(failed) = script.take_loot_close() {
+            if loot.disenchant_holds() {
+                debug!("ui_loot: CloseLoot on a disenchant window with rows left — sweeping it");
+                sweep_rows(&mut loot, &items, &commands, &mut script, &mut pickup);
+            } else {
+                // Past the no-loot and disenchant returns, a set flag shows `ERR_LOOT_NO_UI`
+                // (`0x48f272`-`0x48f280`, `DisplayError(0x87)`) before the release.
+                if failed && loot.source().is_some() {
+                    errors.push(UiError::key("ERR_LOOT_NO_UI"));
                 }
-                debug!("ui_loot: autostore row {index} (wire slot {wire_slot})");
-                let _ = commands
-                    .0
-                    .send(ClientCommand::AutostoreLootItem { slot: wire_slot });
-                // At the click, before any answer (`0x4c2926`): the item's ItemGroupSounds kit 0.
-                pickup.write(crate::sound::LootPickupSound { display_id });
+                let closed = close_interaction(&mut loot, &mut latch, Some(&commands));
+                if let Some(guid) = closed {
+                    debug!("ui_loot: release loot {guid:#x}");
+                }
+                dead.after_close(closed);
             }
-            None => debug!("ui_loot: row {index} clicked out of range — ignored"),
         }
-    }
-
-    // `LootSlot`, the confirm arm (`0x4c27c0`): it sends only for the pending row and clears the
-    // stash on the send (`0x4c281a`), so a doubled OnAccept cannot loot twice.
-    for index in script.take_loot_confirms() {
-        if loot.pending_bind_confirm != Some(index) {
-            debug!("ui_loot: LootSlot({index}) is not the pending bind confirm — ignored");
-            continue;
-        }
-        let Some(LootAction::Item {
-            wire_slot,
-            display_id,
-            ..
-        }) = loot.action_at(index)
-        else {
-            // The row went under the dialog: bail without clearing the stash, as `0x4c27d7` does.
-            debug!("ui_loot: bind confirm for row {index} — the row is gone, nothing sent");
-            continue;
-        };
-        loot.pending_bind_confirm = None;
-        debug!("ui_loot: bind-confirmed row {index} (wire slot {wire_slot})");
-        let _ = commands
-            .0
-            .send(ClientCommand::AutostoreLootItem { slot: wire_slot });
-        pickup.write(crate::sound::LootPickupSound { display_id });
-    }
-    // `GiveMasterLoot(slot, candidateIndex)`, both 1-based; one that does not resolve is dropped.
-    for (index, candidate) in script.take_loot_master_gives() {
-        let Some(guid) = loot.source else {
-            continue;
-        };
-        let (
-            Some(LootAction::Item {
-                wire_slot,
-                slot_type,
-                ..
-            }),
-            Some(target),
-        ) = (
-            loot.action_at(index),
-            loot.master_candidate(candidate, &group),
-        )
-        else {
-            debug!("ui_loot: GiveMasterLoot({index}, {candidate}) unresolvable — ignored");
-            continue;
-        };
-        // Only a master row: the sender `0x4c2940` re-reads the slot type and bails unless it is 2.
-        if slot_type != slot_type::MASTER {
-            debug!("ui_loot: GiveMasterLoot({index}) is not a master row — ignored");
-            continue;
-        }
-        debug!("ui_loot: master-give row {index} (wire slot {wire_slot}) to {target:#x}");
-        let _ = commands.0.send(ClientCommand::LootMasterGive {
-            guid,
-            slot: wire_slot,
-            target,
-        });
-    }
-    // `CloseLoot` (`0x4c2ec0` → `0x48f200(cl=1, dl=0)`), which stock `LootFrame_OnHide` calls.
-    if let Some(failed) = script.take_loot_close() {
-        if loot.disenchant_holds() {
-            debug!("ui_loot: CloseLoot on a disenchant window with rows left — sweeping it");
-            sweep_rows(&mut loot, &items, &commands, &mut script, &mut pickup);
-        } else {
-            // Past the no-loot and disenchant returns, a set flag shows `ERR_LOOT_NO_UI`
-            // (`0x48f272`-`0x48f280`, `DisplayError(0x87)`) before the release.
-            if failed && loot.source().is_some() {
-                errors.push(UiError::key("ERR_LOOT_NO_UI"));
-            }
+        // The last-row auto-close (`0x4c1f8d`, `0x4c2785` → `0x48f200(cl=1, dl=0)`). The feed then
+        // fires `LOOT_CLOSED`, and the `CloseLoot()` from `OnHide` finds no source.
+        if loot.take_auto_release() {
             let closed = close_interaction(&mut loot, &mut latch, Some(&commands));
             if let Some(guid) = closed {
-                debug!("ui_loot: release loot {guid:#x}");
+                debug!("ui_loot: loot emptied — auto-release {guid:#x}");
             }
             dead.after_close(closed);
         }
-    }
-    // The last-row auto-close (`0x4c1f8d`, `0x4c2785` → `0x48f200(cl=1, dl=0)`). The feed then
-    // fires `LOOT_CLOSED`, and the `CloseLoot()` from `OnHide` finds no source.
-    if loot.take_auto_release() {
-        let closed = close_interaction(&mut loot, &mut latch, Some(&commands));
-        if let Some(guid) = closed {
-            debug!("ui_loot: loot emptied — auto-release {guid:#x}");
-        }
-        dead.after_close(closed);
-    }
+    })
 }
 
 #[cfg(test)]
