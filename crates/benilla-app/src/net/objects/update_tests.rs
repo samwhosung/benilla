@@ -895,3 +895,31 @@ fn a_despawn_the_model_cannot_play_holds_nothing_from_its_destroy() {
     assert_eq!(field(world, DOOR, ENTRY), Some(0x13));
     assert_eq!(field(world, DOOR, STALE), None, "a fresh object");
 }
+
+/// A `GAMEOBJECT_STATE` change to a motion the model lacks (Destroy, 150) still holds: the state
+/// arm plays and holds unchecked (`0x5f3af8`-`0x5f3b27`). The destroy behind it only marks the
+/// object pending (`0x464920`), and the unhold parks it in the released table, where a block
+/// brings back the object that left.
+#[test]
+fn a_state_change_to_a_motion_the_model_lacks_holds_through_the_destroy() {
+    use benilla_protocol::field::FIELD_GAMEOBJECT_STATE;
+    let mut app = client();
+    let world = app.world_mut();
+    let e = animated_door(world, DOOR, &[146, 147, 148, 149]);
+
+    send(world, [values(DOOR, &[(FIELD_GAMEOBJECT_STATE, 2)])]);
+    super::super::handlers::dispatch(world, vec![SessionEvent::ObjectDestroyed(DOOR)]);
+    assert!(held(world, DOOR), "held: the destroy only marks it");
+
+    use bevy::ecs::system::RunSystemOnce;
+    world.run_system_once(crate::net::release_unheld).unwrap();
+    assert!(!held(world, DOOR), "the unhold released it");
+    assert!(world.get::<DespawnFade>(e).is_some());
+    send(world, [values(DOOR, &[])]);
+    assert!(held(world, DOOR), "parked, not freed");
+    assert_eq!(
+        field(world, DOOR, STALE),
+        Some(0x55),
+        "the object that left"
+    );
+}

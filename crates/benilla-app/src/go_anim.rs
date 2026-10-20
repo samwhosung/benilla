@@ -96,11 +96,14 @@ impl GoAnim {
     }
 
     /// Whether the machine holds its object once this frame's drive has armed what the packets
-    /// asked, which the reference arms at the packet: a hold comes only with a play that happens
-    /// (`0x5f3b27`). A new state replaces the live play and holds when it plays a motion, a
-    /// substate but 1, 3 and 6 (`0x5f3b0b`-`0x5f3b18`), unless the already-playing skip refuses it
-    /// (`0x5f3a05`); a one-shot holds only when the model has its animation (`0x5f424a`). With no
-    /// model loaded nothing new plays (`0x5f38f0`; the event waits at `+0x280`).
+    /// asked, which the reference arms at the packet: a hold comes only with a play (`0x5f3b27`).
+    /// A new state replaces the live play and holds when it plays a motion, a substate but 1, 3
+    /// and 6 (`0x5f3b0b`-`0x5f3b18`), unless the already-playing skip refuses it (`0x5f3a05`),
+    /// whether or not the model has the id: the state arm plays and holds unchecked
+    /// (`0x5f3af8`-`0x5f3b27`), and its remap keeps a missing Close, Open, Destroy or Rebuild
+    /// (`0x5f39b0`, `0x5f3984`, past the `0x5f3b40` table). A one-shot holds only when the model
+    /// has its animation (`0x5f424a`). With no model loaded nothing new plays (`0x5f38f0`; the
+    /// event waits at `+0x280`).
     pub(crate) fn will_hold(&self, anims: Option<&ModelAnimations>) -> bool {
         let Some(anims) = anims else {
             return self.holds();
@@ -110,14 +113,14 @@ impl GoAnim {
             holds = match resolve(self.shown, state) {
                 None => false,
                 Some(play) => {
-                    let (want, frozen) = remap_missing(anims, play.anim_id());
+                    let (want, _) = remap_missing(anims, play.anim_id());
                     let skip =
                         want != 0 && !anims.owns(play.anim_id()) && self.armed_id == Some(want);
                     // The skip keeps the live play and its hold (`0x5f3a05` → `0x5f3b32`).
                     if skip {
                         holds
                     } else {
-                        matches!(play, Play::Motion(_)) && !frozen && anims.find(want).is_some()
+                        matches!(play, Play::Motion(_))
                     }
                 }
             };
@@ -1273,13 +1276,13 @@ mod tests {
     }
 
     /// What the release reads at the packet ([`GoAnim::will_hold`]) is what the drive then
-    /// plays: a hold for a motion and an owned one-shot (`0x5f3b27`, `0x5f424a`), none for an
-    /// animation the model lacks.
+    /// plays: a hold for a motion and an owned one-shot (`0x5f3b27`, `0x5f424a`), none for a
+    /// one-shot the model lacks.
     #[test]
     fn the_packets_hold_is_the_drives() {
         /// A case: its name, the model's extra clips and what the packet arms.
         type Case = (&'static str, &'static [(u16, f32, u16)], fn(&mut GoAnim));
-        let cases: [Case; 6] = [
+        let cases: [Case; 5] = [
             ("an owned despawn", &[(157, 2.667, 0)], |go| go.despawn()),
             ("an unowned despawn", &[], |go| go.despawn()),
             ("an owned custom", &[(153, 0.667, 0)], |go| go.custom(0)),
@@ -1287,7 +1290,6 @@ mod tests {
             ("the open motion", &[], |go| {
                 go.set_wire_state(GO_STATE_ACTIVE)
             }),
-            ("a motion the model lacks", &[], |go| go.set_wire_state(2)),
         ];
         for (what, extra, arm) in cases {
             let (mut app, go) = crate_app(extra);
@@ -1344,6 +1346,22 @@ mod tests {
             "the one-shot plays in the skip's frame"
         );
         assert_eq!(app.world().get::<GoAnim>(go).unwrap().one_shot, None);
+    }
+
+    /// A state change to a motion the model lacks still holds at the packet: the state arm plays
+    /// and holds unchecked (`0x5f3af8`-`0x5f3b27`), and the remap keeps Destroy (150), outside
+    /// the `0x5f3b40` table. The drive has no clip to play, so the hold drops with it.
+    #[test]
+    fn a_motion_the_model_lacks_holds_at_the_packet() {
+        let (mut app, go) = crate_app(&[]); // no 150
+        app.update();
+        app.world_mut()
+            .get_mut::<GoAnim>(go)
+            .unwrap()
+            .set_wire_state(2);
+        assert!(will_hold(&app, go), "the arm holds unchecked");
+        app.update();
+        assert!(!will_hold(&app, go), "no clip played: the unhold follows");
     }
 
     fn will_hold(app: &App, go: Entity) -> bool {
