@@ -2051,6 +2051,81 @@ fn enhanced_tooltips_off_shortens_the_action_and_stance_tooltips() {
     assert!(s.take_errors().is_empty());
 }
 
+/// The reputation line sits after the form line and before the reagents (`0x52f2ae`-`0x52f38e`):
+/// `ITEM_REQ_REPUTATION` of the faction and the rank's label, gendered for a female player when the
+/// `_FEMALE` text is not empty (`0x612bf0`), white when met, else red; a compact build leaves a met
+/// one out and keeps an unmet one whole.
+#[test]
+fn the_reputation_requirement_line_sits_after_the_form() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    seed_requirement_strings(&s);
+    s.run(
+        r#"ITEM_REQ_REPUTATION = "[REP %s - %s]"
+           FACTION_STANDING_LABEL5 = "Friendly"; FACTION_STANDING_LABEL5_FEMALE = "Friendly (f)"
+           FACTION_STANDING_LABEL6 = "Honored"; FACTION_STANDING_LABEL6_FEMALE = """#,
+    )
+    .unwrap();
+    let rep = |rank, met, female| ReputationRequirement {
+        faction: "Gadgetzan".into(),
+        rank,
+        met,
+        female,
+    };
+    s.set_action(
+        1,
+        Some(ActionSlot {
+            kind: 0,
+            action: 633,
+            ..Default::default()
+        }),
+    );
+    let shown = |s: &mut UiScript, r: ReputationRequirement| {
+        s.set_spell_tooltip(
+            633,
+            SpellTooltipView {
+                requires_reputation: Some(r),
+                ..holy_light()
+            },
+        );
+        let lines: String = s
+            .eval(r#"TT:SetOwner(SBC, "ANCHOR_RIGHT"); TT:SetAction(1); return Lines()"#)
+            .unwrap();
+        let rgb: (f32, f32, f32) = s
+            .eval(
+                r#"for i = 1, TT:NumLines() do
+                       local l = getglobal("TTTextLeft" .. i)
+                       if string.find(l:GetText() or "", "^%[REP") then return l:GetTextColor() end
+                   end"#,
+            )
+            .unwrap_or((0.0, 0.0, 0.0));
+        (lines, rgb)
+    };
+    let (lines, rgb) = shown(&mut s, rep(4, false, false));
+    assert!(
+        lines.contains("[FORM Bear Form]\n[REP Gadgetzan - Friendly]\n[REAGENTS]"),
+        "{lines}"
+    );
+    assert!(
+        (rgb.0 - 1.0).abs() < 1e-3 && rgb.1 < 0.2,
+        "unmet is red: {rgb:?}"
+    );
+    let (lines, rgb) = shown(&mut s, rep(4, true, true));
+    assert!(lines.contains("[REP Gadgetzan - Friendly (f)]"), "{lines}");
+    assert!(rgb.1 > 0.99 && rgb.2 > 0.99, "met is white: {rgb:?}");
+    let (lines, _) = shown(&mut s, rep(5, true, true));
+    assert!(
+        lines.contains("[REP Gadgetzan - Honored]"),
+        "an empty _FEMALE: {lines}"
+    );
+    s.run(r#"SetCVar("UberTooltips", "0")"#).unwrap();
+    let (lines, _) = shown(&mut s, rep(4, true, false));
+    assert!(!lines.contains("[REP"), "compact drops a met one: {lines}");
+    let (lines, _) = shown(&mut s, rep(4, false, false));
+    assert!(lines.contains("[REP Gadgetzan - Friendly]"), "{lines}");
+    assert!(s.take_errors().is_empty());
+}
+
 /// `SetShapeshift` and `SetPetAction` pass the rank flag (`0x532ab3`, `0x532886`), as `SetAction`
 /// does; `SetSpell` does not.
 #[test]

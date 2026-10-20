@@ -131,6 +131,9 @@ pub(super) struct Deps {
     pub(super) worn: u32,
     /// The equipped-item search asked whether the disarm flag hides a hand.
     pub(super) disarm: bool,
+    /// The reputation line read the player's standing with its faction (`0x4d6370`), the wire
+    /// slot on the base its race and class pick.
+    pub(super) reputation: bool,
     /// The player's unit fields the cost, cast and cooldown cells read, a [`UnitField`] bit each.
     /// A pet view's cost and cast cells read the pet's own fields, which are pet inputs, so of
     /// the unit fields only the ranged attack time (read off the player) is recorded for one.
@@ -177,6 +180,7 @@ impl Deps {
             || changes.avoidance & self.avoidance != 0
             || changes.worn & self.worn != 0
             || (changes.disarm && self.disarm)
+            || (changes.reputation && self.reputation)
             || changes.unit & self.unit != 0
             || changes.mod_bits & self.mod_bits != 0
             || self
@@ -219,6 +223,8 @@ pub(super) struct Changes {
     /// The equipment slots whose item moved in a way the search can tell, a bit each.
     pub(super) worn: u32,
     pub(super) disarm: bool,
+    /// A reputation standing moved.
+    pub(super) reputation: bool,
     /// A [`UnitField`] bit each.
     pub(super) unit: u16,
     /// The `SpellFamilyFlags` bits with a changed modifier cell.
@@ -237,6 +243,7 @@ impl Changes {
             && self.avoidance == 0
             && self.worn == 0
             && !self.disarm
+            && !self.reputation
             && self.unit == 0
             && self.mod_bits == 0
             && self.skill_lines.is_empty()
@@ -311,6 +318,10 @@ pub(super) struct Seen {
     range_units: RangeSeen,
     /// The unit fields the cost, cast and cooldown cells read.
     unit: UnitFields,
+    /// The wire standings, slot by slot, and the race and class whose base they ride on, which
+    /// the reputation line's standing reads.
+    reputations: Vec<i32>,
+    race_class: (u8, u8),
 }
 
 impl Seen {
@@ -333,7 +344,17 @@ impl Seen {
                 .map(|which| player.and_then(|s| which.read(&s.0)).map(f32::to_bits)),
             range_units,
             unit: UnitFields::of(player),
+            reputations: Vec::new(),
+            race_class: player.map_or((0, 0), |s| {
+                (s.0.unit_race().unwrap_or(0), s.0.unit_class().unwrap_or(0))
+            }),
         }
+    }
+
+    /// The standings the frame saw, which the reputation line reads.
+    pub(super) fn with_reputations(mut self, reputations: &crate::net::Reputations) -> Self {
+        self.reputations = reputations.slots.iter().map(|&(_, w)| w).collect();
+        self
     }
 
     /// What differs from the frame `prev` saw, the modifiers and reagents apart. A player
@@ -346,6 +367,7 @@ impl Seen {
             form: self.form != prev.form,
             range_units: self.range_units != prev.range_units,
             disarm: self.disarmed != prev.disarmed,
+            reputation: self.reputations != prev.reputations || self.race_class != prev.race_class,
             unit: self.unit.diff(&prev.unit),
             ..Changes::default()
         };

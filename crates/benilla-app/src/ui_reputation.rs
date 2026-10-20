@@ -317,6 +317,25 @@ pub(crate) fn feed_reputation(
     }
 }
 
+/// `GetFactionStanding 0x4d6370` for one faction: the base for `race`/`class` plus its wire slot,
+/// for a faction with a reputation index under 64 (`0x4d6379`), else 0 (`0x4d6390`).
+pub(crate) fn faction_standing(
+    catalog: &benilla_formats::FactionCatalog,
+    reputations: &Reputations,
+    race: u8,
+    class: u8,
+    faction_id: u32,
+) -> i32 {
+    catalog
+        .reputation_faction(faction_id)
+        .and_then(|info| {
+            let index = usize::try_from(info.rep_index).ok().filter(|&i| i < 64)?;
+            let wire = reputations.slots.get(index).map_or(0, |&(_, w)| w);
+            Some(info.base_for(race, class) + wire)
+        })
+        .unwrap_or(0)
+}
+
 /// Every faction with a reputation index under 64 (`0x4d6379`) at the base for `race`/`class` plus
 /// its wire slot (`0x4d6370`). The base table is zeroed at login (`0x4d5426`) and written only
 /// for a fitting column (`0x4d553c`), so a faction the pane does not list still has its wire

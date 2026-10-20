@@ -66,6 +66,8 @@ pub struct SpellTooltipView {
     pub requires_form: Option<String>,
     /// The current shapeshift form matches the mask; the app re-pushes on a form change.
     pub form_met: bool,
+    /// The required reputation, from `MinFactionId` and `MinReputation`.
+    pub requires_reputation: Option<ReputationRequirement>,
     /// `SPELL_REAGENTS` (`0x854e54`) and the reagents; the app writes a missing reagent's inline
     /// `|cffff2020` escape.
     pub reagents: Option<TooltipText>,
@@ -80,6 +82,22 @@ pub struct SpellTooltipView {
     pub use_all: Option<TooltipText>,
     /// The `$`-substituted description.
     pub description: TooltipText,
+}
+
+/// The spell's reputation line (`0x52f2ae`-`0x52f38e`): `ITEM_REQ_REPUTATION` (`0x854b8c`) of the
+/// faction's name and the required rank's label, read off the active player whatever the caster.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ReputationRequirement {
+    /// The `Faction.dbc` row's name, `UNKNOWN` without one (`0x52f336`).
+    pub faction: String,
+    /// The rank, 0 Hated to 7 Exalted, whose label is `FACTION_STANDING_LABEL<rank + 1>`
+    /// (`0x84b5dc`).
+    pub rank: u32,
+    /// The player's standing with the faction (`0x4d6370`) reaches the rank's floor (`0x52f2d3`).
+    pub met: bool,
+    /// The active player is female, so the label is the `_FEMALE` text when it is not empty
+    /// (`0x612bf0`).
+    pub female: bool,
 }
 
 impl super::UiScript {
@@ -515,6 +533,18 @@ fn render_spell(
                 append_line(lua, this, (text, color), None, false)?;
             }
         }
+        // The reputation requirement, white when met, else red, unwrapped; a compact build leaves
+        // a met one out, and an unmet one keeps its key (`0x52f2df`-`0x52f38e`).
+        if let Some(r) = v
+            .requires_reputation
+            .as_ref()
+            .filter(|r| !(compact && r.met))
+        {
+            if let Some(text) = reputation_line(lua, r) {
+                let color = if r.met { WHITE } else { RED };
+                append_line(lua, this, (text, color), None, false)?;
+            }
+        }
         // Reagents, white and wrapped, unless altCaster drops them (`0x52f398`) or a compact
         // build has them all (`0x52f513`-`0x52f51f`).
         if let Some(reagents) = cell(&v.reagents)
@@ -588,6 +618,24 @@ fn render_spell(
 }
 
 /// A requirement line: `key`'s template of `name`, read now; none when the key is missing.
+/// `ITEM_REQ_REPUTATION` of the faction and the rank's label, the label gendered as `0x612bf0`
+/// does: the `_FEMALE` text for a female player when it is not empty, else the bare key's.
+fn reputation_line(lua: &Lua, r: &ReputationRequirement) -> Option<String> {
+    let key = format!("FACTION_STANDING_LABEL{}", r.rank.saturating_add(1));
+    let label = r
+        .female
+        .then(|| crate::strings::global(lua, &format!("{key}_FEMALE")))
+        .flatten()
+        .or_else(|| crate::strings::global(lua, &key))
+        .unwrap_or_default();
+    let template = crate::strings::global(lua, "ITEM_REQ_REPUTATION")?;
+    Some(crate::strings::fill(
+        &template,
+        &[Arg::S(&r.faction), Arg::S(&label)],
+    ))
+    .filter(|t| !t.is_empty())
+}
+
 fn keyed_line(lua: &Lua, key: &str, name: &str) -> Option<String> {
     let template = crate::strings::global(lua, key)?;
     Some(crate::strings::fill(&template, &[Arg::S(name)])).filter(|t| !t.is_empty())

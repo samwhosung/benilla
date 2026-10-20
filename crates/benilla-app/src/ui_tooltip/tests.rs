@@ -89,6 +89,9 @@ pub(super) struct TestCtx {
     pub(super) spell_mods: crate::spell::SpellModifiers,
     /// Absent by default: every spell's skill level reads 0.
     pub(super) skill_lines: Option<benilla_formats::SkillLineCatalog>,
+    /// Absent by default: a reputation line names `UNKNOWN` at a standing of 0.
+    pub(super) factions: Option<benilla_formats::FactionCatalog>,
+    pub(super) reputations: crate::net::Reputations,
 }
 
 impl TestCtx {
@@ -100,6 +103,8 @@ impl TestCtx {
             _rx: rx,
             spell_mods: crate::spell::SpellModifiers::default(),
             skill_lines: None,
+            factions: None,
+            reputations: crate::net::Reputations::default(),
         }
     }
 
@@ -145,6 +150,8 @@ impl TestCtx {
             sub_classes,
             skill_lines: self.skill_lines.as_ref(),
             spell_mods: &self.spell_mods,
+            factions: self.factions.as_ref(),
+            reputations: Some(&self.reputations),
         }
     }
 
@@ -794,6 +801,65 @@ fn the_cost_cell_tests_the_divided_values() {
         Some("0 Mana, plus 23 per sec"),
         "3 + (20 - 10) × 2"
     );
+}
+
+/// The reputation line's facts (`0x52f2ae`-`0x52f38e`) on the one 5875 row with a faction, 6994:
+/// Gadgetzan at Friendly, met from a standing of 3000 (`0x4d6370`, `0x80928c`), the label female
+/// for a female player, a read of the standings and the gender; a missing row names `UNKNOWN`.
+#[test]
+fn the_reputation_line_reads_the_players_standing() {
+    use benilla_ui::script::ReputationRequirement;
+    let Some(spells) = real_spells() else { return };
+    let data = benilla_formats::wow_data_or_skip!();
+    let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+    let factions = benilla_formats::load_faction_catalog(&mut chain).expect("factions");
+    let index = factions
+        .reputation_faction(369)
+        .expect("Gadgetzan")
+        .rep_index as usize;
+    let mut objs = no_objects();
+    let objects = objs.get();
+    // A female human warrior (race 1, class 1, gender byte 1).
+    let store = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+        (22, 100),
+        (36, 1 | 1 << 8 | 1 << 16),
+    ]));
+    let mut t = TestCtx::new();
+    let requirement = |t: &mut TestCtx, wire: i32| {
+        let mut slots = vec![(0u8, 0i32); 64];
+        slots[index] = (0, wire);
+        t.reputations = crate::net::Reputations::from_slots(slots);
+        let (view, deps) = build_view(
+            6994,
+            &spells,
+            &mut t.ctx_for(&objects, 0, None, Some(&store)),
+        )
+        .unwrap();
+        assert!(deps.reputation && deps.gender, "{deps:?}");
+        view.requires_reputation
+    };
+    assert_eq!(
+        requirement(&mut t, 0),
+        Some(ReputationRequirement {
+            faction: "UNKNOWN".into(),
+            rank: 4,
+            met: false,
+            female: true,
+        }),
+        "no Faction.dbc"
+    );
+    t.factions = Some(factions);
+    let base = t
+        .factions
+        .as_ref()
+        .unwrap()
+        .reputation_faction(369)
+        .unwrap()
+        .base_for(1, 1);
+    let at = |t: &mut TestCtx, standing: i32| requirement(t, standing - base).unwrap();
+    assert_eq!(at(&mut t, 2999).faction, "Gadgetzan");
+    assert!(!at(&mut t, 2999).met);
+    assert!(at(&mut t, 3000).met, "Friendly starts at 3000");
 }
 
 /// The per-level terms read `0x6e3130`, for the player `0x5ea690`: the skill in the spell's own

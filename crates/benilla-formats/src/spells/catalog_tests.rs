@@ -1256,6 +1256,21 @@ fn real_spell_catalog_cost_columns() {
     );
 }
 
+/// `MinFactionId` and `MinReputation` (columns 170, 171), the spell tooltip's reputation line
+/// (`0x52f2ae`): set on one 5875 row, 6994, Gadgetzan (369) at Friendly (4).
+#[test]
+fn real_spell_catalog_reputation_columns() {
+    let data = crate::wow_data_or_skip!();
+    let mut chain = crate::open_chain(&data).expect("open chain");
+    let cat = crate::load_spell_catalog(&mut chain).expect("Spell.dbc");
+    let rows: Vec<(u32, u32, u32)> = cat
+        .iter()
+        .filter(|(_, d)| d.min_faction_id != 0)
+        .map(|(id, d)| (id, d.min_faction_id, d.min_reputation))
+        .collect();
+    assert_eq!(rows, [(6994, 369, 4)]);
+}
+
 /// A chat language reaches its skill only through the spell whose `Effect_1` is
 /// `SPELL_EFFECT_LANGUAGE` (`0x4b2656`). On 5875, 813-817 all declare Common (7), so Demonic,
 /// Titan, Thalassian and Kalimag garble for everyone, and a language-to-spell map would resolve

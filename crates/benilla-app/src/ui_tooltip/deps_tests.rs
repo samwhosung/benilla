@@ -48,6 +48,8 @@ struct Inputs {
     worn: u32,
     /// The disarm flag.
     disarm: bool,
+    /// Every reputation slot at Exalted.
+    rep: bool,
     /// A [`UnitField`] bit each: base mana, base health, ranged attack time, cast speed, the cost
     /// modifiers and the cost multipliers.
     unit: u16,
@@ -74,6 +76,7 @@ impl Inputs {
         pace: true,
         worn: EQUIPMENT_MASK,
         disarm: true,
+        rep: true,
         unit: UNIT_MASK,
         lines: u128::MAX,
         bits: u64::MAX,
@@ -91,6 +94,7 @@ impl Inputs {
             pace: self.pace ^ o.pace,
             worn: self.worn ^ o.worn,
             disarm: self.disarm ^ o.disarm,
+            rep: self.rep ^ o.rep,
             unit: self.unit ^ o.unit,
             lines: self.lines ^ o.lines,
             bits: self.bits ^ o.bits,
@@ -181,6 +185,9 @@ impl Inputs {
                 },
             ));
         }
+        if self.rep {
+            parts.push(("the standings".to_string(), Inputs { rep: true, ..alone }));
+        }
         for (bit, name) in UNIT_NAMES.iter().enumerate() {
             if self.unit >> bit & 1 == 1 {
                 let only = Inputs {
@@ -232,6 +239,7 @@ impl Inputs {
             pace: !deps.range_units,
             worn: EQUIPMENT_MASK & !deps.worn,
             disarm: !deps.disarm,
+            rep: !deps.reputation,
             unit: !deps.unit & UNIT_MASK,
             lines: layout
                 .lines
@@ -309,6 +317,7 @@ impl Layout {
 /// A scenario made into the inputs a view is built from.
 struct Mat {
     store: ObjectStore,
+    reputations: crate::net::Reputations,
     mods: SpellModifiers,
     home: Option<&'static str>,
     /// The caster as the range cell reads it: the store's reach, and running or not.
@@ -426,6 +435,13 @@ fn mat(layout: &Layout, inputs: Inputs, p: Params) -> Mat {
     }
     Mat {
         store: ObjectStore(ObjectFields::from_pairs(&pairs)),
+        reputations: crate::net::Reputations::from_slots(vec![
+            (
+                0,
+                if inputs.rep { 50_000 } else { 0 }
+            );
+            64
+        ]),
         mods,
         home: inputs.home.then_some("Zzz"),
         // The two reaches move together: the caster's 1.5 to 4.0, and an auto-attack target's 4.0
@@ -468,7 +484,8 @@ const UNIT_FIELD_INDICES: [&[u16]; 6] = [
 ];
 
 /// The player fields a view's records watch in the scenario `inputs` makes: the ones a poke is
-/// covered by. The form and gender are bytes of fields 138 and 36, the disarm flag a bit of 46.
+/// covered by. The form and gender are bytes of fields 138 and 36, the disarm flag a bit of 46, and
+/// the standings' race and class bytes of 36.
 fn recorded_fields(layout: &Layout, inputs: Inputs, deps: &Deps) -> Vec<u16> {
     let mut fields: Vec<u16> = UNIT_FIELD_INDICES
         .iter()
@@ -480,6 +497,7 @@ fn recorded_fields(layout: &Layout, inputs: Inputs, deps: &Deps) -> Vec<u16> {
         (deps.gender, 36),
         (deps.form, 138),
         (deps.disarm, 46),
+        (deps.reputation, 36),
         (deps.range_units, 130),
     ] {
         if read {
@@ -506,7 +524,7 @@ fn recorded_fields(layout: &Layout, inputs: Inputs, deps: &Deps) -> Vec<u16> {
 fn changes(before: &Mat, now: &Mat, objects: &Objects, items: &Items) -> Changes {
     let seen = |m: &Mat| {
         let range = RangeSeen::of(&m.caster, m.attack_target.as_ref());
-        Seen::of(Some(&m.store), m.home, range, objects, items)
+        Seen::of(Some(&m.store), m.home, range, objects, items).with_reputations(&m.reputations)
     };
     seen(now)
         .changes_since(&seen(before))
@@ -570,6 +588,7 @@ impl Rig {
             .collect();
         let mut t = TestCtx::new();
         t.skill_lines = Some(skill_lines);
+        t.factions = Some(benilla_formats::load_faction_catalog(&mut chain).expect("factions"));
         let mut objs = TestObjects::new();
         // One worn item per kind and slot, and each kind's template.
         for (kind, &(class, subclass)) in layout.kinds.iter().enumerate() {
@@ -624,6 +643,7 @@ fn build(
     m: &Mat,
 ) -> Option<(Built, Deps)> {
     t.spell_mods = m.mods.clone();
+    t.reputations = m.reputations.clone();
     let mut ctx = t.ctx_for(objects, m.form, None, Some(&m.store));
     ctx.home_area = m.home;
     ctx.range_caster = m.caster;
@@ -928,6 +948,12 @@ fn every_view_that_moves_with_an_input_is_requeued_by_that_input() {
     assert_covered("the disarm flag", &s);
     assert!(s.moved >= 20, "only {} views read the disarm flag", s.moved);
     row("disarm flag (armed)", &s);
+    // The standings: the reputation line of the one row with a faction, 6994.
+    let rep = Inputs { rep: true, ..empty };
+    let s = sweep(&mut rig, empty, &any, &own, &cause(rep));
+    assert_covered("the standings", &s);
+    assert_eq!(s.moved, 1, "the one reputation line reads a standing");
+    row("standings", &s);
     let all_lines = Inputs {
         lines: u128::MAX,
         ..empty
@@ -1058,6 +1084,7 @@ fn a_reagent_moving_requeues_the_views_that_list_it() {
     let mods = SpellModifiers::default();
     let mat_of = |store: ObjectStore| Mat {
         store,
+        reputations: Default::default(),
         mods: mods.clone(),
         home: None,
         caster: RangeUnit::still(1.5),
@@ -1499,6 +1526,8 @@ fn the_search_answers_the_same_wherever_the_watched_state_is_the_same() {
                             sub_classes: None,
                             skill_lines: None,
                             spell_mods: &mods,
+                            factions: None,
+                            reputations: None,
                         };
                         let (view, deps) = build_view(id, &spells, &mut vctx).expect("a spec");
                         assert!(
@@ -1676,12 +1705,14 @@ fn the_seen_diff_names_each_input_it_saw_move() {
     assert!(c.disarm);
     let now = player(&[(22, 100), (46, 0x0000_0008)]);
     assert!(seen(&now).changes_since(&seen(&base)).is_empty());
-    // The gender byte, `UNIT_FIELD_BYTES_0` byte 2, and no other byte of the field.
+    // The gender byte, `UNIT_FIELD_BYTES_0` byte 2; the race and class bytes, under the
+    // standings, which ride on their base; and the power type byte, under none.
     let bytes_0 = |bytes: u32| player(&[(22, 100), (36, bytes)]);
     let c = seen(&bytes_0(1 << 16)).changes_since(&seen(&base));
-    assert!(c.gender && !c.is_empty());
-    let race_class_power = bytes_0(4 | 1 << 8 | 1 << 24);
-    assert!(seen(&race_class_power)
+    assert!(c.gender && !c.reputation);
+    let c = seen(&bytes_0(4 | 1 << 8)).changes_since(&seen(&base));
+    assert!(c.reputation && !c.gender);
+    assert!(seen(&bytes_0(1 << 24))
         .changes_since(&seen(&base))
         .is_empty());
     // Each unit field on its own bit: base mana 162, base health 163, ranged attack time 128, a

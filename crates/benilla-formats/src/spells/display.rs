@@ -171,6 +171,11 @@ pub struct SpellDisplay {
     pub max_target_level: u32,
     /// `MaxAffectedTargets` (column 163): the description expander's `$i` (`507fc3`).
     pub max_affected_targets: u32,
+    /// `MinFactionId` (column 170, `+0x2a8`): the faction whose standing the spell tooltip's
+    /// reputation line names (`0x52f2ae`); 0 for none, set on one 5875 row.
+    pub min_faction_id: u32,
+    /// `MinReputation` (column 171, `+0x2ac`): the rank that line requires, 0 Hated to 7 Exalted.
+    pub min_reputation: u32,
     /// `EffectBasePoints[3]` (columns 76-78, signed): each roll's floor; -1 on weapon damage.
     pub effect_base_points: [i32; 3],
     /// `EffectDieSides[3]` (columns 64-66, signed): with n dice, the value runs base + n to
@@ -281,6 +286,8 @@ impl Default for SpellDisplay {
             stack_amount: 0,
             max_target_level: 0,
             max_affected_targets: 0,
+            min_faction_id: 0,
+            min_reputation: 0,
             effect_base_points: [0; 3],
             effect_die_sides: [0; 3],
             effect_base_dice: [0; 3],

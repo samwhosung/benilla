@@ -58,6 +58,10 @@ pub(super) struct ViewCtx<'a, 'w, 's> {
     pub(super) skill_lines: Option<&'a benilla_formats::SkillLineCatalog>,
     /// The talent spell-modifier tables: the cost cell shows the modified cost (`power_cost`).
     pub(super) spell_mods: &'a crate::spell::SpellModifiers,
+    /// `Faction.dbc`, which names the reputation line's faction and indexes its standing.
+    pub(super) factions: Option<&'a benilla_formats::FactionCatalog>,
+    /// The player's standings, the reputation line's test.
+    pub(super) reputations: Option<&'a crate::net::Reputations>,
 }
 
 /// Build one spell's tooltip view, its data resolved here where the catalogs live, and what it
@@ -264,6 +268,7 @@ pub(super) fn build_view(
                 .requirement_name(d.equipped_item_class as u32, d.equipped_item_subclass_mask)
         })
         .flatten();
+    let requires_reputation = reputation_requirement(d, vctx, &mut deps.borrow_mut());
     let chance = chance_line(d, vctx.store, &mut deps.borrow_mut());
     // The unit selector passes the item test outright (`0x52f07f`).
     let item_met = matches!(caster, ViewCaster::Pet(_))
@@ -343,6 +348,7 @@ pub(super) fn build_view(
         item_met,
         requires_form,
         form_met,
+        requires_reputation,
         chance,
         totems,
         totems_met,
@@ -387,6 +393,48 @@ pub(super) fn build_aura_view(
     };
     Some((view, deps.into_inner()))
 }
+
+/// The reputation line's facts (`0x52f2ae`-`0x52f38e`), read off the active player, the builder's
+/// `[ebp-0x18]`, whatever the caster: its standing with `MinFactionId` (`0x4d6370`) against the
+/// floor of `MinReputation` in `0x80928c`, and its gender for the label (`0x612bf0`), read as the
+/// reputation chat reads it (`net::session`'s `self_facts`, `UNIT_FIELD_BYTES_0` byte 2), where
+/// `0x5ed5b0` reads `PLAYER_BYTES_3` byte 0. No line without a faction id.
+fn reputation_requirement(
+    d: &benilla_formats::SpellDisplay,
+    vctx: &ViewCtx,
+    deps: &mut Deps,
+) -> Option<benilla_ui::script::ReputationRequirement> {
+    if d.min_faction_id == 0 {
+        return None;
+    }
+    deps.reputation = true;
+    deps.gender = true;
+    let faction = vctx
+        .factions
+        .and_then(|c| c.faction_name(d.min_faction_id))
+        .unwrap_or("UNKNOWN")
+        .to_string();
+    let player = vctx.store.map(|s| &s.0);
+    let standing = match (player, vctx.factions, vctx.reputations) {
+        (Some(p), Some(c), Some(r)) => {
+            let (race, class) = (p.unit_race().unwrap_or(0), p.unit_class().unwrap_or(0));
+            crate::ui_reputation::faction_standing(c, r, race, class, d.min_faction_id)
+        }
+        _ => 0,
+    };
+    // Every row's rank is 0 to 7; past 7 the client reads the words after the table
+    // (`0x8092ac`), and this holds it at Exalted's.
+    let floor = STANDING_FLOORS[d.min_reputation.min(7) as usize];
+    Some(benilla_ui::script::ReputationRequirement {
+        faction,
+        rank: d.min_reputation,
+        met: standing >= floor,
+        female: player.and_then(|p| p.unit_gender()) == Some(1),
+    })
+}
+
+/// The standing each rank starts at, Hated to Exalted, the table at `0x80928c`.
+const STANDING_FLOORS: [i32; 8] = [-42000, -6000, -3000, 0, 3000, 9000, 21000, 42000];
 
 /// `text`'s `$`-tokens expanded for `d` against `vctx`'s caster as `0x5075f0` does for a caller
 /// passing `at`, each read recorded in `deps`. `unmodified_points` is the aura builder's call,
@@ -651,6 +699,7 @@ pub(super) struct SpellTooltipSources<'w> {
 /// trainer's services, and what the VM holds: the pet's spells, the quest rewards and the craft's
 /// subjects) and for every aura the VM holds (every unit's and the tracking spell) before it is
 /// hovered, as the reference reads them all locally; an ask for any other id or aura too.
+#[allow(clippy::type_complexity)] // a Bevy system's full input set
 pub(super) fn feed_spell_tooltips(
     script: Option<NonSendMut<UiScript>>,
     actions: Option<Res<PlayerActions>>,
@@ -668,11 +717,14 @@ pub(super) fn feed_spell_tooltips(
         Option<Res<crate::ui_items::ItemSubClasses>>,
         Res<crate::spell::SpellModifiers>,
         Option<Res<crate::ui_spellbook::SkillLines>>,
+        // `Faction.dbc` and the standings, the reputation line's.
+        Option<Res<crate::target::Factions>>,
+        Option<Res<crate::net::Reputations>>,
     ),
     commands: Res<NetCommands>,
     mut memory: Local<crate::ui_script::VmMemo<SpellFeedMemory>>,
 ) {
-    let (sub_classes, spell_mods, skill_lines) = &lookups;
+    let (sub_classes, spell_mods, skill_lines, factions, reputations) = &lookups;
     let SpellTooltipSources {
         spells,
         trainer_subjects,
@@ -763,13 +815,16 @@ pub(super) fn feed_spell_tooltips(
     // point (Astral Recall's `$z`), the form, the skills, what the equipped-item search learns of
     // each equipment slot and the disarm flag, the level, cost bases and ranged attack time, the
     // block, dodge, parry and crit percentages, and the two units the melee range cell reads.
-    let seen = Seen::of(
+    let mut seen = Seen::of(
         self_store,
         home_area.as_deref(),
         RangeSeen::of(&caster_unit, attack_target.as_ref()),
         &objects,
         &items,
     );
+    if let Some(reputations) = reputations.as_deref() {
+        seen = seen.with_reputations(reputations);
+    }
     let mut changes = memory
         .seen
         .as_ref()
@@ -819,6 +874,8 @@ pub(super) fn feed_spell_tooltips(
     wanted_aura.dedup();
     let (built, built_aura, built_pet) = {
         let mut vctx = ViewCtx {
+            factions: factions.as_deref().map(|f| f.catalog()),
+            reputations: reputations.as_deref(),
             home_area: home_area.as_deref(),
             form: self_store.map_or(0, |s| s.0.unit_shapeshift_form()),
             store: self_store,
