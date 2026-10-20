@@ -144,9 +144,11 @@ fn slot_instance(s: &crate::script::ContainerSlot, openable_source: bool) -> ren
 /// (81..112). The bank is out of the mask. A broken item (durability 0 with a maximum, unless
 /// wrapped, `0x6224f7`..`0x62250e`) or one carrying flag `0x10` (`0x622510`) is skipped. The
 /// reference also skips an object whose `[+0xe4]` bit 0 is set (`0x614ea0`); benilla holds no
-/// such fact. `None` when nothing matches, where the setter pushes nil (`0x5325bc`). The block's
+/// such fact. `None` when nothing matches, where the setter pushes nil (`0x5325bc`). When the
+/// cached template's block-0 charges (`+0x144`, `0x53251a`) are neither -1 nor 0, the block's
 /// charges are the summed absolute block-0 charges of every copy the same walk reaches
-/// (`0x622180` at `0x532553`, stored at `+0x428`).
+/// (`0x622180` at `0x532553`, stored at `+0x428`); otherwise, and with no template cached
+/// (`0x532518`), they stay -1 and the builder reads the object's own.
 pub(super) fn owned_instance(model: &Model, item_id: u32) -> Option<render::ItemInstance> {
     const BROKEN: u32 = 0x10;
     const WRAPPED: u32 = 0x8;
@@ -183,6 +185,13 @@ pub(super) fn owned_instance(model: &Model, item_id: u32) -> Option<render::Item
         .or_else(|| (1..=4_i64).find_map(|bag| worn(19 + bag as usize).or_else(|| held(bag))))
         .or_else(|| held(0))
         .or_else(|| held(super::char_stats::KEYRING_CONTAINER))?;
+    let summed = model
+        .item_templates
+        .get(&item_id)
+        .is_some_and(|v| !matches!(v.spell_charges_0, -1 | 0));
+    if !summed {
+        return Some(found);
+    }
     let worn_charges = model.inventory_slots.iter().skip(1).take(23).flatten();
     let held_charges = (0..=4)
         .chain([super::char_stats::KEYRING_CONTAINER])
