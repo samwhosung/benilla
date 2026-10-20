@@ -88,6 +88,13 @@ impl ObjectList {
     }
 }
 
+/// The release-pending bit, `0x10` of `+0xe4` (`0x614f50`): a release (`0x464920`) of an object
+/// its game object state player holds (`0x5f3b27`, the count `+0xe8`) only sets it, and the
+/// object stays live, indexed and drawn, until the unhold releases it ([`release_unheld`]). A
+/// block whose lookup finds it live clears it (`0x4645b2`).
+#[derive(Component)]
+pub(crate) struct ReleasePending;
+
 /// A block the notify pass reads again.
 enum Notify {
     /// A values block (`0x465330`) and the fields its mask sent, ascending.
@@ -255,6 +262,7 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
     let kept = live.is_none().then(|| sc.released.take(guid)).flatten();
     let moved = match (live, kept) {
         (Some(e), _) => {
+            found_live(&mut sc, e);
             object_create(&mut sc, block, &fields, Landing::Live(e));
             match sc.stores.get_mut(e) {
                 Ok(mut store) => write_fields(&mut store.0, fields),
@@ -342,10 +350,13 @@ fn on_item_create(In(ev): In<SessionEvent>, mut sc: Scene) {
     let live = sc.index.0.get(&guid).copied();
     let kept = live.is_none().then(|| sc.released.take(guid)).flatten();
     let moved = match (live, kept) {
-        (Some(e), _) => match sc.stores.get_mut(e) {
-            Ok(mut store) => write_fields(&mut store.0, fields),
-            Err(_) => Vec::new(),
-        },
+        (Some(e), _) => {
+            found_live(&mut sc, e);
+            match sc.stores.get_mut(e) {
+                Ok(mut store) => write_fields(&mut store.0, fields),
+                Err(_) => Vec::new(),
+            }
+        }
         (
             None,
             Some(Kept {
@@ -402,11 +413,13 @@ fn on_object_values(In(ev): In<SessionEvent>, mut sc: Scene) {
     crate::death::net::recheck_corpse(guid, &fields, &sc.self_guid, &mut sc.death_net);
     let sent: Vec<u16> = fields.raw_fields().map(|(index, _)| index).collect();
     let moved = match sc.index.0.get(&guid).copied() {
-        Some(e) => sc
-            .stores
-            .get_mut(e)
-            .ok()
-            .map(|mut store| write_fields(&mut store.0, fields)),
+        Some(e) => {
+            found_live(&mut sc, e);
+            sc.stores
+                .get_mut(e)
+                .ok()
+                .map(|mut store| write_fields(&mut store.0, fields))
+        }
         None => sc.released.take(guid).map(
             |Kept {
                  fields: mut store,
@@ -466,7 +479,7 @@ fn on_object_move(In(ev): In<SessionEvent>, mut sc: Scene) {
     };
     // The unit this client moves drops its block before the lookup that would bring a released
     // one back (`0x4670a5`-`0x4670bb`, ahead of `0x4670c2`); a held one is `object_move`'s test.
-    if !sc.index.0.contains_key(&guid) {
+    let Some(&e) = sc.index.0.get(&guid) else {
         if active_mover(&sc) == Some(guid) {
             return;
         }
@@ -475,6 +488,9 @@ fn on_object_move(In(ev): In<SessionEvent>, mut sc: Scene) {
             respawn(&mut sc, guid, body, fields, Some(pose));
         }
         return;
+    };
+    if active_mover(&sc) != Some(guid) {
+        found_live(&mut sc, e);
     }
     object_move(
         guid,
@@ -501,7 +517,11 @@ fn on_objects_near(In(ev): In<SessionEvent>, mut sc: Scene) {
         return;
     };
     for guid in guids {
-        if sc.self_guid.0 == Some(guid) || sc.index.0.contains_key(&guid) {
+        if sc.self_guid.0 == Some(guid) {
+            continue;
+        }
+        if let Some(&e) = sc.index.0.get(&guid) {
+            found_live(&mut sc, e);
             continue;
         }
         if let Some(Kept { fields, body }) = sc.released.take(guid) {
@@ -577,12 +597,57 @@ fn on_objects_removed(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<No
         if sc.self_guid.0 == Some(guid) {
             continue;
         }
-        deactivate(&mut sc, guid, script.as_deref());
-        release(&mut sc, guid);
+        release_or_hold(&mut sc, guid, script.as_deref());
     }
     for guid in ahead {
-        deactivate(&mut sc, guid, script.as_deref());
-        release(&mut sc, guid);
+        release_or_hold(&mut sc, guid, script.as_deref());
+    }
+}
+
+/// The lookup of a create, values, movement or near-objects block that finds the object live
+/// clears its release-pending bit (`0x464530` → `0x4645b2`).
+fn found_live(sc: &mut Scene, e: Entity) {
+    if sc.pending.contains(e) {
+        sc.commands.entity(e).remove::<ReleasePending>();
+    }
+}
+
+/// Whether a live object is held (`0x614f00`): its state player plays a holding substate, or
+/// arms one in this frame's drive, which the reference arms at the packet.
+fn held_by_play(sc: &Scene, e: Entity) -> bool {
+    sc.go_anims.get(e).is_ok_and(|go| go.holds() || go.arming())
+}
+
+/// `0x464920`: a held object only takes its release-pending bit and stays live
+/// (`0x464942`-`0x46494f`); any other runs its deactivate and leaves for the released table.
+fn release_or_hold(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
+    if let Some(&e) = sc.index.0.get(&guid) {
+        if held_by_play(sc, e) {
+            sc.commands.entity(e).insert(ReleasePending);
+            return;
+        }
+    }
+    deactivate(sc, guid, script);
+    release(sc, guid);
+}
+
+/// `ClntObjMgrUnholdObject` (`0x468410`) past its decrement: an object no longer held whose
+/// release is pending is released then (`0x46844a` → `0x464920`), its deactivate first, into the
+/// released table. It runs after the state players' drive ([`crate::go_anim`]), which ends and
+/// replaces their plays.
+pub(crate) fn release_unheld(mut sc: Scene, script: Option<NonSend<UiScript>>) {
+    let due: Vec<(Entity, u64)> = sc
+        .pending
+        .iter()
+        .filter(|&(e, _)| !sc.go_anims.get(e).is_ok_and(|go| go.holds()))
+        .map(|(e, g)| (e, g.0))
+        .collect();
+    for (e, guid) in due {
+        sc.commands.entity(e).remove::<ReleasePending>();
+        if sc.index.0.get(&guid) == Some(&e) {
+            deactivate(&mut sc, guid, script.as_deref());
+            release(&mut sc, guid);
+        }
     }
 }
 
@@ -591,9 +656,9 @@ fn on_objects_removed(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<No
 /// (`0x6145e0`) hands the model to the `SWModelFadeout` scheduler (`0x672df0`); the guid leaves
 /// the index at once ([`super::tear_down`]).
 ///
-/// A pinned object only gets its pending-destroy bit and is freed when the last pin drops
-/// (`0x464920`, `0x468410`). Our one pin is an announced `SMSG_GAMEOBJECT_DESPAWN_ANIM`, whose
-/// end runs the deferred teardown ([`crate::go_anim::release_despawn_pin`]).
+/// A held object's release only marks it pending (`0x464920`), so the destroy finds nothing
+/// released to free: it stays live, and its unhold releases it into the released table
+/// ([`release_unheld`]).
 fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<NonSend<UiScript>>) {
     let SessionEvent::ObjectDestroyed(guid) = ev else {
         return;
@@ -602,6 +667,12 @@ fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<N
     // A released object ran its deactivate as it left.
     if sc.released.take(guid).is_some() {
         return;
+    }
+    if let Some(&e) = sc.index.0.get(&guid) {
+        if held_by_play(&sc, e) {
+            sc.commands.entity(e).insert(ReleasePending);
+            return;
+        }
     }
     deactivate(&mut sc, guid, script.as_deref());
     let Some(e) = sc.index.0.remove(&guid) else {
@@ -612,18 +683,7 @@ fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<N
         sc.commands.entity(e).despawn();
         return;
     }
-    sc.commands.queue(move |world: &mut World| {
-        if world
-            .get::<crate::go_anim::DespawnAnimAnnounced>(e)
-            .is_some()
-        {
-            if let Ok(mut ent) = world.get_entity_mut(e) {
-                ent.insert(crate::go_anim::PendingDestroy);
-            }
-        } else if let Ok(ent) = world.get_entity_mut(e) {
-            super::tear_down(ent);
-        }
-    });
+    sc.commands.entity(e).queue(super::tear_down);
 }
 
 /// The deactivate a release runs (vtable slot 1, `0x46496f`), reading the descriptor about to go:
@@ -690,9 +750,6 @@ fn release(sc: &mut Scene, guid: u64) {
         sc.commands.entity(e).queue(super::tear_down);
     }
 }
-
-/// `ClntObjMgrUnholdObject`'s release (`0x468410`, `0x46844a`): not built.
-pub(crate) fn release_unheld() {}
 
 /// The end of the packet: the notify pass over every block (`0x46522d`-`0x46528b`), then each
 /// brought-back object's vtable slot 3 (`0x465290`-`0x4652ff`).
@@ -762,6 +819,15 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
             old,
             new,
         }));
+    // The `GAMEOBJECT_STATE` watcher stores the state its state player arms from (`0x5f89e0`).
+    if kind == ObjectType::GameObject {
+        let state = block
+            .edges()
+            .find(|&(index, _, _)| index == benilla_protocol::field::FIELD_GAMEOBJECT_STATE);
+        if let (Some((_, _, state)), Ok(mut go)) = (state, sc.go_anims.get_mut(e)) {
+            go.set_wire_state(state);
+        }
+    }
     let me = sc.self_guid.0;
     let (names, index, stores, net) = (&sc.names, &sc.index, &sc.stores, &sc.net);
     let others = || {

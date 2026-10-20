@@ -28,7 +28,7 @@ mod objects;
 #[cfg(test)]
 pub(crate) use objects::wire;
 pub(crate) use objects::Listed;
-pub(crate) use objects::{release_unheld, tear_down};
+pub(crate) use objects::{release_unheld, ReleasePending};
 mod session;
 mod world;
 

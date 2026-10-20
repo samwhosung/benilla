@@ -29,31 +29,20 @@ use super::{
 
 mod update;
 
-pub(crate) use update::{release_unheld, Listed, Released};
+pub(crate) use update::{release_unheld, Listed, ReleasePending, Released};
 
-/// `SMSG_GAMEOBJECT_CUSTOM_ANIM`, bridged to [`crate::go_anim`], which rejects `anim_id >= 4` and
-/// maps the rest to AnimationData 153..156; the fishing bobber's splash is `anim_id` 0.
-fn gameobject_custom_anim(
+/// `SMSG_GAMEOBJECT_CUSTOM_ANIM` and `SMSG_GAMEOBJECT_DESPAWN_ANIM` (`0x5f8930`, `0x5f8990`): an
+/// event on the object's one-shot channel (`0x5f8c50`), armed at the packet so the hold its play
+/// takes is there for a release in the same tick; vmangos sends `SMSG_DESTROY_OBJECT` right after
+/// the despawn. An object whose model has no state machine yet drops the event.
+fn gameobject_anim_event(
     guid: u64,
-    anim_id: u32,
-    plays: &mut MessageWriter<crate::go_anim::GoCustomAnim>,
+    index: &GuidIndex,
+    go_anims: &mut Query<&mut crate::go_anim::GoAnim>,
+    arm: impl FnOnce(&mut crate::go_anim::GoAnim),
 ) {
-    debug!("net: gameobject {guid:#x} custom anim {anim_id}");
-    plays.write(crate::go_anim::GoCustomAnim {
-        go_guid: guid,
-        anim_id,
-    });
-}
-
-/// `SMSG_GAMEOBJECT_DESPAWN_ANIM`: AnimationData 157 on the one-shot channel (`0x5f8c50`).
-/// vmangos sends `SMSG_DESTROY_OBJECT` in the same tick, so the mark is a component queued now,
-/// ahead of the closure the destroy's handler queues, not a message.
-fn gameobject_despawn_anim(guid: u64, commands: &mut Commands, index: &GuidIndex) {
-    debug!("net: gameobject {guid:#x} despawn anim");
-    if let Some(&e) = index.0.get(&guid) {
-        commands
-            .entity(e)
-            .insert(crate::go_anim::DespawnAnimAnnounced);
+    if let Some(mut go) = index.0.get(&guid).and_then(|&e| go_anims.get_mut(e).ok()) {
+        arm(&mut go);
     }
 }
 
@@ -100,7 +89,6 @@ pub(crate) struct Scene<'w, 's> {
     speed_changes: MessageWriter<'w, SpeedChangeMessage>,
     self_moves: MessageWriter<'w, super::SelfMoveMessage>,
     hard_landings: MessageWriter<'w, crate::creature_anim::HardLanding>,
-    go_custom_anims: MessageWriter<'w, crate::go_anim::GoCustomAnim>,
     names: Res<'w, NameCache>,
     items: ResMut<'w, Items>,
     go_templates: ResMut<'w, GameObjectTemplates>,
@@ -114,6 +102,8 @@ pub(crate) struct Scene<'w, 's> {
     list: ResMut<'w, update::ObjectList>,
     player: Option<Res<'w, crate::player::Player>>,
     item_objects: Query<'w, 's, &'static crate::items::ItemObject>,
+    go_anims: Query<'w, 's, &'static mut crate::go_anim::GoAnim>,
+    pending: Query<'w, 's, (Entity, &'static Guid), With<update::ReleasePending>>,
 }
 
 /// The item watchers' reads of the scene ([`crate::item_watch::Watch`]).
@@ -334,10 +324,12 @@ fn on_gameobject_unknown(In(ev): In<SessionEvent>, mut sc: Scene) {
 fn on_gameobject_anim(In(ev): In<SessionEvent>, mut sc: Scene) {
     match ev {
         SessionEvent::GameObjectCustomAnim { guid, anim_id } => {
-            gameobject_custom_anim(guid, anim_id, &mut sc.go_custom_anims)
+            debug!("net: gameobject {guid:#x} custom anim {anim_id}");
+            gameobject_anim_event(guid, &sc.index, &mut sc.go_anims, |go| go.custom(anim_id));
         }
         SessionEvent::GameObjectDespawnAnim { guid } => {
-            gameobject_despawn_anim(guid, &mut sc.commands, &sc.index)
+            debug!("net: gameobject {guid:#x} despawn anim");
+            gameobject_anim_event(guid, &sc.index, &mut sc.go_anims, |go| go.despawn());
         }
         _ => {}
     }
@@ -734,7 +726,7 @@ fn unit_move(
 /// consumer; the [`NetEntity`] and [`ObjectStore`] stay so the model draws out (a decaying corpse
 /// stays lying down). The caller has already removed the guid from the [`GuidIndex`], so a block
 /// that brings the object back spawns a fresh entity beside the fading model.
-pub(crate) fn tear_down(mut ent: EntityWorldMut) {
+fn tear_down(mut ent: EntityWorldMut) {
     ent.remove::<Guid>();
     ent.insert(DespawnFade::default());
 }
