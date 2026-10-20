@@ -640,10 +640,14 @@ fn a_pets_refused_cast_writes_no_combat_log_line() {
         },
         reports,
     );
-    // Only what the log line needs; the red line's text has its own tests.
+    // Only what the log line needs, its template and its reason; the red line's text has its own
+    // tests.
     app.world_mut()
         .non_send_resource::<UiScript>()
-        .run(r#"SPELL_FAILED_ROOTED = "You are unable to move";"#)
+        .run(
+            r#"SPELLFAILCASTSELF = "You fail to cast %s: %s."
+               SPELL_FAILED_ROOTED = "You are unable to move";"#,
+        )
         .unwrap();
     app.update();
 
@@ -682,7 +686,10 @@ fn a_refused_spell_flagged_not_to_log_writes_no_combat_log_line() {
         );
         app.world_mut()
             .non_send_resource::<UiScript>()
-            .run(r#"SPELL_FAILED_ROOTED = "You are unable to move";"#)
+            .run(
+                r#"SPELLFAILCASTSELF = "You fail to cast %s: %s."
+                   SPELL_FAILED_ROOTED = "You are unable to move";"#,
+            )
             .unwrap();
         app.update();
         app.world()
