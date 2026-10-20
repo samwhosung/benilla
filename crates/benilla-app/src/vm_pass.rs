@@ -782,10 +782,14 @@ mod tests {
             .iter()
             .map(|(_, schedule)| schedule.label())
             .collect();
+        // By identity, not by name: a build without type names has none.
+        let flush = System::type_id(&IntoSystem::into_system(
+            crate::creature_anim::flush_unit_edits,
+        ));
         let mut users = 0;
         let mut late = Vec::new();
         for label in labels {
-            let queues: Vec<(SystemKey, String)> =
+            let queues: Vec<(SystemKey, String, bool)> =
                 app.world_mut().schedule_scope(label, |world, schedule| {
                     schedule.graph_mut().systems.initialize(world);
                     let graph = schedule.graph();
@@ -797,7 +801,10 @@ mod tests {
                             !system.is_exclusive()
                                 && access.combined_access().has_resource_read(edits)
                         })
-                        .map(|(key, system, _)| (key, system.name().to_string()))
+                        .map(|(key, system, _)| {
+                            let is_flush = System::type_id(&**system) == flush;
+                            (key, system.name().to_string(), is_flush)
+                        })
                         .collect()
                 });
             if queues.is_empty() {
@@ -807,10 +814,10 @@ mod tests {
             let next = successors(&schedule);
             let flushes: Vec<SystemKey> = queues
                 .iter()
-                .filter(|(_, name)| name.ends_with("flush_unit_edits"))
-                .map(|(key, _)| *key)
+                .filter(|(_, _, is_flush)| *is_flush)
+                .map(|(key, _, _)| *key)
                 .collect();
-            for (key, name) in &queues {
+            for (key, name, _) in &queues {
                 users += 1;
                 if !flushes.contains(key) && !flushes.iter().any(|f| after(&next, *key).contains(f))
                 {
