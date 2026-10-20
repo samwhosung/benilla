@@ -90,9 +90,7 @@ pub(super) fn build_view(
     // The cost cell (`0x52e8ad`): the resolved `power_cost`, named by power type (keys at
     // `0x85416c`) and Health for a type outside 0..=4 (`0x52e8fc`: Bloodrage's -2), never a
     // percentage. Rage shows wire ÷ 10, a per-second cost adds `_PER_TIME`, and a cell whose two
-    // quotients are both 0 or less is empty. A pet with no unit costs -1 (`0x6e3233`), read here
-    // as 0: the same empty cell for every type but rage, whose unsigned quotient of -1 is
-    // 429496729 (`0x52e8dd`).
+    // quotients are both 0 or less is empty.
     // The player's reads are the view's record; the pet's level, basis and cast speed are the
     // pet's own inputs ([`PetInputs`]), which rebuild every pet view.
     let resolved_cost = match caster {
@@ -100,6 +98,10 @@ pub(super) fn build_view(
             let reads: &mut dyn SpellReads = &mut *deps.borrow_mut();
             usable::power_cost(d, s, vctx.skill_lines, vctx.spell_mods, reads)
         }),
+        // Deviation: a pet view with no pet unit costs 0, an empty cell, where `0x6e3233`
+        // returns -1 and the unsigned divide (`0x52e8dd`) prints it as "429496729 Rage", or
+        // "4294967 Happiness" (divisors 10 and 1000 at `0x86f978`); benilla shows no such garbage
+        // cost. For mana, focus and energy, divisor 1, -1 is an empty cell, as 0 is.
         ViewCaster::Pet(pet) => pet.map_or(0, |p| {
             usable::power_cost_at(d, p, pet_level(Some(p)), vctx.spell_mods, &mut Unrecorded)
         }),
