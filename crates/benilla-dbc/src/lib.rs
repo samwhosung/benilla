@@ -256,8 +256,8 @@ impl<'a> DbcParser<'a> {
             }
         }
 
-        // A `record_size` of 0 passes the size guard for any count and `rd_u32_at` never fails, so
-        // records claimed at size 0 are refused and the loop runs over what the bytes hold.
+        // A `record_size` of 0 passes the size guard for any count, so records claimed at size 0
+        // are refused rather than iterated: an empty schema would read each as no fields.
         if rs == 0 && rc > 0 {
             return Err(Error::Truncated("records claimed at record_size 0"));
         }
