@@ -27,6 +27,7 @@ mod objects;
 pub(crate) use objects::tear_down;
 #[cfg(test)]
 pub(crate) use objects::wire;
+pub(crate) use objects::Listed;
 mod session;
 mod world;
 

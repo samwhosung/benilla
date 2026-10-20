@@ -36,6 +36,7 @@ pub(super) fn register(app: &mut App) {
     use benilla_protocol::SessionEventKind as K;
     app.init_resource::<UpdatePass>()
         .init_resource::<Released>()
+        .init_resource::<ObjectList>()
         .net_handler(K::ObjectCreate, on_object_create)
         .net_handler(K::ItemCreate, on_item_create)
         .net_handler(K::ObjectValues, on_object_values)
@@ -65,6 +66,25 @@ pub(crate) struct UpdatePass {
     /// The objects this packet brought back, in order: the list at the manager's `+0xb0`, each
     /// linked at its tail (`0x4646ed`).
     reactivated: Vec<u64>,
+}
+
+/// A placed object's place on the manager's object list (`+0xa4`), which `0x468380` walks from the
+/// head (`+0xac`): a create (`0x4662cf`-`0x4662dd`) and a reactivation (`0x4646c3`-`0x4646d4`)
+/// link it at the tail, so a larger number joined later. Only the players' order is read; items
+/// and game objects leave the list and rejoin it on their own (`0x468270`, `0x4682f0`).
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct Listed(u64);
+
+/// The object list's tail: the next [`Listed`] to hand out.
+#[derive(Resource, Default)]
+pub(crate) struct ObjectList(u64);
+
+impl ObjectList {
+    /// Links one more object at the tail.
+    pub(super) fn link(&mut self) -> Listed {
+        self.0 += 1;
+        Listed(self.0)
+    }
 }
 
 /// A block the notify pass reads again.
@@ -466,6 +486,7 @@ fn respawn(sc: &mut Scene, guid: u64, body: Body, store: ObjectFields, pose: Opt
                 pose.unwrap_or(kept_pose),
                 Visibility::default(),
                 ObjectStore(store),
+                sc.list.link(),
             ));
             entity.vis_chain_only();
             if let Some(s) = speeds {

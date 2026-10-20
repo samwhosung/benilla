@@ -609,22 +609,24 @@ pub(crate) mod net {
         In(ev): In<SessionEvent>,
         mut guild: ResMut<GuildState>,
         index: Res<crate::net::GuidIndex>,
-        stores: Query<&crate::net::ObjectStore>,
+        stores: Query<(&crate::net::ObjectStore, Option<&crate::net::Listed>)>,
         mut notices: MessageWriter<FieldNotice>,
     ) {
         if let SessionEvent::GuildQueryResponse(response) = ev {
             let guild_id = response.guild_id;
             let waiters = query_response(&mut guild, response);
-            let mut players: Vec<(u64, u32)> = index
+            // The held players in object-list order, as the refresh walk meets them (`0x468380`).
+            let mut players: Vec<(Option<crate::net::Listed>, u64, u32)> = index
                 .0
                 .iter()
                 .filter_map(|(&g, &e)| {
-                    let fields = &stores.get(e).ok()?.0;
-                    (fields.created_as() == Some(ObjectType::Player))
-                        .then(|| (g, fields.player_guild_id()))
+                    let (store, listed) = stores.get(e).ok()?;
+                    (store.0.created_as() == Some(ObjectType::Player))
+                        .then(|| (listed.copied(), g, store.0.player_guild_id()))
                 })
                 .collect();
             players.sort_unstable();
+            let players: Vec<(u64, u32)> = players.into_iter().map(|(_, g, id)| (g, id)).collect();
             notices.write_batch(waiter_notices(guild_id, &waiters, &players));
         }
     }
