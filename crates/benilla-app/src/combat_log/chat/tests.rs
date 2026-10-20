@@ -942,9 +942,9 @@ mod emitters {
     }
 
     /// `0x6e7a70` writes each entry's line (`0x6e7d95`), then flashes it (`0x6e7de5`); a reflect
-    /// with an outcome then writes the outcome's line on the caster (`0x6e7e14`) and flashes the
-    /// caster (`0x6e7e5f`). A spell with `Attributes & 0x100` keeps its lines and loses its
-    /// flashes (`0x6e7d9a`, `0x6e7e19`).
+    /// with an outcome then writes the outcome's line on the packet's second guid (`0x6e7dfd`,
+    /// `0x6e7e14`) and flashes it (`0x6e7e5f`). A spell with `Attributes & 0x100` keeps its lines
+    /// and loses its flashes (`0x6e7d9a`, `0x6e7e19`).
     #[test]
     fn a_go_miss_writes_its_line_then_its_unit_combat() {
         let entry = |target, info, reflect_result| benilla_protocol::messages::SpellGoMiss {
