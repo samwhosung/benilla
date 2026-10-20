@@ -372,3 +372,121 @@ fn set_font_object_raises_the_reference_texts() {
         assert!(e.contains(want), "{code}: {e}");
     }
 }
+
+/// `CopyFontObject` ends in `CSimpleFont::SetFontObject` (`0x7841d0`): it merges what the source
+/// holds (`0x7841ea`), then ANDs its own held word with `+0x6c` (`0x7841f4`), which is 0 in every
+/// font (the constructor `0x783aca` and `0x7841e7` are its only stores). The copy holds nothing,
+/// but its getters read the values, which keep what the source did not hold (`0x79f680` reads
+/// `+0x58` whatever the word says): a colour the source never held stays the copy's own.
+#[test]
+fn a_copy_keeps_a_value_the_source_does_not_hold() {
+    let s = script();
+    s.run(
+        r#"
+        F = CreateFont("CopySourceF")
+        F:SetFont("Fonts\\ARIALN.TTF", 9)
+        B = CreateFont("CopyTargetB")
+        B:SetTextColor(1, 0, 0)
+        B:CopyFontObject(F)
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        color_of(&s, "B"),
+        (crate::color::quant::read32(1.0), 0.0, 0.0)
+    );
+    assert_eq!(font_of(&s, "B"), ("Fonts\\ARIALN.TTF".to_string(), 9.0));
+}
+
+/// The copy follows the font the source follows (`0x7841fe`-`0x78426d`), so a later change on that
+/// font reaches it through the follow mask it took from the source (`0x7841fb`).
+#[test]
+fn a_copy_of_a_follower_follows_its_font() {
+    let s = script();
+    chain(&s);
+    s.run(r#"C = CreateFont("CopyOfB") C:CopyFontObject(B)"#)
+        .unwrap();
+    assert!(s.eval::<bool>("return C:GetFontObject() == A").unwrap());
+    s.run(r#"A:SetFont("Fonts\\MORPHEUS.TTF", 14)"#).unwrap();
+    assert_eq!(font_of(&s, "C"), ("Fonts\\MORPHEUS.TTF".to_string(), 14.0));
+}
+
+/// The copy takes the source's follow mask whole (`0x7841fb`): a group the copy had stopped
+/// following by its own setter is followed again when the source still follows it.
+#[test]
+fn a_copy_takes_the_sources_follow_mask() {
+    let s = script();
+    chain(&s);
+    s.run(
+        r#"
+        C = CreateFont("MaskCopy")
+        C:SetTextColor(0, 1, 0)
+        D = CreateFont("MaskSource")
+        D:SetFontObject(A)
+        C:CopyFontObject(D)
+        A:SetTextColor(0, 0, 1)
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        color_of(&s, "C"),
+        (0.0, 0.0, crate::color::quant::read32(1.0))
+    );
+}
+
+/// The copy holds nothing (`0x7841f4`), so its slot-5 push returns at once (`0x78418c`) and a
+/// FontString that follows it, before or after the copy, takes none of the copied values
+/// (`0x770800` writes only what a font holds). A setter then stores even an equal value, since
+/// its group is not held (`0x79f65a`), and pushes it.
+#[test]
+fn a_copy_holds_nothing_until_a_setter_writes() {
+    let s = script();
+    chain(&s);
+    s.run(
+        r#"
+        local host = CreateFrame("Frame", "CopyHost", UIParent)
+        early = host:CreateFontString()
+        late = host:CreateFontString()
+        C = CreateFont("HoldsNothing")
+        early:SetFontObject(C)
+        C:CopyFontObject(B)
+        late:SetFontObject(C)
+    "#,
+    )
+    .unwrap();
+    let own = color_of(&s, "CopyHost:CreateFontString()");
+    let red = (crate::color::quant::read32(1.0), 0.0, 0.0);
+    assert_ne!(own, red);
+    assert_eq!(color_of(&s, "C"), red, "the value is copied");
+    assert_eq!(color_of(&s, "early"), own, "nothing is pushed");
+    assert_eq!(color_of(&s, "late"), own, "nothing is held");
+    s.run("C:SetTextColor(1, 0, 0)").unwrap();
+    assert_eq!(color_of(&s, "early"), red);
+    assert_eq!(color_of(&s, "late"), red);
+}
+
+/// The follow walks the source's chain and drops it when the chain reaches the copy
+/// (`0x784207`-`0x784214`): copying a font that follows the copy, one hop down or two, leaves the
+/// copy following nothing.
+#[test]
+fn a_copy_of_its_own_follower_follows_nothing() {
+    let s = script();
+    chain(&s);
+    s.run(r#"Z = CreateFont("ChainRoot") A:SetFontObject(Z) A:CopyFontObject(B)"#)
+        .unwrap();
+    assert!(s.eval::<bool>("return A:GetFontObject() == nil").unwrap());
+    s.run(
+        r#"
+        A:SetFontObject(Z)
+        C = CreateFont("ChainMiddle")
+        C:SetFontObject(A)
+        B:SetFontObject(C)
+        A:CopyFontObject(B)
+    "#,
+    )
+    .unwrap();
+    assert!(
+        s.eval::<bool>("return A:GetFontObject() == nil").unwrap(),
+        "two hops down, the chain still reaches the copy"
+    );
+}
