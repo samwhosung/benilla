@@ -140,7 +140,10 @@ pub(crate) fn normalize(input: &str) -> Option<String> {
     }
     // The logon resolves each `;`-separated host up to the first empty one (`0x43b890`), so the
     // first must be there. Each mirrors `host_port`'s split: a single colon must carry a valid
-    // port; two or more colons are an IPv6 literal, left intact.
+    // port; two or more colons are an IPv6 literal, left intact. Deviation: a host name may carry
+    // a port, where the reference resolves a name whole (`0x43ba0e`) and takes a port only on a
+    // dotted address (`0x43f3d0`), because a server on a non-default logon port behind a host
+    // name is everyday use.
     if s.starts_with(';') {
         return None;
     }

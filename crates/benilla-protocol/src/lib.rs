@@ -166,6 +166,9 @@ fn logon_pieces(realmlist: &str) -> Vec<(&str, u16)> {
     realmlist
         .split(';')
         .take_while(|piece| !piece.is_empty())
+        // Deviation: a named piece takes a `:port` here, where the reference hands a name to
+        // `gethostbyname` whole (`0x43ba0e`) and only a dotted piece takes a port (`0x43f3d0`),
+        // because a server on a non-default logon port behind a host name is everyday use.
         .map(|piece| host_port(piece, AUTH_PORT))
         .collect()
 }
