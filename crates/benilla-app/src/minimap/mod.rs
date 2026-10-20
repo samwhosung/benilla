@@ -902,7 +902,7 @@ fn feed_minimap_player_facing(
 }
 
 /// Push the game clock `GetGameTime()` answers when the minute ticks, the API's own resolution.
-/// Before the first `SMSG_LOGIN_SETTIMESPEED` it reads 0:00.
+/// Before the first `SMSG_LOGIN_SETTIMESPEED` it reads -1, -1, as the reference's unset clock.
 fn feed_game_time(
     script: Option<bevy::ecs::system::NonSendMut<benilla_ui::script::UiScript>>,
     time: Res<crate::net::ServerTime>,

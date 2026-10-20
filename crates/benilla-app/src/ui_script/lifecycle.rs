@@ -141,6 +141,7 @@ fn new_vm<E: std::fmt::Display>(
     // `[0x882730]`, `Wow.ini`'s `Region`, read once alike and handed to the name check.
     script.set_client_region(super::client_region());
     seed_vm_clock(world, &mut script);
+    seed_game_time(world, &mut script);
     // The reference seeds `rand` with the clock before `WinMain` (`0x5b800b`). Deviation: a
     // capture run (`scenario_active`) keeps the CRT's default seed, 1, so its frames reproduce.
     if crate::run_mode::scenario_active() {
@@ -169,6 +170,20 @@ fn seed_vm_clock(world: &mut World, script: &mut UiScript) {
             anchor,
             ui_now: now,
         };
+    }
+}
+
+/// Start the new VM's `GetGameTime()` at the game clock as it stands: the reference's clock is one
+/// object (`0xce8538`) built at start-up with every field -1 (`0x643300`, `0x642300`) and reset
+/// by no logout or `ReloadUI`, so a VM answers -1, -1 before any server time and the last known
+/// time after it, from the first line its addons run.
+fn seed_game_time(world: &World, script: &mut UiScript) {
+    let clock = world
+        .get_resource::<crate::net::ServerTime>()
+        .and_then(|time| time.0);
+    if let Some(clock) = clock {
+        let minute = clock.minute_of_day();
+        script.set_game_time(minute / 60, minute % 60);
     }
 }
 
