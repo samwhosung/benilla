@@ -1361,7 +1361,11 @@ mod tests {
         };
         assert_eq!(maker(&state.player, 0), (Some("Tailor".into()), 0x7));
         assert_eq!(maker(&state.target, 0), (Some("Tailor".into()), 0x7));
-        assert_eq!(maker(&state.target, 1), (None, 0), "a zero guid names no one");
+        assert_eq!(
+            maker(&state.target, 1),
+            (None, 0),
+            "a zero guid names no one"
+        );
         assert_eq!(maker(&state.target, 2), (None, 0x8), "a name in flight");
     }
 

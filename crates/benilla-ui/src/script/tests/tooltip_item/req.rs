@@ -121,7 +121,11 @@ fn already_known_tests_the_taught_spell_and_its_higher_ranks() {
     });
     assert!(known(&render(&mut s, 9502)).is_some(), "the pet knows it");
     s.set_known_spells(HashSet::new());
-    assert_eq!(known(&render(&mut s, 9501)), None, "the pet's book is not the player's");
+    assert_eq!(
+        known(&render(&mut s, 9501)),
+        None,
+        "the pet's book is not the player's"
+    );
     assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
 }
 
@@ -202,7 +206,10 @@ fn a_required_rank_and_medal_name_themselves() {
             ..Default::default()
         }),
     );
-    assert_eq!(render(&mut s, 9503)[2].0, "[REQ_SKILL Knight-Lieutenant (f)]");
+    assert_eq!(
+        render(&mut s, 9503)[2].0,
+        "[REQ_SKILL Knight-Lieutenant (f)]"
+    );
     s.set_unit(
         "player",
         Some(UnitState {

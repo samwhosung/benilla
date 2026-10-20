@@ -583,8 +583,9 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                                     }
                                 };
                                 if player {
-                                    inst.cooldown_ms =
-                                        super::tooltip_spell::live_remaining_ms(cooldown, model.now);
+                                    inst.cooldown_ms = super::tooltip_spell::live_remaining_ms(
+                                        cooldown, model.now,
+                                    );
                                 }
                                 inst
                             })

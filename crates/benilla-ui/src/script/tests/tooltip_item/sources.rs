@@ -90,9 +90,15 @@ fn only_a_source_with_an_item_object_reads() {
     trade.target.slots[0] = Some(traded);
     s.set_trade(Some(trade));
     let ours = texts_after(&mut s, "TT:SetTradePlayerItem(1)");
-    assert!(ours.contains(&read), "our trade slot is our object: {ours:?}");
+    assert!(
+        ours.contains(&read),
+        "our trade slot is our object: {ours:?}"
+    );
     let theirs = texts_after(&mut s, "TT:SetTradeTargetItem(1)");
-    assert!(!theirs.contains(&read), "the partner's slot is a block: {theirs:?}");
+    assert!(
+        !theirs.contains(&read),
+        "the partner's slot is a block: {theirs:?}"
+    );
     assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
 }
 
@@ -179,7 +185,11 @@ fn a_link_shows_its_enchant() {
     let texts = texts_after(&mut s, r#"TT:SetHyperlink("item:9300:-1900:0:0")"#);
     assert_eq!(texts, ["Runed Blade", "Crusader"]);
     let lines = lines_of(&mut s);
-    assert_eq!(lines[1].1, [1.0, 0.0, 0.0, 1.0], "a negative id is pure red");
+    assert_eq!(
+        lines[1].1,
+        [1.0, 0.0, 0.0, 1.0],
+        "a negative id is pure red"
+    );
     // An id with no row adds nothing (`0x52ca06`).
     let texts = texts_after(&mut s, r#"TT:SetHyperlink("item:9300:1901:0:0")"#);
     assert_eq!(texts, ["Runed Blade"]);
@@ -278,7 +288,11 @@ fn the_trade_enchant_slot_shows_the_proposed_enchant() {
     );
     let lines = lines_of(&mut s);
     assert_eq!(lines[1].1, [0.0, 1.0, 0.0, 1.0], "the proposal is green");
-    assert_eq!(lines[2].1, [1.0, 0.0, 0.0, 1.0], "the disclaimer is pure red");
+    assert_eq!(
+        lines[2].1,
+        [1.0, 0.0, 0.0, 1.0],
+        "the disclaimer is pure red"
+    );
     let theirs = texts_after(&mut s, "TT:SetTradeTargetItem(7)");
     assert_eq!(
         theirs,
@@ -331,7 +345,15 @@ fn a_traded_crafted_item_names_its_maker() {
     let theirs = texts_after(&mut s, "TT:SetTradeTargetItem(1)");
     assert_eq!(theirs, ["Runecloth Bag", "|cff00ff00[CREATED_BY Weaver]|r"]);
     let waiting = texts_after(&mut s, "TT:SetTradeTargetItem(2)");
-    assert_eq!(waiting, ["Runecloth Bag"], "no line while the name is in flight");
-    assert_eq!(s.take_item_name_asks(), [0x77], "the build asks the creator's name");
+    assert_eq!(
+        waiting,
+        ["Runecloth Bag"],
+        "no line while the name is in flight"
+    );
+    assert_eq!(
+        s.take_item_name_asks(),
+        [0x77],
+        "the build asks the creator's name"
+    );
     assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
 }
