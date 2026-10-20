@@ -103,16 +103,10 @@ impl Roster {
         self.pending_row().is_some_and(|c| c.new_character)
     }
 
-    /// The race of a pending new character whose intro eye is yet to be looked up
-    /// ([`Self::resolve_entry_eye`]).
+    /// The race of a pending new character whose intro eye is yet to be looked up.
     fn unresolved_entry_race(&self) -> Option<u8> {
         let c = self.pending_row().filter(|c| c.new_character)?;
         (self.entry_eye.map(|(race, _)| race) != Some(c.race)).then_some(c.race)
-    }
-
-    /// Whether the pending pick is a new character whose race has not been looked up.
-    pub(crate) fn wants_entry_eye(&self) -> bool {
-        self.unresolved_entry_race().is_some()
     }
 
     /// Look up, once per race, the eye `0x46c2c0` writes over a new character's entry position
@@ -153,10 +147,36 @@ impl Roster {
 /// (`0x46b5fa`), named by no GlueXML.
 pub(crate) const CVAR_LAST_CHARACTER: &str = "lastCharacterIndex";
 
+/// The tables and files `0x46c2c0` reads to find a new character's intro eye.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct IntroEyes<'w> {
+    races: Option<Res<'w, crate::chr_classes::ChrRaceTable>>,
+    cinematics: Option<Res<'w, crate::cinematic::Cinematics>>,
+    assets: Option<Res<'w, benilla_assets::WorldAssets>>,
+}
+
+impl IntroEyes<'_> {
+    /// The eye the race's intro shot opens on, read off the patch chain on the spot as the
+    /// reference loads the shot's model (`0x46c36c`); `None` where the tables or the file are
+    /// missing.
+    fn eye(&self, race: u8) -> Option<[f32; 3]> {
+        use benilla_assets::LockRecover;
+        let (races, cinematics, assets) = (
+            self.races.as_deref()?,
+            self.cinematics.as_deref()?,
+            self.assets.as_deref()?,
+        );
+        let mut chain = assets.chain.lock_recover();
+        benilla_formats::first_login_eye(&mut chain, &cinematics.0, &races.0, race)
+    }
+}
+
 /// Ask the parked IO thread to log in as `guid` and remember it as pending, so a reconnect
-/// re-answers with its character.
-pub(crate) fn send_pick(roster: &mut Roster, pick: &CharPick, guid: u64) {
+/// re-answers with its character. A new character's entry opens at its race's intro eye
+/// (`0x46c203`-`0x46c214`), looked up here, where the entry begins.
+pub(crate) fn send_pick(roster: &mut Roster, pick: &CharPick, guid: u64, eyes: &IntroEyes) {
     roster.pending_pick = Some(guid);
+    roster.resolve_entry_eye(|race| eyes.eye(race));
     let _ = pick.0.send(CharRequest::Enter(guid));
 }
 
@@ -167,6 +187,7 @@ pub(super) fn apply_roster_policy(
     mut msgs: MessageReader<CharListMessage>,
     mut roster: ResMut<Roster>,
     pick: Res<CharPick>,
+    eyes: IntroEyes,
     mut run_pick: ResMut<RunPick>,
     // Present only when a rig drives the run and picks its own character.
     rig: Option<Res<crate::run_mode::RigCharacter>>,
@@ -206,7 +227,7 @@ pub(super) fn apply_roster_policy(
         }
         if let Some(guid) = roster.pending_pick {
             // A reconnect, or a pick that raced a dying socket: re-answer without the screen.
-            send_pick(&mut roster, &pick, guid);
+            send_pick(&mut roster, &pick, guid, &eyes);
         } else if let Some(name) = roster.env_char.take() {
             match roster
                 .chars

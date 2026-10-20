@@ -1776,6 +1776,8 @@ pub(crate) struct GlueAsks<'w> {
     pick: Option<Res<'w, crate::net::CharPick>>,
     /// The engine-side CVar table `EnterWorld` writes and saves.
     cvars: Option<ResMut<'w, crate::cvars::Cvars>>,
+    /// What a new character's entry reads for its intro eye.
+    eyes: crate::glue_session::roster::IntroEyes<'w>,
 }
 
 /// The four agreements' states off the CVar registry: the read `0x46a400` makes at `0x402b36`,
@@ -2160,7 +2162,7 @@ fn send_asks(mgr: &mut GlueMgr, asks: &mut GlueAsks) {
                     if let (Some(roster), Some(pick)) =
                         (asks.roster.as_deref_mut(), asks.pick.as_deref())
                     {
-                        crate::glue_session::roster::send_pick(roster, pick, *guid);
+                        crate::glue_session::roster::send_pick(roster, pick, *guid, &asks.eyes);
                     }
                     continue;
                 }

@@ -49,30 +49,6 @@ pub(super) fn publish_viewer(
     };
 }
 
-/// A new character's entry eye, looked up while its pick stands (`0x46c203`-`0x46c214`): the
-/// reference replaces the entry position by the eye of the race's intro cinematic before it opens
-/// the map, loading the shot's model on the spot (`0x46c2c0`). Read here when the roster says so,
-/// once per race, ahead of [`publish_view_focus`].
-pub(super) fn resolve_entry_eye(
-    roster: Option<ResMut<crate::glue_session::roster::Roster>>,
-    races: Option<Res<crate::chr_classes::ChrRaceTable>>,
-    cinematics: Option<Res<crate::cinematic::Cinematics>>,
-    assets: Option<Res<benilla_assets::WorldAssets>>,
-) {
-    let Some(mut roster) = roster else { return };
-    if !roster.wants_entry_eye() {
-        return;
-    }
-    let (Some(races), Some(cinematics), Some(assets)) = (races, cinematics, assets) else {
-        return;
-    };
-    roster.resolve_entry_eye(|race| {
-        use benilla_assets::LockRecover;
-        let mut chain = assets.chain.lock_recover();
-        benilla_formats::first_login_eye(&mut chain, &cinematics.0, &races.0, race)
-    });
-}
-
 /// Tells the world where to stream from each frame, before the stream stage; a cinematic, which
 /// streams from the camera, also puts the body on the settle hold.
 pub(super) fn publish_view_focus(
