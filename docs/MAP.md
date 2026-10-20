@@ -384,6 +384,7 @@
 - `WOW_POINTS_DUMP` — benilla-world/src/lighting/global_light.rs
 - `WOW_PORTRAIT_TEST` — benilla-app/src/portrait/mod.rs, benilla-app/src/portrait/test_bake.rs, benilla-world/src/bgwin.rs
 - `WOW_PORTRAIT_TEST_SKIN` — benilla-app/src/portrait/test_bake.rs
+- `WOW_PRESENT` — benilla-app/src/video.rs
 - `WOW_PROBE` — benilla-app/src/dev.rs, benilla-app/src/lib.rs, benilla-world/src/bgwin.rs
 - `WOW_PROBE_AUCTION` — benilla-app/src/dev.rs
 - `WOW_PROBE_BANK` — benilla-app/src/dev.rs
