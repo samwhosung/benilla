@@ -399,10 +399,10 @@ fn classify_in<'a>(
 /// 8 (vmangos `SpellDefines.h:799-800`).
 const ATTR_DO_NOT_DISPLAY_OR_LOG: u32 = 0x180;
 
-/// The spell a combat-log formatter names, or `None` where it writes no line: each of the 22
-/// formatters that index the Spell store (`0xc0d788`) returns for an id out of range or with no
-/// record, for `Attributes & 0x180` and for an empty name in the client's locale, as the miss
-/// line's `0x62bac3`-`0x62bb07` does.
+/// The spell a combat-log formatter names, or `None` where it writes no line: each of the 23
+/// formatters that index the Spell store (`0xc0d788`), `0x626a10` to `0x62e050`, returns for an
+/// id out of range or with no record, for `Attributes & 0x180` and for an empty name in the
+/// client's locale, as the miss line's `0x62bac3`-`0x62bb07` does.
 pub(crate) fn logged_spell(
     spells: Option<&crate::ui_action::Spells>,
     spell_id: u32,
