@@ -882,12 +882,11 @@ fn an_aura_with_no_text_draws_its_name_alone() {
     assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
 }
 
-/// A position inside the 48 records but past the occupied ones is an empty record
-/// (`ClearBuffRecord 0x4e4490`): the builder's miss leaves no line (`0x52f8ae`), and its zero
-/// until-cancelled flag lets the time line through at 0 ms, the slot -1 arm of `0x4e4450`
-/// (`0x4e447e`). The plate shows that line alone.
+/// A position inside the 48 records but past the occupied ones is an empty record: the builder
+/// clears and leaves no line (`0x52f8ae`), and no time line follows, where the reference's rides
+/// the record's stale `+0xc` (the `Deviation:` at `SetPlayerBuff`).
 #[test]
-fn an_empty_buff_record_reads_zero_seconds_remaining() {
+fn an_empty_buff_record_shows_nothing() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
     s.set_aura_tooltip(
@@ -908,11 +907,13 @@ fn an_empty_buff_record_reads_zero_seconds_remaining() {
         local a = CreateFrame("Button", "BF1"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
         local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT")
+        tt:SetPlayerBuff(0)
+        assert(tt:IsShown() and tt:NumLines() == 2, "the buff, got " .. tt:NumLines())
         tt:SetPlayerBuff(1)
-        assert(tt:IsShown() and tt:NumLines() == 1, "one line, got " .. tt:NumLines())
-        assert(TTTextLeft1:GetText() == "0 seconds remaining", tostring(TTTextLeft1:GetText()))
+        assert(not tt:IsShown() and tt:NumLines() == 0, "cleared, got " .. tt:NumLines())
+        tt:SetPlayerBuff(0)
         tt:SetPlayerBuff(47)
-        assert(TTTextLeft1:GetText() == "0 seconds remaining", "the last record")
+        assert(not tt:IsShown() and tt:NumLines() == 0, "the last record")
     "#,
     )
     .unwrap();

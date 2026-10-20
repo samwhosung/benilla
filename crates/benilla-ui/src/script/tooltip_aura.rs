@@ -230,10 +230,15 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         };
                         (key, a.name.clone(), ms)
                     }
-                    // An empty record (`ClearBuffRecord 0x4e4490`): spell 0, which the builder
-                    // clears and hides on (`0x52f8ae`), and no until-cancelled flag, so the time
-                    // line follows with 0 ms, the slot -1 arm of `0x4e4450` (`0x4e447e`).
-                    None => (AuraKey::default(), None, Some(0)),
+                    // An empty record: spell 0, which the builder clears and hides on
+                    // (`0x52f8ae`). Deviation: no time line follows, where the reference's rides
+                    // the record's `+0xc` (`0x532bdf`), a byte an empty record keeps from its
+                    // history. 0 after `ClearBuffRecord 0x4e4490` prints a lone "0 seconds
+                    // remaining" (`0x4e447e`); else it is whatever the last occupant left, as
+                    // `ResetBuffCache 0x4e40c0` and the compaction's tail reset (`0x4e4237`)
+                    // call `0x4e44b0` with slot -1, which writes `+0x0` and `+0x4` alone
+                    // (`0x4e44bc`-`0x4e44c0`). A line on a stale byte is a fault to not ape.
+                    None => (AuraKey::default(), None, None),
                 }
             };
             // `0x52fa50`'s text from the player's own strings; without them the line is skipped.
