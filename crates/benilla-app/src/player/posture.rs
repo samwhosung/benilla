@@ -178,8 +178,18 @@ struct ToggleGates {
 /// stun flag (`0x5eb4f2`), health at or below 0 (`0x5eb502`) and a channel (`0x5eb48e`).
 fn toggle_refused(fields: Option<&ObjectFields>, gates: ToggleGates) -> bool {
     let mounted = fields.is_some_and(|f| f.unit_mount_display_id() != 0);
+    let stunned = fields.is_some_and(|f| f.unit_flags() & super::UNIT_FLAG_STUNNED != 0);
     let dead = fields.is_some_and(ObjectFields::unit_is_dead);
-    mounted || dead || gates.engaged || gates.seated || gates.mid_ceremony
+    let channelling = fields.is_some_and(|f| f.unit_channel_spell() != 0);
+    gates.control_lost
+        || mounted
+        || stunned
+        || dead
+        || gates.engaged
+        || channelling
+        || gates.precast
+        || gates.seated
+        || gates.mid_ceremony
 }
 
 /// The stand state's local apply, the reference's `0x6127b0`, reached from `SetStandState` after
