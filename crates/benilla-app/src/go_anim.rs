@@ -1277,7 +1277,9 @@ mod tests {
     /// animation the model lacks.
     #[test]
     fn the_packets_hold_is_the_drives() {
-        let cases: [(&str, &[(u16, f32, u16)], fn(&mut GoAnim)); 6] = [
+        /// A case: its name, the model's extra clips and what the packet arms.
+        type Case = (&'static str, &'static [(u16, f32, u16)], fn(&mut GoAnim));
+        let cases: [Case; 6] = [
             ("an owned despawn", &[(157, 2.667, 0)], |go| go.despawn()),
             ("an unowned despawn", &[], |go| go.despawn()),
             ("an owned custom", &[(153, 0.667, 0)], |go| go.custom(0)),
