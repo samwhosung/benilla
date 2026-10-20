@@ -2892,4 +2892,87 @@ mod tests {
         assert_eq!(global(&mut f, "SECOND"), None, "bound and sent");
         assert_eq!(casts(&f), vec![(MOTW, Some(NEW))]);
     }
+
+    /// CorkFu's lines, `CastSpellByName` then `SpellIsTargeting` and `SpellTargetUnit`, with the
+    /// world set up for the arm: an enemy selected, `party1` a friend, the spell a friendly
+    /// single-target buff.
+    fn cork_frame() -> Frame {
+        let mut f = frame(true);
+        with_factions(&mut f, FOE, &[(FLAGS, 0x8)]);
+        with_friendly_party1(&mut f, true);
+        with_book_spell(
+            &mut f,
+            MOTW,
+            "Mark of the Wild",
+            benilla_formats::SpellDisplay {
+                implicit_target_a1: 21,
+                ..Default::default()
+            },
+        );
+        f
+    }
+
+    /// The body every entry below runs once, with no input event up: the client's own code, which
+    /// the gate's tag 2 passes (`0x494a5a`).
+    const CORK: &str = r#"RAN = 1
+        CastSpellByName("Mark of the Wild")
+        FIRST = SpellIsTargeting()
+        if SpellIsTargeting() then SpellTargetUnit("party1") end
+        SECOND = SpellIsTargeting()"#;
+
+    /// An `OnUpdate` script's cast arms inside its call: the update walk of the pump (`0x765650`)
+    /// runs the script (`0x704f10`) with nothing between a verb and its effect, so the next line
+    /// reads the armed word and binds it, as a key's body does.
+    #[test]
+    fn an_on_update_scripts_cast_arms_and_binds_inside_the_tick() {
+        let mut f = cork_frame();
+        let world = f.app.world_mut();
+        world
+            .non_send_resource_mut::<UiScript>()
+            .run(&format!(
+                r#"local u = CreateFrame("Frame")
+                u:SetScript("OnUpdate", function()
+                    this:SetScript("OnUpdate", nil)
+                    {CORK}
+                end)"#
+            ))
+            .expect("the frame builds");
+        world.spawn((Window::default(), bevy::window::PrimaryWindow));
+        crate::ui_script::tick_once(world);
+        assert_eq!(global(&mut f, "RAN"), Some(1), "the script ran");
+        assert_eq!(global(&mut f, "FIRST"), Some(1), "armed on the next line");
+        assert_eq!(global(&mut f, "SECOND"), None, "bound and sent");
+        assert_eq!(casts(&f), vec![(MOTW, Some(NEW))]);
+    }
+
+    /// An event handler's cast arms inside its call: `SignalEvent` (`0x703e50`) runs the handler in
+    /// place (`0x704d50`), here the chat feed's `CHAT_MSG_SYSTEM`, so its next line reads the armed
+    /// word and binds it.
+    #[test]
+    fn an_event_handlers_cast_arms_and_binds_inside_the_feed() {
+        let mut f = cork_frame();
+        let world = f.app.world_mut();
+        world
+            .non_send_resource_mut::<UiScript>()
+            .run(&format!(
+                r#"local e = CreateFrame("Frame")
+                e:RegisterEvent("CHAT_MSG_SYSTEM")
+                e:SetScript("OnEvent", function()
+                    this:UnregisterEvent("CHAT_MSG_SYSTEM")
+                    {CORK}
+                end)"#
+            ))
+            .expect("the frame builds");
+        world.resource_mut::<crate::ui_chat::ChatLog>().push_event(
+            crate::ui_chat::ChatEvent::text_only(
+                crate::ui_chat::ChatEventKind::System,
+                "Welcome".into(),
+            ),
+        );
+        crate::ui_chat::feed_chat_once(world);
+        assert_eq!(global(&mut f, "RAN"), Some(1), "the handler ran");
+        assert_eq!(global(&mut f, "FIRST"), Some(1), "armed on the next line");
+        assert_eq!(global(&mut f, "SECOND"), None, "bound and sent");
+        assert_eq!(casts(&f), vec![(MOTW, Some(NEW))]);
+    }
 }

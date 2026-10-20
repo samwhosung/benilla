@@ -486,6 +486,16 @@ pub(crate) fn feed_input_once(world: &mut World) {
         .expect("the input feeds");
 }
 
+/// The tick once, for a test over the whole client: the `OnUpdate` pump's Lua, with the call host
+/// the world lends.
+#[cfg(test)]
+pub(crate) fn tick_once(world: &mut World) {
+    use bevy::ecs::system::RunSystemOnce;
+    world
+        .run_system_once(extract::tick_script)
+        .expect("the tick runs");
+}
+
 /// Whether a capture includes the player UI: world baselines stay UI-free unless
 /// [`crate::run_mode::capture_ui_opted_in`], which the UI load and window size also read.
 fn capture_ui_active(capture: Option<Res<crate::run_mode::CaptureMode>>) -> bool {

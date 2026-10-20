@@ -61,6 +61,16 @@ pub(crate) use edit::ChannelState;
 pub(crate) use event::event_name;
 pub(crate) use event::{default_color, ChatEvent, ChatEventKind};
 pub(crate) use feed::ChatLog;
+
+/// The chat feed once, for a test over the whole client: the `CHAT_MSG_*` fan-out of what the
+/// log holds, with the call host the world lends.
+#[cfg(test)]
+pub(crate) fn feed_chat_once(world: &mut World) {
+    use bevy::ecs::system::RunSystemOnce;
+    world
+        .run_system_once(feed::feed_chat)
+        .expect("the chat feeds");
+}
 /// Test-only: the quest log's rig tees the lines its timers show.
 #[cfg(test)]
 pub(crate) use frames::{tee_shown_lines, ChatWindows};
