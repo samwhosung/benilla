@@ -56,7 +56,7 @@ pub(super) fn drain_pet_menu(
     script: Option<NonSendMut<UiScript>>,
     bar: Res<PetBar>,
     commands: Res<NetCommands>,
-    mut ui_errors: ResMut<UiErrorKeys>,
+    ui_errors: Res<UiErrorKeys>,
     pet: PetUnit,
 ) {
     let Some(mut script) = script else {
@@ -96,7 +96,7 @@ pub(super) fn drain_pet_menu(
     for name in renames {
         // `0x4bd840`: an empty name raises an error and sends nothing; the rest is truncated.
         if name.is_empty() {
-            ui_errors.0.push(UiError::key("ERR_NULL_PETNAME"));
+            ui_errors.push(UiError::key("ERR_NULL_PETNAME"));
             continue;
         }
         let name = clamp_pet_name(&name);

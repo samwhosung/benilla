@@ -151,7 +151,7 @@ pub(crate) struct ScriptItemUse<'w, 's> {
     // The loot latch the open arm sets, so `SMSG_LOOT_RESPONSE` admits an item loot.
     loot_latch: ResMut<'w, crate::ui_loot::LootLatch>,
     ladder: crate::spell::CastLadder<'w, 's>,
-    ui_errors: ResMut<'w, crate::ui_action::UiErrorKeys>,
+    ui_errors: Res<'w, crate::ui_action::UiErrorKeys>,
     gate: crate::ui_bind_confirm::BindGate<'w>,
 }
 
@@ -1704,7 +1704,7 @@ pub(super) fn drain_bind_on_use_confirms(
     script: Option<NonSendMut<UiScript>>,
     targeting: crate::spell::cast_target::CastTargeting,
     mut ladder: crate::spell::CastLadder,
-    mut ui_errors: ResMut<crate::ui_action::UiErrorKeys>,
+    ui_errors: Res<crate::ui_action::UiErrorKeys>,
     mut gate: crate::ui_bind_confirm::BindGate,
 ) {
     let Some(mut script) = script else {
@@ -1734,7 +1734,7 @@ pub(super) fn drain_bind_on_use_confirms(
         &mut script,
         &mut gate,
         true,
-        &mut ui_errors,
+        &ui_errors,
     );
     ladder.permit(true);
 }

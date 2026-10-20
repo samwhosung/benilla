@@ -100,16 +100,16 @@ fn ask_for_captures(
     mut state: ResMut<ScreenshotState>,
 ) {
     hosted_vm.run(|script| {
-        spawn_pending(&mut commands, &mut state);
+        spawn_captures(&mut commands, std::mem::take(&mut state.pending));
         if let Some(script) = script {
             state.pending += script.take_screenshot_asks();
         }
     })
 }
 
-/// The captures last frame asked for, each a screenshot of the primary window.
-fn spawn_pending(commands: &mut Commands, state: &mut ScreenshotState) {
-    for _ in 0..std::mem::take(&mut state.pending) {
+/// `count` captures, each a screenshot of the primary window.
+fn spawn_captures(commands: &mut Commands, count: u32) {
+    for _ in 0..count {
         commands
             .spawn(Screenshot::primary_window())
             .observe(write_capture);
@@ -312,6 +312,6 @@ mod tests {
 
     /// The real [`ask_for_captures`] with no VM, as at character select.
     fn spawn_pending_only(mut commands: Commands, mut state: ResMut<ScreenshotState>) {
-        spawn_pending(&mut commands, &mut state);
+        spawn_captures(&mut commands, std::mem::take(&mut state.pending));
     }
 }

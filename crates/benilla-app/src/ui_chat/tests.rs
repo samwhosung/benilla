@@ -2952,7 +2952,7 @@ fn chat_sends_as(
         .collect();
     let refused = world
         .resource::<crate::ui_action::UiErrorKeys>()
-        .0
+        .snapshot()
         .iter()
         .map(|e| e.key)
         .collect();

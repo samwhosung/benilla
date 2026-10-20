@@ -72,7 +72,7 @@ pub(crate) struct AttackPress<'w, 's> {
     pick: crate::target::AttackPick<'w, 's>,
     selection: ResMut<'w, crate::target::Selection>,
     seam: crate::creature_anim::AttackSeam<'w, 's>,
-    ui_errors: ResMut<'w, UiErrorKeys>,
+    ui_errors: Res<'w, UiErrorKeys>,
 }
 
 impl AttackPress<'_, '_> {
@@ -153,7 +153,7 @@ pub(crate) fn drain_click_casts(
     targeting: cast_target::CastTargeting,
     mut ladder: CastLadder,
     // Not a `CastLadder` field: Bevy panics on a resource reachable twice from one system.
-    mut ui_errors: ResMut<UiErrorKeys>,
+    ui_errors: Res<UiErrorKeys>,
     mut gate: crate::ui_bind_confirm::BindGate,
 ) {
     if queue.0.is_empty() {
@@ -195,7 +195,7 @@ pub(crate) fn drain_click_casts(
                     script,
                     &mut gate,
                     false,
-                    &mut ui_errors,
+                    &ui_errors,
                 );
             }
         }
@@ -209,7 +209,7 @@ pub(crate) struct ActionPress<'w, 's> {
     targeting: cast_target::CastTargeting<'w, 's>,
     // The by-key error line. Not a `CastLadder` field: Bevy panics, at runtime and not in unit
     // tests, on a resource reachable twice from one system.
-    ui_errors: ResMut<'w, UiErrorKeys>,
+    ui_errors: Res<'w, UiErrorKeys>,
     ladder: CastLadder<'w, 's>,
     gate: crate::ui_bind_confirm::BindGate<'w>,
     equip_sound: MessageWriter<'w, crate::sound::AutoEquipSound>,

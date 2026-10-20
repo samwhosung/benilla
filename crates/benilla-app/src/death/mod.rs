@@ -457,7 +457,7 @@ pub(crate) fn drain_death(
     // The soulstone's item leg cancels the cast in flight first, so the ladder and the cancel
     // share the cast state through one set.
     mut cast: ParamSet<(crate::spell::CastLadder, crate::spell::SelfCancel)>,
-    mut ui_errors: ResMut<crate::ui_action::UiErrorKeys>,
+    ui_errors: Res<crate::ui_action::UiErrorKeys>,
     // The soulstone's item leg is an item use (`0x5d8d00`), so it carries the bind gate.
     mut gate: crate::ui_bind_confirm::BindGate,
 ) {
@@ -544,7 +544,7 @@ pub(crate) fn drain_death(
                                 &mut script,
                                 &mut gate,
                                 false,
-                                &mut ui_errors,
+                                &ui_errors,
                             );
                             ladder.permit(true);
                             Ok(())
@@ -1113,7 +1113,7 @@ mod tests {
         let keys: Vec<_> = app
             .world()
             .resource::<crate::ui_action::UiErrorKeys>()
-            .0
+            .snapshot()
             .iter()
             .map(|e| e.key)
             .collect();

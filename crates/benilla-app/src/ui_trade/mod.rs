@@ -508,7 +508,7 @@ fn answer_trade_request(
     mut trade: ResMut<TradeSession>,
     commands: Res<NetCommands>,
     names: Res<NameCache>,
-    mut errors: ResMut<crate::ui_action::UiErrorKeys>,
+    errors: Res<crate::ui_action::UiErrorKeys>,
     social: Res<crate::ui_social::SocialState>,
     cinematic: Res<crate::cinematic::Cinematic>,
     own_control: Res<crate::player::OwnControlLost>,
@@ -573,9 +573,7 @@ fn answer_trade_request(
         let _ = commands.0.send(ClientCommand::BusyTrade);
         trade.refuse_request();
         // `0x496720(0xbb, name)`: one `DisplayError`; catalog row `0xbb` makes it a chat line.
-        errors
-            .0
-            .push(crate::ui_action::UiError::s("ERR_TRADE_BLOCKED_S", name));
+        errors.push(crate::ui_action::UiError::s("ERR_TRADE_BLOCKED_S", name));
         return;
     }
 
@@ -871,7 +869,7 @@ fn feed_trade(
     spells: Option<Res<crate::ui_action::Spells>>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
-    mut errors: ResMut<crate::ui_action::UiErrorKeys>,
+    errors: Res<crate::ui_action::UiErrorKeys>,
     // The `%s` lines' live-object guard, the same reads as the ladder's leg 3.
     index: Res<GuidIndex>,
     stores: Query<&ObjectStore>,
@@ -1007,7 +1005,7 @@ fn feed_trade(
             .resolve_player(line.who, Ask::at(i >= asked, &commands))
             .map(str::to_string)
         {
-            Some(name) => errors.0.push(crate::ui_action::UiError::s(line.key, name)),
+            Some(name) => errors.push(crate::ui_action::UiError::s(line.key, name)),
             // Not cached: the line's lookup has asked, so park it and read it again next frame.
             None => trade.owe_named_line(line),
         }
@@ -1865,7 +1863,9 @@ mod tests {
         app.update();
 
         assert_eq!(
-            app.world().resource::<crate::ui_action::UiErrorKeys>().0,
+            app.world()
+                .resource::<crate::ui_action::UiErrorKeys>()
+                .snapshot(),
             vec![crate::ui_action::UiError::s(
                 "ERR_INITIATE_TRADE_S",
                 "Grubbis".to_string()
@@ -1879,7 +1879,6 @@ mod tests {
         assert_eq!(
             app.world()
                 .resource::<crate::ui_action::UiErrorKeys>()
-                .0
                 .len(),
             1,
             "the debt is spent once, not re-raised every frame"
@@ -1902,7 +1901,7 @@ mod tests {
         assert_eq!(
             app.world()
                 .resource::<crate::ui_action::UiErrorKeys>()
-                .0
+                .snapshot()
                 .iter()
                 .map(|e| e.key)
                 .collect::<Vec<_>>(),
@@ -1915,8 +1914,7 @@ mod tests {
         app.world_mut().resource_mut::<GuidIndex>().0.insert(0x7, e);
         app.world_mut()
             .resource_mut::<crate::ui_action::UiErrorKeys>()
-            .0
-            .clear();
+            .take();
         app.world_mut()
             .resource_mut::<TradeSession>()
             .owe_named_line(NamedLine {
@@ -1926,7 +1924,9 @@ mod tests {
             });
         app.update();
         assert_eq!(
-            app.world().resource::<crate::ui_action::UiErrorKeys>().0,
+            app.world()
+                .resource::<crate::ui_action::UiErrorKeys>()
+                .snapshot(),
             vec![crate::ui_action::UiError::s(
                 "ERR_PLAYER_BUSY_S",
                 "Grubbis".to_string()
@@ -1944,7 +1944,6 @@ mod tests {
         assert!(
             app.world()
                 .resource::<crate::ui_action::UiErrorKeys>()
-                .0
                 .is_empty(),
             "no name, no line — and never a line with an unfilled %s"
         );
@@ -1960,7 +1959,9 @@ mod tests {
         );
         app.update();
         assert_eq!(
-            app.world().resource::<crate::ui_action::UiErrorKeys>().0,
+            app.world()
+                .resource::<crate::ui_action::UiErrorKeys>()
+                .snapshot(),
             vec![crate::ui_action::UiError::s(
                 "ERR_INITIATE_TRADE_S",
                 "Skarrid".to_string()
@@ -1988,7 +1989,6 @@ mod tests {
         assert!(
             app.world()
                 .resource::<crate::ui_action::UiErrorKeys>()
-                .0
                 .is_empty(),
             "and an accepted request says nothing — only leg 8 speaks"
         );
@@ -2002,7 +2002,9 @@ mod tests {
 
         assert!(matches!(rx.try_recv(), Ok(ClientCommand::BusyTrade)));
         assert_eq!(
-            app.world().resource::<crate::ui_action::UiErrorKeys>().0,
+            app.world()
+                .resource::<crate::ui_action::UiErrorKeys>()
+                .snapshot(),
             vec![crate::ui_action::UiError::s(
                 "ERR_TRADE_BLOCKED_S",
                 "Grubbis".to_string()
@@ -2028,7 +2030,6 @@ mod tests {
             assert!(
                 app.world()
                     .resource::<crate::ui_action::UiErrorKeys>()
-                    .0
                     .is_empty(),
                 "cinematic={cinematic} controlled={controlled}: a silent leg says nothing"
             );
@@ -2077,7 +2078,6 @@ mod tests {
         assert!(app
             .world()
             .resource::<crate::ui_action::UiErrorKeys>()
-            .0
             .is_empty());
     }
 

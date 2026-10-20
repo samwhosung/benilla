@@ -716,14 +716,14 @@ pub(crate) fn send_item_use(
     gate: &mut crate::ui_bind_confirm::BindGate,
     suppress: bool,
     // Passed in, not carried on `CastLadder`, so no system reaches it twice.
-    ui_errors: &mut crate::ui_action::UiErrorKeys,
+    ui_errors: &crate::ui_action::UiErrorKeys,
 ) -> bool {
     // `0x5d8d00`'s requirement check (`0x5d8e0e`) and control gate (`0x5d8eaa`), past the
     // quest-starter arm (`0x5d8dcc`), which runs before them.
     if it.start_quest == 0 {
         if let Some(key) = script.item_use_refusal(it.entry, it.use_spell.unwrap_or(0)) {
             debug!("ui_items: item use refused — {key}");
-            ui_errors.0.push(crate::ui_action::UiError::key(key));
+            ui_errors.push(crate::ui_action::UiError::key(key));
             return false;
         }
     }
@@ -746,9 +746,7 @@ pub(crate) fn send_item_use(
                 "ui_items: item use refused — that hand is disarmed (slot {})",
                 it.slot
             );
-            ui_errors
-                .0
-                .push(crate::ui_action::UiError::key("ERR_CANT_USE_DISARMED"));
+            ui_errors.push(crate::ui_action::UiError::key("ERR_CANT_USE_DISARMED"));
             false
         }
         ItemUseRoute::ToggleCancel(spell) => {

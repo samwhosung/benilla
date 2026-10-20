@@ -187,19 +187,13 @@ pub(crate) mod net {
     fn on_bound(
         In(ev): In<SessionEvent>,
         mut binder: ResMut<BinderState>,
-        mut errors: ResMut<crate::ui_action::UiErrorKeys>,
+        errors: Res<crate::ui_action::UiErrorKeys>,
         areas: Option<Res<AreaTableRes>>,
         mut sounds: MessageWriter<ServerSoundMessage>,
     ) {
         if let SessionEvent::PlayerBound { binder: npc, area } = ev {
             debug!("net: bound to area {area} by {npc:#x}");
-            bound(
-                area,
-                &mut binder,
-                &mut errors,
-                areas.as_deref(),
-                &mut sounds,
-            );
+            bound(area, &mut binder, &errors, areas.as_deref(), &mut sounds);
         }
     }
 
@@ -210,7 +204,7 @@ pub(crate) mod net {
     pub(crate) fn bound(
         area: u32,
         binder: &mut BinderState,
-        errors: &mut crate::ui_action::UiErrorKeys,
+        errors: &crate::ui_action::UiErrorKeys,
         areas: Option<&AreaTableRes>,
         sounds: &mut MessageWriter<ServerSoundMessage>,
     ) {
@@ -224,7 +218,7 @@ pub(crate) mod net {
             debug!("ui_binder: bound to area {area}, which AreaTable does not name — no line");
             return;
         };
-        errors.0.push(crate::ui_action::UiError::s(
+        errors.push(crate::ui_action::UiError::s(
             "ERR_DEATHBIND_SUCCESS_S",
             name,
         ));

@@ -48,9 +48,9 @@ fn on_mode(In(ev): In<SessionEvent>, mut bar: ResMut<PetBar>) {
     }
 }
 
-fn on_action_feedback(In(ev): In<SessionEvent>, mut errors: ResMut<UiErrorKeys>) {
+fn on_action_feedback(In(ev): In<SessionEvent>, errors: Res<UiErrorKeys>) {
     if let SessionEvent::PetActionFeedback { reason } = ev {
-        pet_action_feedback(reason, &mut errors);
+        pet_action_feedback(reason, &errors);
     }
 }
 
@@ -66,10 +66,10 @@ fn on_tame_failure(In(ev): In<SessionEvent>, mut failures: ResMut<PetTameFailure
     }
 }
 
-fn on_refusal_line(In(ev): In<SessionEvent>, mut errors: ResMut<UiErrorKeys>) {
+fn on_refusal_line(In(ev): In<SessionEvent>, errors: Res<UiErrorKeys>) {
     match ev {
-        SessionEvent::PetNameInvalid => pet_name_invalid(&mut errors),
-        SessionEvent::PetBroken => pet_broken(&mut errors),
+        SessionEvent::PetNameInvalid => pet_name_invalid(&errors),
+        SessionEvent::PetBroken => pet_broken(&errors),
         _ => {}
     }
 }
@@ -180,10 +180,10 @@ fn pet_mode(mode: PetMode, bar: &mut PetBar) {
 }
 
 /// `SMSG_PET_ACTION_FEEDBACK`: a refused order's reason byte, onto the red line.
-fn pet_action_feedback(reason: u8, errors: &mut UiErrorKeys) {
+fn pet_action_feedback(reason: u8, errors: &UiErrorKeys) {
     debug!("net: pet action feedback {reason}");
     if let Some(key) = pet_feedback_key(reason) {
-        errors.0.push(UiError::key(key));
+        errors.push(UiError::key(key));
     }
 }
 
@@ -213,16 +213,16 @@ fn pet_tame_failure(reason: u8, failures: &mut PetTameFailures) {
 
 /// `SMSG_PET_NAME_INVALID`, an empty body: the reference raises `ERR_INVALID_PETNAME` and reads
 /// nothing (`0x5e3e33`). No local name was applied, so nothing rolls back.
-fn pet_name_invalid(errors: &mut UiErrorKeys) {
+fn pet_name_invalid(errors: &UiErrorKeys) {
     debug!("net: pet name refused");
-    errors.0.push(UiError::key("ERR_INVALID_PETNAME"));
+    errors.push(UiError::key("ERR_INVALID_PETNAME"));
 }
 
 /// `SMSG_PET_BROKEN`, an empty body: loyalty hit zero; raise `ERR_PET_BROKEN` (`0x4bdc00`). The
 /// zero-guid `SMSG_PET_SPELLS` of the unsummon right after it clears the bar (`Pet.cpp:822`).
-fn pet_broken(errors: &mut UiErrorKeys) {
+fn pet_broken(errors: &UiErrorKeys) {
     debug!("net: pet ran away");
-    errors.0.push(UiError::key("ERR_PET_BROKEN"));
+    errors.push(UiError::key("ERR_PET_BROKEN"));
 }
 
 /// `SMSG_PET_ACTION_SOUND`: dropped when the pet is not streamed (`0x604101`); the sound layer
@@ -353,12 +353,12 @@ mod tests {
 
     #[test]
     fn the_feedback_map_is_the_jump_table_at_0x4bdbe8() {
-        let mut errors = UiErrorKeys::default();
+        let errors = UiErrorKeys::default();
         for reason in [0u8, 1, 2, 3, 4, 5, 200] {
-            pet_action_feedback(reason, &mut errors);
+            pet_action_feedback(reason, &errors);
         }
         assert_eq!(
-            errors.0.iter().map(|e| e.key).collect::<Vec<_>>(),
+            errors.snapshot().iter().map(|e| e.key).collect::<Vec<_>>(),
             [
                 "ERR_PET_SPELL_DEAD",
                 "ERR_NO_ATTACK_TARGET",

@@ -106,7 +106,7 @@ pub(crate) use benilla_ui::messages::MsgKind;
 
 /// One argText argument; the list is ordered and mixed because a template's specifiers are:
 /// `ERR_USE_LOCKED_WITH_SPELL_KNOWN_SI` takes a string then an integer (`0x5f34a9`).
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FillArg {
     S(String),
     D(i64),
@@ -120,7 +120,7 @@ pub(crate) enum FillArg {
 /// argText the reference pushes after the id, at most three strings (the guild event tail
 /// `0x5e745f`). Extra arguments are ignored and a starved specifier shows verbatim, as
 /// `SStrPrintf` does, so a short list is passed short.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UiError {
     pub key: &'static str,
     pub args: Vec<FillArg>,
@@ -171,8 +171,60 @@ impl UiError {
 
 /// Client-local refusals queued by GlobalStrings key: the `DisplayError` route for errors with no
 /// wire code and no spell record.
+///
+/// An append-only sink shared through `&self`, as [`crate::ui_chat::ChatLog`] is: a call the host
+/// applies inside a system's Lua queues its refusal while that system queues its own, in one
+/// order.
 #[derive(Resource, Default)]
-pub(crate) struct UiErrorKeys(pub Vec<UiError>);
+pub(crate) struct UiErrorKeys(std::sync::Mutex<Vec<UiError>>);
+
+impl UiErrorKeys {
+    /// The queue, held for one step; a poisoned lock still holds whole items.
+    fn q(&self) -> std::sync::MutexGuard<'_, Vec<UiError>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Queue one refusal.
+    pub(crate) fn push(&self, error: UiError) {
+        self.q().push(error);
+    }
+
+    /// Queue refusals in order.
+    pub(crate) fn extend(&self, errors: impl IntoIterator<Item = UiError>) {
+        self.q().extend(errors);
+    }
+
+    /// Take everything queued, in order.
+    pub(crate) fn take(&self) -> Vec<UiError> {
+        std::mem::take(&mut *self.q())
+    }
+
+    /// Whether nothing is queued, for the producers' tests.
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.q().is_empty()
+    }
+
+    /// How many are queued.
+    pub(crate) fn len(&self) -> usize {
+        self.q().len()
+    }
+
+    /// Take what was queued from `start` on, leaving the earlier refusals queued.
+    pub(crate) fn take_from(&self, start: usize) -> Vec<UiError> {
+        let mut q = self.q();
+        let start = start.min(q.len());
+        q.drain(start..).collect()
+    }
+
+    /// A copy of what is queued, for the producers' tests.
+    #[cfg(test)]
+    pub(crate) fn snapshot(&self) -> Vec<UiError> {
+        self.q().clone()
+    }
+}
 
 /// Lines that arrive already resolved, with no key and no catalog record: they reach the
 /// reference's sink `0x4945b0(text, flag)` without `DisplayError`, flag 1 firing
@@ -362,13 +414,13 @@ const ATTACK_FLAG_REFUSALS: [(u32, &str); 4] = [
 pub(crate) fn attack_actor_refusal(
     actor: Option<&ObjectStore>,
     self_guid: Option<u64>,
-    errors: &mut UiErrorKeys,
+    errors: &UiErrorKeys,
 ) -> bool {
     let Some(key) = attack_actor_blocked(actor, self_guid) else {
         return false;
     };
     debug!("attack refused locally by the actor's own state — {key}");
-    errors.0.push(UiError::key(key));
+    errors.push(UiError::key(key));
     true
 }
 
@@ -695,10 +747,10 @@ mod attack_actor_tests {
         let refused = attack_actor_refusal(store, self_guid, &mut errors);
         assert_eq!(
             refused,
-            !errors.0.is_empty(),
+            !errors.is_empty(),
             "a refusal and a message are the same event — the ref raises one per veto"
         );
-        errors.0.first().map(|e| e.key)
+        errors.snapshot().first().map(|e| e.key)
     }
 
     /// Every gate of `0x612df0`'s Phase A, each on its own, against an otherwise-healthy actor.

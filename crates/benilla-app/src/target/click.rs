@@ -241,7 +241,7 @@ fn interaction_already_open_on(target: u64, interact: &crate::ui_session::Intera
 /// The refusals and openers the dispatchers raise.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct Feedback<'w, 's> {
-    errors: ResMut<'w, crate::ui_action::UiErrorKeys>,
+    errors: Res<'w, crate::ui_action::UiErrorKeys>,
     // The mailbox's open, which registers on the interaction latch with the world in hand.
     windows: Commands<'w, 's>,
     item_text: ResMut<'w, crate::ui_item_text::ItemTextOpen>,
@@ -260,7 +260,6 @@ impl Feedback<'_, '_> {
             Ok(()) => true,
             Err(crate::player::Refused::TooFar) => {
                 self.errors
-                    .0
                     .push(crate::ui_action::UiError::key("ERR_AUTOFOLLOW_TOO_FAR"));
                 false
             }
@@ -426,7 +425,6 @@ impl Dispatch<'_, '_> {
         if !walked {
             self.feedback
                 .errors
-                .0
                 .push(crate::ui_action::UiError::key("ERR_USE_TOO_FAR"));
         }
         walked
@@ -464,7 +462,6 @@ impl Dispatch<'_, '_> {
             if let Some(key) = refusal.error_key() {
                 self.feedback
                     .errors
-                    .0
                     .push(crate::ui_action::UiError::key(key));
             }
             return;
@@ -556,7 +553,7 @@ impl Dispatch<'_, '_> {
             GoAction::Refuse(err) => {
                 debug!("right-click gameobject {guid:#x}: locked, refused ({err:?})");
                 if let Some(err) = err {
-                    self.feedback.errors.0.push(err);
+                    self.feedback.errors.push(err);
                 }
             }
         }
@@ -924,7 +921,6 @@ fn interact(dispatch: &mut Dispatch, press: &PressPick, mut select: Select) {
                 dispatch
                     .feedback
                     .errors
-                    .0
                     .push(crate::ui_action::UiError::key("ERR_LOOT_NOTSTANDING"));
                 return;
             }
@@ -1069,7 +1065,6 @@ fn interact(dispatch: &mut Dispatch, press: &PressPick, mut select: Select) {
                 dispatch
                     .feedback
                     .errors
-                    .0
                     .push(crate::ui_action::UiError::key("ERR_LOOT_NOTSTANDING"));
             } else {
                 let can_loot = dispatch.can_loot_unit(entity);
@@ -2569,10 +2564,7 @@ mod tests {
                 "{label}: {sent:?}"
             );
             assert!(
-                world
-                    .resource::<crate::ui_action::UiErrorKeys>()
-                    .0
-                    .is_empty(),
+                world.resource::<crate::ui_action::UiErrorKeys>().is_empty(),
                 "{label}: the arm says nothing"
             );
         }
@@ -2799,7 +2791,7 @@ mod tests {
         world.run_system_once(act_on_right_click).unwrap();
         world
             .resource::<crate::ui_action::UiErrorKeys>()
-            .0
+            .snapshot()
             .iter()
             .map(|e| e.key)
             .collect()
@@ -2862,7 +2854,7 @@ mod tests {
             );
             let keys: Vec<&str> = world
                 .resource::<crate::ui_action::UiErrorKeys>()
-                .0
+                .snapshot()
                 .iter()
                 .map(|e| e.key)
                 .collect();
@@ -2932,7 +2924,7 @@ mod tests {
             assert_eq!(sent_use || mail_open, used, "{label}");
             let keys: Vec<&str> = world
                 .resource::<crate::ui_action::UiErrorKeys>()
-                .0
+                .snapshot()
                 .iter()
                 .map(|e| e.key)
                 .collect();
@@ -3141,7 +3133,7 @@ mod tests {
         assert!(!world.resource::<crate::player::Approach>().active());
         let keys: Vec<&str> = world
             .resource::<crate::ui_action::UiErrorKeys>()
-            .0
+            .snapshot()
             .iter()
             .map(|e| e.key)
             .collect();
@@ -3183,7 +3175,7 @@ mod tests {
         assert!(rx.try_iter().next().is_none());
         let keys: Vec<&str> = world
             .resource::<crate::ui_action::UiErrorKeys>()
-            .0
+            .snapshot()
             .iter()
             .map(|e| e.key)
             .collect();
@@ -3400,7 +3392,7 @@ mod tests {
         let (world, rx) = attack_wolf_at(Vec3::new(0.0, 0.0, -85.0), 1.5);
         assert!(!world.resource::<crate::player::Approach>().active());
         assert_eq!(
-            world.resource::<crate::ui_action::UiErrorKeys>().0,
+            world.resource::<crate::ui_action::UiErrorKeys>().snapshot(),
             vec![crate::ui_action::UiError::key("ERR_AUTOFOLLOW_TOO_FAR")]
         );
         assert!(rx

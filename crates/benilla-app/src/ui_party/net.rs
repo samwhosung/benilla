@@ -40,62 +40,46 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::Disconnected, on_session_end);
 }
 
-fn on_invite(
-    In(ev): In<SessionEvent>,
-    mut group: ResMut<GroupState>,
-    mut errors: ResMut<UiErrorKeys>,
-) {
+fn on_invite(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>, errors: Res<UiErrorKeys>) {
     if let SessionEvent::GroupInvite { inviter } = ev {
-        invited(&mut group, &mut errors, &inviter);
+        invited(&mut group, &errors, &inviter);
     }
 }
 
-fn on_decline(
-    In(ev): In<SessionEvent>,
-    mut group: ResMut<GroupState>,
-    mut errors: ResMut<UiErrorKeys>,
-) {
+fn on_decline(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>, errors: Res<UiErrorKeys>) {
     if let SessionEvent::GroupDecline { name } = ev {
-        declined(&mut group, &mut errors, &name);
+        declined(&mut group, &errors, &name);
     }
 }
 
-fn on_uninvited(
-    In(ev): In<SessionEvent>,
-    mut group: ResMut<GroupState>,
-    mut errors: ResMut<UiErrorKeys>,
-) {
+fn on_uninvited(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>, errors: Res<UiErrorKeys>) {
     if let SessionEvent::GroupUninvited = ev {
-        uninvited(&mut group, &mut errors);
+        uninvited(&mut group, &errors);
     }
 }
 
 fn on_leader_changed(
     In(ev): In<SessionEvent>,
     mut group: ResMut<GroupState>,
-    mut errors: ResMut<UiErrorKeys>,
+    errors: Res<UiErrorKeys>,
     self_guid: Res<SelfGuid>,
     names: Res<NameCache>,
 ) {
     if let SessionEvent::GroupLeaderChanged { name } = ev {
-        leader_changed(&mut group, &mut errors, &name, &self_guid, &names);
+        leader_changed(&mut group, &errors, &name, &self_guid, &names);
     }
 }
 
-fn on_destroyed(
-    In(ev): In<SessionEvent>,
-    mut group: ResMut<GroupState>,
-    mut errors: ResMut<UiErrorKeys>,
-) {
+fn on_destroyed(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>, errors: Res<UiErrorKeys>) {
     if let SessionEvent::GroupDestroyed = ev {
-        destroyed(&mut group, &mut errors);
+        destroyed(&mut group, &errors);
     }
 }
 
 fn on_list(
     In(ev): In<SessionEvent>,
     mut group: ResMut<GroupState>,
-    mut errors: ResMut<UiErrorKeys>,
+    errors: Res<UiErrorKeys>,
     sounds: Res<MessageSounds>,
     mut quest: ResMut<QuestGiver>,
     self_guid: Res<SelfGuid>,
@@ -122,19 +106,8 @@ fn on_list(
             }
         }
         list(
-            &mut group,
-            &mut errors,
-            &sounds,
-            &mut quest,
-            group_type,
-            own_flags,
-            members,
-            leader,
-            loot,
-            &self_guid,
-            &names,
-            &index,
-            &commands,
+            &mut group, &errors, &sounds, &mut quest, group_type, own_flags, members, leader, loot,
+            &self_guid, &names, &index, &commands,
         );
     }
 }
@@ -142,7 +115,7 @@ fn on_list(
 fn on_command_result(
     In(ev): In<SessionEvent>,
     mut group: ResMut<GroupState>,
-    mut errors: ResMut<UiErrorKeys>,
+    errors: Res<UiErrorKeys>,
 ) {
     if let SessionEvent::PartyCommandResult {
         operation,
@@ -150,7 +123,7 @@ fn on_command_result(
         result,
     } = ev
     {
-        command_result(&mut group, &mut errors, operation, &member, result);
+        command_result(&mut group, &errors, operation, &member, result);
     }
 }
 
@@ -181,11 +154,11 @@ fn on_raid_target(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>) {
 fn on_ready_check_request(
     In(ev): In<SessionEvent>,
     mut group: ResMut<GroupState>,
-    mut errors: ResMut<UiErrorKeys>,
+    errors: Res<UiErrorKeys>,
     self_guid: Res<SelfGuid>,
 ) {
     if let SessionEvent::ReadyCheckRequest = ev {
-        ready_check_request(&mut group, &mut errors, &self_guid);
+        ready_check_request(&mut group, &errors, &self_guid);
     }
 }
 
@@ -215,36 +188,36 @@ fn on_session_end(In(_): In<SessionEvent>, mut group: ResMut<GroupState>) {
 }
 
 /// Queue the messages an `apply_*` named; `ui_action::feed_actions` resolves and shows them.
-fn push_group_lines(errors: &mut UiErrorKeys, lines: Vec<UiError>) {
-    errors.0.extend(lines);
+fn push_group_lines(errors: &UiErrorKeys, lines: Vec<UiError>) {
+    errors.extend(lines);
 }
 
 /// We lead when our guid is the leader's, the reference's test at `0x4ba3a0`.
-fn ready_check_request(group: &mut GroupState, errors: &mut UiErrorKeys, self_guid: &SelfGuid) {
+fn ready_check_request(group: &mut GroupState, errors: &UiErrorKeys, self_guid: &SelfGuid) {
     let we_lead = self_guid.0 == Some(group.leader);
     push_group_lines(errors, group.apply_ready_check_request(we_lead));
 }
 
-fn invited(group: &mut GroupState, errors: &mut UiErrorKeys, inviter: &str) {
+fn invited(group: &mut GroupState, errors: &UiErrorKeys, inviter: &str) {
     push_group_lines(errors, group.apply_invited(inviter));
 }
 
-fn declined(group: &mut GroupState, errors: &mut UiErrorKeys, name: &str) {
+fn declined(group: &mut GroupState, errors: &UiErrorKeys, name: &str) {
     push_group_lines(errors, group.apply_declined(name));
 }
 
-fn uninvited(group: &mut GroupState, errors: &mut UiErrorKeys) {
+fn uninvited(group: &mut GroupState, errors: &UiErrorKeys) {
     push_group_lines(errors, group.apply_uninvited());
 }
 
-fn destroyed(group: &mut GroupState, errors: &mut UiErrorKeys) {
+fn destroyed(group: &mut GroupState, errors: &UiErrorKeys) {
     push_group_lines(errors, group.apply_destroyed());
 }
 
 /// Our own name, cached from login (`session::connected`), picks the line; this never queries.
 fn leader_changed(
     group: &mut GroupState,
-    errors: &mut UiErrorKeys,
+    errors: &UiErrorKeys,
     name: &str,
     self_guid: &SelfGuid,
     names: &NameCache,
@@ -263,7 +236,7 @@ fn leader_changed(
 /// the answer ([`on_player_name`]).
 fn list(
     group: &mut GroupState,
-    errors: &mut UiErrorKeys,
+    errors: &UiErrorKeys,
     sounds: &MessageSounds,
     quest: &mut QuestGiver,
     group_type: u8,
@@ -409,15 +382,13 @@ pub(crate) fn roster_deactivated(
 
 fn command_result(
     group: &mut GroupState,
-    errors: &mut crate::ui_action::UiErrorKeys,
+    errors: &crate::ui_action::UiErrorKeys,
     operation: u32,
     member: &str,
     result: u32,
 ) {
     // By key, so the catalog row picks the surface; `None` is the reference's silence.
-    errors
-        .0
-        .extend(group.apply_command_result(operation, member, result));
+    errors.extend(group.apply_command_result(operation, member, result));
 }
 
 #[cfg(test)]
@@ -443,7 +414,7 @@ mod tests {
     fn a_refused_member_is_asked_again_by_the_next_list() {
         let (tx, rx) = crossbeam_channel::unbounded();
         let net = NetCommands(tx);
-        let (mut group, mut errors, mut quest) = (
+        let (mut group, errors, mut quest) = (
             GroupState::default(),
             UiErrorKeys::default(),
             QuestGiver::default(),
@@ -453,7 +424,7 @@ mod tests {
         let mut send = |names: &NameCache| {
             list(
                 &mut group,
-                &mut errors,
+                &errors,
                 &mut MessageSounds::default(),
                 &mut quest,
                 0,
@@ -483,7 +454,7 @@ mod tests {
     fn the_roster_warms_every_member_into_the_name_cache_once() {
         let (tx, rx) = crossbeam_channel::unbounded();
         let net = NetCommands(tx);
-        let (mut group, mut errors, mut quest) = (
+        let (mut group, errors, mut quest) = (
             GroupState::default(),
             UiErrorKeys::default(),
             QuestGiver::default(),
@@ -495,7 +466,7 @@ mod tests {
 
         list(
             &mut group,
-            &mut errors,
+            &errors,
             &mut MessageSounds::default(),
             &mut quest,
             0,
@@ -526,7 +497,7 @@ mod tests {
         names.insert_player(leader, "Aldwyn".into(), Some((1, 4, 1)));
         list(
             &mut group,
-            &mut errors,
+            &errors,
             &mut MessageSounds::default(),
             &mut quest,
             0,
@@ -553,7 +524,7 @@ mod tests {
     fn a_raid_list_signals_the_roster_only_once_every_name_is_held() {
         let (tx, _rx) = crossbeam_channel::unbounded();
         let net = NetCommands(tx);
-        let (mut group, mut errors, mut quest) = (
+        let (mut group, errors, mut quest) = (
             GroupState::default(),
             UiErrorKeys::default(),
             QuestGiver::default(),
@@ -564,7 +535,7 @@ mod tests {
         let mut raid = |group: &mut GroupState, names: &NameCache, group_type: u8| {
             list(
                 group,
-                &mut errors,
+                &errors,
                 &mut MessageSounds::default(),
                 &mut quest,
                 group_type,
@@ -618,7 +589,7 @@ mod tests {
     fn a_join_queues_the_invite_accept_chime_and_a_resync_does_not() {
         let (tx, _rx) = crossbeam_channel::unbounded();
         let net = NetCommands(tx);
-        let (mut group, mut errors, sounds, mut quest) = (
+        let (mut group, errors, sounds, mut quest) = (
             GroupState::default(),
             UiErrorKeys::default(),
             MessageSounds::default(),
@@ -628,7 +599,7 @@ mod tests {
         let mut send = |sounds: &MessageSounds, members: Vec<GroupMemberEntry>| {
             list(
                 &mut group,
-                &mut errors,
+                &errors,
                 sounds,
                 &mut quest,
                 0,
@@ -1005,7 +976,7 @@ mod tests {
     fn a_roster_new_member_is_seated_at_one_one_and_asked_for_only_when_unseen() {
         let (tx, rx) = crossbeam_channel::unbounded();
         let net = NetCommands(tx);
-        let (mut group, mut errors, mut quest) = (
+        let (mut group, errors, mut quest) = (
             GroupState::default(),
             UiErrorKeys::default(),
             QuestGiver::default(),
@@ -1022,7 +993,7 @@ mod tests {
         let mut send = |group: &mut GroupState, members: Vec<GroupMemberEntry>| {
             list(
                 group,
-                &mut errors,
+                &errors,
                 &mut MessageSounds::default(),
                 &mut quest,
                 0,
@@ -1080,7 +1051,7 @@ mod tests {
     fn a_resent_list_moves_a_known_members_online_bit_and_keeps_its_record() {
         let (tx, rx) = crossbeam_channel::unbounded();
         let net = NetCommands(tx);
-        let (mut group, mut errors, mut quest) = (
+        let (mut group, errors, mut quest) = (
             GroupState::default(),
             UiErrorKeys::default(),
             QuestGiver::default(),
@@ -1094,7 +1065,7 @@ mod tests {
             };
             list(
                 group,
-                &mut errors,
+                &errors,
                 &mut MessageSounds::default(),
                 &mut quest,
                 0,
@@ -1208,7 +1179,7 @@ mod tests {
                 let refused = app
                     .world()
                     .resource::<UiErrorKeys>()
-                    .0
+                    .snapshot()
                     .iter()
                     .map(|e| e.key)
                     .collect();

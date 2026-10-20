@@ -330,7 +330,7 @@ impl CastReporter<'_, '_> {
 #[derive(SystemParam)]
 pub(crate) struct CallReports<'w, 's> {
     reports: ResMut<'w, CastReports>,
-    ui_errors: ResMut<'w, crate::ui_action::UiErrorKeys>,
+    ui_errors: Res<'w, crate::ui_action::UiErrorKeys>,
     reporter: CastReporter<'w, 's>,
 }
 
@@ -340,14 +340,14 @@ pub(crate) struct ReportMark(usize, usize);
 
 impl CallReports<'_, '_> {
     pub(crate) fn mark(&self) -> ReportMark {
-        ReportMark(self.ui_errors.0.len(), self.reports.0.len())
+        ReportMark(self.ui_errors.len(), self.reports.0.len())
     }
 
     /// The reports queued since `mark`, taken off their queues and readied.
     pub(crate) fn ready_since(&mut self, script: &UiScript, mark: ReportMark) -> Vec<Ready> {
         let ReportMark(errors, reports) = mark;
-        let start = errors.min(self.ui_errors.0.len());
-        let errors: Vec<_> = self.ui_errors.0.drain(start..).collect();
+        let start = errors.min(self.ui_errors.len());
+        let errors = self.ui_errors.take_from(start);
         let mut ready: Vec<Ready> = errors
             .iter()
             .filter_map(|e| {

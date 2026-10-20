@@ -889,8 +889,8 @@ mod tests {
                         |mut pick: AttackPick,
                          mut sel: ResMut<Selection>,
                          mut seam: crate::creature_anim::AttackSeam,
-                         mut errors: ResMut<crate::ui_action::UiErrorKeys>| {
-                            pick.target(None, true, &mut sel, &mut seam, &mut errors)
+                         errors: Res<crate::ui_action::UiErrorKeys>| {
+                            pick.target(None, true, &mut sel, &mut seam, &errors)
                         },
                     )
                     .expect("the scan runs on the built client")

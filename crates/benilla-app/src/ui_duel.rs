@@ -145,7 +145,7 @@ pub(crate) mod net {
     fn on_requested(
         In(ev): In<SessionEvent>,
         mut duel: ResMut<DuelState>,
-        mut errors: ResMut<crate::ui_action::UiErrorKeys>,
+        errors: Res<crate::ui_action::UiErrorKeys>,
         commands: Res<NetCommands>,
         self_guid: Res<crate::net::SelfGuid>,
         social: Res<crate::ui_social::SocialState>,
@@ -157,7 +157,7 @@ pub(crate) mod net {
         {
             requested(
                 &mut duel,
-                &mut errors,
+                &errors,
                 &commands,
                 arbiter,
                 challenger,
@@ -178,10 +178,10 @@ pub(crate) mod net {
     fn on_complete(
         In(ev): In<SessionEvent>,
         mut duel: ResMut<DuelState>,
-        mut errors: ResMut<crate::ui_action::UiErrorKeys>,
+        errors: Res<crate::ui_action::UiErrorKeys>,
     ) {
         if let SessionEvent::DuelComplete { started } = ev {
-            complete(&mut duel, &mut errors, started);
+            complete(&mut duel, &errors, started);
         }
     }
 
@@ -212,7 +212,7 @@ pub(crate) mod net {
     /// `CMSG_DUEL_CANCELLED` and shows nothing (`0x4d4a33`).
     pub(crate) fn requested(
         duel: &mut DuelState,
-        errors: &mut crate::ui_action::UiErrorKeys,
+        errors: &crate::ui_action::UiErrorKeys,
         commands: &NetCommands,
         arbiter: u64,
         challenger: u64,
@@ -224,22 +224,18 @@ pub(crate) mod net {
             return;
         }
         if duel.apply_requested(arbiter, challenger, own) {
-            errors
-                .0
-                .push(crate::ui_action::UiError::key("ERR_DUEL_REQUESTED"));
+            errors.push(crate::ui_action::UiError::key("ERR_DUEL_REQUESTED"));
             let _ = commands.0.send(ClientCommand::DuelAccepted { arbiter });
         }
     }
 
     pub(crate) fn complete(
         duel: &mut DuelState,
-        errors: &mut crate::ui_action::UiErrorKeys,
+        errors: &crate::ui_action::UiErrorKeys,
         started: bool,
     ) {
         if duel.apply_complete(started) {
-            errors
-                .0
-                .push(crate::ui_action::UiError::key("ERR_DUEL_CANCELLED"));
+            errors.push(crate::ui_action::UiError::key("ERR_DUEL_CANCELLED"));
         }
     }
 

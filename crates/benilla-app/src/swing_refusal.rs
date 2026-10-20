@@ -133,7 +133,7 @@ fn show_swing_refusal(
     time: Res<Time>,
     mut refusal: ResMut<SwingRefusal>,
     engaged: Query<(), (With<SelfPlayer>, With<Engaged>)>,
-    mut errors: ResMut<UiErrorKeys>,
+    errors: Res<UiErrorKeys>,
 ) {
     let Some((code, due)) = refusal.0 else {
         return;
@@ -146,7 +146,7 @@ fn show_swing_refusal(
         return;
     }
     refusal.0 = Some((code, now + REPEAT));
-    errors.0.push(UiError::key(code.key()));
+    errors.push(UiError::key(code.key()));
 }
 
 /// Entering the world drops the latch: the reference's `0x5e2510`, from `ClientInitializeGame`

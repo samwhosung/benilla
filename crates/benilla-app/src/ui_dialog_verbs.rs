@@ -946,14 +946,12 @@ mod net {
     fn on_pet_unlearn_confirm(
         In(ev): In<SessionEvent>,
         mut unlearn: ResMut<PetUnlearnState>,
-        mut errors: ResMut<crate::ui_action::UiErrorKeys>,
+        errors: Res<crate::ui_action::UiErrorKeys>,
     ) {
         if let SessionEvent::PetUnlearnConfirm { trainer, cost } = ev {
             if trainer == 0 {
                 debug!("net: pet unlearn refused (zero trainer) — no dialog");
-                errors
-                    .0
-                    .push(crate::ui_action::UiError::key("ERR_TALENT_WIPE_ERROR"));
+                errors.push(crate::ui_action::UiError::key("ERR_TALENT_WIPE_ERROR"));
             } else {
                 debug!("net: trainer {trainer:#x} asks to unlearn the pet for {cost} copper");
                 unlearn.ask(trainer, cost);

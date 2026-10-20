@@ -192,7 +192,7 @@ pub(super) fn drain_petition(
     selection: Res<crate::target::Selection>,
     commands: Res<NetCommands>,
     tabard: Res<crate::ui_tabard::TabardOpen>,
-    mut errors: ResMut<crate::ui_action::UiErrorKeys>,
+    errors: Res<crate::ui_action::UiErrorKeys>,
     mut world_commands: Commands,
 ) {
     let Some(mut script) = script else {
@@ -243,7 +243,7 @@ pub(super) fn drain_petition(
                         tabard.npc().unwrap_or(0),
                         store,
                         &commands,
-                        &mut errors,
+                        &errors,
                     );
                 }
                 crate::ui_session::queue(&mut world_commands, super::close_core);
@@ -309,13 +309,13 @@ fn tabard_vendor_activate(
     designer: u64,
     player: &ObjectStore,
     commands: &NetCommands,
-    errors: &mut crate::ui_action::UiErrorKeys,
+    errors: &crate::ui_action::UiErrorKeys,
 ) {
     if designer == npc {
         return;
     }
     if player.0.unit_displayid() != player.0.unit_native_displayid() {
-        errors.0.push(crate::ui_action::UiError::key(
+        errors.push(crate::ui_action::UiError::key(
             "ERR_EMBLEMERROR_NOTABARDGEOSET",
         ));
         return;
@@ -336,11 +336,11 @@ mod tests {
 
     fn run(npc: u64, designer: u64, me: &ObjectStore) -> (Vec<ClientCommand>, Vec<&'static str>) {
         let (tx, rx) = crossbeam_channel::unbounded();
-        let mut errors = UiErrorKeys::default();
-        tabard_vendor_activate(npc, designer, me, &NetCommands(tx), &mut errors);
+        let errors = UiErrorKeys::default();
+        tabard_vendor_activate(npc, designer, me, &NetCommands(tx), &errors);
         (
             rx.try_iter().collect(),
-            errors.0.iter().map(|e| e.key).collect(),
+            errors.snapshot().iter().map(|e| e.key).collect(),
         )
     }
 

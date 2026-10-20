@@ -69,12 +69,12 @@ fn on_response(
 
 fn on_error(
     In(ev): In<SessionEvent>,
-    mut errors: ResMut<UiErrorKeys>,
+    errors: Res<UiErrorKeys>,
     mut latch: ResMut<LootLatch>,
     mut loot: ResMut<LootState>,
 ) {
     if let SessionEvent::LootError { guid, error } = ev {
-        loot_error(guid, error, &mut errors, &mut latch, &mut loot);
+        loot_error(guid, error, &errors, &mut latch, &mut loot);
     }
 }
 
@@ -113,10 +113,10 @@ fn on_master_list(In(ev): In<SessionEvent>, mut loot: ResMut<LootState>) {
     }
 }
 
-fn on_fish_verdict(In(ev): In<SessionEvent>, mut errors: ResMut<UiErrorKeys>) {
+fn on_fish_verdict(In(ev): In<SessionEvent>, errors: Res<UiErrorKeys>) {
     match ev {
-        SessionEvent::FishNotHooked => fish_verdict(false, &mut errors),
-        SessionEvent::FishEscaped => fish_verdict(true, &mut errors),
+        SessionEvent::FishNotHooked => fish_verdict(false, &errors),
+        SessionEvent::FishEscaped => fish_verdict(true, &errors),
         _ => {}
     }
 }
@@ -185,14 +185,14 @@ fn admit_response(
 /// `SMSG_FISH_ESCAPED` (the skill roll failed) or `SMSG_FISH_NOT_HOOKED` (clicked before the
 /// splash, or expired): a yellow toast, as the handlers `0x5e3fc5`/`0x5e3fe2` push ids
 /// `0x13e`/`0x13f`, type-1 entries that `DisplayError` fires as `UI_INFO_MESSAGE` (`0x49684b`).
-fn fish_verdict(escaped: bool, errors: &mut UiErrorKeys) {
+fn fish_verdict(escaped: bool, errors: &UiErrorKeys) {
     let key = if escaped {
         "ERR_FISH_ESCAPED"
     } else {
         "ERR_FISH_NOT_HOOKED"
     };
     debug!("net: fishing verdict {key}");
-    errors.0.push(UiError::key(key));
+    errors.push(UiError::key(key));
 }
 
 /// The default arm is code 7's arm (`0x5eba11 ja 0x5ebabd`), so it releases; the compare is
@@ -242,13 +242,13 @@ fn loot_refusal(reason: u8) -> LootRefusal {
 fn loot_error(
     guid: u64,
     error: u8,
-    errors: &mut UiErrorKeys,
+    errors: &UiErrorKeys,
     latch: &mut LootLatch,
     loot: &mut LootState,
 ) {
     let LootRefusal { key, releases } = loot_refusal(error);
     debug!("net: loot error {error} on {guid:#x} → {key} (releases: {releases})");
-    errors.0.push(UiError::key(key));
+    errors.push(UiError::key(key));
     if releases {
         // Guid-matched: the tail's store is unconditional, but only a matching latch reaches it.
         latch.clear_for(guid);
@@ -353,11 +353,11 @@ mod tests {
 
     #[test]
     fn fish_verdict_keys_resolve_in_the_real_global_strings() {
-        let mut errors = UiErrorKeys::default();
-        fish_verdict(false, &mut errors);
-        fish_verdict(true, &mut errors);
+        let errors = UiErrorKeys::default();
+        fish_verdict(false, &errors);
+        fish_verdict(true, &errors);
         assert_eq!(
-            errors.0,
+            errors.snapshot(),
             vec![
                 UiError::key("ERR_FISH_NOT_HOOKED"),
                 UiError::key("ERR_FISH_ESCAPED"),
@@ -472,16 +472,16 @@ mod tests {
     fn only_the_window_less_refusals_drop_the_kneel() {
         // The releasing arms plus the default, which is code 7's arm (`ja 0x5ebabd`).
         for code in [4u8, 5, 6, 7, 8, 9, 11, 0, 1, 2, 3, 15, 16, 200, 255] {
-            let mut errors = UiErrorKeys::default();
+            let errors = UiErrorKeys::default();
             let mut latch = LootLatch(Some(CORPSE));
-            loot_error(CORPSE, code, &mut errors, &mut latch, no_item!());
+            loot_error(CORPSE, code, &errors, &mut latch, no_item!());
             assert_eq!(latch.0, None, "code {code} should release");
-            assert_eq!(errors.0.len(), 1, "code {code} shows exactly one line");
+            assert_eq!(errors.len(), 1, "code {code} shows exactly one line");
         }
         for code in [10u8, 12, 13, 14] {
-            let mut errors = UiErrorKeys::default();
+            let errors = UiErrorKeys::default();
             let mut latch = LootLatch(Some(CORPSE));
-            loot_error(CORPSE, code, &mut errors, &mut latch, no_item!());
+            loot_error(CORPSE, code, &errors, &mut latch, no_item!());
             assert_eq!(
                 latch.0,
                 Some(CORPSE),
@@ -494,9 +494,9 @@ mod tests {
     /// only through `0x5eb93e`, which already required a matching latch.
     #[test]
     fn the_error_legs_clear_is_guid_matched() {
-        let mut errors = UiErrorKeys::default();
+        let errors = UiErrorKeys::default();
         let mut latch = LootLatch(Some(CHEST));
-        loot_error(CORPSE, 8, &mut errors, &mut latch, no_item!());
+        loot_error(CORPSE, 8, &errors, &mut latch, no_item!());
         assert_eq!(latch.0, Some(CHEST));
     }
 

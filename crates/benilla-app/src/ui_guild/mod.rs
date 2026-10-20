@@ -668,46 +668,39 @@ pub(crate) mod net {
     fn on_event(
         In(ev): In<SessionEvent>,
         mut guild: ResMut<GuildState>,
-        mut errors: ResMut<UiErrorKeys>,
+        errors: Res<UiErrorKeys>,
         social: Res<SocialState>,
         notify: Res<GuildMemberNotify>,
         self_guid: Res<crate::net::SelfGuid>,
     ) {
         if let SessionEvent::GuildEvent(notice) = ev {
-            event(
-                &mut guild,
-                &mut errors,
-                &social,
-                &notify,
-                self_guid.0,
-                notice,
-            );
+            event(&mut guild, &errors, &social, &notify, self_guid.0, notice);
         }
     }
 
     fn on_command_result(
         In(ev): In<SessionEvent>,
         mut guild: ResMut<GuildState>,
-        mut errors: ResMut<UiErrorKeys>,
+        errors: Res<UiErrorKeys>,
     ) {
         if let SessionEvent::GuildCommandResult(result) = ev {
-            command_result(&mut guild, &mut errors, result);
+            command_result(&mut guild, &errors, result);
         }
     }
 
     fn on_invite(
         In(ev): In<SessionEvent>,
         mut guild: ResMut<GuildState>,
-        mut errors: ResMut<UiErrorKeys>,
+        errors: Res<UiErrorKeys>,
     ) {
         if let SessionEvent::GuildInvite { inviter, guild: g } = ev {
-            invite(&mut guild, &mut errors, inviter, g);
+            invite(&mut guild, &errors, inviter, g);
         }
     }
 
-    fn on_decline(In(ev): In<SessionEvent>, mut errors: ResMut<UiErrorKeys>) {
+    fn on_decline(In(ev): In<SessionEvent>, errors: Res<UiErrorKeys>) {
         if let SessionEvent::GuildDecline { name } = ev {
-            decline(&mut errors, &name);
+            decline(&errors, &name);
         }
     }
 
@@ -725,8 +718,8 @@ pub(crate) mod net {
     }
 
     /// Queue the message ids [`lines`] named.
-    fn push_lines(errors: &mut UiErrorKeys, lines: impl IntoIterator<Item = UiError>) {
-        errors.0.extend(lines);
+    fn push_lines(errors: &UiErrorKeys, lines: impl IntoIterator<Item = UiError>) {
+        errors.extend(lines);
     }
 
     /// `SMSG_GUILD_QUERY_RESPONSE`: the callbacks a found record runs.
@@ -753,7 +746,7 @@ pub(crate) mod net {
     ///    check), since `SMSG_FRIEND_STATUS` prints the same line ungated (`0x5acde6`, `0x5ace08`).
     pub(crate) fn event(
         guild: &mut GuildState,
-        errors: &mut UiErrorKeys,
+        errors: &UiErrorKeys,
         social: &SocialState,
         notify: &GuildMemberNotify,
         self_guid: Option<u64>,
@@ -785,7 +778,7 @@ pub(crate) mod net {
     /// `SMSG_GUILD_COMMAND_RESULT`.
     pub(crate) fn command_result(
         guild: &mut GuildState,
-        errors: &mut UiErrorKeys,
+        errors: &UiErrorKeys,
         result: GuildCommandResult,
     ) {
         guild.apply_command_result(&result);
@@ -795,7 +788,7 @@ pub(crate) mod net {
     /// `SMSG_GUILD_INVITE`: the popup's show edge and the notice line printed beside it.
     pub(crate) fn invite(
         guild: &mut GuildState,
-        errors: &mut UiErrorKeys,
+        errors: &UiErrorKeys,
         inviter: String,
         guild_name: String,
     ) {
@@ -804,7 +797,7 @@ pub(crate) mod net {
     }
 
     /// `SMSG_GUILD_DECLINE`: a line, no state.
-    pub(crate) fn decline(errors: &mut UiErrorKeys, name: &str) {
+    pub(crate) fn decline(errors: &UiErrorKeys, name: &str) {
         push_lines(errors, [lines::decline_line(name)]);
     }
 

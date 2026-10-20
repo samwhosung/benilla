@@ -52,10 +52,10 @@ fn on_channel_list(In(ev): In<SessionEvent>, chat_log: Res<ChatLog>) {
     }
 }
 
-fn on_whisper_refusal(In(ev): In<SessionEvent>, mut errors: ResMut<UiErrorKeys>) {
+fn on_whisper_refusal(In(ev): In<SessionEvent>, errors: Res<UiErrorKeys>) {
     match ev {
-        SessionEvent::ChatPlayerNotFound { name } => chat_player_not_found(&name, &mut errors),
-        SessionEvent::ChatWrongFaction => chat_wrong_faction(&mut errors),
+        SessionEvent::ChatPlayerNotFound { name } => chat_player_not_found(&name, &errors),
+        SessionEvent::ChatWrongFaction => chat_wrong_faction(&errors),
         _ => {}
     }
 }
@@ -199,18 +199,16 @@ fn channel_list(channel: String, members: &[(u64, u8)], chat_log: &ChatLog) {
 
 /// A whisper target is offline: message 241, `ERR_CHAT_PLAYER_NOT_FOUND_S`, with the server's
 /// name. The key travels, since there is no VM here; its row routes it to chat.
-fn chat_player_not_found(name: &str, errors: &mut crate::ui_action::UiErrorKeys) {
-    errors.0.push(crate::ui_action::UiError::s(
+fn chat_player_not_found(name: &str, errors: &crate::ui_action::UiErrorKeys) {
+    errors.push(crate::ui_action::UiError::s(
         "ERR_CHAT_PLAYER_NOT_FOUND_S",
         name,
     ));
 }
 
 /// A cross-faction whisper was refused: message 240, `ERR_CHAT_WRONG_FACTION`.
-fn chat_wrong_faction(errors: &mut crate::ui_action::UiErrorKeys) {
-    errors
-        .0
-        .push(crate::ui_action::UiError::key("ERR_CHAT_WRONG_FACTION"));
+fn chat_wrong_faction(errors: &crate::ui_action::UiErrorKeys) {
+    errors.push(crate::ui_action::UiError::key("ERR_CHAT_WRONG_FACTION"));
 }
 
 /// `SMSG_NOTIFICATION` (`0x1cb`, handler `0x401800`): the red `UIErrorsFrame` line,

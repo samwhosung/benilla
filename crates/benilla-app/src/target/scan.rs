@@ -662,7 +662,7 @@ impl AttackPick<'_, '_> {
         may_pick: bool,
         selection: &mut Selection,
         seam: &mut crate::creature_anim::AttackSeam,
-        errors: &mut crate::ui_action::UiErrorKeys,
+        errors: &crate::ui_action::UiErrorKeys,
     ) -> Option<u64> {
         let candidate = passed.or(selection.guid);
         if candidate.is_some_and(|g| self.keeps(g)) {
@@ -691,9 +691,7 @@ impl AttackPick<'_, '_> {
         }
         let Some(guid) = selection.guid else {
             debug!("attack: nothing to attack (ERR_NO_ATTACK_TARGET)");
-            errors
-                .0
-                .push(crate::ui_action::UiError::key("ERR_NO_ATTACK_TARGET"));
+            errors.push(crate::ui_action::UiError::key("ERR_NO_ATTACK_TARGET"));
             return None;
         };
         // `0x613118`, the second resolve: a miss refuses with no message (`0x613123`).
@@ -707,9 +705,7 @@ impl AttackPick<'_, '_> {
         let unit = self.scan.relations.unit_of(guid, store);
         if !attack_target_valid(&self.scan.relations.get(), me.as_ref(), &unit, store) {
             debug!("attack: {guid:#x} fails the final gate (ERR_INVALID_ATTACK_TARGET)");
-            errors
-                .0
-                .push(crate::ui_action::UiError::key("ERR_INVALID_ATTACK_TARGET"));
+            errors.push(crate::ui_action::UiError::key("ERR_INVALID_ATTACK_TARGET"));
             return None;
         }
         Some(guid)

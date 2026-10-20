@@ -52,7 +52,7 @@ pub(super) fn feed_actions(
     // The by-key and resolved-text queues and the cover that holds the latter, as one parameter,
     // at Bevy's 16-parameter limit.
     ui_errors: (
-        ResMut<UiErrorKeys>,
+        Res<UiErrorKeys>,
         ResMut<UiErrorTexts>,
         Option<Res<crate::loading_screen::LoadingScreen>>,
     ),
@@ -68,7 +68,7 @@ pub(super) fn feed_actions(
     let Some(mut script) = script else {
         return;
     };
-    let (mut ui_error_keys, mut ui_error_texts, cover) = ui_errors;
+    let (ui_error_keys, mut ui_error_texts, cover) = ui_errors;
     let memory = memory.get(&script);
 
     // (Dis)mount refusals by key ([`mount_result_key`]); none of these strings takes arguments.
@@ -104,8 +104,8 @@ pub(super) fn feed_actions(
 
     // Client-local refusals by key ([`UiErrorKeys`]); the key also names the catalog record.
     let key_lines: Vec<Shown> = ui_error_keys
-        .0
-        .drain(..)
+        .take()
+        .into_iter()
         .filter_map(|e| {
             ui_error_text(&e, &|key| script.lua().globals().get::<String>(key).ok())
                 .map(|t| Shown::keyed(e.key, t))

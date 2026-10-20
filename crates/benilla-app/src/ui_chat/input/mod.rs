@@ -99,7 +99,7 @@ pub(super) struct ChatOut<'w, 's> {
     ping: ResMut<'w, crate::minimap::MinimapPing>,
     /// The red error line by GlobalStrings key. The system's only `UiErrorKeys` access: a second
     /// one panics on the first frame.
-    ui_errors: ResMut<'w, crate::ui_action::UiErrorKeys>,
+    ui_errors: Res<'w, crate::ui_action::UiErrorKeys>,
 }
 
 /// The verbs the stock `ChatFrame.lua` handlers call once they have parsed a line (`DoEmote`,
@@ -533,7 +533,7 @@ pub(super) fn drain_chat_input(
                 "raid" => {
                     // The wire arm's by-key queue, so the lines resolve from GlobalStrings with
                     // each row's surface and sound.
-                    chat_out.ui_errors.0.extend(crate::ui_party::synthetic_raid(
+                    chat_out.ui_errors.extend(crate::ui_party::synthetic_raid(
                         &mut group,
                         &mut names,
                         self_guid.0,
@@ -573,7 +573,6 @@ pub(super) fn drain_chat_input(
                     });
                     chat_out
                         .ui_errors
-                        .0
                         .extend(crate::ui_party::synthetic_roster(&mut group, player_xy));
                     if let (true, Some(me)) = (arg == "lead", self_guid.0) {
                         // The leader cell holds our guid, which shows the leader-only popup rows.
@@ -714,7 +713,6 @@ pub(super) fn drain_chat_input(
                         debug!("chat: emote {text_id} refused — moving (ERR_NOEMOTEWHILERUNNING)");
                         chat_out
                             .ui_errors
-                            .0
                             .push(crate::ui_action::UiError::key("ERR_NOEMOTEWHILERUNNING"));
                         continue;
                     }
@@ -1477,7 +1475,7 @@ pub(crate) fn drain_addon_chat_sends(
     self_q: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
     // The joined slots a `CHANNEL` target's number names.
     channels: Res<super::edit::ChannelState>,
-    mut errors: ResMut<crate::ui_action::UiErrorKeys>,
+    errors: Res<crate::ui_action::UiErrorKeys>,
 ) {
     let Some(mut script) = script else {
         return;
@@ -1497,7 +1495,7 @@ pub(crate) fn drain_addon_chat_sends(
         match group_gate(kind, script.chat_group()) {
             Ok(promoted) => kind = promoted,
             Err(key) => {
-                errors.0.push(crate::ui_action::UiError::key(key));
+                errors.push(crate::ui_action::UiError::key(key));
                 continue;
             }
         }
@@ -1551,9 +1549,7 @@ pub(crate) fn drain_addon_chat_sends(
         // A dead or ghost player's line is refused after the AFK clear (`0x49f592`-`0x49f5e4`,
         // `0x605f30`) unless its type is on the allowed chain (`0x49f5a3`-`0x49f5da`).
         if !dead_may_send(kind) && self_q.iter().next().is_some_and(|s| s.0.is_dead_or_ghost()) {
-            errors
-                .0
-                .push(crate::ui_action::UiError::key("ERR_CHAT_WHILE_DEAD"));
+            errors.push(crate::ui_action::UiError::key("ERR_CHAT_WHILE_DEAD"));
             continue;
         }
         let text = match wire {

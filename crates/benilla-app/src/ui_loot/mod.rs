@@ -1070,7 +1070,7 @@ fn drain_loot(
     // The move-start close runs before the VM check: it needs no Lua.
     mut move_start: ResMut<LootMoveStart>,
     mut dead: DeadUnitDeselect,
-    mut errors: ResMut<UiErrorKeys>,
+    errors: Res<UiErrorKeys>,
 ) {
     if std::mem::take(&mut move_start.0) {
         dead.after_close(close_on_move_start(&mut loot, &mut latch, &commands));
@@ -1184,7 +1184,7 @@ fn drain_loot(
             // Past the no-loot and disenchant returns, a set flag shows `ERR_LOOT_NO_UI`
             // (`0x48f272`-`0x48f280`, `DisplayError(0x87)`) before the release.
             if failed && loot.source().is_some() {
-                errors.0.push(UiError::key("ERR_LOOT_NO_UI"));
+                errors.push(UiError::key("ERR_LOOT_NO_UI"));
             }
             let closed = close_interaction(&mut loot, &mut latch, Some(&commands));
             if let Some(guid) = closed {
@@ -2512,7 +2512,9 @@ mod tests {
                 .run(chunk)
                 .unwrap();
             app.update();
-            std::mem::take(&mut app.world_mut().resource_mut::<UiErrorKeys>().0)
+            app.world_mut()
+                .resource_mut::<UiErrorKeys>()
+                .take()
                 .into_iter()
                 .map(|e| e.key)
                 .collect()

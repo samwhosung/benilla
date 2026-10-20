@@ -31,7 +31,7 @@ pub(crate) struct PetPress<'w, 's> {
     /// The talent modifiers the pet GCD's op 21 goes through: the player's tables, which gate on
     /// the spell's family and never on the caster (`0x6e6b30`).
     spell_mods: Res<'w, crate::spell::SpellModifiers>,
-    ui_errors: ResMut<'w, crate::ui_action::UiErrorKeys>,
+    ui_errors: Res<'w, crate::ui_action::UiErrorKeys>,
     pick: crate::target::AttackPick<'w, 's>,
     seam: crate::creature_anim::AttackSeam<'w, 's>,
 }
