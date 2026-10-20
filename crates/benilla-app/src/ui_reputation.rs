@@ -32,7 +32,7 @@ use crate::ui_script::{UiFeed, UiInput};
 /// Rank `r` spans `RANK_BOUNDS[r]..RANK_BOUNDS[r + 1]`, the client's table at `0x80928c`: vmangos's
 /// `PointsInRank` walked up from -42000 (`ReputationMgr.cpp:30`), the edges
 /// [`benilla_formats::reputation_rank`] ranks by. The Lua `standingID` is the rank plus one.
-const RANK_BOUNDS: [i32; 9] = [-42000, -6000, -3000, 0, 3000, 9000, 21000, 42000, 43000];
+pub(crate) const RANK_BOUNDS: [i32; 9] = [-42000, -6000, -3000, 0, 3000, 9000, 21000, 42000, 43000];
 
 /// The reputation pane's feed and outbound drain; the bindings are `benilla-ui`'s.
 pub(crate) struct UiReputationPlugin;
@@ -168,24 +168,8 @@ pub(crate) fn queue_standing_lines(
     }
 }
 
-/// `FACTION_STANDING_LABEL<rank + 1>` gendered by `0x612bf0`: a female player tries the
-/// `_FEMALE` twin and, when that is absent or empty, the bare key (`0x612c36`). A label absent
-/// altogether is the empty string, as `0x703bf0` never returns NULL.
-pub(crate) fn standing_label(
-    get: &dyn Fn(&str) -> Option<String>,
-    rank: u32,
-    female: bool,
-) -> String {
-    let key = format!("FACTION_STANDING_LABEL{}", rank.wrapping_add(1));
-    let defined = |k: &str| get(k).filter(|v| !v.is_empty());
-    female
-        .then(|| defined(&format!("{key}_FEMALE")))
-        .flatten()
-        .or_else(|| defined(&key))
-        .unwrap_or_default()
-}
-
-/// `0x62c670`'s sentence: `FACTION_STANDING_CHANGED` filled with the [`standing_label`] and the
+/// `0x62c670`'s sentence: `FACTION_STANDING_CHANGED` filled with the
+/// [`benilla_ui::strings::standing_label`] and the
 /// faction name. An absent label is an empty one, not a missing line: `0x62c670` prints with
 /// whatever `0x703bf0` gave. Only a missing template prints nothing here, where the reference
 /// would send an empty string to the chat composer.
@@ -195,7 +179,7 @@ pub(crate) fn standing_text(
     female: bool,
     faction_name: &str,
 ) -> Option<String> {
-    let label = standing_label(get, u32::from(rank.min(7)), female);
+    let label = benilla_ui::strings::standing_label(get, u32::from(rank.min(7)), female);
     let template = get("FACTION_STANDING_CHANGED").filter(|v| !v.is_empty())?;
     Some(benilla_ui::strings::fill(
         &template,

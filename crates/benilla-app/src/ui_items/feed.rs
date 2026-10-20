@@ -251,7 +251,7 @@ fn template_view(
                     .and_then(|c| c.faction_name(t.required_rep_faction))
                     .unwrap_or("UNKNOWN");
                 let standing =
-                    crate::ui_reputation::standing_label(get, t.required_rep_rank, gender() == 1);
+                    benilla_ui::strings::standing_label(get, t.required_rep_rank, gender() == 1);
                 Some(benilla_ui::strings::fill(
                     &get("ITEM_REQ_REPUTATION")?,
                     &[

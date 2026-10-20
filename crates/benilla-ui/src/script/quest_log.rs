@@ -1276,14 +1276,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     required,
                     female,
                 } => {
-                    // `FACTION_STANDING_LABEL<rank + 1>` (`0x84b5dc`) through `0x612bf0`: a female
-                    // player's `_FEMALE` text when it is not empty, else the bare key's.
+                    // `FACTION_STANDING_LABEL<rank + 1>` (`0x84b5dc`) through `0x612bf0`.
                     let label = |rank: u8| {
-                        let key = format!("FACTION_STANDING_LABEL{}", rank + 1);
-                        female
-                            .then(|| global(lua, &format!("{key}_FEMALE")))
-                            .flatten()
-                            .unwrap_or_else(|| template(&key))
+                        crate::strings::standing_label(&|k| global(lua, k), rank.into(), *female)
                     };
                     fill(
                         &template("QUEST_FACTION_NEEDED"),

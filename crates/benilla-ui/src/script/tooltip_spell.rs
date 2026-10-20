@@ -618,16 +618,11 @@ fn render_spell(
 }
 
 /// A requirement line: `key`'s template of `name`, read now; none when the key is missing.
-/// `ITEM_REQ_REPUTATION` of the faction and the rank's label, the label gendered as `0x612bf0`
-/// does: the `_FEMALE` text for a female player when it is not empty, else the bare key's.
+/// `ITEM_REQ_REPUTATION` of the faction and the rank's gendered label
+/// ([`crate::strings::standing_label`]).
 fn reputation_line(lua: &Lua, r: &ReputationRequirement) -> Option<String> {
-    let key = format!("FACTION_STANDING_LABEL{}", r.rank.saturating_add(1));
-    let label = r
-        .female
-        .then(|| crate::strings::global(lua, &format!("{key}_FEMALE")))
-        .flatten()
-        .or_else(|| crate::strings::global(lua, &key))
-        .unwrap_or_default();
+    let label =
+        crate::strings::standing_label(&|k| crate::strings::global(lua, k), r.rank, r.female);
     let template = crate::strings::global(lua, "ITEM_REQ_REPUTATION")?;
     Some(crate::strings::fill(
         &template,

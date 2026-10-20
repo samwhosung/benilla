@@ -255,6 +255,20 @@ pub fn global(lua: &mlua::Lua, key: &str) -> Option<String> {
     value.filter(|s| !s.is_empty())
 }
 
+/// `FACTION_STANDING_LABEL<rank + 1>` gendered by `0x612bf0`: a female player tries the
+/// `_FEMALE` twin and, when that is absent or empty, the bare key (`0x612c36`). A label absent
+/// altogether is the empty string, as `0x703bf0` never returns NULL. Read by the standing chat
+/// line, the quest log's faction objective and the item and spell tooltips' reputation lines.
+pub fn standing_label(get: &dyn Fn(&str) -> Option<String>, rank: u32, female: bool) -> String {
+    let key = format!("FACTION_STANDING_LABEL{}", rank.wrapping_add(1));
+    let defined = |k: &str| get(k).filter(|v| !v.is_empty());
+    female
+        .then(|| defined(&format!("{key}_FEMALE")))
+        .flatten()
+        .or_else(|| defined(&key))
+        .unwrap_or_default()
+}
+
 /// `GetText(token, nil, ordinal)`'s plural pick: `0x52fa50` formats the key and `0x703bf0`
 /// pcalls the Lua `GetText`, where `GetPluralIndex` (`LocaleProperties.lua:56`) is singular for
 /// `not ordinal or ordinal == 1`. So one or no ordinal takes the bare token, anything else the

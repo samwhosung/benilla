@@ -424,9 +424,9 @@ fn reputation_requirement(
         }
         _ => 0,
     };
-    // Every row's rank is 0 to 7; past 7 the client reads the words after the table
-    // (`0x8092ac`), and this holds it at Exalted's.
-    let floor = STANDING_FLOORS[d.min_reputation.min(7) as usize];
+    // The rank's floor in the bounds at `0x80928c`. The one row with a faction asks rank 4; past
+    // the table's ninth word the client reads on (`0x8092b0`), and this holds it at the last.
+    let floor = crate::ui_reputation::RANK_BOUNDS[d.min_reputation.min(8) as usize];
     Some(benilla_ui::script::ReputationRequirement {
         faction,
         rank: d.min_reputation,
@@ -434,9 +434,6 @@ fn reputation_requirement(
         female: player.and_then(|p| p.unit_gender()) == Some(1),
     })
 }
-
-/// The standing each rank starts at, Hated to Exalted, the table at `0x80928c`.
-const STANDING_FLOORS: [i32; 8] = [-42000, -6000, -3000, 0, 3000, 9000, 21000, 42000];
 
 /// `text`'s `$`-tokens expanded for `d` against `vctx`'s caster as `0x5075f0` does for a caller
 /// passing `at`, each read recorded in `deps`. `unmodified_points` is the aura builder's call,
