@@ -182,6 +182,41 @@ fn the_pets_event_clear_and_cheat_packets_fire_the_flush() {
     assert_eq!(rig.frame(), FLUSH, "the GM wipe");
 }
 
+/// `0x6e3050` on the pet's list runs the usable refresh between the pair and the pet's flush
+/// (`0x6e3076`, then `0x4bce90` at `0x6e3080`), with no `BAG_UPDATE_COOLDOWN`, which is the
+/// player's list's alone (`0x6e3089`), and whether or not a record matched. The cheat (`0x6e9700`)
+/// has no usable refresh, and flushes an empty list too.
+#[test]
+fn the_pets_event_and_clear_refresh_the_usable_state_inside_the_flush() {
+    let mut rig = growl_rig();
+    ui(&mut rig)
+        .run(
+            "local f = CreateFrame('Frame') f:RegisterEvent('SPELL_UPDATE_USABLE') \
+             f:RegisterEvent('BAG_UPDATE_COOLDOWN') \
+             f:SetScript('OnEvent', function() table.insert(SEEN, event) end)",
+        )
+        .unwrap();
+    rig.frame();
+    let refreshed = [
+        "ACTIONBAR_UPDATE_COOLDOWN",
+        "SPELL_UPDATE_COOLDOWN",
+        "SPELL_UPDATE_USABLE",
+        "PET_BAR_UPDATE_COOLDOWN",
+    ];
+    rig.receive(vec![SessionEvent::CooldownEvent {
+        spell_id: GROWL,
+        caster: PET,
+    }]);
+    assert_eq!(rig.frame(), refreshed, "an event with nothing parked");
+    rig.receive(vec![SessionEvent::ClearCooldown {
+        spell_id: GROWL,
+        caster: PET,
+    }]);
+    assert_eq!(rig.frame(), refreshed, "a clear with nothing held");
+    rig.receive(vec![SessionEvent::CooldownCheat { caster: PET }]);
+    assert_eq!(rig.frame(), FLUSH, "the cheat on an empty list");
+}
+
 /// The frame's mutations are one flush for the frame, as the player's list has them.
 #[test]
 fn several_mutations_in_a_frame_fire_the_flush_once() {

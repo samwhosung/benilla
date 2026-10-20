@@ -641,6 +641,58 @@ mod tests {
         );
     }
 
+    /// `IsCurrentAction`'s item arm reads the in-flight item's guid (`0x6e3d20` → `0xcecab0`) and
+    /// looks it up as an item (type mask 2, `0x4e53e1`) for its entry (`0x4e53ef`): the view
+    /// carries that entry while a cast from the item is in flight, and none once the object is
+    /// gone or for a spell's own cast.
+    #[test]
+    fn the_view_carries_the_in_flight_items_entry() {
+        use benilla_protocol::ObjectFields;
+        use bevy::ecs::system::RunSystemOnce;
+        const HEARTH: u32 = 8690;
+        const HEARTHSTONE: u32 = 6948;
+        const ITEM: u64 = 0x4000_0000_0000_0042;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.init_resource::<PendingCast>()
+            .init_resource::<QueuedMeleeSpell>()
+            .init_resource::<SpellTargeting>()
+            .init_resource::<ActiveChannel>()
+            .init_resource::<AutoRepeatActive>()
+            .init_resource::<CastReports>()
+            .init_resource::<crate::net::GuidIndex>()
+            .insert_resource(NetCommands(tx));
+        let item = app
+            .world_mut()
+            .spawn(crate::net::ObjectStore(ObjectFields::from_pairs(&[
+                (2, 0x3),
+                (3, HEARTHSTONE),
+            ])))
+            .id();
+        app.world_mut()
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(ITEM, item);
+        let item_of = |app: &mut App| {
+            app.world_mut()
+                .run_system_once(|state: CastState| state.view().item)
+                .unwrap()
+        };
+        app.world_mut().resource_mut::<PendingCast>().push_cast(
+            HEARTH,
+            Some(ITEM_FLAG_PLAYERCAST),
+            Some(ITEM),
+            Instant::now(),
+        );
+        assert_eq!(item_of(&mut app), Some(HEARTHSTONE));
+        app.world_mut().entity_mut(item).despawn();
+        assert_eq!(item_of(&mut app), None, "the object is gone");
+        app.world_mut()
+            .resource_mut::<PendingCast>()
+            .push(FIREBALL, None, Instant::now());
+        assert_eq!(item_of(&mut app), None, "a spell's own cast");
+    }
+
     #[test]
     fn a_fresh_guard_is_open() {
         let g = PendingCast::default();

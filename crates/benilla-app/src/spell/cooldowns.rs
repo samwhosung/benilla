@@ -1502,20 +1502,32 @@ mod tests {
         ));
     }
 
+    /// `0x6e3050`, behind `SMSG_COOLDOWN_EVENT`, `SMSG_CLEAR_COOLDOWN` and the cast-fail revert,
+    /// flushes after its walk whether or not a record matched (`0x6e3071`), and so does the cheat
+    /// (`0x6e9712`). The session end is no packet: it flushes only when something went.
     #[test]
-    fn cheat_wipe_and_clear_bump_the_generation_only_on_change() {
+    fn the_record_handlers_flush_whether_or_not_a_record_matched() {
         let t0 = Instant::now();
         let mut cds = Cooldowns::default();
-        let g0 = cds.generation;
+        let mut last = cds.generation;
+        let mut moved = |cds: &Cooldowns| {
+            let moved = cds.generation != last;
+            last = cds.generation;
+            moved
+        };
         cds.clear_spell(133);
+        assert!(moved(&cds), "a clear of nothing");
+        cds.cooldown_event(133, t0);
+        assert!(moved(&cds), "an event with nothing parked");
         cds.wipe();
-        assert_eq!(cds.generation, g0);
+        assert!(moved(&cds), "the cheat on an empty list");
+        cds.clear_session();
+        assert!(!moved(&cds), "a session end with nothing held");
 
         cds.start_gcd(133, &fireball(), t0, &super::SpellModifiers::default());
-        assert_ne!(cds.generation, g0);
-        let g1 = cds.generation;
-        cds.wipe();
-        assert_ne!(cds.generation, g1);
+        assert!(moved(&cds));
+        cds.clear_session();
+        assert!(moved(&cds), "a session end that drops a record");
         assert_eq!(cds.info(133, 0, Some(&fireball()), t0).remaining_ms, 0);
     }
 

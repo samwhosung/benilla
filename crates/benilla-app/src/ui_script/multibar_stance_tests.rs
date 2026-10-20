@@ -1542,7 +1542,9 @@ fn a_forms_state_change_leaves_the_shelf_down_over_the_raised_bar() {
     assert_eq!(log(&s), "");
     assert!(!shown(&s, "ShapeshiftBarMiddle"));
 
-    // A castable flip fires `SPELL_UPDATE_USABLE`; the bar greys the icon and leaves the shelf.
+    // A castable flip pushes silently: the form bar's refresh is the usable refresh's (`0x4b31c0`),
+    // whose own callers signal `SPELL_UPDATE_USABLE`. On it the bar greys the icon and leaves the
+    // shelf.
     assert_eq!(
         push_forms(
             &mut s,
@@ -1553,8 +1555,10 @@ fn a_forms_state_change_leaves_the_shelf_down_over_the_raised_bar() {
                 stance(2458, false, true, None),
             ],
         ),
-        FormsEdge::Usable
+        FormsEdge::Silent
     );
+    assert_eq!(log(&s), "");
+    s.fire_event("SPELL_UPDATE_USABLE", vec![]);
     assert_eq!(log(&s), "SPELL_UPDATE_USABLE");
     let grey = s
         .eval::<f64>("local r = ShapeshiftButton1Icon:GetVertexColor() return r")
