@@ -29,9 +29,6 @@ struct TradeOffer {
     /// on the other side's enchant slot, 0 for none. Our own window's names the partner's slot 7,
     /// the partner's names ours (`0x4c02b7`, `0x4c05d1`).
     enchant_spell_id: u32,
-    /// Our side only: each placed item's `ITEM_FIELD_FLAGS`, read off its object when it was
-    /// placed. The slot's tooltip passes that live object to the builder (`0x5342ed`).
-    object_flags: [u32; TRADE_SLOT_COUNT],
 }
 
 /// The trade session [`net`] fills and [`feed_trade`] reads, cleared on a close and on disconnect.
@@ -191,13 +188,12 @@ impl TradeSession {
 
     /// Place our item in trade slot `id_1based` client-side: vmangos sends a placement to the
     /// partner only (`TradeData.cpp:81`), never back to the placer.
-    pub(crate) fn place_own_item(&mut self, id_1based: u32, item: TradeItem, flags: u32) {
+    pub(crate) fn place_own_item(&mut self, id_1based: u32, item: TradeItem) {
         if let Some(slot) = id_1based
             .checked_sub(1)
             .and_then(|i| self.our.slots.get_mut(i as usize))
         {
             *slot = Some(item);
-            self.our.object_flags[id_1based as usize - 1] = flags;
             self.our_offer_changed();
         }
     }
@@ -641,7 +637,6 @@ fn resolve_slot(
         quality,
         inventory_type,
         lock_id: item.lock_id,
-        object_flags: None,
         wrapped: item.wrapped,
         gift_creator,
         gift_creator_guid: if item.wrapped { item.gift_creator } else { 0 },
@@ -663,7 +658,7 @@ fn own_item_at(
     store: Option<&ObjectStore>,
     objects: &Objects,
     items: &Items,
-) -> Option<(TradeItem, u32)> {
+) -> Option<TradeItem> {
     let (guid, count) = crate::ui_items::slot_guid_count(store, bag, slot, objects);
     if guid == 0 {
         return None;
@@ -671,8 +666,8 @@ fn own_item_at(
     own_item(guid, count, objects, items)
 }
 
-/// Our item object `guid` as a wire [`TradeItem`] of `count`, with its `ITEM_FIELD_FLAGS`.
-fn own_item(guid: u64, count: u32, objects: &Objects, items: &Items) -> Option<(TradeItem, u32)> {
+/// Our item object `guid` as a wire [`TradeItem`] of `count`.
+fn own_item(guid: u64, count: u32, objects: &Objects, items: &Items) -> Option<TradeItem> {
     let fields = objects.object(guid)?;
     let entry = fields.object_entry()?;
     let flags = fields.item_flags().unwrap_or(0);
@@ -684,25 +679,22 @@ fn own_item(guid: u64, count: u32, objects: &Objects, items: &Items) -> Option<(
         .template(entry, guid, Ask::Read)
         .map(|t| t.display_info_id)
         .unwrap_or(0);
-    Some((
-        TradeItem {
-            entry,
-            display_id,
-            count,
-            wrapped,
-            gift_creator: fields.item_gift_creator().unwrap_or(0),
-            perm_enchant: 0,
-            // The tooltip reads our object's maker (`0x52e247`).
-            creator: fields.item_creator().unwrap_or(0),
-            charges: 0,
-            suffix_factor: 0,
-            random_prop_id: 0,
-            lock_id: 0,
-            max_durability: 0,
-            durability: 0,
-        },
-        flags,
-    ))
+    Some(TradeItem {
+        entry,
+        display_id,
+        count,
+        wrapped,
+        gift_creator: fields.item_gift_creator().unwrap_or(0),
+        perm_enchant: 0,
+        // The tooltip reads our object's maker (`0x52e247`).
+        creator: fields.item_creator().unwrap_or(0),
+        charges: 0,
+        suffix_factor: 0,
+        random_prop_id: 0,
+        lock_id: 0,
+        max_durability: 0,
+        durability: 0,
+    })
 }
 
 /// The enchant slot, the seventh: the only row with an enchantment.
@@ -712,7 +704,6 @@ const ENCHANT_SLOT: usize = TRADE_SLOT_COUNT - 1;
 /// read for a filled slot only (`0x4c02b0`, `0x4c05c6`).
 fn resolve_side(
     offer: &TradeOffer,
-    ours: bool,
     enchant: Option<&str>,
     items: &Items,
     icons: Option<&ItemDisplays>,
@@ -722,8 +713,6 @@ fn resolve_side(
     for (i, s) in offer.slots.iter().enumerate() {
         slots[i] = s.map(|it| {
             let mut row = resolve_slot(&it, items, icons, names);
-            // Our items are live objects; the partner's are blocks (`0x5342ed`, `0x53456b`).
-            row.object_flags = ours.then_some(offer.object_flags[i]);
             if i == ENCHANT_SLOT {
                 row.enchantment = enchant.map(str::to_string);
             }
@@ -757,7 +746,6 @@ fn snapshot(
         // The partner's window carries the spell they cast on our slot 7 (`0x4c05d1`, side 1).
         player: resolve_side(
             &trade.our,
-            true,
             name(trade.their.enchant_spell_id),
             items,
             icons,
@@ -766,7 +754,6 @@ fn snapshot(
         // Our window carries the spell we cast on theirs (`0x4c02b7`, side 0).
         target: resolve_side(
             &trade.their,
-            false,
             name(trade.our.enchant_spell_id),
             items,
             icons,
@@ -853,7 +840,7 @@ fn resignal_trade_items(
                     .object(guid)
                     .and_then(|f| f.item_stack_count())
                     .unwrap_or(1);
-                let (Some(_), Some((item, flags)), Some((wire_bag, wire_slot))) = (
+                let (Some(_), Some(item), Some((wire_bag, wire_slot))) = (
                     objects.player(),
                     own_item(guid, count, &objects, &items),
                     crate::ui_items::wire_pos(bag, bag_slot),
@@ -869,8 +856,7 @@ fn resignal_trade_items(
                         slot: wire_slot,
                     },
                 );
-                let mut row = resolve_slot(&item, &items, icons.as_deref(), &names);
-                row.object_flags = Some(flags);
+                let row = resolve_slot(&item, &items, icons.as_deref(), &names);
                 script.replace_trade_slot(slot, row);
             }
         }
@@ -1170,8 +1156,8 @@ fn drain_trade(
         };
         if let Some(trade_slot) = id.checked_sub(1).and_then(|n| u8::try_from(n).ok()) {
             // vmangos echoes a placement to the partner only, so our column is filled here.
-            if let Some((item, flags)) = own_item_at(bag, slot, store, &objects, &items) {
-                trade.place_own_item(id, item, flags);
+            if let Some(item) = own_item_at(bag, slot, store, &objects, &items) {
+                trade.place_own_item(id, item);
             }
             info!(target: "trade", "set item: slot {id} <- bag {bag}/{slot} (wire {wire_bag}/{wire_slot}); sending CMSG_SET_TRADE_ITEM");
             trade.send_edit(
@@ -1310,10 +1296,10 @@ mod tests {
         let mut s = TradeSession::default();
         s.begin(0x9);
         s.open_window();
-        s.place_own_item(1, gift(true, 0x7), 0x8);
-        s.place_own_item(2, gift(false, 0x7), 0);
-        s.place_own_item(3, gift(true, 0), 0x8);
-        s.place_own_item(4, gift(true, 0x8), 0x8);
+        s.place_own_item(1, gift(true, 0x7));
+        s.place_own_item(2, gift(false, 0x7));
+        s.place_own_item(3, gift(true, 0));
+        s.place_own_item(4, gift(true, 0x8));
         s.their.slots[0] = Some(gift(true, 0x7));
         s.their.slots[1] = Some(gift(false, 0x7));
         let state = snapshot(&s, &items, None, None, &names).expect("open");
@@ -1353,7 +1339,7 @@ mod tests {
         let mut s = TradeSession::default();
         s.begin(0x9);
         s.open_window();
-        s.place_own_item(1, made(0x7), 0);
+        s.place_own_item(1, made(0x7));
         s.their.slots[0] = Some(made(0x7));
         s.their.slots[1] = Some(made(0));
         s.their.slots[2] = Some(made(0x8));
@@ -1495,7 +1481,7 @@ mod tests {
         s.partner_accepted();
         assert_eq!((s.our_accept, s.their_accept), (true, true));
 
-        s.place_own_item(2, wire_item(1234), 0);
+        s.place_own_item(2, wire_item(1234));
         assert!(s.our.slots[1].is_some(), "our slot 2 shows the placed item");
         assert_eq!(
             (s.our_accept, s.their_accept),
@@ -1724,7 +1710,7 @@ mod tests {
         assert_eq!(seen(&mut app), 1, "the click's own signal, in place");
         app.world_mut()
             .resource_mut::<TradeSession>()
-            .place_own_item(1, jerky(3), 0);
+            .place_own_item(1, jerky(3));
         app.update();
         assert_eq!(seen(&mut app), 1, "the feed re-announced the placement");
 
@@ -2417,7 +2403,7 @@ mod tests {
         let mut s = TradeSession::default();
         s.begin(0x1);
         s.open_window();
-        s.place_own_item(2, wire_item(1234), 0);
+        s.place_own_item(2, wire_item(1234));
         s.accept();
         s.partner_accepted();
         let edit = |s: &mut TradeSession| {
@@ -2436,7 +2422,7 @@ mod tests {
         assert!(s.our.slots[1].is_none() && s.take_invalidated() == [1]);
 
         // The seventh makes it 8: the same status is now stale.
-        s.place_own_item(2, wire_item(1234), 0);
+        s.place_own_item(2, wire_item(1234));
         s.accept();
         s.partner_accepted();
         edit(&mut s);
@@ -2581,7 +2567,7 @@ mod tests {
             theirs[0] = Some(wire_item(1234));
             {
                 let mut trade = app.world_mut().resource_mut::<TradeSession>();
-                trade.place_own_item(1, wire_item(2589), 0);
+                trade.place_own_item(1, wire_item(2589));
                 trade.set_own_gold(300);
                 trade.set_offer(&TradeStatusExtended {
                     their_window: true,
@@ -2851,7 +2837,7 @@ mod tests {
         // The column the app fills on the placement, as the drain would.
         app.world_mut()
             .resource_mut::<TradeSession>()
-            .place_own_item(1, wire_item(2589), 0);
+            .place_own_item(1, wire_item(2589));
         app.update();
         seen(&mut app);
         app.world_mut()
@@ -2871,7 +2857,7 @@ mod tests {
             .unwrap();
         app.world_mut()
             .resource_mut::<TradeSession>()
-            .place_own_item(1, wire_item(2589), 0);
+            .place_own_item(1, wire_item(2589));
         app.update();
         seen(&mut app);
         app.world_mut()
@@ -3124,7 +3110,6 @@ mod tests {
             .trade_player_slots()
             .expect("open trade");
         let row = slots[0].as_ref().expect("the slot is filled");
-        assert_eq!(row.object_flags, Some(0x8));
         assert_eq!(
             (row.wrapped, row.gift_creator.as_deref()),
             (true, Some("Santa"))

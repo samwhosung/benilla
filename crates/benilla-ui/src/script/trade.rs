@@ -33,10 +33,6 @@ pub struct TradeSlotItem {
     /// The wire's `lock_id`: the trade target's tooltip draws LOCKED off it (`0x534563`,
     /// `0x52bdd2`). 0 for none; the player's side ignores it.
     pub lock_id: u32,
-    /// The player's own side only: the placed item's `ITEM_FIELD_FLAGS`. Its presence means the
-    /// slot holds a live item object, which the tooltip builder's LOCKED gate reads (`0x5342ed`);
-    /// the partner's side has none.
-    pub object_flags: Option<u32>,
     /// The wire's wrapped word: the partner's block `+0x42c` (`0x534559`), which the tooltip's
     /// wrapped gates read (`0x52c991`, `0x52cc5b`). The player's side reads its object's
     /// `ITEM_FIELD_FLAGS` instead, so this only mirrors them there.
@@ -498,7 +494,6 @@ fn trade_slot_item(model: &Model, item: &cursor::CursorItem) -> TradeSlotItem {
             quality: s.quality,
             inventory_type: s.inventory_type,
             lock_id: 0,
-            object_flags: Some(s.flags),
             wrapped: s.flags & 0x8 != 0,
             gift_creator: s.gift_creator.clone(),
             gift_creator_guid: s.gift_creator_guid,
@@ -806,7 +801,6 @@ mod tests {
             quality: Some(quality),
             inventory_type: 0,
             lock_id: 0,
-            object_flags: None,
             wrapped: false,
             gift_creator: None,
             gift_creator_guid: 0,
@@ -857,7 +851,6 @@ mod tests {
             quality: None,
             inventory_type: 0,
             lock_id: 0,
-            object_flags: None,
             wrapped: false,
             gift_creator: None,
             gift_creator_guid: 0,
