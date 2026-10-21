@@ -73,6 +73,9 @@ fn load_addon_files(script: &UiScript, root: &Path, name: &str) -> Vec<String> {
 /// group, as every real session has.
 fn seat_a_hunter(root: &Path) -> UiScript {
     let mut s = UiScript::new().expect("VM");
+    // No engine behind it: the calls its Lua makes (Quiver's `SendAddonMessage` at login) are
+    // kept.
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     s.register_cvars(crate::cvars::registered_pairs());
     s.set_realm_name("Harness");
