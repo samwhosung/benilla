@@ -383,6 +383,23 @@ pub(crate) struct RollCatalogs<'a> {
     pub(crate) enchants: Option<&'a Enchants>,
 }
 
+/// The two roll catalogs as a system reads them; absent in a world that loaded no DBCs.
+#[derive(SystemParam)]
+pub(crate) struct Rolls<'w> {
+    props: Option<Res<'w, RandomProperties>>,
+    enchants: Option<Res<'w, Enchants>>,
+}
+
+impl Rolls<'_> {
+    /// The catalogs, as [`RollCatalogs`].
+    pub(crate) fn get(&self) -> RollCatalogs<'_> {
+        RollCatalogs {
+            props: self.props.as_deref(),
+            enchants: self.enchants.as_deref(),
+        }
+    }
+}
+
 impl RollCatalogs<'_> {
     /// No DBC catalogs: the plain name and no suffix lines.
     #[cfg(test)]

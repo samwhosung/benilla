@@ -830,7 +830,8 @@ pub(super) fn quality_color(quality: u32) -> &'static str {
 
 /// One item hyperlink, as the client's `0x52adb0` builds every one it shows: `SStrPrintf` over
 /// `"%s|Hitem:%d:%d:%d:%d|h[%s]|h%s"` (`0x8549c8`), the colour escape, item id, enchant id,
-/// random-property id, suffix factor, name, then the `|r` reset (`0x844538`).
+/// random-property id, suffix factor, name, then the `|r` reset (`0x844538`). Each number prints
+/// as `%d`, signed.
 pub(super) fn item_link_full(
     item_id: u32,
     enchant_id: u32,
@@ -839,9 +840,68 @@ pub(super) fn item_link_full(
     name: &str,
     quality: u32,
 ) -> String {
+    let [item_id, enchant_id, random_property_id, suffix_factor] =
+        [item_id, enchant_id, random_property_id, suffix_factor].map(|n| n as i32);
     format!(
         "|c{}|Hitem:{item_id}:{enchant_id}:{random_property_id}:{suffix_factor}|h[{name}]|h|r",
         quality_color(quality)
+    )
+}
+
+/// `CGItem_C::GetFullName` (`0x5d8bc0`): the item's name with its random property's suffix
+/// (`0x5d8b00`), or with none when `ITEM_FIELD_FLAGS` has the wrapped bit `0x8`.
+pub(crate) fn object_name(
+    fields: &ObjectFields,
+    template: &benilla_protocol::messages::ItemInfo,
+    rolls: crate::items::RollCatalogs,
+) -> String {
+    rolls.name(&template.name, object_link_numbers(fields, template).1)
+}
+
+/// The three numbers `0x52ae00` passes `0x52adb0` for an item object: the permanent enchant
+/// (`[block+0x40]`, `0x52aeb2`), 0 for a charter, whose template flag `0x2000` marks slot 0 as its
+/// petition id (`0x52aeaa`); the random property id (`+0x98`); and the property seed (`+0x94`). A
+/// wrapped item (`ITEM_FIELD_FLAGS & 0x8`) passes 0 for all three (`0x52ae66`-`0x52ae80`).
+pub(crate) fn object_link_numbers(
+    fields: &ObjectFields,
+    template: &benilla_protocol::messages::ItemInfo,
+) -> (u32, u32, u32) {
+    let wrapped =
+        fields.item_flags().unwrap_or(0) & benilla_protocol::messages::ITEM_DYNFLAG_WRAPPED != 0;
+    if wrapped {
+        return (0, 0, 0);
+    }
+    let charter = template.flags & benilla_protocol::messages::ITEM_FLAG_CHARTER != 0;
+    let enchant = if charter {
+        0
+    } else {
+        fields.item_enchant(0).unwrap_or(0) as u32
+    };
+    (
+        enchant,
+        fields.item_random_properties_id(),
+        fields.item_property_seed(),
+    )
+}
+
+/// `0x52ae00`, the link of an item object: its template's quality and [`object_name`], with
+/// [`object_link_numbers`]. Every link the client makes of an item it holds comes from here: the
+/// bag slot's (`GetContainerItemLink`, `0x4f997f`), the player's own equipped slot's
+/// (`GetInventoryItemLink`, `0x4c8ce2`) and our own trade slot's (`GetTradePlayerItemLink`,
+/// `0x4c06bc`).
+pub(crate) fn object_link(
+    fields: &ObjectFields,
+    template: &benilla_protocol::messages::ItemInfo,
+    rolls: crate::items::RollCatalogs,
+) -> String {
+    let (enchant, roll, seed) = object_link_numbers(fields, template);
+    item_link_full(
+        fields.object_entry().unwrap_or(0),
+        enchant,
+        roll,
+        seed,
+        &object_name(fields, template, rolls),
+        template.quality,
     )
 }
 

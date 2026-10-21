@@ -85,6 +85,11 @@ impl ObjectFields {
             .flatten()
             .unwrap_or(0)
     }
+    /// `ITEM_FIELD_PROPERTY_SEED` (field 43, the client's `[item+0x114]+0x94`): the fourth number
+    /// of the item's link (`0x52ae88`), 0 when unset.
+    pub fn item_property_seed(&self) -> u32 {
+        self.get_u32(43).unwrap_or(0)
+    }
     /// `ITEM_FIELD_RANDOM_PROPERTIES_ID` (field 44): the `ItemRandomProperties.dbc` suffix, 0 if
     /// none; only the name uses it (`0x5d8b00`), the roll's enchants fill enchant slots 2-6.
     pub fn item_random_properties_id(&self) -> u32 {

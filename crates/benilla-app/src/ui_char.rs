@@ -587,9 +587,9 @@ fn slot_view(
                 Some(name.clone()),
                 t.quality as i32,
                 t.display_info_id,
-                Some(crate::ui_items::item_link_full(
-                    entry, 0, roll, 0, &name, t.quality,
-                )),
+                // `GetInventoryItemLink` links the player's own item object (`0x4c8ce2` →
+                // `0x52ae00`).
+                Some(crate::ui_items::object_link(obj, t, rolls)),
                 find_equip_slot(t.inventory_type, has_relic_slot),
                 (t.class, t.subclass),
                 t.placeable_on_action_bar(),

@@ -586,15 +586,19 @@ fn answer_trade_request(
 /// A wire [`TradeItem`] as the Lua row: name and quality from the item-template cache once it
 /// answers, the icon from `display_id` via `ItemDisplayInfo.dbc`; [`resolve_side`] names slot 7's
 /// `enchantment`. The template is only read: the getters' lookups ask for it
-/// ([`run_record_callbacks`]).
+/// ([`run_record_callbacks`]). The name joins the random property's suffix (`0x5d8b00`, at
+/// `0x4c01b8` and `0x4c0405` for the partner's slots) and the link prints the record's permanent
+/// enchant, random property id and suffix factor (`0x4c040a`-`0x4c0431`); our own slots' records
+/// carry what `0x52ae00` reads off the object ([`own_item`]).
 fn resolve_slot(
     item: &TradeItem,
     items: &Items,
     icons: Option<&ItemDisplays>,
     names: &NameCache,
+    rolls: crate::items::RollCatalogs,
 ) -> TradeSlotItem {
     let template = items.template(item.entry, 0, Ask::Read);
-    let name = template.map(|t| t.name.clone());
+    let name = template.map(|t| rolls.name(&t.name, item.random_prop_id));
     let quality = template.map(|t| t.quality);
     let inventory_type = template.map_or(0, |t| t.inventory_type);
     // The icon comes from the template's display, not the wire's (`0x5d88b0([rec+0x18])`,
@@ -608,7 +612,14 @@ fn resolve_slot(
     });
     // Nil until the template answers: the link embeds the name and the quality colour.
     let link = match (name.as_deref(), quality) {
-        (Some(n), Some(q)) => Some(crate::ui_items::item_link(item.entry, n, q)),
+        (Some(n), Some(q)) => Some(crate::ui_items::item_link_full(
+            item.entry,
+            item.perm_enchant,
+            item.random_prop_id,
+            item.suffix_factor,
+            n,
+            q,
+        )),
         _ => None,
     };
     // Only a wrapped gift names its giver (`0x52e288`, `0x52e29d`). Only read: the slot tooltip's
@@ -669,22 +680,25 @@ fn own_item(guid: u64, count: u32, objects: &Objects, items: &Items) -> Option<T
     // (`0x52b789`, `0x52e32a`).
     let wrapped = flags & benilla_protocol::messages::ITEM_DYNFLAG_WRAPPED != 0;
     // Read, as the placing click reads it (`0x4bfede`).
-    let display_id = items
-        .template(entry, guid, Ask::Read)
-        .map(|t| t.display_info_id)
-        .unwrap_or(0);
+    let template = items.template(entry, guid, Ask::Read);
+    let display_id = template.map(|t| t.display_info_id).unwrap_or(0);
+    // What `GetTradePlayerItemLink` links (`0x4c06bc` → `0x52ae00`) and `GetTradePlayerItemInfo`
+    // names (`0x4c04f5` → `0x5d8bc0`): the object's enchant, roll and seed, none when wrapped.
+    let (perm_enchant, random_prop_id, suffix_factor) = template
+        .map(|t| crate::ui_items::object_link_numbers(fields, t))
+        .unwrap_or_default();
     Some(TradeItem {
         entry,
         display_id,
         count,
         wrapped,
         gift_creator: fields.item_gift_creator().unwrap_or(0),
-        perm_enchant: 0,
+        perm_enchant,
         // The tooltip reads our object's maker (`0x52e247`).
         creator: fields.item_creator().unwrap_or(0),
         charges: 0,
-        suffix_factor: 0,
-        random_prop_id: 0,
+        suffix_factor,
+        random_prop_id,
         lock_id: 0,
         max_durability: 0,
         durability: 0,
@@ -702,11 +716,12 @@ fn resolve_side(
     items: &Items,
     icons: Option<&ItemDisplays>,
     names: &NameCache,
+    rolls: crate::items::RollCatalogs,
 ) -> TradeSideState {
     let mut slots: [Option<TradeSlotItem>; TRADE_SLOT_COUNT] = Default::default();
     for (i, s) in offer.slots.iter().enumerate() {
         slots[i] = s.map(|it| {
-            let mut row = resolve_slot(&it, items, icons, names);
+            let mut row = resolve_slot(&it, items, icons, names, rolls);
             if i == ENCHANT_SLOT {
                 row.enchantment = enchant.map(str::to_string);
             }
@@ -725,6 +740,7 @@ fn snapshot(
     icons: Option<&ItemDisplays>,
     spells: Option<&crate::ui_action::Spells>,
     names: &NameCache,
+    rolls: crate::items::RollCatalogs,
 ) -> Option<TradeState> {
     if !trade.open {
         return None;
@@ -744,6 +760,7 @@ fn snapshot(
             items,
             icons,
             names,
+            rolls,
         ),
         // Our window carries the spell we cast on theirs (`0x4c02b7`, side 0).
         target: resolve_side(
@@ -752,8 +769,33 @@ fn snapshot(
             items,
             icons,
             names,
+            rolls,
         ),
     })
+}
+
+/// What [`snapshot`] resolves the rows through: the item templates, their icons, the spell names
+/// slot 7 shows and the roll catalogs.
+#[derive(bevy::ecs::system::SystemParam)]
+struct TradeRows<'w> {
+    items: Res<'w, Items>,
+    icons: Option<Res<'w, ItemDisplays>>,
+    spells: Option<Res<'w, crate::ui_action::Spells>>,
+    rolls: crate::items::Rolls<'w>,
+}
+
+impl TradeRows<'_> {
+    /// [`snapshot`] over these.
+    fn snapshot(&self, trade: &TradeSession, names: &NameCache) -> Option<TradeState> {
+        snapshot(
+            trade,
+            &self.items,
+            self.icons.as_deref(),
+            self.spells.as_deref(),
+            names,
+            self.rolls.get(),
+        )
+    }
 }
 
 /// Where the trade scan has read the item notices to, shared by its scheduled run and the close
@@ -800,7 +842,9 @@ fn resignal_trade_items(
     items: Res<Items>,
     icons: Option<Res<ItemDisplays>>,
     names: Res<NameCache>,
+    rolls: crate::items::Rolls,
 ) {
+    let rolls = rolls.get();
     hosted_vm.run(|script| {
         use crate::item_watch::TradeTouch;
         let touches: Vec<TradeTouch> = cursor
@@ -853,7 +897,7 @@ fn resignal_trade_items(
                             slot: wire_slot,
                         },
                     );
-                    let row = resolve_slot(&item, &items, icons.as_deref(), &names);
+                    let row = resolve_slot(&item, &items, icons.as_deref(), &names, rolls);
                     script.replace_trade_slot(slot, row);
                 }
             }
@@ -866,9 +910,7 @@ fn resignal_trade_items(
 fn feed_trade(
     mut hosted_vm: crate::script_calls::HostedVm,
     mut trade: ResMut<TradeSession>,
-    items: Res<Items>,
-    icons: Option<Res<ItemDisplays>>,
-    spells: Option<Res<crate::ui_action::Spells>>,
+    rows: TradeRows,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
     errors: Res<crate::ui_action::UiErrorKeys>,
@@ -899,7 +941,7 @@ fn feed_trade(
             *last_their_gold = 0;
         }
 
-        let fresh = snapshot(&trade, &items, icons.as_deref(), spells.as_deref(), &names);
+        let fresh = rows.snapshot(&trade, &names);
         // A close is the core's, which shut the VM's window and left both offers in place; a
         // disconnect's clear tells it nothing.
         let opened = !*last_open && trade.is_open();
@@ -1268,7 +1310,13 @@ mod tests {
         items.insert_template(1234, Some(sword));
         items.insert_template(1235, Some(crate::items::test_template("Linen Cloth")));
 
-        let row = resolve_slot(&wire_item(1234), &items, None, &NameCache::default());
+        let row = resolve_slot(
+            &wire_item(1234),
+            &items,
+            None,
+            &NameCache::default(),
+            crate::items::RollCatalogs::NONE,
+        );
         assert_eq!((row.quality, row.inventory_type), (Some(4), 13));
         // The icon is the template's display's, the question mark when that row is missing, and
         // left to the getter while the template is unanswered.
@@ -1277,12 +1325,31 @@ mod tests {
             Some("Interface\\Icons\\INV_Misc_QuestionMark")
         );
         assert_eq!(
-            resolve_slot(&wire_item(1236), &items, None, &NameCache::default(),).texture,
+            resolve_slot(
+                &wire_item(1236),
+                &items,
+                None,
+                &NameCache::default(),
+                crate::items::RollCatalogs::NONE
+            )
+            .texture,
             None
         );
-        let row = resolve_slot(&wire_item(1235), &items, None, &NameCache::default());
+        let row = resolve_slot(
+            &wire_item(1235),
+            &items,
+            None,
+            &NameCache::default(),
+            crate::items::RollCatalogs::NONE,
+        );
         assert_eq!((row.quality, row.inventory_type), (Some(1), 0));
-        let row = resolve_slot(&wire_item(1236), &items, None, &NameCache::default());
+        let row = resolve_slot(
+            &wire_item(1236),
+            &items,
+            None,
+            &NameCache::default(),
+            crate::items::RollCatalogs::NONE,
+        );
         assert_eq!((row.quality, row.inventory_type), (None, 0));
     }
 
@@ -1301,10 +1368,28 @@ mod tests {
             suffix_factor: 77,
             ..wire_item(1234)
         };
-        let row = resolve_slot(&item, &items, None, &NameCache::default());
+        let props =
+            crate::items::RandomProperties(benilla_formats::RandomPropertyCatalog::from_rows(
+                [(
+                    862,
+                    benilla_formats::RandomProperty {
+                        suffix: "of the Monkey".into(),
+                        enchants: [0; 5],
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            ));
+        let rolls = crate::items::RollCatalogs {
+            props: Some(&props),
+            enchants: None,
+        };
+        let row = resolve_slot(&item, &items, None, &NameCache::default(), rolls);
+        // The name joins the suffix as `GetTradeTargetItemInfo` names it (`0x4c01b8`).
+        assert_eq!(row.name.as_deref(), Some("Bloodrazor of the Monkey"));
         assert_eq!(
             row.link.as_deref(),
-            Some("|cff0070dd|Hitem:1234:1900:862:77|h[Bloodrazor]|h|r")
+            Some("|cff0070dd|Hitem:1234:1900:862:77|h[Bloodrazor of the Monkey]|h|r")
         );
     }
 
@@ -1338,9 +1423,10 @@ mod tests {
             .expect("the item streams");
         let row = resolve_slot(
             &item,
-            &world.resource::<Items>(),
+            world.resource::<Items>(),
             None,
             &NameCache::default(),
+            crate::items::RollCatalogs::NONE,
         );
         assert_eq!(
             row.link.as_deref(),
@@ -1371,7 +1457,15 @@ mod tests {
         s.place_own_item(4, gift(true, 0x8));
         s.their.slots[0] = Some(gift(true, 0x7));
         s.their.slots[1] = Some(gift(false, 0x7));
-        let state = snapshot(&s, &items, None, None, &names).expect("open");
+        let state = snapshot(
+            &s,
+            &items,
+            None,
+            None,
+            &names,
+            crate::items::RollCatalogs::NONE,
+        )
+        .expect("open");
         let giver = |side: &TradeSideState, i: usize| {
             let row = side.slots[i].as_ref().expect("filled");
             (row.wrapped, row.gift_creator.clone())
@@ -1412,7 +1506,15 @@ mod tests {
         s.their.slots[0] = Some(made(0x7));
         s.their.slots[1] = Some(made(0));
         s.their.slots[2] = Some(made(0x8));
-        let state = snapshot(&s, &items, None, None, &names).expect("open");
+        let state = snapshot(
+            &s,
+            &items,
+            None,
+            None,
+            &names,
+            crate::items::RollCatalogs::NONE,
+        )
+        .expect("open");
         let maker = |side: &TradeSideState, i: usize| {
             let row = side.slots[i].as_ref().expect("filled");
             (row.creator.clone(), row.creator_guid)
