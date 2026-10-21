@@ -204,6 +204,8 @@ fn drive_mouseover_tooltip(
     // `ChrClasses.dbc` field 16, `UnitHasRelicSlot`'s input, and the form table the creature type
     // reads.
     tables: SnapshotTables,
+    // The guild cache, the hovered player's guild leg.
+    guild: Res<crate::ui_guild::GuildState>,
 ) {
     hosted_vm.run(|script| {
         let Some(script) = script else {
@@ -246,6 +248,8 @@ fn drive_mouseover_tooltip(
             // resolver `0x515970` reads for `"mouseover"`, so `UnitIsUnit` can match it.
             let mut s = snapshot(store, guid, name, reaction, chr, types);
             s.player_reaction = player_reaction(&rel, &subject, me.as_ref());
+            // `GetGuildInfo` reads any token's object (`0x4c9382`), its guild from the cache.
+            s.guild = crate::ui_guild::cached_unit_guild(&store.0, &guild);
             enrich_unit(
                 &mut s,
                 guid,

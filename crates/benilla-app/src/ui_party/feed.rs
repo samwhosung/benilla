@@ -39,6 +39,8 @@ pub(crate) struct FedParty {
     /// defeat its `is_changed`) and the area under us (our raid row's zone).
     names_generation: gate::Watch,
     area: gate::Watch,
+    /// The guild cache's generation, every held member's guild leg.
+    guild_generation: gate::Watch,
     raid_units: Vec<Option<UnitState>>,
     /// `partypet1..4` and `raidpet1..40` (see [`pets`]).
     pets: pets::FedPets,
@@ -151,6 +153,7 @@ pub(crate) fn feed_party(
         // The gate also opens on a despawn, which `Changed` misses. Solo, it almost always stays
         // shut.
         let names_moved = fed.names_generation.moved(names.generation());
+        let guild_moved = fed.guild_generation.moved(guild.identity_generation());
         let area_moved = fed.area.moved(here.area().map_or(u64::MAX, u64::from));
         let group_changed = group.is_changed();
         let index_changed = index.is_changed();
@@ -189,6 +192,7 @@ pub(crate) fn feed_party(
             &[
                 ("vm_reset", vm_reset),
                 ("names", names_moved),
+                ("guild", guild_moved),
                 ("area", area_moved),
                 ("group", group_changed),
                 ("index", index_changed),
@@ -202,6 +206,7 @@ pub(crate) fn feed_party(
         let gate = gate::Gate::new(
             vm_reset
                 || names_moved
+                || guild_moved
                 || area_moved
                 || group_changed
                 || index_changed
@@ -380,7 +385,9 @@ pub(crate) fn feed_party(
                         .map(str::to_string);
                     let mut s = match self_pair.filter(|(_, g, _)| g.0 == *guid) {
                         Some((_, _, store)) => {
-                            crate::ui_unit::snapshot(store, *guid, name, 0, chr, types)
+                            let mut s = crate::ui_unit::snapshot(store, *guid, name, 0, chr, types);
+                            s.guild = crate::ui_guild::cached_unit_guild(&store.0, &guild);
+                            s
                         }
                         // No object of ours, as across a worldport: the row's guid still names us,
                         // through the roster (`0x491900`), the name cache (`0x5171eb`) and the row
@@ -729,7 +736,7 @@ fn member_unit_state(
     // The name cache, whose record answers race, class and sex for a member with no object.
     names: &NameCache,
     // The guild cache, which a held member's guild leg reads without asking.
-    _guild: &crate::ui_guild::GuildState,
+    guild: &crate::ui_guild::GuildState,
     // `ChrRaces.dbc` and `ChrClasses.dbc`: the names and the relic slot, which only the live leg
     // has a class byte to key by, so an unstreamed paladin reads no relic slot.
     classes: crate::ui_unit::UnitNames<'_>,
@@ -738,7 +745,11 @@ fn member_unit_state(
 ) -> UnitState {
     let mut s = match store {
         Some(store) => {
-            crate::ui_unit::snapshot(store, m.guid, Some(m.name.clone()), 0, classes, types)
+            let mut s =
+                crate::ui_unit::snapshot(store, m.guid, Some(m.name.clone()), 0, classes, types);
+            // `GetGuildInfo` reads any token's object (`0x4c9382`), its guild from the cache.
+            s.guild = crate::ui_guild::cached_unit_guild(&store.0, guild);
+            s
         }
         // Unstreamed: the roster record, snapshotted from the descriptor at despawn (`0x5f0880`),
         // seated at 1/1 for a member never seen (`0x4e82d0`) and patched by the wire. The
