@@ -124,7 +124,7 @@ enum Pending {
 }
 
 impl Pending {
-    /// The same item a frame of `step` older: a name lookup's first try asks, the rest read.
+    /// The same item `step` tries older: only a lookup's first try asks the server.
     fn waited(mut self, step: u16) -> Self {
         match &mut self {
             Pending::Wire { tries, .. }
