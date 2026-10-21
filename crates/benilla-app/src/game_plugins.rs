@@ -1715,8 +1715,6 @@ pub(crate) mod schedule_tests {
          "`pending` holds only the VM's own `Screenshot()` asks, and the take spawns a capture, publishing nothing"),
         ("screenshot.rs", "report_captures", Because::FilledByVm,
          "the outcome chain starts with the VM's own `Screenshot()` call"),
-        ("tutorial.rs", "drain_tutorials", Because::FilledByVm,
-         "`sends` exist only after Lua acknowledged, cleared or reset a flag, and go to the wire"),
         ("ui_action/drain.rs", "drain_click_casts", Because::FilledByVm,
          "filled only by a world right-click on a GameObject or a body; the drain sends casts to the wire"),
         ("ui_bank/mod.rs", "feed_bank", Because::PlayerRoundTrip,

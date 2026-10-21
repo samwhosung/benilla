@@ -1925,6 +1925,12 @@ mod tests {
                  `ShowFriends` too",
             ),
             (
+                "PARTY_INVITE_CANCEL",
+                "UIParent.lua — the invite popup's hide. Its one signal is `SMSG_GROUP_CANCEL`'s \
+                 handler (`0x5e6770`, opcode `0x71`, reads a string, then calls \
+                 `0x48f440`); benilla does not read that packet, and vmangos never sends it",
+            ),
+            (
                 "GOSSIP_ENTER_CODE",
                 "UIParent.lua — the code-entry gossip option (a door with a combination); \
                  benilla's gossip feed carries no code-entry option kind yet",
