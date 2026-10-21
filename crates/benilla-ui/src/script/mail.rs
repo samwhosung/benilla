@@ -48,7 +48,8 @@ pub struct MailInboxRow {
     pub message_type: u8,
     /// The `MailTemplate.dbc` id (`[rec+0x25c]`), 0 for none: a body `TakeInboxTextItem` can copy.
     pub mail_template_id: u32,
-    /// `sender_guid.is_some() && !was_returned`, the Reply button's gate (`MailFrame.lua:281`).
+    /// A player's mail off the GM stationery (`0x4aefa5`-`0x4aefbc`), the Reply button's gate
+    /// (`MailFrame.lua:281`).
     pub can_reply: bool,
     /// `stationery == 61`: a GM mail (vmangos `MAIL_STATIONERY_GM`, `Mail.h:85`).
     pub is_gm: bool,

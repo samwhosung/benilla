@@ -335,10 +335,12 @@ fn resolve_row(
     // The VM's GlobalStrings, for the auction subject: the strings are the install's, never ours.
     get_text: &dyn Fn(&str) -> Option<String>,
 ) -> MailInboxRow {
+    // The GM flag is the stationery alone (`0x4aeda1`); the reply flag is a player's mail off it,
+    // returned or not (`0x4aefa5`-`0x4aefbc`), which `MailFrame.lua:281` reads.
     let is_gm = entry.stationery == STATIONERY_GM;
     let returned = entry.checked & CHECKED_RETURNED != 0;
-    // Reply only to an unreturned mail from a player (`MailFrame.lua:281` reads it).
-    let can_reply = entry.sender_guid.is_some() && !returned;
+    let player_mail = entry.message_type == mail_message_type::NORMAL;
+    let can_reply = player_mail && !is_gm;
 
     let (item_id, item_roll, item_count, item_name, item_texture, item_quality) = match &entry.item
     {
@@ -366,9 +368,15 @@ fn resolve_row(
         (att.charges as i32, (att.durability, att.durability_max))
     });
 
-    let sender = entry
-        .sender_guid
-        .and_then(|g| names.resolve_player(g, ask).map(str::to_string));
+    // A player's GM letter is from `GM_EMAIL_NAME`, `""` when the string is missing
+    // (`0x4aedbd`-`0x4aedcb`, `0x703bf0`); any other player's mail from its sender's name.
+    let sender = if player_mail && is_gm {
+        Some(get_text("GM_EMAIL_NAME").unwrap_or_default())
+    } else {
+        entry
+            .sender_guid
+            .and_then(|g| names.resolve_player(g, ask).map(str::to_string))
+    };
 
     let stationery_texture = stationery
         .map(|s| s.0.texture(entry.stationery).to_string())
@@ -1165,7 +1173,7 @@ mod tests {
         );
         assert!(row.can_reply);
 
-        // A returned mail: not replyable.
+        // A returned mail: replyable still (`0x4aefa5`-`0x4aefbc` test no returned bit).
         let returned = entry(2, Some(0xA), CHECKED_RETURNED, 30.0);
         let row = resolve_row(
             &returned,
@@ -1180,10 +1188,11 @@ mod tests {
             &no_macros(&states),
             &no_strings,
         );
-        assert!(!row.can_reply);
+        assert!(row.can_reply);
 
-        // A system mail, with no sender guid: not replyable.
-        let system = entry(3, None, 0, 30.0);
+        // A creature's mail: not replyable.
+        let mut system = entry(3, None, 0, 30.0);
+        system.message_type = mail_message_type::CREATURE;
         let row = resolve_row(
             &system,
             &bodies,
