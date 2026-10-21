@@ -20,9 +20,8 @@ pub(crate) mod auction_mail {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AuctionSubject {
     pub(crate) entry: u32,
-    /// The random-property roll. Parsed, not applied: the reference names the item with it
-    /// (`[rec+0x250]`, `[rec+0x254]`), and the displayed subject here does not.
-    #[allow(dead_code)]
+    /// The random-property roll, which names the item's suffix in the subject and the invoice
+    /// (`[rec+0x254]`, `0x5d8b00`).
     pub(crate) random_property: i32,
     pub(crate) result: u32,
 }

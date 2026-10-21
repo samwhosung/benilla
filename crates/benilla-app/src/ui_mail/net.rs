@@ -40,6 +40,7 @@ struct ListReads<'w, 's> {
     filter: Option<Res<'w, crate::text_filter::TextFilter>>,
     switches: Option<Res<'w, crate::text_filter::TextFilterSwitches>>,
     script: Option<NonSend<'w, benilla_ui::script::UiScript>>,
+    props: Option<Res<'w, crate::items::RandomProperties>>,
 }
 
 fn on_mail_list(
@@ -69,7 +70,15 @@ fn on_mail_list(
             &commands,
             |guid| social.is_ignored(guid),
             first_paper,
-            |raw| super::auction_subject(raw, &reads.items, Ask::Event(&commands), &get_text),
+            |raw| {
+                super::auction_subject(
+                    raw,
+                    &reads.items,
+                    reads.props.as_deref(),
+                    Ask::Event(&commands),
+                    &get_text,
+                )
+            },
             |subject| {
                 if let Some(filter) = reads.filter.as_deref() {
                     filter.mask(enabled, subject);

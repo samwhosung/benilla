@@ -336,17 +336,20 @@ mod invoice;
 use invoice::auction_mail;
 
 /// An auction notice's subject as `0x4ace70` writes it once the notice's item is held
-/// (`0x4acf04`): the outcome's `AUCTION_*_MAIL_SUBJECT` (`0x4acfec`) with the item's name, `""`
+/// (`0x4acf04`): the outcome's `AUCTION_*_MAIL_SUBJECT` (`0x4acfec`) with the item's name and
+/// its roll's suffix (`0x4acf5d` → `0x5d8b00`), `""`
 /// when the string is missing or empty (`0x4acf99`-`0x4acfbd`). `None` for a subject that is not
 /// the triplet, and for an item not held, which the lookup asks for (`0x4acf38`).
 pub(super) fn auction_subject(
     raw: &str,
     items: &Items,
+    props: Option<&crate::items::RandomProperties>,
     ask: Ask<'_>,
     get_text: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
     let notice = invoice::parse_subject(raw)?;
-    let name = &items.template(notice.entry, 0, ask)?.name;
+    let template = items.template(notice.entry, 0, ask)?;
+    let name = &crate::items::item_display_name(&template.name, notice.random_property, props);
     Some(
         invoice::subject_key(notice.result)
             .and_then(get_text)
@@ -468,15 +471,18 @@ fn resolve_row(
         .then(|| invoice::parse_subject(&entry.subject))
         .flatten();
     // The notice's item comes from the subject: a sold notice names an item it does not carry.
-    let notice_item_name = auction
-        .and_then(|a| items.template(a.entry, 0, ask))
-        .map(|t| t.name.clone());
+    // The invoice names it with the roll's suffix (`0x4af430` → `0x5d8b00`).
+    let notice_item_name = auction.and_then(|a| {
+        items
+            .template(a.entry, 0, ask)
+            .map(|t| crate::items::item_display_name(&t.name, a.random_property, rolls.props))
+    });
     // The list parse's rewrite stands, masked; else the template's callback rewrites the raw
     // triplet once the item lands, unmasked, and until then the list's masked triplet shows.
     let subject = match listed {
         Some(l) if l.rewritten => l.text.clone(),
         _ => auction
-            .and_then(|_| auction_subject(&entry.subject, items, ask, get_text))
+            .and_then(|_| auction_subject(&entry.subject, items, rolls.props, ask, get_text))
             .or_else(|| listed.map(|l| l.text.clone()))
             .unwrap_or_else(|| entry.subject.clone()),
     };
