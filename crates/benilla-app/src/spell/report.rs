@@ -160,6 +160,15 @@ impl CastCore<'_> {
         slot
     }
 
+    /// [`Self::cancel`], answering the ordinary cast it popped, whose local teardown is the
+    /// caller's.
+    pub(crate) fn cancel_cast(&mut self, failed: bool, send: bool, reason: u8) -> Option<u32> {
+        match self.cancel(failed, send, reason) {
+            Some(Inflight::Cast(spell_id)) => Some(spell_id),
+            _ => None,
+        }
+    }
+
     /// The merge's range refusal re-arms the cursor as its attempt left it
     /// ([`super::targeting`]'s `merge`, a deviation): the word, the caster, and its spell over
     /// whatever the cancel's pop restored when the attempt had pushed it, unsignalled.

@@ -219,10 +219,12 @@ impl StartGate {
 }
 
 /// The local StartAttack, reference `0x5ecb70`: it returns first when [`StartGate::refuses`];
-/// the swing send (`0x5eccfd`) is skipped while attacking unless a stop is in flight (`[+0xc54]`,
-/// which the target switch passes as `stop_in_flight`); the tail, melee sheath snap, precast bit
-/// and auto-repeat cancel (`0x5ecd78`), always runs, so melee and auto-shot are exclusive. Callers own
-/// the other entry checks: no call from a cast press while engaged (`0x6e51cb`) and the
+/// it reads the caster's precast twice, cancelling the cast in flight for a ranged one and
+/// returning after the stand for one auto-attack interrupts; the swing send (`0x5eccfd`) is
+/// skipped while attacking unless a stop is in flight (`[+0xc54]`, which the target switch passes
+/// as `stop_in_flight`); the tail, melee sheath snap, precast bit and auto-repeat cancel
+/// (`0x5ecd78`), runs past both reads, so melee and auto-shot are exclusive. Callers own the
+/// other entry checks: no call from a cast press while engaged (`0x6e51cb`) and the
 /// attackability walk (`0x606980`).
 pub(crate) fn start_attack_local(
     entity: Entity,
@@ -234,17 +236,35 @@ pub(crate) fn start_attack_local(
     sheath: &mut MessageWriter<SheathRequest>,
     stand: &mut MessageWriter<crate::player::StandStateRequest>,
     edits: &UnitEdits,
-    _spells: Option<&crate::ui_action::Spells>,
+    spells: Option<&crate::ui_action::Spells>,
     core: &mut crate::spell::CastCore,
 ) {
-    let net = core.net;
     if gate.refuses() {
         return;
     }
+    // Both reads take the caster's precast spell (`+0xc8c`, `0x5ecc56` and `0x5eccaf`) as the
+    // queue answers it, which a send earlier in the pass may have just started (TryCast's tail).
+    let precast_record = || {
+        let spell_id = edits.precast(entity)?.spell_id;
+        spells?.catalog.get(spell_id)
+    };
+    // A ranged spell's precast (`Attributes & 0x2`, `0x5ecc79`) cancels what is in flight,
+    // `CancelCast(1, 1, 0x1c)` (`0x5ecc85`), and the attack goes on.
+    if precast_record().is_some_and(|d| d.ranged_slot()) {
+        if let Some(spell_id) = core.cancel_cast(true, true, crate::spell::REASON_ERROR) {
+            edits.push(UnitEdit::AbortCasting { entity, spell_id });
+        }
+    }
+    let net = core.net;
     // Starting an attack stands you up (`0x5ecc9b`), after the attackability check but before
     // the range logic and the already-attacking skip, so a re-issued or out-of-reach attack
     // stands you too.
     stand.write(crate::player::StandStateRequest { state: 0 });
+    // A precast that auto-attack interrupts (`InterruptFlags & 0x8`, `0x5eccd0`) returns here,
+    // ahead of the swing and the whole tail (`0x5eccd4` → `0x5ecd9a`).
+    if precast_record().is_some_and(|d| d.interrupt_flags & INTERRUPT_AUTO_ATTACK != 0) {
+        return;
+    }
     if !engaged || stop_in_flight {
         let _ = net
             .0
@@ -260,6 +280,9 @@ pub(crate) fn start_attack_local(
     edits.push(UnitEdit::EndPrecastBusy(entity));
     cancel_auto_repeat_local(Some(entity), auto_repeat, edits, net);
 }
+
+/// `SPELL_INTERRUPT_FLAG_AUTOATTACK`: auto-attack interrupts the spell.
+const INTERRUPT_AUTO_ATTACK: u32 = 0x8;
 
 /// The Attack toggle, reference `0x6131a0` (the Attack pseudo-spell, `0x6e4c7a`): stop when
 /// attacking with control (`0x6131ce`), else start, which returns at a clear `[0xb4b3e4]` too. Only

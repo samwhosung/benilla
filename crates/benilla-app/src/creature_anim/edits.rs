@@ -15,7 +15,12 @@ use bevy::prelude::*;
 
 use bevy::ecs::entity::EntityHashMap;
 
-use super::{precast, AutoRepeatArmed, Casting, NockLatch, NockedAmmo, Precast};
+use bevy::ecs::message::Messages;
+
+use super::{
+    precast, AutoRepeatArmed, CastEvent, CastEventKind, Casting, NockLatch, NockedAmmo, PlaySeq,
+    Precast,
+};
 
 /// One queued change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +28,10 @@ pub(crate) enum UnitEdit {
     /// The cast's reap (`0x614150(spellId, 0)`, keyed by the spell): its [`Casting`], while that
     /// is still this spell's.
     ReapCasting { entity: Entity, spell_id: u32 },
+    /// `CancelCast`'s local teardown of the cast it popped, from a seam with no message writer
+    /// (StartAttack's, `0x5ecc85`): the reap, and the failed cast event the server's echo would
+    /// bring, stamped as it applies.
+    AbortCasting { entity: Entity, spell_id: u32 },
     /// The sticky auto-repeat arm (`0x6e593b`, `|= 0x200`).
     ArmAutoRepeat(Entity),
     /// The local auto-repeat cancel's clear (`0x6ea080`): the arm (`0x6ea113`), the precast of
@@ -50,7 +59,9 @@ impl UnitEdit {
     #[cfg(test)]
     pub(crate) fn writes(&self) -> Vec<std::any::TypeId> {
         match self {
-            Self::ReapCasting { .. } => vec![std::any::TypeId::of::<Casting>()],
+            Self::ReapCasting { .. } | Self::AbortCasting { .. } => {
+                vec![std::any::TypeId::of::<Casting>()]
+            }
             Self::ArmAutoRepeat(_) => vec![std::any::TypeId::of::<AutoRepeatArmed>()],
             Self::ClearAutoRepeat { .. } => vec![
                 std::any::TypeId::of::<AutoRepeatArmed>(),
@@ -70,6 +81,10 @@ impl UnitEdit {
     pub(crate) fn every(entity: Entity) -> Vec<UnitEdit> {
         let every = vec![
             Self::ReapCasting {
+                entity,
+                spell_id: 0,
+            },
+            Self::AbortCasting {
                 entity,
                 spell_id: 0,
             },
@@ -97,6 +112,7 @@ impl UnitEdit {
         for edit in &every {
             match edit {
                 Self::ReapCasting { .. }
+                | Self::AbortCasting { .. }
                 | Self::ArmAutoRepeat(_)
                 | Self::ClearAutoRepeat { .. }
                 | Self::StartPrecast { .. }
@@ -123,7 +139,7 @@ impl UnitEdit {
                 Some((entity, Change::End(Some(spell_id))))
             }
             Self::EndPrecastBusy(entity) => Some((entity, Change::Busy)),
-            Self::ReapCasting { .. } | Self::ArmAutoRepeat(_) => None,
+            Self::ReapCasting { .. } | Self::AbortCasting { .. } | Self::ArmAutoRepeat(_) => None,
         }
     }
 }
@@ -194,17 +210,36 @@ pub(crate) fn flush_unit_edits(edits: Res<UnitEdits>, mut commands: Commands) {
     }
 }
 
+/// `0x614150(spellId, 0)`: `entity`'s [`Casting`], while it is still `spell_id`'s.
+fn reap(world: &mut World, entity: Entity, spell_id: u32) {
+    if let Ok(mut unit) = world.get_entity_mut(entity) {
+        if unit
+            .get::<Casting>()
+            .is_some_and(|c| c.spell_id == spell_id)
+        {
+            unit.remove::<Casting>();
+        }
+    }
+}
+
 fn apply(world: &mut World, edits: Vec<UnitEdit>) {
     for edit in edits {
         match edit {
-            UnitEdit::ReapCasting { entity, spell_id } => {
-                if let Ok(mut unit) = world.get_entity_mut(entity) {
-                    if unit
-                        .get::<Casting>()
-                        .is_some_and(|c| c.spell_id == spell_id)
-                    {
-                        unit.remove::<Casting>();
-                    }
+            UnitEdit::ReapCasting { entity, spell_id } => reap(world, entity, spell_id),
+            UnitEdit::AbortCasting { entity, spell_id } => {
+                reap(world, entity, spell_id);
+                let seq = world.get_resource_mut::<PlaySeq>().map(|mut s| s.next());
+                if let (Some(seq), Some(mut events)) =
+                    (seq, world.get_resource_mut::<Messages<CastEvent>>())
+                {
+                    events.write(CastEvent {
+                        entity,
+                        spell_id,
+                        kind: CastEventKind::Fail,
+                        cast_flags: 0,
+                        item_cast: false,
+                        seq,
+                    });
                 }
             }
             UnitEdit::ArmAutoRepeat(entity) => {
