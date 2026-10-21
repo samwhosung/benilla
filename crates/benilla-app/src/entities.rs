@@ -644,7 +644,15 @@ impl Plugin for EntitiesPlugin {
         // of `0x60abe0`.
         .add_message::<live_display::DisplaySwapped>()
         .add_systems(Startup, setup_entities.after(AssetSet::Open))
-        .add_systems(Update, (evict_display_caches, scope_entity_art))
+        // The eviction ahead of the VM pass, whose sends read the item displays for a ranged
+        // spell's precast visual (`0x60d450`).
+        .add_systems(
+            Update,
+            (
+                evict_display_caches.before(crate::vm_pass::VmPass::Start),
+                scope_entity_art,
+            ),
+        )
         // An arrival is stamped the frame it streams in, before its visual is asked for.
         .add_systems(
             Update,
