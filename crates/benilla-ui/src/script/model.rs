@@ -943,9 +943,9 @@ pub(crate) struct Model {
     /// `0x4c2790` with flag 0, raising `LOOT_BIND` for a bind-on-pickup row (a `LootButton`'s own
     /// click, `0x4c1820`); `LootSlot` passes 1 (`0x4c2e70`), taking it after the confirm.
     pub(crate) loot: Option<loot::LootState>,
-    pub(crate) loot_picks: Vec<u32>,
-    /// `LootSlot(slot)` rows, 1-based, apart from clicks for the reference's pending-slot gate.
-    pub(crate) loot_confirms: Vec<u32>,
+    /// The row clicks and `LootSlot(slot)` rows, 1-based, in call order, for the reference's
+    /// pending-slot gate.
+    pub(crate) loot_takes: Vec<loot::LootTake>,
     /// The first `CloseLoot` since the last drain, with its `failed` flag; a later one in the
     /// same frame finds the loot already released.
     pub(crate) loot_close: Option<bool>,
@@ -1789,8 +1789,7 @@ impl Model {
             loot: None,
             pending_equip_answers: Vec::new(),
             bind_on_use_confirms: Vec::new(),
-            loot_picks: Vec::new(),
-            loot_confirms: Vec::new(),
+            loot_takes: Vec::new(),
             loot_close: None,
             loot_master_gives: Vec::new(),
             loot_rolls: loot_roll::LootRollsState::default(),

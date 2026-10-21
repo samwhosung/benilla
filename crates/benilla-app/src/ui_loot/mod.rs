@@ -5,7 +5,7 @@
 use benilla_protocol::messages::{slot_type, ItemPushResult, LootItem, BAG_PLAYER_INVENTORY};
 use bevy::prelude::*;
 
-use benilla_ui::script::{LootRow, LootState as LootSnapshot, ScriptValue, UiScript};
+use benilla_ui::script::{LootRow, LootState as LootSnapshot, LootTake, ScriptValue, UiScript};
 
 use crate::entities::ItemDisplays;
 use crate::items::{Items, RollCatalogs};
@@ -98,6 +98,10 @@ pub(crate) struct LootState {
     /// Deviation: it is the display row, where the reference's is the item index plus one
     /// (`0x4c2885`), so an addon's `GetLootSlotInfo(arg1)` reads the row the dialog is for.
     pending_bind_confirm: Option<u32>,
+    /// The row a `LOOT_BIND_CONFIRM` has just signalled for, which the stash takes once the
+    /// signal's handlers ran (`0x4c2917` after `0x4c290f`, `0x4c21dc` after `0x4c21d4`): their
+    /// own `LootSlot` finds the stash as it stood ([`settle_bind_confirm`]).
+    owed_bind_confirm: Option<u32>,
     /// The list staged for the next open: vmangos sends it from inside `Player::SendLoot`
     /// (`Player.cpp:8080`), just ahead of its response. Staging keeps it out of later windows.
     pending_master_candidates: Vec<u64>,
@@ -147,6 +151,7 @@ impl LootState {
         self.taken.clear();
         self.auto_release = false; // an empty window at open stays open
         self.pending_bind_confirm = None; // `0x4c1df5`: the copier resets the stash
+        self.owed_bind_confirm = None;
         self.loot_type = loot_type;
         self.fishing = loot_type == benilla_protocol::messages::loot_type::FISHING;
         self.master_candidates = std::mem::take(&mut self.pending_master_candidates);
@@ -211,6 +216,7 @@ impl LootState {
         self.fishing = false;
         self.loot_type = 0;
         self.pending_bind_confirm = None;
+        self.owed_bind_confirm = None;
         self.master_candidates.clear();
         self.pending_master_candidates.clear();
         self.sweep_owed = false;
@@ -238,6 +244,11 @@ impl LootState {
         if benilla_protocol::guid::is_item(guid) {
             self.item_unlocks.push((guid, true));
         }
+    }
+
+    /// Whether a `LOOT_BIND_CONFIRM` owes the stash its row ([`settle_bind_confirm`]).
+    fn owes_bind_confirm(&self) -> bool {
+        self.owed_bind_confirm.is_some()
     }
 
     /// Whether any unlock is owed.
@@ -861,6 +872,12 @@ fn feed_loot(
         *last = fresh;
         opened
     });
+    // An owed sweep's bind confirm, once its handlers ran.
+    if vm.own().0.owes_bind_confirm() {
+        vm.turn(|script, (mut loot, _)| {
+            settle_bind_confirm(script, &mut loot, &commands, &mut pickup);
+        });
+    }
     if !opened {
         return;
     }
@@ -873,6 +890,11 @@ fn feed_loot(
                 sweep_rows(&mut loot, &items, &commands, script, &mut pickup);
             }
         });
+        if vm.own().0.owes_bind_confirm() {
+            vm.turn(|script, (mut loot, _)| {
+                settle_bind_confirm(script, &mut loot, &commands, &mut pickup);
+            });
+        }
     }
     // The response's tail (`0x5ebc3a`-`0x5ebc51`) closes a window that opened while we move, after
     // the copier's open and sweep and in the same handler: `LOOT_CLOSED` fires in this pass, so the
@@ -906,7 +928,8 @@ pub(crate) fn feed_loot_once(world: &mut World) {
 /// The sweep `0x4c1fa0`, auto-loot's and a disenchant hold's: every row gets a hand pick's sends,
 /// and emptying the window auto-releases it. Only `ALLOW_LOOT` rows (`0x4c2180`/`0x4c2196`); a
 /// hand click's bind gate plus a one-shot latch (`0x4c21c2`, `0x4c21e2`): later bind-on-pickup
-/// rows stay, untaken and unasked.
+/// rows stay, untaken and unasked. The asked row is owed to the stash, which the caller settles
+/// once the turn's handlers ran ([`settle_bind_confirm`]).
 fn sweep_rows(
     loot: &mut LootState,
     items: &Items,
@@ -930,11 +953,11 @@ fn sweep_rows(
                     if bind_confirm_fired {
                         continue;
                     }
-                    loot.pending_bind_confirm = Some(index);
                     script.fire_event(
                         "LOOT_BIND_CONFIRM",
                         vec![ScriptValue::Int(i64::from(index))],
                     );
+                    loot.owed_bind_confirm = Some(index);
                     bind_confirm_fired = true;
                     continue;
                 }
@@ -991,9 +1014,9 @@ pub(crate) fn close_loot_on_leave_world(
     mut dead: DeadUnitDeselect,
     sweep: LegSweepInputs,
 ) {
+    let LegSweepInputs { items, mut pickup } = sweep;
     let closed = vm.turn(|script, (mut loot, mut latch)| {
         if loot.disenchant_holds() {
-            let LegSweepInputs { items, mut pickup } = sweep;
             if let Some(script) = script {
                 sweep_rows(&mut loot, &items, &commands, script, &mut pickup);
             } else {
@@ -1008,6 +1031,12 @@ pub(crate) fn close_loot_on_leave_world(
         Some(closed)
     });
     if closed.is_none() {
+        // The sweep's bind confirm, once its handlers ran.
+        if vm.own().0.owes_bind_confirm() {
+            vm.turn(|script, (mut loot, _)| {
+                settle_bind_confirm(script, &mut loot, &commands, &mut pickup);
+            });
+        }
         return;
     }
     vm.turn(|script, _| {
@@ -1134,8 +1163,11 @@ struct OpenWhileMoving<'w, 's> {
 }
 
 /// Sends what the Lua asked for, as the take dispatcher `0x4c2790(slot, flag)`: a row click
-/// (a `LootButton`'s own, flag 0) and the `LOOT_BIND` confirm (`LootSlot`, flag 1) stay apart,
-/// so a second click on a bind-on-pickup row asks again.
+/// (a `LootButton`'s own, flag 0) and the `LOOT_BIND` confirm (`LootSlot`, flag 1) stay apart, so
+/// a second click on a bind-on-pickup row asks again, and run in their call order, so a confirm
+/// meets the stash as it stood at its call. A step that signals is a turn whose handlers run as it
+/// ends, as the reference runs them inside the step (`0x4c2920`), and what they ask goes out in
+/// this pass.
 fn drain_loot(
     mut vm: crate::script_calls::VmWith<(ResMut<'static, LootState>, ResMut<'static, LootLatch>)>,
     commands: Res<NetCommands>,
@@ -1148,7 +1180,9 @@ fn drain_loot(
     mut dead: DeadUnitDeselect,
     errors: Res<UiErrorKeys>,
 ) {
-    vm.turn(|mut script, (mut loot, mut latch)| {
+    // The input pass's takes, ahead of anything the closes' handlers ask.
+    let takes = vm.run(|script| script.map(UiScript::take_loot_takes).unwrap_or_default());
+    vm.turn(|script, (mut loot, mut latch)| {
         if std::mem::take(&mut move_start.0) {
             dead.after_close(close_on_move_start(&mut loot, &mut latch, &commands));
         }
@@ -1156,7 +1190,7 @@ fn drain_loot(
         // keeps is the one this takes.
         if std::mem::take(&mut at_rest.0) {
             if loot.disenchant_holds() {
-                match script.as_deref_mut() {
+                match script {
                     Some(script) => sweep_rows(&mut loot, &items, &commands, script, &mut pickup),
                     None => loot.owe_sweep(),
                 }
@@ -1164,86 +1198,38 @@ fn drain_loot(
                 dead.after_close(close_interaction(&mut loot, &mut latch, Some(&commands)));
             }
         }
-        let Some(script) = script else {
-            return;
-        };
-        for index in script.take_loot_picks() {
-            match loot.action_at(index) {
-                Some(LootAction::Money) => {
-                    // No sound here: the coinage watcher (`sound::money`) plays it as the purse
-                    // rises.
-                    debug!("ui_loot: loot coin (row {index})");
-                    let _ = commands.0.send(ClientCommand::LootMoney);
-                }
-                // A master-loot row opens the candidate dropdown instead: the dispatcher branches
-                // on the slot type (`0x4c28a9`), and the Lua `OnClick` has already stashed the
-                // anchor.
-                Some(LootAction::Item { slot_type, .. }) if slot_type == slot_type::MASTER => {
-                    debug!("ui_loot: row {index} is master-loot — opening the candidate list");
-                    script.fire_event("OPEN_MASTER_LOOT_LIST", vec![]);
-                }
-                Some(LootAction::Item {
-                    wire_slot,
-                    display_id,
-                    item_id,
-                    ..
-                }) => {
-                    // The bind-on-pickup deferral (`0x4c28f2`-`0x4c2920`): stash the row, fire the
-                    // event, send nothing, not even the pickup sound.
-                    if bind_confirm_required(&items, item_id) {
-                        debug!(
-                            "ui_loot: row {index} (wire {wire_slot}) binds on pickup — confirming"
-                        );
-                        loot.pending_bind_confirm = Some(index);
-                        script.fire_event(
-                            "LOOT_BIND_CONFIRM",
-                            vec![ScriptValue::Int(i64::from(index))],
-                        );
-                        continue;
+    });
+    if vm.own().0.owes_bind_confirm() {
+        vm.turn(|script, (mut loot, _)| {
+            settle_bind_confirm(script, &mut loot, &commands, &mut pickup);
+        });
+    }
+    for take in takes {
+        match take {
+            LootTake::Confirm(index) => {
+                answer_bind_confirm(&mut vm.own().0, index, &commands, &mut pickup);
+            }
+            LootTake::Pick(index) => {
+                vm.turn(|script, (mut loot, _)| {
+                    if let Some(script) = script {
+                        take_row(script, &mut loot, index, &items, &commands, &mut pickup);
                     }
-                    debug!("ui_loot: autostore row {index} (wire slot {wire_slot})");
-                    let _ = commands
-                        .0
-                        .send(ClientCommand::AutostoreLootItem { slot: wire_slot });
-                    // At the click, before any answer (`0x4c2926`): the item's ItemGroupSounds kit
-                    // 0.
-                    pickup.write(crate::sound::LootPickupSound { display_id });
+                });
+                if vm.own().0.owes_bind_confirm() {
+                    vm.turn(|script, (mut loot, _)| {
+                        settle_bind_confirm(script, &mut loot, &commands, &mut pickup);
+                    });
                 }
-                None => debug!("ui_loot: row {index} clicked out of range — ignored"),
             }
         }
-    });
-    // The takes' handlers ran as that turn ended, as the reference runs them inside the take
-    // (`0x4c2920`): a `LootSlot`, `GiveMasterLoot` or `CloseLoot` one calls goes out below, in the
-    // same pass.
+    }
     vm.turn(|script, (mut loot, mut latch)| {
         let Some(script) = script else {
             return;
         };
-        // `LootSlot`, the confirm arm (`0x4c27c0`): it sends only for the pending row and clears
-        // the stash on the send (`0x4c281a`), so a doubled OnAccept cannot loot twice.
+        // What the takes' other handlers asked: an `OPEN_MASTER_LOOT_LIST` handler's `LootSlot`.
         for index in script.take_loot_confirms() {
-            if loot.pending_bind_confirm != Some(index) {
-                debug!("ui_loot: LootSlot({index}) is not the pending bind confirm — ignored");
-                continue;
-            }
-            let Some(LootAction::Item {
-                wire_slot,
-                display_id,
-                ..
-            }) = loot.action_at(index)
-            else {
-                // The row went under the dialog: bail without clearing the stash, as `0x4c27d7`
-                // does.
-                debug!("ui_loot: bind confirm for row {index} — the row is gone, nothing sent");
-                continue;
-            };
-            loot.pending_bind_confirm = None;
-            debug!("ui_loot: bind-confirmed row {index} (wire slot {wire_slot})");
-            let _ = commands
-                .0
-                .send(ClientCommand::AutostoreLootItem { slot: wire_slot });
-            pickup.write(crate::sound::LootPickupSound { display_id });
+            answer_bind_confirm(&mut loot, index, &commands, &mut pickup);
         }
         // `GiveMasterLoot(slot, candidateIndex)`, both 1-based; one that does not resolve is
         // dropped.
@@ -1306,7 +1292,112 @@ fn drain_loot(
             }
             dead.after_close(closed);
         }
-    })
+    });
+    // A `CloseLoot` on a disenchant window swept it.
+    if vm.own().0.owes_bind_confirm() {
+        vm.turn(|script, (mut loot, _)| {
+            settle_bind_confirm(script, &mut loot, &commands, &mut pickup);
+        });
+    }
+}
+
+/// The flag-0 take of display row `index`, a `LootButton`'s click (`0x4c2790(slot, 0)`).
+fn take_row(
+    script: &mut UiScript,
+    loot: &mut LootState,
+    index: u32,
+    items: &Items,
+    commands: &NetCommands,
+    pickup: &mut MessageWriter<crate::sound::LootPickupSound>,
+) {
+    match loot.action_at(index) {
+        Some(LootAction::Money) => {
+            // No sound here: the coinage watcher (`sound::money`) plays it as the purse rises.
+            debug!("ui_loot: loot coin (row {index})");
+            let _ = commands.0.send(ClientCommand::LootMoney);
+        }
+        // A master-loot row opens the candidate dropdown instead: the dispatcher branches on the
+        // slot type (`0x4c28a9`), and the Lua `OnClick` has already stashed the anchor.
+        Some(LootAction::Item { slot_type, .. }) if slot_type == slot_type::MASTER => {
+            debug!("ui_loot: row {index} is master-loot — opening the candidate list");
+            script.fire_event("OPEN_MASTER_LOOT_LIST", vec![]);
+        }
+        Some(LootAction::Item {
+            wire_slot,
+            display_id,
+            item_id,
+            ..
+        }) => {
+            // The bind-on-pickup deferral (`0x4c28f2`-`0x4c2920`): fire the event, then owe the
+            // stash the row; send nothing, not even the pickup sound.
+            if bind_confirm_required(items, item_id) {
+                debug!("ui_loot: row {index} (wire {wire_slot}) binds on pickup — confirming");
+                script.fire_event(
+                    "LOOT_BIND_CONFIRM",
+                    vec![ScriptValue::Int(i64::from(index))],
+                );
+                loot.owed_bind_confirm = Some(index);
+                return;
+            }
+            debug!("ui_loot: autostore row {index} (wire slot {wire_slot})");
+            let _ = commands
+                .0
+                .send(ClientCommand::AutostoreLootItem { slot: wire_slot });
+            // At the click, before any answer (`0x4c2926`): the item's ItemGroupSounds kit 0.
+            pickup.write(crate::sound::LootPickupSound { display_id });
+        }
+        None => debug!("ui_loot: row {index} clicked out of range — ignored"),
+    }
+}
+
+/// `LootSlot`, the confirm arm (`0x4c27c0`): it sends only for the pending row and clears the
+/// stash on the send (`0x4c281a`), so a doubled OnAccept cannot loot twice.
+fn answer_bind_confirm(
+    loot: &mut LootState,
+    index: u32,
+    commands: &NetCommands,
+    pickup: &mut MessageWriter<crate::sound::LootPickupSound>,
+) {
+    if loot.pending_bind_confirm != Some(index) {
+        debug!("ui_loot: LootSlot({index}) is not the pending bind confirm — ignored");
+        return;
+    }
+    let Some(LootAction::Item {
+        wire_slot,
+        display_id,
+        ..
+    }) = loot.action_at(index)
+    else {
+        // The row went under the dialog: bail without clearing the stash, as `0x4c27d7` does.
+        debug!("ui_loot: bind confirm for row {index} — the row is gone, nothing sent");
+        return;
+    };
+    loot.pending_bind_confirm = None;
+    debug!("ui_loot: bind-confirmed row {index} (wire slot {wire_slot})");
+    let _ = commands
+        .0
+        .send(ClientCommand::AutostoreLootItem { slot: wire_slot });
+    pickup.write(crate::sound::LootPickupSound { display_id });
+}
+
+/// The stash a `LOOT_BIND_CONFIRM` owes, once the turn that signalled it has run its handlers:
+/// their own `LootSlot` calls are answered first, against the stash as it stood (`0x4c27c0`), so
+/// one inside the handler sends nothing; then the stash takes the row (`0x4c2917`, `0x4c21dc`).
+fn settle_bind_confirm(
+    script: Option<&mut UiScript>,
+    loot: &mut LootState,
+    commands: &NetCommands,
+    pickup: &mut MessageWriter<crate::sound::LootPickupSound>,
+) {
+    let Some(row) = loot.owed_bind_confirm.take() else {
+        return;
+    };
+    if let Some(script) = script {
+        for index in script.take_loot_confirms() {
+            answer_bind_confirm(loot, index, commands, pickup);
+        }
+    }
+    loot.pending_bind_confirm = Some(row);
 }
 
 #[cfg(test)]

@@ -13,6 +13,17 @@ use mlua::{Lua, MultiValue, Table, Value};
 use super::binding_abi::{self, bool_or_default, flag};
 use super::Model;
 
+/// A take the take dispatcher `0x4c2790` runs: a row click (flag 0) or a `LootSlot` (flag 1, the
+/// confirm arm), 1-based. One queue in call order, so the app answers each confirm against the
+/// pending-slot stash as it stood at its call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LootTake {
+    /// A `LootButton`'s own click (`0x4c1820`).
+    Pick(u32),
+    /// `LootSlot(slot)` (`0x4c2e70`).
+    Confirm(u32),
+}
+
 /// `CLootButton`'s own Lua method table (`0x847ce4`): one entry, per the registrar's `mov edx,1`.
 pub(super) const REG_LOOTBUTTON_METHODS: &str = "__benilla_lootbutton_methods";
 
@@ -89,16 +100,41 @@ impl super::UiScript {
         self.model_mut().loot = state;
     }
 
-    /// Drain the 1-based rows the row click took; the app maps each to the coin or the item's wire
-    /// slot and applies the bind-on-pickup deferral.
-    pub fn take_loot_picks(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().loot_picks)
+    /// Drain the takes in call order; the app maps a pick to the coin or the item's wire slot and
+    /// applies the bind-on-pickup deferral, and honours a confirm only for the row a LOOT_BIND
+    /// confirm is pending for (the reference's `[0x847cec]` gate).
+    pub fn take_loot_takes(&mut self) -> Vec<LootTake> {
+        std::mem::take(&mut self.model_mut().loot_takes)
     }
 
-    /// Drain the 1-based rows `LootSlot` queued; the app honours only the one a LOOT_BIND confirm
-    /// is pending for (the reference's `[0x847cec]` gate).
+    /// Drain the 1-based rows the row click took, leaving the confirms queued.
+    pub fn take_loot_picks(&mut self) -> Vec<u32> {
+        self.take_loot_kind(|t| match t {
+            LootTake::Pick(row) => Some(row),
+            LootTake::Confirm(_) => None,
+        })
+    }
+
+    /// Drain the 1-based rows `LootSlot` queued, leaving the picks queued.
     pub fn take_loot_confirms(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().loot_confirms)
+        self.take_loot_kind(|t| match t {
+            LootTake::Confirm(row) => Some(row),
+            LootTake::Pick(_) => None,
+        })
+    }
+
+    /// Drain the takes `kind` answers a row for, in order, keeping the rest.
+    fn take_loot_kind(&mut self, kind: impl Fn(LootTake) -> Option<u32>) -> Vec<u32> {
+        let takes = &mut self.model_mut().loot_takes;
+        let mut rows = Vec::new();
+        takes.retain(|&t| match kind(t) {
+            Some(row) => {
+                rows.push(row);
+                false
+            }
+            None => true,
+        });
+        rows
     }
 
     /// Whether `CloseLoot` was called since the last drain, with its `failed` flag: the app
@@ -292,7 +328,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `is-number` else `Usage: LootSlot(slot)` (`0x84807c`, `0x4c2e81`).
             let slot = binding_abi::index_arg32(lua, slot, "Usage: LootSlot(slot)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.loot_confirms.push(slot);
+            model.loot_takes.push(LootTake::Confirm(slot));
             Ok(())
         })?,
     )?;

@@ -1215,7 +1215,7 @@ pub(super) fn click_button(lua: &Lua, id: u32, button: &str, down: bool, scripte
         // The slot is 0-based; the take queue speaks the 1-based row.
         lua.app_data_mut::<Model>()
             .expect("model app_data")
-            .loot_picks
-            .push(slot + 1);
+            .loot_takes
+            .push(super::loot::LootTake::Pick(slot + 1));
     }
 }
