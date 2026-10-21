@@ -1066,6 +1066,84 @@ mod tests {
         assert_eq!(selected(&f), Some(NEW));
     }
 
+    /// The plate driver hides each live plate in turn as it returns it to the pool (`0x608a10`),
+    /// so each plate's `OnHide` runs as its plate goes, with the plates after it still shown, and
+    /// a call it makes commits before its verb returns: `TargetUnit` then `UnitName("target")`
+    /// names the new target. The driver's turn leaves the widgets to change after it, with the
+    /// host lent.
+    #[test]
+    fn a_plates_on_hide_runs_as_it_goes_with_the_host_lent() {
+        use benilla_ui::script::{PlateGeometry, PlateState};
+        let mut f = frame(true);
+        let world = f.app.world_mut();
+        world
+            .resource_mut::<crate::names::NameCache>()
+            .insert_player(NEW, "Red Whelp".into(), None);
+        world
+            .run_system_once(crate::ui_unit::feed_name_candidates)
+            .expect("the candidate feed runs as a one-shot system");
+        let plate = |key: u64| PlateState {
+            key,
+            top_centre: (400.0, 400.0),
+            health: 30.0,
+            max_health: 40.0,
+            bar_colour: [1.0, 0.0, 0.0],
+            name: "Wolf".into(),
+            level: Some(12),
+            skull: false,
+            level_colour: [1.0, 1.0, 0.0],
+            raid_icon: None,
+            alpha: 255,
+            lit: false,
+            hovered: false,
+        };
+        let geometry = PlateGeometry {
+            width: 128.0,
+            height: 32.0,
+            bar_off_x: 4.0,
+            bar_off_y: 4.0,
+            bar_width: 103.0,
+            bar_height: 9.0,
+            level_off_x: 11.8,
+            level_off_y: 9.1,
+            skull_size: 12.8,
+            raid_size: 25.6,
+            name_height: 12.8,
+            level_height: 11.0,
+            shadow_offset: 1.0,
+        };
+        {
+            let mut script = world.non_send_resource_mut::<UiScript>();
+            script.run(r#"CreateFrame("Frame", "WorldFrame")"#).unwrap();
+            script.sync_nameplates(geometry, &[plate(OLD), plate(NEW)]);
+            script
+                .run(
+                    r#"SHOWN = ""
+                    local function shown()
+                        local n = 0
+                        for _, c in ipairs({WorldFrame:GetChildren()}) do
+                            if c:IsShown() then n = n + 1 end
+                        end
+                        return n
+                    end
+                    for _, c in ipairs({WorldFrame:GetChildren()}) do
+                        c:SetScript("OnHide", function()
+                            SHOWN = SHOWN .. shown()
+                            TargetUnit("party1")
+                            SEEN = UnitName("target")
+                        end)
+                    end"#,
+                )
+                .unwrap();
+        }
+        // Neither kind of plate on: the driver retires every live one.
+        world.init_resource::<crate::player::CameraControl>();
+        crate::vplates::drive_vplates_once(world);
+        let (shown, seen) = eval::<(Option<String>, Option<String>)>(&mut f, "return SHOWN, SEEN");
+        assert_eq!(shown.as_deref(), Some("10"), "each as its plate goes");
+        assert_eq!(seen.as_deref(), Some("Red Whelp"), "the new target");
+    }
+
     /// `TargetByName` (`0x489d60`) commits through `SetSelection 0x493540` before it returns, so
     /// `UnitName("target")` on the next line of the same chunk names the new unit, the one the
     /// commit picked.

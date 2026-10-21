@@ -667,6 +667,15 @@ impl Plugin for VPlatesPlugin {
     }
 }
 
+/// [`drive_vplates`] as a one-shot, for a test over the whole client.
+#[cfg(test)]
+pub(crate) fn drive_vplates_once(world: &mut World) {
+    use bevy::ecs::system::RunSystemOnce;
+    world
+        .run_system_once(drive_vplates)
+        .expect("the plate driver runs as a one-shot system");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
