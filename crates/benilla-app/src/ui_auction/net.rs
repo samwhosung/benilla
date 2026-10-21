@@ -193,9 +193,8 @@ fn auction_owner_list_result(
     auction_list(OWNER, auctions, total_count, auction);
 }
 
-/// The bidder page, deduped by auction id: the server lists the refreshed ids, then every auction
-/// we lead, so one auction can appear twice. The wire's count other than its total arms the
-/// bidder request (`0x4cce7d`-`0x4cce85`).
+/// The bidder page, its rows as the wire sends them (`0x4ccc80`), an auction listed twice kept
+/// twice; a count other than the total arms the bidder request (`0x4cce7d`-`0x4cce85`).
 fn auction_bidder_list_result(
     auctions: Vec<AuctionListEntry>,
     total_count: u32,
@@ -204,12 +203,7 @@ fn auction_bidder_list_result(
     if auctions.len() as u32 != total_count {
         auction.bidder_armed = true;
     }
-    let mut seen = std::collections::HashSet::with_capacity(auctions.len());
-    let deduped: Vec<AuctionListEntry> = auctions
-        .into_iter()
-        .filter(|e| seen.insert(e.auction_id))
-        .collect();
-    auction_list(BIDDER, deduped, total_count, auction);
+    auction_list(BIDDER, auctions, total_count, auction);
 }
 
 /// The inventory result the reference reads when the fourth dword is short: `0x4cc472` seeds it
@@ -972,7 +966,7 @@ mod tests {
     }
 
     /// An owner or bidder result whose count is not its total arms its request (`0x4ccc35`,
-    /// `0x4cce85`), the bidder's before its dedupe; the browse result has no such test.
+    /// `0x4cce85`); the browse result has no such test.
     #[test]
     fn a_partial_owner_or_bidder_page_arms_its_request() {
         let mut a = AuctionOpen::default();
