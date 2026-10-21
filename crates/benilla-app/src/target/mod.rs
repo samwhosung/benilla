@@ -383,7 +383,7 @@ impl Plugin for TargetPlugin {
                             .after(crate::ui_follow::drain_follow),
                     )
                         .chain(),
-                    scan::auto_acquire_attacker,
+                    scan::auto_acquire,
                     // The melee probe's press, the player's Attack; the TAB keys and ATTACKTARGET
                     // run their bodies' `TargetNearestEnemy` and `AttackTarget` as script calls.
                     crate::ui_action::attack_nearest_probe,

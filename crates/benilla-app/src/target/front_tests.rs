@@ -161,15 +161,24 @@ impl Fix {
     }
 
     /// `SMSG_SPELL_START` by `caster` aimed at us, as the spell handler hands it on.
-    pub(super) fn cast_at_us(&mut self, caster: Entity, guid: u64) {
+    pub(super) fn cast_at_us(&mut self, caster: Entity) {
         self.app
             .world_mut()
             .resource_mut::<Messages<crate::spell::net::CastAtPlayer>>()
-            .write(crate::spell::net::CastAtPlayer {
-                caster,
-                guid,
-                seq: 0,
-            });
+            .write(crate::spell::net::CastAtPlayer { caster, seq: 0 });
+    }
+
+    /// The frame's acquire over the swings and casts written since the last, which it consumes as
+    /// the frame's reader does.
+    pub(super) fn acquire(&mut self) {
+        let world = self.app.world_mut();
+        world
+            .run_system_once(scan::auto_acquire)
+            .expect("the acquire runs");
+        world
+            .resource_mut::<Messages<crate::spell::net::CastAtPlayer>>()
+            .clear();
+        world.resource_mut::<Messages<SwingMessage>>().clear();
     }
 
     /// The target chain's bind of what the writers parked.
@@ -324,7 +333,7 @@ fn a_charmed_player_is_refused_by_every_selector() {
                     });
                 f.app
                     .world_mut()
-                    .run_system_once(scan::auto_acquire_attacker)
+                    .run_system_once(scan::auto_acquire)
                     .unwrap();
             },
             Some(MOB),
@@ -337,10 +346,10 @@ fn a_charmed_player_is_refused_by_every_selector() {
                 *f.app.world_mut().resource_mut::<Selection>() = Selection::default();
                 let mob = f.mob;
                 f.make_unit(mob);
-                f.cast_at_us(mob, MOB);
+                f.cast_at_us(mob);
                 f.app
                     .world_mut()
-                    .run_system_once(scan::auto_acquire_attacker)
+                    .run_system_once(scan::auto_acquire)
                     .unwrap();
             },
             Some(MOB),
@@ -410,7 +419,7 @@ fn an_attacker_acquired_with_the_cursor_up_is_bound() {
         });
     f.app
         .world_mut()
-        .run_system_once(scan::auto_acquire_attacker)
+        .run_system_once(scan::auto_acquire)
         .expect("the acquire runs");
     f.bind();
     assert_eq!(f.wire(), (vec![Some(MOB)], vec![]));
@@ -429,11 +438,8 @@ fn a_caster_at_us_is_selected_when_it_cannot_assist_and_nothing_is() {
     let mut f = fix(false);
     let mob = f.mob;
     f.make_unit(mob);
-    f.cast_at_us(mob, MOB);
-    f.app
-        .world_mut()
-        .run_system_once(scan::auto_acquire_attacker)
-        .unwrap();
+    f.cast_at_us(mob);
+    f.acquire();
     assert_eq!(f.selected(), Some(OLD), "a target is held");
     assert_eq!(f.wire(), (vec![], vec![]));
 
@@ -442,13 +448,10 @@ fn a_caster_at_us_is_selected_when_it_cannot_assist_and_nothing_is() {
     // counts the active player (`0x6062b0`).
     let pet = f.scannable_at(PET, 5.0);
     f.make_unit_with(pet, &[(46, 0x8), (14, ME as u32), (15, 0)]);
-    f.cast_at_us(pet, PET);
+    f.cast_at_us(pet);
     let old = f.app.world().resource::<GuidIndex>().0[&OLD];
-    f.cast_at_us(old, OLD);
-    f.app
-        .world_mut()
-        .run_system_once(scan::auto_acquire_attacker)
-        .unwrap();
+    f.cast_at_us(old);
+    f.acquire();
     assert_eq!(
         f.selected(),
         None,
@@ -456,11 +459,8 @@ fn a_caster_at_us_is_selected_when_it_cannot_assist_and_nothing_is() {
     );
     assert_eq!(f.wire(), (vec![], vec![]));
 
-    f.cast_at_us(mob, MOB);
-    f.app
-        .world_mut()
-        .run_system_once(scan::auto_acquire_attacker)
-        .unwrap();
+    f.cast_at_us(mob);
+    f.acquire();
     assert_eq!(f.selected(), Some(MOB));
     assert_eq!(f.wire(), (vec![], vec![MOB]), "CMSG_SET_SELECTION");
 }
@@ -473,10 +473,10 @@ fn a_caster_acquired_with_the_cursor_up_is_bound() {
     *f.app.world_mut().resource_mut::<Selection>() = Selection::default();
     let mob = f.mob;
     f.make_unit(mob);
-    f.cast_at_us(mob, MOB);
+    f.cast_at_us(mob);
     f.app
         .world_mut()
-        .run_system_once(scan::auto_acquire_attacker)
+        .run_system_once(scan::auto_acquire)
         .expect("the acquire runs");
     f.bind();
     assert_eq!(f.wire(), (vec![Some(MOB)], vec![]));

@@ -8,7 +8,8 @@
 //!
 //! Kept from 1.12: the validity filters (`0x493e40`, `CanAttack 0x606980`, critters), the
 //! [`commit`] through `SetSelection` (`0x493540`), the attack acquire (`0x612df0` at `0x6130b5`),
-//! the ATTACKERSTATEUPDATE acquire (`0x6259c9`–`0x6259fe`) and the 41 yd range.
+//! the ATTACKERSTATEUPDATE and spell start acquires (`0x6259c9`–`0x6259fe`, `0x6e7963`-`0x6e799c`)
+//! and the 41 yd range.
 
 use benilla_formats::CreatureTypeTable;
 use benilla_protocol::{guid, EntityKind};
@@ -794,47 +795,82 @@ pub(super) fn remember_last_enemy(
     }
 }
 
-/// The ATTACKERSTATEUPDATE self-defence acquire (`0x6259c9`–`0x6259fe`): when we are the victim
-/// and hold no selection, select the attacker, with no counter-attack.
-pub(super) fn auto_acquire_attacker(
+/// What asked [`auto_acquire`] for a unit.
+#[derive(Clone, Copy, Debug)]
+enum Acquire {
+    /// A swing at us (`SMSG_ATTACKERSTATEUPDATE`).
+    Attacker,
+    /// A spell start aimed at us (`SMSG_SPELL_START`).
+    Caster,
+}
+
+/// The two packet acquires, in packet order by their [`crate::creature_anim::PlaySeq`] stamps:
+/// - the ATTACKERSTATEUPDATE self-defence acquire (`0x6259c9`–`0x6259fe`): when we are the victim
+///   and hold no selection, select the attacker, with no counter-attack;
+/// - the spell start's (`0x6e7963`-`0x6e799c`): another unit casting at us, which
+///   [`crate::spell::net::CastAtPlayer`] names, is selected when the active player's object is
+///   held (`0x6e796a`), the caster cannot assist it (`CanAssist 0x6066f0` at `0x6e7973`) and
+///   nothing is selected (`[0xb4e2d8]`, `0x6e7980`). The caster is looked up as a unit
+///   (`0x468460` with mask 8, `0x6e7892`).
+///
+/// Each is `SelectTarget` (`0x6259fe`, `0x6e799c`), whose front may bind the unit to a standing
+/// cursor's cast instead; a packet handler runs in no script, whose gate context passes tag 2.
+pub(super) fn auto_acquire(
     mut swings: MessageReader<SwingMessage>,
+    mut casts: MessageReader<crate::spell::net::CastAtPlayer>,
     self_player: Query<(Entity, &Guid), With<SelfPlayer>>,
     guids: Query<&Guid>,
     // For `IsSelectable`: a `NOT_SELECTABLE` attacker is not acquired.
     stores: Query<&ObjectStore>,
+    relations: RelationWorld,
     mut selection: ResMut<Selection>,
     mut seam: crate::creature_anim::AttackSeam,
     mut front: super::front::SelectFront,
 ) {
-    for s in swings.read() {
-        if selection.target.is_some() {
-            continue;
-        }
-        let Ok((me, my_guid)) = self_player.single() else {
+    let Ok((me, my_guid)) = self_player.single() else {
+        return;
+    };
+    let mut asks: Vec<(u64, Entity, Acquire)> = swings
+        .read()
+        .filter(|s| s.victim == Some(me))
+        .map(|s| (s.seq, s.attacker, Acquire::Attacker))
+        .chain(casts.read().map(|c| (c.seq, c.caster, Acquire::Caster)))
+        .collect();
+    asks.sort_by_key(|&(seq, ..)| seq);
+    for (_, unit, why) in asks {
+        let Ok(guid) = guids.get(unit) else {
             continue;
         };
-        if s.victim != Some(me) {
-            continue;
+        let guid = guid.0;
+        match why {
+            Acquire::Attacker => {
+                if selection.target.is_some() {
+                    continue;
+                }
+                debug!("auto-target: attacker {guid:#x} (victim = me, no target)");
+            }
+            Acquire::Caster => {
+                let rel = relations.get();
+                let assists = match (relations.unit(guid), relations.me()) {
+                    (Some(caster), Some(player)) => rel.can_assist(&caster, &player),
+                    _ => continue,
+                };
+                if assists || selection.guid.is_some() {
+                    continue;
+                }
+                debug!("auto-target: caster {guid:#x} (casting at me, no target)");
+            }
         }
-        let Ok(guid) = guids.get(s.attacker) else {
-            continue;
-        };
-        debug!(
-            "auto-target: attacker {:#x} (victim = me, no target)",
-            guid.0
-        );
-        // `0x6259fe` is `SelectTarget`, whose front may bind the attacker to a standing cursor's
-        // cast instead; the packet handler runs in no script, whose gate context passes tag 2.
-        if front.takes(s.attacker, guid.0, seam.slots.targeting()) {
+        if front.takes(unit, guid, seam.slots.targeting()) {
             continue;
         }
         // The selection was empty, so no switch law: selection only.
         commit(
             &mut selection,
             &mut seam,
-            s.attacker,
-            guid.0,
-            stores.get(s.attacker).ok(),
+            unit,
+            guid,
+            stores.get(unit).ok(),
             false,
             Some(my_guid.0),
             false,

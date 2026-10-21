@@ -32,7 +32,6 @@ use crate::query_cache::Ask;
 #[derive(Message, Clone, Copy, Debug)]
 pub(crate) struct CastAtPlayer {
     pub(crate) caster: Entity,
-    pub(crate) guid: u64,
     pub(crate) seq: u64,
 }
 
@@ -255,6 +254,7 @@ fn on_spell_start(
     mut l: Lifecycle,
     mut sc: Scene,
     precast: crate::creature_anim::PrecastTables,
+    mut cast_at_player: MessageWriter<CastAtPlayer>,
 ) {
     if let SessionEvent::SpellStart {
         caster,
@@ -275,6 +275,7 @@ fn on_spell_start(
             &mut sc.commands,
             &l.index,
             &mut sc.cast_events,
+            &mut cast_at_player,
             &l.self_guid,
             &mut l.reports,
             &mut l.pending,
@@ -851,6 +852,8 @@ fn spell_start(
     commands: &mut Commands,
     index: &GuidIndex,
     cast_events: &mut MessageWriter<CastEvent>,
+    // The select of a caster aiming at the player, the target chain's.
+    cast_at_player: &mut MessageWriter<CastAtPlayer>,
     self_guid: &SelfGuid,
     reports: &mut CastReports,
     pending: &mut PendingCast,
@@ -934,6 +937,12 @@ fn spell_start(
                 entity: e,
                 spell_id,
             });
+        }
+        // Another unit's cast whose unit target is the player (`0x6e790d` mask bit `0x2`,
+        // `0x6e7926` a guid, `0x6e7939`/`0x6e7947` the player's) selects its caster when the
+        // target chain's gates pass ([`crate::target`]).
+        if self_guid.0 != Some(caster) && target.is_some() && target == self_guid.0 {
+            cast_at_player.write(CastAtPlayer { caster: e, seq });
         }
         // The precast edge, instants included: their GO follows at once and reaps the hold.
         cast_events.write(CastEvent {
@@ -1944,6 +1953,7 @@ mod tests {
                     move |mut commands: Commands,
                           index: Res<GuidIndex>,
                           mut cast_events: MessageWriter<CastEvent>,
+                          mut cast_at_player: MessageWriter<CastAtPlayer>,
                           self_guid: Res<SelfGuid>,
                           mut reports: ResMut<CastReports>,
                           mut pending: ResMut<PendingCast>,
@@ -1960,6 +1970,7 @@ mod tests {
                             &mut commands,
                             &index,
                             &mut cast_events,
+                            &mut cast_at_player,
                             &self_guid,
                             &mut reports,
                             &mut pending,
@@ -2389,16 +2400,16 @@ mod tests {
         let mut s = CastSeq::new();
         crate::creature_anim::install_visuals_for_tests(s.app.world_mut(), &[FROSTBOLT], &[]);
         let other = s.other_unit(OTHER);
-        let asks = |s: &mut CastSeq| -> Vec<(Entity, u64)> {
+        let asks = |s: &mut CastSeq| -> Vec<Entity> {
             s.app
                 .world_mut()
                 .resource_mut::<Messages<CastAtPlayer>>()
                 .drain()
-                .map(|m| (m.caster, m.guid))
+                .map(|m| m.caster)
                 .collect()
         };
         s.start_at(OTHER, FROSTBOLT, 3_000, 0, Some(CastSeq::SELF));
-        assert_eq!(asks(&mut s), vec![(other, OTHER)], "at us");
+        assert_eq!(asks(&mut s), vec![other], "at us");
         s.start_at(OTHER, FROSTBOLT, 3_000, 0, Some(THIRD));
         s.start_at(OTHER, FROSTBOLT, 3_000, 0, None);
         s.start_at(CastSeq::SELF, FROSTBOLT, 3_000, 0, Some(CastSeq::SELF));
