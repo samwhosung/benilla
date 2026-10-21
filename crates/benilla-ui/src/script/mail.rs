@@ -2184,17 +2184,34 @@ mod tests {
     #[test]
     fn the_send_slot_refuses_bound_conjured_zoned_and_filled_bag_items() {
         use crate::script::cursor::{CursorItem, CursorPayload};
-        let attach = |slot: crate::script::ContainerSlot| -> (Vec<&'static str>, bool) {
+        use crate::script::ItemTemplateView;
+        // `(bound, filled seats, record as (flags, bonding, area, map))`, and what the click shows.
+        type Case = (bool, Option<u32>, Option<(u32, u32, u32, u32)>);
+        let attach = |(bound, seats, record): Case| -> (Vec<&'static str>, bool) {
             let mut s = kept();
             s.set_mail(Some(MailState {
                 open: true,
                 ..Default::default()
             }));
+            if let Some((flags, bonding, area, map)) = record {
+                s.set_item_template(
+                    2589,
+                    ItemTemplateView {
+                        flags,
+                        bonding,
+                        area,
+                        map,
+                        ..Default::default()
+                    },
+                );
+            }
             let slot = crate::script::ContainerSlot {
                 item_id: 2589,
                 guid: 0x102,
                 count: 1,
-                ..slot
+                already_bound: bound,
+                occupied_seats: seats,
+                ..Default::default()
             };
             s.set_container(
                 0,
@@ -2222,42 +2239,55 @@ mod tests {
             let attached = s.model_ref().mail_send_item.is_some();
             (s.take_ui_errors(), attached)
         };
-        let bound = |bonding: u32| crate::script::ContainerSlot {
-            already_bound: true,
-            bonding,
-            ..Default::default()
-        };
-        assert_eq!(attach(bound(4)), (vec!["ERR_MAIL_QUEST_ITEM"], false));
-        assert_eq!(attach(bound(5)), (vec!["ERR_MAIL_QUEST_ITEM"], false));
-        assert_eq!(attach(bound(1)), (vec!["ERR_MAIL_BOUND_ITEM"], false));
+        let refused = |key| (vec![key], false);
         assert_eq!(
-            attach(crate::script::ContainerSlot {
-                template_flags: 0x2,
-                ..bound(1)
-            }),
-            (vec!["ERR_MAIL_BOUND_ITEM"], false),
+            attach((true, None, Some((0, 4, 0, 0)))),
+            refused("ERR_MAIL_QUEST_ITEM")
+        );
+        assert_eq!(
+            attach((true, None, Some((0, 5, 0, 0)))),
+            refused("ERR_MAIL_QUEST_ITEM")
+        );
+        assert_eq!(
+            attach((true, None, Some((0, 1, 0, 0)))),
+            refused("ERR_MAIL_BOUND_ITEM")
+        );
+        assert_eq!(
+            attach((true, None, None)),
+            refused("ERR_MAIL_BOUND_ITEM"),
+            "an uncached record is no quest item (`0x4adf6d`)"
+        );
+        assert_eq!(
+            attach((true, None, Some((0x2, 1, 0, 0)))),
+            refused("ERR_MAIL_BOUND_ITEM"),
             "bound is asked first"
         );
-        let conjured = crate::script::ContainerSlot {
-            template_flags: 0x2,
-            ..Default::default()
-        };
-        assert_eq!(attach(conjured), (vec!["ERR_MAIL_CONJURED_ITEM"], false));
-        let zoned = crate::script::ContainerSlot {
-            zone_bound: true,
-            ..Default::default()
-        };
-        assert_eq!(attach(zoned), (vec!["ERR_MAIL_CONJURED_ITEM"], false));
-        let full_bag = crate::script::ContainerSlot {
-            occupied_seats: Some(1),
-            ..Default::default()
-        };
-        assert_eq!(attach(full_bag), (vec!["ERR_MAIL_BAG"], false));
-        let empty_bag = crate::script::ContainerSlot {
-            occupied_seats: Some(0),
-            ..Default::default()
-        };
-        assert_eq!(attach(empty_bag), (Vec::new(), true));
+        let conjured = "ERR_MAIL_CONJURED_ITEM";
+        assert_eq!(
+            attach((false, None, Some((0x2, 0, 0, 0)))),
+            refused(conjured)
+        );
+        assert_eq!(
+            attach((false, None, Some((0, 0, 12, 0)))),
+            refused(conjured)
+        );
+        assert_eq!(
+            attach((false, None, Some((0, 0, 0, 33)))),
+            refused(conjured)
+        );
+        assert_eq!(
+            attach((false, Some(1), Some((0, 0, 0, 0)))),
+            refused("ERR_MAIL_BAG")
+        );
+        assert_eq!(
+            attach((false, Some(0), Some((0, 0, 0, 0)))),
+            (Vec::new(), true)
+        );
+        assert_eq!(
+            attach((false, None, None)),
+            (Vec::new(), true),
+            "nothing known refuses"
+        );
     }
 }
 

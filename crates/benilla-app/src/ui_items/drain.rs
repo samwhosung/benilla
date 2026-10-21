@@ -1893,8 +1893,6 @@ mod bind_confirm_tests {
                 field_duration: 0,
                 petition: None,
                 already_bound: false,
-                template_flags: 0,
-                zone_bound: false,
                 occupied_seats: None,
                 bonding: 2,
                 use_spell: 0,

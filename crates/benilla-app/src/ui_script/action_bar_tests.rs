@@ -1222,8 +1222,6 @@ fn shipped_bag_frame_drives_end_to_end() {
             field_duration: 0,
             petition: None,
             already_bound: false,
-            template_flags: 0,
-            zone_bound: false,
             occupied_seats: None,
             bonding: 0,
             use_spell: 0,

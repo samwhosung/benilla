@@ -91,12 +91,6 @@ pub struct ContainerSlot {
     /// Bound at runtime (`0x5da2c0`): `ITEM_FIELD_FLAGS & 1`, or an enchant whose
     /// `SpellItemEnchantment` row binds. The tooltip's bind line then says Soulbound.
     pub already_bound: bool,
-    /// The template's flags (`[rec+0x20]`), 0 while unresolved: conjured `0x2` refuses the mail
-    /// slot (`0x4adfbd`).
-    pub template_flags: u32,
-    /// The template binds the item to an area or a map (`[rec+0x1c8]`, `[rec+0x1cc]`, read by
-    /// `0x5da500` and `0x5da570`), which the mail slot refuses (`0x4adfe2`, `0x4adfed`).
-    pub zone_bound: bool,
     /// For a container (`TYPEMASK_CONTAINER`), how many of its seats hold an item, which
     /// `ClickTradeButton` counts (`0x4bff50`); `None` for any other item.
     pub occupied_seats: Option<u32>,
@@ -1325,8 +1319,6 @@ mod tests {
                 field_duration: 0,
                 petition: None,
                 already_bound: false,
-                template_flags: 0,
-                zone_bound: false,
                 occupied_seats: None,
                 bonding: 0,
                 use_spell: 0,
@@ -2085,8 +2077,6 @@ mod tests {
                 field_duration: 0,
                 petition: None,
                 already_bound: false,
-                template_flags: 0,
-                zone_bound: false,
                 occupied_seats: None,
                 bonding: 0,
                 use_spell: 0,
