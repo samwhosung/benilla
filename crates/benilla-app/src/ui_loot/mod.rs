@@ -1402,12 +1402,22 @@ mod tests {
     /// Brutality Blade, a second BoP epic, for the sweep's one-dialog latch.
     const SECOND_BOP: u32 = 18832;
 
-    /// `rows` open on a corpse with every template landed, then `lua` and one drain.
     /// A loot window over `rows` whose display rows `clicks` are clicked by the mouse, as a
     /// `LootButton` takes (`0x4c1820`), then `lua` run, then one drain.
     fn drain_with(
         gold: u32,
         rows: Vec<LootItem>,
+        clicks: &[u32],
+        lua: &str,
+    ) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
+        drain_after(gold, rows, "", clicks, lua)
+    }
+
+    /// [`drain_with`] with `first` run ahead of the clicks.
+    fn drain_after(
+        gold: u32,
+        rows: Vec<LootItem>,
+        first: &str,
         clicks: &[u32],
         lua: &str,
     ) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
@@ -1455,6 +1465,7 @@ mod tests {
             )
             .unwrap();
         script.set_screen_size(1024.0, 768.0);
+        script.run(first).unwrap();
         for &row in clicks {
             script
                 .run(&format!(
@@ -1670,11 +1681,12 @@ mod tests {
         assert!(sent(&rx).is_empty(), "a second accept sends nothing");
     }
 
-    /// A handler that accepts inside its `LOOT_BIND_CONFIRM` (`0x4c2920`) reaches the confirm arm
-    /// (`0x4c27c0`) before the take returns, so the row goes out in the pass that asked.
+    /// The click signals `LOOT_BIND_CONFIRM` (`0x4c290f`) before the stash takes the row
+    /// (`0x4c2917`), and the confirm arm compares with the stash (`0x4c27c0`), which the open
+    /// reset (`0x4c1df5`): a `LootSlot` inside the handler sends nothing, and one after it sends.
     #[test]
-    fn a_confirm_its_handler_accepts_goes_out_in_the_same_pass() {
-        let (app, rx) = drain_with(
+    fn a_bind_confirms_own_handler_cannot_accept_it() {
+        let (mut app, rx) = drain_with(
             0,
             vec![item(7, FELSTRIKER, 1)],
             &[1],
@@ -1682,14 +1694,37 @@ mod tests {
              f:RegisterEvent(\"LOOT_BIND_CONFIRM\")\n\
              f:SetScript(\"OnEvent\", function() LootSlot(arg1) end)",
         );
+        assert!(sent(&rx).is_empty(), "the handler's accept finds no stash");
+        assert_eq!(
+            pending_confirm(&app),
+            Some(1),
+            "the stash takes the row after it"
+        );
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run("LootSlot(1)")
+            .unwrap();
+        app.world_mut().run_system_once(drain_loot).unwrap();
         assert!(
             matches!(
                 sent(&rx)[..],
                 [ClientCommand::AutostoreLootItem { slot: 7 }]
             ),
-            "the accept is sent in the click's pass"
+            "an accept after the handler sends the row"
         );
-        assert_eq!(pending_confirm(&app), None);
+    }
+
+    /// The takes are answered in their call order: an accept made before the click finds no stash
+    /// (`0x4c27c0`), which the click stores only when it runs (`0x4c2917`).
+    #[test]
+    fn an_accept_before_the_click_finds_no_stash() {
+        let (app, rx) = drain_after(0, vec![item(7, FELSTRIKER, 1)], "LootSlot(1)", &[1], "");
+        assert!(sent(&rx).is_empty(), "the early accept sends nothing");
+        assert_eq!(
+            pending_confirm(&app),
+            Some(1),
+            "and the click still stashes its row"
+        );
     }
 
     /// The flag-1 arm opens with `cmp edi,[0x847cec]`, the pending row.
@@ -1800,9 +1835,9 @@ mod tests {
         );
     }
 
-    /// The sweep's one-shot latch (`0x4c21c2`, `0x4c21e2`), over two BoP epics and a white.
-    #[test]
-    fn the_auto_loot_sweep_raises_exactly_one_bind_confirm() {
+    /// A window over two BoP epics and a white (wire slots 5/6/7) with auto-loot on, its
+    /// `LOOT_BIND_CONFIRM` rows noted, then `lua` run; the feed has not run.
+    fn auto_loot_app(lua: &str) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.add_message::<crate::sound::LootPickupSound>()
@@ -1818,6 +1853,7 @@ mod tests {
             .init_resource::<NameCache>()
             .init_resource::<Items>()
             .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<UiErrorKeys>()
             .insert_resource(LootConfig {
                 auto_loot: true,
                 ..LootConfig::default()
@@ -1860,7 +1896,15 @@ mod tests {
                  f:SetScript(\"OnEvent\", function() tinsert(BIND_CONFIRMS, arg1) end)",
             )
             .unwrap();
+        script.run(lua).unwrap();
         app.insert_non_send_resource(script);
+        (app, rx)
+    }
+
+    /// The sweep's one-shot latch (`0x4c21c2`, `0x4c21e2`), over two BoP epics and a white.
+    #[test]
+    fn the_auto_loot_sweep_raises_exactly_one_bind_confirm() {
+        let (mut app, rx) = auto_loot_app("");
         app.world_mut().run_system_once(feed_loot).unwrap();
 
         assert_eq!(
@@ -1875,6 +1919,44 @@ mod tests {
                 [ClientCommand::AutostoreLootItem { slot: 7 }]
             ),
             "the white is swept; neither blue is sent"
+        );
+    }
+
+    /// The sweep signals `LOOT_BIND_CONFIRM` (`0x4c21d4`) before the stash takes the row
+    /// (`0x4c21dc`), so a `LootSlot` inside the handler finds no stash (`0x4c27c0`) and sends
+    /// nothing, and one after it sends the row.
+    #[test]
+    fn a_swept_bind_confirms_own_handler_cannot_accept_it() {
+        let (mut app, rx) = auto_loot_app(
+            "local f = CreateFrame(\"Frame\")\n\
+             f:RegisterEvent(\"LOOT_BIND_CONFIRM\")\n\
+             f:SetScript(\"OnEvent\", function() LootSlot(arg1) end)",
+        );
+        app.world_mut().run_system_once(feed_loot).unwrap();
+        app.world_mut().run_system_once(drain_loot).unwrap();
+        assert!(
+            matches!(
+                sent(&rx)[..],
+                [ClientCommand::AutostoreLootItem { slot: 7 }]
+            ),
+            "the white is swept, and the handler's accept sends nothing"
+        );
+        assert_eq!(
+            pending_confirm(&app),
+            Some(1),
+            "the stash takes the row after it"
+        );
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run("LootSlot(1)")
+            .unwrap();
+        app.world_mut().run_system_once(drain_loot).unwrap();
+        assert!(
+            matches!(
+                sent(&rx)[..],
+                [ClientCommand::AutostoreLootItem { slot: 5 }]
+            ),
+            "an accept after the handler sends the row"
         );
     }
 
