@@ -202,6 +202,89 @@ mod tests {
         assert!(!s.item_locked(A) && !s.item_locked(B));
     }
 
+    /// The failure's handler shows its line and unlocks its items (`0x496720`, `0x5e3ac0`,
+    /// `0x5e3ad3`) and touches nothing else, so its handlers read the bags as they stood before
+    /// the frame's other changes are pushed: here a key that arrived the same frame, `HasKey()`.
+    #[test]
+    fn an_inventory_failures_handlers_run_before_the_frames_bag_push() {
+        use crate::items::Items;
+        const REASON: u8 = 0x16;
+        const KEY: u32 = 5396;
+        let mut app = App::new();
+        app.init_resource::<Items>()
+            .init_resource::<crate::spell::Cooldowns>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<EquipErrors>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .init_resource::<BagOpens>()
+            .init_resource::<super::super::feed::BagUpdates>()
+            .init_resource::<crate::names::NameCache>()
+            .init_resource::<crate::ui_petition::PetitionState>()
+            .insert_resource(crate::ui_script::UiClock {
+                anchor: std::time::Instant::now(),
+                ui_now: 1000.0,
+            })
+            .add_systems(Update, super::super::feed::feed_containers);
+        app.world_mut().resource_mut::<Items>().insert_template(
+            KEY,
+            Some(benilla_protocol::messages::ItemInfo {
+                bag_family: super::super::BAG_FAMILY_KEYS,
+                ..crate::items::test_template("Key")
+            }),
+        );
+        // The key in backpack slot 1 (`PLAYER_FIELD_PACK_SLOT_1`, 532).
+        let guid = u64::from(benilla_protocol::guid::HIGH_ITEM) << 48 | 0xA1;
+        let key = app
+            .world_mut()
+            .spawn(ObjectStore(ObjectFields::from_pairs(&[
+                (2, 0x3),
+                (3, KEY),
+                (14, 1),
+            ])))
+            .id();
+        app.world_mut()
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(guid, key);
+        app.world_mut().spawn((
+            SelfPlayer,
+            ObjectStore(ObjectFields::from_pairs(&[
+                (2, 0x19),
+                (532, guid as u32),
+                (533, (guid >> 32) as u32),
+            ])),
+        ));
+        let script = benilla_ui::script::UiScript::new().unwrap();
+        let line = super::super::equip_error::equip_error_key(REASON);
+        script
+            .run(&format!(
+                "{line} = 'Refused.' SEEN = '' local f = CreateFrame('Frame') \
+                 f:RegisterEvent('UI_ERROR_MESSAGE') \
+                 f:SetScript('OnEvent', function() SEEN = SEEN .. (HasKey() and 1 or 0) end)"
+            ))
+            .unwrap();
+        app.insert_non_send_resource(script);
+        app.world_mut()
+            .resource_mut::<EquipErrors>()
+            .0
+            .push(EquipError {
+                reason: REASON,
+                required_level: None,
+                bag_slot: 0xff,
+                unlocks: [0, 0],
+            });
+        app.update();
+        let s = app
+            .world()
+            .non_send_resource::<benilla_ui::script::UiScript>();
+        assert_eq!(s.eval::<String>("return SEEN").unwrap(), "0");
+        assert!(
+            s.eval::<bool>("return HasKey() == 1").unwrap(),
+            "pushed after"
+        );
+    }
+
     /// A refusal that lands while no VM is up keeps its line for the next one but drops its
     /// unlocks, which would otherwise fire into that VM's locks.
     #[test]
