@@ -18,9 +18,9 @@ use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
 
-use super::{SpellModifiers, OP_GCD};
+use super::{CategoryPad, SpellModifiers, OP_GCD};
 use benilla_formats::SpellDisplay;
-use benilla_protocol::messages::ItemUseSpell;
+use benilla_protocol::messages::{ItemInfo, ItemSpellEntry, ItemUseSpell};
 
 /// One timer; a zero duration is untracked.
 #[derive(Clone, Copy, Debug)]
@@ -129,10 +129,25 @@ pub(crate) struct Cooldowns {
     /// Bumped when [`Self::prune`] removes records. Kept apart from [`Self::generation`]: gated
     /// feeds must see an expiry, but the reference never fires the event for one.
     expiry_epoch: u64,
+    /// The item cooldowns the spell go's item leg holds until the item's record arrives, the
+    /// table `0xceca60` of `ITEMCOOLDOWNHASHNODE`s keyed by item entry ([`Self::pend_item`]).
+    pending_items: std::collections::HashMap<u32, PendingItem>,
+}
+
+/// One `ITEMCOOLDOWNHASHNODE` (`0x6e8660`): the spell at `+0x18`, the go's time at `+0x1c` and the
+/// held flag at `+0x20`.
+#[derive(Clone, Copy, Debug)]
+struct PendingItem {
+    spell_id: u32,
+    at: Instant,
+    on_hold: bool,
 }
 
 impl Cooldowns {
-    fn bump(&mut self) {
+    /// `0x4b31b0`, the cooldown pair: `ACTIONBAR_UPDATE_COOLDOWN` and `SPELL_UPDATE_COOLDOWN`. On
+    /// the pet's list its watcher adds `PET_BAR_UPDATE_COOLDOWN`, the `0x4bce90` each pet site
+    /// calls after it.
+    pub(crate) fn flush(&mut self) {
         self.generation = self.generation.wrapping_add(1);
     }
 
@@ -142,7 +157,7 @@ impl Cooldowns {
 
     /// `0x4b31b0` then `0x4f93d0`, the pair every item leg calls.
     pub(crate) fn flush_item_leg(&mut self) {
-        self.bump();
+        self.flush();
         self.bag_flushes = self.bag_flushes.wrapping_add(1);
     }
 
@@ -216,7 +231,7 @@ impl Cooldowns {
             gcd_category,
             gcd,
         });
-        self.bump();
+        self.flush();
     }
 
     /// Drop fully elapsed records that are not on hold; invisible to reads, it stands in for the
@@ -321,6 +336,33 @@ impl Cooldowns {
         );
     }
 
+    /// Hold the go's item cooldown until the item's record arrives (`0x6e8660`).
+    pub(crate) fn pend_item(
+        &mut self,
+        item_entry: u32,
+        spell_id: u32,
+        now: Instant,
+        on_hold: bool,
+    ) {
+        self.pending_items.insert(
+            item_entry,
+            PendingItem {
+                spell_id,
+                at: now,
+                on_hold,
+            },
+        );
+    }
+
+    /// The item record for `item_entry` arrived, or was refused (`None`).
+    pub(crate) fn item_record_landed<'a>(
+        &mut self,
+        _item_entry: u32,
+        _record: Option<&ItemInfo>,
+        _spell: impl Fn(u32) -> Option<&'a SpellDisplay>,
+    ) {
+    }
+
     /// Arm the GCD at cast send (`StartGlobalCooldown 0x6e2de0`, from `0x6e58fb`) for any cast or
     /// item use, and at a pet-bar spell press (`0x4bd367`, into the pet's list), unless
     /// `startRecoveryCategory` and `startRecoveryTime` are both 0
@@ -388,7 +430,7 @@ impl Cooldowns {
                 );
             }
             self.prune(now);
-            self.bump();
+            self.flush();
         }
     }
 
@@ -434,14 +476,27 @@ impl Cooldowns {
     pub(crate) fn clear_session(&mut self) {
         if !self.records.is_empty() {
             self.records.clear();
-            self.bump();
+            self.flush();
+        }
+    }
+
+    /// `SMSG_SPELL_COOLDOWN` (`0x6e9460`): each pair's record.
+    pub(crate) fn apply_spell_cooldowns<'a>(
+        &mut self,
+        pairs: impl IntoIterator<Item = (u32, u32, Option<&'a SpellDisplay>)>,
+        _mods: &SpellModifiers,
+        _pad: CategoryPad,
+        now: Instant,
+    ) {
+        for (spell_id, cooldown_ms, spell) in pairs {
+            self.apply_wire_cooldown(spell_id, cooldown_ms, spell, now);
         }
     }
 
     /// One `SMSG_SPELL_COOLDOWN` entry (`0x6e9460`): a nonzero duration is the recovery with no
     /// category timer; zero means the spell's own `Spell.dbc` pair. An on-event spell parks with
     /// no GCD; any other carries its GCD.
-    pub(crate) fn apply_wire_cooldown(
+    fn apply_wire_cooldown(
         &mut self,
         spell_id: u32,
         cooldown_ms: u32,
@@ -516,6 +571,10 @@ impl Cooldowns {
     pub(crate) fn seed_initial(
         &mut self,
         cd: &benilla_protocol::messages::SpellCooldown,
+        _spell: Option<&SpellDisplay>,
+        _block: Option<&ItemSpellEntry>,
+        _mods: &SpellModifiers,
+        _pad: CategoryPad,
         now: Instant,
     ) {
         self.add(
@@ -1099,20 +1158,34 @@ mod tests {
             spell_cd_ms: ms,
             category_cd_ms: 0,
         };
+        let last_stand = spell(0, 600_000, 0, (0, 0), 0);
+        let seed = |cds: &mut Cooldowns, ms, at| {
+            cds.seed_initial(
+                &wire(ms),
+                Some(&last_stand),
+                None,
+                &SpellModifiers::default(),
+                CategoryPad::NoPlayer,
+                at,
+            );
+        };
         let t0 = Instant::now();
         let mut cds = Cooldowns::default();
 
         // Login one: 600 s still to run.
-        cds.seed_initial(&wire(600_000), t0);
-        assert_eq!(cds.info(12975, 0, None, t0).duration_ms, 600_000);
+        seed(&mut cds, 600_000, t0);
+        assert_eq!(
+            cds.info(12975, 0, Some(&last_stand), t0).duration_ms,
+            600_000
+        );
 
         // Relog six seconds later: the server now says 594 s.
         let t1 = t0 + Duration::from_secs(6);
         cds.clear_session();
         assert!(cds.records.is_empty(), "the list dies with the session");
-        cds.seed_initial(&wire(594_000), t1);
+        seed(&mut cds, 594_000, t1);
 
-        let read = cds.info(12975, 0, None, t1);
+        let read = cds.info(12975, 0, Some(&last_stand), t1);
         assert_eq!(
             (cds.records.len(), read.duration_ms, read.remaining_ms),
             (1, 594_000, 594_000),

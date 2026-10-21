@@ -56,6 +56,32 @@ fn index(mask_bit: u8, op: u8) -> usize {
     usize::from(mask_bit) * OPS + usize::from(op)
 }
 
+/// Whom `0x6e2b60` adjusts a category recovery for: its active-player lookup (`0x6e2b96`) and its
+/// `skip` argument, which a pet's list passes set (`0x6e9544`, `0x6e2d77`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CategoryPad {
+    /// No active player object: the value is left as it is.
+    NoPlayer,
+    /// `skip` set: op 11 alone.
+    Skip,
+    /// The player's list: the active player's `UNIT_FIELD_RANGEDATTACKTIME` (descriptor
+    /// `+0x1e8`), added for a ranged-speed spell, then op 11.
+    Player { ranged_attack_time_ms: u32 },
+}
+
+impl CategoryPad {
+    /// The pad for a list, given the active player's object when it is streamed.
+    pub(crate) fn for_list(pet: bool, player: Option<&ObjectStore>) -> Self {
+        match player {
+            None => Self::NoPlayer,
+            Some(_) if pet => Self::Skip,
+            Some(store) => Self::Player {
+                ranged_attack_time_ms: store.0.unit_ranged_attack_time().unwrap_or(0),
+            },
+        }
+    }
+}
+
 /// What a talent does to one number, `(value + flat) * pct / 100`; spent only through
 /// [`Self::apply`]. [`Default`] is the identity `(0, 100)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -200,6 +226,23 @@ impl SpellModifiers {
     /// Apply a spell's modifier for `op` to `value`: the applier with its `test al,al` gate.
     pub(crate) fn apply(&self, d: &SpellDisplay, op: u8, value: i32) -> i32 {
         self.modifiers(d, op).map_or(value, |m| m.apply(value))
+    }
+
+    /// `0x6e2b60(&value, spell, skip)`, a category recovery adjusted for the active player: with
+    /// none it is left as it is (`0x6e2b9f`); `skip` goes straight to op 11 (`0x6e2baa`); else
+    /// the ranged pad (`0x6e2c2c`-`0x6e2c47`), then op 11 (`0x6e2c50`). Its main-hand speed scale
+    /// for a `SpellCategory` row of flags `0x1` (`0x6e2bcf`) is left out: 1.12.1's one such row,
+    /// 170, is no spell's category.
+    pub(crate) fn category_recovery(&self, d: &SpellDisplay, value: i32, pad: CategoryPad) -> i32 {
+        let padded = match pad {
+            CategoryPad::NoPlayer => return value,
+            CategoryPad::Skip => value,
+            CategoryPad::Player {
+                ranged_attack_time_ms,
+            } if d.ranged_speed_cooldown() => value.wrapping_add(ranged_attack_time_ms as i32),
+            CategoryPad::Player { .. } => value,
+        };
+        self.apply(d, OP_COOLDOWN, padded)
     }
 
     /// The reference applies op 11 separately to RecoveryTime and to CategoryRecoveryTime

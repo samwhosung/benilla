@@ -46,6 +46,7 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::ClearCooldown, on_cooldown_packet)
         .net_handler(K::CooldownCheat, on_cooldown_packet)
         .net_handler(K::ItemCooldown, on_item_cooldown)
+        .net_handler(K::ItemTemplate, on_item_record)
         .net_handler(K::ChannelStart, on_channel)
         .net_handler(K::ChannelUpdate, on_channel)
         .net_handler(K::AuraDuration, on_aura_duration)
@@ -103,14 +104,35 @@ pub(crate) struct Scene<'w, 's> {
 }
 
 /// `SMSG_INITIAL_SPELLS`, once at login, into the action store the UI feed reads.
-fn on_spell_book(In(ev): In<SessionEvent>, mut l: Lifecycle) {
+fn on_spell_book(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene) {
     if let SessionEvent::SpellBook {
         spell_ids,
         cooldowns,
     } = ev
     {
-        spell_book(spell_ids, cooldowns, &mut l.actions, &mut l.cooldowns);
+        let player = active_player(&l.self_guid, &l.index, &sc.stores);
+        let pad = crate::spell::CategoryPad::for_list(false, player);
+        spell_book(
+            spell_ids,
+            cooldowns,
+            &mut l.actions,
+            &mut l.cooldowns,
+            (l.spells.as_deref(), &sc.items, &l.spell_mods, pad),
+        );
     }
+}
+
+/// The active player's object (`0x468460` with type mask `0x10` on `0x468550`'s guid), when
+/// streamed.
+fn active_player<'a>(
+    self_guid: &SelfGuid,
+    index: &GuidIndex,
+    stores: &'a Query<&mut ObjectStore>,
+) -> Option<&'a ObjectStore> {
+    self_guid
+        .0
+        .and_then(|g| index.0.get(&g))
+        .and_then(|&e| stores.get(e).ok())
 }
 
 fn on_action_buttons(In(ev): In<SessionEvent>, mut l: Lifecycle) {
@@ -385,12 +407,14 @@ fn on_cancel_auto_repeat(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene) 
 }
 
 /// The four cooldown packets, each routed through [`addressed_store`] by the caster guid.
-fn on_cooldown_packet(In(ev): In<SessionEvent>, mut l: Lifecycle) {
+fn on_cooldown_packet(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene) {
+    let player = active_player(&l.self_guid, &l.index, &sc.stores);
     let Lifecycle {
         self_guid,
         spells,
         cooldowns,
         pet_bar,
+        spell_mods,
         ..
     } = &mut l;
     match ev {
@@ -398,8 +422,10 @@ fn on_cooldown_packet(In(ev): In<SessionEvent>, mut l: Lifecycle) {
             caster,
             cooldowns: pairs,
         } => {
+            let pet = self_guid.0 != Some(caster);
             if let Some(store) = addressed_store(caster, self_guid, cooldowns, pet_bar) {
-                spell_cooldowns(caster, pairs, spells.as_deref(), store);
+                let pad = crate::spell::CategoryPad::for_list(pet, player);
+                spell_cooldowns(caster, pairs, spells.as_deref(), store, spell_mods, pad);
             }
         }
         SessionEvent::CooldownEvent { spell_id, caster } => {
@@ -418,6 +444,16 @@ fn on_cooldown_packet(In(ev): In<SessionEvent>, mut l: Lifecycle) {
             }
         }
         _ => {}
+    }
+}
+
+/// `SMSG_ITEM_QUERY_SINGLE_RESPONSE`, the item cache's callbacks of the cooldown list: a held
+/// item cooldown's `0x6e8830`.
+fn on_item_record(In(ev): In<SessionEvent>, mut l: Lifecycle) {
+    if let SessionEvent::ItemTemplate { entry, info } = ev {
+        let spells = l.spells.as_deref();
+        l.cooldowns
+            .item_record_landed(entry, info.as_deref(), |id| spells?.catalog.get(id));
     }
 }
 
@@ -486,12 +522,19 @@ fn addressed_store<'a>(
 }
 
 /// `SMSG_INITIAL_SPELLS`: the book into the action store, and the active cooldowns, whose wire
-/// value is remaining ms, into the cooldown store ([`Cooldowns::seed_initial`]).
+/// value is remaining ms, into the cooldown store ([`Cooldowns::seed_initial`]). `seed` is what
+/// the seed reads: the catalog, the item cache, the modifiers and the category pad.
 fn spell_book(
     spell_ids: Vec<u32>,
     initial_cooldowns: Vec<SpellCooldown>,
     actions: &mut PlayerActions,
     cooldowns: &mut Cooldowns,
+    seed: (
+        Option<&Spells>,
+        &crate::items::Items,
+        &crate::spell::SpellModifiers,
+        crate::spell::CategoryPad,
+    ),
 ) {
     debug!(
         "net: spell book — {} spells, {} active cooldown(s)",
@@ -500,9 +543,17 @@ fn spell_book(
     );
     actions.spells = spell_ids.into_iter().collect();
     actions.dirty = true;
+    let (spells, items, mods, pad) = seed;
     let now = Instant::now();
     for cd in &initial_cooldowns {
-        cooldowns.seed_initial(cd, now);
+        let spell_id = u32::from(cd.spell_id);
+        let spell = spells.and_then(|s| s.catalog.get(spell_id));
+        // `0x6e2c60` reads the item's record with no callback (`0x6e2ce0`) and takes its first
+        // slot naming the spell (`0x6e2cf4`).
+        let block = items
+            .template(u32::from(cd.item_id), 0, Ask::Read)
+            .and_then(|t| t.spells.iter().find(|b| b.spell_id == spell_id));
+        cooldowns.seed_initial(cd, spell, block, mods, pad, now);
     }
 }
 
@@ -1271,16 +1322,17 @@ fn spell_cooldowns(
     pairs: Vec<(u32, u32)>,
     spells: Option<&Spells>,
     cooldowns: &mut Cooldowns,
+    mods: &crate::spell::SpellModifiers,
+    pad: crate::spell::CategoryPad,
 ) {
     debug!(
         "net: spell cooldowns for {caster:#x} — {} pair(s)",
         pairs.len()
     );
-    let now = Instant::now();
-    for (spell_id, cooldown_ms) in pairs {
-        let display = spells.and_then(|s| s.catalog.get(spell_id));
-        cooldowns.apply_wire_cooldown(spell_id, cooldown_ms, display, now);
-    }
+    let pairs = pairs
+        .into_iter()
+        .map(|(id, ms)| (id, ms, spells.and_then(|s| s.catalog.get(id))));
+    cooldowns.apply_spell_cooldowns(pairs, mods, pad, Instant::now());
 }
 
 /// `SMSG_ITEM_COOLDOWN` (`0x6e95d0`): the fixed 30 s use cooldown, keyed on the item instance's

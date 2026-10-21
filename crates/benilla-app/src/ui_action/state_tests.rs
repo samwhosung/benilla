@@ -1636,7 +1636,12 @@ fn bag_update_cooldown_fires_from_the_item_legs_alone() {
 
     cds(&mut app).start_gcd(133, &fireball, now, &mods);
     assert_eq!(frame(&mut app), PAIR, "a cast's global cooldown");
-    cds(&mut app).apply_wire_cooldown(133, 8000, Some(&fireball), now);
+    cds(&mut app).apply_spell_cooldowns(
+        [(133, 8000, Some(&fireball))],
+        &mods,
+        crate::spell::CategoryPad::NoPlayer,
+        now,
+    );
     assert_eq!(frame(&mut app), PAIR, "SMSG_SPELL_COOLDOWN");
     cds(&mut app).apply_wire_item_cooldown(6948, 8690, now);
     assert_eq!(
