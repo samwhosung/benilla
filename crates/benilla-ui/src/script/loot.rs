@@ -140,6 +140,12 @@ impl super::UiScript {
         }
     }
 
+    /// Shift as the VM's calls see it (`EventIsKeyDown(0)`, the state `IsShiftKeyDown` reads too):
+    /// what `OpenItem` passes `SetAutoLoot` (`0x5edca7`), read inside its `UseContainerItem` call.
+    pub fn shift_key_down(&self) -> bool {
+        self.model_ref().modifiers.0
+    }
+
     /// The loot the VM shows now, as the last push or a call left it.
     pub fn shown_loot(&self) -> Option<LootState> {
         self.model_ref().loot.clone()

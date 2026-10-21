@@ -1159,7 +1159,6 @@ pub(crate) fn seat_loot_steps(world: &mut World) {
     world.init_resource::<crate::ui_action::UiErrorKeys>();
     world.init_resource::<crate::net::GuidIndex>();
     world.init_resource::<Items>();
-    world.init_resource::<ButtonInput<KeyCode>>();
     world.init_resource::<Messages<crate::sound::LootPickupSound>>();
     world.init_resource::<Messages<crate::target::DeselectGuid>>();
 }
@@ -1467,7 +1466,6 @@ mod tests {
             .init_resource::<Items>()
             .init_resource::<NameCache>()
             .init_resource::<crate::ui_chat::ChatLog>()
-            .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<UiErrorKeys>()
             .insert_resource(NetCommands(tx));

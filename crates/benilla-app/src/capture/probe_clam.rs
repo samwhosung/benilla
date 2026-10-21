@@ -54,7 +54,16 @@ pub(crate) struct ProbeClamPlugin;
 impl Plugin for ProbeClamPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ClamProbe>()
-            .add_systems(Update, clam_probe);
+            .add_systems(Update, (hold_auto_loot_off, clam_probe).chain());
+    }
+}
+
+/// The window must survive to be looked at: with auto-loot on, the single row is taken at the open
+/// edge and the last-row auto-release shuts it again immediately. Its own system, as the VM's call
+/// host reads the config the probe writes.
+fn hold_auto_loot_off(mut cfg: ResMut<LootConfig>) {
+    if cfg.auto_loot {
+        cfg.auto_loot = false;
     }
 }
 
@@ -182,7 +191,6 @@ fn clam_probe(
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     objects: Objects,
     items: Res<Items>,
-    mut cfg: ResMut<LootConfig>,
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -198,9 +206,6 @@ fn clam_probe(
 
         match probe.phase {
             Phase::Wait => {
-                // The window must survive to be looked at: with auto-loot on, the single row is
-                // taken at the open edge and the last-row auto-release shuts it again immediately.
-                cfg.auto_loot = false;
                 info!(
                     "PROBE_CLAM: stocking one openable item (entry {entry}) — auto-loot forced off"
                 );

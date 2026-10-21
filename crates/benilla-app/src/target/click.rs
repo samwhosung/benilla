@@ -429,7 +429,9 @@ impl Dispatch<'_, '_> {
     /// as a call: inside the click's turn it applies as the turn ends, ahead of the leg's [`Owed`].
     fn set_auto_loot(&self, script: Option<&mut benilla_ui::script::UiScript>) {
         if let Some(script) = script {
-            script.set_auto_loot(crate::ui_loot::interaction_byte(&self.loot_cfg, &self.keys));
+            let shift =
+                self.keys.pressed(KeyCode::ShiftLeft) || self.keys.pressed(KeyCode::ShiftRight);
+            script.set_auto_loot(crate::ui_loot::interaction_byte(&self.loot_cfg, shift));
         }
     }
 

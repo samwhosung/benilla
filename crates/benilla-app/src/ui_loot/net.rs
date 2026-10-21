@@ -1438,7 +1438,6 @@ mod tests {
         app.insert_resource(super::super::AutoLootByte(true))
             .init_resource::<crate::ui_chat::ChatLog>()
             .init_resource::<crate::names::NameCache>()
-            .init_resource::<ButtonInput<KeyCode>>()
             .insert_non_send_resource(benilla_ui::script::UiScript::new().expect("VM"))
             .add_systems(
                 Update,
@@ -1500,17 +1499,15 @@ mod tests {
                 app.world_mut(),
                 crate::player::Player::with_move_flags(flags),
             );
-            app.init_resource::<super::super::LootConfig>()
-                .init_resource::<ButtonInput<KeyCode>>()
-                .add_systems(
-                    Update,
-                    (
-                        super::super::feed_loot,
-                        super::super::drain_loot,
-                        crate::target::click::clear_target_requests,
-                    )
-                        .chain(),
-                );
+            app.init_resource::<super::super::LootConfig>().add_systems(
+                Update,
+                (
+                    super::super::feed_loot,
+                    super::super::drain_loot,
+                    crate::target::click::clear_target_requests,
+                )
+                    .chain(),
+            );
             app.world()
                 .non_send_resource::<UiScript>()
                 .run(

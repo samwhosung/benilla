@@ -881,11 +881,9 @@ mod tests {
         app.insert_non_send_resource(harness_vm());
         feed_clam(&mut app);
         crate::ui_loot::seat_loot_steps(app.world_mut());
-        if shift {
-            app.world_mut()
-                .resource_mut::<ButtonInput<KeyCode>>()
-                .press(KeyCode::ShiftLeft);
-        }
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .set_modifiers(shift, false, false);
         setup(&mut app);
         app.world_mut()
             .non_send_resource_mut::<UiScript>()

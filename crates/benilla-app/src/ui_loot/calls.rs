@@ -32,8 +32,7 @@ pub(crate) struct OpenItem {
 /// The byte an interaction passes `SetAutoLoot`: whether Shift is down (`EventIsKeyDown(0)`,
 /// `0x492879`, `0x5edca7`), inverted by `autoLootDefault` ([`LootConfig::auto_loot`]), which is
 /// not a 1.12 CVar and off by default, leaving Shift alone.
-pub(crate) fn interaction_byte(cfg: &LootConfig, keys: &ButtonInput<KeyCode>) -> bool {
-    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+pub(crate) fn interaction_byte(cfg: &LootConfig, shift: bool) -> bool {
     cfg.auto_loot != shift
 }
 
@@ -75,7 +74,6 @@ pub(crate) struct LootSteps<'w, 's> {
     errors: Res<'w, UiErrorKeys>,
     chat: Res<'w, crate::ui_chat::ChatLog>,
     cfg: Res<'w, LootConfig>,
-    keys: Res<'w, ButtonInput<KeyCode>>,
 }
 
 impl LootSteps<'_, '_> {
@@ -117,13 +115,13 @@ impl LootSteps<'_, '_> {
     }
 
     /// `OpenItem 0x5edc80` from its `SetAutoLoot` (`0x5edcb6`) on, the call having chosen the
-    /// item and locked it: the byte from the keys, which with a window open sweeps it, then the
+    /// item and locked it: the byte from Shift as the call saw it, which with a window open sweeps it, then the
     /// item held as the loot target (`0x5edcc0`) and `CMSG_OPEN_ITEM`, once that sweep's
     /// listeners have run.
     pub(crate) fn open_item(&mut self, script: &mut UiScript, open: OpenItem) -> Option<CallTail> {
         let owed = self.loot.then.len();
         self.loot.then.push(Then::OpenItem(open));
-        let byte = interaction_byte(&self.cfg, &self.keys);
+        let byte = interaction_byte(&self.cfg, script.shift_key_down());
         self.set_auto_loot(script, byte);
         if self.loot.then.len() == owed + 1 {
             self.loot.then.pop();
