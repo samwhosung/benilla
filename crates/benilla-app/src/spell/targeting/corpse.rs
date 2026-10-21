@@ -108,9 +108,11 @@ impl super::SpellTargeting {
     pub(crate) fn can_target_corpse(&self, entity: Entity, checks: &super::BindChecks) -> bool {
         self.0.as_ref().is_some_and(|t| {
             checks
-                .corpse_facts(entity)
+                .corpse_facts(t.commit, entity)
                 .is_some_and(|f| bind_arm(t.word, f).is_some())
-                && checks.corpse_range_refusal(t.spell_id, entity).is_none()
+                && checks
+                    .corpse_range_refusal(t.spell_id, t.commit, entity)
+                    .is_none()
         })
     }
 }
@@ -132,13 +134,16 @@ pub(super) fn bind_target_corpse(
     let Some((spell_id, commit, word)) = ladder.ground.pending() else {
         return;
     };
-    let Some(bit) = checks.corpse_facts(entity).and_then(|f| bind_arm(word, f)) else {
+    let Some(bit) = checks
+        .corpse_facts(commit, entity)
+        .and_then(|f| bind_arm(word, f))
+    else {
         return;
     };
     if word & !bit.target_flag() != 0 {
         return;
     }
-    let range = checks.corpse_range_refusal(spell_id, entity);
+    let range = checks.corpse_range_refusal(spell_id, commit, entity);
     super::merge(
         ladder,
         spell_id,

@@ -95,21 +95,41 @@ impl BindChecks<'_, '_> {
             .is_some_and(|store| store.0.unit_charmed_by().is_some())
     }
 
-    fn is_self(&self, entity: Entity) -> bool {
-        self.self_q
-            .iter()
-            .next()
-            .is_some_and(|(me, _)| me == entity)
+    /// The record's caster (`0xceac50`, resolved at `0x6e5b89`), which `BindTarget`'s relations
+    /// and its range test read: the pet bar's unit for a cast it handed the attempt, else the
+    /// active player. `None` while that caster is not streamed.
+    fn caster(
+        &self,
+        commit: super::cast_send::CastCommit,
+    ) -> Option<(Entity, Option<&crate::net::ObjectStore>)> {
+        match commit.unit_caster() {
+            Some(guid) => {
+                let entity = *self.index.as_deref()?.0.get(&guid)?;
+                Some((entity, self.stores.get(entity).ok()))
+            }
+            None => self.self_q.iter().next(),
+        }
+    }
+
+    fn is_caster(&self, entity: Entity, commit: super::cast_send::CastCommit) -> bool {
+        self.caster(commit)
+            .is_some_and(|(caster, _)| caster == entity)
     }
 
     /// `BindTarget 0x6e5b40`'s unit branch: whether this unit binds the word under this spell,
-    /// its gates and then its relation checks ([`super::cast_target::unit_binds`]). An unknown
-    /// spell has no row to gate on.
-    fn unit_binds(&self, spell_id: u32, word: u16, entity: Entity) -> bool {
+    /// its gates and then its relation checks ([`super::cast_target::unit_binds`]) from the
+    /// cast's caster. An unknown spell has no row to gate on.
+    fn unit_binds(
+        &self,
+        spell_id: u32,
+        commit: super::cast_send::CastCommit,
+        word: u16,
+        entity: Entity,
+    ) -> bool {
         let target_store = self.stores.get(entity).ok();
         let owner_store =
             |store| super::cast_target::owner_store(store, self.index.as_deref(), &self.stores);
-        let me = self.self_q.iter().next();
+        let me = self.caster(commit);
         let self_store = me.and_then(|(_, store)| store);
         let rel = super::cast_target::TargetRelations {
             target_store,
@@ -132,14 +152,19 @@ impl BindChecks<'_, '_> {
             },
         };
         let def = self.spells.as_deref().and_then(|s| s.catalog.get(spell_id));
-        super::cast_target::unit_binds(def, word, self.is_self(entity), &rel)
+        super::cast_target::unit_binds(def, word, self.is_caster(entity, commit), &rel)
     }
 
-    /// The spell's min/max range against this unit, through the one compare the pre-send gate
-    /// asks ([`super::cast_target::RangeInputs::refusal`]); our own body is distance 0. An
-    /// unknown spell or a missing row passes.
-    fn range_refusal(&self, spell_id: u32, entity: Entity) -> Option<u8> {
-        let mut range = self.range_inputs(entity);
+    /// The spell's min/max range from the cast's caster against this unit, through the one
+    /// compare the pre-send gate asks ([`super::cast_target::RangeInputs::refusal`]); the caster's
+    /// own body is distance 0. An unknown spell or a missing row passes.
+    fn range_refusal(
+        &self,
+        spell_id: u32,
+        commit: super::cast_send::CastCommit,
+        entity: Entity,
+    ) -> Option<u8> {
+        let mut range = self.range_inputs(commit, entity);
         range.target = self.range_units.unit(entity);
         self.refusal(spell_id, range)
     }
@@ -148,16 +173,32 @@ impl BindChecks<'_, '_> {
     /// unit's (`6e35fe`), but with no unit to read the second reach from it reads the caster's
     /// again (`6e3605`–`6e361e`). On the ranged arm, which the corpse spells use, no unit means no
     /// moving bonus; a melee row would fall back to the auto-attack target (`0x6e3580`).
-    fn corpse_range_refusal(&self, spell_id: u32, entity: Entity) -> Option<u8> {
-        let mut range = self.range_inputs(entity);
+    fn corpse_range_refusal(
+        &self,
+        spell_id: u32,
+        commit: super::cast_send::CastCommit,
+        entity: Entity,
+    ) -> Option<u8> {
+        let mut range = self.range_inputs(commit, entity);
         range.target = Some(benilla_formats::RangeUnit::still(range.caster.reach));
         self.refusal(spell_id, range)
     }
 
-    /// Our position, reach and motion and the candidate's position, each position the pose the
-    /// hover picks against.
-    fn range_inputs(&self, entity: Entity) -> super::cast_target::RangeInputs {
-        let me = self.self_q.iter().next();
+    /// The caster's position, reach and motion and the candidate's position, each position the
+    /// pose the hover picks against.
+    fn range_inputs(
+        &self,
+        commit: super::cast_send::CastCommit,
+        entity: Entity,
+    ) -> super::cast_target::RangeInputs {
+        let me = self.caster(commit);
+        let caster = match (commit.unit_caster(), me) {
+            (Some(_), Some((unit, _))) => self
+                .range_units
+                .unit(unit)
+                .unwrap_or(benilla_formats::RangeUnit::still(super::DEFAULT_REACH)),
+            _ => self.range_units.caster(),
+        };
         super::cast_target::RangeInputs {
             self_pos: me
                 .and_then(|(e, _)| self.poses.get(e).ok())
@@ -167,7 +208,7 @@ impl BindChecks<'_, '_> {
                 .get(entity)
                 .ok()
                 .map(GlobalTransform::translation),
-            caster: self.range_units.caster(),
+            caster,
             target: None,
         }
     }
@@ -179,12 +220,16 @@ impl BindChecks<'_, '_> {
     }
 
     /// What the corpse legs read of this corpse: `CORPSE_FLAG_BONES` and the reaction gate
-    /// `0x6067d0`. A corpse whose store has not streamed binds nothing.
-    fn corpse_facts(&self, entity: Entity) -> Option<corpse::CorpseFacts> {
+    /// `0x6067d0`, from the cast's caster. A corpse whose store has not streamed binds nothing.
+    fn corpse_facts(
+        &self,
+        commit: super::cast_send::CastCommit,
+        entity: Entity,
+    ) -> Option<corpse::CorpseFacts> {
         Some(corpse::CorpseFacts::of(
             self.stores.get(entity).ok()?,
             self.factions.as_deref(),
-            self.self_q.iter().next().and_then(|(_, s)| s),
+            self.caster(commit).and_then(|(_, s)| s),
         ))
     }
 }
@@ -308,8 +353,8 @@ impl SpellTargeting {
     /// test.
     pub(crate) fn can_target_unit(&self, entity: Entity, checks: &BindChecks) -> bool {
         self.0.as_ref().is_some_and(|t| {
-            checks.unit_binds(t.spell_id, t.word, entity)
-                && checks.range_refusal(t.spell_id, entity).is_none()
+            checks.unit_binds(t.spell_id, t.commit, t.word, entity)
+                && checks.range_refusal(t.spell_id, t.commit, entity).is_none()
         })
     }
 
@@ -498,10 +543,10 @@ fn bind_target_unit(
     let Some((spell_id, commit, word)) = ladder.ground.pending() else {
         return;
     };
-    if !checks.unit_binds(spell_id, word, entity) {
+    if !checks.unit_binds(spell_id, commit, word, entity) {
         return;
     }
-    let range = checks.range_refusal(spell_id, entity);
+    let range = checks.range_refusal(spell_id, commit, entity);
     merge(
         ladder,
         spell_id,
