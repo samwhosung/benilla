@@ -416,12 +416,13 @@ impl Cooldowns {
         }
     }
 
-    /// Clear the GCD of a spell's records (`0x6e1630`), on a failed cast.
+    /// `ClearGlobalCooldown 0x6e1630`, on a failed cast: every record of the spell matches
+    /// (`0x6e1658`), whatever its GCD, and has its GCD category and time zeroed (`0x6e1660`,
+    /// `0x6e1663`); with a match, the sweep at now (`0x6e1678`) and the flush (`0x6e167d`).
     pub(crate) fn clear_gcd(&mut self, spell_id: u32, now: Instant) {
         let mut touched = false;
         for r in &mut self.records {
-            if r.spell_id == spell_id && !r.gcd.is_zero() {
-                // `0x6e1630` zeroes both the category and the time.
+            if r.spell_id == spell_id {
                 r.gcd_category = 0;
                 r.gcd = Duration::ZERO;
                 touched = true;
