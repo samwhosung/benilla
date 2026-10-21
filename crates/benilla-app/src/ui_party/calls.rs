@@ -22,14 +22,11 @@ use crate::net::{ClientCommand, GuidIndex, NetCommands, ObjectStore};
 use crate::query_cache::Ask;
 use crate::ui_action::{UiError, UiErrorKeys};
 
-/// What a call leaves for the drain: the sandbox's echoes, and an answered invite.
+/// What a call leaves for the drain: the sandbox's echoes.
 #[derive(Resource, Default)]
 pub(crate) struct GroupEdits {
     /// The sandbox's group-changing calls, for the drain to answer as the server's echo would.
     pub(super) sandbox: Vec<SandboxEcho>,
-    /// `AcceptGroup` or `DeclineGroup` ran: the invite popup's inviter goes
-    /// ([`GroupState::pending_invite`]).
-    pub(super) invite_answered: bool,
 }
 
 /// One sandboxed call for the drain to echo.
@@ -52,6 +49,8 @@ pub(crate) struct PartyCalls<'w, 's> {
     commands: Res<'w, NetCommands>,
     errors: Res<'w, UiErrorKeys>,
     relations: crate::target::RelationWorld<'w, 's>,
+    /// `InviteByGuid`'s acknowledge (`0x5e949c`); a world with no tutorial state has none.
+    tutorials: Option<Res<'w, crate::tutorial::Tutorials>>,
 }
 
 /// The calls that change the group, which the sandbox answers as the server would
@@ -92,23 +91,17 @@ impl PartyCalls<'_, '_> {
             let _ = self.commands.0.send(command);
         };
         match request {
-            PartyRequest::Accept => {
-                send(ClientCommand::GroupAccept);
-                self.edits.invite_answered = true;
-            }
-            PartyRequest::Decline => {
-                send(ClientCommand::GroupDecline);
-                self.edits.invite_answered = true;
-            }
+            // `SendGroupAccept 0x5e96c0` and `SendGroupDecline 0x5e9720`: the packet and nothing
+            // else, so the invite's popup stays until it hides itself.
+            PartyRequest::Accept => send(ClientCommand::GroupAccept),
+            PartyRequest::Decline => send(ClientCommand::GroupDecline),
             PartyRequest::Leave => send(ClientCommand::GroupLeave),
-            PartyRequest::InviteName(name) => {
-                script.queue_tutorial_acknowledge(crate::tutorial::id::GROUPING);
-                send(ClientCommand::GroupInvite { name });
-            }
+            // The binding `InviteByName` sends with no acknowledge (`0x48a495`-`0x48a4c8`).
+            PartyRequest::InviteName(name) => send(ClientCommand::GroupInvite { name }),
             // The binding resolved the token (`0x48a3ed`). `InviteByGuid` (`0x5e9440`) invites
             // only a player the object manager holds (`0x5e945d`, typemask 0x10), by its
             // `GetUnitName` (`0x609210`), through `InviteByName` (`0x5e9477`), whose first act
-            // acknowledges the grouping tutorial (`0x5e949c`).
+            // acknowledges the grouping tutorial (`0x5e949c`), its flag sent ahead of the invite.
             PartyRequest::InviteGuid(guid) => {
                 let Some(store) =
                     held(guid).filter(|s| matches!(s.0.object_type(), Some(ObjectType::Player)))
@@ -119,7 +112,9 @@ impl PartyCalls<'_, '_> {
                     .names
                     .resolve_unit(guid, Some(store), Ask::Event(&self.commands))
                     .map_or_else(|| script.unknown_object_text(), str::to_string);
-                script.queue_tutorial_acknowledge(crate::tutorial::id::GROUPING);
+                if let Some(tutorials) = &self.tutorials {
+                    tutorials.acknowledge_now(crate::tutorial::id::GROUPING, &self.commands);
+                }
                 send(ClientCommand::GroupInvite { name });
             }
             // The binding resolved the token (`0x48a54d`).

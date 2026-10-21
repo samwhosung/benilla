@@ -51,6 +51,22 @@ fn sent_by(app: &mut App, rx: &Receiver<ClientCommand>, chunk: &str) -> Vec<Stri
 #[test]
 fn a_chunks_party_verbs_send_in_call_order_with_every_other_verb() {
     let (mut app, rx) = client();
+    // Our player's object and a party we lead: `LeaveParty` (`0x4e9196`) and `ConvertToRaid`
+    // (`0x4bbc96`-`0x4bbcbc`) send only then.
+    let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+    script.set_unit_guids(&benilla_ui::script::UnitGuids {
+        player: 0x10,
+        ..Default::default()
+    });
+    script.set_party(benilla_ui::script::PartyState {
+        members: vec![benilla_ui::script::PartyMemberInfo {
+            name: "Bob".into(),
+            guid: 0x21,
+        }],
+        leader_guid: 0x10,
+        own_guid: 0x10,
+        ..Default::default()
+    });
     assert_eq!(
         sent_by(
             &mut app,
@@ -83,7 +99,8 @@ fn invite_to_party_flags_the_grouping_tutorial_before_its_invite() {
     let (mut app, rx) = client();
     let world = app.world_mut();
     world
-        .resource_mut::<crate::tutorial::Tutorials>()
+        .resource::<crate::tutorial::Tutorials>()
+        .lock()
         .apply_flags(&[0; 32]);
     let bob = world
         .spawn((
