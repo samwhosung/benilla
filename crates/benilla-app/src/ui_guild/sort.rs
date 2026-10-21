@@ -150,9 +150,10 @@ impl SortStack {
         Ordering::Equal
     }
 
-    /// Put `rows` in display order; unstable, like the reference's MSVC CRT `qsort` (`0x73f727`).
+    /// Put `rows` in display order with the CRT `qsort` (`0x73f727`) and the compare `0x4d0d50`
+    /// (`0x4d0d32`, `0x4d0f95`, `0x4d1018`): rows that tie on every key sit where it leaves them.
     pub(super) fn order(&self, rows: &mut [RosterRow], show_offline: bool) {
-        rows.sort_unstable_by(|a, b| self.compare(a, b, show_offline));
+        benilla_ui::crt::qsort(rows, |a, b| self.compare(a, b, show_offline) as i32);
     }
 }
 
