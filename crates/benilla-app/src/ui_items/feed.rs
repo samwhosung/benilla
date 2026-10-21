@@ -306,6 +306,8 @@ fn template_view(
             .then(|| maps?.name(t.map))
             .flatten()
             .map(str::to_string),
+        area: t.area,
+        map: t.map,
         teaches: taught_spell(t, spells, skill_lines),
     }
 }
@@ -876,6 +878,7 @@ fn resolve_slot(
     );
     let gift_creator = crate::items::gift_creator_name(fields, names);
     let (creator_guid, gift_creator_guid) = crate::items::creator_guids(fields);
+    let field_duration = fields.item_duration().unwrap_or(0);
     // A container's filled seats, which `ClickTradeButton` counts (`0x4bff50`).
     let occupied_seats = fields.is_container().then(|| {
         let n = fields.container_num_slots().unwrap_or(0).min(36) as u8;
@@ -909,6 +912,7 @@ fn resolve_slot(
             occupied_seats,
             enchants: enchant_lines,
             duration_ms,
+            field_duration,
             ..Default::default()
         });
     };
@@ -960,6 +964,7 @@ fn resolve_slot(
         occupied_seats,
         enchants: enchant_lines,
         duration_ms,
+        field_duration,
         equip_slots: find_equip_slot(t.inventory_type, has_relic_slot),
         bar_placeable: t.placeable_on_action_bar(),
         consumable: t.is_consumable(),

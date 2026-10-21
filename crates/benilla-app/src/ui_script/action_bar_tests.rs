@@ -1219,6 +1219,7 @@ fn shipped_bag_frame_drives_end_to_end() {
             use_fork: Default::default(),
             item_class: None,
             duration_ms: None,
+            field_duration: 0,
             petition: None,
             already_bound: false,
             occupied_seats: None,

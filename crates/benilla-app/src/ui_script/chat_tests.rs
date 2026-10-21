@@ -391,6 +391,7 @@ fn chat_click_dismisses_a_stuck_spell_but_not_an_item() {
             use_fork: Default::default(),
             item_class: None,
             duration_ms: None,
+            field_duration: 0,
             petition: None,
             already_bound: false,
             occupied_seats: None,

@@ -67,6 +67,7 @@ fn merchant_compare_renders_the_compare_shape_and_no_hover_seats_a_plate() {
             use_fork: Default::default(),
             item_class: None,
             duration_ms: None,
+            field_duration: 0,
             petition: None,
             already_bound: false,
             occupied_seats: None,

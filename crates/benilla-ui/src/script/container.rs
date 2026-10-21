@@ -98,6 +98,9 @@ pub struct ContainerSlot {
     pub enchants: Vec<super::EnchantView>,
     /// A timed item's lifetime left in ms (`SMSG_ITEM_TIME_UPDATE`), floored to the second.
     pub duration_ms: Option<u64>,
+    /// `ITEM_FIELD_DURATION` as the object carries it (`[item+0x114]+0x24`), 0 for none: a
+    /// nonzero one refuses the auction sell slot (`0x4ce411`).
+    pub field_duration: u32,
     /// A signable charter's petition, printed between the name and the green `ITEM_SIGNABLE`
     /// line; `None` until the record the hover queries arrives.
     pub petition: Option<PetitionSlotView>,
@@ -1313,6 +1316,7 @@ mod tests {
                 use_fork: Default::default(),
                 item_class: None,
                 duration_ms: None,
+                field_duration: 0,
                 petition: None,
                 already_bound: false,
                 occupied_seats: None,
@@ -2069,6 +2073,7 @@ mod tests {
                 use_fork: Default::default(),
                 item_class: None,
                 duration_ms: None,
+                field_duration: 0,
                 petition: None,
                 already_bound: false,
                 occupied_seats: None,

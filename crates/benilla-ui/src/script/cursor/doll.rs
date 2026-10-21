@@ -392,6 +392,7 @@ mod tests {
         let mut slots: crate::script::InventorySlots = Default::default();
         slots[1] = Some(InvSlotView {
             duration_ms: None,
+            field_duration: 0,
             already_bound: false,
             occupied_seats: None,
             bonding: 0,
@@ -421,6 +422,7 @@ mod tests {
         });
         slots[11] = Some(InvSlotView {
             duration_ms: None,
+            field_duration: 0,
             already_bound: false,
             occupied_seats: None,
             bonding: 0,
@@ -450,6 +452,7 @@ mod tests {
         });
         slots[19] = Some(InvSlotView {
             duration_ms: None,
+            field_duration: 0,
             already_bound: false,
             occupied_seats: None,
             bonding: 0,
@@ -488,6 +491,7 @@ mod tests {
                 use_fork: Default::default(),
                 item_class: None,
                 duration_ms: None,
+                field_duration: 0,
                 petition: None,
                 already_bound: false,
                 occupied_seats: None,
@@ -651,6 +655,7 @@ mod tests {
         // An equipped bag in Bag0Slot (id 20): its equip_slots is the four bag slots.
         slots[20] = Some(InvSlotView {
             duration_ms: None,
+            field_duration: 0,
             already_bound: false,
             occupied_seats: None,
             bonding: 0,
@@ -701,6 +706,7 @@ mod tests {
                 use_fork: Default::default(),
                 item_class: None,
                 duration_ms: None,
+                field_duration: 0,
                 petition: None,
                 already_bound: false,
                 occupied_seats: None,

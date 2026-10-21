@@ -111,6 +111,10 @@ pub struct ItemTemplateView {
     /// The record's map (`+0x1cc`) by its `Map.dbc` name, as [`Self::area_name`]
     /// (`0x52bb06`..`0x52bb3e`).
     pub map_name: Option<String>,
+    /// The record's area and map ids as they stand, 0 for none: either nonzero refuses the
+    /// auction sell slot (`0x5da500`, `0x5da570`).
+    pub area: u32,
+    pub map: u32,
     /// What the first spell slot (`+0x11c`, any trigger) teaches when that spell's first effect is
     /// 36, learn spell (`0x52d500`..`0x52d532`): the "Already known" line's subject.
     pub teaches: Option<TaughtSpell>,

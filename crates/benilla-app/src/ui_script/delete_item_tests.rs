@@ -17,6 +17,7 @@ fn one_item_backpack(item_id: u32, name: &str, quality: u32) -> ContainerState {
             use_fork: Default::default(),
             item_class: None,
             duration_ms: None,
+            field_duration: 0,
             petition: None,
             already_bound: false,
             occupied_seats: None,

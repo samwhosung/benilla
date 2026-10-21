@@ -38,6 +38,12 @@ impl ObjectFields {
             .then(|| self.get_u32(FIELD_ITEM_SPELL_CHARGES + u16::from(i)))?
             .map(|v| v as i32)
     }
+    /// `ITEM_FIELD_DURATION` (field 15, the client's `[item+0x114]+0x24`): a timed item's
+    /// lifetime as the object carries it, 0 for none. The countdown a tooltip shows comes from
+    /// `SMSG_ITEM_TIME_UPDATE` instead.
+    pub fn item_duration(&self) -> Option<u32> {
+        self.get_u32(15)
+    }
     /// `ITEM_FIELD_FLAGS` (field 21): `0x08` wrapped, never alerts; `0x10` forces red status 4.
     pub fn item_flags(&self) -> Option<u32> {
         self.get_u32(21)

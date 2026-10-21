@@ -648,6 +648,7 @@ fn slot_view(
         gift_creator_guid,
         enchants,
         duration_ms,
+        field_duration: obj.item_duration().unwrap_or(0),
     })
 }
 
@@ -745,6 +746,7 @@ fn inventory_slots(
             // No ammo instance streams, only its template id: no enchants, no countdown.
             enchants: Vec::new(),
             duration_ms: None,
+            field_duration: 0,
             spell_0: false,
             spell_charges: [0; 5],
         });

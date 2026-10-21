@@ -65,6 +65,7 @@ fn seed_items(s: &mut UiScript) {
     let mut inv: InventorySlots = Default::default();
     inv[1] = Some(InvSlotView {
         duration_ms: None,
+        field_duration: 0,
         already_bound: false,
         occupied_seats: None,
         bonding: 0,
@@ -125,6 +126,7 @@ fn seed_items(s: &mut UiScript) {
             use_fork: Default::default(),
             item_class: None,
             duration_ms: None,
+            field_duration: 0,
             petition: None,
             already_bound: false,
             occupied_seats: None,
@@ -204,6 +206,7 @@ fn doll_hover_renders_the_live_instance() {
     let mut inv: InventorySlots = Default::default();
     inv[1] = Some(InvSlotView {
         duration_ms: None,
+        field_duration: 0,
         already_bound: false,
         occupied_seats: None,
         bonding: 0,

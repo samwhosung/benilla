@@ -54,6 +54,7 @@ fn inventory_with_head_item() -> InventorySlots {
     let mut slots: InventorySlots = Default::default();
     slots[1] = Some(InvSlotView {
         duration_ms: None,
+        field_duration: 0,
         already_bound: false,
         occupied_seats: None,
         bonding: 0,
@@ -93,6 +94,7 @@ fn backpack_with_fitting_helm() -> benilla_ui::script::ContainerState {
             use_fork: Default::default(),
             item_class: None,
             duration_ms: None,
+            field_duration: 0,
             petition: None,
             already_bound: false,
             occupied_seats: None,

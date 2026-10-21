@@ -245,6 +245,8 @@ pub struct InvSlotView {
     pub enchants: Vec<super::EnchantView>,
     /// The instance's remaining lifetime in ms; `None` without a timer.
     pub duration_ms: Option<u64>,
+    /// `ITEM_FIELD_DURATION`, as [`super::container::ContainerSlot::field_duration`].
+    pub field_duration: u32,
 }
 
 /// The doll snapshot: 0 ammo, 1..=19 equipment, 20..=23 the equipped bags, as
