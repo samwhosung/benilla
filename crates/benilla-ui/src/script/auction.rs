@@ -16,23 +16,48 @@ pub const LIST: usize = 0;
 pub const BIDDER: usize = 1;
 pub const OWNER: usize = 2;
 
-/// The eight sort keys the reference's column headers pass, in the API's order.
+/// The eight sort columns by number, as `SortAuctionItems` names them (`0x4cfc4b`-`0x4cfd1d`)
+/// and the comparator `0x4cd940` numbers its modes: level 0, quality 1, bid 2, duration 3,
+/// buyout 4, status 5, name 6, seller 7.
 pub const SORT_KEYS: [&str; 8] = [
     "level", "quality", "bid", "duration", "buyout", "status", "name", "seller",
 ];
+
+/// The column a sort name names, matched without case as `SStrCmpI` (`0x64a4c0`) matches it;
+/// `None` for any other name, which sorts nothing (`0x4cfd90`).
+pub fn sort_column(name: &str) -> Option<u8> {
+    SORT_KEYS
+        .iter()
+        .position(|k| crate::crt::str_cmp_i(k, name) == 0)
+        .map(|i| i as u8)
+}
 
 /// A list type's snapshot index, for the other modules (the tooltip's `SetAuctionItem`).
 pub(super) fn list_index_of(kind: &str) -> Option<usize> {
     list_index(kind)
 }
 
+/// `"owner"`, `"bidder"` or `"list"`, matched without case in that order (`SStrCmpI`,
+/// `0x4ced6b`, `0x4cedb0`, `0x4cedf4`), by every function that takes a list type.
 fn list_index(kind: &str) -> Option<usize> {
-    match kind {
-        "list" => Some(LIST),
-        "bidder" => Some(BIDDER),
-        "owner" => Some(OWNER),
-        _ => None,
-    }
+    [("owner", OWNER), ("bidder", BIDDER), ("list", LIST)]
+        .into_iter()
+        .find(|(name, _)| crate::crt::str_cmp_i(name, kind) == 0)
+        .map(|(_, i)| i)
+}
+
+/// `SortAuctionItems`' and `IsAuctionSortReversed`' two arguments: `lua_isstring` on each, a number
+/// read as its text (`0x6f3510`, `0x6f3690`), else the usage line.
+fn type_and_sort(
+    lua: &Lua,
+    kind: Value,
+    sort: Value,
+    usage: &'static str,
+) -> mlua::Result<(String, String)> {
+    Ok((
+        binding_abi::string_arg(lua, kind, usage)?,
+        binding_abi::string_arg(lua, sort, usage)?,
+    ))
 }
 
 /// One auction row, resolved by the app from a wire record.
@@ -511,38 +536,52 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SortAuctionItems(type, key): queue the header click for the app, which pushes the reordered
-    // rows back. The reference raises this `Usage:` only for an argument neither string nor number
-    // (`0x6f3510`) and matches both strings case-insensitively (`0x64a4c0`), an unknown one sorting
-    // nothing (`0x4cfd90`); here an unknown or differently cased type or column raises.
+    // SortAuctionItems(type, sort) (`0x4cfc00`): the sort name is matched first, then the type;
+    // either unknown sorts nothing (`0x4cfd90`). The header click is queued for the app, which
+    // pushes the reordered rows back.
     g.set(
         "SortAuctionItems",
-        lua.create_function(|lua, (kind, key): (String, String)| {
-            let Some(i) = list_index(&kind) else {
-                return Err(mlua::Error::RuntimeError(
-                    "Usage: SortAuctionItems(\"type\", \"sort\")".into(),
-                ));
+        lua.create_function(|lua, (kind, sort): (Value, Value)| {
+            let (kind, sort) = type_and_sort(
+                lua,
+                kind,
+                sort,
+                r#"Usage: SortAuctionItems("type", "sort")"#,
+            )?;
+            let Some(column) = sort_column(&sort) else {
+                return Ok(());
             };
-            if !SORT_KEYS.contains(&key.as_str()) {
-                return Err(mlua::Error::RuntimeError(
-                    "Usage: SortAuctionItems(\"type\", \"sort\")".into(),
-                ));
-            }
+            let Some(i) = list_index(&kind) else {
+                return Ok(());
+            };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.auction_sorts.push((i, key));
+            model
+                .auction_sorts
+                .push((i, SORT_KEYS[usize::from(column)].to_string()));
             Ok(())
         })?,
     )?;
 
-    // IsAuctionSortReversed(type, key) → 1/nil, for any key the stack remembers.
+    // IsAuctionSortReversed(type, sort) → 1/nil (`0x4d0030`): an unknown sort name returns no
+    // value (`0x4d024e`), an unknown type nil (`0x4d0230`).
     g.set(
         "IsAuctionSortReversed",
-        lua.create_function(|lua, (kind, key): (String, String)| {
+        lua.create_function(|lua, (kind, sort): (Value, Value)| {
+            let (kind, sort) = type_and_sort(
+                lua,
+                kind,
+                sort,
+                r#"Usage: IsAuctionSortReversed("type", "sort")"#,
+            )?;
+            let Some(column) = sort_column(&sort) else {
+                return Ok(MultiValue::new());
+            };
             let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let key = SORT_KEYS[usize::from(column)];
             let rev = list_index(&kind)
                 .zip(model.auction.as_ref())
-                .is_some_and(|(i, a)| a.lists[i].reversed(&key));
-            Ok(flag(rev))
+                .is_some_and(|(i, a)| a.lists[i].reversed(key));
+            Ok(MultiValue::from_vec(vec![flag(rev)]))
         })?,
     )?;
 
