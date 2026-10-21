@@ -1,33 +1,35 @@
-//! The inspect feed: another player's public descriptor as the slot views the inspect window's
-//! Lua reads. Their inventory guids are server-private, so there are no item objects, only the
-//! `PLAYER_VISIBLE_ITEM_*` entries and their templates, which is why the reference's inspect doll
-//! shows no counts and no durability.
+//! The inspect feed: each held player's public descriptor as the slot views the `GetInventoryItem*`
+//! verbs read through a token naming them. Their inventory guids are server-private, so there are
+//! no item objects, only the `PLAYER_VISIBLE_ITEM_*` entries and their templates, which is why the
+//! reference's inspect doll shows no counts and no durability.
 //!
 //! `NotifyInspect(unit)` sends `CMSG_INSPECT`, which also sets the server-side selection, and
-//! latches the token; the window paints without waiting for `SMSG_INSPECT`, a bare guid echo.
-//! `UNIT_INVENTORY_CHANGED` fires for the inspected token when a new inspectee's view first
-//! lands (`InspectPaperDollFrame.lua:2-5`, `82`); a change of its gear, as its `UNIT_LEVEL`, is
-//! the unit-field bridge's ([`crate::field_watch`]), fired per token on a values block.
+//! latches the token; `SMSG_INSPECT` echoes only the guid (`0x5e7d70`). The window paints inside
+//! the call that shows it (`InspectPaperDollFrame.lua:57-79`), off what the VM already holds, so
+//! nothing here signals: a change of the gear, as of the level, is the unit-field bridge's
+//! ([`crate::field_watch`]), fired per token on a values block.
+
+use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{InspectView, InvSlotView, InventorySlots, ScriptValue};
+use benilla_ui::script::{InvSlotView, InventorySlots};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::net::{ClientCommand, GuidIndex, NetCommands, ObjectStore};
 use crate::query_cache::Ask;
-use crate::ui_script::UiFeed;
+use crate::ui_script::{gate, UiFeed};
 
-/// The reference's `InspectFrame.unit`. The token, not the guid, is the identity: the reference
-/// re-reads it on every retarget, so `"target"` follows the selection.
+/// The reference's `InspectFrame.unit`, latched by `NotifyInspect`: the token the honor feed asks
+/// `MSG_INSPECT_HONOR_STATS` for.
 #[derive(Resource, Default)]
 pub(crate) struct InspectTarget {
     pub(crate) token: Option<String>,
 }
 
-/// The last view pushed, per VM ([`crate::ui_script::VmMemo`]), so a `/reload`'s
-/// new VM gets the view re-pushed and its events re-fired.
+/// The views pushed, per VM ([`crate::ui_script::VmMemo`]), so a `/reload`'s new VM gets every
+/// held player's view again.
 #[derive(Resource, Default)]
 pub(crate) struct InspectFeedState {
     vm: crate::ui_script::VmMemo<InspectFeedMemo>,
@@ -36,7 +38,9 @@ pub(crate) struct InspectFeedState {
 /// The per-VM change bases.
 #[derive(Default)]
 struct InspectFeedMemo {
-    last: Option<InspectView>,
+    /// The slots last pushed, by player guid.
+    pushed: HashMap<u64, InventorySlots>,
+    templates: gate::Watch,
 }
 
 pub(crate) struct InspectUiPlugin;
@@ -45,28 +49,29 @@ impl Plugin for InspectUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InspectTarget>()
             .init_resource::<InspectFeedState>()
-            // Ahead of the field events: the bridge's `UNIT_INVENTORY_CHANGED` for the inspected
-            // token repaints the slots from this view.
+            // After the aura feed seats the held guids, and ahead of the field events, whose
+            // `UNIT_INVENTORY_CHANGED` handlers read these slots.
             .add_systems(
                 Update,
                 feed_inspect
                     .in_set(UiFeed)
-                    .in_set(crate::ui_unit::field_events::FieldEventPushes),
+                    .in_set(crate::ui_unit::field_events::FieldEventPushes)
+                    .after(crate::ui_aura::AuraEvents),
             );
     }
 }
 
-/// One inspected slot from the target's visible-item entry; `slot0` is the 0-based
-/// `EQUIPMENT_SLOT_*` index, `slot0 + 1` in Lua. With no item object the count is the reference's
-/// always-1 and durability, flags, locks and creator stay inert. Only the enchants broadcast, at
+/// One slot from a player's visible-item entry; `slot0` is the 0-based `EQUIPMENT_SLOT_*` index,
+/// `slot0 + 1` in Lua. With no item object the count is the reference's always-1 and durability,
+/// flags, locks and creator stay inert. Only the enchants broadcast, at
 /// `PLAYER_VISIBLE_ITEM_<slot>_0 + 1 + j`, and 1.12 fills PERM and TEMP alone (vmangos
-/// `SetVisibleItemSlot`, `MAX_INSPECTED_ENCHANTMENT_SLOT`).
+/// `SetVisibleItemSlot`, `MAX_INSPECTED_ENCHANTMENT_SLOT`). The record is read, never asked: the
+/// getters' lookup passes no callback (`0x4c8420` → `0x5f0d60` → `0x62eb40`).
 fn inspect_slot_view(
     store: &ObjectStore,
     items: &Items,
     icons: Option<&ItemDisplays>,
     rolls: crate::items::RollCatalogs,
-    ask: Ask<'_>,
     slot0: u8,
 ) -> Option<InvSlotView> {
     let entry = store.0.player_visible_item_entry(slot0)?;
@@ -75,7 +80,7 @@ fn inspect_slot_view(
     // servers leave empty.
     let roll = store.0.player_visible_item_properties(slot0);
     // By entry alone (guid 0), as the reference's item cache asks: there is no item object.
-    let (name, quality, display) = match items.template(entry, 0, ask) {
+    let (name, quality, display) = match items.template(entry, 0, Ask::Read) {
         Some(t) => (
             Some(rolls.name(&t.name, roll)),
             t.quality,
@@ -111,6 +116,20 @@ fn inspect_slot_view(
     })
 }
 
+/// A held player's 19 slots.
+fn visible_slots(
+    store: &ObjectStore,
+    items: &Items,
+    icons: Option<&ItemDisplays>,
+    rolls: crate::items::RollCatalogs,
+) -> InventorySlots {
+    let mut slots: InventorySlots = Default::default();
+    for slot in 1..=19u8 {
+        slots[usize::from(slot)] = inspect_slot_view(store, items, icons, rolls, slot - 1);
+    }
+    slots
+}
+
 pub(crate) fn feed_inspect(
     // What the host also reaches, read before the VM runs with the host lent.
     mut hosted: ParamSet<(Res<crate::target::Selection>, crate::script_calls::HostedVm)>,
@@ -125,8 +144,9 @@ pub(crate) fn feed_inspect(
     ),
     commands: Res<NetCommands>,
     index: Res<GuidIndex>,
-    stores: Query<&ObjectStore>,
+    stores: Query<Ref<ObjectStore>>,
     group: Res<crate::ui_party::GroupState>,
+    me: Res<crate::net::SelfGuid>,
 ) {
     let p = hosted.p0();
     let selection = *p;
@@ -134,90 +154,65 @@ pub(crate) fn feed_inspect(
         let Some(script) = script else {
             return;
         };
-        // A `/reload` keeps the latched token, and the fresh memo re-pushes the view.
         let memo = feed.vm.get(script);
 
         // `NotifyInspect(unit)`: send `CMSG_INSPECT` for the unit's guid and latch its token.
-        let mut notified = false;
         for token in script.take_inspect_notifies() {
             match crate::ui_unit::player_token_guid(&token, &selection, &group) {
                 Some(guid) => {
                     debug!("inspect: {token:?} -> {guid:#x}; sending CMSG_INSPECT");
                     let _ = commands.0.send(ClientCommand::Inspect { target: guid });
                     target.token = Some(token);
-                    notified = true;
                 }
                 None => {
                     debug!("inspect: {token:?} did not resolve to a player guid — nothing sent");
                 }
             }
         }
-        // `ClearInspectPlayer()`, from `InspectFrame_OnHide`: the resolve stops.
+        // `ClearInspectPlayer()`, from `InspectFrame_OnHide`.
         if script.take_inspect_clear() {
             target.token = None;
         }
 
-        // Re-resolve the latched token every frame, so the window follows a retarget as the
-        // reference's `PLAYER_TARGET_CHANGED` arm does.
-        let resolved = target.token.as_ref().and_then(|token| {
-            let guid = crate::ui_unit::player_token_guid(token, &selection, &group)?;
-            let entity = *index.0.get(&guid)?;
-            Some((token.clone(), guid, entity))
+        // A landed record, a new icon or a new catalog can change any view.
+        let templates_moved = memo.templates.moved(items.template_epoch());
+        let tables_moved = icons.as_ref().is_some_and(|i| i.is_changed())
+            || catalogs.0.as_ref().is_some_and(|c| c.is_changed())
+            || catalogs.1.as_ref().is_some_and(|c| c.is_changed());
+        let rolls = crate::items::RollCatalogs {
+            enchants: catalogs.0.as_deref(),
+            props: catalogs.1.as_deref(),
+        };
+        // Every player a token can name, but the active one, whose own items the getters read.
+        let mut held = HashSet::new();
+        for guid in script.held_unit_guids() {
+            if Some(guid) == me.0 {
+                continue;
+            }
+            let Some(store) = index.0.get(&guid).and_then(|&e| stores.get(e).ok()) else {
+                continue;
+            };
+            if store.0.object_type() != Some(benilla_protocol::messages::ObjectType::Player) {
+                continue;
+            }
+            held.insert(guid);
+            let fresh = !memo.pushed.contains_key(&guid);
+            if !(fresh || templates_moved || tables_moved || store.is_changed()) {
+                continue;
+            }
+            let slots = visible_slots(&store, &items, icons.as_deref(), rolls);
+            if memo.pushed.get(&guid) != Some(&slots) {
+                script.set_visible_equipment(guid, Some(slots.clone()));
+                memo.pushed.insert(guid, slots);
+            }
+        }
+        memo.pushed.retain(|&guid, _| {
+            let keep = held.contains(&guid);
+            if !keep {
+                script.set_visible_equipment(guid, None);
+            }
+            keep
         });
-
-        let Some((token, guid, entity)) = resolved else {
-            // Nothing inspected, or the target is not streamed: clear the view.
-            if memo.last.is_some() {
-                script.set_inspect(None);
-                memo.last = None;
-            }
-            return;
-        };
-
-        let Ok(store) = stores.get(entity) else {
-            return;
-        };
-        // The frame's show and a new inspectee are its slots' getter calls, whose lookups pass a
-        // callback (`0x4c83ce`); the frames between only see a slot change, which the visible
-        // item's own lookup asked (`0x5ed764`).
-        let shown = notified || memo.last.as_ref().map(|v| v.guid) != Some(guid);
-        let ask = Ask::at(shown, &commands);
-        let mut slots: InventorySlots = Default::default();
-        for slot in 1..=19u8 {
-            slots[usize::from(slot)] = inspect_slot_view(
-                store,
-                &items,
-                icons.as_deref(),
-                crate::items::RollCatalogs {
-                    enchants: catalogs.0.as_deref(),
-                    props: catalogs.1.as_deref(),
-                },
-                ask,
-                slot - 1,
-            );
-        }
-        let view = InspectView {
-            unit: token.clone(),
-            guid,
-            slots,
-        };
-        if memo.last.as_ref() != Some(&view) {
-            script.set_inspect(Some(view.clone()));
-            let inspectee = |v: &InspectView| (v.unit.clone(), v.guid);
-            let fresh = memo.last.as_ref().map(inspectee) != Some(inspectee(&view));
-            memo.last = Some(view);
-            // The show paints the slots inside the call that latches the token
-            // (`InspectPaperDollFrame.lua:57-79`), a frame ahead of this view, so a new
-            // inspectee's first view signals its token, which the slot buttons filter on `arg1`.
-            // A change of its gear is the visible-item bridge's (`0x51bd70`), and a record
-            // landing repaints nothing (`0x5ed880`).
-            if fresh {
-                script.fire_event(
-                    "UNIT_INVENTORY_CHANGED",
-                    vec![ScriptValue::Str(token.clone())],
-                );
-            }
-        }
     })
 }
 
@@ -250,10 +245,11 @@ mod tests {
             let e = app
                 .world_mut()
                 .spawn(ObjectStore(
-                    benilla_protocol::ObjectFields::from_pairs(&[(
-                        FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR + 2,
-                        entry,
-                    )])
+                    // `OBJECT_FIELD_TYPE`: object, unit, player.
+                    benilla_protocol::ObjectFields::from_pairs(&[
+                        (2, 0x19),
+                        (FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR + 2, entry),
+                    ])
                     .into_created(benilla_protocol::messages::ObjectType::Player),
                 ))
                 .id();
@@ -350,48 +346,24 @@ mod tests {
     }
 
     /// The inspected unit's level is the bridge's to announce: the feed fires no `UNIT_LEVEL`,
-    /// at the first resolve or on a change.
+    /// at the first push or on a change.
     #[test]
     fn the_inspect_feed_fires_no_level_event() {
         const MATE: u64 = 0x2001;
         const UNIT_FIELD_LEVEL: u16 = 34;
-        let mut app = App::new();
-        let (tx, rx) = crossbeam_channel::unbounded();
-        std::mem::forget(rx);
-        app.insert_resource(NetCommands(tx))
-            .insert_resource(InspectTarget {
-                token: Some("target".into()),
-            })
-            .init_resource::<InspectFeedState>()
-            .init_resource::<Items>()
-            .init_resource::<GuidIndex>()
-            .insert_resource(crate::target::Selection {
-                guid: Some(MATE),
-                ..Default::default()
-            })
-            .init_resource::<crate::ui_party::GroupState>();
-        let mate = app
-            .world_mut()
-            .spawn(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
-                (UNIT_FIELD_LEVEL, 10),
-            ])))
-            .id();
+        let (mut app, _rx) = world([MATE, 0x2002], 7366);
         app.world_mut()
-            .resource_mut::<GuidIndex>()
-            .0
-            .insert(MATE, mate);
-        let script = UiScript::new().unwrap();
-        script
+            .non_send_resource_mut::<UiScript>()
             .run(
                 r#"
-                SEEN = 0
+                LEVELS = 0
                 local f = CreateFrame("Frame")
                 f:RegisterEvent("UNIT_LEVEL")
-                f:SetScript("OnEvent", function() SEEN = SEEN + 1 end)
+                f:SetScript("OnEvent", function() LEVELS = LEVELS + 1 end)
             "#,
             )
             .unwrap();
-        app.insert_non_send_resource(script);
+        let mate = app.world().resource::<GuidIndex>().0[&MATE];
         for level in [10, 11] {
             app.world_mut()
                 .entity_mut(mate)
@@ -405,7 +377,7 @@ mod tests {
             app.world_mut().run_system_once(feed_inspect).unwrap();
             let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
             s.resolve();
-            assert_eq!(s.eval::<i64>("return SEEN").unwrap(), 0, "level {level}");
+            assert_eq!(s.eval::<i64>("return LEVELS").unwrap(), 0, "level {level}");
         }
     }
 }

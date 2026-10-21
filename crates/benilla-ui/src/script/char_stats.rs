@@ -490,15 +490,26 @@ fn player_inv_slot(lua: &Lua, token: &Option<String>, slot: i64) -> Option<InvSl
     model.inv_slot(token, idx)
 }
 
+/// [`player_inv_slot`] for the getters that read the unit's item table (`0x6228a0`), which only
+/// the active player's holds: another player's slot is empty.
+fn own_inv_slot(lua: &Lua, token: &Option<String>, slot: i64) -> Option<InvSlotView> {
+    let own = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        model.inventory_reader(token.as_deref()?) == Some(InvReader::Own)
+    };
+    own.then(|| player_inv_slot(lua, token, slot)).flatten()
+}
+
 /// The ammo slot's record lookup with the callback `0x4c84f0` (`0x4c83bc`, `0x4c89cf`): a view of
 /// the active player's ammunition whose record the cache lacks registers one per call.
 fn ask_ammo_record(lua: &Lua, token: &Option<String>, slot: i64, view: Option<&InvSlotView>) {
-    let ammo = token
-        .as_deref()
-        .is_some_and(|t| t.eq_ignore_ascii_case("player"))
-        && slot == 0;
-    if let Some(v) = view.filter(|v| ammo && v.item_id != 0 && v.name.is_none()) {
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    let Some(v) = view.filter(|v| slot == 0 && v.item_id != 0 && v.name.is_none()) else {
+        return;
+    };
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    // The ammo leg reads the active player's field alone (`0x4c8382`).
+    let own = token.as_deref().and_then(|t| model.inventory_reader(t)) == Some(InvReader::Own);
+    if own {
         model.ammo_record_asks.push(v.item_id);
     }
 }
@@ -518,29 +529,57 @@ pub(super) const KEYRING_INV_SLOTS: std::ops::RangeInclusive<usize> = 82..=113;
 /// `ui_items::KEYRING_CONTAINER` in the app, which feeds the keys as that container.
 pub(super) const KEYRING_CONTAINER: i64 = -2;
 
+/// Whose items a slot getter reads after the token's resolve (`0x515940`) and
+/// `CanReadUnitInventory` (`0x4944a0`): the active player's own table, or another player's
+/// visible items, a player it can cooperate with within 10 yards.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum InvReader {
+    Own,
+    Visible(u64),
+}
+
 impl Model {
+    /// [`InvReader`] for `token`, `None` for a unit the getters may not read or no unit at all.
+    /// `"player"` is the active player whatever its guid reads.
+    pub(super) fn inventory_reader(&self, token: &str) -> Option<InvReader> {
+        if token.eq_ignore_ascii_case("player") {
+            return Some(InvReader::Own);
+        }
+        let guid = self.unit_guids.resolve(token).ok().flatten()?;
+        if guid == self.unit_guids.player {
+            return Some(InvReader::Own);
+        }
+        let reach = self.unit_reach.get(&guid)?;
+        (reach.inspectable && super::inspect::in_inspect_range(reach))
+            .then_some(InvReader::Visible(guid))
+    }
+
     /// The item `token` exposes at live-API id `slot`, the one routing the `GetInventoryItem*`
     /// getters and `GameTooltip:SetInventoryItem` share. Stock paints the bank through this API
     /// (`BankFrame.lua:35`) and hovers a key through it (`ContainerFrame.lua:616-619`), so the
-    /// bank and keyring bands are answered from the container snapshots.
+    /// bank and keyring bands are answered from the container snapshots. Another player answers
+    /// its visible items alone, slots 1-19 (`0x5f0d60`).
     pub(super) fn inv_slot(&self, token: &str, slot: usize) -> Option<InvSlotView> {
-        if token.eq_ignore_ascii_case("player") {
-            if let Some(view) = self.bank_inv_slot(slot) {
-                return Some(view);
-            }
-            if KEYRING_INV_SLOTS.contains(&slot) {
-                let n = (slot - KEYRING_INV_SLOTS.start() + 1) as u32;
-                let keyring = self.containers.get(&KEYRING_CONTAINER)?;
-                return keyring.slots.get(&n).map(InvSlotView::from_container_slot);
-            }
-            return self.inventory_slots.get(slot)?.clone();
+        match self.inventory_reader(token)? {
+            InvReader::Own => self.own_inv_slot(slot),
+            InvReader::Visible(guid) => (1..=19)
+                .contains(&slot)
+                .then(|| self.visible_equipment.get(&guid)?.get(slot)?.clone())
+                .flatten(),
         }
-        self.inspect
-            .as_ref()
-            .filter(|v| v.unit == token)?
-            .slots
-            .get(slot)?
-            .clone()
+    }
+
+    /// The active player's item at live-API id `slot`.
+    fn own_inv_slot(&self, slot: usize) -> Option<InvSlotView> {
+        if let Some(view) = self.bank_inv_slot(slot) {
+            return Some(view);
+        }
+        if KEYRING_INV_SLOTS.contains(&slot) {
+            let n = (slot - KEYRING_INV_SLOTS.start() + 1) as u32;
+            let keyring = self.containers.get(&KEYRING_CONTAINER)?;
+            return keyring.slots.get(&n).map(InvSlotView::from_container_slot);
+        }
+        self.inventory_slots.get(slot)?.clone()
     }
 
     /// The bag-slot item object behind the player's live id `slot` in the vault and keyring bands,
@@ -989,7 +1028,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // The getters' shared opening: `is-number-or-string` on the unit (`0x6f3510`) else `usage`,
-    // then the slot reader `0x4c8520` else `invalid`; the 1-based slot back for the lookup.
+    // then the slot reader `0x4c8520` else `invalid`, then the token's resolve, which raises for
+    // one it does not know (`0x4c8328` → `0x515c14`); the 1-based slot back for the lookup.
     fn inventory_item_args(
         lua: &Lua,
         (unit, slot): (Value, Value),
@@ -998,7 +1038,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     ) -> mlua::Result<(Option<String>, i64)> {
         let token = super::binding_abi::string_arg(lua, unit, usage)?;
         let slot0 = super::inventory_verbs::inventory_slot_arg(lua, slot, invalid)?;
-        Ok((Some(token), i64::from(slot0) + 1))
+        let token = Some(token);
+        super::unit::check_unit_token(&token)?;
+        Ok((token, i64::from(slot0) + 1))
     }
 
     // GetInventoryItemTexture(unit, slot) → icon path, or nil until the item's template arrives.
@@ -1065,7 +1107,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     INVALID_SLOT_GET_INVENTORY_ITEM_COUNT.into(),
                 ));
             }
-            let Some(v) = player_inv_slot(lua, &Some(token), i64::from(slot0) + 1) else {
+            let token = Some(token);
+            super::unit::check_unit_token(&token)?;
+            // The item table's slot (`0x6228a0`), empty for another player: 1 (`0x4c8797`).
+            let Some(v) = own_inv_slot(lua, &token, i64::from(slot0) + 1) else {
                 return Ok(1i64);
             };
             Ok(match v.contents_count {
@@ -1089,7 +1134,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 "Usage: GetInventoryItemQuality(unit, slot)",
                 "Invalid inventory slot in GetInventoryItemQuality",
             )?;
-            let view = player_inv_slot(lua, &token, slot);
+            // The item table's slot (`0x4c89d6` → `0x6228a0`), empty for another player.
+            let view = own_inv_slot(lua, &token, slot);
             ask_ammo_record(lua, &token, slot, view.as_ref());
             match view {
                 Some(v) if v.item_id != 0 => Ok(Value::Integer(i64::from(v.quality))),
@@ -1111,7 +1157,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 "Usage: GetInventoryItemBroken(unit, slot)",
                 "Invalid inventory slot in GetInventoryItemBroken",
             )?;
-            match player_inv_slot(lua, &token, slot) {
+            match own_inv_slot(lua, &token, slot) {
                 Some(v) if slot_is_broken(&v) => Ok(Value::Integer(1)),
                 _ => Ok(Value::Nil),
             }
@@ -1146,10 +1192,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     INVALID_SLOT_GET_INVENTORY_ITEM_COOLDOWN.into(),
                 ));
             }
+            super::unit::check_unit_token(&Some(token.clone()))?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let live = usize::try_from(slot0 + 1).ok();
+            let own = model.inventory_reader(&token) == Some(InvReader::Own);
             let answer = live
-                .filter(|_| slot0 != -1 && token.eq_ignore_ascii_case("player"))
+                .filter(|_| slot0 != -1 && own)
                 .filter(|&live| {
                     model
                         .inv_slot("player", live)

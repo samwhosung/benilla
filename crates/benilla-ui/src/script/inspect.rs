@@ -1,13 +1,13 @@
 //! The inspect bindings: `NotifyInspect` and `ClearInspectPlayer` queue intents, the app pushes
-//! the inspected unit's equipment ([`UiScript::set_inspect`]) for the unit-keyed
+//! each held player's visible items by guid ([`UiScript::set_visible_equipment`]) for the
 //! `GetInventoryItem*` verbs, and `CanInspect` and `CheckInteractDistance` read a per-guid
 //! distance map ([`UiScript::set_unit_reach`]) through the token resolver ([`super::UnitGuids`]).
 //!
 //! Worn gear is public descriptor state (`PLAYER_VISIBLE_ITEM_<n>_0`), so the window paints from
-//! what the client holds: `SMSG_INSPECT` echoes only the guid, `InspectFrame_Show` calls
-//! `NotifyInspect` and `ShowUIPanel` together (`Blizzard_InspectUI.lua:6-13`), and the paper doll
-//! reads all 19 slots on show (`InspectPaperDollFrame.lua:57-79`). The view is keyed by unit token,
-//! as the reference keeps `InspectFrame.unit`, so it follows a re-target.
+//! what the client holds: `SMSG_INSPECT` echoes only the guid (`0x5e7d70`), `InspectFrame_Show`
+//! calls `NotifyInspect` and `ShowUIPanel` together (`Blizzard_InspectUI.lua:6-13`), and the paper
+//! doll reads all 19 slots on show, inside that call (`InspectPaperDollFrame.lua:57-79`), through
+//! `InspectFrame.unit`, so it follows a re-target.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -39,19 +39,6 @@ pub struct UnitReach {
     /// `CheckInteractDistance` is a pure distance test, so a creature or an enemy player still
     /// answers it.
     pub inspectable: bool,
-}
-
-/// What the app has resolved for the unit currently being inspected.
-#[derive(Clone, Debug, PartialEq)]
-pub struct InspectView {
-    /// The inspected unit token, the reference's `InspectFrame.unit`; the inventory verbs match
-    /// their `unit` argument against it.
-    pub unit: String,
-    /// The player the token resolved to, so the app can tell a new player behind the same token.
-    pub guid: u64,
-    /// Equipment by inventory slot id 1..=19, like the self feed; ammo (0) and bags (20..=23) stay
-    /// `None`, since another player's are not visible.
-    pub slots: InventorySlots,
 }
 
 impl super::UiScript {
@@ -90,14 +77,10 @@ impl super::UiScript {
         self.model_ref().unit_guids.has_field_watchers(guid)
     }
 
-    /// Push (or clear, with `None`) the inspected unit's equipment. It fires nothing: the
-    /// `UNIT_INVENTORY_CHANGED` the stock slot buttons listen for is the app's.
-    pub fn set_inspect(&mut self, view: Option<InspectView>) {
-        self.model_mut().inspect = view;
-    }
-
-    /// Push, or clear with `None`, the visible items of the player `guid`: what the slot getters
-    /// read through a token naming another player they may read (`0x4944a0`).
+    /// Push, or clear with `None`, the visible items of the player `guid` by slot id 1..=19:
+    /// what the slot getters read through a token naming another player they may read
+    /// (`0x4944a0`). It fires nothing: a change of them is the visible-item bridge's
+    /// `UNIT_INVENTORY_CHANGED` (`0x51bd70`).
     pub fn set_visible_equipment(&mut self, guid: u64, slots: Option<InventorySlots>) {
         let mut model = self.model_mut();
         match slots {
@@ -131,7 +114,7 @@ fn reach(lua: &Lua, token: &str) -> mlua::Result<Option<UnitReach>> {
 /// Whether `0x4944a0`'s distance leg passes: in range unless `100.0 < d²`, since `test ah,0x41`
 /// after the compare counts an unordered one as in range, so a NaN distance passes (`0x494531`),
 /// as `CanInspect`'s own test before it does (`0x48a28b`).
-fn in_inspect_range(r: &UnitReach) -> bool {
+pub(super) fn in_inspect_range(r: &UnitReach) -> bool {
     matches!(
         r.dist_sq.partial_cmp(&CAN_INSPECT_DIST_SQ),
         Some(Ordering::Less | Ordering::Equal) | None
