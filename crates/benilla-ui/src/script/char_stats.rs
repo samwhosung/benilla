@@ -835,8 +835,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // UnitAttackPower(unit) → (base, posBuff, negBuff): `UNIT_FIELD_ATTACK_POWER` and the signed
-    // halves of `_MODS` (vmangos `StatSystem.cpp:335-336`), for any unit (`0x518fe2`); the server
-    // sends them to the owner alone.
+    // halves of `_MODS` (vmangos `StatSystem.cpp:335-336`), for any unit (the type word's unit bit,
+    // `0x518fd3`); the server sends them to the owner alone.
     g.set(
         "UnitAttackPower",
         lua.create_function(|lua, token: Value| {
