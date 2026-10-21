@@ -316,10 +316,8 @@ mod tests {
             joined: joined
                 .iter()
                 .map(|n| {
-                    Some(crate::ui_chat::edit::ChannelSlot::confirmed(
-                        n,
-                        catalog().zone_channel_id(n),
-                    ))
+                    crate::ui_chat::edit::ChannelSlot::confirmed(n, catalog().zone_channel_id(n))
+                        .into()
                 })
                 .collect(),
             channels: catalog(),
@@ -375,7 +373,7 @@ mod tests {
     #[test]
     fn a_freed_slot_does_not_end_the_walk() {
         let mut s = state(&["LocalDefense - Westfall", "WorldDefense"]);
-        s.joined[0] = None;
+        s.free_slot("LocalDefense - Westfall");
         assert_eq!(
             defense_targets(&s, WESTFALL, Some(WESTFALL)),
             vec!["WorldDefense"]
@@ -389,8 +387,10 @@ mod tests {
         use crate::ui_chat::edit::SlotState;
         for state_of in [SlotState::Pending, SlotState::Renamed, SlotState::Suspended] {
             let mut s = state(&["LocalDefense - Westfall", "WorldDefense"]);
-            for slot in s.joined.iter_mut().flatten() {
-                slot.state = state_of;
+            for record in s.joined.iter_mut() {
+                if let crate::ui_chat::edit::SlotRecord::Held(slot) = record {
+                    slot.state = state_of;
+                }
             }
             assert!(
                 defense_targets(&s, WESTFALL, Some(WESTFALL)).is_empty(),
@@ -404,12 +404,9 @@ mod tests {
     #[test]
     fn a_custom_channel_named_like_a_defense_row_is_not_one() {
         let mut s = state(&["WorldDefense"]);
-        s.joined[0].as_mut().unwrap().name = "WorldDefense2".into();
+        s.joined[0] = crate::ui_chat::edit::ChannelSlot::confirmed("WorldDefense2", 23).into();
         s.joined
-            .push(Some(crate::ui_chat::edit::ChannelSlot::confirmed(
-                "WorldDefense3",
-                0,
-            )));
+            .push(crate::ui_chat::edit::ChannelSlot::confirmed("WorldDefense3", 0).into());
         assert_eq!(
             defense_targets(&s, WESTFALL, Some(WESTFALL)),
             vec!["WorldDefense2"],

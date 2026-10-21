@@ -4,7 +4,7 @@
 use benilla_protocol::messages::channel_notice as n;
 use benilla_ui::script::{ChannelCommand, UiScript};
 
-use super::edit::{ChannelSlot, ChannelState, SlotState};
+use super::edit::{ChannelSlot, ChannelState, SlotRecord, SlotState};
 use super::event::{ChatEvent, ChatEventKind};
 use crate::net::{ClientCommand, NetCommands};
 
@@ -42,7 +42,7 @@ struct Verbs {
 }
 
 impl Verbs {
-    fn new(joined: Vec<Option<ChannelSlot>>) -> Self {
+    fn new(joined: Vec<SlotRecord>) -> Self {
         let (tx, sent) = crossbeam_channel::unbounded();
         Verbs {
             channels: ChannelState {
@@ -93,8 +93,8 @@ impl Verbs {
     }
 }
 
-fn custom(name: &str) -> Option<ChannelSlot> {
-    Some(ChannelSlot::confirmed(name, 0))
+fn custom(name: &str) -> SlotRecord {
+    ChannelSlot::confirmed(name, 0).into()
 }
 
 fn join(name: &str, id: u32) -> ChannelCommand {
@@ -119,7 +119,7 @@ fn a_join_takes_its_slot_when_it_is_sent() {
         Some(SlotState::Pending),
         "no notice yet: the slot waits for the server"
     );
-    assert_eq!(v.channels.joined[1].as_ref().map(|s| s.id), Some(1));
+    assert_eq!(v.channels.joined[1].held().map(|s| s.id), Some(1));
 }
 
 /// The `YOU_JOINED` arm only confirms (`0x49c0c2` → `0x49bb20`): the first slot of the name not
@@ -409,8 +409,8 @@ fn the_admin_verbs_send_a_numbers_confirmed_slot_or_nothing() {
         ]
     };
     let mut v = Verbs::new(vec![
-        Some(ChannelSlot::confirmed("General - Elwynn Forest", 1)),
-        Some(ChannelSlot::pending("MyChan", 0)),
+        ChannelSlot::confirmed("General - Elwynn Forest", 1).into(),
+        ChannelSlot::pending("MyChan", 0).into(),
     ]);
     for (key, wire) in [
         ("1", Some("General - Elwynn Forest")),
@@ -442,14 +442,15 @@ fn the_admin_verbs_send_a_numbers_confirmed_slot_or_nothing() {
 #[test]
 fn list_channels_posts_the_confirmed_slots_as_one_channel_list_line() {
     let mut v = Verbs::new(vec![
-        Some(ChannelSlot::confirmed("General - Elwynn Forest", 1)),
-        Some(ChannelSlot::pending("Trade - Elwynn Forest", 2)),
-        Some(ChannelSlot::confirmed("LocalDefense - Elwynn Forest", 22)),
-        None,
-        Some(ChannelSlot {
+        ChannelSlot::confirmed("General - Elwynn Forest", 1).into(),
+        ChannelSlot::pending("Trade - Elwynn Forest", 2).into(),
+        ChannelSlot::confirmed("LocalDefense - Elwynn Forest", 22).into(),
+        SlotRecord::Freed { id: 0 },
+        ChannelSlot {
             state: SlotState::Renamed,
             ..ChannelSlot::confirmed("General - Westfall", 1)
-        }),
+        }
+        .into(),
         custom("MyChan"),
     ]);
     v.apply(ChannelCommand::ListAll);
@@ -497,7 +498,7 @@ fn a_channel_list_line_with_no_channel_is_its_text_alone() {
 fn a_channel_lines_id_is_its_slots_row() {
     let v = Verbs::new(vec![
         custom("WorldDefense2"),
-        Some(ChannelSlot::confirmed("General - Elwynn Forest", 1)),
+        ChannelSlot::confirmed("General - Elwynn Forest", 1).into(),
     ]);
     let stamped = |name: &str| {
         let mut e = ChatEvent::text_only(ChatEventKind::Channel, "hi".into());

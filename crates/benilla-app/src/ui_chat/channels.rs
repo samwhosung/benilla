@@ -14,7 +14,7 @@ use benilla_formats::ChatChannelsCatalog;
 use crate::area::AreaTableRes;
 use crate::net::{ClientCommand, NetCommands};
 
-use super::edit::{ChannelState, SlotState};
+use super::edit::{ChannelState, SlotRecord, SlotState};
 use super::recruitment::GuildRecruitmentCascade;
 
 /// `AreaTable.dbc` flag `0x08`, the walk's city gate (`0x49a3c1`), set on the six capitals;
@@ -243,9 +243,10 @@ pub(crate) enum WalkStep {
 ///   Otherwise a confirmed slot leaves (`0x49a35e`), then a city-only row (`0x10`) in an area
 ///   without `0x8` suspends (`0x49a3b8`-`0x49a3cb`, a no-op on a suspended slot) and any other is
 ///   renamed and re-joined (`0x49a3dc`-`0x49a410`).
-/// - Pass 2 (`0x49a468`) takes each row whose mask bit is set (`0x49a494`) and that no slot
-///   carries, by id (`0x49bef0`) or by composed name (`0x49be90`), in DBC order: it registers the
-///   slot (`0x49a50d`), then suspends it or joins by the same city gate (`0x49a512`-`0x49a577`).
+/// - Pass 2 (`0x49a468`) takes each row whose mask bit is set (`0x49a494`), that no record
+///   carries by id, a freed one included (`0x49bef0`), and whose composed name no slot holds
+///   (`0x49be90`), in DBC order: it registers the slot (`0x49a50d`), then suspends it or joins by
+///   the same city gate (`0x49a512`-`0x49a577`).
 /// - Pass 3 (`0x49a5b4`) registers and joins each deferred name with id 0 (`0x49a5da`, `0x49a5e2`).
 pub(crate) fn plan_walk(
     channels: &ChannelState,
@@ -263,7 +264,7 @@ pub(crate) fn plan_walk(
     let mut steps = Vec::new();
 
     // Pass 1.
-    for slot in channels.joined.iter().flatten() {
+    for slot in channels.joined.iter().filter_map(SlotRecord::held) {
         let Some(row) = catalog.row(slot.id) else {
             continue; // a custom channel: not the walk's
         };
@@ -290,9 +291,7 @@ pub(crate) fn plan_walk(
 
     // Pass 2.
     for row in catalog.rows() {
-        if !channels.zone_row_wanted(row.id)
-            || channels.joined.iter().flatten().any(|s| s.id == row.id)
-        {
+        if !channels.zone_row_wanted(row.id) || channels.carries_row(row.id) {
             continue;
         }
         let Some(name) = compose(row, zone_name, area_flags, city_word) else {
@@ -581,18 +580,21 @@ mod tests {
     }
 
     /// A confirmed slot carrying the row its name composes from, as the walk or a join stores it.
-    fn joined(name: &str) -> Option<crate::ui_chat::edit::ChannelSlot> {
-        Some(crate::ui_chat::edit::ChannelSlot::confirmed(
-            name,
-            catalog().zone_channel_id(name),
-        ))
+    fn joined(name: &str) -> SlotRecord {
+        crate::ui_chat::edit::ChannelSlot::confirmed(name, catalog().zone_channel_id(name)).into()
     }
 
-    fn suspended(name: &str) -> Option<crate::ui_chat::edit::ChannelSlot> {
-        Some(crate::ui_chat::edit::ChannelSlot {
-            state: SlotState::Suspended,
-            ..joined(name).unwrap()
-        })
+    /// `joined(name)` in `state`.
+    fn in_state(name: &str, state: SlotState) -> SlotRecord {
+        crate::ui_chat::edit::ChannelSlot {
+            state,
+            ..crate::ui_chat::edit::ChannelSlot::confirmed(name, catalog().zone_channel_id(name))
+        }
+        .into()
+    }
+
+    fn suspended(name: &str) -> SlotRecord {
+        in_state(name, SlotState::Suspended)
     }
 
     fn s(v: &str) -> String {
@@ -1076,7 +1078,7 @@ mod tests {
         c.joined = vec![
             joined("General - Elwynn Forest"),
             suspended("Trade - City"),
-            None,
+            SlotRecord::Freed { id: 0 },
             joined("MyChan"),
         ];
         assert_eq!(
@@ -1195,11 +1197,8 @@ mod tests {
         W::Register { name: s(name), id }
     }
 
-    fn pending(name: &str) -> Option<crate::ui_chat::edit::ChannelSlot> {
-        Some(crate::ui_chat::edit::ChannelSlot {
-            state: SlotState::Pending,
-            ..joined(name).unwrap()
-        })
+    fn pending(name: &str) -> SlotRecord {
+        in_state(name, SlotState::Pending)
     }
 
     /// Outside a capital a city-named row takes the zone's name: the `%s` is the city word only for
@@ -1360,12 +1359,7 @@ mod tests {
     fn the_walk_with_ten_slots_taken_shows_too_many_channels() {
         let mut c = state(SEED);
         c.joined = (1..=10)
-            .map(|i| {
-                Some(crate::ui_chat::edit::ChannelSlot::confirmed(
-                    &format!("Chan{i}"),
-                    0,
-                ))
-            })
+            .map(|i| crate::ui_chat::edit::ChannelSlot::confirmed(&format!("Chan{i}"), 0).into())
             .collect();
         let (tx, rx) = crossbeam_channel::unbounded();
         let errors = crate::ui_action::UiErrorKeys::default();

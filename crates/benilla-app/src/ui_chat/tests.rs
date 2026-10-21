@@ -1077,7 +1077,7 @@ fn a_freed_slot_is_reused_and_the_others_keep_their_numbers() {
 
     // Leaving the city drops Trade; the hole it leaves is what the next join takes.
     assert_eq!(c.free_slot("Trade - City"), Some(2));
-    assert!(c.joined[1].is_none(), "a hole answers 'not joined'");
+    assert!(c.joined[1].held().is_none(), "a hole answers 'not joined'");
     assert_eq!(c.number_of("General - The Barrens"), Some(1), "still 1");
     assert_eq!(
         c.claim_slot("Trade - City", 2),
@@ -2714,19 +2714,20 @@ fn a_named_language_rides_the_chat_command() {
 /// (`0x49f535`), so it never reaches the host.
 #[test]
 fn a_channel_send_carries_the_numbered_slots_name() {
-    use super::edit::{ChannelSlot, ChannelState, SlotState};
+    use super::edit::{ChannelSlot, ChannelState, SlotRecord, SlotState};
     use crate::net::{ChatKind, ClientCommand};
 
     let channels = ChannelState {
         joined: vec![
-            Some(ChannelSlot::confirmed("General - Elwynn Forest", 1)),
-            Some(ChannelSlot::confirmed("Trade - City", 2)),
-            None,
-            Some(ChannelSlot {
+            ChannelSlot::confirmed("General - Elwynn Forest", 1).into(),
+            ChannelSlot::confirmed("Trade - City", 2).into(),
+            SlotRecord::Freed { id: 0 },
+            ChannelSlot {
                 name: "LocalDefense - Elwynn Forest".into(),
                 id: 22,
                 state: SlotState::Suspended,
-            }),
+            }
+            .into(),
         ],
         ..Default::default()
     };
@@ -2924,7 +2925,7 @@ fn an_empty_line_sends_nothing_but_afk_and_dnd() {
     let mut script = in_world_vm();
     script.set_joined_channels(
         ChannelState {
-            joined: vec![Some(ChannelSlot::confirmed("General - Elwynn Forest", 1))],
+            joined: vec![ChannelSlot::confirmed("General - Elwynn Forest", 1).into()],
             ..Default::default()
         }
         .names(),
