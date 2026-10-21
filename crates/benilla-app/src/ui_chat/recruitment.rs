@@ -212,7 +212,6 @@ mod tests {
         super::super::input::apply_channel_command(
             benilla_ui::script::ChannelCommand::Leave {
                 name: "GuildRecruitment - City".into(),
-                manual: false,
             },
             &mut channels,
             &mut script,

@@ -102,7 +102,6 @@ fn join(name: &str, id: u32) -> ChannelCommand {
         name: name.into(),
         password: String::new(),
         id,
-        manual: true,
     }
 }
 

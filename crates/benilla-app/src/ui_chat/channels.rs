@@ -545,6 +545,7 @@ pub(crate) fn zone_channel_catalog(
             shortcut: r.shortcut.clone(),
             resolved: compose(r, zone_name, area_flags, city_word),
             listed: !r.is_city_only() || in_city,
+            guild_recruitment: r.is_guild_recruitment(),
         })
         .collect()
 }

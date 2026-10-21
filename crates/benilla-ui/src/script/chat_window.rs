@@ -1123,12 +1123,14 @@ mod record_tests {
                 shortcut: "General".into(),
                 resolved: Some("General - Elwynn Forest".into()),
                 listed: true,
+                guild_recruitment: false,
             },
             ZoneChannelRow {
                 id: 2,
                 shortcut: "Trade".into(),
                 resolved: None,
                 listed: false,
+                guild_recruitment: false,
             },
         ]);
         s.run(

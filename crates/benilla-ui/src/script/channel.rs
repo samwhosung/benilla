@@ -9,13 +9,16 @@ use super::Model;
 
 /// One `ChatChannels.dbc` row for the channel verbs: the id, the Shortcut a typed name is matched
 /// against case-folded, the name composed for the player's zone (`None` while the zone text is
-/// empty, the verbs' nil leg), and whether it is listed (a `flags & 0x10` city row only in a city).
+/// empty, the verbs' nil leg), whether it is listed (a `flags & 0x10` city row only in a city),
+/// and whether a binding's join or leave of it turns the guild-recruitment auto-join off
+/// (`flags & 0x20000`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZoneChannelRow {
     pub id: u32,
     pub shortcut: String,
     pub resolved: Option<String>,
     pub listed: bool,
+    pub guild_recruitment: bool,
 }
 
 /// What the recruitment cascade `0x49ea90` would do now, as the app resolves it from the player,
@@ -46,26 +49,20 @@ pub enum RecruitmentPlan {
 /// What `0x49ea90` does on the pushed plan, the latch already AUTO: `None` while the run stays
 /// owed; else the leave (`0x49eb17` → `0x49ee70`) or the join (`0x49eb55` → `0x49eb70`, whose body
 /// first registers window 1's entry, `0x49ec24`) it sends, if any, and whether it then signals
-/// `UPDATE_CHAT_WINDOWS` (`0x49eb21`, `0x49eb5f`). Neither passes the binding's reset flag.
+/// `UPDATE_CHAT_WINDOWS` (`0x49eb21`, `0x49eb5f`). Neither passes the binding's reset flag
+/// (`0x49eb0e`, `0x49eb47`), so neither turns the auto-join off.
 fn cascade_step(model: &mut Model) -> Option<(Option<ChannelCommand>, bool)> {
     Some(match model.guild_recruitment_plan.clone() {
         RecruitmentPlan::Retry => return None,
         RecruitmentPlan::NoPlayer => (None, false),
         RecruitmentPlan::Unnamed => (None, true),
-        RecruitmentPlan::Leave(name) => (
-            Some(ChannelCommand::Leave {
-                name,
-                manual: false,
-            }),
-            true,
-        ),
+        RecruitmentPlan::Leave(name) => (Some(ChannelCommand::Leave { name }), true),
         RecruitmentPlan::Join { name, shortcut, id } => {
             model.register_window_channel(0, shortcut, id);
             let join = ChannelCommand::Join {
                 name,
                 password: String::new(),
                 id,
-                manual: false,
             };
             (Some(join), true)
         }
@@ -93,21 +90,17 @@ pub(crate) fn run_recruitment_cascade(lua: &Lua) -> mlua::Result<bool> {
 /// each, and the recruitment cascade's two.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChannelCommand {
-    /// `JoinChannelByName(name, password)`, sent on both non-nil legs; `id` is the matched row's
-    /// ChannelID, 0 for a custom channel, which the allocator stores with the slot (`0x49ede8`).
-    /// `manual` is the binding's flag, which turns a `GuildRecruitment` row's auto-join off
-    /// (`0x49ed3d`); the cascade's own join passes none.
+    /// `JoinChannelByName(name, password)`, sent on both non-nil legs, or the cascade's join; `id`
+    /// is the matched row's ChannelID, 0 for a custom channel, which the allocator stores with the
+    /// slot (`0x49ede8`).
     Join {
         name: String,
         password: String,
         id: u32,
-        manual: bool,
     },
-    /// `LeaveChannelByName(name)`, or the cascade's leave; `manual` as for [`Self::Join`]
-    /// (`0x49ef8f`).
+    /// `LeaveChannelByName(name)`, or the cascade's leave.
     Leave {
         name: String,
-        manual: bool,
     },
     /// `ListChannelByName(name)`: `CMSG_CHANNEL_LIST`.
     List {
@@ -226,18 +219,17 @@ impl super::UiScript {
             }
         }
     }
+}
 
-    /// A manual join or leave of `GuildRecruitment` forces the latch to 0 (`0x49ed3d`, `0x49ef8f`)
-    /// and, as a player gesture, arms the save; mode 0 has no cascade, and the cascade's own join
-    /// passes a flag that skips this reset. Returns whether the latch moved.
-    pub fn reset_guild_recruitment_mode(&mut self) -> bool {
-        let mut model = self.model_mut();
-        if model.guild_recruitment_mode == 0 {
-            return false;
+impl Model {
+    /// `0x49ea70(0)` from a binding's join or leave of the `GuildRecruitment` row (`0x49ed3d`,
+    /// `0x49ef8f`): the latch to 0 and, as a player gesture, the save armed; mode 0 runs no
+    /// cascade.
+    fn reset_guild_recruitment_mode(&mut self) {
+        if self.guild_recruitment_mode != 0 {
+            self.guild_recruitment_mode = 0;
+            self.guild_recruitment_changed = true;
         }
-        model.guild_recruitment_mode = 0;
-        model.guild_recruitment_changed = true;
-        true
     }
 }
 
@@ -438,15 +430,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         .find(|r| r.shortcut.eq_ignore_ascii_case(&name))
                         .cloned()
                 };
-                let (id, wire, shortcut) = match row {
-                    None => (0, name.clone(), None),
+                let (id, wire, shortcut, guild_recruitment) = match row {
+                    None => (0, name.clone(), None, false),
                     Some(ZoneChannelRow { resolved: None, .. }) => return Ok(MultiValue::new()),
                     Some(ZoneChannelRow {
                         id,
                         resolved: Some(resolved),
                         shortcut,
+                        guild_recruitment,
                         ..
-                    }) => (id, resolved, Some(shortcut)),
+                    }) => (id, resolved, Some(shortcut), guild_recruitment),
                 };
                 // `0x49ff6b edi = -1` / `0x49ff8a dec edi`; `0x49ec27 cmp esi,0xa; jae` skips.
                 let window = match frame {
@@ -456,11 +449,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 .map(|n| super::binding_abi::ftol(n).wrapping_sub(1))
                 .and_then(|i| usize::try_from(i).ok())
                 .filter(|i| *i < 10);
-                if let Some(i) = window {
-                    let entry = shortcut.clone().unwrap_or_else(|| name.clone());
-                    lua.app_data_mut::<Model>()
-                        .expect("model app_data")
-                        .register_window_channel(i, entry, id);
+                {
+                    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                    if let Some(i) = window {
+                        let entry = shortcut.clone().unwrap_or_else(|| name.clone());
+                        model.register_window_channel(i, entry, id);
+                    }
+                    // The row the Shortcut matched turns the auto-join off (`0x49ed19`-`0x49ed3d`),
+                    // before the slot and the packet.
+                    if guild_recruitment {
+                        model.reset_guild_recruitment_mode();
+                    }
                 }
                 submit(
                     lua,
@@ -468,7 +467,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         name: wire,
                         password,
                         id,
-                        manual: true,
                     },
                 )?;
                 Ok(MultiValue::from_vec(vec![
@@ -500,7 +498,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // LeaveChannelByName(name) (`0x4a0000` → `0x49ee70`) returns nothing and raises `Usage:` on a
     // non-string, non-number. A key whose `SStrToInt` is non-zero is a joined slot, resolved
     // app-side and never a window entry; a Shortcut leaves the name composed for this zone (a
-    // no-op with no zone text) and strips by Shortcut; anything else is a custom channel.
+    // no-op with no zone text) and strips by Shortcut; anything else is a custom channel. The key,
+    // a number read as its confirmed slot's name (`0x49e880`), turns the auto-join off when it is
+    // the `GuildRecruitment` row's composed name (`0x49eeec`-`0x49ef8f`, `SStrCmpI` at
+    // `0x49ef84`), so `/leave GuildRecruitment` keeps it on.
     // Deviation: the reference composes the Shortcut with `GetRealZoneText` alone (`0x49efe8`), so
     // in a capital `/leave Trade` sends `Trade - Stormwind City` and leaves nothing; ours uses the
     // join's city-aware name, because the reference's form cannot leave the channel it joined.
@@ -517,14 +518,30 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     .to_string(),
                 _ => return Err(mlua::Error::runtime(r#"Usage: LeaveChannelByName("name")"#)),
             };
-            if super::binding_abi::s_str_to_int(&key) != 0 {
-                return submit(
-                    lua,
-                    ChannelCommand::Leave {
-                        name: key,
-                        manual: true,
-                    },
-                );
+            let number = super::binding_abi::s_str_to_int(&key);
+            {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                let named = match number {
+                    0 => Some(key.clone()),
+                    n => confirmed_channel(&model, i64::from(n)).map(|c| c.name.clone()),
+                };
+                // `0x49e880` answers nothing for a number naming no confirmed slot, and the leave
+                // ends there (`0x49ee8a`).
+                let Some(named) = named else {
+                    return Ok(());
+                };
+                let resets = model.zone_channel_catalog.iter().any(|r| {
+                    r.guild_recruitment
+                        && r.resolved
+                            .as_deref()
+                            .is_some_and(|composed| composed.eq_ignore_ascii_case(&named))
+                });
+                if resets {
+                    model.reset_guild_recruitment_mode();
+                }
+            }
+            if number != 0 {
+                return submit(lua, ChannelCommand::Leave { name: key });
             }
             let wire = {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -545,13 +562,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 model.strip_window_channel(&strip_key);
                 wire
             };
-            submit(
-                lua,
-                ChannelCommand::Leave {
-                    name: wire,
-                    manual: true,
-                },
-            )
+            submit(lua, ChannelCommand::Leave { name: wire })
         })?,
     )?;
 
@@ -695,12 +706,14 @@ mod command_tests {
                 shortcut: "General".into(),
                 resolved: Some("General - Elwynn Forest".into()),
                 listed: true,
+                guild_recruitment: false,
             },
             ZoneChannelRow {
                 id: 2,
                 shortcut: "Trade".into(),
                 resolved: None,
                 listed: false,
+                guild_recruitment: false,
             },
         ]
     }
@@ -738,13 +751,11 @@ mod command_tests {
                     name: "General - Elwynn Forest".into(),
                     password: "pw".into(),
                     id: 1,
-                    manual: true,
                 },
                 ChannelCommand::Join {
                     name: "MyChan".into(),
                     password: String::new(),
                     id: 0,
-                    manual: true,
                 },
             ],
             "sent on both non-nil legs, the resolved name for a row"
@@ -785,7 +796,6 @@ mod command_tests {
             vec![
                 ChannelCommand::Leave {
                     name: "General".into(),
-                    manual: true,
                 },
                 ChannelCommand::ListAll,
                 ChannelCommand::SetPassword {
@@ -869,10 +879,7 @@ mod command_tests {
         s.run("LeaveChannelByName('2')").unwrap();
         assert_eq!(
             s.take_channel_commands(),
-            vec![ChannelCommand::Leave {
-                name: "2".into(),
-                manual: true,
-            }],
+            vec![ChannelCommand::Leave { name: "2".into() }],
             "a number goes through as typed — the app holds the slot states"
         );
         assert!(
@@ -901,7 +908,6 @@ mod command_tests {
             s.take_channel_commands(),
             vec![ChannelCommand::Leave {
                 name: "General - Elwynn Forest".into(),
-                manual: true,
             }],
             "a shortcut composes for the zone"
         );
@@ -928,7 +934,6 @@ mod command_tests {
             s.take_channel_commands(),
             vec![ChannelCommand::Leave {
                 name: "mychan".into(),
-                manual: true,
             }],
             "custom: verbatim"
         );

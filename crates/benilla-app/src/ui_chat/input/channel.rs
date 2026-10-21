@@ -2,26 +2,11 @@
 //! host applies inside each call ([`super::ChatSender::channel`]): the slot table the reference's
 //! verbs read and write, and the packets they send.
 
-use bevy::prelude::*;
-
 use benilla_ui::script::{ChannelCommand, UiScript};
 
 use super::super::edit::ChannelState;
 use super::super::feed::ChatLog;
 use crate::net::{ClientCommand, NetCommands};
-
-/// A manual join or leave of `GuildRecruitment` turns its auto-join option off: `0x49ed3d` (join)
-/// and `0x49ef8f` (leave) call `0x49ea70(0)` when the `ChatChannels.dbc` row has `flags & 0x20000`
-/// and the caller passes its flag, which the Lua bindings do and the cascade's own calls do not.
-fn manual_join_or_leave(channels: &ChannelState, script: &mut UiScript, wire_name: &str) {
-    let guild_row = channels
-        .channels
-        .row_for_name(wire_name)
-        .is_some_and(|r| r.is_guild_recruitment());
-    if guild_row && script.reset_guild_recruitment_mode() {
-        info!("chat: manual {wire_name:?} — auto-join guild recruitment channel switched off");
-    }
-}
 
 /// Apply one queued channel verb: its slot writes and its packet, or its chat line.
 pub(in crate::ui_chat) fn apply(
@@ -34,15 +19,7 @@ pub(in crate::ui_chat) fn apply(
 ) {
     use ChannelCommand as C;
     let cmd = match cmd {
-        C::Join {
-            name,
-            password,
-            id,
-            manual,
-        } => {
-            if manual {
-                manual_join_or_leave(channels, script, &name);
-            }
+        C::Join { name, password, id } => {
             // The join body takes the slot before it builds the packet (`0x49edf3`), and sends
             // whether or not one was free (`0x49ee02`).
             if channels.claim_or_refuse(&name, id, errors).is_some() {
@@ -50,16 +27,13 @@ pub(in crate::ui_chat) fn apply(
             }
             ClientCommand::JoinChannel { name, password }
         }
-        C::Leave { name, manual } => {
+        C::Leave { name } => {
             // `LeaveChannelByName` (`0x4a0000` → `0x49ee70`): a number names a confirmed slot or
             // the call does nothing. Only a leave clears the zone mask and the custom re-join
             // list, the walk's own LEAVE never.
             let Some(name) = channels.channel_key(&name) else {
                 return;
             };
-            if manual {
-                manual_join_or_leave(channels, script, &name);
-            }
             channels.note_zone_channel_left(&name);
             channels.note_custom_channel_left(&name);
             ClientCommand::LeaveChannel { name }

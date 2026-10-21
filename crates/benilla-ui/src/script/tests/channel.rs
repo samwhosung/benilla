@@ -288,7 +288,6 @@ fn the_recruitment_cascade_runs_inside_the_verb() {
             name: "GuildRecruitment - City".into(),
             password: String::new(),
             id: 25,
-            manual: false,
         }]
     );
     assert_eq!(
@@ -306,7 +305,6 @@ fn the_recruitment_cascade_runs_inside_the_verb() {
         run(&mut s, &mut host, "SetGuildRecruitmentMode(1)"),
         [ChannelCommand::Leave {
             name: "GuildRecruitment - City".into(),
-            manual: false,
         }]
     );
     assert_eq!(crate::script::tick::heard::take(&s).len(), 2);
@@ -337,23 +335,30 @@ fn the_recruitment_cascade_runs_inside_the_verb() {
     );
 }
 
-/// A manual join or leave of `GuildRecruitment` calls `0x49ea70(0)` (`0x49ed3d`, `0x49ef8f`): it
-/// dirties the file and, as mode 0, asks for no cascade.
+/// A binding's join of the `GuildRecruitment` row calls `0x49ea70(0)` (`0x49ed3d`): it dirties
+/// the file and, as mode 0, asks for no cascade; with the latch already 0 nothing moves.
 #[test]
-fn a_manual_guild_recruitment_verb_resets_the_latch() {
+fn a_bindings_guild_recruitment_join_resets_the_latch() {
     let mut s = script();
-    assert!(s.reset_guild_recruitment_mode(), "1 → 0 moved");
+    s.set_zone_channel_catalog(vec![crate::script::ZoneChannelRow {
+        id: 25,
+        shortcut: "GuildRecruitment".into(),
+        resolved: Some("GuildRecruitment - City".into()),
+        listed: true,
+        guild_recruitment: true,
+    }]);
+    s.run("JoinChannelByName('GuildRecruitment')").unwrap();
     assert_eq!(
         s.eval::<f64>("return GetGuildRecruitmentMode()").unwrap(),
         0.0
     );
     assert!(s.take_guild_recruitment_change());
     assert!(!s.take_guild_recruitment_cascade());
+    s.run("JoinChannelByName('GuildRecruitment')").unwrap();
     assert!(
-        !s.reset_guild_recruitment_mode(),
+        !s.take_guild_recruitment_change(),
         "already 0: nothing moved"
     );
-    assert!(!s.take_guild_recruitment_change());
 }
 
 /// `JoinChannelByName` (`0x49ff00`): a name that is neither string nor number raises the usage
@@ -413,12 +418,14 @@ fn elwynn_rows() -> Vec<crate::script::ZoneChannelRow> {
             shortcut: "General".into(),
             resolved: Some("General - Elwynn Forest".into()),
             listed: true,
+            guild_recruitment: false,
         },
         crate::script::ZoneChannelRow {
             id: 2,
             shortcut: "Trade".into(),
             resolved: Some("Trade - Elwynn Forest".into()),
             listed: false,
+            guild_recruitment: false,
         },
     ]
 }
@@ -536,6 +543,6 @@ fn join_channel_by_name_answers_a_rows_shortcut() {
     );
     assert!(matches!(
         &s.take_channel_commands()[..],
-        [ChannelCommand::Join { name, id: 1, manual: true, .. }] if name == "General - Elwynn Forest"
+        [ChannelCommand::Join { name, id: 1, .. }] if name == "General - Elwynn Forest"
     ));
 }
