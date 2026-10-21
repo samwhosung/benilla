@@ -1147,9 +1147,13 @@ pub(super) fn seed_ui_fixture(
                     .id();
                 // As the V binding does, so FrameXML's replay at `PLAYER_ENTERING_WORLD` agrees.
                 set_enemy_plates(script.as_deref(), true);
-                // The wolf is the target, so its plate draws lit with the target ring.
+                // The wolf is the target, so its plate draws lit with the target ring: indexed under
+                // its guid, the object the selection's tracker keeps, and lit as `SetSelection`
+                // lights its object (`0x493701`).
+                index.0.insert(WOLF_GUID, wolf);
                 selection.target = Some(wolf);
                 selection.guid = Some(WOLF_GUID);
+                selection.lit = Some(wolf);
             }
             UiFixture::Options => {
                 let Some(script) = script else {
