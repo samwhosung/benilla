@@ -470,6 +470,117 @@ fn a_client_targeted_spell_press_casts_through_the_cursor_as_the_pets_cast() {
     assert_eq!(rig.pet_reads(CLAW, &claw()).1, 1500, "the send's GCD");
 }
 
+/// A spell with the attack-start bits (`0x6e5200`, here `AttributesEx 0x200`) that the possessed
+/// unit casts goes through TryCast's attack pick with that unit as the actor, while it is not
+/// attacking (`0x6e4ee8`-`0x6e4f13`: `0x60ecb0`, then `0x612df0(unit, &guid)`). With nothing
+/// selected and no enemy near, the pick refuses with `ERR_NO_ATTACK_TARGET` and nothing is cast.
+/// At a foe it keeps, the cast goes out, and TryCast's tail (`0x6e51c9`-`0x6e51de`) calls
+/// `StartAttack 0x6131a0` on the unit, which for the pet bar's unit (`0x613200`) presses the
+/// bar's Attack at that foe (`0x4bd630`, word `0x07000002`): its `CMSG_PET_ACTION`, and the attack
+/// latch a possessed unit raises (`0x4bd42e`).
+#[test]
+fn a_possessed_units_combat_spell_picks_its_target_and_orders_the_attack() {
+    const FOE: u64 = 0x77;
+    const STRIKE: u32 = 3010;
+    let strike = || SpellDisplay {
+        attributes_ex: 0x200,
+        targets: 0x2,
+        ..claw()
+    };
+    let unit = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+        (CHARMEDBY, ME as u32),
+        (CHARMEDBY + 1, 0),
+        (FLAGS, crate::target::UNIT_FLAG_POSSESSED),
+        (22, 100),
+        (28, 100),
+    ]));
+    let mut rig = rig(vec![(STRIKE, strike())], &[STRIKE], Some(unit));
+    // The view on the unit, and a player-controlled actor, whose `CanAttack` arm needs no faction
+    // table.
+    let world = rig.app.world_mut();
+    let me = world.resource::<GuidIndex>().0[&ME];
+    world.entity_mut(me).insert(player_with(&[
+        (FARSIGHT, PET as u32),
+        (FARSIGHT + 1, 0),
+        (FLAGS, 0x8),
+    ]));
+    // The call fires its refusals as it returns (`UI_ERROR_MESSAGE`).
+    let script = world.non_send_resource::<benilla_ui::script::UiScript>();
+    script
+        .run(
+            r#"
+            ERR_NO_ATTACK_TARGET = "There is nothing to attack."
+            ERRORS = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("UI_ERROR_MESSAGE")
+            f:SetScript("OnEvent", function() table.insert(ERRORS, arg1) end)
+        "#,
+        )
+        .expect("the error listener registers");
+    let errors = |rig: &mut Rig| {
+        let script = rig
+            .app
+            .world_mut()
+            .non_send_resource_mut::<benilla_ui::script::UiScript>();
+        let seen = script.eval::<Vec<String>>("return ERRORS").unwrap();
+        script.run("ERRORS = {}").unwrap();
+        seen
+    };
+
+    rig.cast_pet_action(1);
+    assert!(pet_casts(&rig.sent()).is_empty(), "the pick refused");
+    assert_eq!(errors(&mut rig), ["There is nothing to attack."]);
+    assert!(
+        !rig.app
+            .world()
+            .resource::<crate::spell::SpellTargeting>()
+            .active(),
+        "the pick stops the attempt before its cursor"
+    );
+
+    let world = rig.app.world_mut();
+    let foe = world
+        .spawn((
+            Guid(FOE),
+            Transform::default(),
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (22, 100),
+                (28, 100),
+            ])),
+        ))
+        .id();
+    world.resource_mut::<GuidIndex>().0.insert(FOE, foe);
+    *world.resource_mut::<crate::target::Selection>() = crate::target::Selection {
+        target: Some(foe),
+        guid: Some(FOE),
+        ..Default::default()
+    };
+
+    rig.cast_pet_action(1);
+    let sent = rig.sent();
+    let attack = PET_COMMAND_ATTACK | (u32::from(PET_ACT_COMMAND) << 24);
+    assert_eq!(
+        pet_casts(&sent),
+        [(
+            PET,
+            STRIKE,
+            benilla_protocol::messages::UseItemTarget::Unit(FOE)
+        )]
+    );
+    assert!(
+        matches!(
+            sent.last(),
+            Some(ClientCommand::PetAction { pet_guid: PET, packed, target_guid: FOE }) if *packed == attack
+        ),
+        "the Attack order follows the cast: {sent:?}"
+    );
+    assert!(
+        latched(&rig).2,
+        "a possessed unit's Attack raises the latch"
+    );
+    assert!(errors(&mut rig).is_empty());
+}
+
 /// `0x4bd24f`: a press on a running aura cancels it and returns before the arm.
 #[test]
 fn an_aura_cancel_press_starts_no_pet_gcd() {
