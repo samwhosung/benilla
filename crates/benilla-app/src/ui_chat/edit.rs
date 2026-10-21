@@ -344,14 +344,6 @@ impl ChannelState {
         script.set_joined_channels(self.names());
     }
 
-    /// Every joined channel's name, holes skipped.
-    pub(crate) fn iter_names(&self) -> impl Iterator<Item = &str> {
-        self.joined
-            .iter()
-            .filter_map(SlotRecord::held)
-            .map(|s| s.name.as_str())
-    }
-
     /// The slots in state 0 with their numbers, the set the lists (`0x4a01f2`, `0x4a0302`) and
     /// the defense broadcasts (`0x49dd5a`, `0x49deaa`) walk.
     pub(crate) fn confirmed_slots(&self) -> impl Iterator<Item = (u32, &ChannelSlot)> {

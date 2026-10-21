@@ -14,7 +14,7 @@ use benilla_formats::ChatChannelsCatalog;
 use crate::area::AreaTableRes;
 use crate::net::{ClientCommand, NetCommands};
 
-use super::edit::{ChannelState, SlotRecord, SlotState};
+use super::edit::{ChannelState, SlotState};
 use super::recruitment::GuildRecruitmentCascade;
 
 /// `AreaTable.dbc` flag `0x08`, the walk's city gate (`0x49a3c1`), set on the six capitals;
@@ -553,6 +553,7 @@ pub(crate) fn zone_channel_catalog(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui_chat::edit::SlotRecord;
     use benilla_formats::ChatChannelRow;
     use WalkStep as W;
 
