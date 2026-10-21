@@ -539,7 +539,7 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
     // seats either, and the load measures text (the stock tab template's `OnLoad` sizes from its
     // text width, `UIPanelTemplates.xml:370-373`), which answers 0 with no measurer.
     seat_raster_seam_for_load(world, &mut script);
-    // Read out of the world first: the bracket below borrows `world` for the chat-cache restore.
+    // Read out of the world first, for the phases below.
     let ui_scale = world
         .get_resource::<super::UiScaleCvar>()
         .map_or(1.0, |c| c.0);
@@ -559,11 +559,11 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
         Default::default()
     };
     // No sound during the load edge, as in the reference's `UI_Init` (`0x48fbfa` → `0x49016d`).
-    // The load is an engine turn: it holds the world, so it cannot lend the host meanwhile, and a
-    // call a file or an `ADDON_LOADED`, `VARIABLES_LOADED` or `PLAYER_LOGIN` handler makes applies
-    // as the load returns, through a host built off the world.
-    script.host_out(|script| {
-        silenced_ui_load(script, |script| {
+    // Each phase runs with a call host lent, built off the world as a system's would be, so a call
+    // a file or an `ADDON_LOADED` or `VARIABLES_LOADED` handler makes applies inside its verb, as
+    // the reference's do; the world reads between them are the load's own.
+    silenced_ui_load(&mut script, |script| {
+        crate::script_calls::lent_by_world(world, script, |script| {
             let _ = load_ingame_ui(script, identity.as_ref(), &roster, version_check);
             crate::ui_chat::commands::register_dev_commands(
                 script,
@@ -575,37 +575,36 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
             script.set_minimap_zoom(zoom.0, zoom.1);
             // The saved-variables file is read after the files set their defaults and before
             // `VARIABLES_LOADED`, the reference's order (`0x4900a3`, `0x4900b2`); reversed, the
-            // defaults always win. The chat cache restores after `VARIABLES_LOADED` and before any
-            // chat is routed: its `UPDATE_CHAT_WINDOWS` registers each chat frame for its
-            // `CHAT_MSG_*` events (`ChatFrame.lua:1261-1273`).
-            finish_ui_load_with(
-                script,
-                // Before `VARIABLES_LOADED`, whose `UIParent_OnEvent` arm runs the first
-                // `UpdateNameplates()` (`UIParent.lua:231-234`).
-                |script| crate::vplates::seat_legacy_settings(script, &legacy_plates),
-                |script| {
-                    crate::ui_chat::restore_chat_looks(world, script);
-                    // The UI scale lands on `UIParent` once the files, the addons and
-                    // `VARIABLES_LOADED` are done, after the chat reader (`0x4900d6`) and before
-                    // the `PLAYER_LOGIN` arm (`0x49011d`), through the display handler (`0x49010e`
-                    // → `0x492e90`). So every `OnLoad` sees `UIParent` at scale 1 and the root's
-                    // size.
-                    let display = {
-                        let mut q =
-                            world.query_filtered::<&Window, With<bevy::window::PrimaryWindow>>();
-                        q.single(world).map_or((0, 0), |w| {
-                            (w.width().round() as u32, w.height().round() as u32)
-                        })
-                    };
-                    let mut none = None;
-                    let mut cache = world.get_resource_mut::<super::UiAutoScaleCache>();
-                    let cache = cache.as_deref_mut().map_or(&mut none, |c| &mut c.0);
-                    script.seat_ui_scale(ui_scale, display, cache);
-                },
-            );
+            // defaults always win. Before `VARIABLES_LOADED` too, the plate setting, whose
+            // `UIParent_OnEvent` arm runs the first `UpdateNameplates()` (`UIParent.lua:231-234`).
+            read_saved_variables(script, |script| {
+                crate::vplates::seat_legacy_settings(script, &legacy_plates)
+            });
         });
+        // The chat cache restores after `VARIABLES_LOADED` and before any chat is routed: its
+        // `UPDATE_CHAT_WINDOWS` registers each chat frame for its `CHAT_MSG_*` events
+        // (`ChatFrame.lua:1261-1273`).
+        crate::ui_chat::restore_chat_looks(world, script);
+        // The UI scale lands on `UIParent` once the files, the addons and `VARIABLES_LOADED` are
+        // done, after the chat reader (`0x4900d6`) and before the `PLAYER_LOGIN` arm (`0x49011d`),
+        // through the display handler (`0x49010e` → `0x492e90`). So every `OnLoad` sees `UIParent`
+        // at scale 1 and the root's size.
+        let display = {
+            let mut q = world.query_filtered::<&Window, With<bevy::window::PrimaryWindow>>();
+            q.single(world).map_or((0, 0), |w| {
+                (w.width().round() as u32, w.height().round() as u32)
+            })
+        };
+        let cached = world.get_resource::<super::UiAutoScaleCache>().map(|c| c.0);
+        let mut cache = cached.flatten();
+        crate::script_calls::lent_by_world(world, script, |script| {
+            script.seat_ui_scale(ui_scale, display, &mut cache)
+        });
+        if let Some(mut slot) = world.get_resource_mut::<super::UiAutoScaleCache>() {
+            slot.0 = cache;
+        }
+        script.arm_player_login();
     });
-    crate::script_calls::apply_waiting(world, &mut script);
     // The load's record goes to `Logs\FrameXML.log` (`0x490187`-`0x4901b6`), after any
     // `LoadAddOn` block the load ran; nothing reaches chat.
     script.finish_ui_load_log();
@@ -1057,26 +1056,34 @@ pub(crate) fn finish_ui_load(script: &mut UiScript) {
     finish_ui_load_with(script, |_| {}, |_| {});
 }
 
-/// [`finish_ui_load`] with its two host seams. `host_settings` runs between the saved-variables
-/// file and `VARIABLES_LOADED`, carrying over a setting `config.toml` held before it moved into
-/// the saved variables. `between` runs after `VARIABLES_LOADED` and before the `PLAYER_LOGIN` arm
-/// (so before the event too): the chat-cache restore's `UPDATE_CHAT_WINDOWS` +
-/// `UPDATE_CHAT_COLOR` burst, where the reference registers its reader (`0x4900d6` → `0x498a20`),
-/// then the UI scale (`0x49010e`). On a fresh login the reference's cache (`0x5afe50`) defers that
-/// reader until the server's account data reconciles (`0x5afa42`/`0x5afd01`), after `UI_Init` has
-/// returned. Either way a `VARIABLES_LOADED` handler sees the boot chat colours, not the file's.
+/// [`finish_ui_load`] with its two host seams, in the order the client's load runs them
+/// ([`load_ingame_ui_on_world_entry`] runs the same steps around its world reads).
+/// `host_settings` runs between the saved-variables file and `VARIABLES_LOADED`, carrying over a
+/// setting `config.toml` held before it moved into the saved variables. `between` runs after
+/// `VARIABLES_LOADED` and before the `PLAYER_LOGIN` arm (so before the event too): the chat-cache
+/// restore's `UPDATE_CHAT_WINDOWS` + `UPDATE_CHAT_COLOR` burst, where the reference registers its
+/// reader (`0x4900d6` → `0x498a20`), then the UI scale (`0x49010e`). On a fresh login the
+/// reference's cache (`0x5afe50`) defers that reader until the server's account data reconciles
+/// (`0x5afa42`/`0x5afd01`), after `UI_Init` has returned. Either way a `VARIABLES_LOADED` handler
+/// sees the boot chat colours, not the file's.
+#[cfg(test)]
 pub(crate) fn finish_ui_load_with(
     script: &mut UiScript,
     host_settings: impl FnOnce(&mut UiScript),
     between: impl FnOnce(&mut UiScript),
 ) {
-    // Still the load edge, so still bounded: re-armed so the saved variables and every
-    // `VARIABLES_LOADED` handler get the full allowance; the entry edge disarms it after. The
-    // world-enter events fire later, unbounded, as every event the feeds fire is.
-    script.set_instruction_budget(addons::LOAD_INSTRUCTION_BUDGET);
-    crate::ui_saved::load_saved_variables(script, host_settings);
+    read_saved_variables(script, host_settings);
     between(script);
     script.arm_player_login();
+}
+
+/// The load's saved-variables step: the flat file, `host_settings`, then `VARIABLES_LOADED`
+/// (`0x4900b2` → `0x4913b0`). Still the load edge, so still bounded: re-armed so the saved
+/// variables and every `VARIABLES_LOADED` handler get the full allowance; the entry edge disarms
+/// it after. The world-enter events fire later, unbounded, as every event the feeds fire is.
+fn read_saved_variables(script: &mut UiScript, host_settings: impl FnOnce(&mut UiScript)) {
+    script.set_instruction_budget(addons::LOAD_INSTRUCTION_BUDGET);
+    crate::ui_saved::load_saved_variables(script, host_settings);
 }
 
 /// Run the patch chain's `Interface\FrameXML\GlobalStrings.lua`, the first file in the reference's

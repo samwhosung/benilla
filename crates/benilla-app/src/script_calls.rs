@@ -391,21 +391,26 @@ pub(crate) fn with_hosted_vm<R>(
     r
 }
 
-/// Apply what an engine turn left waiting on `script`, a VM out of the world (the UI load runs on
-/// one, with the world in hand): through a host built off the world, or dropped with none.
-pub(crate) fn apply_waiting(world: &mut World, script: &mut UiScript) {
+/// Run `f` on `script`, a VM out of the world (the UI load runs on one, with the world in hand),
+/// with a host built off the world lent, as a system's would be, and apply what its calls queued
+/// after. A world without the appliers' state (a bare test world) lends none: the calls are
+/// dropped as `f` returns ([`UiScript::refusing`]).
+pub(crate) fn lent_by_world<R>(
+    world: &mut World,
+    script: &mut UiScript,
+    f: impl FnOnce(&mut UiScript) -> R,
+) -> R {
     let mut state = bevy::ecs::system::SystemState::<Option<ScriptCallHost>>::new(world);
-    {
+    let r = {
         let mut host = state.get_mut(world);
         match host.as_mut() {
-            Some(host) => script.hosted(host, |_| ()),
-            None => {
-                script.refuse_waiting();
-            }
+            Some(host) => script.hosted(host, f),
+            None => script.refusing(f),
         }
-    }
+    };
     state.apply(world);
     crate::creature_anim::apply_unit_edits(world);
+    r
 }
 
 /// Run `system` as a one-shot from an exclusive caller, as [`World::run_system_cached`] does, and
