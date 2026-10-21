@@ -581,6 +581,71 @@ fn a_possessed_units_combat_spell_picks_its_target_and_orders_the_attack() {
     assert!(errors(&mut rig).is_empty());
 }
 
+/// TryCast's tail owes the attack at the guid the pick settled (`[ebx+0xc]`, `[ebx+0x10]` at
+/// `0x6e51d4`-`0x6e51de`), whatever the spell bound: a possessed unit's area melee spell (Crowd
+/// Pummel's shape, `AttributesEx 0x200` on implicit targets) binds no unit and still presses the
+/// bar's Attack at the foe.
+#[test]
+fn a_possessed_units_area_melee_spell_orders_the_attack_at_the_pick() {
+    const FOE: u64 = 0x77;
+    const PUMMEL: u32 = 10887;
+    let pummel = || SpellDisplay {
+        attributes_ex: 0x200,
+        targets: 0,
+        ..claw()
+    };
+    let unit = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+        (CHARMEDBY, ME as u32),
+        (CHARMEDBY + 1, 0),
+        (FLAGS, crate::target::UNIT_FLAG_POSSESSED),
+        (22, 100),
+        (28, 100),
+    ]));
+    let mut rig = rig(vec![(PUMMEL, pummel())], &[PUMMEL], Some(unit));
+    let world = rig.app.world_mut();
+    let me = world.resource::<GuidIndex>().0[&ME];
+    world.entity_mut(me).insert(player_with(&[
+        (FARSIGHT, PET as u32),
+        (FARSIGHT + 1, 0),
+        (FLAGS, 0x8),
+    ]));
+    let foe = world
+        .spawn((
+            Guid(FOE),
+            Transform::default(),
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (22, 100),
+                (28, 100),
+            ])),
+        ))
+        .id();
+    world.resource_mut::<GuidIndex>().0.insert(FOE, foe);
+    *world.resource_mut::<crate::target::Selection>() = crate::target::Selection {
+        target: Some(foe),
+        guid: Some(FOE),
+        ..Default::default()
+    };
+
+    rig.cast_pet_action(1);
+    let sent = rig.sent();
+    let attack = PET_COMMAND_ATTACK | (u32::from(PET_ACT_COMMAND) << 24);
+    assert_eq!(
+        pet_casts(&sent),
+        [(
+            PET,
+            PUMMEL,
+            benilla_protocol::messages::UseItemTarget::SelfImplicit
+        )]
+    );
+    assert!(
+        matches!(
+            sent.last(),
+            Some(ClientCommand::PetAction { pet_guid: PET, packed, target_guid: FOE }) if *packed == attack
+        ),
+        "the Attack order follows the cast: {sent:?}"
+    );
+}
+
 /// The cursor binds a unit caster's cast against that caster: `BindTarget` resolves the record's
 /// caster (`0x6e5b6d`-`0x6e5b89`, `0xceac50`) for its relations and its range test
 /// (`0x6e6059`-`0x6e6063` → `0x6e47b0`). A spell that excludes its caster (`AttributesEx

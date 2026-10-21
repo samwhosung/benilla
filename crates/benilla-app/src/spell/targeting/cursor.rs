@@ -673,6 +673,89 @@ mod tests {
         assert!(!verdict(MELEE_GROUND, false, 1.5, Some(4.0), 7.0));
     }
 
+    /// `CheckGroundPointInRange` measures from the record's caster (`0xceac50`, resolved at
+    /// `0x6e6849`) and asks `GetMinMaxRange` for that caster (`0x6e68b0`, `ecx` the caster): a pet's
+    /// ground spell is in range around the pet, not around us, and its melee row reads the pet's
+    /// reach.
+    #[test]
+    fn the_terrain_verdict_measures_from_the_records_caster() {
+        use super::super::corpse_fixture as fx;
+        use bevy::ecs::system::RunSystemOnce;
+        use std::collections::HashMap;
+
+        const NEAR_GROUND: u32 = 100;
+        const MELEE_GROUND: u32 = 12684;
+        const PET: u64 = 0xF140_0000_0000_0009;
+        // The pet's place and reach, and the point; we stand at the origin with reach 1.5.
+        let verdict = |spell: u32, pet_at: f32, pet_reach: f32, d: f32| -> bool {
+            let mut world = World::new();
+            world.init_resource::<WorldCursor>();
+            world.init_resource::<SpellTargeting>();
+            world.init_resource::<crate::target::Hovered>();
+            world.init_resource::<crate::target::HoveredObject>();
+            world.init_resource::<crate::go_templates::GameObjectTemplates>();
+            world.init_resource::<crate::items::Items>();
+            world.init_resource::<SpellModifiers>();
+            world.insert_resource(crate::net::Reputations::default());
+            world.insert_resource(PickOcclusion {
+                distance: 10.0,
+                point: Some(Vec3::new(d, 0.0, 0.0)),
+                ray: None,
+            });
+            let display = |range_index| SpellDisplay {
+                range_index,
+                targets: 0x40,
+                ..SpellDisplay::default()
+            };
+            let mut spells = Spells::empty_for_tests();
+            spells.catalog = benilla_formats::SpellCatalog::from_displays(HashMap::from([
+                (NEAR_GROUND, display(4)),
+                (MELEE_GROUND, display(2)),
+            ]));
+            spells.ranges = benilla_formats::SpellRangeCatalog::from_rows(HashMap::from([
+                (
+                    4,
+                    SpellRange {
+                        min: 0.0,
+                        max: 10.0,
+                        flags: 0,
+                    },
+                ),
+                (
+                    2,
+                    SpellRange {
+                        min: 0.0,
+                        max: 5.0,
+                        flags: 1,
+                    },
+                ),
+            ]));
+            world.insert_resource(spells);
+            world.spawn((SelfPlayer, Transform::default(), fx::caster(1.5)));
+            let pet = world
+                .spawn((Transform::from_xyz(pet_at, 0.0, 0.0), fx::caster(pet_reach)))
+                .id();
+            world.insert_resource(crate::net::GuidIndex(HashMap::from([(PET, pet)])));
+            world.resource_mut::<SpellTargeting>().enter(
+                spell,
+                crate::spell::CastCommit::Pet { caster: PET },
+                0x0040,
+            );
+            world
+                .run_system_once(drive_targeting_cursor)
+                .expect("the targeting cursor drives");
+            !world.resource::<WorldCursor>().unable
+        };
+
+        // A 10 yd spell from a pet 40 yd out: 5 yd from the pet passes, 5 yd from us does not.
+        assert!(verdict(NEAR_GROUND, 40.0, 1.5, 35.0), "beside the pet");
+        assert!(!verdict(NEAR_GROUND, 40.0, 1.5, 5.0), "beside us");
+        // The melee row from a pet at our spot: its reach twice, 3.0 + 3.0 + 1.3333, reaches 7 yd,
+        // where ours, 1.5 + 1.5 + 1.3333 under the 5.0 floor, does not.
+        assert!(verdict(MELEE_GROUND, 0.0, 3.0, 7.0), "the pet's reach");
+        assert!(!verdict(MELEE_GROUND, 0.0, 1.5, 7.0));
+    }
+
     /// `0x6e6460`'s GameObject leg asks the same range through the same call: a chest a lock spell
     /// opens, `d` yd out, on a family-3 lock spell (fixture) with row 12, 0 to 5 yd.
     #[test]

@@ -280,3 +280,97 @@ fn a_world_entry_clears_the_feed_pet_spell() {
         None
     );
 }
+
+/// `SMSG_SPELL_GO` looks its caster slot up as a unit (`0x468460`, mask 8, at `0x6e7f8b`) on the
+/// packet's second guid, which a game object's cast writes as 0: the caster block (`0x6e7f97`),
+/// the cast kit (`0x6e8066`), the dest effect and the missiles (`0x6e821b`) skip with no unit,
+/// and the speed-0 impacts play on the hit list whatever the caster (`0x6e816b`).
+#[test]
+fn a_game_objects_go_plays_its_instant_impacts_and_nothing_of_a_caster() {
+    use benilla_protocol::messages::ObjectType;
+    const TRAP: u64 = 0xF110_0000_0000_0051;
+    const MOB: u64 = 0xF130_0000_0000_0052;
+    const BURST: u32 = 7;
+    const BOLT: u32 = 8;
+    let (mut app, _rx) = client();
+    app.world_mut().insert_resource(Spells {
+        catalog: benilla_formats::SpellCatalog::from_displays(
+            [
+                (BURST, SpellDisplay::default()),
+                (
+                    BOLT,
+                    SpellDisplay {
+                        speed: 20.0,
+                        ..Default::default()
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        ..Spells::empty_for_tests()
+    });
+    let world = app.world_mut();
+    // `OBJECT_FIELD_TYPE`: a game object's `0x21`, a unit's `0x9`.
+    let typed = |kind, bits| {
+        ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(2, bits)]).into_created(kind))
+    };
+    let trap = world
+        .spawn((Guid(TRAP), typed(ObjectType::GameObject, 0x21)))
+        .id();
+    let mob = world.spawn((Guid(MOB), typed(ObjectType::Unit, 0x9))).id();
+    let mut index = world.resource_mut::<GuidIndex>();
+    index.0.insert(TRAP, trap);
+    index.0.insert(MOB, mob);
+    let go = |caster, unit_caster, spell_id| SessionEvent::SpellGo {
+        caster,
+        spell_id,
+        cast_flags: 0,
+        hits: vec![MOB],
+        misses: vec![],
+        target: None,
+        go_target: None,
+        dest: Some([1.0, 2.0, 3.0]),
+        ammo_display_id: None,
+        item_caster: None,
+        unit_caster,
+    };
+    let drained = |app: &mut App| {
+        let world = app.world_mut();
+        let events: Vec<(Entity, CastEventKind)> = world
+            .resource_mut::<Messages<CastEvent>>()
+            .drain()
+            .map(|e| (e.entity, e.kind))
+            .collect();
+        let targets: Vec<(Entity, Vec<Entity>, bool)> = world
+            .resource_mut::<Messages<SpellGoTargets>>()
+            .drain()
+            .map(|t| (t.caster, t.hits, t.dest.is_some()))
+            .collect();
+        (events, targets)
+    };
+
+    // A unit's go: its cast kit, and the targets with the dest point.
+    dispatch(app.world_mut(), vec![go(MOB, MOB, BURST)]);
+    let (events, targets) = drained(&mut app);
+    assert!(
+        events.contains(&(mob, CastEventKind::Go)),
+        "a unit caster's cast kit"
+    );
+    assert_eq!(targets, [(mob, vec![mob], true)]);
+
+    // A trap's instant go: the impact on the hit, no cast kit and no dest effect.
+    dispatch(app.world_mut(), vec![go(TRAP, 0, BURST)]);
+    let (events, targets) = drained(&mut app);
+    assert!(
+        !events.iter().any(|&(_, kind)| kind == CastEventKind::Go),
+        "{events:?}"
+    );
+    assert_eq!(targets, [(trap, vec![mob], false)]);
+
+    // A trap's missile spell: no missile.
+    dispatch(app.world_mut(), vec![go(TRAP, 0, BOLT)]);
+    let (events, targets) = drained(&mut app);
+    assert!(!events.iter().any(|&(_, kind)| kind == CastEventKind::Go));
+    assert!(targets.is_empty(), "no missile without a caster unit");
+}

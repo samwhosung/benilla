@@ -335,6 +335,59 @@ fn same_frame_start_and_fail_leave_no_hold() {
     assert_eq!(hold(&app, unit), None, "the failed cast's hold is released");
 }
 
+/// The auto-repeat stop's `0x614150(spell, 0)` (`0x6ea139`) stops that spell's kits on the unit:
+/// its hold, its loop (keyed, `0x614167`) and its held effects; another spell's hold stays.
+#[test]
+fn a_kit_reap_drops_its_spells_hold_and_loop_and_spares_another() {
+    let mut app = app();
+    let unit = app.world_mut().spawn_empty().id();
+    app.world_mut()
+        .write_message(cast_event(unit, SPELL, CastEventKind::Start));
+    app.update();
+    app.world_mut()
+        .resource_mut::<Messages<SpellKitSound>>()
+        .clear();
+    app.world_mut()
+        .resource_mut::<Messages<SpellKitFx>>()
+        .clear();
+
+    app.world_mut()
+        .write_message(cast_event(unit, 999, CastEventKind::Reap));
+    app.update();
+    assert_eq!(hold(&app, unit), Some(SPELL), "another spell's reap");
+
+    app.world_mut()
+        .write_message(cast_event(unit, SPELL, CastEventKind::Reap));
+    app.update();
+    assert_eq!(hold(&app, unit), None, "the hold");
+    let stops: Vec<Option<u32>> = app
+        .world_mut()
+        .resource_mut::<Messages<SpellKitSound>>()
+        .drain()
+        .filter_map(|s| match s {
+            SpellKitSound::StopHold { entity, spell_id } if entity == unit => Some(spell_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        stops,
+        [Some(999), Some(SPELL)],
+        "each reap stops its own loop"
+    );
+    let reaps: Vec<u32> = app
+        .world_mut()
+        .resource_mut::<Messages<SpellKitFx>>()
+        .drain()
+        .filter_map(|f| match f {
+            SpellKitFx::Reap {
+                entity, spell_id, ..
+            } if entity == unit => Some(spell_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reaps, [999, SPELL]);
+}
+
 /// The ranged weapon-visual merge (`0x60d450`): a spell with `Attributes & 0x2` fills every zero
 /// slot of its own row from the caster's weapon visual; a non-ranged spell never looks.
 #[test]

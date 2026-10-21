@@ -2029,6 +2029,31 @@ mod tests {
         assert_eq!(stream(&mut world), stream(&mut bare));
     }
 
+    /// The send reports `START_AUTOREPEAT_SPELL` as it stores the key (`0x6e594c`, `0x6e5952`):
+    /// after the attempt's push, arm and bind signals and the send's own (`0x6e589d`), ahead of
+    /// its StopAttack (`0x6e5976`), whose save leg signals nothing, the pop's signal (`0x6e5989`)
+    /// and the attempt's last (`0x6e51e3`).
+    #[test]
+    fn an_auto_repeat_send_reports_its_start_where_it_stores_the_key() {
+        let (mut world, _rx) = combat_world(true);
+        world
+            .resource_mut::<crate::spell::QueuedMeleeSpell>()
+            .arm(RAPTOR_STRIKE);
+        send_at(&mut world, AUTO_SHOT, MOB);
+        assert_eq!(
+            stream(&mut world),
+            [
+                "CHANGED",
+                "CHANGED",
+                "CHANGED",
+                "CHANGED",
+                "START_AUTOREPEAT",
+                "CHANGED",
+                "CHANGED"
+            ]
+        );
+    }
+
     /// `0x5ecac0`'s early-out (`!IsAttacking && [+0xc50] == 0`): with no swing running nothing is
     /// sent and the queued strike survives.
     #[test]
@@ -2105,6 +2130,46 @@ mod tests {
             world.resource::<AutoRepeatActive>().0,
             None,
             "Auto Shot's ring goes dark"
+        );
+    }
+
+    /// TryCast's tail starts the attack at its guid argument as the pick left it (`[ebx+0xc]`,
+    /// `[ebx+0x10]` at `0x6e51d4`-`0x6e51de`), whatever the spell bound: an area melee spell
+    /// (`AttributesEx 0x200`, no unit word) binds nothing and still swings at the selection.
+    #[test]
+    fn an_attack_spell_that_binds_no_unit_still_swings_at_the_pick() {
+        const CROWD_PUMMEL: u32 = 10887;
+        let (mut world, rx) = world();
+        world.insert_resource(Spells {
+            catalog: benilla_formats::SpellCatalog::from_displays(
+                [(
+                    CROWD_PUMMEL,
+                    benilla_formats::SpellDisplay {
+                        attributes_ex: 0x200,
+                        ..Default::default()
+                    },
+                )]
+                .into(),
+            ),
+            ..Spells::empty_for_tests()
+        });
+        world.spawn(SelfPlayer);
+
+        send_at(&mut world, CROWD_PUMMEL, MOB);
+
+        let sent: Vec<_> = rx.try_iter().collect();
+        assert!(
+            matches!(
+                sent[..],
+                [
+                    ClientCommand::CastSpell {
+                        spell_id: CROWD_PUMMEL,
+                        target: None
+                    },
+                    ClientCommand::AttackSwing { guid: MOB }
+                ]
+            ),
+            "{sent:?}"
         );
     }
 

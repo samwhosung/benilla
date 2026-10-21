@@ -2445,6 +2445,7 @@ mod tests {
         world.init_resource::<crate::spell::targeting::EnchantConfirmItem>();
         world.init_resource::<crate::spell::QueuedMeleeSpell>();
         world.init_resource::<crate::spell::AutoRepeatActive>();
+        world.init_resource::<crate::creature_anim::AttackStopInFlight>();
         world.init_resource::<crate::creature_anim::UnitEdits>();
         world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
         world.init_resource::<Messages<crate::player::StandStateRequest>>();
@@ -3170,7 +3171,9 @@ mod tests {
         assert_eq!(world.resource::<Selection>().guid, Some(WOLF));
     }
 
-    /// Mid-combat on another target the select is the click's: stop, select, swing.
+    /// Mid-combat on another target the select is the click's: stop, select, swing, and then
+    /// StartAttack's own swing, since the stop's word (`[+0xc54]`, set at `0x6243b2`) is still
+    /// set when `0x5eccda` reads it and nothing clears it short of the echo or a death.
     #[test]
     fn an_interaction_switching_targets_mid_combat_stops_selects_and_swings() {
         const OLD: u64 = 0xF130_0000_0000_0111;
@@ -3196,7 +3199,7 @@ mod tests {
                 _ => "other",
             })
             .collect();
-        assert_eq!(sent, ["stop", "select", "swing"]);
+        assert_eq!(sent, ["stop", "select", "swing", "swing"]);
         assert_eq!(world.resource::<Selection>().guid, Some(WOLF));
     }
 

@@ -1075,12 +1075,14 @@ mod tests {
             None,
             "the switch un-queued Heroic Strike"
         );
-        // `CancelQueuedCast`'s cancel (`0x6e6f68`): the pop's signal, then `SPELLCAST_STOP`.
+        // `CancelQueuedCast`'s cancel (`0x6e6f68`): the pop's signal, then `SPELLCAST_STOP`; the
+        // re-swing's repeat stop signals `STOP_AUTOREPEAT_SPELL` as the key clears (`0x6ea16a`).
         assert!(matches!(
             world.resource::<crate::ui_cast::CastReports>().0[..],
             [
                 crate::ui_cast::CastReport::Changed,
-                crate::ui_cast::CastReport::Bar(crate::ui_cast::CastBarEdge::Stop)
+                crate::ui_cast::CastReport::Bar(crate::ui_cast::CastBarEdge::Stop),
+                crate::ui_cast::CastReport::AutoRepeat(false)
             ]
         ));
         assert_eq!(

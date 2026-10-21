@@ -2225,3 +2225,50 @@ fn a_macro_bound_to_a_pet_spell_reads_the_pets_gate_power_and_history() {
     let (usable, oom, ..) = at_a_refresh(500, 0x4_0000);
     assert_eq!((usable, oom), (None, None));
 }
+
+/// `START_AUTOREPEAT_SPELL` and `STOP_AUTOREPEAT_SPELL` fire where the key changes, inside the send
+/// and the stop that change it (`0x6e5952`, `0x6ea170`), never off the frame's feed: a key the
+/// world entry zeroes (`0x6e730b`, which signals nothing) and a VM that arrives with one running
+/// see neither.
+#[test]
+fn the_feed_signals_no_auto_repeat_edge_of_its_own() {
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    let mut app = App::new();
+    app.insert_resource(PlayerActions::default())
+        .insert_resource(crate::ui_macro::MacroBoundSpells::default())
+        .init_resource::<Cooldowns>()
+        .init_resource::<crate::spell::SpellModifiers>()
+        .init_resource::<crate::ui_script::UiClock>()
+        .insert_resource(AutoRepeatActive(Some(75)))
+        .init_resource::<crate::creature_anim::UnitEdits>()
+        .add_message::<crate::player::StandStateRequest>()
+        .init_resource::<crate::spell::PendingCast>()
+        .init_resource::<crate::spell::QueuedMeleeSpell>()
+        .init_resource::<crate::spell::ActiveChannel>()
+        .init_resource::<crate::spell::SpellTargeting>()
+        .init_resource::<crate::spell::HeldForPick>()
+        .init_resource::<Items>()
+        .insert_resource(NetCommands(tx));
+    feed_inputs(&mut app);
+    let script = UiScript::new().unwrap();
+    script
+        .run(
+            r#"SEEN = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("START_AUTOREPEAT_SPELL")
+            f:RegisterEvent("STOP_AUTOREPEAT_SPELL")
+            f:SetScript("OnEvent", function() table.insert(SEEN, event) end)"#,
+        )
+        .unwrap();
+    app.insert_non_send_resource(script);
+    add_action_feed(&mut app);
+    app.update();
+    app.world_mut().resource_mut::<AutoRepeatActive>().0 = None;
+    app.update();
+    let seen = app
+        .world()
+        .non_send_resource::<UiScript>()
+        .eval::<Vec<String>>("return SEEN")
+        .unwrap();
+    assert!(seen.is_empty(), "{seen:?}");
+}

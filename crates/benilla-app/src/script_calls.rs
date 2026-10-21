@@ -3231,6 +3231,69 @@ mod tests {
         assert_eq!(casts(&f), vec![(MOTW, Some(NEW))]);
     }
 
+    /// `START_AUTOREPEAT_SPELL` fires inside the send that stores the key (`0x6e594c`,
+    /// `0x6e5952`) and `STOP_AUTOREPEAT_SPELL` inside the stop that clears it (`0x6ea16a`,
+    /// `0x6ea170`): a macro's `SpellStopCasting()` then `CastSpellByName("Shoot")` fires both, in
+    /// that order, before it returns, and the next feed fires neither again.
+    #[test]
+    fn the_auto_repeat_edges_fire_inside_the_calls_that_make_them() {
+        const SHOOT: u32 = 5019;
+        let mut f = frame(true);
+        with_book_spell(
+            &mut f,
+            SHOOT,
+            "Shoot",
+            benilla_formats::SpellDisplay {
+                targets: 0x2,
+                attributes_ex2: 0x20,
+                ..Default::default()
+            },
+        );
+        f.app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run(
+                r#"SEEN = {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("START_AUTOREPEAT_SPELL")
+                f:RegisterEvent("STOP_AUTOREPEAT_SPELL")
+                f:SetScript("OnEvent", function() table.insert(SEEN, event) end)"#,
+            )
+            .unwrap();
+        let seen = |f: &mut Frame| {
+            f.app
+                .world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .eval::<Vec<String>>("return SEEN")
+                .unwrap()
+        };
+        run_hosted(&mut f, r#"CastSpellByName("Shoot") N = table.getn(SEEN)"#);
+        assert_eq!(
+            global(&mut f, "N"),
+            Some(1),
+            "inside the send: {:?}",
+            seen(&mut f)
+        );
+        run_hosted(
+            &mut f,
+            r#"SpellStopCasting() CastSpellByName("Shoot") N = table.getn(SEEN)"#,
+        );
+        assert_eq!(global(&mut f, "N"), Some(3), "inside the macro");
+        assert_eq!(
+            seen(&mut f),
+            [
+                "START_AUTOREPEAT_SPELL",
+                "STOP_AUTOREPEAT_SPELL",
+                "START_AUTOREPEAT_SPELL"
+            ]
+        );
+        f.app
+            .world_mut()
+            .run_system_once(crate::ui_cast::feed_cast_reports)
+            .unwrap();
+        assert_eq!(seen(&mut f).len(), 3, "not again from the feed");
+    }
+
     /// A key's body runs inside `CBindings::ExecuteBinding` (`0x4b7990`) with its input event up
     /// (`0x4b7b02`), and the bindings pass lends the host around it: SmartRes on a key casts, binds
     /// and reads the result inside the body, with no drain after it.

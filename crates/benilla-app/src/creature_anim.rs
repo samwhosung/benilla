@@ -1379,6 +1379,91 @@ mod attack_stand_tests {
             "a queued end"
         );
     }
+
+    /// `StopAutoRepeatSpell 0x6ea080`: the send (`0x6ea0c6`), then on the player the arm
+    /// (`0x6ea113`), the precast (`0x6ea12b`), the spell's kits (`0x614150(spell, 0)` at
+    /// `0x6ea139`, here its cast reaped and the visuals' reap event) and the nock (`0x6ea140`);
+    /// the slot popped when it holds the spell (`0x6ea160`), whose signal comes before the key's
+    /// clear and its `STOP_AUTOREPEAT_SPELL` (`0x6ea16a`, `0x6ea170`). With nothing running it
+    /// does nothing.
+    #[test]
+    fn the_auto_repeat_stop_reaps_its_kits_pops_its_slot_and_reports_last() {
+        let mut a = Attack::new();
+        let me = a.me;
+        a.in_flight(AUTO_SHOT);
+        a.precast(AUTO_SHOT);
+        a.world.entity_mut(me).insert((
+            AutoRepeatArmed,
+            NockedAmmo { display_id: 5996 },
+            Casting {
+                spell_id: AUTO_SHOT,
+                until: None,
+            },
+        ));
+        a.world.resource_mut::<crate::spell::AutoRepeatActive>().0 = Some(AUTO_SHOT);
+        a.world
+            .resource_mut::<crate::ui_cast::CastReports>()
+            .0
+            .clear();
+        let stop = |a: &mut Attack| {
+            a.world
+                .run_system_once(
+                    move |mut auto_repeat: ResMut<crate::spell::AutoRepeatActive>,
+                          edits: Res<UnitEdits>,
+                          mut slots: crate::spell::CastSlots,
+                          net: Res<crate::net::NetCommands>| {
+                        cancel_auto_repeat_local(
+                            Some(me),
+                            &mut auto_repeat,
+                            &edits,
+                            &mut slots.core(&net),
+                        );
+                    },
+                )
+                .unwrap();
+            apply_unit_edits(&mut a.world);
+        };
+        stop(&mut a);
+        assert!(matches!(a.sent()[..], [ClientCommand::CancelAutoRepeat]));
+        assert_eq!(a.world.resource::<crate::spell::AutoRepeatActive>().0, None);
+        let reports: Vec<&'static str> = a
+            .world
+            .resource_mut::<crate::ui_cast::CastReports>()
+            .0
+            .drain(..)
+            .map(|r| match r {
+                crate::ui_cast::CastReport::Changed => "CHANGED",
+                crate::ui_cast::CastReport::AutoRepeat(false) => "STOP_AUTOREPEAT",
+                _ => "OTHER",
+            })
+            .collect();
+        assert_eq!(
+            reports,
+            ["CHANGED", "STOP_AUTOREPEAT"],
+            "the pop, then the stop"
+        );
+        let world = &a.world;
+        assert!(world.get::<AutoRepeatArmed>(me).is_none());
+        assert!(world.get::<NockedAmmo>(me).is_none());
+        assert_eq!(a.held(), None, "the repeat spell's precast");
+        assert!(world.get::<Casting>(me).is_none(), "its cast reaped");
+        let reaps: Vec<_> = a
+            .world
+            .resource_mut::<Messages<CastEvent>>()
+            .drain()
+            .map(|e| (e.entity, e.spell_id, e.kind))
+            .collect();
+        assert_eq!(reaps, vec![(me, AUTO_SHOT, CastEventKind::Reap)]);
+
+        // Nothing running: nothing sent, nothing reported.
+        stop(&mut a);
+        assert!(a.sent().is_empty());
+        assert!(a
+            .world
+            .resource::<crate::ui_cast::CastReports>()
+            .0
+            .is_empty());
+    }
 }
 
 #[cfg(test)]
