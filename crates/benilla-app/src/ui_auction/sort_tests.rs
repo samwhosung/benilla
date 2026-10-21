@@ -614,3 +614,124 @@ fn requests(h: &House) -> Vec<String> {
         .map(|c| format!("{c:?}"))
         .collect()
 }
+
+/// A sale removes the auction from each list that holds it (`0x4cd468` → `0x4cdfe0`), browse
+/// then owner, each signalled with the row gone and the list's order kept, and asks for no list:
+/// the reference re-queries nothing.
+#[test]
+fn a_sale_removes_the_auction_in_place_of_a_requery() {
+    let mut h = House::new();
+    h.item(1, "Cloth", 10, 1);
+    h.item(2, "Silk", 20, 1);
+    h.name(SELLER, "Seller");
+    h.name(ME, "Me");
+    h.open(AUCTIONEER);
+    let mine = |auction_id, item| AuctionListEntry {
+        owner_guid: ME,
+        ..entry(auction_id, item)
+    };
+    h.land(LIST, vec![entry(1, 1), mine(2, 2), entry(3, 1)]);
+    h.land(OWNER, vec![mine(2, 2), mine(4, 1)]);
+    h.lua("SortAuctionItems('list', 'level')");
+    assert_eq!(h.order("list"), "Silk,Cloth,Cloth", "level reversed");
+    h.seen();
+    let _ = requests(&h);
+    h.dispatch(SessionEvent::AuctionOwnerNotification(
+        AuctionOwnerNotification {
+            auction_id: 2,
+            bid: 500,
+            out_bid: 0,
+            bidder_guid: 0,
+            item_entry: 2,
+            random_property_id: 0,
+        },
+    ));
+    assert_eq!(
+        h.seen(),
+        [
+            "AUCTION_ITEM_LIST_UPDATE=Cloth,Cloth",
+            "AUCTION_OWNED_LIST_UPDATE=Cloth"
+        ]
+    );
+    assert_eq!(
+        h.eval::<(i64, i64)>("return GetNumAuctionItems('list')"),
+        (2, 3),
+        "the count drops, the total stays"
+    );
+    h.app.update();
+    h.app.update();
+    assert!(h.seen().is_empty(), "signalled once");
+    assert!(requests(&h).is_empty(), "no list asked again");
+}
+
+/// A placed bid's browse row takes the bid last sent and the player as its bidder
+/// (`0x4cc564`-`0x4cc590`), and the browse list signals it.
+#[test]
+fn a_placed_bid_shows_on_its_browse_row() {
+    let mut h = House::new();
+    h.app
+        .world_mut()
+        .insert_resource(crate::net::SelfGuid(Some(ME)));
+    h.item(1, "Cloth", 10, 1);
+    h.open(AUCTIONEER);
+    h.land(LIST, vec![entry(1, 1)]);
+    h.seen();
+    h.app
+        .world_mut()
+        .resource_mut::<super::AuctionOpen>()
+        .last_bid = 150;
+    h.dispatch(SessionEvent::AuctionCommandResult {
+        auction_id: 1,
+        action: 2,
+        error: 0,
+        tail: AuctionCommandTail::BidPlaced { new_min_outbid: 7 },
+    });
+    assert_eq!(h.seen(), ["AUCTION_ITEM_LIST_UPDATE=Cloth"]);
+    assert_eq!(
+        h.eval::<(i64, i64, i64)>(
+            "local _,_,_,_,_,_,_,inc,_,bid,high = GetAuctionItemInfo('list', 1) \
+             return inc, bid, high"
+        ),
+        (7, 150, 1)
+    );
+}
+
+/// A landed page asks no name, and a seller sort reads the name cache without asking
+/// (`0x4cdbda`); `GetAuctionItemInfo` asks the seller it misses (`0x4cf1c8`), and the name's
+/// landing signals the list.
+#[test]
+fn a_rows_names_are_asked_by_its_read_not_by_its_page() {
+    const AL: u64 = 0x61;
+    const BO: u64 = 0x62;
+    let mut h = House::new();
+    let script = UiScript::new().unwrap();
+    script
+        .run(
+            r#"UPDATES = 0
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("AUCTION_ITEM_LIST_UPDATE")
+            f:SetScript("OnEvent", function() UPDATES = UPDATES + 1 end)"#,
+        )
+        .unwrap();
+    h.app.insert_non_send_resource(script);
+    h.item(1, "Cloth", 10, 1);
+    h.open(AUCTIONEER);
+    let seller = |auction_id, guid| AuctionListEntry {
+        owner_guid: guid,
+        ..entry(auction_id, 1)
+    };
+    h.land(LIST, vec![seller(1, AL), seller(2, BO)]);
+    h.lua("SortAuctionItems('list', 'seller')");
+    assert!(
+        requests(&h).is_empty(),
+        "neither the page nor the sort asks"
+    );
+    h.lua("GetAuctionItemInfo('list', 1)");
+    let asked = requests(&h);
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert!(asked[0].contains(&format!("{}", AL)), "{asked:?}");
+    let before = h.eval::<i64>("return UPDATES");
+    h.name(AL, "Al");
+    h.app.update();
+    assert_eq!(h.eval::<i64>("return UPDATES"), before + 1);
+}

@@ -159,6 +159,72 @@ impl House {
     }
 }
 
+/// A refused bid shows its line inside the call, so the script's next line counts it, and sends
+/// nothing (`0x4cf77a`); an accepted one is on the wire when the verb returns, lowered to the
+/// buyout (`0x4cf762`, `0x4cf915`) and remembered for its result's patch (`0x4cf91e`).
+#[test]
+fn a_bid_refuses_or_sends_inside_the_call() {
+    let mut h = House::new(1_000_000);
+    h.run(r#"PlaceAuctionBid("list", 1, 50) AFTER = table.getn(LINES)"#);
+    assert_eq!(h.eval::<i64>("return AFTER"), 1);
+    assert_eq!(h.eval::<String>("return LINES[1]"), "ERR_AUCTION_MIN_BID");
+    h.run(r#"PlaceAuctionBid("list", 1, 524)"#);
+    assert_eq!(
+        h.eval::<String>("return LINES[2]"),
+        "ERR_AUCTION_BID_INCREMENT"
+    );
+    assert!(h.sent().is_empty());
+
+    h.run(r#"PlaceAuctionBid("list", 1, 5000)"#);
+    assert_eq!(
+        text(h.sent()),
+        text([ClientCommand::AuctionPlaceBid {
+            auctioneer: AUCTIONEER,
+            auction_id: 7,
+            price: 2000,
+        }])
+    );
+    assert_eq!(h.house().last_bid, 2000);
+    assert_eq!(h.eval::<i64>("return table.getn(LINES)"), 2);
+}
+
+/// The money must cover the bid (`0x4cf847`), shown as `ERR_NOT_ENOUGH_MONEY`.
+#[test]
+fn a_bid_the_purse_cannot_cover_is_refused() {
+    let mut h = House::new(524);
+    h.run(r#"PlaceAuctionBid("list", 1, 525)"#);
+    assert_eq!(h.eval::<String>("return LINES[1]"), "ERR_NOT_ENOUGH_MONEY");
+    assert!(h.sent().is_empty());
+}
+
+/// A unique item already carried at its limit, the bank counted (scope `0x4f`, `0x4cf892`), is
+/// error `0x12` (`0x4cf8a8`).
+#[test]
+fn a_bid_on_a_unique_item_already_carried_is_refused() {
+    let mut h = House::new(1_000_000);
+    let mut t = crate::items::test_template("Silk Cloth");
+    t.max_count = 1;
+    h.app
+        .world_mut()
+        .resource_mut::<crate::items::Items>()
+        .insert_template(SILK, Some(t));
+    h.carry(BANK_SLOT_1, 0xB1, SILK);
+    h.run(r#"PlaceAuctionBid("list", 1, 600)"#);
+    assert_eq!(h.eval::<String>("return LINES[1]"), "ERR_ITEM_MAX_COUNT");
+    assert!(h.sent().is_empty());
+
+    let mut h = House::new(1_000_000);
+    let mut t = crate::items::test_template("Silk Cloth");
+    t.max_count = 2;
+    h.app
+        .world_mut()
+        .resource_mut::<crate::items::Items>()
+        .insert_template(SILK, Some(t));
+    h.carry(PACK_SLOT_1, 0xA1, SILK);
+    h.run(r#"PlaceAuctionBid("list", 1, 600)"#);
+    assert_eq!(h.sent().len(), 1, "under the limit");
+}
+
 /// No auctioneer, no bid and no line (`0x4cf75c`), nor a cancel (`0x4d02a5`).
 #[test]
 fn with_no_auctioneer_the_verbs_do_nothing() {
@@ -168,4 +234,181 @@ fn with_no_auctioneer_the_verbs_do_nothing() {
     h.run("GetOwnerAuctionItems() GetBidderAuctionItems()");
     assert_eq!(h.eval::<i64>("return table.getn(LINES)"), 0);
     assert!(h.sent().is_empty());
+}
+
+/// With no player object a bid does nothing (`0x4cf740`), and a cancel with a bid shows the money
+/// line at once (`0x4d0301`).
+#[test]
+fn with_no_player_a_bid_does_nothing_and_a_cancel_is_refused() {
+    let mut h = House::new(1_000_000);
+    let world = h.app.world_mut();
+    let me = world.resource::<GuidIndex>().0[&ME];
+    world.despawn(me);
+    h.run(r#"PlaceAuctionBid("list", 1, 600)"#);
+    assert_eq!(h.eval::<i64>("return table.getn(LINES)"), 0);
+    h.run("CancelAuction(1)");
+    assert_eq!(h.eval::<String>("return LINES[1]"), "ERR_NOT_ENOUGH_MONEY");
+    assert!(h.sent().is_empty());
+}
+
+/// `CancelAuction` on a bid of 400 needs 20c, 5% truncated (`0x4d0338`-`0x4d0346`): short of it
+/// the line shows and nothing goes; with it the cancel is on the wire when the verb returns.
+#[test]
+fn a_cancel_needs_five_percent_of_the_bid() {
+    let mut h = House::new(19);
+    h.run("CancelAuction(1) AFTER = table.getn(LINES)");
+    assert_eq!(h.eval::<i64>("return AFTER"), 1);
+    assert_eq!(h.eval::<String>("return LINES[1]"), "ERR_NOT_ENOUGH_MONEY");
+    assert!(h.sent().is_empty());
+
+    let mut h = House::new(20);
+    h.run("CancelAuction(1)");
+    assert_eq!(
+        text(h.sent()),
+        text([ClientCommand::AuctionRemoveItem {
+            auctioneer: AUCTIONEER,
+            auction_id: 8,
+        }])
+    );
+}
+
+/// The owner and bidder verbs send only while their flag is armed (`0x4cec97`, `0x4cece7`), the
+/// hello's arming spent by the first; the bidder request carries the open house's outbid ids.
+#[test]
+fn the_list_verbs_send_once_per_arming() {
+    let mut h = House::new(0);
+    h.house().outbid_append(1, 31);
+    h.house().outbid_append(2, 32);
+    h.run("GetOwnerAuctionItems(1) GetOwnerAuctionItems(2) GetBidderAuctionItems() GetBidderAuctionItems()");
+    assert_eq!(
+        text(h.sent()),
+        text([
+            ClientCommand::AuctionListOwnerItems {
+                auctioneer: AUCTIONEER,
+                list_from: 50,
+            },
+            ClientCommand::AuctionListBidderItems {
+                auctioneer: AUCTIONEER,
+                list_from: 0,
+                auction_ids: vec![31],
+            },
+        ])
+    );
+    h.house().owner_armed = true;
+    h.run("GetOwnerAuctionItems(3)");
+    assert_eq!(
+        text(h.sent()),
+        text([ClientCommand::AuctionListOwnerItems {
+            auctioneer: AUCTIONEER,
+            list_from: 150,
+        }])
+    );
+}
+
+/// A browse query is on the wire when the verb returns and arms the throttle, so
+/// `CanSendAuctionQuery()` on the next line answers nil and a second query sends nothing
+/// (`0x4cec3d`-`0x4cec4c`).
+#[test]
+fn a_query_sends_and_closes_the_throttle_inside_the_call() {
+    let mut h = House::new(0);
+    h.run(r#"QueryAuctionItems("silk") CAN = CanSendAuctionQuery() QueryAuctionItems("wool")"#);
+    assert!(h.eval::<bool>("return CAN == nil"));
+    let sent = h.sent();
+    assert!(
+        matches!(&sent[..], [ClientCommand::AuctionListItems { searched_name, .. }] if searched_name == "silk"),
+        "{sent:?}"
+    );
+    assert_eq!(h.house().wire.browse_sent, 1);
+}
+
+/// `StartAuction` sends and then clears the sell slot inside the call (`0x4ce925`, `0x4ce92a`):
+/// `NEW_AUCTION_UPDATE` has fired by the next line, and a second call finds the slot empty.
+#[test]
+fn a_start_sends_and_empties_the_slot_inside_the_call() {
+    let mut h = House::new(0);
+    {
+        let mut script = h.app.world_mut().non_send_resource_mut::<UiScript>();
+        script.set_container(
+            0,
+            Some(ContainerState {
+                name: None,
+                num_slots: 16,
+                slots: [(
+                    1,
+                    ContainerSlot {
+                        item_id: 2589,
+                        count: 1,
+                        quality: Some(1),
+                        guid: 0x4001,
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+        );
+    }
+    h.run("PickupContainerItem(0, 1) ClickAuctionSellItemButton() HEARD = {}");
+    let _ = h.sent();
+    h.run("StartAuction(100, 0, 480) AFTER = table.getn(HEARD) StartAuction(100, 0, 480)");
+    assert_eq!(
+        h.eval::<i64>("return AFTER"),
+        1,
+        "the slot's clear signalled in the call"
+    );
+    assert_eq!(
+        text(h.sent()),
+        text([ClientCommand::AuctionSellItem {
+            auctioneer: AUCTIONEER,
+            item_guid: 0x4001,
+            bid: 100,
+            buyout: 0,
+            etime_minutes: 480,
+        }]),
+        "one send; the second call finds the slot empty"
+    );
+}
+
+/// A damaged item's `StartAuction` shows `ERR_AUCTION_REPAIR_ITEM` inside the call
+/// (`0x4ce80f`-`0x4ce83f`), sends nothing and keeps the slot.
+#[test]
+fn a_damaged_items_start_is_refused_inside_the_call() {
+    let mut h = House::new(0);
+    {
+        let mut script = h.app.world_mut().non_send_resource_mut::<UiScript>();
+        script.set_container(
+            0,
+            Some(ContainerState {
+                name: None,
+                num_slots: 16,
+                slots: [(
+                    1,
+                    ContainerSlot {
+                        item_id: 2589,
+                        count: 1,
+                        quality: Some(1),
+                        guid: 0x4001,
+                        durability: Some((10, 40)),
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+        );
+    }
+    h.run("PickupContainerItem(0, 1) ClickAuctionSellItemButton() HEARD = {}");
+    let _ = h.sent();
+    h.run("StartAuction(100, 0, 480) AFTER = table.getn(LINES)");
+    assert_eq!(h.eval::<i64>("return AFTER"), 1);
+    assert_eq!(
+        h.eval::<String>("return LINES[1]"),
+        "ERR_AUCTION_REPAIR_ITEM"
+    );
+    assert!(h.sent().is_empty());
+    assert_eq!(
+        h.eval::<i64>("return table.getn(HEARD)"),
+        0,
+        "the slot stays"
+    );
 }

@@ -2221,6 +2221,169 @@ mod tests {
         );
     }
 
+    /// `GetSelectedAuctionItem` (`0x4cfec0`) answers 1 for a type that is none of the three
+    /// (`0x4cffc5` → `0x4d0013`, the double 1.0), and raises its usage line for a non-string
+    /// (`0x4cfecc`, `0x8495e4`); a number is a type's text.
+    #[test]
+    fn an_unknown_selection_type_answers_one() {
+        let mut s = UiScript::new().unwrap();
+        s.set_auction(page(&[11]));
+        assert_eq!(
+            s.eval::<i64>(r#"return GetSelectedAuctionItem("foo")"#)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            s.eval::<i64>("return GetSelectedAuctionItem(5)").unwrap(),
+            1
+        );
+        assert_eq!(
+            s.eval::<i64>(r#"return GetSelectedAuctionItem("LIST")"#)
+                .unwrap(),
+            0,
+            "a known type with no selection"
+        );
+        for call in ["GetSelectedAuctionItem()", "GetSelectedAuctionItem({})"] {
+            let err = s.run(call).unwrap_err().to_string();
+            assert!(
+                err.contains(r#"Usage: GetSelectedAuctionItem("type")"#),
+                "{call}: {err}"
+            );
+        }
+    }
+
+    /// `0x644bc0` answers 0 unless the run time is one of the three at `0x80e4b0`
+    /// (`0x644bd0`-`0x644be1`), and multiplies the rate in 32 bits (`0x644be9`).
+    #[test]
+    fn the_deposit_is_zero_off_the_three_run_times() {
+        for minutes in [0, 60, 119, 121, 240, 479, 960, 1439, 1441, 2880] {
+            assert_eq!(deposit_for(5, 10_000, minutes), 0, "{minutes} minutes");
+        }
+        assert_eq!(deposit_for(5, 10_000, 480), 2_000);
+        // 25 × 200,000,000 wraps to 705,032,704 (`imul ecx,edx`), over 100.
+        assert_eq!(deposit_for(25, 200_000_000, 120), 7_050_327);
+    }
+
+    /// `CalculateAuctionDeposit(240)` reads 0 where it read twice the two-hour deposit.
+    #[test]
+    fn calculate_auction_deposit_answers_zero_for_four_hours() {
+        use crate::script::container::{ContainerSlot, ContainerState};
+        use crate::script::cursor::CursorItem;
+        use crate::script::ItemTemplateView;
+        let mut s = UiScript::new().unwrap();
+        let mut slots = std::collections::HashMap::new();
+        slots.insert(
+            1u32,
+            ContainerSlot {
+                count: 1,
+                item_id: 2589,
+                ..Default::default()
+            },
+        );
+        s.set_container(
+            0,
+            Some(ContainerState {
+                name: None,
+                num_slots: 16,
+                slots,
+            }),
+        );
+        s.set_item_template(
+            2589,
+            ItemTemplateView {
+                sell_price: 10_000,
+                ..Default::default()
+            },
+        );
+        s.set_auction(AuctionState {
+            deposit_percent: 5,
+            ..Default::default()
+        });
+        s.model_mut().auction_sell_item = Some(CursorItem {
+            item_class: None,
+            guid: 0x108,
+            bag: 0,
+            slot: 1,
+            item_id: 2589,
+            texture: None,
+            link: None,
+            count: None,
+            quality: None,
+            equip_slots: Vec::new(),
+            bar_placeable: false,
+            consumable: false,
+        });
+        let deposit = |s: &UiScript, minutes: u32| {
+            s.eval::<i64>(&format!("return CalculateAuctionDeposit({minutes})"))
+                .unwrap()
+        };
+        assert_eq!(deposit(&s, 120), 500);
+        assert_eq!(deposit(&s, 240), 0);
+        assert_eq!(deposit(&s, 1440), 6_000);
+    }
+
+    /// The stack's value is a 32-bit `imul` of the vendor price and the count, in the deposit and
+    /// in `GetAuctionSellItemInfo` (`0x4ce295`, `0x4ce703`): `0x80000001 × 2` is 2.
+    #[test]
+    fn the_stack_value_is_a_32_bit_product() {
+        use crate::script::container::{ContainerSlot, ContainerState};
+        use crate::script::cursor::CursorItem;
+        use crate::script::ItemTemplateView;
+        let mut s = UiScript::new().unwrap();
+        let mut slots = std::collections::HashMap::new();
+        slots.insert(
+            1u32,
+            ContainerSlot {
+                count: 2,
+                item_id: 2589,
+                ..Default::default()
+            },
+        );
+        s.set_container(
+            0,
+            Some(ContainerState {
+                name: None,
+                num_slots: 16,
+                slots,
+            }),
+        );
+        s.set_item_template(
+            2589,
+            ItemTemplateView {
+                sell_price: 0x8000_0001,
+                ..Default::default()
+            },
+        );
+        s.set_auction(AuctionState {
+            deposit_percent: 100,
+            ..Default::default()
+        });
+        s.model_mut().auction_sell_item = Some(CursorItem {
+            item_class: None,
+            guid: 0x108,
+            bag: 0,
+            slot: 1,
+            item_id: 2589,
+            texture: None,
+            link: None,
+            count: None,
+            quality: None,
+            equip_slots: Vec::new(),
+            bar_placeable: false,
+            consumable: false,
+        });
+        assert_eq!(
+            s.eval::<i64>("local _, _, _, _, _, price = GetAuctionSellItemInfo() return price")
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            s.eval::<i64>("return CalculateAuctionDeposit(120)")
+                .unwrap(),
+            2
+        );
+    }
+
     /// A bid on a row: 100c to start, 500c bid with a 25c step, a 2000c buyout, from someone else.
     fn bid(amount: u32) -> AuctionBid {
         AuctionBid {
@@ -2234,6 +2397,97 @@ mod tests {
             current: 500,
             player_leads: false,
         }
+    }
+
+    /// `PlaceAuctionBid`'s checks in their order (`0x4cf762`-`0x4cf8a8`): the buyout clamp, the
+    /// start bid, the current bid, the step unless the buyout is reached, the silent cap, the
+    /// money (only the rise when the player leads) and the unique item.
+    #[test]
+    fn a_bid_is_checked_in_the_references_order() {
+        use BidVerdict::{Drop, Refuse, Send};
+        let rich = u32::MAX;
+        let none = || None;
+        assert_eq!(
+            bid(5000).verdict(rich, none),
+            Send(2000),
+            "lowered to the buyout"
+        );
+        let mut b = bid(2500);
+        b.buyout = 0;
+        assert_eq!(b.verdict(rich, none), Send(2500), "no buyout, no clamp");
+        let mut b = bid(99);
+        b.current = 0;
+        assert_eq!(b.verdict(rich, none), Refuse("ERR_AUCTION_MIN_BID"));
+        assert_eq!(
+            bid(99).verdict(rich, none),
+            Refuse("ERR_AUCTION_MIN_BID"),
+            "the start bid is tested before the current one"
+        );
+        assert_eq!(
+            bid(500).verdict(rich, none),
+            Refuse("ERR_AUCTION_HIGHER_BID")
+        );
+        assert_eq!(
+            bid(524).verdict(rich, none),
+            Refuse("ERR_AUCTION_BID_INCREMENT")
+        );
+        assert_eq!(bid(525).verdict(rich, none), Send(525));
+        // A buyout under the step: reaching it passes.
+        let mut b = bid(510);
+        b.buyout = 510;
+        assert_eq!(b.verdict(rich, none), Send(510));
+        let mut b = bid(100);
+        b.current = 0;
+        b.increment = 0;
+        assert_eq!(
+            b.verdict(rich, none),
+            Send(100),
+            "no bid yet: the step is not asked"
+        );
+        // Past 2,000,000,000 and the step: nothing at all.
+        let mut b = bid(2_000_000_001);
+        b.buyout = 0;
+        assert_eq!(b.verdict(rich, none), Drop);
+        b.current = 2_000_000_000;
+        b.increment = 1;
+        assert_eq!(
+            b.verdict(rich, none),
+            Send(2_000_000_001),
+            "not past the step"
+        );
+        assert_eq!(bid(525).verdict(524, none), Refuse("ERR_NOT_ENOUGH_MONEY"));
+        let mut b = bid(525);
+        b.player_leads = true;
+        assert_eq!(b.verdict(25, none), Send(525), "the rise alone");
+        assert_eq!(b.verdict(24, none), Refuse("ERR_NOT_ENOUGH_MONEY"));
+        assert_eq!(
+            bid(525).verdict(rich, || Some((1, 1))),
+            Refuse("ERR_ITEM_MAX_COUNT")
+        );
+        assert_eq!(bid(525).verdict(rich, || Some((2, 1))), Send(525));
+        assert_eq!(
+            bid(525).verdict(rich, || Some((0, 9))),
+            Send(525),
+            "no limit"
+        );
+        let mut asked = false;
+        let _ = bid(525).verdict(0, || {
+            asked = true;
+            None
+        });
+        assert!(!asked, "the unique check comes after the money's");
+    }
+
+    /// `CancelAuction`'s fee (`0x4d0338`-`0x4d0341`): 5% of the bid, truncated, with the `f32`
+    /// 0.05 a hair above it.
+    #[test]
+    fn the_cancel_fee_is_five_percent_truncated() {
+        assert_eq!(cancel_fee(0), 0);
+        assert_eq!(cancel_fee(19), 0);
+        assert_eq!(cancel_fee(20), 1);
+        assert_eq!(cancel_fee(39), 1);
+        assert_eq!(cancel_fee(1_000_000), 50_000);
+        assert_eq!(cancel_fee(u32::MAX), 214_748_367);
     }
 
     /// `PlaceAuctionBid` and `CancelAuction` hand the host the record at the row as the call
@@ -2274,4 +2528,34 @@ mod tests {
         );
     }
 
+    /// `GetAuctionItemInfo` asks the name cache for an owned row's bidder (`0x4cf167`) and then the
+    /// seller (`0x4cf1c8`) when either misses, with the list's callback; a cached name, a row
+    /// with no bid to name, or a row whose item is not cached (`0x4cefa0`) asks nothing.
+    #[test]
+    fn the_row_read_asks_the_names_it_misses() {
+        let mut s = UiScript::new().unwrap();
+        let mut state = page(&[1, 2, 3]);
+        state.lists[OWNER] = state.lists[LIST].clone();
+        let rows = &mut state.lists[OWNER].rows;
+        // Owned with a bid: neither name known.
+        rows[0].named_bidder = 0x99;
+        rows[0].owner_guid = 0x77;
+        // Named already.
+        rows[1].owner_guid = 0x55;
+        rows[1].owner = Some("Seller".into());
+        rows[1].named_bidder = 0x98;
+        rows[1].high_bidder = AuctionHighBidder::Name("Bidder".into());
+        // Uncached item: the miss shape, before any name.
+        rows[2].owner_guid = 0x56;
+        rows[2].quality = None;
+        s.set_auction(state);
+        s.run(
+            r#"for i = 1, 3 do GetAuctionItemInfo("owner", i) end GetAuctionItemInfo("owner", 1)"#,
+        )
+        .unwrap();
+        assert_eq!(s.take_auction_name_asks(), [0x99, 0x77]);
+        s.run(r#"GetAuctionItemInfo("owner", 1)"#).unwrap();
+        assert_eq!(s.take_auction_name_asks(), [0x99, 0x77], "every read asks");
+        assert!(s.take_auction_name_asks().is_empty());
+    }
 }

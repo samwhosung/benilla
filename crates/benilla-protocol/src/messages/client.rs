@@ -324,6 +324,13 @@ mod tests {
     use super::*;
     use crate::wire::Vector3d;
 
+    /// The placed bid's wave (`0x4cc5dd` opcode `0x102`, `0x4cc5fc` the one `u32`, 3): four bytes.
+    #[test]
+    fn emote_body_golden() {
+        assert_eq!(emote(3), [0x03, 0x00, 0x00, 0x00]);
+        assert_eq!(emote(0x0102_0304), [0x04, 0x03, 0x02, 0x01]);
+    }
+
     /// vmangos `MoveSplineDone::ReadFromWorldPacket` reads info, spline id, then a skipped float.
     #[test]
     fn move_spline_done_body_golden() {

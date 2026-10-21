@@ -1235,6 +1235,56 @@ mod tests {
         assert_eq!(seen, vec!["AUCTION_OWNED_LIST_UPDATE".to_string()]);
     }
 
+    /// A list's packet asks no name (`0x4cca30` asks the item cache alone); `GetAuctionItemInfo`
+    /// asks the bidder it misses with the list's callback (`0x4cf167`), a refused one again at
+    /// each read, and a frame that reads nothing asks nothing.
+    #[test]
+    fn a_bidders_name_is_asked_by_each_read_and_by_no_frame() {
+        let mut app = App::new();
+        app.init_resource::<AuctionOpen>()
+            .init_resource::<Items>()
+            .init_resource::<NameCache>()
+            .init_resource::<Time>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .add_systems(Update, feed_auction);
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(ME, "Seller".into(), None);
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(2589, Some(crate::items::test_template("Linen Cloth")));
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        app.world_mut().spawn((SelfPlayer, crate::net::Guid(ME)));
+        {
+            let mut open = app.world_mut().resource_mut::<AuctionOpen>();
+            open.open(0x1234, 1);
+            open.set_list(OWNER, vec![entry(ME, BIDDER_GUID)], 1);
+        }
+        let read = |app: &mut App| {
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .run(r#"GetAuctionItemInfo("owner", 1)"#)
+                .unwrap();
+            app.update();
+        };
+        app.update();
+        assert!(name_queries(&rx).is_empty(), "the page asks no name");
+        read(&mut app);
+        assert_eq!(name_queries(&rx), vec![BIDDER_GUID]);
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(BIDDER_GUID, String::new(), None);
+        for _ in 0..600 {
+            app.update();
+        }
+        assert!(name_queries(&rx).is_empty(), "no frame asks the refusal");
+        read(&mut app);
+        assert_eq!(name_queries(&rx), vec![BIDDER_GUID], "the next read does");
+    }
+
     /// The feed and the sweep's auction leg, the feed's other inputs at rest.
     fn sweep_auction_app() -> App {
         use crate::ui_script::SweepApp;
