@@ -316,6 +316,36 @@ fn mail_ready(model: &Model) -> bool {
     !model.mail_busy && model.mail.as_ref().is_some_and(|m| m.open)
 }
 
+/// `GetSendMailPrice()` (`0x4ae730`): 30 copper (`0x4ae756`); plus, for the selected paper in the
+/// usable list (`0x4ae765`-`0x4ae774`) when the player carries none (`0x4ae77d`), its item's buy
+/// price (`0x4ae7a0`); plus the selected package's cost (`0x4ae7b1`-`0x4ae7c6`); plus the money
+/// enclosed (`0x4ae7c9`-`0x4ae7d2`), summed in 32 bits and answered unsigned (`0x4ae7d7`).
+fn send_price(model: &Model) -> u32 {
+    let paper = (model.mail_stationery != 0)
+        .then(|| {
+            model
+                .mail_stationeries
+                .iter()
+                .find(|r| r.id == model.mail_stationery)
+        })
+        .flatten()
+        .and_then(|r| r.cost)
+        .unwrap_or(0);
+    let package = (model.mail_package != 0)
+        .then(|| {
+            model
+                .mail_packages
+                .iter()
+                .find(|p| p.id == model.mail_package)
+        })
+        .flatten()
+        .map_or(0, |p| p.cost as u32);
+    30u32
+        .wrapping_add(paper)
+        .wrapping_add(package)
+        .wrapping_add(model.mail_send_money)
+}
+
 /// The five row verbs, each with its own refusal of the row before any send: silent, but for
 /// TakeInboxItem's COD the purse cannot pay, which shows `ERR_NOT_ENOUGH_MONEY`.
 #[derive(Clone, Copy)]
@@ -856,12 +886,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetSendMailPrice(): 30 copper, vmangos's fee (`MailHandler.cpp:247`). The reference's is 30
-    // (`0x4ae756`) plus an uncarried stationery's price, the package's and the enclosed money
-    // (`0x4ae7a0`-`0x4ae7d2`); those are not added here.
     g.set(
         "GetSendMailPrice",
-        lua.create_function(|_, ()| Ok(Value::Integer(30)))?,
+        lua.create_function(|lua, ()| {
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            Ok(i64::from(send_price(&model)))
+        })?,
     )?;
 
     g.set(
@@ -1607,7 +1637,8 @@ mod tests {
         assert_eq!((req.money, req.cod), (1234, 0));
         assert_eq!(req.item, None);
         assert!(s.take_mail_send().is_none(), "drained");
-        assert_eq!(s.eval::<i64>("return GetSendMailPrice()").unwrap(), 30);
+        // The postage and the money still enclosed, until the send's result resets the form.
+        assert_eq!(s.eval::<i64>("return GetSendMailPrice()").unwrap(), 1264);
         assert!(
             s.run("SetSendMailMoney(nil)").is_err(),
             "a non-number raises"
