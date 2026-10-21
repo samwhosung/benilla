@@ -1137,18 +1137,75 @@ pub(crate) fn feed_containers(
     ),
     mut memory: Local<crate::ui_script::VmMemo<FeedMemory>>,
 ) {
+    // A refusal first, on its own: the failure's handler shows the line and unlocks the items
+    // (`0x496720`, then `0x5e3ac0`, `0x5e3ad3`) and changes nothing else, so its handlers run
+    // with the host lent before the frame's bags are pushed, and read them as they stood.
+    let (mut equip_errors, mut sink) = equip;
+    if !equip_errors.0.is_empty() {
+        vm.run(|script| {
+            let Some(script) = script else {
+                // A refusal's unlocks would fire into a later VM's locks; with none up they are
+                // dropped, as the release queue's are, and the lines wait.
+                for e in &mut equip_errors.0 {
+                    e.unlocks = [0; 2];
+                }
+                return;
+            };
+            // Refusals become the red error line through `equip_error_key`. An empty or missing
+            // string prints nothing, as the reference's sink guard (`0x4945b4`) drops it; that
+            // silences 59.
+            let player = inv.self_store.iter().next();
+            let mut refusals = Vec::new();
+            let mut unlocks = Vec::new();
+            for e in equip_errors.0.drain(..) {
+                unlocks.extend(e.unlocks);
+                // Reason 16 names the bag's family when the bag resolves, as `0x5ede00` does.
+                let subclass_fill = (e.reason == 16)
+                    .then(|| {
+                        bag_family_name(
+                            player,
+                            e.bag_slot,
+                            &inv.objects,
+                            &items,
+                            bag_families.as_deref().map(|c| &c.0),
+                        )
+                    })
+                    .flatten();
+                let key = match subclass_fill {
+                    Some(_) => "ERR_WRONG_BAG_TYPE_SUBCLASS",
+                    None => equip_error_key(e.reason),
+                };
+                let text = script
+                    .lua()
+                    .globals()
+                    .get::<String>(key)
+                    .unwrap_or_default();
+                if text.is_empty() {
+                    continue;
+                }
+                // Reason 1 fills `%d` and 16 `%s`; neither carries the other's fill.
+                let text = match e.required_level {
+                    Some(d) => text.replace("%d", &d.to_string()),
+                    None => text,
+                };
+                let text = match subclass_fill {
+                    Some(family) => text.replace("%s", &family),
+                    None => text,
+                };
+                refusals.push(crate::ui_action::Shown::keyed(key, text));
+            }
+            // Through the one sink, which also plays the error speech 18 of these keys carry.
+            crate::ui_action::show_messages(script, &mut sink, "ui_items", refusals);
+            // A refusal's unlocks follow its line (`0x496720`, then `0x5e3ac0`, `0x5e3ad3`).
+            for guid in unlocks {
+                script.unlock_item(guid);
+            }
+        });
+    }
     // The bags, read off the host's cooldowns among the rest; their push signals `BAG_UPDATE`
     // and `BAG_OPEN`, so it runs with the host lent.
     let Some((source, guids, opened, gate)) = vm.turn(|script, cooldowns| {
-        let (mut equip_errors, mut sink) = equip;
-        let Some(script) = script else {
-            // A refusal's unlocks would fire into a later VM's locks; with none up they are
-            // dropped, as the release queue's are, and the lines wait.
-            for e in &mut equip_errors.0 {
-                e.unlocks = [0; 2];
-            }
-            return None;
-        };
+        let script = script?;
         let (clock, petitions) = clock_and_petitions;
         let (memory, vm_reset) = memory.get_reset(script);
         // The snapshot is a function of these inputs; the stores' counters stand in for their
@@ -1173,7 +1230,6 @@ pub(crate) fn feed_containers(
             || catalogs.1.as_ref().is_some_and(|r| r.is_changed());
         let spells_changed = spells.as_ref().is_some_and(|r| r.is_changed());
         let families_changed = bag_families.as_ref().is_some_and(|r| r.is_changed());
-        let errors_held = !equip_errors.0.is_empty();
         let opens_held = !opens.0.is_empty();
         gate::trace(
             "feed_containers",
@@ -1191,7 +1247,6 @@ pub(crate) fn feed_containers(
                 ("enchants", enchants_changed),
                 ("spells", spells_changed),
                 ("families", families_changed),
-                ("errors", errors_held),
                 ("opens", opens_held),
             ],
         );
@@ -1210,7 +1265,6 @@ pub(crate) fn feed_containers(
             || enchants_changed
             || spells_changed
             || families_changed
-            || errors_held
             || opens_held,
         );
         if gate.skip() {
@@ -1227,54 +1281,7 @@ pub(crate) fn feed_containers(
             enchants: catalogs.0.as_deref(),
             props: catalogs.1.as_deref(),
         };
-        // Refusals become the red error line through `equip_error_key`. An empty or missing string
-        // prints nothing, as the reference's sink guard (`0x4945b4`) drops it; that silences 59.
         let player = inv.self_store.iter().next();
-        let mut refusals = Vec::new();
-        let mut unlocks = Vec::new();
-        for e in equip_errors.0.drain(..) {
-            unlocks.extend(e.unlocks);
-            // Reason 16 names the bag's family when the bag resolves, as `0x5ede00` does.
-            let subclass_fill = (e.reason == 16)
-                .then(|| {
-                    bag_family_name(
-                        player,
-                        e.bag_slot,
-                        &inv.objects,
-                        &items,
-                        bag_families.as_deref().map(|c| &c.0),
-                    )
-                })
-                .flatten();
-            let key = match subclass_fill {
-                Some(_) => "ERR_WRONG_BAG_TYPE_SUBCLASS",
-                None => equip_error_key(e.reason),
-            };
-            let text = script
-                .lua()
-                .globals()
-                .get::<String>(key)
-                .unwrap_or_default();
-            if text.is_empty() {
-                continue;
-            }
-            // Reason 1 fills `%d` and 16 `%s`; neither carries the other's fill.
-            let text = match e.required_level {
-                Some(d) => text.replace("%d", &d.to_string()),
-                None => text,
-            };
-            let text = match subclass_fill {
-                Some(family) => text.replace("%s", &family),
-                None => text,
-            };
-            refusals.push(crate::ui_action::Shown::keyed(key, text));
-        }
-        // Through the one sink, which also plays the error speech 18 of these keys carry.
-        crate::ui_action::show_messages(script, &mut sink, "ui_items", refusals);
-        // A refusal's unlocks follow its line (`0x496720`, then `0x5e3ac0`, `0x5e3ad3`).
-        for guid in unlocks {
-            script.unlock_item(guid);
-        }
         // Server-opened bags fire `BAG_OPEN(id)` after the slot push below.
         let opened: Vec<i64> = std::mem::take(&mut opens.0);
 
