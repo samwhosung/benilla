@@ -1458,14 +1458,114 @@ mod tests {
         );
     }
 
+    /// `UnitAttackSpeed` reads `UNIT_FIELD_BASEATTACKTIME` as it stands (`0x518ea0`), so a unit
+    /// whose field is unsent answers 0, with no stand-in speed.
     #[test]
     fn an_unstreamed_unit_reads_the_absent_shape() {
-        let s = unit_combat_stats(&ObjectStore(ObjectFields::from_pairs(&[])));
+        let store = ObjectStore(ObjectFields::from_pairs(&[]));
+        let s = unit_combat_stats(&store);
         assert_eq!(s.stats, [0; 5]);
         assert_eq!(s.resistances, [0; 7]);
         assert_eq!(s.damage_percent, 1.0);
-        // The base-swing fallback, so `damage / speed` is finite on the first frames.
-        assert_eq!(s.main_attack_time_ms, 2000);
+        assert_eq!(
+            (
+                s.main_attack_time_ms,
+                s.offhand_attack_time_ms,
+                s.ranged_attack_time_ms
+            ),
+            (0, 0, 0)
+        );
+        const PET: u64 = 0xF140_0000_0000_0077;
+        let pet =
+            crate::ui_unit::snapshot(&store, PET, None, 0, Default::default(), Default::default());
+        let mut s = UiScript::new().unwrap();
+        s.set_unit("pet", Some(pet));
+        assert_eq!(
+            s.eval::<f64>(r#"return (UnitAttackSpeed("pet"))"#).unwrap(),
+            0.0
+        );
+    }
+
+    /// `UnitAttackPower` and `UnitRangedAttackPower` scale each of their three values by
+    /// `1 + multiplier` (fields 167 and 170) and round each alone: the product is stored as a
+    /// single and `fistp`'d to nearest even (`0x518fe2`-`0x518ffd`), so 1.5 × 3 is 4, not 5.
+    #[test]
+    fn each_attack_power_value_is_scaled_by_its_multiplier_and_rounded_alone() {
+        const PET: u64 = 0xF140_0000_0000_0077;
+        const MULTIPLIER: u16 = 167;
+        const RANGED: u16 = 168;
+        let pair = |pos: i16, neg: i16| (u32::from(neg as u16) << 16) | u32::from(pos as u16);
+        let mut store = boar();
+        store.0.merge(ObjectFields::from_pairs(&[
+            (ATTACK_POWER, 3),
+            (ATTACK_POWER_MODS, pair(5, -1)),
+            (MULTIPLIER, 0.5f32.to_bits()),
+            (RANGED, 7),
+            (RANGED + 1, pair(1, -3)),
+            (RANGED + 2, 0.5f32.to_bits()),
+        ]));
+        let pet =
+            crate::ui_unit::snapshot(&store, PET, None, 0, Default::default(), Default::default());
+        let mut s = UiScript::new().unwrap();
+        s.set_unit("pet", Some(pet));
+        assert_eq!(
+            s.eval::<(i64, i64, i64)>(r#"return UnitAttackPower("pet")"#)
+                .unwrap(),
+            (4, 8, -2),
+            "4.5, 7.5 and -1.5"
+        );
+        assert_eq!(
+            s.eval::<(i64, i64, i64)>(r#"return UnitRangedAttackPower("pet")"#)
+                .unwrap(),
+            (10, 2, -4),
+            "10.5, 1.5 and -4.5"
+        );
+    }
+
+    /// `GetInventoryItemQuality` answers nil while the slot's record is not cached (`0x4c8a11`),
+    /// and the record's quality only when its inventory type is nonzero, else -1
+    /// (`0x4c8a13`-`0x4c8a22`).
+    #[test]
+    fn the_quality_getter_is_nil_uncached_and_minus_one_for_inventory_type_zero() {
+        use benilla_protocol::field::FIELD_PLAYER_INV_SLOT_HEAD;
+        const HELM: u64 = 0x4000_0000_0000_0b02;
+        const HELM_ID: u32 = 7366;
+        let mut app = world_with_bank_bag(None);
+        set_self(
+            &mut app,
+            &[
+                (FIELD_PLAYER_INV_SLOT_HEAD, HELM as u32),
+                (FIELD_PLAYER_INV_SLOT_HEAD + 1, (HELM >> 32) as u32),
+            ],
+        );
+        crate::items::test_spawn_item(
+            app.world_mut(),
+            HELM,
+            ObjectFields::from_pairs(&[(F_OBJECT_ENTRY, HELM_ID)]),
+            false,
+        );
+        let quality = |app: &mut App| {
+            app.world_mut().run_system_once(feed_char).unwrap();
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .eval::<Option<i64>>(r#"return GetInventoryItemQuality("player", 1)"#)
+                .unwrap()
+        };
+        assert_eq!(quality(&mut app), None, "the record is not cached");
+        let helm = crate::items::test_template("Helm");
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(HELM_ID, Some(helm.clone()));
+        assert_eq!(quality(&mut app), Some(-1), "inventory type 0");
+        app.world_mut().resource_mut::<Items>().insert_template(
+            HELM_ID,
+            Some(benilla_protocol::ItemInfo {
+                inventory_type: 1,
+                quality: 3,
+                ..helm
+            }),
+        );
+        assert_eq!(quality(&mut app), Some(3));
     }
 
     /// A held unit's snapshot carries its own fields, so the pet sheet's reads answer through the
