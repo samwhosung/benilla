@@ -472,6 +472,9 @@ fn sweep_lock_legs(world: &mut World) {
     world.insert_resource(crate::net::NetCommands(tx));
     world.init_resource::<crate::net::GuidIndex>();
     world.init_resource::<crate::ui_loot::LootLatch>();
+    world.init_resource::<crate::ui_loot::AutoLootByte>();
+    world.init_resource::<crate::ui_party::GroupState>();
+    world.init_resource::<crate::ui_action::UiErrorKeys>();
     world.init_resource::<Messages<crate::target::DeselectGuid>>();
     world.init_resource::<crate::ui_mail::MailOpen>();
     world.init_resource::<crate::ui_auction::AuctionOpen>();

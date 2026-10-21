@@ -24,15 +24,19 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::Disconnected, on_session_end);
 }
 
-/// An admitted response selects a looted unit (`0x5ebc35` → `0x48f3a0`) before the window opens
-/// (`0x4c1cb0`), so the outgoing target's teardown closes a window still open on it. One that lands
-/// while our own body moves takes the move-start close (`0x5ebc3a`-`0x5ebc51`), which the feed runs
-/// after it fires `LOOT_OPENED`, or the drain when the window waits on an item template.
+/// An admitted response for an object we hold selects a looted unit (`0x5ebc35` → `0x48f3a0`)
+/// before the window opens (`0x4c1cb0`), so the outgoing target's teardown closes a window still
+/// open on it. One for an object we lack shows `ERR_LOOT_DIDNT_KILL` and returns (`0x5ebb33`,
+/// mask 1, `0x5ebb3f`) before the latch (`0x5ebb60`) and the open. One that lands while our own
+/// body moves takes the move-start close (`0x5ebc3a`-`0x5ebc51`), which the feed runs after the
+/// copier's end, or the drain when the window waits on an item template.
 fn on_response(
     In(ev): In<SessionEvent>,
     mut select: crate::target::SelectCommit,
     player: Option<Res<crate::player::Player>>,
     mut move_start: ResMut<LootMoveStart>,
+    index: Res<crate::net::GuidIndex>,
+    errors: Res<UiErrorKeys>,
 ) {
     let SessionEvent::LootResponse {
         guid,
@@ -53,6 +57,13 @@ fn on_response(
     ) {
         return;
     }
+    if !index.0.contains_key(&guid) {
+        debug!("net: loot response {guid:#x} for an object we lack — ERR_LOOT_DIDNT_KILL");
+        errors.push(UiError::key("ERR_LOOT_DIDNT_KILL"));
+        return;
+    }
+    // A fishing bobber first arms here and still does not kneel: `LootKneel` decides the pose.
+    seam.loot_latch.0 = Some(guid);
     debug!(
         "net: loot response {guid:#x} type {loot_type} gold {gold} {} item(s)",
         items.len()
@@ -78,9 +89,9 @@ fn on_error(
     }
 }
 
-fn on_removed(In(ev): In<SessionEvent>, mut loot: ResMut<LootState>) {
+pub(super) fn on_removed(In(ev): In<SessionEvent>, mut window: WindowPacket) {
     if let SessionEvent::LootRemoved { slot } = ev {
-        loot_removed(slot, &mut loot);
+        window.removed(slot);
     }
 }
 
@@ -90,9 +101,59 @@ fn on_money_notify(In(ev): In<SessionEvent>) {
     }
 }
 
-fn on_clear_money(In(ev): In<SessionEvent>, mut loot: ResMut<LootState>) {
+pub(super) fn on_clear_money(In(ev): In<SessionEvent>, mut window: WindowPacket) {
     if let SessionEvent::LootClearMoney = ev {
-        loot_clear_money(&mut loot);
+        window.money_cleared();
+    }
+}
+
+/// What the removal packets change: the window, and the close an emptied one takes.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct WindowPacket<'w, 's> {
+    loot: ResMut<'w, LootState>,
+    latch: ResMut<'w, LootLatch>,
+    net: Res<'w, NetCommands>,
+    objects: crate::net::Objects<'w, 's>,
+    dead: super::DeadUnitDeselect<'w, 's>,
+}
+
+impl WindowPacket<'_, '_> {
+    /// `SMSG_LOOT_REMOVED` (`0x5ebeb0`): with the player's loot target resolving (`0x5ebedf`, mask
+    /// 1; else `0x5ebee7` leaves), `ClearLootRow` (`0x4c1f00`), the feed's `LOOT_SLOT_CLEARED`.
+    fn removed(&mut self, slot: u8) {
+        debug!("net: loot slot {slot} removed");
+        if !self
+            .latch
+            .0
+            .is_some_and(|g| self.objects.entity(g).is_some())
+        {
+            return;
+        }
+        if self.loot.remove_slot(slot) {
+            self.close_if_empty();
+        }
+    }
+
+    /// `SMSG_LOOT_CLEAR_MONEY` (`0x5ec030` → `0x4c2750`): the coin row goes, for every looter.
+    fn money_cleared(&mut self) {
+        debug!("net: loot coin line cleared");
+        if self.loot.clear_money() {
+            self.close_if_empty();
+        }
+    }
+
+    /// A window with nothing left (`0x4c2a70`) closes with release inside the packet
+    /// (`0x4c1f8d`, `0x4c2785` → `0x48f200(1, 0, 0)`); the feed signals its `LOOT_CLOSED` after the
+    /// removal's `LOOT_SLOT_CLEARED` and before the pushes behind it. vmangos does not release it.
+    fn close_if_empty(&mut self) {
+        if self.loot.source().is_none() || self.loot.has_contents(&self.objects) {
+            return;
+        }
+        let closed = super::close_interaction(&mut self.loot, &mut self.latch, Some(&self.net));
+        if let Some(guid) = closed {
+            debug!("net: loot emptied — release {guid:#x}");
+        }
+        self.dead.after_close(closed);
     }
 }
 
@@ -151,8 +212,8 @@ const SERVER_STARTED_LOOT: [u8; 3] = [2, 3, 4];
 /// latch holds the packet's guid, or when the latch is cold and the type is server-started.
 /// Anything else is refused (`0x5eb963`): no window, a `CMSG_LOOT_RELEASE` for the packet's guid,
 /// the latch cleared whatever it held, and `UnlockItem` on the packet's guid (`0x5eb9de`). An
-/// admitted one writes the latch (`0x5ebb60`) and plays no anim; a chest already knelt at its
-/// `SMSG_SPELL_GO` (`0x6e831b`).
+/// admitted one for an object we hold writes the latch (`0x5ebb60`) and plays no anim; a chest
+/// already knelt at its `SMSG_SPELL_GO` (`0x6e831b`).
 fn admit_response(
     guid: u64,
     loot_type: u8,
@@ -177,8 +238,6 @@ fn admit_response(
         loot.unlock_item(guid);
         return false;
     }
-    // A fishing bobber first arms here and still does not kneel: `LootKneel` decides the pose.
-    latch.0 = Some(guid);
     true
 }
 
@@ -256,23 +315,11 @@ fn loot_error(
     }
 }
 
-/// `SMSG_LOOT_REMOVED`: a row was taken, by anyone; the feed fires `LOOT_SLOT_CLEARED` for it.
-fn loot_removed(slot: u8, loot: &mut LootState) {
-    debug!("net: loot slot {slot} removed");
-    loot.remove_slot(slot);
-}
-
 /// `SMSG_LOOT_MONEY_NOTIFY`, our share of a group's coin: only logged, as the coin row drops on
 /// `SMSG_LOOT_CLEAR_MONEY` and the purse rides the coinage field. vmangos sends none for a solo
 /// loot (`LootHandler.cpp:331`).
 fn loot_money_notify(amount: u32) {
     debug!("net: loot money {amount}");
-}
-
-/// `SMSG_LOOT_CLEAR_MONEY`: the coin row goes, for every looter.
-fn loot_clear_money(loot: &mut LootState) {
-    debug!("net: loot coin line cleared");
-    loot.clear_money();
 }
 
 /// `SMSG_LOOT_RELEASE_RESPONSE` (`0x5ec090`): acted on only with a nonzero result (`0x5ec0b6`)
@@ -941,6 +988,8 @@ mod tests {
         world.init_resource::<crate::player::Player>();
         world.init_resource::<super::super::LootMoveStart>();
         world.init_resource::<super::super::LootCloseAtRest>();
+        world.init_resource::<super::super::AutoLootByte>();
+        world.init_resource::<UiErrorKeys>();
         world.spawn((
             SelfPlayer,
             Guid(1),

@@ -1,27 +1,35 @@
-//! The loot-window bindings: the app pushes the open loot ([`UiScript::set_loot`]), a coin row
-//! first when there is gold, and the Lua verbs queue intents it drains. `slot` is 1-based; the app
-//! maps a row to the money intent or the item's wire slot, which Lua never sees.
+//! The loot-window bindings: the app pushes the window ([`UiScript::set_loot`]), a coin row first
+//! while the money cell is set, and the verbs over it are script calls ([`LootCall`]) the host
+//! applies inside them, as the reference's are done when they return. `slot` is 1-based; the app
+//! maps a row to the money or the item's wire slot, which Lua never sees.
 //!
-//! `LootSlot` is only the LOOT_BIND confirmation: `0x4c2e70` passes flag 1 to the take dispatcher
-//! `0x4c2790`, which then refuses every slot but the pending one. The take itself is flag 0, the
-//! row click of [`crate::widget::FrameKind::LootButton`]. Master loot's dropdown opens from the
-//! app, on a picked row whose wire `slot_type` is `MASTER`, as the dispatcher branches on that byte
-//! before any Lua runs.
+//! The take dispatcher `0x4c2790(slot, confirm)` has two arms. The take itself, `confirm` 0, is the
+//! row click of [`crate::widget::FrameKind::LootButton`] (`0x4c1820`), made after its `<OnClick>`
+//! inside the click's input record. `LootSlot` is the other arm (`0x4c2e70` passes 1 at
+//! `0x4c2ea5`), which acts only on the row a `LOOT_BIND_CONFIRM` stashed (`0x4c27c0`).
 
 use mlua::{Lua, MultiValue, Table, Value};
 
 use super::binding_abi::{self, bool_or_default, flag};
-use super::Model;
+use super::{Model, ScriptCall};
 
-/// A take the take dispatcher `0x4c2790` runs: a row click (flag 0) or a `LootSlot` (flag 1, the
-/// confirm arm), 1-based. One queue in call order, so the app answers each confirm against the
-/// pending-slot stash as it stood at its call.
+/// A loot verb the host applies inside its call ([`ScriptCall::Loot`]), its rows 1-based.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LootTake {
-    /// A `LootButton`'s own click (`0x4c1820`).
-    Pick(u32),
-    /// `LootSlot(slot)` (`0x4c2e70`).
+pub enum LootCall {
+    /// A `LootButton`'s own click: `0x4c2790(slot, 0)` (`0x4c1867`).
+    Take(u32),
+    /// `LootSlot(slot)`: `0x4c2790(slot, 1)`, the confirm arm (`0x4c2e70`).
     Confirm(u32),
+    /// `CloseLoot([failed])`: `0x48f200(1, 0, failed)` (`0x4c2ec0`).
+    Close { failed: bool },
+    /// `GiveMasterLoot(slot, candidateIndex)` (`0x4c2940`).
+    GiveMaster { slot: u32, candidate: u32 },
+    /// The rest of a loot call once the handlers its signal ran have returned, as the
+    /// reference's function goes on after `SignalEvent` runs them in place: the bind stash after
+    /// `LOOT_BIND_CONFIRM` (`0x4c2917` after `0x4c290f`), the coin click's close after
+    /// `LOOT_SLOT_CLEARED` (`0x4c286a` after `0x4c2862`). No verb makes it; the host's tail for
+    /// the call does ([`UiScript::resume_loot`]).
+    Resume,
 }
 
 /// `CLootButton`'s own Lua method table (`0x847ce4`): one entry, per the registrar's `mov edx,1`.
@@ -73,10 +81,12 @@ pub struct LootRow {
 /// One open loot window, pushed whole by the app; `None` means no loot is open.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LootState {
-    /// The fixed slot list. A looted slot becomes `None`: still counted by `GetNumLootItems`, read
-    /// once at `OnShow` (`LootFrame.lua:132`), but neither item nor coin, so `LootFrame_Update`
-    /// hides its button in place (`LootFrame.lua:80`).
+    /// The fixed slot list, the coin row first while [`Self::has_money`]. A looted slot becomes
+    /// `None` in place (`0x4c1f59`), neither item nor coin, so `LootFrame_Update` hides its button
+    /// there (`LootFrame.lua:80`).
     pub rows: Vec<Option<LootRow>>,
+    /// The money cell is nonzero (`0xb71ba0`): row 1 is the coin row, taken (-1) or not.
+    pub has_money: bool,
     /// `IsFishingLoot` (wire `loot_type` 3): the reel-in sound and portrait (`LootFrame.lua:137`).
     pub fishing: bool,
     /// The names `GetMasterLootCandidate(i)` answers by 1-based slot, from `SMSG_LOOT_MASTER_LIST`.
@@ -94,59 +104,43 @@ pub struct LootState {
 /// source. Upper case, so no `SetPortraitTexture` token, which is lowercased, can name it.
 pub const LOOT_PORTRAIT_UNIT: &str = "LOOT";
 
+impl LootState {
+    /// `GetNumLootItems` (`0x4c2260`): the last occupied row's position plus one (`0x4c2281`), plus
+    /// one while the money cell is nonzero (`0x4c229b`), so a gap before the last row counts, one
+    /// after it does not, and a taken coin still counts.
+    pub fn count(&self) -> usize {
+        let coin = usize::from(self.has_money);
+        let items = self.rows.get(coin..).unwrap_or_default();
+        items.iter().rposition(Option::is_some).map_or(0, |i| i + 1) + coin
+    }
+}
+
 impl super::UiScript {
     /// Push (or clear, with `None`) the open loot.
     pub fn set_loot(&mut self, state: Option<LootState>) {
         self.model_mut().loot = state;
     }
 
-    /// Drain the takes in call order; the app maps a pick to the coin or the item's wire slot and
-    /// applies the bind-on-pickup deferral, and honours a confirm only for the row a LOOT_BIND
-    /// confirm is pending for (the reference's `[0x847cec]` gate).
-    pub fn take_loot_takes(&mut self) -> Vec<LootTake> {
-        std::mem::take(&mut self.model_mut().loot_takes)
+    /// The loot the VM shows now, as the last push or a call left it.
+    pub fn shown_loot(&self) -> Option<LootState> {
+        self.model_ref().loot.clone()
     }
 
-    /// Drain the 1-based rows the row click took, leaving the confirms queued.
-    pub fn take_loot_picks(&mut self) -> Vec<u32> {
-        self.take_loot_kind(|t| match t {
-            LootTake::Pick(row) => Some(row),
-            LootTake::Confirm(_) => None,
+    /// Make [`LootCall::Resume`], for the host's tail to a loot call whose signal's handlers have
+    /// run; a refusal is reported as a script error.
+    pub fn resume_loot(&mut self) {
+        let lua = self.lua().clone();
+        if let Err(e) = super::calls::submit(&lua, ScriptCall::Loot(LootCall::Resume)) {
+            self.model_mut().record_lua_error(&e);
+        }
+    }
+
+    /// The loot calls a harness's VM kept ([`Self::keep_calls`]), in call order.
+    pub fn take_loot_calls(&mut self) -> Vec<LootCall> {
+        self.take_calls_where(|call| match call {
+            ScriptCall::Loot(call) => Some(*call),
+            _ => None,
         })
-    }
-
-    /// Drain the 1-based rows `LootSlot` queued, leaving the picks queued.
-    pub fn take_loot_confirms(&mut self) -> Vec<u32> {
-        self.take_loot_kind(|t| match t {
-            LootTake::Confirm(row) => Some(row),
-            LootTake::Pick(_) => None,
-        })
-    }
-
-    /// Drain the takes `kind` answers a row for, in order, keeping the rest.
-    fn take_loot_kind(&mut self, kind: impl Fn(LootTake) -> Option<u32>) -> Vec<u32> {
-        let takes = &mut self.model_mut().loot_takes;
-        let mut rows = Vec::new();
-        takes.retain(|&t| match kind(t) {
-            Some(row) => {
-                rows.push(row);
-                false
-            }
-            None => true,
-        });
-        rows
-    }
-
-    /// Whether `CloseLoot` was called since the last drain, with its `failed` flag: the app
-    /// releases an open loot and, on a set flag, shows `ERR_LOOT_NO_UI`.
-    pub fn take_loot_close(&mut self) -> Option<bool> {
-        self.model_mut().loot_close.take()
-    }
-
-    /// Drain the `GiveMasterLoot(slot, candidateIndex)` pairs, both 1-based; the app resolves them
-    /// to a wire slot and a guid for `CMSG_LOOT_MASTER_GIVE`.
-    pub fn take_loot_master_gives(&mut self) -> Vec<(u32, u32)> {
-        std::mem::take(&mut self.model_mut().loot_master_gives)
     }
 }
 
@@ -176,12 +170,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetNumLootItems(): cleared slots included, so it holds still while a window is open.
+    // GetNumLootItems() (`0x4c2c30`): the count, 0 with no window (`0x4c226d`).
     g.set(
         "GetNumLootItems",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model.loot.as_ref().map_or(0, |l| l.rows.len()) as i64)
+            Ok(model.loot.as_ref().map_or(0, LootState::count) as i64)
         })?,
     )?;
 
@@ -327,9 +321,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, slot: Value| {
             // `is-number` else `Usage: LootSlot(slot)` (`0x84807c`, `0x4c2e81`).
             let slot = binding_abi::index_arg32(lua, slot, "Usage: LootSlot(slot)")?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.loot_takes.push(LootTake::Confirm(slot));
-            Ok(())
+            super::calls::submit(lua, ScriptCall::Loot(LootCall::Confirm(slot)))
         })?,
     )?;
 
@@ -341,9 +333,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "CloseLoot",
         lua.create_function(|lua, args: MultiValue| {
             let failed = bool_or_default(args.front(), false);
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.loot_close.get_or_insert(failed);
-            Ok(())
+            super::calls::submit(lua, ScriptCall::Loot(LootCall::Close { failed }))
         })?,
     )?;
 
@@ -380,9 +370,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let slot = binding_abi::index_arg32(lua, slot, "Usage: GiveMasterLoot(slot, index)")?;
             let candidate =
                 binding_abi::index_arg32(lua, candidate, "Usage: GiveMasterLoot(slot, index)")?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.loot_master_gives.push((slot, candidate));
-            Ok(())
+            super::calls::submit(
+                lua,
+                ScriptCall::Loot(LootCall::GiveMaster { slot, candidate }),
+            )
         })?,
     )?;
 
@@ -391,7 +382,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{LootRow, LootState};
+    use super::{LootCall, LootRow, LootState};
     use crate::script::UiScript;
 
     /// The region data behind a named texture: its portrait key and file.
@@ -450,6 +441,7 @@ mod tests {
         LootState {
             source_unit: false,
             master_candidates: Vec::new(),
+            has_money: true,
             rows: vec![
                 Some(LootRow {
                     item_id: 0,
@@ -670,57 +662,101 @@ mod tests {
         );
     }
 
-    #[test]
-    fn give_master_loot_queues_the_assignment() {
+    /// A VM with no host behind it that keeps its calls, the loot open.
+    fn kept() -> UiScript {
         let mut s = UiScript::new().unwrap();
-        let mut ml = loot();
-        ml.master_candidates = vec![Some("Thrall".into())];
-        s.set_loot(Some(ml));
-        assert!(s.take_loot_master_gives().is_empty());
+        s.keep_calls();
+        s.set_loot(Some(loot()));
+        s
+    }
+
+    #[test]
+    fn give_master_loot_is_a_call() {
+        let mut s = kept();
         s.run("GiveMasterLoot(2, 1)").unwrap();
-        assert_eq!(s.take_loot_master_gives(), vec![(2, 1)]);
-        assert!(s.take_loot_master_gives().is_empty(), "drained");
-        assert!(s.take_loot_picks().is_empty());
+        assert_eq!(
+            s.take_loot_calls(),
+            vec![LootCall::GiveMaster {
+                slot: 2,
+                candidate: 1
+            }]
+        );
     }
 
-    /// In the pick queue `LootSlot` would loot any row an addon named, which the reference refuses.
+    /// `LootSlot` is the confirm arm (`0x4c2ea5`, `edx` 1), never the take: as a take it would
+    /// loot any row an addon named, which the reference refuses.
     #[test]
-    fn loot_slot_queues_confirms_not_picks() {
-        let mut s = UiScript::new().unwrap();
-        s.set_loot(Some(loot()));
+    fn loot_slot_is_the_confirm_call_not_the_take() {
+        let mut s = kept();
         s.run("LootSlot(2)").unwrap();
-        assert!(
-            s.take_loot_picks().is_empty(),
-            "LootSlot is not the take verb"
-        );
-        assert_eq!(s.take_loot_confirms(), vec![2]);
-        assert!(s.take_loot_confirms().is_empty(), "drained");
+        assert_eq!(s.take_loot_calls(), vec![LootCall::Confirm(2)]);
     }
 
     #[test]
-    fn close_loot_flags_the_intent() {
-        let mut s = UiScript::new().unwrap();
-        s.set_loot(Some(loot()));
-        assert_eq!(s.take_loot_close(), None);
-        s.run("CloseLoot()").unwrap();
-        assert_eq!(s.take_loot_close(), Some(false));
-        assert_eq!(s.take_loot_close(), None, "drained");
-        s.run("CloseLoot(1)").unwrap();
-        assert_eq!(
-            s.take_loot_close(),
-            Some(true),
-            "the failed flag (`0x6f1c10`)"
-        );
-        for (arg, failed) in [("nil", false), ("0", false), ("'1'", true), ("true", true)] {
+    fn close_loot_is_a_call_with_its_flag() {
+        let mut s = kept();
+        for (arg, failed) in [
+            ("", false),
+            ("1", true),
+            ("nil", false),
+            ("0", false),
+            ("'1'", true),
+            ("true", true),
+        ] {
             s.run(&format!("CloseLoot({arg})")).unwrap();
-            assert_eq!(s.take_loot_close(), Some(failed), "CloseLoot({arg})");
+            assert_eq!(
+                s.take_loot_calls(),
+                vec![LootCall::Close { failed }],
+                "CloseLoot({arg}), the flag through `0x6f1c10`"
+            );
         }
-        s.run("CloseLoot() CloseLoot(1)").unwrap();
-        assert_eq!(
-            s.take_loot_close(),
-            Some(false),
-            "the first close releases the loot; the second finds none"
-        );
+    }
+
+    /// With no host lent and no harness keeping them, a loot verb raises, as every call does.
+    #[test]
+    fn a_loot_verb_with_no_host_raises() {
+        let s = UiScript::new().unwrap();
+        let e = s.run("CloseLoot()").unwrap_err().to_string();
+        assert!(e.contains("no call host"), "{e}");
+    }
+
+    /// `0x4c2260`: the last occupied row's position plus one, plus one while the money cell is
+    /// set (`0x4c229b`), a taken coin's -1 included.
+    #[test]
+    fn the_count_is_the_last_occupied_row_plus_the_money_cell() {
+        let item = || {
+            Some(LootRow {
+                name: Some("Wool Cloth".into()),
+                ..LootRow::default()
+            })
+        };
+        let coin = || {
+            Some(LootRow {
+                is_coin: true,
+                ..LootRow::default()
+            })
+        };
+        let count = |has_money: bool, rows: Vec<Option<LootRow>>| {
+            LootState {
+                rows,
+                has_money,
+                ..LootState::default()
+            }
+            .count()
+        };
+        // Coin, A, B with B taken: 2; with the coin taken too: still 2; A and B taken: 1.
+        assert_eq!(count(true, vec![coin(), item(), None]), 2);
+        assert_eq!(count(true, vec![None, item(), None]), 2);
+        assert_eq!(count(true, vec![coin(), None, None]), 1);
+        // No money: a gap before the last row counts, one after it does not.
+        assert_eq!(count(false, vec![None, item()]), 2);
+        assert_eq!(count(false, vec![item(), None]), 1);
+        assert_eq!(count(false, vec![None, None]), 0);
+        let mut s = UiScript::new().unwrap();
+        let mut state = loot();
+        state.rows[2] = None;
+        s.set_loot(Some(state));
+        assert_eq!(s.eval::<i64>("return GetNumLootItems()").unwrap(), 2);
     }
 
     #[test]
@@ -784,6 +820,7 @@ mod tests {
     #[test]
     fn an_unmodified_click_runs_the_handler_and_then_takes() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.run(
             r#"
             lb = CreateFrame("LootButton", "LB1", UIParent)
@@ -795,19 +832,28 @@ mod tests {
         .unwrap();
         hardware_click(&mut s, "LB1", "LeftButton");
         assert_eq!(s.eval::<i64>("return ran").unwrap(), 1, "the handler ran");
-        assert_eq!(s.take_loot_picks(), vec![3], "and then the take, 1-based");
+        assert_eq!(
+            s.take_loot_calls(),
+            vec![LootCall::Take(3)],
+            "and then the take, 1-based"
+        );
 
         // An erroring handler still loots: `0x4c1833`'s result is never tested.
         s.run(r#"lb:SetScript("OnClick", function() error("boom") end)"#)
             .unwrap();
         hardware_click(&mut s, "LB1", "LeftButton");
-        assert_eq!(s.take_loot_picks(), vec![3], "a broken hook still loots");
+        assert_eq!(
+            s.take_loot_calls(),
+            vec![LootCall::Take(3)],
+            "a broken hook still loots"
+        );
     }
 
     /// `0x4c1820` forwards the button code without ever comparing it.
     #[test]
     fn right_click_loots_like_left_click() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.run(
             r#"
             lb = CreateFrame("LootButton", "LB1", UIParent)
@@ -817,7 +863,7 @@ mod tests {
         )
         .unwrap();
         hardware_click(&mut s, "LB1", "RightButton");
-        assert_eq!(s.take_loot_picks(), vec![2]);
+        assert_eq!(s.take_loot_calls(), vec![LootCall::Take(2)]);
     }
 
     /// The handler still runs, so stock `LootFrameItem_OnClick` owns ctrl and shift alone.
@@ -832,6 +878,7 @@ mod tests {
         .enumerate()
         {
             let mut s = UiScript::new().unwrap();
+            s.keep_calls();
             s.run(
                 r#"
                 lb = CreateFrame("LootButton", "LB1", UIParent)
@@ -848,7 +895,7 @@ mod tests {
                 1,
                 "case {i}: handler ran"
             );
-            assert!(s.take_loot_picks().is_empty(), "case {i}: no take");
+            assert!(s.take_loot_calls().is_empty(), "case {i}: no take");
         }
     }
 
@@ -856,6 +903,7 @@ mod tests {
     #[test]
     fn a_scripted_click_does_nothing_at_all() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.run(
             r#"
             lb = CreateFrame("LootButton", "LB1", UIParent)
@@ -871,7 +919,7 @@ mod tests {
             0,
             "the handler never ran"
         );
-        assert!(s.take_loot_picks().is_empty(), "and nothing was taken");
+        assert!(s.take_loot_calls().is_empty(), "and nothing was taken");
         // A plain Button's Click() is unaffected.
         s.run(
             r#"
@@ -889,17 +937,18 @@ mod tests {
     #[test]
     fn set_slot_converts_and_guards() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.run(r#"lb = CreateFrame("LootButton", "LB1", UIParent)"#)
             .unwrap();
 
         // `ftol` truncates toward zero: 4.9 is row 4, not 5.
         s.run("lb:SetSlot(4.9)").unwrap();
         hardware_click(&mut s, "LB1", "LeftButton");
-        assert_eq!(s.take_loot_picks(), vec![4]);
+        assert_eq!(s.take_loot_calls(), vec![LootCall::Take(4)]);
 
         s.run(r#"lb:SetSlot("2")"#).unwrap();
         hardware_click(&mut s, "LB1", "LeftButton");
-        assert_eq!(s.take_loot_picks(), vec![2]);
+        assert_eq!(s.take_loot_calls(), vec![LootCall::Take(2)]);
 
         let e = s.run("lb:SetSlot('x')").unwrap_err().to_string();
         assert!(e.contains("Usage: SetSlot(index)"), "{e}");
@@ -910,7 +959,7 @@ mod tests {
         s.run(r#"fresh = CreateFrame("LootButton", "LB2", UIParent)"#)
             .unwrap();
         hardware_click(&mut s, "LB2", "LeftButton");
-        assert!(s.take_loot_picks().is_empty());
+        assert!(s.take_loot_calls().is_empty());
 
         s.run(r#"b = CreateFrame("Button", "PlainB", UIParent)"#)
             .unwrap();

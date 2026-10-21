@@ -140,6 +140,8 @@ pub enum ScriptCall {
     /// `BindEnchant()` (`0x48d2e0`) or `ReplaceEnchant()` (`0x48d300`): a confirm popup's Yes on
     /// the item the seam parked.
     EnchantConfirm(super::EnchantAnswer),
+    /// A loot window verb, a row's own click among them ([`super::LootCall`]).
+    Loot(super::LootCall),
 }
 
 /// The mode the four `TargetNearest*` shims hand the TAB cycler `0x493f60`, the only byte that

@@ -1209,13 +1209,15 @@ pub(super) fn click_button(lua: &Lua, id: u32, button: &str, down: bool, scripte
     if !down {
         super::nameplate::note_click(lua, id, button);
     }
-    // The take runs whatever the handler did (`0x4c1867`): a row whose `OnClick` errored still
-    // loots.
+    // The take runs whatever the handler did (`0x4c1867`), inside the click: a row whose `OnClick`
+    // errored still loots, and the click's next listener reads what the take did.
     if let Some(slot) = take_loot {
-        // The slot is 0-based; the take queue speaks the 1-based row.
-        lua.app_data_mut::<Model>()
-            .expect("model app_data")
-            .loot_takes
-            .push(super::loot::LootTake::Pick(slot + 1));
+        // The slot is 0-based; the call speaks the 1-based row.
+        let take = super::ScriptCall::Loot(super::loot::LootCall::Take(slot + 1));
+        if let Err(e) = super::calls::submit(lua, take) {
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .record_lua_error(&e);
+        }
     }
 }

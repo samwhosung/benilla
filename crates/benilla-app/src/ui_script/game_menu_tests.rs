@@ -247,11 +247,13 @@ fn the_open_menu_takes_the_screen_and_refuses_every_other_panel() {
         "Interface\\FrameXML\\LootFrame.xml",
         "ScrollTemplates.xml",
     ]);
+    s.keep_calls();
     s.set_money(0);
     s.set_container(0, Some(backpack()));
     s.run("MainMenuBarBackpackButton:Click()").unwrap();
     s.set_loot(Some(LootState {
         source_unit: false,
+        has_money: false,
         fishing: false,
         master_candidates: Vec::new(),
         rows: vec![Some(LootRow {

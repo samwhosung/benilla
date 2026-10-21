@@ -928,18 +928,9 @@ pub(crate) struct Model {
     pub(crate) pending_equip_answers: Vec<bind_confirm::PendingEquipAnswer>,
     pub(crate) bind_on_use_confirms: Vec<bool>,
 
-    /// The open loot, the row clicks and whether `CloseLoot` ran. A click is the reference's take
-    /// `0x4c2790` with flag 0, raising `LOOT_BIND` for a bind-on-pickup row (a `LootButton`'s own
-    /// click, `0x4c1820`); `LootSlot` passes 1 (`0x4c2e70`), taking it after the confirm.
+    /// The open loot as the app pushed it; the verbs over it are script calls
+    /// ([`loot::LootCall`]).
     pub(crate) loot: Option<loot::LootState>,
-    /// The row clicks and `LootSlot(slot)` rows, 1-based, in call order, for the reference's
-    /// pending-slot gate.
-    pub(crate) loot_takes: Vec<loot::LootTake>,
-    /// The first `CloseLoot` since the last drain, with its `failed` flag; a later one in the
-    /// same frame finds the loot already released.
-    pub(crate) loot_close: Option<bool>,
-    /// `GiveMasterLoot(slot, candidateIndex)`, both 1-based display positions the app translates.
-    pub(crate) loot_master_gives: Vec<(u32, u32)>,
 
     /// The open group-loot rolls, and the `RollOnLoot` `(roll_id, roll_type)` votes.
     pub(crate) loot_rolls: loot_roll::LootRollsState,
@@ -1775,9 +1766,6 @@ impl Model {
             loot: None,
             pending_equip_answers: Vec::new(),
             bind_on_use_confirms: Vec::new(),
-            loot_takes: Vec::new(),
-            loot_close: None,
-            loot_master_gives: Vec::new(),
             loot_rolls: loot_roll::LootRollsState::default(),
             loot_roll_votes: Vec::new(),
             item_text: None,

@@ -81,7 +81,15 @@ pub(crate) struct ScriptCallHost<'w, 's> {
                     crate::ui_chat::EmoteDoer<'w, 's>,
                 ),
             >,
-            crate::ui_items::ScriptItemUse<'w, 's>,
+            // The bags' and the loot window's.
+            ParamSet<
+                'w,
+                's,
+                (
+                    crate::ui_items::ScriptItemUse<'w, 's>,
+                    crate::ui_loot::LootSteps<'w, 's>,
+                ),
+            >,
             crate::ui_pet::PetPress<'w, 's>,
             crate::ui_action::AttackPress<'w, 's>,
         ),
@@ -149,10 +157,10 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 }
             }
             ScriptCall::UseContainerItem(call) => {
-                appliers.p5().use_container_item(script, call);
+                appliers.p5().p0().use_container_item(script, call);
             }
             ScriptCall::UseInventoryItem { slot, on_self, .. } => {
-                appliers.p5().use_inventory_item(script, slot, on_self)
+                appliers.p5().p0().use_inventory_item(script, slot, on_self)
             }
             ScriptCall::CastPetSpell { spell_id, on_self } => {
                 let send =
@@ -177,6 +185,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::AddonMessage(send) => appliers.p4().p1().addon_message(send),
             ScriptCall::PickItem(pick) => popup = appliers.p1().pick_item(pick),
             ScriptCall::EnchantConfirm(answer) => popup = appliers.p1().confirm_enchant(answer),
+            ScriptCall::Loot(call) => tail = appliers.p5().p1().apply(script, call),
         }
         // A selection this call made with the targeting cursor up was handed to the cast
         // (`SelectTarget`, `0x4935d5`) and is bound now, before the next call reads either.
