@@ -19,9 +19,16 @@ use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
 
+use super::mods::OP_COOLDOWN;
 use super::{CategoryPad, SpellModifiers, OP_GCD};
 use benilla_formats::SpellDisplay;
 use benilla_protocol::messages::{ItemInfo, ItemSpellEntry, ItemUseSpell};
+
+/// A signed millisecond time as a timer's duration, untracked at or below zero: a negative time
+/// ends before its start, so no leg of a read passes it (`0x6e14f7`, `0x6e1588`, `0x6e15df`).
+fn millis(ms: i32) -> Duration {
+    Duration::from_millis(u64::from(ms.max(0).unsigned_abs()))
+}
 
 /// One timer; a zero duration is untracked.
 #[derive(Clone, Copy, Debug)]
@@ -487,48 +494,56 @@ impl Cooldowns {
     }
 
     /// `SMSG_SPELL_COOLDOWN` (`0x6e9460`): each pair's record, a pair whose spell `Spell.dbc` lacks
-    /// skipped (`0x6e94f8`), then the flush, whatever went in (`0x6e95b0`).
+    /// skipped (`0x6e94f8`), then the flush, whatever went in (`0x6e95b0`). `pad` is the list's
+    /// [`CategoryPad`]: the pet's list passes `skip` (`0x6e9544`).
     pub(crate) fn apply_spell_cooldowns<'a>(
         &mut self,
         pairs: impl IntoIterator<Item = (u32, u32, Option<&'a SpellDisplay>)>,
-        _mods: &SpellModifiers,
-        _pad: CategoryPad,
+        mods: &SpellModifiers,
+        pad: CategoryPad,
         now: Instant,
     ) {
         for (spell_id, cooldown_ms, spell) in pairs {
             if let Some(spell) = spell {
-                self.apply_wire_cooldown(spell_id, cooldown_ms, Some(spell), now);
+                self.apply_wire_cooldown(spell_id, cooldown_ms, spell, mods, pad, now);
             }
         }
         self.flush();
     }
 
-    /// One `SMSG_SPELL_COOLDOWN` entry (`0x6e9460`): a nonzero duration is the recovery with no
-    /// category timer; zero means the spell's own `Spell.dbc` pair. An on-event spell parks with
-    /// no GCD; any other carries its GCD.
+    /// One `SMSG_SPELL_COOLDOWN` entry, started at the packet:
+    /// - recovery: a nonzero duration as it is, else `RecoveryTime` through op 11
+    ///   (`0x6e950f`-`0x6e9523`);
+    /// - category recovery: 0 for a nonzero duration, else `CategoryRecoveryTime`
+    ///   (`0x6e952b`-`0x6e953b`), through `0x6e2b60` either way (`0x6e9544`), so the player's list
+    ///   pads a ranged spell's whatever the duration;
+    /// - held from Attributes bit 25 (`0x6e9504`), which takes no GCD (`0x6e9549`); any other the
+    ///   pair `startRecoveryCategory`, `startRecoveryTime` through op 21 (`0x6e9553`-`0x6e956e`).
     fn apply_wire_cooldown(
         &mut self,
         spell_id: u32,
         cooldown_ms: u32,
-        spell: Option<&SpellDisplay>,
+        spell: &SpellDisplay,
+        mods: &SpellModifiers,
+        pad: CategoryPad,
         now: Instant,
     ) {
-        let on_hold = spell.is_some_and(|s| s.cooldown_on_event());
-        let (recovery_ms, category, category_ms) = if cooldown_ms != 0 {
-            (cooldown_ms, spell.map_or(0, |s| s.category), 0)
+        let on_hold = spell.cooldown_on_event();
+        let (recovery_ms, category_ms) = if cooldown_ms != 0 {
+            (cooldown_ms as i32, mods.category_recovery(spell, 0, pad))
         } else {
-            match spell {
-                Some(s) => (s.recovery_ms, s.category, s.category_recovery_ms),
-                None => (0, 0, 0),
-            }
+            (
+                mods.apply(spell, OP_COOLDOWN, spell.recovery_ms as i32),
+                mods.category_recovery(spell, spell.category_recovery_ms as i32, pad),
+            )
         };
         let (gcd_category, gcd_ms) = if on_hold {
             (0, 0)
         } else {
-            match spell {
-                Some(s) => (s.start_recovery_category, s.start_recovery_ms),
-                None => (0, 0),
-            }
+            (
+                spell.start_recovery_category,
+                mods.apply(spell, OP_GCD, spell.start_recovery_ms as i32),
+            )
         };
         self.add(
             now,
@@ -536,17 +551,17 @@ impl Cooldowns {
             0,
             Timer {
                 start: now,
-                duration: Duration::from_millis(u64::from(recovery_ms)),
+                duration: millis(recovery_ms),
             },
-            category,
-            spell.is_some_and(|s| s.category == category && s.category_wildcard),
+            spell.category,
+            spell.category_wildcard,
             Timer {
                 start: now,
-                duration: Duration::from_millis(u64::from(category_ms)),
+                duration: millis(category_ms),
             },
             on_hold,
             gcd_category,
-            Duration::from_millis(u64::from(gcd_ms)),
+            millis(gcd_ms),
         );
     }
 
@@ -1144,13 +1159,14 @@ mod tests {
         let t0 = Instant::now();
         let mut cds = Cooldowns::default();
         // A school lockout: nonzero wire ms is the recovery verbatim.
-        cds.apply_wire_cooldown(133, 8_000, Some(&fireball()), t0);
+        let none = SpellModifiers::default();
+        cds.apply_wire_cooldown(133, 8_000, &fireball(), &none, CategoryPad::NoPlayer, t0);
         let locked = cds.info(133, 0, Some(&fireball()), t0 + Duration::from_secs(3));
         assert_eq!((locked.remaining_ms, locked.duration_ms), (5_000, 8_000));
 
         // Zero wire ms: the spell's own Spell.dbc recovery/category pair.
         let mut cds = Cooldowns::default();
-        cds.apply_wire_cooldown(100, 0, Some(&charge()), t0);
+        cds.apply_wire_cooldown(100, 0, &charge(), &none, CategoryPad::NoPlayer, t0);
         let ch = cds.info(100, 0, Some(&charge()), t0 + Duration::from_secs(5));
         assert_eq!((ch.remaining_ms, ch.duration_ms), (10_000, 15_000));
     }
