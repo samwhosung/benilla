@@ -581,6 +581,71 @@ fn a_possessed_units_combat_spell_picks_its_target_and_orders_the_attack() {
     assert!(errors(&mut rig).is_empty());
 }
 
+/// The cursor binds a unit caster's cast against that caster: `BindTarget` resolves the record's
+/// caster (`0x6e5b6d`-`0x6e5b89`, `0xceac50`) for its relations and its range test
+/// (`0x6e6059`-`0x6e6063` → `0x6e47b0`). A spell that excludes its caster (`AttributesEx
+/// 0x80000`) binds us for the pet, and a 5 yd spell is out of range at us from a pet 30 yd off.
+#[test]
+fn the_cursor_binds_a_unit_casters_spell_against_that_unit() {
+    const MEND: u32 = 3111;
+    const NEAR: u32 = 1;
+    // Client-targeted (`AttributesEx4 0x20`), a unit word, a 5 yd row.
+    let aimed = |attributes_ex| SpellDisplay {
+        attributes_ex4: 0x20,
+        attributes_ex,
+        targets: 0x2,
+        range_index: NEAR,
+        ..claw()
+    };
+    let bound_at_us = |spell: SpellDisplay, pet_at: Vec3| {
+        let mut rig = rig(
+            vec![(MEND, spell)],
+            &[MEND],
+            Some(owned_pet_with(&[(22, 100), (28, 100)])),
+        );
+        let world = rig.app.world_mut();
+        let pet = world.resource::<GuidIndex>().0[&PET];
+        world
+            .entity_mut(pet)
+            .insert(GlobalTransform::from_translation(pet_at));
+        world.resource_mut::<Spells>().ranges = benilla_formats::SpellRangeCatalog::from_rows(
+            [(
+                NEAR,
+                benilla_formats::SpellRange {
+                    min: 0.0,
+                    max: 5.0,
+                    flags: 0,
+                },
+            )]
+            .into(),
+        );
+        crate::script_calls::with_hosted_vm(rig.app.world_mut(), |s| {
+            let s = s.expect("a VM");
+            let up: bool = s
+                .eval("CastPetAction(1) return SpellIsTargeting() == 1")
+                .unwrap();
+            assert!(up, "the cursor is up for the pet's spell");
+            s.run(r#"SpellTargetUnit("player")"#).unwrap();
+        });
+        pet_casts(&rig.sent())
+    };
+    let at_us = [(
+        PET,
+        MEND,
+        benilla_protocol::messages::UseItemTarget::Unit(ME),
+    )];
+    assert_eq!(
+        bound_at_us(aimed(0x80000), Vec3::ZERO),
+        at_us,
+        "we are not the pet's spell's caster"
+    );
+    assert_eq!(
+        bound_at_us(aimed(0), Vec3::new(30.0, 0.0, 0.0)),
+        [],
+        "out of the pet's range"
+    );
+}
+
 /// `0x4bd24f`: a press on a running aura cancels it and returns before the arm.
 #[test]
 fn an_aura_cancel_press_starts_no_pet_gcd() {
