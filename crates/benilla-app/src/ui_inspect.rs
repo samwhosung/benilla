@@ -123,18 +123,41 @@ fn inspect_slot_view(
     })
 }
 
-/// A held player's 19 slots.
-fn visible_slots(
-    store: &ObjectStore,
-    items: &Items,
-    icons: Option<&ItemDisplays>,
-    rolls: crate::items::RollCatalogs,
-) -> InventorySlots {
-    let mut slots: InventorySlots = Default::default();
-    for slot in 1..=19u8 {
-        slots[usize::from(slot)] = inspect_slot_view(store, items, icons, rolls, slot - 1);
+/// What a player's visible-item views read beside the descriptor: the item records, the icons,
+/// and the `SpellItemEnchantment` and `ItemRandomProperties` catalogs that name the enchant lines
+/// and the roll suffix.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct VisibleItemTables<'w> {
+    items: Res<'w, Items>,
+    icons: Option<Res<'w, ItemDisplays>>,
+    enchants: Option<Res<'w, crate::items::Enchants>>,
+    props: Option<Res<'w, crate::items::RandomProperties>>,
+}
+
+impl VisibleItemTables<'_> {
+    /// A player's 19 slots by slot id.
+    pub(crate) fn slots(&self, store: &ObjectStore) -> InventorySlots {
+        let rolls = crate::items::RollCatalogs {
+            enchants: self.enchants.as_deref(),
+            props: self.props.as_deref(),
+        };
+        let mut slots: InventorySlots = Default::default();
+        for slot in 1..=19u8 {
+            slots[usize::from(slot)] =
+                inspect_slot_view(store, &self.items, self.icons.as_deref(), rolls, slot - 1);
+        }
+        slots
     }
-    slots
+
+    /// Whether a landed record, a new icon or a new catalog can have changed any view since
+    /// `templates` last watched.
+    fn moved(&self, templates: &mut gate::Watch) -> bool {
+        let templates_moved = templates.moved(self.items.template_epoch());
+        templates_moved
+            || self.icons.as_ref().is_some_and(|i| i.is_changed())
+            || self.enchants.as_ref().is_some_and(|c| c.is_changed())
+            || self.props.as_ref().is_some_and(|c| c.is_changed())
+    }
 }
 
 pub(crate) fn feed_inspect(
@@ -142,13 +165,7 @@ pub(crate) fn feed_inspect(
     mut hosted: ParamSet<(Res<crate::target::Selection>, crate::script_calls::HostedVm)>,
     mut target: ResMut<InspectTarget>,
     mut feed: ResMut<InspectFeedState>,
-    items: Res<Items>,
-    icons: Option<Res<ItemDisplays>>,
-    // `SpellItemEnchantment` names the enchant lines, `ItemRandomProperties` the roll suffix.
-    catalogs: (
-        Option<Res<crate::items::Enchants>>,
-        Option<Res<crate::items::RandomProperties>>,
-    ),
+    tables: VisibleItemTables,
     commands: Res<NetCommands>,
     index: Res<GuidIndex>,
     stores: Query<Ref<ObjectStore>>,
@@ -181,15 +198,7 @@ pub(crate) fn feed_inspect(
             target.token = None;
         }
 
-        // A landed record, a new icon or a new catalog can change any view.
-        let templates_moved = memo.templates.moved(items.template_epoch());
-        let tables_moved = icons.as_ref().is_some_and(|i| i.is_changed())
-            || catalogs.0.as_ref().is_some_and(|c| c.is_changed())
-            || catalogs.1.as_ref().is_some_and(|c| c.is_changed());
-        let rolls = crate::items::RollCatalogs {
-            enchants: catalogs.0.as_deref(),
-            props: catalogs.1.as_deref(),
-        };
+        let tables_moved = tables.moved(&mut memo.templates);
         // Every player a token can name, but the active one, whose own items the getters read.
         let mut held = HashSet::new();
         for guid in script.held_unit_guids() {
@@ -204,10 +213,10 @@ pub(crate) fn feed_inspect(
             }
             held.insert(guid);
             let fresh = !memo.pushed.contains_key(&guid);
-            if !(fresh || templates_moved || tables_moved || store.is_changed()) {
+            if !(fresh || tables_moved || store.is_changed()) {
                 continue;
             }
-            let slots = visible_slots(&store, &items, icons.as_deref(), rolls);
+            let slots = tables.slots(&store);
             memo.builds += 1;
             if memo.pushed.get(&guid) != Some(&slots) {
                 script.set_visible_equipment(guid, Some(slots.clone()));

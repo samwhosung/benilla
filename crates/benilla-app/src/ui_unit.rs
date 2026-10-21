@@ -25,7 +25,7 @@ mod held;
 mod relations;
 pub(crate) mod tooltip_facts;
 
-pub(crate) use held::traits_from_name_cache;
+pub(crate) use held::{traits_from_name_cache, unit_reach};
 
 /// The unit-feed pass, gated so none of its login one-shots or per-VM memos runs before the in-game
 /// interface exists; the demo override orders itself after it.
@@ -899,12 +899,8 @@ fn feed_farsight_focus(
     })
 }
 
-/// Feed the unit reach map: per held unit a token can name, its squared distance and whether it
-/// passes `0x4944a0`'s other legs, the one `CanInspect` answers by (`0x48a2a1`): a player unit
-/// (`0x4944d8`) that is the active player (`0x4944dd`) or one it can cooperate with (`0x4944e4`).
-/// Cooperation is the faction group, not attackability: an unflagged enemy-faction player is not
-/// inspectable, a same-faction duel opponent is. The guids are the resolver's own inputs, which
-/// the aura feed pushes each frame
+/// Feed the unit reach map: per held unit a token can name, its [`held::unit_reach`]. The guids
+/// are the resolver's own inputs, which the aura feed pushes each frame
 /// ([`UiScript::held_unit_guids`], so this runs after it): the bases and each unit a `target`
 /// chain reaches, and the VM resolves a verb's token to one of them or to a guid with no entry. Ungated: distances move every
 /// frame, and no event keys off the map.
@@ -919,7 +915,6 @@ fn feed_unit_reach(
             return;
         };
         let mut reach = HashMap::new();
-        let (rel, me) = (world.get(), world.me());
         if let Some((self_tf, _)) = self_q.iter().next() {
             for guid in script.held_unit_guids() {
                 let Some((entity, _)) = tokens.held(guid) else {
@@ -928,20 +923,10 @@ fn feed_unit_reach(
                 let Ok(tf) = transforms.get(entity) else {
                     continue;
                 };
-                let unit = tokens
-                    .stores
-                    .get(entity)
-                    .ok()
-                    .map(|s| world.unit_of(guid, s));
-                let inspectable = unit.zip(me.as_ref()).is_some_and(|(unit, me)| {
-                    unit.is_player && (unit.guid == me.guid || rel.can_cooperate(me, &unit))
-                });
+                let store = tokens.stores.get(entity).ok();
                 reach.insert(
                     guid,
-                    benilla_ui::script::UnitReach {
-                        dist_sq: dist_sq(tf.translation, self_tf.translation),
-                        inspectable,
-                    },
+                    held::unit_reach(&world, guid, store, tf.translation, self_tf.translation),
                 );
             }
         }

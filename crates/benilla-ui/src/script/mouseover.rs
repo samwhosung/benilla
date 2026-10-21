@@ -143,6 +143,17 @@ impl UiScript {
         publish(&self.lua, guid)
     }
 
+    /// Seat a published unit in the token resolver, held with its `UNIT_FIELD_TARGET`: the
+    /// publisher writes the pair (`0x492890`) before it signals (`0x4929b3`), so `"mouseover"`
+    /// names the unit inside its `UPDATE_MOUSEOVER_UNIT`. The app's next token push carries it on.
+    pub fn seat_world_mouseover_unit(&mut self, guid: u64, target: u64) {
+        let mut model = self.model_mut();
+        if model.world_mouseover == Some(guid) {
+            model.unit_guids.mouseover = guid;
+            model.unit_guids.held.insert(guid, target);
+        }
+    }
+
     /// Whether the walk probes the Minimap with the cursor on it: it holds the hover, which a hit
     /// in the sweep makes it, or the capture, whose probe runs before the sweep (`0x7661ca`). Its
     /// probe shows and drops the blip tooltip.

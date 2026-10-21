@@ -182,6 +182,36 @@ fn go_lock_lines(
     lines
 }
 
+/// A fresh hover's unit, seated where it is published: the publisher writes the mouseover pair
+/// (`0x492890`) before it signals (`0x4929b3`), and `CanInspect` (`0x48a1b0`),
+/// `CheckInteractDistance` (`0x48ba00`) and the slot getters (`0x4c8328`) read the object it names
+/// at once. So the resolver holds it, the reach map measures it and a player's visible items are
+/// in, ahead of the frame's token, reach and inspect feeds.
+fn seat_fresh_hover(
+    script: &mut benilla_ui::script::UiScript,
+    guid: u64,
+    entity: Entity,
+    stores: &Query<&ObjectStore>,
+    relations: &crate::target::RelationWorld,
+    (visible, transforms): &(crate::ui_inspect::VisibleItemTables, Query<&Transform>),
+    self_at: Option<Vec3>,
+) {
+    let Ok(store) = stores.get(entity) else {
+        return;
+    };
+    script.seat_world_mouseover_unit(guid, store.0.unit_target().unwrap_or(0));
+    if let (Ok(tf), Some(me_at)) = (transforms.get(entity), self_at) {
+        let reach = crate::ui_unit::unit_reach(relations, guid, Some(store), tf.translation, me_at);
+        script.set_unit_reach_of(guid, reach);
+    }
+    let me = relations.me().map(|m| m.guid);
+    if store.0.object_type() == Some(benilla_protocol::messages::ObjectType::Player)
+        && me != Some(guid)
+    {
+        script.set_visible_equipment(guid, Some(visible.slots(store)));
+    }
+}
+
 fn drive_mouseover_tooltip(
     mut hosted_vm: crate::script_calls::HostedVm,
     hovered: Res<Hovered>,
@@ -191,7 +221,7 @@ fn drive_mouseover_tooltip(
     stores: Query<&ObjectStore>,
     // The stored GAMEOBJECT_STATE the lock lines' Action gate reads.
     anims: Query<&crate::go_anim::GoAnim>,
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
+    self_q: Query<(&ObjectStore, Option<&Transform>), With<SelfPlayer>>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
     relations: crate::target::RelationWorld,
@@ -206,6 +236,8 @@ fn drive_mouseover_tooltip(
     tables: SnapshotTables,
     // The guild cache, the hovered player's guild leg.
     guild: Res<crate::ui_guild::GuildState>,
+    // A fresh hover's reach and visible items, which its event's handlers read.
+    seat: (crate::ui_inspect::VisibleItemTables, Query<&Transform>),
 ) {
     hosted_vm.run(|script| {
         let Some(script) = script else {
@@ -216,7 +248,9 @@ fn drive_mouseover_tooltip(
         // The publisher's change check (`0x482090`) compares against the VM's last publish.
         let last = script.world_mouseover();
         let published = memo.published.get(script);
-        let self_store = self_q.iter().next();
+        let (self_store, self_at) = self_q.iter().next().map_or((None, None), |(store, tf)| {
+            (Some(store), tf.map(|t| t.translation))
+        });
         let chr = tables.unit_names();
         let types = tables.types(&names);
 
@@ -283,6 +317,9 @@ fn drive_mouseover_tooltip(
             // drives the bar.
             let key = lines_view(&state);
             let changed = script.publish_world_mouseover(Some(guid));
+            if let Some((entity, _)) = hovered.mouseover(&hovered_go).filter(|_| changed) {
+                seat_fresh_hover(script, guid, entity, &stores, &relations, &seat, self_at);
+            }
             script.set_unit("mouseover", Some(state));
             *published = true;
             if changed || last_lines.as_ref() != Some(&key) {
