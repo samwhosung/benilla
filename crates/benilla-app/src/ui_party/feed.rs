@@ -893,17 +893,9 @@ pub(crate) fn drain_party(
                         let _ = commands.0.send(ClientCommand::GroupInvite { name });
                     }
                 }
-                PartyRequest::UninviteUnit(token) => {
-                    if let Some(guid) = member_for_token(&group, &token).map(|m| m.guid) {
-                        uninvite_by_guid(guid, held(guid), &names, &commands, script);
-                    }
-                }
-                PartyRequest::PromoteUnit(token) => {
-                    if let Some(m) = member_for_token(&group, &token) {
-                        let _ = commands
-                            .0
-                            .send(ClientCommand::GroupSetLeader { guid: m.guid });
-                    }
+                // The binding resolved the token (`0x48a54d`).
+                PartyRequest::UninviteGuid(guid) => {
+                    uninvite_by_guid(guid, held(guid), &names, &commands, script);
                 }
                 // The binding resolved the method, the master and the threshold (`0x4e92a0`).
                 PartyRequest::LootMethod {
@@ -1000,7 +992,8 @@ pub(crate) fn drain_party(
                         .0
                         .send(ClientCommand::GroupSwapSubGroup { name, other });
                 }
-                // The binding resolved the name (`0x48a86a`, `0x4bbd6b`, `0x4bbe3b`).
+                // The binding resolved the token or the name (`0x48a7fd`, `0x48a86a`, `0x4bbd6b`,
+                // `0x4bbe3b`).
                 PartyRequest::PromoteGuid(guid) => {
                     let _ = commands.0.send(ClientCommand::GroupSetLeader { guid });
                 }
@@ -1073,8 +1066,7 @@ fn test_apply_local(
     if matches!(
         req,
         PartyRequest::Leave
-            | PartyRequest::UninviteUnit(_)
-            | PartyRequest::PromoteUnit(_)
+            | PartyRequest::UninviteGuid(_)
             | PartyRequest::LootMethod { .. }
             | PartyRequest::LootThreshold(_)
             | PartyRequest::ConvertToRaid
@@ -1130,17 +1122,9 @@ fn apply_test_intent(
             group.leave_group();
             true
         }
-        PartyRequest::UninviteUnit(token) => {
-            if let Some(guid) = member_for_token(group, token).map(|m| m.guid) {
-                group.members.retain(|m| m.guid != guid);
-                group.stats.remove(&guid);
-            }
-            true
-        }
-        PartyRequest::PromoteUnit(token) => {
-            if let Some(guid) = member_for_token(group, token).map(|m| m.guid) {
-                group.leader = guid;
-            }
+        PartyRequest::UninviteGuid(guid) => {
+            group.members.retain(|m| m.guid != *guid);
+            group.stats.remove(guid);
             true
         }
         PartyRequest::LootMethod {
@@ -2293,8 +2277,8 @@ mod tests {
 
         let (me, mob) = (Some(ME), None);
         let intents = [
-            PartyRequest::UninviteUnit("party2".into()),
-            PartyRequest::PromoteUnit("party1".into()),
+            PartyRequest::UninviteGuid(0xF002),
+            PartyRequest::PromoteGuid(0xF001),
             PartyRequest::LootThreshold(4),
             PartyRequest::Leave,
         ];
@@ -2413,19 +2397,9 @@ mod tests {
         assert_eq!(group.raid_target_index(0xB0B0), 0, "NONE clears");
 
         // Promote party1 (Alice), kick party2 (Bob), retune the loot.
-        test_apply_local(
-            &mut group,
-            &PartyRequest::PromoteUnit("party1".into()),
-            me,
-            None,
-        );
+        test_apply_local(&mut group, &PartyRequest::PromoteGuid(0xF001), me, None);
         assert_eq!(group.leader, 0xF001);
-        test_apply_local(
-            &mut group,
-            &PartyRequest::UninviteUnit("party2".into()),
-            me,
-            None,
-        );
+        test_apply_local(&mut group, &PartyRequest::UninviteGuid(0xF002), me, None);
         assert!(!group.members.iter().any(|m| m.guid == 0xF002));
         assert!(!group.stats.contains_key(&0xF002));
         test_apply_local(
@@ -2958,6 +2932,17 @@ mod tests {
             .collect()
     }
 
+    /// The token resolver's guids as `ui_unit`'s feed pushes them: us, and the party slots.
+    fn resolve_party(app: &mut App, party: [u64; 4]) {
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .set_unit_guids(&benilla_ui::script::UnitGuids {
+                player: ME,
+                party,
+                ..Default::default()
+            });
+    }
+
     fn cache_names(app: &mut App, who: &[(u64, &str)]) {
         let mut names = app.world_mut().resource_mut::<NameCache>();
         for (guid, name) in who {
@@ -2973,6 +2958,7 @@ mod tests {
     fn a_party_kick_goes_by_name_for_a_held_member_and_by_guid_for_the_rest() {
         let (mut app, rx) = drain_app();
         party(&mut app, 2, true);
+        resolve_party(&mut app, [member(1), member(2), 0, 0]);
         cache_names(&mut app, &[(member(1), "M1"), (member(2), "M2")]);
         stream(&mut app, member(2), &PLAYER_TYPE);
         frame(&mut app);
@@ -3022,6 +3008,7 @@ mod tests {
     fn a_held_member_the_cache_has_no_name_for_is_kicked_as_unknown_object() {
         let (mut app, rx) = drain_app();
         party(&mut app, 1, true);
+        resolve_party(&mut app, [member(1), 0, 0, 0]);
         stream(&mut app, member(1), &PLAYER_TYPE);
         let script = app.world_mut().non_send_resource::<UiScript>();
         script.run(r#"UNKNOWNOBJECT = "Unknown Entity""#).unwrap();
