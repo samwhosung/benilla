@@ -372,14 +372,7 @@ impl super::UiScript {
         model.auction = match (model.auction.take(), state) {
             (Some(held), mut state) => {
                 for (list, held) in state.lists.iter_mut().zip(held.lists) {
-                    list.sort = held.sort;
-                    list.removed = Vec::new();
-                    if list.page == held.page {
-                        list.removed = held.removed;
-                        let removed = &list.removed;
-                        list.rows.retain(|r| !removed.contains(&r.auction_id));
-                        list.rows = in_held_order(&held.rows, std::mem::take(&mut list.rows));
-                    }
+                    merge_list(list, held);
                 }
                 Some(state)
             }
@@ -399,6 +392,33 @@ impl super::UiScript {
     /// besides `SetSelectedAuctionItem`.
     pub fn clear_auction_selections(&mut self) {
         self.model_mut().auction_selected = [0; 3];
+    }
+
+    /// One list's result as its handler writes it (`0x4cc880`), merged as [`Self::set_auction`]
+    /// merges each list; with no lists held yet, the others take their empty state and every list
+    /// the app's stack `sorts`.
+    pub fn set_auction_list(
+        &mut self,
+        list: usize,
+        mut state: AuctionListState,
+        sorts: [AuctionSortStack; 3],
+    ) {
+        let mut model = self.model_mut();
+        match model.auction.as_mut() {
+            Some(held) => {
+                let old = std::mem::take(&mut held.lists[list]);
+                merge_list(&mut state, old);
+                held.lists[list] = state;
+            }
+            None => {
+                let mut fresh = AuctionState::default();
+                for (l, sort) in fresh.lists.iter_mut().zip(sorts) {
+                    l.sort = sort;
+                }
+                fresh.lists[list] = state;
+                model.auction = Some(fresh);
+            }
+        }
     }
 
     /// A list's sort tail, run by the app when the last of a result's items is known (`0x4cc9f1`,
@@ -582,6 +602,19 @@ fn in_held_order(held: &[AuctionItemRow], pushed: Vec<AuctionItemRow>) -> Vec<Au
     }
     let mut rows: Vec<Option<AuctionItemRow>> = pushed.into_iter().map(Some).collect();
     order.into_iter().filter_map(|k| rows[k].take()).collect()
+}
+
+/// A pushed list against the one the VM held: the VM's stack kept, and on the same page the VM's
+/// order and the rows a time-left read removed.
+fn merge_list(list: &mut AuctionListState, held: AuctionListState) {
+    list.sort = held.sort;
+    list.removed = Vec::new();
+    if list.page == held.page {
+        list.removed = held.removed;
+        let removed = &list.removed;
+        list.rows.retain(|r| !removed.contains(&r.auction_id));
+        list.rows = in_held_order(&held.rows, std::mem::take(&mut list.rows));
+    }
 }
 
 /// The sort tails `0x4cd8b0`, `0x4cdcd0` and `0x4cddc0`: `qsort` by the list's stack, then the

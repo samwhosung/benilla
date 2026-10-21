@@ -84,6 +84,9 @@ pub(super) struct House<'w, 's> {
     sink: MessageSink<'w>,
     /// The player's guid as the feed reads it, so a patched row resolves as its push would.
     self_q: Query<'w, 's, &'static Guid, With<SelfPlayer>>,
+    icons: Option<Res<'w, crate::entities::ItemDisplays>>,
+    props: Option<Res<'w, crate::items::RandomProperties>>,
+    enchants: Option<Res<'w, crate::items::Enchants>>,
 }
 
 /// A handler's VM and its [`House`].
@@ -130,8 +133,47 @@ fn settle(vm: &mut HouseVm) {
                 }
             }),
             HouseEffect::Send(command) => vm.own().wire.view().send(command),
+            HouseEffect::Page(list) => land_page(vm, list),
         }
     }
+}
+
+/// A list result's page into the VM as its handler writes it, the tail run there when every item
+/// is known ([`AuctionOpen::land_page`]), each item asked with the list's callback (`0x4cc9bf`,
+/// `0x4ccbff`, `0x4cce4f`). With no VM the feed pushes it.
+fn land_page(vm: &mut HouseVm, list: usize) {
+    vm.turn(|script, mut h| {
+        let Some(script) = script else {
+            return;
+        };
+        let Some(items) = h.items.as_deref() else {
+            return;
+        };
+        let Some(names) = h.names.as_deref() else {
+            return;
+        };
+        let tick = script.auction_tick_ms();
+        let tail = h.auction.land_page(list, tick, items);
+        let reads = super::ListReads {
+            self_guid: h.self_q.iter().next().map(|g| g.0),
+            items,
+            icons: h.icons.as_deref(),
+            names,
+            rolls: crate::items::RollCatalogs {
+                props: h.props.as_deref(),
+                enchants: h.enchants.as_deref(),
+            },
+        };
+        let ask = match h.wire.commands.as_deref() {
+            Some(commands) => crate::query_cache::Ask::Event(commands),
+            None => crate::query_cache::Ask::Read,
+        };
+        let state = h.auction.list_state(list, tick, &reads, ask);
+        script.set_auction_list(list, state, h.auction.sorts.0);
+        if tail {
+            script.sort_auction_list(list);
+        }
+    });
 }
 
 /// A line shown now through the VM's strings, unless it names an item not cached: then the feed
@@ -191,33 +233,39 @@ fn on_command_result(In(ev): In<SessionEvent>, mut vm: HouseVm) {
     }
 }
 
-fn on_list_result(In(ev): In<SessionEvent>, mut auction: ResMut<AuctionOpen>) {
+fn on_list_result(In(ev): In<SessionEvent>, mut vm: HouseVm) {
     if let SessionEvent::AuctionListResult {
         auctions,
         total_count,
     } = ev
     {
-        auction_list_result(auctions, total_count, &mut auction);
+        handle(&mut vm, |auction, _| {
+            auction_list_result(auctions, total_count, auction);
+        });
     }
 }
 
-fn on_owner_list_result(In(ev): In<SessionEvent>, mut auction: ResMut<AuctionOpen>) {
+fn on_owner_list_result(In(ev): In<SessionEvent>, mut vm: HouseVm) {
     if let SessionEvent::AuctionOwnerListResult {
         auctions,
         total_count,
     } = ev
     {
-        auction_owner_list_result(auctions, total_count, &mut auction);
+        handle(&mut vm, |auction, _| {
+            auction_owner_list_result(auctions, total_count, auction);
+        });
     }
 }
 
-fn on_bidder_list_result(In(ev): In<SessionEvent>, mut auction: ResMut<AuctionOpen>) {
+fn on_bidder_list_result(In(ev): In<SessionEvent>, mut vm: HouseVm) {
     if let SessionEvent::AuctionBidderListResult {
         auctions,
         total_count,
     } = ev
     {
-        auction_bidder_list_result(auctions, total_count, &mut auction);
+        handle(&mut vm, |auction, _| {
+            auction_bidder_list_result(auctions, total_count, auction);
+        });
     }
 }
 
@@ -267,6 +315,7 @@ fn auction_list(
 ) {
     auction.wire.list_results[which] += 1;
     auction.set_list(which, auctions, total_count);
+    auction.effects.push(HouseEffect::Page(which));
 }
 
 fn auction_list_result(

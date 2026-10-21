@@ -203,6 +203,8 @@ pub(crate) enum HouseEffect {
         auction_id: u32,
         pages: [Option<u32>; 3],
     },
+    /// `list`'s new page, pushed with its tail when every item is known ([`AuctionOpen::land_page`]).
+    Page(usize),
     /// A packet the handler sends at this point: a list request (`0x4cc4e0`, `0x4cc528`) or the
     /// placed bid's wave after its row's update (`0x4cc5dd`-`0x4cc60c`).
     Send(ClientCommand),
@@ -681,6 +683,72 @@ fn resolve_row(
     }
 }
 
+/// What a list's rows read beside the house: the player, the item and name caches, the icons and
+/// the random suffixes.
+pub(crate) struct ListReads<'a> {
+    pub(crate) self_guid: Option<u64>,
+    pub(crate) items: &'a Items,
+    pub(crate) icons: Option<&'a ItemDisplays>,
+    pub(crate) names: &'a NameCache,
+    pub(crate) rolls: crate::items::RollCatalogs<'a>,
+}
+
+impl AuctionOpen {
+    /// `list` as the VM shows it: each row resolved ([`resolve_row`]), each item read as `ask`
+    /// says, and the page owed its tail while an item is out.
+    pub(crate) fn list_state(
+        &self,
+        list: usize,
+        tick: u32,
+        reads: &ListReads,
+        ask: Ask<'_>,
+    ) -> AuctionListState {
+        let slot = &self.lists[list];
+        let rows: Vec<AuctionItemRow> = slot
+            .entries
+            .iter()
+            .map(|e| {
+                resolve_row(
+                    list,
+                    e,
+                    slot.arrived_ms.unwrap_or(tick),
+                    reads.self_guid,
+                    reads.items,
+                    reads.icons,
+                    reads.names,
+                    ask,
+                    reads.rolls,
+                )
+            })
+            .collect();
+        AuctionListState {
+            total: slot.total.max(rows.len() as u32),
+            rows,
+            sort: self.sorts.0[list],
+            page: slot.page,
+            pending: slot.awaiting.is_some(),
+            ..Default::default()
+        }
+    }
+
+    /// A list result's own step in its handler (`0x4cc7f0`, `0x4cca30`, `0x4ccc80`): the page
+    /// stamped with the tick, and its tail run now when every item is already known, as the
+    /// handler's own count reaching 0 runs it (`0x4cc9e8`-`0x4cc9f1`); else it waits for the
+    /// last record (`0x4cca10`). Whether the tail ran.
+    pub(crate) fn land_page(&mut self, list: usize, tick: u32, items: &Items) -> bool {
+        let slot = &mut self.lists[list];
+        slot.arrived_ms.get_or_insert(tick);
+        let known = slot
+            .awaiting
+            .as_ref()
+            .is_some_and(|items_of| items_of.iter().all(|&e| items.template_answered(e)));
+        if known {
+            slot.awaiting = None;
+        }
+        known
+    }
+}
+
 /// What a row of `list` shows of its bid, from the wire entry as the last result or patch left it:
 /// what a bid patch rewrites in the VM's row, so the handler's write and the feed's push agree.
 fn row_bid(
@@ -848,32 +916,15 @@ fn feed_auction(
             slot.arrived_ms.get_or_insert(tick);
         }
         let lists = [LIST, BIDDER, OWNER].map(|i| {
-            let slot = &auction.lists[i];
             let ask = Ask::at(shown || auction.list_result_landed[i], &commands);
-            let rows: Vec<AuctionItemRow> = slot
-                .entries
-                .iter()
-                .map(|e| {
-                    resolve_row(
-                        i,
-                        e,
-                        slot.arrived_ms.unwrap_or(tick),
-                        self_guid,
-                        &items,
-                        icons.as_deref(),
-                        &names,
-                        ask,
-                        rolls,
-                    )
-                })
-                .collect();
-            AuctionListState {
-                total: slot.total.max(rows.len() as u32),
-                rows,
-                sort: auction.sorts.0[i],
-                page: slot.page,
-                ..Default::default()
-            }
+            let reads = ListReads {
+                self_guid,
+                items: &items,
+                icons: icons.as_deref(),
+                names: &names,
+                rolls,
+            };
+            auction.list_state(i, tick, &reads, ask)
         });
         let mut fresh = AuctionState {
             lists,
