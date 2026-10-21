@@ -252,11 +252,10 @@ fn a_water_walk_or_hover_ack_ends_the_precast_and_a_root_or_feather_fall_ack_doe
             "{mode:?} {}",
             if apply { "on" } else { "off" }
         );
-        // The end's tail releases our loot at rest (`0x60d10b`), precast or not.
-        assert_eq!(
-            std::mem::take(&mut world.resource_mut::<crate::ui_loot::LootCloseAtRest>().0),
-            ends,
-            "{mode:?}: the loot release"
-        );
+        // The end's tail releases our loot (`0x60d10b`), precast or not: the move-start close
+        // while the body falls through this empty world, the full one at rest.
+        let released = std::mem::take(&mut world.resource_mut::<crate::ui_loot::LootMoveStart>().0)
+            | std::mem::take(&mut world.resource_mut::<crate::ui_loot::LootCloseAtRest>().0);
+        assert_eq!(released, ends, "{mode:?}: the loot release");
     }
 }

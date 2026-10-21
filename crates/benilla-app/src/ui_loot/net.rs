@@ -939,6 +939,7 @@ mod tests {
         world.init_resource::<bevy::ecs::message::Messages<crate::player::StandStateRequest>>();
         world.init_resource::<crate::player::Player>();
         world.init_resource::<super::super::LootMoveStart>();
+        world.init_resource::<super::super::LootCloseAtRest>();
         world.spawn((
             SelfPlayer,
             Guid(1),

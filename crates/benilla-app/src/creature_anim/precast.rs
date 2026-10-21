@@ -6,12 +6,15 @@
 //! `SMSG_SPELL_START` (`0x6e7908` for another unit, `0x6e79be` for ours unless the pending record
 //! holds the spell), through [`super::UnitEdit`]s, which apply here.
 //!
-//! Ended by `0x60d040`, which clears both when its spell is the unit's `+0xc8c` (`0x60d049`):
+//! Ended by `0x60d040` ([`end`]), which clears both when its spell is the unit's `+0xc8c`
+//! (`0x60d049`) and then runs its tail, the active player's loot release among it:
 //!
-//! - keyed by the spell, at its GO (`0x6e7fc5`), its `SMSG_SPELL_FAILED_OTHER` (`0x6e8e8c`), the
-//!   player's failed cast result (`0x6e1c8e`) and the auto-repeat cancel (`0x6ea12b`), as edits;
-//! - with the unit's own spell, so always, by a spline move (`0x6020e8`) and by the mover's
-//!   own move messages (`0x60e15d`), which remove the component.
+//! - keyed by the spell, at its GO (`0x6e7fc5`, the tail as `0x6e4870` answers), its
+//!   `SMSG_SPELL_FAILED_OTHER` (`0x6e8e8c`), the player's failed cast result (`0x6e1c8e`) and
+//!   the auto-repeat cancel (`0x6ea12b`), as edits;
+//! - with the unit's own spell, so always, by a spline move (`0x6020e8`) and by the mover's own
+//!   move messages and acks that `0x60e0a0` does not send at once (`0x60e15d`), through
+//!   [`end_precast`].
 //!
 //! The bit alone is cleared by the local StartAttack (`0x5ecd87` → `0x60fc50`); `0x5fbd60`,
 //! which clears it when a unit is re-shown, has no counterpart, as a unit that leaves is
@@ -80,18 +83,48 @@ pub(crate) fn end_precast(commands: &mut Commands, entity: Entity, tail: Precast
     commands.queue(move |world: &mut World| end(world, entity, None, tail));
 }
 
-/// `0x60d040`'s clear: keyed by `spell`, or with the unit's own spell for `None`.
-pub(super) fn end(world: &mut World, entity: Entity, spell: Option<u32>, _tail: PrecastTail) {
+/// `0x60d040`: keyed by `spell`, or with the unit's own spell for `None`, which matches an empty
+/// `+0xc8c` too (`0x60d049`). A matched end clears the precast and, unless `tail` skips it, runs
+/// the tail, whose last step releases the active player's loot window (`0x60d0ee`-`0x60d10b`):
+/// `0x48f200(1, moving, 0)`, `moving` its flags `& 0x200f`, the four directions and FALLING.
+/// Moving, that is the move-start close ([`crate::ui_loot::LootMoveStart`]); at rest the full one
+/// ([`crate::ui_loot::LootCloseAtRest`]). An end made in the VM pass applies after it, so its
+/// release reaches the loot drain the next frame.
+pub(super) fn end(world: &mut World, entity: Entity, spell: Option<u32>, tail: PrecastTail) {
     let Ok(mut unit) = world.get_entity_mut(entity) else {
         return;
     };
-    let ends = unit
-        .get::<Precast>()
-        .is_some_and(|p| spell.is_none_or(|s| s == p.spell_id));
-    if ends {
-        unit.remove::<Precast>();
+    let held = unit.get::<Precast>().map(|p| p.spell_id);
+    if spell.is_some_and(|s| held != Some(s)) {
+        return;
+    }
+    unit.remove::<Precast>();
+    let active_player = unit.contains::<crate::net::SelfPlayer>();
+    let moving = match tail {
+        PrecastTail::Skip => return,
+        PrecastTail::Moving(moving) => moving,
+        PrecastTail::Run => world
+            .get_resource::<crate::player::Player>()
+            .is_some_and(|p| p.move_flags() & MOVING != 0),
+    };
+    if !active_player {
+        return;
+    }
+    if moving {
+        if let Some(mut close) = world.get_resource_mut::<crate::ui_loot::LootMoveStart>() {
+            close.0 = true;
+        }
+    } else if let Some(mut close) = world.get_resource_mut::<crate::ui_loot::LootCloseAtRest>() {
+        close.0 = true;
     }
 }
+
+/// The flags the tail's release reads as moving (`0x60d0fd`).
+const MOVING: u32 = super::move_flags::FORWARD
+    | super::move_flags::BACKWARD
+    | super::move_flags::STRAFE_LEFT
+    | super::move_flags::STRAFE_RIGHT
+    | super::move_flags::FALLING;
 
 /// `0x60fc50`'s clear of the bit alone.
 pub(super) fn end_busy(world: &mut World, entity: Entity) {

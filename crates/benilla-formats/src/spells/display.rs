@@ -573,8 +573,16 @@ impl SpellDisplay {
     /// else 0 for `AttributesEx & 0x400` or `AttributesEx2 & 0x10000000`; else 1 when `flags`
     /// bit 0 is clear or bit 12 set. Its one caller, the GO handler `0x6e7a70`, passes the cast
     /// flags (`0x6e7aa4`) and gates the precast end's tail with the answer (`0x6e7fc5`).
-    pub fn test_attributes_and_flags(&self, _flags: u32) -> bool {
-        true
+    pub fn test_attributes_and_flags(&self, flags: u32) -> bool {
+        if self.attributes_ex2 & ATTR_EX2_ACTIVE_THREAT != 0 {
+            return true;
+        }
+        if self.attributes_ex & ATTR_EX_NO_THREAT != 0
+            || self.attributes_ex2 & ATTR_EX2_NOT_AN_ACTION != 0
+        {
+            return false;
+        }
+        flags & 0x1 == 0 || flags & 0x1000 != 0
     }
 
     /// Hidden from the buff bar (`0x4e4170`, `0x4e42b6`-`0x4e42c8`): `Attributes` read as a byte,

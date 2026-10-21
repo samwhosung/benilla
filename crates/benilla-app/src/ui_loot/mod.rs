@@ -431,7 +431,8 @@ impl LootLatch {
 /// The loot window's close owed this frame, `0x48f200(1, 1, 0)` while a loot target is latched
 /// (`0x6126b0`). Two writers call it: the movement-start guard `0x60e990` (`0x60e9dd`), called by
 /// every movement-start emitter, turning included, but not by mouse-look facing; and the local
-/// stand-state apply for a change to any state but 0 (`0x5f07d5`). No loot target reaches the
+/// stand-state apply for a change to any state but 0 (`0x5f07d5`). The precast end's release
+/// owes it too while the player moves (`0x60d10b`, [`LootCloseAtRest`] at rest). No loot target reaches the
 /// range gate `0x493230`, so there is no distance leash. vmangos also releases on movement
 /// (`MovementHandler.cpp:1104`), but the close is the client's. A loot response that lands while
 /// we move sets it too (`0x5ebc3a`).
@@ -1082,14 +1083,27 @@ fn drain_loot(
     mut pickup: MessageWriter<crate::sound::LootPickupSound>,
     group: Res<GroupState>,
     items: Res<Items>,
-    // The move-start close runs before the VM check: it needs no Lua.
+    // The move-start close and the close at rest run before the VM check: they need no Lua.
     mut move_start: ResMut<LootMoveStart>,
+    mut at_rest: ResMut<LootCloseAtRest>,
     mut dead: DeadUnitDeselect,
     errors: Res<UiErrorKeys>,
 ) {
-    vm.turn(|script, (mut loot, mut latch)| {
+    vm.turn(|mut script, (mut loot, mut latch)| {
         if std::mem::take(&mut move_start.0) {
             dead.after_close(close_on_move_start(&mut loot, &mut latch, &commands));
+        }
+        // After the move-start close, which it subsumes: whichever runs first, a window either
+        // keeps is the one this takes.
+        if std::mem::take(&mut at_rest.0) {
+            if loot.disenchant_holds() {
+                match script.as_deref_mut() {
+                    Some(script) => sweep_rows(&mut loot, &items, &commands, script, &mut pickup),
+                    None => loot.owe_sweep(),
+                }
+            } else {
+                dead.after_close(close_interaction(&mut loot, &mut latch, Some(&commands)));
+            }
         }
         let Some(script) = script else {
             return;
@@ -1338,6 +1352,7 @@ mod tests {
             .init_resource::<LootState>()
             .init_resource::<LootLatch>()
             .init_resource::<LootMoveStart>()
+            .init_resource::<LootCloseAtRest>()
             .init_resource::<GroupState>()
             .init_resource::<Items>()
             .init_resource::<crate::net::GuidIndex>()
@@ -1404,6 +1419,7 @@ mod tests {
                 // What the feed's move-start close reads (`OpenWhileMoving`).
                 .add_message::<crate::target::DeselectGuid>()
                 .init_resource::<LootMoveStart>()
+                .init_resource::<LootCloseAtRest>()
                 .init_resource::<LootLatch>()
                 .init_resource::<crate::net::GuidIndex>()
                 .init_resource::<LootState>()
@@ -1466,6 +1482,7 @@ mod tests {
                 // What the feed's move-start close reads (`OpenWhileMoving`).
                 .add_message::<crate::target::DeselectGuid>()
                 .init_resource::<LootMoveStart>()
+                .init_resource::<LootCloseAtRest>()
                 .init_resource::<LootLatch>()
                 .init_resource::<crate::net::GuidIndex>()
                 .init_resource::<LootState>()
@@ -1704,6 +1721,7 @@ mod tests {
             // What the feed's move-start close reads (`OpenWhileMoving`).
             .add_message::<crate::target::DeselectGuid>()
             .init_resource::<LootMoveStart>()
+            .init_resource::<LootCloseAtRest>()
             .init_resource::<LootLatch>()
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<LootState>()
@@ -2758,6 +2776,7 @@ mod tests {
             .init_resource::<LootState>()
             .init_resource::<LootLatch>()
             .init_resource::<LootMoveStart>()
+            .init_resource::<LootCloseAtRest>()
             .init_resource::<LootConfig>()
             .init_resource::<GroupState>()
             .init_resource::<Items>()
