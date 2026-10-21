@@ -393,6 +393,7 @@ mod tests {
                 auto_self: Some(ME),
                 auto_self_store: rel.self_store,
                 main_hand_item: None,
+                long_range: false,
             };
             resolve_cast_target(Some(def), &candidates, auto_self_cast, &rel)
         }

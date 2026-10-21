@@ -1264,6 +1264,7 @@ mod tests {
                     auto_self: Some(ME),
                     auto_self_store: Some(&store),
                     main_hand_item: None,
+                    long_range: false,
                 },
                 false,
                 &TargetRelations {
@@ -1515,6 +1516,7 @@ mod tests {
                                 auto_self: Some(ME),
                                 auto_self_store: None,
                                 main_hand_item: None,
+                                long_range: false,
                             },
                             false,
                             &targeting.context().rel,

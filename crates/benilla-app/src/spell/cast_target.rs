@@ -81,7 +81,8 @@ const ITEM_ARM_BITS: u16 = TF_ITEM | TF_LOCKED;
 /// What the wire's target block should carry for this cast.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CastWireTarget {
-    /// Word 0: mask 0, no guid; the server resolves the target implicitly.
+    /// Mask 0, no guid; the server resolves the target implicitly. Word 0 sends so (`0x6e5342`),
+    /// and so does the arm's long-range leg, whose parked guid the mask never names (`0x6e5454`).
     SelfImplicit,
     /// Mask `TARGET_FLAG_UNIT` (0x2) and this guid, possibly the player's own.
     Unit(u64),
@@ -120,7 +121,14 @@ pub(crate) struct CastCandidates<'a> {
     /// The equipped main hand's item guid (`[player+0x1d3c][15]`), only when it resolves to a
     /// streamed item object (`0x468460` at `0x6e53bc`).
     pub(crate) main_hand_item: Option<u64>,
+    /// Whether the spell's maximum range, `GetMinMaxRange` with no unit target (`0x6e543f`), is
+    /// above [`LONG_RANGE`] (`0x6e5447`), which the arm's last leg tests.
+    pub(crate) long_range: bool,
 }
+
+/// `[0x806b10]`, 100.0: a maximum range above it lets the arm send at a candidate with no object
+/// (`0x6e5447`).
+pub(crate) const LONG_RANGE: f32 = 100.0;
 
 /// What the binder's gates and relation checks read: the selected unit's store and the player's.
 #[derive(Clone, Copy)]
@@ -664,6 +672,21 @@ pub(crate) fn resolve_cast_target(
             Some(_) => {}
         }
     }
+    // `ArmCast`'s last leg (`0x6e540e`-`0x6e5467`), reached once the candidate binds nothing and
+    // `autoSelfCast` is off (`0x6e53e1`): a candidate the object manager does not hold
+    // (`0x6e5425`), for a spell whose maximum range is above 100, is parked in the pending block
+    // (`0xceac60`) and sent at once. The block's mask holds no unit bit, so the packet names no
+    // target. A candidate with no object binds nothing under any word (`0x6e5b5e`), so a location
+    // word reaches the leg as a unit word does. The main hand is the candidate instead of the
+    // selection for the attribute above (`0x6e536e`).
+    if !auto_self_cast
+        && cand.long_range
+        && cand.selection.is_some()
+        && !cand.selection_held
+        && !def.targets_main_hand_item()
+    {
+        return CastWireTarget::SelfImplicit;
+    }
     // A non-unit bit enters the cursor with the whole word. The reference only reaches the cursor
     // after the unit walk fails (`0x6e50c8`), so deferring first matches it only because no unit
     // candidate clears these bits; a location word with a unit bit beside it (0x42, NPC-cast
@@ -729,6 +752,7 @@ mod tests {
             auto_self: caster,
             auto_self_store: None,
             main_hand_item: None,
+            long_range: false,
         }
     }
 
