@@ -1189,41 +1189,110 @@ mod tests {
         }
     }
 
-    /// A clear that waited behind a held signal clears what the cursor holds when it is made
-    /// again: in 1.12.1 the signal's handler runs first, and `ClearCursor` (`0x495190`) then drops
-    /// whatever is on the cursor, releasing an item (`0x4951c2`, `0x495420`), so an item that
-    /// handler picked up goes off the cursor unlocked.
-    #[test]
-    fn a_waiting_clear_releases_what_a_handler_ahead_of_it_picked_up() {
-        use super::super::cursor::{self, CursorPayload};
+    /// A VM whose frame notes, at each `ITEM_LOCK_CHANGED` (`L`) and `CURSOR_UPDATE` (`C`), the
+    /// guid on the cursor and whether items 1 and 2 read locked; `PICK_UP(guid)` takes an item onto
+    /// the cursor (the setter's clear, the set, then its lock) and `PUT_DOWN()` sends the held one
+    /// off (`ClearCursor(0, 1)`). Item 2 is on the cursor, locked.
+    fn cursor_watch() -> UiScript {
+        use super::super::cursor::{self, Clear, CursorPayload};
         let mut s = UiScript::new().unwrap();
         let lua = s.lua().clone();
-        let pick_up = lua
-            .create_function(|lua, guid: u64| {
-                cursor::set_cursor(lua, true, |_| Some(CursorPayload::Item(held_item(guid))));
-                super::super::tick::verb(lua, |model| cursor::lock_item(model, guid));
+        let f = |lua: &Lua, body: fn(&Lua, u64)| {
+            lua.create_function(move |lua, guid: Option<u64>| {
+                body(lua, guid.unwrap_or(0));
                 Ok(())
+            })
+            .unwrap()
+        };
+        let pick_up = f(&lua, |lua, guid| {
+            cursor::set_cursor(lua, true, |_| Some(CursorPayload::Item(held_item(guid))));
+            super::super::tick::verb(lua, |model| cursor::lock_item(model, guid));
+        });
+        let put_down = f(&lua, |lua, _| {
+            super::super::tick::verb(lua, |model| cursor::clear(model, Clear::KEEP_LOCK));
+        });
+        let watched = lua
+            .create_function(|lua, ()| {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                let on = match &model.cursor {
+                    Some(CursorPayload::Item(item)) => item.guid,
+                    _ => 0,
+                };
+                let locked = |g| u8::from(model.item_locks.contains(&g));
+                Ok(format!("{on}:{}{}", locked(1), locked(2)))
             })
             .unwrap();
         lua.globals().set("PICK_UP", pick_up).unwrap();
+        lua.globals().set("PUT_DOWN", put_down).unwrap();
+        lua.globals().set("WATCHED", watched).unwrap();
         s.run(
-            r#"local f = CreateFrame("Frame")
-            f:RegisterEvent("PLAYER_TARGET_CHANGED")
-            f:SetScript("OnEvent", function() PICK_UP(1) end)"#,
+            r#"SEEN = ""
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("ITEM_LOCK_CHANGED")
+            f:RegisterEvent("CURSOR_UPDATE")
+            f:SetScript("OnEvent", function()
+                local tag = event == "ITEM_LOCK_CHANGED" and "L" or "C"
+                SEEN = SEEN .. tag .. ":" .. WATCHED() .. " "
+            end)"#,
         )
         .unwrap();
         s.seed_item_locks([2]);
         s.set_cursor_for_test(CursorPayload::Item(held_item(2)));
+        s
+    }
+
+    /// An engine turn that signals, then clears the cursor `how`, with the signal's handler
+    /// running `handler`; what the frame noted once the host is back.
+    fn clear_behind(handler: &str, how: super::super::cursor::Clear) -> (UiScript, String) {
+        let mut s = cursor_watch();
+        s.run(&format!(
+            r#"local f = CreateFrame("Frame")
+            f:RegisterEvent("PLAYER_TARGET_CHANGED")
+            f:SetScript("OnEvent", function() {handler} end)"#
+        ))
+        .unwrap();
         s.host_out(|s| {
             s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
-            s.run("ClearCursor()").unwrap();
+            let lua = s.lua().clone();
+            super::super::tick::verb(&lua, |model| super::super::cursor::clear(model, how));
         });
         s.hosted(&mut Stamping::default(), |_| ());
-        assert!(
-            s.model_ref().cursor.is_none(),
-            "the clear cleared the pick-up"
+        let seen = global::<String>(&s, "SEEN");
+        (s, seen)
+    }
+
+    /// `ClearCursor` (`0x495190`) acts once, on what the cursor holds when it runs: behind a held
+    /// signal it runs after that signal's handler, as in 1.12.1, so a pick-up the handler made is
+    /// what it takes, unlocked with one `ITEM_LOCK_CHANGED` (`0x4951c2`, `0x4951d9`).
+    #[test]
+    fn a_waiting_clear_takes_and_unlocks_what_a_handler_ahead_of_it_picked_up() {
+        let (s, seen) = clear_behind("PICK_UP(1)", super::super::cursor::Clear::BOTH);
+        assert_eq!(
+            seen, "L:2:00 C:0:00 C:1:00 L:1:10 L:1:00 C:0:00 ",
+            "the pick-up's clear, set and lock, then the waiting clear's own"
         );
-        assert_eq!(s.item_locks(), Vec::<u64>::new(), "and released it");
+        assert!(s.model_ref().cursor.is_none());
+        assert_eq!(s.item_locks(), Vec::<u64>::new());
+    }
+
+    /// An item send's clear (`ClearCursor(0, 1)`) skips the unlock (`0x4951c2` past `0x4951d9`):
+    /// waiting behind a handler's pick-up, it takes that item and leaves it locked.
+    #[test]
+    fn a_waiting_keep_lock_clear_leaves_a_handlers_pick_up_locked() {
+        let (s, seen) = clear_behind("PICK_UP(1)", super::super::cursor::Clear::KEEP_LOCK);
+        assert_eq!(seen, "L:2:00 C:0:00 C:1:00 L:1:10 C:0:10 ");
+        assert!(s.model_ref().cursor.is_none());
+        assert_eq!(s.item_locks(), vec![1]);
+    }
+
+    /// A handler that put the held item down leaves the waiting clear an empty cursor: it unlocks
+    /// nothing and shows nothing, and the sent item keeps its lock for the server's answer.
+    #[test]
+    fn a_waiting_clear_behind_a_put_down_unlocks_and_shows_nothing() {
+        let (s, seen) = clear_behind("PUT_DOWN()", super::super::cursor::Clear::BOTH);
+        assert_eq!(seen, "C:0:01 C:0:01 ");
+        assert!(s.model_ref().cursor.is_none());
+        assert_eq!(s.item_locks(), vec![2]);
     }
 
     /// Lua the turn runs in place reads the locks as they are then, and its own unlock waits in
