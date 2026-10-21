@@ -1348,6 +1348,8 @@ fn the_stock_afk_and_dnd_commands_reach_the_wire() {
 fn the_docked_tabs_follow_the_dock_through_a_session() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    // No engine behind it: `RaidFrame`'s `RequestRaidInfo()` at world entry is kept.
+    s.keep_calls();
     s.set_screen_size(768.0 * 16.0 / 9.0, 768.0);
     s.set_texture_size_probe(Box::new(|_| Some((32, 32))));
     s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));

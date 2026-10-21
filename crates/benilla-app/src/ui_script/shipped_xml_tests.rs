@@ -618,6 +618,8 @@ fn every_texture_frame_outranks_its_status_bars() {
     use benilla_ui::order::unpack;
 
     let mut s = benilla_ui::script::UiScript::new().unwrap();
+    // No engine behind it: `RaidFrame`'s `RequestRaidInfo()` at world entry is kept.
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // The in-game UI loads on world entry, so a player always exists by then.
     s.set_unit(

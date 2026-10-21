@@ -55,6 +55,8 @@ fn stock_ui(tag: &str) -> UiScript {
     s.tick(0.1);
     s.resolve();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+    // The session start's own calls (`RaidFrame.lua:29`'s `RequestRaidInfo()`) are not the test's.
+    let _ = s.take_script_calls();
     s
 }
 

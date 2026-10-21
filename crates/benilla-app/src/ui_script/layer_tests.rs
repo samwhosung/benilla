@@ -60,6 +60,8 @@ pub(crate) fn production_load_with(
     let _h = EnvGuard::set("BENILLA_HOME", home.to_str().unwrap());
 
     let mut s = UiScript::new().unwrap();
+    // No engine behind it: the calls the stock paths make are kept, not refused.
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     s.set_unit(
         "player",

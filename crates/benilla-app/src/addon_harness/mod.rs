@@ -1099,6 +1099,9 @@ fn global_strings() -> Option<&'static str> {
 /// Every seat below is a state an in-world character is always in, kept minimal and ordinary: a VM
 /// answering nil or zero there would fail addons on a state the 1.12 client cannot be in.
 fn seat_a_session(script: &mut UiScript) {
+    // No engine behind it: a verb's call is kept, not refused (stock `RaidFrame_OnEvent` asks
+    // `RequestRaidInfo()` on `PLAYER_ENTERING_WORLD`, `RaidFrame.lua:28-29`).
+    script.keep_calls();
     // The 1.12 client boots FrameXML with this file first; so does our app.
     if let Some(src) = global_strings() {
         let _ = script.run(src);

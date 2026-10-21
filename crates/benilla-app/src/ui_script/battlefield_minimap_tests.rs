@@ -21,6 +21,8 @@ fn quiet(s: &UiScript) {
 /// OnLoads format `UnitName("player")` into their labels.
 fn session() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    // No engine behind it: `RaidFrame`'s `RequestRaidInfo()` at world entry is kept.
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     s.set_unit(
         "player",
