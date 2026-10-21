@@ -59,6 +59,8 @@ fn stats() -> UnitCombatStats {
 fn player() -> UnitState {
     UnitState {
         exists: true,
+        // The stat getters answer a unit with an object (`0x515940`).
+        has_object: true,
         name: Some("Probefour".into()),
         level: 60,
         race: Some("Human".into()),
