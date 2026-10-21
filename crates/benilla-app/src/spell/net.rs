@@ -418,7 +418,8 @@ fn on_cancel_auto_repeat(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene) 
     }
 }
 
-/// The four cooldown packets, each routed through [`addressed_store`] by the caster guid.
+/// The four cooldown packets, each routed to a list by the caster guid: [`addressed_store`] for
+/// `SMSG_SPELL_COOLDOWN` and the cheat, [`event_store`] for the event and the clear.
 fn on_cooldown_packet(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene) {
     let player = active_player(&l.self_guid, &l.index, &sc.stores);
     let Lifecycle {
@@ -441,14 +442,10 @@ fn on_cooldown_packet(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene) {
             }
         }
         SessionEvent::CooldownEvent { spell_id, caster } => {
-            if let Some(store) = addressed_store(caster, self_guid, cooldowns, pet_bar) {
-                cooldown_event(spell_id, caster, store);
-            }
+            cooldown_event(spell_id, caster, event_store(caster, cooldowns, pet_bar));
         }
         SessionEvent::ClearCooldown { spell_id, caster } => {
-            if let Some(store) = addressed_store(caster, self_guid, cooldowns, pet_bar) {
-                clear_cooldown(spell_id, caster, store);
-            }
+            clear_cooldown(spell_id, caster, event_store(caster, cooldowns, pet_bar));
         }
         SessionEvent::CooldownCheat { caster } => {
             if let Some(store) = addressed_store(caster, self_guid, cooldowns, pet_bar) {
@@ -515,9 +512,9 @@ fn on_spell_modifier(In(ev): In<SessionEvent>, mut l: Lifecycle) {
     }
 }
 
-/// Which cooldown store a cooldown packet's caster guid addresses: ours or our pet's (the server
-/// sends a pet's cooldowns on the pet's guid). Any other guid is dropped, as the reference drops
-/// it; its `SMSG_COOLDOWN_CHEAT` handler wipes the self or pet list on this same test.
+/// Which cooldown store `SMSG_SPELL_COOLDOWN` (`0x6e947e`, `0x6e948d`) and `SMSG_COOLDOWN_CHEAT`
+/// (`0x6e974a`, `0x6e9767`) address by the caster guid: ours or our pet's (the server sends a pet's
+/// cooldowns on the pet's guid). Any other guid ends the handler.
 fn addressed_store<'a>(
     caster: u64,
     self_guid: &SelfGuid,
@@ -530,6 +527,20 @@ fn addressed_store<'a>(
         Some(&mut pet.cooldowns)
     } else {
         None
+    }
+}
+
+/// The store `SMSG_COOLDOWN_EVENT` and `SMSG_CLEAR_COOLDOWN` (`0x6e9670`) address: the pet's for
+/// the pet bar's guid `[0xb714a0]`, the player's for any other (`0x6e9696`, the one compare).
+fn event_store<'a>(
+    caster: u64,
+    player: &'a mut crate::spell::Cooldowns,
+    pet: &'a mut crate::ui_pet::PetBar,
+) -> &'a mut crate::spell::Cooldowns {
+    if pet.spells.pet_guid == caster {
+        &mut pet.cooldowns
+    } else {
+        player
     }
 }
 
