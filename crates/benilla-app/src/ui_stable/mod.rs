@@ -219,6 +219,25 @@ fn feed_stable(
     mut closes: CoreCloses,
     mut sink: crate::ui_action::MessageSink,
 ) {
+    // Refusals show, and speak, as their message rows say, on their own: `SMSG_STABLE_RESULT`'s
+    // handler (`0x4cacb0`) shows the line and changes no list, so its handlers run with the host
+    // lent before the frame's stable is pushed, and read it as it stood.
+    if !errors.0.is_empty() {
+        vm.run(|script| {
+            let Some(script) = script else {
+                return;
+            };
+            let lines: Vec<_> = errors
+                .0
+                .drain(..)
+                .filter_map(|key| {
+                    let text = script.lua().globals().get::<String>(key).ok()?;
+                    (!text.is_empty()).then(|| crate::ui_action::Shown::keyed(key, text))
+                })
+                .collect();
+            crate::ui_action::show_messages(script, &mut sink, "ui_stable", lines);
+        });
+    }
     vm.feed(|script, bar, fires| {
         let Some(script) = script else {
             return;
@@ -227,16 +246,6 @@ fn feed_stable(
         if closes.since_last(script, NpcWindow::Stable) {
             *last = None;
         }
-        // Refusals show, and speak, as their message rows say.
-        let lines: Vec<_> = errors
-            .0
-            .drain(..)
-            .filter_map(|key| {
-                let text = script.lua().globals().get::<String>(key).ok()?;
-                (!text.is_empty()).then(|| crate::ui_action::Shown::keyed(key, text))
-            })
-            .collect();
-        crate::ui_action::show_messages(script, &mut sink, "ui_stable", lines);
 
         // The next slot's price: `StableSlotPrices.dbc` row `purchased + 1`, 0 past the table.
         let next_slot_cost = prices
