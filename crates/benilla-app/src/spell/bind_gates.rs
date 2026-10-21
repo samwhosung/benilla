@@ -389,6 +389,8 @@ mod tests {
             let candidates = CastCandidates {
                 selection: Some(if selection_is_self { ME } else { THEM }),
                 caster: Some(ME),
+                auto_self: Some(ME),
+                auto_self_store: rel.self_store,
                 main_hand_item: None,
             };
             resolve_cast_target(Some(def), &candidates, auto_self_cast, &rel)

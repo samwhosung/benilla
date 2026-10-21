@@ -767,9 +767,20 @@ fn send_spell_cast(
         CastCommit::Item { on_object, .. } => on_object,
         CastCommit::Spell | CastCommit::Pet { .. } => bound_object,
     };
+    // The autoSelfCast fallback binds the active player whoever casts (`0x6e53e3`).
+    let (auto_self, auto_self_store) = if player_caster {
+        (ctx.self_guid, ctx.rel.self_store)
+    } else {
+        (
+            unit.active,
+            unit.active.and_then(|guid| objects.store(guid)),
+        )
+    };
     let candidates = cast_target::CastCandidates {
         selection: ctx.selection_guid,
         caster: ctx.self_guid,
+        auto_self,
+        auto_self_store,
         // The reference resolves the candidate through `0x468460(typemask 1)` (`6e53bc`): a guid
         // naming no live object binds nothing and falls to the cursor.
         main_hand_item: ctx

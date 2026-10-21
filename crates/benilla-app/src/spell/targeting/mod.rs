@@ -1177,6 +1177,8 @@ mod tests {
                 &CastCandidates {
                     selection: Some(guid),
                     caster: Some(ME),
+                    auto_self: Some(ME),
+                    auto_self_store: Some(&store),
                     main_hand_item: None,
                 },
                 false,
@@ -1425,6 +1427,8 @@ mod tests {
                             &CastCandidates {
                                 selection: Some(guid),
                                 caster: Some(ME),
+                                auto_self: Some(ME),
+                                auto_self_store: None,
                                 main_hand_item: None,
                             },
                             false,

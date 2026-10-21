@@ -102,13 +102,18 @@ pub(crate) enum CastWireTarget {
 }
 
 /// Where `ArmCast 0x6e5250` takes its candidate guid from (`0x6e5361`-`0x6e539f`). The main hand
-/// is taken instead of the selection, never before it; `caster` is the separate `autoSelfCast`
+/// is taken instead of the selection, never before it; `auto_self` is the separate `autoSelfCast`
 /// fallback (`0x6e53d7`).
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct CastCandidates {
+#[derive(Clone, Copy, Default)]
+pub(crate) struct CastCandidates<'a> {
     /// The current selection (the client's `0xb4e2d8`); benilla never passes an explicit guid.
     pub(crate) selection: Option<u64>,
+    /// The caster, which a gate tests the candidate against.
     pub(crate) caster: Option<u64>,
+    /// The `autoSelfCast` fallback's candidate, the active player whoever casts (`0x6e53e3`-
+    /// `0x6e5400`: `0x468550`, typemask `0x10`), and its store, `None` until it streams.
+    pub(crate) auto_self: Option<u64>,
+    pub(crate) auto_self_store: Option<&'a ObjectStore>,
     /// The equipped main hand's item guid (`[player+0x1d3c][15]`), only when it resolves to a
     /// streamed item object (`0x468460` at `0x6e53bc`).
     pub(crate) main_hand_item: Option<u64>,
@@ -604,7 +609,7 @@ pub(super) fn unit_binds(
 /// without one, and the server validates.
 pub(crate) fn resolve_cast_target(
     def: Option<&SpellDisplay>,
-    cand: &CastCandidates,
+    cand: &CastCandidates<'_>,
     auto_self_cast: bool,
     rel: &TargetRelations,
 ) -> CastWireTarget {
@@ -662,11 +667,12 @@ pub(crate) fn resolve_cast_target(
             return CastWireTarget::Unit(guid);
         }
     }
-    // The fallback: the active player (`0x6e53d7`), behind autoSelfCast, through the same gates.
+    // The fallback: the active player (`0x6e53d7`), behind autoSelfCast, through the same gates,
+    // which test it against the caster: a unit caster's binds the player, not itself.
     if auto_self_cast {
-        if let Some(guid) = cand.caster {
+        if let Some(guid) = cand.auto_self {
             let self_rel = TargetRelations {
-                target_store: rel.self_store,
+                target_store: cand.auto_self_store,
                 target_owner_store: None,
                 group: GroupInputs {
                     target_guid: Some(guid),
@@ -674,7 +680,7 @@ pub(crate) fn resolve_cast_target(
                 },
                 ..*rel
             };
-            if unit_binds(Some(def), word, true, &self_rel) {
+            if unit_binds(Some(def), word, cand.caster == Some(guid), &self_rel) {
                 return CastWireTarget::Unit(guid);
             }
         }
@@ -697,11 +703,13 @@ pub(crate) fn resolve_cast_target(
 mod tests {
     use super::*;
 
-    /// Selection and caster candidates, with an empty main hand.
-    fn cands(selection: Option<u64>, caster: Option<u64>) -> CastCandidates {
+    /// Selection and caster candidates, the caster the active player, with an empty main hand.
+    fn cands(selection: Option<u64>, caster: Option<u64>) -> CastCandidates<'static> {
         CastCandidates {
             selection,
             caster,
+            auto_self: caster,
+            auto_self_store: None,
             main_hand_item: None,
         }
     }
@@ -974,9 +982,8 @@ mod tests {
         assert!(rockbiter.targets_main_hand_item());
         const WEAPON: u64 = 0xdead_beef;
         let armed = CastCandidates {
-            selection: Some(42),
-            caster: Some(1),
             main_hand_item: Some(WEAPON),
+            ..cands(Some(42), Some(1))
         };
         assert_eq!(
             resolve_cast_target(Some(&rockbiter), &armed, true, &rel_none()),
