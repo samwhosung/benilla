@@ -7,11 +7,11 @@
 //! (`[0xb6e5f0]`) that is never reset, so the phase carries across matches and messages. Patterns
 //! apply in list order, not text order, every occurrence, and the length never changes.
 //!
-//! Only the chat chokepoint is wired. The reference masks twelve more sites, not built here: the
-//! mail subject, `GetInboxText`, `GetGuildInfo`, the two guild-record accessors, the roster MOTD
-//! and info, `GetGuildRosterInfo`, `GuildControlGetRankName`, item text, `SendChatMessage` and the
-//! guild-event MOTD; seven of them pass the `dl = 1` memo, which re-blits a cached string without
-//! advancing the index.
+//! The chat chokepoint, the mail list's subjects (`0x4ad5b2`) and `GetInboxText`'s letter
+//! (`0x4af203`) are wired. The reference masks ten more sites, not built here: `GetGuildInfo`, the
+//! two guild-record accessors, the roster MOTD and info, `GetGuildRosterInfo`,
+//! `GuildControlGetRankName`, item text, `SendChatMessage` and the guild-event MOTD; seven of them
+//! pass the `dl = 1` memo, which re-blits a cached string without advancing the index.
 //!
 //! The predicate has one call site, in the chat chokepoint; it never edits the text, and a hit
 //! drops the line silently.
