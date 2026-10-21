@@ -6,20 +6,17 @@
 //! A macro is a record with an id, kept in one list in the order it was made or loaded
 //! (`0xbdcc44`). Lua addresses it by position in a table of 36 ids (`0xbdcc60`): positions 1..=18
 //! the account macros and 19..=36 the character macros, each scope sorted by name
-//! ([`order`]) and rebuilt after every create, edit and delete (`0x4f0d30`), so the first character
+//! ([`crate::crt`]) and rebuilt after every create, edit and delete (`0x4f0d30`), so the first character
 //! macro is index 19 however few account macros there are. An action slot holds the id
 //! (`macroId | 0x40000000`, `0x4e62e0`), never the position. A macro's bound spell
 //! (`0x4e5a50`'s macro arm returns `[rec+0x564]`) is the app's to derive: it needs the spell catalog
 //! and the player's book.
-
-mod order;
 
 #[cfg(test)]
 mod lua_tests;
 
 use mlua::{Lua, MultiValue, Value};
 
-use self::order::{crt_qsort, name_cmp};
 use super::binding_abi;
 use super::cursor::{set_cursor, CursorMacro, CursorPayload};
 use super::Model;
@@ -199,11 +196,13 @@ impl MacroState {
         self.views().find(|v| v.id == id)
     }
 
-    /// A scope's ids by name: the table's half (`0x4f0d30`), `qsort` over the scope's records in
-    /// list order.
+    /// A scope's ids by name: the table's half (`0x4f0d30`), the CRT `qsort` (`0x73f727`) over the
+    /// scope's records in list order with the compare `0x4f0e10`, `SStrCmpI` on the names
+    /// (`0x64a4c0`). The sort is not stable, so records whose names match without case sit where
+    /// `qsort` leaves them.
     fn table(&self, per_character: bool) -> Vec<u32> {
         let mut records: Vec<&MacroView> = self.scope(per_character).collect();
-        crt_qsort(&mut records, |a, b| name_cmp(&a.name, &b.name));
+        crate::crt::qsort(&mut records, |a, b| crate::crt::str_cmp_i(&a.name, &b.name));
         records.into_iter().map(|v| v.id).collect()
     }
 
@@ -258,7 +257,7 @@ impl MacroState {
             return 0;
         }
         self.views()
-            .find(|v| name_cmp(name, &v.name).is_eq())
+            .find(|v| crate::crt::str_cmp_i(name, &v.name) == 0)
             .and_then(|v| self.index_of_id(v.id))
             .unwrap_or(0)
     }

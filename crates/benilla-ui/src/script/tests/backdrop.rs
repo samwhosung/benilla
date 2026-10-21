@@ -617,8 +617,8 @@ fn the_piece_quads_are_the_backdrop_geometry() {
                     let keys: Vec<u64> = (0..want.len() - first_edge)
                         .map(|k| u64::from(k >= 4))
                         .collect();
-                    let (mut perm, mut stack) = (Vec::new(), Vec::new());
-                    crate::script::layer_batch::crt_qsort_into(&keys, &mut perm, &mut stack);
+                    let mut perm: Vec<usize> = (0..keys.len()).collect();
+                    crate::crt::qsort(&mut perm, |&a, &b| keys[a].cmp(&keys[b]) as i32);
                     let edges: Vec<_> = perm.iter().map(|&k| want[first_edge + k]).collect();
                     want.splice(first_edge.., edges);
                 }

@@ -9,11 +9,21 @@
 /// on a stack walked last in, first out, and goes on with the smaller (`0x73f812`-`0x73f871`).
 /// It never asks the comparator for a total order, so one that ties a row with every other sorts
 /// as the reference's does.
-pub fn qsort<T>(items: &mut [T], mut cmp: impl FnMut(&T, &T) -> i32) {
+pub fn qsort<T>(items: &mut [T], cmp: impl FnMut(&T, &T) -> i32) {
+    qsort_with_stack(items, &mut Vec::new(), cmp);
+}
+
+/// [`qsort`] on the caller's stack of pending ranges, emptied on entry and kept for the next call:
+/// a sort that runs every frame allocates nothing once the stack has grown to its depth.
+pub fn qsort_with_stack<T>(
+    items: &mut [T],
+    pending: &mut Vec<(usize, usize)>,
+    mut cmp: impl FnMut(&T, &T) -> i32,
+) {
+    pending.clear();
     if items.len() < 2 {
         return;
     }
-    let mut pending: Vec<(usize, usize)> = Vec::new();
     let (mut lo, mut hi) = (0usize, items.len() - 1);
     loop {
         let size = hi - lo + 1;
@@ -89,13 +99,12 @@ fn shortsort<T>(items: &mut [T], lo: usize, mut hi: usize, cmp: &mut impl FnMut(
 /// `Z` folded to lower case and the first pair that differs deciding -1 or 1 by its unsigned
 /// bytes; a NUL ends either string, and a string that ends first sorts first.
 pub fn str_cmp_i(a: &str, b: &str) -> i32 {
-    let fold = |s: &str| {
+    fn fold(s: &str) -> impl Iterator<Item = u8> + '_ {
         s.bytes()
             .take_while(|&c| c != 0)
             .map(|c| c.to_ascii_lowercase())
-            .collect::<Vec<u8>>()
-    };
-    match fold(a).cmp(&fold(b)) {
+    }
+    match fold(a).cmp(fold(b)) {
         std::cmp::Ordering::Less => -1,
         std::cmp::Ordering::Equal => 0,
         std::cmp::Ordering::Greater => 1,
@@ -156,6 +165,61 @@ mod tests {
             _ => 0,
         });
         assert_eq!(v.len(), 30);
+    }
+
+    /// The permutation `qsort` leaves keyed rows in: `perm[k]` is the original index now at `k`.
+    fn perm(keys: &[u64]) -> Vec<usize> {
+        let mut v: Vec<usize> = (0..keys.len()).collect();
+        qsort(&mut v, |&a, &b| keys[a].cmp(&keys[b]) as i32);
+        v
+    }
+
+    /// The selection sort keeps the first-found largest and swaps it to the end, so ties come out
+    /// rotated, not kept: two reverse, three go B C A.
+    #[test]
+    fn short_runs_scramble_ties_as_the_crt_does() {
+        assert_eq!(perm(&[7, 7]), vec![1, 0]);
+        assert_eq!(perm(&[7, 7, 7]), vec![1, 2, 0]);
+        assert_eq!(perm(&[1, 0]), vec![1, 0]);
+        assert_eq!(perm(&[0, 1]), vec![0, 1]);
+        // A distinct key splits the tie: [5a, 1, 5b] → max 5a to the end, then 1 and 5b.
+        assert_eq!(perm(&[5, 1, 5]), vec![1, 2, 0]);
+    }
+
+    /// Past 8 the run partitions: the middle element goes to the front and is the pivot, and with
+    /// every key equal both scans run off their ends, so it only swaps back to the middle.
+    #[test]
+    fn a_long_tie_moves_only_its_middle_to_the_front() {
+        assert_eq!(perm(&[3; 9]), vec![4, 1, 2, 3, 0, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn the_permutation_sorts_its_keys() {
+        let keys: Vec<u64> = (0..40u64).map(|i| (i * 7919) % 13).collect();
+        let p = perm(&keys);
+        let mut seen = p.clone();
+        seen.sort_unstable();
+        assert_eq!(seen, (0..40).collect::<Vec<_>>());
+        assert!(p.windows(2).all(|w| keys[w[0]] <= keys[w[1]]));
+    }
+
+    /// The caller's stack is emptied on entry, and a sort that has grown it allocates no more:
+    /// the same keys leave the order [`qsort`] gives, and the capacity holds across calls.
+    #[test]
+    fn the_callers_stack_is_cleared_and_reused() {
+        let keys: Vec<u64> = (0..200u64).map(|i| (i * 7919) % 17).collect();
+        let want = perm(&keys);
+        let mut stack = vec![(0, 99)];
+        let mut sort = |stack: &mut Vec<(usize, usize)>| {
+            let mut v: Vec<usize> = (0..keys.len()).collect();
+            qsort_with_stack(&mut v, stack, |&a, &b| keys[a].cmp(&keys[b]) as i32);
+            v
+        };
+        assert_eq!(sort(&mut stack), want);
+        let grown = stack.capacity();
+        assert!(grown > 0, "a partitioned sort used the caller's stack");
+        assert_eq!(sort(&mut stack), want);
+        assert_eq!(stack.capacity(), grown);
     }
 
     #[test]
