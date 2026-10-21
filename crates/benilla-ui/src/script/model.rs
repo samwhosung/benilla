@@ -763,7 +763,7 @@ pub(crate) struct Model {
     pub(crate) container_cooldowns: HashMap<(i64, u32), (f64, f64, bool)>,
     /// The same triple for a worn item, by live-API slot id (1..=19); the cooldown query is keyed
     /// by the item's entry (`0x6e2ed0`), so a worn trinket answers as a bagged one does. Kept off
-    /// the doll snapshot, whose change fires `UNIT_INVENTORY_CHANGED`.
+    /// the doll snapshot, which is pushed on change.
     pub(crate) worn_cooldowns: HashMap<usize, (f64, f64, bool)>,
     /// The entries whose record `GetContainerItemCooldown`, `SetBagItem` or `SetInventoryItem`
     /// found missing, which their query asks with the callback `0x6e2f70`

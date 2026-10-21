@@ -90,8 +90,8 @@ impl super::UiScript {
         self.model_ref().unit_guids.has_field_watchers(guid)
     }
 
-    /// Push (or clear, with `None`) the inspected unit's equipment. It fires nothing: the app fires
-    /// `UNIT_INVENTORY_CHANGED` for the token, which the stock slot buttons listen for.
+    /// Push (or clear, with `None`) the inspected unit's equipment. It fires nothing: the
+    /// `UNIT_INVENTORY_CHANGED` the stock slot buttons listen for is the app's.
     pub fn set_inspect(&mut self, view: Option<InspectView>) {
         self.model_mut().inspect = view;
     }

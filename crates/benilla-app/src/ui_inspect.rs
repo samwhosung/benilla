@@ -5,9 +5,9 @@
 //!
 //! `NotifyInspect(unit)` sends `CMSG_INSPECT`, which also sets the server-side selection, and
 //! latches the token; the window paints without waiting for `SMSG_INSPECT`, a bare guid echo.
-//! `UNIT_INVENTORY_CHANGED` fires for the inspected token on change, a first resolve included
-//! (`InspectPaperDollFrame.lua:2-5`, `82`). Its `UNIT_LEVEL` is the unit-field bridge's
-//! ([`crate::field_watch`]), fired per token on a values block that moves the level.
+//! `UNIT_INVENTORY_CHANGED` fires for the inspected token when a new inspectee's view first
+//! lands (`InspectPaperDollFrame.lua:2-5`, `82`); a change of its gear, as its `UNIT_LEVEL`, is
+//! the unit-field bridge's ([`crate::field_watch`]), fired per token on a values block.
 
 use bevy::prelude::*;
 
@@ -196,13 +196,20 @@ fn feed_inspect(
         };
         if memo.last.as_ref() != Some(&view) {
             script.set_inspect(Some(view.clone()));
+            let inspectee = |v: &InspectView| (v.unit.clone(), v.guid);
+            let fresh = memo.last.as_ref().map(inspectee) != Some(inspectee(&view));
             memo.last = Some(view);
-            // `InspectPaperDollItemSlotButton_OnEvent` filters it on `arg1` being the inspected
-            // unit.
-            script.fire_event(
-                "UNIT_INVENTORY_CHANGED",
-                vec![ScriptValue::Str(token.clone())],
-            );
+            // The show paints the slots inside the call that latches the token
+            // (`InspectPaperDollFrame.lua:57-79`), a frame ahead of this view, so a new
+            // inspectee's first view signals its token, which the slot buttons filter on `arg1`.
+            // A change of its gear is the visible-item bridge's (`0x51bd70`), and a record
+            // landing repaints nothing (`0x5ed880`).
+            if fresh {
+                script.fire_event(
+                    "UNIT_INVENTORY_CHANGED",
+                    vec![ScriptValue::Str(token.clone())],
+                );
+            }
         }
     })
 }

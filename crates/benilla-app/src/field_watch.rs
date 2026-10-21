@@ -17,8 +17,8 @@
 //! The watches here: the unit-field bridge `0x51bbb0` on every unit with token flags; the unit
 //! type watchers `0x6041f0` and the player type watchers `0x5e2510` whose callbacks signal; the
 //! active player's `0x5de4b0`, rest-state and charmed-by watches registered in `0x5dd8a0`, its
-//! skill watches `0x5de180` and `0x5de470`, and the weapon arms of the visible-item watch
-//! `0x5e2810`.
+//! skill watches `0x5de180` and `0x5de470`, its ammunition watch `0x4c70b0`, and the weapon arms
+//! of the visible-item watch `0x5e2810`. The item watchers' signals are [`crate::item_watch`]'s.
 
 use benilla_protocol::messages::ObjectType;
 use benilla_protocol::{ObjectFields, OwnerFallback};
@@ -36,8 +36,10 @@ pub(crate) enum FieldNotice {
     /// Any other callback's own `0x515e50(guid, id)`: a type watcher's, a packet handler's or a
     /// cache answer's. It reaches every token naming `guid`, with no watcher of the unit's own.
     Signal { guid: u64, id: u16 },
-    /// `0x5de4b0` on the active player: the event its registration pushes as the argument
-    /// (`0x5de4b3`), with `"player"` (`0x5de4c1`).
+    /// A callback's `FrameScript_SignalEvent2(id, "%s", "player")`: `0x5de4b0` on the active
+    /// player, the event its registration pushes as the argument (`0x5de4b3`, `0x5de4c1`); the
+    /// ammunition watch's, the item slot path's and the ammo getters' record callback's
+    /// `UNIT_INVENTORY_CHANGED` (`0x4c7110`, `0x4c72e0`, `0x4c8509`).
     Player { id: u16 },
     /// `0x5de4e0` on `PLAYER_BYTES_2` byte 3: `UPDATE_EXHAUSTION` bare (`0x5de4e8`), then the
     /// rest-state line for the new state.
@@ -158,12 +160,17 @@ pub(crate) fn bridge_len(id: u16) -> u16 {
     }
 }
 
-/// The bridge's player-block watch, registered on a unit whose type mask has the player bit
-/// (`0x51bc2b`-`0x51bc31`): the quest log, 0xf0 bytes at the player section's `+0x28` (`0x51bc63`),
-/// signalling `0x20a` through `0x51bd90` (`0x51bd93`). Its twin over the visible items, `0x51bd70`
-/// (`0x51bc3c`) with `0xba` (`0x51bd73`), is not run here: `UNIT_INVENTORY_CHANGED` keeps its own
-/// producers.
+/// The bridge's two player-block watches, registered on a unit whose type mask has the player
+/// bit (`0x51bc2b`-`0x51bc31`) in this order: the 19 visible items, 0x390 bytes at the player
+/// section's `+0x118` (`0x51bc3c`), signalling `UNIT_INVENTORY_CHANGED` through `0x51bd70`
+/// (`0x51bd73`); the quest log, 0xf0 bytes at `+0x28` (`0x51bc63`), signalling `0x20a` through
+/// `0x51bd90` (`0x51bd93`).
+const VISIBLE_ITEMS_WATCH: (u16, u16) = (0x118, 0x390);
 const QUEST_LOG_WATCH: (u16, u16) = (0x28, 0xf0);
+
+/// The active player's ammunition watch `0x4c70b0`, `PLAYER_AMMO_ID` at the player section's
+/// `+0x102c`, registered at world entry (`0x4c6fea`, from `0x49097e`).
+const AMMO_ID: (u16, u16) = (0x102c, 4);
 
 /// `0x5de4b0`'s registrations in `0x5dd8a0`, in registration order: the byte offset in the player
 /// section, the length, and the event id pushed as the argument.
@@ -588,7 +595,11 @@ pub(crate) fn values(
         if let Some(at) = at(PLAYER_SECTION, DUEL_TEAM, List::Type) {
             pass.reaction(at, guid, fields, around);
         }
-        // The bridge's player-block watch.
+        // The bridge's player-block watches.
+        if let Some(at) = at(PLAYER_SECTION, VISIBLE_ITEMS_WATCH, List::Object) {
+            let id = id::UNIT_INVENTORY_CHANGED;
+            pass.push(at, FieldNotice::Unit { guid, id });
+        }
         if let Some(at) = at(PLAYER_SECTION, QUEST_LOG_WATCH, List::Object) {
             let id = id::UNIT_QUEST_LOG_CHANGED;
             pass.push(at, FieldNotice::Unit { guid, id });
@@ -622,6 +633,11 @@ pub(crate) fn values(
             if let Some(at) = at(PLAYER_SECTION, (offset, len), List::Object) {
                 pass.push(at, FieldNotice::Player { id });
             }
+        }
+        // `0x4c70b0` sets the ammunition model (`0x4c70fc`, not built) and signals (`0x4c7110`).
+        if let Some(at) = at(PLAYER_SECTION, AMMO_ID, List::Object) {
+            let id = id::UNIT_INVENTORY_CHANGED;
+            pass.push(at, FieldNotice::Player { id });
         }
         for k in 0..SKILLS {
             let value = SKILL_VALUE + SKILL_STRIDE * k;

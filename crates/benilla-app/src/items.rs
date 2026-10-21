@@ -103,7 +103,7 @@ impl Countdowns {
     }
 
     /// [`Self::enchant_remaining_ms`] floored to the second, for the snapshot feeds: a per-ms read
-    /// would fire `UNIT_INVENTORY_CHANGED` every frame while a timer runs.
+    /// would push a new snapshot every frame while a timer runs.
     pub(crate) fn enchant_remaining_display_ms(&self, slot: u32) -> Option<u64> {
         self.enchant_remaining_ms(slot).map(|ms| ms - ms % 1000)
     }

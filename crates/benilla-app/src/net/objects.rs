@@ -146,15 +146,21 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             // A negative answer releases the waiters with nothing run (`0x5d96bb`).
             let waiters = sc.items.take_entry_waiters(entry);
             let trade_waiters = sc.items.take_trade_waiters(entry);
+            let ammo_waiters = sc.items.take_ammo_waiters(entry);
             if landed {
-                let notices = {
+                let (notices, signals) = {
                     let (index, stores) = (&sc.index, &sc.stores);
-                    let held = index
-                        .0
-                        .iter()
-                        .filter_map(|(&g, &e)| stores.get(e).ok().map(|s| (g, &s.0)));
-                    item_watch(index, stores, &sc.self_guid, &sc.items)
-                        .record_landed(entry, held, &waiters)
+                    let held = || {
+                        index
+                            .0
+                            .iter()
+                            .filter_map(|(&g, &e)| stores.get(e).ok().map(|s| (g, &s.0)))
+                    };
+                    let watch = item_watch(index, stores, &sc.self_guid, &sc.items);
+                    (
+                        watch.record_landed(entry, held(), &waiters),
+                        watch.landed_signals(entry, held(), &waiters),
+                    )
                 };
                 for notice in &notices {
                     if let crate::item_watch::ItemNotice::Record { guid, .. } = *notice {
@@ -162,12 +168,20 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
                     }
                 }
                 sc.item_notices.write_batch(notices);
+                sc.field_notices.write_batch(signals);
             }
-            // The trade getters' callbacks run for a ready record only (`0x4c0343`).
+            // The trade getters' and the ammo getters' callbacks run for a ready record only
+            // (`0x4c0343`, `0x4c84f6`).
             if answered {
                 sc.item_notices.write_batch(std::iter::repeat_n(
                     crate::item_watch::ItemNotice::TradeRecord { entry },
                     trade_waiters,
+                ));
+                sc.field_notices.write_batch(std::iter::repeat_n(
+                    crate::field_watch::FieldNotice::Player {
+                        id: crate::field_watch::id::UNIT_INVENTORY_CHANGED,
+                    },
+                    ammo_waiters,
                 ));
             }
         }

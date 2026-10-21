@@ -338,9 +338,10 @@ impl super::UiScript {
         self.model_mut().player_combat_stats = stats;
     }
 
-    /// Drain the ammunition entries the slot getters missed ([`Model::ammo_record_asks`]).
+    /// Drain the ammunition entries the ammo slot's texture and quality getters looked up and
+    /// missed, one per call, each to be registered with the callback `0x4c84f0`.
     pub fn take_ammo_record_asks(&mut self) -> Vec<u32> {
-        Vec::new()
+        std::mem::take(&mut self.model_mut().ammo_record_asks)
     }
 
     /// Push the doll snapshot, recompute the 12 alert statuses and fire `UPDATE_INVENTORY_ALERTS`.
@@ -487,6 +488,19 @@ fn player_inv_slot(lua: &Lua, token: &Option<String>, slot: i64) -> Option<InvSl
     let idx = usize::try_from(slot).ok()?;
     let model = lua.app_data_ref::<Model>().expect("model app_data");
     model.inv_slot(token, idx)
+}
+
+/// The ammo slot's record lookup with the callback `0x4c84f0` (`0x4c83bc`, `0x4c89cf`): a view of
+/// the active player's ammunition whose record the cache lacks registers one per call.
+fn ask_ammo_record(lua: &Lua, token: &Option<String>, slot: i64, view: Option<&InvSlotView>) {
+    let ammo = token
+        .as_deref()
+        .is_some_and(|t| t.eq_ignore_ascii_case("player"))
+        && slot == 0;
+    if let Some(v) = view.filter(|v| ammo && v.item_id != 0 && v.name.is_none()) {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        model.ammo_record_asks.push(v.item_id);
+    }
 }
 
 /// The bank's live-API ids, `BankButtonIDToInvSlotID`'s two bands: 24 vault slots, 6 bag slots.
@@ -1000,7 +1014,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 "Usage: GetInventoryItemTexture(unit, slot)",
                 "Invalid inventory slot in GetInventoryItemTexture",
             )?;
-            match player_inv_slot(lua, &token, slot).and_then(|v| v.icon) {
+            let view = player_inv_slot(lua, &token, slot);
+            // Only while the player carries some (`0x4c83a0`, `CountInventoryItemsByEntry`).
+            ask_ammo_record(lua, &token, slot, view.as_ref().filter(|v| v.count > 0));
+            match view.and_then(|v| v.icon) {
                 Some(icon) => Ok(Value::String(lua.create_string(&icon)?)),
                 None => Ok(Value::Nil),
             }
@@ -1072,7 +1089,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 "Usage: GetInventoryItemQuality(unit, slot)",
                 "Invalid inventory slot in GetInventoryItemQuality",
             )?;
-            match player_inv_slot(lua, &token, slot) {
+            let view = player_inv_slot(lua, &token, slot);
+            ask_ammo_record(lua, &token, slot, view.as_ref());
+            match view {
                 Some(v) if v.item_id != 0 => Ok(Value::Integer(i64::from(v.quality))),
                 _ => Ok(Value::Nil),
             }

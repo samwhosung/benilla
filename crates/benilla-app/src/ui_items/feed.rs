@@ -1013,7 +1013,7 @@ fn use_cooldown(
 /// The item query's answer for each worn item by live-API slot id (the descriptor slot plus one),
 /// for the tooltip's ITEM_COOLDOWN_TIME line and `GetInventoryItemCooldown`; a slot the query
 /// answers zeros for has no entry ([`use_cooldown`]). The doll snapshot does not carry it: a cooldown moves no
-/// inventory slot, and that snapshot's change fires `UNIT_INVENTORY_CHANGED`.
+/// inventory slot, and that snapshot is pushed on change.
 fn worn_cooldowns(
     store: &ObjectStore,
     objects: &Objects,

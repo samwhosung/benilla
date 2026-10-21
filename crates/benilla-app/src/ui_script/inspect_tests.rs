@@ -371,7 +371,7 @@ fn shipped_inspect_frame_drives_end_to_end() {
         "an empty slot falls back to its own paper-doll art"
     );
 
-    // The feed pushes a changed view and fires the event the slot buttons filter on `arg1`.
+    // A changed view, and the visible-item bridge's event the slot buttons filter on `arg1`.
     let mut swapped = inspect_view("target");
     swapped.slots[1] = Some(foreign_slot(
         7366,

@@ -260,7 +260,7 @@ fn signal_unit(script: &mut UiScript, guid: u64, id: u16) {
     }
 }
 
-/// `0x5de4b0`: the event its registration names, `arg1 = "player"`.
+/// A [`FieldNotice::Player`]: the event its id names, `arg1 = "player"`.
 fn fire_player(script: &mut UiScript, id: u16) {
     let Some(event) = player_event(id) else {
         return;
@@ -305,6 +305,7 @@ fn unit_event(id: u16) -> Option<&'static str> {
         159..=161 => "UNIT_ATTACK_POWER",
         162..=164 => "UNIT_RANGED_ATTACK_POWER",
         183 => "UNIT_NAME_UPDATE",
+        186 => "UNIT_INVENTORY_CHANGED",
         187 => "UNIT_CLASSIFICATION_CHANGED",
         345 => "PLAYER_GUILD_UPDATE",
         407 => "PLAYER_FLAGS_CHANGED",
@@ -330,10 +331,12 @@ fn global_event(id: u16) -> Option<&'static str> {
     })
 }
 
-/// The event-table name of an id `0x5dd8a0` registers `0x5de4b0` with.
+/// The event-table name of an id `0x5dd8a0` registers `0x5de4b0` with, or another callback
+/// signals with `"player"` ([`FieldNotice::Player`]).
 fn player_event(id: u16) -> Option<&'static str> {
     Some(match id {
         149 => "UNIT_RESISTANCES",
+        186 => "UNIT_INVENTORY_CHANGED",
         189 => "PLAYER_XP_UPDATE",
         201 => "PLAYER_DAMAGE_DONE_MODS",
         372 => "UPDATE_FACTION",

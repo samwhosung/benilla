@@ -818,12 +818,26 @@ pub(crate) fn feed_char(
     names: Res<crate::names::NameCache>,
     // `ItemSubClass.dbc`, for `GetInventoryItemCount`'s container count bit.
     sub_classes: Option<Res<crate::ui_items::ItemSubClasses>>,
+    // The ammo getters' record callback, fired with the field events after this push.
+    mut field_notices: MessageWriter<crate::field_watch::FieldNotice>,
 ) {
     hosted_vm.run(|script| {
         let Some(script) = script else {
             return;
         };
-        // Per VM: after a `/reload` both snapshots re-push, and `UNIT_INVENTORY_CHANGED` re-fires.
+        // The ammo slot getters' lookups with the callback `0x4c84f0` (`0x4c83bc`, `0x4c89cf`),
+        // registered after the script's tick: a miss asks and waits for the answer; a record that
+        // landed since the call runs the callback now, `UNIT_INVENTORY_CHANGED` (`0x4c8509`).
+        for entry in script.take_ammo_record_asks() {
+            if items.template(entry, 0, Ask::Event(&commands)).is_some() {
+                field_notices.write(crate::field_watch::FieldNotice::Player {
+                    id: crate::field_watch::id::UNIT_INVENTORY_CHANGED,
+                });
+            } else {
+                items.wait_for_ammo_record(entry);
+            }
+        }
+        // Per VM: after a `/reload` both snapshots re-push.
         let (memo, vm_reset) = feed.vm.get_reset(script);
 
         let Some(store) = inv.self_store.iter().next() else {
@@ -918,7 +932,9 @@ pub(crate) fn feed_char(
             &names,
             sub_classes.as_deref(),
         );
-        // Both bands push under one `UNIT_INVENTORY_CHANGED`: one wire update, one event.
+        // The doll's `UNIT_INVENTORY_CHANGED` is its producers' alone, the visible-item bridge, the
+        // ammunition watch and the item paths ([`crate::field_watch`], [`crate::item_watch`]),
+        // fired after this push; a view change raises none, as a repair's durability (`0x5d97c0`).
         // `PLAYERBANKSLOTS_CHANGED`'s two producers, planned off the old memo: `false` is the
         // descriptor watcher (`0x5ddd6e`: a bag arrived, left or was swapped), `true` the
         // item-object path (`0x4c728d`: the same bag's own fields changed).
@@ -940,14 +956,10 @@ pub(crate) fn feed_char(
             gate.audit("feed_char", "the inventory snapshot");
             script.set_inventory_slots(inv.clone());
             script.set_bank_bag_slots(bank_bags.clone());
-            script.fire_event(
-                "UNIT_INVENTORY_CHANGED",
-                vec![ScriptValue::Str("player".to_string())],
-            );
-            // The bank bag buttons repaint only on this and `BANKFRAME_OPENED`
-            // (`BankFrame.lua:206-208`). One event per changed slot: the descriptor watcher signals
-            // through `0x703e50` with no arguments, the item path through `SignalEvent2` with
-            // `"player"`.
+            // The bank bag buttons repaint only on `PLAYERBANKSLOTS_CHANGED` and
+            // `BANKFRAME_OPENED` (`BankFrame.lua:206-208`). One event per changed slot: the
+            // descriptor watcher signals through `0x703e50` with no arguments, the item path
+            // through `SignalEvent2` with `"player"`.
             memo.last_inv = Some(inv);
             memo.last_bank_bags = Some(bank_bags);
         }

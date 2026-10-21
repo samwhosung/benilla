@@ -260,7 +260,8 @@ fn shipped_character_frame_drives_end_to_end() {
         "N/A"
     );
 
-    // The app follows a snapshot push with this event; the slots repaint on the event.
+    // The equipment's producers fire this after the push ([`crate::field_watch`],
+    // [`crate::item_watch`]); the slots repaint on the event.
     s.fire_event(
         "UNIT_INVENTORY_CHANGED",
         vec![ScriptValue::Str("player".into())],

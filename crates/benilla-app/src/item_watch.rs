@@ -401,25 +401,105 @@ impl<'a, F> Watch<'a, F>
 where
     F: Fn(u64) -> Option<&'a ObjectFields>,
 {
-    /// The unit signals a notice's handler ends in.
-    pub(crate) fn signals(&self, _notice: &ItemNotice) -> Vec<FieldNotice> {
-        Vec::new()
+    /// The unit signals a notice's handler ends in: `NotifyItemSlotChanged` ([`Self::slot_changed`])
+    /// closes the destroy (`0x5d87c1`), the stack count's (`0x5d950e`), the entry's once its record
+    /// is cached (`0x5d9694`) or answered (`0x5d96d5`), and the enchantment's (`0x5d9b2a`). The
+    /// record set-up's signal is [`Self::created_signal`]'s and [`Self::landed_signals`]'.
+    pub(crate) fn signals(&self, notice: &ItemNotice) -> Vec<FieldNotice> {
+        match *notice {
+            ItemNotice::Destroyed { guid, .. }
+            | ItemNotice::StackCount { guid, .. }
+            | ItemNotice::EntryRecord { guid, .. }
+            | ItemNotice::Enchantment { guid, .. }
+            | ItemNotice::Entry {
+                guid,
+                new_cached: true,
+                ..
+            } => self.slot_changed(guid),
+            _ => Vec::new(),
+        }
     }
 
-    /// The record set-up's unit signal at a first create.
-    pub(crate) fn created_signal(&self, _fields: &ObjectFields) -> Option<FieldNotice> {
-        None
+    /// `NotifyItemSlotChanged` (`0x4c7180`) on the item `guid`: its flat seat in the active
+    /// player's array, else its bag's (`ITEM_FIELD_CONTAINED`, searched unless it is the player,
+    /// `0x4c721c`). A seat below 23 signals `UNIT_INVENTORY_CHANGED` with `"player"` (`0x4c7265`,
+    /// `0x4c72e0`) and ends; anything else signals it for a live item whose entry is the active
+    /// player's `PLAYER_AMMO_ID` (`0x4c7298`, `0x4c72cd`). The bank band's
+    /// `PLAYERBANKSLOTS_CHANGED` (`0x4c728d`) is the doll feed's (`crate::ui_char`).
+    fn slot_changed(&self, guid: u64) -> Vec<FieldNotice> {
+        let signal = FieldNotice::Player {
+            id: id::UNIT_INVENTORY_CHANGED,
+        };
+        // No active player, nothing (`0x4c71ab`).
+        let Some((me_guid, me)) = self.me.and_then(|g| Some((g, (self.lookup)(g)?))) else {
+            return Vec::new();
+        };
+        let item = (self.lookup)(guid).filter(|f| f.is_item());
+        let seat_of = |g: u64| (0..113u8).find(|&n| seat_guid(me, n) == g);
+        let seat = seat_of(guid).or_else(|| {
+            let bag = item?.item_contained().unwrap_or(0);
+            (bag != me_guid).then(|| seat_of(bag)).flatten()
+        });
+        if seat.is_some_and(|n| n < 23) {
+            return vec![signal];
+        }
+        let ammo = me.player_ammo_id().unwrap_or(0);
+        let entry = item.map(|f| f.object_entry().unwrap_or(0));
+        if entry == Some(ammo) {
+            vec![signal]
+        } else {
+            Vec::new()
+        }
     }
 
-    /// The unit signals of a record answer's callbacks.
+    /// The record set-up's last act (`0x5d85ed`-`0x5d8606`), at a first create whose record is
+    /// cached (`0x5d8300`): `UNIT_INVENTORY_CHANGED` for each token of the item's owner,
+    /// whoever's the item, while in the world (`0x5d8504`).
+    pub(crate) fn created_signal(&self, fields: &ObjectFields) -> Option<FieldNotice> {
+        let entry = fields.object_entry()?;
+        (self.in_world() && self.items.template(entry, 0, Ask::Read).is_some())
+            .then(|| owner_signal(fields))
+            .flatten()
+    }
+
+    /// A record answer's unit signals, in its callbacks' order ([`Self::record_landed`]): the
+    /// set-up's for each item it finishes, whoever's, in guid order (`0x5d8390`), while in the
+    /// world; then each entry change's slot run (`0x5d96d5`), ungated.
     pub(crate) fn landed_signals<'b>(
         &self,
-        _entry: u32,
-        _held: impl IntoIterator<Item = (u64, &'b ObjectFields)>,
-        _entry_waiters: &[u64],
+        entry: u32,
+        held: impl IntoIterator<Item = (u64, &'b ObjectFields)>,
+        entry_waiters: &[u64],
     ) -> Vec<FieldNotice> {
-        Vec::new()
+        let mut finished: Vec<(u64, &ObjectFields)> = if self.in_world() {
+            held.into_iter()
+                .filter(|(g, f)| {
+                    f.is_item() && f.object_entry() == Some(entry) && !entry_waiters.contains(g)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        finished.sort_unstable_by_key(|&(g, _)| g);
+        finished
+            .into_iter()
+            .filter_map(|(_, f)| owner_signal(f))
+            .chain(
+                entry_waiters
+                    .iter()
+                    .flat_map(|&guid| self.slot_changed(guid)),
+            )
+            .collect()
     }
+}
+
+/// `0x515e50(&owner, 0xba)` (`0x5d8606`): the event for each token naming `ITEM_FIELD_OWNER`.
+fn owner_signal(fields: &ObjectFields) -> Option<FieldNotice> {
+    let guid = fields.item_owner().filter(|&g| g != 0)?;
+    Some(FieldNotice::Signal {
+        guid,
+        id: id::UNIT_INVENTORY_CHANGED,
+    })
 }
 
 fn guid_of(lo: u32, hi: u32) -> u64 {
