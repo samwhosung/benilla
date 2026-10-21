@@ -203,6 +203,12 @@ fn solo_target_right_click_invites_a_player() {
         }),
     );
     ally(&mut s);
+    // The resolver's inputs, which `InviteToParty` reads the token through (`0x48a3ed`).
+    s.set_unit_guids(&benilla_ui::script::UnitGuids {
+        player: 1,
+        target: 2,
+        ..Default::default()
+    });
     s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
     s.resolve();
     assert!(s.errors().is_empty(), "load errors: {:?}", s.errors());
@@ -250,7 +256,7 @@ fn solo_target_right_click_invites_a_player() {
         "Duel"
     );
 
-    // Click Invite → UnitPopup_OnClick → InviteToParty("target") → InviteUnit.
+    // Click Invite → UnitPopup_OnClick → InviteToParty("target") → the target's guid.
     let (ix, iy) = s
         .eval::<(f64, f64)>("return DropDownList1Button4:GetCenter()")
         .unwrap();
@@ -258,8 +264,8 @@ fn solo_target_right_click_invites_a_player() {
     s.mouse_button(ix as f32, iy as f32, "LeftButton", false);
     assert_eq!(
         s.take_party_requests(),
-        vec![PartyRequest::InviteUnit("target".into())],
-        "Invite on a player target queues an invite by unit"
+        vec![PartyRequest::InviteGuid(2)],
+        "Invite on a player target queues an invite by its guid"
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }

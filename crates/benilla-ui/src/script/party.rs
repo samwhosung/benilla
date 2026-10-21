@@ -117,8 +117,9 @@ pub enum PartyRequest {
     Leave,
     /// `InviteByName(name)`.
     InviteName(String),
-    /// `InviteToParty(unit)`, by unit token; the app resolves it to a name.
-    InviteUnit(String),
+    /// `InviteToParty(unit)` after the resolver (`0x48a3ed`): the guid `InviteByGuid 0x5e9440`
+    /// takes.
+    InviteGuid(u64),
     /// `UninviteFromParty(unit)` after the resolver (`0x48a54d`): the guid the kick sender
     /// `0x5e9510` takes.
     UninviteGuid(u64),
@@ -134,9 +135,9 @@ pub enum PartyRequest {
     },
     /// `SetLootThreshold(n)`.
     LootThreshold(u32),
-    /// `SetRaidTarget(unit, index)`: icon 1 to 8, or 0 to clear; the app resolves the token to a
-    /// guid for `MSG_RAID_TARGET_UPDATE`.
-    SetRaidTarget { unit: String, index: u8 },
+    /// `SetRaidTarget(unit, index)` after the resolver (`0x4bbeff`): the nonzero guid and the low
+    /// byte of the index (`0x4bbf23`), whose slot and mark the app settles.
+    SetRaidTarget { guid: u64, index: u8 },
     // ── The raid-management verbs ───────────────────────────────────────────────────────────
     /// `ConvertToRaid()`, leader only (`CMSG_GROUP_RAID_CONVERT`).
     ConvertToRaid,
@@ -559,21 +560,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    g.set(
-        "InviteToParty",
-        lua.create_function(|lua, unit: String| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.party_requests.push(PartyRequest::InviteUnit(unit));
-            Ok(())
-        })?,
-    )?;
-    // UninviteFromParty("unit") (`0x48a510`) and PromoteToPartyLeader("unit") (`0x48a7c0`): a
-    // string or a number (`0x6f3510`) else the usage line (`0x84277c`, `0x8427e0`), then the token's
-    // guid through `GetGUIDFromName` (`0x48a54d`, `0x48a7fd`), which raises for an unknown token;
-    // with our player object (`0x48a538`) and a nonzero guid, the kick sender `0x5e9510` or the
-    // leader sender `0x5e9640`. No party test: any unit the token names.
+    // InviteToParty("unit") (`0x48a3b0`), UninviteFromParty("unit") (`0x48a510`) and
+    // PromoteToPartyLeader("unit") (`0x48a7c0`): a string or a number (`0x6f3510`) else the usage
+    // line (`0x842740`, `0x84277c`, `0x8427e0`), then the token's guid through `GetGUIDFromName`
+    // (`0x48a3ed`, `0x48a54d`, `0x48a7fd`), which raises for an unknown token; with our player
+    // object (`0x48a3f2`, `0x48a538`) and a nonzero guid, the invite sender `0x5e9440`, the kick
+    // sender `0x5e9510` or the leader sender `0x5e9640`. No party test: any unit the token names.
     type GuidRequest = fn(u64) -> PartyRequest;
-    let token_verbs: [(&str, &'static str, GuidRequest); 2] = [
+    let token_verbs: [(&str, &'static str, GuidRequest); 3] = [
+        (
+            "InviteToParty",
+            r#"Usage: InviteToParty("unit")"#,
+            PartyRequest::InviteGuid,
+        ),
         (
             "UninviteFromParty",
             r#"Usage: UninviteFromParty("unit")"#,
@@ -688,14 +687,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SetRaidTarget",
         lua.create_function(|lua, (unit, index): (Value, Value)| {
             // `is-number-or-string` on arg 1, `is-number` on arg 2 else `Usage: SetRaidTarget(unit,
-            // index)` (`0x847578`, `0x4bc066`); the index is `_ftol`'s low byte (`0x4bbf23`).
+            // index)` (`0x847578`, `0x4bc066`); then the token's guid through `GetGUIDFromName`
+            // (`0x4bbeff`), which raises for an unknown token, a zero guid returning (`0x4bbf0c`);
+            // the index is `_ftol`'s low byte (`0x4bbf23`).
             const USAGE: &str = "Usage: SetRaidTarget(unit, index)";
             let unit = binding_abi::string_arg(lua, unit, USAGE)?;
             let index = binding_abi::number_arg(lua, index, USAGE)? as u8;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model
-                .party_requests
-                .push(PartyRequest::SetRaidTarget { unit, index });
+            let guid = model.unit_guids.guid_of(&unit)?.unwrap_or(0);
+            if guid != 0 {
+                model
+                    .party_requests
+                    .push(PartyRequest::SetRaidTarget { guid, index });
+            }
             Ok(())
         })?,
     )?;
@@ -1384,6 +1388,7 @@ mod tests {
         s.set_party(led_party());
         s.set_unit_guids(&crate::script::UnitGuids {
             player: 0x5E1F,
+            target: 0x7A7,
             party: [0xA11CE, 0xB0B, 0, 0],
             ..Default::default()
         });
@@ -1406,7 +1411,7 @@ mod tests {
                 PartyRequest::Decline,
                 PartyRequest::Leave,
                 PartyRequest::InviteName("Bob".into()),
-                PartyRequest::InviteUnit("target".into()),
+                PartyRequest::InviteGuid(0x7A7),
                 PartyRequest::UninviteGuid(0xB0B),
                 PartyRequest::PromoteGuid(0xB0B),
                 PartyRequest::LootMethod {
@@ -1838,20 +1843,28 @@ mod tests {
         }
     }
 
+    /// `SetRaidTarget` queues the guid its token names (`0x4bbeff`) and the index's low byte
+    /// (`0x4bbf23`).
     #[test]
-    fn set_raid_target_icon_queues_the_token_and_index() {
+    fn set_raid_target_icon_queues_the_guid_and_index() {
         let mut s = UiScript::new().unwrap();
+        s.set_unit_guids(&crate::script::UnitGuids {
+            player: 0x5E1F,
+            target: 0x7A7,
+            party: [0xA11CE, 0xB0B, 0, 0],
+            ..Default::default()
+        });
         s.run(r#"SetRaidTarget("target", 8)"#).unwrap();
         s.run(r#"SetRaidTarget("party2", 0)"#).unwrap();
         assert_eq!(
             s.take_party_requests(),
             vec![
                 PartyRequest::SetRaidTarget {
-                    unit: "target".into(),
+                    guid: 0x7A7,
                     index: 8,
                 },
                 PartyRequest::SetRaidTarget {
-                    unit: "party2".into(),
+                    guid: 0xB0B,
                     index: 0,
                 },
             ]

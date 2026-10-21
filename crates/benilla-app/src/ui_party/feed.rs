@@ -15,7 +15,6 @@ use bevy::prelude::*;
 use crate::creature_type::CreatureTypeSources;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
-use crate::target::Selection;
 use crate::ui_script::gate;
 
 use super::pets::{self, Roster};
@@ -815,26 +814,21 @@ fn record_bit(stats: Option<&PartyMemberStatsInfo>, bit: u8) -> bool {
     stats.is_some_and(|s| s.status.unwrap_or(0) & bit != 0)
 }
 
-/// `"party1".."party4"` → the roster entry it names.
-fn member_for_token<'a>(group: &'a GroupState, token: &str) -> Option<&'a GroupMemberEntry> {
-    let n: usize = token.strip_prefix("party")?.parse().ok()?;
-    // The slot view the feed publishes the tokens from, so the two agree.
-    (1..=4)
-        .contains(&n)
-        .then(|| group.party_slots().nth(n - 1))?
-}
-
 /// Drain the Lua party intents into their `CMSG_*` sends.
 pub(crate) fn drain_party(
-    mut vm: crate::script_calls::VmWith<(ResMut<'static, GroupState>, Res<'static, Selection>)>,
+    mut vm: crate::script_calls::VmWith<(
+        ResMut<'static, GroupState>,
+        crate::target::RelationWorld<'static, 'static>,
+    )>,
     names: Res<NameCache>,
     index: Res<GuidIndex>,
     stores: Query<&ObjectStore>,
     self_q: Query<&Guid, With<SelfPlayer>>,
     commands: Res<NetCommands>,
+    errors: Res<crate::ui_action::UiErrorKeys>,
     mut tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
 ) {
-    vm.turn(|script, (mut group, selection)| {
+    vm.turn(|script, (mut group, relations)| {
         // Every frame, VM or none: what the feed has fired goes ([`super::SignalLog`]). Not a
         // change the feed's gate should open on.
         group.bypass_change_detection().signals.age();
@@ -846,7 +840,7 @@ pub(crate) fn drain_party(
         for req in script.take_party_requests() {
             // In the sandbox the server holds no group, so the group-changing intents apply to the
             // mirror as its echo would. Invites and accept/decline stay real: a real group ends it.
-            if group.test && test_apply_local(&mut group, &req, self_guid, selection.guid) {
+            if group.test && test_apply_local(&mut group, &req, self_guid) {
                 continue;
             }
             match req {
@@ -869,29 +863,24 @@ pub(crate) fn drain_party(
                     }
                     let _ = commands.0.send(ClientCommand::GroupInvite { name });
                 }
-                PartyRequest::InviteUnit(token) => {
-                    // `target` resolves through the selection when it is a player
-                    // (`InviteToParty(unit)`); a roster token already has a name.
-                    let name = if token == "target" {
-                        selection
-                            .guid
-                            .filter(|g| benilla_protocol::guid::is_player(*g))
-                            .and_then(|g| {
-                                names
-                                    .resolve_player(g, Ask::Event(&commands))
-                                    .map(str::to_string)
-                            })
-                    } else {
-                        member_for_token(&group, &token).map(|m| m.name.clone())
+                // The binding resolved the token (`0x48a3ed`). `InviteByGuid` (`0x5e9440`) invites
+                // only a player the object manager holds (`0x5e945d`, typemask 0x10), by its
+                // `GetUnitName` (`0x609210`), through `InviteByName` (`0x5e9477`).
+                PartyRequest::InviteGuid(guid) => {
+                    let Some(store) = held(guid)
+                        .filter(|s| matches!(s.0.object_type(), Some(ObjectType::Player)))
+                    else {
+                        continue;
                     };
-                    if let Some(name) = name {
-                        if let Some(t) = tutorials.as_mut() {
-                            t.write(crate::tutorial::TutorialEvent::Acknowledge {
-                                id: crate::tutorial::id::GROUPING,
-                            });
-                        }
-                        let _ = commands.0.send(ClientCommand::GroupInvite { name });
+                    let name = names
+                        .resolve_unit(guid, Some(store), Ask::Event(&commands))
+                        .map_or_else(|| script.unknown_object_text(), str::to_string);
+                    if let Some(t) = tutorials.as_mut() {
+                        t.write(crate::tutorial::TutorialEvent::Acknowledge {
+                            id: crate::tutorial::id::GROUPING,
+                        });
                     }
+                    let _ = commands.0.send(ClientCommand::GroupInvite { name });
                 }
                 // The binding resolved the token (`0x48a54d`).
                 PartyRequest::UninviteGuid(guid) => {
@@ -909,29 +898,34 @@ pub(crate) fn drain_party(
                         threshold,
                     });
                 }
-                PartyRequest::SetRaidTarget { unit, index } => {
-                    // Us, the selection or a roster slot; an unresolvable token is a no-op.
-                    let guid = match unit.as_str() {
-                        "player" => self_q.iter().next().map(|g| g.0),
-                        "target" => selection.guid,
-                        t => member_for_token(&group, t).map(|m| m.guid),
+                // The binding resolved the token (`0x4bbeff`). A mark takes a raid row or its pet
+                // (`0x4bafd0`), a party slot or its pet (`0x4e8fa0`), or, with the player's object
+                // and the unit's held (`0x4bbf85`, `0x4bbfa4`), a unit that is no player
+                // (`0x4bbfc1`), a player we can cooperate with (`0x606ba0`) or ourselves
+                // (`0x4bbfcd`).
+                PartyRequest::SetRaidTarget { guid, index } => {
+                    let markable = || {
+                        let live = |g: u64| held(g).map(|s| &s.0);
+                        group.member_or_pet(guid, None, live)
+                            || relations
+                                .me()
+                                .zip(relations.unit(guid))
+                                .is_some_and(|(me, unit)| {
+                                    !unit.is_player
+                                        || relations.get().can_cooperate(&me, &unit)
+                                        || unit.guid == me.guid
+                                })
                     };
-                    let Some(guid) = guid else { continue };
-                    // Lua marks 1..8 are wire icons 0..7. Setting sends (mark - 1, guid) and the
-                    // server clears the unit's old icon (`Group::SetTargetIcon`); clearing re-sends
-                    // the unit's current icon with guid 0, since the wire has no clear by unit.
-                    if index >= 1 {
-                        let _ = commands.0.send(ClientCommand::SetRaidTarget {
-                            icon: index - 1,
-                            guid,
-                        });
-                    } else {
-                        let current = group.raid_target_index(guid);
-                        if current >= 1 {
-                            let _ = commands.0.send(ClientCommand::SetRaidTarget {
-                                icon: current - 1,
-                                guid: 0,
-                            });
+                    match raid_target_mark(&group, guid, index, markable) {
+                        RaidTargetMark::Invalid => {
+                            errors.push(crate::ui_action::UiError::key("ERR_INVALID_RAID_TARGET"));
+                        }
+                        RaidTargetMark::Nothing => {}
+                        RaidTargetMark::Send { icon, guid } if group.test => {
+                            echo_raid_target(&mut group, icon, guid);
+                        }
+                        RaidTargetMark::Send { icon, guid } => {
+                            let _ = commands.0.send(ClientCommand::SetRaidTarget { icon, guid });
                         }
                     }
                 }
@@ -1047,16 +1041,64 @@ fn uninvite_by_guid(
     let _ = commands.0.send(command);
 }
 
+/// What `SetRaidTarget` (`0x4bbec0`) does for the nonzero guid its token named.
+#[derive(Debug, PartialEq, Eq)]
+enum RaidTargetMark {
+    /// `MSG_RAID_TARGET_UPDATE` with this wire slot and guid (`0x4bc01b`-`0x4bc03a`).
+    Send { icon: u8, guid: u64 },
+    /// `ERR_INVALID_RAID_TARGET` (`0x4bbfd2`), and nothing sent.
+    Invalid,
+    /// Nothing at all.
+    Nothing,
+}
+
+/// `SetRaidTarget`'s tail for `guid` and the index's low byte (`0x4bbf23`): a byte of 1 to 8 marks
+/// slot `byte - 1` when `markable` holds (`0x4bbf48`-`0x4bbfd0`); any other byte, 0 included
+/// (`0x4bbf29` wraps it), clears the slot the guid holds by sending it with guid 0
+/// (`0x4bbf36`-`0x4bbf40`), and nothing for a guid holding none (`0x4bbfed`). A clear asks
+/// nothing of the unit.
+fn raid_target_mark(
+    group: &GroupState,
+    guid: u64,
+    index: u8,
+    markable: impl FnOnce() -> bool,
+) -> RaidTargetMark {
+    let slot = index.wrapping_sub(1);
+    if slot >= 8 {
+        return match group.raid_target_index(guid) {
+            0 => RaidTargetMark::Nothing,
+            held => RaidTargetMark::Send {
+                icon: held - 1,
+                guid: 0,
+            },
+        };
+    }
+    if markable() {
+        RaidTargetMark::Send { icon: slot, guid }
+    } else {
+        RaidTargetMark::Invalid
+    }
+}
+
+/// The sandbox's stand-in for the server's answer to a mark: `Group::SetTargetIcon` clears the
+/// unit's old icon first, one mark per unit, and its `MSG_RAID_TARGET_UPDATE` has one signal
+/// (`0x4ba348`).
+fn echo_raid_target(group: &mut GroupState, icon: u8, guid: u64) {
+    if guid != 0 {
+        for slot in group.raid_targets.iter_mut() {
+            if *slot == guid {
+                *slot = 0;
+            }
+        }
+    }
+    group.apply_raid_target_update(icon, guid);
+}
+
 /// The sandbox half of [`drain_party`]: apply one group-changing intent to the mirror as the
 /// server's echo would. False for the intents that stay real (invites, accept and decline).
-fn test_apply_local(
-    group: &mut GroupState,
-    req: &PartyRequest,
-    self_guid: Option<u64>,
-    target_guid: Option<u64>,
-) -> bool {
+fn test_apply_local(group: &mut GroupState, req: &PartyRequest, self_guid: Option<u64>) -> bool {
     let was_held = group.raid_held();
-    let handled = apply_test_intent(group, req, self_guid, target_guid);
+    let handled = apply_test_intent(group, req, self_guid);
     // The server answers each of these with a fresh `SMSG_GROUP_LIST`, signalled in the order a
     // real one is ([`GroupState::apply_list_awaiting`]): `PARTY_MEMBERS_CHANGED` whether or not it
     // changed anything (`0x5e6c66`), the leader store's index and its signal for a list naming a
@@ -1103,20 +1145,11 @@ fn test_apply_local(
             }
         }
     }
-    if matches!(req, PartyRequest::SetRaidTarget { .. }) {
-        // The server's `MSG_RAID_TARGET_UPDATE` echo, one signal (`0x4ba348`).
-        group.signal(GroupSignal::RaidTargetUpdate);
-    }
     handled
 }
 
 /// [`test_apply_local`]'s mirror edit: the intent's effect on the group, whatever list answers it.
-fn apply_test_intent(
-    group: &mut GroupState,
-    req: &PartyRequest,
-    self_guid: Option<u64>,
-    target_guid: Option<u64>,
-) -> bool {
+fn apply_test_intent(group: &mut GroupState, req: &PartyRequest, self_guid: Option<u64>) -> bool {
     match req {
         PartyRequest::Leave => {
             // The all-zero list's reset: the group facts and sandbox flag, not the session state.
@@ -1147,29 +1180,6 @@ fn apply_test_intent(
                 master,
                 threshold: *threshold as u8,
             });
-            true
-        }
-        PartyRequest::SetRaidTarget { unit, index } => {
-            let guid = match unit.as_str() {
-                "player" => self_guid,
-                "target" => target_guid,
-                t => member_for_token(group, t).map(|m| m.guid),
-            };
-            let Some(guid) = guid else { return true };
-            if *index >= 1 {
-                // The server clears the unit's old icon first (`SetTargetIcon`): one mark per unit.
-                for slot in group.raid_targets.iter_mut() {
-                    if *slot == guid {
-                        *slot = 0;
-                    }
-                }
-                group.apply_raid_target(index - 1, guid);
-            } else {
-                let current = group.raid_target_index(guid);
-                if current >= 1 {
-                    group.apply_raid_target(current - 1, 0);
-                }
-            }
             true
         }
         // ── The raid verbs, sandboxed ─────────────────────────────────────────
@@ -2216,7 +2226,9 @@ mod tests {
             }
         }
         let mut app = app();
-        app.init_resource::<Selection>().init_resource::<Mark>();
+        app.init_resource::<crate::net::Reputations>()
+            .init_resource::<crate::ui_action::UiErrorKeys>()
+            .init_resource::<Mark>();
         app.add_systems(Update, (mark.after(feed_party), drain_party.after(mark)));
         let script = app.world_mut().non_send_resource_mut::<UiScript>();
         script
@@ -2257,7 +2269,7 @@ mod tests {
         synthetic_roster(&mut g, None);
         g.signals.take();
         let same = PartyRequest::LootThreshold(3);
-        assert!(test_apply_local(&mut g, &same, Some(ME), None));
+        assert!(test_apply_local(&mut g, &same, Some(ME)));
         assert_eq!(
             g.signals.take(),
             [
@@ -2268,12 +2280,7 @@ mod tests {
             ],
             "a threshold it already had, under the leader it already had"
         );
-        assert!(test_apply_local(
-            &mut g,
-            &PartyRequest::Leave,
-            Some(ME),
-            None
-        ));
+        assert!(test_apply_local(&mut g, &PartyRequest::Leave, Some(ME)));
         assert_eq!(g.signals.take(), [MembersChanged, RaidTargetUpdate]);
     }
 
@@ -2285,7 +2292,7 @@ mod tests {
         synthetic_roster(&mut app.world_mut().resource_mut::<GroupState>(), None);
         assert_eq!(changed(&mut app), 1);
 
-        let (me, mob) = (Some(ME), None);
+        let me = Some(ME);
         let intents = [
             PartyRequest::UninviteGuid(0xF002),
             PartyRequest::PromoteGuid(0xF001),
@@ -2294,15 +2301,11 @@ mod tests {
         ];
         for req in intents {
             let mut group = app.world_mut().resource_mut::<GroupState>();
-            assert!(test_apply_local(&mut group, &req, me, mob));
+            assert!(test_apply_local(&mut group, &req, me));
             assert_eq!(changed(&mut app), 1, "{req:?}");
         }
         let mut group = app.world_mut().resource_mut::<GroupState>();
-        let mark = PartyRequest::SetRaidTarget {
-            unit: "player".into(),
-            index: 1,
-        };
-        assert!(test_apply_local(&mut group, &mark, me, mob));
+        echo_raid_target(&mut group, 0, ME);
         assert_eq!(changed(&mut app), 0, "a mark is no list");
     }
 
@@ -2391,25 +2394,25 @@ mod tests {
         let mut group = GroupState::default();
         synthetic_roster(&mut group, None);
         assert!(group.test, "the synthetic roster arms the sandbox");
-        let (me, mob) = (Some(0x5E1Fu64), Some(0xB0B0u64));
+        let me = Some(0x5E1Fu64);
 
         // Skull on the target, then Cross: one mark per unit.
-        let mark = |i| PartyRequest::SetRaidTarget {
-            unit: "target".into(),
-            index: i,
+        let mark = |group: &mut GroupState, i| match raid_target_mark(group, 0xB0B0, i, || true) {
+            RaidTargetMark::Send { icon, guid } => echo_raid_target(group, icon, guid),
+            other => panic!("index {i}: {other:?}"),
         };
-        assert!(test_apply_local(&mut group, &mark(8), me, mob));
+        mark(&mut group, 8);
         assert_eq!(group.raid_target_index(0xB0B0), 8);
-        test_apply_local(&mut group, &mark(7), me, mob);
+        mark(&mut group, 7);
         assert_eq!(group.raid_target_index(0xB0B0), 7, "the old icon clears");
         assert_eq!(group.raid_targets[7], 0);
-        test_apply_local(&mut group, &mark(0), me, mob);
+        mark(&mut group, 0);
         assert_eq!(group.raid_target_index(0xB0B0), 0, "NONE clears");
 
         // Promote party1 (Alice), kick party2 (Bob), retune the loot.
-        test_apply_local(&mut group, &PartyRequest::PromoteGuid(0xF001), me, None);
+        test_apply_local(&mut group, &PartyRequest::PromoteGuid(0xF001), me);
         assert_eq!(group.leader, 0xF001);
-        test_apply_local(&mut group, &PartyRequest::UninviteGuid(0xF002), me, None);
+        test_apply_local(&mut group, &PartyRequest::UninviteGuid(0xF002), me);
         assert!(!group.members.iter().any(|m| m.guid == 0xF002));
         assert!(!group.stats.contains_key(&0xF002));
         test_apply_local(
@@ -2420,9 +2423,8 @@ mod tests {
                 threshold: 2,
             },
             me,
-            None,
         );
-        test_apply_local(&mut group, &PartyRequest::LootThreshold(4), me, None);
+        test_apply_local(&mut group, &PartyRequest::LootThreshold(4), me);
         assert_eq!(
             group.loot,
             Some(GroupLootInfo {
@@ -2436,10 +2438,9 @@ mod tests {
         assert!(!test_apply_local(
             &mut group,
             &PartyRequest::InviteName("Zed".into()),
-            me,
-            None
+            me
         ));
-        test_apply_local(&mut group, &PartyRequest::Leave, me, None);
+        test_apply_local(&mut group, &PartyRequest::Leave, me);
         assert!(!group.in_group && !group.test);
         synthetic_roster(&mut group, None);
         group.apply_list(0, 0, vec![], 0x123, None, None);
@@ -2649,8 +2650,7 @@ mod tests {
         assert!(test_apply_local(
             &mut group,
             &PartyRequest::SetSubgroup { index: 1, group: 8 },
-            me,
-            None
+            me
         ));
         assert_eq!(test_subgroup_of(&group, me, 1), Some(7));
         assert!(
@@ -2666,8 +2666,7 @@ mod tests {
                 index: us,
                 other: 1
             },
-            me,
-            None
+            me
         ));
         assert_eq!(test_subgroup_of(&group, me, us), Some(7));
         assert_eq!(test_subgroup_of(&group, me, 1), Some(mine));
@@ -2675,8 +2674,7 @@ mod tests {
         assert!(test_apply_local(
             &mut group,
             &PartyRequest::SetSubgroup { index: 1, group: 9 },
-            me,
-            None
+            me
         ));
         assert_eq!(
             test_subgroup_of(&group, me, 1),
@@ -2689,8 +2687,7 @@ mod tests {
         assert!(test_apply_local(
             &mut group,
             &PartyRequest::ReadyCheckStart,
-            me,
-            None
+            me
         ));
         assert_eq!(
             (group.ready_check, group.ready_check_requests),
@@ -2701,8 +2698,7 @@ mod tests {
         assert!(test_apply_local(
             &mut group,
             &PartyRequest::UninviteRaid(us),
-            me,
-            None
+            me
         ));
         assert_eq!(
             group.members.len(),
@@ -2712,8 +2708,7 @@ mod tests {
         assert!(test_apply_local(
             &mut group,
             &PartyRequest::UninviteRaid(3),
-            me,
-            None
+            me
         ));
         assert_eq!(group.members.len(), n - 1);
     }
@@ -2926,7 +2921,8 @@ mod tests {
         let mut app = app();
         let (tx, rx) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
-        app.init_resource::<Selection>();
+        app.init_resource::<crate::net::Reputations>()
+            .init_resource::<crate::ui_action::UiErrorKeys>();
         app.add_systems(Update, drain_party.after(feed_party));
         (app, rx)
     }

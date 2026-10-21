@@ -685,7 +685,7 @@ fn the_sandbox_answers_a_raid_intent_with_a_raid_roster_update() {
 
     let intent = |app: &mut App, req: PartyRequest| {
         let mut group = app.world_mut().resource_mut::<GroupState>();
-        assert!(test_apply_local(&mut group, &req, Some(ME), None));
+        assert!(test_apply_local(&mut group, &req, Some(ME)));
     };
     intent(&mut app, PartyRequest::LootThreshold(4));
     assert_eq!(fired(&mut app), 0, "a party intent");
@@ -705,13 +705,7 @@ fn the_sandbox_answers_a_raid_intent_with_a_raid_roster_update() {
         (0.0, 2.0),
         "row 2 leads"
     );
-    intent(
-        &mut app,
-        PartyRequest::SetRaidTarget {
-            unit: "player".into(),
-            index: 1,
-        },
-    );
+    super::echo_raid_target(&mut app.world_mut().resource_mut::<GroupState>(), 0, ME);
     assert_eq!(fired(&mut app), 0, "a mark is no list");
     intent(&mut app, PartyRequest::Leave);
     assert_eq!(fired(&mut app), 1, "the raid ended");
