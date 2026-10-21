@@ -122,6 +122,9 @@ pub(crate) struct EquipError {
     /// The item guids a refused inventory operation unlocks after its line (`0x5e3ac0`,
     /// `0x5e3ad3`); none for a mail refusal.
     pub unlocks: [u64; 2],
+    /// The change tick of the handler call that queued it, its place on the wire: each call is
+    /// its own system run, so a later packet's writes carry newer ticks.
+    pub at: bevy::ecs::change_detection::Tick,
 }
 
 /// Inventory refusals (`SMSG_INVENTORY_CHANGE_FAILURE`) queued for the UI error line.

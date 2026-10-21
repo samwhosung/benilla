@@ -33,6 +33,7 @@ fn on_send_mail_result(
     mut mail: ResMut<MailOpen>,
     commands: Res<NetCommands>,
     mut equip_errors: ResMut<EquipErrors>,
+    ticks: bevy::ecs::system::SystemChangeTick,
 ) {
     if let SessionEvent::SendMailResult {
         mail_id,
@@ -51,6 +52,7 @@ fn on_send_mail_result(
             &mut mail,
             &commands,
             &mut equip_errors,
+            ticks.this_run(),
         );
     }
 }
@@ -151,6 +153,8 @@ pub(super) fn send_mail_result(
     mail: &mut MailOpen,
     commands: &NetCommands,
     equip_errors: &mut EquipErrors,
+    // The handler call's change tick, its refusal's place on the wire ([`EquipError::at`]).
+    at: bevy::ecs::change_detection::Tick,
 ) {
     // ITEM_TAKEN's `(entry, count)` tail is unused; vmangos sends no `SMSG_ITEM_PUSH_RESULT` for a
     // mail take (`MailHandler.cpp:675`). Every result lifts the request lock at the handler's
@@ -167,6 +171,7 @@ pub(super) fn send_mail_result(
                 // The result carries no bag slot: 255 is the wire's "own array" sentinel, so
                 // reason 16 names no container.
                 bag_slot: 255,
+                at,
             });
         }
         result.send = Some(error == mail_error::OK);
@@ -215,6 +220,7 @@ pub(super) fn send_mail_result(
             reason: equip_error.unwrap_or(0) as u8,
             required_level: None,
             bag_slot: 255,
+            at,
         }),
         other => result.line = Some(mail_refusal(other)),
     }
@@ -297,7 +303,15 @@ mod tests {
             let mut mail = MailOpen::default();
             mail.click(0x20);
             send_mail_result(
-                7, action, error, None, None, &mut mail, &commands, &mut equip,
+                7,
+                action,
+                error,
+                None,
+                None,
+                &mut mail,
+                &commands,
+                &mut equip,
+                Default::default(),
             );
             assert!(mail.request_resolved, "action {action} error {error}");
         }
@@ -324,7 +338,15 @@ mod tests {
             (mail_action::SEND, mail_error::OK),
         ] {
             send_mail_result(
-                7, action, error, None, None, &mut mail, &commands, &mut equip,
+                7,
+                action,
+                error,
+                None,
+                None,
+                &mut mail,
+                &commands,
+                &mut equip,
+                Default::default(),
             );
         }
         assert_eq!(mail.results.len(), 5, "one per result");
@@ -391,6 +413,7 @@ mod tests {
             mail,
             &NetCommands(tx),
             &mut equip,
+            Default::default(),
         );
         rx
     }
@@ -423,6 +446,7 @@ mod tests {
                 &mut mail,
                 &commands,
                 &mut equip,
+                Default::default(),
             );
         }
         let row = &mail.mails[0];
@@ -486,6 +510,7 @@ mod tests {
                 &mut mail,
                 &NetCommands(tx),
                 &mut equip,
+                Default::default(),
             );
             assert_eq!(
                 sent_commands(&rx).is_empty(),
@@ -514,6 +539,7 @@ mod tests {
             &mut mail,
             &NetCommands(tx),
             &mut equip,
+            Default::default(),
         );
         assert_eq!(sent_commands(&rx), [("delete", 7)]);
         assert_eq!(mail.results[0].close_inbox, Some(1));

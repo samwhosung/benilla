@@ -1136,75 +1136,30 @@ pub(crate) fn feed_containers(
         Res<crate::ui_petition::PetitionState>,
     ),
     mut memory: Local<crate::ui_script::VmMemo<FeedMemory>>,
+    writes: BagWrites,
 ) {
-    // A refusal first, on its own: the failure's handler shows the line and unlocks the items
-    // (`0x496720`, then `0x5e3ac0`, `0x5e3ad3`) and changes nothing else, so its handlers run
-    // with the host lent before the frame's bags are pushed, and read them as they stood.
+    // A refusal's handler shows its line and unlocks its items inside its dispatch (`0x496720`,
+    // then `0x5e3ac0`, `0x5e3ad3`), so its handlers read the bags the packets before it left: one
+    // a later packet's write follows fires ahead of the frame's bag push, the rest after it.
     let (mut equip_errors, mut sink) = equip;
+    let ahead = equip_errors
+        .0
+        .iter()
+        .take_while(|e| writes.after(e.at))
+        .count();
+    let behind = equip_errors.0.split_off(ahead);
+    let refusing = Refusing {
+        me: &inv.self_store,
+        objects: &inv.objects,
+        items: &items,
+        bag_families: bag_families.as_deref(),
+    };
     if !equip_errors.0.is_empty() {
-        vm.run(|script| {
-            let Some(script) = script else {
-                // A refusal's unlocks would fire into a later VM's locks; with none up they are
-                // dropped, as the release queue's are, and the lines wait.
-                for e in &mut equip_errors.0 {
-                    e.unlocks = [0; 2];
-                }
-                return;
-            };
-            // Refusals become the red error line through `equip_error_key`. An empty or missing
-            // string prints nothing, as the reference's sink guard (`0x4945b4`) drops it; that
-            // silences 59.
-            let player = inv.self_store.iter().next();
-            let mut refusals = Vec::new();
-            let mut unlocks = Vec::new();
-            for e in equip_errors.0.drain(..) {
-                unlocks.extend(e.unlocks);
-                // Reason 16 names the bag's family when the bag resolves, as `0x5ede00` does.
-                let subclass_fill = (e.reason == 16)
-                    .then(|| {
-                        bag_family_name(
-                            player,
-                            e.bag_slot,
-                            &inv.objects,
-                            &items,
-                            bag_families.as_deref().map(|c| &c.0),
-                        )
-                    })
-                    .flatten();
-                let key = match subclass_fill {
-                    Some(_) => "ERR_WRONG_BAG_TYPE_SUBCLASS",
-                    None => equip_error_key(e.reason),
-                };
-                let text = script
-                    .lua()
-                    .globals()
-                    .get::<String>(key)
-                    .unwrap_or_default();
-                if text.is_empty() {
-                    continue;
-                }
-                // Reason 1 fills `%d` and 16 `%s`; neither carries the other's fill.
-                let text = match e.required_level {
-                    Some(d) => text.replace("%d", &d.to_string()),
-                    None => text,
-                };
-                let text = match subclass_fill {
-                    Some(family) => text.replace("%s", &family),
-                    None => text,
-                };
-                refusals.push(crate::ui_action::Shown::keyed(key, text));
-            }
-            // Through the one sink, which also plays the error speech 18 of these keys carry.
-            crate::ui_action::show_messages(script, &mut sink, "ui_items", refusals);
-            // A refusal's unlocks follow its line (`0x496720`, then `0x5e3ac0`, `0x5e3ad3`).
-            for guid in unlocks {
-                script.unlock_item(guid);
-            }
-        });
+        vm.run(|script| refusing.show(script, &mut equip_errors.0, &mut sink));
     }
     // The bags, read off the host's cooldowns among the rest; their push signals `BAG_UPDATE`
     // and `BAG_OPEN`, so it runs with the host lent.
-    let Some((source, guids, opened, gate)) = vm.turn(|script, cooldowns| {
+    let bags = vm.turn(|script, cooldowns| {
         let script = script?;
         let (clock, petitions) = clock_and_petitions;
         let (memory, vm_reset) = memory.get_reset(script);
@@ -1550,21 +1505,126 @@ pub(crate) fn feed_containers(
             opened,
             gate,
         ))
-    }) else {
-        return;
-    };
-    vm.run(|script| {
+    });
+    if let Some((source, guids, opened, gate)) = bags {
+        vm.run(|script| {
+            let Some(script) = script else {
+                return;
+            };
+            let memory = memory.get(script);
+            if apply_container_source(script, memory, source, guids, opened) {
+                gate.audit("feed_containers", "a bag diff or a server-opened bag");
+            }
+            bag_updates.0 = bag_updates
+                .0
+                .wrapping_add(std::mem::take(&mut memory.bag_updates));
+        });
+    }
+    equip_errors.0.extend(behind);
+    if !equip_errors.0.is_empty() {
+        vm.run(|script| refusing.show(script, &mut equip_errors.0, &mut sink));
+    }
+}
+
+/// Our own player or an item, written since the feed last ran.
+type BagWritten = (
+    Or<(With<crate::items::ItemObject>, With<SelfPlayer>)>,
+    Changed<ObjectStore>,
+);
+
+/// The writes to our own player and the items this frame, by change tick: each packet's handler
+/// call is its own system run, so a later packet's writes carry newer ticks.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct BagWrites<'w, 's> {
+    written: Query<'w, 's, Ref<'static, ObjectStore>, BagWritten>,
+    ticks: bevy::ecs::system::SystemChangeTick,
+}
+
+impl BagWrites<'_, '_> {
+    /// Whether a packet after the handler call at `at` wrote our player or an item.
+    fn after(&self, at: bevy::ecs::change_detection::Tick) -> bool {
+        let now = self.ticks.this_run();
+        self.written
+            .iter()
+            .any(|s| s.last_changed().is_newer_than(at, now))
+    }
+}
+
+/// What a refusal's line reads.
+struct Refusing<'a, 'w, 's> {
+    me: &'a Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
+    objects: &'a Objects<'w, 's>,
+    items: &'a Items,
+    bag_families: Option<&'a crate::ui_items::ItemBagFamilies>,
+}
+
+impl Refusing<'_, '_, '_> {
+    /// Show `refusals` as the failure's handler does, in a run with the host lent: each line, then
+    /// the unlocks (`0x496720`, then `0x5e3ac0`, `0x5e3ad3`). With no VM up the unlocks are
+    /// dropped, as they would fire into a later VM's locks, as the release queue's are, and the
+    /// lines wait.
+    fn show(
+        &self,
+        script: Option<&mut UiScript>,
+        refusals: &mut Vec<super::EquipError>,
+        sink: &mut crate::ui_action::MessageSink,
+    ) {
         let Some(script) = script else {
+            for e in refusals.iter_mut() {
+                e.unlocks = [0; 2];
+            }
             return;
         };
-        let memory = memory.get(script);
-        if apply_container_source(script, memory, source, guids, opened) {
-            gate.audit("feed_containers", "a bag diff or a server-opened bag");
+        // Refusals become the red error line through `equip_error_key`. An empty or missing
+        // string prints nothing, as the reference's sink guard (`0x4945b4`) drops it; that
+        // silences 59.
+        let player = self.me.iter().next();
+        let mut lines = Vec::new();
+        let mut unlocks = Vec::new();
+        for e in refusals.drain(..) {
+            unlocks.extend(e.unlocks);
+            // Reason 16 names the bag's family when the bag resolves, as `0x5ede00` does.
+            let subclass_fill = (e.reason == 16)
+                .then(|| {
+                    bag_family_name(
+                        player,
+                        e.bag_slot,
+                        self.objects,
+                        self.items,
+                        self.bag_families.map(|c| &c.0),
+                    )
+                })
+                .flatten();
+            let key = match subclass_fill {
+                Some(_) => "ERR_WRONG_BAG_TYPE_SUBCLASS",
+                None => equip_error_key(e.reason),
+            };
+            let text = script
+                .lua()
+                .globals()
+                .get::<String>(key)
+                .unwrap_or_default();
+            if text.is_empty() {
+                continue;
+            }
+            // Reason 1 fills `%d` and 16 `%s`; neither carries the other's fill.
+            let text = match e.required_level {
+                Some(d) => text.replace("%d", &d.to_string()),
+                None => text,
+            };
+            let text = match subclass_fill {
+                Some(family) => text.replace("%s", &family),
+                None => text,
+            };
+            lines.push(crate::ui_action::Shown::keyed(key, text));
         }
-        bag_updates.0 = bag_updates
-            .0
-            .wrapping_add(std::mem::take(&mut memory.bag_updates));
-    })
+        // Through the one sink, which also plays the error speech 18 of these keys carry.
+        crate::ui_action::show_messages(script, sink, "ui_items", lines);
+        // A refusal's unlocks follow its line (`0x496720`, then `0x5e3ac0`, `0x5e3ad3`).
+        for guid in unlocks {
+            script.unlock_item(guid);
+        }
+    }
 }
 
 /// Diffs `source` against the last push, pushes each changed bag and fires the reference's events:

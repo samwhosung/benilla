@@ -1648,6 +1648,7 @@ mod tests {
             &mut app.world_mut().resource_mut::<MailOpen>(),
             &NetCommands(tx),
             &mut equip,
+            Default::default(),
         );
         app.update();
         assert_eq!(logged(&mut app), 6, "the arm's event, once");

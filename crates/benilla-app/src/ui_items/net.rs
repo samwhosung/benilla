@@ -77,6 +77,7 @@ fn on_inventory_failure(
     In(ev): In<SessionEvent>,
     mut equip_errors: ResMut<EquipErrors>,
     mut latch: ResMut<LootLatch>,
+    ticks: bevy::ecs::system::SystemChangeTick,
 ) {
     if let SessionEvent::InventoryFailure {
         reason,
@@ -91,6 +92,7 @@ fn on_inventory_failure(
             required_level,
             items: [item_guid, item2_guid],
             bag_slot,
+            at: ticks.this_run(),
         };
         inventory_failure(failure, &mut equip_errors, &mut latch);
     }
@@ -103,6 +105,8 @@ struct Failure {
     /// The two item guids the packet names.
     items: [u64; 2],
     bag_slot: u8,
+    /// The handler call's change tick ([`EquipError::at`]).
+    at: bevy::ecs::change_detection::Tick,
 }
 
 /// A refused inventory operation (reason 0 never arrives: `benilla_protocol::events` drops it):
@@ -115,6 +119,7 @@ fn inventory_failure(failure: Failure, equip_errors: &mut EquipErrors, latch: &m
         required_level,
         items: [item_guid, item2_guid],
         bag_slot,
+        at,
     } = failure;
     debug!(
         "net: inventory failure {reason:#04x} (items {item_guid:#x} {item2_guid:#x}, bag slot \
@@ -126,6 +131,7 @@ fn inventory_failure(failure: Failure, equip_errors: &mut EquipErrors, latch: &m
         required_level,
         bag_slot,
         unlocks: [item_guid, item2_guid],
+        at,
     });
     // A failure whose first item guid is the looted item (a lockbox) ends the loot (`0x5e3a84`).
     if item_guid != 0 {
@@ -147,6 +153,7 @@ mod tests {
             required_level: None,
             items: [first, 0],
             bag_slot: 0,
+            at: Default::default(),
         };
 
         // An unrelated item's failure must not end the session.
@@ -337,6 +344,7 @@ mod tests {
                 required_level: None,
                 bag_slot: 0xff,
                 unlocks: [A, 0],
+                at: Default::default(),
             });
         app.world_mut()
             .run_system_once(super::super::feed::feed_containers)
@@ -367,6 +375,7 @@ mod tests {
                 required_level: None,
                 bag_slot: 0xff,
                 unlocks: [0x4000_0000_0000_0008, 0],
+                at: Default::default(),
             });
 
         crate::net::handlers::dispatch(
