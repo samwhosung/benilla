@@ -83,7 +83,7 @@ pub(crate) const MAX_CHANNELS: usize = 10;
 /// `+0x00`): `/N` is slot N. The allocator `0x49b980` reuses the first free entry before growing,
 /// and a leave zeroes the number in place (`0x49bbd0`), so no other channel is renumbered and a
 /// hole answers "not joined" (`0x49bf30`).
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub(crate) struct ChannelState {
     /// Slot `i` is channel number `i + 1`; a freed record stays, so the numbers above it do not
     /// move. Never longer than [`MAX_CHANNELS`].

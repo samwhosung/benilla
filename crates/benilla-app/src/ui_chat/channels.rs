@@ -231,8 +231,11 @@ pub(crate) enum WalkStep {
     Suspend(String),
 }
 
-/// The walk as a plan: `ZoneChannelRefresh 0x49a210`'s three passes, for a player in `zone_name`,
-/// an area with `area_flags`; nothing at all with no zone text (`0x49a235`, `0x49a23d`).
+/// The walk: `ZoneChannelRefresh 0x49a210`'s three passes, for a player in `zone_name`, an area
+/// with `area_flags`, each step written to the slots as it is taken, so a row reads the table as
+/// the steps before it left it: General's register can reuse a freed record and overwrite its id
+/// (`0x49b9b0`, `0x49ba01`), which LocalDefense's by-id lookup then no longer finds. Nothing at all
+/// with no zone text (`0x49a235`, `0x49a23d`). The steps come back in wire order.
 ///
 /// - Pass 1 (`0x49a284`) takes each slot with a number and a ChannelID naming a row
 ///   (`0x49a295`-`0x49a2ca`), in slot order, and composes its name for this zone whatever the mask
@@ -241,88 +244,134 @@ pub(crate) enum WalkStep {
 ///   without `0x8` suspends (`0x49a3b8`-`0x49a3cb`, a no-op on a suspended slot) and any other is
 ///   renamed and re-joined (`0x49a3dc`-`0x49a410`).
 /// - Pass 2 (`0x49a468`) takes each row whose mask bit is set (`0x49a494`), that no record
-///   carries by id, a freed one included (`0x49bef0`), and whose composed name no slot holds
-///   (`0x49be90`), in DBC order: it registers the slot (`0x49a50d`), then suspends it or joins by
-///   the same city gate (`0x49a512`-`0x49a577`).
+///   carries by id, a freed one included (`0x49bef0`, `0x49a4a2`), and whose composed name no slot
+///   holds (`0x49be90`), in DBC order: it registers the slot (`0x49a50d`), then suspends it or
+///   joins by the same city gate (`0x49a512`-`0x49a577`).
 /// - Pass 3 (`0x49a5b4`) registers and joins each deferred name with id 0 (`0x49a5da`, `0x49a5e2`).
-pub(crate) fn plan_walk(
-    channels: &ChannelState,
+///
+/// A registration with all ten slots taken shows its error and the join still goes out
+/// (`0x49a50d`, `0x49a5da` → `0x49b9c5`).
+pub(crate) fn run_walk(
+    channels: &mut ChannelState,
     zone_name: &str,
     area_flags: u32,
     city_word: Option<&str>,
+    errors: &crate::ui_action::UiErrorKeys,
 ) -> Vec<WalkStep> {
     use WalkStep as W;
     if zone_name.is_empty() {
         return Vec::new();
     }
     let in_city = area_flags & AREA_FLAG_TRADE_CHANNEL != 0;
-    let catalog = &channels.channels;
     let eligible = |row: &benilla_formats::ChatChannelRow| in_city || !row.is_city_only();
     let mut steps = Vec::new();
+    let mut take = |channels: &mut ChannelState, step: WalkStep| {
+        write_slot(&step, channels, errors);
+        steps.push(step);
+    };
 
     // Pass 1.
-    for slot in channels.joined.iter().filter_map(SlotRecord::held) {
-        let Some(row) = catalog.row(slot.id) else {
+    for i in 0..channels.joined.len() {
+        let Some(slot) = channels.joined[i].held().cloned() else {
+            continue;
+        };
+        let Some(row) = channels.channels.row(slot.id).cloned() else {
             continue; // a custom channel: not the walk's
         };
-        let old = slot.name.as_str();
-        let Some(new) = compose(row, zone_name, area_flags, city_word) else {
+        let old = slot.name;
+        let Some(new) = compose(&row, zone_name, area_flags, city_word) else {
             continue; // the deviation in `compose`: no name to join
         };
-        if slot.state != SlotState::Suspended && new.eq_ignore_ascii_case(old) {
+        if slot.state != SlotState::Suspended && new.eq_ignore_ascii_case(&old) {
             continue;
         }
         if slot.state == SlotState::Confirmed {
-            steps.push(W::Leave(old.to_string()));
+            take(channels, W::Leave(old.clone()));
         }
-        if eligible(row) {
-            steps.push(W::Rename {
-                old: old.to_string(),
-                new: new.clone(),
-            });
-            steps.push(W::Join(new));
+        if eligible(&row) {
+            take(
+                channels,
+                W::Rename {
+                    old,
+                    new: new.clone(),
+                },
+            );
+            take(channels, W::Join(new));
         } else if slot.state != SlotState::Suspended {
-            steps.push(W::Suspend(old.to_string()));
+            take(channels, W::Suspend(old));
         }
     }
 
     // Pass 2.
-    for row in catalog.rows() {
+    for i in 0..channels.channels.rows().len() {
+        let row = channels.channels.rows()[i].clone();
         if !channels.zone_row_wanted(row.id) || channels.carries_row(row.id) {
             continue;
         }
-        let Some(name) = compose(row, zone_name, area_flags, city_word) else {
+        let Some(name) = compose(&row, zone_name, area_flags, city_word) else {
             continue;
         };
         if channels.number_of(&name).is_some() {
             continue;
         }
-        steps.push(W::Register {
-            name: name.clone(),
-            id: row.id,
-        });
-        if eligible(row) {
-            steps.push(W::Join(name));
+        take(
+            channels,
+            W::Register {
+                name: name.clone(),
+                id: row.id,
+            },
+        );
+        if eligible(&row) {
+            take(channels, W::Join(name));
         } else {
-            steps.push(W::Suspend(name));
+            take(channels, W::Suspend(name));
         }
     }
 
     // Pass 3.
-    for name in &channels.deferred_joins {
-        steps.push(W::Register {
-            name: name.clone(),
-            id: 0,
-        });
-        steps.push(W::Join(name.clone()));
+    for name in channels.deferred_joins.clone() {
+        take(
+            channels,
+            W::Register {
+                name: name.clone(),
+                id: 0,
+            },
+        );
+        take(channels, W::Join(name));
     }
     steps
 }
 
-/// One walk for a player in `zone_name`: the plan, applied, then every slot it renamed,
-/// registered or suspended pushed into the VM's mirror, so `GetChannelName(n)` and a
-/// `SendChatMessage` to a number read the new slots from this frame on. The deferred joins are
-/// spent (`0x49a692`-`0x49a69e`).
+/// One step's slot write: the rename `0x49bc50`, the allocator `0x49b980`, the suspend `0x49bcf0`.
+fn write_slot(
+    step: &WalkStep,
+    channels: &mut ChannelState,
+    errors: &crate::ui_action::UiErrorKeys,
+) {
+    match step {
+        WalkStep::Leave(_) | WalkStep::Join(_) => {}
+        WalkStep::Rename { old, new } => {
+            if let Some(n) = channels.rename_slot(old, new) {
+                debug!("chat: zone channel slot {n} renamed {old:?} → {new:?}");
+            }
+        }
+        WalkStep::Register { name, id } => {
+            if let Some(n) = channels.claim_or_refuse(name, *id, errors) {
+                debug!("chat: channel {name:?} registered as slot {n}");
+            }
+        }
+        WalkStep::Suspend(name) => {
+            if let Some(n) = channels.suspend_slot(name) {
+                debug!("chat: zone channel slot {n} ({name:?}) suspended — not eligible here");
+            }
+        }
+    }
+}
+
+/// One walk for a player in `zone_name` ([`run_walk`]), its packets sent in order, then every
+/// slot it renamed, registered or suspended pushed into the VM's mirror, so `GetChannelName(n)`
+/// and a `SendChatMessage` to a number read the new slots from this frame on. The deferred joins
+/// are spent (`0x49a692`-`0x49a69e`).
 pub(super) fn walk_zone(
     channels: &mut ChannelState,
     zone_name: &str,
@@ -331,55 +380,29 @@ pub(super) fn walk_zone(
     (commands, errors): (&NetCommands, &crate::ui_action::UiErrorKeys),
     script: Option<&mut benilla_ui::script::UiScript>,
 ) {
-    let steps = plan_walk(channels, zone_name, area_flags, city_word);
+    let steps = run_walk(channels, zone_name, area_flags, city_word, errors);
     if !zone_name.is_empty() {
         channels.deferred_joins.clear();
     }
-    apply_walk(&steps, channels, commands, errors);
-    if let (false, Some(script)) = (steps.is_empty(), script) {
-        channels.mirror_into(script);
-    }
-}
-
-/// Apply a plan in order. A registration with all ten slots taken shows its error and the join
-/// still goes out (`0x49a50d`, `0x49a5da` → `0x49b9c5`).
-fn apply_walk(
-    steps: &[WalkStep],
-    channels: &mut ChannelState,
-    commands: &NetCommands,
-    errors: &crate::ui_action::UiErrorKeys,
-) {
-    for step in steps {
-        match step {
+    for step in &steps {
+        let cmd = match step {
             WalkStep::Leave(name) => {
                 debug!("chat: leaving zone channel {name:?}");
-                let _ = commands
-                    .0
-                    .send(ClientCommand::LeaveChannel { name: name.clone() });
+                ClientCommand::LeaveChannel { name: name.clone() }
             }
             WalkStep::Join(name) => {
                 debug!("chat: joining zone channel {name:?}");
-                let _ = commands.0.send(ClientCommand::JoinChannel {
+                ClientCommand::JoinChannel {
                     name: name.clone(),
                     password: String::new(),
-                });
-            }
-            WalkStep::Rename { old, new } => {
-                if let Some(n) = channels.rename_slot(old, new) {
-                    debug!("chat: zone channel slot {n} renamed {old:?} → {new:?}");
                 }
             }
-            WalkStep::Register { name, id } => {
-                if let Some(n) = channels.claim_or_refuse(name, *id, errors) {
-                    debug!("chat: channel {name:?} registered as slot {n}");
-                }
-            }
-            WalkStep::Suspend(name) => {
-                if let Some(n) = channels.suspend_slot(name) {
-                    debug!("chat: zone channel slot {n} ({name:?}) suspended — not eligible here");
-                }
-            }
-        }
+            _ => continue,
+        };
+        let _ = commands.0.send(cmd);
+    }
+    if let (false, Some(script)) = (steps.is_empty(), script) {
+        channels.mirror_into(script);
     }
 }
 
@@ -712,7 +735,7 @@ mod tests {
     #[test]
     fn a_first_walk_registers_every_mask_row_before_the_gate() {
         let mut c = state(SEED);
-        let steps = plan_walk(&c, "Elwynn Forest", OUTSIDE, CITY);
+        let steps = walk(&mut c, "Elwynn Forest", OUTSIDE, CITY);
         assert_eq!(
             steps,
             vec![
@@ -733,7 +756,6 @@ mod tests {
                 W::Join(s("LocalDefense - Elwynn Forest")),
             ]
         );
-        apply_steps(&steps, &mut c);
         assert_eq!(c.number_of("General - Elwynn Forest"), Some(1));
         assert_eq!(c.number_of("Trade - Elwynn Forest"), Some(2));
         assert_eq!(
@@ -765,22 +787,20 @@ mod tests {
         );
     }
 
-    /// Apply a plan's slot writes as the system does, without the wire.
-    fn apply_steps(steps: &[WalkStep], c: &mut ChannelState) {
-        for step in steps {
-            match step {
-                W::Leave(_) | W::Join(_) => {}
-                W::Rename { old, new } => {
-                    c.rename_slot(old, new);
-                }
-                W::Register { name, id } => {
-                    c.claim_slot(name, *id);
-                }
-                W::Suspend(name) => {
-                    c.suspend_slot(name);
-                }
-            }
-        }
+    /// The walk on `c`, its slots written as it goes, without the wire.
+    fn walk(c: &mut ChannelState, zone: &str, flags: u32, city: Option<&str>) -> Vec<WalkStep> {
+        run_walk(
+            c,
+            zone,
+            flags,
+            city,
+            &crate::ui_action::UiErrorKeys::default(),
+        )
+    }
+
+    /// What the walk would do on `c`, run on a copy.
+    fn plan_walk(c: &ChannelState, zone: &str, flags: u32, city: Option<&str>) -> Vec<WalkStep> {
+        walk(&mut c.clone(), zone, flags, city)
     }
 
     /// The suspended Trade slot between the two is walked too, and stays as it is.
@@ -792,7 +812,7 @@ mod tests {
             suspended("Trade - City"),
             joined("LocalDefense - Felwood"),
         ];
-        let steps = plan_walk(&c, "Winterspring", OUTSIDE, CITY);
+        let steps = walk(&mut c, "Winterspring", OUTSIDE, CITY);
         assert_eq!(
             steps,
             vec![
@@ -810,7 +830,6 @@ mod tests {
                 W::Join(s("LocalDefense - Winterspring")),
             ]
         );
-        apply_steps(&steps, &mut c);
         assert_eq!(
             c.number_of("General - Winterspring"),
             Some(1),
@@ -836,7 +855,7 @@ mod tests {
         ];
 
         // Out of the city.
-        let steps = plan_walk(&c, "Elwynn Forest", OUTSIDE, CITY);
+        let steps = walk(&mut c, "Elwynn Forest", OUTSIDE, CITY);
         assert_eq!(
             steps,
             vec![
@@ -856,7 +875,6 @@ mod tests {
                 W::Join(s("LocalDefense - Elwynn Forest")),
             ]
         );
-        apply_steps(&steps, &mut c);
         assert_eq!(c.slot_state("Trade - City"), Some(SlotState::Suspended));
         assert_eq!(c.number_of("Trade - City"), Some(2));
         assert_eq!(
@@ -869,7 +887,7 @@ mod tests {
         c.confirm_slot("LocalDefense - Elwynn Forest");
 
         // Back in: the bypass joins and clears the suspension, with no LEAVE.
-        let steps = plan_walk(&c, "Stormwind City", CAPITAL, CITY);
+        let steps = walk(&mut c, "Stormwind City", CAPITAL, CITY);
         assert_eq!(
             steps,
             vec![
@@ -892,7 +910,6 @@ mod tests {
                 W::Join(s("LocalDefense - Stormwind City")),
             ]
         );
-        apply_steps(&steps, &mut c);
         assert_eq!(
             c.slot_state("Trade - City"),
             Some(SlotState::Pending),
@@ -936,8 +953,8 @@ mod tests {
         );
 
         // The next login: a fresh slot array under the file's mask.
-        let relog = state(SEED & !1);
-        let steps = plan_walk(&relog, "Elwynn Forest", OUTSIDE, CITY);
+        let mut relog = state(SEED & !1);
+        let steps = walk(&mut relog, "Elwynn Forest", OUTSIDE, CITY);
         assert_eq!(
             steps,
             vec![
@@ -956,8 +973,6 @@ mod tests {
         );
 
         // Until a `/join General` confirms and sets the bit back.
-        let mut relog = relog;
-        apply_steps(&steps, &mut relog);
         relog.claim_slot("General - Elwynn Forest", 1);
         relog.confirm_slot("General - Elwynn Forest");
         assert_eq!(relog.zone_mask, Some(SEED));
@@ -1050,7 +1065,7 @@ mod tests {
     fn a_suspended_slot_whose_name_moved_rejoins_without_a_leave() {
         let mut c = state(SEED);
         c.joined = vec![suspended("General - Elwynn Forest")];
-        let steps = plan_walk(&c, "Westfall", OUTSIDE, CITY);
+        let steps = walk(&mut c, "Westfall", OUTSIDE, CITY);
         assert_eq!(
             &steps[..2],
             &[
@@ -1061,7 +1076,6 @@ mod tests {
                 W::Join(s("General - Westfall")),
             ]
         );
-        apply_steps(&steps, &mut c);
         assert_eq!(
             c.slot_state("General - Westfall"),
             Some(SlotState::Pending),
@@ -1227,7 +1241,7 @@ mod tests {
     fn a_suspended_trade_slot_is_renamed_into_a_capital_and_waits_for_its_notice() {
         let mut c = state(0b10);
         c.joined = vec![suspended("Trade - Elwynn Forest")];
-        let steps = plan_walk(&c, "Stormwind City", CAPITAL, CITY);
+        let steps = walk(&mut c, "Stormwind City", CAPITAL, CITY);
         assert_eq!(
             steps,
             vec![
@@ -1238,14 +1252,12 @@ mod tests {
                 W::Join(s("Trade - City")),
             ]
         );
-        apply_steps(&steps, &mut c);
         assert_eq!(c.slot_state("Trade - City"), Some(SlotState::Pending));
 
         // Suspended under the capital's own name, the same: renamed to itself.
         let mut c = state(0b10);
         c.joined = vec![suspended("Trade - City")];
-        let steps = plan_walk(&c, "Ironforge", CAPITAL, CITY);
-        apply_steps(&steps, &mut c);
+        let steps = walk(&mut c, "Ironforge", CAPITAL, CITY);
         assert_eq!(steps.last(), Some(&W::Join(s("Trade - City"))));
         assert_eq!(c.slot_state("Trade - City"), Some(SlotState::Pending));
     }
