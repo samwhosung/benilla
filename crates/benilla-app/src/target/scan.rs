@@ -759,7 +759,9 @@ pub(crate) struct AttackNearestRequest;
 #[derive(Resource, Default)]
 pub(crate) struct LastEnemy(pub(crate) Option<u64>);
 
-/// Stamp [`LastEnemy`] behind the five-conjunct gate `0x49372f`–`0x493778`. Runs before
+/// Stamp [`LastEnemy`] behind the five-conjunct gate `0x49372f`–`0x493778`, on the object
+/// `SetSelection` found and lit (`0x4936f3`-`0x493701`, [`Selection::lit`]): one that streams in
+/// later under the selected guid was never selected, so it is never stamped. Runs before
 /// `ring::update_ring`'s death-clear: a hostile that dies while selected stays remembered.
 ///
 /// Deviation: sampled each frame, not stamped in `SetSelection`, so every selection writer is
@@ -771,7 +773,7 @@ pub(super) fn remember_last_enemy(
     world: RelationWorld,
     mut last: ResMut<LastEnemy>,
 ) {
-    let Some((entity, guid)) = selection.target.zip(selection.guid) else {
+    let Some((entity, guid)) = selection.lit.zip(selection.guid) else {
         return;
     };
     // Conjunct 1: the player object resolves.
@@ -1550,10 +1552,12 @@ mod tests {
             ]))
             .id();
 
+        // As `SetSelection` stores the guid and lights the object it found (`0x493701`).
         let select = |world: &mut World, target: Option<(Entity, u64)>| {
             let mut sel = world.resource_mut::<Selection>();
             sel.target = target.map(|(e, _)| e);
             sel.guid = target.map(|(_, g)| g);
+            sel.lit = sel.target;
             world
                 .run_system_once(remember_last_enemy)
                 .expect("the sampler runs as a one-shot system");
