@@ -1866,12 +1866,12 @@ pub(super) fn clear(
     if let Some(old) = selection.guid.take() {
         selection.target = None;
         selection.lit = None;
-        // The teardown `0x493910` closes the old target's loot before its own send.
+        // The teardown `0x493910` closes the old target's loot, then stops our attack
+        // (`0x493a08 call 0x5ecac0`, which also un-queues an on-next-swing strike), then sends
+        // (`0x493a2a`).
         seam.close_loot_on(old);
-        let _ = seam.net.0.send(ClientCommand::SetSelection { guid: 0 });
-        // `SetSelection 0x493540`'s own `0x493a08 call 0x5ecac0`, the real StopAttack, which
-        // also un-queues a pending on-next-swing strike.
         seam.stop(engaged);
+        let _ = seam.net.0.send(ClientCommand::SetSelection { guid: 0 });
     }
 }
 
