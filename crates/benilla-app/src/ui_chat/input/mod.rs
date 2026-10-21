@@ -187,7 +187,10 @@ pub(super) fn drain_chat_input(
     table: Res<super::commands::SlashCommands>,
     probes: ChatProbes,
 ) {
-    vm.turn(|script, parts| {
+    // The lines are taken in turns, and a line's Lua runs between them with the host lent, so a
+    // call it makes applies inside its verb, before the next line is taken.
+    let mut lines: Option<std::vec::IntoIter<(String, ParsedChat)>> = None;
+    while let Some(lua) = vm.turn(|script, parts| {
         let (selection, mut group, mut names, mut cast_events, mut play_seq, mut chat_out) = parts;
         let ChatProbes {
             camera: world_camera,
@@ -203,34 +206,36 @@ pub(super) fn drain_chat_input(
             engaged,
             loot_kneel,
         } = &probes;
-        let Some(script) = script else {
-            return;
-        };
-        let mut queue = engine_verbs(script, emotes.as_deref());
-        // The dev instruments, from their host `SlashCmdList` rows once the stock
-        // `ChatEdit_ParseText` has found no built-in (dev builds), and probe lines.
-        for raw in script.take_chat_input() {
-            let msg = raw.trim();
-            if msg.is_empty() {
-                continue;
-            }
-            // A probe's line with no slash is a SAY, which is also how a `.gm`-style server command
-            // travels; a typed one goes out through the stock `ChatEdit_SendText` instead.
-            if !msg.starts_with('/') {
-                let cmd = ClientCommand::Chat {
-                    kind: super::edit::SendType::Say.wire(),
-                    target: None,
-                    text: msg.to_string(),
-                    language: None,
-                };
-                if commands.0.send(cmd).is_err() {
-                    warn!("chat: not connected; line dropped");
+        let script = script?;
+        let lines = lines.get_or_insert_with(|| {
+            let mut queue = engine_verbs(script, emotes.as_deref());
+            // The dev instruments, from their host `SlashCmdList` rows once the stock
+            // `ChatEdit_ParseText` has found no built-in (dev builds), and probe lines.
+            for raw in script.take_chat_input() {
+                let msg = raw.trim();
+                if msg.is_empty() {
+                    continue;
                 }
-                continue;
+                // A probe's line with no slash is a SAY, which is also how a `.gm`-style server
+                // command travels; a typed one goes out through the stock `ChatEdit_SendText`
+                // instead.
+                if !msg.starts_with('/') {
+                    let cmd = ClientCommand::Chat {
+                        kind: super::edit::SendType::Say.wire(),
+                        target: None,
+                        text: msg.to_string(),
+                        language: None,
+                    };
+                    if commands.0.send(cmd).is_err() {
+                        warn!("chat: not connected; line dropped");
+                    }
+                    continue;
+                }
+                queue.push((msg.to_string(), parse_line(&table, msg)));
             }
-            queue.push((msg.to_string(), parse_line(&table, msg)));
-        }
-        for (msg, parsed) in queue {
+            queue.into_iter()
+        });
+        for (msg, parsed) in lines.by_ref() {
             let msg = msg.as_str();
             match parsed {
                 // `/r` is the stock `ChatEdit_ParseText`'s REPLY arm; a typed one never gets here.
@@ -244,15 +249,10 @@ pub(super) fn drain_chat_input(
                         "SlashCmdList['JOIN']({:?})",
                         format!("{name} {password}").trim_end()
                     );
-                    if let Err(e) = script.run(&body) {
-                        warn!("ui_chat: {body}: {e}");
-                    }
+                    return Some(LineLua::Handler(body));
                 }
                 ParsedChat::Leave { name } => {
-                    let body = format!("SlashCmdList['LEAVE']({name:?})");
-                    if let Err(e) = script.run(&body) {
-                        warn!("ui_chat: {body}: {e}");
-                    }
+                    return Some(LineLua::Handler(format!("SlashCmdList['LEAVE']({name:?})")));
                 }
                 ParsedChat::ChatList { name } => {
                     let _ = commands.0.send(ClientCommand::ChannelList { name });
@@ -895,17 +895,7 @@ pub(super) fn drain_chat_input(
                         .queue(move |world: &mut World| crate::console::run(world, &line));
                 }
                 // The reference's handler body, run in the VM.
-                ParsedChat::Lua { body } => {
-                    if let Err(e) = script.run(&body) {
-                        // Logged and printed: the player sees a `/script` typo, the log a failing
-                        // built-in.
-                        warn!("ui_chat: {body:?}: {e}");
-                        chat_log.push_event(super::event::ChatEvent::text_only(
-                            super::event::ChatEventKind::System,
-                            format!("{e}"),
-                        ));
-                    }
-                }
+                ParsedChat::Lua { body } => return Some(LineLua::Body(body)),
                 ParsedChat::Channel(cmd) => {
                     use benilla_ui::script::ChannelCommand as C;
                     let cmd = match cmd {
@@ -976,33 +966,82 @@ pub(super) fn drain_chat_input(
                 ParsedChat::Unknown => {
                     // `SlashCmdList` gets the line before the help reply: an addon's command, or a
                     // stock one with no arm here.
-                    if let Some(rest) = msg.strip_prefix('/') {
-                        let rest = rest.trim();
-                        let (cmd, args) =
-                            rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-                        if script.run_slash_command(cmd, args.trim()) {
-                            continue;
-                        }
-                    }
-                    // `HELP_TEXT_SIMPLE`, the reference's unknown-command reply
-                    // (`ChatFrame.lua:2205`), a plain chat line with no message-catalog surface or
-                    // sound.
-                    if let Some(text) = script
-                        .lua()
-                        .globals()
-                        .get::<String>("HELP_TEXT_SIMPLE")
-                        .ok()
-                        .filter(|t| !t.is_empty())
-                    {
-                        chat_log.push_event(super::event::ChatEvent::text_only(
-                            super::event::ChatEventKind::System,
-                            text,
-                        ));
-                    }
+                    let rest = msg.strip_prefix('/').unwrap_or(msg).trim();
+                    let (cmd, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+                    return Some(LineLua::Slash {
+                        slashed: msg.starts_with('/'),
+                        cmd: cmd.to_string(),
+                        args: args.trim().to_string(),
+                    });
                 }
             }
         }
-    })
+        None
+    }) {
+        vm.run(|script| {
+            if let Some(script) = script {
+                lua.run(script, &chat_log);
+            }
+        });
+    }
+}
+
+/// A dev or probe line's Lua, which [`drain_chat_input`] runs between the turns that take the
+/// lines, with the host lent.
+enum LineLua {
+    /// A built-in's `SlashCmdList` handler, by its row.
+    Handler(String),
+    /// `/script`'s body.
+    Body(String),
+    /// A command no arm took: `SlashCmdList` first, else the help reply.
+    Slash {
+        slashed: bool,
+        cmd: String,
+        args: String,
+    },
+}
+
+impl LineLua {
+    fn run(self, script: &mut benilla_ui::script::UiScript, chat_log: &super::feed::ChatLog) {
+        match self {
+            LineLua::Handler(body) => {
+                if let Err(e) = script.run(&body) {
+                    warn!("ui_chat: {body}: {e}");
+                }
+            }
+            LineLua::Body(body) => {
+                if let Err(e) = script.run(&body) {
+                    // Logged and printed: the player sees a `/script` typo, the log a failing
+                    // built-in.
+                    warn!("ui_chat: {body:?}: {e}");
+                    chat_log.push_event(super::event::ChatEvent::text_only(
+                        super::event::ChatEventKind::System,
+                        format!("{e}"),
+                    ));
+                }
+            }
+            LineLua::Slash { slashed, cmd, args } => {
+                if slashed && script.run_slash_command(&cmd, &args) {
+                    return;
+                }
+                // `HELP_TEXT_SIMPLE`, the reference's unknown-command reply
+                // (`ChatFrame.lua:2205`), a plain chat line with no message-catalog surface or
+                // sound.
+                if let Some(text) = script
+                    .lua()
+                    .globals()
+                    .get::<String>("HELP_TEXT_SIMPLE")
+                    .ok()
+                    .filter(|t| !t.is_empty())
+                {
+                    chat_log.push_event(super::event::ChatEvent::text_only(
+                        super::event::ChatEventKind::System,
+                        text,
+                    ));
+                }
+            }
+        }
+    }
 }
 
 /// `/chattest`: one synthetic line of every renderable form (kinds, flags, the language header,

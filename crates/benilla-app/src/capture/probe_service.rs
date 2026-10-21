@@ -298,7 +298,14 @@ fn service_probe(
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    vm.turn(|script, mut merchant| {
+    // The cursor legs pick up through the binding and read the bags through Lua, with the host
+    // lent so a call that Lua makes applies inside its verb; the rest is an engine turn over the
+    // merchant window.
+    let lent = matches!(
+        probe.phase,
+        Phase::VendorArm { .. } | Phase::VendorSell { .. }
+    );
+    let mut step = |script: Option<&mut UiScript>, mut merchant: Option<&mut MerchantOpen>| {
         if self_player.is_empty() {
             return; // not in-world yet
         }
@@ -594,7 +601,9 @@ fn service_probe(
                 gossip.clear();
                 giver.clear();
                 trainer.clear();
-                merchant.clear();
+                if let Some(merchant) = merchant.as_deref_mut() {
+                    merchant.clear();
+                }
 
                 // The empty-cursor leg. The arm is asserted: a vendor with a GOSSIP bit takes the
                 // gossip arm.
@@ -630,7 +639,7 @@ fn service_probe(
                 }
             }
             Phase::VendorOpen { since, guid } => {
-                if merchant.vendor == Some(guid) {
+                if let Some(merchant) = merchant.as_deref_mut().filter(|m| m.vendor == Some(guid)) {
                     info!(
                         "PROBE_SERVICE: PASS (vendor fork, empty cursor) — merchant window open on \
                          {guid:#x}: the zero leg is still the plain list open"
@@ -796,7 +805,12 @@ fn service_probe(
                 });
             }
         }
-    })
+    };
+    if lent {
+        vm.run(|script| step(script, None));
+    } else {
+        vm.turn(|script, mut merchant| step(script, Some(&mut *merchant)));
+    }
 }
 
 /// The open quest panel's shape, for the PASS line.
