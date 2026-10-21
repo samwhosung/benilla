@@ -7,7 +7,6 @@ use bevy::prelude::*;
 
 use benilla_formats::{RangeTargets, RangeUnit, SpellDisplay, SpellRange};
 
-use crate::net::SelfPlayer;
 use crate::spell::SpellModifiers;
 use crate::target::{CursorKind, PickOcclusion, WorldCursor};
 use crate::ui_action::Spells;
@@ -16,10 +15,11 @@ use super::{SpellTargeting, TargetingWants};
 
 /// What `GetMinMaxRange 0x6e3480` reads for the cursor's two range verdicts: the ground point
 /// (`CheckGroundPointInRange 0x6e6810`, a null target at `0x6e6879`) and the GameObject leg of
-/// `0x6e6460` (the object as target at `0x6e679b`). Neither passes a unit, which the function
-/// tests for at `0x6e34e1`-`0x6e34f9`: the ranged arm pads nothing and takes no moving bonus,
-/// and the melee arm sums the caster's reach with its auto-attack target's and asks that unit's
-/// motion, with the caster's, for the bonus.
+/// `0x6e6460` (the object as target at `0x6e679b`). Both ask it for the record's caster
+/// (`0xceac50`, resolved at `0x6e6849` and `0x6e64b2`), a pet's cast its pet. Neither passes a
+/// unit, which the function tests for at `0x6e34e1`-`0x6e34f9`: the ranged arm pads nothing and
+/// takes no moving bonus, and the melee arm sums the caster's reach with its auto-attack target's
+/// and asks that unit's motion, with the caster's, for the bonus.
 #[derive(Clone, Copy)]
 struct RangeCall<'a> {
     spell: &'a SpellDisplay,
@@ -29,17 +29,24 @@ struct RangeCall<'a> {
     attack_target: Option<RangeUnit>,
 }
 
-/// The call's inputs, or `None` where the data is absent (no catalog, an unknown spell, a row
-/// missing from `SpellRange`), which is permissive: the server judges every send.
-fn range_call<'a>(checks: &'a super::BindChecks, spell_id: u32) -> Option<RangeCall<'a>> {
+/// The call's inputs for `caster`, or `None` where the data is absent (no catalog, an unknown
+/// spell, a row missing from `SpellRange`), which is permissive: the server judges every send.
+fn range_call<'a>(
+    checks: &'a super::BindChecks,
+    spell_id: u32,
+    caster: Entity,
+) -> Option<RangeCall<'a>> {
     let spells = checks.spells.as_deref()?;
     let spell = spells.catalog.get(spell_id)?;
     Some(RangeCall {
         spell,
         row: spells.ranges.get(spell.range_index)?,
         mods: &checks.spell_mods,
-        caster: checks.range_units.caster(),
-        attack_target: checks.range_units.caster_attack_target(),
+        caster: checks
+            .range_units
+            .unit(caster)
+            .unwrap_or(RangeUnit::still(crate::spell::DEFAULT_REACH)),
+        attack_target: checks.range_units.attack_target(caster),
     })
 }
 
@@ -121,14 +128,13 @@ pub(crate) fn ground_cast_radius(
 /// [`SpellTargeting::can_target_unit`] and its corpse leg [`SpellTargeting::can_target_corpse`],
 /// over a corpse the pick admitted under a word in `0x8600`. The world-item leg is not built.
 ///
-/// Every seam shows the `Cast` kind, so this reads the whole-word [`SpellTargeting::spell`].
+/// Every seam shows the `Cast` kind, so this reads the whole word's spell and its caster.
 pub(crate) fn drive_targeting_cursor(
     targeting: Res<SpellTargeting>,
     checks: super::BindChecks,
     occlusion: Res<PickOcclusion>,
     hovered: Res<crate::target::Hovered>,
     hovered_object: Res<crate::target::HoveredObject>,
-    self_tf: Query<&Transform, With<SelfPlayer>>,
     go_tf: Query<&Transform>,
     stores: Query<(
         &crate::net::ObjectStore,
@@ -140,11 +146,15 @@ pub(crate) fn drive_targeting_cursor(
     lock_inputs: crate::target::lock::GoLockInputs,
     mut cursor: ResMut<WorldCursor>,
 ) {
-    let Some(spell_id) = targeting.spell() else {
+    let Some((spell_id, commit, _)) = targeting.pending() else {
         return;
     };
-    let range = range_call(&checks, spell_id);
-    let me = self_tf.single().ok().map(|tf| tf.translation);
+    // The record's caster (`0xceac50`); one not streamed fails both range legs (`0x6e6852`).
+    let caster = checks.caster(commit).map(|(e, _)| e);
+    let range = caster.and_then(|e| range_call(&checks, spell_id, e));
+    let me = caster
+        .and_then(|e| go_tf.get(e).ok())
+        .map(|tf| tf.translation);
     // The arm the click would take ([`super::world::commit_object_cast_on_click`]): a GameObject
     // word's nearest GameObject, else the picked unit or corpse, else the terrain.
     let able = if targeting.wants(TargetingWants::GameObject)
@@ -242,6 +252,7 @@ fn object_arm(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::SelfPlayer;
 
     /// The call for a spell and row under these tables, with the default combat reach and no
     /// auto-attack target.
