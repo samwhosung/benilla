@@ -292,6 +292,102 @@ impl Clear {
     };
 }
 
+/// The cursor state a write changes: the payload, the grid a setter showed, an armed gift wrap and
+/// the displayed cursor its arm took.
+#[derive(Clone, Debug)]
+pub(crate) struct CursorState {
+    payload: Option<CursorPayload>,
+    grid: bool,
+    wrap: Option<super::container::PendingWrap>,
+    ui_cursor: Option<super::container::UiCursorMode>,
+    ui_cursor_dirty: bool,
+}
+
+impl Model {
+    fn cursor_state(&self) -> CursorState {
+        CursorState {
+            payload: self.cursor.clone(),
+            grid: self.cursor_grid,
+            wrap: self.pending_wrap,
+            ui_cursor: self.ui_cursor,
+            ui_cursor_dirty: self.ui_cursor_dirty,
+        }
+    }
+
+    /// Put the cursor back as `state` held it.
+    pub(crate) fn restore_cursor_state(&mut self, state: &CursorState) {
+        self.cursor = state.payload.clone();
+        self.cursor_grid = state.grid;
+        self.pending_wrap = state.wrap;
+        self.ui_cursor = state.ui_cursor;
+        self.ui_cursor_dirty = state.ui_cursor_dirty;
+    }
+}
+
+/// A cursor write as the operation it is: `ClearCursor` (`0x495190`) with its flags, or a setter's
+/// put. A clear acts on what the cursor holds when it runs.
+#[derive(Clone, Debug)]
+pub(crate) enum CursorOp {
+    Clear(Clear),
+    Put(CursorPayload),
+}
+
+/// One cursor write as made: the operation, the cursor state it found, and what it raised. Made
+/// while something waits for the host, the take puts that state back ([`CursorWrite::rewind`])
+/// and the operation runs again in its place, against the cursor as it is then, as the
+/// reference's runs after what came ahead of it: never its recorded result.
+#[derive(Clone, Debug)]
+pub(crate) struct CursorWrite {
+    pub(crate) op: CursorOp,
+    before: CursorState,
+    pub(crate) raised: Vec<super::tick::Raised>,
+}
+
+impl CursorWrite {
+    /// Undo it: its lock writes, last first, then the cursor state it found.
+    pub(crate) fn rewind(&self, model: &mut Model) {
+        super::tick::rewind(model, &self.raised);
+        model.restore_cursor_state(&self.before);
+    }
+}
+
+/// Make cursor write `op`, recorded whole ([`CursorWrite`]): inside a verb segment as one record,
+/// which its fan-out shows and its replay for the host makes again ([`super::tick::fan_out`]);
+/// outside one while something waits for the host, captured and queued behind it, its events
+/// raised when it is made again. With nothing waiting outside a segment it is just made.
+pub(crate) fn write(model: &mut Model, op: CursorOp) {
+    let before = model.cursor_state();
+    let start = model.verb_events.as_ref().map(Vec::len);
+    let queued = start.is_none() && !model.script_calls.is_empty();
+    if queued {
+        model.verb_events = Some(Vec::new());
+    }
+    match op.clone() {
+        CursorOp::Clear(how) => clear_now(model, how),
+        CursorOp::Put(payload) => put_now(model, payload),
+    }
+    let Some(segment) = model.verb_events.as_mut() else {
+        return;
+    };
+    let raised = segment.split_off(start.unwrap_or(0));
+    let write = Box::new(CursorWrite { op, before, raised });
+    if queued {
+        model.verb_events = None;
+        model.push_waiting(super::calls::Waiting::Cursor {
+            write,
+            shown: false,
+        });
+    } else {
+        segment.push(super::tick::Raised::CursorWrite(write));
+    }
+}
+
+/// `ClearCursor(unlock, signal)` (`0x495190`), the one way a payload leaves the cursor, made as a
+/// recorded write ([`write`]).
+pub(crate) fn clear(model: &mut Model, how: Clear) {
+    write(model, CursorOp::Clear(how));
+}
+
 /// `ClearCursor(unlock, signal)` (`0x495190`), the one way a payload leaves the cursor. An armed
 /// gift wrap is cancelled first (`0x495197`). Then the payload's arm: an item's unlock signals
 /// `ITEM_LOCK_CHANGED` when `unlock` (`0x4951d9`, `0x495455`), coins `PLAYER_MONEY` when `signal`
@@ -301,7 +397,7 @@ impl Clear {
 /// wrap's and the item's unlock see the whole payload, the item reading unlocked, while the coins'
 /// `PLAYER_MONEY` and the grid hide come after the arm zeroed the data
 /// ([`CursorPayload::emptied`]). `CURSOR_UPDATE` alone reads the emptied cursor (`0x4952cc`).
-pub(crate) fn clear(model: &mut Model, how: Clear) {
+fn clear_now(model: &mut Model, how: Clear) {
     let held = model.cursor.take();
     model.view_cursor(held.clone());
     // `0x5edf10`: the wrapping paper unlocks (`0x5ededd`) and the cursor mode returns to the base.
@@ -344,8 +440,14 @@ pub(crate) fn clear_cursor(model: &mut Model) {
 /// bar item, mode 7 (`0x49513a`), and fires `CURSOR_UPDATE` (`0x49515e`). The spell (`0x494dd1`)
 /// and macro (`0x494fd7`) setters end on the action bar's grid, the pet-action setter on the pet
 /// bar's (`0x494f28`), the money setter on `PLAYER_MONEY` (`0x494d0a`) and the stable grab on
-/// nothing (`0x4950c5`), so no `CURSOR_UPDATE` follows theirs.
+/// nothing (`0x4950c5`), so no `CURSOR_UPDATE` follows theirs. Made as a recorded write
+/// ([`write`]).
 pub(crate) fn put(model: &mut Model, payload: CursorPayload) {
+    write(model, CursorOp::Put(payload));
+}
+
+/// [`put`]'s set and tail.
+fn put_now(model: &mut Model, payload: CursorPayload) {
     /// What a setter fires past its set.
     enum Tail {
         /// `SetCursorItem` and the row grab: the action bar's grid if asked, then `CURSOR_UPDATE`.

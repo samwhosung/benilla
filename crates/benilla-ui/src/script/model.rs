@@ -422,10 +422,6 @@ pub(crate) struct Model {
     /// or the targeting cursor made while it was out, and the handlers an engine step fired then
     /// ([`super::host::holding`]), for it to run as soon as it is back.
     pub(crate) script_calls: Vec<super::calls::Waiting>,
-    /// The cursor as the last item put in [`Self::script_calls`] saw it, `None` while nothing
-    /// waits, so each item notes the cursor's change since the one before
-    /// ([`super::calls::Waiting::Cursor`]).
-    pub(crate) waiting_cursor: Option<Option<cursor::CursorPayload>>,
     /// How many drains of [`Self::script_calls`] are running, each inside a call the one outside
     /// it applied ([`super::calls::submit`]).
     pub(crate) call_depth: u8,
@@ -1559,7 +1555,6 @@ impl Model {
             cancel_aura_requests: Vec::new(),
             tracking: None,
             script_calls: Vec::new(),
-            waiting_cursor: None,
             call_depth: 0,
             kept_calls: None,
             call_raises: Default::default(),

@@ -92,6 +92,50 @@ pub(crate) enum Raised {
     Lock { guid: u64, locked: bool, was: bool },
     /// Put back the cursor the segment left.
     EndCursorView,
+    /// A cursor write, its own records inside it ([`super::cursor::write`]).
+    CursorWrite(Box<super::cursor::CursorWrite>),
+}
+
+/// Undo `raised`'s writes, last first: each lock bit as it was, and each cursor write
+/// ([`super::cursor::CursorWrite::rewind`]).
+pub(crate) fn rewind(model: &mut Model, raised: &[Raised]) {
+    for raised in raised.iter().rev() {
+        match raised {
+            Raised::Lock { guid, was, .. } => {
+                set_lock_bit(model, *guid, *was);
+            }
+            Raised::CursorWrite(write) => write.rewind(model),
+            Raised::Event(..) | Raised::CursorView(_) | Raised::EndCursorView => {}
+        }
+    }
+}
+
+/// Put `raised`'s lock bits back as they were, last first, a cursor write's own included; the
+/// cursor stays as the writes left it.
+fn roll_back_locks(model: &mut Model, raised: &[Raised]) {
+    for raised in raised.iter().rev() {
+        match raised {
+            Raised::Lock { guid, was, .. } => {
+                set_lock_bit(model, *guid, *was);
+            }
+            Raised::CursorWrite(write) => roll_back_locks(model, &write.raised),
+            Raised::Event(..) | Raised::CursorView(_) | Raised::EndCursorView => {}
+        }
+    }
+}
+
+/// How [`fan_out`] makes a segment's records.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Fan {
+    /// As made: each record shown; a cursor write made while something waits for the host is
+    /// shown, then waits behind it to be made again ([`super::calls::Waiting::Cursor`]).
+    Now,
+    /// For the host, a held segment run late: each cursor write made again against the cursor
+    /// as it is now, in a segment of its own, its recorded result and records dropped.
+    Again,
+    /// A cursor write's own records, shown in place while it waits: its lock writes are made
+    /// bare, as they are the write's and wait with it.
+    Bare,
 }
 
 /// Run one segment of a Lua verb with the model borrowed, then fire every event it raised, in
@@ -102,8 +146,9 @@ pub(crate) enum Raised {
 /// inside this fan-out, the reference's synchronous nesting.
 ///
 /// An engine step that cannot lend the host ([`super::host::holding`]) holds the fan-out instead,
-/// its events, cursor views and lock writes, for the host ([`super::calls::Held::Segment`]); the
-/// writes stand meanwhile, and the take puts them back to make them again in their places.
+/// its events, cursor views, lock writes and cursor writes, for the host
+/// ([`super::calls::Held::Segment`]); the writes stand meanwhile, and the take puts them back to
+/// make them again in their places, a cursor write as its operation ([`Fan::Again`]).
 pub(crate) fn verb<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
     let (out, raised) = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data set");
@@ -113,10 +158,12 @@ pub(crate) fn verb<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
         (out, model.verb_events.take().unwrap_or_default())
     };
     if super::host::holding(lua) {
-        if raised
-            .iter()
-            .any(|r| matches!(r, Raised::Event(..) | Raised::Lock { .. }))
-        {
+        if raised.iter().any(|r| {
+            matches!(
+                r,
+                Raised::Event(..) | Raised::Lock { .. } | Raised::CursorWrite(_)
+            )
+        }) {
             super::calls::hold(lua, super::calls::Held::Segment(raised));
         }
         return out;
@@ -126,25 +173,49 @@ pub(crate) fn verb<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
     // between two of them is overwritten by the later write, as the reference's later `LockItem`
     // or `UnlockItem` would overwrite it. What the body cannot match is a read: it ran before any
     // handler, so it never sees a handler's change.
-    {
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data set");
-        for raised in raised.iter().rev() {
-            if let Raised::Lock { guid, was, .. } = *raised {
-                set_lock_bit(&mut model, guid, was);
-            }
-        }
-    }
-    fan_out(lua, raised);
+    roll_back_locks(
+        &mut lua.app_data_mut::<Model>().expect("model app_data set"),
+        &raised,
+    );
+    fan_out(lua, raised, Fan::Now);
     out
 }
 
 /// A verb segment's fan-out: each event fired, each cursor view shown to the handlers between it
-/// and its end, each lock write made, in the order raised.
-pub(crate) fn fan_out(lua: &Lua, raised: Vec<Raised>) {
+/// and its end, each lock write made and each cursor write shown or made again ([`Fan`]), in the
+/// order raised.
+pub(crate) fn fan_out(lua: &Lua, raised: Vec<Raised>, how: Fan) {
     // The cursors a view replaced, innermost last.
     let mut hidden = Vec::new();
     for raised in raised {
         match raised {
+            Raised::CursorWrite(write) if how == Fan::Again => {
+                verb(lua, |model| super::cursor::write(model, write.op));
+            }
+            Raised::CursorWrite(write) => {
+                let waits = !lua
+                    .app_data_ref::<Model>()
+                    .expect("model app_data set")
+                    .script_calls
+                    .is_empty();
+                if waits {
+                    // Queued ahead of what its handlers leave waiting, as it was made before them.
+                    let raised = write.raised.clone();
+                    lua.app_data_mut::<Model>()
+                        .expect("model app_data set")
+                        .push_waiting(super::calls::Waiting::Cursor { write, shown: true });
+                    fan_out(lua, raised, Fan::Bare);
+                } else {
+                    fan_out(lua, write.raised, how);
+                }
+            }
+            Raised::Lock { guid, locked, .. } if how == Fan::Bare => {
+                set_lock_bit(
+                    &mut lua.app_data_mut::<Model>().expect("model app_data set"),
+                    guid,
+                    locked,
+                );
+            }
             Raised::Event(event, args) => fire_event_into(lua, &event, args),
             Raised::CursorView(payload) => {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data set");
