@@ -3067,6 +3067,42 @@ fn a_lines_target_tokens_name_the_selection() {
     );
 }
 
+/// `SendChatMessage` acknowledges the Chatting tutorial (`AcknowledgeTutorial(0x16)`, `0x49f5fc`)
+/// for every type past the dead check, the living's say included; the AFK arm ends the call
+/// ahead of it (`0x49f525`), and so does a refused line.
+#[test]
+fn every_line_past_the_dead_check_acknowledges_the_chat_tutorial() {
+    let (mut world, _rx) = super::chat_world(in_world_vm());
+    let acks = |world: &mut bevy::prelude::World, lua: &str| {
+        super::run_chat(world, lua).expect("lua");
+        world
+            .non_send_resource_mut::<benilla_ui::script::UiScript>()
+            .take_tutorial_flag_requests()
+    };
+    assert_eq!(
+        acks(
+            &mut world,
+            r#"DEFAULT_AFK_MESSAGE = "Away" SendChatMessage("brb", "AFK")
+            SendChatMessage("x", "PARTY")"#
+        ),
+        Vec::<u32>::new(),
+        "neither the AFK arm nor a refused line reaches it"
+    );
+    for line in [
+        r#"SendChatMessage("hi")"#,
+        r#"SendChatMessage("hi", "YELL")"#,
+        r#"SendChatMessage("waves", "EMOTE")"#,
+        r#"SendChatMessage("hi", "GUILD")"#,
+        r#"SendChatMessage("", "DND")"#,
+    ] {
+        assert_eq!(
+            acks(&mut world, line),
+            vec![crate::tutorial::id::CHATTING],
+            "{line}"
+        );
+    }
+}
+
 /// The chat calls go through the real call host, applied before their verbs return:
 /// `SendChatMessage`'s line and `RandomRoll`'s `MSG_RANDOM_ROLL` (`0x48c832`) are on the wire when
 /// the next line of the script runs.
