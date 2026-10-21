@@ -376,7 +376,6 @@ fn auction_probe(
     // The house as this frame found it: the verbs the probe's Lua calls apply in the call, through
     // the host, which holds the house while it does.
     let auction = vm.own().clone();
-    let auction = &auction;
     vm.run(|script| {
         let Ok(store) = self_player.single() else {
             return; // not in-world yet

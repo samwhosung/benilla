@@ -85,6 +85,5 @@ fn the_auction_sell_button_paints_the_attached_item_in_place() {
         .unwrap();
     assert!(s.errors().is_empty(), "{:?}", s.errors());
     assert_eq!(name, None, "the button still names the sent item");
-    drop(host);
     assert_eq!(starts, 1);
 }
