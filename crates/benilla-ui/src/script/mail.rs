@@ -471,12 +471,22 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     None => Value::Nil,
                 })
             };
+            // A COD payment's subject goes through `COD_PAYMENT` on any mail type, `""` when the
+            // string is missing (`[rec+0x148] & 8`, `0x4aeeb0`-`0x4aeee9`, `0x703bf0`).
+            let subject = if r.cod_payment {
+                lua.globals()
+                    .get::<Option<String>>("COD_PAYMENT")?
+                    .unwrap_or_default()
+                    .replacen("%s", &r.subject, 1)
+            } else {
+                r.subject.clone()
+            };
             Ok(MultiValue::from_vec(vec![
                 // The row's package or item icon, GM letter or not (`0x4aec76`-`0x4aecf8`).
                 opt_str(&r.package_icon)?,
                 opt_str(&r.stationery_icon)?,
                 opt_str(&r.sender)?,
-                Value::String(lua.create_string(&r.subject)?),
+                Value::String(lua.create_string(&subject)?),
                 Value::Integer(i64::from(r.money)),
                 Value::Integer(i64::from(r.cod)),
                 Value::Number(f64::from(r.days_left)),
