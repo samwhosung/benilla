@@ -804,6 +804,8 @@ fn the_ready_check_popup_opens_and_answers() {
     push_raid(&mut s, twelve());
     assert!(!visible(&s, "ReadyCheckFrame"), "nothing to answer yet");
 
+    // The open form arms the deadline (`0x4ba535`) before it signals (`0x4ba53a`).
+    s.ready_check_request(false);
     s.fire_event("READY_CHECK", Vec::new());
     assert!(visible(&s, "ReadyCheckFrame"), "UIParent's arm opens it");
     assert!(
@@ -815,7 +817,7 @@ fn the_ready_check_popup_opens_and_answers() {
     s.run("ReadyCheckFrameYesButton:Click()").unwrap();
     assert_eq!(
         s.take_party_requests(),
-        vec![PartyRequest::ReadyCheckAnswer(true)]
+        vec![PartyRequest::ReadyCheckAnswer(1)]
     );
     assert!(!visible(&s, "ReadyCheckFrame"));
 
@@ -823,7 +825,7 @@ fn the_ready_check_popup_opens_and_answers() {
     s.run("ReadyCheckFrameNoButton:Click()").unwrap();
     assert_eq!(
         s.take_party_requests(),
-        vec![PartyRequest::ReadyCheckAnswer(false)],
+        vec![PartyRequest::ReadyCheckAnswer(0)],
         "No passes no argument at all, and absent must mean not-ready"
     );
 

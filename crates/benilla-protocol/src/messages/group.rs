@@ -643,9 +643,11 @@ pub fn ready_check_start() -> Vec<u8> {
     Vec::new()
 }
 
-/// `MSG_RAID_READY_CHECK` body answering one: 1 ready or 0 not, no guid (`Group.cpp:84-92`).
-pub fn ready_check_answer(ready: bool) -> Vec<u8> {
-    vec![u8::from(ready)]
+/// `MSG_RAID_READY_CHECK` body answering one: the status byte, no guid (`Group.cpp:84-92`). The
+/// client writes whatever byte `ConfirmReadyCheck` was given (`PutInt8` at `0x4bc0e4`); the stock
+/// buttons pass 1 ready and 0 not.
+pub fn ready_check_answer(status: u8) -> Vec<u8> {
+    vec![status]
 }
 
 /// One `SMSG_RAID_INSTANCE_INFO` row, a permanent raid lockout (vmangos `Player::SendRaidInfo`).

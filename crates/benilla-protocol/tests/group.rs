@@ -133,14 +133,19 @@ fn cmsg_bodies_golden() {
         "ready_check_start body"
     );
     assert_eq!(
-        messages::ready_check_answer(true),
+        messages::ready_check_answer(1),
         hx("01"),
-        "ready_check_answer(true) body"
+        "ready_check_answer(1) body"
     );
     assert_eq!(
-        messages::ready_check_answer(false),
+        messages::ready_check_answer(0),
         hx("00"),
-        "ready_check_answer(false) body"
+        "ready_check_answer(0) body"
+    );
+    assert_eq!(
+        messages::ready_check_answer(0xff),
+        hx("ff"),
+        "any status byte goes out as given (`0x4bc0e4`)"
     );
 }
 

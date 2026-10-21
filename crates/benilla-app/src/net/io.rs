@@ -1778,7 +1778,7 @@ pub(super) fn writer_loop(
                         w.group_assistant_leader(guid, grant)
                     }
                     ClientCommand::ReadyCheckStart => w.ready_check_start(),
-                    ClientCommand::ReadyCheckAnswer { ready } => w.ready_check_answer(ready),
+                    ClientCommand::ReadyCheckAnswer { status } => w.ready_check_answer(status),
                     ClientCommand::RequestRaidInfo => w.request_raid_info(),
                     ClientCommand::ResetInstances => w.reset_instances(),
                     ClientCommand::DuelAccepted { arbiter } => w.duel_accepted(arbiter),

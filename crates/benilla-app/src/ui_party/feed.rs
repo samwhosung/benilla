@@ -82,6 +82,9 @@ fn catch_up(group: &GroupState) -> Vec<GroupSignal> {
     .collect()
 }
 
+/// Seed a reload's VM with the group before the stock frames load into it.
+pub(crate) fn seed_reloaded_vm(_world: &mut World, _script: &mut UiScript) {}
+
 /// The `raid1..raid40` unit tokens, one per `MAX_RAID_MEMBERS` (40, `RaidFrame.lua:2`).
 #[rustfmt::skip]
 pub(crate) const RAID_TOKENS: [&str; 40] = [
@@ -1004,8 +1007,8 @@ pub(crate) fn drain_party(
                 PartyRequest::ReadyCheckStart => {
                     let _ = commands.0.send(ClientCommand::ReadyCheckStart);
                 }
-                PartyRequest::ReadyCheckAnswer(ready) => {
-                    let _ = commands.0.send(ClientCommand::ReadyCheckAnswer { ready });
+                PartyRequest::ReadyCheckAnswer(status) => {
+                    let _ = commands.0.send(ClientCommand::ReadyCheckAnswer { status });
                 }
                 PartyRequest::RequestRaidInfo => {
                     let _ = commands.0.send(ClientCommand::RequestRaidInfo);
@@ -3125,30 +3128,101 @@ mod tests {
         );
     }
 
-    /// A `/reload` loads the stock frames into a new VM that holds no group, and the roster is
-    /// pushed by the feed's first look after the load (`ui_script::lifecycle` seeds the player
-    /// alone): `PartyMemberFrame_OnLoad` reads `GetPartyMember` at the load (`PartyMemberFrame.lua:
-    /// 20-24`) and finds nobody, and only a `PARTY_MEMBERS_CHANGED` shows the row. The reference's
-    /// load reads the engine's group, so its reload fires none; benilla's fires the catch-up, and a
-    /// reload told nothing would leave the party frames hidden.
+    /// The group events a VM heard, in order, once [`hear_group_events`] is installed.
+    fn heard(app: &mut App) -> Vec<String> {
+        app.world_mut()
+            .non_send_resource::<UiScript>()
+            .eval::<Vec<String>>("local h = HEARD; HEARD = {}; return h")
+            .unwrap()
+    }
+
+    /// Note the five group events in `HEARD`, with the `SEEN` the harness's frame reads.
+    fn hear_group_events(script: &UiScript) {
+        script
+            .run(
+                r#"
+                SEEN = {}
+                HEARD = {}
+                local f = CreateFrame("Frame")
+                for _, e in ipairs({ "PARTY_MEMBERS_CHANGED", "PARTY_LEADER_CHANGED",
+                                     "PARTY_LOOT_METHOD_CHANGED", "RAID_ROSTER_UPDATE",
+                                     "RAID_TARGET_UPDATE" }) do
+                    f:RegisterEvent(e)
+                end
+                f:SetScript("OnEvent", function() table.insert(HEARD, event) end)
+                "#,
+            )
+            .unwrap();
+    }
+
+    /// A `/reload` signals none of the group events in 1.12.1: their sites are the group packets'
+    /// handlers (`ReadGroupList 0x5e6a40`, `SetGroupLeader 0x4e8250`, `ClearParty 0x4e84a0`, the
+    /// raid target handler `0x4ba220`), the name callback `0x4bad90` and the world entry's fill of
+    /// a zero raid row (`0x4ba140`, `0x4ba15c`), and the stock frames read the group as they load
+    /// (`PartyMemberFrame.lua:20-24`, `RaidFrame.lua:32`). So the reload's VM is seeded with the
+    /// group before its files run ([`seed_reloaded_vm`]) and told nothing after; a list that
+    /// lands later signals as ever, and a VM nobody seeded, the world entry's first, still hears
+    /// the catch-up.
     #[test]
-    fn a_reloaded_vm_has_its_party_frames_filled_by_the_catch_up() {
+    fn a_reloaded_vm_reads_the_group_as_it_loads_and_hears_no_group_event() {
+        let mut app = app();
+        party(&mut app, 2, true);
+        frame(&mut app);
+
+        let mut reloaded = UiScript::new().unwrap();
+        seed_reloaded_vm(app.world_mut(), &mut reloaded);
+        reloaded
+            .run(r#"LOADED = GetNumPartyMembers() .. "," .. tostring(UnitName("party2"))"#)
+            .unwrap();
+        hear_group_events(&reloaded);
+        app.insert_non_send_resource(reloaded);
+        frame(&mut app);
+        let loaded: String = app
+            .world_mut()
+            .non_send_resource::<UiScript>()
+            .eval("return LOADED")
+            .unwrap();
+        assert_eq!(loaded, "2,M2", "the group is there for the files");
+        assert_eq!(heard(&mut app), Vec::<String>::new(), "the reload");
+
+        party(&mut app, 2, true);
+        frame(&mut app);
+        assert_eq!(
+            heard(&mut app),
+            [
+                "PARTY_MEMBERS_CHANGED",
+                "PARTY_LEADER_CHANGED",
+                "RAID_TARGET_UPDATE"
+            ],
+            "a list after it"
+        );
+
+        let entry = UiScript::new().unwrap();
+        hear_group_events(&entry);
+        app.insert_non_send_resource(entry);
+        frame(&mut app);
+        assert_eq!(
+            heard(&mut app),
+            ["PARTY_MEMBERS_CHANGED", "PARTY_LEADER_CHANGED"],
+            "a VM nobody seeded hears the catch-up"
+        );
+    }
+
+    /// The stock party frames, loaded into a reload's seeded VM, show the members at once.
+    #[test]
+    fn a_reloaded_vm_has_its_party_frames_filled_as_it_loads() {
         benilla_formats::wow_data_or_skip!();
-        let load = || {
-            let mut script = UiScript::new().unwrap();
-            script.set_screen_size(1024.0, 768.0);
-            let failures = crate::ui_script::load_default_ui(&script);
-            assert!(failures.is_empty(), "load failures: {failures:?}");
-            script.run("SEEN = {}").unwrap();
-            script
-        };
-        let mut app = app_with(load());
+        let mut app = app();
         party(&mut app, 1, true);
         frame(&mut app);
-        assert_eq!(flag(&mut app, "PartyMemberFrame1:IsShown()"), Some(1.0));
 
-        app.insert_non_send_resource(load());
-        frame(&mut app);
+        let mut script = UiScript::new().unwrap();
+        seed_reloaded_vm(app.world_mut(), &mut script);
+        script.set_screen_size(1024.0, 768.0);
+        let failures = crate::ui_script::load_default_ui(&script);
+        assert!(failures.is_empty(), "load failures: {failures:?}");
+        script.run("SEEN = {}").unwrap();
+        app.insert_non_send_resource(script);
         assert_eq!(flag(&mut app, "PartyMemberFrame1:IsShown()"), Some(1.0));
         assert_eq!(
             app.world_mut()

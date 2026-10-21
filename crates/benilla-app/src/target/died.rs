@@ -472,4 +472,89 @@ mod tests {
             "the echo"
         );
     }
+
+    /// `CGPlayer_C::OnDied 0x5e99b0`, run for a player (`0x605882` → `0x60588d`): another player
+    /// than the active one (`0x5e99d8`-`0x5e99e4`) who holds one of our four party slots
+    /// (`IsPartyMember 0x4918d0` → `0x4e7f70`, the slots at `0xbc6f48`) shows `ERR_PLAYER_DIED_S`,
+    /// message `0x4c`, with `GetUnitName`'s name (`0x609210` at `0x5e9a08`, `0x496720` at
+    /// `0x5e9a10`): the name cache's, `UNKNOWNOBJECT` on a miss. A raid member in another
+    /// subgroup holds no slot; a stranger, a creature and our own death show nothing.
+    #[test]
+    fn a_party_members_death_names_them_and_no_one_elses_does() {
+        use crate::ui_action::{FillArg, UiError, UiErrorKeys};
+        use benilla_protocol::messages::GroupMemberEntry;
+        const MATE: u64 = 0x21;
+        const NAMELESS: u64 = 0x22;
+        const FAR: u64 = 0x23;
+        const STRANGER: u64 = 0x24;
+        let mut c = client();
+        let mut players = Vec::new();
+        for guid in [MATE, NAMELESS, FAR, STRANGER] {
+            let store = ObjectStore(
+                ObjectFields::from_pairs(&[
+                    (2, 0x19),
+                    (FIELD_UNIT_HEALTH, 100),
+                    (FIELD_UNIT_MAXHEALTH, 100),
+                ])
+                .into_created(ObjectType::Player),
+            );
+            let e = c.world().spawn((Guid(guid), store)).id();
+            c.world().resource_mut::<GuidIndex>().0.insert(guid, e);
+            players.push(e);
+        }
+        let entry = |name: &str, guid: u64, subgroup: u8| GroupMemberEntry {
+            name: name.into(),
+            guid,
+            status: 1,
+            flags: subgroup,
+        };
+        c.world()
+            .resource_mut::<crate::ui_party::GroupState>()
+            .apply_list(
+                crate::ui_party::GROUPTYPE_RAID,
+                0,
+                vec![
+                    entry("Mate", MATE, 0),
+                    entry("Nameless", NAMELESS, 0),
+                    entry("Far", FAR, 1),
+                ],
+                ME,
+                None,
+                Some(ME),
+            );
+        let mut names = c.world().resource_mut::<crate::names::NameCache>();
+        for (guid, name) in [(MATE, "Mate"), (FAR, "Far"), (STRANGER, "Stranger")] {
+            names.insert_player(guid, name.into(), None);
+        }
+        let _ = c.world().resource::<UiErrorKeys>().take();
+        let lines = |c: &mut Client, entity, guid, kind| {
+            c.dies(entity, guid, kind);
+            c.world().resource::<UiErrorKeys>().take()
+        };
+        assert_eq!(
+            lines(&mut c, players[0], MATE, ObjectType::Player),
+            [UiError::s("ERR_PLAYER_DIED_S", "Mate")]
+        );
+        assert_eq!(
+            lines(&mut c, players[1], NAMELESS, ObjectType::Player),
+            [UiError::args(
+                "ERR_PLAYER_DIED_S",
+                vec![FillArg::Global("UNKNOWNOBJECT".into())]
+            )],
+            "a name the cache misses"
+        );
+        assert_eq!(
+            lines(&mut c, players[2], FAR, ObjectType::Player),
+            [],
+            "another subgroup"
+        );
+        assert_eq!(
+            lines(&mut c, players[3], STRANGER, ObjectType::Player),
+            [],
+            "no groupmate"
+        );
+        let (mob, me) = (c.mob, c.me);
+        assert_eq!(lines(&mut c, mob, MOB, ObjectType::Unit), [], "a creature");
+        assert_eq!(lines(&mut c, me, ME, ObjectType::Player), [], "our own");
+    }
 }

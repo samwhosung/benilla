@@ -14,6 +14,8 @@ use bevy::prelude::*;
 
 use crate::ui_script::UiFeed;
 
+#[cfg(test)]
+mod call_tests;
 mod feed;
 pub(crate) mod net;
 mod pets;
@@ -1288,6 +1290,43 @@ mod tests {
             g.signals.take(),
             [MembersChanged],
             "the group's end leaves the lookup"
+        );
+    }
+
+    /// The name cache keeps one callback list per name: each wait is linked at its tail
+    /// (`0x55f177`, `0x55f2ac`, into `0x56d137`) and an answer walks it from the head
+    /// (`0x55f426`-`0x55f452`). A raid list seats Alice (`0x4e8477`) and waits on her row
+    /// (`0x4ba9c7`), then a party list seats her again while the dropped roster's row still waits
+    /// (`0x4ba550` cancels nothing): her answer runs seat, row, seat, across the two lists.
+    #[test]
+    fn a_name_answer_runs_every_wait_in_the_order_it_was_added() {
+        use GroupSignal::*;
+        let mut g = GroupState::default();
+        let list = |g: &mut GroupState, group_type: u8| {
+            g.apply_list_awaiting(
+                group_type,
+                0,
+                vec![member("Alice", 1)],
+                1,
+                None,
+                Some(ME),
+                &|guid| (guid != 1).then(String::new),
+                &|_| Some(String::new()),
+            );
+        };
+        list(&mut g, 1);
+        list(&mut g, 0);
+        g.signals.take();
+        let _ = g.apply_player_name(1, None);
+        assert_eq!(
+            g.signals.take(),
+            [
+                MembersChanged,
+                RaidRosterUpdate,
+                MembersChanged,
+                MembersChanged
+            ],
+            "the raid list's seat, its row, then the party list's seat"
         );
     }
 

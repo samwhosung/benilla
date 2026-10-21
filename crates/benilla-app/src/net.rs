@@ -1922,9 +1922,9 @@ pub(crate) enum ClientCommand {
     },
     /// `MSG_RAID_READY_CHECK` with an empty body, leader only.
     ReadyCheckStart,
-    /// `MSG_RAID_READY_CHECK` with one byte.
+    /// `MSG_RAID_READY_CHECK` with one byte, the status.
     ReadyCheckAnswer {
-        ready: bool,
+        status: u8,
     },
     /// `CMSG_REQUEST_RAID_INFO`.
     RequestRaidInfo,

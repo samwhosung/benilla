@@ -131,11 +131,11 @@ impl WorldWriter {
         self.send(opcode::MSG_RAID_READY_CHECK, &messages::ready_check_start())
     }
 
-    /// Answer a raid ready check (`MSG_RAID_READY_CHECK`).
-    pub fn ready_check_answer(&mut self, ready: bool) -> Result<()> {
+    /// Answer a raid ready check (`MSG_RAID_READY_CHECK`) with its status byte.
+    pub fn ready_check_answer(&mut self, status: u8) -> Result<()> {
         self.send(
             opcode::MSG_RAID_READY_CHECK,
-            &messages::ready_check_answer(ready),
+            &messages::ready_check_answer(status),
         )
     }
 

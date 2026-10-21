@@ -160,7 +160,7 @@ pub enum PartyRequest {
     /// `DoReadyCheck()`, leader only (`MSG_RAID_READY_CHECK`, empty body).
     ReadyCheckStart,
     /// `ConfirmReadyCheck(ready)` (`MSG_RAID_READY_CHECK`, one byte).
-    ReadyCheckAnswer(bool),
+    ReadyCheckAnswer(u8),
     /// `RequestRaidInfo()` (`CMSG_REQUEST_RAID_INFO`).
     RequestRaidInfo,
 }
@@ -843,7 +843,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model
                 .party_requests
-                .push(PartyRequest::ReadyCheckAnswer(ready));
+                .push(PartyRequest::ReadyCheckAnswer(u8::from(ready)));
             Ok(())
         })?,
     )?;
@@ -2128,22 +2128,43 @@ mod tests {
         }
     }
 
-    /// The reference's No button passes no argument, Yes passes `1`.
+    /// `ConfirmReadyCheck` (`0x4bc090`) asks `GetReadyCheckMsLeft` first (`0x4bc099` →
+    /// `0x4bb2f0`) and at 0 returns with nothing sent (`0x4bc0a0`): with no check armed, and from
+    /// the deadline on, where the difference is no longer negative (`0x4bb304`). While a check
+    /// runs it sends the low byte of `GetScriptFlagArg(1, 0)` (`0x4bc0ad`, `0x4bc0bf`, `PutInt8`
+    /// at `0x4bc0e4`): the stock No button passes no argument and Yes `1`; `0` sends 0 where Lua
+    /// calls it true, `2` sends 2, `1.9` 1, `256` 0 and `-1` 255.
     #[test]
-    fn confirm_ready_check_treats_an_absent_argument_as_not_ready() {
+    fn confirm_ready_check_sends_its_flags_low_byte_only_while_a_check_runs() {
         let mut s = UiScript::new().unwrap();
-        s.run("ConfirmReadyCheck(1) ConfirmReadyCheck() ConfirmReadyCheck(false) ConfirmReadyCheck(0)")
-            .unwrap();
+        s.keep_calls();
+        s.set_party(two_member_party());
+        s.set_now(100.0);
+        s.run("ConfirmReadyCheck(1)").unwrap();
+        assert_eq!(s.take_party_requests(), [], "no check armed");
+
+        // A member's open form arms the 30 s deadline (`0x4ba535`): 130.
+        s.ready_check_request(false);
+        s.run(
+            "ConfirmReadyCheck(1) ConfirmReadyCheck() ConfirmReadyCheck(nil) ConfirmReadyCheck(false)
+             ConfirmReadyCheck(0) ConfirmReadyCheck(true) ConfirmReadyCheck('yes')
+             ConfirmReadyCheck(2) ConfirmReadyCheck(1.9) ConfirmReadyCheck(256) ConfirmReadyCheck(-1)",
+        )
+        .unwrap();
         assert_eq!(
             s.take_party_requests(),
-            vec![
-                PartyRequest::ReadyCheckAnswer(true),
-                PartyRequest::ReadyCheckAnswer(false),
-                PartyRequest::ReadyCheckAnswer(false),
-                // `0` truncates to 0 (`GetBoolOrDefault`, `0x4bc0ad`), where Lua calls it true.
-                PartyRequest::ReadyCheckAnswer(false),
-            ]
+            [1, 0, 0, 0, 0, 1, 1, 2, 1, 0, 255].map(PartyRequest::ReadyCheckAnswer)
         );
+        s.set_now(129.9);
+        s.run("ConfirmReadyCheck(1)").unwrap();
+        assert_eq!(
+            s.take_party_requests(),
+            [PartyRequest::ReadyCheckAnswer(1)],
+            "the deadline ahead"
+        );
+        s.set_now(130.0);
+        s.run("ConfirmReadyCheck(1)").unwrap();
+        assert_eq!(s.take_party_requests(), [], "the deadline reached");
     }
 
     #[test]

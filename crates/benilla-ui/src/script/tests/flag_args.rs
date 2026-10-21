@@ -320,21 +320,6 @@ fn queued_verbs_read_their_flags_through_get_bool_or_default() {
         );
     }
 
-    // ConfirmReadyCheck(ready) 0x4bc0ad, default 0.
-    for (arg, want) in cases(false) {
-        s.run(&format!("ConfirmReadyCheck({arg})")).unwrap();
-        assert_eq!(
-            s.take_party_requests(),
-            vec![PartyRequest::ReadyCheckAnswer(want)],
-            "ConfirmReadyCheck({arg})"
-        );
-    }
-    s.run("ConfirmReadyCheck()").unwrap();
-    assert_eq!(
-        s.take_party_requests(),
-        vec![PartyRequest::ReadyCheckAnswer(false)]
-    );
-
     // UseAction(action, checkCursor, onSelf) 0x4e717e, 0x4e716f, defaults 0.
     for (arg, want) in cases(false) {
         s.run(&format!("UseAction(1, 0, {arg})")).unwrap();
