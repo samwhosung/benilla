@@ -1253,6 +1253,37 @@ mod tests {
         assert_eq!(seen(&mut app), Vec::<String>::new());
     }
 
+    /// The ammo view only reads the record: what asks it are the texture and quality getters'
+    /// lookups with the callback `0x4c84f0` (`0x4c83ce`, `0x4c8a0a`), so a frame no getter read
+    /// the slot in sends nothing.
+    #[test]
+    fn the_ammo_view_reads_and_the_getters_ask() {
+        const ARROW: u32 = 2512;
+        /// `PLAYER_AMMO_ID`.
+        const AMMO_ID: u16 = 1223;
+        let mut app = world_with_bank_bag(None);
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        set_self(&mut app, &[(AMMO_ID, ARROW)]);
+        let asked = |rx: &crossbeam_channel::Receiver<crate::net::ClientCommand>| {
+            crate::query_cache::queries(rx)
+                .into_iter()
+                .filter(|c| {
+                    matches!(c, crate::net::ClientCommand::ItemQuery { entry, .. } if *entry == ARROW)
+                })
+                .count()
+        };
+        app.world_mut().run_system_once(feed_char).unwrap();
+        app.world_mut().run_system_once(feed_char).unwrap();
+        assert_eq!(asked(&rx), 0, "the view reads");
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run(r#"GetInventoryItemQuality("player", 0)"#)
+            .unwrap();
+        app.world_mut().run_system_once(feed_char).unwrap();
+        assert_eq!(asked(&rx), 1, "the getter asks");
+    }
+
     /// The ammo slot getters' record lookups with the callback `0x4c84f0` (`0x4c83bc`,
     /// `0x4c89cf`): a call that missed waits for the answer; one whose record landed since runs
     /// its callback at once, `UNIT_INVENTORY_CHANGED` with `"player"` (`0x4c8509`).
