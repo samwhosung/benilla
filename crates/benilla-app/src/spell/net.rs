@@ -1392,15 +1392,17 @@ fn spell_delayed(caster: u64, delay_ms: u32, self_guid: &SelfGuid, reports: &mut
     }
 }
 
-/// `SMSG_CANCEL_AUTO_REPEAT`: the handler (`0x6e99d0` → `0x6ea080`) clears the autorepeat key
-/// `0xceac30`, which the button's checked state reads (`STOP_AUTOREPEAT_SPELL`), the auto-repeat
-/// bit `[+0xd58] & 0x200`, so the Load/Hold idle drops ([`crate::creature_anim::AutoRepeatArmed`]),
-/// and the repeat spell's precast ([`crate::creature_anim::Precast`]). Nothing sheathes.
+/// `SMSG_CANCEL_AUTO_REPEAT`: the handler (`0x6e99d0`) runs `StopAutoRepeatSpell 0x6ea080` whole
+/// ([`crate::creature_anim::cancel_auto_repeat_local`]): the auto-repeat bit `[+0xd58] & 0x200`,
+/// so the Load/Hold idle drops ([`crate::creature_anim::AutoRepeatArmed`]), the repeat spell's
+/// precast and kits, its slot, and the key `0xceac30` the button's checked state reads, with
+/// `STOP_AUTOREPEAT_SPELL`. Nothing sheathes.
 ///
 /// vmangos sends it on every player autorepeat interrupt (`SpellCaster.cpp:1826`), which is how
-/// target death stops a volley (`Unit::_UpdateAutoRepeatSpell` → `CheckCast(true)` fails →
-/// `InterruptSpell`). Moving interrupts only Category 351, the wand, so Auto Shot stays armed
-/// across a run.
+/// the server stops a volley whose target died (`Unit::_UpdateAutoRepeatSpell` →
+/// `CheckCast(true)` fails → `InterruptSpell`); the client stops it itself when its selection
+/// dies (`0x605906`), so this one finds the key clear. Moving interrupts only Category 351, the
+/// wand, so Auto Shot stays armed across a run.
 fn cancel_auto_repeat(
     auto_repeat: &mut AutoRepeatActive,
     self_guid: &SelfGuid,

@@ -96,8 +96,9 @@ impl Wielded {
     }
 }
 
-/// Auto-attacking (`SMSG_ATTACKSTART` to `ATTACKSTOP`), holding the target guid, the reference's
-/// `[+0xc48]`: the Ready idle gates on it, not on sheath (`0x5fd360`); `0x6e3480` reads its reach.
+/// Auto-attacking (`SMSG_ATTACKSTART` to `ATTACKSTOP` or the unit's death, `0x605896`), holding the
+/// target guid, the reference's `[+0xc48]`: the Ready idle gates on it, not on sheath
+/// (`0x5fd360`); `0x6e3480` reads its reach.
 #[derive(Component)]
 pub(crate) struct Engaged(pub(crate) u64);
 
@@ -130,8 +131,8 @@ impl AttackStopInFlight {
 
 /// The local player's auto-repeat is armed: the reference's `[+0xd58] & 0x200`, set only by the
 /// local cast-send (`0x6e593b`); with the ranged sheath drawn a standing unit idles on the Load
-/// clip (`0x5fd460`). Cleared only through `cancel_auto_repeat_local`, including on
-/// `SMSG_CANCEL_AUTO_REPEAT`, which vmangos sends when a volley's target dies
+/// clip (`0x5fd460`). Cleared only through `cancel_auto_repeat_local`: on the selection's death
+/// (`0x605906`) and on `SMSG_CANCEL_AUTO_REPEAT`, which vmangos sends when a volley's target dies
 /// (`SpellCaster.cpp:1829`). A remote shooter plays LoadBow once at its `SMSG_SPELL_START`
 /// (`CastHold`, `0x6e7901`), then the fire clip per GO; the reference holds HoldBow (109) from
 /// the end of the Load until the first GO.
@@ -410,6 +411,13 @@ impl AttackSeam<'_, '_> {
             self.stop_word.as_deref_mut(),
             &mut self.slots.core(&self.net),
         );
+    }
+
+    /// `unit`'s stop in flight cleared, as its death zeroes it (`0x6058a8`).
+    pub(crate) fn clear_stop_word(&mut self, unit: Entity) {
+        if let Some(word) = self.stop_word.as_deref_mut() {
+            word.clear(unit);
+        }
     }
 
     /// Whether our stop is in flight (`[+0xc54]`).

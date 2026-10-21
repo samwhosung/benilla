@@ -1,5 +1,18 @@
 //! `CGUnit_C::OnDied 0x605860`, which the health watcher runs on every unit's alive-to-dead edge
-//! (`0x6046f0` at `0x6047a3`: the new health not above 0, the old above).
+//! (`0x6046f0` at `0x6047a3`: the new health not above 0, the old above). In its order:
+//!
+//! - a player's own leg first (`0x5e99b0` at `0x60588d`), whose active-player release latch and
+//!   timer are [`crate::ui_session`]'s;
+//! - the dying unit's attack words zeroed (`0x605896`-`0x6058a8`): its target ([`Engaged`],
+//!   `+0xc48`) and its stop in flight (`+0xc54`);
+//! - `PresentUnitDeath 0x625190` (`0x6058ae`), the death line, animation and sound, which the chat
+//!   log, the animation driver and the creature sounds play off the same edge;
+//! - with a spell in flight (`0x6e3d30`) whose record's target (`0xceac60`, read through
+//!   `0x6e3d50`) is this unit, `CancelCast(1, 1, 0x65)` (`0x6058e0`);
+//! - when the unit is the selection (`0xb4e2d8`), `SetSelection(0, 0)` (`0x605901`) and then
+//!   `StopAutoRepeatSpell 0x6ea080` (`0x605906`);
+//! - the tail from `0x60590b`: the quest marker, the missiles, the effects, a sound, the auto-move
+//!   stop and `0x4931c0` on the unit's guid (`0x605950`).
 
 use benilla_protocol::field::FIELD_UNIT_HEALTH;
 use bevy::prelude::*;
@@ -19,13 +32,41 @@ pub(super) fn on_unit_died(
     mut edges: MessageReader<FieldChanged>,
     mut selection: ResMut<Selection>,
     mut seam: AttackSeam,
+    mut commands: Commands,
     engaged: Query<(), (With<Engaged>, With<SelfPlayer>)>,
 ) {
+    // Our attack target as this pass leaves it: our own death zeroes it before a deselect reads it.
+    let mut me_engaged = !engaged.is_empty();
     for e in edges.read().filter(|e| died(e)) {
-        // `SetSelection(0, 0)` at `0x605901`, so the dead target becomes the last one; a corpse
-        // selected afterwards stays selected, gray.
+        let me = seam.me.single().ok();
+        if let Ok(mut unit) = commands.get_entity(e.entity) {
+            unit.try_remove::<Engaged>();
+        }
+        seam.clear_stop_word(e.entity);
+        if me == Some(e.entity) {
+            me_engaged = false;
+        }
+        let spells = seam.spells.as_deref();
+        let mut core = seam.slots.core(&seam.net);
+        if core.slot().is_some() && core.pending.record_target() == Some(e.guid) {
+            core.cancel_reaping(
+                true,
+                true,
+                crate::spell::REASON_TARGETS_DEAD,
+                spells,
+                me,
+                &seam.edits,
+            );
+        }
+        // The dead target becomes the last one; a corpse selected afterwards stays selected, gray.
         if selection.guid == Some(e.guid) {
-            super::click::deselect(&mut selection, &mut seam, !engaged.is_empty());
+            super::click::deselect(&mut selection, &mut seam, me_engaged);
+            crate::creature_anim::cancel_auto_repeat_local(
+                me,
+                &mut seam.auto_repeat,
+                &seam.edits,
+                &mut seam.slots.core(&seam.net),
+            );
         }
     }
 }

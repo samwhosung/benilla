@@ -81,9 +81,12 @@ const ITEM_ARM_BITS: u16 = TF_ITEM | TF_LOCKED;
 /// What the wire's target block should carry for this cast.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CastWireTarget {
-    /// Mask 0, no guid; the server resolves the target implicitly. Word 0 sends so (`0x6e5342`),
-    /// and so does the arm's long-range leg, whose parked guid the mask never names (`0x6e5454`).
+    /// Mask 0, no guid; the server resolves the target implicitly. Word 0 sends so (`0x6e5342`).
     SelfImplicit,
+    /// The arm's long-range leg: mask 0 on the wire, as [`Self::SelfImplicit`], with this
+    /// candidate parked in the record's target (`0xceac60`, `0x6e5454`), which the mask never
+    /// names.
+    Parked(u64),
     /// Mask `TARGET_FLAG_UNIT` (0x2) and this guid, possibly the player's own.
     Unit(u64),
     /// Mask `TARGET_FLAG_ITEM` (0x10) and this item guid, sent on the press: only the main-hand
@@ -679,13 +682,12 @@ pub(crate) fn resolve_cast_target(
     // target. A candidate with no object binds nothing under any word (`0x6e5b5e`), so a location
     // word reaches the leg as a unit word does. The main hand is the candidate instead of the
     // selection for the attribute above (`0x6e536e`).
-    if !auto_self_cast
-        && cand.long_range
-        && cand.selection.is_some()
-        && !cand.selection_held
-        && !def.targets_main_hand_item()
+    if let Some(guid) = cand
+        .selection
+        .filter(|_| !auto_self_cast && cand.long_range && !cand.selection_held)
+        .filter(|_| !def.targets_main_hand_item())
     {
-        return CastWireTarget::SelfImplicit;
+        return CastWireTarget::Parked(guid);
     }
     // A non-unit bit enters the cursor with the whole word. The reference only reaches the cursor
     // after the unit walk fails (`0x6e50c8`), so deferring first matches it only because no unit

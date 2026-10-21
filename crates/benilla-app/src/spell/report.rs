@@ -23,6 +23,10 @@ pub(crate) const REASON_ERROR: u8 = 0x1c;
 /// The reason the inventory refusal's cancel passes (`0x5e3aad`): `SPELL_FAILED_DONT_REPORT`.
 pub(crate) const REASON_DONT_REPORT: u8 = 0x17;
 
+/// The reason a unit's death cancels the cast bound to it with (`0x6058dc`):
+/// `SPELL_FAILED_TARGETS_DEAD`.
+pub(crate) const REASON_TARGETS_DEAD: u8 = 0x65;
+
 /// The failure the reporter fires no event for: `SPELL_FAILED_SPELL_IN_PROGRESS` (`0x6e2234`).
 const REASON_IN_PROGRESS: u8 = 0x61;
 

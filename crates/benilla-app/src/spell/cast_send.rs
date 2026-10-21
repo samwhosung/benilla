@@ -341,6 +341,14 @@ impl CastLadder<'_, '_> {
                 commit.item_guid(),
             );
         }
+        // `BindTarget` wrote the clicked unit, game object or corpse into the record's target
+        // (`0x6e5cdc`, `0x6e5f77`, `0x6e5fbe`).
+        if let TargetedBind::Unit(guid)
+        | TargetedBind::Object(guid)
+        | TargetedBind::Corpse(guid, _) = bound
+        {
+            self.pending.bind_target(guid);
+        }
         // The bind emptied the word, and signals before it sends (`0x6e60cb`, `0x6e615d`).
         self.ground.clear();
         self.reports.changed();
@@ -766,6 +774,7 @@ fn send_spell_cast(
     // `0x612df0`) takes a passed guid pair.
     let mut pending_word = None;
     let mut item_target = None;
+    let mut parked = None;
     let mut deferred_refusal = None;
     let explicit_object = match commit {
         CastCommit::Item { on_object, .. } => on_object,
@@ -809,6 +818,10 @@ fn send_spell_cast(
         None => {
             match cast_target::resolve_cast_target(def, &candidates, ctx.auto_self_cast, &ctx.rel) {
                 cast_target::CastWireTarget::SelfImplicit => None,
+                cast_target::CastWireTarget::Parked(guid) => {
+                    parked = Some(guid);
+                    None
+                }
                 cast_target::CastWireTarget::Unit(guid) => Some(guid),
                 // The main-hand auto-pick: already bound, it commits in the item shape. Not a
                 // unit, so the range gate skips it (`0x6e47b0` tests `SPELLCAST+0x14 & 0x8202`).
@@ -986,6 +999,11 @@ fn send_spell_cast(
         core.pending.fill_unit_record();
     }
     core.pending.fill_record_spell(spell_id);
+    // The arm's bind writes the record's target (`0x6e5b40`, `0x6e5454`), which a unit's death
+    // reads (`0x6058c7`).
+    if let Some(guid) = target.or(explicit_object).or(parked) {
+        core.pending.bind_target(guid);
+    }
     // The push (`0x6e5026` → `0x6e4ad0`), which signals: the same spell bailed above, so the slot
     // never holds it here. The arm signals whatever it then decides (`0x6e5333`).
     let held = held(items, commit, def, pending_word.is_some());
