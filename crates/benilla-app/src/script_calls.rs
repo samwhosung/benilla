@@ -2649,12 +2649,15 @@ mod tests {
     /// and the last enemy) beside `OLD` (selected) and `NEW` (party1, "Bob"), with `OLD` the last
     /// target.
     fn with_things_to_select(f: &mut Frame) {
-        spawn_mob(f, &[]);
+        // Units (`OBJECT_FIELD_TYPE` 0x9, 0x19 for the player), the typemask `0x489a40` and the
+        // assist's basis lookup take (`0x489c9b`).
+        spawn_mob(f, &[(2, 0x9)]);
         let world = f.app.world_mut();
         let new = world.resource::<GuidIndex>().0[&NEW];
         world
             .entity_mut(new)
             .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (2, 0x19),
                 (22, 100),
                 (28, 100),
                 (16, MOB as u32),

@@ -108,6 +108,9 @@ pub(crate) enum CastWireTarget {
 pub(crate) struct CastCandidates<'a> {
     /// The current selection (the client's `0xb4e2d8`); benilla never passes an explicit guid.
     pub(crate) selection: Option<u64>,
+    /// Whether the object manager holds the selection's object: the arm looks the candidate up
+    /// (`0x468460` at `0x6e53bc`) and `BindTarget` binds no null object (`0x6e5b5e`).
+    pub(crate) selection_held: bool,
     /// The caster, which a gate tests the candidate against.
     pub(crate) caster: Option<u64>,
     /// The `autoSelfCast` fallback's candidate, the active player whoever casts (`0x6e53e3`-
@@ -214,6 +217,9 @@ impl UnitLookup for TargetRelations<'_> {
 /// The targeting inputs [`super::send_spell_cast`] resolves with, built by both cast callers.
 pub(crate) struct CastContext<'a> {
     pub(crate) selection_guid: Option<u64>,
+    /// Whether the object manager holds [`Self::selection_guid`]'s object, which the bind needs
+    /// (`0x6e53bc`, `0x6e5b5e`).
+    pub(crate) selection_held: bool,
     pub(crate) self_guid: Option<u64>,
     pub(crate) auto_self_cast: bool,
     pub(crate) rel: TargetRelations<'a>,
@@ -249,6 +255,7 @@ impl CastContext<'_> {
     pub(crate) fn self_bound(mut self, on_self: bool) -> Self {
         if on_self {
             self.selection_guid = self.self_guid;
+            self.selection_held = true;
             self.rel.target_store = self.rel.self_store;
             self.rel.group.target_guid = self.self_guid;
         }
@@ -375,6 +382,7 @@ impl CastTargeting<'_, '_> {
         let caster_unit = self.range_units.unit(caster);
         Some(CastContext {
             selection_guid: guid,
+            selection_held: target.is_some(),
             self_guid: Some(caster_guid),
             auto_self_cast: self.auto_self_cast.0,
             rel: TargetRelations {
@@ -432,6 +440,7 @@ impl CastTargeting<'_, '_> {
         let self_store = self.self_store.iter().next();
         CastContext {
             selection_guid: guid,
+            selection_held: target.is_some(),
             self_guid: self.self_guid.0,
             auto_self_cast: self.auto_self_cast.0,
             rel: TargetRelations {
@@ -659,9 +668,9 @@ pub(crate) fn resolve_cast_target(
         }
         return CastWireTarget::Refused(ERR_INVALID_TARGET);
     }
-    // The selection (`0xb4e2d8`, `0x6e539f`). A unit the gates or the relation checks refuse binds
-    // nothing, so the fallback below gets its turn.
-    if let Some(guid) = cand.selection {
+    // The selection (`0xb4e2d8`, `0x6e539f`). A guid with no object (`0x6e5b5e`), or a unit the
+    // gates or the relation checks refuse, binds nothing, so the fallback below gets its turn.
+    if let Some(guid) = cand.selection.filter(|_| cand.selection_held) {
         let is_self = cand.caster == Some(guid);
         if unit_binds(Some(def), word, is_self, rel) {
             return CastWireTarget::Unit(guid);
@@ -707,6 +716,7 @@ mod tests {
     fn cands(selection: Option<u64>, caster: Option<u64>) -> CastCandidates<'static> {
         CastCandidates {
             selection,
+            selection_held: true,
             caster,
             auto_self: caster,
             auto_self_store: None,

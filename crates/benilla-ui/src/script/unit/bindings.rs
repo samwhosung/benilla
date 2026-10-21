@@ -940,24 +940,26 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // AssistUnit(unit) (`0x489b80`): select the unit's `UNIT_FIELD_TARGET`. The shared tail
-    // (`0x489bb2`-`0x489c07`) returns silently on 0 and selects through `0x489a40`, which leaves
-    // the selection alone when nothing resolves; no `CanAssist` gate (`0x6066f0`), any unit, and a
-    // swing only with `assistAttack` set (default "0", `0x48fc50`). A token that resolves nothing
-    // is silent here, where the reference shows `0xb8` ERR_GENERIC_NO_TARGET (`0x489c0e`).
+    // AssistUnit(unit) (`0x489b80`): select the unit's `UNIT_FIELD_TARGET`. A non-string raises
+    // `Usage:` (`0x489c22`) and an unknown token `Unknown unit name` (`0x515940` → `0x515970`); a
+    // token naming no unit the object manager holds shows `0xb8` ERR_GENERIC_NO_TARGET
+    // (`0x489c0e`), the host's. The shared tail (`0x489bb2`-`0x489c07`) returns silently on 0 and
+    // selects through `0x489a40`; no `CanAssist` gate (`0x6066f0`), any unit, and a swing only
+    // with `assistAttack` set (default "0", `0x48fc50`).
     g.set(
         "AssistUnit",
-        lua.create_function(|lua, token: Option<String>| {
-            if let Some(token) = token {
-                let may_cast = select_may_cast(lua);
-                submit(
-                    lua,
-                    ScriptCall::Select {
-                        request: SelectionRequest::Assist(token),
-                        may_cast,
-                    },
-                )?;
-            }
+        lua.create_function(|lua, token: Value| {
+            let token =
+                super::super::binding_abi::string_arg(lua, token, r#"Usage: AssistUnit("unit")"#)?;
+            check_unit_token(&Some(token.clone()))?;
+            let may_cast = select_may_cast(lua);
+            submit(
+                lua,
+                ScriptCall::Select {
+                    request: SelectionRequest::Assist(token),
+                    may_cast,
+                },
+            )?;
             Ok(())
         })?,
     )?;

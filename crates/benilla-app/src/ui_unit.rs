@@ -738,55 +738,55 @@ impl UnitTokens<'_, '_> {
         Some((*self.index.as_ref()?.0.get(&guid)?, guid))
     }
 
-    /// Resolve `token` as `0x515970` does: its base, then a hop for each `target` after it. The
-    /// text is read by [`parse_unit_token`], which the VM's resolver shares, so both take the same
-    /// tokens; a token that names nobody, or a base or hop the object manager does not hold, is
-    /// `None`.
-    pub(crate) fn resolve(&self, token: &str, selection: &Selection) -> Option<(Entity, u64)> {
+    /// `0x515970` on `token`: the guid its base names, then each `target` hop off the unit it has
+    /// reached. The text is read by [`parse_unit_token`], which the VM's resolver shares, so both
+    /// take the same tokens. A base needs no object, as a slot's guid (`0x4e81a0`) or the target's
+    /// (`[0xb4e2d8]`) names a party member out of range, save `mouseover`, which names a held unit
+    /// alone (`0x515bd9`); a hop reads the held unit's `UNIT_FIELD_TARGET` (`0x515a0f`-`0x515a25`),
+    /// so a hop off a unit the object manager does not hold is nobody (`0x515a16`). `None` is
+    /// nobody.
+    pub(crate) fn guid(&self, token: &str, selection: &Selection) -> Option<u64> {
         let UnitTokenParse::Unit { base, hops } = parse_unit_token(token) else {
             return None;
         };
-        let mut unit = self.base(base, selection)?;
+        let mut guid = self.base(base, selection).filter(|&g| g != 0)?;
         for _ in 0..hops {
-            unit = self.target_of(unit.0)?;
+            let (entity, _) = self.held(guid)?;
+            let store = self.stores.get(entity).ok().filter(|s| s.is_unit())?;
+            guid = store.0.unit_target().filter(|&g| g != 0)?;
         }
-        Some(unit)
+        Some(guid)
     }
 
-    /// The held unit a token's base names, before any `target` hop.
-    fn base(&self, base: UnitBase, selection: &Selection) -> Option<(Entity, u64)> {
+    /// `GetUnitFromToken 0x515940`: the object of the guid `token` names ([`Self::guid`]), held.
+    pub(crate) fn resolve(&self, token: &str, selection: &Selection) -> Option<(Entity, u64)> {
+        self.held(self.guid(token, selection)?)
+    }
+
+    /// The guid a token's base names, before any `target` hop.
+    fn base(&self, base: UnitBase, selection: &Selection) -> Option<u64> {
         match base {
-            UnitBase::Player => self.me(),
-            UnitBase::Target => selection.target.zip(selection.guid),
+            UnitBase::Player => self.me().map(|(_, guid)| guid),
+            UnitBase::Target => selection.guid,
             // The same pick `ui_tooltip` pushes `"mouseover"` from.
             UnitBase::Mouseover => self
                 .hovered
                 .as_ref()?
-                .mouseover(&self.hovered_go.as_deref().copied().unwrap_or_default()),
+                .mouseover(&self.hovered_go.as_deref().copied().unwrap_or_default())
+                .map(|(_, guid)| guid),
             // Off the pet bar's cached guid, as the `"pet"` snapshot reads it.
-            UnitBase::Pet => {
-                let guid = self.pet.as_ref()?.spells.pet_guid;
-                (guid != 0).then(|| self.held(guid)).flatten()
-            }
+            UnitBase::Pet => Some(self.pet.as_ref()?.spells.pet_guid),
             UnitBase::PartyPet(row) => self
                 .party_member(row)
                 .and_then(|member| self.pet_of(member, false)),
             UnitBase::RaidPet(row) => self
                 .raid_member(row)
                 .and_then(|member| self.pet_of(member, true)),
-            UnitBase::Raid(row) => self.raid_member(row).and_then(|guid| self.held(guid)),
-            UnitBase::Party(row) => self.party_member(row).and_then(|guid| self.held(guid)),
+            UnitBase::Raid(row) => self.raid_member(row),
+            UnitBase::Party(row) => self.party_member(row),
             // The interaction NPC's guid, `[0xb4e2d0]` (`0x515c00`).
-            UnitBase::Npc => self.held(self.interact.as_ref()?.1?),
+            UnitBase::Npc => self.interact.as_ref()?.1,
         }
-    }
-
-    /// One `target` hop (`0x515a0f`-`0x515a25`): the held unit's `UNIT_FIELD_TARGET`, held in turn.
-    /// The lookup takes the unit typemask, so a hop off any other object, or off a unit with no
-    /// target, is nobody.
-    fn target_of(&self, unit: Entity) -> Option<(Entity, u64)> {
-        let store = self.stores.get(unit).ok().filter(|s| s.is_unit())?;
-        self.held(store.0.unit_target()?)
     }
 
     /// The guid in 0-based party slot `row`, the one `partyN` and `partypetN` share.
@@ -801,20 +801,18 @@ impl UnitTokens<'_, '_> {
         crate::ui_party::raid_row_guid(&self.group, index)
     }
 
-    /// A group member's pet, held: `CHARM`, else `SUMMON`, off the member's descriptor while it is
-    /// held, else off the roster record's pet guid (`partypetN` `0x4e81d0`, `raidpetN` `0x491960`).
-    /// A pet the object manager does not hold names no unit here, as any unheld unit.
-    fn pet_of(&self, member: u64, raid: bool) -> Option<(Entity, u64)> {
+    /// A group member's pet: `CHARM`, else `SUMMON`, off the member's descriptor while it is held,
+    /// else off the roster record's pet guid (`partypetN` `0x4e81d0`, `raidpetN` `0x491960`).
+    fn pet_of(&self, member: u64, raid: bool) -> Option<u64> {
         let live = self
             .held(member)
             .and_then(|(entity, _)| self.stores.get(entity).ok())
             .map(|store| &store.0);
-        let pet = if raid {
+        if raid {
             self.group.raid_pet_guid(member, live)
         } else {
             self.group.party_pet_guid(member, live)
-        };
-        self.held(pet?)
+        }
     }
 }
 
@@ -1881,6 +1879,7 @@ mod tests {
         app.init_resource::<crate::ui_party::GroupState>()
             .init_resource::<HoveredObject>();
         let wolf = app.world_mut().spawn_empty().id();
+        app.insert_resource(crate::net::GuidIndex([(WOLF, wolf)].into_iter().collect()));
         app.insert_resource(Hovered {
             target: Some(wolf),
             guid: Some(WOLF),
@@ -3793,6 +3792,7 @@ mod tests {
         // The druid targets the player, so the seat shows a target of target too.
         script.seat_selection(Some(benilla_ui::script::SeatedSelection {
             guid: DRUID,
+            held: true,
             target: 0x77,
             target_held: true,
         }));

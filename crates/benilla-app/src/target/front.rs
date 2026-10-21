@@ -37,13 +37,7 @@ impl SelectFront<'_, '_> {
     /// Whether `SelectTarget` returns before selecting `guid`, the object `entity`: charmed, or
     /// the cursor is up (`targeting`) and the unit goes to the bind instead.
     pub(super) fn takes(&mut self, entity: Entity, guid: u64, targeting: &SpellTargeting) -> bool {
-        // `0x49359c`: `UNIT_FIELD_CHARMEDBY` of the active player.
-        if self
-            .me
-            .iter()
-            .next()
-            .is_some_and(|me| me.0.unit_charmed_by().is_some())
-        {
+        if self.charmed() {
             return true;
         }
         if !targeting.active() {
@@ -54,5 +48,14 @@ impl SelectFront<'_, '_> {
             self.picks.park(entity, guid);
         }
         true
+    }
+
+    /// `0x49359c`: the active player's `UNIT_FIELD_CHARMEDBY`, the one return ahead of a guid the
+    /// object manager does not hold, which skips the cursor's bind (`0x4935c8`).
+    pub(super) fn charmed(&self) -> bool {
+        self.me
+            .iter()
+            .next()
+            .is_some_and(|me| me.0.unit_charmed_by().is_some())
     }
 }

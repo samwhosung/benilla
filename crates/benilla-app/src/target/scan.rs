@@ -456,6 +456,8 @@ pub(super) struct CommitOutcome {
 /// re-swing: StopAttack `0x5ecac0` (`0x493a08`) flags a stop in flight (`[player+0xc54]`),
 /// `CMSG_SET_SELECTION` goes out (`0x493857`), then unless the new target is us `Attack 0x5ecb70`
 /// swings past its already-attacking gate, or stops if `new_attackable` is false (`0x4938a1`).
+/// `entity` is the guid's object, which the select lights (`0x493701`); with none the guid is
+/// stored all the same (`0x4935c8` → `0x493605`), and neither `IsSelectable` nor the light runs.
 ///
 /// The latch (`0x493637`) reduces to `engaged && had_old`: vmangos ends [`Engaged`] when the
 /// victim dies, before a TAB can land, so the old target's own legs change nothing seen.
@@ -464,7 +466,7 @@ pub(super) struct CommitOutcome {
 pub(super) fn commit(
     selection: &mut Selection,
     seam: &mut crate::creature_anim::AttackSeam,
-    entity: Entity,
+    entity: Option<Entity>,
     guid: u64,
     target_store: Option<&ObjectStore>,
     engaged: bool,
@@ -490,9 +492,9 @@ pub(super) fn commit(
         // The old target's teardown (`0x4936cc` → `0x493910`) closes its loot first.
         seam.close_loot_on(old);
     }
-    selection.target = Some(entity);
-    selection.lit = Some(entity);
+    selection.target = entity;
     selection.guid = Some(guid);
+    selection.lit = entity;
     let stop_and_repoint = engaged && had_old;
     if stop_and_repoint {
         // `0x493a08`: the real StopAttack, which also un-queues a next-swing strike (`0x6e6f30`).
@@ -589,7 +591,7 @@ pub(super) fn cycle(
     let out = commit(
         selection,
         seam,
-        entity,
+        Some(entity),
         guid,
         scan.store_at(entity),
         engaged,
@@ -845,7 +847,9 @@ pub(super) fn auto_acquire(
         let guid = guid.0;
         match why {
             Acquire::Attacker => {
-                if selection.target.is_some() {
+                // `0x6259e6` tests the selected guid, so a party member selected out of range
+                // keeps the selection.
+                if selection.guid.is_some() {
                     continue;
                 }
                 debug!("auto-target: attacker {guid:#x} (victim = me, no target)");
@@ -869,7 +873,7 @@ pub(super) fn auto_acquire(
         commit(
             &mut selection,
             &mut seam,
-            unit,
+            Some(unit),
             guid,
             stores.get(unit).ok(),
             false,
@@ -914,7 +918,7 @@ mod tests {
                     commit(
                         &mut selection,
                         &mut seam,
-                        Entity::PLACEHOLDER,
+                        Some(Entity::PLACEHOLDER),
                         guid,
                         store.as_ref(),
                         engaged,

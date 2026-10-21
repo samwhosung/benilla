@@ -1185,13 +1185,8 @@ fn sync_portraits(
                 occupant = member.map(|m| m.guid);
                 let entity = member.and_then(|m| party.index.0.get(&m.guid)).copied();
                 if entity.is_none() {
-                    unseen = member.map(|m| {
-                        let traits = party.names.player_traits(m.guid);
-                        player_temporary_portrait(
-                            traits.map(|(race, _, _)| race),
-                            traits.map(|(_, _, sex)| sex),
-                        )
-                    });
+                    unseen =
+                        member.and_then(|m| unseen_portrait(&party.roster, &party.names, m.guid));
                 }
                 entity
             }
@@ -1631,15 +1626,43 @@ struct Subject {
     unseen: Option<String>,
 }
 
-/// `"target"`'s subject: the selection's object.
+/// `"target"`'s subject: the selection's object, or, for a selection with no object, a party
+/// member out of range, the guid's cached bake or stand-in, as any unit the object manager does not
+/// hold (`0x519fe6`).
 fn target_subject(
     selection: &Selection,
-    _roster: &crate::ui_party::GroupState,
-    _names: &crate::names::NameCache,
+    roster: &crate::ui_party::GroupState,
+    names: &crate::names::NameCache,
 ) -> Subject {
-    Subject {
-        entity: selection.target,
-        ..Subject::default()
+    match (selection.target, selection.guid) {
+        (None, Some(guid)) => Subject {
+            entity: None,
+            occupant: Some(guid),
+            unseen: unseen_portrait(roster, names, guid),
+        },
+        (entity, _) => Subject {
+            entity,
+            ..Subject::default()
+        },
+    }
+}
+
+/// The stand-in of a guid the object manager does not hold (`0x519fe6`): a player's by the race
+/// and sex of its name record (`0x51a00c` → `0x525ba0`), any other guid's from the group's pet
+/// record (`0x51a06d` → `0x525cb0`), none with no pet record.
+fn unseen_portrait(
+    roster: &crate::ui_party::GroupState,
+    names: &crate::names::NameCache,
+    guid: u64,
+) -> Option<String> {
+    if benilla_protocol::guid::is_player(guid) {
+        let traits = names.player_traits(guid);
+        Some(player_temporary_portrait(
+            traits.map(|(race, _, _)| race),
+            traits.map(|(_, _, sex)| sex),
+        ))
+    } else {
+        roster.pet_record(guid).map(|_| pet_temporary_portrait())
     }
 }
 

@@ -9,7 +9,7 @@ use super::{
     macros, mail, merchant, parse_unit_token, party, petition, pvp, quest, quest_log, reputation,
     session, simplehtml, skills, slider, social, spellbook, stable, taxi, trade, tradeskill,
     trainer, weapon_enchant, ActionSlot, AuraState, FontObject, ItemTemplateView, MusicRequest,
-    PlayerReqState, RegionData, ScriptValue, SoundRequest, UnitState, UnitTokenParse,
+    PlayerReqState, RegionData, ScriptValue, SoundRequest, UnitBase, UnitState, UnitTokenParse,
 };
 
 // ── The Rust-side model ──
@@ -1406,7 +1406,8 @@ impl Model {
     }
 
     /// The state of the unit `token` names, as the `Unit*` getters read it: the snapshot the app
-    /// pushed under the token, else, for a token with a `target` hop, the chain's end.
+    /// pushed under the token, else, for a token with a `target` hop or for `target` itself, what
+    /// the getters read for the guid it resolves to.
     pub(crate) fn unit(&self, token: &str) -> Option<&UnitState> {
         self.pushed_unit(token).or_else(|| self.chained_unit(token))
     }
@@ -1422,16 +1423,18 @@ impl Model {
         }
     }
 
-    /// The unit a token with a `target` hop and no push of its own names: the resolver's guid
-    /// (`0x515970`, which the getters call before their own object lookup, `0x468460`), then what
-    /// each getter reads for that guid. A held unit's snapshot first; with no object, the group
-    /// row naming the guid, whose own token's push carries its records (`0x496400`, `0x496420`)
-    /// and the roster's `UnitExists` (`0x491900`); off the roster, the app's no-object entry, a
-    /// name from the name cache (`0x5171eb`) and nothing more. A token without a hop is the app's
-    /// to push, base by base, and reads nothing here.
+    /// The unit a token with a `target` hop and no push of its own names, or `target` itself while
+    /// the selection's object is not held (the app pushes `"target"` for a held one): the
+    /// resolver's guid (`0x515970`, which the getters call before their own object lookup,
+    /// `0x468460`), then what each getter reads for that guid. A held unit's snapshot first; with
+    /// no object, the group row naming the guid, whose own token's push carries its records
+    /// (`0x496400`, `0x496420`) and the roster's `UnitExists` (`0x491900`), so a party member out
+    /// of range shows on the target frame; off the roster, the app's no-object entry, a name from
+    /// the name cache (`0x5171eb`) and nothing more. Any other token without a hop is the app's to
+    /// push, base by base, and reads nothing here.
     fn chained_unit(&self, token: &str) -> Option<&UnitState> {
         match parse_unit_token(token) {
-            UnitTokenParse::Unit { base, hops } if hops > 0 => {
+            UnitTokenParse::Unit { base, hops } if hops > 0 || base == UnitBase::Target => {
                 let guid = self.unit_guids.resolve_unit(base, hops)?;
                 match self.units_by_guid.get(&guid) {
                     Some(held) if held.has_object => Some(held),

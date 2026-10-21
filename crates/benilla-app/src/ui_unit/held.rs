@@ -652,9 +652,10 @@ mod tests {
             );
         }
         // The plain tokens read their own push and nothing else: this world pushes none, so
-        // `raid1` answers nil though a chain ends on it, and a token pushed by name wins.
+        // `raid1` answers nil though a chain ends on it, and a token pushed by name wins. `target`
+        // alone reads its guid as a chain does, for a selection with no object has no push.
         assert_eq!(name(&app, "raid1"), None);
-        assert_eq!(name(&app, "target"), None);
+        assert_eq!(name(&app, "target").as_deref(), Some("Mob"));
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .set_unit(

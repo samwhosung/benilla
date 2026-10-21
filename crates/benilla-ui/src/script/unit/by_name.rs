@@ -297,14 +297,23 @@ impl super::super::UiScript {
     /// the unit's by-name snapshot, else a pushed snapshot of the same guid, else a bare held unit;
     /// the next frame's unit feed replaces it with the committed selection's own push.
     ///
+    /// A selection whose object is not held, a party member out of range, seats as its guid: the
+    /// getters read it as they read any guid with no object ([`Model::unit`]).
+    ///
     /// `"targettarget"` follows: `0x515970` reads the target's `UNIT_FIELD_TARGET` as it resolves,
     /// so it names the new target's target at once, a held unit as its snapshot, and an unheld or
-    /// absent one through the chain (a roster member out of range, or nobody).
+    /// absent one through the chain (a roster member out of range, or nobody); a target with no
+    /// object has no target to read.
     pub fn seat_selection(&mut self, selected: Option<SeatedSelection>) {
         let mut model = self.model_mut();
-        let state = selected.map(|s| model.held_view(s.guid));
-        model.show_selection(state);
-        let hop = selected.map_or(0, |s| {
+        match selected {
+            Some(s) if !s.held => model.show_unheld_selection(s.guid),
+            _ => {
+                let state = selected.map(|s| model.held_view(s.guid));
+                model.show_selection(state);
+            }
+        }
+        let hop = selected.filter(|s| s.held).map_or(0, |s| {
             model.unit_guids.held.insert(s.guid, s.target);
             if s.target_held {
                 s.target
@@ -328,6 +337,8 @@ impl super::super::UiScript {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SeatedSelection {
     pub guid: u64,
+    /// The object manager holds its object.
+    pub held: bool,
     /// Its `UNIT_FIELD_TARGET`, 0 for none.
     pub target: u64,
     /// The object manager holds the unit it targets.
@@ -405,6 +416,18 @@ impl Model {
                 ..Default::default()
             }),
         }
+    }
+
+    /// Show a committed selection with no object to the rest of its chunk: the resolver's target
+    /// guid, and no `"target"` snapshot, so the getters read the guid's roster row.
+    fn show_unheld_selection(&mut self, guid: u64) {
+        if self.unit_guids.target == guid && self.pushed_unit("target").is_none() {
+            return;
+        }
+        self.unit_guids.target = guid;
+        self.unit_guids.held.remove(&guid);
+        self.units_by_lower.remove("target");
+        self.target_view_moved = true;
     }
 
     /// Show a committed selection to the rest of its chunk: the resolver's target guid and the

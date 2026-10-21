@@ -345,7 +345,7 @@ fn target_unit_queues_the_token_for_the_app_to_resolve() {
     assert!(s.take_selection_requests().is_empty());
 }
 
-/// A nil `AssistUnit` argument is dropped like `TargetUnit`'s.
+/// A nil `AssistUnit` argument raises its usage (`0x489c22`) and queues nothing.
 #[test]
 fn the_selection_queue_carries_all_three_verbs_in_call_order() {
     use crate::script::SelectionRequest;
@@ -353,7 +353,7 @@ fn the_selection_queue_carries_all_three_verbs_in_call_order() {
     s.keep_calls();
     s.eval::<()>(r#"TargetUnit("party1")"#).unwrap();
     s.eval::<()>(r#"AssistUnit("target")"#).unwrap();
-    s.eval::<()>(r#"AssistUnit(nil)"#).unwrap();
+    assert!(s.eval::<()>(r#"AssistUnit(nil)"#).is_err());
     s.eval::<()>("TargetLastEnemy()").unwrap();
     assert_eq!(
         s.take_selection_requests(),
@@ -932,6 +932,7 @@ fn candidate(guid: u64, name: &str, dist2: f32) -> crate::script::NameCandidate 
 fn alone(guid: u64) -> crate::script::SeatedSelection {
     crate::script::SeatedSelection {
         guid,
+        held: true,
         target: 0,
         target_held: false,
     }
@@ -962,6 +963,7 @@ fn a_seated_selection_carries_its_target_of_target() {
 
     s.seat_selection(Some(crate::script::SeatedSelection {
         guid: 0x31,
+        held: true,
         target: 0x32,
         target_held: true,
     }));
@@ -969,6 +971,7 @@ fn a_seated_selection_carries_its_target_of_target() {
 
     s.seat_selection(Some(crate::script::SeatedSelection {
         guid: 0x31,
+        held: true,
         target: 0x22,
         target_held: false,
     }));

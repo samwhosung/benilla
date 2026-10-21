@@ -141,6 +141,32 @@ impl GroupState {
                 .is_some_and(PartyMemberStatsInfo::is_online)
     }
 
+    /// `IsRaidMemberOrPet` (`0x491900`): a nonzero `guid` that is the active player's, `me`, its
+    /// pet's, a party slot's or its pet's (`0x4e80a0`), or a raid row's or its pet's (`0x4bafd0`).
+    /// The player is matched by guid before any object (`0x4e80b0`), its pet only while its object
+    /// is held (`0x4e80e1`). A member whose object `live` holds names its pet by `CHARM`, else
+    /// `SUMMON` (`0x4e814d`, `0x4bb022`); one with none by its record's pet guid while the record
+    /// reads online (`0x4e816b`, `0x4bb040`). No object of `guid` itself is needed.
+    pub(crate) fn member_or_pet<'a>(
+        &self,
+        guid: u64,
+        me: Option<(u64, Option<&ObjectFields>)>,
+        live: impl Fn(u64) -> Option<&'a ObjectFields>,
+    ) -> bool {
+        if guid == 0 {
+            return false;
+        }
+        if let Some((me, fields)) = me {
+            if me == guid || fields.and_then(ObjectFields::unit_pet_guid) == Some(guid) {
+                return true;
+            }
+        }
+        let names = |member: u64| {
+            member == guid || self.pet_guid_of(member, live(member), true) == Some(guid)
+        };
+        self.party_slots().any(|m| names(m.guid)) || self.raid_rows().any(names)
+    }
+
     /// `partypetN`'s guid for the member `member` (`0x4e81d0`): `CHARM`, else `SUMMON`, off the
     /// member's descriptor while it is held (`0x4e8204`-`0x4e821a`), else the record's pet guid
     /// while the record reads online (`0x4e8227`-`0x4e8236`).

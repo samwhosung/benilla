@@ -90,7 +90,7 @@ pub(super) fn select_on_plate_click(
         scan::commit(
             &mut selection,
             &mut seam,
-            entity,
+            Some(entity),
             guid.0,
             store,
             engaged,
@@ -112,7 +112,7 @@ pub(super) fn select_on_plate_click(
             scan::commit(
                 &mut selection,
                 &mut seam,
-                entity,
+                Some(entity),
                 guid.0,
                 store,
                 engaged,
@@ -191,7 +191,7 @@ pub(super) fn select_on_click(
             scan::commit(
                 &mut selection,
                 &mut seam,
-                entity,
+                Some(entity),
                 guid,
                 stores.get(entity).ok(),
                 engaged,
@@ -1015,7 +1015,7 @@ fn interact(
         scan::commit(
             selection,
             seam,
-            entity,
+            Some(entity),
             guid,
             target,
             me.is_some_and(|(_, _, e)| e),
@@ -1684,7 +1684,7 @@ pub(crate) fn deselect_on_ui_shutdown(
     {
         return false;
     }
-    let had = selection.target.is_some();
+    let had = selection.guid.is_some();
     deselect(&mut selection, &mut seam, !engaged.is_empty());
     had
 }
@@ -1724,20 +1724,20 @@ pub(super) fn deselect(
     clear(selection, seam, engaged);
 }
 
-/// Drop the target and send `CMSG_SET_SELECTION` 0 (a no-op with none): the teardown `0x493910`
-/// with its send, which a despawn and a dead unit's loot close reach without `SetSelection`, so the
-/// last-target pair is left. When `engaged`, melee stops too. Weapons stay drawn.
+/// Drop the target and send `CMSG_SET_SELECTION` 0 (a no-op with none, `0x493937`): the teardown
+/// `0x493910` with its send, which a despawn and a dead unit's loot close reach without
+/// `SetSelection`, so the last-target pair is left. A guid with no object is torn down alike. When
+/// `engaged`, melee stops too. Weapons stay drawn.
 pub(super) fn clear(
     selection: &mut Selection,
     seam: &mut crate::creature_anim::AttackSeam,
     engaged: bool,
 ) {
-    if selection.target.take().is_some() {
+    if let Some(old) = selection.guid.take() {
+        selection.target = None;
         selection.lit = None;
-        if let Some(old) = selection.guid.take() {
-            // The teardown `0x493910` closes the old target's loot before its own send.
-            seam.close_loot_on(old);
-        }
+        // The teardown `0x493910` closes the old target's loot before its own send.
+        seam.close_loot_on(old);
         let _ = seam.net.0.send(ClientCommand::SetSelection { guid: 0 });
         // `SetSelection 0x493540`'s own `0x493a08 call 0x5ecac0`, the real StopAttack, which
         // also un-queues a pending on-next-swing strike.

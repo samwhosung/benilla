@@ -85,11 +85,15 @@ pub(crate) use ring::{selection_variant, Factions, RingVariant};
 pub use click::Interact;
 pub(crate) use click::{clear_selection_on_world_teardown, deselect_on_ui_shutdown, DeselectGuid};
 
-/// Our target, set the instant we click, as the 1.12 client does without waiting for the server,
-/// and cleared on deselect or when it streams out. `CMSG_SET_SELECTION` carries the guid, which the
-/// server records in our `UNIT_FIELD_TARGET`.
+/// Our target, set the instant we click, as the 1.12 client does without waiting for the server.
+/// The selection is the guid `[0xb4e2d8]`: `SetSelection 0x493540` stores it whether or not the
+/// object manager holds its object (`0x4935bf` → `0x493605`), and the client reads the object by
+/// that guid where it needs one. `CMSG_SET_SELECTION` carries the guid, which the server records in
+/// our `UNIT_FIELD_TARGET`. [`track::follow_selection_object`] keeps [`Self::target`] on the guid's
+/// object and ends the selection where the client's teardowns do.
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Selection {
+    /// The object [`Self::guid`] names while the object manager holds it.
     pub(crate) target: Option<Entity>,
     pub(crate) guid: Option<u64>,
     /// The object `SetSelection` lit as the target (`SetLight` bit 0, `0x493701`) and the teardown

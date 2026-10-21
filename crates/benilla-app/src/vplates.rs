@@ -123,12 +123,13 @@ const MAX_DIST_SQ: f32 = 20.0 * 20.0;
 /// far to read.
 const DIM_ALPHA: u8 = 178;
 
-/// The alpha of `guid`'s plate: full with no target or on the target's own plate, else dimmed.
+/// The alpha of `guid`'s plate off the selected guid (`0x7cb9d7`-`0x7cb9f9`): full with nothing
+/// selected or on the selected unit's own plate, else dimmed, so a selection whose object is not
+/// held, a party member out of range, dims every plate.
 fn plate_alpha(selection: &Selection, guid: u64) -> u8 {
-    if selection.target.is_none() || selection.guid == Some(guid) {
-        255
-    } else {
-        DIM_ALPHA
+    match selection.guid {
+        Some(selected) if selected != guid => DIM_ALPHA,
+        _ => 255,
     }
 }
 

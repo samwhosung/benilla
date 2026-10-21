@@ -107,12 +107,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // AssistByName(name) (`0x489c40`): a non-string raises `Usage:` (`0x489d3f`); any string,
+    // the empty one included, goes to the host, which assists the named player or, for an empty
+    // name, the selection (`0x489c89`), and shows the line its miss owes (`0x489d17`, `0x489d2b`).
     g.set(
         "AssistByName",
-        lua.create_function(|lua, name: Option<String>| {
-            let Some(name) = name.filter(|n| !n.trim().is_empty()) else {
-                return Ok(());
-            };
+        lua.create_function(|lua, name: Value| {
+            let name = super::binding_abi::string_arg(lua, name, r#"Usage: AssistByName("name")"#)?;
             let may_cast = super::protected::select_may_cast(lua);
             super::calls::submit(
                 lua,
@@ -268,6 +269,8 @@ mod tests {
         assert_eq!(s.take_roll_requests(), vec![(0, 1_000_000), (7, 7), (0, 3)]);
     }
 
+    /// `AssistByName` hands the host any string, the empty one included, which assists the
+    /// selection (`0x489c89`).
     #[test]
     fn assist_and_uninvite_by_name_queue_their_names() {
         let mut s = UiScript::new().unwrap();
@@ -276,7 +279,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             s.take_selection_requests(),
-            vec![SelectionRequest::AssistByName("Alice".into())]
+            vec![
+                SelectionRequest::AssistByName("Alice".into()),
+                SelectionRequest::AssistByName(String::new()),
+            ]
         );
         assert_eq!(s.take_uninvite_requests(), vec!["Carol".to_string()]);
     }

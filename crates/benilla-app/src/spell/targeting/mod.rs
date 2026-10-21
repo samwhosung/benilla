@@ -738,7 +738,9 @@ mod tests {
         world.insert_resource(spells);
         // `UNIT_FIELD_HEALTH` 100: a store with no health reads dead to `BindTarget`'s gates.
         let live = || ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(22, 100)]));
-        world.spawn((SelfPlayer, Guid(ME), GlobalTransform::default(), live()));
+        let me = world
+            .spawn((SelfPlayer, Guid(ME), GlobalTransform::default(), live()))
+            .id();
         let ally = world
             .spawn((
                 Guid(ALLY),
@@ -746,6 +748,10 @@ mod tests {
                 live(),
             ))
             .id();
+        // The object manager's index, which every token resolves its guid through.
+        let index = &mut world.resource_mut::<crate::net::GuidIndex>().0;
+        index.insert(ME, me);
+        index.insert(ALLY, ally);
         world.insert_resource(crate::target::Selection {
             target: Some(ally),
             guid: Some(ALLY),
@@ -1253,6 +1259,7 @@ mod tests {
                 Some(&def),
                 &CastCandidates {
                     selection: Some(guid),
+                    selection_held: true,
                     caster: Some(ME),
                     auto_self: Some(ME),
                     auto_self_store: Some(&store),
@@ -1503,6 +1510,7 @@ mod tests {
                             Some(&def),
                             &CastCandidates {
                                 selection: Some(guid),
+                                selection_held: true,
                                 caster: Some(ME),
                                 auto_self: Some(ME),
                                 auto_self_store: None,
