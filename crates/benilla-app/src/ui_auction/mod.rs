@@ -158,10 +158,10 @@ pub(crate) struct AuctionOpen {
     /// The outbid list, `{house, auction}` pairs (`0xb72594`, count `0xb72634`): a bidder notice
     /// that we were outbid appends (`0x4cde50`), a placed bid removes its auction (`0x4cdf30`), and
     /// the bidder request sends the open house's ids (`0x4cd7a4`-`0x4cd7e8`) and removes a pair of
-    /// that house (`0x4cdf90`). Nothing else clears it.
+    /// that house (`0x4cdf90`), and each world entry's start-up empties it (`0x4cc1d0`).
     pub(crate) outbid: Vec<(u32, u32)>,
-    /// How often a full append has doubled the list's room (`0xb72590`), eight pairs at start-up
-    /// (`0x4cc213`).
+    /// How often a full append has doubled the list's room (`0xb72590`), eight pairs at each
+    /// world entry's start-up (`0x4cc207`).
     outbid_doublings: u32,
     /// The amount the last `PlaceAuctionBid` sent (`0xb72658`, stored at `0x4cf91e`), which a
     /// placed bid's result writes into its browse row (`0x4cc56b`).
@@ -528,7 +528,7 @@ impl Plugin for UiAuctionPlugin {
             )
             .add_systems(
                 OnEnter(crate::client_state::ClientState::InWorld),
-                seed_sorts_at_world_entry,
+                start_up_at_world_entry,
             );
     }
 }
@@ -553,10 +553,13 @@ fn reset_auction_on_world_enter(
     })
 }
 
-/// The world entry seeds the three stacks (`0x48f5f9` → `0x4cc0f0`, `0x4cc236`-`0x4cc274`), from
-/// `ClientInitializeGame` (`0x401570`), which runs once per entry from the glue screens and not on
-/// a worldport.
-fn seed_sorts_at_world_entry(mut auction: ResMut<AuctionOpen>) {
+/// The world entry's start-up (`0x48f5f9` → `0x4cc0f0`), from `ClientInitializeGame`
+/// (`0x401570`), which runs once per entry from the glue screens and not on a worldport: the
+/// outbid list emptied (`0x4cc1d0`) with its room back at eight (`0x4cc207`), and the three
+/// stacks seeded (`0x4cc236`-`0x4cc274`).
+fn start_up_at_world_entry(mut auction: ResMut<AuctionOpen>) {
+    auction.outbid.clear();
+    auction.outbid_doublings = 0;
     auction.sorts = SortStacks::default();
 }
 
