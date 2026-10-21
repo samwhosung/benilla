@@ -299,6 +299,22 @@ pub(crate) fn plan_walk(
     steps
 }
 
+/// One walk for a player in `zone_name`: the plan, applied, then the VM's mirror when a slot
+/// name moved, so `GetChannelName(n)` answers the new name from this frame on.
+pub(super) fn walk_zone(
+    channels: &mut ChannelState,
+    zone_name: &str,
+    in_city: bool,
+    city_word: Option<&str>,
+    commands: &NetCommands,
+    script: Option<&mut benilla_ui::script::UiScript>,
+) {
+    let steps = plan_walk(channels, zone_name, in_city, city_word);
+    if let (true, Some(script)) = (apply_walk(&steps, channels, commands), script) {
+        script.set_joined_channels(channels.names());
+    }
+}
+
 /// Apply a plan in order; answers whether a slot name moved, the VM mirror's cue.
 fn apply_walk(steps: &[WalkStep], channels: &mut ChannelState, commands: &NetCommands) -> bool {
     let mut names_moved = false;
@@ -433,13 +449,14 @@ pub(super) fn auto_join_zone_channels(
             return; // same zone as last frame
         }
 
-        let steps = plan_walk(&channels, &zone_name, in_city, city_word(&areas.0));
-        if apply_walk(&steps, &mut channels, &commands) {
-            if let Some(script) = script.as_mut() {
-                // `GetChannelName(n)` answers the new name from this frame on, as in the reference.
-                script.set_joined_channels(channels.names());
-            }
-        }
+        walk_zone(
+            &mut channels,
+            &zone_name,
+            in_city,
+            city_word(&areas.0),
+            &commands,
+            script,
+        );
         walk.at = Some(zone_id);
     })
 }

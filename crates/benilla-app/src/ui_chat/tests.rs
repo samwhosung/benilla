@@ -2774,6 +2774,139 @@ fn a_channel_send_carries_the_numbered_slots_name() {
     );
 }
 
+/// `SendChatMessage`'s channel target reads the slot's state (`0x49be50`, state 0 only) as the
+/// zone walk and the server's notices write it. Crossing into Elwynn renames General's slot in
+/// place (`0x49bc50`), and the re-join's `YOU_JOINED` writes state 0 (`0x49bb20`), so `/1` reaches
+/// the new name. Leaving the capital suspends Trade (`0x49bcf0`): its number sends nothing until
+/// the walk back in and the server's `YOU_JOINED` confirm it.
+#[test]
+fn a_channel_number_sends_as_the_walk_and_the_notices_leave_its_slot() {
+    use super::edit::ChannelState;
+    use crate::net::{ChatKind, ClientCommand, NetCommands};
+    use benilla_formats::{ChatChannelRow, ChatChannelsCatalog};
+
+    let catalog = || {
+        ChatChannelsCatalog::from_rows(vec![
+            ChatChannelRow {
+                id: 1,
+                flags: 0x0_0003,
+                pattern: "General - %s".into(),
+                shortcut: "General".into(),
+            },
+            ChatChannelRow {
+                id: 2,
+                flags: 0x0_003B,
+                pattern: "Trade - %s".into(),
+                shortcut: "Trade".into(),
+            },
+        ])
+    };
+    let notice = |name: &str, byte: &str| {
+        let mut e = ChatEvent::text_only(K::ChannelNotice, String::new());
+        e.channel = name.into();
+        e.notice = byte.into();
+        e
+    };
+    // The walk into `zone`, then the server's notices for it, in order.
+    let (wire, _rx) = crossbeam_channel::unbounded();
+    let commands = NetCommands(wire);
+    let cross = |script: &mut benilla_ui::script::UiScript,
+                 channels: &mut ChannelState,
+                 zone: &str,
+                 in_city: bool,
+                 notices: &[(&str, &str)]| {
+        super::channels::walk_zone(
+            channels,
+            zone,
+            in_city,
+            Some("City"),
+            &commands,
+            Some(script),
+        );
+        let mut windows = super::frames::ChatWindows::default();
+        for (name, byte) in notices {
+            super::feed::deliver(script, &mut windows, channels, &mut notice(name, byte));
+        }
+    };
+    // One `SendChatMessage` to channel 1, and what reached the wire.
+    let send_to_1 = |script: benilla_ui::script::UiScript| {
+        let (mut world, rx) = super::chat_world(script);
+        super::run_chat(&mut world, r#"SendChatMessage("lf1m", "CHANNEL", nil, 1)"#).expect("lua");
+        let sent: Vec<_> = rx
+            .try_iter()
+            .map(|c| match c {
+                ClientCommand::Chat { kind, target, .. } => (kind, target),
+                other => panic!("unexpected command {other:?}"),
+            })
+            .collect();
+        let script = world
+            .remove_non_send_resource::<benilla_ui::script::UiScript>()
+            .expect("the VM");
+        (sent, script)
+    };
+    let to = |name: &str| vec![(ChatKind::Channel, Some(name.to_string()))];
+
+    // General alone: Stormwind's walk and join, then the crossing into Elwynn.
+    let mut channels = ChannelState {
+        channels: catalog(),
+        zone_mask: Some(0x1),
+        ..Default::default()
+    };
+    let mut script = in_world_vm();
+    let joined = [("General - Stormwind City", "2")];
+    cross(&mut script, &mut channels, "Stormwind City", true, &joined);
+    let crossing = [
+        ("General - Stormwind City", "3"),
+        ("General - Elwynn Forest", "2"),
+    ];
+    cross(
+        &mut script,
+        &mut channels,
+        "Elwynn Forest",
+        false,
+        &crossing,
+    );
+    let (sent, _) = send_to_1(script);
+    assert_eq!(
+        sent,
+        to("General - Elwynn Forest"),
+        "the renamed slot, confirmed"
+    );
+
+    // Trade alone: suspended outside the capital, confirmed again inside it.
+    let mut channels = ChannelState {
+        channels: catalog(),
+        zone_mask: Some(0x2),
+        ..Default::default()
+    };
+    let mut script = in_world_vm();
+    cross(
+        &mut script,
+        &mut channels,
+        "Stormwind City",
+        true,
+        &[("Trade - City", "2")],
+    );
+    cross(
+        &mut script,
+        &mut channels,
+        "Elwynn Forest",
+        false,
+        &[("Trade - City", "3")],
+    );
+    let (sent, mut script) = send_to_1(script);
+    assert_eq!(sent, [], "a suspended slot sends nothing");
+    cross(
+        &mut script,
+        &mut channels,
+        "Stormwind City",
+        true,
+        &[("Trade - City", "2")],
+    );
+    let (sent, _) = send_to_1(script);
+    assert_eq!(sent, to("Trade - City"), "confirmed again");
+}
+
 /// `SendChatMessage`'s empty-line gate (`0x49f28d`-`0x49f2a1`): an empty line, or one whose first
 /// byte is NUL, of any type but AFK and DND sends nothing and leaves a standing AFK set, since the
 /// gate is ahead of the AFK clear. The binding's type check comes first, so an unknown type still
