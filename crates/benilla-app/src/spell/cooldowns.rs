@@ -169,6 +169,17 @@ pub(crate) struct Cooldowns {
     pending_items: std::collections::HashMap<u32, PendingItem>,
 }
 
+/// `StartCooldown 0x6e2c60`'s own arguments: the spell and item, the category, the two remainders
+/// and the held flag.
+struct StartCooldown {
+    spell_id: u32,
+    item_id: u32,
+    category: u32,
+    recovery_ms: i32,
+    category_recovery_ms: i32,
+    held: bool,
+}
+
 /// One `ITEMCOOLDOWNHASHNODE` (`0x6e8660`): the spell at `+0x18`, the go's time at `+0x1c` and the
 /// held flag at `+0x20`.
 #[derive(Clone, Copy, Debug)]
@@ -661,33 +672,99 @@ impl Cooldowns {
         self.flush_item_leg();
     }
 
-    /// One `SMSG_INITIAL_SPELLS` cooldown: the wire carries the remainder, so the record starts
-    /// now. A permanent cooldown (the category word's top bit) arrives as 1 ms and is kept.
+    /// One `SMSG_INITIAL_SPELLS` cooldown (`ReadInitialSpells 0x5e6510`): the category word's bit
+    /// 31 is the held flag and the rest the remainder (`0x5e6632`-`0x5e664b`), seeded through
+    /// [`Self::start_cooldown`] on the player's list. vmangos marks a cooldown-on-event spell
+    /// running at login permanent: 1 ms and bit 31 (`Player.cpp:3499-3500`).
     pub(crate) fn seed_initial(
         &mut self,
         cd: &benilla_protocol::messages::SpellCooldown,
-        _spell: Option<&SpellDisplay>,
-        _block: Option<&ItemSpellEntry>,
-        _mods: &SpellModifiers,
-        _pad: CategoryPad,
+        spell: Option<&SpellDisplay>,
+        block: Option<&ItemSpellEntry>,
+        mods: &SpellModifiers,
+        pad: CategoryPad,
         now: Instant,
     ) {
+        let Some(spell) = spell else {
+            return;
+        };
+        self.start_cooldown(
+            StartCooldown {
+                spell_id: u32::from(cd.spell_id),
+                item_id: u32::from(cd.item_id),
+                category: u32::from(cd.category),
+                recovery_ms: cd.spell_cd_ms as i32,
+                category_recovery_ms: (cd.category_cd_ms & 0x7fff_ffff) as i32,
+                held: cd.category_cd_ms & 0x8000_0000 != 0,
+            },
+            spell,
+            block,
+            mods,
+            pad,
+            now,
+        );
+    }
+
+    /// `StartCooldown 0x6e2c60`, cooldowns given as remainders, for a spell `Spell.dbc` holds
+    /// (`0x6e2cbd`). `block` is the item's record's first slot naming the spell (`0x6e2cf4`).
+    /// - A positive remainder gives a time of the larger of its base and it (`0x6e2d31`), the base
+    ///   the slot's `+0x158` when not negative, else `RecoveryTime`, through op 11 (`0x6e2d40`),
+    ///   started so the timer ends at the remainder: `now − time + remainder` (`0x6e2d4e`).
+    /// - A positive category remainder the same, its base the slot's `+0x180` when not negative,
+    ///   else `CategoryRecoveryTime` through `0x6e2b60` (`0x6e2d80`), then the larger
+    ///   (`0x6e2d8b`), started likewise (`0x6e2d94`).
+    /// - The record takes the caller's category and held flag and no GCD (`0x6e2dcc`). No flush.
+    fn start_cooldown(
+        &mut self,
+        args: StartCooldown,
+        spell: &SpellDisplay,
+        block: Option<&ItemSpellEntry>,
+        mods: &SpellModifiers,
+        pad: CategoryPad,
+        now: Instant,
+    ) {
+        // A timer of `time` that ends `remaining` from now.
+        let ending = |time: i32, remaining: i32| -> Timer {
+            let duration = millis(time);
+            let end = now + millis(remaining);
+            Timer {
+                start: end.checked_sub(duration).unwrap_or(now),
+                duration,
+            }
+        };
+        let recovery = if args.recovery_ms > 0 {
+            let base = block
+                .map(|b| b.cooldown_ms)
+                .filter(|&ms| ms >= 0)
+                .unwrap_or(spell.recovery_ms as i32);
+            let time = mods.apply(spell, OP_COOLDOWN, base.max(args.recovery_ms));
+            ending(time, args.recovery_ms)
+        } else {
+            Timer::none(now)
+        };
+        let category_recovery = if args.category_recovery_ms > 0 {
+            let base = block
+                .map(|b| b.category_cooldown_ms)
+                .filter(|&ms| ms >= 0)
+                .unwrap_or_else(|| {
+                    mods.category_recovery(spell, spell.category_recovery_ms as i32, pad)
+                });
+            ending(
+                base.max(args.category_recovery_ms),
+                args.category_recovery_ms,
+            )
+        } else {
+            Timer::none(now)
+        };
         self.add(
             now,
-            u32::from(cd.spell_id),
-            u32::from(cd.item_id),
-            Timer {
-                start: now,
-                duration: Duration::from_millis(u64::from(cd.spell_cd_ms)),
-            },
-            u32::from(cd.category & 0x7FFF),
-            // No catalog here; the wildcard category 351 never arrives in this list.
-            false,
-            Timer {
-                start: now,
-                duration: Duration::from_millis(u64::from(cd.category_cd_ms)),
-            },
-            false,
+            args.spell_id,
+            args.item_id,
+            recovery,
+            args.category,
+            spell.category == args.category && spell.category_wildcard,
+            category_recovery,
+            args.held,
             0,
             Duration::ZERO,
         );
@@ -1281,9 +1358,8 @@ mod tests {
         let read = cds.info(12975, 0, Some(&last_stand), t1);
         assert_eq!(
             (cds.records.len(), read.duration_ms, read.remaining_ms),
-            (1, 594_000, 594_000),
-            "one record, the second login's — a surviving first-login record would answer 600 s \
-             and go on answering it for the whole cooldown"
+            (1, 600_000, 594_000),
+            "one record, the second login's, its 10 minutes started to end at the remainder"
         );
     }
 
