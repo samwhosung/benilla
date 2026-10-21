@@ -700,8 +700,9 @@ fn inventory_slots(
     let mut inv: InventorySlots = Default::default();
     let ammo_id = store.0.player_ammo_id().unwrap_or(0);
     if ammo_id != 0 {
-        // An entry, not an item object, so no create asked for it; the texture getter's lookup
-        // passes a callback (`0x4c83ce`), on the doll's events, which none here marks.
+        // An entry, not an item object, so no create asked for it. The ammo getters' own lookups,
+        // with the callback `0x4c84f0` (`0x4c83bc`, `0x4c83ce`), are drained above; this read
+        // also asks a miss once.
         let t = items.template(ammo_id, 0, Ask::New(commands));
         let inventory_type = t.map(|t| t.inventory_type);
         let (name, quality, display, link) = match t {
