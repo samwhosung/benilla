@@ -1259,4 +1259,205 @@ mod tests {
             .unlock_item(BAG);
         assert!(!locked(&mut app), "the server's answer");
     }
+
+    // The UNIT-block field indices the core reads (`benilla_protocol`'s `fields::FIELD_UNIT_*`).
+    const BASEATTACKTIME: u16 = 126;
+    const MINDAMAGE: u16 = 134;
+    const MAXDAMAGE: u16 = 135;
+    const STAT0: u16 = 150;
+    const RESISTANCES0: u16 = 155;
+    const ATTACK_POWER: u16 = 165;
+    const ATTACK_POWER_MODS: u16 = 166;
+
+    /// A boar's descriptor: the UNIT block alone, built as a create block, because a live pet
+    /// arrives as one and a create reads an absent field as 0, not unknown.
+    fn boar() -> ObjectStore {
+        ObjectStore(
+            ObjectFields::from_pairs(&[
+                (STAT0, 63),     // strength
+                (STAT0 + 1, 45), // agility
+                (STAT0 + 2, 68), // stamina
+                (STAT0 + 3, 32), // intellect
+                (STAT0 + 4, 42), // spirit
+                (RESISTANCES0, 1810),
+                (RESISTANCES0 + 2, 15), // fire
+                (BASEATTACKTIME, 2000),
+                (MINDAMAGE, 30.5f32.to_bits()),
+                (MAXDAMAGE, 44.5f32.to_bits()),
+                (ATTACK_POWER, 178),
+                // The MODS field is a packed signed pair: pos in the low word, neg in the high.
+                (ATTACK_POWER_MODS, (((-4i16) as u16 as u32) << 16) | 12),
+            ])
+            .into_created(benilla_protocol::messages::ObjectType::Unit),
+        )
+    }
+
+    /// PLAYER-block values keep their defaults: a creature has no buff split.
+    #[test]
+    fn the_core_reads_a_creatures_unit_block_and_defaults_the_rest() {
+        let s = unit_combat_stats(&boar());
+        assert_eq!(s.stats, [63, 45, 68, 32, 42]);
+        assert_eq!(s.resistances, [1810, 0, 15, 0, 0, 0, 0]);
+        assert_eq!(s.min_damage, 30.5);
+        assert_eq!(s.max_damage, 44.5);
+        assert_eq!(s.main_attack_time_ms, 2000);
+        assert_eq!(
+            (s.attack_power, s.attack_power_pos, s.attack_power_neg),
+            (178, 12, -4)
+        );
+        assert_eq!(s.stat_pos, [0; 5]);
+        assert_eq!(s.stat_neg, [0; 5]);
+        assert_eq!(s.resistance_pos, [0; 7]);
+        assert_eq!(s.resistance_neg, [0; 7]);
+        assert_eq!((s.physical_bonus_pos, s.physical_bonus_neg), (0, 0));
+        assert_eq!(s.damage_percent, 1.0);
+        assert!(!s.has_offhand && !s.has_wand);
+        assert_eq!(s.main_weapon_skill, (0, 0));
+        assert_eq!(s.ranged_weapon_skill, (0, 0));
+        assert_eq!(
+            s.defense_skill,
+            (0, 0),
+            "a creature has no defense pair; `UnitDefense` answers its level × 5 itself"
+        );
+    }
+
+    #[test]
+    fn an_unstreamed_unit_reads_the_absent_shape() {
+        let s = unit_combat_stats(&ObjectStore(ObjectFields::from_pairs(&[])));
+        assert_eq!(s.stats, [0; 5]);
+        assert_eq!(s.resistances, [0; 7]);
+        assert_eq!(s.damage_percent, 1.0);
+        // The base-swing fallback, so `damage / speed` is finite on the first frames.
+        assert_eq!(s.main_attack_time_ms, 2000);
+    }
+
+    /// A held unit's snapshot carries its own fields, so the pet sheet's reads answer through the
+    /// `"pet"` token as any other token's do (`PetPaperDollFrame.lua:112`, `:149`), and a unit we
+    /// summoned answers `UnitDefense` with its level times 5 (`0x519272`, `0x613680`).
+    #[test]
+    fn a_held_units_snapshot_answers_the_stat_bindings() {
+        const ME: u64 = 0x10;
+        const PET: u64 = 0xF140_0000_0000_0077;
+        /// `UNIT_FIELD_SUMMONEDBY` and `UNIT_FIELD_LEVEL`.
+        const SUMMONEDBY: u16 = 12;
+        const LEVEL: u16 = 34;
+        let mut store = boar();
+        store.0.merge(ObjectFields::from_pairs(&[
+            (SUMMONEDBY, ME as u32),
+            (LEVEL, 40),
+        ]));
+        let pet =
+            crate::ui_unit::snapshot(&store, PET, None, 0, Default::default(), Default::default());
+        let mut s = UiScript::new().unwrap();
+        s.set_unit_guids(&benilla_ui::script::UnitGuids {
+            player: ME,
+            pet: PET,
+            ..Default::default()
+        });
+        s.set_unit("pet", Some(pet));
+        assert_eq!(
+            s.eval::<(i64, i64, i64, i64)>(r#"return UnitStat("pet", 3)"#)
+                .unwrap(),
+            (68, 68, 0, 0)
+        );
+        assert_eq!(
+            s.eval::<(i64, i64, i64, i64)>(r#"return UnitResistance("pet", 2)"#)
+                .unwrap(),
+            (15, 15, 0, 0)
+        );
+        assert_eq!(
+            s.eval::<(i64, i64, i64, i64, i64)>(r#"return UnitArmor("pet")"#)
+                .unwrap(),
+            (1810, 1810, 1810, 0, 0)
+        );
+        assert_eq!(
+            s.eval::<(f64, f64, f64, f64, i64, i64, f64)>(r#"return UnitDamage("pet")"#)
+                .unwrap(),
+            (30.5, 44.5, 0.0, 0.0, 0, 0, 1.0)
+        );
+        assert_eq!(
+            s.eval::<(i64, i64, i64)>(r#"return UnitAttackPower("pet")"#)
+                .unwrap(),
+            (178, 12, -4)
+        );
+        assert_eq!(
+            s.eval::<(i64, i64)>(r#"return UnitDefense("pet")"#)
+                .unwrap(),
+            (200, 0)
+        );
+        s.set_unit("pet", None);
+        assert_eq!(
+            s.eval::<(i64, i64, i64, i64, i64)>(r#"return UnitArmor("pet")"#)
+                .unwrap(),
+            (0, 0, 0, 0, 0)
+        );
+    }
+
+    /// `UnitRangedDamage`'s bonus is read at the ranged weapon's school (`0x5189e1`-`0x518a45`):
+    /// the first damage line of the ranged slot's record with a minimum above 0, its school at
+    /// `+0xe0`; school 0 with no such line or no record.
+    #[test]
+    fn the_ranged_bonus_is_read_at_the_ranged_weapons_school() {
+        use benilla_protocol::field::{FIELD_OBJECT_ENTRY, FIELD_PLAYER_INV_SLOT_HEAD};
+        /// `PLAYER_FIELD_MOD_DAMAGE_DONE_POS`, `_NEG` and `_PCT`, seven schools each.
+        const POS: u16 = 1201;
+        const NEG: u16 = 1208;
+        const PCT: u16 = 1215;
+        const WAND: u64 = 0x4000_0000_0000_0077;
+        const WAND_ENTRY: u32 = 5240;
+        let ranged = FIELD_PLAYER_INV_SLOT_HEAD + 2 * u16::from(SLOT_RANGED);
+        let store = ObjectStore(ObjectFields::from_pairs(&[
+            (ranged, WAND as u32),
+            (ranged + 1, (WAND >> 32) as u32),
+            (POS, 3),
+            (POS + 5, 20),
+            (NEG + 5, (-4i32) as u32),
+            (PCT, 1.0f32.to_bits()),
+            (PCT + 5, 1.15f32.to_bits()),
+        ]));
+        let mut objs = crate::ui_items::TestObjects::new();
+        objs.spawn(
+            WAND,
+            ObjectFields::from_pairs(&[(2, 0x3), (FIELD_OBJECT_ENTRY, WAND_ENTRY)]),
+        );
+        let mut items = Items::default();
+        let wand = |damages: Vec<benilla_protocol::messages::ItemDamage>| {
+            Some(benilla_protocol::messages::ItemInfo {
+                class: ITEM_CLASS_WEAPON,
+                subclass: SUBCLASS_WAND,
+                damages,
+                ..crate::items::test_template("Wand")
+            })
+        };
+        let shadow = |min: f32| benilla_protocol::messages::ItemDamage {
+            min,
+            max: 30.0,
+            school: 5,
+        };
+        // A line with a minimum of 0 is passed over for the next.
+        items.insert_template(
+            WAND_ENTRY,
+            wand(vec![
+                benilla_protocol::messages::ItemDamage {
+                    min: 0.0,
+                    max: 10.0,
+                    school: 2,
+                },
+                shadow(20.0),
+            ]),
+        );
+        let s = combat_stats(&store, &objs.get(), &items);
+        assert_eq!(
+            (s.ranged_bonus_pos, s.ranged_bonus_neg, s.ranged_percent),
+            (20, -4, 1.15)
+        );
+        assert_eq!(s.physical_bonus_pos, 3, "the melee bonus stays physical");
+        // No line above 0: school 0.
+        items.insert_template(WAND_ENTRY, wand(vec![shadow(0.0)]));
+        let s = combat_stats(&store, &objs.get(), &items);
+        assert_eq!(
+            (s.ranged_bonus_pos, s.ranged_bonus_neg, s.ranged_percent),
+            (3, 0, 1.0)
+        );
+    }
 }
