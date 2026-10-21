@@ -942,6 +942,48 @@ mod tests {
         }
     }
 
+    /// The resolver reads the target's `UNIT_FIELD_TARGET` live (`0x515970`, the hop at
+    /// `0x515a0f`), so `"targettarget"` follows each selection a call commits: after
+    /// `TargetUnit` it names the new target's target, and after `ClearTarget` nobody, whatever
+    /// the frame pushed for the selection the chunk started on.
+    #[test]
+    fn target_of_target_follows_the_selection_a_call_commits() {
+        use benilla_ui::script::UnitState;
+        let mut f = frame(true);
+        let world = f.app.world_mut();
+        // `party1` targets us (`UNIT_FIELD_TARGET`, fields 16 and 17).
+        let new = world.resource::<GuidIndex>().0[&NEW];
+        world
+            .entity_mut(new)
+            .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (22, 100),
+                (28, 100),
+                (16, ME as u32),
+                (17, 0),
+            ])));
+        let mut script = world.non_send_resource_mut::<UiScript>();
+        let named = |guid, name: &str| UnitState {
+            exists: true,
+            has_object: true,
+            guid,
+            name: Some(name.into()),
+            ..Default::default()
+        };
+        script.set_unit("player", Some(named(ME, "Me")));
+        // The frame's push for the old selection's target.
+        script.set_unit("targettarget", Some(named(0x77, "Stale")));
+        let tot = eval::<Option<String>>(
+            &mut f,
+            r#"TargetUnit("party1") return UnitName("targettarget")"#,
+        );
+        assert_eq!(tot.as_deref(), Some("Me"), "the new target's target");
+        let exists = eval::<Option<i64>>(
+            &mut f,
+            r#"ClearTarget() return UnitExists("targettarget")"#,
+        );
+        assert_eq!(exists, None, "no target, so no target of target");
+    }
+
     /// `TargetNearestEnemy` (`0x489a80` → `0x493f60(0, 1)`) commits through `SetSelection` before
     /// it returns, so the cast after it in the same script goes to the unit the TAB cycle picked.
     #[test]
