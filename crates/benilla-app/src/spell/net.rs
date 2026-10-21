@@ -498,21 +498,28 @@ fn on_inventory_refusal(
 }
 
 /// `Spell_C::SystemInitialize 0x6e7150`, which every world entry runs, a reconnect's too
-/// (`ClientInitializeGame 0x401570` → `0x6033c0` at `0x401639` → `0x6038da`): it zeroes the
-/// targeting word (`0x6e72e0`), the in-flight slot and its item (`0x6e72e7`, `0x6e72ed`), the
-/// queued strike's save (`0x6e72f9`) and the auto-repeat spell (`0x6e730b`). It fires no event.
+/// (`ClientInitializeGame 0x401570` → `0x6033c0` at `0x401639` → `0x6038da`), in packet order: it
+/// zeroes both modifier tables (`0x6e72c4`, `0x6e72d6`), the targeting word (`0x6e72e0`), the
+/// in-flight slot and its item (`0x6e72e7`, `0x6e72ed`), the queued strike's save (`0x6e72f9`),
+/// the auto-repeat spell (`0x6e730b`), the Feed Pet spell (`0x6e7311`) and the class family
+/// (`0x6e7317`). The pending record `0xceac48` is not its to zero. It fires no event; the teardown
+/// `0x6e99e0` zeroes none of these, and there is no talent-change clear.
 fn on_world_enter(
     In(ev): In<SessionEvent>,
     mut pending: ResMut<PendingCast>,
     mut queued: ResMut<QueuedMeleeSpell>,
     mut targeting: ResMut<super::SpellTargeting>,
     mut auto_repeat: ResMut<AutoRepeatActive>,
+    mut spell_mods: ResMut<crate::spell::SpellModifiers>,
+    mut learned: ResMut<crate::ui_action::LearnedAbilities>,
 ) {
     if let SessionEvent::Connected { .. } = ev {
+        spell_mods.clear();
         targeting.clear();
         pending.clear_slot();
         *queued = QueuedMeleeSpell::default();
         auto_repeat.0 = None;
+        learned.feed_pet = None;
     }
 }
 

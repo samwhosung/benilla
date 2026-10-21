@@ -313,13 +313,6 @@ impl benilla_formats::SpellMods for SpellModifiers {
     }
 }
 
-/// Entering the world clears the tables and class family: `Spell_C::SystemInitialize 0x6e7150`,
-/// run once per world entry from `CGlueMgr::Update 0x46b930`. The teardown `0x6e99e0` leaves
-/// them, and there is no talent-change clear.
-pub(super) fn clear_on_world_enter(mut mods: ResMut<SpellModifiers>) {
-    mods.clear();
-}
-
 /// Keep the class family in step with the avatar (`0x6e6ca0`, called from `0x5debcc`: byte 1, the
 /// class, of `UNIT_FIELD_BYTES_0` into `ChrClasses` field 15). An absent avatar keeps the last
 /// value, as a cross-map worldport drops the entity mid-session; only world-enter zeroes it.
@@ -342,7 +335,6 @@ pub(super) fn track_class_family(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client_state::ClientState;
 
     /// A mage spell (family 3) with the given bits set, against a mage player.
     fn mage(bits: &[u8]) -> SpellDisplay {
@@ -469,32 +461,6 @@ mod tests {
             mods.flat.iter().chain(mods.pct.iter()).all(|&v| v == 0),
             "not one cell was written"
         );
-    }
-
-    #[test]
-    fn world_enter_clears_both_tables_and_the_family() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
-            .insert_state(ClientState::Login)
-            .init_resource::<SpellModifiers>()
-            .add_systems(OnEnter(ClientState::InWorld), clear_on_world_enter);
-
-        {
-            let mut mods = app.world_mut().resource_mut::<SpellModifiers>();
-            mods.set_class_family(3);
-            mods.set(true, 5, OP_COST, -30);
-            mods.set(false, 35, OP_COST, -50);
-            assert_eq!(mods.apply(&mage(&[5]), OP_COST, 100), 70);
-        }
-
-        app.world_mut()
-            .resource_mut::<NextState<ClientState>>()
-            .set(ClientState::InWorld);
-        app.update();
-
-        let mods = app.world().resource::<SpellModifiers>();
-        assert_eq!(mods.class_family, 0);
-        assert!(mods.flat.iter().chain(mods.pct.iter()).all(|&v| v == 0));
     }
 
     /// Real `Spell.dbc` family masks; Cleanse 4987 sets bits 12 and 33, across both dwords.
