@@ -39,27 +39,32 @@ impl MailVerbs<'_> {
             debug!("ui_mail: no mail session in this world; {call:?} dropped");
             return;
         };
-        if let MailCall::Open {
-            index,
-            mail_id,
-            unread,
-            text_id,
-        } = call
-        {
-            // The mark runs with no test of the mailbox, which a close leaves 0 (`0x4add25`).
-            if unread {
-                let mailbox = mail.mailbox.unwrap_or(0);
-                let _ = commands
-                    .0
-                    .send(ClientCommand::MailMarkAsRead { mailbox, mail_id });
-                mail.mark_read(mail_id);
-                script.mark_mail_read(index);
-                // Only an unread mail arms the close's re-query (`0x4adda6`).
-                if let Some(pending) = pending.as_deref_mut() {
-                    pending.arm_refresh();
+        match call {
+            MailCall::Open {
+                index,
+                mail_id,
+                unread,
+            } => {
+                // The mark runs with no test of the mailbox, which a close leaves 0 (`0x4add25`).
+                if unread {
+                    let mailbox = mail.mailbox.unwrap_or(0);
+                    let _ = commands
+                        .0
+                        .send(ClientCommand::MailMarkAsRead { mailbox, mail_id });
+                    mail.mark_read(mail_id);
+                    script.mark_mail_read(index);
+                    // Only an unread mail arms the close's re-query (`0x4adda6`).
+                    if let Some(pending) = pending.as_deref_mut() {
+                        pending.arm_refresh();
+                    }
                 }
+                return;
             }
-            if text_id != 0 {
+            MailCall::ReadBody {
+                index,
+                mail_id,
+                text_id,
+            } => {
                 mail.bodies.lookup(text_id, || {
                     let _ = commands
                         .0
@@ -74,8 +79,9 @@ impl MailVerbs<'_> {
                     filter.mask(enabled, &mut body);
                     script.answer_inbox_body(body);
                 }
+                return;
             }
-            return;
+            _ => {}
         }
         // The VM's guards found a mailbox the session has since forgotten: no packet goes, so the
         // locks the verb took go back.
@@ -87,7 +93,7 @@ impl MailVerbs<'_> {
             return;
         };
         let command = match call {
-            MailCall::Open { .. } => return,
+            MailCall::Open { .. } | MailCall::ReadBody { .. } => return,
             MailCall::CheckInbox => ClientCommand::GetMailList { mailbox },
             MailCall::Row {
                 verb,

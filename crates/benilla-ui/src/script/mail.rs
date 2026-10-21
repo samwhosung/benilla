@@ -160,11 +160,17 @@ pub enum MailCall {
     /// `CheckInbox()` past its throttle (`0x4aeab0`): `CMSG_GET_MAIL_LIST` (`0x4aeb0b`).
     CheckInbox,
     /// `GetInboxText(index)` on a held row (`0x4af110`): an unread mail's read mark
-    /// (`0x4af18e` → `0x4adcd0`), then its body asked by the text id (`0x4af1bf`).
+    /// (`0x4af18e` → `0x4adcd0`), whose `MAIL_INBOX_UPDATE` (`0x4add9d`) runs its handlers.
     Open {
         index: u32,
         mail_id: u32,
         unread: bool,
+    },
+    /// `GetInboxText`'s body, after the mark: asked by the text id (`0x4af1bf`) and masked
+    /// (`0x4af203`), the answer [`super::UiScript::answer_inbox_body`] leaves for the call.
+    ReadBody {
+        index: u32,
+        mail_id: u32,
         text_id: u32,
     },
     /// A row verb past its refusals: its packet for `mail_id`, `TakeInboxTextItem`'s with the
@@ -502,25 +508,42 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(r) = read(lua) else {
                 return Ok(MultiValue::from_vec(vec![Value::Nil; 4]));
             };
-            // An answer a call that waited for the host left is no answer to this one.
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .mail_body_answer = None;
+            let index = index as u32;
             submit(
                 lua,
                 MailCall::Open {
-                    index: index as u32,
+                    index,
                     mail_id: r.mail_id,
                     unread: !r.was_read,
-                    text_id: r.item_text_id,
                 },
             )?;
-            // The row as the call left it, and the body the host masked in it.
-            let answer = lua
-                .app_data_mut::<Model>()
-                .expect("model app_data")
-                .mail_body_answer
-                .take();
+            // The body is read after the mark's event, whose handlers may read the letter
+            // themselves (`0x4add9d` ahead of `0x4af1bf`), so nothing runs between this call's
+            // answer and its take.
+            let answer = if r.item_text_id != 0 {
+                let answer = |lua: &Lua| {
+                    std::mem::take(
+                        &mut lua
+                            .app_data_mut::<Model>()
+                            .expect("model app_data")
+                            .mail_body_answer,
+                    )
+                };
+                // An answer a call that waited for the host left is no answer to this one.
+                answer(lua);
+                submit(
+                    lua,
+                    MailCall::ReadBody {
+                        index,
+                        mail_id: r.mail_id,
+                        text_id: r.item_text_id,
+                    },
+                )?;
+                answer(lua)
+            } else {
+                None
+            };
+            // The row as the call left it.
             let Some(r) = read(lua) else {
                 return Ok(MultiValue::from_vec(vec![Value::Nil; 4]));
             };
