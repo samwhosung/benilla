@@ -38,6 +38,24 @@ impl super::super::UiScript {
     pub fn set_unit_relations(&mut self, relations: Option<Rc<dyn UnitRelations>>) {
         self.model_mut().unit_relations = relations;
     }
+
+    /// Whether `guid` is the active player's (`0x468550`), as the resolver's inputs hold it.
+    pub fn is_active_player(&self, guid: u64) -> bool {
+        guid != 0 && guid == self.model_ref().unit_guids.player
+    }
+
+    /// The drunk watcher's test on the active player (`0x5e2afb`-`0x5e2b2a`): the target global
+    /// `[0xb4e2d8]` names a unit the host holds (`0x468460`, typemask 8) and
+    /// `CanAttack 0x606980(player, target)` holds.
+    pub fn player_can_attack_target(&self) -> bool {
+        let model = self.model_ref();
+        let guids = &model.unit_guids;
+        model.unit_relations.as_deref().is_some_and(|rel| {
+            guids.target != 0
+                && rel.holds(guids.target)
+                && rel.can_attack(guids.player, guids.target) == Some(true)
+        })
+    }
 }
 
 /// `GetGUIDFromName 0x515970` on one token: the guid of the unit it names, 0 for nobody. An

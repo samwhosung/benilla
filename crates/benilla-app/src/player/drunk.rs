@@ -22,7 +22,7 @@ const PULSE_AMP: f32 = f32::from_bits(0x3c56_7750);
 pub(super) const SWIM_PITCH_WOBBLE_SCALE: f32 = 4.0;
 
 /// The drunk fraction, `min(byte, 100) × 0.01` (`0x5e2a90`).
-pub(super) fn fraction(byte: u8) -> f32 {
+pub(crate) fn fraction(byte: u8) -> f32 {
     let clamped = byte.min(100);
     (f64::from(clamped) * f64::from(DRUNK_SCALE)) as f32
 }

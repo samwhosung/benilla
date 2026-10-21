@@ -222,12 +222,14 @@ const ENTRY: (u16, u16) = (0xc, 4);
 
 /// The player type watchers of `0x5e2510` whose callbacks signal, as (byte offset, length) in the
 /// player section: `PLAYER_FLAGS` (`0x5e2850` → `0x5ee990`), `PLAYER_GUILDID` (`0x5e258f` →
-/// `0x5e2770`), `PLAYER_GUILDRANK` (`0x5e25a7` → `0x5e27b0`), `PLAYER_BYTES_3` bytes 2 and 3
-/// (`0x5e2a30`, `0x5e2a50`) and the duel team (`0x5e27d0`); and `PLAYER_GUILD_TIMESTAMP`
-/// (`0x5e25ef` → `0x5e2890`), which acts on the guild cache ([`guild_timestamp`]).
+/// `0x5e2770`), `PLAYER_GUILDRANK` (`0x5e25a7` → `0x5e27b0`), `PLAYER_BYTES_3` bytes 2, 3 and 1
+/// in that order (`0x5e2a30`, `0x5e2a50`, `0x5e2a90`) and the duel team (`0x5e27d0`); and
+/// `PLAYER_GUILD_TIMESTAMP` (`0x5e25ef` → `0x5e2890`), which acts on the guild cache
+/// ([`guild_timestamp`]).
 const PLAYER_FLAGS: (u16, u16) = (0x08, 4);
 const GUILD_ID: (u16, u16) = (0x0c, 4);
 const GUILD_RANK: (u16, u16) = (0x10, 4);
+const BYTES_3_BYTE_1: (u16, u16) = (0x1d, 1);
 const BYTES_3_BYTE_2: (u16, u16) = (0x1e, 1);
 const BYTES_3_BYTE_3: (u16, u16) = (0x1f, 1);
 const DUEL_TEAM: (u16, u16) = (0x20, 4);
@@ -574,6 +576,13 @@ pub(crate) fn values(
         if let Some(at) = at(PLAYER_SECTION, BYTES_3_BYTE_3, List::Type) {
             pass.signal(at, guid, id::UNIT_NAME_UPDATE);
             pass.reaction(at, guid, fields, around);
+        }
+        if let Some(at) = at(PLAYER_SECTION, BYTES_3_BYTE_1, List::Type) {
+            // `0x5e2a90`: the byte's copy (`0x5e2b59`) and the byte now (`0x5e2ac9`).
+            let (old, new) = block.edge(at.0).unwrap_or_default();
+            let byte = |v: u32| (v >> (8 * (BYTES_3_BYTE_1.0 % 4))) as u8;
+            let (old, new) = (byte(old), byte(new));
+            pass.push(at, FieldNotice::Drunk { guid, old, new });
         }
         if let Some(at) = at(PLAYER_SECTION, DUEL_TEAM, List::Type) {
             pass.reaction(at, guid, fields, around);

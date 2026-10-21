@@ -30,6 +30,8 @@ pub(crate) fn fire_field_notices(
     notices: Res<Messages<FieldNotice>>,
     mut cursor: ResMut<FieldNoticeCursor>,
     mut sink: crate::ui_action::MessageSink,
+    // The drunk watcher names the player it runs on (`0x609210`).
+    names: Res<crate::names::NameCache>,
     // The quest log's watcher reads the slots.
     me: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
     mut tutorials: Option<ResMut<crate::tutorial::Tutorials>>,
@@ -54,9 +56,64 @@ pub(crate) fn fire_field_notices(
                 }
                 continue;
             }
+            if let FieldNotice::Drunk { guid, old, new } = notice {
+                drunk(script, &mut sink, &names, guid, old, new);
+                continue;
+            }
             fire(script, &mut sink, notice);
         }
     })
+}
+
+/// `0x5e2a90`'s run on the player `guid` whose drunk byte moved from `old` to `new`. On the active
+/// player, `UNIT_LEVEL` for `"target"` when it can attack its target (`0x5e2afb`-`0x5e2b38`), as
+/// `UnitLevel` lowers such a unit's level by the player's drunkenness (`0x518096`). Then each
+/// message as a system chat line (`0x49a870`, type 0xa, `0x5e2c5d`): `DRUNK_MESSAGE_SELF%d` for
+/// the active player (`0x5e2bf8`), else `DRUNK_MESSAGE_OTHER%d` filled with the player's name
+/// (`0x5e2c09`, `0x609210`), the text the key names or empty (`0x703bf0`). The active player's
+/// name-plate refresh and camera field-of-view bias (`0x605550`, `0x511250`) are not built.
+fn drunk(
+    script: &mut UiScript,
+    sink: &mut crate::ui_action::MessageSink,
+    names: &crate::names::NameCache,
+    guid: u64,
+    old: u8,
+    new: u8,
+) {
+    let me = script.is_active_player(guid);
+    if me && script.player_can_attack_target() {
+        script.fire_event("UNIT_LEVEL", vec![ScriptValue::Str("target".to_string())]);
+    }
+    let name = (!me).then(|| {
+        names
+            .resolve_player(guid, crate::query_cache::Ask::Read)
+            .map_or_else(|| script.unknown_object_text(), str::to_string)
+    });
+    let lines: Vec<_> = drunk_messages(old, new)
+        .into_iter()
+        .map(|k| {
+            let key = if me {
+                format!("DRUNK_MESSAGE_SELF{k}")
+            } else {
+                format!("DRUNK_MESSAGE_OTHER{k}")
+            };
+            let template = script
+                .lua()
+                .globals()
+                .get::<String>(key)
+                .unwrap_or_default();
+            let args: Vec<benilla_ui::strings::Arg<'_>> = name
+                .as_deref()
+                .map(benilla_ui::strings::Arg::S)
+                .into_iter()
+                .collect();
+            crate::ui_action::Shown::unkeyed(
+                benilla_ui::messages::MsgKind::Chat,
+                benilla_ui::strings::fill(&template, &args),
+            )
+        })
+        .collect();
+    crate::ui_action::show_messages(script, sink, "ui_unit", lines);
 }
 
 /// The field notices' second reader and its position: [`drop_field_notices`] under the exact
@@ -124,9 +181,8 @@ fn fire(script: &mut UiScript, sink: &mut crate::ui_action::MessageSink, notice:
                 script.fire_event(global, vec![]);
             }
         }
-        // Fired by [`fire_field_notices`], which holds the slots and the banks.
-        FieldNotice::QuestLog | FieldNotice::Tutorial { .. } => {}
-        FieldNotice::Drunk { .. } => {}
+        // Fired by [`fire_field_notices`], which holds the slots, the banks and the names.
+        FieldNotice::QuestLog | FieldNotice::Tutorial { .. } | FieldNotice::Drunk { .. } => {}
         FieldNotice::PvpPreference { on } => {
             let (toast, verbose) = super::pvp_announcement(on);
             // The verbose sentence is no catalog row, so it goes `unkeyed` to chat:
@@ -148,9 +204,34 @@ fn fire(script: &mut UiScript, sink: &mut crate::ui_action::MessageSink, notice:
     }
 }
 
-/// The drunk messages a change of the byte prints.
-fn drunk_messages(_old: u8, _new: u8) -> Vec<u8> {
-    Vec::new()
+/// The drunk thresholds, the floats at `0x80af68`.
+const DRUNK_THRESHOLDS: [f32; 3] = [0.01, 0.5, 0.9];
+
+/// The numbers of the drunk messages a move of the byte from `old` to `new` prints, in order, over
+/// the drunk fractions of the two bytes (`0x5e2acc`-`0x5e2aeb`, `0x5e2b5e`-`0x5e2b7c`). Threshold
+/// k, from the lowest (`0x5e2b6f`), is crossed rising when `old < t <= new` (`0x5e2b8b`,
+/// `0x5e2b9b`) and falling when `new < t <= old` (`0x5e2bab`, `0x5e2bbf`); a rise prints k + 2 and
+/// skips threshold k + 1 (`0x5e2bd0`-`0x5e2bdc`), a fall prints k + 1.
+fn drunk_messages(old: u8, new: u8) -> Vec<u8> {
+    let (old, new) = (
+        crate::player::drunk::fraction(old),
+        crate::player::drunk::fraction(new),
+    );
+    let mut out = Vec::new();
+    let mut k = 0;
+    while k < DRUNK_THRESHOLDS.len() {
+        let t = DRUNK_THRESHOLDS[k];
+        let rising = old < t && new >= t;
+        let falling = old >= t && new < t;
+        if rising || falling {
+            if new > old {
+                k += 1;
+            }
+            out.push(k as u8 + 1);
+        }
+        k += 1;
+    }
+    out
 }
 
 /// A unit notice's signals into a bare VM, for the stock-file tests that drive the frames off the
