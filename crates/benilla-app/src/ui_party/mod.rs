@@ -143,6 +143,9 @@ pub struct GroupState {
 pub struct ListOutcome {
     pub lines: Vec<UiError>,
     pub invite_accept: bool,
+    /// Whether the list ends by asking for every raid-target icon, as a raid list that finds no
+    /// roster held does (`0x4ba61c`, `0x4babf4`-`0x4bac33`).
+    pub ask_raid_targets: bool,
 }
 
 /// A group event as a packet's handler signals it; none of the five carries an argument
@@ -400,6 +403,7 @@ impl GroupState {
                 }
             } else {
                 out.lines.push(UiError::key("ERR_RAID_YOU_JOINED"));
+                out.ask_raid_targets = true;
             }
             // The rebuild counts afresh (`0x4ba89e`): each new row's lookup, ours after the
             // members' once any is listed, a zero guid asking nothing (`0x4ba9b4`). It ends in the
@@ -1290,6 +1294,7 @@ mod tests {
         ListOutcome {
             lines,
             invite_accept,
+            ask_raid_targets: false,
         }
     }
 
@@ -1470,15 +1475,19 @@ mod tests {
     fn joining_a_raid_prints_the_joined_line_alone() {
         let raid = vec![sub("Alice", 1, 0), sub("Bob", 2, 1), sub("Carol", 3, 1)];
         let mut g = GroupState::default();
+        let joined = |invite_accept| ListOutcome {
+            ask_raid_targets: true,
+            ..lines(vec![UiError::key("ERR_RAID_YOU_JOINED")], invite_accept)
+        };
         assert_eq!(
             g.apply_list(1, 0, raid.clone(), 1, None, Some(ME)),
-            lines(vec![UiError::key("ERR_RAID_YOU_JOINED")], true),
+            joined(true),
             "Alice shares our subgroup, so the chime plays"
         );
         let mut g = GroupState::default();
         assert_eq!(
             g.apply_list(1, 2, raid, 1, None, Some(ME)),
-            lines(vec![UiError::key("ERR_RAID_YOU_JOINED")], false),
+            joined(false),
             "nobody in our subgroup, no chime"
         );
     }
@@ -1680,7 +1689,10 @@ mod tests {
         g.apply_list(0, 0, vec![member("Alice", 1)], 1, None, None);
         assert_eq!(
             g.apply_list(1, 0, vec![member("Alice", 1)], 1, None, None),
-            lines(vec![UiError::key("ERR_RAID_YOU_JOINED")], false)
+            ListOutcome {
+                ask_raid_targets: true,
+                ..lines(vec![UiError::key("ERR_RAID_YOU_JOINED")], false)
+            }
         );
         assert_eq!(
             g.apply_list(0, 0, vec![member("Alice", 1)], 1, None, None),

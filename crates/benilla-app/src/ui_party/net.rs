@@ -237,8 +237,9 @@ fn leader_changed(
     push_group_lines(errors, group.apply_leader_changed(name, own.as_deref()));
 }
 
-/// `SMSG_GROUP_LIST`: apply the roster, seat new members' records and re-ask the questgiver sweep
-/// (shared-quest availability follows the roster). Every member is name-queried once: the
+/// `SMSG_GROUP_LIST`: apply the roster, seat new members' records, ask for every raid-target icon
+/// when a raid list finds no roster held, and re-ask the questgiver sweep (shared-quest
+/// availability follows the roster). Every member is name-queried once: the
 /// answer's race, class and gender are the only source of them for a member we never see streamed.
 /// The party seats (`0x4e8477`) and a raid's rows (`0x4ba9c7`), ours among them once others are
 /// listed (`0x5e6e73`), each look their name up with a callback, which [`GroupState`] keeps for
@@ -288,6 +289,10 @@ fn list(
         sounds.push_cue(INVITE_ACCEPT_SOUND);
     }
     seat_new_records(group, &seats, index, net_commands);
+    // The roster writer's last send, after its stats requests (`0x4bac33`).
+    if shown.ask_raid_targets {
+        let _ = net_commands.0.send(ClientCommand::RequestRaidTargets);
+    }
     quest.bump_reask();
 }
 

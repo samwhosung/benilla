@@ -108,7 +108,8 @@ fn cmsg_bodies_golden() {
     );
 
     // MSG_RAID_TARGET_UPDATE (Group.cpp:77-82): icon and guid set or clear one icon; a lone 0xFF
-    // requests the current set.
+    // requests the current set, the bytes the client's raid roster writer sends (`0x4bac01` puts
+    // the opcode, `0x4bac20` the 0xFF, nothing after).
     assert_eq!(
         messages::raid_target_set(3, guid),
         hx(concat!("03", "f0debc9a78563412")),
