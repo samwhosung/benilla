@@ -2997,6 +2997,22 @@ mod tests {
         assert_eq!(seen_in(&app), ["LOOT_OPENED", "LOOT_CLOSED"]);
     }
 
+    /// Every close but the sweep's and the reload's (`CloseLoot`, the release response, the
+    /// auto-release, the at-rest close) owes an item source's two unlocks (`0x48f2bd`, `0x4c1d36`)
+    /// to `apply_item_releases` and leaves `LOOT_CLOSED` to the feed. Both unlocks come before the
+    /// teardown signals it (`0x4c1dac`), so the releases run first and each `ITEM_LOCK_CHANGED`
+    /// handler reads the window open. The VM pass holds the order by registration
+    /// (`crate::vm_pass`), so a move that flips it fails here.
+    #[test]
+    fn the_owed_unlocks_run_before_the_feeds_loot_closed() {
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        assert!(crate::test_support::runs_before(
+            &mut app,
+            crate::ui_items::locks::apply_item_releases,
+            feed_loot,
+        ));
+    }
+
     /// The sweep's loot leg on a lockbox: `CloseInteraction`'s unlock (`0x48f2bd`) and the
     /// teardown's (`0x4c1d36`) come before the teardown zeroes the source (`0x4c1cb0`) and signals
     /// `LOOT_CLOSED` (`0x4c1dac`), so each unlock's `ITEM_LOCK_CHANGED` handlers read the window
