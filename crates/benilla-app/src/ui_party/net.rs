@@ -1007,6 +1007,32 @@ mod tests {
             .expect("the name handler");
     }
 
+    /// The name cache files a found answer before any callback of it runs: `0x55f310` copies the
+    /// record, sets its valid byte (`0x55f413`), then walks the callbacks (`0x55f426`-`0x55f452`).
+    /// So the cache's handler runs ahead of the roster's, which reads the filed record, whichever
+    /// plugin registers first.
+    #[test]
+    fn the_name_cache_files_an_answer_ahead_of_the_rosters_callbacks() {
+        let mut app = App::new();
+        register(&mut app);
+        crate::names::net::register(&mut app);
+        let table = app
+            .world()
+            .resource::<crate::net::handlers::NetHandlers>()
+            .census();
+        let order: Vec<&str> = table[&SessionEventKind::PlayerName]
+            .iter()
+            .map(|name| name.trim_start_matches("benilla_app::"))
+            .collect();
+        assert_eq!(
+            order,
+            [
+                "names::net::on_player_name",
+                "ui_party::net::on_player_name"
+            ]
+        );
+    }
+
     fn shown(app: &mut App) -> Vec<UiError> {
         app.world_mut().resource::<UiErrorKeys>().take()
     }
