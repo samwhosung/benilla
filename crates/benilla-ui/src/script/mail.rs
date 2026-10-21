@@ -1084,11 +1084,66 @@ fn submit(lua: &Lua, call: MailCall) -> mlua::Result<()> {
     super::calls::submit(lua, super::ScriptCall::Mail(call))
 }
 
+/// The error `ClickSendMailItemButton` refuses a held item with (`0x4adf38`-`0x4ae042`), read off
+/// the item's slot and its cache record (`0x55ba30`, no callback), before any swap; none when the
+/// slot no longer holds it, as an item the cursor's guid finds no object for passes
+/// (`0x4adf3a`). In order: bound (`0x5da2c0`) is `ERR_MAIL_QUEST_ITEM` for quest bonding 4 or 5
+/// (`0x4adf75`-`0x4adf7f`) and `ERR_MAIL_BOUND_ITEM` otherwise, an uncached record included
+/// (`0x4adf6d`, `0x4adf97`); record flags conjured `0x2` (`0x4adfbd`), an area (`0x5da500`, record
+/// `+0x1c8`) or a map (`0x5da570`, `+0x1cc`) is `ERR_MAIL_CONJURED_ITEM`; a container holding an
+/// item is `ERR_MAIL_BAG` (`0x4ae019`-`0x4ae042`).
+fn attach_refusal(model: &Model, item: &cursor::CursorItem) -> Option<&'static str> {
+    let (bound, seats) = if item.bag == cursor::EQUIPMENT_BAG {
+        let s = model
+            .inv_slot("player", item.slot as usize)
+            .filter(|s| s.guid == item.guid)?;
+        (s.already_bound, s.occupied_seats)
+    } else {
+        let s = model
+            .containers
+            .get(&item.bag)?
+            .slots
+            .get(&item.slot)
+            .filter(|s| s.guid == item.guid)?;
+        (s.already_bound, s.occupied_seats)
+    };
+    let record = model.item_templates.get(&item.item_id);
+    /// `BIND_QUEST_ITEM` and `BIND_QUEST_ITEM1`.
+    const QUEST_BONDING: [u32; 2] = [4, 5];
+    if bound {
+        return Some(
+            if record.is_some_and(|r| QUEST_BONDING.contains(&r.bonding)) {
+                "ERR_MAIL_QUEST_ITEM"
+            } else {
+                "ERR_MAIL_BOUND_ITEM"
+            },
+        );
+    }
+    if record.is_some_and(|r| r.flags & 0x2 != 0 || r.area != 0 || r.map != 0) {
+        return Some("ERR_MAIL_CONJURED_ITEM");
+    }
+    seats.is_some_and(|n| n > 0).then_some("ERR_MAIL_BAG")
+}
+
 /// `ClickSendMailItemButton` (`0x4adef0`): the send slot as a cursor drop target, attaching the
-/// held item and putting an earlier attachment back on the cursor ([`cursor::click_attach_slot`]).
+/// held item past its refusals ([`attach_refusal`]) and putting an earlier attachment back on
+/// the cursor ([`cursor::click_attach_slot`]).
 /// A held item stays in its bag slot, locked, until the send. A changed attachment signals
 /// `MAIL_SEND_INFO_UPDATE` (`0x4ae0de`), whose stock handler re-reads the item and postage.
 fn click_send_mail_item(lua: &Lua) {
+    let refusal = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        match &model.cursor {
+            Some(cursor::CursorPayload::Item(item)) => attach_refusal(&model, item),
+            _ => None,
+        }
+    };
+    if let Some(key) = refusal {
+        lua.app_data_mut::<Model>()
+            .expect("model app_data")
+            .push_ui_error(key);
+        return;
+    }
     if cursor::click_attach_slot(lua, |model| &mut model.mail_send_item) {
         super::tick::verb(lua, |model| {
             model.raise("MAIL_SEND_INFO_UPDATE", Vec::new());
