@@ -1648,19 +1648,18 @@ fn target_subject(
 }
 
 /// The stand-in of a guid the object manager does not hold (`0x519fe6`): a player's by the race
-/// and sex of its name record (`0x51a00c` → `0x525ba0`), any other guid's from the group's pet
-/// record (`0x51a06d` → `0x525cb0`), none with no pet record.
+/// and sex of its name record (`0x51a08e` → `0x51a0b4`, `0x525ba0`), none with no record
+/// (`0x51a095`); any other guid's from the group's pet record (`0x51a0c7` → `0x525cb0`), none with
+/// no pet record (`0x51a0ce`).
 fn unseen_portrait(
     roster: &crate::ui_party::GroupState,
     names: &crate::names::NameCache,
     guid: u64,
 ) -> Option<String> {
     if benilla_protocol::guid::is_player(guid) {
-        let traits = names.player_traits(guid);
-        Some(player_temporary_portrait(
-            traits.map(|(race, _, _)| race),
-            traits.map(|(_, _, sex)| sex),
-        ))
+        names
+            .player_traits(guid)
+            .map(|(race, _, sex)| player_temporary_portrait(Some(race), Some(sex)))
     } else {
         roster.pet_record(guid).map(|_| pet_temporary_portrait())
     }
