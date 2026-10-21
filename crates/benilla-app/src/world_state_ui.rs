@@ -412,6 +412,42 @@ mod tests {
         );
     }
 
+    /// `0x49bd50` counts a record with a number (`0x49bd72`) in state 0 (`0x49bd7c`), and reads its
+    /// row through its `+0x94` id (`0x49bd83`): a pending or suspended LocalDefense, a freed record
+    /// and a custom channel of that name are none, and any name on row 22 is one.
+    #[test]
+    fn the_defense_gate_counts_a_confirmed_slot_by_its_row_id() {
+        use crate::ui_chat::edit::{ChannelSlot, SlotRecord, SlotState};
+        let joined = |slot: SlotRecord| crate::ui_chat::ChannelState {
+            joined: vec![slot],
+            channels: benilla_formats::ChatChannelsCatalog::from_rows(vec![
+                benilla_formats::ChatChannelRow {
+                    id: 22,
+                    flags: 0x1_0003,
+                    pattern: "LocalDefense - %s".into(),
+                    shortcut: "LocalDefense".into(),
+                },
+            ]),
+            ..Default::default()
+        };
+        let name = "LocalDefense - Elwynn Forest";
+        let suspended = ChannelSlot {
+            state: SlotState::Suspended,
+            ..ChannelSlot::confirmed(name, 22)
+        };
+        for (slot, want) in [
+            (ChannelSlot::confirmed(name, 22).into(), true),
+            (ChannelSlot::confirmed("Anything", 22).into(), true),
+            (ChannelSlot::pending(name, 22).into(), false),
+            (suspended.into(), false),
+            (ChannelSlot::confirmed(name, 0).into(), false),
+            (SlotRecord::Freed { id: 22 }, false),
+        ] {
+            let label = format!("{slot:?}");
+            assert_eq!(defense_channel_joined(&joined(slot)), want, "{label}");
+        }
+    }
+
     /// An init clears the table.
     #[test]
     fn an_init_forgets_the_previous_zone() {

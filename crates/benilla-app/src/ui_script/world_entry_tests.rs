@@ -1811,19 +1811,22 @@ BindProbeSet = SetBinding(\"J\", \"TOGGLEWORLDMAP\")
 
 /// With an empty channel catalog, `JoinChannelByName("General")` would join a custom channel of
 /// that name on the server. Seeded with no zone, the call matches the built-in row and does
-/// nothing, the reference's answer while there is no zone text.
+/// nothing, the reference's answer while there is no zone text; the custom channel joined beside
+/// it shows the call host was lent.
 #[test]
 fn an_addon_that_joins_general_at_file_scope_puts_nothing_on_the_wire() {
     const TOC: &str = "\
 ## Interface: 11200
 JoinProbe.lua
 ";
-    const LUA: &str = "JoinChannelByName(\"General\")\n";
+    const LUA: &str = "JoinChannelByName(\"General\")\nJoinChannelByName(\"JoinProbe\")\n";
     let _l = ENV_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (tmp, _c, _h) = hermetic_addon("joinprobe", "JoinProbe", TOC, LUA);
     let mut world = booted_world();
+    let (tx, wire) = crossbeam_channel::unbounded();
+    world.insert_resource(crate::net::NetCommands(tx));
     world.insert_resource(crate::ui_chat::ChannelState {
         channels: benilla_formats::ChatChannelsCatalog::from_rows(vec![
             // Row 1 as `ChatChannels.dbc` has it: auto-joined, its `%s` the zone's name.
@@ -1840,16 +1843,18 @@ JoinProbe.lua
 
     log_in_as(&mut world, "Onewarrior", 1);
 
-    // A join is applied inside its call, its slot taken there (`0x49edf3`).
-    let joined: Vec<String> = world
-        .resource::<crate::ui_chat::ChannelState>()
-        .iter_names()
-        .map(str::to_string)
+    // A join goes out inside its call (`0x49ee02`).
+    let joins: Vec<String> = wire
+        .try_iter()
+        .filter_map(|c| match c {
+            crate::net::ClientCommand::JoinChannel { name, .. } => Some(name),
+            _ => None,
+        })
         .collect();
-    assert!(
-        joined.is_empty(),
-        "a built-in shortcut with no zone text yet is a no-op, not a custom channel on the \
-         server — joined {joined:?}"
+    assert_eq!(
+        joins,
+        ["JoinProbe"],
+        "a built-in shortcut with no zone text yet is a no-op, not a custom channel on the server"
     );
 
     drop(world);

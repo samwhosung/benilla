@@ -1306,6 +1306,43 @@ mod tests {
         );
     }
 
+    /// Pass 2 looks each row up in the table as the rows before it left it: General's register
+    /// reuses the freed record (`0x49b9b0`) and overwrites its id 22 (`0x49ba01`), so
+    /// LocalDefense's `0x49bef0` (`0x49a4a2`) then finds no record and it joins too.
+    #[test]
+    fn pass_two_reads_the_slots_each_earlier_row_wrote() {
+        let bit = crate::ui_chat::edit::zone_bit;
+        let mut c = state(bit(1) | bit(2) | bit(22));
+        c.joined = vec![
+            joined("MyChan"),
+            suspended("Trade - City"),
+            SlotRecord::Freed { id: 22 },
+        ];
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let errors = crate::ui_action::UiErrorKeys::default();
+        walk_zone(
+            &mut c,
+            "Elwynn Forest",
+            OUTSIDE,
+            CITY,
+            (&NetCommands(tx), &errors),
+            None,
+        );
+        let joins: Vec<String> = rx
+            .try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::JoinChannel { name, .. } => Some(name),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            joins,
+            ["General - Elwynn Forest", "LocalDefense - Elwynn Forest"]
+        );
+        assert_eq!(c.number_of("General - Elwynn Forest"), Some(3));
+        assert_eq!(c.number_of("LocalDefense - Elwynn Forest"), Some(4));
+    }
+
     /// The chat cache's `CHANNELS` names are the walk's third pass: registered with id 0
     /// (`0x49a5da`) and joined (`0x49a5e2`-`0x49a62a`) after the zone channels, then the list is
     /// freed (`0x49a692`-`0x49a69e`). With no zone text the walk skips all three passes

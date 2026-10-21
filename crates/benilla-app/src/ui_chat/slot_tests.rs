@@ -462,6 +462,123 @@ fn the_cascades_join_takes_its_slot_ahead_of_a_later_join() {
     assert_eq!(c.joins(), ["GuildRecruitment - City", "Y"]);
 }
 
+/// Each chat verb sends inside its call, so call order is wire order: `DoEmote` (`0x49fd30`,
+/// `0x5ef560` at `0x49fe16`), the join body (`0x49ee02`), `UninviteByName` (`0x48a669`) and
+/// `SendAddonMessage` (`0x49faff`).
+#[test]
+fn the_chat_verbs_go_out_in_call_order() {
+    let mut c = Client::new(&[], UiScript::new().expect("a VM"));
+    // WAVE as a chat-only text emote, which reads `Emotes.dbc` row 0.
+    c.world().insert_resource(crate::sound::EmoteSounds(
+        benilla_formats::EmoteSoundCatalog::default()
+            .with_text_emote("WAVE", 101, 0)
+            .with_row(0, 0, 0),
+    ));
+    c.run(
+        "DoEmote('WAVE') JoinChannelByName('X') UninviteByName('Bob') \
+         SendAddonMessage('P', 'm') JoinChannelByName('Y')",
+    );
+    super::drain_chat_input_once(c.world());
+    let wire: Vec<String> = c
+        .sent
+        .try_iter()
+        .filter_map(|cmd| match cmd {
+            ClientCommand::TextEmote { text_id, .. } => Some(format!("emote {text_id}")),
+            ClientCommand::JoinChannel { name, .. } => Some(format!("join {name}")),
+            ClientCommand::GroupUninvite { name } => Some(format!("uninvite {name}")),
+            ClientCommand::AddonMessage { text, .. } => Some(format!("addon {text}")),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        wire,
+        [
+            "emote 101",
+            "join X",
+            "uninvite Bob",
+            "addon P\tm",
+            "join Y"
+        ]
+    );
+}
+
+/// The leave body turns the auto-join off only when its key, a number read as its slot's name
+/// (`0x49e880`), is the `GuildRecruitment` row's composed name (`SStrCmpI` at `0x49ef84`, then
+/// `0x49ea70(0)` at `0x49ef8f`): `/leave GuildRecruitment` leaves the channel and keeps the
+/// latch. The join's reset reads the row its Shortcut matched (`0x49ec0c`, `0x49ed3d`).
+#[test]
+fn only_the_composed_name_leaving_guild_recruitment_turns_its_auto_join_off() {
+    let mut channels = ChannelState {
+        channels: catalog(),
+        zone_mask: Some(0),
+        ..Default::default()
+    };
+    channels.claim_slot("GuildRecruitment - Elwynn Forest", 25);
+    channels.confirm_slot("GuildRecruitment - Elwynn Forest");
+    let mut world = hosted(channels);
+    let after = |world: &mut bevy::prelude::World, lua: &str| {
+        world
+            .non_send_resource_mut::<UiScript>()
+            .set_guild_recruitment_mode(1);
+        super::run_chat(world, lua).expect("the verb runs");
+        world
+            .non_send_resource::<UiScript>()
+            .guild_recruitment_mode()
+    };
+    assert_eq!(
+        after(&mut world, "LeaveChannelByName('GuildRecruitment')"),
+        1,
+        "the Shortcut is not the composed name"
+    );
+    assert_eq!(
+        after(
+            &mut world,
+            "LeaveChannelByName('guildrecruitment - elwynn forest')"
+        ),
+        0,
+        "the composed name, case-folded"
+    );
+    assert_eq!(
+        after(&mut world, "LeaveChannelByName(1)"),
+        0,
+        "slot 1's name"
+    );
+    assert_eq!(after(&mut world, "LeaveChannelByName('MyChan')"), 1);
+    assert_eq!(
+        after(&mut world, "JoinChannelByName('GuildRecruitment')"),
+        0
+    );
+}
+
+/// `ListChannels` adds its line inside the verb (`0x4a02c0` → `0x49a870`, type `0x11`): a
+/// `CHAT_MSG_CHANNEL_LIST` handler has run by the verb's next line.
+#[test]
+fn list_channels_shows_its_line_inside_the_call() {
+    let mut channels = ChannelState {
+        channels: catalog(),
+        zone_mask: Some(0),
+        ..Default::default()
+    };
+    channels.claim_slot("MyChan", 0);
+    channels.confirm_slot("MyChan");
+    let mut world = hosted(channels);
+    world
+        .non_send_resource::<UiScript>()
+        .run(
+            r#"
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("CHAT_MSG_CHANNEL_LIST")
+            f:SetScript("OnEvent", function() SEEN = arg1 end)
+        "#,
+        )
+        .expect("the handler installs");
+    super::run_chat(&mut world, "ListChannels() AFTER = SEEN").expect("the verb runs");
+    assert_eq!(
+        eval::<Option<String>>(&world, "return AFTER").as_deref(),
+        Some("[1. MyChan] ")
+    );
+}
+
 /// The name a channel command went out under.
 fn wire_name(c: &ClientCommand) -> &str {
     use ClientCommand as W;

@@ -83,6 +83,9 @@ pub(crate) fn drain_chat_input_once(world: &mut World) {
     world
         .run_system_once(input::drain_chat_input)
         .expect("the chat input drains");
+    world
+        .run_system_once(input::drain_addon_message_sends)
+        .expect("the addon sends drain");
 }
 /// Test-only: the quest log's rig tees the lines its timers show.
 #[cfg(test)]

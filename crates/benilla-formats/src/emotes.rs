@@ -77,6 +77,15 @@ impl EmoteSoundCatalog {
         self
     }
 
+    /// A catalog holding one `EmotesText.dbc` row: its name, id and the `Emotes.dbc` id it plays,
+    /// for tests of what reads them.
+    #[doc(hidden)]
+    pub fn with_text_emote(mut self, name: &str, text_id: u32, emote_id: u32) -> Self {
+        self.by_name.insert(name.to_ascii_uppercase(), text_id);
+        self.text_emote.insert(text_id, emote_id);
+        self
+    }
+
     /// The raw `AnimID` of an `Emotes.dbc` row, `0` (Stand) included: the state resolver
     /// (`0x5fd770`) claims the base with whatever the row holds (`0x5fd816`, `row+8`), and a
     /// missing row claims nothing.
