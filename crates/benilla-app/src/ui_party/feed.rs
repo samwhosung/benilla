@@ -1,6 +1,6 @@
 //! The party feed and drain: push the roster and the `party1..4` and `raid1..40` unit snapshots
-//! into the VM, fire the party events on their edges, and turn the Lua [`PartyRequest`] intents
-//! into `CMSG_*` sends. The state and its lines live in the parent module.
+//! into the VM, fire the party events on their edges, and answer what the party calls left
+//! ([`super::calls`]). The state and its lines live in the parent module.
 
 use benilla_protocol::messages::{
     member_status, GroupLootInfo, GroupMemberEntry, ObjectType, PartyMemberStatsInfo,
@@ -573,14 +573,14 @@ pub(crate) fn raid_row_guid(group: &GroupState, index: usize) -> Option<u64> {
 }
 
 /// A 1-based raid row index to its guid; row 0, a row past the end or no raid gives `None`.
-fn raid_guid_at(group: &GroupState, index: u32) -> Option<u64> {
+pub(super) fn raid_guid_at(group: &GroupState, index: u32) -> Option<u64> {
     raid_row_guid(group, usize::try_from(index).ok()?)
 }
 
 /// A 1-based raid row's subgroup as the roster holds it, the row's `+8` (`0x4ba8ea`, the flags
 /// under 0x7f): a member's from the list's flags, ours, the row after them, from our own
 /// (`0x5e6e82`). No row, no subgroup.
-fn raid_row_subgroup(group: &GroupState, index: u32) -> Option<u8> {
+pub(super) fn raid_row_subgroup(group: &GroupState, index: u32) -> Option<u8> {
     let row = usize::try_from(index).ok()?.checked_sub(1)?;
     if !group.raid_held() {
         return None;
@@ -593,7 +593,7 @@ fn raid_row_subgroup(group: &GroupState, index: u32) -> Option<u8> {
 
 /// The name the subgroup verbs send: the cache's record, looked up with no callback
 /// (`0x4bba5e`, `0x4bbbc4`, `0x4bbbe5`), so a name still to come sends nothing.
-fn cached_player_name(names: &NameCache, guid: u64) -> Option<String> {
+pub(super) fn cached_player_name(names: &NameCache, guid: u64) -> Option<String> {
     names.resolve_player(guid, Ask::Read).map(str::to_string)
 }
 
@@ -817,205 +817,32 @@ fn record_bit(stats: Option<&PartyMemberStatsInfo>, bit: u8) -> bool {
     stats.is_some_and(|s| s.status.unwrap_or(0) & bit != 0)
 }
 
-/// Drain the Lua party intents into their `CMSG_*` sends.
+/// Every frame: age the signal log, and answer what the party calls left
+/// ([`super::calls::GroupEdits`]): an answered invite's popup state goes, and the sandbox's
+/// group-changing calls are echoed onto the mirror as the server would answer them.
 pub(crate) fn drain_party(
-    mut vm: crate::script_calls::VmWith<(
-        ResMut<'static, GroupState>,
-        crate::target::RelationWorld<'static, 'static>,
-    )>,
-    names: Res<NameCache>,
-    index: Res<GuidIndex>,
-    stores: Query<&ObjectStore>,
+    mut group: ResMut<GroupState>,
+    mut edits: ResMut<super::calls::GroupEdits>,
     self_q: Query<&Guid, With<SelfPlayer>>,
-    commands: Res<NetCommands>,
-    errors: Res<crate::ui_action::UiErrorKeys>,
-    mut tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
 ) {
-    vm.turn(|script, (mut group, relations)| {
-        // Every frame, VM or none: what the feed has fired goes ([`super::SignalLog`]). Not a
-        // change the feed's gate should open on.
-        group.bypass_change_detection().signals.age();
-        let Some(script) = script else {
-            return;
-        };
-        let self_guid = self_q.iter().next().map(|g| g.0);
-        let held = |guid: u64| index.0.get(&guid).and_then(|e| stores.get(*e).ok());
-        for req in script.take_party_requests() {
-            // In the sandbox the server holds no group, so the group-changing intents apply to the
-            // mirror as its echo would. Invites and accept/decline stay real: a real group ends it.
-            if group.test && test_apply_local(&mut group, &req, self_guid) {
-                continue;
+    // What the feed has fired goes ([`super::SignalLog`]). Not a change the feed's gate should
+    // open on.
+    group.bypass_change_detection().signals.age();
+    if std::mem::take(&mut edits.invite_answered) {
+        group.pending_invite = None;
+    }
+    let self_guid = self_q.iter().next().map(|g| g.0);
+    for echo in std::mem::take(&mut edits.sandbox) {
+        match echo {
+            super::calls::SandboxEcho::Request(request) => {
+                let echoed = test_apply_local(&mut group, &request, self_guid);
+                debug_assert!(echoed, "only a sandboxed call is echoed: {request:?}");
             }
-            match req {
-                PartyRequest::Accept => {
-                    let _ = commands.0.send(ClientCommand::GroupAccept);
-                    group.pending_invite = None;
-                }
-                PartyRequest::Decline => {
-                    let _ = commands.0.send(ClientCommand::GroupDecline);
-                    group.pending_invite = None;
-                }
-                PartyRequest::Leave => {
-                    let _ = commands.0.send(ClientCommand::GroupLeave);
-                }
-                PartyRequest::InviteName(name) => {
-                    if let Some(t) = tutorials.as_mut() {
-                        t.write(crate::tutorial::TutorialEvent::Acknowledge {
-                            id: crate::tutorial::id::GROUPING,
-                        });
-                    }
-                    let _ = commands.0.send(ClientCommand::GroupInvite { name });
-                }
-                // The binding resolved the token (`0x48a3ed`). `InviteByGuid` (`0x5e9440`) invites
-                // only a player the object manager holds (`0x5e945d`, typemask 0x10), by its
-                // `GetUnitName` (`0x609210`), through `InviteByName` (`0x5e9477`).
-                PartyRequest::InviteGuid(guid) => {
-                    let Some(store) = held(guid)
-                        .filter(|s| matches!(s.0.object_type(), Some(ObjectType::Player)))
-                    else {
-                        continue;
-                    };
-                    let name = names
-                        .resolve_unit(guid, Some(store), Ask::Event(&commands))
-                        .map_or_else(|| script.unknown_object_text(), str::to_string);
-                    if let Some(t) = tutorials.as_mut() {
-                        t.write(crate::tutorial::TutorialEvent::Acknowledge {
-                            id: crate::tutorial::id::GROUPING,
-                        });
-                    }
-                    let _ = commands.0.send(ClientCommand::GroupInvite { name });
-                }
-                // The binding resolved the token (`0x48a54d`).
-                PartyRequest::UninviteGuid(guid) => {
-                    uninvite_by_guid(guid, held(guid), &names, &commands, script);
-                }
-                // The binding resolved the method, the master and the threshold (`0x4e92a0`).
-                PartyRequest::LootMethod {
-                    method,
-                    master,
-                    threshold,
-                } => {
-                    let _ = commands.0.send(ClientCommand::LootMethod {
-                        method,
-                        master,
-                        threshold,
-                    });
-                }
-                // The binding resolved the token (`0x4bbeff`). A mark takes a raid row or its pet
-                // (`0x4bafd0`), a party slot or its pet (`0x4e8fa0`), or, with the player's object
-                // and the unit's held (`0x4bbf85`, `0x4bbfa4`), a unit that is no player
-                // (`0x4bbfc1`), a player we can cooperate with (`0x606ba0`) or ourselves
-                // (`0x4bbfcd`).
-                PartyRequest::SetRaidTarget { guid, index } => {
-                    let markable = || {
-                        let live = |g: u64| held(g).map(|s| &s.0);
-                        group.member_or_pet(guid, None, live)
-                            || relations
-                                .me()
-                                .zip(relations.unit(guid))
-                                .is_some_and(|(me, unit)| {
-                                    !unit.is_player
-                                        || relations.get().can_cooperate(&me, &unit)
-                                        || unit.guid == me.guid
-                                })
-                    };
-                    match raid_target_mark(&group, guid, index, markable) {
-                        RaidTargetMark::Invalid => {
-                            errors.push(crate::ui_action::UiError::key("ERR_INVALID_RAID_TARGET"));
-                        }
-                        RaidTargetMark::Nothing => {}
-                        RaidTargetMark::Send { icon, guid } if group.test => {
-                            echo_raid_target(&mut group, icon, guid);
-                        }
-                        RaidTargetMark::Send { icon, guid } => {
-                            let _ = commands.0.send(ClientCommand::SetRaidTarget { icon, guid });
-                        }
-                    }
-                }
-                // The stored method and looter with the new threshold (`0x4e95aa`-`0x4e95b8`).
-                PartyRequest::LootThreshold(threshold) => {
-                    let _ = commands.0.send(ClientCommand::LootMethod {
-                        method: u32::from(group.loot_stored.method),
-                        master: group.loot_stored.master,
-                        threshold,
-                    });
-                }
-                // ── The raid-management verbs ────────────────────────────────────
-                //
-                // The RaidFrame names rows by index, UnitPopup by name. A row that is not there
-                // sends nothing, as in the reference's bindings (`UninviteFromRaid`, `0x48a5c9`).
-                PartyRequest::ConvertToRaid => {
-                    let _ = commands.0.send(ClientCommand::GroupRaidConvert);
-                }
-                PartyRequest::SetSubgroup { index, group: sub } => {
-                    // Lua subgroups 1..8 are wire 0..7, the flags' bits 0-2
-                    // (`Server/Packets/Group.cpp:158`); out-of-range ones are dropped, never
-                    // wrapped.
-                    let Some(sub) = (1..=8).contains(&sub).then(|| (sub - 1) as u8) else {
-                        continue;
-                    };
-                    // `0x4bb990`: a row (`0x4bba1f`-`0x4bba36`) not already in the subgroup
-                    // (`0x4bba3c`) whose name the cache holds (`0x4bba68`).
-                    let Some(guid) = raid_guid_at(&group, index) else {
-                        continue;
-                    };
-                    if raid_row_subgroup(&group, index) == Some(sub) {
-                        continue;
-                    }
-                    let Some(name) = cached_player_name(&names, guid) else {
-                        continue;
-                    };
-                    let _ = commands
-                        .0
-                        .send(ClientCommand::GroupChangeSubGroup { name, group: sub });
-                }
-                PartyRequest::SwapSubgroup { index, other } => {
-                    // `0x4bbb00`: two rows (`0x4bbb71`-`0x4bbb99`) in different subgroups
-                    // (`0x4bbba5`) whose names the cache both holds (`0x4bbbec`-`0x4bbbf7`).
-                    let (Some(a), Some(b)) =
-                        (raid_guid_at(&group, index), raid_guid_at(&group, other))
-                    else {
-                        continue;
-                    };
-                    if raid_row_subgroup(&group, index) == raid_row_subgroup(&group, other) {
-                        continue;
-                    }
-                    let (Some(name), Some(other)) =
-                        (cached_player_name(&names, a), cached_player_name(&names, b))
-                    else {
-                        continue;
-                    };
-                    let _ = commands
-                        .0
-                        .send(ClientCommand::GroupSwapSubGroup { name, other });
-                }
-                // The binding resolved the token or the name (`0x48a7fd`, `0x48a86a`, `0x4bbd6b`,
-                // `0x4bbe3b`).
-                PartyRequest::PromoteGuid(guid) => {
-                    let _ = commands.0.send(ClientCommand::GroupSetLeader { guid });
-                }
-                PartyRequest::AssistantLeader { guid, grant } => {
-                    let _ = commands
-                        .0
-                        .send(ClientCommand::GroupAssistantLeader { guid, grant });
-                }
-                PartyRequest::UninviteRaid(row) => {
-                    if let Some(guid) = raid_guid_at(&group, row) {
-                        uninvite_by_guid(guid, held(guid), &names, &commands, script);
-                    }
-                }
-                PartyRequest::ReadyCheckStart => {
-                    let _ = commands.0.send(ClientCommand::ReadyCheckStart);
-                }
-                PartyRequest::ReadyCheckAnswer(status) => {
-                    let _ = commands.0.send(ClientCommand::ReadyCheckAnswer { status });
-                }
-                PartyRequest::RequestRaidInfo => {
-                    let _ = commands.0.send(ClientCommand::RequestRaidInfo);
-                }
+            super::calls::SandboxEcho::RaidTarget { icon, guid } => {
+                echo_raid_target(&mut group, icon, guid);
             }
         }
-    })
+    }
 }
 
 /// `UninviteByGuid` (`0x5e9510`), the sender `UninviteFromParty` (`0x48a560`) and
@@ -1025,7 +852,7 @@ pub(crate) fn drain_party(
 /// player-name cache with a callback, else as `UNKNOWNOBJECT`; any other, by its guid in
 /// `CMSG_GROUP_UNINVITE_GUID` (`0x5e953e`). Only `UninviteByName` always sends the name
 /// (`0x48a62a`).
-fn uninvite_by_guid(
+pub(super) fn uninvite_by_guid(
     guid: u64,
     held: Option<&ObjectStore>,
     names: &NameCache,
@@ -1046,7 +873,7 @@ fn uninvite_by_guid(
 
 /// What `SetRaidTarget` (`0x4bbec0`) does for the nonzero guid its token named.
 #[derive(Debug, PartialEq, Eq)]
-enum RaidTargetMark {
+pub(super) enum RaidTargetMark {
     /// `MSG_RAID_TARGET_UPDATE` with this wire slot and guid (`0x4bc01b`-`0x4bc03a`).
     Send { icon: u8, guid: u64 },
     /// `ERR_INVALID_RAID_TARGET` (`0x4bbfd2`), and nothing sent.
@@ -1060,7 +887,7 @@ enum RaidTargetMark {
 /// (`0x4bbf29` wraps it), clears the slot the guid holds by sending it with guid 0
 /// (`0x4bbf36`-`0x4bbf40`), and nothing for a guid holding none (`0x4bbfed`). A clear asks
 /// nothing of the unit.
-fn raid_target_mark(
+pub(super) fn raid_target_mark(
     group: &GroupState,
     guid: u64,
     index: u8,
@@ -1097,8 +924,9 @@ fn echo_raid_target(group: &mut GroupState, icon: u8, guid: u64) {
     group.apply_raid_target_update(icon, guid);
 }
 
-/// The sandbox half of [`drain_party`]: apply one group-changing intent to the mirror as the
-/// server's echo would. False for the intents that stay real (invites, accept and decline).
+/// The sandbox's echo of one group-changing call ([`drain_party`]), applied to the mirror as the
+/// server's answer would be. False for the calls that stay real (invites, accept and decline),
+/// which [`super::calls`] never hands it.
 fn test_apply_local(group: &mut GroupState, req: &PartyRequest, self_guid: Option<u64>) -> bool {
     let was_held = group.raid_held();
     let handled = apply_test_intent(group, req, self_guid);
@@ -2932,6 +2760,26 @@ mod tests {
         (app, rx)
     }
 
+    /// Run `chunk` with a host lent that applies the party calls inside their verbs, as the app's
+    /// host does ([`super::super::calls::PartyCalls`]); other calls go nowhere.
+    pub(super) fn hosted_run(app: &mut App, chunk: &str) {
+        use bevy::ecs::system::SystemState;
+        let world = app.world_mut();
+        let mut script = world.remove_non_send_resource::<UiScript>().expect("a VM");
+        let mut state = SystemState::<super::super::calls::PartyCalls>::new(world);
+        let ran = {
+            let mut host = crate::script_calls::FnHost(|s: &mut UiScript, call| {
+                if let benilla_ui::script::ScriptCall::Party(request) = call {
+                    state.get_mut(world).apply(s, request);
+                }
+            });
+            script.hosted(&mut host, |s| s.run(chunk))
+        };
+        state.apply(world);
+        world.insert_non_send_resource(script);
+        ran.expect("the chunk runs");
+    }
+
     /// The kicks among the commands sent, `name:<name>` or `guid:<guid>`, in order.
     fn kicks(rx: &crossbeam_channel::Receiver<ClientCommand>) -> Vec<String> {
         rx.try_iter()
@@ -2975,10 +2823,10 @@ mod tests {
         frame(&mut app);
         let _ = kicks(&rx);
 
-        app.world_mut()
-            .non_send_resource::<UiScript>()
-            .run(r#"UninviteFromParty("party1") UninviteFromParty("party2")"#)
-            .unwrap();
+        hosted_run(
+            &mut app,
+            r#"UninviteFromParty("party1") UninviteFromParty("party2")"#,
+        );
         frame(&mut app);
         assert_eq!(kicks(&rx), ["guid:0x1001", "name:M2"]);
     }
@@ -3005,10 +2853,10 @@ mod tests {
         frame(&mut app);
         let _ = kicks(&rx);
 
-        app.world_mut()
-            .non_send_resource::<UiScript>()
-            .run("UninviteFromRaid(1) UninviteFromRaid(2) UninviteFromRaid(3)")
-            .unwrap();
+        hosted_run(
+            &mut app,
+            "UninviteFromRaid(1) UninviteFromRaid(2) UninviteFromRaid(3)",
+        );
         frame(&mut app);
         assert_eq!(kicks(&rx), ["guid:0x1001", "name:M2", "name:Me"]);
     }
@@ -3026,8 +2874,7 @@ mod tests {
         frame(&mut app);
         let _ = kicks(&rx);
 
-        let script = app.world_mut().non_send_resource::<UiScript>();
-        script.run(r#"UninviteFromParty("party1")"#).unwrap();
+        hosted_run(&mut app, r#"UninviteFromParty("party1")"#);
         frame(&mut app);
         assert_eq!(kicks(&rx), ["name:Unknown Entity"]);
     }
@@ -3055,14 +2902,12 @@ mod tests {
         frame(&mut app);
         let _ = rx.try_iter().count();
 
-        app.world_mut()
-            .non_send_resource::<UiScript>()
-            .run(
-                "SetRaidSubgroup(1, 2) SetRaidSubgroup(2, 1) SetRaidSubgroup(3, 1) \
-                 SetRaidSubgroup(1, 3) SwapRaidSubgroup(1, 1) SwapRaidSubgroup(1, 2) \
-                 SwapRaidSubgroup(2, 3) SwapRaidSubgroup(1, 3)",
-            )
-            .unwrap();
+        hosted_run(
+            &mut app,
+            "SetRaidSubgroup(1, 2) SetRaidSubgroup(2, 1) SetRaidSubgroup(3, 1) \
+             SetRaidSubgroup(1, 3) SwapRaidSubgroup(1, 1) SwapRaidSubgroup(1, 2) \
+             SwapRaidSubgroup(2, 3) SwapRaidSubgroup(1, 3)",
+        );
         frame(&mut app);
         let sent: Vec<String> = rx
             .try_iter()
@@ -3105,13 +2950,12 @@ mod tests {
             raid: vec![member(1), member(2), ME],
             ..Default::default()
         });
-        script
-            .run(
-                r#"UninviteFromParty("target") PromoteToPartyLeader("raid2")
-                   UninviteFromParty("raid1") PromoteToPartyLeader("party1")
-                   UninviteFromParty("party2") PromoteToPartyLeader("mouseover")"#,
-            )
-            .unwrap();
+        hosted_run(
+            &mut app,
+            r#"UninviteFromParty("target") PromoteToPartyLeader("raid2")
+               UninviteFromParty("raid1") PromoteToPartyLeader("party1")
+               UninviteFromParty("party2") PromoteToPartyLeader("mouseover")"#,
+        );
         frame(&mut app);
         let sent: Vec<String> = rx
             .try_iter()

@@ -88,6 +88,7 @@ fn bake_strings(s: &UiScript) {
 fn chat_name_right_click_opens_the_invite_menu() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     bake_strings(&s);
     load_popup_frames(&s);
@@ -172,6 +173,7 @@ fn ally(s: &mut UiScript) {
 fn solo_target_right_click_invites_a_player() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     bake_strings(&s);
     load_popup_frames(&s);

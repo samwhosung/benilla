@@ -81,6 +81,7 @@ pub(crate) struct ScriptCallHost<'w, 's> {
                     crate::ui_chat::EmoteDoer<'w, 's>,
                     crate::ui_auction::AuctionVerbs<'w, 's>,
                     crate::ui_social::SocialSteps<'w>,
+                    crate::ui_party::PartyCalls<'w, 's>,
                 ),
             >,
             // The bags' and the loot window's.
@@ -192,6 +193,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Loot(call) => tail = appliers.p5().p1().apply(script, call),
             ScriptCall::Auction(call) => appliers.p4().p3().apply(script, call),
             ScriptCall::Social(call) => appliers.p4().p4().apply(script, call),
+            ScriptCall::Party(request) => appliers.p4().p5().apply(script, request),
         }
         // A selection this call made with the targeting cursor up was handed to the cast
         // (`SelectTarget`, `0x4935d5`) and is bound now, before the next call reads either.
@@ -1287,12 +1289,30 @@ mod tests {
         }
     }
 
+    /// The `CMSG_LOOT_METHOD`s `chunk` sends inside its calls, run with the host lent.
+    fn loot_methods_sent(f: &mut Frame, chunk: &str) -> Vec<(u32, u64, u32)> {
+        let _ = f.rx.try_iter().count();
+        with_hosted_vm(f.app.world_mut(), |script| {
+            script.expect("a VM").run(chunk).expect("the script runs")
+        });
+        f.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::LootMethod {
+                    method,
+                    master,
+                    threshold,
+                } => Some((method, master, threshold)),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// `SetLootMethod`'s master name runs the resolver in mode 2 (`0x4e9418`, filter `0x493eca`):
     /// a held groupmate resolves through the candidate feed while `CanAssist` and alive, and a
     /// dead one is no candidate, so the name finds nobody and the binding sends nothing.
     #[test]
     fn set_loot_method_resolves_a_held_groupmate_only_while_alive() {
-        use benilla_ui::script::{PartyMemberInfo, PartyRequest, PartyState};
+        use benilla_ui::script::{PartyMemberInfo, PartyState};
         for (health, resolved) in [(100, true), (0, false)] {
             let mut f = frame(false);
             // OLD is a friendly player, our groupmate "Olly" in `party1`.
@@ -1333,16 +1353,12 @@ mod tests {
                     ..Default::default()
                 }),
             );
-            script
-                .run(r#"SetLootMethod("master", "Ol")"#)
-                .expect("the script runs");
-            let sent = script.take_party_requests();
-            let expected = resolved.then_some(PartyRequest::LootMethod {
-                method: 2,
-                master: OLD,
-                threshold: 2,
-            });
-            assert_eq!(sent, expected.into_iter().collect::<Vec<_>>(), "{health}");
+            let expected = resolved.then_some((2, OLD, 2));
+            assert_eq!(
+                loot_methods_sent(&mut f, r#"SetLootMethod("master", "Ol")"#),
+                expected.into_iter().collect::<Vec<_>>(),
+                "{health}"
+            );
         }
     }
 
@@ -1351,7 +1367,7 @@ mod tests {
     /// above 0 (`0x493eca`): a ghost, at health 1, does; a corpse, at 0, does not.
     #[test]
     fn set_loot_method_resolves_our_own_name_through_the_feed() {
-        use benilla_ui::script::{PartyRequest, PartyState};
+        use benilla_ui::script::PartyState;
         for (health, resolved) in [(100, true), (1, true), (0, false)] {
             let mut f = frame(false);
             with_factions(&mut f, FRIEND, &[]);
@@ -1391,16 +1407,9 @@ mod tests {
                     ..Default::default()
                 }),
             );
-            script
-                .run(r#"SetLootMethod("master", "kel")"#)
-                .expect("the script runs");
-            let expected = resolved.then_some(PartyRequest::LootMethod {
-                method: 2,
-                master: ME,
-                threshold: 2,
-            });
+            let expected = resolved.then_some((2, ME, 2));
             assert_eq!(
-                script.take_party_requests(),
+                loot_methods_sent(&mut f, r#"SetLootMethod("master", "kel")"#),
                 expected.into_iter().collect::<Vec<_>>(),
                 "health {health}"
             );

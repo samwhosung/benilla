@@ -444,8 +444,6 @@ pub(crate) struct Model {
     pub(crate) joined_channels: Vec<Option<super::channel::JoinedChannel>>,
     /// The party or raid roster the app pushes; the default is not in a group.
     pub(crate) party: party::PartyState,
-    /// Party and loot-method calls (`AcceptGroup`, `InviteToParty`, `SetLootMethod`, …) queued.
-    pub(crate) party_requests: Vec<party::PartyRequest>,
     /// The ready-check deadline and the unanswered flags the timeout tick reads.
     pub(crate) ready_check: party::ReadyCheckState,
     /// Saved raid lockouts from `SMSG_RAID_INSTANCE_INFO`, which outlive any roster change.
@@ -1549,7 +1547,6 @@ impl Model {
             drop_item_on_unit: Vec::new(),
             joined_channels: Vec::new(),
             party: party::PartyState::default(),
-            party_requests: Vec::new(),
             ready_check: party::ReadyCheckState::default(),
             saved_instances: Vec::new(),
             raid_selection: 0,

@@ -16,10 +16,12 @@ use crate::ui_script::UiFeed;
 
 #[cfg(test)]
 mod call_tests;
+mod calls;
 mod feed;
 pub(crate) mod net;
 mod pets;
 mod records;
+pub(crate) use calls::PartyCalls;
 pub(crate) use feed::{
     drain_party, raid_row_guid, raid_row_guids, synthetic_raid, synthetic_roster, GROUPTYPE_RAID,
     GROUP_MEMBER_SUBGROUP,
@@ -36,6 +38,7 @@ impl Plugin for UiPartyPlugin {
         // A UI-only harness has no sound stack; the list handler queues the join chime, the stats
         // handler the unit events of a record.
         app.init_resource::<GroupState>()
+            .init_resource::<calls::GroupEdits>()
             .init_resource::<crate::sound::MessageSounds>()
             .add_message::<crate::field_watch::FieldNotice>()
             .add_systems(

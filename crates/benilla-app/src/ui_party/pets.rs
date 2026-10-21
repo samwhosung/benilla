@@ -262,6 +262,7 @@ pub(in crate::ui_party) mod tests {
         let mut app = App::new();
         app.add_message::<FieldChanged>()
             .init_resource::<GroupState>()
+            .init_resource::<crate::ui_party::calls::GroupEdits>()
             .init_resource::<GuidIndex>()
             .init_resource::<NameCache>()
             .init_resource::<crate::ui_guild::GuildState>()

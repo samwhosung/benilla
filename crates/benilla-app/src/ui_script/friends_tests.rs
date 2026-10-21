@@ -250,6 +250,7 @@ fn the_friend_buttons_follow_the_selection() {
 fn the_friend_buttons_queue_their_verbs() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
+    s.keep_calls();
     s.run("ToggleFriendsFrame(1)").unwrap();
     push(
         &mut s,

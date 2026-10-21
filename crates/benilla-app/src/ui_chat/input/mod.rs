@@ -571,7 +571,7 @@ pub(super) fn drain_chat_input(
                     if let Some(name) =
                         name.or_else(|| target_player_name(&selection, &names, &commands))
                     {
-                        // The binding's own resolve and queue (`PromoteByName 0x48a86a`); a miss is
+                        // The binding's own resolve and call (`PromoteByName 0x48a86a`); a miss is
                         // silent there.
                         script.promote_by_name(&name);
                     }

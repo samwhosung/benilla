@@ -490,6 +490,7 @@ fn left_clicking_the_player_frame_targets_self() {
 fn raid_mark_clicks_through_the_nested_level() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_unit_frames(&s);
 

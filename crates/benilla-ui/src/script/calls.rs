@@ -148,6 +148,10 @@ pub enum ScriptCall {
     /// A friend or ignore verb ([`super::SocialCall`]): its packet, its selection and its line
     /// inside the call.
     Social(super::SocialCall),
+    /// A party or raid verb past its binding's checks ([`super::PartyRequest`]): the host sends
+    /// its packet inside the call, so a chunk's group packets go out in call order with every
+    /// other verb's.
+    Party(super::PartyRequest),
 }
 
 /// The mode the four `TargetNearest*` shims hand the TAB cycler `0x493f60`, the only byte that

@@ -1,7 +1,8 @@
 //! The party and raid bindings. The app pushes a roster snapshot ([`UiScript::set_party`]) that
-//! the getters read; the verbs queue a [`PartyRequest`] the app drains
-//! ([`UiScript::take_party_requests`]) into the send. Per-member game state is the unit snapshot
-//! under `party1`..`party4` ([`super::unit::UnitState`]).
+//! the getters read; each verb hands its [`PartyRequest`] to the call host, which sends it before
+//! the verb returns ([`super::calls::submit`]), as the reference's verbs send inside their calls
+//! (`InviteByName` at `0x48a4c8`). Per-member game state is the unit snapshot under
+//! `party1`..`party4` ([`super::unit::UnitState`]).
 //!
 //! The raid roster ([`PartyState::raid`]) is one list, the player included, because the
 //! reference's count (`0xb713e0`) bounds the very array `GetRaidRosterInfo` indexes (`0xb712a8`).
@@ -105,8 +106,8 @@ pub struct PartyState {
     pub loot_threshold: u32,
 }
 
-/// Outbound party and raid intents, drained by the app ([`UiScript::take_party_requests`]) into
-/// the matching send.
+/// A party or raid verb past its binding's checks, which the call host applies inside the verb
+/// ([`super::ScriptCall::Party`]).
 #[derive(Clone, Debug, PartialEq)]
 pub enum PartyRequest {
     /// `AcceptGroup()`.
@@ -252,14 +253,20 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().ready_check.lines)
     }
 
-    /// `PromoteByName(name)` for the app's Rust slash parser: the binding's own resolve and queue.
+    /// `PromoteByName(name)` for the app's Rust slash parser: the binding's own resolve and call.
     pub fn promote_by_name(&mut self, name: &str) {
-        promote_by_name(&mut self.model_mut(), name);
+        let lua = self.lua().clone();
+        if let Err(e) = promote_by_name(&lua, name) {
+            self.model_mut().record_lua_error(&e);
+        }
     }
 
-    /// Drain the party/loot intents queued since the last call.
+    /// Take the party calls a harness's VM kept ([`Self::keep_calls`]), in call order.
     pub fn take_party_requests(&mut self) -> Vec<PartyRequest> {
-        std::mem::take(&mut self.model_mut().party_requests)
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Party(request) => Some(request.clone()),
+            _ => None,
+        })
     }
 
     /// Push the saved raid-lockout list, replacing it; the app fires `UPDATE_INSTANCE_INFO`.
@@ -271,22 +278,34 @@ impl super::UiScript {
 /// `SetLootMethod`'s usage line (`0x84c42c`).
 const USAGE_SET_LOOT_METHOD: &str = "Usage: SetLootMethod(\"method\" [,master][,threshold])";
 
+/// Hand `request` to the call host, which applies it before the verb returns. The caller holds
+/// no borrow of the model.
+fn call(lua: &Lua, request: PartyRequest) -> mlua::Result<()> {
+    super::calls::submit(lua, super::ScriptCall::Party(request))
+}
+
+/// The best player of `name` (`0x493aa0`, typemask 0x10, mode 2), as the name verbs resolve it.
+fn player_named(lua: &Lua, name: &str) -> Option<u64> {
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    model.closest_player(name, Filter::AssistableAlive)
+}
+
 /// `PromoteByName`: `0x493aa0` with typemask 0x10 and mode 2 (`0x48a86a`), then
 /// `CMSG_GROUP_SET_LEADER` (`0x78`) for the guid it returns; a zero guid sends nothing, silently
 /// (`0x48a875`). No membership test: the server judges the guid.
-fn promote_by_name(model: &mut Model, name: &str) {
-    if let Some(guid) = model.closest_player(name, Filter::AssistableAlive) {
-        model.party_requests.push(PartyRequest::PromoteGuid(guid));
+fn promote_by_name(lua: &Lua, name: &str) -> mlua::Result<()> {
+    match player_named(lua, name) {
+        Some(guid) => call(lua, PartyRequest::PromoteGuid(guid)),
+        None => Ok(()),
     }
 }
 
 /// `PromoteToAssistant` (`0x4bbd6b`) and `DemoteAssistant` (`0x4bbe3b`): the same resolver call,
 /// then `CMSG_GROUP_ASSISTANT_LEADER` (`0x28f`) with the guid and a byte, 1 or 0.
-fn assistant_by_name(model: &mut Model, name: &str, grant: bool) {
-    if let Some(guid) = model.closest_player(name, Filter::AssistableAlive) {
-        model
-            .party_requests
-            .push(PartyRequest::AssistantLeader { guid, grant });
+fn assistant_by_name(lua: &Lua, name: &str, grant: bool) -> mlua::Result<()> {
+    match player_named(lua, name) {
+        Some(guid) => call(lua, PartyRequest::AssistantLeader { guid, grant }),
+        None => Ok(()),
     }
 }
 
@@ -527,38 +546,24 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The party verbs queue a `PartyRequest` and return nothing.
+    // The party verbs hand their request to the call host and return nothing: `AcceptGroup`
+    // (`0x48aa80`), `DeclineGroup` (`0x48aab0`), `LeaveParty` (`0x4e9180`) and `InviteByName`
+    // (`0x48a420`) send inside the call.
     g.set(
         "AcceptGroup",
-        lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.party_requests.push(PartyRequest::Accept);
-            Ok(())
-        })?,
+        lua.create_function(|lua, ()| call(lua, PartyRequest::Accept))?,
     )?;
     g.set(
         "DeclineGroup",
-        lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.party_requests.push(PartyRequest::Decline);
-            Ok(())
-        })?,
+        lua.create_function(|lua, ()| call(lua, PartyRequest::Decline))?,
     )?;
     g.set(
         "LeaveParty",
-        lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.party_requests.push(PartyRequest::Leave);
-            Ok(())
-        })?,
+        lua.create_function(|lua, ()| call(lua, PartyRequest::Leave))?,
     )?;
     g.set(
         "InviteByName",
-        lua.create_function(|lua, name: String| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.party_requests.push(PartyRequest::InviteName(name));
-            Ok(())
-        })?,
+        lua.create_function(|lua, name: String| call(lua, PartyRequest::InviteName(name)))?,
     )?;
     // InviteToParty("unit") (`0x48a3b0`), UninviteFromParty("unit") (`0x48a510`) and
     // PromoteToPartyLeader("unit") (`0x48a7c0`): a string or a number (`0x6f3510`) else the usage
@@ -589,10 +594,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             binding,
             lua.create_function(move |lua, unit: Value| {
                 let token = binding_abi::string_arg(lua, unit, usage)?;
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                let guid = model.unit_guids.guid_of(&token)?.unwrap_or(0);
-                if model.unit_guids.player != 0 && guid != 0 {
-                    model.party_requests.push(request(guid));
+                let (player, guid) = {
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
+                    let guid = model.unit_guids.guid_of(&token)?.unwrap_or(0);
+                    (model.unit_guids.player, guid)
+                };
+                if player != 0 && guid != 0 {
+                    call(lua, request(guid))?;
                 }
                 Ok(())
             })?,
@@ -654,15 +662,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             }
             let threshold = binding_abi::is_number(lua, arg(if master { 2 } else { 1 }))
                 .map_or(2, |n| binding_abi::ftol(n) as u32);
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .party_requests
-                .push(PartyRequest::LootMethod {
+            call(
+                lua,
+                PartyRequest::LootMethod {
                     method: method_id as u32,
                     master: master_guid,
                     threshold,
-                });
-            Ok(())
+                },
+            )
         })?,
     )?;
     // SetLootThreshold(threshold) (`0x4e9500`): the same group and leader checks as SetLootMethod
@@ -675,9 +682,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             }
             // `is-number` else `Usage: SetLooThreshold(threshold)` (`0x84c464`, `0x4e9564`).
             let n = binding_abi::index_arg32(lua, n, "Usage: SetLooThreshold(threshold)")?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.party_requests.push(PartyRequest::LootThreshold(n));
-            Ok(())
+            call(lua, PartyRequest::LootThreshold(n))
         })?,
     )?;
     // SetRaidTarget(unit, index) is the engine verb. `SetRaidTargetIcon` is FrameXML's toggle
@@ -693,12 +698,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             const USAGE: &str = "Usage: SetRaidTarget(unit, index)";
             let unit = binding_abi::string_arg(lua, unit, USAGE)?;
             let index = binding_abi::number_arg(lua, index, USAGE)? as u8;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let guid = model.unit_guids.guid_of(&unit)?.unwrap_or(0);
+            let guid = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model.unit_guids.guid_of(&unit)?.unwrap_or(0)
+            };
             if guid != 0 {
-                model
-                    .party_requests
-                    .push(PartyRequest::SetRaidTarget { guid, index });
+                call(lua, PartyRequest::SetRaidTarget { guid, index })?;
             }
             Ok(())
         })?,
@@ -727,14 +732,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // Each only marshals its arguments into a client call or a send (`ConvertToRaid 0x4bbc90`,
     // `SetRaidSubgroup 0x4bb990`, `SwapRaidSubgroup 0x4bbb00`, `PromoteToAssistant 0x4bbd20`,
     // `RequestRaidInfo 0x4a1850`, `GetSavedInstanceInfo 0x4a1920`, `UninviteFromRaid 0x48a580`,
-    // `SetRaidRosterSelection 0x4bb820`), so the verbs here queue a request.
+    // `SetRaidRosterSelection 0x4bb820`), so the verbs here hand the host a request.
     g.set(
         "ConvertToRaid",
-        lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.party_requests.push(PartyRequest::ConvertToRaid);
-            Ok(())
-        })?,
+        lua.create_function(|lua, ()| call(lua, PartyRequest::ConvertToRaid))?,
     )?;
     // SetRaidSubgroup(index, subgroup) / SwapRaidSubgroup(index, other), the drag's two drops. A
     // non-number raises the usage line (`0x4bbae2`), and so does a subgroup whose truncation minus
@@ -748,12 +749,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if (group.wrapping_sub(1) as u32) >= 8 {
                 return Err(mlua::Error::runtime(USAGE));
             }
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.party_requests.push(PartyRequest::SetSubgroup {
-                index: index.max(0) as u32,
-                group: group as u32,
-            });
-            Ok(())
+            call(
+                lua,
+                PartyRequest::SetSubgroup {
+                    index: index.max(0) as u32,
+                    group: group as u32,
+                },
+            )
         })?,
     )?;
     g.set(
@@ -761,64 +763,52 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, (index, other): (Value, Value)| {
             let index = number_arg(lua, index, "Usage: SwapRaidSubgroup(index1, index2)")?;
             let other = number_arg(lua, other, "Usage: SwapRaidSubgroup(index1, index2)")?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.party_requests.push(PartyRequest::SwapSubgroup {
-                index: index.max(0) as u32,
-                other: other.max(0) as u32,
-            });
-            Ok(())
+            call(
+                lua,
+                PartyRequest::SwapSubgroup {
+                    index: index.max(0) as u32,
+                    other: other.max(0) as u32,
+                },
+            )
         })?,
     )?;
     g.set(
         "PromoteByName",
-        lua.create_function(|lua, name: String| {
-            promote_by_name(
-                &mut lua.app_data_mut::<Model>().expect("model app_data"),
-                &name,
-            );
-            Ok(())
-        })?,
+        lua.create_function(|lua, name: String| promote_by_name(lua, &name))?,
     )?;
     for (binding, grant) in [("PromoteToAssistant", true), ("DemoteAssistant", false)] {
         g.set(
             binding,
-            lua.create_function(move |lua, name: String| {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                assistant_by_name(&mut model, &name, grant);
-                Ok(())
-            })?,
+            lua.create_function(move |lua, name: String| assistant_by_name(lua, &name, grant))?,
         )?;
     }
     g.set(
         "UninviteFromRaid",
         lua.create_function(|lua, index: Value| {
             let index = number_arg(lua, index, "Usage: UninviteFromRaid(index)")?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model
-                .party_requests
-                .push(PartyRequest::UninviteRaid(index.max(0) as u32));
-            Ok(())
+            call(lua, PartyRequest::UninviteRaid(index.max(0) as u32))
         })?,
     )?;
     g.set(
         "DoReadyCheck",
         lua.create_function(|lua, ()| {
             let now = clock(lua);
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            // The worker `0x4bb1d0` flags every roster member but the caller as pending
-            // (`0x4bb24c`, `0x4bb258`) and arms the 30 s deadline (`0x4bb2b6`), then sends. A
-            // party has no raid roster, so nothing is flagged and the leader's echo closes it.
-            let own = model.party.own_guid;
-            model.ready_check.unanswered = model
-                .party
-                .raid
-                .iter()
-                .map(|m| m.guid)
-                .filter(|g| *g != own)
-                .collect();
-            model.ready_check.deadline = Some(now + READY_CHECK_SECONDS);
-            model.party_requests.push(PartyRequest::ReadyCheckStart);
-            Ok(())
+            {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                // The worker `0x4bb1d0` flags every roster member but the caller as pending
+                // (`0x4bb24c`, `0x4bb258`) and arms the 30 s deadline (`0x4bb2b6`), then sends. A
+                // party has no raid roster, so nothing is flagged and the leader's echo closes it.
+                let own = model.party.own_guid;
+                model.ready_check.unanswered = model
+                    .party
+                    .raid
+                    .iter()
+                    .map(|m| m.guid)
+                    .filter(|g| *g != own)
+                    .collect();
+                model.ready_check.deadline = Some(now + READY_CHECK_SECONDS);
+            }
+            call(lua, PartyRequest::ReadyCheckStart)
         })?,
     )?;
     // CheckReadyCheckTime() (`0x4bc120` → `0x4bb310`), called every frame from stock
@@ -840,20 +830,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "ConfirmReadyCheck",
         lua.create_function(|lua, ready: Option<Value>| {
             let ready = crate::script::binding_abi::bool_or_default(ready.as_ref(), false);
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model
-                .party_requests
-                .push(PartyRequest::ReadyCheckAnswer(u8::from(ready)));
-            Ok(())
+            call(lua, PartyRequest::ReadyCheckAnswer(u8::from(ready)))
         })?,
     )?;
     g.set(
         "RequestRaidInfo",
-        lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.party_requests.push(PartyRequest::RequestRaidInfo);
-            Ok(())
-        })?,
+        lua.create_function(|lua, ()| call(lua, PartyRequest::RequestRaidInfo))?,
     )?;
 
     // GetNumSavedInstances() / GetSavedInstanceInfo(index), 1-based over the pushed list; a miss
@@ -1001,6 +983,13 @@ fn ready_check_force_close(lua: &Lua) {
 mod tests {
     use crate::script::{PartyMemberInfo, PartyRequest, PartyState, UiScript};
 
+    /// A VM with no engine behind it, which keeps the calls its verbs make for the test to read.
+    fn vm() -> UiScript {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s
+    }
+
     fn two_member_party() -> PartyState {
         PartyState {
             members: vec![
@@ -1034,7 +1023,7 @@ mod tests {
 
     #[test]
     fn read_natives_report_the_pushed_roster() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         s.set_party(two_member_party());
 
         assert_eq!(s.eval::<i64>("return GetNumPartyMembers()").unwrap(), 2);
@@ -1056,14 +1045,14 @@ mod tests {
 
     #[test]
     fn is_party_leader_reports_when_the_player_leads() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         s.set_party(led_party());
         assert_eq!(s.eval::<i64>("return IsPartyLeader()").unwrap(), 1);
     }
 
     #[test]
     fn get_loot_method_reports_the_assigned_master() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         let mut party = two_member_party();
         party.loot_method = "master".into();
         party.master_looter = Some(2); // Bob (party2)
@@ -1075,7 +1064,7 @@ mod tests {
 
     #[test]
     fn empty_state_reports_the_solo_player_shape() {
-        let s = UiScript::new().unwrap();
+        let s = vm();
         assert_eq!(s.eval::<i64>("return GetNumPartyMembers()").unwrap(), 0);
         assert!(s.eval::<bool>("return GetPartyMember(1) == nil").unwrap());
         assert!(s.eval::<bool>("return IsPartyLeader() == nil").unwrap());
@@ -1122,7 +1111,7 @@ mod tests {
     /// Every return site in `0x4bb560` is `mov eax,9`, the miss arm `0x4bb7b9` included.
     #[test]
     fn get_raid_roster_info_returns_nine_values_on_every_path() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         s.set_party(ten_player_raid());
 
         for index in ["1", "10", "0", "-1", "41", "9999"] {
@@ -1132,14 +1121,14 @@ mod tests {
                 "index {index} must still be a nine-value answer"
             );
         }
-        let s = UiScript::new().unwrap();
+        let s = vm();
         assert_eq!(s.arity("GetRaidRosterInfo(1)").unwrap(), 9);
     }
 
     /// `0x4bb7b9` pushes `nil, 0, 1, 1` and five nils.
     #[test]
     fn get_raid_roster_info_misses_with_the_fixed_tuple() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         s.set_party(ten_player_raid());
         let miss = "local a,b,c,d,e,f,g,h,i = GetRaidRosterInfo(99) \
                     return a == nil, b, c, d, e == nil, f == nil, g == nil, h == nil, i == nil";
@@ -1165,7 +1154,7 @@ mod tests {
 
     #[test]
     fn get_raid_roster_info_reports_the_pushed_row() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         s.set_party(ten_player_raid());
         let (name, rank, subgroup, level, class, file, zone, online, ninth): (
             String,
@@ -1199,7 +1188,7 @@ mod tests {
     /// Return 8 goes nil on the same arm (`0x4bb705`).
     #[test]
     fn get_raid_roster_info_puts_player_offline_in_the_zone_slot() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         let mut party = ten_player_raid();
         party.raid[1].online = false;
         party.raid[1].zone = Some("Molten Core".into()); // ignored on the offline arm
@@ -1216,7 +1205,7 @@ mod tests {
     /// The raise at `0x4bb591` goes through `0x6f4940`, which never returns.
     #[test]
     fn get_raid_roster_info_raises_only_on_a_non_number() {
-        let s = UiScript::new().unwrap();
+        let s = vm();
         let err = s.arity("GetRaidRosterInfo({})").unwrap_err();
         assert!(
             format!("{err}").contains("Usage: GetRaidRosterInfo(index)"),
@@ -1229,7 +1218,7 @@ mod tests {
     /// The 1 is the constant double at `0x51637e`.
     #[test]
     fn unit_in_raid_answers_one_not_an_index() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         s.set_party(ten_player_raid());
         s.set_unit("player", Some(unit(true, 0x109))); // the last row
         s.set_unit("target", Some(unit(true, 0x105))); // roster row 6
@@ -1265,7 +1254,7 @@ mod tests {
     /// `0x4bb8c0` reads the same leader guid as `0x4e9130`, and no raid flag.
     #[test]
     fn is_raid_leader_is_true_for_a_party_leader() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         s.set_party(led_party()); // we lead a party, with no raid roster
         assert!(
             s.eval::<i64>("return GetNumRaidMembers()").unwrap() == 0,
@@ -1292,7 +1281,7 @@ mod tests {
     /// one alone in their subgroup has no slots at all and still leads.
     #[test]
     fn the_leader_tests_compare_guids_whatever_slots_the_subgroup_holds() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         s.set_party(PartyState {
             leader_index: 0,
             leader_guid: 0xFA2,
@@ -1317,7 +1306,7 @@ mod tests {
     /// a cell that holds their guid.
     #[test]
     fn only_is_party_leader_guards_a_zero_leader_cell() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         assert!(s.eval::<bool>("return IsPartyLeader() == nil").unwrap());
         assert_eq!(s.eval::<i64>("return IsRaidLeader()").unwrap(), 1);
 
@@ -1336,7 +1325,7 @@ mod tests {
     #[test]
     fn set_raid_subgroup_raises_its_usage_line_outside_one_to_eight() {
         const USAGE: &str = "Usage: SetRaidSubgroup(index, subgroup)";
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         for call in [
             "SetRaidSubgroup(3, 0)",
             "SetRaidSubgroup(3, 9)",
@@ -1370,7 +1359,7 @@ mod tests {
 
     #[test]
     fn get_num_raid_members_bounds_the_roster_it_indexes() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         s.set_party(ten_player_raid());
         assert_eq!(s.eval::<i64>("return GetNumRaidMembers()").unwrap(), 10);
         assert!(s
@@ -1383,7 +1372,7 @@ mod tests {
 
     #[test]
     fn intent_natives_queue_the_exact_request_sequence() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         hold(&mut s, "player", 0x5E1F, "Me");
         s.set_party(led_party());
         s.set_unit_guids(&crate::script::UnitGuids {
@@ -1431,7 +1420,7 @@ mod tests {
     /// player object or for a token naming nobody (`0x48a552`-`0x48a55a`, `0x48a802`-`0x48a80a`).
     #[test]
     fn the_token_verbs_raise_their_usage_and_queue_nothing_for_nobody() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         for (call, error) in [
             ("UninviteFromParty()", r#"Usage: UninviteFromParty("unit")"#),
             (
@@ -1460,7 +1449,7 @@ mod tests {
     }
 
     fn loot_vm(party: PartyState) -> UiScript {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         // The active player object, without which the resolver finds nobody (`0x493ae0`).
         hold(&mut s, "player", party.own_guid, "Me");
         s.set_party(party);
@@ -1806,7 +1795,7 @@ mod tests {
     /// object included, so the binding shows game error 0x49.
     #[test]
     fn without_the_player_object_the_master_name_finds_nobody() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         s.set_party(led_party());
         s.run(r#"ERR_NOT_LEADER = "x" ERR_TARGET_NOT_IN_GROUP_S = "%s is not in your group.""#)
             .unwrap();
@@ -1847,7 +1836,7 @@ mod tests {
     /// (`0x4bbf23`).
     #[test]
     fn set_raid_target_icon_queues_the_guid_and_index() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         s.set_unit_guids(&crate::script::UnitGuids {
             player: 0x5E1F,
             target: 0x7A7,
@@ -1875,7 +1864,7 @@ mod tests {
     #[test]
     fn is_raid_officer_reads_our_own_roster_rank() {
         let officer = |s: &UiScript| s.eval::<Option<i64>>("return IsRaidOfficer()").unwrap();
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         assert_eq!(officer(&s), None, "ungrouped");
         // We are the last row, a plain member under row 1's lead.
         let mut raid = ten_player_raid();
@@ -1911,7 +1900,7 @@ mod tests {
 
     #[test]
     fn unit_is_unit_compares_guids_and_tokens() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         s.set_unit("player", Some(unit(true, 0x10)));
         s.set_unit("target", Some(unit(true, 0x10)));
         s.set_unit("party1", Some(unit(true, 0x20)));
@@ -1943,7 +1932,7 @@ mod tests {
     /// `UnitPlayerOrPetInParty`, the raid roster's for `UnitPlayerOrPetInRaid`.
     #[test]
     fn unit_player_or_pet_in_party_reads_the_owner() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         s.set_party(two_member_party());
         s.set_unit("player", Some(unit(true, 0x10)));
         let mut alices_pet = unit(true, 0xC0FFEE);
@@ -1992,7 +1981,7 @@ mod tests {
     /// the player's own guid or one of the four slots'. No object and no group are needed.
     #[test]
     fn unit_in_party_answers_for_the_guid_the_token_names() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         let guids = |party: [u64; 4], target: u64| crate::script::UnitGuids {
             player: 0x10,
             target,
@@ -2034,7 +2023,7 @@ mod tests {
 
     #[test]
     fn the_raid_verbs_queue_what_they_name() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         hold(&mut s, "player", 0x5E1F, "Me");
         s.set_party(two_member_party());
         s.run(
@@ -2170,7 +2159,7 @@ mod tests {
     #[test]
     fn saved_instance_info_reads_the_pushed_list() {
         use crate::script::SavedInstanceInfo;
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         assert_eq!(s.eval::<i64>("return GetNumSavedInstances()").unwrap(), 0);
         s.set_saved_instances(vec![
             SavedInstanceInfo {
@@ -2207,7 +2196,7 @@ mod tests {
 
     #[test]
     fn the_raid_roster_selection_is_a_local_cursor() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         assert_eq!(s.eval::<i64>("return GetRaidRosterSelection()").unwrap(), 0);
         s.run("SetRaidRosterSelection(11)").unwrap();
         assert_eq!(
@@ -2222,7 +2211,7 @@ mod tests {
 
     #[test]
     fn get_raid_target_index_reads_the_fed_mark() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         let mut marked = unit(true, 0x40);
         marked.raid_target = 8;
         s.set_unit("target", Some(marked));
@@ -2279,7 +2268,7 @@ mod tests {
 
     #[test]
     fn the_leaders_check_times_out_into_the_afk_list_and_disarms() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         let party = raid_we_lead(&s);
         s.set_party(party);
         s.set_now(100.0);
@@ -2309,7 +2298,7 @@ mod tests {
     /// The answer that leaves nobody pending closes the check at once (`0x4ba4d9`).
     #[test]
     fn an_answer_clears_its_member_and_the_last_one_closes_the_check_at_once() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         let party = raid_we_lead(&s);
         s.set_party(party);
         s.set_now(100.0);
@@ -2333,7 +2322,7 @@ mod tests {
     /// The leader arm stores a constant 0 whatever the status byte (`0x4ba40e`).
     #[test]
     fn a_not_ready_answer_prints_its_line_and_still_clears_the_member() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         let party = raid_we_lead(&s);
         s.run(r#"RAID_MEMBER_NOT_READY = "%s is not ready""#)
             .unwrap();
@@ -2363,7 +2352,7 @@ mod tests {
     /// (`0x4bb3a8`).
     #[test]
     fn an_offline_member_never_blocks_the_close_but_is_still_listed() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         let mut party = raid_we_lead(&s);
         party
             .raid
@@ -2383,7 +2372,7 @@ mod tests {
     /// A member's client arms the deadline, never clears it, and never prints.
     #[test]
     fn the_tick_is_inert_for_a_non_leader() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         s.run(r#"READY_CHECK_NO_AFK = "No players are AFK""#)
             .unwrap();
         s.set_party(two_member_party()); // Alice leads; we are 0x5E1F
@@ -2397,7 +2386,7 @@ mod tests {
 
     #[test]
     fn a_roster_change_with_nobody_left_pending_closes_the_check() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         let party = raid_we_lead(&s);
         s.set_party(party.clone());
         s.set_now(100.0);
@@ -2416,7 +2405,7 @@ mod tests {
     /// A party has no raid roster, so `DoReadyCheck` flags nobody.
     #[test]
     fn the_leaders_own_echo_closes_an_empty_check_at_once() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         let mut party = raid_we_lead(&s);
         party.raid.clear();
         s.set_party(party);
@@ -2432,7 +2421,7 @@ mod tests {
     /// Both keys are read raw from `_G` with an empty default.
     #[test]
     fn a_missing_summary_string_prints_an_empty_line() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         let party = raid_we_lead(&s);
         s.set_party(party);
         s.set_now(100.0);
@@ -2476,7 +2465,7 @@ mod tests {
     /// the answer. It must find the Model free.
     #[test]
     fn a_not_ready_answer_reads_its_string_with_the_model_free() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         let party = raid_we_lead(&s);
         s.set_party(party);
         s.set_now(100.0);
@@ -2496,7 +2485,7 @@ mod tests {
     /// name (`0x4bb48e`), so both lookups run for an empty list.
     #[test]
     fn the_force_close_from_the_last_answer_reads_its_strings_with_the_model_free() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         let party = raid_we_lead(&s);
         s.set_party(party);
         s.set_now(100.0);
@@ -2523,7 +2512,7 @@ mod tests {
     /// summary prints once.
     #[test]
     fn the_timeout_reads_its_string_with_the_model_free_and_already_disarmed() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         let party = raid_we_lead(&s);
         s.set_party(party);
         s.set_now(100.0);
@@ -2552,7 +2541,7 @@ mod tests {
     /// The roster push and the request echo reach the same force-close.
     #[test]
     fn the_force_close_from_a_roster_push_and_from_the_echo_reads_with_the_model_free() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         let party = raid_we_lead(&s);
         s.set_party(party.clone());
         s.set_now(100.0);
@@ -2568,7 +2557,7 @@ mod tests {
             vec!["No players are AFK".to_string()]
         );
 
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         let mut party = raid_we_lead(&s);
         party.raid.clear();
         s.set_party(party);
