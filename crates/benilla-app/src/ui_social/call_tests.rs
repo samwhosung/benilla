@@ -17,7 +17,6 @@ use benilla_ui::script::UiScript;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
 use crate::script_calls::with_hosted_vm;
-use crate::ui_action::UiErrorKeys;
 
 /// A zone and a subzone under it, for the area lookup's one parent hop (`0x5ad127`-`0x5ad13f`).
 const ELWYNN: u32 = 12;
@@ -61,18 +60,31 @@ fn client() -> Social {
             ERR_FRIEND_NOT_FOUND = "ERR_FRIEND_NOT_FOUND"
             ERR_IGNORE_ALREADY_S = "ERR_IGNORE_ALREADY_S %s"
             ERR_IGNORE_NOT_FOUND = "ERR_IGNORE_NOT_FOUND"
-            UPDATES = 0 COUNTS = "" IGNORES = 0 ICOUNTS = ""
+            for _, key in ipairs({"ERR_FRIEND_LIST_FULL", "ERR_FRIEND_ONLINE_SS",
+                    "ERR_FRIEND_OFFLINE_S", "ERR_FRIEND_REMOVED_S", "ERR_FRIEND_ADDED_S",
+                    "ERR_FRIEND_ALREADY_S", "ERR_FRIEND_ERROR", "ERR_IGNORE_ADDED_S",
+                    "ERR_IGNORE_REMOVED_S"}) do
+                setglobal(key, key)
+            end
+            UPDATES = 0 COUNTS = "" IGNORES = 0 ICOUNTS = "" LINES = "" SEQ = ""
             local f = CreateFrame("Frame")
             f:RegisterEvent("FRIENDLIST_UPDATE")
             f:RegisterEvent("IGNORELIST_UPDATE")
+            f:RegisterEvent("CHAT_MSG_SYSTEM")
             f:SetScript("OnEvent", function()
                 if event == "FRIENDLIST_UPDATE" then
                     UPDATES = UPDATES + 1
                     COUNTS = COUNTS .. GetNumFriends() .. ","
-                else
+                    SEQ = SEQ .. "F,"
+                elseif event == "IGNORELIST_UPDATE" then
                     IGNORES = IGNORES + 1
                     ICOUNTS = ICOUNTS .. GetNumIgnores() .. ","
+                    SEQ = SEQ .. "I,"
+                else
+                    LINES = LINES .. arg1 .. "|"
+                    SEQ = SEQ .. arg1 .. ","
                 end
+                if ON_UPDATE and event == "FRIENDLIST_UPDATE" then ON_UPDATE() end
             end)"#,
         )
         .expect("the recorder installs");
@@ -82,7 +94,7 @@ fn client() -> Social {
     feed_once(&mut s);
     run(
         &mut s,
-        r#"UPDATES = 0 COUNTS = "" IGNORES = 0 ICOUNTS = """#,
+        r#"UPDATES = 0 COUNTS = "" IGNORES = 0 ICOUNTS = "" LINES = "" SEQ = """#,
     );
     s
 }
@@ -160,15 +172,16 @@ fn sent(s: &Social) -> Vec<Sent> {
         .collect()
 }
 
-/// The keys of the lines queued since the last read, in order.
-fn lines(s: &Social) -> Vec<&'static str> {
-    s.app
-        .world()
-        .resource::<UiErrorKeys>()
-        .take()
-        .into_iter()
-        .map(|e| e.key)
-        .collect()
+/// The friend and ignore lines the packets showed since the last read, in order: the VM's
+/// strings are their keys.
+fn lines(s: &mut Social) -> Vec<String> {
+    let text: String = eval(s, "local l = LINES LINES = \"\" return l");
+    text.split_terminator('|').map(str::to_string).collect()
+}
+
+/// The list events and lines in the order the VM heard them, since the last read.
+fn seq(s: &mut Social) -> String {
+    eval(s, "local q = SEQ SEQ = \"\" return q")
 }
 
 /// The chat lines the verbs showed inside their calls since the last read, in order: the VM's
@@ -308,17 +321,17 @@ fn an_add_whose_name_is_pending_waits_for_it() {
     list(&mut s, vec![offline(7)]);
     feed_once(&mut s);
     assert_eq!(updates(&mut s), 1);
-    let _ = lines(&s);
+    let _ = lines(&mut s);
 
     status(&mut s, friend_result::ADDED_OFFLINE, 8, None);
     feed_once(&mut s);
     assert_eq!(updates(&mut s), 0, "8's name is pending");
-    assert!(lines(&s).is_empty(), "the line waits for the name");
+    assert!(lines(&mut s).is_empty(), "the line waits for the name");
 
     answer(&mut s, 8, "Bbb");
     feed_once(&mut s);
     assert_eq!(updates(&mut s), 1);
-    assert_eq!(lines(&s), ["ERR_FRIEND_ADDED_S"]);
+    assert_eq!(lines(&mut s), ["ERR_FRIEND_ADDED_S"]);
     assert_eq!(names(&mut s, 2), ["Aaa", "Bbb"]);
 }
 
@@ -336,7 +349,7 @@ fn already_your_friend_claims_a_slot() {
         1,
         "the add path sorts and signals (`0x5acdde`)"
     );
-    assert_eq!(lines(&s), ["ERR_FRIEND_ALREADY_S"]);
+    assert_eq!(lines(&mut s), ["ERR_FRIEND_ALREADY_S"]);
     assert_eq!(names(&mut s, 1), ["nil"]);
 }
 
@@ -354,7 +367,7 @@ fn the_result_table_maps_zero_and_the_codes_past_seventeen() {
     ] {
         status(&mut s, result, 7, None);
         feed_once(&mut s);
-        assert_eq!(lines(&s), [key], "result {result:#04x}");
+        assert_eq!(lines(&mut s), [key], "result {result:#04x}");
     }
 }
 
@@ -457,14 +470,14 @@ fn a_name_the_server_refuses_removes_the_friend() {
     answer(&mut s, 7, "");
     feed_once(&mut s);
     assert_eq!(sent(&s), [Sent::DelFriend(7)]);
-    assert!(lines(&s).is_empty(), "the list's lookup shows nothing");
+    assert!(lines(&mut s).is_empty(), "the list's lookup shows nothing");
     assert_eq!(updates(&mut s), 1, "the last pending name signals");
 
     status(&mut s, friend_result::ADDED_OFFLINE, 8, None);
     answer(&mut s, 8, "");
     feed_once(&mut s);
     assert_eq!(sent(&s), [Sent::DelFriend(8)]);
-    assert_eq!(lines(&s), ["ERR_FRIEND_ERROR"]);
+    assert_eq!(lines(&mut s), ["ERR_FRIEND_ERROR"]);
 }
 
 /// `AddFriend` (`0x5ad290` → `0x5ae670`), `ShowFriends` (`0x5ad340`) and `RemoveFriend`
@@ -746,4 +759,163 @@ fn a_list_event_reads_the_list_its_packet_left() {
     // An ignore added with its name cached signals twice: `AddIgnoreSlot`'s sort (`0x5af642`),
     // then the result's own (`0x5ace00`).
     assert_eq!(counts(&mut s), ("1,2,".into(), "1,2,2,".into()));
+}
+
+/// A listener's verbs act on the list as its signal left it: with two signals in one frame, stock
+/// `FriendsList_Update`'s `SetSelectedFriend(1)` (`FriendsFrame.lua:155-157`) and a
+/// `RemoveFriend(1)` take the first friend of the first signal (`0x5ae4d0`, `0x5ae7e0`).
+#[test]
+fn a_listeners_verbs_act_on_the_list_its_signal_left() {
+    let mut s = client();
+    cache(&mut s, 7, "Bbb");
+    cache(&mut s, 8, "Aaa");
+    run(
+        &mut s,
+        "ON_UPDATE = function()
+            if GetSelectedFriend() == 0 then SetSelectedFriend(1) end
+            if not REMOVED then REMOVED = 1 RemoveFriend(1) end
+        end",
+    );
+    let _ = sent(&s);
+    packets(
+        &mut s,
+        vec![
+            SessionEvent::FriendList {
+                friends: vec![offline(7), offline(8)],
+            },
+            SessionEvent::FriendStatus(FriendStatusUpdate {
+                result: friend_result::ONLINE,
+                guid: 7,
+                online: Some(FriendOnline {
+                    status: friend_status::ONLINE,
+                    area: ELWYNN,
+                    level: 1,
+                    class: 1,
+                }),
+            }),
+        ],
+    );
+    feed_once(&mut s);
+    assert_eq!(updates(&mut s), 2);
+    assert_eq!(
+        names(&mut s, 2),
+        ["Bbb", "Aaa"],
+        "online first as the frame ends"
+    );
+    assert_eq!(
+        eval::<String>(&mut s, "return (GetFriendInfo(GetSelectedFriend()))"),
+        "Aaa",
+        "the first signal's first friend"
+    );
+    assert_eq!(sent(&s), [Sent::DelFriend(8)]);
+}
+
+/// A cached status signals before its line (`0x5acdde` → `0x5acde6`), and so does a found
+/// callback (`0x5acf15` → `0x5acf27`); a refusal shows its line first (`0x5acea4` → `0x5aceb6`).
+#[test]
+fn lines_and_list_events_keep_the_reference_order() {
+    let mut s = client();
+    cache(&mut s, 8, "Bbb");
+    status(&mut s, friend_result::ADDED_OFFLINE, 8, None);
+    feed_once(&mut s);
+    assert_eq!(seq(&mut s), "F,ERR_FRIEND_ADDED_S,", "cached");
+    status(&mut s, friend_result::ADDED_OFFLINE, 9, None);
+    answer(&mut s, 9, "Ccc");
+    feed_once(&mut s);
+    assert_eq!(seq(&mut s), "F,ERR_FRIEND_ADDED_S,", "found");
+    status(&mut s, friend_result::ADDED_OFFLINE, 10, None);
+    answer(&mut s, 10, "");
+    feed_once(&mut s);
+    assert_eq!(seq(&mut s), "ERR_FRIEND_ERROR,F,", "refused");
+}
+
+/// A cached status sorts and signals whatever is pending (`0x5acdde`).
+#[test]
+fn a_cached_status_signals_while_a_name_is_pending() {
+    let mut s = client();
+    cache(&mut s, 8, "Bbb");
+    list(&mut s, vec![offline(7)]);
+    status(&mut s, friend_result::ADDED_OFFLINE, 8, None);
+    feed_once(&mut s);
+    assert_eq!(updates(&mut s), 1, "7's name is still pending");
+}
+
+/// Result 16 signals twice with its name cached: the removal's sort (`0x5af699`), then the
+/// result's own (`0x5ace00`).
+#[test]
+fn an_ignore_removed_with_its_name_cached_signals_twice() {
+    let mut s = client();
+    cache(&mut s, 9, "Aaa");
+    ignore_list(&mut s, vec![9]);
+    feed_once(&mut s);
+    let _ = ignore_updates(&mut s);
+    status(&mut s, friend_result::IGNORE_REMOVED, 9, None);
+    feed_once(&mut s);
+    assert_eq!(ignore_updates(&mut s), 2);
+}
+
+/// Index 51 reads the 32 bytes after the slots (`0x5ae4b0`): the pending count's low bytes as the
+/// online byte and flags, the first ignore guid as the level and class, the second's low half as
+/// the area. The name is the dword at `+0x644`, which nothing writes, held null.
+#[test]
+fn get_friend_info_51_reads_the_bytes_after_the_slots() {
+    let mut s = client();
+    cache(&mut s, 30, "Aaa");
+    cache(&mut s, u64::from(ELWYNN), "Bbb");
+    ignore_list(&mut s, vec![u64::from(ELWYNN), 30]);
+    list(&mut s, vec![offline(7)]);
+    feed_once(&mut s);
+    assert_eq!(
+        info(&mut s, 51),
+        ["nil", "30", "Unknown", "Elwynn Forest", "1", ""].map(String::from)
+    );
+}
+
+/// Index 26 reads the eight bytes at `+0x718` as a guid (`0x5ae576`, `0x5ae5f6`): the ignore
+/// pending count, the high dword at `+0x71c`, which nothing writes, held 0.
+#[test]
+fn ignore_index_26_reads_the_pending_count_as_a_guid() {
+    let mut s = client();
+    cache(&mut s, 1, "One");
+    ignore_list(&mut s, vec![9, 1]);
+    feed_once(&mut s);
+    assert_eq!(eval::<String>(&mut s, "return GetIgnoreName(26)"), "One");
+    assert_eq!(
+        eval::<i64>(&mut s, "SetSelectedIgnore(26) return GetSelectedIgnore()"),
+        2,
+        "the guid 1, which slot 2 holds"
+    );
+}
+
+/// The ignores' callback shows `ERR_FRIEND_ERROR` for a refused add's lookup (`0x5acf6e`); each
+/// of its two lookups, the slot's (`0x5af627`) and the result's, sends `CMSG_DEL_IGNORE`
+/// (`0x5acf8c`).
+#[test]
+fn a_refused_ignore_add_shows_the_error_line() {
+    let mut s = client();
+    status(&mut s, friend_result::IGNORE_ADDED, 9, None);
+    feed_once(&mut s);
+    let _ = sent(&s);
+    answer(&mut s, 9, "");
+    feed_once(&mut s);
+    assert_eq!(lines(&mut s), ["ERR_FRIEND_ERROR"]);
+    assert_eq!(sent(&s), [Sent::DelIgnore(9), Sent::DelIgnore(9)]);
+}
+
+/// Result 5 clears its slot (`0x5aea00`) and, its name pending, does not sort: the hole stays,
+/// and `GetNumFriends` stops at it (`0x5ae490`).
+#[test]
+fn a_removal_whose_name_is_pending_leaves_a_hole() {
+    let mut s = client();
+    cache(&mut s, 7, "Aaa");
+    cache(&mut s, 8, "Bbb");
+    list(&mut s, vec![offline(7), offline(8)]);
+    s.app
+        .world_mut()
+        .resource_mut::<NameCache>()
+        .invalidate_player(7);
+    status(&mut s, friend_result::REMOVED, 7, None);
+    feed_once(&mut s);
+    assert_eq!(eval::<i64>(&mut s, "return GetNumFriends()"), 0);
+    assert_eq!(names(&mut s, 2), ["nil", "Bbb"]);
 }
