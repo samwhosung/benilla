@@ -99,6 +99,10 @@ pub(crate) enum Raised {
 /// and then changes state a getter reads runs one segment per such step, so each handler sees
 /// the state the reference's sees. A handler that calls another verb runs that verb's segments
 /// inside this fan-out, the reference's synchronous nesting.
+///
+/// An engine step that cannot lend the host ([`super::host::holding`]) holds the fan-out instead,
+/// its events and cursor views, for the host; the body's lock writes stand, so the held handlers
+/// read the locks the step left.
 pub(crate) fn verb<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
     let (out, raised) = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data set");
@@ -107,6 +111,16 @@ pub(crate) fn verb<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
         let out = body(&mut model);
         (out, model.verb_events.take().unwrap_or_default())
     };
+    if super::host::holding(lua) {
+        let fan: Vec<Raised> = raised
+            .into_iter()
+            .filter(|r| !matches!(r, Raised::Lock { .. }))
+            .collect();
+        if fan.iter().any(|r| matches!(r, Raised::Event(..))) {
+            super::calls::hold(lua, super::calls::Held::Segment(fan));
+        }
+        return out;
+    }
     // The body's lock changes are rolled back, then replayed in place as the absolute writes they
     // were, in the reference's order against the handlers: a nested verb's change to the same item
     // between two of them is overwritten by the later write, as the reference's later `LockItem`
@@ -120,6 +134,13 @@ pub(crate) fn verb<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
             }
         }
     }
+    fan_out(lua, raised);
+    out
+}
+
+/// A verb segment's fan-out: each event fired, each cursor view shown to the handlers between it
+/// and its end, each lock write made, in the order raised.
+pub(crate) fn fan_out(lua: &Lua, raised: Vec<Raised>) {
     // The cursors a view replaced, innermost last.
     let mut hidden = Vec::new();
     for raised in raised {
@@ -142,7 +163,6 @@ pub(crate) fn verb<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
             }
         }
     }
-    out
 }
 
 /// Set item `guid`'s lock bit to `locked`, recording nothing.
@@ -189,6 +209,7 @@ pub(crate) fn show_chat_line_into(lua: &Lua, key: &'static str, text: String) {
 /// the walk (`0x703ea4`) and the earlier value put back after it (`0x703f04`), so a handler's
 /// assignment to it reaches the next listener. The walk takes each listener's successor before
 /// its call (`0x703ee8`): one appended meanwhile is reached unless the running one was the tail.
+/// An engine step that cannot lend the host holds the walk for it ([`super::host::holding`]).
 pub(crate) fn fire_event_into(lua: &Lua, event: &str, args: Vec<ScriptValue>) {
     let model_mut = || lua.app_data_mut::<Model>().expect("model app_data set");
     let mut at = {
@@ -199,6 +220,10 @@ pub(crate) fn fire_event_into(lua: &Lua, event: &str, args: Vec<ScriptValue>) {
             .and_then(|l| l.first().copied())
     };
     if at.is_none() {
+        return;
+    }
+    if super::host::holding(lua) {
+        super::calls::hold(lua, super::calls::Held::Event(event.to_string(), args));
         return;
     }
     let globals = lua.globals();

@@ -85,7 +85,8 @@ pub(super) fn has_widget_handler(lua: &Lua, id: u32, script: &str) -> bool {
     }
 }
 
-/// The one firing path: `extra` is the `arg1..argN`. Holds no model borrow across the call.
+/// The one firing path: `extra` is the `arg1..argN`. Holds no model borrow across the call. An
+/// engine step that cannot lend the host holds the handler for it ([`super::host::holding`]).
 fn fire(lua: &Lua, id: u32, script: &str, extra: Vec<Value>) -> mlua::Result<()> {
     let scripts: Table = lua.named_registry_value(REG_SCRIPTS)?;
     let func: Function = match scripts.get::<Value>(id)? {
@@ -95,6 +96,11 @@ fn fire(lua: &Lua, id: u32, script: &str, extra: Vec<Value>) -> mlua::Result<()>
         },
         _ => return Ok(()),
     };
+    if super::host::holding(lua) {
+        let script = script.to_string();
+        super::calls::hold(lua, super::calls::Held::Handler { id, script, extra });
+        return Ok(());
+    }
 
     let wrapper = frame_wrapper(lua, id)?;
     // The profiler's fire opens after `frame_wrapper`, where no model borrow is held, and closes

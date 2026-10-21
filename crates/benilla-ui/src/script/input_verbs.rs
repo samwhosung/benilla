@@ -99,7 +99,9 @@ impl UiScript {
     /// no such command, or a release of one that is not `runOnUp`.
     pub fn execute_binding(&self, command: &str, down: bool) -> mlua::Result<bool> {
         let _event = protected::raise(self.lua(), Event::Binding);
-        super::keybind::run_command(&self.lua, command, down)
+        super::host::unheld(&self.lua, || {
+            super::keybind::run_command(&self.lua, command, down)
+        })
     }
 
     /// Push whether the TurnOrAction channel is held: the world holds the right mouse button, or

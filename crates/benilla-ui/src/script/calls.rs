@@ -6,11 +6,12 @@
 //! (`0x4b4ab0`) casts at the selection as it stands then. So `/target Bob` then `/cast Flash Heal`
 //! heals Bob.
 //!
-//! A verb hands its call to [`submit`], which applies it before the verb returns. A call made
-//! while the host is out (applying another call, or in an engine turn,
-//! [`super::UiScript::host_out`]) waits for it, and applies as soon as it is back, ahead of any
-//! made later. With no host lent the call is refused; a harness with no engine keeps it instead
-//! ([`super::UiScript::keep_calls`]).
+//! A verb hands its call to [`submit`], which applies it before the verb returns. While the host is
+//! out (applying another call, or in an engine turn, [`super::UiScript::host_out`]) the handlers
+//! the engine fires are held for it ([`super::host::holding`]), so their calls apply in place once
+//! they run; a call made meanwhile by Lua the host ran in place (a chunk) waits. Both run as soon
+//! as the host is back, in the order made, ahead of any made later. With no host lent a call is
+//! refused; a harness with no engine keeps it instead ([`super::UiScript::keep_calls`]).
 //!
 //! A call that selects a unit may find the spell targeting cursor up when it is applied:
 //! `SelectTarget` (`0x493540`) then binds the unit to the pending cast and returns without
@@ -21,7 +22,7 @@ use std::collections::VecDeque;
 
 use mlua::Lua;
 
-use super::{ActionUse, Model, SelectionRequest, UiScript};
+use super::{ActionUse, Model, ScriptValue, SelectionRequest, UiScript};
 
 /// One script call a verb hands the host, in the reference's terms.
 #[derive(Clone, Debug, PartialEq)]
@@ -190,14 +191,85 @@ pub(crate) struct CallRaises {
     raised: Vec<(u64, String)>,
 }
 
+/// What waits for the host, in the order made: a call, or a handler an engine step fired while
+/// the host was out ([`Held`]), each with the input events running when it was made.
+#[derive(Clone, Debug)]
+pub(crate) enum Waiting {
+    Call(QueuedCall),
+    Lua {
+        held: Held,
+        input: super::InputEvents,
+        /// The `PlaySound` suppression depth it was fired under (`0x458f50`): a load's or a
+        /// sweep's handlers stay silent though they run once the scope has closed.
+        muted: u32,
+    },
+}
+
+/// A fire held for the host ([`super::host::holding`]): run as it would have run then.
+#[derive(Clone, Debug)]
+pub(crate) enum Held {
+    /// An event's fan-out to its listeners (`SignalEvent`, `0x703e50`).
+    Event(String, Vec<ScriptValue>),
+    /// A verb segment's fan-out ([`super::tick::verb`]): its events and the cursor views around
+    /// them, in order. Its lock writes stand as the verb made them, so its handlers read the locks
+    /// the step left.
+    Segment(Vec<super::tick::Raised>),
+    /// One widget script (`OnShow`, `OnValueChanged`, …) on frame `id`, with its `arg1..argN`.
+    Handler {
+        id: u32,
+        script: String,
+        extra: Vec<mlua::Value>,
+    },
+}
+
 impl super::Model {
     /// Hold `call` for the host, with the input events running now; its number.
     fn queue_call(&mut self, call: ScriptCall) -> u64 {
         let input = self.protected.events();
         let seq = self.call_raises.next;
         self.call_raises.next += 1;
-        self.script_calls.push(QueuedCall { call, input, seq });
+        self.script_calls
+            .push(Waiting::Call(QueuedCall { call, input, seq }));
         seq
+    }
+}
+
+/// Hold `held` for the host, with the input events running now: an engine step fired it while it
+/// could not lend the host ([`super::host::holding`]).
+pub(crate) fn hold(lua: &Lua, held: Held) {
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    let input = model.protected.events();
+    let muted = model.sound_suppression;
+    model.script_calls.push(Waiting::Lua { held, input, muted });
+}
+
+/// Run a held fire now, under the input events and the sound suppression it was fired under.
+fn replay(lua: &Lua, script: &mut UiScript, held: Held, input: super::InputEvents, muted: u32) {
+    let outer = std::mem::replace(
+        &mut lua
+            .app_data_mut::<Model>()
+            .expect("model app_data")
+            .sound_suppression,
+        muted,
+    );
+    script.with_input_events(input, |_| run_held(lua, held));
+    lua.app_data_mut::<Model>()
+        .expect("model app_data")
+        .sound_suppression = outer;
+}
+
+/// Run `held` now, as it would have run when it was fired.
+fn run_held(lua: &Lua, held: Held) {
+    match held {
+        Held::Event(event, args) => super::tick::fire_event_into(lua, &event, args),
+        Held::Segment(raised) => super::tick::fan_out(lua, raised),
+        Held::Handler { id, script, extra } => {
+            if let Err(e) = super::event::fire_widget_handler(lua, id, &script, extra) {
+                lua.app_data_mut::<Model>()
+                    .expect("model app_data")
+                    .record_lua_error(&e);
+            }
+        }
     }
 }
 
@@ -214,10 +286,10 @@ pub(crate) const NO_HOST: &str = "no call host is lent for this script call";
 /// What a verb raises past [`MAX_NESTING`].
 pub(crate) const TOO_DEEP: &str = "script calls nested too deep";
 
-/// A verb's call: with a host lent and free, applied before the verb returns, after any call that
-/// was waiting for it, under the input events running now; with the host out, held until it is
-/// back. What the host raises in the call ([`UiScript::raise_in_call`]) is the verb's error. The
-/// caller holds no borrow of the model.
+/// A verb's call: with a host lent and free, applied before the verb returns, after whatever was
+/// waiting for it, under the input events running now; with the host out, held until it is back.
+/// What the host raises in the call ([`UiScript::raise_in_call`]) is the verb's error. The caller
+/// holds no borrow of the model.
 pub(crate) fn submit(lua: &Lua, call: ScriptCall) -> mlua::Result<()> {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     if !super::host::open(lua) {
@@ -277,14 +349,16 @@ fn swap_raising(lua: &Lua, raise: Option<String>) -> Option<String> {
     std::mem::replace(&mut model.call_raises.raising, raise)
 }
 
-/// Apply what waits through the lent host, front to back, each call and its tail under exactly the
-/// input events its verb ran under. The calls an applied call makes while its host is out go next,
-/// ahead of the rest; those its tail makes apply inside the tail.
+/// Run what waits through the lent host, front to back: each call and its tail under exactly the
+/// input events its verb ran under, each held handler under those it was fired under. What an
+/// applied call left while its host was out (the handlers it fired, a call made meanwhile) runs
+/// next, as the host comes back and before its tail, ahead of the rest; the calls its tail makes
+/// apply inside the tail.
 pub(crate) fn drain(lua: &Lua) {
     if !super::host::free(lua) {
         return;
     }
-    let mut batch: VecDeque<QueuedCall> = {
+    let mut batch: VecDeque<Waiting> = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
         if model.script_calls.is_empty() {
             return;
@@ -308,28 +382,63 @@ pub(crate) fn drain(lua: &Lua) {
             requeue(lua, batch);
             return;
         }
-        let Some(QueuedCall { call, input, seq }) = batch.pop_front() else {
+        let Some(item) = batch.pop_front() else {
             break;
         };
-        // What the host raises while it applies the call and runs its tail is this call's.
-        let outer = swap_raising(lua, None);
-        // The reference does the call inside the verb, so what it signals runs inside the key,
-        // click or Enter that made it, and only inside that: a queued call gets exactly its events.
-        let tail = script.with_input_events(input, |script| {
-            super::host::with_host(lua, |host| host.apply(script, call)).flatten()
-        });
-        if let Some(tail) = tail {
-            script.with_input_events(input, tail);
-        }
-        if let Some(message) = swap_raising(lua, outer) {
-            file_raise(lua, seq, message);
+        match item {
+            Waiting::Call(QueuedCall { call, input, seq }) => {
+                // What the host raises while it applies the call, settles what the call left and
+                // runs its tail is this call's.
+                let outer = swap_raising(lua, None);
+                // The reference does the call inside the verb, so what it signals runs inside the
+                // key, click or Enter that made it, and only inside that: a queued call gets
+                // exactly its events.
+                let tail = script.with_input_events(input, |script| {
+                    super::host::with_host(lua, |host| host.apply(script, call)).flatten()
+                });
+                settle(lua, &mut script);
+                if let Some(tail) = tail {
+                    script.with_input_events(input, tail);
+                }
+                if let Some(message) = swap_raising(lua, outer) {
+                    file_raise(lua, seq, message);
+                }
+            }
+            Waiting::Lua { held, input, muted } => replay(lua, &mut script, held, input, muted),
         }
         drain(lua);
     }
 }
 
+/// Run what an applied call left while its host was out, now that it is back: the handlers it
+/// fired at this call's level, so a call one makes is the call's own nested call, and a call made
+/// meanwhile one level in. The reference runs both inside the call.
+fn settle(lua: &Lua, script: &mut UiScript) {
+    let left = std::mem::take(
+        &mut lua
+            .app_data_mut::<Model>()
+            .expect("model app_data")
+            .script_calls,
+    );
+    let mut left: VecDeque<Waiting> = left.into();
+    while let Some(item) = left.pop_front() {
+        if !super::host::free(lua) {
+            left.push_front(item);
+            requeue(lua, left);
+            return;
+        }
+        match item {
+            Waiting::Lua { held, input, muted } => replay(lua, script, held, input, muted),
+            call @ Waiting::Call(_) => {
+                requeue(lua, [call]);
+                drain(lua);
+            }
+        }
+    }
+}
+
 /// Put `calls` back at the front of the queue, ahead of any queued since.
-fn requeue(lua: &Lua, calls: impl IntoIterator<Item = QueuedCall>) {
+fn requeue(lua: &Lua, calls: impl IntoIterator<Item = Waiting>) {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let later = std::mem::replace(&mut model.script_calls, calls.into_iter().collect());
     model.script_calls.extend(later);
@@ -343,13 +452,33 @@ impl super::Model {
     }
 }
 
-/// Drop what waits for a host that will not come back: an engine turn's calls with no host to
-/// apply them, or a lend's leftovers once the outermost lend has ended. The count dropped.
+/// Settle what waits for a host that will not come back (an engine turn's leftovers with no host
+/// to lend, or a lend's once the outermost lend has ended): the held handlers run, with the calls
+/// they make waiting, and every call is dropped. The count of calls dropped.
 pub(crate) fn refuse_waiting(lua: &Lua) -> usize {
-    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    let n = model.script_calls.len();
-    model.script_calls.clear();
-    n
+    super::host::open_unheld(lua, || {
+        let mut dropped = 0;
+        loop {
+            let batch = std::mem::take(
+                &mut lua
+                    .app_data_mut::<Model>()
+                    .expect("model app_data")
+                    .script_calls,
+            );
+            if batch.is_empty() {
+                return dropped;
+            }
+            let mut script = UiScript::reentrant(lua);
+            for item in batch {
+                match item {
+                    Waiting::Call(_) => dropped += 1,
+                    Waiting::Lua { held, input, muted } => {
+                        replay(lua, &mut script, held, input, muted)
+                    }
+                }
+            }
+        }
+    })
 }
 
 impl UiScript {
@@ -842,6 +971,35 @@ mod tests {
         assert_eq!(
             global::<Option<String>>(&s, "ORDER").as_deref(),
             Some("e:0 ")
+        );
+    }
+
+    /// A handler held from inside a `PlaySound` suppression scope (`0x458f50`, the UI load's and
+    /// the leave-world sweep's) stays silent when it runs after the scope has closed, and one held
+    /// outside any scope plays though it runs inside one.
+    #[test]
+    fn a_held_handler_plays_under_the_suppression_it_was_fired_under() {
+        let mut s = UiScript::new().unwrap();
+        s.run(
+            r#"local f = CreateFrame("Frame")
+            f:RegisterEvent("LOOT_OPENED")
+            f:SetScript("OnEvent", function() PlaySound("igMainMenuOpen") end)"#,
+        )
+        .unwrap();
+        let mut host = Stamping::default();
+        s.push_sound_suppression();
+        s.host_out(|s| s.fire_event("LOOT_OPENED", vec![]));
+        s.pop_sound_suppression();
+        s.hosted(&mut host, |_| ());
+        assert_eq!(s.take_sounds(), vec![], "fired inside the scope");
+        s.host_out(|s| s.fire_event("LOOT_OPENED", vec![]));
+        s.push_sound_suppression();
+        s.hosted(&mut host, |_| ());
+        s.pop_sound_suppression();
+        assert_eq!(
+            s.take_sounds(),
+            vec![super::super::SoundRequest::KitName("igMainMenuOpen".into())],
+            "fired outside it"
         );
     }
 }

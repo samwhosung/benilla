@@ -112,10 +112,13 @@ pub(super) struct Scan {
 
 /// The files that drain a queue of events: their relay carries what the queue's sites pushed,
 /// and those are sites of their own. The host queue's are the `pending_events` pushes; a feed's
-/// are the calls of `Fires::post`, a firing function by its signature.
+/// are the calls of `Fires::post`, a firing function by its signature; the call host's are the
+/// fires an engine step made while the host was out, each held inside the firing function it
+/// came through (`fire_event_into`).
 const DRAINS: &[&str] = &[
     "crates/benilla-ui/src/script/tick.rs",
     "crates/benilla-app/src/script_calls.rs",
+    "crates/benilla-ui/src/script/calls.rs",
 ];
 
 impl Scan {

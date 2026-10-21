@@ -418,9 +418,10 @@ pub(crate) struct Model {
     pub(crate) cancel_aura_requests: Vec<u32>,
     /// The player's active tracking aura, behind `GetTrackingTexture`.
     pub(crate) tracking: Option<super::aura::TrackingState>,
-    /// The calls that touch the selection, the cast or the targeting cursor made while the host
-    /// was out, in call order, for it to apply as soon as it is back.
-    pub(crate) script_calls: Vec<super::calls::QueuedCall>,
+    /// What waits for the host, in the order made: the calls that touch the selection, the cast
+    /// or the targeting cursor made while it was out, and the handlers an engine step fired then
+    /// ([`super::host::holding`]), for it to run as soon as it is back.
+    pub(crate) script_calls: Vec<super::calls::Waiting>,
     /// How many drains of [`Self::script_calls`] are running, each inside a call the one outside
     /// it applied ([`super::calls::submit`]).
     pub(crate) call_depth: u8,

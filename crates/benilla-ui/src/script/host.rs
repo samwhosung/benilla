@@ -4,6 +4,12 @@
 //! reaches `ArmCastTargets 0x6e5250` through direct calls, so `SpellIsTargeting()` (`0x6e6cd0`) on
 //! the script's next line reads the armed word. The reference has no queue between a verb and its
 //! effect, so a call made with no host lent is refused with a Lua error.
+//!
+//! Two engine steps hold the host's state while they run, so neither can lend it: an engine turn
+//! ([`UiScript::host_out`]) and a call's apply ([`CallHost::apply`]). The handlers either fires
+//! (an event's listeners, a widget's script) are held ([`holding`]) and run as soon as the host
+//! is back, in the order fired, so a call a handler makes applies in place, inside its verb, as
+//! the reference's does: they read the state the step left, not the state at the signal.
 
 use std::cell::Cell;
 use std::ptr::NonNull;
@@ -38,6 +44,9 @@ struct HostSlot {
     /// The lends and the engine turns ([`UiScript::host_out`]) running now. While any is, a call
     /// is the host's: it applies at once with the host in the slot, else as soon as it is back.
     open: Cell<u32>,
+    /// An engine step that cannot lend the host is running (an engine turn, or a call's apply) and
+    /// no Lua it ran since: a handler fired now is held for the host ([`holding`]).
+    hold: Cell<bool>,
 }
 
 /// Install the empty slot at the VM's birth, a fork's included: every verb asks it
@@ -72,6 +81,42 @@ impl Drop for Open<'_> {
     }
 }
 
+/// Set the slot's [`HostSlot::hold`] while it lives, and put back what it was.
+struct Hold<'a> {
+    slot: mlua::AppDataRef<'a, HostSlot>,
+    before: bool,
+}
+
+impl<'a> Hold<'a> {
+    fn new(slot: mlua::AppDataRef<'a, HostSlot>, hold: bool) -> Self {
+        let before = slot.hold.replace(hold);
+        Hold { slot, before }
+    }
+}
+
+impl Drop for Hold<'_> {
+    fn drop(&mut self) {
+        self.slot.hold.set(self.before);
+    }
+}
+
+/// Run `f`, Lua the host runs in place (a chunk, a binding's body, a slash command's handler),
+/// with no handler held meanwhile: the handlers it fires run inside it, as its own lines read
+/// what they did. Only an engine step's own signals are held.
+pub(crate) fn unheld<R>(lua: &Lua, f: impl FnOnce() -> R) -> R {
+    let _hold = Hold::new(slot(lua), false);
+    f()
+}
+
+/// Run `f` with the slot open and nothing held, with no host to lend: the drop of what an engine
+/// turn left ([`super::calls::refuse_waiting`]), whose handlers still run, their calls waiting to
+/// be dropped with the rest.
+pub(crate) fn open_unheld<R>(lua: &Lua, f: impl FnOnce() -> R) -> R {
+    let _open = Open::new(slot(lua));
+    let _hold = Hold::new(slot(lua), false);
+    f()
+}
+
 /// Lend `host` to the VM of `lua` while `f` runs, then take it back, `f` unwinding included. A
 /// host lent already is put back after.
 pub(crate) fn lend<R>(lua: &Lua, host: &mut dyn CallHost, f: impl FnOnce() -> R) -> R {
@@ -96,7 +141,8 @@ pub(crate) fn lend<R>(lua: &Lua, host: &mut dyn CallHost, f: impl FnOnce() -> R)
 }
 
 /// Run `f` on the lent host, out of the slot meanwhile; `None` with no host lent, or with the one
-/// lent out applying a call.
+/// lent out applying a call. The handlers `f` fires are held ([`holding`]) for the caller to run
+/// once the host is back ([`super::calls::drain`]).
 pub(crate) fn with_host<R>(lua: &Lua, f: impl FnOnce(&mut dyn CallHost) -> R) -> Option<R> {
     struct PutBack<'a> {
         slot: mlua::AppDataRef<'a, HostSlot>,
@@ -110,6 +156,7 @@ pub(crate) fn with_host<R>(lua: &Lua, f: impl FnOnce(&mut dyn CallHost) -> R) ->
     let slot = slot(lua);
     let host = slot.host.take()?;
     let _back = PutBack { slot, host };
+    let _hold = Hold::new(self::slot(lua), true);
     // SAFETY: the pointer came out of the slot, so by its invariant it is valid, and this is the
     // only `&mut` made from it until it goes back.
     Some(f(unsafe { &mut *host.as_ptr() }))
@@ -123,6 +170,14 @@ pub(crate) fn free(lua: &Lua) -> bool {
 /// Whether a call made now is the host's: a lend or an engine turn is running.
 pub(crate) fn open(lua: &Lua) -> bool {
     slot(lua).open.get() > 0
+}
+
+/// Whether a handler fired now is held for the host rather than run: an engine step that cannot
+/// lend it is running, and no Lua it ran in place since ([`unheld`]). A handler run then would
+/// make its calls wait past the verb that made them, where the reference applies them inside it.
+pub(crate) fn holding(lua: &Lua) -> bool {
+    let slot = slot(lua);
+    slot.hold.get() && slot.host.get().is_none()
 }
 
 impl UiScript {
@@ -143,18 +198,30 @@ impl UiScript {
     }
 
     /// Run `f` as an engine turn: the app's half of a verb or an engine step that holds the host's
-    /// own state alongside the VM, so it cannot lend the host meanwhile. A call the Lua `f` runs
-    /// makes waits, as one made while the host applies a call does; the entry lends the host when
-    /// the turn ends ([`Self::hosted`]), which applies it, or drops it with
-    /// [`Self::refuse_waiting`] when it has none to lend.
+    /// own state alongside the VM, so it cannot lend the host meanwhile. The handlers its pushes
+    /// and signals fire are held, and a call Lua `f` runs in place makes (a chunk) waits; the
+    /// entry lends the host when the turn ends ([`Self::hosted`]), which runs and applies them in
+    /// the order made, or runs the handlers and drops the calls with [`Self::refuse_waiting`] when
+    /// it has none to lend.
     pub fn host_out<R>(&mut self, f: impl FnOnce(&mut UiScript) -> R) -> R {
         let lua = self.lua().clone();
         let _open = Open::new(slot(&lua));
+        let _hold = Hold::new(slot(&lua), true);
         f(self)
     }
 
-    /// Drop the calls an engine turn left with no host to apply them, a harness without the
-    /// engine's half; the count dropped.
+    /// Run `f` with no host to lend, for an entry of a harness without the engine's half that runs
+    /// Lua (a load in a bare world): the handlers run in place, and a call its Lua makes waits and
+    /// is dropped as `f` returns, as with [`Self::refuse_waiting`].
+    pub fn refusing<R>(&mut self, f: impl FnOnce(&mut UiScript) -> R) -> R {
+        let lua = self.lua().clone();
+        let r = open_unheld(&lua, || f(self));
+        self.refuse_waiting();
+        r
+    }
+
+    /// Run the handlers an engine turn left with no host to lend them, and drop its calls and
+    /// theirs, for a harness without the engine's half; the count of calls dropped.
     pub fn refuse_waiting(&mut self) -> usize {
         super::calls::refuse_waiting(self.lua())
     }

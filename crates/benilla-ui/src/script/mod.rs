@@ -852,6 +852,8 @@ impl UiScript {
         let session = NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut model = self.model_ref().clone();
         model.session = session;
+        // What waits is the original's host's, and its handlers' values its VM's.
+        model.script_calls.clear();
         lua.set_app_data(model);
         // A fork is a VM of its own, so it carries the profiler's slot and the call host's.
         handler_prof::install(&lua);
@@ -1116,16 +1118,20 @@ impl UiScript {
 
     /// Run a chunk under the name the 1.12 client gives it ([`addon_chunk_name`] for addon files).
     pub fn run_chunk_named(&self, chunk: &[u8], name: &str) -> mlua::Result<()> {
-        self.lua
-            .load(crate::source::chunk(chunk))
-            .set_name(name)
-            .set_mode(mlua::ChunkMode::Text)
-            .exec()
+        host::unheld(&self.lua, || {
+            self.lua
+                .load(crate::source::chunk(chunk))
+                .set_name(name)
+                .set_mode(mlua::ChunkMode::Text)
+                .exec()
+        })
     }
 
     /// Load and evaluate a Lua chunk, returning its result: for tests and one-shot queries.
     pub fn eval<T: mlua::FromLuaMulti>(&self, chunk: &str) -> mlua::Result<T> {
-        self.lua.load(chunk).set_mode(mlua::ChunkMode::Text).eval()
+        host::unheld(&self.lua, || {
+            self.lua.load(chunk).set_mode(mlua::ChunkMode::Text).eval()
+        })
     }
 
     /// How many values the Lua expression `expr` returns (`"GetItemInfo(1)"`, not a chunk), zero
@@ -1617,7 +1623,10 @@ impl UiScript {
             return;
         };
         for arg in pending {
-            if let Err(e) = arg.value(&self.lua).and_then(|v| handler.call::<()>(v)) {
+            let ran = host::unheld(&self.lua, || {
+                arg.value(&self.lua).and_then(|v| handler.call::<()>(v))
+            });
+            if let Err(e) = ran {
                 self.model_mut()
                     .errors
                     .push(format!("error handler itself failed: {e}"));
