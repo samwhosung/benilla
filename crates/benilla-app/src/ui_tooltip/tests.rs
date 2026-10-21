@@ -1277,6 +1277,7 @@ pub(super) fn mouseover_app() -> (App, Entity, Entity) {
         .init_resource::<crate::go_templates::GameObjectTemplates>()
         .init_resource::<Items>()
         .init_resource::<PlayerActions>()
+        .init_resource::<crate::ui_guild::GuildState>()
         .add_systems(Update, drive_mouseover_tooltip);
     app.world_mut()
         .spawn((SelfPlayer, ObjectStore(ObjectFields::default())));
@@ -1355,6 +1356,34 @@ fn the_mouseover_token_carries_the_hovered_guid() {
         Some(1),
         "the token is itself"
     );
+}
+
+/// `GetGuildInfo("mouseover")` (`0x4c9330`) reads the hovered player's guild from the cache
+/// (`0x4c93d2`), as any token does, from the frame the record lands.
+#[test]
+fn the_mouseover_answers_get_guild_info_from_the_cache() {
+    use benilla_protocol::ObjectFields;
+    let (mut app, _, boar) = mouseover_app();
+    // A player now, in guild 7 at rank 2 (`OBJECT_FIELD_TYPE`, `PLAYER_GUILDID`, `_GUILDRANK`).
+    app.world_mut()
+        .get_mut::<ObjectStore>(boar)
+        .unwrap()
+        .0
+        .merge(ObjectFields::from_pairs(&[(2, 0x19), (191, 7), (192, 2)]));
+    let info = |app: &mut App| -> (Option<String>, i64) {
+        app.world_mut()
+            .non_send_resource::<UiScript>()
+            .eval::<(Option<String>, Option<String>, i64)>(r#"return GetGuildInfo("mouseover")"#)
+            .map(|(name, _, rank)| (name, rank))
+            .unwrap()
+    };
+    hover_unit(&mut app, boar, BOAR);
+    assert_eq!(info(&mut app), (None, 0), "not cached");
+    app.world_mut()
+        .resource_mut::<crate::ui_guild::GuildState>()
+        .land_for_test(7, "Probe Guild");
+    hover_unit(&mut app, boar, BOAR);
+    assert_eq!(info(&mut app), (Some("Probe Guild".to_string()), 2));
 }
 
 /// `UnitCreatureType("mouseover")` goes through the resolver `0x605570` for a hovered player as
