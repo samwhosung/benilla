@@ -1101,9 +1101,10 @@ fn send_spell_cast(
         },
     });
     if let Some(caster) = commit.unit_caster() {
-        // TryCast's attack tail (`0x6e51b5`-`0x6e51de`) on this caster, which its caller applies.
+        // TryCast's attack tail (`0x6e51b5`-`0x6e51de`) on this caster, which its caller applies,
+        // at the guid argument the pick settled (`[ebx+0xc]`, `[ebx+0x10]`), bound or not.
         let mut unit = unit;
-        if let (Some(d), Some(guid), false) = (def, target, unit.engaged) {
+        if let (Some(d), Some(guid), false) = (def, ctx.selection_guid, unit.engaged) {
             if d.initiates_auto_attack() {
                 if let Some(owed) = unit.attack.as_deref_mut() {
                     owed.0 = Some((caster, guid));
@@ -1169,9 +1170,10 @@ fn send_spell_cast(
         core.pop_if(spell_id);
     }
     // TryCast's post-send tail (`6e51b5`): a spell that initiates auto-attack (on-next-swing
-    // `0x404` or `AttributesEx & 0x200`, not the GO-deferred Ex2 bit 20) starts the swing at its
-    // unit target (`0x6131a0` → `0x5ecb70`: sheath snap and `CMSG_ATTACKSWING`).
-    if let (Some(d), Some(guid)) = (def, target) {
+    // `0x404` or `AttributesEx & 0x200`, not the GO-deferred Ex2 bit 20) starts the swing at the
+    // attempt's guid argument as the pick left it (`[ebx+0xc]`, `[ebx+0x10]` at `0x6e51d4`),
+    // whatever the spell bound (`0x6131a0` → `0x5ecb70`: sheath snap and `CMSG_ATTACKSWING`).
+    if let (Some(d), Some(guid)) = (def, ctx.selection_guid) {
         if d.initiates_auto_attack() {
             if let Ok((e, engaged)) = self_player.single() {
                 // The tail's own gate (`6e51cb call 0x60ecb0; 6e51d2 jne`, the attack lock
