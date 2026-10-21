@@ -844,6 +844,43 @@ mod tests {
         }
     }
 
+    /// `0x4b3300` stops the targeting cursor when the book spell pressed is the one awaiting its
+    /// click (`0x4b3474` `GetTargetingSpellId`, `0x4b347d` `StopTargeting`), ahead of its pet fork,
+    /// so `CastSpell(slot, "pet")` on the pet's own armed spell lowers the cursor and sends no order.
+    #[test]
+    fn a_pet_book_cast_of_the_armed_spell_stops_targeting() {
+        let mut f = frame(true);
+        let world = f.app.world_mut();
+        world
+            .resource_mut::<crate::ui_pet::PetBar>()
+            .spells
+            .pet_guid = PET;
+        world
+            .non_send_resource_mut::<UiScript>()
+            .set_pet_book(PetBookState {
+                token: Some("PET".into()),
+                slots: vec![SpellSlotView {
+                    spell_id: GROWL,
+                    name: "Growl".into(),
+                    ..Default::default()
+                }],
+            });
+        world.resource_mut::<crate::spell::SpellTargeting>().enter(
+            GROWL,
+            crate::spell::CastCommit::Pet { caster: PET },
+            0x0002,
+        );
+        run(&mut f, r#"CastSpell(1, "pet")"#);
+        assert_eq!(pet_actions(&f), vec![], "no order");
+        assert!(
+            !f.app
+                .world()
+                .resource::<crate::spell::SpellTargeting>()
+                .active(),
+            "the cursor is down"
+        );
+    }
+
     /// `/target` then `/cast`: `TargetUnit` commits through `SetSelection 0x493540` before it
     /// returns, and `CastSpellByName` (`0x4b4ab0`) casts at the selection as it stands then.
     #[test]
