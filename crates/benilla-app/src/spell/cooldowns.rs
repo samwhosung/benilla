@@ -169,6 +169,9 @@ pub(crate) struct Cooldowns {
     /// The item cooldowns the spell go's item leg holds until the item's record arrives, the
     /// table `0xceca60` of `ITEMCOOLDOWNHASHNODE`s keyed by item entry ([`Self::pend_item`]).
     pending_items: std::collections::HashMap<u32, PendingItem>,
+    /// The item entries a cooldown query found without a record and asked with the callback
+    /// `0x6e2f70` ([`Self::await_item_record`]).
+    awaited_records: std::collections::HashSet<u32>,
 }
 
 /// `StartCooldown 0x6e2c60`'s own arguments: the spell and item, the category, the two remainders
@@ -453,6 +456,21 @@ impl Cooldowns {
             }
         }
         self.flush_item_leg();
+    }
+
+    /// A cooldown query (`0x6e2ed0`, `0x6e2fc0`) found the record of `item_entry` missing and asked
+    /// it with the callback `0x6e2f70` (`0x6e2efb`, `0x6e2fea`).
+    pub(crate) fn await_item_record(&mut self, item_entry: u32) {
+        self.awaited_records.insert(item_entry);
+    }
+
+    /// The callback `0x6e2f70` of each awaited record the item cache now answers.
+    pub(crate) fn answer_awaited_records(
+        &mut self,
+        _items: &crate::items::Items,
+        _spells: Option<&benilla_formats::SpellCatalog>,
+        _now: Instant,
+    ) {
     }
 
     /// Arm the GCD at cast send (`StartGlobalCooldown 0x6e2de0`, from `0x6e58fb`) for any cast or
