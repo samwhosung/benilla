@@ -1272,6 +1272,44 @@ mod tests {
         );
     }
 
+    /// A freed slot keeps its ChannelID (`0x49bbd0` zeroes the number and the name, not `+0x94`),
+    /// and pass 2 finds a row by id in any record (`0x49bef0` tests no number, `0x49bf10`): a zone
+    /// channel the server dropped stays out at the next zone change, until a join reuses its
+    /// record and its id (`0x49b9b0`, `0x49ba01`). Pass 1 skips the record (`0x49a295`).
+    #[test]
+    fn a_dropped_zone_channel_stays_out_until_its_record_is_reused() {
+        let mut c = state(SEED);
+        for name in ["General - Elwynn Forest", "LocalDefense - Elwynn Forest"] {
+            c.claim_slot(name, c.channels.zone_channel_id(name));
+            c.confirm_slot(name);
+        }
+        c.free_slot("General - Elwynn Forest");
+        let steps = plan_walk(&c, "Westfall", OUTSIDE, CITY);
+        assert!(
+            !steps.iter().any(|s| match s {
+                W::Join(name) | W::Leave(name) => name.starts_with("General"),
+                W::Register { name, .. } => name.starts_with("General"),
+                _ => false,
+            }),
+            "{steps:?}"
+        );
+        assert!(
+            steps.contains(&W::Join(s("LocalDefense - Westfall"))),
+            "{steps:?}"
+        );
+
+        assert_eq!(
+            c.claim_slot("MyChan", 0),
+            Some(1),
+            "the custom join takes slot 1"
+        );
+        let steps = plan_walk(&c, "Westfall", OUTSIDE, CITY);
+        assert!(
+            steps.contains(&W::Join(s("General - Westfall"))),
+            "{steps:?}"
+        );
+    }
+
     /// The chat cache's `CHANNELS` names are the walk's third pass: registered with id 0
     /// (`0x49a5da`) and joined (`0x49a5e2`-`0x49a62a`) after the zone channels, then the list is
     /// freed (`0x49a692`-`0x49a69e`). With no zone text the walk skips all three passes

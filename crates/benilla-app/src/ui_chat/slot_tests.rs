@@ -8,7 +8,7 @@ use super::edit::{ChannelSlot, ChannelState, SlotState};
 use super::event::{ChatEvent, ChatEventKind};
 use crate::net::{ClientCommand, NetCommands};
 
-/// Rows 1, 2, 22 and 23 as `ChatChannels.dbc` has them.
+/// Rows 1, 2, 22, 23 and 25 as `ChatChannels.dbc` has them.
 fn catalog() -> benilla_formats::ChatChannelsCatalog {
     benilla_formats::ChatChannelsCatalog::from_rows(
         [
@@ -16,6 +16,7 @@ fn catalog() -> benilla_formats::ChatChannelsCatalog {
             (2, 0x0_003B, "Trade - %s", "Trade"),
             (22, 0x1_0003, "LocalDefense - %s", "LocalDefense"),
             (23, 0x1_0004, "WorldDefense", "WorldDefense"),
+            (25, 0x2_0032, "GuildRecruitment - %s", "GuildRecruitment"),
         ]
         .into_iter()
         .map(
@@ -190,6 +191,147 @@ fn the_four_refusals_free_the_slot_after_their_line() {
         Some(1),
         "any other refusal keeps it"
     );
+}
+
+/// `BANNED` (19) drops the slot as `WRONG_FACTION` does: its arm (`0x49c39a`) copies its token and
+/// jumps into that arm's tail (`0x49c43a`), whose `0x49c446` sets the drop flag, so the slot frees
+/// after the line (`0x49c5b5`-`0x49c5c2`) and a banned custom channel leaves the re-join list.
+#[test]
+fn a_banned_notice_frees_the_slot_after_its_line() {
+    let mut v = Verbs::new(vec![custom("World")]);
+    v.channels.custom = vec!["World".into(), "MyChan".into()];
+    v.apply(join("MyChan", 0));
+    let line = v.notice(n::BANNED, "MyChan");
+    assert_eq!(
+        line.channel, "2. MyChan",
+        "the line reads the slot before it frees"
+    );
+    assert_eq!(v.channels.number_of("MyChan"), None);
+    assert_eq!(
+        v.channels.custom,
+        ["World"],
+        "not re-joined at the next login"
+    );
+    v.apply(join("Other", 0));
+    assert_eq!(
+        v.channels.number_of("Other"),
+        Some(2),
+        "the next join reuses it"
+    );
+}
+
+/// The whole client headless, whose call host every entry that runs Lua lends, holding `held` as
+/// slots 1.. (each confirmed but the last, which waits for its notice) and `script` as its VM.
+struct Client {
+    app: bevy::prelude::App,
+    sent: crossbeam_channel::Receiver<ClientCommand>,
+}
+
+impl Client {
+    fn new(held: &[&str], mut script: UiScript) -> Self {
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let (tx, sent) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        let mut channels = ChannelState {
+            channels: catalog(),
+            zone_mask: Some(0),
+            ..Default::default()
+        };
+        for name in held {
+            channels.claim_slot(name, channels.channels.zone_channel_id(name));
+        }
+        for name in &held[..held.len().saturating_sub(1)] {
+            channels.confirm_slot(name);
+        }
+        channels.mirror_into(&mut script);
+        app.insert_resource(channels);
+        // What the startup builds, which the line drain reads.
+        app.insert_resource(super::commands::SlashCommands::build(|_| None, |_| None));
+        benilla_world::world_point::init_world_point_resources(app.world_mut());
+        app.world_mut().insert_non_send_resource(script);
+        Client { app, sent }
+    }
+
+    fn world(&mut self) -> &mut bevy::prelude::World {
+        self.app.world_mut()
+    }
+
+    /// Run `lua` with the host lent, as every entry that runs Lua does.
+    fn run(&mut self, lua: &str) {
+        crate::script_calls::with_hosted_vm(self.world(), |s| s.expect("a VM").run(lua))
+            .expect("the script runs");
+    }
+
+    fn number_of(&mut self, name: &str) -> Option<u32> {
+        self.world().resource::<ChannelState>().number_of(name)
+    }
+
+    /// The names the `CMSG_JOIN_CHANNEL`s went out under, in order.
+    fn joins(&self) -> Vec<String> {
+        self.sent
+            .try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::JoinChannel { name, .. } => Some(name),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// A handler's join takes its slot inside its call (`0x49edf3`), against the slots as they stand
+/// then: with 1-3 held, a `YOU_JOINED` handler's `JoinChannelByName("X")` takes 4 (`0x49b9b0`),
+/// and the `YOU_LEFT` after it frees 2 and leaves X where it is, the notify handler freeing after
+/// its event (`0x49c5b0`, `0x49c5b5`).
+#[test]
+fn a_handlers_join_keeps_the_slot_its_call_took() {
+    let script = UiScript::new().expect("a VM");
+    script
+        .run(
+            r#"
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")
+            f:SetScript("OnEvent", function()
+                if arg1 == "YOU_JOINED" then JoinChannelByName("X") end
+            end)
+        "#,
+        )
+        .expect("the handler installs");
+    let mut c = Client::new(&["A", "B", "C"], script);
+    {
+        let log = c.world().resource::<super::ChatLog>();
+        let tail = benilla_protocol::messages::ChannelNoticeTail::Empty;
+        log.push_channel_notice(n::YOU_JOINED, "C".into(), &tail);
+        log.push_channel_notice(n::YOU_LEFT, "B".into(), &tail);
+    }
+    super::feed_chat_once(c.world());
+    super::drain_chat_input_once(c.world());
+    assert_eq!(c.number_of("X"), Some(4));
+    assert_eq!(c.number_of("B"), None, "2 is free");
+    assert_eq!(c.joins(), ["X"]);
+}
+
+/// `SetGuildRecruitmentMode(1)` runs the cascade inside the verb (`0x49ea7b` → `0x49eb55` →
+/// `0x49eb70`), whose join takes its slot there (`0x49edf3`): a `/join` the same script makes after
+/// it takes the next one, with 1-2 held 3 and then 4, each sent in that order.
+#[test]
+fn the_cascades_join_takes_its_slot_ahead_of_a_later_join() {
+    let mut script = UiScript::new().expect("a VM");
+    script.set_guild_recruitment_plan(benilla_ui::script::RecruitmentPlan::Join {
+        name: "GuildRecruitment - City".into(),
+        shortcut: "GuildRecruitment".into(),
+        id: 25,
+    });
+    let mut c = Client::new(&["A", "B"], script);
+    c.run("SetGuildRecruitmentMode(1) JoinChannelByName('Y')");
+    super::drain_chat_input_once(c.world());
+    bevy::ecs::system::RunSystemOnce::run_system_once(
+        c.world(),
+        super::recruitment::guild_recruitment_cascade,
+    )
+    .expect("the cascade runs");
+    assert_eq!(c.number_of("GuildRecruitment - City"), Some(3));
+    assert_eq!(c.number_of("Y"), Some(4));
+    assert_eq!(c.joins(), ["GuildRecruitment - City", "Y"]);
 }
 
 /// The name a channel command went out under.
