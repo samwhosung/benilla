@@ -6,8 +6,8 @@
 //! A macro is a record with an id, kept in one list in the order it was made or loaded
 //! (`0xbdcc44`). Lua addresses it by position in a table of 36 ids (`0xbdcc60`): positions 1..=18
 //! the account macros and 19..=36 the character macros, each scope sorted by name
-//! ([`crate::crt`]) and rebuilt after every create, edit and delete (`0x4f0d30`), so the first character
-//! macro is index 19 however few account macros there are. An action slot holds the id
+//! ([`crate::crt`]) and rebuilt after every create, edit and delete (`0x4f0d30`), so the first
+//! character macro is index 19 however few account macros there are. An action slot holds the id
 //! (`macroId | 0x40000000`, `0x4e62e0`), never the position. A macro's bound spell
 //! (`0x4e5a50`'s macro arm returns `[rec+0x564]`) is the app's to derive: it needs the spell catalog
 //! and the player's book.
