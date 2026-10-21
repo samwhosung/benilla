@@ -5,7 +5,7 @@
 //! and `0x4bfa70`'s sends `0x5d4380` and `0x5d4480`). The enchant casts at the partner's slot 7
 //! are the targeting cursor's ([`crate::spell::ScriptCursor::trade_enchant`]).
 
-use benilla_ui::script::{ScriptValue, TradeCall, UiScript};
+use benilla_ui::script::{TradeCall, UiScript};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
@@ -55,20 +55,15 @@ impl TradeSteps<'_, '_> {
                 let _ = net.0.send(ClientCommand::InitiateTrade { target: guid });
             }
             // `0x4bf230`: its gate's tag 5 always passes (`0x4bf233`), an unchanged flag does
-            // nothing (`0x4bf247`), and a change signals both flags, ours first (`0x4bf260`), then
-            // sends (`0x4bf26d`, `0x4bf272`). Nothing tests an open window.
+            // nothing (`0x4bf247`), and a change goes back to the verb, which signals both flags
+            // (`0x4bf260`) before the send below. Nothing tests an open window.
             TradeCall::Accept(flag) => {
-                if !trade.set_our_accept(flag) {
-                    return;
+                if trade.set_our_accept(flag) {
+                    let (mine, theirs) = trade.accepts();
+                    script.trade_accept_moved(mine, theirs);
                 }
-                let (mine, theirs) = trade.accepts();
-                script.fire_event(
-                    "TRADE_ACCEPT_UPDATE",
-                    vec![
-                        ScriptValue::Int(i64::from(mine)),
-                        ScriptValue::Int(i64::from(theirs)),
-                    ],
-                );
+            }
+            TradeCall::SendAccept(flag) => {
                 let _ = net.0.send(if flag {
                     ClientCommand::AcceptTrade {
                         flag: trade.partner_flag(),

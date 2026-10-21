@@ -74,9 +74,13 @@ pub enum TradeCall {
     /// (`0x48a18a`). Nothing tests the target.
     Initiate(u64),
     /// `AcceptTrade()` (`0x4c06e0`) with `true`, `CancelTradeAccept()` (`0x4c06f0`) with `false`:
-    /// `0x4bf230(flag)`, which changes our accept flag, signals `TRADE_ACCEPT_UPDATE` and sends
-    /// `CMSG_ACCEPT_TRADE` or `CMSG_UNACCEPT_TRADE` only when the flag moves.
+    /// `0x4bf230(flag)`'s store (`0x4bf25a`). A flag that moved is reported back
+    /// ([`UiScript::trade_accept_moved`]); the verb then signals `TRADE_ACCEPT_UPDATE`
+    /// (`0x4bf260`) and makes [`Self::SendAccept`] (`0x4bf26d`, `0x4bf272`).
     Accept(bool),
+    /// `0x4bf230`'s send, after its signal: `CMSG_ACCEPT_TRADE` (`0x5d4230`) for `true`,
+    /// `CMSG_UNACCEPT_TRADE` (`0x5d42a0`) for `false`.
+    SendAccept(bool),
     /// `BeginTrade()` (`0x48aa60` → `0x5d40e0`): an empty `CMSG_BEGIN_TRADE`.
     Begin,
     /// `CancelTrade()` (`0x48aa70` → `0x5d4310`): an empty `CMSG_CANCEL_TRADE`.
@@ -167,6 +171,12 @@ impl super::UiScript {
     /// (`0x4bfab3`) and writes nothing.
     pub fn refuse_trade_send(&mut self) {
         self.model_mut().trade_send_refused = true;
+    }
+
+    /// The host's answer to a [`TradeCall::Accept`] that moved our flag: both flags, ours first,
+    /// for the verb's `TRADE_ACCEPT_UPDATE` (`0x4bf24e`).
+    pub fn trade_accept_moved(&mut self, mine: bool, theirs: bool) {
+        self.model_mut().trade_accept_moved = Some((mine, theirs));
     }
 
     /// `TRADE_REPLACE_ENCHANT` with the enchant already on the partner's slot 7 and the one the
@@ -587,6 +597,31 @@ fn place_in_slot(lua: &Lua, i: usize, held: Option<cursor::CursorItem>) -> mlua:
     Ok(true)
 }
 
+/// `0x4bf230(flag)`: the store (the host's [`TradeCall::Accept`]); a flag that moved signals
+/// `TRADE_ACCEPT_UPDATE` with both flags, ours first, in place (`0x4bf260`), then sends
+/// (`0x4bf26d`). An unchanged flag does nothing (`0x4bf247`).
+fn set_accept(lua: &Lua, flag: bool) -> mlua::Result<()> {
+    submit(lua, TradeCall::Accept(flag))?;
+    let moved = lua
+        .app_data_mut::<Model>()
+        .expect("model app_data")
+        .trade_accept_moved
+        .take();
+    let Some((mine, theirs)) = moved else {
+        return Ok(());
+    };
+    super::tick::verb(lua, |model| {
+        model.raise(
+            "TRADE_ACCEPT_UPDATE",
+            vec![
+                super::ScriptValue::Int(i64::from(mine)),
+                super::ScriptValue::Int(i64::from(theirs)),
+            ],
+        )
+    });
+    submit(lua, TradeCall::SendAccept(flag))
+}
+
 /// The bag record behind a held item, as the reference reads its object: `(bound, bonding,
 /// filled seats)`; none when the record is gone or holds another item.
 fn held_record(model: &Model, item: &cursor::CursorItem) -> Option<(bool, u32, Option<u32>)> {
@@ -887,11 +922,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `0x4bf230(0)`.
     g.set(
         "AcceptTrade",
-        lua.create_function(|lua, ()| submit(lua, TradeCall::Accept(true)))?,
+        lua.create_function(|lua, ()| set_accept(lua, true))?,
     )?;
     g.set(
         "CancelTradeAccept",
-        lua.create_function(|lua, ()| submit(lua, TradeCall::Accept(false)))?,
+        lua.create_function(|lua, ()| set_accept(lua, false))?,
     )?;
     // CloseTrade() (`0x4bfdc0`): `PLAYER_TRADE_MONEY` while the done flag `[0xb71748]` is 0
     // (`0x4bfdc7`-`0x4bfdce`), then the close core `0x4bf4e0(0, 0)` (`0x4bfdd9`), which the

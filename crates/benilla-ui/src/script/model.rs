@@ -1003,6 +1003,9 @@ pub(crate) struct Model {
     pub(crate) trade_done: bool,
     /// The host refused the set send the applying `0x4bfa70` made ([`super::TradeCall::SetItem`]).
     pub(crate) trade_send_refused: bool,
+    /// Both accept flags, ours first, when the host's [`super::TradeCall::Accept`] moved ours:
+    /// the verb signals them before it sends (`0x4bf260`, `0x4bf26d`).
+    pub(crate) trade_accept_moved: Option<(bool, bool)>,
     /// The item each of our trade slots holds, as the client's own table records it at the click
     /// (`[0xb716d0]`, written by `0x4bfa70`): the item a later click puts back on the cursor, and
     /// one the client keeps locked until the trade closes (`0x4bfcf0` unlocks them and leaves the
@@ -1785,6 +1788,7 @@ impl Model {
             trade_close: false,
             trade_done: false,
             trade_send_refused: false,
+            trade_accept_moved: None,
             trade_offered: Default::default(),
             quest: None,
             quest_pool_levels: Default::default(),

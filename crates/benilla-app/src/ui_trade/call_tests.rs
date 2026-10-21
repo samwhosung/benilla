@@ -806,3 +806,28 @@ fn the_money_signals_follow_a_status_not_our_edit() {
     );
     assert_eq!(eval::<i64>(&mut t, "return GetPlayerTradeMoney()"), 0);
 }
+
+/// `0x4bf230` signals before it sends (`0x4bf260`, then `0x4bf26d`): a `TRADE_ACCEPT_UPDATE`
+/// handler's own packet leaves ahead of the accept's, and an unchanged flag does neither.
+#[test]
+fn the_accept_signal_runs_before_its_packet() {
+    let mut t = client();
+    open_with_bob(&mut t);
+    run(
+        &mut t,
+        r#"local f = CreateFrame("Frame")
+        f:RegisterEvent("TRADE_ACCEPT_UPDATE")
+        f:SetScript("OnEvent", function() RandomRoll(arg1, 9) end)"#,
+    );
+    run(&mut t, "AcceptTrade() AcceptTrade() CancelTradeAccept()");
+    let sent: Vec<String> = sent(&t).into_iter().map(|c| format!("{c:?}")).collect();
+    assert_eq!(
+        sent,
+        [
+            "RandomRoll { min: 1, max: 9 }",
+            "AcceptTrade { flag: 1 }",
+            "RandomRoll { min: 0, max: 9 }",
+            "UnacceptTrade",
+        ]
+    );
+}
