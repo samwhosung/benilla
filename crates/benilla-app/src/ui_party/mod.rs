@@ -532,27 +532,19 @@ impl GroupState {
     /// when none is left, or none was counted (`0x4bad97`), signals `RAID_ROSTER_UPDATE` then
     /// `PARTY_MEMBERS_CHANGED` (`0x4bad90`-`0x4badb0`); these read no status. Each roster
     /// notice's tests the answer's found byte (`0x4bad46`), then shows its line under the record
-    /// the cache filed, `filed` (`0x4bad6b`-`0x4bad75`), and nothing for a refusal. The party
-    /// seats' run first here; the order the cache runs one node's callbacks in is not derived.
+    /// the cache filed, `filed` (`0x4bad6b`-`0x4bad75`), and nothing for a refusal. The cache runs
+    /// a node's callbacks in the order they were added, each linked at the tail (`0x55f177`,
+    /// `0x55f2ac`, into `0x56d137`) and walked from the head (`0x55f426`-`0x55f452`, refused
+    /// `0x55f788`-`0x55f7b9`): each kind's run here in that order, and the kinds in the order one
+    /// list adds them, its seats', its notices', then its rows' (`0x4e8477`, `0x4ba744`,
+    /// `0x4ba7e3`, `0x4ba9c7`).
     pub fn apply_player_name(&mut self, guid: u64, filed: Option<&str>) -> Vec<UiError> {
         let taken = |waits: &mut Vec<u64>| {
             let before = waits.len();
             waits.retain(|&g| g != guid);
             (before - waits.len()) as u32
         };
-        let party = taken(&mut self.party_name_waits);
-        let raid = taken(&mut self.raid_name_waits);
-        for _ in 0..party {
-            self.signal(GroupSignal::MembersChanged);
-        }
-        for _ in 0..raid {
-            if self.raid_names_pending != 0 {
-                self.raid_names_pending -= 1;
-                if self.raid_names_pending != 0 {
-                    continue;
-                }
-            }
-            self.signal(GroupSignal::RaidRosterUpdate);
+        for _ in 0..taken(&mut self.party_name_waits) {
             self.signal(GroupSignal::MembersChanged);
         }
         let mut lines = Vec::new();
@@ -563,6 +555,16 @@ impl GroupState {
             lines.extend(filed.map(|name| UiError::s(key, name)));
             false
         });
+        for _ in 0..taken(&mut self.raid_name_waits) {
+            if self.raid_names_pending != 0 {
+                self.raid_names_pending -= 1;
+                if self.raid_names_pending != 0 {
+                    continue;
+                }
+            }
+            self.signal(GroupSignal::RaidRosterUpdate);
+            self.signal(GroupSignal::MembersChanged);
+        }
         lines
     }
 
