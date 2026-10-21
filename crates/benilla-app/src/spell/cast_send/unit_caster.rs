@@ -32,11 +32,30 @@ impl PetGcdsOwed {
     }
 }
 
+/// The attack a unit caster's send owes: TryCast's tail calls `StartAttack 0x6131a0` on the caster
+/// at its target (`0x6e51c9`-`0x6e51de`) for a spell that starts melee from its send, unless the
+/// caster is attacking already (`0x60ecb0`). Its caller, which holds the pet bar, applies it
+/// before the next call reads anything ([`crate::ui_pet::PetPress::begin_attack_from_cast`]).
+/// The caster and the target.
+#[derive(Resource, Default)]
+pub(crate) struct UnitAttackOwed(pub(super) Option<(u64, u64)>);
+
+impl UnitAttackOwed {
+    /// The attack owed since the last take.
+    pub(crate) fn take(&mut self) -> Option<(u64, u64)> {
+        self.0.take()
+    }
+}
+
 /// What the attempt reads besides its caster when that caster is not the active player.
 pub(super) struct UnitCaster<'a> {
     /// The active player's guid (`0x468550`).
     pub(super) active: Option<u64>,
     pub(super) pet_gcds: Option<&'a mut PetGcdsOwed>,
+    /// The caster's `[unit+0xc48]` (`0x60ecb0`), which the pick (`0x6e4eeb`) and the attack tail
+    /// (`0x6e51cb`) test.
+    pub(super) engaged: bool,
+    pub(super) attack: Option<&'a mut UnitAttackOwed>,
 }
 
 impl TargetedBind {
@@ -55,10 +74,25 @@ impl TargetedBind {
 
 impl CastLadder<'_, '_> {
     /// The pet bar's press through the attempt with `caster`, the bar's unit, at the press's
-    /// target (`0x4bd378`-`0x4bd385`): the ladder as a player's press runs it, with no attack
-    /// pick held, sent as `CMSG_PET_CAST_SPELL`.
+    /// target (`0x4bd378`-`0x4bd385`): the ladder as a player's press runs it, held at the attack
+    /// pick with the unit as its actor (`0x6e4ef4`), sent as `CMSG_PET_CAST_SPELL`.
     pub(crate) fn send_pet(&mut self, spell_id: u32, ctx: &cast_target::CastContext, caster: u64) {
-        self.send_bound(spell_id, ctx, CastCommit::Pet { caster }, None, None);
+        let held = super::HeldCast {
+            spell_id,
+            on_self: false,
+            unit: Some(super::UnitPress {
+                caster,
+                target: ctx.selection_guid,
+            }),
+        };
+        self.send_bound(spell_id, ctx, CastCommit::Pet { caster }, None, Some(held));
+    }
+
+    /// The attack a unit caster's send owes ([`UnitAttackOwed`]), if one does.
+    pub(crate) fn take_unit_attack(&mut self) -> Option<(u64, u64)> {
+        self.unit_attack
+            .as_deref_mut()
+            .and_then(UnitAttackOwed::take)
     }
 
     /// [`send_tail`] for a cursor's commit of a unit caster's cast.
@@ -71,9 +105,12 @@ impl CastLadder<'_, '_> {
             reports: &mut self.reports,
             net: &self.commands,
         };
+        // A cursor's commit is past TryCast, whose attack tail it never reaches.
         let unit = UnitCaster {
             active: self.active.as_ref().and_then(|g| g.0),
             pet_gcds: self.pet_gcds.as_deref_mut(),
+            engaged: false,
+            attack: None,
         };
         send_tail(
             spell_id,

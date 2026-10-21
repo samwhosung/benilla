@@ -161,11 +161,32 @@ impl CallHost for ScriptCallHost<'_, '_> {
         // there is picked and resumed before the next call reads the selection.
         if let Some(held) = appliers.p3().ladder.take_held() {
             // A held press passed tag 2 to be held, so the pick's tag 4 passes as well.
-            if appliers.p7().pick_for_cast(held) {
-                let mut cast = appliers.p3();
-                let ctx = cast.targeting.context();
-                cast.ladder.resume_after_pick(held, &ctx);
+            match held.unit {
+                None => {
+                    if appliers.p7().pick_for_cast(held) {
+                        let mut cast = appliers.p3();
+                        let ctx = cast.targeting.context();
+                        cast.ladder.resume_after_pick(held, &ctx);
+                    }
+                }
+                // The pet bar's unit as the pick's actor (`0x6e4ef4`), which settles the guid the
+                // attempt goes on with (`0x6e4ef7`).
+                Some(press) => {
+                    if let Some(guid) = appliers.p6().pick_for_unit_cast(press) {
+                        let mut cast = appliers.p3();
+                        if let Some(ctx) =
+                            cast.targeting.context_for_caster(press.caster, Some(guid))
+                        {
+                            cast.ladder.resume_after_pick(held, &ctx);
+                        }
+                    }
+                }
             }
+        }
+        // A unit caster's send owes its attack tail (`0x6e51de` → `0x6131a0`), which presses the
+        // pet bar's Attack before the attempt returns.
+        if let Some(owed) = appliers.p3().ladder.take_unit_attack() {
+            pet_in_order!(appliers, begin_attack_from_cast(owed));
         }
         // Whatever casts next is the engine's own, which asks no gate.
         appliers.p3().ladder.permit(true);

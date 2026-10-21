@@ -31,6 +31,7 @@ pub(crate) mod validator;
 // `send_spell_cast` is private to `cast_send`, so no second send path can exist.
 pub(crate) use cast_send::{
     CastCommit, CastLadder, HeldCast, HeldForPick, PetGcdsOwed, ScriptCastPermit, TargetedBind,
+    UnitAttackOwed, UnitPress,
 };
 pub(crate) use cast_target::AutoSelfCast;
 pub(crate) use cooldowns::Cooldowns;
@@ -80,6 +81,7 @@ impl Plugin for SpellPlugin {
             .init_resource::<SpellTargeting>()
             .init_resource::<HeldForPick>()
             .init_resource::<PetGcdsOwed>()
+            .init_resource::<UnitAttackOwed>()
             .init_resource::<ScriptCastPermit>()
             .init_resource::<CursorPicks>()
             .init_resource::<targeting::EnchantConfirmItem>()

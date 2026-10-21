@@ -32,8 +32,8 @@ use crate::ui_action::{reagent_totem_refusal, CastFail, Spells};
 use crate::ui_cast::CastReports;
 
 mod unit_caster;
-pub(crate) use unit_caster::PetGcdsOwed;
 use unit_caster::UnitCaster;
+pub(crate) use unit_caster::{PetGcdsOwed, UnitAttackOwed};
 
 /// What the commit sends: `SendCast 0x6e54f0` branches on whether the pending-cast guid
 /// (`0xceac48`, the item's when TryCast got one, else the caster's) is the caster's; the item arm
@@ -109,6 +109,17 @@ pub(crate) struct HeldCast {
     /// Pressed with the self-cast modifier: TryCast's guid argument is then the caster
     /// (`0x4e610e`), which the pick tries before the selection.
     pub(crate) on_self: bool,
+    /// The pet bar's press with its unit as the caster (`0x4bd385`), `None` for the active
+    /// player's own.
+    pub(crate) unit: Option<UnitPress>,
+}
+
+/// A unit caster's press held at the attack pick: the caster, the pick's actor (`0x6e4ef4`), and
+/// TryCast's guid argument, the press's target, which the pick takes as its candidate (`0x6e4ef7`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct UnitPress {
+    pub(crate) caster: u64,
+    pub(crate) target: Option<u64>,
 }
 
 /// Whether the script call being applied passed the protected-action gate's tag 2, which opens
@@ -176,6 +187,12 @@ pub(crate) struct CastLadder<'w, 's> {
     /// The GCDs a unit caster's sends started in the pet's history (`0x6e58fb`); absent in a
     /// world with no pet bar.
     pet_gcds: Option<ResMut<'w, PetGcdsOwed>>,
+    /// The units attacking (`[unit+0xc48]`, which `0x60ecb0` tests): a unit caster's pick and
+    /// attack tail read its own.
+    engaged_units: Query<'w, 's, (), With<crate::creature_anim::Engaged>>,
+    /// The attack a unit caster's send owes the pet bar (`0x6e51de`); absent in a world with no
+    /// pet bar.
+    unit_attack: Option<ResMut<'w, UnitAttackOwed>>,
 }
 
 /// Whether `ReportCastFailure 0x6e1a00` reaches its tail for `fail`
@@ -382,7 +399,11 @@ impl CastLadder<'_, '_> {
         ctx: &cast_target::CastContext,
         on_self: bool,
     ) {
-        let held = HeldCast { spell_id, on_self };
+        let held = HeldCast {
+            spell_id,
+            on_self,
+            unit: None,
+        };
         self.send_bound(spell_id, ctx, CastCommit::Spell, None, Some(held));
     }
 
@@ -391,10 +412,14 @@ impl CastLadder<'_, '_> {
         self.held_for_pick.0.take()
     }
 
-    /// A held press after its pick, at the unit the pick left selected. The rungs above the pick
-    /// run again; none reads the selection, so each passes as it did.
+    /// A held press after its pick, at the unit the pick left selected, or for a unit caster at
+    /// the guid it settled (`0x6e4efb` writes TryCast's argument). The rungs above the pick run
+    /// again; none reads the selection, so each passes as it did.
     pub(crate) fn resume_after_pick(&mut self, held: HeldCast, ctx: &cast_target::CastContext) {
-        self.send_bound(held.spell_id, ctx, CastCommit::Spell, None, None);
+        let commit = held.unit.map_or(CastCommit::Spell, |unit| CastCommit::Pet {
+            caster: unit.caster,
+        });
+        self.send_bound(held.spell_id, ctx, commit, None, None);
     }
 
     /// The ladder for a cast the caller already bound to a GameObject (a lock opener): TryCast
@@ -455,6 +480,11 @@ impl CastLadder<'_, '_> {
             UnitCaster {
                 active: self.active.as_ref().and_then(|g| g.0),
                 pet_gcds: self.pet_gcds.as_deref_mut(),
+                engaged: commit
+                    .unit_caster()
+                    .and_then(|guid| self.objects.entity(guid))
+                    .is_some_and(|e| self.engaged_units.contains(e)),
+                attack: self.unit_attack.as_deref_mut(),
             },
         );
     }
@@ -716,7 +746,11 @@ fn send_spell_cast(
     // hostile selection or selects the nearest enemy. It sits above the bind and the range gate,
     // so an acquired target out of reach reads "Out of range.".
     if let Some(held) = hold {
-        let engaged = self_player.single().is_ok_and(|(_, engaged)| engaged);
+        // `0x60ecb0` on the caster (`0x6e4ee8`).
+        let engaged = match commit.unit_caster() {
+            Some(_) => unit.engaged,
+            None => self_player.single().is_ok_and(|(_, engaged)| engaged),
+        };
         if def.is_some_and(|d| d.initiates_combat()) && !engaged {
             debug!("ui_action: cast {spell_id} holds for the attack pick");
             held_for_pick.0 = Some(held);
@@ -1021,6 +1055,15 @@ fn send_spell_cast(
         },
     });
     if let Some(caster) = commit.unit_caster() {
+        // TryCast's attack tail (`0x6e51b5`-`0x6e51de`) on this caster, which its caller applies.
+        let mut unit = unit;
+        if let (Some(d), Some(guid), false) = (def, target, unit.engaged) {
+            if d.initiates_auto_attack() {
+                if let Some(owed) = unit.attack.as_deref_mut() {
+                    owed.0 = Some((caster, guid));
+                }
+            }
+        }
         unit_caster::send_tail(
             spell_id, caster, def, objects, core, cooldowns, unit, spell_mods, now,
         );
@@ -1847,7 +1890,8 @@ mod tests {
             press(&mut world, RAPTOR_STRIKE),
             Some(HeldCast {
                 spell_id: RAPTOR_STRIKE,
-                on_self: false
+                on_self: false,
+                unit: None,
             })
         );
         assert!(rx.try_recv().is_err(), "a held press sends nothing");

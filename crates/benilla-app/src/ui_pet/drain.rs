@@ -8,7 +8,7 @@ use std::time::Instant;
 use bevy::prelude::*;
 
 use benilla_protocol::messages::{
-    PetActionEntry, PET_COMMAND_ATTACK, PET_COMMAND_FOLLOW, PET_COMMAND_STAY,
+    PetActionEntry, PET_ACT_COMMAND, PET_COMMAND_ATTACK, PET_COMMAND_FOLLOW, PET_COMMAND_STAY,
 };
 
 use crate::net::{ClientCommand, NetCommands, ObjectStore};
@@ -96,12 +96,46 @@ impl PetPress<'_, '_> {
     /// halves.
     pub(crate) fn begin_slot(&mut self, slot: u32) -> Option<PetStep> {
         let entry = slot_entry(&self.bar, slot)?;
-        self.begin_press(slot, entry)
+        self.begin_press(slot, entry, None)
     }
 
     /// [`Self::order`]'s first half; see [`Self::begin_slot`].
     pub(crate) fn begin_order(&mut self, packed: u32) -> Option<PetStep> {
-        self.begin_press(0, PetActionEntry::from(packed))
+        self.begin_press(0, PetActionEntry::from(packed), None)
+    }
+
+    /// TryCast's attack pick for a press the bar handed the attempt (`0x6e4efb`:
+    /// `0x612df0(unit, &guid)`), the validator with that unit as the actor and the press's target
+    /// as its candidate: the guid the cast goes on at, or `None` once refused.
+    pub(crate) fn pick_for_unit_cast(&mut self, press: crate::spell::UnitPress) -> Option<u64> {
+        let actor = self.pet.store(press.caster);
+        if crate::ui_action::attack_actor_refusal(actor, self.pet.self_guid.0, &self.ui_errors) {
+            return None;
+        }
+        self.pick.target(
+            press.target,
+            true,
+            &mut self.selection,
+            &mut self.seam,
+            &self.ui_errors,
+        )
+    }
+
+    /// `StartAttack 0x6131a0` on a unit caster at its cast's target, TryCast's tail
+    /// (`0x6e51de`): the attack validator with the unit as the actor (`0x6131aa`), then, for the
+    /// pet bar's unit (`0x613200`-`0x613212`), the bar's Attack at the guid it settled
+    /// (`0x613217` → `0x4bd630`, word `0x07000002`), through the dispatcher a press takes. Any
+    /// other unit does nothing more.
+    pub(crate) fn begin_attack_from_cast(&mut self, (caster, guid): (u64, u64)) -> Option<PetStep> {
+        let guid = self.pick_for_unit_cast(crate::spell::UnitPress {
+            caster,
+            target: Some(guid),
+        })?;
+        if caster != self.bar.spells.pet_guid {
+            return None;
+        }
+        let attack = PET_COMMAND_ATTACK | (u32::from(PET_ACT_COMMAND) << 24);
+        self.begin_press(0, PetActionEntry::from(attack), Some(guid))
     }
 
     /// The second half of a press: its `CMSG_PET_ACTION`.
@@ -133,10 +167,16 @@ impl PetPress<'_, '_> {
 
     /// Send under [`PetBar`]'s pet guid, never one from the VM, so a press queued as the pet
     /// leaves dies here. `CMSG_PET_ACTION` echoes the slot's word, which the server dispatches on
-    /// its type, with our selection as the target; `HandlePetAction` drops a target the spell
-    /// does not want. The dispatcher's first act is the usability predicate (`0x4bd1f2`), and a
-    /// zero answer leaves for the epilogue (`0x4bd1f9`) ahead of everything below it.
-    fn begin_press(&mut self, slot: u32, entry: PetActionEntry) -> Option<PetStep> {
+    /// its type, with `passed` as the target, else the selection (`0x4bd1ff`-`0x4bd212`);
+    /// `HandlePetAction` drops a target the spell does not want. The dispatcher's first act is the
+    /// usability predicate (`0x4bd1f2`), and a zero answer leaves for the epilogue (`0x4bd1f9`)
+    /// ahead of everything below it.
+    fn begin_press(
+        &mut self,
+        slot: u32,
+        entry: PetActionEntry,
+        passed: Option<u64>,
+    ) -> Option<PetStep> {
         let Self {
             bar,
             selection,
@@ -191,8 +231,8 @@ impl PetPress<'_, '_> {
             None
         };
         // Only Attack runs `0x612df0`, the attack validator with the pet as actor, whose target
-        // pick can move the selection; every other press sends the selection as is (`0x4bd212`).
-        let mut target_guid = selection.guid.unwrap_or(0);
+        // pick can move the selection; every other press sends its target as is.
+        let mut target_guid = passed.or(selection.guid).unwrap_or(0);
         // A spell with `AttributesEx4 & 0x20` (`0x4bd355`), or any spell of the unit the player
         // possesses (`0x4bd35e`-`0x4bd365`), goes to the attempt with that unit as its caster and
         // returns: no packet of the bar's, no GCD of this arm's, nothing latched.
@@ -205,7 +245,7 @@ impl PetPress<'_, '_> {
         }
         let refused = if is_attack_order(entry) {
             crate::ui_action::attack_actor_refusal(Some(pet_store), pet.self_guid.0, ui_errors)
-                || match pick.target(None, true, selection, seam, ui_errors) {
+                || match pick.target(passed, true, selection, seam, ui_errors) {
                     Some(guid) => {
                         target_guid = guid;
                         false
