@@ -3200,6 +3200,32 @@ fn a_lines_target_tokens_name_the_selection() {
     );
 }
 
+/// `0x5083a0`'s player-name cache leg passes no callback (`0x508488`-`0x50849f`), so a selected
+/// guid the client neither holds nor has a name for reads `TARGET_TOKEN_NOT_FOUND`, and the lookup
+/// returns without a query (`0x55f125`): no `CMSG_NAME_QUERY` goes out.
+#[test]
+fn a_target_token_asks_no_name_for_a_guid_the_client_does_not_hold() {
+    use crate::net::ClientCommand;
+    use crate::target::Selection;
+
+    let (mut world, rx) = super::chat_world(in_world_vm());
+    world.insert_resource(Selection {
+        target: None,
+        guid: Some(0x44),
+        ..Default::default()
+    });
+    super::run_chat(
+        &mut world,
+        r#"TARGET_TOKEN_NOT_FOUND = "<no target>" SendChatMessage("at %t")"#,
+    )
+    .expect("lua");
+    let sent: Vec<_> = rx.try_iter().collect();
+    assert!(
+        matches!(sent.as_slice(), [ClientCommand::Chat { text, .. }] if text == "at <no target>"),
+        "the line alone: {sent:?}"
+    );
+}
+
 /// `SendChatMessage` acknowledges the Chatting tutorial (`AcknowledgeTutorial(0x16)`, `0x49f5fc`)
 /// for every type past the dead check, the living's say included; the AFK arm ends the call
 /// ahead of it (`0x49f525`), and so does a refused line.
