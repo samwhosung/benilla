@@ -774,19 +774,22 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // UnitXP/UnitXPMax(unit): `PLAYER_XP` is a private field, so only `"player"` has a value and
-    // any other token answers 0.
-    let is_player = |token: &Option<String>| token.as_deref() == Some("player");
+    // UnitXP/UnitXPMax(unit): the token resolved (`0x51738e`), then the active player's private
+    // `PLAYER_XP` pair for its object by whatever token names it (`0x5173ad`-`0x5173c9`), 0 for
+    // any other unit or none.
+    fn names_self(model: &Model, token: &str) -> bool {
+        token.eq_ignore_ascii_case("player")
+            || (model.unit_guids.player != 0
+                && model.unit_guids.resolve(token).ok().flatten() == Some(model.unit_guids.player))
+    }
     g.set(
         "UnitXP",
-        lua.create_function(move |lua, token: Value| {
-            let token = Some(crate::script::binding_abi::string_arg(
-                lua,
-                token,
-                r#"Usage: UnitXP("unit")"#,
-            )?);
+        lua.create_function(|lua, token: Value| {
+            let token =
+                crate::script::binding_abi::string_arg(lua, token, r#"Usage: UnitXP("unit")"#)?;
+            check_unit_token(&Some(token.clone()))?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(if is_player(&token) {
+            Ok(if names_self(&model, &token) {
                 i64::from(model.player_xp)
             } else {
                 0
@@ -795,14 +798,12 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "UnitXPMax",
-        lua.create_function(move |lua, token: Value| {
-            let token = Some(crate::script::binding_abi::string_arg(
-                lua,
-                token,
-                r#"Usage: UnitXPMax("unit")"#,
-            )?);
+        lua.create_function(|lua, token: Value| {
+            let token =
+                crate::script::binding_abi::string_arg(lua, token, r#"Usage: UnitXPMax("unit")"#)?;
+            check_unit_token(&Some(token.clone()))?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(if is_player(&token) {
+            Ok(if names_self(&model, &token) {
                 i64::from(model.player_next_level_xp)
             } else {
                 0

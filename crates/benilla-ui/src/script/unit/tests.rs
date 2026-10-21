@@ -570,7 +570,7 @@ fn get_money_reads_the_pushed_purse() {
 }
 
 #[test]
-fn unit_xp_reads_the_player_globals_only_for_the_player_token() {
+fn unit_xp_reads_the_player_globals() {
     let mut s = UiScript::new().unwrap();
     assert_eq!(s.eval::<i64>(r#"return UnitXP("player")"#).unwrap(), 0);
     assert_eq!(s.eval::<i64>(r#"return UnitXPMax("player")"#).unwrap(), 0);
