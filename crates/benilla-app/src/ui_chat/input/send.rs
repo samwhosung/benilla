@@ -35,8 +35,9 @@ impl ChatSender<'_, '_> {
 
     /// `SendChatMessage` from its group gates on, in the reference's order: the group gates and
     /// the leader promotion, the channel slot, the AFK clear or the AFK arm, the DND arm, the dead
-    /// check (`0x49f592`), the `%` expander (`0x49f60f`), the escape scan (`0x49f661`), and the
-    /// packet (`0x49f6c3`). What a step does stands when a later step ends the call or raises.
+    /// check (`0x49f592`), the tutorial (`0x49f5fc`), the `%` expander (`0x49f60f`), the escape
+    /// scan (`0x49f661`), and the packet (`0x49f6c3`). What a step does stands when a later step
+    /// ends the call or raises.
     pub(crate) fn send_chat(&mut self, script: &mut UiScript, mut send: ChatSend) {
         // The binding has raised on any other token (`0x49f27f`), so none reaches here.
         let Some(mut kind) = SendType::from_token(&send.chat_type) else {
@@ -65,11 +66,6 @@ impl ChatSender<'_, '_> {
             }
             send.target = name;
         }
-        // `SendChatMessage`'s tutorial acknowledge (`0x49f5fc`) covers the twelve social types,
-        // not say, yell or emote.
-        if !matches!(kind, SendType::Say | SendType::Yell | SendType::Emote) {
-            script.queue_tutorial_acknowledge(crate::tutorial::id::CHATTING);
-        }
         let wire = kind.wire();
         // The AFK arm (`0x49f4f3`-`0x49f562`) ends the call with its own packet.
         if wire == ChatKind::Afk {
@@ -95,6 +91,9 @@ impl ChatSender<'_, '_> {
                 .push(crate::ui_action::UiError::key("ERR_CHAT_WHILE_DEAD"));
             return;
         }
+        // `AcknowledgeTutorial(0x16)` (`0x49f5fc`), for every type that gets past the dead check,
+        // the living's say, yell and emote included.
+        script.queue_tutorial_acknowledge(crate::tutorial::id::CHATTING);
         let mut text =
             benilla_ui::script::expand_target_tokens(&send.text, || self.target_name(script));
         // A drunk player's text goes through `0x508680` here (`0x49f614`-`0x49f656`), which
