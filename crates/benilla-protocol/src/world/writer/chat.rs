@@ -57,6 +57,11 @@ impl WorldWriter {
         self.send(opcode::MSG_RANDOM_ROLL, &messages::random_roll(min, max))
     }
 
+    /// Play a one-shot emote (`CMSG_EMOTE`), the wave a placed bid sends (`0x4cc60c`).
+    pub fn emote(&mut self, emote: u32) -> Result<()> {
+        self.send(opcode::CMSG_EMOTE, &messages::emote(emote))
+    }
+
     /// Perform a text emote (EmotesText id, target or 0), echoed to everyone in range, us included.
     pub fn text_emote(&mut self, text_id: u32, target: u64) -> Result<()> {
         self.send(

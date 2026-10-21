@@ -1,5 +1,6 @@
 //! The auction window's app side: [`net`] fills [`AuctionOpen`] from the wire, [`feed_auction`]
-//! pushes it into the VM and fires its events, and [`drain_auction`] sends the Lua intents.
+//! pushes it into the VM and fires its events, the call host applies the verbs inside their calls
+//! ([`AuctionVerbs`]), and [`drain_auction`] follows the header clicks and the close verb.
 //!
 //! The hello reply opens the window, not the click (`0x4cd570` fires `AUCTION_HOUSE_SHOW` inside
 //! the hello handler). Browse, Bids and Auctions are independent lists, as in the reference's
@@ -14,7 +15,7 @@
 
 use bevy::prelude::*;
 
-use benilla_protocol::messages::{auction_filter, AuctionListEntry};
+use benilla_protocol::messages::AuctionListEntry;
 use benilla_ui::auction_sort::{sort_column, AuctionSortStack};
 use benilla_ui::script::{
     AuctionCategory, AuctionHighBidder, AuctionItemRow, AuctionListState, AuctionState,
@@ -26,17 +27,23 @@ use crate::items::Items;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands, SelfPlayer};
 use crate::query_cache::Ask;
+use crate::script_calls::VmWith;
 use crate::ui_action::{show_messages, ui_error_text, MessageSink, Shown, UiError};
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 
 mod net;
+mod verbs;
+
+pub(crate) use verbs::AuctionVerbs;
 
 #[cfg(test)]
 mod sort_tests;
+#[cfg(test)]
+mod verb_tests;
 
 /// The browse rate limit: `0x4ce980` arms `tick + 0x1388` once sent; a refused query fires nothing.
-const QUERY_THROTTLE_SECS: f64 = 5.0;
+pub(super) const QUERY_THROTTLE_SECS: f64 = 5.0;
 
 /// `ItemSubClass.dbc` `DisplayFlags` bit 1: left out of the auction category filter (`0x4cf9c0`).
 const SUBCLASS_HIDDEN_FROM_AUCTIONS: u32 = 0x2;
@@ -65,14 +72,12 @@ const SUBCLASS_OFFERS_INV_TYPES: u32 = 0x200;
 pub(crate) struct AuctionHouses(pub(crate) benilla_formats::AuctionHouseCatalog);
 
 /// One of the three lists.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct AuctionListSlot {
     /// The current page in wire order.
     pub(crate) entries: Vec<AuctionListEntry>,
     /// `totalCount`, the match count before the page cap; the pager reads it.
     pub(crate) total: u32,
-    /// A result for this list landed, an empty page included; the refreshes gate on it.
-    received: bool,
     /// Which result `entries` came from, from [`AuctionOpen::next_page`].
     page: u32,
     /// The millisecond tick the result was read at (`0x4cc865`), each row's deadline base, on
@@ -101,7 +106,7 @@ impl Default for SortStacks {
 
 /// What the live probe (`crate::capture::ProbeAuctionPlugin`) reads to tell an empty answer from
 /// none; the client never reads it, and [`AuctionOpen::clear`] does not reset it.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct AuctionWireLog {
     /// List results landed, per list, in [`LIST`]/[`BIDDER`]/[`OWNER`] order.
     pub(crate) list_results: [u32; 3],
@@ -113,7 +118,7 @@ pub(crate) struct AuctionWireLog {
 
 /// The auctioneer session, closed by its close core and on disconnect, and the three lists, which
 /// outlive it.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub(crate) struct AuctionOpen {
     pub(crate) auctioneer: Option<u64>,
     /// The `AuctionHouse.dbc` row (1..=7), which keys the deposit rate.
@@ -126,16 +131,39 @@ pub(crate) struct AuctionOpen {
     list_result_landed: [bool; 3],
     /// The `Time::elapsed_secs_f64` before which a browse query is refused (`0xb72638`): the
     /// hello and the world-enter reset clear it, the close leaves it.
-    query_gate: Option<f64>,
+    pub(super) query_gate: Option<f64>,
     /// Messages queued for [`feed_auction`]; [`Self::clear`] keeps them, since a sale notice can
     /// land after a close.
     pub(crate) messages: Vec<AuctionMessage>,
     /// How many of `messages`, from the front, a feed has read: the rest came since, each with its
     /// notification's lookup with a callback (`0x4ccfa2`, `0x4cd41f`, `0x4cd51a`).
     messages_asked: usize,
-    /// A list we hold went stale (a sale, an outbid, a cancel): the drain re-asks its page 0.
-    pending_owner_refresh: bool,
-    pending_bidder_refresh: bool,
+    /// The one-shot request flags, owner (`0xb7263c`) and bidder (`0xb72640`): the hello arms both
+    /// (`0x4cd5a8`, `0x4cd5ae`), as do an owner or bidder result whose count is not its total
+    /// (`0x4ccc35`, `0x4cce85`) and a successful start or bid (`0x4cc4da`, `0x4cc522`); the close
+    /// (`0x4cd624`, `0x4cd629`), the world-enter reset (`0x4cc2b9`, `0x4cc2be`) and the send
+    /// (`0x4cd6e9`, `0x4cd814`) clear them.
+    pub(crate) owner_armed: bool,
+    pub(crate) bidder_armed: bool,
+    /// The offsets the owner and bidder requests last went out at (`0xb72650`, `0xb72654`), which a
+    /// successful start or bid asks again; the hello zeroes them (`0x4cd5d2`, `0x4cd5d7`), the
+    /// reset leaves them.
+    owner_offset: u32,
+    bidder_offset: u32,
+    /// The outbid list, `{house, auction}` pairs (`0xb72594`, count `0xb72634`): a bidder notice
+    /// that we were outbid appends (`0x4cde50`), a placed bid removes its auction (`0x4cdf30`), and
+    /// the bidder request sends the open house's ids (`0x4cd7a4`-`0x4cd7e8`) and removes a pair of
+    /// that house (`0x4cdf90`). Nothing else clears it.
+    pub(crate) outbid: Vec<(u32, u32)>,
+    /// How often a full append has doubled the list's room (`0xb72590`), eight pairs at start-up
+    /// (`0x4cc213`).
+    outbid_doublings: u32,
+    /// The amount the last `PlaceAuctionBid` sent (`0xb72658`, stored at `0x4cf91e`), which a
+    /// placed bid's result writes into its browse row (`0x4cc56b`).
+    pub(crate) last_bid: u32,
+    /// The auctions a result or a notice removed (`0x4cdfe0`), each with the page every list held
+    /// it on, for the feed to remove from the VM's lists while they hold that page.
+    removals: Vec<(u32, [Option<u32>; 3])>,
     /// The count [`AuctionListSlot::page`] is drawn from; never reset, so no two results share one.
     next_page: u32,
     /// The key stacks; neither [`Self::open`] nor [`Self::clear`] touches them.
@@ -143,8 +171,25 @@ pub(crate) struct AuctionOpen {
     pub(crate) wire: AuctionWireLog,
 }
 
-/// One of the reference's twenty auction message rows: the twelve refusals (`0x16c`-`0x177`) are
-/// kind 2, on the red `UIErrorsFrame`; the eight outcomes (`0x178`-`0x17f`) are kind 0, in chat.
+/// How far past the tick a bid notice pushes a deadline at least (`0x15f90`, `0x4cc5a2`).
+const DEADLINE_FLOOR_MS: u32 = 90_000;
+
+/// The outbid list's room at start-up (`0x4cc213`), doubled by each full append.
+const OUTBID_ROOM: usize = 8;
+
+/// What a bid result or notice writes into a cached row: the bid (`+0x40`), the increment
+/// (`+0x2c`) when the packet carries it, the high bidder (`+0x38`), and, with `floor_at` the tick
+/// now, the deadline (`+0x34`) raised to at least 90 s after it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RowPatch {
+    pub(crate) bid: u32,
+    pub(crate) increment: Option<u32>,
+    pub(crate) bidder: u64,
+    pub(crate) floor_at: Option<u32>,
+}
+
+/// A message an auction handler shows (`0x496720`): a refusal on the red `UIErrorsFrame`, or one of
+/// the eight outcomes (`0x178`-`0x17f`, kind 0) in chat.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AuctionMessage {
     pub(crate) key: &'static str,
@@ -166,7 +211,7 @@ impl AuctionMessage {
         }
     }
 
-    /// A refusal; none of the twelve takes a fill.
+    /// A refusal, which takes no fill: the command result pushes the id alone (`0x4cc79e`).
     pub(crate) fn error(key: &'static str) -> Self {
         Self { key, item: None }
     }
@@ -174,17 +219,20 @@ impl AuctionMessage {
 
 impl AuctionOpen {
     /// The hello reply (`0x4cd570`): the auctioneer and house stored, the browse gate zeroed
-    /// (`0x4cd5a3`) and every list emptied (`0x4cd5b4`-`0x4cd5cd`), from the auctioneer already
-    /// open as from any other; the show re-fires on every greeting. A list's owed tail, the sort
-    /// stacks and the selection stay.
+    /// (`0x4cd5a3`), both request flags armed (`0x4cd5a8`, `0x4cd5ae`), every list emptied
+    /// (`0x4cd5b4`-`0x4cd5cd`) and the saved offsets zeroed (`0x4cd5d2`, `0x4cd5d7`), from the
+    /// auctioneer already open as from any other; the show re-fires on every greeting. A list's
+    /// owed tail, the sort stacks, the selection and the outbid list stay.
     pub(crate) fn open(&mut self, auctioneer: u64, house_id: u32) {
         self.auctioneer = Some(auctioneer);
         self.house_id = house_id;
         self.empty_lists();
         self.query_gate = None;
         self.show_requested = true;
-        self.pending_owner_refresh = false;
-        self.pending_bidder_refresh = false;
+        self.owner_armed = true;
+        self.bidder_armed = true;
+        self.owner_offset = 0;
+        self.bidder_offset = 0;
     }
 
     /// Every list's count and total zeroed, as the hello and the world-enter reset write them.
@@ -194,7 +242,6 @@ impl AuctionOpen {
             self.next_page = self.next_page.wrapping_add(1);
             slot.entries.clear();
             slot.total = 0;
-            slot.received = false;
             slot.page = self.next_page;
         }
     }
@@ -204,7 +251,6 @@ impl AuctionOpen {
         self.list_result_landed[which] = true;
         self.next_page = self.next_page.wrapping_add(1);
         let slot = &mut self.lists[which];
-        slot.received = true;
         slot.entries = entries;
         slot.total = total.max(slot.entries.len() as u32);
         slot.page = self.next_page;
@@ -212,32 +258,104 @@ impl AuctionOpen {
         slot.awaiting = Some(slot.entries.iter().map(|e| e.item_entry).collect());
     }
 
-    /// Re-query our listings next frame, only with a session to send it and a list we hold: the
-    /// reference patches its cached rows, so a list it never fetched announces nothing.
-    pub(crate) fn refresh_owner(&mut self) {
-        self.pending_owner_refresh |= self.auctioneer.is_some() && self.lists[OWNER].received;
+    /// `0x4cdfe0`: the auction leaves each list that holds it, the later rows moving up and the
+    /// total kept, signalling nothing here; the feed removes it from the VM's lists and signals
+    /// there ([`UiScript::remove_auction_from`]). It checks no session, so a closed window's lists
+    /// change too.
+    pub(crate) fn remove_auction(&mut self, auction_id: u32) {
+        let _ = auction_id;
     }
 
-    /// Re-query our bids next frame, under [`Self::refresh_owner`]'s rule.
-    pub(crate) fn refresh_bidder(&mut self) {
-        self.pending_bidder_refresh |= self.auctioneer.is_some() && self.lists[BIDDER].received;
+    /// Write a bid notice into `list`'s row for `auction_id`, if the list holds it; the feed's
+    /// diff signals the list.
+    pub(crate) fn patch_row(&mut self, list: usize, auction_id: u32, patch: &RowPatch) {
+        let slot = &mut self.lists[list];
+        let Some(e) = slot.entries.iter_mut().find(|e| e.auction_id == auction_id) else {
+            return;
+        };
+        e.current_bid = patch.bid;
+        if let Some(increment) = patch.increment {
+            e.min_increment = increment;
+        }
+        e.bidder_guid = patch.bidder;
+        if let Some(now) = patch.floor_at {
+            // `+0x34` raised to now plus 90 s when at or under it (`cmp edi,eax; jbe`), on the
+            // result's tick, which this frame's feed stamps when it has not yet.
+            let arrived = slot.arrived_ms.unwrap_or(now);
+            let floor = now.wrapping_add(DEADLINE_FLOOR_MS);
+            if arrived.wrapping_add(e.time_left_ms) <= floor {
+                e.time_left_ms = floor.wrapping_sub(arrived);
+            }
+        }
     }
 
-    /// The close (`0x4cd5f0`), client-side, sending nothing: the auctioneer and house zeroed
-    /// (`0x4cd613`-`0x4cd61f`). The lists, their owed tails and the browse gate stand, as the
-    /// reference leaves its counts and its throttle.
+    /// `0x4cde50`: the pair appended; on a full list the room doubles and the pair is written past
+    /// the count without raising it (`0x4cde9a`-`0x4cdf1c`), so it is lost.
+    pub(crate) fn outbid_append(&mut self, house: u32, auction_id: u32) {
+        let _ = (house, auction_id, OUTBID_ROOM, self.outbid_doublings);
+    }
+
+    /// `0x4cdf30`: the first pair of `auction_id` removed, whatever its house.
+    fn outbid_remove(&mut self, auction_id: u32) {
+        let _ = auction_id;
+    }
+
+    /// `0x4cdf90`: the first pair of `house` removed. Its loop shifts the later pairs down with the
+    /// scan's own index and then steps it past the count (`0x4cdfb6`-`0x4cdfdb`), so it ends after
+    /// the first match.
+    fn outbid_remove_house(&mut self, house: u32) {
+        let _ = house;
+    }
+
+    /// The owner list's sender `0x4cd680`: while the flag is armed, `CMSG_AUCTION_LIST_OWNER_ITEMS`
+    /// at `offset` with the auctioneer cell as it stands, then the flag cleared and the offset
+    /// saved (`0x4cd6e9`, `0x4cd6ef`). It tests no auctioneer.
+    pub(crate) fn send_owner_list(&mut self, commands: &NetCommands, offset: u32) {
+        let _ = commands.0.send(ClientCommand::AuctionListOwnerItems {
+            auctioneer: self.auctioneer.unwrap_or(0),
+            list_from: offset,
+        });
+        self.owner_armed = false;
+        self.owner_offset = offset;
+    }
+
+    /// The bidder list's sender `0x4cd720`: while the flag is armed, `CMSG_AUCTION_LIST_BIDDER_ITEMS`
+    /// at `offset` with the outbid ids of the open house (`0x4cd7b6`), then a pair of that house
+    /// removed (`0x4cd808`), the flag cleared and the offset saved (`0x4cd814`, `0x4cd81a`).
+    pub(crate) fn send_bidder_list(&mut self, commands: &NetCommands, offset: u32) {
+        let house = self.house_id;
+        let auction_ids = self
+            .outbid
+            .iter()
+            .filter(|&&(h, _)| h == house)
+            .map(|&(_, a)| a)
+            .collect();
+        let _ = commands.0.send(ClientCommand::AuctionListBidderItems {
+            auctioneer: self.auctioneer.unwrap_or(0),
+            list_from: offset,
+            auction_ids,
+        });
+        self.outbid_remove_house(house);
+        self.bidder_armed = false;
+        self.bidder_offset = offset;
+    }
+
+    /// The close (`0x4cd5f0`), client-side, sending nothing: the auctioneer, house and request
+    /// flags zeroed (`0x4cd613`-`0x4cd629`). The lists, their owed tails and the browse gate stand,
+    /// as the reference leaves its counts and its throttle.
     pub(crate) fn clear(&mut self) {
         self.auctioneer = None;
         self.house_id = 0;
         self.show_requested = false;
-        self.pending_owner_refresh = false;
-        self.pending_bidder_refresh = false;
+        self.owner_armed = false;
+        self.bidder_armed = false;
         self.list_result_landed = [false; 3];
     }
 
-    /// The world-enter cascade's reset (`0x4cc280`): the session closed, every list emptied with
-    /// its owed tail (`0x4cc296`-`0x4cc2cd`) and the browse gate zeroed (`0x4cc2b4`); the sort
-    /// stacks stay.
+    /// The world-enter cascade's reset (`0x4cc280`): the session closed with its request flags
+    /// (`0x4cc2b9`, `0x4cc2be`), every list emptied with its owed tail (`0x4cc296`-`0x4cc2cd`) and
+    /// the browse gate zeroed (`0x4cc2b4`); the sort stacks, the saved offsets and the outbid list
+    /// stay.
     pub(crate) fn reset_world_state(&mut self) {
         self.clear();
         self.empty_lists();
@@ -316,8 +434,8 @@ impl Plugin for UiAuctionPlugin {
                 Update,
                 (
                     // The feed before the input pass, and after `UnitFeed` so a row's tooltip reads
-                    // a landed template; the drain after the input pass so a click goes out the
-                    // same frame.
+                    // a landed template; the drain after the input pass so a header click or a
+                    // close lands the same frame.
                     // Only with the interface up: a sale notice landing in the login burst would
                     // otherwise be shown on the glue VM and lost.
                     feed_auction
@@ -345,15 +463,14 @@ impl Plugin for UiAuctionPlugin {
 /// lists cleared ([`AuctionOpen::reset_world_state`]) and the selection with them, signalling
 /// nothing else. The emptied lists reach the VM with the feed that follows.
 fn reset_auction_on_world_enter(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    mut vm: VmWith<ResMut<'static, AuctionOpen>>,
     mut cascades: MessageReader<crate::net::WorldEnterCascadeMessage>,
-    mut auction: ResMut<AuctionOpen>,
 ) {
-    hosted_vm.run(|script| {
-        if cascades.read().count() == 0 {
-            return;
-        }
-        auction.reset_world_state();
+    if cascades.read().count() == 0 {
+        return;
+    }
+    vm.own().reset_world_state();
+    vm.run(|script| {
         if let Some(script) = script {
             script.clear_auction_sell_item();
             script.clear_auction_selections();
@@ -393,8 +510,7 @@ fn high_bidder(
     names: &NameCache,
     ask: Ask<'_>,
 ) -> AuctionHighBidder {
-    let owned = list == OWNER && self_guid.is_some_and(|g| g == entry.owner_guid);
-    if owned {
+    if is_owned(list, entry, self_guid) {
         if entry.bidder_guid == 0 {
             return AuctionHighBidder::Nil;
         }
@@ -411,10 +527,20 @@ fn high_bidder(
     }
 }
 
+/// An `"owner"` row the player owns (`0x4cf131`-`0x4cf142`), whose eleventh value is a name.
+fn is_owned(list: usize, entry: &AuctionListEntry, self_guid: Option<u64>) -> bool {
+    list == OWNER && self_guid.is_some_and(|g| g == entry.owner_guid)
+}
+
+/// An owned row with a bid (`0x4cf150`): the bidder whose name `GetAuctionItemInfo` reads.
+fn owned_with_bid(list: usize, entry: &AuctionListEntry, self_guid: Option<u64>) -> bool {
+    is_owned(list, entry, self_guid) && entry.bidder_guid != 0
+}
+
 /// One wire entry of `list` as a display row, through the ask-once template and name caches; a
 /// `None` fills in when its answer lands. The link carries the row's enchant, property and suffix.
-/// Read as `ask` says: the list's packet looks each item up with a callback (`0x4cc9bf`,
-/// `0x4ccbff`, `0x4cce4f`), and `GetAuctionItemInfo` each name (`0x4cf167`, `0x4cf1c8`).
+/// The item is read as `ask` says, the list's packet looking each up with a callback (`0x4cc9bf`,
+/// `0x4ccbff`, `0x4cce4f`); the names only from the cache.
 fn resolve_row(
     list: usize,
     entry: &AuctionListEntry,
@@ -462,11 +588,20 @@ fn resolve_row(
         deadline: arrived_ms.wrapping_add(entry.time_left_ms),
         bidder_rank: bidder_rank(entry.bidder_guid, self_guid),
         base_name: template.map(|t| t.name.clone()),
-        high_bidder: high_bidder(list, entry, self_guid, names, ask),
+        // The names are read, never asked: `GetAuctionItemInfo` asks what it misses
+        // ([`UiScript::take_auction_name_asks`]), and the seller sort reads the cache alone
+        // (`0x4cdbda`).
+        high_bidder: high_bidder(list, entry, self_guid, names, Ask::Read),
         owner: names
-            .resolve_player(entry.owner_guid, ask)
+            .resolve_player(entry.owner_guid, Ask::Read)
             .map(str::to_string),
         link,
+        owner_guid: entry.owner_guid,
+        named_bidder: if owned_with_bid(list, entry, self_guid) {
+            entry.bidder_guid
+        } else {
+            0
+        },
     }
 }
 
@@ -518,10 +653,10 @@ type AuctionCatalogs<'w> = (
     Option<Res<'w, crate::items::Enchants>>,
 );
 
-/// Push the auction house into the VM and fire its events on a change, diffed against `VmMemo`s.
+/// Push the auction house into the VM and fire its events on a change, diffed against `VmMemo`s:
+/// an engine turn, since the house is the call host's too, whose events' handlers run as it ends.
 fn feed_auction(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut auction: ResMut<AuctionOpen>,
+    mut vm: VmWith<ResMut<'static, AuctionOpen>>,
     items: Res<Items>,
     icons: Option<Res<ItemDisplays>>,
     names: Res<NameCache>,
@@ -537,7 +672,7 @@ fn feed_auction(
     mut last_classes: Local<crate::ui_script::VmMemo<Vec<AuctionCategory>>>,
     mut closes: CoreCloses,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, mut auction| {
         let Some(script) = script else {
             return;
         };
@@ -590,6 +725,31 @@ fn feed_auction(
             auction.messages_asked = deferred.len();
             auction.messages = deferred;
             show_messages(script, &mut sink, "ui_auction", lines);
+        }
+
+        // The names `GetAuctionItemInfo` missed, asked with the list's callback (`0x4cf167`,
+        // `0x4cf1c8`), whose answer the diff below signals.
+        for guid in script.take_auction_name_asks() {
+            let _ = names.resolve_player(guid, Ask::Event(&commands));
+        }
+
+        // What a result or notice removed (`0x4cdfe0`) leaves the VM's lists that still hold the
+        // page it left, each signalled as its copy finishes; what was pushed forgets it too, so
+        // the diff owes nothing more for it.
+        for (auction_id, pages) in std::mem::take(&mut auction.removals) {
+            let lists: [bool; 3] =
+                std::array::from_fn(|i| pages[i].is_some() && pages[i] == script.auction_page(i));
+            if !lists.contains(&true) {
+                continue;
+            }
+            script.remove_auction_from(auction_id, lists);
+            if let Some(pushed) = last.as_mut() {
+                for (list, held) in pushed.lists.iter_mut().zip(lists) {
+                    if held {
+                        list.rows.retain(|r| r.auction_id != auction_id);
+                    }
+                }
+            }
         }
 
         let self_guid = self_q.iter().next().map(|g| g.0);
@@ -712,15 +872,10 @@ fn list_content(state: Option<&AuctionState>, list: usize) -> Option<(&[AuctionI
     state.map(|s| (s.lists[list].rows.as_slice(), s.lists[list].total))
 }
 
-/// Drain the Lua intents into the auction `CMSG`s.
-fn drain_auction(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut auction: ResMut<AuctionOpen>,
-    mut world_commands: Commands,
-    commands: Res<NetCommands>,
-    time: Res<Time>,
-) {
-    hosted_vm.run(|script| {
+/// The header clicks into the app's copy of the stacks, and the close verb into its core; every
+/// other verb applies inside its call ([`AuctionVerbs`]).
+fn drain_auction(mut vm: VmWith<ResMut<'static, AuctionOpen>>, mut world_commands: Commands) {
+    vm.turn(|script, mut auction| {
         let Some(script) = script else {
             return;
         };
@@ -732,98 +887,8 @@ fn drain_auction(
                 stack.promote(column);
             }
         }
-        let Some(auctioneer) = auction.auctioneer else {
-            // No session: a stray close finds no cell (`0x4cd5fb`); every other intent is dropped.
-            let _ = script.take_auction_close();
-            let _ = script.take_auction_query();
-            let _ = script.take_auction_owner_query();
-            let _ = script.take_auction_bidder_query();
-            let _ = script.take_auction_bids();
-            let _ = script.take_auction_cancels();
-            let _ = script.take_auction_starts();
-            return;
-        };
-
-        // The browse query, behind the gate the Search button reads.
-        if let Some(q) = script.take_auction_query() {
-            let now = time.elapsed_secs_f64();
-            if auction.query_gate.is_none_or(|gate| now >= gate) {
-                auction.query_gate = Some(now + QUERY_THROTTLE_SECS);
-                auction.wire.browse_sent += 1;
-                let _ = commands.0.send(ClientCommand::AuctionListItems {
-                    auctioneer,
-                    list_from: q.page.saturating_mul(50),
-                    searched_name: q.name,
-                    level_min: u8::try_from(q.min_level).unwrap_or(u8::MAX),
-                    level_max: u8::try_from(q.max_level).unwrap_or(u8::MAX),
-                    slot_id: q.inv_type.unwrap_or(auction_filter::ANY),
-                    // Already ids: the binding maps menu positions as `0x4ce980` does.
-                    main_category: q.class.unwrap_or(auction_filter::ANY),
-                    sub_category: q.sub_class.unwrap_or(auction_filter::ANY),
-                    quality: q.quality.unwrap_or(auction_filter::ANY),
-                    usable: u8::from(q.usable_only),
-                });
-            }
-        }
-
-        if std::mem::take(&mut auction.pending_owner_refresh) {
-            let _ = commands.0.send(ClientCommand::AuctionListOwnerItems {
-                auctioneer,
-                list_from: 0,
-            });
-        }
-        if std::mem::take(&mut auction.pending_bidder_refresh) {
-            let _ = commands.0.send(ClientCommand::AuctionListBidderItems {
-                auctioneer,
-                list_from: 0,
-                auction_ids: Vec::new(),
-            });
-        }
-
-        if let Some(page) = script.take_auction_owner_query() {
-            let _ = commands.0.send(ClientCommand::AuctionListOwnerItems {
-                auctioneer,
-                list_from: page.saturating_mul(50),
-            });
-        }
-        if let Some(page) = script.take_auction_bidder_query() {
-            // An empty refresh set: the reference sends the ids it was outbid on (it keeps eight),
-            // which this does not track, so only the auctions we lead are listed.
-            let _ = commands.0.send(ClientCommand::AuctionListBidderItems {
-                auctioneer,
-                list_from: page.saturating_mul(50),
-                auction_ids: Vec::new(),
-            });
-        }
-
-        // Bids and cancels name the auction their verb read at its row (`0x4cf610`, `0x4d0260`).
-        for bid in script.take_auction_bids() {
-            let _ = commands.0.send(ClientCommand::AuctionPlaceBid {
-                auctioneer,
-                auction_id: bid.auction_id,
-                price: bid.amount,
-            });
-        }
-        for auction_id in script.take_auction_cancels() {
-            let _ = commands.0.send(ClientCommand::AuctionRemoveItem {
-                auctioneer,
-                auction_id,
-            });
-        }
-
-        // `StartAuction` emptied the sell slot in the verb (`0x4ce92a`); it sends the guid the
-        // attach stored (`0x4ce8f3`), wherever the item has since gone.
-        for req in script.take_auction_starts() {
-            let _ = commands.0.send(ClientCommand::AuctionSellItem {
-                auctioneer,
-                item_guid: req.item_guid,
-                bid: req.min_bid,
-                buyout: req.buyout,
-                etime_minutes: req.duration,
-            });
-        }
-
-        if script.take_auction_close() {
+        // With no session a stray close finds no cell (`0x4cd5fb`).
+        if script.take_auction_close() && auction.auctioneer.is_some() {
             crate::ui_session::queue(&mut world_commands, close_core);
         }
     })
@@ -922,33 +987,6 @@ mod tests {
         open.lists[OWNER].awaiting = None;
         open.set_list(BIDDER, Vec::new(), 0);
         assert_eq!(owed(&open), [false, true, false]);
-    }
-
-    #[test]
-    fn a_refresh_never_introduces_a_list_the_interface_never_asked_for() {
-        let mut open = AuctionOpen::default();
-        open.open(0x1234, 1);
-
-        open.refresh_owner();
-        open.refresh_bidder();
-        assert!(
-            !open.pending_owner_refresh && !open.pending_bidder_refresh,
-            "we hold neither list, so neither can have gone stale"
-        );
-
-        // The Auctions tab was shown and answered, even empty: now a sale makes it stale.
-        open.set_list(OWNER, Vec::new(), 0);
-        open.refresh_owner();
-        assert!(open.pending_owner_refresh, "a list we hold can go stale");
-        assert!(
-            !open.pending_bidder_refresh,
-            "and the other one still cannot"
-        );
-
-        // Closing forgets it: a notice after the close re-asks nothing.
-        open.clear();
-        open.refresh_owner();
-        assert!(!open.pending_owner_refresh);
     }
 
     const ME: u64 = 0x77;
@@ -1176,14 +1214,16 @@ mod tests {
             (seen, bidder)
         };
 
-        // The window opens with the page; the bidder is unknown, so nil and asked for.
+        // The window opens with the page, which asks no name; the read finds the bidder unknown,
+        // so nil, and asks for it (`0x4cf167`), which the next feed sends.
         let (_, bidder) = step(&mut app);
         assert_eq!(bidder, None);
-        assert_eq!(name_queries(&rx), vec![BIDDER_GUID]);
+        assert!(name_queries(&rx).is_empty(), "the page asks no name");
 
         let (seen, bidder) = step(&mut app);
         assert!(seen.is_empty(), "nothing new, nothing fired: {seen:?}");
         assert_eq!(bidder, None);
+        assert_eq!(name_queries(&rx), vec![BIDDER_GUID], "the read asked it");
 
         app.world_mut().resource_mut::<NameCache>().insert_player(
             BIDDER_GUID,
@@ -1193,51 +1233,6 @@ mod tests {
         let (seen, bidder) = step(&mut app);
         assert_eq!(bidder.as_deref(), Some("Bidder"));
         assert_eq!(seen, vec!["AUCTION_OWNED_LIST_UPDATE".to_string()]);
-    }
-
-    /// A list's packet looks its items up with a callback (`0x4ccbff`), and `GetAuctionItemInfo`
-    /// the bidder's name (`0x4cf167`), on the list's update; the frames between read. A refused
-    /// bidder is asked by no frame, and again by the list's next result.
-    #[test]
-    fn a_refused_bidder_is_asked_at_the_next_list_result_never_by_a_frame() {
-        let mut app = App::new();
-        app.init_resource::<AuctionOpen>()
-            .init_resource::<Items>()
-            .init_resource::<NameCache>()
-            .init_resource::<Time>()
-            .init_resource::<crate::ui_chat::ChatLog>()
-            .init_resource::<crate::sound::MessageSounds>()
-            .add_systems(Update, feed_auction);
-        let (tx, rx) = crossbeam_channel::unbounded();
-        app.insert_resource(NetCommands(tx));
-        app.world_mut()
-            .resource_mut::<NameCache>()
-            .insert_player(ME, "Seller".into(), None);
-        app.insert_non_send_resource(UiScript::new().unwrap());
-        app.world_mut().spawn((SelfPlayer, crate::net::Guid(ME)));
-        app.world_mut()
-            .resource_mut::<AuctionOpen>()
-            .open(0x1234, 1);
-        let list = |app: &mut App| {
-            app.world_mut().resource_mut::<AuctionOpen>().set_list(
-                OWNER,
-                vec![entry(ME, BIDDER_GUID)],
-                1,
-            );
-        };
-        list(&mut app);
-        app.update();
-        assert_eq!(name_queries(&rx), vec![BIDDER_GUID]);
-        app.world_mut()
-            .resource_mut::<NameCache>()
-            .insert_player(BIDDER_GUID, String::new(), None);
-        for _ in 0..600 {
-            app.update();
-        }
-        assert!(name_queries(&rx).is_empty(), "no frame asks the refusal");
-        list(&mut app);
-        app.update();
-        assert_eq!(name_queries(&rx), vec![BIDDER_GUID], "the next result does");
     }
 
     /// The feed and the sweep's auction leg, the feed's other inputs at rest.

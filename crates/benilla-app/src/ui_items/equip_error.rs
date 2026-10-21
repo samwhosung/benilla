@@ -10,7 +10,7 @@
 /// A refusal reason's key, total like the reference's errorId table (`0x622794`). Positions are
 /// vmangos `ItemDefines.h` with every band up to 5875 (stunned 37, dead 38, inventory full 50).
 /// Reason 1's string carries a `%d` for the required level.
-pub(super) fn equip_error_key(reason: u8) -> &'static str {
+pub(crate) fn equip_error_key(reason: u8) -> &'static str {
     match reason {
         1 => "ERR_CANT_EQUIP_LEVEL_I",
         2 => "ERR_CANT_EQUIP_SKILL",

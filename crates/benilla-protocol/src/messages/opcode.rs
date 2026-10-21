@@ -110,6 +110,8 @@ pub const SMSG_PLAY_OBJECT_SOUND: u16 = 0x0278;
 pub const SMSG_PLAY_SOUND: u16 = 0x02D2;
 /// The zone's weather, pushed by the server.
 pub const SMSG_WEATHER: u16 = 0x02F4;
+/// One `u32` emote, the placed bid's wave (`0x4cc5dd`).
+pub const CMSG_EMOTE: u16 = 0x0102;
 pub const SMSG_EMOTE: u16 = 0x0103;
 pub const CMSG_TEXT_EMOTE: u16 = 0x0104;
 pub const SMSG_TEXT_EMOTE: u16 = 0x0105;

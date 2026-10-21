@@ -66,15 +66,25 @@ fn the_auction_sell_button_paints_the_attached_item_in_place() {
     assert_eq!(name.as_deref(), Some("Linen Cloth"));
 
     // `StartAuction` empties the slot in the verb (`0x4ce92a` → `0x4cd640`): its
-    // `NEW_AUCTION_UPDATE` has repainted the button before the call returns.
-    s.set_auction(benilla_ui::script::AuctionState {
-        open: true,
-        ..Default::default()
+    // `NEW_AUCTION_UPDATE` has repainted the button before the call returns. The host here does
+    // the start's clear as the auction applier does after its send ([`crate::ui_auction`]).
+    let mut starts = 0;
+    let mut host = crate::script_calls::FnHost(|script: &mut UiScript, call| {
+        if let benilla_ui::script::ScriptCall::Auction(benilla_ui::script::AuctionCall::Start(
+            Ok(_),
+        )) = call
+        {
+            starts += 1;
+            script.clear_auction_sell_item();
+        }
     });
     let name: Option<String> = s
-        .eval("StartAuction(100, 0, 120) return AuctionsItemButtonName:GetText()")
+        .hosted(&mut host, |s| {
+            s.eval("StartAuction(100, 0, 120) return AuctionsItemButtonName:GetText()")
+        })
         .unwrap();
     assert!(s.errors().is_empty(), "{:?}", s.errors());
     assert_eq!(name, None, "the button still names the sent item");
-    assert_eq!(s.take_auction_starts().len(), 1);
+    drop(host);
+    assert_eq!(starts, 1);
 }

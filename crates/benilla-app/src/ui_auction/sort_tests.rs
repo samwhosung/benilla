@@ -2,7 +2,7 @@
 //! wire's results through the handlers, the feed and the drain to the VM's getters, as the window
 //! reads them.
 
-use benilla_protocol::messages::AuctionListEntry;
+use benilla_protocol::messages::{AuctionCommandTail, AuctionListEntry, AuctionOwnerNotification};
 use benilla_protocol::SessionEvent;
 use benilla_ui::script::{UiScript, BIDDER, LIST, OWNER};
 use bevy::prelude::*;
@@ -39,8 +39,16 @@ impl House {
             )
             .add_plugins(super::UiAuctionPlugin);
         let (tx, rx) = crossbeam_channel::unbounded();
-        app.insert_resource(NetCommands(tx));
-        app.world_mut().spawn((SelfPlayer, crate::net::Guid(ME)));
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<crate::net::GuidIndex>();
+        // A purse for the bids (`PLAYER_FIELD_COINAGE`).
+        app.world_mut().spawn((
+            SelfPlayer,
+            crate::net::Guid(ME),
+            crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
+                1176, 1_000_000,
+            )])),
+        ));
         let mut house = Self { app, rx };
         house.new_vm();
         house
@@ -158,10 +166,21 @@ impl House {
         self.app.world_mut().non_send_resource_mut::<UiScript>()
     }
 
-    /// A chunk of Lua, then two frames: whatever the chunk leaves for the drain has reached the
-    /// getters by the second.
+    /// A chunk of Lua with the auction verbs' host lent, then two frames: whatever the chunk
+    /// leaves for the drain has reached the getters by the second.
     fn lua(&mut self, chunk: &str) {
-        self.script().run(chunk).unwrap();
+        let world = self.app.world_mut();
+        let mut state =
+            bevy::ecs::system::SystemState::<(NonSendMut<UiScript>, super::AuctionVerbs)>::new(
+                world,
+            );
+        {
+            let (mut script, mut verbs) = state.get_mut(world);
+            script
+                .hosted(&mut AuctionHost(&mut verbs), |s| s.run(chunk))
+                .unwrap();
+        }
+        state.apply(world);
         self.app.update();
         self.app.update();
     }
@@ -209,6 +228,23 @@ impl House {
             .resource_mut::<NextState<ClientState>>()
             .set(ClientState::InWorld);
         self.app.update();
+    }
+}
+
+/// The call host's auction applier alone, lent by [`House::lua`]: this world has no other
+/// engine half.
+struct AuctionHost<'a, 'w, 's>(&'a mut super::AuctionVerbs<'w, 's>);
+
+impl benilla_ui::script::CallHost for AuctionHost<'_, '_, '_> {
+    fn apply(
+        &mut self,
+        script: &mut UiScript,
+        call: benilla_ui::script::ScriptCall,
+    ) -> Option<benilla_ui::script::CallTail> {
+        if let benilla_ui::script::ScriptCall::Auction(call) = call {
+            self.0.apply(script, call);
+        }
+        None
     }
 }
 
@@ -561,4 +597,20 @@ fn the_selection_outlasts_the_close_and_the_hello() {
     h.land(LIST, vec![entry(2, 2), entry(1, 1), entry(3, 1)]);
     assert_eq!(h.order("list"), "Copper Bar,Copper Bar,Tin Bar");
     assert_eq!(h.eval::<i64>("return GetSelectedAuctionItem('list')"), 3);
+}
+
+/// The wire's sends since the last call that list or name, as text.
+fn requests(h: &House) -> Vec<String> {
+    h.rx.try_iter()
+        .filter(|c| {
+            matches!(
+                c,
+                ClientCommand::AuctionListOwnerItems { .. }
+                    | ClientCommand::AuctionListBidderItems { .. }
+                    | ClientCommand::AuctionListItems { .. }
+                    | ClientCommand::NameQuery { .. }
+            )
+        })
+        .map(|c| format!("{c:?}"))
+        .collect()
 }

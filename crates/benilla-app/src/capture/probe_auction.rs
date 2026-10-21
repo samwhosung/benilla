@@ -366,15 +366,18 @@ fn error_name(error: u32) -> &'static str {
 fn auction_probe(
     time: ProbeClock,
     mut probe: ResMut<AuctionProbe>,
-    auction: Res<AuctionOpen>,
-    mut hosted_vm: crate::script_calls::HostedVm,
+    mut vm: crate::script_calls::VmWith<Res<'static, AuctionOpen>>,
     self_player: Query<&ObjectStore, With<SelfPlayer>>,
     player: Res<Player>,
     units: Query<(&Guid, &NetEntity, &ObjectStore, &Transform), Without<SelfPlayer>>,
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    hosted_vm.run(|script| {
+    // The house as this frame found it: the verbs the probe's Lua calls apply in the call, through
+    // the host, which holds the house while it does.
+    let auction = vm.own().clone();
+    let auction = &auction;
+    vm.run(|script| {
         let Ok(store) = self_player.single() else {
             return; // not in-world yet
         };

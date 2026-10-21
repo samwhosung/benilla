@@ -142,6 +142,9 @@ pub enum ScriptCall {
     EnchantConfirm(super::EnchantAnswer),
     /// A loot window verb, a row's own click among them ([`super::LootCall`]).
     Loot(super::LootCall),
+    /// An auction verb past its binding's checks: its gates, refusals and packet
+    /// ([`super::AuctionCall`]).
+    Auction(super::AuctionCall),
 }
 
 /// The mode the four `TargetNearest*` shims hand the TAB cycler `0x493f60`, the only byte that

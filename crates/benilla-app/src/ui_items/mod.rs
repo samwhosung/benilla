@@ -30,6 +30,7 @@ use drain::{
     drain_bag_autostores, drain_container_autoequips, drain_container_destroys,
     drain_container_moves, drain_container_repairs,
 };
+pub(crate) use equip_error::equip_error_key;
 // `UseContainerItem` and `UseInventoryItem`, applied in call order by `crate::script_calls`.
 pub(crate) use drain::ScriptItemUse;
 use feed::{
@@ -250,7 +251,8 @@ impl InventoryScope {
     };
     /// `0x4F`: [`Self::DEFAULT`] plus the bank, what mask `8` becomes. The quest surfaces pass it
     /// to `0x622130`: `GetQuestLogLeaderBoard` (`0x4e0579`, `0x4e0592`), the ADD_ITEM toast
-    /// (`0x5dd0f5`), the turn-in predicate (`0x4df778`) and `GetAbandonQuestItems` (`0x4dfc8a`).
+    /// (`0x5dd0f5`), the turn-in predicate (`0x4df778`) and `GetAbandonQuestItems` (`0x4dfc8a`);
+    /// `PlaceAuctionBid`'s unique check passes `0x4f` itself (`0x4cf892`).
     pub(crate) const QUEST_ITEMS: Self = Self {
         bank: true,
         ..Self::DEFAULT

@@ -1062,6 +1062,10 @@ pub(crate) enum ClientCommand {
         slot: u8,
         count: u8,
     },
+    /// `CMSG_EMOTE`: a one-shot emote, the wave a placed bid sends (`0x4cc5dd`-`0x4cc60c`).
+    Emote {
+        emote: u32,
+    },
     /// `CMSG_TEXT_EMOTE`; our own sound and animation ride the `SMSG_TEXT_EMOTE` echo.
     TextEmote {
         text_id: u32,
