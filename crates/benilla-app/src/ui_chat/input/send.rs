@@ -168,9 +168,10 @@ impl ChatSender<'_, '_> {
     }
 
     /// The name `0x5083a0` puts for a token (`0x50844a`-`0x5084bc`): with a selection, a unit the
-    /// client holds is named by `GetUnitName` (`0x609210`), whose miss is `UNKNOWNOBJECT`; a guid
-    /// it does not hold by the player-name cache (`0x55f080`); with neither, or no selection,
-    /// `TARGET_TOKEN_NOT_FOUND`.
+    /// client holds is named by `GetUnitName` (`0x609210`), which asks its caches with a callback
+    /// (`0x60924e`) and whose miss is `UNKNOWNOBJECT`; a guid it does not hold by the player-name
+    /// cache with none (`0x508488`-`0x50849f`), which asks nothing on a miss (`0x55f125`); with
+    /// neither, or no selection, `TARGET_TOKEN_NOT_FOUND`.
     fn target_name(&self, script: &UiScript) -> String {
         let not_found = || {
             super::super::combat::global_string(script, "TARGET_TOKEN_NOT_FOUND")
@@ -179,7 +180,6 @@ impl ChatSender<'_, '_> {
         let Some(guid) = self.selection.guid.filter(|&g| g != 0) else {
             return not_found();
         };
-        let ask = crate::query_cache::Ask::New(&self.commands);
         match self
             .objects
             .store(guid)
@@ -187,11 +187,15 @@ impl ChatSender<'_, '_> {
         {
             Some(unit) => self
                 .names
-                .resolve_unit(guid, Some(unit), ask)
+                .resolve_unit(
+                    guid,
+                    Some(unit),
+                    crate::query_cache::Ask::New(&self.commands),
+                )
                 .map_or_else(|| script.unknown_object_text(), str::to_owned),
             None => self
                 .names
-                .resolve_player(guid, ask)
+                .resolve_player(guid, crate::query_cache::Ask::Read)
                 .map_or_else(not_found, str::to_owned),
         }
     }
