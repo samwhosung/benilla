@@ -35,19 +35,22 @@ pub(crate) struct Precast {
 }
 
 /// `SendCast`'s precast for the active player's send (`0x6e5877`-`0x6e5898`): a spell other
-/// than the unit's `+0xc8c` (`0x6e588f`) starts it. The flag `0x6e5885` tests is set only by the
-/// trade slot's bind (`0x6e694f`), which benilla does not build, so every send reaches it.
-pub(crate) fn precast_at_send(player: Option<Entity>, spell_id: u32, edits: &super::UnitEdits) {
-    if let Some(entity) = player {
+/// than the unit's `+0xc8c` (`0x6e588f`) starts it, if it resolves a visual
+/// ([`super::PrecastVisuals`]). The flag `0x6e5885` tests is set only by the trade slot's bind
+/// (`0x6e694f`), which benilla does not build, so every send reaches it.
+pub(crate) fn precast_at_send(
+    player: Option<Entity>,
+    spell_id: u32,
+    edits: &super::UnitEdits,
+    visuals: &super::PrecastVisuals,
+) {
+    if let Some(entity) = player.filter(|&e| visuals.resolves(e, spell_id)) {
         edits.push(UnitEdit::SendPrecast { entity, spell_id });
     }
 }
 
-/// `0x6ec220`'s state half: `0x60d020` for a spell with a visual.
+/// `0x6ec220`'s state half, `0x60d020`, for a spell its pusher found a visual for.
 pub(super) fn start(world: &mut World, entity: Entity, spell_id: u32) {
-    if !super::spell_visual::resolves_visual(world, entity, spell_id) {
-        return;
-    }
     if let Ok(mut unit) = world.get_entity_mut(entity) {
         unit.insert(Precast {
             spell_id,
@@ -195,25 +198,24 @@ mod tests {
     }
 
     /// `0x6ec220` starts the precast only for a spell that resolves a visual (`0x6ec2a9`, else
-    /// `0x60d020` at `0x6ec2cf`), whether the send or the start asks.
+    /// `0x60d020` at `0x6ec2cf`), decided at the send, which queues nothing without one.
     #[test]
     fn a_spell_with_a_visual_precasts_and_one_without_does_not() {
+        use bevy::ecs::system::RunSystemOnce;
         let (mut world, unit) = world();
-        apply(
-            &mut world,
-            UnitEdit::SendPrecast {
-                entity: unit,
-                spell_id: BARE_SPELL,
-            },
-        );
+        let send = |world: &mut World, spell_id: u32| {
+            world
+                .run_system_once(
+                    move |edits: Res<UnitEdits>, visuals: super::super::PrecastVisuals| {
+                        precast_at_send(Some(unit), spell_id, &edits, &visuals);
+                    },
+                )
+                .unwrap();
+            apply_unit_edits(world);
+        };
+        send(&mut world, BARE_SPELL);
         assert_eq!(precast(&world, unit), None, "no visual, no precast");
-        apply(
-            &mut world,
-            UnitEdit::SendPrecast {
-                entity: unit,
-                spell_id: VISUAL_SPELL,
-            },
-        );
+        send(&mut world, VISUAL_SPELL);
         assert_eq!(
             precast(&world, unit),
             Some(Precast {

@@ -136,6 +136,8 @@ pub(crate) struct CastLadder<'w, 's> {
     pub(crate) stand: MessageWriter<'w, crate::player::StandStateRequest>,
     /// The auto-repeat arm and clear, applied after the pass.
     pub(crate) edits: Res<'w, crate::creature_anim::UnitEdits>,
+    /// Whether a send's spell resolves a visual, which its precast needs (`0x6ec220`).
+    pub(crate) precast_visuals: crate::creature_anim::PrecastVisuals<'w, 's>,
     pub(crate) pending: ResMut<'w, crate::spell::PendingCast>,
     pub(crate) queued_melee: ResMut<'w, crate::spell::QueuedMeleeSpell>,
     pub(crate) cooldowns: ResMut<'w, crate::spell::Cooldowns>,
@@ -308,7 +310,7 @@ impl CastLadder<'_, '_> {
         let _ = self.commands.0.send(cmd);
         // The send's precast and own signal (`0x6e5898`, `0x6e589d`), as the attempt's send.
         let me = self.self_player.single().ok().map(|(e, _)| e);
-        crate::creature_anim::precast_at_send(me, spell_id, &self.edits);
+        crate::creature_anim::precast_at_send(me, spell_id, &self.edits, &self.precast_visuals);
         self.reports.changed();
         let auto_repeat = self
             .spells
@@ -419,6 +421,7 @@ impl CastLadder<'_, '_> {
             &mut self.sheath,
             &mut self.stand,
             &self.edits,
+            &self.precast_visuals,
             &mut core,
             &mut self.cooldowns,
             &self.spell_mods,
@@ -528,6 +531,7 @@ fn send_spell_cast(
     sheath: &mut MessageWriter<crate::creature_anim::SheathRequest>,
     stand: &mut MessageWriter<crate::player::StandStateRequest>,
     edits: &crate::creature_anim::UnitEdits,
+    precast_visuals: &crate::creature_anim::PrecastVisuals,
     core: &mut CastCore,
     cooldowns: &mut crate::spell::Cooldowns,
     spell_mods: &crate::spell::SpellModifiers,
@@ -954,7 +958,7 @@ fn send_spell_cast(
     // applies after the pass, so benilla signals every send. The visual starts at the
     // `SMSG_SPELL_START` (#1583).
     let me = self_player.single().ok().map(|(e, _)| e);
-    crate::creature_anim::precast_at_send(me, spell_id, edits);
+    crate::creature_anim::precast_at_send(me, spell_id, edits, precast_visuals);
     core.reports.changed();
     // The GCD arms at the send (`0x6e2de0` from `0x6e58fb`), after the packet; a failed cast
     // result clears it (`0x6e1630`).

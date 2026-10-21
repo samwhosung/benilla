@@ -235,26 +235,114 @@ impl WeaponVisualSrc<'_, '_> {
     /// The caster's ranged weapon's substitute `SpellVisual` id.
     fn caster(&mut self, caster: Entity) -> Option<u32> {
         let (net_entity, store) = self.units.get(caster).ok()?;
-        let s = &store.0;
-        let display_id = match net_entity?.kind {
-            EntityKind::Unit => s.unit_virtual_item_display(2),
-            // 17: vmangos `EQUIPMENT_SLOT_RANGED`.
-            EntityKind::Player => s
-                .player_visible_item_entry(17)
-                .filter(|e| *e != 0)
-                // The visible item's change looked it up (`0x5ed764`); this only reads.
-                .and_then(|entry| self.items.as_deref()?.held(entry, Ask::Read))
-                .map(|t| t.display_info_id),
-            _ => None,
-        }
-        .filter(|d| *d != 0)?;
-        let visual = self
-            .displays
-            .as_deref()?
-            .catalog
-            .get(display_id)?
-            .spell_visual;
-        (visual != 0).then_some(visual)
+        ranged_weapon_visual(
+            net_entity,
+            store,
+            self.items.as_deref(),
+            self.displays.as_deref(),
+        )
+    }
+}
+
+/// A caster's ranged weapon's substitute `SpellVisual` id, read off its descriptor.
+fn ranged_weapon_visual(
+    net_entity: Option<&NetEntity>,
+    store: &ObjectStore,
+    items: Option<&Items>,
+    displays: Option<&ItemDisplays>,
+) -> Option<u32> {
+    let s = &store.0;
+    let display_id = match net_entity?.kind {
+        EntityKind::Unit => s.unit_virtual_item_display(2),
+        // 17: vmangos `EQUIPMENT_SLOT_RANGED`.
+        EntityKind::Player => s
+            .player_visible_item_entry(17)
+            .filter(|e| *e != 0)
+            // The visible item's change looked it up (`0x5ed764`); this only reads.
+            .and_then(|entry| items?.held(entry, Ask::Read))
+            .map(|t| t.display_info_id),
+        _ => None,
+    }
+    .filter(|d| *d != 0)?;
+    let visual = displays?.catalog.get(display_id)?.spell_visual;
+    (visual != 0).then_some(visual)
+}
+
+/// Whether `0x6ec220` starts its precast: the caster is a unit (`0x6ec245`, type mask bit 3)
+/// and the spell resolves a visual for it (`0x60d450` returns a row, else `0x6ec2a9`). A caster
+/// with no [`NetEntity`] counts as a unit.
+fn precast_resolves(
+    spells: Option<&crate::ui_action::Spells>,
+    visuals: Option<&SpellVisuals>,
+    kind: Option<&NetEntity>,
+    store: Option<&ObjectStore>,
+    items: Option<&Items>,
+    displays: Option<&ItemDisplays>,
+    spell_id: u32,
+) -> bool {
+    let (Some(spells), Some(visuals)) = (spells, visuals) else {
+        return false; // no client data
+    };
+    let unit = kind.is_none_or(|n| matches!(n.kind, EntityKind::Unit | EntityKind::Player));
+    unit && resolve_stages(spells, &visuals.0, spell_id, || {
+        ranged_weapon_visual(kind, store?, items, displays)
+    })
+    .is_some()
+}
+
+/// What `0x6ec220` decides its precast by, for the active player's send ([`super::precast_at_send`]):
+/// the decision is made where the send is, so the queued start already carries it.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct PrecastVisuals<'w, 's> {
+    spells: Option<Res<'w, crate::ui_action::Spells>>,
+    visuals: Option<Res<'w, SpellVisuals>>,
+    kinds: Query<'w, 's, &'static NetEntity>,
+    weapon: WeaponVisualSrc<'w, 's>,
+}
+
+impl PrecastVisuals<'_, '_> {
+    /// Whether `spell_id` precasts on `caster` ([`precast_resolves`]).
+    pub(crate) fn resolves(&self, caster: Entity, spell_id: u32) -> bool {
+        precast_resolves(
+            self.spells.as_deref(),
+            self.visuals.as_deref(),
+            self.kinds.get(caster).ok(),
+            self.weapon.units.get(caster).ok().map(|(_, store)| store),
+            self.weapon.items.as_deref(),
+            self.weapon.displays.as_deref(),
+            spell_id,
+        )
+    }
+}
+
+/// The same decision's tables for a caller that holds the stores and the item cache itself, the
+/// `SMSG_SPELL_START` handler.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct PrecastTables<'w, 's> {
+    visuals: Option<Res<'w, SpellVisuals>>,
+    displays: Option<Res<'w, ItemDisplays>>,
+    kinds: Query<'w, 's, &'static NetEntity>,
+}
+
+impl PrecastTables<'_, '_> {
+    /// Whether `spell_id` precasts on `caster`, whose descriptor is `store` ([`precast_resolves`]).
+    pub(crate) fn resolves(
+        &self,
+        spells: Option<&crate::ui_action::Spells>,
+        items: &Items,
+        caster: Entity,
+        store: Option<&ObjectStore>,
+        spell_id: u32,
+    ) -> bool {
+        precast_resolves(
+            spells,
+            self.visuals.as_deref(),
+            self.kinds.get(caster).ok(),
+            store,
+            Some(items),
+            self.displays.as_deref(),
+            spell_id,
+        )
     }
 }
 
@@ -277,31 +365,6 @@ fn resolve_stages(
     };
     // No own row: the reference zeroes the row before the same fill (`0x60d4bc`).
     Some(own.unwrap_or_default().merged_over_weapon(weapon))
-}
-
-/// Whether `spell_id` resolves a visual for `caster` (`0x60d450` returns a row), which `0x6ec220`
-/// asks of a unit only (`0x6ec245`, type mask bit 3) before it starts the precast.
-pub(super) fn resolves_visual(world: &mut World, caster: Entity, spell_id: u32) -> bool {
-    world
-        .run_system_cached_with(visual_resolves, (caster, spell_id))
-        .unwrap_or(false)
-}
-
-fn visual_resolves(
-    In((caster, spell_id)): In<(Entity, u32)>,
-    spells: Option<Res<crate::ui_action::Spells>>,
-    visuals: Option<Res<SpellVisuals>>,
-    kinds: Query<&NetEntity>,
-    mut weapon_src: WeaponVisualSrc,
-) -> bool {
-    let (Some(spells), Some(visuals)) = (spells.as_deref(), visuals.as_deref()) else {
-        return false; // no client data
-    };
-    let unit = kinds
-        .get(caster)
-        .ok()
-        .is_none_or(|n| matches!(n.kind, EntityKind::Unit | EntityKind::Player));
-    unit && resolve_stages(spells, &visuals.0, spell_id, || weapon_src.caster(caster)).is_some()
 }
 
 /// One stage's kit from `spell_id`'s visual chain.

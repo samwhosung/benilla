@@ -210,7 +210,12 @@ fn on_cast_result(
     }
 }
 
-fn on_spell_start(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
+fn on_spell_start(
+    In(ev): In<SessionEvent>,
+    mut l: Lifecycle,
+    mut sc: Scene,
+    precast: crate::creature_anim::PrecastTables,
+) {
     if let SessionEvent::SpellStart {
         caster,
         spell_id,
@@ -235,6 +240,15 @@ fn on_spell_start(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
             &mut l.pending,
             l.spells.as_deref(),
             &sc.edits,
+            &|e, spell_id| {
+                precast.resolves(
+                    l.spells.as_deref(),
+                    &sc.items,
+                    e,
+                    sc.stores.get(e).ok(),
+                    spell_id,
+                )
+            },
             l.play_seq.next(),
         );
     }
@@ -757,6 +771,8 @@ fn spell_start(
     pending: &mut PendingCast,
     spells: Option<&crate::ui_action::Spells>,
     edits: &crate::creature_anim::UnitEdits,
+    // Whether a spell resolves a visual for a caster, which its precast needs (`0x6ec220`).
+    precasts: &dyn Fn(Entity, u32) -> bool,
     seq: u64,
 ) {
     // A nonzero cast time marks the caster `Casting`; an instant gets none, its GO follows at once.
@@ -825,12 +841,12 @@ fn spell_start(
         // `0x6ec220`'s precast: another unit's unless the packet's flag bit 0 is set (`0x6e78f8`,
         // vmangos's `CAST_FLAG_HIDDEN_COMBATLOG`), ours unless the spell is the pending record's
         // (`0x6e79af`), whose send started it.
-        let precasts = if self_guid.0 == Some(caster) {
+        let starts = if self_guid.0 == Some(caster) {
             pending.record_spell() != spell_id
         } else {
             cast_flags & 0x1 == 0
         };
-        if precasts {
+        if starts && precasts(e, spell_id) {
             edits.push(crate::creature_anim::UnitEdit::StartPrecast {
                 entity: e,
                 spell_id,
@@ -1774,7 +1790,8 @@ mod tests {
                           self_guid: Res<SelfGuid>,
                           mut reports: ResMut<CastReports>,
                           mut pending: ResMut<PendingCast>,
-                          edits: Res<crate::creature_anim::UnitEdits>| {
+                          edits: Res<crate::creature_anim::UnitEdits>,
+                          visuals: crate::creature_anim::PrecastVisuals| {
                         spell_start(
                             caster,
                             spell_id,
@@ -1790,6 +1807,7 @@ mod tests {
                             &mut pending,
                             None,
                             &edits,
+                            &|e, spell_id| visuals.resolves(e, spell_id),
                             1,
                         );
                     },

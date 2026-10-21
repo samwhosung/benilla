@@ -26,10 +26,11 @@ pub(crate) enum UnitEdit {
     /// The local auto-repeat cancel's clear (`0x6ea080`): the arm (`0x6ea113`), the precast of
     /// the repeat spell `spell_id` (`0x6ea12b`) and the nock (`0x6ea140`).
     ClearAutoRepeat { entity: Entity, spell_id: u32 },
-    /// `0x6ec220`'s precast at `SMSG_SPELL_START` (`0x6e7908`, `0x6e79be`).
+    /// `0x6ec220`'s precast at `SMSG_SPELL_START` (`0x6e7908`, `0x6e79be`), queued only for a
+    /// spell that resolves a visual for the unit, as its pusher found ([`super::PrecastTables`]).
     StartPrecast { entity: Entity, spell_id: u32 },
-    /// The same at the active player's send, unless the unit already precasts the spell
-    /// (`0x6e588f`).
+    /// The same at the active player's send ([`super::precast_at_send`]), unless the unit already
+    /// precasts the spell (`0x6e588f`).
     SendPrecast { entity: Entity, spell_id: u32 },
     /// `0x60d040`: the precast ends when it is `spell_id`'s, or whatever it is for `None`, and
     /// runs its tail when `tail` is set (its `b`).
