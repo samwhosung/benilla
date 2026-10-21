@@ -307,8 +307,9 @@ impl Cooldowns {
         self.flush();
     }
 
-    /// An item use's cooldown (`StartCooldown 0x6e2c60`): the item's values, a negative one
-    /// falling back to the spell's `Spell.dbc` value.
+    /// The go's item leg when the item's record names the spell (`0x6e8511`-`0x6e8566`): the
+    /// block's recovery and category recovery when not negative (`jge`) and its category when
+    /// positive (`jg`), each else the spell's own column, unmodified.
     pub(crate) fn start_item(
         &mut self,
         item_entry: u32,
@@ -320,6 +321,11 @@ impl Cooldowns {
             use_spell.cooldown_ms as u32
         } else {
             spell.map_or(0, |s| s.recovery_ms)
+        };
+        let category = if use_spell.category as i32 > 0 {
+            use_spell.category
+        } else {
+            spell.map_or(0, |s| s.category)
         };
         let category_ms = if use_spell.category_cooldown_ms >= 0 {
             use_spell.category_cooldown_ms as u32
@@ -334,9 +340,9 @@ impl Cooldowns {
                 start: now,
                 duration: Duration::from_millis(u64::from(recovery_ms)),
             },
-            use_spell.category,
+            category,
             // Resolved through the spell only when the categories agree; no item carries 351.
-            spell.is_some_and(|s| s.category == use_spell.category && s.category_wildcard),
+            spell.is_some_and(|s| s.category == category && s.category_wildcard),
             Timer {
                 start: now,
                 duration: Duration::from_millis(u64::from(category_ms)),
