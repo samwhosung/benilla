@@ -500,6 +500,9 @@ impl Plugin for UiDuelPlugin {
 }
 
 #[cfg(test)]
+mod challenge_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use benilla_ui::script::UiScript;

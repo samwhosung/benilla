@@ -103,6 +103,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 }
 
 #[cfg(test)]
+mod start_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::script::{NameCandidate, PartyMemberInfo, PartyState, UiScript, UnitState};

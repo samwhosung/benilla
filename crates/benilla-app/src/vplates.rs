@@ -693,6 +693,9 @@ impl Plugin for VPlatesPlugin {
 }
 
 #[cfg(test)]
+mod unheld_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

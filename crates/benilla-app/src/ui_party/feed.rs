@@ -1524,6 +1524,8 @@ mod tests {
     use super::*;
     use benilla_ui::script::UiScript;
 
+    mod token_verb_tests;
+
     #[test]
     fn an_out_of_range_member_reads_the_record_and_divides_its_rage() {
         let m = GroupMemberEntry {

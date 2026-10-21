@@ -46,6 +46,8 @@ mod scan;
 mod script;
 pub(crate) use script::ScriptSelect;
 mod track;
+#[cfg(test)]
+mod unheld_tests;
 
 pub(crate) use cursor_mode::{
     corpse_mouseover_eligible, CursorKind, WorldCursor, GO_TYPE_GENERIC, SERVICE_RANGE_SQ,

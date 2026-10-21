@@ -67,6 +67,8 @@ use light::{studio_light, BoothLight};
 mod panes;
 pub(crate) use panes::{PaneDisplays, PaneRequest, PaneRequests};
 pub(crate) mod test_bake;
+#[cfg(test)]
+mod unheld_tests;
 
 /// The round portrait slots, each with its own layer and camera. `"npc"` is an interaction
 /// window's NPC ([`crate::ui_session::InteractNpc`]); `"targettarget"` resolves only while drawn,
