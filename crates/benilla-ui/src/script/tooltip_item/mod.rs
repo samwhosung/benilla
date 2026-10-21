@@ -598,7 +598,18 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let bag = i64::from(crate::script::binding_abi::ftol(bag));
             let slot = crate::script::binding_abi::ftol(slot) as u32;
             let (item_id, count, link, quality, inst, repair_cost) = {
-                let model = lua.app_data_mut::<Model>().expect("model app_data");
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                // The cooldown query asks a missing record with the callback `0x6e2f70`
+                // (`0x53483a`, `0x6e2efb`).
+                if let Some(entry) = model
+                    .containers
+                    .get(&bag)
+                    .and_then(|c| c.slots.get(&slot))
+                    .filter(|s| s.record_pending())
+                    .map(|s| s.item_id)
+                {
+                    model.cooldown_record_asks.push(entry);
+                }
                 let cost = model.repair_costs.bags.get(&(bag, slot)).copied();
                 match model
                     .containers

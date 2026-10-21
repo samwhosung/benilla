@@ -170,7 +170,8 @@ pub(crate) struct Cooldowns {
     /// table `0xceca60` of `ITEMCOOLDOWNHASHNODE`s keyed by item entry ([`Self::pend_item`]).
     pending_items: std::collections::HashMap<u32, PendingItem>,
     /// The item entries a cooldown query found without a record and asked with the callback
-    /// `0x6e2f70` ([`Self::await_item_record`]).
+    /// `0x6e2f70` ([`Self::await_item_record`]). The item cache holds the callback, so it outlives
+    /// the asking slot and a `/reload`.
     awaited_records: std::collections::HashSet<u32>,
 }
 
@@ -464,13 +465,43 @@ impl Cooldowns {
         self.awaited_records.insert(item_entry);
     }
 
-    /// The callback `0x6e2f70` of each awaited record the item cache now answers.
+    /// The callback `0x6e2f70` of each awaited record the item cache now answers, spent either
+    /// way: a record re-queries `0x6e2ed0` (`0x6e2f80`), which reads the first on-use spell with
+    /// the item (`0x6e2f20`-`0x6e2f58`), and flushes the pair and the bags while a leg ends after
+    /// now, running or held (`0x6e2f85`-`0x6e2f8e`); a refusal runs it with no record, which
+    /// returns (`0x6e2f78`).
     pub(crate) fn answer_awaited_records(
         &mut self,
-        _items: &crate::items::Items,
-        _spells: Option<&benilla_formats::SpellCatalog>,
-        _now: Instant,
+        items: &crate::items::Items,
+        spells: Option<&benilla_formats::SpellCatalog>,
+        now: Instant,
     ) {
+        use crate::query_cache::Ask;
+        let answered: Vec<u32> = self
+            .awaited_records
+            .iter()
+            .copied()
+            .filter(|&e| {
+                items.template(e, 0, Ask::Read).is_some() || items.template_answered_unknown(e)
+            })
+            .collect();
+        for entry in answered {
+            self.awaited_records.remove(&entry);
+            let Some(u) = items
+                .template(entry, 0, Ask::Read)
+                .and_then(|t| t.use_spell)
+            else {
+                continue;
+            };
+            let spell = spells.and_then(|s| s.get(u.spell_id));
+            if self
+                .info_item(u.spell_id, entry, u.category, spell, now)
+                .remaining_ms
+                > 0
+            {
+                self.flush_item_leg();
+            }
+        }
     }
 
     /// Arm the GCD at cast send (`StartGlobalCooldown 0x6e2de0`, from `0x6e58fb`) for any cast or

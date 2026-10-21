@@ -932,13 +932,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 slot,
                 "Usage: GetContainerItemCooldown(index, slot)",
             )?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let held = key.is_some_and(|k| {
-                model
-                    .containers
-                    .get(&k.0)
-                    .is_some_and(|c| c.slots.contains_key(&k.1))
-            });
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let slot = key.and_then(|k| model.containers.get(&k.0)?.slots.get(&k.1));
+            let held = slot.is_some();
+            // The query asks a missing record with the callback `0x6e2f70` (`0x6e2efb`).
+            if let Some(entry) = slot.filter(|s| s.record_pending()).map(|s| s.item_id) {
+                model.cooldown_record_asks.push(entry);
+            }
             Ok(if held {
                 item_cooldown_triple(
                     key.and_then(|k| model.container_cooldowns.get(&k).copied()),

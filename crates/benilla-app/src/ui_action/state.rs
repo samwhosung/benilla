@@ -47,9 +47,6 @@ pub(super) struct StateMemory {
     /// The VM's macro edits and the bag feed's `BAG_UPDATE`s as last read.
     macro_edits: u64,
     bag_updates: u64,
-    /// Item slots whose record was missing at the cooldown query, which `0x6e2ed0` asks with the
-    /// callback `0x6e2f70` (`0x6e2efb`).
-    awaiting_records: HashSet<u32>,
     engaged: bool,
     auto_repeat: Option<u32>,
     last_cd_trace: Option<Instant>,
@@ -342,6 +339,14 @@ pub(super) fn feed_action_state(
         // pair, so a running cooldown derives the same start every frame.
         let (anchor, ui_now) = (clock.anchor, clock.ui_now);
         cooldowns.prune(now);
+        // The callback `0x6e2f70` that the bag getter's and the bag tooltip's queries asked, each
+        // a lookup with it (`0x6e2f0d`); then every awaited record that answered, whose flush is
+        // this frame's.
+        for entry in script.take_cooldown_record_asks() {
+            let _ = items.template(entry, 0, Ask::Event(&commands));
+            cooldowns.await_item_record(entry);
+        }
+        cooldowns.answer_awaited_records(&items, spells.as_deref().map(|s| &s.catalog), now);
         let gen_changed = memory.last_generation != Some(cooldowns.generation);
         memory.last_generation = Some(cooldowns.generation);
         // The cooldown-clock trace (`WOW_MOVE_TRACE` sink, tag "cd"): once per second.
@@ -419,9 +424,6 @@ pub(super) fn feed_action_state(
             || macro_edits != memory.macro_edits
             || bag_updates != memory.bag_updates;
         (memory.macro_edits, memory.bag_updates) = (macro_edits, bag_updates);
-        // `0x6e2f70`, an awaited record's arrival with its cooldown running (`0x6e2f89`,
-        // `0x6e2f8e`).
-        let mut record_flush = false;
 
         let mut fresh: HashMap<u32, ActionState> = HashMap::new();
         for (&slot, button) in &actions.buttons {
@@ -542,13 +544,11 @@ pub(super) fn feed_action_state(
                     // The getter's lookup passes a callback (`0x4e5b3f`) on the bar's events, which
                     // no event here marks: an entry is asked when it first shows.
                     let template = items.template(button.action, 0, Ask::New(&commands));
-                    let awaited = match template {
-                        None if !items.template_answered_unknown(button.action) => {
-                            memory.awaiting_records.insert(button.action);
-                            false
-                        }
-                        _ => memory.awaiting_records.remove(&button.action),
-                    };
+                    // A missing record is asked with the callback `0x6e2f70` by the slot's cooldown
+                    // query and its usable test (`0x6e2efb`, `0x6e2fea`).
+                    if template.is_none() && !items.template_answered_unknown(button.action) {
+                        cooldowns.await_item_record(button.action);
+                    }
                     let use_spell = template.and_then(|t| t.use_spell);
                     // `IsCurrentAction`'s item arm holds the entry against the in-flight item
                     // (`0x4e53fc`-`0x4e5428`).
@@ -606,8 +606,6 @@ pub(super) fn feed_action_state(
                         let info =
                             cooldowns.info_item(u.spell_id, button.action, u.category, d, now);
                         st.cooldown = info.ui_triple(anchor, ui_now);
-                        // The callback queries again and flushes while the cooldown ends after now.
-                        record_flush |= awaited && info.remaining_ms > 0;
                     }
                 }
                 _ => {}
@@ -698,11 +696,11 @@ pub(super) fn feed_action_state(
             _ => Vec::new(),
         };
 
-        owed.cooldowns |= gen_changed || record_flush;
+        owed.cooldowns |= gen_changed;
         owed.usable_changed |= usable_changed;
         owed.refresh |= refresh;
         owed.activated.extend(activated);
-        owed.bags |= bags || record_flush;
+        owed.bags |= bags;
         if engaged != memory.engaged {
             memory.engaged = engaged;
             owed.combat = Some(engaged);
