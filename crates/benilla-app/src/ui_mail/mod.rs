@@ -337,6 +337,7 @@ fn resolve_row(
     items: &Items,
     icons: Option<&ItemDisplays>,
     stationery: Option<&Stationery>,
+    templates: Option<&MailTemplates>,
     names: &NameCache,
     ask: Ask<'_>,
     rolls: crate::items::RollCatalogs,
@@ -451,8 +452,7 @@ fn resolve_row(
         mail_template_id: entry.mail_template_id,
         can_reply,
         is_gm,
-        // The body runs the `$`-macro expander for the local player, as `GetInboxText` does.
-        body: raw_body.map(|b| crate::npc_text::substitute(b, macros)),
+        body: letter_body(entry, raw_body, templates, macros),
         stationery_texture,
         // Won and sold notices only, not every auction mail: the reference's `isInvoice` reads
         // what its subject parser persists for those two alone.
@@ -468,6 +468,26 @@ fn resolve_row(
         item_texture,
         item_quality,
     }
+}
+
+/// `GetInboxText`'s body (`0x4af193`-`0x4af26e`): with a text id, its cached text, nil until it
+/// lands (`0x4af1c9`) and for an auction mail (`0x4af1cf`); with none, the template's body in the
+/// client's locale (`0x4af217`-`0x4af24e`), nil for an id the store lacks (`0x4af229`); with
+/// neither, nil. Either is expanded for the local player (`0x4af1f6`, `0x4af261`).
+fn letter_body(
+    entry: &MailListEntry,
+    raw_body: Option<&String>,
+    templates: Option<&MailTemplates>,
+    macros: &crate::npc_text::MacroContext,
+) -> Option<String> {
+    let text = if entry.item_text_id != 0 {
+        raw_body.filter(|_| entry.message_type != mail_message_type::AUCTION)
+    } else if entry.mail_template_id != 0 {
+        templates.and_then(|t| t.0.get(&entry.mail_template_id))
+    } else {
+        None
+    };
+    text.map(|b| crate::npc_text::substitute(b, macros))
 }
 
 /// The usable stationery list (`0x4ad970`): rows always available (`Flags & 1`) or whose item the
@@ -518,6 +538,7 @@ fn snapshot(
     items: &Items,
     icons: Option<&ItemDisplays>,
     stationery: Option<&Stationery>,
+    templates: Option<&MailTemplates>,
     names: &NameCache,
     ask: Ask<'_>,
     rolls: crate::items::RollCatalogs,
@@ -536,6 +557,7 @@ fn snapshot(
                     items,
                     icons,
                     stationery,
+                    templates,
                     names,
                     ask,
                     rolls,
@@ -559,6 +581,7 @@ struct MailFeedExtras<'w, 's> {
     packages_pushed: Local<'s, crate::ui_script::VmMemo<bool>>,
     closes: CoreCloses<'w, 's>,
     unit_names: crate::ui_unit::NameTables<'w>,
+    templates: Option<Res<'w, MailTemplates>>,
     /// The diff fired `MAIL_INBOX_UPDATE` last frame, which the stock inbox answers with its
     /// getters, as it does the reference's cache callbacks' (`0x4af080`, `0x4af0a0` on status 1).
     inbox_updated: Local<'s, crate::ui_script::VmMemo<bool>>,
@@ -641,6 +664,7 @@ fn feed_mail(
             mut packages_pushed,
             mut closes,
             unit_names,
+            templates,
             mut inbox_updated,
         } = extras;
         if let Some(packages) = packages.as_deref() {
@@ -688,6 +712,7 @@ fn feed_mail(
                 &items,
                 icons.as_deref(),
                 stationery.as_deref(),
+                templates.as_deref(),
                 &names,
                 Ask::at(rows_event, &commands),
                 rolls,
@@ -1248,6 +1273,7 @@ mod tests {
             &items,
             None,
             None,
+            None,
             &names,
             Ask::New(&commands),
             crate::items::RollCatalogs::NONE,
@@ -1266,6 +1292,7 @@ mod tests {
             &items,
             None,
             None,
+            None,
             &names,
             Ask::New(&commands),
             crate::items::RollCatalogs::NONE,
@@ -1282,6 +1309,7 @@ mod tests {
             &items,
             None,
             None,
+            None,
             &names,
             Ask::New(&commands),
             crate::items::RollCatalogs::NONE,
@@ -1296,6 +1324,7 @@ mod tests {
             &system,
             &bodies,
             &items,
+            None,
             None,
             None,
             &names,
@@ -1333,6 +1362,7 @@ mod tests {
             &e,
             &bodies,
             &items,
+            None,
             None,
             None,
             &names,

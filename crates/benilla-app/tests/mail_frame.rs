@@ -611,6 +611,8 @@ fn an_auction_invoice_renders_as_a_receipt() {
         let mut inbox = small_inbox();
         inbox.inbox[0].is_invoice = true;
         inbox.inbox[0].invoice = Some(invoice);
+        // An auction mail's text is no letter body (`0x4af1cf`), as the feed resolves it.
+        (inbox.inbox[0].message_type, inbox.inbox[0].body) = (2, None);
         s.set_mail(Some(inbox));
         s.fire_event("MAIL_SHOW", vec![]);
         // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).

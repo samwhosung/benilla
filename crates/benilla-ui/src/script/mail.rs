@@ -8,6 +8,9 @@ use super::binding_abi::{self, flag};
 use super::cursor;
 use super::Model;
 
+/// The GM stationery, `Stationery.dbc` row 61 (`0x4af2cb cmp [rec+0x11c],0x3d`).
+const STATIONERY_GM: u32 = 61;
+
 /// `CheckInbox`'s throttle window, 60 000 ms (`0x4aeb06`).
 const CHECK_INBOX_WINDOW_SECS: f64 = 60.0;
 
@@ -49,7 +52,8 @@ pub struct MailInboxRow {
     pub can_reply: bool,
     /// `stationery == 61`: a GM mail (vmangos `MAIL_STATIONERY_GM`, `Mail.h:85`).
     pub is_gm: bool,
-    /// The letter body; `None` until fetched, while `GetInboxText` answers `""`.
+    /// `GetInboxText`'s body, its text or its template's, `$`-expanded; `None` (nil) until the
+    /// text lands, for an auction mail and for a mail with neither.
     pub body: Option<String>,
     pub stationery_texture: String,
     /// `isInvoice`: only an auction won (result 1) or sold (2), not an outbid or expiry notice
@@ -471,8 +475,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetInboxText(index): body, stationeryTexture, isTakeable, isInvoice (`MailFrame.lua:292`);
-    // reading a mail queues its open. isTakeable with `not textCreated` gates the copy button
-    // (`MailFrame.lua:366`), the pair vmangos requires (`MailHandler.cpp:867`).
+    // reading a mail queues its open.
     g.set(
         "GetInboxText",
         lua.create_function(|lua, index: Value| {
@@ -494,16 +497,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(r) = row else {
                 return Ok(MultiValue::from_vec(vec![Value::Nil; 4]));
             };
+            // The body as the app resolved it, nil on every miss (`0x4af275`).
+            let body = match &r.body {
+                Some(b) => Value::String(lua.create_string(b)?),
+                None => Value::Nil,
+            };
+            // A text or a template (`0x4af2ae`-`0x4af2c0`), not yet copied (`0x4af2c2`), off the
+            // GM stationery 61 (`0x4af2cb`).
+            let takeable = (r.item_text_id != 0 || r.mail_template_id != 0)
+                && !r.text_created
+                && r.stationery != STATIONERY_GM;
             Ok(MultiValue::from_vec(vec![
-                // An invoice's body is nil (`0x4af1cf`): its text is the auction house's
-                // bookkeeping, which only `GetInboxInvoiceInfo` parses.
-                if r.is_invoice {
-                    Value::Nil
-                } else {
-                    Value::String(lua.create_string(r.body.as_deref().unwrap_or(""))?)
-                },
+                body,
                 Value::String(lua.create_string(&r.stationery_texture)?),
-                flag(r.has_body),
+                flag(takeable),
                 flag(r.is_invoice),
             ]))
         })?,
@@ -1262,8 +1269,9 @@ mod tests {
     fn an_invoice_has_no_letter_body() {
         let mut s = UiScript::new().unwrap();
         let mut st = state();
-        st.inbox[0].is_invoice = true;
-        st.inbox[0].body = Some("6C:10000:10000:25:500".into());
+        // The app resolves an auction mail's body to none (`0x4af1cf`).
+        (st.inbox[0].is_invoice, st.inbox[0].message_type) = (true, 2);
+        st.inbox[0].body = None;
         s.set_mail(Some(st));
 
         assert_eq!(
