@@ -831,3 +831,68 @@ fn the_accept_signal_runs_before_its_packet() {
         ]
     );
 }
+
+/// A drop on the open partner places inside an engine turn, where its call waits: a send that
+/// refuses (`0x4bfab3`, here a backpack slot with no wire form) still writes nothing, signals
+/// nothing and leaves the item on the cursor, as `0x4bfc50` clears it only past a placement that
+/// went (`0x4bfcd4`).
+#[test]
+fn a_refused_drop_placement_writes_nothing_and_keeps_the_cursor() {
+    let mut t = client();
+    open_with_bob(&mut t);
+    with_hosted_vm(t.app.world_mut(), |vm| {
+        let mut bag = ContainerState {
+            num_slots: 32,
+            ..Default::default()
+        };
+        bag.slots.insert(
+            30,
+            ContainerSlot {
+                item_id: 2589,
+                guid: CLOTH,
+                count: 1,
+                ..Default::default()
+            },
+        );
+        vm.expect("a VM").set_container(0, Some(bag));
+    });
+    run(
+        &mut t,
+        "PickupContainerItem(0, 30) DropItemOnUnit('target')",
+    );
+    let drop = t.drop;
+    run_system(&mut t, drop);
+    assert!(sent(&t).is_empty(), "nothing went out");
+    assert_eq!(heard(&mut t), "", "no slot signal");
+    assert_eq!(
+        eval::<(bool, bool)>(
+            &mut t,
+            "return GetTradePlayerItemInfo(1) == nil, CursorHasItem() == 1"
+        ),
+        (true, true)
+    );
+}
+
+/// `AcceptTrade` from Lua an engine turn runs: its call waits for the turn's end, and the signal
+/// and the send follow the store wherever it applies (`0x4bf25a`, `0x4bf260`, `0x4bf26d`).
+#[test]
+fn an_accept_made_in_an_engine_turn_signals_and_sends_when_it_applies() {
+    let mut t = client();
+    open_with_bob(&mut t);
+    fn accept_in_turn(mut vm: crate::script_calls::VmWith<Res<'static, super::TradeSession>>) {
+        vm.turn(|script, _| {
+            script
+                .expect("a VM")
+                .run("AcceptTrade() SEEN = HEARD")
+                .expect("the chunk runs")
+        });
+    }
+    let turn = t.app.world_mut().register_system(accept_in_turn);
+    run_system(&mut t, turn);
+    assert_eq!(eval::<String>(&mut t, "return SEEN"), "", "the call waited");
+    assert_eq!(heard(&mut t), "TRADE_ACCEPT_UPDATE(1,0) ");
+    assert!(matches!(
+        sent(&t)[..],
+        [ClientCommand::AcceptTrade { flag: 1 }]
+    ));
+}
