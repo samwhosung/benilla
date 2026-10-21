@@ -65,6 +65,7 @@ mod go_templates;
 mod hover_log;
 mod item_watch;
 mod items;
+mod lanes;
 mod loading_screen;
 mod local_state;
 mod minimap;

@@ -75,6 +75,26 @@ pub(crate) fn feed_chat_once(world: &mut World) {
         .run_system_once(feed::feed_chat)
         .expect("the chat feeds");
 }
+/// Every resource the chat drain reads, fresh, for a test world that holds the VM and the
+/// net commands itself.
+#[cfg(test)]
+pub(crate) fn insert_drain_reads(world: &mut World) {
+    world.init_resource::<ChatLog>();
+    world.insert_resource(frames::ChatWindows::default());
+    world.insert_resource(edit::ChannelState::default());
+    world.init_resource::<crate::names::NameCache>();
+    world.insert_resource(crate::chat_bubble::BubbleQueue::default());
+    world.insert_resource(crate::chat_bubble::BubbleConfig::default());
+    world.insert_resource(crate::creature_anim::GestureQueue::default());
+    world.init_resource::<crate::net::SelfGuid>();
+    world.init_resource::<crate::net::GuidIndex>();
+    world.insert_resource(crate::world_state::WorldStates::default());
+    world.insert_resource(language::ChatLanguages::default());
+    world.insert_resource(crate::items::Items::default());
+    world.insert_resource(crate::go_templates::GameObjectTemplates::default());
+    world.insert_resource(crate::text_filter::TextFilter::default());
+    world.insert_resource(crate::text_filter::TextFilterSwitches::default());
+}
 /// The submitted-line drain once, for a test over the whole client: the dev and probe lines the
 /// VM holds, with the call host the world lends.
 #[cfg(test)]
