@@ -96,6 +96,16 @@ impl super::UiScript {
         self.model_mut().inspect = view;
     }
 
+    /// Push, or clear with `None`, the visible items of the player `guid`: what the slot getters
+    /// read through a token naming another player they may read (`0x4944a0`).
+    pub fn set_visible_equipment(&mut self, guid: u64, slots: Option<InventorySlots>) {
+        let mut model = self.model_mut();
+        match slots {
+            Some(slots) => model.visible_equipment.insert(guid, slots),
+            None => model.visible_equipment.remove(&guid),
+        };
+    }
+
     /// Drain the tokens `NotifyInspect` queued; the app sends `CMSG_INSPECT` for each, which also
     /// sets the server-side selection (`MiscHandler.cpp:945`).
     pub fn take_inspect_notifies(&mut self) -> Vec<String> {

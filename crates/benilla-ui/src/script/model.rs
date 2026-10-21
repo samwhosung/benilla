@@ -1202,6 +1202,9 @@ pub(crate) struct Model {
 
     /// The inspected unit's gear, from its public `PLAYER_VISIBLE_ITEM_*` fields.
     pub(crate) inspect: Option<inspect::InspectView>,
+    /// Another player's visible items by guid, slots 1..=19 as the doll numbers them, for the
+    /// slot getters' other-unit leg (`0x4c8420` → `0x5f0d60`).
+    pub(crate) visible_equipment: HashMap<u64, char_stats::InventorySlots>,
     /// `NotifyInspect` unit tokens, sent as `CMSG_INSPECT`.
     pub(crate) inspect_notifies: Vec<String>,
     /// `ClearInspectPlayer` ran; the app drops its inspect target.
@@ -1947,6 +1950,7 @@ impl Model {
             inventory_repairs: Vec::new(),
             weapon_enchants: [None; 2],
             inspect: None,
+            visible_equipment: HashMap::new(),
             inspect_notifies: Vec::new(),
             inspect_clear: false,
             dressup_intents: Vec::new(),

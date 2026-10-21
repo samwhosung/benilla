@@ -5,8 +5,8 @@
 use std::collections::HashMap;
 
 use benilla_ui::script::{
-    InspectView, InvSlotView, InventorySlots, QuadContent, SoundRequest, UiScript, UnitGuids,
-    UnitReach, UnitState,
+    InvSlotView, InventorySlots, QuadContent, SoundRequest, UiScript, UnitGuids, UnitReach,
+    UnitState,
 };
 
 /// The inspected player's guid, which `"target"` resolves to and the reach map is keyed by.
@@ -65,19 +65,15 @@ fn foreign_slot(entry: u32, icon: &str, name: &str) -> InvSlotView {
     }
 }
 
-/// The inspected unit's equipment: a helm in the head slot (id 1) and nothing else.
-fn inspect_view(unit: &str) -> InspectView {
+/// The inspected player's visible items: a helm in the head slot (id 1) and nothing else.
+fn inspect_slots() -> InventorySlots {
     let mut slots: InventorySlots = Default::default();
     slots[1] = Some(foreign_slot(
         7365,
         "Interface\\Icons\\INV_Helmet_09",
         "Mighty Helm",
     ));
-    InspectView {
-        unit: unit.into(),
-        guid: 0x0000_0000_0000_0042,
-        slots,
-    }
+    slots
 }
 
 /// Our own equipment: a different helm in the same slot, so a doll reading the wrong source shows.
@@ -130,7 +126,7 @@ fn armed() -> UiScript {
     s.run("InspectFrame_LoadUI()").unwrap();
     s.set_unit("target", Some(target_unit()));
     s.set_unit_guids(&target_guids());
-    s.set_inspect(Some(inspect_view("target")));
+    s.set_visible_equipment(TARGET, Some(inspect_slots()));
     // 4 yards away (d² = 16), inside the 10-yard gate (100.0).
     s.set_unit_reach(HashMap::from([(TARGET, reach(16.0))]));
     s
@@ -316,12 +312,13 @@ fn inventory_bindings_route_by_unit_token() {
     assert!(s
         .eval::<bool>(r#"return GetInventoryItemTexture("party2", 1) == nil"#)
         .unwrap());
-    // The view answers only for the token it was built for.
-    s.set_inspect(Some(inspect_view("party1")));
+    // The view answers only for the player it was pushed for.
+    s.set_visible_equipment(TARGET, None);
+    s.set_visible_equipment(0x0000_0000_0000_0042, Some(inspect_slots()));
     assert!(
         s.eval::<bool>(r#"return GetInventoryItemTexture("target", 1) == nil"#)
             .unwrap(),
-        "a view built for \"party1\" must not answer for \"target\""
+        "another player's view must not answer for \"target\""
     );
 }
 
@@ -372,13 +369,13 @@ fn shipped_inspect_frame_drives_end_to_end() {
     );
 
     // A changed view, and the visible-item bridge's event the slot buttons filter on `arg1`.
-    let mut swapped = inspect_view("target");
-    swapped.slots[1] = Some(foreign_slot(
+    let mut swapped = inspect_slots();
+    swapped[1] = Some(foreign_slot(
         7366,
         "Interface\\Icons\\INV_Helmet_22",
         "Better Helm",
     ));
-    s.set_inspect(Some(swapped));
+    s.set_visible_equipment(TARGET, Some(swapped));
     s.fire_event(
         "UNIT_INVENTORY_CHANGED",
         vec![benilla_ui::script::ScriptValue::Str("target".into())],
@@ -388,9 +385,9 @@ fn shipped_inspect_frame_drives_end_to_end() {
         "UNIT_INVENTORY_CHANGED for the inspected unit repaints the slot"
     );
 
-    let mut other = inspect_view("target");
-    other.slots[1] = Some(foreign_slot(1, "Interface\\Icons\\INV_Helmet_ZZ", "Nope"));
-    s.set_inspect(Some(other));
+    let mut other = inspect_slots();
+    other[1] = Some(foreign_slot(1, "Interface\\Icons\\INV_Helmet_ZZ", "Nope"));
+    s.set_visible_equipment(TARGET, Some(other));
     s.fire_event(
         "UNIT_INVENTORY_CHANGED",
         vec![benilla_ui::script::ScriptValue::Str("party4".into())],

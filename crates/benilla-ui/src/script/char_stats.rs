@@ -2057,6 +2057,123 @@ mod tests {
         )
     }
 
+    /// The slot getters resolve their token (`0x4c8328`) and read through
+    /// `CanReadUnitInventory` (`0x4944a0`): any token naming the active player reads its own
+    /// table; another player, a cooperative one within 10 yards, its visible items, slots 1-19
+    /// (`0x4c8420` → `0x5f0d60`), whose quality the item table answers, empty (`0x4c89d6`); a token
+    /// the resolver does not know raises (`0x515c14`).
+    #[test]
+    fn the_slot_getters_resolve_their_token_and_read_through_the_reach_gate() {
+        use crate::script::UnitReach;
+        use std::collections::HashMap;
+        const MATE: u64 = 0x20;
+        const FAR: u64 = 0x30;
+        let mut s = seated();
+        let helm = |id: u32, icon: &str| InvSlotView {
+            item_id: id,
+            icon: Some(icon.into()),
+            count: 1,
+            quality: 3,
+            name: Some(format!("Helm {id}")),
+            link: Some(format!("|cff0070dd|Hitem:{id}:0:0:0|h[Helm {id}]|h|r")),
+            ..Default::default()
+        };
+        let mut own: crate::script::InventorySlots = Default::default();
+        own[1] = Some(helm(1, "Own"));
+        s.set_inventory_slots(own);
+        for (guid, id) in [(MATE, 2), (FAR, 3)] {
+            let mut slots: crate::script::InventorySlots = Default::default();
+            slots[1] = Some(helm(id, &format!("Visible{id}")));
+            s.set_visible_equipment(guid, Some(slots));
+        }
+        let guids = |target: u64| UnitGuids {
+            player: ME,
+            target,
+            party: [MATE, FAR, 0, 0],
+            held: HashMap::from([(ME, 0), (MATE, 0), (FAR, 0)]),
+            ..Default::default()
+        };
+        s.set_unit_guids(&guids(MATE));
+        let reach = |inspectable: bool| {
+            HashMap::from([
+                (
+                    ME,
+                    UnitReach {
+                        dist_sq: 0.0,
+                        inspectable: true,
+                    },
+                ),
+                (
+                    MATE,
+                    UnitReach {
+                        dist_sq: 16.0,
+                        inspectable,
+                    },
+                ),
+                (
+                    FAR,
+                    UnitReach {
+                        dist_sq: 400.0,
+                        inspectable: true,
+                    },
+                ),
+            ])
+        };
+        s.set_unit_reach(reach(true));
+        let texture = |s: &UiScript, token: &str| {
+            s.eval::<Option<String>>(&format!("return GetInventoryItemTexture({token:?}, 1)"))
+                .unwrap()
+        };
+        assert_eq!(texture(&s, "target").as_deref(), Some("Visible2"));
+        assert_eq!(texture(&s, "PARTY1").as_deref(), Some("Visible2"));
+        assert_eq!(texture(&s, "player").as_deref(), Some("Own"));
+        assert_eq!(texture(&s, "party2"), None, "20 yards off");
+        assert_eq!(
+            s.eval::<Option<String>>(r#"return GetInventoryItemLink("target", 1)"#)
+                .unwrap(),
+            Some("|cff0070dd|Hitem:2:0:0:0|h[Helm 2]|h|r".into())
+        );
+        assert_eq!(
+            s.eval::<Option<i64>>(r#"return GetInventoryItemQuality("target", 1)"#)
+                .unwrap(),
+            None,
+            "another player's item table holds nothing"
+        );
+        assert_eq!(
+            s.eval::<i64>(r#"return GetInventoryItemCount("target", 1)"#)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            s.eval::<Option<String>>(r#"return GetInventoryItemTexture("target", 0)"#)
+                .unwrap(),
+            None,
+            "the ammo slot is the active player's alone"
+        );
+        s.set_unit_reach(reach(false));
+        assert_eq!(
+            texture(&s, "target"),
+            None,
+            "a player we cannot cooperate with"
+        );
+        s.set_unit_guids(&guids(ME));
+        assert_eq!(
+            texture(&s, "target").as_deref(),
+            Some("Own"),
+            "a token naming us reads our table"
+        );
+        for call in [
+            r#"GetInventoryItemTexture("npctarget", 1)"#,
+            r#"GetInventoryItemLink("bogus", 1)"#,
+            r#"GetInventoryItemQuality("bogus", 1)"#,
+            r#"GetInventoryItemCount("bogus", 1)"#,
+            r#"GetInventoryItemBroken("bogus", 1)"#,
+            r#"GetInventoryItemCooldown("bogus", 1)"#,
+        ] {
+            assert!(s.run(call).is_err(), "{call}");
+        }
+    }
+
     /// The ammo slot's texture and quality getters look the record up with the callback
     /// `0x4c84f0` (`0x4c83bc`, `0x4c89cf`): each call that misses registers one, the texture's
     /// only while the player carries some (`0x4c83a0`, `CountInventoryItemsByEntry`). A cached
