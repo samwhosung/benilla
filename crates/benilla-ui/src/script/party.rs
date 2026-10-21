@@ -160,7 +160,8 @@ pub enum PartyRequest {
     UninviteRaid(u32),
     /// `DoReadyCheck()`, leader only (`MSG_RAID_READY_CHECK`, empty body).
     ReadyCheckStart,
-    /// `ConfirmReadyCheck(ready)` (`MSG_RAID_READY_CHECK`, one byte).
+    /// `ConfirmReadyCheck(ready)` while a check runs: `MSG_RAID_READY_CHECK` with the low byte of
+    /// the argument's flag (`0x4bc0bf`, `PutInt8` at `0x4bc0e4`).
     ReadyCheckAnswer(u8),
     /// `RequestRaidInfo()` (`CMSG_REQUEST_RAID_INFO`).
     RequestRaidInfo,
@@ -824,13 +825,25 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // ConfirmReadyCheck(ready) (`0x4bc090`) reads its argument through `GetBoolOrDefault`
-    // (`0x4bc0ad`) with default 0: the reference's No button passes no argument, Yes passes `1`.
+    // ConfirmReadyCheck(ready) (`0x4bc090`) first asks `GetReadyCheckMsLeft` (`0x4bc099` →
+    // `0x4bb2f0`), the time to the armed deadline, 0 with none armed or once it has passed, and at
+    // 0 returns with nothing read or sent (`0x4bc0a0`). Then it reads its argument through
+    // `GetScriptFlagArg` (`0x4bc0ad`, default 0) and sends that value's low byte (`0x4bc0bf`,
+    // `PutInt8` at `0x4bc0e4`): the reference's No button passes no argument, Yes passes `1`, and
+    // `ConfirmReadyCheck(256)` sends 0.
     g.set(
         "ConfirmReadyCheck",
         lua.create_function(|lua, ready: Option<Value>| {
-            let ready = crate::script::binding_abi::bool_or_default(ready.as_ref(), false);
-            call(lua, PartyRequest::ReadyCheckAnswer(u8::from(ready)))
+            let now = clock(lua);
+            let running = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model.ready_check.deadline.is_some_and(|d| now < d)
+            };
+            if !running {
+                return Ok(());
+            }
+            let status = binding_abi::flag_or_default(ready.as_ref(), 0) as u8;
+            call(lua, PartyRequest::ReadyCheckAnswer(status))
         })?,
     )?;
     g.set(

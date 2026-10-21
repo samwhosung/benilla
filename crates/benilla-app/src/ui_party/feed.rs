@@ -475,25 +475,26 @@ pub(crate) fn feed_party(
 
         // ── READY_CHECK ─────────────────────────────────────────────────────────
         //
-        // Fired by the reference's open handler `0x4ba360` (at `0x4ba53a`), which also arms the 30
-        // s deadline (`0xb713f4`). `UIParent.lua:571` shows the popup on it, and UIParent's
-        // OnUpdate ticks the deadline through `CheckReadyCheckTime` (`UIParent.xml:24`): no clock
-        // here.
+        // Fired by the reference's open handler `0x4ba360` (at `0x4ba53a`), once it has armed the
+        // 30 s deadline (`0xb713f4`, `0x4ba535`), so a handler's `ConfirmReadyCheck` finds the
+        // check running. `UIParent.lua:571` shows the popup on it, and UIParent's OnUpdate ticks
+        // the deadline through `CheckReadyCheckTime` (`UIParent.xml:24`): no clock here.
+        //
+        // Each request arms the engine's side first (the leader's close, a member's 30 s
+        // deadline); the answer log then replays from this memo's cursor.
+        if group.ready_check_requests != fed.ready_check_requests {
+            fed.ready_check_requests = group.ready_check_requests;
+            fed.answers_forwarded = 0;
+            if !vm_reset {
+                script.ready_check_request(Some(group.leader) == self_guid);
+            }
+        }
         if group.ready_check != fed.ready_check {
             gate.audit("feed_party", "the ready-check edge");
             fed.ready_check = group.ready_check;
             // Not on the first look after a VM reset, which would pop a check that has ended.
             if !vm_reset {
                 script.fire_event("READY_CHECK", vec![]);
-            }
-        }
-        // Each request arms the engine's side (the leader's close, a member's 30 s deadline); the
-        // answer log then replays from this memo's cursor.
-        if group.ready_check_requests != fed.ready_check_requests {
-            fed.ready_check_requests = group.ready_check_requests;
-            fed.answers_forwarded = 0;
-            if !vm_reset {
-                script.ready_check_request(Some(group.leader) == self_guid);
             }
         }
         for &(guid, ready) in group.ready_check_answers.iter().skip(fed.answers_forwarded) {
@@ -2969,6 +2970,36 @@ mod tests {
         assert_eq!(
             sent,
             ["kick:0x1002", "lead:0x1002", "kick:0x1001", "lead:0x1001"]
+        );
+    }
+
+    /// The open form arms the 30 s deadline (`0x4ba535`) before it signals `READY_CHECK`
+    /// (`0x4ba53a`), so a handler that answers at once finds the check running
+    /// (`GetReadyCheckMsLeft 0x4bb2f0`, read at `0x4bc099`) and its answer goes out.
+    #[test]
+    fn a_ready_check_handler_answers_inside_the_check() {
+        let mut app = app();
+        party(&mut app, 2, true);
+        frame(&mut app);
+        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+        script.keep_calls();
+        script
+            .run(
+                r#"local f = CreateFrame("Frame")
+                   f:RegisterEvent("READY_CHECK")
+                   f:SetScript("OnEvent", function() ConfirmReadyCheck(1) end)"#,
+            )
+            .unwrap();
+        let _ = app
+            .world_mut()
+            .resource_mut::<GroupState>()
+            .apply_ready_check_request(false);
+        frame(&mut app);
+        assert_eq!(
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .take_party_requests(),
+            [PartyRequest::ReadyCheckAnswer(1)]
         );
     }
 
