@@ -192,7 +192,7 @@ pub(crate) struct RowPatch {
 
 /// What a handler did that the VM sees, in the handler's order: the reference's handlers show their
 /// lines and signal each list as they go, so the VM's half of each step is done before the next.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) enum HouseEffect {
     /// A line shown (`0x496720`).
     Line(AuctionMessage),
@@ -203,8 +203,9 @@ pub(crate) enum HouseEffect {
         auction_id: u32,
         pages: [Option<u32>; 3],
     },
-    /// The placed bid's `CMSG_EMOTE` 3, sent after its row's update (`0x4cc5dd`-`0x4cc60c`).
-    Wave,
+    /// A packet the handler sends at this point: a list request (`0x4cc4e0`, `0x4cc528`) or the
+    /// placed bid's wave after its row's update (`0x4cc5dd`-`0x4cc60c`).
+    Send(ClientCommand),
 }
 
 /// A message an auction handler shows (`0x496720`): a refusal on the red `UIErrorsFrame`, or one of
@@ -378,25 +379,26 @@ impl AuctionOpen {
 
     /// The owner list's sender `0x4cd680`: while the flag is armed, `CMSG_AUCTION_LIST_OWNER_ITEMS`
     /// at `offset` with the auctioneer cell as it stands, then the flag cleared and the offset
-    /// saved (`0x4cd6e9`, `0x4cd6ef`). It tests no auctioneer.
-    pub(crate) fn send_owner_list(&mut self, commands: &NetCommands, offset: u32) {
+    /// saved (`0x4cd6e9`, `0x4cd6ef`); the caller sends it. It tests no auctioneer.
+    pub(crate) fn owner_list(&mut self, offset: u32) -> Option<ClientCommand> {
         if !self.owner_armed {
-            return;
+            return None;
         }
-        let _ = commands.0.send(ClientCommand::AuctionListOwnerItems {
-            auctioneer: self.auctioneer.unwrap_or(0),
-            list_from: offset,
-        });
         self.owner_armed = false;
         self.owner_offset = offset;
+        Some(ClientCommand::AuctionListOwnerItems {
+            auctioneer: self.auctioneer.unwrap_or(0),
+            list_from: offset,
+        })
     }
 
     /// The bidder list's sender `0x4cd720`: while the flag is armed, `CMSG_AUCTION_LIST_BIDDER_ITEMS`
     /// at `offset` with the outbid ids of the open house (`0x4cd7b6`), then a pair of that house
-    /// removed (`0x4cd808`), the flag cleared and the offset saved (`0x4cd814`, `0x4cd81a`).
-    pub(crate) fn send_bidder_list(&mut self, commands: &NetCommands, offset: u32) {
+    /// removed (`0x4cd808`), the flag cleared and the offset saved (`0x4cd814`, `0x4cd81a`); the
+    /// caller sends it.
+    pub(crate) fn bidder_list(&mut self, offset: u32) -> Option<ClientCommand> {
         if !self.bidder_armed {
-            return;
+            return None;
         }
         let house = self.house_id;
         let auction_ids = self
@@ -405,14 +407,15 @@ impl AuctionOpen {
             .filter(|&&(h, _)| h == house)
             .map(|&(_, a)| a)
             .collect();
-        let _ = commands.0.send(ClientCommand::AuctionListBidderItems {
+        let request = ClientCommand::AuctionListBidderItems {
             auctioneer: self.auctioneer.unwrap_or(0),
             list_from: offset,
             auction_ids,
-        });
+        };
         self.outbid_remove_house(house);
         self.bidder_armed = false;
         self.bidder_offset = offset;
+        Some(request)
     }
 
     /// The close (`0x4cd5f0`), client-side, sending nothing: the auctioneer, house and request

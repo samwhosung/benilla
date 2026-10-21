@@ -887,7 +887,7 @@ pub(crate) static CAST_TRACE: std::sync::LazyLock<bool> =
     std::sync::LazyLock::new(|| std::env::var("WOW_CAST_TRACE").is_ok());
 
 /// A message to the server through the write thread, carrying any pose it needs.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum ClientCommand {
     /// A self-movement packet. Each tail is written iff its flag is set (`JUMPING`, `SWIMMING`,
     /// `ON_TRANSPORT`): a flag without its tail desyncs the server's parse.

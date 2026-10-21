@@ -129,11 +129,7 @@ fn settle(vm: &mut HouseVm) {
                     script.remove_auction_from(auction_id, pages);
                 }
             }),
-            HouseEffect::Wave => vm
-                .own()
-                .wire
-                .view()
-                .send(ClientCommand::Emote { emote: EMOTE_WAVE }),
+            HouseEffect::Send(command) => vm.own().wire.view().send(command),
         }
     }
 }
@@ -329,9 +325,9 @@ fn auction_command_result(
             auction_action::STARTED => {
                 auction.line(AuctionMessage::chat("ERR_AUCTION_STARTED"));
                 auction.owner_armed = true;
-                if let Some(commands) = wire.commands {
-                    let offset = auction.owner_offset;
-                    auction.send_owner_list(commands, offset);
+                let offset = auction.owner_offset;
+                if let Some(request) = auction.owner_list(offset) {
+                    auction.effects.push(HouseEffect::Send(request));
                 }
             }
             // Cancelled (`0x4cc648`): its line and the auction removed (`0x4cc658`).
@@ -389,9 +385,9 @@ fn auction_command_result(
 fn bid_placed(auction_id: u32, tail: &AuctionCommandTail, auction: &mut AuctionOpen, wire: Wire) {
     auction.outbid_remove(auction_id);
     auction.bidder_armed = true;
-    if let Some(commands) = wire.commands {
-        let offset = auction.bidder_offset;
-        auction.send_bidder_list(commands, offset);
+    let offset = auction.bidder_offset;
+    if let Some(request) = auction.bidder_list(offset) {
+        auction.effects.push(HouseEffect::Send(request));
     }
     if auction.auctioneer.is_some() {
         let increment = match tail {
@@ -406,7 +402,11 @@ fn bid_placed(auction_id: u32, tail: &AuctionCommandTail, auction: &mut AuctionO
         };
         auction.patch_row(LIST, auction_id, &patch);
     }
-    auction.effects.push(HouseEffect::Wave);
+    auction
+        .effects
+        .push(HouseEffect::Send(ClientCommand::Emote {
+            emote: EMOTE_WAVE,
+        }));
 }
 
 /// `EMOTE_ONESHOT_WAVE`, the placed bid's emote (`0x4cc5fc push 3`).
@@ -1013,11 +1013,14 @@ mod tests {
             }
             assert!(matches!(a.effects[0], HouseEffect::Line(_)));
             assert_eq!(
-                a.effects[1..],
-                [HouseEffect::Remove {
-                    auction_id: 7,
-                    pages
-                }]
+                fx(&a)[1..],
+                [format!(
+                    "{:?}",
+                    HouseEffect::Remove {
+                        auction_id: 7,
+                        pages
+                    }
+                )]
             );
         };
         let e = AuctionCommandTail::Empty;
@@ -1062,14 +1065,12 @@ mod tests {
     /// pair of that house alone: `0x4cdf90`'s shift reuses the scan's index and ends it.
     #[test]
     fn the_bidder_request_sends_the_houses_ids_and_drops_one_pair() {
-        let rig = Rig::new();
         let mut a = house();
         for pair in [(1, 7), (2, 8), (1, 9), (1, 10)] {
             a.outbid_append(pair.0, pair.1);
         }
-        a.send_bidder_list(&rig.commands, 0);
         assert_eq!(
-            text(rig.sent()),
+            text(a.bidder_list(0)),
             text([ClientCommand::AuctionListBidderItems {
                 auctioneer: AUCTIONEER,
                 list_from: 0,
@@ -1077,8 +1078,7 @@ mod tests {
             }])
         );
         assert_eq!(a.outbid, [(2, 8), (1, 9), (1, 10)]);
-        a.send_bidder_list(&rig.commands, 0);
-        assert!(rig.sent().is_empty(), "the flag is spent");
+        assert!(a.bidder_list(0).is_none(), "the flag is spent");
     }
 
     /// The bidder page's rows stay as the wire sends them, a repeated auction twice: `0x4ccc80`

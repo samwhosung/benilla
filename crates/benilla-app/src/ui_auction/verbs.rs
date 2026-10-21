@@ -54,12 +54,16 @@ impl AuctionVerbs<'_, '_> {
             // and its sender tests the flag again (`0x4cd686`).
             AuctionCall::OwnerList { offset } => {
                 if auction.auctioneer.is_some() {
-                    auction.send_owner_list(commands, offset);
+                    if let Some(request) = auction.owner_list(offset) {
+                        let _ = commands.0.send(request);
+                    }
                 }
             }
             AuctionCall::BidderList { offset } => {
                 if auction.auctioneer.is_some() {
-                    auction.send_bidder_list(commands, offset);
+                    if let Some(request) = auction.bidder_list(offset) {
+                        let _ = commands.0.send(request);
+                    }
                 }
             }
             AuctionCall::Bid(bid) => {
