@@ -130,12 +130,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // UninviteByName(name) (`0x48a610`): `lua_isstring` (`0x6f3510` at `0x48a61e`) else
+    // `Usage: UninviteByName("name")` (`0x48a698`, the string at `0x8427c0`); any string, the
+    // empty one included, goes into `CMSG_GROUP_UNINVITE` as it is (`0x48a65e`), with no trim.
     g.set(
         "UninviteByName",
-        lua.create_function(|lua, name: Option<String>| {
-            let Some(name) = name.filter(|n| !n.trim().is_empty()) else {
-                return Ok(());
-            };
+        lua.create_function(|lua, name: Value| {
+            let name =
+                super::binding_abi::string_arg(lua, name, r#"Usage: UninviteByName("name")"#)?;
             super::calls::submit(lua, super::ScriptCall::Uninvite(name))
         })?,
     )?;
