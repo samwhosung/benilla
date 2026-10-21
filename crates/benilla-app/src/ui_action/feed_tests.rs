@@ -728,7 +728,8 @@ fn an_empty_default_format_shows_nothing_and_still_logs() {
         app.world_mut()
             .non_send_resource::<UiScript>()
             .run(&format!(
-                r#"SPELL_FAILED_ROOTED = "You are unable to move"
+                r#"SPELLFAILCASTSELF = "You fail to cast %s: %s."
+                SPELL_FAILED_ROOTED = "You are unable to move"
                 ERR_SPELL_FAILED_S = "{format}"
                 SEEN = {{}}
                 local f = CreateFrame("Frame")
