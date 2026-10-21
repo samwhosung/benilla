@@ -78,7 +78,8 @@ pub struct AuctionItemRow {
     pub count: u32,
     /// `None` while the item template query is in flight.
     pub quality: Option<u32>,
-    /// `RequiredLevel`, printed red above the player's level.
+    /// The template's `RequiredLevel` (`+0x3c`), 0 for none; `GetAuctionItemInfo` and the level
+    /// sort read it floored at 1.
     pub level: u32,
     /// The seller's opening price, shown as the current bid while [`Self::bid_amount`] is 0.
     pub min_bid: u32,
@@ -426,7 +427,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     None => Value::Nil,
                 },
                 flag(can_use),
-                Value::Integer(i64::from(r.level)),
+                // The required level floored at 1 (`0x4cf091`-`0x4cf0b1`).
+                Value::Integer(i64::from(r.level.max(1))),
                 Value::Integer(i64::from(r.min_bid)),
                 Value::Integer(i64::from(r.min_increment)),
                 Value::Integer(i64::from(r.buyout_price)),
