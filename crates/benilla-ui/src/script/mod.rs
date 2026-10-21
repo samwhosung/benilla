@@ -854,6 +854,7 @@ impl UiScript {
         model.session = session;
         // What waits is the original's host's, and its handlers' values its VM's.
         model.script_calls.clear();
+        model.waiting_cursor = None;
         lua.set_app_data(model);
         // A fork is a VM of its own, so it carries the profiler's slot and the call host's.
         handler_prof::install(&lua);

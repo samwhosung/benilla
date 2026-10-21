@@ -193,7 +193,7 @@ pub(crate) struct CallRaises {
 
 /// What waits for the host, in the order made: a call, or a handler an engine step fired while
 /// the host was out ([`Held`]), each with the input events running when it was made, and the lock
-/// writes made among them ([`Waiting::Lock`]).
+/// writes and cursor changes made among them ([`Waiting::Lock`], [`Waiting::Cursor`]).
 #[derive(Clone, Debug)]
 pub(crate) enum Waiting {
     Call(QueuedCall),
@@ -213,6 +213,17 @@ pub(crate) enum Waiting {
         locked: bool,
         was: bool,
     },
+    /// The cursor's payload changed between the item before and the one after
+    /// ([`Model::push_waiting`]); the take puts it back and the change is made again in its
+    /// place, so each item reads the cursor as its step left it.
+    Cursor(Box<CursorChange>),
+}
+
+/// A change to the cursor's payload, `was` to `now`.
+#[derive(Clone, Debug)]
+pub(crate) struct CursorChange {
+    was: Option<super::cursor::CursorPayload>,
+    now: Option<super::cursor::CursorPayload>,
 }
 
 /// A fire held for the host ([`super::host::holding`]): run as it would have run then.
@@ -237,9 +248,26 @@ impl super::Model {
         let input = self.protected.events();
         let seq = self.call_raises.next;
         self.call_raises.next += 1;
-        self.script_calls
-            .push(Waiting::Call(QueuedCall { call, input, seq }));
+        self.push_waiting(Waiting::Call(QueuedCall { call, input, seq }));
         seq
+    }
+
+    /// Put `item` behind what waits, after any change to the cursor since the item before it: the
+    /// cursor is written in steps by many hands (a set's clear, then its payload, then a send's
+    /// clear), and an item run late reads it as its step left it.
+    pub(crate) fn push_waiting(&mut self, item: Waiting) {
+        if self.script_calls.is_empty() {
+            self.waiting_cursor = Some(self.cursor.clone());
+        } else if self.waiting_cursor.as_ref() != Some(&self.cursor) {
+            let now = self.cursor.clone();
+            let was = self
+                .waiting_cursor
+                .replace(now.clone())
+                .unwrap_or_else(|| now.clone());
+            self.script_calls
+                .push(Waiting::Cursor(Box::new(CursorChange { was, now })));
+        }
+        self.script_calls.push(item);
     }
 }
 
@@ -249,27 +277,36 @@ pub(crate) fn hold(lua: &Lua, held: Held) {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let input = model.protected.events();
     let muted = model.sound_suppression;
-    model.script_calls.push(Waiting::Lua { held, input, muted });
+    model.push_waiting(Waiting::Lua { held, input, muted });
 }
 
-/// Take what waits, with the lock bits its writes changed put back, last first: each item then
-/// runs against the locks as they stood when it was made, and each write is made again in its
-/// place ([`Waiting::Lock`], a held segment's own).
+/// Take what waits, with the lock bits its writes changed and the cursor put back, last first:
+/// each item then runs against the locks and the cursor as they stood when it was made, and each
+/// write is made again in its place ([`Waiting::Lock`], a held segment's own, [`Waiting::Cursor`]).
 fn take_waiting(lua: &Lua) -> VecDeque<Waiting> {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    let batch = std::mem::take(&mut model.script_calls);
+    let model = &mut *model;
+    let mut batch = std::mem::take(&mut model.script_calls);
+    // What changed the cursor after the last item, made again after it.
+    if let Some(was) = model.waiting_cursor.take() {
+        if was != model.cursor {
+            let now = model.cursor.clone();
+            batch.push(Waiting::Cursor(Box::new(CursorChange { was, now })));
+        }
+    }
     for item in batch.iter().rev() {
         match item {
             Waiting::Lock { guid, was, .. } => {
-                super::tick::set_lock_bit(&mut model, *guid, *was);
+                super::tick::set_lock_bit(model, *guid, *was);
             }
+            Waiting::Cursor(change) => model.cursor = change.was.clone(),
             Waiting::Lua {
                 held: Held::Segment(raised),
                 ..
             } => {
                 for raised in raised.iter().rev() {
                     if let super::tick::Raised::Lock { guid, was, .. } = *raised {
-                        super::tick::set_lock_bit(&mut model, guid, was);
+                        super::tick::set_lock_bit(model, guid, was);
                     }
                 }
             }
@@ -284,6 +321,11 @@ fn relock(lua: &Lua, guid: u64, locked: bool) {
     lua.app_data_mut::<Model>()
         .expect("model app_data")
         .set_item_lock(guid, locked);
+}
+
+/// Make a change to the cursor that waited, in its place.
+fn recursor(lua: &Lua, now: Option<super::cursor::CursorPayload>) {
+    lua.app_data_mut::<Model>().expect("model app_data").cursor = now;
 }
 
 /// Run a held fire now, under the input events and the sound suppression it was fired under.
@@ -449,6 +491,7 @@ pub(crate) fn drain(lua: &Lua) {
             }
             Waiting::Lua { held, input, muted } => replay(lua, &mut script, held, input, muted),
             Waiting::Lock { guid, locked, .. } => relock(lua, guid, locked),
+            Waiting::Cursor(change) => recursor(lua, change.now),
         }
         drain(lua);
     }
@@ -468,6 +511,7 @@ fn settle(lua: &Lua, script: &mut UiScript) {
         match item {
             Waiting::Lua { held, input, muted } => replay(lua, script, held, input, muted),
             Waiting::Lock { guid, locked, .. } => relock(lua, guid, locked),
+            Waiting::Cursor(change) => recursor(lua, change.now),
             call @ Waiting::Call(_) => {
                 requeue(lua, [call]);
                 drain(lua);
@@ -481,6 +525,9 @@ fn requeue(lua: &Lua, calls: impl IntoIterator<Item = Waiting>) {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let later = std::mem::replace(&mut model.script_calls, calls.into_iter().collect());
     model.script_calls.extend(later);
+    if model.waiting_cursor.is_none() && !model.script_calls.is_empty() {
+        model.waiting_cursor = Some(model.cursor.clone());
+    }
 }
 
 impl super::Model {
@@ -510,6 +557,7 @@ pub(crate) fn refuse_waiting(lua: &Lua) -> usize {
                         replay(lua, &mut script, held, input, muted)
                     }
                     Waiting::Lock { guid, locked, .. } => relock(lua, guid, locked),
+                    Waiting::Cursor(change) => recursor(lua, change.now),
                 }
             }
         }

@@ -67,8 +67,7 @@ impl Model {
         match &mut self.verb_events {
             Some(segment) => segment.push(Raised::Lock { guid, locked, was }),
             None if !self.script_calls.is_empty() => {
-                self.script_calls
-                    .push(super::calls::Waiting::Lock { guid, locked, was });
+                self.push_waiting(super::calls::Waiting::Lock { guid, locked, was });
             }
             None => {}
         }
