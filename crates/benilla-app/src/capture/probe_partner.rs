@@ -16,8 +16,9 @@ impl Plugin for ProbePartnerPlugin {
     }
 }
 
-/// Accept a pending invite the frame it lands; taking `pending_invite` keeps the invite popup
-/// from arming, and a racing `DeclineGroup` is a no-op once grouped (`GroupHandler.cpp:200`).
+/// Accept each invite the frame it lands, by the inviter [`GroupState::pending_invite`] keeps for
+/// this probe. The invite popup still shows, and a `DeclineGroup` it sends later is a no-op once
+/// grouped (`GroupHandler.cpp:200`).
 fn partner_probe(
     self_player: Query<(), With<SelfPlayer>>,
     mut group: ResMut<GroupState>,

@@ -266,7 +266,8 @@ pub(in crate::ui_party) mod tests {
             .init_resource::<GuidIndex>()
             .init_resource::<NameCache>()
             .init_resource::<crate::ui_guild::GuildState>()
-            .init_resource::<crate::ui_chat::ChatLog>();
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>();
         let (tx, rx) = crossbeam_channel::unbounded();
         // Kept alive for the run: a dropped receiver would fail the name queries.
         std::mem::forget(rx);

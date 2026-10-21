@@ -195,6 +195,7 @@ pub(crate) fn feed_party(
     mut fed: Local<crate::ui_script::VmMemo<FedParty>>,
     chat: Res<crate::ui_chat::ChatLog>,
     seeded: Option<Res<ReloadSeed>>,
+    mut sink: crate::ui_action::MessageSink,
 ) {
     let GroupView {
         tables,
@@ -328,8 +329,21 @@ pub(crate) fn feed_party(
                 GroupSignal::LootMethodChanged => ("PARTY_LOOT_METHOD_CHANGED", vec![]),
                 GroupSignal::RaidRosterUpdate => ("RAID_ROSTER_UPDATE", vec![]),
                 GroupSignal::RaidTargetUpdate => ("RAID_TARGET_UPDATE", vec![]),
+                // `0x5e6730` signals the event (`0x5e6747`), then shows `ERR_INVITED_TO_GROUP_S`
+                // (message `0x3c`, `0x5e6752`), so the line follows the popup's handlers.
                 GroupSignal::InviteRequest(inviter) => {
-                    ("PARTY_INVITE_REQUEST", vec![ScriptValue::Str(inviter)])
+                    script.fire_event(
+                        "PARTY_INVITE_REQUEST",
+                        vec![ScriptValue::Str(inviter.clone())],
+                    );
+                    if let Some(line) = crate::ui_action::keyed_line_s(
+                        script,
+                        "ERR_INVITED_TO_GROUP_S",
+                        &[&inviter],
+                    ) {
+                        crate::ui_action::show_now(script, &mut sink, "ui_party", line);
+                    }
+                    continue;
                 }
             };
             script.fire_event(signalled, args);
@@ -3136,6 +3150,46 @@ mod tests {
     /// `SMSG_GROUP_CANCEL`'s alone (`0x5e6784` → `0x48f440`), and `AcceptGroup` and
     /// `DeclineGroup` only send (`0x48aa80`, `0x48aab0`). So an answer signals nothing, and the
     /// same inviter asking again is asked about again.
+    /// `SMSG_GROUP_INVITE`'s handler (`0x5e6730`) signals `PARTY_INVITE_REQUEST` (`0x5e6747`), then
+    /// shows `ERR_INVITED_TO_GROUP_S` (message `0x3c`, `0x5e6752`): one pass, the event first.
+    #[test]
+    fn an_invite_fires_its_request_then_shows_its_line() {
+        let (mut app, _rx) = drain_app();
+        resolve_party(&mut app, [0; 4]);
+        app.world_mut()
+            .non_send_resource::<UiScript>()
+            .run(
+                r#"ERR_INVITED_TO_GROUP_S = "%s has invited you to join a group."
+                   HEARD = {}
+                   local f = CreateFrame("Frame")
+                   for _, e in ipairs({ "PARTY_INVITE_REQUEST", "CHAT_MSG_SYSTEM",
+                                        "UI_INFO_MESSAGE", "UI_ERROR_MESSAGE" }) do
+                       f:RegisterEvent(e)
+                   end
+                   f:SetScript("OnEvent", function()
+                       table.insert(HEARD, event .. ":" .. tostring(arg1))
+                   end)"#,
+            )
+            .unwrap();
+        frame(&mut app);
+        app.world_mut()
+            .resource_mut::<GroupState>()
+            .apply_invited("Bob");
+        frame(&mut app);
+        let heard: Vec<String> = app
+            .world_mut()
+            .non_send_resource::<UiScript>()
+            .eval("return HEARD")
+            .unwrap();
+        assert_eq!(
+            heard,
+            [
+                "PARTY_INVITE_REQUEST:Bob",
+                "CHAT_MSG_SYSTEM:Bob has invited you to join a group."
+            ]
+        );
+    }
+
     #[test]
     fn every_invite_signals_its_request_and_an_answer_signals_nothing() {
         let (mut app, _rx) = drain_app();
@@ -3159,8 +3213,7 @@ mod tests {
                 .unwrap()
         };
         let invite = |app: &mut App| {
-            let _ = app
-                .world_mut()
+            app.world_mut()
                 .resource_mut::<GroupState>()
                 .apply_invited("Bob");
             frame(app);

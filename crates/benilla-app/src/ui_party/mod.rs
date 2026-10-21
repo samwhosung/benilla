@@ -695,11 +695,11 @@ impl GroupState {
         std::mem::take(&mut self.released)
     }
 
-    /// `SMSG_GROUP_INVITE`: the popup plus a chat line, as the reference's `0x5e6730` does.
-    pub fn apply_invited(&mut self, inviter: &str) -> Vec<UiError> {
+    /// `SMSG_GROUP_INVITE` (`0x5e6730`): the invite's signal, which the feed fires as
+    /// `PARTY_INVITE_REQUEST` (`0x5e6747`) and follows with `ERR_INVITED_TO_GROUP_S` (`0x5e6752`).
+    pub fn apply_invited(&mut self, inviter: &str) {
         self.pending_invite = Some(inviter.to_string());
         self.signal(GroupSignal::InviteRequest(inviter.to_string()));
-        vec![UiError::s("ERR_INVITED_TO_GROUP_S", inviter)]
     }
 
     /// `SMSG_GROUP_DECLINE`: our invitee said no; only the inviter gets it.
@@ -1860,11 +1860,13 @@ mod tests {
     #[test]
     fn invite_lines() {
         let mut g = GroupState::default();
-        assert_eq!(
-            g.apply_invited("Bob"),
-            vec![UiError::s("ERR_INVITED_TO_GROUP_S", "Bob")]
-        );
+        g.apply_invited("Bob");
         assert_eq!(g.pending_invite.as_deref(), Some("Bob"));
+        assert_eq!(
+            g.signals.since(0),
+            [GroupSignal::InviteRequest("Bob".into())],
+            "the feed shows its line after the event"
+        );
         assert_eq!(
             g.apply_command_result(party_operation::INVITE, "Carol", party_result::OK),
             Some(UiError::s("ERR_INVITE_PLAYER_S", "Carol"))
@@ -2196,7 +2198,8 @@ mod tests {
                     .lines,
             );
         }
-        lines.extend(g.apply_invited("Bob"));
+        // The invite's, which the feed shows after `PARTY_INVITE_REQUEST`.
+        lines.push(UiError::s("ERR_INVITED_TO_GROUP_S", "Bob"));
         lines.extend(g.apply_declined("Carol"));
         lines.extend(g.apply_leader_changed("Alice", Some("Us")));
         lines.extend(g.apply_leader_changed("Us", Some("Us")));

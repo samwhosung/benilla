@@ -42,9 +42,10 @@ pub(super) fn register(app: &mut App) {
         .add_message::<DeselectGuid>();
 }
 
-fn on_invite(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>, errors: Res<UiErrorKeys>) {
+/// The popup's signal; the feed shows its line after the event ([`GroupState::apply_invited`]).
+fn on_invite(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>) {
     if let SessionEvent::GroupInvite { inviter } = ev {
-        invited(&mut group, &errors, &inviter);
+        group.apply_invited(&inviter);
     }
 }
 
@@ -269,10 +270,6 @@ fn push_group_lines(errors: &UiErrorKeys, lines: Vec<UiError>) {
 fn ready_check_request(group: &mut GroupState, errors: &UiErrorKeys, self_guid: &SelfGuid) {
     let we_lead = self_guid.0 == Some(group.leader);
     push_group_lines(errors, group.apply_ready_check_request(we_lead));
-}
-
-fn invited(group: &mut GroupState, errors: &UiErrorKeys, inviter: &str) {
-    push_group_lines(errors, group.apply_invited(inviter));
 }
 
 fn declined(group: &mut GroupState, errors: &UiErrorKeys, name: &str) {

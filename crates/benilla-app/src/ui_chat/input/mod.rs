@@ -511,7 +511,7 @@ pub(super) fn drain_chat_input(
                             self_guid.0,
                         ));
                     }
-                    "invite" => chat_out.ui_errors.extend(group.apply_invited("Partner")),
+                    "invite" => group.apply_invited("Partner"),
                     // A group member's ping 35 yd north-east: off both axes, so a mirrored sign
                     // shows, and inside every outdoor view radius (the tightest is 66.7 yd).
                     "ping" => {
