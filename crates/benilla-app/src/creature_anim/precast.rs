@@ -20,13 +20,17 @@
 //! which clears it when a unit is re-shown, has no counterpart, as a unit that leaves is
 //! despawned.
 
+use bevy::ecs::lifecycle::HookContext;
+use bevy::ecs::world::DeferredWorld;
 use bevy::prelude::*;
 
-use super::UnitEdit;
+use super::{UnitEdit, UnitEdits};
 
 /// The unit's precast, present while `+0xc8c` holds a spell. The stand and sheathe gates read
-/// the spell (`0x5ed4cc`, `0x5eb52b`), the emote gate the bit (`0x5fcd8b`).
+/// the spell (`0x5ed4cc`, `0x5eb52b`), the emote gate the bit (`0x5fcd8b`). Its hooks mirror it
+/// into the queue, which answers it for the VM pass ([`UnitEdits::precast`]).
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+#[component(on_insert = mirror_insert, on_replace = mirror_replace)]
 pub(crate) struct Precast {
     /// `+0xc8c`, never 0.
     pub(crate) spell_id: u32,
@@ -49,21 +53,70 @@ pub(crate) fn precast_at_send(
     }
 }
 
-/// `0x6ec220`'s state half, `0x60d020`, for a spell its pusher found a visual for.
-pub(super) fn start(world: &mut World, entity: Entity, spell_id: u32) {
-    if let Ok(mut unit) = world.get_entity_mut(entity) {
-        unit.insert(Precast {
-            spell_id,
-            busy: true,
-        });
+fn mirror_insert(world: DeferredWorld, ctx: HookContext) {
+    if let (Some(&precast), Some(edits)) = (
+        world.get::<Precast>(ctx.entity),
+        world.get_resource::<UnitEdits>(),
+    ) {
+        edits.mirror(ctx.entity, Some(precast));
     }
 }
 
-/// The send's start: a spell the unit already precasts starts nothing (`0x6e588f`), even once
-/// `0x60fc50` has cleared its bit.
-pub(super) fn start_at_send(world: &mut World, entity: Entity, spell_id: u32) {
-    if world.get::<Precast>(entity).map(|p| p.spell_id) != Some(spell_id) {
-        start(world, entity, spell_id);
+fn mirror_replace(world: DeferredWorld, ctx: HookContext) {
+    if let Some(edits) = world.get_resource::<UnitEdits>() {
+        edits.mirror(ctx.entity, None);
+    }
+}
+
+/// One change to a unit's precast, as the queue applies it and as it answers it.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Change {
+    /// `0x6ec220`'s state half, `0x60d020`, for a spell its pusher found a visual for.
+    Start(u32),
+    /// The send's start, which a spell the unit already precasts skips (`0x6e588f`), even once
+    /// `0x60fc50` has cleared its bit.
+    Send(u32),
+    /// `0x60d040`, keyed by the spell, or with the unit's own for `None`, which matches an empty
+    /// `+0xc8c` too (`0x60d049`).
+    End(Option<u32>),
+    /// `0x60fc50`'s clear of the bit alone.
+    Busy,
+}
+
+impl Change {
+    /// The precast `held` becomes, and whether this was an end that matched.
+    pub(super) fn after(self, held: Option<Precast>) -> (Option<Precast>, bool) {
+        let spell = held.map(|p| p.spell_id);
+        let started = |spell_id| Precast {
+            spell_id,
+            busy: true,
+        };
+        match self {
+            Change::Start(s) => (Some(started(s)), false),
+            Change::Send(s) if spell == Some(s) => (held, false),
+            Change::Send(s) => (Some(started(s)), false),
+            Change::End(Some(s)) if spell != Some(s) => (held, false),
+            Change::End(_) => (None, true),
+            Change::Busy => (held.map(|p| Precast { busy: false, ..p }), false),
+        }
+    }
+}
+
+/// Applies `change` to `entity`'s precast, and the tail of an end that matched ([`end`]).
+pub(super) fn apply(world: &mut World, entity: Entity, change: Change, tail: PrecastTail) {
+    let Ok(mut unit) = world.get_entity_mut(entity) else {
+        return;
+    };
+    let held = unit.get::<Precast>().copied();
+    let (after, ended) = change.after(held);
+    if after != held {
+        match after {
+            Some(precast) => unit.insert(precast),
+            None => unit.remove::<Precast>(),
+        };
+    }
+    if ended {
+        run_tail(world, entity, tail);
     }
 }
 
@@ -94,15 +147,13 @@ pub(crate) fn end_precast(commands: &mut Commands, entity: Entity, tail: Precast
 /// ([`crate::ui_loot::LootCloseAtRest`]). An end made in the VM pass applies after it, so its
 /// release reaches the loot drain the next frame.
 pub(super) fn end(world: &mut World, entity: Entity, spell: Option<u32>, tail: PrecastTail) {
-    let Ok(mut unit) = world.get_entity_mut(entity) else {
-        return;
-    };
-    let held = unit.get::<Precast>().map(|p| p.spell_id);
-    if spell.is_some_and(|s| held != Some(s)) {
-        return;
-    }
-    unit.remove::<Precast>();
-    let active_player = unit.contains::<crate::net::SelfPlayer>();
+    apply(world, entity, Change::End(spell), tail);
+}
+
+fn run_tail(world: &mut World, entity: Entity, tail: PrecastTail) {
+    let active_player = world
+        .get_entity(entity)
+        .is_ok_and(|unit| unit.contains::<crate::net::SelfPlayer>());
     let moving = match tail {
         PrecastTail::Skip => return,
         PrecastTail::Moving(moving) => moving,
@@ -128,13 +179,6 @@ const MOVING: u32 = super::move_flags::FORWARD
     | super::move_flags::STRAFE_LEFT
     | super::move_flags::STRAFE_RIGHT
     | super::move_flags::FALLING;
-
-/// `0x60fc50`'s clear of the bit alone.
-pub(super) fn end_busy(world: &mut World, entity: Entity) {
-    if let Some(mut p) = world.get_mut::<Precast>(entity) {
-        p.busy = false;
-    }
-}
 
 /// Installs a spell catalog whose `with_visual` spells resolve a `SpellVisual` row and whose
 /// `without` spells name none, for the tests that start a precast.

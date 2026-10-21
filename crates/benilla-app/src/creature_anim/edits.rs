@@ -13,7 +13,9 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use bevy::prelude::*;
 
-use super::{precast, AutoRepeatArmed, Casting, NockLatch, NockedAmmo};
+use bevy::ecs::entity::EntityHashMap;
+
+use super::{precast, AutoRepeatArmed, Casting, NockLatch, NockedAmmo, Precast};
 
 /// One queued change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,14 +54,14 @@ impl UnitEdit {
             Self::ArmAutoRepeat(_) => vec![std::any::TypeId::of::<AutoRepeatArmed>()],
             Self::ClearAutoRepeat { .. } => vec![
                 std::any::TypeId::of::<AutoRepeatArmed>(),
-                std::any::TypeId::of::<super::Precast>(),
+                std::any::TypeId::of::<Precast>(),
                 std::any::TypeId::of::<NockedAmmo>(),
                 std::any::TypeId::of::<NockLatch>(),
             ],
             Self::StartPrecast { .. }
             | Self::SendPrecast { .. }
             | Self::EndPrecast { .. }
-            | Self::EndPrecastBusy(_) => vec![std::any::TypeId::of::<super::Precast>()],
+            | Self::EndPrecastBusy(_) => vec![std::any::TypeId::of::<Precast>()],
         }
     }
 
@@ -107,14 +109,37 @@ impl UnitEdit {
     }
 }
 
+impl UnitEdit {
+    /// The precast change this makes, on which unit.
+    fn precast_change(&self) -> Option<(Entity, precast::Change)> {
+        use precast::Change;
+        match *self {
+            Self::StartPrecast { entity, spell_id } => Some((entity, Change::Start(spell_id))),
+            Self::SendPrecast { entity, spell_id } => Some((entity, Change::Send(spell_id))),
+            Self::EndPrecast {
+                entity, spell_id, ..
+            } => Some((entity, Change::End(spell_id))),
+            Self::ClearAutoRepeat { entity, spell_id } => {
+                Some((entity, Change::End(Some(spell_id))))
+            }
+            Self::EndPrecastBusy(entity) => Some((entity, Change::Busy)),
+            Self::ReapCasting { .. } | Self::ArmAutoRepeat(_) => None,
+        }
+    }
+}
+
 /// The queue, pushed through `&self` as the chat log is: its users run one at a time, in the VM
 /// pass's order ([`crate::vm_pass::shared_sinks`]) or inside the net drain.
 #[derive(Resource, Default)]
-pub(crate) struct UnitEdits(Mutex<Vec<UnitEdit>>);
+pub(crate) struct UnitEdits {
+    queue: Mutex<Vec<UnitEdit>>,
+    /// Every unit's [`Precast`] as applied, kept by the component's hooks.
+    precasts: Mutex<EntityHashMap<Precast>>,
+}
 
 impl UnitEdits {
     fn queue(&self) -> MutexGuard<'_, Vec<UnitEdit>> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.queue.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Queue `edit` behind the ones already queued.
@@ -122,9 +147,32 @@ impl UnitEdits {
         self.queue().push(edit);
     }
 
-    /// The precast `entity` holds once the queue applies.
-    pub(crate) fn precast(&self, _entity: Entity) -> Option<super::Precast> {
-        None
+    /// The precast `entity` holds once the queue applies: the applied one with the queued changes
+    /// replayed as they will apply. A link of the VM pass reads a unit's precast here, never off
+    /// the component, which lags the edits queued ahead of it until the pass's end; that end hands
+    /// the queue to its sync point with no link between.
+    pub(crate) fn precast(&self, entity: Entity) -> Option<Precast> {
+        let mut held = self
+            .precasts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&entity)
+            .copied();
+        for (unit, change) in self.queue().iter().filter_map(UnitEdit::precast_change) {
+            if unit == entity {
+                held = change.after(held).0;
+            }
+        }
+        held
+    }
+
+    /// The component's hooks: `entity` now holds `precast`.
+    pub(super) fn mirror(&self, entity: Entity, precast: Option<Precast>) {
+        let mut precasts = self.precasts.lock().unwrap_or_else(PoisonError::into_inner);
+        match precast {
+            Some(p) => precasts.insert(entity, p),
+            None => precasts.remove(&entity),
+        };
     }
 }
 
@@ -164,29 +212,23 @@ fn apply(world: &mut World, edits: Vec<UnitEdit>) {
                     unit.insert(AutoRepeatArmed);
                 }
             }
-            UnitEdit::ClearAutoRepeat { entity, spell_id } => {
+            UnitEdit::ClearAutoRepeat { entity, .. } => {
                 if let Ok(mut unit) = world.get_entity_mut(entity) {
                     unit.remove::<(AutoRepeatArmed, NockedAmmo, NockLatch)>();
                 }
-                precast::end(world, entity, Some(spell_id), precast::PrecastTail::Run);
             }
-            UnitEdit::StartPrecast { entity, spell_id } => precast::start(world, entity, spell_id),
-            UnitEdit::SendPrecast { entity, spell_id } => {
-                precast::start_at_send(world, entity, spell_id);
-            }
-            UnitEdit::EndPrecast {
-                entity,
-                spell_id,
-                tail,
-            } => {
-                let tail = if tail {
-                    precast::PrecastTail::Run
-                } else {
-                    precast::PrecastTail::Skip
-                };
-                precast::end(world, entity, spell_id, tail);
-            }
-            UnitEdit::EndPrecastBusy(entity) => precast::end_busy(world, entity),
+            UnitEdit::StartPrecast { .. }
+            | UnitEdit::SendPrecast { .. }
+            | UnitEdit::EndPrecast { .. }
+            | UnitEdit::EndPrecastBusy(_) => {}
+        }
+        if let Some((entity, change)) = edit.precast_change() {
+            // `b` is set but at a GO its record refuses (`0x6e7fc5`).
+            let tail = match edit {
+                UnitEdit::EndPrecast { tail: false, .. } => precast::PrecastTail::Skip,
+                _ => precast::PrecastTail::Run,
+            };
+            precast::apply(world, entity, change, tail);
         }
     }
 }
