@@ -49,11 +49,6 @@ const CHECKED_COD_PAYMENT: u32 = 0x8;
 /// carries a package (`MailFrame.lua:108`).
 const STATIONERY_GM: u32 = 61;
 
-/// The letter-row icon: the stationery's item icon (`Stationery.dbc` 41 → item 9311, display
-/// 7798; 61 → item 18154, display 30658).
-const STATIONERY_ICON_NORMAL: &str = "Interface\\Icons\\INV_Misc_Note_01";
-const STATIONERY_ICON_GM: &str = "Interface\\Icons\\Mail_GMIcon";
-
 /// The `Stationery.dbc` catalog; without it every mail's texture is nil and no paper is usable.
 #[derive(Resource)]
 pub(crate) struct Stationery(pub(crate) benilla_formats::StationeryCatalog);
@@ -417,13 +412,44 @@ fn resolve_row(
 
     // A player's GM letter is from `GM_EMAIL_NAME`, `""` when the string is missing
     // (`0x4aedbd`-`0x4aedcb`, `0x703bf0`); any other player's mail from its sender's name.
-    let sender = if player_mail && is_gm {
-        Some(get_text("GM_EMAIL_NAME").unwrap_or_default())
-    } else {
-        entry
+    // A non-player sender is named from its store by the sender id (`[rec+0x10]`, jump table
+    // `0x4af068`): an auction house's name (`0x4aee11`), a creature's (`0x4aee48`) and a game
+    // object's (`0x4aee78`), the last two asked with no guid.
+    let sender_id = entry.sender_id.unwrap_or(0);
+    let sender = match entry.message_type {
+        mail_message_type::NORMAL if is_gm => Some(get_text("GM_EMAIL_NAME").unwrap_or_default()),
+        mail_message_type::NORMAL => entry
             .sender_guid
-            .and_then(|g| names.resolve_player(g, ask).map(str::to_string))
+            .and_then(|g| names.resolve_player(g, ask).map(str::to_string)),
+        mail_message_type::AUCTION => catalogs
+            .houses
+            .and_then(|h| h.0.get(sender_id))
+            .map(|h| h.name.clone()),
+        mail_message_type::CREATURE => names
+            .resolve_creature(sender_id, 0, ask)
+            .map(str::to_string),
+        mail_message_type::GAMEOBJECT => catalogs
+            .gameobjects
+            .and_then(|g| g.resolve_name(sender_id, ask))
+            .map(str::to_string),
+        _ => None,
     };
+
+    // The package's icon when the row carries an id the store holds (`[rec+0x118]`,
+    // `0x4aec76`-`0x4aec9c`), else the item's (`[rec+0x120]`, `0x4aeca6`-`0x4aecd8`), GM letter
+    // or not.
+    let package_icon = catalogs
+        .packages
+        .filter(|_| (entry.package as i32) > 0)
+        .and_then(|p| p.0.iter().find(|r| r.id == entry.package))
+        .map(|r| package_view(r).icon)
+        .or_else(|| item_texture.clone());
+    // The paper's item's icon (`[rec+0x11c]` → the store row's item, `0x4aed25`-`0x4aed74`), nil
+    // for a paper the store lacks or an item not yet held.
+    let stationery_icon = stationery
+        .and_then(|s| s.0.rows().iter().find(|r| r.id == entry.stationery))
+        .and_then(|r| items.template(r.item, 0, ask))
+        .and_then(|t| crate::ui_items::item_icon(icons, t.display_info_id));
 
     // The store's texture for the id, none for one it lacks (`0x4af27c`-`0x4af2a9`).
     let stationery_texture = stationery
@@ -476,15 +502,8 @@ fn resolve_row(
         mail_id: entry.message_id,
         item_text_id: entry.item_text_id,
         stationery: entry.stationery,
-        package_icon: item_texture.clone(),
-        stationery_icon: Some(
-            if is_gm {
-                STATIONERY_ICON_GM
-            } else {
-                STATIONERY_ICON_NORMAL
-            }
-            .to_string(),
-        ),
+        package_icon,
+        stationery_icon,
         sender,
         subject,
         money: entry.money,

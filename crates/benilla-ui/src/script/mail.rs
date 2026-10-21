@@ -25,10 +25,13 @@ pub struct MailInboxRow {
     pub item_text_id: u32,
     /// The stationery id (`[rec+0x11c]`).
     pub stationery: u32,
-    /// `packageIcon`, the enclosed item's icon; `None` with no item or while its template loads.
+    /// `packageIcon`: the package's icon for a package id the store holds, else the enclosed
+    /// item's; `None` with neither, or while the item's template loads.
     pub package_icon: Option<String>,
+    /// `stationeryIcon`: the paper's item's icon; `None` while its template loads.
     pub stationery_icon: Option<String>,
-    /// `sender`, from the name cache; `None` while in flight or for a non-player sender.
+    /// `sender`: a player's name, or an auction house's, a creature's or a game object's by the
+    /// sender id; `None` while in flight.
     pub sender: Option<String>,
     pub subject: String,
     pub money: u32,
@@ -468,14 +471,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     None => Value::Nil,
                 })
             };
-            // packageIcon only for a non-GM mail with an item (`MailFrame.lua:108`).
-            let package_icon = if r.item_id != 0 && !r.is_gm {
-                opt_str(&r.package_icon)?
-            } else {
-                Value::Nil
-            };
             Ok(MultiValue::from_vec(vec![
-                package_icon,
+                // The row's package or item icon, GM letter or not (`0x4aec76`-`0x4aecf8`).
+                opt_str(&r.package_icon)?,
                 opt_str(&r.stationery_icon)?,
                 opt_str(&r.sender)?,
                 Value::String(lua.create_string(&r.subject)?),
