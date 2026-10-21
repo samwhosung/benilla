@@ -133,7 +133,7 @@ fn send_query(
     }
     let _ = commands.0.send(ClientCommand::AuctionListItems {
         auctioneer,
-        list_from: q.page.saturating_mul(50),
+        list_from: q.list_from,
         searched_name: q.name,
         level_min: u8::try_from(q.min_level).unwrap_or(u8::MAX),
         level_max: u8::try_from(q.max_level).unwrap_or(u8::MAX),

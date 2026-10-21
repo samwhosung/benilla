@@ -207,8 +207,9 @@ pub struct AuctionQuery {
     pub sub_class: Option<u32>,
     /// A minimum quality, not an equality; `None` = no filter (the dropdown's All, -1).
     pub quality: Option<u32>,
-    /// 0-based; the app multiplies by 50 for the wire's item offset.
-    pub page: u32,
+    /// The wire's item offset: the page argument's `_ftol` times 50 in 32 bits, 0 for a
+    /// non-number (`0x4ceb28`-`0x4ceb44`).
+    pub list_from: u32,
     pub usable_only: bool,
 }
 
@@ -636,8 +637,8 @@ fn submit(lua: &Lua, call: AuctionCall) -> mlua::Result<()> {
     super::calls::submit(lua, super::ScriptCall::Auction(call))
 }
 
-/// The owner and bidder verbs' list offset: a number's `_ftol` times 50 in 32 bits (`0x4cecbf`,
-/// `0x4ced0f`), anything else 0 (`0x4cecaa`, `0x4cecfa`); the verbs never raise.
+/// A list verb's offset: a number's `_ftol` times 50 in 32 bits (`0x4ceb44`, `0x4cecbf`,
+/// `0x4ced0f`), anything else 0 (`0x4ceb2f`, `0x4cecaa`, `0x4cecfa`); the verbs never raise.
 fn list_offset(lua: &Lua, page: Option<Value>) -> u32 {
     match page.and_then(|v| binding_abi::is_number(lua, v)) {
         Some(n) => binding_abi::ftol(n).wrapping_mul(50) as u32,
@@ -1119,7 +1120,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     class,
                     sub_class,
                     quality,
-                    page: num(6).unwrap_or(0),
+                    list_from: list_offset(lua, a.get(6).cloned()),
                     usable_only: truthy(7),
                 }
             };

@@ -717,7 +717,7 @@ fn search_reads_the_filters_and_nothing_queries_before_it() {
         "Armor is item class 4, not menu row 1"
     );
     assert!(query.usable_only);
-    assert_eq!(query.page, 0);
+    assert_eq!(query.list_from, 0);
     assert!(s.errors().is_empty(), "clean search: {:?}", s.errors());
 }
 
@@ -953,7 +953,10 @@ fn paging_shows_the_turners_only_at_the_end_of_the_list() {
     let _ = s.take_auction_calls();
     s.run("BrowseNextPageButton:Click()").unwrap();
     let query = queries(&mut s).pop().expect("the turner re-queries");
-    assert_eq!(query.page, 1, "the next page, 0-based");
+    assert_eq!(
+        query.list_from, 50,
+        "the next page, 0-based, as an item offset"
+    );
 
     assert!(s.errors().is_empty(), "clean paging: {:?}", s.errors());
 }
