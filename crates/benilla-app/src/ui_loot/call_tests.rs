@@ -1,10 +1,10 @@
 //! The loot window's verbs and packets through the whole client's host, each read on the line or
 //! the packet after it: `LootSlot`, `CloseLoot` and `GiveMasterLoot` apply inside their calls
 //! (`0x4c2e70`, `0x4c2ec0`, `0x4c2940`), a row's click takes inside its input record after its
-//! `<OnClick>` (`0x4c1820`), the last row's removal closes inside its packet (`0x4c1f8d`), the
-//! auto-loot copier sweeps before it signals (`0x4c1ed3` → `0x4c1fa0`), the count is the last
-//! occupied row's (`0x4c2260`), and a response for an object the client lacks opens nothing
-//! (`0x5ebb3f`).
+//! `<OnClick>` (`0x4c1820`), the last row's removal and the coin line's clear close inside their
+//! packets (`0x4c1f8d`, `0x4c2785`), the auto-loot copier sweeps before it signals (`0x4c1ed3` →
+//! `0x4c1fa0`), the count is the last occupied row's (`0x4c2260`), and a response for an object
+//! the client lacks opens nothing (`0x5ebb3f`).
 
 use benilla_protocol::messages::{slot_type, ItemInfo, ItemPushResult, LootItem, ObjectFields};
 use benilla_protocol::{EntityKind, SessionEvent};
@@ -395,6 +395,11 @@ fn an_auto_loot_open_sweeps_before_it_signals() {
         [ClientCommand::AutostoreLootItem { slot: 6 }]
     ));
     assert_eq!(seen(&mut l), "LOOT_BIND_CONFIRM:1,LOOT_OPENED");
+    run(&mut l, "LootSlot(1)");
+    assert!(
+        matches!(sent(&l)[..], [ClientCommand::AutostoreLootItem { slot: 5 }]),
+        "the sweep stashed the confirmed row after its listeners (`0x4c21dc`)"
+    );
 
     let mut l = client();
     l.app.world_mut().resource_mut::<LootConfig>().auto_loot = true;
@@ -404,6 +409,27 @@ fn an_auto_loot_open_sweeps_before_it_signals() {
         [ClientCommand::LootRelease { guid: CORPSE }]
     ));
     assert_eq!(seen(&mut l), "LOOT_CLOSED");
+
+    let mut l = client();
+    open(&mut l, CORPSE, 1, 0, Vec::new());
+    assert!(sent(&l).is_empty(), "without the byte nothing closes it");
+    assert_eq!(seen(&mut l), "LOOT_OPENED", "`0x4c1ee6` signals it empty");
+}
+
+/// `SMSG_LOOT_CLEAR_MONEY` (`0x5ec030` → `0x4c2750`) on a window with nothing else left closes
+/// with release inside its packet (`0x4c2777`, `0x4c2785`), after its `LOOT_SLOT_CLEARED` 1.
+#[test]
+fn the_coin_lines_clear_closes_an_emptied_window_at_its_packet() {
+    let mut l = client();
+    open(&mut l, CORPSE, 1, 150, Vec::new());
+    let _ = (seen(&mut l), sent(&l));
+    packets(&mut l, vec![SessionEvent::LootClearMoney]);
+    assert!(
+        matches!(sent(&l)[..], [ClientCommand::LootRelease { guid: CORPSE }]),
+        "released at the packet"
+    );
+    feed(&mut l);
+    assert_eq!(seen(&mut l), "LOOT_SLOT_CLEARED:1,LOOT_CLOSED");
 }
 
 /// `GetNumLootItems` (`0x4c2c30` → `0x4c2260`): the last occupied row's position plus one, plus
