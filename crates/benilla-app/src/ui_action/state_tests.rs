@@ -1916,7 +1916,7 @@ fn the_feed_runs_around_the_snapshots_and_before_the_events_its_producers_preced
     let seen = later_than(fire);
     for later in [
         "::ui_unit::fire_unit_events",
-        "::field_events::fire_field_notices",
+        "::lanes::fire_in_order",
         "::ui_cast::feed_cast_reports",
     ] {
         assert!(
