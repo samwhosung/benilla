@@ -35,24 +35,14 @@ pub struct StationeryCatalog {
 }
 
 impl StationeryCatalog {
-    /// Id 41's `Texture` in the shipped file, the fallback for an unknown id or a failed load.
-    pub const DEFAULT_TEXTURE: &'static str = "STATIONERYTEST";
-
     /// A catalog of the given rows, for tests.
     pub fn from_rows(rows: Vec<StationeryRow>) -> Self {
         let by_id = rows.iter().map(|r| (r.id, r.texture.clone())).collect();
         Self { rows, by_id }
     }
 
-    /// The basename for a stationery id, or [`Self::DEFAULT_TEXTURE`] for one the table lacks.
-    pub fn texture(&self, id: u32) -> &str {
-        self.by_id
-            .get(&id)
-            .map(String::as_str)
-            .unwrap_or(Self::DEFAULT_TEXTURE)
-    }
-
-    /// The basename with no fallback, as `GetSelectedStationeryTexture` answers.
+    /// The basename for a stationery id, `None` for one the table lacks, as `GetInboxText` and
+    /// `GetSelectedStationeryTexture` answer it.
     pub fn texture_of(&self, id: u32) -> Option<&str> {
         self.by_id.get(&id).map(String::as_str)
     }

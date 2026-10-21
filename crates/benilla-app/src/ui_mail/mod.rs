@@ -53,7 +53,7 @@ const STATIONERY_GM: u32 = 61;
 const STATIONERY_ICON_NORMAL: &str = "Interface\\Icons\\INV_Misc_Note_01";
 const STATIONERY_ICON_GM: &str = "Interface\\Icons\\Mail_GMIcon";
 
-/// The `Stationery.dbc` catalog; without it every mail gets the default backdrop.
+/// The `Stationery.dbc` catalog; without it every mail's texture is nil and no paper is usable.
 #[derive(Resource)]
 pub(crate) struct Stationery(pub(crate) benilla_formats::StationeryCatalog);
 
@@ -378,9 +378,10 @@ fn resolve_row(
             .and_then(|g| names.resolve_player(g, ask).map(str::to_string))
     };
 
+    // The store's texture for the id, none for one it lacks (`0x4af27c`-`0x4af2a9`).
     let stationery_texture = stationery
-        .map(|s| s.0.texture(entry.stationery).to_string())
-        .unwrap_or_else(|| benilla_formats::StationeryCatalog::DEFAULT_TEXTURE.to_string());
+        .and_then(|s| s.0.texture_of(entry.stationery))
+        .map(str::to_string);
 
     // The raw body: the invoice parses it before any `$`-macro expansion.
     let raw_body = (entry.item_text_id != 0)
@@ -451,7 +452,7 @@ fn resolve_row(
         can_reply,
         is_gm,
         body: letter_body(entry, raw_body, templates, macros),
-        stationery_texture: Some(stationery_texture),
+        stationery_texture,
         // Won and sold notices only, not every auction mail: the reference's `isInvoice` reads
         // what its subject parser persists for those two alone.
         is_invoice: auction
@@ -492,10 +493,11 @@ fn letter_body(
 type MailSession = (ResMut<'static, MailOpen>, ResMut<'static, MailPending>);
 
 /// The usable stationery list (`0x4ad970`): rows always available (`Flags & 1`) or whose item the
-/// player carries in bags (`0x622270`), with a cached template, sorted by buy price (`0x4ada90`).
-/// A carried paper has no `cost`. The templates are only read (`0x4ada51`): the mail init asks
+/// player carries in bags (`0x622270`), with a cached template, in the comparator `0x4ada90`'s
+/// order: carried first (`0x4adab5`-`0x4adae7`), then the lower buy price, signed (`0x4adb81`), then
+/// the name, ASCII case folded (`SStrCmpI` at `0x4adba6`). A carried paper has no `cost`. The templates are only read (`0x4ada51`): the mail init asks
 /// for them ([`send_query_next_mail_time_on_enter`]).
-fn stationeries(
+pub(super) fn stationeries(
     catalog: &Stationery,
     self_q: &Query<(&ObjectStore, &crate::net::Guid), With<SelfPlayer>>,
     objects: &Objects,
@@ -503,7 +505,7 @@ fn stationeries(
     icons: Option<&ItemDisplays>,
 ) -> Vec<StationeryView> {
     let store = self_q.iter().next().map(|(s, _)| s);
-    let mut out: Vec<(u32, StationeryView)> = Vec::new();
+    let mut out: Vec<((bool, i32, String), StationeryView)> = Vec::new();
     for row in catalog.0.rows() {
         let Some(t) = items.template(row.item, 0, Ask::Read).cloned() else {
             continue;
@@ -520,7 +522,7 @@ fn stationeries(
             continue;
         }
         out.push((
-            t.buy_price,
+            (!carried, t.buy_price as i32, t.name.to_ascii_lowercase()),
             StationeryView {
                 id: row.id,
                 name: t.name.clone(),
@@ -530,7 +532,9 @@ fn stationeries(
             },
         ));
     }
-    out.sort_by_key(|(price, v)| (*price, v.id));
+    // The id breaks what the comparator leaves equal, which its sort (`0x73f727`) leaves in no
+    // order the reference fixes.
+    out.sort_by(|(a, v), (b, w)| a.cmp(b).then(v.id.cmp(&w.id)));
     out.into_iter().map(|(_, v)| v).collect()
 }
 
@@ -1153,7 +1157,7 @@ mod tests {
             &no_strings,
         );
         assert!(row.can_reply);
-        assert_eq!(row.stationery_texture.as_deref(), Some("STATIONERYTEST"));
+        assert_eq!(row.stationery_texture, None, "no store, no texture");
 
         // A player mail still carrying money: replyable.
         let mut with_money = entry(4, Some(0xA), 0, 30.0);
@@ -1454,6 +1458,8 @@ mod tests {
             &mut app.world_mut().resource_mut::<MailOpen>(),
             &commands,
             |_| false,
+            None,
+            |_| {},
         );
         app.update();
         let asked = crate::query_cache::queries(&rx);
@@ -1473,6 +1479,8 @@ mod tests {
             &mut app.world_mut().resource_mut::<MailOpen>(),
             &commands,
             |_| false,
+            None,
+            |_| {},
         );
         app.update();
         assert_eq!(
@@ -1546,6 +1554,8 @@ mod tests {
             &mut app.world_mut().resource_mut::<MailOpen>(),
             &commands,
             |_| false,
+            None,
+            |_| {},
         );
         app.update();
         assert_eq!(crate::query_cache::queries(&rx).len(), 2);
@@ -1626,6 +1636,8 @@ mod tests {
             &mut app.world_mut().resource_mut::<MailOpen>(),
             &commands,
             |_| false,
+            None,
+            |_| {},
         );
         app.update();
         assert_eq!(logged(&mut app), 1, "the first list");
@@ -1634,6 +1646,8 @@ mod tests {
             &mut app.world_mut().resource_mut::<MailOpen>(),
             &commands,
             |_| false,
+            None,
+            |_| {},
         );
         app.update();
         assert_eq!(logged(&mut app), 2, "the same list again is still a result");
@@ -1647,6 +1661,8 @@ mod tests {
                 &mut app.world_mut().resource_mut::<MailOpen>(),
                 &commands,
                 |_| false,
+                None,
+                |_| {},
             );
         }
         app.update();
@@ -1663,6 +1679,8 @@ mod tests {
             &mut app.world_mut().resource_mut::<MailOpen>(),
             &commands,
             |_| false,
+            None,
+            |_| {},
         );
         app.update();
         assert_eq!(logged(&mut app), 5);

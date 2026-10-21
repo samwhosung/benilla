@@ -22,14 +22,50 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::Disconnected, on_session_end);
 }
 
+/// What the list handler reads beside the session: the papers it defaults a row to, and the
+/// profanity mask it runs on each subject.
+#[derive(bevy::ecs::system::SystemParam)]
+struct ListReads<'w, 's> {
+    stationery: Option<Res<'w, super::Stationery>>,
+    self_q: Query<
+        'w,
+        's,
+        (&'static crate::net::ObjectStore, &'static crate::net::Guid),
+        With<crate::net::SelfPlayer>,
+    >,
+    objects: crate::net::Objects<'w, 's>,
+    items: Res<'w, crate::items::Items>,
+    filter: Option<Res<'w, crate::text_filter::TextFilter>>,
+    switches: Option<Res<'w, crate::text_filter::TextFilterSwitches>>,
+}
+
 fn on_mail_list(
     In(ev): In<SessionEvent>,
     mut mail: ResMut<MailOpen>,
     commands: Res<NetCommands>,
     social: Res<crate::ui_social::SocialState>,
+    reads: ListReads,
 ) {
     if let SessionEvent::MailList { mails } = ev {
-        mail_list(mails, &mut mail, &commands, |guid| social.is_ignored(guid));
+        // The usable list's first paper (`[[0xb6ee30]]`, `0x4ad565`-`0x4ad56d`).
+        let first_paper = reads.stationery.as_deref().and_then(|catalog| {
+            super::stationeries(catalog, &reads.self_q, &reads.objects, &reads.items, None)
+                .first()
+                .map(|v| v.id)
+        });
+        let enabled = reads.switches.as_deref().is_some_and(|s| s.profanity);
+        mail_list(
+            mails,
+            &mut mail,
+            &commands,
+            |guid| social.is_ignored(guid),
+            first_paper,
+            |subject| {
+                if let Some(filter) = reads.filter.as_deref() {
+                    filter.mask(enabled, subject);
+                }
+            },
+        );
     }
 }
 
@@ -101,13 +137,18 @@ fn on_session_end(
 /// (`0x4ad47f`) that is neither returned nor a COD payment (`0x4ad496`) is answered at once and
 /// dropped (`0x4ad51d`): `CMSG_MAIL_RETURN_TO_SENDER` when it holds an item or money (`0x4ad4bf`,
 /// `0x4ad4c7`), else `CMSG_MAIL_DELETE` (`0x4ad4cf`), with the mailbox cell as it stands, 0 when
-/// none is open (`0x4ad4e3`). It never touches [`MailPending`]: nothing on the inbox path writes
-/// the countdown `0x845eac`.
+/// none is open (`0x4ad4e3`). Every other row with no positive stationery id takes `first_paper`,
+/// the usable list's first (`0x4ad551`-`0x4ad56f`; the reference reads a null record with an empty
+/// list, which this does not ape), and its subject is masked (`0x4ad5b2`, `dl` 0). An auction
+/// notice's subject is rewritten as the inbox resolves it ([`super::invoice`]), not masked here.
+/// It never touches [`MailPending`]: nothing on the inbox path writes the countdown `0x845eac`.
 pub(super) fn mail_list(
     mails: Vec<MailListEntry>,
     mail: &mut MailOpen,
     commands: &NetCommands,
     is_ignored: impl Fn(u64) -> bool,
+    first_paper: Option<u32>,
+    mut mask: impl FnMut(&mut String),
 ) {
     // The answer clears the request lock (`0x4ad5d0`).
     mail.resolve_request();
@@ -129,6 +170,18 @@ pub(super) fn mail_list(
                 });
             }
             !answered
+        })
+        .map(|mut e| {
+            // The id is read signed (`0x4ad551 cmp [ecx+0x11c],0; jg`).
+            if (e.stationery as i32) <= 0 {
+                if let Some(id) = first_paper {
+                    e.stationery = id;
+                }
+            }
+            if e.message_type != mail_message_type::AUCTION {
+                mask(&mut e.subject);
+            }
+            e
         })
         .collect();
 }

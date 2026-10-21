@@ -984,7 +984,7 @@ fn setup_entities(
     }
     match benilla_formats::load_stationery_catalog(&mut chain) {
         Ok(catalog) => commands.insert_resource(crate::ui_mail::Stationery(catalog)),
-        Err(e) => warn!("stationery catalog unavailable, mail uses the default backdrop: {e:#}"),
+        Err(e) => warn!("stationery catalog unavailable, mail has no paper or texture: {e:#}"),
     }
     match benilla_formats::load_packages(&mut chain) {
         Ok(rows) => commands.insert_resource(crate::ui_mail::Packages(rows)),
