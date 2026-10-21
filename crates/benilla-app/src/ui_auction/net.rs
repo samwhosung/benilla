@@ -261,7 +261,29 @@ fn auction_command_result(
         // `HIGHER_BID` (`0x4cc672`): with the window open the browse and bidder rows take the
         // packet's bidder, bid and increment, and every exit shows the line (`0x4cc76e`,
         // `0x4cc728`).
-        auction_error::HIGHER_BID => {}
+        auction_error::HIGHER_BID => {
+            if let (
+                Some(_),
+                AuctionCommandTail::HigherBid {
+                    new_bidder_guid,
+                    new_bid,
+                    new_min_outbid,
+                },
+            ) = (auction.auctioneer, tail)
+            {
+                let patch = RowPatch {
+                    bid: *new_bid,
+                    increment: Some(*new_min_outbid),
+                    bidder: *new_bidder_guid,
+                    floor_at: None,
+                };
+                auction.patch_row(LIST, auction_id, &patch);
+                auction.patch_row(BIDDER, auction_id, &patch);
+            }
+            auction
+                .messages
+                .push(AuctionMessage::error("ERR_AUCTION_HIGHER_BID"));
+        }
         _ => {
             let inventory_result = match tail {
                 AuctionCommandTail::Inventory { result } => *result,
