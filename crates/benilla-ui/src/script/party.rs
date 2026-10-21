@@ -1397,6 +1397,40 @@ mod tests {
         assert!(s.take_party_requests().is_empty());
     }
 
+    /// `UninviteFromParty` (`0x48a510`) and `PromoteToPartyLeader` (`0x48a7c0`) take a string or
+    /// a number (`0x6f3510`), else their usage line (`0x84277c`, `0x8427e0`); the token goes through
+    /// `0x515970`, which raises for one it does not know (`0x515c14`). Nothing is queued without our
+    /// player object or for a token naming nobody (`0x48a552`-`0x48a55a`, `0x48a802`-`0x48a80a`).
+    #[test]
+    fn the_token_verbs_raise_their_usage_and_queue_nothing_for_nobody() {
+        let mut s = UiScript::new().unwrap();
+        for (call, error) in [
+            ("UninviteFromParty()", r#"Usage: UninviteFromParty("unit")"#),
+            (
+                "PromoteToPartyLeader({})",
+                r#"Usage: PromoteToPartyLeader("unit")"#,
+            ),
+            (r#"UninviteFromParty("bogus")"#, "Unknown unit name: bogus"),
+            ("PromoteToPartyLeader(5)", "Unknown unit name: 5"),
+        ] {
+            let raised = s.run(call).unwrap_err().to_string();
+            assert!(raised.contains(error), "{call}: {raised}");
+        }
+        s.set_unit_guids(&crate::script::UnitGuids {
+            target: 0xB0B,
+            ..Default::default()
+        });
+        s.run(r#"UninviteFromParty("target") PromoteToPartyLeader("target")"#)
+            .unwrap();
+        s.set_unit_guids(&crate::script::UnitGuids {
+            player: 0x5E1F,
+            ..Default::default()
+        });
+        s.run(r#"UninviteFromParty("party1") PromoteToPartyLeader("target")"#)
+            .unwrap();
+        assert!(s.take_party_requests().is_empty());
+    }
+
     fn loot_vm(party: PartyState) -> UiScript {
         let mut s = UiScript::new().unwrap();
         // The active player object, without which the resolver finds nobody (`0x493ae0`).

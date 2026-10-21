@@ -2805,6 +2805,142 @@ mod tests {
         assert_eq!(flag(&mut app, "IsPartyLeader()"), Some(1.0));
     }
 
+    /// `GetPartyLeaderIndex` pushes the leader-index cell plus one (`0x4e9104`-`0x4e9109`). The
+    /// session starts it at -1 (`0x4e7c9f`); every list and every ending zeroes it (`0x5e6b19`,
+    /// `0x5e6855`, `0x5e6898`, `0x5e68fb` into `0x4e85b5`) before the leader store, which returns
+    /// at once for a zero leader (`0x4e8267`) and otherwise stores -1 (`0x4e827a`), then the slot
+    /// holding the leader (`0x4e82b8`).
+    #[test]
+    fn get_party_leader_index_answers_the_cell_plus_one() {
+        let mut app = app();
+        seat_self(&mut app);
+        let list = |app: &mut App, members: Vec<GroupMemberEntry>, leader: u64| {
+            app.world_mut().resource_mut::<GroupState>().apply_list(
+                0,
+                0,
+                members,
+                leader,
+                None,
+                Some(ME),
+            );
+            frame(app);
+        };
+        let index = |app: &mut App| flag(app, "GetPartyLeaderIndex()");
+        frame(&mut app);
+        assert_eq!(index(&mut app), Some(0.0), "the session's start");
+
+        list(&mut app, vec![listed(1, 0), listed(2, 0)], member(2));
+        assert_eq!(index(&mut app), Some(2.0), "party2 leads");
+        list(&mut app, vec![listed(1, 0), listed(2, 0)], ME);
+        assert_eq!(index(&mut app), Some(0.0), "we lead");
+        list(&mut app, Vec::new(), 0);
+        assert_eq!(index(&mut app), Some(1.0), "the all-zero list");
+
+        type Ending = fn(&mut GroupState);
+        let endings: [Ending; 3] = [
+            |g| {
+                let _ = g.apply_uninvited();
+            },
+            |g| {
+                let _ = g.apply_destroyed();
+            },
+            |g| {
+                let _ = g.apply_command_result(
+                    benilla_protocol::messages::party_operation::LEAVE,
+                    "Us",
+                    benilla_protocol::messages::party_result::OK,
+                );
+            },
+        ];
+        for (i, end) in endings.into_iter().enumerate() {
+            list(&mut app, vec![listed(1, 0)], member(1));
+            assert_eq!(index(&mut app), Some(1.0), "ending {i}: party1 leads");
+            end(&mut app.world_mut().resource_mut::<GroupState>());
+            frame(&mut app);
+            assert_eq!(index(&mut app), Some(1.0), "ending {i}");
+            list(&mut app, vec![listed(1, 0)], ME);
+            assert_eq!(index(&mut app), Some(0.0), "ending {i}: we lead again");
+        }
+
+        app.world_mut()
+            .resource_mut::<GroupState>()
+            .apply_uninvited();
+        app.world_mut().resource_mut::<GroupState>().clear_session();
+        frame(&mut app);
+        assert_eq!(index(&mut app), Some(0.0), "a new session");
+    }
+
+    /// `GetLootMethod` (`0x4e91b0`) and `GetLootThreshold` (`0x4e94e0`) read the stored cells
+    /// (`0xbc7600`, `0xbc7608`, `0xbc7610`) with no group test: zero before the first list with
+    /// members, kept by every list without and by the end of the group. The method is named for 0
+    /// to 4 through `0x4e9280`, `ERROR!` above (`0x4e91ef`); the looter's index needs a nonzero
+    /// cell alone (`0x4e9209`): 0 for us (`0x4e9215`), a party slot plus one (`0x4e9238`), else nil.
+    #[test]
+    fn the_loot_getters_read_the_stored_cells_with_no_group() {
+        let mut app = app();
+        seat_self(&mut app);
+        let list = |app: &mut App, members: Vec<GroupMemberEntry>, tail: Option<(u8, u64, u8)>| {
+            let loot = tail.map(|(method, master, threshold)| GroupLootInfo {
+                method,
+                master,
+                threshold,
+            });
+            let leader = if members.is_empty() { 0 } else { ME };
+            app.world_mut().resource_mut::<GroupState>().apply_list(
+                0,
+                0,
+                members,
+                leader,
+                loot,
+                Some(ME),
+            );
+            frame(app);
+        };
+        let loot = |app: &mut App| -> (String, Option<f64>, f64) {
+            let script = app.world_mut().non_send_resource::<UiScript>();
+            let (method, master): (String, Option<f64>) =
+                script.eval("return GetLootMethod()").unwrap();
+            (
+                method,
+                master,
+                script.eval("return GetLootThreshold()").unwrap(),
+            )
+        };
+        frame(&mut app);
+        assert_eq!(
+            loot(&mut app),
+            ("freeforall".into(), None, 0.0),
+            "no list yet"
+        );
+
+        let party = || vec![listed(1, 0), listed(2, 0)];
+        list(&mut app, party(), Some((2, member(2), 3)));
+        assert_eq!(loot(&mut app), ("master".into(), Some(2.0), 3.0));
+        list(&mut app, Vec::new(), None);
+        assert_eq!(
+            loot(&mut app),
+            ("master".into(), None, 3.0),
+            "the all-zero list keeps the cells; the looter holds no slot now"
+        );
+        list(&mut app, party(), Some((3, member(1), 2)));
+        assert_eq!(
+            loot(&mut app),
+            ("group".into(), Some(1.0), 2.0),
+            "a looter under group loot"
+        );
+        list(&mut app, party(), Some((1, ME, 2)));
+        assert_eq!(loot(&mut app), ("roundrobin".into(), Some(0.0), 2.0), "us");
+        list(&mut app, party(), Some((5, 0, 4)));
+        assert_eq!(loot(&mut app), ("ERROR!".into(), None, 4.0), "above 4");
+        app.world_mut().resource_mut::<GroupState>().clear_session();
+        frame(&mut app);
+        assert_eq!(
+            loot(&mut app),
+            ("ERROR!".into(), None, 4.0),
+            "a new session"
+        );
+    }
+
     /// The drain over a group the feed has pushed, and the commands it sends.
     fn drain_app() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         let mut app = app();
@@ -2900,6 +3036,102 @@ mod tests {
         script.run(r#"UninviteFromParty("party1")"#).unwrap();
         frame(&mut app);
         assert_eq!(kicks(&rx), ["name:Unknown Entity"]);
+    }
+
+    /// `SetRaidSubgroup` (`0x4bb990`) sends nothing for a row already in that subgroup (`0x4bba3c`,
+    /// the row's `+8`, its flags under 0x7f) or whose name the cache lacks, looked up with no
+    /// callback (`0x4bba5e`-`0x4bba68`); `SwapRaidSubgroup` (`0x4bbb00`) nothing for two rows of one
+    /// subgroup (`0x4bbba5`) or for either name missing (`0x4bbbec`-`0x4bbbf7`). The names sent are
+    /// the cache's records (`0x4bba9c`, `0x4bbc2b`, `0x4bbc34`).
+    #[test]
+    fn the_subgroup_verbs_send_only_a_move_with_every_name_cached() {
+        let (mut app, rx) = drain_app();
+        seat_self(&mut app);
+        // Row 1 in subgroup 2 under a cached spelling of its own, row 2 in subgroup 3 with no
+        // name cached, row 3 us in subgroup 1.
+        cache_names(&mut app, &[(ME, "Me"), (member(1), "Cached")]);
+        app.world_mut().resource_mut::<GroupState>().apply_list(
+            GROUPTYPE_RAID,
+            0,
+            vec![listed(1, 1), listed(2, 2)],
+            ME,
+            None,
+            Some(ME),
+        );
+        frame(&mut app);
+        let _ = rx.try_iter().count();
+
+        app.world_mut()
+            .non_send_resource::<UiScript>()
+            .run(
+                "SetRaidSubgroup(1, 2) SetRaidSubgroup(2, 1) SetRaidSubgroup(3, 1) \
+                 SetRaidSubgroup(1, 3) SwapRaidSubgroup(1, 1) SwapRaidSubgroup(1, 2) \
+                 SwapRaidSubgroup(2, 3) SwapRaidSubgroup(1, 3)",
+            )
+            .unwrap();
+        frame(&mut app);
+        let sent: Vec<String> = rx
+            .try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::GroupChangeSubGroup { name, group } => {
+                    Some(format!("move:{name}:{group}"))
+                }
+                ClientCommand::GroupSwapSubGroup { name, other } => {
+                    Some(format!("swap:{name}:{other}"))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sent, ["move:Cached:2", "swap:Cached:Me"]);
+    }
+
+    /// `UninviteFromParty` (`0x48a510`) and `PromoteToPartyLeader` (`0x48a7c0`) turn any token into
+    /// a guid through `GetGUIDFromName` (`0x48a54d`, `0x48a7fd`, into `0x515970`) and give a nonzero
+    /// one to the kick sender (`0x5e9510`) or the leader sender (`0x5e9640`), with no party test:
+    /// the target, a raid row and a party slot alike.
+    #[test]
+    fn the_token_verbs_kick_and_promote_whatever_unit_the_token_names() {
+        let (mut app, rx) = drain_app();
+        seat_self(&mut app);
+        app.world_mut().resource_mut::<GroupState>().apply_list(
+            GROUPTYPE_RAID,
+            0,
+            vec![listed(1, 0), listed(2, 1)],
+            ME,
+            None,
+            Some(ME),
+        );
+        frame(&mut app);
+        let _ = rx.try_iter().count();
+        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+        script.set_unit_guids(&benilla_ui::script::UnitGuids {
+            player: ME,
+            target: member(2),
+            party: [member(1), 0, 0, 0],
+            raid: vec![member(1), member(2), ME],
+            ..Default::default()
+        });
+        script
+            .run(
+                r#"UninviteFromParty("target") PromoteToPartyLeader("raid2")
+                   UninviteFromParty("raid1") PromoteToPartyLeader("party1")
+                   UninviteFromParty("party2") PromoteToPartyLeader("mouseover")"#,
+            )
+            .unwrap();
+        frame(&mut app);
+        let sent: Vec<String> = rx
+            .try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::GroupUninvite { name } => Some(format!("kick:{name}")),
+                ClientCommand::GroupUninviteGuid { guid } => Some(format!("kick:{guid:#x}")),
+                ClientCommand::GroupSetLeader { guid } => Some(format!("lead:{guid:#x}")),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            sent,
+            ["kick:0x1002", "lead:0x1002", "kick:0x1001", "lead:0x1001"]
+        );
     }
 
     /// A `/reload` loads the stock frames into a new VM that holds no group, and the roster is

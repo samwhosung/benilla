@@ -1566,6 +1566,50 @@ mod tests {
         );
     }
 
+    /// A party list looks each leaver up with no callback (`0x5e6d15`-`0x5e6d2b`): only a name the
+    /// cache holds shows `ERR_LEFT_GROUP_S` (`0x5e6d30`-`0x5e6d37`), the cache's and not the list's,
+    /// and a miss shows nothing.
+    #[test]
+    fn a_party_leave_line_names_only_a_leaver_the_cache_holds() {
+        let list = |g: &mut GroupState, members, cached: &dyn Fn(u64) -> Option<String>| {
+            g.apply_list_awaiting(0, 0, members, 1, None, Some(ME), &|_| None, cached)
+                .lines
+        };
+        let mut g = GroupState::default();
+        let party = vec![member("Alice", 1), member("Bob", 2), member("Carol", 3)];
+        list(&mut g, party, &|_| None);
+        // Bob is cached under another spelling, Carol not at all.
+        let cache = |guid: u64| (guid == 2).then(|| "Bobby".to_string());
+        assert_eq!(
+            list(&mut g, vec![member("Alice", 1)], &cache),
+            [UiError::s("ERR_LEFT_GROUP_S", "Bobby")]
+        );
+    }
+
+    /// A departure's cached name shows its line at once only while a player is active
+    /// (`0x4ba7ee`): with none, nothing, and nothing later, since a hit leaves no callback.
+    #[test]
+    fn a_raid_departure_shows_at_once_only_with_an_active_player() {
+        let named = |guid: u64| Some(format!("M{guid}"));
+        let raid = |g: &mut GroupState, members, me: Option<u64>| {
+            g.apply_list_awaiting(1, 0, members, 1, None, me, &named, &named)
+                .lines
+        };
+        let mut g = GroupState::default();
+        raid(&mut g, vec![sub("Alice", 1, 0), sub("Bob", 2, 1)], Some(ME));
+        assert_eq!(
+            raid(&mut g, vec![sub("Alice", 1, 0)], None),
+            [],
+            "no active player"
+        );
+        raid(&mut g, vec![sub("Alice", 1, 0), sub("Bob", 2, 1)], Some(ME));
+        assert_eq!(
+            raid(&mut g, vec![sub("Alice", 1, 0)], Some(ME)),
+            [UiError::s("ERR_RAID_MEMBER_REMOVED_S", "M2")],
+            "the cache's name"
+        );
+    }
+
     #[test]
     fn leaving_a_raid_prints_the_left_line_alone() {
         let raid = vec![sub("Alice", 1, 0), sub("Bob", 2, 1), sub("Carol", 3, 0)];

@@ -937,6 +937,172 @@ mod tests {
         );
     }
 
+    /// The group handlers on a session holding us as [`SelfGuid`] `ME`, our name cached.
+    fn handler_app(me: u64) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
+        let mut app = App::new();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<GroupState>()
+            .init_resource::<UiErrorKeys>()
+            .init_resource::<MessageSounds>()
+            .init_resource::<QuestGiver>()
+            .insert_resource(SelfGuid(Some(me)))
+            .init_resource::<NameCache>()
+            .init_resource::<GuidIndex>();
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(me, "Me".into(), None);
+        (app, rx)
+    }
+
+    /// `SMSG_GROUP_LIST` through its handler.
+    fn list_event(app: &mut App, group_type: u8, members: Vec<GroupMemberEntry>, leader: u64) {
+        use bevy::ecs::system::RunSystemOnce;
+        app.world_mut()
+            .run_system_once_with(
+                on_list,
+                SessionEvent::GroupList {
+                    group_type,
+                    own_flags: 0,
+                    members,
+                    leader,
+                    loot: None,
+                },
+            )
+            .expect("the group-list handler");
+    }
+
+    /// `SMSG_NAME_QUERY_RESPONSE` through the name cache's handler, then the group's, as the
+    /// table runs them; an empty name is a refusal.
+    fn name_event(app: &mut App, guid: u64, name: &str) {
+        use bevy::ecs::system::RunSystemOnce;
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(guid, name.into(), None);
+        app.world_mut()
+            .run_system_once_with(
+                on_player_name,
+                SessionEvent::PlayerName {
+                    guid,
+                    name: name.into(),
+                    race: 1,
+                    class: 1,
+                    gender: 0,
+                },
+            )
+            .expect("the name handler");
+    }
+
+    fn shown(app: &mut App) -> Vec<UiError> {
+        app.world_mut().resource::<UiErrorKeys>().take()
+    }
+
+    /// A raid list onto a held roster looks each arrival up with the callback `0x4bacd0`
+    /// (`0x4ba72e`-`0x4ba744`) and each departure with `0x4bad30` (`0x4ba7c6`-`0x4ba7e3`): a
+    /// cached name shows its line at once, the cache's spelling (`0x4ba74e`, `0x4ba7f8`), and a
+    /// miss shows it when the answer finds the name (`0x4bad15`, `0x4bad75`); a refusal shows
+    /// nothing (`0x4bad50`).
+    #[test]
+    fn a_raid_notice_for_a_name_still_to_come_waits_for_its_answer() {
+        const ME: u64 = 0x10;
+        let (mut app, _rx) = handler_app(ME);
+        let (a, b, c, d, e) = (0x21, 0x22, 0x23, 0x24, 0x25);
+        for (guid, name) in [(a, "Aldwyn"), (b, "Brisca"), (d, "Dorn")] {
+            app.world_mut()
+                .resource_mut::<NameCache>()
+                .insert_player(guid, name.into(), None);
+        }
+        // Joining Aldwyn's raid: no roster held, so no notices (`0x4ba725`); Eira's name never
+        // lands.
+        list_event(
+            &mut app,
+            GROUPTYPE_RAID,
+            vec![member(a, "Aldwyn"), member(b, "Brisca"), member(e, "Eira")],
+            a,
+        );
+        assert_eq!(shown(&mut app), [UiError::key("ERR_RAID_YOU_JOINED")]);
+
+        // Cyra (uncached) and Dorn (cached, listed under another spelling) arrive; Brisca
+        // (cached) and Eira (uncached) leave.
+        list_event(
+            &mut app,
+            GROUPTYPE_RAID,
+            vec![member(a, "Aldwyn"), member(c, "Cyra"), member(d, "Dornish")],
+            a,
+        );
+        assert_eq!(
+            shown(&mut app),
+            [
+                UiError::s("ERR_RAID_MEMBER_ADDED_S", "Dorn"),
+                UiError::s("ERR_RAID_MEMBER_REMOVED_S", "Brisca"),
+            ],
+            "the cached names at once"
+        );
+        name_event(&mut app, c, "Cyra");
+        assert_eq!(
+            shown(&mut app),
+            [UiError::s("ERR_RAID_MEMBER_ADDED_S", "Cyra")],
+            "the arrival's answer"
+        );
+        name_event(&mut app, e, "");
+        assert_eq!(shown(&mut app), [], "the departure's name refused");
+        name_event(&mut app, c, "Cyra");
+        assert_eq!(shown(&mut app), [], "nothing left waiting");
+    }
+
+    /// A party list's leaver is looked up with no callback (`0x5e6d15`-`0x5e6d2b`), so a name
+    /// the cache lacks shows no leave line, then or when it lands.
+    #[test]
+    fn an_uncached_party_leaver_shows_no_line_then_or_later() {
+        const ME: u64 = 0x10;
+        let (mut app, _rx) = handler_app(ME);
+        let (a, f) = (0x21, 0x26);
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(a, "Aldwyn".into(), None);
+        list_event(&mut app, 0, vec![member(a, "Aldwyn"), member(f, "Fen")], a);
+        shown(&mut app);
+        list_event(&mut app, 0, vec![member(a, "Aldwyn")], a);
+        assert_eq!(shown(&mut app), [], "Fen's name is still to come");
+        name_event(&mut app, f, "Fen");
+        assert_eq!(shown(&mut app), [], "and its answer shows nothing");
+    }
+
+    /// The raid roster writer ends with `MSG_RAID_TARGET_UPDATE` 0xff, the request for every
+    /// icon, when the roster held no rows on entry (`0x4ba61c` keeps that, `0x4babf4` tests it,
+    /// `0x4bac01`-`0x4bac33` send), after the rebuild's own sends, whatever the new list holds; a
+    /// raid list onto a held roster and a list that is not a raid (`0x4ba550`) send none.
+    #[test]
+    fn a_raid_list_with_no_roster_held_asks_for_every_raid_target() {
+        const ME: u64 = 0x10;
+        let (mut app, rx) = handler_app(ME);
+        let raid = vec![member(0x21, "Aldwyn"), member(0x22, "Brisca")];
+        let sent = |rx: &crossbeam_channel::Receiver<ClientCommand>| -> Vec<ClientCommand> {
+            rx.try_iter().collect()
+        };
+        let asks = |sent: &[ClientCommand]| {
+            sent.iter()
+                .filter(|c| matches!(c, ClientCommand::RequestRaidTargets))
+                .count()
+        };
+
+        list_event(&mut app, 0, raid.clone(), ME);
+        assert_eq!(asks(&sent(&rx)), 0, "a party's list");
+        list_event(&mut app, GROUPTYPE_RAID, raid.clone(), ME);
+        let joined = sent(&rx);
+        assert_eq!(asks(&joined), 1, "the party becomes a raid");
+        assert!(
+            matches!(joined.last(), Some(ClientCommand::RequestRaidTargets)),
+            "the last send: {joined:?}"
+        );
+        list_event(&mut app, GROUPTYPE_RAID, raid.clone(), ME);
+        assert_eq!(asks(&sent(&rx)), 0, "a roster held");
+        list_event(&mut app, GROUPTYPE_RAID, Vec::new(), ME);
+        assert_eq!(asks(&sent(&rx)), 0, "a list naming nobody, onto a roster held");
+        list_event(&mut app, GROUPTYPE_RAID, Vec::new(), ME);
+        assert_eq!(asks(&sent(&rx)), 1, "and again, onto none");
+    }
+
     #[test]
     fn a_despawn_that_is_not_a_party_member_asks_nothing() {
         let (tx, rx) = crossbeam_channel::unbounded();
