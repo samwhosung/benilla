@@ -20,6 +20,9 @@ pub(crate) struct MailVerbs<'w> {
     mail: Option<ResMut<'w, MailOpen>>,
     pending: Option<ResMut<'w, MailPending>>,
     commands: Res<'w, NetCommands>,
+    /// The profanity mask a read letter's text runs through (`0x4af203`).
+    filter: Option<Res<'w, crate::text_filter::TextFilter>>,
+    switches: Option<Res<'w, crate::text_filter::TextFilterSwitches>>,
 }
 
 impl MailVerbs<'_> {
@@ -29,6 +32,8 @@ impl MailVerbs<'_> {
             mail,
             pending,
             commands,
+            filter,
+            switches,
         } = self;
         let Some(mail) = mail.as_deref_mut() else {
             debug!("ui_mail: no mail session in this world; {call:?} dropped");
@@ -60,6 +65,15 @@ impl MailVerbs<'_> {
                         .0
                         .send(ClientCommand::ItemTextQuery { text_id, mail_id });
                 });
+                // The cached text, expanded, is masked on every read (`0x4af1f6`, `0x4af203` with
+                // `dl` 0), so each read moves the mask's phase; a template's body is not.
+                if let (Some(mut body), Some(filter)) =
+                    (script.inbox_body(index), filter.as_deref())
+                {
+                    let enabled = switches.as_deref().is_some_and(|s| s.profanity);
+                    filter.mask(enabled, &mut body);
+                    script.answer_inbox_body(body);
+                }
             }
             return;
         }

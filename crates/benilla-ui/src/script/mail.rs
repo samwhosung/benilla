@@ -253,6 +253,17 @@ impl super::UiScript {
         });
     }
 
+    /// The body row `index` holds, for the host's mask of a read letter.
+    pub fn inbox_body(&self, index: u32) -> Option<String> {
+        let model = self.model_ref();
+        row_at(&model, index as usize).and_then(|r| r.body)
+    }
+
+    /// The body the applying `GetInboxText` call answers, masked by the host (`0x4af203`).
+    pub fn answer_inbox_body(&mut self, body: String) {
+        self.model_mut().mail_body_answer = Some(body);
+    }
+
     /// Whether the VM holds `state` as its inbox: a snapshot equal to what the calls already left
     /// there is no change for the scripts.
     pub fn holds_mail(&self, state: &Option<MailState>) -> bool {
@@ -491,6 +502,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(r) = read(lua) else {
                 return Ok(MultiValue::from_vec(vec![Value::Nil; 4]));
             };
+            // An answer a call that waited for the host left is no answer to this one.
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .mail_body_answer = None;
             submit(
                 lua,
                 MailCall::Open {
@@ -500,12 +515,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     text_id: r.item_text_id,
                 },
             )?;
-            // The row as the call left it.
+            // The row as the call left it, and the body the host masked in it.
+            let answer = lua
+                .app_data_mut::<Model>()
+                .expect("model app_data")
+                .mail_body_answer
+                .take();
             let Some(r) = read(lua) else {
                 return Ok(MultiValue::from_vec(vec![Value::Nil; 4]));
             };
-            // The body as the app resolved it, nil on every miss (`0x4af275`).
-            let body = match &r.body {
+            // The body, nil on every miss (`0x4af275`).
+            let body = match answer.as_ref().or(r.body.as_ref()) {
                 Some(b) => Value::String(lua.create_string(b)?),
                 None => Value::Nil,
             };

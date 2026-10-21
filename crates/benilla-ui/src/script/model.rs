@@ -954,6 +954,8 @@ pub(crate) struct Model {
     pub(crate) mail_send_pending: bool,
     /// `CloseMail`, for the interaction latch's close.
     pub(crate) mail_close: bool,
+    /// The masked body the host answered the applying `GetInboxText` call with (`0x4af203`).
+    pub(crate) mail_body_answer: Option<String>,
     pub(crate) mail_send_money: u32,
     pub(crate) mail_send_cod: u32,
     /// The Send tab's attached item (`0xb6ef90`), whose guid the send carries.
@@ -1766,6 +1768,7 @@ impl Model {
             mail_busy: false,
             mail_send_pending: false,
             mail_close: false,
+            mail_body_answer: None,
             mail_send_money: 0,
             mail_send_cod: 0,
             mail_send_item: None,
