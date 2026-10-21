@@ -87,7 +87,6 @@ fn row(sender: &str, subject: &str, was_read: bool, item_id: u32, cod: u32) -> M
         stationery_texture: "STATIONERYTEST".into(),
         is_invoice: false,
         invoice: None,
-        has_body: true,
         item_id,
         item_name: (item_id != 0).then(|| "Linen Cloth".to_string()),
         item_texture: (item_id != 0).then(|| "Interface\\Icons\\INV_Fabric_Linen_01".to_string()),

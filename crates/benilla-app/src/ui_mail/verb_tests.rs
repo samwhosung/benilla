@@ -67,7 +67,6 @@ fn row_of(e: &MailListEntry) -> MailInboxRow {
         item_id: e.item.as_ref().map_or(0, |i| i.entry),
         item_count: e.item.as_ref().map_or(0, |i| u32::from(i.count)),
         was_read: e.checked & CHECKED_READ != 0,
-        has_body: e.item_text_id != 0,
         can_reply: true,
         subject: e.subject.clone(),
         ..Default::default()

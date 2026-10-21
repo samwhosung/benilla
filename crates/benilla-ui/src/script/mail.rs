@@ -62,8 +62,6 @@ pub struct MailInboxRow {
     /// `GetInboxInvoiceInfo`'s answer; `None`, the reference's miss, also while the body or the
     /// counterparty's name is in flight.
     pub invoice: Option<MailInvoice>,
-    /// `item_text_id != 0`: the mail has a letter body to fetch.
-    pub has_body: bool,
     /// The enclosed item's template entry, 0 for none; the key `SetInboxItem`'s tooltip reads.
     pub item_id: u32,
     /// The enclosed item's random-suffix id (the wire `randomPropId`), 0 for none, which the
@@ -385,7 +383,7 @@ impl MailRowVerb {
             // A body or a template to copy (`[rec+0x114]`, `[rec+0x25c]`, `0x4afae7`), not yet
             // copied (`& 4`, `0x4afafb`).
             MailRowVerb::TakeText => {
-                (row.has_body || row.mail_template_id != 0) && !row.text_created
+                (row.item_text_id != 0 || row.mail_template_id != 0) && !row.text_created
             }
             // A player's mail (type 0, `0x4afc27`) with an item or money (`0x4afc30`), neither
             // returned nor a COD payment (`& 0xa`, `0x4afc44`).
@@ -1245,7 +1243,6 @@ mod tests {
             stationery_texture: "STATIONERYTEST".into(),
             is_invoice: false,
             invoice: None,
-            has_body: true,
             item_id,
             item_name: (item_id != 0).then(|| "Linen Cloth".to_string()),
             item_texture: (item_id != 0)
@@ -1643,7 +1640,7 @@ mod tests {
         s.set_unit("player", Some(crate::script::UnitState::default()));
         let mut empty = row(0);
         empty.money = 0;
-        empty.has_body = false;
+        empty.item_text_id = 0;
         let mut cod = row(2589);
         cod.cod = 100;
         let mut copied = row(0);
@@ -2070,14 +2067,14 @@ mod tests {
         let mut s = kept();
         s.keep_calls();
         let mut template = row(0);
-        (template.item_text_id, template.has_body) = (0, false);
+        template.item_text_id = 0;
         template.mail_template_id = 87;
         let mut copied = row(0);
         copied.text_created = true;
         let mut gm = row(0);
         (gm.stationery, gm.is_gm) = (61, true);
         let mut neither = row(0);
-        (neither.item_text_id, neither.has_body) = (0, false);
+        neither.item_text_id = 0;
         s.set_mail(Some(MailState {
             inbox: vec![row(0), template, copied, gm, neither],
             open: true,
@@ -2100,7 +2097,7 @@ mod tests {
         let mut unfetched = row(0);
         unfetched.body = None;
         let mut neither = row(0);
-        (neither.item_text_id, neither.has_body, neither.body) = (0, false, None);
+        (neither.item_text_id, neither.body) = (0, None);
         s.set_mail(Some(MailState {
             inbox: vec![row(0), unfetched, neither],
             open: true,

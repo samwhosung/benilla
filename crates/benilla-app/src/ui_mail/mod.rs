@@ -449,7 +449,6 @@ fn resolve_row(
         is_invoice: auction
             .is_some_and(|a| matches!(a.result, auction_mail::WON | auction_mail::SOLD)),
         invoice: auction_invoice,
-        has_body: entry.item_text_id != 0,
         item_id,
         item_random_property_id: item_roll,
         item_charges,
@@ -1180,7 +1179,7 @@ mod tests {
         assert_eq!(row.item_id, 2589);
         assert_eq!(row.item_count, 5);
         assert_eq!(row.body.as_deref(), Some("the letter body"));
-        assert!(row.has_body);
+        assert_eq!(row.item_text_id, e.item_text_id);
         // The item template has not answered yet.
         assert!(row.item_name.is_none());
     }
