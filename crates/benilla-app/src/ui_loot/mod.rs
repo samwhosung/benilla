@@ -978,7 +978,7 @@ pub(crate) fn close_loot_on_leave_world(
     mut dead: DeadUnitDeselect,
     sweep: LegSweepInputs,
 ) {
-    vm.turn(|script, (mut loot, mut latch)| {
+    let closed = vm.turn(|script, (mut loot, mut latch)| {
         if loot.disenchant_holds() {
             let LegSweepInputs { items, mut pickup } = sweep;
             if let Some(script) = script {
@@ -986,14 +986,20 @@ pub(crate) fn close_loot_on_leave_world(
             } else {
                 loot.owe_sweep();
             }
-            return;
+            return None;
         }
-        let closed = close_interaction(&mut loot, &mut latch, Some(&commands));
-        if closed.is_none() {
-            return;
-        }
+        let closed = close_interaction(&mut loot, &mut latch, Some(&commands))?;
         if let Some(script) = script {
-            announce_loot_closed(script, &mut loot, &objects);
+            unlock_closed_source(script, &mut loot, &objects);
+        }
+        Some(closed)
+    });
+    if closed.is_none() {
+        return;
+    }
+    vm.turn(|script, _| {
+        if let Some(script) = script {
+            announce_loot_closed(script);
         }
         dead.after_close(closed);
     })
@@ -1014,15 +1020,21 @@ pub(crate) fn tell_loot_closed(
 ) {
     vm.turn(|script, mut loot| {
         if let Some(script) = script {
-            announce_loot_closed(script, &mut loot, &objects);
+            unlock_closed_source(script, &mut loot, &objects);
+        }
+    });
+    vm.turn(|script, _| {
+        if let Some(script) = script {
+            announce_loot_closed(script);
         }
     })
 }
 
-/// The VM's half of a close that runs where the feed cannot report it: an item source's two
-/// unlocks (`0x48f2bd`, `0x4c1d36`), each resolved as the close's own lookup (`0x48f29e`), then
-/// `LOOT_CLOSED` (`0x4c1dac`).
-fn announce_loot_closed(
+/// The VM's half of a close that runs where the feed cannot report it, first: an item source's
+/// two unlocks (`0x48f2bd`, `0x4c1d36`), each resolved as the close's own lookup (`0x48f29e`). Both
+/// come before the teardown zeroes the source (`0x4c1cb0`), so their handlers read the window
+/// open, and run as this turn ends, ahead of [`announce_loot_closed`].
+fn unlock_closed_source(
     script: &mut UiScript,
     loot: &mut LootState,
     objects: &crate::net::Objects,
@@ -1032,6 +1044,10 @@ fn announce_loot_closed(
             script.unlock_item(guid);
         }
     }
+}
+
+/// The close's teardown in the VM: the window goes and `LOOT_CLOSED` signals (`0x4c1dac`).
+fn announce_loot_closed(script: &mut UiScript) {
     script.set_loot(None);
     script.fire_event("LOOT_CLOSED", vec![]);
 }
