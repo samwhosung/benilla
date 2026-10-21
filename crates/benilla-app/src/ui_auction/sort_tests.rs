@@ -156,7 +156,7 @@ impl House {
 
     /// The list updates since the last call, each with its list's order as it fired.
     fn seen(&mut self) -> Vec<String> {
-        let mut script = self.script();
+        let script = self.script();
         let seen = script.eval::<Vec<String>>("return SEEN").unwrap();
         script.run("SEEN = {}").unwrap();
         seen

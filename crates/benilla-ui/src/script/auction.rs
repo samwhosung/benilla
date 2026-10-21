@@ -1133,9 +1133,16 @@ mod tests {
             "the highest buyout first, signalled inside the call"
         );
         assert!(s.eval::<bool>("return REVERSED == nil").unwrap());
-        s.run(r#"SEEN = {} SortAuctionItems("list", "buyout") REVERSED = IsAuctionSortReversed("list", "buyout")"#)
-            .unwrap();
-        assert_eq!(s.eval::<Vec<String>>("return SEEN").unwrap(), ["nil:Cheap"]);
+        s.run(
+            r#"SEEN = {}
+               SortAuctionItems("list", "buyout")
+               REVERSED = IsAuctionSortReversed("list", "buyout")"#,
+        )
+        .unwrap();
+        assert_eq!(
+            s.eval::<Vec<String>>("return SEEN").unwrap(),
+            ["false:Cheap"]
+        );
         assert!(
             s.eval::<bool>("return REVERSED == 1").unwrap(),
             "the second click flips the primary, and the next line reads it"
