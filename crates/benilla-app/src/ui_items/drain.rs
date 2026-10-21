@@ -862,11 +862,12 @@ mod tests {
                 (F_PACK_SLOT_1 + 1, (CLAM >> 32) as u32),
             ])),
         ));
-        // The item object and its lootable template, so the open arm claims the click.
+        // The item object (`OBJECT_FIELD_TYPE` an item's) and its lootable template, so the open
+        // arm claims the click.
         crate::items::test_spawn_item(
             app.world_mut(),
             CLAM,
-            ObjectFields::from_pairs(&[(F_OBJECT_ENTRY, CLAM_ENTRY)]),
+            ObjectFields::from_pairs(&[(2, 0x3), (F_OBJECT_ENTRY, CLAM_ENTRY)]),
             false,
         );
         let mut items = app.world_mut().resource_mut::<Items>();
@@ -974,9 +975,10 @@ mod tests {
     }
 
     /// `OpenItem` stores whether Shift is down through `SetAutoLoot` (`0x5edca7`-`0x5edcb6`) before
-    /// it holds the item as the loot target (`0x5edcc0`) and sends `CMSG_OPEN_ITEM`: alone the byte
-    /// waits for the item's answer; with a window open on another source the store sweeps it at
-    /// once (`0x5df470` → `0x5df480`), its rows ahead of the open.
+    /// it holds the item as the loot target (`0x5edcc0`), locks it (`0x5edcd9`) and sends
+    /// `CMSG_OPEN_ITEM`: alone the byte waits for the item's answer; with a window open on another
+    /// source the store sweeps it at once (`0x5df470` → `0x5df480`), its rows and its
+    /// `LOOT_OPENED` ahead of the lock and the open.
     #[test]
     fn a_shift_open_stores_the_byte_and_sweeps_an_open_window_first() {
         const CORPSE: u64 = 0xF130_0000_0000_00AB;
@@ -988,7 +990,7 @@ mod tests {
         ));
         assert!(app.world().resource::<crate::ui_loot::AutoLootByte>().0);
 
-        let (_app, rx) = open_the_clam_with(true, |app| {
+        let (app, rx) = open_the_clam_with(true, |app| {
             let corpse = app
                 .world_mut()
                 .spawn(ObjectStore(ObjectFields::from_pairs(&[(2, 0x9)])))
@@ -1015,7 +1017,24 @@ mod tests {
                 }],
             );
             world.resource_mut::<crate::ui_loot::LootLatch>().0 = Some(CORPSE);
+            app.world()
+                .non_send_resource::<UiScript>()
+                .run(
+                    "SEEN = {} local f = CreateFrame('Frame') \
+                     f:RegisterEvent('LOOT_OPENED') f:RegisterEvent('ITEM_LOCK_CHANGED') \
+                     f:SetScript('OnEvent', function() tinsert(SEEN, event) end)",
+                )
+                .unwrap();
         });
+        let seen: String = app
+            .world()
+            .non_send_resource::<UiScript>()
+            .eval("return table.concat(SEEN, ',')")
+            .unwrap();
+        assert_eq!(
+            seen, "LOOT_OPENED,ITEM_LOCK_CHANGED",
+            "the sweep, then the lock"
+        );
         let sent: Vec<ClientCommand> = rx.try_iter().collect();
         assert!(
             matches!(

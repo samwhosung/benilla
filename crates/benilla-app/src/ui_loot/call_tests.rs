@@ -653,3 +653,106 @@ fn a_refusal_for_another_session_shows_nothing_and_drops_the_target() {
         );
     }
 }
+
+/// A response over an open window runs its copier's teardown first (`0x4c1cb0`): the source is
+/// zeroed (`0x4c1da0`) and `LOOT_CLOSED` signalled (`0x4c1dac`) before the new source is stored
+/// (`0x4c1dc2`), so a `CloseLoot` in its handlers finds no window (`0x48f23f`) and releases
+/// nothing; the new window opens.
+#[test]
+fn a_replacing_responses_close_finds_no_window() {
+    let mut l = client();
+    run(
+        &mut l,
+        r#"local f = CreateFrame("Frame")
+        f:RegisterEvent("LOOT_CLOSED")
+        f:SetScript("OnEvent", function() CloseLoot() end)"#,
+    );
+    open(&mut l, CORPSE, 1, 0, vec![row(0, LINEN)]);
+    let _ = (seen(&mut l), sent(&l));
+    open(&mut l, LOCKBOX, 1, 0, vec![row(0, WOOL)]);
+    assert!(sent(&l).is_empty(), "no release");
+    assert_eq!(seen(&mut l), "LOOT_CLOSED,LOOT_OPENED");
+    assert_eq!(
+        l.app.world().resource::<LootState>().source(),
+        Some(LOCKBOX)
+    );
+    assert_eq!(l.app.world().resource::<LootLatch>().0, Some(LOCKBOX));
+    assert_eq!(
+        eval::<String>(
+            &mut l,
+            "local _, name = GetLootSlotInfo(1) return name or ''"
+        ),
+        "Wool Cloth"
+    );
+}
+
+/// The same on the stock frames: `LOOT_CLOSED` hides `LootFrame` (`LootFrame.lua:53-55`), whose
+/// `OnHide` calls `CloseLoot()` (`:143-145`), which finds no window at the copier's teardown; the
+/// new window's `LOOT_OPENED` shows the frame again and the lockbox's loot is kept.
+#[test]
+fn the_stock_frames_hide_on_a_replacing_response_releases_nothing() {
+    benilla_formats::wow_data_or_skip!();
+    let mut l = client();
+    {
+        let mut s = l.app.world_mut().non_send_resource_mut::<UiScript>();
+        s.set_screen_size(1024.0, 768.0);
+        for f in crate::ui_script::test_ui::production_order(&[
+            crate::ui_script::test_ui::LOOT_UI,
+            &["Interface\\FrameXML\\LootFrame.xml"],
+        ]) {
+            crate::ui_script::test_ui::load_ui(&s, f);
+        }
+    }
+    let shown = |l: &mut Loot| eval::<bool>(l, "return LootFrame:IsShown() == 1");
+    open(&mut l, CORPSE, 1, 0, vec![row(0, LINEN)]);
+    assert!(shown(&mut l), "the corpse's window");
+    let _ = sent(&l);
+    open(&mut l, LOCKBOX, 1, 0, vec![row(0, WOOL)]);
+    assert!(sent(&l).is_empty(), "no release");
+    assert!(shown(&mut l), "the lockbox's window");
+    assert_eq!(
+        l.app.world().resource::<LootState>().source(),
+        Some(LOCKBOX)
+    );
+}
+
+/// Each function keeps its own confirm row: a take's (`0x4c2917`) and a sweep's (`0x4c21dc`). A
+/// take's `LOOT_BIND_CONFIRM` whose handler closes a disenchant window runs the sweep inside it
+/// (`0x48f264` → `0x4c1fa0`), which signals its own row's confirm and goes on past it; the take
+/// then stores its row, which the accept sends.
+#[test]
+fn a_take_and_a_sweep_inside_it_keep_their_own_confirm_rows() {
+    let mut l = client();
+    open(
+        &mut l,
+        CORPSE,
+        4,
+        0,
+        vec![row(0, FELSTRIKER), row(1, FELSTRIKER), row(2, LINEN)],
+    );
+    let _ = (seen(&mut l), sent(&l));
+    run(
+        &mut l,
+        r#"local f = CreateFrame("Frame")
+        f:RegisterEvent("LOOT_BIND_CONFIRM")
+        f:SetScript("OnEvent", function()
+            if arg1 == 2 and not CLOSED then CLOSED = 1 CloseLoot() end
+        end)"#,
+    );
+    click(&mut l, 2);
+    assert_eq!(
+        seen(&mut l),
+        "LOOT_BIND_CONFIRM:2,LOOT_BIND_CONFIRM:1,LOOT_OPENED"
+    );
+    assert!(
+        matches!(sent(&l)[..], [ClientCommand::AutostoreLootItem { slot: 2 }]),
+        "the sweep went on past its confirm"
+    );
+    run(&mut l, "LootSlot(1)");
+    assert!(sent(&l).is_empty(), "the sweep's row is not the stash");
+    run(&mut l, "LootSlot(2)");
+    assert!(
+        matches!(sent(&l)[..], [ClientCommand::AutostoreLootItem { slot: 1 }]),
+        "the take's row is"
+    );
+}

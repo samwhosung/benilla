@@ -22,6 +22,8 @@ const BODY_B: u64 = 0xF130_0000_0000_00B2;
 /// A skinnable creature that has been looted.
 const HIDE: u64 = 0xF130_0000_0000_00C3;
 const CHEST: u64 = 0xF110_0000_0000_00D4;
+/// A lootable bone pile, a corpse object.
+const BONES: u64 = 0xF000_0000_0000_00E5;
 const LINEN: u32 = 2589;
 const SKINNING: u32 = 8613;
 /// `UNIT_DYNAMIC_FLAGS`: lootable.
@@ -34,6 +36,7 @@ struct Client {
     rx: Receiver<ClientCommand>,
     bodies: [(u64, Entity); 3],
     chest: Entity,
+    bones: Entity,
 }
 
 fn fields(pairs: &[(u16, u32)]) -> ObjectStore {
@@ -41,8 +44,8 @@ fn fields(pairs: &[(u16, u32)]) -> ObjectStore {
 }
 
 /// The whole client, headless: our player, the active mover, two dead lootable creatures, a
-/// looted skinnable one and a chest, all in reach, with a VM noting `LOOT_OPENED` and
-/// `LOOT_CLOSED` in `SEEN`.
+/// looted skinnable one, a chest and a lootable corpse, all in reach, Skinning known, with a VM
+/// noting `LOOT_OPENED` and `LOOT_CLOSED` in `SEEN`.
 fn client() -> Client {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
     let (tx, rx) = crossbeam_channel::unbounded();
@@ -73,7 +76,8 @@ fn client() -> Client {
             unit(EntityKind::Player),
             Transform::default(),
             GlobalTransform::default(),
-            fields(&[(22, 100), (28, 100)]),
+            // `OBJECT_FIELD_TYPE` a player's, the cast ladder's actor.
+            fields(&[(2, 0x19), (22, 100), (28, 100)]),
         ))
         .id();
     world
@@ -128,9 +132,35 @@ fn client() -> Client {
         .resource_mut::<crate::net::GuidIndex>()
         .0
         .insert(CHEST, chest);
+    let bones = world
+        .spawn((
+            Guid(BONES),
+            Transform::from_xyz(0.0, 0.0, -1.0),
+            GlobalTransform::default(),
+            fields(&[(benilla_protocol::field::FIELD_CORPSE_DYNAMIC_FLAGS, 0x1)]),
+        ))
+        .id();
+    world
+        .resource_mut::<crate::net::GuidIndex>()
+        .0
+        .insert(BONES, bones);
     world
         .resource_mut::<crate::ui_action::LearnedAbilities>()
         .skinning = Some(SKINNING);
+    let mut spells = crate::ui_action::Spells::empty_for_tests();
+    spells.catalog = benilla_formats::SpellCatalog::from_displays(
+        [(
+            SKINNING,
+            benilla_formats::SpellDisplay {
+                targets: 0x402,
+                implicit_target_a1: 25,
+                ..Default::default()
+            },
+        )]
+        .into_iter()
+        .collect(),
+    );
+    world.insert_resource(spells);
     world
         .resource_mut::<crate::items::Items>()
         .insert_template(LINEN, Some(crate::items::test_template("Linen Cloth")));
@@ -149,6 +179,7 @@ fn client() -> Client {
         rx,
         bodies,
         chest,
+        bones,
     }
 }
 
@@ -201,6 +232,32 @@ impl Client {
             },
             ..PressPick::default()
         });
+    }
+
+    /// A right-click on the corpse, its cursor as the press found it: grey while another loot is
+    /// held (`0x4827d7`).
+    fn right_click_bones(&mut self, unable: bool) {
+        self.right_click(PressPick {
+            hovered: Hovered {
+                corpse: Some(self.bones),
+                corpse_guid: Some(BONES),
+                distance: 1.0,
+                ..Hovered::default()
+            },
+            cursor: WorldCursor {
+                kind: cursor_mode::CursorKind::LootAll,
+                unable,
+            },
+            ..PressPick::default()
+        });
+    }
+
+    /// The frame's right-click casts, sent through the cast ladder.
+    fn drain_casts(&mut self) {
+        self.app
+            .world_mut()
+            .run_system_once(crate::ui_action::drain_click_casts)
+            .unwrap();
     }
 
     fn right_click(&mut self, press: PressPick) {
@@ -382,14 +439,77 @@ fn a_shift_click_on_a_chest_stores_the_byte_before_the_use() {
     assert!(!c.byte());
 }
 
-/// The skin leg's `InteractWithSpell` stores the byte after its cast (`0x5f06e1`-`0x5f06ef`, its
-/// `set` given by the leg, `0x60c06e`), so the skinning's loot auto-loots with Shift held.
+/// The skin leg's `InteractWithSpell` casts (`0x5f06dc`), then stores the byte (`0x5f06e1`-
+/// `0x5f06ef`, its `set` given by the leg, `0x60c06e`): alone, the byte waits for the skinning's
+/// loot; with a window open, the cast goes out ahead of the sweep's stores.
 #[test]
-fn a_shift_skin_stores_the_byte() {
+fn a_shift_skin_casts_then_stores_the_byte() {
     let mut c = client();
     c.shift(true);
     c.right_click_body(HIDE);
+    c.drain_casts();
     assert!(c.byte());
+
+    let mut c = client();
+    c.looting(BODY_A, vec![linen(0)]);
+    c.shift(true);
+    c.right_click_body(HIDE);
+    c.drain_casts();
+    let sent: Vec<ClientCommand> =
+        c.rx.try_iter()
+            .filter(|c| {
+                matches!(
+                    c,
+                    ClientCommand::CastSpell { .. } | ClientCommand::AutostoreLootItem { .. }
+                )
+            })
+            .collect();
+    assert!(
+        matches!(
+            sent[..],
+            [
+                ClientCommand::CastSpell {
+                    spell_id: SKINNING,
+                    ..
+                },
+                ClientCommand::AutostoreLootItem { slot: 0 }
+            ]
+        ),
+        "the cast, then the sweep: {sent:?}"
+    );
+}
+
+/// The corpse leg stores the byte (`0x5d6c68`) before `LootCorpse` asks `CanLootNow`
+/// (`0x5df151` → `0x5ec110`): a Shift-click whose sweep closes an empty window has dropped the
+/// target (`0x4c224f` → `0x48f2c9`), so the corpse is looted, though the cursor was grey at the
+/// press.
+#[test]
+fn a_shift_click_on_a_corpse_over_an_empty_window_loots_it() {
+    let mut c = client();
+    c.looting(BODY_A, Vec::new());
+    c.shift(true);
+    c.right_click_bones(true);
+    let sent = c.sent();
+    assert!(
+        matches!(
+            sent[..],
+            [
+                ClientCommand::LootRelease { guid: BODY_A },
+                ClientCommand::Loot { guid: BONES }
+            ]
+        ),
+        "the close, then the loot: {sent:?}"
+    );
+
+    // With the window's row left, the sweep keeps it open and the corpse is refused.
+    let mut c = client();
+    c.looting(BODY_A, vec![linen(0)]);
+    c.shift(true);
+    c.right_click_bones(true);
+    assert!(matches!(
+        c.sent()[..],
+        [ClientCommand::AutostoreLootItem { slot: 0 }]
+    ));
 }
 
 /// The loot cursor grays over a lootable body or corpse while another loot is held (`0x4824fe`,

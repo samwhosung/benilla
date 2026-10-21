@@ -18,12 +18,25 @@ const DISENCHANT: u8 = 4;
 /// An entry the item cache has no record of.
 const UNCACHED: u32 = 40_000;
 
-/// The money lines the sweeps queued for the chat frame, in order.
-fn money_lines(l: &Loot) -> Vec<String> {
-    l.app
-        .world()
-        .resource::<crate::ui_chat::ChatLog>()
-        .pending_lines()
+/// A recorder for the money lines: `CHAT_MSG_MONEY` noted in `SEEN` in its place among the loot
+/// events, and its text in `MONEY`.
+fn note_money(l: &mut Loot) {
+    run(
+        l,
+        r#"MONEY = {}
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("CHAT_MSG_MONEY")
+        f:SetScript("OnEvent", function() tinsert(SEEN, event) tinsert(MONEY, arg1) end)"#,
+    );
+}
+
+/// The money lines signalled so far, in order.
+fn money_lines(l: &mut Loot) -> Vec<String> {
+    eval::<String>(l, "return table.concat(MONEY, '|')")
+        .split('|')
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// An auto-loot open: the byte the interaction stored, then the response.
@@ -39,14 +52,17 @@ fn auto_open(
 
 /// Money above 0 with the flag `0xb71bc4` clear (`0x4c2008`, `0x4c2015`): outside a party and a
 /// raid, the line `YOU_LOOT_MONEY` with the coins, gold first, as `"%d %s"` joined by the
-/// reference's separator tests (`0x4c2043`-`0x4c2123`), on chat type 86 (`0x4c2170`). The sweep's
-/// end sets the flag (`0x4c221e`), so a second sweep of the session prints none; the next
-/// session's copier clears it (`0x4c1d95`).
+/// reference's separator tests (`0x4c2043`-`0x4c2123`), on chat type 86, added in place
+/// (`0x4c2170` → `AddChatLine 0x49a870`): its `CHAT_MSG_MONEY` runs inside the sweep, ahead of the
+/// rows and the sweep's `LOOT_OPENED` (`0x4c2240`). The sweep's end sets the flag (`0x4c221e`), so
+/// a second sweep of the session prints none; the next session's copier clears it (`0x4c1d95`).
 #[test]
 fn the_sweep_prints_the_money_line_once_per_session() {
     let mut l = client();
+    note_money(&mut l);
     auto_open(&mut l, DISENCHANT, 10_203, vec![row(1, LINEN)]);
-    assert_eq!(money_lines(&l), ["You loot 1 Gold, 2 Silver, 3 Copper"]);
+    assert_eq!(money_lines(&mut l), ["You loot 1 Gold, 2 Silver, 3 Copper"]);
+    assert_eq!(seen(&mut l), "CHAT_MSG_MONEY,LOOT_OPENED", "in place");
     let _ = sent(&l);
     run(&mut l, "CloseLoot()");
     assert!(
@@ -59,12 +75,12 @@ fn the_sweep_prints_the_money_line_once_per_session() {
         ),
         "the second sweep asks for the coin again (`0x4c1ffc`)"
     );
-    assert_eq!(money_lines(&l).len(), 1, "but prints no second line");
+    assert_eq!(money_lines(&mut l).len(), 1, "but prints no second line");
 
     // The next session, a zero middle coin: both separators stand (`0x4c20c7`, `0x4c20e8`).
     auto_open(&mut l, DISENCHANT, 10_003, vec![row(1, LINEN)]);
     assert_eq!(
-        money_lines(&l)[1..],
+        money_lines(&mut l)[1..],
         ["You loot 1 Gold, , 3 Copper".to_string()]
     );
 }
@@ -88,16 +104,18 @@ fn a_party_or_a_raid_skips_the_money_line() {
                 .resource_mut::<crate::ui_party::GroupState>()
                 .apply_list(group_type, 0, members, ME, None, Some(ME));
         };
+        note_money(&mut l);
         group(&mut l, vec![member]);
         auto_open(&mut l, 1, 500, vec![row(1, LINEN)]);
-        assert!(money_lines(&l).is_empty(), "group type {group_type}");
+        assert!(money_lines(&mut l).is_empty(), "group type {group_type}");
         assert!(
             matches!(sent(&l)[..], [ClientCommand::LootMoney, ..]),
             "group type {group_type}"
         );
         let mut l = client();
+        note_money(&mut l);
         auto_open(&mut l, 1, 500, vec![row(1, LINEN)]);
-        assert_eq!(money_lines(&l), ["You loot 5 Silver"], "alone");
+        assert_eq!(money_lines(&mut l), ["You loot 5 Silver"], "alone");
     }
 }
 
@@ -198,5 +216,35 @@ fn two_responses_in_one_frame_each_end_their_own_copier() {
             "Wool Cloth",
             "the second window shows"
         );
+    }
+}
+
+/// `autoLootDefault`, benilla's own option, auto-loots every window when on, with Shift held
+/// opening it plain: a pickpocket or disenchant window, which no interaction stores the byte for,
+/// takes it at its copier's end from the Shift held then. Off, they open plain, as in 1.12.
+#[test]
+fn auto_loot_default_sweeps_a_pickpocket_and_a_disenchant_window() {
+    for loot_type in [2, DISENCHANT] {
+        for (on, shift, swept) in [
+            (true, false, true),
+            (true, true, false),
+            (false, false, false),
+        ] {
+            let mut l = client();
+            l.app
+                .world_mut()
+                .resource_mut::<super::LootConfig>()
+                .auto_loot = on;
+            crate::script_calls::with_hosted_vm(l.app.world_mut(), |s| {
+                s.expect("a VM").set_modifiers(shift, false, false);
+            });
+            open(&mut l, CORPSE, loot_type, 0, vec![row(0, LINEN)]);
+            let stores = sent(&l);
+            assert_eq!(
+                matches!(stores[..], [ClientCommand::AutostoreLootItem { slot: 0 }]),
+                swept,
+                "type {loot_type}, on {on}, shift {shift}: {stores:?}"
+            );
+        }
     }
 }
