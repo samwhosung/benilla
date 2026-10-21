@@ -701,6 +701,16 @@ fn cast_result(
         // spell still in flight. vmangos sends 0x17 for real aborts.
         let dont_report = reason == Some(0x17);
         let self_e = self_guid.0.and_then(|g| index.0.get(&g)).copied();
+        // NOT_READY with a first dword of 0, the server holding no cooldown of its own
+        // (`0x6e1af1`): a held record of the spell on our list (`0x6e1690`, `0x6e1b02`) goes with
+        // all its records (`0x6e3050(spell, 0, 0, 1)`, `0x6e1b13`). An absent dword reads -1.
+        if reason == Some(0x3c) && arg == Some(0) {
+            if let Some(d) = spells.and_then(|s| s.catalog.get(spell_id)) {
+                if cooldowns.has_on_hold_record(spell_id, 0, d.category) {
+                    cooldowns.clear_spell(spell_id);
+                }
+            }
+        }
         if auto_repeat.0 == Some(spell_id) && !dont_report {
             crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, edits, net);
         }
