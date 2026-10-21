@@ -3,8 +3,8 @@
 //! ascending (`0x5add04`). A click promotes its key to the front and the comparator walks the chain
 //! as tie-breakers, so earlier clicks still order ties. The direction flips only when the key was
 //! already in front (`0x5ad99e`–`0x5ad9a7`); promoted from behind, it keeps its old direction.
-//! Sorting is local, never a server request, and the chain lives for the process (`0x5adc50`, run
-//! from `0x401666`), so it survives a logout.
+//! Sorting is local, never a server request. The chain is seeded with the friend list at each world
+//! entry (`0x5adc50`, from `0x401666`), so a logout resets it.
 
 use std::cmp::Ordering;
 

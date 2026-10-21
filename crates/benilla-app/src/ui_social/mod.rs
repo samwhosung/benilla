@@ -173,13 +173,10 @@ impl Default for SocialState {
 
 impl SocialState {
     /// Drop the session's state, as the teardown frees the list (`0x5ae2d0`) and the next world
-    /// entry builds an empty one. The `/who` sort chain survives, since the reference initialises
-    /// it once per process (`0x5adc50`, from `0x401666`), never at login.
+    /// entry builds an empty one (`0x5adc50`, from `0x401666`), seeding the `/who` sort chain with
+    /// it (`0x5add04`, only while the list `0xc28168` is null).
     pub(crate) fn clear_session(&mut self) {
-        *self = Self {
-            who_sort: std::mem::take(&mut self.who_sort),
-            ..Self::default()
-        };
+        *self = Self::default();
     }
 
     /// Is `guid` in an ignore slot? The reference's `IsIgnored` (`0x5ae5a0`): an ignored player's
@@ -768,8 +765,7 @@ pub(crate) mod net {
     }
 
     /// The world's teardown `ClientDestroyGame` (`0x401ee0`) frees the list (`0x5ae2d0` at
-    /// `0x401fc6`), at a logout to the character list and a lost link alike. `clear_session`,
-    /// not `default()`, so the per-process sort chain survives.
+    /// `0x401fc6`), at a logout to the character list and a lost link alike.
     fn on_session_end(In(ev): In<SessionEvent>, mut social: ResMut<SocialState>) {
         if let SessionEvent::LoggedOut | SessionEvent::Disconnected { .. } = ev {
             social.clear_session();
