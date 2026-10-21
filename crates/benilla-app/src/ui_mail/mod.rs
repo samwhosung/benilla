@@ -348,10 +348,6 @@ fn resolve_row(
     let returned = entry.checked & CHECKED_RETURNED != 0;
     // Reply only to an unreturned mail from a player (`MailFrame.lua:281` reads it).
     let can_reply = entry.sender_guid.is_some() && !returned;
-    // An unreturned player mail still carrying money or an item returns rather than deletes; the
-    // reference's `InboxItemCanDelete` predicate is untraced.
-    let can_delete =
-        returned || entry.sender_guid.is_none() || (entry.item.is_none() && entry.money == 0);
 
     let (item_id, item_roll, item_count, item_name, item_texture, item_quality) = match &entry.item
     {
@@ -471,7 +467,6 @@ fn resolve_row(
         item_name,
         item_texture,
         item_quality,
-        can_delete,
     }
 }
 
@@ -1237,7 +1232,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_row_derives_the_reply_and_delete_law() {
+    fn resolve_row_derives_the_reply_law() {
         let states = crate::world_state::WorldStates::default();
         let items = Items::default();
         let (tx, _rx) = crossbeam_channel::unbounded();
@@ -1245,7 +1240,7 @@ mod tests {
         let names = NameCache::default();
         let bodies = QueryCache::default();
 
-        // A plain letter from a player: replyable and deletable.
+        // A plain letter from a player: replyable.
         let from_player = entry(1, Some(0xA), 0, 30.0);
         let row = resolve_row(
             &from_player,
@@ -1260,10 +1255,9 @@ mod tests {
             &no_strings,
         );
         assert!(row.can_reply);
-        assert!(row.can_delete);
         assert_eq!(row.stationery_texture, "STATIONERYTEST");
 
-        // A player mail still carrying money returns, so it is not deletable; so does an item.
+        // A player mail still carrying money: replyable.
         let mut with_money = entry(4, Some(0xA), 0, 30.0);
         with_money.money = 500;
         let row = resolve_row(
@@ -1279,9 +1273,8 @@ mod tests {
             &no_strings,
         );
         assert!(row.can_reply);
-        assert!(!row.can_delete);
 
-        // A returned mail: not replyable, deletable.
+        // A returned mail: not replyable.
         let returned = entry(2, Some(0xA), CHECKED_RETURNED, 30.0);
         let row = resolve_row(
             &returned,
@@ -1296,9 +1289,8 @@ mod tests {
             &no_strings,
         );
         assert!(!row.can_reply);
-        assert!(row.can_delete);
 
-        // A system mail, with no sender guid: deletable.
+        // A system mail, with no sender guid: not replyable.
         let system = entry(3, None, 0, 30.0);
         let row = resolve_row(
             &system,
@@ -1312,7 +1304,7 @@ mod tests {
             &no_macros(&states),
             &no_strings,
         );
-        assert!(row.can_delete);
+        assert!(!row.can_reply);
     }
 
     #[test]

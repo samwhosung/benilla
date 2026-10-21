@@ -74,9 +74,6 @@ pub struct MailInboxRow {
     pub item_name: Option<String>,
     pub item_texture: Option<String>,
     pub item_quality: Option<u32>,
-    /// `InboxItemCanDelete`: `!can_reply`, as a player's unreturned mail is returned instead
-    /// (`MailFrame.lua:417`, `:450`).
-    pub can_delete: bool,
 }
 
 /// One auction invoice, `GetInboxInvoiceInfo`'s answer, parsed by the app from the mail's subject
@@ -569,8 +566,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: InboxItemCanDelete(index)` (`0x846508`, `0x4afe11`).
             let index = binding_abi::index_arg(lua, index, "Usage: InboxItemCanDelete(index)")?;
+            // `DeleteInboxItem`'s own rule (`0x4afe4c`-`0x4afe66`), with none of its guards on
+            // the lock or the mailbox.
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(flag(row_at(&model, index).is_some_and(|r| r.can_delete)))
+            let can =
+                row_at(&model, index).is_some_and(|r| RowVerb::Delete.sends(&model, &r).is_ok());
+            Ok(flag(can))
         })?,
     )?;
 
@@ -1151,7 +1152,6 @@ mod tests {
             item_texture: (item_id != 0)
                 .then(|| "Interface\\Icons\\INV_Fabric_Linen_01".to_string()),
             item_quality: (item_id != 0).then_some(1),
-            can_delete: false, // a player's unreturned mail is returned, not deleted
             item_random_property_id: 0,
             item_charges: 0,
             item_durability: (0, 0),
