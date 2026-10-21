@@ -1,8 +1,8 @@
 //! What the game tells the world, and what it does with what the world publishes back:
 //! [`publish_view_focus`] says where to stream from, ahead of the stream stage,
 //! [`release_post_snap_hold`] ends the mover's settle hold on the residency the world publishes,
-//! and [`publish_player_outdoors`] asks the world whether the body stands outdoors. The hold ends
-//! on residency, never on ground contact, the same way for every mover mode.
+//! and [`publish_caster_outdoors`] asks the world whether each caster stands outdoors. The hold
+//! ends on residency, never on ground contact, the same way for every mover mode.
 
 use bevy::prelude::*;
 
@@ -170,23 +170,46 @@ impl Default for PlayerOutdoors {
     }
 }
 
-/// Asks [`PlayerOutdoors`] of the world where our own body stands, after this frame's re-place:
-/// free-fly freezes it in place, so it still answers.
-pub(crate) fn publish_player_outdoors(
+/// The pet bar's unit's answer to `CWorld::IsEntityOutdoors 0x6706f0`, with its guid: the one
+/// caster but the active player, the bar's presses passing it to the attempt (`0x4bd385`), whose
+/// place rungs ask that unit's own node through `0x612cc0`. `None` while the bar's unit has no
+/// body.
+#[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct BarUnitOutdoors(pub(crate) Option<(u64, bool)>);
+
+/// Asks the entity outdoors test of the world for each caster after this frame's re-place:
+/// [`PlayerOutdoors`] where our own body stands (free-fly freezes it in place, so it still
+/// answers), and [`BarUnitOutdoors`] where the pet bar's unit stands, at its world position, as a
+/// mounted unit's `Transform` is seat-relative.
+pub(crate) fn publish_caster_outdoors(
     test: benilla_world::wmo_portal::EntityOutdoors,
     player: Option<Res<Player>>,
     mut outdoors: ResMut<PlayerOutdoors>,
+    bar: Option<Res<crate::ui_pet::PetBar>>,
+    index: Option<Res<crate::net::GuidIndex>>,
+    bodies: Query<&GlobalTransform>,
+    mut unit_outdoors: ResMut<BarUnitOutdoors>,
 ) {
     let now = match player.as_deref() {
         // `pos` is another unit's while we drive it, and still the last mover's until the new
         // one's pose is adopted (`reseat`): our own body's answer holds.
-        Some(p) if p.active && (p.foreign_mover.is_some() || p.reseat) => return,
-        Some(p) if p.active => test.at(p.pos),
+        Some(p) if p.active && (p.foreign_mover.is_some() || p.reseat) => None,
+        Some(p) if p.active => Some(test.at(p.pos)),
         // No body: a null entity reads outdoors (`0x6706fa`).
-        _ => true,
+        _ => Some(true),
     };
-    if outdoors.0 != now {
+    if let Some(now) = now.filter(|&now| outdoors.0 != now) {
         outdoors.0 = now;
+    }
+    let unit = bar
+        .map(|b| b.spells.pet_guid)
+        .filter(|&guid| guid != 0)
+        .and_then(|guid| {
+            let body = bodies.get(*index.as_deref()?.0.get(&guid)?).ok()?;
+            Some((guid, test.at(body.translation())))
+        });
+    if unit_outdoors.0 != unit {
+        unit_outdoors.0 = unit;
     }
 }
 
@@ -574,7 +597,8 @@ mod tests {
             app.insert_resource(player)
                 .insert_resource(viewer)
                 .insert_resource(PlayerOutdoors(last))
-                .add_systems(Update, publish_player_outdoors);
+                .init_resource::<BarUnitOutdoors>()
+                .add_systems(Update, publish_caster_outdoors);
             app.update();
             app.world().resource::<PlayerOutdoors>().0
         };

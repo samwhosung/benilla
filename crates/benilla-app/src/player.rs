@@ -37,7 +37,7 @@ mod controller;
 mod world_focus;
 #[cfg(test)]
 pub(crate) use world_focus::insert_test_room;
-pub(crate) use world_focus::{publish_player_outdoors, PlayerOutdoors};
+pub(crate) use world_focus::{publish_caster_outdoors, BarUnitOutdoors, PlayerOutdoors};
 // The remembered camera pose, inside `player/` to read the rig's `pub(super)` fields.
 mod camera_saved;
 mod camera_water;
@@ -254,14 +254,16 @@ impl Plugin for PlayerPlugin {
                 .in_set(WorldFocusSet)
                 .in_set(crate::vm_pass::VmPass::Member),
         );
-        // The player's outdoors answer, once this frame's re-place has put the body where it
-        // stands; the cast validator's place rungs read it, so it runs among the VM pass's hosts.
-        app.init_resource::<PlayerOutdoors>().add_systems(
-            Update,
-            publish_player_outdoors
-                .after(WorldFocusSet)
-                .in_set(crate::vm_pass::VmPass::Member),
-        );
+        // The casters' outdoors answers, once this frame's re-place has put the body where it
+        // stands; the cast validator's place rungs read them, so it runs among the VM pass's hosts.
+        app.init_resource::<PlayerOutdoors>()
+            .init_resource::<BarUnitOutdoors>()
+            .add_systems(
+                Update,
+                publish_caster_outdoors
+                    .after(WorldFocusSet)
+                    .in_set(crate::vm_pass::VmPass::Member),
+            );
         app.add_observer(camera::on_cvar);
         app.add_observer(camera_dynamics::on_cvar);
         app.init_resource::<camera::LookConfig>();

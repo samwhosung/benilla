@@ -336,7 +336,7 @@ impl Plugin for TargetPlugin {
                         // `UiInput`, before `WorldStage::Input`, and reads the last re-place's, as
                         // the client's bit does.
                         crate::ui_merchant::end_repair_mode_on_right_press
-                            .after(crate::player::publish_player_outdoors),
+                            .after(crate::player::publish_caster_outdoors),
                     ),
                     // Overwrites the classifier's verdict while the targeting cursor is up, as the
                     // reference's dispatcher runs this branch before the object classifier.

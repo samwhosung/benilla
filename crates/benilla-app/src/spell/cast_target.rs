@@ -327,11 +327,9 @@ pub(crate) struct CastTargeting<'w, 's> {
     /// The player's answer to the entity outdoors test, which the place rungs read; absent
     /// outside the world.
     outdoors: Option<Res<'w, crate::player::PlayerOutdoors>>,
-    /// The entity outdoors test itself, asked of a unit caster where it stands; absent in a
-    /// harness without the world.
-    entity_outdoors: Option<benilla_world::wmo_portal::EntityOutdoors<'w, 's>>,
-    /// World positions: a mounted unit's `Transform` is seat-relative.
-    global_transforms: Query<'w, 's, &'static GlobalTransform>,
+    /// The pet bar's unit's answer, which a unit caster's place rungs read; absent outside the
+    /// world.
+    bar_unit_outdoors: Option<Res<'w, crate::player::BarUnitOutdoors>>,
 }
 
 impl CastTargeting<'_, '_> {
@@ -411,11 +409,14 @@ impl CastTargeting<'_, '_> {
             self_sheathe_state: self_store.0.unit_sheath_state().unwrap_or(0),
             daytime: self.clock.as_deref().is_some_and(|c| c.0.is_daytime()),
             // `0x612cc0` asks the caster's own node (`[unit+0xe0]` → `0x6706f0`), never the
-            // player's; with no world to ask it reads outdoors, as a null entity does (`0x6706fa`).
-            self_outdoors: match (&self.entity_outdoors, self.global_transforms.get(caster)) {
-                (Some(test), Ok(at)) => test.at(at.translation()),
-                _ => true,
-            },
+            // player's; with no answer for it, it reads outdoors, as a null entity does
+            // (`0x6706fa`).
+            self_outdoors: self
+                .bar_unit_outdoors
+                .as_deref()
+                .and_then(|o| o.0)
+                .filter(|&(guid, _)| guid == caster_guid)
+                .is_none_or(|(_, outdoors)| outdoors),
             self_control_lost: self.own_control.as_deref().is_some_and(|c| c.0),
         })
     }
@@ -1115,36 +1116,52 @@ mod tests {
 
     /// A unit caster's context reads that caster, never the player: its stand and sheathe states
     /// are its descriptor's bytes (its `GetStandState 0x60be50`), and the place rungs' `0x612cc0`
-    /// asks the node where it stands (`[unit+0xe0]` → `0x6706f0`). A pet in a room's interior
-    /// group is indoors while the player stands outdoors, and outdoors in an `EXTERIOR` (0x8)
-    /// group while the player is indoors.
+    /// asks the node where it stands (`[unit+0xe0]` → `0x6706f0`), as the outdoors publisher
+    /// answers for the pet bar's unit. A pet in a room's interior group is indoors while the
+    /// player stands off the building, outdoors off it while the player is in the room, and
+    /// outdoors in an `EXTERIOR` (0x8) group.
     #[test]
     fn a_unit_casters_context_reads_its_own_posture_and_place() {
         use benilla_assets::coords::wow_to_bevy;
         use benilla_protocol::ObjectFields;
         use bevy::ecs::system::RunSystemOnce;
         const PET: u64 = 0x2a;
-        let read = |flags: u32, player_outdoors: bool| {
+        let (inside, outside) = (
+            wow_to_bevy([1.0, 2.0, 30.0]),
+            wow_to_bevy([40.0, 2.0, 30.0]),
+        );
+        let read = |flags: u32, player_at: Vec3, pet_at: Vec3| {
             let mut world = World::new();
             crate::player::insert_test_room(&mut world, flags);
             world.init_resource::<crate::spell::AutoSelfCast>();
             world.insert_resource(Reputations::default());
             world.insert_resource(SelfGuid(Some(7)));
             world.insert_resource(Selection::default());
-            world.insert_resource(crate::player::PlayerOutdoors(player_outdoors));
+            let mut body = crate::player::Player::default();
+            (body.active, body.pos) = (true, player_at);
+            world.insert_resource(body);
+            world.init_resource::<crate::player::PlayerOutdoors>();
+            world.init_resource::<crate::player::BarUnitOutdoors>();
+            world.init_resource::<crate::ui_pet::PetBar>();
+            world
+                .resource_mut::<crate::ui_pet::PetBar>()
+                .spells
+                .pet_guid = PET;
             // `UNIT_FIELD_BYTES_1` (138) byte 0 and `UNIT_FIELD_BYTES_2` (164) byte 0: the player
             // sits with its weapon away, the pet stands with its drawn.
             let me = ObjectFields::from_pairs(&[(138, 1), (164, 0)]);
             world.spawn((SelfPlayer, ObjectStore(me)));
-            let inside = wow_to_bevy([1.0, 2.0, 30.0]);
             let pet = world
                 .spawn((
                     ObjectStore(ObjectFields::from_pairs(&[(138, 0), (164, 1)])),
-                    Transform::from_translation(inside),
-                    GlobalTransform::from_translation(inside),
+                    Transform::from_translation(pet_at),
+                    GlobalTransform::from_translation(pet_at),
                 ))
                 .id();
             world.insert_resource(GuidIndex([(PET, pet)].into()));
+            world
+                .run_system_once(crate::player::publish_caster_outdoors)
+                .expect("the answers publish");
             world
                 .run_system_once(|targeting: CastTargeting| {
                     let me = targeting.context();
@@ -1163,14 +1180,19 @@ mod tests {
                 .expect("the context builds")
         };
         assert_eq!(
-            read(0, true),
+            read(0, outside, inside),
             ((true, 1, 0), (false, 0, 1)),
-            "an interior group"
+            "the pet in the room"
         );
         assert_eq!(
-            read(0x8, false),
+            read(0, inside, outside),
             ((false, 1, 0), (true, 0, 1)),
-            "an exterior group"
+            "the player in the room"
+        );
+        assert_eq!(
+            read(0x8, outside, inside).1,
+            (true, 0, 1),
+            "the pet in an exterior group"
         );
     }
 
