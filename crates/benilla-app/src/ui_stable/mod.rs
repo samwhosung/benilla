@@ -382,6 +382,45 @@ mod tests {
         assert_eq!(crate::query_cache::queries(&rx).len(), 1);
     }
 
+    /// The refusal's line shows in `SMSG_STABLE_RESULT`'s handler (`0x4cacb0`, `DisplayError(0x25)`),
+    /// which changes no list, so its handlers read the stable as it stood before the frame's list
+    /// is pushed.
+    #[test]
+    fn a_refusals_handlers_read_the_stable_before_the_frames_push() {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<StableOpen>()
+            .init_resource::<StableErrors>()
+            .init_resource::<crate::names::NameCache>()
+            .init_resource::<crate::ui_pet::PetBar>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<crate::net::SelfGuid>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .add_systems(Update, feed_stable);
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                "ERR_NOT_ENOUGH_MONEY = 'Poor.' SEEN = '' local f = CreateFrame('Frame') \
+                 f:RegisterEvent('UI_ERROR_MESSAGE') \
+                 f:SetScript('OnEvent', function() SEEN = SEEN .. GetNumStableSlots() end)",
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        app.world_mut()
+            .resource_mut::<StableErrors>()
+            .0
+            .push("ERR_NOT_ENOUGH_MONEY");
+        app.world_mut()
+            .resource_mut::<StableOpen>()
+            .open(0xF130_0000_4500_0001, 2, Vec::new());
+        app.update();
+        let s = app.world().non_send_resource::<UiScript>();
+        assert_eq!(s.eval::<String>("return SEEN").unwrap(), "0");
+        assert_eq!(s.eval::<i64>("return GetNumStableSlots()").unwrap(), 2);
+    }
+
     /// The range guard cannot close it: after the drop there is no self player to measure from.
     #[test]
     fn the_session_end_closes_the_stable() {
