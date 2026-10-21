@@ -427,6 +427,8 @@ pub(crate) struct Model {
     /// A harness's VM keeps the calls made with no host lent here
     /// ([`super::UiScript::keep_calls`]); `None` refuses them.
     pub(crate) kept_calls: Option<Vec<super::ScriptCall>>,
+    /// What the host raised in its calls' verbs ([`super::UiScript::raise_in_call`]).
+    pub(crate) call_raises: super::calls::CallRaises,
     /// The binding functions' queue and mouselook state.
     pub(crate) input: super::input_verbs::InputState,
     /// The selection change a script call made and the input events it ran under, for the event
@@ -1558,6 +1560,7 @@ impl Model {
             script_calls: Vec::new(),
             call_depth: 0,
             kept_calls: None,
+            call_raises: Default::default(),
             input: Default::default(),
             protected: Default::default(),
             selection_cause: None,

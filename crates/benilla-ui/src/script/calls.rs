@@ -156,13 +156,31 @@ impl ScriptCall {
 pub struct QueuedCall {
     pub call: ScriptCall,
     pub input: super::InputEvents,
+    /// The call's number, under which a raise it makes is filed for its verb.
+    seq: u64,
+}
+
+/// The raises the host makes in its calls' verbs ([`UiScript::raise_in_call`]).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CallRaises {
+    /// The number the next queued call takes.
+    next: u64,
+    /// The calls whose verbs are inside [`submit`], waiting for them to apply.
+    awaited: Vec<u64>,
+    /// What the call applying now raised.
+    raising: Option<String>,
+    /// The raises of awaited calls, for their verbs to take.
+    raised: Vec<(u64, String)>,
 }
 
 impl super::Model {
-    /// Hold `call` for the host, with the input events running now.
-    fn queue_call(&mut self, call: ScriptCall) {
+    /// Hold `call` for the host, with the input events running now; its number.
+    fn queue_call(&mut self, call: ScriptCall) -> u64 {
         let input = self.protected.events();
-        self.script_calls.push(QueuedCall { call, input });
+        let seq = self.call_raises.next;
+        self.call_raises.next += 1;
+        self.script_calls.push(QueuedCall { call, input, seq });
+        seq
     }
 }
 
@@ -181,7 +199,8 @@ pub(crate) const TOO_DEEP: &str = "script calls nested too deep";
 
 /// A verb's call: with a host lent and free, applied before the verb returns, after any call that
 /// was waiting for it, under the input events running now; with the host out, held until it is
-/// back. The caller holds no borrow of the model.
+/// back. What the host raises in the call ([`UiScript::raise_in_call`]) is the verb's error. The
+/// caller holds no borrow of the model.
 pub(crate) fn submit(lua: &Lua, call: ScriptCall) -> mlua::Result<()> {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     if !super::host::open(lua) {
@@ -196,10 +215,45 @@ pub(crate) fn submit(lua: &Lua, call: ScriptCall) -> mlua::Result<()> {
     if model.call_depth >= MAX_NESTING {
         return Err(mlua::Error::runtime(TOO_DEEP));
     }
-    model.queue_call(call);
+    let seq = model.queue_call(call);
+    model.call_raises.awaited.push(seq);
     drop(model);
+    /// The verb stops waiting for its call as it returns or unwinds.
+    struct Awaited<'a>(&'a Lua, u64);
+    impl Drop for Awaited<'_> {
+        fn drop(&mut self) {
+            if let Some(mut model) = self.0.app_data_mut::<Model>() {
+                model.call_raises.awaited.retain(|&s| s != self.1);
+            }
+        }
+    }
+    let awaited = Awaited(lua, seq);
     drain(lua);
-    Ok(())
+    drop(awaited);
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    let raised = &mut model.call_raises.raised;
+    match raised.iter().position(|&(s, _)| s == seq) {
+        Some(at) => Err(mlua::Error::runtime(raised.remove(at).1)),
+        None => Ok(()),
+    }
+}
+
+/// File what the call `seq` raised: for its verb, while that waits inside [`submit`]; else, its
+/// verb having returned while the call waited for the host, as its script's error, which the
+/// error handler hears as it would the verb's raise.
+fn file_raise(lua: &Lua, seq: u64, message: String) {
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    if model.call_raises.awaited.contains(&seq) {
+        model.call_raises.raised.push((seq, message));
+    } else {
+        model.record_lua_error(&mlua::Error::runtime(message));
+    }
+}
+
+/// Swap the applying call's raise for `raise`, returning what was there.
+fn swap_raising(lua: &Lua, raise: Option<String>) -> Option<String> {
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    std::mem::replace(&mut model.call_raises.raising, raise)
 }
 
 /// Apply what waits through the lent host, front to back, each call and its tail under exactly the
@@ -233,9 +287,11 @@ pub(crate) fn drain(lua: &Lua) {
             requeue(lua, batch);
             return;
         }
-        let Some(QueuedCall { call, input }) = batch.pop_front() else {
+        let Some(QueuedCall { call, input, seq }) = batch.pop_front() else {
             break;
         };
+        // What the host raises while it applies the call and runs its tail is this call's.
+        let outer = swap_raising(lua, None);
         // The reference does the call inside the verb, so what it signals runs inside the key,
         // click or Enter that made it, and only inside that: a queued call gets exactly its events.
         let tail = script.with_input_events(input, |script| {
@@ -243,6 +299,9 @@ pub(crate) fn drain(lua: &Lua) {
         });
         if let Some(tail) = tail {
             script.with_input_events(input, tail);
+        }
+        if let Some(message) = swap_raising(lua, outer) {
+            file_raise(lua, seq, message);
         }
         drain(lua);
     }
@@ -273,6 +332,14 @@ pub(crate) fn refuse_waiting(lua: &Lua) -> usize {
 }
 
 impl UiScript {
+    /// Raise `message` in the verb of the call the host is applying, as that verb returns: the
+    /// reference's verb raises in its own body (`lua_error`, through `0x6f4940`), after what it did
+    /// before, which stands. A verb that returned while its call waited for the host reports it as
+    /// its script's error. For [`super::CallHost::apply`] and the tail it leaves.
+    pub fn raise_in_call(&mut self, message: &str) {
+        self.model_mut().call_raises.raising = Some(message.to_string());
+    }
+
     /// Make this VM a harness's: a call its verbs make with no host lent is kept, for the
     /// `take_*` calls to read, in place of the refusal. For a VM with no engine behind it.
     pub fn keep_calls(&mut self) {
@@ -443,6 +510,72 @@ mod tests {
             vec![ScriptCall::ClearTarget],
             "a harness's VM keeps it"
         );
+    }
+
+    /// A host that records each call and raises in the verb of every `ClearTarget` it applies,
+    /// after running `inner` with the host out, as an applier's engine half runs a handler.
+    #[derive(Default)]
+    struct Raising {
+        applied: Vec<ScriptCall>,
+        inner: Option<&'static str>,
+    }
+
+    impl CallHost for Raising {
+        fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
+            let raises = call == ScriptCall::ClearTarget;
+            self.applied.push(call);
+            if let Some(chunk) = self.inner.take() {
+                script.run(chunk).expect("the inner chunk runs");
+            }
+            if raises {
+                script.raise_in_call("refused in the call");
+            }
+            None
+        }
+    }
+
+    /// The host's raise reaches the verb of the call it applied as that verb returns, as the
+    /// reference's verb raises in its own body (`0x49f769`, `SendChatMessage`'s escape error): the
+    /// call stands applied, the script's next line does not run, and `pcall` catches it.
+    #[test]
+    fn a_raise_in_the_call_reaches_its_verb_after_what_the_call_did() {
+        let mut s = UiScript::new().unwrap();
+        let mut host = Raising::default();
+        let e = s
+            .hosted(&mut host, |s| s.run("ClearTarget() TargetLastEnemy()"))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("refused in the call"), "{e}");
+        assert_eq!(host.applied, vec![ScriptCall::ClearTarget]);
+        let (ok, e) = s
+            .hosted(&mut host, |s| {
+                s.eval::<(bool, String)>("local ok, e = pcall(ClearTarget) return ok, tostring(e)")
+            })
+            .unwrap();
+        assert!(!ok && e.contains("refused in the call"), "{e}");
+        s.hosted(&mut host, |s| s.run("TargetLastEnemy()"))
+            .expect("a call that raises nothing returns");
+        assert!(s.take_errors().is_empty());
+    }
+
+    /// A call that waited for the host applies after its verb returned, so its raise is that
+    /// script's error, which the error handler hears; the call that was applying raises nothing.
+    #[test]
+    fn a_raise_in_a_call_that_waited_is_its_scripts_error() {
+        let mut s = UiScript::new().unwrap();
+        s.run("HEARD = {} seterrorhandler(function(e) table.insert(HEARD, tostring(e)) end)")
+            .unwrap();
+        let mut host = Raising {
+            inner: Some("ClearTarget()"),
+            ..Default::default()
+        };
+        s.hosted(&mut host, |s| s.run("TargetLastEnemy()"))
+            .expect("the outer verb's own call raised nothing");
+        assert_eq!(host.applied, vec![LAST_ENEMY, ScriptCall::ClearTarget]);
+        s.dispatch_script_errors_to_handler();
+        let heard: Vec<String> = s.eval("return HEARD").expect("the handler's record");
+        assert_eq!(heard.len(), 1, "{heard:?}");
+        assert!(heard[0].contains("refused in the call"), "{heard:?}");
     }
 
     /// A key's input event raised alone.
