@@ -1138,9 +1138,8 @@ fn spell_go(
         hits.len(),
         misses.len()
     );
-    // The `use` trace's third link, after `target::click`: a caster we never streamed drops every
-    // visual below, its instant impacts too, which the reference plays (`0x6e816b`). A
-    // SPELLCASTER GameObject (type 22) is its own caster: vmangos writes the caster slot as 0,
+    // The `use` trace's third link, after `target::click`: a caster we never streamed plays only
+    // its instant impacts below (`0x6e816b`). A SPELLCASTER GameObject (type 22) is its own caster: vmangos writes the caster slot as 0,
     // which the decode resolves to the first guid (`benilla_protocol::events`' `spell_caster`),
     // and it plays as a cast with no caster unit (`0x6e7f8b`).
     if benilla_assets::trace::enabled_for("use") {
@@ -1308,12 +1307,12 @@ fn spell_go(
         .copied()
         .filter(|&e| stores.get(e).is_ok_and(|s| s.is_unit()));
     let Some(e) = unit else {
-        // The instant impacts run on the hit list whatever the caster (`0x6e816b` → `0x6e8bf0`);
-        // the cast kit (`0x6e8066`), the dest effect and the missiles (`0x6e8219`) need one.
-        let impacts = display.speed <= 0.0 && !hits.is_empty();
-        if let (true, Some(&caster)) = (impacts, index.0.get(&caster)) {
+        // The instant impacts run on the hit list with no caster unit (`0x6e816b` → `0x6e8bf0`),
+        // whether or not the packet's caster is streamed; the cast kit (`0x6e8066`), the dest
+        // effect (`0x6e8082`) and the missiles (`0x6e8219`) need one.
+        if display.speed <= 0.0 && !hits.is_empty() {
             go_targets.write(SpellGoTargets {
-                caster: Some(caster),
+                caster: None,
                 spell_id,
                 hits: hits.into_iter().map(|(_, e)| e).collect(),
                 misses,

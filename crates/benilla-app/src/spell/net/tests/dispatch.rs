@@ -359,14 +359,14 @@ fn a_game_objects_go_plays_its_instant_impacts_and_nothing_of_a_caster() {
     );
     assert_eq!(targets, [(Some(mob), vec![mob], true)]);
 
-    // A trap's instant go: the impact on the hit, no cast kit and no dest effect.
+    // A trap's instant go: the impact on the hit, no caster unit, no cast kit, no dest effect.
     dispatch(app.world_mut(), vec![go(TRAP, 0, BURST)]);
     let (events, targets) = drained(&mut app);
     assert!(
         !events.iter().any(|&(_, kind)| kind == CastEventKind::Go),
         "{events:?}"
     );
-    assert_eq!(targets, [(Some(trap), vec![mob], false)]);
+    assert_eq!(targets, [(None, vec![mob], false)]);
 
     // A trap's missile spell: no missile.
     dispatch(app.world_mut(), vec![go(TRAP, 0, BOLT)]);

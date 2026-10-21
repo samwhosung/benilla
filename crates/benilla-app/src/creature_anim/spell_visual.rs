@@ -939,21 +939,19 @@ pub(super) fn route_cast_visuals(
         }
     }
 
-    // Speed 0 plays every impact now (`0x6e8bf0`), Speed > 0 flies one projectile per target.
-    // Misses fly too; the reference deflects them off the target, which is not built.
+    // Speed 0 plays every impact now (`0x6e8bf0`), with or without a caster unit (`0x6e816b`);
+    // Speed > 0 flies one projectile per target from a caster unit. Misses fly too; the reference deflects them off the target, which is not built.
     for go in go_targets.read() {
         let Some(display) = spells.catalog.get(go.spell_id) else {
             continue;
         };
-        let Some(caster) = go.caster else {
-            continue;
-        };
-        // Resolved once per GO (`0x6e802e`); every consumer below reads the merged row.
-        let wv = weapon_src.caster(caster);
+        // Resolved once per GO (`0x6e802e`); every consumer below reads the merged row. A caster
+        // that is no unit we hold reads the spell's own row (`0x6e8038`).
+        let wv = go.caster.and_then(|caster| weapon_src.caster(caster));
         let stages = resolve_stages(spells, &visuals.0, go.spell_id, || wv);
         // The dest one-shot (`0x6e8088`): field 12's model once at the dest point when field 6 is
-        // 0, fired at GO whatever the hit list.
-        if let Some(dest) = go.dest {
+        // 0, fired at GO whatever the hit list, for a caster unit only (`0x6e8082`).
+        if let (Some(dest), Some(_)) = (go.dest, go.caster) {
             if let Some(stages) = stages {
                 if stages.missile_gate == 0 && stages.area_effect != 0 {
                     if let Some(path) = visuals.0.effect_path(stages.area_effect) {
@@ -982,8 +980,9 @@ pub(super) fn route_cast_visuals(
                     &mut out,
                 );
             }
-        } else {
-            // The spawn gate is Speed alone (`0x60a3d0`): basic shots have no visual row.
+        } else if let Some(caster) = go.caster {
+            // No caster unit flies nothing (`0x6e8219`). The spawn gate is Speed alone
+            // (`0x60a3d0`): basic shots have no visual row.
             let path = stages.and_then(|s| {
                 (s.missile_model >= 1).then(|| {
                     visuals
