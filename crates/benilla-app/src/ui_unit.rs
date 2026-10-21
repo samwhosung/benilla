@@ -1561,12 +1561,14 @@ fn feed_units(
             gate.audit("feed_units", "the target snapshot");
             script.set_unit("target", target.clone());
         }
-        // Absence is data here too: the target dropping its target clears the token.
-        let tot_dirty = match (&tot, memo.last.get("targettarget")) {
-            (Some(cur), Some(prev)) => cur != prev,
-            (None, None) => false,
-            _ => true,
-        };
+        // Absence is data here too: the target dropping its target clears the token. A seat
+        // replaced it past the memo, as it did `"target"`.
+        let tot_dirty = target_view_moved
+            || match (&tot, memo.last.get("targettarget")) {
+                (Some(cur), Some(prev)) => cur != prev,
+                (None, None) => false,
+                _ => true,
+            };
         if tot_dirty {
             gate.audit("feed_units", "the target-of-target snapshot");
             script.set_unit("targettarget", tot.clone());
