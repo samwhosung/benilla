@@ -768,9 +768,12 @@ fn feed_loot(
     names: Res<NameCache>,
     objects: LootSourceObjects,
 ) {
-    vm.turn(|script, (mut loot, mut moving)| {
+    // Each step is a turn whose handlers run as it ends, with the host lent, reading what it
+    // left: the copier's open signals `LOOT_OPENED` before the auto-loot sweep and the move-start
+    // close run, so its handlers read the open window.
+    let opened = vm.turn(|script, (mut loot, _)| {
         let Some(script) = script else {
-            return;
+            return false;
         };
         let last = last.get(script);
         let rolls = RollCatalogs {
@@ -805,38 +808,20 @@ fn feed_loot(
             snap
         });
         if fresh == *last {
-            return;
+            return false;
         }
         script.set_loot(fresh.clone());
-        match (&*last, &fresh) {
+        let opened = match (&*last, &fresh) {
             (None, Some(snap)) => {
                 // No window until every template has landed: the copier fires nothing while a query
                 // is pending (`0x4c1e9f`), and the cache callback `0x4c2ac0` fires `LOOT_OPENED`
                 // (or the auto-loot sweep) at the last answer. Not advancing `last` retries next
                 // frame.
                 if templates_outstanding(&items, snap) {
-                    return;
+                    return false;
                 }
                 script.fire_event("LOOT_OPENED", vec![]);
-                // Auto-loot (`LootConfig`), inverted by a held Shift: every row gets a hand pick's
-                // sends, and emptying the window auto-releases it.
-                let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-                if cfg.auto_loot != shift {
-                    sweep_rows(&mut loot, &items, &commands, script, &mut pickup);
-                }
-                // The response's tail (`0x5ebc3a`-`0x5ebc51`) closes a window that opened while we
-                // move, after the copier's open and sweep and in the same handler: `LOOT_CLOSED`
-                // fires in this pass, so the window never paints.
-                if std::mem::take(&mut moving.move_start.0) {
-                    let closed = close_on_move_start(&mut loot, &mut moving.latch, &commands);
-                    if closed.is_some() {
-                        moving.dead.after_close(closed);
-                        script.set_loot(None);
-                        script.fire_event("LOOT_CLOSED", vec![]);
-                        *last = None;
-                        return;
-                    }
-                }
+                true
             }
             // One `LOOT_SLOT_CLEARED` per row that went, with its 1-based row: the stock handler
             // hides that button and pages down when the page empties (`LootFrame.lua:22-50`).
@@ -852,12 +837,48 @@ fn feed_loot(
                 if before.master_candidates != after.master_candidates {
                     script.fire_event("UPDATE_MASTER_LOOT_LIST", vec![]);
                 }
+                false
             }
-            (Some(_), None) => script.fire_event("LOOT_CLOSED", vec![]),
-            (None, None) => {}
-        }
+            (Some(_), None) => {
+                script.fire_event("LOOT_CLOSED", vec![]);
+                false
+            }
+            (None, None) => false,
+        };
         *last = fresh;
-    })
+        opened
+    });
+    if !opened {
+        return;
+    }
+    // Auto-loot (`LootConfig`), inverted by a held Shift: every row gets a hand pick's sends, and
+    // emptying the window auto-releases it.
+    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    if cfg.auto_loot != shift {
+        vm.turn(|script, (mut loot, _)| {
+            if let Some(script) = script {
+                sweep_rows(&mut loot, &items, &commands, script, &mut pickup);
+            }
+        });
+    }
+    // The response's tail (`0x5ebc3a`-`0x5ebc51`) closes a window that opened while we move, after
+    // the copier's open and sweep and in the same handler: `LOOT_CLOSED` fires in this pass, so the
+    // window never paints.
+    vm.turn(|script, (mut loot, mut moving)| {
+        let Some(script) = script else {
+            return;
+        };
+        if !std::mem::take(&mut moving.move_start.0) {
+            return;
+        }
+        let closed = close_on_move_start(&mut loot, &mut moving.latch, &commands);
+        if closed.is_some() {
+            moving.dead.after_close(closed);
+            script.set_loot(None);
+            script.fire_event("LOOT_CLOSED", vec![]);
+            *last.get(script) = None;
+        }
+    });
 }
 
 /// [`feed_loot`] as a one-shot, for a test that drives the window from outside the module.
@@ -2833,6 +2854,40 @@ mod tests {
         assert_eq!(asked(&rx), 0, "no frame asks a refusal");
         open(&mut app);
         assert_eq!(asked(&rx), 1, "the next response asks again");
+    }
+
+    /// The response's tail closes a window that opened on the run after the copier's open and
+    /// sweep (`0x5ebc3a`-`0x5ebc51`), so `LOOT_OPENED`'s handlers read the open window, its coin
+    /// row included, and `LOOT_CLOSED`'s the closed one.
+    #[test]
+    fn a_window_opened_on_the_run_is_open_to_its_loot_opened_handlers() {
+        let (mut app, _rx) = sweep_loot_app();
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                r#"SEEN = {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("LOOT_OPENED")
+                f:RegisterEvent("LOOT_CLOSED")
+                f:SetScript("OnEvent", function()
+                    table.insert(SEEN, event .. ":" .. GetNumLootItems())
+                end)"#,
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        let world = app.world_mut();
+        world
+            .resource_mut::<LootState>()
+            .open(CORPSE, 1, 5, Vec::new());
+        world.resource_mut::<LootLatch>().0 = Some(CORPSE);
+        world.resource_mut::<LootMoveStart>().0 = true;
+        app.update();
+        let seen: String = app
+            .world()
+            .non_send_resource::<UiScript>()
+            .eval("return table.concat(SEEN, ',')")
+            .unwrap();
+        assert_eq!(seen, "LOOT_OPENED:1,LOOT_CLOSED:0");
     }
 
     const EVENTS: [&str; 2] = ["LOOT_OPENED", "LOOT_CLOSED"];
