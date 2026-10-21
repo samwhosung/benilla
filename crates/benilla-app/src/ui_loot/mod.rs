@@ -41,6 +41,7 @@ const PUSH_KEYRING_SLOTS: std::ops::RangeInclusive<u32> = 81..=112;
 
 /// A push waiting on its item template. `OnItemPush 0x491a60` defers both of its outputs the same
 /// way: on a cache miss (`0x491a93`) it re-enters from the cache callback `0x491ee0`.
+#[derive(Clone)]
 struct PendingReceive {
     /// Crafted or conjured: "You create: …".
     created: bool,
@@ -54,6 +55,32 @@ struct PendingReceive {
     in_chat: bool,
     container: i64,
     tries: u16,
+    /// Where it came among the frame's window changes.
+    at: PushAt,
+}
+
+/// Where a queued push came among the window changes the feed has yet to show: each packet's
+/// events fire inside its dispatch (`0x537aa0`), so `ITEM_PUSH` reads the window the packets
+/// before it left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PushAt {
+    /// Ahead of all of them: a push an earlier frame left waiting on its template, or one ahead
+    /// of the frame's response or close.
+    Ahead,
+    /// After this many of the frame's removals ([`LootState::removed`]).
+    After(usize),
+    /// After the frame's response or close: after its `LOOT_OPENED`, sweep and move-start
+    /// close, or its `LOOT_CLOSED`.
+    Behind,
+}
+
+/// A removal from the window the feed last showed, with what undoes it.
+#[derive(Clone, Copy, Debug)]
+enum Removed {
+    /// `SMSG_LOOT_REMOVED`'s row, by wire slot (`0x4c1f00`).
+    Row(u8),
+    /// `SMSG_LOOT_CLEAR_MONEY`'s coin row, with the copper it held (`0x4c2750`).
+    Money(u32),
 }
 
 /// `ITEM_PUSH`'s `arg1`, the reference's selector at `0x491bb5`-`0x491bd6`: a wire bag other than
@@ -72,7 +99,7 @@ fn push_container(bag: u8, slot: u32) -> i64 {
 /// The open loot as the wire delivered it, plus the push queue, which outlives the window. The
 /// layout is fixed at open: a looted row is a gap, as `LOOT_SLOT_CLEARED` hides its button in
 /// place and `numLootItems` is read once at `OnShow` (`LootFrame.lua:22-37`, `:132`).
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub(crate) struct LootState {
     /// The looted object; `None` when no loot is open.
     source: Option<u64>,
@@ -85,6 +112,12 @@ pub(crate) struct LootState {
     /// Wire slots taken by anyone (`SMSG_LOOT_REMOVED`), left as gaps.
     taken: Vec<u8>,
     receives: Vec<PendingReceive>,
+    /// The removals from the window the feed last showed, in wire order, which it shows in step
+    /// with the pushes queued between them ([`PushAt::After`]).
+    removed: Vec<Removed>,
+    /// A response or a close replaced the window since the feed last ran: a push after it comes
+    /// [`PushAt::Behind`].
+    replaced: bool,
     /// A removal just emptied the window, so the client releases it, as the reference does on the
     /// last slot (`0x4c2a70` → `0x48f200`); vmangos does not. Never set at open: an empty window
     /// stays up (`LOOTWINDOWOPENEMPTY`).
@@ -139,6 +172,7 @@ enum LootAction {
 impl LootState {
     /// Opens or replaces the window; quest items ride the same rows at `slot = items.len() + i`.
     pub(crate) fn open(&mut self, source: u64, loot_type: u8, gold: u32, items: Vec<LootItem>) {
+        self.replace_window();
         // The frame's teardown of the window it replaces unlocks an item source (`0x5ebc35` →
         // `0x48f3a0` → `0x4c1d36`).
         if let Some(old) = self.source {
@@ -170,14 +204,42 @@ impl LootState {
     pub(crate) fn remove_slot(&mut self, wire_slot: u8) {
         if self.items.iter().any(|it| it.slot == wire_slot) && !self.taken.contains(&wire_slot) {
             self.taken.push(wire_slot);
+            if !self.replaced {
+                self.removed.push(Removed::Row(wire_slot));
+            }
         }
         self.arm_auto_release();
     }
 
     /// `SMSG_LOOT_CLEAR_MONEY`: the coin row becomes a gap; an emptied window arms the auto-close.
     pub(crate) fn clear_money(&mut self) {
+        if self.gold > 0 && !self.replaced {
+            self.removed.push(Removed::Money(self.gold));
+        }
         self.gold = 0;
         self.arm_auto_release();
+    }
+
+    /// The window as the frame's first `k` removals left it, the later ones undone.
+    fn as_of(&self, k: usize) -> LootState {
+        let mut then = self.clone();
+        for removed in self.removed[k..].iter().rev() {
+            match *removed {
+                Removed::Row(slot) => then.taken.retain(|&t| t != slot),
+                Removed::Money(was) => then.gold = was,
+            }
+        }
+        then
+    }
+
+    /// A response or a close replaces the window the feed showed: a push before it reads the old
+    /// window and one after it the new, and the old window's removals are past undoing.
+    fn replace_window(&mut self) {
+        for r in &mut self.receives {
+            r.at = PushAt::Ahead;
+        }
+        self.removed.clear();
+        self.replaced = true;
     }
 
     fn arm_auto_release(&mut self) {
@@ -202,11 +264,17 @@ impl LootState {
             in_chat: p.show_in_chat,
             container: push_container(p.bag_slot, p.item_slot),
             tries: 0,
+            at: if self.replaced {
+                PushAt::Behind
+            } else {
+                PushAt::After(self.removed.len())
+            },
         });
     }
 
     /// Closes the window; queued pushes outlive it.
     pub(crate) fn clear(&mut self) {
+        self.replace_window();
         self.source = None;
         self.gold = 0;
         self.coin_slot = false;
@@ -685,15 +753,14 @@ fn receive_line(r: &PendingReceive, name: &str, quality: u32) -> String {
 /// [`RECEIVE_MAX_TRIES`] frames, where the reference waits on the item-cache callback with no
 /// timeout, because an entry the server never describes would otherwise stay queued.
 fn drain_receives(
-    loot: &mut LootState,
+    pending: Vec<PendingReceive>,
     items: &Items,
     icons: Option<&ItemDisplays>,
     commands: &NetCommands,
     chat: &crate::ui_chat::ChatLog,
     script: &mut UiScript,
     rolls: RollCatalogs,
-) {
-    let pending = std::mem::take(&mut loot.receives);
+) -> Vec<PendingReceive> {
     let mut still = Vec::new();
     for mut r in pending {
         // The push's lookup with the callback `0x491ee0` (`0x491b05`); its retries read.
@@ -737,7 +804,7 @@ fn drain_receives(
             }
         }
     }
-    loot.receives = still;
+    still
 }
 
 /// Emits the queued pushes, then pushes the loot snapshot and fires the loot events on a change.
@@ -781,96 +848,74 @@ fn feed_loot(
 ) {
     // Each step is a turn whose handlers run as it ends, with the host lent, reading what it
     // left: the copier's open signals `LOOT_OPENED` before the auto-loot sweep and the move-start
-    // close run, so its handlers read the open window. The pushes go first: `OnItemPush` signals
-    // `ITEM_PUSH` (`0x491be8`) and touches no window, so its handlers read the window as it stood
-    // before this frame's snapshot.
-    if !vm.own().0.receives.is_empty() {
-        vm.turn(|script, (mut loot, _)| {
-            let Some(script) = script else {
-                return;
-            };
-            let rolls = RollCatalogs {
-                props: props.as_deref(),
-                enchants: enchants.as_deref(),
-            };
-            drain_receives(
-                &mut loot,
-                &items,
-                icons.as_deref(),
-                &commands,
-                &chat,
-                script,
-                rolls,
-            );
-        });
+    // close run, so its handlers read the open window. Each push fires where its packet came
+    // ([`PushAt`]): `OnItemPush` signals `ITEM_PUSH` inside its dispatch (`0x491be8`), so its
+    // handlers read the window the packets before it left.
+    let rolls = RollCatalogs {
+        props: props.as_deref(),
+        enchants: enchants.as_deref(),
+    };
+    let who = Candidates {
+        group: &group,
+        names: &names,
+    };
+    let view = |loot: &LootState, ask: Ask<'_>| {
+        snapshot(loot, &items, icons.as_deref(), ask, rolls, who).map(|mut snap| {
+            snap.source_unit = loot.source().is_some_and(|g| objects.is_unit(g));
+            snap
+        })
+    };
+    let pushes = PushInputs {
+        items: &items,
+        icons: icons.as_deref(),
+        commands: &commands,
+        chat: &chat,
+        rolls,
+    };
+    let (mut ahead, mut after, mut behind) = (Vec::new(), Vec::new(), Vec::new());
+    for r in std::mem::take(&mut vm.own().0.receives) {
+        match r.at {
+            PushAt::Ahead => ahead.push(r),
+            PushAt::After(k) => after.push((k, r)),
+            PushAt::Behind => behind.push(r),
+        }
+    }
+    let mut still = emit_pushes(&mut vm, ahead, &pushes);
+    // The removals before each push, shown as the window they left: its `LOOT_SLOT_CLEARED`s
+    // (`0x4c1f00`) come before the push's `ITEM_PUSH`.
+    let mut shown = 0;
+    let mut after = after.into_iter().peekable();
+    while let Some(&(k, _)) = after.peek() {
+        if k > shown {
+            vm.turn(|script, (loot, _)| {
+                let Some(script) = script else {
+                    return;
+                };
+                let last = last.get(script);
+                if last.is_some() {
+                    show_window(script, last, view(&loot.as_of(k), Ask::Read), &items);
+                }
+            });
+            shown = k;
+        }
+        let batch = std::iter::from_fn(|| after.next_if(|(j, _)| *j == k).map(|(_, r)| r));
+        let batch = batch.collect();
+        still.extend(emit_pushes(&mut vm, batch, &pushes));
     }
     let opened = vm.turn(|script, (mut loot, _)| {
         let Some(script) = script else {
             return false;
         };
         let last = last.get(script);
-        let rolls = RollCatalogs {
-            props: props.as_deref(),
-            enchants: enchants.as_deref(),
-        };
-
         if std::mem::take(&mut loot.sweep_owed) && loot.source.is_some() {
             sweep_rows(&mut loot, &items, &commands, script, &mut pickup);
         }
-
-        let who = Candidates {
-            group: &group,
-            names: &names,
-        };
         let ask = if std::mem::take(&mut loot.opened) {
             Ask::Event(&commands)
         } else {
             Ask::Read
         };
-        let fresh = snapshot(&loot, &items, icons.as_deref(), ask, rolls, who).map(|mut snap| {
-            snap.source_unit = loot.source().is_some_and(|g| objects.is_unit(g));
-            snap
-        });
-        if fresh == *last {
-            return false;
-        }
-        script.set_loot(fresh.clone());
-        let opened = match (&*last, &fresh) {
-            (None, Some(snap)) => {
-                // No window until every template has landed: the copier fires nothing while a query
-                // is pending (`0x4c1e9f`), and the cache callback `0x4c2ac0` fires `LOOT_OPENED`
-                // (or the auto-loot sweep) at the last answer. Not advancing `last` retries next
-                // frame.
-                if templates_outstanding(&items, snap) {
-                    return false;
-                }
-                script.fire_event("LOOT_OPENED", vec![]);
-                true
-            }
-            // One `LOOT_SLOT_CLEARED` per row that went, with its 1-based row: the stock handler
-            // hides that button and pages down when the page empties (`LootFrame.lua:22-50`).
-            (Some(before), Some(after)) => {
-                for (i, was) in before.rows.iter().enumerate() {
-                    let gone = was.is_some() && after.rows.get(i).is_none_or(Option::is_none);
-                    if gone {
-                        script
-                            .fire_event("LOOT_SLOT_CLEARED", vec![ScriptValue::Int(i as i64 + 1)]);
-                    }
-                }
-                // Refreshes an open dropdown in place (`LootFrame.lua:62-64`).
-                if before.master_candidates != after.master_candidates {
-                    script.fire_event("UPDATE_MASTER_LOOT_LIST", vec![]);
-                }
-                false
-            }
-            (Some(_), None) => {
-                script.fire_event("LOOT_CLOSED", vec![]);
-                false
-            }
-            (None, None) => false,
-        };
-        *last = fresh;
-        opened
+        show_window(script, last, view(&loot, ask), &items)
     });
     // An owed sweep's bind confirm, once its handlers ran.
     if vm.own().0.owes_bind_confirm() {
@@ -878,42 +923,132 @@ fn feed_loot(
             settle_bind_confirm(script, &mut loot, &commands, &mut pickup);
         });
     }
-    if !opened {
-        return;
-    }
-    // Auto-loot (`LootConfig`), inverted by a held Shift: every row gets a hand pick's sends, and
-    // emptying the window auto-releases it.
-    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-    if cfg.auto_loot != shift {
-        vm.turn(|script, (mut loot, _)| {
-            if let Some(script) = script {
-                sweep_rows(&mut loot, &items, &commands, script, &mut pickup);
+    if opened {
+        // Auto-loot (`LootConfig`), inverted by a held Shift: every row gets a hand pick's sends,
+        // and emptying the window auto-releases it.
+        let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+        if cfg.auto_loot != shift {
+            vm.turn(|script, (mut loot, _)| {
+                if let Some(script) = script {
+                    sweep_rows(&mut loot, &items, &commands, script, &mut pickup);
+                }
+            });
+            if vm.own().0.owes_bind_confirm() {
+                vm.turn(|script, (mut loot, _)| {
+                    settle_bind_confirm(script, &mut loot, &commands, &mut pickup);
+                });
+            }
+        }
+        // The response's tail (`0x5ebc3a`-`0x5ebc51`) closes a window that opened while we move,
+        // after the copier's open and sweep and in the same handler: `LOOT_CLOSED` fires in this
+        // pass, so the window never paints.
+        vm.turn(|script, (mut loot, mut moving)| {
+            let Some(script) = script else {
+                return;
+            };
+            if !std::mem::take(&mut moving.move_start.0) {
+                return;
+            }
+            let closed = close_on_move_start(&mut loot, &mut moving.latch, &commands);
+            if closed.is_some() {
+                moving.dead.after_close(closed);
+                script.set_loot(None);
+                script.fire_event("LOOT_CLOSED", vec![]);
+                *last.get(script) = None;
             }
         });
-        if vm.own().0.owes_bind_confirm() {
-            vm.turn(|script, (mut loot, _)| {
-                settle_bind_confirm(script, &mut loot, &commands, &mut pickup);
-            });
-        }
     }
-    // The response's tail (`0x5ebc3a`-`0x5ebc51`) closes a window that opened while we move, after
-    // the copier's open and sweep and in the same handler: `LOOT_CLOSED` fires in this pass, so the
-    // window never paints.
-    vm.turn(|script, (mut loot, mut moving)| {
-        let Some(script) = script else {
-            return;
-        };
-        if !std::mem::take(&mut moving.move_start.0) {
-            return;
+    still.extend(emit_pushes(&mut vm, behind, &pushes));
+    // The window is shown as it stands: the next frame's pushes and removals count from it.
+    let (mut loot, _) = vm.own();
+    for r in &mut still {
+        r.at = PushAt::Ahead;
+    }
+    still.append(&mut loot.receives);
+    loot.receives = still;
+    loot.removed.clear();
+    loot.replaced = false;
+}
+
+/// What a push's firing reads.
+struct PushInputs<'a> {
+    items: &'a Items,
+    icons: Option<&'a ItemDisplays>,
+    commands: &'a NetCommands,
+    chat: &'a crate::ui_chat::ChatLog,
+    rolls: RollCatalogs<'a>,
+}
+
+/// Fire `batch` as one turn ([`drain_receives`]); what still waits on its template comes back.
+fn emit_pushes<P: bevy::ecs::system::SystemParam + 'static>(
+    vm: &mut crate::script_calls::VmWith<'_, '_, P>,
+    batch: Vec<PendingReceive>,
+    with: &PushInputs,
+) -> Vec<PendingReceive> {
+    if batch.is_empty() {
+        return batch;
+    }
+    vm.turn(|script, _| match script {
+        Some(script) => drain_receives(
+            batch,
+            with.items,
+            with.icons,
+            with.commands,
+            with.chat,
+            script,
+            with.rolls,
+        ),
+        None => batch,
+    })
+}
+
+/// Push `fresh` over `last`, the window the VM shows, and fire what changed; whether
+/// `LOOT_OPENED` fired.
+fn show_window(
+    script: &mut UiScript,
+    last: &mut Option<LootSnapshot>,
+    fresh: Option<LootSnapshot>,
+    items: &Items,
+) -> bool {
+    if fresh == *last {
+        return false;
+    }
+    script.set_loot(fresh.clone());
+    let opened = match (&*last, &fresh) {
+        (None, Some(snap)) => {
+            // No window until every template has landed: the copier fires nothing while a query
+            // is pending (`0x4c1e9f`), and the cache callback `0x4c2ac0` fires `LOOT_OPENED`
+            // (or the auto-loot sweep) at the last answer. Not advancing `last` retries next
+            // frame.
+            if templates_outstanding(items, snap) {
+                return false;
+            }
+            script.fire_event("LOOT_OPENED", vec![]);
+            true
         }
-        let closed = close_on_move_start(&mut loot, &mut moving.latch, &commands);
-        if closed.is_some() {
-            moving.dead.after_close(closed);
-            script.set_loot(None);
+        // One `LOOT_SLOT_CLEARED` per row that went, with its 1-based row: the stock handler
+        // hides that button and pages down when the page empties (`LootFrame.lua:22-50`).
+        (Some(before), Some(after)) => {
+            for (i, was) in before.rows.iter().enumerate() {
+                let gone = was.is_some() && after.rows.get(i).is_none_or(Option::is_none);
+                if gone {
+                    script.fire_event("LOOT_SLOT_CLEARED", vec![ScriptValue::Int(i as i64 + 1)]);
+                }
+            }
+            // Refreshes an open dropdown in place (`LootFrame.lua:62-64`).
+            if before.master_candidates != after.master_candidates {
+                script.fire_event("UPDATE_MASTER_LOOT_LIST", vec![]);
+            }
+            false
+        }
+        (Some(_), None) => {
             script.fire_event("LOOT_CLOSED", vec![]);
-            *last.get(script) = None;
+            false
         }
-    });
+        (None, None) => false,
+    };
+    *last = fresh;
+    opened
 }
 
 /// [`feed_loot`] as a one-shot, for a test that drives the window from outside the module.
