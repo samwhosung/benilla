@@ -604,6 +604,7 @@ fn feed_auction(
                     rows,
                     sort: auction.sorts.0[i],
                     page: slot.page,
+                    pending: false,
                 }
             });
             AuctionState {
@@ -644,6 +645,15 @@ fn feed_auction(
         });
         for (slot, tail) in auction.lists.iter_mut().zip(tails) {
             slot.awaiting &= !tail;
+        }
+        // A tail run now leaves its list with nothing owed.
+        let mut fresh = fresh;
+        for (list, slot) in fresh
+            .iter_mut()
+            .flat_map(|f| &mut f.lists)
+            .zip(&auction.lists)
+        {
+            list.pending = slot.awaiting;
         }
         if fresh != *last {
             script.set_auction(fresh.clone());

@@ -129,6 +129,9 @@ pub struct AuctionListState {
     /// in wire order, as the result handler writes its records (`0x4cc880`), and one the VM holds
     /// keeps the VM's order.
     pub page: u32,
+    /// The list's sort tail is still owed: its pending-lookups counter is not back at 0
+    /// (`0xb72644`, `0xb72648`, `0xb7264c`), so a removal from it signals nothing (`0x4ce035`).
+    pub pending: bool,
 }
 
 /// One class of the Browse tab's category tree, from the player's `ItemClass.dbc`.
