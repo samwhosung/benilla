@@ -69,11 +69,22 @@ pub(crate) struct SpellVisuals(pub(crate) SpellVisualCatalog);
 /// `crate::sound` in emission order.
 #[derive(Message, Clone, Copy, Debug)]
 pub(crate) enum SpellKitSound {
-    /// Ring this kit at the unit; a looping kit (`SoundEntries` flag 0x200) becomes the unit's
-    /// tracked hold loop until [`Self::StopHold`] (`0x458830` → `0x61fec0`, one-shot `0x458870`).
-    Play { entity: Entity, kit_sound: u32 },
-    /// The cast or channel hold ended: stop the unit's hold loop (`0x614150`).
-    StopHold { entity: Entity },
+    /// Ring this kit at the unit for `spell_id`'s kit, 0 for a kit push; a looping kit
+    /// (`SoundEntries` flag 0x200) becomes the unit's tracked hold loop until [`Self::StopHold`]
+    /// (`0x458830` → `0x61fec0`, one-shot `0x458870`). The effect it rides carries the spell
+    /// (`+0x18`), which the stop keys on.
+    Play {
+        entity: Entity,
+        spell_id: u32,
+        kit_sound: u32,
+    },
+    /// Stop the unit's hold loop: for `Some(spell)`, only a loop that spell's kit rang, as
+    /// `0x614150(spell, 0)` stops only the effects whose spell matches (`0x614167`); for `None`,
+    /// whatever loop it holds, as a new hold replaces the old.
+    StopHold {
+        entity: Entity,
+        spell_id: Option<u32>,
+    },
     /// Ring this kit at a world point, the kit play's `extra` override (`0x60f49e`): a missile's
     /// ground arrival. Always a one-shot: no shipped ground-arrival kit loops.
     PlayAt { pos: Vec3, kit_sound: u32 },
@@ -540,7 +551,11 @@ fn play_kit(
         }
     }
     if let Some(kit_sound) = kit.sound.filter(|_| play.sound) {
-        out.sounds.write(SpellKitSound::Play { entity, kit_sound });
+        out.sounds.write(SpellKitSound::Play {
+            entity,
+            spell_id,
+            kit_sound,
+        });
     }
     // The camera shake plays at every stage, gated on nothing.
     if let Some(group) = kit.shake {
@@ -713,8 +728,10 @@ pub(super) fn route_cast_visuals(
         match ev.kind {
             CastEventKind::Start => {
                 // A replacing cast reaps the prior hold's loop and persistent models first.
-                out.sounds
-                    .write(SpellKitSound::StopHold { entity: ev.entity });
+                out.sounds.write(SpellKitSound::StopHold {
+                    entity: ev.entity,
+                    spell_id: None,
+                });
                 if let Some(prior) = held_spell(&pending, ev.entity) {
                     out.fx.write(SpellKitFx::Reap {
                         entity: ev.entity,
@@ -762,6 +779,7 @@ pub(super) fn route_cast_visuals(
                     if let Some(kit_sound) = kit.sound {
                         out.sounds.write(SpellKitSound::Play {
                             entity: ev.entity,
+                            spell_id: ev.spell_id,
                             kit_sound,
                         });
                     }
@@ -785,9 +803,12 @@ pub(super) fn route_cast_visuals(
                     commands.entity(ev.entity).try_remove::<CastHold>();
                     pending.insert(ev.entity, None);
                 }
-                // Reaped whatever the hold: a precast kit with no anim still starts a loop.
-                out.sounds
-                    .write(SpellKitSound::StopHold { entity: ev.entity });
+                // The spell's own loop (`0x614150(spellId, 0)`), whatever the hold: a precast kit
+                // with no anim still starts a loop.
+                out.sounds.write(SpellKitSound::StopHold {
+                    entity: ev.entity,
+                    spell_id: Some(ev.spell_id),
+                });
                 out.fx.write(SpellKitFx::Reap {
                     entity: ev.entity,
                     spell_id: ev.spell_id,
@@ -860,8 +881,12 @@ pub(super) fn route_cast_visuals(
                     commands.entity(ev.entity).try_remove::<CastHold>();
                     pending.insert(ev.entity, None);
                 }
-                out.sounds
-                    .write(SpellKitSound::StopHold { entity: ev.entity });
+                // The spell's own loop only (`0x614167`): a cancel's reap of the record's
+                // spell spares a channel another spell runs.
+                out.sounds.write(SpellKitSound::StopHold {
+                    entity: ev.entity,
+                    spell_id: Some(ev.spell_id),
+                });
                 out.fx.write(SpellKitFx::Reap {
                     entity: ev.entity,
                     spell_id: ev.spell_id,
@@ -968,7 +993,10 @@ pub(super) fn route_cast_visuals(
         }
         channel_cache.insert(entity, cur);
         if cur != 0 {
-            out.sounds.write(SpellKitSound::StopHold { entity });
+            out.sounds.write(SpellKitSound::StopHold {
+                entity,
+                spell_id: None,
+            });
             if prev != 0 {
                 // A channel replacing a channel reaps the old spell's effects first.
                 out.fx.write(SpellKitFx::Reap {
@@ -990,7 +1018,11 @@ pub(super) fn route_cast_visuals(
                     pending.insert(entity, Some(cur));
                 }
                 if let Some(kit_sound) = kit.sound {
-                    out.sounds.write(SpellKitSound::Play { entity, kit_sound });
+                    out.sounds.write(SpellKitSound::Play {
+                        entity,
+                        spell_id: cur,
+                        kit_sound,
+                    });
                 }
                 // The CharProc dispatcher's second caller (`0x612b18`): Drain Life's beam is
                 // reached only here, on the rising edge, and lives until the field clears.
@@ -1025,7 +1057,10 @@ pub(super) fn route_cast_visuals(
                 commands.entity(entity).try_remove::<CastHold>();
                 pending.insert(entity, None);
             }
-            out.sounds.write(SpellKitSound::StopHold { entity });
+            out.sounds.write(SpellKitSound::StopHold {
+                entity,
+                spell_id: Some(prev),
+            });
             out.fx.write(SpellKitFx::Reap {
                 entity,
                 spell_id: prev,
@@ -1166,7 +1201,11 @@ pub(crate) fn arm_aura_state_fx(
             }
             // Ungated; a same-frame duplicate of the impact hand-off's collapses downstream.
             if let Some(kit_sound) = kit.sound {
-                sounds.write(SpellKitSound::Play { entity, kit_sound });
+                sounds.write(SpellKitSound::Play {
+                    entity,
+                    spell_id,
+                    kit_sound,
+                });
             }
             // The stage-2 anim leg, on the add edge only: an aura refreshed in place keeps its id,
             // and `0x604d00` fires neither arm.

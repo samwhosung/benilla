@@ -2256,10 +2256,24 @@ fn esc_with_a_cursor_up_leaves_the_running_channels_hold_and_loop() {
     );
     assert_eq!(hold(&app, me), Some(ARCANE_MISSILES), "the channel's hold");
     let after = sounds(&mut app);
-    assert!(
-        !after
-            .iter()
-            .any(|s| matches!(s, SpellKitSound::StopHold { entity } if *entity == me)),
+    // The sound router's books over both frames, the hum a looping kit.
+    let mut loops = crate::sound::HoldLoops::default();
+    for ev in rise.iter().chain(&after) {
+        match *ev {
+            SpellKitSound::Play {
+                entity,
+                spell_id,
+                kit_sound: AM_HUM,
+            } => loops.rang(entity, spell_id, AM_HUM),
+            SpellKitSound::StopHold { entity, spell_id } => {
+                loops.stop_hold(entity, spell_id);
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        loops.held(me),
+        Some((ARCANE_MISSILES, AM_HUM)),
         "Blizzard's reap stops none of the channel's sound (got {after:?})"
     );
 }
