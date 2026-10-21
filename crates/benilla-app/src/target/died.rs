@@ -1,8 +1,8 @@
 //! `CGUnit_C::OnDied 0x605860`, which the health watcher runs on every unit's alive-to-dead edge
 //! (`0x6046f0` at `0x6047a3`: the new health not above 0, the old above). In its order:
 //!
-//! - a player's own leg first (`0x5e99b0` at `0x60588d`), whose active-player release latch and
-//!   timer are [`crate::ui_session`]'s;
+//! - a player's own leg first (`0x5e99b0` at `0x60588d`): a groupmate's death line, here, and
+//!   the active player's release latch and timer, [`crate::ui_session`]'s;
 //! - the dying unit's attack words zeroed (`0x605896`-`0x6058a8`): its target ([`Engaged`],
 //!   `+0xc48`) and its stop in flight (`+0xc54`);
 //! - `PresentUnitDeath 0x625190` (`0x6058ae`), the death line, animation and sound, which the chat
@@ -16,22 +16,53 @@
 
 use bevy::prelude::*;
 
+use benilla_protocol::messages::ObjectType;
+
 use super::Selection;
 use crate::creature_anim::{AttackSeam, Engaged};
-use crate::net::{FieldChanged, SelfPlayer};
+use crate::net::{FieldChanged, ObjectStore, SelfPlayer};
+use crate::query_cache::Ask;
+use crate::ui_action::{FillArg, UiError, UiErrorKeys};
+
+/// What a groupmate's death shows: message `0x4c` (`0x5e9a0e`).
+const PLAYER_DIED: &str = "ERR_PLAYER_DIED_S";
 
 /// Each unit's death, in the order the edges came.
+#[allow(clippy::too_many_arguments)] // the death's legs, each its own owner's state
 pub(super) fn on_unit_died(
     mut edges: MessageReader<FieldChanged>,
     mut selection: ResMut<Selection>,
     mut seam: AttackSeam,
     mut commands: Commands,
     engaged: Query<(), (With<Engaged>, With<SelfPlayer>)>,
+    group: Res<crate::ui_party::GroupState>,
+    names: Res<crate::names::NameCache>,
+    stores: Query<&ObjectStore>,
+    errors: Res<UiErrorKeys>,
 ) {
     // Our attack target as this pass leaves it: our own death zeroes it before a deselect reads it.
     let mut me_engaged = !engaged.is_empty();
     for e in edges.read().filter(|e| e.unit_died()) {
         let me = seam.me.single().ok();
+        // `CGPlayer_C::OnDied 0x5e99b0`, for a player (`0x605882`): another player than the
+        // active one (`0x5e99d8`-`0x5e99e4`) on one of our four party slots (`IsPartyMember
+        // 0x4918d0` → `0x4e7f70` at `0x5e99f7`) shows the line under `GetUnitName`'s name, the
+        // cache's with a callback or `UNKNOWNOBJECT` (`0x609210` at `0x5e9a08`, `0x496720` at
+        // `0x5e9a10`).
+        if e.kind == ObjectType::Player
+            && me != Some(e.entity)
+            && group.party_slots().any(|m| m.guid == e.guid)
+        {
+            let store = stores.get(e.entity).ok();
+            errors.push(
+                match names.resolve_unit(e.guid, store, Ask::Event(&seam.net)) {
+                    Some(name) => UiError::s(PLAYER_DIED, name),
+                    None => {
+                        UiError::args(PLAYER_DIED, vec![FillArg::Global("UNKNOWNOBJECT".into())])
+                    }
+                },
+            );
+        }
         if let Ok(mut unit) = commands.get_entity(e.entity) {
             unit.try_remove::<Engaged>();
         }
@@ -528,6 +559,8 @@ mod tests {
         }
         let _ = c.world().resource::<UiErrorKeys>().take();
         let lines = |c: &mut Client, entity, guid, kind| {
+            // Each one-shot reads every edge still buffered: only this death's.
+            c.world().resource_mut::<Messages<FieldChanged>>().clear();
             c.dies(entity, guid, kind);
             c.world().resource::<UiErrorKeys>().take()
         };
