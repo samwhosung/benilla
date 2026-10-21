@@ -1144,6 +1144,34 @@ mod tests {
         assert_eq!(seen.as_deref(), Some("Red Whelp"), "the new target");
     }
 
+    /// A probe's `/script` line is `RunScript(msg)`, a verb like any other: the line's `TargetUnit`
+    /// commits through `SetSelection 0x493540` before it returns, so the line's next statement
+    /// reads the new target. The drain takes the lines in an engine turn and runs each line's Lua
+    /// between turns, with the host lent.
+    #[test]
+    fn a_probe_lines_target_call_applies_inside_it() {
+        let mut f = frame(true);
+        let world = f.app.world_mut();
+        world
+            .resource_mut::<crate::names::NameCache>()
+            .insert_player(NEW, "Red Whelp".into(), None);
+        world
+            .run_system_once(crate::ui_unit::feed_name_candidates)
+            .expect("the candidate feed runs as a one-shot system");
+        benilla_world::world_point::init_world_point_resources(world);
+        world.insert_resource(crate::ui_chat::commands::SlashCommands::build(
+            |name| (name == "SLASH_SCRIPT1").then(|| "/script".to_string()),
+            |_| None,
+        ));
+        world
+            .non_send_resource_mut::<UiScript>()
+            .push_chat_input(r#"/script TargetUnit("party1") SEEN = UnitName("target")"#.into());
+        crate::ui_chat::drain_chat_input_once(world);
+        let seen = eval::<Option<String>>(&mut f, "return SEEN");
+        assert_eq!(seen.as_deref(), Some("Red Whelp"), "the new target");
+        assert_eq!(selected(&f), Some(NEW));
+    }
+
     /// `TargetByName` (`0x489d60`) commits through `SetSelection 0x493540` before it returns, so
     /// `UnitName("target")` on the next line of the same chunk names the new unit, the one the
     /// commit picked.

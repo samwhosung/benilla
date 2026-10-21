@@ -73,6 +73,15 @@ pub(crate) fn feed_chat_once(world: &mut World) {
         .run_system_once(feed::feed_chat)
         .expect("the chat feeds");
 }
+/// The submitted-line drain once, for a test over the whole client: the dev and probe lines the
+/// VM holds, with the call host the world lends.
+#[cfg(test)]
+pub(crate) fn drain_chat_input_once(world: &mut World) {
+    use bevy::ecs::system::RunSystemOnce;
+    world
+        .run_system_once(input::drain_chat_input)
+        .expect("the chat input drains");
+}
 /// Test-only: the quest log's rig tees the lines its timers show.
 #[cfg(test)]
 pub(crate) use frames::{tee_shown_lines, ChatWindows};
