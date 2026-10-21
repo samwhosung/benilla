@@ -599,6 +599,9 @@ pub(super) fn follow_requests(
     }
 }
 
+/// The cue `SetSelection` plays for a guid whose object it does not find (`0x843328`).
+const UNHELD_SELECT_SOUND: &str = "igCharacterSelect";
+
 /// Everything [`scan::commit`], the one `SetSelection` path, needs.
 #[derive(SystemParam)]
 #[allow(clippy::type_complexity)] // one bundled param, the app's convention for big query sets
@@ -626,6 +629,8 @@ pub(crate) struct SelectCommit<'w, 's> {
     pub(super) front: super::front::SelectFront<'w, 's>,
     /// The roster `IsRaidMemberOrPet` reads (`0x491900`), absent in a harness without groups.
     group: Option<Res<'w, crate::ui_party::GroupState>>,
+    /// The 2D cues `PlaySoundByName` (`0x458030`) plays, absent in a harness without sound.
+    sounds: Option<Res<'w, crate::sound::MessageSounds>>,
 }
 
 impl SelectCommit<'_, '_> {
@@ -732,13 +737,15 @@ impl SelectCommit<'_, '_> {
     }
 
     /// `SetSelection` on a guid with no object: the charmed return (`0x49359c`) alone stands
-    /// ahead of it, and the guid is stored with no light (`0x493605`, `0x4936f7`).
+    /// ahead of it, and the guid is stored with no light (`0x493605`). Its object lookup finds
+    /// nothing, so it plays `igCharacterSelect` (`0x4936f7 je 0x493843`, `0x843328` through
+    /// `0x458030`), past the dedup (`0x493617`).
     fn commit_unheld(&mut self, guid: u64) {
         if self.front.charmed() {
             return;
         }
         let me = self.me.single().ok();
-        scan::commit(
+        let outcome = scan::commit(
             &mut self.selection,
             &mut self.seam,
             None,
@@ -748,6 +755,11 @@ impl SelectCommit<'_, '_> {
             me.map(|(g, _, _)| g.0),
             false,
         );
+        if outcome.changed {
+            if let Some(sounds) = &self.sounds {
+                sounds.push_cue(UNHELD_SELECT_SOUND);
+            }
+        }
     }
 
     /// Select the held object `entity`, `guid`, through [`scan::commit`], unless `SelectTarget`'s
