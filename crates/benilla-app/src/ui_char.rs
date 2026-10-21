@@ -491,6 +491,14 @@ fn combat_stats(store: &ObjectStore, objects: &Objects, items: &Items) -> UnitCo
         .and_then(|e| items.template(e, 0, Ask::Read))
         .filter(|t| t.class == ITEM_CLASS_WEAPON)
         .and_then(|t| weapon_subclass_skill(t.subclass));
+    // `UnitRangedDamage`'s school (`0x5189e1`-`0x518a45`): the ranged-slot item's record, read
+    // without asking, and its first damage line whose minimum is above 0, else school 0. The
+    // template keeps only lines whose maximum is above 0, which drops no well-formed such line.
+    let ranged_school = slot_entry(store, objects, SLOT_RANGED)
+        .and_then(|e| items.template(e, 0, Ask::Read))
+        .and_then(|t| t.damages.iter().find(|d| d.min > 0.0))
+        .map_or(0, |d| u8::try_from(d.school).unwrap_or(u8::MAX));
+    let f = &store.0;
 
     UnitCombatStats {
         has_offhand,
@@ -506,6 +514,10 @@ fn combat_stats(store: &ObjectStore, objects: &Objects, items: &Items) -> UnitCo
         dodge_percent: store.0.player_dodge_percentage().unwrap_or(0.0),
         parry_percent: store.0.player_parry_percentage().unwrap_or(0.0),
         block_percent: store.0.player_block_percentage().unwrap_or(0.0),
+        // The three at that school (`0x518a77`, `0x518ac0`, `0x518b0e`).
+        ranged_bonus_pos: f.player_mod_damage_done_pos(ranged_school).unwrap_or(0),
+        ranged_bonus_neg: f.player_mod_damage_done_neg(ranged_school).unwrap_or(0),
+        ranged_percent: f.player_mod_damage_done_pct(ranged_school).unwrap_or(1.0),
         ..unit_combat_stats(store)
     }
 }

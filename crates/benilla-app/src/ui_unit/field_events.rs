@@ -11,8 +11,8 @@ use benilla_ui::script::{ScriptValue, UiScript};
 use crate::field_watch::FieldNotice;
 
 /// The feeds that push what a field event's handlers read: the unit tokens' snapshots with the XP
-/// and rest values (`feed_units`), the group's and the pet's tokens, the pet's stats, the combat
-/// stats of the player and of the pet, the honor block and the watched faction. The firing runs
+/// and rest values (`feed_units`), the group's and the pet's tokens, the pet's stats, the player's
+/// combat stats, the honor block and the watched faction. The firing runs
 /// after all of them, as the reference writes a whole block before its notify pass.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct FieldEventPushes;
@@ -803,11 +803,6 @@ mod tests {
             ),
             crate::test_support::runs_before(
                 &mut headless,
-                crate::ui_pet_doll::feed_pet_doll,
-                fire_field_notices,
-            ),
-            crate::test_support::runs_before(
-                &mut headless,
                 crate::ui_honor::feed_honor,
                 fire_field_notices,
             ),
@@ -833,8 +828,8 @@ mod tests {
             ),
         ];
         assert_eq!(
-            ahead, [true; 8],
-            "feed_units, char, pet doll, honor, reputation, party, pet, pet stats"
+            ahead, [true; 7],
+            "feed_units, char, honor, reputation, party, pet, pet stats"
         );
 
         // In that order: the block lands, the push, the firing.

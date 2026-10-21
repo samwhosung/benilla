@@ -67,7 +67,6 @@ use crate::ui_party::UiPartyPlugin;
 use crate::ui_pass::PlayerUiPlugin;
 use crate::ui_pet::UiPetPlugin;
 use crate::ui_pet_book::UiPetBookPlugin;
-use crate::ui_pet_doll::UiPetDollPlugin;
 use crate::ui_pet_stats::UiPetStatsPlugin;
 use crate::ui_petition::UiPetitionPlugin;
 use crate::ui_quest::UiQuestPlugin;
@@ -215,7 +214,6 @@ impl PluginGroup for GamePlugins {
             .add(ChrClassesPlugin)
             .add(UiPetBookPlugin)
             .add(UiPetStatsPlugin)
-            .add(UiPetDollPlugin)
             .add(UiNetPlugin)
             .add(UiCastPlugin)
             .add(UiMirrorPlugin)

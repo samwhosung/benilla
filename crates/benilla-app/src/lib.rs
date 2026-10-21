@@ -158,7 +158,6 @@ mod ui_party;
 mod ui_pass;
 mod ui_pet;
 mod ui_pet_book;
-mod ui_pet_doll;
 mod ui_pet_stats;
 mod ui_petition;
 mod ui_quest;

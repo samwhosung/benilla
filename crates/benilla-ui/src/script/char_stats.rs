@@ -338,11 +338,6 @@ impl super::UiScript {
         self.model_mut().player_combat_stats = stats;
     }
 
-    /// The pet's snapshot; `None` without a pet, so `Unit*("pet")` reads the absent shape.
-    pub fn set_pet_combat_stats(&mut self, stats: Option<UnitCombatStats>) {
-        self.model_mut().pet_combat_stats = stats;
-    }
-
     /// Push the doll snapshot, recompute the 12 alert statuses and fire `UPDATE_INVENTORY_ALERTS`.
     pub fn set_inventory_slots(&mut self, slots: InventorySlots) {
         {
@@ -389,19 +384,75 @@ pub(super) fn recompute_inventory_alerts(model: &mut Model) {
     model.inventory_alerts = alerts;
 }
 
-fn with_unit_stats<T>(
-    lua: &Lua,
-    token: &Option<String>,
-    f: impl FnOnce(&UnitCombatStats) -> T,
-) -> T {
+/// The unit a stat getter asks after `GetUnitFromToken` (`0x515940`), the gates' inputs beside
+/// its fields; `None` is no object, whose answer is each function's zeros.
+struct Asked<'a> {
+    /// The fields read: the active player's own snapshot, with its PLAYER block and equipment,
+    /// else the unit's ([`super::UnitState::combat`]).
+    fields: &'a UnitCombatStats,
+    /// SELF: the object's GUID is the active player's (`0x468550`).
+    me: bool,
+    /// PLAYER: the type word's player bit (`shr ecx,4; test cl,1`).
+    player: bool,
+    /// SELF or `UNIT_FIELD_SUMMONEDBY` the active player's GUID (`0x519272`, `0x518881`), with
+    /// no zero guard.
+    me_or_mine: bool,
+    /// `UNIT_FIELD_LEVEL`, which a creature's skill body multiplies by 5 (`0x613680`).
+    level: u32,
+}
+
+/// [`Asked`] for `token`, after the resolver's raise for a token it does not know (`0x515c14`).
+/// The `"player"` token's own push is the active player whatever its guid reads, as the resolver
+/// names it.
+fn asked<T>(lua: &Lua, token: &str, f: impl FnOnce(Option<Asked<'_>>) -> T) -> mlua::Result<T> {
+    super::unit::check_unit_token(&Some(token.to_string()))?;
     let model = lua.app_data_ref::<Model>().expect("model app_data");
-    let absent = UnitCombatStats::default();
-    let pushed = match token.as_deref() {
-        Some("player") => model.player_combat_stats.as_ref(),
-        Some("pet") => model.pet_combat_stats.as_ref(),
-        _ => None,
-    };
-    f(pushed.unwrap_or(&absent))
+    let player_guid = model.unit_guids.player;
+    let player_push = model.pushed_unit("player");
+    let asked = model.unit(token).filter(|u| u.has_object).map(|u| {
+        let me = player_push.is_some_and(|p| std::ptr::eq(p, u))
+            || (u.guid != 0 && u.guid == player_guid);
+        Asked {
+            fields: if me {
+                model.player_combat_stats.as_ref().unwrap_or(&u.combat)
+            } else {
+                &u.combat
+            },
+            me,
+            player: me || u.is_player,
+            me_or_mine: me || u.summoned_by == player_guid,
+            level: u.level,
+        }
+    });
+    Ok(f(asked))
+}
+
+/// [`asked`] behind the `Usage:` gate the one-argument getters open with (`0x6f3510`).
+fn asked_arg<T>(
+    lua: &Lua,
+    token: Value,
+    usage: &'static str,
+    f: impl FnOnce(Option<Asked<'_>>) -> T,
+) -> mlua::Result<T> {
+    let token = binding_abi::string_arg(lua, token, usage)?;
+    asked(lua, &token, f)
+}
+
+/// A swing time in seconds: the field, an integer, times the single 0.001 at `0x801360`
+/// (`0x518eb8`, `0x51898f`), at the x87's double precision.
+fn swing_seconds(ms: u32) -> f64 {
+    f64::from(ms) * f64::from(0.001f32)
+}
+
+/// The damage-bonus triple `UnitDamage` and `UnitRangedDamage` push after the damage: the active
+/// player's own; another player's the zero constant (`0x518cf7`, `0x518d7a`); a non-player's 0, 0
+/// and 1.0 (`0x518dbc`-`0x518dd2`, `0x518b1d`-`0x518b33`).
+fn damage_bonus(a: &Asked<'_>, own: (i32, i32, f32)) -> (i64, i64, f64) {
+    match (a.player, a.me) {
+        (false, _) => (0, 0, 1.0),
+        (true, false) => (0, 0, 0.0),
+        (true, true) => (i64::from(own.0), i64::from(own.1), f64::from(own.2)),
+    }
 }
 
 /// The clamp `UnitDefense` (`0x519298`) and each hand of `UnitAttackBothHands` (`0x5188a7`) apply:
@@ -412,10 +463,15 @@ fn skill_clamped((base, modifier): (i32, i32)) -> (i64, i64) {
     (base, if modifier + base < 0 { -base } else { modifier })
 }
 
-/// A non-player's `UnitDefense` and `UnitAttackBothHands` answer: `CGUnit_C`'s vtable bodies
-/// (`0x613680`, `0x6136b0`) return level * 5 with a 0 modifier; a creature has no skill block.
-fn cgunit_skill(model: &Model, token: &str) -> i64 {
-    model.unit(token).map_or(0, |u| i64::from(u.level)) * 5
+/// The skill pair `UnitDefense` and each hand of `UnitAttackBothHands` ask through the vtable
+/// (`[vtbl+0xac]`, `[vtbl+0xb0]`) behind SELF-or-mine: the active player's skill line
+/// (`0x5eda20`), a creature's level times 5 and 0 (`0x613680`, `0x6136b0`); anyone else's zeros.
+fn vtable_skill(a: Option<&Asked<'_>>, own: (i32, i32)) -> (i32, i32) {
+    match a {
+        Some(a) if a.me => own,
+        Some(a) if a.me_or_mine => ((a.level as i32).wrapping_mul(5), 0),
+        _ => (0, 0),
+    }
 }
 
 /// `token`'s inventory slot, unit-keyed as in the reference so the inspect doll reuses these
@@ -618,186 +674,232 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "UnitStat",
         lua.create_function(|lua, (token, i): (Value, Value)| {
+            // Both arguments' gates, then the resolver (`0x51863f`), then the index (`0x51865a`).
             let token = binding_abi::string_arg(lua, token, STAT_USAGE)?;
             let idx = binding_abi::number_arg(lua, i, STAT_USAGE)? - 1;
+            super::unit::check_unit_token(&Some(token.clone()))?;
             if !(0..5).contains(&idx) {
                 return Err(mlua::Error::RuntimeError(STAT_INDEX_ERROR.into()));
             }
             let idx = idx as usize;
-            Ok(with_unit_stats(lua, &Some(token), |s| {
-                let (raw, pos, neg) = (s.stats[idx], s.stat_pos[idx], s.stat_neg[idx]);
+            asked(lua, &token, |a| {
+                let Some(a) = a else {
+                    return (0, 0, 0, 0);
+                };
+                let s = a.fields;
+                let raw = s.stats[idx];
+                let (pos, neg) = if a.me {
+                    (s.stat_pos[idx], s.stat_neg[idx])
+                } else {
+                    (0, 0)
+                };
                 (
                     i64::from(raw),
                     i64::from(raw.max(0)),
                     i64::from(pos),
                     i64::from(neg),
                 )
-            }))
+            })
         })?,
     )?;
 
-    // UnitResistance(unit, 0..=6) → (base, resistance, positive, negative) through `0x5efcd0`,
-    // school 0 armor: `base = raw - pos - neg` before the clamp, `resistance = max(raw, 0)`.
+    // UnitResistance(unit, 0..=6) → (base, resistance, positive, negative). The active player's
+    // through `0x5efcd0`: `base = raw - pos - neg` before the clamp, `resistance = max(raw, 0)`;
+    // any other unit's the field raised to 0 twice and no buffs (`0x518562`-`0x51857c`).
     g.set(
         "UnitResistance",
         lua.create_function(|lua, (token, school): (Value, Value)| {
+            // Both arguments' gates, then the resolver (`0x5184df`), then the index (`0x5184fd`).
             let token = binding_abi::string_arg(lua, token, RESISTANCE_USAGE)?;
             let school = binding_abi::number_arg(lua, school, RESISTANCE_USAGE)?;
+            super::unit::check_unit_token(&Some(token.clone()))?;
             if !(0..7).contains(&school) {
                 return Err(mlua::Error::RuntimeError(RESISTANCE_INDEX_ERROR.into()));
             }
             let idx = school as usize;
-            Ok(with_unit_stats(lua, &Some(token), |s| {
-                let (raw, pos, neg) = (
-                    s.resistances[idx],
-                    s.resistance_pos[idx],
-                    s.resistance_neg[idx],
-                );
+            asked(lua, &token, |a| {
+                let Some(a) = a else {
+                    return (0, 0, 0, 0);
+                };
+                let s = a.fields;
+                let raw = s.resistances[idx];
+                if !a.me {
+                    let shown = i64::from(raw.max(0));
+                    return (shown, shown, 0, 0);
+                }
+                let (pos, neg) = (s.resistance_pos[idx], s.resistance_neg[idx]);
                 (
                     i64::from(raw - pos - neg),
                     i64::from(raw.max(0)),
                     i64::from(pos),
                     i64::from(neg),
                 )
-            }))
+            })
         })?,
     )?;
 
-    // UnitArmor(unit) → (base, effectiveArmor, armor, posBuff, negBuff): school 0 through
-    // `0x5efcd0`, effectiveArmor and armor both its clamped total.
+    // UnitArmor(unit) → (base, effectiveArmor, armor, posBuff, negBuff): the armor school through
+    // `0x5efcd0` for the active player, effectiveArmor and armor both its clamped total; any
+    // other unit's the field raised to 0 three times and no buffs (`0x51937e`-`0x5193b0`).
     g.set(
         "UnitArmor",
-        lua.create_function(|lua, token: Option<String>| {
-            Ok(with_unit_stats(lua, &token, |s| {
-                let (raw, pos, neg) = (s.resistances[0], s.resistance_pos[0], s.resistance_neg[0]);
+        lua.create_function(|lua, token: Value| {
+            asked_arg(lua, token, r#"Usage: UnitArmor("unit")"#, |a| {
+                let Some(a) = a else {
+                    return (0, 0, 0, 0, 0);
+                };
+                let s = a.fields;
+                let raw = s.resistances[0];
+                let shown = i64::from(raw.max(0));
+                if !a.me {
+                    return (shown, shown, shown, 0, 0);
+                }
+                let (pos, neg) = (s.resistance_pos[0], s.resistance_neg[0]);
                 (
                     i64::from(raw - pos - neg),
-                    i64::from(raw.max(0)),
-                    i64::from(raw.max(0)),
+                    shown,
+                    shown,
                     i64::from(pos),
                     i64::from(neg),
                 )
-            }))
+            })
         })?,
     )?;
 
     // UnitDamage(unit) → (minDamage, maxDamage, minOffHandDamage, maxOffHandDamage,
-    // physicalBonusPos, physicalBonusNeg, percent): the damage fields verbatim, then school 0's
-    // `MOD_DAMAGE_DONE` split, which is inferred, not traced in the reference.
+    // physicalBonusPos, physicalBonusNeg, percent): the four damage fields of any unit
+    // (`0x518c72`-`0x518cc9`), then [`damage_bonus`] at the physical school; seven zeros with no
+    // object (`0x518deb`).
     g.set(
         "UnitDamage",
-        lua.create_function(|lua, token: Option<String>| {
-            Ok(with_unit_stats(lua, &token, |s| {
+        lua.create_function(|lua, token: Value| {
+            asked_arg(lua, token, r#"Usage: UnitDamage("unit")"#, |a| {
+                let Some(a) = a else {
+                    return (0.0, 0.0, 0.0, 0.0, 0, 0, 0.0);
+                };
+                let s = a.fields;
+                let (pos, neg, percent) = damage_bonus(
+                    &a,
+                    (s.physical_bonus_pos, s.physical_bonus_neg, s.damage_percent),
+                );
                 (
                     f64::from(s.min_damage),
                     f64::from(s.max_damage),
                     f64::from(s.min_offhand_damage),
                     f64::from(s.max_offhand_damage),
-                    i64::from(s.physical_bonus_pos),
-                    i64::from(s.physical_bonus_neg),
-                    f64::from(s.damage_percent),
+                    pos,
+                    neg,
+                    percent,
                 )
-            }))
-        })?,
-    )?;
-
-    // UnitAttackSpeed(unit) → (mainSpeed, offhandSpeed) in seconds; nil offhand without a weapon.
-    g.set(
-        "UnitAttackSpeed",
-        lua.create_function(|lua, token: Option<String>| {
-            Ok(with_unit_stats(lua, &token, |s| {
-                (
-                    f64::from(s.main_attack_time_ms) / 1000.0,
-                    s.has_offhand
-                        .then_some(f64::from(s.offhand_attack_time_ms) / 1000.0),
-                )
-            }))
-        })?,
-    )?;
-
-    // UnitAttackPower(unit) → (base, posBuff, negBuff): `UNIT_FIELD_ATTACK_POWER` and the signed
-    // halves of `_MODS` (vmangos `StatSystem.cpp:335-336`).
-    g.set(
-        "UnitAttackPower",
-        lua.create_function(|lua, token: Option<String>| {
-            Ok(with_unit_stats(lua, &token, |s| {
-                (
-                    i64::from(s.attack_power),
-                    i64::from(s.attack_power_pos),
-                    i64::from(s.attack_power_neg),
-                )
-            }))
-        })?,
-    )?;
-
-    // UnitRangedAttackPower(unit) → (base, posBuff, negBuff), from the ranged fields.
-    g.set(
-        "UnitRangedAttackPower",
-        lua.create_function(|lua, token: Option<String>| {
-            Ok(with_unit_stats(lua, &token, |s| {
-                (
-                    i64::from(s.ranged_attack_power),
-                    i64::from(s.ranged_attack_power_pos),
-                    i64::from(s.ranged_attack_power_neg),
-                )
-            }))
-        })?,
-    )?;
-
-    // UnitAttackBothHands(unit) → (mainBase, mainMod, offBase, offMod): `0x518810` calls
-    // `[vtbl+0xb0]` for hand 0 then hand 1. Stock reads only the first pair
-    // (`PaperDollFrame.lua:398-399`). A pet's `CGUnit_C` body (`0x6136b0`) ignores the hand, so
-    // both pairs are `(level * 5, 0)`.
-    g.set(
-        "UnitAttackBothHands",
-        lua.create_function(|lua, token: Option<String>| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(match token.as_deref() {
-                Some("player") => model
-                    .player_combat_stats
-                    .as_ref()
-                    .map_or((0, 0, 0, 0), |s| {
-                        let (mb, mm) = skill_clamped(s.main_weapon_skill);
-                        let (ob, om) = skill_clamped(s.offhand_weapon_skill);
-                        (mb, mm, ob, om)
-                    }),
-                Some("pet") => {
-                    let base = cgunit_skill(&model, "pet");
-                    (base, 0, base, 0)
-                }
-                _ => (0, 0, 0, 0),
             })
         })?,
     )?;
 
-    // UnitRangedAttack(unit) → (base, modifier), the ranged weapon's skill pair.
+    // UnitAttackSpeed(unit) → (mainSpeed, offhandSpeed) in seconds (`0x518ea0`, field 126, for
+    // any unit); the off hand only for a player whose slot-16 item is a weapon (`0x518ecf`,
+    // `0x518f19`), which only the active player's descriptor names, else nil; `0, nil` with no
+    // object (`0x518f55`).
+    g.set(
+        "UnitAttackSpeed",
+        lua.create_function(|lua, token: Value| {
+            asked_arg(lua, token, r#"Usage: UnitAttackSpeed("unit")"#, |a| {
+                let Some(a) = a else {
+                    return (0.0, None);
+                };
+                let s = a.fields;
+                (
+                    swing_seconds(s.main_attack_time_ms),
+                    (a.player && s.has_offhand).then(|| swing_seconds(s.offhand_attack_time_ms)),
+                )
+            })
+        })?,
+    )?;
+
+    // UnitAttackPower(unit) → (base, posBuff, negBuff): `UNIT_FIELD_ATTACK_POWER` and the signed
+    // halves of `_MODS` (vmangos `StatSystem.cpp:335-336`), for any unit (`0x518fe2`); the server
+    // sends them to the owner alone.
+    g.set(
+        "UnitAttackPower",
+        lua.create_function(|lua, token: Value| {
+            asked_arg(lua, token, r#"Usage: UnitAttackPower("unit")"#, |a| {
+                a.map_or((0, 0, 0), |a| {
+                    let s = a.fields;
+                    (
+                        i64::from(s.attack_power),
+                        i64::from(s.attack_power_pos),
+                        i64::from(s.attack_power_neg),
+                    )
+                })
+            })
+        })?,
+    )?;
+
+    // UnitRangedAttackPower(unit) → (base, posBuff, negBuff), from the ranged fields, under
+    // `UnitAttackPower`'s usage text (`0x5190d7`).
+    g.set(
+        "UnitRangedAttackPower",
+        lua.create_function(|lua, token: Value| {
+            asked_arg(lua, token, r#"Usage: UnitAttackPower("unit")"#, |a| {
+                a.map_or((0, 0, 0), |a| {
+                    let s = a.fields;
+                    (
+                        i64::from(s.ranged_attack_power),
+                        i64::from(s.ranged_attack_power_pos),
+                        i64::from(s.ranged_attack_power_neg),
+                    )
+                })
+            })
+        })?,
+    )?;
+
+    // UnitAttackBothHands(unit) → (mainBase, mainMod, offBase, offMod): `0x518810` calls
+    // `[vtbl+0xb0]` for hand 0 then hand 1 ([`vtable_skill`]). Stock reads only the first pair
+    // (`PaperDollFrame.lua:398-399`). A creature's body (`0x6136b0`) ignores the hand, so both
+    // pairs are `(level * 5, 0)`.
+    g.set(
+        "UnitAttackBothHands",
+        lua.create_function(|lua, token: Value| {
+            asked_arg(lua, token, r#"Usage: UnitAttackBothHands("unit")"#, |a| {
+                let own = a.as_ref().map_or(((0, 0), (0, 0)), |a| {
+                    (a.fields.main_weapon_skill, a.fields.offhand_weapon_skill)
+                });
+                let (mb, mm) = skill_clamped(vtable_skill(a.as_ref(), own.0));
+                let (ob, om) = skill_clamped(vtable_skill(a.as_ref(), own.1));
+                (mb, mm, ob, om)
+            })
+        })?,
+    )?;
+
+    // UnitRangedAttack(unit) → (base, modifier), the active player's ranged weapon skill pair
+    // (`0x518be5`, `0x612b40`), behind PLAYER then SELF; any other unit `0, 0`.
     g.set(
         "UnitRangedAttack",
-        lua.create_function(|lua, token: Option<String>| {
-            Ok(with_unit_stats(lua, &token, |s| {
-                (
-                    i64::from(s.ranged_weapon_skill.0),
-                    i64::from(s.ranged_weapon_skill.1),
-                )
-            }))
+        lua.create_function(|lua, token: Value| {
+            asked_arg(
+                lua,
+                token,
+                r#"Usage: UnitRangedAttack("unit")"#,
+                |a| match a {
+                    Some(a) if a.player && a.me => (
+                        i64::from(a.fields.ranged_weapon_skill.0),
+                        i64::from(a.fields.ranged_weapon_skill.1),
+                    ),
+                    _ => (0, 0),
+                },
+            )
         })?,
     )?;
 
     // UnitDefense(unit) → (base, modifier); stock splits the modifier's sign itself
-    // (`PaperDollFrame.lua:259-271`). The gate is SELF or `UNIT_FIELD_SUMMONEDBY` = us, then
-    // `[vtbl+0xac]`: `CGPlayer_C` `0x5eda20` reads the Defense skill (`0x6de040`), `CGUnit_C`
-    // `0x613680` answers level * 5 and 0. Any other token gets the gate's zeros.
+    // (`PaperDollFrame.lua:259-271`). SELF or `UNIT_FIELD_SUMMONEDBY` us, then `[vtbl+0xac]`:
+    // `CGPlayer_C` `0x5eda20` reads the Defense skill (`0x6de040`), `CGUnit_C` `0x613680` answers
+    // level * 5 and 0 ([`vtable_skill`]); the clamp runs on every arm (`0x519298`).
     g.set(
         "UnitDefense",
-        lua.create_function(|lua, token: Option<String>| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(match token.as_deref() {
-                Some("player") => model
-                    .player_combat_stats
-                    .as_ref()
-                    .map_or((0, 0), |s| skill_clamped(s.defense_skill)),
-                Some("pet") => (cgunit_skill(&model, "pet"), 0),
-                _ => (0, 0),
+        lua.create_function(|lua, token: Value| {
+            asked_arg(lua, token, r#"Usage: UnitDefense("unit")"#, |a| {
+                let own = a.as_ref().map_or((0, 0), |a| a.fields.defense_skill);
+                skill_clamped(vtable_skill(a.as_ref(), own))
             })
         })?,
     )?;
@@ -826,20 +928,30 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     }
 
     // UnitRangedDamage(unit) → (speed, minDamage, maxDamage, physicalBonusPos, physicalBonusNeg,
-    // percent), with `UnitDamage`'s school-0 mods.
+    // percent): the ranged speed and damage fields of any unit (`0x518977`-`0x5189c8`), then
+    // [`damage_bonus`] at the ranged weapon's school (`0x5189e1`-`0x518b0e`); six zeros with no
+    // object (`0x518b3a`).
     g.set(
         "UnitRangedDamage",
-        lua.create_function(|lua, token: Option<String>| {
-            Ok(with_unit_stats(lua, &token, |s| {
+        lua.create_function(|lua, token: Value| {
+            asked_arg(lua, token, r#"Usage: UnitRangedDamage("unit")"#, |a| {
+                let Some(a) = a else {
+                    return (0.0, 0.0, 0.0, 0, 0, 0.0);
+                };
+                let s = a.fields;
+                let (pos, neg, percent) = damage_bonus(
+                    &a,
+                    (s.ranged_bonus_pos, s.ranged_bonus_neg, s.ranged_percent),
+                );
                 (
-                    f64::from(s.ranged_attack_time_ms) / 1000.0,
+                    swing_seconds(s.ranged_attack_time_ms),
                     f64::from(s.ranged_min_damage),
                     f64::from(s.ranged_max_damage),
-                    i64::from(s.physical_bonus_pos),
-                    i64::from(s.physical_bonus_neg),
-                    f64::from(s.damage_percent),
+                    pos,
+                    neg,
+                    percent,
                 )
-            }))
+            })
         })?,
     )?;
 

@@ -37,13 +37,16 @@ fn player_unit() -> UnitState {
     }
 }
 
+/// The pet in view, its descriptor's numbers the stat rows read.
 fn pet_unit() -> UnitState {
     UnitState {
         exists: true,
+        has_object: true,
         name: Some("Snarl".into()),
         health: 900,
         max_health: 1000,
         level: 58,
+        combat: pet_combat_stats(),
         ..UnitState::default()
     }
 }
@@ -103,7 +106,6 @@ fn tab_left(s: &mut UiScript, tab: u32) -> f64 {
 fn give_pet(s: &mut UiScript) {
     s.set_unit("pet", Some(pet_unit()));
     s.set_pet_stats(true, hunter_pet_stats());
-    s.set_pet_combat_stats(Some(pet_combat_stats()));
     s.fire_event("PET_BAR_UPDATE", vec![]);
 }
 
@@ -111,7 +113,6 @@ fn give_pet(s: &mut UiScript) {
 fn take_pet(s: &mut UiScript) {
     s.set_unit("pet", None);
     s.set_pet_stats(false, PetStats::default());
-    s.set_pet_combat_stats(None);
     s.fire_event("UNIT_PET", vec![ScriptValue::Str("player".into())]);
 }
 
@@ -273,7 +274,6 @@ fn a_minion_gets_the_page_without_the_hunter_furniture() {
     let mut s = load_pet_page();
     s.set_unit("pet", Some(pet_unit()));
     s.set_pet_stats(true, PetStats::default()); // has_ui, but hunter_pet == false
-    s.set_pet_combat_stats(Some(pet_combat_stats()));
     s.fire_event("PET_BAR_UPDATE", vec![]);
 
     s.run(r#"ToggleCharacter("PetPaperDollFrame")"#).unwrap();
@@ -307,7 +307,6 @@ fn the_level_line_names_the_family_and_is_untouched_without_one() {
     let with_family = |family: Option<String>| {
         let mut s = load_pet_page();
         s.set_unit("pet", Some(pet_unit()));
-        s.set_pet_combat_stats(Some(pet_combat_stats()));
         s.set_pet_stats(
             true,
             PetStats {

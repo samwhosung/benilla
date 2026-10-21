@@ -140,6 +140,7 @@ fn seat_a_hunter(root: &Path) -> UiScript {
         "player",
         Some(benilla_ui::script::UnitState {
             exists: true,
+            has_object: true,
             name: Some("Probefour".into()),
             level: 60,
             ..Default::default()
