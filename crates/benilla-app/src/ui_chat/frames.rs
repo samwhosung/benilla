@@ -91,6 +91,8 @@ pub(crate) fn compose(
             &get("CHAT_IGNORED").unwrap_or_default(),
             &[Arg::S(&event.sender)],
         ),
+        // With no channel, `ListChannels`' line, arg1 alone (`:1411`).
+        K::ChannelList if event.channel.is_empty() => event.text.clone(),
         // `format(CHAT_CHANNEL_LIST_GET .. arg1, arg4)` (`:1409`): arg4 whole, arg1 unescaped.
         K::ChannelList => fill(
             &format!(
