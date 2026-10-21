@@ -333,7 +333,16 @@ fn auction_bidder_notification(
     // browse rows take the bid, the increment, the new bidder and the 90 s floor
     // (`0x4cd033`-`0x4cd132`). A closed window's house is 0, which no notice names.
     auction.outbid_append(notice.house_id, notice.auction_id);
-    let _ = wire;
+    if notice.house_id == auction.house_id {
+        let patch = RowPatch {
+            bid: notice.bid_or_zero,
+            increment: Some(notice.out_bid),
+            bidder: notice.bidder_guid,
+            floor_at: Some(wire.now),
+        };
+        auction.patch_row(BIDDER, notice.auction_id, &patch);
+        auction.patch_row(LIST, notice.auction_id, &patch);
+    }
 }
 
 /// `SMSG_AUCTION_OWNER_NOTIFICATION` (`0x4cd1f0`): one of ours took a bid, sold or expired.
@@ -346,7 +355,16 @@ fn auction_owner_notification(
     // `[0x4cd25f, 0x4cd3bd)`): with the window open (`0x4cd26b`) the owner and browse rows take
     // it, with the 90 s floor (`0x4cd296`-`0x4cd3a8`).
     if notice.bidder_guid != 0 {
-        let _ = wire;
+        if auction.auctioneer.is_some() {
+            let patch = RowPatch {
+                bid: notice.bid,
+                increment: Some(notice.out_bid),
+                bidder: notice.bidder_guid,
+                floor_at: Some(wire.now),
+            };
+            auction.patch_row(OWNER, notice.auction_id, &patch);
+            auction.patch_row(LIST, notice.auction_id, &patch);
+        }
         return;
     }
     // A zero guid closes it, sold with a bid (`0x4cd43e`), and removes it (`0x4cd468`).

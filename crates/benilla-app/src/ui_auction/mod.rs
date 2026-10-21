@@ -263,7 +263,16 @@ impl AuctionOpen {
     /// there ([`UiScript::remove_auction_from`]). It checks no session, so a closed window's lists
     /// change too.
     pub(crate) fn remove_auction(&mut self, auction_id: u32) {
-        let _ = auction_id;
+        let mut pages = [None; 3];
+        for (slot, page) in self.lists.iter_mut().zip(&mut pages) {
+            if let Some(i) = slot.entries.iter().position(|e| e.auction_id == auction_id) {
+                slot.entries.remove(i);
+                *page = Some(slot.page);
+            }
+        }
+        if pages.iter().any(Option::is_some) {
+            self.removals.push((auction_id, pages));
+        }
     }
 
     /// Write a bid notice into `list`'s row for `auction_id`, if the list holds it; the feed's
