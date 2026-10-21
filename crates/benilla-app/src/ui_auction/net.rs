@@ -580,6 +580,21 @@ mod tests {
         }
     }
 
+    /// What the handler left to settle, in order, as debug text.
+    fn fx(auction: &AuctionOpen) -> Vec<String> {
+        auction.effects.iter().map(|e| format!("{e:?}")).collect()
+    }
+
+    /// A chat line's effect, as [`fx`] prints it.
+    fn line(key: &'static str) -> String {
+        format!("{:?}", HouseEffect::Line(AuctionMessage::chat(key)))
+    }
+
+    /// A send's effect, as [`fx`] prints it.
+    fn send(command: ClientCommand) -> String {
+        format!("Send({command:?})")
+    }
+
     /// The lines the handler showed, in order.
     fn keys(auction: &AuctionOpen) -> Vec<(&'static str, MsgKind, Option<u32>)> {
         auction
@@ -897,23 +912,29 @@ mod tests {
              (`0x4cd808`)"
         );
         assert!(!a.bidder_armed, "the request went out");
-        assert_eq!(
-            text(rig.sent()),
-            text([ClientCommand::AuctionListBidderItems {
-                auctioneer: AUCTIONEER,
-                list_from: 50,
-                auction_ids: vec![9],
-            }])
+        assert!(
+            rig.sent().is_empty(),
+            "the handler's settle sends, in order"
         );
+        let placed = line("ERR_AUCTION_BID_PLACED");
+        let wave = send(ClientCommand::Emote { emote: 3 });
         assert_eq!(
-            a.effects,
+            fx(&a),
             [
-                HouseEffect::Line(AuctionMessage::chat("ERR_AUCTION_BID_PLACED")),
-                HouseEffect::Edit {
-                    list: LIST,
-                    auction_id: 7
-                },
-                HouseEffect::Wave,
+                placed.clone(),
+                send(ClientCommand::AuctionListBidderItems {
+                    auctioneer: AUCTIONEER,
+                    list_from: 50,
+                    auction_ids: vec![9],
+                }),
+                format!(
+                    "{:?}",
+                    HouseEffect::Edit {
+                        list: LIST,
+                        auction_id: 7
+                    }
+                ),
+                wave.clone(),
             ]
         );
 
@@ -930,23 +951,22 @@ mod tests {
         auction_command_result(8, auction_action::BID_PLACED, 0, &tail, &mut a, rig.wire());
         assert_eq!(row(&a, LIST, 8).unwrap().current_bid, 0);
         assert_eq!(
-            text(rig.sent()),
-            text([ClientCommand::AuctionListBidderItems {
-                auctioneer: 0,
-                list_from: 0,
-                auction_ids: vec![],
-            }]),
+            fx(&a),
+            [
+                placed,
+                send(ClientCommand::AuctionListBidderItems {
+                    auctioneer: 0,
+                    list_from: 0,
+                    auction_ids: vec![],
+                }),
+                wave,
+            ],
             "the sender tests no auctioneer (`0x4cd726`)"
         );
-        assert_eq!(a.effects.last(), Some(&HouseEffect::Wave));
-        assert!(!a
-            .effects
-            .iter()
-            .any(|e| matches!(e, HouseEffect::Edit { .. })));
     }
 
-    /// A started auction re-arms the owner request and sends it at its saved offset
-    /// (`0x4cc4da`, `0x4cc4e0`).
+    /// A started auction shows its line (`0x4cc4c7`), then re-arms the owner request and sends it
+    /// at its saved offset (`0x4cc4da`, `0x4cc4e0`), in that order.
     #[test]
     fn a_started_auction_asks_the_owner_list_again() {
         let rig = Rig::new();
@@ -956,11 +976,18 @@ mod tests {
         let tail = AuctionCommandTail::Empty;
         auction_command_result(7, auction_action::STARTED, 0, &tail, &mut a, rig.wire());
         assert_eq!(
-            text(rig.sent()),
-            text([ClientCommand::AuctionListOwnerItems {
-                auctioneer: AUCTIONEER,
-                list_from: 100,
-            }])
+            fx(&a),
+            [
+                line("ERR_AUCTION_STARTED"),
+                send(ClientCommand::AuctionListOwnerItems {
+                    auctioneer: AUCTIONEER,
+                    list_from: 100,
+                }),
+            ]
+        );
+        assert!(
+            rig.sent().is_empty(),
+            "the handler's settle sends, in order"
         );
         assert!(!a.owner_armed);
     }

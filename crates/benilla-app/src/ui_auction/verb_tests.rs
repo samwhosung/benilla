@@ -341,6 +341,25 @@ fn the_browse_offset_wraps_in_32_bits() {
     }
 }
 
+/// The level bounds are a number's `_ftol` low byte, anything else 0 (`0x4ce9fd`-`0x4cea3b`):
+/// 300 is 44, -1 is 255.
+#[test]
+fn the_level_bounds_take_the_low_byte() {
+    for (min, max, bounds) in [
+        ("300", "-1", (44, 255)),
+        ("'10'", "20.9", (10, 20)),
+        ("'x'", "{}", (0, 0)),
+    ] {
+        let mut h = House::new(0);
+        h.run(&format!(r#"QueryAuctionItems("silk", {min}, {max})"#));
+        let sent = h.sent();
+        assert!(
+            matches!(&sent[..], [ClientCommand::AuctionListItems { level_min, level_max, .. }] if (*level_min, *level_max) == bounds),
+            "{min}, {max}: {sent:?}"
+        );
+    }
+}
+
 /// `StartAuction` sends and then clears the sell slot inside the call (`0x4ce925`, `0x4ce92a`):
 /// `NEW_AUCTION_UPDATE` has fired by the next line, and a second call finds the slot empty.
 #[test]

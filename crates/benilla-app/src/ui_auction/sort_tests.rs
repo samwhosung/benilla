@@ -396,8 +396,10 @@ fn a_page_waits_for_its_items_then_sorts_and_signals_once() {
     assert!(h.seen().is_empty(), "the page signalled once");
 }
 
-/// A seller's name arriving signals the list and sorts nothing (`0x4cf290`), so its row holds
-/// still under the seller sort until the next page or header click.
+/// A seller's name arriving signals the list whose read asked it and sorts nothing
+/// (`0x4cf290`), so its row holds still under the seller sort until the next page or header
+/// click. The owner list shows the same seller but never read it, so it registered no callback
+/// (`0x55f080`) and stays silent.
 #[test]
 fn a_sellers_name_signals_the_list_without_sorting_it() {
     const AL: u64 = 0x61;
@@ -411,12 +413,22 @@ fn a_sellers_name_signals_the_list_without_sorting_it() {
     let mut bob = entry(2, 1);
     bob.owner_guid = BOB;
     h.land(LIST, vec![al, bob]);
+    h.land(OWNER, vec![al]);
     h.lua("SortAuctionItems('list', 'seller')");
     assert_eq!(h.sellers("list"), "Bob,?");
+    assert_eq!(
+        h.sellers("list"),
+        "Bob,?",
+        "a second read registers nothing more"
+    );
     h.seen();
     h.name(AL, "Al");
     h.app.update();
-    assert_eq!(h.seen().len(), 1, "the name signals the list");
+    assert_eq!(
+        h.seen(),
+        ["AUCTION_ITEM_LIST_UPDATE=Cloth,Cloth"],
+        "the name signals the list that asked, once"
+    );
     assert_eq!(h.sellers("list"), "Bob,Al", "and does not sort it");
 }
 
@@ -954,4 +966,68 @@ fn a_won_auction_leaves_the_lists_in_its_handler() {
     );
     h.app.update();
     assert!(h.seen().is_empty(), "the frame after signals nothing");
+}
+
+/// The world entry's start-up empties the outbid list and resets its room to eight
+/// (`0x4cc1d0`, `0x4cc207`), so after a relog the bidder request sends no old session's ids.
+#[test]
+fn a_relog_empties_the_outbid_list() {
+    let mut h = House::new();
+    h.item(1, "Cloth", 10, 1);
+    h.open(AUCTIONEER);
+    h.dispatch(outbid());
+    {
+        let mut auction = h.app.world_mut().resource_mut::<super::AuctionOpen>();
+        assert_eq!(auction.outbid, [(1, 7)]);
+        auction.outbid_doublings = 2;
+    }
+    h.enter_world();
+    h.open(AUCTIONEER);
+    let _ = requests(&h);
+    h.lua("GetBidderAuctionItems()");
+    assert_eq!(
+        requests(&h),
+        [format!(
+            "{:?}",
+            ClientCommand::AuctionListBidderItems {
+                auctioneer: AUCTIONEER,
+                list_from: 0,
+                auction_ids: vec![],
+            }
+        )]
+    );
+    assert_eq!(
+        h.app
+            .world()
+            .resource::<super::AuctionOpen>()
+            .outbid_doublings,
+        0
+    );
+}
+
+/// A page whose items are all cached is sorted and signalled by its result handler
+/// (`0x4cc9e8`-`0x4cc9f1`), so a bid patch later in the same frame signals the list again
+/// (`0x4cd13e`).
+#[test]
+fn a_patch_in_its_pages_frame_signals_after_the_page() {
+    let mut h = House::new();
+    h.item(1, "Cloth", 10, 1);
+    h.open(AUCTIONEER);
+    h.hear_bids();
+    crate::net::handlers::dispatch(
+        h.app.world_mut(),
+        vec![
+            SessionEvent::AuctionListResult {
+                auctions: vec![entry(7, 1)],
+                total_count: 1,
+            },
+            outbid(),
+        ],
+    );
+    assert_eq!(
+        h.heard(),
+        ["AUCTION_ITEM_LIST_UPDATE=0", "AUCTION_ITEM_LIST_UPDATE=900"]
+    );
+    h.app.update();
+    assert!(h.heard().is_empty(), "the frame after signals nothing");
 }

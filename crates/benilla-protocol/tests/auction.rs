@@ -255,6 +255,28 @@ fn auction_command_result_bare_wire() {
     }
 }
 
+/// A tail shorter than its field reads short and the packet stands: `0x418e30` writes nothing
+/// past the end, so result 1 keeps its seed and a placed or higher bid carries nothing, as a
+/// higher bid missing its last dword does.
+#[test]
+fn auction_command_result_short_tail_reads_short() {
+    for (action, error, lengths) in [
+        (auction_action::STARTED, auction_error::INVENTORY, 1..4),
+        (auction_action::BID_PLACED, auction_error::OK, 1..4),
+        (auction_action::BID_PLACED, auction_error::HIGHER_BID, 1..16),
+    ] {
+        for short in lengths {
+            let mut body = command_head(4242, action, error);
+            body.extend(std::iter::repeat_n(0xAB, short));
+            assert_eq!(
+                parse_command(&body),
+                (4242, action, error, AuctionCommandTail::Empty),
+                "error {error}, {short} bytes"
+            );
+        }
+    }
+}
+
 #[test]
 fn auction_command_result_bid_placed_tail_wire() {
     let mut body = command_head(4242, auction_action::BID_PLACED, auction_error::OK);
