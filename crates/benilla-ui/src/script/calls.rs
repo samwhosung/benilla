@@ -253,6 +253,10 @@ fn file_raise(lua: &Lua, seq: u64, message: String) {
     if model.call_raises.awaited.contains(&seq) {
         model.call_raises.raised.push((seq, message));
     } else {
+        // The reference never defers a call: its verb raises in its own body, so the lines after
+        // it never run and a `pcall` around it catches the error. A call that waited for the host
+        // had its verb return without an error, the script's later lines ran, and a `pcall` saw
+        // nothing; the error reaches the handler only now, after them.
         model.record_lua_error(&mlua::Error::runtime(message));
     }
 }
