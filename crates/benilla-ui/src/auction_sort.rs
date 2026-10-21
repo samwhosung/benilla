@@ -300,6 +300,23 @@ mod tests {
         assert_eq!(compare(0, &lo, &level_one), 0, "0 floors to 1");
     }
 
+    /// The level is read as a signed dword and floored at 1 (`0x4cda98`-`0x4cdab4`, `jl`;
+    /// `0x4cf091`-`0x4cf0a3`), so a level of 2^31 or more is negative and floors to 1.
+    #[test]
+    fn the_level_reads_signed_and_floors_at_one() {
+        let at = |level: u32| AuctionItemRow { level, ..row("a") };
+        for level in [0, 1, 0x8000_0000, 0xffff_ffff] {
+            assert_eq!(floor_level(&at(level)), 1, "{level:#x}");
+        }
+        assert_eq!(floor_level(&at(0x7fff_ffff)), i32::MAX);
+        assert_eq!(compare(0, &at(0x8000_0000), &at(1)), 0, "ties level 1");
+        assert_eq!(
+            compare(0, &at(0xffff_ffff), &at(2)),
+            -1,
+            "sorts below level 2"
+        );
+    }
+
     /// The bid is a signed dword in the compare (`setge`), so a bid past `i32::MAX` sorts low.
     #[test]
     fn the_bid_compares_signed() {

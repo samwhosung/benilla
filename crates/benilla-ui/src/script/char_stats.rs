@@ -2546,4 +2546,32 @@ mod tests {
         s.run(r#"CreateFrame("Frame", "NotAPane")"#).unwrap();
         assert!(s.model_pane("NotAPane").is_none());
     }
+
+    /// A vault or keyring item read through the inventory API keeps its `ITEM_FIELD_DURATION`
+    /// (`[item+0x114]+0x24`), the field the auction sell slot refuses on (`0x4ce411`).
+    #[test]
+    fn a_container_slot_seen_as_an_inventory_slot_keeps_its_field_duration() {
+        use crate::script::container::{ContainerSlot, ContainerState};
+        let mut s = seated();
+        for (bag, live_id) in [(super::BANK_CONTAINER, 40), (super::KEYRING_CONTAINER, 82)] {
+            let mut state = ContainerState {
+                num_slots: 24,
+                ..Default::default()
+            };
+            state.slots.insert(
+                1,
+                ContainerSlot {
+                    item_id: 7000,
+                    guid: 0x700,
+                    count: 1,
+                    field_duration: 3_600_000,
+                    ..Default::default()
+                },
+            );
+            s.set_container(bag, Some(state));
+            let view = s.model_ref().inv_slot("player", live_id).unwrap();
+            assert_eq!(view.item_id, 7000, "bag {bag}");
+            assert_eq!(view.field_duration, 3_600_000, "bag {bag}");
+        }
+    }
 }

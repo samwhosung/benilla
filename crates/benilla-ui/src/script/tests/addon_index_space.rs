@@ -73,6 +73,34 @@ fn a_titleless_addon_sorts_under_its_folder_name() {
     assert_eq!(by_index(&s), vec!["bravo", "Yankee"]);
 }
 
+/// Titles that match without case tie in `0x51deb0`, and `qsort` (`0x73f727`) is not stable: the
+/// four rows go to `shortsort` (`0x73f87b`), which moves the first-found largest to the end each
+/// pass, so the three `dup` rows (folder order `Alpha`, `Bravo`, `Charlie`) come out reversed.
+#[test]
+fn rows_with_equal_titles_sit_where_the_crt_qsort_leaves_them() {
+    let mut s = UiScript::new().unwrap();
+    let row = |name: &str, title: &str| AddOnInfo {
+        name: name.into(),
+        title: Some(title.into()),
+        interface: 11200,
+        enabled: true,
+        ..Default::default()
+    };
+    s.register_addons(
+        vec![
+            row("Alpha", "dup"),
+            row("Bravo", "DUP"),
+            row("Charlie", "Dup"),
+            row("Delta", "abc"),
+        ],
+        None,
+        None,
+        None,
+    );
+    s.note_addon_info_reply(&[]);
+    assert_eq!(by_index(&s), vec!["Delta", "Charlie", "Bravo", "Alpha"]);
+}
+
 /// The count `[0xbe1b90]` is zeroed by the registry reset (`0x51fad1`) and written only by the
 /// reply's rebuild, so before it an index raises the ordinary range error against 0.
 #[test]
