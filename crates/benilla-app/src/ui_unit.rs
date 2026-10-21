@@ -3702,7 +3702,7 @@ mod tests {
     }
 
     /// The host seats each selection a call commits as `"target"` for the rest of its chunk
-    /// ([`UiScript::seat_selection`]), from a snapshot without the guild leg, and its
+    /// ([`UiScript::seat_selection`]), from its by-name candidate's snapshot, and its
     /// `"targettarget"`; the next frame re-pushes both from the committed selection, though
     /// nothing the feed diffs moved, as when a chunk selects a unit and goes back to the one it
     /// started on.

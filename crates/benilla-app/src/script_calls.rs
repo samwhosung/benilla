@@ -1375,9 +1375,9 @@ mod tests {
         }
     }
 
-    /// The commit's `IsSelectable` (`0x4935ee`) refuses a `UNIT_FLAG_NOT_SELECTABLE` unit: the nearer
-    /// namesake is the ranked pick and it is refused, so the commit keeps its selection, not the
-    /// farther namesake, and the chunk keeps the old target's view.
+    /// The commit's `IsSelectable` (`0x4935ee`) refuses a `UNIT_FLAG_NOT_SELECTABLE` unit: the
+    /// nearer namesake is the ranked pick and it is refused, so the commit keeps its selection,
+    /// not the farther namesake, and the chunk keeps the old target's view.
     #[test]
     fn target_by_name_shows_nothing_when_the_commit_refuses_its_pick() {
         /// `UNIT_FLAG_NOT_SELECTABLE`, `UNIT_FIELD_FLAGS` bit 25.

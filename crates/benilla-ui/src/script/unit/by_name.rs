@@ -2,8 +2,9 @@
 //! `/target`, `/assist` and `/follow` scans and `TargetByName`'s commit (`0x489d60`), and
 //! `SetLootMethod`'s master name (`0x4e9418`). The candidates the app pushes for it also give a
 //! selection a script call commits its `"target"` view for the rest of the chunk
-//! ([`super::super::UiScript::seat_selection`]). A name matches whole-string first (`0x64a4c0` → CRT
-//! `0x414310`), else by the longest common prefix (`0x493cb6`-`0x493cf6`), both case-insensitive.
+//! ([`super::super::UiScript::seat_selection`]). A name matches whole-string first (`0x64a4c0`
+//! → CRT `0x414310`), else by the longest common prefix (`0x493cb6`-`0x493cf6`), both
+//! case-insensitive.
 //!
 //! [`resolve`] runs the reference's three passes over the one matcher `0x493c60`: the four party
 //! slots (`0x493b22`), then the raid roster (`0x493ba7`), each member offered only when no object is
@@ -285,7 +286,7 @@ impl super::super::UiScript {
     }
 
     /// Whether a selection call moved the `"target"` view since the last ask; the app's unit feed
-    /// then re-pushes `"target"` from the committed selection, with its guild leg.
+    /// then re-pushes `"target"` from the committed selection, which its memo no longer matches.
     pub fn take_target_view_moved(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().target_view_moved)
     }
@@ -409,7 +410,7 @@ impl Model {
     /// Show a committed selection to the rest of its chunk: the resolver's target guid and the
     /// `"target"` snapshot, `None` for nothing selected.
     fn show_selection(&mut self, state: Option<UnitState>) {
-        // Already shown: the feed's own push, which carries the guild leg, stays.
+        // Already shown: the feed's own push stays, and the view has not moved.
         if state.as_ref().is_some_and(|s| {
             s.guid != 0 && s.guid == self.unit_guids.target && self.pushed_unit("target").is_some()
         }) {

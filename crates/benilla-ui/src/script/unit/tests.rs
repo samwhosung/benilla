@@ -1041,8 +1041,8 @@ fn a_seated_selection_is_the_target_for_the_rest_of_the_chunk() {
     assert!(s.take_target_view_moved());
 }
 
-/// The feed's own `"target"` push carries the guild leg the other snapshots lack (here, a health
-/// the candidate's does not share), so seating the unit it already shows keeps it.
+/// Seating the unit the feed's own `"target"` push already shows keeps that push (here, a health
+/// the candidate's does not share), and the view has not moved.
 #[test]
 fn seating_the_shown_target_keeps_the_feeds_push() {
     let mut s = UiScript::new().unwrap();
