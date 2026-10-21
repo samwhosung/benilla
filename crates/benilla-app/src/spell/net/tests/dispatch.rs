@@ -202,3 +202,81 @@ fn a_world_entry_empties_the_cast_slots() {
     assert!(!world.resource::<crate::spell::SpellTargeting>().active());
     assert_eq!(world.resource::<AutoRepeatActive>().0, None);
 }
+
+/// The entry itself, in packet order.
+fn enter_world() -> SessionEvent {
+    SessionEvent::Connected {
+        self_guid: ME,
+        name: "Probethree".to_string(),
+        billing: Default::default(),
+        tutorial_flags: None,
+        addon_info: None,
+    }
+}
+
+/// The same entry zeroes both modifier tables (`0x6e72c4`, `0x6e72d6`) and the class family
+/// (`0x6e7317`) at the entry and in packet order: a modifier the same drain brings after it
+/// stands.
+#[test]
+fn a_world_entry_clears_the_modifiers_in_packet_order() {
+    use crate::spell::{SpellModifiers, OP_COST};
+    /// A mage spell (family 3) with one family bit.
+    fn mage(bit: u8) -> SpellDisplay {
+        SpellDisplay {
+            spell_family: 3,
+            spell_family_flags: 1 << bit,
+            ..Default::default()
+        }
+    }
+    let (mut app, _rx) = client();
+    {
+        let mut mods = app.world_mut().resource_mut::<SpellModifiers>();
+        mods.set_class_family(3);
+        mods.set(true, 5, OP_COST, -30);
+        assert_eq!(mods.apply(&mage(5), OP_COST, 100), 70);
+    }
+
+    dispatch(
+        app.world_mut(),
+        vec![
+            enter_world(),
+            SessionEvent::SpellModifier {
+                flat: true,
+                mask_bit: 6,
+                op: OP_COST,
+                value: -20,
+            },
+        ],
+    );
+
+    let mut mods = app.world_mut().resource_mut::<SpellModifiers>();
+    assert_eq!(
+        mods.apply(&mage(6), OP_COST, 100),
+        100,
+        "the class family is 0 until the avatar names it"
+    );
+    mods.set_class_family(3);
+    assert_eq!(mods.apply(&mage(5), OP_COST, 100), 100, "cleared");
+    assert_eq!(
+        mods.apply(&mage(6), OP_COST, 100),
+        80,
+        "the packet after the entry"
+    );
+}
+
+/// The entry zeroes the Feed Pet spell `[0xcecad8]` (`0x6e7311`); the next spell list latches it
+/// again.
+#[test]
+fn a_world_entry_clears_the_feed_pet_spell() {
+    let (mut app, _rx) = client();
+    app.world_mut()
+        .resource_mut::<crate::ui_action::LearnedAbilities>()
+        .feed_pet = Some(6991);
+    dispatch(app.world_mut(), vec![enter_world()]);
+    assert_eq!(
+        app.world()
+            .resource::<crate::ui_action::LearnedAbilities>()
+            .feed_pet,
+        None
+    );
+}

@@ -1610,7 +1610,7 @@ fn spell_chain_targets(
 mod tests {
     use super::*;
     use crate::spell::QueuedMeleeSpell;
-    use benilla_protocol::messages::ACTION_KIND_SPELL;
+    use benilla_protocol::messages::{ObjectType, ACTION_KIND_SPELL};
 
     mod cooldown_sites;
     mod dispatch;
@@ -1941,7 +1941,11 @@ mod tests {
             app.insert_resource(crate::net::NetCommands(tx));
             let self_e = app
                 .world_mut()
-                .spawn((Guid(Self::SELF), SelfPlayer, ObjectStore::default()))
+                .spawn((
+                    Guid(Self::SELF),
+                    SelfPlayer,
+                    Self::store(ObjectType::Player),
+                ))
                 .id();
             app.world_mut()
                 .resource_mut::<GuidIndex>()
@@ -2072,12 +2076,28 @@ mod tests {
             crate::creature_anim::apply_unit_edits(self.app.world_mut());
         }
 
+        /// A streamed object of `kind` with no field but its `OBJECT_FIELD_TYPE` mask (2).
+        fn store(kind: ObjectType) -> ObjectStore {
+            let mask = match kind {
+                ObjectType::Player => 0x19,
+                ObjectType::Unit => 0x9,
+                ObjectType::GameObject => 0x21,
+                _ => 0x1,
+            };
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(2, mask)]).into_created(kind))
+        }
+
         /// A unit `guid` streamed beside us.
         fn other_unit(&mut self, guid: u64) -> Entity {
+            self.other(guid, ObjectType::Unit)
+        }
+
+        /// An object of `kind` streamed beside us as `guid`.
+        fn other(&mut self, guid: u64, kind: ObjectType) -> Entity {
             let e = self
                 .app
                 .world_mut()
-                .spawn((crate::net::Guid(guid), ObjectStore::default()))
+                .spawn((crate::net::Guid(guid), Self::store(kind)))
                 .id();
             self.app
                 .world_mut()
@@ -2474,6 +2494,22 @@ mod tests {
         assert_eq!(s.events(), Vec::<&str>::new(), "no bar");
         assert!(s.app.world().get::<Casting>(me).is_none());
         assert!(s.app.world().get::<Casting>(other).is_none());
+        assert_eq!(drain_cast_events(&mut s), vec![], "no cast event");
+    }
+
+    /// `SMSG_SPELL_START` looks its caster up as a unit (`0x468460` with type mask 8 at
+    /// `0x6e7892`) and ends without one (`0x6e789b je 0x6e7a5b`): a GameObject's cast, whose
+    /// caster slot vmangos leaves 0 so the first slot names the object, gets no `Casting`, no
+    /// precast and no cast event.
+    #[test]
+    fn a_start_by_a_game_object_does_nothing() {
+        const LIGHTWELL: u64 = 0xf110_002c_3600_0042;
+        let mut s = CastSeq::new();
+        crate::creature_anim::install_visuals_for_tests(s.app.world_mut(), &[FIREBALL], &[]);
+        let well = s.other(LIGHTWELL, ObjectType::GameObject);
+        s.start_by(LIGHTWELL, FIREBALL, 3_000, 0);
+        assert!(s.app.world().get::<Casting>(well).is_none());
+        assert_eq!(s.precast(well), None);
         assert_eq!(drain_cast_events(&mut s), vec![], "no cast event");
     }
 

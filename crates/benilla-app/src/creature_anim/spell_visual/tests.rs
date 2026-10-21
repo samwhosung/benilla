@@ -2133,3 +2133,133 @@ fn a_sweeps_pins_arm_in_slot_order() {
         "slot 33's kit armed last, so it is the head"
     );
 }
+
+/// `CancelCast`'s reap is `0x614150` on the record's spell (`0x6e4a8e`-`0x6e4ab7`), which stops
+/// only the effects that spell's kits made (`0x614167`): Esc with Blizzard's cursor up over a
+/// running Arcane Missiles channel ends the cursor and leaves the channel's hold and its loop.
+#[test]
+fn esc_with_a_cursor_up_leaves_the_running_channels_hold_and_loop() {
+    use benilla_protocol::messages::{ObjectFields, ObjectType};
+    use bevy::ecs::system::RunSystemOnce;
+
+    const ARCANE_MISSILES: u32 = 5143;
+    const AM_VISUAL: u32 = 225;
+    const AM_CHANNEL_KIT: u32 = 436;
+    const AM_HUM: u32 = 3136;
+    const BLIZZARD: u32 = 10;
+    const ME: u64 = 10;
+
+    let mut app = app();
+    app.insert_resource(SpellVisuals(SpellVisualCatalog::from_tables(
+        HashMap::from([(
+            AM_VISUAL,
+            VisualStages {
+                channel: AM_CHANNEL_KIT,
+                ..Default::default()
+            },
+        )]),
+        HashMap::from([(
+            AM_CHANNEL_KIT,
+            VisualKit {
+                anim_id: Some(HOLD_ANIM),
+                sound: Some(AM_HUM),
+                ..Default::default()
+            },
+        )]),
+    )));
+    app.insert_resource(crate::ui_action::Spells {
+        catalog: SpellCatalog::from_displays(HashMap::from([
+            (
+                ARCANE_MISSILES,
+                SpellDisplay {
+                    visual: AM_VISUAL,
+                    ..Default::default()
+                },
+            ),
+            (BLIZZARD, SpellDisplay::default()),
+        ])),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    // What the cancel reads and writes.
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetCommands(tx))
+        .init_resource::<crate::spell::PendingCast>()
+        .init_resource::<crate::spell::QueuedMeleeSpell>()
+        .init_resource::<crate::spell::ActiveChannel>()
+        .init_resource::<crate::spell::AutoRepeatActive>()
+        .init_resource::<crate::spell::SpellTargeting>()
+        .init_resource::<crate::ui_cast::CastReports>()
+        .init_resource::<crate::creature_anim::UnitEdits>()
+        .init_resource::<crate::creature_anim::PlaySeq>()
+        .init_resource::<crate::net::GuidIndex>()
+        .init_resource::<crate::net::SelfGuid>();
+    // The player, channelling: `UNIT_CHANNEL_SPELL` (144) holds Arcane Missiles.
+    let me = app
+        .world_mut()
+        .spawn((
+            crate::net::Guid(ME),
+            crate::net::SelfPlayer,
+            crate::net::ObjectStore(
+                ObjectFields::from_pairs(&[(144, ARCANE_MISSILES)])
+                    .into_created(ObjectType::Player),
+            ),
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<crate::net::GuidIndex>()
+        .0
+        .insert(ME, me);
+    app.world_mut().resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
+    let sounds = |app: &mut App| -> Vec<SpellKitSound> {
+        app.world_mut()
+            .resource_mut::<Messages<SpellKitSound>>()
+            .drain()
+            .collect()
+    };
+
+    // The channel poll's rising edge holds the channel and rings its hum.
+    app.update();
+    let rise = sounds(&mut app);
+    assert!(
+        rise.iter().any(|s| matches!(
+            s,
+            SpellKitSound::Play { entity, kit_sound, .. } if *entity == me && *kit_sound == AM_HUM
+        )),
+        "the channel's loop (got {rise:?})"
+    );
+    assert_eq!(hold(&app, me), Some(ARCANE_MISSILES));
+
+    // Blizzard's attempt fills the record (`0x6e4f88`, `0x6e4fb1`) and raises its cursor.
+    {
+        let world = app.world_mut();
+        let mut pending = world.resource_mut::<crate::spell::PendingCast>();
+        pending.fill_record();
+        pending.fill_record_spell(BLIZZARD);
+        world.resource_mut::<crate::spell::SpellTargeting>().enter(
+            BLIZZARD,
+            crate::spell::CastCommit::Spell,
+            0x40,
+        );
+    }
+    // Esc: `SpellStopCasting` (`0x6e6e80` → `0x6e4940(0, 1, 0x1c)`).
+    app.world_mut()
+        .run_system_once(|mut cancel: crate::spell::SelfCancel| cancel.stop_casting())
+        .unwrap();
+    crate::creature_anim::apply_unit_edits(app.world_mut());
+    app.update();
+
+    assert!(
+        !app.world()
+            .resource::<crate::spell::SpellTargeting>()
+            .active(),
+        "the cursor is down"
+    );
+    assert_eq!(hold(&app, me), Some(ARCANE_MISSILES), "the channel's hold");
+    let after = sounds(&mut app);
+    assert!(
+        !after
+            .iter()
+            .any(|s| matches!(s, SpellKitSound::StopHold { entity } if *entity == me)),
+        "Blizzard's reap stops none of the channel's sound (got {after:?})"
+    );
+}
