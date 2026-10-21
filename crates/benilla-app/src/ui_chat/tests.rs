@@ -3772,3 +3772,88 @@ fn a_kills_unnamed_victim_is_the_unit_getters_miss() {
         assert!(line.starts_with("Unknown Being "), "{lines:?}");
     }
 }
+
+/// The reference's handlers fire inside the dispatch (`0x537aa0`): our `SMSG_ATTACKSTART` signals
+/// `PLAYER_ENTER_COMBAT` (`0x6256ff`) and the object update that sets the combat flag signals
+/// `PLAYER_REGEN_DISABLED` (`UNIT_FIELD_FLAGS` 0x80000, `crate::field_watch`). vmangos sends the
+/// start at once (`Unit.cpp:4774`) and the flag with the next update (`Unit.cpp:6145`), so in one
+/// drain the edge comes first; packets the other way round give the other order. The edge waits in
+/// the chat queue and the flag's notice in the field notices, each fired by its own pass.
+#[test]
+fn the_combat_edge_and_the_regen_notice_fire_in_their_packets_order() {
+    use benilla_protocol::{SessionEvent, SessionEventKind};
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy::prelude::*;
+
+    use crate::field_watch::FieldNotice;
+    use crate::net::handlers::NetHandlerApp;
+
+    fn edge(_: In<SessionEvent>, log: Res<super::ChatLog>) {
+        log.push_combat_edge(true);
+    }
+    fn regen(_: In<SessionEvent>, mut notices: MessageWriter<FieldNotice>) {
+        notices.write(FieldNotice::Global {
+            id: crate::field_watch::id::PLAYER_REGEN_DISABLED,
+        });
+    }
+    let start = || SessionEvent::LoggedOut;
+    let update = || SessionEvent::LoginQueued {
+        position: None,
+        realm: None,
+    };
+    for (packets, heard) in [
+        (
+            vec![start(), update()],
+            "PLAYER_ENTER_COMBAT PLAYER_REGEN_DISABLED",
+        ),
+        (
+            vec![update(), start()],
+            "PLAYER_REGEN_DISABLED PLAYER_ENTER_COMBAT",
+        ),
+    ] {
+        let mut app = App::new();
+        app.add_plugins(crate::ui_unit::UiUnitPlugin)
+            .net_handler(SessionEventKind::LoggedOut, edge)
+            .net_handler(SessionEventKind::LoginQueued, regen);
+        let world = app.world_mut();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        world.insert_resource(crate::net::NetCommands(tx));
+        world.insert_resource(super::frames::ChatWindows::default());
+        world.insert_resource(super::edit::ChannelState::default());
+        world.insert_resource(crate::names::NameCache::default());
+        world.insert_resource(crate::chat_bubble::BubbleQueue::default());
+        world.insert_resource(crate::chat_bubble::BubbleConfig::default());
+        world.insert_resource(crate::creature_anim::GestureQueue::default());
+        world.insert_resource(crate::net::SelfGuid::default());
+        world.insert_resource(crate::net::GuidIndex::default());
+        world.insert_resource(crate::world_state::WorldStates::default());
+        world.insert_resource(super::language::ChatLanguages::default());
+        world.insert_resource(crate::items::Items::default());
+        world.insert_resource(crate::go_templates::GameObjectTemplates::default());
+        world.insert_resource(crate::text_filter::TextFilter::default());
+        world.insert_resource(crate::text_filter::TextFilterSwitches::default());
+        let s = benilla_ui::script::UiScript::new().unwrap();
+        s.run(
+            r#"
+            Heard = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("PLAYER_ENTER_COMBAT")
+            f:RegisterEvent("PLAYER_REGEN_DISABLED")
+            f:SetScript("OnEvent", function() table.insert(Heard, event) end)
+        "#,
+        )
+        .unwrap();
+        world.insert_non_send_resource(s);
+
+        crate::net::handlers::dispatch(world, packets);
+        world
+            .run_system_once(crate::ui_unit::field_events::fire_field_notices)
+            .unwrap();
+        crate::ui_chat::feed_chat_once(world);
+        let order = world
+            .non_send_resource::<benilla_ui::script::UiScript>()
+            .eval::<String>("return table.concat(Heard, ' ')")
+            .unwrap();
+        assert_eq!(order, heard);
+    }
+}

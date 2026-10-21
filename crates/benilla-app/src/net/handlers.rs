@@ -280,6 +280,14 @@ mod tests {
             if path.ends_with("net/handlers.rs") {
                 continue; // this file's own fixtures and prose
             }
+            // A test file's registrations build no client, so the census below never counts them.
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            if name == "tests.rs"
+                || name.ends_with("_tests.rs")
+                || path.components().any(|c| c.as_os_str() == "tests")
+            {
+                continue;
+            }
             let text = regex_lite_strip_comments(&std::fs::read_to_string(&path).expect("source"))
                 .replace("net_handler_ahead(", "net_handler(");
             for call in text.split("net_handler(").skip(1) {
