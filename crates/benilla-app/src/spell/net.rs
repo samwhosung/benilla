@@ -1463,6 +1463,8 @@ mod tests {
     use crate::spell::QueuedMeleeSpell;
     use benilla_protocol::messages::ACTION_KIND_SPELL;
 
+    mod cooldown_sites;
+
     /// `SMSG_COOLDOWN_EVENT` (`0x6e9670`): the event moves the held record's one start, which the
     /// GCD leg reads (`0x6e15d8`), so the global cooldown runs again from the packet.
     #[test]

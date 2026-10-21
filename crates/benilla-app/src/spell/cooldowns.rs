@@ -1672,3 +1672,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "cooldowns_tests.rs"]
+mod site_tests;
