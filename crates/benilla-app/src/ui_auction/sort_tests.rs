@@ -829,7 +829,7 @@ fn a_bid_on_ours_signals_the_owned_then_the_browse_list_in_its_handler() {
         owner_guid: ME,
         ..entry(7, 1)
     };
-    h.land(OWNER, vec![mine.clone()]);
+    h.land(OWNER, vec![mine]);
     h.land(LIST, vec![mine]);
     h.hear_bids();
     h.handle(SessionEvent::AuctionOwnerNotification(
