@@ -2892,6 +2892,181 @@ fn chat_sends_as(
     )
 }
 
+/// `SendChatMessage`'s escape scan (`0x49f661`-`0x49f6a8`) runs after the AFK clear, and an
+/// invalid escape raises `Invalid escape code in chat message` in the verb (`0x49f763`-`0x49f769`)
+/// with what came before standing: the standing AFK is cleared, its line printed and its empty
+/// packet sent, and the line itself is not. `||` and a closed `|c` pass; an unclosed `|c` cuts the
+/// line there, which is still sent (`0x49f758`).
+#[test]
+fn an_invalid_escape_raises_in_the_verb_after_the_afk_clear() {
+    use crate::net::ChatKind;
+
+    let (mut world, rx) = super::chat_world(in_world_vm());
+    world.insert_resource(super::away::AfkMirror(2));
+    let err = super::run_chat(
+        &mut world,
+        r#"CLEARED_AFK = "You are no longer AFK." SendChatMessage("a|b") NEXT = 1"#,
+    )
+    .expect_err("the verb raises");
+    assert!(
+        err.to_string()
+            .contains("Invalid escape code in chat message"),
+        "{err}"
+    );
+    assert_eq!(chat_packets(&rx), vec![(ChatKind::Afk, String::new())]);
+    assert!(!world.resource::<super::away::AfkMirror>().is_afk());
+    assert_eq!(
+        world.resource::<super::feed::ChatLog>().pending_lines(),
+        vec!["You are no longer AFK."]
+    );
+    super::run_chat(
+        &mut world,
+        r#"
+        assert(NEXT == nil, "the raise ended the chunk")
+        OK, E = pcall(SendChatMessage, "|r")
+        assert(not OK and string.find(E, "Invalid escape code in chat message"), tostring(E))
+        SendChatMessage("|cffff0000red|r and ||pipes")
+        SendChatMessage("cut |cffhere", "YELL")
+        "#,
+    )
+    .expect("pcall catches the raise");
+    assert_eq!(
+        chat_packets(&rx),
+        vec![
+            (ChatKind::Say, "|cffff0000red|r and ||pipes".into()),
+            (ChatKind::Yell, "cut ".into()),
+        ]
+    );
+}
+
+/// The steps ahead of the escape scan end the call without it, so an invalid escape raises
+/// nothing there: a group line without its group (`0x49f351`), a channel number naming no slot
+/// (`0x49f4ea`), a dead player's say (`0x49f5df`); and the AFK arm, which ends the call with its
+/// own packet (`0x49f525`), sends the text as it stands.
+#[test]
+fn the_steps_ahead_of_the_escape_scan_end_the_call_without_it() {
+    use crate::net::ChatKind;
+    let dead: &[(u16, u32)] = &[(22, 0), (28, 100)];
+    let (sent, refused, afk) = chat_sends_as(
+        Default::default(),
+        Some(dead),
+        r#"SendChatMessage("a|b", "PARTY") SendChatMessage("a|b", "CHANNEL", nil, 1)
+        SendChatMessage("a|b", "SAY") SendChatMessage("a|b", "AFK")"#,
+    );
+    assert_eq!(refused, ["ERR_NOT_IN_GROUP", "ERR_CHAT_WHILE_DEAD"]);
+    assert_eq!(
+        sent,
+        vec![
+            (ChatKind::Afk, String::new()),
+            (ChatKind::Afk, "a|b".into())
+        ],
+        "the say's AFK clear, then the AFK arm's own packet"
+    );
+    assert!(afk);
+}
+
+/// `SendChatMessage` copies its text through `0x5083a0` (`0x49f60f`): `%t`, `%T`, `%n` and `%N`
+/// name the selection (`0xb4e2d8`), any other letter keeps its `%`, and with nobody selected the
+/// token is `TARGET_TOKEN_NOT_FOUND` (`0x84f3a4`). A unit the client holds is named by
+/// `GetUnitName` (`0x609210`), whose miss is `UNKNOWNOBJECT`; a selected guid it does not hold, by
+/// the player-name cache (`0x55f080`). The whisper target is not expanded.
+#[test]
+fn a_lines_target_tokens_name_the_selection() {
+    use crate::net::{ChatKind, ClientCommand, Guid, GuidIndex, ObjectStore};
+    use crate::target::Selection;
+
+    let (mut world, rx) = super::chat_world(in_world_vm());
+    let lines = |world: &mut bevy::prelude::World, lua: &str| {
+        super::run_chat(world, lua).expect("lua");
+        rx.try_iter()
+            .map(|c| match c {
+                ClientCommand::Chat {
+                    kind, target, text, ..
+                } => (kind, target, text),
+                other => panic!("unexpected command {other:?}"),
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        lines(
+            &mut world,
+            r#"TARGET_TOKEN_NOT_FOUND = "<no target>" UNKNOWNOBJECT = "Unknown"
+            SendChatMessage("heal %t please, %x at 100%")"#
+        ),
+        vec![(
+            ChatKind::Say,
+            None,
+            "heal <no target> please, %x at 100%".into()
+        )]
+    );
+
+    // A player the client holds: `OBJECT_FIELD_TYPE` 0x19.
+    let bob = world
+        .spawn((
+            Guid(0x42),
+            ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(&[(
+                2, 0x19,
+            )])),
+        ))
+        .id();
+    world.resource_mut::<GuidIndex>().0.insert(0x42, bob);
+    world
+        .resource_mut::<crate::names::NameCache>()
+        .insert_player(0x42, "Bob".into(), None);
+    world.insert_resource(Selection {
+        target: Some(bob),
+        guid: Some(0x42),
+        ..Default::default()
+    });
+    assert_eq!(
+        lines(
+            &mut world,
+            r#"SendChatMessage("%t, %T, %n, %N and %%t", "WHISPER", nil, "%t")"#
+        ),
+        vec![(
+            ChatKind::Whisper,
+            Some("%t".into()),
+            "Bob, Bob, Bob, Bob and %Bob".into()
+        )]
+    );
+
+    // A creature the client holds with no record cached: `GetUnitName`'s miss.
+    let mob_guid = 0xF130_0000_0000_0050;
+    let mob = world
+        .spawn((
+            Guid(mob_guid),
+            ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(&[
+                (2, 0x9),
+                (3, 500),
+            ])),
+        ))
+        .id();
+    world.resource_mut::<GuidIndex>().0.insert(mob_guid, mob);
+    world.insert_resource(Selection {
+        target: Some(mob),
+        guid: Some(mob_guid),
+        ..Default::default()
+    });
+    assert_eq!(
+        lines(&mut world, r#"SendChatMessage("at %t")"#),
+        vec![(ChatKind::Say, None, "at Unknown".into())]
+    );
+
+    // A guid the client does not hold: the player-name cache.
+    world
+        .resource_mut::<crate::names::NameCache>()
+        .insert_player(0x43, "Carol".into(), None);
+    world.insert_resource(Selection {
+        target: None,
+        guid: Some(0x43),
+        ..Default::default()
+    });
+    assert_eq!(
+        lines(&mut world, r#"SendChatMessage("%n", "GUILD")"#),
+        vec![(ChatKind::Guild, None, "Carol".into())]
+    );
+}
+
 /// The chat calls go through the real call host, applied before their verbs return:
 /// `SendChatMessage`'s line and `RandomRoll`'s `MSG_RANDOM_ROLL` (`0x48c832`) are on the wire when
 /// the next line of the script runs.
