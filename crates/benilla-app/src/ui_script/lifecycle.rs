@@ -514,6 +514,11 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
             }
         }
     }
+    // A reload's group, before any file reads it: the reference's frames load over the engine's
+    // roster and hear no group event for it ([`crate::ui_party::seed_reloaded_vm`]).
+    if seat == LoadSeat::Live {
+        crate::ui_party::seed_reloaded_vm(world, &mut script);
+    }
     // The addon version gate, read from the persisted base the fold above just made current, so a
     // character-screen "Load out of date AddOns" click counts. A bare test world is check on.
     let version_check = world
