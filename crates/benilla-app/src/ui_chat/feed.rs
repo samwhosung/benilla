@@ -937,10 +937,11 @@ pub(super) fn notice_event(
 /// drops its slot frees it after, so the line keeps its number and colour ("Left Channel: [2.
 /// General - Elwynn Forest]") and a handler's `GetChannelName` still finds it. The reference sets
 /// its drop flag for `YOU_LEFT` (`0x49c115`, skipped on the suspended leg `0x49c0e9`),
-/// `WRONG_PASSWORD` (`0x49c13c`), `WRONG_FACTION` (`0x49c446`), `NOT_MEMBER` and `INVALID_NAME`
-/// (`0x49c46d`), fires the event (`0x49c5b0` calling `0x49a870`), then frees the slot of the
-/// notice's name (`0x49c5b5`-`0x49c5c2`, `0x49bbd0`). Both arms mirror the slots into the VM,
-/// whose `GetChannelName` and `SendChatMessage` read them.
+/// `WRONG_PASSWORD` (`0x49c13c`), `BANNED` and `WRONG_FACTION` (`0x49c446`, which `BANNED`'s arm
+/// `0x49c39a` reaches through `0x49c43a`), `NOT_MEMBER` and `INVALID_NAME` (`0x49c46d`), fires the
+/// event (`0x49c5b0` calling `0x49a870`), then frees the slot of the notice's name
+/// (`0x49c5b5`-`0x49c5c2`, `0x49bbd0`). Both arms mirror the slots into the VM, whose
+/// `GetChannelName` and `SendChatMessage` read them.
 pub(super) fn deliver(
     script: &mut benilla_ui::script::UiScript,
     windows: &mut ChatWindows,
@@ -980,7 +981,9 @@ pub(super) fn deliver(
     use channel_notice as n;
     let drops = match notice {
         Some(n::YOU_LEFT) => event.slot_state != Some(super::edit::SlotState::Suspended),
-        Some(n::WRONG_PASSWORD | n::NOT_MEMBER | n::WRONG_FACTION | n::INVALID_NAME) => true,
+        Some(
+            n::WRONG_PASSWORD | n::NOT_MEMBER | n::BANNED | n::WRONG_FACTION | n::INVALID_NAME,
+        ) => true,
         _ => false,
     };
     // The wire name, kept before `stamp_channel` decorates arg4 with the slot number.
