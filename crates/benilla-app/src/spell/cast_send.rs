@@ -671,11 +671,14 @@ fn send_spell_cast(
     }
     // The ranged rung (`0x6e4e13`-`0x6e4e3e`): `Attributes & 0x2` (`SPELL_ATTR_RANGED`) with no
     // ranged weapon, the caster's `GetVirtualItem` (vtable slot 38, hand 2, `raw` 0) answering
-    // null, refuses `0x18` `SPELL_FAILED_EQUIPPED_ITEM`. The active player's (`0x5ec240`) finds no
-    // visible entry in slot 17 (`0x5ec300`) or one whose flag half has bit 0 (`0x5ec2ee`); any
-    // other unit's (`0x605e30`) is null for hand 2 only with no display id (`0x605f10`).
+    // null, refuses `0x18` `SPELL_FAILED_EQUIPPED_ITEM`. A player's, possessed or not
+    // (`0x5ec240`), finds no visible entry in its slot 17 (`0x5ec300`) or one whose flag half has
+    // bit 0 (`0x5ec2ee`); a creature's (`0x605e30`) is null for hand 2 only with no display id
+    // (`0x605f10`).
     if let (Some(d), Some(store)) = (def, ctx.rel.self_store) {
-        let ranged_weapon = if player_caster {
+        let player_object = player_caster
+            || store.0.object_type() == Some(benilla_protocol::messages::ObjectType::Player);
+        let ranged_weapon = if player_object {
             store
                 .0
                 .player_visible_item_entry(crate::items::EQUIPMENT_SLOT_RANGED)
