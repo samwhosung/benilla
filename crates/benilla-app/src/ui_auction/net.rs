@@ -51,50 +51,33 @@ fn on_command_result(In(ev): In<SessionEvent>, mut auction: ResMut<AuctionOpen>)
     }
 }
 
-// Each list result samples the millisecond clock once, before its rows (`0x4cc865`).
-
-fn on_list_result(
-    In(ev): In<SessionEvent>,
-    time: Res<Time<Real>>,
-    mut auction: ResMut<AuctionOpen>,
-) {
+fn on_list_result(In(ev): In<SessionEvent>, mut auction: ResMut<AuctionOpen>) {
     if let SessionEvent::AuctionListResult {
         auctions,
         total_count,
     } = ev
     {
-        let now_ms = crate::ui_billing::now_ms(&time);
-        auction_list_result(auctions, total_count, now_ms, &mut auction);
+        auction_list_result(auctions, total_count, &mut auction);
     }
 }
 
-fn on_owner_list_result(
-    In(ev): In<SessionEvent>,
-    time: Res<Time<Real>>,
-    mut auction: ResMut<AuctionOpen>,
-) {
+fn on_owner_list_result(In(ev): In<SessionEvent>, mut auction: ResMut<AuctionOpen>) {
     if let SessionEvent::AuctionOwnerListResult {
         auctions,
         total_count,
     } = ev
     {
-        let now_ms = crate::ui_billing::now_ms(&time);
-        auction_owner_list_result(auctions, total_count, now_ms, &mut auction);
+        auction_owner_list_result(auctions, total_count, &mut auction);
     }
 }
 
-fn on_bidder_list_result(
-    In(ev): In<SessionEvent>,
-    time: Res<Time<Real>>,
-    mut auction: ResMut<AuctionOpen>,
-) {
+fn on_bidder_list_result(In(ev): In<SessionEvent>, mut auction: ResMut<AuctionOpen>) {
     if let SessionEvent::AuctionBidderListResult {
         auctions,
         total_count,
     } = ev
     {
-        let now_ms = crate::ui_billing::now_ms(&time);
-        auction_bidder_list_result(auctions, total_count, now_ms, &mut auction);
+        auction_bidder_list_result(auctions, total_count, &mut auction);
     }
 }
 
@@ -127,7 +110,6 @@ fn auction_list(
     which: usize,
     auctions: Vec<AuctionListEntry>,
     total_count: u32,
-    now_ms: u32,
     auction: &mut AuctionOpen,
 ) {
     // Counted before the drop below, so a dropped result still shows as arrived.
@@ -136,25 +118,23 @@ fn auction_list(
     if auction.auctioneer.is_none() {
         return;
     }
-    auction.set_list(which, auctions, total_count, now_ms);
+    auction.set_list(which, auctions, total_count);
 }
 
 fn auction_list_result(
     auctions: Vec<AuctionListEntry>,
     total_count: u32,
-    now_ms: u32,
     auction: &mut AuctionOpen,
 ) {
-    auction_list(LIST, auctions, total_count, now_ms, auction);
+    auction_list(LIST, auctions, total_count, auction);
 }
 
 fn auction_owner_list_result(
     auctions: Vec<AuctionListEntry>,
     total_count: u32,
-    now_ms: u32,
     auction: &mut AuctionOpen,
 ) {
-    auction_list(OWNER, auctions, total_count, now_ms, auction);
+    auction_list(OWNER, auctions, total_count, auction);
 }
 
 /// The bidder page, deduped by auction id: the server lists the refreshed ids, then every auction
@@ -162,7 +142,6 @@ fn auction_owner_list_result(
 fn auction_bidder_list_result(
     auctions: Vec<AuctionListEntry>,
     total_count: u32,
-    now_ms: u32,
     auction: &mut AuctionOpen,
 ) {
     let mut seen = std::collections::HashSet::with_capacity(auctions.len());
@@ -170,7 +149,7 @@ fn auction_bidder_list_result(
         .into_iter()
         .filter(|e| seen.insert(e.auction_id))
         .collect();
-    auction_list(BIDDER, deduped, total_count, now_ms, auction);
+    auction_list(BIDDER, deduped, total_count, auction);
 }
 
 /// `SMSG_AUCTION_COMMAND_RESULT`, the verdict on a sell, a cancel or a bid. `auction_id` is 0 on

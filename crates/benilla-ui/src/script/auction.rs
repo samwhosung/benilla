@@ -86,10 +86,11 @@ pub struct AuctionItemRow {
     pub high_bidder: AuctionHighBidder,
     /// The seller's name; `None` while the name query is in flight.
     pub owner: Option<String>,
-    /// The time-left bucket, `1..=4` (Short, Medium, Long, Very Long); 0 when not known yet.
-    pub time_left: u32,
-    /// The auction's deadline on the millisecond clock: the tick its list was read at plus the
-    /// wire's milliseconds left, wrapping (`0x4cc865`, `0x4cc966`-`0x4cc975`).
+    /// The auction's deadline in milliseconds on `GetTime`'s clock ([`UiScript::auction_tick_ms`]):
+    /// the tick its list was read at plus the wire's milliseconds left, wrapping (`0x4cc865`,
+    /// `0x4cc966`-`0x4cc975`). `GetAuctionItemTimeLeft` reads it against the clock at the call.
+    ///
+    /// [`UiScript::auction_tick_ms`]: super::UiScript::auction_tick_ms
     pub deadline: u32,
     /// The high bidder's rank (`0x4cdb10`-`0x4cdb6a`): 2 the player, 1 another bidder, 0 no bid.
     pub bidder_rank: u8,
@@ -132,6 +133,9 @@ pub struct AuctionListState {
     /// The list's sort tail is still owed: its pending-lookups counter is not back at 0
     /// (`0xb72644`, `0xb72648`, `0xb7264c`), so a removal from it signals nothing (`0x4ce035`).
     pub pending: bool,
+    /// The auctions a time-left read removed from this page ([`remove_auction`]), which a push of
+    /// the same page leaves out. The VM's own: a push's value is not read.
+    pub removed: Vec<u32>,
 }
 
 /// One class of the Browse tab's category tree, from the player's `ItemClass.dbc`.
@@ -246,7 +250,11 @@ impl super::UiScript {
             (Some(held), Some(mut state)) => {
                 for (list, held) in state.lists.iter_mut().zip(held.lists) {
                     list.sort = held.sort;
+                    list.removed = Vec::new();
                     if list.page == held.page {
+                        list.removed = held.removed;
+                        let removed = &list.removed;
+                        list.rows.retain(|r| !removed.contains(&r.auction_id));
                         list.rows = in_held_order(&held.rows, std::mem::take(&mut list.rows));
                     }
                 }
@@ -270,6 +278,13 @@ impl super::UiScript {
         rows.iter()
             .position(|r| r.auction_id == auction_id)
             .map(|i| i as u32 + 1)
+    }
+
+    /// The millisecond tick a list result is read at (`0x42c010` at `0x4cc865`), on `GetTime`'s
+    /// clock: the one `GetAuctionItemTimeLeft` reads at its call (`0x4cf548`), so each row's
+    /// deadline is this plus the wire's milliseconds left.
+    pub fn auction_tick_ms(&self) -> u32 {
+        tick_ms(self.model_ref().now)
     }
 
     /// Push `CanSendAuctionQuery()`'s answer, the app's query throttle.
@@ -432,6 +447,67 @@ fn sort_tail(model: &mut Model, list: usize) {
     }
 }
 
+/// `GetTime`'s seconds as the reference's millisecond tick (`0x42c010`), the dword it wraps at.
+fn tick_ms(now: f64) -> u32 {
+    (now * 1000.0) as u64 as u32
+}
+
+/// The time-left bands' upper bounds in milliseconds left (`0x8072a8`): band 1 under 30
+/// minutes, 2 under 2 hours, 3 under 8 hours, 4 past them (`0x4cf5a1`).
+const TIME_LEFT_BOUNDS: [u32; 3] = [1_800_000, 7_200_000, 28_800_000];
+
+/// How far past its deadline a row still answers 1 and stays: further, the read removes it
+/// (`0x4cf569`).
+const TIME_LEFT_GRACE_MS: u32 = 10_000;
+
+/// `GetAuctionItemTimeLeft`'s answer for a row with `deadline` at the tick `now` (`0x4cf548`-
+/// `0x4cf5a1`): 1 at or past it, the sign read off the wrapping difference (`0x4cf556`), else the
+/// band of the time left; and whether it is far enough past to be removed (`0x4cf569`).
+fn time_left_band(deadline: u32, now: u32) -> (i64, bool) {
+    let past = now.wrapping_sub(deadline);
+    if (past as i32) >= 0 {
+        return (1, past > TIME_LEFT_GRACE_MS);
+    }
+    let left = deadline.wrapping_sub(now);
+    let band = TIME_LEFT_BOUNDS
+        .iter()
+        .position(|&bound| left < bound)
+        .map_or(4, |i| i as i64 + 1);
+    (band, false)
+}
+
+/// `0x4cdfe0`: the auction leaves browse, owner and bidder in that order (`0x4cdfec`, `0x4ce04b`,
+/// `0x4ce0ab`), each list signalled as its own copy finishes (`0x4ce03e`, `0x4ce09e`,
+/// `0x4ce101`), so each segment is its own verb and the browse list's handlers still see the row
+/// on the owner list.
+fn remove_auction(lua: &Lua, auction_id: u32) {
+    for list in [LIST, OWNER, BIDDER] {
+        super::tick::verb(lua, |model| remove_from(model, list, auction_id));
+    }
+}
+
+/// One list's copy of `0x4cdfe0`: the auction's row goes, the rows after it moving up and the
+/// total kept, and a list that held it signals unless its sort tail is owed (`0x4ce035`,
+/// `0x4ce095`, `0x4ce0f5`). The VM keeps the id, so a push of the same page leaves it out.
+fn remove_from(model: &mut Model, list: usize, auction_id: u32) {
+    let Some(l) = model.auction.as_mut().map(|a| &mut a.lists[list]) else {
+        return;
+    };
+    let Some(i) = l.rows.iter().position(|r| r.auction_id == auction_id) else {
+        return;
+    };
+    l.rows.remove(i);
+    l.removed.push(auction_id);
+    if l.pending {
+        return;
+    }
+    match list {
+        LIST => model.raise("AUCTION_ITEM_LIST_UPDATE", Vec::new()),
+        OWNER => model.raise("AUCTION_OWNED_LIST_UPDATE", Vec::new()),
+        _ => model.raise("AUCTION_BIDDER_LIST_UPDATE", Vec::new()),
+    }
+}
+
 /// The auction id at `list`'s 1-based row `index`, as the getters read it.
 fn row_id(model: &Model, list: usize, index: usize) -> Option<u32> {
     model
@@ -574,8 +650,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetAuctionItemTimeLeft(type, index) → the 1..4 bucket, 0 when unknown. The reference has no
-    // live countdown: it moves only when a new list lands.
+    // GetAuctionItemTimeLeft(type, index) (`0x4cf470`) → the band 1 to 4 of the row's time left,
+    // read off its deadline against the clock at the call ([`time_left_band`]); 0 for a type or
+    // row that misses (`0x4cf5e1`). A row far enough past is removed after its 1 is pushed
+    // (`0x4cf574` → `0x4cdfe0`), its lists signalled inside the call.
     g.set(
         "GetAuctionItemTimeLeft",
         lua.create_function(|lua, (kind, index): (Value, Value)| {
@@ -591,8 +669,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 index,
                 r#"Usage: GetAuctionItemTimeLeft("type", index)"#,
             )?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(row_at(&model, &kind, index).map_or(0, |r| i64::from(r.time_left)))
+            let (band, remove) = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                let Some(row) = row_at(&model, &kind, index) else {
+                    return Ok(0);
+                };
+                let (band, remove) = time_left_band(row.deadline, tick_ms(model.now));
+                (band, remove.then_some(row.auction_id))
+            };
+            if let Some(auction_id) = remove {
+                remove_auction(lua, auction_id);
+            }
+            Ok(band)
         })?,
     )?;
 
@@ -1396,6 +1484,24 @@ mod tests {
         assert_eq!(left(&s, "list", 0), 0);
         assert_eq!(left(&s, "auction", 1), 0);
         assert_eq!(left(&s, "LIST", 6), 1);
+    }
+
+    /// The band reads the wrapping difference's sign (`0x4cf556`): an unclamped wire time gone
+    /// negative (`AuctionHouseMgr.cpp:838`) is past, not eternal, and a deadline across the
+    /// dword's wrap still counts down.
+    #[test]
+    fn the_time_left_band_reads_the_wrapping_difference() {
+        let now: u32 = 5_000_000;
+        assert_eq!(
+            time_left_band(now.wrapping_add(u32::MAX - 1000), now),
+            (1, false)
+        );
+        assert_eq!(
+            time_left_band(now.wrapping_add(u32::MAX - 20_000), now),
+            (1, true)
+        );
+        assert_eq!(time_left_band(100, u32::MAX - 5), (1, false), "106 ms left");
+        assert_eq!(time_left_band(now + 20 * 3_600_000, now), (4, false));
     }
 
     #[test]

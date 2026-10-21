@@ -80,8 +80,8 @@ fn row(name: &str, min_bid: u32, buyout: u32, bid: u32, owner: &str) -> AuctionI
         bid_amount: bid,
         high_bidder: AuctionHighBidder::Nil,
         owner: Some(owner.to_string()),
-        time_left: 4,
-        deadline: 0,
+        // A day out on `GetTime`'s clock: Very Long.
+        deadline: 24 * 60 * 60 * 1000,
         bidder_rank: 0,
         base_name: Some(name.to_string()),
         link: Some("|cffffffff|Hitem:2589:0:0:0|h[Linen Cloth]|h|r".into()),

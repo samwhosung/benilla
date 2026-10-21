@@ -37,15 +37,6 @@ mod sort_tests;
 /// The browse rate limit: `0x4ce980` arms `tick + 0x1388` once sent; a refused query fires nothing.
 const QUERY_THROTTLE_SECS: f64 = 5.0;
 
-/// The upper bounds, in ms, of time-left buckets 1 to 3 (the reference's table at `0x8072a8`).
-const TIME_LEFT_SHORT_MS: u32 = 30 * 60 * 1000;
-const TIME_LEFT_MEDIUM_MS: u32 = 2 * 60 * 60 * 1000;
-const TIME_LEFT_LONG_MS: u32 = 8 * 60 * 60 * 1000;
-
-/// Past this, `time_left_ms` is an underflow and reads as expired: vmangos writes it unclamped
-/// (`AuctionHouseMgr.cpp:838`) and sweeps expiry every 60 s, and no auction runs past 24 h.
-const TIME_LEFT_IMPLAUSIBLE_MS: u32 = 7 * 24 * 60 * 60 * 1000;
-
 /// `ItemSubClass.dbc` `DisplayFlags` bit 1: left out of the auction category filter (`0x4cf9c0`).
 const SUBCLASS_HIDDEN_FROM_AUCTIONS: u32 = 0x2;
 
@@ -83,8 +74,10 @@ pub(crate) struct AuctionListSlot {
     received: bool,
     /// Which result `entries` came from, from [`AuctionOpen::next_page`].
     page: u32,
-    /// The millisecond tick the result was read at (`0x4cc865`), each row's deadline base.
-    arrived_ms: u32,
+    /// The millisecond tick the result was read at (`0x4cc865`), each row's deadline base, on
+    /// `GetTime`'s clock as `GetAuctionItemTimeLeft` reads it: the feed stamps it the frame the
+    /// result lands, before any Lua reads the page.
+    arrived_ms: Option<u32>,
     /// The page's sort tail is owed: the reference's pending-lookups counter is not yet back at
     /// zero (`0xb72644`, `0xb72648`, `0xb7264c`), so the list holds its event.
     awaiting: bool,
@@ -188,15 +181,8 @@ impl AuctionOpen {
         self.show_requested = true;
     }
 
-    /// Replace one list's page, read at `now_ms` on the millisecond clock; that list's event is
-    /// owed even for an identical page.
-    pub(crate) fn set_list(
-        &mut self,
-        which: usize,
-        entries: Vec<AuctionListEntry>,
-        total: u32,
-        now_ms: u32,
-    ) {
+    /// Replace one list's page; that list's event is owed even for an identical page.
+    pub(crate) fn set_list(&mut self, which: usize, entries: Vec<AuctionListEntry>, total: u32) {
         self.list_result_landed[which] = true;
         self.next_page = self.next_page.wrapping_add(1);
         let slot = &mut self.lists[which];
@@ -204,7 +190,7 @@ impl AuctionOpen {
         slot.entries = entries;
         slot.total = total.max(slot.entries.len() as u32);
         slot.page = self.next_page;
-        slot.arrived_ms = now_ms;
+        slot.arrived_ms = None;
         slot.awaiting = true;
     }
 
@@ -331,22 +317,6 @@ fn seed_sorts_at_world_entry(mut auction: ResMut<AuctionOpen>) {
     auction.sorts = SortStacks::default();
 }
 
-/// The wire's unclamped milliseconds left, as the reference's bucket 1 to 4.
-fn time_left_bucket(ms: u32) -> u32 {
-    if ms >= TIME_LEFT_IMPLAUSIBLE_MS {
-        return 1;
-    }
-    if ms < TIME_LEFT_SHORT_MS {
-        1
-    } else if ms < TIME_LEFT_MEDIUM_MS {
-        2
-    } else if ms < TIME_LEFT_LONG_MS {
-        3
-    } else {
-        4
-    }
-}
-
 /// The status sort's rank of a row's high bidder (`0x4cdb10`-`0x4cdb6a`): 2 when it is the player
 /// (`0x468550`, 0 with no player), 1 for any other bidder, 0 for no bid.
 fn bidder_rank(bidder_guid: u64, self_guid: Option<u64>) -> u8 {
@@ -436,7 +406,8 @@ fn resolve_row(
         min_increment: entry.min_increment,
         buyout_price: entry.buyout,
         bid_amount: entry.current_bid,
-        time_left: time_left_bucket(entry.time_left_ms),
+        // The wire's milliseconds are unclamped (`AuctionHouseMgr.cpp:838`): one gone negative
+        // wraps the deadline into the past, as the reference's add does.
         deadline: arrived_ms.wrapping_add(entry.time_left_ms),
         bidder_rank: bidder_rank(entry.bidder_guid, self_guid),
         base_name: template.map(|t| t.name.clone()),
@@ -578,6 +549,11 @@ fn feed_auction(
         // A list's result, and the window's show, are the frames the stock tabs call their getters
         // on.
         let shown = last_open.is_none() || auction.show_requested;
+        // A landed result's tick, on the clock `GetAuctionItemTimeLeft` reads (`0x4cc865`).
+        let tick = script.auction_tick_ms();
+        for slot in &mut auction.lists {
+            slot.arrived_ms.get_or_insert(tick);
+        }
         let fresh = auction.auctioneer.map(|_| {
             let lists = [LIST, BIDDER, OWNER].map(|i| {
                 let slot = &auction.lists[i];
@@ -589,7 +565,7 @@ fn feed_auction(
                         resolve_row(
                             i,
                             e,
-                            slot.arrived_ms,
+                            slot.arrived_ms.unwrap_or(tick),
                             self_guid,
                             &items,
                             icons.as_deref(),
@@ -604,7 +580,7 @@ fn feed_auction(
                     rows,
                     sort: auction.sorts.0[i],
                     page: slot.page,
-                    pending: false,
+                    ..Default::default()
                 }
             });
             AuctionState {
@@ -865,21 +841,6 @@ mod tests {
         assert!(!tree[3].subclasses.is_empty());
     }
 
-    #[test]
-    fn the_time_left_buckets_read_an_underflow_as_expired() {
-        assert_eq!(time_left_bucket(0), 1, "already gone");
-        assert_eq!(time_left_bucket(29 * 60 * 1000), 1);
-        assert_eq!(time_left_bucket(31 * 60 * 1000), 2);
-        assert_eq!(time_left_bucket(3 * 60 * 60 * 1000), 3);
-        assert_eq!(time_left_bucket(20 * 60 * 60 * 1000), 4, "a 24h auction");
-        // `(expireTime - now) * 1000` one second past the deadline, unclamped.
-        assert_eq!(
-            time_left_bucket(u32::MAX - 1000),
-            1,
-            "an underflow is expired, not eternal"
-        );
-    }
-
     /// Every result runs its sort tail, which signals with no test (`0x4cd8b0`): the Browse pane
     /// leaves "Searching" only on it (`Blizzard_AuctionUI.lua:187`), even for an identical page.
     #[test]
@@ -887,13 +848,13 @@ mod tests {
         let mut open = AuctionOpen::default();
         open.open(0x1234, 1);
 
-        open.set_list(LIST, Vec::new(), 0, 0);
+        open.set_list(LIST, Vec::new(), 0);
         assert!(open.lists[LIST].awaiting, "the first empty page");
 
         // The feed runs the tail and clears it.
         open.lists[LIST].awaiting = false;
 
-        open.set_list(LIST, Vec::new(), 0, 0);
+        open.set_list(LIST, Vec::new(), 0);
         assert!(
             open.lists[LIST].awaiting,
             "an identical page owes the event too — this is the whole bug"
@@ -908,7 +869,7 @@ mod tests {
         open.open(0x1234, 1);
         let owed = |open: &AuctionOpen| open.lists.each_ref().map(|l| l.awaiting);
 
-        open.set_list(LIST, Vec::new(), 0, 0);
+        open.set_list(LIST, Vec::new(), 0);
         assert_eq!(
             owed(&open),
             [true, false, false],
@@ -916,11 +877,11 @@ mod tests {
         );
 
         open.lists[LIST].awaiting = false;
-        open.set_list(OWNER, Vec::new(), 0, 0);
+        open.set_list(OWNER, Vec::new(), 0);
         assert_eq!(owed(&open), [false, false, true]);
 
         open.lists[OWNER].awaiting = false;
-        open.set_list(BIDDER, Vec::new(), 0, 0);
+        open.set_list(BIDDER, Vec::new(), 0);
         assert_eq!(owed(&open), [false, true, false]);
     }
 
@@ -937,7 +898,7 @@ mod tests {
         );
 
         // The Auctions tab was shown and answered, even empty: now a sale makes it stale.
-        open.set_list(OWNER, Vec::new(), 0, 0);
+        open.set_list(OWNER, Vec::new(), 0);
         open.refresh_owner();
         assert!(open.pending_owner_refresh, "a list we hold can go stale");
         assert!(
@@ -1157,7 +1118,7 @@ mod tests {
         {
             let mut open = app.world_mut().resource_mut::<AuctionOpen>();
             open.open(0x1234, 1);
-            open.set_list(OWNER, vec![entry(ME, BIDDER_GUID)], 1, 0);
+            open.set_list(OWNER, vec![entry(ME, BIDDER_GUID)], 1);
         }
 
         // One registered system, so its `VmMemo` locals persist from frame to frame.
@@ -1223,7 +1184,6 @@ mod tests {
                 OWNER,
                 vec![entry(ME, BIDDER_GUID)],
                 1,
-                0,
             );
         };
         list(&mut app);
