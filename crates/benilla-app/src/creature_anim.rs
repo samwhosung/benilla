@@ -1099,7 +1099,6 @@ mod attack_stand_tests {
                                 item_flags: None,
                                 item: None,
                             },
-                            std::time::Instant::now(),
                         );
                     },
                 )

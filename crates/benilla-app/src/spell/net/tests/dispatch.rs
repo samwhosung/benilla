@@ -112,7 +112,6 @@ fn an_inventory_refusal_pops_the_cast_of_its_item_and_no_other() {
             HEARTH,
             Some(benilla_protocol::messages::ITEM_FLAG_PLAYERCAST),
             Some(STONE),
-            Instant::now(),
         );
     }
     let refusal = |item_guid| SessionEvent::InventoryFailure {
@@ -168,7 +167,6 @@ fn a_world_entry_empties_the_cast_slots() {
                             item_flags: None,
                             item: None,
                         },
-                        Instant::now(),
                     );
                 },
             )

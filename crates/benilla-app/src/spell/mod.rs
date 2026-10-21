@@ -93,8 +93,7 @@ impl Plugin for SpellPlugin {
             .add_systems(
                 Update,
                 (
-                    (inflight::reap_lapsed_cast, inflight::local_self_cancel)
-                        .chain()
+                    inflight::local_self_cancel
                         .in_set(UnitFeed)
                         .in_set(LocalCancel),
                     mods::track_class_family

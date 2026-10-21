@@ -56,6 +56,7 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::ClearCooldown, on_cooldown_packet)
         .net_handler(K::CooldownCheat, on_cooldown_packet)
         .net_handler(K::ItemCooldown, on_item_cooldown)
+        .net_handler(K::InventoryFailure, on_inventory_refusal)
         .net_handler(K::ItemTemplate, on_item_record)
         .net_handler(K::ChannelStart, on_channel)
         .net_handler(K::ChannelUpdate, on_channel)
@@ -396,13 +397,7 @@ fn on_spell_failed_other(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Sce
 
 fn on_spell_delayed(In(ev): In<SessionEvent>, mut l: Lifecycle) {
     if let SessionEvent::SpellDelayed { caster, delay_ms } = ev {
-        spell_delayed(
-            caster,
-            delay_ms,
-            &l.self_guid,
-            &mut l.reports,
-            &mut l.pending,
-        );
+        spell_delayed(caster, delay_ms, &l.self_guid, &mut l.reports);
     }
 }
 
@@ -464,6 +459,41 @@ fn on_item_record(In(ev): In<SessionEvent>, mut l: Lifecycle) {
         l.cooldowns
             .item_record_landed(entry, info.as_deref(), |id| spells?.catalog.get(id));
     }
+}
+
+/// `SMSG_INVENTORY_CHANGE_FAILURE`'s cast leg (`0x5e3a45`-`0x5e3ab3`): a refusal whose first item
+/// is the in-flight cast's (`0x6e3d20` → `[0xcecab0]`, compared at `0x5e3aa1`) cancels it as
+/// `CancelCast(1, 0, 0x17)` with the tail's reap, while the active player's object is held
+/// (`0x5e3a63`). The line, the loot and the unlocks are the item handler's
+/// ([`crate::ui_items`]).
+fn on_inventory_refusal(
+    In(ev): In<SessionEvent>,
+    mut slots: super::CastSlots,
+    net: Res<NetCommands>,
+    spells: Option<Res<Spells>>,
+    edits: Res<crate::creature_anim::UnitEdits>,
+    self_guid: Res<SelfGuid>,
+    index: Res<GuidIndex>,
+) {
+    let SessionEvent::InventoryFailure { item_guid, .. } = ev else {
+        return;
+    };
+    let Some(&me) = self_guid.0.and_then(|g| index.0.get(&g)) else {
+        return;
+    };
+    let mut core = slots.core(&net);
+    if item_guid == 0 || core.slot_item() != Some(item_guid) {
+        return;
+    }
+    debug!("net: inventory refusal names the in-flight cast's item {item_guid:#x} — cancel");
+    core.cancel_reaping(
+        true,
+        false,
+        super::report::REASON_DONT_REPORT,
+        spells.as_deref(),
+        Some(me),
+        &edits,
+    );
 }
 
 fn on_item_cooldown(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene) {
@@ -918,15 +948,11 @@ fn spell_start(
         );
     }
     // Our own timed cast opens the bar.
-    if self_guid.0 == Some(caster) && cast_time_ms > 0 {
-        if !ranged_slot {
-            reports.bar(CastBarEdge::Start {
-                spell_id,
-                cast_time_ms,
-            });
-        }
-        // The real cast time replaces the guard's send-time deadline, ranged casts included.
-        pending.refine(cast_time_ms, Instant::now());
+    if self_guid.0 == Some(caster) && cast_time_ms > 0 && !ranged_slot {
+        reports.bar(CastBarEdge::Start {
+            spell_id,
+            cast_time_ms,
+        });
     }
     if let Some(&e) = index.0.get(&caster) {
         if cast_time_ms > 0 {
@@ -1271,21 +1297,13 @@ fn spell_failed_other(
 /// `SMSG_SPELL_DELAYED`: pushback. A hit on our cast extends its timer by `delay_ms` (vmangos
 /// `Spell::Delayed`), and the bar's window slides out by the same (`SPELLCAST_DELAYED`). Sent
 /// only to the caster, but gated on the caster guid like every own-cast edge.
-fn spell_delayed(
-    caster: u64,
-    delay_ms: u32,
-    self_guid: &SelfGuid,
-    reports: &mut CastReports,
-    pending: &mut PendingCast,
-) {
+fn spell_delayed(caster: u64, delay_ms: u32, self_guid: &SelfGuid, reports: &mut CastReports) {
     debug!("net: spell delayed by {caster:#x} (+{delay_ms}ms pushback)");
     if self_guid.0 == Some(caster) {
         if *crate::net::CAST_TRACE {
             info!("cast-trace: RECV SPELL_DELAYED — +{delay_ms}ms pushback (bar extends, does NOT vanish)");
         }
         reports.bar(CastBarEdge::Delayed { delay_ms });
-        // The in-flight guard holds past the stretched end.
-        pending.delay(delay_ms, Instant::now());
     }
 }
 
@@ -1927,7 +1945,7 @@ mod tests {
                     .run_system_once(
                         move |mut slots: crate::spell::CastSlots,
                               net: Res<crate::net::NetCommands>| {
-                            slots.core(&net).push(spell_id, held, Instant::now());
+                            slots.core(&net).push(spell_id, held);
                         },
                     )
                     .unwrap();

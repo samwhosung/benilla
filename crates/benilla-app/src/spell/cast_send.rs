@@ -330,14 +330,13 @@ impl CastLadder<'_, '_> {
             },
         };
         let now = Instant::now();
-        // The spell its attempt pushed stays in the slot through the send; the guard holds it from
-        // here, as for a cast sent at its attempt.
+        // The spell its attempt pushed stays in the slot through the send, as for a cast sent at
+        // its attempt.
         if self.ground.in_slot() == Some(spell_id) {
             self.pending.push_cast(
                 spell_id,
                 item_flags(&self.items, commit),
                 commit.item_guid(),
-                now,
             );
         }
         // The bind emptied the word, and signals before it sends (`0x6e60cb`, `0x6e615d`).
@@ -973,7 +972,7 @@ fn send_spell_cast(
     // never holds it here. The arm signals whatever it then decides (`0x6e5333`).
     let held = held(items, commit, def, pending_word.is_some());
     if let Some(held) = held {
-        core.push(spell_id, held, now);
+        core.push(spell_id, held);
     }
     core.reports.changed();
     // The deferred ArmCast-false refusal (`6e5045`-`6e50a9`): every rung passed and nothing
@@ -2179,8 +2178,8 @@ mod tests {
     }
 
     /// The attempt's in-flight rungs and the report's tail read one slot (`0xceca88`): a cast
-    /// running outside it (an item's without `ITEM_FLAG_PLAYERCAST`, or a guard that lapsed) is no
-    /// same-spell bail for a press of its spell (`0x6e4d43`), and that press's refusal finds
+    /// running outside it (an item's without `ITEM_FLAG_PLAYERCAST`) is no same-spell bail for a
+    /// press of its spell (`0x6e4d43`), and that press's refusal finds
     /// nothing in flight (`0x6e2201`): `SPELLCAST_FAILED`, and no `CMSG_CANCEL_CAST`.
     #[test]
     fn a_refusal_of_a_cast_outside_the_slot_sends_no_cancel() {
