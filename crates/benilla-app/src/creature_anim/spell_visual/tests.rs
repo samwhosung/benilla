@@ -2277,3 +2277,136 @@ fn esc_with_a_cursor_up_leaves_the_running_channels_hold_and_loop() {
         "Blizzard's reap stops none of the channel's sound (got {after:?})"
     );
 }
+
+/// Beside its own stop, a spell go stops its caster's kits of the running auto-repeat spell
+/// `[0xceac30]` (`0x6e7fed` when set, `0x6e7ffb` with force 0): another spell's go ends an Auto
+/// Shot hold and its loop on its caster and on no other unit, and with no auto-repeat running it
+/// ends neither.
+#[test]
+fn a_go_stops_the_running_auto_repeat_spells_hold_and_loop_on_its_caster() {
+    use crate::sound::HoldLoops;
+
+    const AUTO_SHOT: u32 = 75;
+    const AUTO_SHOT_VISUAL: u32 = 2003;
+    const AUTO_SHOT_PRECAST_KIT: u32 = 3030;
+    const AUTO_SHOT_LOOP: u32 = 4040;
+    const ARCANE_SHOT: u32 = 3044;
+
+    /// One frame of `events` through the router, its sounds through the sound router's books (the
+    /// Auto Shot sound a looping kit); returns the hold reaps it wrote.
+    fn frame(app: &mut App, loops: &mut HoldLoops, events: &[CastEvent]) -> Vec<(Entity, u32)> {
+        for &ev in events {
+            app.world_mut().write_message(ev);
+        }
+        app.update();
+        let sounds: Vec<SpellKitSound> = app
+            .world_mut()
+            .resource_mut::<Messages<SpellKitSound>>()
+            .drain()
+            .collect();
+        for ev in sounds {
+            match ev {
+                SpellKitSound::Play {
+                    entity,
+                    spell_id,
+                    kit_sound: AUTO_SHOT_LOOP,
+                } => loops.rang(entity, spell_id, AUTO_SHOT_LOOP),
+                SpellKitSound::StopHold { entity, spell_id } => {
+                    loops.stop_hold(entity, spell_id);
+                }
+                _ => {}
+            }
+        }
+        app.world_mut()
+            .resource_mut::<Messages<SpellKitFx>>()
+            .drain()
+            .filter_map(|fx| match fx {
+                SpellKitFx::Reap {
+                    entity, spell_id, ..
+                } => Some((entity, spell_id)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    let mut app = app();
+    app.insert_resource(SpellVisuals(SpellVisualCatalog::from_tables(
+        HashMap::from([(
+            AUTO_SHOT_VISUAL,
+            VisualStages {
+                precast: AUTO_SHOT_PRECAST_KIT,
+                ..Default::default()
+            },
+        )]),
+        HashMap::from([(
+            AUTO_SHOT_PRECAST_KIT,
+            VisualKit {
+                anim_id: Some(HOLD_ANIM),
+                sound: Some(AUTO_SHOT_LOOP),
+                ..Default::default()
+            },
+        )]),
+    )));
+    app.insert_resource(crate::ui_action::Spells {
+        catalog: SpellCatalog::from_displays(HashMap::from([
+            (
+                AUTO_SHOT,
+                SpellDisplay {
+                    visual: AUTO_SHOT_VISUAL,
+                    ..Default::default()
+                },
+            ),
+            (ARCANE_SHOT, SpellDisplay::default()),
+        ])),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    app.insert_resource(crate::spell::AutoRepeatActive(Some(AUTO_SHOT)));
+    let hunter = app.world_mut().spawn_empty().id();
+    let other = app.world_mut().spawn_empty().id();
+    let mut loops = HoldLoops::default();
+
+    frame(
+        &mut app,
+        &mut loops,
+        &[
+            cast_event(hunter, AUTO_SHOT, CastEventKind::Start),
+            cast_event(other, AUTO_SHOT, CastEventKind::Start),
+        ],
+    );
+    assert_eq!(hold(&app, hunter), Some(AUTO_SHOT));
+    assert_eq!(loops.held(hunter), Some((AUTO_SHOT, AUTO_SHOT_LOOP)));
+
+    let reaped = frame(
+        &mut app,
+        &mut loops,
+        &[cast_event(hunter, ARCANE_SHOT, CastEventKind::Go)],
+    );
+    assert_eq!(hold(&app, hunter), None, "the caster's Auto Shot hold");
+    assert_eq!(loops.held(hunter), None, "and its loop");
+    assert_eq!(
+        reaped,
+        vec![(hunter, ARCANE_SHOT), (hunter, AUTO_SHOT)],
+        "the go's own spell, then the auto-repeat spell, on the caster alone"
+    );
+    assert_eq!(hold(&app, other), Some(AUTO_SHOT), "another unit's hold");
+    assert_eq!(
+        loops.held(other),
+        Some((AUTO_SHOT, AUTO_SHOT_LOOP)),
+        "and its loop"
+    );
+
+    // With no auto-repeat running, another spell's go leaves both.
+    app.insert_resource(crate::spell::AutoRepeatActive(None));
+    frame(
+        &mut app,
+        &mut loops,
+        &[cast_event(hunter, AUTO_SHOT, CastEventKind::Start)],
+    );
+    frame(
+        &mut app,
+        &mut loops,
+        &[cast_event(hunter, ARCANE_SHOT, CastEventKind::Go)],
+    );
+    assert_eq!(hold(&app, hunter), Some(AUTO_SHOT));
+    assert_eq!(loops.held(hunter), Some((AUTO_SHOT, AUTO_SHOT_LOOP)));
+}
