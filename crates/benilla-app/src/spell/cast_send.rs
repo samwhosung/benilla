@@ -238,6 +238,8 @@ pub(crate) enum TargetedBind {
     Source([f32; 3]),
     /// The bag or paper-doll click's item guid.
     Item(u64),
+    /// The partner's trade slot, the bind of `0x6e6900` (mask `0x1000`, guid `{6, 0}`).
+    TradeItem(u8),
     /// The world click's GameObject guid: a chest, door, vein or herb.
     Object(u64),
     /// The world click's unit guid.
@@ -323,6 +325,9 @@ impl CastLadder<'_, '_> {
                     spell_id,
                     item_guid,
                 },
+                TargetedBind::TradeItem(slot) => {
+                    ClientCommand::CastSpellTradeItem { spell_id, slot }
+                }
                 // The right-click OPEN_LOCK packet: `BindTarget`'s GameObject arm fills both.
                 TargetedBind::Object(go_guid) => {
                     ClientCommand::CastSpellGameObject { spell_id, go_guid }

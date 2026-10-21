@@ -65,6 +65,7 @@ impl TargetedBind {
             TargetedBind::Dest(dest) => UseItemTarget::Dest(dest),
             TargetedBind::Source(src) => UseItemTarget::Source(src),
             TargetedBind::Item(guid) => UseItemTarget::Item(guid),
+            TargetedBind::TradeItem(slot) => UseItemTarget::TradeItem(slot),
             TargetedBind::Object(guid) => UseItemTarget::Object(guid),
             TargetedBind::Unit(guid) => UseItemTarget::Unit(guid),
             TargetedBind::Corpse(guid, target) => UseItemTarget::Corpse(target, guid),
