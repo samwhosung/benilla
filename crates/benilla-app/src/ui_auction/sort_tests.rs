@@ -1,5 +1,6 @@
-//! The three lists' sort, end to end: the wire's results through the handlers, the feed and the
-//! drain to the VM's getters, as the window reads them.
+//! The three lists end to end, their sort, their time left and their life across the window: the
+//! wire's results through the handlers, the feed and the drain to the VM's getters, as the window
+//! reads them.
 
 use benilla_protocol::messages::AuctionListEntry;
 use benilla_protocol::SessionEvent;
@@ -32,6 +33,7 @@ impl House {
             .init_resource::<NameCache>()
             .init_resource::<crate::ui_chat::ChatLog>()
             .init_resource::<crate::sound::MessageSounds>()
+            .add_message::<crate::net::WorldEnterCascadeMessage>()
             .configure_sets(
                 Update,
                 (crate::ui_script::UiFeed, crate::ui_script::UiDrain).chain(),
@@ -128,6 +130,29 @@ impl House {
                 total_count,
             },
         });
+    }
+
+    /// The close core, as the window's hide or a walk-away runs it.
+    fn close(&mut self) {
+        super::close_core(self.app.world_mut());
+        self.app.update();
+    }
+
+    /// The world-enter cascade (`0x4908c0`): a login, a cross-map worldport or a `/reload`.
+    fn cascade(&mut self) {
+        self.app
+            .world_mut()
+            .write_message(crate::net::WorldEnterCascadeMessage);
+        self.app.update();
+    }
+
+    /// `GetTime()`'s clock, the one the list results and `GetAuctionItemTimeLeft` read.
+    fn clock(&mut self, secs: f64) {
+        self.script().set_now(secs);
+    }
+
+    fn eval<T: benilla_ui::mlua::FromLuaMulti>(&mut self, chunk: &str) -> T {
+        self.script().eval(chunk).unwrap()
     }
 
     fn script(&mut self) -> Mut<'_, UiScript> {
@@ -438,4 +463,103 @@ fn a_bid_after_a_header_click_names_the_auction_the_click_put_on_its_row() {
         [1],
         "the cheaper auction, first under a reversed buyout"
     );
+}
+
+/// `GetAuctionItemTimeLeft` reads the deadline against the clock at the call (`0x4cf548`), and the
+/// deadline is the result's tick plus the wire's milliseconds (`0x4cc865`, `0x4cc966`): a row
+/// counts down between results.
+#[test]
+fn the_time_left_counts_down_from_the_results_tick() {
+    let mut h = House::new();
+    h.item(1, "Copper Bar", 1, 1);
+    h.clock(100.0);
+    h.open(AUCTIONEER);
+    let mut row = entry(1, 1);
+    row.time_left_ms = 31 * 60 * 1000;
+    h.land(LIST, vec![row]);
+    let left = "return GetAuctionItemTimeLeft('list', 1)";
+    assert_eq!(h.eval::<i64>(left), 2, "31 minutes: Medium");
+    h.clock(220.0);
+    assert_eq!(h.eval::<i64>(left), 1, "two minutes on, 29 left: Short");
+}
+
+/// The close (`0x4cd5f0`) zeroes the auctioneer, the house and the one-shot flags and empties the
+/// sell slot, nothing more: the lists, their stacks, the selection and the query throttle stand,
+/// and the getters answer them. The world-enter cascade's reset (`0x490a05` → `0x4cc280`) empties
+/// the counts, the selection and the throttle, and leaves the stacks.
+#[test]
+fn a_close_keeps_the_lists_and_the_world_enter_cascade_empties_them() {
+    let mut h = House::new();
+    h.item(1, "Copper Bar", 1, 1);
+    h.item(2, "Tin Bar", 1, 2);
+    h.open(AUCTIONEER);
+    h.land(LIST, vec![entry(1, 1), entry(2, 2)]);
+    h.lua(
+        "SortAuctionItems('list', 'quality') SortAuctionItems('list', 'quality') \
+         SetSelectedAuctionItem('list', 2) QueryAuctionItems('')",
+    );
+    assert_eq!(h.order("list"), "Copper Bar,Tin Bar", "quality reversed");
+    let read = "local n, total = GetNumAuctionItems('list') return n, total, \
+                GetSelectedAuctionItem('list'), IsAuctionSortReversed('list', 'quality'), \
+                CanSendAuctionQuery()";
+    type Read = (i64, i64, i64, Option<i64>, Option<i64>);
+    assert_eq!(h.eval::<Read>(read), (2, 2, 2, Some(1), None));
+    h.close();
+    assert_eq!(h.eval::<Read>(read), (2, 2, 2, Some(1), None), "the close");
+    assert_eq!(h.order("list"), "Copper Bar,Tin Bar");
+    h.cascade();
+    assert_eq!(
+        h.eval::<Read>(read),
+        (0, 0, 0, Some(1), Some(1)),
+        "the cascade's reset"
+    );
+}
+
+/// The hello (`0x4cd570`) zeroes every list's count and total (`0x4cd5b4`-`0x4cd5cd`), from the
+/// auctioneer already open as from any other.
+#[test]
+fn a_hello_empties_every_list_even_from_the_same_auctioneer() {
+    let mut h = House::new();
+    h.item(1, "Copper Bar", 1, 1);
+    h.open(AUCTIONEER);
+    h.land(LIST, vec![entry(1, 1), entry(2, 1)]);
+    h.land(OWNER, vec![entry(3, 1)]);
+    h.open(AUCTIONEER);
+    let read = "local a, b = GetNumAuctionItems('list') local c, d = \
+                GetNumAuctionItems('owner') return a, b, c, d";
+    assert_eq!(h.eval::<(i64, i64, i64, i64)>(read), (0, 0, 0, 0));
+}
+
+/// A result has its lists whatever the session (`0x4cc7f0` reads no auctioneer): one landing
+/// after the close is written, sorted and signalled.
+#[test]
+fn a_result_after_the_close_still_lands_and_signals() {
+    let mut h = House::new();
+    h.item(1, "Copper Bar", 1, 1);
+    h.open(AUCTIONEER);
+    h.close();
+    h.seen();
+    h.land(LIST, vec![entry(1, 1)]);
+    assert_eq!(
+        h.eval::<(i64, i64)>("return GetNumAuctionItems('list')"),
+        (1, 1)
+    );
+    assert_eq!(h.seen(), ["AUCTION_ITEM_LIST_UPDATE=Copper Bar"]);
+}
+
+/// The selection is an auction id (`0x849058`) that neither the close nor the hello writes: the
+/// same auction on a later page is selected again.
+#[test]
+fn the_selection_outlasts_the_close_and_the_hello() {
+    let mut h = House::new();
+    h.item(1, "Copper Bar", 1, 1);
+    h.item(2, "Tin Bar", 1, 1);
+    h.open(AUCTIONEER);
+    h.land(LIST, vec![entry(1, 1), entry(2, 2)]);
+    h.lua("SetSelectedAuctionItem('list', 2)");
+    h.close();
+    h.open(AUCTIONEER);
+    h.land(LIST, vec![entry(2, 2), entry(1, 1), entry(3, 1)]);
+    assert_eq!(h.order("list"), "Copper Bar,Copper Bar,Tin Bar");
+    assert_eq!(h.eval::<i64>("return GetSelectedAuctionItem('list')"), 3);
 }

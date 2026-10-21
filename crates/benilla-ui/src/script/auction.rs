@@ -1240,6 +1240,98 @@ mod tests {
         );
     }
 
+    /// `GetAuctionItemTimeLeft` reads the row's deadline against the clock at the call
+    /// (`0x4cf548`): 1 to 3 under 30 minutes, 2 hours and 8 hours left (`0x8072a8`), else 4
+    /// (`0x4cf5a1`); 1 at or past the deadline (`0x4cf558`). More than 10 s past (`0x4cf569`) the
+    /// call also removes the auction (`0x4cdfe0`) from browse, owner and bidder in that order, each
+    /// list that held it signalled inside the call unless its sort tail is owed (`0x4ce035`), the
+    /// totals kept; a push of the same page keeps it out. A type or row that misses answers 0
+    /// (`0x4cf5e1`).
+    #[test]
+    fn the_time_left_reads_the_deadline_at_the_call() {
+        use crate::script::tick::heard;
+        let mut s = UiScript::new().unwrap();
+        s.set_now(1000.0);
+        let now: u32 = 1_000_000;
+        let list = |rows: &[(u32, u32)], pending: bool| {
+            let rows: Vec<AuctionItemRow> = rows
+                .iter()
+                .map(|&(auction_id, deadline)| AuctionItemRow {
+                    auction_id,
+                    item_id: 1000 + auction_id,
+                    name: Some(format!("Item {auction_id}")),
+                    quality: Some(1),
+                    count: 1,
+                    deadline,
+                    ..Default::default()
+                })
+                .collect();
+            AuctionListState {
+                total: rows.len() as u32 + 2,
+                rows,
+                pending,
+                ..Default::default()
+            }
+        };
+        let gone = now - 10_001;
+        let mut state = AuctionState::default();
+        state.lists[LIST] = list(
+            &[
+                (1, now + 1_799_999),
+                (2, now + 1_800_000),
+                (3, now + 7_200_000),
+                (4, now + 28_800_000),
+                (5, now),
+                (6, now - 10_000),
+                (7, gone),
+            ],
+            false,
+        );
+        state.lists[OWNER] = list(&[(7, gone)], false);
+        state.lists[BIDDER] = list(&[(7, gone)], true);
+        s.set_auction(Some(state.clone()));
+        heard::listen(
+            &s,
+            &[
+                "AUCTION_ITEM_LIST_UPDATE",
+                "AUCTION_OWNED_LIST_UPDATE",
+                "AUCTION_BIDDER_LIST_UPDATE",
+            ],
+            Some("(GetNumAuctionItems('list')) .. '/' .. (GetNumAuctionItems('owner'))"),
+        );
+        let left = |s: &UiScript, kind: &str, i: i64| {
+            s.eval::<i64>(&format!("return GetAuctionItemTimeLeft('{kind}', {i})"))
+                .unwrap()
+        };
+        let bands: Vec<i64> = (1..=6).map(|i| left(&s, "list", i)).collect();
+        assert_eq!(bands, [1, 2, 3, 4, 1, 1]);
+        assert!(heard::take(&s).is_empty(), "10 s past is kept");
+        assert_eq!(left(&s, "list", 7), 1);
+        assert_eq!(
+            heard::take(&s),
+            [
+                "AUCTION_ITEM_LIST_UPDATE 6/1",
+                "AUCTION_OWNED_LIST_UPDATE 6/0"
+            ],
+            "the bidder list owes its tail"
+        );
+        let counts = "local a, b = GetNumAuctionItems('list') local c, d = \
+                      GetNumAuctionItems('bidder') return a, b, c, d";
+        assert_eq!(
+            s.eval::<(i64, i64, i64, i64)>(counts).unwrap(),
+            (6, 9, 0, 3)
+        );
+        s.set_auction(Some(state));
+        assert_eq!(
+            s.eval::<(i64, i64, i64, i64)>(counts).unwrap(),
+            (6, 9, 0, 3)
+        );
+        assert_eq!(left(&s, "list", 7), 0, "a row past the list");
+        assert_eq!(left(&s, "list", 0), 0);
+        assert_eq!(left(&s, "auction", 1), 0);
+        assert_eq!(left(&s, "LIST", 6), 1);
+    }
+
     #[test]
     fn the_selection_follows_its_auction_through_a_resort() {
         let mut s = UiScript::new().unwrap();
@@ -1602,6 +1694,130 @@ mod tests {
         heard::take(&s);
         s.run("ClickAuctionSellItemButton()").unwrap();
         assert_eq!(heard::take(&s), ["CURSOR_UPDATE none"]);
+    }
+
+    /// `ClickAuctionSellItemButton`'s refusals (`0x4ce360`-`0x4ce4f1`), in the reference's order:
+    /// each shows its error (`0x496720`) and returns, the cursor kept, the slot holding what it
+    /// held and nothing signalled. A bound item (`0x5da2c0`) is `ERR_AUCTION_QUEST_ITEM` for quest
+    /// bonding 4 or 5 and `ERR_AUCTION_BOUND_ITEM` otherwise, a missing record included; then
+    /// `ERR_AUCTION_CONJURED_ITEM` for record flags `0x2` or `0x10000`, a nonzero
+    /// `ITEM_FIELD_DURATION`, an area or a map; then `ERR_AUCTION_BAG` for a container with an
+    /// item in a seat, `ERR_AUCTION_WRAPPED_ITEM` for `ITEM_FIELD_FLAGS & 8` and
+    /// `ERR_AUCTION_LOOT_ITEM` for record flags `& 4`. An item that passes them all attaches, one
+    /// with no record among them, whose flags read 0 (`0x5da2b3`).
+    #[test]
+    fn the_sell_slot_refuses_in_the_references_order() {
+        use crate::script::container::{ContainerSlot, ContainerState};
+        use crate::script::tick::heard;
+        use crate::script::ItemTemplateView;
+        let mut s = UiScript::new().unwrap();
+        // `(bound, ITEM_FIELD_FLAGS, ITEM_FIELD_DURATION, filled seats, record as (flags,
+        // bonding, area, map))` per backpack slot, and what the click answers.
+        type Record = Option<(u32, u32, u32, u32)>;
+        type Case = (bool, u32, u32, Option<u32>, Record, Option<&'static str>);
+        #[rustfmt::skip]
+        let cases: [Case; 14] = [
+            (true, 0, 0, None, Some((0, 4, 0, 0)), Some("ERR_AUCTION_QUEST_ITEM")),
+            (true, 0, 0, None, Some((0x2, 5, 12, 0)), Some("ERR_AUCTION_QUEST_ITEM")),
+            (true, 0, 0, None, Some((0, 1, 0, 0)), Some("ERR_AUCTION_BOUND_ITEM")),
+            (true, 0, 0, None, None, Some("ERR_AUCTION_BOUND_ITEM")),
+            (false, 0, 0, None, Some((0x2, 0, 0, 0)), Some("ERR_AUCTION_CONJURED_ITEM")),
+            (false, 0, 0, None, Some((0x10000, 0, 0, 0)), Some("ERR_AUCTION_CONJURED_ITEM")),
+            (false, 0, 60_000, Some(2), Some((0, 0, 0, 0)), Some("ERR_AUCTION_CONJURED_ITEM")),
+            (false, 0, 0, None, Some((0, 0, 12, 0)), Some("ERR_AUCTION_CONJURED_ITEM")),
+            (false, 0, 0, None, Some((0, 0, 0, 33)), Some("ERR_AUCTION_CONJURED_ITEM")),
+            (false, 0x8, 0, Some(2), Some((0x4, 0, 0, 0)), Some("ERR_AUCTION_BAG")),
+            (false, 0x8, 0, None, Some((0x4, 0, 0, 0)), Some("ERR_AUCTION_WRAPPED_ITEM")),
+            (false, 0, 0, None, Some((0x4, 0, 0, 0)), Some("ERR_AUCTION_LOOT_ITEM")),
+            (false, 0, 0, Some(0), Some((0, 0, 0, 0)), None),
+            (false, 0, 0, None, None, None),
+        ];
+        let mut bag = ContainerState {
+            num_slots: 16,
+            ..Default::default()
+        };
+        for (i, &(bound, flags, duration, seats, record, _)) in cases.iter().enumerate() {
+            let slot = i as u32 + 1;
+            bag.slots.insert(
+                slot,
+                ContainerSlot {
+                    item_id: 1000 + slot,
+                    guid: 0x500 + u64::from(slot),
+                    count: 1,
+                    quality: record.map(|_| 1),
+                    already_bound: bound,
+                    flags,
+                    field_duration: duration,
+                    occupied_seats: seats,
+                    ..Default::default()
+                },
+            );
+            if let Some((flags, bonding, area, map)) = record {
+                s.set_item_template(
+                    1000 + slot,
+                    ItemTemplateView {
+                        flags,
+                        bonding,
+                        area,
+                        map,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+        s.set_container(0, Some(bag));
+        // A worn trinket with a lifetime, picked up off the doll.
+        let mut doll: crate::script::InventorySlots = Default::default();
+        doll[14] = Some(crate::script::InvSlotView {
+            item_id: 7000,
+            guid: 0x714,
+            field_duration: 3_600_000,
+            ..Default::default()
+        });
+        s.set_inventory_slots(doll);
+        heard::listen(
+            &s,
+            &["CURSOR_UPDATE", "NEW_AUCTION_UPDATE", "ITEM_LOCK_CHANGED"],
+            None,
+        );
+        let click = |s: &mut UiScript, pick: &str| {
+            s.run(&format!("ClearCursor() {pick}")).unwrap();
+            heard::take(s);
+            s.run("ClickAuctionSellItemButton()").unwrap();
+            (s.take_ui_errors(), heard::take(s))
+        };
+        // The last slot attaches first, so each refusal shows the slot left as it was.
+        let (errors, heard) = click(&mut s, "PickupContainerItem(0, 14)");
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(heard, ["CURSOR_UPDATE", "NEW_AUCTION_UPDATE"]);
+        let mut held = 14;
+        for (i, &(.., refusal)) in cases.iter().enumerate() {
+            let slot = i as u32 + 1;
+            let pick = format!("PickupContainerItem(0, {slot})");
+            let (errors, heard) = click(&mut s, &pick);
+            match refusal {
+                Some(key) => {
+                    assert_eq!((errors, heard), (vec![key], vec![]), "slot {slot}");
+                    assert_eq!(
+                        s.cursor_item().map(|c| c.slot),
+                        Some(slot),
+                        "slot {slot}: the cursor keeps it"
+                    );
+                }
+                None => {
+                    assert!(errors.is_empty(), "slot {slot}: {errors:?}");
+                    held = slot;
+                }
+            }
+            assert_eq!(s.auction_sell_item(), Some((0, held)), "slot {slot}");
+        }
+        let (errors, heard) = click(&mut s, "PickupInventoryItem(14)");
+        assert_eq!(
+            (errors, heard),
+            (vec!["ERR_AUCTION_CONJURED_ITEM"], vec![]),
+            "a worn item answers to its own ITEM_FIELD_DURATION"
+        );
+        assert_eq!(s.auction_sell_item(), Some((0, held)));
     }
 
     /// `StartAuction` (`0x4ce770`) sends and then runs the sell-slot clear in the verb
