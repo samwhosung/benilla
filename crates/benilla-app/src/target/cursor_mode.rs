@@ -540,6 +540,9 @@ struct CorpseFacts {
     skin_latch: bool,
     /// `d2`, centre to centre.
     dist_sq: f32,
+    /// Any loot target held (`[player+0x1d28/2c]` nonzero), which `CanLootNow` refuses
+    /// (`0x5ec1f6`).
+    loot_held: bool,
     /// The already-looting override: `[player+0x1d28/2c] == corpse GUID`.
     looting_this: bool,
     /// `CanAutoInteract`, which `CanLootNow` asks first and then skips its range (`0x5ec11b`).
@@ -550,10 +553,13 @@ struct CorpseFacts {
 }
 
 fn corpse_cursor(f: CorpseFacts) -> Option<(CursorKind, bool)> {
-    // Leg 1, lootable: able within `CanLootNow 0x5ec110`'s reach or while this corpse's loot
-    // window is open; Pickup or LootAll by key 0 (`0x41f8f0` at `0x4827f8`), grayed at `0x482818`.
+    // Leg 1, lootable: able where `CanLootNow 0x5ec110` allows (`0x4827d7`), its reach and no loot
+    // target held, or while this corpse's loot window is open (`0x4827e3`); Pickup or LootAll by
+    // key 0 (`0x41f8f0` at `0x4827f8`), grayed at `0x482818`.
     if f.lootable {
-        let able = f.can_auto_interact || f.dist_sq <= CORPSE_INTERACT_RANGE_SQ || f.looting_this;
+        let can_loot_now =
+            !f.loot_held && (f.can_auto_interact || f.dist_sq <= CORPSE_INTERACT_RANGE_SQ);
+        let able = can_loot_now || f.looting_this;
         return Some((loot_cursor(f.auto_loot, f.shift_held), !able));
     }
     // Leg 2, the PvP insignia (`0x482875..0x4828a2`), inert in 1.12.1 as no player holds a
@@ -716,12 +722,15 @@ pub(super) fn classify(
         let dead = store.0.unit_is_dead();
         if dead {
             if store.0.unit_lootable() {
-                // Grayed by `CanLootNow 0x5ec110`'s melee reach; the reference's mid-loot state
-                // block and open-loot-window override are not applied to units.
+                // Lit where `CanLootNow 0x5ec110` allows (`0x4824fe`), its melee reach and no loot
+                // target held, or over the unit being looted (`0x48250a`).
                 let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+                let held = loot_latch.0;
+                let can_loot_now = held.is_none() && (can_auto_interact || in_melee);
+                let looting_this = held.is_some() && held == hovered.guid;
                 return Some((
                     loot_cursor(loot_cfg.auto_loot, shift),
-                    !(can_auto_interact || in_melee),
+                    !(can_loot_now || looting_this),
                 ));
             }
             // Skin also needs the learn latch `[0xb700e4 + 4×isPlayerTarget]` (`0x482589`): a
@@ -763,6 +772,7 @@ pub(super) fn classify(
             insignia: store.0.corpse_pvp_insignia(),
             skin_latch: learned.skin_player_corpse.is_some(),
             dist_sq: corpse_tf.translation.distance_squared(self_tf.translation),
+            loot_held: loot_latch.0.is_some(),
             looting_this: loot_latch.0.is_some() && loot_latch.0 == hovered.corpse_guid,
             can_auto_interact,
             auto_loot: loot_cfg.auto_loot,

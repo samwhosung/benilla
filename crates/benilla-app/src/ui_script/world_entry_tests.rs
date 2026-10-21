@@ -471,11 +471,7 @@ fn sweep_lock_legs(world: &mut World) {
     let (tx, _rx) = crossbeam_channel::unbounded();
     world.insert_resource(crate::net::NetCommands(tx));
     world.init_resource::<crate::net::GuidIndex>();
-    world.init_resource::<crate::ui_loot::LootLatch>();
-    world.init_resource::<crate::ui_loot::AutoLootByte>();
-    world.init_resource::<crate::ui_party::GroupState>();
-    world.init_resource::<crate::ui_action::UiErrorKeys>();
-    world.init_resource::<Messages<crate::target::DeselectGuid>>();
+    crate::ui_loot::seat_loot_steps(world);
     world.init_resource::<crate::ui_mail::MailOpen>();
     world.init_resource::<crate::ui_auction::AuctionOpen>();
     world.init_resource::<crate::ui_merchant::MerchantOpen>();

@@ -149,10 +149,12 @@ impl WindowPacket<'_, '_> {
         if self.loot.source().is_none() || self.loot.has_contents(&self.objects) {
             return;
         }
+        let owed = self.loot.owed_unlocks();
         let closed = super::close_interaction(&mut self.loot, &mut self.latch, Some(&self.net));
         if let Some(guid) = closed {
             debug!("net: loot emptied — release {guid:#x}");
         }
+        self.loot.defer_close_unlocks(owed);
         self.dead.after_close(closed);
     }
 }
@@ -162,9 +164,11 @@ fn on_release_response(
     mut loot: ResMut<LootState>,
     mut latch: ResMut<LootLatch>,
     mut dead: super::DeadUnitDeselect,
+    objects: crate::net::Objects,
 ) {
     if let SessionEvent::LootReleaseResponse { guid, result } = ev {
-        dead.after_close(loot_release_response(guid, result, &mut loot, &mut latch));
+        let closed = loot_release_response(guid, result, &mut loot, &mut latch, &objects);
+        dead.after_close(closed);
     }
 }
 
@@ -193,14 +197,17 @@ fn on_item_push_result(
     }
 }
 
-/// The open window and the latch die with the session, unconditionally.
+/// The open window, the latch and the auto-loot byte die with the session, unconditionally: the
+/// next player object is built with both at 0 (`0x5dd403`, `0x5dd40f`).
 fn on_session_end(
     In(_): In<SessionEvent>,
     mut loot: ResMut<LootState>,
     mut latch: ResMut<LootLatch>,
+    mut byte: ResMut<super::AutoLootByte>,
 ) {
     loot.clear_session();
     latch.0 = None;
+    byte.0 = false;
 }
 
 /// The `loot_type`s a cold latch admits (`0x5eb94b`, `0x5eb953`, `0x5eb95b`): pickpocketing,
@@ -293,11 +300,12 @@ fn loot_refusal(reason: u8) -> LootRefusal {
     LootRefusal { key, releases }
 }
 
-/// `SMSG_LOOT_RESPONSE`'s error shape: the arm's message by key, as `DisplayError(stringId)` takes
-/// its surface and voice from the record; a releasing arm drops the latch and runs
-/// `UnlockItem 0x495420` on the packet's guid (the tail `0x5ebac2`, `0x5ebae0`). There is no admission gate
-/// here: a guid-mismatched error still shows and keeps the latch, where the reference refuses it
-/// at `0x5eb963`, clearing the latch and showing nothing.
+/// `SMSG_LOOT_RESPONSE`'s error shape. Only for the held loot target (`0x5eb936`-`0x5eb93e`): the
+/// arm's message by key, as `DisplayError(stringId)` takes its surface and voice from the record,
+/// and a releasing arm drops the target and runs `UnlockItem 0x495420` on the packet's guid (the
+/// tail `0x5ebac2`, `0x5ebae0`). A refusal for any other guid, or with no target held, takes the
+/// refusal leg (`0x5eb944` → `0x5eb963`): no line, the target cleared whatever it held
+/// (`0x5eb9d2`) and the guid unlocked (`0x5eb9de`).
 fn loot_error(
     guid: u64,
     error: u8,
@@ -305,12 +313,17 @@ fn loot_error(
     latch: &mut LootLatch,
     loot: &mut LootState,
 ) {
+    if latch.0 != Some(guid) {
+        debug!("net: loot error {error} on {guid:#x}, not the loot target — dropped");
+        latch.0 = None;
+        loot.unlock_item(guid);
+        return;
+    }
     let LootRefusal { key, releases } = loot_refusal(error);
     debug!("net: loot error {error} on {guid:#x} → {key} (releases: {releases})");
     errors.push(UiError::key(key));
     if releases {
-        // Guid-matched: the tail's store is unconditional, but only a matching latch reaches it.
-        latch.clear_for(guid);
+        latch.0 = None;
         loot.unlock_item(guid);
     }
 }
@@ -335,6 +348,7 @@ fn loot_release_response(
     result: u8,
     loot: &mut LootState,
     latch: &mut LootLatch,
+    objects: &crate::net::Objects,
 ) -> Option<u64> {
     if result == 0 || latch.0 != Some(guid) {
         debug!(
@@ -345,9 +359,9 @@ fn loot_release_response(
     }
     debug!("net: loot released {guid:#x}");
     latch.0 = None;
-    // The handler's close has `dl` clear (`0x5ec0ef`), so a disenchant window with rows left is
+    // The handler's close has `dl` clear (`0x5ec0ef`), so a disenchant window with contents is
     // swept instead, by the feed.
-    if loot.disenchant_holds() {
+    if loot.disenchant_hold(objects) {
         loot.owe_sweep();
         return None;
     }
@@ -537,14 +551,16 @@ mod tests {
         }
     }
 
-    /// The reference's behaviour: the tail's store is unconditional, but the error leg is reached
-    /// only through `0x5eb93e`, which already required a matching latch.
+    /// The error leg is reached only through `0x5eb93e`, a matching target; a refusal for another
+    /// guid takes the refusal leg (`0x5eb963`), which shows nothing and clears the target whatever
+    /// it held (`0x5eb9d2`).
     #[test]
-    fn the_error_legs_clear_is_guid_matched() {
+    fn a_refusal_for_another_guid_clears_the_target_and_shows_nothing() {
         let errors = UiErrorKeys::default();
         let mut latch = LootLatch(Some(CHEST));
         loot_error(CORPSE, 8, &errors, &mut latch, no_item!());
-        assert_eq!(latch.0, Some(CHEST));
+        assert_eq!(latch.0, None);
+        assert!(errors.snapshot().is_empty());
     }
 
     /// A GameObject guid: a chest.
@@ -876,6 +892,16 @@ mod tests {
     #[test]
     fn a_release_on_a_disenchant_window_with_rows_left_owes_its_sweep() {
         let mut world = opened_lockbox_world();
+        // The disenchanted item, which `LootHasContents` resolves (`0x4c2a8c`).
+        let item = world
+            .spawn(crate::net::ObjectStore(
+                benilla_protocol::messages::ObjectFields::from_pairs(&[(2, 0x3)]),
+            ))
+            .id();
+        world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(LOCKBOX, item);
         world.resource_mut::<LootState>().open(
             LOCKBOX,
             benilla_protocol::messages::loot_type::DISENCHANTING,
@@ -1313,10 +1339,7 @@ mod tests {
     /// word at `player`'s.
     fn seat_drain(world: &mut World, player: crate::player::Player) {
         world.insert_resource(player);
-        world.init_resource::<crate::ui_party::GroupState>();
-        world.init_resource::<crate::items::Items>();
-        world.init_resource::<crate::ui_action::UiErrorKeys>();
-        world.init_resource::<bevy::ecs::message::Messages<crate::sound::LootPickupSound>>();
+        super::super::seat_loot_steps(world);
     }
 
     /// The deselects asked for since the last call.
@@ -1394,8 +1417,9 @@ mod tests {
         }
     }
 
-    /// The copier `0x4c1cb0` sweeps an auto-loot window (`0x4c1fa0`) before the response's
-    /// movement close (`0x5ebc51`), so a body auto-looted on the run is taken, then released.
+    /// With the byte the click stored set, the copier `0x4c1cb0` sweeps the window (`0x4c1fa0`)
+    /// before the response's movement close (`0x5ebc51`), so a body auto-looted on the run is
+    /// taken, then released.
     #[test]
     fn auto_loot_on_the_run_takes_the_rows_before_the_release() {
         const TOUGH_JERKY: u32 = 117;
@@ -1411,18 +1435,15 @@ mod tests {
                 TOUGH_JERKY,
                 Some(crate::items::test_template("Tough Jerky")),
             );
-        app.insert_resource(super::super::LootConfig {
-            auto_loot: true,
-            ..Default::default()
-        })
-        .init_resource::<crate::ui_chat::ChatLog>()
-        .init_resource::<crate::names::NameCache>()
-        .init_resource::<ButtonInput<KeyCode>>()
-        .insert_non_send_resource(benilla_ui::script::UiScript::new().expect("VM"))
-        .add_systems(
-            Update,
-            (super::super::feed_loot, super::super::drain_loot).chain(),
-        );
+        app.insert_resource(super::super::AutoLootByte(true))
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::names::NameCache>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .insert_non_send_resource(benilla_ui::script::UiScript::new().expect("VM"))
+            .add_systems(
+                Update,
+                (super::super::feed_loot, super::super::drain_loot).chain(),
+            );
 
         app.world_mut().resource_mut::<LootLatch>().0 = Some(CORPSE);
         app.world_mut()

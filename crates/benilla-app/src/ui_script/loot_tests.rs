@@ -68,7 +68,6 @@ fn coin_and_two_items() -> LootState {
     LootState {
         source_unit: false,
         has_money: true,
-        fishing: false,
         master_candidates: Vec::new(),
         rows: vec![
             Some(LootRow {
@@ -309,7 +308,6 @@ fn loot_empty_roll_plays_the_empty_open_kit() {
     s.set_loot(Some(LootState {
         source_unit: false,
         has_money: false,
-        fishing: false,
         master_candidates: Vec::new(),
         rows: vec![],
     }));
@@ -342,9 +340,8 @@ fn fishing_loot_open_plays_the_reel_and_swaps_the_portrait() {
         })
     };
 
-    let mut fished = coin_and_two_items();
-    fished.fishing = true;
-    s.set_loot(Some(fished));
+    s.set_loot_type(3);
+    s.set_loot(Some(coin_and_two_items()));
     s.fire_event("LOOT_OPENED", vec![]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
     assert_eq!(
@@ -364,6 +361,7 @@ fn fishing_loot_open_plays_the_reel_and_swaps_the_portrait() {
 
     s.fire_event("LOOT_CLOSED", vec![]);
     let _ = s.take_sounds();
+    s.set_loot_type(1);
     s.set_loot(Some(coin_and_two_items()));
     s.fire_event("LOOT_OPENED", vec![]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
@@ -407,7 +405,6 @@ fn shipped_loot_frame_pages_five_items() {
     s.set_loot(Some(LootState {
         source_unit: false,
         has_money: false,
-        fishing: false,
         master_candidates: Vec::new(),
         rows: rows.clone(),
     }));
@@ -449,7 +446,6 @@ fn shipped_loot_frame_pages_five_items() {
     s.set_loot(Some(LootState {
         source_unit: false,
         has_money: false,
-        fishing: false,
         master_candidates: Vec::new(),
         rows: cleared,
     }));
@@ -617,7 +613,6 @@ fn ctrl_and_shift_on_a_loot_row_preview_and_post_without_looting() {
     s.set_loot(Some(LootState {
         source_unit: false,
         has_money: true,
-        fishing: false,
         master_candidates: Vec::new(),
         rows: vec![
             Some(LootRow {
@@ -753,7 +748,6 @@ fn shipped_loot_frame_hands_a_master_row_to_a_candidate() {
     s.set_loot(Some(LootState {
         source_unit: false,
         has_money: false,
-        fishing: false,
         master_candidates: vec![Some("Thrall".into()), Some("Cairne".into())],
         rows: vec![row("Wool Cloth", 2), row("Thunderfury", 4)],
     }));
@@ -892,7 +886,6 @@ fn the_master_loot_menu_groups_raid_candidates_by_subgroup() {
     s.set_loot(Some(LootState {
         source_unit: false,
         has_money: false,
-        fishing: false,
         master_candidates: candidates,
         rows: vec![Some(LootRow {
             item_id: 17182,
@@ -1077,7 +1070,6 @@ fn loot_row_awaiting_its_template_opens_clean() {
     s.set_loot(Some(LootState {
         source_unit: false,
         has_money: false,
-        fishing: false,
         master_candidates: Vec::new(),
         rows: vec![Some(LootRow {
             item_id: 2582,
@@ -1139,7 +1131,6 @@ fn loot_row_awaiting_its_template_opens_clean() {
     s.set_loot(Some(LootState {
         source_unit: false,
         has_money: false,
-        fishing: false,
         master_candidates: Vec::new(),
         rows: vec![Some(LootRow {
             item_id: 2582,

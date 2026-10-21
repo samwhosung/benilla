@@ -145,8 +145,7 @@ pub(crate) struct ScriptItemUse<'w, 's> {
     equip_sound: MessageWriter<'w, crate::sound::AutoEquipSound>,
     item_text: ResMut<'w, crate::ui_item_text::ItemTextOpen>,
     targeting: crate::spell::cast_target::CastTargeting<'w, 's>,
-    // The loot latch the open arm sets, so `SMSG_LOOT_RESPONSE` admits an item loot, is the
-    // ladder's (`CastLadder::loot_latch`).
+    // The item use's casts and sends.
     ladder: crate::spell::CastLadder<'w, 's>,
     ui_errors: Res<'w, crate::ui_action::UiErrorKeys>,
     gate: crate::ui_bind_confirm::BindGate<'w>,
@@ -212,8 +211,13 @@ impl ScriptItemUse<'_, '_> {
     }
 
     /// `UseContainerItem(bag, slot)` outside repair mode: the arm the call took, sent. The call
-    /// chose it and took its lock ([`benilla_ui::script::UseArm`]), so this only sends.
-    pub(crate) fn use_container_item(&mut self, script: &mut UiScript, call: ContainerUse) {
+    /// chose it and took its lock ([`benilla_ui::script::UseArm`]), so this only sends; an item
+    /// that opens is handed back for the loot window's `OpenItem` ([`crate::ui_loot::OpenItem`]).
+    pub(crate) fn use_container_item(
+        &mut self,
+        script: &mut UiScript,
+        call: ContainerUse,
+    ) -> Option<crate::ui_loot::OpenItem> {
         let Self {
             self_q,
             merchant,
@@ -246,7 +250,7 @@ impl ScriptItemUse<'_, '_> {
                     guid: item_guid,
                 },
             );
-            return;
+            return None;
         }
         let slot0 = u8::try_from(slot.saturating_sub(1)).ok();
         // The slot must still hold the item the call resolved (`0x4fa1a6`). The reference sends
@@ -265,7 +269,7 @@ impl ScriptItemUse<'_, '_> {
             if arm_locked(arm) {
                 script.unlock_item(item_guid);
             }
-            return;
+            return None;
         };
         let fork = match arm {
             UseArm::Withdraw => {
@@ -274,7 +278,7 @@ impl ScriptItemUse<'_, '_> {
                     bag: bag_index,
                     slot: wire_slot,
                 });
-                return;
+                return None;
             }
             UseArm::Deposit => {
                 debug!("ui_items: deposit (lua bag {bag} → wire {bag_index}/{wire_slot})");
@@ -282,14 +286,14 @@ impl ScriptItemUse<'_, '_> {
                     bag: bag_index,
                     slot: wire_slot,
                 });
-                return;
+                return None;
             }
             // The whole stack sells (`CMSG_SELL_ITEM`, count 0).
             UseArm::Sell => {
                 let Some(vendor) = merchant.vendor else {
                     debug!("ui_items: sale of {item_guid:#x} with no vendor open — let go");
                     script.unlock_item(item_guid);
-                    return;
+                    return None;
                 };
                 debug!("ui_items: sell lua bag {bag} slot {slot} (item {item_guid:#x})");
                 let _ = ladder.commands.0.send(ClientCommand::SellItem {
@@ -297,7 +301,7 @@ impl ScriptItemUse<'_, '_> {
                     item_guid,
                     count: 0,
                 });
-                return;
+                return None;
             }
             UseArm::Item(fork) => fork,
         };
@@ -400,21 +404,18 @@ impl ScriptItemUse<'_, '_> {
                     );
                 }
             }
-            // The server answers with a loot window on the item (`SpellHandler.cpp:227`). The send
-            // tests neither the lock id nor the unlocked bit, so a locked box sends and the
-            // server's `EQUIP_ERR_ITEM_LOCKED` is the "Item is locked" line. The loot latch on the
-            // item's guid goes up before the send (`0x5edcc0`), as the call's lock did
-            // (`0x5edcd9`); the admission gate refuses the type-1 `SMSG_LOOT_RESPONSE` without it.
-            // No kneel (`0x612710`).
+            // `OpenItem 0x5edc80`, whose auto-loot byte, loot target and send are the loot
+            // window's. The server answers with a loot window on the item
+            // (`SpellHandler.cpp:227`). The send tests neither the lock id nor the unlocked bit,
+            // so a locked box sends and the server's `EQUIP_ERR_ITEM_LOCKED` is the "Item is
+            // locked" line. No kneel (`0x612710`).
             (UseFork::Open, Some(c)) => {
                 debug!(
                     "ui_items: open item {:#x} (lua bag {bag} → wire {bag_index}/{wire_slot})",
                     c.guid
                 );
-                if let Some(latch) = ladder.loot_latch.as_deref_mut() {
-                    latch.0 = Some(c.guid);
-                }
-                let _ = ladder.commands.0.send(ClientCommand::OpenItem {
+                return Some(crate::ui_loot::OpenItem {
+                    guid: c.guid,
                     bag_index,
                     slot: wire_slot,
                 });
@@ -427,7 +428,7 @@ impl ScriptItemUse<'_, '_> {
                     if arm_locked(arm) {
                         script.unlock_item(item_guid);
                     }
-                    return;
+                    return None;
                 }
                 debug!("ui_items: use item (lua bag {bag} → wire {bag_index}/{wire_slot})");
                 super::send_item_use(
@@ -451,6 +452,7 @@ impl ScriptItemUse<'_, '_> {
                 );
             }
         }
+        None
     }
 }
 
@@ -765,19 +767,23 @@ pub(super) fn drain_container_destroys(
 }
 
 /// The bag clicks of a harness's VM ([`UiScript::keep_calls`]): the repair-mode drain, then the
-/// kept `UseContainerItem` calls through their applier, as the app's host applies each inside its
-/// verb.
+/// kept `UseContainerItem` calls through their applier and an open through the loot window's, as
+/// the app's host applies each inside its verb.
 #[cfg(test)]
 fn run_container_clicks(world: &mut World) {
     use benilla_ui::script::ScriptCall;
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy::ecs::system::{ParamSet, RunSystemOnce};
+    crate::ui_loot::seat_loot_steps(world);
     world.run_system_once(drain_container_repairs).unwrap();
     world
         .run_system_once(
-            |mut script: NonSendMut<UiScript>, mut items: ScriptItemUse| {
+            |mut script: NonSendMut<UiScript>,
+             mut set: ParamSet<(ScriptItemUse, crate::ui_loot::LootSteps)>| {
                 for call in script.take_script_calls() {
                     if let ScriptCall::UseContainerItem(call) = call {
-                        items.use_container_item(&mut script, call);
+                        if let Some(open) = set.p0().use_container_item(&mut script, call) {
+                            let _ = set.p1().open_item(&mut script, open);
+                        }
                     }
                 }
             },
@@ -874,7 +880,7 @@ mod tests {
 
         app.insert_non_send_resource(harness_vm());
         feed_clam(&mut app);
-        app.init_resource::<ButtonInput<KeyCode>>();
+        crate::ui_loot::seat_loot_steps(app.world_mut());
         if shift {
             app.world_mut()
                 .resource_mut::<ButtonInput<KeyCode>>()
@@ -977,11 +983,7 @@ mod tests {
     fn a_shift_open_stores_the_byte_and_sweeps_an_open_window_first() {
         const CORPSE: u64 = 0xF130_0000_0000_00AB;
         const LINEN: u32 = 2589;
-        let seat = |app: &mut App| {
-            app.init_resource::<crate::ui_loot::AutoLootByte>()
-                .init_resource::<crate::ui_loot::LootState>();
-        };
-        let (app, rx) = open_the_clam_with(true, seat);
+        let (app, rx) = open_the_clam_with(true, |_| {});
         assert!(matches!(
             rx.try_iter().collect::<Vec<_>>()[..],
             [ClientCommand::OpenItem { .. }]
@@ -989,7 +991,6 @@ mod tests {
         assert!(app.world().resource::<crate::ui_loot::AutoLootByte>().0);
 
         let (_app, rx) = open_the_clam_with(true, |app| {
-            seat(app);
             let corpse = app
                 .world_mut()
                 .spawn(ObjectStore(ObjectFields::from_pairs(&[(2, 0x9)])))

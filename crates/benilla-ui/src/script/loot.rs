@@ -24,12 +24,15 @@ pub enum LootCall {
     Close { failed: bool },
     /// `GiveMasterLoot(slot, candidateIndex)` (`0x4c2940`).
     GiveMaster { slot: u32, candidate: u32 },
+    /// `SetAutoLoot(byte)` (`0x5df460`), which the engine's interactions make, never a verb.
+    SetAutoLoot(bool),
     /// The rest of a loot call once the handlers its signal ran have returned, as the
     /// reference's function goes on after `SignalEvent` runs them in place: the bind stash after
     /// `LOOT_BIND_CONFIRM` (`0x4c2917` after `0x4c290f`), the coin click's close after
     /// `LOOT_SLOT_CLEARED` (`0x4c286a` after `0x4c2862`). No verb makes it; the host's tail for
-    /// the call does ([`UiScript::resume_loot`]).
-    Resume,
+    /// the call does ([`UiScript::resume_loot`]), down to the depth of what the call owed when it
+    /// began, so a call owing several steps runs each.
+    Resume { depth: usize },
 }
 
 /// `CLootButton`'s own Lua method table (`0x847ce4`): one entry, per the registrar's `mov edx,1`.
@@ -87,8 +90,6 @@ pub struct LootState {
     pub rows: Vec<Option<LootRow>>,
     /// The money cell is nonzero (`0xb71ba0`): row 1 is the coin row, taken (-1) or not.
     pub has_money: bool,
-    /// `IsFishingLoot` (wire `loot_type` 3): the reel-in sound and portrait (`LootFrame.lua:137`).
-    pub fishing: bool,
     /// The names `GetMasterLootCandidate(i)` answers by 1-based slot, from `SMSG_LOOT_MASTER_LIST`.
     /// Not packed: in a raid each candidate sits in their subgroup's five-slot block, which the
     /// dropdown labels "Group N" (`LootFrame.lua:197-213`). A `None` (an empty slot, or a name not
@@ -103,6 +104,9 @@ pub struct LootState {
 /// The portrait key `SetLootPortrait` binds a texture to, which the app bakes from the loot
 /// source. Upper case, so no `SetPortraitTexture` token, which is lowercased, can name it.
 pub const LOOT_PORTRAIT_UNIT: &str = "LOOT";
+
+/// The wire `loot_type` of fishing loot.
+const FISHING: u8 = 3;
 
 impl LootState {
     /// `GetNumLootItems` (`0x4c2260`): the last occupied row's position plus one (`0x4c2281`), plus
@@ -121,16 +125,31 @@ impl super::UiScript {
         self.model_mut().loot = state;
     }
 
+    /// The loot type cell (`0xb71bbc`), which the copier stores (`0x4c1dd6`) and no close clears:
+    /// `IsFishingLoot` reads it, window or not.
+    pub fn set_loot_type(&mut self, loot_type: u8) {
+        self.model_mut().loot_type = loot_type;
+    }
+
+    /// `SetAutoLoot` (`0x5df460`) as a call, the interaction's: the byte stored, and with a loot
+    /// target held a sweep of the open window. Inside an engine turn it applies as the turn ends.
+    pub fn set_auto_loot(&mut self, byte: bool) {
+        let lua = self.lua().clone();
+        if let Err(e) = super::calls::submit(&lua, ScriptCall::Loot(LootCall::SetAutoLoot(byte))) {
+            self.model_mut().record_lua_error(&e);
+        }
+    }
+
     /// The loot the VM shows now, as the last push or a call left it.
     pub fn shown_loot(&self) -> Option<LootState> {
         self.model_ref().loot.clone()
     }
 
-    /// Make [`LootCall::Resume`], for the host's tail to a loot call whose signal's handlers have
-    /// run; a refusal is reported as a script error.
-    pub fn resume_loot(&mut self) {
+    /// Make [`LootCall::Resume`] down to `depth`, for the host's tail to a loot call whose signal's
+    /// handlers have run; a refusal is reported as a script error.
+    pub fn resume_loot(&mut self, depth: usize) {
         let lua = self.lua().clone();
-        if let Err(e) = super::calls::submit(&lua, ScriptCall::Loot(LootCall::Resume)) {
+        if let Err(e) = super::calls::submit(&lua, ScriptCall::Loot(LootCall::Resume { depth })) {
             self.model_mut().record_lua_error(&e);
         }
     }
@@ -278,8 +297,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "IsFishingLoot",
         lua.create_function(|lua, ()| {
+            // `0x4c2740` reads the type cell unguarded: a close leaves it.
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(flag(model.loot.as_ref().is_some_and(|l| l.fishing)))
+            Ok(flag(model.loot_type == FISHING))
         })?,
     )?;
 
@@ -475,7 +495,6 @@ mod tests {
                     random_property_id: 0,
                 }),
             ],
-            fishing: false,
         }
     }
 
@@ -532,10 +551,14 @@ mod tests {
         assert!(s.eval::<bool>("return GetLootSlotLink(3) == nil").unwrap());
 
         assert!(s.eval::<bool>("return not IsFishingLoot()").unwrap());
-        let mut fished = loot();
-        fished.fishing = true;
-        s.set_loot(Some(fished));
+        s.set_loot_type(3);
         assert!(s.eval::<bool>("return IsFishingLoot()").unwrap());
+        s.set_loot(None);
+        assert!(
+            s.eval::<bool>("return IsFishingLoot()").unwrap(),
+            "the type cell, not the window"
+        );
+        s.set_loot_type(1);
         s.set_loot(Some(loot()));
 
         assert!(s.eval::<bool>("return GetLootSlotInfo(9) == nil").unwrap());

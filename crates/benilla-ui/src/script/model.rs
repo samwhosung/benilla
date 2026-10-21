@@ -931,6 +931,8 @@ pub(crate) struct Model {
     /// The open loot as the app pushed it; the verbs over it are script calls
     /// ([`loot::LootCall`]).
     pub(crate) loot: Option<loot::LootState>,
+    /// The loot type cell (`0xb71bbc`), which outlives the window.
+    pub(crate) loot_type: u8,
 
     /// The open group-loot rolls, and the `RollOnLoot` `(roll_id, roll_type)` votes.
     pub(crate) loot_rolls: loot_roll::LootRollsState,
@@ -1764,6 +1766,7 @@ impl Model {
             craft_selection: 0,
             craft_close: false,
             loot: None,
+            loot_type: 0,
             pending_equip_answers: Vec::new(),
             bind_on_use_confirms: Vec::new(),
             loot_rolls: loot_roll::LootRollsState::default(),

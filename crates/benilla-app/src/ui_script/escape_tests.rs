@@ -81,7 +81,6 @@ fn escape_closes_bag_and_panel_releases_loot_and_keeps_the_held_item() {
     s.set_loot(Some(LootState {
         source_unit: false,
         has_money: false,
-        fishing: false,
         master_candidates: Vec::new(),
         rows: vec![Some(LootRow {
             item_id: 0,

@@ -20,7 +20,7 @@ use crate::ui_items::KEYRING_CONTAINER;
 use crate::ui_party::{GroupState, GROUP_MEMBER_SUBGROUP};
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 
-pub(crate) use calls::LootSteps;
+pub(crate) use calls::{interaction_byte, LootSteps, OpenItem};
 
 #[cfg(test)]
 mod call_tests;
@@ -102,8 +102,8 @@ struct Window {
     items: Vec<LootItem>,
     /// Wire slots taken by anyone (`SMSG_LOOT_REMOVED`), left as gaps.
     taken: Vec<u8>,
-    /// The wire `loot_type` (`0x4c2740`): fishing for `IsFishingLoot()`, and a disenchant window
-    /// with rows left survives a close.
+    /// The wire `loot_type`, the cell `0xb71bbc` (`0x4c2740`) a close leaves: fishing for
+    /// `IsFishingLoot()`, and a disenchant window with rows left survives a close.
     loot_type: u8,
     /// The window's master-loot candidates (`SMSG_LOOT_MASTER_LIST`), in wire order.
     master_candidates: Vec<u64>,
@@ -204,6 +204,13 @@ impl Window {
 enum Step {
     /// A removal (`0x4c1f00`, `0x4c2750`) or a close (`0x4c1cb0(0)`).
     Changed(Window),
+    /// The coin row's clear with no window open (`0x4c2750`), which still signals
+    /// `LOOT_SLOT_CLEARED` with its row (`0x4c276f`).
+    SlotCleared(u32),
+    /// The unlocks of a close a packet asked for (`0x48f2bd`, `0x4c1d36`), signalled in their
+    /// place: after the removal's `LOOT_SLOT_CLEARED`, before the close's `LOOT_CLOSED`. Each is
+    /// flagged when it needs a live item object.
+    Unlocks(Vec<(u64, bool)>),
     /// A response's copier (`0x4c1cb0`): the session it ends, then this window.
     Opened(Window),
 }
@@ -241,6 +248,9 @@ pub(crate) struct LootState {
     /// copier returns with a fetch outstanding (`0x4c1ea6`) and the cache callback ends it at the
     /// last arrival (`0x4c2afc`).
     copier_due: bool,
+    /// `0xb71bc4`: a sweep of this session has run (`0x4c221e`), so the next prints no money line
+    /// (`0x4c2008`); the session's end clears it (`0x4c1d95`).
+    coin_line_shown: bool,
     /// What the loot steps owe once their signals' handlers have run, innermost last
     /// ([`calls::Then`]).
     then: Vec<calls::Then>,
@@ -250,9 +260,11 @@ impl LootState {
     /// The copier (`0x4c1cb0`) at a response: it ends the session in progress, then fills the
     /// window; quest items ride the same rows at `slot = items.len() + i`.
     pub(crate) fn open(&mut self, source: u64, loot_type: u8, gold: u32, items: Vec<LootItem>) {
-        // The ending unlocks an item source (`0x5ebc35` → `0x48f3a0` → `0x4c1d36`).
+        // The ending unlocks an item source (`0x5ebc35` → `0x48f3a0` → `0x4c1d36`) and clears
+        // the money line's flag (`0x4c1d95`).
         if let Some(old) = self.window.source {
             self.unlock_item_source(old);
+            self.coin_line_shown = false;
         }
         self.window = Window {
             source: Some(source),
@@ -290,14 +302,17 @@ impl LootState {
         true
     }
 
-    /// `ClearLootCoinRow` (`0x4c2750`): money above 0 goes to -1, the coin row a gap; whether it
-    /// was there (`0x4c2757`).
+    /// `ClearLootCoinRow` (`0x4c2750`): money above 0 goes to -1, the coin row a gap, whether a
+    /// window is open or not; whether it was there (`0x4c2757`).
     pub(crate) fn clear_money(&mut self) -> bool {
         if !self.window.has_coin() {
             return false;
         }
         self.take_coin();
-        self.steps.push(Step::Changed(self.window.clone()));
+        self.steps.push(match self.window.source {
+            Some(_) => Step::Changed(self.window.clone()),
+            None => Step::SlotCleared(1),
+        });
         true
     }
 
@@ -327,6 +342,7 @@ impl LootState {
     pub(crate) fn clear(&mut self) {
         if self.window.source.take().is_some() {
             self.steps.push(Step::Changed(self.window.clone()));
+            self.coin_line_shown = false; // `0x4c1d95`
         }
         self.copier_due = false;
         self.sweep_owed = false;
@@ -353,6 +369,24 @@ impl LootState {
         if benilla_protocol::guid::is_item(guid) {
             self.item_unlocks.push((guid, true));
         }
+    }
+
+    /// How many unlocks are owed, a mark for [`Self::defer_close_unlocks`].
+    pub(crate) fn owed_unlocks(&self) -> usize {
+        self.item_unlocks.len()
+    }
+
+    /// Signal the unlocks a close owed past `mark` in their place in the steps, ahead of its
+    /// teardown's step: for a close inside a packet, which the feed shows.
+    pub(crate) fn defer_close_unlocks(&mut self, mark: usize) {
+        let unlocks = self
+            .item_unlocks
+            .split_off(mark.min(self.item_unlocks.len()));
+        if unlocks.is_empty() {
+            return;
+        }
+        let at = self.steps.len().saturating_sub(1);
+        self.steps.insert(at, Step::Unlocks(unlocks));
     }
 
     /// Whether any unlock is owed.
@@ -386,13 +420,33 @@ impl LootState {
     }
 
     /// `0x48f200`'s early-out with `dl` clear (`0x48f245`-`0x48f26f`): a disenchant window
-    /// (`0x4c2740` == 4) with rows left (`0x4c2a70`) is not closed but swept (`0x48f264` →
-    /// `0x4c1fa0`), with no release, no latch clear and no `LOOT_CLOSED`. Every close with `dl`
-    /// clear tests it; the move-start close, `dl` set, returns instead (`0x48f25a`).
+    /// (`0x4c2740` == 4) with contents (`0x4c2a70`, its source resolving) is not closed but swept
+    /// (`0x48f264` → `0x4c1fa0`), with no release, no latch clear and no `LOOT_CLOSED`. Every
+    /// close with `dl` clear tests it; the move-start close, `dl` set, returns instead
+    /// (`0x48f25a`).
+    pub(crate) fn disenchant_hold(&self, objects: &crate::net::Objects) -> bool {
+        self.window.loot_type == benilla_protocol::messages::loot_type::DISENCHANTING
+            && self.has_contents(objects)
+    }
+
+    /// [`Self::disenchant_hold`] for the selection teardown's close, which holds no object manager:
+    /// a set source stands in for one that resolves (`0x4c2a8c`).
     pub(crate) fn disenchant_holds(&self) -> bool {
         self.window.source.is_some()
             && self.window.loot_type == benilla_protocol::messages::loot_type::DISENCHANTING
             && !self.window.is_empty()
+    }
+
+    /// `0xb71b44` above 0: a row's item record is still being fetched, counted from the copier
+    /// (`0x4c1e77`) until its callback (`0x4c2ac0`); a negative answer releases the row, as
+    /// [`templates_outstanding`] has it.
+    fn records_pending(&self, items: &Items) -> bool {
+        let w = &self.window;
+        w.items.iter().any(|it| {
+            !w.taken.contains(&it.slot)
+                && items.template(it.item_id, 0, Ask::Read).is_none()
+                && !items.template_answered_unknown(it.item_id)
+        })
     }
 
     /// Owe the hold's sweep to the feed, from a close with no VM at hand.
@@ -402,15 +456,14 @@ impl LootState {
 }
 
 /// The active player's auto-loot byte (`+0x1d30`): the copier's end sweeps while it is set
-/// (`0x4c1ec7`, `0x4c2b1d`), and the sweep clears it (`0x4c2219`). The reference's writer is the
-/// interaction's `SetAutoLoot` (`0x5df460`); the feed writes it at the response, from the keys held
-/// then ([`LootConfig::auto_loot`] inverted by Shift).
+/// (`0x4c1ec7`, `0x4c2b1d`), and the sweep clears it (`0x4c2219`). Each loot interaction stores it
+/// through `SetAutoLoot` (`0x5df460`), from the keys held then ([`interaction_byte`]).
 #[derive(Resource, Default)]
 pub(crate) struct AutoLootByte(pub(crate) bool);
 
 /// The loot CVars. `autoLootDefault` is not a 1.12 CVar: 1.12 auto-loots only on a shift-click.
-/// [`feed_loot`] sweeps the rows engine-side at the open, as the reference does, and a held Shift
-/// inverts the setting. `showLootSpam` is 1.12's Detailed Loot Information checkbox (`0xb4e2bc`,
+/// A held Shift inverts the setting at the interaction ([`interaction_byte`]), and [`feed_loot`]
+/// sweeps the rows engine-side at the open, as the reference does. `showLootSpam` is 1.12's Detailed Loot Information checkbox (`0xb4e2bc`,
 /// registered at `0x48fd1c`, default `"1"`), read only by the loot-roll line composers.
 #[derive(Resource)]
 pub(crate) struct LootConfig {
@@ -472,7 +525,7 @@ pub(crate) fn resolve_loot_kneel(
             benilla_protocol::EntityKind::Unit | benilla_protocol::EntityKind::Player => {
                 store.0.unit_health().unwrap_or(0) == 0
             }
-            // An item never kneels (`0x612797`); we stream none, so a lockbox latch never resolves.
+            // An item, which the bags stream, never kneels (`0x612797`).
             _ => false,
         });
     if kneel.0 != allowed {
@@ -665,7 +718,6 @@ fn snapshot(
     Some(LootSnapshot {
         rows,
         has_money: window.coin_slot,
-        fishing: window.loot_type == benilla_protocol::messages::loot_type::FISHING,
         master_candidates: who.names_for(window),
         // The feed's, which holds the object manager.
         source_unit: false,
@@ -822,8 +874,6 @@ fn feed_loot(
     icons: Option<Res<ItemDisplays>>,
     commands: Res<NetCommands>,
     chat: Res<crate::ui_chat::ChatLog>,
-    cfg: Res<LootConfig>,
-    keys: Res<ButtonInput<KeyCode>>,
     // The random-suffix catalogs: a loot slot has no item object to carry the roll.
     props: Option<Res<crate::items::RandomProperties>>,
     enchants: Option<Res<crate::items::Enchants>>,
@@ -878,28 +928,41 @@ fn feed_loot(
                     show(script, view(&w, Ask::Read));
                 }
             }),
+            Step::SlotCleared(row) => vm.turn(|script, _| {
+                if let Some(script) = script {
+                    script.fire_event("LOOT_SLOT_CLEARED", vec![ScriptValue::Int(i64::from(row))]);
+                }
+            }),
+            Step::Unlocks(unlocks) => vm.turn(|script, (steps, _)| {
+                if let Some(script) = script {
+                    fire_unlocks(script, unlocks, &steps.objects);
+                }
+            }),
             Step::Opened(w) => {
-                let waiting = vm.turn(|script, (mut steps, _)| {
-                    // The byte the interaction stored (`0x5df460`), read off the keys here.
-                    let shift =
-                        keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-                    steps.byte.0 = cfg.auto_loot != shift;
+                let waiting = vm.turn(|script, _| {
                     let Some(script) = script else {
                         return true;
                     };
-                    // The copier ends the session the VM shows (`0x4c1ccb`-`0x4c1dac`), then
-                    // fills the window and asks for each row's record (`0x4c1e77`).
+                    // The copier ends the session the VM shows (`0x4c1ccb`-`0x4c1dac`), stores the
+                    // type cell (`0x4c1dd6`), then fills the window and asks for each row's
+                    // record (`0x4c1e77`).
                     if script.shown_loot().is_some() {
                         show(script, None);
                     }
+                    script.set_loot_type(w.loot_type);
                     let snap = view(&w, Ask::Event(&commands));
                     let waiting = waits(&snap);
                     show(script, snap);
                     waiting
                 });
-                if Some(k) == last_open && !waiting && vm.own().0.loot.copier_due {
-                    let moving = std::mem::take(&mut vm.own().1 .0);
-                    end_open(&mut vm, moving);
+                if !waiting {
+                    if Some(k) != last_open {
+                        let moving = vm.own().1 .0;
+                        end_superseded_open(&mut vm, w, moving);
+                    } else if vm.own().0.loot.copier_due {
+                        let moving = std::mem::take(&mut vm.own().1 .0);
+                        end_open(&mut vm, moving);
+                    }
                 }
             }
         }
@@ -918,6 +981,8 @@ fn feed_loot(
         let Some(script) = script else {
             return false;
         };
+        // A new VM's type cell too (`/reload`): the C cell outlives the interface.
+        script.set_loot_type(steps.loot.window.loot_type);
         let snap = view(&steps.loot.window, Ask::Read);
         let ready = steps.loot.copier_due && !waits(&snap);
         show(script, snap);
@@ -934,6 +999,35 @@ fn feed_loot(
     }
     still.append(&mut s.loot.receives);
     s.loot.receives = still;
+}
+
+/// The copier end of a response a later one in the same frame replaced, which the reference ran
+/// inside its own packet's dispatch (`0x4c1ea8`-`0x4c1ee6`) before the next arrived: on its own
+/// window, which the live cells take for the while, then the next copier's resets over what it
+/// left (`0x4c1d95`, `0x4c1def`, `0x4c1df5`). What it closes it releases; its teardown's step is
+/// the replacing window's to show.
+fn end_superseded_open<X: bevy::ecs::system::SystemParam + 'static>(
+    vm: &mut VmWith<(LootSteps<'static, 'static>, X)>,
+    own: Window,
+    moving: bool,
+) {
+    let (live, mark) = {
+        let (mut s, _) = vm.own();
+        (
+            std::mem::replace(&mut s.loot.window, own),
+            s.loot.steps.len(),
+        )
+    };
+    end_open(vm, moving);
+    let (mut s, _) = vm.own();
+    let loot = &mut *s.loot;
+    loot.window = live;
+    loot.steps.truncate(mark);
+    loot.copier_due = true;
+    loot.coin_line_shown = false;
+    loot.sweep_owed = false;
+    loot.pending_bind_confirm = None;
+    loot.owed_bind_confirm = None;
 }
 
 /// A response's end, once its window is filled: the copier's end ([`LootSteps::copier_end`]) and
@@ -1045,9 +1139,29 @@ fn emit_pushes<P: bevy::ecs::system::SystemParam + 'static>(
 #[cfg(test)]
 pub(crate) fn feed_loot_once(world: &mut World) {
     use bevy::ecs::system::RunSystemOnce;
+    seat_loot_steps(world);
     world
         .run_system_once(feed_loot)
         .expect("the loot feed runs as a one-shot system");
+}
+
+/// Seat what [`LootSteps`] reads that a harness's world need not hold; the commands are the
+/// harness's own.
+#[cfg(test)]
+pub(crate) fn seat_loot_steps(world: &mut World) {
+    use bevy::ecs::message::Messages;
+    world.init_resource::<LootState>();
+    world.init_resource::<LootLatch>();
+    world.init_resource::<AutoLootByte>();
+    world.init_resource::<LootConfig>();
+    world.init_resource::<GroupState>();
+    world.init_resource::<crate::ui_chat::ChatLog>();
+    world.init_resource::<crate::ui_action::UiErrorKeys>();
+    world.init_resource::<crate::net::GuidIndex>();
+    world.init_resource::<Items>();
+    world.init_resource::<ButtonInput<KeyCode>>();
+    world.init_resource::<Messages<crate::sound::LootPickupSound>>();
+    world.init_resource::<Messages<crate::target::DeselectGuid>>();
 }
 
 /// Whether a take must raise `LOOT_BIND_CONFIRM` first (`0x4c28f2`/`0x4c28fb`): bind on pickup
@@ -1084,11 +1198,11 @@ pub(crate) fn close_interaction(
 /// The leave-world sweep's loot leg (`0x490ab2` → `0x4c1ca0` → `0x48f200(cl=1, dl=0, 0)`): the
 /// shared close with its `CMSG_LOOT_RELEASE` (`0x48f2da`), told to the VM the sweep runs in, the
 /// dying one on a `/reload` ([`tell_loot_closed`]). The dead-unit deselect follows, as the
-/// close's last step. A disenchant window with rows left is swept instead
-/// ([`LootState::disenchant_holds`]).
+/// close's last step. A disenchant window with contents is swept instead
+/// ([`LootState::disenchant_hold`]).
 pub(crate) fn close_loot_on_leave_world(mut vm: VmWith<(LootSteps<'static, 'static>, ())>) {
     let closed = vm.turn(|script, (mut steps, _)| {
-        if steps.loot.disenchant_holds() {
+        if steps.loot.disenchant_hold(&steps.objects) {
             match script {
                 Some(script) => steps.sweep(script, false),
                 None => steps.loot.owe_sweep(),
@@ -1140,7 +1254,13 @@ fn unlock_closed_source(
     loot: &mut LootState,
     objects: &crate::net::Objects,
 ) {
-    for (guid, live) in loot.take_item_unlocks() {
+    fire_unlocks(script, loot.take_item_unlocks(), objects);
+}
+
+/// `UnlockItem` (`0x495420`) on each guid, with its `ITEM_LOCK_CHANGED`; one flagged as a
+/// window source's only while it resolves as a live item object.
+fn fire_unlocks(script: &mut UiScript, unlocks: Vec<(u64, bool)>, objects: &crate::net::Objects) {
+    for (guid, live) in unlocks {
         if !live || objects.object(guid).is_some_and(|f| f.is_item()) {
             script.unlock_item(guid);
         }
@@ -1231,7 +1351,7 @@ fn drain_loot(mut vm: VmWith<(LootSteps<'static, 'static>, OwedCloses)>) {
         // After the move-start close, which it subsumes: whichever runs first, a window either
         // keeps is the one this takes.
         if std::mem::take(&mut at_rest.0) {
-            if steps.loot.disenchant_holds() {
+            if steps.loot.disenchant_hold(&steps.objects) {
                 match script {
                     Some(script) => steps.sweep(script, false),
                     None => steps.loot.owe_sweep(),
@@ -1351,6 +1471,8 @@ mod tests {
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<UiErrorKeys>()
             .insert_resource(NetCommands(tx));
+        // Our player, whom the take and the sweep ask for (`0x4c27b6`, `0x4c1fd9`).
+        app.world_mut().spawn(crate::net::SelfPlayer);
         (app, rx)
     }
 
@@ -1791,14 +1913,12 @@ mod tests {
         );
     }
 
-    /// A window over two BoP epics and a white (wire slots 5/6/7) with auto-loot on, its
-    /// `LOOT_BIND_CONFIRM` rows noted, then `lua` run; the feed has not run.
+    /// A window over two BoP epics and a white (wire slots 5/6/7) with the auto-loot byte the
+    /// interaction stored set, its `LOOT_BIND_CONFIRM` rows noted, then `lua` run; the feed has not
+    /// run.
     fn auto_loot_app(lua: &str) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         let (mut app, rx) = bare_app();
-        app.insert_resource(LootConfig {
-            auto_loot: true,
-            ..LootConfig::default()
-        });
+        app.insert_resource(AutoLootByte(true));
         stream(&mut app, 0x42, EntityKind::Unit, &[]);
 
         let mut items = app.world_mut().resource_mut::<Items>();
@@ -2206,36 +2326,17 @@ mod tests {
         assert_eq!(latch.0, None, "the matching release drops it");
     }
 
-    /// `IsFishingLoot` reads the response's type (`0x4c2740` == 3), which the next response
-    /// replaces.
+    /// `IsFishingLoot` reads the type cell (`0x4c2740` == 3), which each response's copier stores
+    /// (`0x4c1dd6`) and the close leaves (`0x4c1cb0(0)` zeroes only the source).
     #[test]
-    fn fishing_follows_the_responses_loot_type() {
-        let items = Items::default();
-        let (grp, nm) = nobody();
-        let fishing = |loot: &LootState| {
-            snapshot(
-                &loot.window,
-                &items,
-                None,
-                Ask::Read,
-                RollCatalogs::NONE,
-                Candidates {
-                    group: &grp,
-                    names: &nm,
-                },
-            )
-            .map(|s| s.fishing)
-        };
+    fn the_type_cell_follows_the_responses_and_outlives_the_close() {
         let mut loot = LootState::default();
         loot.open(0x42, loot_type::FISHING, 0, vec![item(0, 117, 1)]);
-        assert_eq!(fishing(&loot), Some(true));
+        assert_eq!(loot.window.loot_type, loot_type::FISHING);
         loot.clear();
-        assert_eq!(fishing(&loot), None, "no window");
+        assert_eq!(loot.window.loot_type, loot_type::FISHING, "no window");
         loot.open(0x42, loot_type::CORPSE, 0, vec![item(0, 117, 1)]);
-        assert_eq!(fishing(&loot), Some(false));
-        loot.open(0x42, loot_type::FISHING, 0, vec![]);
-        loot.open(0x43, loot_type::CORPSE, 0, vec![]);
-        assert_eq!(fishing(&loot), Some(false));
+        assert_eq!(loot.window.loot_type, loot_type::CORPSE);
     }
 
     #[test]

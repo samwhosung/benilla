@@ -157,7 +157,9 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 }
             }
             ScriptCall::UseContainerItem(call) => {
-                appliers.p5().p0().use_container_item(script, call);
+                if let Some(open) = appliers.p5().p0().use_container_item(script, call) {
+                    tail = appliers.p5().p1().open_item(script, open);
+                }
             }
             ScriptCall::UseInventoryItem { slot, on_self, .. } => {
                 appliers.p5().p0().use_inventory_item(script, slot, on_self)
