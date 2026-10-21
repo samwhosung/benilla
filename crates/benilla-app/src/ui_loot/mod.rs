@@ -770,7 +770,29 @@ fn feed_loot(
 ) {
     // Each step is a turn whose handlers run as it ends, with the host lent, reading what it
     // left: the copier's open signals `LOOT_OPENED` before the auto-loot sweep and the move-start
-    // close run, so its handlers read the open window.
+    // close run, so its handlers read the open window. The pushes go first: `OnItemPush` signals
+    // `ITEM_PUSH` (`0x491be8`) and touches no window, so its handlers read the window as it stood
+    // before this frame's snapshot.
+    if !vm.own().0.receives.is_empty() {
+        vm.turn(|script, (mut loot, _)| {
+            let Some(script) = script else {
+                return;
+            };
+            let rolls = RollCatalogs {
+                props: props.as_deref(),
+                enchants: enchants.as_deref(),
+            };
+            drain_receives(
+                &mut loot,
+                &items,
+                icons.as_deref(),
+                &commands,
+                &chat,
+                script,
+                rolls,
+            );
+        });
+    }
     let opened = vm.turn(|script, (mut loot, _)| {
         let Some(script) = script else {
             return false;
@@ -780,15 +802,6 @@ fn feed_loot(
             props: props.as_deref(),
             enchants: enchants.as_deref(),
         };
-        drain_receives(
-            &mut loot,
-            &items,
-            icons.as_deref(),
-            &commands,
-            &chat,
-            script,
-            rolls,
-        );
 
         if std::mem::take(&mut loot.sweep_owed) && loot.source.is_some() {
             sweep_rows(&mut loot, &items, &commands, script, &mut pickup);
