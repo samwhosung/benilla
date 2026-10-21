@@ -29,7 +29,7 @@ pub(crate) struct InspectTarget {
 /// The last view pushed, per VM ([`crate::ui_script::VmMemo`]), so a `/reload`'s
 /// new VM gets the view re-pushed and its events re-fired.
 #[derive(Resource, Default)]
-struct InspectFeedState {
+pub(crate) struct InspectFeedState {
     vm: crate::ui_script::VmMemo<InspectFeedMemo>,
 }
 
@@ -45,7 +45,14 @@ impl Plugin for InspectUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InspectTarget>()
             .init_resource::<InspectFeedState>()
-            .add_systems(Update, feed_inspect.in_set(UiFeed));
+            // Ahead of the field events: the bridge's `UNIT_INVENTORY_CHANGED` for the inspected
+            // token repaints the slots from this view.
+            .add_systems(
+                Update,
+                feed_inspect
+                    .in_set(UiFeed)
+                    .in_set(crate::ui_unit::field_events::FieldEventPushes),
+            );
     }
 }
 
@@ -104,7 +111,7 @@ fn inspect_slot_view(
     })
 }
 
-fn feed_inspect(
+pub(crate) fn feed_inspect(
     // What the host also reaches, read before the VM runs with the host lent.
     mut hosted: ParamSet<(Res<crate::target::Selection>, crate::script_calls::HostedVm)>,
     mut target: ResMut<InspectTarget>,

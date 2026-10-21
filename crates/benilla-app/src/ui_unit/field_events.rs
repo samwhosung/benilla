@@ -12,7 +12,8 @@ use crate::field_watch::FieldNotice;
 
 /// The feeds that push what a field event's handlers read: the unit tokens' snapshots with the XP
 /// and rest values (`feed_units`), the group's and the pet's tokens, the pet's stats, the player's
-/// combat stats, the honor block and the watched faction. The firing runs
+/// combat stats and inventory, the inspected unit's slots, the honor block and the watched
+/// faction. The firing runs
 /// after all of them, as the reference writes a whole block before its notify pass.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct FieldEventPushes;
@@ -855,10 +856,16 @@ mod tests {
                 crate::ui_pet_stats::feed_pet_stats,
                 fire_field_notices,
             ),
+            // The inspected unit's slots, which the bridge's `UNIT_INVENTORY_CHANGED` repaints.
+            crate::test_support::runs_before(
+                &mut headless,
+                crate::ui_inspect::feed_inspect,
+                fire_field_notices,
+            ),
         ];
         assert_eq!(
-            ahead, [true; 7],
-            "feed_units, char, honor, reputation, party, pet, pet stats"
+            ahead, [true; 8],
+            "feed_units, char, honor, reputation, party, pet, pet stats, inspect"
         );
 
         // In that order: the block lands, the push, the firing.
