@@ -73,7 +73,17 @@ impl AuctionVerbs<'_, '_> {
                 let Some(auctioneer) = auction.auctioneer else {
                     return;
                 };
-                let _ = bid;
+                // With a bid the player pays 5% of it; no player is the error at once
+                // (`0x4d0301`).
+                if bid != 0 {
+                    let money = objects
+                        .player_fields()
+                        .map(|p| p.player_money().unwrap_or(0));
+                    if money.is_none_or(|m| m < cancel_fee(bid)) {
+                        show_error(script, sink, "ERR_NOT_ENOUGH_MONEY");
+                        return;
+                    }
+                }
                 let _ = commands.0.send(ClientCommand::AuctionRemoveItem {
                     auctioneer,
                     auction_id,

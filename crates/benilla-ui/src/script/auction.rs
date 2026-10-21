@@ -273,16 +273,51 @@ impl AuctionBid {
     /// (`0x622130` with scope `0x4f`), asked only past the money check and only for a cached record
     /// (`0x4cf879`, no callback).
     pub fn verdict(&self, money: u32, unique: impl FnOnce() -> Option<(i32, i32)>) -> BidVerdict {
-        let _ = (money, unique);
-        BidVerdict::Send(self.amount)
+        // A bid above a nonzero buyout becomes the buyout (`0x4cf762`-`0x4cf773`).
+        let bid = if self.buyout > 0 && self.amount > self.buyout {
+            self.buyout
+        } else {
+            self.amount
+        };
+        // Under the start bid, whatever the current bid (`0x4cf775`).
+        if bid < self.min_bid {
+            return BidVerdict::Refuse("ERR_AUCTION_MIN_BID");
+        }
+        // Not above the current bid (`0x4cf795`).
+        if bid <= self.current {
+            return BidVerdict::Refuse("ERR_AUCTION_HIGHER_BID");
+        }
+        // With a bid, under it plus the increment, unless it reaches a nonzero buyout
+        // (`0x4cf7b1`-`0x4cf7c4`).
+        let step = self.current.wrapping_add(self.increment);
+        if self.current != 0 && bid < step && (self.buyout == 0 || bid < self.buyout) {
+            return BidVerdict::Refuse("ERR_AUCTION_BID_INCREMENT");
+        }
+        // Past 2,000,000,000 and the step, dropped (`0x4cf7e1`-`0x4cf7f0`).
+        if bid > 2_000_000_000 && bid > step {
+            return BidVerdict::Drop;
+        }
+        // The money covers the bid, or only the rise when the player leads (`0x4cf812`-`0x4cf84a`).
+        let needed = if self.player_leads {
+            bid.wrapping_sub(self.current)
+        } else {
+            bid
+        };
+        if money < needed {
+            return BidVerdict::Refuse("ERR_NOT_ENOUGH_MONEY");
+        }
+        // A unique item carried at its limit is error 0x12 (`0x4cf887`-`0x4cf8a8`).
+        if unique().is_some_and(|(max, carried)| max > 0 && carried >= max) {
+            return BidVerdict::Refuse("ERR_ITEM_MAX_COUNT");
+        }
+        BidVerdict::Send(bid)
     }
 }
 
 /// `CancelAuction`'s fee on an auction with a bid (`0x4d0338`-`0x4d0341`): `fild` of the bid times
 /// the `f32` 0.05 at `0x807024`, truncated by `_ftol`, and compared unsigned (`0x4d0346`).
 pub fn cancel_fee(bid: u32) -> u32 {
-    let _ = bid;
-    0
+    binding_abi::ftol(f64::from(bid) * f64::from(f32::from_bits(0x3d4c_cccd))) as u32
 }
 
 /// An auction verb past its binding's checks, which the host applies inside the call: its gates
