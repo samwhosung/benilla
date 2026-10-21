@@ -78,6 +78,7 @@ pub(crate) struct ScriptCallHost<'w, 's> {
                 (
                     crate::ui_action::ActionPress<'w, 's>,
                     crate::ui_chat::ChatSender<'w, 's>,
+                    crate::ui_chat::EmoteDoer<'w, 's>,
                 ),
             >,
             crate::ui_items::ScriptItemUse<'w, 's>,
@@ -91,6 +92,11 @@ impl ScriptCallHost<'_, '_> {
     /// The selected unit, as the calls applied so far left it.
     pub(crate) fn target(&mut self) -> Option<Entity> {
         self.appliers.p0().target()
+    }
+
+    /// A probe line's text emote, run as `DoEmote` runs it inside its call (`0x5ef560`).
+    pub(crate) fn emote(&mut self, text_id: u32, arg: Option<&str>) {
+        self.appliers.p4().p2().emote(text_id, arg);
     }
 }
 
@@ -166,6 +172,9 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::SendChat(send) => appliers.p4().p1().send_chat(script, send),
             ScriptCall::RandomRoll { min, max } => appliers.p4().p1().random_roll(min, max),
             ScriptCall::Channel(cmd) => appliers.p4().p1().channel(script, cmd),
+            ScriptCall::DoEmote(request) => appliers.p4().p2().do_emote(request),
+            ScriptCall::Uninvite(name) => appliers.p4().p1().uninvite(name),
+            ScriptCall::AddonMessage(send) => appliers.p4().p1().addon_message(send),
             ScriptCall::PickItem(pick) => popup = appliers.p1().pick_item(pick),
             ScriptCall::EnchantConfirm(answer) => popup = appliers.p1().confirm_enchant(answer),
         }

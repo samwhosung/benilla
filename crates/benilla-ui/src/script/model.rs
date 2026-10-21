@@ -508,10 +508,6 @@ pub(crate) struct Model {
     pub(crate) guild_recruitment_plan: super::channel::RecruitmentPlan,
     /// Lua changed the recruitment mode: the chat cache's dirty signal.
     pub(crate) guild_recruitment_changed: bool,
-    /// `DoEmote` calls queued.
-    pub(crate) emote_requests: Vec<super::chat_misc::EmoteRequest>,
-    /// `UninviteByName` calls queued.
-    pub(crate) uninvite_requests: Vec<String>,
     /// `ConsoleExec` lines that were not CVar writes.
     pub(crate) console_lines: Vec<String>,
     /// `LoggingChat` and `LoggingCombat`'s flags, and their change cue.
@@ -1289,8 +1285,6 @@ pub(crate) struct Model {
     /// The world points our own `Minimap:PingLocation` calls pinged, for the host's wire send
     /// (`0x1d5`, `0x4eef72`) and its process-wide copy of the ping.
     pub(crate) minimap_pings_sent: Vec<(f32, f32)>,
-    /// `SendAddonMessage` broadcasts: `LANG_ADDON`, four distributions, `prefix` TAB `message`.
-    pub(crate) addon_sends: Vec<super::addon_message::AddonSend>,
     /// `RequestTimePlayed()` calls, one empty `CMSG_PLAYED_TIME` each.
     pub(crate) played_time_asks: u32,
     /// `OpeningCinematic()` calls, one empty `CMSG_OPENING_CINEMATIC` each.
@@ -1597,8 +1591,6 @@ impl Model {
             guild_recruitment_cascade: false,
             guild_recruitment_plan: Default::default(),
             guild_recruitment_changed: false,
-            emote_requests: Vec::new(),
-            uninvite_requests: Vec::new(),
             console_lines: Vec::new(),
             logging_chat: false,
             logging_combat: false,
@@ -1894,7 +1886,6 @@ impl Model {
             cursor_pos: (0.0, 0.0),
             minimap: crate::widget::MinimapStatics::default(),
             minimap_pings_sent: Vec::new(),
-            addon_sends: Vec::new(),
             played_time_asks: 0,
             opening_cinematic_asks: 0,
             screenshot_asks: 0,

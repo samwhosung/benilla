@@ -1,7 +1,8 @@
 //! The chat verbs the host applies inside their calls ([`ChatSender`]): `SendChatMessage`
-//! (`0x49f1e0`) past its binding's checks, from the group gates to the packet, `RandomRoll`'s
-//! send (`0x48c832`), and the channel verbs' slots and packets. No slash grammar runs here: an
-//! addon sending `"/dance"` says six characters.
+//! (`0x49f1e0`) past its binding's checks, from the group gates to the packet, the sends of
+//! `RandomRoll` (`0x48c832`), `UninviteByName` (`0x48a669`) and `SendAddonMessage` (`0x49faff`),
+//! and the channel verbs' slots and packets. No slash grammar runs here: an addon sending
+//! `"/dance"` says six characters.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -52,6 +53,36 @@ impl ChatSender<'_, '_> {
     /// `MSG_RANDOM_ROLL` (`0x48c832`), the binding having checked the range.
     pub(crate) fn random_roll(&self, min: u32, max: u32) {
         let _ = self.commands.0.send(ClientCommand::RandomRoll { min, max });
+    }
+
+    /// `UninviteByName`'s `CMSG_GROUP_UNINVITE` (`0x48a669`).
+    pub(crate) fn uninvite(&self, name: String) {
+        let _ = self.commands.0.send(ClientCommand::GroupUninvite { name });
+    }
+
+    /// `SendAddonMessage`'s send (`0x49faff`). The binding has applied the reference's rules
+    /// (`0x49f920`: the four distributions, `prefix` TAB `message`, the downgrade outside a raid),
+    /// so nothing is refused here. This writes the outbound half of the `addon` trace tag and
+    /// `ui_chat::net` the inbound: `WOW_MOVE_TRACE=<path> WOW_MOVE_TRACE_TAGS=addon` logs both.
+    pub(crate) fn addon_message(&self, send: benilla_ui::script::AddonSend) {
+        debug!(
+            "chat: addon broadcast on {} — {:?}",
+            send.distribution.token(),
+            send.text
+        );
+        if benilla_assets::trace::enabled() {
+            benilla_assets::trace::line(
+                "addon",
+                &format!("-> {} {:?}", send.distribution.token(), send.text),
+            );
+        }
+        let cmd = ClientCommand::AddonMessage {
+            distribution: send.distribution,
+            text: send.text,
+        };
+        if self.commands.0.send(cmd).is_err() {
+            warn!("chat: not connected; addon broadcast dropped");
+        }
     }
 
     /// `SendChatMessage` from its group gates on, in the reference's order: the group gates and
@@ -307,6 +338,8 @@ pub(crate) fn run_chat(world: &mut World, lua: &str) -> benilla_ui::mlua::Result
                 sender.random_roll(min, max);
             }
             benilla_ui::script::ScriptCall::Channel(cmd) => sender.channel(script, cmd),
+            benilla_ui::script::ScriptCall::Uninvite(name) => sender.uninvite(name),
+            benilla_ui::script::ScriptCall::AddonMessage(send) => sender.addon_message(send),
             other => panic!("not a chat call: {other:?}"),
         });
         script.hosted(&mut host, |s| s.run(lua))

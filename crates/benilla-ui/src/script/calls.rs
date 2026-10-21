@@ -119,6 +119,15 @@ pub enum ScriptCall {
     /// `RandomRoll(min, max)` (`0x48c7b0`) past its range check (`0x48c807`-`0x48c830`):
     /// `MSG_RANDOM_ROLL` (`0x48c832`).
     RandomRoll { min: u32, max: u32 },
+    /// `DoEmote(token, target)` (`0x49fd30`) past its empty-token check: the host finds the
+    /// `EmotesText` row by name (`0x49fd72`-`0x49fda6`), resolves the target (`0x49fdb1`-`0x49fdee`)
+    /// and runs `0x5ef560` (`0x49fe16`), its gates, posture, play and `CMSG_TEXT_EMOTE`.
+    DoEmote(super::EmoteRequest),
+    /// `UninviteByName(name)` (`0x48a610`): `CMSG_GROUP_UNINVITE` (`0x75`), sent at `0x48a669`.
+    Uninvite(String),
+    /// `SendAddonMessage(prefix, message, type)` (`0x49f920`) past its checks: the send at
+    /// `0x49faff`.
+    AddonMessage(super::AddonSend),
     /// A channel verb past its binding's checks, or the recruitment cascade's join or leave: the
     /// host does the rest inside the call, the join's slot (`0x49ede8`-`0x49edf3`, the allocator
     /// `0x49b980`) and the packet, so the verb's next line and the events after it read the slot.

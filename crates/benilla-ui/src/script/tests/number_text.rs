@@ -11,6 +11,7 @@ use crate::widget::KindState;
 #[test]
 fn a_number_argument_is_lua_number_text() {
     let mut s = script();
+    s.keep_calls();
     s.run(
         r#"
         DoEmote("WAVE", 1/3)

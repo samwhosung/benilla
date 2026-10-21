@@ -60,11 +60,11 @@ pub(crate) use edit::ChannelState;
 pub(crate) use event::event_name;
 pub(crate) use event::{default_color, ChatEvent, ChatEventKind};
 pub(crate) use feed::ChatLog;
-/// The host's chat applier ([`crate::script_calls::ScriptCallHost`]).
-pub(crate) use input::ChatSender;
 /// The chat applier off a bare world, for the tests that send through it.
 #[cfg(test)]
 pub(crate) use input::{chat_world, run_chat};
+/// The host's chat appliers ([`crate::script_calls::ScriptCallHost`]).
+pub(crate) use input::{ChatSender, EmoteDoer};
 
 /// The chat feed once, for a test over the whole client: the `CHAT_MSG_*` fan-out of what the
 /// log holds, with the call host the world lends.
@@ -83,9 +83,6 @@ pub(crate) fn drain_chat_input_once(world: &mut World) {
     world
         .run_system_once(input::drain_chat_input)
         .expect("the chat input drains");
-    world
-        .run_system_once(input::drain_addon_message_sends)
-        .expect("the addon sends drain");
 }
 /// Test-only: the quest log's rig tees the lines its timers show.
 #[cfg(test)]
@@ -201,9 +198,6 @@ impl Plugin for UiChatPlugin {
                     // settled before the idle timer reads it.
                     idle::idle_handler,
                     input::drain_chat_input.in_set(ChatDrain),
-                    // After the box's drain, so a `SendAddonMessage` from a slash handler it just
-                    // ran goes out this frame.
-                    input::drain_addon_message_sends,
                 )
                     .chain()
                     .in_set(crate::ui_script::UiDrain)
