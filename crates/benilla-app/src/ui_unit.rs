@@ -24,7 +24,6 @@ pub(crate) mod field_events;
 mod held;
 mod relations;
 pub(crate) mod tooltip_facts;
-pub(crate) mod wire_order;
 
 pub(crate) use held::{traits_from_name_cache, unit_reach};
 
@@ -118,14 +117,7 @@ pub(crate) struct UiUnitPlugin;
 
 impl Plugin for UiUnitPlugin {
     fn build(&self, app: &mut App) {
-        field_events::add_notice_drop(app);
-        // The handler table's marks, which put the field notices and the chat queue in their
-        // packets' order.
-        crate::net::handlers::NetHandlerApp::net_drain_marks(
-            app,
-            wire_order::begin_drain,
-            wire_order::mark_call,
-        );
+        field_events::add_notice_lane(app);
         app.configure_sets(
             Update,
             UnitFeed
@@ -139,7 +131,6 @@ impl Plugin for UiUnitPlugin {
         .init_resource::<crate::sound::MessageSounds>()
         .init_resource::<crate::ui_chat::ChatLog>()
         .add_message::<crate::net::WorldportMessage>()
-        .add_message::<crate::field_watch::FieldNotice>()
         .init_world_leave_sweep()
         // Ahead of the unit feed, so a worldport's leaving edge precedes the entering edge
         // `feed_units` raises for the same port, and outside its gate: the destructor sweeps
@@ -176,12 +167,6 @@ impl Plugin for UiUnitPlugin {
                 held::feed_chain_units.after(crate::ui_aura::AuraEvents),
                 // After every snapshot above is pushed, so a handler reads the new reaction.
                 fire_faction_on_forced_table.after(crate::ui_aura::AuraEvents),
-                // After the pushes its handlers read and the token seat it fans out over, and after
-                // the tutorial banks' frame, whose fire-once bank a watcher's tutorial tests.
-                field_events::fire_field_notices
-                    .after(field_events::FieldEventPushes)
-                    .after(crate::ui_aura::AuraEvents)
-                    .after(crate::tutorial::TutorialFeed),
                 held::feed_name_candidates,
                 // After the control edge, whose flag the exemption is asked for.
                 control_gate::feed_control_bypass,
@@ -1812,8 +1797,7 @@ pub(crate) use held::feed_name_candidates;
 #[cfg(test)]
 pub(crate) fn add_unit_feed(app: &mut App) {
     app.init_resource::<UnitFeedState>()
-        .add_message::<crate::field_watch::FieldNotice>()
-        .init_resource::<field_events::FieldNoticeCursor>()
+        .init_resource::<crate::field_watch::NoticeLane>()
         .add_systems(
             Update,
             (

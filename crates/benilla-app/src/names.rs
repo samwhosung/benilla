@@ -531,7 +531,7 @@ pub(crate) mod net {
     use bevy::prelude::*;
 
     use super::{CreatureRecord, NameCache};
-    use crate::field_watch::{id, FieldNotice};
+    use crate::field_watch::{id, FieldNotice, NoticeLane};
     use crate::net::{GuidIndex, NetHandlerApp, ObjectStore};
 
     /// Register the four handlers. A player-name answer's goes ahead of every other subsystem's:
@@ -539,7 +539,7 @@ pub(crate) mod net {
     /// callback waiting on it (`0x55f426`-`0x55f452`), and those read the record it filed.
     pub(crate) fn register(app: &mut App) {
         use SessionEventKind as K;
-        app.add_message::<FieldNotice>()
+        app.init_resource::<NoticeLane>()
             .net_handler_ahead(K::PlayerName, on_player_name)
             .net_handler(K::PetName, on_pet_name)
             .net_handler(K::CreatureName, on_creature_name)
@@ -580,13 +580,15 @@ pub(crate) mod net {
     }
 
     /// The name callback `0x5fb840` of a unit the answer names: for a found name (`0x5fb84b`) of a
-    /// held unit (`0x5fb86a`), `UNIT_NAME_UPDATE` through `0x491a00`. The callbacks are the
-    /// lookups that missed, so an answer for a name the cache already holds runs none.
+    /// held unit (`0x5fb86a`), `UNIT_NAME_UPDATE` through `0x491a00`; and the chat's `0x49ccc0`,
+    /// which shows the lines that waited on the name. The callbacks are the lookups that missed,
+    /// so an answer for a name the cache already holds runs none.
     fn on_player_name(
         In(ev): In<SessionEvent>,
         mut names: ResMut<NameCache>,
         units: HeldUnits,
-        mut notices: MessageWriter<FieldNotice>,
+        mut notices: ResMut<NoticeLane>,
+        chat: Option<Res<crate::ui_chat::ChatLog>>,
     ) {
         if let SessionEvent::PlayerName {
             guid,
@@ -599,6 +601,11 @@ pub(crate) mod net {
             // A guid already cached has no lookup waiting, so no callback runs.
             let found = !name.is_empty() && names.players.get(guid).is_none();
             player_name(guid, name, race, class, gender, &mut names);
+            if found {
+                if let Some(chat) = &chat {
+                    chat.answer_landed(Some(guid));
+                }
+            }
             if found && units.holds(guid) {
                 notices.write(FieldNotice::Signal {
                     guid,
@@ -614,7 +621,7 @@ pub(crate) mod net {
         In(ev): In<SessionEvent>,
         mut names: ResMut<NameCache>,
         units: HeldUnits,
-        mut notices: MessageWriter<FieldNotice>,
+        mut notices: ResMut<NoticeLane>,
     ) {
         if let SessionEvent::PetName { pet_number, name } = ev {
             let found = !name.is_empty() && names.pets.get(pet_number).is_none();
@@ -637,7 +644,8 @@ pub(crate) mod net {
         In(ev): In<SessionEvent>,
         mut names: ResMut<NameCache>,
         units: HeldUnits,
-        mut notices: MessageWriter<FieldNotice>,
+        mut notices: ResMut<NoticeLane>,
+        chat: Option<Res<crate::ui_chat::ChatLog>>,
     ) {
         if let SessionEvent::CreatureName {
             entry,
@@ -669,6 +677,10 @@ pub(crate) mod net {
                 &mut names,
             );
             if found {
+                // A monster line's `$`-macro may name a unit of the entry.
+                if let Some(chat) = &chat {
+                    chat.answer_landed(None);
+                }
                 for guid in units.matching(|s| s.0.object_entry() == Some(entry)) {
                     notices.write_batch([
                         FieldNotice::Signal {
@@ -766,7 +778,7 @@ pub(crate) mod net {
             let mut app = App::new();
             app.init_resource::<NameCache>()
                 .init_resource::<GuidIndex>()
-                .add_message::<FieldNotice>();
+                .init_resource::<crate::field_watch::NoticeLane>();
             for (guid, kind, pairs) in [
                 // `OBJECT_FIELD_TYPE` (2): the unit and player type masks.
                 (WOLF_A, ObjectType::Unit, vec![(2, 0x9), (3, 299)]),
@@ -787,7 +799,7 @@ pub(crate) mod net {
 
         fn notices(app: &mut App) -> Vec<FieldNotice> {
             app.world_mut()
-                .resource_mut::<Messages<FieldNotice>>()
+                .resource_mut::<crate::field_watch::NoticeLane>()
                 .drain()
                 .collect()
         }

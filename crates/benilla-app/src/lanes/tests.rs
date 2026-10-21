@@ -10,16 +10,12 @@ use bevy::prelude::*;
 use crate::field_watch::FieldNotice;
 use crate::net::handlers::NetHandlerApp;
 
-/// The notice queue a test handler writes.
-type Notices<'w> = bevy::ecs::message::MessageWriter<'w, FieldNotice>;
+/// The notice lane a test handler writes.
+type Notices<'w> = ResMut<'w, crate::field_watch::NoticeLane>;
 
 /// The frame's firing of what the packets queued, after the frame's pushes.
 fn fire_frame(world: &mut World) {
-    use bevy::ecs::system::RunSystemOnce;
-    world
-        .run_system_once(crate::ui_unit::field_events::fire_field_notices)
-        .unwrap();
-    crate::ui_chat::feed_chat_once(world);
+    super::fire_in_order(world);
 }
 
 /// The field notices alone, as their firing runs them.
@@ -84,6 +80,7 @@ fn stranger_named() -> SessionEvent {
 fn client(handlers: impl FnOnce(&mut App)) -> App {
     let mut app = App::new();
     app.add_plugins(crate::ui_unit::UiUnitPlugin);
+    crate::ui_chat::add_chat_lane(&mut app);
     crate::names::net::register(&mut app);
     handlers(&mut app);
     let world = app.world_mut();

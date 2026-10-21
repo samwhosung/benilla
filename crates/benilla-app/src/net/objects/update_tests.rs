@@ -246,7 +246,7 @@ fn send(world: &mut World, blocks: impl IntoIterator<Item = SessionEvent>) {
 
 fn notices(world: &mut World) -> Vec<crate::field_watch::FieldNotice> {
     world
-        .resource_mut::<Messages<crate::field_watch::FieldNotice>>()
+        .resource_mut::<crate::field_watch::NoticeLane>()
         .drain()
         .collect()
 }

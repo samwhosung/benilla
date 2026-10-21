@@ -667,7 +667,7 @@ mod tests {
         next
     }
 
-    /// The pass runs its phases in their declared order: the net feeds (the chat feed), then the
+    /// The pass runs its phases in their declared order: the net feeds (the unit feed), then the
     /// frame's tick and the input pass, then the drains of what their Lua asked, then the paint.
     #[test]
     fn the_pass_runs_the_feeds_then_the_tick_then_the_drains() {
@@ -677,7 +677,7 @@ mod tests {
         };
         let at = |name: &str| at(&order, name);
         let (feed, tick, input) = (
-            at("::feed_chat"),
+            at("::ui_unit::feed_units"),
             at("::tick_script"),
             at("::feed_ui_input"),
         );

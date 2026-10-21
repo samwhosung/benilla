@@ -933,12 +933,16 @@ pub(crate) mod schedule_tests {
     ///   `portrait::test_bake::sync_test_portraits`,
     ///   `sound::emitter_pool::pump_emitters`, `sound::liquid_loop::drive_liquid_loops` and
     ///   `quest_markers::bake_seat_scale`. It reads its two units' poses for the display range;
-    ///   those move booth, emitter and marker-seat entities, never a unit.
+    ///   those move booth, emitter and marker-seat entities, never a unit;
+    /// - the lanes' drain (`lanes::fire_in_order`), exclusive as the handler table's drain is,
+    ///   against the world systems no UI phase orders, which bevy lists with no component: its
+    ///   lanes' firings read the chat log, the notice lane, the names and the VM with the call
+    ///   host, and of those the world systems touch only the name cache, a pure cache.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 1_708;
+    const UPDATE_ACTIONABLE_CEILING: usize = 1_779;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
@@ -1248,7 +1252,11 @@ pub(crate) mod schedule_tests {
     /// Why a VM holder in `Update` ordered before the tick may stay out of
     /// [`crate::ui_script::UiFeed`], keyed by a suffix of the system's full name, with the
     /// reason.
-    const OUTSIDE_THE_FEED_PHASE: &[(&str, &str)] = &[];
+    const OUTSIDE_THE_FEED_PHASE: &[(&str, &str)] = &[(
+        "::ui_chat::frames::tee_shown_lines",
+        "in the lanes' set after their drain (`lanes::UiLanes`, after `UiFeed` and before the \
+         tick), so the log files take the lines the verbs showed after the drain's own",
+    )];
 
     /// The create's control restore (`player::regain_control_on_arrival`) is registered in the
     /// built client and ordered: after the self create it answers, before the controller and the

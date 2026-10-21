@@ -17,14 +17,7 @@ type Handler = (SystemId<In<SessionEvent>>, &'static str);
 #[derive(Resource, Default)]
 pub(crate) struct NetHandlers {
     by_kind: HashMap<SessionEventKind, Vec<Handler>>,
-    /// Run ahead of each drain and after each handler call, for a subsystem that orders what the
-    /// handlers queue by the call that queued it ([`NetHandlerApp::net_drain_marks`]).
-    marks: Vec<(DrainMark, DrainMark)>,
 }
-
-/// A hook [`NetHandlerApp::net_drain_marks`] registers: run on the world at a drain's start or
-/// after one handler call.
-type DrainMark = fn(&mut World);
 
 impl NetHandlers {
     /// Every kind with a handler, and the handlers' names in registration order.
@@ -61,7 +54,7 @@ impl NetHandlers {
         }
     }
 
-    /// Runs the event's handlers in registration order, each call marked as it ends.
+    /// Runs the event's handlers in registration order.
     fn run(&self, world: &mut World, ev: SessionEvent) {
         let Some(list) = self.by_kind.get(&SessionEventKind::from(&ev)) else {
             return;
@@ -71,16 +64,8 @@ impl NetHandlers {
         };
         for (id, name) in rest {
             call(world, *id, name, ev.clone());
-            self.mark_call(world);
         }
         call(world, *last_id, last_name, ev);
-        self.mark_call(world);
-    }
-
-    fn mark_call(&self, world: &mut World) {
-        for (_, after_call) in &self.marks {
-            after_call(world);
-        }
     }
 }
 
@@ -109,11 +94,6 @@ pub(crate) trait NetHandlerApp {
         kind: SessionEventKind,
         handler: impl IntoSystem<In<SessionEvent>, (), M> + 'static,
     ) -> &mut Self;
-
-    /// Run `start` ahead of each drain and `after_call` after each handler call it makes: the
-    /// reference's handlers fire their events inside the dispatch (`0x537aa0`), so a subsystem
-    /// whose events wait for a later pass can still order them by the call that queued them.
-    fn net_drain_marks(&mut self, start: fn(&mut World), after_call: fn(&mut World)) -> &mut Self;
 }
 
 impl NetHandlerApp for App {
@@ -131,14 +111,6 @@ impl NetHandlerApp for App {
         handler: impl IntoSystem<In<SessionEvent>, (), M> + 'static,
     ) -> &mut Self {
         register(self, kind, handler, true)
-    }
-
-    fn net_drain_marks(&mut self, start: fn(&mut World), after_call: fn(&mut World)) -> &mut Self {
-        self.world_mut()
-            .get_resource_or_init::<NetHandlers>()
-            .marks
-            .push((start, after_call));
-        self
     }
 }
 
@@ -159,9 +131,6 @@ fn register<M>(
 /// One drain's dispatch in wire order, each handler's commands applied before the next event.
 pub(crate) fn dispatch(world: &mut World, events: Vec<SessionEvent>) {
     let handlers = world.remove_resource::<NetHandlers>().unwrap_or_default();
-    for (start, _) in &handlers.marks {
-        start(world);
-    }
     for ev in events {
         handlers.run(world, ev);
     }
@@ -251,36 +220,6 @@ mod tests {
             .net_handler_ahead(SessionEventKind::LoggedOut, on_logged_out_too);
         let log = run(&mut app, vec![SessionEvent::LoggedOut]);
         assert_eq!(log, vec!["logged_out_too", "logged_out"]);
-    }
-
-    /// The drain marks run once ahead of the drain and after every handler call, a second
-    /// handler on one kind included, so a subsystem knows which call queued what.
-    #[test]
-    fn the_drain_marks_run_ahead_of_it_and_after_each_call() {
-        fn start(world: &mut World) {
-            world.resource_mut::<Log>().0.push("start".into());
-        }
-        fn after_call(world: &mut World) {
-            world.resource_mut::<Log>().0.push("mark".into());
-        }
-        let mut app = app();
-        app.net_handler(SessionEventKind::LoginQueued, on_queued)
-            .net_handler(SessionEventKind::LoggedOut, on_logged_out)
-            .net_handler(SessionEventKind::LoggedOut, on_logged_out_too)
-            .net_drain_marks(start, after_call);
-        let log = run(&mut app, vec![queued(1), SessionEvent::LoggedOut]);
-        assert_eq!(
-            log,
-            vec![
-                "start",
-                "queued:1",
-                "mark",
-                "logged_out",
-                "mark",
-                "logged_out_too",
-                "mark"
-            ]
-        );
     }
 
     /// A kind with no handler is a decoded packet dropped in silence, as the reference does.

@@ -196,7 +196,7 @@ impl RosterTeardown<'_, '_> {
 fn on_member_stats(
     In(ev): In<SessionEvent>,
     mut group: ResMut<GroupState>,
-    mut notices: MessageWriter<crate::field_watch::FieldNotice>,
+    mut notices: ResMut<crate::field_watch::NoticeLane>,
 ) {
     if let SessionEvent::PartyMemberStats { guid, full, info } = ev {
         let old = group.stats.get(&guid).cloned().unwrap_or_default();
@@ -1475,7 +1475,7 @@ mod tests {
         const MATE: u64 = 0x2001;
         let mut app = App::new();
         app.init_resource::<GroupState>()
-            .add_message::<FieldNotice>();
+            .init_resource::<crate::field_watch::NoticeLane>();
         let mut packet = |full: bool, info: PartyMemberStatsInfo| -> Vec<FieldNotice> {
             app.world_mut()
                 .run_system_once_with(
@@ -1488,7 +1488,7 @@ mod tests {
                 )
                 .unwrap();
             app.world_mut()
-                .resource_mut::<Messages<FieldNotice>>()
+                .resource_mut::<crate::field_watch::NoticeLane>()
                 .drain()
                 .collect()
         };

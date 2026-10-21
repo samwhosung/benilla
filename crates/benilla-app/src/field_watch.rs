@@ -1,8 +1,8 @@
 //! The reference callbacks that signal interface events from the object packets: the field watches
 //! on units and the active player, and the packet handlers that signal unit events through the
-//! token fan-out `0x515e50`. The packets write one [`FieldNotice`] per signal, in wire order, and
-//! the unit feed fires each (`crate::ui_unit`), so an event follows the change that raised it and
-//! nothing else: not a login, not a `/reload`, not a value read for the first time, not a token
+//! token fan-out `0x515e50`. The packets write one [`FieldNotice`] per signal onto the notice
+//! lane ([`NoticeLane`]), and the lanes' drain fires each in the packets' order
+//! ([`crate::lanes`]), so an event follows the change that raised it and nothing else: not a login, not a `/reload`, not a value read for the first time, not a token
 //! that comes to name another unit.
 //!
 //! A block's notify runs each watch whose bytes now differ from the copy its object's last write
@@ -27,7 +27,7 @@ use bevy::prelude::*;
 use crate::tutorial::id as tutorial;
 
 /// One signal a reference callback raised, in the order the packets raised them.
-#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FieldNotice {
     /// The unit-field bridge `0x51bd50`: event `id`, the watched field's byte offset in the unit
     /// section over 4 (`0x51bd55`), or the fixed id of a player-block watch (`0x51bd90`), through
@@ -71,6 +71,59 @@ pub(crate) enum FieldNotice {
     /// fire-once bit tested and set, then its `TutorialPopup` cue and `TUTORIAL_TRIGGER` at once,
     /// in the watcher's order.
     Tutorial { id: u32 },
+}
+
+/// The notice lane: each notice stamped as a handler writes it ([`crate::lanes::stamp`]), fired
+/// by `crate::ui_unit::field_events` in stamp order among the other lanes.
+#[derive(Resource, Default)]
+pub(crate) struct NoticeLane(std::collections::VecDeque<(crate::lanes::Stamp, FieldNotice)>);
+
+impl NoticeLane {
+    /// Queue `notice` behind everything stamped before it.
+    pub(crate) fn write(&mut self, notice: FieldNotice) {
+        let stamp = crate::lanes::stamp();
+        let at = self.0.partition_point(|(s, _)| *s < stamp);
+        self.0.insert(at, (stamp, notice));
+    }
+
+    /// Queue each of `notices` in turn.
+    pub(crate) fn write_batch(&mut self, notices: impl IntoIterator<Item = FieldNotice>) {
+        for notice in notices {
+            self.write(notice);
+        }
+    }
+
+    /// The head's stamp.
+    pub(crate) fn peek(&self) -> Option<crate::lanes::Stamp> {
+        self.0.front().map(|(s, _)| *s)
+    }
+
+    /// Take the head if `until` admits it.
+    pub(crate) fn pop(
+        &mut self,
+        until: crate::lanes::Until,
+    ) -> Option<(crate::lanes::Stamp, FieldNotice)> {
+        until
+            .admits(self.peek()?)
+            .then(|| self.0.pop_front())
+            .flatten()
+    }
+
+    /// Drop every notice waiting, unfired.
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    /// The notices waiting, in order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &FieldNotice> {
+        self.0.iter().map(|(_, n)| n)
+    }
+
+    /// Take every notice waiting, in order, unfired.
+    #[cfg(test)]
+    pub(crate) fn drain(&mut self) -> impl Iterator<Item = FieldNotice> + '_ {
+        self.0.drain(..).map(|(_, n)| n)
+    }
 }
 
 /// The event ids the producers pass to `0x515e50`, by their event-table names.

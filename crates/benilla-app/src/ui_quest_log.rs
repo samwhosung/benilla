@@ -495,7 +495,7 @@ impl Plugin for UiQuestLogPlugin {
         crate::query_cache::register::<QuestLog>(app);
         app.init_resource::<QuestLog>()
             .add_message::<ItemNotice>()
-            .add_message::<FieldNotice>()
+            .init_resource::<crate::field_watch::NoticeLane>()
             .add_systems(
                 Startup,
                 (load_quest_header_names, load_quest_tag_names)
@@ -730,7 +730,8 @@ pub(crate) fn feed_quest_log(
     // The latch's quest-giver refresh.
     mut quest_giver: ResMut<crate::ui_quest::QuestGiver>,
     mut item_notices: MessageReader<ItemNotice>,
-    mut field_notices: MessageReader<FieldNotice>,
+    // The notices still to fire this frame: the lanes' drain follows every feed.
+    field_notices: Res<crate::field_watch::NoticeLane>,
     mut memo: Local<crate::ui_script::VmMemo<FeedMemo>>,
 ) {
     hosted_vm.run(|script| {
@@ -746,7 +747,7 @@ pub(crate) fn feed_quest_log(
         };
         let store = &store.0;
         let slots_moved = field_notices
-            .read()
+            .iter()
             .any(|n| matches!(n, FieldNotice::QuestLog));
         let mut item_changes: Vec<u32> = Vec::new();
         let mut bags_moved = !reads.changed_items.is_empty();
@@ -1257,10 +1258,9 @@ mod tests {
                 .init_resource::<crate::sound::MessageSounds>()
                 .init_resource::<crate::ui_quest::QuestLines>()
                 .init_resource::<crate::ui_quest::QuestGiver>()
-                .init_resource::<crate::ui_unit::field_events::FieldNoticeCursor>()
                 .init_resource::<QuestLog>()
                 .add_message::<ItemNotice>()
-                .add_message::<FieldNotice>();
+                .init_resource::<crate::field_watch::NoticeLane>();
             net::register(&mut app);
             for t in templates {
                 app.world_mut()
@@ -1347,14 +1347,20 @@ mod tests {
         /// A values block that moved the log: the slots and the watcher's notice.
         fn set_log(&mut self, log: &[u32]) {
             self.write_log(log);
-            self.app.world_mut().write_message(FieldNotice::QuestLog);
+            self.app
+                .world_mut()
+                .resource_mut::<crate::field_watch::NoticeLane>()
+                .write(FieldNotice::QuestLog);
         }
 
         /// A values block that moved slot 0's timer word alone.
         fn touch_log(&mut self, timer: u32) {
             self.fields.insert(FIELD_PLAYER_QUEST_LOG_1_1 + 2, timer);
             self.write_store();
-            self.app.world_mut().write_message(FieldNotice::QuestLog);
+            self.app
+                .world_mut()
+                .resource_mut::<crate::field_watch::NoticeLane>()
+                .write(FieldNotice::QuestLog);
         }
 
         fn notify(&mut self, notice: ItemNotice) {

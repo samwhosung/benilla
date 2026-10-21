@@ -40,7 +40,7 @@ impl Plugin for UiPartyPlugin {
         app.init_resource::<GroupState>()
             .init_resource::<calls::GroupEdits>()
             .init_resource::<crate::sound::MessageSounds>()
-            .add_message::<crate::field_watch::FieldNotice>()
+            .init_resource::<crate::field_watch::NoticeLane>()
             .add_systems(
                 Update,
                 (

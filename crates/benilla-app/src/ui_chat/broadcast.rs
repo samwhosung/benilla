@@ -102,8 +102,8 @@ fn parent_zone(areas: &AreaTableRes, id: u32) -> Option<u32> {
     Some(if row.zone_id == 0 { id } else { row.zone_id })
 }
 
-/// Resolve the parked broadcasts into chat events, before [`super::feed::feed_chat`] so each
-/// lands the frame it decodes.
+/// Resolve the parked broadcasts into chat events, a feed ahead of the lanes' drain
+/// ([`crate::lanes`]), so each lands the frame it decodes.
 pub(super) fn feed_broadcasts(
     log: Res<ChatLog>,
     // The slots beside the VM: the lines are queued, so this runs no Lua.

@@ -620,7 +620,7 @@ pub(crate) mod net {
         mut guild: ResMut<GuildState>,
         index: Res<crate::net::GuidIndex>,
         stores: Query<(&crate::net::ObjectStore, Option<&crate::net::Listed>)>,
-        mut notices: MessageWriter<FieldNotice>,
+        mut notices: ResMut<crate::field_watch::NoticeLane>,
     ) {
         if let SessionEvent::GuildQueryResponse(response) = ev {
             let guild_id = response.guild_id;
@@ -818,10 +818,6 @@ pub(crate) mod net {
     }
 }
 
-/// The guild feed's system set, so the chat drain can run after the guild events fire.
-#[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct GuildFeed;
-
 /// The guild windows' session: the wire mirror, the VM feed, and the outbound intents.
 pub(crate) struct UiGuildPlugin;
 
@@ -845,7 +841,6 @@ impl Plugin for UiGuildPlugin {
                     // Its push is what `PLAYER_GUILD_UPDATE`'s handlers read.
                     feed::feed_guild
                         .in_set(UiFeed)
-                        .in_set(GuildFeed)
                         .in_set(crate::ui_unit::field_events::FieldEventPushes),
                     feed::drain_guild.in_set(crate::ui_script::UiDrain),
                 )
@@ -1464,7 +1459,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<GuildState>()
             .init_resource::<crate::net::GuidIndex>()
-            .add_message::<FieldNotice>()
+            .init_resource::<crate::field_watch::NoticeLane>()
             .insert_resource(commands)
             .add_systems(Update, feed::drain_guild);
         net::register(&mut app);
@@ -1489,7 +1484,7 @@ mod tests {
         };
         let drain = |app: &mut App| -> Vec<FieldNotice> {
             app.world_mut()
-                .resource_mut::<Messages<FieldNotice>>()
+                .resource_mut::<crate::field_watch::NoticeLane>()
                 .drain()
                 .collect()
         };

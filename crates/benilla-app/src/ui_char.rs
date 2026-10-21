@@ -818,7 +818,7 @@ pub(crate) fn feed_char(
     // `ItemSubClass.dbc`, for `GetInventoryItemCount`'s container count bit.
     sub_classes: Option<Res<crate::ui_items::ItemSubClasses>>,
     // The ammo getters' record callback, fired with the field events after this push.
-    mut field_notices: MessageWriter<crate::field_watch::FieldNotice>,
+    mut field_notices: ResMut<crate::field_watch::NoticeLane>,
 ) {
     hosted_vm.run(|script| {
         let Some(script) = script else {
@@ -1130,7 +1130,7 @@ mod tests {
             .init_resource::<Items>()
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<crate::names::NameCache>()
-            .add_message::<crate::field_watch::FieldNotice>()
+            .init_resource::<crate::field_watch::NoticeLane>()
             .insert_resource(NetCommands(tx));
         let fields = match bag {
             Some(g) => ObjectFields::from_pairs(&[
@@ -1337,7 +1337,7 @@ mod tests {
         };
         let signals = |app: &mut App| -> Vec<FieldNotice> {
             app.world_mut()
-                .resource_mut::<Messages<FieldNotice>>()
+                .resource_mut::<crate::field_watch::NoticeLane>()
                 .drain()
                 .collect()
         };

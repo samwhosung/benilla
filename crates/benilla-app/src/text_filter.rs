@@ -801,8 +801,8 @@ impl benilla_ui::script::NameLists for NameFilter {
     }
 }
 
-/// The chat chokepoint's view of the two filters, one [`SystemParam`] to keep `feed_chat` under
-/// Bevy's sixteen-parameter limit.
+/// The chat chokepoint's view of the two filters, one [`SystemParam`] to keep the chat lane's
+/// reads under Bevy's sixteen-parameter limit.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ChatTextFilter<'w> {
     filter: Res<'w, TextFilter>,

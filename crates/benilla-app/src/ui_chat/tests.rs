@@ -3784,12 +3784,12 @@ fn a_kills_unnamed_victim_is_the_unit_getters_miss() {
 /// `PLAYER_ENTER_COMBAT` (`0x6256ff`) and the object update that sets the combat flag signals
 /// `PLAYER_REGEN_DISABLED` (`UNIT_FIELD_FLAGS` 0x80000, `crate::field_watch`). vmangos sends the
 /// start at once (`Unit.cpp:4774`) and the flag with the next update (`Unit.cpp:6145`), so in one
-/// drain the edge comes first; packets the other way round give the other order. The edge waits in
-/// the chat queue and the flag's notice in the field notices, each fired by its own pass.
+/// drain the edge comes first; packets the other way round give the other order. The edge waits on
+/// the chat lane and the flag's notice on the notice lane, and the lanes' drain fires them in their
+/// stamps' order.
 #[test]
 fn the_combat_edge_and_the_regen_notice_fire_in_their_packets_order() {
     use benilla_protocol::{SessionEvent, SessionEventKind};
-    use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::*;
 
     use crate::field_watch::FieldNotice;
@@ -3798,7 +3798,7 @@ fn the_combat_edge_and_the_regen_notice_fire_in_their_packets_order() {
     fn edge(_: In<SessionEvent>, log: Res<super::ChatLog>) {
         log.push_combat_edge(true);
     }
-    fn regen(_: In<SessionEvent>, mut notices: MessageWriter<FieldNotice>) {
+    fn regen(_: In<SessionEvent>, mut notices: ResMut<crate::field_watch::NoticeLane>) {
         notices.write(FieldNotice::Global {
             id: crate::field_watch::id::PLAYER_REGEN_DISABLED,
         });
@@ -3819,8 +3819,9 @@ fn the_combat_edge_and_the_regen_notice_fire_in_their_packets_order() {
         ),
     ] {
         let mut app = App::new();
-        app.add_plugins(crate::ui_unit::UiUnitPlugin)
-            .net_handler(SessionEventKind::LoggedOut, edge)
+        app.add_plugins(crate::ui_unit::UiUnitPlugin);
+        crate::ui_chat::add_chat_lane(&mut app);
+        app.net_handler(SessionEventKind::LoggedOut, edge)
             .net_handler(SessionEventKind::LoginQueued, regen);
         let world = app.world_mut();
         let (tx, _rx) = crossbeam_channel::unbounded();
@@ -3853,10 +3854,7 @@ fn the_combat_edge_and_the_regen_notice_fire_in_their_packets_order() {
         world.insert_non_send_resource(s);
 
         crate::net::handlers::dispatch(world, packets);
-        world
-            .run_system_once(crate::ui_unit::field_events::fire_field_notices)
-            .unwrap();
-        crate::ui_chat::feed_chat_once(world);
+        crate::lanes::fire_in_order(world);
         let order = world
             .non_send_resource::<benilla_ui::script::UiScript>()
             .eval::<String>("return table.concat(Heard, ' ')")
@@ -3865,15 +3863,14 @@ fn the_combat_edge_and_the_regen_notice_fire_in_their_packets_order() {
     }
 }
 
-/// A field notice that waits for the chat drain shows its line as it fires: the rest-state
-/// callback signals `UPDATE_EXHAUSTION` and then shows the line for the new state (`0x5de4e0`),
-/// which `0x496720` hands the chat frames at once as `CHAT_MSG_SYSTEM`, ahead of the next
-/// packet's events. One between two combat edges, and one after the last, each show theirs in the
-/// pass that fires them, and of two in a row each shows its own before the next one signals.
+/// A field notice shows its line as it fires: the rest-state callback signals `UPDATE_EXHAUSTION`
+/// and then shows the line for the new state (`0x5de4e0`), which `0x496720` hands the chat frames
+/// at once as `CHAT_MSG_SYSTEM`, ahead of the next packet's events. One between two combat edges,
+/// and one after the last, each show theirs where they fire, and of two in a row each shows its
+/// own before the next one signals.
 #[test]
-fn a_waiting_notices_chat_line_shows_in_the_pass_that_fires_it() {
+fn a_notices_chat_line_shows_where_the_notice_fires() {
     use benilla_protocol::{SessionEvent, SessionEventKind};
-    use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::*;
 
     use crate::field_watch::FieldNotice;
@@ -3885,10 +3882,10 @@ fn a_waiting_notices_chat_line_shows_in_the_pass_that_fires_it() {
     fn leave(_: In<SessionEvent>, log: Res<super::ChatLog>) {
         log.push_combat_edge(false);
     }
-    fn rest(_: In<SessionEvent>, mut notices: MessageWriter<FieldNotice>) {
+    fn rest(_: In<SessionEvent>, mut notices: ResMut<crate::field_watch::NoticeLane>) {
         notices.write(FieldNotice::RestState { old: 1, new: 2 });
     }
-    fn rest_back(_: In<SessionEvent>, mut notices: MessageWriter<FieldNotice>) {
+    fn rest_back(_: In<SessionEvent>, mut notices: ResMut<crate::field_watch::NoticeLane>) {
         notices.write(FieldNotice::RestState { old: 2, new: 1 });
     }
     let enter_packet = || SessionEvent::LoggedOut;
@@ -3928,8 +3925,9 @@ fn a_waiting_notices_chat_line_shows_in_the_pass_that_fires_it() {
         ),
     ] {
         let mut app = App::new();
-        app.add_plugins(crate::ui_unit::UiUnitPlugin)
-            .net_handler(SessionEventKind::LoggedOut, enter)
+        app.add_plugins(crate::ui_unit::UiUnitPlugin);
+        crate::ui_chat::add_chat_lane(&mut app);
+        app.net_handler(SessionEventKind::LoggedOut, enter)
             .net_handler(SessionEventKind::LoginQueued, rest)
             .net_handler(SessionEventKind::LogoutCancelled, leave)
             .net_handler(SessionEventKind::LogoutResponse, rest_back);
@@ -3970,10 +3968,7 @@ fn a_waiting_notices_chat_line_shows_in_the_pass_that_fires_it() {
         world.insert_non_send_resource(s);
 
         crate::net::handlers::dispatch(world, packets);
-        world
-            .run_system_once(crate::ui_unit::field_events::fire_field_notices)
-            .unwrap();
-        crate::ui_chat::feed_chat_once(world);
+        crate::lanes::fire_in_order(world);
         let order = world
             .non_send_resource::<benilla_ui::script::UiScript>()
             .eval::<String>("return table.concat(Heard, ' ')")
