@@ -294,28 +294,32 @@ mod tests {
         const ME: u64 = 1;
         const MEMBER: u64 = 0x1234;
         const PET: u64 = 0xF140_0000_0000_0077;
-        // HEALTH/MAXHEALTH keep the units live; `UNIT_FIELD_SUMMON` is the 2-field guid at 8;
-        // `OBJECT_FIELD_TYPE` 0x9 makes each a unit, the typemask `0x489a40` selects by.
-        let store = |pairs: &[(u16, u32)]| {
+        // HEALTH/MAXHEALTH keep the units live; `UNIT_FIELD_SUMMON` is the 2-field guid at 8.
+        // `OBJECT_FIELD_TYPE` 0x9 makes a unit, the typemask `0x489a40` selects by, and 0x19 a
+        // player, the typemask the party lookups find a member by (`0x4e8144`, `0x4e81fb`).
+        let store = |kind: u32, pairs: &[(u16, u32)]| {
             ObjectStore(benilla_protocol::ObjectFields::from_pairs(
-                &[&[(2, 0x9)], pairs].concat(),
+                &[&[(2, kind)], pairs].concat(),
             ))
         };
 
         let mut world = script_world();
-        world.spawn((SelfPlayer, Guid(ME), store(&[(22, 100), (28, 100)])));
+        world.spawn((SelfPlayer, Guid(ME), store(0x19, &[(22, 100), (28, 100)])));
         let pet = world
-            .spawn((Guid(PET), store(&[(22, 100), (28, 100)])))
+            .spawn((Guid(PET), store(0x9, &[(22, 100), (28, 100)])))
             .id();
         let member = world
             .spawn((
                 Guid(MEMBER),
-                store(&[
-                    (22, 100),
-                    (28, 100),
-                    (8, PET as u32),
-                    (9, (PET >> 32) as u32),
-                ]),
+                store(
+                    0x19,
+                    &[
+                        (22, 100),
+                        (28, 100),
+                        (8, PET as u32),
+                        (9, (PET >> 32) as u32),
+                    ],
+                ),
             ))
             .id();
         let index = &mut world.resource_mut::<crate::net::GuidIndex>().0;

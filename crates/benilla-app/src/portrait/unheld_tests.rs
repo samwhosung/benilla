@@ -9,11 +9,14 @@ use crate::ui_party::GroupState;
 
 const MEMBER: u64 = 0x51;
 const CREATURE: u64 = 0xF130_0000_0000_0031;
+/// A player whose name record the cache does not hold.
+const STRANGER: u64 = 0x52;
 
 /// A selection with no object, a party member out of range, draws as any unit the object manager
 /// does not hold (`0x519fe6`): the bake cached under its guid, else the stand-in of the race and
-/// sex its name record holds (`0x51a00c` → `0x525ba0`); a guid that is no player and has no pet
-/// record draws nothing (`0x51a06d`). A held selection bakes its object.
+/// sex its name record holds (`0x51a08e` → `0x525ba0`); a player with no name record draws nothing
+/// (`0x51a095`), nor a guid that is no player and has no pet record (`0x51a0ce`). A held selection
+/// bakes its object.
 #[test]
 fn a_selection_with_no_object_draws_its_stand_in() {
     let roster = GroupState::default();
@@ -30,6 +33,14 @@ fn a_selection_with_no_object_draws_its_stand_in() {
             entity: None,
             occupant: Some(MEMBER),
             unseen: Some(player_temporary_portrait(Some(4), Some(1))),
+        }
+    );
+    assert_eq!(
+        target_subject(&unheld(STRANGER), &roster, &names),
+        Subject {
+            entity: None,
+            occupant: Some(STRANGER),
+            unseen: None,
         }
     );
     assert_eq!(

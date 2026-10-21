@@ -924,3 +924,63 @@ fn a_state_change_to_a_motion_the_model_lacks_holds_through_the_destroy() {
         "the object that left"
     );
 }
+
+/// `OnCharmOrSummonChanged` (`0x5e2660`), the player type watcher on the unit section's first 16
+/// bytes, `CHARM` then `SUMMON` (`0x5e257a`): for the active player or a party or raid member
+/// (`0x5e266b`, `0x4918e0`), an old guid the object manager does not hold that is no longer the
+/// field's value has its selection torn down (`0x5e2709` → `0x5e2719`). A player outside the group
+/// raises nothing, nor an old pet still held (`0x5e2702`).
+#[test]
+fn a_groupmates_pet_leaving_its_field_tears_down_that_pets_selection() {
+    use benilla_protocol::messages::{member_status, GroupMemberEntry};
+    const MATE: u64 = 0x51;
+    const STRANGER: u64 = 0x52;
+    const PET: u64 = 0xF140_0000_0000_0077;
+    const NEAR_PET: u64 = 0xF140_0000_0000_0078;
+    let guid = |g: u64, at: u16| [(at, g as u32), (at + 1, (g >> 32) as u32)];
+    let mut app = client();
+    let world = app.world_mut();
+    world.resource_mut::<SelfGuid>().0 = Some(ME);
+    world
+        .resource_mut::<crate::ui_party::GroupState>()
+        .apply_list(
+            0,
+            0,
+            vec![GroupMemberEntry {
+                name: "Brisca".into(),
+                guid: MATE,
+                status: member_status::ONLINE,
+                flags: 0,
+            }],
+            ME,
+            None,
+            Some(ME),
+        );
+    let torn = |world: &mut World| -> Vec<u64> {
+        world
+            .resource_mut::<Messages<crate::target::DeselectGuid>>()
+            .drain()
+            .map(|d| d.0)
+            .collect()
+    };
+    send(
+        world,
+        [
+            player(ME, &[]),
+            player(MATE, &guid(PET, 8)),
+            player(STRANGER, &guid(PET, 8)),
+            unit(NEAR_PET, &[]),
+        ],
+    );
+    torn(world);
+
+    send(world, [values(MATE, &guid(0, 8))]);
+    assert_eq!(torn(world), [PET], "a groupmate's summon");
+    send(world, [values(STRANGER, &guid(0, 8))]);
+    assert!(torn(world).is_empty(), "a player outside the group");
+    send(world, [values(ME, &guid(PET, 6))]);
+    send(world, [values(ME, &guid(NEAR_PET, 6))]);
+    assert_eq!(torn(world), [PET], "our own charm, moved off");
+    send(world, [values(ME, &guid(0, 6))]);
+    assert!(torn(world).is_empty(), "an old pet still held");
+}
