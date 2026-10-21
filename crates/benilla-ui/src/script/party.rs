@@ -158,7 +158,8 @@ pub enum PartyRequest {
     /// `UninviteFromRaid(index)`: a 1-based raid row the app resolves to the name
     /// `CMSG_GROUP_UNINVITE` takes.
     UninviteRaid(u32),
-    /// `DoReadyCheck()`, leader only (`MSG_RAID_READY_CHECK`, empty body).
+    /// `DoReadyCheck()` past its leader and running-check gates (`MSG_RAID_READY_CHECK`, empty
+    /// body, `0x4bb295`).
     ReadyCheckStart,
     /// `ConfirmReadyCheck(ready)` while a check runs: `MSG_RAID_READY_CHECK` with the low byte of
     /// the argument's flag (`0x4bc0bf`, `PutInt8` at `0x4bc0e4`).
@@ -283,6 +284,13 @@ const USAGE_SET_LOOT_METHOD: &str = "Usage: SetLootMethod(\"method\" [,master][,
 /// no borrow of the model.
 fn call(lua: &Lua, request: PartyRequest) -> mlua::Result<()> {
     super::calls::submit(lua, super::ScriptCall::Party(request))
+}
+
+/// Whether the active player's object is held (`ClntObjMgrObjectPtr(active, 0x10)`, as at
+/// `0x48aa96`): the unit feed's player guid.
+fn player_object(lua: &Lua) -> bool {
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    model.unit_guids.player != 0
 }
 
 /// The best player of `name` (`0x493aa0`, typemask 0x10, mode 2), as the name verbs resolve it.
@@ -547,24 +555,48 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The party verbs hand their request to the call host and return nothing: `AcceptGroup`
-    // (`0x48aa80`), `DeclineGroup` (`0x48aab0`), `LeaveParty` (`0x4e9180`) and `InviteByName`
-    // (`0x48a420`) send inside the call.
-    g.set(
-        "AcceptGroup",
-        lua.create_function(|lua, ()| call(lua, PartyRequest::Accept))?,
-    )?;
-    g.set(
-        "DeclineGroup",
-        lua.create_function(|lua, ()| call(lua, PartyRequest::Decline))?,
-    )?;
-    g.set(
-        "LeaveParty",
-        lua.create_function(|lua, ()| call(lua, PartyRequest::Leave))?,
-    )?;
+    // AcceptGroup() (`0x48aa80`), DeclineGroup() (`0x48aab0`) and LeaveParty() (`0x4e9180`) send
+    // inside the call, and only with the active player's object (`0x48aa96`, `0x48aac6`,
+    // `0x4e9196`); nothing else.
+    for (binding, request) in [
+        ("AcceptGroup", PartyRequest::Accept),
+        ("DeclineGroup", PartyRequest::Decline),
+        ("LeaveParty", PartyRequest::Leave),
+    ] {
+        g.set(
+            binding,
+            lua.create_function(move |lua, ()| {
+                if !player_object(lua) {
+                    return Ok(());
+                }
+                call(lua, request.clone())
+            })?,
+        )?;
+    }
+    // InviteByName(name) (`0x48a420`): `lua_isstring` (`0x48a42f`) else `Usage:
+    // InviteByName("name")` (`0x842760`, `0x48a4f7`). With the player's object (`0x48a460`), a
+    // name equal to the player's own, case-blind (`GetUnitName` at `0x48a473`, `SStrCmpI` at
+    // `0x48a47a`), shows `ERR_INVITE_SELF` (`0x48a485`) and sends nothing; any other string is
+    // sent (`0x48a4c8`).
     g.set(
         "InviteByName",
-        lua.create_function(|lua, name: String| call(lua, PartyRequest::InviteName(name)))?,
+        lua.create_function(|lua, name: Value| {
+            let name = binding_abi::string_arg(lua, name, r#"Usage: InviteByName("name")"#)?;
+            let ours = player_object(lua) && {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model
+                    .unit("player")
+                    .and_then(|u| u.name.as_deref())
+                    .is_some_and(|own| own.eq_ignore_ascii_case(&name))
+            };
+            if ours {
+                lua.app_data_mut::<Model>()
+                    .expect("model app_data")
+                    .push_ui_error("ERR_INVITE_SELF");
+                return Ok(());
+            }
+            call(lua, PartyRequest::InviteName(name))
+        })?,
     )?;
     // InviteToParty("unit") (`0x48a3b0`), UninviteFromParty("unit") (`0x48a510`) and
     // PromoteToPartyLeader("unit") (`0x48a7c0`): a string or a number (`0x6f3510`) else the usage
@@ -736,7 +768,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `SetRaidRosterSelection 0x4bb820`), so the verbs here hand the host a request.
     g.set(
         "ConvertToRaid",
-        lua.create_function(|lua, ()| call(lua, PartyRequest::ConvertToRaid))?,
+        lua.create_function(|lua, ()| {
+            // Party slot 1 held (`0x4bbc96`-`0x4bbca3`) and the leader cell our guid
+            // (`0x4bbca5`-`0x4bbcbc`), else nothing.
+            let leads = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                let party = &model.party;
+                party.members.first().is_some_and(|m| m.guid != 0)
+                    && party.leader_guid == party.own_guid
+            };
+            if !leads {
+                return Ok(());
+            }
+            call(lua, PartyRequest::ConvertToRaid)
+        })?,
     )?;
     // SetRaidSubgroup(index, subgroup) / SwapRaidSubgroup(index, other), the drag's two drops. A
     // non-number raises the usage line (`0x4bbae2`), and so does a subgroup whose truncation minus
@@ -775,12 +820,27 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "PromoteByName",
-        lua.create_function(|lua, name: String| promote_by_name(lua, &name))?,
+        lua.create_function(|lua, name: Value| {
+            // `lua_isstring` (`0x48a840`) else the usage line (`0x842804`, `0x48a8db`).
+            let name = binding_abi::string_arg(lua, name, r#"Usage: PromoteByName("name")"#)?;
+            promote_by_name(lua, &name)
+        })?,
     )?;
-    for (binding, grant) in [("PromoteToAssistant", true), ("DemoteAssistant", false)] {
+    // `lua_isstring` (`0x4bbd2e`, `0x4bbdfe`) else the usage line (`0x847538`, `0x847558`).
+    for (binding, grant, usage) in [
+        (
+            "PromoteToAssistant",
+            true,
+            "Usage: PromoteToAssistant(name)",
+        ),
+        ("DemoteAssistant", false, "Usage: DemoteAssistant(name)"),
+    ] {
         g.set(
             binding,
-            lua.create_function(move |lua, name: String| assistant_by_name(lua, &name, grant))?,
+            lua.create_function(move |lua, name: Value| {
+                let name = binding_abi::string_arg(lua, name, usage)?;
+                assistant_by_name(lua, &name, grant)
+            })?,
         )?;
     }
     g.set(
@@ -796,10 +856,21 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let now = clock(lua);
             {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                // The worker `0x4bb1d0` flags every roster member but the caller as pending
-                // (`0x4bb24c`, `0x4bb258`) and arms the 30 s deadline (`0x4bb2b6`), then sends. A
-                // party has no raid roster, so nothing is flagged and the leader's echo closes it.
+                // The worker `0x4bb1d0` runs for the leader alone: a nonzero active guid equal to
+                // the leader cell (`0x4bb1d6`-`0x4bb1fd`).
                 let own = model.party.own_guid;
+                if own == 0 || own != model.party.leader_guid {
+                    return Ok(());
+                }
+                // A running check (`GetReadyCheckMsLeft`, `0x4bb203`) shows message `0x1c7` and
+                // ends the call (`0x4bb20c`).
+                if model.ready_check.deadline.is_some_and(|d| now < d) {
+                    model.push_ui_error("ERR_READY_CHECK_IN_PROGRESS");
+                    return Ok(());
+                }
+                // Every roster member but the caller is flagged pending (`0x4bb24c`, `0x4bb258`).
+                // A party has no raid roster, so nothing is flagged and the leader's echo closes
+                // it.
                 model.ready_check.unanswered = model
                     .party
                     .raid
@@ -807,9 +878,25 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     .map(|m| m.guid)
                     .filter(|g| *g != own)
                     .collect();
-                model.ready_check.deadline = Some(now + READY_CHECK_SECONDS);
             }
-            call(lua, PartyRequest::ReadyCheckStart)
+            // The send (`0x4bb295`), then the 30 s deadline (`0x4bb2b6`), then `READY_CHECK_START`
+            // read raw (`0x703bf0` at `0x4bb2bb`, with no Model borrow held) and added as a system
+            // line (`0x49a870(text, 10)` at `0x4bb2c7`).
+            call(lua, PartyRequest::ReadyCheckStart)?;
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .ready_check
+                .deadline = Some(now + READY_CHECK_SECONDS);
+            let line = lua
+                .globals()
+                .get::<String>("READY_CHECK_START")
+                .unwrap_or_default();
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .ready_check
+                .lines
+                .push(line);
+            Ok(())
         })?,
     )?;
     // CheckReadyCheckTime() (`0x4bc120` → `0x4bb310`), called every frame from stock
@@ -2038,7 +2125,7 @@ mod tests {
     fn the_raid_verbs_queue_what_they_name() {
         let mut s = vm();
         hold(&mut s, "player", 0x5E1F, "Me");
-        s.set_party(two_member_party());
+        s.set_party(led_party());
         s.run(
             r#"
             ConvertToRaid()
@@ -2279,13 +2366,19 @@ mod tests {
         }
     }
 
+    /// The leader's `DoReadyCheck()`, and its `READY_CHECK_START` line (`0x4bb2c7`) taken.
+    fn start_check(s: &mut UiScript) {
+        s.run("DoReadyCheck()").unwrap();
+        assert_eq!(s.take_ready_check_lines().len(), 1, "the start line");
+    }
+
     #[test]
     fn the_leaders_check_times_out_into_the_afk_list_and_disarms() {
         let mut s = vm();
         let party = raid_we_lead(&s);
         s.set_party(party);
         s.set_now(100.0);
-        s.run("DoReadyCheck()").unwrap();
+        start_check(&mut s);
         assert_eq!(s.take_party_requests(), vec![PartyRequest::ReadyCheckStart]);
 
         s.set_now(129.9);
@@ -2315,7 +2408,7 @@ mod tests {
         let party = raid_we_lead(&s);
         s.set_party(party);
         s.set_now(100.0);
-        s.run("DoReadyCheck()").unwrap();
+        start_check(&mut s);
         s.ready_check_answered(0xA11CE, true);
         assert!(
             s.take_ready_check_lines().is_empty(),
@@ -2341,7 +2434,7 @@ mod tests {
             .unwrap();
         s.set_party(party);
         s.set_now(100.0);
-        s.run("DoReadyCheck()").unwrap();
+        start_check(&mut s);
         s.ready_check_answered(0xDEAD, false);
         assert!(
             s.take_ready_check_lines().is_empty(),
@@ -2373,7 +2466,7 @@ mod tests {
             .for_each(|m| m.online = m.guid != 0xB0B); // Bob is offline
         s.set_party(party);
         s.set_now(100.0);
-        s.run("DoReadyCheck()").unwrap();
+        start_check(&mut s);
         s.ready_check_answered(0xA11CE, true);
         assert_eq!(
             s.take_ready_check_lines(),
@@ -2403,7 +2496,7 @@ mod tests {
         let party = raid_we_lead(&s);
         s.set_party(party.clone());
         s.set_now(100.0);
-        s.run("DoReadyCheck()").unwrap();
+        start_check(&mut s);
         s.ready_check_answered(0xA11CE, true);
         let mut without_bob = party;
         without_bob.raid.retain(|m| m.guid != 0xB0B);
@@ -2423,7 +2516,7 @@ mod tests {
         party.raid.clear();
         s.set_party(party);
         s.set_now(100.0);
-        s.run("DoReadyCheck()").unwrap();
+        start_check(&mut s);
         s.ready_check_request(true);
         assert_eq!(
             s.take_ready_check_lines(),
@@ -2438,7 +2531,8 @@ mod tests {
         let party = raid_we_lead(&s);
         s.set_party(party);
         s.set_now(100.0);
-        s.run("RAID_MEMBERS_AFK = nil DoReadyCheck()").unwrap();
+        s.run("RAID_MEMBERS_AFK = nil").unwrap();
+        start_check(&mut s);
         s.set_now(130.0);
         s.run("CheckReadyCheckTime()").unwrap();
         assert_eq!(s.take_ready_check_lines(), vec![String::new()]);
@@ -2482,7 +2576,7 @@ mod tests {
         let party = raid_we_lead(&s);
         s.set_party(party);
         s.set_now(100.0);
-        s.run("DoReadyCheck()").unwrap();
+        start_check(&mut s);
         model_touching_index(&s);
         s.ready_check_answered(0xA11CE, false);
         assert_eq!(
@@ -2502,7 +2596,7 @@ mod tests {
         let party = raid_we_lead(&s);
         s.set_party(party);
         s.set_now(100.0);
-        s.run("DoReadyCheck()").unwrap();
+        start_check(&mut s);
         model_touching_index(&s);
         s.ready_check_answered(0xA11CE, true);
         s.ready_check_answered(0xB0B, false);
@@ -2529,7 +2623,7 @@ mod tests {
         let party = raid_we_lead(&s);
         s.set_party(party);
         s.set_now(100.0);
-        s.run("DoReadyCheck()").unwrap();
+        start_check(&mut s);
         s.ready_check_answered(0xA11CE, true);
         model_touching_index(&s);
         s.run(
@@ -2558,7 +2652,7 @@ mod tests {
         let party = raid_we_lead(&s);
         s.set_party(party.clone());
         s.set_now(100.0);
-        s.run("DoReadyCheck()").unwrap();
+        start_check(&mut s);
         s.ready_check_answered(0xA11CE, true);
         model_touching_index(&s);
         let mut without_bob = party;
@@ -2575,7 +2669,7 @@ mod tests {
         party.raid.clear();
         s.set_party(party);
         s.set_now(100.0);
-        s.run("DoReadyCheck()").unwrap();
+        start_check(&mut s);
         model_touching_index(&s);
         s.ready_check_request(true);
         assert_eq!(
@@ -2634,7 +2728,7 @@ mod tests {
     /// and raise their usage lines for anything else (`0x842804`, `0x847538`, `0x847558`).
     #[test]
     fn the_name_verbs_raise_their_usage_lines_for_a_non_string() {
-        let mut s = vm();
+        let s = vm();
         for (verb, usage) in [
             ("PromoteByName", r#"Usage: PromoteByName("name")"#),
             ("PromoteToAssistant", "Usage: PromoteToAssistant(name)"),

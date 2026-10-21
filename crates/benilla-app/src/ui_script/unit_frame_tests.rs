@@ -466,6 +466,11 @@ fn left_clicking_the_player_frame_targets_self() {
         "Loot Method is nested for the leader"
     );
     s.resolve();
+    // `LeaveParty` sends only with the player's object (`0x4e9196`).
+    s.set_unit_guids(&benilla_ui::script::UnitGuids {
+        player: 0x5E1F,
+        ..Default::default()
+    });
     let (rx, ry) = s
         .eval::<(f64, f64)>("return DropDownList1Button4:GetCenter()")
         .unwrap();
