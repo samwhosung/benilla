@@ -251,10 +251,14 @@ pub(crate) fn start_attack_local(
     // A ranged spell's precast (`Attributes & 0x2`, `0x5ecc79`) cancels what is in flight,
     // `CancelCast(1, 1, 0x1c)` (`0x5ecc85`), and the attack goes on.
     if precast_record().is_some_and(|d| d.ranged_slot()) {
-        if let Some(spell_id) = core.cancel_reaping(true, true, crate::spell::REASON_ERROR, spells)
-        {
-            edits.push(UnitEdit::AbortCasting { entity, spell_id });
-        }
+        core.cancel_reaping(
+            true,
+            true,
+            crate::spell::REASON_ERROR,
+            spells,
+            Some(entity),
+            edits,
+        );
     }
     let net = core.net;
     // Starting an attack stands you up (`0x5ecc9b`), after the attackability check but before

@@ -7,7 +7,6 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 
 use super::SpellTargeting;
-use crate::creature_anim::{CastEvent, CastEventKind, PlaySeq};
 use crate::net::{ClientCommand, GuidIndex, NetCommands, SelfGuid};
 use crate::ui_action::Spells;
 use crate::ui_cast::CastReports;
@@ -418,9 +417,10 @@ pub(crate) struct LocalMoveStart {
 ///
 /// - Esc first stops a running auto-repeat (`SpellStopCasting 0x6e6e80`, then `0x6ea080`),
 ///   and that spends the press; the cast survives to the next one.
-/// - The cast: `CMSG_CANCEL_CAST`, the self `Casting` reaped with a `Fail` cast event, and the
-///   `Stop` bar edge the cancel's own event fires ([`super::CastCore::cancel`]). Movement tests
-///   the spell's `InterruptFlags`; Esc does not.
+/// - The cast: `CMSG_CANCEL_CAST`, the `Stop` bar edge the cancel's own event fires, and the
+///   record's cast reaped with a `Fail` cast event as the cancel's tail gates it
+///   ([`super::CastCore::cancel_reaping`]). Movement tests the spell's `InterruptFlags`; Esc does
+///   not.
 /// - The channel, on movement only and only while the player is the mover (`0x515180`):
 ///   `CMSG_CANCEL_CHANNELLING` (`0x6e9b70`) and nothing local; the bar and [`ActiveChannel`] close
 ///   on `MSG_CHANNEL_UPDATE(0)` (`0x6e75f0`). Esc cannot stop a channel: `0x6e6e80` never calls
@@ -457,8 +457,6 @@ pub(crate) struct SelfCancel<'w> {
     net: Res<'w, NetCommands>,
     self_guid: Res<'w, SelfGuid>,
     index: Res<'w, GuidIndex>,
-    cast_events: MessageWriter<'w, CastEvent>,
-    play_seq: ResMut<'w, PlaySeq>,
     /// The reap and the auto-repeat clear, applied after the pass.
     edits: Res<'w, crate::creature_anim::UnitEdits>,
     ground: ResMut<'w, super::targeting::SpellTargeting>,
@@ -488,11 +486,11 @@ impl SelfCancel<'_> {
             .copied()
     }
 
-    /// `CancelCast(failed, 1, 0x1c)` ([`super::CastCore::cancel`]), then a popped cast's local
-    /// teardown: its self `Casting` reaped with a `Fail` cast event, as `spell_failed_other`'s
-    /// echo would, run early so the echo finds it done. A strike a cast popped back over is in the
-    /// slot and the save, so its pop copies it back (`0x6e4b2c`): it stays in flight, and each
-    /// press until the server's echo sends its cancel again (`0x6e6eb4`).
+    /// `CancelCast(failed, 1, 0x1c)` with its tail's reap ([`super::CastCore::cancel_reaping`]):
+    /// the record's cast on the player, as `spell_failed_other`'s echo would end it, run early so
+    /// the echo finds it done. A strike a cast popped back over is in the slot and the save, so its
+    /// pop copies it back (`0x6e4b2c`): it stays in flight, and each press until the server's echo
+    /// sends its cancel again (`0x6e6eb4`).
     fn cancel_inflight(&mut self, failed: bool, why: &str) {
         let self_e = self.self_entity();
         let Self {
@@ -500,8 +498,7 @@ impl SelfCancel<'_> {
             queued_melee,
             reports,
             net,
-            cast_events,
-            play_seq,
+            spells,
             edits,
             ground,
             ..
@@ -513,23 +510,16 @@ impl SelfCancel<'_> {
             reports,
             net,
         }
-        .cancel(failed, true, super::REASON_ERROR);
+        .cancel_reaping(
+            failed,
+            true,
+            super::REASON_ERROR,
+            spells.as_deref(),
+            self_e,
+            edits,
+        );
         if *crate::net::CAST_TRACE {
             info!("cast-trace: LOCAL self-cancel — {popped:?} ({why})");
-        }
-        if let (Some(Inflight::Cast(spell_id)), Some(e)) = (popped, self_e) {
-            edits.push(crate::creature_anim::UnitEdit::ReapCasting {
-                entity: e,
-                spell_id,
-            });
-            cast_events.write(CastEvent {
-                entity: e,
-                spell_id,
-                kind: CastEventKind::Fail,
-                cast_flags: 0,
-                item_cast: false,
-                seq: play_seq.next(),
-            });
         }
     }
 
@@ -607,7 +597,7 @@ impl SelfCancel<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::creature_anim::Casting;
+    use crate::creature_anim::{CastEvent, Casting};
 
     const FIREBALL: u32 = 133;
 
@@ -1036,6 +1026,9 @@ mod tests {
                 },
             )]));
             fill_record(&mut app);
+            app.world_mut()
+                .resource_mut::<PendingCast>()
+                .fill_record_spell(FIREBALL);
             app.world_mut()
                 .resource_mut::<PendingCast>()
                 .push(FIREBALL, None, Instant::now());

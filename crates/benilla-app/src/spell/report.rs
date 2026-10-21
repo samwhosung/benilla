@@ -175,24 +175,34 @@ impl CastCore<'_> {
         (slot, caster)
     }
 
-    /// [`Self::cancel`], answering the spell its tail reaps on the player, for a caller that
-    /// applies the reap itself (StartAttack's, `0x5ecc85`): the record's `[0xceac58]`
-    /// (`0x6e4a8e`), whatever was popped, while the record's caster was the active player, and
-    /// not for a record with `AttributesEx & 0x4` (`0x6e4aad`); a spell with no record is reaped
-    /// (`0x6e4ab3`).
+    /// [`Self::cancel`] with its tail's reap of the player's cast (`0x614150` at `0x6e4ab7`),
+    /// queued on `edits` for `player`, the active player's object (`0x6e4a77`-`0x6e4a8c`): the
+    /// record's spell `[0xceac58]` (`0x6e4a8e`), whatever was popped, while the record's caster
+    /// was the active player (`0x6e4a11`), and not for a record with `AttributesEx & 0x4`
+    /// (`0x6e4aad`); a spell with no record is reaped (`0x6e4ab3`). Every caller that tears its
+    /// cast down locally takes this one tail: StartAttack's (`0x5ecc85`), the self cancel's and the
+    /// inventory refusal's (`0x5e3ab3`).
     pub(crate) fn cancel_reaping(
         &mut self,
         failed: bool,
         send: bool,
         reason: u8,
         spells: Option<&crate::ui_action::Spells>,
-    ) -> Option<u32> {
+        player: Option<Entity>,
+        edits: &crate::creature_anim::UnitEdits,
+    ) -> Option<Inflight> {
         let record = self.pending.record_spell();
-        let (_, caster) = self.cancel_for_caster(failed, send, reason);
+        let (slot, caster) = self.cancel_for_caster(failed, send, reason);
         let kept = spells
             .and_then(|s| s.catalog.get(record))
             .is_some_and(|d| d.attributes_ex & ATTR_EX_NOT_REAPED != 0);
-        (caster && !kept && record != 0).then_some(record)
+        if let (true, Some(entity)) = (caster && !kept && record != 0, player) {
+            edits.push(crate::creature_anim::UnitEdit::AbortCasting {
+                entity,
+                spell_id: record,
+            });
+        }
+        slot
     }
 
     /// The merge's range refusal re-arms the cursor as its attempt left it
