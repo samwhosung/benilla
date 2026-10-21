@@ -24,6 +24,7 @@ pub(crate) mod field_events;
 mod held;
 mod relations;
 pub(crate) mod tooltip_facts;
+pub(crate) mod wire_order;
 
 pub(crate) use held::{traits_from_name_cache, unit_reach};
 
@@ -118,6 +119,13 @@ pub(crate) struct UiUnitPlugin;
 impl Plugin for UiUnitPlugin {
     fn build(&self, app: &mut App) {
         field_events::add_notice_drop(app);
+        // The handler table's marks, which put the field notices and the chat queue in their
+        // packets' order.
+        crate::net::handlers::NetHandlerApp::net_drain_marks(
+            app,
+            wire_order::begin_drain,
+            wire_order::mark_call,
+        );
         app.configure_sets(
             Update,
             UnitFeed

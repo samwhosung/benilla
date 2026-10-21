@@ -24,44 +24,133 @@ pub(crate) struct FieldEventPushes;
 #[derive(Resource, Default)]
 pub(crate) struct FieldNoticeCursor(MessageCursor<FieldNotice>);
 
-/// Fire this frame's field notices in the order the packets wrote them. Under the unit feed's
-/// gate, so only while the in-game interface is up; [`drop_field_notices`] takes them otherwise.
+/// The notices [`fire_field_notices`] left for the chat drain, each by its message id: each came
+/// after a chat item the drain had yet to fire, in the order the packets queued them
+/// ([`super::wire_order`]).
+#[derive(Resource, Default)]
+pub(crate) struct DeferredNotices(Vec<(usize, FieldNotice)>);
+
+/// What a field notice's firing reads, and the notices left for the chat drain.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct NoticeFiring<'w, 's> {
+    sink: crate::ui_action::MessageSink<'w>,
+    // The drunk watcher names the player it runs on (`0x609210`).
+    names: Res<'w, crate::names::NameCache>,
+    // The quest log's watcher reads the slots.
+    me: Query<'w, 's, &'static crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
+    tutorials: Option<ResMut<'w, crate::tutorial::Tutorials>>,
+    // `Option`, as the marks: a harness without the unit plugin defers nothing.
+    deferred: Option<ResMut<'w, DeferredNotices>>,
+    marks: Option<Res<'w, super::wire_order::WireMarks>>,
+}
+
+impl NoticeFiring<'_, '_> {
+    /// One notice's signals.
+    fn fire(&mut self, script: &mut UiScript, notice: FieldNotice) {
+        if notice == FieldNotice::QuestLog {
+            if let Some(store) = self.me.iter().next() {
+                script.quest_log_changed(crate::ui_quest_log::slot_views(&store.0));
+            }
+            return;
+        }
+        if let FieldNotice::Tutorial { id } = notice {
+            // `0x4b5390` with no delay, inside the watcher's run.
+            if let Some(published) = self.tutorials.as_mut().and_then(|t| t.fire_now(id)) {
+                crate::tutorial::fire_published(script, &self.sink.sounds, published);
+            }
+            return;
+        }
+        if let FieldNotice::Drunk { guid, old, new } = notice {
+            drunk(script, &mut self.sink, &self.names, guid, old, new);
+            return;
+        }
+        fire(script, &mut self.sink, notice);
+    }
+
+    /// The handler call that wrote notice `id` ([`super::wire_order::WireMarks::of_notice`]).
+    fn call_of_notice(&self, id: usize) -> usize {
+        self.marks.as_ref().map_or(0, |m| m.of_notice(id))
+    }
+
+    /// The handler call that queued chat item `seq`, on the notices' scale.
+    pub(crate) fn call_of_chat(&self, seq: u64) -> usize {
+        self.marks.as_ref().map_or(0, |m| m.of_chat(seq))
+    }
+
+    /// Fire the waiting notices a chat item of handler call `call` comes after, those of an earlier
+    /// call or of the same one; `None` fires them all.
+    pub(crate) fn fire_waiting(&mut self, script: &mut UiScript, call: Option<usize>) {
+        let Some(deferred) = self.deferred.as_ref() else {
+            return;
+        };
+        let due = match call {
+            Some(call) => deferred
+                .0
+                .iter()
+                .take_while(|(id, _)| self.call_of_notice(*id) <= call)
+                .count(),
+            None => deferred.0.len(),
+        };
+        let due: Vec<FieldNotice> = match self.deferred.as_mut() {
+            Some(deferred) => deferred.0.drain(..due).map(|(_, n)| n).collect(),
+            None => Vec::new(),
+        };
+        for notice in due {
+            self.fire(script, notice);
+        }
+    }
+
+    /// Whether a notice waits for the chat drain.
+    pub(crate) fn any_waiting(&self) -> bool {
+        self.deferred.as_ref().is_some_and(|d| !d.0.is_empty())
+    }
+
+    /// Leave `notice` for the chat drain; `false` with nowhere to leave it.
+    fn defer(&mut self, id: usize, notice: FieldNotice) -> bool {
+        match self.deferred.as_mut() {
+            Some(deferred) => {
+                deferred.0.push((id, notice));
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// Fire this frame's field notices in the order the packets wrote them. A notice a packet wrote
+/// after a chat item still queued, and every notice after it, waits for the chat drain, which
+/// fires them in their packets' order among its items ([`super::wire_order`]). Under the unit
+/// feed's gate, so only while the in-game interface is up; [`drop_field_notices`] takes them
+/// otherwise.
 pub(crate) fn fire_field_notices(
     mut hosted_vm: crate::script_calls::HostedVm,
     notices: Res<Messages<FieldNotice>>,
     mut cursor: ResMut<FieldNoticeCursor>,
-    mut sink: crate::ui_action::MessageSink,
-    // The drunk watcher names the player it runs on (`0x609210`).
-    names: Res<crate::names::NameCache>,
-    // The quest log's watcher reads the slots.
-    me: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
-    mut tutorials: Option<ResMut<crate::tutorial::Tutorials>>,
+    mut firing: NoticeFiring,
 ) {
     hosted_vm.run(|script| {
-        let fresh: Vec<FieldNotice> = cursor.0.read(&notices).copied().collect();
+        let fresh: Vec<(FieldNotice, usize)> = cursor
+            .0
+            .read_with_id(&notices)
+            .map(|(notice, id)| (*notice, id.id))
+            .collect();
         // No VM, nobody to hear them: they are dropped, as below.
         let Some(script) = script else {
             return;
         };
-        for notice in fresh {
-            if notice == FieldNotice::QuestLog {
-                if let Some(store) = me.iter().next() {
-                    script.quest_log_changed(crate::ui_quest_log::slot_views(&store.0));
-                }
+        // The chat drain's first item, by the handler call that queued it.
+        let chat_first = firing
+            .sink
+            .chat
+            .first_live_seq()
+            .map(|seq| firing.call_of_chat(seq));
+        for (notice, id) in fresh {
+            let waits =
+                firing.any_waiting() || chat_first.is_some_and(|c| c < firing.call_of_notice(id));
+            if waits && firing.defer(id, notice) {
                 continue;
             }
-            if let FieldNotice::Tutorial { id } = notice {
-                // `0x4b5390` with no delay, inside the watcher's run.
-                if let Some(published) = tutorials.as_mut().and_then(|t| t.fire_now(id)) {
-                    crate::tutorial::fire_published(script, &sink.sounds, published);
-                }
-                continue;
-            }
-            if let FieldNotice::Drunk { guid, old, new } = notice {
-                drunk(script, &mut sink, &names, guid, old, new);
-                continue;
-            }
-            fire(script, &mut sink, notice);
+            firing.fire(script, notice);
         }
     })
 }
@@ -123,6 +212,8 @@ fn drunk(
 pub(super) fn add_notice_drop(app: &mut App) {
     app.add_message::<FieldNotice>()
         .init_resource::<FieldNoticeCursor>()
+        .init_resource::<DeferredNotices>()
+        .init_resource::<super::wire_order::WireMarks>()
         .add_systems(
             Update,
             drop_field_notices
@@ -139,8 +230,12 @@ pub(super) fn add_notice_drop(app: &mut App) {
 pub(super) fn drop_field_notices(
     notices: Res<Messages<FieldNotice>>,
     mut cursor: ResMut<FieldNoticeCursor>,
+    deferred: Option<ResMut<DeferredNotices>>,
 ) {
     cursor.0.clear(&notices);
+    if let Some(mut deferred) = deferred {
+        deferred.0.clear();
+    }
 }
 
 /// One callback's signals.
