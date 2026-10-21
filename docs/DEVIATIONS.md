@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 239
+- [benilla-app](#benilla-app): 240
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 22
@@ -267,7 +267,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - Default off where the reference registers "1". Its reverb is FMOD 3's EAX API, which renders only with hardware 3D mixing, so off is what the reference is heard to produce (inferred: `fmod.dll`'s render side is untraced). ([`src/sound/mod.rs:103`](../crates/benilla-app/src/sound/mod.rs#L103))
 - `SoundOutputLimiter`, not a 1.12 CVar, default on, so overlapping full-scale kits are limited rather than clipped. ([`src/sound/mod.rs:121`](../crates/benilla-app/src/sound/mod.rs#L121))
 - With no character the reference leaves the listener where it was; benilla seats it on the camera, where the view is. ([`src/sound/mod.rs:472`](../crates/benilla-app/src/sound/mod.rs#L472))
-- The reference also plays an optimistic coin at the loot-money click, so looted money sounds twice; benilla plays the watcher's coin alone, because one coin on the confirmed change reads cleanly and the round trip the early coin hides is imperceptible on a local server. ([`src/sound/money.rs:7`](../crates/benilla-app/src/sound/money.rs#L7))
+- The reference also plays an optimistic coin at the loot-money click, and at the auto-loot sweep's money, once a session (`0x4c201b`-`0x4c2020`, the same `0x458030` call), so looted money sounds twice; benilla plays the watcher's coin alone, because one coin on the confirmed change reads cleanly and the round trip the early coin hides is imperceptible on a local server. ([`src/sound/money.rs:7`](../crates/benilla-app/src/sound/money.rs#L7))
 - 1.12.1 sets FMOD up on driver 0 and, when that fails, runs silent for the session (`Sound::Initialize` `0x7a4330`, the driver −1 → 0 at `0x7a445f`); here another output stands in, because on Linux the default is often a stock `dmix` whose card a sound server holds. ([`src/sound/output/cpal.rs:193`](../crates/benilla-app/src/sound/output/cpal.rs#L193))
 - A change of the default output device is followed (here and in `coreaudio.rs`), where 1.12.1 initialises its sound device once and never again (`Sound::Initialize` `0x7a4330` refuses a second call; the driver-enumeration functions `0x7a6320`-`0x7a6380` have no caller), because a headset plugged in mid-session should play at once. ([`src/sound/output/cpal.rs:544`](../crates/benilla-app/src/sound/output/cpal.rs#L544))
 
@@ -279,8 +279,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### target
 
-- The reference's arm reads the last object's stop (`0x611336` before `0x610383` stores this one's), so its first walk has no stop. ([`src/target/click.rs:413`](../crates/benilla-app/src/target/click.rs#L413))
-- It runs on the first frame with none, so an arrival that sends no stop (mid-air, rooted, under a held turn key) acts at once or on landing or release, where the reference waits for the next ground stop and can act long after, wherever the player then is. ([`src/target/click.rs:1211`](../crates/benilla-app/src/target/click.rs#L1211))
+- The reference's arm reads the last object's stop (`0x611336` before `0x610383` stores this one's), so its first walk has no stop. ([`src/target/click.rs:493`](../crates/benilla-app/src/target/click.rs#L493))
+- It runs on the first frame with none, so an arrival that sends no stop (mid-air, rooted, under a held turn key) acts at once or on landing or release, where the reference waits for the next ground stop and can act long after, wherever the player then is. ([`src/target/click.rs:1341`](../crates/benilla-app/src/target/click.rs#L1341))
 - The rank is held to 7, the top of the ring scale's eight entries (`0..=7`), where the reference keeps any value; a server rank past 7 would index outside our palette. ([`src/target/relations.rs:491`](../crates/benilla-app/src/target/relations.rs#L491))
 - TAB uses Classic Era's screen-space priority, not 1.12's ±30° facing cone and snapshot cursor (`0x493f60`), because the cone skips a close mob in front of the camera, which sits behind the character. ([`src/target/scan.rs:3`](../crates/benilla-app/src/target/scan.rs#L3))
 - Our own body is never a candidate. The reference's friendly scan picks the player at some facings (`CanAssist(P, P)` is true, `0x6061e0`; the cone test `0x47f220`), but our scoring always puts the player dead centre at distance 0, so CTRL-TAB would pick us on every press. ([`src/target/scan.rs:194`](../crates/benilla-app/src/target/scan.rs#L194))
@@ -369,10 +369,11 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_loot
 
-- It is the display row, where the reference's is the item index plus one (`0x4c2885`), so an addon's `GetLootSlotInfo(arg1)` reads the row the dialog is for. ([`src/ui_loot/mod.rs:131`](../crates/benilla-app/src/ui_loot/mod.rs#L131))
-- Our close paths clear it guid-matched, where `CloseInteraction` clears it unconditionally (`0x48f2c9`), so closing an old window keeps a newer `CMSG_LOOT`'s latch. ([`src/ui_loot/mod.rs:456`](../crates/benilla-app/src/ui_loot/mod.rs#L456))
-- A negative answer releases the row, where the reference's callback `0x4c2ac0` returns on a failed query and the window never opens, because an entry the server cannot describe would otherwise keep the loot shut for good. ([`src/ui_loot/mod.rs:640`](../crates/benilla-app/src/ui_loot/mod.rs#L640))
-- A push is dropped after `RECEIVE_MAX_TRIES` frames, where the reference waits on the item-cache callback with no timeout, because an entry the server never describes would otherwise stay queued. ([`src/ui_loot/mod.rs:752`](../crates/benilla-app/src/ui_loot/mod.rs#L752))
+- It is the display row, where the reference's is the item index plus one (`0x4c2885`), so an addon's `GetLootSlotInfo(arg1)` reads the row the dialog is for. ([`src/ui_loot/mod.rs:231`](../crates/benilla-app/src/ui_loot/mod.rs#L231))
+- `autoLootDefault` is benilla's own option, 1.12 auto-looting only on a shift-click, and off is 1.12's behaviour. ([`src/ui_loot/mod.rs:469`](../crates/benilla-app/src/ui_loot/mod.rs#L469))
+- Our close paths clear it guid-matched, where `CloseInteraction` clears it unconditionally (`0x48f2c9`), so closing an old window keeps a newer `CMSG_LOOT`'s latch. ([`src/ui_loot/mod.rs:497`](../crates/benilla-app/src/ui_loot/mod.rs#L497))
+- A negative answer releases the row, where the reference's callback `0x4c2ac0` returns on a failed query and the window never opens, because an entry the server cannot describe would otherwise keep the loot shut for good. ([`src/ui_loot/mod.rs:682`](../crates/benilla-app/src/ui_loot/mod.rs#L682))
+- A push is dropped after `RECEIVE_MAX_TRIES` frames, where the reference waits on the item-cache callback with no timeout, because an entry the server never describes would otherwise stay queued. ([`src/ui_loot/mod.rs:795`](../crates/benilla-app/src/ui_loot/mod.rs#L795))
 
 #### ui_loot_roll
 
