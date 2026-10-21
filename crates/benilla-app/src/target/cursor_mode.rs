@@ -688,7 +688,7 @@ pub(super) fn classify(
             .is_some_and(|slots| {
                 super::lock::resolve_lock(
                     slots,
-                    &player_actions.spells,
+                    &player_actions.openers,
                     go_inputs.spells.as_deref(),
                     go_inputs.skill_lines.as_ref().map(|s| &s.catalog),
                     Some(self_store),

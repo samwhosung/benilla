@@ -614,9 +614,15 @@ fn spell_book(
         spell_ids.len(),
         initial_cooldowns.len()
     );
+    let (spells, items, mods, pad) = seed;
+    // `ResetSpellBook 0x4b23a0` empties the opener list (`0x4b2464`-`0x4b2470`) before the
+    // arrival's replay learns the list in wire order (`0x5dea8b`-`0x5deab9`).
+    actions.openers.clear();
+    for &spell_id in &spell_ids {
+        list_opener(spell_id, spells, actions);
+    }
     actions.spells = spell_ids.into_iter().collect();
     actions.dirty = true;
-    let (spells, items, mods, pad) = seed;
     let now = Instant::now();
     for cd in &initial_cooldowns {
         let spell_id = u32::from(cd.spell_id);
@@ -651,8 +657,32 @@ fn learned_spell(
     if actions.spells.insert(spell_id) {
         actions.dirty = true;
     }
+    list_opener(spell_id, spells, actions);
     announce_learn(spell_id, spells, errors);
     tab_flash.0.push(spell_id);
+}
+
+/// `SPELL_EFFECT_OPEN_LOCK` in `Effect[0]`, the registrar's test for the opener list (`0x4b265e`).
+const SPELL_EFFECT_OPEN_LOCK: u32 = 0x21;
+
+/// The registrar's opener leg (`0x4b265e`-`0x4b2689`): a spell whose `Effect[0]` is
+/// `SPELL_EFFECT_OPEN_LOCK` goes to the tail of [`PlayerActions::openers`], already listed or not.
+/// An id with no record is not registered (`0x4b25c6`-`0x4b25e5`).
+fn list_opener(spell_id: u32, spells: Option<&Spells>, actions: &mut PlayerActions) {
+    if spells
+        .and_then(|s| s.catalog.get(spell_id))
+        .is_some_and(|d| d.effects[0] == SPELL_EFFECT_OPEN_LOCK)
+    {
+        actions.openers.push(spell_id);
+    }
+}
+
+/// The unlearn's opener leg (`0x4b2d4a`-`0x4b2dae`): the last copy of `spell_id` leaves
+/// [`PlayerActions::openers`], and the ones after it move up a place.
+fn unlist_opener(spell_id: u32, actions: &mut PlayerActions) {
+    if let Some(at) = actions.openers.iter().rposition(|&id| id == spell_id) {
+        actions.openers.remove(at);
+    }
 }
 
 /// The `ERR_LEARN_*` chat line the registrar `0x4b25b0` prints at `0x4b2909` for a spell learned
@@ -696,6 +726,8 @@ fn removed_spell(
     if actions.spells.remove(&spell_id) {
         actions.dirty = true;
     }
+    // `0x5ea24c`: every unlearn runs `0x4b2c50`.
+    unlist_opener(spell_id, actions);
     announce_unlearn(spell_id, spells, errors);
 }
 
@@ -727,6 +759,12 @@ fn superceded_spell(
     actions.spells.remove(&old_spell_id);
     actions.spells.insert(new_spell_id);
     actions.dirty = true;
+    // `0x4b2f50` unlists the old rank and registers the new one at the tail; the player's own
+    // unlearn of the old rank (`0x5e6392` → `0x5ea24c`) then runs the removal once more, and its
+    // learn of the new one (`0x5e63a4`) skips the registrar (`0x5e9c5a`).
+    unlist_opener(old_spell_id, actions);
+    list_opener(new_spell_id, spells, actions);
+    unlist_opener(old_spell_id, actions);
     // A rank-up announces once, like a first learn: the supersede pair `0x4b2f50` calls the
     // unlearn `0x4b2c50`, which prints nothing, then the registrar `0x4b25b0` with `edx = 1`
     // (`0x4b2f61`).

@@ -511,7 +511,7 @@ impl Dispatch<'_, '_> {
         match resolve_go_action(
             guid,
             &mut self.go_inputs,
-            &self.player_actions.spells,
+            &self.player_actions.openers,
             go,
             self_store,
             &self.seam.net,
@@ -1302,7 +1302,7 @@ enum KeyFact {
 pub(crate) fn resolve_go_action(
     guid: u64,
     inputs: &mut GoLockInputs,
-    known: &std::collections::BTreeSet<u32>,
+    openers: &[u32],
     go: Option<(&ObjectStore, u32)>,
     me_store: Option<&ObjectStore>,
     net: &NetCommands,
@@ -1321,7 +1321,7 @@ pub(crate) fn resolve_go_action(
     let mut matched = None;
     let outcome = super::lock::resolve_lock(
         slots,
-        known,
+        openers,
         inputs.spells.as_deref(),
         inputs.skill_lines.as_ref().map(|s| &s.catalog),
         me_store,

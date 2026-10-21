@@ -247,7 +247,8 @@ fn chest_probe(
                     .find(|(g, ..)| g.0 == guid)
                     .map(|(_, _, store, _, anim)| (store, crate::go_anim::go_state(anim, store)));
                 let me_store = self_store.single().ok();
-                match resolve_go_action(guid, &mut go_inputs, &actions.spells, go, me_store, &net) {
+                match resolve_go_action(guid, &mut go_inputs, &actions.openers, go, me_store, &net)
+                {
                     GoAction::Use => {
                         info!("PROBE_CHEST: lockless — CMSG_GAMEOBJ_USE on {guid:#x}");
                         let _ = net.0.send(ClientCommand::GameObjUse { guid });

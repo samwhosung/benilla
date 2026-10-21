@@ -75,10 +75,16 @@ pub(crate) const SPELL_ATTACK: u32 = 6603;
 pub(crate) struct PlayerActions {
     /// Wire slot (0-based) to its packed action; the Lua action id is slot + 1.
     pub buttons: HashMap<u8, ActionButton>,
-    /// The spell book (`SMSG_INITIAL_SPELLS`), ordered on purpose: the reference's first-hit
-    /// scans (the lock resolver `0x5f83d0`) pick between equal spells, 6478 and 22810 "Opening",
-    /// by array order, which is ascending id: the server sends the book from a `std::map`.
+    /// The known spells (`SMSG_INITIAL_SPELLS` and the learns since), the reference's known-spell
+    /// bits `0xb710fc` (`0x4b2603`): a set, which keeps no learn order.
     pub spells: BTreeSet<u32>,
+    /// `[0xb700b0]`: the known spells whose `Effect[0]` is `SPELL_EFFECT_OPEN_LOCK`, in learn
+    /// order. The login list enters in wire order (`0x5dea8b`-`0x5deab9`), each learn appends at
+    /// the tail with no duplicate check (`0x4b2665`-`0x4b2689`), and an unlearn removes the last
+    /// copy and closes the gap (`0x4b2d60`-`0x4b2d87`). The lock resolver `0x5f83d0` and the
+    /// item tooltip's lock walk `0x5da5e0` scan it from the front, so its order picks between
+    /// 6478 "Opening" and 22810 "Opening - No Text", which open the same locks.
+    pub openers: Vec<u32>,
     /// Set by every book or bar change, cleared once the feed re-resolves slot identity, which a
     /// landed item template ([`crate::items::Items::template_epoch`]) also triggers. Between
     /// resolves an item slot's count moves only by the item watchers' recount (`recount`).

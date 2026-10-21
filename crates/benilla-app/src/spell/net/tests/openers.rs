@@ -70,7 +70,7 @@ fn opens(actions: &PlayerActions, spells: &Spells) -> LockOutcome {
     let mut objects = crate::ui_items::TestObjects::new();
     resolve_lock(
         &slot,
-        &actions.spells,
+        &actions.openers,
         Some(spells),
         None,
         None,
@@ -154,5 +154,51 @@ fn an_unlearned_opener_leaves_the_rest_in_order() {
     assert_eq!(
         opens(&actions, &spells),
         LockOutcome::OpenBySpell(OPENING_NO_TEXT)
+    );
+}
+
+/// The registrar appends with no duplicate check (`0x4b2665`-`0x4b2689`) and the unlearn takes
+/// the last copy (`0x4b2d60`-`0x4b2d67`), so an opener learned twice keeps its first place.
+#[test]
+fn a_relearned_opener_is_listed_twice_and_an_unlearn_takes_the_last_copy() {
+    let spells = spells();
+    let mut actions = book(&[OPENING_NO_TEXT, OPENING], &spells);
+    let errors = UiErrorKeys::default();
+    learned_spell(
+        OPENING_NO_TEXT,
+        &mut actions,
+        Some(&spells),
+        &errors,
+        &mut LearnedInTab::default(),
+    );
+    assert_eq!(actions.openers, [OPENING_NO_TEXT, OPENING, OPENING_NO_TEXT]);
+    removed_spell(OPENING_NO_TEXT, &mut actions, Some(&spells), &errors);
+    assert_eq!(
+        opens(&actions, &spells),
+        LockOutcome::OpenBySpell(OPENING_NO_TEXT)
+    );
+}
+
+/// The supersede unlists the old rank twice: in `0x4b2f50` (`0x4b2f5b`), then in the player's
+/// unlearn of it (`0x5e6392` → `0x5ea24c`), so an old rank listed twice leaves no copy.
+#[test]
+fn a_supersede_unlists_the_old_rank_twice() {
+    let spells = spells();
+    let mut actions = book(&[OPENING], &spells);
+    let errors = UiErrorKeys::default();
+    let mut tab = LearnedInTab::default();
+    learned_spell(OPENING, &mut actions, Some(&spells), &errors, &mut tab);
+    superceded_spell(
+        OPENING,
+        OPENING_2,
+        &mut actions,
+        Some(&spells),
+        &errors,
+        &mut tab,
+    );
+    assert_eq!(actions.openers, [OPENING_2]);
+    assert_eq!(
+        opens(&actions, &spells),
+        LockOutcome::OpenBySpell(OPENING_2)
     );
 }

@@ -2,7 +2,7 @@
 //! pushed whole once, and what the active player opens locks with, pushed on change. The walk and
 //! the colour are the engine's ([`benilla_ui::script::check_lock`]).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
@@ -61,16 +61,16 @@ fn row_views(catalog: &LockCatalog) -> HashMap<u32, Vec<LockSlotView>> {
         .collect()
 }
 
-/// What the player opens a lock with: each known spell with an open-lock effect, in the scan order
-/// of the known-spell list, with the skill it provides now (`0x6e3760`), and the item entries
-/// carried (`0x622270`, mode 0). `skill` is the player's skill in a spell's own line.
+/// What the player opens a lock with: each spell of the opener list `0xb700b0`, in the order the
+/// walk scans it (`0x5da644`-`0x5da712`), with the skill it provides now (`0x6e3760`), and the
+/// item entries carried (`0x622270`, mode 0). `skill` is the player's skill in a spell's own line.
 fn lock_openers(
-    known: &BTreeSet<u32>,
+    openers: &[u32],
     spells: Option<&SpellCatalog>,
     skill: &dyn Fn(u32) -> u32,
     held: HashSet<u32>,
 ) -> LockOpeners {
-    let opening = known.iter().filter_map(|&id| {
+    let opening = openers.iter().filter_map(|&id| {
         let spell = spells?.get(id)?;
         Some(LockOpener {
             lock_type: spell.open_lock_type()?,
@@ -129,7 +129,7 @@ pub(super) fn feed_lock_openers(
             .into_keys()
             .collect();
         let state = lock_openers(
-            &actions.spells,
+            &actions.openers,
             spells.as_deref().map(|s| &s.catalog),
             &|id| crate::spell::spell_skill_value(Some(store), skill_catalog, id),
             held,
@@ -159,14 +159,23 @@ mod tests {
         }
     }
 
+    /// The walk reads the opener list from the front (`0x5da644`-`0x5da712`), so the openers go
+    /// in its order, not by spell id.
     #[test]
-    fn the_openers_are_the_known_open_lock_spells_with_their_current_points() {
+    fn the_openers_are_the_listed_open_lock_spells_in_order_with_their_current_points() {
+        let herbs = SpellDisplay {
+            open_lock: Some(OpenLock {
+                effect: 0,
+                lock_type: 2,
+            }),
+            ..pick_lock()
+        };
         let catalog = SpellCatalog::from_displays(HashMap::from([
             (1804, pick_lock()),
             (133, SpellDisplay::default()),
-            (6477, pick_lock()),
+            (6477, herbs),
         ]));
-        let known = BTreeSet::from([133, 1804, 6477, 9999]);
+        let known = [6477, 133, 1804, 9999];
         let at =
             |skill: u32| lock_openers(&known, Some(&catalog), &|_| skill, HashSet::from([5060]));
         let openers = at(150);
@@ -174,7 +183,7 @@ mod tests {
             openers.spells,
             [
                 LockOpener {
-                    lock_type: 1,
+                    lock_type: 2,
                     points: 150
                 },
                 LockOpener {
@@ -182,7 +191,7 @@ mod tests {
                     points: 150
                 }
             ],
-            "ascending spell id, Fireball and the unknown id left out"
+            "in list order, Fireball and the unknown id left out"
         );
         assert_eq!(openers.held, HashSet::from([5060]));
         // The value follows the skill, so a skill-up changes the state and re-pushes it.
