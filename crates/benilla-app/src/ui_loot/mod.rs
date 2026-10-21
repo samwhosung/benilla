@@ -1634,6 +1634,28 @@ mod tests {
         assert!(sent(&rx).is_empty(), "a second accept sends nothing");
     }
 
+    /// A handler that accepts inside its `LOOT_BIND_CONFIRM` (`0x4c2920`) reaches the confirm arm
+    /// (`0x4c27c0`) before the take returns, so the row goes out in the pass that asked.
+    #[test]
+    fn a_confirm_its_handler_accepts_goes_out_in_the_same_pass() {
+        let (app, rx) = drain_with(
+            0,
+            vec![item(7, FELSTRIKER, 1)],
+            &[1],
+            "local f = CreateFrame(\"Frame\")\n\
+             f:RegisterEvent(\"LOOT_BIND_CONFIRM\")\n\
+             f:SetScript(\"OnEvent\", function() LootSlot(arg1) end)",
+        );
+        assert!(
+            matches!(
+                sent(&rx)[..],
+                [ClientCommand::AutostoreLootItem { slot: 7 }]
+            ),
+            "the accept is sent in the click's pass"
+        );
+        assert_eq!(pending_confirm(&app), None);
+    }
+
     /// The flag-1 arm opens with `cmp edi,[0x847cec]`, the pending row.
     #[test]
     fn loot_slot_on_an_ordinary_row_sends_nothing() {
