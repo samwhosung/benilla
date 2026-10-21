@@ -17,6 +17,8 @@ use crate::ui_items::KEYRING_CONTAINER;
 use crate::ui_party::{GroupState, GROUP_MEMBER_SUBGROUP};
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 
+#[cfg(test)]
+mod call_tests;
 mod net;
 
 /// `ItemBondingType::BIND_WHEN_PICKED_UP`, the first conjunct of the `LOOT_BIND` confirm: the
