@@ -270,6 +270,29 @@ impl CastLadder<'_, '_> {
         self.core().stop_targeting()
     }
 
+    /// `UseAction`'s re-press toggle (`0x4e60d1`-`0x4e60da`): a slot whose spell is the running
+    /// auto-repeat spell (`0x6e9fd0`) stops it (`0x6ea080`) in place of a cast. Whether it did.
+    pub(crate) fn stop_auto_repeat_of(&mut self, spell_id: u32) -> bool {
+        if self.auto_repeat.0 != Some(spell_id) {
+            return false;
+        }
+        let me = self.self_player.single().ok().map(|(e, _)| e);
+        let mut core = CastCore {
+            pending: &mut self.pending,
+            queued_melee: &mut self.queued_melee,
+            ground: &mut self.ground,
+            reports: &mut self.reports,
+            net: &self.commands,
+        };
+        crate::creature_anim::cancel_auto_repeat_local(
+            me,
+            &mut self.auto_repeat,
+            &self.edits,
+            &mut core,
+        );
+        true
+    }
+
     /// Set what the gate's tag 2 allowed the script call about to be applied.
     pub(crate) fn permit(&mut self, may_cast: bool) {
         if let Some(permit) = self.permit.as_mut() {
@@ -624,17 +647,6 @@ fn send_spell_cast(
     if def.is_some_and(|d| d.effects[0] == benilla_formats::SPELL_EFFECT_TRADE_SKILL) {
         debug!("ui_action: cast {spell_id} is a profession opener — the crafting book opens, no packet");
         trade_skill_opens.0.push(spell_id);
-        return;
-    }
-    // The re-press toggle (`0x4e60da`): pressing the running auto-repeat spell cancels it. The
-    // reference does this in the action-button handler, before TryCast is called.
-    if commit.unit_caster().is_none()
-        && def.is_some_and(|d| d.auto_repeat())
-        && auto_repeat.0 == Some(spell_id)
-    {
-        debug!("ui_action: cast {spell_id} re-pressed — auto-repeat toggles off");
-        let self_e = self_player.single().ok().map(|(e, _)| e);
-        crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, edits, core);
         return;
     }
     if caster_dead(spell_id, def, ctx.rel.self_store) {
