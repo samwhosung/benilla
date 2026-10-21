@@ -147,10 +147,10 @@ fn compare(column: u8, a: &AuctionItemRow, b: &AuctionItemRow) -> i32 {
     }
 }
 
-/// The level the level sort and `GetAuctionItemInfo` read: the requirement, at least 1
-/// (`0x4cda98`-`0x4cdab4`, `0x4cf091`-`0x4cf0a3`).
+/// The level the level sort and `GetAuctionItemInfo` read: the requirement as a signed dword, at
+/// least 1 (`0x4cda98`-`0x4cdab4`, `0x4cf091`-`0x4cf0a3`, `jl`), so 2^31 or more floors to 1.
 pub(crate) fn floor_level(row: &AuctionItemRow) -> i32 {
-    i32::try_from(row.level).unwrap_or(i32::MAX).max(1)
+    (row.level as i32).max(1)
 }
 
 /// The bid sort's key: the current bid, else the opening price (`0x4cdb81`-`0x4cdb9a`), as the
