@@ -175,8 +175,9 @@ fn on_raid_instance_info(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>
 }
 
 /// `SMSG_NAME_QUERY_RESPONSE`, found or refused: the roster's lookups that waited on it run
-/// ([`GroupState::apply_player_name`]), after the name cache's own handler has filed the answer,
-/// whose record a found answer's notices read with no callback (`0x4bad6b`).
+/// ([`GroupState::apply_player_name`]). The name cache's handler, registered ahead of every other
+/// (`names::net::register`), has filed the answer by then, and a found answer's notices read that
+/// record with no callback (`0x4bad6b`).
 fn on_player_name(
     In(ev): In<SessionEvent>,
     mut group: ResMut<GroupState>,

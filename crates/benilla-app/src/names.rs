@@ -529,11 +529,13 @@ pub(crate) mod net {
     use crate::field_watch::{id, FieldNotice};
     use crate::net::{GuidIndex, NetHandlerApp, ObjectStore};
 
-    /// Register the four handlers.
+    /// Register the four handlers. A player-name answer's goes ahead of every other subsystem's:
+    /// the cache files the record and its valid byte (`0x55f310`, `0x55f413`) before it runs any
+    /// callback waiting on it (`0x55f426`-`0x55f452`), and those read the record it filed.
     pub(crate) fn register(app: &mut App) {
         use SessionEventKind as K;
         app.add_message::<FieldNotice>()
-            .net_handler(K::PlayerName, on_player_name)
+            .net_handler_ahead(K::PlayerName, on_player_name)
             .net_handler(K::PetName, on_pet_name)
             .net_handler(K::CreatureName, on_creature_name)
             .net_handler(K::InvalidatePlayer, on_invalidate_player);
