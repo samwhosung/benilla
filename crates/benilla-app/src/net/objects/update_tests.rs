@@ -969,7 +969,8 @@ fn a_groupmates_pet_leaving_its_field_tears_down_that_pets_selection() {
             player(ME, &[]),
             player(MATE, &guid(PET, 8)),
             player(STRANGER, &guid(PET, 8)),
-            unit(NEAR_PET, &[]),
+            // `OBJECT_FIELD_TYPE`: a unit, which the old pet's lookup asks for (`0x5e26f7`).
+            unit(NEAR_PET, &[(2, 0x9)]),
         ],
     );
     torn(world);

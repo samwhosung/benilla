@@ -1313,6 +1313,8 @@ fn apply_sandbox_list(
         )
         .lines;
     group.loot_stored = stored;
+    // Its members are no session's: their selection teardowns go nowhere.
+    let _ = group.take_released();
     lines
 }
 

@@ -139,6 +139,25 @@ pub struct GroupState {
     pub ready_check_requests: u32,
     /// The answers forwarded to us as leader, append-only until the next request clears them.
     pub ready_check_answers: Vec<(u64, bool)>,
+    /// The roster's own teardowns of the selection (`0x493910(guid, 1)`) the last list or ending
+    /// raised, in its order, for the handler to resolve against the objects held
+    /// ([`Self::take_released`]).
+    pub(crate) released: Vec<RosterRelease>,
+}
+
+/// A selection teardown the roster raises; the handler that applied it resolves which guid it
+/// tears down while the objects stand as the packet found them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RosterRelease {
+    /// `AddPartyMember` (`0x4e82d0`) seats a member the list marks offline: their guid, whether or
+    /// not the object manager holds them (`0x4e8448` → `0x4e845a`).
+    Offline(u64),
+    /// A member leaves the roster: an ending's slots (`0x4e84a0(1)`), a party list's departed slots
+    /// (`0x5e6cd7`-`0x5e6e09`) and a raid rebuild's departed rows (`0x4ba9f0`-`0x4baae4`). Each
+    /// tears down the member's guid when the object manager does not hold them (`0x4e8587`,
+    /// `0x5e6df7`, `0x4baad9`), else their charm, else summon, when that is set and not held
+    /// (`0x4e8558`, `0x5e6dc4`, `0x4baab8`).
+    Departed(u64),
 }
 
 /// What one `SMSG_GROUP_LIST` shows: its lines, and whether it plays `igPlayerInviteAccept`
@@ -350,15 +369,24 @@ impl GroupState {
                 out.lines.push(UiError::s("ERR_JOINED_GROUP_S", &last.name));
             }
         }
+        // Each seat's `0x4e82d0` call, its argument the row's online bit (`0x5e6c40`): a member
+        // listed offline has their selection torn down (`0x4e8448` → `0x4e845a`).
+        let mut released: Vec<RosterRelease> = seated
+            .iter()
+            .filter(|m| m.guid != 0 && !m.listed_online())
+            .map(|m| RosterRelease::Offline(m.guid))
+            .collect();
         // A party list's leaves: the held slots it no longer seats (`0x5e6cd7`-`0x5e6e09`), each
         // looked up with no callback (`0x5e6d15`-`0x5e6d2b`) and named only from the cache's
-        // record (`0x5e6d30`-`0x5e6d37`), so a miss shows nothing, then or later.
+        // record (`0x5e6d30`-`0x5e6d37`), so a miss shows nothing, then or later; then each one's
+        // teardown (`0x5e6d3f`-`0x5e6df7`).
         if !raid {
             for guid in &held_slots {
                 if !seated.iter().any(|m| m.guid == *guid) {
                     if let Some(name) = cached_name(*guid) {
                         out.lines.push(UiError::s("ERR_LEFT_GROUP_S", name));
                     }
+                    released.push(RosterRelease::Departed(*guid));
                 }
             }
         }
@@ -391,6 +419,14 @@ impl GroupState {
                 let old_rows: Vec<u64> = self.raid_rows().collect();
                 let arrivals = new_rows.iter().filter(|g| !old_rows.contains(g));
                 let departures = old_rows.iter().filter(|g| !new_rows.contains(g));
+                // The rebuild's teardown of each departed row, after its rows are written
+                // (`0x4ba9f0`-`0x4baae4`).
+                released.extend(
+                    departures
+                        .clone()
+                        .filter(|&&g| g != 0)
+                        .map(|&g| RosterRelease::Departed(g)),
+                );
                 let notices: Vec<(u64, &'static str)> = arrivals
                     .map(|&g| (g, ADDED))
                     .chain(departures.map(|&g| (g, REMOVED)))
@@ -438,6 +474,7 @@ impl GroupState {
 
         // The all-zero list means "not in a group" (vmangos `Server/Packets/Group.h:257`); only
         // `leader == 0` tells it apart, since a solo leader's list is empty but names a leader.
+        self.released = released;
         if leader == 0 {
             self.leave_group();
             self.store_leader_index();
@@ -586,6 +623,12 @@ impl GroupState {
     /// leader store finds the 0 already there and signals nothing (`0x4e8267`). The raid roster
     /// stays.
     fn end_party(&mut self) {
+        // Each slot's teardown, the argument set (`0x4e84b0`-`0x4e8598`).
+        self.released = self
+            .party_slots()
+            .filter(|m| m.guid != 0)
+            .map(|m| RosterRelease::Departed(m.guid))
+            .collect();
         self.slots_emptied = true;
         self.leader = 0;
         self.store_leader_index();
@@ -623,6 +666,11 @@ impl GroupState {
             .filter(move |_| held)
             .map(|m| m.guid)
             .chain(self.own_raid_row)
+    }
+
+    /// The teardowns the last list or ending raised, for its handler to resolve.
+    pub(crate) fn take_released(&mut self) -> Vec<RosterRelease> {
+        std::mem::take(&mut self.released)
     }
 
     /// `SMSG_GROUP_INVITE`: the popup plus a chat line, as the reference's `0x5e6730` does.
@@ -819,6 +867,8 @@ impl GroupState {
             ready_check: _,
             ready_check_requests: _,
             ready_check_answers: _,
+            // The list's own teardowns, raised before its reset.
+            released: _,
         } = self;
         *in_group = false;
         *group_type = 0;

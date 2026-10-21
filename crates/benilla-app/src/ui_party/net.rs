@@ -9,11 +9,12 @@ use bevy::prelude::*;
 
 use benilla_protocol::{SessionEvent, SessionEventKind};
 
-use super::{GroupState, GROUPTYPE_RAID};
+use super::{GroupState, RosterRelease, GROUPTYPE_RAID};
 use crate::names::NameCache;
 use crate::net::{ClientCommand, GuidIndex, NetCommands, NetHandlerApp, ObjectStore, SelfGuid};
 use crate::query_cache::Ask;
 use crate::sound::MessageSounds;
+use crate::target::DeselectGuid;
 use crate::ui_action::{UiError, UiErrorKeys};
 use crate::ui_quest::QuestGiver;
 
@@ -37,7 +38,8 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::ReadyCheckAnswer, on_ready_check_answer)
         .net_handler(K::RaidInstanceInfo, on_raid_instance_info)
         .net_handler(K::PlayerName, on_player_name)
-        .net_handler(K::Disconnected, on_session_end);
+        .net_handler(K::Disconnected, on_session_end)
+        .add_message::<DeselectGuid>();
 }
 
 fn on_invite(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>, errors: Res<UiErrorKeys>) {
@@ -52,9 +54,15 @@ fn on_decline(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>, errors: R
     }
 }
 
-fn on_uninvited(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>, errors: Res<UiErrorKeys>) {
+fn on_uninvited(
+    In(ev): In<SessionEvent>,
+    mut group: ResMut<GroupState>,
+    errors: Res<UiErrorKeys>,
+    mut teardown: RosterTeardown,
+) {
     if let SessionEvent::GroupUninvited = ev {
         uninvited(&mut group, &errors);
+        teardown.run(&mut group);
     }
 }
 
@@ -70,9 +78,15 @@ fn on_leader_changed(
     }
 }
 
-fn on_destroyed(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>, errors: Res<UiErrorKeys>) {
+fn on_destroyed(
+    In(ev): In<SessionEvent>,
+    mut group: ResMut<GroupState>,
+    errors: Res<UiErrorKeys>,
+    mut teardown: RosterTeardown,
+) {
     if let SessionEvent::GroupDestroyed = ev {
         destroyed(&mut group, &errors);
+        teardown.run(&mut group);
     }
 }
 
@@ -87,6 +101,7 @@ fn on_list(
     index: Res<GuidIndex>,
     commands: Res<NetCommands>,
     tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
+    mut teardown: RosterTeardown,
 ) {
     if let SessionEvent::GroupList {
         group_type,
@@ -109,6 +124,7 @@ fn on_list(
             &mut group, &errors, &sounds, &mut quest, group_type, own_flags, members, leader, loot,
             &self_guid, &names, &index, &commands,
         );
+        teardown.run(&mut group);
     }
 }
 
@@ -116,6 +132,7 @@ fn on_command_result(
     In(ev): In<SessionEvent>,
     mut group: ResMut<GroupState>,
     errors: Res<UiErrorKeys>,
+    mut teardown: RosterTeardown,
 ) {
     if let SessionEvent::PartyCommandResult {
         operation,
@@ -124,6 +141,52 @@ fn on_command_result(
     } = ev
     {
         command_result(&mut group, &errors, operation, &member, result);
+        teardown.run(&mut group);
+    }
+}
+
+/// The selection teardowns (`0x493910(guid, 1)`) a list or an ending raised
+/// ([`GroupState::take_released`]), resolved while the objects stand as the packet found them and
+/// handed to the guid-scoped deselect ([`DeselectGuid`]). A harness with no object index holds no
+/// object, and one with no selection drops them.
+#[derive(bevy::ecs::system::SystemParam)]
+struct RosterTeardown<'w, 's> {
+    index: Option<Res<'w, GuidIndex>>,
+    stores: Query<'w, 's, &'static ObjectStore>,
+    deselect: Option<MessageWriter<'w, DeselectGuid>>,
+}
+
+impl RosterTeardown<'_, '_> {
+    fn run(&mut self, group: &mut GroupState) {
+        let released = group.take_released();
+        let guids: Vec<u64> = released
+            .into_iter()
+            .filter_map(|release| self.released_guid(release))
+            .collect();
+        if let Some(deselect) = &mut self.deselect {
+            deselect.write_batch(guids.into_iter().map(DeselectGuid));
+        }
+    }
+
+    /// The guid a release tears down. Each lookup asks for a unit (typemask 8: the member at
+    /// `0x4e84d7` and `0x5e6d50`, the pet at `0x4e8523`, `0x5e6da1` and `0x4baa64`), but the raid's
+    /// for its member asks for a player (`0x4baa18`), which a row's member is.
+    fn released_guid(&self, release: RosterRelease) -> Option<u64> {
+        let held = |guid: u64| {
+            self.index
+                .as_deref()
+                .and_then(|index| index.0.get(&guid))
+                .and_then(|&e| self.stores.get(e).ok())
+                .filter(|s| s.is_unit())
+        };
+        match release {
+            RosterRelease::Offline(guid) => Some(guid),
+            RosterRelease::Departed(member) => match held(member) {
+                None => Some(member),
+                // `CHARM`, else `SUMMON` (`0x4e84e6`-`0x4e84f3`, `0x5e6d60`-`0x5e6d6d`).
+                Some(store) => store.0.unit_pet_guid().filter(|&pet| held(pet).is_none()),
+            },
+        }
     }
 }
 

@@ -40,6 +40,7 @@ pub(super) fn register(app: &mut App) {
     app.init_resource::<UpdatePass>()
         .init_resource::<Released>()
         .init_resource::<ObjectList>()
+        .add_message::<crate::target::DeselectGuid>()
         .net_handler(K::ObjectCreate, on_object_create)
         .net_handler(K::ItemCreate, on_item_create)
         .net_handler(K::ObjectValues, on_object_values)
@@ -921,6 +922,22 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
         notices
     };
     let stamp = crate::field_watch::guild_timestamp(&block, kind, fields);
+    // `OnCharmOrSummonChanged` (`0x5e2660`) on the active player or a party or raid member
+    // (`0x5e266b`, `0x4918e0`): an old pet the object manager holds no unit of has its selection
+    // torn down (`0x5e26f7`, `0x5e2719`).
+    if me == Some(guid) || sc.group.party_or_raid_member(guid) {
+        for old in crate::field_watch::pets_moved_off(&block, kind, fields) {
+            let held = sc
+                .index
+                .0
+                .get(&old)
+                .and_then(|&e| sc.stores.get(e).ok())
+                .is_some_and(|s| s.is_unit());
+            if !held {
+                sc.deselect.write(crate::target::DeselectGuid(old));
+            }
+        }
+    }
     // An entry change that missed the cache asks and waits on the answer (`0x5d9652` asks with
     // `0x5d96b0`).
     for n in &notices {

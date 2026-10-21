@@ -86,6 +86,8 @@ pub(crate) struct Scene<'w, 's> {
     field_changes: MessageWriter<'w, FieldChanged>,
     item_notices: MessageWriter<'w, crate::item_watch::ItemNotice>,
     field_notices: MessageWriter<'w, crate::field_watch::FieldNotice>,
+    /// The guid-scoped selection teardowns (`0x493910(guid, 1)`) a watcher raises.
+    deselect: MessageWriter<'w, crate::target::DeselectGuid>,
     speed_changes: MessageWriter<'w, SpeedChangeMessage>,
     self_moves: MessageWriter<'w, super::SelfMoveMessage>,
     hard_landings: MessageWriter<'w, crate::creature_anim::HardLanding>,

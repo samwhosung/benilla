@@ -167,6 +167,13 @@ impl GroupState {
         self.party_slots().any(|m| names(m.guid)) || self.raid_rows().any(names)
     }
 
+    /// `IsPartyOrRaidMember` (`0x4918e0`) past its active-player test: a nonzero guid in a party
+    /// slot (`0x4e7f96`) or a raid row (`0x4baee0`).
+    pub(crate) fn party_or_raid_member(&self, guid: u64) -> bool {
+        guid != 0
+            && (self.party_slots().any(|m| m.guid == guid) || self.raid_rows().any(|g| g == guid))
+    }
+
     /// `partypetN`'s guid for the member `member` (`0x4e81d0`): `CHARM`, else `SUMMON`, off the
     /// member's descriptor while it is held (`0x4e8204`-`0x4e821a`), else the record's pet guid
     /// while the record reads online (`0x4e8227`-`0x4e8236`).

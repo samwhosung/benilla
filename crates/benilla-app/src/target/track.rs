@@ -13,10 +13,10 @@ use super::Selection;
 /// Keep [`Selection::target`] on the selected guid's object, once the net stage has applied the
 /// objects that stream in and out. A unit's deactivation (`0x5fbb60`), destroyed or out of range, runs
 /// the teardown with its send on a matching selection (`0x5fbbe5`) unless `IsRaidMemberOrPet`
-/// (`0x491900`, `0x5fbbcd`) holds the guid, whose selection stays as the guid alone; a guid with
-/// no object leaves the selection when the roster stops holding it, the group list's and the
-/// party slots' own teardowns (`0x5e6df7`, `0x4e8587`); and an object the guid names again is the
-/// one every reader takes (the target circle compares guids each frame, `0x614a96`).
+/// (`0x491900`, `0x5fbbcd`) holds the guid, whose selection stays as the guid alone; an object the
+/// guid names again is the one every reader takes (the target circle compares guids each frame,
+/// `0x614a96`). A guid with no object has no deactivation: only an explicit teardown ends it, the
+/// roster's among them (`crate::ui_party::RosterRelease`), and the deselects.
 pub(crate) fn follow_selection_object(
     mut selection: ResMut<Selection>,
     index: Res<GuidIndex>,
@@ -49,8 +49,8 @@ pub(crate) fn follow_selection_object(
         Some(held) if now == Some(held) => return,
         // Its object deactivated, though the guid may name a fresh one already.
         Some(_) => !member(),
-        // No object: it ends once the roster no longer holds the guid.
-        None => now.is_none() && !member(),
+        // No object to deactivate.
+        None => false,
     };
     if ends {
         super::click::clear(&mut selection, &mut seam, !engaged.is_empty());

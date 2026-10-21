@@ -133,6 +133,35 @@ pub(crate) fn guild_timestamp(
     .then(|| (fields.player_guild_id(), fields.player_guild_timestamp()))
 }
 
+/// `OnCharmOrSummonChanged` (`0x5e2660`), the player type watcher on the unit section's first 16
+/// bytes, `CHARM` then `SUMMON` (`0x5e257a`-`0x5e2588`): when it runs, each of the two guids as the
+/// copy held it that is nonzero (`0x5e26e0`) and no longer the field's value (`0x5e2709`-
+/// `0x5e2710`). The caller holds its other gates: the player is the active one or in the group
+/// (`0x5e266b`-`0x5e267f`), and the old guid names no unit (`0x5e26f7`-`0x5e26fe`), whose selection
+/// it tears down (`0x5e2719`).
+pub(crate) fn pets_moved_off(
+    block: &Notified,
+    kind: ObjectType,
+    fields: &ObjectFields,
+) -> Vec<u64> {
+    if kind != ObjectType::Player || block.fired(UNIT_SECTION, 0, 16).is_none() {
+        return Vec::new();
+    }
+    [
+        (UNIT_SECTION, fields.unit_charm()),
+        (UNIT_SECTION + 2, fields.unit_summon()),
+    ]
+    .into_iter()
+    .filter_map(|(lo, now)| {
+        let now = now.unwrap_or(0);
+        let copy = |index: u16, value: u32| block.edge(index).map_or(value, |(copy, _)| copy);
+        let old =
+            u64::from(copy(lo, now as u32)) | (u64::from(copy(lo + 1, (now >> 32) as u32)) << 32);
+        (old != 0 && old != now).then_some(old)
+    })
+    .collect()
+}
+
 /// The first field of the object, unit and player sections: their byte offsets in the field
 /// array, 0, 0x18 and 0x2f0 (`0x465690`), over 4.
 const OBJECT_SECTION: u16 = 0;
