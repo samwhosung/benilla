@@ -743,5 +743,7 @@ fn a_list_event_reads_the_list_its_packet_left() {
         ],
     );
     feed_once(&mut s);
-    assert_eq!(counts(&mut s), ("1,2,".into(), "1,2,".into()));
+    // An ignore added with its name cached signals twice: `AddIgnoreSlot`'s sort (`0x5af642`),
+    // then the result's own (`0x5ace00`).
+    assert_eq!(counts(&mut s), ("1,2,".into(), "1,2,2,".into()));
 }

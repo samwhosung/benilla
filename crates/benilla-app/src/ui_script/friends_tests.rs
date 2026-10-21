@@ -2,7 +2,9 @@
 //! snapshot, then the list event. The VM keeps the friend and ignore calls its verbs make, which
 //! the client's host applies inside them (`ui_social::call_tests`).
 
-use benilla_ui::script::{FriendInfo, SocialCall, SocialRequest, SocialState, UiScript, WhoInfo};
+use benilla_ui::script::{
+    FriendInfo, IgnoreInfo, SocialCall, SocialRequest, SocialState, UiScript, WhoInfo,
+};
 
 /// The window's own manifest slice, in `load_default_ui` order.
 fn setup() -> UiScript {
@@ -295,7 +297,12 @@ fn the_ignore_list_is_the_other_half_of_tab_one() {
     push(
         &mut s,
         SocialState {
-            ignores: vec!["Spammer".to_string(), "Ninja".to_string()],
+            ignores: ["Spammer", "Ninja"]
+                .map(|n| IgnoreInfo {
+                    name: Some(n.to_string()),
+                    listed: true,
+                })
+                .to_vec(),
             selected_ignore: 1,
             ..Default::default()
         },

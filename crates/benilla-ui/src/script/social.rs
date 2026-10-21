@@ -33,6 +33,16 @@ pub struct FriendInfo {
     pub listed: bool,
 }
 
+/// One ignore slot as `GetIgnoreName` (`0x5ad460`) reads it; the default is an empty slot.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IgnoreInfo {
+    /// The guid's name as the cache holds it (`0x5ad4e5`, no callback), `None` for none.
+    pub name: Option<String>,
+    /// Whether the slot holds a guid: `GetNumIgnores` counts the slots before the first that does
+    /// not (`0x5ae550`).
+    pub listed: bool,
+}
+
 /// One `/who` row in `GetWhoInfo`'s order, names localized; race comes before class, where the
 /// wire has class first.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -54,7 +64,10 @@ pub struct SocialState {
     pub friends: Vec<FriendInfo>,
     /// The selected friend, 1-based, 0 for none (`0x5ad260` returns the stored slot + 1).
     pub selected_friend: u32,
-    pub ignores: Vec<String>,
+    /// The 25 ignore slots in the engine's order, then the eight bytes after them, which
+    /// `GetIgnoreName(26)` reads as a guid (`0x5ae576` bounds at 25 inclusive). A slot past the
+    /// end of a shorter list reads empty.
+    pub ignores: Vec<IgnoreInfo>,
     /// The selected ignore, on the same scale.
     pub selected_ignore: u32,
     /// The last `/who` answer's rows, at most 49.
@@ -335,27 +348,28 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetNumIgnores",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model.social.ignores.len() as i64)
+            let slots = model.social.ignores.iter().take(IGNORE_SLOTS);
+            Ok(slots.take_while(|i| i.listed).count() as i64)
         })?,
     )?;
 
+    // GetIgnoreName(index) (`0x5ad460`): the guid `0x5ae570` finds for `index − 1`, up to 25
+    // inclusive, its name read from the cache with no callback (`0x5ad4e5`), else the global
+    // `UNKNOWN` (`0x5ad4ee`), for no guid as for no name.
     g.set(
         "GetIgnoreName",
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: GetIgnoreName(index)` (`0x85dac8`, `0x5ad48a`).
-            let index = i64::from(binding_abi::number_arg(
-                lua,
-                index,
-                "Usage: GetIgnoreName(index)",
-            )?);
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let name = usize::try_from(index - 1)
-                .ok()
-                .and_then(|i| model.social.ignores.get(i));
-            Ok(match name {
-                Some(name) => Value::String(lua.create_string(name)?),
-                None => Value::Nil,
-            })
+            let index = binding_abi::index_arg32(lua, index, "Usage: GetIgnoreName(index)")?;
+            let slot = index.wrapping_sub(1) as usize;
+            let name = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                (slot <= IGNORE_SLOTS)
+                    .then(|| model.social.ignores.get(slot).and_then(|i| i.name.clone()))
+                    .flatten()
+            };
+            let name = name.unwrap_or_else(|| super::glue_core::global_text(lua, "UNKNOWN"));
+            lua.create_string(&name)
         })?,
     )?;
 
@@ -501,6 +515,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
 /// The friend list's slot count (`0x32`).
 const FRIEND_SLOTS: usize = 50;
+/// The ignore list's slot count (`0x19`).
+const IGNORE_SLOTS: usize = 25;
 
 /// `GetFriendSlot` (`0x5ae4b0`) on `index − 1`: a slot up to 50 inclusive, compared unsigned, so 0
 /// and every negative index find none; one the snapshot does not hold is an empty slot.

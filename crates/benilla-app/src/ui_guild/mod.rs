@@ -901,9 +901,9 @@ mod tests {
                 guid: 7,
                 ..Default::default()
             }],
-            &|_| None,
+            &crate::ui_social::NoNames,
         );
-        crate::ui_social::net::ignore_list(&mut social, vec![9]);
+        crate::ui_social::net::ignore_list(&mut social, vec![9], &crate::ui_social::NoNames);
         let on = GuildMemberNotify(true);
         let off = GuildMemberNotify(false);
         let me = Some(1);

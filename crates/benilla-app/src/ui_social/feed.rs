@@ -4,7 +4,7 @@
 
 use benilla_formats::AreaTableCatalog;
 use benilla_protocol::messages::WhoEntry;
-use benilla_ui::script::{FriendInfo, SocialRequest, SocialState as VmSocial, WhoInfo};
+use benilla_ui::script::{FriendInfo, IgnoreInfo, SocialRequest, SocialState as VmSocial, WhoInfo};
 use bevy::prelude::*;
 
 use crate::area::AreaTableRes;
@@ -14,8 +14,7 @@ use crate::script_calls::VmWith;
 use crate::ui_action::{MessageSink, Shown};
 use crate::ui_unit::{NameTables, UnitNames};
 
-use super::{FriendSlot, SocialState};
-use crate::query_cache::Ask;
+use super::{row_of, FriendSlot, ListEvent, Lists, SocialState};
 
 /// The chat-routed `/who` templates. FrameXML never names them: the engine prints these lines
 /// itself. None is a message-catalog row, so they go out through `Shown::unkeyed`, since
@@ -42,8 +41,9 @@ pub(super) struct FedSocial {
     lfg_pushed: bool,
 }
 
-/// Push the display snapshot to the VM and fire the list events the handlers owe: one
-/// `FRIENDLIST_UPDATE` per sort they ran (`0x5ae867`).
+/// Fire the list events the handlers signalled, each after pushing the lists as its signal left
+/// them, so its listeners read the list as that packet or callback did (`0x5ae867`, `0x5ae92d`,
+/// inside the dispatch); then push the lists as they stand, and the `/who` answer's exit.
 #[allow(clippy::too_many_arguments)] // the snapshot's sources, one per table it resolves through
 pub(super) fn feed_social(
     mut vm: VmWith<ResMut<'static, SocialState>>,
@@ -55,51 +55,50 @@ pub(super) fn feed_social(
     mut sink: MessageSink,
     mut fed: Local<crate::ui_script::VmMemo<FedSocial>>,
 ) {
+    let areas = areas.as_deref().map(|a| &a.0);
+    let signals = std::mem::take(&mut vm.own().signals);
+    for signal in signals {
+        vm.turn(|script, social| {
+            if let Some(script) = script {
+                script.set_social(view(&signal.lists, &social, areas, unit_names.get()));
+            }
+        });
+        let event = match signal.event {
+            ListEvent::Friends => "FRIENDLIST_UPDATE",
+            ListEvent::Ignores => "IGNORELIST_UPDATE",
+        };
+        vm.run(|script| {
+            if let Some(script) = script {
+                script.fire_event(event, Vec::new());
+            }
+        });
+    }
+    let cache = super::net::CacheNames {
+        names: &names,
+        net: &commands,
+    };
     vm.feed(|script, mut social, fires| {
         let Some(script) = script else {
             return;
         };
         let fed = fed.get(script);
-        let areas = areas.as_deref().map(|a| &a.0);
-        // An ignored player's name is asked at its packet's lookup ([`SocialState::name_events`]),
-        // and the frames between ask only a name the cache holds nothing for; a new VM's first
-        // feed stands for every list's packet.
-        let first = !fed.seeded;
-        // Taken in the frame before the interface is up too, deliberately: it marks only the ask,
-        // which goes to the server, not the VM.
-        let name_events = std::mem::take(&mut social.name_events);
-        let ask = |guid: u64| Ask::at(first || name_events.contains(&guid), &commands);
         if !fed.lfg_pushed {
             if let Some(d) = dungeons.as_deref() {
                 script.set_lfg_dungeons(d.0.clone());
                 fed.lfg_pushed = true;
             }
         }
+        script.set_social(view(
+            &social.lists(&cache),
+            &social,
+            areas,
+            unit_names.get(),
+        ));
 
-        let (ignores, ignore_order) = ignore_rows(&social, &names, &ask);
-        social.ignore_display_order = ignore_order;
-        let friends = friend_rows(&social, areas, unit_names.get());
-        let who = who_rows(&social, areas, unit_names.get());
-
-        script.set_social(VmSocial {
-            friends,
-            selected_friend: social.selected_friend_index(),
-            ignores,
-            selected_ignore: social.selected_ignore_index(),
-            who,
-            who_total: social.who_total,
-            // The chain rides along: `SortWho` re-sorts inside the binding.
-            who_sort: social.who_sort.clone(),
-        });
-
-        fed.seeded = true;
-        // `ShowFriends` signals nothing of its own: the event table has no `FRIENDLIST_SHOW`.
-        let signals = std::mem::take(&mut social.friend_signals).max(u32::from(first));
-        for _ in 0..signals {
+        // A new VM's first feed stands for every list's signal.
+        if !fed.seeded {
+            fed.seeded = true;
             fires.post("FRIENDLIST_UPDATE", Vec::new());
-        }
-        if social.ignores_dirty || first {
-            social.ignores_dirty = false;
             fires.post("IGNORELIST_UPDATE", Vec::new());
         }
         // `SMSG_WHO`'s two exits ([`WHO_CHAT_MAX`]); a sort fires its own event inside `SortWho`.
@@ -123,6 +122,26 @@ pub(super) fn feed_social(
             }
         }
     })
+}
+
+/// The VM's snapshot of `lists`, with the selections as the engine holds them now and the `/who`
+/// answer.
+fn view(
+    lists: &Lists,
+    social: &SocialState,
+    areas: Option<&AreaTableCatalog>,
+    names: UnitNames<'_>,
+) -> VmSocial {
+    VmSocial {
+        friends: friend_rows(lists, areas, names),
+        selected_friend: row_of(lists.slots.iter().map(|s| s.guid), social.selected_friend),
+        ignores: ignore_rows(lists),
+        selected_ignore: row_of(lists.ignores.iter().copied(), social.selected_ignore),
+        who: who_rows(social, areas, names),
+        who_total: social.who_total,
+        // The chain rides along: `SortWho` re-sorts inside the binding.
+        who_sort: social.who_sort.clone(),
+    }
 }
 
 /// Whether an `SMSG_WHO` answer fires `WHO_LIST_UPDATE` (true) or prints chat lines (false).
@@ -173,25 +192,25 @@ fn who_lines(rows: &[WhoInfo], total: u32, get: &dyn Fn(&str) -> Option<String>)
 /// The 50 slots as `GetFriendInfo` (`0x5ad060`) reads them, then the 32 bytes after them, which
 /// it reads for index 51 (`0x5ae4b0` bounds at 50 inclusive).
 fn friend_rows(
-    social: &SocialState,
+    lists: &Lists,
     areas: Option<&AreaTableCatalog>,
     names: UnitNames<'_>,
 ) -> Vec<FriendInfo> {
-    let mut rows: Vec<FriendInfo> = social
+    let mut rows: Vec<FriendInfo> = lists
         .slots
         .iter()
         .map(|slot| friend_row(slot, areas, names))
         .collect();
     // `+0x640`: the pending count's low bytes are the online byte and the flags, the dword at
-    // `+0x644`, which nothing writes, the name (benilla holds it null), the selection the guid,
-    // and the first ignore guid and the low half of the second the level, class and area.
-    let ignore = |k: usize| social.ignore_display_order.get(k).copied().unwrap_or(0);
+    // `+0x644`, which nothing writes, the name (benilla holds it null), and the first ignore guid
+    // and the low half of the second the level, class and area.
+    let ignore = |k: usize| lists.ignores.get(k).copied().unwrap_or(0);
     rows.push(friend_row(
         &FriendSlot {
-            online: social.friends_pending & 0xff != 0,
-            status: (social.friends_pending >> 8) as u8,
+            online: lists.friends_pending & 0xff != 0,
+            status: (lists.friends_pending >> 8) as u8,
             name: None,
-            guid: social.selected_friend,
+            guid: 0,
             level: ignore(0) as u32,
             class: (ignore(0) >> 32) as u32,
             area: ignore(1) as u32,
@@ -199,6 +218,26 @@ fn friend_rows(
         areas,
         names,
     ));
+    rows
+}
+
+/// The 25 ignore slots as `GetIgnoreName` (`0x5ad460`) reads them, then the eight bytes after
+/// them, which it reads for index 26: the pending count and a dword nothing writes, which benilla
+/// holds as 0 (`0x5ae583`).
+fn ignore_rows(lists: &Lists) -> Vec<IgnoreInfo> {
+    let mut rows: Vec<IgnoreInfo> = lists
+        .ignores
+        .iter()
+        .zip(&lists.ignore_names)
+        .map(|(&guid, name)| IgnoreInfo {
+            name: name.clone().filter(|_| guid != 0),
+            listed: guid != 0,
+        })
+        .collect();
+    rows.push(IgnoreInfo {
+        name: lists.after_ignores_name.clone(),
+        listed: lists.ignores_pending != 0,
+    });
     rows
 }
 
@@ -233,34 +272,6 @@ fn friend_row(
         flags: slot.status,
         listed: slot.guid != 0,
     }
-}
-
-/// The ignore rows: names only, sorted by name with the unresolved last, each looked up as `ask`
-/// says for its guid.
-fn ignore_rows<'a>(
-    social: &SocialState,
-    names: &NameCache,
-    ask: &dyn Fn(u64) -> Ask<'a>,
-) -> (Vec<String>, Vec<u64>) {
-    let mut rows: Vec<(u64, String)> = social
-        .ignores
-        .iter()
-        .map(|guid| {
-            (
-                *guid,
-                names
-                    .resolve_player(*guid, ask(*guid))
-                    .map(str::to_string)
-                    .unwrap_or_default(),
-            )
-        })
-        .collect();
-    rows.sort_by(|(_, a), (_, b)| {
-        a.is_empty()
-            .cmp(&b.is_empty())
-            .then_with(|| a.to_lowercase().cmp(&b.to_lowercase()))
-    });
-    rows.into_iter().map(|(guid, name)| (name, guid)).unzip()
 }
 
 /// The `/who` rows, resolved, then sorted by the chain as the reference sorts every answer
@@ -605,11 +616,10 @@ mod tests {
             .insert_player(guid, String::new(), None);
     }
 
-    /// The friend list's packet and its statuses look their names up with a callback (`0x5ae438`,
-    /// `0x5acb97`), and so do the ignore list's rows at the feed after their packet (`0x5af59a`);
-    /// the frames between ask only an ignored name the cache holds nothing for, and never a
-    /// friend's, which the slot holds. A refused name is asked again only by the next packet that
-    /// names its player, once.
+    /// Every list function looks its names up with a callback at its packet: the friend list's
+    /// (`0x5ae438`), a status's (`0x5acb97`) and the ignore list's (`0x5af59a`). No frame asks a
+    /// name, and a refused one is asked again only by the next packet that names its player,
+    /// once.
     #[test]
     fn a_refused_social_name_is_asked_at_its_next_packet_and_never_by_a_frame() {
         let (mut app, rx) = social_app();
@@ -618,24 +628,22 @@ mod tests {
             guid: 7,
             ..Default::default()
         }];
-        let packet = |app: &mut App, f: &dyn Fn(&mut SocialState, super::super::Lookup)| {
+        let packet = |app: &mut App, f: &dyn Fn(&mut SocialState, &dyn super::super::Names)| {
             app.world_mut()
                 .resource_scope(|world, mut social: Mut<SocialState>| {
-                    let names = world.resource::<NameCache>();
-                    let commands = world.resource::<NetCommands>();
-                    f(&mut social, &|guid| {
-                        names
-                            .resolve_player(guid, Ask::Event(commands))
-                            .map(str::to_string)
-                    });
+                    let names = super::super::net::CacheNames {
+                        names: world.resource::<NameCache>(),
+                        net: world.resource::<NetCommands>(),
+                    };
+                    f(&mut social, &names);
                 })
         };
-        packet(&mut app, &|social, lookup| {
-            social.apply_friend_list(&friends, lookup)
+        packet(&mut app, &|social, names| {
+            social.apply_friend_list(&friends, names)
         });
-        app.world_mut()
-            .resource_mut::<SocialState>()
-            .apply_ignore_list(vec![9]);
+        packet(&mut app, &|social, names| {
+            social.apply_ignore_list(&[9], names)
+        });
         app.update();
         let mut asked = named(&rx);
         asked.sort_unstable();
@@ -648,21 +656,21 @@ mod tests {
         }
         assert!(named(&rx).is_empty(), "no frame asks a refusal");
 
-        packet(&mut app, &|social, lookup| {
+        packet(&mut app, &|social, names| {
             let _ = social.apply_friend_status(
                 FriendStatusUpdate {
                     result: friend_result::OFFLINE,
                     guid: 7,
                     online: None,
                 },
-                lookup,
+                names,
             );
         });
         app.update();
         assert_eq!(named(&rx), [7], "a status asks its subject");
-        app.world_mut()
-            .resource_mut::<SocialState>()
-            .apply_ignore_list(vec![9]);
+        packet(&mut app, &|social, names| {
+            social.apply_ignore_list(&[9], names)
+        });
         for _ in 0..600 {
             app.update();
         }
@@ -671,8 +679,8 @@ mod tests {
             [9],
             "the ignore list's packet asks its rows, once"
         );
-        packet(&mut app, &|social, lookup| {
-            social.apply_friend_list(&friends, lookup)
+        packet(&mut app, &|social, names| {
+            social.apply_friend_list(&friends, names)
         });
         app.update();
         assert!(named(&rx).is_empty(), "7 is still in flight");

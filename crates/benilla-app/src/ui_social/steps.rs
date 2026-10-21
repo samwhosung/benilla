@@ -6,14 +6,11 @@ use benilla_ui::script::{SocialCall, UiScript};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use super::{SocialState, FRIEND_SLOTS};
+use super::{SocialState, FRIEND_SLOTS, IGNORE_SLOTS};
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
 use crate::query_cache::Ask;
 use crate::ui_action::{UiError, UiErrorKeys};
-
-/// The ignore slots (`0x19`).
-const IGNORE_SLOTS: u32 = 25;
 
 /// The social state and what its verbs send through: the engine half of the social calls
 /// ([`crate::script_calls::ScriptCallHost`]).
@@ -92,8 +89,9 @@ impl SocialSteps<'_> {
         }
     }
 
-    /// The first listed ignore whose cached name matches `name` by `SStrCmpI`, as the ignore verbs
-    /// scan the 25 slots with the lookup that never asks (`0x5af1ef`, `0x5af345`, `0x5af447`).
+    /// The first ignore slot whose guid's cached name matches `name` by `SStrCmpI`, as the ignore
+    /// verbs scan the 25 slots with the lookup that never asks (`0x5af1ef`, `0x5af345`,
+    /// `0x5af447`); an empty slot has no name.
     fn ignore_named(&self, name: &str) -> Option<(u64, String)> {
         self.social.ignores.iter().find_map(|&guid| {
             let cached = self.names.resolve_player(guid, Ask::Read)?;
@@ -128,19 +126,15 @@ impl SocialSteps<'_> {
         }
     }
 
-    /// `FriendList::SetSelectedIgnore` (`0x5ae5f0`): the guid of ignore row `index − 1` up to 25
-    /// inclusive (`0x5ae5f6`), else none. Row 25 reads the ignore pending count and the dword after
-    /// it (`+0x718`), which benilla holds as no guid.
+    /// `FriendList::SetSelectedIgnore` (`0x5ae5f0`): the guid of ignore slot `index − 1` up to 25
+    /// inclusive (`0x5ae5f6`), else none. Slot 25 is the eight bytes at `+0x718`: the ignore
+    /// pending count, and a dword nothing writes, which benilla holds as 0.
     fn select_ignore(&mut self, index: u32) {
-        let row = index.wrapping_sub(1);
-        self.social.selected_ignore = if row <= IGNORE_SLOTS {
-            self.social
-                .ignore_display_order
-                .get(row as usize)
-                .copied()
-                .unwrap_or(0)
-        } else {
-            0
+        let slot = index.wrapping_sub(1) as usize;
+        self.social.selected_ignore = match self.social.ignores.get(slot) {
+            Some(&guid) => guid,
+            None if slot == IGNORE_SLOTS => u64::from(self.social.ignores_pending),
+            None => 0,
         };
     }
 }

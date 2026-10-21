@@ -29,6 +29,58 @@ pub(crate) use steps::SocialSteps;
 
 /// The friend slots (`0x32`).
 const FRIEND_SLOTS: usize = 50;
+/// The ignore slots (`0x19`), 8 bytes each from `+0x650`.
+const IGNORE_SLOTS: usize = 25;
+
+/// The name cache (`0xc0e228`) as the list's functions reach it, through `0x55f080`.
+pub(crate) trait Names {
+    /// The lookup with a callback: the cached name, or `None` after asking the server.
+    fn lookup(&self, guid: u64) -> Option<String>;
+    /// The lookup with none: the cached name, never asking.
+    fn read(&self, guid: u64) -> Option<String>;
+}
+
+/// No name cached, for a test of a function that only seats a list.
+#[cfg(test)]
+pub(crate) struct NoNames;
+
+#[cfg(test)]
+impl Names for NoNames {
+    fn lookup(&self, _: u64) -> Option<String> {
+        None
+    }
+    fn read(&self, _: u64) -> Option<String> {
+        None
+    }
+}
+
+/// The two lists as a signal left them, which its event's listeners read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Lists {
+    slots: Vec<FriendSlot>,
+    friends_pending: u32,
+    ignores: Vec<u64>,
+    /// Each ignore slot's name as the cache held it, read with no callback (`0x5ad4e5`).
+    ignore_names: Vec<Option<String>>,
+    ignores_pending: u32,
+    /// The name of the guid `GetIgnoreName(26)` reads, the pending count (`+0x718`).
+    after_ignores_name: Option<String>,
+}
+
+/// Which list a signal is about: `FRIENDLIST_UPDATE` (`0x15f`, `0x5ae867`) or
+/// `IGNORELIST_UPDATE` (`0x160`, `0x5ae92d`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ListEvent {
+    Friends,
+    Ignores,
+}
+
+/// A list event a handler signalled, and the lists it left.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Signal {
+    event: ListEvent,
+    lists: Lists,
+}
 
 /// One friend slot, the 32 bytes at `+0x20·k`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -67,11 +119,12 @@ pub(crate) struct SocialState {
     friends_pending: u32,
     /// The selected friend's guid (`+0x648`); 0 is none.
     selected_friend: u64,
+    /// The 25 ignore guids (`+0x650`); 0 is an empty slot.
     ignores: Vec<u64>,
-    /// The selected ignore as a guid (the reference's `+0x720`).
+    /// `+0x718`, the ignore names pending, as `+0x640` for the friends.
+    ignores_pending: u32,
+    /// The selected ignore's guid (`+0x720`); 0 is none.
     selected_ignore: u64,
-    /// The ignore guids in the order the feed last showed them, for Lua's row indices.
-    ignore_display_order: Vec<u64>,
     /// The last `/who` answer; `who_total` is the server's full match count.
     who: Vec<benilla_protocol::messages::WhoEntry>,
     who_total: u32,
@@ -82,12 +135,8 @@ pub(crate) struct SocialState {
     who_to_ui: bool,
     /// The lookups that missed, in the order made.
     waits: Vec<NameWait>,
-    /// The ignored players whose name `SMSG_IGNORE_LIST` looked up since the last feed
-    /// (`0x5af59a`), which the feed asks with a callback.
-    name_events: std::collections::HashSet<u64>,
-    /// The `FRIENDLIST_UPDATE`s the sorts signalled (`0x5ae867`) since the last feed.
-    friend_signals: u32,
-    ignores_dirty: bool,
+    /// The list events signalled since the last feed, each with the lists it left.
+    signals: Vec<Signal>,
     who_dirty: bool,
 }
 
@@ -97,25 +146,19 @@ impl Default for SocialState {
             slots: vec![FriendSlot::default(); FRIEND_SLOTS],
             friends_pending: 0,
             selected_friend: 0,
-            ignores: Vec::new(),
+            ignores: vec![0; IGNORE_SLOTS],
+            ignores_pending: 0,
             selected_ignore: 0,
-            ignore_display_order: Vec::new(),
             who: Vec::new(),
             who_total: 0,
             who_sort: Default::default(),
             who_to_ui: false,
             waits: Vec::new(),
-            name_events: Default::default(),
-            friend_signals: 0,
-            ignores_dirty: false,
+            signals: Vec::new(),
             who_dirty: false,
         }
     }
 }
-
-/// The lookup with a callback a friend-list function makes (`0x55f080`): the cached name, or
-/// `None` after asking the server.
-type Lookup<'a> = &'a dyn Fn(u64) -> Option<String>;
 
 impl SocialState {
     /// Drop the session's state, as the teardown frees the list (`0x5ae2d0`) and the next world
@@ -128,10 +171,28 @@ impl SocialState {
         };
     }
 
-    /// Is `guid` on the ignore list? The reference's `IsIgnored` (`0x5ae5a0`): an ignored player's
-    /// chat and text emotes drop silently (`0x49dbe0`), and their duel is declined (`0x4d4a33`).
+    /// Is `guid` in an ignore slot? The reference's `IsIgnored` (`0x5ae5a0`): an ignored player's
+    /// chat and text emotes drop silently (`0x49dc36`), and their duel is declined (`0x4d4a33`).
     pub(crate) fn is_ignored(&self, guid: u64) -> bool {
         guid != 0 && self.ignores.contains(&guid)
+    }
+
+    /// The lists as they stand, the ignores' names read from the cache.
+    pub(super) fn lists(&self, names: &dyn Names) -> Lists {
+        Lists {
+            slots: self.slots.clone(),
+            friends_pending: self.friends_pending,
+            ignores: self.ignores.clone(),
+            ignore_names: self.ignores.iter().map(|&g| names.read(g)).collect(),
+            ignores_pending: self.ignores_pending,
+            after_ignores_name: names.read(u64::from(self.ignores_pending)),
+        }
+    }
+
+    /// Signal `event` with the lists as they stand, for the feed to fire in order.
+    fn signal(&mut self, event: ListEvent, names: &dyn Names) {
+        let lists = self.lists(names);
+        self.signals.push(Signal { event, lists });
     }
 
     /// Is `guid` in a friend slot? The reference's `IsFriend` (`0x5ae810`), which keeps the guild
@@ -179,35 +240,88 @@ impl SocialState {
 
     /// `SortFriends` (`0x5ae850`): the CRT `qsort` of the 50 slots with `CompareFriends`
     /// (`0x5ae870`), then `FRIENDLIST_UPDATE` (`0x5ae867`).
-    fn sort_friends(&mut self) {
+    fn sort_friends(&mut self, names: &dyn Names) {
         benilla_ui::crt::qsort(&mut self.slots, compare_friends);
-        self.friend_signals += 1;
+        self.signal(ListEvent::Friends, names);
     }
 
-    /// `DecrementPendingFriendNames` (`0x5aeb70`): a pending count above 0 drops by one, and the
-    /// list sorts when it reaches 0.
-    fn decrement_friends_pending(&mut self) {
-        if self.friends_pending == 0 {
+    /// `SortIgnores` (`0x5ae910`): the CRT `qsort` of the 25 guids with `CompareIgnoredByName`
+    /// (`0x5ae940`), then `IGNORELIST_UPDATE` (`0x5ae92d`).
+    fn sort_ignores(&mut self, names: &dyn Names) {
+        benilla_ui::crt::qsort(&mut self.ignores, |&a, &b| compare_ignores(a, b, names));
+        self.signal(ListEvent::Ignores, names);
+    }
+
+    /// `DecrementPendingFriendNames` (`0x5aeb70`) and `DecrementPendingIgnoreNames` (`0x5aeb90`):
+    /// a pending count above 0 drops by one, and its list sorts when it reaches 0.
+    fn decrement_pending(&mut self, ignore: bool, names: &dyn Names) {
+        let pending = if ignore {
+            &mut self.ignores_pending
+        } else {
+            &mut self.friends_pending
+        };
+        if *pending == 0 {
             return;
         }
-        self.friends_pending -= 1;
-        if self.friends_pending == 0 {
-            self.sort_friends();
+        *pending -= 1;
+        if *pending == 0 {
+            if ignore {
+                self.sort_ignores(names);
+            } else {
+                self.sort_friends(names);
+            }
         }
     }
 
-    /// Look `guid`'s name up for a friend function, the miss counted and its callback waited for.
-    fn look_up(&mut self, guid: u64, line: Option<&'static str>, lookup: Lookup) -> Option<String> {
-        let name = lookup(guid);
+    /// Look `guid`'s name up with a list's callback, the miss counted in that list's pending count
+    /// and its callback waited for.
+    fn look_up(
+        &mut self,
+        guid: u64,
+        line: Option<&'static str>,
+        ignore: bool,
+        names: &dyn Names,
+    ) -> Option<String> {
+        let name = names.lookup(guid);
         if name.is_none() {
-            self.friends_pending = self.friends_pending.wrapping_add(1);
-            self.waits.push(NameWait {
-                guid,
-                line,
-                ignore: false,
-            });
+            let pending = if ignore {
+                &mut self.ignores_pending
+            } else {
+                &mut self.friends_pending
+            };
+            *pending = pending.wrapping_add(1);
+            self.waits.push(NameWait { guid, line, ignore });
         }
         name
+    }
+
+    /// `AddIgnoreSlot` (`0x5af5d0`): `guid` into the first empty slot, with no test for a slot
+    /// holding it already, or dropped when all 25 are taken (`0x5af5eb`, `0x5af5f0`). With
+    /// `look` its name is looked up (`0x5af627`) and the ignores sort with nothing pending
+    /// (`0x5af636`).
+    fn add_ignore_slot(&mut self, guid: u64, look: bool, names: &dyn Names) {
+        let Some(k) = self.ignores.iter().position(|&g| g == 0) else {
+            return;
+        };
+        self.ignores[k] = guid;
+        if !look {
+            return;
+        }
+        self.look_up(guid, None, true, names);
+        if self.ignores_pending == 0 {
+            self.sort_ignores(names);
+        }
+    }
+
+    /// `0x5af650`, result 16's: the first slot holding `guid` zeroed, and the ignores sorted when
+    /// nothing is pending (`0x5af691`); the selection stays.
+    fn remove_ignore(&mut self, guid: u64, names: &dyn Names) {
+        if let Some(k) = self.ignores.iter().position(|&g| g == guid) {
+            self.ignores[k] = 0;
+            if self.ignores_pending == 0 {
+                self.sort_ignores(names);
+            }
+        }
     }
 
     /// `SMSG_FRIEND_LIST` (`0x5ae350`): every slot's name freed (`0x5ae366`-`0x5ae388`), then up to
@@ -215,7 +329,7 @@ impl SocialState {
     /// and class (`0x5ae415`); the slots past the records keep their guids. Each name is copied
     /// from the cache (`0x5ae438`-`0x5ae451`) or counted pending (`0x5ae459`), and the list sorts
     /// only with nothing pending (`0x5ae475`-`0x5ae481`).
-    fn apply_friend_list(&mut self, friends: &[FriendEntry], lookup: Lookup) {
+    fn apply_friend_list(&mut self, friends: &[FriendEntry], names: &dyn Names) {
         for slot in &mut self.slots {
             slot.name = None;
         }
@@ -230,25 +344,33 @@ impl SocialState {
                 class: if on { entry.class } else { 0 },
                 area: if on { entry.area } else { 0 },
             };
-            let name = self.look_up(entry.guid, None, lookup);
+            let name = self.look_up(entry.guid, None, false, names);
             self.slots[k].name = name;
         }
         if self.friends_pending == 0 {
-            self.sort_friends();
+            self.sort_friends(names);
         }
     }
 
     /// Seat the ignore list directly, for tests of the code that consults it.
     #[cfg(test)]
     pub(crate) fn set_ignores_for_test(&mut self, guids: Vec<u64>) {
-        self.apply_ignore_list(guids);
+        self.apply_ignore_list(&guids, &NoNames);
     }
 
-    /// `SMSG_IGNORE_LIST`: the whole list.
-    fn apply_ignore_list(&mut self, guids: Vec<u64>) {
-        self.name_events.extend(guids.iter().copied());
-        self.ignores = guids;
-        self.ignores_dirty = true;
+    /// `SMSG_IGNORE_LIST` (`0x5af530`): the 25 slots zeroed (`0x5af548`), then every guid the
+    /// count names, with no cap: each seated by `AddIgnoreSlot` without a lookup (`0x5af578`), which
+    /// drops one past the 25th, then looked up with the ignores' callback (`0x5af59a`), a miss
+    /// counted (`0x5af5a3`). The ignores sort only with nothing pending (`0x5af5b2`).
+    fn apply_ignore_list(&mut self, guids: &[u64], names: &dyn Names) {
+        self.ignores = vec![0; IGNORE_SLOTS];
+        for &guid in guids {
+            self.add_ignore_slot(guid, false, names);
+            self.look_up(guid, None, true, names);
+        }
+        if self.ignores_pending == 0 {
+            self.sort_ignores(names);
+        }
     }
 
     /// `SMSG_FRIEND_STATUS`, `HandleResult` (`0x5acab0`) through its table (`0x5ace1c`): a result
@@ -256,7 +378,11 @@ impl SocialState {
     /// with their line as the callback's message. A cached name is stored for an add
     /// (`0x5acdbd`), the list sorts and the line shows with the name (`0x5acdd5`-`0x5ace08`); a
     /// miss counts as pending and returns unsignalled (`0x5acba6`-`0x5acdba`).
-    fn apply_friend_status(&mut self, update: FriendStatusUpdate, lookup: Lookup) -> Vec<UiError> {
+    fn apply_friend_status(
+        &mut self,
+        update: FriendStatusUpdate,
+        names: &dyn Names,
+    ) -> Vec<UiError> {
         let FriendStatusUpdate {
             result,
             guid,
@@ -315,43 +441,29 @@ impl SocialState {
             }
             friend_result::IGNORE_ALREADY => true,
             friend_result::IGNORE_ADDED => {
-                if !self.ignores.contains(&guid) {
-                    self.ignores.push(guid);
-                }
-                self.ignores_dirty = true;
+                self.add_ignore_slot(guid, true, names);
                 true
             }
             friend_result::IGNORE_REMOVED => {
-                self.ignores.retain(|g| *g != guid);
-                if self.selected_ignore == guid {
-                    self.selected_ignore = 0;
-                }
-                self.ignores_dirty = true;
+                self.remove_ignore(guid, names);
                 true
             }
             // Every other result shows its line alone.
             _ => return vec![UiError::key(key)],
         };
-        let name = if ignore {
-            let name = lookup(guid);
-            if name.is_none() {
-                self.waits.push(NameWait {
-                    guid,
-                    line: Some(key),
-                    ignore,
-                });
+        let name = self.look_up(guid, Some(key), ignore, names);
+        if let Some(name) = &name {
+            if key == "ERR_FRIEND_ADDED_S" {
+                self.set_name(guid, name);
             }
-            name
-        } else {
-            let name = self.look_up(guid, Some(key), lookup);
-            if let Some(name) = &name {
-                if key == "ERR_FRIEND_ADDED_S" {
-                    self.set_name(guid, name);
-                }
-                self.sort_friends();
+            // The cached arm sorts the list the result acted on, pending or not (`0x5acdde`,
+            // `0x5ace00`).
+            if ignore {
+                self.sort_ignores(names);
+            } else {
+                self.sort_friends(names);
             }
-            name
-        };
+        }
         name.map(|name| named_line(key, &name))
             .into_iter()
             .collect()
@@ -362,11 +474,14 @@ impl SocialState {
     /// drops the pending count (`0x5acf15`) and shows its line with the name (`0x5acf27`); for a
     /// refusal it shows `ERR_FRIEND_ERROR` (`0x5ace9f`), drops the count (`0x5aceb6`) and sends
     /// `CMSG_DEL_FRIEND` (`0x5acec8`). Neither line shows for the list's lookups (`0x1d1`). The
-    /// ignores' callback (`0x5acf40`) shows the same lines.
+    /// ignores' (`0x5acf40`) drops its count and shows its line for a found name (`0x5acf97`,
+    /// `0x5acfe2`); for a refusal it shows `ERR_FRIEND_ERROR` (`0x5acf6e`), sends
+    /// `CMSG_DEL_IGNORE` (`0x5acf8c`) and drops its count (`0x5acf97`).
     fn apply_player_name(
         &mut self,
         guid: u64,
         found: Option<&str>,
+        names: &dyn Names,
         send: &mut dyn FnMut(ClientCommand),
     ) -> Vec<UiError> {
         let mut lines = Vec::new();
@@ -379,16 +494,19 @@ impl SocialState {
                 Some(name) => {
                     if !wait.ignore {
                         self.set_name(guid, name);
-                        self.decrement_friends_pending();
                     }
+                    self.decrement_pending(wait.ignore, names);
                     lines.extend(wait.line.map(|key| named_line(key, name)));
+                }
+                None if wait.ignore => {
+                    lines.extend(wait.line.map(|_| UiError::key("ERR_FRIEND_ERROR")));
+                    send(ClientCommand::DelIgnore { guid });
+                    self.decrement_pending(true, names);
                 }
                 None => {
                     lines.extend(wait.line.map(|_| UiError::key("ERR_FRIEND_ERROR")));
-                    if !wait.ignore {
-                        self.decrement_friends_pending();
-                        send(ClientCommand::DelFriend { guid });
-                    }
+                    self.decrement_pending(false, names);
+                    send(ClientCommand::DelFriend { guid });
                 }
             }
         }
@@ -398,15 +516,12 @@ impl SocialState {
     /// `GetSelectedFriendIndex` (`0x5ae510`) plus one, as `GetSelectedFriend` answers it
     /// (`0x5ad272`): the slot holding the selected guid, 0 for none.
     fn selected_friend_index(&self) -> u32 {
-        if self.selected_friend == 0 {
-            return 0;
-        }
-        self.find(self.selected_friend).map_or(0, |k| k as u32 + 1)
+        row_of(self.slots.iter().map(|s| s.guid), self.selected_friend)
     }
 
-    /// `GetSelectedIgnore`'s answer: the shown row holding the selected guid, 0 for none.
+    /// `GetSelectedIgnore` (`0x5ae630` plus one): the slot holding the selected guid, 0 for none.
     fn selected_ignore_index(&self) -> u32 {
-        index_of(&self.ignore_display_order, self.selected_ignore)
+        row_of(self.ignores.iter().copied(), self.selected_ignore)
     }
 
     /// `SMSG_WHO`: the answer to the last query.
@@ -438,15 +553,33 @@ fn compare_friends(a: &FriendSlot, b: &FriendSlot) -> i32 {
     }
 }
 
-/// The 1-based row of a guid in the shown order, 0 when absent.
-fn index_of(order: &[u64], guid: u64) -> u32 {
+/// The 1-based slot holding the selected `guid`, 0 for none (`0x5ae510`, `0x5ae630`, plus one).
+pub(super) fn row_of(slots: impl IntoIterator<Item = u64>, guid: u64) -> u32 {
     if guid == 0 {
         return 0;
     }
-    order
-        .iter()
-        .position(|g| *g == guid)
-        .map_or(0, |i| i as u32 + 1)
+    slots
+        .into_iter()
+        .position(|g| g == guid)
+        .map_or(0, |k| k as u32 + 1)
+}
+
+/// `CompareIgnoredByName` (`0x5ae940`): an empty slot after a full one (`0x5ae96f`, `0x5ae975`),
+/// then the names the cache holds, read with no callback (`0x5ae98d`, `0x5ae9ab`), by `SStrCmpI`
+/// with no bound (`0x5ae9c2`), a missing name after a present one.
+fn compare_ignores(a: u64, b: u64, names: &dyn Names) -> i32 {
+    match (a == 0, b == 0) {
+        (true, true) => return 0,
+        (true, false) => return 1,
+        (false, true) => return -1,
+        (false, false) => {}
+    }
+    match (names.read(a), names.read(b)) {
+        (Some(x), Some(y)) => benilla_ui::crt::str_cmp_i(&x, &y),
+        (None, None) => 0,
+        (None, Some(_)) => 1,
+        (Some(_), None) => -1,
+    }
 }
 
 /// A result's line with the subject's name, which `DisplayError` is passed twice (`0x5acde3`); the
@@ -518,14 +651,22 @@ pub(crate) mod net {
             .net_handler(K::Disconnected, on_session_end);
     }
 
-    /// The lookup with a callback (`0x55f080`), which asks the server on a miss.
-    fn lookup<'a>(
-        names: &'a NameCache,
-        commands: &'a NetCommands,
-    ) -> impl Fn(u64) -> Option<String> + 'a {
-        move |guid| {
-            names
-                .resolve_player(guid, Ask::Event(commands))
+    /// The name cache as a handler holds it: the lookup with a callback asks the server on a
+    /// miss ([`Ask::Event`]), the one with none never does ([`Ask::Read`]).
+    pub(crate) struct CacheNames<'a> {
+        pub(crate) names: &'a NameCache,
+        pub(crate) net: &'a NetCommands,
+    }
+
+    impl Names for CacheNames<'_> {
+        fn lookup(&self, guid: u64) -> Option<String> {
+            self.names
+                .resolve_player(guid, Ask::Event(self.net))
+                .map(str::to_string)
+        }
+        fn read(&self, guid: u64) -> Option<String> {
+            self.names
+                .resolve_player(guid, Ask::Read)
                 .map(str::to_string)
         }
     }
@@ -534,16 +675,29 @@ pub(crate) mod net {
         In(ev): In<SessionEvent>,
         mut social: ResMut<SocialState>,
         names: Res<NameCache>,
-        commands: Res<NetCommands>,
+        net: Res<NetCommands>,
     ) {
         if let SessionEvent::FriendList { friends } = ev {
-            friend_list(&mut social, friends, &lookup(&names, &commands));
+            let names = CacheNames {
+                names: &names,
+                net: &net,
+            };
+            friend_list(&mut social, friends, &names);
         }
     }
 
-    fn on_ignore_list(In(ev): In<SessionEvent>, mut social: ResMut<SocialState>) {
+    fn on_ignore_list(
+        In(ev): In<SessionEvent>,
+        mut social: ResMut<SocialState>,
+        names: Res<NameCache>,
+        net: Res<NetCommands>,
+    ) {
         if let SessionEvent::IgnoreList { guids } = ev {
-            ignore_list(&mut social, guids);
+            let names = CacheNames {
+                names: &names,
+                net: &net,
+            };
+            ignore_list(&mut social, guids, &names);
         }
     }
 
@@ -551,12 +705,15 @@ pub(crate) mod net {
         In(ev): In<SessionEvent>,
         mut social: ResMut<SocialState>,
         names: Res<NameCache>,
-        commands: Res<NetCommands>,
+        net: Res<NetCommands>,
         errors: Res<UiErrorKeys>,
     ) {
         if let SessionEvent::FriendStatus(update) = ev {
-            let lines = social.apply_friend_status(update, &lookup(&names, &commands));
-            errors.extend(lines);
+            let names = CacheNames {
+                names: &names,
+                net: &net,
+            };
+            errors.extend(social.apply_friend_status(update, &names));
         }
     }
 
@@ -565,13 +722,18 @@ pub(crate) mod net {
     fn on_player_name(
         In(ev): In<SessionEvent>,
         mut social: ResMut<SocialState>,
-        commands: Res<NetCommands>,
+        names: Res<NameCache>,
+        net: Res<NetCommands>,
         errors: Res<UiErrorKeys>,
     ) {
         if let SessionEvent::PlayerName { guid, name, .. } = ev {
             let found = (!name.is_empty()).then_some(name.as_str());
-            let lines = social.apply_player_name(guid, found, &mut |c| {
-                let _ = commands.0.send(c);
+            let cache = CacheNames {
+                names: &names,
+                net: &net,
+            };
+            let lines = social.apply_player_name(guid, found, &cache, &mut |c| {
+                let _ = net.0.send(c);
             });
             errors.extend(lines);
         }
@@ -584,26 +746,26 @@ pub(crate) mod net {
     }
 
     /// The world's teardown `ClientDestroyGame` (`0x401ee0`) frees the list (`0x5ae2d0` at
-    /// `0x401fc6`): a logout to the character list and a lost link alike. `clear_session`, not `default()`, so the per-process
-    /// sort chain survives.
+    /// `0x401fc6`), at a logout to the character list and a lost link alike. `clear_session`,
+    /// not `default()`, so the per-process sort chain survives.
     fn on_session_end(In(ev): In<SessionEvent>, mut social: ResMut<SocialState>) {
         if let SessionEvent::LoggedOut | SessionEvent::Disconnected { .. } = ev {
             social.clear_session();
         }
     }
 
-    /// `SMSG_FRIEND_LIST`, each name looked up with `lookup`.
+    /// `SMSG_FRIEND_LIST`.
     pub(crate) fn friend_list(
         social: &mut SocialState,
         friends: Vec<FriendEntry>,
-        lookup: &dyn Fn(u64) -> Option<String>,
+        names: &dyn Names,
     ) {
-        social.apply_friend_list(&friends, lookup);
+        social.apply_friend_list(&friends, names);
     }
 
     /// `SMSG_IGNORE_LIST`.
-    pub(crate) fn ignore_list(social: &mut SocialState, guids: Vec<u64>) {
-        social.apply_ignore_list(guids);
+    pub(crate) fn ignore_list(social: &mut SocialState, guids: Vec<u64>, names: &dyn Names) {
+        social.apply_ignore_list(&guids, names);
     }
 
     /// `SMSG_WHO`.
@@ -683,8 +845,15 @@ mod tests {
     }
 
     /// Every name cached, as `0x55f080` returns them.
-    fn cached(guid: u64) -> Option<String> {
-        Some(format!("P{guid}"))
+    struct Cached;
+
+    impl Names for Cached {
+        fn lookup(&self, guid: u64) -> Option<String> {
+            self.read(guid)
+        }
+        fn read(&self, guid: u64) -> Option<String> {
+            (guid != 0).then(|| format!("P{guid}"))
+        }
     }
 
     fn guids(social: &SocialState) -> Vec<u64> {
@@ -712,9 +881,9 @@ mod tests {
                     class: 4,
                 }),
             },
-            &cached,
+            &Cached,
         );
-        let _ = social.apply_friend_status(status(friend_result::ADDED_OFFLINE, 8), &cached);
+        let _ = social.apply_friend_status(status(friend_result::ADDED_OFFLINE, 8), &Cached);
         assert_eq!(guids(&social), [7, 8]);
         assert_eq!(social.slots[0].level, 60);
         assert_eq!(
@@ -723,15 +892,16 @@ mod tests {
             "an add stores the name"
         );
 
-        let _ = social.apply_friend_status(status(friend_result::ADDED_OFFLINE, 7), &cached);
+        let _ = social.apply_friend_status(status(friend_result::ADDED_OFFLINE, 7), &Cached);
         assert_eq!(guids(&social), [7, 8], "the same add again reuses the slot");
         assert!(!social.slots[0].online, "now offline");
 
-        let _ = social.apply_friend_status(status(friend_result::REMOVED, 8), &cached);
+        let _ = social.apply_friend_status(status(friend_result::REMOVED, 8), &Cached);
         assert_eq!(guids(&social), [7]);
         assert!(social.slots[49].name.is_none());
         assert_eq!(
-            social.friend_signals, 4,
+            social.signals.len(),
+            4,
             "each cached result sorts and signals"
         );
     }
@@ -746,11 +916,11 @@ mod tests {
                 guid: 7,
                 ..Default::default()
             }],
-            &cached,
+            &Cached,
         );
         social.selected_friend = 7;
         assert_eq!(social.selected_friend_index(), 1);
-        let _ = social.apply_friend_status(status(friend_result::REMOVED, 7), &cached);
+        let _ = social.apply_friend_status(status(friend_result::REMOVED, 7), &Cached);
         assert_eq!(social.selected_friend, 7);
         assert_eq!(social.selected_friend_index(), 0);
     }
@@ -764,8 +934,8 @@ mod tests {
             guid,
             ..Default::default()
         };
-        social.apply_friend_list(&[friend(7), friend(8)], &cached);
-        social.apply_friend_list(&[friend(9)], &|_| None);
+        social.apply_friend_list(&[friend(7), friend(8)], &Cached);
+        social.apply_friend_list(&[friend(9)], &NoNames);
         assert_eq!(guids(&social), [9, 8]);
         assert!(social.slots.iter().all(|s| s.name.is_none()));
         assert_eq!(social.friends_pending, 1);
@@ -775,10 +945,10 @@ mod tests {
     fn ignore_results_maintain_the_ignore_list() {
         let mut social = SocialState::default();
         assert!(!social.is_ignored(9));
-        let _ = social.apply_friend_status(status(friend_result::IGNORE_ADDED, 9), &cached);
+        let _ = social.apply_friend_status(status(friend_result::IGNORE_ADDED, 9), &Cached);
         assert!(social.is_ignored(9));
         assert!(!social.is_ignored(0), "guid 0 is never ignored");
-        let _ = social.apply_friend_status(status(friend_result::IGNORE_REMOVED, 9), &cached);
+        let _ = social.apply_friend_status(status(friend_result::IGNORE_REMOVED, 9), &Cached);
         assert!(!social.is_ignored(9));
     }
 
@@ -834,9 +1004,9 @@ mod tests {
                 guid: 7,
                 ..Default::default()
             }],
-            &cached,
+            &Cached,
         );
-        social.apply_ignore_list(vec![9]);
+        social.apply_ignore_list(&[9], &Cached);
         social.who_to_ui = true;
         social.who_sort.promote("level");
         social.who_sort.promote("level"); // descending
@@ -844,7 +1014,7 @@ mod tests {
 
         social.clear_session();
         assert!(guids(&social).is_empty());
-        assert!(social.ignores.is_empty());
+        assert!(!social.is_ignored(9));
         assert!(social.who.is_empty());
         assert!(!social.who_to_ui, "the frame is closed after a logout");
         assert_eq!(social.who_sort, chain, "the sort chain is process state");
