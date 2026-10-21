@@ -324,8 +324,10 @@ fn command_error_key(error: u32, inventory_result: u32) -> Option<&'static str> 
             "ERR_AUCTION_DATABASE_ERROR"
         }
         auction_error::NOT_ENOUGH_MONEY => "ERR_NOT_ENOUGH_MONEY", // `0x25`
+        auction_error::ITEM_NOT_FOUND => "ERR_ITEM_NOT_FOUND",     // `0x17`
         auction_error::BID_INCREMENT => "ERR_AUCTION_BID_INCREMENT", // `0x174`
         auction_error::BID_OWN => "ERR_AUCTION_BID_OWN",           // `0x173`
+        auction_error::RESTRICTED_ACCOUNT => "ERR_RESTRICTED_ACCOUNT", // `0x1be`
         _ => "ERR_AUCTION_DATABASE_ERROR",                         // `0x172`
     })
 }
