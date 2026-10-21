@@ -339,9 +339,9 @@ pub(super) fn feed_action_state(
         // pair, so a running cooldown derives the same start every frame.
         let (anchor, ui_now) = (clock.anchor, clock.ui_now);
         cooldowns.prune(now);
-        // The callback `0x6e2f70` that the bag getter's and the bag tooltip's queries asked, each
-        // a lookup with it (`0x6e2f0d`); then every awaited record that answered, whose flush is
-        // this frame's.
+        // The callback `0x6e2f70` that the bag getter's and the bag and inventory tooltips'
+        // queries asked, each a lookup with it (`0x6e2f0d`); then every awaited record that
+        // answered, whose flush is this frame's.
         for entry in script.take_cooldown_record_asks() {
             let _ = items.template(entry, 0, Ask::Event(&commands));
             cooldowns.await_item_record(entry);

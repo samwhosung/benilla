@@ -546,6 +546,13 @@ fn link_item_name(link: &str) -> Option<String> {
 }
 
 impl InvSlotView {
+    /// An item object whose record the cache does not hold yet, which the app pushes with its
+    /// entry and no name: `SetInventoryItem`'s cooldown query on it asks the record with the
+    /// callback `0x6e2f70` (`0x533188` → `0x5331ec`, `0x6e2efb`).
+    pub fn record_pending(&self) -> bool {
+        self.item_id != 0 && self.name.is_none()
+    }
+
     /// A container slot seen through the inventory API, for `Model::inv_slot`'s bank band.
     fn from_container_slot(slot: &super::container::ContainerSlot) -> Self {
         InvSlotView {

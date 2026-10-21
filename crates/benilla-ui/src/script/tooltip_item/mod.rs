@@ -484,6 +484,18 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         Ok(t) => std::mem::take(&mut t.equipped_header_armed),
                         Err(_) => false,
                     };
+                    // The player's item object answers the cooldown query, which asks a missing
+                    // record with the callback `0x6e2f70` (`0x533188` → `0x5331ec`, `0x6e2efb`);
+                    // the ammo slot passes an entry and queries nothing (`0x53307d`).
+                    if slot0 != -1 && unit.eq_ignore_ascii_case("player") {
+                        if let Some(entry) = model
+                            .inv_slot("player", slot)
+                            .filter(|s| s.record_pending())
+                            .map(|s| s.item_id)
+                        {
+                            model.cooldown_record_asks.push(entry);
+                        }
+                    }
                     let view = model
                         .inv_slot(&unit, slot)
                         .filter(|s| s.item_id != 0)
