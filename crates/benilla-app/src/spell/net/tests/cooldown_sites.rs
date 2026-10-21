@@ -128,7 +128,6 @@ impl GoRig {
                             &mut cooldowns,
                             Some(&*spells),
                             &mut items,
-                            &net_commands,
                             &mut pet_bar,
                             &mods,
                         ),
@@ -139,6 +138,13 @@ impl GoRig {
                             &edits,
                             false,
                             crate::creature_anim::StartGate::default(),
+                            &mut crate::spell::CastCore {
+                                pending: &mut Default::default(),
+                                queued_melee: &mut Default::default(),
+                                ground: &mut Default::default(),
+                                reports: &mut Default::default(),
+                                net: &net_commands,
+                            },
                         ),
                         1,
                     );

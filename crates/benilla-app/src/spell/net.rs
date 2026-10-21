@@ -1097,15 +1097,7 @@ fn spell_go(
         match item_caster {
             Some(item) => {
                 pended = item_go_cooldown(
-                    item,
-                    spell_id,
-                    display,
-                    now,
-                    index,
-                    stores,
-                    items,
-                    core.net,
-                    cooldowns,
+                    item, spell_id, display, now, index, stores, items, core.net, cooldowns,
                 );
             }
             None => {
