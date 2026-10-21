@@ -112,7 +112,8 @@ pub struct GroupState {
     /// `0xbc7610`): the last tail a list carried, which the next one is compared against. Nothing
     /// in the reference clears them, neither the end of a group nor a new login.
     pub loot_stored: GroupLootInfo,
-    /// The inviter's name while the invite popup is up.
+    /// The last invite's inviter, for the partner probe to take (`capture::probe_partner`); the
+    /// interface hears each invite as its signal ([`GroupSignal::InviteRequest`]).
     pub pending_invite: Option<String>,
     /// Each member's record by guid, seated at 1/1, patched by `SMSG_PARTY_MEMBER_STATS`, and given
     /// its online bit again by each `SMSG_GROUP_LIST` that lists the member.
@@ -192,9 +193,9 @@ pub struct ListOutcome {
     pub ask_raid_targets: bool,
 }
 
-/// A group event as a packet's handler signals it; none of the five carries an argument
+/// A group event as a packet's handler signals it; only the invite carries an argument
 /// (benilla-re `tables/event_args.tsv`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GroupSignal {
     /// `PARTY_MEMBERS_CHANGED`: every list (`0x5e6c66`), a party seat's name answer (`0x4e8495`),
     /// the raid's last pending name (`0x4badb0`) and every ending (`0x4e85c5`).
@@ -209,6 +210,10 @@ pub enum GroupSignal {
     /// `RAID_TARGET_UPDATE`: every `MSG_RAID_TARGET_UPDATE` (`0x4ba348`) and every list that
     /// clears the board (`0x4ba5db`).
     RaidTargetUpdate,
+    /// `PARTY_INVITE_REQUEST` with the inviter: every `SMSG_GROUP_INVITE` (`0x5e6747` →
+    /// `0x48f420`, event `0x118`). Its partner `PARTY_INVITE_CANCEL` is `SMSG_GROUP_CANCEL`'s
+    /// alone (`0x5e6784` → `0x48f440`), which vmangos never sends and benilla does not read.
+    InviteRequest(String),
 }
 
 /// The group events signalled, oldest first. The reference signals each inside its packet's
@@ -693,6 +698,7 @@ impl GroupState {
     /// `SMSG_GROUP_INVITE`: the popup plus a chat line, as the reference's `0x5e6730` does.
     pub fn apply_invited(&mut self, inviter: &str) -> Vec<UiError> {
         self.pending_invite = Some(inviter.to_string());
+        self.signal(GroupSignal::InviteRequest(inviter.to_string()));
         vec![UiError::s("ERR_INVITED_TO_GROUP_S", inviter)]
     }
 

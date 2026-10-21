@@ -28,7 +28,6 @@ use crate::query_cache::Ask;
 pub(crate) struct FedParty {
     /// How far into [`GroupState::signals`] the feed has fired.
     signals: u64,
-    invite: Option<String>,
     units: [Option<UnitState>; 4],
     /// Each party slot's (member guid, object streamed) pair, the `PARTY_MEMBER_ENABLE`/`DISABLE`
     /// edge; with the guid in it a new occupant is a roster edge, not an activation.
@@ -295,14 +294,17 @@ pub(crate) fn feed_party(
             gate.audit("feed_party", "a group signal");
         }
         for signal in owed {
-            let signalled = match signal {
-                GroupSignal::MembersChanged => "PARTY_MEMBERS_CHANGED",
-                GroupSignal::LeaderChanged => "PARTY_LEADER_CHANGED",
-                GroupSignal::LootMethodChanged => "PARTY_LOOT_METHOD_CHANGED",
-                GroupSignal::RaidRosterUpdate => "RAID_ROSTER_UPDATE",
-                GroupSignal::RaidTargetUpdate => "RAID_TARGET_UPDATE",
+            let (signalled, args) = match signal {
+                GroupSignal::MembersChanged => ("PARTY_MEMBERS_CHANGED", vec![]),
+                GroupSignal::LeaderChanged => ("PARTY_LEADER_CHANGED", vec![]),
+                GroupSignal::LootMethodChanged => ("PARTY_LOOT_METHOD_CHANGED", vec![]),
+                GroupSignal::RaidRosterUpdate => ("RAID_ROSTER_UPDATE", vec![]),
+                GroupSignal::RaidTargetUpdate => ("RAID_TARGET_UPDATE", vec![]),
+                GroupSignal::InviteRequest(inviter) => {
+                    ("PARTY_INVITE_REQUEST", vec![ScriptValue::Str(inviter)])
+                }
             };
-            script.fire_event(signalled, vec![]);
+            script.fire_event(signalled, args);
         }
 
         // ── READY_CHECK ─────────────────────────────────────────────────────────
@@ -360,20 +362,6 @@ pub(crate) fn feed_party(
             if !vm_reset {
                 script.fire_event("UPDATE_INSTANCE_INFO", vec![]);
             }
-        }
-
-        if group.pending_invite != fed.invite {
-            gate.audit("feed_party", "the invite edge");
-            match &group.pending_invite {
-                Some(inviter) => script.fire_event(
-                    "PARTY_INVITE_REQUEST",
-                    vec![ScriptValue::Str(inviter.clone())],
-                ),
-                // Also fires on accept and decline: hiding a hidden popup is a no-op, and the
-                // accepted guard stops a second decline.
-                None => script.fire_event("PARTY_INVITE_CANCEL", vec![]),
-            }
-            fed.invite = group.pending_invite.clone();
         }
     })
 }
@@ -905,8 +893,8 @@ fn record_bit(stats: Option<&PartyMemberStatsInfo>, bit: u8) -> bool {
 }
 
 /// Every frame: age the signal log, and answer what the party calls left
-/// ([`super::calls::GroupEdits`]): an answered invite's popup state goes, and the sandbox's
-/// group-changing calls are echoed onto the mirror as the server would answer them.
+/// ([`super::calls::GroupEdits`]): the sandbox's group-changing calls, echoed onto the mirror as
+/// the server would answer them.
 pub(crate) fn drain_party(
     mut group: ResMut<GroupState>,
     mut edits: ResMut<super::calls::GroupEdits>,
@@ -915,9 +903,6 @@ pub(crate) fn drain_party(
     // What the feed has fired goes ([`super::SignalLog`]). Not a change the feed's gate should
     // open on.
     group.bypass_change_detection().signals.age();
-    if std::mem::take(&mut edits.invite_answered) {
-        group.pending_invite = None;
-    }
     let self_guid = self_q.iter().next().map(|g| g.0);
     for echo in std::mem::take(&mut edits.sandbox) {
         match echo {
@@ -2874,7 +2859,11 @@ mod tests {
     fn the_sandbox_echoes_a_group_call_and_sends_an_accept() {
         let (mut app, rx) = drain_app();
         seat_self(&mut app);
-        let _ = synthetic_roster(&mut app.world_mut().resource_mut::<GroupState>(), None);
+        resolve_party(&mut app, [0; 4]);
+        let mut group = app.world_mut().resource_mut::<GroupState>();
+        let _ = synthetic_roster(&mut group, None);
+        // `/partytest lead`: we lead, so `ConvertToRaid` passes its gate (`0x4bbca5`).
+        group.leader = ME;
         frame(&mut app);
         let _ = rx.try_iter().count();
         hosted_run(&mut app, "ConvertToRaid() AcceptGroup()");
@@ -3148,6 +3137,8 @@ mod tests {
                 .apply_invited("Bob");
             frame(app);
         };
+        // The VM's first look, which owes it nothing.
+        frame(&mut app);
         invite(&mut app);
         assert_eq!(invites(&mut app), ["PARTY_INVITE_REQUEST:Bob"]);
         hosted_run(&mut app, "AcceptGroup()");
