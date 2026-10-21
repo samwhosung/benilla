@@ -3862,7 +3862,7 @@ fn the_combat_edge_and_the_regen_notice_fire_in_their_packets_order() {
 /// callback signals `UPDATE_EXHAUSTION` and then shows the line for the new state (`0x5de4e0`),
 /// which `0x496720` hands the chat frames at once as `CHAT_MSG_SYSTEM`, ahead of the next
 /// packet's events. One between two combat edges, and one after the last, each show theirs in the
-/// pass that fires them.
+/// pass that fires them, and of two in a row each shows its own before the next one signals.
 #[test]
 fn a_waiting_notices_chat_line_shows_in_the_pass_that_fires_it() {
     use benilla_protocol::{SessionEvent, SessionEventKind};
@@ -3881,12 +3881,19 @@ fn a_waiting_notices_chat_line_shows_in_the_pass_that_fires_it() {
     fn rest(_: In<SessionEvent>, mut notices: MessageWriter<FieldNotice>) {
         notices.write(FieldNotice::RestState { old: 1, new: 2 });
     }
+    fn rest_back(_: In<SessionEvent>, mut notices: MessageWriter<FieldNotice>) {
+        notices.write(FieldNotice::RestState { old: 2, new: 1 });
+    }
     let enter_packet = || SessionEvent::LoggedOut;
     let rest_packet = || SessionEvent::LoginQueued {
         position: None,
         realm: None,
     };
     let leave_packet = || SessionEvent::LogoutCancelled;
+    let rest_back_packet = || SessionEvent::LogoutResponse {
+        reason: 0,
+        instant: false,
+    };
     for (packets, heard) in [
         (
             vec![enter_packet(), rest_packet(), leave_packet()],
@@ -3897,12 +3904,28 @@ fn a_waiting_notices_chat_line_shows_in_the_pass_that_fires_it() {
             vec![enter_packet(), rest_packet()],
             "PLAYER_ENTER_COMBAT UPDATE_EXHAUSTION CHAT_MSG_SYSTEM:You feel normal.",
         ),
+        (
+            vec![
+                enter_packet(),
+                rest_packet(),
+                rest_back_packet(),
+                leave_packet(),
+            ],
+            "PLAYER_ENTER_COMBAT UPDATE_EXHAUSTION CHAT_MSG_SYSTEM:You feel normal. \
+             UPDATE_EXHAUSTION CHAT_MSG_SYSTEM:You feel rested. PLAYER_LEAVE_COMBAT",
+        ),
+        (
+            vec![enter_packet(), rest_packet(), rest_back_packet()],
+            "PLAYER_ENTER_COMBAT UPDATE_EXHAUSTION CHAT_MSG_SYSTEM:You feel normal. \
+             UPDATE_EXHAUSTION CHAT_MSG_SYSTEM:You feel rested.",
+        ),
     ] {
         let mut app = App::new();
         app.add_plugins(crate::ui_unit::UiUnitPlugin)
             .net_handler(SessionEventKind::LoggedOut, enter)
             .net_handler(SessionEventKind::LoginQueued, rest)
-            .net_handler(SessionEventKind::LogoutCancelled, leave);
+            .net_handler(SessionEventKind::LogoutCancelled, leave)
+            .net_handler(SessionEventKind::LogoutResponse, rest_back);
         let world = app.world_mut();
         let (tx, _rx) = crossbeam_channel::unbounded();
         world.insert_resource(crate::net::NetCommands(tx));
@@ -3924,6 +3947,7 @@ fn a_waiting_notices_chat_line_shows_in_the_pass_that_fires_it() {
         s.run(
             r#"
             ERR_EXHAUSTION_NORMAL = "You feel normal."
+            ERR_EXHAUSTION_RESTED = "You feel rested."
             Heard = {}
             local f = CreateFrame("Frame")
             f:RegisterEvent("PLAYER_ENTER_COMBAT")
