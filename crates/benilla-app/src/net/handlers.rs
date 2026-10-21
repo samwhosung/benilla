@@ -17,6 +17,9 @@ type Handler = (SystemId<In<SessionEvent>>, &'static str);
 #[derive(Resource, Default)]
 pub(crate) struct NetHandlers {
     by_kind: HashMap<SessionEventKind, Vec<Handler>>,
+    /// Each handler's declared access, by name, for the tests that ask what the handlers write.
+    #[cfg(test)]
+    pub(crate) accesses: Vec<(&'static str, bevy::ecs::query::FilteredAccessSet)>,
 }
 
 impl NetHandlers {
@@ -121,10 +124,18 @@ fn register<M>(
     ahead: bool,
 ) -> &mut App {
     let name = std::any::type_name_of_val(&handler);
+    // Initialized here, its access kept: the run initializes it again, on the same state.
+    #[cfg(test)]
+    let (handler, access) = {
+        let mut system = IntoSystem::into_system(handler);
+        let access = bevy::ecs::system::System::initialize(&mut system, app.world_mut());
+        (system, access)
+    };
     let id = app.world_mut().register_system(handler);
-    app.world_mut()
-        .get_resource_or_init::<NetHandlers>()
-        .push(kind, (id, name), ahead);
+    let mut handlers = app.world_mut().get_resource_or_init::<NetHandlers>();
+    handlers.push(kind, (id, name), ahead);
+    #[cfg(test)]
+    handlers.accesses.push((name, access));
     app
 }
 
