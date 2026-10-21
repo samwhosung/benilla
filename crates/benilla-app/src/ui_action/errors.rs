@@ -114,8 +114,8 @@ pub(crate) enum FillArg {
     /// empty string when missing): for a line queued while the VM in hand is not the loaded
     /// interface's, which defines none of the strings the reference reads at its own display.
     Global(String),
-    /// `GetUnitName`'s miss (`0x609324`-`0x60933c`): the `UNKNOWNOBJECT` global, read when the
-    /// line is shown.
+    /// `GetUnitName`'s miss: the `UNKNOWNOBJECT` global (`0x60932e`, read when the line is
+    /// shown), or `Unknown Being` (`0x860fa4`) when it is missing or empty (`0x609333`-`0x60933c`).
     UnknownObject,
 }
 
@@ -258,7 +258,9 @@ pub(crate) fn ui_error_text(e: &UiError, get: &dyn Fn(&str) -> Option<String>) -
         .iter()
         .map(|a| match a {
             FillArg::Global(key) => get(key).unwrap_or_default(),
-            FillArg::UnknownObject => get("UNKNOWNOBJECT").unwrap_or_default(),
+            FillArg::UnknownObject => get("UNKNOWNOBJECT")
+                .filter(|text| !text.is_empty())
+                .unwrap_or_else(|| "Unknown Being".to_string()),
             FillArg::S(_) | FillArg::D(_) => String::new(),
         })
         .collect();
