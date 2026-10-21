@@ -166,6 +166,10 @@ pub(crate) struct Cooldowns {
     /// Bumped when [`Self::prune`] removes records. Kept apart from [`Self::generation`]: gated
     /// feeds must see an expiry, but the reference never fires the event for one.
     expiry_epoch: u64,
+    /// Bumped by every record [`Self::add`] puts in. Kept apart from [`Self::generation`]: the
+    /// insert flushes nothing (`0x6e12c0`), nor does `StartCooldown 0x6e2c60`'s seed (`0x6e2dcc`),
+    /// but a gated feed must read the record.
+    insert_epoch: u64,
     /// The item cooldowns the spell go's item leg holds until the item's record arrives, the
     /// table `0xceca60` of `ITEMCOOLDOWNHASHNODE`s keyed by item entry ([`Self::pend_item`]).
     pending_items: std::collections::HashMap<u32, PendingItem>,
@@ -227,9 +231,11 @@ impl Cooldowns {
         self.records.len()
     }
 
-    /// The counter a gated feed watches: moves on any mutation or pruned expiry.
+    /// The counter a gated feed watches: moves on any flush, insert or pruned expiry.
     pub(crate) fn feed_epoch(&self) -> u64 {
-        self.generation.wrapping_add(self.expiry_epoch)
+        self.generation
+            .wrapping_add(self.expiry_epoch)
+            .wrapping_add(self.insert_epoch)
     }
 
     /// An elapsed record awaits its prune. The feeds run before `feed_action_state`'s prune, so
@@ -251,7 +257,8 @@ impl Cooldowns {
     /// `now` are dropped first ([`Self::prune`]), and a list holds its live records plus those
     /// that ran out since its last insert. The pet's list has no other pruner.
     ///
-    /// It flushes nothing: each caller's site does ([`Self::flush`]).
+    /// It flushes nothing: each caller's site does ([`Self::flush`]). It moves
+    /// [`Self::feed_epoch`].
     fn add(
         &mut self,
         now: Instant,
@@ -285,6 +292,7 @@ impl Cooldowns {
             gcd_category,
             gcd,
         });
+        self.insert_epoch = self.insert_epoch.wrapping_add(1);
     }
 
     /// Drop fully elapsed records that are not on hold; invisible to reads, it stands in for the
