@@ -465,6 +465,7 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
     // The item locks before any file or event runs: a `/reload`'s survive, as on the reference's
     // item objects.
     crate::ui_items::locks::seed_vm_item_locks(world, &mut script, seat == LoadSeat::Live);
+    crate::ui_party::seed_vm_ready_check(world, &mut script, seat == LoadSeat::Live);
     // The realm before the load, since addons read `GetRealmName()` at file scope; the roster
     // carries the realm-list entry this session connected to.
     let realm = world
@@ -939,6 +940,8 @@ fn close_ui_session(world: &mut World, root: ShutdownRoot) {
     crate::ui_chat::settings::fold_dying_vm_chat_cache(world);
     // The item locks too: the reference keeps them on the item objects, which a `/reload` keeps.
     crate::ui_items::locks::fold_dying_vm_item_locks(world);
+    // And the ready check, engine state the reference's reload never writes.
+    crate::ui_party::fold_dying_vm_ready_check(world);
     // So do the engine globals the VM holds for the session: the quest log's fold mask and the
     // tradeskill repeat, which no UI init resets.
     crate::ui_quest_log::fold_dying_vm_quest_folds(world);

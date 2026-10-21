@@ -109,6 +109,34 @@ pub(crate) fn seed_reloaded_vm(world: &mut World, script: &mut UiScript) {
     }
 }
 
+/// The ready check a dying VM held ([`fold_dying_vm_ready_check`]), for the next VM's seed
+/// ([`seed_vm_ready_check`]).
+#[derive(Resource, Default)]
+pub(crate) struct ReadyCheckCarry(benilla_ui::script::ReadyCheckState);
+
+/// Fold the ready check out of the dying VM, with the item locks: its deadline (`[0xb713f4]`) and
+/// pending flags are engine state, which no reload path writes.
+pub(crate) fn fold_dying_vm_ready_check(world: &mut World) {
+    let Some(state) = world
+        .get_non_send_resource_mut::<UiScript>()
+        .map(|mut s| s.take_ready_check())
+    else {
+        return;
+    };
+    world.insert_resource(ReadyCheckCarry(state));
+}
+
+/// Seat a new in-game VM's ready check before its load runs: a `/reload`'s is the dying VM's, a
+/// world entry's none, as `InitializeGame`'s group init zeroes it (`0x4ba130`, from `0x48f603`).
+pub(crate) fn seed_vm_ready_check(world: &mut World, script: &mut UiScript, reload: bool) {
+    let carried = world
+        .remove_resource::<ReadyCheckCarry>()
+        .unwrap_or_default();
+    if reload {
+        script.seed_ready_check(carried.0);
+    }
+}
+
 /// The `raid1..raid40` unit tokens, one per `MAX_RAID_MEMBERS` (40, `RaidFrame.lua:2`).
 #[rustfmt::skip]
 pub(crate) const RAID_TOKENS: [&str; 40] = [

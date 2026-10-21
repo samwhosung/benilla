@@ -51,6 +51,8 @@ pub(crate) struct PartyCalls<'w, 's> {
     relations: crate::target::RelationWorld<'w, 's>,
     /// `InviteByGuid`'s acknowledge (`0x5e949c`); a world with no tutorial state has none.
     tutorials: Option<Res<'w, crate::tutorial::Tutorials>>,
+    /// The lines a verb adds in place ([`PartyRequest::SystemLine`]).
+    chat: Res<'w, crate::ui_chat::ChatLog>,
 }
 
 /// The calls that change the group, which the sandbox answers as the server would
@@ -227,6 +229,10 @@ impl PartyCalls<'_, '_> {
                 }
             }
             PartyRequest::ReadyCheckStart => send(ClientCommand::ReadyCheckStart),
+            PartyRequest::SystemLine(text) => self.chat.show_now(
+                script,
+                &crate::ui_chat::ChatEvent::text_only(crate::ui_chat::ChatEventKind::System, text),
+            ),
             PartyRequest::ReadyCheckAnswer(status) => {
                 send(ClientCommand::ReadyCheckAnswer { status });
             }

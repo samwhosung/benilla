@@ -708,6 +708,80 @@ fn reload_ui_is_a_fresh_login_in_place() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// The ready check's deadline is engine state (`[0xb713f4]`): its writers are the request handler
+/// (`0x4ba4d4`, `0x4ba535`), the name callback (`0x4bacb4`), `DoReadyCheck` (`0x4bb2b6`) and the
+/// timeout (`0x4bb377`), and only `InitializeGame`'s group init zeroes it (`0x4ba130`, from
+/// `0x48f603`). So a check armed before a `ReloadUI()` still runs after it, and a new login starts
+/// with none.
+#[test]
+fn a_ready_check_outlives_a_reload_and_not_a_login() {
+    use benilla_ui::script::{PartyRequest, PartyState, UiScript};
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_probe("ready-check");
+    let mut world = booted_world();
+    // A party we lead, set on each VM as the group's seed would.
+    let led = || PartyState {
+        own_guid: 1,
+        leader_guid: 1,
+        ..PartyState::default()
+    };
+    let vm = |world: &mut World| -> UiScript {
+        world
+            .remove_non_send_resource::<UiScript>()
+            .expect("in-world VM")
+    };
+
+    log_in_as(&mut world, "Onehunter", 1);
+    let mut script = vm(&mut world);
+    script.keep_calls();
+    script.set_party(led());
+    script.run("DoReadyCheck()").unwrap();
+    assert!(
+        script
+            .take_party_requests()
+            .contains(&PartyRequest::ReadyCheckStart),
+        "the check starts"
+    );
+    world.insert_non_send_resource(script);
+
+    reload(&mut world, crate::client_state::ClientState::InWorld);
+    let mut script = vm(&mut world);
+    script.keep_calls();
+    script.set_party(led());
+    let _ = script.take_ui_errors();
+    script.run("DoReadyCheck() ConfirmReadyCheck(1)").unwrap();
+    assert_eq!(
+        script.take_ui_errors(),
+        ["ERR_READY_CHECK_IN_PROGRESS"],
+        "the reloaded VM finds the check running"
+    );
+    assert_eq!(
+        script.take_party_requests(),
+        [PartyRequest::ReadyCheckAnswer(1)],
+        "and its answer sends"
+    );
+    world.insert_non_send_resource(script);
+
+    super::end_ui_session(&mut world);
+    log_in_as(&mut world, "Onehunter", 1);
+    let mut script = vm(&mut world);
+    script.keep_calls();
+    script.set_party(led());
+    script.run("ConfirmReadyCheck(1)").unwrap();
+    assert_eq!(
+        script.take_party_requests(),
+        [],
+        "a login's group init zeroed it"
+    );
+    world.insert_non_send_resource(script);
+
+    drop(world);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The connection's billing group reaches every in-game VM, as `GetBillingTimeRested` reads the
 /// session's word (`0x48ec59`), a reload's VM included; the world entry arms the play-time warning
 /// (`0x48f630`) and a reload, which jumps to `UI_Init` alone (`0x495669`), does not.

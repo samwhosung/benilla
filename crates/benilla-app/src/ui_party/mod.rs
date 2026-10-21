@@ -23,8 +23,8 @@ mod pets;
 mod records;
 pub(crate) use calls::PartyCalls;
 pub(crate) use feed::{
-    drain_party, raid_row_guid, raid_row_guids, seed_reloaded_vm, synthetic_raid, synthetic_roster,
-    GROUPTYPE_RAID, GROUP_MEMBER_SUBGROUP,
+    drain_party, fold_dying_vm_ready_check, raid_row_guid, raid_row_guids, seed_reloaded_vm,
+    seed_vm_ready_check, synthetic_raid, synthetic_roster, GROUPTYPE_RAID, GROUP_MEMBER_SUBGROUP,
 };
 #[cfg(test)]
 pub(crate) use feed::{feed_party, PARTY_PET_TOKENS};

@@ -141,3 +141,37 @@ fn invite_to_party_flags_the_grouping_tutorial_before_its_invite() {
         ["invite Zed", "flag 0x11", "invite Bob", "invite Bob"]
     );
 }
+
+/// `DoReadyCheck` (`0x4bb1d0`) sends (`0x4bb295`), arms (`0x4bb2b6`), then adds
+/// `READY_CHECK_START` as a system line (`AddChatLine 0x49a870(text, 10)` at `0x4bb2c7`), so its
+/// `CHAT_MSG_SYSTEM` fires before the verb returns.
+#[test]
+fn do_ready_check_shows_its_start_line_inside_the_call() {
+    let (mut app, rx) = client();
+    let world = app.world_mut();
+    let mut script = world.non_send_resource_mut::<UiScript>();
+    script.set_party(benilla_ui::script::PartyState {
+        leader_guid: 0x10,
+        own_guid: 0x10,
+        ..Default::default()
+    });
+    script
+        .run(
+            r#"READY_CHECK_START = "Ready check started."
+               HEARD = {}
+               local f = CreateFrame("Frame")
+               f:RegisterEvent("CHAT_MSG_SYSTEM")
+               f:SetScript("OnEvent", function() table.insert(HEARD, arg1) end)"#,
+        )
+        .unwrap();
+    let heard = with_hosted_vm(world, |script| {
+        script
+            .expect("a VM")
+            .eval::<Vec<String>>("DoReadyCheck() return HEARD")
+            .expect("the chunk runs")
+    });
+    assert_eq!(heard, ["Ready check started."]);
+    assert!(rx
+        .try_iter()
+        .any(|c| matches!(c, ClientCommand::ReadyCheckStart)));
+}

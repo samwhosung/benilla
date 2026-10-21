@@ -166,6 +166,10 @@ pub enum PartyRequest {
     ReadyCheckAnswer(u8),
     /// `RequestRaidInfo()` (`CMSG_REQUEST_RAID_INFO`).
     RequestRaidInfo,
+    /// A system line the verb adds in place (`AddChatLine 0x49a870(text, 10)`), its
+    /// `CHAT_MSG_SYSTEM` fired before the verb returns: `DoReadyCheck`'s `READY_CHECK_START`
+    /// (`0x4bb2c7`, after the arm at `0x4bb2b6`).
+    SystemLine(String),
 }
 
 impl super::UiScript {
@@ -173,15 +177,26 @@ impl super::UiScript {
     /// new roster. The app fires the `PARTY_*` events.
     pub fn set_party(&mut self, state: PartyState) {
         // The ready-check leg (`0x4ba5f0`, from the `0x7d` handler): a member who left drops their
-        // pending flag, and nobody left pending force-closes the check.
+        // pending flag with their row. The check force-closes (`0x4bacb4`) only with a deadline
+        // armed (`0x4bac5a`), a member gone (the count at `0x4ba825`, tested at `0x4bac62`), us
+        // as the leader (`0x4bac6d`) and no row both pending and online (`0x4bac90`-`0x4bacac`):
+        // a push of the same roster, a reload's seed among them, closes nothing.
         let lua = self.lua();
         let close = {
             let mut model = self.model_mut();
+            let left = model
+                .party
+                .raid
+                .iter()
+                .any(|m| !state.raid.iter().any(|n| n.guid == m.guid));
             model.party = state;
             if model.ready_check.deadline.is_some() {
                 let roster: Vec<u64> = model.party.raid.iter().map(|m| m.guid).collect();
                 model.ready_check.unanswered.retain(|g| roster.contains(g));
-                model.ready_check.unanswered.is_empty()
+                let own = model.party.own_guid;
+                left && own != 0
+                    && own == model.party.leader_guid
+                    && !ready_check_pending_online(&model)
             } else {
                 false
             }
@@ -261,6 +276,16 @@ impl super::UiScript {
         if let Err(e) = promote_by_name(&lua, name) {
             self.model_mut().record_lua_error(&e);
         }
+    }
+
+    /// Take the ready check out of a dying VM, for [`Self::seed_ready_check`] to seat in the next.
+    pub fn take_ready_check(&mut self) -> ReadyCheckState {
+        std::mem::take(&mut self.model_mut().ready_check)
+    }
+
+    /// Seat a `/reload`'s VM with the ready check the last one held, before anything runs on it.
+    pub fn seed_ready_check(&mut self, state: ReadyCheckState) {
+        self.model_mut().ready_check = state;
     }
 
     /// Take the party calls a harness's VM kept ([`Self::keep_calls`]), in call order.
@@ -891,12 +916,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 .globals()
                 .get::<String>("READY_CHECK_START")
                 .unwrap_or_default();
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .ready_check
-                .lines
-                .push(line);
-            Ok(())
+            call(lua, PartyRequest::SystemLine(line))
         })?,
     )?;
     // CheckReadyCheckTime() (`0x4bc120` → `0x4bb310`), called every frame from stock
@@ -996,9 +1016,11 @@ const READY_CHECK_SECONDS: f64 = 30.0;
 
 /// The ready-check state: the armed deadline (`[0xb713f4]`), the members whose pending flag
 /// (`[entry+0x158]`) is set, and summary lines not yet pushed to chat. Outside [`PartyState`]
-/// because a roster push replaces that and this survives it.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct ReadyCheckState {
+/// because a roster push replaces that and this survives it. The deadline and the flags are
+/// engine state, which only `InitializeGame`'s group init zeroes (`0x4ba130`, the rows at
+/// `0x4ba12a`), so a `/reload` carries them into the next VM ([`UiScript::take_ready_check`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ReadyCheckState {
     pub(crate) deadline: Option<f64>,
     pub(crate) unanswered: Vec<u64>,
     pub(crate) lines: Vec<String>,
@@ -2160,6 +2182,7 @@ mod tests {
                 },
                 PartyRequest::UninviteRaid(9),
                 PartyRequest::ReadyCheckStart,
+                PartyRequest::SystemLine(String::new()),
                 PartyRequest::RequestRaidInfo,
             ]
         );
@@ -2369,7 +2392,14 @@ mod tests {
     /// The leader's `DoReadyCheck()`, and its `READY_CHECK_START` line (`0x4bb2c7`) taken.
     fn start_check(s: &mut UiScript) {
         s.run("DoReadyCheck()").unwrap();
-        assert_eq!(s.take_ready_check_lines().len(), 1, "the start line");
+        assert_eq!(
+            s.take_party_requests(),
+            [
+                PartyRequest::ReadyCheckStart,
+                PartyRequest::SystemLine(String::new())
+            ],
+            "the send, then the start line"
+        );
     }
 
     #[test]
@@ -2379,7 +2409,6 @@ mod tests {
         s.set_party(party);
         s.set_now(100.0);
         start_check(&mut s);
-        assert_eq!(s.take_party_requests(), vec![PartyRequest::ReadyCheckStart]);
 
         s.set_now(129.9);
         s.run("CheckReadyCheckTime()").unwrap();
@@ -2784,9 +2813,15 @@ mod tests {
 
         s.set_party(led_party());
         s.run("DoReadyCheck()").unwrap();
-        assert_eq!(s.take_party_requests(), [PartyRequest::ReadyCheckStart]);
+        assert_eq!(
+            s.take_party_requests(),
+            [
+                PartyRequest::ReadyCheckStart,
+                PartyRequest::SystemLine("Ready check started.".into())
+            ]
+        );
         assert_eq!(s.model_mut().ready_check.deadline, Some(130.0));
-        assert_eq!(s.take_ready_check_lines(), ["Ready check started."]);
+        assert!(s.take_ready_check_lines().is_empty(), "shown in place");
 
         s.set_now(110.0);
         s.run("DoReadyCheck()").unwrap();
@@ -2794,6 +2829,56 @@ mod tests {
         assert_eq!(s.take_ui_errors(), ["ERR_READY_CHECK_IN_PROGRESS"]);
         assert_eq!(s.model_mut().ready_check.deadline, Some(130.0));
         assert!(s.take_ready_check_lines().is_empty());
+    }
+
+    /// The group list's ready-check leg force-closes the check (`0x4bacb4`) only for the leader,
+    /// and only when a member left (`0x4bac62`) and no row is both pending and online
+    /// (`0x4bac90`): a push of the same roster, a reload's seed among them, keeps it running.
+    #[test]
+    fn a_roster_push_closes_the_check_only_for_the_leader_when_a_member_left() {
+        let mut s = vm();
+        let party = raid_we_lead(&s);
+        let without_bob = |p: &PartyState| PartyState {
+            raid: p.raid.iter().filter(|m| m.guid != 0xB0B).cloned().collect(),
+            ..p.clone()
+        };
+
+        // Another's check: no push closes it, a member leaving included.
+        let theirs = PartyState {
+            leader_guid: 0xA11CE,
+            ..party.clone()
+        };
+        s.set_party(theirs.clone());
+        s.set_now(100.0);
+        s.ready_check_request(false);
+        s.set_party(without_bob(&theirs));
+        s.set_party(theirs.clone());
+        s.run("ConfirmReadyCheck(1)").unwrap();
+        assert_eq!(
+            s.take_party_requests(),
+            [PartyRequest::ReadyCheckAnswer(1)],
+            "still running"
+        );
+        assert!(s.take_ready_check_lines().is_empty());
+
+        // Ours, with Alice pending and offline and Bob pending: the same roster keeps it, Bob's
+        // leaving closes it with Alice listed.
+        let mut s = vm();
+        let party = raid_we_lead(&s);
+        s.set_party(party.clone());
+        s.set_now(100.0);
+        start_check(&mut s);
+        let mut alice_off = party.clone();
+        alice_off.raid[1].online = false;
+        s.set_party(alice_off.clone());
+        s.set_party(alice_off.clone());
+        assert!(s.take_ready_check_lines().is_empty(), "nobody left");
+        s.set_party(without_bob(&alice_off));
+        assert_eq!(
+            s.take_ready_check_lines(),
+            ["The following players are AFK: Alice"],
+            "Bob left and nobody online is pending"
+        );
     }
 
     /// `AcceptGroup` (`0x48aa80`), `DeclineGroup` (`0x48aab0`) and `LeaveParty` (`0x4e9180`) send
