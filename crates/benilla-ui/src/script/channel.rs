@@ -55,10 +55,10 @@ pub enum RecruitmentRun {
     },
 }
 
-/// `0x49ea90`'s acting arms on the pushed plan, the latch already AUTO: a leave, or a join that
-/// takes its slot (`0x49b980`, a held name keeping its number) and registers window 1's entry,
-/// each followed by `UPDATE_CHAT_WINDOWS` (`0x49eb21`, `0x49eb5f`). Returns whether the run is
-/// spent, `false` when it stays owed.
+/// `0x49ea90`'s acting arms on the pushed plan, the latch already AUTO: a leave, or a join through
+/// the join body (`0x49eb55` → `0x49eb70`) that registers window 1's entry and takes its slot
+/// ([`claim_channel`]), each followed by `UPDATE_CHAT_WINDOWS` (`0x49eb21`, `0x49eb5f`). Returns
+/// whether the run is spent, `false` when it stays owed.
 pub(crate) fn run_recruitment_cascade(model: &mut Model) -> bool {
     match model.guild_recruitment_plan.clone() {
         RecruitmentPlan::Retry => return false,
@@ -70,20 +70,8 @@ pub(crate) fn run_recruitment_cascade(model: &mut Model) -> bool {
                 .push(RecruitmentRun::Leave(name));
         }
         RecruitmentPlan::Join { name, shortcut, id } => {
-            let held = model.joined_channels.iter().any(|c| {
-                c.as_ref()
-                    .is_some_and(|c| c.name.eq_ignore_ascii_case(&name))
-            });
-            if !held {
-                match model.joined_channels.iter().position(Option::is_none) {
-                    Some(i) => model.joined_channels[i] = Some(name.as_str().into()),
-                    None if model.joined_channels.len() < MAX_CHANNELS => {
-                        model.joined_channels.push(Some(name.as_str().into()));
-                    }
-                    None => {}
-                }
-            }
             model.register_window_channel(0, shortcut, id);
+            claim_channel(model, &name, id);
             model
                 .guild_recruitment_runs
                 .push(RecruitmentRun::Join { name, id });
@@ -93,8 +81,35 @@ pub(crate) fn run_recruitment_cascade(model: &mut Model) -> bool {
     true
 }
 
-/// The client's ten channel slots (`0x49b980`).
+/// The client's ten channel slots (`0x49b9c0`).
 const MAX_CHANNELS: usize = 10;
+
+/// The allocator `0x49b980` on the VM's mirror, inside the join body's call (`0x49edf3`): a name
+/// already held keeps its slot as it is (`0x49b991`); otherwise the first free slot (`0x49b9b0`),
+/// else a new one under ten, takes the name and `id` in state 1 (`0x49ba0f`). `None` with all ten
+/// taken (`0x49b9c0`); the app's own claim at the send shows the error. The app's slots replace
+/// these at its next push.
+pub(crate) fn claim_channel(model: &mut Model, name: &str, id: u32) -> Option<usize> {
+    if let Some(n) = slot_of(model, name) {
+        return Some(n);
+    }
+    let slot = JoinedChannel {
+        name: name.to_string(),
+        id,
+        confirmed: false,
+    };
+    let slots = &mut model.joined_channels;
+    let i = match slots.iter().position(Option::is_none) {
+        Some(i) => i,
+        None if slots.len() < MAX_CHANNELS => {
+            slots.push(None);
+            slots.len() - 1
+        }
+        None => return None,
+    };
+    slots[i] = Some(slot);
+    Some(i + 1)
+}
 
 /// A channel verb's ask, drained by the app into its `CMSG_*`: the stock `ChatFrame.lua` slash
 /// handlers' calls, one variant each.
@@ -115,7 +130,7 @@ pub enum ChannelCommand {
     List {
         name: String,
     },
-    /// `ListChannels()`: the roster of every joined channel.
+    /// `ListChannels()` (`0x4a01c0`): the confirmed slots as one `CHAT_MSG_CHANNEL_LIST` line.
     ListAll,
     /// `DisplayChannelOwner(name)`: `CMSG_CHANNEL_OWNER`.
     DisplayOwner {
@@ -258,15 +273,18 @@ fn slot_of(model: &Model, name: &str) -> Option<usize> {
         .map(|i| i + 1)
 }
 
-/// The name in slot `n` (1-based), `None` out of range or for a freed slot: the reference's lookup
-/// `0x49bf30` requires the entry's own number to equal `n`, which a leave zeroes (`0x49bbd0`), so a
-/// left channel's number answers "not joined" while every channel above it keeps its own.
-fn name_at(model: &Model, n: usize) -> Option<&str> {
+/// Slot `n` (1-based) when the server has confirmed it, the by-number lookups `0x49bf30` and
+/// `0x49be50`: below 1 or past the end (`0x49bf34`, `0x49bf3c`), a freed slot, whose number the
+/// leave zeroed (`0x49bf52`, `0x49bbd0`), or a slot not in state 0 (`0x49bf5c`-`0x49bf68`) is
+/// `None`, so a left channel's number answers "not joined" while every channel above it keeps
+/// its own.
+pub(crate) fn confirmed_channel(model: &Model, n: i64) -> Option<&JoinedChannel> {
+    let i = usize::try_from(n).ok()?.checked_sub(1)?;
     model
         .joined_channels
-        .get(n.checked_sub(1)?)?
+        .get(i)?
         .as_ref()
-        .map(|c| c.name.as_str())
+        .filter(|c| c.confirmed)
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -330,48 +348,39 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // GetChannelName(x) (`0x4a05e0`): a number, or a string Lua reads as one (`lua_isnumber`,
+    // `0x4a05ed`; `ChatFrame.lua:2113` passes the "1" of `/1`), selects a confirmed slot after
+    // `__ftol` (`0x4a0602` → `0x49bf30`); any other string selects the first slot of that name in
+    // any state (`0x4a0627` → `0x49be90`), and anything else none (`0x4a0693`). Three values on
+    // every path: the number, the name or nil (`lua_pushstring(NULL)`, `0x4a0659`), the instance.
     g.set(
         "GetChannelName",
         lua.create_function(|lua, key: Value| {
+            let number = super::binding_abi::is_number(lua, key.clone());
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let slot = match &key {
-                // The reference bounds-checks `1 <= n <= count` (`0x49bf30`) and answers only a
-                // confirmed slot; `joined` holds only those, so the bound is the whole check.
-                Value::Integer(_) | Value::Number(_) => {
-                    let n = match &key {
-                        Value::Integer(i) => *i,
-                        Value::Number(n) => *n as i64,
-                        _ => unreachable!(),
-                    };
-                    usize::try_from(n)
-                        .ok()
-                        .filter(|n| name_at(&model, *n).is_some())
+            let found = match (number, &key) {
+                (Some(n), _) => {
+                    let n = i64::from(super::binding_abi::ftol(n));
+                    confirmed_channel(&model, n).map(|c| (n, c.name.clone()))
                 }
-                // A numeric string still resolves as a number, as Lua's coercion does in the
-                // reference: `ChatFrame.lua:2113` passes a `gsub` result, `GetChannelName("1")`.
-                Value::String(s) => {
+                (None, Value::String(s)) => {
                     let name = s.to_str()?;
-                    match name.trim().parse::<usize>() {
-                        Ok(n) if name_at(&model, n).is_some() => Some(n),
-                        Ok(_) => None,
-                        Err(_) => slot_of(&model, &name),
-                    }
+                    slot_of(&model, &name).and_then(|n| {
+                        let slot = model.joined_channels[n - 1].as_ref()?;
+                        Some((n as i64, slot.name.clone()))
+                    })
                 }
                 _ => None,
             };
-
-            let Some(slot) = slot else {
-                // Three values on every path, the name `lua_pushstring(NULL)`, which is nil
-                // (`0x4a0659`); an unconfirmed channel answers the same, as `joined` models.
+            let Some((n, name)) = found else {
                 return Ok(MultiValue::from_vec(vec![
                     Value::Integer(0),
                     Value::Nil,
                     Value::Integer(0),
                 ]));
             };
-            let name = name_at(&model, slot).unwrap_or_default().to_string();
             Ok(MultiValue::from_vec(vec![
-                Value::Integer(slot as i64),
+                Value::Integer(n),
                 Value::String(lua.create_string(&name)?),
                 // `instanceID`: `YOU_JOINED`'s split index, 0 on vanilla servers; never nil.
                 Value::Integer(0),
@@ -379,19 +388,24 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetChannelList() (`0x4a02d0`): a flat vararg of slot, name pairs in join order, as
-    // `FCFDropDown_LoadChannels` steps it (`FloatingChatFrame.lua:445`); none joined is zero
-    // returns. The slots must match `slot_of`'s, so it agrees with `GetChannelName`.
+    // GetChannelList() (`0x4a02d0`): a flat vararg of number, name pairs over the slots in state 0
+    // (`0x4a02f8`-`0x4a030b`), as `FCFDropDown_LoadChannels` steps it (`FloatingChatFrame.lua:445`);
+    // a slot whose ChannelID names a row answers that row's Shortcut (`0x4a0323`-`0x4a034f`), any
+    // other its own name (`0x4a0351`). None confirmed is zero returns.
     g.set(
         "GetChannelList",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let mut out = Vec::with_capacity(model.joined_channels.len() * 2);
-            // Occupied slots only: the reference skips the cleared entries of its record array.
-            for (i, name) in model.joined_channels.iter().enumerate() {
-                let Some(name) = name.as_ref().map(|c| c.name.as_str()) else {
+            for (i, slot) in model.joined_channels.iter().enumerate() {
+                let Some(slot) = slot.as_ref().filter(|c| c.confirmed) else {
                     continue;
                 };
+                let name = model
+                    .zone_channel_catalog
+                    .iter()
+                    .find(|r| slot.id != 0 && r.id == slot.id)
+                    .map_or(slot.name.as_str(), |r| r.shortcut.as_str());
                 out.push(Value::Integer(i as i64 + 1));
                 out.push(Value::String(lua.create_string(name)?));
             }
@@ -401,12 +415,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // JoinChannelByName(name [, password [, frameId]]) (`0x49ff00` → `0x49eb70`): `name` is a
     // string or number (anything else raises `Usage: JoinChannelByName("name")`, `0x49ffe7`), the
-    // password a string or number, else empty. A DBC row answers `(ChannelID, resolvedName)` and a
-    // custom channel `(ChannelID, nil)`, two values either way (`0x49ffcc`, `0x49ffdd`), both
-    // sending; a name with a space (`0x49ff5e`), a row whose zone text is empty, or a failed join
-    // (`0x49ffaa`) pushes nothing and sends nothing. A `frameId` (a number or numeric string) that
-    // truncates to 1..=10 registers the channel in that window's list, deduplicated by name
-    // (`0x49ec24`), which is what brings a `/leave`-stripped channel's lines back to the window.
+    // password a string or number, else empty. A DBC row answers `(ChannelID, Shortcut)`
+    // (`0x49ecec`-`0x49ecfa`, `0x49ffbc`-`0x49ffc5`) and a custom channel `(0, nil)`, two values
+    // either way (`0x49ffcc`, `0x49ffdd`), both sending; a name with a space (`0x49ff5e`), a row
+    // whose zone text is empty, or a failed join (`0x49ffaa`) pushes nothing and sends nothing. A
+    // `frameId` (a number or numeric string) that truncates to 1..=10 registers the channel in that
+    // window's list, deduplicated by name (`0x49ec24`), which is what brings a `/leave`-stripped
+    // channel's lines back to the window; then the join takes its slot ([`claim_channel`]).
     g.set(
         "JoinChannelByName",
         lua.create_function(
@@ -431,15 +446,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         .find(|r| r.shortcut.eq_ignore_ascii_case(&name))
                         .cloned()
                 };
-                let (id, resolved, listed_as) = match row {
-                    None => (0, None, name.clone()),
+                let (id, wire, shortcut) = match row {
+                    None => (0, name.clone(), None),
                     Some(ZoneChannelRow { resolved: None, .. }) => return Ok(MultiValue::new()),
                     Some(ZoneChannelRow {
                         id,
-                        resolved,
+                        resolved: Some(resolved),
                         shortcut,
                         ..
-                    }) => (id, resolved, shortcut),
+                    }) => (id, resolved, Some(shortcut)),
                 };
                 // `0x49ff6b edi = -1` / `0x49ff8a dec edi`; `0x49ec27 cmp esi,0xa; jae` skips.
                 let window = match frame {
@@ -449,22 +464,25 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 .map(|n| super::binding_abi::ftol(n).wrapping_sub(1))
                 .and_then(|i| usize::try_from(i).ok())
                 .filter(|i| *i < 10);
-                if let Some(i) = window {
-                    lua.app_data_mut::<Model>()
-                        .expect("model app_data")
-                        .register_window_channel(i, listed_as, id);
+                {
+                    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                    if let Some(i) = window {
+                        let entry = shortcut.clone().unwrap_or_else(|| name.clone());
+                        model.register_window_channel(i, entry, id);
+                    }
+                    claim_channel(&mut model, &wire, id);
                 }
                 push(
                     lua,
                     ChannelCommand::Join {
-                        name: resolved.clone().unwrap_or_else(|| name.clone()),
+                        name: wire,
                         password,
                         id,
                     },
                 );
                 Ok(MultiValue::from_vec(vec![
                     Value::Integer(i64::from(id)),
-                    match resolved {
+                    match shortcut {
                         Some(r) => Value::String(lua.create_string(&r)?),
                         None => Value::Nil,
                     },
@@ -664,14 +682,7 @@ impl super::UiScript {
     /// answers, with that slot's name; anything else, a name included, is `None`.
     pub fn channel_send_target(&self, target: &str) -> Option<String> {
         let n = super::binding_abi::s_str_to_int(target);
-        let model = self.model_ref();
-        usize::try_from(n)
-            .ok()
-            .and_then(|n| n.checked_sub(1))
-            .and_then(|i| model.joined_channels.get(i))
-            .and_then(Option::as_ref)
-            .filter(|c| c.confirmed)
-            .map(|c| c.name.clone())
+        confirmed_channel(&self.model_ref(), i64::from(n)).map(|c| c.name.clone())
     }
 }
 
@@ -711,7 +722,8 @@ mod command_tests {
         .unwrap();
         assert_eq!(
             s.eval::<(i64, String)>("return A[1], A[2]").unwrap(),
-            (1, "General - Elwynn Forest".to_string())
+            (1, "General".to_string()),
+            "the row's Shortcut"
         );
         assert!(s
             .eval::<bool>("return B[1] == 0 and B[2] == nil and table.getn(B) == 1")

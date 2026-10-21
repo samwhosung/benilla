@@ -669,9 +669,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // RemoveChatWindowChannel(id, name | n) (`0x4a1260`): a numeric key names the joined channel
-    // in slot n, and an empty slot or a negative number removes nothing; the key then resolves to its DBC Shortcut as
-    // above, and the entry of that name is freed.
+    // RemoveChatWindowChannel(id, name | n) (`0x4a1260`): a numeric key names the confirmed
+    // channel in slot n, and any other number removes nothing; the key then resolves to its DBC
+    // Shortcut as above, and the entry of that name is freed.
     lua.globals().set(
         "RemoveChatWindowChannel",
         lua.create_function(|lua, (id, key): (Value, Value)| {
@@ -690,17 +690,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let key = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let n = crate::script::binding_abi::s_str_to_int(&key);
-                // `0x49e880`: a non-zero `SStrToInt` names a joined slot, and `0x49be50` answers
-                // NULL below slot 1, so `"-1"` removes nothing (`0x4a12c9`); a zero keeps the
-                // string raw, untrimmed, for the case-insensitive compares (`0x4a1315`,
-                // `0x4a1359`).
+                // `0x49e880` (`0x4a12bf`): a non-zero `SStrToInt` names a confirmed slot, and
+                // `0x49be50` answers NULL below slot 1 or for a slot not in state 0, so `"-1"` or
+                // a pending slot's number removes nothing (`0x4a12c9`); a zero keeps the string
+                // raw, untrimmed, for the case-insensitive compares (`0x4a1315`, `0x4a1359`).
                 let key = if n != 0 {
-                    match usize::try_from(n)
-                        .ok()
-                        .and_then(|n| model.joined_channels.get(n - 1))
-                        .and_then(|c| c.as_ref().map(|c| c.name.clone()))
-                    {
-                        Some(name) => name,
+                    match super::channel::confirmed_channel(&model, i64::from(n)) {
+                        Some(c) => c.name.clone(),
                         None => return Ok(()),
                     }
                 } else {

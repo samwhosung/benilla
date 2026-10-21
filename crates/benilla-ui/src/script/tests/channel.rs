@@ -79,9 +79,9 @@ fn a_numeric_string_resolves_as_an_index_not_as_a_name() {
     assert_eq!(id, 2, "the `/2` slash-command path depends on this");
 }
 
-/// `ui_chat::feed` appends on the server's YOU_JOINED notice, never on the request.
+/// A fresh VM holds no slot: the app's mirror and the join verbs fill it.
 #[test]
-fn nothing_is_joined_before_the_server_confirms_it() {
+fn a_fresh_vm_holds_no_channel() {
     let s = script();
     let id: i64 = s.eval("return GetChannelName('World')").unwrap();
     assert_eq!(id, 0);
