@@ -1199,7 +1199,14 @@ fn drain_loot(
                 None => debug!("ui_loot: row {index} clicked out of range — ignored"),
             }
         }
-
+    });
+    // The takes' handlers ran as that turn ended, as the reference runs them inside the take
+    // (`0x4c2920`): a `LootSlot`, `GiveMasterLoot` or `CloseLoot` one calls goes out below, in the
+    // same pass.
+    vm.turn(|script, (mut loot, mut latch)| {
+        let Some(script) = script else {
+            return;
+        };
         // `LootSlot`, the confirm arm (`0x4c27c0`): it sends only for the pending row and clears
         // the stash on the send (`0x4c281a`), so a doubled OnAccept cannot loot twice.
         for index in script.take_loot_confirms() {
