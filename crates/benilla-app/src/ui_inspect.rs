@@ -330,4 +330,74 @@ mod tests {
             assert_eq!(s.eval::<i64>("return SEEN").unwrap(), 0, "level {level}");
         }
     }
+
+    /// The feed signals the inspected token when its view first lands for an inspectee, standing
+    /// for the show's own paint; a record landing repaints nothing (`0x5ed880` signals none), and
+    /// a change of the gear is the visible-item bridge's (`0x51bd70`).
+    #[test]
+    fn the_inspect_feed_signals_a_new_inspectee_alone() {
+        use benilla_protocol::field::FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR;
+        const MATE: u64 = 0x2001;
+        const OTHER: u64 = 0x2002;
+        const HELM: u32 = 7366;
+        let mut app = App::new();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        std::mem::forget(rx);
+        app.insert_resource(NetCommands(tx))
+            .insert_resource(InspectTarget {
+                token: Some("target".into()),
+            })
+            .init_resource::<InspectFeedState>()
+            .init_resource::<Items>()
+            .init_resource::<GuidIndex>()
+            .insert_resource(crate::target::Selection {
+                guid: Some(MATE),
+                ..Default::default()
+            })
+            .init_resource::<crate::ui_party::GroupState>();
+        for guid in [MATE, OTHER] {
+            let e = app
+                .world_mut()
+                .spawn(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                    (FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR + 2, HELM),
+                ])))
+                .id();
+            app.world_mut()
+                .resource_mut::<GuidIndex>()
+                .0
+                .insert(guid, e);
+        }
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                r#"
+                SEEN = {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("UNIT_INVENTORY_CHANGED")
+                f:SetScript("OnEvent", function() table.insert(SEEN, arg1) end)
+            "#,
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        let seen = |app: &mut App| {
+            app.world_mut().run_system_once(feed_inspect).unwrap();
+            let s = app.world_mut().non_send_resource_mut::<UiScript>();
+            let out = s.eval::<Vec<String>>("return SEEN").unwrap();
+            s.run("SEEN = {}").unwrap();
+            out
+        };
+        assert_eq!(seen(&mut app), ["target"], "the first view");
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(HELM, Some(crate::items::test_template("Helm")));
+        assert!(seen(&mut app).is_empty(), "the helm's record landed");
+        app.world_mut()
+            .resource_mut::<crate::target::Selection>()
+            .guid = Some(OTHER);
+        assert_eq!(
+            seen(&mut app),
+            ["target"],
+            "a new inspectee behind the token"
+        );
+    }
 }

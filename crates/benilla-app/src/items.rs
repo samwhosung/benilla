@@ -427,6 +427,9 @@ pub(crate) struct Items {
     /// callback `0x4c0340` per call, with no dedupe (`0x4c017f`, `0x4c0582`). A lookup registers
     /// it, so it is locked like the in-flight asks and registering takes `&self`.
     trade_waiters: std::sync::Mutex<Vec<u32>>,
+    /// The ammunition entry each ammo-slot getter call that missed asked for, in call order: one
+    /// callback `0x4c84f0` per call (`0x4c83bc`, `0x4c89cf`), registered after the script's tick.
+    ammo_waiters: std::sync::Mutex<Vec<u32>>,
 }
 
 impl Items {
@@ -465,6 +468,23 @@ impl Items {
     pub(crate) fn take_trade_waiters(&mut self, entry: u32) -> usize {
         let waiters = self
             .trade_waiters
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner());
+        let before = waiters.len();
+        waiters.retain(|&e| e != entry);
+        before - waiters.len()
+    }
+
+    /// An ammo-slot getter missed the cache on `entry` and asked with the callback `0x4c84f0`.
+    pub(crate) fn wait_for_ammo_record(&self, entry: u32) {
+        self.ammo_waiters.lock_recover().push(entry);
+    }
+
+    /// The answer for `entry` landed, or refused it: how many ammo-slot getter calls were
+    /// waiting on it, whose callbacks are spent either way.
+    pub(crate) fn take_ammo_waiters(&mut self, entry: u32) -> usize {
+        let waiters = self
+            .ammo_waiters
             .get_mut()
             .unwrap_or_else(|e| e.into_inner());
         let before = waiters.len();
@@ -559,6 +579,10 @@ impl Items {
         self.pending_enchant_times.clear();
         self.entry_waiters.clear();
         self.trade_waiters
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.ammo_waiters
             .get_mut()
             .unwrap_or_else(|e| e.into_inner())
             .clear();

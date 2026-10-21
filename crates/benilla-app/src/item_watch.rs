@@ -20,6 +20,7 @@ use benilla_protocol::messages::{ObjectType, ITEM_FLAG_CHARTER};
 use benilla_protocol::ObjectFields;
 use bevy::prelude::*;
 
+use crate::field_watch::{id, FieldNotice};
 use crate::items::Items;
 use crate::query_cache::Ask;
 
@@ -396,6 +397,31 @@ where
     }
 }
 
+impl<'a, F> Watch<'a, F>
+where
+    F: Fn(u64) -> Option<&'a ObjectFields>,
+{
+    /// The unit signals a notice's handler ends in.
+    pub(crate) fn signals(&self, _notice: &ItemNotice) -> Vec<FieldNotice> {
+        Vec::new()
+    }
+
+    /// The record set-up's unit signal at a first create.
+    pub(crate) fn created_signal(&self, _fields: &ObjectFields) -> Option<FieldNotice> {
+        None
+    }
+
+    /// The unit signals of a record answer's callbacks.
+    pub(crate) fn landed_signals<'b>(
+        &self,
+        _entry: u32,
+        _held: impl IntoIterator<Item = (u64, &'b ObjectFields)>,
+        _entry_waiters: &[u64],
+    ) -> Vec<FieldNotice> {
+        Vec::new()
+    }
+}
+
 fn guid_of(lo: u32, hi: u32) -> u64 {
     u64::from(lo) | (u64::from(hi) << 32)
 }
@@ -727,6 +753,148 @@ mod tests {
             ],
             "in guid order"
         );
+    }
+
+    /// `UNIT_INVENTORY_CHANGED` with `"player"`, as `0x4c72e0` signals it.
+    const INVENTORY: FieldNotice = FieldNotice::Player {
+        id: id::UNIT_INVENTORY_CHANGED,
+    };
+
+    /// An item of ours, `ITEM_FIELD_CONTAINED` the bag or player holding it.
+    fn held_item(entry: u32, contained: u64) -> ObjectFields {
+        let mut f = item(entry, ME);
+        f.merge(ObjectFields::from_pairs(&[
+            (8, contained as u32),
+            (9, (contained >> 32) as u32),
+        ]));
+        f
+    }
+
+    /// `NotifyItemSlotChanged` (`0x4c7180`) finds the item's seat, else its bag's: a seat below
+    /// 23 signals (`0x4c7265`); anything else signals only for the active player's ammunition
+    /// (`0x4c72cd`). Each notice whose handler calls it runs it.
+    #[test]
+    fn the_slot_change_signals_a_worn_or_bagged_item_and_the_ammunition() {
+        const HELM: u64 = 0x4000_0000_0000_0201;
+        const BANKED: u64 = 0x4000_0000_0000_0202;
+        const INNER: u64 = 0x4000_0000_0000_0203;
+        let mut w = World::new();
+        // Head (0), a bag in seat 19, the potion and the arrows in the backpack (23, 24), a
+        // bank seat (39); `PLAYER_AMMO_ID` the arrows'.
+        let mut me = player(&[
+            (0, HELM),
+            (19, BAG),
+            (23, POTION),
+            (24, ARROWS),
+            (39, BANKED),
+        ]);
+        me.merge(ObjectFields::from_pairs(&[(1223, ARROWS_ID)]));
+        w.objects.insert(ME, me);
+        w.objects.insert(HELM, held_item(7366, ME));
+        w.objects.insert(BAG, bag(BAG_ID, &[(0, INNER)]));
+        w.objects.insert(INNER, held_item(POTION_ID, BAG));
+        w.objects.insert(POTION, held_item(POTION_ID, ME));
+        w.objects.insert(ARROWS, held_item(ARROWS_ID, ME));
+        w.objects.insert(BANKED, held_item(POTION_ID, ME));
+        let stack = |guid| ItemNotice::StackCount { guid, entry: 0 };
+        {
+            let watch = w.watch();
+            assert_eq!(watch.signals(&stack(HELM)), [INVENTORY], "a worn seat");
+            assert_eq!(
+                watch.signals(&stack(INNER)),
+                [INVENTORY],
+                "the bag's seat, 19"
+            );
+            assert!(watch.signals(&stack(POTION)).is_empty(), "a backpack seat");
+            assert_eq!(watch.signals(&stack(ARROWS)), [INVENTORY], "the ammunition");
+            assert!(
+                watch.signals(&stack(BANKED)).is_empty(),
+                "the bank band's event is the bank feed's"
+            );
+            // The other handlers that call it (`0x5d87c1`, `0x5d9694`, `0x5d96d5`, `0x5d9b2a`);
+            // an entry change whose record missed waits for its answer (`0x5d966e`).
+            for notice in [
+                ItemNotice::Destroyed {
+                    guid: HELM,
+                    entry: 7366,
+                },
+                ItemNotice::Entry {
+                    guid: HELM,
+                    old: 1,
+                    new: 7366,
+                    new_cached: true,
+                },
+                ItemNotice::EntryRecord {
+                    guid: HELM,
+                    entry: 7366,
+                },
+                ItemNotice::Enchantment {
+                    guid: HELM,
+                    entry: 7366,
+                },
+            ] {
+                assert_eq!(watch.signals(&notice), [INVENTORY], "{notice:?}");
+            }
+            let missed = ItemNotice::Entry {
+                guid: HELM,
+                old: 1,
+                new: 7366,
+                new_cached: false,
+            };
+            assert!(watch.signals(&missed).is_empty());
+            // The spell charges' handler `0x5d9540` and a seat's `0x4f8db0` never call it.
+            assert!(watch
+                .signals(&ItemNotice::SpellCharges {
+                    guid: HELM,
+                    entry: 7366
+                })
+                .is_empty());
+        }
+        // A worn seat signals with the item gone; the ammunition test needs it live (`0x4c7298`).
+        w.objects.remove(&HELM);
+        w.objects.remove(&ARROWS);
+        assert_eq!(w.watch().signals(&stack(HELM)), [INVENTORY]);
+        assert!(w.watch().signals(&stack(ARROWS)).is_empty());
+        // No active player, nothing (`0x4c71ab`).
+        w.objects.remove(&ME);
+        assert!(w.watch().signals(&stack(INNER)).is_empty());
+    }
+
+    /// The record set-up's last act signals `UNIT_INVENTORY_CHANGED` for the tokens of the item's
+    /// owner, whoever's the item, while in the world (`0x5d8504`, `0x5d85ed`-`0x5d8606`): at a
+    /// create whose record is cached, and for each item a landed answer finishes, in guid order,
+    /// ahead of the entry changes' callbacks (`0x5d96d5`).
+    #[test]
+    fn a_record_set_up_signals_its_owner_and_an_answer_its_waiters_after() {
+        const HELM: u64 = 0x4000_0000_0000_0201;
+        let mut w = World::new();
+        let ours = held_item(POTION_ID, ME);
+        let theirs = item(POTION_ID, OTHER);
+        assert_eq!(w.watch().created_signal(&ours), None, "not cached");
+        w.items
+            .insert_template(POTION_ID, Some(crate::items::test_template("Potion")));
+        let owner = |guid| FieldNotice::Signal {
+            guid,
+            id: id::UNIT_INVENTORY_CHANGED,
+        };
+        assert_eq!(w.watch().created_signal(&ours), Some(owner(ME)));
+        assert_eq!(w.watch().created_signal(&theirs), Some(owner(OTHER)));
+        w.objects.insert(ME, player(&[(0, HELM)]));
+        assert_eq!(
+            w.watch().landed_signals(
+                POTION_ID,
+                [(ARROWS, &theirs), (POTION, &ours), (HELM, &ours)],
+                &[HELM]
+            ),
+            [owner(ME), owner(OTHER), INVENTORY],
+            "the set-ups in guid order, then the entry change's slot run"
+        );
+        w.objects.remove(&ME);
+        assert_eq!(w.watch().created_signal(&ours), None, "out of the world");
+        assert!(w
+            .watch()
+            .landed_signals(POTION_ID, [(POTION, &ours)], &[])
+            .is_empty());
     }
 
     /// A trade getter's record callback (`0x4c0340`) touches neither the bar nor a trade slot.

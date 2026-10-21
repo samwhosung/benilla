@@ -251,6 +251,14 @@ fn player_skill_unpacks_the_three_dword_triplet() {
 }
 
 #[test]
+fn item_contained_reads_the_guid_after_the_owner() {
+    // `ITEM_FIELD_OWNER` 6-7 set too, so a wrong index reads the owner.
+    let f = ObjectFields::from_pairs(&[(6, 0x07), (7, 0), (8, 0xabc), (9, 0x4000_0000)]);
+    assert_eq!(f.item_contained(), Some(0x4000_0000_0000_0abc));
+    assert_eq!(ObjectFields::default().item_contained(), None);
+}
+
+#[test]
 fn player_ammo_id_reads_the_field() {
     let f = ObjectFields::from_pairs(&[(1223, 2512)]);
     assert_eq!(f.player_ammo_id(), Some(2512));

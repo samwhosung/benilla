@@ -1119,6 +1119,7 @@ mod tests {
             .init_resource::<Items>()
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<crate::names::NameCache>()
+            .add_message::<crate::field_watch::FieldNotice>()
             .insert_resource(NetCommands(tx));
         let fields = match bag {
             Some(g) => ObjectFields::from_pairs(&[
@@ -1177,8 +1178,118 @@ mod tests {
              recorder stringifies the absent arg1 as nil. Got {events:?}"
         );
         assert!(
-            events.contains(&"UNIT_INVENTORY_CHANGED player".to_string()),
-            "and the doll's, unchanged, got {events:?}"
+            !events
+                .iter()
+                .any(|e| e.starts_with("UNIT_INVENTORY_CHANGED")),
+            "a bank bag seat is no doll seat (`0x4c726a`), got {events:?}"
+        );
+    }
+
+    /// Rewrite the active player's descriptor wholesale: `ObjectFields` has no setter.
+    fn set_self(app: &mut App, pairs: &[(u16, u32)]) {
+        let mut q = app
+            .world_mut()
+            .query_filtered::<&mut ObjectStore, With<SelfPlayer>>();
+        let mut store = q.single_mut(app.world_mut()).unwrap();
+        *store = ObjectStore(ObjectFields::from_pairs(pairs));
+    }
+
+    /// A repair moves the doll's view and fires no `UNIT_INVENTORY_CHANGED`: the durability
+    /// watcher `0x5d97c0` signals none. The doll's event is its producers' alone
+    /// ([`crate::field_watch`], [`crate::item_watch`]), never a change of this feed's view.
+    #[test]
+    fn a_repair_moves_the_doll_and_fires_no_inventory_event() {
+        use benilla_protocol::field::FIELD_PLAYER_INV_SLOT_HEAD;
+        const HELM: u64 = 0x4000_0000_0000_0b01;
+        const HELM_ID: u32 = 7366;
+        /// `ITEM_FIELD_DURABILITY` and `_MAXDURABILITY`.
+        const DURABILITY: u16 = 46;
+        let mut app = world_with_bank_bag(None);
+        set_self(
+            &mut app,
+            &[
+                (FIELD_PLAYER_INV_SLOT_HEAD, HELM as u32),
+                (FIELD_PLAYER_INV_SLOT_HEAD + 1, (HELM >> 32) as u32),
+            ],
+        );
+        crate::items::test_spawn_item(
+            app.world_mut(),
+            HELM,
+            ObjectFields::from_pairs(&[(F_OBJECT_ENTRY, HELM_ID), (DURABILITY, 0), (47, 40)]),
+            false,
+        );
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(HELM_ID, Some(crate::items::test_template("Helm")));
+        let broken = |app: &mut App| {
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .eval::<bool>(r#"return GetInventoryItemBroken("player", 1) ~= nil"#)
+                .unwrap()
+        };
+        app.world_mut().run_system_once(feed_char).unwrap();
+        assert!(broken(&mut app));
+        let _ = seen(&mut app);
+        restream(
+            &mut app,
+            HELM,
+            ObjectFields::from_pairs(&[(F_OBJECT_ENTRY, HELM_ID), (DURABILITY, 40), (47, 40)]),
+        );
+        app.world_mut().run_system_once(feed_char).unwrap();
+        assert!(!broken(&mut app), "the doll reads the repair");
+        assert_eq!(seen(&mut app), Vec::<String>::new());
+    }
+
+    /// The ammo slot getters' record lookups with the callback `0x4c84f0` (`0x4c83bc`,
+    /// `0x4c89cf`): a call that missed waits for the answer; one whose record landed since runs
+    /// its callback at once, `UNIT_INVENTORY_CHANGED` with `"player"` (`0x4c8509`).
+    #[test]
+    fn an_ammo_getters_miss_waits_and_a_record_landed_since_signals_at_once() {
+        use crate::field_watch::{id, FieldNotice};
+        const ARROW: u32 = 2512;
+        /// `PLAYER_AMMO_ID`.
+        const AMMO_ID: u16 = 1223;
+        let mut app = world_with_bank_bag(None);
+        set_self(&mut app, &[(AMMO_ID, ARROW)]);
+        app.world_mut().run_system_once(feed_char).unwrap();
+        let ask = |app: &mut App| {
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .run(r#"GetInventoryItemQuality("player", 0)"#)
+                .unwrap();
+        };
+        let signals = |app: &mut App| -> Vec<FieldNotice> {
+            app.world_mut()
+                .resource_mut::<Messages<FieldNotice>>()
+                .drain()
+                .collect()
+        };
+        ask(&mut app);
+        app.world_mut().run_system_once(feed_char).unwrap();
+        assert!(signals(&mut app).is_empty());
+        assert_eq!(
+            app.world_mut()
+                .resource_mut::<Items>()
+                .take_ammo_waiters(ARROW),
+            1,
+            "the miss waits for its answer"
+        );
+        ask(&mut app);
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(ARROW, Some(crate::items::test_template("Rough Arrow")));
+        app.world_mut().run_system_once(feed_char).unwrap();
+        assert_eq!(
+            signals(&mut app),
+            [FieldNotice::Player {
+                id: id::UNIT_INVENTORY_CHANGED
+            }]
+        );
+        assert_eq!(
+            app.world_mut()
+                .resource_mut::<Items>()
+                .take_ammo_waiters(ARROW),
+            0
         );
     }
 

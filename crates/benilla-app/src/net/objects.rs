@@ -1238,6 +1238,137 @@ mod tests {
         );
     }
 
+    /// The item paths' `UNIT_INVENTORY_CHANGED`, in wire order: a create's record set-up for its
+    /// owner, whoever's (`0x5d85fe`); a worn item's restack (`0x5d950e` → `0x4c72e0`); the late
+    /// record of an item of ours; the worn item's destroy (`0x5d87c1`). A backpack restack is none.
+    #[test]
+    fn the_object_packets_write_the_item_paths_inventory_signals_in_wire_order() {
+        use crate::field_watch::FieldNotice;
+        use benilla_protocol::field::{
+            FIELD_ITEM_STACK_COUNT, FIELD_OBJECT_ENTRY, FIELD_PLAYER_INV_SLOT_HEAD,
+        };
+        use benilla_protocol::messages::ObjectType;
+        const ME: u64 = 0x0000_0000_0000_0007;
+        const HELM: u64 = 0x4000_0000_0000_0042;
+        const POTIONS: u64 = 0x4000_0000_0000_0043;
+        const THEIRS: u64 = 0x4000_0000_0000_0044;
+        const HELM_ID: u32 = 7366;
+        const POTION: u32 = 118;
+        let create = |guid: u64, entry: u32, owner: u64| SessionEvent::ItemCreate {
+            guid,
+            container: false,
+            fields: ObjectFields::from_pairs(&[
+                (2, 0x3),
+                (FIELD_OBJECT_ENTRY, entry),
+                (6, owner as u32),
+                (7, 0),
+                (8, owner as u32),
+                (9, 0),
+                (FIELD_ITEM_STACK_COUNT, 1),
+            ])
+            .into_created(ObjectType::Item),
+        };
+        let seat = |n: u16, guid: u64| {
+            let lo = FIELD_PLAYER_INV_SLOT_HEAD + 2 * n;
+            [(lo, guid as u32), (lo + 1, (guid >> 32) as u32)]
+        };
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let world = app.world_mut();
+        let pairs: Vec<(u16, u32)> = seat(0, HELM).into_iter().chain(seat(23, POTIONS)).collect();
+        let me = world
+            .spawn((
+                Guid(ME),
+                ObjectStore(ObjectFields::from_pairs(&pairs).into_created(ObjectType::Player)),
+            ))
+            .id();
+        world.resource_mut::<GuidIndex>().0.insert(ME, me);
+        world.resource_mut::<SelfGuid>().0 = Some(ME);
+        world
+            .resource_mut::<Items>()
+            .insert_template(POTION, Some(crate::items::test_template("Potion")));
+        let restack = |guid: u64| SessionEvent::ObjectValues {
+            guid,
+            fields: ObjectFields::from_pairs(&[(FIELD_ITEM_STACK_COUNT, 2)]),
+        };
+        super::super::handlers::dispatch(
+            world,
+            super::wire(vec![
+                create(POTIONS, POTION, ME),
+                create(HELM, HELM_ID, ME),
+                create(THEIRS, POTION, 0x8),
+                restack(POTIONS),
+                restack(HELM),
+                SessionEvent::ItemTemplate {
+                    entry: HELM_ID,
+                    info: Some(Box::new(crate::items::test_template("Helm"))),
+                },
+                SessionEvent::ObjectDestroyed(HELM),
+            ]),
+        );
+        let inventory: Vec<FieldNotice> = world
+            .resource_mut::<Messages<FieldNotice>>()
+            .drain()
+            .filter(|n| match *n {
+                FieldNotice::Unit { id, .. }
+                | FieldNotice::Signal { id, .. }
+                | FieldNotice::Player { id } => {
+                    id == crate::field_watch::id::UNIT_INVENTORY_CHANGED
+                }
+                _ => false,
+            })
+            .collect();
+        let owner = |guid| FieldNotice::Signal {
+            guid,
+            id: crate::field_watch::id::UNIT_INVENTORY_CHANGED,
+        };
+        let slot = FieldNotice::Player {
+            id: crate::field_watch::id::UNIT_INVENTORY_CHANGED,
+        };
+        assert_eq!(
+            inventory,
+            [owner(ME), owner(0x8), slot, owner(ME), slot],
+            "the potions' set-up, theirs, the helm's restack, its late record, its destroy"
+        );
+    }
+
+    /// The ammunition getters' record callback `0x4c84f0`: each call that missed runs once on a
+    /// ready answer, `UNIT_INVENTORY_CHANGED` with `"player"` (`0x4c8509`); a refusal frees them.
+    #[test]
+    fn an_item_answer_runs_each_waiting_ammo_getters_callback_once() {
+        use crate::field_watch::FieldNotice;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let world = app.world_mut();
+        {
+            let items = world.resource::<Items>();
+            for entry in [2512, 2512, 3030] {
+                items.wait_for_ammo_record(entry);
+            }
+        }
+        let answer = |entry: u32, ok: bool| SessionEvent::ItemTemplate {
+            entry,
+            info: ok.then(|| Box::new(crate::items::test_template("Arrow"))),
+        };
+        super::super::handlers::dispatch(
+            world,
+            super::wire(vec![
+                answer(2512, true),
+                answer(3030, false),
+                answer(3030, true),
+            ]),
+        );
+        let notices: Vec<FieldNotice> = world
+            .resource_mut::<Messages<FieldNotice>>()
+            .drain()
+            .collect();
+        assert_eq!(
+            notices,
+            [FieldNotice::Player {
+                id: crate::field_watch::id::UNIT_INVENTORY_CHANGED
+            }; 2],
+            "one per call that asked, none for the refusal or after it"
+        );
+    }
+
     /// The object packets run the field watches per block in wire order: our first create none
     /// (`0x465d80`), a values block each watch it moved once, a create of an object already shown
     /// each watch it moved over every field (`0x465d8e`); another unit only its bridge.

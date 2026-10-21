@@ -13,6 +13,11 @@ impl ObjectFields {
     pub fn item_owner(&self) -> Option<u64> {
         self.get_guid(6)
     }
+    /// `ITEM_FIELD_CONTAINED` (field 8): the bag holding the item, or its owner for an item in
+    /// one of the player's own seats.
+    pub fn item_contained(&self) -> Option<u64> {
+        self.get_guid(8)
+    }
     /// `OBJECT_FIELD_TYPE` itself, the type mask: 9 for a creature or a pet, `0x19` for a player.
     /// The display resolve asks the creature cache only for 9 (`0x60b134`).
     pub fn object_type_mask(&self) -> Option<u32> {

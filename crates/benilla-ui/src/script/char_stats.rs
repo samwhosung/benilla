@@ -338,6 +338,11 @@ impl super::UiScript {
         self.model_mut().player_combat_stats = stats;
     }
 
+    /// Drain the ammunition entries the slot getters missed ([`Model::ammo_record_asks`]).
+    pub fn take_ammo_record_asks(&mut self) -> Vec<u32> {
+        Vec::new()
+    }
+
     /// Push the doll snapshot, recompute the 12 alert statuses and fire `UPDATE_INVENTORY_ALERTS`.
     pub fn set_inventory_slots(&mut self, slots: InventorySlots) {
         {
@@ -2031,6 +2036,51 @@ mod tests {
             r#"local _, _, id = string.find(GetInventoryItemLink("player", {slot}), "item:(%d+)")
                return tonumber(id)"#
         )
+    }
+
+    /// The ammo slot's texture and quality getters look the record up with the callback
+    /// `0x4c84f0` (`0x4c83bc`, `0x4c89cf`): each call that misses registers one, the texture's
+    /// only while the player carries some (`0x4c83a0`, `CountInventoryItemsByEntry`). A cached
+    /// record, another getter or another slot registers none.
+    #[test]
+    fn the_ammo_slot_getters_register_a_record_callback_on_a_miss() {
+        let mut s = seated();
+        let mut slots: crate::script::InventorySlots = Default::default();
+        let arrows = |count: u32, name: Option<&str>| InvSlotView {
+            item_id: 2512,
+            count,
+            name: name.map(str::to_string),
+            ..Default::default()
+        };
+        slots[0] = Some(arrows(200, None));
+        slots[1] = Some(InvSlotView {
+            item_id: 2263,
+            count: 1,
+            ..Default::default()
+        });
+        s.set_inventory_slots(slots.clone());
+        s.run(
+            r#"GetInventoryItemTexture("player", 0); GetInventoryItemQuality("player", 0)
+               GetInventoryItemQuality("player", 0); GetInventoryItemLink("player", 0)
+               GetInventoryItemTexture("player", 1); GetInventoryItemQuality("player", 1)"#,
+        )
+        .unwrap();
+        assert_eq!(s.take_ammo_record_asks(), [2512, 2512, 2512]);
+        assert!(s.take_ammo_record_asks().is_empty(), "drained");
+        slots[0] = Some(arrows(0, None));
+        s.set_inventory_slots(slots.clone());
+        s.run(r#"GetInventoryItemTexture("player", 0); GetInventoryItemQuality("player", 0)"#)
+            .unwrap();
+        assert_eq!(
+            s.take_ammo_record_asks(),
+            [2512],
+            "none carried: the quality's alone"
+        );
+        slots[0] = Some(arrows(200, Some("Rough Arrow")));
+        s.set_inventory_slots(slots);
+        s.run(r#"GetInventoryItemTexture("player", 0); GetInventoryItemQuality("player", 0)"#)
+            .unwrap();
+        assert!(s.take_ammo_record_asks().is_empty(), "the record is cached");
     }
 
     #[test]

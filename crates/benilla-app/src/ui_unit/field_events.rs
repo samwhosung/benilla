@@ -388,7 +388,7 @@ mod tests {
                 );
             }
         }
-        for id in [149, 189, 201, 372, 406, 523, 524] {
+        for id in [149, 186, 189, 201, 372, 406, 523, 524] {
             assert_eq!(
                 player_event(id),
                 table.get(&id).map(String::as_str),
@@ -456,6 +456,32 @@ mod tests {
             mouseover: MOB,
             ..Default::default()
         }
+    }
+
+    /// `UNIT_INVENTORY_CHANGED` from its three kinds of producer: the visible-item bridge
+    /// (`0x51bd70`) and the record set-up (`0x5d85fe`) for each token of the player, the
+    /// ammunition and slot paths for `"player"` alone (`0x4c7110`, `0x4c72e0`, `0x4c8509`).
+    #[test]
+    fn the_inventory_event_reaches_each_token_or_the_player() {
+        let mut app = world(seated());
+        let id = crate::field_watch::id::UNIT_INVENTORY_CHANGED;
+        assert_eq!(
+            fired(
+                &mut app,
+                &[
+                    FieldNotice::Unit { guid: ME, id },
+                    FieldNotice::Signal { guid: ME, id },
+                    FieldNotice::Player { id }
+                ]
+            ),
+            [
+                "UNIT_INVENTORY_CHANGED player",
+                "UNIT_INVENTORY_CHANGED target",
+                "UNIT_INVENTORY_CHANGED player",
+                "UNIT_INVENTORY_CHANGED target",
+                "UNIT_INVENTORY_CHANGED player"
+            ]
+        );
     }
 
     /// The bridge fires once per token naming the unit, in the fan-out's order; a unit with no

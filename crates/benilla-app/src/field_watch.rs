@@ -85,6 +85,7 @@ pub(crate) mod id {
     pub(crate) const UNIT_DISPLAYPOWER: u16 = 30;
     pub(crate) const UNIT_AURA: u16 = 41;
     pub(crate) const UNIT_NAME_UPDATE: u16 = 183;
+    pub(crate) const UNIT_INVENTORY_CHANGED: u16 = 186;
     pub(crate) const UNIT_CLASSIFICATION_CHANGED: u16 = 187;
     pub(crate) const PLAYER_FLAGS_CHANGED: u16 = 407;
     pub(crate) const UNIT_QUEST_LOG_CHANGED: u16 = 522;
@@ -939,19 +940,63 @@ mod tests {
                 &[(slot(15) + 2, 2504), (slot(16) + 5, 1), (slot(17) + 11, 3)]
             ),
             [
+                // The bridge's watch over all 19 slots, spliced at their first field ahead.
+                bridge(ME, id::UNIT_INVENTORY_CHANGED),
                 FieldNotice::Weapon { slot: 15 },
                 FieldNotice::Weapon { slot: 16 },
                 FieldNotice::Weapon { slot: 17 }
             ]
         );
-        // The chest (slot 4) and a ring (10) do not reach it.
-        assert!(block(
-            &mut me,
-            Some(ME),
-            ME,
-            &[(slot(4) + 2, 1), (slot(10) + 2, 1)]
-        )
-        .is_empty());
+        // The chest (slot 4) and a ring (10) do not reach it, only the bridge's.
+        assert_eq!(
+            block(
+                &mut me,
+                Some(ME),
+                ME,
+                &[(slot(4) + 2, 1), (slot(10) + 2, 1)]
+            ),
+            [bridge(ME, id::UNIT_INVENTORY_CHANGED)]
+        );
+    }
+
+    /// The bridge's visible-item watch (`0x51bc3c`): one over the 19 slots' 0x390 bytes at the
+    /// player section's `+0x118`, on every player, signalling `0xba` (`0x51bd73`) once a block.
+    #[test]
+    fn the_visible_item_bridge_runs_on_every_player_once_a_block() {
+        let mut other = player();
+        let first = pf(VISIBLE_ITEM);
+        let last = pf(VISIBLE_ITEM + 0x390 - 4);
+        assert_eq!(
+            block(&mut other, Some(ME), OTHER, &[(first + 2, 7366), (last, 1)]),
+            [bridge(OTHER, id::UNIT_INVENTORY_CHANGED)]
+        );
+        assert!(
+            block(&mut other, Some(ME), OTHER, &[(last + 1, 1)]).is_empty(),
+            "the inventory seats past it"
+        );
+        let mut mob = unit();
+        assert!(
+            block(&mut mob, Some(ME), MOB, &[(first + 2, 7366)]).is_empty(),
+            "a creature has no player block watch"
+        );
+    }
+
+    /// The ammunition watch `0x4c70b0`, registered on the active player alone at world entry
+    /// (`0x4c6fea`, from `0x49097e`): `PLAYER_AMMO_ID` signals `UNIT_INVENTORY_CHANGED` with
+    /// `"player"` (`0x4c7110`).
+    #[test]
+    fn the_ammo_watch_signals_the_active_player_alone() {
+        let ammo = pf(0x102c);
+        let mut me = player();
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(ammo, 2512)]),
+            [FieldNotice::Player {
+                id: id::UNIT_INVENTORY_CHANGED
+            }]
+        );
+        assert!(block(&mut me, Some(ME), ME, &[(ammo, 2512)]).is_empty());
+        let mut other = player();
+        assert!(block(&mut other, Some(ME), OTHER, &[(ammo, 2512)]).is_empty());
     }
 
     const PET: u64 = 0xF140_0000_0000_0077;
@@ -1156,8 +1201,11 @@ mod tests {
             block(&mut other, Some(ME), OTHER, &[(198, 5), (257, 1)]),
             [bridge(OTHER, 522)]
         );
-        // Field 258, past the 60 dwords, is outside it.
-        assert!(block(&mut other, Some(ME), OTHER, &[(258, 1)]).is_empty());
+        // Field 258, past the 60 dwords, is outside it: the visible items' watch begins there.
+        assert_eq!(
+            block(&mut other, Some(ME), OTHER, &[(258, 1)]),
+            [bridge(OTHER, id::UNIT_INVENTORY_CHANGED)]
+        );
     }
 
     /// The active player's log carries the quest log's own watcher (`0x4de430`, registered after
