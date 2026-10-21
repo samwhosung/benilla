@@ -5,10 +5,12 @@
 //!   (`startRecoveryCategory`, `startRecoveryTime`); `on_hold` parks the first two until
 //!   `SMSG_COOLDOWN_EVENT` (`SPELL_ATTR_COOLDOWN_ON_EVENT`: Stealth, Feign Death).
 //! - The GCD starts at cast send (`0x6e58fb`); the spell's recovery is computed from `Spell.dbc`
-//!   when our own `SMSG_SPELL_GO` arrives (`0x6e8498`, `0x6e8566`). vmangos sends no cooldown
-//!   packet for a plain cast; `SMSG_SPELL_COOLDOWN` is its override path.
+//!   when our own `SMSG_SPELL_GO` arrives (`0x6e8498`, `0x6e8566`), an item's held until its
+//!   record arrives (`0x6e8660`, `0x6e8830`). vmangos sends no cooldown packet for a plain cast;
+//!   `SMSG_SPELL_COOLDOWN` is its override path.
 //! - A failed cast clears the GCD armed at send (`0x6e1d83`, `0x6e1630`) and, unless the reason
-//!   is 0x3c, removes a cooldown-on-event spell's parked record (`0x6e73cc`).
+//!   is 0x3c, removes a cooldown-on-event spell's parked record (`0x6e73cc`); a 0x3c whose first
+//!   dword is 0 removes a held one (`0x6e1af1`).
 //!
 //! Each of the reference's sites of the flush `0x4b31b0` (`ACTIONBAR_UPDATE_COOLDOWN`,
 //! `SPELL_UPDATE_COOLDOWN`) calls [`Cooldowns::flush`], whether or not its insert added a record:
