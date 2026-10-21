@@ -2584,4 +2584,140 @@ mod tests {
         );
         assert!(s.take_errors().is_empty());
     }
+
+    /// The active player's object, as the app's unit feed pushes it: guid `0x5E1F`, named "Kelvin".
+    fn seat_player(s: &mut UiScript) {
+        s.set_unit_guids(&crate::script::UnitGuids {
+            player: 0x5E1F,
+            ..Default::default()
+        });
+        hold(s, "player", 0x5E1F, "Kelvin");
+    }
+
+    /// `InviteByName` (`0x48a420`) tests its argument with `lua_isstring` (`0x48a42f`) and raises
+    /// `Usage: InviteByName("name")` (`0x842760`, at `0x48a4f7`) for anything else. With the
+    /// player's object (`0x48a460`) it compares the name with the player's own, case-blind
+    /// (`GetUnitName` at `0x48a473`, `SStrCmpI` at `0x48a47a`), and shows `ERR_INVITE_SELF`
+    /// (message `0x3b`, `0x48a485`) instead of sending; with none it sends any string
+    /// (`0x48a469` → `0x48a495`).
+    #[test]
+    fn invite_by_name_raises_its_usage_and_refuses_our_own_name() {
+        let mut s = vm();
+        for arg in ["", "nil", "{}", "true"] {
+            let e = s
+                .run(&format!("InviteByName({arg})"))
+                .expect_err(arg)
+                .to_string();
+            assert!(e.contains(r#"Usage: InviteByName("name")"#), "{arg}: {e}");
+        }
+        s.run(r#"InviteByName("Kelvin")"#).unwrap();
+        assert_eq!(
+            s.take_party_requests(),
+            [PartyRequest::InviteName("Kelvin".into())],
+            "no player object: no compare"
+        );
+        seat_player(&mut s);
+        s.run(r#"InviteByName("kELVIN") InviteByName("Bob") InviteByName(5)"#)
+            .unwrap();
+        assert_eq!(s.take_ui_errors(), ["ERR_INVITE_SELF"]);
+        assert_eq!(
+            s.take_party_requests(),
+            [
+                PartyRequest::InviteName("Bob".into()),
+                PartyRequest::InviteName("5".into())
+            ]
+        );
+    }
+
+    /// `PromoteByName` (`0x48a830`), `PromoteToAssistant` (`0x4bbd20`) and `DemoteAssistant`
+    /// (`0x4bbdf0`) test their argument with `lua_isstring` (`0x48a840`, `0x4bbd2e`, `0x4bbdfe`)
+    /// and raise their usage lines for anything else (`0x842804`, `0x847538`, `0x847558`).
+    #[test]
+    fn the_name_verbs_raise_their_usage_lines_for_a_non_string() {
+        let mut s = vm();
+        for (verb, usage) in [
+            ("PromoteByName", r#"Usage: PromoteByName("name")"#),
+            ("PromoteToAssistant", "Usage: PromoteToAssistant(name)"),
+            ("DemoteAssistant", "Usage: DemoteAssistant(name)"),
+        ] {
+            for arg in ["", "nil", "{}"] {
+                let e = s
+                    .run(&format!("{verb}({arg})"))
+                    .expect_err(verb)
+                    .to_string();
+                assert!(e.contains(usage), "{verb}({arg}): {e}");
+            }
+        }
+    }
+
+    /// `ConvertToRaid` (`0x4bbc90`) sends only with party slot 1 held (`0x4bbc96`-`0x4bbca3`)
+    /// and the leader cell holding our guid (`0x4bbca5`-`0x4bbcbc`).
+    #[test]
+    fn convert_to_raid_sends_only_for_the_leader_of_a_held_slot() {
+        let mut s = vm();
+        s.run("ConvertToRaid()").unwrap();
+        assert_eq!(s.take_party_requests(), [], "solo");
+        s.set_party(two_member_party());
+        s.run("ConvertToRaid()").unwrap();
+        assert_eq!(s.take_party_requests(), [], "Alice leads");
+        s.set_party(PartyState {
+            members: Vec::new(),
+            ..led_party()
+        });
+        s.run("ConvertToRaid()").unwrap();
+        assert_eq!(s.take_party_requests(), [], "no slot held");
+        s.set_party(led_party());
+        s.run("ConvertToRaid()").unwrap();
+        assert_eq!(s.take_party_requests(), [PartyRequest::ConvertToRaid]);
+    }
+
+    /// `DoReadyCheck` (`0x4bc080` → `0x4bb1d0`) runs for the leader alone, a nonzero active guid
+    /// equal to the leader cell (`0x4bb1d6`-`0x4bb1fd`). While a check runs it shows
+    /// `ERR_READY_CHECK_IN_PROGRESS` (message `0x1c7`, `0x4bb20c`) and does nothing else; else it
+    /// sends (`0x4bb295`), arms the deadline (`0x4bb2b6`) and shows `READY_CHECK_START` as a system
+    /// line (`0x4bb2b1`-`0x4bb2c7`).
+    #[test]
+    fn do_ready_check_is_the_leaders_and_refuses_a_running_check() {
+        let mut s = vm();
+        s.run(r#"READY_CHECK_START = "Ready check started.""#)
+            .unwrap();
+        s.set_party(two_member_party());
+        s.set_now(100.0);
+        s.run("DoReadyCheck()").unwrap();
+        assert_eq!(s.take_party_requests(), [], "Alice leads");
+        assert_eq!(s.model_mut().ready_check.deadline, None);
+        assert!(s.take_ready_check_lines().is_empty());
+
+        s.set_party(led_party());
+        s.run("DoReadyCheck()").unwrap();
+        assert_eq!(s.take_party_requests(), [PartyRequest::ReadyCheckStart]);
+        assert_eq!(s.model_mut().ready_check.deadline, Some(130.0));
+        assert_eq!(s.take_ready_check_lines(), ["Ready check started."]);
+
+        s.set_now(110.0);
+        s.run("DoReadyCheck()").unwrap();
+        assert_eq!(s.take_party_requests(), [], "a check runs");
+        assert_eq!(s.take_ui_errors(), ["ERR_READY_CHECK_IN_PROGRESS"]);
+        assert_eq!(s.model_mut().ready_check.deadline, Some(130.0));
+        assert!(s.take_ready_check_lines().is_empty());
+    }
+
+    /// `AcceptGroup` (`0x48aa80`), `DeclineGroup` (`0x48aab0`) and `LeaveParty` (`0x4e9180`) send
+    /// only with the active player's object (`0x48aa96`, `0x48aac6`, `0x4e9196`).
+    #[test]
+    fn the_invite_answers_and_the_leave_need_the_players_object() {
+        let mut s = vm();
+        s.run("AcceptGroup() DeclineGroup() LeaveParty()").unwrap();
+        assert_eq!(s.take_party_requests(), [], "no player object");
+        seat_player(&mut s);
+        s.run("AcceptGroup() DeclineGroup() LeaveParty()").unwrap();
+        assert_eq!(
+            s.take_party_requests(),
+            [
+                PartyRequest::Accept,
+                PartyRequest::Decline,
+                PartyRequest::Leave
+            ]
+        );
+    }
 }

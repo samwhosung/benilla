@@ -57,9 +57,7 @@ pub(super) fn on_unit_died(
             errors.push(
                 match names.resolve_unit(e.guid, store, Ask::Event(&seam.net)) {
                     Some(name) => UiError::s(PLAYER_DIED, name),
-                    None => {
-                        UiError::args(PLAYER_DIED, vec![FillArg::Global("UNKNOWNOBJECT".into())])
-                    }
+                    None => UiError::args(PLAYER_DIED, vec![FillArg::UnknownObject]),
                 },
             );
         }
@@ -572,7 +570,7 @@ mod tests {
             lines(&mut c, players[1], NAMELESS, ObjectType::Player),
             [UiError::args(
                 "ERR_PLAYER_DIED_S",
-                vec![FillArg::Global("UNKNOWNOBJECT".into())]
+                vec![FillArg::UnknownObject]
             )],
             "a name the cache misses"
         );

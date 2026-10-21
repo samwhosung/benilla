@@ -3114,6 +3114,60 @@ mod tests {
         );
     }
 
+    /// `SMSG_GROUP_INVITE`'s handler signals `PARTY_INVITE_REQUEST` with the inviter (`0x5e6747`
+    /// → `0x48f420`, event `0x118`) for every invite; `PARTY_INVITE_CANCEL` is
+    /// `SMSG_GROUP_CANCEL`'s alone (`0x5e6784` → `0x48f440`), and `AcceptGroup` and
+    /// `DeclineGroup` only send (`0x48aa80`, `0x48aab0`). So an answer signals nothing, and the
+    /// same inviter asking again is asked about again.
+    #[test]
+    fn every_invite_signals_its_request_and_an_answer_signals_nothing() {
+        let (mut app, _rx) = drain_app();
+        resolve_party(&mut app, [0; 4]);
+        app.world_mut()
+            .non_send_resource::<UiScript>()
+            .run(
+                r#"INVITES = {}
+                   local f = CreateFrame("Frame")
+                   f:RegisterEvent("PARTY_INVITE_REQUEST")
+                   f:RegisterEvent("PARTY_INVITE_CANCEL")
+                   f:SetScript("OnEvent", function()
+                       table.insert(INVITES, event .. ":" .. tostring(arg1))
+                   end)"#,
+            )
+            .unwrap();
+        let invites = |app: &mut App| -> Vec<String> {
+            app.world_mut()
+                .non_send_resource::<UiScript>()
+                .eval("local i = INVITES; INVITES = {}; return i")
+                .unwrap()
+        };
+        let invite = |app: &mut App| {
+            let _ = app
+                .world_mut()
+                .resource_mut::<GroupState>()
+                .apply_invited("Bob");
+            frame(app);
+        };
+        invite(&mut app);
+        assert_eq!(invites(&mut app), ["PARTY_INVITE_REQUEST:Bob"]);
+        hosted_run(&mut app, "AcceptGroup()");
+        frame(&mut app);
+        frame(&mut app);
+        assert_eq!(invites(&mut app), Vec::<String>::new(), "the accept");
+        invite(&mut app);
+        assert_eq!(
+            invites(&mut app),
+            ["PARTY_INVITE_REQUEST:Bob"],
+            "asked again"
+        );
+        invite(&mut app);
+        assert_eq!(
+            invites(&mut app),
+            ["PARTY_INVITE_REQUEST:Bob"],
+            "unanswered, asked again"
+        );
+    }
+
     /// The group events a VM heard, in order, once [`hear_group_events`] is installed.
     fn heard(app: &mut App) -> Vec<String> {
         app.world_mut()

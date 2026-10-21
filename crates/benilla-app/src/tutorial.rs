@@ -388,7 +388,7 @@ fn watch_self(
 }
 
 /// After the script tick: the four verbs' writes, then every send.
-fn drain_tutorials(
+pub(crate) fn drain_tutorials(
     mut hosted_vm: crate::script_calls::HostedVm,
     mut tutorials: ResMut<Tutorials>,
     commands: Res<NetCommands>,

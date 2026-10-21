@@ -70,3 +70,57 @@ fn a_chunks_party_verbs_send_in_call_order_with_every_other_verb() {
         ]
     );
 }
+
+/// `InviteToParty` reaches `InviteByName 0x5e9490` through `InviteByGuid` (`0x5e9477`), whose first
+/// act acknowledges the grouping tutorial (`SetTutorialFlag(0x11)` at `0x5e949c`), its
+/// `CMSG_TUTORIAL_FLAG` ahead of the invite; the binding `InviteByName` (`0x48a420`) sends with no
+/// acknowledge (`0x48a495`-`0x48a4c8`).
+#[test]
+fn invite_to_party_flags_the_grouping_tutorial_before_its_invite() {
+    use crate::net::{Guid, GuidIndex, ObjectStore};
+    const ME: u64 = 0x10;
+    const BOB: u64 = 0x21;
+    let (mut app, rx) = client();
+    let world = app.world_mut();
+    world
+        .resource_mut::<crate::tutorial::Tutorials>()
+        .apply_flags(&[0; 32]);
+    let bob = world
+        .spawn((
+            Guid(BOB),
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(2, 0x19)])),
+        ))
+        .id();
+    world.resource_mut::<GuidIndex>().0.insert(BOB, bob);
+    world
+        .resource_mut::<crate::names::NameCache>()
+        .insert_player(BOB, "Bob".into(), None);
+    world
+        .non_send_resource_mut::<UiScript>()
+        .set_unit_guids(&benilla_ui::script::UnitGuids {
+            player: ME,
+            target: BOB,
+            ..Default::default()
+        });
+    with_hosted_vm(world, |script| {
+        script
+            .expect("a VM")
+            .run(r#"InviteByName("Zed") InviteToParty("target") InviteToParty("target")"#)
+            .expect("the chunk runs")
+    });
+    world
+        .run_system_once(crate::tutorial::drain_tutorials)
+        .expect("the tutorial drain runs on the built client");
+    let sent: Vec<String> = rx
+        .try_iter()
+        .filter_map(|c| match c {
+            ClientCommand::GroupInvite { name } => Some(format!("invite {name}")),
+            ClientCommand::TutorialFlag { id } => Some(format!("flag {id:#x}")),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        ["invite Zed", "flag 0x11", "invite Bob", "invite Bob"]
+    );
+}
