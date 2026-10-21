@@ -34,8 +34,9 @@ pub(crate) enum UnitEdit {
     AbortCasting { entity: Entity, spell_id: u32 },
     /// The sticky auto-repeat arm (`0x6e593b`, `|= 0x200`).
     ArmAutoRepeat(Entity),
-    /// The local auto-repeat cancel's clear (`0x6ea080`): the arm (`0x6ea113`), the precast of
-    /// the repeat spell `spell_id` (`0x6ea12b`) and the nock (`0x6ea140`).
+    /// The local auto-repeat stop's unit leg (`0x6ea080`): the arm (`0x6ea113`), the precast of
+    /// the repeat spell `spell_id` (`0x6ea12b`), that spell's kits (`0x614150(spell, 0)` at
+    /// `0x6ea139`: its [`Casting`] and a [`CastEventKind::Reap`]) and the nock (`0x6ea140`).
     ClearAutoRepeat { entity: Entity, spell_id: u32 },
     /// `0x6ec220`'s precast at `SMSG_SPELL_START` (`0x6e7908`, `0x6e79be`), queued only for a
     /// spell that resolves a visual for the unit, as its pusher found ([`super::PrecastTables`]).
@@ -66,6 +67,7 @@ impl UnitEdit {
             Self::ClearAutoRepeat { .. } => vec![
                 std::any::TypeId::of::<AutoRepeatArmed>(),
                 std::any::TypeId::of::<Precast>(),
+                std::any::TypeId::of::<Casting>(),
                 std::any::TypeId::of::<NockedAmmo>(),
                 std::any::TypeId::of::<NockLatch>(),
             ],
@@ -228,19 +230,7 @@ fn apply(world: &mut World, edits: Vec<UnitEdit>) {
             UnitEdit::ReapCasting { entity, spell_id } => reap(world, entity, spell_id),
             UnitEdit::AbortCasting { entity, spell_id } => {
                 reap(world, entity, spell_id);
-                let seq = world.get_resource_mut::<PlaySeq>().map(|mut s| s.next());
-                if let (Some(seq), Some(mut events)) =
-                    (seq, world.get_resource_mut::<Messages<CastEvent>>())
-                {
-                    events.write(CastEvent {
-                        entity,
-                        spell_id,
-                        kind: CastEventKind::Fail,
-                        cast_flags: 0,
-                        item_cast: false,
-                        seq,
-                    });
-                }
+                cast_event(world, entity, spell_id, CastEventKind::Fail);
             }
             UnitEdit::ArmAutoRepeat(entity) => {
                 if let Ok(mut unit) = world.get_entity_mut(entity) {
@@ -249,7 +239,7 @@ fn apply(world: &mut World, edits: Vec<UnitEdit>) {
             }
             UnitEdit::ClearAutoRepeat { entity, .. } => {
                 if let Ok(mut unit) = world.get_entity_mut(entity) {
-                    unit.remove::<(AutoRepeatArmed, NockedAmmo, NockLatch)>();
+                    unit.remove::<AutoRepeatArmed>();
                 }
             }
             UnitEdit::StartPrecast { .. }
@@ -265,5 +255,28 @@ fn apply(world: &mut World, edits: Vec<UnitEdit>) {
             };
             precast::apply(world, entity, change, tail);
         }
+        // Past the stop's precast end: its kit reap (`0x6ea139`) and the un-nock (`0x6ea140`).
+        if let UnitEdit::ClearAutoRepeat { entity, spell_id } = edit {
+            reap(world, entity, spell_id);
+            cast_event(world, entity, spell_id, CastEventKind::Reap);
+            if let Ok(mut unit) = world.get_entity_mut(entity) {
+                unit.remove::<(NockedAmmo, NockLatch)>();
+            }
+        }
+    }
+}
+
+/// A cast edge the local change makes, stamped as it applies.
+fn cast_event(world: &mut World, entity: Entity, spell_id: u32, kind: CastEventKind) {
+    let seq = world.get_resource_mut::<PlaySeq>().map(|mut s| s.next());
+    if let (Some(seq), Some(mut events)) = (seq, world.get_resource_mut::<Messages<CastEvent>>()) {
+        events.write(CastEvent {
+            entity,
+            spell_id,
+            kind,
+            cast_flags: 0,
+            item_cast: false,
+            seq,
+        });
     }
 }

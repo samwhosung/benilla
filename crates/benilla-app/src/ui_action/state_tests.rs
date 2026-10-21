@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::creature_anim::Engaged;
+use crate::spell::AutoRepeatActive;
 use crate::target::Selection;
 use benilla_formats::SpellDisplay;
 use benilla_ui::script::UiScript;

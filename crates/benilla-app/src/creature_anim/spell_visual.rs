@@ -650,7 +650,8 @@ fn play_impact(
 ///   the GO's targets play their impacts inline when `Spell.dbc` Speed is 0 (`0x6e8bf0`), else
 ///   fly a [`MissileSpawn`] (`0x6e8a50`).
 /// - Impact: a missile arrived on this unit ([`play_impact`]).
-/// - Fail: the hold drops silently.
+/// - Fail, and the auto-repeat stop's reap (`0x614150(spell, 0)` at `0x6ea139`): that spell's hold
+///   drops silently, with its own loop and models.
 /// - Channel: `UNIT_CHANNEL_SPELL` polled per frame (`0x612a30`); observers have no packet. A set
 ///   field holds the channel kit's anim and rings its sound once, a cleared one drops it.
 pub(super) fn route_cast_visuals(
@@ -899,8 +900,7 @@ pub(super) fn route_cast_visuals(
                     out.shakes.write(SpellKitShake::PlayAt { pos, group });
                 }
             }
-            CastEventKind::Reap => {}
-            CastEventKind::Fail => {
+            CastEventKind::Fail | CastEventKind::Reap => {
                 if held_spell(&pending, ev.entity) == Some(ev.spell_id) {
                     commands.entity(ev.entity).try_remove::<CastHold>();
                     pending.insert(ev.entity, None);

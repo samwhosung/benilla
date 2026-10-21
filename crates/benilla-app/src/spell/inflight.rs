@@ -1127,8 +1127,11 @@ mod tests {
                 "the send guard still holds — one press stopped one thing"
             );
             assert!(
-                app.world().resource::<CastReports>().0.is_empty(),
-                "an auto-repeat cancel paints no bar edge"
+                matches!(
+                    app.world().resource::<CastReports>().0[..],
+                    [crate::ui_cast::CastReport::AutoRepeat(false)]
+                ),
+                "an auto-repeat cancel paints no bar edge, only its `STOP_AUTOREPEAT_SPELL`"
             );
 
             // Press 2 cancels the cast.

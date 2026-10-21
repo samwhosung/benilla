@@ -1125,9 +1125,11 @@ fn send_spell_cast(
             }
             if d.auto_repeat() {
                 // The sticky armed state (`0x6e593b`, `|= 0x200`) and the autorepeat key
-                // (`0xceac30`, written at `0x6e594c`) the button's checked state reads.
+                // (`0xceac30`, written at `0x6e594c`) the button's checked state reads, signalled
+                // as `START_AUTOREPEAT_SPELL` (`0x6e5952`).
                 edits.push(crate::creature_anim::UnitEdit::ArmAutoRepeat(e));
                 auto_repeat.0 = Some(spell_id);
+                core.reports.auto_repeat(true);
                 // StopAttack (`0x6e5976` → `0x5ecac0`), gated only on the caster being the active
                 // player (`0x6e5957`–`0x6e5972`): starting a repeat ends the melee swing and its
                 // queued strike, which the repeat's push moved into the save, so its cancel is

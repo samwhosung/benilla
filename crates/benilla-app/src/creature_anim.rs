@@ -176,23 +176,28 @@ pub(crate) fn drive_nock_latch(
     }
 }
 
-/// The one local auto-repeat cancel, reference `0x6ea080`: sends `CMSG_CANCEL_AUTO_REPEAT_SPELL`
-/// (`0x6ea0c6`), clears the arm, the repeat spell's precast and the nock
-/// ([`UnitEdit::ClearAutoRepeat`]) and the key (`[0xceac30]`); the sheath stays drawn.
+/// The one local auto-repeat stop, `StopAutoRepeatSpell 0x6ea080`: sends
+/// `CMSG_CANCEL_AUTO_REPEAT_SPELL` (`0x6ea0c6`); on our unit clears the arm, ends the repeat
+/// spell's precast, stops its kits and un-nocks ([`UnitEdit::ClearAutoRepeat`]); pops the slot
+/// while it holds that spell (`0x6ea160`); and clears the key (`[0xceac30]`, `0x6ea16a`) with
+/// `STOP_AUTOREPEAT_SPELL` (`0x6ea170`). The sheath stays drawn.
 pub(crate) fn cancel_auto_repeat_local(
     entity: Option<Entity>,
     auto_repeat: &mut crate::spell::AutoRepeatActive,
     edits: &UnitEdits,
     core: &mut crate::spell::CastCore,
 ) {
-    let Some(spell_id) = auto_repeat.0.take() else {
-        // The reference's `[0xceac30] == 0` early-out: nothing running, nothing sent.
+    let Some(spell_id) = auto_repeat.0 else {
+        // The reference's `[0xceac30] == 0` early-out (`0x6ea090`): nothing sent or signalled.
         return;
     };
+    let _ = core.net.0.send(crate::net::ClientCommand::CancelAutoRepeat);
     if let Some(entity) = entity {
         edits.push(UnitEdit::ClearAutoRepeat { entity, spell_id });
     }
-    let _ = core.net.0.send(crate::net::ClientCommand::CancelAutoRepeat);
+    core.pop_if(spell_id);
+    auto_repeat.0 = None;
+    core.reports.auto_repeat(false);
 }
 
 /// The local StopAttack, reference `0x5ecac0`: when attacking, `CMSG_ATTACKSTOP` (`0x624370`),

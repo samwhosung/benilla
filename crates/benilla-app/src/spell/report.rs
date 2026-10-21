@@ -109,10 +109,11 @@ impl CastCore<'_> {
         self.reports.changed();
     }
 
-    /// The send's pop of an auto-repeat spell once its packet is out (`0x6e597d`-`0x6e5989`): only
-    /// while the slot holds it, so a ranged shot that is not auto-repeat (Aimed Shot, Arcane Shot,
-    /// Throw) stays in flight until its result. The send's other pop (`0x6e58a2`-`0x6e58bd`) is for
-    /// a record the push did not make or another caster's (the pet bar), neither in this slot.
+    /// The pop of an auto-repeat spell while the slot holds it: the send's once its packet is out
+    /// (`0x6e597d`-`0x6e5989`), so a ranged shot that is not auto-repeat (Aimed Shot, Arcane Shot,
+    /// Throw) stays in flight until its result, and the repeat stop's (`0x6ea154`-`0x6ea160`). The
+    /// send's other pop (`0x6e58a2`-`0x6e58bd`) is for a record the push did not make or another
+    /// caster's (the pet bar), neither in this slot.
     pub(crate) fn pop_if(&mut self, spell_id: u32) {
         let slot = self.slot();
         if slot.map(Inflight::spell_id) == Some(spell_id) {
