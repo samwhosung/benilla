@@ -10,6 +10,7 @@ use super::{
     CHECKED_RETURNED, MAIL_SENT_KEY,
 };
 use crate::net::{ClientCommand, NetCommands, NetHandlerApp};
+use crate::query_cache::Ask;
 use crate::ui_items::{EquipError, EquipErrors};
 
 pub(super) fn register(app: &mut App) {
@@ -22,8 +23,9 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::Disconnected, on_session_end);
 }
 
-/// What the list handler reads beside the session: the papers it defaults a row to, and the
-/// profanity mask it runs on each subject.
+/// What the list handler reads beside the session: the papers it defaults a row to, the item
+/// templates and GlobalStrings an auction notice's subject is written from, and the profanity
+/// mask it runs on each subject.
 #[derive(bevy::ecs::system::SystemParam)]
 struct ListReads<'w, 's> {
     stationery: Option<Res<'w, super::Stationery>>,
@@ -37,6 +39,7 @@ struct ListReads<'w, 's> {
     items: Res<'w, crate::items::Items>,
     filter: Option<Res<'w, crate::text_filter::TextFilter>>,
     switches: Option<Res<'w, crate::text_filter::TextFilterSwitches>>,
+    script: Option<NonSend<'w, benilla_ui::script::UiScript>>,
 }
 
 fn on_mail_list(
@@ -54,12 +57,19 @@ fn on_mail_list(
                 .map(|v| v.id)
         });
         let enabled = reads.switches.as_deref().is_some_and(|s| s.profanity);
+        let get_text = |key: &str| {
+            reads
+                .script
+                .as_deref()
+                .and_then(|s| crate::ui_chat::combat::global_string(s, key))
+        };
         mail_list(
             mails,
             &mut mail,
             &commands,
             |guid| social.is_ignored(guid),
             first_paper,
+            |raw| super::auction_subject(raw, &reads.items, Ask::Event(&commands), &get_text),
             |subject| {
                 if let Some(filter) = reads.filter.as_deref() {
                     filter.mask(enabled, subject);
@@ -138,16 +148,22 @@ fn on_session_end(
 /// dropped (`0x4ad51d`): `CMSG_MAIL_RETURN_TO_SENDER` when it holds an item or money (`0x4ad4bf`,
 /// `0x4ad4c7`), else `CMSG_MAIL_DELETE` (`0x4ad4cf`), with the mailbox cell as it stands, 0 when
 /// none is open (`0x4ad4e3`). Every other row with no positive stationery id takes `first_paper`,
-/// the usable list's first (`0x4ad551`-`0x4ad56f`; the reference reads a null record with an empty
-/// list, which this does not ape), and its subject is masked (`0x4ad5b2`, `dl` 0). An auction
-/// notice's subject is rewritten as the inbox resolves it ([`super::invoice`]), not masked here.
-/// It never touches [`MailPending`]: nothing on the inbox path writes the countdown `0x845eac`.
+/// the usable list's first (`0x4ad551`-`0x4ad56f`). An auction notice's subject is written by
+/// `rewrite` when its item is held (`0x4ad580`-`0x4ad5a0`), and every row's shown subject is then
+/// masked in list order (`0x4ad5b2`, `dl` 0); a notice keeps its raw triplet beside it
+/// ([`super::ListedSubject`]). It never touches [`MailPending`]: nothing on the inbox path writes
+/// the countdown `0x845eac`.
+///
+/// Deviation: with no usable paper the reference reads the first record of an empty list through
+/// a null pointer (`0x4ad561`-`0x4ad56d`, `mov eax,[eax]` with `eax` 0) and faults; benilla keeps
+/// the row's wire id, so the inbox still opens.
 pub(super) fn mail_list(
     mails: Vec<MailListEntry>,
     mail: &mut MailOpen,
     commands: &NetCommands,
     is_ignored: impl Fn(u64) -> bool,
     first_paper: Option<u32>,
+    mut rewrite: impl FnMut(&str) -> Option<String>,
     mut mask: impl FnMut(&mut String),
 ) {
     // The answer clears the request lock (`0x4ad5d0`).
@@ -155,6 +171,7 @@ pub(super) fn mail_list(
     // The parse ends in `MAIL_INBOX_UPDATE` (`0x4ad5c6`).
     mail.list_results += 1;
     let mailbox = mail.mailbox.unwrap_or(0);
+    let mut auction_subjects = std::collections::HashMap::new();
     mail.mails = mails
         .into_iter()
         .filter(|e| {
@@ -178,12 +195,19 @@ pub(super) fn mail_list(
                     e.stationery = id;
                 }
             }
-            if e.message_type != mail_message_type::AUCTION {
+            if e.message_type == mail_message_type::AUCTION {
+                let written = rewrite(&e.subject);
+                let rewritten = written.is_some();
+                let mut text = written.unwrap_or_else(|| e.subject.clone());
+                mask(&mut text);
+                auction_subjects.insert(e.message_id, super::ListedSubject { text, rewritten });
+            } else {
                 mask(&mut e.subject);
             }
             e
         })
         .collect();
+    mail.auction_subjects = auction_subjects;
 }
 
 /// Whether a take leaves the mail empty, which the client then deletes itself: `CMSG_MAIL_DELETE`,

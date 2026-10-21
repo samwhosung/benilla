@@ -12,6 +12,7 @@
 
 use benilla_protocol::messages::{mail_error, mail_message_type, MailListEntry};
 use bevy::prelude::*;
+use std::collections::HashMap;
 
 use benilla_ui::script::{MailInboxRow, MailState, ScriptValue, StationeryView, UiScript};
 
@@ -123,6 +124,19 @@ pub(crate) struct MailOpen {
     list_results: u32,
     /// The mail results since the last feed, in arrival order.
     pub(crate) results: Vec<MailResult>,
+    /// Each auction notice's subject cell (`[rec+0x14]`) as the list parse left it, by mail id; the
+    /// row keeps the raw triplet, the copy (`[rec+0x150]`) every parse reads.
+    pub(crate) auction_subjects: HashMap<u32, ListedSubject>,
+}
+
+/// An auction notice's shown subject after the list parse (`0x4ad580`-`0x4ad5b2`): masked, and
+/// rewritten when the notice's item was held then.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ListedSubject {
+    pub(crate) text: String,
+    /// The parse rewrote it. Else the raw triplet shows until the item's template lands and its
+    /// callback rewrites the cell (`0x4ad010` → `0x4ace40`), with no mask.
+    pub(crate) rewritten: bool,
 }
 
 impl crate::query_cache::AskOnce for MailOpen {
@@ -170,6 +184,7 @@ impl MailOpen {
         self.clear();
         self.results.clear();
         self.mails.clear();
+        self.auction_subjects.clear();
         self.bodies.clear();
         self.request_resolved = false;
         self.list_results = 0;
@@ -325,6 +340,27 @@ mod invoice;
 
 use invoice::auction_mail;
 
+/// An auction notice's subject as `0x4ace70` writes it once the notice's item is held
+/// (`0x4acf04`): the outcome's `AUCTION_*_MAIL_SUBJECT` (`0x4acfec`) with the item's name, `""`
+/// when the string is missing or empty (`0x4acf99`-`0x4acfbd`). `None` for a subject that is not
+/// the triplet, and for an item not held, which the lookup asks for (`0x4acf38`).
+pub(super) fn auction_subject(
+    raw: &str,
+    items: &Items,
+    ask: Ask<'_>,
+    get_text: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let notice = invoice::parse_subject(raw)?;
+    let name = &items.template(notice.entry, 0, ask)?.name;
+    Some(
+        invoice::subject_key(notice.result)
+            .and_then(get_text)
+            .filter(|t| !t.is_empty())
+            .map(|t| t.replace("%s", name))
+            .unwrap_or_default(),
+    )
+}
+
 /// One wire row as the Lua-facing row; anything still in flight stays `None` until it lands. The
 /// caches are read as `ask` says: the reference's `GetInboxHeaderInfo` (sender `0x4aedf6`, item
 /// `0x4aecc7`), its subject parse at the list (`0x4acf38`) and `GetInboxInvoiceInfo`'s name
@@ -332,6 +368,8 @@ use invoice::auction_mail;
 fn resolve_row(
     entry: &MailListEntry,
     bodies: &QueryCache<u32, String>,
+    // What the list parse left in an auction notice's subject.
+    listed: Option<&ListedSubject>,
     items: &Items,
     icons: Option<&ItemDisplays>,
     stationery: Option<&Stationery>,
@@ -407,13 +445,14 @@ fn resolve_row(
     let notice_item_name = auction
         .and_then(|a| items.template(a.entry, 0, ask))
         .map(|t| t.name.clone());
-    // Until the item template lands, the raw triplet stands.
-    let subject = match (auction, &notice_item_name) {
-        (Some(a), Some(name)) => invoice::subject_key(a.result)
-            .and_then(get_text)
-            .map(|t| t.replace("%s", name))
+    // The list parse's rewrite stands, masked; else the template's callback rewrites the raw
+    // triplet once the item lands, unmasked, and until then the list's masked triplet shows.
+    let subject = match listed {
+        Some(l) if l.rewritten => l.text.clone(),
+        _ => auction
+            .and_then(|_| auction_subject(&entry.subject, items, ask, get_text))
+            .or_else(|| listed.map(|l| l.text.clone()))
             .unwrap_or_else(|| entry.subject.clone()),
-        _ => entry.subject.clone(),
     };
     let auction_invoice = auction
         .filter(|a| matches!(a.result, auction_mail::WON | auction_mail::SOLD))
@@ -569,6 +608,7 @@ fn snapshot(
                 resolve_row(
                     e,
                     &mail.bodies,
+                    mail.auction_subjects.get(&e.message_id),
                     items,
                     icons,
                     stationery,
@@ -1167,6 +1207,7 @@ mod tests {
         let row = resolve_row(
             &from_player,
             &bodies,
+            None,
             &items,
             None,
             None,
@@ -1187,6 +1228,7 @@ mod tests {
         let row = resolve_row(
             &with_money,
             &bodies,
+            None,
             &items,
             None,
             None,
@@ -1205,6 +1247,7 @@ mod tests {
         let row = resolve_row(
             &returned,
             &bodies,
+            None,
             &items,
             None,
             None,
@@ -1224,6 +1267,7 @@ mod tests {
         let row = resolve_row(
             &system,
             &bodies,
+            None,
             &items,
             None,
             None,
@@ -1254,6 +1298,7 @@ mod tests {
             resolve_row(
                 e,
                 &bodies,
+                None,
                 &items,
                 None,
                 None,
@@ -1300,6 +1345,7 @@ mod tests {
             resolve_row(
                 &e,
                 &bodies,
+                None,
                 &items,
                 None,
                 Some(&catalog),
@@ -1382,6 +1428,7 @@ mod tests {
             let r = resolve_row(
                 &e,
                 &bodies,
+                None,
                 &items,
                 Some(&icons),
                 Some(&catalog),
@@ -1463,6 +1510,7 @@ mod tests {
             resolve_row(
                 &e,
                 &bodies,
+                None,
                 &items,
                 None,
                 None,
@@ -1529,6 +1577,7 @@ mod tests {
         let row = resolve_row(
             &e,
             &bodies,
+            None,
             &items,
             None,
             None,
@@ -1674,6 +1723,7 @@ mod tests {
             &commands,
             |_| false,
             None,
+            |_| None,
             |_| {},
         );
         app.update();
@@ -1695,6 +1745,7 @@ mod tests {
             &commands,
             |_| false,
             None,
+            |_| None,
             |_| {},
         );
         app.update();
@@ -1770,6 +1821,7 @@ mod tests {
             &commands,
             |_| false,
             None,
+            |_| None,
             |_| {},
         );
         app.update();
@@ -1852,6 +1904,7 @@ mod tests {
             &commands,
             |_| false,
             None,
+            |_| None,
             |_| {},
         );
         app.update();
@@ -1862,6 +1915,7 @@ mod tests {
             &commands,
             |_| false,
             None,
+            |_| None,
             |_| {},
         );
         app.update();
@@ -1877,6 +1931,7 @@ mod tests {
                 &commands,
                 |_| false,
                 None,
+                |_| None,
                 |_| {},
             );
         }
@@ -1895,6 +1950,7 @@ mod tests {
             &commands,
             |_| false,
             None,
+            |_| None,
             |_| {},
         );
         app.update();
