@@ -3857,3 +3857,96 @@ fn the_combat_edge_and_the_regen_notice_fire_in_their_packets_order() {
         assert_eq!(order, heard);
     }
 }
+
+/// A field notice that waits for the chat drain shows its line as it fires: the rest-state
+/// callback signals `UPDATE_EXHAUSTION` and then shows the line for the new state (`0x5de4e0`),
+/// which `0x496720` hands the chat frames at once as `CHAT_MSG_SYSTEM`, ahead of the next
+/// packet's events. One between two combat edges, and one after the last, each show theirs in the
+/// pass that fires them.
+#[test]
+fn a_waiting_notices_chat_line_shows_in_the_pass_that_fires_it() {
+    use benilla_protocol::{SessionEvent, SessionEventKind};
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy::prelude::*;
+
+    use crate::field_watch::FieldNotice;
+    use crate::net::handlers::NetHandlerApp;
+
+    fn enter(_: In<SessionEvent>, log: Res<super::ChatLog>) {
+        log.push_combat_edge(true);
+    }
+    fn leave(_: In<SessionEvent>, log: Res<super::ChatLog>) {
+        log.push_combat_edge(false);
+    }
+    fn rest(_: In<SessionEvent>, mut notices: MessageWriter<FieldNotice>) {
+        notices.write(FieldNotice::RestState { old: 1, new: 2 });
+    }
+    let enter_packet = || SessionEvent::LoggedOut;
+    let rest_packet = || SessionEvent::LoginQueued {
+        position: None,
+        realm: None,
+    };
+    let leave_packet = || SessionEvent::LogoutCancelled;
+    for (packets, heard) in [
+        (
+            vec![enter_packet(), rest_packet(), leave_packet()],
+            "PLAYER_ENTER_COMBAT UPDATE_EXHAUSTION CHAT_MSG_SYSTEM:You feel normal. \
+             PLAYER_LEAVE_COMBAT",
+        ),
+        (
+            vec![enter_packet(), rest_packet()],
+            "PLAYER_ENTER_COMBAT UPDATE_EXHAUSTION CHAT_MSG_SYSTEM:You feel normal.",
+        ),
+    ] {
+        let mut app = App::new();
+        app.add_plugins(crate::ui_unit::UiUnitPlugin)
+            .net_handler(SessionEventKind::LoggedOut, enter)
+            .net_handler(SessionEventKind::LoginQueued, rest)
+            .net_handler(SessionEventKind::LogoutCancelled, leave);
+        let world = app.world_mut();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        world.insert_resource(crate::net::NetCommands(tx));
+        world.insert_resource(super::frames::ChatWindows::default());
+        world.insert_resource(super::edit::ChannelState::default());
+        world.insert_resource(crate::names::NameCache::default());
+        world.insert_resource(crate::chat_bubble::BubbleQueue::default());
+        world.insert_resource(crate::chat_bubble::BubbleConfig::default());
+        world.insert_resource(crate::creature_anim::GestureQueue::default());
+        world.insert_resource(crate::net::SelfGuid::default());
+        world.insert_resource(crate::net::GuidIndex::default());
+        world.insert_resource(crate::world_state::WorldStates::default());
+        world.insert_resource(super::language::ChatLanguages::default());
+        world.insert_resource(crate::items::Items::default());
+        world.insert_resource(crate::go_templates::GameObjectTemplates::default());
+        world.insert_resource(crate::text_filter::TextFilter::default());
+        world.insert_resource(crate::text_filter::TextFilterSwitches::default());
+        let s = benilla_ui::script::UiScript::new().unwrap();
+        s.run(
+            r#"
+            ERR_EXHAUSTION_NORMAL = "You feel normal."
+            Heard = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("PLAYER_ENTER_COMBAT")
+            f:RegisterEvent("PLAYER_LEAVE_COMBAT")
+            f:RegisterEvent("UPDATE_EXHAUSTION")
+            f:RegisterEvent("CHAT_MSG_SYSTEM")
+            f:SetScript("OnEvent", function()
+                table.insert(Heard, event == "CHAT_MSG_SYSTEM" and event .. ":" .. arg1 or event)
+            end)
+        "#,
+        )
+        .unwrap();
+        world.insert_non_send_resource(s);
+
+        crate::net::handlers::dispatch(world, packets);
+        world
+            .run_system_once(crate::ui_unit::field_events::fire_field_notices)
+            .unwrap();
+        crate::ui_chat::feed_chat_once(world);
+        let order = world
+            .non_send_resource::<benilla_ui::script::UiScript>()
+            .eval::<String>("return table.concat(Heard, ' ')")
+            .unwrap();
+        assert_eq!(order, heard);
+    }
+}
