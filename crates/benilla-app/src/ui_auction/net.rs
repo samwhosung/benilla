@@ -187,6 +187,9 @@ fn auction_owner_list_result(
     total_count: u32,
     auction: &mut AuctionOpen,
 ) {
+    if auctions.len() as u32 != total_count {
+        auction.owner_armed = true;
+    }
     auction_list(OWNER, auctions, total_count, auction);
 }
 
@@ -198,6 +201,9 @@ fn auction_bidder_list_result(
     total_count: u32,
     auction: &mut AuctionOpen,
 ) {
+    if auctions.len() as u32 != total_count {
+        auction.bidder_armed = true;
+    }
     let mut seen = std::collections::HashSet::with_capacity(auctions.len());
     let deduped: Vec<AuctionListEntry> = auctions
         .into_iter()
@@ -230,6 +236,11 @@ fn auction_command_result(
                 auction
                     .messages
                     .push(AuctionMessage::chat("ERR_AUCTION_STARTED"));
+                auction.owner_armed = true;
+                if let Some(commands) = wire.commands {
+                    let offset = auction.owner_offset;
+                    auction.send_owner_list(commands, offset);
+                }
             }
             // Cancelled (`0x4cc648`): its line and the auction removed (`0x4cc658`).
             auction_action::REMOVED => {
@@ -269,6 +280,11 @@ fn auction_command_result(
 /// 90 s out (`0x4cc564`-`0x4cc5c0`); then, open or not, the wave (`0x4cc5dd`-`0x4cc60c`).
 fn bid_placed(auction_id: u32, tail: &AuctionCommandTail, auction: &mut AuctionOpen, wire: Wire) {
     auction.outbid_remove(auction_id);
+    auction.bidder_armed = true;
+    if let Some(commands) = wire.commands {
+        let offset = auction.bidder_offset;
+        auction.send_bidder_list(commands, offset);
+    }
     let _ = (tail, EMOTE_WAVE, wire.me, wire.now);
 }
 

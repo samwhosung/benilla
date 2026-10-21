@@ -311,6 +311,9 @@ impl AuctionOpen {
     /// at `offset` with the auctioneer cell as it stands, then the flag cleared and the offset
     /// saved (`0x4cd6e9`, `0x4cd6ef`). It tests no auctioneer.
     pub(crate) fn send_owner_list(&mut self, commands: &NetCommands, offset: u32) {
+        if !self.owner_armed {
+            return;
+        }
         let _ = commands.0.send(ClientCommand::AuctionListOwnerItems {
             auctioneer: self.auctioneer.unwrap_or(0),
             list_from: offset,
@@ -323,6 +326,9 @@ impl AuctionOpen {
     /// at `offset` with the outbid ids of the open house (`0x4cd7b6`), then a pair of that house
     /// removed (`0x4cd808`), the flag cleared and the offset saved (`0x4cd814`, `0x4cd81a`).
     pub(crate) fn send_bidder_list(&mut self, commands: &NetCommands, offset: u32) {
+        if !self.bidder_armed {
+            return;
+        }
         let house = self.house_id;
         let auction_ids = self
             .outbid
