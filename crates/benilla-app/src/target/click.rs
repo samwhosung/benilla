@@ -1746,6 +1746,10 @@ pub(super) fn clear(
 }
 
 #[cfg(test)]
+#[path = "click_loot_tests.rs"]
+mod loot_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

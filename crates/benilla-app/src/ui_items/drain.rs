@@ -808,6 +808,14 @@ mod tests {
 
     /// Right-clicks backpack slot 1, holding a lootable template, and runs the click dispatcher.
     fn open_the_clam() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
+        open_the_clam_with(false, |_| {})
+    }
+
+    /// [`open_the_clam`] with Shift held as `shift` says, after `setup`.
+    fn open_the_clam_with(
+        shift: bool,
+        setup: impl FnOnce(&mut App),
+    ) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.add_message::<crate::sound::AutoEquipSound>()
@@ -866,6 +874,13 @@ mod tests {
 
         app.insert_non_send_resource(harness_vm());
         feed_clam(&mut app);
+        app.init_resource::<ButtonInput<KeyCode>>();
+        if shift {
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::ShiftLeft);
+        }
+        setup(&mut app);
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .run("UseContainerItem(0, 1)")
@@ -951,6 +966,67 @@ mod tests {
                 .non_send_resource::<UiScript>()
                 .item_locked(CLAM),
             "the slot greys at the click"
+        );
+    }
+
+    /// `OpenItem` stores whether Shift is down through `SetAutoLoot` (`0x5edca7`-`0x5edcb6`) before
+    /// it holds the item as the loot target (`0x5edcc0`) and sends `CMSG_OPEN_ITEM`: alone the byte
+    /// waits for the item's answer; with a window open on another source the store sweeps it at
+    /// once (`0x5df470` → `0x5df480`), its rows ahead of the open.
+    #[test]
+    fn a_shift_open_stores_the_byte_and_sweeps_an_open_window_first() {
+        const CORPSE: u64 = 0xF130_0000_0000_00AB;
+        const LINEN: u32 = 2589;
+        let seat = |app: &mut App| {
+            app.init_resource::<crate::ui_loot::AutoLootByte>()
+                .init_resource::<crate::ui_loot::LootState>();
+        };
+        let (app, rx) = open_the_clam_with(true, seat);
+        assert!(matches!(
+            rx.try_iter().collect::<Vec<_>>()[..],
+            [ClientCommand::OpenItem { .. }]
+        ));
+        assert!(app.world().resource::<crate::ui_loot::AutoLootByte>().0);
+
+        let (_app, rx) = open_the_clam_with(true, |app| {
+            seat(app);
+            let corpse = app
+                .world_mut()
+                .spawn(ObjectStore(ObjectFields::from_pairs(&[(2, 0x9)])))
+                .id();
+            let world = app.world_mut();
+            world
+                .resource_mut::<crate::net::GuidIndex>()
+                .0
+                .insert(CORPSE, corpse);
+            world
+                .resource_mut::<Items>()
+                .insert_template(LINEN, Some(crate::items::test_template("Linen Cloth")));
+            world.resource_mut::<crate::ui_loot::LootState>().open(
+                CORPSE,
+                1,
+                0,
+                vec![benilla_protocol::messages::LootItem {
+                    slot: 0,
+                    item_id: LINEN,
+                    count: 1,
+                    display_info_id: 0,
+                    random_property_id: 0,
+                    slot_type: benilla_protocol::messages::slot_type::ALLOW_LOOT,
+                }],
+            );
+            world.resource_mut::<crate::ui_loot::LootLatch>().0 = Some(CORPSE);
+        });
+        let sent: Vec<ClientCommand> = rx.try_iter().collect();
+        assert!(
+            matches!(
+                sent[..],
+                [
+                    ClientCommand::AutostoreLootItem { slot: 0 },
+                    ClientCommand::OpenItem { .. }
+                ]
+            ),
+            "the sweep, then the open: {sent:?}"
         );
     }
 

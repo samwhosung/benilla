@@ -13,38 +13,67 @@ use crossbeam_channel::Receiver;
 
 use benilla_ui::script::UiScript;
 
-use super::{LootConfig, LootLatch, LootState};
+use super::{AutoLootByte, LootLatch, LootState};
 use crate::items::Items;
-use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, NetEntity, ObjectStore, SelfGuid};
+use crate::net::{
+    ClientCommand, Guid, GuidIndex, NetCommands, NetEntity, ObjectStore, SelfGuid, SelfPlayer,
+};
 use crate::script_calls::with_hosted_vm;
 use crate::ui_action::{UiError, UiErrorKeys};
 
 /// A dead creature the object manager holds: the loot source.
-const CORPSE: u64 = 0xF130_0000_0000_00AB;
+pub(super) const CORPSE: u64 = 0xF130_0000_0000_00AB;
 /// A guid no object carries.
-const GONE: u64 = 0xF130_0000_0000_0FFF;
-const ME: u64 = 0x10;
+pub(super) const GONE: u64 = 0xF130_0000_0000_0FFF;
+pub(super) const ME: u64 = 0x10;
+/// A lockbox in our bags, an item object the object manager holds.
+pub(super) const LOCKBOX: u64 = 0x4000_0000_0000_0007;
 /// A white, a bind-on-pickup epic, and a second white.
-const LINEN: u32 = 2589;
-const FELSTRIKER: u32 = 12590;
-const WOOL: u32 = 2592;
+pub(super) const LINEN: u32 = 2589;
+pub(super) const FELSTRIKER: u32 = 12590;
+pub(super) const WOOL: u32 = 2592;
 /// The display id the cloths share, which has an icon, so their pushes signal `ITEM_PUSH`.
 const CLOTH_DISPLAY: u32 = 5;
 /// A master-loot candidate.
-const THRALL: u64 = 0x22;
+pub(super) const THRALL: u64 = 0x22;
 
-struct Loot {
-    app: App,
+pub(super) struct Loot {
+    pub(super) app: App,
     rx: Receiver<ClientCommand>,
 }
 
-/// The whole client, headless, holding [`CORPSE`], with the three templates and a VM that notes
-/// the loot events in `SEEN` and defines the loot error keys as themselves.
-fn client() -> Loot {
+/// The whole client, headless, holding our player, [`CORPSE`] and [`LOCKBOX`], with the three
+/// templates and a VM that notes the loot events in `SEEN`, defines the loot error keys as
+/// themselves and the money line's strings as the stock ones.
+pub(super) fn client() -> Loot {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     let world = app.world_mut();
+    let me = world
+        .spawn((
+            Guid(ME),
+            SelfPlayer,
+            NetEntity {
+                kind: EntityKind::Player,
+                display_id: None,
+                scale: 1.0,
+            },
+            Transform::default(),
+            GlobalTransform::default(),
+            // `UNIT_FIELD_HEALTH` and `UNIT_FIELD_MAXHEALTH` 100.
+            ObjectStore(ObjectFields::from_pairs(&[(22, 100), (28, 100)])),
+        ))
+        .id();
+    world.resource_mut::<GuidIndex>().0.insert(ME, me);
+    // `OBJECT_FIELD_TYPE` (2): `TYPEMASK_OBJECT | TYPEMASK_ITEM`.
+    let lockbox = world
+        .spawn((
+            Guid(LOCKBOX),
+            ObjectStore(ObjectFields::from_pairs(&[(2, 0x3)])),
+        ))
+        .id();
+    world.resource_mut::<GuidIndex>().0.insert(LOCKBOX, lockbox);
     let corpse = world
         .spawn((
             Guid(CORPSE),
@@ -92,11 +121,14 @@ fn client() -> Loot {
         .run(
             r#"ERR_LOOT_ROLL_PENDING = "ERR_LOOT_ROLL_PENDING"
             ERR_LOOT_NO_UI = "ERR_LOOT_NO_UI"
+            ERR_LOOT_DIDNT_KILL = "ERR_LOOT_DIDNT_KILL"
+            YOU_LOOT_MONEY = "You loot %s"
+            GOLD = "Gold" SILVER = "Silver" COPPER = "Copper"
             SEEN = {}
             local f = CreateFrame("Frame")
             for _, e in ipairs({"LOOT_OPENED", "LOOT_SLOT_CLEARED", "LOOT_CLOSED",
                     "LOOT_BIND_CONFIRM", "OPEN_MASTER_LOOT_LIST", "ITEM_PUSH",
-                    "UI_ERROR_MESSAGE"}) do
+                    "UI_ERROR_MESSAGE", "ITEM_LOCK_CHANGED"}) do
                 f:RegisterEvent(e)
             end
             f:SetScript("OnEvent", function()
@@ -116,7 +148,7 @@ fn client() -> Loot {
     Loot { app, rx }
 }
 
-fn row(slot: u8, entry: u32) -> LootItem {
+pub(super) fn row(slot: u8, entry: u32) -> LootItem {
     LootItem {
         slot,
         item_id: entry,
@@ -128,13 +160,13 @@ fn row(slot: u8, entry: u32) -> LootItem {
 }
 
 /// The packets, dispatched as one net drain in wire order.
-fn packets(l: &mut Loot, events: Vec<SessionEvent>) {
+pub(super) fn packets(l: &mut Loot, events: Vec<SessionEvent>) {
     crate::net::handlers::dispatch(l.app.world_mut(), events);
 }
 
 /// The answer to our `CMSG_LOOT` on `guid`, which armed the latch: the response, then the feed
 /// that shows it.
-fn open(l: &mut Loot, guid: u64, loot_type: u8, gold: u32, items: Vec<LootItem>) {
+pub(super) fn open(l: &mut Loot, guid: u64, loot_type: u8, gold: u32, items: Vec<LootItem>) {
     l.app.world_mut().resource_mut::<LootLatch>().0 = Some(guid);
     packets(
         l,
@@ -148,26 +180,26 @@ fn open(l: &mut Loot, guid: u64, loot_type: u8, gold: u32, items: Vec<LootItem>)
     feed(l);
 }
 
-fn feed(l: &mut Loot) {
+pub(super) fn feed(l: &mut Loot) {
     super::feed_loot_once(l.app.world_mut());
 }
 
 /// Run `lua` with the host lent, as every entry that runs Lua lends it.
-fn run(l: &mut Loot, lua: &str) {
+pub(super) fn run(l: &mut Loot, lua: &str) {
     with_hosted_vm(l.app.world_mut(), |s| s.expect("a VM").run(lua)).expect("the chunk runs");
 }
 
-fn eval<T: benilla_ui::mlua::FromLuaMulti>(l: &mut Loot, lua: &str) -> T {
+pub(super) fn eval<T: benilla_ui::mlua::FromLuaMulti>(l: &mut Loot, lua: &str) -> T {
     with_hosted_vm(l.app.world_mut(), |s| s.expect("a VM").eval::<T>(lua)).expect("the chunk runs")
 }
 
 /// The events noted since the last read.
-fn seen(l: &mut Loot) -> String {
+pub(super) fn seen(l: &mut Loot) -> String {
     eval(l, "local s = table.concat(SEEN, ',') SEEN = {} return s")
 }
 
 /// The loot packets sent since the last read, in order.
-fn sent(l: &Loot) -> Vec<ClientCommand> {
+pub(super) fn sent(l: &Loot) -> Vec<ClientCommand> {
     l.rx.try_iter()
         .filter(|c| {
             matches!(
@@ -182,7 +214,7 @@ fn sent(l: &Loot) -> Vec<ClientCommand> {
 }
 
 /// A hardware left click on the `LootButton` slotted at `slot`, its own input record.
-fn click(l: &mut Loot, slot: u32) {
+pub(super) fn click(l: &mut Loot, slot: u32) {
     with_hosted_vm(l.app.world_mut(), |s| {
         let s = s.expect("a VM");
         s.set_screen_size(1024.0, 768.0);
@@ -376,13 +408,14 @@ fn the_last_rows_removal_closes_before_its_push() {
     assert_eq!(seen(&mut l), "LOOT_SLOT_CLEARED:1,LOOT_CLOSED,ITEM_PUSH");
 }
 
-/// The auto-loot copier sweeps first (`0x4c1ed3` → `0x4c1fa0`): the stores and the bind confirm,
-/// then `LOOT_OPENED` while anything is left (`0x4c2240`), sent rows included; an empty window
-/// closes with release instead (`0x4c224f`) and never signals it.
+/// With the byte the interaction stored set (`0x5df468`), the copier sweeps first (`0x4c1ec7`,
+/// `0x4c1ed3` → `0x4c1fa0`): the stores and the bind confirm, then `LOOT_OPENED` while anything is
+/// left (`0x4c2240`), sent rows included; an empty window closes with release instead
+/// (`0x4c224f`) and never signals it. The response reads the stored byte, never the keys.
 #[test]
 fn an_auto_loot_open_sweeps_before_it_signals() {
     let mut l = client();
-    l.app.world_mut().resource_mut::<LootConfig>().auto_loot = true;
+    l.app.world_mut().resource_mut::<AutoLootByte>().0 = true;
     open(
         &mut l,
         CORPSE,
@@ -402,7 +435,7 @@ fn an_auto_loot_open_sweeps_before_it_signals() {
     );
 
     let mut l = client();
-    l.app.world_mut().resource_mut::<LootConfig>().auto_loot = true;
+    l.app.world_mut().resource_mut::<AutoLootByte>().0 = true;
     open(&mut l, CORPSE, 1, 0, Vec::new());
     assert!(matches!(
         sent(&l)[..],
@@ -513,4 +546,110 @@ fn a_response_over_an_open_window_closes_it_first() {
     let _ = seen(&mut l);
     open(&mut l, CORPSE, 1, 0, vec![row(0, WOOL)]);
     assert_eq!(seen(&mut l), "LOOT_CLOSED,LOOT_OPENED");
+}
+
+/// `IsFishingLoot` (`0x4c2740`) reads the type cell `0xb71bbc` with no guard, and a close leaves
+/// it (`0x48f200` → `0x4c1cb0(0)` zeroes only the source, `0x4c1da0`): after the close it still
+/// answers the last window's type.
+#[test]
+fn is_fishing_loot_reads_the_last_windows_type_after_its_close() {
+    let mut l = client();
+    // A fishing answer (type 3), which a cold latch admits (`0x5eb953`).
+    packets(
+        &mut l,
+        vec![SessionEvent::LootResponse {
+            guid: CORPSE,
+            loot_type: 3,
+            gold: 0,
+            items: vec![row(0, LINEN)],
+        }],
+    );
+    feed(&mut l);
+    let fishing = |l: &mut Loot| eval::<bool>(l, "return IsFishingLoot() == 1");
+    assert!(fishing(&mut l));
+    run(&mut l, "CloseLoot()");
+    assert!(fishing(&mut l), "the type cell outlives the close");
+    feed(&mut l);
+    assert!(fishing(&mut l), "and the next frame's feed");
+}
+
+/// `SMSG_LOOT_CLEAR_MONEY` tests no latch (`0x5ec030` → `0x4c2750`), and the close keeps the money
+/// cell, so a clear that lands after the close still takes the coin row and signals
+/// `LOOT_SLOT_CLEARED` 1 (`0x4c2765`, `0x4c276f`); the close it then asks for finds no window
+/// (`0x4c2785` → `0x48f23f`) and sends nothing.
+#[test]
+fn a_coin_clear_after_the_close_still_signals_its_row() {
+    let mut l = client();
+    open(&mut l, CORPSE, 1, 150, vec![row(0, LINEN)]);
+    run(&mut l, "CloseLoot()");
+    let _ = (seen(&mut l), sent(&l));
+    packets(&mut l, vec![SessionEvent::LootClearMoney]);
+    feed(&mut l);
+    assert_eq!(seen(&mut l), "LOOT_SLOT_CLEARED:1");
+    assert!(sent(&l).is_empty());
+}
+
+/// `CloseLoot(1)` on a lockbox's window (`0x48f200`): `ERR_LOOT_NO_UI` first (`0x48f27b`), then
+/// the close's unlock (`0x48f2bd`) and the teardown's (`0x4c1d36`), then `LOOT_CLOSED`
+/// (`0x4c1dac`).
+#[test]
+fn close_loot_failed_shows_its_line_before_the_teardown() {
+    let mut l = client();
+    open(&mut l, LOCKBOX, 1, 0, vec![row(0, LINEN)]);
+    let _ = seen(&mut l);
+    run(&mut l, "CloseLoot(1)");
+    assert_eq!(
+        seen(&mut l),
+        "UI_ERROR_MESSAGE:ERR_LOOT_NO_UI,ITEM_LOCK_CHANGED,ITEM_LOCK_CHANGED,LOOT_CLOSED"
+    );
+}
+
+/// The last row's removal on a lockbox (`0x4c1f00`): `LOOT_SLOT_CLEARED` (`0x4c1f77`), then the
+/// close it asks for (`0x4c1f8d` → `0x48f200`) with its two unlocks (`0x48f2bd`, `0x4c1d36`) and
+/// `LOOT_CLOSED` (`0x4c1dac`), all inside the packet.
+#[test]
+fn a_lockboxs_last_row_signals_its_unlocks_between_the_clear_and_the_close() {
+    let mut l = client();
+    open(&mut l, LOCKBOX, 1, 0, vec![row(0, LINEN)]);
+    let _ = seen(&mut l);
+    packets(&mut l, vec![SessionEvent::LootRemoved { slot: 0 }]);
+    feed(&mut l);
+    assert_eq!(
+        seen(&mut l),
+        "LOOT_SLOT_CLEARED:1,ITEM_LOCK_CHANGED,ITEM_LOCK_CHANGED,LOOT_CLOSED"
+    );
+    assert!(
+        !l.app.world().resource::<LootState>().owes_unlocks(),
+        "signalled in their place, none left for the inventory pass"
+    );
+}
+
+/// A refusal (`loot_type` 0) whose guid is not the held loot target goes to `0x5eb963`: no line,
+/// the target cleared (`0x5eb9d2`) and `UnlockItem` on the refused guid (`0x5eb9de`). With no
+/// target held it takes the same leg (`0x5eb944`).
+#[test]
+fn a_refusal_for_another_session_shows_nothing_and_drops_the_target() {
+    use benilla_protocol::messages::loot_error;
+    for held in [Some(CORPSE), None] {
+        let mut l = client();
+        open(&mut l, CORPSE, 1, 0, vec![row(0, LINEN)]);
+        l.app.world_mut().resource_mut::<LootLatch>().0 = held;
+        packets(
+            &mut l,
+            vec![SessionEvent::LootError {
+                guid: GONE,
+                error: loot_error::TOO_FAR,
+            }],
+        );
+        let world = l.app.world();
+        assert!(
+            world.resource::<UiErrorKeys>().snapshot().is_empty(),
+            "held {held:?}: no line"
+        );
+        assert_eq!(world.resource::<LootLatch>().0, None, "held {held:?}");
+        assert!(
+            world.resource::<LootState>().owes_unlocks(),
+            "held {held:?}"
+        );
+    }
 }

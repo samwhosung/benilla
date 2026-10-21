@@ -26,6 +26,8 @@ pub(crate) use calls::LootSteps;
 mod call_tests;
 mod calls;
 mod net;
+#[cfg(test)]
+mod sweep_tests;
 
 /// `ItemBondingType::BIND_WHEN_PICKED_UP`, the first conjunct of the `LOOT_BIND` confirm: the
 /// client compares `item_template + 0x194` against 1.
