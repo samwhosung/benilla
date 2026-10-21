@@ -10,7 +10,10 @@ use benilla_protocol::messages::{ActionButton, SpellCooldown};
 use bevy::prelude::*;
 
 use super::cast_target::CastTargeting;
-use super::{ActiveChannel, AutoRepeatActive, CastCommit, CastLadder, Cooldowns, PendingCast};
+use super::{
+    ActiveChannel, AutoRepeatActive, CastCommit, CastLadder, Cooldowns, PendingCast,
+    QueuedMeleeSpell,
+};
 use crate::creature_anim::{CastEvent, CastEventKind, Casting, SpellGoTargets};
 use crate::ui_action::{PlayerActions, Spells, UiError, UiErrorKeys};
 use crate::ui_aura::AuraDurations;
@@ -62,6 +65,10 @@ pub(crate) struct Lifecycle<'w> {
     learned_in_tab: ResMut<'w, LearnedInTab>,
     reports: ResMut<'w, CastReports>,
     pending: ResMut<'w, PendingCast>,
+    /// With `pending`, `reports` and `net`, the in-flight slot the GO-deferred attack start's
+    /// cancel reads (`0x5ecc85`).
+    queued_melee: ResMut<'w, QueuedMeleeSpell>,
+    ground: ResMut<'w, super::SpellTargeting>,
     cooldowns: ResMut<'w, Cooldowns>,
     auto_repeat: ResMut<'w, AutoRepeatActive>,
     channel: ResMut<'w, ActiveChannel>,
@@ -303,7 +310,6 @@ fn on_spell_go(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
                 &mut l.cooldowns,
                 l.spells.as_deref(),
                 &mut sc.items,
-                &l.net,
                 &mut l.pet_bar,
                 &l.spell_mods,
             ),
@@ -314,6 +320,13 @@ fn on_spell_go(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
                 &sc.edits,
                 engaged,
                 start_gate,
+                &mut super::CastCore {
+                    pending: &mut l.pending,
+                    queued_melee: &mut l.queued_melee,
+                    ground: &mut l.ground,
+                    reports: &mut l.reports,
+                    net: &l.net,
+                },
             ),
             l.play_seq.next(),
         );
@@ -898,7 +911,6 @@ fn spell_go(
         &mut Cooldowns,
         Option<&Spells>,
         &mut crate::items::Items,
-        &crate::net::NetCommands,
         &mut crate::ui_pet::PetBar,
         &crate::spell::SpellModifiers,
     ),
@@ -912,6 +924,7 @@ fn spell_go(
         &crate::creature_anim::UnitEdits,
         bool,
         crate::creature_anim::StartGate,
+        &mut super::CastCore,
     ),
     seq: u64,
 ) {
@@ -941,8 +954,8 @@ fn spell_go(
     if let Some(go_guid) = go_target {
         go_lid.write(crate::go_anim::GoLidOpen { go_guid, spell_id });
     }
-    let (cooldowns, spells, items, net_commands, pet_bar, spell_mods) = cooldown_ctx;
-    let (auto_repeat, sheath, stand, edits, engaged, start_gate) = attack_ctx;
+    let (cooldowns, spells, items, pet_bar, spell_mods) = cooldown_ctx;
+    let (auto_repeat, sheath, stand, edits, engaged, start_gate, core) = attack_ctx;
     let now = Instant::now();
     let display = spells.and_then(|s| s.catalog.get(spell_id));
     // A chest becomes the loot target at this packet, not at the loot response: `HandleSpellGo
@@ -999,7 +1012,8 @@ fn spell_go(
                     sheath,
                     stand,
                     edits,
-                    net_commands,
+                    spells,
+                    core,
                 );
             }
         }
@@ -1968,7 +1982,6 @@ mod tests {
                                 &mut cooldowns,
                                 spells.as_deref(),
                                 &mut items,
-                                &net_commands,
                                 &mut pet_bar,
                                 &crate::spell::SpellModifiers::default(),
                             ),
@@ -1979,6 +1992,13 @@ mod tests {
                                 &edits,
                                 false,
                                 crate::creature_anim::StartGate::default(),
+                                &mut crate::spell::CastCore {
+                                    pending: &mut Default::default(),
+                                    queued_melee: &mut Default::default(),
+                                    ground: &mut Default::default(),
+                                    reports: &mut Default::default(),
+                                    net: &net_commands,
+                                },
                             ),
                             1,
                         );
@@ -2787,7 +2807,6 @@ mod tests {
                             &mut cooldowns,
                             Some(&spells),
                             &mut items,
-                            &net_commands,
                             &mut pet_bar,
                             &mods,
                         ),
@@ -2798,6 +2817,13 @@ mod tests {
                             &edits,
                             false,
                             crate::creature_anim::StartGate::default(),
+                            &mut crate::spell::CastCore {
+                                pending: &mut Default::default(),
+                                queued_melee: &mut Default::default(),
+                                ground: &mut Default::default(),
+                                reports: &mut Default::default(),
+                                net: &net_commands,
+                            },
                         ),
                         1,
                     );
@@ -2993,7 +3019,6 @@ mod tests {
                             &mut cooldowns,
                             None,
                             &mut items,
-                            &net_commands,
                             &mut pet_bar,
                             &crate::spell::SpellModifiers::default(),
                         ),
@@ -3004,6 +3029,13 @@ mod tests {
                             &edits,
                             false,
                             crate::creature_anim::StartGate::default(),
+                            &mut crate::spell::CastCore {
+                                pending: &mut Default::default(),
+                                queued_melee: &mut Default::default(),
+                                ground: &mut Default::default(),
+                                reports: &mut Default::default(),
+                                net: &net_commands,
+                            },
                         ),
                         1,
                     );
@@ -3375,7 +3407,6 @@ mod tests {
                                 &mut cooldowns,
                                 Some(&spells),
                                 &mut items,
-                                &net_commands,
                                 &mut pet_bar,
                                 &crate::spell::SpellModifiers::default(),
                             ),
@@ -3386,6 +3417,13 @@ mod tests {
                                 &edits,
                                 engaged,
                                 gate,
+                                &mut crate::spell::CastCore {
+                                    pending: &mut Default::default(),
+                                    queued_melee: &mut Default::default(),
+                                    ground: &mut Default::default(),
+                                    reports: &mut Default::default(),
+                                    net: &net_commands,
+                                },
                             ),
                             1,
                         );

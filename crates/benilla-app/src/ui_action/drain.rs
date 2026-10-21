@@ -116,6 +116,7 @@ impl AttackPress<'_, '_> {
             &mut seam.sheath,
             &mut seam.stand,
             &seam.edits,
+            seam.spells.as_deref(),
             &seam.net,
         );
     }

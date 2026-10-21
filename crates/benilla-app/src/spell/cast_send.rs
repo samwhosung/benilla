@@ -1023,7 +1023,8 @@ fn send_spell_cast(
                         sheath,
                         stand,
                         edits,
-                        commands,
+                        spells,
+                        core,
                     );
                 }
             }
@@ -1224,6 +1225,62 @@ mod tests {
             .expect("the ladder runs as a one-shot system");
         crate::creature_anim::apply_unit_edits(&mut world);
         assert_eq!(precast(&world), Some(BLIZZARD), "a bind's send");
+    }
+
+    /// TryCast's tail starts the attack after the send's precast (`0x6e5898`, then `0x6e51b5`),
+    /// so StartAttack reads the pressed spell: Slam, which initiates combat, has a visual, and
+    /// `InterruptFlags & 0x8`, returns before the swing (`0x5eccd4`).
+    #[test]
+    fn a_combat_spell_auto_attack_interrupts_starts_no_swing_from_its_own_send() {
+        use benilla_formats::{SpellCatalog, SpellDisplay, SpellVisualCatalog, VisualStages};
+        use std::collections::HashMap;
+        const SLAM: u32 = 1464;
+        const STRIKE: u32 = 1752;
+        const MOB: u64 = 0xF130_0000_0000_0042;
+        const VISUAL: u32 = 1165;
+        let swings = |spell_id: u32| {
+            let (mut world, rx) = world();
+            let combat = |interrupt_flags| SpellDisplay {
+                targets: 0x2,
+                attributes_ex: 0x200,
+                interrupt_flags,
+                visual: VISUAL,
+                ..Default::default()
+            };
+            world.insert_resource(Spells {
+                catalog: SpellCatalog::from_displays(HashMap::from([
+                    (SLAM, combat(0xf)),
+                    (STRIKE, combat(0)),
+                ])),
+                ..Spells::empty_for_tests()
+            });
+            world.insert_resource(crate::creature_anim::SpellVisuals(
+                SpellVisualCatalog::from_tables(
+                    HashMap::from([(VISUAL, VisualStages::default())]),
+                    HashMap::new(),
+                ),
+            ));
+            world.spawn(SelfPlayer);
+            world
+                .run_system_once(move |mut ladder: CastLadder| {
+                    let ctx = cast_target::CastContext {
+                        selection_guid: Some(MOB),
+                        ..ctx()
+                    };
+                    ladder.send(spell_id, &ctx, CastCommit::Spell);
+                })
+                .expect("the ladder runs as a one-shot system");
+            let sent: Vec<_> = rx.try_iter().collect();
+            assert!(
+                matches!(sent.first(), Some(ClientCommand::CastSpell { spell_id: s, .. }) if *s == spell_id),
+                "{spell_id} is sent: {sent:?}"
+            );
+            sent.iter()
+                .filter(|c| matches!(c, ClientCommand::AttackSwing { guid: MOB }))
+                .count()
+        };
+        assert_eq!(swings(SLAM), 0, "Slam's own precast");
+        assert_eq!(swings(STRIKE), 1, "a strike auto-attack does not interrupt");
     }
 
     /// The arm's refusal (`0x6e5045`-`0x6e50a9`) comes after the attempt's push (`0x6e5026`), so
