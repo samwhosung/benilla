@@ -945,6 +945,20 @@ mod tests {
         assert!(rig.sent().is_empty(), "the flag is spent");
     }
 
+    /// The bidder page's rows stay as the wire sends them, a repeated auction twice: `0x4ccc80`
+    /// reads each record in turn.
+    #[test]
+    fn the_bidder_page_keeps_a_repeated_auction() {
+        let mut a = AuctionOpen::default();
+        auction_bidder_list_result(vec![entry(7), entry(8), entry(7)], 3, &mut a);
+        let ids: Vec<u32> = a.lists[BIDDER]
+            .entries
+            .iter()
+            .map(|e| e.auction_id)
+            .collect();
+        assert_eq!(ids, [7, 8, 7]);
+    }
+
     /// `0x4cde50`: on a full list the room doubles and the pair is written past the count it does
     /// not raise (`0x4cdf02`-`0x4cdf1c`), so the ninth is lost and the tenth lands.
     #[test]

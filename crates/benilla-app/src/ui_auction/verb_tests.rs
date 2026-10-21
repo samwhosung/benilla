@@ -318,6 +318,29 @@ fn a_query_sends_and_closes_the_throttle_inside_the_call() {
     assert_eq!(h.house().wire.browse_sent, 1);
 }
 
+/// The browse page is a number's `_ftol` times 50 in 32 bits, anything else 0
+/// (`0x4ceb28`-`0x4ceb44`): page 85,899,346 wraps to offset 4, and page -1 to -50.
+#[test]
+fn the_browse_offset_wraps_in_32_bits() {
+    for (page, offset) in [
+        ("85899346", 4),
+        ("-1", (-50i32) as u32),
+        ("2.9", 100),
+        ("'2'", 100),
+        ("'x'", 0),
+    ] {
+        let mut h = House::new(0);
+        h.run(&format!(
+            r#"QueryAuctionItems("silk", nil, nil, nil, nil, nil, {page})"#
+        ));
+        let sent = h.sent();
+        assert!(
+            matches!(&sent[..], [ClientCommand::AuctionListItems { list_from, .. }] if *list_from == offset),
+            "page {page}: {sent:?}"
+        );
+    }
+}
+
 /// `StartAuction` sends and then clears the sell slot inside the call (`0x4ce925`, `0x4ce92a`):
 /// `NEW_AUCTION_UPDATE` has fired by the next line, and a second call finds the slot empty.
 #[test]

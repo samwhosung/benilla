@@ -2,7 +2,9 @@
 //! wire's results through the handlers, the feed and the drain to the VM's getters, as the window
 //! reads them.
 
-use benilla_protocol::messages::{AuctionCommandTail, AuctionListEntry, AuctionOwnerNotification};
+use benilla_protocol::messages::{
+    AuctionBidderNotification, AuctionCommandTail, AuctionListEntry, AuctionOwnerNotification,
+};
 use benilla_protocol::SessionEvent;
 use benilla_ui::script::{UiScript, BIDDER, LIST, OWNER};
 use bevy::prelude::*;
@@ -195,6 +197,49 @@ impl House {
         self.script()
             .eval(&format!("return SELLERS({list:?})"))
             .unwrap()
+    }
+
+    /// The packet through its handlers alone, with no frame after: what the handler signals
+    /// itself.
+    fn handle(&mut self, event: SessionEvent) {
+        crate::net::handlers::dispatch(self.app.world_mut(), vec![event]);
+    }
+
+    /// From here on, each list update with its first row's bid as the update's handler reads it,
+    /// and each red line, in the order they fire.
+    fn hear_bids(&mut self) {
+        self.script()
+            .run(
+                r#"
+                HEARD = {}
+                ERR_AUCTION_HIGHER_BID = "ERR_AUCTION_HIGHER_BID"
+                local lists = {
+                    AUCTION_ITEM_LIST_UPDATE = "list",
+                    AUCTION_BIDDER_LIST_UPDATE = "bidder",
+                    AUCTION_OWNED_LIST_UPDATE = "owner",
+                }
+                local f = CreateFrame("Frame")
+                for e in pairs(lists) do f:RegisterEvent(e) end
+                f:RegisterEvent("UI_ERROR_MESSAGE")
+                f:SetScript("OnEvent", function()
+                    if event == "UI_ERROR_MESSAGE" then
+                        table.insert(HEARD, arg1)
+                        return
+                    end
+                    local _, _, _, _, _, _, _, _, _, bid = GetAuctionItemInfo(lists[event], 1)
+                    table.insert(HEARD, event .. "=" .. tostring(bid))
+                end)
+                "#,
+            )
+            .unwrap();
+    }
+
+    /// What [`Self::hear_bids`] heard since the last call.
+    fn heard(&mut self) -> Vec<String> {
+        let script = self.script();
+        let heard = script.eval::<Vec<String>>("return HEARD").unwrap();
+        script.run("HEARD = {}").unwrap();
+        heard
     }
 
     /// The list updates since the last call, each with its list's order as it fired.
@@ -734,4 +779,179 @@ fn a_rows_names_are_asked_by_its_read_not_by_its_page() {
     h.name(AL, "Al");
     h.app.update();
     assert_eq!(h.eval::<i64>("return UPDATES"), before + 1);
+}
+
+/// An outbid on house 1, auction 7: `OTHER` now bids 900 with a 45c step.
+fn outbid() -> SessionEvent {
+    SessionEvent::AuctionBidderNotification(AuctionBidderNotification {
+        house_id: 1,
+        auction_id: 7,
+        bidder_guid: OTHER,
+        bid_or_zero: 900,
+        out_bid: 45,
+        item_entry: 1,
+        random_property_id: 0,
+    })
+}
+
+/// An outbid patches the bidder row and signals its list, then the browse row and its list,
+/// inside the handler (`0x4cd033`-`0x4cd09e`, `0x4cd0d8`-`0x4cd143`): each update's handler reads
+/// its row patched, and the frame after signals nothing more. The same notice again, the rows
+/// unchanged, signals both again.
+#[test]
+fn an_outbid_signals_the_bidder_then_the_browse_list_in_its_handler() {
+    let mut h = House::new();
+    h.item(1, "Cloth", 10, 1);
+    h.open(AUCTIONEER);
+    h.land(BIDDER, vec![entry(7, 1)]);
+    h.land(LIST, vec![entry(7, 1)]);
+    h.hear_bids();
+    h.handle(outbid());
+    let both = [
+        "AUCTION_BIDDER_LIST_UPDATE=900",
+        "AUCTION_ITEM_LIST_UPDATE=900",
+    ];
+    assert_eq!(h.heard(), both);
+    h.app.update();
+    assert!(h.heard().is_empty(), "the frame after signals nothing");
+    h.handle(outbid());
+    assert_eq!(h.heard(), both, "an unchanged row signals too");
+}
+
+/// A bid on one of ours patches the owner row and signals its list, then the browse row and its
+/// list, inside the handler (`0x4cd296`-`0x4cd301`, `0x4cd306`-`0x4cd3a8`).
+#[test]
+fn a_bid_on_ours_signals_the_owned_then_the_browse_list_in_its_handler() {
+    let mut h = House::new();
+    h.item(1, "Cloth", 10, 1);
+    h.open(AUCTIONEER);
+    let mine = AuctionListEntry {
+        owner_guid: ME,
+        ..entry(7, 1)
+    };
+    h.land(OWNER, vec![mine.clone()]);
+    h.land(LIST, vec![mine]);
+    h.hear_bids();
+    h.handle(SessionEvent::AuctionOwnerNotification(
+        AuctionOwnerNotification {
+            auction_id: 7,
+            bid: 500,
+            out_bid: 25,
+            bidder_guid: OTHER,
+            item_entry: 1,
+            random_property_id: 0,
+        },
+    ));
+    assert_eq!(
+        h.heard(),
+        [
+            "AUCTION_OWNED_LIST_UPDATE=500",
+            "AUCTION_ITEM_LIST_UPDATE=500"
+        ]
+    );
+    h.app.update();
+    assert!(h.heard().is_empty(), "the frame after signals nothing");
+}
+
+/// Error 5 patches the browse row and signals it, then the bidder row and its list, and shows its
+/// line last (`0x4cc6c9`-`0x4cc703`, `0x4cc72f`-`0x4cc769`, `0x4cc76e`), inside the handler.
+#[test]
+fn a_higher_bid_signals_browse_then_bidder_then_its_line() {
+    let mut h = House::new();
+    h.item(1, "Cloth", 10, 1);
+    h.open(AUCTIONEER);
+    h.land(LIST, vec![entry(7, 1)]);
+    h.land(BIDDER, vec![entry(7, 1)]);
+    h.hear_bids();
+    h.handle(SessionEvent::AuctionCommandResult {
+        auction_id: 7,
+        action: 2,
+        error: 5,
+        tail: AuctionCommandTail::HigherBid {
+            new_bidder_guid: OTHER,
+            new_bid: 900,
+            new_min_outbid: 45,
+        },
+    });
+    assert_eq!(
+        h.heard(),
+        [
+            "AUCTION_ITEM_LIST_UPDATE=900",
+            "AUCTION_BIDDER_LIST_UPDATE=900",
+            "ERR_AUCTION_HIGHER_BID"
+        ]
+    );
+    h.app.update();
+    assert!(h.heard().is_empty(), "the frame after signals nothing");
+}
+
+/// A placed bid patches the browse row and signals it inside the handler (`0x4cc564`-`0x4cc5d0`).
+#[test]
+fn a_placed_bid_signals_the_browse_list_in_its_handler() {
+    let mut h = House::new();
+    h.item(1, "Cloth", 10, 1);
+    h.open(AUCTIONEER);
+    h.land(LIST, vec![entry(7, 1)]);
+    h.app
+        .world_mut()
+        .resource_mut::<super::AuctionOpen>()
+        .last_bid = 150;
+    h.hear_bids();
+    h.handle(SessionEvent::AuctionCommandResult {
+        auction_id: 7,
+        action: 2,
+        error: 0,
+        tail: AuctionCommandTail::BidPlaced { new_min_outbid: 7 },
+    });
+    assert_eq!(h.heard(), ["AUCTION_ITEM_LIST_UPDATE=150"]);
+    h.app.update();
+    assert!(h.heard().is_empty(), "the frame after signals nothing");
+}
+
+/// A list still waiting on an item record takes the patch without its update, as each patch's
+/// event tests its list's pending count (`0x4cd090`, `0x4cd135`): here the bidder list waits and
+/// the browse list does not.
+#[test]
+fn a_pending_list_takes_a_patch_without_its_update() {
+    let mut h = House::new();
+    h.item(1, "Cloth", 10, 1);
+    h.open(AUCTIONEER);
+    h.land(BIDDER, vec![entry(7, 2)]);
+    h.land(LIST, vec![entry(7, 1)]);
+    h.hear_bids();
+    h.handle(outbid());
+    assert_eq!(h.heard(), ["AUCTION_ITEM_LIST_UPDATE=900"]);
+}
+
+/// A won auction leaves each list inside the handler, each list signalled as it goes
+/// (`0x4cd173` → `0x4cdfe0`), and the frame after signals nothing more.
+#[test]
+fn a_won_auction_leaves_the_lists_in_its_handler() {
+    let mut h = House::new();
+    h.item(1, "Cloth", 10, 1);
+    h.item(2, "Silk", 20, 1);
+    h.open(AUCTIONEER);
+    h.land(LIST, vec![entry(7, 1), entry(8, 2)]);
+    h.land(BIDDER, vec![entry(7, 1)]);
+    h.seen();
+    h.handle(SessionEvent::AuctionBidderNotification(
+        AuctionBidderNotification {
+            house_id: 1,
+            auction_id: 7,
+            bidder_guid: 0,
+            bid_or_zero: 0,
+            out_bid: 0,
+            item_entry: 1,
+            random_property_id: 0,
+        },
+    ));
+    assert_eq!(
+        h.seen(),
+        [
+            "AUCTION_ITEM_LIST_UPDATE=Silk",
+            "AUCTION_BIDDER_LIST_UPDATE="
+        ]
+    );
+    h.app.update();
+    assert!(h.seen().is_empty(), "the frame after signals nothing");
 }
