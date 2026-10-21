@@ -260,13 +260,16 @@ pub(super) fn arm_pet_gcd(
 }
 
 /// The GCDs the attempt's sends owe the pet's list (`0x6e58fb`), each at its send's instant, put
-/// in before the bar's feed reads the list.
+/// in before the bar's feed reads the list. A world with no spell plugin owes none.
 pub(crate) fn arm_owed_pet_gcds(
-    mut owed: ResMut<crate::spell::PetGcdsOwed>,
+    owed: Option<ResMut<crate::spell::PetGcdsOwed>>,
     mut bar: ResMut<PetBar>,
     spells: Option<Res<Spells>>,
-    mods: Res<crate::spell::SpellModifiers>,
+    mods: Option<Res<crate::spell::SpellModifiers>>,
 ) {
+    let (Some(mut owed), Some(mods)) = (owed, mods) else {
+        return;
+    };
     for (spell_id, at) in owed.take() {
         let Some(d) = spells.as_ref().and_then(|s| s.catalog.get(spell_id)) else {
             continue;
