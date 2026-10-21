@@ -3284,6 +3284,99 @@ mod tests {
         assert_eq!(s.eval::<i64>("return GetNumLootItems()").unwrap(), 1);
     }
 
+    /// A loot app whose two cloths have icons, and a VM noting `LOOT_OPENED`, each
+    /// `LOOT_SLOT_CLEARED` row and, at each `ITEM_PUSH`, which of rows 1 and 2 still hold an item.
+    fn push_order_app() -> App {
+        let (mut app, _rx) = sweep_loot_app();
+        app.insert_resource(ItemDisplays::icons_for_tests(
+            benilla_formats::ItemDisplayCatalog::from_displays(std::collections::HashMap::from([
+                (
+                    5,
+                    benilla_formats::ItemDisplay {
+                        icon: Some("ITEM".into()),
+                        ..Default::default()
+                    },
+                ),
+            ])),
+        ));
+        for (entry, name) in [(LINEN, "Linen Cloth"), (WOOL, "Wool Cloth")] {
+            let mut cloth = crate::items::test_template(name);
+            cloth.display_info_id = 5;
+            app.world_mut()
+                .resource_mut::<Items>()
+                .insert_template(entry, Some(cloth));
+        }
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                r#"SEEN = {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("LOOT_OPENED")
+                f:RegisterEvent("LOOT_SLOT_CLEARED")
+                f:RegisterEvent("ITEM_PUSH")
+                f:SetScript("OnEvent", function()
+                    if event == "LOOT_OPENED" then
+                        tinsert(SEEN, "OPENED")
+                    elseif event == "LOOT_SLOT_CLEARED" then
+                        tinsert(SEEN, "CLEARED" .. arg1)
+                    else
+                        local rows = ""
+                        for i = 1, 2 do rows = rows .. ((GetLootSlotInfo(i)) and 1 or 0) end
+                        tinsert(SEEN, "PUSH" .. rows)
+                    end
+                end)"#,
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        app
+    }
+
+    const LINEN: u32 = 2589;
+    const WOOL: u32 = 2592;
+
+    fn seen_order(app: &App) -> String {
+        app.world()
+            .non_send_resource::<UiScript>()
+            .eval::<String>("return table.concat(SEEN, ',')")
+            .unwrap()
+    }
+
+    /// Each packet's events fire inside its dispatch: `SMSG_LOOT_REMOVED` clears its row
+    /// (`0x5ebeb0` → `0x4c1f00`) ahead of the `SMSG_ITEM_PUSH_RESULT` vmangos sends after it
+    /// (`LootHandler.cpp:217`, `:230`), so each `ITEM_PUSH` reads the rows removed before it gone
+    /// and the rows removed after it still there.
+    #[test]
+    fn each_item_push_reads_the_rows_removed_before_it() {
+        let mut app = push_order_app();
+        app.world_mut().resource_mut::<LootState>().open(
+            CORPSE,
+            loot_type::CORPSE,
+            0,
+            vec![item(0, LINEN, 1), item(1, WOOL, 1)],
+        );
+        app.update();
+        assert_eq!(seen_order(&app), "OPENED");
+        let mut loot = app.world_mut().resource_mut::<LootState>();
+        loot.remove_slot(0);
+        loot.push_receive(&push(LINEN, 1, false, false));
+        loot.remove_slot(1);
+        loot.push_receive(&push(WOOL, 1, false, false));
+        app.update();
+        assert_eq!(seen_order(&app), "OPENED,CLEARED1,PUSH01,CLEARED2,PUSH00");
+    }
+
+    /// A push after the response in the same frame fires after the response's `LOOT_OPENED`
+    /// (`0x4c2ac0`), so its handlers read the window open.
+    #[test]
+    fn an_item_push_after_the_response_reads_the_window_open() {
+        let mut app = push_order_app();
+        let mut loot = app.world_mut().resource_mut::<LootState>();
+        loot.open(CORPSE, loot_type::CORPSE, 0, vec![item(0, LINEN, 1)]);
+        loot.push_receive(&push(WOOL, 1, false, false));
+        app.update();
+        assert_eq!(seen_order(&app), "OPENED,PUSH10");
+    }
+
     /// A disenchanted item's guid (`HIGHGUID_ITEM`).
     const ESSENCE_SOURCE: u64 = 0x4000_0000_0000_0d15;
 

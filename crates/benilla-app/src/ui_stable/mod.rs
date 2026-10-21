@@ -391,11 +391,9 @@ mod tests {
         assert_eq!(crate::query_cache::queries(&rx).len(), 1);
     }
 
-    /// The refusal's line shows in `SMSG_STABLE_RESULT`'s handler (`0x4cacb0`, `DisplayError(0x25)`),
-    /// which changes no list, so its handlers read the stable as it stood before the frame's list
-    /// is pushed.
-    #[test]
-    fn a_refusals_handlers_read_the_stable_before_the_frames_push() {
+    /// A stable open on its master with no slot bought, pushed, whose VM notes the slot count
+    /// at each `UI_ERROR_MESSAGE`; the stable's handlers in the table.
+    fn refusal_app() -> App {
         let (tx, _rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.insert_resource(NetCommands(tx))
@@ -408,6 +406,7 @@ mod tests {
             .init_resource::<crate::ui_chat::ChatLog>()
             .init_resource::<crate::sound::MessageSounds>()
             .add_systems(Update, feed_stable);
+        net::register(&mut app);
         let script = UiScript::new().unwrap();
         script
             .run(
@@ -418,16 +417,49 @@ mod tests {
             .unwrap();
         app.insert_non_send_resource(script);
         app.world_mut()
-            .resource_mut::<StableErrors>()
-            .0
-            .push("ERR_NOT_ENOUGH_MONEY");
-        app.world_mut()
             .resource_mut::<StableOpen>()
-            .open(0xF130_0000_4500_0001, 2, Vec::new());
+            .open(MASTER, 0, Vec::new());
+        app.update();
+        app
+    }
+
+    const MASTER: u64 = 0xF130_0000_4500_0001;
+
+    /// The refusal and a list showing two slots bought, the list first when `list_first`, as one
+    /// frame's packets; then the count the refusal's handler read and the count after the frame.
+    fn refusal_then(list_first: bool) -> (String, i64) {
+        use benilla_protocol::messages::stable_result;
+        use benilla_protocol::SessionEvent;
+        let mut app = refusal_app();
+        let refusal = SessionEvent::StableResult {
+            result: stable_result::ERR_MONEY,
+        };
+        let list = SessionEvent::ListStabledPets {
+            npc: MASTER,
+            num_stable_slots: 2,
+            pets: Vec::new(),
+        };
+        let events = if list_first {
+            vec![list, refusal]
+        } else {
+            vec![refusal, list]
+        };
+        crate::net::handlers::dispatch(app.world_mut(), events);
         app.update();
         let s = app.world().non_send_resource::<UiScript>();
-        assert_eq!(s.eval::<String>("return SEEN").unwrap(), "0");
-        assert_eq!(s.eval::<i64>("return GetNumStableSlots()").unwrap(), 2);
+        (
+            s.eval::<String>("return SEEN").unwrap(),
+            s.eval::<i64>("return GetNumStableSlots()").unwrap(),
+        )
+    }
+
+    /// The refusal's line shows in `SMSG_STABLE_RESULT`'s handler (`0x4cacb0`,
+    /// `DisplayError(0x25)`), so its handlers read the stable as the packets before it left it: a
+    /// list after it is not there yet, and a list before it is.
+    #[test]
+    fn a_refusals_handlers_read_the_stable_the_packets_before_it_left() {
+        assert_eq!(refusal_then(false), ("0".into(), 2), "the list came after");
+        assert_eq!(refusal_then(true), ("2".into(), 2), "the list came first");
     }
 
     /// The range guard cannot close it: after the drop there is no self player to measure from.
