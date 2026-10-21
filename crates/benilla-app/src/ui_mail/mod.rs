@@ -124,13 +124,13 @@ pub(crate) struct MailOpen {
     pub(crate) auction_subjects: HashMap<u32, ListedSubject>,
 }
 
-/// An auction notice's shown subject after the list parse (`0x4ad580`-`0x4ad5b2`): masked, and
-/// rewritten when the notice's item was held then.
+/// An auction notice's shown subject after the list parse (`0x4ad580`-`0x4ad5b2`): rewritten
+/// and masked when the notice's item was held then, else empty (`0x4acf3d`).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ListedSubject {
     pub(crate) text: String,
-    /// The parse rewrote it. Else the raw triplet shows until the item's template lands and its
-    /// callback rewrites the cell (`0x4ad010` → `0x4ace40`), with no mask.
+    /// The parse rewrote it. Else the cell stays empty until the item's template lands and its
+    /// callback rewrites it (`0x4ad010` → `0x4ace40`), with no mask.
     pub(crate) rewritten: bool,
 }
 

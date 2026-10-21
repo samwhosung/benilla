@@ -149,7 +149,8 @@ fn on_session_end(
 /// `0x4ad4c7`), else `CMSG_MAIL_DELETE` (`0x4ad4cf`), with the mailbox cell as it stands, 0 when
 /// none is open (`0x4ad4e3`). Every other row with no positive stationery id takes `first_paper`,
 /// the usable list's first (`0x4ad551`-`0x4ad56f`). An auction notice's subject is written by
-/// `rewrite` when its item is held (`0x4ad580`-`0x4ad5a0`), and every row's shown subject is then
+/// `rewrite` when its item is held, else emptied (`0x4ad580`-`0x4ad5a0`, `0x4acf3d`), and every
+/// row's shown subject is then
 /// masked in list order (`0x4ad5b2`, `dl` 0); a notice keeps its raw triplet beside it
 /// ([`super::ListedSubject`]). It never touches [`MailPending`]: nothing on the inbox path writes
 /// the countdown `0x845eac`.
@@ -198,7 +199,9 @@ pub(super) fn mail_list(
             if e.message_type == mail_message_type::AUCTION {
                 let written = rewrite(&e.subject);
                 let rewritten = written.is_some();
-                let mut text = written.unwrap_or_else(|| e.subject.clone());
+                // An item not held, or a subject the parse cannot name, leaves the cell empty
+                // (`0x4acf3d`, `0x4acfbd`).
+                let mut text = written.unwrap_or_default();
                 mask(&mut text);
                 auction_subjects.insert(e.message_id, super::ListedSubject { text, rewritten });
             } else {
