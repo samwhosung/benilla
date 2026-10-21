@@ -307,7 +307,20 @@ fn bid_placed(auction_id: u32, tail: &AuctionCommandTail, auction: &mut AuctionO
         let offset = auction.bidder_offset;
         auction.send_bidder_list(commands, offset);
     }
-    let _ = (tail, EMOTE_WAVE, wire.me, wire.now);
+    if auction.auctioneer.is_some() {
+        let increment = match tail {
+            AuctionCommandTail::BidPlaced { new_min_outbid } => Some(*new_min_outbid),
+            _ => None,
+        };
+        let patch = RowPatch {
+            bid: auction.last_bid,
+            increment,
+            bidder: wire.me,
+            floor_at: Some(wire.now),
+        };
+        auction.patch_row(LIST, auction_id, &patch);
+    }
+    wire.send(ClientCommand::Emote { emote: EMOTE_WAVE });
 }
 
 /// `EMOTE_ONESHOT_WAVE`, the placed bid's emote (`0x4cc5fc push 3`).
