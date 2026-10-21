@@ -203,7 +203,7 @@ pub(crate) struct ChatLog(std::sync::Mutex<ChatQueue>);
 #[derive(Default)]
 struct ChatQueue {
     /// The lane: every item not held, in stamp order.
-    pending: Vec<Queued>,
+    pending: std::collections::VecDeque<Queued>,
     /// The lines waiting for a name or an item's, out of the merge, in the order they began to
     /// wait, each with its place in that order.
     held: Vec<(u64, Pending)>,
@@ -267,16 +267,16 @@ impl ChatLog {
 
     /// The lane's head, for the drain ([`crate::lanes`]).
     pub(crate) fn peek(&self) -> Option<crate::lanes::Stamp> {
-        self.q().pending.first().map(|q| q.stamp)
+        self.q().pending.front().map(|q| q.stamp)
     }
 
     /// Take the head if `until` admits it.
     fn pop(&self, until: crate::lanes::Until) -> Option<Queued> {
         let mut q = self.q();
-        if !until.admits(q.pending.first()?.stamp) {
+        if !until.admits(q.pending.front()?.stamp) {
             return None;
         }
-        let head = q.pending.remove(0);
+        let head = q.pending.pop_front()?;
         if matches!(
             head.item,
             Pending::Release {
