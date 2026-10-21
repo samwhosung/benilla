@@ -130,6 +130,10 @@ pub struct TradeStatusExtended {
     /// column whose sequence is below its own-edit counter. vmangos writes the slot count there,
     /// 7, whatever the sender's edits (`TradeHandler.cpp:60`).
     pub sequence: u32,
+    /// The second `u32`, which the client keeps per side (`0xc4be78`, `0x5d49d5`) and sends the
+    /// partner's back in `CMSG_ACCEPT_TRADE` (`0x5d4260`). vmangos writes the slot count, 7
+    /// (`TradeHandler.cpp:61`).
+    pub flag: u32,
     /// In copper.
     pub gold: u32,
     /// The spell cast on this side's non-traded slot item, 0 for none.
@@ -144,9 +148,10 @@ pub fn initiate_trade(target: u64) -> Vec<u8> {
     target.to_le_bytes().to_vec()
 }
 
-/// `CMSG_ACCEPT_TRADE`: a `u32` the server skips; the 1.12 client sends 1.
-pub fn accept_trade() -> Vec<u8> {
-    1u32.to_le_bytes().to_vec()
+/// `CMSG_ACCEPT_TRADE`: the `flag` of the partner's last extended status (`0x5d4230` sends
+/// `[0xc4be7c]`), 1 from the window's open until one arrives; vmangos skips it.
+pub fn accept_trade(flag: u32) -> Vec<u8> {
+    flag.to_le_bytes().to_vec()
 }
 
 /// `CMSG_SET_TRADE_ITEM`: puts the item at (`bag`, `slot`) into `trade_slot`.
@@ -211,12 +216,12 @@ pub(super) fn read_trade_status(r: &mut &[u8]) -> io::Result<TradeStatus> {
 }
 
 /// `SMSG_TRADE_STATUS_EXTENDED` (vmangos `WorldSession::SendUpdateTrade`): `u8 which`, the
-/// sequence, the slot count, gold, enchant spell, then seven records of `u8 index` and a 60-byte
+/// sequence, the flag (vmangos's slot count), gold, enchant spell, then seven records of `u8 index` and a 60-byte
 /// item block.
 pub(super) fn read_trade_status_extended(r: &mut &[u8]) -> io::Result<TradeStatusExtended> {
     let which = read_u8(r)?;
     let sequence = read_u32_le(r)?;
-    let _slot_count = read_u32_le(r)?;
+    let flag = read_u32_le(r)?;
     let gold = read_u32_le(r)?;
     let enchant_spell_id = read_u32_le(r)?;
 
@@ -257,6 +262,7 @@ pub(super) fn read_trade_status_extended(r: &mut &[u8]) -> io::Result<TradeStatu
     Ok(TradeStatusExtended {
         their_window: which == 1,
         sequence,
+        flag,
         gold,
         enchant_spell_id,
         slots,
@@ -278,8 +284,9 @@ mod tests {
     }
 
     #[test]
-    fn accept_trade_is_u32_one() {
-        assert_eq!(accept_trade(), vec![1, 0, 0, 0]);
+    fn accept_trade_is_the_partners_flag() {
+        assert_eq!(accept_trade(1), vec![1, 0, 0, 0]);
+        assert_eq!(accept_trade(7), vec![7, 0, 0, 0]);
     }
 
     #[test]
@@ -403,7 +410,7 @@ mod tests {
         let mut b = Vec::new();
         b.push(which);
         b.extend_from_slice(&(TRADE_SLOT_COUNT as u32).to_le_bytes()); // sequence
-        b.extend_from_slice(&(TRADE_SLOT_COUNT as u32).to_le_bytes()); // slot count
+        b.extend_from_slice(&(TRADE_SLOT_COUNT as u32).to_le_bytes()); // flag
         b.extend_from_slice(&gold.to_le_bytes());
         b.extend_from_slice(&spell.to_le_bytes());
         for (i, entry) in entries.iter().enumerate() {
@@ -486,7 +493,7 @@ mod tests {
         assert!(ext.slots[5].is_none());
     }
 
-    /// The header byte for byte: side, then the sequence, then the slot count, gold and spell. The
+    /// The header byte for byte: side, then the sequence, then the flag, gold and spell. The
     /// sequence is the first `u32` (`0x5d4990` reads it into `[ebp-0xc]` before the others), so a
     /// sender that counts its edits is read as it wrote them, not as the slot count after it.
     #[test]
@@ -494,7 +501,7 @@ mod tests {
         let mut wire = vec![
             0x00, // side: ours
             0x0B, 0x00, 0x00, 0x00, // sequence 11
-            0x07, 0x00, 0x00, 0x00, // slot count 7
+            0x05, 0x00, 0x00, 0x00, // flag 5
             0x39, 0x30, 0x00, 0x00, // gold 12345
             0x09, 0x03, 0x00, 0x00, // spell 777
         ];
@@ -504,7 +511,7 @@ mod tests {
         }
         assert_eq!(wire.len(), 444);
         let ext = read_trade_status_extended(&mut &wire[..]).unwrap();
-        assert_eq!(ext.sequence, 11);
+        assert_eq!((ext.sequence, ext.flag), (11, 5));
         assert_eq!((ext.gold, ext.enchant_spell_id), (12_345, 777));
         // What vmangos sends: the slot count in both words.
         let vmangos = extended_wire(0, 0, 0, [None; TRADE_SLOT_COUNT]);

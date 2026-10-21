@@ -233,7 +233,7 @@ fn the_trade_verbs_send_inside_their_calls() {
     assert_eq!(
         sent,
         [
-            "AcceptTrade",
+            "AcceptTrade { flag: 0 }",
             "BeginTrade",
             "CancelTrade",
             "SetTradeGold { copper: 500 }",
@@ -502,6 +502,7 @@ fn partner_slot_7(t: &mut Trade, perm_enchant: u32) {
             state: Box::new(benilla_protocol::messages::TradeStatusExtended {
                 their_window: true,
                 sequence: 7,
+                flag: 7,
                 gold: 0,
                 enchant_spell_id: 0,
                 slots,
@@ -732,4 +733,24 @@ fn the_click_refuses_a_full_bag_and_a_dead_player_and_skips_a_targeting_cursor()
     run(&mut t, "ClearCursor()");
     click_on(&mut t, BOB);
     assert!(sent(&t).is_empty() && errors(&t).is_empty(), "nothing held");
+}
+
+/// `CMSG_ACCEPT_TRADE` carries the partner's flag `[0xc4be7c]` (`0x5d4260`): 1 from the window's
+/// open (`0x5d4834`), then the second header dword of the partner's last extended status
+/// (`0x5d49d5`), which vmangos fills with the slot count.
+#[test]
+fn an_accept_sends_the_partners_last_flag() {
+    let mut t = client();
+    open_with_bob(&mut t);
+    run(&mut t, "AcceptTrade()");
+    assert!(matches!(
+        sent(&t)[..],
+        [ClientCommand::AcceptTrade { flag: 1 }]
+    ));
+    partner_slot_7(&mut t, 0);
+    run(&mut t, "AcceptTrade()");
+    assert!(matches!(
+        sent(&t)[..],
+        [ClientCommand::AcceptTrade { flag: 7 }]
+    ));
 }

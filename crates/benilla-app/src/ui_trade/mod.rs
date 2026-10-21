@@ -71,6 +71,10 @@ pub(crate) struct TradeSession {
     /// (`0x5d4442`, `0x5d44bc`, `0x5d45a5`, `0x5d463b`, `0x5d4712`). An own-side status whose
     /// sequence is below it is stale (`0x5d49ba`).
     own_edits: u32,
+    /// The partner's flag `[0xc4be7c]`, which `CMSG_ACCEPT_TRADE` carries (`0x5d4260`): 1 at
+    /// `OPEN_WINDOW` (`0x5d4834`), then the second header dword of each partner-side extended
+    /// status (`0x5d49d5`); a fresh client's is 0.
+    partner_flag: u32,
     /// Each side's spell as `0x4bf2b0` last compared it (`0xb71738`, `0xb7173c`), indexed by the
     /// header's side byte; zero for a fresh window (`0x4bf5cc`).
     spell_seen: [u32; 2],
@@ -150,6 +154,7 @@ impl TradeSession {
     pub(crate) fn open_window(&mut self) {
         self.open = true;
         self.own_edits = 1;
+        self.partner_flag = 1;
         self.our_accept = false;
         self.their_accept = false;
         self.accept_shown = (false, false);
@@ -192,6 +197,9 @@ impl TradeSession {
                     self.invalidated.push(i as u8);
                 }
             }
+        }
+        if ext.their_window {
+            self.partner_flag = ext.flag;
         }
         let side = if ext.their_window {
             &mut self.their
@@ -414,6 +422,11 @@ impl TradeSession {
 
     pub(crate) fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// What `CMSG_ACCEPT_TRADE` carries ([`Self::partner_flag`]).
+    pub(crate) fn partner_flag(&self) -> u32 {
+        self.partner_flag
     }
 
     // ── Test accessors, for `net`'s tests ──

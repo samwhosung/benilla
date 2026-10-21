@@ -70,7 +70,9 @@ impl TradeSteps<'_, '_> {
                     ],
                 );
                 let _ = net.0.send(if flag {
-                    ClientCommand::AcceptTrade
+                    ClientCommand::AcceptTrade {
+                        flag: trade.partner_flag(),
+                    }
                 } else {
                     ClientCommand::UnacceptTrade
                 });

@@ -323,6 +323,7 @@ fn extended_fills_the_right_side_and_resets_accepts() {
     let ext = TradeStatusExtended {
         their_window: true,
         sequence: 7,
+        flag: 7,
         gold: 500,
         enchant_spell_id: 0,
         slots,
@@ -336,6 +337,7 @@ fn extended_fills_the_right_side_and_resets_accepts() {
     let our_ext = TradeStatusExtended {
         their_window: false,
         sequence: 7,
+        flag: 7,
         gold: 999,
         enchant_spell_id: 0,
         slots: [None; TRADE_SLOT_COUNT],
@@ -976,6 +978,7 @@ fn a_stale_own_side_status_is_dropped_whole() {
     let ext = |their_window: bool, sequence: u32, gold: u32| TradeStatusExtended {
         their_window,
         sequence,
+        flag: 7,
         gold,
         enchant_spell_id: 0,
         slots: [None; TRADE_SLOT_COUNT],
@@ -1152,6 +1155,7 @@ fn both_offers_answer_inside_trade_closed_and_until_the_next_open() {
             trade.set_offer(&TradeStatusExtended {
                 their_window: true,
                 sequence: 7,
+                flag: 7,
                 gold: 500,
                 enchant_spell_id: 0,
                 slots: theirs,
@@ -1258,6 +1262,7 @@ fn trade_update_comes_only_from_a_landed_record_a_getter_asked_for() {
             .set_offer(&TradeStatusExtended {
                 their_window: true,
                 sequence: 7,
+                flag: 7,
                 gold,
                 enchant_spell_id: 0,
                 slots: theirs,
@@ -1346,6 +1351,7 @@ fn a_refused_slot_record_is_asked_by_the_next_getter_never_by_a_frame() {
         .set_offer(&TradeStatusExtended {
             their_window: true,
             sequence: 7,
+            flag: 7,
             gold: 0,
             enchant_spell_id: 0,
             slots: theirs,
@@ -1452,6 +1458,7 @@ fn a_bounced_offer_unlocks_its_item_and_signals_the_slot_once() {
         .set_offer(&TradeStatusExtended {
             their_window: false,
             sequence: 7,
+            flag: 7,
             gold: 0,
             enchant_spell_id: 0,
             slots: [None; TRADE_SLOT_COUNT],
@@ -1816,6 +1823,7 @@ fn the_enchant_slots_spell_signals_its_side_and_names_the_enchantment() {
     let ext = |their_window: bool, spell: u32| TradeStatusExtended {
         their_window,
         sequence: 7,
+        flag: 7,
         gold: 0,
         enchant_spell_id: spell,
         slots,
