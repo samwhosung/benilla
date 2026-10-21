@@ -575,23 +575,24 @@ fn raid_guid_at(group: &GroupState, index: u32) -> Option<u64> {
     raid_row_guid(group, usize::try_from(index).ok()?)
 }
 
-/// A guid to its name for the by-name opcodes: ours from the name cache, others' from the roster.
-fn raid_name_of(
-    group: &GroupState,
-    self_guid: Option<u64>,
-    names: &NameCache,
-    guid: u64,
-) -> Option<String> {
-    if Some(guid) == self_guid {
-        return names
-            .resolve_unit(guid, None, Ask::Read)
-            .map(str::to_string);
+/// A 1-based raid row's subgroup as the roster holds it, the row's `+8` (`0x4ba8ea`, the flags
+/// under 0x7f): a member's from the list's flags, ours, the row after them, from our own
+/// (`0x5e6e82`). No row, no subgroup.
+fn raid_row_subgroup(group: &GroupState, index: u32) -> Option<u8> {
+    let row = usize::try_from(index).ok()?.checked_sub(1)?;
+    if !group.raid_held() {
+        return None;
     }
-    group
-        .members
-        .iter()
-        .find(|m| m.guid == guid)
-        .map(|m| m.name.clone())
+    match group.members.get(row) {
+        Some(m) => Some(m.flags & 0x7f),
+        None => (row == group.members.len()).then_some(group.own_flags & 0x7f),
+    }
+}
+
+/// The name the subgroup verbs send: the cache's record, looked up with no callback
+/// (`0x4bba5e`, `0x4bbbc4`, `0x4bbbe5`), so a name still to come sends nothing.
+fn cached_player_name(names: &NameCache, guid: u64) -> Option<String> {
+    names.resolve_player(guid, Ask::Read).map(str::to_string)
 }
 
 /// `GetRaidRosterInfo`'s array (`0x4bb560`) in [`raid_row_guids`]' order: empty while no roster
@@ -964,9 +965,15 @@ pub(crate) fn drain_party(
                     let Some(sub) = (1..=8).contains(&sub).then(|| (sub - 1) as u8) else {
                         continue;
                     };
-                    let Some(name) = raid_guid_at(&group, index)
-                        .and_then(|g| raid_name_of(&group, self_guid, &names, g))
-                    else {
+                    // `0x4bb990`: a row (`0x4bba1f`-`0x4bba36`) not already in the subgroup
+                    // (`0x4bba3c`) whose name the cache holds (`0x4bba68`).
+                    let Some(guid) = raid_guid_at(&group, index) else {
+                        continue;
+                    };
+                    if raid_row_subgroup(&group, index) == Some(sub) {
+                        continue;
+                    }
+                    let Some(name) = cached_player_name(&names, guid) else {
                         continue;
                     };
                     let _ = commands
@@ -974,19 +981,24 @@ pub(crate) fn drain_party(
                         .send(ClientCommand::GroupChangeSubGroup { name, group: sub });
                 }
                 PartyRequest::SwapSubgroup { index, other } => {
-                    let pair = raid_guid_at(&group, index)
-                        .zip(raid_guid_at(&group, other))
-                        .and_then(|(a, b)| {
-                            Some((
-                                raid_name_of(&group, self_guid, &names, a)?,
-                                raid_name_of(&group, self_guid, &names, b)?,
-                            ))
-                        });
-                    if let Some((name, other)) = pair {
-                        let _ = commands
-                            .0
-                            .send(ClientCommand::GroupSwapSubGroup { name, other });
+                    // `0x4bbb00`: two rows (`0x4bbb71`-`0x4bbb99`) in different subgroups
+                    // (`0x4bbba5`) whose names the cache both holds (`0x4bbbec`-`0x4bbbf7`).
+                    let (Some(a), Some(b)) =
+                        (raid_guid_at(&group, index), raid_guid_at(&group, other))
+                    else {
+                        continue;
+                    };
+                    if raid_row_subgroup(&group, index) == raid_row_subgroup(&group, other) {
+                        continue;
                     }
+                    let (Some(name), Some(other)) =
+                        (cached_player_name(&names, a), cached_player_name(&names, b))
+                    else {
+                        continue;
+                    };
+                    let _ = commands
+                        .0
+                        .send(ClientCommand::GroupSwapSubGroup { name, other });
                 }
                 // The binding resolved the name (`0x48a86a`, `0x4bbd6b`, `0x4bbe3b`).
                 PartyRequest::PromoteGuid(guid) => {
@@ -2604,7 +2616,6 @@ mod tests {
             flags: 0,
         };
         group.members = vec![wire("Alice", 0xA11CE), wire("Bob", 0xB0B)];
-        let me = Some(0x5E1Fu64);
 
         assert_eq!(raid_row_guids(&group), vec![0xA11CE, 0xB0B, 0x5E1F]);
         assert_eq!(
@@ -2621,22 +2632,17 @@ mod tests {
             );
         }
 
-        let mut names = NameCache::default();
-        names.insert_player(0x5E1F, "Kel".into(), None);
-        assert_eq!(
-            raid_name_of(&group, me, &names, 0x5E1F).as_deref(),
-            Some("Kel")
-        );
-        assert_eq!(
-            raid_name_of(&group, me, &names, 0xA11CE).as_deref(),
-            Some("Alice")
-        );
-        assert_eq!(raid_name_of(&group, me, &names, 0xDEAD), None);
+        // Each row's subgroup is its flags under 0x7f, ours our own, the row after the members.
+        group.members[1].flags = 0x82;
+        group.own_flags = 3;
+        let subgroups: Vec<Option<u8>> = (0..=4).map(|i| raid_row_subgroup(&group, i)).collect();
+        assert_eq!(subgroups, [None, Some(0), Some(2), Some(3), None]);
 
         // With no roster held all are empty, so a raid verb in a party sends nothing.
         group.own_raid_row = None;
         assert!(raid_row_guids(&group).is_empty());
         assert_eq!(raid_guid_at(&group, 1), None);
+        assert_eq!(raid_row_subgroup(&group, 1), None);
     }
 
     #[test]
