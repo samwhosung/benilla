@@ -2592,7 +2592,6 @@ mod tests {
             ("party1targettargettarget", 4, false),
             ("party2target", 4, false),
             ("party1foo", 4, false),
-            ("npctarget", 4, false),
         ] {
             assert_eq!(
                 answers(
@@ -2603,6 +2602,16 @@ mod tests {
                 "CheckInteractDistance({token}, {kind})"
             );
         }
+        // A token the resolver does not know raises (`0x515c14`): `npc` is one exact compare with
+        // no chain, so it knows no `npctarget`; a bad suffix after a known prefix is GUID 0.
+        let call = r#"CheckInteractDistance("npctarget", 4)"#;
+        assert!(
+            app.world()
+                .non_send_resource::<UiScript>()
+                .run(call)
+                .is_err(),
+            "{call}"
+        );
         // `CanInspect`: a player within 10 yards, so `B` and not the mob 20 yards off.
         for (token, want) in [
             ("party1targettarget", true),
