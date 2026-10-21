@@ -1138,22 +1138,6 @@ fn submit(lua: &Lua, call: MailCall) -> mlua::Result<()> {
 /// (`0x4adf6d`, `0x4adf97`); record flags conjured `0x2` (`0x4adfbd`), an area (`0x5da500`, record
 /// `+0x1c8`) or a map (`0x5da570`, `+0x1cc`) is `ERR_MAIL_CONJURED_ITEM`; a container holding an
 /// item is `ERR_MAIL_BAG` (`0x4ae019`-`0x4ae042`).
-/// Whether the attachment's slot, a bag's or the doll's, still holds its object: the send
-/// resolves the guid and tests its owner (`0x4ae92e`-`0x4ae955`), and a locked item cannot move.
-fn holds(model: &Model, item: &cursor::CursorItem) -> bool {
-    if item.bag == cursor::EQUIPMENT_BAG {
-        model
-            .inv_slot("player", item.slot as usize)
-            .is_some_and(|s| s.guid == item.guid)
-    } else {
-        model
-            .containers
-            .get(&item.bag)
-            .and_then(|c| c.slots.get(&item.slot))
-            .is_some_and(|s| s.guid == item.guid)
-    }
-}
-
 fn attach_refusal(model: &Model, item: &cursor::CursorItem) -> Option<&'static str> {
     let (bound, seats) = if item.bag == cursor::EQUIPMENT_BAG {
         let s = model
@@ -1185,6 +1169,22 @@ fn attach_refusal(model: &Model, item: &cursor::CursorItem) -> Option<&'static s
         return Some("ERR_MAIL_CONJURED_ITEM");
     }
     seats.is_some_and(|n| n > 0).then_some("ERR_MAIL_BAG")
+}
+
+/// Whether the attachment's slot, a bag's or the doll's, still holds its object: the send
+/// resolves the guid and tests its owner (`0x4ae92e`-`0x4ae955`), and a locked item cannot move.
+fn holds(model: &Model, item: &cursor::CursorItem) -> bool {
+    if item.bag == cursor::EQUIPMENT_BAG {
+        model
+            .inv_slot("player", item.slot as usize)
+            .is_some_and(|s| s.guid == item.guid)
+    } else {
+        model
+            .containers
+            .get(&item.bag)
+            .and_then(|c| c.slots.get(&item.slot))
+            .is_some_and(|s| s.guid == item.guid)
+    }
 }
 
 /// `ClickSendMailItemButton` (`0x4adef0`): the send slot as a cursor drop target, attaching the
