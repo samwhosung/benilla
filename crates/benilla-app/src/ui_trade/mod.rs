@@ -75,6 +75,14 @@ pub(crate) struct TradeSession {
     /// `OPEN_WINDOW` (`0x5d4834`), then the second header dword of each partner-side extended
     /// status (`0x5d49d5`); a fresh client's is 0.
     partner_flag: u32,
+    /// Each side's money as `0x4bf2b0` last compared it (`0xb71740`, `0xb71744`): zero for a
+    /// fresh window (`0x4bf5d8`), our offer once the open folds held coins in (`0x4bf62b`), and
+    /// our 0 when a status bounces our coins (`0x4bfbe0`).
+    money_seen: [u32; 2],
+    /// The money signals owed to [`feed_trade`], in order: `false` ours, `PLAYER_TRADE_MONEY` then
+    /// `PLAYER_MONEY` (`0x4bf4ab`, `0x4bfbea`), `true` the partner's, `TRADE_MONEY_CHANGED`
+    /// (`0x4bf4d6`).
+    money_changed: Vec<bool>,
     /// Each side's spell as `0x4bf2b0` last compared it (`0xb71738`, `0xb7173c`), indexed by the
     /// header's side byte; zero for a fresh window (`0x4bf5cc`).
     spell_seen: [u32; 2],
@@ -155,6 +163,7 @@ impl TradeSession {
         self.open = true;
         self.own_edits = 1;
         self.partner_flag = 1;
+        self.money_seen = [0, 0];
         self.our_accept = false;
         self.their_accept = false;
         self.accept_shown = (false, false);
@@ -215,6 +224,15 @@ impl TradeSession {
         if *seen != ext.enchant_spell_id {
             *seen = ext.enchant_spell_id;
             self.enchant_changed.push(ext.their_window);
+        }
+        // Then both money offers, whichever side the status was for: ours (`0x4bf48f`), then the
+        // partner's (`0x4bf4ba`).
+        for (partner, gold) in [(false, self.our.gold), (true, self.their.gold)] {
+            let seen = &mut self.money_seen[usize::from(partner)];
+            if *seen != gold {
+                *seen = gold;
+                self.money_changed.push(partner);
+            }
         }
         self.our_accept = false;
         self.their_accept = false;
@@ -400,7 +418,10 @@ impl TradeSession {
     pub(crate) fn bounce_own_offer(&mut self, slot: u8) {
         const MONEY: u8 = 0xff;
         if slot == MONEY {
+            // `0x5d4864` zeroes the offer; `0x4bfbd0(0xff)` zeroes the cache and signals.
             self.our.gold = 0;
+            self.money_seen[0] = 0;
+            self.money_changed.push(false);
         } else if let Some(cell) = self.our.slots.get_mut(usize::from(slot)) {
             *cell = None;
             self.invalidated.push(slot);
@@ -422,6 +443,17 @@ impl TradeSession {
 
     pub(crate) fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// The open leg's coins: our offer `copper`, which the money cache takes (`0x4bf62b`).
+    pub(crate) fn fold_held_coins(&mut self, copper: u32) {
+        self.set_own_gold(copper);
+        self.money_seen[0] = copper;
+    }
+
+    /// The money signals owed, in order ([`Self::money_changed`]).
+    pub(crate) fn take_money_changed(&mut self) -> Vec<bool> {
+        std::mem::take(&mut self.money_changed)
     }
 
     /// What `CMSG_ACCEPT_TRADE` carries ([`Self::partner_flag`]).
@@ -1009,8 +1041,6 @@ fn feed_trade(
     stores: Query<&ObjectStore>,
     mut last: crate::ui_script::WindowMemo<Option<TradeState>>,
     mut last_open: crate::ui_script::WindowMemo<bool>,
-    mut last_player_gold: crate::ui_script::WindowMemo<u32>,
-    mut last_their_gold: crate::ui_script::WindowMemo<u32>,
     mut closes: CoreCloses,
 ) {
     vm.turn(|script, mut trade| {
@@ -1019,13 +1049,9 @@ fn feed_trade(
         };
         let last = last.get(script);
         let last_open = last_open.get(script);
-        let last_player_gold = last_player_gold.get(script);
-        let last_their_gold = last_their_gold.get(script);
         if closes.since_last(script, NpcWindow::Trade) {
             *last = None;
             *last_open = false;
-            *last_player_gold = 0;
-            *last_their_gold = 0;
         }
 
         let fresh = rows.snapshot(&trade, &names);
@@ -1124,6 +1150,19 @@ fn feed_trade(
             };
             script.fire_event(event, vec![ScriptValue::Int(ENCHANT_SLOT as i64 + 1)]);
         }
+        // Then the money, as a status's compare (`0x4bf48f`-`0x4bf4d6`) or a bounce of our coins
+        // (`0x4bfbd0(0xff)`) left it. Our gold reaches the money input through
+        // `PLAYER_TRADE_MONEY` alone (`TradeFrame.xml:565`), so a repaint never overwrites what
+        // the player is typing; the partner's is the `TARGET_TRADE` money frame's
+        // `TRADE_MONEY_CHANGED` (`MoneyFrame.lua:133`).
+        for partner in trade.take_money_changed() {
+            if partner {
+                script.fire_event("TRADE_MONEY_CHANGED", vec![]);
+            } else {
+                script.fire_event("PLAYER_TRADE_MONEY", vec![]);
+                script.fire_event("PLAYER_MONEY", vec![]);
+            }
+        }
         // The owed `%s` lines, resolved here where the name cache is; a miss waits for the query it
         // started. The catalog row, read by `ui_action::feed_actions`, decides where each lands.
         // Taken in the frame before the interface is up too, deliberately: it marks only the ask,
@@ -1152,9 +1191,8 @@ fn feed_trade(
                     // Coins (`0x4bf5fe`-`0x4bf644`): `0x5d4500` sends the new offer, the cache of
                     // our money `[0xb71740]` takes it (`0x4bf62b`), and `PLAYER_TRADE_MONEY`,
                     // `PLAYER_MONEY` and `TRADE_SHOW` fire once each, then the leg returns.
-                    trade.set_own_gold(offer);
+                    trade.fold_held_coins(offer);
                     trade.send_edit(&commands, ClientCommand::SetTradeGold { copper: offer });
-                    *last_player_gold = offer;
                     script.fire_event("PLAYER_TRADE_MONEY", vec![]);
                     script.fire_event("PLAYER_MONEY", vec![]);
                 } else if let Some(held) = script.trade_open_item() {
@@ -1185,23 +1223,6 @@ fn feed_trade(
             );
             trade.accept_shown = accept;
         }
-
-        // Our gold reaches the money input through `PLAYER_TRADE_MONEY` (`TradeFrame.xml:565`),
-        // never `TRADE_UPDATE`, so a repaint never overwrites what the player is typing.
-        let player_gold = trade.our.gold;
-        if trade.is_open() && player_gold != *last_player_gold {
-            script.fire_event("PLAYER_TRADE_MONEY", vec![]);
-        }
-        *last_player_gold = if trade.is_open() { player_gold } else { 0 };
-        // The partner's gold: `TRADE_MONEY_CHANGED`, which the `TARGET_TRADE` money frame repaints
-        // on (`MoneyFrame.lua:133`). The reference fires it at `0x4bf4d6`, beside
-        // `PLAYER_TRADE_MONEY` at `0x4bf4ab`; which side each reports is inferred from
-        // `MoneyFrame.lua`, not traced.
-        let their_gold = trade.their.gold;
-        if trade.is_open() && their_gold != *last_their_gold {
-            script.fire_event("TRADE_MONEY_CHANGED", vec![]);
-        }
-        *last_their_gold = if trade.is_open() { their_gold } else { 0 };
 
         *last = fresh;
         *last_open = trade.is_open();

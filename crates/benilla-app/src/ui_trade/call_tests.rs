@@ -116,8 +116,9 @@ fn client() -> Trade {
         .run(
             r#"HEARD = ""
             local f = CreateFrame("Frame")
-            for _, e in ipairs({"TRADE_ACCEPT_UPDATE", "PLAYER_TRADE_MONEY", "TRADE_SHOW",
-                    "TRADE_PLAYER_ITEM_CHANGED", "TRADE_REPLACE_ENCHANT"}) do
+            for _, e in ipairs({"TRADE_ACCEPT_UPDATE", "PLAYER_TRADE_MONEY", "PLAYER_MONEY",
+                    "TRADE_MONEY_CHANGED", "TRADE_SHOW", "TRADE_PLAYER_ITEM_CHANGED",
+                    "TRADE_REPLACE_ENCHANT"}) do
                 f:RegisterEvent(e)
             end
             f:SetScript("OnEvent", function()
@@ -570,12 +571,13 @@ fn an_enchant_on_the_partners_bare_item_casts_at_once() {
 }
 
 /// A trade we started by dropping coins (`0x5d3f80`) folds them in as it opens and fires
-/// `PLAYER_TRADE_MONEY` once (`0x4bf630`), then `TRADE_SHOW`; the cache of our money takes the
+/// `PLAYER_TRADE_MONEY` once (`0x4bf630`), `PLAYER_MONEY` (`0x4bf63a`), then `TRADE_SHOW`; the cache of our money takes the
 /// offer (`0x4bf62b`), so no later feed fires it again.
 #[test]
 fn a_drop_started_trade_folds_held_coins_with_one_money_signal() {
     let mut t = client();
     run(&mut t, "PickupPlayerMoney(300)");
+    let _ = heard(&mut t);
     t.app
         .world_mut()
         .resource_mut::<super::TradeSession>()
@@ -583,7 +585,7 @@ fn a_drop_started_trade_folds_held_coins_with_one_money_signal() {
     status(&mut t, TradeStatus::OpenWindow);
     assert_eq!(
         heard(&mut t),
-        "PLAYER_TRADE_MONEY(nil,nil) TRADE_SHOW(nil,nil) "
+        "PLAYER_TRADE_MONEY(nil,nil) PLAYER_MONEY(nil,nil) TRADE_SHOW(nil,nil) "
     );
     assert!(sent(&t)
         .iter()
@@ -616,6 +618,7 @@ fn close_trade_signals_the_money_after_any_close() {
 fn a_click_on_a_player_with_coins_starts_a_trade_that_folds_them() {
     let mut t = client();
     run(&mut t, "PickupPlayerMoney(300)");
+    let _ = heard(&mut t);
     click_on(&mut t, BOB);
     assert!(matches!(
         sent(&t)[..],
@@ -625,7 +628,7 @@ fn a_click_on_a_player_with_coins_starts_a_trade_that_folds_them() {
     status(&mut t, TradeStatus::OpenWindow);
     assert_eq!(
         heard(&mut t),
-        "PLAYER_TRADE_MONEY(nil,nil) TRADE_SHOW(nil,nil) "
+        "PLAYER_TRADE_MONEY(nil,nil) PLAYER_MONEY(nil,nil) TRADE_SHOW(nil,nil) "
     );
     assert!(sent(&t)
         .iter()
@@ -753,4 +756,53 @@ fn an_accept_sends_the_partners_last_flag() {
         sent(&t)[..],
         [ClientCommand::AcceptTrade { flag: 7 }]
     ));
+}
+
+/// The partner's column with `gold` offered and no items.
+fn partner_gold(t: &mut Trade, gold: u32) {
+    crate::net::handlers::dispatch(
+        t.app.world_mut(),
+        vec![SessionEvent::TradeStatusExtended {
+            state: Box::new(benilla_protocol::messages::TradeStatusExtended {
+                their_window: true,
+                sequence: 7,
+                flag: 7,
+                gold,
+                enchant_spell_id: 0,
+                slots: [None; benilla_protocol::messages::TRADE_SLOT_COUNT],
+            }),
+        }],
+    );
+    let feed = t.feed;
+    run_system(t, feed);
+}
+
+/// The money signals come from a status's compare (`0x4bf2b0`), not from our own edit: an offer
+/// we set signals nothing until the next extended status finds it moved against the cache
+/// (`0x4bf494`), then `PLAYER_TRADE_MONEY` and `PLAYER_MONEY`; the partner's moved offer is
+/// `TRADE_MONEY_CHANGED` (`0x4bf4d6`); a status bouncing our coins (`0x4bf9fd` →
+/// `0x4bfbd0(0xff)`) signals ours whatever the cache held.
+#[test]
+fn the_money_signals_follow_a_status_not_our_edit() {
+    let mut t = client();
+    open_with_bob(&mut t);
+    run(&mut t, "SetTradeMoney(500)");
+    let feed = t.feed;
+    run_system(&mut t, feed);
+    assert_eq!(heard(&mut t), "", "our edit signals nothing");
+    partner_gold(&mut t, 0);
+    assert_eq!(
+        heard(&mut t),
+        "PLAYER_TRADE_MONEY(nil,nil) PLAYER_MONEY(nil,nil) "
+    );
+    partner_gold(&mut t, 0);
+    assert_eq!(heard(&mut t), "", "nothing moved");
+    partner_gold(&mut t, 300);
+    assert_eq!(heard(&mut t), "TRADE_MONEY_CHANGED(nil,nil) ");
+    status(&mut t, TradeStatus::OnlyConjured { slot: 0xff });
+    assert_eq!(
+        heard(&mut t),
+        "PLAYER_TRADE_MONEY(nil,nil) PLAYER_MONEY(nil,nil) "
+    );
+    assert_eq!(eval::<i64>(&mut t, "return GetPlayerTradeMoney()"), 0);
 }
