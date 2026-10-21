@@ -390,11 +390,7 @@ impl TextFilter {
                 // One token per byte of the span, as the reference's loop writes; a match is on
                 // char boundaries, so both strings stay valid UTF-8 and aligned.
                 let run: String = (start..end)
-                    .map(|_| {
-                        let index = self.next_mask_index();
-                        let token = MASK_TOKENS[index] as char;
-                        token
-                    })
+                    .map(|_| MASK_TOKENS[self.next_mask_index()] as char)
                     .collect();
                 text.replace_range(start..end, &run);
                 subject.replace_range(start..end, &run);
