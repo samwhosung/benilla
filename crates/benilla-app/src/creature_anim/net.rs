@@ -112,6 +112,7 @@ fn on_text_emote(
     index: Res<GuidIndex>,
     mut out: MessageWriter<EmoteMessage>,
     chat_log: Res<crate::ui_chat::ChatLog>,
+    social: Res<crate::ui_social::SocialState>,
 ) {
     if let SessionEvent::TextEmote {
         guid,
@@ -119,7 +120,16 @@ fn on_text_emote(
         target_name,
     } = ev
     {
-        self::text_emote(guid, text_emote, target_name, &index, &mut out, &chat_log);
+        let ignored = social.is_ignored(guid);
+        self::text_emote(
+            guid,
+            text_emote,
+            target_name,
+            ignored,
+            &index,
+            &mut out,
+            &chat_log,
+        );
     }
 }
 
@@ -336,11 +346,14 @@ fn attacker_state(
 }
 
 /// `SMSG_TEXT_EMOTE`: the animation needs the performer streamed, the chat line only needs their
-/// name, so an off-screen emote still prints (reference: `0x49dbe0`).
+/// name, so an off-screen emote still prints (reference: `0x49dbe0`). An `ignored` performer's
+/// line is dropped at receipt, before anything is composed (`0x49dc36` → `0x49dc3d`); its voice
+/// has a gate of its own (`sound::emote`).
 fn text_emote(
     guid: u64,
     text_emote: u32,
     target_name: String,
+    ignored: bool,
     index: &GuidIndex,
     out: &mut MessageWriter<EmoteMessage>,
     chat_log: &crate::ui_chat::ChatLog,
@@ -350,7 +363,9 @@ fn text_emote(
         source: index.0.get(&guid).copied(),
         kind: EmoteKind::Text(text_emote),
     });
-    chat_log.push_text_emote(guid, text_emote, target_name);
+    if !ignored {
+        chat_log.push_text_emote(guid, text_emote, target_name);
+    }
 }
 
 /// `SMSG_EMOTE`: an `Emotes.dbc` id to play on a unit (NPC scripts, a `/`-emote's animation).
