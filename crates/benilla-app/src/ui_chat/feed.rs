@@ -219,6 +219,17 @@ impl ChatLog {
         std::mem::take(&mut self.q().pending)
     }
 
+    /// Take what was queued since `mark` ([`Self::pushed`]), leaving what was queued before: the
+    /// lines a notice the drain fires shows.
+    fn take_pending_since(&self, mark: u64) -> Vec<Queued> {
+        let mut q = self.q();
+        let (since, before) = std::mem::take(&mut q.pending)
+            .into_iter()
+            .partition(|item| item.seq >= mark);
+        q.pending = before;
+        since
+    }
+
     /// Park `still` again ahead of what was queued while the drain ran: the lines a call its
     /// handlers made appended meanwhile.
     fn park_again(&self, mut still: Vec<Queued>) {
@@ -1050,19 +1061,47 @@ pub(super) fn feed_chat(
     let (Some(script), mut host) = hosted_vm.parts() else {
         return;
     };
-    let pending = log.take_pending();
-    if pending.is_empty() && !notices.as_ref().is_some_and(|n| n.any_waiting()) {
+    // Each item, and whether the notices due before it are still to fire.
+    let mut work: std::collections::VecDeque<(Queued, bool)> =
+        log.take_pending().into_iter().map(|q| (q, true)).collect();
+    if work.is_empty() && !notices.as_ref().is_some_and(|n| n.any_waiting()) {
         return;
     }
     let mut parked = Vec::new();
-    for Queued { seq, item, .. } in pending {
-        // The notices a packet wrote ahead of this item's, or in the same handler call.
-        if let Some(notices) = notices.as_mut() {
-            let call = notices.call_of_chat(seq);
+    // The notices left after every item's, fired once the items are done.
+    let mut rest_fired = notices.is_none();
+    loop {
+        let Some((queued, due)) = work.pop_front() else {
+            let Some(notices) = notices.as_mut().filter(|_| !rest_fired) else {
+                break;
+            };
+            rest_fired = true;
+            let mark = log.pushed();
+            crate::script_calls::lent(script, host.as_deref_mut(), |script| {
+                notices.fire_waiting(script, None);
+            });
+            work.extend(log.take_pending_since(mark).into_iter().map(|q| (q, false)));
+            continue;
+        };
+        // The notices a packet wrote ahead of this item's, or in the same handler call. A chat line
+        // one shows reaches the chat frames as it fires (`0x496720`), so it shows here, ahead of
+        // this item.
+        if let Some(notices) = notices.as_mut().filter(|_| due) {
+            let call = notices.call_of_chat(queued.seq);
+            let mark = log.pushed();
             crate::script_calls::lent(script, host.as_deref_mut(), |script| {
                 notices.fire_waiting(script, Some(call));
             });
+            let shown = log.take_pending_since(mark);
+            if !shown.is_empty() {
+                work.push_front((queued, false));
+                for line in shown.into_iter().rev() {
+                    work.push_front((line, false));
+                }
+                continue;
+            }
         }
+        let Queued { seq, item, .. } = queued;
         let mut still = Vec::new();
         // The token lister runs as `SignalUnitCombat` (`0x494600`) signals: a handler earlier in
         // the queue may have moved the target, its call applied inside the verb.
@@ -1580,11 +1619,6 @@ pub(super) fn feed_chat(
             parked: true,
             item,
         }));
-    }
-    if let Some(notices) = notices.as_mut() {
-        crate::script_calls::lent(script, host, |script| {
-            notices.fire_waiting(script, None);
-        });
     }
     log.park_again(parked);
 }
