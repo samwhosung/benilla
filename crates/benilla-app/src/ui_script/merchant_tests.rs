@@ -1034,6 +1034,8 @@ fn shipped_merchant_frame_arms_the_buy_cursor_on_hover() {
 fn trade_recipient_money_renders_the_digit_not_ellipsis() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    // No host: the trade calls are kept.
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for f in crate::ui_script::test_ui::production_order(&[
         super::test_ui::MERCHANT_UI,
@@ -1090,6 +1092,8 @@ fn trade_recipient_money_renders_the_digit_not_ellipsis() {
 fn a_trade_slot_click_repaints_the_slot_in_place() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    // No host: the trade calls are kept.
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for f in crate::ui_script::test_ui::production_order(&[
         super::test_ui::MERCHANT_UI,

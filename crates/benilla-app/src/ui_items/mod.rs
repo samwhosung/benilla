@@ -14,7 +14,7 @@ use benilla_ui::script::EQUIPMENT_BAG;
 use bevy::prelude::*;
 
 use crate::items::Items;
-use crate::net::{ObjectStore, Objects};
+use crate::net::Objects;
 use crate::query_cache::Ask;
 use crate::ui_unit::UnitFeed;
 
@@ -173,30 +173,6 @@ pub(crate) fn slot_guid(
         }
         EQUIPMENT_BAG => store.player_inv_slot(slot0).filter(|g| *g != 0),
         _ => None,
-    }
-}
-
-/// `(item guid, stack count)` at a Lua-space `(bag, 1-based slot)`, `(0, 0)` when empty:
-/// the trade window's offered-item view reads both.
-pub(crate) fn slot_guid_count(
-    store: Option<&ObjectStore>,
-    bag: i64,
-    slot1: u32,
-    objects: &Objects,
-) -> (u64, u32) {
-    let Some(store) = store else {
-        return (0, 0);
-    };
-    let slot0 = slot1.saturating_sub(1) as u8;
-    match slot_guid(&store.0, bag, slot0, objects) {
-        Some(guid) => {
-            let count = objects
-                .object(guid)
-                .and_then(|f| f.item_stack_count())
-                .unwrap_or(1);
-            (guid, count)
-        }
-        None => (0, 0),
     }
 }
 

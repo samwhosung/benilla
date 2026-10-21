@@ -987,8 +987,7 @@ pub(crate) struct Model {
     /// The sell slot's item, resolved to its guid when `StartAuction` fires.
     pub(crate) auction_sell_item: Option<cursor::CursorItem>,
 
-    /// The last trade's two offers and its calls: `InitiateTrade` tokens, the accept, unaccept and
-    /// cancel flags, and `SetTradeMoney` copper (`CMSG_SET_TRADE_GOLD`). The offers are the
+    /// The last trade's two offers. The offers are the
     /// getters' tables (`0xb714f4` and its siblings, `0xb716d0`), which a close leaves alone and
     /// the next open clears (`0x4bf549`-`0x4bf5ef`).
     pub(crate) trade: Option<trade::TradeState>,
@@ -998,17 +997,12 @@ pub(crate) struct Model {
     /// The entries the item getters found filled and unnamed (`0x4c017f`, `0x4c0582`), for the
     /// host to ask the item cache for with the callback that signals `TRADE_UPDATE`.
     pub(crate) trade_record_asks: Vec<u32>,
-    pub(crate) trade_initiates: Vec<String>,
-    pub(crate) trade_accept: bool,
-    pub(crate) trade_unaccept: bool,
+    /// `CloseTrade` was called: the interaction latch runs the close core.
     pub(crate) trade_close: bool,
-    /// `BeginTrade()` and `CancelTrade()` calls.
-    pub(crate) trade_begin: bool,
-    pub(crate) trade_cancel: bool,
-    pub(crate) trade_set_money: Vec<u32>,
-    /// Items dropped on our slots, `(1-based trade slot, bag, slot)`, and the slots clicks cleared.
-    pub(crate) trade_set_items: Vec<(u32, i64, u32)>,
-    pub(crate) trade_clear_items: Vec<u32>,
+    /// The close core's done flag `[0xb71748]`, which `CloseTrade` tests (`0x4bfdc0`).
+    pub(crate) trade_done: bool,
+    /// The host refused the set send the applying `0x4bfa70` made ([`super::TradeCall::SetItem`]).
+    pub(crate) trade_send_refused: bool,
     /// The item each of our trade slots holds, as the client's own table records it at the click
     /// (`[0xb716d0]`, written by `0x4bfa70`): the item a later click puts back on the cursor, and
     /// one the client keeps locked until the trade closes (`0x4bfcf0` unlocks them and leaves the
@@ -1788,15 +1782,9 @@ impl Model {
             trade: None,
             trade_window: false,
             trade_record_asks: Vec::new(),
-            trade_initiates: Vec::new(),
-            trade_accept: false,
-            trade_unaccept: false,
             trade_close: false,
-            trade_begin: false,
-            trade_cancel: false,
-            trade_set_money: Vec::new(),
-            trade_set_items: Vec::new(),
-            trade_clear_items: Vec::new(),
+            trade_done: false,
+            trade_send_refused: false,
             trade_offered: Default::default(),
             quest: None,
             quest_pool_levels: Default::default(),

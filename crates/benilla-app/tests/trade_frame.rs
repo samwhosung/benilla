@@ -4,7 +4,9 @@
 
 mod common;
 
-use benilla_ui::script::{ScriptValue, TradeSideState, TradeSlotItem, TradeState, UiScript};
+use benilla_ui::script::{
+    ScriptValue, TradeCall, TradeSideState, TradeSlotItem, TradeState, UiScript,
+};
 
 /// The trade window's load prefix, in the production order.
 const FILES: &[&str] = &[
@@ -72,7 +74,9 @@ fn state() -> TradeState {
 #[test]
 fn trade_frame_loads_and_key_regions_exist() {
     let _data = benilla_formats::wow_data_or_skip!();
-    let s = UiScript::new().unwrap();
+    let mut s = UiScript::new().unwrap();
+    s.keep_calls();
+    s.keep_calls();
     load_ui(&s);
     for name in [
         "TradeFrame",
@@ -102,6 +106,7 @@ fn trade_frame_loads_and_key_regions_exist() {
 fn trade_show_opens_and_both_columns_populate() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     load_ui(&s);
     s.set_trade(Some(state()));
     // The stock header reads `UnitName("NPC")` (`TradeFrame.lua:43`); the app points the "npc"
@@ -177,6 +182,7 @@ fn trade_show_opens_and_both_columns_populate() {
 fn enchant_slot_shows_the_not_traded_note() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     load_ui(&s);
     let mut st = state();
     // Our enchant slot: index 6, slot 7.
@@ -196,6 +202,7 @@ fn enchant_slot_shows_the_not_traded_note() {
 fn accept_update_drives_the_column_glows() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     load_ui(&s);
     s.set_trade(Some(state()));
     s.fire_event("TRADE_SHOW", vec![]);
@@ -237,6 +244,7 @@ fn accept_update_drives_the_column_glows() {
 fn closing_the_window_queues_the_cancel() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     load_ui(&s);
     s.set_trade(Some(state()));
     s.fire_event("TRADE_SHOW", vec![]);
@@ -259,13 +267,18 @@ fn closing_the_window_queues_the_cancel() {
 fn trade_button_click_queues_accept() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     load_ui(&s);
     s.set_trade(Some(state()));
     s.fire_event("TRADE_SHOW", vec![]);
-    let _ = s.take_trade_accept();
+    let _ = s.take_trade_calls();
 
     s.run("TradeFrameTradeButton:Click()").unwrap();
-    assert!(s.take_trade_accept(), "the Trade button queues AcceptTrade");
+    assert_eq!(
+        s.take_trade_calls(),
+        [TradeCall::Accept(true)],
+        "the Trade button calls AcceptTrade"
+    );
     assert!(s.take_errors().is_empty());
 }
 
@@ -277,6 +290,7 @@ fn trade_button_click_queues_accept() {
 fn player_money_input_reflects_then_offers() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_money(1_000_000); // SetTradeMoney is purse-gated
     load_ui(&s);
     s.open_trade_window(); // our money getter tests the partner cell (`0x4c0706`)
@@ -294,8 +308,11 @@ fn player_money_input_reflects_then_offers() {
         );
     }
 
+    // The money input's reset as the window shows offers 0 (`SetTradeMoney`, stored at
+    // `0x5d471e`); the app's next push carries the session's offer.
+    s.set_trade(Some(state()));
     // The programmatic fill must not re-offer.
-    let _ = s.take_trade_money();
+    let _ = s.take_trade_calls();
     s.fire_event("PLAYER_TRADE_MONEY", vec![]);
     assert_eq!(
         s.eval::<(String, String, String)>(
@@ -308,8 +325,8 @@ fn player_money_input_reflects_then_offers() {
         "the event fills 1g 23s 45c into the boxes"
     );
     assert_eq!(
-        s.take_trade_money(),
-        Vec::<u32>::new(),
+        s.take_trade_calls(),
+        [],
         "the guarded reflect does not re-offer"
     );
 
@@ -319,8 +336,8 @@ fn player_money_input_reflects_then_offers() {
         .unwrap();
     s.tick(0.0); // the deferred OnTextChanged drains here
     assert_eq!(
-        s.take_trade_money(),
-        [2 * 10000 + 23 * 100 + 45],
+        s.take_trade_calls(),
+        [TradeCall::Gold(2 * 10000 + 23 * 100 + 45)],
         "typing offers the copper total via SetTradeMoney"
     );
     assert!(s.take_errors().is_empty());
@@ -333,6 +350,7 @@ fn player_money_input_reflects_then_offers() {
 fn slot_click_routes_player_to_clear_and_recipient_to_inert() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     load_ui(&s);
     s.set_trade(Some(state())); // both slot 1s are filled
     s.fire_event("TRADE_SHOW", vec![]);
@@ -346,23 +364,32 @@ fn slot_click_routes_player_to_clear_and_recipient_to_inert() {
         },
     );
     s.set_container(0, Some(bag));
+    // The window's money input offers its reset as it shows.
+    let _ = s.take_trade_calls();
     s.run("PickupContainerItem(0, 1) TradePlayerItem1ItemButton:Click()")
         .unwrap();
-    assert_eq!(s.take_trade_set_items(), vec![(1, 0, 1)]);
-    let _ = s.take_trade_clear_items();
+    assert!(matches!(
+        s.take_trade_calls()[..],
+        [TradeCall::SetItem {
+            slot: 0,
+            bag: 0,
+            bag_slot: 1,
+            ..
+        }]
+    ));
 
     s.run("TradePlayerItem1ItemButton:Click()").unwrap();
     assert_eq!(s.cursor_item().map(|i| i.slot), Some(1), "the item is back");
     s.run("ClearCursor()").unwrap();
     assert_eq!(
-        s.take_trade_clear_items(),
-        vec![1],
+        s.take_trade_calls(),
+        [TradeCall::ClearItem(0)],
         "clicking our filled slot clears it (ClickTradeButton)"
     );
 
     s.run("TradeRecipientItem1ItemButton:Click()").unwrap();
     assert!(
-        s.take_trade_clear_items().is_empty() && s.take_trade_set_items().is_empty(),
+        s.take_trade_calls().is_empty(),
         "the partner slot is inert (ClickTargetTradeButton)"
     );
     assert!(s.take_errors().is_empty());

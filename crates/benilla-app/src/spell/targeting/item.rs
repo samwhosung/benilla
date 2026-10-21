@@ -191,6 +191,85 @@ pub(crate) fn confirm_enchant(
     }
 }
 
+/// `ClickTargetTradeButton(7)`'s clash check `0x496170` (`check`), then the trade slot's bind
+/// `0x6e6900`, which `ReplaceTradeEnchant` (`0x48d330`) runs alone. Both return at once while the
+/// partner's slot 7 is empty (`[0xb7150c]`, `0x496175`, `0x6e6911`); `partner_enchant` is the
+/// permanent enchant its record carries (`0xb715d8`).
+///
+/// The check reads the in-flight spell (`0x6e3d10`), which must have a `Spell.dbc` row
+/// (`0x496185`-`0x4961a4`), and walks its three effects: the first `SPELL_EFFECT_ENCHANT_ITEM`
+/// (53, `0x4961c0`) for which both the slot's enchant and the effect's `EffectMiscValue` name a
+/// `SpellItemEnchantment` row signals `TRADE_REPLACE_ENCHANT` with the two names and binds
+/// nothing (`0x496216`-`0x496230`); with none it tail-jumps to the bind (`0x496211`). The popup's
+/// Yes is `ReplaceTradeEnchant`.
+pub(crate) fn trade_enchant(
+    ladder: &mut crate::spell::CastLadder,
+    enchants: Option<&crate::items::Enchants>,
+    script: &mut benilla_ui::script::UiScript,
+    partner_enchant: Option<u32>,
+    check: bool,
+) {
+    let Some(existing) = partner_enchant else {
+        return;
+    };
+    if check {
+        let Some(spell_id) = ladder.core().slot().map(|s| s.spell_id()) else {
+            return;
+        };
+        let Some(def) = ladder
+            .spells
+            .as_deref()
+            .and_then(|s| s.catalog.get(spell_id))
+        else {
+            return;
+        };
+        // A row for an id, as `0x4961cd`-`0x4961fb` index the table: a negative id has none.
+        let row = |id: i32| {
+            u32::try_from(id)
+                .ok()
+                .filter(|&id| id != 0 && enchants.is_some_and(|c| c.0.has_row(id)))
+        };
+        let name = |id: u32| {
+            enchants
+                .and_then(|c| c.0.name(id))
+                .unwrap_or_default()
+                .to_string()
+        };
+        let clash = (0..3).find_map(|i| {
+            (def.effects[i] == benilla_formats::SPELL_EFFECT_ENCHANT_ITEM)
+                .then(|| row(existing as i32).zip(row(def.effect_misc_value[i])))
+                .flatten()
+        });
+        if let Some((old, new)) = clash {
+            debug!("ui_trade: trade slot enchant clash {old} -> {new}");
+            script.signal_trade_replace_enchant(name(old), name(new));
+            return;
+        }
+    }
+    bind_trade_slot(ladder);
+}
+
+/// `0x6e6900`: a standing word that wants an item (`0x4010`, `0x6e6900`) binds the partner's slot
+/// 7, item guid `{6, 0}` with mask bit `0x1000` (`0x6e6915`-`0x6e692f`), and sends the cast
+/// (`0x6e694f`); the spell the send left in flight is then dropped with no packet and no failure
+/// (`CancelCast(0, 0, 0x17)`, `0x6e695a`), since the server holds the cast until the trade is
+/// accepted (vmangos `TradeHandler.cpp:347-365`).
+fn bind_trade_slot(ladder: &mut crate::spell::CastLadder) {
+    let Some((spell_id, commit)) = ladder.ground.pending_for(TargetingWants::Item) else {
+        return;
+    };
+    debug!("ui_trade: cast {spell_id} at the partner's trade slot 7");
+    ladder.commit_targeted(
+        spell_id,
+        commit,
+        crate::spell::cast_send::TargetedBind::TradeItem(ENCHANT_TRADE_SLOT),
+    );
+    ladder.core().cancel(false, false, 0x17);
+}
+
+/// The partner's non-traded slot as the trade bind names it, 0-based (`0x6e6925`).
+const ENCHANT_TRADE_SLOT: u8 = 6;
+
 /// `0x495d60` on `item_guid`: run [`item_bind_verdict`] and on a pass bind the item for `SendCast
 /// 0x6e54f0` (`CMSG_CAST_SPELL` for an enchant, `CMSG_USE_ITEM` for a poison bottle). A confirm
 /// parks the guid and keeps the mode; a refusal ends it. The bind is `BindSpellTargetObject

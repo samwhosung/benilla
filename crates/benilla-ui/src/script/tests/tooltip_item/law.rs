@@ -848,6 +848,7 @@ fn a_wrapped_gift_in_trade_names_its_giver_on_both_sides() {
     st.target.slots[0] = Some(row(true, Some("Santa")));
     st.target.slots[1] = Some(row(false, Some("Santa")));
     st.target.slots[2] = Some(row(true, None));
+    s.keep_calls();
     s.open_trade_window();
     s.set_trade(Some(st));
     s.run("PickupContainerItem(0, 1) ClickTradeButton(1) PickupContainerItem(0, 2) ClickTradeButton(2)")

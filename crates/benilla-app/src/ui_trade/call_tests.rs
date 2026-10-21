@@ -529,6 +529,34 @@ fn an_enchant_on_the_partners_bare_item_casts_at_once() {
     assert_eq!(trade_casts(&mut t), (vec![(ENCHANT_SPELL, 6)], false));
 }
 
+/// A trade we started by dropping coins (`0x5d3f80`) folds them in as it opens and fires
+/// `PLAYER_TRADE_MONEY` once (`0x4bf630`), then `TRADE_SHOW`; the cache of our money takes the
+/// offer (`0x4bf62b`), so no later feed fires it again.
+#[test]
+fn a_drop_started_trade_folds_held_coins_with_one_money_signal() {
+    let mut t = client();
+    run(&mut t, "PickupPlayerMoney(300)");
+    t.app
+        .world_mut()
+        .resource_mut::<super::TradeSession>()
+        .initiate(BOB, true);
+    status(&mut t, TradeStatus::OpenWindow);
+    assert_eq!(
+        heard(&mut t),
+        "PLAYER_TRADE_MONEY(nil,nil) TRADE_SHOW(nil,nil) "
+    );
+    assert!(sent(&t)
+        .iter()
+        .any(|c| matches!(c, ClientCommand::SetTradeGold { copper: 300 })));
+    assert_eq!(
+        eval::<(i64, i64)>(&mut t, "return GetCursorMoney(), GetPlayerTradeMoney()"),
+        (0, 300)
+    );
+    let feed = t.feed;
+    run_system(&mut t, feed);
+    assert_eq!(heard(&mut t), "", "the feed's money diff saw the fold");
+}
+
 /// `CloseTrade` (`0x4bfdc0`) signals `PLAYER_TRADE_MONEY` while the done flag is 0, which every
 /// close leaves while the partner holds the latch: the release's inner run stores 0 over the
 /// `COMPLETE` arm's 1 (`0x4bf4fd`, `0x493363`).

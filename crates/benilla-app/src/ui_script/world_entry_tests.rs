@@ -544,6 +544,8 @@ fn item_locks_cross_a_reload_as_its_sweep_leaves_them() {
         s.run("PickupContainerItem(0, 2) ClickAuctionSellItemButton()")
             .unwrap();
         s.set_trade(Some(Default::default()));
+        // No host is lent here: the placement's call is kept, the VM's slot written.
+        s.keep_calls();
         s.run("PickupContainerItem(0, 3) ClickTradeButton(1)")
             .unwrap();
         s.run("PickupContainerItem(0, 4)").unwrap();

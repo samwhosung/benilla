@@ -231,7 +231,7 @@ pub(crate) enum Inflight {
     /// The spell awaiting its click, which the attempt pushed (`0x6e5026`) before the arm raised
     /// the cursor (`0x6e5250`). A bind sends with it still in the slot, where it stays until its
     /// result, but the trade slot's bind, which pops it right after its send (`0x6e695a`,
-    /// `CancelCast(0, 0, 0x17)`; not built, #88). A cursor whose item lacks the flag holds no
+    /// `CancelCast(0, 0, 0x17)`). A cursor whose item lacks the flag holds no
     /// slot, and the word stands alone ([`SpellTargeting`]).
     Targeting(u32),
 }

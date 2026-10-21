@@ -155,6 +155,8 @@ pub enum ScriptCall {
     /// A mail verb past its binding's guards: its packet, and for `GetInboxText` the read mark
     /// and the body's ask ([`super::MailCall`]).
     Mail(super::MailCall),
+    /// A trade verb ([`super::TradeCall`]): its packet, its state and its signal inside the call.
+    Trade(super::TradeCall),
 }
 
 /// The mode the four `TargetNearest*` shims hand the TAB cycler `0x493f60`, the only byte that

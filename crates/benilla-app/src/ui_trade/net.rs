@@ -29,7 +29,7 @@ fn on_trade_status(
         if let Some(window) = trade_status(status, &mut trade, &errors, &commands) {
             world_commands.queue(move |world: &mut World| match window {
                 Window::Open => super::open_window(world),
-                Window::Close { canceled } => super::server_close(world, canceled),
+                Window::Close { canceled, done } => super::server_close(world, canceled, done),
             });
         }
     }
@@ -41,8 +41,9 @@ fn on_trade_status(
 pub(super) enum Window {
     /// `OPEN_WINDOW` (`0x4bf7f8` → `0x4bf4e0(partner)`).
     Open,
-    /// `CANCELED`, `COMPLETE` or `CLOSE_WINDOW`; only `CANCELED` signals `TRADE_REQUEST_CANCEL`.
-    Close { canceled: bool },
+    /// `CANCELED`, `COMPLETE` or `CLOSE_WINDOW`; only `CANCELED` signals `TRADE_REQUEST_CANCEL`,
+    /// and only `COMPLETE` closes with `done` 1 (`0x4bf862`).
+    Close { canceled: bool, done: bool },
 }
 
 fn on_trade_status_extended(In(ev): In<SessionEvent>, mut trade: ResMut<TradeSession>) {
@@ -119,11 +120,24 @@ fn trade_status(
         // trade is gone (`Player.cpp:11739`). The tail's clear runs here, the core's reset later.
         TradeStatus::Canceled => {
             trade.clear_pending();
-            return Some(Window::Close { canceled: true });
+            return Some(Window::Close {
+                canceled: true,
+                done: false,
+            });
         }
-        TradeStatus::Complete | TradeStatus::CloseWindow { .. } => {
+        TradeStatus::Complete => {
             trade.clear_pending();
-            return Some(Window::Close { canceled: false });
+            return Some(Window::Close {
+                canceled: false,
+                done: true,
+            });
+        }
+        TradeStatus::CloseWindow { .. } => {
+            trade.clear_pending();
+            return Some(Window::Close {
+                canceled: false,
+                done: false,
+            });
         }
         // The placement is bounced, not the window (case 22, `0x4bf9ec` → `0x4bfbd0`).
         TradeStatus::OnlyConjured { slot } => trade.bounce_own_offer(slot),
@@ -269,7 +283,7 @@ mod tests {
     /// A window up and both sides accepted, so a wrong close, accept reset or cell clear shows.
     fn open_trade() -> TradeSession {
         let mut trade = TradeSession::default();
-        trade.initiate(0x7);
+        trade.initiate(0x7, false);
         trade.open_window();
         trade.accept();
         trade.partner_accepted();
@@ -360,9 +374,27 @@ mod tests {
             windows,
             vec![
                 (2, Window::Open),
-                (3, Window::Close { canceled: true }),
-                (8, Window::Close { canceled: false }),
-                (12, Window::Close { canceled: false }),
+                (
+                    3,
+                    Window::Close {
+                        canceled: true,
+                        done: false,
+                    },
+                ),
+                (
+                    8,
+                    Window::Close {
+                        canceled: false,
+                        done: true,
+                    },
+                ),
+                (
+                    12,
+                    Window::Close {
+                        canceled: false,
+                        done: false,
+                    },
+                ),
             ]
         );
     }
@@ -456,7 +488,7 @@ mod tests {
             // We asked: the line is owed, naming our target.
             let (errors, commands, _rx) = sink();
             let mut trade = TradeSession::default();
-            trade.initiate(0x7);
+            trade.initiate(0x7, false);
             trade.take_named_lines_for_test();
             trade_status(status, &mut trade, &errors, &commands);
             assert_eq!(
@@ -490,7 +522,7 @@ mod tests {
     fn the_plain_refusals_are_raised_immediately() {
         let (errors, commands, _rx) = sink();
         let mut trade = TradeSession::default();
-        trade.initiate(0x7);
+        trade.initiate(0x7, false);
         trade.take_named_lines_for_test();
         trade_status(TradeStatus::TargetDead, &mut trade, &errors, &commands);
         assert_eq!(

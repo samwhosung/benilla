@@ -657,6 +657,23 @@ impl ScriptCursor<'_, '_> {
         )
     }
 
+    /// `ClickTargetTradeButton(7)` (`check`) or `ReplaceTradeEnchant()` on the partner's slot 7
+    /// ([`item::trade_enchant`]).
+    pub(crate) fn trade_enchant(
+        &mut self,
+        script: &mut benilla_ui::script::UiScript,
+        partner_enchant: Option<u32>,
+        check: bool,
+    ) {
+        item::trade_enchant(
+            &mut self.ladder,
+            self.enchants.as_deref(),
+            script,
+            partner_enchant,
+            check,
+        );
+    }
+
     /// `BindEnchant()` or `ReplaceEnchant()` ([`item::confirm_enchant`]); the popup a bind's
     /// rerun raised, if any.
     pub(crate) fn confirm_enchant(

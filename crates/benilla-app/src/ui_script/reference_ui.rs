@@ -1352,14 +1352,7 @@ mod tests {
 
         // Open gaps, each with the window and the click that reach it. The assertion below
         // refuses an entry whose gap has closed.
-        const KNOWN: &[(&str, &str, &str)] = &[
-            (
-                "StaticPopup.xml",
-                "ReplaceTradeEnchant",
-                "a registered 1.12 binding (`0x48d330`) whose body is not yet known; it is built \
-                 once it is. Reached by TRADE_REPLACE_ENCHANT's Accept, an event this engine does not fire yet.",
-            ),
-        ];
+        const KNOWN: &[(&str, &str, &str)] = &[];
 
         let mut missing: Vec<(String, String)> = Vec::new();
         for entry in &gated_chain_entries() {
@@ -1943,11 +1936,6 @@ mod tests {
                  `0x11d`), so StaticPopupDialogs[\"TRADE\"] is \
                  dead code THERE too, and benilla leaves it unproduced: \
                  producing this would be a divergence, not a fix",
-            ),
-            (
-                "TRADE_REPLACE_ENCHANT",
-                "UIParent.lua — the enchant-replacement confirm inside a trade; benilla's trade \
-                 feed does not derive it",
             ),
             (
                 "CLOSE_WORLD_MAP",

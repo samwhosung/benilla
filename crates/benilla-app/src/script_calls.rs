@@ -82,6 +82,7 @@ pub(crate) struct ScriptCallHost<'w, 's> {
                     crate::ui_auction::AuctionVerbs<'w, 's>,
                     crate::ui_social::SocialSteps<'w>,
                     crate::ui_party::PartyCalls<'w, 's>,
+                    crate::ui_trade::TradeSteps<'w, 's>,
                 ),
             >,
             // The bags', the loot window's and the mailbox's.
@@ -196,6 +197,16 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Social(call) => appliers.p4().p4().apply(script, call),
             ScriptCall::Party(request) => appliers.p4().p5().apply(script, request),
             ScriptCall::Mail(call) => appliers.p5().p2().apply(script, call),
+            // The partner's slot 7 is the trade's, the bind the targeting cursor's.
+            ScriptCall::Trade(
+                call @ (benilla_ui::script::TradeCall::TargetEnchant
+                | benilla_ui::script::TradeCall::ReplaceEnchant),
+            ) => {
+                let partner = appliers.p4().p6().partner_enchant_slot();
+                let check = call == benilla_ui::script::TradeCall::TargetEnchant;
+                appliers.p1().trade_enchant(script, partner, check);
+            }
+            ScriptCall::Trade(call) => appliers.p4().p6().apply(script, call),
         }
         // A selection this call made with the targeting cursor up was handed to the cast
         // (`SelectTarget`, `0x4935d5`) and is bound now, before the next call reads either.

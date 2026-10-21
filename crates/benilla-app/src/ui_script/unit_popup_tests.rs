@@ -277,6 +277,12 @@ fn solo_target_right_click_invites_a_player() {
 fn solo_target_trade_click_queues_an_initiate() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
+    s.set_unit_guids(&benilla_ui::script::UnitGuids {
+        player: 1,
+        target: 2,
+        ..Default::default()
+    });
     s.set_screen_size(1024.0, 768.0);
     bake_strings(&s);
     load_popup_frames(&s);
@@ -331,9 +337,9 @@ fn solo_target_trade_click_queues_an_initiate() {
     s.mouse_button(tx as f32, ty as f32, "LeftButton", true);
     s.mouse_button(tx as f32, ty as f32, "LeftButton", false);
     assert_eq!(
-        s.take_trade_initiates(),
-        vec!["target".to_string()],
-        "clicking Trade queues an initiate against the target token"
+        s.take_trade_calls(),
+        [benilla_ui::script::TradeCall::Initiate(2)],
+        "clicking Trade initiates with the guid the target token names"
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }

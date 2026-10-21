@@ -1551,6 +1551,7 @@ mod tests {
     #[test]
     fn the_entry_unlock_skips_a_trade_offer_only_while_the_window_is_open() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.open_trade_window();
         s.set_trade(Some(Default::default()));
         s.set_container(0, Some(super::two_item_bag()));

@@ -435,6 +435,7 @@ mod tests {
     #[test]
     fn an_item_in_the_trade_window_is_refused_before_the_set() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.open_trade_window();
         s.set_container(0, Some(bag(&[(1, 0x11, 4), (2, 0x12, 4)])));
         // Offer the second item, then hold the first.

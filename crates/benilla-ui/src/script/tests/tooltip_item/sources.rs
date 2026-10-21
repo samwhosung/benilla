@@ -24,6 +24,8 @@ fn texts_after(s: &mut UiScript, call: &str) -> Vec<String> {
 /// Opens a trade showing `state` and offers each `(bag slot, trade slot)` of the backpack by a
 /// click, which records the item's guid in our slot (`0x4bfa70`, the table at `0xb716d0`).
 fn offer(s: &mut UiScript, state: TradeState, slots: &[(u32, u32)]) {
+    // No host: the placements' calls are kept, and the VM writes our slots as a sent one would.
+    s.keep_calls();
     s.open_trade_window();
     s.set_trade(Some(state));
     for (bag_slot, trade_slot) in slots {
