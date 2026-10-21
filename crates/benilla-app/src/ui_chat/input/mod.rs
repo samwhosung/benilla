@@ -8,6 +8,8 @@
 use crate::query_cache::Ask;
 use bevy::prelude::*;
 
+/// The channel verbs' slot writes and packets.
+mod channel;
 mod parse;
 /// `SendChatMessage` and `RandomRoll`, applied inside their calls.
 mod send;
@@ -146,23 +148,6 @@ fn engine_verbs(
         out.push((String::new(), ParsedChat::Channel(cmd)));
     }
     out
-}
-
-/// A manual join or leave of `GuildRecruitment` turns its auto-join option off: `0x49ed3d` (join)
-/// and `0x49ef8f` (leave) call `0x49ea70(0)` when the `ChatChannels.dbc` row has `flags & 0x20000`
-/// and the caller passes its flag, which the Lua bindings do and the cascade's own calls do not.
-fn manual_join_or_leave(
-    channels: &super::edit::ChannelState,
-    script: &mut benilla_ui::script::UiScript,
-    wire_name: &str,
-) {
-    let guild_row = channels
-        .channels
-        .row_for_name(wire_name)
-        .is_some_and(|r| r.is_guild_recruitment());
-    if guild_row && script.reset_guild_recruitment_mode() {
-        info!("chat: manual {wire_name:?} — auto-join guild recruitment channel switched off");
-    }
 }
 
 #[allow(clippy::type_complexity)] // a Bevy system's full input set
@@ -896,73 +881,14 @@ pub(super) fn drain_chat_input(
                 }
                 // The reference's handler body, run in the VM.
                 ParsedChat::Lua { body } => return Some(LineLua::Body(body)),
-                ParsedChat::Channel(cmd) => {
-                    use benilla_ui::script::ChannelCommand as C;
-                    let cmd = match cmd {
-                        C::Join { name, password } => {
-                            manual_join_or_leave(&channels, script, &name);
-                            ClientCommand::JoinChannel { name, password }
-                        }
-                        C::Leave { name } => {
-                            // `LeaveChannelByName` (`0x4a0000` → `0x49ee70`): a number names a
-                            // confirmed slot or the call does nothing. Only this path clears the
-                            // zone mask and the custom re-join list.
-                            let Some(name) = channels.leave_target(&name) else {
-                                continue;
-                            };
-                            manual_join_or_leave(&channels, script, &name);
-                            channels.note_zone_channel_left(&name);
-                            channels.note_custom_channel_left(&name);
-                            ClientCommand::LeaveChannel { name }
-                        }
-                        C::List { name } => ClientCommand::ChannelList { name },
-                        // `ListChannels()`: the joined roster, numbered as `/N` addresses it.
-                        C::ListAll => {
-                            let roster: Vec<String> = channels
-                                .joined
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(i, c)| {
-                                    c.as_ref().map(|c| format!("{}. {}", i + 1, c.name))
-                                })
-                                .collect();
-                            let text = if roster.is_empty() {
-                                "You are not in any channels.".to_string()
-                            } else {
-                                format!("Channels: {}", roster.join(", "))
-                            };
-                            chat_log.push_event(super::event::ChatEvent::text_only(
-                                super::event::ChatEventKind::System,
-                                text,
-                            ));
-                            continue;
-                        }
-                        C::DisplayOwner { name } => ClientCommand::ChannelOwner { name },
-                        C::SetOwner { name, player } => {
-                            ClientCommand::ChannelSetOwner { name, player }
-                        }
-                        C::SetPassword { name, password } => {
-                            ClientCommand::ChannelPassword { name, password }
-                        }
-                        C::Ban { name, player } => ClientCommand::ChannelBan { name, player },
-                        C::Invite { name, player } => ClientCommand::ChannelInvite { name, player },
-                        C::Kick { name, player } => ClientCommand::ChannelKick { name, player },
-                        C::Moderator { name, player } => {
-                            ClientCommand::ChannelModerator { name, player }
-                        }
-                        C::Unmoderator { name, player } => {
-                            ClientCommand::ChannelUnmoderator { name, player }
-                        }
-                        C::Mute { name, player } => ClientCommand::ChannelMute { name, player },
-                        C::Unmute { name, player } => ClientCommand::ChannelUnmute { name, player },
-                        C::Unban { name, player } => ClientCommand::ChannelUnban { name, player },
-                        C::Moderate { name } => ClientCommand::ChannelModerate { name },
-                        C::ToggleAnnouncements { name } => {
-                            ClientCommand::ChannelAnnouncements { name }
-                        }
-                    };
-                    let _ = commands.0.send(cmd);
-                }
+                ParsedChat::Channel(cmd) => channel::apply(
+                    cmd,
+                    &mut channels,
+                    script,
+                    &commands,
+                    &chat_log,
+                    &chat_out.ui_errors,
+                ),
                 ParsedChat::Unknown => {
                     // `SlashCmdList` gets the line before the help reply: an addon's command, or a
                     // stock one with no arm here.

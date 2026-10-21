@@ -69,6 +69,7 @@ fn end_channel_session(
     walk.clear_session();
     cascade.clear_session();
     channels.joined.clear();
+    channels.deferred_joins.clear();
     if let Some(script) = script {
         script.set_joined_channels(Vec::new());
     }
@@ -185,9 +186,10 @@ pub(crate) fn wanted_channels(
     catalog: &ChatChannelsCatalog,
     zone_mask: u32,
     zone_name: &str,
-    in_city: bool,
+    area_flags: u32,
     city_word: Option<&str>,
 ) -> Vec<String> {
+    let in_city = area_flags & AREA_FLAG_TRADE_CHANNEL != 0;
     catalog
         .rows()
         .iter()
@@ -195,6 +197,11 @@ pub(crate) fn wanted_channels(
         .filter(|r| in_city || !r.is_city_only())
         .filter_map(|r| compose(r, zone_name, city_word))
         .collect()
+}
+
+/// A slot the scaffold still treats as joined: confirmed or pending.
+fn live(state: SlotState) -> bool {
+    matches!(state, SlotState::Confirmed | SlotState::Pending)
 }
 
 /// One step of a walk, in wire order.
@@ -206,8 +213,9 @@ pub(crate) enum WalkStep {
     Join(String),
     /// `0x49bc50`: renamed in place at send time ([`ChannelState::rename_slot`]).
     Rename { old: String, new: String },
-    /// `0x49b980`: a slot claimed for an untracked row, before the city gate.
-    Register(String),
+    /// `0x49b980`: a slot claimed for an untracked row, before the city gate, with the row's
+    /// ChannelID (`0x49a505`-`0x49a50d`).
+    Register { name: String, id: u32 },
     /// `0x49bcf0`: state 3, the row stopped applying; the record and its number survive.
     Suspend(String),
     /// The state-3 bypass with the name unchanged: `0x49bc50` writes `(old == 3) ? 1 : 2`, so the
@@ -226,10 +234,11 @@ pub(crate) enum WalkStep {
 pub(crate) fn plan_walk(
     channels: &ChannelState,
     zone_name: &str,
-    in_city: bool,
+    area_flags: u32,
     city_word: Option<&str>,
 ) -> Vec<WalkStep> {
     use WalkStep as W;
+    let in_city = area_flags & AREA_FLAG_TRADE_CHANNEL != 0;
     let catalog = &channels.channels;
     let eligible = |row: &benilla_formats::ChatChannelRow| in_city || !row.is_city_only();
     let mut steps = Vec::new();
@@ -250,14 +259,14 @@ pub(crate) fn plan_walk(
                         steps.push(W::Join(old.to_string()));
                     }
                 } else if !eligible(row) {
-                    if slot.state == SlotState::Joined {
+                    if live(slot.state) {
                         steps.push(W::Leave(old.to_string()));
                     }
                     steps.push(W::Suspend(old.to_string()));
                 }
             }
             Some(new) => {
-                if slot.state == SlotState::Joined {
+                if live(slot.state) {
                     steps.push(W::Leave(old.to_string()));
                 }
                 if eligible(row) {
@@ -271,7 +280,7 @@ pub(crate) fn plan_walk(
                 }
             }
             None => {
-                if slot.state == SlotState::Joined {
+                if live(slot.state) {
                     steps.push(W::Leave(old.to_string()));
                 }
                 if slot.state != SlotState::Suspended {
@@ -289,7 +298,10 @@ pub(crate) fn plan_walk(
         let Some(name) = compose(row, zone_name, city_word) else {
             continue;
         };
-        steps.push(W::Register(name.clone()));
+        steps.push(W::Register {
+            name: name.clone(),
+            id: row.id,
+        });
         if eligible(row) {
             steps.push(W::Join(name));
         } else {
@@ -305,20 +317,25 @@ pub(crate) fn plan_walk(
 pub(super) fn walk_zone(
     channels: &mut ChannelState,
     zone_name: &str,
-    in_city: bool,
+    area_flags: u32,
     city_word: Option<&str>,
-    commands: &NetCommands,
+    (commands, errors): (&NetCommands, &crate::ui_action::UiErrorKeys),
     script: Option<&mut benilla_ui::script::UiScript>,
 ) {
-    let steps = plan_walk(channels, zone_name, in_city, city_word);
-    apply_walk(&steps, channels, commands);
+    let steps = plan_walk(channels, zone_name, area_flags, city_word);
+    apply_walk(&steps, channels, commands, errors);
     if let (false, Some(script)) = (steps.is_empty(), script) {
         channels.mirror_into(script);
     }
 }
 
 /// Apply a plan in order.
-fn apply_walk(steps: &[WalkStep], channels: &mut ChannelState, commands: &NetCommands) {
+fn apply_walk(
+    steps: &[WalkStep],
+    channels: &mut ChannelState,
+    commands: &NetCommands,
+    _errors: &crate::ui_action::UiErrorKeys,
+) {
     for step in steps {
         match step {
             WalkStep::Leave(name) => {
@@ -339,7 +356,7 @@ fn apply_walk(steps: &[WalkStep], channels: &mut ChannelState, commands: &NetCom
                     debug!("chat: zone channel slot {n} renamed {old:?} → {new:?}");
                 }
             }
-            WalkStep::Register(name) => match channels.claim_slot(name) {
+            WalkStep::Register { name, id } => match channels.claim_slot(name, *id) {
                 Some(n) => debug!("chat: zone channel {name:?} registered as slot {n}"),
                 None => warn!(
                     "chat: no free slot for zone channel {name:?} — all {} are taken",
@@ -384,7 +401,8 @@ pub(super) fn auto_join_zone_channels(
     mut walk: ResMut<ZoneChannelWalk>,
     mut entered: MessageReader<crate::net::EnteredWorldMessage>,
     mut hosted_vm: crate::script_calls::HostedVm,
-    mut catalog_fed: Local<crate::ui_script::VmMemo<Option<(String, bool)>>>,
+    mut catalog_fed: Local<crate::ui_script::VmMemo<Option<(String, u32)>>>,
+    errors: Res<crate::ui_action::UiErrorKeys>,
 ) {
     hosted_vm.run(|script| {
         let (player, cinematic) = (&body.0, &body.1);
@@ -411,7 +429,7 @@ pub(super) fn auto_join_zone_channels(
         walk.zone_id = zone_id;
         let zone = zone_id
             .and_then(|id| areas?.0.get(id))
-            .map(|row| (row.name.clone(), row.flags & AREA_FLAG_TRADE_CHANNEL != 0));
+            .map(|row| (row.name.clone(), row.flags));
 
         // The VM's catalog is fed before those gates: to its verbs an empty catalog means "no such
         // built-in channel", which files `General` as a custom channel and joins one of that name.
@@ -434,7 +452,7 @@ pub(super) fn auto_join_zone_channels(
             }
         }
 
-        let (Some(zone_id), Some((zone_name, in_city)), Some(areas)) = (zone_id, zone, areas)
+        let (Some(zone_id), Some((zone_name, area_flags)), Some(areas)) = (zone_id, zone, areas)
         else {
             return; // nothing to walk against yet
         };
@@ -448,9 +466,9 @@ pub(super) fn auto_join_zone_channels(
         walk_zone(
             &mut channels,
             &zone_name,
-            in_city,
+            area_flags,
             city_word(&areas.0),
-            &commands,
+            (&commands, &errors),
             script,
         );
         walk.at = Some(zone_id);
@@ -472,7 +490,7 @@ pub(crate) fn seed_zone_channel_catalog(
     let city = world
         .get_resource::<AreaTableRes>()
         .and_then(|a| city_word(&a.0));
-    script.set_zone_channel_catalog(zone_channel_catalog(&channels.channels, "", false, city));
+    script.set_zone_channel_catalog(zone_channel_catalog(&channels.channels, "", 0, city));
 }
 
 /// Every `ChatChannels.dbc` row as the VM needs it: the id, the Shortcut the verbs match a typed
@@ -481,9 +499,10 @@ pub(crate) fn seed_zone_channel_catalog(
 pub(crate) fn zone_channel_catalog(
     catalog: &ChatChannelsCatalog,
     zone_name: &str,
-    in_city: bool,
+    area_flags: u32,
     city_word: Option<&str>,
 ) -> Vec<benilla_ui::script::ZoneChannelRow> {
+    let in_city = area_flags & AREA_FLAG_TRADE_CHANNEL != 0;
     catalog
         .rows()
         .iter()
@@ -527,6 +546,12 @@ mod tests {
     /// The city word, row 3459 of the shipped `AreaTable.dbc`.
     const CITY: Option<&str> = Some("City");
 
+    /// A capital's `AreaTable.dbc` flags (Stormwind City's `0x138`): the walk's city gate `0x8`
+    /// and the city word's `0x100`.
+    const CAPITAL: u32 = 0x138;
+    /// An ordinary zone's: neither.
+    const OUTSIDE: u32 = 0;
+
     /// A fresh character's mask: the DBC's three `INITIAL` rows (seeded at `0x4997fc`).
     const SEED: u32 = 0x0020_0003;
     /// `GuildRecruitment`'s bit, `1 << (25 - 1)`, which the cascade's confirmed join sets.
@@ -540,14 +565,18 @@ mod tests {
         }
     }
 
+    /// A confirmed slot carrying the row its name composes from, as the walk or a join stores it.
     fn joined(name: &str) -> Option<crate::ui_chat::edit::ChannelSlot> {
-        Some(crate::ui_chat::edit::ChannelSlot::joined(name))
+        Some(crate::ui_chat::edit::ChannelSlot::confirmed(
+            name,
+            catalog().zone_channel_id(name),
+        ))
     }
 
     fn suspended(name: &str) -> Option<crate::ui_chat::edit::ChannelSlot> {
         Some(crate::ui_chat::edit::ChannelSlot {
-            name: name.into(),
             state: SlotState::Suspended,
+            ..joined(name).unwrap()
         })
     }
 
@@ -559,7 +588,7 @@ mod tests {
     #[test]
     fn an_ordinary_zone_joins_general_and_local_defense() {
         assert_eq!(
-            wanted_channels(&catalog(), SEED, "Elwynn Forest", false, CITY),
+            wanted_channels(&catalog(), SEED, "Elwynn Forest", OUTSIDE, CITY),
             vec!["General - Elwynn Forest", "LocalDefense - Elwynn Forest"]
         );
     }
@@ -567,7 +596,7 @@ mod tests {
     #[test]
     fn a_capital_adds_the_shared_trade_channel() {
         assert_eq!(
-            wanted_channels(&catalog(), SEED, "Stormwind City", true, CITY),
+            wanted_channels(&catalog(), SEED, "Stormwind City", CAPITAL, CITY),
             vec![
                 "General - Stormwind City",
                 "Trade - City",
@@ -579,8 +608,8 @@ mod tests {
     /// "General - " would be a real channel on the server.
     #[test]
     fn an_unknown_zone_joins_nothing_zone_dependent() {
-        assert!(wanted_channels(&catalog(), SEED, "", false, CITY).is_empty());
-        assert!(wanted_channels(&catalog(), SEED, "", true, CITY).is_empty());
+        assert!(wanted_channels(&catalog(), SEED, "", OUTSIDE, CITY).is_empty());
+        assert!(wanted_channels(&catalog(), SEED, "", CAPITAL, CITY).is_empty());
     }
 
     #[test]
@@ -646,7 +675,7 @@ mod tests {
     #[test]
     fn a_missing_city_word_skips_the_trade_channel_rather_than_half_naming_it() {
         assert_eq!(
-            wanted_channels(&catalog(), SEED, "Stormwind City", true, None),
+            wanted_channels(&catalog(), SEED, "Stormwind City", CAPITAL, None),
             vec!["General - Stormwind City", "LocalDefense - Stormwind City"]
         );
     }
@@ -654,8 +683,8 @@ mod tests {
     #[test]
     fn crossing_a_zone_border_renames_the_same_rows() {
         let cat = catalog();
-        let felwood = wanted_channels(&cat, SEED, "Felwood", false, CITY);
-        let winterspring = wanted_channels(&cat, SEED, "Winterspring", false, CITY);
+        let felwood = wanted_channels(&cat, SEED, "Felwood", OUTSIDE, CITY);
+        let winterspring = wanted_channels(&cat, SEED, "Winterspring", OUTSIDE, CITY);
         assert_ne!(felwood, winterspring, "the names differ");
         let ids = |v: &[String]| -> Vec<u32> { v.iter().map(|n| cat.zone_channel_id(n)).collect() };
         assert_eq!(
@@ -669,15 +698,24 @@ mod tests {
     #[test]
     fn a_first_walk_registers_every_mask_row_before_the_gate() {
         let mut c = state(SEED);
-        let steps = plan_walk(&c, "Elwynn Forest", false, CITY);
+        let steps = plan_walk(&c, "Elwynn Forest", OUTSIDE, CITY);
         assert_eq!(
             steps,
             vec![
-                W::Register(s("General - Elwynn Forest")),
+                W::Register {
+                    name: s("General - Elwynn Forest"),
+                    id: 1
+                },
                 W::Join(s("General - Elwynn Forest")),
-                W::Register(s("Trade - City")),
+                W::Register {
+                    name: s("Trade - City"),
+                    id: 2
+                },
                 W::Suspend(s("Trade - City")),
-                W::Register(s("LocalDefense - Elwynn Forest")),
+                W::Register {
+                    name: s("LocalDefense - Elwynn Forest"),
+                    id: 22
+                },
                 W::Join(s("LocalDefense - Elwynn Forest")),
             ]
         );
@@ -687,15 +725,24 @@ mod tests {
         assert_eq!(c.slot_state("Trade - City"), Some(SlotState::Suspended));
         assert_eq!(c.number_of("LocalDefense - Elwynn Forest"), Some(3));
 
-        let steps = plan_walk(&state(SEED), "Stormwind City", true, CITY);
+        let steps = plan_walk(&state(SEED), "Stormwind City", CAPITAL, CITY);
         assert_eq!(
             steps,
             vec![
-                W::Register(s("General - Stormwind City")),
+                W::Register {
+                    name: s("General - Stormwind City"),
+                    id: 1
+                },
                 W::Join(s("General - Stormwind City")),
-                W::Register(s("Trade - City")),
+                W::Register {
+                    name: s("Trade - City"),
+                    id: 2
+                },
                 W::Join(s("Trade - City")),
-                W::Register(s("LocalDefense - Stormwind City")),
+                W::Register {
+                    name: s("LocalDefense - Stormwind City"),
+                    id: 22
+                },
                 W::Join(s("LocalDefense - Stormwind City")),
             ]
         );
@@ -709,8 +756,8 @@ mod tests {
                 W::Rename { old, new } => {
                     c.rename_slot(old, new);
                 }
-                W::Register(name) => {
-                    c.claim_slot(name);
+                W::Register { name, id } => {
+                    c.claim_slot(name, *id);
                 }
                 W::Suspend(name) => {
                     c.suspend_slot(name);
@@ -729,7 +776,7 @@ mod tests {
             suspended("Trade - City"),
             joined("LocalDefense - Felwood"),
         ];
-        let steps = plan_walk(&c, "Winterspring", false, CITY);
+        let steps = plan_walk(&c, "Winterspring", OUTSIDE, CITY);
         assert_eq!(
             steps,
             vec![
@@ -772,7 +819,7 @@ mod tests {
         ];
 
         // Out of the city.
-        let steps = plan_walk(&c, "Elwynn Forest", false, CITY);
+        let steps = plan_walk(&c, "Elwynn Forest", OUTSIDE, CITY);
         assert_eq!(
             steps,
             vec![
@@ -805,7 +852,7 @@ mod tests {
         c.confirm_slot("LocalDefense - Elwynn Forest");
 
         // Back in: the bypass joins and clears the suspension, with no LEAVE.
-        let steps = plan_walk(&c, "Stormwind City", true, CITY);
+        let steps = plan_walk(&c, "Stormwind City", CAPITAL, CITY);
         assert_eq!(
             steps,
             vec![
@@ -826,7 +873,7 @@ mod tests {
             ]
         );
         apply_steps(&steps, &mut c);
-        assert_eq!(c.slot_state("Trade - City"), Some(SlotState::Joined));
+        assert_eq!(c.slot_state("Trade - City"), Some(SlotState::Confirmed));
         assert_eq!(c.number_of("Trade - City"), Some(2), "still slot 2");
     }
 
@@ -851,7 +898,7 @@ mod tests {
         assert_eq!(c.free_slot(&target), Some(1));
 
         // The next border: General is neither walked (no slot) nor registered (no bit).
-        let steps = plan_walk(&c, "Westfall", false, CITY);
+        let steps = plan_walk(&c, "Westfall", OUTSIDE, CITY);
         assert_eq!(
             steps,
             vec![
@@ -866,13 +913,19 @@ mod tests {
 
         // The next login: a fresh slot array under the file's mask.
         let relog = state(SEED & !1);
-        let steps = plan_walk(&relog, "Elwynn Forest", false, CITY);
+        let steps = plan_walk(&relog, "Elwynn Forest", OUTSIDE, CITY);
         assert_eq!(
             steps,
             vec![
-                W::Register(s("Trade - City")),
+                W::Register {
+                    name: s("Trade - City"),
+                    id: 2
+                },
                 W::Suspend(s("Trade - City")),
-                W::Register(s("LocalDefense - Elwynn Forest")),
+                W::Register {
+                    name: s("LocalDefense - Elwynn Forest"),
+                    id: 22
+                },
                 W::Join(s("LocalDefense - Elwynn Forest")),
             ],
             "General is gone for good; Trade is now number 1"
@@ -882,9 +935,9 @@ mod tests {
         let mut relog = relog;
         apply_steps(&steps, &mut relog);
         relog.note_zone_channel_joined("General - Elwynn Forest");
-        relog.claim_slot("General - Elwynn Forest");
+        relog.claim_slot("General - Elwynn Forest", 1);
         assert_eq!(relog.zone_mask, Some(SEED));
-        let steps = plan_walk(&relog, "Westfall", false, CITY);
+        let steps = plan_walk(&relog, "Westfall", OUTSIDE, CITY);
         assert!(
             steps.contains(&W::Join(s("General - Westfall"))),
             "walked again from its slot: {steps:?}"
@@ -894,13 +947,13 @@ mod tests {
     /// Zero is a real state, every zone channel left; unseated means the file is not read yet.
     #[test]
     fn a_zero_or_unseated_mask_registers_nothing() {
-        assert!(plan_walk(&state(0), "Elwynn Forest", false, CITY).is_empty());
+        assert!(plan_walk(&state(0), "Elwynn Forest", OUTSIDE, CITY).is_empty());
         let unseated = ChannelState {
             channels: catalog(),
             zone_mask: None,
             ..Default::default()
         };
-        assert!(plan_walk(&unseated, "Elwynn Forest", false, CITY).is_empty());
+        assert!(plan_walk(&unseated, "Elwynn Forest", OUTSIDE, CITY).is_empty());
         assert!(!unseated.zone_row_wanted(1));
     }
 
@@ -911,13 +964,16 @@ mod tests {
         let steps = plan_walk(
             &state(SEED | GUILD_RECRUITMENT_BIT),
             "Elwynn Forest",
-            false,
+            OUTSIDE,
             CITY,
         );
         assert_eq!(
             &steps[6..],
             &[
-                W::Register(s("GuildRecruitment - City")),
+                W::Register {
+                    name: s("GuildRecruitment - City"),
+                    id: 25
+                },
                 W::Suspend(s("GuildRecruitment - City")),
             ],
             "registered and suspended out here, number 4"
@@ -925,13 +981,16 @@ mod tests {
         let steps = plan_walk(
             &state(SEED | GUILD_RECRUITMENT_BIT),
             "Ironforge",
-            true,
+            CAPITAL,
             CITY,
         );
         assert_eq!(
             &steps[6..],
             &[
-                W::Register(s("GuildRecruitment - City")),
+                W::Register {
+                    name: s("GuildRecruitment - City"),
+                    id: 25
+                },
                 W::Join(s("GuildRecruitment - City")),
             ]
         );
@@ -947,17 +1006,17 @@ mod tests {
             joined("LocalDefense - Stormwind City"),
         ];
         // The cascade's join: a slot, then the notice sets the bit.
-        c.claim_slot("GuildRecruitment - City");
-        let steps = plan_walk(&c, "Stormwind City", true, CITY);
+        c.claim_slot("GuildRecruitment - City", 25);
+        let steps = plan_walk(&c, "Stormwind City", CAPITAL, CITY);
         assert!(
             steps.is_empty(),
             "same zone, every name unchanged, every row eligible — nothing to do: {steps:?}"
         );
         // Walking out suspends it exactly like Trade.
-        let steps = plan_walk(&c, "Elwynn Forest", false, CITY);
+        let steps = plan_walk(&c, "Elwynn Forest", OUTSIDE, CITY);
         assert!(steps.contains(&W::Leave(s("GuildRecruitment - City"))));
         assert!(steps.contains(&W::Suspend(s("GuildRecruitment - City"))));
-        assert!(!steps.iter().any(|st| matches!(st, W::Register(_))));
+        assert!(!steps.iter().any(|st| matches!(st, W::Register { .. })));
     }
 
     /// State 3 sends no LEAVE, and the rename's `(old == 3) ? 1 : 2` lands it on 1, a plain
@@ -966,7 +1025,7 @@ mod tests {
     fn a_suspended_slot_whose_name_moved_rejoins_without_a_leave() {
         let mut c = state(SEED);
         c.joined = vec![suspended("General - Elwynn Forest")];
-        let steps = plan_walk(&c, "Westfall", false, CITY);
+        let steps = plan_walk(&c, "Westfall", OUTSIDE, CITY);
         assert_eq!(
             &steps[..2],
             &[
@@ -980,7 +1039,7 @@ mod tests {
         apply_steps(&steps, &mut c);
         assert_eq!(
             c.slot_state("General - Westfall"),
-            Some(SlotState::Joined),
+            Some(SlotState::Pending),
             "3 → 1, not 2"
         );
     }
@@ -1043,7 +1102,7 @@ mod tests {
         let cat = catalog();
         assert_eq!(
             tracked_channels(&cat, SEED, "Stormwind City", None),
-            wanted_channels(&cat, SEED, "Stormwind City", true, None),
+            wanted_channels(&cat, SEED, "Stormwind City", CAPITAL, None),
             "no city word: the city-NAMED rows are unresolvable, so neither list carries them"
         );
         assert!(
@@ -1056,7 +1115,7 @@ mod tests {
     /// the reference's nil leg (`0x4a10d9`, `0x49ece5`), not the custom-channel leg.
     #[test]
     fn a_zoneless_catalog_still_carries_every_row() {
-        let rows = zone_channel_catalog(&catalog(), "", false, None);
+        let rows = zone_channel_catalog(&catalog(), "", OUTSIDE, None);
         assert_eq!(rows.len(), 6, "every DBC row is present, zone or no zone");
 
         let by = |s: &str| rows.iter().find(|r| r.shortcut == s).unwrap().clone();
@@ -1074,7 +1133,7 @@ mod tests {
         );
 
         // Once a zone is known, the same rows resolve.
-        let rows = zone_channel_catalog(&catalog(), "Elwynn Forest", false, CITY);
+        let rows = zone_channel_catalog(&catalog(), "Elwynn Forest", OUTSIDE, CITY);
         let by = |s: &str| rows.iter().find(|r| r.shortcut == s).unwrap().clone();
         assert_eq!(
             by("General").resolved,

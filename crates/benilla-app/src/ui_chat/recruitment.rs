@@ -173,9 +173,9 @@ fn apply_runs(script: &mut UiScript, channels: &mut ChannelState, commands: &Net
                 info!("chat: guild recruitment cascade — guilded, leaving {name:?}");
                 cascade_leave(channels, commands, name);
             }
-            RecruitmentRun::Join(name) => {
+            RecruitmentRun::Join { name, id } => {
                 info!("chat: guild recruitment cascade — unguilded in a capital, joining {name:?}");
-                match channels.claim_slot(&name) {
+                match channels.claim_slot(&name, id) {
                     Some(n) => {
                         debug!("chat: {name:?} registered as slot {n}");
                         channels.mirror_into(script);
@@ -243,7 +243,7 @@ mod tests {
             zone_mask: Some(1 << (GUILD_RECRUITMENT - 1)),
             ..Default::default()
         };
-        channels.claim_slot("GuildRecruitment - City");
+        channels.claim_slot("GuildRecruitment - City", GUILD_RECRUITMENT);
         let (tx, rx) = crossbeam_channel::unbounded();
 
         cascade_leave(

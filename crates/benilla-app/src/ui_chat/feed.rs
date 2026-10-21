@@ -962,7 +962,8 @@ pub(super) fn deliver(
         // A slot the walk renamed is numbered already, but its state must return to `Joined`.
         channels.confirm_slot(&event.channel);
         if channels.number_of(&event.channel).is_none() {
-            match channels.claim_slot(&event.channel) {
+            let id = channels.channels.zone_channel_id(&event.channel);
+            match channels.claim_slot(&event.channel, id) {
                 Some(slot) => debug!(
                     "chat: server confirms channel {:?} joined (slot {slot})",
                     event.channel

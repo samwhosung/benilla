@@ -264,7 +264,10 @@ fn the_recruitment_cascade_runs_inside_the_verb() {
     );
     assert_eq!(
         s.take_guild_recruitment_runs(),
-        [RecruitmentRun::Join("GuildRecruitment - City".into())]
+        [RecruitmentRun::Join {
+            name: "GuildRecruitment - City".into(),
+            id: 25
+        }]
     );
     assert!(!s.take_guild_recruitment_cascade(), "the run is spent");
 

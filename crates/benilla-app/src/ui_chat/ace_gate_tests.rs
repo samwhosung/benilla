@@ -133,14 +133,16 @@ fn the_auto_join_walk_names_the_channels_the_server_resolves() {
         "the 0x200 sentinel row names the channel"
     );
 
+    // Each zone's own `AreaTable.dbc` flags: Elwynn Forest (12) and Stormwind City (1519).
+    let flags = |id: u32| areas.get(id).expect("a shipped zone").flags;
     let out_in_the_world =
-        super::channels::wanted_channels(&cat, 0x0020_0003, "Elwynn Forest", false, city);
+        super::channels::wanted_channels(&cat, 0x0020_0003, "Elwynn Forest", flags(12), city);
     assert_eq!(
         out_in_the_world,
         vec!["General - Elwynn Forest", "LocalDefense - Elwynn Forest"]
     );
     let in_a_capital =
-        super::channels::wanted_channels(&cat, 0x0020_0003, "Stormwind City", true, city);
+        super::channels::wanted_channels(&cat, 0x0020_0003, "Stormwind City", flags(1519), city);
     assert_eq!(
         in_a_capital,
         vec![

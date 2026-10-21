@@ -846,7 +846,7 @@ mod tests {
         // a name with no slot clears nothing.
         state.note_zone_channel_left("Trade - City");
         assert_eq!(state.zone_mask, Some(0b11), "no slot carries it yet");
-        state.claim_slot("Trade - City");
+        state.claim_slot("Trade - City", 2);
         state.note_zone_channel_left("Trade - City");
         assert_eq!(
             state.zone_mask,

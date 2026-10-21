@@ -309,11 +309,17 @@ mod tests {
         ])
     }
 
+    /// Confirmed slots, each carrying the row its name composes from.
     fn state(joined: &[&str]) -> ChannelState {
         ChannelState {
             joined: joined
                 .iter()
-                .map(|n| Some(crate::ui_chat::edit::ChannelSlot::joined(n)))
+                .map(|n| {
+                    Some(crate::ui_chat::edit::ChannelSlot::confirmed(
+                        n,
+                        catalog().zone_channel_id(n),
+                    ))
+                })
                 .collect(),
             channels: catalog(),
             ..Default::default()

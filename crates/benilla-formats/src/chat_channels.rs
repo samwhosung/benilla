@@ -116,6 +116,12 @@ impl ChatChannelsCatalog {
         self.rows.iter().filter(|r| r.is_auto_join())
     }
 
+    /// The row of ChannelID `id`, the client's id map (`0xc0df1c`), through which a slot's `+0x94`
+    /// names its row (`0x49a2bf`, `0x4a0338`).
+    pub fn row(&self, id: u32) -> Option<&ChatChannelRow> {
+        self.rows.iter().find(|r| r.id == id)
+    }
+
     /// The row a composed name belongs to, matched as the server does: the name contains the
     /// pattern minus its `%s` (`GetChannelEntryFor`, `Database/DBCStores.cpp:531`).
     pub fn row_for_name(&self, name: &str) -> Option<&ChatChannelRow> {

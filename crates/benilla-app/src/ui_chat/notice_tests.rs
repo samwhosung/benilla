@@ -47,7 +47,7 @@ impl Feed {
 
         let mut channels = super::edit::ChannelState::default();
         for name in ["World", "Trade - City", "Mychan"] {
-            channels.claim_slot(name);
+            channels.claim_slot(name, channels.channels.zone_channel_id(name));
         }
         let (tx, sent) = crossbeam_channel::unbounded();
 

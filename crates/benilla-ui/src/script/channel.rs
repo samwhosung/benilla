@@ -47,7 +47,12 @@ pub enum RecruitmentPlan {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RecruitmentRun {
     Leave(String),
-    Join(String),
+    /// The composed name and the row's ChannelID, which the join body's allocator stores
+    /// (`0x49ede8`-`0x49edf3`).
+    Join {
+        name: String,
+        id: u32,
+    },
 }
 
 /// `0x49ea90`'s acting arms on the pushed plan, the latch already AUTO: a leave, or a join that
@@ -81,7 +86,7 @@ pub(crate) fn run_recruitment_cascade(model: &mut Model) -> bool {
             model.register_window_channel(0, shortcut, id);
             model
                 .guild_recruitment_runs
-                .push(RecruitmentRun::Join(name));
+                .push(RecruitmentRun::Join { name, id });
         }
     }
     model.raise("UPDATE_CHAT_WINDOWS", Vec::new());
@@ -95,10 +100,12 @@ const MAX_CHANNELS: usize = 10;
 /// handlers' calls, one variant each.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChannelCommand {
-    /// `JoinChannelByName(name, password)`, sent on both non-nil legs.
+    /// `JoinChannelByName(name, password)`, sent on both non-nil legs; `id` is the matched row's
+    /// ChannelID, 0 for a custom channel, which the allocator stores with the slot (`0x49ede8`).
     Join {
         name: String,
         password: String,
+        id: u32,
     },
     /// `LeaveChannelByName(name)`.
     Leave {
@@ -452,6 +459,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     ChannelCommand::Join {
                         name: resolved.clone().unwrap_or_else(|| name.clone()),
                         password,
+                        id,
                     },
                 );
                 Ok(MultiValue::from_vec(vec![
@@ -626,16 +634,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JoinedChannel {
     pub name: String,
+    /// `+0x94`, the slot's `ChatChannels.dbc` ChannelID, 0 for a custom channel.
+    pub id: u32,
     /// The slot is in state 0 (`+0x9c`), which the by-number lookups `0x49be50` and `0x49bf30`
     /// require: not renamed with its re-join pending, not suspended.
     pub confirmed: bool,
 }
 
 impl From<&str> for JoinedChannel {
-    /// A confirmed slot of that name.
+    /// A confirmed custom slot of that name.
     fn from(name: &str) -> Self {
         JoinedChannel {
             name: name.to_string(),
+            id: 0,
             confirmed: true,
         }
     }
@@ -715,11 +726,13 @@ mod command_tests {
             vec![
                 ChannelCommand::Join {
                     name: "General - Elwynn Forest".into(),
-                    password: "pw".into()
+                    password: "pw".into(),
+                    id: 1,
                 },
                 ChannelCommand::Join {
                     name: "MyChan".into(),
-                    password: String::new()
+                    password: String::new(),
+                    id: 0,
                 },
             ],
             "sent on both non-nil legs, the resolved name for a row"

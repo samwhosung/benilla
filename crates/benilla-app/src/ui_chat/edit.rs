@@ -107,6 +107,10 @@ pub(crate) struct ChannelState {
     /// confirmed custom join, shrunk by an explicit leave. A channel whose re-join is refused, or
     /// that kicks the player, stays listed until a `/leave`, where the reference's file drops it.
     pub custom: Vec<String>,
+    /// The chat cache's `CHANNELS` names still to join, the reference's deferred-join list
+    /// (`0xb4fdd8` count, `0xb4fddc` names): the walk's third pass registers and joins each with
+    /// id 0 after the zone channels (`0x49a5b4`-`0x49a675`), then frees the list (`0x49a692`).
+    pub deferred_joins: Vec<String>,
 }
 
 /// One slot, the reference's `[0xb4fe04] + n*0xa0` record, in the fields this client uses.
@@ -114,18 +118,21 @@ pub(crate) struct ChannelState {
 pub(crate) struct ChannelSlot {
     /// `+0x04`, the current name; the zone walk renames it in place.
     pub name: String,
+    /// `+0x94`, the `ChatChannels.dbc` ChannelID the allocator stored (`0x49ba01`, `0x49baf9`): the
+    /// walk's row for a zone channel, the join's matched row, 0 for a custom channel.
+    pub id: u32,
     /// `+0x9c`, the slot's state.
     pub state: SlotState,
 }
 
-/// The reference's per-slot state (`+0x9c`), in the values whose notice token differs: the stock
-/// `ChatFrame_OnEvent`'s `YOU_LEFT` branch deletes the window's channel registration.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// The reference's per-slot state (`+0x9c`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SlotState {
-    /// `0` (confirmed) and `1` (join sent) in one: the reference's walk sends a LEAVE only from 0,
-    /// so an unconfirmed slot here sends one the server answers "Not on channel".
-    #[default]
-    Joined,
+    /// `0`, confirmed by the server's `YOU_JOINED` (`0x49bb8b`): the one state the by-number
+    /// lookups (`0x49be50`, `0x49bf30`), the lists and the walk's LEAVE (`0x49a35e`) take.
+    Confirmed,
+    /// `1`, the join sent and not yet confirmed: the allocator's state (`0x49ba0f`, `0x49bb05`).
+    Pending,
     /// `2`, renamed with its re-join pending (`0x49bcd3`, in the rename `0x49bc50`): the confirming
     /// `YOU_JOINED` carries the `YOU_CHANGED` token, "Changed Channel: [%s]".
     Renamed,
@@ -135,12 +142,28 @@ pub(crate) enum SlotState {
     Suspended,
 }
 
+impl SlotState {
+    fn live(self) -> bool {
+        matches!(self, SlotState::Confirmed | SlotState::Pending)
+    }
+}
+
 impl ChannelSlot {
-    /// A new slot in state `Joined`: claimed by the walk at send time or by a confirmed join.
-    pub(crate) fn joined(name: &str) -> Self {
+    /// A slot the allocator fills: `name`, row `id`, state 1 (`0x49b9e0`-`0x49ba0f`).
+    pub(crate) fn pending(name: &str, id: u32) -> Self {
         ChannelSlot {
             name: name.to_string(),
-            state: SlotState::Joined,
+            id,
+            state: SlotState::Pending,
+        }
+    }
+
+    /// A slot the server has confirmed.
+    #[cfg(test)]
+    pub(crate) fn confirmed(name: &str, id: u32) -> Self {
+        ChannelSlot {
+            state: SlotState::Confirmed,
+            ..Self::pending(name, id)
         }
     }
 }
@@ -210,15 +233,14 @@ impl ChannelState {
     }
 
     /// The by-number getter `0x49be50`: slot `n`'s name when it is in range, not a hole, and in
-    /// state 0 (here [`SlotState::Joined`]); below 1, past the end, a hole or another state is
-    /// `None`.
+    /// state 0; below 1, past the end, a hole or another state is `None`.
     fn confirmed_slot_name(&self, n: i32) -> Option<&str> {
         usize::try_from(n)
             .ok()
             .and_then(|n| n.checked_sub(1))
             .and_then(|i| self.joined.get(i))
             .and_then(|slot| slot.as_ref())
-            .filter(|slot| slot.state == SlotState::Joined)
+            .filter(|slot| slot.state.live())
             .map(|slot| slot.name.as_str())
     }
 
@@ -230,10 +252,10 @@ impl ChannelState {
         let n = self.number_of(old)?;
         let slot = self.joined[n as usize - 1].as_mut()?;
         slot.name = new.to_string();
-        // `0x49bcd3`: `(old == 3) ? 1 : 2`. A suspended slot comes back as a pending join, our
-        // `Joined`, so its notice reads `YOU_JOINED`; any other is a rename awaiting its re-join.
+        // `0x49bcd3`: `(old == 3) ? 1 : 2`. A suspended slot comes back as a pending join, so its
+        // notice reads `YOU_JOINED`; any other is a rename awaiting its re-join.
         slot.state = if slot.state == SlotState::Suspended {
-            SlotState::Joined
+            SlotState::Pending
         } else {
             SlotState::Renamed
         };
@@ -253,7 +275,7 @@ impl ChannelState {
     pub(crate) fn confirm_slot(&mut self, name: &str) {
         if let Some(n) = self.number_of(name) {
             if let Some(slot) = self.joined[n as usize - 1].as_mut() {
-                slot.state = SlotState::Joined;
+                slot.state = SlotState::Confirmed;
             }
         }
     }
@@ -273,7 +295,8 @@ impl ChannelState {
             .map(|s| {
                 s.as_ref().map(|s| benilla_ui::script::JoinedChannel {
                     name: s.name.clone(),
-                    confirmed: s.state == SlotState::Joined,
+                    id: s.id,
+                    confirmed: s.state.live(),
                 })
             })
             .collect()
@@ -306,23 +329,23 @@ impl ChannelState {
     /// already held keeps its number. With all ten taken, the reference prints
     /// `ERR_TOO_MANY_CHAT_CHANNELS` (`0x199`, `0x49b9c5` via `0x496720`) and still sends the join;
     /// here the callers only log it.
-    pub(crate) fn claim_slot(&mut self, name: &str) -> Option<u32> {
+    pub(crate) fn claim_slot(&mut self, name: &str, id: u32) -> Option<u32> {
         if let Some(n) = self.number_of(name) {
             // A confirmed join on a held slot clears its suspension (`0x49bb20` writes state 0
             // unconditionally): the other half of the state-3 bypass.
             if let Some(slot) = self.joined[n as usize - 1].as_mut() {
-                slot.state = SlotState::Joined;
+                slot.state = SlotState::Confirmed;
             }
             return Some(n);
         }
         if let Some(i) = self.joined.iter().position(Option::is_none) {
-            self.joined[i] = Some(ChannelSlot::joined(name));
+            self.joined[i] = Some(ChannelSlot::pending(name, id));
             return Some(i as u32 + 1);
         }
         if self.joined.len() >= MAX_CHANNELS {
             return None;
         }
-        self.joined.push(Some(ChannelSlot::joined(name)));
+        self.joined.push(Some(ChannelSlot::pending(name, id)));
         Some(self.joined.len() as u32)
     }
 
