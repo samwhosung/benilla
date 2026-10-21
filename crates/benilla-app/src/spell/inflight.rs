@@ -1567,6 +1567,146 @@ mod tests {
                 "no local bar edge — the bar closes on the wire's SPELLCAST_CHANNEL_STOP"
             );
         }
+
+        /// The failed cast events written since the last look, by spell.
+        fn fails(app: &mut App) -> Vec<u32> {
+            app.world_mut()
+                .resource_mut::<Messages<CastEvent>>()
+                .drain()
+                .filter(|e| e.kind == crate::creature_anim::CastEventKind::Fail)
+                .map(|e| e.spell_id)
+                .collect()
+        }
+
+        /// The cancel's reap is its tail's (`0x6e4a04`-`0x6e4ab7`): the record's spell
+        /// `[0xceac58]` (`0x6e4a8e`), whatever the slot popped. A cast nested over another
+        /// record's leaves that record's cast reaped and its own running.
+        #[test]
+        fn esc_reaps_the_records_spell_not_the_popped_one() {
+            const FROSTBOLT: u32 = 116;
+            let (mut app, _rx) = harness(HashMap::from([
+                (FIREBALL, SpellDisplay::default()),
+                (FROSTBOLT, SpellDisplay::default()),
+            ]));
+            app.insert_non_send_resource(UiScript::new().unwrap());
+            fill_record(&mut app);
+            app.world_mut()
+                .resource_mut::<PendingCast>()
+                .fill_record_spell(FROSTBOLT);
+            app.world_mut()
+                .resource_mut::<PendingCast>()
+                .push(FIREBALL, None, Instant::now());
+            mark_casting(&mut app, FROSTBOLT);
+
+            app.world_mut().run_system_once(feed_cast_reports).unwrap();
+            assert_eq!(stop_casting(&mut app), Some(1));
+            crate::creature_anim::apply_unit_edits(app.world_mut());
+
+            let self_e = app.world().resource::<GuidIndex>().0[&10];
+            assert!(
+                app.world().get::<Casting>(self_e).is_none(),
+                "the record's cast"
+            );
+            assert_eq!(fails(&mut app), vec![FROSTBOLT]);
+        }
+
+        /// The tail spares a record spell with `AttributesEx & 0x4` (`0x6e4aad`): the cancel goes
+        /// out and the cast keeps running locally.
+        #[test]
+        fn a_move_cancel_spares_an_attributes_ex_4_cast() {
+            let (mut app, rx) = harness(HashMap::from([(
+                FIREBALL,
+                SpellDisplay {
+                    interrupt_flags: 0xf,
+                    attributes_ex: 0x4,
+                    ..Default::default()
+                },
+            )]));
+            fill_record(&mut app);
+            app.world_mut()
+                .resource_mut::<PendingCast>()
+                .fill_record_spell(FIREBALL);
+            app.world_mut()
+                .resource_mut::<PendingCast>()
+                .push(FIREBALL, None, Instant::now());
+            mark_casting(&mut app, FIREBALL);
+            run(&mut app, true);
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(crate::net::ClientCommand::CancelCast { spell_id: FIREBALL })
+            ));
+            let self_e = app.world().resource::<GuidIndex>().0[&10];
+            assert!(
+                app.world().get::<Casting>(self_e).is_some(),
+                "AttributesEx & 0x4"
+            );
+            assert!(fails(&mut app).is_empty());
+        }
+
+        /// The tail reaps nothing unless the record's caster is the active player (`0x6e4a11`).
+        #[test]
+        fn a_move_cancel_reaps_nothing_for_another_casters_record() {
+            let (mut app, rx) = harness(HashMap::from([(
+                FIREBALL,
+                SpellDisplay {
+                    interrupt_flags: 0xf,
+                    ..Default::default()
+                },
+            )]));
+            app.world_mut()
+                .resource_mut::<PendingCast>()
+                .fill_record_spell(FIREBALL);
+            app.world_mut()
+                .resource_mut::<PendingCast>()
+                .push(FIREBALL, None, Instant::now());
+            mark_casting(&mut app, FIREBALL);
+            run(&mut app, true);
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(crate::net::ClientCommand::CancelCast { spell_id: FIREBALL })
+            ));
+            let self_e = app.world().resource::<GuidIndex>().0[&10];
+            assert!(
+                app.world().get::<Casting>(self_e).is_some(),
+                "no record caster"
+            );
+            assert!(fails(&mut app).is_empty());
+        }
+
+        /// The frame's pass over the slot with no press: the systems the plugin chains in
+        /// [`super::super::LocalCancel`].
+        fn quiet_frame(app: &mut App) {
+            app.world_mut().run_system_once(reap_lapsed_cast).unwrap();
+            run(app, false);
+        }
+
+        /// Nothing times the slot out (`0xceca88`'s writers are the push `0x6e4af8`, the pop
+        /// `0x6e4b3d` and the world-entry zero `0x6e72e7`): a cast whose answer never comes holds
+        /// it, refusing the next press, until `SpellStopCasting` (`0x6e6e80` → `0x6e4940`) frees it.
+        #[test]
+        fn a_cast_with_no_answer_holds_the_slot_until_esc() {
+            let (mut app, rx) = harness(HashMap::from([(FIREBALL, SpellDisplay::default())]));
+            app.insert_non_send_resource(UiScript::new().unwrap());
+            let sent = Instant::now()
+                .checked_sub(Duration::from_secs(60))
+                .expect("a clock a minute old");
+            app.world_mut()
+                .resource_mut::<PendingCast>()
+                .push(FIREBALL, None, sent);
+            quiet_frame(&mut app);
+            assert_eq!(
+                app.world().resource::<PendingCast>().current(),
+                Some(FIREBALL),
+                "a minute on, still in flight"
+            );
+            app.world_mut().run_system_once(feed_cast_reports).unwrap();
+            assert_eq!(stop_casting(&mut app), Some(1));
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(crate::net::ClientCommand::CancelCast { spell_id: FIREBALL })
+            ));
+            assert_eq!(app.world().resource::<PendingCast>().current(), None);
+        }
     }
 
     #[test]

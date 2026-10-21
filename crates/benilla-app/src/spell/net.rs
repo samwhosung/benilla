@@ -26,9 +26,20 @@ use bevy::ecs::system::SystemParam;
 use crate::net::{GuidIndex, NetCommands, NetHandlerApp, ObjectStore, SelfGuid, SelfPlayer};
 use crate::query_cache::Ask;
 
+/// Another unit's `SMSG_SPELL_START` aimed at the player (`0x6e790d`-`0x6e7947`), for the target
+/// chain's select of its caster (`0x6e799c`), which holds the selection
+/// ([`crate::target`]). `seq` is the packet's [`crate::creature_anim::PlaySeq`] stamp.
+#[derive(Message, Clone, Copy, Debug)]
+pub(crate) struct CastAtPlayer {
+    pub(crate) caster: Entity,
+    pub(crate) guid: u64,
+    pub(crate) seq: u64,
+}
+
 /// Register the spell's handlers; called from [`super::SpellPlugin`].
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
+    app.add_message::<CastAtPlayer>();
     app.net_handler(K::SpellBook, on_spell_book)
         .net_handler(K::ActionButtons, on_action_buttons)
         .net_handler(K::SpellLearned, on_spell_learned)
@@ -1512,6 +1523,8 @@ mod tests {
     use benilla_protocol::messages::ACTION_KIND_SPELL;
 
     mod cooldown_sites;
+    mod dispatch;
+    mod openers;
 
     /// `SMSG_COOLDOWN_EVENT` (`0x6e9670`): the event moves the held record's one start, which the
     /// GCD leg reads (`0x6e15d8`), so the global cooldown runs again from the packet.
@@ -1816,6 +1829,7 @@ mod tests {
             let mut app = App::new();
             app.add_message::<CastEvent>()
                 .add_message::<SpellGoTargets>()
+                .add_message::<CastAtPlayer>()
                 .add_message::<CombatTextSpawn>()
                 .add_message::<GoLidOpen>()
                 .add_message::<crate::creature_anim::SheathRequest>()
@@ -1900,6 +1914,18 @@ mod tests {
 
         /// `SMSG_SPELL_START` by `caster` with the packet's `cast_flags`.
         fn start_by(&mut self, caster: u64, spell_id: u32, cast_time_ms: u32, cast_flags: u16) {
+            self.start_at(caster, spell_id, cast_time_ms, cast_flags, None);
+        }
+
+        /// The same with the packet's unit target, read against the world's spell records.
+        fn start_at(
+            &mut self,
+            caster: u64,
+            spell_id: u32,
+            cast_time_ms: u32,
+            cast_flags: u16,
+            target: Option<u64>,
+        ) {
             self.app
                 .world_mut()
                 .run_system_once(
@@ -1910,13 +1936,14 @@ mod tests {
                           mut reports: ResMut<CastReports>,
                           mut pending: ResMut<PendingCast>,
                           edits: Res<crate::creature_anim::UnitEdits>,
+                          spells: Option<Res<Spells>>,
                           visuals: crate::creature_anim::PrecastVisuals| {
                         spell_start(
                             caster,
                             spell_id,
                             cast_flags,
                             cast_time_ms,
-                            None,
+                            target,
                             None,
                             &mut commands,
                             &index,
@@ -1924,7 +1951,7 @@ mod tests {
                             &self_guid,
                             &mut reports,
                             &mut pending,
-                            None,
+                            spells.as_deref(),
                             &edits,
                             &|e, spell_id| visuals.resolves(e, spell_id),
                             1,
@@ -2295,6 +2322,75 @@ mod tests {
         s.give_precast(me, FIREBALL);
         s.go(FIREBALL);
         assert_eq!(s.precast(me), Some((FIREBALL, true)));
+    }
+
+    /// The cast events written since the last look, by spell and kind.
+    fn drain_cast_events(s: &mut CastSeq) -> Vec<(u32, CastEventKind)> {
+        s.app
+            .world_mut()
+            .resource_mut::<Messages<CastEvent>>()
+            .drain()
+            .map(|e| (e.spell_id, e.kind))
+            .collect()
+    }
+
+    /// Nor does it reap the caster's cast or write the cast event: `0x6e7cd7 jl`, `0x6e7ce3 jg`
+    /// and `0x6e7cf7 je` all reach the handler's end `0x6e8647`.
+    #[test]
+    fn a_go_with_no_spell_record_reaps_no_cast_and_writes_no_event() {
+        let mut s = CastSeq::new();
+        let me = s.self_e;
+        s.app.world_mut().insert_resource(Spells::empty_for_tests());
+        s.app.world_mut().entity_mut(me).insert(Casting {
+            spell_id: FIREBALL,
+            until: None,
+        });
+        s.go(FIREBALL);
+        assert!(s.app.world().get::<Casting>(me).is_some(), "no reap");
+        assert_eq!(drain_cast_events(&mut s), vec![], "no cast event");
+    }
+
+    /// `SMSG_SPELL_START` for a spell with no record returns before anything (`0x6e7876 je
+    /// 0x6e7a5b`): ours opens no bar, and no caster is marked casting or given a cast event.
+    #[test]
+    fn a_start_with_no_spell_record_does_nothing() {
+        const OTHER: u64 = 20;
+        let mut s = CastSeq::new();
+        let me = s.self_e;
+        let other = s.other_unit(OTHER);
+        s.app.world_mut().insert_resource(Spells::empty_for_tests());
+        s.start(FIREBALL, 3_000);
+        s.start_by(OTHER, FIREBALL, 3_000, 0);
+        assert_eq!(s.events(), Vec::<&str>::new(), "no bar");
+        assert!(s.app.world().get::<Casting>(me).is_none());
+        assert!(s.app.world().get::<Casting>(other).is_none());
+        assert_eq!(drain_cast_events(&mut s), vec![], "no cast event");
+    }
+
+    /// Another unit's start whose unit target is the player asks the target chain for the
+    /// caster's select (`0x6e790d` mask bit `0x2`, `0x6e7926` a guid, `0x6e7939`/`0x6e7947` the
+    /// player's); the player's own start (`0x6e78d6`) and a start at anyone else do not.
+    #[test]
+    fn another_units_start_at_the_player_asks_for_its_casters_select() {
+        const OTHER: u64 = 20;
+        const THIRD: u64 = 30;
+        let mut s = CastSeq::new();
+        crate::creature_anim::install_visuals_for_tests(s.app.world_mut(), &[FROSTBOLT], &[]);
+        let other = s.other_unit(OTHER);
+        let asks = |s: &mut CastSeq| -> Vec<(Entity, u64)> {
+            s.app
+                .world_mut()
+                .resource_mut::<Messages<CastAtPlayer>>()
+                .drain()
+                .map(|m| (m.caster, m.guid))
+                .collect()
+        };
+        s.start_at(OTHER, FROSTBOLT, 3_000, 0, Some(CastSeq::SELF));
+        assert_eq!(asks(&mut s), vec![(other, OTHER)], "at us");
+        s.start_at(OTHER, FROSTBOLT, 3_000, 0, Some(THIRD));
+        s.start_at(OTHER, FROSTBOLT, 3_000, 0, None);
+        s.start_at(CastSeq::SELF, FROSTBOLT, 3_000, 0, Some(CastSeq::SELF));
+        assert_eq!(asks(&mut s), vec![], "at another, at no unit, or ours");
     }
 
     /// The GO's end runs its tail as `0x6e4870` answers for the record and the cast flags

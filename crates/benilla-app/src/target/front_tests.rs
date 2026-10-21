@@ -147,6 +147,31 @@ impl Fix {
         }
     }
 
+    /// `entity` held as a unit (`OBJECT_FIELD_TYPE` 0x9), alive, with `more` fields.
+    pub(super) fn make_unit_with(&mut self, entity: Entity, more: &[(u16, u32)]) {
+        let mut fields = vec![(2, 0x9), (22, 100), (28, 100)];
+        fields.extend_from_slice(more);
+        self.app.world_mut().entity_mut(entity).insert(ObjectStore(
+            benilla_protocol::ObjectFields::from_pairs(&fields),
+        ));
+    }
+
+    pub(super) fn make_unit(&mut self, entity: Entity) {
+        self.make_unit_with(entity, &[]);
+    }
+
+    /// `SMSG_SPELL_START` by `caster` aimed at us, as the spell handler hands it on.
+    pub(super) fn cast_at_us(&mut self, caster: Entity, guid: u64) {
+        self.app
+            .world_mut()
+            .resource_mut::<Messages<crate::spell::net::CastAtPlayer>>()
+            .write(crate::spell::net::CastAtPlayer {
+                caster,
+                guid,
+                seq: 0,
+            });
+    }
+
     /// The target chain's bind of what the writers parked.
     pub(super) fn bind(&mut self) {
         self.app
@@ -219,7 +244,7 @@ fn a_plate_click_with_the_cursor_up_binds_its_unit() {
 #[test]
 fn a_charmed_player_is_refused_by_every_selector() {
     type Run = fn(&mut Fix);
-    let writers: [(&str, bool, Run, Option<u64>, bool); 6] = [
+    let writers: [(&str, bool, Run, Option<u64>, bool); 7] = [
         (
             "a plate click",
             false,
@@ -306,6 +331,22 @@ fn a_charmed_player_is_refused_by_every_selector() {
             false,
         ),
         (
+            "a caster at us acquired",
+            false,
+            |f| {
+                *f.app.world_mut().resource_mut::<Selection>() = Selection::default();
+                let mob = f.mob;
+                f.make_unit(mob);
+                f.cast_at_us(mob, MOB);
+                f.app
+                    .world_mut()
+                    .run_system_once(scan::auto_acquire_attacker)
+                    .unwrap();
+            },
+            Some(MOB),
+            false,
+        ),
+        (
             "ClearTarget",
             false,
             |f| {
@@ -327,7 +368,7 @@ fn a_charmed_player_is_refused_by_every_selector() {
             if cursor {
                 f.cursor_up();
             }
-            let before = if what == "an attacker acquired" {
+            let before = if what == "an attacker acquired" || what == "a caster at us acquired" {
                 None
             } else {
                 Some(OLD)
@@ -375,6 +416,71 @@ fn an_attacker_acquired_with_the_cursor_up_is_bound() {
     assert_eq!(f.wire(), (vec![Some(MOB)], vec![]));
     assert_eq!(f.selected(), None);
     assert!(!f.cursor_is_up());
+}
+
+/// Another unit casting at us is selected through `SelectTarget` (`0x6e799c`) when it cannot
+/// assist us (`CanAssist 0x6066f0` at `0x6e7973`) and nothing is selected (`[0xb4e2d8]`,
+/// `0x6e7980`); `PLAYER_TARGET_CHANGED` follows the selection. Our own pet, which can assist us,
+/// is not selected, nor is a caster the object manager does not hold as a unit, nor anyone while
+/// a target is held.
+#[test]
+fn a_caster_at_us_is_selected_when_it_cannot_assist_and_nothing_is() {
+    const PET: u64 = 0x41;
+    let mut f = fix(false);
+    let mob = f.mob;
+    f.make_unit(mob);
+    f.cast_at_us(mob, MOB);
+    f.app
+        .world_mut()
+        .run_system_once(scan::auto_acquire_attacker)
+        .unwrap();
+    assert_eq!(f.selected(), Some(OLD), "a target is held");
+    assert_eq!(f.wire(), (vec![], vec![]));
+
+    *f.app.world_mut().resource_mut::<Selection>() = Selection::default();
+    // `UNIT_FLAG_PLAYER_CONTROLLED` and `UNIT_FIELD_CREATEDBY` us: friendly, as the party rung
+    // counts the active player (`0x6062b0`).
+    let pet = f.scannable_at(PET, 5.0);
+    f.make_unit_with(pet, &[(46, 0x8), (14, ME as u32), (15, 0)]);
+    f.cast_at_us(pet, PET);
+    let old = f.app.world().resource::<GuidIndex>().0[&OLD];
+    f.cast_at_us(old, OLD);
+    f.app
+        .world_mut()
+        .run_system_once(scan::auto_acquire_attacker)
+        .unwrap();
+    assert_eq!(
+        f.selected(),
+        None,
+        "the pet can assist us, and OLD is no unit"
+    );
+    assert_eq!(f.wire(), (vec![], vec![]));
+
+    f.cast_at_us(mob, MOB);
+    f.app
+        .world_mut()
+        .run_system_once(scan::auto_acquire_attacker)
+        .unwrap();
+    assert_eq!(f.selected(), Some(MOB));
+    assert_eq!(f.wire(), (vec![], vec![MOB]), "CMSG_SET_SELECTION");
+}
+
+/// The caster's select is `SelectTarget` too, so a standing cursor binds it to the cast instead.
+#[test]
+fn a_caster_acquired_with_the_cursor_up_is_bound() {
+    let mut f = fix(false);
+    f.cursor_up();
+    *f.app.world_mut().resource_mut::<Selection>() = Selection::default();
+    let mob = f.mob;
+    f.make_unit(mob);
+    f.cast_at_us(mob, MOB);
+    f.app
+        .world_mut()
+        .run_system_once(scan::auto_acquire_attacker)
+        .expect("the acquire runs");
+    f.bind();
+    assert_eq!(f.wire(), (vec![Some(MOB)], vec![]));
+    assert_eq!(f.selected(), None);
 }
 
 /// 1.12.1 stores the cycle's index before `SelectTarget` (`0x4941d4`, `0x4941e6`), so a pick the
