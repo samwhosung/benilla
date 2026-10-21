@@ -172,18 +172,29 @@ fn slot_view(
     }
 }
 
-/// `CastSpell(id, "pet", onSelf)`: cancel first, as on the bar (`0x4b33af`-`0x4b3461`), a spell
-/// whose aura is on the pet sending `CMSG_PET_CANCEL_AURA` (0x26B) instead of the order; else
-/// `CMSG_PET_ACTION` at the selection as the calls before it left it, or with `onSelf` at the
-/// player. Unlike the bar's press it asks no usability predicate: no call site of `0x4bcf70` is
-/// in this path.
-pub(crate) fn cast_pet_spell(p: &mut crate::ui_pet::PetPress, spell_id: u32, on_self: bool) {
+/// The order a pet book cast sends, built by [`begin_pet_book_cast`].
+pub(crate) struct PetBookSend {
+    pet_guid: u64,
+    spell_id: u32,
+    target_guid: u64,
+}
+
+/// `CastSpell(id, "pet", onSelf)`'s first half (`0x4b3300`'s pet leg): cancel first, as on the bar
+/// (`0x4b33af`-`0x4b3461`), a spell whose aura is on the pet sending `CMSG_PET_CANCEL_AURA`
+/// (0x26B) instead of the order; else the order, at the selection as the calls before it left it,
+/// or with `onSelf` at the player. Between the halves the caller stops the targeting cursor this
+/// spell armed (`0x4b3474`-`0x4b347d`), which it owns. Unlike the bar's press it asks no usability
+/// predicate: no call site of `0x4bcf70` is in this path.
+pub(crate) fn begin_pet_book_cast(
+    p: &mut crate::ui_pet::PetPress,
+    spell_id: u32,
+    on_self: bool,
+) -> Option<PetBookSend> {
     let pet_guid = p.bar.spells.pet_guid;
     if pet_guid == 0 {
         debug!("ui_pet_book: dropping a queued pet book cast — the bar is gone");
-        return;
+        return None;
     }
-    let target_guid = p.spell_target(on_self);
     let display = p.spells.as_ref().and_then(|s| s.catalog.get(spell_id));
     if let (Some(d), Some(store)) = (display, p.pet.store(pet_guid)) {
         if crate::ui_action::toggle::active_action_toggle(spell_id, d, store) {
@@ -192,11 +203,25 @@ pub(crate) fn cast_pet_spell(p: &mut crate::ui_pet::PetPress, spell_id: u32, on_
                 .commands
                 .0
                 .send(ClientCommand::PetCancelAura { pet_guid, spell_id });
-            return;
+            return None;
         }
     }
-    // The word built for the send (`0x4b350a`-`0x4b3516`): type 1, the spell branch, autocast
-    // bits clear; with no target passed it aims at the selection (`0x4b34af`).
+    Some(PetBookSend {
+        pet_guid,
+        spell_id,
+        target_guid: p.spell_target(on_self),
+    })
+}
+
+/// The second half: `CMSG_PET_ACTION`, the word built for the send (`0x4b350a`-`0x4b3516`): type
+/// 1, the spell branch, autocast bits clear; with no target passed it aims at the selection
+/// (`0x4b34af`).
+pub(crate) fn finish_pet_book_cast(p: &mut crate::ui_pet::PetPress, send: PetBookSend) {
+    let PetBookSend {
+        pet_guid,
+        spell_id,
+        target_guid,
+    } = send;
     let packed = 0x0100_0000 | (spell_id & 0xFFFF);
     debug!("ui_pet_book: cast {spell_id} (target {target_guid:#x})");
     let _ = p.commands.0.send(ClientCommand::PetAction {

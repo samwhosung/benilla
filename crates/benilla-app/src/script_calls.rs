@@ -147,7 +147,17 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 appliers.p5().use_inventory_item(script, slot, on_self)
             }
             ScriptCall::CastPetSpell { spell_id, on_self } => {
-                crate::ui_pet_book::cast_pet_spell(&mut appliers.p6(), spell_id, on_self);
+                let send =
+                    crate::ui_pet_book::begin_pet_book_cast(&mut appliers.p6(), spell_id, on_self);
+                if let Some(send) = send {
+                    // `GetTargetingSpellId 0x6e48e0` is this spell: the press lowers the cursor
+                    // and sends nothing (`0x4b3474`-`0x4b347d`).
+                    if appliers.p3().ladder.ground.spell() == Some(spell_id) {
+                        appliers.p3().ladder.stop_targeting();
+                    } else {
+                        crate::ui_pet_book::finish_pet_book_cast(&mut appliers.p6(), send);
+                    }
+                }
             }
             ScriptCall::PetAction(slot) => pet_in_order!(appliers, begin_slot(slot)),
             ScriptCall::PetOrder(packed) => pet_in_order!(appliers, begin_order(packed)),
