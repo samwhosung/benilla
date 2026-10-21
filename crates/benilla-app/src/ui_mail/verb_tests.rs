@@ -342,3 +342,109 @@ fn the_list_keeps_expired_mail_and_answers_an_ignored_sender() {
         }])
     );
 }
+
+/// A profanity list masking the one word `darn`.
+fn darn_filter() -> crate::text_filter::TextFilter {
+    crate::text_filter::TextFilter::new(
+        &[benilla_formats::FilterPattern {
+            id: 1,
+            pattern: r"\<darn\>".into(),
+        }],
+        &[],
+    )
+}
+
+/// The list handler gives a row with no positive stationery id the first usable paper's
+/// (`0x4ad551`-`0x4ad56f`), and masks each kept row's subject (`0x4ad5b2`, `dl` 0) in list order.
+#[test]
+fn the_list_defaults_the_paper_and_masks_the_subject() {
+    let mut h = Mailbox::new(Vec::new());
+    let world = h.app.world_mut();
+    world.insert_resource(super::Stationery(
+        benilla_formats::StationeryCatalog::from_rows(vec![
+            benilla_formats::StationeryRow {
+                id: 42,
+                item: 9312,
+                texture: "PRICEY".into(),
+                flags: 1,
+            },
+            benilla_formats::StationeryRow {
+                id: 41,
+                item: 9311,
+                texture: "STATIONERYTEST".into(),
+                flags: 1,
+            },
+        ]),
+    ));
+    {
+        let mut items = world.resource_mut::<crate::items::Items>();
+        for (entry, price) in [(9311, 0), (9312, 25)] {
+            let mut t = crate::items::test_template("Paper");
+            t.buy_price = price;
+            items.insert_template(entry, Some(t));
+        }
+    }
+    world.insert_resource(darn_filter());
+    let mut none = entry(1, 0);
+    none.stationery = 0;
+    none.subject = "darn it".into();
+    let mut negative = entry(2, 0);
+    negative.stationery = u32::MAX;
+    let mut gm = entry(3, 0);
+    gm.stationery = 61;
+    crate::net::handlers::dispatch(
+        world,
+        vec![SessionEvent::MailList {
+            mails: vec![none, negative, gm],
+        }],
+    );
+    let mail = world.resource::<MailOpen>();
+    let rows: Vec<(u32, &str)> = mail
+        .mails
+        .iter()
+        .map(|e| (e.stationery, e.subject.as_str()))
+        .collect();
+    assert_eq!(rows, [(41, "!@#$ it"), (41, "s"), (61, "s")]);
+}
+
+/// `GetInboxText` masks the text it reads (`0x4af203`, `dl` 0) on every call, after the `$`
+/// expansion, so each read moves the mask's phase; a template's body is not masked
+/// (`0x4af261`-`0x4af26e`).
+#[test]
+fn get_inbox_text_masks_a_letter_but_not_a_template() {
+    let mut letter = entry(1, 9);
+    letter.checked = CHECKED_READ;
+    let mut template = entry(2, 0);
+    template.mail_template_id = 87;
+    let mut h = Mailbox::new(vec![letter, template]);
+    h.app.world_mut().insert_resource(darn_filter());
+    {
+        let mut script = h.script();
+        let mut state = MailState {
+            inbox: Vec::new(),
+            open: true,
+        };
+        for (id, body) in [(1, "darn mail"), (2, "darn template")] {
+            let mut e = entry(id, if id == 1 { 9 } else { 0 });
+            e.checked = CHECKED_READ;
+            e.mail_template_id = if id == 2 { 87 } else { 0 };
+            state.inbox.push(MailInboxRow {
+                body: Some(body.into()),
+                ..row_of(&e)
+            });
+        }
+        script.set_mail(Some(state));
+    }
+    let bodies: (String, String, String) = h.eval(
+        "local a = GetInboxText(1) local b = GetInboxText(1) local c = GetInboxText(2) \
+         return a, b, c",
+    );
+    assert_eq!(
+        bodies,
+        (
+            "!@#$ mail".to_string(),
+            "%^&* mail".to_string(),
+            "darn template".to_string()
+        )
+    );
+}

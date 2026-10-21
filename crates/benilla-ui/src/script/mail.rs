@@ -2173,6 +2173,91 @@ mod tests {
         assert_eq!(price("SelectPackage(1)"), 40);
         assert_eq!(price("SetSendMailMoney(500)"), 540);
     }
+
+    /// `ClickSendMailItemButton` refuses the held item off its live record before any swap
+    /// (`0x4adf38`-`0x4ae042`), in the reference's order: bound (`0x5da2c0`) is
+    /// `ERR_MAIL_QUEST_ITEM` for quest bonding 4 or 5 (`0x4adf75`-`0x4adf7f`) and
+    /// `ERR_MAIL_BOUND_ITEM` otherwise (`0x4adf97`); conjured (`0x4adfbd`) or bound to an area or a
+    /// map (`0x4adfe2`, `0x4adfed`) is `ERR_MAIL_CONJURED_ITEM`; a container holding an item is
+    /// `ERR_MAIL_BAG` (`0x4ae042`). A refused item stays on the cursor.
+    #[test]
+    fn the_send_slot_refuses_bound_conjured_zoned_and_filled_bag_items() {
+        use crate::script::cursor::{CursorItem, CursorPayload};
+        let attach = |slot: crate::script::ContainerSlot| -> (Vec<&'static str>, bool) {
+            let mut s = kept();
+            s.set_mail(Some(MailState {
+                open: true,
+                ..Default::default()
+            }));
+            let slot = crate::script::ContainerSlot {
+                item_id: 2589,
+                guid: 0x102,
+                count: 1,
+                ..slot
+            };
+            s.set_container(
+                0,
+                Some(crate::script::ContainerState {
+                    name: None,
+                    num_slots: 16,
+                    slots: [(5, slot)].into_iter().collect(),
+                }),
+            );
+            s.model_mut().cursor = Some(CursorPayload::Item(CursorItem {
+                item_class: None,
+                guid: 0x102,
+                bar_placeable: false,
+                consumable: false,
+                bag: 0,
+                slot: 5,
+                item_id: 2589,
+                texture: None,
+                link: None,
+                count: Some(1),
+                quality: Some(1),
+                equip_slots: Vec::new(),
+            }));
+            s.run("ClickSendMailItemButton()").unwrap();
+            let attached = s.model_ref().mail_send_item.is_some();
+            (s.take_ui_errors(), attached)
+        };
+        let bound = |bonding: u32| crate::script::ContainerSlot {
+            already_bound: true,
+            bonding,
+            ..Default::default()
+        };
+        assert_eq!(attach(bound(4)), (vec!["ERR_MAIL_QUEST_ITEM"], false));
+        assert_eq!(attach(bound(5)), (vec!["ERR_MAIL_QUEST_ITEM"], false));
+        assert_eq!(attach(bound(1)), (vec!["ERR_MAIL_BOUND_ITEM"], false));
+        assert_eq!(
+            attach(crate::script::ContainerSlot {
+                template_flags: 0x2,
+                ..bound(1)
+            }),
+            (vec!["ERR_MAIL_BOUND_ITEM"], false),
+            "bound is asked first"
+        );
+        let conjured = crate::script::ContainerSlot {
+            template_flags: 0x2,
+            ..Default::default()
+        };
+        assert_eq!(attach(conjured), (vec!["ERR_MAIL_CONJURED_ITEM"], false));
+        let zoned = crate::script::ContainerSlot {
+            zone_bound: true,
+            ..Default::default()
+        };
+        assert_eq!(attach(zoned), (vec!["ERR_MAIL_CONJURED_ITEM"], false));
+        let full_bag = crate::script::ContainerSlot {
+            occupied_seats: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(attach(full_bag), (vec!["ERR_MAIL_BAG"], false));
+        let empty_bag = crate::script::ContainerSlot {
+            occupied_seats: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(attach(empty_bag), (Vec::new(), true));
+    }
 }
 
 #[cfg(test)]

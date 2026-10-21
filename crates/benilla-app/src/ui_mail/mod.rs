@@ -880,6 +880,65 @@ mod tests {
         );
     }
 
+    /// The usable list's order is the comparator `0x4ada90`'s: a carried paper first
+    /// (`0x4adab5`-`0x4adae7`), then the lower buy price (`0x4adb81`-`0x4adb89`), then the name,
+    /// case-insensitively (`0x4adba6`).
+    #[test]
+    fn the_usable_papers_sort_carried_first_then_by_price_then_by_name() {
+        use bevy::ecs::system::RunSystemOnce;
+        const PACK_SLOT_1: u16 = 486 + 2 * 23;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        let mut items = Items::default();
+        for (entry, name, price) in [(1, "Zeta", 10), (2, "alpha", 10), (3, "Mid", 50)] {
+            let mut t = crate::items::test_template(name);
+            t.buy_price = price;
+            items.insert_template(entry, Some(t));
+        }
+        app.init_resource::<crate::net::GuidIndex>()
+            .insert_resource(items)
+            .insert_resource(NetCommands(tx));
+        crate::items::test_spawn_item(
+            app.world_mut(),
+            0x4000_0000_0000_0003,
+            benilla_protocol::ObjectFields::from_pairs(&[(3, 3), (14, 1)]),
+            false,
+        );
+        app.world_mut().spawn((
+            SelfPlayer,
+            crate::net::Guid(7),
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (PACK_SLOT_1, 0x4000_0000_0000_0003u64 as u32),
+                (PACK_SLOT_1 + 1, 0x4000_0000),
+            ])),
+        ));
+        let row = |id: u32, item: u32, flags: u32| benilla_formats::StationeryRow {
+            id,
+            item,
+            texture: format!("T{id}"),
+            flags,
+        };
+        let catalog = Stationery(benilla_formats::StationeryCatalog::from_rows(vec![
+            row(11, 1, 1),
+            row(12, 2, 1),
+            row(13, 3, 0),
+        ]));
+        let order = app
+            .world_mut()
+            .run_system_once(
+                move |self_q: Query<(&ObjectStore, &crate::net::Guid), With<SelfPlayer>>,
+                      objects: Objects,
+                      items: Res<Items>| {
+                    stationeries(&catalog, &self_q, &objects, &items, None)
+                        .into_iter()
+                        .map(|v| v.id)
+                        .collect::<Vec<_>>()
+                },
+            )
+            .unwrap();
+        assert_eq!(order, [13, 12, 11]);
+    }
+
     /// `GetPackageInfo`'s icon is the basename under `Interface\Icons` (`0x4ae4c6`, `0x4ae4eb`).
     #[test]
     fn a_package_row_answers_its_icon_under_the_icon_folder() {
@@ -1139,6 +1198,83 @@ mod tests {
             &no_strings,
         );
         assert!(!row.can_reply);
+    }
+
+    /// `GetInboxHeaderInfo`'s reply flag is a player's mail off the GM stationery
+    /// (`0x4aefa5`-`0x4aefbc`), with no returned test; a player's GM letter names its sender
+    /// `GM_EMAIL_NAME` (`0x4aedbd`-`0x4aedcb`, jump table `0x4af068`).
+    #[test]
+    fn a_gm_letter_is_from_gm_email_name_and_a_returned_mail_can_be_answered() {
+        let states = crate::world_state::WorldStates::default();
+        let items = Items::default();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let names = NameCache::default();
+        let bodies = QueryCache::default();
+        let strings = |key: &str| (key == "GM_EMAIL_NAME").then(|| "Customer Support".to_string());
+        let row_of = |e: &MailListEntry| {
+            resolve_row(
+                e,
+                &bodies,
+                &items,
+                None,
+                None,
+                None,
+                &names,
+                Ask::New(&commands),
+                crate::items::RollCatalogs::NONE,
+                &no_macros(&states),
+                &strings,
+            )
+        };
+        let mut gm = entry(1, Some(0xA), 0, 30.0);
+        gm.stationery = STATIONERY_GM;
+        let row = row_of(&gm);
+        assert_eq!(
+            (row.sender.as_deref(), row.can_reply, row.is_gm),
+            (Some("Customer Support"), false, true)
+        );
+        let returned = entry(2, Some(0xA), CHECKED_RETURNED, 30.0);
+        assert!(row_of(&returned).can_reply);
+    }
+
+    /// `GetInboxText`'s texture is nil for a stationery id the store lacks (`0x4af284`-`0x4af2a9`).
+    #[test]
+    fn a_stationery_the_store_lacks_has_no_texture() {
+        let states = crate::world_state::WorldStates::default();
+        let items = Items::default();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let names = NameCache::default();
+        let bodies = QueryCache::default();
+        let catalog = Stationery(benilla_formats::StationeryCatalog::from_rows(vec![
+            benilla_formats::StationeryRow {
+                id: 41,
+                item: 9311,
+                texture: "STATIONERYTEST".into(),
+                flags: 1,
+            },
+        ]));
+        let texture = |id: u32| {
+            let mut e = entry(1, Some(0xA), 0, 30.0);
+            e.stationery = id;
+            resolve_row(
+                &e,
+                &bodies,
+                &items,
+                None,
+                Some(&catalog),
+                None,
+                &names,
+                Ask::New(&commands),
+                crate::items::RollCatalogs::NONE,
+                &no_macros(&states),
+                &no_strings,
+            )
+            .stationery_texture
+        };
+        assert_eq!(texture(41).as_deref(), Some("STATIONERYTEST"));
+        assert_eq!(texture(77), None);
     }
 
     #[test]
