@@ -22,6 +22,9 @@ pub(crate) struct ChatSender<'w, 's> {
     mirror: Option<ResMut<'w, AfkMirror>>,
     objects: crate::net::Objects<'w, 's>,
     self_guid: Option<Res<'w, crate::net::SelfGuid>>,
+    /// The selection `%t` names (`0xb4e2d8`).
+    selection: Res<'w, crate::target::Selection>,
+    names: Res<'w, crate::names::NameCache>,
 }
 
 impl ChatSender<'_, '_> {
@@ -32,8 +35,8 @@ impl ChatSender<'_, '_> {
 
     /// `SendChatMessage` from its group gates on, in the reference's order: the group gates and
     /// the leader promotion, the channel slot, the AFK clear or the AFK arm, the DND arm, the dead
-    /// check (`0x49f592`), and the packet (`0x49f6c3`). What a step does stands when a later step
-    /// ends the call.
+    /// check (`0x49f592`), the `%` expander (`0x49f60f`), the escape scan (`0x49f661`), and the
+    /// packet (`0x49f6c3`). What a step does stands when a later step ends the call or raises.
     pub(crate) fn send_chat(&mut self, script: &mut UiScript, mut send: ChatSend) {
         // The binding has raised on any other token (`0x49f27f`), so none reaches here.
         let Some(mut kind) = SendType::from_token(&send.chat_type) else {
@@ -92,11 +95,19 @@ impl ChatSender<'_, '_> {
                 .push(crate::ui_action::UiError::key("ERR_CHAT_WHILE_DEAD"));
             return;
         }
+        let mut text =
+            benilla_ui::script::expand_target_tokens(&send.text, || self.target_name(script));
+        // A drunk player's text goes through `0x508680` here (`0x49f614`-`0x49f656`), which
+        // benilla does not build.
+        if benilla_ui::script::validate_escapes(&mut text).is_err() {
+            script.raise_in_call(benilla_ui::script::INVALID_ESCAPE);
+            return;
+        }
         // The gate `0x494a50(6)` (`0x49f6af`) passes every caller: tag 6 is its pass arm.
         let cmd = ClientCommand::Chat {
             kind: wire,
             target: send.target,
-            text: send.text,
+            text,
             language: send.language,
         };
         if self.commands.0.send(cmd).is_err() {
@@ -155,6 +166,35 @@ impl ChatSender<'_, '_> {
     /// the server's update marks again where a second `/afk` clears.
     fn player_flags(&self) -> u32 {
         self.player().map_or(0, |s| s.0.player_flags())
+    }
+
+    /// The name `0x5083a0` puts for a token (`0x50844a`-`0x5084bc`): with a selection, a unit the
+    /// client holds is named by `GetUnitName` (`0x609210`), whose miss is `UNKNOWNOBJECT`; a guid
+    /// it does not hold by the player-name cache (`0x55f080`); with neither, or no selection,
+    /// `TARGET_TOKEN_NOT_FOUND`.
+    fn target_name(&self, script: &UiScript) -> String {
+        let not_found = || {
+            super::super::combat::global_string(script, "TARGET_TOKEN_NOT_FOUND")
+                .unwrap_or_default()
+        };
+        let Some(guid) = self.selection.guid.filter(|&g| g != 0) else {
+            return not_found();
+        };
+        let ask = crate::query_cache::Ask::New(&self.commands);
+        match self
+            .objects
+            .store(guid)
+            .filter(|s| super::super::combat::is_unit(s))
+        {
+            Some(unit) => self
+                .names
+                .resolve_unit(guid, Some(unit), ask)
+                .map_or_else(|| script.unknown_object_text(), str::to_owned),
+            None => self
+                .names
+                .resolve_player(guid, ask)
+                .map_or_else(not_found, str::to_owned),
+        }
     }
 }
 

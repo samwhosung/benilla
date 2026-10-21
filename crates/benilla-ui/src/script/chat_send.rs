@@ -10,7 +10,8 @@
 //! the language, a WHISPER with no target raises `Whisper message missing target player!`
 //! (`0x49f325`) and a CHANNEL with none `Channel send missing channel number` (`0x49f535`). The
 //! rest of the verb, from the group gates to the packet, is the host's, applied inside the call
-//! ([`super::ScriptCall::SendChat`]).
+//! ([`super::ScriptCall::SendChat`]), which raises [`INVALID_ESCAPE`] there after what the verb did
+//! before its escape scan.
 //!
 //! The line goes out as a [`ChatSend`] rather than through the edit box, whose drain runs the
 //! slash grammar: an addon's `SendChatMessage("/dance")` says the characters. The reference splits
@@ -29,6 +30,10 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::Model;
+
+mod text;
+
+pub use text::{expand_target_tokens, validate_escapes, INVALID_ESCAPE};
 
 impl super::UiScript {
     /// Push the name `GetDefaultLanguage()` answers. `None` is the reference's no-player state,

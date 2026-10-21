@@ -84,41 +84,6 @@ pub struct AddonSend {
 /// `_snprintf(dst, 0x800, …)` writes at most 2047 bytes plus its NUL (`0x64a861`-`0x64a868`).
 const ADDON_MESSAGE_CAP: usize = 0x800 - 1;
 
-/// The reference's `|`-escape scan (`0x49f9bb`-`0x49fa04`), its only text check, run on the
-/// composed payload before the distribution is read. After each `|`: `||` skips both bytes; `|c`
-/// skips past the first later `|r` (case-sensitive `strstr`, `0x49f9f4`), leaving the run between
-/// unchecked; `|c` with no `|r` cuts `text` at the `|` and accepts (`0x49fa6a`); anything else,
-/// the NUL after a trailing `|` included, is `Err` (`0x49fa6f`).
-fn validate_escapes(text: &mut String) -> Result<(), ()> {
-    let bytes = text.as_bytes();
-    let mut i = 0usize;
-    while let Some(off) = bytes[i..].iter().position(|&b| b == b'|') {
-        let pipe = i + off;
-        match bytes.get(pipe + 1) {
-            Some(b'|') => i = pipe + 2,
-            Some(b'c') => {
-                // The reference's `strstr` starts at the `|c`, which cannot itself match `|r`.
-                match bytes[pipe..]
-                    .windows(2)
-                    .position(|w| w == b"|r")
-                    .map(|p| pipe + p)
-                {
-                    // Past the closer: its `|` must not reach the loop head, where `|r` raises.
-                    Some(closer) => i = closer + 2,
-                    // No closer: the reference cuts at the `|` and accepts.
-                    None => {
-                        text.truncate(pipe);
-                        return Ok(());
-                    }
-                }
-            }
-            // Anything else, including `None`: the NUL after a trailing `|`.
-            _ => return Err(()),
-        }
-    }
-    Ok(())
-}
-
 /// `lua_tostring` with the reference's NULL-to-empty replacement (`0x49f96b`-`0x49f97a`): strings
 /// and numbers coerce, anything else is `""`.
 fn lua_tostring(lua: &Lua, v: &Value) -> mlua::Result<String> {
@@ -152,12 +117,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     }
                     text.truncate(cut);
                 }
-                // After the compose, before argument 3 is read (`0x49fa06` precedes `0x49fa0b`),
-                // so a bad escape is reported over a bad distribution.
-                if validate_escapes(&mut text).is_err() {
-                    return Err(mlua::Error::RuntimeError(
-                        "Invalid escape code in chat message".into(),
-                    ));
+                // The escape scan (`0x49f9bb`-`0x49fa04`), its only text check: after the compose,
+                // before argument 3 is read (`0x49fa06` precedes `0x49fa0b`), so a bad escape is
+                // reported over a bad distribution.
+                if super::chat_send::validate_escapes(&mut text).is_err() {
+                    return Err(mlua::Error::runtime(super::chat_send::INVALID_ESCAPE));
                 }
                 // `lua_isstring` (`0x49fa15`) is true for a number, so `1` is the token "1" and
                 // raises; anything else that is not a string is PARTY (`0x49fa1c`).
