@@ -283,6 +283,13 @@ impl FieldChanged {
     pub fn unit_field(&self, index: u16) -> bool {
         self.is_unit() && self.index == index
     }
+    /// A unit's alive-to-dead edge, signed as the health watcher compares it (`0x6046f0`:
+    /// `0x604774 jg` on the old health, `0x604778 jle` on the new), which runs `OnDied`.
+    pub fn unit_died(&self) -> bool {
+        self.unit_field(benilla_protocol::field::FIELD_UNIT_HEALTH)
+            && self.old as i32 > 0
+            && self.new as i32 <= 0
+    }
     /// The edge's slot in a unit-block array of `len` dwords at `base` (`UNIT_FIELD_AURA[48]`).
     pub fn unit_array_slot(&self, base: u16, len: u16) -> Option<u16> {
         (self.is_unit() && (base..base + len).contains(&self.index)).then(|| self.index - base)

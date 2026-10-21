@@ -14,18 +14,11 @@
 //! - the tail from `0x60590b`: the quest marker, the missiles, the effects, a sound, the auto-move
 //!   stop and `0x4931c0` on the unit's guid (`0x605950`).
 
-use benilla_protocol::field::FIELD_UNIT_HEALTH;
 use bevy::prelude::*;
 
 use super::Selection;
 use crate::creature_anim::{AttackSeam, Engaged};
 use crate::net::{FieldChanged, SelfPlayer};
-
-/// Whether `e` is a unit's alive-to-dead edge, signed as the watcher compares (`0x604774 jg`,
-/// `0x604778 jle`).
-fn died(e: &FieldChanged) -> bool {
-    e.unit_field(FIELD_UNIT_HEALTH) && e.old as i32 > 0 && e.new as i32 <= 0
-}
 
 /// Each unit's death, in the order the edges came.
 pub(super) fn on_unit_died(
@@ -37,7 +30,7 @@ pub(super) fn on_unit_died(
 ) {
     // Our attack target as this pass leaves it: our own death zeroes it before a deselect reads it.
     let mut me_engaged = !engaged.is_empty();
-    for e in edges.read().filter(|e| died(e)) {
+    for e in edges.read().filter(|e| e.unit_died()) {
         let me = seam.me.single().ok();
         if let Ok(mut unit) = commands.get_entity(e.entity) {
             unit.try_remove::<Engaged>();
