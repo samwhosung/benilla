@@ -333,3 +333,56 @@ fn get_inventory_item_cooldown_answers_the_item_query_under_the_clients_gates() 
     assert!(err("GetInventoryItemCooldown('player', 30)")
         .contains("Invalid inventory slot in GetInventoryItemCooldown"));
 }
+
+/// `GetContainerItemCooldown` (`0x4f9a7f`) and `GameTooltip:SetBagItem` (`0x53483a`) reach the item
+/// query `0x6e2ed0` with the item's record missing (`0x4f9a46`, `0x5347e1`), which asks it with the
+/// callback `0x6e2f70` (`0x6e2efb`): each call on such a slot queues its entry, and a slot whose
+/// record is cached queues nothing.
+#[test]
+fn a_bag_slots_cooldown_query_asks_for_its_missing_record() {
+    let mut s = script();
+    let bag = ContainerState {
+        name: None,
+        num_slots: 16,
+        slots: std::collections::HashMap::from([
+            (
+                1,
+                ContainerSlot {
+                    item_id: 6948,
+                    count: 1,
+                    ..Default::default()
+                },
+            ),
+            (
+                2,
+                ContainerSlot {
+                    item_id: 118,
+                    count: 1,
+                    quality: Some(1),
+                    cooldown: Some((0, 0, true)),
+                    ..Default::default()
+                },
+            ),
+        ]),
+    };
+    s.set_container(0, Some(bag));
+    s.run("GetContainerItemCooldown(0, 2)").unwrap();
+    assert!(s.take_cooldown_record_asks().is_empty(), "a cached record");
+    s.run("GetContainerItemCooldown(0, 1)").unwrap();
+    assert_eq!(s.take_cooldown_record_asks(), vec![6948]);
+    s.run(
+        r#"
+        local owner = CreateFrame("Frame", "CooldownAskOwner")
+        local tt = CreateFrame("GameTooltip", "CooldownAskTT", nil, "TestTooltipTemplate")
+        tt:SetOwner(owner, "ANCHOR_RIGHT")
+        tt:SetBagItem(0, 1)
+        tt:SetBagItem(0, 2)
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        s.take_cooldown_record_asks(),
+        vec![6948],
+        "the tooltip's query"
+    );
+}

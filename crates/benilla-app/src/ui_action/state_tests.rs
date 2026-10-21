@@ -1752,6 +1752,97 @@ fn an_item_slots_record_landing_flushes_its_running_cooldown() {
     );
 }
 
+/// The three events a record callback `0x6e2f70` fires (`0x6e2f89`, `0x6e2f8e`).
+const RECORD_FLUSH: [&str; 3] = [
+    "ACTIONBAR_UPDATE_COOLDOWN",
+    "SPELL_UPDATE_COOLDOWN",
+    "BAG_UPDATE_COOLDOWN",
+];
+
+/// Hearthstone's record, its on-use spell 8690.
+fn hearthstone_record() -> benilla_protocol::messages::ItemInfo {
+    benilla_protocol::messages::ItemInfo {
+        use_spell: Some(benilla_protocol::messages::ItemUseSpell {
+            spell_id: 8690,
+            cooldown_ms: -1,
+            category: 0,
+            category_cooldown_ms: -1,
+        }),
+        ..crate::items::test_template("Hearthstone")
+    }
+}
+
+/// The callback `0x6e2f70` is the item cache's, not the asking slot's: a record that lands after
+/// the slot was cleared still flushes its running cooldown (`0x6e2f80`-`0x6e2f8e`).
+#[test]
+fn a_record_landing_after_its_slot_was_cleared_still_flushes() {
+    const HEARTHSTONE: u32 = 6948;
+    let mut app = feed_app(
+        &[(0, HEARTHSTONE, ACTION_KIND_ITEM)],
+        Spells::empty_for_tests(),
+        5.0,
+    );
+    record(&mut app, &RECORD_FLUSH);
+    app.world_mut()
+        .resource_mut::<Cooldowns>()
+        .apply_wire_item_cooldown(HEARTHSTONE, 8690, Instant::now());
+    frame(&mut app);
+    app.world_mut()
+        .resource_mut::<PlayerActions>()
+        .buttons
+        .clear();
+    assert!(
+        frame(&mut app).is_empty(),
+        "the slot is gone, its ask is not"
+    );
+    app.world_mut()
+        .resource_mut::<Items>()
+        .insert_template(HEARTHSTONE, Some(hearthstone_record()));
+    assert_eq!(frame(&mut app), RECORD_FLUSH);
+}
+
+/// `GetContainerItemCooldown` on a bag slot whose record is missing asks it with the callback
+/// `0x6e2f70` (`0x4f9a7f` → `0x6e2efb`), whose landing on a running cooldown fires the pair and
+/// `BAG_UPDATE_COOLDOWN` (`0x6e2f89`, `0x6e2f8e`).
+#[test]
+fn a_bag_query_on_a_missing_record_flushes_when_the_record_lands() {
+    use benilla_ui::script::{ContainerSlot, ContainerState};
+    const HEARTHSTONE: u32 = 6948;
+    let mut app = feed_app(&[], Spells::empty_for_tests(), 5.0);
+    record(&mut app, &RECORD_FLUSH);
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .set_container(
+            0,
+            Some(ContainerState {
+                name: None,
+                num_slots: 16,
+                slots: std::collections::HashMap::from([(
+                    1,
+                    ContainerSlot {
+                        item_id: HEARTHSTONE,
+                        count: 1,
+                        ..Default::default()
+                    },
+                )]),
+            }),
+        );
+    app.world_mut()
+        .resource_mut::<Cooldowns>()
+        .apply_wire_item_cooldown(HEARTHSTONE, 8690, Instant::now());
+    frame(&mut app);
+    app.world()
+        .non_send_resource::<UiScript>()
+        .run("GetContainerItemCooldown(0, 1)")
+        .unwrap();
+    assert!(frame(&mut app).is_empty(), "asked, and waiting");
+    app.world_mut()
+        .resource_mut::<Items>()
+        .insert_template(HEARTHSTONE, Some(hearthstone_record()));
+    assert_eq!(frame(&mut app), RECORD_FLUSH);
+    assert!(frame(&mut app).is_empty(), "once");
+}
+
 /// The feed's two halves sit around the unit snapshots, and its signals come ahead of the events
 /// its producers precede. The push half seats the action states before the snapshots, which
 /// `PLAYER_ENTERING_WORLD`'s handlers read. The fire half runs after the snapshots and the
