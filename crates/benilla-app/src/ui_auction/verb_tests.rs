@@ -91,10 +91,7 @@ impl House {
             min_bid: 100,
             ..Default::default()
         };
-        let mut state = AuctionState {
-            open: true,
-            ..Default::default()
-        };
+        let mut state = AuctionState::default();
         let mut browse = row(7, SILK);
         (browse.bid_amount, browse.min_increment, browse.buyout_price) = (500, 25, 2000);
         let mut owned = row(8, 2589);

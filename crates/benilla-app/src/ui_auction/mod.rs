@@ -823,7 +823,6 @@ fn feed_auction(
                 .as_deref()
                 .and_then(|h| h.0.deposit_percent(auction.house_id))
                 .unwrap_or(0),
-            open: auction.auctioneer.is_some(),
         };
 
         // A close is the core's, which told the VM; a disconnect's clear tells it nothing.

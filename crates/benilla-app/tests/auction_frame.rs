@@ -121,7 +121,6 @@ fn state(mut rows: Vec<AuctionItemRow>) -> AuctionState {
     AuctionState {
         lists,
         deposit_percent: 5,
-        open: true,
     }
 }
 

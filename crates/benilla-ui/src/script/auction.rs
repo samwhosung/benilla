@@ -178,13 +178,10 @@ pub struct AuctionState {
     pub lists: [AuctionListState; 3],
     /// `GetAuctionHouseDepositRate()`: the house's `AuctionHouse.dbc` deposit percentage.
     pub deposit_percent: u32,
-    /// An auctioneer session is open (`[0xb725f8]` nonzero): `StartAuction` sends only then
-    /// (`0x4ce7da`).
-    pub open: bool,
 }
 
 impl Default for AuctionState {
-    /// Three empty lists, each with its world-entry stack, and no session.
+    /// Three empty lists, each with its world-entry stack, and no deposit rate.
     fn default() -> Self {
         Self {
             lists: AuctionSortStack::seeded_all().map(|sort| AuctionListState {
@@ -192,7 +189,6 @@ impl Default for AuctionState {
                 ..Default::default()
             }),
             deposit_percent: 0,
-            open: false,
         }
     }
 }
@@ -375,11 +371,10 @@ impl super::UiScript {
         };
     }
 
-    /// The close's half the VM holds (`0x4cd613`-`0x4cd61f`): the session and its house go; the
-    /// lists, their stacks and the selection stand, and the getters still answer them.
+    /// The close's half the VM holds (`0x4cd613`-`0x4cd61f`): the house goes, and its deposit rate
+    /// with it; the lists, their stacks and the selection stand, and the getters still answer them.
     pub fn close_auction_session(&mut self) {
         if let Some(a) = self.model_mut().auction.as_mut() {
-            a.open = false;
             a.deposit_percent = 0;
         }
     }
@@ -1461,10 +1456,7 @@ mod tests {
                 ..Default::default()
             })
             .collect();
-        let mut state = AuctionState {
-            open: true,
-            ..Default::default()
-        };
+        let mut state = AuctionState::default();
         state.lists[LIST] = AuctionListState {
             total: rows.len() as u32,
             rows,
