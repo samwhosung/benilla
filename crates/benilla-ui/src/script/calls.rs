@@ -678,4 +678,170 @@ mod tests {
         );
         assert_eq!(*host.tails.borrow(), vec![InputEvents::NONE, KEY]);
     }
+
+    /// A host that applies each call by counting it into the `APPLIED` global, so a handler can
+    /// read whether the call it made has applied by its next line. The first call it applies may
+    /// signal `SPELLCAST_FAILED` from inside the apply, and leave a tail that copies `SEEN` into
+    /// `TAIL_SAW`.
+    #[derive(Default)]
+    struct Stamping {
+        applied: Vec<ScriptCall>,
+        signal: bool,
+    }
+
+    impl CallHost for Stamping {
+        fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
+            self.applied.push(call);
+            script
+                .lua()
+                .globals()
+                .set("APPLIED", self.applied.len())
+                .unwrap();
+            if !std::mem::take(&mut self.signal) {
+                return None;
+            }
+            script.fire_event("SPELLCAST_FAILED", vec![]);
+            Some(Box::new(|script: &mut UiScript| {
+                let seen: mlua::Value = script.lua().globals().get("SEEN").unwrap();
+                script.lua().globals().set("TAIL_SAW", seen).unwrap();
+            }))
+        }
+    }
+
+    /// A frame whose handler for `event` (and its `OnShow`) clears the target and notes, in `SEEN`,
+    /// how many calls had applied by the next line, and appends `<tag>:<applied>` to `ORDER`.
+    fn listen(s: &UiScript, name: &str, event: &str, tag: &str) {
+        s.run(&format!(
+            r#"local f = CreateFrame("Frame", "{name}")
+            local function note()
+                ClearTarget()
+                SEEN = APPLIED
+                ORDER = (ORDER or "") .. "{tag}:" .. (APPLIED or 0) .. " "
+            end
+            f:RegisterEvent("{event}")
+            f:SetScript("OnEvent", note)
+            f:SetScript("OnShow", note)"#
+        ))
+        .unwrap();
+    }
+
+    fn global<T: mlua::FromLua>(s: &UiScript, name: &str) -> T {
+        s.lua().globals().get(name).unwrap()
+    }
+
+    /// The reference has no queue between a verb and its effect: an event an engine step signals
+    /// runs its handlers then (`SignalEvent`, `0x703e50`, walks the listeners in place), and a
+    /// call they make applies before its verb returns. An engine
+    /// turn cannot lend the host, so the handlers it fires run when its entry lends it, and the
+    /// call a handler makes applies in place: `SEEN` reads it applied.
+    #[test]
+    fn a_handler_an_engine_turn_fires_runs_with_the_host_lent() {
+        let mut s = UiScript::new().unwrap();
+        listen(&s, "Turned", "LOOT_OPENED", "e");
+        s.host_out(|s| s.fire_event("LOOT_OPENED", vec![]));
+        let mut host = Stamping::default();
+        s.hosted(&mut host, |_| ());
+        assert_eq!(host.applied, vec![ScriptCall::ClearTarget]);
+        assert_eq!(
+            global::<Option<u32>>(&s, "SEEN"),
+            Some(1),
+            "applied in place"
+        );
+    }
+
+    /// A widget handler an engine turn fires (here `OnShow`) waits for the host the same way.
+    #[test]
+    fn a_widget_handler_an_engine_turn_fires_runs_with_the_host_lent() {
+        let mut s = UiScript::new().unwrap();
+        listen(&s, "Shown", "BAG_UPDATE", "s");
+        let h = s.frame_handle("Shown").expect("the frame");
+        let id = s.model_mut().frame_id(h);
+        s.host_out(|s| {
+            let lua = s.lua().clone();
+            super::super::event::fire_widget_handler(&lua, id, "OnShow", vec![]).unwrap();
+        });
+        let mut host = Stamping::default();
+        s.hosted(&mut host, |_| ());
+        assert_eq!(
+            global::<Option<u32>>(&s, "SEEN"),
+            Some(1),
+            "applied in place"
+        );
+    }
+
+    /// A handler a call's apply fires runs as the host comes back, before the call's tail, so the
+    /// call it makes applies in place, inside the handler, and the tail sees it ran.
+    #[test]
+    fn a_handler_an_apply_fires_runs_as_the_host_is_back_before_the_tail() {
+        let mut s = UiScript::new().unwrap();
+        listen(&s, "Applied", "SPELLCAST_FAILED", "a");
+        let mut host = Stamping {
+            signal: true,
+            ..Default::default()
+        };
+        s.hosted(&mut host, |s| s.run(r#"TargetUnit("player")"#))
+            .unwrap();
+        assert_eq!(
+            host.applied,
+            vec![select("player"), ScriptCall::ClearTarget]
+        );
+        assert_eq!(
+            global::<Option<u32>>(&s, "SEEN"),
+            Some(2),
+            "applied in place"
+        );
+        assert_eq!(
+            global::<Option<u32>>(&s, "TAIL_SAW"),
+            Some(2),
+            "before the tail"
+        );
+    }
+
+    /// What an engine turn left runs in the order it was made: a handler fired before a waiting
+    /// call reads the state before it, one fired after it the state after.
+    #[test]
+    fn a_turns_handlers_and_waiting_calls_run_in_the_order_made() {
+        let mut s = UiScript::new().unwrap();
+        listen(&s, "First", "LOOT_OPENED", "1");
+        listen(&s, "Second", "LOOT_CLOSED", "2");
+        s.host_out(|s| {
+            s.fire_event("LOOT_OPENED", vec![]);
+            s.run(r#"TargetUnit("player")"#).unwrap();
+            s.fire_event("LOOT_CLOSED", vec![]);
+        });
+        let mut host = Stamping::default();
+        s.hosted(&mut host, |_| ());
+        // The first handler's call applies inside it, then the waiting one, then the second's.
+        assert_eq!(
+            global::<Option<String>>(&s, "ORDER").as_deref(),
+            Some("1:1 2:3 ")
+        );
+        assert_eq!(
+            host.applied,
+            vec![
+                ScriptCall::ClearTarget,
+                select("player"),
+                ScriptCall::ClearTarget
+            ]
+        );
+    }
+
+    /// With no host to lend after the turn, its handlers still run, as it ends: the calls they
+    /// make are dropped with the turn's own.
+    #[test]
+    fn a_turn_with_no_host_runs_its_handlers_as_it_ends() {
+        let mut s = UiScript::new().unwrap();
+        listen(&s, "Alone", "LOOT_OPENED", "e");
+        s.host_out(|s| s.fire_event("LOOT_OPENED", vec![]));
+        assert_eq!(
+            global::<Option<String>>(&s, "ORDER"),
+            None,
+            "held for the host"
+        );
+        assert_eq!(s.refuse_waiting(), 1, "the handler's call");
+        assert_eq!(
+            global::<Option<String>>(&s, "ORDER").as_deref(),
+            Some("e:0 ")
+        );
+    }
 }
