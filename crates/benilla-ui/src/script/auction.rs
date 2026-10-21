@@ -677,7 +677,7 @@ fn sell_item_info(model: &Model) -> Option<(String, Option<String>, u32, i64, bo
         count,
         quality,
         can_use,
-        sell_price.saturating_mul(count),
+        sell_price.wrapping_mul(count),
     ))
 }
 
@@ -686,9 +686,11 @@ fn sell_item_info(model: &Model) -> Option<(String, Option<String>, u32, i64, bo
 /// over 100, times `minutes / 120` (`0x644bf3`-`0x644c17`). The inner floor zeroes a cheap stack
 /// the server still charges a few copper for.
 fn deposit_for(rate: u32, stack_value: u32, minutes: u32) -> u32 {
-    let per_unit = u64::from(rate).saturating_mul(u64::from(stack_value)) / 100;
-    let units = u64::from(minutes) / 120;
-    u32::try_from(per_unit.saturating_mul(units)).unwrap_or(u32::MAX)
+    if !RUN_TIMES.contains(&minutes) {
+        return 0;
+    }
+    // At most `u32::MAX / 100 × 12`, so the x87 product `_ftol` truncates is exact.
+    rate.wrapping_mul(stack_value) / 100 * (minutes / 120)
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
