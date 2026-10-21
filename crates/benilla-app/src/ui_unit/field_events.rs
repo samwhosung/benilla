@@ -814,6 +814,53 @@ mod tests {
         out
     }
 
+    /// `PLAYER_TARGET_CHANGED` re-shows the inspect window on the new target
+    /// (`Blizzard_InspectUI.lua:29-31`), whose doll reads its slots inside the call
+    /// (`InspectPaperDollFrame.lua:57-79`): the aura feed seats the new target's guid, the inspect
+    /// feed pushes its slots, then the event fires.
+    #[test]
+    fn a_new_targets_slots_are_pushed_before_its_target_event() {
+        use crate::game_plugins::schedule_tests::{census, headless_client, SyncPoints};
+
+        let mut app = headless_client();
+        let pushed_first = crate::test_support::runs_before(
+            &mut app,
+            crate::ui_inspect::feed_inspect,
+            super::super::fire_unit_events,
+        );
+        let c = census(&mut app, Update, SyncPoints::Declared);
+        if !c.systems.values().any(|s| s.name.contains("benilla_app::")) {
+            eprintln!("skipped: this build carries no type names");
+            return;
+        }
+        let one = |suffix: &str| {
+            let mut hits = c.systems.iter().filter(|(_, s)| s.name.ends_with(suffix));
+            match (hits.next(), hits.next()) {
+                (Some((k, _)), None) => *k,
+                _ => panic!("exactly one system named `…{suffix}` in Update"),
+            }
+        };
+        // The aura feed is private to its module, so its side is read by name off the graph.
+        let (aura, inspect) = (
+            one("::ui_aura::feed_auras"),
+            one("::ui_inspect::feed_inspect"),
+        );
+        let mut after_aura = std::collections::HashSet::new();
+        let mut next = vec![aura];
+        while let Some(n) = next.pop() {
+            for &(a, b) in &c.dependencies {
+                if a == n && after_aura.insert(b) {
+                    next.push(b);
+                }
+            }
+        }
+        assert_eq!(
+            [after_aura.contains(&inspect), pushed_first],
+            [true; 2],
+            "aura seat, inspect push"
+        );
+    }
+
     /// A values block with new XP: `PLAYER_XP_UPDATE`'s handler reads the new `UnitXP`, because
     /// the schedule runs every push the field events' handlers read ahead of the firing.
     #[test]
