@@ -652,9 +652,9 @@ impl SelectCommit<'_, '_> {
         };
         info!("assist ({how}) -> the basis unit's target, guid {guid:#x}");
         // `engaged` and attackability are read before the selection: `SetSelection` may re-point
-        // a swing we already had (`0x4938c8`), and `0x5ecb70` then skips the send but still runs
-        // its tail, a sheath snap; not yet fighting, the second leg opens a fresh swing. A guid
-        // with no object is never attackable, as `StartAttack` refuses it.
+        // a swing we already had (`0x4938c8`), whose stop leaves `[+0xc54]` set, so `0x5ecb70`
+        // sends its swing again (`0x5eccda`); not yet fighting, the second leg opens a fresh
+        // swing. A guid with no object is never attackable, as `StartAttack` refuses it.
         let me = self.me.single().ok();
         let engaged = me.is_some_and(|(_, _, engaged)| engaged);
         let attackable = (|| {
@@ -671,7 +671,7 @@ impl SelectCommit<'_, '_> {
         // target is selected, not swung at.
         if self.assist_attack.0 && attackable {
             info!("assist ({how}): assistAttack is on -> opening the swing");
-            self.seam.start(guid, engaged, false);
+            self.seam.start(guid, engaged);
         }
     }
 

@@ -257,8 +257,8 @@ impl StartGate {
 /// The local StartAttack, reference `0x5ecb70`: it returns first when [`StartGate::refuses`];
 /// it reads the caster's precast twice, cancelling the cast in flight for a ranged one and
 /// returning after the stand for one auto-attack interrupts; the swing send (`0x5eccfd`) is
-/// skipped while attacking unless a stop is in flight (`[+0xc54]`, which the target switch passes
-/// as `stop_in_flight`); the tail, melee sheath snap, precast bit and auto-repeat cancel
+/// skipped while attacking unless a stop is in flight (`[+0xc54]`, [`AttackStopInFlight`], which
+/// every caller reads for `stop_in_flight`); the tail, melee sheath snap, precast bit and auto-repeat cancel
 /// (`0x5ecd78`), runs past both reads, so melee and auto-shot are exclusive. Callers own the
 /// other entry checks: no call from a cast press while engaged (`0x6e51cb`) and the
 /// attackability walk (`0x606980`).
@@ -421,14 +421,16 @@ impl AttackSeam<'_, '_> {
         if engaged && self.start_gate().has_control() {
             self.stop(engaged);
         } else {
-            self.start(target, engaged, false);
+            self.start(target, engaged);
         }
     }
 
-    /// StartAttack (`0x5ecb70`); a no-op before our own entity streams in.
-    pub(crate) fn start(&mut self, target: u64, engaged: bool, stop_in_flight: bool) {
+    /// StartAttack (`0x5ecb70`), reading our stop in flight (`0x5eccda`); a no-op before our own
+    /// entity streams in.
+    pub(crate) fn start(&mut self, target: u64, engaged: bool) {
         let Ok(e) = self.me.single() else { return };
         let gate = self.start_gate();
+        let stop_in_flight = self.stop_in_flight();
         start_attack_local(
             e,
             target,

@@ -136,7 +136,7 @@ impl GoRig {
                             &mut sheath,
                             &mut stand,
                             &edits,
-                            false,
+                            (false, false),
                             crate::creature_anim::StartGate::default(),
                             &mut crate::spell::CastCore {
                                 pending: &mut Default::default(),

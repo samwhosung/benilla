@@ -1161,12 +1161,12 @@ fn send_spell_cast(
                 // gets there.
                 if !engaged {
                     debug!("ui_action: cast {spell_id} initiates auto-attack at {guid:#x}");
-                    // No stop is in flight: the gate above guarantees the lock is clear.
+                    let stop_in_flight = stop_word.as_deref().is_some_and(|w| w.of(e));
                     crate::creature_anim::start_attack_local(
                         e,
                         guid,
                         engaged,
-                        false,
+                        stop_in_flight,
                         crate::creature_anim::StartGate::of(
                             ctx.rel.self_store,
                             ctx.self_control_lost,

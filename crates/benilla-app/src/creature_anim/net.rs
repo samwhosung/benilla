@@ -56,6 +56,7 @@ fn on_attack_stop(
     log: Res<crate::ui_chat::ChatLog>,
     mut pending: ResMut<PendingImpacts>,
     mut sinks: ImpactSinks,
+    mut stop_word: Option<ResMut<super::AttackStopInFlight>>,
 ) {
     if let SessionEvent::AttackStop { attacker, victim } = ev {
         attack_stop(
@@ -66,6 +67,7 @@ fn on_attack_stop(
             (&self_guid, &log),
             &mut pending,
             &mut sinks,
+            stop_word.as_deref_mut(),
         );
     }
 }
@@ -207,10 +209,16 @@ fn attack_stop(
     (self_guid, log): (&SelfGuid, &crate::ui_chat::ChatLog),
     pending: &mut PendingImpacts,
     sinks: &mut ImpactSinks,
+    stop_word: Option<&mut super::AttackStopInFlight>,
 ) {
     debug!("net: attack stop {attacker:#x} → {victim:#x}");
     if let Some(&e) = index.0.get(&attacker) {
+        // `StopAttack 0x624e40` (`0x625763`) zeroes the attacker's target and its stop in flight
+        // (`0x624e6b`).
         commands.entity(e).remove::<Engaged>();
+        if let Some(word) = stop_word {
+            word.clear(e);
+        }
         stop_swing(e, pending, sinks);
         // After `StopAttack`'s swing flush (`0x625763` → `0x624e40`), the active player's
         // `PLAYER_LEAVE_COMBAT` (`0x62576a` → `0x5fa6d0`, `0x625778`).

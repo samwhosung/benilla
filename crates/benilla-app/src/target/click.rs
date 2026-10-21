@@ -1177,10 +1177,10 @@ fn interact(
                     swung: outcome.swung || second.swung,
                 };
                 debug!("right-click attack: {guid:#x}");
-                // `0x5ecb70`'s body through the seam; `swung` means the commit already asked it
-                // for its re-swing, which `0x5eccda` keeps from sending twice.
+                // `0x5ecb70`'s body through the seam. A commit that stopped and re-swung left
+                // `[+0xc54]` set, so this swing goes out a second time (`0x5eccda`).
                 let engaged = me.is_some_and(|(_, _, e)| e);
-                dispatch.seam.start(guid, engaged || outcome.swung, false);
+                dispatch.seam.start(guid, engaged || outcome.swung);
             }
         }
         UnitBranch::Dead(DeadUnitLeg::Loot) => {

@@ -503,9 +503,10 @@ pub(super) fn commit(
     let _ = seam.net.0.send(ClientCommand::SetSelection { guid });
     let swung = stop_and_repoint && new_attackable && self_guid != Some(guid);
     if swung {
-        // `0x4938c8`: the swing goes out despite the lock, and cancels auto-repeat (`0x6ea080`),
-        // unless StartAttack's gate returns first.
-        seam.start(guid, engaged, true);
+        // `0x4938c8`: the swing goes out despite the lock, the stop just set `[+0xc54]`
+        // (`0x5eccda`), and cancels auto-repeat (`0x6ea080`), unless StartAttack's gate returns
+        // first.
+        seam.start(guid, engaged);
     }
     CommitOutcome {
         changed: true,
@@ -942,6 +943,7 @@ mod tests {
         world.init_resource::<crate::spell::SpellTargeting>();
         world.init_resource::<crate::ui_cast::CastReports>();
         world.init_resource::<crate::spell::AutoRepeatActive>();
+        world.init_resource::<crate::creature_anim::AttackStopInFlight>();
         world.init_resource::<crate::creature_anim::UnitEdits>();
         world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
         world.init_resource::<Messages<crate::player::StandStateRequest>>();

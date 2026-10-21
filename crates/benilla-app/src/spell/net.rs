@@ -113,6 +113,8 @@ pub(crate) struct Scene<'w, 's> {
     stand: MessageWriter<'w, crate::player::StandStateRequest>,
     /// The auto-repeat clear and the precast's changes, applied after this handler.
     edits: Res<'w, crate::creature_anim::UnitEdits>,
+    /// Our stop in flight (`[+0xc54]`), which the GO-deferred swing reads (`0x5eccda`).
+    stop_word: Option<Res<'w, crate::creature_anim::AttackStopInFlight>>,
 }
 
 /// `SMSG_INITIAL_SPELLS`, once at login, into the action store the UI feed reads.
@@ -314,6 +316,11 @@ fn on_spell_go(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
     } = ev
     {
         let engaged = !sc.engaged_self.is_empty();
+        let stop_in_flight = sc
+            .stop_word
+            .as_deref()
+            .zip(l.self_guid.0.and_then(|guid| l.index.0.get(&guid)))
+            .is_some_and(|(word, &me)| word.of(me));
         let own = l
             .self_guid
             .0
@@ -355,7 +362,7 @@ fn on_spell_go(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
                 &mut sc.sheaths,
                 &mut sc.stand,
                 &sc.edits,
-                engaged,
+                (engaged, stop_in_flight),
                 start_gate,
                 &mut super::CastCore {
                     pending: &mut l.pending,
@@ -1076,6 +1083,7 @@ const GO_TYPE_CHEST: i32 = 3;
 /// `SMSG_SPELL_GO`: the cast launched. The server schedules damage off `Spell.dbc` Speed; the
 /// packet carries the hit and miss lists and the ammo display id, and the flight is rebuilt from
 /// the same Speed column ([`SpellGoTargets`]).
+#[allow(clippy::type_complexity)] // the handler's write sets, grouped by the leg that writes them
 fn spell_go(
     caster: u64,
     spell_id: u32,
@@ -1107,14 +1115,14 @@ fn spell_go(
         &crate::spell::SpellModifiers,
     ),
     // The GO-deferred auto-attack start's writes (`0x6e83c0`), the attack lock it gates on
-    // (`Engaged`, the reference's `[player+0xc48]`) and StartAttack's own gate (`0x5ecbaa`,
-    // `0x5ecbc0`).
+    // (`Engaged`, the reference's `[player+0xc48]`) with the stop in flight StartAttack reads
+    // (`[+0xc54]`, `0x5eccda`), and StartAttack's own gate (`0x5ecbaa`, `0x5ecbc0`).
     attack_ctx: (
         &mut crate::spell::AutoRepeatActive,
         &mut MessageWriter<crate::creature_anim::SheathRequest>,
         &mut MessageWriter<crate::player::StandStateRequest>,
         &crate::creature_anim::UnitEdits,
-        bool,
+        (bool, bool),
         crate::creature_anim::StartGate,
         &mut super::CastCore,
     ),
@@ -1154,7 +1162,8 @@ fn spell_go(
     }
     // The item leg held the cooldown for its record ([`item_go_cooldown`]).
     let mut pended = false;
-    let (auto_repeat, sheath, stand, edits, engaged, start_gate, core) = attack_ctx;
+    let (auto_repeat, sheath, stand, edits, (engaged, stop_in_flight), start_gate, core) =
+        attack_ctx;
     let now = Instant::now();
     // A chest becomes the loot target at this packet, not at the loot response: `HandleSpellGo
     // 0x6e7a70` reaches `0x6e831b call SetLootTarget 0x5ed5f0`, which writes `[player+0x1d28]` and
@@ -1204,7 +1213,7 @@ fn spell_go(
                     me,
                     guid,
                     engaged,
-                    false,
+                    stop_in_flight,
                     start_gate,
                     auto_repeat,
                     sheath,
@@ -2272,7 +2281,7 @@ mod tests {
                                 &mut sheath,
                                 &mut stand,
                                 &edits,
-                                false,
+                                (false, false),
                                 crate::creature_anim::StartGate::default(),
                                 &mut crate::spell::CastCore {
                                     pending: &mut Default::default(),
@@ -3203,7 +3212,7 @@ mod tests {
                             &mut sheath,
                             &mut stand,
                             &edits,
-                            false,
+                            (false, false),
                             crate::creature_anim::StartGate::default(),
                             &mut crate::spell::CastCore {
                                 pending: &mut Default::default(),
@@ -3406,7 +3415,7 @@ mod tests {
                             &mut sheath,
                             &mut stand,
                             &edits,
-                            false,
+                            (false, false),
                             crate::creature_anim::StartGate::default(),
                             &mut crate::spell::CastCore {
                                 pending: &mut Default::default(),
@@ -3794,7 +3803,7 @@ mod tests {
                                 &mut sheath,
                                 &mut stand,
                                 &edits,
-                                engaged,
+                                (engaged, false),
                                 gate,
                                 &mut crate::spell::CastCore {
                                     pending: &mut Default::default(),
