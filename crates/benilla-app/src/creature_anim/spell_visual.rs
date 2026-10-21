@@ -162,7 +162,8 @@ pub(crate) enum SpellKitFx {
         entity: Entity,
         spell_id: u32,
         class: FxClass,
-        /// `0x614150`'s `force`.
+        /// `0x614150`'s `force`: the cast edges stop unforced, sparing the spell's state effects
+        /// (kind 2), which the aura's removal and the channel's change stop forced.
         force: bool,
     },
 }
@@ -822,7 +823,7 @@ pub(super) fn route_cast_visuals(
                     entity: ev.entity,
                     spell_id: ev.spell_id,
                     class: FxClass::Hold,
-                    force: true,
+                    force: false,
                 });
                 // Then the running auto-repeat spell's on the same unit, `0x614150([0xceac30], 0)`
                 // whenever it is set (`0x6e7fed`-`0x6e7ffb`), whoever casts the go: the gate of
@@ -840,7 +841,7 @@ pub(super) fn route_cast_visuals(
                         entity: ev.entity,
                         spell_id: repeat,
                         class: FxClass::Hold,
-                        force: true,
+                        force: false,
                     });
                 }
                 // A ranged-slot GO redraws ranged before the cast kit (`0x60f34c`, gate
@@ -920,7 +921,7 @@ pub(super) fn route_cast_visuals(
                     entity: ev.entity,
                     spell_id: ev.spell_id,
                     class: FxClass::Hold,
-                    force: true,
+                    force: false,
                 });
             }
         }

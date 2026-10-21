@@ -573,6 +573,7 @@ pub(super) fn resolve_spell_fx(
                             &mut instances,
                             *spell_id,
                             *class,
+                            true,
                             &fx,
                             now,
                             &mut commands,
@@ -604,12 +605,16 @@ pub(super) fn resolve_spell_fx(
                     }
                 }
                 SpellKitFx::Reap {
-                    spell_id, class, ..
+                    spell_id,
+                    class,
+                    force,
+                    ..
                 } => {
                     reap_matching(
                         &mut instances,
                         *spell_id,
                         *class,
+                        *force,
                         &fx,
                         now,
                         &mut commands,
@@ -669,10 +674,14 @@ fn replace_same_slot(
 
 /// The spell-id reap (`0x614150`): each persistent instance of `(spell_id, class)` plays `Decay`
 /// out, or goes at once without a model, a ready model or a `Decay` (`0x614187`–`0x6141a1`).
+/// Unforced it takes only a looping kit's, kinds 3 and 4 ([`FxStage::Relive`]): kind 2's state
+/// carries flag 0x1000 (`0x60eecd`), taken only when forced (`0x614179`), and kinds 0 and 1 carry
+/// 0x20 (`0x60eeb5`), never taken (`0x614181`).
 fn reap_matching(
     instances: &mut Vec<FxInstance>,
     spell_id: u32,
     class: FxClass,
+    force: bool,
     fx: &SpellFx,
     now: f32,
     commands: &mut Commands,
@@ -680,6 +689,9 @@ fn reap_matching(
 ) {
     instances.retain_mut(|i| {
         if i.decaying || !i.persistent || i.spell_id != spell_id || i.class != class {
+            return true;
+        }
+        if !force && i.stage != FxStage::Relive {
             return true;
         }
         let span = i
