@@ -75,11 +75,20 @@ pub(super) enum ListEvent {
     Ignores,
 }
 
-/// A list event a handler signalled, and the lists it left.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Signal {
-    event: ListEvent,
-    lists: Lists,
+/// What a handler did that Lua hears, in the order it did it: a list event signalled, or a line
+/// shown (`0x496720`).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Heard {
+    Event(ListEvent),
+    Line(UiError),
+}
+
+/// One thing a handler did that Lua hears, with the lists as it left them: the feed runs its
+/// listeners on those lists, as the reference runs them inside the handler.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Step {
+    pub(super) lists: Lists,
+    pub(super) heard: Heard,
 }
 
 /// One friend slot, the 32 bytes at `+0x20·k`.
@@ -135,8 +144,8 @@ pub(crate) struct SocialState {
     who_to_ui: bool,
     /// The lookups that missed, in the order made.
     waits: Vec<NameWait>,
-    /// The list events signalled since the last feed, each with the lists it left.
-    signals: Vec<Signal>,
+    /// The list events and lines since the last feed, in order, each with the lists it left.
+    pub(super) steps: Vec<Step>,
     who_dirty: bool,
 }
 
@@ -154,7 +163,7 @@ impl Default for SocialState {
             who_sort: Default::default(),
             who_to_ui: false,
             waits: Vec::new(),
-            signals: Vec::new(),
+            steps: Vec::new(),
             who_dirty: false,
         }
     }
@@ -191,8 +200,27 @@ impl SocialState {
 
     /// Signal `event` with the lists as they stand, for the feed to fire in order.
     fn signal(&mut self, event: ListEvent, names: &dyn Names) {
+        self.step(Heard::Event(event), names);
+    }
+
+    /// Show `line` with the lists as they stand, for the feed to show in order.
+    fn line(&mut self, line: UiError, names: &dyn Names) {
+        self.step(Heard::Line(line), names);
+    }
+
+    fn step(&mut self, heard: Heard, names: &dyn Names) {
         let lists = self.lists(names);
-        self.signals.push(Signal { event, lists });
+        self.steps.push(Step { lists, heard });
+    }
+
+    /// Trade the lists for `lists`: the feed swaps a step's lists in around its listeners, so the
+    /// verbs they call act on the list their signal left (`FriendsFrame.lua`'s `FriendsList_Update`
+    /// selects friend 1 inside the event), and swaps them back after. No verb writes the lists.
+    pub(super) fn swap_lists(&mut self, lists: &mut Lists) {
+        std::mem::swap(&mut self.slots, &mut lists.slots);
+        std::mem::swap(&mut self.friends_pending, &mut lists.friends_pending);
+        std::mem::swap(&mut self.ignores, &mut lists.ignores);
+        std::mem::swap(&mut self.ignores_pending, &mut lists.ignores_pending);
     }
 
     /// Is `guid` in a friend slot? The reference's `IsFriend` (`0x5ae810`), which keeps the guild
@@ -378,11 +406,7 @@ impl SocialState {
     /// with their line as the callback's message. A cached name is stored for an add
     /// (`0x5acdbd`), the list sorts and the line shows with the name (`0x5acdd5`-`0x5ace08`); a
     /// miss counts as pending and returns unsignalled (`0x5acba6`-`0x5acdba`).
-    fn apply_friend_status(
-        &mut self,
-        update: FriendStatusUpdate,
-        names: &dyn Names,
-    ) -> Vec<UiError> {
+    fn apply_friend_status(&mut self, update: FriendStatusUpdate, names: &dyn Names) {
         let FriendStatusUpdate {
             result,
             guid,
@@ -449,24 +473,22 @@ impl SocialState {
                 true
             }
             // Every other result shows its line alone.
-            _ => return vec![UiError::key(key)],
+            _ => return self.line(UiError::key(key), names),
         };
-        let name = self.look_up(guid, Some(key), ignore, names);
-        if let Some(name) = &name {
-            if key == "ERR_FRIEND_ADDED_S" {
-                self.set_name(guid, name);
-            }
-            // The cached arm sorts the list the result acted on, pending or not (`0x5acdde`,
-            // `0x5ace00`).
-            if ignore {
-                self.sort_ignores(names);
-            } else {
-                self.sort_friends(names);
-            }
+        let Some(name) = self.look_up(guid, Some(key), ignore, names) else {
+            return;
+        };
+        if key == "ERR_FRIEND_ADDED_S" {
+            self.set_name(guid, &name);
         }
-        name.map(|name| named_line(key, &name))
-            .into_iter()
-            .collect()
+        // The cached arm sorts the list the result acted on, pending or not, then shows the line
+        // (`0x5acdde` → `0x5acde6`, `0x5ace00` → `0x5ace08`).
+        if ignore {
+            self.sort_ignores(names);
+        } else {
+            self.sort_friends(names);
+        }
+        self.line(named_line(key, &name), names);
     }
 
     /// The name cache's answer for `guid`, `found` or refused: each lookup that missed it runs its
@@ -483,8 +505,7 @@ impl SocialState {
         found: Option<&str>,
         names: &dyn Names,
         send: &mut dyn FnMut(ClientCommand),
-    ) -> Vec<UiError> {
-        let mut lines = Vec::new();
+    ) {
         let (answered, waiting): (Vec<NameWait>, Vec<NameWait>) = std::mem::take(&mut self.waits)
             .into_iter()
             .partition(|w| w.guid == guid);
@@ -496,21 +517,24 @@ impl SocialState {
                         self.set_name(guid, name);
                     }
                     self.decrement_pending(wait.ignore, names);
-                    lines.extend(wait.line.map(|key| named_line(key, name)));
-                }
-                None if wait.ignore => {
-                    lines.extend(wait.line.map(|_| UiError::key("ERR_FRIEND_ERROR")));
-                    send(ClientCommand::DelIgnore { guid });
-                    self.decrement_pending(true, names);
+                    if let Some(key) = wait.line {
+                        self.line(named_line(key, name), names);
+                    }
                 }
                 None => {
-                    lines.extend(wait.line.map(|_| UiError::key("ERR_FRIEND_ERROR")));
-                    self.decrement_pending(false, names);
-                    send(ClientCommand::DelFriend { guid });
+                    if wait.line.is_some() {
+                        self.line(UiError::key("ERR_FRIEND_ERROR"), names);
+                    }
+                    if wait.ignore {
+                        send(ClientCommand::DelIgnore { guid });
+                        self.decrement_pending(true, names);
+                    } else {
+                        self.decrement_pending(false, names);
+                        send(ClientCommand::DelFriend { guid });
+                    }
                 }
             }
         }
-        lines
     }
 
     /// `GetSelectedFriendIndex` (`0x5ae510`) plus one, as `GetSelectedFriend` answers it
@@ -637,7 +661,6 @@ pub(crate) mod net {
     use crate::names::NameCache;
     use crate::net::{NetCommands, NetHandlerApp};
     use crate::query_cache::Ask;
-    use crate::ui_action::UiErrorKeys;
 
     /// Register the handlers, one per kind, and the teardown listeners.
     pub(super) fn register(app: &mut App) {
@@ -706,14 +729,13 @@ pub(crate) mod net {
         mut social: ResMut<SocialState>,
         names: Res<NameCache>,
         net: Res<NetCommands>,
-        errors: Res<UiErrorKeys>,
     ) {
         if let SessionEvent::FriendStatus(update) = ev {
             let names = CacheNames {
                 names: &names,
                 net: &net,
             };
-            errors.extend(social.apply_friend_status(update, &names));
+            social.apply_friend_status(update, &names);
         }
     }
 
@@ -724,7 +746,6 @@ pub(crate) mod net {
         mut social: ResMut<SocialState>,
         names: Res<NameCache>,
         net: Res<NetCommands>,
-        errors: Res<UiErrorKeys>,
     ) {
         if let SessionEvent::PlayerName { guid, name, .. } = ev {
             let found = (!name.is_empty()).then_some(name.as_str());
@@ -732,10 +753,9 @@ pub(crate) mod net {
                 names: &names,
                 net: &net,
             };
-            let lines = social.apply_player_name(guid, found, &cache, &mut |c| {
+            social.apply_player_name(guid, found, &cache, &mut |c| {
                 let _ = net.0.send(c);
             });
-            errors.extend(lines);
         }
     }
 
@@ -870,7 +890,7 @@ mod tests {
     #[test]
     fn add_and_remove_results_maintain_the_slots() {
         let mut social = SocialState::default();
-        let _ = social.apply_friend_status(
+        social.apply_friend_status(
             FriendStatusUpdate {
                 result: friend_result::ADDED_ONLINE,
                 guid: 7,
@@ -883,7 +903,7 @@ mod tests {
             },
             &Cached,
         );
-        let _ = social.apply_friend_status(status(friend_result::ADDED_OFFLINE, 8), &Cached);
+        social.apply_friend_status(status(friend_result::ADDED_OFFLINE, 8), &Cached);
         assert_eq!(guids(&social), [7, 8]);
         assert_eq!(social.slots[0].level, 60);
         assert_eq!(
@@ -892,18 +912,18 @@ mod tests {
             "an add stores the name"
         );
 
-        let _ = social.apply_friend_status(status(friend_result::ADDED_OFFLINE, 7), &Cached);
+        social.apply_friend_status(status(friend_result::ADDED_OFFLINE, 7), &Cached);
         assert_eq!(guids(&social), [7, 8], "the same add again reuses the slot");
         assert!(!social.slots[0].online, "now offline");
 
-        let _ = social.apply_friend_status(status(friend_result::REMOVED, 8), &Cached);
+        social.apply_friend_status(status(friend_result::REMOVED, 8), &Cached);
         assert_eq!(guids(&social), [7]);
         assert!(social.slots[49].name.is_none());
-        assert_eq!(
-            social.signals.len(),
-            4,
-            "each cached result sorts and signals"
-        );
+        let events = std::mem::take(&mut social.steps)
+            .into_iter()
+            .filter(|s| matches!(s.heard, Heard::Event(_)))
+            .count();
+        assert_eq!(events, 4, "each cached result sorts and signals");
     }
 
     /// The selection is a guid no remove clears (`0x5aea00` writes only the slot); it reads as
@@ -920,7 +940,7 @@ mod tests {
         );
         social.selected_friend = 7;
         assert_eq!(social.selected_friend_index(), 1);
-        let _ = social.apply_friend_status(status(friend_result::REMOVED, 7), &Cached);
+        social.apply_friend_status(status(friend_result::REMOVED, 7), &Cached);
         assert_eq!(social.selected_friend, 7);
         assert_eq!(social.selected_friend_index(), 0);
     }
@@ -945,10 +965,10 @@ mod tests {
     fn ignore_results_maintain_the_ignore_list() {
         let mut social = SocialState::default();
         assert!(!social.is_ignored(9));
-        let _ = social.apply_friend_status(status(friend_result::IGNORE_ADDED, 9), &Cached);
+        social.apply_friend_status(status(friend_result::IGNORE_ADDED, 9), &Cached);
         assert!(social.is_ignored(9));
         assert!(!social.is_ignored(0), "guid 0 is never ignored");
-        let _ = social.apply_friend_status(status(friend_result::IGNORE_REMOVED, 9), &Cached);
+        social.apply_friend_status(status(friend_result::IGNORE_REMOVED, 9), &Cached);
         assert!(!social.is_ignored(9));
     }
 

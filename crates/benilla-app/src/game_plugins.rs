@@ -1771,7 +1771,7 @@ pub(crate) mod schedule_tests {
         ("ui_script/extract/mod.rs", "paint_script", Because::Deliberate,
          "per-frame paint and cost state, not a queue"),
         ("ui_social/feed.rs", "feed_social", Because::Deliberate,
-         "its take is `name_events`, the packets' ask markers: taken before the interface is up they still send their name queries, to the server and not the VM, and the lists and lines are read again as the names land"),
+         "its take is the handlers' list events and lines: those taken into the glue VM are lost there, and the in-game VM's first feed fires both list events again over the lists as they stand"),
         ("ui_stable/mod.rs", "feed_stable", Because::PlayerRoundTrip,
          "both packets follow a stable master's gossip and a click in its window"),
         ("ui_summon.rs", "feed_summon", Because::PlayerRoundTrip,

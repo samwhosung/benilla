@@ -374,6 +374,27 @@ pub(crate) fn show_messages(
     }
 }
 
+/// [`show_messages`] for one line shown inside the handler that adds it, as `DisplayError`
+/// (`0x496720`) shows it: a chat line's `CHAT_MSG_SYSTEM` fires now ([`ChatLog::show_now`],
+/// `0x49a870`), where [`show_messages`] queues it for the chat drain.
+pub(crate) fn show_now(script: &mut UiScript, sink: &mut MessageSink, who: &str, shown: Shown) {
+    if !matches!(shown.kind, MsgKind::Chat) || shown.text.is_empty() {
+        return show_messages(script, sink, who, [shown]);
+    }
+    let Shown {
+        record,
+        text,
+        input,
+        ..
+    } = shown;
+    debug!("{who}: message (Chat) {text:?}");
+    if let Some(record) = record {
+        sink.sounds.push(record);
+    }
+    let event = ChatEvent::text_only(ChatEventKind::System, text);
+    script.with_input_events(input, |script| sink.chat.show_now(script, &event));
+}
+
 impl Shown {
     /// The line's world half, its sound and a chat surface's line, done now; what is left is the
     /// VM's event, `UI_INFO_MESSAGE` or `UI_ERROR_MESSAGE` with the text.

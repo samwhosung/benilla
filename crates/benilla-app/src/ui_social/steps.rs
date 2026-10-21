@@ -128,7 +128,9 @@ impl SocialSteps<'_> {
 
     /// `FriendList::SetSelectedIgnore` (`0x5ae5f0`): the guid of ignore slot `index − 1` up to 25
     /// inclusive (`0x5ae5f6`), else none. Slot 25 is the eight bytes at `+0x718`: the ignore
-    /// pending count, and a dword nothing writes, which benilla holds as 0.
+    /// pending count, then `+0x71c`, which nothing writes: the list's allocation is unzeroed
+    /// (`SMemAlloc` flags 0 at `0x5adc60`) and its constructor `0x5aca10` skips it, so the
+    /// reference reads whatever the heap held, and benilla holds 0.
     fn select_ignore(&mut self, index: u32) {
         let slot = index.wrapping_sub(1) as usize;
         self.social.selected_ignore = match self.social.ignores.get(slot) {

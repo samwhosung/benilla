@@ -11,10 +11,10 @@ use crate::area::AreaTableRes;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
 use crate::script_calls::VmWith;
-use crate::ui_action::{MessageSink, Shown};
+use crate::ui_action::{show_now, ui_error_text, MessageSink, Shown};
 use crate::ui_unit::{NameTables, UnitNames};
 
-use super::{row_of, FriendSlot, ListEvent, Lists, SocialState};
+use super::{row_of, FriendSlot, Heard, ListEvent, Lists, SocialState, Step};
 
 /// The chat-routed `/who` templates. FrameXML never names them: the engine prints these lines
 /// itself. None is a message-catalog row, so they go out through `Shown::unkeyed`, since
@@ -41,9 +41,10 @@ pub(super) struct FedSocial {
     lfg_pushed: bool,
 }
 
-/// Fire the list events the handlers signalled, each after pushing the lists as its signal left
-/// them, so its listeners read the list as that packet or callback did (`0x5ae867`, `0x5ae92d`,
-/// inside the dispatch); then push the lists as they stand, and the `/who` answer's exit.
+/// Replay what the handlers did that Lua hears, in their order: each list event and line with the
+/// lists as it left them pushed and swapped into the engine, so its listeners read, and their verbs
+/// act on, the list as that packet or callback did (`0x5ae867`, `0x5ae92d`, `0x496720`, inside the
+/// dispatch); then push the lists as they stand, and the `/who` answer's exit.
 #[allow(clippy::too_many_arguments)] // the snapshot's sources, one per table it resolves through
 pub(super) fn feed_social(
     mut vm: VmWith<ResMut<'static, SocialState>>,
@@ -56,22 +57,33 @@ pub(super) fn feed_social(
     mut fed: Local<crate::ui_script::VmMemo<FedSocial>>,
 ) {
     let areas = areas.as_deref().map(|a| &a.0);
-    let signals = std::mem::take(&mut vm.own().signals);
-    for signal in signals {
-        vm.turn(|script, social| {
+    let steps = std::mem::take(&mut vm.own().steps);
+    for Step { mut lists, heard } in steps {
+        vm.turn(|script, mut social| {
             if let Some(script) = script {
-                script.set_social(view(&signal.lists, &social, areas, unit_names.get()));
+                script.set_social(view(&lists, &social, areas, unit_names.get()));
             }
+            social.swap_lists(&mut lists);
         });
-        let event = match signal.event {
-            ListEvent::Friends => "FRIENDLIST_UPDATE",
-            ListEvent::Ignores => "IGNORELIST_UPDATE",
-        };
         vm.run(|script| {
-            if let Some(script) = script {
-                script.fire_event(event, Vec::new());
+            let Some(script) = script else {
+                return;
+            };
+            match heard {
+                Heard::Event(ListEvent::Friends) => {
+                    script.fire_event("FRIENDLIST_UPDATE", Vec::new());
+                }
+                Heard::Event(ListEvent::Ignores) => {
+                    script.fire_event("IGNORELIST_UPDATE", Vec::new());
+                }
+                Heard::Line(line) => {
+                    let get = |key: &str| script.lua().globals().get::<String>(key).ok();
+                    let text = ui_error_text(&line, &get).unwrap_or_default();
+                    show_now(script, &mut sink, "ui_social", Shown::keyed(line.key, text));
+                }
             }
         });
+        vm.own().swap_lists(&mut lists);
     }
     let cache = super::net::CacheNames {
         names: &names,
@@ -202,8 +214,10 @@ fn friend_rows(
         .map(|slot| friend_row(slot, areas, names))
         .collect();
     // `+0x640`: the pending count's low bytes are the online byte and the flags, the dword at
-    // `+0x644`, which nothing writes, the name (benilla holds it null), and the first ignore guid
-    // and the low half of the second the level, class and area.
+    // `+0x644` the name, and the first ignore guid and the low half of the second the level, class
+    // and area. Nothing writes `+0x644`: the list's allocation is unzeroed (`SMemAlloc` flags 0 at
+    // `0x5adc60`) and its constructor `0x5aca10` skips it, so the reference reads whatever the heap
+    // held, and benilla holds it null.
     let ignore = |k: usize| lists.ignores.get(k).copied().unwrap_or(0);
     rows.push(friend_row(
         &FriendSlot {
@@ -222,8 +236,10 @@ fn friend_rows(
 }
 
 /// The 25 ignore slots as `GetIgnoreName` (`0x5ad460`) reads them, then the eight bytes after
-/// them, which it reads for index 26: the pending count and a dword nothing writes, which benilla
-/// holds as 0 (`0x5ae583`).
+/// them, which it reads for index 26 (`0x5ae583`): the pending count, then `+0x71c`, which nothing
+/// writes. The list's allocation is unzeroed (`SMemAlloc` flags 0 at `0x5adc60`) and its
+/// constructor `0x5aca10` skips it, so the reference reads whatever the heap held, and benilla
+/// holds 0.
 fn ignore_rows(lists: &Lists) -> Vec<IgnoreInfo> {
     let mut rows: Vec<IgnoreInfo> = lists
         .ignores
@@ -657,7 +673,7 @@ mod tests {
         assert!(named(&rx).is_empty(), "no frame asks a refusal");
 
         packet(&mut app, &|social, names| {
-            let _ = social.apply_friend_status(
+            social.apply_friend_status(
                 FriendStatusUpdate {
                     result: friend_result::OFFLINE,
                     guid: 7,
