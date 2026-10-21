@@ -1,7 +1,7 @@
 //! A layer batch's End (`0x7731a0`): the texture quads of one batch
 //! ([`crate::order::quad_batch`]), in the order it filled, sorted by texture handle with the CRT
-//! `qsort` ([`crate::crt::qsort_with_stack`], `0x73f727`, width `0x1c`, comparator `0x7731c0`: the records' first dwords
-//! subtracted). The handle is the first dword (`0x772fd0` → `0x770700`): the device texture
+//! `qsort` (`0x73f727`, [`crate::crt::qsort_with_stack`]; width `0x1c`, comparator `0x7731c0`: the
+//! records' first dwords subtracted). The handle is the first dword (`0x772fd0` → `0x770700`): the device texture
 //! `[[region+0xcc]+0x140]` of the region's texture object, which regions showing one texture
 //! share ([`super::texel`]). The sort is not stable, so a batch of one texture comes out in the
 //! CRT's own order, two quads reversed.
