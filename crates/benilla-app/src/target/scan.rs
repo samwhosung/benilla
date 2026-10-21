@@ -491,6 +491,7 @@ pub(super) fn commit(
         seam.close_loot_on(old);
     }
     selection.target = Some(entity);
+    selection.lit = Some(entity);
     selection.guid = Some(guid);
     let stop_and_repoint = engaged && had_old;
     if stop_and_repoint {

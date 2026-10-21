@@ -13,7 +13,7 @@ use benilla_assets::{LockRecover, WorldAssets};
 use benilla_world::decal::{DecalFrame, WorldDecal};
 use benilla_world::particles::buffer::EffectVertex;
 
-use super::click::{clear, deselect};
+use super::click::deselect;
 use super::relations::{RelUnit, RelationWorld, Relations};
 use super::{CombatFlash, Selection, SelectionRadius};
 use crate::creature_anim::Engaged;
@@ -266,7 +266,7 @@ pub(super) fn update_ring(
         // The party roster: the selector's party table `0xbc6f48`.
         Res<crate::ui_party::GroupState>,
     ),
-    // Our auto-attack; both clear paths end it, as the reference's death and teardown edges do.
+    // Our auto-attack, which the death clear ends, as the reference's death edge does.
     engaged: Query<(), (With<Engaged>, With<SelfPlayer>)>,
 ) {
     let state = &mut *state;
@@ -357,11 +357,9 @@ pub(super) fn update_ring(
                 // No ground in the box hides the ring: the reference skips the draw (`0x6d74b5`).
                 !projected
             }
-            // No longer an object: clear and tell the server, as the reference's deactivate does on
-            // both removal paths (`0x5fbb60` → `0x493910`). This also drops a selected corpse at
-            // respawn, which the server destroys before the fresh create.
+            // No longer an object: nothing to draw. The selection's own teardown is the net stage's
+            // (`track::follow_selection_object`).
             Err(_) => {
-                clear(&mut selection, &mut seam, !engaged.is_empty());
                 *last_vitals = None;
                 *logged_guid = None;
                 true
@@ -827,7 +825,10 @@ mod tests {
                 guid: Some(MOB),
                 ..Default::default()
             };
-            // Control: a live target keeps its selection through a ring pass.
+            // Control: a live target keeps its selection through the tracker and a ring pass.
+            world
+                .run_system_once(super::super::super::track::follow_selection_object)
+                .expect("the tracker runs on the built client");
             world
                 .run_system_once(super::super::update_ring)
                 .expect("the ring runs on the built client");
@@ -851,8 +852,8 @@ mod tests {
             );
             assert!(world.get::<DespawnFade>(mob).is_some(), "…and fades");
             world
-                .run_system_once(super::super::update_ring)
-                .expect("the ring runs on the built client");
+                .run_system_once(super::super::super::track::follow_selection_object)
+                .expect("the tracker runs on the built client");
             let sel = world.resource::<Selection>();
             assert_eq!(
                 (sel.target, sel.guid),

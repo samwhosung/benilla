@@ -43,7 +43,9 @@ pub(super) fn apply_highlight(
         .filter(|_| go.is_none())
         .filter(|e| stores.get(*e).is_ok_and(super::corpse_mouseover_eligible));
     let mut want: Vec<Entity> = Vec::new();
-    for root in [unit_hover, corpse_hover, go, selection.target]
+    // The target reason is the object `SetSelection` lit (`0x493701`), not one that streamed in
+    // under the selected guid since.
+    for root in [unit_hover, corpse_hover, go, selection.lit]
         .into_iter()
         .flatten()
     {

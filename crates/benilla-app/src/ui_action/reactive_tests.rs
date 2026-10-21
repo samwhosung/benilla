@@ -287,6 +287,7 @@ fn select(app: &mut App, guid: u64) {
         target: None,
         guid: Some(guid),
         last: None,
+        lit: None,
     });
 }
 

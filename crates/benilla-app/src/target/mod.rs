@@ -45,6 +45,7 @@ pub(crate) mod ring;
 mod scan;
 mod script;
 pub(crate) use script::ScriptSelect;
+mod track;
 
 pub(crate) use cursor_mode::{
     corpse_mouseover_eligible, CursorKind, WorldCursor, GO_TYPE_GENERIC, SERVICE_RANGE_SQ,
@@ -89,6 +90,9 @@ pub(crate) use click::{clear_selection_on_world_teardown, deselect_on_ui_shutdow
 pub(crate) struct Selection {
     pub(crate) target: Option<Entity>,
     pub(crate) guid: Option<u64>,
+    /// The object `SetSelection` lit as the target (`SetLight` bit 0, `0x493701`) and the teardown
+    /// unlights (`0x4939a7`): an object that streams in after the select is not lit.
+    pub(crate) lit: Option<Entity>,
     /// The last-target pair `[0xb4e2e0]` that `TargetLastTarget` reads: `SetSelection` stamps the
     /// outgoing selection, none included, on every change it makes, a select or a deselect
     /// (`0x49361d`-`0x493628`); a teardown clear (`0x493910` alone) leaves it.
@@ -396,6 +400,14 @@ impl Plugin for TargetPlugin {
                     .chain()
                     .in_set(TargetUpdate)
                     .after(WorldStage::Input),
+            )
+            // The selection's object, as the objects that streamed in and out applied and the
+            // active player is tagged, before any reader of the frame.
+            .add_systems(
+                Update,
+                track::follow_selection_object
+                    .after(WorldStage::Net)
+                    .before(WorldStage::Input),
             )
             // PostUpdate: the brighten sets MeshTag bit 31 after every Update writer that
             // overwrites the whole tag.

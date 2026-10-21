@@ -123,6 +123,15 @@ const MAX_DIST_SQ: f32 = 20.0 * 20.0;
 /// far to read.
 const DIM_ALPHA: u8 = 178;
 
+/// The alpha of `guid`'s plate: full with no target or on the target's own plate, else dimmed.
+fn plate_alpha(selection: &Selection, guid: u64) -> u8 {
+    if selection.target.is_none() || selection.guid == Some(guid) {
+        255
+    } else {
+        DIM_ALPHA
+    }
+}
+
 /// The bar-fill palette, the dwords at `0xcf60d0`/`e8`/`c8`/`dc`, in sRGB.
 const PLATE_HOSTILE: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
 const PLATE_NEUTRAL: [f32; 4] = [1.0, 1.0, 0.0, 1.0];
@@ -376,7 +385,6 @@ fn drive_vplates(
         let hovered_key = script.hovered_nameplate();
         let clicked = script.take_nameplate_clicks();
         let my_level = self_store.and_then(|s| s.0.unit_level()).unwrap_or(1);
-        let has_target = world.selection.target.is_some();
         let (rel, me) = (world.relations.get(), world.relations.me());
 
         let (pw, ph) = (gx(PLATE_W), gx(PLATE_H));
@@ -478,11 +486,7 @@ fn drive_vplates(
         for (_, screen, anchor, rank, is_player, entity, guid, store) in cands {
             plates.0.insert(entity);
 
-            let alpha = if !has_target || world.selection.target == Some(entity) {
-                255
-            } else {
-                DIM_ALPHA
-            };
+            let alpha = plate_alpha(&world.selection, guid.0);
             let tint = plate_tint(rank, is_player);
             // `WOW_VPLATE_TRACE=1` prints each plate rect in logical px.
             static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

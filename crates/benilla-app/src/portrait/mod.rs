@@ -1115,7 +1115,11 @@ fn sync_portraits(
         let mut occupant: Option<u64> = None;
         let unit: Option<Entity> = match token {
             "player" => self_q.single().ok(),
-            "target" => selection.target,
+            "target" => {
+                let subject = target_subject(&selection, &party.roster, &party.names);
+                (occupant, unseen) = (subject.occupant, subject.unseen);
+                subject.entity
+            }
             // Gated on the UI drawing the slot: its frame ships hidden (`SHOW_TARGET_OF_TARGET`
             // defaults to `"0"`), and ungated it would re-bake on every target switch.
             "targettarget" => party
@@ -1613,6 +1617,27 @@ fn party_pet_subject<'a>(
             None,
             roster.pet_record(pet).map(|_| pet_temporary_portrait()),
         ),
+    }
+}
+
+/// What a portrait slot shows: the object to bake, the guid the bake cache files it under, and the
+/// stand-in for a unit the object manager does not hold.
+#[derive(Debug, Default, PartialEq)]
+struct Subject {
+    entity: Option<Entity>,
+    occupant: Option<u64>,
+    unseen: Option<String>,
+}
+
+/// `"target"`'s subject: the selection's object.
+fn target_subject(
+    selection: &Selection,
+    _roster: &crate::ui_party::GroupState,
+    _names: &crate::names::NameCache,
+) -> Subject {
+    Subject {
+        entity: selection.target,
+        ..Subject::default()
     }
 }
 

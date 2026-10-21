@@ -321,6 +321,7 @@ fn a_ranged_button_pads_its_range_by_the_selected_target_alone() {
             target: Some(selected),
             guid: Some(SELECTED),
             last: None,
+            lit: None,
         });
         app.insert_non_send_resource(UiScript::new().unwrap());
         add_action_feed(&mut app);
@@ -458,6 +459,7 @@ fn a_melee_button_reaches_the_moving_bonus_while_both_units_run() {
             target: Some(mob),
             guid: Some(SELECTED),
             last: None,
+            lit: None,
         });
         app.insert_non_send_resource(UiScript::new().unwrap());
         add_action_feed(&mut app);
@@ -1160,6 +1162,7 @@ fn select(app: &mut App, guid: Option<u64>) {
         target,
         guid,
         last: None,
+        lit: None,
     });
 }
 

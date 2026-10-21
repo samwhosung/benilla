@@ -1698,6 +1698,7 @@ pub(crate) fn clear_selection_on_world_teardown(mut selection: ResMut<Selection>
     }
     selection.target = None;
     selection.guid = None;
+    selection.lit = None;
 }
 
 /// A deselect that applies only if the selection is this guid (`0x493910(guid, 1)`), raised by
@@ -1732,6 +1733,7 @@ pub(super) fn clear(
     engaged: bool,
 ) {
     if selection.target.take().is_some() {
+        selection.lit = None;
         if let Some(old) = selection.guid.take() {
             // The teardown `0x493910` closes the old target's loot before its own send.
             seam.close_loot_on(old);
