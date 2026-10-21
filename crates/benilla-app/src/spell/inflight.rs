@@ -39,6 +39,7 @@ pub(crate) struct PendingCast {
     slot: Option<PendingCastState>,
     caster_is_player: bool,
     record_spell: u32,
+    record_target: Option<u64>,
 }
 
 struct PendingCastState {
@@ -128,6 +129,12 @@ impl PendingCast {
     /// precast (`0x6e79af`), its send having done so.
     pub(crate) fn record_spell(&self) -> u32 {
         self.record_spell
+    }
+
+    /// The record's bound object (`0xceac48 + 0x18`, `0xceac60`), which `0x6e3d50` hands the
+    /// death handler (`0x6058c7`).
+    pub(crate) fn record_target(&self) -> Option<u64> {
+        self.record_target
     }
 }
 
@@ -479,11 +486,27 @@ impl SelfCancel<'_> {
             if *crate::net::CAST_TRACE {
                 info!("cast-trace: LOCAL auto-repeat self-cancel (esc), CMSG_CANCEL_AUTO_REPEAT_SPELL");
             }
+            let Self {
+                pending,
+                queued_melee,
+                ground,
+                reports,
+                net,
+                auto_repeat,
+                edits,
+                ..
+            } = self;
             crate::creature_anim::cancel_auto_repeat_local(
                 self_e,
-                &mut self.auto_repeat,
-                &self.edits,
-                &self.net,
+                auto_repeat,
+                edits,
+                &mut super::CastCore {
+                    pending,
+                    queued_melee,
+                    ground,
+                    reports,
+                    net,
+                },
             );
             false // the press is spent
         } else {

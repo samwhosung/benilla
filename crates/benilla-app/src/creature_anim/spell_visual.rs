@@ -899,6 +899,7 @@ pub(super) fn route_cast_visuals(
                     out.shakes.write(SpellKitShake::PlayAt { pos, group });
                 }
             }
+            CastEventKind::Reap => {}
             CastEventKind::Fail => {
                 if held_spell(&pending, ev.entity) == Some(ev.spell_id) {
                     commands.entity(ev.entity).try_remove::<CastHold>();

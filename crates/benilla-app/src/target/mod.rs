@@ -17,6 +17,7 @@ mod by_name;
 pub(crate) mod click;
 // `pub(crate)` for the hover inspector, which runs the cursor's `cursor_mode::go_highlightable`.
 pub(crate) mod cursor_mode;
+mod died;
 mod flash;
 mod front;
 #[cfg(test)]
@@ -398,10 +399,15 @@ impl Plugin for TargetPlugin {
                     // run their bodies' `TargetNearestEnemy` and `AttackTarget` as script calls.
                     crate::ui_action::attack_nearest_probe,
                     flash::drive_flash,
-                    // The last-enemy stamp before the ring's death-clear, so a hostile that dies
-                    // selected is still remembered (the reference's `TargetLastEnemy` has no
-                    // liveness gate).
-                    (scan::remember_last_enemy, ring::update_ring).chain(),
+                    // The last-enemy stamp before the death handler's deselect, so a hostile that
+                    // dies selected is still remembered (the reference's `TargetLastEnemy` has no
+                    // liveness gate); the ring after both, off the frame's final selection.
+                    (
+                        scan::remember_last_enemy,
+                        died::on_unit_died,
+                        ring::update_ring,
+                    )
+                        .chain(),
                 )
                     .chain()
                     .in_set(TargetUpdate)

@@ -193,6 +193,8 @@ pub(crate) struct CastLadder<'w, 's> {
     /// The attack a unit caster's send owes the pet bar (`0x6e51de`); absent in a world with no
     /// pet bar.
     unit_attack: Option<ResMut<'w, UnitAttackOwed>>,
+    /// Our stop in flight (`[+0xc54]`); absent in a world that never stops an attack.
+    stop_word: Option<ResMut<'w, crate::creature_anim::AttackStopInFlight>>,
 }
 
 /// Whether `ReportCastFailure 0x6e1a00` reaches its tail for `fail`
@@ -476,6 +478,7 @@ impl CastLadder<'_, '_> {
             &mut self.auto_repeat,
             &mut self.trade_skill_opens,
             &mut self.held_for_pick,
+            self.stop_word.as_deref_mut(),
             UnitCaster {
                 active: self.active.as_ref().and_then(|g| g.0),
                 pet_gcds: self.pet_gcds.as_deref_mut(),
@@ -595,6 +598,8 @@ fn send_spell_cast(
     auto_repeat: &mut AutoRepeatActive,
     trade_skill_opens: &mut crate::ui_tradeskill::TradeSkillOpens,
     held_for_pick: &mut HeldForPick,
+    // Our stop in flight (`[+0xc54]`), which the send's StopAttack sets and its attack tail reads.
+    mut stop_word: Option<&mut crate::creature_anim::AttackStopInFlight>,
     unit: UnitCaster<'_>,
 ) {
     // A refusal through the reporter, then the attempt's `xor al,al` exit.
@@ -621,7 +626,7 @@ fn send_spell_cast(
     {
         debug!("ui_action: cast {spell_id} re-pressed — auto-repeat toggles off");
         let self_e = self_player.single().ok().map(|(e, _)| e);
-        crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, edits, commands);
+        crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, edits, core);
         return;
     }
     if caster_dead(spell_id, def, ctx.rel.self_store) {
@@ -881,7 +886,7 @@ fn send_spell_cast(
                         self_e,
                         auto_repeat,
                         edits,
-                        commands,
+                        core,
                     );
                 }
             }
@@ -1033,7 +1038,7 @@ fn send_spell_cast(
                 .0
                 .send(ClientCommand::CancelCast { spell_id: cached });
             let self_e = self_player.single().ok().map(|(e, _)| e);
-            crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, edits, commands);
+            crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, edits, core);
         }
     }
     // `SendCast 0x6e54f0`: one targets block, two opcodes, sent first (`0x6e5872`); everything the
@@ -1128,7 +1133,12 @@ fn send_spell_cast(
                 // queued strike, which the repeat's push moved into the save, so its cancel is
                 // the packet alone. This is where melee and auto-repeat are kept exclusive. It
                 // runs after the arm above, so it never cancels this repeat.
-                crate::creature_anim::stop_attack_local(engaged, core);
+                crate::creature_anim::stop_attack_local(
+                    Some(e),
+                    engaged,
+                    stop_word.as_deref_mut(),
+                    core,
+                );
             }
         }
     }
@@ -2120,6 +2130,8 @@ mod tests {
                 crate::ui_cast::CastReport::Bar(_) => "BAR",
                 crate::ui_cast::CastReport::Refused(_) => "REFUSED",
                 crate::ui_cast::CastReport::TradeSkillDisarm => "DISARM",
+                crate::ui_cast::CastReport::AutoRepeat(true) => "START_AUTOREPEAT",
+                crate::ui_cast::CastReport::AutoRepeat(false) => "STOP_AUTOREPEAT",
             })
             .collect()
     }

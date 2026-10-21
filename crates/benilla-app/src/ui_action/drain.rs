@@ -97,28 +97,15 @@ impl AttackPress<'_, '_> {
     /// [`Self::attack_target`]'s second half, the toggle at the validated target.
     pub(crate) fn start_attack(&mut self, guid: u64) {
         let Self { pick, seam, .. } = self;
-        let Ok(e) = seam.me.single() else {
+        if seam.me.single().is_err() {
             return;
-        };
+        }
         let engaged = pick.engaged();
         debug!(
             "attack {} at {guid:#x}",
             if engaged { "toggled off" } else { "swing" }
         );
-        let gate = seam.start_gate();
-        crate::creature_anim::toggle_attack_local(
-            e,
-            guid,
-            engaged,
-            gate,
-            &mut seam.slots,
-            &mut seam.auto_repeat,
-            &mut seam.sheath,
-            &mut seam.stand,
-            &seam.edits,
-            seam.spells.as_deref(),
-            &seam.net,
-        );
+        seam.toggle(guid, engaged);
     }
 
     /// TryCast's attack pick (`0x6e4efb`) for a spell press held there

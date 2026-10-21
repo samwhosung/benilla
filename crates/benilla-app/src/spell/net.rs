@@ -410,7 +410,13 @@ fn on_cancel_auto_repeat(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene) 
             &l.self_guid,
             &l.index,
             &sc.edits,
-            &l.net,
+            &mut super::CastCore {
+                pending: &mut l.pending,
+                queued_melee: &mut l.queued_melee,
+                ground: &mut l.ground,
+                reports: &mut l.reports,
+                net: &l.net,
+            },
         );
     }
 }
@@ -831,7 +837,7 @@ fn cast_result(
             }
         }
         if auto_repeat.0 == Some(spell_id) && !dont_report {
-            crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, edits, net);
+            crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, edits, core);
         }
         if !dont_report {
             cooldowns.clear_gcd(spell_id, now);
@@ -1391,12 +1397,12 @@ fn cancel_auto_repeat(
     self_guid: &SelfGuid,
     index: &GuidIndex,
     edits: &crate::creature_anim::UnitEdits,
-    net: &crate::net::NetCommands,
+    core: &mut super::CastCore,
 ) {
     debug!("net: cancel auto-repeat");
     // The same cancel `0x6ea080` as every local trigger, its unconditional CMSG ack included.
     let self_e = self_guid.0.and_then(|g| index.0.get(&g)).copied();
-    crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, edits, net);
+    crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, edits, core);
 }
 
 /// The go's item leg, for a cast whose first guid is not the caster's: the item's entry off its

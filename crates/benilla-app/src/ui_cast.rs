@@ -55,6 +55,10 @@ pub(crate) enum CastReport {
     /// (`0x6e589d`) and the active player's form change (`0x5de016`). The trade slot's bind
     /// (`0x6e6939`) signals it too; benilla does not build that bind (#88).
     Changed,
+    /// The auto-repeat key `0xceac30` stored or cleared: `START_AUTOREPEAT_SPELL` (435) as the
+    /// send stores it (`0x6e594c`, `0x6e5952`), `STOP_AUTOREPEAT_SPELL` (436) as
+    /// `StopAutoRepeatSpell` clears it (`0x6ea16a`, `0x6ea170`).
+    AutoRepeat(bool),
 }
 
 /// Our cast's reports in the order they were made: one queue, so a refusal's line precedes its
@@ -84,6 +88,11 @@ impl CastReports {
     /// `0x4b3250` ([`CastReport::Changed`]).
     pub(crate) fn changed(&mut self) {
         self.0.push(CastReport::Changed);
+    }
+
+    /// The auto-repeat key's edge ([`CastReport::AutoRepeat`]).
+    pub(crate) fn auto_repeat(&mut self, on: bool) {
+        self.0.push(CastReport::AutoRepeat(on));
     }
 
     /// The refusals queued, in order.
@@ -308,6 +317,12 @@ impl CastReporter<'_, '_> {
                     Ready::Event("ACTIONBAR_UPDATE_STATE", vec![]),
                     Ready::Event("CURRENT_SPELL_CAST_CHANGED", vec![]),
                 ]),
+                CastReport::AutoRepeat(true) => {
+                    out.push(Ready::Event("START_AUTOREPEAT_SPELL", vec![]))
+                }
+                CastReport::AutoRepeat(false) => {
+                    out.push(Ready::Event("STOP_AUTOREPEAT_SPELL", vec![]))
+                }
             }
         }
         out

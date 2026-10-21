@@ -124,6 +124,8 @@ pub(super) fn record_casts(
                     row.impacts += 1;
                 }
             }
+            // A kit reap outside a cast edge ends no row.
+            CastEventKind::Reap => {}
         }
     }
 }

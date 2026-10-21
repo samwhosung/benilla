@@ -101,6 +101,33 @@ impl Wielded {
 #[derive(Component)]
 pub(crate) struct Engaged(pub(crate) u64);
 
+/// The stop in flight, the reference's `[+0xc54]`, kept for the one unit that sets it: only
+/// `SendAttackStop 0x624370` writes it nonzero (`0x6243b2`), and only on the active player.
+/// StartAttack sends its swing past the already-attacking gate while it is set (`0x5eccda`). The
+/// attack stop's handler clears it (`0x624e40` at `0x624e6b`), so does the unit's death
+/// (`0x6058a8`), and a new object starts clear (`0x5fae74`): a new entity reads clear here.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AttackStopInFlight(Option<Entity>);
+
+impl AttackStopInFlight {
+    /// Whether `unit`'s word is set.
+    pub(crate) fn of(&self, unit: Entity) -> bool {
+        self.0 == Some(unit)
+    }
+
+    /// `0x6243b2`: `unit`'s stop is on the wire.
+    fn set(&mut self, unit: Entity) {
+        self.0 = Some(unit);
+    }
+
+    /// `unit`'s word cleared.
+    pub(crate) fn clear(&mut self, unit: Entity) {
+        if self.0 == Some(unit) {
+            self.0 = None;
+        }
+    }
+}
+
 /// The local player's auto-repeat is armed: the reference's `[+0xd58] & 0x200`, set only by the
 /// local cast-send (`0x6e593b`); with the ranged sheath drawn a standing unit idles on the Load
 /// clip (`0x5fd460`). Cleared only through `cancel_auto_repeat_local`, including on
@@ -156,7 +183,7 @@ pub(crate) fn cancel_auto_repeat_local(
     entity: Option<Entity>,
     auto_repeat: &mut crate::spell::AutoRepeatActive,
     edits: &UnitEdits,
-    net: &crate::net::NetCommands,
+    core: &mut crate::spell::CastCore,
 ) {
     let Some(spell_id) = auto_repeat.0.take() else {
         // The reference's `[0xceac30] == 0` early-out: nothing running, nothing sent.
@@ -165,7 +192,7 @@ pub(crate) fn cancel_auto_repeat_local(
     if let Some(entity) = entity {
         edits.push(UnitEdit::ClearAutoRepeat { entity, spell_id });
     }
-    let _ = net.0.send(crate::net::ClientCommand::CancelAutoRepeat);
+    let _ = core.net.0.send(crate::net::ClientCommand::CancelAutoRepeat);
 }
 
 /// The local StopAttack, reference `0x5ecac0`: when attacking, `CMSG_ATTACKSTOP` (`0x624370`),
@@ -173,14 +200,23 @@ pub(crate) fn cancel_auto_repeat_local(
 /// a queued on-next-swing spell with `CMSG_CANCEL_CAST`: in the slot, as Esc does, with its pop's
 /// signal and `SPELLCAST_STOP`; in the save under a cast, by the packet alone, which is why Auto
 /// Shot (`0x6e5976`) darkens a Raptor Strike ring. `Engaged` stays until the `SMSG_ATTACKSTOP` echo
-/// (`0x624e40`), as in the reference.
-pub(crate) fn stop_attack_local(engaged: bool, core: &mut crate::spell::CastCore) {
+/// (`0x624e40`), as in the reference. The send marks `me`'s stop in flight in `word`
+/// (`0x6243b2`), absent in a world that never stops an attack.
+pub(crate) fn stop_attack_local(
+    me: Option<Entity>,
+    engaged: bool,
+    word: Option<&mut AttackStopInFlight>,
+    core: &mut crate::spell::CastCore,
+) {
     if !engaged {
         // The reference's `!IsAttacking(0x60ecb0) && [+0xc50] == 0` early-out (`[+0xc50]`, a
         // locally started attack, is not modelled): nothing sent, a queued strike survives.
         return;
     }
     let _ = core.net.0.send(crate::net::ClientCommand::AttackStop);
+    if let (Some(me), Some(word)) = (me, word) {
+        word.set(me);
+    }
     core.cancel_queued();
 }
 
@@ -283,46 +319,11 @@ pub(crate) fn start_attack_local(
     });
     // `0x60fc50` (`0x5ecd87`): the precast's busy bit, its spell kept.
     edits.push(UnitEdit::EndPrecastBusy(entity));
-    cancel_auto_repeat_local(Some(entity), auto_repeat, edits, net);
+    cancel_auto_repeat_local(Some(entity), auto_repeat, edits, core);
 }
 
 /// `SPELL_INTERRUPT_FLAG_AUTOATTACK`: auto-attack interrupts the spell.
 const INTERRUPT_AUTO_ATTACK: u32 = 0x8;
-
-/// The Attack toggle, reference `0x6131a0` (the Attack pseudo-spell, `0x6e4c7a`): stop when
-/// attacking with control (`0x6131ce`), else start, which returns at a clear `[0xb4b3e4]` too. Only
-/// the start arm cancels auto-repeat, so toggling melee off leaves Auto Shot running.
-pub(crate) fn toggle_attack_local(
-    entity: Entity,
-    target: u64,
-    engaged: bool,
-    gate: StartGate,
-    slots: &mut crate::spell::CastSlots,
-    auto_repeat: &mut crate::spell::AutoRepeatActive,
-    sheath: &mut MessageWriter<SheathRequest>,
-    stand: &mut MessageWriter<crate::player::StandStateRequest>,
-    edits: &UnitEdits,
-    spells: Option<&crate::ui_action::Spells>,
-    net: &crate::net::NetCommands,
-) {
-    if engaged && gate.has_control() {
-        stop_attack_local(engaged, &mut slots.core(net));
-    } else {
-        start_attack_local(
-            entity,
-            target,
-            engaged,
-            false,
-            gate,
-            auto_repeat,
-            sheath,
-            stand,
-            edits,
-            spells,
-            &mut slots.core(net),
-        );
-    }
-}
 
 /// The attack seams' write set as one param, for the selection writers that run the reference's
 /// stop, select, re-swing (`SetSelection` `0x493540`), and the loot its teardown closes.
@@ -350,6 +351,9 @@ pub(crate) struct AttackSeam<'w, 's> {
     pub(crate) loot: ResMut<'w, crate::ui_loot::LootState>,
     /// The loot latch: the teardown's close drops it, and the right-click loot legs arm it.
     pub(crate) loot_latch: ResMut<'w, crate::ui_loot::LootLatch>,
+    /// Our stop in flight (`[+0xc54]`), which StopAttack's send sets and StartAttack reads;
+    /// absent in a world that never stops an attack.
+    stop_word: Option<ResMut<'w, AttackStopInFlight>>,
 }
 
 impl AttackSeam<'_, '_> {
@@ -394,7 +398,31 @@ impl AttackSeam<'_, '_> {
 
     /// StopAttack (`0x5ecac0`).
     pub(crate) fn stop(&mut self, engaged: bool) {
-        stop_attack_local(engaged, &mut self.slots.core(&self.net));
+        let me = self.me.single().ok();
+        stop_attack_local(
+            me,
+            engaged,
+            self.stop_word.as_deref_mut(),
+            &mut self.slots.core(&self.net),
+        );
+    }
+
+    /// Whether our stop is in flight (`[+0xc54]`).
+    pub(crate) fn stop_in_flight(&self) -> bool {
+        let me = self.me.single().ok();
+        me.zip(self.stop_word.as_deref())
+            .is_some_and(|(me, word)| word.of(me))
+    }
+
+    /// The Attack toggle, reference `0x6131a0` (the Attack pseudo-spell, `0x6e4c7a`): stop when
+    /// attacking with control (`0x6131ce`), else start, which returns at a clear `[0xb4b3e4]` too.
+    /// Only the start arm cancels auto-repeat, so toggling melee off leaves Auto Shot running.
+    pub(crate) fn toggle(&mut self, target: u64, engaged: bool) {
+        if engaged && self.start_gate().has_control() {
+            self.stop(engaged);
+        } else {
+            self.start(target, engaged, false);
+        }
     }
 
     /// StartAttack (`0x5ecb70`); a no-op before our own entity streams in.
@@ -465,6 +493,9 @@ pub(crate) enum CastEventKind {
     Go,
     /// Died without release (`SMSG_SPELL_FAILED_OTHER`, or our failed `SMSG_CAST_RESULT`).
     Fail,
+    /// `0x614150(spell, 0)` with no cast edge of its own: the spell's kits stop on the unit, as
+    /// the auto-repeat stop stops the repeat spell's (`0x6ea139`).
+    Reap,
     /// The spell landed on this unit (a missile arrival, `0x61dc50`): impact kit, then state kit.
     /// `weapon_visual` is the caster's ranged-weapon `SpellVisual` (`0x60d450`), carried from the
     /// GO since the caster may despawn.
@@ -903,6 +934,7 @@ impl Plugin for CreatureAnimPlugin {
             .init_resource::<PendingImpacts>()
             .init_resource::<PlaySeq>()
             .init_resource::<UnitEdits>()
+            .init_resource::<AttackStopInFlight>()
             .init_resource::<gesture::GestureQueue>()
             .add_message::<EmoteAnim>()
             .add_message::<BaseAnimRecompute>()
