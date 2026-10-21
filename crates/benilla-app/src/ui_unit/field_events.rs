@@ -817,17 +817,13 @@ mod tests {
     /// `PLAYER_TARGET_CHANGED` re-shows the inspect window on the new target
     /// (`Blizzard_InspectUI.lua:29-31`), whose doll reads its slots inside the call
     /// (`InspectPaperDollFrame.lua:57-79`): the aura feed seats the new target's guid, the inspect
-    /// feed pushes its slots, then the event fires.
+    /// feed pushes its slots, then the event fires. Both edges are declared, not left to
+    /// registration order.
     #[test]
     fn a_new_targets_slots_are_pushed_before_its_target_event() {
         use crate::game_plugins::schedule_tests::{census, headless_client, SyncPoints};
 
         let mut app = headless_client();
-        let pushed_first = crate::test_support::runs_before(
-            &mut app,
-            crate::ui_inspect::feed_inspect,
-            super::super::fire_unit_events,
-        );
         let c = census(&mut app, Update, SyncPoints::Declared);
         if !c.systems.values().any(|s| s.name.contains("benilla_app::")) {
             eprintln!("skipped: this build carries no type names");
@@ -841,21 +837,16 @@ mod tests {
             }
         };
         // The aura feed is private to its module, so its side is read by name off the graph.
-        let (aura, inspect) = (
+        let (aura, inspect, fire) = (
             one("::ui_aura::feed_auras"),
             one("::ui_inspect::feed_inspect"),
+            one("::ui_unit::fire_unit_events"),
         );
-        let mut after_aura = std::collections::HashSet::new();
-        let mut next = vec![aura];
-        while let Some(n) = next.pop() {
-            for &(a, b) in &c.dependencies {
-                if a == n && after_aura.insert(b) {
-                    next.push(b);
-                }
-            }
-        }
         assert_eq!(
-            [after_aura.contains(&inspect), pushed_first],
+            [
+                c.dependencies.contains(&(aura, inspect)),
+                c.dependencies.contains(&(inspect, fire)),
+            ],
             [true; 2],
             "aura seat, inspect push"
         );
