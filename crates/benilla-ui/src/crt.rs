@@ -210,7 +210,7 @@ mod tests {
         let keys: Vec<u64> = (0..200u64).map(|i| (i * 7919) % 17).collect();
         let want = perm(&keys);
         let mut stack = vec![(0, 99)];
-        let mut sort = |stack: &mut Vec<(usize, usize)>| {
+        let sort = |stack: &mut Vec<(usize, usize)>| {
             let mut v: Vec<usize> = (0..keys.len()).collect();
             qsort_with_stack(&mut v, stack, |&a, &b| keys[a].cmp(&keys[b]) as i32);
             v
