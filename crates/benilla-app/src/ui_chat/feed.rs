@@ -824,7 +824,7 @@ pub(super) fn notice_event(
 /// Forest]") and a handler's `GetChannelName` still finds it. The reference flags the teardown
 /// (`0x49c115`), fires the event (`0x49c5b0` calling `0x49a870`), then drops the record
 /// (`0x49c5b5`, `0x49c5c2` calling `0x49bbd0`); its suspended leg (`0x49c0e9`) skips the flag.
-/// Both arms mirror the list into the VM for `GetChannelName`.
+/// Both arms mirror the slots into the VM, whose `GetChannelName` and `SendChatMessage` read them.
 pub(super) fn deliver(
     script: &mut benilla_ui::script::UiScript,
     windows: &mut ChatWindows,
@@ -853,25 +853,26 @@ pub(super) fn deliver(
         channels.note_custom_channel_joined(&event.channel);
         // A slot the walk renamed is numbered already, but its state must return to `Joined`.
         channels.confirm_slot(&event.channel);
-    }
-    if notice == Some(channel_notice::YOU_JOINED) && channels.number_of(&event.channel).is_none() {
-        match channels.claim_slot(&event.channel) {
-            Some(slot) => {
-                debug!(
+        if channels.number_of(&event.channel).is_none() {
+            match channels.claim_slot(&event.channel) {
+                Some(slot) => debug!(
                     "chat: server confirms channel {:?} joined (slot {slot})",
                     event.channel
-                );
-                script.set_joined_channels(channels.names());
+                ),
+                // All ten slots taken: no number, as in the reference, whose slot allocator also
+                // prints `ERR_TOO_MANY_CHAT_CHANNELS` (`0x199` at `0x49b9c5`); here it is only
+                // logged.
+                None => warn!(
+                    "chat: server confirms channel {:?} joined but all {} slots are taken — it \
+                     has no number, so /N cannot reach it",
+                    event.channel,
+                    super::edit::MAX_CHANNELS
+                ),
             }
-            // All ten slots taken: no number, as in the reference, whose slot allocator also
-            // prints `ERR_TOO_MANY_CHAT_CHANNELS` (`0x199` at `0x49b9c5`); here it is only logged.
-            None => warn!(
-                "chat: server confirms channel {:?} joined but all {} slots are taken — it has no \
-                 number, so /N cannot reach it",
-                event.channel,
-                super::edit::MAX_CHANNELS
-            ),
         }
+        // The confirm and the claim both write the slot's state (`0x49bb20`), which a handler's
+        // `SendChatMessage` to it reads from this event on.
+        channels.mirror_into(script);
     }
     // The wire name, kept before `stamp_channel` decorates arg4 with the slot number.
     let leaving = (notice == Some(channel_notice::YOU_LEFT)).then(|| event.channel.clone());
@@ -887,7 +888,7 @@ pub(super) fn deliver(
             // Cleared in place, never compacted: slot 3 stays 3 when slot 2 empties.
             let freed = channels.free_slot(&name);
             debug!("chat: server confirms channel {name:?} left (slot {freed:?} now free)");
-            script.set_joined_channels(channels.names());
+            channels.mirror_into(script);
         }
     }
 }

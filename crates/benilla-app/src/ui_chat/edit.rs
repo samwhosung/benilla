@@ -279,6 +279,13 @@ impl ChannelState {
             .collect()
     }
 
+    /// Push the slots into the VM's mirror, which `SendChatMessage`'s channel target and the
+    /// channel verbs read where the reference reads the slot array itself. Every step that writes
+    /// a slot's name or state ends with this, so the mirror never lags the slot it copies.
+    pub(crate) fn mirror_into(&self, script: &mut benilla_ui::script::UiScript) {
+        script.set_joined_channels(self.names());
+    }
+
     /// Every joined channel's name, holes skipped.
     pub(crate) fn iter_names(&self) -> impl Iterator<Item = &str> {
         self.joined.iter().flatten().map(|s| s.name.as_str())

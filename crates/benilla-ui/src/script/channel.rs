@@ -642,8 +642,8 @@ impl From<&str> for JoinedChannel {
 }
 
 impl super::UiScript {
-    /// Mirror the app's joined channels in join order, `None` for a freed slot; `ui_chat::feed`
-    /// pushes it on each `YOU_JOINED` and `YOU_LEFT`.
+    /// Mirror the app's joined channels in join order, `None` for a freed slot; the app pushes it
+    /// after every step that writes a slot's name or state.
     pub fn set_joined_channels(&mut self, joined: Vec<Option<JoinedChannel>>) {
         self.model_mut().joined_channels = joined;
     }

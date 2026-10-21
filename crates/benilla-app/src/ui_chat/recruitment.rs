@@ -178,7 +178,7 @@ fn apply_runs(script: &mut UiScript, channels: &mut ChannelState, commands: &Net
                 match channels.claim_slot(&name) {
                     Some(n) => {
                         debug!("chat: {name:?} registered as slot {n}");
-                        script.set_joined_channels(channels.names());
+                        channels.mirror_into(script);
                     }
                     None => warn!(
                         "chat: no free slot for {name:?} — all {} are taken",
