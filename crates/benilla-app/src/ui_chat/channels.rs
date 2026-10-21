@@ -89,11 +89,10 @@ fn end_channel_session(
 /// Seed a fresh VM's joined-channel mirror, which is otherwise pushed only on a join or a leave, so
 /// a `/reload` would leave `GetChannelName` and `/N` empty until the next one.
 pub(super) fn seed_channels(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    channels: Res<ChannelState>,
+    mut vm: crate::script_calls::VmWith<Res<'static, ChannelState>>,
     mut seeded: Local<crate::ui_script::VmMemo<bool>>,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, channels| {
         let Some(script) = script else {
             return;
         };
@@ -105,12 +104,11 @@ pub(super) fn seed_channels(
 
 /// The session-end edge: a confirmed `/logout` back to the glue screens (`OnExit(InWorld)`).
 pub(super) fn end_session_channels(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut channels: ResMut<ChannelState>,
+    mut vm: crate::script_calls::VmWith<ResMut<'static, ChannelState>>,
     mut walk: ResMut<ZoneChannelWalk>,
     mut cascade: ResMut<GuildRecruitmentCascade>,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, mut channels| {
         end_channel_session(script, &mut channels, &mut walk, &mut cascade);
     })
 }
@@ -118,16 +116,15 @@ pub(super) fn end_session_channels(
 /// The other session end, a dead socket: a recoverable drop never leaves `InWorld`, but the
 /// reconnect gets a fresh server-side `Player` in no channels, so it clears the same state.
 pub(super) fn end_session_channels_on_disconnect(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut channels: ResMut<ChannelState>,
+    mut vm: crate::script_calls::VmWith<ResMut<'static, ChannelState>>,
     mut walk: ResMut<ZoneChannelWalk>,
     mut cascade: ResMut<GuildRecruitmentCascade>,
     mut disconnects: MessageReader<crate::net::DisconnectedMessage>,
 ) {
-    hosted_vm.run(|script| {
-        if disconnects.read().next().is_none() {
-            return;
-        }
+    if disconnects.read().next().is_none() {
+        return;
+    }
+    vm.turn(|script, mut channels| {
         end_channel_session(script, &mut channels, &mut walk, &mut cascade);
     })
 }
@@ -403,7 +400,8 @@ fn zone_is_settled(player: Option<&crate::player::Player>) -> bool {
 /// its ready flag (`0x49a219`) until the cache loader calls the walk (`0x499a22`).
 pub(super) fn auto_join_zone_channels(
     commands: Res<NetCommands>,
-    mut channels: ResMut<ChannelState>,
+    // The slots beside the VM: the walk runs no Lua, so it is an engine turn.
+    mut vm: crate::script_calls::VmWith<ResMut<'static, ChannelState>>,
     areas: Option<Res<AreaTableRes>>,
     world: benilla_world::world_point::WorldPoint,
     // One parameter for clippy's argument limit: the body's settle and a cinematic's view.
@@ -413,11 +411,10 @@ pub(super) fn auto_join_zone_channels(
     ),
     mut walk: ResMut<ZoneChannelWalk>,
     mut entered: MessageReader<crate::net::EnteredWorldMessage>,
-    mut hosted_vm: crate::script_calls::HostedVm,
     mut catalog_fed: Local<crate::ui_script::VmMemo<Option<(String, u32)>>>,
     errors: Res<crate::ui_action::UiErrorKeys>,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, mut channels| {
         let (player, cinematic) = (&body.0, &body.1);
         // World entry arms the walk; the session-end edges disarm it.
         if entered.read().next().is_some() {

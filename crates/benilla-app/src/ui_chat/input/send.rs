@@ -1,11 +1,12 @@
 //! The chat verbs the host applies inside their calls ([`ChatSender`]): `SendChatMessage`
-//! (`0x49f1e0`) past its binding's checks, from the group gates to the packet, and `RandomRoll`'s
-//! send (`0x48c832`). No slash grammar runs here: an addon sending `"/dance"` says six characters.
+//! (`0x49f1e0`) past its binding's checks, from the group gates to the packet, `RandomRoll`'s
+//! send (`0x48c832`), and the channel verbs' slots and packets. No slash grammar runs here: an
+//! addon sending `"/dance"` says six characters.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use benilla_ui::script::{ChatSend, UiScript};
+use benilla_ui::script::{ChannelCommand, ChatSend, UiScript};
 
 use super::super::away::{self, AfkMirror};
 use super::super::edit::SendType;
@@ -25,9 +26,29 @@ pub(crate) struct ChatSender<'w, 's> {
     /// The selection `%t` names (`0xb4e2d8`).
     selection: Res<'w, crate::target::Selection>,
     names: Res<'w, crate::names::NameCache>,
+    /// The channel slots the channel verbs read and the join's allocator writes; a world with no
+    /// chat has none.
+    channels: Option<ResMut<'w, super::super::edit::ChannelState>>,
 }
 
 impl ChatSender<'_, '_> {
+    /// A channel verb inside its call: a join's slot (`0x49ede8`-`0x49edf3`) and every verb's
+    /// packet, the slots mirrored into the VM before the verb returns.
+    pub(crate) fn channel(&mut self, script: &mut UiScript, cmd: ChannelCommand) {
+        let Some(channels) = self.channels.as_deref_mut() else {
+            debug!("chat: no channel slots in this world; {cmd:?} dropped");
+            return;
+        };
+        super::channel::apply(
+            cmd,
+            channels,
+            script,
+            &self.commands,
+            &self.chat_log,
+            &self.errors,
+        );
+    }
+
     /// `MSG_RANDOM_ROLL` (`0x48c832`), the binding having checked the range.
     pub(crate) fn random_roll(&self, min: u32, max: u32) {
         let _ = self.commands.0.send(ClientCommand::RandomRoll { min, max });
@@ -268,6 +289,7 @@ pub(crate) fn chat_world(script: UiScript) -> (World, crossbeam_channel::Receive
     world.init_resource::<crate::net::SelfGuid>();
     world.init_resource::<crate::target::Selection>();
     world.init_resource::<crate::names::NameCache>();
+    world.init_resource::<super::super::edit::ChannelState>();
     (world, rx)
 }
 
@@ -284,6 +306,7 @@ pub(crate) fn run_chat(world: &mut World, lua: &str) -> benilla_ui::mlua::Result
             benilla_ui::script::ScriptCall::RandomRoll { min, max } => {
                 sender.random_roll(min, max);
             }
+            benilla_ui::script::ScriptCall::Channel(cmd) => sender.channel(script, cmd),
             other => panic!("not a chat call: {other:?}"),
         });
         script.hosted(&mut host, |s| s.run(lua))

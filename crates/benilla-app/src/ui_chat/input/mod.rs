@@ -146,9 +146,6 @@ fn engine_verbs(
         // CVar name to print, or an unknown word.
         out.push((line.clone(), ParsedChat::Console { line }));
     }
-    for cmd in script.take_channel_commands() {
-        out.push((String::new(), ParsedChat::Channel(cmd)));
-    }
     out
 }
 
@@ -163,9 +160,6 @@ pub(super) fn drain_chat_input(
         ChatOut<'static, 'static>,
     )>,
     chat_log: Res<super::feed::ChatLog>,
-    // Mutable because an explicit leave clears the channel's `ZONECHANNELS` bit (`0x49f10a` in
-    // leave-by-name `0x49ee70`); the zone walk's own leave does not.
-    mut channels: ResMut<super::edit::ChannelState>,
     commands: Res<NetCommands>,
     emotes: Option<Res<crate::sound::EmoteSounds>>,
     // Our stand state and move flags for the emote gates; the entity is `/castvis`'s fallback.
@@ -229,8 +223,7 @@ pub(super) fn drain_chat_input(
                 ParsedChat::Reply { .. } => {}
                 // Stock built-ins (`ChatFrame.lua:778`, `:803`), so only a probe's line gets here,
                 // and it runs the same handler: sent verbatim, `/join General` would create a
-                // custom channel of that name. The handlers queue their verbs for the `Channel`
-                // arm.
+                // custom channel of that name. The handlers' verbs apply inside their calls.
                 ParsedChat::Join { name, password } => {
                     let body = format!(
                         "SlashCmdList['JOIN']({:?})",
@@ -883,14 +876,6 @@ pub(super) fn drain_chat_input(
                 }
                 // The reference's handler body, run in the VM.
                 ParsedChat::Lua { body } => return Some(LineLua::Body(body)),
-                ParsedChat::Channel(cmd) => channel::apply(
-                    cmd,
-                    &mut channels,
-                    script,
-                    &commands,
-                    &chat_log,
-                    &chat_out.ui_errors,
-                ),
                 ParsedChat::Unknown => {
                     // `SlashCmdList` gets the line before the help reply: an addon's command, or a
                     // stock one with no arm here.

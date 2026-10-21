@@ -1840,14 +1840,16 @@ JoinProbe.lua
 
     log_in_as(&mut world, "Onewarrior", 1);
 
-    let queued = world
-        .get_non_send_resource_mut::<benilla_ui::script::UiScript>()
-        .expect("VM")
-        .take_channel_commands();
+    // A join is applied inside its call, its slot taken there (`0x49edf3`).
+    let joined: Vec<String> = world
+        .resource::<crate::ui_chat::ChannelState>()
+        .iter_names()
+        .map(str::to_string)
+        .collect();
     assert!(
-        queued.is_empty(),
+        joined.is_empty(),
         "a built-in shortcut with no zone text yet is a no-op, not a custom channel on the \
-         server — queued {queued:?}"
+         server — joined {joined:?}"
     );
 
     drop(world);

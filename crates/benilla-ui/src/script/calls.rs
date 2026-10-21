@@ -119,6 +119,10 @@ pub enum ScriptCall {
     /// `RandomRoll(min, max)` (`0x48c7b0`) past its range check (`0x48c807`-`0x48c830`):
     /// `MSG_RANDOM_ROLL` (`0x48c832`).
     RandomRoll { min: u32, max: u32 },
+    /// A channel verb past its binding's checks, or the recruitment cascade's join or leave: the
+    /// host does the rest inside the call, the join's slot (`0x49ede8`-`0x49edf3`, the allocator
+    /// `0x49b980`) and the packet, so the verb's next line and the events after it read the slot.
+    Channel(super::ChannelCommand),
     /// A bag or paper-doll click while targeting wants an item (`PickupContainerItem` at
     /// `0x4f9c54`, `PickupInventoryItem` through `0x4c7300` at `0x4c76df`): the item seam
     /// `ValidateSpellItemTarget 0x495d60` on the clicked slot, which binds and sends, raises a

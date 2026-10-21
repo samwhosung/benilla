@@ -428,22 +428,41 @@ impl ChannelState {
         Some(n)
     }
 
-    /// Stamp an event's channel args from our slot, as the reference reads them off one record
+    /// The stamp of the record holding `name`, as the reference reads it off one record
     /// (`0x49b113`-`0x49b12a`: `+0x00` number, `+0x04` name, `+0x94` ChannelID, `+0x98` split
-    /// index): held, arg4 becomes `"N. Name"` (`0x8445c8`, the hit leg `0x49aa48`), arg8 the
-    /// number, arg9 the name with its zone tail and arg7 the slot's id; not held, nothing is
-    /// stamped (`0x49aa86`, `0x49b12f`).
+    /// index); `None` for an empty name or one no slot holds (`0x49aa86`, `0x49b12f`).
+    pub(crate) fn stamp_of(&self, name: &str) -> Option<ChannelStamp> {
+        let number = self.number_of(name).filter(|_| !name.is_empty())?;
+        Some(ChannelStamp {
+            number,
+            id: self.joined[number as usize - 1].id(),
+        })
+    }
+
+    /// Stamp an event's channel args from our slot ([`ChannelStamp::apply`]); a miss stamps
+    /// nothing, as the four args are one record.
     pub(crate) fn stamp_channel(&self, event: &mut super::event::ChatEvent) {
-        // A miss stamps nothing: the four args are one record.
-        let Some(n) = self
-            .number_of(&event.channel)
-            .filter(|_| !event.channel.is_empty())
-        else {
-            return;
-        };
+        if let Some(stamp) = self.stamp_of(&event.channel) {
+            stamp.apply(event);
+        }
+    }
+}
+
+/// What a channel line's record stamps on it ([`ChannelState::stamp_of`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ChannelStamp {
+    number: u32,
+    id: u32,
+}
+
+impl ChannelStamp {
+    /// Stamp `event`, whose `channel` is the record's name: arg4 becomes `"N. Name"` (`0x8445c8`,
+    /// the hit leg `0x49aa48`), arg8 the number, arg9 the name with its zone tail and arg7 the
+    /// slot's id.
+    pub(crate) fn apply(self, event: &mut super::event::ChatEvent) {
         event.channel_base = event.channel.clone();
-        event.zone_channel_id = self.joined[n as usize - 1].id();
-        event.channel_number = n;
-        event.channel = format!("{n}. {}", event.channel_base);
+        event.zone_channel_id = self.id;
+        event.channel_number = self.number;
+        event.channel = format!("{}. {}", self.number, event.channel_base);
     }
 }

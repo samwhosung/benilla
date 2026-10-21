@@ -498,7 +498,6 @@ pub(crate) struct Model {
     /// `Languages.dbc`'s `(ID, Name_lang)` rows in file order, whatever the character knows.
     pub(crate) language_table: Vec<(u32, String)>,
     pub(crate) zone_channel_catalog: Vec<super::channel::ZoneChannelRow>,
-    pub(crate) channel_commands: Vec<super::channel::ChannelCommand>,
     /// The recruitment auto-join latch `[0x843608]`: 0 `STANDARD`, 1 `AUTO` (`0x49ea70` maps any
     /// other word to 1). Boots at 1, as the reference writes `AUTO` for an untouched option.
     pub(crate) guild_recruitment_mode: u8,
@@ -507,8 +506,6 @@ pub(crate) struct Model {
     pub(crate) guild_recruitment_cascade: bool,
     /// What the cascade `0x49ea90` would do now, pushed by the app.
     pub(crate) guild_recruitment_plan: super::channel::RecruitmentPlan,
-    /// The cascade's joins and leaves since the last drain, for the app's wire and slot halves.
-    pub(crate) guild_recruitment_runs: Vec<super::channel::RecruitmentRun>,
     /// Lua changed the recruitment mode: the chat cache's dirty signal.
     pub(crate) guild_recruitment_changed: bool,
     /// `DoEmote` calls queued.
@@ -1596,11 +1593,9 @@ impl Model {
             known_languages: Vec::new(),
             language_table: Vec::new(),
             zone_channel_catalog: Vec::new(),
-            channel_commands: Vec::new(),
             guild_recruitment_mode: 1,
             guild_recruitment_cascade: false,
             guild_recruitment_plan: Default::default(),
-            guild_recruitment_runs: Vec::new(),
             guild_recruitment_changed: false,
             emote_requests: Vec::new(),
             uninvite_requests: Vec::new(),

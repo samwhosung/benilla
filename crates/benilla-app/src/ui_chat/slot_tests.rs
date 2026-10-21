@@ -102,6 +102,7 @@ fn join(name: &str, id: u32) -> ChannelCommand {
         name: name.into(),
         password: String::new(),
         id,
+        manual: true,
     }
 }
 
@@ -217,6 +218,133 @@ fn a_banned_notice_frees_the_slot_after_its_line() {
         v.channels.number_of("Other"),
         Some(2),
         "the next join reuses it"
+    );
+}
+
+/// A chat world whose host applies the channel verbs ([`super::run_chat`]), holding `channels`
+/// and a VM with their mirror and the Elwynn Forest catalog.
+fn hosted(channels: ChannelState) -> bevy::prelude::World {
+    let mut script = UiScript::new().expect("a VM");
+    script.set_zone_channel_catalog(super::channels::zone_channel_catalog(
+        &channels.channels,
+        "Elwynn Forest",
+        0,
+        None,
+    ));
+    channels.mirror_into(&mut script);
+    let (mut world, _sent) = super::chat_world(script);
+    world.insert_resource(channels);
+    world
+}
+
+fn eval<T: benilla_ui::mlua::FromLuaMulti>(world: &bevy::prelude::World, lua: &str) -> T {
+    world
+        .non_send_resource::<UiScript>()
+        .eval(lua)
+        .expect("the chunk runs")
+}
+
+/// The join body takes its slot inside the call (`0x49ede8`-`0x49edf3`, the allocator
+/// `0x49b980`) in state 1 (`0x49ba0f`): the name finds it on the verb's next line (`0x49be90`),
+/// its number does not (`0x49bf30`). A held name keeps its slot (`0x49b991`); with all ten taken
+/// the join gets none and shows `0x199` (`0x49b9c0`-`0x49b9ca`).
+#[test]
+fn a_join_takes_a_pending_slot_inside_the_call() {
+    let mut channels = ChannelState {
+        channels: catalog(),
+        zone_mask: Some(0),
+        ..Default::default()
+    };
+    channels.claim_slot("General - Elwynn Forest", 1);
+    channels.confirm_slot("General - Elwynn Forest");
+    channels.claim_slot("Gone", 0);
+    channels.free_slot("Gone");
+    let mut world = hosted(channels);
+    super::run_chat(
+        &mut world,
+        "JoinChannelByName('MyChan') A = GetChannelName('MyChan') B = GetChannelName(2)",
+    )
+    .expect("the joins run");
+    assert_eq!(
+        eval::<(i64, i64)>(&world, "return A, B"),
+        (2, 0),
+        "the freed slot 2 is taken, pending"
+    );
+    super::run_chat(&mut world, "JoinChannelByName('General')").expect("the join runs");
+    assert_eq!(
+        eval::<i64>(&world, "return GetChannelName('General - Elwynn Forest')"),
+        1,
+        "a held name keeps its number"
+    );
+    for i in 3..=10 {
+        super::run_chat(&mut world, &format!("JoinChannelByName('Chan{i}')")).expect("joins");
+    }
+    super::run_chat(&mut world, "JoinChannelByName('Eleventh')").expect("the join runs");
+    assert_eq!(
+        eval::<i64>(&world, "return GetChannelName('Eleventh')"),
+        0,
+        "ten slots taken: no slot"
+    );
+    let keys: Vec<&str> = world
+        .resource::<crate::ui_action::UiErrorKeys>()
+        .take()
+        .into_iter()
+        .map(|e| e.key)
+        .collect();
+    assert_eq!(keys, ["ERR_TOO_MANY_CHAT_CHANNELS"]);
+}
+
+/// The cascade's join goes through the join body (`0x49eb55` → `0x49eb70`): its slot is taken
+/// before the cascade's `UPDATE_CHAT_WINDOWS` (`0x49eb5f`), in state 1 (`0x49ba0f`) until the
+/// server confirms it, and the latch keeps AUTO, the cascade passing no reset flag.
+#[test]
+fn the_cascades_join_is_pending_until_the_server_confirms_it() {
+    let mut channels = ChannelState {
+        channels: catalog(),
+        zone_mask: Some(0),
+        ..Default::default()
+    };
+    channels.claim_slot("General - Orgrimmar", 1);
+    channels.confirm_slot("General - Orgrimmar");
+    let mut world = hosted(channels);
+    {
+        let mut script = world.non_send_resource_mut::<UiScript>();
+        script.set_guild_recruitment_plan(benilla_ui::script::RecruitmentPlan::Join {
+            name: "GuildRecruitment - City".into(),
+            shortcut: "GuildRecruitment".into(),
+            id: 25,
+        });
+        script
+            .run(
+                r#"
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("UPDATE_CHAT_WINDOWS")
+                f:SetScript("OnEvent", function()
+                    SEEN = SEEN or GetChannelName("GuildRecruitment - City")
+                end)
+            "#,
+            )
+            .expect("the handler installs");
+    }
+    super::run_chat(&mut world, "SetGuildRecruitmentMode(1)").expect("the verb runs");
+    assert_eq!(
+        eval::<(i64, i64, i64)>(
+            &world,
+            "return SEEN, (GetChannelName('GuildRecruitment - City')), (GetChannelName(2))"
+        ),
+        (2, 2, 0)
+    );
+    assert_eq!(
+        world
+            .resource::<ChannelState>()
+            .slot_state("GuildRecruitment - City"),
+        Some(SlotState::Pending)
+    );
+    assert_eq!(
+        world
+            .non_send_resource::<UiScript>()
+            .guild_recruitment_mode(),
+        1
     );
 }
 

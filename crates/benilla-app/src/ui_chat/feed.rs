@@ -942,12 +942,52 @@ pub(super) fn notice_event(
 /// event (`0x49c5b0` calling `0x49a870`), then frees the slot of the notice's name
 /// (`0x49c5b5`-`0x49c5c2`, `0x49bbd0`). Both arms mirror the slots into the VM, whose
 /// `GetChannelName` and `SendChatMessage` read them.
+#[cfg(test)]
 pub(super) fn deliver(
     script: &mut benilla_ui::script::UiScript,
     windows: &mut ChatWindows,
     channels: &mut ChannelState,
     event: &mut ChatEvent,
 ) {
+    let dropping = deliver_before(script, channels, event);
+    route(script, windows, event);
+    deliver_after(script, channels, dropping);
+}
+
+/// The slots and the call host of [`feed_chat`], borrowed in turn: the host is lent around Lua
+/// alone, and the slots are written between.
+type SlotsAndHost<'w, 's> = ParamSet<
+    'w,
+    's,
+    (
+        ResMut<'static, ChannelState>,
+        Option<crate::script_calls::ScriptCallHost<'w, 's>>,
+    ),
+>;
+
+/// [`deliver`] with the host lent around the event alone: a join a handler makes takes its slot
+/// through the host against the slots the confirm left, and the free after it leaves that join's
+/// slot where it is, as the notify handler frees after its event (`0x49c5b0`, `0x49c5b5`).
+fn deliver_hosted(
+    script: &mut benilla_ui::script::UiScript,
+    set: &mut SlotsAndHost,
+    windows: &mut ChatWindows,
+    event: &mut ChatEvent,
+) {
+    let dropping = deliver_before(script, &mut set.p0(), event);
+    crate::script_calls::lent(script, set.p1().as_mut(), |script| {
+        route(script, windows, event)
+    });
+    deliver_after(script, &mut set.p0(), dropping);
+}
+
+/// [`deliver`]'s half before the event: the confirm and the stamp. Returns the name whose slot
+/// frees after the event.
+fn deliver_before(
+    script: &mut benilla_ui::script::UiScript,
+    channels: &mut ChannelState,
+    event: &mut ChatEvent,
+) -> Option<String> {
     let notice = event.notice_byte().filter(|_| {
         matches!(
             event.kind,
@@ -990,7 +1030,15 @@ pub(super) fn deliver(
     let dropping = drops.then(|| event.channel.clone());
     // The channel renders numbered when its slot is known.
     channels.stamp_channel(event);
-    route(script, windows, event);
+    dropping
+}
+
+/// [`deliver`]'s half after the event: the free of the slot the notice drops.
+fn deliver_after(
+    script: &mut benilla_ui::script::UiScript,
+    channels: &mut ChannelState,
+    dropping: Option<String>,
+) {
     if let Some(name) = dropping {
         // Cleared in place, never compacted: slot 3 stays 3 when slot 2 empties.
         let freed = channels.free_slot(&name);
@@ -1023,16 +1071,15 @@ pub(super) fn gesture_prevented(tries: u16, speaker_flags: Option<u32>) -> bool 
 /// the field notices that waited for an item here fired among the items in their packets' order
 /// ([`crate::ui_unit::wire_order`]).
 pub(super) fn feed_chat(
-    // The VM, and the host its calls apply through, whose selection `UNIT_COMBAT`'s `"target"`
-    // token reads between the queue's items.
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // The VM, the slots the channel notices write between their Lua, and the host its calls apply
+    // through, whose selection `UNIT_COMBAT`'s `"target"` token reads between the queue's items.
+    mut vm: crate::script_calls::VmWith<ResMut<'static, ChannelState>>,
     // `Option`: a chat-only harness has no field notices to fire among the items.
     (log, mut notices): (
         Res<ChatLog>,
         Option<crate::ui_unit::field_events::NoticeFiring>,
     ),
     mut windows: ResMut<ChatWindows>,
-    mut channels: ResMut<ChannelState>,
     names: Res<NameCache>,
     mut speaker: SpeakerEffects,
     commands: Res<NetCommands>,
@@ -1056,7 +1103,7 @@ pub(super) fn feed_chat(
     // The spam and profanity filters, which run in the reference's display function `0x49a870`.
     mut text_filter: crate::text_filter::ChatTextFilter,
 ) {
-    let (Some(script), mut host) = hosted_vm.parts() else {
+    let (Some(script), set) = vm.parts() else {
         return;
     };
     // Each item, and whether the notices due before it are still to fire.
@@ -1071,18 +1118,19 @@ pub(super) fn feed_chat(
     // item. The next notice fires if it comes before chat item `before`, or with `None` once the
     // items are done; its lines come back.
     let mut fire_next =
-        |before: Option<u64>, script: &mut benilla_ui::script::UiScript, host: Option<&mut _>| {
+        |before: Option<u64>, script: &mut benilla_ui::script::UiScript, set: &mut SlotsAndHost| {
             let notices = notices.as_mut()?;
             let call = before.map(|seq| notices.call_of_chat(seq));
             let mark = log.pushed();
-            let fired =
-                crate::script_calls::lent(script, host, |script| notices.fire_next(script, call));
+            let fired = crate::script_calls::lent(script, set.p1().as_mut(), |script| {
+                notices.fire_next(script, call)
+            });
             fired.then(|| log.take_pending_since(mark))
         };
     loop {
         let Some((queued, due)) = work.pop_front() else {
             // The notices left after every item's.
-            match fire_next(None, script, host.as_deref_mut()) {
+            match fire_next(None, script, set) {
                 Some(shown) => work.extend(shown.into_iter().map(|q| (q, false))),
                 None => break,
             }
@@ -1091,7 +1139,7 @@ pub(super) fn feed_chat(
         // The notices a packet wrote ahead of this item's, or in the same handler call: each one's
         // lines, then this item, which fires the next one first.
         if due {
-            if let Some(shown) = fire_next(Some(queued.seq), script, host.as_deref_mut()) {
+            if let Some(shown) = fire_next(Some(queued.seq), script, set) {
                 work.push_front((queued, true));
                 for line in shown.into_iter().rev() {
                     work.push_front((line, false));
@@ -1104,13 +1152,78 @@ pub(super) fn feed_chat(
         // The token lister runs as `SignalUnitCombat` (`0x494600`) signals: a handler earlier in
         // the queue may have moved the target, its call applied inside the verb.
         let is_target = match &item {
-            Pending::UnitCombat(ev) => host
-                .as_deref_mut()
+            Pending::UnitCombat(ev) => set
+                .p1()
+                .as_mut()
                 .and_then(|h| h.target())
                 .is_some_and(|t| guids.0.get(&ev.guid) == Some(&t)),
             _ => false,
         };
-        crate::script_calls::lent(script, host.as_deref_mut(), |script| {
+        // A channel line's record, read as the composer reads it (`0x49aa1e`-`0x49aa48`) before
+        // the line's Lua runs.
+        let stamp = match &item {
+            Pending::Wire { msg, .. } => msg
+                .channel
+                .as_deref()
+                .and_then(|name| set.p0().stamp_of(name)),
+            _ => None,
+        };
+        // A channel notice writes its slot around its event, outside the host's lend.
+        let item = match item {
+            Pending::Event(mut event) => {
+                deliver_hosted(script, set, &mut windows, &mut event);
+                None
+            }
+            Pending::Notice {
+                notice,
+                channel,
+                a_guid,
+                b_guid,
+                tries,
+            } => {
+                let ask = Ask::at(tries == 0, &commands);
+                let a = names.resolve_player(a_guid, ask).map(str::to_string);
+                let b = if b_guid != 0 {
+                    names.resolve_player(b_guid, ask).map(str::to_string)
+                } else {
+                    Some(String::new())
+                };
+                if (a.is_none() || b.is_none()) && tries < NAME_MAX_TRIES {
+                    still.push(Pending::Notice {
+                        notice,
+                        channel,
+                        a_guid,
+                        b_guid,
+                        tries: tries + 1,
+                    });
+                } else if let Some(mut event) = notice_event(
+                    notice,
+                    channel,
+                    Some(a.unwrap_or_else(|| "Unknown".into())),
+                    b,
+                ) {
+                    // Stamped against the channel list as it stands at delivery: the reference
+                    // hands the composer `0x49a870` the notice's channel name, directly when the
+                    // names are cached (`0x49c59f`-`0x49c5b0`), else from the queued line's node
+                    // (`+0x2c`) in the name-query callback (`0x49cfb4`-`0x49cfc1`), and the
+                    // composer looks it up among the joined channels (`0x49aa1e`-`0x49aa31`).
+                    // Unstamped, arg7-arg9 are empty and the stock filter
+                    // (`ChatFrame.lua:1374-1392`) drops the line.
+                    deliver_hosted(script, set, &mut windows, &mut event);
+                }
+                None
+            }
+            item => Some(item),
+        };
+        let Some(item) = item else {
+            parked.extend(still.into_iter().map(|item| Queued {
+                seq,
+                parked: true,
+                item,
+            }));
+            continue;
+        };
+        crate::script_calls::lent(script, set.p1().as_mut(), |script| {
             match item {
                 Pending::UnitCombat(ev) => {
                     crate::ui_unit::fire_unit_combat(
@@ -1129,9 +1242,8 @@ pub(super) fn feed_chat(
                     script.fire_event(combat_edge, vec![]);
                 }
                 Pending::Tee { combat, line } => windows.logs.record(combat, &line),
-                Pending::Event(mut event) => {
-                    deliver(script, &mut windows, &mut channels, &mut event);
-                }
+                // Delivered above.
+                Pending::Event(_) | Pending::Notice { .. } => {}
                 Pending::Wire { msg, tries } => {
                     let kind = kind_of_wire(msg.chat_type);
                     if kind.is_none() {
@@ -1195,7 +1307,7 @@ pub(super) fn feed_chat(
                         {
                             debug!(
                                 "chat: dropping unexpandable [{:#04x}] {:?} (subject \
-                                 {subject_guid:#x})",
+                             {subject_guid:#x})",
                                 msg.chat_type, msg.text
                             );
                             return; // the reference prints no line
@@ -1253,7 +1365,9 @@ pub(super) fn feed_chat(
                         flag: flag_of_tag(msg.chat_tag).to_string(),
                         ..Default::default()
                     };
-                    channels.stamp_channel(&mut event);
+                    if let Some(stamp) = stamp {
+                        stamp.apply(&mut event);
+                    }
                     route(script, &mut windows, &event);
                     // The bubble gets the same text: the reference spawns it in this path
                     // (`0x49acd9`).
@@ -1282,46 +1396,6 @@ pub(super) fn feed_chat(
                         .filter(|_| !gesture_prevented(tries, speaker_flags))
                     {
                         speaker.gestures.push(msg.sender_guid, gesture);
-                    }
-                }
-                Pending::Notice {
-                    notice,
-                    channel,
-                    a_guid,
-                    b_guid,
-                    tries,
-                } => {
-                    let ask = Ask::at(tries == 0, &commands);
-                    let a = names.resolve_player(a_guid, ask).map(str::to_string);
-                    let b = if b_guid != 0 {
-                        names.resolve_player(b_guid, ask).map(str::to_string)
-                    } else {
-                        Some(String::new())
-                    };
-                    if (a.is_none() || b.is_none()) && tries < NAME_MAX_TRIES {
-                        still.push(Pending::Notice {
-                            notice,
-                            channel,
-                            a_guid,
-                            b_guid,
-                            tries: tries + 1,
-                        });
-                        return;
-                    }
-                    // Stamped against the channel list as it stands at delivery: the reference
-                    // hands the composer `0x49a870` the notice's channel name, directly when the
-                    // names are cached (`0x49c59f`-`0x49c5b0`), else from the queued line's node
-                    // (`+0x2c`) in the name-query callback (`0x49cfb4`-`0x49cfc1`), and the
-                    // composer looks it up among the joined channels (`0x49aa1e`-`0x49aa31`).
-                    // Unstamped, arg7-arg9 are empty and the stock filter
-                    // (`ChatFrame.lua:1374-1392`) drops the line.
-                    if let Some(mut event) = notice_event(
-                        notice,
-                        channel,
-                        Some(a.unwrap_or_else(|| "Unknown".into())),
-                        b,
-                    ) {
-                        deliver(script, &mut windows, &mut channels, &mut event);
                     }
                 }
                 Pending::Addon {

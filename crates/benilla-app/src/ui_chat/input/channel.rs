@@ -1,5 +1,6 @@
-//! The app's half of the channel verbs the VM queues ([`benilla_ui::script::ChannelCommand`]):
-//! the slot table the reference's verbs read and write, and the packets they send.
+//! The app's half of the channel verbs ([`benilla_ui::script::ChannelCommand`]), which the call
+//! host applies inside each call ([`super::ChatSender::channel`]): the slot table the reference's
+//! verbs read and write, and the packets they send.
 
 use bevy::prelude::*;
 
@@ -33,8 +34,15 @@ pub(in crate::ui_chat) fn apply(
 ) {
     use ChannelCommand as C;
     let cmd = match cmd {
-        C::Join { name, password, id } => {
-            manual_join_or_leave(channels, script, &name);
+        C::Join {
+            name,
+            password,
+            id,
+            manual,
+        } => {
+            if manual {
+                manual_join_or_leave(channels, script, &name);
+            }
             // The join body takes the slot before it builds the packet (`0x49edf3`), and sends
             // whether or not one was free (`0x49ee02`).
             if channels.claim_or_refuse(&name, id, errors).is_some() {
@@ -42,14 +50,16 @@ pub(in crate::ui_chat) fn apply(
             }
             ClientCommand::JoinChannel { name, password }
         }
-        C::Leave { name } => {
+        C::Leave { name, manual } => {
             // `LeaveChannelByName` (`0x4a0000` → `0x49ee70`): a number names a confirmed slot or
-            // the call does nothing. Only this path clears the zone mask and the custom re-join
-            // list.
+            // the call does nothing. Only a leave clears the zone mask and the custom re-join
+            // list, the walk's own LEAVE never.
             let Some(name) = channels.channel_key(&name) else {
                 return;
             };
-            manual_join_or_leave(channels, script, &name);
+            if manual {
+                manual_join_or_leave(channels, script, &name);
+            }
             channels.note_zone_channel_left(&name);
             channels.note_custom_channel_left(&name);
             ClientCommand::LeaveChannel { name }

@@ -53,8 +53,6 @@ pub(in crate::ui_chat) enum ParsedChat {
     Help,
     /// An `EmotesText` command (`/wave` is 101), sent as `CMSG_TEXT_EMOTE` at the selection.
     TextEmote { text_id: u32, arg: Option<String> },
-    /// A channel verb the stock handler parsed and the VM queued; never from [`parse_line`].
-    Channel(benilla_ui::script::ChannelCommand),
     /// `/castvis`: a locally synthesized [`crate::creature_anim::CastEvent`], at the selection
     /// or self.
     CastVis {

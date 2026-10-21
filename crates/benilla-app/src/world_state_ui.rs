@@ -149,19 +149,21 @@ fn resolve(row: &WorldStateUiRow, states: &WorldStates) -> WorldStateUiView {
 /// Pushes the readout when a world-state packet arrives or the defense-channel flag flips, the
 /// reference's two rebuild triggers.
 fn feed_world_state_ui(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    mut vm: crate::script_calls::VmWith<Res<'static, crate::ui_chat::ChannelState>>,
     catalog: Option<Res<WorldStateUiRes>>,
     states: Res<WorldStates>,
-    channels: Res<crate::ui_chat::ChannelState>,
     mut defense_channel: Local<bool>,
     mut last: Local<crate::ui_script::VmMemo<Option<(u64, bool)>>>,
 ) {
-    hosted_vm.run(|script| {
-        // Only when the roster moves; a first run sees it changed.
+    // Only when the roster moves; a first run sees it changed.
+    {
+        let channels = vm.own();
         if channels.is_changed() {
             *defense_channel = defense_channel_joined(&channels);
         }
-        let defense_channel = *defense_channel;
+    }
+    let defense_channel = *defense_channel;
+    vm.run(|script| {
         let (Some(script), Some(catalog)) = (script, catalog) else {
             return;
         };

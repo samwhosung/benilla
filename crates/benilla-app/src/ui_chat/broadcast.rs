@@ -106,13 +106,13 @@ fn parent_zone(areas: &AreaTableRes, id: u32) -> Option<u32> {
 /// lands the frame it decodes.
 pub(super) fn feed_broadcasts(
     log: Res<ChatLog>,
-    mut hosted_vm: crate::script_calls::HostedVm,
-    channels: Res<ChannelState>,
+    // The slots beside the VM: the lines are queued, so this runs no Lua.
+    mut vm: crate::script_calls::VmWith<Res<'static, ChannelState>>,
     areas: Option<Res<AreaTableRes>>,
     messages: Option<Res<ServerMessages>>,
     world: benilla_world::world_point::WorldPoint,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, channels| {
         if log.broadcasts_pending() == 0 {
             return;
         }

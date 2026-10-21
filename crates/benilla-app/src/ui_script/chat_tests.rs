@@ -1427,6 +1427,8 @@ fn the_docked_tabs_follow_the_dock_through_a_session() {
 fn the_recruitment_join_reaches_the_chat_frame_before_the_verb_returns() {
     benilla_formats::wow_data_or_skip!();
     let mut s = chat_frame();
+    // No engine: the join's call is kept, its window entry made in the verb.
+    s.keep_calls();
     s.set_guild_recruitment_plan(benilla_ui::script::RecruitmentPlan::Join {
         name: "GuildRecruitment - City".into(),
         shortcut: "GuildRecruitment".into(),

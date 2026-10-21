@@ -600,13 +600,13 @@ fn flush(
 
 /// The debounced save, and the `AppExit` flush.
 fn save_chat_looks(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    channels: Res<super::edit::ChannelState>,
+    // The slots beside the VM: the save runs no Lua.
+    mut vm: crate::script_calls::VmWith<Res<'static, super::edit::ChannelState>>,
     mut file: ResMut<ChatWindowFile>,
     mut exits: MessageReader<AppExit>,
 ) {
-    hosted_vm.run(|script| {
-        let exiting = exits.read().next().is_some();
+    let exiting = exits.read().next().is_some();
+    vm.turn(|script, channels| {
         let Some(script) = script else { return };
         flush(script, &channels, &mut file, exiting);
     })

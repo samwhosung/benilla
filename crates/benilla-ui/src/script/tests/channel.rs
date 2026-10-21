@@ -1,10 +1,38 @@
 //! The joined-channel verbs `GetChannelName` and `GetChannelList` ([`crate::script::channel`])
 //! and the guild-recruitment latch.
 
-use super::common::script;
+use crate::script::{CallHost, CallTail, ChannelCommand, ScriptCall, UiScript};
+
+/// A VM with no engine behind it: the channel verbs' calls are kept for the test to read.
+fn script() -> UiScript {
+    let mut s = super::common::script();
+    s.keep_calls();
+    s
+}
+
+/// A host that applies each channel call by naming it in the global `APPLIED`, so a handler can
+/// tell whether the call was applied before it ran.
+#[derive(Default)]
+struct Recorder(Vec<ChannelCommand>);
+
+impl CallHost for Recorder {
+    fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
+        if let ScriptCall::Channel(cmd) = call {
+            if let ChannelCommand::Join { name, .. } | ChannelCommand::Leave { name, .. } = &cmd {
+                script
+                    .lua()
+                    .globals()
+                    .set("APPLIED", name.as_str())
+                    .expect("the global sets");
+            }
+            self.0.push(cmd);
+        }
+        None
+    }
+}
 
 /// Two channels in join order, which is the numbering; deliberately not sorted.
-fn joined() -> crate::script::UiScript {
+fn joined() -> UiScript {
     let mut s = script();
     s.set_joined_channels(vec![Some("World".into()), Some("Trade - City".into())]);
     s
@@ -231,53 +259,57 @@ fn the_setter_asks_for_the_cascade_on_one_and_fires_update_chat_windows() {
 }
 
 /// `SetGuildRecruitmentMode(1)` runs the cascade in place (`0x49ea70` → `0x49ea90`): the join
-/// takes its slot and window 1's entry, then fires `UPDATE_CHAT_WINDOWS` (`0x49eb5f`), all before
-/// the verb's own (`0x4a00a9`); a leave fires the same pair (`0x49eb21`); an owed run fires the
-/// verb's alone.
+/// registers window 1's entry and is applied, then fires `UPDATE_CHAT_WINDOWS` (`0x49eb5f`), all
+/// before the verb's own (`0x4a00a9`); a leave fires the same pair (`0x49eb21`); an owed run fires
+/// the verb's alone. Neither passes the binding's reset flag.
 #[test]
 fn the_recruitment_cascade_runs_inside_the_verb() {
-    use crate::script::{RecruitmentPlan, RecruitmentRun};
-    let mut s = script();
-    s.set_joined_channels(vec![Some("General - Orgrimmar".into()), None]);
+    use crate::script::RecruitmentPlan;
+    let mut s = super::common::script();
     crate::script::tick::heard::listen(
         &s,
         &["UPDATE_CHAT_WINDOWS"],
-        Some(
-            "(GetChannelName('GuildRecruitment - City')) .. ',' .. \
-             tostring((GetChatWindowChannels(1)))",
-        ),
+        Some("tostring(APPLIED) .. ',' .. tostring((GetChatWindowChannels(1)))"),
     );
+    let mut host = Recorder::default();
+    let run = |s: &mut UiScript, host: &mut Recorder, lua: &str| {
+        s.hosted(host, |s| s.run(lua)).unwrap();
+        std::mem::take(&mut host.0)
+    };
 
     s.set_guild_recruitment_plan(RecruitmentPlan::Join {
         name: "GuildRecruitment - City".into(),
         shortcut: "GuildRecruitment".into(),
         id: 25,
     });
-    s.run("SetGuildRecruitmentMode(1)").unwrap();
+    assert_eq!(
+        run(&mut s, &mut host, "SetGuildRecruitmentMode(1)"),
+        [ChannelCommand::Join {
+            name: "GuildRecruitment - City".into(),
+            password: String::new(),
+            id: 25,
+            manual: false,
+        }]
+    );
     assert_eq!(
         crate::script::tick::heard::take(&s),
         [
-            "UPDATE_CHAT_WINDOWS 2,GuildRecruitment",
-            "UPDATE_CHAT_WINDOWS 2,GuildRecruitment"
+            "UPDATE_CHAT_WINDOWS GuildRecruitment - City,GuildRecruitment",
+            "UPDATE_CHAT_WINDOWS GuildRecruitment - City,GuildRecruitment"
         ],
-        "the join fills the free slot and window 1 before either event"
-    );
-    assert_eq!(
-        s.take_guild_recruitment_runs(),
-        [RecruitmentRun::Join {
-            name: "GuildRecruitment - City".into(),
-            id: 25
-        }]
+        "the join is applied and window 1 holds the entry before either event"
     );
     assert!(!s.take_guild_recruitment_cascade(), "the run is spent");
 
     s.set_guild_recruitment_plan(RecruitmentPlan::Leave("GuildRecruitment - City".into()));
-    s.run("SetGuildRecruitmentMode(1)").unwrap();
-    assert_eq!(crate::script::tick::heard::take(&s).len(), 2);
     assert_eq!(
-        s.take_guild_recruitment_runs(),
-        [RecruitmentRun::Leave("GuildRecruitment - City".into())]
+        run(&mut s, &mut host, "SetGuildRecruitmentMode(1)"),
+        [ChannelCommand::Leave {
+            name: "GuildRecruitment - City".into(),
+            manual: false,
+        }]
     );
+    assert_eq!(crate::script::tick::heard::take(&s).len(), 2);
 
     // The retry owes the run; no player returns before anything (`0x49eac3`); an unnamed
     // channel still signals the cascade's own event before the verb's.
@@ -287,9 +319,8 @@ fn the_recruitment_cascade_runs_inside_the_verb() {
         (RecruitmentPlan::Unnamed, 2, false),
     ] {
         s.set_guild_recruitment_plan(plan);
-        s.run("SetGuildRecruitmentMode(1)").unwrap();
+        assert!(run(&mut s, &mut host, "SetGuildRecruitmentMode(1)").is_empty());
         assert_eq!(crate::script::tick::heard::take(&s).len(), events);
-        assert!(s.take_guild_recruitment_runs().is_empty());
         assert_eq!(s.take_guild_recruitment_cascade(), owed);
     }
 
@@ -298,13 +329,12 @@ fn the_recruitment_cascade_runs_inside_the_verb() {
         shortcut: "GuildRecruitment".into(),
         id: 25,
     });
-    s.run("SetGuildRecruitmentMode(0)").unwrap();
+    assert!(run(&mut s, &mut host, "SetGuildRecruitmentMode(0)").is_empty());
     assert_eq!(
         crate::script::tick::heard::take(&s).len(),
         1,
         "mode 0 is the latch alone"
     );
-    assert!(s.take_guild_recruitment_runs().is_empty());
 }
 
 /// A manual join or leave of `GuildRecruitment` calls `0x49ea70(0)` (`0x49ed3d`, `0x49ef8f`): it
@@ -506,68 +536,6 @@ fn join_channel_by_name_answers_a_rows_shortcut() {
     );
     assert!(matches!(
         &s.take_channel_commands()[..],
-        [crate::script::ChannelCommand::Join { name, id: 1, .. }] if name == "General - Elwynn Forest"
+        [ChannelCommand::Join { name, id: 1, manual: true, .. }] if name == "General - Elwynn Forest"
     ));
-}
-
-/// The join body takes its slot inside the call (`0x49ede8`-`0x49edf3`, the allocator
-/// `0x49b980`) in state 1 (`0x49ba0f`): the name finds it at once (`0x49be90`), its number does not
-/// (`0x49bf30`). A held name keeps its slot (`0x49b991`); with all ten taken the join gets none
-/// (`0x49b9c0`-`0x49b9d8`) and is still sent (`0x49ee02`).
-#[test]
-fn a_join_takes_a_pending_slot_inside_the_call() {
-    let mut s = script();
-    s.set_zone_channel_catalog(elwynn_rows());
-    s.set_joined_channels(vec![slot("General - Elwynn Forest", 1, true), None]);
-    s.run("JoinChannelByName('MyChan') A = GetChannelName('MyChan') B = GetChannelName(2)")
-        .unwrap();
-    assert_eq!(
-        s.eval::<(i64, i64)>("return A, B").unwrap(),
-        (2, 0),
-        "the freed slot 2 is taken, pending"
-    );
-    s.run("JoinChannelByName('General')").unwrap();
-    assert_eq!(
-        s.eval::<i64>("return GetChannelName('General - Elwynn Forest')")
-            .unwrap(),
-        1,
-        "a held name keeps its number"
-    );
-    for i in 3..=10 {
-        s.run(&format!("JoinChannelByName('Chan{i}')")).unwrap();
-    }
-    s.take_channel_commands();
-    s.run("JoinChannelByName('Eleventh')").unwrap();
-    assert_eq!(
-        s.eval::<i64>("return GetChannelName('Eleventh')").unwrap(),
-        0,
-        "ten slots taken: no slot"
-    );
-    assert!(
-        matches!(&s.take_channel_commands()[..],
-            [crate::script::ChannelCommand::Join { name, .. }] if name == "Eleventh"),
-        "the join still goes out"
-    );
-}
-
-/// The cascade's join goes through the join body (`0x49eb55` → `0x49eb70`), whose slot is in state
-/// 1 (`0x49ba0f`) until the server confirms it.
-#[test]
-fn the_cascades_join_is_pending_until_the_server_confirms_it() {
-    use crate::script::RecruitmentPlan;
-    let mut s = script();
-    s.set_joined_channels(vec![slot("General - Orgrimmar", 1, true)]);
-    s.set_guild_recruitment_plan(RecruitmentPlan::Join {
-        name: "GuildRecruitment - City".into(),
-        shortcut: "GuildRecruitment".into(),
-        id: 25,
-    });
-    s.run("SetGuildRecruitmentMode(1)").unwrap();
-    assert_eq!(
-        s.eval::<(i64, i64)>(
-            "return (GetChannelName('GuildRecruitment - City')), (GetChannelName(2))"
-        )
-        .unwrap(),
-        (2, 0)
-    );
 }
