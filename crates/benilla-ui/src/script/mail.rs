@@ -15,6 +15,13 @@ const CHECK_INBOX_WINDOW_SECS: f64 = 60.0;
 /// position in [`MailState::inbox`].
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MailInboxRow {
+    /// The mail id (`[rec+0]`), which every request about the mail carries.
+    pub mail_id: u32,
+    /// The letter's item text id (`[rec+0x114]`), 0 for none: the key `GetInboxText` asks the
+    /// body by (`0x4af1bf`).
+    pub item_text_id: u32,
+    /// The stationery id (`[rec+0x11c]`).
+    pub stationery: u32,
     /// `packageIcon`, the enclosed item's icon; `None` with no item or while its template loads.
     pub package_icon: Option<String>,
     pub stationery_icon: Option<String>,
@@ -1118,6 +1125,9 @@ mod tests {
 
     fn row(item_id: u32) -> MailInboxRow {
         MailInboxRow {
+            mail_id: 7,
+            item_text_id: 1,
+            stationery: 41,
             package_icon: (item_id != 0).then(|| "Interface\\Icons\\INV_Misc_Bag_08".to_string()),
             stationery_icon: Some("Interface\\Icons\\INV_Letter_15".to_string()),
             sender: Some("Thrall".into()),

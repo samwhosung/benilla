@@ -43,6 +43,9 @@ fn load_ui(script: &UiScript) {
 /// One inbox row with the fields the window paints.
 fn row(sender: &str, subject: &str, was_read: bool, item_id: u32, cod: u32) -> MailInboxRow {
     MailInboxRow {
+        mail_id: 7,
+        item_text_id: 1,
+        stationery: 41,
         package_icon: (item_id != 0).then(|| "Interface\\Icons\\INV_Misc_Bag_08".to_string()),
         stationery_icon: Some("Interface\\Icons\\INV_Misc_Note_01".to_string()),
         sender: Some(sender.to_string()),

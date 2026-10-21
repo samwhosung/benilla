@@ -52,6 +52,11 @@ const STATIONERY_ICON_GM: &str = "Interface\\Icons\\Mail_GMIcon";
 #[derive(Resource)]
 pub(crate) struct Stationery(pub(crate) benilla_formats::StationeryCatalog);
 
+/// `MailTemplate.dbc`'s bodies by id, in the client's locale; without them a template mail's body
+/// is nil, as for an id the store lacks (`0x4af229`).
+#[derive(Resource)]
+pub(crate) struct MailTemplates(pub(crate) std::collections::HashMap<u32, String>);
+
 /// `Package.dbc`'s rows, in file order; without them `GetNumPackages()` answers 0.
 #[derive(Resource)]
 pub(crate) struct Packages(pub(crate) Vec<benilla_formats::PackageRow>);
@@ -422,6 +427,9 @@ fn resolve_row(
         });
 
     MailInboxRow {
+        mail_id: entry.message_id,
+        item_text_id: entry.item_text_id,
+        stationery: entry.stationery,
         package_icon: item_texture.clone(),
         stationery_icon: Some(
             if is_gm {
