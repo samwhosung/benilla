@@ -662,7 +662,7 @@ impl super::UiScript {
         if guid == 0 {
             return;
         }
-        self.model_mut().item_locks.insert(guid);
+        self.model_mut().set_item_lock(guid, true);
         self.fire_event("ITEM_LOCK_CHANGED", Vec::new());
     }
 
@@ -672,7 +672,7 @@ impl super::UiScript {
         if guid == 0 {
             return;
         }
-        self.model_mut().item_locks.remove(&guid);
+        self.model_mut().set_item_lock(guid, false);
         self.fire_event("ITEM_LOCK_CHANGED", Vec::new());
     }
 
@@ -693,7 +693,7 @@ impl super::UiScript {
             };
             let freed: Vec<u64> = guids.iter().copied().filter(|&g| !attached(g)).collect();
             for guid in freed {
-                model.item_locks.remove(&guid);
+                model.set_item_lock(guid, false);
             }
         }
         self.fire_event("ITEM_LOCK_CHANGED", Vec::new());
@@ -708,7 +708,9 @@ impl super::UiScript {
     /// them; a lock it strands lasts until the item's seat or stack moves, which this does not
     /// copy.
     pub fn unlock_all_items(&mut self) {
-        self.model_mut().item_locks.clear();
+        for guid in self.item_locks() {
+            self.model_mut().set_item_lock(guid, false);
+        }
         self.fire_event("ITEM_LOCK_CHANGED", Vec::new());
     }
 
@@ -724,7 +726,7 @@ impl super::UiScript {
     /// with that guid starts unlocked, as the item constructor zeroes the bit (`0x5d821f`,
     /// `0x5d823e`).
     pub fn forget_item_lock(&mut self, guid: u64) {
-        self.model_mut().item_locks.remove(&guid);
+        self.model_mut().set_item_lock(guid, false);
     }
 
     /// Seat a fresh VM's locks before anything runs on it, with no event.

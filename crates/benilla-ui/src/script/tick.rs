@@ -57,18 +57,20 @@ impl Model {
         }
     }
 
-    /// Set or clear the client's lock on item `guid` ([`Model::item_locks`]). Inside a [`verb`]
-    /// segment the change is also recorded, so the segment's handlers see each lock as it stood
-    /// when their event was raised, as `LockItem` and `UnlockItem` set the bit before they signal
-    /// (`0x495409`, `0x495449`).
+    /// Set or clear the client's lock on item `guid` ([`Model::item_locks`]): every write but a
+    /// fresh VM's seat comes this way. `LockItem` and `UnlockItem` set the bit before they signal
+    /// (`0x495409`, `0x495449`), so each handler reads the locks as its event left them: inside a
+    /// [`verb`] segment the change is recorded with the segment's events, and outside one, made
+    /// while something waits for the host, it waits behind them ([`super::calls::Waiting::Lock`]).
     pub(crate) fn set_item_lock(&mut self, guid: u64, locked: bool) {
-        let was = if locked {
-            !self.item_locks.insert(guid)
-        } else {
-            self.item_locks.remove(&guid)
-        };
-        if let Some(segment) = &mut self.verb_events {
-            segment.push(Raised::Lock { guid, locked, was });
+        let was = set_lock_bit(self, guid, locked);
+        match &mut self.verb_events {
+            Some(segment) => segment.push(Raised::Lock { guid, locked, was }),
+            None if !self.script_calls.is_empty() => {
+                self.script_calls
+                    .push(super::calls::Waiting::Lock { guid, locked, was });
+            }
+            None => {}
         }
     }
 
@@ -101,8 +103,8 @@ pub(crate) enum Raised {
 /// inside this fan-out, the reference's synchronous nesting.
 ///
 /// An engine step that cannot lend the host ([`super::host::holding`]) holds the fan-out instead,
-/// its events and cursor views, for the host; the body's lock writes stand, so the held handlers
-/// read the locks the step left.
+/// its events, cursor views and lock writes, for the host ([`super::calls::Held::Segment`]); the
+/// writes stand meanwhile, and the take puts them back to make them again in their places.
 pub(crate) fn verb<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
     let (out, raised) = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data set");
@@ -112,12 +114,11 @@ pub(crate) fn verb<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
         (out, model.verb_events.take().unwrap_or_default())
     };
     if super::host::holding(lua) {
-        let fan: Vec<Raised> = raised
-            .into_iter()
-            .filter(|r| !matches!(r, Raised::Lock { .. }))
-            .collect();
-        if fan.iter().any(|r| matches!(r, Raised::Event(..))) {
-            super::calls::hold(lua, super::calls::Held::Segment(fan));
+        if raised
+            .iter()
+            .any(|r| matches!(r, Raised::Event(..) | Raised::Lock { .. }))
+        {
+            super::calls::hold(lua, super::calls::Held::Segment(raised));
         }
         return out;
     }
@@ -158,19 +159,20 @@ pub(crate) fn fan_out(lua: &Lua, raised: Vec<Raised>) {
                 }
             }
             Raised::Lock { guid, locked, .. } => {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data set");
-                set_lock_bit(&mut model, guid, locked);
+                lua.app_data_mut::<Model>()
+                    .expect("model app_data set")
+                    .set_item_lock(guid, locked);
             }
         }
     }
 }
 
-/// Set item `guid`'s lock bit to `locked`, recording nothing.
-fn set_lock_bit(model: &mut Model, guid: u64, locked: bool) {
+/// Set item `guid`'s lock bit to `locked`, recording nothing; whether it was set before.
+pub(crate) fn set_lock_bit(model: &mut Model, guid: u64, locked: bool) -> bool {
     if locked {
-        model.item_locks.insert(guid);
+        !model.item_locks.insert(guid)
     } else {
-        model.item_locks.remove(&guid);
+        model.item_locks.remove(&guid)
     }
 }
 

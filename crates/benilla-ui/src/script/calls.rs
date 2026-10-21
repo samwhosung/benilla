@@ -192,7 +192,8 @@ pub(crate) struct CallRaises {
 }
 
 /// What waits for the host, in the order made: a call, or a handler an engine step fired while
-/// the host was out ([`Held`]), each with the input events running when it was made.
+/// the host was out ([`Held`]), each with the input events running when it was made, and the lock
+/// writes made among them ([`Waiting::Lock`]).
 #[derive(Clone, Debug)]
 pub(crate) enum Waiting {
     Call(QueuedCall),
@@ -203,6 +204,15 @@ pub(crate) enum Waiting {
         /// sweep's handlers stay silent though they run once the scope has closed.
         muted: u32,
     },
+    /// A write of item `guid`'s lock bit made while something waited ([`Model::set_item_lock`]):
+    /// `locked` after it, `was` before it. The take puts the bit back ([`take_waiting`]) and the
+    /// write is made again in its place, so what waited ahead of it reads the lock as it stood
+    /// then, as `UnlockItem` (`0x495420`) signals before the step's next write.
+    Lock {
+        guid: u64,
+        locked: bool,
+        was: bool,
+    },
 }
 
 /// A fire held for the host ([`super::host::holding`]): run as it would have run then.
@@ -210,9 +220,8 @@ pub(crate) enum Waiting {
 pub(crate) enum Held {
     /// An event's fan-out to its listeners (`SignalEvent`, `0x703e50`).
     Event(String, Vec<ScriptValue>),
-    /// A verb segment's fan-out ([`super::tick::verb`]): its events and the cursor views around
-    /// them, in order. Its lock writes stand as the verb made them, so its handlers read the locks
-    /// the step left.
+    /// A verb segment's fan-out ([`super::tick::verb`]): its events, the cursor views around
+    /// them and its lock writes, in order, so each handler reads the locks as its event left them.
     Segment(Vec<super::tick::Raised>),
     /// One widget script (`OnShow`, `OnValueChanged`, …) on frame `id`, with its `arg1..argN`.
     Handler {
@@ -241,6 +250,40 @@ pub(crate) fn hold(lua: &Lua, held: Held) {
     let input = model.protected.events();
     let muted = model.sound_suppression;
     model.script_calls.push(Waiting::Lua { held, input, muted });
+}
+
+/// Take what waits, with the lock bits its writes changed put back, last first: each item then
+/// runs against the locks as they stood when it was made, and each write is made again in its
+/// place ([`Waiting::Lock`], a held segment's own).
+fn take_waiting(lua: &Lua) -> VecDeque<Waiting> {
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    let batch = std::mem::take(&mut model.script_calls);
+    for item in batch.iter().rev() {
+        match item {
+            Waiting::Lock { guid, was, .. } => {
+                super::tick::set_lock_bit(&mut model, *guid, *was);
+            }
+            Waiting::Lua {
+                held: Held::Segment(raised),
+                ..
+            } => {
+                for raised in raised.iter().rev() {
+                    if let super::tick::Raised::Lock { guid, was, .. } = *raised {
+                        super::tick::set_lock_bit(&mut model, guid, was);
+                    }
+                }
+            }
+            Waiting::Lua { .. } | Waiting::Call(_) => {}
+        }
+    }
+    batch.into()
+}
+
+/// Make a lock write that waited, in its place.
+fn relock(lua: &Lua, guid: u64, locked: bool) {
+    lua.app_data_mut::<Model>()
+        .expect("model app_data")
+        .set_item_lock(guid, locked);
 }
 
 /// Run a held fire now, under the input events and the sound suppression it was fired under.
@@ -358,14 +401,14 @@ pub(crate) fn drain(lua: &Lua) {
     if !super::host::free(lua) {
         return;
     }
-    let mut batch: VecDeque<Waiting> = {
+    {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
         if model.script_calls.is_empty() {
             return;
         }
         model.call_depth += 1;
-        std::mem::take(&mut model.script_calls).into()
-    };
+    }
+    let mut batch = take_waiting(lua);
     struct Depth<'a>(&'a Lua);
     impl Drop for Depth<'_> {
         fn drop(&mut self) {
@@ -405,6 +448,7 @@ pub(crate) fn drain(lua: &Lua) {
                 }
             }
             Waiting::Lua { held, input, muted } => replay(lua, &mut script, held, input, muted),
+            Waiting::Lock { guid, locked, .. } => relock(lua, guid, locked),
         }
         drain(lua);
     }
@@ -414,13 +458,7 @@ pub(crate) fn drain(lua: &Lua) {
 /// fired at this call's level, so a call one makes is the call's own nested call, and a call made
 /// meanwhile one level in. The reference runs both inside the call.
 fn settle(lua: &Lua, script: &mut UiScript) {
-    let left = std::mem::take(
-        &mut lua
-            .app_data_mut::<Model>()
-            .expect("model app_data")
-            .script_calls,
-    );
-    let mut left: VecDeque<Waiting> = left.into();
+    let mut left = take_waiting(lua);
     while let Some(item) = left.pop_front() {
         if !super::host::free(lua) {
             left.push_front(item);
@@ -429,6 +467,7 @@ fn settle(lua: &Lua, script: &mut UiScript) {
         }
         match item {
             Waiting::Lua { held, input, muted } => replay(lua, script, held, input, muted),
+            Waiting::Lock { guid, locked, .. } => relock(lua, guid, locked),
             call @ Waiting::Call(_) => {
                 requeue(lua, [call]);
                 drain(lua);
@@ -459,12 +498,7 @@ pub(crate) fn refuse_waiting(lua: &Lua) -> usize {
     super::host::open_unheld(lua, || {
         let mut dropped = 0;
         loop {
-            let batch = std::mem::take(
-                &mut lua
-                    .app_data_mut::<Model>()
-                    .expect("model app_data")
-                    .script_calls,
-            );
+            let batch = take_waiting(lua);
             if batch.is_empty() {
                 return dropped;
             }
@@ -475,6 +509,7 @@ pub(crate) fn refuse_waiting(lua: &Lua) -> usize {
                     Waiting::Lua { held, input, muted } => {
                         replay(lua, &mut script, held, input, muted)
                     }
+                    Waiting::Lock { guid, locked, .. } => relock(lua, guid, locked),
                 }
             }
         }
