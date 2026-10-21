@@ -65,19 +65,20 @@ pub(super) fn load_server_messages(mut commands: Commands, assets: Option<Res<Wo
     }
 }
 
-/// The joined channels a defense broadcast about `subject_zone` reaches, in slot order. With
-/// `player_zone` unknown only non-`ZONE_DEP` rows pass, as with the reference's unset
-/// `[0xb6e5d0]`. Every slot counts whatever its state; the reference takes only state 0
-/// (`[e+0x9c]`, `0x49dd5a`), skipping pending, renamed and suspended slots.
+/// The joined channels a defense broadcast about `subject_zone` reaches, in slot order: the slots
+/// in state 0 (`0x49dd5a`-`0x49dd63`, `0x49deaa`-`0x49deb3`) whose ChannelID names a `DEFENSE`
+/// row (`0x49dd69`-`0x49dd94`), a `ZONE_DEP` one only when the zone is the player's
+/// (`0x49dd9c`-`0x49dda4`). With `player_zone` unknown only non-`ZONE_DEP` rows pass, as with the
+/// reference's unset `[0xb6e5d0]`.
 pub(crate) fn defense_targets(
     channels: &ChannelState,
     subject_zone: u32,
     player_zone: Option<u32>,
 ) -> Vec<String> {
     channels
-        .iter_names()
-        .filter(|name| {
-            let Some(row) = channels.channels.row_for_name(name) else {
+        .confirmed_slots()
+        .filter(|(_, slot)| {
+            let Some(row) = channels.channels.row(slot.id) else {
                 return false; // a custom channel: no DBC row, no defense flag
             };
             if row.flags & chan_flags::DEFENSE == 0 {
@@ -85,7 +86,7 @@ pub(crate) fn defense_targets(
             }
             row.flags & chan_flags::ZONE_DEP == 0 || player_zone == Some(subject_zone)
         })
-        .map(str::to_string)
+        .map(|(_, slot)| slot.name.clone())
         .collect()
 }
 
