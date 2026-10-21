@@ -865,13 +865,14 @@ fn spell_start(
         "net: spell start {spell_id} by {caster:#x} ({cast_time_ms}ms, flags \
          {cast_flags:#x}, target {target:?}, ammo {ammo_display_id:?})"
     );
+    // A spell with no record does nothing (`0x6e7856`-`0x6e7876`, all to `0x6e7a5b`).
+    let Some(display) = spells.and_then(|s| s.catalog.get(spell_id)) else {
+        return;
+    };
     // The nocked-ammo refresh (`0x60ba30` at `0x6e78b6`, gated at `0x6e78a1` on `SpellRec+0x20 &
     // 0x20` or `+0x18 & 0x2`, for any caster): a ranged START attaches the wire's ammo display id,
     // or detaches without one. The model persists through Load/Hold and the fire clip.
-    if spells
-        .and_then(|s| s.catalog.get(spell_id))
-        .is_some_and(|d| d.ranged_attack())
-    {
+    if display.ranged_attack() {
         if let Some(&e) = index.0.get(&caster) {
             match ammo_display_id.filter(|id| *id != 0) {
                 Some(display_id) => {
@@ -887,13 +888,10 @@ fn spell_start(
             }
         }
     }
-    // SPELLCAST_START fires only on `cast_time > 0 && !(SpellRec+0x18 & 2)` (`0x6e7700`): a
-    // ranged-slot spell never opens a bar. vmangos pads a non-auto-repeat ranged cast by 500 ms
-    // (`SpellEntry::GetCastTime`), so Throw arrives as a 500 ms cast with no bar. An unknown spell
-    // keeps the bar.
-    let ranged_slot = spells
-        .and_then(|s| s.catalog.get(spell_id))
-        .is_some_and(|d| d.ranged_slot());
+    // SPELLCAST_START fires only on `cast_time > 0 && !(SpellRec+0x18 & 2)` (`0x6e7a1d`,
+    // `0x6e7a27`): a ranged-slot spell never opens a bar. vmangos pads a non-auto-repeat ranged
+    // cast by 500 ms (`SpellEntry::GetCastTime`), so Throw arrives as a 500 ms cast with no bar.
+    let ranged_slot = display.ranged_slot();
     if *crate::net::CAST_TRACE && self_guid.0 == Some(caster) {
         info!(
             "cast-trace: RECV SPELL_START — spell {spell_id} cast_time={cast_time_ms}ms \
@@ -1021,17 +1019,21 @@ fn spell_go(
             ),
         );
     }
+    let (cooldowns, spells, items, pet_bar, spell_mods) = cooldown_ctx;
+    // A spell with no record does nothing (`0x6e7cd7 jl`, `0x6e7ce3 jg` and `0x6e7cf7 je`, all to
+    // the end `0x6e8647`), ahead of the caster's lookup and every leg.
+    let Some(display) = spells.and_then(|s| s.catalog.get(spell_id)) else {
+        return;
+    };
     // A cast naming a GameObject goes to the GameObject animation driver, which opens the lid on
     // an open-lock cast, streamed caster or not.
     if let Some(go_guid) = go_target {
         go_lid.write(crate::go_anim::GoLidOpen { go_guid, spell_id });
     }
-    let (cooldowns, spells, items, pet_bar, spell_mods) = cooldown_ctx;
     // The item leg held the cooldown for its record ([`item_go_cooldown`]).
     let mut pended = false;
     let (auto_repeat, sheath, stand, edits, engaged, start_gate, core) = attack_ctx;
     let now = Instant::now();
-    let display = spells.and_then(|s| s.catalog.get(spell_id));
     // A chest becomes the loot target at this packet, not at the loot response: `HandleSpellGo
     // 0x6e7a70` reaches `0x6e831b call SetLootTarget 0x5ed5f0`, which writes `[player+0x1d28]` and
     // plays Loot 50. Gates: the local player cast it (`0x6e81b6`), the spell has `OPEN_LOCK`
@@ -1042,7 +1044,7 @@ fn spell_go(
     // [`crate::ui_loot::LootKneel`] recomputes every frame.
     if self_guid.0 == Some(caster) {
         if let Some(go_guid) = go_target {
-            let is_open_lock = display.is_some_and(|d| d.open_lock.is_some());
+            let is_open_lock = display.open_lock.is_some();
             let is_chest = index
                 .0
                 .get(&go_guid)
@@ -1071,7 +1073,7 @@ fn spell_go(
         // resolves to the selection or else the nearest hostile. Deviation: the fallback is the
         // packet's target guid, never the nearest-hostile acquire, because that would attack
         // something the player never named. Gated on `[player+0xc48] == 0` (`0x6e83e7`).
-        if display.is_some_and(|d| d.initiates_auto_attack_at_go()) && !engaged {
+        if display.initiates_auto_attack_at_go() && !engaged {
             if let (Some(&me), Some(guid)) =
                 (index.0.get(&caster), hits.first().copied().or(target))
             {
@@ -1098,59 +1100,54 @@ fn spell_go(
         // 25) or the item leg ([`item_go_cooldown`]). `SMSG_SPELL_COOLDOWN` is the server's
         // override; vmangos sends none for a plain cast. A ranged-slot cast folds
         // `UNIT_FIELD_RANGEDATTACKTIME` into the category recovery (`0x6e2b60`).
-        let ranged_ms = display
-            .filter(|d| d.ranged_speed_cooldown())
-            .and_then(|_| {
-                let e = index.0.get(&caster)?;
-                stores.get(*e).ok()?.0.unit_ranged_attack_time()
-            })
-            .unwrap_or(0);
+        let ranged_ms = if display.ranged_speed_cooldown() {
+            index
+                .0
+                .get(&caster)
+                .and_then(|&e| stores.get(e).ok())
+                .and_then(|s| s.0.unit_ranged_attack_time())
+                .unwrap_or(0)
+        } else {
+            0
+        };
         match item_caster {
             Some(item) => {
                 pended = item_go_cooldown(
                     item, spell_id, display, now, index, stores, items, core.net, cooldowns,
                 );
             }
-            None => {
-                if let Some(d) = display {
-                    cooldowns.start_spell(spell_id, d, ranged_ms, now, Some(spell_mods));
-                }
-            }
+            None => cooldowns.start_spell(spell_id, display, ranged_ms, now, Some(spell_mods)),
         }
         if benilla_assets::trace::enabled() {
-            if let Some(d) = display {
-                let (recovery_ms, category_ms) = spell_mods.spell_cooldowns(d, ranged_ms);
-                benilla_assets::trace::line(
-                    "cd",
-                    &format!(
-                        "arm spell={spell_id} rec={}ms cat={}:{}ms (GO self-insert)",
-                        recovery_ms, d.category, category_ms
-                    ),
-                );
-            }
+            let (recovery_ms, category_ms) = spell_mods.spell_cooldowns(display, ranged_ms);
+            benilla_assets::trace::line(
+                "cd",
+                &format!(
+                    "arm spell={spell_id} rec={}ms cat={}:{}ms (GO self-insert)",
+                    recovery_ms, display.category, category_ms
+                ),
+            );
         }
     }
     // The pet leg of the same insert: an independent `if`, not an else, which a held item cooldown
     // skips, as it ends the handler (`0x6e84dd`).
-    if let Some(d) =
-        display.filter(|_| !pended && pet_go_cooldown(caster, self_guid, index, stores))
-    {
+    if !pended && pet_go_cooldown(caster, self_guid, index, stores) {
         // No ranged pad: `0x6e2b60` is called on the self leg only (`0x6e845d`). Op 11 still
         // applies to both columns (`0x6e85c5`, `0x6e85d1`) off the player's tables, which gate
         // on the spell's family and never the caster (`0x6e6b30`).
         pet_bar
             .cooldowns
-            .start_spell(spell_id, d, 0, now, Some(spell_mods));
+            .start_spell(spell_id, display, 0, now, Some(spell_mods));
         // Its flush follows, inserted or not (`0x6e85fc` `0x4b31b0`, `0x6e8601` `0x4bce90`):
         // `ACTIONBAR_UPDATE_COOLDOWN`, `SPELL_UPDATE_COOLDOWN`, `PET_BAR_UPDATE_COOLDOWN`, and no
         // `PET_BAR_UPDATE`.
         if benilla_assets::trace::enabled() {
-            let (recovery_ms, category_ms) = spell_mods.spell_cooldowns(d, 0);
+            let (recovery_ms, category_ms) = spell_mods.spell_cooldowns(display, 0);
             benilla_assets::trace::line(
                 "cd",
                 &format!(
                     "arm spell={spell_id} rec={}ms cat={}:{}ms (GO pet-insert)",
-                    recovery_ms, d.category, category_ms
+                    recovery_ms, display.category, category_ms
                 ),
             );
         }
@@ -1165,14 +1162,11 @@ fn spell_go(
         }
         // The precast ends with its own spell's GO (`0x60d040` at `0x6e7fc5`), its tail run as
         // `0x6e4870` answers for the record and the cast flags (`0x6e7fa1`, pushed at `0x6e7fbd`).
-        // A spell with no record returns long before (`0x6e7cd7`-`0x6e7cf7`).
-        if let Some(d) = display {
-            edits.push(crate::creature_anim::UnitEdit::EndPrecast {
-                entity: e,
-                spell_id: Some(spell_id),
-                tail: d.test_attributes_and_flags(u32::from(cast_flags)),
-            });
-        }
+        edits.push(crate::creature_anim::UnitEdit::EndPrecast {
+            entity: e,
+            spell_id: Some(spell_id),
+            tail: display.test_attributes_and_flags(u32::from(cast_flags)),
+        });
         // The GO's chain-hop fill (`0x6e800d`), the producer for non-channelled chain spells. It
         // must precede the CastEvent: the cast kit's chain proc consumes it the same frame. The
         // reference gates it on the attribute predicate `0x6e4870`, whose role here is untraced;
@@ -1308,7 +1302,7 @@ fn cancel_auto_repeat(
 fn item_go_cooldown(
     item: u64,
     spell_id: u32,
-    display: Option<&benilla_formats::SpellDisplay>,
+    display: &benilla_formats::SpellDisplay,
     now: Instant,
     index: &GuidIndex,
     stores: &Query<&mut ObjectStore>,
@@ -1327,7 +1321,7 @@ fn item_go_cooldown(
         return false;
     };
     let Some(record) = items.template(entry, item, Ask::Event(net)) else {
-        let on_hold = display.is_some_and(|d| d.cooldown_on_event());
+        let on_hold = display.cooldown_on_event();
         cooldowns.pend_item(entry, spell_id, now, on_hold);
         return true;
     };
@@ -1339,7 +1333,7 @@ fn item_go_cooldown(
                 category: block.category,
                 category_cooldown_ms: block.category_cooldown_ms,
             };
-            cooldowns.start_item(entry, &block, display, now);
+            cooldowns.start_item(entry, &block, Some(display), now);
         }
         None => cooldowns.flush_item_leg(),
     }
@@ -1858,6 +1852,24 @@ mod tests {
                 .0
                 .insert(Self::SELF, self_e);
             app.world_mut().resource_mut::<SelfGuid>().0 = Some(Self::SELF);
+            // Every spell the sequences cast has a record, as a shipped spell does: a packet
+            // naming one without does nothing (`0x6e7876`, `0x6e7cf7`).
+            app.insert_resource(Spells {
+                catalog: benilla_formats::SpellCatalog::from_displays(
+                    [
+                        FIREBALL,
+                        FROSTBOLT,
+                        FORTITUDE,
+                        ARCANE_MISSILES,
+                        HEARTHSTONE,
+                        MINOR_HEALING,
+                    ]
+                    .into_iter()
+                    .map(|id| (id, Default::default()))
+                    .collect(),
+                ),
+                ..Spells::empty_for_tests()
+            });
             Self { app, self_e, sent }
         }
 
@@ -3207,6 +3219,7 @@ mod tests {
                       mut stand: MessageWriter<crate::player::StandStateRequest>,
                       edits: Res<crate::creature_anim::UnitEdits>| {
                     let net_commands = crate::net::NetCommands(tx.clone());
+                    let spells = catalog_with(421, Default::default());
                     spell_go(
                         10,
                         421, // Chain Lightning
@@ -3229,7 +3242,7 @@ mod tests {
                         &mut crate::ui_loot::LootLatch::default(),
                         (
                             &mut cooldowns,
-                            None,
+                            Some(&spells),
                             &mut items,
                             &mut pet_bar,
                             &crate::spell::SpellModifiers::default(),
