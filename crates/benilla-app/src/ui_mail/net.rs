@@ -7,7 +7,7 @@ use bevy::prelude::*;
 
 use super::{
     mail_refusal, MailOpen, MailPending, MailResult, CHECKED_COD_PAYMENT, CHECKED_COPIED,
-    MAIL_SENT_KEY,
+    CHECKED_RETURNED, MAIL_SENT_KEY,
 };
 use crate::net::{ClientCommand, NetCommands, NetHandlerApp};
 use crate::ui_items::{EquipError, EquipErrors};
@@ -22,9 +22,14 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::Disconnected, on_session_end);
 }
 
-fn on_mail_list(In(ev): In<SessionEvent>, mut mail: ResMut<MailOpen>, commands: Res<NetCommands>) {
+fn on_mail_list(
+    In(ev): In<SessionEvent>,
+    mut mail: ResMut<MailOpen>,
+    commands: Res<NetCommands>,
+    social: Res<crate::ui_social::SocialState>,
+) {
     if let SessionEvent::MailList { mails } = ev {
-        mail_list(mails, &mut mail, &commands);
+        mail_list(mails, &mut mail, &commands, |guid| social.is_ignored(guid));
     }
 }
 
@@ -91,29 +96,39 @@ fn on_session_end(
     *pending = MailPending::default();
 }
 
-/// `SMSG_MAIL_LIST_RESULT` replaces the rows; an expired row (`expire_days <= 0`) is deleted with
-/// `CMSG_MAIL_DELETE` and dropped, as the handler `0x4ad1b0` does. It never touches
-/// [`MailPending`]: nothing on the inbox path writes the countdown `0x845eac`.
-pub(super) fn mail_list(mails: Vec<MailListEntry>, mail: &mut MailOpen, commands: &NetCommands) {
+/// `SMSG_MAIL_LIST_RESULT` (`0x4ad1b0`) replaces the rows, whatever their days left: the handler
+/// reads them (`0x4ad414`) and never tests them. A player's mail from an ignored sender
+/// (`0x4ad47f`) that is neither returned nor a COD payment (`0x4ad496`) is answered at once and
+/// dropped (`0x4ad51d`): `CMSG_MAIL_RETURN_TO_SENDER` when it holds an item or money (`0x4ad4bf`,
+/// `0x4ad4c7`), else `CMSG_MAIL_DELETE` (`0x4ad4cf`), with the mailbox cell as it stands, 0 when
+/// none is open (`0x4ad4e3`). It never touches [`MailPending`]: nothing on the inbox path writes
+/// the countdown `0x845eac`.
+pub(super) fn mail_list(
+    mails: Vec<MailListEntry>,
+    mail: &mut MailOpen,
+    commands: &NetCommands,
+    is_ignored: impl Fn(u64) -> bool,
+) {
     // The answer clears the request lock (`0x4ad5d0`).
     mail.resolve_request();
     // The parse ends in `MAIL_INBOX_UPDATE` (`0x4ad5c6`).
     mail.list_results += 1;
-    let mailbox = mail.mailbox;
+    let mailbox = mail.mailbox.unwrap_or(0);
     mail.mails = mails
         .into_iter()
         .filter(|e| {
-            if e.expire_days <= 0.0 {
-                if let Some(mailbox) = mailbox {
-                    let _ = commands.0.send(ClientCommand::MailDelete {
-                        mailbox,
-                        mail_id: e.message_id,
-                    });
-                }
-                false
-            } else {
-                true
+            let answered = e.message_type == mail_message_type::NORMAL
+                && is_ignored(e.sender_guid.unwrap_or(0))
+                && e.checked & (CHECKED_RETURNED | CHECKED_COD_PAYMENT) == 0;
+            if answered {
+                let mail_id = e.message_id;
+                let _ = commands.0.send(if e.item.is_some() || e.money != 0 {
+                    ClientCommand::MailReturnToSender { mailbox, mail_id }
+                } else {
+                    ClientCommand::MailDelete { mailbox, mail_id }
+                });
             }
+            !answered
         })
         .collect();
 }

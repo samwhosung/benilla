@@ -1479,6 +1479,7 @@ mod tests {
             vec![row.clone()],
             &mut app.world_mut().resource_mut::<MailOpen>(),
             &commands,
+            |_| false,
         );
         app.update();
         let asked = crate::query_cache::queries(&rx);
@@ -1497,6 +1498,7 @@ mod tests {
             vec![row],
             &mut app.world_mut().resource_mut::<MailOpen>(),
             &commands,
+            |_| false,
         );
         app.update();
         assert_eq!(
@@ -1569,6 +1571,7 @@ mod tests {
             vec![row],
             &mut app.world_mut().resource_mut::<MailOpen>(),
             &commands,
+            |_| false,
         );
         app.update();
         assert_eq!(crate::query_cache::queries(&rx).len(), 2);
@@ -1648,6 +1651,7 @@ mod tests {
             list(),
             &mut app.world_mut().resource_mut::<MailOpen>(),
             &commands,
+            |_| false,
         );
         app.update();
         assert_eq!(logged(&mut app), 1, "the first list");
@@ -1655,6 +1659,7 @@ mod tests {
             list(),
             &mut app.world_mut().resource_mut::<MailOpen>(),
             &commands,
+            |_| false,
         );
         app.update();
         assert_eq!(logged(&mut app), 2, "the same list again is still a result");
@@ -1667,6 +1672,7 @@ mod tests {
                 list(),
                 &mut app.world_mut().resource_mut::<MailOpen>(),
                 &commands,
+                |_| false,
             );
         }
         app.update();
@@ -1682,6 +1688,7 @@ mod tests {
             vec![paid],
             &mut app.world_mut().resource_mut::<MailOpen>(),
             &commands,
+            |_| false,
         );
         app.update();
         assert_eq!(logged(&mut app), 5);
