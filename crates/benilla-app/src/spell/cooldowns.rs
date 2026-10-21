@@ -10,9 +10,10 @@
 //! - A failed cast clears the GCD armed at send (`0x6e1d83`, `0x6e1630`) and, unless the reason
 //!   is 0x3c, removes a cooldown-on-event spell's parked record (`0x6e73cc`).
 //!
-//! Every mutation the reference flushes bumps [`Cooldowns::generation`], the edge of the flush
-//! `0x4b31b0` makes (`ACTIONBAR_UPDATE_COOLDOWN`, `SPELL_UPDATE_COOLDOWN`); a natural expiry does
-//! not, since the stock `Cooldown.lua` frame hides itself at the end.
+//! Each of the reference's sites of the flush `0x4b31b0` (`ACTIONBAR_UPDATE_COOLDOWN`,
+//! `SPELL_UPDATE_COOLDOWN`) calls [`Cooldowns::flush`], whether or not its insert added a record:
+//! the insert `0x6e12c0` and `StartCooldown 0x6e2c60` flush nothing, and nor does a natural expiry,
+//! since the stock `Cooldown.lua` frame hides itself at the end.
 
 use std::time::{Duration, Instant};
 
@@ -114,8 +115,8 @@ impl CooldownInfo {
 #[derive(Resource, Default)]
 pub(crate) struct Cooldowns {
     records: Vec<Record>,
-    /// Bumped on every mutation the reference flushes (`0x4b31b0`), the flush's edge. Only counts
-    /// up, across [`Self::clear_silent`] too, so a watcher reads a reset as no mutation.
+    /// Bumped by [`Self::flush`], the edge of `0x4b31b0`. Only counts up, across
+    /// [`Self::clear_silent`] too, so a watcher reads a reset as no mutation.
     pub(crate) generation: u64,
     /// Bumped by the list's own calls of the usable refresh `0x4b31c0`, the edge of its
     /// `SPELL_UPDATE_USABLE`: a held global cooldown's start (`0x6e2e85`) and `0x6e3050`'s
@@ -198,6 +199,8 @@ impl Cooldowns {
     /// The list only grows here, so this is where it is bounded: the records that have run out by
     /// `now` are dropped first ([`Self::prune`]), and a list holds its live records plus those
     /// that ran out since its last insert. The pet's list has no other pruner.
+    ///
+    /// It flushes nothing: each caller's site does ([`Self::flush`]).
     fn add(
         &mut self,
         now: Instant,
@@ -231,7 +234,6 @@ impl Cooldowns {
             gcd_category,
             gcd,
         });
-        self.flush();
     }
 
     /// Drop fully elapsed records that are not on hold; invisible to reads, it stands in for the
@@ -251,7 +253,8 @@ impl Cooldowns {
         }
     }
 
-    /// A spell's own cooldown from `Spell.dbc` (`StartCooldown 0x6e2c60`), without a GCD.
+    /// The go's spell leg (`0x6e8498`) or its pet leg (`0x6e85f7`): the spell's own cooldown from
+    /// `Spell.dbc`, without a GCD, then the flush, inserted or not (`0x6e849d`, `0x6e85fc`).
     ///
     /// `ranged_attack_time_ms` is `UNIT_FIELD_RANGEDATTACKTIME` when
     /// [`SpellDisplay::ranged_speed_cooldown`], else 0, added to the category timer (`0x6e2b60`):
@@ -294,6 +297,7 @@ impl Cooldowns {
             0,
             Duration::ZERO,
         );
+        self.flush();
     }
 
     /// An item use's cooldown (`StartCooldown 0x6e2c60`): the item's values, a negative one
@@ -367,9 +371,9 @@ impl Cooldowns {
     /// item use, and at a pet-bar spell press (`0x4bd367`, into the pet's list), unless
     /// `startRecoveryCategory` and `startRecoveryTime` are both 0
     /// (`0x6e2e0f`-`0x6e2e21`), then with op 21 applied (`0x6e2e2c`) and nothing armed for a zero
-    /// result (`0x6e2e3d`). A negative one arms nothing either, where the reference inserts a
-    /// record no reader shows. `on_hold` is Attributes bit 25, which also runs the usable refresh
-    /// after the flush (`0x6e2e7c`-`0x6e2e85`).
+    /// result (`0x6e2e3d`). A negative one is inserted with no GCD a reader shows, which keeps only
+    /// a held record (`0x6e12c3`). Then the flush (`0x6e2e77`). `on_hold` is Attributes bit 25,
+    /// which also runs the usable refresh after the flush (`0x6e2e7c`-`0x6e2e85`).
     pub(crate) fn start_gcd(
         &mut self,
         spell_id: u32,
@@ -382,7 +386,7 @@ impl Cooldowns {
         }
         // `StartGlobalCooldown 0x6e2de0`: op 21 before the zero-duration exit (`0x6e2e2c`).
         let duration_ms = mods.apply(spell, OP_GCD, spell.start_recovery_ms as i32);
-        if duration_ms <= 0 {
+        if duration_ms == 0 {
             return;
         }
         if benilla_assets::trace::enabled() {
@@ -404,8 +408,9 @@ impl Cooldowns {
             Timer::none(now),
             spell.cooldown_on_event(),
             spell.start_recovery_category,
-            Duration::from_millis(duration_ms as u64),
+            Duration::from_millis(duration_ms.max(0) as u64),
         );
+        self.flush();
         if spell.cooldown_on_event() {
             self.refresh_usable();
         }
@@ -480,7 +485,8 @@ impl Cooldowns {
         }
     }
 
-    /// `SMSG_SPELL_COOLDOWN` (`0x6e9460`): each pair's record.
+    /// `SMSG_SPELL_COOLDOWN` (`0x6e9460`): each pair's record, a pair whose spell `Spell.dbc` lacks
+    /// skipped (`0x6e94f8`), then the flush, whatever went in (`0x6e95b0`).
     pub(crate) fn apply_spell_cooldowns<'a>(
         &mut self,
         pairs: impl IntoIterator<Item = (u32, u32, Option<&'a SpellDisplay>)>,
@@ -489,8 +495,11 @@ impl Cooldowns {
         now: Instant,
     ) {
         for (spell_id, cooldown_ms, spell) in pairs {
-            self.apply_wire_cooldown(spell_id, cooldown_ms, spell, now);
+            if let Some(spell) = spell {
+                self.apply_wire_cooldown(spell_id, cooldown_ms, Some(spell), now);
+            }
         }
+        self.flush();
     }
 
     /// One `SMSG_SPELL_COOLDOWN` entry (`0x6e9460`): a nonzero duration is the recovery with no
@@ -601,8 +610,7 @@ impl Cooldowns {
     /// One `SMSG_PET_SPELLS` cooldown: remainders, starting now. The category duration's
     /// [`PET_COOLDOWN_PERMANENT`] marker is stripped, or it would read as a 37-hour sweep.
     ///
-    /// The handler seeds through `StartCooldown 0x6e2c60` (`0x4bdabf`), which calls no flush, so
-    /// the insert leaves [`Self::generation`] where it was.
+    /// The handler seeds through `StartCooldown 0x6e2c60` (`0x4bdabf`), which calls no flush.
     pub(crate) fn seed_pet(
         &mut self,
         cd: &benilla_protocol::messages::PetSpellCooldown,
@@ -611,7 +619,6 @@ impl Cooldowns {
     ) {
         use benilla_protocol::messages::PET_COOLDOWN_PERMANENT;
         let category_ms = cd.category_cd_ms & !PET_COOLDOWN_PERMANENT;
-        let generation = self.generation;
         self.add(
             now,
             cd.spell_id,
@@ -631,7 +638,6 @@ impl Cooldowns {
             0,
             Duration::ZERO,
         );
-        self.generation = generation;
     }
 
     /// The client's `IsSpellOnCooldown 0x6e1690`, which despite its name is true only for an
