@@ -867,7 +867,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 binding_abi::string_arg(lua, kind, r#"Usage: GetSelectedAuctionItem("type")"#)?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(i) = list_index(&kind) else {
-                return Ok(0i64); // unknown
+                return Ok(1i64);
             };
             let id = model.auction_selected[i];
             if id == 0 {
