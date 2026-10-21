@@ -182,8 +182,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The reference places collision and culling by the raw facing, ours follow the display facing, because a capsule and a sphere barely change under rotation. ([`src/net/motion/facing.rs:9`](../crates/benilla-app/src/net/motion/facing.rs#L9))
 - The reference paces a self move through the same replay chain as a remote's, which would only delay a correction to our own pose. ([`src/net/motion/remote.rs:84`](../crates/benilla-app/src/net/motion/remote.rs#L84))
 - Its rate-limited hover climb (`0x636fa1`, 7 yd/s) is not reproduced, because the cache gate needs a pure function; it converges to this answer. ([`src/net/motion/spline.rs:568`](../crates/benilla-app/src/net/motion/spline.rs#L568))
-- A first-pass values block the clear header byte left unwritten re-fires, for a live object, its last write's edges against the watch copy (`0x465570`, `0x466686`); benilla compares against this packet's copies, which hold none for it, so a stale edge never fires twice. ([`src/net/objects/update.rs:805`](../crates/benilla-app/src/net/objects/update.rs#L805))
-- The create notify uses its lookup's result untested (`0x465c97`, `0x465d79`). ([`src/net/objects/update.rs:817`](../crates/benilla-app/src/net/objects/update.rs#L817))
+- A first-pass values block the clear header byte left unwritten re-fires, for a live object, its last write's edges against the watch copy (`0x465570`, `0x466686`); benilla compares against this packet's copies, which hold none for it, so a stale edge never fires twice. ([`src/net/objects/update.rs:811`](../crates/benilla-app/src/net/objects/update.rs#L811))
+- The create notify uses its lookup's result untested (`0x465c97`, `0x465d79`). ([`src/net/objects/update.rs:823`](../crates/benilla-app/src/net/objects/update.rs#L823))
 
 #### no_install
 
@@ -347,7 +347,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A script's 16-letter name, which the reference's bindings pass (1 to 16 units, `0x4d20d0`, `0x4d2210`), is dropped rather than sent or truncated, because vmangos would kick the session. ([`src/ui_guild/feed.rs:422`](../crates/benilla-app/src/ui_guild/feed.rs#L422))
 - Bounded at the ten slots, because the reference's read (`0x4c93e7`) runs past its array. ([`src/ui_guild/mod.rs:46`](../crates/benilla-app/src/ui_guild/mod.rs#L46))
 - Clamped to ten, because the reference's unbounded loop (`0x4d0bb0`) overruns its ten-slot array on a hostile `rankCount >= 12`. ([`src/ui_guild/mod.rs:365`](../crates/benilla-app/src/ui_guild/mod.rs#L365))
-- The identity cache goes too, where the reference keeps it in `guildcache.wdb`, because a renamed guild would otherwise show its old name. ([`src/ui_guild/mod.rs:713`](../crates/benilla-app/src/ui_guild/mod.rs#L713))
+- The identity cache goes too, where the reference keeps it in `guildcache.wdb`, because a renamed guild would otherwise show its old name. ([`src/ui_guild/mod.rs:723`](../crates/benilla-app/src/ui_guild/mod.rs#L723))
 - An exact tie is `Equal` where the reference answers ±1, and a NaN has a place (`total_cmp`), because Rust's sort requires a total order. ([`src/ui_guild/sort.rs:72`](../crates/benilla-app/src/ui_guild/sort.rs#L72))
 - The reference ties a miss with a hit (`0x4d0e27`, `0x4d0ea1`), no total order. ([`src/ui_guild/sort.rs:89`](../crates/benilla-app/src/ui_guild/sort.rs#L89))
 
@@ -776,7 +776,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A header clears it too, because it has no spell id; the reference stores its `0xffffffff` (`0x4d7b05`) and reads back 1, which the stock window's `> 1` test treats the same as 0. ([`src/script/trainer/mod.rs:914`](../crates/benilla-ui/src/script/trainer/mod.rs#L914))
 - Index 0 is a no-op, because one stray call would spend the purse; the reference buys every visible service for any index at or below 0 (`0x4da244`, `0x4d8a70`). ([`src/script/trainer/mod.rs:938`](../crates/benilla-ui/src/script/trainer/mod.rs#L938))
 - Kept apart from `Self::vertex_color`, which the reference's `Texture:SetAlpha` (`0x79b580`) rewrites, because the drawn product differs only on a region that sets both, or a gradient and an alpha, which no stock code does, and a FontString's `SetAlpha` then keeps its font colour. ([`src/script/types.rs:421`](../crates/benilla-ui/src/script/types.rs#L421))
-- Among whole-name matches ours picks the nearest, because the reference's first-walked pick is order-dependent and reads as a bug. ([`src/script/unit/bindings.rs:979`](../crates/benilla-ui/src/script/unit/bindings.rs#L979))
+- Among whole-name matches ours picks the nearest, because the reference's first-walked pick is order-dependent and reads as a bug. ([`src/script/unit/bindings.rs:994`](../crates/benilla-ui/src/script/unit/bindings.rs#L994))
 - The reference's matcher takes a whole-string hit at once only when it is nearer than the best so far (`0x493c88`-`0x493ca2`); an exact hit that is not nearer competes on prefix length alone (`0x493cf8`-`0x493d09`), so a nearer "Bobby" walked first beats an exact "Bob", and the pick follows the object list's order. ([`src/script/unit/by_name.rs:18`](../crates/benilla-ui/src/script/unit/by_name.rs#L18))
 - A full tie goes to the lower guid, where the reference keeps the first unit its walk (`0x493aa0`) reaches, an order neither of ours has; a guid keeps the two picks equal. ([`src/script/unit/by_name.rs:60`](../crates/benilla-ui/src/script/unit/by_name.rs#L60))
 - `0x4e81d0` has no bound and reads past its four-entry table, which is stale memory, not a mechanism; past it, nobody. ([`src/script/unit/resolve.rs:198`](../crates/benilla-ui/src/script/unit/resolve.rs#L198))
