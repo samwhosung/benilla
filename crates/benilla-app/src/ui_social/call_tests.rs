@@ -61,17 +61,29 @@ fn client() -> Social {
             ERR_FRIEND_NOT_FOUND = "ERR_FRIEND_NOT_FOUND"
             ERR_IGNORE_ALREADY_S = "ERR_IGNORE_ALREADY_S %s"
             ERR_IGNORE_NOT_FOUND = "ERR_IGNORE_NOT_FOUND"
-            UPDATES = 0
+            UPDATES = 0 COUNTS = "" IGNORES = 0 ICOUNTS = ""
             local f = CreateFrame("Frame")
             f:RegisterEvent("FRIENDLIST_UPDATE")
-            f:SetScript("OnEvent", function() UPDATES = UPDATES + 1 end)"#,
+            f:RegisterEvent("IGNORELIST_UPDATE")
+            f:SetScript("OnEvent", function()
+                if event == "FRIENDLIST_UPDATE" then
+                    UPDATES = UPDATES + 1
+                    COUNTS = COUNTS .. GetNumFriends() .. ","
+                else
+                    IGNORES = IGNORES + 1
+                    ICOUNTS = ICOUNTS .. GetNumIgnores() .. ","
+                end
+            end)"#,
         )
         .expect("the recorder installs");
     app.world_mut().insert_non_send_resource(script);
     let feed = app.world_mut().register_system(super::feed::feed_social);
     let mut s = Social { app, rx, feed };
     feed_once(&mut s);
-    run(&mut s, "UPDATES = 0");
+    run(
+        &mut s,
+        r#"UPDATES = 0 COUNTS = "" IGNORES = 0 ICOUNTS = """#,
+    );
     s
 }
 
@@ -97,6 +109,25 @@ fn try_run(s: &mut Social, lua: &str) -> Result<(), String> {
 fn eval<T: benilla_ui::mlua::FromLuaMulti>(s: &mut Social, lua: &str) -> T {
     with_hosted_vm(s.app.world_mut(), |vm| vm.expect("a VM").eval::<T>(lua))
         .expect("the chunk runs")
+}
+
+/// The `IGNORELIST_UPDATE`s since the last read.
+fn ignore_updates(s: &mut Social) -> i64 {
+    let n = eval(s, "return IGNORES");
+    run(s, "IGNORES = 0");
+    n
+}
+
+/// What each list event's handler counted, `GetNumFriends()` then `GetNumIgnores()`, since the
+/// last read.
+fn counts(s: &mut Social) -> (String, String) {
+    let c = eval(s, "return COUNTS, ICOUNTS");
+    run(s, r#"COUNTS = "" ICOUNTS = """#);
+    c
+}
+
+fn ignore_list(s: &mut Social, guids: Vec<u64>) {
+    packets(s, vec![SessionEvent::IgnoreList { guids }]);
 }
 
 fn updates(s: &mut Social) -> i64 {
@@ -553,4 +584,164 @@ fn a_logout_frees_the_list() {
     list(&mut s, vec![offline(8)]);
     feed_once(&mut s);
     assert_eq!(eval::<i64>(&mut s, "return GetNumFriends()"), 1);
+}
+
+/// `SMSG_IGNORE_LIST` (`0x5af530`) looks each name up with the ignores' callback and counts a miss
+/// (`0x5af59a`, `0x5af5a3`); it sorts and signals only with nothing pending (`0x5af5b2` →
+/// `0x5ae910`), and the last callback does (`0x5acf97` → `0x5aeb90`).
+#[test]
+fn the_ignore_list_signals_once_its_last_name_arrives() {
+    let mut s = client();
+    cache(&mut s, 10, "Bbb");
+    ignore_list(&mut s, vec![10, 9]);
+    feed_once(&mut s);
+    assert_eq!(ignore_updates(&mut s), 0, "9's name is pending");
+    answer(&mut s, 9, "Aaa");
+    feed_once(&mut s);
+    assert_eq!(ignore_updates(&mut s), 1);
+    assert_eq!(
+        eval::<(String, String)>(&mut s, "return GetIgnoreName(1), GetIgnoreName(2)"),
+        ("Aaa".into(), "Bbb".into()),
+        "sorted by name (`0x5ae940`)"
+    );
+}
+
+/// The ignores' callback on a refusal sends `CMSG_DEL_IGNORE` (`0x5acf8c`) and drops the count,
+/// which signals at 0 (`0x5acf97`).
+#[test]
+fn an_ignored_name_the_server_refuses_is_removed() {
+    let mut s = client();
+    ignore_list(&mut s, vec![9]);
+    feed_once(&mut s);
+    let _ = sent(&s);
+    answer(&mut s, 9, "");
+    feed_once(&mut s);
+    assert_eq!(sent(&s), [Sent::DelIgnore(9)]);
+    assert_eq!(ignore_updates(&mut s), 1);
+}
+
+/// `IGNORE_REMOVED` zeroes the guid's slot and nothing else (`0x5af650`): the selection stays a
+/// guid, which reads as a row again once a slot holds it (`0x5ae630`).
+#[test]
+fn removing_an_ignore_keeps_its_guid_selected() {
+    let mut s = client();
+    cache(&mut s, 9, "Aaa");
+    cache(&mut s, 10, "Bbb");
+    ignore_list(&mut s, vec![9, 10]);
+    feed_once(&mut s);
+    assert_eq!(
+        eval::<i64>(&mut s, "SetSelectedIgnore(1) return GetSelectedIgnore()"),
+        1
+    );
+    status(&mut s, friend_result::IGNORE_REMOVED, 9, None);
+    feed_once(&mut s);
+    assert_eq!(eval::<i64>(&mut s, "return GetSelectedIgnore()"), 0);
+    status(&mut s, friend_result::IGNORE_ADDED, 9, None);
+    feed_once(&mut s);
+    assert_eq!(eval::<i64>(&mut s, "return GetSelectedIgnore()"), 1);
+}
+
+/// `AddIgnoreSlot` (`0x5af5d0`) takes the first empty slot without looking for the guid, so an
+/// added duplicate holds two.
+#[test]
+fn an_added_duplicate_takes_a_second_slot() {
+    let mut s = client();
+    cache(&mut s, 9, "Aaa");
+    ignore_list(&mut s, vec![9]);
+    status(&mut s, friend_result::IGNORE_ADDED, 9, None);
+    feed_once(&mut s);
+    assert_eq!(eval::<i64>(&mut s, "return GetNumIgnores()"), 2);
+}
+
+/// 25 slots (`0x5af548`): a guid past them is dropped (`0x5af5eb`, `0x5af5f0`), from the list and
+/// from an add alike.
+#[test]
+fn the_ignore_list_holds_twenty_five() {
+    let mut s = client();
+    let guids: Vec<u64> = (1..=30).collect();
+    for &g in &guids {
+        cache(&mut s, g, &format!("P{g:02}"));
+    }
+    ignore_list(&mut s, guids);
+    status(&mut s, friend_result::IGNORE_ADDED, 31, None);
+    feed_once(&mut s);
+    assert_eq!(eval::<i64>(&mut s, "return GetNumIgnores()"), 25);
+    let social = s.app.world().resource::<super::SocialState>();
+    assert!(social.is_ignored(25));
+    assert!(!social.is_ignored(26));
+    assert!(!social.is_ignored(31));
+}
+
+/// `GetIgnoreName` (`0x5ad460`) answers `UNKNOWN` for a slot with no guid, an index past 26
+/// (`0x5ae576`), and a guid whose name is not cached (`0x5ad4ee`).
+#[test]
+fn get_ignore_name_answers_unknown_for_no_name() {
+    let mut s = client();
+    ignore_list(&mut s, vec![9]);
+    feed_once(&mut s);
+    for index in [1, 2, 0, 30] {
+        assert_eq!(
+            eval::<String>(&mut s, &format!("return GetIgnoreName({index})")),
+            "Unknown",
+            "index {index}"
+        );
+    }
+}
+
+/// `SMSG_TEXT_EMOTE` (`0x49dbe0`) drops an ignored performer's emote at receipt (`0x49dc36` →
+/// `0x49dc3d`), before the line is composed.
+#[test]
+fn an_ignored_players_text_emote_prints_nothing() {
+    let mut s = client();
+    ignore_list(&mut s, vec![9]);
+    let chat = |s: &Social| {
+        s.app
+            .world()
+            .resource::<crate::ui_chat::ChatLog>()
+            .pending_kinds()
+            .into_iter()
+            .filter(|k| *k == "emote")
+            .count()
+    };
+    let emote = |guid| SessionEvent::TextEmote {
+        guid,
+        text_emote: 101,
+        target_name: String::new(),
+    };
+    packets(&mut s, vec![emote(9)]);
+    assert_eq!(chat(&s), 0, "ignored");
+    packets(&mut s, vec![emote(8)]);
+    assert_eq!(chat(&s), 1, "the control prints");
+}
+
+/// Each list event fires where its handler signals it (`0x5ae867`, `0x5ae92d`), so its listeners
+/// read the list as that packet left it, not as the frame ends.
+#[test]
+fn a_list_event_reads_the_list_its_packet_left() {
+    let mut s = client();
+    cache(&mut s, 7, "Aaa");
+    cache(&mut s, 8, "Bbb");
+    cache(&mut s, 9, "Ccc");
+    cache(&mut s, 10, "Ddd");
+    packets(
+        &mut s,
+        vec![
+            SessionEvent::FriendList {
+                friends: vec![offline(7)],
+            },
+            SessionEvent::FriendStatus(FriendStatusUpdate {
+                result: friend_result::ADDED_OFFLINE,
+                guid: 8,
+                online: None,
+            }),
+            SessionEvent::IgnoreList { guids: vec![9] },
+            SessionEvent::FriendStatus(FriendStatusUpdate {
+                result: friend_result::IGNORE_ADDED,
+                guid: 10,
+                online: None,
+            }),
+        ],
+    );
+    feed_once(&mut s);
+    assert_eq!(counts(&mut s), ("1,2,".into(), "1,2,".into()));
 }
