@@ -1286,6 +1286,68 @@ mod tests {
         assert_eq!((row.quality, row.inventory_type), (None, 0));
     }
 
+    /// The partner's slot links from the wire's record as `GetTradeTargetItemLink` prints it
+    /// (`0x4c040a`-`0x4c0431` → `0x52adb0`): the permanent enchant (`+0x0c`, `0xb715c0`), the
+    /// random property id (`+0x30`, `0xb714b8`) and the suffix factor (`+0x2c`, `0xb715a0`).
+    #[test]
+    fn a_partner_slot_links_with_the_wires_enchant_roll_and_suffix() {
+        let mut items = Items::default();
+        let mut sword = crate::items::test_template("Bloodrazor");
+        sword.quality = 3;
+        items.insert_template(1234, Some(sword));
+        let item = TradeItem {
+            perm_enchant: 1900,
+            random_prop_id: 862,
+            suffix_factor: 77,
+            ..wire_item(1234)
+        };
+        let row = resolve_slot(&item, &items, None, &NameCache::default());
+        assert_eq!(
+            row.link.as_deref(),
+            Some("|cff0070dd|Hitem:1234:1900:862:77|h[Bloodrazor]|h|r")
+        );
+    }
+
+    /// Our own slot's item as `GetTradePlayerItemLink` links it, from the item object through
+    /// `0x52ae00` (`0x4c06bc`): the permanent enchant, the random property id and the seed.
+    #[test]
+    fn an_own_slot_links_from_the_item_object() {
+        use bevy::ecs::system::RunSystemOnce;
+        const GUID: u64 = 0x4000_0000_0000_0123;
+        let mut world = World::new();
+        world.init_resource::<GuidIndex>();
+        let mut items = Items::default();
+        items.insert_template(1234, Some(crate::items::test_template("Helm")));
+        world.insert_resource(items);
+        crate::items::test_spawn_item(
+            &mut world,
+            GUID,
+            benilla_protocol::ObjectFields::from_pairs(&[
+                (3, 1234),
+                (22, 1900),
+                (43, 7),
+                (44, 862),
+            ]),
+            false,
+        );
+        let item = world
+            .run_system_once(|objects: Objects, items: Res<Items>| {
+                own_item(GUID, 1, &objects, &items)
+            })
+            .unwrap()
+            .expect("the item streams");
+        let row = resolve_slot(
+            &item,
+            &world.resource::<Items>(),
+            None,
+            &NameCache::default(),
+        );
+        assert_eq!(
+            row.link.as_deref(),
+            Some("|cffffffff|Hitem:1234:1900:862:7|h[Helm]|h|r")
+        );
+    }
+
     /// A wrapped gift's giver rides both columns: the partner's block carries the wire's wrapped
     /// word and gift creator (`0x534559`, `0x534574`), our placed item's object the same; only a
     /// wrapped item names it, a zero guid names no one, and a name not yet answered is `None`.

@@ -1252,6 +1252,40 @@ mod tests {
         assert_eq!(seen(&mut app), Vec::<String>::new());
     }
 
+    /// The player's own equipped link comes from the item object through `0x52ae00`
+    /// (`GetInventoryItemLink` at `0x4c8ce2`): the permanent enchant (`+0x40`), the random
+    /// property id (`+0x98`) and the property seed (`+0x94`), in `0x52adb0`'s order.
+    #[test]
+    fn an_equipped_link_carries_the_enchant_the_roll_and_the_seed() {
+        use benilla_protocol::field::FIELD_PLAYER_INV_SLOT_HEAD;
+        const HELM: u64 = 0x4000_0000_0000_0b02;
+        const HELM_ID: u32 = 7366;
+        let mut app = world_with_bank_bag(None);
+        set_self(
+            &mut app,
+            &[
+                (FIELD_PLAYER_INV_SLOT_HEAD, HELM as u32),
+                (FIELD_PLAYER_INV_SLOT_HEAD + 1, (HELM >> 32) as u32),
+            ],
+        );
+        crate::items::test_spawn_item(
+            app.world_mut(),
+            HELM,
+            ObjectFields::from_pairs(&[(F_OBJECT_ENTRY, HELM_ID), (22, 1900), (43, 7), (44, 862)]),
+            false,
+        );
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(HELM_ID, Some(crate::items::test_template("Helm")));
+        app.world_mut().run_system_once(feed_char).unwrap();
+        let link = app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .eval::<String>(r#"return GetInventoryItemLink("player", 1)"#)
+            .unwrap();
+        assert_eq!(link, "|cffffffff|Hitem:7366:1900:862:7|h[Helm]|h|r");
+    }
+
     /// The ammo view only reads the record: what asks it are the texture and quality getters'
     /// lookups with the callback `0x4c84f0` (`0x4c83ce`, `0x4c8a0a`), so a frame no getter read
     /// the slot in sends nothing.
