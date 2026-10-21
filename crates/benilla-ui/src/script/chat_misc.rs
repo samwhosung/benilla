@@ -204,12 +204,57 @@ mod tests {
         );
     }
 
+    /// `RandomRoll` reads both arguments as text (`0x48c7c0`, `0x48c7d4`) through `SStrToInt`
+    /// (`0x64ac60`), so a number is its text and `"12x"` is 12.
     #[test]
-    fn random_roll_coerces_the_strings_the_stock_handler_passes() {
+    fn random_roll_reads_the_strings_the_stock_handler_passes() {
         let mut s = UiScript::new().unwrap();
-        s.run("RandomRoll('1', '100') RandomRoll(5, 10) RandomRoll('x', nil)")
-            .unwrap();
-        assert_eq!(s.take_roll_requests(), vec![(1, 100), (5, 10), (0, 0)]);
+        s.keep_calls();
+        s.run(
+            "RandomRoll('1', '100') RandomRoll(5, 10) RandomRoll('1', '12x') RandomRoll(' 1', 2)",
+        )
+        .unwrap();
+        assert_eq!(
+            s.take_roll_requests(),
+            vec![(1, 100), (5, 10), (1, 12), (0, 2)]
+        );
+    }
+
+    /// Both arguments must be a string or a number, else the usage error (`0x842a94`, at
+    /// `0x48c8a1`): `RandomRoll("100")` raises, though its usage text names that form.
+    #[test]
+    fn random_roll_raises_its_usage_without_two_strings() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        for bad in [
+            "RandomRoll()",
+            "RandomRoll('100')",
+            "RandomRoll(nil, 100)",
+            "RandomRoll(1, {})",
+            "RandomRoll(true, 2)",
+        ] {
+            let err = s.run(bad).expect_err(bad).to_string();
+            assert!(
+                err.contains(r#"Usage: RandomRoll("max") or RandomRoll("min", "max")"#),
+                "{bad}: {err}"
+            );
+        }
+        assert!(s.take_roll_requests().is_empty());
+    }
+
+    /// `0x48c807`-`0x48c830`: no roll for `(0, 0)`, a negative `min`, `max` below `min` or `max`
+    /// past 1000000; `(0, max)` and `(n, n)` roll.
+    #[test]
+    fn random_roll_sends_only_an_ordered_range_up_to_a_million() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.run(
+            "RandomRoll(0, 0) RandomRoll(-1, 5) RandomRoll(10, 5) RandomRoll(1, 1000001) \
+             RandomRoll('x', 'y') RandomRoll('1', 'x') RandomRoll(0, 1000000) RandomRoll(7, 7) \
+             RandomRoll('x', 3)",
+        )
+        .unwrap();
+        assert_eq!(s.take_roll_requests(), vec![(0, 1_000_000), (7, 7), (0, 3)]);
     }
 
     #[test]
