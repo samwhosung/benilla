@@ -3700,9 +3700,10 @@ mod tests {
     }
 
     /// The host seats each selection a call commits as `"target"` for the rest of its chunk
-    /// ([`UiScript::seat_selection`]), from a snapshot without the guild leg; the next frame
-    /// re-pushes `"target"` from the committed selection, though nothing the feed diffs moved, as
-    /// when a chunk selects a unit and goes back to the one it started on.
+    /// ([`UiScript::seat_selection`]), from a snapshot without the guild leg, and its
+    /// `"targettarget"`; the next frame re-pushes both from the committed selection, though
+    /// nothing the feed diffs moved, as when a chunk selects a unit and goes back to the one it
+    /// started on.
     #[test]
     fn a_seated_target_view_is_re_pushed_from_the_selection_the_next_frame() {
         use crate::names::CreatureRecord;
@@ -3787,21 +3788,33 @@ mod tests {
                 assistable_alive: true,
             }),
         );
+        // The druid targets the player, so the seat shows a target of target too.
         script.seat_selection(Some(benilla_ui::script::SeatedSelection {
             guid: DRUID,
-            target: 0,
-            target_held: false,
+            target: 0x77,
+            target_held: true,
         }));
+        let tot_exists = |app: &mut App| {
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .eval::<bool>("return UnitExists('targettarget') == 1")
+                .unwrap()
+        };
         assert_eq!(
             target_name(&mut app, "").as_deref(),
             Some("Druid"),
             "the chunk reads the seat"
         );
+        assert!(tot_exists(&mut app), "and the seat's target of target");
         app.update();
         assert_eq!(
             target_name(&mut app, "").as_deref(),
             Some("Wolf"),
             "the committed selection is shown again"
+        );
+        assert!(
+            !tot_exists(&mut app),
+            "the wolf targets nobody, so its target of target is nobody"
         );
     }
 
