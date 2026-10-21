@@ -437,9 +437,10 @@ impl super::UiScript {
         })
     }
 
-    /// The guids `GetAuctionItemInfo` read and missed in the name cache since the last take, in
-    /// read order, for the app to ask with the list's callback (`0x4cf167`, `0x4cf1c8`).
-    pub fn take_auction_name_asks(&mut self) -> Vec<u64> {
+    /// The guids `GetAuctionItemInfo` read and missed in the name cache since the last take, each
+    /// with the list whose callback it registers, in read order, for the app to ask
+    /// (`0x4cf167`, `0x4cf1c8`).
+    pub fn take_auction_name_asks(&mut self) -> Vec<(u64, usize)> {
         std::mem::take(&mut self.model_mut().auction_name_asks)
     }
 
@@ -470,44 +471,6 @@ impl super::UiScript {
         super::tick::verb(&self.lua, |model| {
             patch_row(model, list, page, auction_id, bid)
         });
-    }
-
-    /// Whether `list` holds `page` with other rows or another total than `rows` and `total`,
-    /// leaving out what the VM removed itself: a name or a record that landed since the push,
-    /// which the list's update owes (`0x4cf290`, `0x4cf2b0`, `0x4cf2d0`).
-    pub fn auction_list_differs(
-        &self,
-        list: usize,
-        page: u32,
-        rows: &[AuctionItemRow],
-        total: u32,
-    ) -> bool {
-        let model = self.model_ref();
-        let Some(held) = model.auction.as_ref().map(|a| &a.lists[list]) else {
-            return false;
-        };
-        if held.page != page {
-            return false;
-        }
-        if held.total != total {
-            return true;
-        }
-        let mut pushed: Vec<&AuctionItemRow> = rows
-            .iter()
-            .filter(|r| !held.removed.contains(&r.auction_id))
-            .collect();
-        if pushed.len() != held.rows.len() {
-            return true;
-        }
-        for row in &held.rows {
-            match pushed.iter().position(|r| *r == row) {
-                Some(i) => {
-                    pushed.swap_remove(i);
-                }
-                None => return true,
-            }
-        }
-        false
     }
 
     /// Drain the header clicks: `(list index, sort key)`, in click order, which the app replays
@@ -859,7 +822,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             };
             // A name the cache misses is asked with the list's callback, the bidder's on an owned
             // row first (`0x4cf167`), then the seller's (`0x4cf1c8`); nothing else asks a name.
-            {
+            if let Some(list) = list_index(&kind) {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 let bidder_missed = r.named_bidder != 0 && r.high_bidder == AuctionHighBidder::Nil;
                 let seller_missed = r.owner_guid != 0 && r.owner.is_none();
@@ -867,8 +830,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     (bidder_missed, r.named_bidder),
                     (seller_missed, r.owner_guid),
                 ] {
-                    if missed && !model.auction_name_asks.contains(&guid) {
-                        model.auction_name_asks.push(guid);
+                    if missed && !model.auction_name_asks.contains(&(guid, list)) {
+                        model.auction_name_asks.push((guid, list));
                     }
                 }
             }
@@ -2699,9 +2662,13 @@ mod tests {
             r#"for i = 1, 3 do GetAuctionItemInfo("owner", i) end GetAuctionItemInfo("owner", 1)"#,
         )
         .unwrap();
-        assert_eq!(s.take_auction_name_asks(), [0x99, 0x77]);
+        assert_eq!(s.take_auction_name_asks(), [(0x99, OWNER), (0x77, OWNER)]);
         s.run(r#"GetAuctionItemInfo("owner", 1)"#).unwrap();
-        assert_eq!(s.take_auction_name_asks(), [0x99, 0x77], "every read asks");
+        assert_eq!(
+            s.take_auction_name_asks(),
+            [(0x99, OWNER), (0x77, OWNER)],
+            "every read asks"
+        );
         assert!(s.take_auction_name_asks().is_empty());
     }
 }

@@ -398,13 +398,36 @@ fn a_page_waits_for_its_items_then_sorts_and_signals_once() {
 
 /// A seller's name arriving signals the list whose read asked it and sorts nothing
 /// (`0x4cf290`), so its row holds still under the seller sort until the next page or header
-/// click. The owner list shows the same seller but never read it, so it registered no callback
-/// (`0x55f080`) and stays silent.
+/// click. The owner list shows the same seller but nothing read it, so it registered no callback
+/// (`0x55f080`) and stays silent; a second read of the list registers nothing more.
 #[test]
 fn a_sellers_name_signals_the_list_without_sorting_it() {
     const AL: u64 = 0x61;
     const BOB: u64 = 0x62;
     let mut h = House::new();
+    // A VM whose recorder reads no rows, so only the reads below ask names.
+    let script = UiScript::new().unwrap();
+    script
+        .run(
+            r#"
+            function SELLERS(list)
+                local t = {}
+                for i = 1, (GetNumAuctionItems(list)) do
+                    local _, _, _, _, _, _, _, _, _, _, _, owner = GetAuctionItemInfo(list, i)
+                    t[i] = owner or "?"
+                end
+                return table.concat(t, ",")
+            end
+            EVENTS = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("AUCTION_ITEM_LIST_UPDATE")
+            f:RegisterEvent("AUCTION_OWNED_LIST_UPDATE")
+            f:RegisterEvent("AUCTION_BIDDER_LIST_UPDATE")
+            f:SetScript("OnEvent", function() table.insert(EVENTS, event) end)
+            "#,
+        )
+        .unwrap();
+    h.app.insert_non_send_resource(script);
     h.item(1, "Cloth", 10, 1);
     h.name(BOB, "Bob");
     h.open(AUCTIONEER);
@@ -416,17 +439,13 @@ fn a_sellers_name_signals_the_list_without_sorting_it() {
     h.land(OWNER, vec![al]);
     h.lua("SortAuctionItems('list', 'seller')");
     assert_eq!(h.sellers("list"), "Bob,?");
-    assert_eq!(
-        h.sellers("list"),
-        "Bob,?",
-        "a second read registers nothing more"
-    );
-    h.seen();
+    assert_eq!(h.sellers("list"), "Bob,?");
+    h.script().run("EVENTS = {}").unwrap();
     h.name(AL, "Al");
     h.app.update();
     assert_eq!(
-        h.seen(),
-        ["AUCTION_ITEM_LIST_UPDATE=Cloth,Cloth"],
+        h.eval::<Vec<String>>("return EVENTS"),
+        ["AUCTION_ITEM_LIST_UPDATE"],
         "the name signals the list that asked, once"
     );
     assert_eq!(h.sellers("list"), "Bob,Al", "and does not sort it");

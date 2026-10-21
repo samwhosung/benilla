@@ -582,7 +582,7 @@ fn bidder_rank(bidder_guid: u64, self_guid: Option<u64>) -> u8 {
 /// `"owner"` row the player owns (`0x4cf131`–`0x4cf142` compare its owner guid with the player's),
 /// the bidder guid (vmangos `AuctionHouseMgr.cpp:840`) goes through the name cache: nil with no
 /// bid (`0x4cf150`) or until the asked name lands (`0x4cf16e`), whose arrival re-fires the owned
-/// list's update (`0x4cf2b0`), here the feed's diff. Any other row: `1` if the player holds the
+/// list's update (`0x4cf2b0`) for an owned list that read it. Any other row: `1` if the player holds the
 /// bid, else nil (`0x4cf17b`–`0x4cf1a0`).
 fn high_bidder(
     list: usize,
@@ -771,6 +771,7 @@ fn feed_auction(
     mut last_open: crate::ui_script::WindowMemo<Option<u64>>,
     mut last_can_query: Local<crate::ui_script::VmMemo<bool>>,
     mut last_classes: Local<crate::ui_script::VmMemo<Vec<AuctionCategory>>>,
+    mut name_waits: Local<crate::ui_script::VmMemo<Vec<(u64, usize)>>>,
     mut closes: CoreCloses,
 ) {
     vm.turn(|script, mut auction| {
@@ -822,10 +823,15 @@ fn feed_auction(
             show_messages(script, &mut sink, "ui_auction", lines);
         }
 
-        // The names `GetAuctionItemInfo` missed, asked with the list's callback (`0x4cf167`,
-        // `0x4cf1c8`), whose answer the diff below signals.
-        for guid in script.take_auction_name_asks() {
+        // The names `GetAuctionItemInfo` missed, asked with the reading list's callback
+        // (`0x4cf167`, `0x4cf1c8`), kept once per name and list (`0x55f080`'s dedupe flag 1) until
+        // the name lands.
+        let name_waits = name_waits.get(script);
+        for (guid, list) in script.take_auction_name_asks() {
             let _ = names.resolve_player(guid, Ask::Event(&commands));
+            if !name_waits.contains(&(guid, list)) {
+                name_waits.push((guid, list));
+            }
         }
 
         let self_guid = self_q.iter().next().map(|g| g.0);
@@ -883,23 +889,12 @@ fn feed_auction(
         auction.list_result_landed = [false; 3];
         // Per list, the sort tail once every item its page waits on is answered, a record or a
         // refusal, as the pending counter's last decrement runs it (`0x4cc9e8`, `0x4cca10`),
-        // whatever the session; otherwise, on the page the VM already holds, the update a landed
-        // name or template owes, which sorts nothing (`0x4cf290`, `0x4cf2b0`, `0x4cf2d0`).
+        // whatever the session.
         let tails: [bool; 3] = std::array::from_fn(|i| {
             auction.lists[i]
                 .awaiting
                 .as_ref()
                 .is_some_and(|items_of| items_of.iter().all(|&e| items.template_answered(e)))
-        });
-        // Measured against the VM's rows, not the last push: the handlers wrote and signalled
-        // their own patches and removals there, so only what the VM still lacks is owed.
-        let changed = last.as_ref() != Some(&fresh);
-        let renamed: [bool; 3] = std::array::from_fn(|i| {
-            let list = &fresh.lists[i];
-            changed
-                && !opened
-                && auction.lists[i].awaiting.is_none()
-                && script.auction_list_differs(i, list.page, &list.rows, list.total)
         });
         for (slot, tail) in auction.lists.iter_mut().zip(tails) {
             if tail {
@@ -921,15 +916,26 @@ fn feed_auction(
                 script.sort_auction_list(list);
             }
         }
-        // Literal names, not a loop: `reference_ui`'s producer test finds fire sites by literal.
-        if renamed[LIST] {
-            script.fire_event("AUCTION_ITEM_LIST_UPDATE", vec![]);
-        }
-        if renamed[BIDDER] {
-            script.fire_event("AUCTION_BIDDER_LIST_UPDATE", vec![]);
-        }
-        if renamed[OWNER] {
-            script.fire_event("AUCTION_OWNED_LIST_UPDATE", vec![]);
+        // Each landed name's callbacks, in the order they were kept: the reading list's update,
+        // with no pending test and sorting nothing (`0x4cf290`, `0x4cf2b0`, `0x4cf2d0`).
+        let landed: Vec<usize> = {
+            let mut landed = Vec::new();
+            name_waits.retain(|&(guid, list)| {
+                let named = names.resolve_player(guid, Ask::Read).is_some();
+                if named {
+                    landed.push(list);
+                }
+                !named
+            });
+            landed
+        };
+        for list in landed {
+            // Literal names: `reference_ui`'s producer test finds fire sites by literal.
+            match list {
+                LIST => script.fire_event("AUCTION_ITEM_LIST_UPDATE", vec![]),
+                BIDDER => script.fire_event("AUCTION_BIDDER_LIST_UPDATE", vec![]),
+                _ => script.fire_event("AUCTION_OWNED_LIST_UPDATE", vec![]),
+            }
         }
         *last = Some(fresh);
         *last_open = auction.auctioneer;
