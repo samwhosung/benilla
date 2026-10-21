@@ -108,6 +108,7 @@ fn state(mut rows: Vec<AuctionItemRow>) -> AuctionState {
     AuctionState {
         lists,
         deposit_percent: 5,
+        open: true,
     }
 }
 
@@ -189,13 +190,7 @@ fn auction_house_show_opens_the_window_on_the_browse_tab() {
     let mut s = UiScript::new().unwrap();
     load_ui_with_classes(&mut s);
     seat_player(&mut s, 500_000);
-    s.set_auction(Some(state(vec![row(
-        "Linen Cloth",
-        1000,
-        5000,
-        0,
-        "Seller",
-    )])));
+    s.set_auction(state(vec![row("Linen Cloth", 1000, 5000, 0, "Seller")]));
 
     s.fire_event("AUCTION_HOUSE_SHOW", vec![]);
     assert!(
@@ -249,13 +244,7 @@ fn the_auctions_tab_cannot_repaint_before_it_has_been_shown() {
     let mut s = UiScript::new().unwrap();
     load_ui_with_classes(&mut s);
     seat_player(&mut s, 500_000);
-    s.set_auction(Some(state(vec![row(
-        "Linen Cloth",
-        1000,
-        5000,
-        0,
-        "Seller",
-    )])));
+    s.set_auction(state(vec![row("Linen Cloth", 1000, 5000, 0, "Seller")]));
 
     // Open, and land a browse result: the whole of a search.
     s.fire_event("AUCTION_HOUSE_SHOW", vec![]);
@@ -303,7 +292,7 @@ fn the_auctions_tab_names_the_high_bidder() {
         total: 2,
         ..Default::default()
     };
-    s.set_auction(Some(snapshot));
+    s.set_auction(snapshot);
 
     s.fire_event("AUCTION_HOUSE_SHOW", vec![]);
     s.run("AuctionFrameTab_OnClick(3)").unwrap();
@@ -352,13 +341,7 @@ fn only_the_bids_pane_gets_its_page_without_being_opened() {
     // Browse is shown by the tab click; Bid is shown with the window and hidden again, keeping
     // the page its OnShow assigned.
     seat_player(&mut s, 500_000);
-    s.set_auction(Some(state(vec![row(
-        "Linen Cloth",
-        1000,
-        5000,
-        0,
-        "Seller",
-    )])));
+    s.set_auction(state(vec![row("Linen Cloth", 1000, 5000, 0, "Seller")]));
     s.fire_event("AUCTION_HOUSE_SHOW", vec![]);
     assert_eq!(page(&s, "AuctionFrameBrowse"), "0");
     assert_eq!(
@@ -387,13 +370,7 @@ fn the_show_cascade_notifies_the_bids_pane_once_and_keeps_its_page() {
     let mut s = UiScript::new().unwrap();
     load_ui_with_classes(&mut s);
     seat_player(&mut s, 500_000);
-    s.set_auction(Some(state(vec![row(
-        "Linen Cloth",
-        1000,
-        5000,
-        0,
-        "Seller",
-    )])));
+    s.set_auction(state(vec![row("Linen Cloth", 1000, 5000, 0, "Seller")]));
 
     // Both `<OnShow>`s call their handler by global name, so wrapping the globals records the
     // order.
@@ -449,12 +426,12 @@ fn the_browse_list_populates_from_the_fed_snapshot() {
     let mut s = UiScript::new().unwrap();
     load_ui_with_classes(&mut s);
     seat_player(&mut s, 500_000);
-    s.set_auction(Some(state(vec![
+    s.set_auction(state(vec![
         // No bids yet: the row shows the seller's opening price as the current bid.
         row("Linen Cloth", 1000, 5000, 0, "Seller"),
         // Bid on: the row shows the live bid instead.
         row("Wool Cloth", 1000, 0, 2500, "Someone"),
-    ])));
+    ]));
 
     s.fire_event("AUCTION_HOUSE_SHOW", vec![]);
     s.fire_event("AUCTION_ITEM_LIST_UPDATE", vec![]);
@@ -544,10 +521,10 @@ fn the_bid_and_buyout_gates_read_the_purse() {
     load_ui_with_classes(&mut s);
     // 2 gold. Row 1 costs 10s to bid and 50s to buy out; row 2 wants 5 gold.
     seat_player(&mut s, 20_000);
-    s.set_auction(Some(state(vec![
+    s.set_auction(state(vec![
         row("Linen Cloth", 1000, 5000, 0, "Seller"),
         row("Arcanite Bar", 50_000, 60_000, 0, "Seller"),
-    ])));
+    ]));
     s.fire_event("AUCTION_HOUSE_SHOW", vec![]);
     s.fire_event("AUCTION_ITEM_LIST_UPDATE", vec![]);
 
@@ -629,13 +606,7 @@ fn you_cannot_bid_on_your_own_auction() {
     let mut s = UiScript::new().unwrap();
     load_ui_with_classes(&mut s);
     seat_player(&mut s, 10_000_000);
-    s.set_auction(Some(state(vec![row(
-        "Linen Cloth",
-        1000,
-        5000,
-        0,
-        "Buyer",
-    )])));
+    s.set_auction(state(vec![row("Linen Cloth", 1000, 5000, 0, "Buyer")]));
     s.fire_event("AUCTION_HOUSE_SHOW", vec![]);
     s.fire_event("AUCTION_ITEM_LIST_UPDATE", vec![]);
 
@@ -659,7 +630,7 @@ fn search_reads_the_filters_and_nothing_queries_before_it() {
     let mut s = UiScript::new().unwrap();
     load_ui_with_classes(&mut s);
     seat_player(&mut s, 0);
-    s.set_auction(Some(state(vec![])));
+    s.set_auction(state(vec![]));
     s.set_auction_can_query(true);
     s.fire_event("AUCTION_HOUSE_SHOW", vec![]);
     let _ = s.take_auction_query();
@@ -714,7 +685,7 @@ fn the_create_gate_and_the_deposit() {
     let mut s = UiScript::new().unwrap();
     load_ui_with_classes(&mut s);
     seat_player(&mut s, 100_000);
-    s.set_auction(Some(state(vec![])));
+    s.set_auction(state(vec![]));
     s.fire_event("AUCTION_HOUSE_SHOW", vec![]);
     s.run("AuctionFrameTab_OnClick(3)").unwrap();
 
@@ -862,7 +833,7 @@ fn hiding_the_window_closes_the_session() {
     let mut s = UiScript::new().unwrap();
     load_ui_with_classes(&mut s);
     seat_player(&mut s, 0);
-    s.set_auction(Some(state(vec![])));
+    s.set_auction(state(vec![]));
     s.fire_event("AUCTION_HOUSE_SHOW", vec![]);
     let _ = s.take_auction_close();
 
@@ -896,7 +867,7 @@ fn paging_shows_the_turners_only_at_the_end_of_the_list() {
     }
     let mut st = state(rows);
     st.lists[LIST].total = 120;
-    s.set_auction(Some(st));
+    s.set_auction(st);
     s.fire_event("AUCTION_HOUSE_SHOW", vec![]);
     s.fire_event("AUCTION_ITEM_LIST_UPDATE", vec![]);
 
@@ -940,7 +911,7 @@ fn a_row_hover_goes_through_the_reference_tooltip_verb() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     load_ui_with_classes(&mut s);
-    s.set_auction(Some(state(vec![row("Copper Bar", 100, 500, 0, "Someone")])));
+    s.set_auction(state(vec![row("Copper Bar", 100, 500, 0, "Someone")]));
     s.fire_event("AUCTION_HOUSE_SHOW", vec![]);
     s.fire_event("AUCTION_ITEM_LIST_UPDATE", vec![]);
 

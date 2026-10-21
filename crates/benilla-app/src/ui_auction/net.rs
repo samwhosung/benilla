@@ -105,19 +105,16 @@ fn on_session_end(In(_): In<SessionEvent>, mut auction: ResMut<AuctionOpen>) {
     auction.clear_session();
 }
 
-/// Any of the three list results, which share a record and differ only in their tab.
+/// Any of the three list results, which share a record and differ only in their tab. A result is
+/// written whatever the session, as its handler reads no auctioneer (`0x4cc7f0`, `0x4cca30`,
+/// `0x4ccc80`): one in flight at the close lands in the lists the close left standing.
 fn auction_list(
     which: usize,
     auctions: Vec<AuctionListEntry>,
     total_count: u32,
     auction: &mut AuctionOpen,
 ) {
-    // Counted before the drop below, so a dropped result still shows as arrived.
     auction.wire.list_results[which] += 1;
-    // A page in flight when the window closed is dropped: the reference has nowhere to put it.
-    if auction.auctioneer.is_none() {
-        return;
-    }
     auction.set_list(which, auctions, total_count);
 }
 

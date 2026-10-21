@@ -33,7 +33,6 @@ impl House {
             .init_resource::<NameCache>()
             .init_resource::<crate::ui_chat::ChatLog>()
             .init_resource::<crate::sound::MessageSounds>()
-            .add_message::<crate::net::WorldEnterCascadeMessage>()
             .configure_sets(
                 Update,
                 (crate::ui_script::UiFeed, crate::ui_script::UiDrain).chain(),

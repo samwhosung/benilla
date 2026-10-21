@@ -123,8 +123,8 @@ pub struct AuctionListState {
     pub rows: Vec<AuctionItemRow>,
     /// `totalAuctions`: the match count before the 50-row cap.
     pub total: u32,
-    /// The list's key stack. The VM takes the app's copy when a session opens and keeps its own
-    /// for the session, which the header clicks promote in place.
+    /// The list's key stack. The VM takes the app's copy at its first push and keeps its own
+    /// after it, which the header clicks promote in place.
     pub sort: AuctionSortStack,
     /// Which result the rows came from, counted by the app across every list: a new one is laid
     /// in wire order, as the result handler writes its records (`0x4cc880`), and one the VM holds
@@ -163,17 +163,21 @@ pub struct AuctionSubCategory {
     pub has_inv_types: bool,
 }
 
-/// The open auction house's snapshot, pushed whole by the app.
+/// The auction house's snapshot, pushed whole by the app: the three lists, which outlive the
+/// session as the reference's arrays do, and the session itself.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AuctionState {
     /// Browse / Bids / Auctions, indexed by [`LIST`], [`BIDDER`], [`OWNER`].
     pub lists: [AuctionListState; 3],
     /// `GetAuctionHouseDepositRate()`: the house's `AuctionHouse.dbc` deposit percentage.
     pub deposit_percent: u32,
+    /// An auctioneer session is open (`[0xb725f8]` nonzero): `StartAuction` sends only then
+    /// (`0x4ce7da`).
+    pub open: bool,
 }
 
 impl Default for AuctionState {
-    /// Three empty lists, each with its world-entry stack.
+    /// Three empty lists, each with its world-entry stack, and no session.
     fn default() -> Self {
         Self {
             lists: AuctionSortStack::seeded_all().map(|sort| AuctionListState {
@@ -181,6 +185,7 @@ impl Default for AuctionState {
                 ..Default::default()
             }),
             deposit_percent: 0,
+            open: false,
         }
     }
 }
@@ -237,17 +242,14 @@ impl super::UiScript {
         self.model_mut().auction_item_classes = classes;
     }
 
-    /// Push the session, or `None` at its close. A session already open keeps its key stacks,
-    /// and each list keeps its order while the push carries the same page.
-    pub fn set_auction(&mut self, state: Option<AuctionState>) {
+    /// Push the lists and the session. The VM's first push takes the app's key stacks and every
+    /// later one keeps the VM's; a list pushed with the page it holds keeps the VM's order and
+    /// leaves out what a time-left read removed. The selection is an auction id no push writes
+    /// (`0x849058`): it stops resolving when its auction leaves the list.
+    pub fn set_auction(&mut self, state: AuctionState) {
         let mut model = self.model_mut();
-        // Only opening or closing the session drops the selection: it is an auction id, so it
-        // survives a new page or a re-sort and stops resolving when the auction leaves the page.
-        if model.auction.is_none() || state.is_none() {
-            model.auction_selected = [0; 3];
-        }
         model.auction = match (model.auction.take(), state) {
-            (Some(held), Some(mut state)) => {
+            (Some(held), mut state) => {
                 for (list, held) in state.lists.iter_mut().zip(held.lists) {
                     list.sort = held.sort;
                     list.removed = Vec::new();
@@ -260,8 +262,23 @@ impl super::UiScript {
                 }
                 Some(state)
             }
-            (_, state) => state,
+            (None, state) => Some(state),
         };
+    }
+
+    /// The close's half the VM holds (`0x4cd613`-`0x4cd61f`): the session and its house go; the
+    /// lists, their stacks and the selection stand, and the getters still answer them.
+    pub fn close_auction_session(&mut self) {
+        if let Some(a) = self.model_mut().auction.as_mut() {
+            a.open = false;
+            a.deposit_percent = 0;
+        }
+    }
+
+    /// The world-enter cascade's reset of the selection (`0x4cc2d5`), the one writer of the cells
+    /// besides `SetSelectedAuctionItem`.
+    pub fn clear_auction_selections(&mut self) {
+        self.model_mut().auction_selected = [0; 3];
     }
 
     /// A list's sort tail, run by the app when the last of a result's items is known (`0x4cc9f1`,
@@ -341,8 +358,8 @@ impl super::UiScript {
             .map(|it| (it.bag, it.slot))
     }
 
-    /// Empty the sell slot on session close: the sell-slot clear (`0x4cd640`), as
-    /// [`clear_sell_slot`] runs it.
+    /// Empty the sell slot at the close and the world-enter reset: the sell-slot clear
+    /// (`0x4cd640`), as [`clear_sell_slot`] runs it.
     pub fn clear_auction_sell_item(&mut self) {
         super::tick::verb(&self.lua, clear_sell_slot);
     }
@@ -1046,7 +1063,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // No auctioneer or an empty slot, its stored guid zero, ends it before the send
                 // (`0x4ce7da`, `0x4ce7e4`).
                 let guid = model.auction_sell_item.as_ref().map_or(0, |it| it.guid);
-                if model.auction.is_none() || guid == 0 {
+                if !model.auction.as_ref().is_some_and(|a| a.open) || guid == 0 {
                     return;
                 }
                 // A damaged item, not wrapped (`flags & 8`), with a max durability whose current
@@ -1271,7 +1288,10 @@ mod tests {
                 ..Default::default()
             })
             .collect();
-        let mut state = AuctionState::default();
+        let mut state = AuctionState {
+            open: true,
+            ..Default::default()
+        };
         state.lists[LIST] = AuctionListState {
             total: rows.len() as u32,
             rows,
@@ -1287,7 +1307,7 @@ mod tests {
     #[test]
     fn list_types_and_sort_names_match_without_case() {
         let mut s = UiScript::new().unwrap();
-        s.set_auction(Some(page(&[7])));
+        s.set_auction(page(&[7]));
         assert_eq!(
             s.eval::<i64>(r#"return (GetNumAuctionItems("LIST"))"#)
                 .unwrap(),
@@ -1335,7 +1355,7 @@ mod tests {
         let mut state = page(&[7, 8]);
         state.lists[LIST].rows[0].level = 0;
         state.lists[LIST].rows[1].level = 12;
-        s.set_auction(Some(state));
+        s.set_auction(state);
         let level = |s: &UiScript, i: usize| {
             s.eval::<i64>(&format!(
                 r#"local _, _, _, _, _, l = GetAuctionItemInfo("list", {i}) return l"#
@@ -1358,7 +1378,7 @@ mod tests {
         state.lists[LIST].rows[0].buyout_price = 100;
         state.lists[LIST].rows[1].name = Some("Dear".into());
         state.lists[LIST].rows[1].buyout_price = 900;
-        s.set_auction(Some(state));
+        s.set_auction(state);
         s.run(
             r#"SEEN = {}
                local f = CreateFrame("Frame")
@@ -1443,7 +1463,7 @@ mod tests {
         );
         state.lists[OWNER] = list(&[(7, gone)], false);
         state.lists[BIDDER] = list(&[(7, gone)], true);
-        s.set_auction(Some(state.clone()));
+        s.set_auction(state.clone());
         heard::listen(
             &s,
             &[
@@ -1475,7 +1495,7 @@ mod tests {
             s.eval::<(i64, i64, i64, i64)>(counts).unwrap(),
             (6, 9, 0, 3)
         );
-        s.set_auction(Some(state));
+        s.set_auction(state);
         assert_eq!(
             s.eval::<(i64, i64, i64, i64)>(counts).unwrap(),
             (6, 9, 0, 3)
@@ -1507,7 +1527,7 @@ mod tests {
     #[test]
     fn the_selection_follows_its_auction_through_a_resort() {
         let mut s = UiScript::new().unwrap();
-        s.set_auction(Some(page(&[11, 22])));
+        s.set_auction(page(&[11, 22]));
 
         s.eval::<()>(r#"SetSelectedAuctionItem("list", 2)"#)
             .unwrap();
@@ -1528,7 +1548,7 @@ mod tests {
         );
 
         // It leaves the page.
-        s.set_auction(Some(page(&[33, 44])));
+        s.set_auction(page(&[33, 44]));
         assert_eq!(
             s.eval::<i64>(r#"return GetSelectedAuctionItem("list")"#)
                 .unwrap(),
@@ -1536,11 +1556,17 @@ mod tests {
             "gone means nothing selected, never its neighbour"
         );
 
-        // Closing the session drops it outright.
-        s.set_auction(Some(page(&[33])));
+        // The close keeps it (`0x4cd5f0`); the world-enter cascade's reset drops it.
+        s.set_auction(page(&[33]));
         s.eval::<()>(r#"SetSelectedAuctionItem("list", 1)"#)
             .unwrap();
-        s.set_auction(None);
+        s.close_auction_session();
+        assert_eq!(
+            s.eval::<i64>(r#"return GetSelectedAuctionItem("list")"#)
+                .unwrap(),
+            1
+        );
+        s.clear_auction_selections();
         assert_eq!(
             s.eval::<i64>(r#"return GetSelectedAuctionItem("list")"#)
                 .unwrap(),
@@ -1627,7 +1653,7 @@ mod tests {
             owner: Some("Seller".into()),
             ..Default::default()
         };
-        s.set_auction(Some(state));
+        s.set_auction(state);
         let shape: String = s
             .eval(
                 r#"local t = {GetAuctionItemInfo("list", 1)}
@@ -1655,7 +1681,7 @@ mod tests {
     #[test]
     fn a_cached_row_answers_its_quality() {
         let mut s = UiScript::new().unwrap();
-        s.set_auction(Some(page(&[7])));
+        s.set_auction(page(&[7]));
         let (name, quality): (String, i64) = s
             .eval(r#"local n, _, _, q = GetAuctionItemInfo("list", 1) return n, q"#)
             .unwrap();
@@ -1669,7 +1695,7 @@ mod tests {
         let mut state = page(&[1, 2, 3]);
         state.lists[LIST].rows[0].high_bidder = AuctionHighBidder::Name("Bidder".into());
         state.lists[LIST].rows[1].high_bidder = AuctionHighBidder::Player;
-        s.set_auction(Some(state));
+        s.set_auction(state);
         let eleventh = |i: usize| {
             s.eval::<Value>(&format!(
                 r#"local _,_,_,_,_,_,_,_,_,_,h = GetAuctionItemInfo("list", {i}) return h"#
@@ -2014,7 +2040,10 @@ mod tests {
         s.run("StartAuction(100, 0, 120)").unwrap();
         assert!(s.take_auction_starts().is_empty(), "no auctioneer");
 
-        s.set_auction(Some(AuctionState::default()));
+        s.set_auction(AuctionState {
+            open: true,
+            ..Default::default()
+        });
         heard::listen(
             &s,
             &["ITEM_LOCK_CHANGED", "NEW_AUCTION_UPDATE"],
@@ -2057,7 +2086,10 @@ mod tests {
     fn start_auction_refuses_a_damaged_item() {
         use crate::script::cursor::two_item_bag;
         let mut s = UiScript::new().unwrap();
-        s.set_auction(Some(AuctionState::default()));
+        s.set_auction(AuctionState {
+            open: true,
+            ..Default::default()
+        });
         let bag = |durability, flags| {
             let mut bag = two_item_bag();
             for (slot, item) in bag.slots.iter_mut() {

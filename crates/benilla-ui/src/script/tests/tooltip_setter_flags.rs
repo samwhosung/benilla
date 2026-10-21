@@ -300,7 +300,7 @@ fn the_mail_and_auction_item_setters_answer_one_value() {
         name: Some("Linen Cloth".into()),
         ..Default::default()
     });
-    s.set_auction(Some(auction));
+    s.set_auction(auction);
     {
         let mut model = s.model_mut();
         let item = CursorItem {

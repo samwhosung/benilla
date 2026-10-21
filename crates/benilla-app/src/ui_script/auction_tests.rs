@@ -67,7 +67,10 @@ fn the_auction_sell_button_paints_the_attached_item_in_place() {
 
     // `StartAuction` empties the slot in the verb (`0x4ce92a` → `0x4cd640`): its
     // `NEW_AUCTION_UPDATE` has repainted the button before the call returns.
-    s.set_auction(Some(benilla_ui::script::AuctionState::default()));
+    s.set_auction(benilla_ui::script::AuctionState {
+        open: true,
+        ..Default::default()
+    });
     let name: Option<String> = s
         .eval("StartAuction(100, 0, 120) return AuctionsItemButtonName:GetText()")
         .unwrap();

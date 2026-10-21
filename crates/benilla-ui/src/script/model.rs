@@ -992,8 +992,9 @@ pub(crate) struct Model {
     /// `HasNewMail()` (`0x4afea0`), from `MSG_QUERY_NEXT_MAIL_TIME` and `SMSG_RECEIVED_MAIL`.
     pub(crate) has_new_mail: bool,
 
-    /// The open auction house and the auction calls. `auction_selected` is each list's selected
-    /// auction id, 0 for none (`0x4cfda0`/`0x4cfec0`); `auction_can_query` is the 5 s throttle.
+    /// The auction house's lists and session as the app last pushed them, `None` until this VM's
+    /// first push, and the auction calls. `auction_selected` is each list's selected auction id, 0
+    /// for none (`0x4cfda0`/`0x4cfec0`); `auction_can_query` is the 5 s throttle.
     pub(crate) auction: Option<auction::AuctionState>,
     /// The Browse tab's class tree, pushed once per login.
     pub(crate) auction_item_classes: Vec<auction::AuctionCategory>,
