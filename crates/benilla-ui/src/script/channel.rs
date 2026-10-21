@@ -521,20 +521,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let number = super::binding_abi::s_str_to_int(&key);
             {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                // A number naming no confirmed slot names nothing (`0x49e880`), and the app ends
+                // the leave there (`0x49ee8a`).
                 let named = match number {
                     0 => Some(key.clone()),
                     n => confirmed_channel(&model, i64::from(n)).map(|c| c.name.clone()),
                 };
-                // `0x49e880` answers nothing for a number naming no confirmed slot, and the leave
-                // ends there (`0x49ee8a`).
-                let Some(named) = named else {
-                    return Ok(());
-                };
-                let resets = model.zone_channel_catalog.iter().any(|r| {
-                    r.guild_recruitment
-                        && r.resolved
-                            .as_deref()
-                            .is_some_and(|composed| composed.eq_ignore_ascii_case(&named))
+                let resets = named.is_some_and(|named| {
+                    model.zone_channel_catalog.iter().any(|r| {
+                        r.guild_recruitment
+                            && r.resolved
+                                .as_deref()
+                                .is_some_and(|composed| composed.eq_ignore_ascii_case(&named))
+                    })
                 });
                 if resets {
                     model.reset_guild_recruitment_mode();
