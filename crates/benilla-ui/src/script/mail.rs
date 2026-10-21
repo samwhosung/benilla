@@ -1533,6 +1533,35 @@ mod tests {
             .unwrap());
     }
 
+    /// A COD payment's header subject goes through `COD_PAYMENT` (`[rec+0x148] & 8`,
+    /// `0x4aeeb0`-`0x4aeee9`), whatever the mail's type; any other row's is pushed as held.
+    #[test]
+    fn a_cod_payments_subject_goes_through_cod_payment() {
+        let mut s = kept();
+        s.run("COD_PAYMENT = 'COD Payment: %s'").unwrap();
+        let mut paid = row(0);
+        (paid.mail_id, paid.cod_payment, paid.message_type) = (1, true, 2);
+        let mut plain = row(0);
+        plain.mail_id = 2;
+        s.set_mail(Some(MailState {
+            inbox: vec![paid, plain],
+            open: true,
+        }));
+        let subjects: (String, String) = s
+            .eval(
+                "local _, _, _, a = GetInboxHeaderInfo(1) local _, _, _, b = GetInboxHeaderInfo(2) \
+                 return a, b",
+            )
+            .unwrap();
+        assert_eq!(
+            subjects,
+            (
+                "COD Payment: Warchief's orders".to_string(),
+                "Warchief's orders".to_string()
+            )
+        );
+    }
+
     /// The header's first icon is the row's, a GM letter's and an item-less row's alike: the
     /// binding pushes what `0x4aec76`-`0x4aecf8` found, with no GM or item gate.
     #[test]

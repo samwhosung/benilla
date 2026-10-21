@@ -1571,6 +1571,58 @@ mod tests {
         );
     }
 
+    /// An auction notice names its item as `0x5d8b00` does, with the roll's suffix, in the
+    /// subject (`0x4acf5d`) and the invoice (`0x4af430`, from `[rec+0x250]` and `[rec+0x254]`).
+    #[test]
+    fn an_auction_notice_names_its_item_with_the_suffix() {
+        let states = crate::world_state::WorldStates::default();
+        let mut items = Items::default();
+        items.insert_template(2589, Some(crate::items::test_template("Linen Cloth")));
+        let props = crate::items::RandomProperties(
+            benilla_formats::RandomPropertyCatalog::from_rows(std::collections::HashMap::from([(
+                7,
+                benilla_formats::RandomProperty {
+                    suffix: "of the Bear".into(),
+                    ..Default::default()
+                },
+            )])),
+        );
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut names = NameCache::default();
+        names.insert_player(0x42, "Bob".into(), None);
+        let mut bodies = QueryCache::default();
+        bodies.insert(99, "0000000000000042:500:0".into());
+        let mut e = entry(1, None, 0, 30.0);
+        (e.message_type, e.sender_id) = (mail_message_type::AUCTION, Some(1));
+        (e.subject, e.item_text_id) = ("2589:7:1".into(), 99);
+        let strings =
+            |key: &str| (key == "AUCTION_WON_MAIL_SUBJECT").then(|| "Auction won: %s".to_string());
+        let row = resolve_row(
+            &e,
+            &bodies,
+            None,
+            &items,
+            None,
+            None,
+            None,
+            RowCatalogs::default(),
+            &names,
+            Ask::New(&commands),
+            crate::items::RollCatalogs {
+                props: Some(&props),
+                enchants: None,
+            },
+            &no_macros(&states),
+            &strings,
+        );
+        assert_eq!(row.subject, "Auction won: Linen Cloth of the Bear");
+        assert_eq!(
+            row.invoice.map(|i| i.item_name).as_deref(),
+            Some("Linen Cloth of the Bear")
+        );
+    }
+
     #[test]
     fn resolve_row_reads_the_item_and_body_caches() {
         let states = crate::world_state::WorldStates::default();

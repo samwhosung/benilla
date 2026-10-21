@@ -452,8 +452,8 @@ fn get_inbox_text_masks_a_letter_but_not_a_template() {
 }
 
 /// An auction notice's subject is masked by the list parse that rewrites it, when its item is
-/// held then (`0x4ace70`, then `0x4ad5b2`); one whose item lands later is rewritten by the
-/// template's callback (`0x4ad010` → `0x4ace40`), unmasked.
+/// held then (`0x4ace70`, then `0x4ad5b2`); one whose item is not held shows empty
+/// (`0x4acf3d`) until the template's callback rewrites it (`0x4ad010` → `0x4ace40`), unmasked.
 #[test]
 fn an_auction_subject_is_masked_by_the_list_parse_alone() {
     let mut h = Mailbox::new(Vec::new());
@@ -479,6 +479,9 @@ fn an_auction_subject_is_masked_by_the_list_parse_alone() {
         }],
     );
     h.feed();
+    // An item not held at the parse leaves the cell empty (`0x4acf3d`) until it lands.
+    let waiting: String = h.eval("local _, _, _, b = GetInboxHeaderInfo(2) return b");
+    assert_eq!(waiting, "");
     h.app
         .world_mut()
         .resource_mut::<crate::items::Items>()
