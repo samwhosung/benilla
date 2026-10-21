@@ -270,13 +270,15 @@ impl Cooldowns {
         category_recovery: Timer,
         on_hold: bool,
         gcd_category: u32,
-        gcd: Duration,
+        gcd_ms: i32,
     ) {
-        // The client's early-out when nothing is tracked (`0x6e12c3`).
+        // The client's early-out (`0x6e12c3`-`0x6e12e0`): nothing goes in when the recovery and
+        // category times, the held flag and the GCD time are all zero. A negative GCD time is not
+        // zero (`0x6e12db`), so it goes in, with a GCD that ends before its start ([`millis`]).
         if recovery.duration.is_zero()
             && category_recovery.duration.is_zero()
             && !on_hold
-            && gcd.is_zero()
+            && gcd_ms == 0
         {
             return;
         }
@@ -290,7 +292,7 @@ impl Cooldowns {
             category_recovery,
             on_hold,
             gcd_category,
-            gcd,
+            gcd: millis(gcd_ms),
         });
         self.insert_epoch = self.insert_epoch.wrapping_add(1);
     }
@@ -354,7 +356,7 @@ impl Cooldowns {
             },
             spell.cooldown_on_event(),
             0,
-            Duration::ZERO,
+            0,
         );
         self.flush();
     }
@@ -391,7 +393,7 @@ impl Cooldowns {
             },
             spell.is_some_and(|s| s.cooldown_on_event()),
             0,
-            Duration::ZERO,
+            0,
         );
         self.flush_item_leg();
     }
@@ -460,7 +462,7 @@ impl Cooldowns {
                     },
                     held.on_hold,
                     0,
-                    Duration::ZERO,
+                    0,
                 );
             }
         }
@@ -516,9 +518,10 @@ impl Cooldowns {
     /// item use, and at a pet-bar spell press (`0x4bd367`, into the pet's list), unless
     /// `startRecoveryCategory` and `startRecoveryTime` are both 0
     /// (`0x6e2e0f`-`0x6e2e21`), then with op 21 applied (`0x6e2e2c`) and nothing armed for a zero
-    /// result (`0x6e2e3d`). A negative one is inserted with no GCD a reader shows, which keeps only
-    /// a held record (`0x6e12c3`). Then the flush (`0x6e2e77`). `on_hold` is Attributes bit 25,
-    /// which also runs the usable refresh after the flush (`0x6e2e7c`-`0x6e2e85`).
+    /// result (`0x6e2e3d`). A negative one is inserted, as the insert tests the GCD time for zero
+    /// alone (`0x6e12db`), with a GCD no read shows (`0x6e15df`). Then the flush (`0x6e2e77`).
+    /// `on_hold` is Attributes bit 25, which also runs the usable refresh after the flush
+    /// (`0x6e2e7c`-`0x6e2e85`).
     pub(crate) fn start_gcd(
         &mut self,
         spell_id: u32,
@@ -553,7 +556,7 @@ impl Cooldowns {
             Timer::none(now),
             spell.cooldown_on_event(),
             spell.start_recovery_category,
-            Duration::from_millis(duration_ms.max(0) as u64),
+            duration_ms,
         );
         self.flush();
         if spell.cooldown_on_event() {
@@ -701,7 +704,7 @@ impl Cooldowns {
             },
             on_hold,
             gcd_category,
-            millis(gcd_ms),
+            gcd_ms,
         );
     }
 
@@ -726,7 +729,7 @@ impl Cooldowns {
             Timer::none(now),
             false,
             0,
-            Duration::ZERO,
+            0,
         );
         self.flush_item_leg();
     }
@@ -825,7 +828,7 @@ impl Cooldowns {
             category_recovery,
             args.held,
             0,
-            Duration::ZERO,
+            0,
         );
     }
 
@@ -858,7 +861,7 @@ impl Cooldowns {
             },
             false,
             0,
-            Duration::ZERO,
+            0,
         );
     }
 
