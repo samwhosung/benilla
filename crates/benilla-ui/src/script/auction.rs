@@ -1,15 +1,17 @@
-//! The auction-house bindings: the app pushes a snapshot of three lists, rows already resolved and
-//! in display order, and the Lua calls queue intents the app drains. Getters are keyed by `"list"`
+//! The auction-house bindings: the app pushes a snapshot of three lists, rows resolved and in
+//! wire order, and the Lua calls queue intents the app drains. Getters are keyed by `"list"`
 //! (Browse), `"bidder"` (Bids) or `"owner"` (Auctions), with `index` 1-based in the 50-row batch.
 //!
-//! The wire carries no sort: each list keeps an 8-deep stack of `(key, reversed)`, where clicking
-//! the primary column toggles it and another column is promoted with the direction it remembers.
+//! The order is the VM's: a list is sorted where the reference sorts it, by its key stack
+//! ([`AuctionSortStack`]), in `SortAuctionItems` and in the tail the app runs once a result's
+//! items are all known ([`super::UiScript::sort_auction_list`]), and holds still in between.
 
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{self, flag};
 use super::cursor;
 use super::Model;
+use crate::auction_sort::{floor_level, sort_column, AuctionSortStack};
 
 /// The three list types, in the order the app pushes them.
 pub const LIST: usize = 0;
@@ -22,15 +24,6 @@ pub const OWNER: usize = 2;
 pub const SORT_KEYS: [&str; 8] = [
     "level", "quality", "bid", "duration", "buyout", "status", "name", "seller",
 ];
-
-/// The column a sort name names, matched without case as `SStrCmpI` (`0x64a4c0`) matches it;
-/// `None` for any other name, which sorts nothing (`0x4cfd90`).
-pub fn sort_column(name: &str) -> Option<u8> {
-    SORT_KEYS
-        .iter()
-        .position(|k| crate::crt::str_cmp_i(k, name) == 0)
-        .map(|i| i as u8)
-}
 
 /// A list type's snapshot index, for the other modules (the tooltip's `SetAuctionItem`).
 pub(super) fn list_index_of(kind: &str) -> Option<usize> {
@@ -124,24 +117,18 @@ pub enum AuctionHighBidder {
 /// One of the three lists: the batch the server sent, the pre-cap match count and its sort stack.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AuctionListState {
-    /// The current batch in display order, at most 50 (the server's page cap).
+    /// The current batch, at most 50 (the server's page cap): in wire order as the app pushes it,
+    /// in display order once the VM holds it.
     pub rows: Vec<AuctionItemRow>,
     /// `totalAuctions`: the match count before the 50-row cap.
     pub total: u32,
-    /// The most-recently-clicked sort stack, primary first: `(key, reversed)`.
-    pub sort: Vec<(String, bool)>,
-    /// Which result the rows came from, counted by the app across every list.
+    /// The list's key stack. The VM takes the app's copy when a session opens and keeps its own
+    /// for the session, which the header clicks promote in place.
+    pub sort: AuctionSortStack,
+    /// Which result the rows came from, counted by the app across every list: a new one is laid
+    /// in wire order, as the result handler writes its records (`0x4cc880`), and one the VM holds
+    /// keeps the VM's order.
     pub page: u32,
-}
-
-impl AuctionListState {
-    /// This list's remembered direction for `key`, or `false` for a key it has never sorted by.
-    fn reversed(&self, key: &str) -> bool {
-        self.sort
-            .iter()
-            .find(|(k, _)| k == key)
-            .is_some_and(|(_, rev)| *rev)
-    }
 }
 
 /// One class of the Browse tab's category tree, from the player's `ItemClass.dbc`.
@@ -170,12 +157,25 @@ pub struct AuctionSubCategory {
 }
 
 /// The open auction house's snapshot, pushed whole by the app.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AuctionState {
     /// Browse / Bids / Auctions, indexed by [`LIST`], [`BIDDER`], [`OWNER`].
     pub lists: [AuctionListState; 3],
     /// `GetAuctionHouseDepositRate()`: the house's `AuctionHouse.dbc` deposit percentage.
     pub deposit_percent: u32,
+}
+
+impl Default for AuctionState {
+    /// Three empty lists, each with its world-entry stack.
+    fn default() -> Self {
+        Self {
+            lists: AuctionSortStack::seeded_all().map(|sort| AuctionListState {
+                sort,
+                ..Default::default()
+            }),
+            deposit_percent: 0,
+        }
+    }
 }
 
 /// A drained `QueryAuctionItems`, the `CMSG_AUCTION_LIST_ITEMS` filters: each is already a wire id,
@@ -218,8 +218,8 @@ const RUN_TIMES: [u32; 3] = [120, 480, 1440];
 pub struct AuctionBid {
     /// [`LIST`] or [`BIDDER`]: the Auctions tab has no bid button.
     pub list: usize,
-    /// 1-based row within the current batch; the app maps it to the wire auction id.
-    pub index: u32,
+    /// The auction at the bid's row when the call was made, as the verb reads it (`0x4cf610`).
+    pub auction_id: u32,
     pub amount: u32,
 }
 
@@ -230,6 +230,8 @@ impl super::UiScript {
         self.model_mut().auction_item_classes = classes;
     }
 
+    /// Push the session, or `None` at its close. A session already open keeps its key stacks,
+    /// and each list keeps its order while the push carries the same page.
     pub fn set_auction(&mut self, state: Option<AuctionState>) {
         let mut model = self.model_mut();
         // Only opening or closing the session drops the selection: it is an auction id, so it
@@ -237,7 +239,34 @@ impl super::UiScript {
         if model.auction.is_none() || state.is_none() {
             model.auction_selected = [0; 3];
         }
-        model.auction = state;
+        model.auction = match (model.auction.take(), state) {
+            (Some(held), Some(mut state)) => {
+                for (list, held) in state.lists.iter_mut().zip(held.lists) {
+                    list.sort = held.sort;
+                    if list.page == held.page {
+                        list.rows = in_held_order(&held.rows, std::mem::take(&mut list.rows));
+                    }
+                }
+                Some(state)
+            }
+            (_, state) => state,
+        };
+    }
+
+    /// A list's sort tail, run by the app when the last of a result's items is known (`0x4cc9f1`,
+    /// `0x4cca21`): the list sorted by its stack and its update signalled.
+    pub fn sort_auction_list(&mut self, list: usize) {
+        super::tick::verb(&self.lua, |model| sort_tail(model, list));
+    }
+
+    /// The 1-based row the auction `auction_id` shows at in `list`, for an instrument that clicks
+    /// it.
+    pub fn auction_display_index(&self, list: usize, auction_id: u32) -> Option<u32> {
+        let model = self.model_ref();
+        let rows = &model.auction.as_ref()?.lists.get(list)?.rows;
+        rows.iter()
+            .position(|r| r.auction_id == auction_id)
+            .map(|i| i as u32 + 1)
     }
 
     /// Push `CanSendAuctionQuery()`'s answer, the app's query throttle.
@@ -265,7 +294,7 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().auction_bids)
     }
 
-    /// Drain the 1-based owner-row indices `CancelAuction` was called on.
+    /// Drain the auctions `CancelAuction` was called on, each read at its row when called.
     pub fn take_auction_cancels(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().auction_cancels)
     }
@@ -275,7 +304,8 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().auction_starts)
     }
 
-    /// Drain the header clicks: `(list index, sort key)`, in click order. The app owns the stacks.
+    /// Drain the header clicks: `(list index, sort key)`, in click order, which the app replays
+    /// onto its own copy of the stacks, the one that outlives the session and the VM.
     pub fn take_auction_sorts(&mut self) -> Vec<(usize, String)> {
         std::mem::take(&mut self.model_mut().auction_sorts)
     }
@@ -308,6 +338,50 @@ pub(crate) fn clear_sell_slot(model: &mut Model) {
         super::cursor::unlock_item(model, item.guid);
         model.raise("NEW_AUCTION_UPDATE", Vec::new());
     }
+}
+
+/// `pushed`, a page the VM already holds, in the order of `held`, its rows matched by auction id;
+/// a page whose ids differ is taken as pushed.
+fn in_held_order(held: &[AuctionItemRow], pushed: Vec<AuctionItemRow>) -> Vec<AuctionItemRow> {
+    if held.len() != pushed.len() {
+        return pushed;
+    }
+    let mut used = vec![false; pushed.len()];
+    let mut order = Vec::with_capacity(held.len());
+    for h in held {
+        match (0..pushed.len()).find(|&k| !used[k] && pushed[k].auction_id == h.auction_id) {
+            Some(k) => {
+                used[k] = true;
+                order.push(k);
+            }
+            None => return pushed,
+        }
+    }
+    let mut rows: Vec<Option<AuctionItemRow>> = pushed.into_iter().map(Some).collect();
+    order.into_iter().filter_map(|k| rows[k].take()).collect()
+}
+
+/// The sort tails `0x4cd8b0`, `0x4cdcd0` and `0x4cddc0`: `qsort` by the list's stack, then the
+/// list's event with no test (`mov ecx,0x1a8`-`0x1aa`; `jmp 0x703e50`), a session or none.
+fn sort_tail(model: &mut Model, list: usize) {
+    if let Some(l) = model.auction.as_mut().and_then(|a| a.lists.get_mut(list)) {
+        let stack = l.sort;
+        stack.sort(&mut l.rows);
+    }
+    match list {
+        LIST => model.raise("AUCTION_ITEM_LIST_UPDATE", Vec::new()),
+        BIDDER => model.raise("AUCTION_BIDDER_LIST_UPDATE", Vec::new()),
+        _ => model.raise("AUCTION_OWNED_LIST_UPDATE", Vec::new()),
+    }
+}
+
+/// The auction id at `list`'s 1-based row `index`, as the getters read it.
+fn row_id(model: &Model, list: usize, index: usize) -> Option<u32> {
+    model
+        .auction
+        .as_ref()
+        .and_then(|a| index.checked_sub(1).and_then(|n| a.lists[list].rows.get(n)))
+        .map(|r| r.auction_id)
 }
 
 fn row_at(model: &Model, kind: &str, index: usize) -> Option<AuctionItemRow> {
@@ -428,7 +502,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 },
                 flag(can_use),
                 // The required level floored at 1 (`0x4cf091`-`0x4cf0b1`).
-                Value::Integer(i64::from(r.level.max(1))),
+                Value::Integer(i64::from(floor_level(&r))),
                 Value::Integer(i64::from(r.min_bid)),
                 Value::Integer(i64::from(r.min_increment)),
                 Value::Integer(i64::from(r.buyout_price)),
@@ -539,8 +613,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // SortAuctionItems(type, sort) (`0x4cfc00`): the sort name is matched first, then the type;
-    // either unknown sorts nothing (`0x4cfd90`). The header click is queued for the app, which
-    // pushes the reordered rows back.
+    // either unknown sorts nothing (`0x4cfd90`). Otherwise the list's driver promotes the column
+    // and runs the sort tail, which sorts and signals before the call returns (`0x4cd850`,
+    // `0x4cdc70`, `0x4cdd60`); the click is queued for the app's copy of the stack.
     g.set(
         "SortAuctionItems",
         lua.create_function(|lua, (kind, sort): (Value, Value)| {
@@ -553,13 +628,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(column) = sort_column(&sort) else {
                 return Ok(());
             };
-            let Some(i) = list_index(&kind) else {
+            let Some(list) = list_index(&kind) else {
                 return Ok(());
             };
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model
-                .auction_sorts
-                .push((i, SORT_KEYS[usize::from(column)].to_string()));
+            super::tick::verb(lua, |model| {
+                model
+                    .auction_sorts
+                    .push((list, SORT_KEYS[usize::from(column)].to_string()));
+                if let Some(a) = model.auction.as_mut() {
+                    a.lists[list].sort.promote(column);
+                }
+                sort_tail(model, list);
+            });
             Ok(())
         })?,
     )?;
@@ -579,10 +659,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(MultiValue::new());
             };
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let key = SORT_KEYS[usize::from(column)];
             let rev = list_index(&kind)
                 .zip(model.auction.as_ref())
-                .is_some_and(|(i, a)| a.lists[i].reversed(key));
+                .and_then(|(i, a)| a.lists[i].sort.reversed(column))
+                .unwrap_or(false);
             Ok(MultiValue::from_vec(vec![flag(rev)]))
         })?,
     )?;
@@ -796,9 +876,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(());
             };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            // The record at the row as the call finds it; no row, no bid (`0x4cf610`).
+            let Some(auction_id) = row_id(&model, list, index as usize) else {
+                return Ok(());
+            };
             model.auction_bids.push(AuctionBid {
                 list,
-                index,
+                auction_id,
                 amount,
             });
             Ok(())
@@ -869,7 +953,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let index =
                 binding_abi::index_arg32(lua, index, "Usage: SetSelectedAuctionItem(index)")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.auction_cancels.push(index);
+            // The owner record at the row; out of range sends nothing (`0x4d02c5`).
+            if let Some(auction_id) = row_id(&model, OWNER, index as usize) {
+                model.auction_cancels.push(auction_id);
+            }
             Ok(())
         })?,
     )?;
@@ -1021,6 +1108,7 @@ mod tests {
                 item_id: 1000 + auction_id,
                 // A cached template: a `None` quality is a row still in the item cache's miss.
                 name: Some(format!("Item {auction_id}")),
+                base_name: Some(format!("Item {auction_id}")),
                 quality: Some(1),
                 count: 1,
                 ..Default::default()
@@ -1162,8 +1250,9 @@ mod tests {
             2
         );
 
-        // The same two auctions, re-sorted into the opposite order.
-        s.set_auction(Some(page(&[22, 11])));
+        // The same two auctions, sorted into the opposite order: name, reversed.
+        s.run(r#"SortAuctionItems("list", "name") SortAuctionItems("list", "name")"#)
+            .unwrap();
         assert_eq!(
             s.eval::<i64>(r#"return GetSelectedAuctionItem("list")"#)
                 .unwrap(),
@@ -1432,22 +1521,6 @@ mod tests {
             14,
             "an exhausted scan skips the gate"
         );
-    }
-
-    #[test]
-    fn reversed_answers_for_any_remembered_key() {
-        let list = AuctionListState {
-            sort: vec![
-                ("bid".into(), false),
-                ("quality".into(), true),
-                ("level".into(), false),
-            ],
-            ..Default::default()
-        };
-        assert!(!list.reversed("bid"), "the primary, not reversed");
-        assert!(list.reversed("quality"), "remembered, and reversed");
-        assert!(!list.reversed("level"));
-        assert!(!list.reversed("seller"), "never sorted by: not reversed");
     }
 
     /// The attach clears with `SetCursorItem(0, …)` (`0x4ce56a`): no unlock and no

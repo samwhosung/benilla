@@ -608,7 +608,10 @@ fn the_bid_and_buyout_gates_read_the_purse() {
     let bids = s.take_auction_bids();
     assert_eq!(bids.len(), 1, "one bid queued, got {bids:?}");
     assert_eq!(bids[0].list, LIST);
-    assert_eq!(bids[0].index, 1);
+    assert_eq!(
+        bids[0].auction_id, 1,
+        "row 1's auction, read when the bid was placed"
+    );
     assert_eq!(bids[0].amount, 1000);
     assert!(
         !s.eval::<bool>("return BrowseBidButton:IsEnabled() ~= 0")

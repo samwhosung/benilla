@@ -7,10 +7,14 @@
 //! event. The window is on the interaction latch: walking out of the 5.56 yd service range closes
 //! it with no packet (`[0xb72410]` holds 30.864, that radius squared), and so does any other NPC
 //! window's open.
+//!
+//! The VM sorts the lists ([`AuctionSortStack`]); the app pushes each page in wire order, runs a
+//! page's sort tail once its items are known, and keeps the stacks across sessions and VMs.
 
 use bevy::prelude::*;
 
 use benilla_protocol::messages::{auction_filter, AuctionListEntry};
+use benilla_ui::auction_sort::{sort_column, AuctionSortStack};
 use benilla_ui::script::{
     AuctionCategory, AuctionHighBidder, AuctionItemRow, AuctionListState, AuctionState,
     AuctionSubCategory, UiScript, BIDDER, LIST, OWNER,
@@ -24,10 +28,6 @@ use crate::query_cache::Ask;
 use crate::ui_action::{show_messages, ui_error_text, MessageSink, Shown, UiError};
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
-
-mod sort;
-
-use sort::SortStack;
 
 mod net;
 
@@ -72,53 +72,6 @@ const SUBCLASS_OFFERS_INV_TYPES: u32 = 0x200;
 #[derive(Resource)]
 pub(crate) struct AuctionHouses(pub(crate) benilla_formats::AuctionHouseCatalog);
 
-/// A wire row resolved for display. Its 1-based position after the sort is the index the Lua API
-/// uses, so the drain maps a click back to [`Self::auction_id`] through the same sort.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub(crate) struct AuctionRow {
-    pub(crate) auction_id: u32,
-    pub(crate) item_entry: u32,
-    /// The random-suffix roll behind the name's suffix, the hover's enchant lines and the link.
-    pub(crate) random_property_id: u32,
-    /// The wire's spell charges, the hover's `+0x428` (`0x535a4a`).
-    pub(crate) charges: i32,
-    pub(crate) count: u32,
-    pub(crate) name: Option<String>,
-    pub(crate) texture: Option<String>,
-    pub(crate) quality: Option<u32>,
-    /// The item's `RequiredLevel`, 0 until its template lands.
-    pub(crate) level: u32,
-    pub(crate) start_bid: u32,
-    pub(crate) min_increment: u32,
-    pub(crate) buyout: u32,
-    pub(crate) current_bid: u32,
-    /// The time-left bucket, `1..=4`.
-    pub(crate) time_left: u32,
-    /// The deadline on the millisecond clock, [`benilla_ui::script::AuctionItemRow::deadline`].
-    pub(crate) deadline: u32,
-    /// The status sort's rank, [`benilla_ui::script::AuctionItemRow::bidder_rank`].
-    pub(crate) bidder_rank: u8,
-    /// The template's own name, unsuffixed: the name sort's key.
-    pub(crate) base_name: Option<String>,
-    /// Whether the player holds the high bid; the status sort's key.
-    pub(crate) player_holds_bid: bool,
-    /// `GetAuctionItemInfo`'s eleventh value, per [`high_bidder`].
-    pub(crate) high_bidder: AuctionHighBidder,
-    pub(crate) owner: Option<String>,
-    pub(crate) link: Option<String>,
-}
-
-impl AuctionRow {
-    /// The "current bid" column: the opening price until someone bids, since 0 means no bids.
-    pub(crate) fn displayed_bid(&self) -> u32 {
-        if self.current_bid == 0 {
-            self.start_bid
-        } else {
-            self.current_bid
-        }
-    }
-}
-
 /// One of the three lists.
 #[derive(Debug, Default)]
 pub(crate) struct AuctionListSlot {
@@ -128,11 +81,26 @@ pub(crate) struct AuctionListSlot {
     pub(crate) total: u32,
     /// A result for this list landed, an empty page included; the refreshes gate on it.
     received: bool,
-    sort: SortStack,
     /// Which result `entries` came from, from [`AuctionOpen::next_page`].
     page: u32,
     /// The millisecond tick the result was read at (`0x4cc865`), each row's deadline base.
     arrived_ms: u32,
+    /// The page's sort tail is owed: the reference's pending-lookups counter is not yet back at
+    /// zero (`0xb72644`, `0xb72648`, `0xb7264c`), so the list holds its event.
+    awaiting: bool,
+}
+
+/// The three lists' key stacks as the app keeps them: seeded at world entry (`0x48f5f9` →
+/// `0x4cc0f0`), promoted as the VM reports each header click, and pushed to a VM when its session
+/// opens. Nothing else writes them (`0x4cc238`-`0x4cc274`, the three drivers), so they outlast the
+/// window, the auctioneer and a `/reload`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SortStacks(pub(crate) [AuctionSortStack; 3]);
+
+impl Default for SortStacks {
+    fn default() -> Self {
+        Self(AuctionSortStack::seeded_all())
+    }
 }
 
 /// What the live probe (`crate::capture::ProbeAuctionPlugin`) reads to tell an empty answer from
@@ -156,9 +124,8 @@ pub(crate) struct AuctionOpen {
     pub(crate) lists: [AuctionListSlot; 3],
     /// Fire `AUCTION_HOUSE_SHOW` next feed: a hello reply landed.
     show_requested: bool,
-    /// Per list, a result landed, so its event is owed even for an identical page: the Browse
-    /// pane leaves "Searching" only on it (`Blizzard_AuctionUI.lua:187`). Only that list's: the
-    /// Auctions tab's update needs the `page` its `OnShow` sets (`Blizzard_AuctionUI.lua:817`).
+    /// Per list, a result landed this frame: the feed's lookups of its items stand for the
+    /// result handler's, which pass a callback (`0x4cc9bf`, `0x4ccbff`, `0x4cce4f`).
     list_result_landed: [bool; 3],
     /// The `Time::elapsed_secs_f64` before which a browse query is refused; opening clears it.
     query_gate: Option<f64>,
@@ -173,6 +140,8 @@ pub(crate) struct AuctionOpen {
     pending_bidder_refresh: bool,
     /// The count [`AuctionListSlot::page`] is drawn from; never reset, so no two results share one.
     next_page: u32,
+    /// The key stacks; neither [`Self::open`] nor [`Self::clear`] touches them.
+    pub(crate) sorts: SortStacks,
     pub(crate) wire: AuctionWireLog,
 }
 
@@ -206,8 +175,8 @@ impl AuctionMessage {
 }
 
 impl AuctionOpen {
-    /// The hello reply: a new auctioneer resets the lists and sort stacks; the same one keeps them
-    /// and re-shows, as the reference re-fires its show on every greeting.
+    /// The hello reply: a new auctioneer resets the lists; the same one keeps them and re-shows,
+    /// as the reference re-fires its show on every greeting. The sort stacks stay either way.
     pub(crate) fn open(&mut self, auctioneer: u64, house_id: u32) {
         if self.auctioneer != Some(auctioneer) {
             self.auctioneer = Some(auctioneer);
@@ -236,14 +205,7 @@ impl AuctionOpen {
         slot.total = total.max(slot.entries.len() as u32);
         slot.page = self.next_page;
         slot.arrived_ms = now_ms;
-    }
-
-    /// The auction id at a 1-based row of the sorted view, the order the player clicked in.
-    fn auction_id_at(index_1based: u32, rows: &[AuctionRow]) -> Option<u32> {
-        index_1based
-            .checked_sub(1)
-            .and_then(|i| rows.get(i as usize))
-            .map(|r| r.auction_id)
+        slot.awaiting = true;
     }
 
     /// Re-query our listings next frame, only if we hold them: the reference patches its cached
@@ -354,8 +316,19 @@ impl Plugin for UiAuctionPlugin {
                         .run_if(crate::ui_script::ingame_ui_up),
                     drain_auction.in_set(crate::ui_script::UiDrain),
                 ),
+            )
+            .add_systems(
+                OnEnter(crate::client_state::ClientState::InWorld),
+                seed_sorts_at_world_entry,
             );
     }
+}
+
+/// The world entry seeds the three stacks (`0x48f5f9` → `0x4cc0f0`, `0x4cc236`-`0x4cc274`), from
+/// `ClientInitializeGame` (`0x401570`), which runs once per entry from the glue screens and not on
+/// a worldport.
+fn seed_sorts_at_world_entry(mut auction: ResMut<AuctionOpen>) {
+    auction.sorts = SortStacks::default();
 }
 
 /// The wire's unclamped milliseconds left, as the reference's bucket 1 to 4.
@@ -431,7 +404,7 @@ fn resolve_row(
     names: &NameCache,
     ask: Ask<'_>,
     rolls: crate::items::RollCatalogs,
-) -> AuctionRow {
+) -> AuctionItemRow {
     let template = items.template(entry.item_entry, 0, ask);
     let roll = entry.random_property_id as u32;
     let name = template.map(|t| rolls.name(&t.name, roll));
@@ -449,9 +422,9 @@ fn resolve_row(
         )
     });
 
-    AuctionRow {
+    AuctionItemRow {
         auction_id: entry.auction_id,
-        item_entry: entry.item_entry,
+        item_id: entry.item_entry,
         random_property_id: roll,
         charges: entry.spell_charges,
         count: entry.count,
@@ -459,15 +432,14 @@ fn resolve_row(
         texture,
         quality,
         level,
-        start_bid: entry.start_bid,
+        min_bid: entry.start_bid,
         min_increment: entry.min_increment,
-        buyout: entry.buyout,
-        current_bid: entry.current_bid,
+        buyout_price: entry.buyout,
+        bid_amount: entry.current_bid,
         time_left: time_left_bucket(entry.time_left_ms),
         deadline: arrived_ms.wrapping_add(entry.time_left_ms),
         bidder_rank: bidder_rank(entry.bidder_guid, self_guid),
         base_name: template.map(|t| t.name.clone()),
-        player_holds_bid: self_guid.is_some_and(|g| g == entry.bidder_guid),
         high_bidder: high_bidder(list, entry, self_guid, names, ask),
         owner: names
             .resolve_player(entry.owner_guid, ask)
@@ -513,63 +485,6 @@ pub(crate) fn categories(
             })
         })
         .collect()
-}
-
-/// List `list`'s rows in display order.
-fn rows_for(
-    list: usize,
-    slot: &AuctionListSlot,
-    self_guid: Option<u64>,
-    items: &Items,
-    icons: Option<&ItemDisplays>,
-    names: &NameCache,
-    ask: Ask<'_>,
-    rolls: crate::items::RollCatalogs,
-) -> Vec<AuctionRow> {
-    let mut rows: Vec<AuctionRow> = slot
-        .entries
-        .iter()
-        .map(|e| {
-            resolve_row(
-                list,
-                e,
-                slot.arrived_ms,
-                self_guid,
-                items,
-                icons,
-                names,
-                ask,
-                rolls,
-            )
-        })
-        .collect();
-    slot.sort.apply(&mut rows);
-    rows
-}
-
-fn to_script_row(r: &AuctionRow) -> AuctionItemRow {
-    AuctionItemRow {
-        auction_id: r.auction_id,
-        item_id: r.item_entry,
-        random_property_id: r.random_property_id,
-        charges: r.charges,
-        name: r.name.clone(),
-        texture: r.texture.clone(),
-        count: r.count,
-        quality: r.quality,
-        level: r.level,
-        min_bid: r.start_bid,
-        min_increment: r.min_increment,
-        buyout_price: r.buyout,
-        bid_amount: r.current_bid,
-        high_bidder: r.high_bidder.clone(),
-        owner: r.owner.clone(),
-        time_left: r.time_left,
-        deadline: r.deadline,
-        bidder_rank: r.bidder_rank,
-        base_name: r.base_name.clone(),
-        link: r.link.clone(),
-    }
 }
 
 /// The DBC catalogs as one system param, since [`feed_auction`] is at Bevy's 16-param limit: the
@@ -667,20 +582,27 @@ fn feed_auction(
             let lists = [LIST, BIDDER, OWNER].map(|i| {
                 let slot = &auction.lists[i];
                 let ask = Ask::at(shown || auction.list_result_landed[i], &commands);
-                let rows = rows_for(
-                    i,
-                    slot,
-                    self_guid,
-                    &items,
-                    icons.as_deref(),
-                    &names,
-                    ask,
-                    rolls,
-                );
+                let rows: Vec<AuctionItemRow> = slot
+                    .entries
+                    .iter()
+                    .map(|e| {
+                        resolve_row(
+                            i,
+                            e,
+                            slot.arrived_ms,
+                            self_guid,
+                            &items,
+                            icons.as_deref(),
+                            &names,
+                            ask,
+                            rolls,
+                        )
+                    })
+                    .collect();
                 AuctionListState {
-                    rows: rows.iter().map(to_script_row).collect(),
                     total: slot.total.max(rows.len() as u32),
-                    sort: slot.sort.pairs(),
+                    rows,
+                    sort: auction.sorts.0[i],
                     page: slot.page,
                 }
             });
@@ -695,31 +617,55 @@ fn feed_auction(
 
         // A close is the core's, which told the VM; a disconnect's clear tells it nothing.
         let opened = last_open.is_none() && auction.auctioneer.is_some();
+        if opened {
+            // A new session lays each list it is given in wire order, so each one held sorts again.
+            for slot in &mut auction.lists {
+                slot.awaiting |= slot.received;
+            }
+        }
         let show_requested = std::mem::take(&mut auction.show_requested);
-        let landed = std::mem::take(&mut auction.list_result_landed);
-        let changed = fresh != *last;
-        // Owed per list: a result landed, or an async name or template filled one of its rows.
-        let owed: [bool; 3] = std::array::from_fn(|i| {
-            landed[i] || fresh.as_ref().map(|s| &s.lists[i]) != last.as_ref().map(|s| &s.lists[i])
+        auction.list_result_landed = [false; 3];
+        // Per list, the sort tail once every item of its page is answered, a record or a
+        // refusal, as the pending counter's last decrement runs it (`0x4cc9e8`, `0x4cca10`);
+        // otherwise, while no page waits, the update a landed name or template owes, which sorts
+        // nothing (`0x4cf290`, `0x4cf2b0`, `0x4cf2d0`).
+        let tails: [bool; 3] = std::array::from_fn(|i| {
+            let slot = &auction.lists[i];
+            slot.awaiting
+                && slot
+                    .entries
+                    .iter()
+                    .all(|e| items.template_answered(e.item_entry))
         });
-        if changed {
+        let renamed: [bool; 3] = std::array::from_fn(|i| {
+            !opened
+                && !auction.lists[i].awaiting
+                && list_content(fresh.as_ref(), i) != list_content(last.as_ref(), i)
+        });
+        for (slot, tail) in auction.lists.iter_mut().zip(tails) {
+            slot.awaiting &= !tail;
+        }
+        if fresh != *last {
             script.set_auction(fresh.clone());
         }
-        if opened {
+        if opened || (auction.auctioneer.is_some() && show_requested) {
             script.fire_event("AUCTION_HOUSE_SHOW", vec![]);
-        } else if auction.auctioneer.is_some() {
-            if show_requested {
-                script.fire_event("AUCTION_HOUSE_SHOW", vec![]);
+        }
+        if auction.auctioneer.is_some() {
+            for list in [LIST, BIDDER, OWNER] {
+                if tails[list] {
+                    script.sort_auction_list(list);
+                }
             }
             // Literal names, not a loop: `reference_ui`'s producer test finds fire sites by
             // literal.
-            if owed[LIST] {
+            if renamed[LIST] {
                 script.fire_event("AUCTION_ITEM_LIST_UPDATE", vec![]);
             }
-            if owed[BIDDER] {
+            if renamed[BIDDER] {
                 script.fire_event("AUCTION_BIDDER_LIST_UPDATE", vec![]);
             }
-            if owed[OWNER] {
+            if renamed[OWNER] {
                 script.fire_event("AUCTION_OWNED_LIST_UPDATE", vec![]);
             }
         }
@@ -736,6 +682,11 @@ fn feed_auction(
     })
 }
 
+/// A pushed list's rows and count: what a landed name or template changes.
+fn list_content(state: Option<&AuctionState>, list: usize) -> Option<(&[AuctionItemRow], u32)> {
+    state.map(|s| (s.lists[list].rows.as_slice(), s.lists[list].total))
+}
+
 /// Drain the Lua intents into the auction `CMSG`s.
 fn drain_auction(
     mut hosted_vm: crate::script_calls::HostedVm,
@@ -743,21 +694,19 @@ fn drain_auction(
     mut world_commands: Commands,
     commands: Res<NetCommands>,
     time: Res<Time>,
-    items: Res<Items>,
-    icons: Option<Res<ItemDisplays>>,
-    names: Res<NameCache>,
-    self_q: Query<&crate::net::Guid, With<SelfPlayer>>,
-    props: Option<Res<crate::items::RandomProperties>>,
-    enchants: Option<Res<crate::items::Enchants>>,
 ) {
     hosted_vm.run(|script| {
-        let rolls = crate::items::RollCatalogs {
-            props: props.as_deref(),
-            enchants: enchants.as_deref(),
-        };
         let Some(script) = script else {
             return;
         };
+        // The VM sorted in the verb; the app's copy of the stacks follows each click, with a
+        // session or without, as the drivers run with none (`0x4cd850`). A sort sends nothing.
+        for (which, key) in script.take_auction_sorts() {
+            if let (Some(stack), Some(column)) = (auction.sorts.0.get_mut(which), sort_column(&key))
+            {
+                stack.promote(column);
+            }
+        }
         let Some(auctioneer) = auction.auctioneer else {
             // No session: a stray close finds no cell (`0x4cd5fb`); every other intent is dropped.
             let _ = script.take_auction_close();
@@ -767,7 +716,6 @@ fn drain_auction(
             let _ = script.take_auction_bids();
             let _ = script.take_auction_cancels();
             let _ = script.take_auction_starts();
-            let _ = script.take_auction_sorts();
             return;
         };
 
@@ -823,49 +771,19 @@ fn drain_auction(
             });
         }
 
-        // Bids and cancels map the clicked row through the sorted view the feed pushed, roll
-        // included, reading the caches as the verbs do (`0x4cf879`).
-        let self_guid = self_q.iter().next().map(|g| g.0);
-        let bids = script.take_auction_bids();
-        let cancels = script.take_auction_cancels();
-        if !bids.is_empty() || !cancels.is_empty() {
-            for bid in bids {
-                let rows = rows_for(
-                    bid.list,
-                    &auction.lists[bid.list],
-                    self_guid,
-                    &items,
-                    icons.as_deref(),
-                    &names,
-                    Ask::Read,
-                    rolls,
-                );
-                if let Some(auction_id) = AuctionOpen::auction_id_at(bid.index, &rows) {
-                    let _ = commands.0.send(ClientCommand::AuctionPlaceBid {
-                        auctioneer,
-                        auction_id,
-                        price: bid.amount,
-                    });
-                }
-            }
-            for index in cancels {
-                let rows = rows_for(
-                    OWNER,
-                    &auction.lists[OWNER],
-                    self_guid,
-                    &items,
-                    icons.as_deref(),
-                    &names,
-                    Ask::Read,
-                    rolls,
-                );
-                if let Some(auction_id) = AuctionOpen::auction_id_at(index, &rows) {
-                    let _ = commands.0.send(ClientCommand::AuctionRemoveItem {
-                        auctioneer,
-                        auction_id,
-                    });
-                }
-            }
+        // Bids and cancels name the auction their verb read at its row (`0x4cf610`, `0x4d0260`).
+        for bid in script.take_auction_bids() {
+            let _ = commands.0.send(ClientCommand::AuctionPlaceBid {
+                auctioneer,
+                auction_id: bid.auction_id,
+                price: bid.amount,
+            });
+        }
+        for auction_id in script.take_auction_cancels() {
+            let _ = commands.0.send(ClientCommand::AuctionRemoveItem {
+                auctioneer,
+                auction_id,
+            });
         }
 
         // `StartAuction` emptied the sell slot in the verb (`0x4ce92a`); it sends the guid the
@@ -878,14 +796,6 @@ fn drain_auction(
                 buyout: req.buyout,
                 etime_minutes: req.duration,
             });
-        }
-
-        // Header clicks last: a row pick above indexes last frame's order, so sorting first would
-        // point it at another auction. A sort sends nothing.
-        for (which, key) in script.take_auction_sorts() {
-            if let Some(slot) = auction.lists.get_mut(which) {
-                slot.sort.click(&key);
-            }
         }
 
         if script.take_auction_close() {
@@ -960,43 +870,48 @@ mod tests {
         );
     }
 
+    /// Every result runs its sort tail, which signals with no test (`0x4cd8b0`): the Browse pane
+    /// leaves "Searching" only on it (`Blizzard_AuctionUI.lua:187`), even for an identical page.
     #[test]
     fn an_identical_list_result_still_owes_its_events() {
         let mut open = AuctionOpen::default();
         open.open(0x1234, 1);
 
         open.set_list(LIST, Vec::new(), 0, 0);
-        assert!(open.list_result_landed[LIST], "the first empty page");
+        assert!(open.lists[LIST].awaiting, "the first empty page");
 
-        // The feed consumes the flag when it fires.
-        open.list_result_landed = [false; 3];
+        // The feed runs the tail and clears it.
+        open.lists[LIST].awaiting = false;
 
         open.set_list(LIST, Vec::new(), 0, 0);
         assert!(
-            open.list_result_landed[LIST],
+            open.lists[LIST].awaiting,
             "an identical page owes the event too — this is the whole bug"
         );
     }
 
+    /// Only that list's tail: the Auctions tab's update needs the `page` its `OnShow` sets
+    /// (`Blizzard_AuctionUI.lua:817`).
     #[test]
     fn a_result_owes_only_its_own_lists_event() {
         let mut open = AuctionOpen::default();
         open.open(0x1234, 1);
+        let owed = |open: &AuctionOpen| open.lists.each_ref().map(|l| l.awaiting);
 
         open.set_list(LIST, Vec::new(), 0, 0);
         assert_eq!(
-            open.list_result_landed,
+            owed(&open),
             [true, false, false],
             "a browse result is not news about the player's bids or listings"
         );
 
-        open.list_result_landed = [false; 3];
+        open.lists[LIST].awaiting = false;
         open.set_list(OWNER, Vec::new(), 0, 0);
-        assert_eq!(open.list_result_landed, [false, false, true]);
+        assert_eq!(owed(&open), [false, false, true]);
 
-        open.list_result_landed = [false; 3];
+        open.lists[OWNER].awaiting = false;
         open.set_list(BIDDER, Vec::new(), 0, 0);
-        assert_eq!(open.list_result_landed, [false, true, false]);
+        assert_eq!(owed(&open), [false, true, false]);
     }
 
     #[test]
@@ -1314,22 +1229,6 @@ mod tests {
         list(&mut app);
         app.update();
         assert_eq!(name_queries(&rx), vec![BIDDER_GUID], "the next result does");
-    }
-
-    #[test]
-    fn an_unbid_row_shows_its_opening_price() {
-        let unbid = AuctionRow {
-            start_bid: 5000,
-            current_bid: 0,
-            ..Default::default()
-        };
-        assert_eq!(unbid.displayed_bid(), 5000);
-        let bid = AuctionRow {
-            start_bid: 5000,
-            current_bid: 7500,
-            ..Default::default()
-        };
-        assert_eq!(bid.displayed_bid(), 7500);
     }
 
     /// The feed and the sweep's auction leg, the feed's other inputs at rest.

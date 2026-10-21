@@ -313,14 +313,10 @@ fn owner_money_check(script: &UiScript, probe: &mut AuctionProbe) {
     }
 }
 
-/// The 1-based display index of our auction in the owner list. `CancelAuction(index)` maps back
-/// through the same sorted view, which is wire order while no header is clicked.
-fn owner_index_of(auction: &AuctionOpen, auction_id: u32) -> Option<u32> {
-    auction.lists[OWNER]
-        .entries
-        .iter()
-        .position(|e| e.auction_id == auction_id)
-        .map(|i| i as u32 + 1)
+/// The 1-based row our auction shows at in the owner list, the VM's order, which
+/// `CancelAuction(index)` reads.
+fn owner_index_of(script: &UiScript, auction_id: u32) -> Option<u32> {
+    script.auction_display_index(OWNER, auction_id)
 }
 
 /// Step (5)'s entry, where every step-4 exit lands.
@@ -1032,8 +1028,12 @@ fn auction_probe(
                     probe.phase = Phase::Done;
                     return;
                 };
-                if let Some(index) = owner_index_of(&auction, auction_id) {
-                    let entry = auction.lists[OWNER].entries[(index - 1) as usize];
+                let entry = auction.lists[OWNER]
+                    .entries
+                    .iter()
+                    .find(|e| e.auction_id == auction_id)
+                    .copied();
+                if let (Some(index), Some(entry)) = (owner_index_of(script, auction_id), entry) {
                     let (name, min_bid, buyout, count) = script
                         .eval::<(String, i64, i64, i64)>(&format!(
                             "local n, _, c, _, _, _, b, _, o = GetAuctionItemInfo(\"owner\", \
@@ -1155,7 +1155,7 @@ fn auction_probe(
                     return;
                 };
                 if !sent {
-                    let Some(index) = owner_index_of(&auction, auction_id) else {
+                    let Some(index) = owner_index_of(script, auction_id) else {
                         if now - since > ACTION_TIMEOUT_SECS {
                             error!(
                                 "PROBE_AUCTION: FAIL (7 cancel) — auction {auction_id} is not on \
@@ -1227,7 +1227,7 @@ fn auction_probe(
                     }
                 }
                 // The row must also leave the page the window shows.
-                if owner_index_of(&auction, auction_id).is_none() {
+                if owner_index_of(script, auction_id).is_none() {
                     info!(
                         "PROBE_AUCTION: PASS (7b cancel-list) — auction {auction_id} is gone \
                            from the \"owner\" list"

@@ -524,6 +524,12 @@ impl Items {
         self.templates.knows(entry)
     }
 
+    /// Whether the cache answered `entry`, with a record or a refusal: the point at which a lookup's
+    /// callback has run, status 1 or 0.
+    pub(crate) fn template_answered(&self, entry: u32) -> bool {
+        self.templates.answered(entry)
+    }
+
     /// Whether the server refused `entry`, not still pending; the cast-fail redisplay then shows
     /// the reference's `"UNKNOWN"` instead of waiting (`0x6e29b0` runs on the status-0 callback and
     /// finds no record, `0x6e2a49`).
