@@ -74,9 +74,11 @@ pub struct PartyState {
     /// The other party members in `party1`..`party4` order, empty when ungrouped. The player is
     /// never in it, as in `SMSG_GROUP_LIST`; in a raid it is our own subgroup's slice.
     pub members: Vec<PartyMemberInfo>,
-    /// `GetPartyLeaderIndex`: the leader's `members` slot, `1..=4`, else `0`: the player, and a
-    /// raid leader in another subgroup, who holds none of the slots (`0x84c150` is -1 then, and
-    /// the binding pushes it plus one). Not the leadership test: [`Self::leader_guid`] is.
+    /// `GetPartyLeaderIndex`: the leader-index cell `0x84c150` plus one, as the binding pushes it
+    /// (`0x4e9104`). The leader's `members` slot, `1..=4`; `0` for a leader in none of the slots,
+    /// the player and a raid leader in another subgroup among them, and before any list; `1` once
+    /// a list, a kick, a leave or a disband stored no leader. Not the leadership test:
+    /// [`Self::leader_guid`] is.
     pub leader_index: u32,
     /// The cached group-leader guid (the reference's `[0xbc75f8]:[0xbc75fc]`), `0` when
     /// ungrouped, fed from the wire rather than derived from [`Self::leader_index`].
@@ -473,7 +475,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetPartyLeaderIndex() → 0 (the player leads) or 1..4 (that party slot leads).
+    // GetPartyLeaderIndex() → the leader-index cell plus one ([`PartyState::leader_index`]).
     g.set(
         "GetPartyLeaderIndex",
         lua.create_function(|lua, ()| {

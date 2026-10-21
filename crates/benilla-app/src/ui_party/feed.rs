@@ -229,9 +229,8 @@ pub(crate) fn feed_party(
 
         let slots: Vec<&GroupMemberEntry> = group.party_slots().collect();
 
-        // Leader and master looter as party indices, 0 for us. They cover our own subgroup's slots
-        // only, so a raid leader elsewhere reads 0 here; `GetRaidRosterInfo` carries every
-        // subgroup.
+        // The master looter as a party index, 0 for us. It covers our own subgroup's slots only,
+        // as the leader index does; `GetRaidRosterInfo` carries every subgroup.
         let members: Vec<PartyMemberInfo> = slots
             .iter()
             .map(|m| PartyMemberInfo {
@@ -239,14 +238,6 @@ pub(crate) fn feed_party(
                 guid: m.guid,
             })
             .collect();
-        let leader_index = if Some(group.leader) == self_guid {
-            0
-        } else {
-            slots
-                .iter()
-                .position(|m| m.guid == group.leader)
-                .map_or(0, |i| i as u32 + 1)
-        };
         // `GetLootMethod` and `GetLootThreshold` read the stored cells, with no group test.
         let loot = group.loot_cells();
         // Methods 0 to 4 through the table `0x4e9280`, `ERROR!` above (`0x4e91ef`).
@@ -299,7 +290,7 @@ pub(crate) fn feed_party(
 
         let fresh = PartyState {
             members,
-            leader_index,
+            leader_index: group.leader_index,
             // `UnitIsPartyLeader` compares a resolved token's guid with it, which an index cannot
             // do for an unstreamed member; zero when ungrouped (see `PartyState::leader_guid`).
             leader_guid: group.leader,
@@ -1063,8 +1054,8 @@ fn test_apply_local(
     let handled = apply_test_intent(group, req, self_guid, target_guid);
     // The server answers each of these with a fresh `SMSG_GROUP_LIST`, signalled in the order a
     // real one is ([`GroupState::apply_list_awaiting`]): `PARTY_MEMBERS_CHANGED` whether or not it
-    // changed anything (`0x5e6c66`), the leader store's signal for a list naming a leader and the
-    // loot store's for one listing members, the raid roster as a raid list writes it, our row
+    // changed anything (`0x5e6c66`), the leader store's index and its signal for a list naming a
+    // leader, the loot store's signal for one listing members, the raid roster as a raid list writes it, our row
     // after any members (`0x5e6e6f`-`0x5e6e9c`), with its `RAID_ROSTER_UPDATE` (`0x4babef`) or the
     // one that ends a raid for the roster it drops (`0x4ba57b`), and a party's board.
     if matches!(
@@ -1084,6 +1075,7 @@ fn test_apply_local(
         let raid = group.group_type == GROUPTYPE_RAID;
         group.own_raid_row = (raid && !group.members.is_empty()).then(|| self_guid.unwrap_or(0));
         group.raid_leader = if raid { group.leader } else { 0 };
+        group.store_leader_index();
         group.listed = true;
         group.signal(GroupSignal::MembersChanged);
         if group.leader != 0 {

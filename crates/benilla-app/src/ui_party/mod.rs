@@ -104,6 +104,10 @@ pub struct GroupState {
     pub slots_emptied: bool,
     /// The leader cell (`[0xbc75f8]`), which the endings zero.
     pub leader: u64,
+    /// `GetPartyLeaderIndex`'s answer, the leader-index cell `0x84c150` plus one (`0x4e9104`): 0
+    /// from the session's start (`0x4e7c9f` stores -1), then what each list's and each ending's
+    /// leader store leaves ([`Self::store_leader_index`]).
+    pub leader_index: u32,
     /// The leader the raid roster's ranks were written against at its last rebuild (`0x4ba8f9`),
     /// which an ending's zeroing of the cell leaves alone.
     pub raid_leader: u64,
@@ -436,6 +440,7 @@ impl GroupState {
         // `leader == 0` tells it apart, since a solo leader's list is empty but names a leader.
         if leader == 0 {
             self.leave_group();
+            self.store_leader_index();
             return out;
         }
 
@@ -460,6 +465,7 @@ impl GroupState {
         self.members = members;
         self.slots_emptied = false;
         self.leader = leader;
+        self.store_leader_index();
         self.loot = loot;
         // A real list ends the sandbox; `synthetic_roster` re-raises the flag after its own call.
         self.test = false;
@@ -573,13 +579,30 @@ impl GroupState {
     }
 
     /// `0x4e84a0` with its argument set, then `0x4e8250(0)`, as the leave acknowledgement, the kick
-    /// and the disband each call them: the party slots and the leader cell empty (`0x4e858c`,
-    /// `0x4e85a9`), `PARTY_MEMBERS_CHANGED` signals (`0x4e85c5`), and the leader store finds the 0
-    /// already there and signals nothing (`0x4e8267`). The raid roster stays.
+    /// and the disband each call them: the party slots, the leader cell and the index cell empty
+    /// (`0x4e858c`, `0x4e85a9`, `0x4e85b5`), `PARTY_MEMBERS_CHANGED` signals (`0x4e85c5`), and the
+    /// leader store finds the 0 already there and signals nothing (`0x4e8267`). The raid roster
+    /// stays.
     fn end_party(&mut self) {
         self.slots_emptied = true;
         self.leader = 0;
+        self.store_leader_index();
         self.signal(GroupSignal::MembersChanged);
+    }
+
+    /// The leader store `0x4e8250` onto the index cell the list's or the ending's emptier zeroed
+    /// (`0x4e85b5`): a zero leader finds the zeroed leader cell and returns at once (`0x4e8267`),
+    /// leaving the index 0; any other stores -1 (`0x4e827a`), then the party slot that holds it
+    /// (`0x4e82b8`). [`Self::leader_index`] is the cell plus one.
+    pub(super) fn store_leader_index(&mut self) {
+        let leader = self.leader;
+        self.leader_index = if leader == 0 {
+            1
+        } else {
+            self.party_slots()
+                .position(|m| m.guid == leader)
+                .map_or(0, |i| i as u32 + 1)
+        };
     }
 
     /// Whether the raid roster holds rows (`[0xb713e0]` above 0), what every raid reader and the
@@ -779,6 +802,8 @@ impl GroupState {
             pending_invite,
             // The reference's stored loot cells, which no ending clears.
             loot_stored: _,
+            // The leader-index cell, which the list's own leader store writes next (`0x5e6c7e`).
+            leader_index: _,
             // Session state the feed fires events off: kept until `clear_session`.
             listed: _,
             signals: _,
