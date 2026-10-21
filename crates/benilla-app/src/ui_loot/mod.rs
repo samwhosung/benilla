@@ -860,6 +860,15 @@ fn feed_loot(
     })
 }
 
+/// [`feed_loot`] as a one-shot, for a test that drives the window from outside the module.
+#[cfg(test)]
+pub(crate) fn feed_loot_once(world: &mut World) {
+    use bevy::ecs::system::RunSystemOnce;
+    world
+        .run_system_once(feed_loot)
+        .expect("the loot feed runs as a one-shot system");
+}
+
 /// The sweep `0x4c1fa0`, auto-loot's and a disenchant hold's: every row gets a hand pick's sends,
 /// and emptying the window auto-releases it. Only `ALLOW_LOOT` rows (`0x4c2180`/`0x4c2196`); a
 /// hand click's bind gate plus a one-shot latch (`0x4c21c2`, `0x4c21e2`): later bind-on-pickup

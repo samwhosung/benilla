@@ -1030,6 +1030,37 @@ mod tests {
         assert_eq!(swings(&f), (vec![NEW], false));
     }
 
+    /// `LOOT_OPENED` is signalled by the response's copier (`0x4c2ac0`), whose listeners run in
+    /// place (`SignalEvent`, `0x703e50`), so a selecting verb a handler calls has committed by its
+    /// next line, as every verb's has: `TargetUnit` then `UnitName("target")` names the new
+    /// target. The window's feed is an engine turn; its handlers run as the turn ends, with the
+    /// host lent.
+    #[test]
+    fn a_loot_opened_handlers_target_call_applies_inside_it() {
+        let mut f = frame(true);
+        let world = f.app.world_mut();
+        world
+            .resource_mut::<crate::names::NameCache>()
+            .insert_player(NEW, "Red Whelp".into(), None);
+        world
+            .run_system_once(crate::ui_unit::feed_name_candidates)
+            .expect("the candidate feed runs as a one-shot system");
+        run(
+            &mut f,
+            r#"local l = CreateFrame("Frame")
+            l:RegisterEvent("LOOT_OPENED")
+            l:SetScript("OnEvent", function() TargetUnit("party1") SEEN = UnitName("target") end)"#,
+        );
+        let world = f.app.world_mut();
+        world
+            .resource_mut::<crate::ui_loot::LootState>()
+            .open(MOB, 1, 0, Vec::new());
+        crate::ui_loot::feed_loot_once(world);
+        let seen = eval::<Option<String>>(&mut f, "return SEEN");
+        assert_eq!(seen.as_deref(), Some("Red Whelp"), "the new target");
+        assert_eq!(selected(&f), Some(NEW));
+    }
+
     /// `TargetByName` (`0x489d60`) commits through `SetSelection 0x493540` before it returns, so
     /// `UnitName("target")` on the next line of the same chunk names the new unit, the one the
     /// commit picked.
