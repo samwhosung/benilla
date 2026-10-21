@@ -646,8 +646,9 @@ fn play_impact(
 /// The cast-edge router: wire [`CastEvent`]s and the public channel field → animation intents.
 ///
 /// - Start: the precast kit's anim becomes the [`CastHold`] (stage 4) and its sound rings.
-/// - Go: the hold drops and the cast kit plays; the GO's targets play their impacts inline when
-///   `Spell.dbc` Speed is 0 (`0x6e8bf0`), else fly a [`MissileSpawn`] (`0x6e8a50`).
+/// - Go: the hold drops, its spell's and the running auto-repeat spell's, and the cast kit plays;
+///   the GO's targets play their impacts inline when `Spell.dbc` Speed is 0 (`0x6e8bf0`), else
+///   fly a [`MissileSpawn`] (`0x6e8a50`).
 /// - Impact: a missile arrived on this unit ([`play_impact`]).
 /// - Fail: the hold drops silently.
 /// - Channel: `UNIT_CHANNEL_SPELL` polled per frame (`0x612a30`); observers have no packet. A set
@@ -664,7 +665,11 @@ pub(super) fn route_cast_visuals(
     mut sheaths: MessageWriter<super::SheathRequest>,
     mut spawns: KitSpawnWriters,
     visuals: Option<Res<SpellVisuals>>,
-    spells: Option<Res<crate::ui_action::Spells>>,
+    // The running auto-repeat spell `[0xceac30]`, whose kits every go stops on its caster.
+    (spells, auto_repeat): (
+        Option<Res<crate::ui_action::Spells>>,
+        Option<Res<crate::spell::AutoRepeatActive>>,
+    ),
     mut weapon_src: WeaponVisualSrc,
     units: Query<(Entity, &ObjectStore), Without<ItemObject>>,
     holds: Query<&CastHold>,
@@ -814,6 +819,24 @@ pub(super) fn route_cast_visuals(
                     spell_id: ev.spell_id,
                     class: FxClass::Hold,
                 });
+                // Then the running auto-repeat spell's on the same unit, `0x614150([0xceac30], 0)`
+                // whenever it is set (`0x6e7fed`-`0x6e7ffb`), whoever casts the go: the gate of
+                // the go's own stop (`0x6e7fca`) does not reach it.
+                if let Some(repeat) = auto_repeat.as_ref().and_then(|a| a.0) {
+                    if held_spell(&pending, ev.entity) == Some(repeat) {
+                        commands.entity(ev.entity).try_remove::<CastHold>();
+                        pending.insert(ev.entity, None);
+                    }
+                    out.sounds.write(SpellKitSound::StopHold {
+                        entity: ev.entity,
+                        spell_id: Some(repeat),
+                    });
+                    out.fx.write(SpellKitFx::Reap {
+                        entity: ev.entity,
+                        spell_id: repeat,
+                        class: FxClass::Hold,
+                    });
+                }
                 // A ranged-slot GO redraws ranged before the cast kit (`0x60f34c`, gate
                 // `Attributes & 0x2`, stages 0 and 4): what redraws a bow an emote lowered.
                 if spells
