@@ -259,6 +259,27 @@ impl FactionCatalog {
         }
     }
 
+    /// This catalog with one `Faction.dbc` row's reputation identity: list slot `rep_index`, and
+    /// `base` for the races in `race_mask`, whatever the class. Fixture constructor for tests.
+    pub fn with_reputation(
+        mut self,
+        faction_id: u32,
+        rep_index: i32,
+        race_mask: u32,
+        base: i32,
+    ) -> Self {
+        let info = FactionInfo {
+            rep_index,
+            team: 0,
+            race_masks: [race_mask, 0, 0, 0],
+            class_masks: [0; 4],
+            base: [base, 0, 0, 0],
+            flags: [0; 4],
+        };
+        self.factions.insert(faction_id, info);
+        self
+    }
+
     /// The template row for a `UNIT_FIELD_FACTIONTEMPLATE` id.
     pub fn template(&self, id: u32) -> Option<&FactionTemplate> {
         self.templates.get(&id)

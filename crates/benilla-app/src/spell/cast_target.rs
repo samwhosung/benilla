@@ -1113,6 +1113,67 @@ mod tests {
         assert!(read(None));
     }
 
+    /// A unit caster's context reads that caster, never the player: its stand and sheathe states
+    /// are its descriptor's bytes (its `GetStandState 0x60be50`), and the place rungs' `0x612cc0`
+    /// asks the node where it stands (`[unit+0xe0]` → `0x6706f0`). A pet in a room's interior
+    /// group is indoors while the player stands outdoors, and outdoors in an `EXTERIOR` (0x8)
+    /// group while the player is indoors.
+    #[test]
+    fn a_unit_casters_context_reads_its_own_posture_and_place() {
+        use benilla_assets::coords::wow_to_bevy;
+        use benilla_protocol::ObjectFields;
+        use bevy::ecs::system::RunSystemOnce;
+        const PET: u64 = 0x2a;
+        let read = |flags: u32, player_outdoors: bool| {
+            let mut world = World::new();
+            crate::player::insert_test_room(&mut world, flags);
+            world.init_resource::<crate::spell::AutoSelfCast>();
+            world.insert_resource(Reputations::default());
+            world.insert_resource(SelfGuid(Some(7)));
+            world.insert_resource(Selection::default());
+            world.insert_resource(crate::player::PlayerOutdoors(player_outdoors));
+            // `UNIT_FIELD_BYTES_1` (138) byte 0 and `UNIT_FIELD_BYTES_2` (164) byte 0: the player
+            // sits with its weapon away, the pet stands with its drawn.
+            let me = ObjectFields::from_pairs(&[(138, 1), (164, 0)]);
+            world.spawn((SelfPlayer, ObjectStore(me)));
+            let inside = wow_to_bevy([1.0, 2.0, 30.0]);
+            let pet = world
+                .spawn((
+                    ObjectStore(ObjectFields::from_pairs(&[(138, 0), (164, 1)])),
+                    Transform::from_translation(inside),
+                    GlobalTransform::from_translation(inside),
+                ))
+                .id();
+            world.insert_resource(GuidIndex([(PET, pet)].into()));
+            world
+                .run_system_once(|targeting: CastTargeting| {
+                    let me = targeting.context();
+                    let pet = targeting
+                        .context_for_caster(PET, None)
+                        .expect("the pet is streamed");
+                    (
+                        (me.self_outdoors, me.self_stand_state, me.self_sheathe_state),
+                        (
+                            pet.self_outdoors,
+                            pet.self_stand_state,
+                            pet.self_sheathe_state,
+                        ),
+                    )
+                })
+                .expect("the context builds")
+        };
+        assert_eq!(
+            read(0, true),
+            ((true, 1, 0), (false, 0, 1)),
+            "an interior group"
+        );
+        assert_eq!(
+            read(0x8, false),
+            ((false, 1, 0), (true, 0, 1)),
+            "an exterior group"
+        );
+    }
+
     /// `BindTarget`'s unit branch is one else-if chain (`0x6e5cad`-`0x6e5ee7`): the first arm whose
     /// test holds clears its own bit, and on a dead unit `0x400`, or `0x8600` for the `0x2` arm;
     /// with none holding the unit binds nothing (`0x6e60dc`).

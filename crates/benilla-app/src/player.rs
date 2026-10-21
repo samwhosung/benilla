@@ -35,6 +35,8 @@ pub(crate) mod camera_dynamics;
 pub(crate) mod camera_zoom;
 mod controller;
 mod world_focus;
+#[cfg(test)]
+pub(crate) use world_focus::insert_test_room;
 pub(crate) use world_focus::{publish_player_outdoors, PlayerOutdoors};
 // The remembered camera pose, inside `player/` to read the rig's `pub(super)` fields.
 mod camera_saved;

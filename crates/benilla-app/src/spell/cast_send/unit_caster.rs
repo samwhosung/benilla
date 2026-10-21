@@ -3,10 +3,12 @@
 //! `0x6e4b60(unit, spell, 0, guid)`), and `SendCast`'s tail for such a caster.
 //!
 //! The rungs read the caster through the context ([`cast_target::CastTargeting::context_for_caster`]);
-//! the reagents and totems (`0x6e400e`), the equipped item (`0x6e40e0`) and the combo points
-//! (`0x6e4e5b`) pass any caster but the active player, and the charm rung compares the charmer
-//! with the active player (`0x60994d`). The validator's cooldown rung queries the player's history
-//! whatever the caster (`0x60952e`, `0x609569`: `0x6e2ea0(spell, 0)`).
+//! the loot window (`0x6126f0`), the reagents and totems (`0x6e400e`), the equipped item
+//! (`0x6e40e0`) and the combo points (`0x6e4e5b`) pass any caster but the active player, the
+//! ranged rung asks the caster's own `GetVirtualItem` (vtable slot 38), and the charm rung compares
+//! the charmer with the active player (`0x60994d`). The validator's cooldown rung queries the
+//! player's history whatever the caster (`0x60952e`, `0x609569`: `0x6e2ea0(spell, 0)`), and its
+//! reputation rung the player's standing (`0x609f29` → `0x4d6370`).
 
 use std::time::Instant;
 
@@ -119,5 +121,205 @@ pub(super) fn send_tail(
     // A world with no pet bar keeps no pet history to owe.
     if let Some(owed) = unit.pet_gcds {
         owed.0.push((spell_id, now));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use benilla_formats::SpellDisplay;
+    use benilla_protocol::ObjectFields;
+    use bevy::ecs::system::RunSystemOnce;
+    use crossbeam_channel::Receiver;
+
+    use super::super::tests::{ctx, send, world};
+    use super::*;
+    use crate::net::{ClientCommand, GuidIndex, ObjectStore, SelfGuid};
+    use crate::target::Factions;
+    use crate::ui_action::CastFail;
+    use crate::ui_cast::CastReports;
+
+    const ME: u64 = 0x10;
+    const PET: u64 = 0x2a;
+    const AS_PET: CastCommit = CastCommit::Pet { caster: PET };
+
+    fn spells(rows: impl IntoIterator<Item = (u32, SpellDisplay)>) -> crate::ui_action::Spells {
+        let mut spells = crate::ui_action::Spells::empty_for_tests();
+        spells.catalog = benilla_formats::SpellCatalog::from_displays(rows.into_iter().collect());
+        spells
+    }
+
+    /// The attempt for `spell_id` as `commit`, with `fields` over a living caster's descriptor and
+    /// `factions` the catalog the reputation rung reads: what it refused.
+    fn press(
+        world: &mut World,
+        spell_id: u32,
+        commit: CastCommit,
+        fields: &[(u16, u32)],
+        factions: Option<&'static Factions>,
+    ) -> Vec<CastFail> {
+        let mut pairs = vec![(22, 100)];
+        pairs.extend_from_slice(fields);
+        let store: &'static ObjectStore =
+            Box::leak(Box::new(ObjectStore(ObjectFields::from_pairs(&pairs))));
+        world
+            .run_system_once(move |mut ladder: CastLadder| {
+                let base = ctx();
+                let with_caster = cast_target::CastContext {
+                    rel: cast_target::TargetRelations {
+                        self_store: Some(store),
+                        factions,
+                        ..base.rel
+                    },
+                    ..base
+                };
+                ladder.send(spell_id, &with_caster, commit);
+            })
+            .expect("the ladder runs as a one-shot system");
+        world.resource_mut::<CastReports>().take_refusals()
+    }
+
+    /// The casts sent since the last look, as `(caster, spell)`: the unit's in
+    /// `CMSG_PET_CAST_SPELL`, the player's `CMSG_CAST_SPELL` as caster 0.
+    fn casts(rx: &Receiver<ClientCommand>) -> Vec<(u64, u32)> {
+        rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::PetCastSpell {
+                    caster_guid,
+                    spell_id,
+                    ..
+                } => Some((caster_guid, spell_id)),
+                ClientCommand::CastSpell { spell_id, .. } => Some((0, spell_id)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The loot rungs (`0x6e4ca2`-`0x6e4d31`) read the caster's loot guid through `0x6126f0`,
+    /// which is 0 for any caster but the active player (`0x5fa6d0`): with a window latched, the
+    /// player's Disenchant is refused `0x82` and a unit's goes out.
+    #[test]
+    fn a_unit_caster_has_no_loot_window() {
+        const DISENCHANT: u32 = 13262;
+        let (mut world, rx) = world();
+        let disenchant = SpellDisplay {
+            effects: [99, 0, 0],
+            ..Default::default()
+        };
+        world.insert_resource(spells([(DISENCHANT, disenchant)]));
+        world.insert_resource(crate::ui_loot::LootLatch(Some(0xF110_0000_0000_0042)));
+
+        send(&mut world, DISENCHANT, CastCommit::Spell);
+        assert_eq!(
+            world.resource_mut::<CastReports>().take_refusals(),
+            [CastFail::local(DISENCHANT, 0x82)]
+        );
+        assert!(casts(&rx).is_empty());
+
+        send(&mut world, DISENCHANT, AS_PET);
+        assert!(world
+            .resource_mut::<CastReports>()
+            .take_refusals()
+            .is_empty());
+        assert_eq!(casts(&rx), [(PET, DISENCHANT)]);
+    }
+
+    /// The ranged rung (`0x6e4e13`) asks the caster's own `GetVirtualItem`, vtable slot 38, for
+    /// hand 2. A creature's (`0x605e30`) is null with no display id in
+    /// `UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + 2` (`0x605f10`), whatever else its descriptor holds; a
+    /// player's, possessed ones included (`0x5ec240`), reads its visible slot 17 (`0x5f0d60`).
+    #[test]
+    fn a_unit_casters_ranged_rung_asks_its_own_weapon() {
+        const THROW: u32 = 2764;
+        const DISPLAY_RANGED: u16 = 37 + 2;
+        const VISIBLE_RANGED_ENTRY: u16 = 258 + 12 * 17 + 2;
+        const PLAYER_TYPE: (u16, u32) = (2, 0x19);
+        let (mut world, rx) = world();
+        let throw = SpellDisplay {
+            attributes: 0x2,
+            ..Default::default()
+        };
+        world.insert_resource(spells([(THROW, throw)]));
+        let refused = [CastFail::local(THROW, 0x18)];
+
+        let creature_with_slot_17 = [(VISIBLE_RANGED_ENTRY, 2504)];
+        assert_eq!(
+            press(&mut world, THROW, AS_PET, &creature_with_slot_17, None),
+            refused,
+            "a creature's hand 2 is its display id"
+        );
+        assert_eq!(
+            press(&mut world, THROW, AS_PET, &[(DISPLAY_RANGED, 5260)], None),
+            []
+        );
+        assert_eq!(
+            press(
+                &mut world,
+                THROW,
+                AS_PET,
+                &[PLAYER_TYPE, (DISPLAY_RANGED, 5260)],
+                None
+            ),
+            refused,
+            "a possessed player's is its visible slot"
+        );
+        assert_eq!(
+            press(
+                &mut world,
+                THROW,
+                AS_PET,
+                &[PLAYER_TYPE, (VISIBLE_RANGED_ENTRY, 2504)],
+                None
+            ),
+            []
+        );
+        assert_eq!(casts(&rx), [(PET, THROW), (PET, THROW)]);
+    }
+
+    /// The reputation rung (`0x609f1f`) asks `GetFactionStanding 0x4d6370` with no caster: the
+    /// active player's base for its race and class plus the wire, whoever casts. A human player
+    /// Friendly by the faction's base passes the floor for a unit of another race, which as the
+    /// player's own descriptor would be refused `0x8f`.
+    #[test]
+    fn a_unit_casters_reputation_rung_reads_the_players_standing() {
+        const FACTION: u32 = 529;
+        const WARD: u32 = 17670;
+        // `UNIT_FIELD_BYTES_0` (36): race in byte 0, class in byte 1.
+        const HUMAN_WARRIOR: (u16, u32) = (36, 0x0101);
+        const ORC_WARRIOR: (u16, u32) = (36, 0x0102);
+        let (mut world, rx) = world();
+        let ward = SpellDisplay {
+            min_faction_id: FACTION,
+            // Friendly, whose floor is 3000.
+            min_reputation: 4,
+            ..Default::default()
+        };
+        world.insert_resource(spells([(WARD, ward)]));
+        // Friendly by its base for a human (race bit 1) alone.
+        let catalog =
+            benilla_formats::FactionCatalog::from_rows(Default::default(), Default::default())
+                .with_reputation(FACTION, 0, 0x1, 3000);
+        let factions: &'static Factions = Box::leak(Box::new(Factions::from_catalog(catalog)));
+        world.insert_resource(SelfGuid(Some(ME)));
+        let me = world
+            .spawn(ObjectStore(ObjectFields::from_pairs(&[HUMAN_WARRIOR])))
+            .id();
+        world.resource_mut::<GuidIndex>().0.insert(ME, me);
+
+        assert_eq!(
+            press(&mut world, WARD, AS_PET, &[ORC_WARRIOR], Some(factions)),
+            []
+        );
+        assert_eq!(casts(&rx), [(PET, WARD)]);
+        assert_eq!(
+            press(
+                &mut world,
+                WARD,
+                CastCommit::Spell,
+                &[ORC_WARRIOR],
+                Some(factions)
+            ),
+            [CastFail::local(WARD, 0x8f)]
+        );
+        assert!(casts(&rx).is_empty());
     }
 }

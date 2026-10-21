@@ -190,6 +190,56 @@ pub(crate) fn publish_player_outdoors(
     }
 }
 
+/// One placed building for the entity outdoors test, with the terrain it is asked against: a
+/// group of `flags` whose 10-yd floor spans WoW x and y -5 to 5 at z 30, placed at the world's
+/// origin.
+#[cfg(test)]
+pub(crate) fn insert_test_room(world: &mut World, flags: u32) {
+    use benilla_assets::{AdtTile, WmoGroupNav, WmoModel};
+    use benilla_world::terrain_stream::TerrainStreamer;
+    use benilla_world::wmo_portal::WmoPortalInstance;
+
+    let floor = |a: [f32; 2], b: [f32; 2], c: [f32; 2]| {
+        [[a[0], a[1], 30.0], [b[0], b[1], 30.0], [c[0], c[1], 30.0]]
+    };
+    let tris = vec![vec![
+        floor([-5.0, -5.0], [5.0, -5.0], [5.0, 5.0]),
+        floor([-5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]),
+    ]];
+    let (bounds, all) = benilla_assets::collision_tri_bounds(&tris);
+    let room = WmoModel {
+        group_nav: vec![WmoGroupNav {
+            flags,
+            bbox_min: [-5.0, -5.0, 30.0],
+            bbox_max: [5.0, 5.0, 34.0],
+            ref_start: 0,
+            ref_count: 0,
+            area_table_id: 0,
+            fog_indices: [0; 4],
+            group_liquid: benilla_formats::NO_GROUP_LIQUID,
+        }],
+        group_collision_grids: benilla_assets::collision_tri_grids(&tris),
+        group_collision_tris: tris,
+        group_collision_bounds: bounds,
+        collision_bounds: all,
+        ..WmoModel::default()
+    };
+    let mut wmos = Assets::<WmoModel>::default();
+    let handle = wmos.add(room);
+    world.insert_resource(wmos);
+    world.init_resource::<Assets<AdtTile>>();
+    world.init_resource::<TerrainStreamer>();
+    world.spawn(WmoPortalInstance {
+        handle,
+        world_from_local: bevy::math::Affine3A::IDENTITY,
+        name_set: 0,
+        visible: vec![true],
+        interior_fog: vec![false],
+        liquid_visited: vec![false],
+        flooded: vec![None],
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -516,60 +566,15 @@ mod tests {
     #[test]
     fn the_outdoors_answer_is_asked_where_the_body_stands() {
         use benilla_assets::coords::wow_to_bevy;
-        use benilla_assets::{AdtTile, WmoGroupNav, WmoModel};
-        use benilla_world::terrain_stream::TerrainStreamer;
-        use benilla_world::wmo_portal::WmoPortalInstance;
-        use bevy::math::Affine3A;
 
-        // One group: a 10-yd floor at WoW z 30 around the model's origin, placed at the world's.
-        let room = |flags: u32| {
-            let floor = |a: [f32; 2], b: [f32; 2], c: [f32; 2]| {
-                [[a[0], a[1], 30.0], [b[0], b[1], 30.0], [c[0], c[1], 30.0]]
-            };
-            let tris = vec![vec![
-                floor([-5.0, -5.0], [5.0, -5.0], [5.0, 5.0]),
-                floor([-5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]),
-            ]];
-            let (bounds, all) = benilla_assets::collision_tri_bounds(&tris);
-            WmoModel {
-                group_nav: vec![WmoGroupNav {
-                    flags,
-                    bbox_min: [-5.0, -5.0, 30.0],
-                    bbox_max: [5.0, 5.0, 34.0],
-                    ref_start: 0,
-                    ref_count: 0,
-                    area_table_id: 0,
-                    fog_indices: [0; 4],
-                    group_liquid: benilla_formats::NO_GROUP_LIQUID,
-                }],
-                group_collision_grids: benilla_assets::collision_tri_grids(&tris),
-                group_collision_tris: tris,
-                group_collision_bounds: bounds,
-                collision_bounds: all,
-                ..WmoModel::default()
-            }
-        };
-        // One frame of the system over that room, from the answer `last`.
+        // One frame of the system over the test room, from the answer `last`.
         let ask = |flags: u32, player: Player, viewer: Viewer, last: bool| {
             let mut app = App::new();
-            let mut wmos = Assets::<WmoModel>::default();
-            let handle = wmos.add(room(flags));
-            app.insert_resource(wmos)
-                .init_resource::<Assets<AdtTile>>()
-                .init_resource::<TerrainStreamer>()
-                .insert_resource(player)
+            insert_test_room(app.world_mut(), flags);
+            app.insert_resource(player)
                 .insert_resource(viewer)
                 .insert_resource(PlayerOutdoors(last))
                 .add_systems(Update, publish_player_outdoors);
-            app.world_mut().spawn(WmoPortalInstance {
-                handle,
-                world_from_local: Affine3A::IDENTITY,
-                name_set: 0,
-                visible: vec![true],
-                interior_fog: vec![false],
-                liquid_visited: vec![false],
-                flooded: vec![None],
-            });
             app.update();
             app.world().resource::<PlayerOutdoors>().0
         };

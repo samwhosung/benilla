@@ -1130,7 +1130,7 @@ mod tests {
     static EMPTY_REPUTATIONS: Reputations = Reputations::from_slots(Vec::new());
 
     /// A context with nothing selected: every rung that needs world state is inert.
-    fn ctx() -> cast_target::CastContext<'static> {
+    pub(super) fn ctx() -> cast_target::CastContext<'static> {
         cast_target::CastContext {
             selection_guid: None,
             self_guid: Some(0x0000_0000_0000_0007),
@@ -1157,7 +1157,7 @@ mod tests {
 
     /// A World with exactly the resources [`CastLadder`] gathers and no `Spells`, so every rung
     /// that needs the spell's row is inert.
-    fn world() -> (World, Receiver<ClientCommand>) {
+    pub(super) fn world() -> (World, Receiver<ClientCommand>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut world = World::new();
         world.insert_resource(NetCommands(tx));
@@ -1179,7 +1179,7 @@ mod tests {
         (world, rx)
     }
 
-    fn send(world: &mut World, spell_id: u32, commit: CastCommit) {
+    pub(super) fn send(world: &mut World, spell_id: u32, commit: CastCommit) {
         world
             .run_system_once(move |mut ladder: CastLadder| {
                 ladder.send(spell_id, &ctx(), commit);
