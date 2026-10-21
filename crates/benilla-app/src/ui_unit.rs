@@ -151,11 +151,13 @@ impl Plugin for UiUnitPlugin {
                 feed_player_control
                     .after(crate::player::ControlRestore)
                     .before(crate::ui_action::CooldownEvents),
+                // After the aura feed, whose resolver inputs it measures, and ahead of the unit
+                // events, whose `PLAYER_TARGET_CHANGED` handlers ask the new target's range
+                // (`CanInspect`, `0x48a1b0`).
+                feed_unit_reach.after(crate::ui_aura::AuraEvents),
                 // After the action feed, whose usable refresh precedes these events.
                 fire_unit_events.after(crate::ui_action::CooldownEvents),
-                // After the aura feed, whose resolver inputs it measures.
-                feed_unit_reach.after(crate::ui_aura::AuraEvents),
-                // After the same feed, whose guids it covers.
+                // After the aura feed, whose guids it covers.
                 held::feed_chain_units.after(crate::ui_aura::AuraEvents),
                 // After every snapshot above is pushed, so a handler reads the new reaction.
                 fire_faction_on_forced_table.after(crate::ui_aura::AuraEvents),
