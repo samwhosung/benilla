@@ -115,6 +115,7 @@ impl GoRig {
                         None,
                         None,
                         item,
+                        caster,
                         &mut commands,
                         &index,
                         &casting,

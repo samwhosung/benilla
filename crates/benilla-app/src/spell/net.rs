@@ -312,7 +312,7 @@ fn on_spell_go(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
         dest,
         ammo_display_id,
         item_caster,
-        ..
+        unit_caster,
     } = ev
     {
         let engaged = !sc.engaged_self.is_empty();
@@ -341,6 +341,7 @@ fn on_spell_go(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
             dest,
             ammo_display_id,
             item_caster,
+            unit_caster,
             &mut sc.commands,
             &l.index,
             &sc.casting,
@@ -1095,6 +1096,8 @@ fn spell_go(
     dest: Option<[f32; 3]>,
     ammo_display_id: Option<u32>,
     item_caster: Option<u64>,
+    // The packet's second guid as written, the caster slot `0x6e7f8b` looks up as a unit.
+    unit_caster: u64,
     commands: &mut Commands,
     index: &GuidIndex,
     casting: &Query<&Casting>,
@@ -1136,8 +1139,10 @@ fn spell_go(
         misses.len()
     );
     // The `use` trace's third link, after `target::click`: a caster we never streamed drops every
-    // visual below. A SPELLCASTER GameObject (type 22) is its own caster; vmangos writes that guid
-    // as 0 and the decode resolves it (`benilla_protocol::events`' `spell_caster`).
+    // visual below, its instant impacts too, which the reference plays (`0x6e816b`). A
+    // SPELLCASTER GameObject (type 22) is its own caster: vmangos writes the caster slot as 0,
+    // which the decode resolves to the first guid (`benilla_protocol::events`' `spell_caster`),
+    // and it plays as a cast with no caster unit (`0x6e7f8b`).
     if benilla_assets::trace::enabled_for("use") {
         benilla_assets::trace::line(
             "use",
@@ -1285,56 +1290,78 @@ fn spell_go(
     }
     // The miss list's lines, words and `UNIT_COMBAT` are the combat log's
     // (`crate::combat_log`, `0x6e7d65`-`0x6e7e71`).
-    // Keyed by spell id, like the reap `0x614150(spellId, 0)`: a proc's GO must not clear another
-    // spell's precast state.
-    if let Some(&e) = index.0.get(&caster) {
-        if casting.get(e).is_ok_and(|c| c.spell_id == spell_id) {
-            commands.entity(e).remove::<Casting>();
-        }
-        // The precast ends with its own spell's GO (`0x60d040` at `0x6e7fc5`), its tail run as
-        // `0x6e4870` answers for the record and the cast flags (`0x6e7fa1`, pushed at `0x6e7fbd`).
-        edits.push(crate::creature_anim::UnitEdit::EndPrecast {
-            entity: e,
-            spell_id: Some(spell_id),
-            tail: display.test_attributes_and_flags(u32::from(cast_flags)),
-        });
-        // The GO's chain-hop fill (`0x6e800d`), the producer for non-channelled chain spells. It
-        // must precede the CastEvent: the cast kit's chain proc consumes it the same frame. The
-        // reference gates it on the attribute predicate `0x6e4870`, whose role here is untraced;
-        // this fills unconditionally, harmless since consumption needs a chain proc and every fill
-        // clears.
-        fill_chain_hops(caster, e, &hits, commands, index);
-        cast_events.write(CastEvent {
-            entity: e,
-            spell_id,
-            kind: CastEventKind::Go,
-            cast_flags,
-            item_cast: item_caster.is_some(),
-            seq,
-        });
-        // Targets not streamed to us drop out. The miss code picks the victim's dodge or block
-        // clip on the missile's arrival.
-        let hits: Vec<Entity> = hits
-            .iter()
-            .filter_map(|g| index.0.get(g).copied())
-            .collect();
-        let misses: Vec<(Entity, u8)> = misses
-            .iter()
-            .filter_map(|m| index.0.get(&m.target).map(|&e| (e, m.info)))
-            .collect();
-        // A pure dest cast (ground AoE, empty lists) rides the same message: the point is a target.
-        let dest = dest.map(benilla_assets::coords::wow_to_bevy);
-        if !hits.is_empty() || !misses.is_empty() || dest.is_some() {
+    // Targets not streamed to us drop out. The miss code picks the victim's dodge or block clip on
+    // the missile's arrival.
+    let hits: Vec<(u64, Entity)> = hits
+        .iter()
+        .filter_map(|&g| index.0.get(&g).map(|&e| (g, e)))
+        .collect();
+    let misses: Vec<(Entity, u8)> = misses
+        .iter()
+        .filter_map(|m| index.0.get(&m.target).map(|&e| (e, m.info)))
+        .collect();
+    // The caster slot is the second guid looked up as a unit (`0x6e7f8b`, mask 8): a game object's
+    // cast writes it 0, so it finds none and skips every leg that needs one.
+    let unit = index
+        .0
+        .get(&unit_caster)
+        .copied()
+        .filter(|&e| stores.get(e).is_ok_and(|s| s.is_unit()));
+    let Some(e) = unit else {
+        // The instant impacts run on the hit list whatever the caster (`0x6e816b` → `0x6e8bf0`);
+        // the cast kit (`0x6e8066`), the dest effect and the missiles (`0x6e8219`) need one.
+        let impacts = display.speed <= 0.0 && !hits.is_empty();
+        if let (true, Some(&caster)) = (impacts, index.0.get(&caster)) {
             go_targets.write(SpellGoTargets {
-                caster: e,
+                caster,
                 spell_id,
-                hits,
+                hits: hits.into_iter().map(|(_, e)| e).collect(),
                 misses,
-                dest,
+                dest: None,
                 ammo_display_id,
                 seq,
             });
         }
+        return;
+    };
+    // Keyed by spell id, like the reap `0x614150(spellId, 0)`: a proc's GO must not clear another
+    // spell's precast state.
+    if casting.get(e).is_ok_and(|c| c.spell_id == spell_id) {
+        commands.entity(e).remove::<Casting>();
+    }
+    // The precast ends with its own spell's GO (`0x60d040` at `0x6e7fc5`), its tail run as
+    // `0x6e4870` answers for the record and the cast flags (`0x6e7fa1`, pushed at `0x6e7fbd`).
+    edits.push(crate::creature_anim::UnitEdit::EndPrecast {
+        entity: e,
+        spell_id: Some(spell_id),
+        tail: display.test_attributes_and_flags(u32::from(cast_flags)),
+    });
+    // The GO's chain-hop fill (`0x6e800d`), the producer for non-channelled chain spells. It must
+    // precede the CastEvent: the cast kit's chain proc consumes it the same frame. The reference
+    // gates it on the attribute predicate `0x6e4870`, whose role here is untraced; this fills
+    // unconditionally, harmless since consumption needs a chain proc and every fill clears.
+    let hit_guids: Vec<u64> = hits.iter().map(|&(g, _)| g).collect();
+    fill_chain_hops(unit_caster, e, &hit_guids, commands, index);
+    cast_events.write(CastEvent {
+        entity: e,
+        spell_id,
+        kind: CastEventKind::Go,
+        cast_flags,
+        item_cast: item_caster.is_some(),
+        seq,
+    });
+    // A pure dest cast (ground AoE, empty lists) rides the same message: the point is a target.
+    let dest = dest.map(benilla_assets::coords::wow_to_bevy);
+    if !hits.is_empty() || !misses.is_empty() || dest.is_some() {
+        go_targets.write(SpellGoTargets {
+            caster: e,
+            spell_id,
+            hits: hits.into_iter().map(|(_, e)| e).collect(),
+            misses,
+            dest,
+            ammo_display_id,
+            seq,
+        });
     }
 }
 
@@ -2262,6 +2289,7 @@ mod tests {
                             None,
                             None,
                             None,
+                            Self::SELF,
                             &mut commands,
                             &index,
                             &casting,
@@ -3193,6 +3221,7 @@ mod tests {
                         None,
                         None,
                         item_caster,
+                        caster,
                         &mut commands,
                         &index,
                         &casting,
@@ -3343,12 +3372,11 @@ mod tests {
             .init_resource::<crate::ui_pet::PetBar>()
             .init_resource::<crate::items::Items>();
 
-        // A caster and two streamed victims; guid 40 is never streamed to us.
+        // A caster and two streamed victims, units (`OBJECT_FIELD_TYPE` 0x9) as the go's caster
+        // slot finds them (`0x6e7f8b`); guid 40 is never streamed to us.
         let mut spawn = |guid: u64| {
-            let e = app
-                .world_mut()
-                .spawn((Guid(guid), ObjectStore::default()))
-                .id();
+            let unit = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(2, 0x9)]));
+            let e = app.world_mut().spawn((Guid(guid), unit)).id();
             app.world_mut()
                 .resource_mut::<GuidIndex>()
                 .0
@@ -3396,6 +3424,7 @@ mod tests {
                         None,
                         None,
                         None,
+                        10,
                         &mut commands,
                         &index,
                         &casting,
@@ -3784,6 +3813,7 @@ mod tests {
                             None,
                             None,
                             None,
+                            caster,
                             &mut commands,
                             &index,
                             &casting,
