@@ -175,6 +175,7 @@ pub(crate) fn drain_click_casts(
                     spell_id,
                     entity,
                     guid,
+                    auto_loot,
                 } => {
                     debug!("ui_action: right-click casts {spell_id} at {guid:#x}");
                     ladder.send(
@@ -182,6 +183,10 @@ pub(crate) fn drain_click_casts(
                         &targeting.context_at(entity, guid),
                         crate::spell::CastCommit::Spell,
                     );
+                    // Then the store, whatever the attempt answered (`0x5f06e1`-`0x5f06ef`).
+                    if let (Some(byte), Some(script)) = (auto_loot, script.as_deref_mut()) {
+                        script.set_auto_loot(byte);
+                    }
                 }
                 // The key goes through the shared `CGItem::Use` fork, as a bag click does.
                 super::ClickCast::Key(it) => {

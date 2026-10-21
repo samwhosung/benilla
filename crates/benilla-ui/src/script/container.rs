@@ -152,8 +152,9 @@ pub enum UseFork {
     Read,
     /// A mail letter, the instance's `ITEM_FIELD_ITEM_TEXT_ID`, opens the reader.
     Letter,
-    /// A lootable template sends `CMSG_OPEN_ITEM` (`0x5d8f7c`), locking the item first
-    /// (`0x5edcd9`).
+    /// A lootable template sends `CMSG_OPEN_ITEM` (`0x5d8f7c`) through `OpenItem`, which locks
+    /// the item (`0x5edcd9`) after its `SetAutoLoot` (`0x5edcb6`): the host's, as that store
+    /// sweeps an open window first.
     Open,
     /// The plain use, and a slot whose template is still in flight, which `0x5d9ff0` reads as
     /// not equippable.
@@ -176,7 +177,8 @@ pub enum UseArm {
 }
 
 /// One `UseContainerItem` call past its gates: the slot, the item it resolved (`0x4fa1a6`) and
-/// the arm it took, whose lock the call has already taken.
+/// the arm it took, whose lock the call has already taken, but the open arm's, which the host
+/// takes ([`UseFork::Open`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ContainerUse {
     pub bag: i64,
@@ -549,9 +551,7 @@ fn use_cleared(
         may_cast,
     }));
     match arm {
-        UseArm::Withdraw | UseArm::Deposit | UseArm::Sell | UseArm::Item(UseFork::Open) => {
-            cursor::lock_item(model, guid);
-        }
+        UseArm::Withdraw | UseArm::Deposit | UseArm::Sell => cursor::lock_item(model, guid),
         UseArm::Item(UseFork::WrapPaper) => arm_gift_wrap(model, bag, slot),
         UseArm::Item(_) => {}
     }
@@ -1832,13 +1832,14 @@ mod tests {
         assert_eq!(s.take_ui_errors(), vec!["ERR_CANT_USE_ITEM"]);
         assert!(!s.item_locked(0x11));
 
-        // Control back, the requirement met: the open locks and goes out.
+        // Control back, the requirement met: the open goes out, for the host to lock past its
+        // `SetAutoLoot` (`0x5edcb6`, `0x5edcd9`).
         s.set_player_control(true);
         s.set_item_template(871, template(0, 0, 5));
         s.run("UseContainerItem(0, 1)").unwrap();
         assert!(s.take_ui_errors().is_empty());
         assert_eq!(s.take_script_calls().len(), 1);
-        assert!(s.item_locked(0x11));
+        assert!(!s.item_locked(0x11));
     }
 
     /// The dispatcher's order (`0x5d8d00`): the gift, wrapping paper and quest-starter arms run

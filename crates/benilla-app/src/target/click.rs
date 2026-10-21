@@ -336,7 +336,10 @@ enum Owed {
 impl Owed {
     fn run(self, dispatch: &mut Dispatch) {
         match self {
-            Owed::LootCorpse { entity, guid, walk } => dispatch.loot_corpse(entity, guid, walk),
+            Owed::LootCorpse { entity, guid, walk } => {
+                let can_loot = dispatch.can_loot_corpse(entity);
+                dispatch.loot_corpse(entity, guid, can_loot, walk);
+            }
             Owed::LootUnit { entity, guid, walk } => {
                 let can_loot = dispatch.can_loot_unit(entity);
                 dispatch.loot_unit(entity, guid, can_loot, walk);
@@ -425,14 +428,28 @@ impl Dispatch<'_, '_> {
             && self.seam.loot_latch.0.is_none()
     }
 
+    /// `CanLootNow 0x5ec110` for a corpse object, as the corpse cursor asks it (`0x4827d7`): its
+    /// 5 yd reach, skipped under `CanAutoInteract`, and no loot target held.
+    fn can_loot_corpse(&self, target: Entity) -> bool {
+        (self.auto.can_auto_interact()
+            || self
+                .dist_sq(target)
+                .is_some_and(|d2| d2 <= cursor_mode::CORPSE_INTERACT_RANGE_SQ))
+            && self.seam.loot_latch.0.is_none()
+    }
+
     /// `SetAutoLoot 0x5df460` with the interaction's byte ([`crate::ui_loot::interaction_byte`]),
     /// as a call: inside the click's turn it applies as the turn ends, ahead of the leg's [`Owed`].
     fn set_auto_loot(&self, script: Option<&mut benilla_ui::script::UiScript>) {
         if let Some(script) = script {
-            let shift =
-                self.keys.pressed(KeyCode::ShiftLeft) || self.keys.pressed(KeyCode::ShiftRight);
-            script.set_auto_loot(crate::ui_loot::interaction_byte(&self.loot_cfg, shift));
+            script.set_auto_loot(self.auto_loot_byte());
         }
+    }
+
+    /// The interaction's byte ([`crate::ui_loot::interaction_byte`]) from the Shift held now.
+    fn auto_loot_byte(&self) -> bool {
+        let shift = self.keys.pressed(KeyCode::ShiftLeft) || self.keys.pressed(KeyCode::ShiftRight);
+        crate::ui_loot::interaction_byte(&self.loot_cfg, shift)
     }
 
     fn approach(
@@ -623,12 +640,12 @@ impl Dispatch<'_, '_> {
         }
     }
 
-    /// `0x5df130`: `CMSG_LOOT` at a lootable corpse, never while a loot target is held
-    /// (`CanLootNow`, `0x5df151` → `0x5ec1f6`; its reach is the cursor's gray) or while
-    /// [`Self::moving`] (`0x5df173`), walked to first when `walk` and beyond its 5 yd (`0x5df1c3`),
-    /// stopping at [`loot_stop`] of 5. A walk that does not start falls through to the send.
-    fn loot_corpse(&mut self, entity: Entity, guid: u64, walk: bool) {
-        if self.seam.loot_latch.0.is_some() || self.moving() {
+    /// `0x5df130`: `CMSG_LOOT` at a lootable corpse, which `can_loot` (`CanLootNow`, `0x5df151`,
+    /// [`Self::can_loot_corpse`]) must allow, never while [`Self::moving`] (`0x5df173`), walked to
+    /// first when `walk` and beyond its 5 yd (`0x5df1c3`), stopping at [`loot_stop`] of 5. A walk
+    /// that does not start falls through to the send.
+    fn loot_corpse(&mut self, entity: Entity, guid: u64, can_loot: bool, walk: bool) {
+        if !can_loot || self.moving() {
             return;
         }
         if walk
@@ -685,8 +702,13 @@ impl Dispatch<'_, '_> {
     /// rungs refuse it as they refuse a press: another spell in flight (`0x6e4d97`), the range
     /// test (`0x6e4f26`), the validator (`0x6e4f3b`), and a passing one is pushed in flight
     /// (`0x6e5026`) and sent (`0x6e54f0`). Queued for [`crate::ui_action::ClickCasts`]' drain.
+    /// With the leg's VM, `script`, the walk or the cast is followed by `SetAutoLoot`, its `set`
+    /// given (`0x5f06e1`-`0x5f06ef`): at once after a walk (`0x5f06c4`), after the cast in its
+    /// drain ([`crate::ui_action::ClickCast::AtUnit`]).
+    #[allow(clippy::too_many_arguments)] // `InteractWithSpell`'s own inputs
     fn skin(
         &mut self,
+        script: Option<&mut benilla_ui::script::UiScript>,
         entity: Entity,
         guid: u64,
         spell_id: u32,
@@ -694,6 +716,7 @@ impl Dispatch<'_, '_> {
         in_reach: bool,
         walk: bool,
     ) {
+        let auto_loot = script.is_some().then(|| self.auto_loot_byte());
         if !in_reach && walk {
             let reach = match subject {
                 crate::player::Subject::Corpse => cursor_mode::MELEE_FLOOR,
@@ -707,6 +730,9 @@ impl Dispatch<'_, '_> {
                 subject,
                 stop,
             );
+            if let (Some(script), Some(byte)) = (script, auto_loot) {
+                script.set_auto_loot(byte);
+            }
             return;
         }
         debug!("right-click skin: {guid:#x} (spell {spell_id})");
@@ -717,6 +743,7 @@ impl Dispatch<'_, '_> {
                 spell_id,
                 entity,
                 guid,
+                auto_loot,
             });
     }
 
@@ -1022,13 +1049,16 @@ fn interact(
             if dispatch.is_active_mover() {
                 dispatch.set_auto_loot(script);
             }
-            // Range rides the cursor's gray, so the pouch is never lit where the click refuses.
-            return (!cursor.unable).then_some(Owed::LootCorpse { entity, guid, walk });
+            // `LootCorpse` asks `CanLootNow` once the store's sweep has run (`0x5df151`), which
+            // may have dropped the target (`0x4c224f` → `0x48f2c9`).
+            return Some(Owed::LootCorpse { entity, guid, walk });
         } else if insignia {
             // Leg 2. `skin_player_corpse` mirrors `[0xb700e8]`, `None` for every 1.12.1 player,
             // so this is inert as in the reference; the unfriendly test is not built.
             if let Some(spell_id) = dispatch.learned.skin_player_corpse {
+                // `InteractWithSpell`, its store's `set` given (`0x5d6cc7`).
                 dispatch.skin(
+                    script,
                     entity,
                     guid,
                     spell_id,
@@ -1036,8 +1066,6 @@ fn interact(
                     !cursor.unable,
                     walk,
                 );
-                // `InteractWithSpell`'s store, its `set` given (`0x5d6cc7`, `0x5f06ef`).
-                dispatch.set_auto_loot(script);
             }
         }
         return None;
@@ -1179,7 +1207,9 @@ fn interact(
             // loot leg declined, lootable ones included while mounted.
             if let Some(spell_id) = dispatch.learned.skinning {
                 let in_reach = dispatch.in_melee_reach(entity);
+                // `InteractWithSpell`, its store's `set` given (`0x60c074`).
                 dispatch.skin(
+                    script,
                     entity,
                     guid,
                     spell_id,
@@ -1187,8 +1217,6 @@ fn interact(
                     in_reach,
                     walk,
                 );
-                // `InteractWithSpell`'s store, its `set` given (`0x60c074`, `0x5f06ef`).
-                dispatch.set_auto_loot(script);
             }
         }
         // Terminal: a dead unit that took no leg does nothing; only the alive branch (`0x60c162`)
@@ -1369,7 +1397,7 @@ fn act_on_arrival_with(
                 } else {
                     Subject::Unit { dead: true }
                 };
-                dispatch.skin(entity, guid, spell_id, subject, true, false);
+                dispatch.skin(None, entity, guid, spell_id, subject, true, false);
             }
         }
         _ => {}
@@ -2520,6 +2548,7 @@ mod tests {
                         spell_id: SKINNING,
                         entity,
                         guid: BOAR,
+                        ..
                     }] if entity == boar
                 ),
                 casts,

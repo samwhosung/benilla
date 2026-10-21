@@ -211,8 +211,9 @@ enum Step {
     /// place: after the removal's `LOOT_SLOT_CLEARED`, before the close's `LOOT_CLOSED`. Each is
     /// flagged when it needs a live item object.
     Unlocks(Vec<(u64, bool)>),
-    /// A response's copier (`0x4c1cb0`): the session it ends, then this window.
-    Opened(Window),
+    /// A response's copier (`0x4c1cb0`): the cells its teardown leaves, the ended session's with
+    /// the source zeroed (`0x4c1da0`), then the window it fills.
+    Opened { ended: Window, window: Window },
 }
 
 /// The loot session: the window, the steps the feed has yet to show, the push queue, which
@@ -230,10 +231,6 @@ pub(crate) struct LootState {
     /// Deviation: it is the display row, where the reference's is the item index plus one
     /// (`0x4c2885`), so an addon's `GetLootSlotInfo(arg1)` reads the row the dialog is for.
     pending_bind_confirm: Option<u32>,
-    /// The row a `LOOT_BIND_CONFIRM` has just signalled for, which the stash takes once the
-    /// signal's handlers ran ([`calls::Then::StoreBind`]): their own `LootSlot` meets the stash as
-    /// it stood.
-    owed_bind_confirm: Option<u32>,
     /// The list staged for the next open: vmangos sends it from inside `Player::SendLoot`
     /// (`Player.cpp:8080`), just ahead of its response. Staging keeps it out of later windows.
     pending_master_candidates: Vec<u64>,
@@ -266,6 +263,10 @@ impl LootState {
             self.unlock_item_source(old);
             self.coin_line_shown = false;
         }
+        let ended = Window {
+            source: None,
+            ..self.window.clone()
+        };
         self.window = Window {
             source: Some(source),
             gold,
@@ -276,10 +277,12 @@ impl LootState {
             master_candidates: std::mem::take(&mut self.pending_master_candidates),
         };
         self.pending_bind_confirm = None; // `0x4c1df5`
-        self.owed_bind_confirm = None;
         self.sweep_owed = false;
         self.copier_due = true;
-        self.steps.push(Step::Opened(self.window.clone()));
+        self.steps.push(Step::Opened {
+            ended,
+            window: self.window.clone(),
+        });
     }
 
     /// Stages a list for the next open; an open window takes it at once, as a refresh.
@@ -461,10 +464,13 @@ impl LootState {
 #[derive(Resource, Default)]
 pub(crate) struct AutoLootByte(pub(crate) bool);
 
-/// The loot CVars. `autoLootDefault` is not a 1.12 CVar: 1.12 auto-loots only on a shift-click.
-/// A held Shift inverts the setting at the interaction ([`interaction_byte`]), and [`feed_loot`]
-/// sweeps the rows engine-side at the open, as the reference does. `showLootSpam` is 1.12's Detailed Loot Information checkbox (`0xb4e2bc`,
+/// The loot CVars. `showLootSpam` is 1.12's Detailed Loot Information checkbox (`0xb4e2bc`,
 /// registered at `0x48fd1c`, default `"1"`), read only by the loot-roll line composers.
+/// Deviation: `autoLootDefault` is benilla's own option, 1.12 auto-looting only on a shift-click,
+/// and off is 1.12's behaviour. On, every window auto-loots unless Shift is held: an interaction
+/// stores the byte inverted by it ([`interaction_byte`]), and a pickpocket or disenchant window,
+/// which no interaction stores the byte for, takes it at its copier's end from the Shift held
+/// then.
 #[derive(Resource)]
 pub(crate) struct LootConfig {
     pub(crate) auto_loot: bool,
@@ -918,16 +924,25 @@ fn feed_loot(
         let k = r.at.min(steps.len());
         between[k].push(r);
     }
-    let last_open = steps.iter().rposition(|s| matches!(s, Step::Opened(_)));
+    let last_open = steps.iter().rposition(|s| matches!(s, Step::Opened { .. }));
+    // A step of a session a later response replaced runs on the cells it left, as its packet's
+    // dispatch ran it before the next arrived; the steps after the last response, on the window.
+    let replaced = |k: usize| last_open.is_some_and(|last| k < last);
     let mut between = between.into_iter();
     let mut still = emit_pushes(&mut vm, between.next().unwrap_or_default(), &pushes);
     for ((k, step), after) in steps.into_iter().enumerate().zip(between) {
         match step {
-            Step::Changed(w) => vm.turn(|script, _| {
-                if let Some(script) = script {
-                    show(script, view(&w, Ask::Read));
+            Step::Changed(w) => {
+                let live = replaced(k).then(|| swap_in_cells(&mut vm, w.clone()));
+                vm.turn(|script, _| {
+                    if let Some(script) = script {
+                        show(script, view(&w, Ask::Read));
+                    }
+                });
+                if let Some(live) = live {
+                    restore_live(&mut vm, live);
                 }
-            }),
+            }
             Step::SlotCleared(row) => vm.turn(|script, _| {
                 if let Some(script) = script {
                     script.fire_event("LOOT_SLOT_CLEARED", vec![ScriptValue::Int(i64::from(row))]);
@@ -938,17 +953,25 @@ fn feed_loot(
                     fire_unlocks(script, unlocks, &steps.objects);
                 }
             }),
-            Step::Opened(w) => {
+            Step::Opened { ended, window: w } => {
+                // The copier ends the session the VM shows (`0x4c1ccb`-`0x4c1dac`): its
+                // `LOOT_CLOSED` handlers run on the cells the teardown leaves, the source zeroed,
+                // before the new source is stored (`0x4c1dc2`), so their `CloseLoot` finds no
+                // window (`0x48f23f`). The stash clear comes after them (`0x4c1df5`).
+                let live = swap_in_cells(&mut vm, ended);
+                vm.turn(|script, _| {
+                    if let Some(script) = script.filter(|s| s.shown_loot().is_some()) {
+                        show(script, None);
+                    }
+                });
+                restore_live(&mut vm, live);
+                vm.own().0.loot.pending_bind_confirm = None;
                 let waiting = vm.turn(|script, _| {
                     let Some(script) = script else {
                         return true;
                     };
-                    // The copier ends the session the VM shows (`0x4c1ccb`-`0x4c1dac`), stores the
-                    // type cell (`0x4c1dd6`), then fills the window and asks for each row's
-                    // record (`0x4c1e77`).
-                    if script.shown_loot().is_some() {
-                        show(script, None);
-                    }
+                    // Then the type cell (`0x4c1dd6`), the window, and each row's record asked
+                    // for (`0x4c1e77`).
                     script.set_loot_type(w.loot_type);
                     let snap = view(&w, Ask::Event(&commands));
                     let waiting = waits(&snap);
@@ -1011,23 +1034,44 @@ fn end_superseded_open<X: bevy::ecs::system::SystemParam + 'static>(
     own: Window,
     moving: bool,
 ) {
-    let (live, mark) = {
-        let (mut s, _) = vm.own();
-        (
-            std::mem::replace(&mut s.loot.window, own),
-            s.loot.steps.len(),
-        )
-    };
+    let live = swap_in_cells(vm, own);
     end_open(vm, moving);
+    restore_live(vm, live);
     let (mut s, _) = vm.own();
     let loot = &mut *s.loot;
-    loot.window = live;
-    loot.steps.truncate(mark);
     loot.copier_due = true;
     loot.coin_line_shown = false;
     loot.sweep_owed = false;
     loot.pending_bind_confirm = None;
-    loot.owed_bind_confirm = None;
+}
+
+/// The live window and the steps' mark, set aside while a step runs on the cells it left.
+struct Live {
+    window: Window,
+    mark: usize,
+}
+
+/// Put `cells`, the loot cells as a step left them, in the window's place for that step's turn.
+fn swap_in_cells<X: bevy::ecs::system::SystemParam + 'static>(
+    vm: &mut VmWith<(LootSteps<'static, 'static>, X)>,
+    cells: Window,
+) -> Live {
+    let (mut s, _) = vm.own();
+    Live {
+        window: std::mem::replace(&mut s.loot.window, cells),
+        mark: s.loot.steps.len(),
+    }
+}
+
+/// Put the live window back: the later copier rewrote every cell (`0x4c1dc2` on), so what the
+/// step's handlers changed in them goes, with the steps their calls queued.
+fn restore_live<X: bevy::ecs::system::SystemParam + 'static>(
+    vm: &mut VmWith<(LootSteps<'static, 'static>, X)>,
+    live: Live,
+) {
+    let (mut s, _) = vm.own();
+    s.loot.window = live.window;
+    s.loot.steps.truncate(live.mark);
 }
 
 /// A response's end, once its window is filled: the copier's end ([`LootSteps::copier_end`]) and

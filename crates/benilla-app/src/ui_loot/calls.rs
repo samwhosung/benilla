@@ -6,7 +6,7 @@
 //! the signal is a [`Then`], run by the call's tail ([`UiScript::resume_loot`]) or by the feed's
 //! next turn ([`super::run_then`]): the listeners read the state as the signal left it.
 
-use benilla_protocol::messages::slot_type;
+use benilla_protocol::messages::{loot_type, slot_type};
 use benilla_ui::script::{CallTail, LootCall, ScriptValue, UiScript};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -39,11 +39,12 @@ pub(crate) fn interaction_byte(cfg: &LootConfig, shift: bool) -> bool {
 /// What a loot function does after its signal's listeners have returned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Then {
-    /// The take's stash takes the row it signalled `LOOT_BIND_CONFIRM` for (`0x4c2917`).
-    StoreBind,
-    /// The sweep after its `LOOT_BIND_CONFIRM` (`0x4c21dc` on): the stash, the rows after the
-    /// confirmed one, and its end, with the sweep's flag.
-    SweepRest { flag: bool },
+    /// The take's stash takes the row it signalled `LOOT_BIND_CONFIRM` for (`0x4c2917`), its own
+    /// whatever a nested function signalled meanwhile.
+    StoreBind { row: u32 },
+    /// The sweep after its `LOOT_BIND_CONFIRM` for `row` (`0x4c21dc` on): the stash, the rows
+    /// after it, and its end, with the sweep's flag.
+    SweepRest { row: u32, flag: bool },
     /// The coin click after its `LOOT_SLOT_CLEARED` (`0x4c286a`-`0x4c287c`): the close with
     /// release when nothing is left.
     CloseIfEmpty,
@@ -115,9 +116,9 @@ impl LootSteps<'_, '_> {
     }
 
     /// `OpenItem 0x5edc80` from its `SetAutoLoot` (`0x5edcb6`) on, the call having chosen the
-    /// item and locked it: the byte from Shift as the call saw it, which with a window open sweeps it, then the
-    /// item held as the loot target (`0x5edcc0`) and `CMSG_OPEN_ITEM`, once that sweep's
-    /// listeners have run.
+    /// item: the byte from Shift as the call saw it, which with a window open sweeps it, then,
+    /// once that sweep's listeners have run, the item held as the loot target, its lock and
+    /// `CMSG_OPEN_ITEM` ([`Self::send_open_item`]).
     pub(crate) fn open_item(&mut self, script: &mut UiScript, open: OpenItem) -> Option<CallTail> {
         let owed = self.loot.then.len();
         self.loot.then.push(Then::OpenItem(open));
@@ -125,17 +126,21 @@ impl LootSteps<'_, '_> {
         self.set_auto_loot(script, byte);
         if self.loot.then.len() == owed + 1 {
             self.loot.then.pop();
-            self.send_open_item(open);
+            self.send_open_item(script, open);
             return None;
         }
         self.resume_tail(owed)
     }
 
-    /// `OpenItem`'s end: the item becomes the loot target, which the type-1 answer's admission
-    /// asks for (`0x5ebb3f`), and `CMSG_OPEN_ITEM` goes out.
-    fn send_open_item(&mut self, open: OpenItem) {
+    /// `OpenItem`'s end: the item becomes the loot target (`0x5edcc0`), which the type-1 answer's
+    /// admission asks for (`0x5ebb3f`), it locks (`0x5edcd9`; `LockItem` signals nothing for a
+    /// guid that is no item object, `0x495407`), and `CMSG_OPEN_ITEM` goes out.
+    fn send_open_item(&mut self, script: &mut UiScript, open: OpenItem) {
         debug!("ui_loot: open item {:#x}", open.guid);
         self.latch.0 = Some(open.guid);
+        if self.objects.object(open.guid).is_some_and(|f| f.is_item()) {
+            script.lock_item(open.guid);
+        }
         let _ = self.net.0.send(ClientCommand::OpenItem {
             bag_index: open.bag_index,
             slot: open.slot,
@@ -191,8 +196,7 @@ impl LootSteps<'_, '_> {
                 // whose listeners run before the stash takes the row (`0x4c290f`, `0x4c2917`).
                 if bind_confirm_required(&self.items, item_id) {
                     script.fire_event("LOOT_BIND_CONFIRM", vec![ScriptValue::Int(i64::from(row))]);
-                    self.loot.owed_bind_confirm = Some(row);
-                    self.loot.then.push(Then::StoreBind);
+                    self.loot.then.push(Then::StoreBind { row });
                     return;
                 }
                 self.store(wire_slot, display_id);
@@ -287,8 +291,18 @@ impl LootSteps<'_, '_> {
     }
 
     /// The copier's end (`0x4c1ea8`-`0x4c1ee6`, the cache callback's `0x4c2afe`-`0x4c2b37`): the
-    /// sweep while the auto-loot byte is set (`0x4c1ed3`, `0x4c2b29`), else `LOOT_OPENED`.
+    /// sweep while the auto-loot byte is set (`0x4c1ed3`, `0x4c2b29`), else `LOOT_OPENED`. With
+    /// `autoLootDefault` on, a pickpocket or disenchant window, which no interaction stores the
+    /// byte for, stores it here from the Shift held now ([`LootConfig`]'s deviation).
     pub(super) fn copier_end(&mut self, script: &mut UiScript) {
+        if self.cfg.auto_loot
+            && matches!(
+                self.loot.window.loot_type,
+                loot_type::PICKPOCKETING | loot_type::DISENCHANTING
+            )
+        {
+            self.byte.0 = interaction_byte(&self.cfg, script.shift_key_down());
+        }
         if self.byte.0 {
             self.sweep(script, false);
         } else {
@@ -300,9 +314,9 @@ impl LootSteps<'_, '_> {
     /// `LOOT_OPENED` with no active player (`0x4c1fd9`, `0x4c1fe0`). Then for a nonzero money
     /// cell, -1 included (`0x4c1ff4`): the coin request, sent while the loot target is held
     /// (`0x4c1ffc` → `0x5ea8c6`), and once a session for money above 0 (`0x4c2008`, `0x4c2015`)
-    /// the money line, which a party (`0x4c2030`) or a raid (`0x4c203d`) skips. Its coin sound
-    /// (`0x4c2020`) is not played, as the click's is not (`crate::sound`'s money module). Then
-    /// the rows.
+    /// the money line, which a party (`0x4c2030`) or a raid (`0x4c203d`) skips, added in place
+    /// (`0x4c2170` → `AddChatLine 0x49a870`). Its early coin (`0x4c201b`-`0x4c2020`) is not played
+    /// (`crate::sound`'s money module). Then the rows.
     pub(super) fn sweep(&mut self, script: &mut UiScript, flag: bool) {
         if self.loot.records_pending(&self.items) {
             return;
@@ -319,10 +333,11 @@ impl LootSteps<'_, '_> {
             let grouped = self.group.party_slots().next().is_some_and(|m| m.guid != 0)
                 || self.group.raid_held();
             if !self.loot.coin_line_shown && window.has_coin() && !grouped {
-                self.chat.push_event(crate::ui_chat::ChatEvent::text_only(
+                let line = crate::ui_chat::ChatEvent::text_only(
                     crate::ui_chat::ChatEventKind::Money,
                     money_line(script, window.gold),
-                ));
+                );
+                self.chat.show_now(script, &line);
             }
         }
         self.sweep_rows(script, 1, false, flag);
@@ -348,8 +363,7 @@ impl LootSteps<'_, '_> {
                     continue;
                 }
                 script.fire_event("LOOT_BIND_CONFIRM", vec![ScriptValue::Int(i64::from(row))]);
-                self.loot.owed_bind_confirm = Some(row);
-                self.loot.then.push(Then::SweepRest { flag });
+                self.loot.then.push(Then::SweepRest { row, flag });
                 return;
             }
             self.store(wire_slot, display_id);
@@ -376,15 +390,8 @@ impl LootSteps<'_, '_> {
     /// Run what a function owed after its signal's listeners.
     pub(super) fn then(&mut self, script: &mut UiScript, then: Then) {
         match then {
-            Then::StoreBind => {
-                if let Some(row) = self.loot.owed_bind_confirm.take() {
-                    self.loot.pending_bind_confirm = Some(row);
-                }
-            }
-            Then::SweepRest { flag } => {
-                let Some(row) = self.loot.owed_bind_confirm.take() else {
-                    return;
-                };
+            Then::StoreBind { row } => self.loot.pending_bind_confirm = Some(row),
+            Then::SweepRest { row, flag } => {
                 self.loot.pending_bind_confirm = Some(row); // `0x4c21dc`
                 self.sweep_rows(script, row + 1, true, flag);
             }
@@ -395,7 +402,7 @@ impl LootSteps<'_, '_> {
             }
             Then::Unlocks => unlock_closed_source(script, &mut self.loot, &self.objects),
             Then::Announce => show(script, None),
-            Then::OpenItem(open) => self.send_open_item(open),
+            Then::OpenItem(open) => self.send_open_item(script, open),
         }
     }
 }

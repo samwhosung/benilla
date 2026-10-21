@@ -461,10 +461,7 @@ impl ScriptItemUse<'_, '_> {
 fn arm_locked(arm: UseArm) -> bool {
     matches!(
         arm,
-        UseArm::Withdraw
-            | UseArm::Deposit
-            | UseArm::Sell
-            | UseArm::Item(UseFork::Equip | UseFork::Open)
+        UseArm::Withdraw | UseArm::Deposit | UseArm::Sell | UseArm::Item(UseFork::Equip)
     )
 }
 
@@ -1188,23 +1185,31 @@ mod tests {
         );
     }
 
-    /// The open arm locks the item inside the call (`0x5edcd9`), so a second right-click in the
-    /// same frame stops at the lock (`0x4fa1cd`) and one `CMSG_OPEN_ITEM` goes out.
+    /// The open arm locks the item inside the call, past its `SetAutoLoot` (`0x5edcd9`), so a
+    /// second right-click in the same frame, each applied as its call returns, stops at the lock
+    /// (`0x4fa1cd`) and one `CMSG_OPEN_ITEM` goes out.
     #[test]
     fn two_opens_in_one_frame_send_once() {
         let (mut app, rx) = open_the_clam();
         while rx.try_recv().is_ok() {} // drain the clam's own send
-        {
-            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
-            script.unlock_item(CLAM);
-            script.run("UseContainerItem(0, 1)").unwrap();
-            assert!(
-                script.item_locked(CLAM),
-                "locked in the call, before any send"
-            );
-            script.run("UseContainerItem(0, 1)").unwrap();
-        }
-        run_container_clicks(app.world_mut());
+        let click = |app: &mut App| {
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .run("UseContainerItem(0, 1)")
+                .unwrap();
+            run_container_clicks(app.world_mut());
+        };
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .unlock_item(CLAM);
+        click(&mut app);
+        assert!(
+            app.world()
+                .non_send_resource::<UiScript>()
+                .item_locked(CLAM),
+            "locked in the call, before any send"
+        );
+        click(&mut app);
         assert_eq!(rx.try_iter().count(), 1);
     }
 

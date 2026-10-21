@@ -5,9 +5,10 @@
 //!
 //! The first value after login or reconnect seeds without playing; whether the reference's watcher
 //! fires on the login set is untraced. Deviation: the reference also plays an optimistic coin at
-//! the loot-money click, so looted money sounds twice; benilla plays the watcher's coin alone,
-//! because one coin on the confirmed change reads cleanly and the round trip the early coin hides
-//! is imperceptible on a local server.
+//! the loot-money click, and at the auto-loot sweep's money, once a session (`0x4c201b`-`0x4c2020`,
+//! the same `0x458030` call), so looted money sounds twice; benilla plays the watcher's coin
+//! alone, because one coin on the confirmed change reads cleanly and the round trip the early coin
+//! hides is imperceptible on a local server.
 
 use bevy::prelude::*;
 

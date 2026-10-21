@@ -112,6 +112,9 @@ pub(crate) enum ClickCast {
         spell_id: u32,
         entity: Entity,
         guid: u64,
+        /// The byte `InteractWithSpell` passes `SetAutoLoot` after the cast, its `set` given
+        /// (`0x5f06e1`-`0x5f06ef`).
+        auto_loot: Option<bool>,
     },
 }
 
