@@ -464,9 +464,9 @@ fn drain_trade_skill(
     )>,
     mut open: ResMut<TradeSkillOpen>,
 ) {
-    vm.turn(|script, (mut cast_events, targeting, mut ladder)| {
+    let edges = vm.turn(|script, (mut cast_events, targeting, mut ladder)| {
         let Some(script) = script else {
-            return;
+            return Vec::new();
         };
 
         // The verb reads the held list, not the open marker (`0x5002e1`, `0x5002e9`), so a recipe
@@ -477,11 +477,21 @@ fn drain_trade_skill(
         }
 
         let self_entity = ladder.self_player.single().ok().map(|(e, _)| e);
-        for ev in cast_events.read() {
-            if Some(ev.entity) != self_entity {
-                continue;
-            }
-            if let Some(spell_id) = repeat_edge(script, ev) {
+        cast_events
+            .read()
+            .filter(|ev| Some(ev.entity) == self_entity)
+            .copied()
+            .collect::<Vec<_>>()
+    });
+
+    // Each edge is its own packet's hook (`0x6e81d3` → `0x4fd7b0`), whose signal's handlers run
+    // before the next packet counts down: a turn each.
+    for ev in edges {
+        vm.turn(|script, (_, targeting, mut ladder)| {
+            let Some(script) = script else {
+                return;
+            };
+            if let Some(spell_id) = repeat_edge(script, &ev) {
                 debug!(
                     "ui_tradeskill: recast {spell_id} ({} left)",
                     script.trade_skill_repeat().1
@@ -490,13 +500,13 @@ fn drain_trade_skill(
                 ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
                 script.trade_skill_recast_sent();
             }
-        }
+        });
+    }
 
-        if script.take_trade_skill_close() {
-            debug!("ui_tradeskill: client-side close (no packet)");
-            open.line = None;
-        }
-    })
+    if vm.run(|script| script.is_some_and(UiScript::take_trade_skill_close)) {
+        debug!("ui_tradeskill: client-side close (no packet)");
+        open.line = None;
+    }
 }
 
 /// One of our own cast edges into the VM's repeat: every GO whose first guid is the player, not
