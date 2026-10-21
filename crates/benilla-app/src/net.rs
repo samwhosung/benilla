@@ -1616,6 +1616,7 @@ pub(crate) enum ClientCommand {
     MailCreateTextItem {
         mailbox: u64,
         mail_id: u32,
+        template_id: u32,
     },
     /// `CMSG_ITEM_TEXT_QUERY`, once per mail with a nonzero `item_text_id`.
     ItemTextQuery {

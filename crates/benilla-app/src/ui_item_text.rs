@@ -410,8 +410,8 @@ fn readable(
 /// Drive the begun session to `ITEM_TEXT_READY`, which shows the window, once the body and any
 /// creator line are in.
 fn feed_item_text(
-    mut vm: crate::script_calls::VmWith<ResMut<'static, ItemTextOpen>>,
-    mail: Res<MailOpen>,
+    // The mail session's body cache is the call host's too ([`crate::ui_mail::MailVerbs`]).
+    mut vm: crate::script_calls::VmWith<(ResMut<'static, ItemTextOpen>, Res<'static, MailOpen>)>,
     pages: Res<PageTexts>,
     objects: Objects,
     items: Res<Items>,
@@ -424,7 +424,7 @@ fn feed_item_text(
     states: Res<crate::world_state::WorldStates>,
     unit_names: crate::ui_unit::NameTables,
 ) {
-    vm.feed(|script, mut open, fires| {
+    vm.feed(|script, (mut open, mail), fires| {
         let Some(script) = script else {
             return;
         };

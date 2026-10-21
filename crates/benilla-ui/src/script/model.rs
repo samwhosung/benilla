@@ -940,9 +940,8 @@ pub(crate) struct Model {
     pub(crate) item_text: Option<item_text::ItemTextState>,
     pub(crate) item_text_close: bool,
     pub(crate) item_text_page_turns: Vec<i32>,
-    /// The open inbox and mail calls, rows 1-based: `mail_opens` are rows `GetInboxText` read.
+    /// The inbox, rows 1-based.
     pub(crate) mail: Option<mail::MailState>,
-    pub(crate) mail_check_inbox: bool,
     /// `CheckInbox`'s throttle `[0xb6efc4]`, on the `GetTime` clock: the list query 60 s ago
     /// plus its window, before which a check re-announces the held list instead.
     pub(crate) mail_list_stamp: Option<f64>,
@@ -953,17 +952,11 @@ pub(crate) struct Model {
     /// the send's result (`0x4ad159`) or the compose reset (`0x4ace02`); `SendMail` returns while
     /// it is up (`0x4ae85e`).
     pub(crate) mail_send_pending: bool,
-    pub(crate) mail_opens: Vec<u32>,
-    pub(crate) mail_take_items: Vec<u32>,
-    pub(crate) mail_take_money: Vec<u32>,
-    pub(crate) mail_deletes: Vec<u32>,
-    pub(crate) mail_returns: Vec<u32>,
-    pub(crate) mail_take_texts: Vec<u32>,
+    /// `CloseMail`, for the interaction latch's close.
     pub(crate) mail_close: bool,
-    pub(crate) mail_send: Option<(String, String, String)>,
     pub(crate) mail_send_money: u32,
     pub(crate) mail_send_cod: u32,
-    /// The Send tab's attached item, resolved to its guid when the send fires.
+    /// The Send tab's attached item (`0xb6ef90`), whose guid the send carries.
     pub(crate) mail_send_item: Option<cursor::CursorItem>,
     /// The usable stationery, in the picker's order.
     pub(crate) mail_stationeries: Vec<mail::StationeryView>,
@@ -1769,18 +1762,10 @@ impl Model {
             item_text_close: false,
             item_text_page_turns: Vec::new(),
             mail: None,
-            mail_check_inbox: false,
             mail_list_stamp: None,
             mail_busy: false,
             mail_send_pending: false,
-            mail_opens: Vec::new(),
-            mail_take_items: Vec::new(),
-            mail_take_money: Vec::new(),
-            mail_deletes: Vec::new(),
-            mail_returns: Vec::new(),
-            mail_take_texts: Vec::new(),
             mail_close: false,
-            mail_send: None,
             mail_send_money: 0,
             mail_send_cod: 0,
             mail_send_item: None,

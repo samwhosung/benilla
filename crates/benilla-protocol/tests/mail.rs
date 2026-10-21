@@ -61,12 +61,17 @@ fn mail_send_bodies_golden() {
     assert_eq!(messages::mail_return_to_sender(MAILBOX, 77), golden);
     assert_eq!(messages::mail_delete(MAILBOX, 77), golden);
 
-    // CMSG_MAIL_CREATE_TEXT_ITEM: the shared shape, then `u32` mailTemplateId 0 (vmangos
-    // `MailCreateTextItem::ReadFromWorldPacket`).
+    // CMSG_MAIL_CREATE_TEXT_ITEM: the shared shape, then the mail's `u32` template id
+    // (`0x4afb4a`; vmangos `MailCreateTextItem::ReadFromWorldPacket`).
     assert_eq!(
-        messages::mail_create_text_item(MAILBOX, 77),
+        messages::mail_create_text_item(MAILBOX, 77, 0),
         hx("420000000010f1004d00000000000000"),
         "CMSG_MAIL_CREATE_TEXT_ITEM body"
+    );
+    assert_eq!(
+        messages::mail_create_text_item(MAILBOX, 77, 87),
+        hx("420000000010f1004d00000057000000"),
+        "CMSG_MAIL_CREATE_TEXT_ITEM body, a template letter"
     );
 
     // CMSG_ITEM_TEXT_QUERY: u32 textId, u32 mailId, u32 unk(0).

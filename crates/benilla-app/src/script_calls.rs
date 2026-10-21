@@ -84,13 +84,14 @@ pub(crate) struct ScriptCallHost<'w, 's> {
                     crate::ui_party::PartyCalls<'w, 's>,
                 ),
             >,
-            // The bags' and the loot window's.
+            // The bags', the loot window's and the mailbox's.
             ParamSet<
                 'w,
                 's,
                 (
                     crate::ui_items::ScriptItemUse<'w, 's>,
                     crate::ui_loot::LootSteps<'w, 's>,
+                    crate::ui_mail::MailVerbs<'w>,
                 ),
             >,
             crate::ui_pet::PetPress<'w, 's>,
@@ -194,6 +195,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Auction(call) => appliers.p4().p3().apply(script, call),
             ScriptCall::Social(call) => appliers.p4().p4().apply(script, call),
             ScriptCall::Party(request) => appliers.p4().p5().apply(script, request),
+            ScriptCall::Mail(call) => appliers.p5().p2().apply(script, call),
         }
         // A selection this call made with the targeting cursor up was handed to the cast
         // (`SelectTarget`, `0x4935d5`) and is bound now, before the next call reads either.

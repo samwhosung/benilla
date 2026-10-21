@@ -320,7 +320,8 @@ pub use macros::{
     MAX_MACRO_NAME,
 };
 pub use mail::{
-    MailInboxRow, MailInvoice, MailSendRequest, MailState, PackageView, StationeryView,
+    MailCall, MailInboxRow, MailInvoice, MailRowVerb, MailSendRequest, MailState, PackageView,
+    StationeryView,
 };
 pub use measure::TextMeasure;
 pub use merchant::{ItemStatsHead, MerchantItem, MerchantState, RepairCosts};

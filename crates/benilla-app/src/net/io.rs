@@ -1640,9 +1640,11 @@ pub(super) fn writer_loop(
                     ClientCommand::MailDelete { mailbox, mail_id } => {
                         w.mail_delete(mailbox, mail_id)
                     }
-                    ClientCommand::MailCreateTextItem { mailbox, mail_id } => {
-                        w.mail_create_text_item(mailbox, mail_id)
-                    }
+                    ClientCommand::MailCreateTextItem {
+                        mailbox,
+                        mail_id,
+                        template_id,
+                    } => w.mail_create_text_item(mailbox, mail_id, template_id),
                     ClientCommand::ItemTextQuery { text_id, mail_id } => {
                         w.item_text_query(text_id, mail_id)
                     }

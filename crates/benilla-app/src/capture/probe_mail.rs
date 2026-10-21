@@ -174,16 +174,17 @@ fn last_event(script: &UiScript) -> String {
 fn mail_probe(
     time: ProbeClock,
     mut probe: ResMut<MailProbe>,
-    mail: Res<MailOpen>,
     mut windows: Commands,
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // The session is the call host's too ([`crate::ui_mail::MailVerbs`]): the probe's verbs apply
+    // as its turn ends.
+    mut vm: crate::script_calls::VmWith<Res<'static, MailOpen>>,
     self_player: Query<(), With<SelfPlayer>>,
     player: Res<Player>,
     objects: Query<(&Guid, &NetEntity, &ObjectStore, &Transform), Without<SelfPlayer>>,
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, mail| {
         if self_player.is_empty() {
             return; // not in-world yet
         }
