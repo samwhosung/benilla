@@ -41,9 +41,11 @@ fn on_result(
     mut stable_open: ResMut<StableOpen>,
     mut errors: ResMut<StableErrors>,
     commands: Res<NetCommands>,
+    ticks: bevy::ecs::system::SystemChangeTick,
 ) {
     if let SessionEvent::StableResult { result } = ev {
-        stable_result(result, &mut stable_open, &mut errors, &commands);
+        let at = ticks.this_run();
+        stable_result(result, &mut stable_open, &mut errors, &commands, at);
     }
 }
 
@@ -73,6 +75,8 @@ fn stable_result(
     stable_open: &mut StableOpen,
     errors: &mut StableErrors,
     net_commands: &NetCommands,
+    // The handler call's change tick, the refusal's place on the wire ([`StableErrors`]).
+    at: bevy::ecs::change_detection::Tick,
 ) {
     use benilla_protocol::messages::stable_result as code;
     // Before the guid test, as `0x4cacf3` precedes `0x4cad05`: the count moves even with no
@@ -83,7 +87,7 @@ fn stable_result(
     match result {
         code::ERR_MONEY => {
             debug!("net: stable purchase refused — not enough money");
-            errors.0.push("ERR_NOT_ENOUGH_MONEY");
+            errors.0.push(("ERR_NOT_ENOUGH_MONEY", at));
         }
         code::SUCCESS_STABLE | code::SUCCESS_UNSTABLE | code::SUCCESS_BUY_SLOT => {
             let Some(npc) = stable_open.npc else {

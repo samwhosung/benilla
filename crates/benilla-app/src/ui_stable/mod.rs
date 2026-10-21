@@ -218,25 +218,20 @@ fn feed_stable(
     mut last: crate::ui_script::WindowMemo<Option<StableState>>,
     mut closes: CoreCloses,
     mut sink: crate::ui_action::MessageSink,
+    ticks: bevy::ecs::system::SystemChangeTick,
 ) {
-    // Refusals show, and speak, as their message rows say, on their own: `SMSG_STABLE_RESULT`'s
-    // handler (`0x4cacb0`) shows the line and changes no list, so its handlers run with the host
-    // lent before the frame's stable is pushed, and read it as it stood.
+    // A refusal's line shows inside `SMSG_STABLE_RESULT`'s handler (`0x4cacb0`), so its handlers
+    // read the stable the packets before it left: one a later packet's write to the stable follows
+    // shows ahead of the frame's push, the rest after it and its events.
+    let (listed, now) = (open.last_changed(), ticks.this_run());
+    let ahead = errors
+        .0
+        .iter()
+        .take_while(|(_, at)| listed.is_newer_than(*at, now))
+        .count();
+    let behind = errors.0.split_off(ahead);
     if !errors.0.is_empty() {
-        vm.run(|script| {
-            let Some(script) = script else {
-                return;
-            };
-            let lines: Vec<_> = errors
-                .0
-                .drain(..)
-                .filter_map(|key| {
-                    let text = script.lua().globals().get::<String>(key).ok()?;
-                    (!text.is_empty()).then(|| crate::ui_action::Shown::keyed(key, text))
-                })
-                .collect();
-            crate::ui_action::show_messages(script, &mut sink, "ui_stable", lines);
-        });
+        vm.run(|script| show_refusals(script, &mut errors.0, &mut sink));
     }
     vm.feed(|script, bar, fires| {
         let Some(script) = script else {
@@ -293,7 +288,31 @@ fn feed_stable(
             fires.post("PET_STABLE_UPDATE_PAPERDOLL", vec![]);
         }
         *last = fresh;
-    })
+    });
+    errors.0.extend(behind);
+    if !errors.0.is_empty() {
+        vm.run(|script| show_refusals(script, &mut errors.0, &mut sink));
+    }
+}
+
+/// Show `refusals`, in a run with the host lent, each as its message row says, speech included;
+/// with no VM up they wait.
+fn show_refusals(
+    script: Option<&mut UiScript>,
+    refusals: &mut Vec<(&'static str, bevy::ecs::change_detection::Tick)>,
+    sink: &mut crate::ui_action::MessageSink,
+) {
+    let Some(script) = script else {
+        return;
+    };
+    let lines: Vec<_> = refusals
+        .drain(..)
+        .filter_map(|(key, _)| {
+            let text = script.lua().globals().get::<String>(key).ok()?;
+            (!text.is_empty()).then(|| crate::ui_action::Shown::keyed(key, text))
+        })
+        .collect();
+    crate::ui_action::show_messages(script, sink, "ui_stable", lines);
 }
 
 /// Drain the Lua intents into the four stable verbs, each aimed at the open session's NPC; a close
@@ -332,9 +351,11 @@ fn drain_stable(
 }
 
 /// Stable refusals as message keys: only `ERR_NOT_ENOUGH_MONEY`, `DisplayError(0x25)` in the
-/// `SMSG_STABLE_RESULT` handler `0x4cacb0`, whose row also speaks (line `0x28`).
+/// `SMSG_STABLE_RESULT` handler `0x4cacb0`, whose row also speaks (line `0x28`). Each carries the
+/// change tick of the handler call that queued it, its place on the wire: each call is its own
+/// system run, so a later packet's writes carry newer ticks.
 #[derive(Resource, Default)]
-pub(crate) struct StableErrors(pub(crate) Vec<&'static str>);
+pub(crate) struct StableErrors(pub(crate) Vec<(&'static str, bevy::ecs::change_detection::Tick)>);
 
 /// `StableSlotPrices.dbc`, the purchase row's prices; absent, the row quotes 0.
 #[derive(Resource)]
