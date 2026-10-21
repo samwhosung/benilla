@@ -2867,6 +2867,31 @@ mod tests {
         ran.expect("the chunk runs");
     }
 
+    /// In the `/partytest` sandbox a group-changing call sends nothing: the drain answers it on
+    /// the mirror as the server's list would, and an accept still goes out, as a real group ends
+    /// the sandbox.
+    #[test]
+    fn the_sandbox_echoes_a_group_call_and_sends_an_accept() {
+        let (mut app, rx) = drain_app();
+        seat_self(&mut app);
+        let _ = synthetic_roster(&mut app.world_mut().resource_mut::<GroupState>(), None);
+        frame(&mut app);
+        let _ = rx.try_iter().count();
+        hosted_run(&mut app, "ConvertToRaid() AcceptGroup()");
+        let sent: Vec<bool> = rx
+            .try_iter()
+            .map(|c| matches!(c, ClientCommand::GroupAccept))
+            .collect();
+        assert_eq!(sent, [true], "the accept alone");
+        assert_eq!(app.world().resource::<GroupState>().group_type, 0);
+        frame(&mut app);
+        assert_eq!(
+            app.world().resource::<GroupState>().group_type,
+            GROUPTYPE_RAID,
+            "the drain's echo"
+        );
+    }
+
     /// The kicks among the commands sent, `name:<name>` or `guid:<guid>`, in order.
     fn kicks(rx: &crossbeam_channel::Receiver<ClientCommand>) -> Vec<String> {
         rx.try_iter()
