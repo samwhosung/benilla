@@ -461,4 +461,35 @@ mod tests {
         ));
         assert!(s.take_ui_errors().is_empty());
     }
+
+    /// `0x5e1840` sets the item on the cursor, the set's inner clear signalling `CURSOR_UPDATE`
+    /// with the cursor emptied (`0x4952cc`) and the set its own with the item held, then sends it
+    /// off, whose clear signals with the cursor empty again (`0x5e1761`). An engine step's handlers
+    /// held for the host read the cursor as each of those steps left it, as they do in place.
+    #[test]
+    fn a_held_handler_reads_the_cursor_its_step_left() {
+        for held in [false, true] {
+            let mut s = UiScript::new().unwrap();
+            s.set_container(0, Some(bag(&[(1, 0x11, 4), (2, 0x12, 4)])));
+            s.run(
+                "SEEN = '' local f = CreateFrame('Frame') f:RegisterEvent('CURSOR_UPDATE') \
+                 f:SetScript('OnEvent', function() SEEN = SEEN .. (CursorHasItem() and 1 or 0) end)",
+            )
+            .unwrap();
+            let sent = if held {
+                let sent = s.host_out(|s| s.auto_equip_guid(0x12, false));
+                s.refuse_waiting();
+                sent
+            } else {
+                s.auto_equip_guid(0x12, false)
+            };
+            assert!(matches!(sent, AutoEquip::Sent { guid: 0x12, .. }));
+            assert_eq!(
+                s.eval::<String>("return SEEN").unwrap(),
+                "010",
+                "held: {held}"
+            );
+            assert!(s.cursor_item().is_none(), "held: {held}");
+        }
+    }
 }
