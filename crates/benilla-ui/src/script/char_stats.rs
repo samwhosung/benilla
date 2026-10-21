@@ -97,10 +97,14 @@ pub struct UnitCombatStats {
     pub attack_power: i32,
     pub attack_power_pos: i32,
     pub attack_power_neg: i32,
+    /// `UNIT_FIELD_ATTACK_POWER_MULTIPLIER`, the percent bonus minus 1.0.
+    pub attack_power_multiplier: f32,
     /// Ranged AP + its split mods.
     pub ranged_attack_power: i32,
     pub ranged_attack_power_pos: i32,
     pub ranged_attack_power_neg: i32,
+    /// `UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER`, the same.
+    pub ranged_attack_power_multiplier: f32,
     /// Ranged attack speed in ms (`UNIT_FIELD_RANGEDATTACKTIME`).
     pub ranged_attack_time_ms: u32,
     /// Ranged damage range (`UNIT_FIELD_MINRANGEDDAMAGE`/`MAXRANGEDDAMAGE`).
@@ -151,9 +155,11 @@ impl Default for UnitCombatStats {
             attack_power: 0,
             attack_power_pos: 0,
             attack_power_neg: 0,
+            attack_power_multiplier: 0.0,
             ranged_attack_power: 0,
             ranged_attack_power_pos: 0,
             ranged_attack_power_neg: 0,
+            ranged_attack_power_multiplier: 0.0,
             ranged_attack_time_ms: 0,
             ranged_min_damage: 0.0,
             ranged_max_damage: 0.0,
@@ -448,6 +454,12 @@ fn asked_arg<T>(
 /// (`0x518eb8`, `0x51898f`), at the x87's double precision.
 fn swing_seconds(ms: u32) -> f64 {
     f64::from(ms) * f64::from(0.001f32)
+}
+
+/// One attack power value as `UnitAttackPower` pushes it: `(1 + m) · x` at the x87's double
+/// precision, stored as a single, then `fistp`'d to nearest even (`0x518fe2`-`0x518ffd`).
+fn scaled_attack_power(m: f32, x: i32) -> i64 {
+    (((f64::from(m) + 1.0) * f64::from(x)) as f32).round_ties_even() as i64
 }
 
 /// The damage-bonus triple `UnitDamage` and `UnitRangedDamage` push after the damage: the active
@@ -874,7 +886,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // UnitAttackPower(unit) → (base, posBuff, negBuff): `UNIT_FIELD_ATTACK_POWER` and the signed
-    // halves of `_MODS` (vmangos `StatSystem.cpp:335-336`), for any unit (the type word's unit bit,
+    // halves of `_MODS` (vmangos `StatSystem.cpp:335-336`), each scaled by `1 + _MULTIPLIER` and
+    // rounded alone (`0x518fe2`, `0x519019`, `0x519051`), for any unit (the type word's unit bit,
     // `0x518fd3`); the server sends them to the owner alone.
     g.set(
         "UnitAttackPower",
@@ -882,28 +895,30 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             asked_arg(lua, token, r#"Usage: UnitAttackPower("unit")"#, |a| {
                 a.map_or((0, 0, 0), |a| {
                     let s = a.fields;
+                    let m = s.attack_power_multiplier;
                     (
-                        i64::from(s.attack_power),
-                        i64::from(s.attack_power_pos),
-                        i64::from(s.attack_power_neg),
+                        scaled_attack_power(m, s.attack_power),
+                        scaled_attack_power(m, s.attack_power_pos),
+                        scaled_attack_power(m, s.attack_power_neg),
                     )
                 })
             })
         })?,
     )?;
 
-    // UnitRangedAttackPower(unit) → (base, posBuff, negBuff), from the ranged fields, under
-    // `UnitAttackPower`'s usage text (`0x5190d7`).
+    // UnitRangedAttackPower(unit) → (base, posBuff, negBuff), from the ranged fields scaled the
+    // same way, under `UnitAttackPower`'s usage text (`0x5190d7`).
     g.set(
         "UnitRangedAttackPower",
         lua.create_function(|lua, token: Value| {
             asked_arg(lua, token, r#"Usage: UnitAttackPower("unit")"#, |a| {
                 a.map_or((0, 0, 0), |a| {
                     let s = a.fields;
+                    let m = s.ranged_attack_power_multiplier;
                     (
-                        i64::from(s.ranged_attack_power),
-                        i64::from(s.ranged_attack_power_pos),
-                        i64::from(s.ranged_attack_power_neg),
+                        scaled_attack_power(m, s.ranged_attack_power),
+                        scaled_attack_power(m, s.ranged_attack_power_pos),
+                        scaled_attack_power(m, s.ranged_attack_power_neg),
                     )
                 })
             })
@@ -1363,9 +1378,11 @@ mod tests {
             attack_power: 78,
             attack_power_pos: 30,
             attack_power_neg: -10,
+            attack_power_multiplier: 0.0,
             ranged_attack_power: 52,
             ranged_attack_power_pos: 0,
             ranged_attack_power_neg: -3,
+            ranged_attack_power_multiplier: 0.0,
             ranged_attack_time_ms: 2800,
             ranged_min_damage: 31.0,
             ranged_max_damage: 47.0,
