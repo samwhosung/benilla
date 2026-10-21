@@ -1380,7 +1380,7 @@ fn fire_one(
             b_guid,
             tries,
         } => {
-            let ask = Ask::at(tries == 0, &commands);
+            let ask = Ask::at(tries == 0, commands);
             let a = names.resolve_player(a_guid, ask).map(str::to_string);
             let b = if b_guid != 0 {
                 names.resolve_player(b_guid, ask).map(str::to_string)
@@ -1449,7 +1449,7 @@ fn fire_one(
                 let name = match &msg.sender_name {
                     Some(n) => Some(n.clone()),
                     None if needs_name(msg.chat_type) && msg.sender_guid != 0 => names
-                        .resolve_player(msg.sender_guid, Ask::at(tries == 0, &commands))
+                        .resolve_player(msg.sender_guid, Ask::at(tries == 0, commands))
                         .map(str::to_string),
                     _ => None,
                 };
@@ -1475,17 +1475,17 @@ fn fire_one(
                     };
                     let subject = crate::npc_text::subject_for_guid(
                         subject_guid,
-                        &guids,
-                        &stores,
-                        &names,
-                        Ask::at(tries == 0, &commands),
+                        guids,
+                        stores,
+                        names,
+                        Ask::at(tries == 0, commands),
                         unit_names.get(),
                     );
                     let (text, clean) = crate::npc_text::substitute_checked(
                         &msg.text,
                         &crate::npc_text::MacroContext {
                             subject: subject.as_ref(),
-                            states: &states,
+                            states,
                         },
                     );
                     if clean {
@@ -1590,7 +1590,7 @@ fn fire_one(
                 tries,
             } => {
                 let name = names
-                    .resolve_player(guid, Ask::at(tries == 0, &commands))
+                    .resolve_player(guid, Ask::at(tries == 0, commands))
                     .map(str::to_string);
                 if name.is_none() && tries < NAME_MAX_TRIES {
                     return Some(Pending::Addon {
@@ -1617,7 +1617,7 @@ fn fire_one(
                 tries,
             } => {
                 let name = names
-                    .resolve_player(guid, Ask::at(tries == 0, &commands))
+                    .resolve_player(guid, Ask::at(tries == 0, commands))
                     .map(str::to_string);
                 if name.is_none() && tries < NAME_MAX_TRIES {
                     return Some(Pending::Roll {
@@ -1664,8 +1664,8 @@ fn fire_one(
                     super::combat::unit_name(
                         victim,
                         guids.0.get(&victim).and_then(|e| stores.get(*e).ok()),
-                        &names,
-                        Ask::at(true, &commands),
+                        names,
+                        Ask::at(true, commands),
                     )
                     .unwrap_or_else(|| script.unknown_object_text())
                 });
@@ -1713,8 +1713,8 @@ fn fire_one(
                     super::combat::unit_name(
                         victim,
                         guids.0.get(&victim).and_then(|e| stores.get(*e).ok()),
-                        &names,
-                        Ask::at(true, &commands),
+                        names,
+                        Ask::at(true, commands),
                     )
                     .unwrap_or_else(|| script.unknown_object_text())
                 });
@@ -1742,7 +1742,7 @@ fn fire_one(
             } => {
                 // Both names, looked up as the packet's (`0x49dc59`): the performer's, and ours
                 // for the "is the target me?" test.
-                let ask = Ask::at(tries == 0, &commands);
+                let ask = Ask::at(tries == 0, commands);
                 let performer_name = names.resolve_player(performer, ask).map(str::to_string);
                 let your_name = self_guid
                     .0
@@ -1778,7 +1778,7 @@ fn fire_one(
                     },
                 );
                 // No sentence is a real outcome: `/sit` prints nothing.
-                let Some(event) = event else { return None };
+                let event = event?;
                 route(script, windows, &event);
             }
             Pending::Combat(mut line) => {
@@ -1787,11 +1787,11 @@ fn fire_one(
                 // long as the cache takes to answer: the reference's list has no timer or
                 // count, and only the answer or the session's end removes an entry
                 // (`0x6293a0`, `0x6294cc`, `0x629a90`).
-                let ask = Ask::at(line.tries == 0, &commands);
+                let ask = Ask::at(line.tries == 0, commands);
                 let sources = super::combat::NameSources {
-                    names: &names,
-                    gameobjects: &gameobjects,
-                    items: &items,
+                    names,
+                    gameobjects,
+                    items,
                 };
                 let ready = line.fill_names(
                     |guid| {

@@ -277,17 +277,17 @@ fn every_feed_that_takes_a_handlers_queue_is_on_a_lane_or_listed() {
                 }
                 let takes: BTreeSet<ComponentId> = queues
                     .iter()
-                    .filter(|&&id| {
+                    .copied()
+                    .filter(|&id| {
                         Some(id) != vm
                             && !lanes.contains(&id)
                             && !host.has_resource_read(id)
                             && !host.has_resource_write(id)
                     })
-                    .filter(|&&id| {
+                    .filter(|&id| {
                         access.has_resource_write(id)
                             || (access.has_resource_read(id) && is_messages(world, id))
                     })
-                    .map(|&id| id)
                     .collect();
                 if !takes.is_empty() {
                     out.insert(system.name().to_string(), takes);
