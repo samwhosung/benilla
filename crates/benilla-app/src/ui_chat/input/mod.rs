@@ -15,6 +15,8 @@ mod parse;
 mod send;
 
 #[cfg(test)]
+pub(super) use channel::apply as apply_channel_command;
+#[cfg(test)]
 pub(super) use parse::lua_quoted_string;
 pub(super) use parse::{parse_line, ParsedChat};
 pub(crate) use send::ChatSender;

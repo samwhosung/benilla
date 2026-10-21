@@ -44,6 +44,8 @@ mod recruitment;
 /// The chat windows' saved look: tab tint, alpha and font size, read at login, saved at logout.
 pub(crate) mod settings;
 #[cfg(test)]
+mod slot_tests;
+#[cfg(test)]
 mod tests;
 
 pub(crate) use away::AfkMirror;

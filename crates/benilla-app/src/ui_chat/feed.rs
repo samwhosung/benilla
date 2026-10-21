@@ -634,12 +634,18 @@ impl ChatLog {
     /// The text of every composed line waiting to render, in order.
     #[cfg(test)]
     pub(crate) fn pending_lines(&self) -> Vec<String> {
+        self.pending_events().into_iter().map(|e| e.text).collect()
+    }
+
+    /// Every composed event waiting to render, in order.
+    #[cfg(test)]
+    pub(crate) fn pending_events(&self) -> Vec<ChatEvent> {
         self.q()
             .pending
             .iter()
             .map(|q| &q.item)
             .filter_map(|p| match p {
-                Pending::Event(e) => Some(e.text.clone()),
+                Pending::Event(e) => Some(e.clone()),
                 _ => None,
             })
             .collect()

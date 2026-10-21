@@ -381,6 +381,41 @@ mod tests {
         );
     }
 
+    /// Both handlers skip a slot whose state is not 0 (`0x49dd5a`-`0x49dd63`, `0x49deaa`-`0x49deb3`):
+    /// one the walk registered and the server has not confirmed (1), renamed (2) or suspended (3).
+    #[test]
+    fn the_defense_broadcasts_skip_every_slot_the_server_has_not_confirmed() {
+        use crate::ui_chat::edit::SlotState;
+        for state_of in [SlotState::Pending, SlotState::Renamed, SlotState::Suspended] {
+            let mut s = state(&["LocalDefense - Westfall", "WorldDefense"]);
+            for slot in s.joined.iter_mut().flatten() {
+                slot.state = state_of;
+            }
+            assert!(
+                defense_targets(&s, WESTFALL, Some(WESTFALL)).is_empty(),
+                "{state_of:?}"
+            );
+        }
+    }
+
+    /// The handlers read the row through the slot's id (`0x49dd69`-`0x49dd94`): a custom channel
+    /// whose name holds a defense row's pattern has id 0.
+    #[test]
+    fn a_custom_channel_named_like_a_defense_row_is_not_one() {
+        let mut s = state(&["WorldDefense"]);
+        s.joined[0].as_mut().unwrap().name = "WorldDefense2".into();
+        s.joined
+            .push(Some(crate::ui_chat::edit::ChannelSlot::confirmed(
+                "WorldDefense3",
+                0,
+            )));
+        assert_eq!(
+            defense_targets(&s, WESTFALL, Some(WESTFALL)),
+            vec!["WorldDefense2"],
+            "the slot that carries row 23 hears it, under whatever name; the custom one does not"
+        );
+    }
+
     /// The `%s` takes the area's name, not its zone's; the colour codes pass through.
     #[test]
     fn the_line_fills_the_frame_xml_template_with_the_area_name() {

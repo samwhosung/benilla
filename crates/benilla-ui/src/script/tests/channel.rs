@@ -365,3 +365,209 @@ fn join_channel_by_name_raises_pushes_two_values_or_nothing() {
         )
         .unwrap());
 }
+
+/// A slot of the app's mirror: its name, its `ChatChannels.dbc` id, and whether it is in state 0.
+fn slot(name: &str, id: u32, confirmed: bool) -> Option<crate::script::JoinedChannel> {
+    Some(crate::script::JoinedChannel {
+        name: name.into(),
+        id,
+        confirmed,
+    })
+}
+
+/// Rows 1 and 2 as `ChatChannels.dbc` has them, composed for Elwynn Forest.
+fn elwynn_rows() -> Vec<crate::script::ZoneChannelRow> {
+    vec![
+        crate::script::ZoneChannelRow {
+            id: 1,
+            shortcut: "General".into(),
+            resolved: Some("General - Elwynn Forest".into()),
+            listed: true,
+        },
+        crate::script::ZoneChannelRow {
+            id: 2,
+            shortcut: "Trade".into(),
+            resolved: Some("Trade - Elwynn Forest".into()),
+            listed: false,
+        },
+    ]
+}
+
+/// `GetChannelName` by number is `0x49bf30` after `__ftol` (`0x4a05ed`-`0x4a0609`), which keeps a
+/// slot in state 0 only (`0x49bf5c`-`0x49bf68`); by name it is `0x49be90` (`0x4a0627`), which
+/// tests no state.
+#[test]
+fn a_number_names_only_a_confirmed_slot_and_a_name_any() {
+    let mut s = script();
+    s.set_joined_channels(vec![
+        slot("General - Elwynn Forest", 1, true),
+        slot("Trade - Elwynn Forest", 2, false),
+        slot("MyChan", 0, false),
+    ]);
+    let miss = (0, None, 0);
+    for call in [
+        "GetChannelName(2)",
+        "GetChannelName('2')",
+        "GetChannelName(3)",
+        "GetChannelName(2.9)",
+        "GetChannelName(-1)",
+    ] {
+        assert_eq!(
+            s.eval::<(i64, Option<String>, i64)>(&format!("return {call}"))
+                .unwrap(),
+            miss,
+            "{call}: a slot the server has not confirmed answers no number"
+        );
+    }
+    assert_eq!(
+        s.eval::<(i64, String)>("return GetChannelName(1.9)")
+            .unwrap(),
+        (1, "General - Elwynn Forest".to_string()),
+        "the number truncates"
+    );
+    assert_eq!(
+        s.eval::<i64>("return GetChannelName('Trade - Elwynn Forest')")
+            .unwrap(),
+        2,
+        "the name finds the pending slot"
+    );
+    assert_eq!(s.eval::<i64>("return GetChannelName('mychan')").unwrap(), 3);
+}
+
+/// `GetChannelList` (`0x4a02d0`) skips every slot not in state 0 (`0x4a0302`-`0x4a030b`) and names
+/// each by its row's Shortcut when its id names a row (`0x4a0323`-`0x4a034f`), else by its own
+/// name (`0x4a0351`).
+#[test]
+fn the_channel_list_names_confirmed_slots_by_their_shortcut() {
+    let mut s = script();
+    s.set_zone_channel_catalog(elwynn_rows());
+    s.set_joined_channels(vec![
+        slot("General - Elwynn Forest", 1, true),
+        slot("Trade - Elwynn Forest", 2, false),
+        None,
+        slot("MyChan", 0, true),
+        slot("LocalDefense - Elwynn Forest", 22, true),
+    ]);
+    let list: Vec<mlua::Value> = s.eval("return {GetChannelList()}").unwrap();
+    let got: Vec<String> = list
+        .iter()
+        .map(|v| match v {
+            mlua::Value::Integer(i) => i.to_string(),
+            mlua::Value::Number(n) => n.to_string(),
+            mlua::Value::String(t) => t.to_str().unwrap().to_string(),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            "1",
+            "General",
+            "4",
+            "MyChan",
+            "5",
+            "LocalDefense - Elwynn Forest"
+        ],
+        "the pending Trade slot is left out; a row's slot is its Shortcut, a custom one or one \
+         whose id names no row its own name"
+    );
+}
+
+/// `RemoveChatWindowChannel` sends a number through `0x49e880` (`0x4a12bf`) to `0x49be50`, which
+/// answers a slot in state 0 only (`0x49be73`-`0x49be78`); with none it removes nothing
+/// (`0x4a12c9`).
+#[test]
+fn remove_chat_window_channel_numbers_only_a_confirmed_slot() {
+    let mut s = script();
+    s.run("AddChatWindowChannel(1, 'MyChan')").unwrap();
+    s.set_joined_channels(vec![slot("MyChan", 0, false)]);
+    s.run("RemoveChatWindowChannel(1, '1')").unwrap();
+    assert_eq!(
+        s.chat_window_looks()[0].channels,
+        vec![("MyChan".to_string(), 0)],
+        "slot 1 is not confirmed: nothing is removed"
+    );
+    s.set_joined_channels(vec![slot("MyChan", 0, true)]);
+    s.run("RemoveChatWindowChannel(1, '1')").unwrap();
+    assert!(s.chat_window_looks()[0].channels.is_empty());
+}
+
+/// The join body stores a matched row's Shortcut as its second result (`0x49ecec`-`0x49ecf3`),
+/// which `JoinChannelByName` returns (`0x49ffbc`-`0x49ffc5`); the packet carries the composed name
+/// and the slot the row's id (`0x49ede8`).
+#[test]
+fn join_channel_by_name_answers_a_rows_shortcut() {
+    let mut s = script();
+    s.set_zone_channel_catalog(elwynn_rows());
+    assert_eq!(
+        s.eval::<(i64, String)>("return JoinChannelByName('general')")
+            .unwrap(),
+        (1, "General".to_string())
+    );
+    assert!(matches!(
+        &s.take_channel_commands()[..],
+        [crate::script::ChannelCommand::Join { name, id: 1, .. }] if name == "General - Elwynn Forest"
+    ));
+}
+
+/// The join body takes its slot inside the call (`0x49ede8`-`0x49edf3`, the allocator
+/// `0x49b980`) in state 1 (`0x49ba0f`): the name finds it at once (`0x49be90`), its number does not
+/// (`0x49bf30`). A held name keeps its slot (`0x49b991`); with all ten taken the join gets none
+/// (`0x49b9c0`-`0x49b9d8`) and is still sent (`0x49ee02`).
+#[test]
+fn a_join_takes_a_pending_slot_inside_the_call() {
+    let mut s = script();
+    s.set_zone_channel_catalog(elwynn_rows());
+    s.set_joined_channels(vec![slot("General - Elwynn Forest", 1, true), None]);
+    s.run("JoinChannelByName('MyChan') A = GetChannelName('MyChan') B = GetChannelName(2)")
+        .unwrap();
+    assert_eq!(
+        s.eval::<(i64, i64)>("return A, B").unwrap(),
+        (2, 0),
+        "the freed slot 2 is taken, pending"
+    );
+    s.run("JoinChannelByName('General')").unwrap();
+    assert_eq!(
+        s.eval::<i64>("return GetChannelName('General - Elwynn Forest')")
+            .unwrap(),
+        1,
+        "a held name keeps its number"
+    );
+    for i in 3..=10 {
+        s.run(&format!("JoinChannelByName('Chan{i}')")).unwrap();
+    }
+    s.take_channel_commands();
+    s.run("JoinChannelByName('Eleventh')").unwrap();
+    assert_eq!(
+        s.eval::<i64>("return GetChannelName('Eleventh')").unwrap(),
+        0,
+        "ten slots taken: no slot"
+    );
+    assert!(
+        matches!(&s.take_channel_commands()[..],
+            [crate::script::ChannelCommand::Join { name, .. }] if name == "Eleventh"),
+        "the join still goes out"
+    );
+}
+
+/// The cascade's join goes through the join body (`0x49eb55` → `0x49eb70`), whose slot is in state
+/// 1 (`0x49ba0f`) until the server confirms it.
+#[test]
+fn the_cascades_join_is_pending_until_the_server_confirms_it() {
+    use crate::script::RecruitmentPlan;
+    let mut s = script();
+    s.set_joined_channels(vec![slot("General - Orgrimmar", 1, true)]);
+    s.set_guild_recruitment_plan(RecruitmentPlan::Join {
+        name: "GuildRecruitment - City".into(),
+        shortcut: "GuildRecruitment".into(),
+        id: 25,
+    });
+    s.run("SetGuildRecruitmentMode(1)").unwrap();
+    assert_eq!(
+        s.eval::<(i64, i64)>(
+            "return (GetChannelName('GuildRecruitment - City')), (GetChannelName(2))"
+        )
+        .unwrap(),
+        (2, 0)
+    );
+}

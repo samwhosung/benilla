@@ -23,7 +23,7 @@ fn manual_join_or_leave(channels: &ChannelState, script: &mut UiScript, wire_nam
 }
 
 /// Apply one queued channel verb: its slot writes and its packet, or its chat line.
-pub(super) fn apply(
+pub(in crate::ui_chat) fn apply(
     cmd: ChannelCommand,
     channels: &mut ChannelState,
     script: &mut UiScript,

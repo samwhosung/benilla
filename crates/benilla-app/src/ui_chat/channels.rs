@@ -1155,4 +1155,195 @@ mod tests {
         assert_eq!(cat.zone_channel_id("LocalDefense - Durotar"), 22);
         assert_eq!(cat.zone_channel_id("World"), 0);
     }
+
+    fn reg(name: &str, id: u32) -> WalkStep {
+        W::Register { name: s(name), id }
+    }
+
+    fn pending(name: &str) -> Option<crate::ui_chat::edit::ChannelSlot> {
+        Some(crate::ui_chat::edit::ChannelSlot {
+            state: SlotState::Pending,
+            ..joined(name).unwrap()
+        })
+    }
+
+    /// Outside a capital a city-named row takes the zone's name: the `%s` is the city word only for
+    /// a row with `0x20` in an area with `0x100` (`0x49a4af`-`0x49a4d8`), so pass 2 registers
+    /// `Trade - Elwynn Forest` (`0x49a50d`) before the city gate suspends it (`0x49a527`).
+    #[test]
+    fn outside_a_capital_trade_takes_the_zones_name() {
+        assert_eq!(
+            plan_walk(&state(SEED), "Elwynn Forest", OUTSIDE, CITY),
+            vec![
+                reg("General - Elwynn Forest", 1),
+                W::Join(s("General - Elwynn Forest")),
+                reg("Trade - Elwynn Forest", 2),
+                W::Suspend(s("Trade - Elwynn Forest")),
+                reg("LocalDefense - Elwynn Forest", 22),
+                W::Join(s("LocalDefense - Elwynn Forest")),
+            ]
+        );
+        // The trade gate (`0x8`) without the city word's bit (`0x100`) joins Trade by the zone.
+        assert_eq!(
+            plan_walk(&state(0b10), "Somewhere", 0x8, CITY),
+            vec![reg("Trade - Somewhere", 2), W::Join(s("Trade - Somewhere"))]
+        );
+    }
+
+    /// Back in a capital, a suspended slot skips the name test (`0x49a31c`) and is renamed in place
+    /// (`0x49a3dc`), which writes state 1, not 2 (`0x49bcd3`), so it is pending until its notice.
+    #[test]
+    fn a_suspended_trade_slot_is_renamed_into_a_capital_and_waits_for_its_notice() {
+        let mut c = state(0b10);
+        c.joined = vec![suspended("Trade - Elwynn Forest")];
+        let steps = plan_walk(&c, "Stormwind City", CAPITAL, CITY);
+        assert_eq!(
+            steps,
+            vec![
+                W::Rename {
+                    old: s("Trade - Elwynn Forest"),
+                    new: s("Trade - City")
+                },
+                W::Join(s("Trade - City")),
+            ]
+        );
+        apply_steps(&steps, &mut c);
+        assert_eq!(c.slot_state("Trade - City"), Some(SlotState::Pending));
+
+        // Suspended under the capital's own name, the same: renamed to itself.
+        let mut c = state(0b10);
+        c.joined = vec![suspended("Trade - City")];
+        let steps = plan_walk(&c, "Ironforge", CAPITAL, CITY);
+        apply_steps(&steps, &mut c);
+        assert_eq!(steps.last(), Some(&W::Join(s("Trade - City"))));
+        assert_eq!(c.slot_state("Trade - City"), Some(SlotState::Pending));
+    }
+
+    /// The walk's LEAVE goes out only from a slot in state 0 (`0x49a35e`): a pending one is renamed
+    /// and re-joined without it.
+    #[test]
+    fn the_walk_leaves_only_from_a_confirmed_slot() {
+        let mut c = state(SEED);
+        c.joined = vec![pending("General - Elwynn Forest")];
+        assert_eq!(
+            plan_walk(&c, "Westfall", OUTSIDE, CITY)[..2],
+            [
+                W::Rename {
+                    old: s("General - Elwynn Forest"),
+                    new: s("General - Westfall")
+                },
+                W::Join(s("General - Westfall")),
+            ]
+        );
+    }
+
+    /// The chat cache's `CHANNELS` names are the walk's third pass: registered with id 0
+    /// (`0x49a5da`) and joined (`0x49a5e2`-`0x49a62a`) after the zone channels, then the list is
+    /// freed (`0x49a692`-`0x49a69e`). With no zone text the walk skips all three passes
+    /// (`0x49a235`, `0x49a23d`).
+    #[test]
+    fn the_login_re_join_is_the_walks_third_pass() {
+        let mut c = state(SEED);
+        c.deferred_joins = vec![s("MyChan"), s("Other")];
+        let steps = plan_walk(&c, "Elwynn Forest", OUTSIDE, CITY);
+        assert_eq!(
+            steps[6..],
+            [
+                reg("MyChan", 0),
+                W::Join(s("MyChan")),
+                reg("Other", 0),
+                W::Join(s("Other")),
+            ]
+        );
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let errors = crate::ui_action::UiErrorKeys::default();
+        walk_zone(
+            &mut c,
+            "Elwynn Forest",
+            OUTSIDE,
+            CITY,
+            (&NetCommands(tx), &errors),
+            None,
+        );
+        assert_eq!(c.number_of("General - Elwynn Forest"), Some(1));
+        assert_eq!(c.number_of("MyChan"), Some(4));
+        assert_eq!(c.number_of("Other"), Some(5));
+        assert!(c.deferred_joins.is_empty(), "the list is spent");
+        assert_eq!(
+            rx.try_iter().count(),
+            4,
+            "General, LocalDefense, MyChan, Other"
+        );
+
+        let mut c = state(SEED);
+        c.deferred_joins = vec![s("MyChan")];
+        assert!(plan_walk(&c, "", OUTSIDE, CITY).is_empty());
+    }
+
+    /// Pass 2's allocator (`0x49a50d`) shows `ERR_TOO_MANY_CHAT_CHANNELS` with ten slots taken
+    /// (`0x49b9c5`), and the join still goes out (`0x49a536`-`0x49a577`); a suspended row sends
+    /// nothing either way.
+    #[test]
+    fn the_walk_with_ten_slots_taken_shows_too_many_channels() {
+        let mut c = state(SEED);
+        c.joined = (1..=10)
+            .map(|i| {
+                Some(crate::ui_chat::edit::ChannelSlot::confirmed(
+                    &format!("Chan{i}"),
+                    0,
+                ))
+            })
+            .collect();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let errors = crate::ui_action::UiErrorKeys::default();
+        walk_zone(
+            &mut c,
+            "Elwynn Forest",
+            OUTSIDE,
+            CITY,
+            (&NetCommands(tx), &errors),
+            None,
+        );
+        let keys: Vec<_> = errors.take().into_iter().map(|e| e.key).collect();
+        assert_eq!(keys, ["ERR_TOO_MANY_CHAT_CHANNELS"; 3]);
+        let joins: Vec<String> = rx
+            .try_iter()
+            .map(|c| match c {
+                ClientCommand::JoinChannel { name, .. } => name,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            joins,
+            ["General - Elwynn Forest", "LocalDefense - Elwynn Forest"]
+        );
+    }
+
+    /// The join and leave bodies resolve a Shortcut only against a non-empty zone text, whatever the
+    /// row's pattern (`0x49ece3`-`0x49ecea`, `0x49efca`-`0x49efd5`); the join body's city word needs
+    /// the area's `0x100` (`0x49ecc3`-`0x49ecda`).
+    #[test]
+    fn the_verbs_catalog_composes_as_the_join_body_does() {
+        let by = |rows: &[benilla_ui::script::ZoneChannelRow], shortcut: &str| {
+            rows.iter()
+                .find(|r| r.shortcut == shortcut)
+                .unwrap()
+                .resolved
+                .clone()
+        };
+        let rows = zone_channel_catalog(&catalog(), "", OUTSIDE, CITY);
+        assert_eq!(by(&rows, "WorldDefense"), None, "no zone text: no channel");
+        let rows = zone_channel_catalog(&catalog(), "Elwynn Forest", OUTSIDE, CITY);
+        assert_eq!(by(&rows, "Trade").as_deref(), Some("Trade - Elwynn Forest"));
+        assert_eq!(
+            by(&rows, "GuildRecruitment").as_deref(),
+            Some("GuildRecruitment - Elwynn Forest")
+        );
+        let rows = zone_channel_catalog(&catalog(), "Orgrimmar", CAPITAL, CITY);
+        assert_eq!(by(&rows, "Trade").as_deref(), Some("Trade - City"));
+        assert_eq!(by(&rows, "General").as_deref(), Some("General - Orgrimmar"));
+        // No city row at all (`0xb4e4f0` null): the zone's name (`0x49ecd8`).
+        let rows = zone_channel_catalog(&catalog(), "Orgrimmar", CAPITAL, None);
+        assert_eq!(by(&rows, "Trade").as_deref(), Some("Trade - Orgrimmar"));
+    }
 }
