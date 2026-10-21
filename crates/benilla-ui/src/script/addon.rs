@@ -175,8 +175,8 @@ fn addon_key(lua: &Lua, model: &Model, key: &Value, usage: &'static str) -> mlua
 /// Rebuild the Lua index array as `AddOn_ReadAddonInfoReply` (`0x51da70`) does in its tail,
 /// `[0x51dc30, 0x51dcdf)`, the array's only builder: hidden records dropped (`0x51dc4f`), the
 /// rest sorted case-insensitively by `## Title`, else folder name (`0x51deb0` through
-/// `AddOn_GetTitle 0x51df20`, `SStrCmpI`). Empty until the server replies. The reference's
-/// `qsort` (`0x73f727`) is unstable, which a stable sort refines.
+/// `AddOn_GetTitle 0x51df20`, `SStrCmpI`), by the CRT `qsort` (`0x73f727`) from the list's order.
+/// Titles that match without case sit where `qsort` leaves them. Empty until the server replies.
 fn rebuild_index(model: &mut Model) {
     let Some(reply) = model.addon_reply.take() else {
         model.addon_index = Vec::new(); // no reply yet, as in the reference
@@ -187,9 +187,12 @@ fn rebuild_index(model: &mut Model) {
     let mut index: Vec<usize> = (0..model.addons.len())
         .filter(|&i| !model.addons[i].hidden)
         .collect();
-    index.sort_by_key(|&i| {
+    let title = |i: usize| {
         let a = &model.addons[i];
-        a.title.as_deref().unwrap_or(&a.name).to_ascii_lowercase()
+        a.title.as_deref().unwrap_or(&a.name)
+    };
+    crate::crt::qsort(&mut index, |&a, &b| {
+        crate::crt::str_cmp_i(title(a), title(b))
     });
     model.addon_index = index;
 }
