@@ -292,6 +292,7 @@ fn on_spell_start(
                     spell_id,
                 )
             },
+            &|e| sc.stores.get(e).is_ok_and(|s| s.is_unit()),
             l.play_seq.next(),
         );
     }
@@ -967,6 +968,8 @@ fn spell_start(
     edits: &crate::creature_anim::UnitEdits,
     // Whether a spell resolves a visual for a caster, which its precast needs (`0x6ec220`).
     precasts: &dyn Fn(Entity, u32) -> bool,
+    // Whether a streamed object is a unit or a player (`ObjectStore::is_unit`).
+    is_unit: &dyn Fn(Entity) -> bool,
     seq: u64,
 ) {
     // A nonzero cast time marks the caster `Casting`; an instant gets none, its GO follows at once.
@@ -978,22 +981,26 @@ fn spell_start(
     let Some(display) = spells.and_then(|s| s.catalog.get(spell_id)) else {
         return;
     };
+    // The caster slot looked up as a unit (`0x468460` with type mask 8, `0x6e7892`); none ends
+    // the handler too (`0x6e789b je 0x6e7a5b`). vmangos writes a GameObject's caster slot as 0, so
+    // the decode names the object itself, which this refuses.
+    let Some(e) = index.0.get(&caster).copied().filter(|&e| is_unit(e)) else {
+        return;
+    };
     // The nocked-ammo refresh (`0x60ba30` at `0x6e78b6`, gated at `0x6e78a1` on `SpellRec+0x20 &
     // 0x20` or `+0x18 & 0x2`, for any caster): a ranged START attaches the wire's ammo display id,
     // or detaches without one. The model persists through Load/Hold and the fire clip.
     if display.ranged_attack() {
-        if let Some(&e) = index.0.get(&caster) {
-            match ammo_display_id.filter(|id| *id != 0) {
-                Some(display_id) => {
-                    commands
-                        .entity(e)
-                        .insert(crate::creature_anim::NockedAmmo { display_id });
-                }
-                None => {
-                    commands
-                        .entity(e)
-                        .remove::<crate::creature_anim::NockedAmmo>();
-                }
+        match ammo_display_id.filter(|id| *id != 0) {
+            Some(display_id) => {
+                commands
+                    .entity(e)
+                    .insert(crate::creature_anim::NockedAmmo { display_id });
+            }
+            None => {
+                commands
+                    .entity(e)
+                    .remove::<crate::creature_anim::NockedAmmo>();
             }
         }
     }
@@ -1019,43 +1026,41 @@ fn spell_start(
             cast_time_ms,
         });
     }
-    if let Some(&e) = index.0.get(&caster) {
-        if cast_time_ms > 0 {
-            commands.entity(e).insert(Casting {
-                spell_id,
-                until: Some(Instant::now() + Duration::from_millis(u64::from(cast_time_ms))),
-            });
-        }
-        // `0x6ec220`'s precast: another unit's unless the packet's flag bit 0 is set (`0x6e78f8`,
-        // vmangos's `CAST_FLAG_HIDDEN_COMBATLOG`), ours unless the spell is the pending record's
-        // (`0x6e79af`), whose send started it.
-        let starts = if self_guid.0 == Some(caster) {
-            pending.record_spell() != spell_id
-        } else {
-            cast_flags & 0x1 == 0
-        };
-        if starts && precasts(e, spell_id) {
-            edits.push(crate::creature_anim::UnitEdit::StartPrecast {
-                entity: e,
-                spell_id,
-            });
-        }
-        // Another unit's cast whose unit target is the player (`0x6e790d` mask bit `0x2`,
-        // `0x6e7926` a guid, `0x6e7939`/`0x6e7947` the player's) selects its caster when the
-        // target chain's gates pass ([`crate::target`]).
-        if self_guid.0 != Some(caster) && target.is_some() && target == self_guid.0 {
-            cast_at_player.write(CastAtPlayer { caster: e, seq });
-        }
-        // The precast edge, instants included: their GO follows at once and reaps the hold.
-        cast_events.write(CastEvent {
-            entity: e,
+    if cast_time_ms > 0 {
+        commands.entity(e).insert(Casting {
             spell_id,
-            kind: CastEventKind::Start,
-            cast_flags: 0,
-            item_cast: false,
-            seq,
+            until: Some(Instant::now() + Duration::from_millis(u64::from(cast_time_ms))),
         });
     }
+    // `0x6ec220`'s precast: another unit's unless the packet's flag bit 0 is set (`0x6e78f8`,
+    // vmangos's `CAST_FLAG_HIDDEN_COMBATLOG`), ours unless the spell is the pending record's
+    // (`0x6e79af`), whose send started it.
+    let starts = if self_guid.0 == Some(caster) {
+        pending.record_spell() != spell_id
+    } else {
+        cast_flags & 0x1 == 0
+    };
+    if starts && precasts(e, spell_id) {
+        edits.push(crate::creature_anim::UnitEdit::StartPrecast {
+            entity: e,
+            spell_id,
+        });
+    }
+    // Another unit's cast whose unit target is the player (`0x6e790d` mask bit `0x2`,
+    // `0x6e7926` a guid, `0x6e7939`/`0x6e7947` the player's) selects its caster when the
+    // target chain's gates pass ([`crate::target`]).
+    if self_guid.0 != Some(caster) && target.is_some() && target == self_guid.0 {
+        cast_at_player.write(CastAtPlayer { caster: e, seq });
+    }
+    // The precast edge, instants included: their GO follows at once and reaps the hold.
+    cast_events.write(CastEvent {
+        entity: e,
+        spell_id,
+        kind: CastEventKind::Start,
+        cast_flags: 0,
+        item_cast: false,
+        seq,
+    });
 }
 
 /// `GAMEOBJECT_TYPE_ID` 3, `CHEST`: the only GameObject type whose `OPEN_LOCK` cast arms the
@@ -2057,7 +2062,8 @@ mod tests {
                           mut pending: ResMut<PendingCast>,
                           edits: Res<crate::creature_anim::UnitEdits>,
                           spells: Option<Res<Spells>>,
-                          visuals: crate::creature_anim::PrecastVisuals| {
+                          visuals: crate::creature_anim::PrecastVisuals,
+                          stores: Query<&ObjectStore>| {
                         spell_start(
                             caster,
                             spell_id,
@@ -2075,6 +2081,7 @@ mod tests {
                             spells.as_deref(),
                             &edits,
                             &|e, spell_id| visuals.resolves(e, spell_id),
+                            &|e| stores.get(e).is_ok_and(|s| s.is_unit()),
                             1,
                         );
                     },
