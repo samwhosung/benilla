@@ -323,9 +323,25 @@ fn relock(lua: &Lua, guid: u64, locked: bool) {
         .set_item_lock(guid, locked);
 }
 
-/// Make a change to the cursor that waited, in its place.
-fn recursor(lua: &Lua, now: Option<super::cursor::CursorPayload>) {
-    lua.app_data_mut::<Model>().expect("model app_data").cursor = now;
+/// Make a change to the cursor that waited, in its place. Every change opens with `ClearCursor`
+/// (`0x495190`), which drops whatever the cursor holds when it runs: an item a handler ahead of it
+/// put on, neither the change's own `was` nor its `now`, is released, its lock lifted with its
+/// `ITEM_LOCK_CHANGED` (`0x4951c2`, `0x495420`), as the clear in its place would have.
+fn recursor(lua: &Lua, change: &CursorChange) {
+    use super::cursor::CursorPayload;
+    let item = |payload: &Option<CursorPayload>| match payload {
+        Some(CursorPayload::Item(item)) => Some(item.guid),
+        _ => None,
+    };
+    let released = {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        let held = std::mem::replace(&mut model.cursor, change.now.clone());
+        item(&held)
+            .filter(|&guid| item(&change.was) != Some(guid) && item(&change.now) != Some(guid))
+    };
+    if let Some(guid) = released {
+        super::tick::verb(lua, |model| super::cursor::unlock_item(model, guid));
+    }
 }
 
 /// Run a held fire now, under the input events and the sound suppression it was fired under.
@@ -491,7 +507,7 @@ pub(crate) fn drain(lua: &Lua) {
             }
             Waiting::Lua { held, input, muted } => replay(lua, &mut script, held, input, muted),
             Waiting::Lock { guid, locked, .. } => relock(lua, guid, locked),
-            Waiting::Cursor(change) => recursor(lua, change.now),
+            Waiting::Cursor(change) => recursor(lua, &change),
         }
         drain(lua);
     }
@@ -511,7 +527,7 @@ fn settle(lua: &Lua, script: &mut UiScript) {
         match item {
             Waiting::Lua { held, input, muted } => replay(lua, script, held, input, muted),
             Waiting::Lock { guid, locked, .. } => relock(lua, guid, locked),
-            Waiting::Cursor(change) => recursor(lua, change.now),
+            Waiting::Cursor(change) => recursor(lua, &change),
             call @ Waiting::Call(_) => {
                 requeue(lua, [call]);
                 drain(lua);
@@ -557,7 +573,7 @@ pub(crate) fn refuse_waiting(lua: &Lua) -> usize {
                         replay(lua, &mut script, held, input, muted)
                     }
                     Waiting::Lock { guid, locked, .. } => relock(lua, guid, locked),
-                    Waiting::Cursor(change) => recursor(lua, change.now),
+                    Waiting::Cursor(change) => recursor(lua, &change),
                 }
             }
         }
