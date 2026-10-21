@@ -38,11 +38,35 @@ pub(crate) struct InspectFeedState {
 /// The per-VM change bases.
 #[derive(Default)]
 struct InspectFeedMemo {
-    /// The slots last pushed, by player guid.
-    pushed: HashMap<u64, InventorySlots>,
+    /// What was last pushed, by player guid.
+    pushed: HashMap<u64, Pushed>,
     templates: gate::Watch,
     /// How many players' views were built, the feed's cost.
     builds: u64,
+}
+
+/// One player's last push and the visible-item fields it was built from.
+struct Pushed {
+    block: VisibleBlock,
+    slots: InventorySlots,
+}
+
+/// The fields of a player's visible-item block (`PLAYER_VISIBLE_ITEM_1_CREATOR` on, 12 a slot)
+/// that its views read: per slot the entry, the 7 enchants and the properties.
+type VisibleBlock = [u32; 19 * 9];
+
+fn visible_block(store: &ObjectStore) -> VisibleBlock {
+    let mut block = [0; 19 * 9];
+    for slot0 in 0..19u8 {
+        let at = usize::from(slot0) * 9;
+        block[at] = store.0.player_visible_item_entry(slot0).unwrap_or(0);
+        for j in 0..7u8 {
+            block[at + 1 + usize::from(j)] =
+                store.0.player_visible_item_enchant(slot0, j).unwrap_or(0);
+        }
+        block[at + 8] = store.0.player_visible_item_properties(slot0);
+    }
+    block
 }
 
 pub(crate) struct InspectUiPlugin;
@@ -215,16 +239,21 @@ pub(crate) fn feed_inspect(
                 continue;
             }
             held.insert(guid);
-            let fresh = !memo.pushed.contains_key(&guid);
-            if !(fresh || tables_moved || store.is_changed()) {
+            // Rebuilt when the views' fields moved, not on any descriptor write.
+            let last = memo.pushed.get(&guid);
+            if last.is_some() && !tables_moved && !store.is_changed() {
+                continue;
+            }
+            let block = visible_block(&store);
+            if !tables_moved && last.is_some_and(|p| p.block == block) {
                 continue;
             }
             let slots = tables.slots(&store);
             memo.builds += 1;
-            if memo.pushed.get(&guid) != Some(&slots) {
+            if last.map(|p| &p.slots) != Some(&slots) {
                 script.set_visible_equipment(guid, Some(slots.clone()));
-                memo.pushed.insert(guid, slots);
             }
+            memo.pushed.insert(guid, Pushed { block, slots });
         }
         memo.pushed.retain(|&guid, _| {
             let keep = held.contains(&guid);
