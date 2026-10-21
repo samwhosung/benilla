@@ -928,6 +928,62 @@ fn candidate(guid: u64, name: &str, dist2: f32) -> crate::script::NameCandidate 
     }
 }
 
+/// A seated selection that targets nobody.
+fn alone(guid: u64) -> crate::script::SeatedSelection {
+    crate::script::SeatedSelection {
+        guid,
+        target: 0,
+        target_held: false,
+    }
+}
+
+/// `0x515970` reads the target's `UNIT_FIELD_TARGET` as it resolves `"targettarget"`, so a seat
+/// carries the hop: a held unit as its snapshot, an unheld groupmate through its own token's push
+/// (the chain's roster arm), and nobody once the new target targets nobody.
+#[test]
+fn a_seated_selection_carries_its_target_of_target() {
+    let mut s = UiScript::new().unwrap();
+    s.set_unit_guids(&UnitGuids {
+        player: 0x10,
+        party: [0x22, 0, 0, 0],
+        target: 0x21,
+        ..Default::default()
+    });
+    let mut mate = candidate(0x22, "Bob", 9.0).state;
+    mate.has_object = false;
+    s.set_unit("party1", Some(mate));
+    s.set_unit("targettarget", Some(candidate(0x50, "Stale", 1.0).state));
+    s.set_name_candidate(0x31, Some(candidate(0x31, "Red Affinity", 4.0)));
+    s.set_name_candidate(0x32, Some(candidate(0x32, "Blue Whelp", 4.0)));
+    let tot = |s: &UiScript| {
+        s.eval::<Option<String>>("return UnitName('targettarget')")
+            .unwrap()
+    };
+
+    s.seat_selection(Some(crate::script::SeatedSelection {
+        guid: 0x31,
+        target: 0x32,
+        target_held: true,
+    }));
+    assert_eq!(tot(&s).as_deref(), Some("Blue Whelp"), "a held hop");
+
+    s.seat_selection(Some(crate::script::SeatedSelection {
+        guid: 0x31,
+        target: 0x22,
+        target_held: false,
+    }));
+    assert_eq!(tot(&s).as_deref(), Some("Bob"), "an unheld groupmate");
+
+    s.seat_selection(Some(alone(0x32)));
+    assert!(s
+        .eval::<bool>("return UnitExists('targettarget') == nil")
+        .unwrap());
+    s.seat_selection(None);
+    assert!(s
+        .eval::<bool>("return UnitExists('targettarget') == nil")
+        .unwrap());
+}
+
 /// Every selecting verb commits through `SetSelection 0x493540` before it returns, and the host
 /// seats the selection it committed as `"target"` for the rest of the chunk: the unit's by-name
 /// snapshot, else a pushed snapshot of its guid, else the unit as its guid alone, and nothing for a
@@ -949,7 +1005,7 @@ fn a_seated_selection_is_the_target_for_the_rest_of_the_chunk() {
     assert!(!s.take_target_view_moved());
     let health = |s: &UiScript| s.eval::<i64>("return UnitHealth('target')").unwrap();
 
-    s.seat_selection(Some(0x31));
+    s.seat_selection(Some(alone(0x31)));
     assert_eq!(
         s.eval::<String>("return UnitName('target')").unwrap(),
         "Red Affinity"
@@ -962,14 +1018,14 @@ fn a_seated_selection_is_the_target_for_the_rest_of_the_chunk() {
     assert_eq!(s.model_ref().unit_guids.target, 0x31);
     assert!(s.take_target_view_moved());
 
-    s.seat_selection(Some(0x22));
+    s.seat_selection(Some(alone(0x22)));
     assert_eq!(
         health(&s),
         45,
         "no candidate: party1's push of the same guid"
     );
 
-    s.seat_selection(Some(0x40));
+    s.seat_selection(Some(alone(0x40)));
     assert!(s.eval::<bool>("return UnitExists('target') == 1").unwrap());
     assert_eq!(
         s.model_ref().unit("target").map(|u| u.guid),
@@ -999,7 +1055,7 @@ fn seating_the_shown_target_keeps_the_feeds_push() {
     fed.health = 12;
     s.set_unit("target", Some(fed));
     s.set_name_candidate(0x21, Some(candidate(0x21, "Old Mob", 1.0)));
-    s.seat_selection(Some(0x21));
+    s.seat_selection(Some(alone(0x21)));
     assert_eq!(s.eval::<i64>("return UnitHealth('target')").unwrap(), 12);
     assert!(!s.take_target_view_moved());
 }

@@ -377,7 +377,7 @@ pub use types::{
     ExtractedQuad, FontObject, FontShadow, Gradient, JustifyH, JustifyV, LineMeasureRequest,
     MeasureRequest, Outline, QuadContent, ScriptValue, TexCoords, TextShadow,
 };
-pub use unit::by_name::{self, NameCandidate};
+pub use unit::by_name::{self, NameCandidate, SeatedSelection};
 pub use unit::{
     grey_band, level_reads_unknown, parse_unit_token, power_token, unit_is_grey, PlayerRecord,
     SelectionRequest, UnitBase, UnitGuids, UnitRelations, UnitState, UnitTokenParse,

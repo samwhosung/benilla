@@ -40,6 +40,24 @@ impl ScriptSelect<'_, '_> {
         self.commit.selection.target
     }
 
+    /// The selection as the VM seats it after a call moved it: the unit, its `UNIT_FIELD_TARGET`
+    /// (`0x515a0f`-`0x515a25`, the hop `"targettarget"` makes) and whether that unit is held.
+    pub(crate) fn seated(&self) -> Option<benilla_ui::script::SeatedSelection> {
+        let guid = self.commit.selection.guid?;
+        let target = self
+            .commit
+            .selection
+            .target
+            .and_then(|e| self.tokens.stores.get(e).ok())
+            .and_then(|s| s.0.unit_target())
+            .unwrap_or(0);
+        Some(benilla_ui::script::SeatedSelection {
+            guid,
+            target,
+            target_held: target != 0 && self.tokens.held(target).is_some(),
+        })
+    }
+
     /// `TargetUnit` (`0x4899d0`), `AssistUnit` (`0x489b80`) and `TargetLastEnemy` share the
     /// reference's helper `0x489a40`: a resolved unit or a roster member is committed, anything
     /// else is a no-op, never a deselect. Here a token must name a streamed unit, so an

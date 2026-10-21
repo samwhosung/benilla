@@ -211,7 +211,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
         let selected_after = appliers.p0().selected();
         let input = script.input_events();
         if selected_after != selected_before {
-            script.seat_selection(selected_after);
+            script.seat_selection(appliers.p0().seated());
             script.note_selection_cause(selected_after, input);
         }
         // The reports the call made, in its order: a refusal's `UI_ERROR_MESSAGE` and its
@@ -977,10 +977,8 @@ mod tests {
             r#"TargetUnit("party1") return UnitName("targettarget")"#,
         );
         assert_eq!(tot.as_deref(), Some("Me"), "the new target's target");
-        let exists = eval::<Option<i64>>(
-            &mut f,
-            r#"ClearTarget() return UnitExists("targettarget")"#,
-        );
+        let exists =
+            eval::<Option<i64>>(&mut f, r#"ClearTarget() return UnitExists("targettarget")"#);
         assert_eq!(exists, None, "no target, so no target of target");
     }
 

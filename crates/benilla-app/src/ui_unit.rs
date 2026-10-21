@@ -3787,7 +3787,11 @@ mod tests {
                 assistable_alive: true,
             }),
         );
-        script.seat_selection(Some(DRUID));
+        script.seat_selection(Some(benilla_ui::script::SeatedSelection {
+            guid: DRUID,
+            target: 0,
+            target_held: false,
+        }));
         assert_eq!(
             target_name(&mut app, "").as_deref(),
             Some("Druid"),

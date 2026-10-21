@@ -291,15 +291,46 @@ impl super::super::UiScript {
     }
 
     /// Seat the selection a script call just committed as `"target"` for the rest of its chunk,
-    /// `guid` `None` for nothing selected: every selecting verb commits through `SetSelection
-    /// 0x493540` before it returns, so `UnitName("target")` on the next line names the new unit.
-    /// The view is the unit's by-name snapshot, else a pushed snapshot of the same guid, else a bare
-    /// held unit; the next frame's unit feed replaces it with the committed selection's own push.
-    pub fn seat_selection(&mut self, guid: Option<u64>) {
+    /// `None` for nothing selected: every selecting verb commits through `SetSelection 0x493540`
+    /// before it returns, so `UnitName("target")` on the next line names the new unit. The view is
+    /// the unit's by-name snapshot, else a pushed snapshot of the same guid, else a bare held unit;
+    /// the next frame's unit feed replaces it with the committed selection's own push.
+    ///
+    /// `"targettarget"` follows: `0x515970` reads the target's `UNIT_FIELD_TARGET` as it resolves,
+    /// so it names the new target's target at once, a held unit as its snapshot, and an unheld or
+    /// absent one through the chain (a roster member out of range, or nobody).
+    pub fn seat_selection(&mut self, selected: Option<SeatedSelection>) {
         let mut model = self.model_mut();
-        let state = guid.map(|guid| model.held_view(guid));
+        let state = selected.map(|s| model.held_view(s.guid));
         model.show_selection(state);
+        let hop = selected.map_or(0, |s| {
+            model.unit_guids.held.insert(s.guid, s.target);
+            if s.target_held {
+                s.target
+            } else {
+                0
+            }
+        });
+        match (hop != 0).then(|| model.held_view(hop)) {
+            Some(tot) => {
+                model.units_by_lower.insert("targettarget".to_string(), tot);
+            }
+            None => {
+                model.units_by_lower.remove("targettarget");
+            }
+        }
     }
+}
+
+/// The selection a script call committed, as the call host seats it
+/// ([`super::super::UiScript::seat_selection`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SeatedSelection {
+    pub guid: u64,
+    /// Its `UNIT_FIELD_TARGET`, 0 for none.
+    pub target: u64,
+    /// The object manager holds the unit it targets.
+    pub target_held: bool,
 }
 
 impl Model {
