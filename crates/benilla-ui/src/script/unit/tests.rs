@@ -584,6 +584,45 @@ fn unit_xp_reads_the_player_globals_only_for_the_player_token() {
     assert_eq!(s.eval::<i64>(r#"return UnitXPMax("target")"#).unwrap(), 0);
 }
 
+/// `UnitXP` and `UnitXPMax` resolve their token (`0x51738e`) and answer for the active player's
+/// object by whatever token names it (`0x5173ad`-`0x5173c9`): `"target"` on yourself and
+/// `"PLAYER"` read the experience, another unit 0, and a token the resolver does not know raises
+/// (`0x515c14`).
+#[test]
+fn unit_xp_answers_any_token_naming_the_active_player() {
+    const ME: u64 = 0x10;
+    const OTHER: u64 = 0x20;
+    let mut s = UiScript::new().unwrap();
+    s.set_player_xp(4200, 6000);
+    let seat = |s: &mut UiScript, target: u64| {
+        s.set_unit_guids(&UnitGuids {
+            player: ME,
+            target,
+            held: [(ME, 0), (OTHER, 0)].into_iter().collect(),
+            ..Default::default()
+        });
+    };
+    seat(&mut s, ME);
+    for token in ["target", "PLAYER"] {
+        assert_eq!(
+            s.eval::<(i64, i64)>(&format!("return UnitXP({token:?}), UnitXPMax({token:?})"))
+                .unwrap(),
+            (4200, 6000),
+            "{token}"
+        );
+    }
+    seat(&mut s, OTHER);
+    assert_eq!(
+        s.eval::<(i64, i64)>(r#"return UnitXP("target"), UnitXPMax("target")"#)
+            .unwrap(),
+        (0, 0)
+    );
+    for call in [r#"UnitXP("bogus")"#, r#"UnitXPMax("npctarget")"#] {
+        let err = s.run(call).unwrap_err().to_string();
+        assert!(err.contains("Unknown unit name"), "{call}: {err}");
+    }
+}
+
 #[test]
 fn set_unit_none_removes_the_token() {
     let mut s = UiScript::new().unwrap();
