@@ -2294,6 +2294,42 @@ mod tests {
         assert!(s.take_ammo_record_asks().is_empty(), "the record is cached");
     }
 
+    /// `GetInventoryItemLink` and `GetInventoryItemCooldown` answer the ammo slot ahead of the
+    /// token's resolve (`0x4c8c8a`, `0x4c8ad4`): no values from the link and three zeros from the
+    /// cooldown, for any token, one the resolver does not know included.
+    #[test]
+    fn the_link_and_cooldown_answer_the_ammo_slot_before_the_token() {
+        let mut s = seated();
+        let mut slots: crate::script::InventorySlots = Default::default();
+        slots[0] = Some(InvSlotView {
+            item_id: 2512,
+            count: 200,
+            name: Some("Rough Arrow".into()),
+            link: Some("|cffffffff|Hitem:2512:0:0:0|h[Rough Arrow]|h|r".into()),
+            ..Default::default()
+        });
+        s.set_inventory_slots(slots);
+        for token in ["player", "bogus"] {
+            assert_eq!(
+                s.eval::<i64>(&format!(
+                    "local function n(...) return arg.n end \
+                     return n(GetInventoryItemLink({token:?}, 0))"
+                ))
+                .unwrap(),
+                0,
+                "{token}"
+            );
+            assert_eq!(
+                s.eval::<(f64, f64, f64)>(&format!(
+                    "return GetInventoryItemCooldown({token:?}, 0)"
+                ))
+                .unwrap(),
+                (0.0, 0.0, 0.0),
+                "{token}"
+            );
+        }
+    }
+
     #[test]
     fn inventory_item_bindings_serve_occupied_empty_and_absent_shapes() {
         let mut s = seated();
