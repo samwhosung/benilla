@@ -67,6 +67,8 @@ pub struct MailListEntry {
     pub subject: String,
     /// `0` = no letter body to fetch; nonzero = a [`super::item_text_query`] key.
     pub item_text_id: u32,
+    /// The `Package.dbc` id (`[rec+0x118]`), 0 for none; vmangos always sends 0.
+    pub package: u32,
     pub stationery: u32,
     pub item: Option<MailAttachment>,
     pub money: u32,
@@ -185,7 +187,7 @@ pub(super) fn read_mail_list_result(r: &mut &[u8]) -> io::Result<Vec<MailListEnt
         };
         let subject = read_cstring(r)?;
         let item_text_id = read_u32_le(r)?;
-        let _package = read_u32_le(r)?; // always 0 (vmangos hardcodes it)
+        let package = read_u32_le(r)?;
         let stationery = read_u32_le(r)?;
         let entry = read_u32_le(r)?;
         let perm_enchant = read_u32_le(r)?;
@@ -217,6 +219,7 @@ pub(super) fn read_mail_list_result(r: &mut &[u8]) -> io::Result<Vec<MailListEnt
             sender_id,
             subject,
             item_text_id,
+            package,
             stationery,
             item,
             money,

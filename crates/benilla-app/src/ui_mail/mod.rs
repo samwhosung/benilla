@@ -66,6 +66,14 @@ pub(crate) struct MailTemplates(pub(crate) std::collections::HashMap<u32, String
 #[derive(Resource)]
 pub(crate) struct Packages(pub(crate) Vec<benilla_formats::PackageRow>);
 
+/// The stores a row's icons and a non-player sender's name are read from.
+#[derive(Clone, Copy, Default)]
+pub(super) struct RowCatalogs<'a> {
+    pub(super) packages: Option<&'a Packages>,
+    pub(super) houses: Option<&'a crate::ui_auction::AuctionHouses>,
+    pub(super) gameobjects: Option<&'a crate::go_templates::GameObjectTemplates>,
+}
+
 /// A package row as the engine answers it: the icon under `StringLookups.dbc` row 3's folder
 /// (`0x4ae4ab`, the `"%s%s"` of folder and `\`, then the basename appended).
 fn package_view(row: &benilla_formats::PackageRow) -> benilla_ui::script::PackageView {
@@ -328,6 +336,7 @@ fn resolve_row(
     icons: Option<&ItemDisplays>,
     stationery: Option<&Stationery>,
     templates: Option<&MailTemplates>,
+    catalogs: RowCatalogs,
     names: &NameCache,
     ask: Ask<'_>,
     rolls: crate::items::RollCatalogs,
@@ -544,6 +553,7 @@ fn snapshot(
     icons: Option<&ItemDisplays>,
     stationery: Option<&Stationery>,
     templates: Option<&MailTemplates>,
+    catalogs: RowCatalogs,
     names: &NameCache,
     ask: Ask<'_>,
     rolls: crate::items::RollCatalogs,
@@ -563,6 +573,7 @@ fn snapshot(
                     icons,
                     stationery,
                     templates,
+                    catalogs,
                     names,
                     ask,
                     rolls,
@@ -587,6 +598,8 @@ struct MailFeedExtras<'w, 's> {
     closes: CoreCloses<'w, 's>,
     unit_names: crate::ui_unit::NameTables<'w>,
     templates: Option<Res<'w, MailTemplates>>,
+    houses: Option<Res<'w, crate::ui_auction::AuctionHouses>>,
+    gameobjects: Option<Res<'w, crate::go_templates::GameObjectTemplates>>,
     /// The diff fired `MAIL_INBOX_UPDATE` last frame, which the stock inbox answers with its
     /// getters, as it does the reference's cache callbacks' (`0x4af080`, `0x4af0a0` on status 1).
     inbox_updated: Local<'s, crate::ui_script::VmMemo<bool>>,
@@ -670,6 +683,8 @@ fn feed_mail(
         mut closes,
         unit_names,
         templates,
+        houses,
+        gameobjects,
         mut inbox_updated,
     } = extras;
     let rolls = crate::items::RollCatalogs {
@@ -711,6 +726,11 @@ fn feed_mail(
             icons.as_deref(),
             stationery.as_deref(),
             templates.as_deref(),
+            RowCatalogs {
+                packages: packages.as_deref(),
+                houses: houses.as_deref(),
+                gameobjects: gameobjects.as_deref(),
+            },
             &names,
             Ask::at(rows_event, &commands),
             rolls,
@@ -1022,6 +1042,7 @@ mod tests {
             sender_id: None,
             subject: "s".into(),
             item_text_id: 0,
+            package: 0,
             stationery: 41,
             item: None,
             money: 0,
@@ -1150,6 +1171,7 @@ mod tests {
             None,
             None,
             None,
+            RowCatalogs::default(),
             &names,
             Ask::New(&commands),
             crate::items::RollCatalogs::NONE,
@@ -1169,6 +1191,7 @@ mod tests {
             None,
             None,
             None,
+            RowCatalogs::default(),
             &names,
             Ask::New(&commands),
             crate::items::RollCatalogs::NONE,
@@ -1186,6 +1209,7 @@ mod tests {
             None,
             None,
             None,
+            RowCatalogs::default(),
             &names,
             Ask::New(&commands),
             crate::items::RollCatalogs::NONE,
@@ -1204,6 +1228,7 @@ mod tests {
             None,
             None,
             None,
+            RowCatalogs::default(),
             &names,
             Ask::New(&commands),
             crate::items::RollCatalogs::NONE,
@@ -1233,6 +1258,7 @@ mod tests {
                 None,
                 None,
                 None,
+                RowCatalogs::default(),
                 &names,
                 Ask::New(&commands),
                 crate::items::RollCatalogs::NONE,
@@ -1278,6 +1304,7 @@ mod tests {
                 None,
                 Some(&catalog),
                 None,
+                RowCatalogs::default(),
                 &names,
                 Ask::New(&commands),
                 crate::items::RollCatalogs::NONE,
@@ -1319,6 +1346,7 @@ mod tests {
             None,
             None,
             None,
+            RowCatalogs::default(),
             &names,
             Ask::New(&commands),
             crate::items::RollCatalogs::NONE,

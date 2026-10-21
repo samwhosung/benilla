@@ -183,6 +183,18 @@ impl GameObjectTemplates {
         self.templates.get(entry).map(|t| t.name.as_str())
     }
 
+    /// A template's name by entry, read as `ask` says, a miss asked with no spawn's guid: the inbox
+    /// header's game object sender (`0x558560` with the callback `0x4af080`, `0x4aee94`).
+    pub(crate) fn resolve_name(
+        &self,
+        entry: u32,
+        ask: crate::query_cache::Ask<'_>,
+    ) -> Option<&str> {
+        self.templates
+            .read(entry, ask, |commands| Self::send(entry, 0, commands))
+            .map(|t| t.name.as_str())
+    }
+
     /// The cached template for a GameObject, found through its own descriptor.
     pub(crate) fn of(&self, fields: &ObjectFields) -> Option<&GoTemplate> {
         Self::key(fields).and_then(|e| self.templates.get(e))
