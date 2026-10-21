@@ -85,7 +85,7 @@ impl AuctionVerbs<'_, '_> {
                     return;
                 };
                 match start {
-                    Err(_) => {}
+                    Err(key) => show_error(script, sink, key),
                     Ok(req) => {
                         let _ = commands.0.send(ClientCommand::AuctionSellItem {
                             auctioneer,
@@ -94,7 +94,10 @@ impl AuctionVerbs<'_, '_> {
                             buyout: req.buyout,
                             etime_minutes: req.duration,
                         });
-                        let _ = &*script;
+                        // The sell slot's clear follows the send whatever the server answers
+                        // (`0x4ce92a` → `0x4cd640`): the unlock and `NEW_AUCTION_UPDATE` fire in
+                        // the call.
+                        script.clear_auction_sell_item();
                     }
                 }
             }
@@ -133,7 +136,7 @@ fn send_query(
     });
     auction.query_gate = Some(now + QUERY_THROTTLE_SECS);
     auction.wire.browse_sent += 1;
-    let _ = &mut *script;
+    script.set_auction_can_query(false);
 }
 
 /// `PlaceAuctionBid` past its row: nothing with no player or no auctioneer (`0x4cf740`,
