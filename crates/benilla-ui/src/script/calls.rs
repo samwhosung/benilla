@@ -1173,6 +1173,43 @@ mod tests {
         }
     }
 
+    /// A clear that waited behind a held signal clears what the cursor holds when it is made
+    /// again: in 1.12.1 the signal's handler runs first, and `ClearCursor` (`0x495190`) then drops
+    /// whatever is on the cursor, releasing an item (`0x4951c2`, `0x495420`), so an item that
+    /// handler picked up goes off the cursor unlocked.
+    #[test]
+    fn a_waiting_clear_releases_what_a_handler_ahead_of_it_picked_up() {
+        use super::super::cursor::{self, CursorPayload};
+        let mut s = UiScript::new().unwrap();
+        let lua = s.lua().clone();
+        let pick_up = lua
+            .create_function(|lua, guid: u64| {
+                cursor::set_cursor(lua, true, |_| Some(CursorPayload::Item(held_item(guid))));
+                super::super::tick::verb(lua, |model| cursor::lock_item(model, guid));
+                Ok(())
+            })
+            .unwrap();
+        lua.globals().set("PICK_UP", pick_up).unwrap();
+        s.run(
+            r#"local f = CreateFrame("Frame")
+            f:RegisterEvent("PLAYER_TARGET_CHANGED")
+            f:SetScript("OnEvent", function() PICK_UP(1) end)"#,
+        )
+        .unwrap();
+        s.seed_item_locks([2]);
+        s.set_cursor_for_test(CursorPayload::Item(held_item(2)));
+        s.host_out(|s| {
+            s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+            s.run("ClearCursor()").unwrap();
+        });
+        s.hosted(&mut Stamping::default(), |_| ());
+        assert!(
+            s.model_ref().cursor.is_none(),
+            "the clear cleared the pick-up"
+        );
+        assert_eq!(s.item_locks(), Vec::<u64>::new(), "and released it");
+    }
+
     /// Lua the turn runs in place reads the locks as they are then, and its own unlock waits in
     /// order behind the held signal before it: `ClearCursor` (`0x495190`) on a held item unlocks
     /// it (`0x4951d9`) after the turn's first unlock signalled, so that signal's handler, run once
