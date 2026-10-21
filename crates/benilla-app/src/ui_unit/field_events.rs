@@ -77,27 +77,21 @@ impl NoticeFiring<'_, '_> {
         self.marks.as_ref().map_or(0, |m| m.of_chat(seq))
     }
 
-    /// Fire the waiting notices a chat item of handler call `call` comes after, those of an earlier
-    /// call or of the same one; `None` fires them all.
-    pub(crate) fn fire_waiting(&mut self, script: &mut UiScript, call: Option<usize>) {
-        let Some(deferred) = self.deferred.as_ref() else {
-            return;
+    /// Fire the first waiting notice if a chat item of handler call `call` comes after it, as one
+    /// of an earlier call or of the same one does; `None` fires it whatever its call. Whether one
+    /// fired: one at a time, so the chat drain shows each one's line before the next signals.
+    pub(crate) fn fire_next(&mut self, script: &mut UiScript, call: Option<usize>) -> bool {
+        let Some(&(id, notice)) = self.deferred.as_ref().and_then(|d| d.0.first()) else {
+            return false;
         };
-        let due = match call {
-            Some(call) => deferred
-                .0
-                .iter()
-                .take_while(|(id, _)| self.call_of_notice(*id) <= call)
-                .count(),
-            None => deferred.0.len(),
-        };
-        let due: Vec<FieldNotice> = match self.deferred.as_mut() {
-            Some(deferred) => deferred.0.drain(..due).map(|(_, n)| n).collect(),
-            None => Vec::new(),
-        };
-        for notice in due {
-            self.fire(script, notice);
+        if call.is_some_and(|call| self.call_of_notice(id) > call) {
+            return false;
         }
+        if let Some(deferred) = self.deferred.as_mut() {
+            deferred.0.remove(0);
+        }
+        self.fire(script, notice);
+        true
     }
 
     /// Whether a notice waits for the chat drain.

@@ -1068,33 +1068,33 @@ pub(super) fn feed_chat(
         return;
     }
     let mut parked = Vec::new();
-    // The notices left after every item's, fired once the items are done.
-    let mut rest_fired = notices.is_none();
+    // The waiting notices fire one at a time: a chat line one shows reaches the chat frames as it
+    // fires (`0x496720` → `0x49a870`), so it shows here, ahead of the next notice and the next
+    // item. The next notice fires if it comes before chat item `before`, or with `None` once the
+    // items are done; its lines come back.
+    let mut fire_next =
+        |before: Option<u64>, script: &mut benilla_ui::script::UiScript, host: Option<&mut _>| {
+            let notices = notices.as_mut()?;
+            let call = before.map(|seq| notices.call_of_chat(seq));
+            let mark = log.pushed();
+            let fired =
+                crate::script_calls::lent(script, host, |script| notices.fire_next(script, call));
+            fired.then(|| log.take_pending_since(mark))
+        };
     loop {
         let Some((queued, due)) = work.pop_front() else {
-            let Some(notices) = notices.as_mut().filter(|_| !rest_fired) else {
-                break;
-            };
-            rest_fired = true;
-            let mark = log.pushed();
-            crate::script_calls::lent(script, host.as_deref_mut(), |script| {
-                notices.fire_waiting(script, None);
-            });
-            work.extend(log.take_pending_since(mark).into_iter().map(|q| (q, false)));
+            // The notices left after every item's.
+            match fire_next(None, script, host.as_deref_mut()) {
+                Some(shown) => work.extend(shown.into_iter().map(|q| (q, false))),
+                None => break,
+            }
             continue;
         };
-        // The notices a packet wrote ahead of this item's, or in the same handler call. A chat line
-        // one shows reaches the chat frames as it fires (`0x496720`), so it shows here, ahead of
-        // this item.
-        if let Some(notices) = notices.as_mut().filter(|_| due) {
-            let call = notices.call_of_chat(queued.seq);
-            let mark = log.pushed();
-            crate::script_calls::lent(script, host.as_deref_mut(), |script| {
-                notices.fire_waiting(script, Some(call));
-            });
-            let shown = log.take_pending_since(mark);
-            if !shown.is_empty() {
-                work.push_front((queued, false));
+        // The notices a packet wrote ahead of this item's, or in the same handler call: each one's
+        // lines, then this item, which fires the next one first.
+        if due {
+            if let Some(shown) = fire_next(Some(queued.seq), script, host.as_deref_mut()) {
+                work.push_front((queued, true));
                 for line in shown.into_iter().rev() {
                     work.push_front((line, false));
                 }
