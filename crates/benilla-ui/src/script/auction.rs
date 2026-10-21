@@ -343,6 +343,60 @@ pub(crate) fn clear_sell_slot(model: &mut Model) {
     }
 }
 
+/// The error `ClickAuctionSellItemButton` refuses a held item with (`0x4ce360`-`0x4ce4f1`), read
+/// off the item and its record as the reference reads its object; none when the item is gone, as
+/// an object the cursor's guid no longer finds goes straight to the attach (`0x4ce35a`). In order:
+/// a bound item (`0x5da2c0`) is `ERR_AUCTION_QUEST_ITEM` for quest bonding 4 or 5 (`[rec+0x194]`)
+/// and `ERR_AUCTION_BOUND_ITEM` otherwise, a missing record included (`0x4ce38d`); record flags
+/// `0x2` or `0x10000` (`0x4ce3e2`, `0x4ce3ec`), `ITEM_FIELD_DURATION` (`0x4ce411`), an area
+/// (`0x5da500`) or a map (`0x5da570`) are `ERR_AUCTION_CONJURED_ITEM`; a container with an item in
+/// a seat is `ERR_AUCTION_BAG` (`0x4ce45e`-`0x4ce48f`); `ITEM_FIELD_FLAGS & 8` is
+/// `ERR_AUCTION_WRAPPED_ITEM` (`0x4ce4b1`); record flags `& 4` are `ERR_AUCTION_LOOT_ITEM`
+/// (`0x4ce4d6`). The record is the item cache's, read with no callback (`0x55ba30`); without one
+/// its flags read 0 (`0x5da2b3`).
+fn sell_refusal(model: &Model, item: &cursor::CursorItem) -> Option<&'static str> {
+    let (bound, flags, duration, seats) = if item.bag == cursor::EQUIPMENT_BAG {
+        let s = model
+            .inv_slot("player", item.slot as usize)
+            .filter(|s| s.guid == item.guid)?;
+        (s.already_bound, s.flags, s.field_duration, s.occupied_seats)
+    } else {
+        let s = model
+            .containers
+            .get(&item.bag)?
+            .slots
+            .get(&item.slot)
+            .filter(|s| s.guid == item.guid)?;
+        (s.already_bound, s.flags, s.field_duration, s.occupied_seats)
+    };
+    let record = model.item_templates.get(&item.item_id);
+    /// `BIND_QUEST_ITEM` and `BIND_QUEST_ITEM1`.
+    const QUEST_BONDING: [u32; 2] = [4, 5];
+    if bound {
+        return Some(
+            if record.is_some_and(|r| QUEST_BONDING.contains(&r.bonding)) {
+                "ERR_AUCTION_QUEST_ITEM"
+            } else {
+                "ERR_AUCTION_BOUND_ITEM"
+            },
+        );
+    }
+    let record_flags = record.map_or(0, |r| r.flags);
+    if record_flags & (0x2 | 0x10000) != 0
+        || duration != 0
+        || record.is_some_and(|r| r.area != 0 || r.map != 0)
+    {
+        return Some("ERR_AUCTION_CONJURED_ITEM");
+    }
+    if seats.is_some_and(|n| n > 0) {
+        return Some("ERR_AUCTION_BAG");
+    }
+    if flags & 0x8 != 0 {
+        return Some("ERR_AUCTION_WRAPPED_ITEM");
+    }
+    (record_flags & 0x4 != 0).then_some("ERR_AUCTION_LOOT_ITEM")
+}
+
 /// `pushed`, a page the VM already holds, in the order of `held`, its rows matched by auction id;
 /// a page whose ids differ is taken as pushed.
 fn in_held_order(held: &[AuctionItemRow], pushed: Vec<AuctionItemRow>) -> Vec<AuctionItemRow> {
@@ -1027,12 +1081,24 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ClickAuctionSellItemButton() (`0x4ce310`): attach the cursor's item, putting an earlier
-    // attachment back on the cursor ([`cursor::click_attach_slot`]); a changed slot signals
-    // `NEW_AUCTION_UPDATE` right after that `SetCursorItem` (`0x4ce56c`, `0x4ce576`).
+    // ClickAuctionSellItemButton() (`0x4ce310`): a held item the reference refuses shows its
+    // error and changes nothing ([`sell_refusal`]); otherwise attach the cursor's item, putting an
+    // earlier attachment back on the cursor ([`cursor::click_attach_slot`]), and a changed slot
+    // signals `NEW_AUCTION_UPDATE` right after that `SetCursorItem` (`0x4ce56c`, `0x4ce576`).
     g.set(
         "ClickAuctionSellItemButton",
         lua.create_function(|lua, ()| {
+            let refusal = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                match &model.cursor {
+                    Some(cursor::CursorPayload::Item(item)) => sell_refusal(&model, item),
+                    _ => None,
+                }
+            };
+            if let Some(key) = refusal {
+                super::tick::verb(lua, |model| model.push_ui_error(key));
+                return Ok(());
+            }
             if cursor::click_attach_slot(lua, |model| &mut model.auction_sell_item) {
                 super::tick::verb(lua, |model| {
                     model.raise("NEW_AUCTION_UPDATE", Vec::new());
