@@ -190,10 +190,10 @@ fn on_item_push_result(
     In(ev): In<SessionEvent>,
     self_guid: Res<SelfGuid>,
     mut loot: ResMut<LootState>,
-    mut tutorials: ResMut<crate::tutorial::Tutorials>,
+    tutorials: Res<crate::tutorial::Tutorials>,
 ) {
     if let SessionEvent::ItemPushResult(p) = ev {
-        item_push_result(p, &self_guid, &mut loot, &mut tutorials);
+        item_push_result(p, &self_guid, &mut loot, &mut tutorials.lock());
     }
 }
 
@@ -387,7 +387,7 @@ fn item_push_result(
     p: ItemPushResult,
     self_guid: &SelfGuid,
     loot: &mut LootState,
-    tutorials: &mut crate::tutorial::Tutorials,
+    tutorials: &mut crate::tutorial::TutorialState,
 ) {
     debug!(
         "net: item push {} x{} → bag {} slot {:#x}",
@@ -1627,7 +1627,7 @@ mod tests {
             push(ME, false),
             &me,
             &mut loot,
-            &mut crate::tutorial::Tutorials::default(),
+            &mut crate::tutorial::TutorialState::default(),
         );
         assert_eq!(loot.pending_receive_count(), 1);
     }

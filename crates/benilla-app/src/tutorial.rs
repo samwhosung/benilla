@@ -3,8 +3,8 @@
 //! the timers, the popup sound and the trigger sites.
 //!
 //! Both banks (`0xb711b8`, `0xb711e4`) are filled from the same `SMSG_TUTORIAL_FLAGS`; until it
-//! lands nothing fires. Bank A is fire-once: [`Tutorials::trigger`] tests and sets it and raises
-//! `TUTORIAL_TRIGGER(id + 1)`, never sending. Bank B is acknowledged: [`Tutorials::acknowledge`]
+//! lands nothing fires. Bank A is fire-once: [`TutorialState::trigger`] tests and sets it and raises
+//! `TUTORIAL_TRIGGER(id + 1)`, never sending. Bank B is acknowledged: [`TutorialState::acknowledge`]
 //! tests it, sets both banks, cancels the id's timer and sends `CMSG_TUTORIAL_FLAG`. So A ⊇ B, and
 //! doing the thing suppresses its tutorial, account-wide.
 //!
@@ -16,7 +16,7 @@
 //! `0x4b5390` and `0x4b54c0`); the ones this app can produce reach here through
 //! [`TutorialEvent`], the polled edges below, or a field watcher's
 //! [`crate::field_watch::FieldNotice::Tutorial`], fired in the watcher's place
-//! ([`Tutorials::fire_now`]).
+//! ([`TutorialState::fire_now`]).
 
 use std::time::{Duration, Instant};
 
@@ -87,7 +87,7 @@ pub(crate) const TARGETING_DELAY_MS: u32 = 10_000;
 const MOVEMENT_SILENCE: Duration = Duration::from_millis(90_000);
 
 /// The banks' frame: the world-entry bring-up, then the sites' triggers fired. A field watcher's
-/// tutorial tests the same fire-once bank after it ([`Tutorials::fire_now`]).
+/// tutorial tests the same fire-once bank after it ([`TutorialState::fire_now`]).
 #[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct TutorialFeed;
 
@@ -126,9 +126,33 @@ fn set_bank_bit(bank: &mut [u8], id: u32) {
     }
 }
 
-/// The two banks, the timers, and what the frame owes the VM and the wire.
+/// The tutorial state, shared through `&self` ([`Self::lock`]): the call host acknowledges inside
+/// a script call (`InviteToParty`'s `SetTutorialFlag` at `0x5e949c`) while systems that lend the
+/// host hold it too.
 #[derive(Resource, Default)]
-pub(crate) struct Tutorials {
+pub(crate) struct Tutorials(std::sync::Mutex<TutorialState>);
+
+impl Tutorials {
+    /// The state, held for one step; never across Lua, which may acknowledge in a call.
+    pub(crate) fn lock(&self) -> std::sync::MutexGuard<'_, TutorialState> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// `SetTutorialFlag(id)` (`0x4b54c0`) inside a script call: the acknowledge, and its
+    /// `CMSG_TUTORIAL_FLAG` sent at once, with any send owed before it, so it leaves ahead of the
+    /// call's own packet.
+    pub(crate) fn acknowledge_now(&self, id: u32, commands: &NetCommands) {
+        let mut state = self.lock();
+        state.acknowledge(id);
+        state.flush(commands);
+    }
+}
+
+/// The two banks, the timers, and what the frame owes the VM and the wire.
+#[derive(Default)]
+pub(crate) struct TutorialState {
     /// Bank A (`0xb711b8`…): fire-once. `None` until the packet lands.
     fire_once: Option<Vec<u8>>,
     /// Bank B (`0xb711e4`…): acknowledged.
@@ -142,7 +166,19 @@ pub(crate) struct Tutorials {
     pushes: Vec<(u32, u8, u32)>,
 }
 
-impl Tutorials {
+impl TutorialState {
+    /// Send what is owed, in order.
+    fn flush(&mut self, commands: &NetCommands) {
+        for send in std::mem::take(&mut self.sends) {
+            let command = match send {
+                TutorialSend::Flag(id) => ClientCommand::TutorialFlag { id },
+                TutorialSend::Clear => ClientCommand::TutorialClear,
+                TutorialSend::Reset => ClientCommand::TutorialReset,
+            };
+            let _ = commands.0.send(command);
+        }
+    }
+
     /// `SMSG_TUTORIAL_FLAGS`: both banks copied from the payload.
     pub(crate) fn apply_flags(&mut self, bytes: &[u8]) {
         self.fire_once = Some(bytes.to_vec());
@@ -276,7 +312,7 @@ const KEYRING_SLOTS: std::ops::RangeInclusive<u32> = 0x51..=0x70;
 /// event, and the acknowledged bank's push to whichever VM is live.
 fn feed_tutorials(
     mut hosted_vm: crate::script_calls::HostedVm,
-    mut tutorials: ResMut<Tutorials>,
+    tutorials: Res<Tutorials>,
     mut asks: MessageReader<TutorialEvent>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     items: Res<crate::items::Items>,
@@ -285,6 +321,7 @@ fn feed_tutorials(
 ) {
     hosted_vm.run(|mut script| {
         let now = Instant::now();
+        let mut tutorials = tutorials.lock();
         for ask in asks.read() {
             match *ask {
                 TutorialEvent::Trigger { id, delay_ms } => tutorials.trigger(id, delay_ms, now),
@@ -326,15 +363,18 @@ fn feed_tutorials(
         let Some(script) = script else {
             return;
         };
-        for published in std::mem::take(&mut tutorials.fired) {
-            fire_published(script, &sounds, published);
-        }
+        let fired = std::mem::take(&mut tutorials.fired);
         // The bank is owed to every VM: what it has been told is per VM, so a `/reload`'s fresh VM
         // is told again.
         let told = told.get(script);
         if *told != tutorials.acknowledged {
             told.clone_from(&tutorials.acknowledged);
             script.set_tutorial_bank(tutorials.acknowledged.clone());
+        }
+        // Free before any handler runs: one may acknowledge inside a call.
+        drop(tutorials);
+        for published in fired {
+            fire_published(script, &sounds, published);
         }
     })
 }
@@ -390,10 +430,11 @@ fn watch_self(
 /// After the script tick: the four verbs' writes, then every send.
 pub(crate) fn drain_tutorials(
     mut hosted_vm: crate::script_calls::HostedVm,
-    mut tutorials: ResMut<Tutorials>,
+    tutorials: Res<Tutorials>,
     commands: Res<NetCommands>,
 ) {
     hosted_vm.run(|script| {
+        let mut tutorials = tutorials.lock();
         if let Some(script) = script {
             for id in script.take_tutorial_flag_requests() {
                 tutorials.acknowledge(id);
@@ -405,14 +446,7 @@ pub(crate) fn drain_tutorials(
                 tutorials.reset();
             }
         }
-        for send in std::mem::take(&mut tutorials.sends) {
-            let command = match send {
-                TutorialSend::Flag(id) => ClientCommand::TutorialFlag { id },
-                TutorialSend::Clear => ClientCommand::TutorialClear,
-                TutorialSend::Reset => ClientCommand::TutorialReset,
-            };
-            let _ = commands.0.send(command);
-        }
+        tutorials.flush(&commands);
     })
 }
 
@@ -420,9 +454,10 @@ pub(crate) fn drain_tutorials(
 /// applied if there was one.
 fn on_world_enter(
     mut entered: MessageReader<EnteredWorldMessage>,
-    mut tutorials: ResMut<Tutorials>,
+    tutorials: Res<Tutorials>,
     mut cascade: ResMut<WorldEnterCascade>,
 ) {
+    let mut tutorials = tutorials.lock();
     for e in entered.read() {
         tutorials.world_enter();
         if let Some(bytes) = &e.tutorial_flags {
@@ -455,10 +490,11 @@ pub(crate) struct WorldEnterCascade {
 /// ahead of Welcome.
 fn run_world_enter_cascade(
     mut cascade: ResMut<WorldEnterCascade>,
-    mut tutorials: ResMut<Tutorials>,
+    tutorials: Res<Tutorials>,
     self_q: Query<(), With<SelfPlayer>>,
     arrivals: Query<&ObjectStore, Added<SelfPlayer>>,
 ) {
+    let mut tutorials = tutorials.lock();
     let now = Instant::now();
     for store in &arrivals {
         if store.0.player_flags() & 0x10 != 0 {
@@ -542,8 +578,8 @@ fn watch_windows(
     watch.taxi = taxi_open;
 }
 
-fn on_world_leave(mut tutorials: ResMut<Tutorials>, mut cascade: ResMut<WorldEnterCascade>) {
-    tutorials.world_leave();
+fn on_world_leave(tutorials: Res<Tutorials>, mut cascade: ResMut<WorldEnterCascade>) {
+    tutorials.lock().world_leave();
     cascade.armed = false;
     cascade.entered_at = None;
 }
@@ -594,9 +630,9 @@ mod net {
         app.net_handler(SessionEventKind::TutorialFlags, on_flags);
     }
 
-    fn on_flags(In(ev): In<SessionEvent>, mut tutorials: ResMut<Tutorials>) {
+    fn on_flags(In(ev): In<SessionEvent>, tutorials: Res<Tutorials>) {
         if let SessionEvent::TutorialFlags(bytes) = ev {
-            tutorials.apply_flags(&bytes);
+            tutorials.lock().apply_flags(&bytes);
         }
     }
 }
@@ -605,8 +641,8 @@ mod net {
 mod tests {
     use super::*;
 
-    fn banked() -> Tutorials {
-        let mut t = Tutorials::default();
+    fn banked() -> TutorialState {
+        let mut t = TutorialState::default();
         t.apply_flags(&[0u8; 32]);
         t
     }
@@ -615,7 +651,7 @@ mod tests {
     #[test]
     fn the_trigger_fires_once_per_bank_a_and_never_sends() {
         let now = Instant::now();
-        let mut t = Tutorials::default();
+        let mut t = TutorialState::default();
         t.trigger(id::WELCOME, 0, now);
         assert!(t.fired.is_empty(), "no bank yet: silent");
         let mut t = banked();
@@ -658,7 +694,7 @@ mod tests {
     /// B is a no-op.
     #[test]
     fn the_acknowledge_sets_both_banks_and_sends_once() {
-        let mut t = Tutorials::default();
+        let mut t = TutorialState::default();
         t.acknowledge(id::CHATTING);
         assert!(t.sends.is_empty(), "no bank: nothing");
         let mut t = banked();
@@ -707,7 +743,7 @@ mod tests {
     /// World enter zeroes present banks and keeps their size; the packet fills both.
     #[test]
     fn world_enter_zeroes_and_the_packet_fills() {
-        let mut t = Tutorials::default();
+        let mut t = TutorialState::default();
         t.world_enter();
         assert!(t.fire_once.is_none(), "no bank: nothing to zero");
         t.apply_flags(&[0xFFu8; 4]);
@@ -748,7 +784,8 @@ mod tests {
         let mut bank = vec![0xFFu8; 32];
         bank[0] = 0xFE;
         app.world_mut()
-            .resource_mut::<Tutorials>()
+            .resource::<Tutorials>()
+            .lock()
             .apply_flags(&bank);
 
         app.insert_non_send_resource(UiScript::new().expect("VM"));
@@ -773,7 +810,8 @@ mod tests {
     fn an_unchanged_bank_is_not_re_pushed_every_frame() {
         let mut app = feeder();
         app.world_mut()
-            .resource_mut::<Tutorials>()
+            .resource::<Tutorials>()
+            .lock()
             .apply_flags(&[0u8; 32]);
         app.insert_non_send_resource(UiScript::new().expect("VM"));
         app.update();
@@ -785,7 +823,8 @@ mod tests {
         assert!(!enabled(&mut app), "unchanged ⇒ nothing pushed");
         // A real change is still pushed, on the same VM.
         app.world_mut()
-            .resource_mut::<Tutorials>()
+            .resource::<Tutorials>()
+            .lock()
             .acknowledge(id::CHATTING);
         app.update();
         assert!(enabled(&mut app), "a moved bank reaches the live VM");
@@ -852,7 +891,8 @@ mod tests {
             .unwrap();
         app.insert_non_send_resource(script);
         app.world_mut()
-            .resource_mut::<Tutorials>()
+            .resource::<Tutorials>()
+            .lock()
             .apply_flags(&[0u8; 32]);
         app.update();
         let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
@@ -888,14 +928,15 @@ mod tests {
         app.insert_non_send_resource(UiScript::new().expect("a frameless VM"));
 
         {
-            let mut t = app.world_mut().resource_mut::<Tutorials>();
+            let t = app.world().resource::<Tutorials>();
+            let mut t = t.lock();
             t.apply_flags(&[0u8; 32]);
             t.trigger(id::WELCOME, 0, Instant::now());
         }
 
         app.update();
         assert_eq!(
-            app.world().resource::<Tutorials>().fired,
+            app.world().resource::<Tutorials>().lock().fired,
             vec![id::WELCOME + 1],
             "the window must not publish: there is no frame registered for TUTORIAL_TRIGGER, and \
              the take is one-way"
@@ -906,7 +947,7 @@ mod tests {
             .remove_resource::<crate::ui_script::PendingEntryUiLoad>();
         app.update();
         assert!(
-            app.world().resource::<Tutorials>().fired.is_empty(),
+            app.world().resource::<Tutorials>().lock().fired.is_empty(),
             "…and once there is an interface, it is published exactly once"
         );
     }

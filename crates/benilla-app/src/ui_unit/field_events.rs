@@ -38,7 +38,7 @@ pub(crate) struct NoticeFiring<'w, 's> {
     names: Res<'w, crate::names::NameCache>,
     // The quest log's watcher reads the slots.
     me: Query<'w, 's, &'static crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
-    tutorials: Option<ResMut<'w, crate::tutorial::Tutorials>>,
+    tutorials: Option<Res<'w, crate::tutorial::Tutorials>>,
     // `Option`, as the marks: a harness without the unit plugin defers nothing.
     deferred: Option<ResMut<'w, DeferredNotices>>,
     marks: Option<Res<'w, super::wire_order::WireMarks>>,
@@ -55,7 +55,8 @@ impl NoticeFiring<'_, '_> {
         }
         if let FieldNotice::Tutorial { id } = notice {
             // `0x4b5390` with no delay, inside the watcher's run.
-            if let Some(published) = self.tutorials.as_mut().and_then(|t| t.fire_now(id)) {
+            let published = self.tutorials.as_ref().and_then(|t| t.lock().fire_now(id));
+            if let Some(published) = published {
                 crate::tutorial::fire_published(script, &self.sink.sounds, published);
             }
             return;
@@ -792,7 +793,8 @@ mod tests {
         let mut app = world(seated());
         app.init_resource::<crate::tutorial::Tutorials>();
         app.world_mut()
-            .resource_mut::<crate::tutorial::Tutorials>()
+            .resource::<crate::tutorial::Tutorials>()
+            .lock()
             .apply_flags(&[0u8; 8]);
         assert_eq!(
             fired(
