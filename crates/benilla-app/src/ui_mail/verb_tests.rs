@@ -366,7 +366,7 @@ fn the_list_defaults_the_paper_and_masks_the_subject() {
             benilla_formats::StationeryRow {
                 id: 42,
                 item: 9312,
-                texture: "PRICEY".into(),
+                texture: "FREE".into(),
                 flags: 1,
             },
             benilla_formats::StationeryRow {
@@ -379,7 +379,8 @@ fn the_list_defaults_the_paper_and_masks_the_subject() {
     ));
     {
         let mut items = world.resource_mut::<crate::items::Items>();
-        for (entry, price) in [(9311, 0), (9312, 25)] {
+        // The cheapest paper is not the lowest id, so the sort, not the id order, picks it.
+        for (entry, price) in [(9311, 25), (9312, 0)] {
             let mut t = crate::items::test_template("Paper");
             t.buy_price = price;
             items.insert_template(entry, Some(t));
@@ -405,7 +406,7 @@ fn the_list_defaults_the_paper_and_masks_the_subject() {
         .iter()
         .map(|e| (e.stationery, e.subject.as_str()))
         .collect();
-    assert_eq!(rows, [(41, "!@#$ it"), (41, "s"), (61, "s")]);
+    assert_eq!(rows, [(42, "!@#$ it"), (42, "s"), (61, "s")]);
 }
 
 /// `GetInboxText` masks the text it reads (`0x4af203`, `dl` 0) on every call, after the `$`
@@ -448,4 +449,80 @@ fn get_inbox_text_masks_a_letter_but_not_a_template() {
             "darn template".to_string()
         )
     );
+}
+
+/// An auction notice's subject is masked by the list parse that rewrites it, when its item is
+/// held then (`0x4ace70`, then `0x4ad5b2`); one whose item lands later is rewritten by the
+/// template's callback (`0x4ad010` → `0x4ace40`), unmasked.
+#[test]
+fn an_auction_subject_is_masked_by_the_list_parse_alone() {
+    let mut h = Mailbox::new(Vec::new());
+    h.script()
+        .run("AUCTION_WON_MAIL_SUBJECT = 'Auction won: %s'")
+        .expect("the string sets");
+    let world = h.app.world_mut();
+    world.insert_resource(darn_filter());
+    world
+        .resource_mut::<crate::items::Items>()
+        .insert_template(2589, Some(crate::items::test_template("darn cloth")));
+    let notice = |id: u32, item: u32| MailListEntry {
+        message_type: mail_message_type::AUCTION,
+        sender_guid: None,
+        sender_id: Some(1),
+        subject: format!("{item}:0:1"),
+        ..entry(id, 0)
+    };
+    crate::net::handlers::dispatch(
+        world,
+        vec![SessionEvent::MailList {
+            mails: vec![notice(1, 2589), notice(2, 2590)],
+        }],
+    );
+    h.feed();
+    h.app
+        .world_mut()
+        .resource_mut::<crate::items::Items>()
+        .insert_template(2590, Some(crate::items::test_template("darn wool")));
+    h.feed();
+    let subjects: (String, String) = h.eval(
+        "local _, _, _, a = GetInboxHeaderInfo(1) local _, _, _, b = GetInboxHeaderInfo(2) \
+         return a, b",
+    );
+    assert_eq!(
+        subjects,
+        (
+            "Auction won: !@#$ cloth".to_string(),
+            "Auction won: darn wool".to_string()
+        )
+    );
+}
+
+/// The read mark's `MAIL_INBOX_UPDATE` (`0x4add9d`) comes before the body is read and masked
+/// (`0x4af1bf`, `0x4af203`), so a handler that reads the letter again inside it takes the mask's
+/// first phase and the outer call its own masked body.
+#[test]
+fn a_nested_get_inbox_text_leaves_the_outer_body_masked() {
+    let mut h = Mailbox::new(vec![entry(1, 9)]);
+    h.app.world_mut().insert_resource(darn_filter());
+    {
+        let mut script = h.script();
+        script.set_mail(Some(MailState {
+            inbox: vec![MailInboxRow {
+                body: Some("darn mail".into()),
+                ..row_of(&entry(1, 9))
+            }],
+            open: true,
+        }));
+        script
+            .run(
+                r#"local f = CreateFrame("Frame")
+                f:RegisterEvent("MAIL_INBOX_UPDATE")
+                f:SetScript("OnEvent", function()
+                    if not INNER then INNER = GetInboxText(1) end
+                end)"#,
+            )
+            .expect("the reader installs");
+    }
+    let bodies: (String, String) = h.eval("local outer = GetInboxText(1) return outer, INNER");
+    assert_eq!(bodies, ("%^&* mail".to_string(), "!@#$ mail".to_string()));
 }

@@ -1501,6 +1501,32 @@ mod tests {
             .unwrap());
     }
 
+    /// The header's first icon is the row's, a GM letter's and an item-less row's alike: the
+    /// binding pushes what `0x4aec76`-`0x4aecf8` found, with no GM or item gate.
+    #[test]
+    fn the_header_pushes_the_rows_package_icon_ungated() {
+        let mut s = kept();
+        let mut gm = row(2589);
+        (gm.mail_id, gm.is_gm, gm.can_reply) = (1, true, false);
+        let mut boxed = row(0);
+        boxed.mail_id = 2;
+        boxed.package_icon = Some("Interface\\Icons\\INV_BOX_04".into());
+        s.set_mail(Some(MailState {
+            inbox: vec![gm, boxed],
+            open: true,
+        }));
+        let icons: (String, String) = s
+            .eval("return GetInboxHeaderInfo(1), GetInboxHeaderInfo(2)")
+            .unwrap();
+        assert_eq!(
+            icons,
+            (
+                "Interface\\Icons\\INV_Misc_Bag_08".to_string(),
+                "Interface\\Icons\\INV_BOX_04".to_string()
+            )
+        );
+    }
+
     /// A row that does not exist still answers the full tuple: `GetInboxHeaderInfo` 13 values,
     /// four nils, `0` money, COD and days left, six nils (`0x4aeff0`..`0x4af05e`), so a closed
     /// letter's `GetInboxHeaderInfo(0)` can be compared with `CODAmount > 0` (`MailFrame.lua:399`);
@@ -1698,6 +1724,33 @@ mod tests {
         assert_eq!(s.take_ui_errors(), vec!["ERR_ITEM_NOT_FOUND"]);
         assert_eq!(heard::take(&s), ["MAIL_SEND_INFO_UPDATE"]);
         assert!(s.eval::<bool>("return GetSendMailItem() == nil").unwrap());
+    }
+
+    /// The send finds its attachment by the object and its owner (`0x4ae92e`-`0x4ae955`), wherever
+    /// the player holds it: an item attached off the doll sends.
+    #[test]
+    fn send_mail_sends_an_item_attached_off_the_doll() {
+        let mut s = kept();
+        s.set_mail(Some(MailState {
+            open: true,
+            ..Default::default()
+        }));
+        let mut doll: crate::script::InventorySlots = Default::default();
+        doll[16] = Some(crate::script::InvSlotView {
+            item_id: 7000,
+            guid: 0x716,
+            count: 1,
+            ..Default::default()
+        });
+        s.set_inventory_slots(doll);
+        s.run("PickupInventoryItem(16) ClickSendMailItemButton()")
+            .unwrap();
+        assert!(s.model_ref().mail_send_item.is_some(), "attached");
+        select_default_stationery(&mut s);
+        let _ = s.take_ui_errors();
+        s.run("SendMail('Bob', 'Hi', 'b')").unwrap();
+        assert!(s.take_ui_errors().is_empty());
+        assert_eq!(sends(&mut s).map(|r| r.item_guid), Some(0x716));
     }
 
     /// `CloseMail` zeroes the mailbox inside the verb (`0x4aded0` → `0x4acd8f`): a mail verb

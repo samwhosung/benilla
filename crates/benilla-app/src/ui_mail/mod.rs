@@ -1317,6 +1317,193 @@ mod tests {
         assert_eq!(texture(77), None);
     }
 
+    /// `GetInboxHeaderInfo`'s first icon is the package's when the row carries a package id the
+    /// store holds (`[rec+0x118]`, `0x4aec76`-`0x4aec9c`), else its item's (`[rec+0x120]`,
+    /// `0x4aeca6`-`0x4aecd8`), whatever the paper; the second is the paper's item's icon
+    /// (`[rec+0x11c]` → the store row's item, `0x4aed25`-`0x4aed74`), nil for a paper the store
+    /// lacks or an item not yet held.
+    #[test]
+    fn the_header_icons_read_the_package_and_the_paper_item() {
+        use benilla_formats::{ItemDisplay, ItemDisplayCatalog};
+        let states = crate::world_state::WorldStates::default();
+        let mut items = Items::default();
+        for (item, display) in [(9311, 5), (18154, 6), (2589, 7)] {
+            let mut t = crate::items::test_template("Paper");
+            t.display_info_id = display;
+            items.insert_template(item, Some(t));
+        }
+        let icons = ItemDisplays::icons_for_tests(ItemDisplayCatalog::from_displays(
+            std::collections::HashMap::from([5, 6, 7].map(|id| {
+                (
+                    id,
+                    ItemDisplay {
+                        icon: Some(format!("ICON{id}")),
+                        ..Default::default()
+                    },
+                )
+            })),
+        ));
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let names = NameCache::default();
+        let bodies = QueryCache::default();
+        let row = |id, item| benilla_formats::StationeryRow {
+            id,
+            item,
+            texture: "STATIONERYTEST".into(),
+            flags: 1,
+        };
+        let catalog = Stationery(benilla_formats::StationeryCatalog::from_rows(vec![
+            row(41, 9311),
+            row(61, 18154),
+            row(42, 9999),
+        ]));
+        let packages = Packages(vec![benilla_formats::PackageRow {
+            id: 2,
+            icon: "INV_BOX_04".into(),
+            cost: 10,
+            name: "Gift".into(),
+        }]);
+        let icons_of = |stationery: u32, package: u32, item: bool| {
+            let mut e = entry(1, Some(0xA), 0, 30.0);
+            (e.stationery, e.package) = (stationery, package);
+            if item {
+                e.item = Some(MailAttachment {
+                    entry: 2589,
+                    perm_enchant: 0,
+                    random_prop_id: 0,
+                    suffix_factor: 0,
+                    count: 1,
+                    charges: 0,
+                    durability_max: 0,
+                    durability: 0,
+                });
+            }
+            let r = resolve_row(
+                &e,
+                &bodies,
+                &items,
+                Some(&icons),
+                Some(&catalog),
+                None,
+                RowCatalogs {
+                    packages: Some(&packages),
+                    ..Default::default()
+                },
+                &names,
+                Ask::New(&commands),
+                crate::items::RollCatalogs::NONE,
+                &no_macros(&states),
+                &no_strings,
+            );
+            (r.package_icon, r.stationery_icon)
+        };
+        let s = |v: &str| Some(v.to_string());
+        let gift = s("Interface\\Icons\\INV_BOX_04");
+        assert_eq!(icons_of(41, 2, true), (gift.clone(), s("ICON5")));
+        assert_eq!(icons_of(41, 2, false), (gift, s("ICON5")), "no item asked");
+        assert_eq!(
+            icons_of(41, 3, true),
+            (s("ICON7"), s("ICON5")),
+            "no such package"
+        );
+        assert_eq!(
+            icons_of(61, 0, true),
+            (s("ICON7"), s("ICON6")),
+            "a GM row's item"
+        );
+        assert_eq!(icons_of(61, 0, false), (None, s("ICON6")));
+        assert_eq!(icons_of(77, 0, false), (None, None), "no such paper");
+        assert_eq!(icons_of(42, 0, false), (None, None), "its item not held");
+    }
+
+    /// `GetInboxHeaderInfo` names a non-player sender from its store by the row's sender id
+    /// (`[rec+0x10]`, jump table `0x4af068`): an auction house's `AuctionHouse.dbc` name
+    /// (`0x4aee11`), a creature's (`0x4aee48`) and a game object's (`0x4aee78`) cached names, each
+    /// nil until held.
+    #[test]
+    fn a_non_player_sender_is_named_from_its_store() {
+        let states = crate::world_state::WorldStates::default();
+        let items = Items::default();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut names = NameCache::default();
+        names.insert_creature(
+            3,
+            Some(crate::names::CreatureRecord {
+                name: "Innkeeper Farley".into(),
+                subname: None,
+                creature_type: 7,
+                pet_family: 0,
+                rank: 0,
+                type_flags: 0,
+                pet_spell_list: 0,
+                civilian: false,
+                racial_leader: false,
+                display_id: 0,
+            }),
+        );
+        let mut gameobjects = crate::go_templates::GameObjectTemplates::default();
+        gameobjects.insert(4, 19, "Mailbox".into(), &[0; 24]);
+        let houses = crate::ui_auction::AuctionHouses(
+            benilla_formats::AuctionHouseCatalog::from_houses(std::collections::HashMap::from([(
+                1,
+                benilla_formats::AuctionHouseInfo {
+                    faction: 12,
+                    deposit_percent: 15,
+                    cut_percent: 5,
+                    name: "Stormwind Auction House".into(),
+                },
+            )])),
+        );
+        let bodies = QueryCache::default();
+        let sender = |message_type: u8, sender_id: u32| {
+            let mut e = entry(1, None, 0, 30.0);
+            (e.message_type, e.sender_id) = (message_type, Some(sender_id));
+            resolve_row(
+                &e,
+                &bodies,
+                &items,
+                None,
+                None,
+                None,
+                RowCatalogs {
+                    houses: Some(&houses),
+                    gameobjects: Some(&gameobjects),
+                    ..Default::default()
+                },
+                &names,
+                Ask::New(&commands),
+                crate::items::RollCatalogs::NONE,
+                &no_macros(&states),
+                &no_strings,
+            )
+            .sender
+        };
+        assert_eq!(
+            sender(mail_message_type::AUCTION, 1).as_deref(),
+            Some("Stormwind Auction House")
+        );
+        assert_eq!(
+            sender(mail_message_type::CREATURE, 3).as_deref(),
+            Some("Innkeeper Farley")
+        );
+        assert_eq!(
+            sender(mail_message_type::GAMEOBJECT, 4).as_deref(),
+            Some("Mailbox")
+        );
+        let _ = rx.try_iter().count();
+        assert_eq!(sender(mail_message_type::AUCTION, 2), None);
+        assert_eq!(sender(mail_message_type::CREATURE, 30), None);
+        assert_eq!(sender(mail_message_type::GAMEOBJECT, 40), None);
+        let asked: Vec<String> = rx.try_iter().map(|c| format!("{c:?}")).collect();
+        assert_eq!(
+            asked.len(),
+            2,
+            "the creature and the object are asked: {asked:?}"
+        );
+    }
+
     #[test]
     fn resolve_row_reads_the_item_and_body_caches() {
         let states = crate::world_state::WorldStates::default();
