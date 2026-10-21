@@ -20,6 +20,9 @@ use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 
 mod net;
 
+#[cfg(test)]
+mod call_tests;
+
 /// One side's offer: slots 0-5 change hands, slot 6 is the non-traded enchant slot.
 #[derive(Default)]
 struct TradeOffer {
