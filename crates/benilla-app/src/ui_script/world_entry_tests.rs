@@ -2123,6 +2123,56 @@ fn player_login_fires_from_the_world_entry_with_the_player_seated() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// The load runs its files and handlers with a call host lent, built off the world, so a call one
+/// makes applies inside its verb, as the reference's do inside `UI_Init` (`0x48fbf0`): a file's
+/// `TargetUnit("player")` (`0x4899d0`, through `SetSelection 0x493540`) has committed by its next
+/// line.
+#[test]
+fn a_call_a_file_makes_at_the_load_applies_inside_its_verb() {
+    use crate::net::{Guid, GuidIndex, ObjectStore, SelfGuid, SelfPlayer};
+    const ME: u64 = 0x10;
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_addon(
+        "loadcall",
+        "LoadCall",
+        "## Interface: 11200\nLoadCall.lua\n",
+        "TargetUnit(\"player\") LoadCallSeen = UnitExists(\"target\")",
+    );
+    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetCommands(tx));
+    app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
+    app.insert_resource(roster_named("Loadcall", ME));
+    let world = app.world_mut();
+    let me = world
+        .spawn((
+            SelfPlayer,
+            Guid(ME),
+            Transform::default(),
+            GlobalTransform::default(),
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (2, 0x19),
+                (22, 100),
+                (28, 100),
+            ])),
+        ))
+        .id();
+    world.resource_mut::<GuidIndex>().0.insert(ME, me);
+    world.resource_mut::<SelfGuid>().0 = Some(ME);
+    super::load_ingame_ui_on_world_entry(world);
+    let seen = world
+        .non_send_resource::<benilla_ui::script::UiScript>()
+        .eval::<Option<i64>>("return LoadCallSeen")
+        .unwrap();
+    assert_eq!(seen, Some(1), "the file reads the target it selected");
+    assert_eq!(world.resource::<crate::target::Selection>().guid, Some(ME));
+
+    drop(app);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// A model pane bound to `"player"` at `PLAYER_ENTERING_WORLD`, as `PaperDollFrame.lua:39` binds
 /// `CharacterModelFrame`.
 const PANE_PROBE_LUA: &str = "\
