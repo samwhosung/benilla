@@ -121,6 +121,11 @@ impl UnitEdits {
     pub(crate) fn push(&self, edit: UnitEdit) {
         self.queue().push(edit);
     }
+
+    /// The precast `entity` holds once the queue applies.
+    pub(crate) fn precast(&self, _entity: Entity) -> Option<super::Precast> {
+        None
+    }
 }
 
 /// Applies the queue in order, from an exclusive system. A despawned unit's changes are dropped.

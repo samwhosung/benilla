@@ -461,4 +461,94 @@ mod tests {
             "the auto-repeat cancel (0x6ea12b)"
         );
     }
+
+    /// The queue answers a unit's precast as it stands once the queue applies
+    /// ([`UnitEdits::precast`]): the applied one, through every insert, removal and despawn of
+    /// the component, with the queued changes replayed in order as they will apply, so a link
+    /// of the VM pass reads what the edits queued ahead of it make.
+    #[test]
+    fn the_queue_answers_the_precast_its_edits_will_leave() {
+        let (mut world, unit) = world();
+        let other = world.spawn_empty().id();
+        let view = |world: &World| world.resource::<UnitEdits>().precast(unit);
+        let push = |world: &World, edit| world.resource::<UnitEdits>().push(edit);
+        let held = |spell_id, busy| Some(Precast { spell_id, busy });
+        assert_eq!(view(&world), None);
+        world.entity_mut(unit).insert(Precast {
+            spell_id: VISUAL_SPELL,
+            busy: true,
+        });
+        assert_eq!(
+            view(&world),
+            held(VISUAL_SPELL, true),
+            "the applied precast"
+        );
+        let send = |spell_id| UnitEdit::SendPrecast {
+            entity: unit,
+            spell_id,
+        };
+        push(&world, UnitEdit::EndPrecastBusy(unit));
+        push(&world, send(VISUAL_SPELL));
+        assert_eq!(
+            view(&world),
+            held(VISUAL_SPELL, false),
+            "the bit's clear, and a resend of its spell starts nothing (0x6e588f)"
+        );
+        push(&world, send(OTHER_VISUAL_SPELL));
+        assert_eq!(view(&world), held(OTHER_VISUAL_SPELL, true));
+        push(
+            &world,
+            UnitEdit::EndPrecast {
+                entity: unit,
+                spell_id: Some(VISUAL_SPELL),
+                tail: true,
+            },
+        );
+        push(
+            &world,
+            UnitEdit::EndPrecast {
+                entity: other,
+                spell_id: None,
+                tail: true,
+            },
+        );
+        assert_eq!(
+            view(&world),
+            held(OTHER_VISUAL_SPELL, true),
+            "another spell's end and another unit's"
+        );
+        push(
+            &world,
+            UnitEdit::ClearAutoRepeat {
+                entity: unit,
+                spell_id: OTHER_VISUAL_SPELL,
+            },
+        );
+        assert_eq!(view(&world), None, "the repeat spell's cancel");
+        push(
+            &world,
+            UnitEdit::StartPrecast {
+                entity: unit,
+                spell_id: VISUAL_SPELL,
+            },
+        );
+        let answered = view(&world);
+        assert_eq!(answered, held(VISUAL_SPELL, true));
+        apply_unit_edits(&mut world);
+        assert_eq!(
+            precast(&world, unit),
+            answered,
+            "the queue applies as it answered"
+        );
+        assert_eq!(view(&world), answered);
+
+        world.entity_mut(unit).remove::<Precast>();
+        assert_eq!(view(&world), None, "a removal");
+        world.entity_mut(unit).insert(Precast {
+            spell_id: VISUAL_SPELL,
+            busy: true,
+        });
+        world.despawn(unit);
+        assert_eq!(view(&world), None, "a despawn");
+    }
 }
