@@ -974,7 +974,8 @@ impl Plugin for CreatureAnimPlugin {
                     // Same frame as the loot kneel: the reference force-plays Loot 50 in the
                     // handler that arms the latch.
                     .after(crate::ui_loot::resolve_loot_kneel)
-                    // `DoEmote`'s local play, written in the chat drain.
+                    // A probe line's emote, played from the chat drain; a `DoEmote` call's is the
+                    // VM pass's, below.
                     .after(crate::ui_chat::ChatDrain)
                     // After Input so a sheath request (the Z toggle) executes the same frame.
                     .after(WorldStage::Input)
