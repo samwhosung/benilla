@@ -136,8 +136,10 @@ fn a_spell_cooldown_entry_takes_op_11_the_ranged_pad_and_op_21() {
 }
 
 /// `StartGlobalCooldown 0x6e2de0` returns early only for a zero result of op 21 (`0x6e2e3d`): a
-/// negative one is inserted and flushed (`0x6e2e72`, `0x6e2e77`). No GCD leg shows it, but a held
-/// spell's record parks, as `0x6e12c0` keeps any held record (`0x6e12c3`).
+/// negative one is inserted (`0x6e2e72`), as the insert's early-out tests the GCD time for zero
+/// alone (`0x6e12db`), and flushed (`0x6e2e77`). Its GCD ends before its start, so no read shows
+/// it (`0x6e15df`), but a failed cast of the spell finds the record and flushes (`0x6e1658`,
+/// `0x6e167d`); a held spell's record parks.
 #[test]
 fn a_negative_global_cooldown_still_inserts_and_flushes() {
     let now = Instant::now();
@@ -145,8 +147,14 @@ fn a_negative_global_cooldown_still_inserts_and_flushes() {
     let fb = in_family(fireball());
     let mut cds = Cooldowns::default();
     cds.start_gcd(133, &fb, now, &m);
-    assert_eq!(cds.generation, 1, "the flush");
+    assert_eq!(
+        (cds.record_count(), cds.generation),
+        (1, 1),
+        "the record and the flush"
+    );
     assert_eq!(cds.info(133, 0, Some(&fb), now).remaining_ms, 0, "no GCD");
+    cds.clear_gcd(133, now);
+    assert_eq!(cds.generation, 2, "a failed cast finds the record");
     let held = in_family(spell(0, 0, 0, (133, 1_500), 0x0200_0000));
     cds.start_gcd(1784, &held, now, &m);
     assert!(cds.has_on_hold_record(1784, 0, 0), "parked");

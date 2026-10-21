@@ -386,3 +386,61 @@ fn a_bag_slots_cooldown_query_asks_for_its_missing_record() {
         "the tooltip's query"
     );
 }
+
+/// `GameTooltip:SetInventoryItem` reaches the item query `0x6e2ed0` with the player's item record
+/// missing (`0x533188` → `0x5331ec`), which asks it with the callback `0x6e2f70` (`0x6e2efb`): a
+/// worn or vault item awaiting its record queues its entry; a cached record, and the ammo slot,
+/// which passes an entry and queries nothing (`0x53307d`), queue none.
+#[test]
+fn an_inventory_slots_tooltip_asks_for_its_missing_record() {
+    let mut s = script();
+    let mut inv: InventorySlots = Default::default();
+    inv[0] = Some(InvSlotView {
+        item_id: 2512,
+        count: 200,
+        ..Default::default()
+    });
+    inv[13] = Some(InvSlotView {
+        item_id: 118,
+        name: Some("Minor Healing Potion".into()),
+        ..Default::default()
+    });
+    inv[14] = Some(InvSlotView {
+        item_id: 6948,
+        ..Default::default()
+    });
+    s.set_inventory_slots(inv);
+    let vault = ContainerState {
+        name: None,
+        num_slots: 24,
+        slots: std::collections::HashMap::from([(
+            1,
+            ContainerSlot {
+                item_id: 5976,
+                count: 1,
+                ..Default::default()
+            },
+        )]),
+    };
+    s.set_container(-1, Some(vault));
+    s.run(
+        r#"
+        local owner = CreateFrame("Frame", "InventoryAskOwner")
+        InventoryAskTT = CreateFrame("GameTooltip", "InventoryAskTT", nil, "TestTooltipTemplate")
+        InventoryAskTT:SetOwner(owner, "ANCHOR_RIGHT")
+        InventoryAskTT:SetInventoryItem("player", 0)
+        InventoryAskTT:SetInventoryItem("player", 13)
+    "#,
+    )
+    .unwrap();
+    assert!(
+        s.take_cooldown_record_asks().is_empty(),
+        "the ammo slot and a cached record"
+    );
+    s.run(r#"InventoryAskTT:SetInventoryItem("player", 14)"#)
+        .unwrap();
+    assert_eq!(s.take_cooldown_record_asks(), vec![6948], "a worn item");
+    s.run(r#"InventoryAskTT:SetInventoryItem("player", 40)"#)
+        .unwrap();
+    assert_eq!(s.take_cooldown_record_asks(), vec![5976], "a vault item");
+}

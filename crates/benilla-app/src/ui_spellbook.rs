@@ -656,6 +656,72 @@ mod tests {
         );
     }
 
+    /// `StartCooldown 0x6e2c60` inserts with no flush (`0x6e2dcc`), so a login's
+    /// `SMSG_INITIAL_SPELLS` seed moves no [`crate::spell::Cooldowns::generation`]; the book's
+    /// next frame still reads it, as `GetSpellCooldown` queries the list itself (`0x6e13e0`).
+    #[test]
+    fn an_initial_cooldown_alone_reaches_the_book() {
+        const LAST_STAND: u32 = 12975;
+        fn last_stand() -> SpellDisplay {
+            SpellDisplay {
+                recovery_ms: 60_000,
+                ..spell("Last Stand", None, 0x10000)
+            }
+        }
+        let now = std::time::Instant::now();
+        let mut app = App::new();
+        app.insert_resource(Spells {
+            catalog: SpellCatalog::from_displays(HashMap::from([(LAST_STAND, last_stand())])),
+            ..Spells::empty_for_tests()
+        })
+        .init_resource::<PlayerActions>()
+        .init_resource::<Items>()
+        .init_resource::<LearnedInTab>()
+        .init_resource::<crate::spell::Cooldowns>()
+        .init_resource::<crate::net::GuidIndex>()
+        .insert_resource(crate::ui_script::UiClock {
+            anchor: now,
+            ui_now: 1000.0,
+        })
+        .add_systems(Update, feed_spellbook);
+        app.world_mut()
+            .resource_mut::<PlayerActions>()
+            .spells
+            .insert(LAST_STAND);
+        let mut script = UiScript::new().unwrap();
+        script.set_now(1000.0);
+        app.insert_non_send_resource(script);
+        app.update();
+        let duration = |app: &mut App| {
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .eval::<f64>("local _, d = GetSpellCooldown(1, 'spell') return d")
+                .unwrap()
+        };
+        assert_eq!(duration(&mut app), 0.0, "booked, cold");
+
+        // Half of Last Stand's minute still to run at login.
+        let wire = benilla_protocol::messages::SpellCooldown {
+            spell_id: LAST_STAND as u16,
+            item_id: 0,
+            category: 0,
+            spell_cd_ms: 30_000,
+            category_cd_ms: 0,
+        };
+        app.world_mut()
+            .resource_mut::<crate::spell::Cooldowns>()
+            .seed_initial(
+                &wire,
+                Some(&last_stand()),
+                None,
+                &crate::spell::SpellModifiers::default(),
+                crate::spell::CategoryPad::NoPlayer,
+                now,
+            );
+        app.update();
+        assert_eq!(duration(&mut app), 60.0, "the seeded record, read");
+    }
+
     /// Both bits (`Attributes & 0x2`, `AttributesEx2 & 0x20`) substitute; Throw's `0x2` alone
     /// does not, and without a weapon the spell keeps its own icon, never Spell-Reset (`0x4e6990`).
     #[test]

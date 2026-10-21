@@ -2772,6 +2772,10 @@ mod tests {
 }
 
 #[cfg(test)]
+#[path = "feed_cooldown_tests.rs"]
+mod cooldown_tests;
+
+#[cfg(test)]
 mod ask_tests {
     use bevy::prelude::*;
 
