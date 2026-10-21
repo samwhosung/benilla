@@ -1000,6 +1000,42 @@ mod tests {
         );
     }
 
+    /// Each of our cast edges is its own `SMSG_SPELL_GO` in the reference, whose hook (`0x4fd7b0`)
+    /// counts down (`0x4fd7ca`) and signals `UPDATE_TRADESKILL_RECAST` (`0x4fd7dc`) before the next
+    /// packet is read, so two edges drained in one pass show their handlers 2, then 1.
+    #[test]
+    fn each_recasts_handlers_read_the_count_its_edge_left() {
+        let (mut app, _rx) = headless_tailor();
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run(
+                "SEEN = '' local f = CreateFrame('Frame') \
+                 f:RegisterEvent('UPDATE_TRADESKILL_RECAST') \
+                 f:SetScript('OnEvent', function() SEEN = SEEN .. GetTradeskillRepeatCount() .. ' ' end) \
+                 SelectTradeSkill(2) DoTradeSkill(2, 3)",
+            )
+            .unwrap();
+        let me = app
+            .world_mut()
+            .query_filtered::<Entity, With<SelfPlayer>>()
+            .single(app.world())
+            .unwrap();
+        for seq in 0..2 {
+            app.world_mut().write_message(CastEvent {
+                entity: me,
+                spell_id: 2963,
+                kind: CastEventKind::Go,
+                cast_flags: 0,
+                item_cast: false,
+                seq,
+            });
+        }
+        drain(&mut app);
+        let script = app.world().non_send_resource::<UiScript>();
+        assert_eq!(script.trade_skill_repeat(), (2963, 1));
+        assert_eq!(script.eval::<String>("return SEEN").unwrap(), "3 2 1 ");
+    }
+
     /// A cancelled targeting cursor is the cast abort with its disarm flag (`0x6e4900`,
     /// `0x6e4940(cl=1)` → `0x4fd790`): the armed batch disarms, with its signal, when the cancel's
     /// reports are signalled. Nothing up, nothing cancels (`0x6e4907`).
