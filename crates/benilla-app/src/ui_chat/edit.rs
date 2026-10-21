@@ -110,6 +110,10 @@ pub(crate) struct ChannelState {
     /// (`0xb4fdd8` count, `0xb4fddc` names): the walk's third pass registers and joins each with
     /// id 0 after the zone channels (`0x49a5b4`-`0x49a675`), then frees the list (`0x49a692`).
     pub deferred_joins: Vec<String>,
+    /// The zone-defense flag `0x49bd50` stores (`0xb6e5dc`), the world-state readout's `Type` 1
+    /// gate. Only a confirm (`0x49bbbf`) and a free (`0x49bc41`) recompute it, so it holds
+    /// through a rename, a suspend or a pending join.
+    pub defense_channel: bool,
 }
 
 /// One slot, the reference's `[0xb4fe04] + n*0xa0` record, in the fields this client uses.
@@ -307,7 +311,20 @@ impl ChannelState {
         if id == 0 && !self.custom.iter().any(|c| c.eq_ignore_ascii_case(&name)) {
             self.custom.push(name);
         }
+        self.recompute_defense_channel();
         Some(i as u32 + 1)
+    }
+
+    /// `0x49bd50`: whether a slot with a number (`0x49bd72`) in state 0 (`0x49bd7c`) has a
+    /// `+0x94` id naming a row (`0x49bd83`-`0x49bd96`) with both `ZONE_DEP` and `DEFENSE`
+    /// (`0x49bd9b`, `0x49bda2`), which is row 22 alone; a custom channel's id 0 names no row.
+    pub(crate) fn recompute_defense_channel(&mut self) {
+        use benilla_formats::chat_channel_flags::{DEFENSE, ZONE_DEP};
+        let joined = self
+            .confirmed_slots()
+            .filter_map(|(_, slot)| self.channels.row(slot.id))
+            .any(|row| row.flags & (ZONE_DEP | DEFENSE) == ZONE_DEP | DEFENSE);
+        self.defense_channel = joined;
     }
 
     /// The slot holding `name` (case-insensitive) in any state, the lookup `0x49be90`.
@@ -417,6 +434,7 @@ impl ChannelState {
                 self.note_custom_channel_left(&slot.name);
             }
         }
+        self.recompute_defense_channel();
         Some(n)
     }
 

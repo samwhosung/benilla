@@ -4,7 +4,8 @@
 //! The list builder (`0x4c56e0`) walks the whole DBC and admits a row when:
 //! 1. `MapID` is -1 or the scope's map;
 //! 2. `AreaID` is 0 or the scope's area;
-//! 3. `Type` is 0, or 1 while [`defense_channel_joined`]; 2 (battleground scoreboard columns)
+//! 3. `Type` is 0, or 1 while the zone-defense flag is set
+//!    ([`crate::ui_chat::ChannelState::defense_channel`]); 2 (battleground scoreboard columns)
 //!    never.
 //!
 //! The scope is the server's last `SMSG_INIT_WORLD_STATES`, not the player's position: the
@@ -15,7 +16,7 @@
 
 use bevy::prelude::*;
 
-use benilla_formats::{chat_channel_flags as chan, WorldStateUiCatalog, WorldStateUiRow};
+use benilla_formats::{WorldStateUiCatalog, WorldStateUiRow};
 use benilla_ui::script::WorldStateUiView;
 
 use benilla_assets::{AssetSet, LockRecover, WorldAssets};
@@ -39,18 +40,6 @@ fn load_world_state_ui(mut commands: Commands, assets: Option<Res<WorldAssets>>)
         }
         Err(e) => warn!("world-state UI: WorldStateUI.dbc failed — no readout: {e:#}"),
     }
-}
-
-/// The `Type == 1` gate (`0x49bd50`): a slot with a number (`0x49bd72`) in state 0 (`0x49bd7c`)
-/// whose `+0x94` id names a `ChatChannels.dbc` row (`0x49bd83`-`0x49bd96`) with both `ZONE_DEP`
-/// and `DEFENSE` (`0x49bd9b`, `0x49bda2`), which is row 22 alone. A custom channel's id 0 names
-/// no row, whatever its name.
-fn defense_channel_joined(channels: &crate::ui_chat::ChannelState) -> bool {
-    const REQUIRED: u32 = chan::ZONE_DEP | chan::DEFENSE;
-    channels
-        .confirmed_slots()
-        .filter_map(|(_, slot)| channels.channels.row(slot.id))
-        .any(|row| row.flags & REQUIRED == REQUIRED)
 }
 
 /// Expands a `WorldStateUI` label (`0x508560`), a different expander from [`crate::npc_text`]'s,
@@ -149,22 +138,14 @@ fn resolve(row: &WorldStateUiRow, states: &WorldStates) -> WorldStateUiView {
 }
 
 /// Pushes the readout when a world-state packet arrives or the defense-channel flag flips, the
-/// reference's two rebuild triggers.
+/// reference's two rebuild triggers (`0x49bdc7`-`0x49bdcf`).
 fn feed_world_state_ui(
     mut vm: crate::script_calls::VmWith<Res<'static, crate::ui_chat::ChannelState>>,
     catalog: Option<Res<WorldStateUiRes>>,
     states: Res<WorldStates>,
-    mut defense_channel: Local<bool>,
     mut last: Local<crate::ui_script::VmMemo<Option<(u64, bool)>>>,
 ) {
-    // Only when the roster moves; a first run sees it changed.
-    {
-        let channels = vm.own();
-        if channels.is_changed() {
-            *defense_channel = defense_channel_joined(&channels);
-        }
-    }
-    let defense_channel = *defense_channel;
+    let defense_channel = vm.own().defense_channel;
     vm.run(|script| {
         let (Some(script), Some(catalog)) = (script, catalog) else {
             return;
@@ -190,6 +171,7 @@ impl Plugin for WorldStateUiPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use benilla_formats::chat_channel_flags as chan;
 
     fn row(map_id: u32, area_id: u32, ui_type: u32) -> WorldStateUiRow {
         WorldStateUiRow {
@@ -446,7 +428,9 @@ mod tests {
             (SlotRecord::Freed { id: 22 }, false),
         ] {
             let label = format!("{slot:?}");
-            assert_eq!(defense_channel_joined(&joined(slot)), want, "{label}");
+            let mut channels = joined(slot);
+            channels.recompute_defense_channel();
+            assert_eq!(channels.defense_channel, want, "{label}");
         }
     }
 
