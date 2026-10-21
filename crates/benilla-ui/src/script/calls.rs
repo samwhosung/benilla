@@ -1002,4 +1002,111 @@ mod tests {
             "fired outside it"
         );
     }
+
+    /// A frame that appends, at each `ITEM_LOCK_CHANGED`, whether items 1 and 2 read locked then:
+    /// `1` for locked, `0` for not, as `GetContainerItemInfo`'s `locked` tests the bit
+    /// (`0x4f9752`).
+    fn watch_locks(s: &UiScript) {
+        let lua = s.lua().clone();
+        let locked = lua
+            .create_function(|lua, guid: u64| {
+                Ok(lua
+                    .app_data_ref::<Model>()
+                    .expect("model app_data")
+                    .item_locks
+                    .contains(&guid))
+            })
+            .unwrap();
+        lua.globals().set("LOCKED", locked).unwrap();
+        s.run(
+            r#"SEEN = ""
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("ITEM_LOCK_CHANGED")
+            f:SetScript("OnEvent", function()
+                SEEN = SEEN .. (LOCKED(1) and 1 or 0) .. (LOCKED(2) and 1 or 0) .. " "
+            end)"#,
+        )
+        .unwrap();
+    }
+
+    fn held_item(guid: u64) -> super::super::cursor::CursorItem {
+        super::super::cursor::CursorItem {
+            guid,
+            bag: 0,
+            slot: 1,
+            item_id: 2589,
+            item_class: None,
+            texture: None,
+            link: None,
+            count: None,
+            quality: None,
+            equip_slots: Vec::new(),
+            bar_placeable: false,
+            consumable: false,
+        }
+    }
+
+    /// `UnlockItem` (`0x495420`) clears the bit (`0x495449`) and signals `ITEM_LOCK_CHANGED`
+    /// (`0x495455`) before it returns, so a step that unlocks two items in turn, as a refused move
+    /// unlocks its two (`0x5e3ac0`, `0x5e3ad3`), shows the first signal's handlers the second item
+    /// still locked. Held for the host, they read the locks as each signal left them.
+    #[test]
+    fn a_held_handler_reads_the_locks_its_signal_left() {
+        let mut s = UiScript::new().unwrap();
+        watch_locks(&s);
+        s.seed_item_locks([1, 2]);
+        s.host_out(|s| {
+            s.unlock_item(1);
+            s.unlock_item(2);
+        });
+        let mut host = Stamping::default();
+        s.hosted(&mut host, |_| ());
+        assert_eq!(global::<String>(&s, "SEEN"), "01 00 ");
+        assert_eq!(s.item_locks(), Vec::<u64>::new());
+    }
+
+    /// A held verb segment carries its lock writes: the sell-slot clear (`0x4cd640`) unlocks its
+    /// item (`0x495420` at `0x4cd653`) after a release that unlocked another, and each signal's
+    /// handlers read the locks as it left them. With no host to lend, the turn's handlers read
+    /// the same.
+    #[test]
+    fn a_held_segment_shows_its_handlers_the_locks_it_left_each() {
+        for lent in [true, false] {
+            let mut s = UiScript::new().unwrap();
+            watch_locks(&s);
+            s.seed_item_locks([1, 2]);
+            s.model_mut().auction_sell_item = Some(held_item(2));
+            s.host_out(|s| {
+                s.unlock_item(1);
+                s.clear_auction_sell_item();
+            });
+            if lent {
+                s.hosted(&mut Stamping::default(), |_| ());
+            } else {
+                s.refuse_waiting();
+            }
+            assert_eq!(global::<String>(&s, "SEEN"), "01 00 ", "lent: {lent}");
+            assert_eq!(s.item_locks(), Vec::<u64>::new());
+        }
+    }
+
+    /// Lua the turn runs in place reads the locks as they are then, and its own unlock waits in
+    /// order behind the held signal before it: `ClearCursor` (`0x495190`) on a held item unlocks
+    /// it (`0x4951d9`) after the turn's first unlock signalled, so that signal's handler, run once
+    /// the host is back, still reads the cursor's item locked.
+    #[test]
+    fn a_chunks_unlock_waits_behind_the_held_signal_before_it() {
+        let mut s = UiScript::new().unwrap();
+        watch_locks(&s);
+        s.seed_item_locks([1, 2]);
+        s.set_cursor_for_test(super::super::cursor::CursorPayload::Item(held_item(2)));
+        s.host_out(|s| {
+            s.unlock_item(1);
+            s.run("ClearCursor()").unwrap();
+        });
+        s.hosted(&mut Stamping::default(), |_| ());
+        // The chunk's own handler ran in place, then the held one.
+        assert_eq!(global::<String>(&s, "SEEN"), "00 01 ");
+        assert_eq!(s.item_locks(), Vec::<u64>::new());
+    }
 }
