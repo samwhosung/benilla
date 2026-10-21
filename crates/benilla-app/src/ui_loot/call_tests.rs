@@ -756,3 +756,42 @@ fn a_take_and_a_sweep_inside_it_keep_their_own_confirm_rows() {
         "the take's row is"
     );
 }
+
+/// A close and the next response in one frame: the last row's removal closes inside its own
+/// packet's dispatch (`0x4c1f8d` → `0x48f200`), before the response arrives, so a `CloseLoot` in
+/// its `LOOT_CLOSED` handlers finds the closed window and touches nothing of the next, a
+/// disenchant window the server started on a cold target (`0x5eb95b`), which opens.
+#[test]
+fn a_close_and_the_next_response_in_one_frame_keep_their_order() {
+    let mut l = client();
+    run(
+        &mut l,
+        r#"local f = CreateFrame("Frame")
+        f:RegisterEvent("LOOT_CLOSED")
+        f:SetScript("OnEvent", function() CloseLoot() end)"#,
+    );
+    open(&mut l, CORPSE, 1, 0, vec![row(0, LINEN)]);
+    let _ = (seen(&mut l), sent(&l));
+    packets(
+        &mut l,
+        vec![
+            SessionEvent::LootRemoved { slot: 0 },
+            SessionEvent::LootResponse {
+                guid: LOCKBOX,
+                loot_type: 4,
+                gold: 0,
+                items: vec![row(0, WOOL)],
+            },
+        ],
+    );
+    feed(&mut l);
+    assert!(
+        matches!(sent(&l)[..], [ClientCommand::LootRelease { guid: CORPSE }]),
+        "the removal's close alone"
+    );
+    assert_eq!(seen(&mut l), "LOOT_SLOT_CLEARED:1,LOOT_CLOSED,LOOT_OPENED");
+    assert_eq!(
+        l.app.world().resource::<LootState>().source(),
+        Some(LOCKBOX)
+    );
+}
