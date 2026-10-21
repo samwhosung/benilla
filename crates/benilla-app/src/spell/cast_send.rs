@@ -193,8 +193,8 @@ pub(crate) struct CastLadder<'w, 's> {
     /// The attack a unit caster's send owes the pet bar (`0x6e51de`); absent in a world with no
     /// pet bar.
     unit_attack: Option<ResMut<'w, UnitAttackOwed>>,
-    /// Our stop in flight (`[+0xc54]`); absent in a world that never stops an attack.
-    stop_word: Option<ResMut<'w, crate::creature_anim::AttackStopInFlight>>,
+    /// Our stop in flight (`[+0xc54]`).
+    stop_word: ResMut<'w, crate::creature_anim::AttackStopInFlight>,
 }
 
 /// Whether `ReportCastFailure 0x6e1a00` reaches its tail for `fail`
@@ -509,7 +509,7 @@ impl CastLadder<'_, '_> {
             &mut self.auto_repeat,
             &mut self.trade_skill_opens,
             &mut self.held_for_pick,
-            self.stop_word.as_deref_mut(),
+            &mut self.stop_word,
             UnitCaster {
                 active: self.active.as_ref().and_then(|g| g.0),
                 pet_gcds: self.pet_gcds.as_deref_mut(),
@@ -630,7 +630,7 @@ fn send_spell_cast(
     trade_skill_opens: &mut crate::ui_tradeskill::TradeSkillOpens,
     held_for_pick: &mut HeldForPick,
     // Our stop in flight (`[+0xc54]`), which the send's StopAttack sets and its attack tail reads.
-    mut stop_word: Option<&mut crate::creature_anim::AttackStopInFlight>,
+    stop_word: &mut crate::creature_anim::AttackStopInFlight,
     unit: UnitCaster<'_>,
 ) {
     // A refusal through the reporter, then the attempt's `xor al,al` exit.
@@ -1166,12 +1166,7 @@ fn send_spell_cast(
                 // queued strike, which the repeat's push moved into the save, so its cancel is
                 // the packet alone. This is where melee and auto-repeat are kept exclusive. It
                 // runs after the arm above, so it never cancels this repeat.
-                crate::creature_anim::stop_attack_local(
-                    Some(e),
-                    engaged,
-                    stop_word.as_deref_mut(),
-                    core,
-                );
+                crate::creature_anim::stop_attack_local(Some(e), engaged, stop_word, core);
             }
         }
     }
@@ -1195,7 +1190,7 @@ fn send_spell_cast(
                 // gets there.
                 if !engaged {
                     debug!("ui_action: cast {spell_id} initiates auto-attack at {guid:#x}");
-                    let stop_in_flight = stop_word.as_deref().is_some_and(|w| w.of(e));
+                    let stop_in_flight = stop_word.of(e);
                     crate::creature_anim::start_attack_local(
                         e,
                         guid,
@@ -1283,6 +1278,7 @@ mod tests {
         world.init_resource::<crate::spell::SpellModifiers>();
         world.init_resource::<CastReports>();
         world.init_resource::<AutoRepeatActive>();
+        world.init_resource::<crate::creature_anim::AttackStopInFlight>();
         world.init_resource::<crate::creature_anim::UnitEdits>();
         world.init_resource::<crate::ui_tradeskill::TradeSkillOpens>();
         world.init_resource::<crate::spell::SpellTargeting>();

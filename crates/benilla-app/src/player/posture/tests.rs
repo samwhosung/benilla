@@ -164,6 +164,7 @@ fn the_stand_state_stop_sends_the_attack_stop_only_while_attacking() {
     world.init_resource::<crate::spell::QueuedMeleeSpell>();
     world.init_resource::<crate::spell::SpellTargeting>();
     world.init_resource::<crate::ui_cast::CastReports>();
+    world.init_resource::<crate::creature_anim::AttackStopInFlight>();
     let me = world.spawn(crate::net::SelfPlayer).id();
     let sent = |rx: &crossbeam_channel::Receiver<ClientCommand>| {
         rx.try_iter().map(|c| format!("{c:?}")).collect::<Vec<_>>()
@@ -198,6 +199,7 @@ fn a_sit_closes_the_loot_and_stops_the_attack_and_a_stand_does_neither() {
     world.init_resource::<crate::spell::QueuedMeleeSpell>();
     world.init_resource::<crate::spell::SpellTargeting>();
     world.init_resource::<crate::ui_cast::CastReports>();
+    world.init_resource::<crate::creature_anim::AttackStopInFlight>();
     world.init_resource::<super::Player>();
     world.init_resource::<crate::ui_loot::LootMoveStart>();
     world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();

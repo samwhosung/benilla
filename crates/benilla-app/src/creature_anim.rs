@@ -207,11 +207,11 @@ pub(crate) fn cancel_auto_repeat_local(
 /// signal and `SPELLCAST_STOP`; in the save under a cast, by the packet alone, which is why Auto
 /// Shot (`0x6e5976`) darkens a Raptor Strike ring. `Engaged` stays until the `SMSG_ATTACKSTOP` echo
 /// (`0x624e40`), as in the reference. The send marks `me`'s stop in flight in `word`
-/// (`0x6243b2`), absent in a world that never stops an attack.
+/// (`0x6243b2`).
 pub(crate) fn stop_attack_local(
     me: Option<Entity>,
     engaged: bool,
-    word: Option<&mut AttackStopInFlight>,
+    word: &mut AttackStopInFlight,
     core: &mut crate::spell::CastCore,
 ) {
     if !engaged {
@@ -220,7 +220,7 @@ pub(crate) fn stop_attack_local(
         return;
     }
     let _ = core.net.0.send(crate::net::ClientCommand::AttackStop);
-    if let (Some(me), Some(word)) = (me, word) {
+    if let Some(me) = me {
         word.set(me);
     }
     core.cancel_queued();
@@ -357,9 +357,8 @@ pub(crate) struct AttackSeam<'w, 's> {
     pub(crate) loot: ResMut<'w, crate::ui_loot::LootState>,
     /// The loot latch: the teardown's close drops it, and the right-click loot legs arm it.
     pub(crate) loot_latch: ResMut<'w, crate::ui_loot::LootLatch>,
-    /// Our stop in flight (`[+0xc54]`), which StopAttack's send sets and StartAttack reads;
-    /// absent in a world that never stops an attack.
-    stop_word: Option<ResMut<'w, AttackStopInFlight>>,
+    /// Our stop in flight (`[+0xc54]`), which StopAttack's send sets and StartAttack reads.
+    stop_word: ResMut<'w, AttackStopInFlight>,
 }
 
 impl AttackSeam<'_, '_> {
@@ -408,23 +407,19 @@ impl AttackSeam<'_, '_> {
         stop_attack_local(
             me,
             engaged,
-            self.stop_word.as_deref_mut(),
+            &mut self.stop_word,
             &mut self.slots.core(&self.net),
         );
     }
 
     /// `unit`'s stop in flight cleared, as its death zeroes it (`0x6058a8`).
     pub(crate) fn clear_stop_word(&mut self, unit: Entity) {
-        if let Some(word) = self.stop_word.as_deref_mut() {
-            word.clear(unit);
-        }
+        self.stop_word.clear(unit);
     }
 
     /// Whether our stop is in flight (`[+0xc54]`).
     pub(crate) fn stop_in_flight(&self) -> bool {
-        let me = self.me.single().ok();
-        me.zip(self.stop_word.as_deref())
-            .is_some_and(|(me, word)| word.of(me))
+        self.me.single().is_ok_and(|me| self.stop_word.of(me))
     }
 
     /// The Attack toggle, reference `0x6131a0` (the Attack pseudo-spell, `0x6e4c7a`): stop when

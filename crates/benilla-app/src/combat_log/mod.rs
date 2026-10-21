@@ -929,6 +929,7 @@ mod tests {
             .add_message::<crate::swing_refusal::SwingRefusalEdge>()
             .init_resource::<crate::creature_anim::PendingImpacts>()
             .init_resource::<crate::creature_anim::PlaySeq>()
+            .init_resource::<crate::creature_anim::AttackStopInFlight>()
             .add_plugins(CombatLogPlugin);
         crate::creature_anim::net::register(&mut app);
         app

@@ -272,18 +272,13 @@ fn stop_attack_for_stand_state(
     mut slots: crate::spell::CastSlots,
     net: Res<NetCommands>,
     me: Query<(Entity, Has<crate::creature_anim::Engaged>), With<crate::net::SelfPlayer>>,
-    mut word: Option<ResMut<crate::creature_anim::AttackStopInFlight>>,
+    mut word: ResMut<crate::creature_anim::AttackStopInFlight>,
 ) {
     let (me, engaged) = me
         .iter()
         .next()
         .map_or((None, false), |(me, engaged)| (Some(me), engaged));
-    crate::creature_anim::stop_attack_local(
-        me,
-        engaged,
-        word.as_deref_mut(),
-        &mut slots.core(&net),
-    );
+    crate::creature_anim::stop_attack_local(me, engaged, &mut word, &mut slots.core(&net));
 }
 
 #[cfg(test)]

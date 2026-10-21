@@ -114,7 +114,7 @@ pub(crate) struct Scene<'w, 's> {
     /// The auto-repeat clear and the precast's changes, applied after this handler.
     edits: Res<'w, crate::creature_anim::UnitEdits>,
     /// Our stop in flight (`[+0xc54]`), which the GO-deferred swing reads (`0x5eccda`).
-    stop_word: Option<Res<'w, crate::creature_anim::AttackStopInFlight>>,
+    stop_word: Res<'w, crate::creature_anim::AttackStopInFlight>,
 }
 
 /// `SMSG_INITIAL_SPELLS`, once at login, into the action store the UI feed reads.
@@ -316,11 +316,11 @@ fn on_spell_go(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
     } = ev
     {
         let engaged = !sc.engaged_self.is_empty();
-        let stop_in_flight = sc
-            .stop_word
-            .as_deref()
-            .zip(l.self_guid.0.and_then(|guid| l.index.0.get(&guid)))
-            .is_some_and(|(word, &me)| word.of(me));
+        let stop_in_flight = l
+            .self_guid
+            .0
+            .and_then(|guid| l.index.0.get(&guid))
+            .is_some_and(|&me| sc.stop_word.of(me));
         let own = l
             .self_guid
             .0

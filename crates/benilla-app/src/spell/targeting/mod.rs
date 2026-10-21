@@ -704,6 +704,7 @@ mod tests {
         world.init_resource::<crate::spell::SpellModifiers>();
         world.init_resource::<crate::ui_cast::CastReports>();
         world.init_resource::<crate::spell::AutoRepeatActive>();
+        world.init_resource::<crate::creature_anim::AttackStopInFlight>();
         world.init_resource::<crate::creature_anim::UnitEdits>();
         world.init_resource::<bevy::ecs::message::Messages<crate::player::StandStateRequest>>();
         world.init_resource::<crate::ui_tradeskill::TradeSkillOpens>();
