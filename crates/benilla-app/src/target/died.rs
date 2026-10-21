@@ -401,6 +401,31 @@ mod tests {
             .any(|r| matches!(r, CastReport::AutoRepeat(false))));
     }
 
+    /// `ReleaseTarget 0x493910` stops our attack (`0x493a08`) before it sends
+    /// `CMSG_SET_SELECTION` 0 (`0x493a2a`): the selection's death while we swing at it sends the
+    /// stop, the deselect and then the repeat's cancel (`0x605906`).
+    #[test]
+    fn the_selections_death_mid_swing_stops_before_it_deselects() {
+        let mut c = client();
+        let (me, mob) = (c.me, c.mob);
+        c.select(MOB, mob);
+        c.world().entity_mut(me).insert(Engaged(MOB));
+        c.world().resource_mut::<AutoRepeatActive>().0 = Some(SHOOT);
+        c.dies(mob, MOB, ObjectType::Unit);
+        let sent = c.sent();
+        assert!(
+            matches!(
+                sent[..],
+                [
+                    ClientCommand::AttackStop,
+                    ClientCommand::SetSelection { guid: 0 },
+                    ClientCommand::CancelAutoRepeat
+                ]
+            ),
+            "{sent:?}"
+        );
+    }
+
     /// A unit that is not the selection and names no record dies with no deselect and no stop.
     #[test]
     fn another_units_death_touches_neither_the_selection_nor_the_repeat() {

@@ -235,3 +235,33 @@ fn the_shipped_forms_split_into_those_that_close_the_window_and_those_that_do_no
         assert!(!closes(id), "{name} form {id}");
     }
 }
+
+/// The health watcher compares signed (`0x604774 jg`, `0x604778 jle`): a rise out of a negative
+/// health to 0 is no death, and a fall to a negative one is.
+#[test]
+fn the_death_edge_reads_health_signed() {
+    let (mut app, me) = app();
+    open(&mut app, NpcWindow::Merchant, VENDOR);
+    vocals(&mut app);
+    app.world_mut().write_message(edge(
+        me,
+        ME,
+        ObjectType::Player,
+        FIELD_UNIT_HEALTH,
+        0x8000_0000,
+        0,
+    ));
+    app.update();
+    assert_eq!(latch(&app), Some(VENDOR), "the old health was not above 0");
+
+    app.world_mut().write_message(edge(
+        me,
+        ME,
+        ObjectType::Player,
+        FIELD_UNIT_HEALTH,
+        20,
+        u32::MAX,
+    ));
+    app.update();
+    assert_eq!(latch(&app), None, "a fall to -1");
+}

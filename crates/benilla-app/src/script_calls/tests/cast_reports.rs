@@ -398,3 +398,62 @@ fn a_local_refusal_that_skips_its_text_skips_its_tail() {
         assert_eq!(casts_and_cancels(&f), vec![], "named {named}");
     }
 }
+
+/// The auto-repeat toggle is `UseAction`'s alone (`0x4e60d1`-`0x4e60da`, `0x6e9fd0` against the
+/// slot's spell): `CastSpellByName` of the running repeat spell goes through `TryCast`, which never
+/// reads the key, so it casts again and the repeat runs on; the bar's press stops it (`0x6ea080`).
+#[test]
+fn only_the_bars_press_toggles_a_running_repeat_off() {
+    const SHOOT: u32 = 5019;
+    let mut f = frame(true);
+    with_book_spell(
+        &mut f,
+        SHOOT,
+        "Shoot",
+        benilla_formats::SpellDisplay {
+            targets: 0x2,
+            attributes_ex2: 0x20,
+            ..Default::default()
+        },
+    );
+    f.app
+        .world_mut()
+        .resource_mut::<crate::ui_action::PlayerActions>()
+        .buttons
+        .insert(
+            0,
+            ActionButton {
+                slot: 0,
+                action: SHOOT,
+                kind: ACTION_KIND_SPELL,
+            },
+        );
+    let key = |f: &Frame| f.app.world().resource::<crate::spell::AutoRepeatActive>().0;
+    run_hosted(&mut f, r#"CastSpellByName("Shoot")"#);
+    assert_eq!(key(&f), Some(SHOOT), "the first cast starts the repeat");
+    let _ = f.rx.try_iter().count();
+
+    run_hosted(&mut f, r#"CastSpellByName("Shoot")"#);
+    let sent: Vec<ClientCommand> = f.rx.try_iter().collect();
+    assert!(
+        !sent
+            .iter()
+            .any(|c| matches!(c, ClientCommand::CancelAutoRepeat)),
+        "{sent:?}"
+    );
+    assert!(sent.iter().any(|c| matches!(
+        c,
+        ClientCommand::CastSpell {
+            spell_id: SHOOT,
+            ..
+        }
+    )));
+    assert_eq!(key(&f), Some(SHOOT), "the repeat runs on");
+
+    run_hosted(&mut f, "UseAction(1)");
+    assert!(f
+        .rx
+        .try_iter()
+        .any(|c| matches!(c, ClientCommand::CancelAutoRepeat)));
+    assert_eq!(key(&f), None, "the bar's press stops it");
+}

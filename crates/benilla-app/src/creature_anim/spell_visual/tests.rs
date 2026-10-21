@@ -388,6 +388,158 @@ fn a_kit_reap_drops_its_spells_hold_and_loop_and_spares_another() {
     assert_eq!(reaps, [999, SPELL]);
 }
 
+/// The cast edges stop a spell's kits unforced, `0x614150(spell, 0)`: the go's own (`0x6e7fe8`)
+/// and the running repeat spell's (`0x6e7ffb`), a failure's (`0x6e8de4`) and the repeat stop's
+/// (`0x6ea139`); the channel's end stops its old spell's forced (`0x60d1c0` at `0x60d22b`).
+#[test]
+fn the_cast_edges_reap_unforced_and_a_channels_end_forced() {
+    use benilla_protocol::field::FIELD_UNIT_CHANNEL_SPELL;
+    const AUTO_SHOT: u32 = 75;
+    let mut app = app();
+    app.insert_resource(crate::spell::AutoRepeatActive(Some(AUTO_SHOT)));
+    let unit = app
+        .world_mut()
+        .spawn(crate::net::ObjectStore(
+            benilla_protocol::ObjectFields::from_pairs(&[(FIELD_UNIT_CHANNEL_SPELL, SPELL)]),
+        ))
+        .id();
+    let reaps = |app: &mut App| -> Vec<(u32, bool)> {
+        app.world_mut()
+            .resource_mut::<Messages<SpellKitFx>>()
+            .drain()
+            .filter_map(|fx| match fx {
+                SpellKitFx::Reap {
+                    spell_id, force, ..
+                } => Some((spell_id, force)),
+                _ => None,
+            })
+            .collect()
+    };
+    app.update();
+    reaps(&mut app);
+    for kind in [CastEventKind::Go, CastEventKind::Fail, CastEventKind::Reap] {
+        app.world_mut()
+            .write_message(cast_event(unit, RANGED_SPELL, kind));
+    }
+    app.update();
+    assert_eq!(
+        reaps(&mut app),
+        [
+            (RANGED_SPELL, false),
+            (AUTO_SHOT, false),
+            (RANGED_SPELL, false),
+            (RANGED_SPELL, false)
+        ]
+    );
+    app.world_mut()
+        .get_mut::<crate::net::ObjectStore>(unit)
+        .unwrap()
+        .0
+        .merge(benilla_protocol::ObjectFields::from_pairs(&[(
+            FIELD_UNIT_CHANNEL_SPELL,
+            0,
+        )]));
+    app.update();
+    assert_eq!(reaps(&mut app), [(SPELL, true)], "the channel's end");
+}
+
+/// The go's own kit stop is skipped for a spell with `AttributesEx & 0x4` while its caster
+/// channels (`UNIT_CHANNEL_SPELL`, the field block's `+0x228`; `0x6e7fca`-`0x6e7fde`), and the
+/// repeat spell's still runs (`0x6e7fed`); with the field clear the go stops its own.
+#[test]
+fn a_channelled_spells_go_keeps_its_kits_while_its_caster_channels() {
+    use benilla_protocol::field::FIELD_UNIT_CHANNEL_SPELL;
+    const DRAIN_LIFE: u32 = 689;
+    let mut app = app();
+    app.insert_resource(crate::ui_action::Spells {
+        catalog: SpellCatalog::from_displays(HashMap::from([(
+            DRAIN_LIFE,
+            SpellDisplay {
+                attributes_ex: 0x4,
+                ..Default::default()
+            },
+        )])),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    let store = |channel| {
+        crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
+            FIELD_UNIT_CHANNEL_SPELL,
+            channel,
+        )]))
+    };
+    let channelling = app.world_mut().spawn(store(DRAIN_LIFE)).id();
+    let idle = app.world_mut().spawn(store(0)).id();
+    app.update();
+    app.world_mut()
+        .resource_mut::<Messages<SpellKitFx>>()
+        .clear();
+    app.world_mut()
+        .resource_mut::<Messages<SpellKitSound>>()
+        .clear();
+    for unit in [channelling, idle] {
+        app.world_mut()
+            .write_message(cast_event(unit, DRAIN_LIFE, CastEventKind::Go));
+    }
+    app.update();
+    let reaps: Vec<Entity> = app
+        .world_mut()
+        .resource_mut::<Messages<SpellKitFx>>()
+        .drain()
+        .filter_map(|fx| match fx {
+            SpellKitFx::Reap { entity, .. } => Some(entity),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reaps, [idle]);
+    let stops: Vec<Entity> = app
+        .world_mut()
+        .resource_mut::<Messages<SpellKitSound>>()
+        .drain()
+        .filter_map(|s| match s {
+            SpellKitSound::StopHold { entity, .. } => Some(entity),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stops, [idle]);
+}
+
+/// The speed-0 impacts play for a go with no caster unit (`0x6e816b` → `0x6e8bf0`, no caster
+/// passed): a harmful instant hit still flinches its target (`0x6e8c7b`).
+#[test]
+fn a_go_with_no_caster_unit_plays_its_instant_impacts() {
+    const BOLT: u32 = 5143;
+    let mut app = app();
+    app.insert_resource(crate::ui_action::Spells {
+        catalog: SpellCatalog::from_displays(HashMap::from([(
+            BOLT,
+            SpellDisplay {
+                visual: VISUAL,
+                targets: 0x80,
+                ..Default::default()
+            },
+        )])),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    let target = app.world_mut().spawn_empty().id();
+    app.world_mut().write_message(SpellGoTargets {
+        caster: None,
+        spell_id: BOLT,
+        hits: vec![target],
+        misses: Vec::new(),
+        dest: None,
+        ammo_display_id: None,
+        seq: 1,
+    });
+    app.update();
+    let wounds: Vec<Entity> = app
+        .world_mut()
+        .resource_mut::<Messages<WoundAnim>>()
+        .drain()
+        .map(|w| w.entity)
+        .collect();
+    assert_eq!(wounds, [target]);
+}
+
 /// The ranged weapon-visual merge (`0x60d450`): a spell with `Attributes & 0x2` fills every zero
 /// slot of its own row from the caster's weapon visual; a non-ranged spell never looks.
 #[test]

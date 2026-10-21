@@ -373,4 +373,11 @@ fn a_game_objects_go_plays_its_instant_impacts_and_nothing_of_a_caster() {
     let (events, targets) = drained(&mut app);
     assert!(!events.iter().any(|&(_, kind)| kind == CastEventKind::Go));
     assert!(targets.is_empty(), "no missile without a caster unit");
+
+    // A caster we never streamed: its instant impacts still play, with no caster to name.
+    const UNSEEN: u64 = 0xF130_0000_0000_0053;
+    dispatch(app.world_mut(), vec![go(UNSEEN, UNSEEN, BURST)]);
+    let (events, targets) = drained(&mut app);
+    assert!(events.is_empty(), "{events:?}");
+    assert_eq!(targets, [(None, vec![mob], false)]);
 }

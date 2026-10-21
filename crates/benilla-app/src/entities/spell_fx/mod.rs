@@ -1174,6 +1174,48 @@ mod tests {
         );
     }
 
+    /// `0x614150(spell, force)` never takes flag 0x20, kinds 0 and 1 (`0x614181`), and takes flag
+    /// 0x1000, kind 2's state (`0x60eecd`), only when forced (`0x614179`): a cast edge's reap ends
+    /// the spell's precast loop (kind 4, `0x60ee7e`) and spares its channel kit, which the channel's
+    /// own forced stop takes (`0x60d22b`).
+    #[test]
+    fn an_unforced_reap_spares_the_spells_state_effects() {
+        let (mut app, unit) = resolving();
+        let (looping, state) = (
+            app.world_mut().spawn_empty().id(),
+            app.world_mut().spawn_empty().id(),
+        );
+        let hold = |root, stage| FxInstance {
+            class: FxClass::Hold,
+            stage,
+            ..instance(root, true)
+        };
+        app.world_mut().entity_mut(unit).insert(FxAttached {
+            instances: vec![hold(looping, FxStage::Relive), hold(state, FxStage::State)],
+        });
+        let reap = |force| SpellKitFx::Reap {
+            entity: unit,
+            spell_id: 13033,
+            class: FxClass::Hold,
+            force,
+        };
+        let roots = |app: &App| {
+            app.world()
+                .entity(unit)
+                .get::<FxAttached>()
+                .unwrap()
+                .instances
+                .iter()
+                .map(|i| i.root)
+                .collect::<Vec<_>>()
+        };
+        send(&mut app, reap(false));
+        assert_eq!(roots(&app), [Some(state)], "the loop ends, the state stays");
+        assert!(app.world().get_entity(looping).is_err());
+        send(&mut app, reap(true));
+        assert!(roots(&app).is_empty(), "forced, the state goes too");
+    }
+
     /// The walk skips tag -1 (`0x620913`): a second Thunder Clap ring does not eat the first.
     #[test]
     fn the_world_plant_slot_is_excluded_from_the_replace() {
