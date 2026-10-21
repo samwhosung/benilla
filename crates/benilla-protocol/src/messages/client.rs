@@ -204,8 +204,8 @@ pub fn random_roll(min: u32, max: u32) -> Vec<u8> {
 /// `CMSG_EMOTE` body: the `u32` emote, which vmangos plays only for `EMOTE_ONESHOT_NONE` and
 /// `EMOTE_ONESHOT_WAVE` (`ChatHandler.cpp:670-672`). The reference sends it from one site, a
 /// placed bid's wave (`0x4cc5dd`-`0x4cc60c`, emote 3).
-pub fn emote(_emote: u32) -> Vec<u8> {
-    Vec::new()
+pub fn emote(emote: u32) -> Vec<u8> {
+    emote.to_le_bytes().to_vec()
 }
 
 /// `CMSG_TEXT_EMOTE` body: `u32` EmotesText.dbc id, `u32` text variation (only relayed), `u64`
