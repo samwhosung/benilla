@@ -1045,7 +1045,7 @@ fn a_leave_notice_keeps_its_number_because_the_record_dies_after_the_line() {
     );
     assert_eq!(
         channels.names(),
-        [Some("World".to_string()), None],
+        [Some("World".into()), None],
         "and only THEN is the record gone — as a HOLE at slot 2, not a shortened list"
     );
 }
@@ -2615,41 +2615,40 @@ fn in_world_vm() -> benilla_ui::script::UiScript {
     script
 }
 
-/// `/afk` then `/dnd` through the real drain: every type but AFK clears a standing AFK first
+/// Every `CMSG_MESSAGECHAT` sent, as `(type, text)`.
+fn chat_packets(
+    rx: &crossbeam_channel::Receiver<crate::net::ClientCommand>,
+) -> Vec<(crate::net::ChatKind, String)> {
+    rx.try_iter()
+        .map(|c| match c {
+            crate::net::ClientCommand::Chat { kind, text, .. } => (kind, text),
+            other => panic!("unexpected command {other:?}"),
+        })
+        .collect()
+}
+
+/// `/afk` then `/dnd` through the applier: every type but AFK clears a standing AFK first
 /// (`0x49f4f6 jne 0x49f3c7`), so `/dnd` (`0x15`) prints the clear and sends the empty `0x14` ahead
 /// of its own line and packet, three lines in all.
 #[test]
 fn afk_then_dnd_clears_the_afk_first() {
-    use crate::net::{ChatKind, ClientCommand, NetCommands};
-    use bevy::ecs::system::RunSystemOnce;
+    use crate::net::ChatKind;
 
-    let mut world = bevy::prelude::World::new();
-    world.insert_non_send_resource(in_world_vm());
-    let (tx, rx) = crossbeam_channel::unbounded();
-    world.insert_resource(NetCommands(tx));
-    world.init_resource::<super::feed::ChatLog>();
-    world.init_resource::<crate::ui_action::UiErrorKeys>();
-    world.init_resource::<super::away::AfkMirror>();
-    world.init_resource::<crate::cvars::Cvars>();
-    world.init_resource::<super::edit::ChannelState>();
+    let (mut world, rx) = super::chat_world(in_world_vm());
     // The five `GlobalStrings.lua` keys the away lines read, at their enUS values.
-    world
-        .non_send_resource::<benilla_ui::script::UiScript>()
-        .run(
-            r#"
-            MARKED_AFK_MESSAGE = "You are now AFK: %s"
-            CLEARED_AFK = "You are no longer AFK."
-            MARKED_DND = "You are now DND: %s."
-            DEFAULT_AFK_MESSAGE = "Away from Keyboard"
-            DEFAULT_DND_MESSAGE = "Do not Disturb"
-            SendChatMessage("", "AFK")
-            SendChatMessage("", "DND")
-            "#,
-        )
-        .expect("lua");
-    world
-        .run_system_once(super::input::drain_addon_chat_sends)
-        .expect("drain");
+    super::run_chat(
+        &mut world,
+        r#"
+        MARKED_AFK_MESSAGE = "You are now AFK: %s"
+        CLEARED_AFK = "You are no longer AFK."
+        MARKED_DND = "You are now DND: %s."
+        DEFAULT_AFK_MESSAGE = "Away from Keyboard"
+        DEFAULT_DND_MESSAGE = "Do not Disturb"
+        SendChatMessage("", "AFK")
+        SendChatMessage("", "DND")
+        "#,
+    )
+    .expect("lua");
 
     assert_eq!(
         world.resource::<super::feed::ChatLog>().pending_lines(),
@@ -2659,15 +2658,8 @@ fn afk_then_dnd_clears_the_afk_first() {
             "You are now DND: Do not Disturb.",
         ]
     );
-    let sent: Vec<(ChatKind, String)> = rx
-        .try_iter()
-        .map(|c| match c {
-            ClientCommand::Chat { kind, text, .. } => (kind, text),
-            other => panic!("unexpected command {other:?}"),
-        })
-        .collect();
     assert_eq!(
-        sent,
+        chat_packets(&rx),
         vec![
             (ChatKind::Afk, "Away from Keyboard".into()),
             (ChatKind::Afk, String::new()),
@@ -2677,39 +2669,26 @@ fn afk_then_dnd_clears_the_afk_first() {
     assert!(!world.resource::<super::away::AfkMirror>().is_afk());
 }
 
-/// `SendChatMessage`'s language through the real drain: the id the binding resolved rides every
+/// `SendChatMessage`'s language through the applier: the id the binding resolved rides every
 /// type's packet (`0x49f6f9`) but AFK's, whose `SetAFK` (`0x5eb740`) never reads it.
 #[test]
 fn a_named_language_rides_the_chat_command() {
-    use crate::net::{ChatKind, ClientCommand, NetCommands};
-    use bevy::ecs::system::RunSystemOnce;
+    use crate::net::{ChatKind, ClientCommand};
 
-    let mut world = bevy::prelude::World::new();
     let mut script = in_world_vm();
     script.set_language_table(vec![(2, "Darnassian".into()), (7, "Common".into())]);
-    world.insert_non_send_resource(script);
-    let (tx, rx) = crossbeam_channel::unbounded();
-    world.insert_resource(NetCommands(tx));
-    world.init_resource::<super::feed::ChatLog>();
-    world.init_resource::<crate::ui_action::UiErrorKeys>();
-    world.init_resource::<super::away::AfkMirror>();
-    world.init_resource::<crate::cvars::Cvars>();
-    world.init_resource::<super::edit::ChannelState>();
-    world
-        .non_send_resource::<benilla_ui::script::UiScript>()
-        .run(
-            r#"
-            SendChatMessage("ishnu", "SAY", "darnassian")
-            SendChatMessage("hi", "WHISPER", "Darnassian", "Bob")
-            SendChatMessage("hi")
-            DEFAULT_AFK_MESSAGE = "Away from Keyboard"
-            SendChatMessage("brb", "AFK", "Darnassian")
-            "#,
-        )
-        .expect("lua");
-    world
-        .run_system_once(super::input::drain_addon_chat_sends)
-        .expect("drain");
+    let (mut world, rx) = super::chat_world(script);
+    super::run_chat(
+        &mut world,
+        r#"
+        SendChatMessage("ishnu", "SAY", "darnassian")
+        SendChatMessage("hi", "WHISPER", "Darnassian", "Bob")
+        SendChatMessage("hi")
+        DEFAULT_AFK_MESSAGE = "Away from Keyboard"
+        SendChatMessage("brb", "AFK", "Darnassian")
+        "#,
+    )
+    .expect("lua");
     let sent: Vec<(ChatKind, Option<u32>)> = rx
         .try_iter()
         .map(|c| match c {
@@ -2728,25 +2707,16 @@ fn a_named_language_rides_the_chat_command() {
     );
 }
 
-/// `SendChatMessage`'s `CHANNEL` target through the real drain: `SStrToInt` into `0x49be50`
+/// `SendChatMessage`'s `CHANNEL` target through the applier: `SStrToInt` into `0x49be50`
 /// (`0x49f4d9`-`0x49f4ea`), so the packet carries the numbered slot's name, and a number naming
 /// no confirmed slot, or a name, sends nothing at all. A call with no number raises instead
-/// (`0x49f535`), so it never reaches the drain.
+/// (`0x49f535`), so it never reaches the host.
 #[test]
 fn a_channel_send_carries_the_numbered_slots_name() {
     use super::edit::{ChannelSlot, ChannelState, SlotState};
-    use crate::net::{ChatKind, ClientCommand, NetCommands};
-    use bevy::ecs::system::RunSystemOnce;
+    use crate::net::{ChatKind, ClientCommand};
 
-    let mut world = bevy::prelude::World::new();
-    world.insert_non_send_resource(in_world_vm());
-    let (tx, rx) = crossbeam_channel::unbounded();
-    world.insert_resource(NetCommands(tx));
-    world.init_resource::<super::feed::ChatLog>();
-    world.init_resource::<crate::ui_action::UiErrorKeys>();
-    world.init_resource::<super::away::AfkMirror>();
-    world.init_resource::<crate::cvars::Cvars>();
-    world.insert_resource(ChannelState {
+    let channels = ChannelState {
         joined: vec![
             Some(ChannelSlot::joined("General - Elwynn Forest")),
             Some(ChannelSlot::joined("Trade - City")),
@@ -2757,26 +2727,25 @@ fn a_channel_send_carries_the_numbered_slots_name() {
             }),
         ],
         ..Default::default()
-    });
-    world
-        .non_send_resource::<benilla_ui::script::UiScript>()
-        .run(
-            r#"
-            SendChatMessage("lf1m", "CHANNEL", nil, 2)
-            SendChatMessage("hello", "CHANNEL", nil, "1")
-            SendChatMessage("float", "CHANNEL", nil, 2.7)
-            SendChatMessage("hole", "CHANNEL", nil, 3)
-            SendChatMessage("suspended", "CHANNEL", nil, 4)
-            SendChatMessage("past the end", "CHANNEL", nil, 9)
-            SendChatMessage("by name", "CHANNEL", nil, "General - Elwynn Forest")
-            SendChatMessage("zero", "CHANNEL", nil, "0")
-            SendChatMessage("tell", "WHISPER", nil, "2")
-            "#,
-        )
-        .expect("lua");
-    world
-        .run_system_once(super::input::drain_addon_chat_sends)
-        .expect("drain");
+    };
+    let mut script = in_world_vm();
+    script.set_joined_channels(channels.names());
+    let (mut world, rx) = super::chat_world(script);
+    super::run_chat(
+        &mut world,
+        r#"
+        SendChatMessage("lf1m", "CHANNEL", nil, 2)
+        SendChatMessage("hello", "CHANNEL", nil, "1")
+        SendChatMessage("float", "CHANNEL", nil, 2.7)
+        SendChatMessage("hole", "CHANNEL", nil, 3)
+        SendChatMessage("suspended", "CHANNEL", nil, 4)
+        SendChatMessage("past the end", "CHANNEL", nil, 9)
+        SendChatMessage("by name", "CHANNEL", nil, "General - Elwynn Forest")
+        SendChatMessage("zero", "CHANNEL", nil, "0")
+        SendChatMessage("tell", "WHISPER", nil, "2")
+        "#,
+    )
+    .expect("lua");
 
     let sent: Vec<(ChatKind, Option<String>, String)> = rx
         .try_iter()
@@ -2805,44 +2774,27 @@ fn a_channel_send_carries_the_numbered_slots_name() {
     );
 }
 
-/// `SendChatMessage`'s empty-line gate through the real drain (`0x49f28d`-`0x49f2a1`): an empty
-/// line, or one whose first byte is NUL, of any type but AFK and DND sends nothing and leaves a
-/// standing AFK set, since the gate is ahead of the AFK clear. The binding's type check comes
-/// first, so an unknown type still raises.
+/// `SendChatMessage`'s empty-line gate (`0x49f28d`-`0x49f2a1`): an empty line, or one whose first
+/// byte is NUL, of any type but AFK and DND sends nothing and leaves a standing AFK set, since the
+/// gate is ahead of the AFK clear. The binding's type check comes first, so an unknown type still
+/// raises.
 #[test]
 fn an_empty_line_sends_nothing_but_afk_and_dnd() {
     use super::edit::{ChannelSlot, ChannelState};
-    use crate::net::{ChatKind, ClientCommand, NetCommands};
-    use bevy::ecs::system::RunSystemOnce;
+    use crate::net::ChatKind;
 
-    let mut world = bevy::prelude::World::new();
-    world.insert_non_send_resource(in_world_vm());
-    let (tx, rx) = crossbeam_channel::unbounded();
-    world.insert_resource(NetCommands(tx));
-    world.init_resource::<super::feed::ChatLog>();
-    world.init_resource::<crate::ui_action::UiErrorKeys>();
+    let mut script = in_world_vm();
+    script.set_joined_channels(
+        ChannelState {
+            joined: vec![Some(ChannelSlot::joined("General - Elwynn Forest"))],
+            ..Default::default()
+        }
+        .names(),
+    );
+    let (mut world, rx) = super::chat_world(script);
     world.insert_resource(super::away::AfkMirror(2));
-    world.init_resource::<crate::cvars::Cvars>();
-    world.insert_resource(ChannelState {
-        joined: vec![Some(ChannelSlot::joined("General - Elwynn Forest"))],
-        ..Default::default()
-    });
-    let script = |world: &bevy::prelude::World, lua: &str| {
-        world
-            .non_send_resource::<benilla_ui::script::UiScript>()
-            .run(lua)
-            .expect("lua");
-    };
-    let sent = |rx: &crossbeam_channel::Receiver<ClientCommand>| -> Vec<(ChatKind, String)> {
-        rx.try_iter()
-            .map(|c| match c {
-                ClientCommand::Chat { kind, text, .. } => (kind, text),
-                other => panic!("unexpected command {other:?}"),
-            })
-            .collect()
-    };
-    script(
-        &world,
+    super::run_chat(
+        &mut world,
         r#"
         MARKED_AFK_MESSAGE = "You are now AFK: %s"
         CLEARED_AFK = "You are no longer AFK."
@@ -2853,19 +2805,15 @@ fn an_empty_line_sends_nothing_but_afk_and_dnd() {
         SendChatMessage("", "CHANNEL", nil, 1)
         SendChatMessage("\0hidden", "YELL")
         "#,
-    );
-    let unknown = world
-        .non_send_resource::<benilla_ui::script::UiScript>()
-        .run(r#"SendChatMessage("", "BOGUS")"#)
+    )
+    .expect("lua");
+    let unknown = super::run_chat(&mut world, r#"SendChatMessage("", "BOGUS")"#)
         .expect_err("the type check precedes the gate");
     assert!(
         unknown.to_string().contains("Unknown chat type"),
         "{unknown}"
     );
-    world
-        .run_system_once(super::input::drain_addon_chat_sends)
-        .expect("drain");
-    assert_eq!(sent(&rx), vec![], "no empty line reaches the wire");
+    assert_eq!(chat_packets(&rx), vec![], "no empty line reaches the wire");
     assert!(
         world
             .resource::<super::feed::ChatLog>()
@@ -2876,15 +2824,13 @@ fn an_empty_line_sends_nothing_but_afk_and_dnd() {
     assert!(world.resource::<super::away::AfkMirror>().is_afk());
 
     // A line with text clears the standing AFK and says itself; an empty AFK marks it again.
-    script(
-        &world,
+    super::run_chat(
+        &mut world,
         r#"SendChatMessage("hi") SendChatMessage("", "AFK")"#,
-    );
-    world
-        .run_system_once(super::input::drain_addon_chat_sends)
-        .expect("drain");
+    )
+    .expect("lua");
     assert_eq!(
-        sent(&rx),
+        chat_packets(&rx),
         vec![
             (ChatKind::Afk, String::new()),
             (ChatKind::Say, "hi".into()),
@@ -2893,7 +2839,7 @@ fn an_empty_line_sends_nothing_but_afk_and_dnd() {
     );
 }
 
-/// Run `lua` through the real `SendChatMessage` drain in a group state, with a standing AFK, and
+/// Run `lua` through `SendChatMessage`'s applier in a group state, with a standing AFK, and
 /// return what went on the wire and the refusals shown.
 fn group_chat_sends(
     group: benilla_ui::script::PartyState,
@@ -2915,41 +2861,24 @@ fn chat_sends_as(
     fields: Option<&[(u16, u32)]>,
     lua: &str,
 ) -> (Vec<(crate::net::ChatKind, String)>, Vec<&'static str>, bool) {
-    use crate::net::{ClientCommand, Guid, NetCommands, ObjectStore, SelfPlayer};
-    use bevy::ecs::system::RunSystemOnce;
+    use crate::net::{Guid, GuidIndex, ObjectStore, SelfGuid, SelfPlayer};
 
-    let mut world = bevy::prelude::World::new();
     let mut script = in_world_vm();
     script.set_party(group);
-    world.insert_non_send_resource(script);
-    let (tx, rx) = crossbeam_channel::unbounded();
-    world.insert_resource(NetCommands(tx));
-    world.init_resource::<super::feed::ChatLog>();
-    world.init_resource::<crate::ui_action::UiErrorKeys>();
+    let (mut world, rx) = super::chat_world(script);
     world.insert_resource(super::away::AfkMirror(2));
-    world.init_resource::<crate::cvars::Cvars>();
-    world.init_resource::<super::edit::ChannelState>();
     if let Some(pairs) = fields {
-        world.spawn((
-            SelfPlayer,
-            Guid(1),
-            ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(pairs)),
-        ));
+        let me = world
+            .spawn((
+                SelfPlayer,
+                Guid(1),
+                ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(pairs)),
+            ))
+            .id();
+        world.resource_mut::<GuidIndex>().0.insert(1, me);
+        world.insert_resource(SelfGuid(Some(1)));
     }
-    world
-        .non_send_resource::<benilla_ui::script::UiScript>()
-        .run(lua)
-        .expect("lua");
-    world
-        .run_system_once(super::input::drain_addon_chat_sends)
-        .expect("drain");
-    let sent = rx
-        .try_iter()
-        .map(|c| match c {
-            ClientCommand::Chat { kind, text, .. } => (kind, text),
-            other => panic!("unexpected command {other:?}"),
-        })
-        .collect();
+    super::run_chat(&mut world, lua).expect("lua");
     let refused = world
         .resource::<crate::ui_action::UiErrorKeys>()
         .snapshot()
@@ -2957,10 +2886,45 @@ fn chat_sends_as(
         .map(|e| e.key)
         .collect();
     (
-        sent,
+        chat_packets(&rx),
         refused,
         world.resource::<super::away::AfkMirror>().is_afk(),
     )
+}
+
+/// The chat calls go through the real call host, applied before their verbs return:
+/// `SendChatMessage`'s line and `RandomRoll`'s `MSG_RANDOM_ROLL` (`0x48c832`) are on the wire when
+/// the next line of the script runs.
+#[test]
+fn the_call_host_applies_the_chat_calls_inside_the_verb() {
+    use crate::net::{ChatKind, ClientCommand, NetCommands};
+
+    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    app.insert_resource(NetCommands(tx));
+    app.world_mut().insert_non_send_resource(in_world_vm());
+    let sent_at_each_line = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = sent_at_each_line.clone();
+    crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+        let s = s.expect("a VM");
+        s.run(r#"SendChatMessage("hi", "GUILD")"#).expect("lua");
+        seen.borrow_mut().extend(rx.try_iter());
+        s.run("RandomRoll(1, 6) RandomRoll(6, 1)").expect("lua");
+        seen.borrow_mut().extend(rx.try_iter());
+    });
+    let sent: Vec<String> = sent_at_each_line
+        .borrow()
+        .iter()
+        .map(|c| match c {
+            ClientCommand::Chat { kind, text, .. } => format!("{kind:?} {text}"),
+            ClientCommand::RandomRoll { min, max } => format!("roll {min}-{max}"),
+            other => format!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        [format!("{:?} hi", ChatKind::Guild), "roll 1-6".into()]
+    );
 }
 
 /// A raid of the player (guid 1, at `rank`) and one other, led by `leader`.

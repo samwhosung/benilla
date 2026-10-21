@@ -1,6 +1,7 @@
 //! The submitted-line side of the chat: [`drain_chat_input`] executes what [`parse`] resolved and
-//! the verbs the stock `ChatFrame.lua` handlers queue in the VM; the addon drains send
-//! `SendChatMessage` and `SendAddonMessage`. The emote arm is `DoEmote` (`0x5ef560`): the
+//! the verbs the stock `ChatFrame.lua` handlers queue in the VM; the addon drain sends
+//! `SendAddonMessage`, and [`send`] applies `SendChatMessage` and `RandomRoll` inside their calls.
+//! The emote arm is `DoEmote` (`0x5ef560`): the
 //! eligibility gate, the asleep gate, the stow, the posture, then `CMSG_TEXT_EMOTE`. Own sends are
 //! never echoed locally; the server echoes them.
 
@@ -8,9 +9,15 @@ use crate::query_cache::Ask;
 use bevy::prelude::*;
 
 mod parse;
+/// `SendChatMessage` and `RandomRoll`, applied inside their calls.
+mod send;
+
 #[cfg(test)]
 pub(super) use parse::lua_quoted_string;
 pub(super) use parse::{parse_line, ParsedChat};
+pub(crate) use send::ChatSender;
+#[cfg(test)]
+pub(crate) use send::{chat_world, run_chat};
 
 use crate::creature_anim::{move_flags, MovementState};
 use crate::net::{ClientCommand, NetCommands, SelfPlayer};
@@ -103,7 +110,7 @@ pub(super) struct ChatOut<'w, 's> {
 }
 
 /// The verbs the stock `ChatFrame.lua` handlers call once they have parsed a line (`DoEmote`,
-/// `RandomRoll`, `UninviteByName`, `ConsoleExec`, the channel verbs), drained from the VM as
+/// `UninviteByName`, `ConsoleExec`, the channel verbs), drained from the VM as
 /// [`ParsedChat`] values, so one executor serves them and the lines the Lua never sees.
 fn engine_verbs(
     script: &mut benilla_ui::script::UiScript,
@@ -125,9 +132,6 @@ fn engine_verbs(
                 e.token
             ),
         }
-    }
-    for (min, max) in script.take_roll_requests() {
-        out.push((String::new(), ParsedChat::Random { min, max }));
     }
     for name in script.take_uninvite_requests() {
         out.push((String::new(), ParsedChat::Uninvite { name: Some(name) }));
@@ -1425,204 +1429,6 @@ pub(super) fn emote_gate(
         }
         _ => EmoteGate::Suppressed,
     }
-}
-
-/// `PLAYER_FLAGS_DND` (`0x4`) off our live descriptor. Live, not mirrored, as in the reference
-/// (`0x49f3f0`): AFK keeps an optimistic global and DND nothing, so a second `/dnd` before the
-/// server's update re-marks where a second `/afk` clears.
-fn is_dnd(self_q: &Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>) -> bool {
-    self_q
-        .iter()
-        .next()
-        .is_some_and(|s| s.0.player_flags() & 0x4 != 0)
-}
-
-/// `autoClearAFK`, registered default `"1"` (`0x5e24d4`). Off, the clear is a total no-op: no
-/// echo, no mirror write, no packet (`0x5eb84b`).
-fn auto_clear_afk(cvars: &crate::cvars::Cvars) -> bool {
-    cvars.flag("autoClearAFK").unwrap_or(true)
-}
-
-/// `SendChatMessage`'s group arms (`0x49f33e`-`0x49f4c7`): the refusal a type meets without its
-/// group, as a message key (`DisplayError` `0x496720`), or the type that goes out. PARTY needs a
-/// party member (id 0x48, `ERR_NOT_IN_GROUP`); RAID, RAID_WARNING and BATTLEGROUND need a raid
-/// (0x19c, `ERR_NOT_IN_RAID`); RAID_WARNING also needs the leader or an assistant (0x4b,
-/// `ERR_NOT_LEADER`). The group leader's RAID goes out as RAID_LEADER (`0x49f3bf`) and its
-/// BATTLEGROUND as BATTLEGROUND_LEADER (`0x49f48b`).
-fn group_gate(
-    kind: super::edit::SendType,
-    group: benilla_ui::script::ChatGroup,
-) -> Result<super::edit::SendType, &'static str> {
-    use super::edit::SendType as T;
-    match kind {
-        T::Party if !group.in_party => Err("ERR_NOT_IN_GROUP"),
-        T::Raid | T::RaidWarning | T::Battleground if group.raid_members == 0 => {
-            Err("ERR_NOT_IN_RAID")
-        }
-        T::RaidWarning if !group.leads_or_assists => Err("ERR_NOT_LEADER"),
-        T::Raid if group.leads => Ok(T::RaidLeader),
-        T::Battleground if group.leads => Ok(T::BattlegroundLeader),
-        other => Ok(other),
-    }
-}
-
-/// Whether a dead or ghost player may send `kind`: the compare chain `0x49f5a3`-`0x49f5da` allows
-/// whisper, party, raid, raid leader, raid warning, guild, officer, channel, AFK, DND, battleground
-/// and battleground leader, so only say, yell and emote are refused (message 0xef,
-/// `ERR_CHAT_WHILE_DEAD`).
-fn dead_may_send(kind: super::edit::SendType) -> bool {
-    use super::edit::SendType as T;
-    match kind {
-        T::Say | T::Yell | T::Emote => false,
-        T::Whisper
-        | T::Party
-        | T::Raid
-        | T::RaidLeader
-        | T::RaidWarning
-        | T::Guild
-        | T::Officer
-        | T::Channel
-        | T::Afk
-        | T::Dnd
-        | T::Battleground
-        | T::BattlegroundLeader => true,
-    }
-}
-
-/// Turn `SendChatMessage` calls into sends. No slash grammar runs here: an addon sending
-/// `"/dance"` says six characters. An empty line of any type but AFK and DND sends nothing and
-/// prints nothing.
-pub(crate) fn drain_addon_chat_sends(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    commands: Res<NetCommands>,
-    chat_log: Res<super::feed::ChatLog>,
-    mut tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
-    // The optimistic AFK mirror (`[0xb6e5cc]`) the `/afk` toggle reads and writes.
-    mut mirror: ResMut<super::away::AfkMirror>,
-    cvars: Res<crate::cvars::Cvars>,
-    // Our descriptor, for the DND arm's live `PLAYER_FLAGS & 0x4`.
-    self_q: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
-    // The joined slots a `CHANNEL` target's number names.
-    channels: Res<super::edit::ChannelState>,
-    errors: Res<crate::ui_action::UiErrorKeys>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        for mut send in script.take_chat_sends() {
-            // The binding has raised on any other token (`0x49f27f`), so none reaches here.
-            let Some(mut kind) = super::edit::SendType::from_token(&send.chat_type) else {
-                continue;
-            };
-            // An empty line of any type but AFK and DND ends the call here, ahead of the target
-            // checks, the AFK clear and the tutorial acknowledge (`0x49f2a1`).
-            if send.ends_at_empty_line() {
-                continue;
-            }
-            // The group gates and the leader promotion, ahead of the AFK clear and the tutorial
-            // acknowledge, which a refused line never reaches.
-            match group_gate(kind, script.chat_group()) {
-                Ok(promoted) => kind = promoted,
-                Err(key) => {
-                    errors.push(crate::ui_action::UiError::key(key));
-                    continue;
-                }
-            }
-            // A channel target is a slot number, sent as that slot's name; with no such slot the
-            // call ends here (`0x49f4ea`), ahead of the AFK clear and the tutorial acknowledge.
-            if kind == super::edit::SendType::Channel {
-                let name = send.target.as_deref().and_then(|t| channels.send_target(t));
-                if name.is_none() {
-                    debug!(
-                        "chat: SendChatMessage names no joined channel {:?}; not sent",
-                        send.target
-                    );
-                    continue;
-                }
-                send.target = name;
-            }
-            // `SendChatMessage`'s tutorial acknowledge (`0x49f5fc`) covers the twelve social types,
-            // not say, yell or emote.
-            if !matches!(
-                kind,
-                super::edit::SendType::Say
-                    | super::edit::SendType::Yell
-                    | super::edit::SendType::Emote
-            ) {
-                if let Some(t) = tutorials.as_mut() {
-                    t.write(crate::tutorial::TutorialEvent::Acknowledge {
-                        id: crate::tutorial::id::CHATTING,
-                    });
-                }
-            }
-            // ── The away commands, and the AFK clear the other sends carry ───────────────────────
-            //
-            // `SendChatMessage` (`0x49f1e0`): every type but AFK (`0x14`) first clears a standing
-            // AFK (`0x49f4f6 jne 0x49f3c7`), `/dnd` included; then AFK and DND each have an arm
-            // ahead of the generic send. The system lines, the default text and the mirror are
-            // `super::away`'s.
-            let strings = |key: &str| crate::ui_chat::combat::global_string(script, key);
-            let wire = kind.wire();
-            if !matches!(wire, crate::net::ChatKind::Afk) {
-                if let Some(line) =
-                    super::away::auto_clear_line(*mirror, auto_clear_afk(&cvars), &strings)
-                {
-                    super::away::push_system(&chat_log, line);
-                    mirror.0 = 0;
-                    // The empty `0x14` that tells the server, ahead of the message's own packet.
-                    let _ = commands.0.send(ClientCommand::Chat {
-                        kind: crate::net::ChatKind::Afk,
-                        target: None,
-                        text: String::new(),
-                        language: None,
-                    });
-                }
-            }
-            // A dead or ghost player's line is refused after the AFK clear (`0x49f592`-`0x49f5e4`,
-            // `0x605f30`) unless its type is on the allowed chain (`0x49f5a3`-`0x49f5da`).
-            if !dead_may_send(kind) && self_q.iter().next().is_some_and(|s| s.0.is_dead_or_ghost())
-            {
-                errors.push(crate::ui_action::UiError::key("ERR_CHAT_WHILE_DEAD"));
-                continue;
-            }
-            let text = match wire {
-                crate::net::ChatKind::Afk => {
-                    let out = super::away::afk_line(&send.text, *mirror, &strings);
-                    if let Some(line) = out.line {
-                        super::away::push_system(&chat_log, line);
-                    }
-                    if let Some(v) = out.mirror {
-                        mirror.0 = v;
-                    }
-                    out.body
-                }
-                crate::net::ChatKind::Dnd => {
-                    // DND has no mirror (`0x49f3f0`): the live descriptor bit.
-                    let out = super::away::dnd_line(&send.text, is_dnd(&self_q), &strings);
-                    if let Some(line) = out.line {
-                        super::away::push_system(&chat_log, line);
-                    }
-                    out.body
-                }
-                _ => send.text,
-            };
-            let cmd = ClientCommand::Chat {
-                kind: wire,
-                target: send.target,
-                text,
-                // Every type but AFK carries the language the binding resolved (`0x49f6f9`); the
-                // AFK arm's own builder, `SetAFK` (`0x5eb740`), never reads the argument.
-                language: match wire {
-                    crate::net::ChatKind::Afk => None,
-                    _ => send.language,
-                },
-            };
-            if commands.0.send(cmd).is_err() {
-                warn!("chat: not connected; addon line dropped");
-            }
-        }
-    })
 }
 
 /// Turn `SendAddonMessage` calls into sends. The binding has already applied the reference's

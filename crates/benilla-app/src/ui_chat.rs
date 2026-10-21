@@ -31,9 +31,6 @@ mod frames;
 /// The idle handler: the 5-minute auto-sit and auto-AFK, and the 30-minute camp.
 pub(crate) mod idle;
 mod input;
-/// The `SendChatMessage` drain, for the tests that feed it a real group.
-#[cfg(test)]
-pub(crate) use input::drain_addon_chat_sends;
 /// The language gate: the exemptions and fluency lookup behind the chat garble.
 mod language;
 /// `LoggingChat`/`LoggingCombat`: the two log files `/chatlog` and `/combatlog` toggle.
@@ -61,6 +58,11 @@ pub(crate) use edit::ChannelState;
 pub(crate) use event::event_name;
 pub(crate) use event::{default_color, ChatEvent, ChatEventKind};
 pub(crate) use feed::ChatLog;
+/// The host's chat applier ([`crate::script_calls::ScriptCallHost`]).
+pub(crate) use input::ChatSender;
+/// The chat applier off a bare world, for the tests that send through it.
+#[cfg(test)]
+pub(crate) use input::{chat_world, run_chat};
 
 /// The chat feed once, for a test over the whole client: the `CHAT_MSG_*` fan-out of what the
 /// log holds, with the call host the world lends.
@@ -185,9 +187,8 @@ impl Plugin for UiChatPlugin {
                     // settled before the idle timer reads it.
                     idle::idle_handler,
                     input::drain_chat_input.in_set(ChatDrain),
-                    // After the box's drain, so a `SendChatMessage` or `SendAddonMessage` from a
-                    // slash handler it just ran goes out this frame.
-                    input::drain_addon_chat_sends,
+                    // After the box's drain, so a `SendAddonMessage` from a slash handler it just
+                    // ran goes out this frame.
                     input::drain_addon_message_sends,
                 )
                     .chain()

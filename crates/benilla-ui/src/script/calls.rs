@@ -111,6 +111,13 @@ pub enum ScriptCall {
     PetAction(u32),
     /// `PetAttack` and the other one-shot orders, as their bar slot's packed word.
     PetOrder(u32),
+    /// `SendChatMessage(text, type, language, target)` (`0x49f1e0`) past the binding's checks: the
+    /// host runs the rest of the verb inside the call, from the group gates to the packet, and
+    /// raises its escape error there ([`UiScript::raise_in_call`]).
+    SendChat(super::ChatSend),
+    /// `RandomRoll(min, max)` (`0x48c7b0`) past its range check (`0x48c807`-`0x48c830`):
+    /// `MSG_RANDOM_ROLL` (`0x48c832`).
+    RandomRoll { min: u32, max: u32 },
 }
 
 /// The mode the four `TargetNearest*` shims hand the TAB cycler `0x493f60`, the only byte that

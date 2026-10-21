@@ -72,7 +72,14 @@ pub(crate) struct ScriptCallHost<'w, 's> {
                 ),
             >,
             crate::spell::ScriptCast<'w, 's>,
-            crate::ui_action::ActionPress<'w, 's>,
+            ParamSet<
+                'w,
+                's,
+                (
+                    crate::ui_action::ActionPress<'w, 's>,
+                    crate::ui_chat::ChatSender<'w, 's>,
+                ),
+            >,
             crate::ui_items::ScriptItemUse<'w, 's>,
             crate::ui_pet::PetPress<'w, 's>,
             crate::ui_action::AttackPress<'w, 's>,
@@ -119,7 +126,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 crate::ui_shapeshift::cast_form(&mut appliers.p3(), spell_id);
             }
             ScriptCall::UseAction(press) => {
-                match crate::ui_action::use_action(&mut appliers.p4(), script, press) {
+                match crate::ui_action::use_action(&mut appliers.p4().p0(), script, press) {
                     // The Attack slot is a cast, so the gate's tag 4 (the pick) is asked only
                     // after tag 2 passed, and so passes as well.
                     crate::ui_action::UseOutcome::Attack => attack_in_order!(appliers, true),
@@ -144,6 +151,8 @@ impl CallHost for ScriptCallHost<'_, '_> {
             }
             ScriptCall::PetAction(slot) => pet_in_order!(appliers, begin_slot(slot)),
             ScriptCall::PetOrder(packed) => pet_in_order!(appliers, begin_order(packed)),
+            ScriptCall::SendChat(send) => appliers.p4().p1().send_chat(script, send),
+            ScriptCall::RandomRoll { min, max } => appliers.p4().p1().random_roll(min, max),
         }
         // A selection this call made with the targeting cursor up was handed to the cast
         // (`SelectTarget`, `0x4935d5`) and is bound now, before the next call reads either.

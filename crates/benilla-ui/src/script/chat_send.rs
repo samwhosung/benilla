@@ -4,15 +4,17 @@
 //! the channel's number.
 //!
 //! The call returns quietly with no local player (`0x49f223`) and raises the usage error for a text
-//! that is no string (`0x49f77c`). It raises where the reference does, ahead of anything queued: a
-//! string `chatType` outside [`SEND_CHAT_TOKENS`] raises `Unknown chat type` (`0x49f27f`), and past the empty-line gate and
+//! that is no string (`0x49f77c`). The binding raises where the reference does, ahead of the
+//! rest: a string `chatType` outside [`SEND_CHAT_TOKENS`] raises `Unknown chat type`
+//! (`0x49f27f`); an empty line of any type but AFK and DND ends the call (`0x49f2a1`); past it and
 //! the language, a WHISPER with no target raises `Whisper message missing target player!`
-//! (`0x49f325`) and a CHANNEL with none `Channel send missing channel number` (`0x49f535`). A
-//! CHANNEL target naming no joined channel is no error (`0x49f4ea`): the drain ends the call.
+//! (`0x49f325`) and a CHANNEL with none `Channel send missing channel number` (`0x49f535`). The
+//! rest of the verb, from the group gates to the packet, is the host's, applied inside the call
+//! ([`super::ScriptCall::SendChat`]).
 //!
-//! It queues a [`ChatSend`] rather than going through the edit box, whose drain runs the slash
-//! grammar: an addon's `SendChatMessage("/dance")` says the characters. The reference splits the
-//! same way, `ChatEdit_SendText` parsing and `SendChatMessage` not.
+//! The line goes out as a [`ChatSend`] rather than through the edit box, whose drain runs the
+//! slash grammar: an addon's `SendChatMessage("/dance")` says the characters. The reference splits
+//! the same way, `ChatEdit_SendText` parsing and `SendChatMessage` not.
 //!
 //! `language` starts as the speaker's race base language (`0x5ec890`, at `0x49f2aa`). A string or
 //! number third argument is matched by name, case-insensitively, against every `Languages.dbc`
@@ -70,34 +72,27 @@ const WHISPER_MISSING_TARGET: &str = "Whisper message missing target player!";
 /// `Channel send missing channel number`, `0x844a7c`.
 const CHANNEL_MISSING_NUMBER: &str = "Channel send missing channel number";
 
-/// One queued `SendChatMessage` line, plain data: this crate holds no wire types.
+/// One `SendChatMessage` line past the binding's checks, plain data: this crate holds no wire
+/// types.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChatSend {
-    /// The line, verbatim: a leading `/` is text, not a command.
+    /// The line, verbatim: a leading `/` is text, not a command. Past the empty-line gate, so its
+    /// first byte is no NUL unless its type is AFK or DND.
     pub text: String,
     /// The chat type token (`"SAY"`, `"WHISPER"`, `"CHANNEL"`, …), uppercased, since the
     /// reference's compare ignores case; always one of [`SEND_CHAT_TOKENS`].
     pub chat_type: String,
     /// The fourth argument as `lua_tostring` gives it (`0x49f306`): the whisper target, or the
-    /// channel number the app resolves to a joined channel's name. For WHISPER and CHANNEL it is
-    /// never absent or empty past the empty-line gate, which raise without one; an empty line is
-    /// queued unchecked and the drain drops it.
+    /// channel number the host resolves to a joined channel's name. For WHISPER and CHANNEL it is
+    /// never absent or empty: the binding raises without one.
     pub target: Option<String>,
     /// The `Languages.dbc` id the third argument named; `None` is the speaker's default.
     pub language: Option<u32>,
 }
 
-impl ChatSend {
-    /// The empty-line gate (`0x49f28d`-`0x49f2a1`): a line whose first byte is NUL ends the call,
-    /// before the language is read or anything is sent, unless its type is AFK (`0x14`) or DND
-    /// (`0x15`). The chat-type lookup and its "Unknown chat type" (`0x49f27f`) come first, in the
-    /// binding.
-    pub fn ends_at_empty_line(&self) -> bool {
-        ends_at_empty_line(&self.text, &self.chat_type)
-    }
-}
-
-/// [`ChatSend::ends_at_empty_line`] on the binding's arguments, before the line is built.
+/// The empty-line gate (`0x49f28d`-`0x49f2a1`): a line whose first byte is NUL ends the call,
+/// before the language is read or anything is sent, unless its type is AFK (`0x14`) or DND
+/// (`0x15`). The chat-type lookup and its "Unknown chat type" (`0x49f27f`) come first.
 fn ends_at_empty_line(text: &str, chat_type: &str) -> bool {
     text.bytes().next().unwrap_or(0) == 0 && !matches!(chat_type, "AFK" | "DND")
 }
@@ -249,11 +244,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 if !SEND_CHAT_TOKENS.contains(&chat_type.as_str()) {
                     return Err(mlua::Error::runtime(UNKNOWN_CHAT_TYPE));
                 }
-                // The language is read only past the empty-line gate. The line is queued
-                // anyway and the drain applies the gate.
-                let reads_language = !ends_at_empty_line(&text, &chat_type);
+                if ends_at_empty_line(&text, &chat_type) {
+                    return Ok(());
+                }
+                // The language is read only past the empty-line gate (`0x49f2aa`-`0x49f2e1`).
                 let language = match super::binding_abi::optional_string(lua, &language) {
-                    Some(name) if reads_language => {
+                    Some(name) => {
                         let model = lua.app_data_ref::<Model>().expect("model app_data");
                         let id = language_id(&model.language_table, &name);
                         Some(
@@ -268,10 +264,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // Past the gate and the language, a WHISPER or CHANNEL with a NULL or empty
                 // target raises (`0x49f310`-`0x49f32b`, `0x49f4ca`-`0x49f4d6`, `0x49f535`).
                 // NULL, or a first byte of NUL (`cmp byte [esi],0`), as the empty-line gate reads.
-                if reads_language
-                    && target
-                        .as_deref()
-                        .is_none_or(|t| t.bytes().next().unwrap_or(0) == 0)
+                if target
+                    .as_deref()
+                    .is_none_or(|t| t.bytes().next().unwrap_or(0) == 0)
                 {
                     match chat_type.as_str() {
                         "WHISPER" => return Err(mlua::Error::runtime(WHISPER_MISSING_TARGET)),
@@ -279,16 +274,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         _ => {}
                     }
                 }
-                lua.app_data_mut::<Model>()
-                    .expect("model app_data")
-                    .chat_sends
-                    .push(ChatSend {
+                super::calls::submit(
+                    lua,
+                    super::ScriptCall::SendChat(ChatSend {
                         text,
                         chat_type,
                         target,
                         language,
-                    });
-                Ok(())
+                    }),
+                )
             },
         )?,
     )?;
@@ -296,9 +290,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 }
 
 impl super::UiScript {
-    /// Drain the lines `SendChatMessage` queued since the last call.
+    /// The `SendChatMessage` lines a harness's VM kept ([`Self::keep_calls`]), in call order.
     pub fn take_chat_sends(&mut self) -> Vec<ChatSend> {
-        std::mem::take(&mut self.model_mut().chat_sends)
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::SendChat(send) => Some(send.clone()),
+            _ => None,
+        })
     }
 }
 
@@ -307,9 +304,11 @@ mod tests {
     use super::*;
     use crate::script::UiScript;
 
-    /// A VM with a local player, as every in-world `SendChatMessage` has (`0x49f223`).
+    /// A VM with a local player, as every in-world `SendChatMessage` has (`0x49f223`), that keeps
+    /// its calls.
     fn vm() -> UiScript {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_unit(
             "player",
             Some(crate::script::UnitState {
@@ -364,7 +363,7 @@ mod tests {
         assert_eq!(
             sent[3].target.as_deref(),
             Some("2.7"),
-            "not rounded: the app's `SStrToInt` reads 2"
+            "not rounded: the host's `SStrToInt` reads 2"
         );
         assert_eq!(sent[1].chat_type, "CHANNEL");
     }
@@ -539,7 +538,7 @@ mod tests {
         let err = call(&s, r#""hi", "WHISPER", "Klingon""#).expect_err("language first");
         assert!(err.contains("Unknown language"), "{err}");
         s.take_chat_sends();
-        // No other type needs a target, and a target naming no channel is the drain's quiet end
+        // No other type needs a target, and a target naming no channel is the host's quiet end
         // (`0x49f4ea`), not an error here.
         call(&s, r#""hi", "SAY""#).unwrap();
         call(&s, r#""hi", "GUILD""#).unwrap();
@@ -551,6 +550,51 @@ mod tests {
                 .map(|c| c.chat_type.as_str())
                 .collect::<Vec<_>>(),
             ["SAY", "GUILD", "CHANNEL", "WHISPER"]
+        );
+    }
+
+    /// The empty-line gate ends the call in the binding (`0x49f28d`-`0x49f2a1`), so nothing
+    /// reaches the host, but for AFK and DND, whose arms take an empty text.
+    #[test]
+    fn an_empty_line_ends_the_call_but_for_afk_and_dnd() {
+        let mut s = vm();
+        for args in [
+            r#""""#,
+            r#""", "PARTY""#,
+            r#""\0hidden", "YELL""#,
+            r#""", "WHISPER", nil, "Bob""#,
+            r#""", "CHANNEL", nil, 1"#,
+        ] {
+            call(&s, args).unwrap_or_else(|e| panic!("{args}: {e}"));
+        }
+        assert!(s.take_chat_sends().is_empty());
+        call(&s, r#""", "AFK""#).unwrap();
+        call(&s, r#""", "dnd""#).unwrap();
+        let sent = s.take_chat_sends();
+        assert_eq!(
+            sent.iter()
+                .map(|c| c.chat_type.as_str())
+                .collect::<Vec<_>>(),
+            ["AFK", "DND"]
+        );
+    }
+
+    /// The line past the binding's checks is the host's, applied before the verb returns.
+    #[test]
+    fn the_line_applies_inside_the_verb() {
+        let mut s = vm();
+        let applied = crate::script::host::test_support::applied_in_call(
+            &mut s,
+            r#"SendChatMessage("hi", "GUILD")"#,
+        );
+        assert_eq!(
+            applied,
+            vec![crate::script::ScriptCall::SendChat(ChatSend {
+                text: "hi".into(),
+                chat_type: "GUILD".into(),
+                target: None,
+                language: None,
+            })]
         );
     }
 

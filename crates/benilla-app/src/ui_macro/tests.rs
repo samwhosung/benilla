@@ -78,6 +78,8 @@ fn a_capture_run_persists_nothing() {
 /// stock `ChatFrame1` sends the line through its edit box.
 fn ui() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    // No engine behind it: the calls its lines make are kept for the `take_*` readers.
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // The in-game UI loads on world entry, so a player exists: the stock macro window's OnLoad
     // formats `UnitName("player")` into its character tab.

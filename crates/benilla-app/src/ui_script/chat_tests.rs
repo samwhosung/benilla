@@ -8,6 +8,8 @@ use super::test_ui::load_ui as load_xml;
 /// The chat stack, fonts first so `inherits="ChatFontNormal"` resolves.
 pub(crate) fn chat_frame() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    // No engine behind it: the calls its verbs make are kept for the `take_*` readers.
+    s.keep_calls();
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");

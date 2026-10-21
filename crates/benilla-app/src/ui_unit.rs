@@ -2771,6 +2771,7 @@ mod tests {
             benilla_formats::load_languages(&mut chain).expect("Languages.dbc"),
         ));
         let mut script = UiScript::new().expect("VM");
+        script.keep_calls();
         // `SendChatMessage` needs a local player (`0x49f223`).
         script.set_unit(
             "player",

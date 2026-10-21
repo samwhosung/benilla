@@ -1108,7 +1108,7 @@ mod tests {
     }
 
     /// The group feed's mapping reaches the chat gate: `SMSG_GROUP_LIST` through its handler, the
-    /// roster feed into the VM, then `SendChatMessage` through the drain. We lead a raid, so RAID
+    /// roster feed into the VM, then `SendChatMessage` through its applier. We lead a raid, so RAID
     /// goes out as RAID_LEADER (`0x49f3bf`); led by another member it goes out plain; ungrouped it
     /// is refused (`0x49f379`).
     #[test]
@@ -1136,8 +1136,7 @@ mod tests {
                     .init_resource::<MessageSounds>()
                     .init_resource::<QuestGiver>()
                     .init_resource::<crate::ui_chat::AfkMirror>()
-                    .init_resource::<crate::cvars::Cvars>()
-                    .init_resource::<crate::ui_chat::ChannelState>()
+                    .init_resource::<crate::target::Selection>()
                     .insert_resource(SelfGuid(Some(ME)));
                 let me = app
                     .world_mut()
@@ -1162,13 +1161,8 @@ mod tests {
                     )
                     .expect("the group-list handler");
                 app.update();
-                app.world_mut()
-                    .non_send_resource_mut::<UiScript>()
-                    .run(r#"SendChatMessage("go", "RAID")"#)
+                crate::ui_chat::run_chat(app.world_mut(), r#"SendChatMessage("go", "RAID")"#)
                     .expect("lua");
-                app.world_mut()
-                    .run_system_once(crate::ui_chat::drain_addon_chat_sends)
-                    .expect("drain");
                 let sent = rx
                     .try_iter()
                     .filter_map(|c| match c {

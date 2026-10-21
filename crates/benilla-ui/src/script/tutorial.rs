@@ -22,6 +22,12 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().tutorial_flag_requests)
     }
 
+    /// An acknowledge the engine made inside a script call (`AcknowledgeTutorial 0x4b54c0`), as a
+    /// 0-based id, drained with the `FlagTutorial` writes ([`Self::take_tutorial_flag_requests`]).
+    pub fn queue_tutorial_acknowledge(&mut self, id: u32) {
+        self.model_mut().tutorial_flag_requests.push(id);
+    }
+
     /// `TriggerTutorial(id, 0)` asks the engine made since the last drain, as 0-based ids, for the
     /// app's fire-once bank.
     pub fn take_tutorial_triggers(&mut self) -> Vec<u32> {
