@@ -212,9 +212,10 @@ impl Default for AuctionState {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AuctionQuery {
     pub name: String,
-    /// `0` = no filter, for both.
-    pub min_level: u32,
-    pub max_level: u32,
+    /// `0` = no filter, for both: the argument's `_ftol` low byte, 0 for a non-number
+    /// (`0x4ce9fd`-`0x4cea3b`).
+    pub min_level: u8,
+    pub max_level: u8,
     /// `None` = no filter (the wire's `0xFFFFFFFF`), for all three.
     pub inv_type: Option<u32>,
     pub class: Option<u32>,
@@ -733,6 +734,13 @@ fn submit(lua: &Lua, call: AuctionCall) -> mlua::Result<()> {
     super::calls::submit(lua, super::ScriptCall::Auction(call))
 }
 
+/// A level bound of `QueryAuctionItems`: a number's `_ftol` low byte (`0x4cea17`, `0x4cea3b`),
+/// anything else 0.
+fn level_byte(lua: &Lua, v: Option<Value>) -> u8 {
+    v.and_then(|v| binding_abi::is_number(lua, v))
+        .map_or(0, |n| binding_abi::ftol(n) as u8)
+}
+
 /// A list verb's offset: a number's `_ftol` times 50 in 32 bits (`0x4ceb44`, `0x4cecbf`,
 /// `0x4ced0f`), anything else 0 (`0x4ceb2f`, `0x4cecaa`, `0x4cecfa`); the verbs never raise.
 fn list_offset(lua: &Lua, page: Option<Value>) -> u32 {
@@ -1170,15 +1178,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "QueryAuctionItems",
         lua.create_function(|lua, args: MultiValue| {
             let a: Vec<Value> = args.into_iter().collect();
-            let num = |i: usize| -> Option<u32> {
-                match a.get(i) {
-                    Some(Value::Integer(n)) => u32::try_from(*n).ok(),
-                    Some(Value::Number(n)) => (*n >= 0.0).then_some(*n as u32),
-                    // The min/max level boxes are edit boxes: their text arrives as a string.
-                    Some(Value::String(s)) => s.to_str().ok()?.trim().parse::<u32>().ok(),
-                    _ => None,
-                }
-            };
             let name = match a.first() {
                 Some(Value::String(s)) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
                 _ => String::new(),
@@ -1195,7 +1194,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Some(Value::Number(n)) if *n >= 0.0 => Some(*n as u32),
                 _ => None,
             };
-            let position = |i: usize| num(i).and_then(|n| (n as usize).checked_sub(1));
+            // A menu position: a number's `_ftol` less one, compared unsigned, so 0 and a
+            // negative fall out of range (`0x4cea62`-`0x4cea6b`).
+            let position = |i: usize| {
+                a.get(i)
+                    .cloned()
+                    .and_then(|v| binding_abi::is_number(lua, v))
+                    .map(|n| binding_abi::ftol(n).wrapping_sub(1) as u32 as usize)
+            };
             let query = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let inv_type = position(3)
@@ -1210,8 +1216,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 });
                 AuctionQuery {
                     name,
-                    min_level: num(1).unwrap_or(0),
-                    max_level: num(2).unwrap_or(0),
+                    min_level: level_byte(lua, a.get(1).cloned()),
+                    max_level: level_byte(lua, a.get(2).cloned()),
                     inv_type,
                     class,
                     sub_class,

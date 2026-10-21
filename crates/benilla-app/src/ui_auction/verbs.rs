@@ -135,8 +135,8 @@ fn send_query(
         auctioneer,
         list_from: q.list_from,
         searched_name: q.name,
-        level_min: u8::try_from(q.min_level).unwrap_or(u8::MAX),
-        level_max: u8::try_from(q.max_level).unwrap_or(u8::MAX),
+        level_min: q.min_level,
+        level_max: q.max_level,
         slot_id: q.inv_type.unwrap_or(auction_filter::ANY),
         // Already ids: the binding maps menu positions as `0x4ce980` does.
         main_category: q.class.unwrap_or(auction_filter::ANY),
