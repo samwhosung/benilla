@@ -337,6 +337,7 @@ fn the_mail_and_auction_item_setters_answer_one_value() {
 #[test]
 fn live_objects_and_blocks_reach_the_flag() {
     let mut s = fixture();
+    s.keep_calls();
     s.run(r#"ITEM_DURATION_HOURS = "[DURATION %d h]" LOCKED = "[LOCKED]""#)
         .unwrap();
     s.set_lock_rows(std::collections::HashMap::from([

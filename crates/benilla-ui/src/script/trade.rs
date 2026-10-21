@@ -628,7 +628,7 @@ fn trade_refusal(model: &Model, item: &cursor::CursorItem) -> Option<&'static st
 
 /// `0x4bfa70`'s local half: our 0-based slot shows `item` and signals
 /// `TRADE_PLAYER_ITEM_CHANGED` with its 1-based index (`0x4bfaef`). The reference writes only
-/// past a successful send (`0x4bfab1`), which needs an open trade.
+/// past a successful send (`0x4bfab1`); with no window there is no slot to write.
 fn write_player_slot(model: &mut Model, i: usize, item: Option<TradeSlotItem>) {
     let Some(trade) = model.trade.as_mut() else {
         return;
