@@ -91,6 +91,12 @@ impl PendingCast {
         }
     }
 
+    /// The world entry's zero of the slot and its item guid (`0x6e72e7`, `0x6e72ed`). The pending
+    /// record is not `0x6e7150`'s to zero, so its caster word and spell stay.
+    pub(crate) fn clear_slot(&mut self) {
+        self.slot = None;
+    }
+
     /// The attempt's record fill (`0x6e4fb1`, once every rung has passed and before the arm, so a
     /// cursor spell and an arm refusal have it too), and the re-arm's (`0x6e748f`): the caster
     /// word names the active player. Every player commit fills it, an item use without

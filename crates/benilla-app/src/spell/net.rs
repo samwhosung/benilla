@@ -39,7 +39,8 @@ pub(crate) struct CastAtPlayer {
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
     app.add_message::<CastAtPlayer>();
-    app.net_handler(K::SpellBook, on_spell_book)
+    app.net_handler(K::Connected, on_world_enter)
+        .net_handler(K::SpellBook, on_spell_book)
         .net_handler(K::ActionButtons, on_action_buttons)
         .net_handler(K::SpellLearned, on_spell_learned)
         .net_handler(K::SpellRemoved, on_spell_removed)
@@ -494,6 +495,25 @@ fn on_inventory_refusal(
         Some(me),
         &edits,
     );
+}
+
+/// `Spell_C::SystemInitialize 0x6e7150`, which every world entry runs, a reconnect's too
+/// (`ClientInitializeGame 0x401570` → `0x6033c0` at `0x401639` → `0x6038da`): it zeroes the
+/// targeting word (`0x6e72e0`), the in-flight slot and its item (`0x6e72e7`, `0x6e72ed`), the
+/// queued strike's save (`0x6e72f9`) and the auto-repeat spell (`0x6e730b`). It fires no event.
+fn on_world_enter(
+    In(ev): In<SessionEvent>,
+    mut pending: ResMut<PendingCast>,
+    mut queued: ResMut<QueuedMeleeSpell>,
+    mut targeting: ResMut<super::SpellTargeting>,
+    mut auto_repeat: ResMut<AutoRepeatActive>,
+) {
+    if let SessionEvent::Connected { .. } = ev {
+        targeting.clear();
+        pending.clear_slot();
+        *queued = QueuedMeleeSpell::default();
+        auto_repeat.0 = None;
+    }
 }
 
 fn on_item_cooldown(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene) {
