@@ -1006,6 +1006,8 @@ fn spell_go(
         go_lid.write(crate::go_anim::GoLidOpen { go_guid, spell_id });
     }
     let (cooldowns, spells, items, pet_bar, spell_mods) = cooldown_ctx;
+    // The item leg held the cooldown for its record ([`item_go_cooldown`]).
+    let mut pended = false;
     let (auto_repeat, sheath, stand, edits, engaged, start_gate, core) = attack_ctx;
     let now = Instant::now();
     let display = spells.and_then(|s| s.catalog.get(spell_id));
@@ -1070,12 +1072,11 @@ fn spell_go(
         }
 
         // Our launch starts the cast's cooldown here, at the GO receive time. The self-insert
-        // forks on itemCaster == caster: the spell leg (`0x6e8498`: RecoveryTime, Category,
-        // CategoryRecoveryTime, on-hold from Attributes bit 25) or the item leg (`0x6e8566`,
-        // per-slot values with SpellRec fallbacks; a non-resident row pends via `0x6e8660` →
-        // `0x6e8830`). `SMSG_SPELL_COOLDOWN` is the server's override; vmangos sends none for a
-        // plain cast. A ranged-slot cast folds `UNIT_FIELD_RANGEDATTACKTIME` into the category
-        // recovery (`0x6e2b60`).
+        // forks on the first guid against the caster's (`0x6e8441`): the spell leg
+        // (`0x6e8498`: RecoveryTime, Category, CategoryRecoveryTime, on-hold from Attributes bit
+        // 25) or the item leg ([`item_go_cooldown`]). `SMSG_SPELL_COOLDOWN` is the server's
+        // override; vmangos sends none for a plain cast. A ranged-slot cast folds
+        // `UNIT_FIELD_RANGEDATTACKTIME` into the category recovery (`0x6e2b60`).
         let ranged_ms = display
             .filter(|d| d.ranged_speed_cooldown())
             .and_then(|_| {
@@ -1083,26 +1084,19 @@ fn spell_go(
                 stores.get(*e).ok()?.0.unit_ranged_attack_time()
             })
             .unwrap_or(0);
-        // The item's entry, off its own store.
-        match item_caster.and_then(|g| stores.get(*index.0.get(&g)?).ok()?.0.object_entry()) {
-            Some(entry) => {
-                // The item's record, which its create asked.
-                let use_spell = items
-                    .template(entry, 0, Ask::Read)
-                    .and_then(|t| t.use_spell)
-                    .filter(|u| u.spell_id == spell_id);
-                match use_spell {
-                    Some(u) => cooldowns.start_item(entry, &u, display, now),
-                    // Template not streamed, or naming another spell: the spell-keyed record,
-                    // unmodified, as the item leg never applies op 11 (`0x6e8566`, `0x6e8830`).
-                    None => {
-                        if let Some(d) = display {
-                            cooldowns.start_spell(spell_id, d, ranged_ms, now, None);
-                        }
-                    }
-                }
-                // The item leg's pair, with or without an insert (`0x6e8500`, `0x6e856b`).
-                cooldowns.flush_item_leg();
+        match item_caster {
+            Some(item) => {
+                pended = item_go_cooldown(
+                    item,
+                    spell_id,
+                    display,
+                    now,
+                    index,
+                    stores,
+                    items,
+                    core.net,
+                    cooldowns,
+                );
             }
             None => {
                 if let Some(d) = display {
@@ -1123,8 +1117,11 @@ fn spell_go(
             }
         }
     }
-    // The pet leg of the same insert: an independent `if`, not an else.
-    if let Some(d) = display.filter(|_| pet_go_cooldown(caster, self_guid, index, stores)) {
+    // The pet leg of the same insert: an independent `if`, not an else, which a held item cooldown
+    // skips, as it ends the handler (`0x6e84dd`).
+    if let Some(d) =
+        display.filter(|_| !pended && pet_go_cooldown(caster, self_guid, index, stores))
+    {
         // No ranged pad: `0x6e2b60` is called on the self leg only (`0x6e845d`). Op 11 still
         // applies to both columns (`0x6e85c5`, `0x6e85d1`) off the player's tables, which gate
         // on the spell's family and never the caster (`0x6e6b30`).
@@ -1285,6 +1282,55 @@ fn cancel_auto_repeat(
     // The same cancel `0x6ea080` as every local trigger, its unconditional CMSG ack included.
     let self_e = self_guid.0.and_then(|g| index.0.get(&g)).copied();
     crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, edits, net);
+}
+
+/// The go's item leg, for a cast whose first guid is not the caster's: the item's entry off its
+/// object (`0x6e8425`, type mask 2), with none inserting and flushing nothing (`0x6e84a9`); then its
+/// record, asked with the callback `0x6e8830` (`0x6e84c2`).
+/// - Not cached: the cooldown is held for the record ([`Cooldowns::pend_item`], `0x6e84d8`) and
+///   the handler ends (`0x6e84dd`); returns `true`.
+/// - Cached: the spell is searched among all five blocks, whatever their trigger (`0x6e84f0`). The
+///   block naming it inserts, keyed by the item ([`Cooldowns::start_item`]); none inserts nothing
+///   and flushes the pair and the bags (`0x6e84fd`-`0x6e8505`).
+fn item_go_cooldown(
+    item: u64,
+    spell_id: u32,
+    display: Option<&benilla_formats::SpellDisplay>,
+    now: Instant,
+    index: &GuidIndex,
+    stores: &Query<&mut ObjectStore>,
+    items: &crate::items::Items,
+    net: &crate::net::NetCommands,
+    cooldowns: &mut Cooldowns,
+) -> bool {
+    let entry = index
+        .0
+        .get(&item)
+        .and_then(|&e| stores.get(e).ok())
+        .filter(|s| s.0.is_item())
+        .and_then(|s| s.0.object_entry())
+        .filter(|&entry| entry != 0);
+    let Some(entry) = entry else {
+        return false;
+    };
+    let Some(record) = items.template(entry, item, Ask::Event(net)) else {
+        let on_hold = display.is_some_and(|d| d.cooldown_on_event());
+        cooldowns.pend_item(entry, spell_id, now, on_hold);
+        return true;
+    };
+    match record.spells.iter().find(|b| b.spell_id == spell_id) {
+        Some(block) => {
+            let block = benilla_protocol::messages::ItemUseSpell {
+                spell_id,
+                cooldown_ms: block.cooldown_ms,
+                category: block.category,
+                category_cooldown_ms: block.category_cooldown_ms,
+            };
+            cooldowns.start_item(entry, &block, display, now);
+        }
+        None => cooldowns.flush_item_leg(),
+    }
+    false
 }
 
 /// Whether this `SMSG_SPELL_GO` arms the pet's cooldown bank (`0x6e857a`–`0x6e85ad`). The GO
@@ -2871,7 +2917,7 @@ mod tests {
                         None,
                         None,
                         None,
-                        item_caster.or(Some(caster)),
+                        item_caster,
                         &mut commands,
                         &index,
                         &casting,
@@ -2971,10 +3017,9 @@ mod tests {
     }
 
     /// Op 11 on the GO insert: the self leg (`0x6e846f`, and `0x6e2b60`'s tail) and the pet leg
-    /// (`0x6e85c5`) apply the player's table; the item leg inserts the DBC values (`0x6e8566`),
-    /// here through its not-streamed fallback.
+    /// (`0x6e85c5`) apply the player's table.
     #[test]
-    fn op_11_shortens_the_self_and_pet_inserts_and_never_the_item_one() {
+    fn op_11_shortens_the_self_and_pet_inserts() {
         fn display() -> benilla_formats::SpellDisplay {
             benilla_formats::SpellDisplay {
                 spell_family: 9,
@@ -2992,15 +3037,6 @@ mod tests {
         assert_eq!(go_cooldowns(10, own, None, display, mods()).0, 3000);
         let pet = go_cooldowns(20, owned(SUMMONEDBY, 10), None, display, mods());
         assert_eq!(pet.1, 3000, "the pet leg takes the player's op 11");
-        let item = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(3, 6948)]));
-        let used = go_cooldowns(
-            10,
-            ObjectStore::default(),
-            Some((50, item)),
-            display,
-            mods(),
-        );
-        assert_eq!(used.0, 5000, "the item leg applies no modifier");
     }
 
     /// Both producers of the chain-hop array, the GO's hit list and the 816 packet, drop the

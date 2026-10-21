@@ -266,6 +266,37 @@ fn an_item_go_inserts_from_the_block_naming_its_spell_or_nothing() {
     assert_eq!(rig.cooldowns().bag_flushes, bags + 1);
 }
 
+/// The item leg inserts the block's values, or the spell's columns for a negative one, with no
+/// modifier (`0x6e8511`-`0x6e8566`), where the spell leg applies op 11 (`0x6e846f`).
+#[test]
+fn an_item_go_applies_no_modifier() {
+    fn display() -> SpellDisplay {
+        SpellDisplay {
+            spell_family: 9,
+            spell_family_flags: 1,
+            ..growl()
+        }
+    }
+    let mut rig = GoRig::new(display)
+        .with_object(ITEM, item_object())
+        .with_record(vec![ItemSpellEntry {
+            cooldown_ms: -1,
+            ..block(0, SPELL, 0)
+        }]);
+    {
+        let mut mods = rig
+            .app
+            .world_mut()
+            .resource_mut::<crate::spell::SpellModifiers>();
+        mods.set_class_family(9);
+        mods.set(true, 0, crate::spell::OP_COOLDOWN, -2000);
+    }
+    rig.go(ME, Some(ITEM));
+    assert_eq!(rig.reads(), (0, 5_000), "the spell's 5 s, unmodified");
+    rig.go(ME, None);
+    assert_eq!(rig.reads(), (3_000, 5_000), "the spell leg takes op 11");
+}
+
 /// A record not yet cached holds the cooldown under the item (`0x6e8660`) and ends the handler
 /// (`0x6e84dd`); the record's arrival inserts it as the item leg does, with the go's time
 /// (`0x6e8830`, `0x6e89a3`), and flushes the pair and the bags (`0x6e89a8`, `0x6e89ad`). A refusal

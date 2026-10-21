@@ -30,6 +30,33 @@ fn millis(ms: i32) -> Duration {
     Duration::from_millis(u64::from(ms.max(0).unsigned_abs()))
 }
 
+/// An item block's values as the go's item leg and its record callback take them
+/// (`0x6e8511`-`0x6e8547`, `0x6e892a`-`0x6e896f`): its recovery and category recovery when not
+/// negative and its category when positive, each else the spell's own column, unmodified.
+fn item_leg(
+    cooldown_ms: i32,
+    category: u32,
+    category_cooldown_ms: i32,
+    spell: Option<&SpellDisplay>,
+) -> (i32, u32, i32) {
+    let recovery = if cooldown_ms >= 0 {
+        cooldown_ms
+    } else {
+        spell.map_or(0, |s| s.recovery_ms as i32)
+    };
+    let category = if category as i32 > 0 {
+        category
+    } else {
+        spell.map_or(0, |s| s.category)
+    };
+    let category_recovery = if category_cooldown_ms >= 0 {
+        category_cooldown_ms
+    } else {
+        spell.map_or(0, |s| s.category_recovery_ms as i32)
+    };
+    (recovery, category, category_recovery)
+}
+
 /// One timer; a zero duration is untracked.
 #[derive(Clone, Copy, Debug)]
 struct Timer {
@@ -307,9 +334,8 @@ impl Cooldowns {
         self.flush();
     }
 
-    /// The go's item leg when the item's record names the spell (`0x6e8511`-`0x6e8566`): the
-    /// block's recovery and category recovery when not negative (`jge`) and its category when
-    /// positive (`jg`), each else the spell's own column, unmodified.
+    /// The go's item leg when the item's record names the spell (`0x6e8511`-`0x6e8566`), then
+    /// its pair (`0x6e856b`, `0x6e8570`).
     pub(crate) fn start_item(
         &mut self,
         item_entry: u32,
@@ -317,43 +343,36 @@ impl Cooldowns {
         spell: Option<&SpellDisplay>,
         now: Instant,
     ) {
-        let recovery_ms = if use_spell.cooldown_ms >= 0 {
-            use_spell.cooldown_ms as u32
-        } else {
-            spell.map_or(0, |s| s.recovery_ms)
-        };
-        let category = if use_spell.category as i32 > 0 {
-            use_spell.category
-        } else {
-            spell.map_or(0, |s| s.category)
-        };
-        let category_ms = if use_spell.category_cooldown_ms >= 0 {
-            use_spell.category_cooldown_ms as u32
-        } else {
-            spell.map_or(0, |s| s.category_recovery_ms)
-        };
+        let (recovery_ms, category, category_ms) = item_leg(
+            use_spell.cooldown_ms,
+            use_spell.category,
+            use_spell.category_cooldown_ms,
+            spell,
+        );
         self.add(
             now,
             use_spell.spell_id,
             item_entry,
             Timer {
                 start: now,
-                duration: Duration::from_millis(u64::from(recovery_ms)),
+                duration: millis(recovery_ms),
             },
             category,
             // Resolved through the spell only when the categories agree; no item carries 351.
             spell.is_some_and(|s| s.category == category && s.category_wildcard),
             Timer {
                 start: now,
-                duration: Duration::from_millis(u64::from(category_ms)),
+                duration: millis(category_ms),
             },
             spell.is_some_and(|s| s.cooldown_on_event()),
             0,
             Duration::ZERO,
         );
+        self.flush_item_leg();
     }
 
-    /// Hold the go's item cooldown until the item's record arrives (`0x6e8660`).
+    /// Hold the go's item cooldown until the item's record arrives (`0x6e8660`): one node per item
+    /// entry, found or added, which takes the spell, the go's time and the held flag.
     pub(crate) fn pend_item(
         &mut self,
         item_entry: u32,
@@ -371,13 +390,56 @@ impl Cooldowns {
         );
     }
 
-    /// The item record for `item_entry` arrived, or was refused (`None`).
+    /// The item cache's callback `0x6e8830` on a held item cooldown: the record of `item_entry`
+    /// arrived, or was refused (`None`), and the node goes either way (`0x6e8a3a`).
+    /// - A refusal finds no record and flushes nothing (`0x6e88d8`).
+    /// - A record whose blocks name the held spell (`0x6e88f0`) inserts as the go's item leg does,
+    ///   with the go's time and held flag, unless its recovery and category recovery are both 0
+    ///   (`0x6e8971`-`0x6e897a`). The go asks with the argument 1 (`0x6e84b4`), which takes the
+    ///   category pair (`0x6e8943`).
+    /// - Any record then flushes the item leg's pair (`0x6e89a8`, `0x6e89ad`).
     pub(crate) fn item_record_landed<'a>(
         &mut self,
-        _item_entry: u32,
-        _record: Option<&ItemInfo>,
-        _spell: impl Fn(u32) -> Option<&'a SpellDisplay>,
+        item_entry: u32,
+        record: Option<&ItemInfo>,
+        spell: impl Fn(u32) -> Option<&'a SpellDisplay>,
     ) {
+        let Some(held) = self.pending_items.remove(&item_entry) else {
+            return;
+        };
+        let Some(record) = record else {
+            return;
+        };
+        if let Some(block) = record.spells.iter().find(|b| b.spell_id == held.spell_id) {
+            let spell = spell(held.spell_id);
+            let (recovery_ms, category, category_ms) = item_leg(
+                block.cooldown_ms,
+                block.category,
+                block.category_cooldown_ms,
+                spell,
+            );
+            if recovery_ms != 0 || category_ms != 0 {
+                self.add(
+                    held.at,
+                    held.spell_id,
+                    item_entry,
+                    Timer {
+                        start: held.at,
+                        duration: millis(recovery_ms),
+                    },
+                    category,
+                    spell.is_some_and(|s| s.category == category && s.category_wildcard),
+                    Timer {
+                        start: held.at,
+                        duration: millis(category_ms),
+                    },
+                    held.on_hold,
+                    0,
+                    Duration::ZERO,
+                );
+            }
+        }
+        self.flush_item_leg();
     }
 
     /// Arm the GCD at cast send (`StartGlobalCooldown 0x6e2de0`, from `0x6e58fb`) for any cast or
@@ -493,6 +555,8 @@ impl Cooldowns {
     /// running cooldown at world entry and [`Self::seed_initial`] appends, so a surviving record
     /// would outlive the fresh one.
     pub(crate) fn clear_session(&mut self) {
+        // The shutdown frees the held item cooldowns with both lists (`0x6e9ad0`).
+        self.pending_items.clear();
         if !self.records.is_empty() {
             self.records.clear();
             self.flush();
