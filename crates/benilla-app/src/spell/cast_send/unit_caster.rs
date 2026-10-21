@@ -231,6 +231,57 @@ mod tests {
             .collect()
     }
 
+    /// autoSelfCast's fallback binds the active player whoever casts (`0x6e53d7`-`0x6e5400`:
+    /// `0x468550`, typemask `0x10`), tested against the caster: a pet's friendly spell with nothing
+    /// selected goes out at us, which the pet may assist, never at the pet.
+    #[test]
+    fn a_unit_casters_auto_self_cast_binds_the_active_player() {
+        use crate::target::relations::fixture::{factions, HUMAN};
+        const MEND: u32 = 136;
+        let (mut world, rx) = world();
+        // Implicit target 21, a friend: the assist word alone.
+        let mend = SpellDisplay {
+            implicit_target_a1: 21,
+            ..Default::default()
+        };
+        world.insert_resource(spells([(MEND, mend)]));
+        let factions: &'static Factions = Box::leak(Box::new(factions()));
+        // Both alive (22) under the Human template (`UNIT_FIELD_FACTIONTEMPLATE`, 35).
+        let living = || ObjectStore(ObjectFields::from_pairs(&[(22, 100), (35, HUMAN)]));
+        let pet: &'static ObjectStore = Box::leak(Box::new(living()));
+        world.insert_resource(SelfGuid(Some(ME)));
+        let me = world.spawn(living()).id();
+        world.resource_mut::<GuidIndex>().0.insert(ME, me);
+        world
+            .run_system_once(move |mut ladder: CastLadder| {
+                let base = ctx();
+                let as_pet = cast_target::CastContext {
+                    self_guid: Some(PET),
+                    auto_self_cast: true,
+                    rel: cast_target::TargetRelations {
+                        self_store: Some(pet),
+                        factions: Some(factions),
+                        group: crate::spell::group_relation::GroupInputs {
+                            self_guid: Some(PET),
+                            ..Default::default()
+                        },
+                        ..base.rel
+                    },
+                    ..base
+                };
+                ladder.send(MEND, &as_pet, AS_PET);
+            })
+            .expect("the ladder runs as a one-shot system");
+        let sent: Vec<_> = rx
+            .try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::PetCastSpell { target, .. } => Some(target),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sent, [UseItemTarget::Unit(ME)]);
+    }
+
     /// The loot rungs (`0x6e4ca2`-`0x6e4d31`) read the caster's loot guid through `0x6126f0`,
     /// which is 0 for any caster but the active player (`0x5fa6d0`): with a window latched, the
     /// player's Disenchant is refused `0x82` and a unit's goes out.
