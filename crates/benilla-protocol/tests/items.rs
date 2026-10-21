@@ -78,6 +78,13 @@ fn item_query_wire() {
         hx("ff18001000c3cdab50f1")
     );
 
+    // A trade-slot target (an oil used on the partner's non-traded slot): TARGET_FLAG_TRADE_ITEM
+    // (0x1000) and the slot as a packed guid, as the trade bind `0x6e6900` writes it.
+    assert_eq!(
+        messages::use_item(255, 24, 0, messages::UseItemTarget::TradeItem(6)),
+        hx("ff180000100106")
+    );
+
     // A corpse target (Goblin Jumper Cables' Defibrillate, `Targets 0x8000`): the corpse bit and
     // the packed guid, the block `cast_spell_corpse` writes; vmangos reads the guid for either
     // corpse bit (`SpellCastTargetsInfo.cpp:156-157`). 0xF101_0000_0000_002A packs to mask 0xC1.

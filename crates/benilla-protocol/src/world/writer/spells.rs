@@ -55,6 +55,15 @@ impl WorldWriter {
         )
     }
 
+    /// `CMSG_CAST_SPELL` with `TARGET_FLAG_TRADE_ITEM` and the trade slot: an enchant cast on the
+    /// partner's non-traded slot (`0x6e6900`).
+    pub fn cast_spell_trade_item(&mut self, spell_id: u32, slot: u8) -> Result<()> {
+        self.send(
+            opcode::CMSG_CAST_SPELL,
+            &messages::cast_spell_trade_item(spell_id, slot),
+        )
+    }
+
     /// `CMSG_CAST_SPELL` with `TARGET_FLAG_DEST_LOCATION`: a ground-targeted spell at a world
     /// point; the server checks range and line of sight (`Spell::CheckCast`).
     pub fn cast_spell_at_dest(&mut self, spell_id: u32, dest: [f32; 3]) -> Result<()> {

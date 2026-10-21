@@ -452,6 +452,7 @@ pub const SLOT_BAG_FIRST: u8 = 19;
 
 /// `SpellCastTargets` mask bits, vmangos `SpellDefines.h`.
 const TARGET_FLAG_GAMEOBJECT: u16 = 0x0800;
+const TARGET_FLAG_TRADE_ITEM: u16 = 0x1000;
 
 const TARGET_FLAG_UNIT: u16 = 0x0002;
 const TARGET_FLAG_DEST_LOCATION: u16 = 0x0040;
@@ -475,6 +476,11 @@ pub enum UseItemTarget {
     Dest([f32; 3]),
     /// `TARGET_FLAG_ITEM` and a packed guid: a poison, oil or stone applied to a clicked item.
     Item(u64),
+    /// `TARGET_FLAG_TRADE_ITEM` (`0x1000`) and a trade slot as the packed guid: the non-traded
+    /// slot of the partner's window, which the trade bind `0x6e6900` writes as guid `{6, 0}`
+    /// (`0x6e6915`-`0x6e6925`); vmangos resolves it to the item the partner has there
+    /// (`SpellCastTargetsInfo.cpp:131-135`).
+    TradeItem(u8),
     /// `TARGET_FLAG_SOURCE_LOCATION` and three `f32` coords (`BindLocation`, `0x6e60f0`); only
     /// items carrying spell 265, such as Martin Fury, use it. vmangos reads it before the dest.
     Source([f32; 3]),
@@ -513,6 +519,10 @@ pub(super) fn write_cast_targets(body: &mut Vec<u8>, target: UseItemTarget) {
         UseItemTarget::Item(guid) => {
             body.extend_from_slice(&TARGET_FLAG_ITEM.to_le_bytes());
             guid
+        }
+        UseItemTarget::TradeItem(slot) => {
+            body.extend_from_slice(&TARGET_FLAG_TRADE_ITEM.to_le_bytes());
+            u64::from(slot)
         }
         UseItemTarget::Corpse(corpse, guid) => {
             body.extend_from_slice(&corpse.target_flag().to_le_bytes());

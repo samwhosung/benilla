@@ -92,6 +92,13 @@ fn spell_and_action_wire() {
         "item cast: u32 id + u16 mask 0x10 + packed item guid"
     );
 
+    // The partner's non-traded slot, 6, as `0x6e6900` binds it: mask 0x1000, packed guid {6, 0}.
+    assert_eq!(
+        messages::cast_spell_trade_item(7418, 6),
+        hx("fa1c000000100106"),
+        "trade-slot cast: u32 id + u16 mask 0x1000 + packed guid 6 (mask 0x01)"
+    );
+
     // CMSG_ATTACKSWING: one full 8-byte guid, not packed.
     assert_eq!(messages::attack_swing(victim), hx("2a000045000030f1"));
 

@@ -362,6 +362,16 @@ pub fn cast_spell_item(spell_id: u32, item_guid: u64) -> Vec<u8> {
     body
 }
 
+/// Body of `CMSG_CAST_SPELL` at the partner's trade slot `slot`: `TARGET_FLAG_TRADE_ITEM` and the
+/// slot as a packed guid, the bind of `0x6e6900` (`0x6e6915`-`0x6e6925`), written by the targets
+/// writer `0x7e4e10` as any item target.
+pub fn cast_spell_trade_item(spell_id: u32, slot: u8) -> Vec<u8> {
+    let mut body = Vec::with_capacity(8);
+    body.extend_from_slice(&spell_id.to_le_bytes());
+    super::items::write_cast_targets(&mut body, super::items::UseItemTarget::TradeItem(slot));
+    body
+}
+
 /// Body of `CMSG_CAST_SPELL` at a ground point, for a `Targets & 0x40` spell such as Blizzard:
 /// `DEST_LOCATION` and three `f32` WoW world coords (`SpellCastTargetsInfo.cpp:169-174`; client
 /// `BindLocation` `0x6e60f0`).
