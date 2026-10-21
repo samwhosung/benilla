@@ -220,6 +220,13 @@ pub struct UnitState {
     pub drunk: u8,
     /// What the unit tooltip builder `0x529fe0` alone reads of the unit.
     pub tooltip: super::tooltip_unit::UnitTooltipFacts,
+    /// The unit's own stat, resistance, damage, speed and attack-power fields, which the stat
+    /// getters read for any unit but the active player (`ui/unitstats`); zeros where the server
+    /// sends the field to the owner alone.
+    pub combat: super::char_stats::UnitCombatStats,
+    /// `UNIT_FIELD_SUMMONEDBY` (fields 12-13), 0 for none: `UnitDefense` and `UnitAttackBothHands`
+    /// answer a unit the active player summoned (`0x519272`, `0x518881`).
+    pub summoned_by: u64,
 }
 
 /// The name of a unit whose name is not yet known, as the reference's `UnitName` (`0x517220`) and

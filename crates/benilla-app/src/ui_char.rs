@@ -444,6 +444,10 @@ pub(crate) fn unit_combat_stats(store: &ObjectStore) -> UnitCombatStats {
         physical_bonus_pos: f.player_mod_damage_done_pos(0).unwrap_or(0),
         physical_bonus_neg: f.player_mod_damage_done_neg(0).unwrap_or(0),
         damage_percent: f.player_mod_damage_done_pct(0).unwrap_or(1.0),
+        // School 0 here; the player's ranged school is `combat_stats`' to read.
+        ranged_bonus_pos: f.player_mod_damage_done_pos(0).unwrap_or(0),
+        ranged_bonus_neg: f.player_mod_damage_done_neg(0).unwrap_or(0),
+        ranged_percent: f.player_mod_damage_done_pct(0).unwrap_or(1.0),
         // `0` counts as unstreamed: a created store reads an absent in-block field as `Some(0)`,
         // so a plain `unwrap_or` would leave `damage / speed` infinite.
         main_attack_time_ms: base_swing(f.unit_base_attack_time(0)),

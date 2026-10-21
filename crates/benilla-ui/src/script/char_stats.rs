@@ -82,6 +82,12 @@ pub struct UnitCombatStats {
     pub physical_bonus_neg: i32,
     /// The physical damage multiplier (`PLAYER_FIELD_MOD_DAMAGE_DONE_PCT[0]`), 1.0 until streamed.
     pub damage_percent: f32,
+    /// The same three at the ranged weapon's damage school, which `UnitRangedDamage` reads
+    /// (`0x518a77`, `0x518ac0`, `0x518b0e`): the school of the first damage line of the ranged
+    /// slot's record with a minimum above 0, else 0 (`0x5189e1`-`0x518a45`).
+    pub ranged_bonus_pos: i32,
+    pub ranged_bonus_neg: i32,
+    pub ranged_percent: f32,
     /// Attack speeds in ms (`UNIT_FIELD_BASEATTACKTIME[0..2]`).
     pub main_attack_time_ms: u32,
     pub offhand_attack_time_ms: u32,
@@ -136,6 +142,9 @@ impl Default for UnitCombatStats {
             physical_bonus_pos: 0,
             physical_bonus_neg: 0,
             damage_percent: 1.0,
+            ranged_bonus_pos: 0,
+            ranged_bonus_neg: 0,
+            ranged_percent: 1.0,
             main_attack_time_ms: 0,
             offhand_attack_time_ms: 0,
             has_offhand: false,
@@ -1090,7 +1099,60 @@ mod tests {
     use super::{
         weapon_subclass_skill, RESISTANCE_INDEX_ERROR, SKILL_UNARMED, STAT_INDEX_ERROR, STAT_USAGE,
     };
-    use crate::script::{InvSlotView, UiScript, UnitCombatStats};
+    use crate::script::{InvSlotView, UiScript, UnitCombatStats, UnitGuids, UnitState};
+
+    const ME: u64 = 0x10;
+    const PET: u64 = 0xF140_0000_0000_0077;
+    const MOB: u64 = 0xF130_0000_0000_0001;
+    /// Another player.
+    const BOB: u64 = 0x20;
+
+    /// A VM with the active player seated: its snapshot under `"player"` and its guid among the
+    /// resolver's inputs, as the unit feed and the aura feed seat them.
+    fn seated() -> UiScript {
+        let mut s = UiScript::new().unwrap();
+        s.set_unit(
+            "player",
+            Some(UnitState {
+                exists: true,
+                has_object: true,
+                guid: ME,
+                is_player: true,
+                ..Default::default()
+            }),
+        );
+        s.set_unit_guids(&UnitGuids {
+            player: ME,
+            ..Default::default()
+        });
+        s
+    }
+
+    /// A held unit that is not the player, with its own fields.
+    fn held(guid: u64, level: u32, combat: UnitCombatStats) -> UnitState {
+        UnitState {
+            exists: true,
+            has_object: true,
+            guid,
+            level,
+            combat,
+            ..Default::default()
+        }
+    }
+
+    /// Our level-60 pet, which we summoned.
+    fn pet_unit(combat: UnitCombatStats) -> UnitState {
+        UnitState {
+            summoned_by: ME,
+            ..held(PET, 60, combat)
+        }
+    }
+
+    /// A swing time in seconds as the getters scale it: the integer times the single 0.001
+    /// (`0x518eb8`, `0x51898f`), at double precision.
+    fn speed(ms: u32) -> f64 {
+        f64::from(ms) * f64::from(0.001f32)
+    }
 
     /// A filled snapshot exercising every field the bindings read.
     fn stats() -> UnitCombatStats {
@@ -1108,6 +1170,9 @@ mod tests {
             physical_bonus_pos: 25,
             physical_bonus_neg: -3,
             damage_percent: 1.1,
+            ranged_bonus_pos: 40,
+            ranged_bonus_neg: -6,
+            ranged_percent: 1.2,
             main_attack_time_ms: 2900,
             offhand_attack_time_ms: 1500,
             has_offhand: false,
@@ -1174,7 +1239,7 @@ mod tests {
     /// The values are exact in `f32`, so the assertions compare equal.
     #[test]
     fn the_avoidance_verbs_are_player_implicit_and_answer_one_number() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = seated();
         // Before anything streams: 0, not nil.
         assert_eq!(s.eval::<f64>("return GetDodgeChance()").unwrap(), 0.0);
         s.set_player_combat_stats(Some(UnitCombatStats {
@@ -1200,7 +1265,7 @@ mod tests {
 
     #[test]
     fn unit_stat_serves_the_raw_field_twice_and_the_buff_split() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = seated();
         s.set_player_combat_stats(Some(stats()));
         // Str: raw 25 in both first slots; stock subtracts the +4 itself.
         assert_eq!(
@@ -1236,7 +1301,7 @@ mod tests {
     /// `0x518663`): 1.9 is stat 1, while 0.5 and any negative raise.
     #[test]
     fn an_out_of_range_stat_index_raises_the_references_own_string() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = seated();
         s.set_player_combat_stats(Some(stats()));
         for arg in ["6", "0", "-3", "0.5", "-0.5"] {
             let err = s
@@ -1282,7 +1347,7 @@ mod tests {
 
     #[test]
     fn unit_resistance_and_armor_decompose_school_zero() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = seated();
         s.set_player_combat_stats(Some(stats()));
         // Armor (school 0): 150 total, +30/−10 → base 130.
         assert_eq!(
@@ -1335,7 +1400,7 @@ mod tests {
 
     #[test]
     fn unit_damage_and_attack_speed_read_the_snapshot() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = seated();
         s.set_player_combat_stats(Some(stats()));
         assert_eq!(
             s.eval::<(f64, f64, f64, f64, i64, i64, f64)>(r#"return UnitDamage("player")"#)
@@ -1343,9 +1408,11 @@ mod tests {
             (12.5, 19.5, 5.0, 9.0, 25, -3, f64::from(1.1f32))
         );
         // No off-hand weapon: the second return is nil.
-        assert!(s
-            .eval::<bool>(r#"local m, o = UnitAttackSpeed("player") return m == 2.9 and o == nil"#)
-            .unwrap());
+        assert_eq!(
+            s.eval::<(f64, Option<f64>)>(r#"return UnitAttackSpeed("player")"#)
+                .unwrap(),
+            (speed(2900), None)
+        );
         s.set_player_combat_stats(Some(UnitCombatStats {
             has_offhand: true,
             ..stats()
@@ -1353,26 +1420,27 @@ mod tests {
         assert_eq!(
             s.eval::<(f64, f64)>(r#"return UnitAttackSpeed("player")"#)
                 .unwrap(),
-            (2.9, 1.5)
+            (speed(2900), speed(1500))
         );
-        // Another token, or no snapshot: zeros and percent 1.0.
+        // No object, a token naming nobody or the player before its object: seven zeros, the
+        // percent among them (`0x518deb`).
         assert_eq!(
             s.eval::<(f64, f64, f64, f64, i64, i64, f64)>(r#"return UnitDamage("target")"#)
                 .unwrap(),
-            (0.0, 0.0, 0.0, 0.0, 0, 0, 1.0)
+            (0.0, 0.0, 0.0, 0.0, 0, 0, 0.0)
         );
         let fresh = UiScript::new().unwrap();
         assert_eq!(
             fresh
                 .eval::<(f64, f64, f64, f64, i64, i64, f64)>(r#"return UnitDamage("player")"#)
                 .unwrap(),
-            (0.0, 0.0, 0.0, 0.0, 0, 0, 1.0)
+            (0.0, 0.0, 0.0, 0.0, 0, 0, 0.0)
         );
     }
 
     #[test]
     fn attack_power_and_weapon_skill_bindings_serve_the_pairs() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = seated();
         s.set_player_combat_stats(Some(stats()));
         assert_eq!(
             s.eval::<(i64, i64, i64)>(r#"return UnitAttackPower("player")"#)
@@ -1395,10 +1463,11 @@ mod tests {
                 .unwrap(),
             (18, 0)
         );
+        // The bonus at the ranged weapon's school, not the physical one.
         assert_eq!(
             s.eval::<(f64, f64, f64, i64, i64, f64)>(r#"return UnitRangedDamage("player")"#)
                 .unwrap(),
-            (2.8, 31.0, 47.0, 25, -3, f64::from(1.1f32))
+            (speed(2800), 31.0, 47.0, 40, -6, f64::from(1.2f32))
         );
         assert_eq!(
             s.eval::<(i64, i64, i64)>(r#"return UnitAttackPower("target")"#)
@@ -1417,17 +1486,9 @@ mod tests {
     /// PLAYER typemask (`0x612b40`, `0x5edae0`, `0x5ea460` are in no vtable), so a pet gets zeros.
     #[test]
     fn ranged_attack_gives_a_pet_zeros_where_defense_gives_it_level_times_five() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = seated();
         s.set_player_combat_stats(Some(stats()));
-        s.set_pet_combat_stats(Some(pet_stats()));
-        s.set_unit(
-            "pet",
-            Some(super::super::UnitState {
-                exists: true,
-                level: 60,
-                ..Default::default()
-            }),
-        );
+        s.set_unit("pet", Some(pet_unit(pet_stats())));
         assert_eq!(
             s.eval::<(i64, i64)>(r#"return UnitDefense("pet")"#)
                 .unwrap(),
@@ -1451,7 +1512,7 @@ mod tests {
     /// `0x518810` pushes `(base0, mod0, base1, mod1)`, one pair per hand.
     #[test]
     fn attack_both_hands_answers_a_pair_per_hand() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = seated();
         s.set_player_combat_stats(Some(UnitCombatStats {
             main_weapon_skill: (300, 5),
             offhand_weapon_skill: (275, -12),
@@ -1486,9 +1547,9 @@ mod tests {
 
     #[test]
     fn the_pet_token_reads_the_pet_snapshot_and_only_it() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = seated();
         s.set_player_combat_stats(Some(stats()));
-        s.set_pet_combat_stats(Some(pet_stats()));
+        s.set_unit("pet", Some(pet_unit(pet_stats())));
 
         // Stamina: the pet's 68, the player's 22.
         assert_eq!(
@@ -1545,9 +1606,11 @@ mod tests {
                 .unwrap(),
             (178, 12, -4)
         );
-        assert!(s
-            .eval::<bool>(r#"local m, o = UnitAttackSpeed("pet") return m == 2.0 and o == nil"#)
-            .unwrap());
+        assert_eq!(
+            s.eval::<(f64, Option<f64>)>(r#"return UnitAttackSpeed("pet")"#)
+                .unwrap(),
+            (speed(2000), None)
+        );
 
         // A third token is still the absent shape.
         assert_eq!(
@@ -1561,7 +1624,7 @@ mod tests {
             (0, 0, 0, 0, 0)
         );
         // So is `"pet"` once the pet is dismissed (the feed pushes `None`).
-        s.set_pet_combat_stats(None);
+        s.set_unit("pet", None);
         assert_eq!(
             s.eval::<(i64, i64, i64, i64)>(r#"return UnitStat("pet", 1)"#)
                 .unwrap(),
@@ -1570,7 +1633,7 @@ mod tests {
         assert_eq!(
             s.eval::<(f64, f64, f64, f64, i64, i64, f64)>(r#"return UnitDamage("pet")"#)
                 .unwrap(),
-            (0.0, 0.0, 0.0, 0.0, 0, 0, 1.0)
+            (0.0, 0.0, 0.0, 0.0, 0, 0, 0.0)
         );
         // The player's is untouched by any of it.
         assert_eq!(
@@ -1584,17 +1647,9 @@ mod tests {
     /// 0 modifier; `UnitAttackBothHands` takes the same fork.
     #[test]
     fn unit_defense_forks_the_player_skill_from_a_pets_level_times_five() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = seated();
         s.set_player_combat_stats(Some(stats()));
-        s.set_pet_combat_stats(Some(pet_stats()));
-        s.set_unit(
-            "pet",
-            Some(super::super::UnitState {
-                exists: true,
-                level: 60,
-                ..Default::default()
-            }),
-        );
+        s.set_unit("pet", Some(pet_unit(pet_stats())));
         assert_eq!(
             s.eval::<(i64, i64)>(r#"return UnitDefense("player")"#)
                 .unwrap(),
@@ -1625,10 +1680,9 @@ mod tests {
         // A token failing the SELF-or-SUMMONEDBY gate gets zeros, not its level.
         s.set_unit(
             "target",
-            Some(super::super::UnitState {
-                exists: true,
-                level: 63,
-                ..Default::default()
+            Some(UnitState {
+                summoned_by: BOB,
+                ..held(MOB, 63, UnitCombatStats::default())
             }),
         );
         assert_eq!(
@@ -1648,9 +1702,134 @@ mod tests {
         );
     }
 
+    /// The stat getters resolve any token to its object (`0x515940`) and read that object's fields
+    /// behind each function's gates (benilla-re `ui/unitstats`, "Who may be asked"): SELF is the
+    /// object's GUID against the active player's (`0x468550`), so a chain that ends on us reads our
+    /// own block; SUMMONEDBY us (`0x519272`) gives the level times 5; PLAYER picks the damage bonus
+    /// arm (`0x518cd4`, `0x5189d5`); no object gives zeros, the percent among them.
+    #[test]
+    fn the_stat_getters_answer_for_any_token_by_its_unit() {
+        let mut s = seated();
+        s.set_player_combat_stats(Some(stats()));
+        s.set_unit_guids(&UnitGuids {
+            player: ME,
+            target: MOB,
+            held: std::collections::HashMap::from([(MOB, ME), (ME, MOB)]),
+            ..Default::default()
+        });
+        // A target's public base attack time (`0x518ea0`, field 126) and nothing owner-only.
+        let mob = UnitCombatStats {
+            main_attack_time_ms: 2000,
+            min_damage: 50.0,
+            max_damage: 70.0,
+            resistances: [900, 0, -5, 0, 0, 0, 0],
+            ..Default::default()
+        };
+        s.set_unit("target", Some(held(MOB, 50, mob.clone())));
+        // The chain `targettarget` ends on us.
+        s.set_unit_by_guid(
+            ME,
+            Some(UnitState {
+                is_player: true,
+                ..held(ME, 60, UnitCombatStats::default())
+            }),
+        );
+        let eval = |s: &UiScript, chunk: &str| -> String {
+            s.eval::<mlua::MultiValue>(&format!("return {chunk}"))
+                .map(|v| {
+                    v.iter()
+                        .map(|v| match v {
+                            mlua::Value::Nil => "nil".to_string(),
+                            mlua::Value::Number(n) => n.to_string(),
+                            mlua::Value::Integer(n) => n.to_string(),
+                            other => format!("{other:?}"),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_else(|e| panic!("{chunk}: {e}"))
+        };
+        assert_eq!(
+            eval(&s, r#"UnitAttackSpeed("target")"#),
+            format!("{} nil", speed(2000))
+        );
+        assert_eq!(
+            eval(&s, r#"UnitDamage("target")"#),
+            "50 70 0 0 0 0 1",
+            "a creature: the bonus arm's 0, 0 and 1.0"
+        );
+        assert_eq!(
+            eval(&s, r#"UnitResistance("target", 2)"#),
+            "0 0 0 0",
+            "not the player: the field raised to 0 twice (`0x518562`-`0x51857c`)"
+        );
+        assert_eq!(eval(&s, r#"UnitArmor("target")"#), "900 900 900 0 0");
+        assert_eq!(eval(&s, r#"UnitDefense("target")"#), "0 0");
+        // Us by a chain: our own block, the buffs and the skills included.
+        assert_eq!(eval(&s, r#"UnitStat("targettarget", 1)"#), "25 25 4 0");
+        assert_eq!(eval(&s, r#"UnitAttackPower("targettarget")"#), "78 30 -10");
+        assert_eq!(eval(&s, r#"UnitDefense("targettarget")"#), "55 4");
+        assert_eq!(eval(&s, r#"UnitRangedAttack("targettarget")"#), "18 0");
+        // A target that is our pet: its own fields, and our summon's level times 5.
+        s.set_unit("target", Some(pet_unit(pet_stats())));
+        assert_eq!(eval(&s, r#"UnitAttackPower("target")"#), "178 12 -4");
+        assert_eq!(eval(&s, r#"UnitDefense("target")"#), "300 0");
+        assert_eq!(eval(&s, r#"UnitAttackBothHands("target")"#), "300 0 300 0");
+        assert_eq!(eval(&s, r#"UnitRangedAttack("target")"#), "0 0");
+        // Another player: its fields, the bonus arm's 0, 0 and 0.0, no off hand.
+        s.set_unit(
+            "target",
+            Some(UnitState {
+                is_player: true,
+                ..held(BOB, 60, mob)
+            }),
+        );
+        assert_eq!(eval(&s, r#"UnitDamage("target")"#), "50 70 0 0 0 0 0");
+        assert_eq!(eval(&s, r#"UnitRangedDamage("target")"#), "0 0 0 0 0 0");
+        // A party member out of view: no object, zeros.
+        s.set_unit(
+            "party1",
+            Some(UnitState {
+                exists: true,
+                guid: BOB,
+                level: 60,
+                ..Default::default()
+            }),
+        );
+        assert_eq!(eval(&s, r#"UnitAttackSpeed("party1")"#), "0 nil");
+        assert_eq!(eval(&s, r#"UnitStat("party1", 1)"#), "0 0 0 0");
+        // Every one raises `Usage:` for a non-string (`0x6f3510`) and the resolver's error for an
+        // unknown token.
+        for (getter, usage) in [
+            ("UnitArmor", r#"Usage: UnitArmor("unit")"#),
+            ("UnitDamage", r#"Usage: UnitDamage("unit")"#),
+            ("UnitRangedDamage", r#"Usage: UnitRangedDamage("unit")"#),
+            ("UnitAttackSpeed", r#"Usage: UnitAttackSpeed("unit")"#),
+            ("UnitAttackPower", r#"Usage: UnitAttackPower("unit")"#),
+            ("UnitRangedAttackPower", r#"Usage: UnitAttackPower("unit")"#),
+            ("UnitDefense", r#"Usage: UnitDefense("unit")"#),
+            (
+                "UnitAttackBothHands",
+                r#"Usage: UnitAttackBothHands("unit")"#,
+            ),
+            ("UnitRangedAttack", r#"Usage: UnitRangedAttack("unit")"#),
+        ] {
+            let err = s.run(&format!("{getter}()")).unwrap_err().to_string();
+            assert!(err.contains(usage), "{getter}(): {err}");
+            let err = s
+                .run(&format!("{getter}(\"bogus\")"))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("Unknown unit name"),
+                "{getter}(\"bogus\"): {err}"
+            );
+        }
+    }
+
     #[test]
     fn has_wand_equipped_reads_the_flag() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = seated();
         assert!(!s.eval::<bool>("return HasWandEquipped()").unwrap());
         s.set_player_combat_stats(Some(UnitCombatStats {
             has_wand: true,
@@ -1663,7 +1842,7 @@ mod tests {
     /// container in a bank bag slot 0 before the DBC is read.
     #[test]
     fn get_inventory_item_count_forks_on_the_container_bit_and_the_slot() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = seated();
         let bag = |contents: Option<u32>| {
             Some(InvSlotView {
                 item_id: 4496,
@@ -1744,7 +1923,7 @@ mod tests {
 
     #[test]
     fn inventory_item_bindings_serve_occupied_empty_and_absent_shapes() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = seated();
         let mut slots: crate::script::InventorySlots = Default::default();
         // Head (slot 1) occupied; ammo (slot 0) with a bag-summed count; the rest empty.
         slots[1] = Some(InvSlotView {
