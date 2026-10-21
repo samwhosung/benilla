@@ -29,6 +29,23 @@ struct Trade {
     /// The trade feed and the drop's system, registered once so their memories persist.
     feed: SystemId,
     drop: SystemId,
+    click: SystemId,
+}
+
+/// Our object with `extra` fields: `OBJECT_FIELD_TYPE` a player, the human template,
+/// player-controlled, and the two pack slots.
+fn me_fields(extra: &[(u16, u32)]) -> ObjectFields {
+    let mut pairs = vec![
+        (2, 0x19),
+        (35, fixture::HUMAN),
+        (46, fixture::PC),
+        (532, CLOTH as u32),
+        (533, (CLOTH >> 32) as u32),
+        (534, JERKY as u32),
+        (535, (JERKY >> 32) as u32),
+    ];
+    pairs.extend_from_slice(extra);
+    ObjectFields::from_pairs(&pairs)
 }
 
 /// The whole client, headless, with us and Bob streamed as players of one faction group, Bob
@@ -39,16 +56,7 @@ fn client() -> Trade {
     app.insert_resource(NetCommands(tx));
     app.insert_resource(fixture::factions());
     let world = app.world_mut();
-    // `OBJECT_FIELD_TYPE` a player, the human template, player-controlled, and the two pack slots.
-    let me = crate::net::ObjectStore(ObjectFields::from_pairs(&[
-        (2, 0x19),
-        (35, fixture::HUMAN),
-        (46, fixture::PC),
-        (532, CLOTH as u32),
-        (533, (CLOTH >> 32) as u32),
-        (534, JERKY as u32),
-        (535, (JERKY >> 32) as u32),
-    ]));
+    let me = crate::net::ObjectStore(me_fields(&[]));
     let me = world
         .spawn((crate::net::SelfPlayer, crate::net::Guid(ME), me))
         .id();
@@ -122,12 +130,43 @@ fn client() -> Trade {
     let drop = app
         .world_mut()
         .register_system(crate::ui_action::drop_item::drop_item_on_unit);
+    let click = app
+        .world_mut()
+        .register_system(crate::ui_action::drop_item::trade_on_world_click);
     Trade {
         app,
         rx,
         feed,
         drop,
+        click,
     }
+}
+
+/// A left click on `guid`'s model, through the world click's trade leg.
+fn click_on(t: &mut Trade, guid: u64) {
+    let world = t.app.world_mut();
+    let entity = world.resource::<crate::net::GuidIndex>().0[&guid];
+    world.resource_mut::<crate::target::PressPick>().hovered = crate::target::Hovered {
+        target: Some(entity),
+        guid: Some(guid),
+        ..Default::default()
+    };
+    world
+        .resource_mut::<Messages<benilla_world::interact::WorldClick>>()
+        .write(benilla_world::interact::WorldClick);
+    let click = t.click;
+    run_system(t, click);
+}
+
+/// The refusals queued since the last read.
+fn errors(t: &Trade) -> Vec<&'static str> {
+    t.app
+        .world()
+        .resource::<crate::ui_action::UiErrorKeys>()
+        .take()
+        .into_iter()
+        .map(|e| e.key)
+        .collect()
 }
 
 fn run(t: &mut Trade, lua: &str) {
@@ -568,4 +607,129 @@ fn close_trade_signals_the_money_after_any_close() {
     let _ = heard(&mut t);
     run(&mut t, "CloseTrade()");
     assert_eq!(heard(&mut t), "PLAYER_TRADE_MONEY(nil,nil) ");
+}
+
+/// A left click on another player with coins held asks to trade in the cursor-drop mode
+/// (`0x49278e`), keeping the coins; the window's open then folds them (`0x4bf5f1`).
+#[test]
+fn a_click_on_a_player_with_coins_starts_a_trade_that_folds_them() {
+    let mut t = client();
+    run(&mut t, "PickupPlayerMoney(300)");
+    click_on(&mut t, BOB);
+    assert!(matches!(
+        sent(&t)[..],
+        [ClientCommand::InitiateTrade { target: BOB }]
+    ));
+    assert_eq!(eval::<i64>(&mut t, "return GetCursorMoney()"), 300);
+    status(&mut t, TradeStatus::OpenWindow);
+    assert_eq!(
+        heard(&mut t),
+        "PLAYER_TRADE_MONEY(nil,nil) TRADE_SHOW(nil,nil) "
+    );
+    assert!(sent(&t)
+        .iter()
+        .any(|c| matches!(c, ClientCommand::SetTradeGold { copper: 300 })));
+    assert_eq!(
+        eval::<(i64, i64)>(&mut t, "return GetCursorMoney(), GetPlayerTradeMoney()"),
+        (0, 300)
+    );
+}
+
+/// On our open partner a held item goes to a slot through `0x4bfc50` (`0x49276b`), and coins
+/// do nothing there; another player with our trade open is `ERR_ALREADY_TRADING` (`0x492777`).
+#[test]
+fn a_click_on_the_partner_offers_the_item_and_on_anyone_else_refuses() {
+    let mut t = client();
+    open_with_bob(&mut t);
+    run(&mut t, "PickupContainerItem(0, 1)");
+    click_on(&mut t, BOB);
+    assert!(
+        sent(&t)
+            .iter()
+            .any(|c| matches!(c, ClientCommand::SetTradeItem { trade_slot: 0, .. })),
+        "the click places the held item"
+    );
+    assert_eq!(heard(&mut t), "TRADE_PLAYER_ITEM_CHANGED(1,nil) ");
+    assert!(eval::<bool>(&mut t, "return CursorHasItem() == nil"));
+
+    run(&mut t, "PickupPlayerMoney(300)");
+    click_on(&mut t, BOB);
+    assert!(sent(&t).is_empty(), "coins take no slot");
+    assert_eq!(eval::<i64>(&mut t, "return GetCursorMoney()"), 300);
+
+    const ALICE: u64 = 0x8;
+    crate::items::test_spawn_object(
+        t.app.world_mut(),
+        ALICE,
+        fixture::store_of(&fixture::player(ALICE, fixture::HUMAN)).0,
+    );
+    click_on(&mut t, ALICE);
+    assert!(sent(&t).is_empty());
+    assert_eq!(errors(&t), ["ERR_ALREADY_TRADING"]);
+}
+
+/// The click's own gates, each alone: a bag with an item in it (`0x4926f2`), a dead active
+/// player (`0x492742`), a spell awaiting a target (`0x492668`) and an empty cursor
+/// (`0x492662`) start nothing.
+#[test]
+fn the_click_refuses_a_full_bag_and_a_dead_player_and_skips_a_targeting_cursor() {
+    let mut t = client();
+    // Backpack slot 1 a bag with two of its seats filled.
+    with_hosted_vm(t.app.world_mut(), |vm| {
+        let mut bag = ContainerState {
+            num_slots: 16,
+            ..Default::default()
+        };
+        bag.slots.insert(
+            1,
+            ContainerSlot {
+                item_id: 2589,
+                guid: CLOTH,
+                count: 1,
+                occupied_seats: Some(2),
+                ..Default::default()
+            },
+        );
+        bag.slots.insert(
+            2,
+            ContainerSlot {
+                item_id: 117,
+                guid: JERKY,
+                count: 1,
+                ..Default::default()
+            },
+        );
+        vm.expect("a VM").set_container(0, Some(bag));
+    });
+    run(&mut t, "PickupContainerItem(0, 1)");
+    click_on(&mut t, BOB);
+    assert!(sent(&t).is_empty());
+    assert_eq!(errors(&t), ["ERR_TRADE_BAG"]);
+    run(&mut t, "ClearCursor()");
+
+    run(&mut t, "PickupContainerItem(0, 2)");
+    t.app
+        .world_mut()
+        .resource_mut::<crate::spell::SpellTargeting>()
+        .enter(1, crate::spell::CastCommit::Spell, 0x0010);
+    click_on(&mut t, BOB);
+    assert!(sent(&t).is_empty());
+    assert!(errors(&t).is_empty(), "the cursor's click is the cast's");
+    *t.app
+        .world_mut()
+        .resource_mut::<crate::spell::SpellTargeting>() = Default::default();
+
+    // `UNIT_FIELD_HEALTH` 0 of a `UNIT_FIELD_MAXHEALTH` 100: dead.
+    let me = t.app.world().resource::<crate::net::GuidIndex>().0[&ME];
+    t.app
+        .world_mut()
+        .entity_mut(me)
+        .insert(crate::net::ObjectStore(me_fields(&[(22, 0), (28, 100)])));
+    click_on(&mut t, BOB);
+    assert!(sent(&t).is_empty());
+    assert_eq!(errors(&t), ["ERR_PLAYER_DEAD"]);
+
+    run(&mut t, "ClearCursor()");
+    click_on(&mut t, BOB);
+    assert!(sent(&t).is_empty() && errors(&t).is_empty(), "nothing held");
 }

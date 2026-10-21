@@ -358,8 +358,15 @@ impl Plugin for TargetPlugin {
                     // It lends the call host too, after the repair-mode reset, so its casts read
                     // this frame's outdoors answer as well.
                     click::world_right_click_payload,
-                    // A plate click replayed as a click, then the select that reads it.
-                    (click::select_on_plate_click, click::select_on_click).chain(),
+                    // The world click's trade leg, ahead of the select in the same click
+                    // (`0x4925d0`); then a plate click replayed as a click, then the select that
+                    // reads it.
+                    (
+                        crate::ui_action::drop_item::trade_on_world_click,
+                        click::select_on_plate_click,
+                        click::select_on_click,
+                    )
+                        .chain(),
                     // After the gated select, which must read the targeting mode before a commit
                     // clears it. The pending spell feeds only one of the two legs, so their mutual
                     // order is free.

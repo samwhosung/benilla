@@ -273,6 +273,19 @@ impl super::UiScript {
         Ok(())
     }
 
+    /// The world click's refusal of the held item before its trade leg (`0x4926bc`-`0x49271f`): a
+    /// container with an item in any seat is `ERR_TRADE_BAG` (`0x4926f2`), and an empty one worn
+    /// in a bag slot, player slots 19-22, `ERR_TRADE_EQUIPPED_BAG` (`0x6225d0`, `0x49271d`). An
+    /// item whose object is gone is let through (`0x4926a6`), and so is coin.
+    pub fn trade_click_refusal(&self) -> Option<&'static str> {
+        let model = self.model_ref();
+        let Some(CursorPayload::Item(item)) = model.cursor.as_ref() else {
+            return None;
+        };
+        let (_, _, seats) = held_record(&model, item)?;
+        bag_refusal(item, seats)
+    }
+
     /// Both money offers zero (`0xc4be70`, `0xc4be74`), as the cancel, complete, close-window and
     /// code 13 statuses do before their dispatch (`0x5d4884`-`0x5d48a2`, `0x5d48eb`-`0x5d48ff`).
     pub fn zero_trade_gold(&mut self) {
@@ -617,11 +630,16 @@ fn trade_refusal(model: &Model, item: &cursor::CursorItem) -> Option<&'static st
             "ERR_TRADE_BOUND_ITEM"
         });
     }
-    let seats = seats?;
-    if seats > 0 {
+    bag_refusal(item, seats)
+}
+
+/// A held container's refusal, as both the slot click and the world click test it: an item in any
+/// seat is `ERR_TRADE_BAG`, and an empty one worn in a bag slot, the paper doll's 1-based 20 to
+/// 23, is `ERR_TRADE_EQUIPPED_BAG`. Anything but a container (`seats` none) passes.
+fn bag_refusal(item: &cursor::CursorItem, seats: Option<u32>) -> Option<&'static str> {
+    if seats? > 0 {
         return Some("ERR_TRADE_BAG");
     }
-    // The paper doll's bag slots, 1-based 20 to 23.
     (item.bag == cursor::EQUIPMENT_BAG && (20..=23).contains(&item.slot))
         .then_some("ERR_TRADE_EQUIPPED_BAG")
 }

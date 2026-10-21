@@ -1469,6 +1469,51 @@ pub(crate) mod schedule_tests {
         );
     }
 
+    /// The world click's trade leg runs ahead of its select (`0x4925d0`: the trade request at
+    /// `0x49278e`, `SelectTarget` at `0x49280c`), so the targeting cursor it tests (`0x492668`)
+    /// is the one the click found, not what the select's bind left.
+    #[test]
+    fn the_world_clicks_trade_leg_runs_before_its_select() {
+        let mut app = headless_client();
+        let c = census(&mut app, Update, SyncPoints::Declared);
+        if !type_names_available(&c) {
+            eprintln!(
+                "skipped: this build carries no type names (bevy/debug rides with the dev feature)"
+            );
+            return;
+        }
+        let one = |suffix: &str| {
+            let mut hits = c.systems.iter().filter(|(_, s)| s.name.ends_with(suffix));
+            match (hits.next(), hits.next()) {
+                (Some((k, _)), None) => *k,
+                _ => panic!("exactly one system named `…{suffix}` in Update"),
+            }
+        };
+        let trade = one("::ui_action::drop_item::trade_on_world_click");
+        let mut succ: HashMap<SystemKey, Vec<SystemKey>> = HashMap::new();
+        for (a, b) in &c.dependencies {
+            succ.entry(*a).or_default().push(*b);
+        }
+        let mut seen = HashSet::new();
+        let mut stack = vec![trade];
+        while let Some(n) = stack.pop() {
+            for m in succ.get(&n).into_iter().flatten() {
+                if seen.insert(*m) {
+                    stack.push(*m);
+                }
+            }
+        }
+        for select in [
+            "::target::click::select_on_plate_click",
+            "::target::click::select_on_click",
+        ] {
+            assert!(
+                seen.contains(&one(select)),
+                "the trade leg runs before {select}"
+            );
+        }
+    }
+
     /// The `Startup` VM, the stock glue's, is built after the glyph cache:
     /// its first screen sizes frames by measured text in the show (`TOSFrameHeader` off
     /// `TOSFrameTitle:GetWidth()`, `AccountLogin.lua`), which with no cache measures 0.

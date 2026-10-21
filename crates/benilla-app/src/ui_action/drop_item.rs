@@ -5,7 +5,8 @@
 //! first: our open trade partner gets the item in a slot (`0x4bfc50`), and with no trade open the
 //! drop asks to trade with the cursor-drop mode (`0x5d3fb0` with 1), so the window opens with the
 //! item in it. Every refusal is silent and keeps the payload (`ClearCursor 0x495190` runs on
-//! success only), and the server alone judges range.
+//! success only), and the server alone judges range. A left click on another player's model or
+//! plate runs the same trade leg from the world click (`0x4925d0`), with its own gates.
 
 use bevy::prelude::*;
 
@@ -117,6 +118,7 @@ pub(crate) struct TradeLeg<'w, 's> {
     relations: crate::target::RelationWorld<'w, 's>,
     trade: Option<ResMut<'w, crate::ui_trade::TradeSession>>,
     net: Res<'w, crate::net::NetCommands>,
+    errors: Res<'w, crate::ui_action::UiErrorKeys>,
 }
 
 impl TradeLeg<'_, '_> {
@@ -148,22 +150,123 @@ impl TradeLeg<'_, '_> {
             return;
         }
         match trade.cell() {
-            Some(partner) if partner == guid => {
-                if let Err(e) = script.offer_cursor_item() {
-                    debug!("DropItemOnUnit({token}) — the offer raised: {e}");
-                }
-            }
+            Some(partner) if partner == guid => offer(script),
             Some(_) => {}
-            None => {
-                info!(target: "trade", "DropItemOnUnit({token}) -> {guid:#x}; sending CMSG_INITIATE_TRADE");
-                trade.initiate(guid, true);
-                let _ = self
-                    .net
-                    .0
-                    .send(crate::net::ClientCommand::InitiateTrade { target: guid });
-            }
+            None => ask(trade, &self.net, guid),
         }
     }
+
+    /// The world click's player leg (`0x492635`-`0x49278e`), on the clicked object `entity`: a
+    /// player (`0x492635`, ourselves not excepted), an item or coins on the cursor (`0x49263f`-
+    /// `0x492662`) and no spell awaiting a target (`0x492668`, the caller's test). A held bag
+    /// with items, or an empty one worn, is refused (`0x4926f4`, `0x49271f`), then a dead active
+    /// player (`0x492744`). Our open trade partner takes the item through `0x4bfc50`
+    /// (`0x49276b`), which takes no coins; anyone else with a trade open is `ERR_ALREADY_TRADING`
+    /// (`0x492777`), and with none the click asks to trade in the cursor-drop mode (`0x49278e`).
+    fn click_on(
+        &mut self,
+        script: &mut benilla_ui::script::UiScript,
+        entity: Entity,
+        guid: u64,
+        dead: bool,
+    ) {
+        use crate::ui_session::LatchedWindow;
+        let Some(trade) = self.trade.as_deref_mut() else {
+            return;
+        };
+        let Ok(store) = self.tokens.stores.get(entity) else {
+            return;
+        };
+        if store.0.object_type_mask().unwrap_or(0) & 0x10 == 0 {
+            return;
+        }
+        let held = match script.cursor_payload() {
+            Some(CursorPayload::Item(item)) => item.guid != 0,
+            Some(CursorPayload::Money(money)) => money.copper > 0,
+            _ => false,
+        };
+        if !held {
+            return;
+        }
+        if let Some(key) = script.trade_click_refusal() {
+            self.errors.push(crate::ui_action::UiError::key(key));
+            return;
+        }
+        if dead {
+            self.errors
+                .push(crate::ui_action::UiError::key("ERR_PLAYER_DEAD"));
+            return;
+        }
+        match trade.cell() {
+            Some(partner) if partner == guid => offer(script),
+            Some(_) => self
+                .errors
+                .push(crate::ui_action::UiError::key("ERR_ALREADY_TRADING")),
+            None => ask(trade, &self.net, guid),
+        }
+    }
+}
+
+/// `0x4bfc50` on our open trade partner: the held item to a slot of ours.
+fn offer(script: &mut benilla_ui::script::UiScript) {
+    if let Err(e) = script.offer_cursor_item() {
+        debug!("ui_trade: the offer of the held item raised: {e}");
+    }
+}
+
+/// `0x5d3fb0` with mode 1: `CMSG_INITIATE_TRADE`, the window to open with what the cursor holds.
+fn ask(trade: &mut crate::ui_trade::TradeSession, net: &crate::net::NetCommands, guid: u64) {
+    info!(target: "trade", "a drop on {guid:#x}; sending CMSG_INITIATE_TRADE");
+    trade.initiate(guid, true);
+    let _ = net
+        .0
+        .send(crate::net::ClientCommand::InitiateTrade { target: guid });
+}
+
+/// The world click's trade leg (`0x4925d0`), for a nameplate's left click (`0x7cb910` →
+/// `0x4949f0` action 1) and the body click's press pick alike, ahead of the select that follows it
+/// in the same function (`0x49280c`) and so ahead of the targeting cursor's bind, whose state it
+/// reads (`0x492668`). The body click's router returns first for a charmed player (`0x481f98`).
+#[allow(clippy::too_many_arguments)] // the click's two entries and its gates
+pub(crate) fn trade_on_world_click(
+    mut vm: crate::script_calls::VmWith<(
+        TradeLeg<'static, 'static>,
+        Res<'static, crate::spell::SpellTargeting>,
+    )>,
+    mut clicks: MessageReader<benilla_world::interact::WorldClick>,
+    plate: Res<crate::vplates::PlateClicks>,
+    press: Res<crate::target::PressPick>,
+    inspect: Res<crate::ui_script::InspectMode>,
+    me: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
+    guids: Query<&crate::net::Guid>,
+) {
+    let clicked = clicks.read().count() > 0;
+    vm.turn(|script, (mut trade, targeting)| {
+        let Some(script) = script else {
+            return;
+        };
+        // The active player (`0x4925f4`).
+        let Some(me) = me.iter().next() else {
+            return;
+        };
+        if targeting.active() {
+            return;
+        }
+        let dead = me.0.is_dead_or_ghost();
+        let mut picks: Vec<(Entity, u64)> = plate
+            .left
+            .iter()
+            .filter_map(|&e| guids.get(e).ok().map(|g| (e, g.0)))
+            .collect();
+        if clicked && !inspect.enabled && me.0.unit_charmed_by().is_none() {
+            if let (Some(entity), Some(guid)) = (press.hovered.target, press.hovered.guid) {
+                picks.push((entity, guid));
+            }
+        }
+        for (entity, guid) in picks {
+            trade.click_on(script, entity, guid, dead);
+        }
+    })
 }
 
 #[cfg(test)]
