@@ -3042,6 +3042,46 @@ mod tests {
         );
     }
 
+    /// `OnItemPush` signals `ITEM_PUSH` in the push's handler (`0x491be8`), which touches no loot
+    /// window, so its handlers read the window as it stood before the frame's loot is pushed.
+    #[test]
+    fn an_item_pushs_handlers_read_the_loot_before_the_frames_push() {
+        let (mut app, _rx) = sweep_loot_app();
+        app.insert_resource(ItemDisplays::icons_for_tests(
+            benilla_formats::ItemDisplayCatalog::from_displays(std::collections::HashMap::from([
+                (
+                    5,
+                    benilla_formats::ItemDisplay {
+                        icon: Some("ITEM".into()),
+                        ..Default::default()
+                    },
+                ),
+            ])),
+        ));
+        let mut cloth = crate::items::test_template("Linen Cloth");
+        cloth.display_info_id = 5;
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(2589, Some(cloth));
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                r#"SEEN = ""
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("ITEM_PUSH")
+                f:SetScript("OnEvent", function() SEEN = SEEN .. GetNumLootItems() end)"#,
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        let mut loot = app.world_mut().resource_mut::<LootState>();
+        loot.push_receive(&push(2589, 1, false, false));
+        loot.open(CORPSE, loot_type::CORPSE, 0, vec![item(0, 2589, 1)]);
+        app.update();
+        let s = app.world().non_send_resource::<UiScript>();
+        assert_eq!(s.eval::<String>("return SEEN").unwrap(), "0");
+        assert_eq!(s.eval::<i64>("return GetNumLootItems()").unwrap(), 1);
+    }
+
     /// A disenchanted item's guid (`HIGHGUID_ITEM`).
     const ESSENCE_SOURCE: u64 = 0x4000_0000_0000_0d15;
 
