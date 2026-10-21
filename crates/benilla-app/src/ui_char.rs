@@ -934,7 +934,8 @@ pub(crate) fn feed_char(
         );
         // The doll's `UNIT_INVENTORY_CHANGED` is its producers' alone, the visible-item bridge, the
         // ammunition watch and the item paths ([`crate::field_watch`], [`crate::item_watch`]),
-        // fired after this push; a view change raises none, as a repair's durability (`0x5d97c0`).
+        // fired after this push; a view change raises none, a repair's durability included, which
+        // repaints through the push's `UPDATE_INVENTORY_ALERTS` (`0x5d9920` → `0x4c7ee0`).
         // `PLAYERBANKSLOTS_CHANGED`'s two producers, planned off the old memo: `false` is the
         // descriptor watcher (`0x5ddd6e`: a bag arrived, left or was swapped), `true` the
         // item-object path (`0x4c728d`: the same bag's own fields changed).
@@ -1207,8 +1208,9 @@ mod tests {
     }
 
     /// A repair moves the doll's view and fires no `UNIT_INVENTORY_CHANGED`: the durability
-    /// watcher `0x5d97c0` signals none. The doll's event is its producers' alone
-    /// ([`crate::field_watch`], [`crate::item_watch`]), never a change of this feed's view.
+    /// watcher `0x5d97c0` ends in the alert recompute (`0x5d9920`), whose
+    /// `UPDATE_INVENTORY_ALERTS` repaints the slots. The doll's inventory event is its producers'
+    /// alone ([`crate::field_watch`], [`crate::item_watch`]), never a change of this feed's view.
     #[test]
     fn a_repair_moves_the_doll_and_fires_no_inventory_event() {
         use benilla_protocol::field::FIELD_PLAYER_INV_SLOT_HEAD;

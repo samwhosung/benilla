@@ -116,9 +116,10 @@ impl Plugin for UiMerchantPlugin {
                     // After `UnitFeed`: `MERCHANT_SHOW`'s paint reads the item and
                     // player-requirement stores for `GetMerchantItemInfo`'s `isUsable`.
                     feed_merchant.after(crate::ui_unit::UnitFeed).in_set(UiFeed),
-                    // Before `feed_char`, so ahead of the field events: a doll slot's
-                    // `UNIT_INVENTORY_CHANGED` refreshes the Repair All button from this total
-                    // (`PaperDollFrame.lua:717-724`).
+                    // Before `feed_char`: the `UPDATE_INVENTORY_ALERTS` its doll push fires, a
+                    // repair's through the durability watcher's recompute (`0x5d9920` →
+                    // `0x4c7ee0`, `0x4c8080`), repaints each doll slot, which refreshes the Repair
+                    // All button from this total (`PaperDollFrame.lua:642-643`, `:716-726`).
                     // After the roster publish, whose party slots the vendor's reaction reads.
                     feed_repair_costs
                         .in_set(UiFeed)
@@ -1055,15 +1056,16 @@ pub(crate) mod purse_fixture {
 mod tests {
     use super::*;
 
-    /// A doll slot's `UNIT_INVENTORY_CHANGED` reads this frame's total: the stock handler
-    /// refreshes the Repair All button from `GetRepairAllCost` (`PaperDollFrame.lua:717-724`).
+    /// A repair's `UPDATE_INVENTORY_ALERTS`, fired by the doll push, reads this frame's total: the
+    /// stock handler repaints the slot, which refreshes the Repair All button from
+    /// `GetRepairAllCost` (`PaperDollFrame.lua:642-643`, `:716-726`).
     #[test]
     fn the_repair_all_total_is_swept_before_the_inventory_event() {
         let mut app = crate::game_plugins::schedule_tests::headless_client();
         assert!(crate::test_support::runs_before(
             &mut app,
             feed_repair_costs,
-            crate::ui_unit::field_events::fire_field_notices
+            crate::ui_char::feed_char
         ));
     }
 
