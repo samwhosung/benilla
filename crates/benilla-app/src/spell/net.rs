@@ -2154,6 +2154,15 @@ mod tests {
     fn the_go_and_the_failures_end_the_precast_of_their_own_spell() {
         let mut s = CastSeq::new();
         let me = s.self_e;
+        s.app.world_mut().insert_resource(Spells {
+            catalog: benilla_formats::SpellCatalog::from_displays(std::collections::HashMap::from(
+                [
+                    (FIREBALL, Default::default()),
+                    (FROSTBOLT, Default::default()),
+                ],
+            )),
+            ..Spells::empty_for_tests()
+        });
         s.give_precast(me, FIREBALL);
         s.go(FROSTBOLT);
         assert!(s.precast(me).is_some(), "another spell's GO");
@@ -2169,6 +2178,18 @@ mod tests {
         assert!(s.precast(me).is_some(), "another spell's failed result");
         s.result(FIREBALL, Some(0x23));
         assert_eq!(s.precast(me), None, "its failed result");
+    }
+
+    /// A GO whose spell has no record returns before anything (`0x6e7cd7`-`0x6e7cf7` →
+    /// `0x6e8647`), so it ends no precast (`0x60d040` is at `0x6e7fc5`).
+    #[test]
+    fn a_go_with_no_spell_record_ends_no_precast() {
+        let mut s = CastSeq::new();
+        let me = s.self_e;
+        s.app.world_mut().insert_resource(Spells::empty_for_tests());
+        s.give_precast(me, FIREBALL);
+        s.go(FIREBALL);
+        assert_eq!(s.precast(me), Some((FIREBALL, true)));
     }
 
     /// The GO's end runs its tail as `0x6e4870` answers for the record and the cast flags

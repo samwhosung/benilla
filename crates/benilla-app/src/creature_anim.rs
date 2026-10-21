@@ -1022,6 +1022,8 @@ mod attack_stand_tests {
     /// Aimed Shot: both.
     const AIMED_SHOT: u32 = 19434;
     const AUTO_SHOT: u32 = 75;
+    /// A record whose `AttributesEx & 0x4` the cancel's reap skips.
+    const UNREAPED: u32 = 7;
 
     struct Attack {
         world: World,
@@ -1056,6 +1058,13 @@ mod attack_stand_tests {
                     (ARCANE_SHOT, record(0x1_0002, 0)),
                     (SLAM, record(0x5_0010, 0xf)),
                     (AIMED_SHOT, record(0x41_0012, 0xf)),
+                    (
+                        UNREAPED,
+                        SpellDisplay {
+                            attributes_ex: 0x4,
+                            ..Default::default()
+                        },
+                    ),
                 ])),
                 ..crate::ui_action::Spells::empty_for_tests()
             });
@@ -1070,8 +1079,12 @@ mod attack_stand_tests {
             });
         }
 
-        /// `spell_id` in the in-flight slot, as its attempt pushed it, mid-cast on our unit.
+        /// `spell_id` in the in-flight slot, as its attempt recorded (`0x6e4fb1`, `0x6e4f88`) and
+        /// pushed it, mid-cast on our unit.
         fn in_flight(&mut self, spell_id: u32) {
+            let mut pending = self.world.resource_mut::<crate::spell::PendingCast>();
+            pending.fill_record();
+            pending.fill_record_spell(spell_id);
             self.world
                 .run_system_once(
                     move |mut slots: crate::spell::CastSlots, net: Res<crate::net::NetCommands>| {
@@ -1207,6 +1220,65 @@ mod attack_stand_tests {
             .collect();
         assert_eq!(fails, vec![(ARCANE_SHOT, CastEventKind::Fail)]);
         assert_eq!(a.held().map(|p| p.busy), Some(false), "the tail ran");
+    }
+
+    /// The cancel's reap is its tail's (`0x6e4a04`-`0x6e4ab7`): only while the record's caster is
+    /// the active player (`0x6e4a11`), of the record's spell `[0xceac58]` (`0x6e4a8e`) whatever
+    /// it popped, and not for a record with `AttributesEx & 0x4` (`0x6e4aad`).
+    #[test]
+    fn the_cancels_reap_is_the_records_spell_and_gated_as_its_tail_is() {
+        let fails = |a: &mut Attack| -> Vec<u32> {
+            a.world
+                .resource_mut::<Messages<CastEvent>>()
+                .drain()
+                .map(|e| e.spell_id)
+                .collect()
+        };
+        let mut a = Attack::new();
+        a.precast(ARCANE_SHOT);
+        a.in_flight(ARCANE_SHOT);
+        a.world
+            .resource_mut::<crate::spell::PendingCast>()
+            .fill_record_spell(PLAIN);
+        a.world.entity_mut(a.me).insert(Casting {
+            spell_id: PLAIN,
+            until: None,
+        });
+        a.start(false);
+        assert!(a.world.get::<Casting>(a.me).is_none(), "the record's cast");
+        assert_eq!(fails(&mut a), vec![PLAIN]);
+
+        let mut a = Attack::new();
+        a.precast(ARCANE_SHOT);
+        a.in_flight(ARCANE_SHOT);
+        a.world
+            .resource_mut::<crate::spell::PendingCast>()
+            .take_caster_event();
+        a.start(false);
+        assert!(
+            matches!(
+                a.sent()[..],
+                [
+                    ClientCommand::CancelCast {
+                        spell_id: ARCANE_SHOT
+                    },
+                    ..
+                ]
+            ),
+            "the cancel goes out"
+        );
+        assert!(
+            a.world.get::<Casting>(a.me).is_some(),
+            "no record caster, no reap"
+        );
+        assert!(fails(&mut a).is_empty());
+
+        let mut a = Attack::new();
+        a.precast(ARCANE_SHOT);
+        a.in_flight(UNREAPED);
+        a.start(false);
+        assert!(a.world.get::<Casting>(a.me).is_some(), "AttributesEx & 0x4");
+        assert!(fails(&mut a).is_empty());
     }
 
     /// A precast that auto-attack interrupts (`InterruptFlags & 0x8`, `0x5eccd0`) returns after
