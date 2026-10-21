@@ -28,9 +28,9 @@ pub(crate) enum UnitEdit {
     /// The cast's reap (`0x614150(spellId, 0)`, keyed by the spell): its [`Casting`], while that
     /// is still this spell's.
     ReapCasting { entity: Entity, spell_id: u32 },
-    /// `CancelCast`'s local teardown of the cast it popped, from a seam with no message writer
-    /// (StartAttack's, `0x5ecc85`): the reap, and the failed cast event the server's echo would
-    /// bring, stamped as it applies.
+    /// `CancelCast`'s reap, from a seam with no message writer (StartAttack's, `0x5ecc85`): the
+    /// record's spell as its tail keys and gates it ([`crate::spell::CastCore::cancel_reaping`]),
+    /// and the failed cast event the server's echo would bring, stamped as it applies.
     AbortCasting { entity: Entity, spell_id: u32 },
     /// The sticky auto-repeat arm (`0x6e593b`, `|= 0x200`).
     ArmAutoRepeat(Entity),

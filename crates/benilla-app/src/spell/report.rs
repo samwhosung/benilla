@@ -14,6 +14,9 @@ use crate::net::{ClientCommand, NetCommands};
 use crate::ui_action::CastFail;
 use crate::ui_cast::{CastBarEdge, CastReports};
 
+/// `AttributesEx & 0x4`: `CancelCast`'s tail leaves the record's cast unreaped (`0x6e4aad`).
+const ATTR_EX_NOT_REAPED: u32 = 0x4;
+
 /// The reason `TryCast`'s supersede, `StopSpellTargeting`, `SpellStopCasting` and
 /// `CancelQueuedCast` pass the cancel: `SPELL_FAILED_ERROR` (`0x6e4d6d`, `0x6e490b`, `0x6e6ec3`,
 /// `0x6e6f62`).
@@ -137,6 +140,17 @@ impl CastCore<'_> {
     /// `StartMeleeAttack`'s reads the caster's precast spell (`0x5ecc56`-`0x5ecc85`). What it
     /// popped is returned for the caller's local teardown.
     pub(crate) fn cancel(&mut self, failed: bool, send: bool, reason: u8) -> Option<Inflight> {
+        self.cancel_for_caster(failed, send, reason).0
+    }
+
+    /// [`Self::cancel`], and whether the record's caster was the active player
+    /// (`0x6e4a04`-`0x6e4a1e`), the gate of its events and of its reap.
+    fn cancel_for_caster(
+        &mut self,
+        failed: bool,
+        send: bool,
+        reason: u8,
+    ) -> (Option<Inflight>, bool) {
         let slot = self.slot();
         if self.ground.active() {
             self.ground.clear();
@@ -147,7 +161,8 @@ impl CastCore<'_> {
             });
         }
         self.pop(slot);
-        if self.pending.take_caster_event() {
+        let caster = self.pending.take_caster_event();
+        if caster {
             self.reports.bar(if failed {
                 failure_edge(reason)
             } else {
@@ -157,16 +172,27 @@ impl CastCore<'_> {
         if failed {
             self.reports.trade_skill_disarm();
         }
-        slot
+        (slot, caster)
     }
 
-    /// [`Self::cancel`], answering the ordinary cast it popped, whose local teardown is the
-    /// caller's.
-    pub(crate) fn cancel_cast(&mut self, failed: bool, send: bool, reason: u8) -> Option<u32> {
-        match self.cancel(failed, send, reason) {
-            Some(Inflight::Cast(spell_id)) => Some(spell_id),
-            _ => None,
-        }
+    /// [`Self::cancel`], answering the spell its tail reaps on the player, for a caller that
+    /// applies the reap itself (StartAttack's, `0x5ecc85`): the record's `[0xceac58]`
+    /// (`0x6e4a8e`), whatever was popped, while the record's caster was the active player, and
+    /// not for a record with `AttributesEx & 0x4` (`0x6e4aad`); a spell with no record is reaped
+    /// (`0x6e4ab3`).
+    pub(crate) fn cancel_reaping(
+        &mut self,
+        failed: bool,
+        send: bool,
+        reason: u8,
+        spells: Option<&crate::ui_action::Spells>,
+    ) -> Option<u32> {
+        let record = self.pending.record_spell();
+        let (_, caster) = self.cancel_for_caster(failed, send, reason);
+        let kept = spells
+            .and_then(|s| s.catalog.get(record))
+            .is_some_and(|d| d.attributes_ex & ATTR_EX_NOT_REAPED != 0);
+        (caster && !kept && record != 0).then_some(record)
     }
 
     /// The merge's range refusal re-arms the cursor as its attempt left it

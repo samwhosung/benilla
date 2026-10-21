@@ -1104,11 +1104,14 @@ fn spell_go(
         }
         // The precast ends with its own spell's GO (`0x60d040` at `0x6e7fc5`), its tail run as
         // `0x6e4870` answers for the record and the cast flags (`0x6e7fa1`, pushed at `0x6e7fbd`).
-        edits.push(crate::creature_anim::UnitEdit::EndPrecast {
-            entity: e,
-            spell_id: Some(spell_id),
-            tail: display.is_some_and(|d| d.test_attributes_and_flags(u32::from(cast_flags))),
-        });
+        // A spell with no record returns long before (`0x6e7cd7`-`0x6e7cf7`).
+        if let Some(d) = display {
+            edits.push(crate::creature_anim::UnitEdit::EndPrecast {
+                entity: e,
+                spell_id: Some(spell_id),
+                tail: d.test_attributes_and_flags(u32::from(cast_flags)),
+            });
+        }
         // The GO's chain-hop fill (`0x6e800d`), the producer for non-channelled chain spells. It
         // must precede the CastEvent: the cast kit's chain proc consumes it the same frame. The
         // reference gates it on the attribute predicate `0x6e4870`, whose role here is untraced;
