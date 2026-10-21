@@ -617,6 +617,7 @@ fn slot_view(
         .and_then(|i| i.catalog.get(display))
         .and_then(|d| d.icon.clone());
     Some(InvSlotView {
+        inventory_type: t.map(|t| t.inventory_type),
         bonding: t.map_or(0, |t| t.bonding),
         // A container's filled seats, which `ClickTradeButton` counts (`0x4bff50`).
         occupied_seats: is_container
@@ -702,6 +703,7 @@ fn inventory_slots(
         // An entry, not an item object, so no create asked for it; the texture getter's lookup
         // passes a callback (`0x4c83ce`), on the doll's events, which none here marks.
         let t = items.template(ammo_id, 0, Ask::New(commands));
+        let inventory_type = t.map(|t| t.inventory_type);
         let (name, quality, display, link) = match t {
             Some(t) => (
                 Some(t.name.clone()),
@@ -715,6 +717,7 @@ fn inventory_slots(
             .and_then(|i| i.catalog.get(display))
             .and_then(|d| d.icon.clone());
         inv[0] = Some(InvSlotView {
+            inventory_type,
             durability: None,
             flags: 0,
             // Ammo has no item object, only its template, so there is no bind to read.

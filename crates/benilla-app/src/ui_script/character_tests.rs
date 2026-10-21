@@ -69,6 +69,7 @@ fn inventory_with_head_item() -> InventorySlots {
         count: 1,
         contents_count: None,
         quality: 2,
+        inventory_type: Some(1),
         name: Some("Test Helm".into()),
         link: Some("|cff1eff00|Hitem:1234:0:0:0|h[Test Helm]|h|r".into()),
         guid: 0x70e,

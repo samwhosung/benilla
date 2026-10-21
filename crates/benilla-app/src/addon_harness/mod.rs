@@ -1389,6 +1389,8 @@ fn equip_slot(item_id: u32, name: &str) -> benilla_ui::script::InvSlotView {
         icon: Some("Interface\\Icons\\INV_Misc_QuestionMark".into()),
         count: 1,
         quality: 2,
+        // A cached record of a wearable type.
+        inventory_type: Some(1),
         name: Some(name.to_string()),
         // Full durability: the setter fires `UPDATE_INVENTORY_ALERTS`, and a worn item would light
         // DurabilityFrame.

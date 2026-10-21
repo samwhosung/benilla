@@ -80,7 +80,8 @@ fn inspect_slot_view(
     // servers leave empty.
     let roll = store.0.player_visible_item_properties(slot0);
     // By entry alone (guid 0), as the reference's item cache asks: there is no item object.
-    let (name, quality, display) = match items.template(entry, 0, Ask::Read) {
+    let t = items.template(entry, 0, Ask::Read);
+    let (name, quality, display) = match t {
         Some(t) => (
             Some(rolls.name(&t.name, roll)),
             t.quality,
@@ -98,6 +99,7 @@ fn inspect_slot_view(
             .and_then(|d| d.icon.clone()),
         count: 1,
         quality: quality as i32,
+        inventory_type: t.map(|t| t.inventory_type),
         name,
         link,
         // `0x5da2c0` reads an item object's `ITEM_FIELD_FLAGS`, which inspected gear lacks, so the

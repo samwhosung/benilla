@@ -193,8 +193,11 @@ pub struct InvSlotView {
     /// its contents' summed stacks when its `ItemSubClass.dbc` row has `DisplayFlags & 0x4` (Soul
     /// Bag and quivers, `0x4c881a`), else 0; past 0-based slot `0x16` the binding answers 0 first.
     pub contents_count: Option<u32>,
-    /// Item quality 0..6 (`GetInventoryItemQuality`).
+    /// Item quality 0..6.
     pub quality: i32,
+    /// The record's inventory type (`+0x2c`), `None` while the record is not cached: what
+    /// `GetInventoryItemQuality` tests before the quality (`0x4c8a11`, `0x4c8a16`).
+    pub inventory_type: Option<u32>,
     /// The item's name, once known.
     pub name: Option<String>,
     /// Live durability `(current, max)`, the tooltip's "Durability X / Y" line.
@@ -1136,7 +1139,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetInventoryItemQuality(unit, slot) → 0..6, or nil for an empty slot (the wiki's shape).
+    // GetInventoryItemQuality(unit, slot) → the record's quality, -1 for a record of inventory
+    // type 0 (`0x4c8a22`), nil for an empty slot or an uncached record (`0x4c8a11`).
     g.set(
         "GetInventoryItemQuality",
         lua.create_function(|lua, (unit, slot): (Value, Value)| {
@@ -1152,10 +1156,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // The item table's slot (`0x4c89d6` → `0x6228a0`), empty for another player.
             let view = own_inv_slot(lua, &token, slot);
             ask_ammo_record(lua, &token, slot, view.as_ref());
-            match view {
-                Some(v) if v.item_id != 0 => Ok(Value::Integer(i64::from(v.quality))),
-                _ => Ok(Value::Nil),
-            }
+            Ok(
+                match view
+                    .filter(|v| v.item_id != 0)
+                    .map(|v| (v.inventory_type, v.quality))
+                {
+                    Some((Some(0), _)) => Value::Integer(-1),
+                    Some((Some(_), quality)) => Value::Integer(i64::from(quality)),
+                    _ => Value::Nil,
+                },
+            )
         })?,
     )?;
 
@@ -2294,6 +2304,7 @@ mod tests {
             icon: Some("Interface\\Icons\\INV_Misc_Bandana_01".into()),
             count: 1,
             quality: 2,
+            inventory_type: Some(1),
             name: Some("Brawler's Harness".into()),
             link: Some("|cff1eff00|Hitem:2263:0:0:0|h[Brawler's Harness]|h|r".into()),
             ..Default::default()

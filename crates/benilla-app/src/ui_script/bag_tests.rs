@@ -1506,6 +1506,7 @@ fn the_bar_bag_buttons_name_themselves_on_hover() {
         count: 1,
         contents_count: Some(0), // an equipped bag, whose subclass row carries no count gate
         quality: 1,
+        inventory_type: Some(1),
         name: Some("Small Brown Pouch".into()),
         link: Some("|cffffffff|Hitem:4496:0:0:0|h[Small Brown Pouch]|h|r".into()),
         guid: 0x70d,
