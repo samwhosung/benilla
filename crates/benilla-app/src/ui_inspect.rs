@@ -41,6 +41,8 @@ struct InspectFeedMemo {
     /// The slots last pushed, by player guid.
     pushed: HashMap<u64, InventorySlots>,
     templates: gate::Watch,
+    /// How many players' views were built, the feed's cost.
+    builds: u64,
 }
 
 pub(crate) struct InspectUiPlugin;
@@ -203,6 +205,7 @@ pub(crate) fn feed_inspect(
                 continue;
             }
             let slots = visible_slots(&store, &items, icons.as_deref(), rolls);
+            memo.builds += 1;
             if memo.pushed.get(&guid) != Some(&slots) {
                 script.set_visible_equipment(guid, Some(slots.clone()));
                 memo.pushed.insert(guid, slots);
@@ -345,6 +348,70 @@ mod tests {
         }
         let s = app.world_mut().non_send_resource::<UiScript>();
         assert!(s.eval::<Vec<String>>("return SEEN").unwrap().is_empty());
+    }
+
+    /// The visible item's link carries the slot's permanent enchant, the block's `+0xc`, which the
+    /// getter hands the link builder (`0x4c8d60` → `0x52adb0`), beside the suffix at `+0x28`.
+    #[test]
+    fn an_inspected_link_carries_the_permanent_enchant() {
+        use benilla_protocol::field::FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR;
+        const MATE: u64 = 0x2001;
+        const HELM: u32 = 7366;
+        let (mut app, _rx) = world([MATE, 0x2002], HELM);
+        let mate = app.world().resource::<GuidIndex>().0[&MATE];
+        app.world_mut()
+            .entity_mut(mate)
+            .get_mut::<ObjectStore>()
+            .unwrap()
+            .0
+            .merge(benilla_protocol::ObjectFields::from_pairs(&[(
+                FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR + 3,
+                1900,
+            )]));
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(HELM, Some(crate::items::test_template("Helm")));
+        app.update();
+        let link = app
+            .world_mut()
+            .non_send_resource::<UiScript>()
+            .eval::<String>(r#"return GetInventoryItemLink("target", 1)"#)
+            .unwrap();
+        assert!(link.contains("|Hitem:7366:1900:0:0|h"), "{link}");
+    }
+
+    /// A player's 19 views are rebuilt when their visible-item block moves, not on any write to
+    /// the descriptor: a health tick builds nothing, a new helm builds that player's again.
+    #[test]
+    fn only_a_visible_item_write_rebuilds_a_players_views() {
+        use benilla_protocol::field::FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR;
+        const MATE: u64 = 0x2001;
+        /// `UNIT_FIELD_HEALTH`.
+        const HEALTH: u16 = 22;
+        let (mut app, _rx) = world([MATE, 0x2002], 7366);
+        let builds = |app: &mut App| {
+            app.update();
+            app.world_mut()
+                .resource_scope(|world, mut feed: Mut<InspectFeedState>| {
+                    feed.vm.get(world.non_send_resource::<UiScript>()).builds
+                })
+        };
+        assert_eq!(builds(&mut app), 2, "both players, first seen");
+        let mate = app.world().resource::<GuidIndex>().0[&MATE];
+        let write = |app: &mut App, field: u16, value: u32| {
+            app.world_mut()
+                .entity_mut(mate)
+                .get_mut::<ObjectStore>()
+                .unwrap()
+                .0
+                .merge(benilla_protocol::ObjectFields::from_pairs(&[(
+                    field, value,
+                )]));
+        };
+        write(&mut app, HEALTH, 50);
+        assert_eq!(builds(&mut app), 2, "a health tick");
+        write(&mut app, FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR + 2, 7367);
+        assert_eq!(builds(&mut app), 3, "a new helm");
     }
 
     /// The inspected unit's level is the bridge's to announce: the feed fires no `UNIT_LEVEL`,
