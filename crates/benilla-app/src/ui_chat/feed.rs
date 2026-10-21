@@ -293,6 +293,25 @@ impl ChatLog {
         self.q().push(Pending::Event(event));
     }
 
+    /// Show a client-composed line inside the verb that adds it, as `0x49a870` does: its event
+    /// fires now, and only its log-file tee waits for the drain, in order with the lines around
+    /// it. For a line whose composition reads no default language.
+    pub(crate) fn show_now(&self, script: &mut benilla_ui::script::UiScript, event: &ChatEvent) {
+        let Some(kind) = event.kind else {
+            return;
+        };
+        let line = super::frames::compose(event, kind, "", &|key| {
+            script.lua().globals().get::<String>(key).ok()
+        });
+        if let Some(line) = line {
+            self.q().push(Pending::Tee {
+                combat: kind.is_combat_log(),
+                line,
+            });
+        }
+        script.fire_event(super::event::event_name(kind), event.script_args());
+    }
+
     /// Queue one combat-log line, classified at the packet by [`super::combat`], for its names.
     pub(crate) fn push_combat(&self, line: super::combat::PendingCombat) {
         self.q().push(Pending::Combat(Box::new(line)));

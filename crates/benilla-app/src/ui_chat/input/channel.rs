@@ -39,7 +39,9 @@ pub(in crate::ui_chat) fn apply(
             ClientCommand::LeaveChannel { name }
         }
         C::ListAll => {
-            chat_log.push_event(list_channels(channels));
+            // The line is added inside the verb (`0x4a02c0` → `0x49a870`), so a handler has run
+            // by the verb's next line.
+            chat_log.show_now(script, &list_channels(channels));
             return;
         }
         admin => {

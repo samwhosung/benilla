@@ -78,6 +78,29 @@ impl Verbs {
         self.errors.take().into_iter().map(|e| e.key).collect()
     }
 
+    /// Count the `CHAT_MSG_CHANNEL_LIST` lines, keeping the last one's `arg1` and `arg4`.
+    fn listen_for_lists(&self) {
+        self.script
+            .run(
+                r#"
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("CHAT_MSG_CHANNEL_LIST")
+                f:SetScript("OnEvent", function()
+                    LISTS = (LISTS or 0) + 1
+                    LIST_TEXT, LIST_CHANNEL = arg1, arg4
+                end)
+            "#,
+            )
+            .expect("the handler installs");
+    }
+
+    /// What [`Self::listen_for_lists`] heard: the count, then the last line's `arg1` and `arg4`.
+    fn lists(&self) -> (i64, String, String) {
+        self.script
+            .eval("return LISTS, LIST_TEXT, LIST_CHANNEL")
+            .expect("a list line was heard")
+    }
+
     /// One server notice through [`super::feed::deliver`], returned as it was rendered.
     fn notice(&mut self, byte: u8, channel: &str) -> ChatEvent {
         let mut event =
@@ -697,23 +720,25 @@ fn list_channels_posts_the_confirmed_slots_as_one_channel_list_line() {
         .into(),
         custom("MyChan"),
     ]);
+    v.listen_for_lists();
     v.apply(ChannelCommand::ListAll);
-    let events = v.log.pending_events();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].kind, Some(ChatEventKind::ChannelList));
     assert_eq!(
-        events[0].text,
-        "[1. General - Elwynn Forest] [3. LocalDefense - Elwynn Forest] [6. MyChan] "
+        v.lists(),
+        (
+            1,
+            "[1. General - Elwynn Forest] [3. LocalDefense - Elwynn Forest] [6. MyChan] ".into(),
+            String::new()
+        ),
+        "one line, with no channel argument"
     );
-    assert_eq!(events[0].channel, "", "no channel argument");
     assert!(v.sent().is_empty());
 
     let mut v = Verbs::new(Vec::new());
+    v.listen_for_lists();
     v.apply(ChannelCommand::ListAll);
-    let events = v.log.pending_events();
     assert_eq!(
-        (events.len(), events[0].text.as_str()),
-        (1, ""),
+        v.lists(),
+        (1, String::new(), String::new()),
         "an empty list still posts"
     );
 }
