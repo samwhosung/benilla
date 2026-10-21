@@ -1948,6 +1948,116 @@ mod tests {
         assert!(s.cursor_payload().is_none());
         assert_eq!(heard::take(&s), ["CURSOR_UPDATE none nil"]);
     }
+
+    /// `GetInboxText`'s third return (`0x4af2ae`-`0x4af2e6`): 1 for a text id or a template id
+    /// (`0x4af2b6`, `0x4af2c0`), nil for a letter already copied (`0x4af2c2`) or on the GM
+    /// stationery 61 (`0x4af2cb`).
+    #[test]
+    fn is_takeable_needs_a_text_or_a_template_uncopied_off_gm_paper() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        let mut template = row(0);
+        (template.item_text_id, template.has_body) = (0, false);
+        template.mail_template_id = 87;
+        let mut copied = row(0);
+        copied.text_created = true;
+        let mut gm = row(0);
+        (gm.stationery, gm.is_gm) = (61, true);
+        let mut neither = row(0);
+        (neither.item_text_id, neither.has_body) = (0, false);
+        s.set_mail(Some(MailState {
+            inbox: vec![row(0), template, copied, gm, neither],
+            open: true,
+        }));
+        let takeable: Vec<bool> = (1..=5)
+            .map(|i| {
+                s.eval(&format!("local _, _, t = GetInboxText({i}) return t == 1"))
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(takeable, [true, true, false, false, false]);
+    }
+
+    /// `GetInboxText`'s body is nil on every miss (`0x4af275`): a text not yet in the cache
+    /// (`0x4af1c9`), and a mail with neither a text id nor a template id (`0x4af21f`).
+    #[test]
+    fn an_unfetched_or_absent_body_is_nil() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        let mut unfetched = row(0);
+        unfetched.body = None;
+        let mut neither = row(0);
+        (neither.item_text_id, neither.has_body, neither.body) = (0, false, None);
+        s.set_mail(Some(MailState {
+            inbox: vec![row(0), unfetched, neither],
+            open: true,
+        }));
+        let bodies: Vec<Option<String>> = (1..=3)
+            .map(|i| s.eval(&format!("return (GetInboxText({i}))")).unwrap())
+            .collect();
+        assert_eq!(bodies, [Some("Lok'tar.".to_string()), None, None]);
+    }
+
+    /// `InboxItemCanDelete` (`0x4afe00`) is `DeleteInboxItem`'s own rule: returned or a COD
+    /// payment (`0x4afe4c test [rec+0x148],0xa`), not a player's mail (`0x4afe55`), or holding
+    /// neither item nor money (`0x4afe5c`, `0x4afe66`); a bad index is nil (`0x4afe3d`).
+    #[test]
+    fn can_delete_is_the_delete_verbs_own_rule() {
+        let mut s = UiScript::new().unwrap();
+        let mut cod_payment = row(0);
+        cod_payment.cod_payment = true;
+        let mut returned = row(2589);
+        returned.was_returned = true;
+        let mut auction = row(2589);
+        auction.message_type = 2;
+        let mut empty = row(0);
+        empty.money = 0;
+        s.set_mail(Some(MailState {
+            inbox: vec![row(2589), row(0), cod_payment, returned, auction, empty],
+            open: true,
+        }));
+        let can: Vec<bool> = (1..=7)
+            .map(|i| {
+                s.eval(&format!("return InboxItemCanDelete({i}) == 1"))
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(can, [false, false, true, true, true, true, false]);
+    }
+
+    /// `GetSendMailPrice` (`0x4ae730`): 30 copper (`0x4ae756`), plus the selected paper's price
+    /// when the player carries none (`0x4ae77d`, `0x4ae7a0`), plus the selected package's cost
+    /// (`0x4ae7c6`), plus the money enclosed (`0x4ae7c9`-`0x4ae7d2`).
+    #[test]
+    fn the_send_price_sums_postage_paper_package_and_money() {
+        let mut s = UiScript::new().unwrap();
+        s.set_money(10_000);
+        let paper = |id: u32, cost: Option<u32>| StationeryView {
+            id,
+            name: format!("Paper {id}"),
+            icon: "Interface\\Icons\\INV_Letter_15".into(),
+            cost,
+            texture: "STATIONERYTEST".into(),
+        };
+        s.set_mail_stationeries(vec![
+            paper(41, Some(0)),
+            paper(42, Some(25)),
+            paper(43, None),
+        ]);
+        s.set_mail_packages(vec![PackageView {
+            id: 2,
+            name: "Test Package".into(),
+            icon: "Interface\\Icons\\INV_BOX_04".into(),
+            cost: 10,
+        }]);
+        let mut price =
+            |lua: &str| -> i64 { s.eval(&format!("{lua} return GetSendMailPrice()")).unwrap() };
+        assert_eq!(price(""), 30, "no paper selected (`0x4ae75b`)");
+        assert_eq!(price("SelectStationery(2)"), 55);
+        assert_eq!(price("SelectStationery(3)"), 30, "a carried paper is free");
+        assert_eq!(price("SelectPackage(1)"), 40);
+        assert_eq!(price("SetSendMailMoney(500)"), 540);
+    }
 }
 
 #[cfg(test)]

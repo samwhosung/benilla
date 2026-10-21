@@ -28,6 +28,8 @@ use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 
 mod net;
 mod pending;
+#[cfg(test)]
+mod verb_tests;
 
 pub(crate) use pending::MailPending;
 
@@ -1506,6 +1508,42 @@ mod tests {
             app.update();
         }
         assert!(crate::query_cache::queries(&rx).is_empty());
+    }
+
+    /// A mail with a template id and no text id takes its body from `MailTemplate.dbc`
+    /// (`0x4af217`-`0x4af26e`), and its letter can be copied (`0x4af2c0`); an auction mail's text
+    /// is no body (`0x4af1cf`), whatever its notice.
+    #[test]
+    fn a_template_letter_reads_its_body_from_the_template() {
+        let (mut app, _rx) = feed_app();
+        app.insert_resource(MailTemplates(
+            [(87, "Thanks for the fish.".to_string())].into(),
+        ));
+        let mut template = entry(1, Some(0x77), 0, 30.0);
+        template.mail_template_id = 87;
+        // An outbid notice (result 0), which no invoice parse marks.
+        let mut notice = entry(2, None, 0, 30.0);
+        notice.message_type = mail_message_type::AUCTION;
+        notice.subject = "2589:0:0".into();
+        notice.item_text_id = 9;
+        {
+            let mut mail = app.world_mut().resource_mut::<MailOpen>();
+            mail.click(0x20);
+            mail.mails = vec![template, notice];
+            mail.bodies.insert(9, "Outbid.".into());
+        }
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .keep_calls();
+        app.update();
+        let script = app.world_mut().non_send_resource_mut::<UiScript>();
+        let (body, takeable): (Option<String>, bool) = script
+            .eval("local b, _, t = GetInboxText(1) return b, t == 1")
+            .unwrap();
+        assert_eq!(body.as_deref(), Some("Thanks for the fish."));
+        assert!(takeable);
+        let notice: Option<String> = script.eval("return (GetInboxText(2))").unwrap();
+        assert_eq!(notice, None);
     }
 
     /// A sender's name landing moves the row, and the diff's `MAIL_INBOX_UPDATE` stands for the
