@@ -1060,9 +1060,10 @@ fn test_apply_local(
     // The server answers each of these with a fresh `SMSG_GROUP_LIST`, signalled in the order a
     // real one is ([`GroupState::apply_list_awaiting`]): `PARTY_MEMBERS_CHANGED` whether or not it
     // changed anything (`0x5e6c66`), the leader store's index and its signal for a list naming a
-    // leader, the loot store's signal for one listing members, the raid roster as a raid list writes it, our row
-    // after any members (`0x5e6e6f`-`0x5e6e9c`), with its `RAID_ROSTER_UPDATE` (`0x4babef`) or the
-    // one that ends a raid for the roster it drops (`0x4ba57b`), and a party's board.
+    // leader, the loot store's signal for one listing members, the raid roster as a raid list
+    // writes it, our row after any members (`0x5e6e6f`-`0x5e6e9c`), with its `RAID_ROSTER_UPDATE`
+    // (`0x4babef`) or the one that ends a raid for the roster it drops (`0x4ba57b`), and a party's
+    // board.
     if matches!(
         req,
         PartyRequest::Leave
@@ -1262,10 +1263,11 @@ fn set_test_subgroup(group: &mut GroupState, self_guid: Option<u64>, index: u32,
     }
 }
 
-/// A list for a sandbox, whose cache is not behind it: the loot lines name the master by the
-/// roster's own name. The stored loot cells are the real session's (`0xbc7600`...), so the
-/// sandbox compares against them and leaves them as it found them, and a real group after
-/// `/partytest off` is compared against what the real lists last carried.
+/// A list for a sandbox, whose cache is not behind it: the lines name a member by the roster's
+/// own name, the new list's or the one it replaces, and every name is taken as held. The stored
+/// loot cells are the real session's (`0xbc7600`...), so the sandbox compares against them and
+/// leaves them as it found them, and a real group after `/partytest off` is compared against what
+/// the real lists last carried.
 fn apply_sandbox_list(
     group: &mut GroupState,
     (group_type, own_flags): (u8, u8),
@@ -1274,10 +1276,16 @@ fn apply_sandbox_list(
     loot: GroupLootInfo,
     self_guid: Option<u64>,
 ) -> Vec<crate::ui_action::UiError> {
-    let roster: Vec<(u64, String)> = members.iter().map(|m| (m.guid, m.name.clone())).collect();
+    let roster: Vec<(u64, String)> = group
+        .members
+        .iter()
+        .chain(&members)
+        .map(|m| (m.guid, m.name.clone()))
+        .collect();
     let cached_name = |guid: u64| {
         roster
             .iter()
+            .rev()
             .find(|(g, _)| *g == guid)
             .map(|(_, name)| name.clone())
     };
@@ -1290,7 +1298,7 @@ fn apply_sandbox_list(
             leader,
             Some(loot),
             self_guid,
-            &|_| Some(String::new()),
+            &|guid| Some(cached_name(guid).unwrap_or_default()),
             &cached_name,
         )
         .lines;
