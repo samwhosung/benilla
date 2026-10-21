@@ -13,7 +13,7 @@
 //! vmangos narrows the four buff-split arrays with `uint32(float)` (`Object.cpp:759-763`), so a
 //! negative delta arrives as 0 from an arm64 server and intact from x86.
 
-use mlua::{Lua, Value};
+use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::flag;
 use super::{binding_abi, Model};
@@ -1092,16 +1092,30 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `Usage: GetInventoryItemLink(unit, slot)` (`0x848ad0`) unless arg 1 is a number or
             // string, `Invalid inventory slot in GetInventoryItemLink` (`0x848aa0`) unless the
             // shared reader passes arg 2 (`0x4c8c68`).
-            let (token, slot) = inventory_item_args(
+            let token = super::binding_abi::string_arg(
                 lua,
-                (unit, slot),
+                unit,
                 "Usage: GetInventoryItemLink(unit, slot)",
+            )?;
+            let slot0 = super::inventory_verbs::inventory_slot_arg(
+                lua,
+                slot,
                 "Invalid inventory slot in GetInventoryItemLink",
             )?;
-            match player_inv_slot(lua, &token, slot).and_then(|v| v.link) {
-                Some(link) => Ok(Value::String(lua.create_string(&link)?)),
-                None => Ok(Value::Nil),
+            // The ammo slot answers no values ahead of the token's resolve (`0x4c8c8a`).
+            if slot0 == -1 {
+                return Ok(MultiValue::new());
             }
+            let token = Some(token);
+            super::unit::check_unit_token(&token)?;
+            Ok(
+                match player_inv_slot(lua, &token, i64::from(slot0) + 1).and_then(|v| v.link) {
+                    Some(link) => {
+                        MultiValue::from_vec(vec![Value::String(lua.create_string(&link)?)])
+                    }
+                    None => MultiValue::from_vec(vec![Value::Nil]),
+                },
+            )
         })?,
     )?;
 
@@ -1217,12 +1231,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     INVALID_SLOT_GET_INVENTORY_ITEM_COOLDOWN.into(),
                 ));
             }
+            // The ammo slot answers three zeros ahead of the token's resolve (`0x4c8ad4`).
+            if slot0 == -1 {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                return Ok(super::container::item_cooldown_triple(None, model.now));
+            }
             super::unit::check_unit_token(&Some(token.clone()))?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let live = usize::try_from(slot0 + 1).ok();
             let own = model.inventory_reader(&token) == Some(InvReader::Own);
             let answer = live
-                .filter(|_| slot0 != -1 && own)
+                .filter(|_| own)
                 .filter(|&live| {
                     model
                         .inv_slot("player", live)
@@ -2372,8 +2391,10 @@ mod tests {
                 .unwrap(),
             2
         );
-        // The ammo slot (0) reads through the same family.
-        assert_eq!(s.eval::<i64>(&link_id("0")).unwrap(), 2512);
+        // The ammo slot (0) reads through the same family, but for its link (`0x4c8c8a`).
+        assert!(s
+            .eval::<bool>(r#"return GetInventoryItemLink("player", 0) == nil"#)
+            .unwrap());
         assert_eq!(
             s.eval::<i64>(r#"return GetInventoryItemCount("player", 0)"#)
                 .unwrap(),
