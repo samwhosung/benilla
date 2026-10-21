@@ -505,6 +505,16 @@ impl GroupState {
         lines
     }
 
+    /// The loot cells `GetLootMethod` and `GetLootThreshold` read (`0x4e91b6`, `0x4e91fb`,
+    /// `0x4e94e0`): [`Self::loot_stored`], or in the `/partytest` sandbox, which leaves those as it
+    /// found them, the sandbox's own tail.
+    pub fn loot_cells(&self) -> GroupLootInfo {
+        match self.loot {
+            Some(sandbox) if self.test => sandbox,
+            _ => self.loot_stored,
+        }
+    }
+
     /// Log one event where its handler signals it, behind every signal before it.
     pub(super) fn signal(&mut self, signal: GroupSignal) {
         self.signals.push(signal);

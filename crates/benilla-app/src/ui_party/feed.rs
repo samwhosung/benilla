@@ -247,35 +247,35 @@ pub(crate) fn feed_party(
                 .position(|m| m.guid == group.leader)
                 .map_or(0, |i| i as u32 + 1)
         };
-        let (loot_method, master_looter, loot_threshold) = match &group.loot {
-            Some(loot) => {
-                let method = match loot.method {
-                    0 => "freeforall",
-                    1 => "roundrobin",
-                    2 => "master",
-                    4 => "needbeforegreed",
-                    _ => "group",
-                };
-                // `GetLootMethod`'s second return (`0x4e91b0`): 0 when the looter is us, else the
-                // looter's party slot + 1 over the four slots only (`0x4e81a0`, even in a raid),
-                // else nil. A master looter in another raid subgroup reads nil, never 0, which
-                // would light the crown on our portrait (`PlayerFrame.lua:48`).
-                let master = (loot.method == 2 && loot.master != 0)
-                    .then(|| {
-                        if Some(loot.master) == self_guid {
-                            Some(0)
-                        } else {
-                            slots
-                                .iter()
-                                .position(|m| m.guid == loot.master)
-                                .map(|i| i as u32 + 1)
-                        }
-                    })
-                    .flatten();
-                (method.to_string(), master, u32::from(loot.threshold))
-            }
-            None => ("group".to_string(), None, 0),
+        // `GetLootMethod` and `GetLootThreshold` read the stored cells, with no group test.
+        let loot = group.loot_cells();
+        // Methods 0 to 4 through the table `0x4e9280`, `ERROR!` above (`0x4e91ef`).
+        let loot_method = match loot.method {
+            0 => "freeforall",
+            1 => "roundrobin",
+            2 => "master",
+            3 => "group",
+            4 => "needbeforegreed",
+            _ => "ERROR!",
         };
+        // `GetLootMethod`'s second return, for any looter in the cell whatever the method
+        // (`0x4e9209`): 0 when it is us (`0x4e9215`), else its party slot + 1 over the four slots
+        // only (`0x4e9238`, `0x4e81a0`, even in a raid), else nil. A looter in another raid
+        // subgroup reads nil, never 0, which would light the crown on our portrait
+        // (`PlayerFrame.lua:48`).
+        let master_looter = (loot.master != 0)
+            .then(|| {
+                if Some(loot.master) == self_guid {
+                    Some(0)
+                } else {
+                    slots
+                        .iter()
+                        .position(|m| m.guid == loot.master)
+                        .map(|i| i as u32 + 1)
+                }
+            })
+            .flatten();
+        let (loot_method, loot_threshold) = (loot_method.to_string(), u32::from(loot.threshold));
         // The raid roster, the one list `GetNumRaidMembers`, `GetRaidRosterInfo` and `UnitInRaid`
         // read.
         let me = self_pair.map(|(_, g, store)| RaidSelf {
@@ -951,13 +951,11 @@ pub(crate) fn drain_party(
                         }
                     }
                 }
+                // The stored method and looter with the new threshold (`0x4e95aa`-`0x4e95b8`).
                 PartyRequest::LootThreshold(threshold) => {
-                    let (method, master) = group
-                        .loot
-                        .map_or((3, 0), |l| (u32::from(l.method), l.master));
                     let _ = commands.0.send(ClientCommand::LootMethod {
-                        method,
-                        master,
+                        method: u32::from(group.loot_stored.method),
+                        master: group.loot_stored.master,
                         threshold,
                     });
                 }
