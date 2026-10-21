@@ -81,6 +81,9 @@ fn row(name: &str, min_bid: u32, buyout: u32, bid: u32, owner: &str) -> AuctionI
         high_bidder: AuctionHighBidder::Nil,
         owner: Some(owner.to_string()),
         time_left: 4,
+        deadline: 0,
+        bidder_rank: 0,
+        base_name: Some(name.to_string()),
         link: Some("|cffffffff|Hitem:2589:0:0:0|h[Linen Cloth]|h|r".into()),
         random_property_id: 0,
         charges: 0,
@@ -98,7 +101,7 @@ fn state(mut rows: Vec<AuctionItemRow>) -> AuctionState {
     lists[LIST] = AuctionListState {
         rows,
         total,
-        sort: vec![("bid".into(), true)],
+        ..Default::default()
     };
     lists[BIDDER] = AuctionListState::default();
     lists[OWNER] = AuctionListState::default();
@@ -298,7 +301,7 @@ fn the_auctions_tab_names_the_high_bidder() {
     snapshot.lists[OWNER] = AuctionListState {
         rows: vec![bid_on, unbid],
         total: 2,
-        sort: Vec::new(),
+        ..Default::default()
     };
     s.set_auction(Some(snapshot));
 

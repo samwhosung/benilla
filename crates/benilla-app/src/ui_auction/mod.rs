@@ -91,6 +91,12 @@ pub(crate) struct AuctionRow {
     pub(crate) current_bid: u32,
     /// The time-left bucket, `1..=4`.
     pub(crate) time_left: u32,
+    /// The deadline on the millisecond clock, [`benilla_ui::script::AuctionItemRow::deadline`].
+    pub(crate) deadline: u32,
+    /// The status sort's rank, [`benilla_ui::script::AuctionItemRow::bidder_rank`].
+    pub(crate) bidder_rank: u8,
+    /// The template's own name, unsuffixed: the name sort's key.
+    pub(crate) base_name: Option<String>,
     /// Whether the player holds the high bid; the status sort's key.
     pub(crate) player_holds_bid: bool,
     /// `GetAuctionItemInfo`'s eleventh value, per [`high_bidder`].
@@ -120,6 +126,10 @@ pub(crate) struct AuctionListSlot {
     /// A result for this list landed, an empty page included; the refreshes gate on it.
     received: bool,
     sort: SortStack,
+    /// Which result `entries` came from, from [`AuctionOpen::next_page`].
+    page: u32,
+    /// The millisecond tick the result was read at (`0x4cc865`), each row's deadline base.
+    arrived_ms: u32,
 }
 
 /// What the live probe (`crate::capture::ProbeAuctionPlugin`) reads to tell an empty answer from
@@ -158,6 +168,8 @@ pub(crate) struct AuctionOpen {
     /// A list we hold went stale (a sale, an outbid, a cancel): the drain re-asks its page 0.
     pending_owner_refresh: bool,
     pending_bidder_refresh: bool,
+    /// The count [`AuctionListSlot::page`] is drawn from; never reset, so no two results share one.
+    next_page: u32,
     pub(crate) wire: AuctionWireLog,
 }
 
@@ -204,13 +216,23 @@ impl AuctionOpen {
         self.show_requested = true;
     }
 
-    /// Replace one list's page; that list's event is owed even for an identical page.
-    pub(crate) fn set_list(&mut self, which: usize, entries: Vec<AuctionListEntry>, total: u32) {
+    /// Replace one list's page, read at `now_ms` on the millisecond clock; that list's event is
+    /// owed even for an identical page.
+    pub(crate) fn set_list(
+        &mut self,
+        which: usize,
+        entries: Vec<AuctionListEntry>,
+        total: u32,
+        now_ms: u32,
+    ) {
         self.list_result_landed[which] = true;
+        self.next_page = self.next_page.wrapping_add(1);
         let slot = &mut self.lists[which];
         slot.received = true;
         slot.entries = entries;
         slot.total = total.max(slot.entries.len() as u32);
+        slot.page = self.next_page;
+        slot.arrived_ms = now_ms;
     }
 
     /// The auction id at a 1-based row of the sorted view, the order the player clicked in.
@@ -349,6 +371,18 @@ fn time_left_bucket(ms: u32) -> u32 {
     }
 }
 
+/// The status sort's rank of a row's high bidder (`0x4cdb10`-`0x4cdb6a`): 2 when it is the player
+/// (`0x468550`, 0 with no player), 1 for any other bidder, 0 for no bid.
+fn bidder_rank(bidder_guid: u64, self_guid: Option<u64>) -> u8 {
+    if bidder_guid == self_guid.unwrap_or(0) {
+        2
+    } else if bidder_guid != 0 {
+        1
+    } else {
+        0
+    }
+}
+
 /// `GetAuctionItemInfo`'s `highBidder` for a row of `list` (`0x4cf12a`–`0x4cf1a0`). On an
 /// `"owner"` row the player owns (`0x4cf131`–`0x4cf142` compare its owner guid with the player's),
 /// the bidder guid (vmangos `AuctionHouseMgr.cpp:840`) goes through the name cache: nil with no
@@ -387,6 +421,7 @@ fn high_bidder(
 fn resolve_row(
     list: usize,
     entry: &AuctionListEntry,
+    arrived_ms: u32,
     self_guid: Option<u64>,
     items: &Items,
     icons: Option<&ItemDisplays>,
@@ -426,6 +461,9 @@ fn resolve_row(
         buyout: entry.buyout,
         current_bid: entry.current_bid,
         time_left: time_left_bucket(entry.time_left_ms),
+        deadline: arrived_ms.wrapping_add(entry.time_left_ms),
+        bidder_rank: bidder_rank(entry.bidder_guid, self_guid),
+        base_name: template.map(|t| t.name.clone()),
         player_holds_bid: self_guid.is_some_and(|g| g == entry.bidder_guid),
         high_bidder: high_bidder(list, entry, self_guid, names, ask),
         owner: names
@@ -488,7 +526,19 @@ fn rows_for(
     let mut rows: Vec<AuctionRow> = slot
         .entries
         .iter()
-        .map(|e| resolve_row(list, e, self_guid, items, icons, names, ask, rolls))
+        .map(|e| {
+            resolve_row(
+                list,
+                e,
+                slot.arrived_ms,
+                self_guid,
+                items,
+                icons,
+                names,
+                ask,
+                rolls,
+            )
+        })
         .collect();
     slot.sort.apply(&mut rows);
     rows
@@ -512,6 +562,9 @@ fn to_script_row(r: &AuctionRow) -> AuctionItemRow {
         high_bidder: r.high_bidder.clone(),
         owner: r.owner.clone(),
         time_left: r.time_left,
+        deadline: r.deadline,
+        bidder_rank: r.bidder_rank,
+        base_name: r.base_name.clone(),
         link: r.link.clone(),
     }
 }
@@ -625,6 +678,7 @@ fn feed_auction(
                     rows: rows.iter().map(to_script_row).collect(),
                     total: slot.total.max(rows.len() as u32),
                     sort: slot.sort.pairs(),
+                    page: slot.page,
                 }
             });
             AuctionState {
@@ -908,13 +962,13 @@ mod tests {
         let mut open = AuctionOpen::default();
         open.open(0x1234, 1);
 
-        open.set_list(LIST, Vec::new(), 0);
+        open.set_list(LIST, Vec::new(), 0, 0);
         assert!(open.list_result_landed[LIST], "the first empty page");
 
         // The feed consumes the flag when it fires.
         open.list_result_landed = [false; 3];
 
-        open.set_list(LIST, Vec::new(), 0);
+        open.set_list(LIST, Vec::new(), 0, 0);
         assert!(
             open.list_result_landed[LIST],
             "an identical page owes the event too — this is the whole bug"
@@ -926,7 +980,7 @@ mod tests {
         let mut open = AuctionOpen::default();
         open.open(0x1234, 1);
 
-        open.set_list(LIST, Vec::new(), 0);
+        open.set_list(LIST, Vec::new(), 0, 0);
         assert_eq!(
             open.list_result_landed,
             [true, false, false],
@@ -934,11 +988,11 @@ mod tests {
         );
 
         open.list_result_landed = [false; 3];
-        open.set_list(OWNER, Vec::new(), 0);
+        open.set_list(OWNER, Vec::new(), 0, 0);
         assert_eq!(open.list_result_landed, [false, false, true]);
 
         open.list_result_landed = [false; 3];
-        open.set_list(BIDDER, Vec::new(), 0);
+        open.set_list(BIDDER, Vec::new(), 0, 0);
         assert_eq!(open.list_result_landed, [false, true, false]);
     }
 
@@ -955,7 +1009,7 @@ mod tests {
         );
 
         // The Auctions tab was shown and answered, even empty: now a sale makes it stale.
-        open.set_list(OWNER, Vec::new(), 0);
+        open.set_list(OWNER, Vec::new(), 0, 0);
         open.refresh_owner();
         assert!(open.pending_owner_refresh, "a list we hold can go stale");
         assert!(
@@ -1175,7 +1229,7 @@ mod tests {
         {
             let mut open = app.world_mut().resource_mut::<AuctionOpen>();
             open.open(0x1234, 1);
-            open.set_list(OWNER, vec![entry(ME, BIDDER_GUID)], 1);
+            open.set_list(OWNER, vec![entry(ME, BIDDER_GUID)], 1, 0);
         }
 
         // One registered system, so its `VmMemo` locals persist from frame to frame.
@@ -1241,6 +1295,7 @@ mod tests {
                 OWNER,
                 vec![entry(ME, BIDDER_GUID)],
                 1,
+                0,
             );
         };
         list(&mut app);

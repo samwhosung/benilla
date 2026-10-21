@@ -69,6 +69,14 @@ pub struct AuctionItemRow {
     pub owner: Option<String>,
     /// The time-left bucket, `1..=4` (Short, Medium, Long, Very Long); 0 when not known yet.
     pub time_left: u32,
+    /// The auction's deadline on the millisecond clock: the tick its list was read at plus the
+    /// wire's milliseconds left, wrapping (`0x4cc865`, `0x4cc966`-`0x4cc975`).
+    pub deadline: u32,
+    /// The high bidder's rank (`0x4cdb10`-`0x4cdb6a`): 2 the player, 1 another bidder, 0 no bid.
+    pub bidder_rank: u8,
+    /// The item template's own name (`[rec+8]`), without the random suffix [`Self::name`]
+    /// carries; `None` while the template query is in flight.
+    pub base_name: Option<String>,
     /// The full item link: auction rows carry entry, enchant, random property and suffix.
     pub link: Option<String>,
 }
@@ -96,6 +104,8 @@ pub struct AuctionListState {
     pub total: u32,
     /// The most-recently-clicked sort stack, primary first: `(key, reversed)`.
     pub sort: Vec<(String, bool)>,
+    /// Which result the rows came from, counted by the app across every list.
+    pub page: u32,
 }
 
 impl AuctionListState {
@@ -979,7 +989,7 @@ mod tests {
         state.lists[LIST] = AuctionListState {
             total: rows.len() as u32,
             rows,
-            sort: Vec::new(),
+            ..Default::default()
         };
         state
     }
