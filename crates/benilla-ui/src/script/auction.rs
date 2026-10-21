@@ -994,6 +994,113 @@ mod tests {
         state
     }
 
+    /// Every list type and sort name matches without case (`SStrCmpI`, `0x64a4c0`), an unknown
+    /// one sorts nothing (`0x4cfd90`), and only an argument that is neither string nor number
+    /// raises (`0x4cfd82`). `IsAuctionSortReversed` answers nothing for an unknown sort name
+    /// (`0x4d024e`) and nil for an unknown type (`0x4d0230`).
+    #[test]
+    fn list_types_and_sort_names_match_without_case() {
+        let mut s = UiScript::new().unwrap();
+        s.set_auction(Some(page(&[7])));
+        assert_eq!(
+            s.eval::<i64>(r#"return (GetNumAuctionItems("LIST"))"#)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            s.eval::<String>(r#"return (GetAuctionItemInfo("List", 1))"#)
+                .unwrap(),
+            "Item 7"
+        );
+        s.run(r#"SortAuctionItems("LIST", "Name")"#).unwrap();
+        assert_eq!(s.take_auction_sorts(), [(LIST, "name".to_string())]);
+        s.run(r#"SortAuctionItems("list", "nonsense") SortAuctionItems("nowhere", "name")"#)
+            .unwrap();
+        s.run("SortAuctionItems(1, 2)").unwrap();
+        assert!(
+            s.take_auction_sorts().is_empty(),
+            "an unknown one sorts nothing"
+        );
+        let err = s
+            .run(r#"SortAuctionItems({}, "name")"#)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(r#"Usage: SortAuctionItems("type", "sort")"#),
+            "{err}"
+        );
+        assert_eq!(
+            s.arity(r#"IsAuctionSortReversed("list", "nonsense")"#)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            s.arity(r#"IsAuctionSortReversed("nowhere", "bid")"#)
+                .unwrap(),
+            1
+        );
+    }
+
+    /// `GetAuctionItemInfo`'s sixth value is the required level floored at 1
+    /// (`0x4cf091`-`0x4cf0b1`, `max(template+0x3c, 1)`).
+    #[test]
+    fn the_level_is_floored_at_one() {
+        let mut s = UiScript::new().unwrap();
+        let mut state = page(&[7, 8]);
+        state.lists[LIST].rows[0].level = 0;
+        state.lists[LIST].rows[1].level = 12;
+        s.set_auction(Some(state));
+        let level = |s: &UiScript, i: usize| {
+            s.eval::<i64>(&format!(
+                r#"local _, _, _, _, _, l = GetAuctionItemInfo("list", {i}) return l"#
+            ))
+            .unwrap()
+        };
+        assert_eq!(level(&s, 1), 1, "no requirement reads 1");
+        assert_eq!(level(&s, 2), 12);
+    }
+
+    /// `SortAuctionItems` sorts and signals before it returns (`0x4cd850` → `0x4cd8b0`: `qsort`,
+    /// then `jmp 0x703e50`), so an addon that flags its own call, as Auctioneer's
+    /// `PerformingSortAuctionItems` does, sees the update inside it with the rows in order, and
+    /// reads the flipped flag on the next line.
+    #[test]
+    fn a_sort_signals_its_list_inside_the_call_with_the_rows_in_order() {
+        let mut s = UiScript::new().unwrap();
+        let mut state = page(&[1, 2]);
+        state.lists[LIST].rows[0].name = Some("Cheap".into());
+        state.lists[LIST].rows[0].buyout_price = 100;
+        state.lists[LIST].rows[1].name = Some("Dear".into());
+        state.lists[LIST].rows[1].buyout_price = 900;
+        s.set_auction(Some(state));
+        s.run(
+            r#"SEEN = {}
+               local f = CreateFrame("Frame")
+               f:RegisterEvent("AUCTION_ITEM_LIST_UPDATE")
+               f:SetScript("OnEvent", function()
+                   table.insert(SEEN, tostring(INSIDE) .. ":" .. (GetAuctionItemInfo("list", 1)))
+               end)
+               INSIDE = true
+               SortAuctionItems("list", "buyout")
+               INSIDE = false
+               REVERSED = IsAuctionSortReversed("list", "buyout")"#,
+        )
+        .unwrap();
+        assert_eq!(
+            s.eval::<Vec<String>>("return SEEN").unwrap(),
+            ["true:Dear"],
+            "the highest buyout first, signalled inside the call"
+        );
+        assert!(s.eval::<bool>("return REVERSED == nil").unwrap());
+        s.run(r#"SEEN = {} SortAuctionItems("list", "buyout") REVERSED = IsAuctionSortReversed("list", "buyout")"#)
+            .unwrap();
+        assert_eq!(s.eval::<Vec<String>>("return SEEN").unwrap(), ["nil:Cheap"]);
+        assert!(
+            s.eval::<bool>("return REVERSED == 1").unwrap(),
+            "the second click flips the primary, and the next line reads it"
+        );
+    }
+
     #[test]
     fn the_selection_follows_its_auction_through_a_resort() {
         let mut s = UiScript::new().unwrap();

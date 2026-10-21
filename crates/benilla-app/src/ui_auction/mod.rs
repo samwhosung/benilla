@@ -31,6 +31,9 @@ use sort::SortStack;
 
 mod net;
 
+#[cfg(test)]
+mod sort_tests;
+
 /// The browse rate limit: `0x4ce980` arms `tick + 0x1388` once sent; a refused query fires nothing.
 const QUERY_THROTTLE_SECS: f64 = 5.0;
 
