@@ -155,7 +155,10 @@ fn drunk(
             )
         })
         .collect::<Vec<_>>();
-    crate::ui_action::show_messages(script, sink, "ui_unit", lines);
+    // Each to the line function inside the watcher's run (`0x5e2c68` → `0x49a870`).
+    for line in lines {
+        crate::ui_action::show_now(script, sink, "ui_unit", line);
+    }
 }
 
 /// The notice lane and its drop: [`drop_field_notices`] under the exact complement of the
@@ -195,9 +198,12 @@ fn fire(script: &mut UiScript, sink: &mut crate::ui_action::MessageSink, notice:
         FieldNotice::RestState { old, new } => {
             // `0x5de4e0`: the signal, then the line for the new state.
             script.fire_event("UPDATE_EXHAUSTION", vec![]);
+            // Through `DisplayError` (`0x5de52c`), whose chat row shows it at once (`0x496842`).
             let line = super::rest_state_message(old, new)
                 .and_then(|key| crate::ui_action::keyed_line(script, key));
-            crate::ui_action::show_messages(script, sink, "ui_unit", line);
+            if let Some(line) = line {
+                crate::ui_action::show_now(script, sink, "ui_unit", line);
+            }
         }
         FieldNotice::CombatSkill => {
             // `0x5ed990`, in its order (`0x5ed99f`, `0x5ed9b3`, `0x5ed9c7`).
@@ -238,7 +244,9 @@ fn fire(script: &mut UiScript, sink: &mut crate::ui_action::MessageSink, notice:
                         crate::ui_action::Shown::unkeyed(benilla_ui::messages::MsgKind::Chat, t)
                     }),
             ];
-            crate::ui_action::show_messages(script, sink, "ui_unit", lines.into_iter().flatten());
+            for line in lines.into_iter().flatten() {
+                crate::ui_action::show_now(script, sink, "ui_unit", line);
+            }
         }
     }
 }
@@ -588,7 +596,8 @@ mod tests {
     }
 
     /// A global notice fires its event bare, once, whatever unit raised it; the PvP preference
-    /// shows its toast for the new state, then its verbose sentence as a chat line.
+    /// shows its toast for the new state, then its verbose sentence as a chat line, whose
+    /// `CHAT_MSG_SYSTEM` fires inside the watcher's run (`0x496822`-`0x496842`).
     #[test]
     fn a_global_notice_fires_bare_and_the_pvp_preference_speaks() {
         let mut app = world(seated());
@@ -618,16 +627,19 @@ mod tests {
             [
                 "PLAYER_REGEN_DISABLED nil",
                 "UI_INFO_MESSAGE on",
+                "CHAT_MSG_SYSTEM on, verbose",
                 "PET_ATTACK_STOP nil",
                 "UI_INFO_MESSAGE off",
+                "CHAT_MSG_SYSTEM off, verbose",
                 "PLAYER_UNGHOST nil",
             ]
         );
-        assert_eq!(
+        assert!(
             app.world()
                 .resource::<crate::ui_chat::ChatLog>()
-                .pending_lines(),
-            ["on, verbose", "off, verbose"]
+                .pending_lines()
+                .is_empty(),
+            "the lines fired in the watcher's run, not from the chat lane"
         );
     }
 
@@ -706,30 +718,39 @@ mod tests {
                 )
                 .unwrap();
         }
-        let chat = |app: &mut App| -> Vec<String> {
-            let lines = app
-                .world()
-                .resource::<crate::ui_chat::ChatLog>()
-                .pending_lines();
-            app.world_mut()
-                .insert_resource(crate::ui_chat::ChatLog::default());
-            lines
-        };
         let drunk = |guid, old, new| FieldNotice::Drunk { guid, old, new };
-        assert_eq!(fired(&mut app, &[drunk(ME, 0, 95)]), ["UNIT_LEVEL target"]);
-        assert_eq!(chat(&mut app), ["self 2", "self 4"]);
-        // Another player: no signal, its name in the line.
-        assert!(fired(&mut app, &[drunk(OTHER, 95, 0)]).is_empty());
         assert_eq!(
-            chat(&mut app),
-            ["Bob other 1", "Bob other 2", "Bob other 3"]
+            fired(&mut app, &[drunk(ME, 0, 95)]),
+            [
+                "UNIT_LEVEL target",
+                "CHAT_MSG_SYSTEM self 2",
+                "CHAT_MSG_SYSTEM self 4"
+            ]
+        );
+        // Another player: no signal, its name in the line.
+        assert_eq!(
+            fired(&mut app, &[drunk(OTHER, 95, 0)]),
+            [
+                "CHAT_MSG_SYSTEM Bob other 1",
+                "CHAT_MSG_SYSTEM Bob other 2",
+                "CHAT_MSG_SYSTEM Bob other 3"
+            ]
         );
         // A target the player cannot attack: the lines alone.
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .set_unit_guids(&seated());
-        assert!(fired(&mut app, &[drunk(ME, 60, 40)]).is_empty());
-        assert_eq!(chat(&mut app), ["self 2"]);
+        assert_eq!(
+            fired(&mut app, &[drunk(ME, 60, 40)]),
+            ["CHAT_MSG_SYSTEM self 2"]
+        );
+        assert!(
+            app.world()
+                .resource::<crate::ui_chat::ChatLog>()
+                .pending_lines()
+                .is_empty(),
+            "each line fired in the watcher's run (`0x5e2c68`)"
+        );
     }
 
     /// A watcher's tutorial fires inside its run (`0x4b5390` with delay 0): the `TutorialPopup` cue
