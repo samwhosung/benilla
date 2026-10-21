@@ -5,13 +5,16 @@
 /// `0x49fa6f`).
 pub const INVALID_ESCAPE: &str = "Invalid escape code in chat message";
 
+/// A `|` followed by anything but `|` or `c`: the verb raises [`INVALID_ESCAPE`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvalidEscape;
+
 /// The `|`-escape scan, duplicated in the two verbs (`0x49f661`-`0x49f6a8`, `0x49f9bb`-`0x49fa04`).
 /// After each `|`: `||` skips both bytes; `|c` skips past the first later `|r` (case-sensitive
 /// `strstr` `0x64b4f0`, resuming at the closer plus 2, `0x49f9f4`), leaving the run between
 /// unchecked; `|c` with no `|r` cuts `text` at the `|` and ends the scan (`0x49f758`, `0x49fa6a`);
-/// anything else, the NUL after a trailing `|` included, is `Err`, the verb's raise of
-/// [`INVALID_ESCAPE`].
-pub fn validate_escapes(text: &mut String) -> Result<(), ()> {
+/// anything else, the NUL after a trailing `|` included, is [`InvalidEscape`].
+pub fn validate_escapes(text: &mut String) -> Result<(), InvalidEscape> {
     let bytes = text.as_bytes();
     let mut i = 0usize;
     while let Some(off) = bytes[i..].iter().position(|&b| b == b'|') {
@@ -35,7 +38,7 @@ pub fn validate_escapes(text: &mut String) -> Result<(), ()> {
                 }
             }
             // Anything else, including `None`: the NUL after a trailing `|`.
-            _ => return Err(()),
+            _ => return Err(InvalidEscape),
         }
     }
     Ok(())

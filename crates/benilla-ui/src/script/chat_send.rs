@@ -33,7 +33,7 @@ use super::Model;
 
 mod text;
 
-pub use text::{expand_target_tokens, validate_escapes, INVALID_ESCAPE};
+pub use text::{expand_target_tokens, validate_escapes, InvalidEscape, INVALID_ESCAPE};
 
 impl super::UiScript {
     /// Push the name `GetDefaultLanguage()` answers. `None` is the reference's no-player state,

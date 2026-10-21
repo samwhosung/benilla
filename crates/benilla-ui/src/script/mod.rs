@@ -236,7 +236,8 @@ pub use char_stats::{
 };
 pub use chat_misc::EmoteRequest;
 pub use chat_send::{
-    expand_target_tokens, validate_escapes, ChatGroup, ChatSend, INVALID_ESCAPE, SEND_CHAT_TOKENS,
+    expand_target_tokens, validate_escapes, ChatGroup, ChatSend, InvalidEscape, INVALID_ESCAPE,
+    SEND_CHAT_TOKENS,
 };
 pub use chat_types::ChatTypeColor;
 pub use chat_window::{message_group_index, ChatWindowLook, MESSAGE_GROUPS};
