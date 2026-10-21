@@ -2939,6 +2939,64 @@ mod tests {
         assert_eq!(seen_in(&app), ["LOOT_OPENED", "LOOT_CLOSED"]);
     }
 
+    /// The sweep's loot leg on a lockbox: `CloseInteraction`'s unlock (`0x48f2bd`) and the
+    /// teardown's (`0x4c1d36`) come before the teardown zeroes the source (`0x4c1cb0`) and signals
+    /// `LOOT_CLOSED` (`0x4c1dac`), so each unlock's `ITEM_LOCK_CHANGED` handlers read the window
+    /// still open, and `LOOT_CLOSED`'s the closed one.
+    #[test]
+    fn a_closing_lockboxs_unlock_handlers_read_the_window_open() {
+        use crate::ui_script::sweep_test::sweep_in_place;
+        const LOCKBOX: u64 = 0x4000_0000_0000_0007;
+        let (mut app, _rx) = sweep_loot_app();
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                r#"SEEN = {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("LOOT_OPENED")
+                f:RegisterEvent("ITEM_LOCK_CHANGED")
+                f:RegisterEvent("LOOT_CLOSED")
+                f:SetScript("OnEvent", function()
+                    table.insert(SEEN, event .. ":" .. GetNumLootItems())
+                end)"#,
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        // OBJECT_FIELD_TYPE (2): TYPEMASK_OBJECT | TYPEMASK_ITEM.
+        let e = app
+            .world_mut()
+            .spawn(crate::net::ObjectStore(ObjectFields::from_pairs(&[(
+                2, 0x3,
+            )])))
+            .id();
+        let world = app.world_mut();
+        world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(LOCKBOX, e);
+        world
+            .resource_mut::<Items>()
+            .insert_template(117, Some(crate::items::test_template("Linen Cloth")));
+        world.resource_mut::<LootState>().open(
+            LOCKBOX,
+            loot_type::CORPSE,
+            0,
+            vec![item(0, 117, 1)],
+        );
+        world.resource_mut::<LootLatch>().0 = Some(LOCKBOX);
+        app.update();
+        sweep_in_place(&mut app);
+        let seen: String = app
+            .world()
+            .non_send_resource::<UiScript>()
+            .eval("return table.concat(SEEN, ',')")
+            .unwrap();
+        assert_eq!(
+            seen,
+            "LOOT_OPENED:1,ITEM_LOCK_CHANGED:1,ITEM_LOCK_CHANGED:1,LOOT_CLOSED:0"
+        );
+    }
+
     /// A disenchanted item's guid (`HIGHGUID_ITEM`).
     const ESSENCE_SOURCE: u64 = 0x4000_0000_0000_0d15;
 
