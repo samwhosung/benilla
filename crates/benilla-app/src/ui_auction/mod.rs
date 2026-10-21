@@ -292,19 +292,28 @@ impl AuctionOpen {
     /// `0x4cde50`: the pair appended; on a full list the room doubles and the pair is written past
     /// the count without raising it (`0x4cde9a`-`0x4cdf1c`), so it is lost.
     pub(crate) fn outbid_append(&mut self, house: u32, auction_id: u32) {
-        let _ = (house, auction_id, OUTBID_ROOM, self.outbid_doublings);
+        let room = OUTBID_ROOM << self.outbid_doublings;
+        if self.outbid.len() >= room {
+            self.outbid_doublings += 1;
+            return;
+        }
+        self.outbid.push((house, auction_id));
     }
 
     /// `0x4cdf30`: the first pair of `auction_id` removed, whatever its house.
     fn outbid_remove(&mut self, auction_id: u32) {
-        let _ = auction_id;
+        if let Some(i) = self.outbid.iter().position(|&(_, a)| a == auction_id) {
+            self.outbid.remove(i);
+        }
     }
 
     /// `0x4cdf90`: the first pair of `house` removed. Its loop shifts the later pairs down with the
     /// scan's own index and then steps it past the count (`0x4cdfb6`-`0x4cdfdb`), so it ends after
     /// the first match.
     fn outbid_remove_house(&mut self, house: u32) {
-        let _ = house;
+        if let Some(i) = self.outbid.iter().position(|&(h, _)| h == house) {
+            self.outbid.remove(i);
+        }
     }
 
     /// The owner list's sender `0x4cd680`: while the flag is armed, `CMSG_AUCTION_LIST_OWNER_ITEMS`
