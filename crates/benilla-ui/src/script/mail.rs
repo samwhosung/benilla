@@ -806,12 +806,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // (`0x4ae917` ahead of `0x4ae99e`). The attachment is locked, so it cannot have
                 // moved.
                 if let Some(item) = model.mail_send_item.as_ref() {
-                    let held = model
-                        .containers
-                        .get(&item.bag)
-                        .and_then(|c| c.slots.get(&item.slot))
-                        .is_some_and(|s| s.guid == item.guid);
-                    if !held {
+                    if !holds(model, item) {
                         model.push_ui_error("ERR_ITEM_NOT_FOUND");
                         model.mail_send_item = None;
                         model.raise("MAIL_SEND_INFO_UPDATE", Vec::new());
@@ -1133,6 +1128,22 @@ fn submit(lua: &Lua, call: MailCall) -> mlua::Result<()> {
 /// (`0x4adf6d`, `0x4adf97`); record flags conjured `0x2` (`0x4adfbd`), an area (`0x5da500`, record
 /// `+0x1c8`) or a map (`0x5da570`, `+0x1cc`) is `ERR_MAIL_CONJURED_ITEM`; a container holding an
 /// item is `ERR_MAIL_BAG` (`0x4ae019`-`0x4ae042`).
+/// Whether the attachment's slot, a bag's or the doll's, still holds its object: the send
+/// resolves the guid and tests its owner (`0x4ae92e`-`0x4ae955`), and a locked item cannot move.
+fn holds(model: &Model, item: &cursor::CursorItem) -> bool {
+    if item.bag == cursor::EQUIPMENT_BAG {
+        model
+            .inv_slot("player", item.slot as usize)
+            .is_some_and(|s| s.guid == item.guid)
+    } else {
+        model
+            .containers
+            .get(&item.bag)
+            .and_then(|c| c.slots.get(&item.slot))
+            .is_some_and(|s| s.guid == item.guid)
+    }
+}
+
 fn attach_refusal(model: &Model, item: &cursor::CursorItem) -> Option<&'static str> {
     let (bound, seats) = if item.bag == cursor::EQUIPMENT_BAG {
         let s = model
