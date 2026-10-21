@@ -14,6 +14,8 @@ use bevy::prelude::*;
 use crate::console::ConsoleCommandApp;
 use crate::ui_script::UiFeed;
 
+#[cfg(test)]
+mod call_tests;
 mod feed;
 mod query;
 mod whois;
