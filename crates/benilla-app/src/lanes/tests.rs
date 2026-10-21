@@ -212,6 +212,26 @@ fn a_held_line_fires_where_its_name_answers() {
     );
 }
 
+/// A line whose sender's name answers later in the same frame still waits for that answer: the
+/// reference's handler found the cache empty at its packet and queued it (`0x49cae0`), so it shows
+/// at the answer, behind the packets between, though the drain runs after both were handled.
+#[test]
+fn a_line_whose_name_answers_later_in_the_frame_fires_at_the_answer() {
+    let mut app = client(|app| {
+        app.net_handler(SessionEventKind::LoggedOut, enter)
+            .net_handler(SessionEventKind::LoginQueued, regen)
+            .net_handler(SessionEventKind::LogoutCancelled, stranger_whispers);
+    });
+    assert_eq!(
+        frame(&mut app, vec![p3(), p2(), stranger_named(), p1()]),
+        [
+            "PLAYER_REGEN_DISABLED",
+            "CHAT_MSG_WHISPER:psst",
+            "PLAYER_ENTER_COMBAT"
+        ]
+    );
+}
+
 /// A line whose name never answers holds nothing up: the packets behind it fire as they come.
 #[test]
 fn a_line_that_never_resolves_blocks_nothing() {
