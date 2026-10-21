@@ -320,8 +320,8 @@ pub(crate) struct CastTargeting<'w, 's> {
     own_control: Option<Res<'w, crate::player::OwnControlLost>>,
     /// The caster's and the selection's reach and motion, for the range gate.
     range_units: super::RangeUnits<'w, 's>,
-    /// The caster's animation driver, which keeps its sheathe state.
-    self_driver: Query<'w, 's, &'static crate::creature_anim::AnimDriver, With<SelfPlayer>>,
+    /// The caster's committed sheathe state, which its animation driver keeps.
+    self_sheath: Query<'w, 's, &'static crate::creature_anim::CommittedSheath, With<SelfPlayer>>,
     /// The game clock the day and night rungs read; absent in a harness without one.
     clock: Option<Res<'w, crate::net::ServerTime>>,
     /// The player's answer to the entity outdoors test, which the place rungs read; absent
@@ -393,10 +393,10 @@ impl CastTargeting<'_, '_> {
             // The cached state, seeded from `UNIT_FIELD_BYTES_2` byte 0 and moved by the local
             // setter `0x611cf0` ahead of its echo; the descriptor's byte until it is driven.
             self_sheathe_state: self
-                .self_driver
+                .self_sheath
                 .iter()
                 .next()
-                .and_then(|d| d.sheath_state())
+                .and_then(|c| c.state())
                 .or_else(|| self_store.and_then(|s| s.0.unit_sheath_state()))
                 .unwrap_or(0),
             daytime: self.clock.as_deref().is_some_and(|c| c.0.is_daytime()),
