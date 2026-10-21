@@ -495,11 +495,10 @@ mod tests {
         assert_eq!(lines[2], "2 players total", "the summary comes last");
     }
 
-    /// The comparator ties on an unresolved name (`0x5adbb2`). The reference's `GetWhoInfo`
-    /// (`0x5ad6e0`) shows `UNKNOWN` where benilla shows an empty cell; adopting it must carry the
-    /// miss to the comparator some other way than the string.
+    /// The chat composer `0x5ae160` names an id with no row `UNKNOWN`: the race at `0x5ae199`, the
+    /// class at `0x5ae1d2`, the zone at `0x5ae20b`.
     #[test]
-    fn an_unresolvable_id_leaves_the_name_empty_for_the_comparator() {
+    fn a_chat_line_names_an_id_with_no_row_unknown() {
         let row = who_row(
             &WhoEntry {
                 name: "Nobody".into(),
@@ -512,10 +511,51 @@ mod tests {
             None,
             crate::ui_unit::TestNames::english().names(),
         );
+        let get = |key: &str| match key {
+            "WHO_LIST_FORMAT" => Some("|Hplayer:%s|h[%s]|h: Level %d %s %s - %s".to_string()),
+            "WHO_NUM_RESULTS" => Some("%d player total".to_string()),
+            "UNKNOWN" => Some("Unknown".to_string()),
+            _ => None,
+        };
+        let lines: Vec<String> = who_lines(&[row], 1, &get)
+            .iter()
+            .map(|s| s.text().to_string())
+            .collect();
         assert_eq!(
-            (row.class.as_str(), row.race.as_str(), row.zone.as_str()),
-            ("", "", "")
+            lines,
+            [
+                "|Hplayer:Nobody|h[Nobody]|h: Level 1 Unknown Unknown - Unknown",
+                "1 player total"
+            ]
         );
+    }
+
+    /// The same ids from a race or class wider than a byte: the reference bounds the whole dword
+    /// (`0x5ae176`, `0x5ae1af`), so race 0x101 is no race 1.
+    #[test]
+    fn a_wide_id_names_no_row() {
+        let row = who_row(
+            &WhoEntry {
+                name: "Wide".into(),
+                guild: String::new(),
+                level: 1,
+                class: 0x101,
+                race: 0x101,
+                zone: 0,
+            },
+            None,
+            crate::ui_unit::TestNames::english().names(),
+        );
+        let get = |key: &str| match key {
+            "WHO_LIST_FORMAT" => Some("%s %s %d %s %s - %s".to_string()),
+            "UNKNOWN" => Some("Unknown".to_string()),
+            _ => None,
+        };
+        let lines: Vec<String> = who_lines(&[row], 1, &get)
+            .iter()
+            .map(|s| s.text().to_string())
+            .collect();
+        assert_eq!(lines, ["Wide Wide 1 Unknown Unknown - Unknown"]);
     }
 
     /// Against the shipped strings: the guilded template takes a seventh fill.

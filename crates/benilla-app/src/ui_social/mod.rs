@@ -22,6 +22,8 @@ mod call_tests;
 mod feed;
 mod query;
 mod steps;
+#[cfg(test)]
+mod who_tests;
 mod whois;
 
 pub(crate) use query::parse as who_query;
@@ -1016,8 +1018,10 @@ mod tests {
         assert_eq!(compare_friends(&on_none, &on_none), 0);
     }
 
+    /// The teardown frees the list (`0x5ae2d0`) and the next world entry builds it again, the sort
+    /// chain seeded with it (`0x5adc50`, `0x5add04`).
     #[test]
-    fn a_logout_keeps_the_sort_chain_and_drops_everything_else() {
+    fn a_logout_drops_the_session_and_seeds_the_sort_chain_again() {
         let mut social = SocialState::default();
         social.apply_friend_list(
             &[FriendEntry {
@@ -1030,18 +1034,16 @@ mod tests {
         social.who_to_ui = true;
         social.who_sort.promote("level");
         social.who_sort.promote("level"); // descending
-        let chain = social.who_sort.clone();
 
         social.clear_session();
         assert!(guids(&social).is_empty());
         assert!(!social.is_ignored(9));
         assert!(social.who.is_empty());
         assert!(!social.who_to_ui, "the frame is closed after a logout");
-        assert_eq!(social.who_sort, chain, "the sort chain is process state");
-        assert_ne!(
+        assert_eq!(
             social.who_sort,
             benilla_ui::script::WhoSortChain::default(),
-            "and the assertion above only means something if it is not the seeded chain"
+            "the chain is the list's, seeded at each world entry"
         );
     }
 
