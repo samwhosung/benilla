@@ -9,7 +9,8 @@ use crate::wire::{capacity_hint, read_cstring, read_u32_le, read_u64_le, read_u8
 /// `SMSG_FRIEND_STATUS`'s result byte, vmangos `FriendsResult` (`SocialMgr.h:81-110`). The client
 /// (`0x5acab0`) prints each result's `ERR_*` string to the chat frame, not the red error line.
 pub mod friend_result {
-    /// `ERR_FRIEND_DB_ERROR`: the server's lookup failed.
+    /// vmangos `FRIEND_DB_ERROR`, the server's lookup failed; the client shows it as
+    /// `ERR_FRIEND_NOT_FOUND`, result 4's line (`0x5ace1c`, `0x5acad6`).
     pub const DB_ERROR: u8 = 0x00;
     /// `ERR_FRIEND_LIST_FULL`: 50 friends already.
     pub const LIST_FULL: u8 = 0x01;
@@ -61,8 +62,8 @@ pub mod friend_status {
     pub const DND: u8 = 4;
 }
 
-/// One friend-list row. The name is not on the wire: the client resolves it through its name cache
-/// (`0x55f080`, filled by `CMSG_NAME_QUERY`) when it draws the row.
+/// One friend-list row. The name is not on the wire: the client copies it into the slot from its
+/// name cache at the packet (`0x55f080` at `0x5ae438`), or when the cache's answer arrives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct FriendEntry {
     /// Always a player guid: vmangos rebuilds it as `ObjectGuid(HIGHGUID_PLAYER, lowguid)`.
