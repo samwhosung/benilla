@@ -808,23 +808,35 @@ pub(super) fn route_cast_visuals(
                 }
             }
             CastEventKind::Go => {
-                // Spell-id-keyed (`0x614150(spellId, 0)`): a proc's GO keeps another spell's hold.
-                if held_spell(&pending, ev.entity) == Some(ev.spell_id) {
-                    commands.entity(ev.entity).try_remove::<CastHold>();
-                    pending.insert(ev.entity, None);
+                // The go's own stop is skipped for a channelled spell (`AttributesEx & 0x4`) while
+                // the caster channels (`UNIT_CHANNEL_SPELL` nonzero), `0x6e7fca`-`0x6e7fde`.
+                let channelling = spells
+                    .catalog
+                    .get(ev.spell_id)
+                    .is_some_and(|d| d.attributes_ex & 0x4 != 0)
+                    && units
+                        .get(ev.entity)
+                        .is_ok_and(|(_, store)| store.0.unit_channel_spell() != 0);
+                if !channelling {
+                    // Spell-id-keyed (`0x614150(spellId, 0)` at `0x6e7fe8`): a proc's GO keeps
+                    // another spell's hold.
+                    if held_spell(&pending, ev.entity) == Some(ev.spell_id) {
+                        commands.entity(ev.entity).try_remove::<CastHold>();
+                        pending.insert(ev.entity, None);
+                    }
+                    // The spell's own loop, whatever the hold: a precast kit with no anim still
+                    // starts a loop.
+                    out.sounds.write(SpellKitSound::StopHold {
+                        entity: ev.entity,
+                        spell_id: Some(ev.spell_id),
+                    });
+                    out.fx.write(SpellKitFx::Reap {
+                        entity: ev.entity,
+                        spell_id: ev.spell_id,
+                        class: FxClass::Hold,
+                        force: false,
+                    });
                 }
-                // The spell's own loop (`0x614150(spellId, 0)`), whatever the hold: a precast kit
-                // with no anim still starts a loop.
-                out.sounds.write(SpellKitSound::StopHold {
-                    entity: ev.entity,
-                    spell_id: Some(ev.spell_id),
-                });
-                out.fx.write(SpellKitFx::Reap {
-                    entity: ev.entity,
-                    spell_id: ev.spell_id,
-                    class: FxClass::Hold,
-                    force: false,
-                });
                 // Then the running auto-repeat spell's on the same unit, `0x614150([0xceac30], 0)`
                 // whenever it is set (`0x6e7fed`-`0x6e7ffb`), whoever casts the go: the gate of
                 // the go's own stop (`0x6e7fca`) does not reach it.
