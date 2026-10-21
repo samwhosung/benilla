@@ -95,7 +95,7 @@ pub struct AuctionListEntry {
 /// `action` only on success (`AuctionHouseHandler.cpp:70-96`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuctionCommandTail {
-    /// Every other pair: the three dwords are the whole packet.
+    /// Every other pair, or a tail too short for its fields: the three dwords are all there is.
     Empty,
     /// A placed bid: the step the next bid must clear, from the bid just accepted.
     BidPlaced { new_min_outbid: u32 },
@@ -291,16 +291,19 @@ pub(super) fn read_auction_command_result(
     let auction_id = read_u32_le(r)?;
     let action = read_u32_le(r)?;
     let error = read_u32_le(r)?;
+    // The tail reads short: `0x418e30` and its kin write nothing past the end and the handler
+    // goes on, so a tail shorter than its fields is no tail and the packet stands. A higher bid
+    // missing a field would patch from unwritten stack slots, which nothing here can know.
     let tail = match error {
-        auction_error::OK if action == auction_action::BID_PLACED && !r.is_empty() => {
+        auction_error::OK if action == auction_action::BID_PLACED && r.len() >= 4 => {
             AuctionCommandTail::BidPlaced {
                 new_min_outbid: read_u32_le(r)?,
             }
         }
-        auction_error::INVENTORY if !r.is_empty() => AuctionCommandTail::Inventory {
+        auction_error::INVENTORY if r.len() >= 4 => AuctionCommandTail::Inventory {
             result: read_u32_le(r)?,
         },
-        auction_error::HIGHER_BID if !r.is_empty() => AuctionCommandTail::HigherBid {
+        auction_error::HIGHER_BID if r.len() >= 16 => AuctionCommandTail::HigherBid {
             new_bidder_guid: read_u64_le(r)?,
             new_bid: read_u32_le(r)?,
             new_min_outbid: read_u32_le(r)?,
