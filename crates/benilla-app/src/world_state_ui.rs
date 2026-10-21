@@ -41,13 +41,15 @@ fn load_world_state_ui(mut commands: Commands, assets: Option<Res<WorldAssets>>)
     }
 }
 
-/// The `Type == 1` gate: a joined channel whose `ChatChannels.dbc` flags carry both `ZONE_DEP` and
-/// `DEFENSE` (`0x49bd9b`, `0x49bda2`), which is row 22 alone. A custom channel resolves to no row.
+/// The `Type == 1` gate (`0x49bd50`): a slot with a number (`0x49bd72`) in state 0 (`0x49bd7c`)
+/// whose `+0x94` id names a `ChatChannels.dbc` row (`0x49bd83`-`0x49bd96`) with both `ZONE_DEP`
+/// and `DEFENSE` (`0x49bd9b`, `0x49bda2`), which is row 22 alone. A custom channel's id 0 names
+/// no row, whatever its name.
 fn defense_channel_joined(channels: &crate::ui_chat::ChannelState) -> bool {
     const REQUIRED: u32 = chan::ZONE_DEP | chan::DEFENSE;
     channels
-        .iter_names()
-        .filter_map(|name| channels.channels.row_for_name(name))
+        .confirmed_slots()
+        .filter_map(|(_, slot)| channels.channels.row(slot.id))
         .any(|row| row.flags & REQUIRED == REQUIRED)
 }
 
