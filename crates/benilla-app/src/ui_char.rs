@@ -400,12 +400,6 @@ fn skill_pair(store: &ObjectStore, skill_id: u32) -> (i32, i32) {
     (0, 0)
 }
 
-/// A swing time in ms, with 0 or absent read as not yet streamed: the vanilla 2000, never zero,
-/// as the reference divides damage by it.
-fn base_swing(streamed: Option<u32>) -> u32 {
-    streamed.filter(|&ms| ms != 0).unwrap_or(2000)
-}
-
 pub(crate) fn unit_combat_stats(store: &ObjectStore) -> UnitCombatStats {
     let f = &store.0;
 
@@ -448,17 +442,16 @@ pub(crate) fn unit_combat_stats(store: &ObjectStore) -> UnitCombatStats {
         ranged_bonus_pos: f.player_mod_damage_done_pos(0).unwrap_or(0),
         ranged_bonus_neg: f.player_mod_damage_done_neg(0).unwrap_or(0),
         ranged_percent: f.player_mod_damage_done_pct(0).unwrap_or(1.0),
-        // `0` counts as unstreamed: a created store reads an absent in-block field as `Some(0)`,
-        // so a plain `unwrap_or` would leave `damage / speed` infinite.
-        main_attack_time_ms: base_swing(f.unit_base_attack_time(0)),
-        offhand_attack_time_ms: base_swing(f.unit_base_attack_time(1)),
+        // As the fields stand, 0 when unsent (`0x518ea0`).
+        main_attack_time_ms: f.unit_base_attack_time(0).unwrap_or(0),
+        offhand_attack_time_ms: f.unit_base_attack_time(1).unwrap_or(0),
         attack_power: f.unit_attack_power().unwrap_or(0),
         attack_power_pos: i32::from(ap_pos),
         attack_power_neg: i32::from(ap_neg),
         ranged_attack_power: f.unit_ranged_attack_power().unwrap_or(0),
         ranged_attack_power_pos: i32::from(rap_pos),
         ranged_attack_power_neg: i32::from(rap_neg),
-        ranged_attack_time_ms: base_swing(f.unit_ranged_attack_time()),
+        ranged_attack_time_ms: f.unit_ranged_attack_time().unwrap_or(0),
         ranged_min_damage: f.unit_min_ranged_damage().unwrap_or(0.0),
         ranged_max_damage: f.unit_max_ranged_damage().unwrap_or(0.0),
         // The equipment and skill half is `combat_stats`'s; any other unit keeps these defaults.
