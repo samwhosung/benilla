@@ -43,6 +43,11 @@ pub(crate) struct WorldEnterSeats;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct UnitSnapshots;
 
+/// [`fire_unit_events`]' signals, `PLAYER_TARGET_CHANGED` and `PLAYER_COMBO_POINTS`: a feed whose
+/// state their handlers read runs `.before(UnitEvents)`.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct UnitEvents;
+
 /// One `UNIT_COMBAT` over a unit, the portrait hit indicator's feed. The emitter `0x494600` fires
 /// `(token, action, descriptor, amount, type)` once per token naming the unit, with no
 /// self-suppression and no CVar gate; `type` is the school on the melee and spell-damage paths, 0
@@ -156,7 +161,9 @@ impl Plugin for UiUnitPlugin {
                 // (`CanInspect`, `0x48a1b0`).
                 feed_unit_reach.after(crate::ui_aura::AuraEvents),
                 // After the action feed, whose usable refresh precedes these events.
-                fire_unit_events.after(crate::ui_action::CooldownEvents),
+                fire_unit_events
+                    .in_set(UnitEvents)
+                    .after(crate::ui_action::CooldownEvents),
                 // After the aura feed, whose guids it covers.
                 held::feed_chain_units.after(crate::ui_aura::AuraEvents),
                 // After every snapshot above is pushed, so a handler reads the new reaction.

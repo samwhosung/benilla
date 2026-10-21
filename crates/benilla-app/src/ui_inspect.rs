@@ -51,14 +51,17 @@ impl Plugin for InspectUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InspectTarget>()
             .init_resource::<InspectFeedState>()
-            // After the aura feed seats the held guids, and ahead of the field events, whose
-            // `UNIT_INVENTORY_CHANGED` handlers read these slots.
+            // After the aura feed seats the held guids, and ahead of the events whose handlers
+            // read these slots: the field events' `UNIT_INVENTORY_CHANGED`, and the unit events'
+            // `PLAYER_TARGET_CHANGED`, which re-shows the window on the new target
+            // (`Blizzard_InspectUI.lua:29-31`).
             .add_systems(
                 Update,
                 feed_inspect
                     .in_set(UiFeed)
                     .in_set(crate::ui_unit::field_events::FieldEventPushes)
-                    .after(crate::ui_aura::AuraEvents),
+                    .after(crate::ui_aura::AuraEvents)
+                    .before(crate::ui_unit::UnitEvents),
             );
     }
 }
