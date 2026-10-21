@@ -122,6 +122,19 @@ pub enum AuctionHighBidder {
     Name(String),
 }
 
+/// What a bid result or notice writes into a held row: the bid (`+0x40`), the step (`+0x2c`), the
+/// deadline (`+0x34`) and the bidder (`+0x38`), with what the getters read off the bidder, as the
+/// app resolves a row's ([`UiScript::patch_auction_row`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AuctionRowBid {
+    pub bid_amount: u32,
+    pub min_increment: u32,
+    pub deadline: u32,
+    pub bidder_rank: u8,
+    pub high_bidder: AuctionHighBidder,
+    pub named_bidder: u64,
+}
+
 /// One of the three lists: the batch the server sent, the pre-cap match count and its sort stack.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AuctionListState {
@@ -138,7 +151,8 @@ pub struct AuctionListState {
     /// keeps the VM's order.
     pub page: u32,
     /// The list's sort tail is still owed: its pending-lookups counter is not back at 0
-    /// (`0xb72644`, `0xb72648`, `0xb7264c`), so a removal from it signals nothing (`0x4ce035`).
+    /// (`0xb72644`, `0xb72648`, `0xb7264c`), so a removal or a bid patch signals nothing
+    /// (`0x4ce035`, `0x4cc5c3`, `0x4cd090`).
     pub pending: bool,
     /// The auctions a time-left read removed from this page ([`remove_auction`]), which a push of
     /// the same page leaves out. The VM's own: a push's value is not read.
@@ -428,21 +442,71 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().auction_name_asks)
     }
 
-    /// Which result `list`'s rows came from, as the VM holds them ([`AuctionListState::page`]).
-    pub fn auction_page(&self, list: usize) -> Option<u32> {
-        let model = self.model_ref();
-        Some(model.auction.as_ref()?.lists.get(list)?.page)
-    }
-
-    /// `0x4cdfe0` as a notice runs it (`0x4cc658`, `0x4cd173`, `0x4cd468`, `0x4cd550`): the
-    /// auction leaves each list `lists` names, browse, owner and bidder in that order, each list
-    /// that held it signalled as its copy finishes ([`remove_from`]).
-    pub fn remove_auction_from(&mut self, auction_id: u32, lists: [bool; 3]) {
+    /// `0x4cdfe0` as a result or notice runs it (`0x4cc658`, `0x4cd173`, `0x4cd468`,
+    /// `0x4cd550`): the auction leaves each list that holds it on the page `pages` names, browse,
+    /// owner and bidder in that order, each signalled as its copy finishes ([`remove_from`]).
+    pub fn remove_auction_from(&mut self, auction_id: u32, pages: [Option<u32>; 3]) {
         for list in [LIST, OWNER, BIDDER] {
-            if lists[list] {
-                super::tick::verb(&self.lua, |model| remove_from(model, list, auction_id));
+            if let Some(page) = pages[list] {
+                super::tick::verb(&self.lua, |model| {
+                    remove_from(model, list, Some(page), auction_id)
+                });
             }
         }
+    }
+
+    /// A bid result or notice's write into `list`'s row for the auction on `page`, then the
+    /// list's update unless it waits on an item record: browse `0x4cc5cb`, `0x4cc6fe` and
+    /// `0x4cd13e`, owner `0x4cd2fc`, bidder `0x4cc764` and `0x4cd099`, each after its pending
+    /// count's test. The update fires whether or not the row changed.
+    pub fn patch_auction_row(
+        &mut self,
+        list: usize,
+        page: u32,
+        auction_id: u32,
+        bid: AuctionRowBid,
+    ) {
+        super::tick::verb(&self.lua, |model| {
+            patch_row(model, list, page, auction_id, bid)
+        });
+    }
+
+    /// Whether `list` holds `page` with other rows or another total than `rows` and `total`,
+    /// leaving out what the VM removed itself: a name or a record that landed since the push,
+    /// which the list's update owes (`0x4cf290`, `0x4cf2b0`, `0x4cf2d0`).
+    pub fn auction_list_differs(
+        &self,
+        list: usize,
+        page: u32,
+        rows: &[AuctionItemRow],
+        total: u32,
+    ) -> bool {
+        let model = self.model_ref();
+        let Some(held) = model.auction.as_ref().map(|a| &a.lists[list]) else {
+            return false;
+        };
+        if held.page != page {
+            return false;
+        }
+        if held.total != total {
+            return true;
+        }
+        let mut pushed: Vec<&AuctionItemRow> = rows
+            .iter()
+            .filter(|r| !held.removed.contains(&r.auction_id))
+            .collect();
+        if pushed.len() != held.rows.len() {
+            return true;
+        }
+        for row in &held.rows {
+            match pushed.iter().position(|r| *r == row) {
+                Some(i) => {
+                    pushed.swap_remove(i);
+                }
+                None => return true,
+            }
+        }
+        false
     }
 
     /// Drain the header clicks: `(list index, sort key)`, in click order, which the app replays
@@ -606,22 +670,54 @@ fn time_left_band(deadline: u32, now: u32) -> (i64, bool) {
 /// on the owner list.
 fn remove_auction(lua: &Lua, auction_id: u32) {
     for list in [LIST, OWNER, BIDDER] {
-        super::tick::verb(lua, |model| remove_from(model, list, auction_id));
+        super::tick::verb(lua, |model| remove_from(model, list, None, auction_id));
     }
 }
 
 /// One list's copy of `0x4cdfe0`: the auction's row goes, the rows after it moving up and the
 /// total kept, and a list that held it signals unless its sort tail is owed (`0x4ce035`,
-/// `0x4ce095`, `0x4ce0f5`). The VM keeps the id, so a push of the same page leaves it out.
-fn remove_from(model: &mut Model, list: usize, auction_id: u32) {
+/// `0x4ce095`, `0x4ce0f5`). The VM keeps the id, so a push of the same page leaves it out. With a
+/// `page`, a list holding another page is left alone.
+fn remove_from(model: &mut Model, list: usize, page: Option<u32>, auction_id: u32) {
     let Some(l) = model.auction.as_mut().map(|a| &mut a.lists[list]) else {
         return;
     };
+    if page.is_some_and(|p| p != l.page) {
+        return;
+    }
     let Some(i) = l.rows.iter().position(|r| r.auction_id == auction_id) else {
         return;
     };
     l.rows.remove(i);
     l.removed.push(auction_id);
+    if l.pending {
+        return;
+    }
+    match list {
+        LIST => model.raise("AUCTION_ITEM_LIST_UPDATE", Vec::new()),
+        OWNER => model.raise("AUCTION_OWNED_LIST_UPDATE", Vec::new()),
+        _ => model.raise("AUCTION_BIDDER_LIST_UPDATE", Vec::new()),
+    }
+}
+
+/// One list's copy of a bid patch ([`UiScript::patch_auction_row`]): the row's bid, step,
+/// deadline and bidder written, then the list's update unless its pending count is not 0.
+fn patch_row(model: &mut Model, list: usize, page: u32, auction_id: u32, bid: AuctionRowBid) {
+    let Some(l) = model.auction.as_mut().map(|a| &mut a.lists[list]) else {
+        return;
+    };
+    if l.page != page {
+        return;
+    }
+    let Some(r) = l.rows.iter_mut().find(|r| r.auction_id == auction_id) else {
+        return;
+    };
+    r.bid_amount = bid.bid_amount;
+    r.min_increment = bid.min_increment;
+    r.deadline = bid.deadline;
+    r.bidder_rank = bid.bidder_rank;
+    r.high_bidder = bid.high_bidder;
+    r.named_bidder = bid.named_bidder;
     if l.pending {
         return;
     }

@@ -1,5 +1,6 @@
-//! The auction window's app side: [`net`] fills [`AuctionOpen`] from the wire, [`feed_auction`]
-//! pushes it into the VM and fires its events, the call host applies the verbs inside their calls
+//! The auction window's app side: [`net`] writes the wire into [`AuctionOpen`] and does in each
+//! handler what the reference's handler shows and signals, [`feed_auction`] pushes the pages into
+//! the VM and fires their events, the call host applies the verbs inside their calls
 //! ([`AuctionVerbs`]), and [`drain_auction`] follows the header clicks and the close verb.
 //!
 //! The hello reply opens the window, not the click (`0x4cd570` fires `AUCTION_HOUSE_SHOW` inside
@@ -18,8 +19,8 @@ use bevy::prelude::*;
 use benilla_protocol::messages::AuctionListEntry;
 use benilla_ui::auction_sort::{sort_column, AuctionSortStack};
 use benilla_ui::script::{
-    AuctionCategory, AuctionHighBidder, AuctionItemRow, AuctionListState, AuctionState,
-    AuctionSubCategory, UiScript, BIDDER, LIST, OWNER,
+    AuctionCategory, AuctionHighBidder, AuctionItemRow, AuctionListState, AuctionRowBid,
+    AuctionState, AuctionSubCategory, UiScript, BIDDER, LIST, OWNER,
 };
 
 use crate::entities::ItemDisplays;
@@ -132,8 +133,12 @@ pub(crate) struct AuctionOpen {
     /// The `Time::elapsed_secs_f64` before which a browse query is refused (`0xb72638`): the
     /// hello and the world-enter reset clear it, the close leaves it.
     pub(super) query_gate: Option<f64>,
-    /// Messages queued for [`feed_auction`]; [`Self::clear`] keeps them, since a sale notice can
-    /// land after a close.
+    /// What the handler now running did that the VM sees, in its order, which the handler applies
+    /// before it returns ([`HouseEffect`]).
+    pub(crate) effects: Vec<HouseEffect>,
+    /// The `_S` lines a handler could not fill, their item not cached, which [`feed_auction`]
+    /// shows as each record lands; [`Self::clear`] keeps them, since a sale notice can land after
+    /// a close.
     pub(crate) messages: Vec<AuctionMessage>,
     /// How many of `messages`, from the front, a feed has read: the rest came since, each with its
     /// notification's lookup with a callback (`0x4ccfa2`, `0x4cd41f`, `0x4cd51a`).
@@ -161,9 +166,6 @@ pub(crate) struct AuctionOpen {
     /// The amount the last `PlaceAuctionBid` sent (`0xb72658`, stored at `0x4cf91e`), which a
     /// placed bid's result writes into its browse row (`0x4cc56b`).
     pub(crate) last_bid: u32,
-    /// The auctions a result or a notice removed (`0x4cdfe0`), each with the page every list held
-    /// it on, for the feed to remove from the VM's lists while they hold that page.
-    removals: Vec<(u32, [Option<u32>; 3])>,
     /// The count [`AuctionListSlot::page`] is drawn from; never reset, so no two results share one.
     next_page: u32,
     /// The key stacks; neither [`Self::open`] nor [`Self::clear`] touches them.
@@ -188,6 +190,23 @@ pub(crate) struct RowPatch {
     pub(crate) floor_at: Option<u32>,
 }
 
+/// What a handler did that the VM sees, in the handler's order: the reference's handlers show their
+/// lines and signal each list as they go, so the VM's half of each step is done before the next.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum HouseEffect {
+    /// A line shown (`0x496720`).
+    Line(AuctionMessage),
+    /// `list`'s row for the auction took a bid ([`AuctionOpen::patch_row`]).
+    Edit { list: usize, auction_id: u32 },
+    /// The auction left the lists, each on the page it held it on ([`AuctionOpen::remove_auction`]).
+    Remove {
+        auction_id: u32,
+        pages: [Option<u32>; 3],
+    },
+    /// The placed bid's `CMSG_EMOTE` 3, sent after its row's update (`0x4cc5dd`-`0x4cc60c`).
+    Wave,
+}
+
 /// A message an auction handler shows (`0x496720`): a refusal on the red `UIErrorsFrame`, or one of
 /// the eight outcomes (`0x178`-`0x17f`, kind 0) in chat.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,6 +218,16 @@ pub(crate) struct AuctionMessage {
 }
 
 impl AuctionMessage {
+    /// The line as the VM's strings word it, its `%s` the item's name `fill`.
+    pub(crate) fn shown(&self, script: &UiScript, fill: Option<String>) -> Option<Shown> {
+        let get = |key: &str| script.lua().globals().get::<String>(key).ok();
+        let err = match fill {
+            Some(s) => UiError::s(self.key, s),
+            None => UiError::key(self.key),
+        };
+        ui_error_text(&err, &get).map(|text| Shown::keyed(self.key, text))
+    }
+
     pub(crate) fn chat(key: &'static str) -> Self {
         Self { key, item: None }
     }
@@ -258,10 +287,15 @@ impl AuctionOpen {
         slot.awaiting = Some(slot.entries.iter().map(|e| e.item_entry).collect());
     }
 
+    /// A line the handler shows, in its order ([`HouseEffect::Line`]).
+    pub(crate) fn line(&mut self, msg: AuctionMessage) {
+        self.effects.push(HouseEffect::Line(msg));
+    }
+
     /// `0x4cdfe0`: the auction leaves each list that holds it, the later rows moving up and the
-    /// total kept, signalling nothing here; the feed removes it from the VM's lists and signals
-    /// there ([`UiScript::remove_auction_from`]). It checks no session, so a closed window's lists
-    /// change too.
+    /// total kept; the handler removes it from the VM's lists that hold the same page, each
+    /// signalled there ([`UiScript::remove_auction_from`]). It checks no session, so a closed
+    /// window's lists change too.
     pub(crate) fn remove_auction(&mut self, auction_id: u32) {
         let mut pages = [None; 3];
         for (slot, page) in self.lists.iter_mut().zip(&mut pages) {
@@ -271,17 +305,19 @@ impl AuctionOpen {
             }
         }
         if pages.iter().any(Option::is_some) {
-            self.removals.push((auction_id, pages));
+            self.effects.push(HouseEffect::Remove { auction_id, pages });
         }
     }
 
-    /// Write a bid notice into `list`'s row for `auction_id`, if the list holds it; the feed's
-    /// diff signals the list.
+    /// Write a bid notice into `list`'s row for `auction_id`, if the list holds it, and owe the
+    /// VM's row the same with the list's update ([`HouseEffect::Edit`]); a list that does not
+    /// hold it signals nothing.
     pub(crate) fn patch_row(&mut self, list: usize, auction_id: u32, patch: &RowPatch) {
         let slot = &mut self.lists[list];
         let Some(e) = slot.entries.iter_mut().find(|e| e.auction_id == auction_id) else {
             return;
         };
+        self.effects.push(HouseEffect::Edit { list, auction_id });
         e.current_bid = patch.bid;
         if let Some(increment) = patch.increment {
             e.min_increment = increment;
@@ -296,6 +332,21 @@ impl AuctionOpen {
                 e.time_left_ms = floor.wrapping_sub(arrived);
             }
         }
+    }
+
+    /// The page `list` holds and what its row for `auction_id` shows of its bid, as the feed
+    /// resolves it ([`row_bid`]); `None` for a row the list lacks or a page no feed has read yet.
+    pub(crate) fn row_bid(
+        &self,
+        list: usize,
+        auction_id: u32,
+        self_guid: Option<u64>,
+        names: &NameCache,
+    ) -> Option<(u32, AuctionRowBid)> {
+        let slot = &self.lists[list];
+        let arrived = slot.arrived_ms?;
+        let entry = slot.entries.iter().find(|e| e.auction_id == auction_id)?;
+        Some((slot.page, row_bid(list, entry, arrived, self_guid, names)))
     }
 
     /// `0x4cde50`: the pair appended; on a full list the room doubles and the pair is written past
@@ -577,6 +628,7 @@ fn resolve_row(
     rolls: crate::items::RollCatalogs,
 ) -> AuctionItemRow {
     let template = items.template(entry.item_entry, 0, ask);
+    let bid = row_bid(list, entry, arrived_ms, self_guid, names);
     let roll = entry.random_property_id as u32;
     let name = template.map(|t| rolls.name(&t.name, roll));
     let quality = template.map(|t| t.quality);
@@ -604,23 +656,42 @@ fn resolve_row(
         quality,
         level,
         min_bid: entry.start_bid,
-        min_increment: entry.min_increment,
+        min_increment: bid.min_increment,
         buyout_price: entry.buyout,
-        bid_amount: entry.current_bid,
-        // The wire's milliseconds are unclamped (`AuctionHouseMgr.cpp:838`): one gone negative
-        // wraps the deadline into the past, as the reference's add does.
-        deadline: arrived_ms.wrapping_add(entry.time_left_ms),
-        bidder_rank: bidder_rank(entry.bidder_guid, self_guid),
+        bid_amount: bid.bid_amount,
+        deadline: bid.deadline,
+        bidder_rank: bid.bidder_rank,
         base_name: template.map(|t| t.name.clone()),
+        high_bidder: bid.high_bidder,
         // The names are read, never asked: `GetAuctionItemInfo` asks what it misses
         // ([`UiScript::take_auction_name_asks`]), and the seller sort reads the cache alone
         // (`0x4cdbda`).
-        high_bidder: high_bidder(list, entry, self_guid, names, Ask::Read),
         owner: names
             .resolve_player(entry.owner_guid, Ask::Read)
             .map(str::to_string),
         link,
         owner_guid: entry.owner_guid,
+        named_bidder: bid.named_bidder,
+    }
+}
+
+/// What a row of `list` shows of its bid, from the wire entry as the last result or patch left it:
+/// what a bid patch rewrites in the VM's row, so the handler's write and the feed's push agree.
+fn row_bid(
+    list: usize,
+    entry: &AuctionListEntry,
+    arrived_ms: u32,
+    self_guid: Option<u64>,
+    names: &NameCache,
+) -> AuctionRowBid {
+    AuctionRowBid {
+        bid_amount: entry.current_bid,
+        min_increment: entry.min_increment,
+        // The wire's milliseconds are unclamped (`AuctionHouseMgr.cpp:838`): one gone negative
+        // wraps the deadline into the past, as the reference's add does.
+        deadline: arrived_ms.wrapping_add(entry.time_left_ms),
+        bidder_rank: bidder_rank(entry.bidder_guid, self_guid),
+        high_bidder: high_bidder(list, entry, self_guid, names, Ask::Read),
         named_bidder: if owned_with_bid(list, entry, self_guid) {
             entry.bidder_guid
         } else {
@@ -717,8 +788,9 @@ fn feed_auction(
             script.set_auction_item_classes(classes_now);
         }
 
-        // A `_S` line whose item is not cached yet stays queued, as the reference defers it through
-        // `0x4cd190`; the `items.template` call below asks for it.
+        // A `_S` line whose item was not cached when its handler ran, shown once the record lands,
+        // as the reference defers it through `0x4cd190`; the `items.template` call below asks for
+        // it.
         {
             let mut deferred = Vec::new();
             let mut lines = Vec::new();
@@ -737,14 +809,7 @@ fn feed_auction(
                         }
                     },
                 };
-                let get = |key: &str| script.lua().globals().get::<String>(key).ok();
-                let err = match fill {
-                    Some(s) => UiError::s(msg.key, s),
-                    None => UiError::key(msg.key),
-                };
-                if let Some(text) = ui_error_text(&err, &get) {
-                    lines.push(Shown::keyed(msg.key, text));
-                }
+                lines.extend(msg.shown(script, fill));
             }
             auction.messages_asked = deferred.len();
             auction.messages = deferred;
@@ -755,25 +820,6 @@ fn feed_auction(
         // `0x4cf1c8`), whose answer the diff below signals.
         for guid in script.take_auction_name_asks() {
             let _ = names.resolve_player(guid, Ask::Event(&commands));
-        }
-
-        // What a result or notice removed (`0x4cdfe0`) leaves the VM's lists that still hold the
-        // page it left, each signalled as its copy finishes; what was pushed forgets it too, so
-        // the diff owes nothing more for it.
-        for (auction_id, pages) in std::mem::take(&mut auction.removals) {
-            let lists: [bool; 3] =
-                std::array::from_fn(|i| pages[i].is_some() && pages[i] == script.auction_page(i));
-            if !lists.contains(&true) {
-                continue;
-            }
-            script.remove_auction_from(auction_id, lists);
-            if let Some(pushed) = last.as_mut() {
-                for (list, held) in pushed.lists.iter_mut().zip(lists) {
-                    if held {
-                        list.rows.retain(|r| r.auction_id != auction_id);
-                    }
-                }
-            }
         }
 
         let self_guid = self_q.iter().next().map(|g| g.0);
@@ -839,13 +885,15 @@ fn feed_auction(
                 .as_ref()
                 .is_some_and(|items_of| items_of.iter().all(|&e| items.template_answered(e)))
         });
+        // Measured against the VM's rows, not the last push: the handlers wrote and signalled
+        // their own patches and removals there, so only what the VM still lacks is owed.
+        let changed = last.as_ref() != Some(&fresh);
         let renamed: [bool; 3] = std::array::from_fn(|i| {
-            !opened
+            let list = &fresh.lists[i];
+            changed
+                && !opened
                 && auction.lists[i].awaiting.is_none()
-                && last
-                    .as_ref()
-                    .is_some_and(|l| l.lists[i].page == fresh.lists[i].page)
-                && list_content(Some(&fresh), i) != list_content(last.as_ref(), i)
+                && script.auction_list_differs(i, list.page, &list.rows, list.total)
         });
         for (slot, tail) in auction.lists.iter_mut().zip(tails) {
             if tail {
@@ -888,11 +936,6 @@ fn feed_auction(
             *last_can_query = can_query;
         }
     })
-}
-
-/// A pushed list's rows and count: what a landed name or template changes.
-fn list_content(state: Option<&AuctionState>, list: usize) -> Option<(&[AuctionItemRow], u32)> {
-    state.map(|s| (s.lists[list].rows.as_slice(), s.lists[list].total))
 }
 
 /// The header clicks into the app's copy of the stacks, and the close verb into its core; every

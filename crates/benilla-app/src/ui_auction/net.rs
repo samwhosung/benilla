@@ -1,6 +1,7 @@
-//! The auction house's packet handlers: every `SMSG_AUCTION_*` becomes state on [`AuctionOpen`],
-//! which [`super::feed_auction`] turns into the window's events, and the requests a result sends
-//! go out here; nothing here touches the VM.
+//! The auction house's packet handlers: every `SMSG_AUCTION_*` is written into [`AuctionOpen`],
+//! and what the reference's handler shows and signals as it goes is done before the handler
+//! returns, in its order ([`settle`]): each line, each row a bid patches with its list's update,
+//! each removal, the requests and the wave. [`super::feed_auction`] pushes the pages.
 
 use benilla_protocol::messages::{
     auction_action, auction_error, AuctionBidderNotification, AuctionCommandTail, AuctionListEntry,
@@ -11,8 +12,13 @@ use benilla_ui::script::{BIDDER, LIST, OWNER};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use super::{AuctionMessage, AuctionOpen, RowPatch};
-use crate::net::{ClientCommand, NetCommands, NetHandlerApp};
+use super::{AuctionMessage, AuctionOpen, HouseEffect, RowPatch};
+use crate::items::Items;
+use crate::names::NameCache;
+use crate::net::{ClientCommand, Guid, NetCommands, NetHandlerApp, SelfPlayer};
+use crate::query_cache::Ask;
+use crate::script_calls::VmWith;
+use crate::ui_action::{show_messages, MessageSink};
 
 /// One handler per `SMSG_AUCTION_*` kind, plus the session-end listener.
 pub(super) fn register(app: &mut App) {
@@ -68,6 +74,100 @@ impl Wire<'_> {
     }
 }
 
+/// What a handler holds beside the VM: the house, its wire, and what a line and a patched row read.
+#[derive(SystemParam)]
+pub(super) struct House<'w, 's> {
+    auction: ResMut<'w, AuctionOpen>,
+    wire: HouseWire<'w>,
+    items: Option<Res<'w, Items>>,
+    names: Option<Res<'w, NameCache>>,
+    sink: MessageSink<'w>,
+    /// The player's guid as the feed reads it, so a patched row resolves as its push would.
+    self_q: Query<'w, 's, &'static Guid, With<SelfPlayer>>,
+}
+
+/// A handler's VM and its [`House`].
+type HouseVm<'w, 's> = VmWith<'w, 's, House<'static, 'static>>;
+
+/// Run one handler's body on the house, then do the VM's half of what it wrote ([`settle`]).
+fn handle(vm: &mut HouseVm, body: impl FnOnce(&mut AuctionOpen, Wire)) {
+    {
+        let mut h = vm.own();
+        let wire = h.wire.view();
+        body(&mut h.auction, wire);
+    }
+    settle(vm);
+}
+
+/// The VM's half of what a handler wrote, in its order ([`HouseEffect`]): a line shown now, or
+/// left for the feed while its item's record is out; a patched row written into the VM's copy of
+/// the page, then the list's update; a removal from the VM's lists; the wave. The Lua each update
+/// runs makes its calls with the host lent.
+fn settle(vm: &mut HouseVm) {
+    let effects = std::mem::take(&mut vm.own().auction.effects);
+    for effect in effects {
+        match effect {
+            HouseEffect::Line(msg) => show_line(vm, msg),
+            HouseEffect::Edit { list, auction_id } => {
+                let bid = {
+                    let h = vm.own();
+                    let self_guid = h.self_q.iter().next().map(|g| g.0);
+                    h.names
+                        .as_deref()
+                        .and_then(|names| h.auction.row_bid(list, auction_id, self_guid, names))
+                };
+                if let Some((page, bid)) = bid {
+                    vm.run(|script| {
+                        if let Some(script) = script {
+                            script.patch_auction_row(list, page, auction_id, bid);
+                        }
+                    });
+                }
+            }
+            HouseEffect::Remove { auction_id, pages } => vm.run(|script| {
+                if let Some(script) = script {
+                    script.remove_auction_from(auction_id, pages);
+                }
+            }),
+            HouseEffect::Wave => vm
+                .own()
+                .wire
+                .view()
+                .send(ClientCommand::Emote { emote: EMOTE_WAVE }),
+        }
+    }
+}
+
+/// A line shown now through the VM's strings, unless it names an item not cached: then the feed
+/// shows it once the record lands (`0x4cd190`), asking for it.
+fn show_line(vm: &mut HouseVm, msg: AuctionMessage) {
+    vm.turn(|script, mut h| {
+        let fill = match msg.item {
+            None => None,
+            Some(entry) => {
+                let name = h
+                    .items
+                    .as_deref()
+                    .and_then(|items| items.template(entry, 0, Ask::Read))
+                    .map(|t| t.name.clone());
+                match name {
+                    Some(name) => Some(name),
+                    None => {
+                        h.auction.messages.push(msg);
+                        return;
+                    }
+                }
+            }
+        };
+        let Some(script) = script else {
+            h.auction.messages.push(msg);
+            return;
+        };
+        let line = msg.shown(script, fill);
+        show_messages(script, &mut h.sink, "ui_auction", line);
+    });
+}
+
 /// The `MSG_AUCTION_HELLO` reply opens the window, as in the reference's hello handler `0x4cc420`.
 fn on_hello(In(ev): In<SessionEvent>, mut commands: Commands) {
     if let SessionEvent::AuctionHello {
@@ -81,7 +181,7 @@ fn on_hello(In(ev): In<SessionEvent>, mut commands: Commands) {
     }
 }
 
-fn on_command_result(In(ev): In<SessionEvent>, mut auction: ResMut<AuctionOpen>, wire: HouseWire) {
+fn on_command_result(In(ev): In<SessionEvent>, mut vm: HouseVm) {
     if let SessionEvent::AuctionCommandResult {
         auction_id,
         action,
@@ -89,7 +189,9 @@ fn on_command_result(In(ev): In<SessionEvent>, mut auction: ResMut<AuctionOpen>,
         tail,
     } = ev
     {
-        auction_command_result(auction_id, action, error, &tail, &mut auction, wire.view());
+        handle(&mut vm, |auction, wire| {
+            auction_command_result(auction_id, action, error, &tail, auction, wire);
+        });
     }
 }
 
@@ -123,34 +225,32 @@ fn on_bidder_list_result(In(ev): In<SessionEvent>, mut auction: ResMut<AuctionOp
     }
 }
 
-fn on_bidder_notification(
-    In(ev): In<SessionEvent>,
-    mut auction: ResMut<AuctionOpen>,
-    wire: HouseWire,
-) {
+fn on_bidder_notification(In(ev): In<SessionEvent>, mut vm: HouseVm) {
     if let SessionEvent::AuctionBidderNotification(n) = ev {
-        auction_bidder_notification(&n, &mut auction, wire.view());
+        handle(&mut vm, |auction, wire| {
+            auction_bidder_notification(&n, auction, wire);
+        });
     }
 }
 
-fn on_owner_notification(
-    In(ev): In<SessionEvent>,
-    mut auction: ResMut<AuctionOpen>,
-    wire: HouseWire,
-) {
+fn on_owner_notification(In(ev): In<SessionEvent>, mut vm: HouseVm) {
     if let SessionEvent::AuctionOwnerNotification(n) = ev {
-        auction_owner_notification(&n, &mut auction, wire.view());
+        handle(&mut vm, |auction, wire| {
+            auction_owner_notification(&n, auction, wire);
+        });
     }
 }
 
-fn on_removed_notification(In(ev): In<SessionEvent>, mut auction: ResMut<AuctionOpen>) {
+fn on_removed_notification(In(ev): In<SessionEvent>, mut vm: HouseVm) {
     if let SessionEvent::AuctionRemovedNotification {
         auction_id,
         item_entry,
         ..
     } = ev
     {
-        auction_removed_notification(auction_id, item_entry, &mut auction);
+        handle(&mut vm, |auction, _| {
+            auction_removed_notification(auction_id, item_entry, auction);
+        });
     }
 }
 
@@ -227,9 +327,7 @@ fn auction_command_result(
             // Started (`0x4cc4c7`): its line, the owner request armed and sent again at its
             // saved offset (`0x4cc4da`, `0x4cc4e0`).
             auction_action::STARTED => {
-                auction
-                    .messages
-                    .push(AuctionMessage::chat("ERR_AUCTION_STARTED"));
+                auction.line(AuctionMessage::chat("ERR_AUCTION_STARTED"));
                 auction.owner_armed = true;
                 if let Some(commands) = wire.commands {
                     let offset = auction.owner_offset;
@@ -238,15 +336,11 @@ fn auction_command_result(
             }
             // Cancelled (`0x4cc648`): its line and the auction removed (`0x4cc658`).
             auction_action::REMOVED => {
-                auction
-                    .messages
-                    .push(AuctionMessage::chat("ERR_AUCTION_REMOVED"));
+                auction.line(AuctionMessage::chat("ERR_AUCTION_REMOVED"));
                 auction.remove_auction(auction_id);
             }
             auction_action::BID_PLACED => {
-                auction
-                    .messages
-                    .push(AuctionMessage::chat("ERR_AUCTION_BID_PLACED"));
+                auction.line(AuctionMessage::chat("ERR_AUCTION_BID_PLACED"));
                 bid_placed(auction_id, tail, auction, wire);
             }
             // Any other action shows nothing (`0x4cc642`).
@@ -274,9 +368,7 @@ fn auction_command_result(
                 auction.patch_row(LIST, auction_id, &patch);
                 auction.patch_row(BIDDER, auction_id, &patch);
             }
-            auction
-                .messages
-                .push(AuctionMessage::error("ERR_AUCTION_HIGHER_BID"));
+            auction.line(AuctionMessage::error("ERR_AUCTION_HIGHER_BID"));
         }
         _ => {
             let inventory_result = match tail {
@@ -284,7 +376,7 @@ fn auction_command_result(
                 _ => SHORT_INVENTORY_RESULT,
             };
             if let Some(key) = command_error_key(error, inventory_result) {
-                auction.messages.push(AuctionMessage::error(key));
+                auction.line(AuctionMessage::error(key));
             }
         }
     }
@@ -314,7 +406,7 @@ fn bid_placed(auction_id: u32, tail: &AuctionCommandTail, auction: &mut AuctionO
         };
         auction.patch_row(LIST, auction_id, &patch);
     }
-    wire.send(ClientCommand::Emote { emote: EMOTE_WAVE });
+    auction.effects.push(HouseEffect::Wave);
 }
 
 /// `EMOTE_ONESHOT_WAVE`, the placed bid's emote (`0x4cc5fc push 3`).
@@ -350,7 +442,7 @@ fn auction_bidder_notification(
     wire: Wire,
 ) {
     let won = notice.bid_or_zero == 0;
-    auction.messages.push(AuctionMessage::chat_item(
+    auction.line(AuctionMessage::chat_item(
         if won {
             "ERR_AUCTION_WON_S"
         } else {
@@ -402,7 +494,7 @@ fn auction_owner_notification(
         return;
     }
     // A zero guid closes it, sold with a bid (`0x4cd43e`), and removes it (`0x4cd468`).
-    auction.messages.push(AuctionMessage::chat_item(
+    auction.line(AuctionMessage::chat_item(
         if notice.bid != 0 {
             "ERR_AUCTION_SOLD_S"
         } else {
@@ -416,7 +508,7 @@ fn auction_owner_notification(
 /// `SMSG_AUCTION_REMOVED_NOTIFICATION` (`0x4cd480`): the seller cancelled an auction we bid on;
 /// it always prints `ERR_AUCTION_REMOVED_S` (`0x4cd540`) and removes the auction (`0x4cd550`).
 fn auction_removed_notification(auction_id: u32, item_entry: u32, auction: &mut AuctionOpen) {
-    auction.messages.push(AuctionMessage::chat_item(
+    auction.line(AuctionMessage::chat_item(
         "ERR_AUCTION_REMOVED_S",
         item_entry,
     ));
@@ -488,11 +580,15 @@ mod tests {
         }
     }
 
+    /// The lines the handler showed, in order.
     fn keys(auction: &AuctionOpen) -> Vec<(&'static str, MsgKind, Option<u32>)> {
         auction
-            .messages
+            .effects
             .iter()
-            .map(|m| (m.key, benilla_ui::messages::kind_of(m.key), m.item))
+            .filter_map(|e| match e {
+                HouseEffect::Line(m) => Some((m.key, benilla_ui::messages::kind_of(m.key), m.item)),
+                _ => None,
+            })
             .collect()
     }
 
@@ -563,7 +659,7 @@ mod tests {
         let mut a = AuctionOpen::default();
         auction_owner_notification(&owner(0x6C, 500), &mut a, rig.wire());
         assert!(
-            a.messages.is_empty(),
+            keys(&a).is_empty(),
             "a live bid raises no message; `[0x4cd25f, 0x4cd3bd)` holds no display call"
         );
 
@@ -729,7 +825,7 @@ mod tests {
                 &mut a,
                 rig.wire(),
             );
-            a.messages.iter().map(|m| m.key).collect::<Vec<_>>()
+            keys(&a).into_iter().map(|k| k.0).collect::<Vec<_>>()
         };
         let e = || AuctionCommandTail::Empty;
         assert_eq!(shown(3, e()), ["ERR_NOT_ENOUGH_MONEY"]);
@@ -750,7 +846,7 @@ mod tests {
         let shown = |tail: AuctionCommandTail| {
             let mut a = AuctionOpen::default();
             auction_command_result(0, auction_action::STARTED, 1, &tail, &mut a, rig.wire());
-            a.messages.iter().map(|m| m.key).collect::<Vec<_>>()
+            keys(&a).into_iter().map(|k| k.0).collect::<Vec<_>>()
         };
         let inv = |result| AuctionCommandTail::Inventory { result };
         assert_eq!(shown(inv(23)), ["ERR_ITEM_NOT_FOUND"]);
@@ -764,10 +860,10 @@ mod tests {
         assert_eq!(shown(AuctionCommandTail::Empty), ["ERR_INTERNAL_BAG_ERROR"]);
     }
 
-    /// A placed bid (`0x4cc4f3`): its outbid pair goes (`0x4cc517`), the bidder request is armed
-    /// and sent at its saved offset (`0x4cc522`, `0x4cc528`), the browse row takes the bid last
-    /// sent, the packet's increment, the player and a deadline at least 90 s out
-    /// (`0x4cc564`-`0x4cc5c0`), and `CMSG_EMOTE` 3 goes out (`0x4cc5dd`-`0x4cc60c`).
+    /// A placed bid (`0x4cc4f3`): its line (`0x4cc507`), its outbid pair gone (`0x4cc517`), the
+    /// bidder request armed and sent at its saved offset (`0x4cc522`, `0x4cc528`), the browse row
+    /// taking the bid last sent, the packet's increment, the player and a deadline at least 90 s
+    /// out (`0x4cc564`-`0x4cc5c0`), and then `CMSG_EMOTE` 3 (`0x4cc5dd`-`0x4cc60c`).
     #[test]
     fn a_placed_bid_patches_the_browse_row_and_waves() {
         let rig = Rig::new();
@@ -803,14 +899,22 @@ mod tests {
         assert!(!a.bidder_armed, "the request went out");
         assert_eq!(
             text(rig.sent()),
-            text([
-                ClientCommand::AuctionListBidderItems {
-                    auctioneer: AUCTIONEER,
-                    list_from: 50,
-                    auction_ids: vec![9],
+            text([ClientCommand::AuctionListBidderItems {
+                auctioneer: AUCTIONEER,
+                list_from: 50,
+                auction_ids: vec![9],
+            }])
+        );
+        assert_eq!(
+            a.effects,
+            [
+                HouseEffect::Line(AuctionMessage::chat("ERR_AUCTION_BID_PLACED")),
+                HouseEffect::Edit {
+                    list: LIST,
+                    auction_id: 7
                 },
-                ClientCommand::Emote { emote: 3 },
-            ])
+                HouseEffect::Wave,
+            ]
         );
 
         // A deadline past the floor stays; with the window closed nothing is patched, and the
@@ -822,20 +926,23 @@ mod tests {
         let _ = rig.sent();
         a.clear();
         a.last_bid = 700;
+        a.effects.clear();
         auction_command_result(8, auction_action::BID_PLACED, 0, &tail, &mut a, rig.wire());
         assert_eq!(row(&a, LIST, 8).unwrap().current_bid, 0);
         assert_eq!(
             text(rig.sent()),
-            text([
-                ClientCommand::AuctionListBidderItems {
-                    auctioneer: 0,
-                    list_from: 0,
-                    auction_ids: vec![],
-                },
-                ClientCommand::Emote { emote: 3 },
-            ]),
+            text([ClientCommand::AuctionListBidderItems {
+                auctioneer: 0,
+                list_from: 0,
+                auction_ids: vec![],
+            }]),
             "the sender tests no auctioneer (`0x4cd726`)"
         );
+        assert_eq!(a.effects.last(), Some(&HouseEffect::Wave));
+        assert!(!a
+            .effects
+            .iter()
+            .any(|e| matches!(e, HouseEffect::Edit { .. })));
     }
 
     /// A started auction re-arms the owner request and sends it at its saved offset
@@ -858,9 +965,10 @@ mod tests {
         assert!(!a.owner_armed);
     }
 
-    /// The cancel reply, a win, a sale or expiry and the removed notice each remove the auction
-    /// from every list that holds it (`0x4cc658`, `0x4cd173`, `0x4cd468`, `0x4cd550`), with its
-    /// page per list for the feed, and send nothing; a closed window's lists change too.
+    /// The cancel reply, a win, a sale or expiry and the removed notice each show their line and
+    /// then remove the auction from every list that holds it (`0x4cc658`, `0x4cd173`, `0x4cd468`,
+    /// `0x4cd550`), with its page per list for the VM's copies, and send nothing; a closed
+    /// window's lists change too.
     #[test]
     fn the_closing_notices_remove_the_auction_and_ask_nothing() {
         let rig = Rig::new();
@@ -876,7 +984,14 @@ mod tests {
                 assert!(row(&a, list, 8).is_some());
                 assert_eq!(a.lists[list].total, 2, "the total stays");
             }
-            assert_eq!(a.removals, [(7, pages)]);
+            assert!(matches!(a.effects[0], HouseEffect::Line(_)));
+            assert_eq!(
+                a.effects[1..],
+                [HouseEffect::Remove {
+                    auction_id: 7,
+                    pages
+                }]
+            );
         };
         let e = AuctionCommandTail::Empty;
         remove(&|a| auction_command_result(7, auction_action::REMOVED, 0, &e, a, rig.wire()));

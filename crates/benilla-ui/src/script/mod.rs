@@ -217,8 +217,9 @@ pub use addon_enable::{AddonStateFiles, EnableHash, EnableStore};
 pub use addon_message::{AddonDistribution, AddonSend};
 pub use auction::{
     cancel_fee, tick_ms as auction_tick_ms, AuctionBid, AuctionCall, AuctionCategory,
-    AuctionHighBidder, AuctionItemRow, AuctionListState, AuctionQuery, AuctionStartRequest,
-    AuctionState, AuctionSubCategory, BidVerdict, BIDDER, LIST, OWNER, SORT_KEYS,
+    AuctionHighBidder, AuctionItemRow, AuctionListState, AuctionQuery, AuctionRowBid,
+    AuctionStartRequest, AuctionState, AuctionSubCategory, BidVerdict, BIDDER, LIST, OWNER,
+    SORT_KEYS,
 };
 pub use aura::{AuraState, TrackingState, UnitAuraList};
 pub use backdrop::{Backdrop, Insets};
