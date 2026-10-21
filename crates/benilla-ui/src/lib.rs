@@ -5,6 +5,7 @@
 // the same API through `benilla_ui::mlua`.
 pub extern crate benilla_mlua as mlua;
 
+pub mod auction_sort;
 pub mod bindings_xml;
 pub mod civil;
 pub mod color;
