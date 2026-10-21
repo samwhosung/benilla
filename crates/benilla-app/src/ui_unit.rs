@@ -1124,6 +1124,10 @@ pub(crate) fn snapshot(
         guild_id: store.0.player_guild_id(),
         // `PLAYER_BYTES_3` byte 1; a creature has no PLAYER block and reads 0.
         drunk: store.0.player_drunk_byte().unwrap_or(0),
+        // What the stat getters read of any unit but the active player (`0x515940`, then the
+        // object's fields), and the SUMMONEDBY their summon gate compares (`0x519272`).
+        combat: crate::ui_char::unit_combat_stats(store),
+        summoned_by: store.0.unit_summoned_by().unwrap_or(0),
         tooltip: benilla_ui::script::UnitTooltipFacts {
             // The builder's raw read (`0x52a89f`), not `UnitHealth`'s feign-death zero. The facts
             // that read beyond the descriptor are [`tooltip_facts`]'.
