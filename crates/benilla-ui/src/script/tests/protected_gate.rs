@@ -413,7 +413,7 @@ const VERBS: &[Verb] = &[
     gone("TogglePetAutocast(2)"),
     gone("ToggleSpellAutocast(1, BOOKTYPE_PET)"),
     gone(r#"StartDuel("Bob")"#),
-    gone(r#"StartDuelUnit("target")"#),
+    gone(r#"StartDuelUnit("party1")"#),
     gone("Stuck()"),
     gone("ReloadUI()"),
     gone("TargetNearestEnemy()"),
@@ -463,7 +463,12 @@ fn verbs_world(security: AddonSecurity) -> UiScript {
             ..Default::default()
         }],
     });
-    // `StartDuel("Bob")` needs a name the resolver finds: the active player, and Bob in the party.
+    // `StartDuel("Bob")` needs a name the resolver finds: the active player, and Bob in the party,
+    // whom `StartDuelUnit("party1")` names by the token resolver's party slot.
+    s.set_unit_guids(&crate::script::UnitGuids {
+        party: [0xB0B, 0, 0, 0],
+        ..Default::default()
+    });
     s.set_unit(
         "player",
         Some(crate::script::UnitState {

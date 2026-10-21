@@ -4,7 +4,7 @@
 //! (`0x4d4c40`) and `StartDuelUnit` (`0x4d4c90`) send no duel opcode but cast the duel spell at
 //! the guid they resolve (`0x4d4810`).
 
-use mlua::Lua;
+use mlua::{Lua, Value};
 
 use super::by_name::Filter;
 use super::protected::{self, Tag};
@@ -18,12 +18,10 @@ pub enum DuelRequest {
     /// `CancelDuel()`: `CMSG_DUEL_CANCELLED`, which the server reads by duel state as a decline,
     /// a cancel or a forfeit.
     Cancel,
-    /// `StartDuel(name)` after the resolver (`0x4d4c6d`, players only, no filter): the duel spell
-    /// at the guid it returned, nothing on a miss.
+    /// The duel spell at this guid (`0x4d4810`), never zero: `StartDuel(name)` after the by-name
+    /// resolver (`0x4d4c6d`, players only, no filter), or `StartDuelUnit(unit)`, the unit popup's
+    /// Duel row, after the token resolver (`0x4d4caf`), any unit it names.
     StartByGuid(u64),
-    /// `StartDuelUnit(unit)`, the unit popup's Duel row. The app casts only at a player; the
-    /// reference resolves the token (`0x515970`) with no player gate of its own.
-    StartByUnit(String),
 }
 
 impl super::UiScript {
@@ -75,25 +73,43 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // StartDuel(name) (`0x4d4c40`): a non-string returns silently (`0x4d4c4f`). The challenge
+    // is a plain cast (`CastDuelSpell 0x4d4810` → `0x6e5a90`), behind the gate's tag 2
+    // (`0x6e4bc1`), which a name that resolves to nobody never reaches (`0x4d4c76`).
     g.set(
         "StartDuel",
-        lua.create_function(|lua, name: String| {
-            // The challenge is a plain cast (`CastDuelSpell 0x4d4810` → `0x6e5a90`), behind the
-            // gate's tag 2 (`0x6e4bc1`).
-            if protected::gate(lua, Tag::CAST) {
+        lua.create_function(|lua, name: Value| {
+            let Some(name) = super::binding_abi::optional_string(lua, &name) else {
+                return Ok(());
+            };
+            let guid = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model.closest_player(&name, Filter::AcceptAll)
+            };
+            if let Some(guid) = guid.filter(|_| protected::gate(lua, Tag::CAST)) {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                start_duel_by_name(&mut model, &name);
+                model.duel_requests.push(DuelRequest::StartByGuid(guid));
             }
             Ok(())
         })?,
     )?;
 
+    // StartDuelUnit(unit) (`0x4d4c90`): a non-string raises its usage (`0x4d4cc5`), and the token
+    // goes through `0x515970` (`0x4d4caf`), which raises for an unknown one. Only a zero guid
+    // returns (`0x4d4cb8`): any other, ourselves or a unit the object manager does not hold
+    // included, goes to the duel cast (`0x4d4cbc`), behind the gate as `StartDuel`'s.
     g.set(
         "StartDuelUnit",
-        lua.create_function(|lua, unit: String| {
-            if protected::gate(lua, Tag::CAST) {
+        lua.create_function(|lua, unit: Value| {
+            let token =
+                super::binding_abi::string_arg(lua, unit, r#"Usage: StartDuelUnit("unit")"#)?;
+            let guid = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model.unit_guids.guid_of(&token)?.unwrap_or(0)
+            };
+            if guid != 0 && protected::gate(lua, Tag::CAST) {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.duel_requests.push(DuelRequest::StartByUnit(unit));
+                model.duel_requests.push(DuelRequest::StartByGuid(guid));
             }
             Ok(())
         })?,

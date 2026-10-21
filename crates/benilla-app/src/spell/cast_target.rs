@@ -360,6 +360,14 @@ impl CastTargeting<'_, '_> {
         self.context_on(Some(entity), Some(guid))
     }
 
+    /// [`Self::context_at`] for an explicit guid (`0x6e5a90`'s, as `CastDuelSpell 0x4d4810` passes
+    /// it), on the guid's object, or on the guid alone when the object manager holds none: the
+    /// range test passes it (`0x6e4482`) and the bind binds nothing (`0x6e5b5e`).
+    pub(crate) fn context_at_guid(&self, guid: u64) -> CastContext<'_> {
+        let target = self.index.as_deref().and_then(|i| i.0.get(&guid).copied());
+        self.context_on(target, Some(guid))
+    }
+
     /// The context for an attempt whose caster is a unit other than the active player, the pet
     /// bar's client-targeted and possessed presses (`0x4bd385`: `0x6e4b60(unit, spell, 0, guid)`),
     /// at `guid`, the press's target. The attempt reads that caster wherever it reads one: the dead
