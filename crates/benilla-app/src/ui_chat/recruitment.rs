@@ -15,12 +15,8 @@ use benilla_ui::script::{RecruitmentPlan, RecruitmentRun, UiScript};
 use crate::area::AreaTableRes;
 use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfPlayer};
 
-use super::channels::{city_word, ZoneChannelWalk};
+use super::channels::{city_word, ZoneChannelWalk, AREA_FLAG_CAPITAL};
 use super::edit::ChannelState;
-
-/// vmangos `AREA_FLAG_CAPITAL`, the cascade's capital test (`0x49eb2e`); the walk tests `0x8`,
-/// which marks the same six rows in 1.12 data.
-const AREA_FLAG_CAPITAL: u32 = 0x100;
 
 /// The cascade's own state: whether a run is owed, and the guild id its watcher last saw.
 #[derive(Resource, Default)]
@@ -111,7 +107,10 @@ fn plan(
         .rows()
         .iter()
         .find(|r| r.is_guild_recruitment())
-        .and_then(|row| Some((row, row.joinable_name("", city_word(&areas.0)?))));
+        .and_then(|row| {
+            let city = city_word(&areas.0).filter(|w| !w.is_empty())?;
+            Some((row, row.joinable_name(city)))
+        });
     let Some((row, name)) = target else {
         return RecruitmentPlan::Unnamed;
     };
@@ -135,11 +134,12 @@ pub(super) fn guild_recruitment_cascade(
     walk: Res<ZoneChannelWalk>,
     areas: Option<Res<AreaTableRes>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    commands: Res<NetCommands>,
+    // One parameter for clippy's argument limit: the wire and the refusal line.
+    (commands, errors): (Res<NetCommands>, Res<crate::ui_action::UiErrorKeys>),
 ) {
     hosted_vm.run(|script| {
         let Some(script) = script else { return };
-        apply_runs(script, &mut channels, &commands);
+        apply_runs(script, &mut channels, (&commands, &errors));
         // A `SetGuildRecruitmentMode(1)` whose cascade could not act leaves the run owed.
         if script.take_guild_recruitment_cascade() {
             state.request();
@@ -160,13 +160,17 @@ pub(super) fn guild_recruitment_cascade(
             return;
         }
         state.pending = false;
-        apply_runs(script, &mut channels, &commands);
+        apply_runs(script, &mut channels, (&commands, &errors));
     })
 }
 
-/// The app's halves of the cascade's runs: a join's slot (`0x49b980`, by name) and its send, which
-/// goes out always; a leave's packet and mask bit.
-fn apply_runs(script: &mut UiScript, channels: &mut ChannelState, commands: &NetCommands) {
+/// The app's halves of the cascade's runs: a join's slot (`0x49b980` from the join body,
+/// `0x49edf3`) and its send, which goes out always; a leave's packet and mask bit.
+fn apply_runs(
+    script: &mut UiScript,
+    channels: &mut ChannelState,
+    (commands, errors): (&NetCommands, &crate::ui_action::UiErrorKeys),
+) {
     for run in script.take_guild_recruitment_runs() {
         match run {
             RecruitmentRun::Leave(name) => {
@@ -175,15 +179,9 @@ fn apply_runs(script: &mut UiScript, channels: &mut ChannelState, commands: &Net
             }
             RecruitmentRun::Join { name, id } => {
                 info!("chat: guild recruitment cascade — unguilded in a capital, joining {name:?}");
-                match channels.claim_slot(&name, id) {
-                    Some(n) => {
-                        debug!("chat: {name:?} registered as slot {n}");
-                        channels.mirror_into(script);
-                    }
-                    None => warn!(
-                        "chat: no free slot for {name:?} — all {} are taken",
-                        super::edit::MAX_CHANNELS
-                    ),
+                if let Some(n) = channels.claim_or_refuse(&name, id, errors) {
+                    debug!("chat: {name:?} registered as slot {n}");
+                    channels.mirror_into(script);
                 }
                 let _ = commands.0.send(ClientCommand::JoinChannel {
                     name,

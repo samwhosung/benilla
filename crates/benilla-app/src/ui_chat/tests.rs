@@ -1027,6 +1027,7 @@ fn a_leave_notice_keeps_its_number_because_the_record_dies_after_the_line() {
     let mut windows = super::frames::ChatWindows::default();
     let mut channels = super::edit::ChannelState::default();
     channels.claim_slot("World", 0);
+    channels.confirm_slot("World");
     channels.claim_slot("General - Elwynn Forest", 1);
 
     let mut e = ChatEvent::text_only(K::ChannelNotice, String::new());

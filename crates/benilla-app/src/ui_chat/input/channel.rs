@@ -29,19 +29,24 @@ pub(in crate::ui_chat) fn apply(
     script: &mut UiScript,
     commands: &NetCommands,
     chat_log: &ChatLog,
-    _errors: &crate::ui_action::UiErrorKeys,
+    errors: &crate::ui_action::UiErrorKeys,
 ) {
     use ChannelCommand as C;
     let cmd = match cmd {
-        C::Join { name, password, .. } => {
+        C::Join { name, password, id } => {
             manual_join_or_leave(channels, script, &name);
+            // The join body takes the slot before it builds the packet (`0x49edf3`), and sends
+            // whether or not one was free (`0x49ee02`).
+            if channels.claim_or_refuse(&name, id, errors).is_some() {
+                channels.mirror_into(script);
+            }
             ClientCommand::JoinChannel { name, password }
         }
         C::Leave { name } => {
             // `LeaveChannelByName` (`0x4a0000` → `0x49ee70`): a number names a confirmed slot or
             // the call does nothing. Only this path clears the zone mask and the custom re-join
             // list.
-            let Some(name) = channels.leave_target(&name) else {
+            let Some(name) = channels.channel_key(&name) else {
                 return;
             };
             manual_join_or_leave(channels, script, &name);
@@ -49,39 +54,88 @@ pub(in crate::ui_chat) fn apply(
             channels.note_custom_channel_left(&name);
             ClientCommand::LeaveChannel { name }
         }
-        C::List { name } => ClientCommand::ChannelList { name },
-        // `ListChannels()`: the joined roster, numbered as `/N` addresses it.
         C::ListAll => {
-            let roster: Vec<String> = channels
-                .joined
-                .iter()
-                .enumerate()
-                .filter_map(|(i, c)| c.as_ref().map(|c| format!("{}. {}", i + 1, c.name)))
-                .collect();
-            let text = if roster.is_empty() {
-                "You are not in any channels.".to_string()
-            } else {
-                format!("Channels: {}", roster.join(", "))
-            };
-            chat_log.push_event(super::super::event::ChatEvent::text_only(
-                super::super::event::ChatEventKind::System,
-                text,
-            ));
+            chat_log.push_event(list_channels(channels));
             return;
         }
-        C::DisplayOwner { name } => ClientCommand::ChannelOwner { name },
-        C::SetOwner { name, player } => ClientCommand::ChannelSetOwner { name, player },
-        C::SetPassword { name, password } => ClientCommand::ChannelPassword { name, password },
-        C::Ban { name, player } => ClientCommand::ChannelBan { name, player },
-        C::Invite { name, player } => ClientCommand::ChannelInvite { name, player },
-        C::Kick { name, player } => ClientCommand::ChannelKick { name, player },
-        C::Moderator { name, player } => ClientCommand::ChannelModerator { name, player },
-        C::Unmoderator { name, player } => ClientCommand::ChannelUnmoderator { name, player },
-        C::Mute { name, player } => ClientCommand::ChannelMute { name, player },
-        C::Unmute { name, player } => ClientCommand::ChannelUnmute { name, player },
-        C::Unban { name, player } => ClientCommand::ChannelUnban { name, player },
-        C::Moderate { name } => ClientCommand::ChannelModerate { name },
-        C::ToggleAnnouncements { name } => ClientCommand::ChannelAnnouncements { name },
+        admin => {
+            // The admin verbs pass argument 1 through `ParseChannelKey` (`0x4a014f`, `0x4a03df`,
+            // `0x4a04f5`); a number naming no confirmed slot ends the call before the packet
+            // (`0x4a015a`, `0x4a03ea`, `0x4a0500`).
+            let Some(cmd) = admin_command(admin, |key| channels.channel_key(key)) else {
+                return;
+            };
+            cmd
+        }
     };
     let _ = commands.0.send(cmd);
+}
+
+/// `ListChannels` (`0x4a01c0`): `"[%d. %s] "` (`0x844c94`) for each slot in state 0
+/// (`0x4a01f2`-`0x4a01fb`), as one `CHAT_MSG_CHANNEL_LIST` line (type `0x11`) with no channel,
+/// empty or not (`0x4a02a1`-`0x4a02c0`); ten entries of at most `0x89` bytes fit its 2048-byte
+/// line.
+fn list_channels(channels: &ChannelState) -> super::super::event::ChatEvent {
+    let text: String = channels
+        .confirmed_slots()
+        .map(|(n, slot)| format!("[{n}. {}] ", slot.name))
+        .collect();
+    super::super::event::ChatEvent::text_only(super::super::event::ChatEventKind::ChannelList, text)
+}
+
+/// The packet of an admin verb, its channel argument resolved by `key`; `None` when it resolves
+/// to nothing.
+fn admin_command(
+    cmd: ChannelCommand,
+    key: impl Fn(&str) -> Option<String>,
+) -> Option<ClientCommand> {
+    use ChannelCommand as C;
+    use ClientCommand as W;
+    Some(match cmd {
+        C::List { name } => W::ChannelList { name: key(&name)? },
+        C::DisplayOwner { name } => W::ChannelOwner { name: key(&name)? },
+        C::Moderate { name } => W::ChannelModerate { name: key(&name)? },
+        C::ToggleAnnouncements { name } => W::ChannelAnnouncements { name: key(&name)? },
+        C::SetOwner { name, player } => W::ChannelSetOwner {
+            name: key(&name)?,
+            player,
+        },
+        C::SetPassword { name, password } => W::ChannelPassword {
+            name: key(&name)?,
+            password,
+        },
+        C::Ban { name, player } => W::ChannelBan {
+            name: key(&name)?,
+            player,
+        },
+        C::Invite { name, player } => W::ChannelInvite {
+            name: key(&name)?,
+            player,
+        },
+        C::Kick { name, player } => W::ChannelKick {
+            name: key(&name)?,
+            player,
+        },
+        C::Moderator { name, player } => W::ChannelModerator {
+            name: key(&name)?,
+            player,
+        },
+        C::Unmoderator { name, player } => W::ChannelUnmoderator {
+            name: key(&name)?,
+            player,
+        },
+        C::Mute { name, player } => W::ChannelMute {
+            name: key(&name)?,
+            player,
+        },
+        C::Unmute { name, player } => W::ChannelUnmute {
+            name: key(&name)?,
+            player,
+        },
+        C::Unban { name, player } => W::ChannelUnban {
+            name: key(&name)?,
+            player,
+        },
+        C::Join { .. } | C::Leave { .. } | C::ListAll => return None,
+    })
 }

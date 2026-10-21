@@ -88,8 +88,8 @@ pub(crate) struct ChannelState {
     /// Slot `i` is channel number `i + 1`; `None` is a freed slot, kept so the numbers above it
     /// do not move. Never longer than [`MAX_CHANNELS`].
     pub joined: Vec<Option<ChannelSlot>>,
-    /// `ChatChannels.dbc`: it composes the auto-join names and resolves a chat event's arg7 from a
-    /// name, as the server does. Empty without an install.
+    /// `ChatChannels.dbc`: it composes the auto-join names and names a slot's row by its id.
+    /// Empty without an install.
     pub channels: benilla_formats::ChatChannelsCatalog,
     /// The `ZONECHANNELS` mask, the reference's `ds:0xb6e5e0`, bit `1 << (ChannelID - 1)`: seeded
     /// from the chat cache (`0x498d83`) or the `INITIAL` rows (`0x4997fc`), set by a confirmed join
@@ -102,10 +102,9 @@ pub(crate) struct ChannelState {
     /// nothing from `None`.
     pub zone_mask: Option<u32>,
     /// The custom channels to re-join at the next login, the chat cache's `CHANNELS` list. The
-    /// reference writes it from its live slots at teardown (`0x499b90`-`0x499bb1`); ours are
-    /// cleared before the flush, so the list is kept here: seated from the file, grown by a
-    /// confirmed custom join, shrunk by an explicit leave. A channel whose re-join is refused, or
-    /// that kicks the player, stays listed until a `/leave`, where the reference's file drops it.
+    /// reference writes it from its confirmed id-0 slots at teardown (`0x499b90`-`0x499bb1`); ours
+    /// are cleared before the flush, so the list is kept here: seated from the file, grown by a
+    /// confirmed custom join, shrunk by an explicit leave and by the free of its slot.
     pub custom: Vec<String>,
     /// The chat cache's `CHANNELS` names still to join, the reference's deferred-join list
     /// (`0xb4fdd8` count, `0xb4fddc` names): the walk's third pass registers and joins each with
@@ -142,12 +141,6 @@ pub(crate) enum SlotState {
     Suspended,
 }
 
-impl SlotState {
-    fn live(self) -> bool {
-        matches!(self, SlotState::Confirmed | SlotState::Pending)
-    }
-}
-
 impl ChannelSlot {
     /// A slot the allocator fills: `name`, row `id`, state 1 (`0x49b9e0`-`0x49ba0f`).
     pub(crate) fn pending(name: &str, id: u32) -> Self {
@@ -178,38 +171,15 @@ pub(crate) fn zone_bit(id: u32) -> u32 {
 }
 
 impl ChannelState {
-    /// A confirmed join sets the channel's mask bit (`0x49bbaf`, in the `YOU_JOINED` arm).
-    pub(crate) fn note_zone_channel_joined(&mut self, name: &str) {
-        let bit = zone_bit(self.channels.zone_channel_id(name));
-        match &mut self.zone_mask {
-            Some(mask) => *mask |= bit,
-            // No join precedes the cache loader, so this is a broken ordering.
-            None if bit != 0 => warn!(
-                "chat: {name:?} joined before the zone mask was seated — bit {bit:#x} dropped"
-            ),
-            None => {}
-        }
-    }
-
-    /// An explicit leave clears the bit (`0x49f10a`/`0x49f11a` in leave-by-name `0x49ee70`), found
-    /// as the reference finds it (`0x49f0f4`): by the slot carrying the wire name.
+    /// An explicit leave clears the bit (`0x49f10a`/`0x49f11a` in leave-by-name `0x49ee70`) of the
+    /// slot carrying the wire name, in any state (`0x49f0f4`), by that slot's id.
     pub(crate) fn note_zone_channel_left(&mut self, name: &str) {
-        if self.number_of(name).is_none() {
+        let Some(id) = self.slot(name).map(|s| s.id) else {
             return;
-        }
+        };
         if let Some(mask) = &mut self.zone_mask {
-            *mask &= !zone_bit(self.channels.zone_channel_id(name));
+            *mask &= !zone_bit(id);
         }
-    }
-
-    /// A confirmed join of a channel with no `ChatChannels.dbc` id enters [`Self::custom`].
-    pub(crate) fn note_custom_channel_joined(&mut self, name: &str) {
-        if self.channels.zone_channel_id(name) != 0
-            || self.custom.iter().any(|c| c.eq_ignore_ascii_case(name))
-        {
-            return;
-        }
-        self.custom.push(name.to_string());
     }
 
     /// An explicit leave drops a custom channel, case-insensitively as the server's names are.
@@ -222,10 +192,11 @@ impl ChannelState {
         self.zone_mask.is_some_and(|mask| mask & zone_bit(id) != 0)
     }
 
-    /// The numeric leg of leave-by-name (`0x49ee70`): a nonzero `SStrToInt` names a confirmed slot
-    /// (`0x49be50`), and a hole, an out-of-range number or a suspended slot make the whole call a
-    /// no-op (`None`). Anything else is already the wire name.
-    pub(crate) fn leave_target(&self, arg: &str) -> Option<String> {
+    /// `ParseChannelKey` (`0x49e880`), the channel argument of leave-by-name and the admin verbs: a
+    /// nonzero `SStrToInt` names a confirmed slot (`0x49be50`), and a hole, an out-of-range number
+    /// or a slot in another state make the whole call a no-op (`None`). Anything else is already
+    /// the wire name.
+    pub(crate) fn channel_key(&self, arg: &str) -> Option<String> {
         match s_str_to_int(arg) {
             0 => Some(arg.to_string()),
             n => self.confirmed_slot_name(n).map(str::to_string),
@@ -240,7 +211,7 @@ impl ChannelState {
             .and_then(|n| n.checked_sub(1))
             .and_then(|i| self.joined.get(i))
             .and_then(|slot| slot.as_ref())
-            .filter(|slot| slot.state.live())
+            .filter(|slot| slot.state == SlotState::Confirmed)
             .map(|slot| slot.name.as_str())
     }
 
@@ -270,25 +241,49 @@ impl ChannelState {
         Some(n)
     }
 
-    /// The confirming `YOU_JOINED` writes state 0 unconditionally (`0x49bb20`); separate from
-    /// [`Self::claim_slot`], as a renamed slot is already numbered.
-    pub(crate) fn confirm_slot(&mut self, name: &str) {
-        if let Some(n) = self.number_of(name) {
-            if let Some(slot) = self.joined[n as usize - 1].as_mut() {
-                slot.state = SlotState::Confirmed;
-            }
+    /// The `YOU_JOINED` arm's confirm (`0x49c0c2` → `0x49bb20`): the first slot of the name not in
+    /// state 0 (`0x49bb43`-`0x49bb6c`) takes state 0 (`0x49bb8b`) and its id's mask bit
+    /// (`0x49bbaf`); a name with no such slot changes nothing, so no notice creates a slot. A
+    /// confirmed custom slot enters [`Self::custom`], as the teardown writes the confirmed id-0
+    /// slots (`0x499b90`-`0x499baa`). Returns the slot's number.
+    pub(crate) fn confirm_slot(&mut self, name: &str) -> Option<u32> {
+        let i = self.joined.iter().position(|c| {
+            c.as_ref().is_some_and(|c| {
+                c.state != SlotState::Confirmed && c.name.eq_ignore_ascii_case(name)
+            })
+        })?;
+        let slot = self.joined[i].as_mut()?;
+        slot.state = SlotState::Confirmed;
+        let (id, name) = (slot.id, slot.name.clone());
+        let bit = zone_bit(id);
+        match &mut self.zone_mask {
+            Some(mask) => *mask |= bit,
+            // No join precedes the cache loader, so this is a broken ordering.
+            None if bit != 0 => warn!(
+                "chat: {name:?} joined before the zone mask was seated — bit {bit:#x} dropped"
+            ),
+            None => {}
         }
+        if id == 0 && !self.custom.iter().any(|c| c.eq_ignore_ascii_case(&name)) {
+            self.custom.push(name);
+        }
+        Some(i as u32 + 1)
+    }
+
+    /// The slot holding `name` (case-insensitive) in any state, the lookup `0x49be90`.
+    fn slot(&self, name: &str) -> Option<&ChannelSlot> {
+        self.number_of(name)
+            .and_then(|n| self.joined[n as usize - 1].as_ref())
     }
 
     /// The state of the slot holding `name`; `None` is the reference's no-record leg.
     pub(crate) fn slot_state(&self, name: &str) -> Option<SlotState> {
-        self.number_of(name)
-            .and_then(|n| self.joined[n as usize - 1].as_ref())
-            .map(|s| s.state)
+        self.slot(name).map(|s| s.state)
     }
 
     /// The slots for the VM's mirror, holes kept so `/N` addresses the right channel, each with
-    /// whether it is in state 0, which `SendChatMessage`'s lookup `0x49be50` requires.
+    /// its id and whether it is in state 0, which the by-number lookups `0x49be50` and `0x49bf30`
+    /// and the lists require.
     pub(crate) fn names(&self) -> Vec<Option<benilla_ui::script::JoinedChannel>> {
         self.joined
             .iter()
@@ -296,7 +291,7 @@ impl ChannelState {
                 s.as_ref().map(|s| benilla_ui::script::JoinedChannel {
                     name: s.name.clone(),
                     id: s.id,
-                    confirmed: s.state.live(),
+                    confirmed: s.state == SlotState::Confirmed,
                 })
             })
             .collect()
@@ -314,6 +309,16 @@ impl ChannelState {
         self.joined.iter().flatten().map(|s| s.name.as_str())
     }
 
+    /// The slots in state 0 with their numbers, the set the lists (`0x4a01f2`, `0x4a0302`) and
+    /// the defense broadcasts (`0x49dd5a`, `0x49deaa`) walk.
+    pub(crate) fn confirmed_slots(&self) -> impl Iterator<Item = (u32, &ChannelSlot)> {
+        self.joined
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| Some((i as u32 + 1, s.as_ref()?)))
+            .filter(|(_, s)| s.state == SlotState::Confirmed)
+    }
+
     /// The 1-based number of `name` (case-insensitive), if joined.
     pub(crate) fn number_of(&self, name: &str) -> Option<u32> {
         self.joined
@@ -325,17 +330,13 @@ impl ChannelState {
             .map(|i| i as u32 + 1)
     }
 
-    /// Give `name` the first free slot, else a new one under [`MAX_CHANNELS`] (`0x49b980`); a name
-    /// already held keeps its number. With all ten taken, the reference prints
-    /// `ERR_TOO_MANY_CHAT_CHANNELS` (`0x199`, `0x49b9c5` via `0x496720`) and still sends the join;
-    /// here the callers only log it.
+    /// The allocator `0x49b980`, run when a join is sent: a name already held keeps its slot as it
+    /// is (`0x49b991`); otherwise the first free slot (`0x49b9b0`), else a new one under
+    /// [`MAX_CHANNELS`], takes the name and row `id` in state 1 (`0x49ba0f`, `0x49bb05`). With
+    /// all ten taken it makes none (`0x49b9c0`), and the caller shows
+    /// `ERR_TOO_MANY_CHAT_CHANNELS` (`0x199`, `0x49b9c5`) and sends the join anyway.
     pub(crate) fn claim_slot(&mut self, name: &str, id: u32) -> Option<u32> {
         if let Some(n) = self.number_of(name) {
-            // A confirmed join on a held slot clears its suspension (`0x49bb20` writes state 0
-            // unconditionally): the other half of the state-3 bypass.
-            if let Some(slot) = self.joined[n as usize - 1].as_mut() {
-                slot.state = SlotState::Confirmed;
-            }
             return Some(n);
         }
         if let Some(i) = self.joined.iter().position(Option::is_none) {
@@ -349,18 +350,39 @@ impl ChannelState {
         Some(self.joined.len() as u32)
     }
 
-    /// Free the slot holding `name` in place (`0x49bbd0`), so no other channel renumbers.
+    /// [`Self::claim_slot`] with its refusal shown: `DisplayError(0x199)` (`0x49b9c5`), a chat
+    /// row (`CHAT_MSG_SYSTEM`).
+    pub(crate) fn claim_or_refuse(
+        &mut self,
+        name: &str,
+        id: u32,
+        errors: &crate::ui_action::UiErrorKeys,
+    ) -> Option<u32> {
+        let n = self.claim_slot(name, id);
+        if n.is_none() {
+            debug!("chat: no free slot for {name:?} — all {MAX_CHANNELS} are taken");
+            errors.push(crate::ui_action::UiError::key("ERR_TOO_MANY_CHAT_CHANNELS"));
+        }
+        n
+    }
+
+    /// Free the slot holding `name` in place (`0x49bbd0`), so no other channel renumbers. A freed
+    /// custom slot leaves [`Self::custom`]: the teardown writes only live slots (`0x499b90`).
     pub(crate) fn free_slot(&mut self, name: &str) -> Option<u32> {
         let n = self.number_of(name)?;
-        self.joined[n as usize - 1] = None;
+        if let Some(slot) = self.joined[n as usize - 1].take() {
+            if slot.id == 0 {
+                self.note_custom_channel_left(&slot.name);
+            }
+        }
         Some(n)
     }
 
     /// Stamp an event's channel args from our slot, as the reference reads them off one record
-    /// (`+0x00` number, `+0x04` name, `+0x94` ChannelID, `+0x98` split index): held, arg4 becomes
-    /// `"N. Name"` (`0x8445c8`, the hit leg `0x49aa48`), arg8 the number, arg9 the name with its
-    /// zone tail and arg7 the ChannelID; not held, nothing is stamped (`0x49aa86`, `0x49b12f`).
-    /// arg7 comes from the name, as vmangos resolves it (`DBCStores.cpp:531`).
+    /// (`0x49b113`-`0x49b12a`: `+0x00` number, `+0x04` name, `+0x94` ChannelID, `+0x98` split
+    /// index): held, arg4 becomes `"N. Name"` (`0x8445c8`, the hit leg `0x49aa48`), arg8 the
+    /// number, arg9 the name with its zone tail and arg7 the slot's id; not held, nothing is
+    /// stamped (`0x49aa86`, `0x49b12f`).
     pub(crate) fn stamp_channel(&self, event: &mut super::event::ChatEvent) {
         // A miss stamps nothing: the four args are one record.
         let Some(n) = self
@@ -370,7 +392,7 @@ impl ChannelState {
             return;
         };
         event.channel_base = event.channel.clone();
-        event.zone_channel_id = self.channels.zone_channel_id(&event.channel_base);
+        event.zone_channel_id = self.joined[n as usize - 1].as_ref().map_or(0, |s| s.id);
         event.channel_number = n;
         event.channel = format!("{n}. {}", event.channel_base);
     }

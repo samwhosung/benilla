@@ -21,17 +21,22 @@ use super::recruitment::GuildRecruitmentCascade;
 /// vmangos names it `AREA_FLAG_SLAVE_CAPITAL`, "Allow trade channel" (`DBCEnums.h:58`).
 const AREA_FLAG_TRADE_CHANNEL: u32 = 0x08;
 
+/// `AreaTable.dbc` flag `0x100`, a capital, on the six capitals: a city-named row's `%s` is the
+/// city word only in an area carrying it (`0x49a2df`, `0x49a4c1`, `0x49eccc`), and the guild
+/// recruitment cascade joins only there (`0x49eb2e`). vmangos names it `AREA_FLAG_CAPITAL`.
+pub(super) const AREA_FLAG_CAPITAL: u32 = 0x100;
+
 /// `AreaTable.dbc` flag `0x200`: the one row (id 3459, "City"), cached at load (`0xb4e4f0`,
 /// written at `0x4985fd`), whose localized name the city-named channels take.
 const AREA_FLAG_CITY_NAME_ROW: u32 = 0x200;
 
-/// The city word, as the client's load-time scan finds it; `None` skips the city-named rows.
+/// The city word, as the client's load-time scan finds it; `None` when no row carries `0x200`,
+/// where a city-named row takes the zone's name (`0x49a2eb`).
 pub(crate) fn city_word(areas: &benilla_formats::AreaTableCatalog) -> Option<&str> {
     areas
         .rows()
         .find(|r| r.flags & AREA_FLAG_CITY_NAME_ROW != 0)
         .map(|r| r.name.as_str())
-        .filter(|n| !n.is_empty())
 }
 
 /// The walk's own state; the joined list is not copied here, as the reference's pass 1 walks the
@@ -49,6 +54,12 @@ pub(crate) struct ZoneChannelWalk {
 }
 
 impl ZoneChannelWalk {
+    /// Walk again at the next settled frame, whatever the zone: the cache loader's call
+    /// (`0x499a22`), which runs the deferred joins it just seated.
+    pub(super) fn rewalk(&mut self) {
+        self.at = None;
+    }
+
     /// Forget the session: the next world entry re-joins from nothing.
     fn clear_session(&mut self) {
         self.at = None;
@@ -140,25 +151,26 @@ pub(super) fn load_chat_channels(
     }
 }
 
-/// The name `row` composes to in `zone_name`; `None` when there is nothing to substitute. A
-/// city-named row takes the city word in every zone here; the reference takes it only in an area
-/// with flag `0x100` and the zone name elsewhere (`0x49a2dc`).
+/// The name `row` composes to in `zone_name`, an area with `area_flags`: the pattern with the
+/// city word for a city-named row (`0x20`) in a capital (`0x100`) when a city row exists, else
+/// with the zone's name (`0x49a2d0`-`0x49a2f6`, `0x49a4af`-`0x49a4d8`, `0x49ecb6`-`0x49ece0`).
+/// `None` when that word is empty, where the join and leave bodies send nothing for any row
+/// (`0x49ece3`-`0x49ecea`, `0x49efca`-`0x49efd5`) and the walk does not run (`0x49a235`).
 ///
-/// Deviation: with a blank city word the reference composes `"Trade - "` (its capital arm checks
-/// the row pointer, not the string, `0x49a2d0`-`0x49a2f6`); we decline, because a wrong channel
-/// name is joined silently and for good.
+/// Deviation: in a capital with a blank city word the walk composes `"Trade - "` (it tests the
+/// row pointer, not the string, `0x49a2e4`-`0x49a2ed`); we decline, because a wrong channel name
+/// is joined silently and for good.
 fn compose(
     row: &benilla_formats::ChatChannelRow,
     zone_name: &str,
+    area_flags: u32,
     city_word: Option<&str>,
 ) -> Option<String> {
-    if row.is_zone_dependent() && zone_name.is_empty() {
-        return None;
-    }
-    if row.takes_city_name() && city_word.is_none() {
-        return None;
-    }
-    Some(row.joinable_name(zone_name, city_word.unwrap_or_default()))
+    let word = match city_word {
+        Some(city) if row.takes_city_name() && area_flags & AREA_FLAG_CAPITAL != 0 => city,
+        _ => zone_name,
+    };
+    (!word.is_empty()).then(|| row.joinable_name(word))
 }
 
 /// The names the walk registers on a character with no slots, in table order: the reference
@@ -169,18 +181,22 @@ pub(crate) fn tracked_channels(
     catalog: &ChatChannelsCatalog,
     zone_mask: u32,
     zone_name: &str,
+    area_flags: u32,
     city_word: Option<&str>,
 ) -> Vec<String> {
+    if zone_name.is_empty() {
+        return Vec::new(); // the walk's own bail (`0x49a235`)
+    }
     catalog
         .rows()
         .iter()
         .filter(|r| zone_mask & super::edit::zone_bit(r.id) != 0)
-        .filter_map(|r| compose(r, zone_name, city_word))
+        .filter_map(|r| compose(r, zone_name, area_flags, city_word))
         .collect()
 }
 
-/// [`tracked_channels`] with the city gate applied: the names the walk joins. `in_city` gates the
-/// city-only rows (`0x10`); `city_word` fills a city-named row's (`0x20`) `%s`.
+/// [`tracked_channels`] with the city gate applied: the names the walk joins. A city-only row
+/// (`0x10`) is joined only in an area with `0x8` (`0x49a512`-`0x49a51f`).
 #[cfg(test)]
 pub(crate) fn wanted_channels(
     catalog: &ChatChannelsCatalog,
@@ -189,19 +205,17 @@ pub(crate) fn wanted_channels(
     area_flags: u32,
     city_word: Option<&str>,
 ) -> Vec<String> {
+    if zone_name.is_empty() {
+        return Vec::new(); // the walk's own bail (`0x49a235`)
+    }
     let in_city = area_flags & AREA_FLAG_TRADE_CHANNEL != 0;
     catalog
         .rows()
         .iter()
         .filter(|r| zone_mask & super::edit::zone_bit(r.id) != 0)
         .filter(|r| in_city || !r.is_city_only())
-        .filter_map(|r| compose(r, zone_name, city_word))
+        .filter_map(|r| compose(r, zone_name, area_flags, city_word))
         .collect()
-}
-
-/// A slot the scaffold still treats as joined: confirmed or pending.
-fn live(state: SlotState) -> bool {
-    matches!(state, SlotState::Confirmed | SlotState::Pending)
 }
 
 /// One step of a walk, in wire order.
@@ -209,28 +223,30 @@ fn live(state: SlotState) -> bool {
 pub(crate) enum WalkStep {
     /// `CMSG_LEAVE_CHANNEL` of the old name (`0x49a367`), from a confirmed slot only (`0x49a35e`).
     Leave(String),
-    /// `CMSG_JOIN_CHANNEL` (`0x49a3e1` in pass 1, `0x49a56e` in pass 2).
+    /// `CMSG_JOIN_CHANNEL` (`0x49a3e1` in pass 1, `0x49a536` in pass 2, `0x49a5e2` in pass 3).
     Join(String),
     /// `0x49bc50`: renamed in place at send time ([`ChannelState::rename_slot`]).
     Rename { old: String, new: String },
-    /// `0x49b980`: a slot claimed for an untracked row, before the city gate, with the row's
-    /// ChannelID (`0x49a505`-`0x49a50d`).
+    /// `0x49b980`: a slot claimed with its ChannelID, before the city gate (`0x49a50d`), or with
+    /// id 0 for a deferred join (`0x49a5da`).
     Register { name: String, id: u32 },
     /// `0x49bcf0`: state 3, the row stopped applying; the record and its number survive.
     Suspend(String),
-    /// The state-3 bypass with the name unchanged: `0x49bc50` writes `(old == 3) ? 1 : 2`, so the
-    /// slot confirms with a plain `YOU_JOINED`.
-    Confirm(String),
 }
 
-/// The walk as a plan: `ZoneChannelRefresh 0x49a210`'s two passes, for a player in `zone_name`.
-/// Pass 1 (`0x49a284`) composes each held slot, in slot order, for this zone whatever the mask
-/// says. A moved name leaves if confirmed (`0x49a35e`), then the city gate (`0x49a3b8`) suspends
-/// it or renames and re-joins it; a suspended slot the gate admits re-joins (the state-3 bypass,
-/// `0x49a31c`). A row that stopped applying under an unchanged name, or no longer composes, leaves
-/// and suspends here, where the reference skips any other unchanged name (`0x49a337`): its
-/// city-named rows move to the zone name outside a capital ([`compose`]). Pass 2 (`0x49a468`)
-/// registers the unslotted rows whose mask bit is set (`0x49a494`), in DBC order, before the gate.
+/// The walk as a plan: `ZoneChannelRefresh 0x49a210`'s three passes, for a player in `zone_name`,
+/// an area with `area_flags`; nothing at all with no zone text (`0x49a235`, `0x49a23d`).
+///
+/// - Pass 1 (`0x49a284`) takes each slot with a number and a ChannelID naming a row
+///   (`0x49a295`-`0x49a2ca`), in slot order, and composes its name for this zone whatever the mask
+///   says. An unchanged name is left alone unless the slot is suspended (`0x49a31c`, `0x49a337`).
+///   Otherwise a confirmed slot leaves (`0x49a35e`), then a city-only row (`0x10`) in an area
+///   without `0x8` suspends (`0x49a3b8`-`0x49a3cb`, a no-op on a suspended slot) and any other is
+///   renamed and re-joined (`0x49a3dc`-`0x49a410`).
+/// - Pass 2 (`0x49a468`) takes each row whose mask bit is set (`0x49a494`) and that no slot
+///   carries, by id (`0x49bef0`) or by composed name (`0x49be90`), in DBC order: it registers the
+///   slot (`0x49a50d`), then suspends it or joins by the same city gate (`0x49a512`-`0x49a577`).
+/// - Pass 3 (`0x49a5b4`) registers and joins each deferred name with id 0 (`0x49a5da`, `0x49a5e2`).
 pub(crate) fn plan_walk(
     channels: &ChannelState,
     zone_name: &str,
@@ -238,66 +254,53 @@ pub(crate) fn plan_walk(
     city_word: Option<&str>,
 ) -> Vec<WalkStep> {
     use WalkStep as W;
+    if zone_name.is_empty() {
+        return Vec::new();
+    }
     let in_city = area_flags & AREA_FLAG_TRADE_CHANNEL != 0;
     let catalog = &channels.channels;
     let eligible = |row: &benilla_formats::ChatChannelRow| in_city || !row.is_city_only();
     let mut steps = Vec::new();
-    let mut tracked_rows: Vec<u32> = Vec::new();
 
     // Pass 1.
     for slot in channels.joined.iter().flatten() {
-        let Some(row) = catalog.row_for_name(&slot.name) else {
+        let Some(row) = catalog.row(slot.id) else {
             continue; // a custom channel: not the walk's
         };
-        tracked_rows.push(row.id);
         let old = slot.name.as_str();
-        match compose(row, zone_name, city_word) {
-            Some(new) if new.eq_ignore_ascii_case(old) => {
-                if slot.state == SlotState::Suspended {
-                    if eligible(row) {
-                        steps.push(W::Confirm(old.to_string()));
-                        steps.push(W::Join(old.to_string()));
-                    }
-                } else if !eligible(row) {
-                    if live(slot.state) {
-                        steps.push(W::Leave(old.to_string()));
-                    }
-                    steps.push(W::Suspend(old.to_string()));
-                }
-            }
-            Some(new) => {
-                if live(slot.state) {
-                    steps.push(W::Leave(old.to_string()));
-                }
-                if eligible(row) {
-                    steps.push(W::Rename {
-                        old: old.to_string(),
-                        new: new.clone(),
-                    });
-                    steps.push(W::Join(new));
-                } else {
-                    steps.push(W::Suspend(old.to_string()));
-                }
-            }
-            None => {
-                if live(slot.state) {
-                    steps.push(W::Leave(old.to_string()));
-                }
-                if slot.state != SlotState::Suspended {
-                    steps.push(W::Suspend(old.to_string()));
-                }
-            }
+        let Some(new) = compose(row, zone_name, area_flags, city_word) else {
+            continue; // the deviation in `compose`: no name to join
+        };
+        if slot.state != SlotState::Suspended && new.eq_ignore_ascii_case(old) {
+            continue;
+        }
+        if slot.state == SlotState::Confirmed {
+            steps.push(W::Leave(old.to_string()));
+        }
+        if eligible(row) {
+            steps.push(W::Rename {
+                old: old.to_string(),
+                new: new.clone(),
+            });
+            steps.push(W::Join(new));
+        } else if slot.state != SlotState::Suspended {
+            steps.push(W::Suspend(old.to_string()));
         }
     }
 
     // Pass 2.
     for row in catalog.rows() {
-        if !channels.zone_row_wanted(row.id) || tracked_rows.contains(&row.id) {
+        if !channels.zone_row_wanted(row.id)
+            || channels.joined.iter().flatten().any(|s| s.id == row.id)
+        {
             continue;
         }
-        let Some(name) = compose(row, zone_name, city_word) else {
+        let Some(name) = compose(row, zone_name, area_flags, city_word) else {
             continue;
         };
+        if channels.number_of(&name).is_some() {
+            continue;
+        }
         steps.push(W::Register {
             name: name.clone(),
             id: row.id,
@@ -308,12 +311,22 @@ pub(crate) fn plan_walk(
             steps.push(W::Suspend(name));
         }
     }
+
+    // Pass 3.
+    for name in &channels.deferred_joins {
+        steps.push(W::Register {
+            name: name.clone(),
+            id: 0,
+        });
+        steps.push(W::Join(name.clone()));
+    }
     steps
 }
 
 /// One walk for a player in `zone_name`: the plan, applied, then every slot it renamed,
-/// registered, suspended or confirmed pushed into the VM's mirror, so `GetChannelName(n)` and a
-/// `SendChatMessage` to a number read the new slots from this frame on.
+/// registered or suspended pushed into the VM's mirror, so `GetChannelName(n)` and a
+/// `SendChatMessage` to a number read the new slots from this frame on. The deferred joins are
+/// spent (`0x49a692`-`0x49a69e`).
 pub(super) fn walk_zone(
     channels: &mut ChannelState,
     zone_name: &str,
@@ -323,18 +336,22 @@ pub(super) fn walk_zone(
     script: Option<&mut benilla_ui::script::UiScript>,
 ) {
     let steps = plan_walk(channels, zone_name, area_flags, city_word);
+    if !zone_name.is_empty() {
+        channels.deferred_joins.clear();
+    }
     apply_walk(&steps, channels, commands, errors);
     if let (false, Some(script)) = (steps.is_empty(), script) {
         channels.mirror_into(script);
     }
 }
 
-/// Apply a plan in order.
+/// Apply a plan in order. A registration with all ten slots taken shows its error and the join
+/// still goes out (`0x49a50d`, `0x49a5da` → `0x49b9c5`).
 fn apply_walk(
     steps: &[WalkStep],
     channels: &mut ChannelState,
     commands: &NetCommands,
-    _errors: &crate::ui_action::UiErrorKeys,
+    errors: &crate::ui_action::UiErrorKeys,
 ) {
     for step in steps {
         match step {
@@ -356,19 +373,16 @@ fn apply_walk(
                     debug!("chat: zone channel slot {n} renamed {old:?} → {new:?}");
                 }
             }
-            WalkStep::Register { name, id } => match channels.claim_slot(name, *id) {
-                Some(n) => debug!("chat: zone channel {name:?} registered as slot {n}"),
-                None => warn!(
-                    "chat: no free slot for zone channel {name:?} — all {} are taken",
-                    super::edit::MAX_CHANNELS
-                ),
-            },
+            WalkStep::Register { name, id } => {
+                if let Some(n) = channels.claim_or_refuse(name, *id, errors) {
+                    debug!("chat: channel {name:?} registered as slot {n}");
+                }
+            }
             WalkStep::Suspend(name) => {
                 if let Some(n) = channels.suspend_slot(name) {
                     debug!("chat: zone channel slot {n} ({name:?}) suspended — not eligible here");
                 }
             }
-            WalkStep::Confirm(name) => channels.confirm_slot(name),
         }
     }
 }
@@ -494,8 +508,9 @@ pub(crate) fn seed_zone_channel_catalog(
 }
 
 /// Every `ChatChannels.dbc` row as the VM needs it: the id, the Shortcut the verbs match a typed
-/// name against (`0x4a10b2`), the name composed here (`None` is the verbs' nil leg), and whether
-/// `EnumerateServerChannels 0x4a1790` lists it (a city-only row, `flags & 0x10`, only in a city).
+/// name against (`0x4a10b2`), the name the join body composes here ([`compose`]; `None` is the
+/// verbs' nil leg), and whether `EnumerateServerChannels 0x4a1790` lists it (a city-only row,
+/// `flags & 0x10`, only in a city).
 pub(crate) fn zone_channel_catalog(
     catalog: &ChatChannelsCatalog,
     zone_name: &str,
@@ -509,7 +524,7 @@ pub(crate) fn zone_channel_catalog(
         .map(|r| benilla_ui::script::ZoneChannelRow {
             id: r.id,
             shortcut: r.shortcut.clone(),
-            resolved: compose(r, zone_name, city_word),
+            resolved: compose(r, zone_name, area_flags, city_word),
             listed: !r.is_city_only() || in_city,
         })
         .collect()
@@ -675,7 +690,7 @@ mod tests {
     #[test]
     fn a_missing_city_word_skips_the_trade_channel_rather_than_half_naming_it() {
         assert_eq!(
-            wanted_channels(&catalog(), SEED, "Stormwind City", CAPITAL, None),
+            wanted_channels(&catalog(), SEED, "Stormwind City", CAPITAL, Some("")),
             vec!["General - Stormwind City", "LocalDefense - Stormwind City"]
         );
     }
@@ -708,10 +723,10 @@ mod tests {
                 },
                 W::Join(s("General - Elwynn Forest")),
                 W::Register {
-                    name: s("Trade - City"),
+                    name: s("Trade - Elwynn Forest"),
                     id: 2
                 },
-                W::Suspend(s("Trade - City")),
+                W::Suspend(s("Trade - Elwynn Forest")),
                 W::Register {
                     name: s("LocalDefense - Elwynn Forest"),
                     id: 22
@@ -721,8 +736,11 @@ mod tests {
         );
         apply_steps(&steps, &mut c);
         assert_eq!(c.number_of("General - Elwynn Forest"), Some(1));
-        assert_eq!(c.number_of("Trade - City"), Some(2));
-        assert_eq!(c.slot_state("Trade - City"), Some(SlotState::Suspended));
+        assert_eq!(c.number_of("Trade - Elwynn Forest"), Some(2));
+        assert_eq!(
+            c.slot_state("Trade - Elwynn Forest"),
+            Some(SlotState::Suspended)
+        );
         assert_eq!(c.number_of("LocalDefense - Elwynn Forest"), Some(3));
 
         let steps = plan_walk(&state(SEED), "Stormwind City", CAPITAL, CITY);
@@ -762,7 +780,6 @@ mod tests {
                 W::Suspend(name) => {
                     c.suspend_slot(name);
                 }
-                W::Confirm(name) => c.confirm_slot(name),
             }
         }
     }
@@ -808,7 +825,8 @@ mod tests {
         assert_eq!(c.number_of("LocalDefense - Winterspring"), Some(3));
     }
 
-    /// Trade suspends on the way out (`0x49bcf0`) and re-joins through the state-3 bypass.
+    /// Trade suspends on the way out (`0x49bcf0`) under its old name, and back in a suspended slot
+    /// skips the name test (`0x49a31c`) and is renamed to itself and re-joined (`0x49a3dc`).
     #[test]
     fn a_city_round_trip_keeps_the_slot_and_its_number() {
         let mut c = state(SEED);
@@ -862,7 +880,10 @@ mod tests {
                     new: s("General - Stormwind City")
                 },
                 W::Join(s("General - Stormwind City")),
-                W::Confirm(s("Trade - City")),
+                W::Rename {
+                    old: s("Trade - City"),
+                    new: s("Trade - City")
+                },
                 W::Join(s("Trade - City")),
                 W::Leave(s("LocalDefense - Elwynn Forest")),
                 W::Rename {
@@ -873,7 +894,11 @@ mod tests {
             ]
         );
         apply_steps(&steps, &mut c);
-        assert_eq!(c.slot_state("Trade - City"), Some(SlotState::Confirmed));
+        assert_eq!(
+            c.slot_state("Trade - City"),
+            Some(SlotState::Pending),
+            "renamed to itself, 3 → 1, until its notice"
+        );
         assert_eq!(c.number_of("Trade - City"), Some(2), "still slot 2");
     }
 
@@ -890,7 +915,7 @@ mod tests {
 
         // `/leave General`: the stock `SlashCmdList["LEAVE"]` hands `LeaveChannelByName` the bare
         // token and the VM composes it for the zone; `/leave 1` names the slot here.
-        let target = c.leave_target("1").expect("slot 1 is confirmed");
+        let target = c.channel_key("1").expect("slot 1 is confirmed");
         assert_eq!(target, "General - Elwynn Forest", "the slot's wire name");
         c.note_zone_channel_left(&target);
         assert_eq!(c.zone_mask, Some(SEED & !1), "bit 0 cleared");
@@ -918,10 +943,10 @@ mod tests {
             steps,
             vec![
                 W::Register {
-                    name: s("Trade - City"),
+                    name: s("Trade - Elwynn Forest"),
                     id: 2
                 },
-                W::Suspend(s("Trade - City")),
+                W::Suspend(s("Trade - Elwynn Forest")),
                 W::Register {
                     name: s("LocalDefense - Elwynn Forest"),
                     id: 22
@@ -934,8 +959,8 @@ mod tests {
         // Until a `/join General` confirms and sets the bit back.
         let mut relog = relog;
         apply_steps(&steps, &mut relog);
-        relog.note_zone_channel_joined("General - Elwynn Forest");
         relog.claim_slot("General - Elwynn Forest", 1);
+        relog.confirm_slot("General - Elwynn Forest");
         assert_eq!(relog.zone_mask, Some(SEED));
         let steps = plan_walk(&relog, "Westfall", OUTSIDE, CITY);
         assert!(
@@ -958,7 +983,7 @@ mod tests {
     }
 
     /// Once the cascade's confirmed join sets bit 24, `GuildRecruitment` takes the same city gate
-    /// (`0x10`) and city name (`0x20`) as Trade, last in DBC order.
+    /// (`0x10`) and city name (`0x20`, in a capital) as Trade, last in DBC order.
     #[test]
     fn the_guild_recruitment_bit_rides_the_walk_like_trade() {
         let steps = plan_walk(
@@ -971,12 +996,12 @@ mod tests {
             &steps[6..],
             &[
                 W::Register {
-                    name: s("GuildRecruitment - City"),
+                    name: s("GuildRecruitment - Elwynn Forest"),
                     id: 25
                 },
-                W::Suspend(s("GuildRecruitment - City")),
+                W::Suspend(s("GuildRecruitment - Elwynn Forest")),
             ],
-            "registered and suspended out here, number 4"
+            "registered and suspended out here under the zone's name, number 4"
         );
         let steps = plan_walk(
             &state(SEED | GUILD_RECRUITMENT_BIT),
@@ -1005,8 +1030,9 @@ mod tests {
             joined("Trade - City"),
             joined("LocalDefense - Stormwind City"),
         ];
-        // The cascade's join: a slot, then the notice sets the bit.
+        // The cascade's join: a slot, then the notice confirms it and sets the bit.
         c.claim_slot("GuildRecruitment - City", 25);
+        c.confirm_slot("GuildRecruitment - City");
         let steps = plan_walk(&c, "Stormwind City", CAPITAL, CITY);
         assert!(
             steps.is_empty(),
@@ -1045,7 +1071,7 @@ mod tests {
     }
 
     #[test]
-    fn leave_target_resolves_a_number_to_a_confirmed_slot_or_to_nothing() {
+    fn channel_key_resolves_a_number_to_a_confirmed_slot_or_to_nothing() {
         let mut c = state(SEED);
         c.joined = vec![
             joined("General - Elwynn Forest"),
@@ -1054,38 +1080,38 @@ mod tests {
             joined("MyChan"),
         ];
         assert_eq!(
-            c.leave_target("1").as_deref(),
+            c.channel_key("1").as_deref(),
             Some("General - Elwynn Forest")
         );
         assert_eq!(
-            c.leave_target("1abc").as_deref(),
+            c.channel_key("1abc").as_deref(),
             Some("General - Elwynn Forest"),
             "SStrToInt takes the leading digits"
         );
         assert_eq!(
-            c.leave_target("2"),
+            c.channel_key("2"),
             None,
             "suspended: state 3 fails `0x49be50`, and the whole call is a no-op"
         );
-        assert_eq!(c.leave_target("3"), None, "a hole");
-        assert_eq!(c.leave_target("9"), None, "out of range");
-        assert_eq!(c.leave_target("-1"), None);
-        assert_eq!(c.leave_target("0").as_deref(), Some("0"), "0 is a name");
+        assert_eq!(c.channel_key("3"), None, "a hole");
+        assert_eq!(c.channel_key("9"), None, "out of range");
+        assert_eq!(c.channel_key("-1"), None);
+        assert_eq!(c.channel_key("0").as_deref(), Some("0"), "0 is a name");
         assert_eq!(
-            c.leave_target("").as_deref(),
+            c.channel_key("").as_deref(),
             Some(""),
             "`/leave` alone sends an empty name"
         );
         assert_eq!(
-            c.leave_target("General - Elwynn Forest").as_deref(),
+            c.channel_key("General - Elwynn Forest").as_deref(),
             Some("General - Elwynn Forest"),
             "a composed name passes through"
         );
-        assert_eq!(c.leave_target("mychan").as_deref(), Some("mychan"));
-        assert_eq!(c.leave_target("+1").as_deref(), Some("+1"), "no `+`");
-        assert_eq!(c.leave_target(" 1").as_deref(), Some(" 1"), "no space skip");
+        assert_eq!(c.channel_key("mychan").as_deref(), Some("mychan"));
+        assert_eq!(c.channel_key("+1").as_deref(), Some("+1"), "no `+`");
+        assert_eq!(c.channel_key(" 1").as_deref(), Some(" 1"), "no space skip");
         assert_eq!(
-            c.leave_target("4294967297").as_deref(),
+            c.channel_key("4294967297").as_deref(),
             Some("General - Elwynn Forest"),
             "`SStrToInt` wraps: 2^32 + 1 reads 1"
         );
@@ -1101,12 +1127,21 @@ mod tests {
     fn the_slot_set_and_the_join_set_differ_only_by_the_city_gate() {
         let cat = catalog();
         assert_eq!(
-            tracked_channels(&cat, SEED, "Stormwind City", None),
-            wanted_channels(&cat, SEED, "Stormwind City", CAPITAL, None),
-            "no city word: the city-NAMED rows are unresolvable, so neither list carries them"
+            tracked_channels(&cat, SEED, "Stormwind City", CAPITAL, CITY),
+            wanted_channels(&cat, SEED, "Stormwind City", CAPITAL, CITY),
+            "in a capital the gate passes every row, so the two lists agree"
+        );
+        assert_eq!(
+            tracked_channels(&cat, SEED, "Elwynn Forest", OUTSIDE, CITY),
+            [
+                "General - Elwynn Forest",
+                "Trade - Elwynn Forest",
+                "LocalDefense - Elwynn Forest"
+            ],
+            "outside one Trade takes a slot under the zone's name and is not joined"
         );
         assert!(
-            tracked_channels(&cat, SEED, "", CITY).is_empty(),
+            tracked_channels(&cat, SEED, "", OUTSIDE, CITY).is_empty(),
             "no zone: nothing zone-dependent composes, so nothing takes a slot either"
         );
     }
@@ -1128,8 +1163,8 @@ mod tests {
         assert_eq!(by("Trade").resolved, None);
         assert_eq!(
             by("WorldDefense").resolved,
-            Some("WorldDefense".to_string()),
-            "a row whose name carries no %s resolves with no zone at all"
+            None,
+            "a row whose name carries no %s is the nil leg too (`0x49ece3`-`0x49ecea`)"
         );
 
         // Once a zone is known, the same rows resolve.

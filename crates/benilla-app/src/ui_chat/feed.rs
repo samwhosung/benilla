@@ -933,21 +933,26 @@ pub(super) fn notice_event(
     })
 }
 
-/// Deliver one built event: a `YOU_JOINED` claims its slot before the render, a `YOU_LEFT` frees
-/// it after, so the leave line keeps its number and colour ("Left Channel: [2. General - Elwynn
-/// Forest]") and a handler's `GetChannelName` still finds it. The reference flags the teardown
-/// (`0x49c115`), fires the event (`0x49c5b0` calling `0x49a870`), then drops the record
-/// (`0x49c5b5`, `0x49c5c2` calling `0x49bbd0`); its suspended leg (`0x49c0e9`) skips the flag.
-/// Both arms mirror the slots into the VM, whose `GetChannelName` and `SendChatMessage` read them.
+/// Deliver one built event: a `YOU_JOINED` confirms its slot before the render, and a notice that
+/// drops its slot frees it after, so the line keeps its number and colour ("Left Channel: [2.
+/// General - Elwynn Forest]") and a handler's `GetChannelName` still finds it. The reference sets
+/// its drop flag for `YOU_LEFT` (`0x49c115`, skipped on the suspended leg `0x49c0e9`),
+/// `WRONG_PASSWORD` (`0x49c13c`), `WRONG_FACTION` (`0x49c446`), `NOT_MEMBER` and `INVALID_NAME`
+/// (`0x49c46d`), fires the event (`0x49c5b0` calling `0x49a870`), then frees the slot of the
+/// notice's name (`0x49c5b5`-`0x49c5c2`, `0x49bbd0`). Both arms mirror the slots into the VM,
+/// whose `GetChannelName` and `SendChatMessage` read them.
 pub(super) fn deliver(
     script: &mut benilla_ui::script::UiScript,
     windows: &mut ChatWindows,
     channels: &mut ChannelState,
     event: &mut ChatEvent,
 ) {
-    let notice = event
-        .notice_byte()
-        .filter(|_| event.kind == Some(ChatEventKind::ChannelNotice));
+    let notice = event.notice_byte().filter(|_| {
+        matches!(
+            event.kind,
+            Some(ChatEventKind::ChannelNotice | ChatEventKind::ChannelNoticeUser)
+        )
+    });
     // Read first: the reference picks the token from `slot+0x9c` (`0x49c0c2`) before writing it
     // (`0x49bb20`), and the renamed and suspended tokens keep the window's registration.
     event.slot_state = channels.slot_state(&event.channel);
@@ -961,50 +966,33 @@ pub(super) fn deliver(
         );
     }
     if notice == Some(channel_notice::YOU_JOINED) {
-        // A confirmed join sets the `ZONECHANNELS` bit (`0x49bbaf`), its only runtime growth.
-        channels.note_zone_channel_joined(&event.channel);
-        // A custom channel's confirmed join enters the chat cache's re-join list.
-        channels.note_custom_channel_joined(&event.channel);
-        // A slot the walk renamed is numbered already, but its state must return to `Joined`.
-        channels.confirm_slot(&event.channel);
-        if channels.number_of(&event.channel).is_none() {
-            let id = channels.channels.zone_channel_id(&event.channel);
-            match channels.claim_slot(&event.channel, id) {
-                Some(slot) => debug!(
-                    "chat: server confirms channel {:?} joined (slot {slot})",
-                    event.channel
-                ),
-                // All ten slots taken: no number, as in the reference, whose slot allocator also
-                // prints `ERR_TOO_MANY_CHAT_CHANNELS` (`0x199` at `0x49b9c5`); here it is only
-                // logged.
-                None => warn!(
-                    "chat: server confirms channel {:?} joined but all {} slots are taken — it \
-                     has no number, so /N cannot reach it",
-                    event.channel,
-                    super::edit::MAX_CHANNELS
-                ),
-            }
+        // The slot was taken when the join was sent; the notice only confirms it, which a
+        // handler's `SendChatMessage` to it reads from this event on.
+        match channels.confirm_slot(&event.channel) {
+            Some(slot) => debug!(
+                "chat: server confirms channel {:?} joined (slot {slot})",
+                event.channel
+            ),
+            None => debug!("chat: {:?} joined with no slot to confirm", event.channel),
         }
-        // The confirm and the claim both write the slot's state (`0x49bb20`), which a handler's
-        // `SendChatMessage` to it reads from this event on.
         channels.mirror_into(script);
     }
+    use channel_notice as n;
+    let drops = match notice {
+        Some(n::YOU_LEFT) => event.slot_state != Some(super::edit::SlotState::Suspended),
+        Some(n::WRONG_PASSWORD | n::NOT_MEMBER | n::WRONG_FACTION | n::INVALID_NAME) => true,
+        _ => false,
+    };
     // The wire name, kept before `stamp_channel` decorates arg4 with the slot number.
-    let leaving = (notice == Some(channel_notice::YOU_LEFT)).then(|| event.channel.clone());
+    let dropping = drops.then(|| event.channel.clone());
     // The channel renders numbered when its slot is known.
     channels.stamp_channel(event);
     route(script, windows, event);
-    if let Some(name) = leaving {
-        // A suspended slot (state 3, `0x49c0e0`) survives its leave: the reference skips the
-        // teardown (`0x49c115`), so leaving a capital keeps Trade's number for the re-join.
-        if event.slot_state == Some(super::edit::SlotState::Suspended) {
-            debug!("chat: channel {name:?} suspended — the record and its number stay");
-        } else {
-            // Cleared in place, never compacted: slot 3 stays 3 when slot 2 empties.
-            let freed = channels.free_slot(&name);
-            debug!("chat: server confirms channel {name:?} left (slot {freed:?} now free)");
-            channels.mirror_into(script);
-        }
+    if let Some(name) = dropping {
+        // Cleared in place, never compacted: slot 3 stays 3 when slot 2 empties.
+        let freed = channels.free_slot(&name);
+        debug!("chat: channel {name:?} dropped (slot {freed:?} now free)");
+        channels.mirror_into(script);
     }
 }
 
