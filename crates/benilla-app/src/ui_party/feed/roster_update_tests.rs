@@ -208,9 +208,11 @@ fn answer(app: &mut App, i: u64) {
         format!("M{i}"),
         Some((1, 1, 0)),
     );
-    app.world_mut()
+    let name = format!("M{i}");
+    let _ = app
+        .world_mut()
         .resource_mut::<GroupState>()
-        .apply_player_name(member(i));
+        .apply_player_name(member(i), Some(&name));
 }
 
 /// A frame that counts `PARTY_MEMBERS_CHANGED` and `RAID_ROSTER_UPDATE` in the order the VM is

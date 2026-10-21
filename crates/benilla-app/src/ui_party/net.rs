@@ -175,10 +175,19 @@ fn on_raid_instance_info(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>
 }
 
 /// `SMSG_NAME_QUERY_RESPONSE`, found or refused: the roster's lookups that waited on it run
-/// ([`GroupState::apply_player_name`]).
-fn on_player_name(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>) {
-    if let SessionEvent::PlayerName { guid, .. } = ev {
-        group.apply_player_name(guid);
+/// ([`GroupState::apply_player_name`]), after the name cache's own handler has filed the answer,
+/// whose record a found answer's notices read with no callback (`0x4bad6b`).
+fn on_player_name(
+    In(ev): In<SessionEvent>,
+    mut group: ResMut<GroupState>,
+    errors: Res<UiErrorKeys>,
+    names: Res<NameCache>,
+) {
+    if let SessionEvent::PlayerName { guid, name, .. } = ev {
+        let filed = (!name.is_empty())
+            .then(|| names.resolve_player(guid, Ask::Read))
+            .flatten();
+        push_group_lines(&errors, group.apply_player_name(guid, filed));
     }
 }
 
@@ -1098,7 +1107,11 @@ mod tests {
         list_event(&mut app, GROUPTYPE_RAID, raid.clone(), ME);
         assert_eq!(asks(&sent(&rx)), 0, "a roster held");
         list_event(&mut app, GROUPTYPE_RAID, Vec::new(), ME);
-        assert_eq!(asks(&sent(&rx)), 0, "a list naming nobody, onto a roster held");
+        assert_eq!(
+            asks(&sent(&rx)),
+            0,
+            "a list naming nobody, onto a roster held"
+        );
         list_event(&mut app, GROUPTYPE_RAID, Vec::new(), ME);
         assert_eq!(asks(&sent(&rx)), 1, "and again, onto none");
     }

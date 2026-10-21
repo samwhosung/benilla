@@ -93,6 +93,11 @@ pub struct GroupState {
     /// `0x55f870`) before it counts afresh (`0x4ba89e`); a roster that a list that is not a raid
     /// drops keeps its own (`0x4ba550` touches neither), so their answers still count down.
     pub(crate) raid_name_waits: Vec<u64>,
+    /// The roster notices a rebuild left waiting on a name, in the order it asked: an arrival's
+    /// lookup with the callback `0x4bacd0` (`0x4ba744`) or a departure's with `0x4bad30`
+    /// (`0x4ba7e3`) that missed, each with its message. Nothing cancels one (`0x4ba631` cancels
+    /// only `0x4ba1b0`), and an answer runs every one its guid holds.
+    pub(crate) raid_notice_waits: Vec<(u64, &'static str)>,
     /// The leave ack, `SMSG_GROUP_UNINVITE` and `SMSG_GROUP_DESTROYED` empty the reference's party
     /// slots and leader (`0x4e84a0`, `0x4e8250(0)`) and keep its raid roster: from then
     /// [`Self::party_slots`] is empty, and the next list finds no slot held.
@@ -238,7 +243,8 @@ impl GroupState {
     /// Apply one `SMSG_GROUP_LIST` and return what it shows, in the reference's order: the party
     /// slots' joins, the new-group line, the party slots' leaves, then the raid roster's lines.
     /// Kick, leave (`0x5e690b`) and disband lines come from their opcodes. Every name is taken as
-    /// held, as the empty string: [`Self::apply_list_awaiting`] is the one that says otherwise.
+    /// held, under the name this list or the one before it gives the guid, else the empty string:
+    /// [`Self::apply_list_awaiting`] is the one that says otherwise.
     #[cfg(test)]
     pub fn apply_list(
         &mut self,
@@ -249,25 +255,34 @@ impl GroupState {
         loot: Option<GroupLootInfo>,
         self_guid: Option<u64>,
     ) -> ListOutcome {
+        let known: Vec<(u64, String)> = self
+            .members
+            .iter()
+            .chain(&members)
+            .map(|m| (m.guid, m.name.clone()))
+            .collect();
+        let held = move |guid: u64| {
+            Some(
+                known
+                    .iter()
+                    .rev()
+                    .find(|(g, _)| *g == guid)
+                    .map_or_else(String::new, |(_, name)| name.clone()),
+            )
+        };
         self.apply_list_awaiting(
-            group_type,
-            own_flags,
-            members,
-            leader,
-            loot,
-            self_guid,
-            &|_| Some(String::new()),
-            &|_| Some(String::new()),
+            group_type, own_flags, members, leader, loot, self_guid, &held, &held,
         )
     }
 
     /// [`Self::apply_list`] told what the name cache holds: `lookup` is the handler's lookup with a
     /// callback, the name the cache holds or `None` while it is still to come, and `cached_name`
-    /// the loot master's, looked up with no callback (`0x4e878f`): the record if held, never
-    /// asking. Each party seat looks
-    /// its member up (`0x4e8477`), and a raid list's rebuild each row, ours included
+    /// the lookup with no callback, the record if held, never asking: the loot master's
+    /// (`0x4e878f`) and each party leaver's (`0x5e6d2b`). Each party seat looks its member up
+    /// (`0x4e8477`), each raid arrival and departure onto a held roster its notice's name
+    /// (`0x4ba744`, `0x4ba7e3`), and a raid list's rebuild each row, ours included
     /// (`0x4ba9b6`-`0x4ba9c7`); a raid row that misses holds `RAID_ROSTER_UPDATE` back
-    /// (`0x4babdf`) until its answer.
+    /// (`0x4babdf`) until its answer, and a notice that misses waits for its own.
     pub fn apply_list_awaiting(
         &mut self,
         group_type: u8,
@@ -294,10 +309,7 @@ impl GroupState {
         let raid = group_type == GROUPTYPE_RAID;
         // The two stores as this list finds them: the party slots unless an opcode emptied them,
         // and the raid roster, which only a list that is not a raid drops.
-        let held_slots: Vec<(u64, String)> = self
-            .party_slots()
-            .map(|m| (m.guid, m.name.clone()))
-            .collect();
+        let held_slots: Vec<u64> = self.party_slots().map(|m| m.guid).collect();
         let raid_held = self.raid_held();
         // "Held a group" (`0x5e6aa9`): an occupied slot (`0x5e6afb`) or a raid roster (`0x5e6b29`).
         let held = !held_slots.is_empty() || raid_held;
@@ -319,7 +331,7 @@ impl GroupState {
             if !held {
                 // Seated into no group: no line, but the chime (`0x5e6dc6`).
                 out.invite_accept = true;
-            } else if !raid && !held_slots.iter().any(|(guid, _)| *guid == m.guid) {
+            } else if !raid && !held_slots.contains(&m.guid) {
                 // New to a party we held (`0x5e6c19`, `0x5e6c24`).
                 out.lines.push(UiError::s("ERR_JOINED_GROUP_S", &m.name));
                 out.invite_accept = true;
@@ -331,11 +343,15 @@ impl GroupState {
                 out.lines.push(UiError::s("ERR_JOINED_GROUP_S", &last.name));
             }
         }
-        // A party list's leaves: the held slots it no longer seats (`0x5e6cd7`-`0x5e6e09`).
+        // A party list's leaves: the held slots it no longer seats (`0x5e6cd7`-`0x5e6e09`), each
+        // looked up with no callback (`0x5e6d15`-`0x5e6d2b`) and named only from the cache's
+        // record (`0x5e6d30`-`0x5e6d37`), so a miss shows nothing, then or later.
         if !raid {
-            for (guid, name) in &held_slots {
+            for guid in &held_slots {
                 if !seated.iter().any(|m| m.guid == *guid) {
-                    out.lines.push(UiError::s("ERR_LEFT_GROUP_S", name));
+                    if let Some(name) = cached_name(*guid) {
+                        out.lines.push(UiError::s("ERR_LEFT_GROUP_S", name));
+                    }
                 }
             }
         }
@@ -352,29 +368,35 @@ impl GroupState {
                 let old: Vec<u64> = self.raid_rows().collect();
                 self.raid_name_waits.retain(|g| !old.contains(g));
             }
-            // Arrivals only onto a held roster (`0x4ba725`), departures, and the joined line when
-            // none was held (`0x4ba83a`).
+            // The rows this rebuild writes: the members, then ours once any is listed
+            // (`0x5e6e6f`-`0x5e6e9c`).
+            let own_row = (!members.is_empty()).then(|| self_guid.unwrap_or(0));
+            let new_rows: Vec<u64> = members.iter().map(|m| m.guid).chain(own_row).collect();
+            // Onto a held roster (`0x4ba725`), each arrival in list order, then each departure in
+            // row order, ours the last (`0x4ba7a0`-`0x4ba7fd`), so a list naming nobody sees us
+            // leave too. Each is looked up with its notice's callback, a zero guid asking nothing
+            // (`0x55f0aa`): a hit shows at once under the cache's name (`0x4ba74e`, `0x4ba7f8`), a
+            // departure only while a player is active (`0x4ba7ee`); a miss waits for its answer
+            // ([`Self::apply_player_name`]). With none held, the joined line (`0x4ba83a`).
             if raid_held {
-                for m in &members {
-                    if !self.members.iter().any(|old| old.guid == m.guid) {
-                        out.lines
-                            .push(UiError::s("ERR_RAID_MEMBER_ADDED_S", &m.name));
+                const ADDED: &str = "ERR_RAID_MEMBER_ADDED_S";
+                const REMOVED: &str = "ERR_RAID_MEMBER_REMOVED_S";
+                let old_rows: Vec<u64> = self.raid_rows().collect();
+                let arrivals = new_rows.iter().filter(|g| !old_rows.contains(g));
+                let departures = old_rows.iter().filter(|g| !new_rows.contains(g));
+                let notices: Vec<(u64, &'static str)> = arrivals
+                    .map(|&g| (g, ADDED))
+                    .chain(departures.map(|&g| (g, REMOVED)))
+                    .filter(|&(g, _)| g != 0)
+                    .collect();
+                for (guid, key) in notices {
+                    match lookup(guid) {
+                        None => self.raid_notice_waits.push((guid, key)),
+                        Some(name) if key == ADDED || self_guid.is_some() => {
+                            out.lines.push(UiError::s(key, name));
+                        }
+                        Some(_) => {}
                     }
-                }
-                for old in &self.members {
-                    if !members.iter().any(|m| m.guid == old.guid) {
-                        out.lines
-                            .push(UiError::s("ERR_RAID_MEMBER_REMOVED_S", &old.name));
-                    }
-                }
-                // The departures walk every old row (`0x4ba7a0`-`0x4ba7fd`), ours the last: a list
-                // that names nobody rows no one, us included, so our row leaves too, under the name
-                // the cache holds for it (`0x4ba7e3`) while a player is active (`0x4ba7ee`). A miss
-                // defers the line to the answer (`0x4bad30`), which is not built.
-                let ours = self.own_raid_row.filter(|&g| g != 0 && self_guid.is_some());
-                if let Some(name) = ours.filter(|_| members.is_empty()).and_then(lookup) {
-                    out.lines
-                        .push(UiError::s("ERR_RAID_MEMBER_REMOVED_S", &name));
                 }
             } else {
                 out.lines.push(UiError::key("ERR_RAID_YOU_JOINED"));
@@ -382,11 +404,9 @@ impl GroupState {
             // The rebuild counts afresh (`0x4ba89e`): each new row's lookup, ours after the
             // members' once any is listed, a zero guid asking nothing (`0x4ba9b4`). It ends in the
             // signal unless a name is pending (`0x4babdf`-`0x4babef`).
-            let own_row = (!members.is_empty()).then(|| self_guid.unwrap_or(0));
-            let waits: Vec<u64> = members
+            let waits: Vec<u64> = new_rows
                 .iter()
-                .map(|m| m.guid)
-                .chain(own_row)
+                .copied()
                 .filter(|&g| g != 0 && missed(g))
                 .collect();
             self.raid_names_pending = waits.len() as u32;
@@ -486,13 +506,15 @@ impl GroupState {
         self.signals.push(signal);
     }
 
-    /// A name answer for `guid`, found or refused: a pending node runs its callbacks either way
-    /// (`0x556f05`, `0x556f91`), and these two read no status. Each party seat's signals
+    /// A name answer for `guid`, found or refused, and what it shows: a pending node runs its
+    /// callbacks either way (`0x556f05`, `0x556f91`). Each party seat's signals
     /// `PARTY_MEMBERS_CHANGED` (`0x4e8495`); each raid row's counts the pending names down and,
     /// when none is left, or none was counted (`0x4bad97`), signals `RAID_ROSTER_UPDATE` then
-    /// `PARTY_MEMBERS_CHANGED` (`0x4bad90`-`0x4badb0`). The party seats' run first here; the order
-    /// the cache runs one node's callbacks in is not derived.
-    pub fn apply_player_name(&mut self, guid: u64) {
+    /// `PARTY_MEMBERS_CHANGED` (`0x4bad90`-`0x4badb0`); these read no status. Each roster
+    /// notice's tests the answer's found byte (`0x4bad46`), then shows its line under the record
+    /// the cache filed, `filed` (`0x4bad6b`-`0x4bad75`), and nothing for a refusal. The party
+    /// seats' run first here; the order the cache runs one node's callbacks in is not derived.
+    pub fn apply_player_name(&mut self, guid: u64, filed: Option<&str>) -> Vec<UiError> {
         let taken = |waits: &mut Vec<u64>| {
             let before = waits.len();
             waits.retain(|&g| g != guid);
@@ -513,6 +535,15 @@ impl GroupState {
             self.signal(GroupSignal::RaidRosterUpdate);
             self.signal(GroupSignal::MembersChanged);
         }
+        let mut lines = Vec::new();
+        self.raid_notice_waits.retain(|&(g, key)| {
+            if g != guid {
+                return true;
+            }
+            lines.extend(filed.map(|name| UiError::s(key, name)));
+            false
+        });
+        lines
     }
 
     /// The `party1..party4` slots: our own subgroup in packet order, at most four (`0x5e6baa`
@@ -741,6 +772,7 @@ impl GroupState {
             party_name_waits: _,
             raid_names_pending: _,
             raid_name_waits: _,
+            raid_notice_waits: _,
             saved_instances: _,
             saved_instances_answers: _,
             ready_check: _,
@@ -1085,7 +1117,7 @@ mod tests {
             g.signals.take()
         };
         let answer = |g: &mut GroupState, guid: u64| {
-            g.apply_player_name(guid);
+            let _ = g.apply_player_name(guid, None);
             g.signals.take()
         };
 
@@ -1146,21 +1178,21 @@ mod tests {
         list(&mut g);
         list(&mut g);
         g.signals.take();
-        g.apply_player_name(2);
+        let _ = g.apply_player_name(2, None);
         assert_eq!(g.signals.take(), [], "Bob holds no seat of ours");
-        g.apply_player_name(1);
+        let _ = g.apply_player_name(1, None);
         assert_eq!(
             g.signals.take(),
             [MembersChanged, MembersChanged],
             "one per list"
         );
-        g.apply_player_name(1);
+        let _ = g.apply_player_name(1, None);
         assert_eq!(g.signals.take(), []);
 
         list(&mut g);
         g.apply_list(0, 0, Vec::new(), 0, None, Some(ME));
         g.signals.take();
-        g.apply_player_name(1);
+        let _ = g.apply_player_name(1, None);
         assert_eq!(
             g.signals.take(),
             [MembersChanged],
@@ -1454,7 +1486,7 @@ mod tests {
     /// The writer's departures walk every old row, ours the last (`0x4ba7a0`-`0x4ba7fd`): a raid
     /// list that names nobody rows no one, so with a roster held our own row leaves as the others
     /// do, under the name the cache holds for us (`0x4ba7e3`); a list that names anyone rows us
-    /// again, and a miss shows nothing now (its line waits on `0x4bad30`).
+    /// again, and a miss shows its line when the answer lands (`0x4bad30`).
     #[test]
     fn a_raid_list_naming_nobody_removes_our_own_row_too() {
         let removed = |name: &str| UiError::s("ERR_RAID_MEMBER_REMOVED_S", name);
@@ -1484,6 +1516,11 @@ mod tests {
             raid(&mut g, Vec::new(), &unnamed),
             [removed("Alice")],
             "our name to come"
+        );
+        assert_eq!(
+            g.apply_player_name(ME, Some("Me")),
+            [removed("Me")],
+            "and shown when it lands"
         );
     }
 
@@ -1539,7 +1576,7 @@ mod tests {
             vec![sub("Alice", 1, 0), sub("Bob", 2, 1)],
             1,
             None,
-            None,
+            Some(ME),
         );
         // Dave lands in our subgroup: the raid line, no party line and no chime.
         assert_eq!(
@@ -1549,7 +1586,7 @@ mod tests {
                 vec![sub("Alice", 1, 0), sub("Bob", 2, 1), sub("Dave", 4, 0)],
                 1,
                 None,
-                None
+                Some(ME)
             ),
             lines(vec![UiError::s("ERR_RAID_MEMBER_ADDED_S", "Dave")], false)
         );
@@ -1560,7 +1597,7 @@ mod tests {
                 vec![sub("Alice", 1, 0), sub("Dave", 4, 0)],
                 1,
                 None,
-                None
+                Some(ME)
             ),
             lines(vec![UiError::s("ERR_RAID_MEMBER_REMOVED_S", "Bob")], false)
         );
@@ -1980,7 +2017,7 @@ mod tests {
             |g: &mut GroupState, group_type: u8, members: &[(&str, u64)], leader: u64| {
                 let members = members.iter().map(|(n, guid)| member(n, *guid)).collect();
                 lines.extend(
-                    g.apply_list(group_type, 0, members, leader, None, None)
+                    g.apply_list(group_type, 0, members, leader, None, Some(ME))
                         .lines,
                 );
             };
@@ -2237,7 +2274,7 @@ mod tests {
                 Some(loot),
                 Some(ME),
                 &|_| Some(String::new()),
-                &|_| None,
+                &|guid| (guid == 2).then(|| "Bob".to_string()),
             )
             .lines
         };
