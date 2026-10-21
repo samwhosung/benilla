@@ -1,6 +1,7 @@
 //! [`super::feed_action_state`] through a real Lua VM, and its helpers.
 
 use super::*;
+use crate::creature_anim::Engaged;
 use crate::target::Selection;
 use benilla_formats::SpellDisplay;
 use benilla_ui::script::UiScript;

@@ -23,7 +23,6 @@ use benilla_formats::RangeTargets;
 use benilla_protocol::messages::{ACTION_KIND_ITEM, ACTION_KIND_SPELL};
 use benilla_ui::script::{macro_slot_id, ActionState};
 
-use crate::creature_anim::Engaged;
 use crate::item_watch::ItemNotice;
 use crate::items::Items;
 use crate::net::{FieldChanged, NetCommands, ObjectStore, SelfPlayer};
@@ -303,7 +302,7 @@ pub(super) fn feed_action_state(
         // The active player's creation, whose arrival (`0x5dea86`) empties the reactive list.
         Query<(), Added<SelfPlayer>>,
     ),
-    self_q: Query<(&ObjectStore, &Transform, Has<Engaged>), With<SelfPlayer>>,
+    self_q: Query<(&ObjectStore, &Transform), With<SelfPlayer>>,
     // One param for the guid index and the item store, for the same ceiling.
     objects: crate::net::Objects,
     units: Query<(&ObjectStore, &Transform), Without<SelfPlayer>>,
@@ -363,7 +362,7 @@ pub(super) fn feed_action_state(
         let control_lost = own_control.as_ref().is_some_and(|c| c.0);
         // The bags, walked once per frame for every reagent and totem count below.
         let stacks = me
-            .map(|(s, _, _)| stack_counts(&s.0, &objects))
+            .map(|(s, _)| stack_counts(&s.0, &objects))
             .unwrap_or_default();
         let caster = range_units.caster();
         let selection = &targeting.selection;
@@ -376,12 +375,8 @@ pub(super) fn feed_action_state(
         // slots read the history of, and the pet's object when the gate holds.
         let pet_leg = pet_bar.as_deref().map(|bar| {
             let pet = objects.store(bar.spells.pet_guid);
-            let held = crate::ui_pet::pet_actions_usable(
-                bar,
-                cast_ctx.self_guid,
-                me.map(|(s, _, _)| s),
-                pet,
-            );
+            let held =
+                crate::ui_pet::pet_actions_usable(bar, cast_ctx.self_guid, me.map(|(s, _)| s), pet);
             (bar, pet.filter(|_| held))
         });
 
@@ -448,7 +443,7 @@ pub(super) fn feed_action_state(
                         st = pet_book_state(PetBookLeg {
                             d,
                             spell,
-                            player: me.map(|(s, _, _)| s),
+                            player: me.map(|(s, _)| s),
                             pet,
                             skill_lines: skill_catalog,
                             mods: spell_mods,
@@ -487,7 +482,7 @@ pub(super) fn feed_action_state(
                     st.form = d.shapeshift_form;
                     st.profession = profession(button.action, d, skill_lines.as_deref());
                     // The usable walk (`0x6e3d60`); only its power gate sets `notEnoughMana`.
-                    if let (Some((store, _, _)), Some(sp)) = (me, spells.as_deref()) {
+                    if let (Some((store, _)), Some(sp)) = (me, spells.as_deref()) {
                         let ctx = usable::UsableCtx {
                             store,
                             target: selection.guid.zip(target.map(|(s, _)| s)),
@@ -559,7 +554,7 @@ pub(super) fn feed_action_state(
                     // `IsEquippedAction`, the green border: `0x622270` at mask 1
                     // (`0x4e5377`-`0x4e5380`), the walker over the worn slots, so a broken copy is
                     // not worn.
-                    st.equipped = me.is_some_and(|(s, _, _)| {
+                    st.equipped = me.is_some_and(|(s, _)| {
                         crate::ui_items::find_item(
                             &s.0,
                             &objects,
@@ -574,7 +569,7 @@ pub(super) fn feed_action_state(
                     // `0x4e5050`'s item arm runs the count, `IsItemOnCooldown` and the on-use spell
                     // through the same `0x6e3d60` walk. With no player the reference answers (0, 0)
                     // (`0x4e5080`), the default state.
-                    if let Some((store, _, _)) = me {
+                    if let Some((store, _)) = me {
                         let ctx = usable::UsableCtx {
                             store,
                             target: selection.guid.zip(target.map(|(s, _)| s)),
@@ -672,7 +667,7 @@ pub(super) fn feed_action_state(
             }
         }
         let activated = match (me, spells.as_deref()) {
-            (Some((store, _, _)), Some(sp)) if refresh => {
+            (Some((store, _)), Some(sp)) if refresh => {
                 let ctx = usable::UsableCtx {
                     store,
                     target: selection.guid.zip(target.map(|(s, _)| s)),
