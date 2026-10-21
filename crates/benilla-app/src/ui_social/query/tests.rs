@@ -87,8 +87,8 @@ fn sent_with(
     areas: &AreaTableCatalog,
     names: crate::ui_unit::UnitNames<'_>,
 ) -> Sent {
-    let _ = tags;
-    let request = parse(&String::from_utf8_lossy(filter), Some(areas), names);
+    let tags = WhoTags::from_texts(tags);
+    let request = parse(filter, &tags, Some(areas), names);
     read(&benilla_protocol::messages::who(&request))
 }
 
@@ -308,4 +308,21 @@ fn white_space_is_the_code_points() {
     assert_eq!(sent("a\u{a0}b").terms, terms(&["a\u{a0}b"]));
     let q = sent_with(b"\xc3 b", EN_TAGS, &areas(), TestNames::english().names());
     assert_eq!(q.terms, vec![b"\xc3 b".to_vec()]);
+}
+
+/// `_isdigit` (`0x73fc0f`) reads `0xf7`, `0xfb` and `0xfd` as digits from the bytes before its
+/// table, so after a range's dash or a leading `-` they set the maximum to `SStrToInt`'s 0 for no
+/// digits; `iswdigit` (`0x740050`) begins no range at a high byte. Each is a broken lead, so it
+/// takes the byte after it into the token (`0x41aab0`).
+#[test]
+fn three_high_bytes_pass_the_second_digit_test() {
+    let bytes = |f: &[u8]| sent_with(f, EN_TAGS, &areas(), TestNames::english().names());
+    let q = bytes(b"10-\xf7a");
+    assert_eq!((q.min, q.max), (10, 0));
+    let q = bytes(b"-\xfba");
+    assert_eq!((q.min, q.max, q.terms.len()), (0, 0, 0));
+    assert_eq!(bytes(b"-\xfca").terms, vec![b"-\xfca".to_vec()]);
+    assert_eq!(bytes(b"\xfda").terms, vec![b"\xfda".to_vec()]);
+    // Alone, the lead takes the appended space and the token is still open at the NUL.
+    assert_eq!(bytes(b"a \xfd").terms, vec![b"a".to_vec()]);
 }

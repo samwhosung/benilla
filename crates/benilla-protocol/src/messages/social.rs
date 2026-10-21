@@ -202,26 +202,27 @@ pub fn read_who(r: &mut impl Read) -> io::Result<WhoResults> {
     })
 }
 
-/// A `/who` query parsed from the typed filter, e.g. `z-"Elwynn Forest" 1-10`, which the 1.12
-/// engine (not FrameXML) parses for `SendWho`. [`Default`] is a bare `/who`.
+/// A `/who` query as the 1.12 engine's builder (`0x5aebb0`, not FrameXML) makes it from the typed
+/// filter, e.g. `z-"Elwynn Forest" 1-10`. [`Default`] is an empty filter's. The strings are the
+/// filter's bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhoRequest {
-    /// Inclusive minimum level.
+    /// Inclusive minimum level, 0 unset (`0x5aebd7`).
     pub level_min: u32,
-    /// Inclusive maximum level; the 1.12 client sends 100 when unset, not 255.
+    /// Inclusive maximum level, 100 unset (`0x5aebda`).
     pub level_max: u32,
-    /// `n-`: a name substring, empty for any.
-    pub player_name: String,
-    /// `g-`: a guild-name substring, empty for any.
-    pub guild_name: String,
-    /// `r-`: a bitmask over race ids (`1 << race`), all-ones for any.
+    /// The name tag's text, up to 47 bytes, empty for any.
+    pub player_name: Vec<u8>,
+    /// The guild tag's text, up to 47 bytes, empty for any.
+    pub guild_name: Vec<u8>,
+    /// A bitmask over race ids (`1 << race`), all ones for any.
     pub race_mask: u32,
-    /// `c-`: a bitmask over class ids (`1 << class`), all-ones for any.
+    /// A bitmask over class ids (`1 << class`), all ones for any.
     pub class_mask: u32,
-    /// `z-`: zone ids, resolved from names client-side.
+    /// The zone ids the zone tags found, up to 10.
     pub zones: Vec<u32>,
-    /// Untagged words; the server matches each against name, guild and zone name.
-    pub search_terms: Vec<String>,
+    /// Untagged words, up to 4; the server matches each against name, guild and zone name.
+    pub search_terms: Vec<Vec<u8>>,
 }
 
 impl Default for WhoRequest {
@@ -229,8 +230,8 @@ impl Default for WhoRequest {
         Self {
             level_min: 0,
             level_max: 100,
-            player_name: String::new(),
-            guild_name: String::new(),
+            player_name: Vec::new(),
+            guild_name: Vec::new(),
             race_mask: u32::MAX,
             class_mask: u32::MAX,
             zones: Vec::new(),
@@ -239,33 +240,32 @@ impl Default for WhoRequest {
     }
 }
 
-/// Over 10 zones or 4 search terms, `HandleWhoOpcode` silently drops the whole query.
-pub const WHO_MAX_ZONES: usize = 10;
-/// See [`WHO_MAX_ZONES`].
-pub const WHO_MAX_SEARCH_TERMS: usize = 4;
-
-/// Body of `CMSG_WHO` (vmangos `Misc.cpp`, `Who::ReadFromWorldPacket`). Both arrays are trimmed to
-/// the server's caps, so an over-long query narrows instead of matching nobody.
+/// Body of `CMSG_WHO` as the builder writes it (`0x5af0a4`-`0x5af141`): the levels, the name and
+/// guild C strings, the masks, the zone count and ids, the term count and terms, every number a
+/// u32.
 pub fn who(request: &WhoRequest) -> Vec<u8> {
-    let zones = &request.zones[..request.zones.len().min(WHO_MAX_ZONES)];
-    let terms = &request.search_terms[..request.search_terms.len().min(WHO_MAX_SEARCH_TERMS)];
-
     let mut body = Vec::with_capacity(32 + request.player_name.len() + request.guild_name.len());
     body.extend_from_slice(&request.level_min.to_le_bytes());
     body.extend_from_slice(&request.level_max.to_le_bytes());
-    push_cstring(&mut body, &request.player_name);
-    push_cstring(&mut body, &request.guild_name);
+    push_bytes(&mut body, &request.player_name);
+    push_bytes(&mut body, &request.guild_name);
     body.extend_from_slice(&request.race_mask.to_le_bytes());
     body.extend_from_slice(&request.class_mask.to_le_bytes());
-    body.extend_from_slice(&(zones.len() as u32).to_le_bytes());
-    for zone in zones {
+    body.extend_from_slice(&(request.zones.len() as u32).to_le_bytes());
+    for zone in &request.zones {
         body.extend_from_slice(&zone.to_le_bytes());
     }
-    body.extend_from_slice(&(terms.len() as u32).to_le_bytes());
-    for term in terms {
-        push_cstring(&mut body, term);
+    body.extend_from_slice(&(request.search_terms.len() as u32).to_le_bytes());
+    for term in &request.search_terms {
+        push_bytes(&mut body, term);
     }
     body
+}
+
+/// A C string of raw bytes.
+fn push_bytes(body: &mut Vec<u8>, s: &[u8]) {
+    body.extend_from_slice(s);
+    body.push(0);
 }
 
 /// Body of `CMSG_FRIEND_LIST`: empty. The `ShowFriends()` refresh; the list also arrives unasked
@@ -465,12 +465,12 @@ mod tests {
         let request = WhoRequest {
             level_min: 1,
             level_max: 10,
-            player_name: "bob".into(),
-            guild_name: String::new(),
+            player_name: b"bob".to_vec(),
+            guild_name: Vec::new(),
             race_mask: 0xFFFF_FFFF,
             class_mask: 0x0000_0002,
             zones: vec![12],
-            search_terms: vec!["elw".into()],
+            search_terms: vec![b"elw".to_vec()],
         };
         let mut want = Vec::new();
         want.extend_from_slice(&1u32.to_le_bytes());
@@ -486,7 +486,7 @@ mod tests {
         assert_eq!(who(&request), want);
     }
 
-    /// A bare `/who` as bytes: levels 0 to 100, both names empty, every race and class, no lists.
+    /// An empty filter as bytes: levels 0 to 100, both names empty, every race and class, no lists.
     #[test]
     fn the_default_who_query_encodes_levels_0_to_100_with_every_filter_open() {
         let body = who(&WhoRequest::default());
@@ -498,21 +498,6 @@ mod tests {
         assert_eq!(&body[18..22], &0u32.to_le_bytes(), "no zones");
         assert_eq!(&body[22..26], &0u32.to_le_bytes(), "no terms");
         assert_eq!(body.len(), 26);
-    }
-
-    #[test]
-    fn who_trims_to_the_servers_caps() {
-        let request = WhoRequest {
-            zones: (0..15).collect(),
-            search_terms: (0..7).map(|i| i.to_string()).collect(),
-            ..Default::default()
-        };
-        let body = who(&request);
-        let zone_count = u32::from_le_bytes(body[18..22].try_into().unwrap());
-        assert_eq!(zone_count as usize, WHO_MAX_ZONES);
-        let after_zones = 22 + WHO_MAX_ZONES * 4;
-        let term_count = u32::from_le_bytes(body[after_zones..after_zones + 4].try_into().unwrap());
-        assert_eq!(term_count as usize, WHO_MAX_SEARCH_TERMS);
     }
 
     #[test]

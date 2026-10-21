@@ -64,6 +64,11 @@ impl ChrRaces {
             .map(|r| (r.name.as_str(), r.file.as_str()))
     }
 
+    /// Every row's id and name, in no order, as the `/who` race tag searches them (`0x5aee60`).
+    pub fn names_by_id(&self) -> impl Iterator<Item = (u32, &str)> {
+        self.0.iter().map(|(id, r)| (*id, r.name.as_str()))
+    }
+
     /// The race row's `CinematicSequenceID` (`+0x40`), the intro cinematic the first-login camera
     /// looks up (`0x46c2f8`); a race with no row has none.
     pub fn intro_sequence(&self, race: u32) -> Option<u32> {

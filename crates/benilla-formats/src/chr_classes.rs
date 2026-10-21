@@ -112,6 +112,14 @@ impl ChrClasses {
         self.0.get(&class)?.name.as_deref()
     }
 
+    /// Every row's id and name, in no order, the empty string for a row with none, as the `/who`
+    /// class tag searches them (`0x5aef0d`).
+    pub fn names_by_id(&self) -> impl Iterator<Item = (u32, &str)> {
+        self.0
+            .iter()
+            .map(|(id, c)| (*id, c.name.as_deref().unwrap_or_default()))
+    }
+
     /// The class's file string (`"WARRIOR"`), the create screen's second value per class; `None`
     /// for a class with no row or an empty string.
     pub fn file(&self, class: u32) -> Option<&str> {

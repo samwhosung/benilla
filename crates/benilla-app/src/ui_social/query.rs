@@ -1,141 +1,317 @@
-//! The `/who` filter parser: the typed string into `CMSG_WHO`'s fields, which the reference's
-//! `SendWho` builds in the engine (`0x5aebb0`). `z-` names a zone the wire wants as an
-//! `AreaTable.dbc` id, so the parse needs [`crate::area::AreaTableRes`].
-//!
-//! `n-` name, `g-` guild, `z-` zone, `c-` class and `r-` race (the `WHO_TAG_*` strings, without
-//! case); `lo-hi` or `n` a level range; anything else a search term the server matches against
-//! name, guild and zone. Values may be quoted. Here a `z-`, `c-` or `r-` word must equal a name,
-//! and one that matches nothing becomes a search term; the reference takes every name containing
-//! the word, and sends zone 0 or an empty mask for one that matches nothing.
+//! The `/who` query builder `FriendList::SendWhoQuery` (`0x5aebb0`, from `SendWho` `0x5ad3b0`): the
+//! typed filter into `CMSG_WHO`'s fields, token by token. The filter is copied up to 127 bytes and
+//! a space appended (`0x5aebf2`-`0x5aec1a`), read one UTF-8 code point at a time (`sgetu8`
+//! `0x41aab0`), and split at white space outside double quotes (`0x5aec90`-`0x5aecda`); a token
+//! still quoted when the copy ends is dropped (`0x5af099`). Each token is tested, without case and
+//! as a prefix, for the localized `WHO_TAG_NAME`, `_GUILD`, `_ZONE`, `_RACE` and `_CLASS` in that
+//! order (`0x5aecd5`-`0x5aeee8`), then for a level range (`0x5aef7d`); any other is a search term,
+//! and the fourth ends the scan (`0x5af02d`).
 
 use benilla_formats::AreaTableCatalog;
 use benilla_protocol::messages::WhoRequest;
 
 use crate::ui_unit::UnitNames;
 
-/// The 1.12 class ids a `c-` word can name; 6 and 10 do not exist in 1.12.
-const CLASS_IDS: [u8; 9] = [1, 2, 3, 4, 5, 7, 8, 9, 11];
-/// The 1.12 playable race ids.
-const RACE_IDS: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+/// The five tag strings `FrameScript_GetText` answers for the builder (`0x85dce0`, `0x85dcd0`,
+/// `0x85dcc0`, `0x85dcb0`, `0x85dca0`), the empty string for a missing one.
+pub(crate) struct WhoTags {
+    name: Vec<u8>,
+    guild: Vec<u8>,
+    zone: Vec<u8>,
+    race: Vec<u8>,
+    class: Vec<u8>,
+}
 
-/// Parse a `/who` filter into the wire request. A `z-` name that `areas` cannot resolve becomes a
-/// search term, which the server still matches against zone names.
+/// The tag keys, in the builder's test order.
+pub(crate) const WHO_TAG_KEYS: [&str; 5] = [
+    "WHO_TAG_NAME",
+    "WHO_TAG_GUILD",
+    "WHO_TAG_ZONE",
+    "WHO_TAG_RACE",
+    "WHO_TAG_CLASS",
+];
+
+impl WhoTags {
+    /// The tags from their texts, in [`WHO_TAG_KEYS`]' order.
+    pub(crate) fn from_texts<S: AsRef<[u8]>>(texts: [S; 5]) -> Self {
+        let [name, guild, zone, race, class] = texts.map(|t| t.as_ref().to_vec());
+        Self {
+            name,
+            guild,
+            zone,
+            race,
+            class,
+        }
+    }
+}
+
+/// The filter copy's buffer (`[ebp-0x128]`, `SStrCopy` bound `0x80`): 127 bytes and a NUL.
+const COPY_BYTES: usize = 127;
+/// The name and guild buffers (`SStrCopy` bound `0x30`, `0x5aed08`, `0x5aed49`).
+const NAME_BYTES: usize = 47;
+/// The zone ids the walk collects (`0x5aedc8`).
+const MAX_ZONES: usize = 10;
+/// The search terms; the fourth ends the scan (`0x5af02d`).
+const MAX_TERMS: usize = 4;
+
+/// `sgetu8`'s answer at a NUL (`0x5aec6a`, `0x5af099`).
+const END: u32 = 0xffff_ffff;
+/// `sgetu8`'s answer for a broken sequence.
+const BAD: u32 = 0x8000_0000;
+
+/// Build the query `filter` asks for. `areas` and `names` are the `AreaTable`, `ChrRaces` and
+/// `ChrClasses` rows the zone, race and class tags search.
 pub(crate) fn parse(
-    filter: &str,
+    filter: &[u8],
+    tags: &WhoTags,
     areas: Option<&AreaTableCatalog>,
     names: UnitNames<'_>,
 ) -> WhoRequest {
-    let mut request = WhoRequest::default();
-    let mut class_mask = 0u32;
-    let mut race_mask = 0u32;
-
-    for token in tokenize(filter) {
-        let (tag, value) = split_tag(&token);
-        match tag {
-            Some('n') => request.player_name = value.to_string(),
-            Some('g') => request.guild_name = value.to_string(),
-            Some('z') => match areas.and_then(|areas| zone_id(areas, value)) {
-                Some(id) => request.zones.push(id),
-                None => request.search_terms.push(value.to_string()),
-            },
-            Some('c') => match mask_bit(value, &CLASS_IDS, |id| names.class(id)) {
-                Some(bit) => class_mask |= bit,
-                None => request.search_terms.push(value.to_string()),
-            },
-            Some('r') => match mask_bit(value, &RACE_IDS, |id| names.race(id)) {
-                Some(bit) => race_mask |= bit,
-                None => request.search_terms.push(value.to_string()),
-            },
-            _ => {
-                if let Some((lo, hi)) = level_range(value) {
-                    request.level_min = lo;
-                    request.level_max = hi;
-                } else if !value.is_empty() {
-                    request.search_terms.push(value.to_string());
-                }
-            }
-        }
-    }
-
-    // No `c-` or `r-` term keeps the default all-ones mask.
-    if class_mask != 0 {
-        request.class_mask = class_mask;
-    }
-    if race_mask != 0 {
-        request.race_mask = race_mask;
-    }
-    request
-}
-
-/// Split a filter on whitespace outside double quotes; an unterminated quote runs to the end.
-fn tokenize(filter: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
+    let mut copy: Vec<u8> = filter
+        .iter()
+        .copied()
+        .take_while(|&b| b != 0)
+        .take(COPY_BYTES)
+        .collect();
+    // Deviation: a filter of 127 bytes or more puts the copy's NUL in the name buffer's first byte
+    // (`0x5aec1a`), so a name an earlier tag set is scanned as more filter. benilla ends the copy
+    // at its own NUL: the run-on reads one stack buffer through another.
+    copy.push(b' ');
+    let mut builder = Builder {
+        tags,
+        areas,
+        names,
+        request: WhoRequest::default(),
+    };
+    let mut token = Vec::new();
     let mut quoted = false;
-    for ch in filter.chars() {
-        match ch {
-            '"' => quoted = !quoted,
-            c if c.is_whitespace() && !quoted => {
-                if !current.is_empty() {
-                    tokens.push(std::mem::take(&mut current));
+    let mut at = skip_space(&copy, 0);
+    loop {
+        let (c, n) = next_code_point(&copy, at);
+        if c == END {
+            break;
+        }
+        if c == u32::from(b'"') {
+            quoted = !quoted;
+            at += n;
+            continue;
+        }
+        if quoted || !is_space(c) {
+            // Every byte the decoder read, the one that broke a sequence too (`0x5af06f`).
+            token.extend_from_slice(&copy[at..at + n]);
+            at += n;
+            continue;
+        }
+        builder.token(std::mem::take(&mut token));
+        if builder.request.search_terms.len() >= MAX_TERMS {
+            break;
+        }
+        at = skip_space(&copy, at);
+    }
+    builder.request
+}
+
+/// The position past the white space at `at` (`0x5aec2b`-`0x5aec58`, `0x5af03d`-`0x5af068`).
+fn skip_space(copy: &[u8], mut at: usize) -> usize {
+    loop {
+        let (c, n) = next_code_point(copy, at);
+        if !is_space(c) {
+            return at;
+        }
+        at += n;
+    }
+}
+
+/// `sgetu8` (`0x41aab0`): the code point at `at` and the bytes read. A NUL lead, or a NUL where a
+/// continuation belongs, is [`END`]; a stray continuation, or a continuation that is not
+/// `10xxxxxx`, is [`BAD`], the bad byte counted. Leads up to `0xfd` take up to five
+/// continuations, with no check for overlong forms. The copy's end reads as its NUL.
+fn next_code_point(copy: &[u8], at: usize) -> (u32, usize) {
+    let byte = |i: usize| u32::from(copy.get(at + i).copied().unwrap_or(0));
+    let lead = byte(0);
+    let (more, mut point) = match lead {
+        0 => return (END, 0),
+        0x01..=0x7f => return (lead, 1),
+        0xc0..=0xdf => (1, lead & 0x1f),
+        0xe0..=0xef => (2, lead & 0xf),
+        0xf0..=0xf7 => (3, lead & 7),
+        0xf8..=0xfb => (4, lead & 3),
+        0xfc..=0xfd => (5, lead & 1),
+        _ => return (BAD, 1),
+    };
+    for k in 1..=more {
+        let c = byte(k);
+        if c == 0 {
+            return (END, k);
+        }
+        if c & 0xc0 != 0x80 {
+            return (BAD, k + 1);
+        }
+        point = point << 6 | (c & 0x3f);
+    }
+    (point, more + 1)
+}
+
+/// `iswspace` (`0x74006f`) of a code point's low 16 bits: tab to carriage return and the space
+/// from the C table below `0x100`, which has no bit from `0x80` on (so not `U+00A0`), and the
+/// system's space class above it (`GetStringTypeW` through `0x413ed3`), here Unicode's
+/// `White_Space`; `0xffff` is none.
+fn is_space(c: u32) -> bool {
+    match c as u16 {
+        0xffff => false,
+        w @ 0..=0xff => matches!(w, 0x09..=0x0d | 0x20),
+        w => char::from_u32(u32::from(w)).is_some_and(char::is_whitespace),
+    }
+}
+
+/// `iswdigit` (`0x740050`) of a byte sign-extended to 16 bits (`movsx ax`): a byte of `0x80` or
+/// more is `U+FF80` to `U+FFFF`, none of them a digit.
+fn is_wide_digit(b: u8) -> bool {
+    b.is_ascii_digit()
+}
+
+/// `_isdigit` (`0x73fc0f`) of the byte after a range's digits or its leading `-` (`0x5aefd9`),
+/// sign-extended: a byte of `0x80` or more reads the 128 bytes before the ctype table, where the
+/// digit bit is set for `0xf7`, `0xfb` and `0xfd` (the decimal point `0x831714` and the low bytes
+/// of `0x83171c` and `0x831720`).
+fn is_digit(b: u8) -> bool {
+    b.is_ascii_digit() || matches!(b, 0xf7 | 0xfb | 0xfd)
+}
+
+/// `SStrToInt` (`0x64ac60`): an optional `-`, then decimal digits in wrapping 32-bit arithmetic,
+/// 0 when no digit follows.
+fn str_to_int(s: &[u8]) -> u32 {
+    let (negative, digits) = match s.split_first() {
+        Some((b'-', rest)) => (true, rest),
+        _ => (false, s),
+    };
+    let value = digits
+        .iter()
+        .take_while(|b| b.is_ascii_digit())
+        .fold(0u32, |v, &d| {
+            v.wrapping_mul(10).wrapping_add(u32::from(d - b'0'))
+        });
+    if negative {
+        value.wrapping_neg()
+    } else {
+        value
+    }
+}
+
+/// `SStrCmpI` (`0x64a4c0`) over the tag's length: does `token` begin with `tag`, `A`-`Z` folded?
+/// An empty tag begins every token.
+fn starts_with_tag(token: &[u8], tag: &[u8]) -> bool {
+    token.len() >= tag.len() && token[..tag.len()].eq_ignore_ascii_case(tag)
+}
+
+/// `SStrStrI` (`0x64b540`): does `text` occur in `name`, `A`-`Z` folded? An empty name holds
+/// nothing, and an empty text is in any other.
+fn contains(name: &[u8], text: &[u8]) -> bool {
+    !name.is_empty() && (0..name.len()).any(|i| starts_with_tag(&name[i..], text))
+}
+
+/// `SStrCopy` into a 48-byte buffer: the first 47 bytes.
+fn bounded(text: &[u8]) -> Vec<u8> {
+    text[..text.len().min(NAME_BYTES)].to_vec()
+}
+
+struct Builder<'a> {
+    tags: &'a WhoTags,
+    areas: Option<&'a AreaTableCatalog>,
+    names: UnitNames<'a>,
+    request: WhoRequest,
+}
+
+impl Builder<'_> {
+    /// One token at the white space that ends it (`0x5aecda`).
+    fn token(&mut self, token: Vec<u8>) {
+        let tags = self.tags;
+        if starts_with_tag(&token, &tags.name) {
+            self.request.player_name = bounded(&token[tags.name.len()..]);
+        } else if starts_with_tag(&token, &tags.guild) {
+            self.request.guild_name = bounded(&token[tags.guild.len()..]);
+        } else if starts_with_tag(&token, &tags.zone) {
+            self.zone(&token[tags.zone.len()..]);
+        } else if starts_with_tag(&token, &tags.race) {
+            let rows = self.names.races.into_iter().flat_map(|t| t.names_by_id());
+            add_matches(&mut self.request.race_mask, rows, &token[tags.race.len()..]);
+        } else if starts_with_tag(&token, &tags.class) {
+            let rows = self.names.classes.into_iter().flat_map(|t| t.names_by_id());
+            add_matches(
+                &mut self.request.class_mask,
+                rows,
+                &token[tags.class.len()..],
+            );
+        } else if !self.levels(&token) {
+            self.request.search_terms.push(token);
+        }
+    }
+
+    /// The zone walk (`0x5aed8f`-`0x5aee0f`): every `AreaTable` row with no parent (`+8`,
+    /// `0x5aedc1`), in record order, whose name contains `text`, while the list holds fewer than
+    /// 10; the list carries over from one zone tag to the next, and one left empty holds zone 0
+    /// (`0x5aee08`).
+    fn zone(&mut self, text: &[u8]) {
+        let zones = &mut self.request.zones;
+        if let Some(areas) = self.areas {
+            for (id, row) in areas.rows_in_order() {
+                if zones.len() >= MAX_ZONES {
+                    break;
+                }
+                if row.zone_id == 0 && contains(row.name.as_bytes(), text) {
+                    zones.push(id);
                 }
             }
-            c => current.push(c),
+        }
+        if zones.is_empty() {
+            zones.push(0);
         }
     }
-    if !current.is_empty() {
-        tokens.push(current);
-    }
-    tokens
-}
 
-/// Split `c-warrior` into `(Some('c'), "warrior")`. Only one ASCII letter and a `-` is a tag, so
-/// `1-10` and a hyphenated word are not.
-fn split_tag(token: &str) -> (Option<char>, &str) {
-    let mut chars = token.chars();
-    match (chars.next(), chars.next()) {
-        (Some(tag), Some('-')) if tag.is_ascii_alphabetic() => {
-            (Some(tag.to_ascii_lowercase()), &token[2..])
+    /// A level range (`0x5aef7d`-`0x5aeff2`), or `false` for a term. A token that begins with a
+    /// digit sets both levels to its number, then 100 for the maximum after a `-` (`0x5aefc4`) and
+    /// the number after that dash; one that begins with `-` and a digit sets only the maximum.
+    /// Nothing is clamped.
+    fn levels(&mut self, token: &[u8]) -> bool {
+        let byte = |i: usize| token.get(i).copied().unwrap_or(0);
+        let request = &mut self.request;
+        let mut at = 1;
+        let range = if is_wide_digit(byte(0)) {
+            let n = str_to_int(token);
+            (request.level_min, request.level_max) = (n, n);
+            while is_wide_digit(byte(at)) {
+                at += 1;
+            }
+            if byte(at) == b'-' {
+                at += 1;
+                request.level_max = 100;
+            }
+            true
+        } else if byte(0) == b'-' {
+            false
+        } else {
+            return false;
+        };
+        if is_digit(byte(at)) {
+            request.level_max = str_to_int(&token[at..]);
+            return true;
         }
-        _ => (None, token),
-    }
-}
-
-/// `1-10` is `(1, 10)` and `40` is `(40, 40)`, clamped to 1..=100 with the high bound raised to
-/// the low. The reference (`0x5aef7d`) sends the numbers as typed, unclamped, and also reads `N-`
-/// as N..100 and `-M` as 0..M.
-fn level_range(value: &str) -> Option<(u32, u32)> {
-    let clamp = |n: u32| n.clamp(1, 100);
-    match value.split_once('-') {
-        Some((lo, hi)) => {
-            let (lo, hi) = (lo.parse::<u32>().ok()?, hi.parse::<u32>().ok()?);
-            Some((clamp(lo), clamp(hi.max(lo))))
-        }
-        None => {
-            let n = clamp(value.parse::<u32>().ok()?);
-            Some((n, n))
-        }
+        range
     }
 }
 
-/// Match a class/race word against the display names and return its `1 << id` bit.
-fn mask_bit<'n>(
-    value: &str,
-    ids: &[u8],
-    names: impl Fn(u8) -> Option<(&'n str, &'n str)>,
-) -> Option<u32> {
-    ids.iter().copied().find_map(|id| {
-        let (display, token) = names(id)?;
-        // Both spellings answer: "night elf" (the display name) and "nightelf" (the file token).
-        (display.eq_ignore_ascii_case(value) || token.eq_ignore_ascii_case(value))
-            .then_some(1u32 << id)
-    })
-}
-
-/// A zone name's `AreaTable` id, exact but without case; the catalog prefers a top-level row over
-/// a same-named subzone, and the reference skips subzones.
-fn zone_id(areas: &AreaTableCatalog, name: &str) -> Option<u32> {
-    areas.id_for_name(name)
+/// A race or class tag (`0x5aee53`-`0x5aeec1`, `0x5aef00`-`0x5aef70`): the first of its kind clears
+/// the all-ones mask, then every row whose localized name contains `text` adds `1 << (id mod 32)`
+/// (`shl edx,cl`, `0x5aeeab`).
+fn add_matches<'n>(mask: &mut u32, rows: impl Iterator<Item = (u32, &'n str)>, text: &[u8]) {
+    if *mask == u32::MAX {
+        *mask = 0;
+    }
+    for (id, name) in rows {
+        if contains(name.as_bytes(), text) {
+            *mask |= 1 << (id & 31);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -354,8 +354,12 @@ pub(super) fn drain_social(
                         .send(ClientCommand::LfgQuery { criterion, class });
                 }
                 SocialRequest::Who(filter) => {
+                    let tags = super::query::WhoTags::from_texts(
+                        super::query::WHO_TAG_KEYS.map(|key| script.global_text(key)),
+                    );
+                    let areas = areas.as_deref().map(|a| &a.0);
                     let request =
-                        super::who_query(&filter, areas.as_deref().map(|a| &a.0), unit_names.get());
+                        super::who_query(filter.as_bytes(), &tags, areas, unit_names.get());
                     let _ = commands.0.send(ClientCommand::Who {
                         request: Box::new(request),
                     });
