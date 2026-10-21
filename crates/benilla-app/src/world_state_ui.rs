@@ -450,6 +450,67 @@ mod tests {
         }
     }
 
+    /// The flag `0x49bd50` stores (`0xb6e5dc`) moves only at a confirm (`0x49bbbf`) or a free
+    /// (`0x49bc41`): the walk's rename (state 2) and a pending join keep the defense rows up until
+    /// a notice confirms or frees a slot.
+    #[test]
+    fn the_defense_rows_hold_through_a_rename_until_a_confirm_or_a_free() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.insert_non_send_resource(benilla_ui::script::UiScript::new().expect("a VM"));
+        let mut states = WorldStates::default();
+        states.init_scope(0, 139);
+        world.insert_resource(states);
+        world.insert_resource(WorldStateUiRes(WorldStateUiCatalog::from_rows(vec![(
+            1,
+            row(0, 139, 1),
+        )])));
+        let mut channels = crate::ui_chat::ChannelState {
+            channels: benilla_formats::ChatChannelsCatalog::from_rows(vec![
+                benilla_formats::ChatChannelRow {
+                    id: 22,
+                    flags: 0x1_0003,
+                    pattern: "LocalDefense - %s".into(),
+                    shortcut: "LocalDefense".into(),
+                },
+            ]),
+            zone_mask: Some(0),
+            ..Default::default()
+        };
+        let (east, west) = (
+            "LocalDefense - Eastern Plaguelands",
+            "LocalDefense - Western Plaguelands",
+        );
+        channels.claim_slot(east, 22);
+        channels.confirm_slot(east);
+        world.insert_resource(channels);
+        let shown = |world: &mut World| -> i64 {
+            world
+                .run_system_once(feed_world_state_ui)
+                .expect("the feed runs");
+            world
+                .non_send_resource::<benilla_ui::script::UiScript>()
+                .eval("return GetNumWorldStateUI()")
+                .expect("the count")
+        };
+        assert_eq!(shown(&mut world), 1);
+        world
+            .resource_mut::<crate::ui_chat::ChannelState>()
+            .rename_slot(east, west);
+        world
+            .resource_mut::<crate::ui_chat::ChannelState>()
+            .claim_slot("MyChan", 0);
+        assert_eq!(shown(&mut world), 1, "a rename and a pending join keep it");
+        world
+            .resource_mut::<crate::ui_chat::ChannelState>()
+            .confirm_slot(west);
+        assert_eq!(shown(&mut world), 1, "the confirm recomputes: still joined");
+        world
+            .resource_mut::<crate::ui_chat::ChannelState>()
+            .free_slot(west);
+        assert_eq!(shown(&mut world), 0, "the free recomputes");
+    }
+
     /// An init clears the table.
     #[test]
     fn an_init_forgets_the_previous_zone() {
