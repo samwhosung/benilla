@@ -84,11 +84,16 @@ fn hermetic_addon(
 /// The world after `Startup` ([`super::setup_script`]): the stock glue VM at the login screen.
 fn booted_world() -> World {
     let mut world = World::new();
+    boot(&mut world);
+    world
+}
+
+/// `Startup`'s part of [`booted_world`], on `world`.
+fn boot(world: &mut World) {
     world.init_resource::<super::AddOnIdentity>();
     world.init_resource::<crate::minimap::MinimapZoom>();
     world.init_resource::<super::ReloadUiPending>();
-    super::setup_script(&mut world);
-    world
+    super::setup_script(world);
 }
 
 /// Queue and run a `ReloadUI()` as the app does; [`super::run_pending_reload`] checks the client
@@ -1824,7 +1829,10 @@ JoinProbe.lua
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (tmp, _c, _h) = hermetic_addon("joinprobe", "JoinProbe", TOC, LUA);
-    let mut world = booted_world();
+    // The whole client, whose call host the load lends.
+    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let world = app.world_mut();
+    boot(world);
     let (tx, wire) = crossbeam_channel::unbounded();
     world.insert_resource(crate::net::NetCommands(tx));
     world.insert_resource(crate::ui_chat::ChannelState {
@@ -1841,7 +1849,7 @@ JoinProbe.lua
         ..Default::default()
     });
 
-    log_in_as(&mut world, "Onewarrior", 1);
+    log_in_as(world, "Onewarrior", 1);
 
     // A join goes out inside its call (`0x49ee02`).
     let joins: Vec<String> = wire
@@ -1857,7 +1865,7 @@ JoinProbe.lua
         "a built-in shortcut with no zone text yet is a no-op, not a custom channel on the server"
     );
 
-    drop(world);
+    drop(app);
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
