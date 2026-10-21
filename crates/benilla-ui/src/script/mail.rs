@@ -55,7 +55,9 @@ pub struct MailInboxRow {
     /// `GetInboxText`'s body, its text or its template's, `$`-expanded; `None` (nil) until the
     /// text lands, for an auction mail and for a mail with neither.
     pub body: Option<String>,
-    pub stationery_texture: String,
+    /// The stationery's texture basename in the store (`[row+0x8]`), `None` (nil) for an id the
+    /// store lacks (`0x4af27c`-`0x4af2a9`).
+    pub stationery_texture: Option<String>,
     /// `isInvoice`: only an auction won (result 1) or sold (2), not an outbid or expiry notice
     /// (`0x4af2eb`).
     pub is_invoice: bool,
@@ -513,7 +515,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 && r.stationery != STATIONERY_GM;
             Ok(MultiValue::from_vec(vec![
                 body,
-                Value::String(lua.create_string(&r.stationery_texture)?),
+                match &r.stationery_texture {
+                    Some(t) => Value::String(lua.create_string(t)?),
+                    None => Value::Nil,
+                },
                 flag(takeable),
                 flag(r.is_invoice),
             ]))
@@ -1240,7 +1245,7 @@ mod tests {
             can_reply: true,
             is_gm: false,
             body: Some("Lok'tar.".into()),
-            stationery_texture: "STATIONERYTEST".into(),
+            stationery_texture: Some("STATIONERYTEST".into()),
             is_invoice: false,
             invoice: None,
             item_id,

@@ -443,7 +443,7 @@ fn resolve_row(
         can_reply,
         is_gm,
         body: letter_body(entry, raw_body, templates, macros),
-        stationery_texture,
+        stationery_texture: Some(stationery_texture),
         // Won and sold notices only, not every auction mail: the reference's `isInvoice` reads
         // what its subject parser persists for those two alone.
         is_invoice: auction
@@ -1086,7 +1086,7 @@ mod tests {
             &no_strings,
         );
         assert!(row.can_reply);
-        assert_eq!(row.stationery_texture, "STATIONERYTEST");
+        assert_eq!(row.stationery_texture.as_deref(), Some("STATIONERYTEST"));
 
         // A player mail still carrying money: replyable.
         let mut with_money = entry(4, Some(0xA), 0, 30.0);

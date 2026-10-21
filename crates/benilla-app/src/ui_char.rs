@@ -617,6 +617,8 @@ fn slot_view(
         .and_then(|i| i.catalog.get(display))
         .and_then(|d| d.icon.clone());
     Some(InvSlotView {
+        template_flags: t.map_or(0, |t| t.flags),
+        zone_bound: t.is_some_and(|t| t.area != 0 || t.map != 0),
         inventory_type: t.map(|t| t.inventory_type),
         bonding: t.map_or(0, |t| t.bonding),
         // A container's filled seats, which `ClickTradeButton` counts (`0x4bff50`).
@@ -722,6 +724,8 @@ fn inventory_slots(
             flags: 0,
             // Ammo has no item object, only its template, so there is no bind to read.
             already_bound: false,
+            template_flags: 0,
+            zone_bound: false,
             bonding: 0,
             occupied_seats: None,
             use_spell: 0,

@@ -1120,7 +1120,7 @@ pub(super) fn feed_chat(
     ),
     unit_names: crate::ui_unit::NameTables,
     // The spam and profanity filters, which run in the reference's display function `0x49a870`.
-    mut text_filter: crate::text_filter::ChatTextFilter,
+    text_filter: crate::text_filter::ChatTextFilter,
 ) {
     let (Some(script), set) = vm.parts() else {
         return;

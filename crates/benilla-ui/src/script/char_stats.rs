@@ -208,6 +208,12 @@ pub struct InvSlotView {
     /// Bound at runtime (`0x5da2c0`): `ITEM_FIELD_FLAGS & 1`, or an enchant whose
     /// `SpellItemEnchantment` row binds. The tooltip's bind line then says Soulbound.
     pub already_bound: bool,
+    /// The template's flags (`[rec+0x20]`), 0 while unresolved: conjured `0x2` refuses the mail
+    /// slot (`0x4adfbd`).
+    pub template_flags: u32,
+    /// The template binds the item to an area or a map (`[rec+0x1c8]`, `[rec+0x1cc]`, read by
+    /// `0x5da500` and `0x5da570`), which the mail slot refuses (`0x4adfe2`, `0x4adfed`).
+    pub zone_bound: bool,
     /// The template's bonding (`[rec+0x194]`), 0 while unresolved: the equip arms ask on 2.
     pub bonding: u32,
     /// For a container, how many of its seats hold an item, as

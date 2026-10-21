@@ -70,6 +70,8 @@ fn merchant_compare_renders_the_compare_shape_and_no_hover_seats_a_plate() {
             field_duration: 0,
             petition: None,
             already_bound: false,
+            template_flags: 0,
+            zone_bound: false,
             occupied_seats: None,
             bonding: 0,
             use_spell: 0,

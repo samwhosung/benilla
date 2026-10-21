@@ -293,8 +293,10 @@ pub(crate) struct TextFilter {
     /// (`0xce893c`) is read by the masker and the name check alike.
     profanity: Arc<PatternList>,
     spam: PatternList,
-    /// `[0xb6e5f0]`: zero-initialized, advanced mod 8, never reset.
-    mask_index: usize,
+    /// `[0xb6e5f0]`: zero-initialized, advanced mod 8, never reset. Atomic, so every reader of the
+    /// filter (the chat chokepoint, the mail calls) shares the one index without excluding the
+    /// others.
+    mask_index: std::sync::atomic::AtomicUsize,
 }
 
 impl Default for TextFilter {
@@ -303,7 +305,7 @@ impl Default for TextFilter {
         TextFilter {
             profanity: Arc::new(PatternList::empty()),
             spam: PatternList::empty(),
-            mask_index: 0,
+            mask_index: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 }
@@ -313,7 +315,7 @@ impl TextFilter {
         TextFilter {
             profanity: Arc::new(PatternList::compile(profanity, "chat profanity filter")),
             spam: PatternList::compile(spam, "chat spam filter"),
-            mask_index: 0,
+            mask_index: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -351,16 +353,24 @@ impl TextFilter {
 
     /// `0x4a1a60` with `dl = 0`: mask in place, return whether anything matched. `enabled` is
     /// `profanityFilter`, tested here as the reference does.
-    pub(crate) fn mask(&mut self, enabled: bool, text: &mut String) -> bool {
+    pub(crate) fn mask(&self, enabled: bool, text: &mut String) -> bool {
         if !enabled || text.is_empty() || self.profanity.len() == 0 {
             return false;
         }
         self.mask_uncached(text)
     }
 
+    /// The index's current token, and the index advanced past it.
+    fn next_mask_index(&self) -> usize {
+        use std::sync::atomic::Ordering::Relaxed;
+        let at = self.mask_index.load(Relaxed);
+        self.mask_index.store((at + 1) % MASK_TOKENS.len(), Relaxed);
+        at
+    }
+
     /// The byte loop of `0x4a1b6a`-`0x4a1ba6`: one pass in list order over the mutating buffer, so
     /// an earlier pattern's mask can enable a later match but never the reverse.
-    fn mask_uncached(&mut self, text: &mut String) -> bool {
+    fn mask_uncached(&self, text: &mut String) -> bool {
         // The subject is ASCII-lowercased, byte-aligned with `text` and masked in step.
         let mut subject = ascii_lower(text);
         let mut candidates = self.profanity.candidates(&subject);
@@ -381,8 +391,8 @@ impl TextFilter {
                 // char boundaries, so both strings stay valid UTF-8 and aligned.
                 let run: String = (start..end)
                     .map(|_| {
-                        let token = MASK_TOKENS[self.mask_index] as char;
-                        self.mask_index = (self.mask_index + 1) % MASK_TOKENS.len();
+                        let index = self.next_mask_index();
+                        let token = MASK_TOKENS[index] as char;
                         token
                     })
                     .collect();
@@ -433,7 +443,7 @@ mod tests {
             let f = TextFilter::new(&list(&[spelling]), &[]);
             let mut hit = "you twat here".to_string();
             let mut miss = "atwatb".to_string();
-            let mut copy = f;
+            let copy = f;
             assert!(copy.mask(true, &mut hit), "{spelling} must match [4,8)");
             assert_eq!(hit, "you !@#$ here", "{spelling}");
             assert!(
@@ -458,7 +468,7 @@ mod tests {
     }
 
     fn masked(pattern: &str, text: &str) -> String {
-        let mut f = TextFilter::new(&list(&[pattern]), &[]);
+        let f = TextFilter::new(&list(&[pattern]), &[]);
         let mut line = text.to_string();
         f.mask(true, &mut line);
         line
@@ -572,7 +582,7 @@ mod tests {
     /// carrying across calls, and list order giving the later word the earlier mask characters.
     #[test]
     fn the_masker_reproduces_the_oracle_transcript() {
-        let mut f = TextFilter::new(&list(&[r"\<fagg[aeiouy]t", r"\<twat\>", "shit"]), &[]);
+        let f = TextFilter::new(&list(&[r"\<fagg[aeiouy]t", r"\<twat\>", "shit"]), &[]);
 
         let mut line = "you are a twat and a faggot".to_string();
         assert!(f.mask(true, &mut line));
@@ -596,7 +606,8 @@ mod tests {
         assert_eq!(line, "hello friend, nice weather");
 
         assert_eq!(
-            f.mask_index, 6,
+            f.mask_index.load(std::sync::atomic::Ordering::Relaxed),
+            6,
             "the cycle carries forward, and is never reset"
         );
     }
@@ -604,17 +615,17 @@ mod tests {
     /// With `profanityFilter = 0` the text is untouched and the phase does not move.
     #[test]
     fn the_masker_self_gates_and_a_gated_call_does_not_move_the_phase() {
-        let mut f = TextFilter::new(&list(&[r"\<twat\>"]), &[]);
+        let f = TextFilter::new(&list(&[r"\<twat\>"]), &[]);
         let mut line = "you are a twat".to_string();
         assert!(!f.mask(false, &mut line));
         assert_eq!(line, "you are a twat");
-        assert_eq!(f.mask_index, 0);
+        assert_eq!(f.mask_index.load(std::sync::atomic::Ordering::Relaxed), 0);
     }
 
     /// A multi-byte match is masked byte for byte.
     #[test]
     fn a_non_ascii_match_is_masked_byte_for_byte() {
-        let mut f = TextFilter::new(&list(&["傻B"]), &[]);
+        let f = TextFilter::new(&list(&["傻B"]), &[]);
         let mut line = "说 傻B 了".to_string();
         let before = line.len();
         assert!(f.mask(true, &mut line));
@@ -715,7 +726,7 @@ mod tests {
         let mut chain = benilla_formats::open_chain(&data).expect("open chain");
         let profanity = benilla_formats::load_chat_profanity(&mut chain).expect("profanity");
         let spam = benilla_formats::load_spam_messages(&mut chain).expect("spam");
-        let mut f = TextFilter::new(&profanity, &spam);
+        let f = TextFilter::new(&profanity, &spam);
 
         let mut line = "you are a twat and a faggot".to_string();
         assert!(f.mask(true, &mut line));
@@ -798,7 +809,7 @@ impl benilla_ui::script::NameLists for NameFilter {
 /// Bevy's sixteen-parameter limit.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ChatTextFilter<'w> {
-    filter: ResMut<'w, TextFilter>,
+    filter: Res<'w, TextFilter>,
     switches: Res<'w, TextFilterSwitches>,
 }
 
@@ -822,7 +833,7 @@ impl ChatTextFilter<'_> {
 
     /// Arm 2: mask the line if its type is in the reference's table (`0x49aa98`-`0x49aac2`); the
     /// CVar is the masker's own.
-    pub(crate) fn mask_chat(&mut self, chat_type: u8, text: &mut String) {
+    pub(crate) fn mask_chat(&self, chat_type: u8, text: &mut String) {
         if !PROFANITY_MASKED_CHAT_TYPES.contains(&chat_type) {
             return;
         }

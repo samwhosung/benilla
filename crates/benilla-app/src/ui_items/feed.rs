@@ -917,6 +917,8 @@ fn resolve_slot(
         });
     };
     Some(ContainerSlot {
+        template_flags: t.flags,
+        zone_bound: t.area != 0 || t.map != 0,
         use_fork: super::drain::use_fork(&t, flags, fields.item_text_id().unwrap_or(0)),
         item_class: Some(t.class),
         bonding: t.bonding,

@@ -84,7 +84,7 @@ fn row(sender: &str, subject: &str, was_read: bool, item_id: u32, cod: u32) -> M
         can_reply: true,
         is_gm: false,
         body: Some("body".into()),
-        stationery_texture: "STATIONERYTEST".into(),
+        stationery_texture: Some("STATIONERYTEST".into()),
         is_invoice: false,
         invoice: None,
         item_id,
