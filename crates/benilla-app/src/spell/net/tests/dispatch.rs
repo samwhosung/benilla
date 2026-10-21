@@ -342,7 +342,7 @@ fn a_game_objects_go_plays_its_instant_impacts_and_nothing_of_a_caster() {
             .drain()
             .map(|e| (e.entity, e.kind))
             .collect();
-        let targets: Vec<(Entity, Vec<Entity>, bool)> = world
+        let targets: Vec<(Option<Entity>, Vec<Entity>, bool)> = world
             .resource_mut::<Messages<SpellGoTargets>>()
             .drain()
             .map(|t| (t.caster, t.hits, t.dest.is_some()))
@@ -357,7 +357,7 @@ fn a_game_objects_go_plays_its_instant_impacts_and_nothing_of_a_caster() {
         events.contains(&(mob, CastEventKind::Go)),
         "a unit caster's cast kit"
     );
-    assert_eq!(targets, [(mob, vec![mob], true)]);
+    assert_eq!(targets, [(Some(mob), vec![mob], true)]);
 
     // A trap's instant go: the impact on the hit, no cast kit and no dest effect.
     dispatch(app.world_mut(), vec![go(TRAP, 0, BURST)]);
@@ -366,7 +366,7 @@ fn a_game_objects_go_plays_its_instant_impacts_and_nothing_of_a_caster() {
         !events.iter().any(|&(_, kind)| kind == CastEventKind::Go),
         "{events:?}"
     );
-    assert_eq!(targets, [(trap, vec![mob], false)]);
+    assert_eq!(targets, [(Some(trap), vec![mob], false)]);
 
     // A trap's missile spell: no missile.
     dispatch(app.world_mut(), vec![go(TRAP, 0, BOLT)]);

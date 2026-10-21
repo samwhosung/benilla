@@ -651,7 +651,8 @@ pub(crate) struct WoundAnim {
 /// reference's `0x6e8bf0` and `0x6e8a50`).
 #[derive(Message, Clone)]
 pub(crate) struct SpellGoTargets {
-    pub(crate) caster: Entity,
+    /// The caster unit, `None` for a caster that is no unit we hold.
+    pub(crate) caster: Option<Entity>,
     pub(crate) spell_id: u32,
     /// Units the spell landed on; each gets the impact hand-off.
     pub(crate) hits: Vec<Entity>,

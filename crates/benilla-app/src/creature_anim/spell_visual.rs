@@ -162,6 +162,8 @@ pub(crate) enum SpellKitFx {
         entity: Entity,
         spell_id: u32,
         class: FxClass,
+        /// `0x614150`'s `force`.
+        force: bool,
     },
 }
 
@@ -743,6 +745,7 @@ pub(super) fn route_cast_visuals(
                         entity: ev.entity,
                         spell_id: prior,
                         class: FxClass::Hold,
+                        force: true,
                     });
                 }
                 // A ranged-attribute START draws the ranged weapon (`0x6e78f3`); vmangos sends
@@ -819,6 +822,7 @@ pub(super) fn route_cast_visuals(
                     entity: ev.entity,
                     spell_id: ev.spell_id,
                     class: FxClass::Hold,
+                    force: true,
                 });
                 // Then the running auto-repeat spell's on the same unit, `0x614150([0xceac30], 0)`
                 // whenever it is set (`0x6e7fed`-`0x6e7ffb`), whoever casts the go: the gate of
@@ -836,6 +840,7 @@ pub(super) fn route_cast_visuals(
                         entity: ev.entity,
                         spell_id: repeat,
                         class: FxClass::Hold,
+                        force: true,
                     });
                 }
                 // A ranged-slot GO redraws ranged before the cast kit (`0x60f34c`, gate
@@ -915,6 +920,7 @@ pub(super) fn route_cast_visuals(
                     entity: ev.entity,
                     spell_id: ev.spell_id,
                     class: FxClass::Hold,
+                    force: true,
                 });
             }
         }
@@ -926,8 +932,11 @@ pub(super) fn route_cast_visuals(
         let Some(display) = spells.catalog.get(go.spell_id) else {
             continue;
         };
+        let Some(caster) = go.caster else {
+            continue;
+        };
         // Resolved once per GO (`0x6e802e`); every consumer below reads the merged row.
-        let wv = weapon_src.caster(go.caster);
+        let wv = weapon_src.caster(caster);
         let stages = resolve_stages(spells, &visuals.0, go.spell_id, || wv);
         // The dest one-shot (`0x6e8088`): field 12's model once at the dest point when field 6 is
         // 0, fired at GO whatever the hit list.
@@ -991,7 +1000,7 @@ pub(super) fn route_cast_visuals(
                     .and_then(|s| visuals.0.kit(s.cast))
                     .is_some_and(|k| k.positive_anim().is_some());
                 missiles.write(MissileSpawn {
-                    caster: go.caster,
+                    caster,
                     spell_id: go.spell_id,
                     path,
                     ammo_display_id: go.ammo_display_id,
@@ -1027,6 +1036,7 @@ pub(super) fn route_cast_visuals(
                     entity,
                     spell_id: prev,
                     class: FxClass::Hold,
+                    force: true,
                 });
             }
             // No ranged fallback on the channel poll (`0x612a30`).
@@ -1089,6 +1099,7 @@ pub(super) fn route_cast_visuals(
                 entity,
                 spell_id: prev,
                 class: FxClass::Hold,
+                force: true,
             });
         }
     }
@@ -1172,6 +1183,7 @@ pub(crate) fn arm_aura_state_fx(
                     entity,
                     spell_id,
                     class: FxClass::AuraState,
+                    force: true,
                 });
                 procs.write(AuraProc::Reap { entity, spell_id });
                 // The forced stop takes the 0x1000 effect too (`0x614179`).
@@ -1338,6 +1350,7 @@ pub(super) fn arm_loot_fx(
                 entity,
                 spell_id: LOOT_FX_KEY,
                 class: FxClass::Hold,
+                force: true,
             });
         }
     }

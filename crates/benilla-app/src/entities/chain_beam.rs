@@ -186,6 +186,7 @@ pub(super) fn spawn_chain_beams(
             entity,
             spell_id,
             class: FxClass::Hold,
+            ..
         } = ev
         else {
             continue;
@@ -889,6 +890,7 @@ mod tests {
                 entity: caster,
                 spell_id: CHAIN_SPELL,
                 class: FxClass::Hold,
+                force: true,
             });
             app.update();
             assert_eq!(

@@ -736,7 +736,7 @@ fn a_harmful_go_wounds_each_hit_once_and_a_missile_arrival_always() {
         app.world_mut()
             .write_message(cast_event(caster, spell_id, CastEventKind::Go));
         app.world_mut().write_message(SpellGoTargets {
-            caster,
+            caster: Some(caster),
             spell_id,
             hits: vec![target],
             misses: Vec::new(),
@@ -873,7 +873,7 @@ fn missile_spawn_defers_iff_the_cast_kit_animates() {
     let target = app.world_mut().spawn_empty().id();
     for spell_id in [ANIMATED, SILENT, STANDING] {
         app.world_mut().write_message(SpellGoTargets {
-            caster,
+            caster: Some(caster),
             spell_id,
             hits: vec![target],
             misses: Vec::new(),
@@ -957,7 +957,7 @@ fn a_targetless_dest_go_spawns_a_ground_missile_whose_arrival_sounds_at_the_poin
 
     let caster = app.world_mut().spawn_empty().id();
     app.world_mut().write_message(SpellGoTargets {
-        caster,
+        caster: Some(caster),
         spell_id: GROUND,
         hits: Vec::new(),
         misses: Vec::new(),
@@ -1775,7 +1775,7 @@ fn a_state_kits_anim_is_a_recompute_and_never_a_second_play() {
     app.world_mut()
         .write_message(cast_event(caster, CHARGE, CastEventKind::Go));
     app.world_mut().write_message(SpellGoTargets {
-        caster,
+        caster: Some(caster),
         spell_id: CHARGE,
         hits: vec![victim],
         misses: Vec::new(),

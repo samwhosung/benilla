@@ -1313,7 +1313,7 @@ fn spell_go(
         let impacts = display.speed <= 0.0 && !hits.is_empty();
         if let (true, Some(&caster)) = (impacts, index.0.get(&caster)) {
             go_targets.write(SpellGoTargets {
-                caster,
+                caster: Some(caster),
                 spell_id,
                 hits: hits.into_iter().map(|(_, e)| e).collect(),
                 misses,
@@ -1354,7 +1354,7 @@ fn spell_go(
     let dest = dest.map(benilla_assets::coords::wow_to_bevy);
     if !hits.is_empty() || !misses.is_empty() || dest.is_some() {
         go_targets.write(SpellGoTargets {
-            caster: e,
+            caster: Some(e),
             spell_id,
             hits: hits.into_iter().map(|(_, e)| e).collect(),
             misses,
