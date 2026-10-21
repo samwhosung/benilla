@@ -755,7 +755,21 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 super::item_stats::item_usable_by_id(&model, r.item_id)
             };
-            let _ = (r.named_bidder, r.owner_guid);
+            // A name the cache misses is asked with the list's callback, the bidder's on an owned
+            // row first (`0x4cf167`), then the seller's (`0x4cf1c8`); nothing else asks a name.
+            {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                let bidder_missed = r.named_bidder != 0 && r.high_bidder == AuctionHighBidder::Nil;
+                let seller_missed = r.owner_guid != 0 && r.owner.is_none();
+                for (missed, guid) in [
+                    (bidder_missed, r.named_bidder),
+                    (seller_missed, r.owner_guid),
+                ] {
+                    if missed && !model.auction_name_asks.contains(&guid) {
+                        model.auction_name_asks.push(guid);
+                    }
+                }
+            }
             let opt_str = |s: &Option<String>| -> mlua::Result<Value> {
                 Ok(match s {
                     Some(v) => Value::String(lua.create_string(v)?),
