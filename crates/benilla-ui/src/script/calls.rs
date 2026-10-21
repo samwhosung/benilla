@@ -145,6 +145,9 @@ pub enum ScriptCall {
     /// An auction verb past its binding's checks: its gates, refusals and packet
     /// ([`super::AuctionCall`]).
     Auction(super::AuctionCall),
+    /// A friend or ignore verb ([`super::SocialCall`]): its packet, its selection and its line
+    /// inside the call.
+    Social(super::SocialCall),
 }
 
 /// The mode the four `TargetNearest*` shims hand the TAB cycler `0x493f60`, the only byte that

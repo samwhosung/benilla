@@ -1,11 +1,13 @@
 //! The social window (`FriendsFrame.xml`), fed as `ui_social` feeds it: a pushed [`SocialState`]
-//! snapshot, then the list event.
+//! snapshot, then the list event. The VM keeps the friend and ignore calls its verbs make, which
+//! the client's host applies inside them (`ui_social::call_tests`).
 
-use benilla_ui::script::{FriendInfo, SocialRequest, SocialState, UiScript, WhoInfo};
+use benilla_ui::script::{FriendInfo, SocialCall, SocialRequest, SocialState, UiScript, WhoInfo};
 
 /// The window's own manifest slice, in `load_default_ui` order.
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     super::test_ui::load_social_ui(&mut s);
     s
@@ -27,14 +29,17 @@ fn who_name(s: &UiScript, row: u32) -> String {
         .unwrap()
 }
 
-fn friend(name: &str, level: u32, class: &str, area: &str, connected: bool) -> FriendInfo {
+/// A listed slot; an empty class or area is one with no row.
+fn friend(name: &str, level: i32, class: &str, area: &str, online: bool) -> FriendInfo {
+    let named = |s: &str| (!s.is_empty()).then(|| s.to_string());
     FriendInfo {
-        name: name.to_string(),
+        name: Some(name.to_string()),
         level,
-        class: class.to_string(),
-        area: area.to_string(),
-        connected,
-        status: String::new(),
+        class: named(class),
+        area: named(area),
+        online,
+        flags: 0,
+        listed: true,
     }
 }
 
@@ -125,6 +130,7 @@ fn the_social_tabs_fit_their_labels_on_the_first_show() {
     /// The big tab's two 20-unit end slices.
     const SIDES: f64 = 40.0;
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // Synchronous, like the app's `AtlasMeasurer`: the reference fits the tab inline.
     s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));
@@ -160,7 +166,7 @@ fn friend_rows_render_the_online_and_offline_templates() {
         SocialState {
             friends: vec![
                 FriendInfo {
-                    status: "<AFK>".to_string(),
+                    flags: 2,
                     ..friend("Onerogue", 60, "Rogue", "Elwynn Forest", true)
                 },
                 friend("Twomage", 0, "", "", false),
@@ -236,7 +242,8 @@ fn the_friend_buttons_follow_the_selection() {
     );
 }
 
-/// Remove Friend queues the row index (the app resolves the guid); Group Invite queues the name.
+/// Remove Friend calls with the row index (the host resolves the slot); Group Invite queues the
+/// name.
 #[test]
 fn the_friend_buttons_queue_their_verbs() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -254,12 +261,11 @@ fn the_friend_buttons_queue_their_verbs() {
         },
         "FRIENDLIST_UPDATE",
     );
-    let _ = s.take_social_requests();
-
+    let _ = s.take_social_calls();
     s.run("FriendsFrame_RemoveFriend()").unwrap();
     assert_eq!(
-        s.take_social_requests(),
-        vec![SocialRequest::RemoveFriendIndex(2)]
+        s.take_social_calls(),
+        vec![SocialCall::RemoveFriendIndex(2)]
     );
 
     s.run("FriendsFrame_GroupInvite()").unwrap();
@@ -319,11 +325,11 @@ fn the_ignore_list_is_the_other_half_of_tab_one() {
         "Ninja"
     );
 
-    let _ = s.take_social_requests();
+    let _ = s.take_social_calls();
     s.run("FriendsFrame_UnIgnore()").unwrap();
     assert_eq!(
-        s.take_social_requests(),
-        vec![SocialRequest::DelIgnore("Spammer".to_string())]
+        s.take_social_calls(),
+        vec![SocialCall::DelIgnore("Spammer".to_string())]
     );
 
     // Through the ignore frame's own toggle pair: the friends frame's copy hides with its list.
@@ -512,11 +518,11 @@ fn the_who_buttons_need_a_selected_row() {
     assert!(s
         .eval::<bool>("return WhoFrameAddFriendButton:IsEnabled() ~= 0")
         .unwrap());
-    let _ = s.take_social_requests();
+    let _ = s.take_social_calls();
     s.run("WhoFrameAddFriendButton:Click()").unwrap();
     assert_eq!(
-        s.take_social_requests(),
-        vec![SocialRequest::AddFriend("Furor".to_string())]
+        s.take_social_calls(),
+        vec![SocialCall::AddFriend("Furor".to_string())]
     );
 
     push(
@@ -592,13 +598,13 @@ fn add_friend_without_a_target_opens_the_name_dialog() {
         "Enter name of friend to add:"
     );
 
-    let _ = s.take_social_requests();
+    let _ = s.take_social_calls();
     s.run("StaticPopup1EditBox:SetText(\"Onerogue\")").unwrap();
     // Through the button: the stock `OnAccept` reads `this:GetParent()`, which a click seats.
     s.run("StaticPopup1Button1:Click()").unwrap();
     assert_eq!(
-        s.take_social_requests(),
-        vec![SocialRequest::AddFriend("Onerogue".to_string())]
+        s.take_social_calls(),
+        vec![SocialCall::AddFriend("Onerogue".to_string())]
     );
     assert!(
         !s.eval::<bool>("return StaticPopup1:IsVisible()").unwrap(),
@@ -702,9 +708,10 @@ fn right_clicking_an_offline_friend_opens_nothing() {
     );
 }
 
-/// `FriendsList_Update` reads the selection back right after `SetSelectedFriend`.
+/// A row's click selects through the call, which the host applies before `FriendsList_Update`
+/// reads the selection back (`ui_social::call_tests`).
 #[test]
-fn selecting_a_row_reads_back_in_the_same_tick() {
+fn clicking_a_row_selects_it_through_the_call() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
     s.run("ToggleFriendsFrame(1)").unwrap();
@@ -720,17 +727,10 @@ fn selecting_a_row_reads_back_in_the_same_tick() {
         },
         "FRIENDLIST_UPDATE",
     );
-    let _ = s.take_social_requests();
+    let _ = s.take_social_calls();
 
     s.run("FriendsFrameFriendButton2:Click()").unwrap();
-    assert_eq!(
-        s.eval::<i64>("return GetSelectedFriend()").unwrap(),
-        2,
-        "the getter answers this tick, not after the app's next push"
-    );
-    assert!(s
-        .take_social_requests()
-        .contains(&SocialRequest::SelectFriend(2)));
+    assert!(s.take_social_calls().contains(&SocialCall::SelectFriend(2)));
 }
 
 /// `WhoListScrollFrame` is 287 tall (`FriendsFrame.xml:1661`), so its overflow `n * 16 - 287` is

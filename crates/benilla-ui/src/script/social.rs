@@ -1,8 +1,9 @@
 //! The social API: friends, ignores and `/who`. The app pushes a display-ready [`SocialState`]
-//! (the reference's formatter `0x5ae160` also resolves names engine-side) and drains the queued
-//! [`SocialRequest`]s. Selection is engine state in the reference (guids at FriendList `+0x648` and
-//! `+0x720`, read back by `0x5ad260` and `0x5ae510`), so a set changes the snapshot at once and
-//! queues the change for the app.
+//! (the reference's formatter `0x5ae160` also resolves names engine-side). The friend and ignore
+//! verbs act inside their calls through the host ([`SocialCall`]); the `/who` and LFG ones queue
+//! [`SocialRequest`]s for the app's drain. Selection is engine state in the reference (guids at
+//! FriendList `+0x648` and `+0x720`, read back by `0x5ae510` and `0x5ae630`), so the host seats the
+//! index its call leaves before the verb returns.
 
 use mlua::{Lua, Value};
 
@@ -10,18 +11,26 @@ use super::binding_abi::{self, bool_or_default, string_arg};
 use super::who_sort::WhoSortChain;
 use super::Model;
 
-/// One friend row in `GetFriendInfo`'s order; offline, the level is 0 and class and area empty.
+/// One friend slot as `GetFriendInfo` (`0x5ad060`) reads it, its ids resolved; the default is an
+/// empty slot, as the list's constructor leaves one (`0x5aca10`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FriendInfo {
-    /// From the name cache; empty while the name query is in flight.
-    pub name: String,
-    pub level: u32,
-    pub class: String,
-    /// The zone name, also empty when the id has no `AreaTable` row.
-    pub area: String,
-    pub connected: bool,
-    /// The away tag the friends-list template takes: `""`, `"<AFK>"` or `"<DND>"`.
-    pub status: String,
+    /// The slot's own copy of the name, `None` while it is null: the list fills it only from the
+    /// name cache (`0x5ae438`), and `lua_pushstring` pushes a null as nil (`0x5ad0c5`).
+    pub name: Option<String>,
+    /// `+0x10`, pushed signed (`fild` at `0x5ad0ca`).
+    pub level: i32,
+    /// The `ChrClasses` name of `+0x14`, `None` for an id with no row (`UNKNOWN`, `0x5ad102`).
+    pub class: Option<String>,
+    /// The `AreaTable` name of `+0x18` or of its parent, `None` for no row (`UNKNOWN`, `0x5ad151`).
+    pub area: Option<String>,
+    /// The online byte `+0`.
+    pub online: bool,
+    /// The status flags `+1`: 4 busy, 2 away (`0x5ad17b`).
+    pub flags: u8,
+    /// Whether the slot holds a guid: `GetNumFriends` counts the slots before the first that does
+    /// not (`0x5ae490`).
+    pub listed: bool,
 }
 
 /// One `/who` row in `GetWhoInfo`'s order, names localized; race comes before class, where the
@@ -39,7 +48,9 @@ pub struct WhoInfo {
 /// The social snapshot the app pushes whole; the default is a fresh login's.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SocialState {
-    /// In display order: the app sorts, as the reference's comparator `0x5ada00` does.
+    /// The 50 friend slots in the engine's order, then the 32 bytes after them, which
+    /// `GetFriendInfo(51)` reads as a slot (`0x5ae4b6` bounds at 50 inclusive). A slot past the end
+    /// of a shorter list reads empty.
     pub friends: Vec<FriendInfo>,
     /// The selected friend, 1-based, 0 for none (`0x5ad260` returns the stored slot + 1).
     pub selected_friend: u32,
@@ -54,29 +65,11 @@ pub struct SocialState {
     pub who_sort: WhoSortChain,
 }
 
-/// Outbound social intents, drained by the app.
+/// Outbound `/who` and LFG intents, drained by the app.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SocialRequest {
-    /// `ShowFriends()`: `CMSG_FRIEND_LIST`.
-    RefreshFriends,
-    /// `AddFriend(name)`.
-    AddFriend(String),
-    /// `RemoveFriend(index)`, from the friends frame's button.
-    RemoveFriendIndex(u32),
-    /// `RemoveFriend(name)`, from `/removefriend`; the app resolves either shape to the guid.
-    RemoveFriendName(String),
-    /// `AddIgnore(name)`.
-    AddIgnore(String),
-    /// `DelIgnore(name)`.
-    DelIgnore(String),
-    /// `AddOrDelIgnore(name)`, `/ignore`'s toggle; the app decides which, as it holds the list.
-    ToggleIgnore(String),
     /// A changed `SetLookingForGroup`: slots and comment for `CMSG_SET_LOOKING_FOR_GROUP`.
     SetLookingForGroup { slots: [u32; 3], comment: String },
-    /// `SetSelectedFriend(index)`, mirrored so the next push agrees.
-    SelectFriend(u32),
-    /// `SetSelectedIgnore(index)`.
-    SelectIgnore(u32),
     /// `SendWho(filter)`, the raw filter; parsing it needs the DBCs, so the app does it.
     Who(String),
     /// `SortWho(sortType)`, the raw argument; the binding has already sorted the snapshot.
@@ -86,6 +79,31 @@ pub enum SocialRequest {
     LfgQuery { criterion: u32, class: u32 },
     /// `SetWhoToUI(flag)`: the next `/who` answer goes to the Who frame (true) or chat (false).
     SetWhoToUi(bool),
+}
+
+/// A friend or ignore verb past its argument check, which the host applies inside the call
+/// ([`super::ScriptCall::Social`]). An index is the binding's `_ftol` of its argument, still
+/// 1-based: the engine's own functions take it less one, compared unsigned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SocialCall {
+    /// `ShowFriends()` (`0x5ad340`): `CMSG_FRIEND_LIST`.
+    ShowFriends,
+    /// `AddFriend(name)` (`0x5ad290` → `0x5ae670`).
+    AddFriend(String),
+    /// `RemoveFriend(index)` (`0x5ad2fa` → `0x5ae7e0`).
+    RemoveFriendIndex(u32),
+    /// `RemoveFriend(name)` (`0x5ad31f` → `0x5ae6f0`).
+    RemoveFriendName(String),
+    /// `SetSelectedFriend(index)` (`0x5ad24c` → `0x5ae4d0`).
+    SelectFriend(u32),
+    /// `AddIgnore(name)` (`0x5ad62f` → `0x5af300`).
+    AddIgnore(String),
+    /// `DelIgnore(name)` (`0x5ad67f` → `0x5af400`).
+    DelIgnore(String),
+    /// `AddOrDelIgnore(name)` (`0x5ad5df` → `0x5af1a0`), `/ignore`'s toggle.
+    AddOrDelIgnore(String),
+    /// `SetSelectedIgnore(index)` (`0x5ad55c` → `0x5ae5f0`).
+    SelectIgnore(u32),
 }
 
 impl super::UiScript {
@@ -98,6 +116,27 @@ impl super::UiScript {
     pub fn take_social_requests(&mut self) -> Vec<SocialRequest> {
         std::mem::take(&mut self.model_mut().social_requests)
     }
+
+    /// Seat the selections a call left, as `GetSelectedFriend` and `GetSelectedIgnore` answer
+    /// them: 1-based, 0 for none.
+    pub fn set_social_selection(&mut self, friend: u32, ignore: u32) {
+        let mut model = self.model_mut();
+        model.social.selected_friend = friend;
+        model.social.selected_ignore = ignore;
+    }
+
+    /// The friend and ignore calls a harness VM kept ([`Self::keep_calls`]), in call order.
+    pub fn take_social_calls(&mut self) -> Vec<SocialCall> {
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Social(call) => Some(call.clone()),
+            _ => None,
+        })
+    }
+}
+
+/// Hand `call` to the host, which applies it before the verb returns.
+fn submit(lua: &Lua, call: SocialCall) -> mlua::Result<()> {
+    super::calls::submit(lua, super::ScriptCall::Social(call))
 }
 
 /// Register the social globals against the snapshot store.
@@ -110,44 +149,51 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetNumFriends",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model.social.friends.len() as i64)
+            let slots = model.social.friends.iter().take(FRIEND_SLOTS);
+            Ok(slots.take_while(|f| f.listed).count() as i64)
         })?,
     )?;
 
-    // GetFriendInfo(index) (`0x5ad060`): an index past the end answers nils, not an error;
-    // FrameXML tests `if ( not name )`.
+    // GetFriendInfo(index) (`0x5ad060`): the slot `0x5ae4b0` finds for `index − 1`, or the
+    // `UNKNOWN` tuple when it finds none. The strings are global strings read at the call
+    // (`0x703bf0`), the empty one when missing.
     g.set(
         "GetFriendInfo",
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: GetFriendInfo(index)` (`0x85da28`, `0x5ad073`).
-            let index = i64::from(binding_abi::number_arg(
-                lua,
-                index,
-                "Usage: GetFriendInfo(index)",
-            )?);
+            let index = binding_abi::index_arg32(lua, index, "Usage: GetFriendInfo(index)")?;
+            let text = |key: &str| super::glue_core::global_text(lua, key);
+            let unknown = text("UNKNOWN");
+            let string = |s: &str| lua.create_string(s).map(Value::String);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(friend) = friend_at(&model.social.friends, index) else {
-                return Ok((
+                // `0x5ad1c8`-`0x5ad1fd`.
+                return Ok(mlua::MultiValue::from_vec(vec![
+                    string(&unknown)?,
+                    Value::Integer(1),
+                    string(&unknown)?,
+                    string(&unknown)?,
                     Value::Nil,
-                    Value::Nil,
-                    Value::Nil,
-                    Value::Nil,
-                    Value::Nil,
-                    Value::Nil,
-                ));
+                    string("")?,
+                ]));
             };
-            Ok((
-                Value::String(lua.create_string(&friend.name)?),
-                Value::Integer(i64::from(friend.level)),
-                Value::String(lua.create_string(&friend.class)?),
-                Value::String(lua.create_string(&friend.area)?),
-                if friend.connected {
-                    Value::Integer(1)
-                } else {
-                    Value::Nil
+            // The away tag only for an online slot, busy before away (`0x5ad176`-`0x5ad1a5`).
+            let tag = match (friend.online, friend.flags) {
+                (true, f) if f & 4 != 0 => text("CHAT_FLAG_DND"),
+                (true, f) if f & 2 != 0 => text("CHAT_FLAG_AFK"),
+                _ => String::new(),
+            };
+            Ok(mlua::MultiValue::from_vec(vec![
+                match &friend.name {
+                    Some(name) => string(name)?,
+                    None => Value::Nil,
                 },
-                Value::String(lua.create_string(&friend.status)?),
-            ))
+                Value::Integer(i64::from(friend.level)),
+                string(friend.class.as_deref().unwrap_or(&unknown))?,
+                string(friend.area.as_deref().unwrap_or(&unknown))?,
+                binding_abi::flag(friend.online),
+                string(&tag)?,
+            ]))
         })?,
     )?;
 
@@ -159,24 +205,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetSelectedFriend(index): set now, since `FriendsList_Update` reads it back in the same
-    // call, and queue it for the app.
+    // SetSelectedFriend(index): the host stores the slot's guid and seats the index before the
+    // verb returns, as `FriendsList_Update` reads it back on its next line.
     g.set(
         "SetSelectedFriend",
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: SetSelectedFriend(index)` (`0x85da44`, `0x5ad221`).
-            let index = i64::from(binding_abi::number_arg(
-                lua,
-                index,
-                "Usage: SetSelectedFriend(index)",
-            )?);
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let index = clamp_index(index, model.social.friends.len());
-            model.social.selected_friend = index;
-            model
-                .social_requests
-                .push(SocialRequest::SelectFriend(index));
-            Ok(())
+            let index = binding_abi::index_arg32(lua, index, "Usage: SetSelectedFriend(index)")?;
+            submit(lua, SocialCall::SelectFriend(index))
         })?,
     )?;
 
@@ -266,44 +302,30 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "ShowFriends",
-        lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.social_requests.push(SocialRequest::RefreshFriends);
-            Ok(())
-        })?,
+        lua.create_function(|lua, ()| submit(lua, SocialCall::ShowFriends))?,
     )?;
 
-    // AddFriend(name): a blank name is not sent, as vmangos drops it without a reply
-    // (`MiscHandler.cpp:468`).
+    // AddFriend(name): `is-number-or-string` else the usage (`0x5ad298`, `0x85da64`); any name is
+    // sent, the empty one too (`0x5ae670` tests nothing).
     g.set(
         "AddFriend",
-        lua.create_function(|lua, name: String| {
-            if !name.trim().is_empty() {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.social_requests.push(SocialRequest::AddFriend(name));
-            }
-            Ok(())
+        lua.create_function(|lua, name: Value| {
+            let name = string_arg(lua, name, "Usage: AddFriend(\"name\")")?;
+            submit(lua, SocialCall::AddFriend(name))
         })?,
     )?;
 
-    // RemoveFriend(indexOrName): the friends frame passes a row, `/removefriend` a name.
+    // RemoveFriend(indexOrName): `is-number` first, so a numeric string is an index (`0x5ad2d8`),
+    // then `is-number-or-string` for a name (`0x5ad303`), else the usage (`0x85da80`).
     g.set(
         "RemoveFriend",
         lua.create_function(|lua, who: Value| {
-            let request = match who {
-                Value::Integer(i) if i >= 1 => Some(SocialRequest::RemoveFriendIndex(i as u32)),
-                Value::Number(n) if n >= 1.0 => Some(SocialRequest::RemoveFriendIndex(n as u32)),
-                Value::String(s) => {
-                    let name = s.to_str()?.to_string();
-                    (!name.trim().is_empty()).then_some(SocialRequest::RemoveFriendName(name))
-                }
-                _ => None,
-            };
-            if let Some(request) = request {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.social_requests.push(request);
+            if let Some(n) = binding_abi::is_number(lua, who.clone()) {
+                let index = binding_abi::ftol(n) as u32;
+                return submit(lua, SocialCall::RemoveFriendIndex(index));
             }
-            Ok(())
+            let name = string_arg(lua, who, "Usage: RemoveFriend([\"name\"] or [index])")?;
+            submit(lua, SocialCall::RemoveFriendName(name))
         })?,
     )?;
 
@@ -349,37 +371,34 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SetSelectedIgnore",
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: SetSelectedIgnore(index)` (`0x85dae4`, `0x5ad531`).
-            let index = i64::from(binding_abi::number_arg(
-                lua,
-                index,
-                "Usage: SetSelectedIgnore(index)",
-            )?);
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let index = clamp_index(index, model.social.ignores.len());
-            model.social.selected_ignore = index;
-            model
-                .social_requests
-                .push(SocialRequest::SelectIgnore(index));
-            Ok(())
+            let index = binding_abi::index_arg32(lua, index, "Usage: SetSelectedIgnore(index)")?;
+            submit(lua, SocialCall::SelectIgnore(index))
         })?,
     )?;
 
-    for (global, make) in [
-        ("AddIgnore", SocialRequest::AddIgnore as fn(String) -> _),
-        ("DelIgnore", SocialRequest::DelIgnore as fn(String) -> _),
+    // Each `is-number-or-string`, else its usage (`0x85db24`, `0x85db40`, `0x85db04`).
+    for (global, usage, make) in [
+        (
+            "AddIgnore",
+            "Usage: AddIgnore(\"name\")",
+            SocialCall::AddIgnore as fn(String) -> _,
+        ),
+        (
+            "DelIgnore",
+            "Usage: DelIgnore(\"name\")",
+            SocialCall::DelIgnore as fn(String) -> _,
+        ),
         (
             "AddOrDelIgnore",
-            SocialRequest::ToggleIgnore as fn(String) -> _,
+            "Usage: AddOrDelIgnore(\"name\")",
+            SocialCall::AddOrDelIgnore as fn(String) -> _,
         ),
     ] {
         g.set(
             global,
-            lua.create_function(move |lua, name: String| {
-                if !name.trim().is_empty() {
-                    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                    model.social_requests.push(make(name));
-                }
-                Ok(())
+            lua.create_function(move |lua, name: Value| {
+                let name = string_arg(lua, name, usage)?;
+                submit(lua, make(name))
             })?,
         )?;
     }
@@ -480,18 +499,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// The 1-based friend lookup `GetFriendInfo` does, `None` past either end.
-fn friend_at(friends: &[FriendInfo], index: i64) -> Option<&FriendInfo> {
-    usize::try_from(index - 1).ok().and_then(|i| friends.get(i))
-}
+/// The friend list's slot count (`0x32`).
+const FRIEND_SLOTS: usize = 50;
 
-/// A selection index in `1..=len`, else 0, nothing selected.
-fn clamp_index(index: i64, len: usize) -> u32 {
-    if index >= 1 && index <= len as i64 {
-        index as u32
-    } else {
-        0
-    }
+/// `GetFriendSlot` (`0x5ae4b0`) on `index − 1`: a slot up to 50 inclusive, compared unsigned, so 0
+/// and every negative index find none; one the snapshot does not hold is an empty slot.
+fn friend_at(friends: &[FriendInfo], index: u32) -> Option<std::borrow::Cow<'_, FriendInfo>> {
+    let slot = index.wrapping_sub(1) as usize;
+    (slot <= FRIEND_SLOTS).then(|| match friends.get(slot) {
+        Some(f) => std::borrow::Cow::Borrowed(f),
+        None => std::borrow::Cow::Owned(FriendInfo::default()),
+    })
 }
 
 #[cfg(test)]

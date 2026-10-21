@@ -80,6 +80,7 @@ pub(crate) struct ScriptCallHost<'w, 's> {
                     crate::ui_chat::ChatSender<'w, 's>,
                     crate::ui_chat::EmoteDoer<'w, 's>,
                     crate::ui_auction::AuctionVerbs<'w, 's>,
+                    crate::ui_social::SocialSteps<'w>,
                 ),
             >,
             // The bags' and the loot window's.
@@ -190,6 +191,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::EnchantConfirm(answer) => popup = appliers.p1().confirm_enchant(answer),
             ScriptCall::Loot(call) => tail = appliers.p5().p1().apply(script, call),
             ScriptCall::Auction(call) => appliers.p4().p3().apply(script, call),
+            ScriptCall::Social(call) => appliers.p4().p4().apply(script, call),
         }
         // A selection this call made with the targeting cursor up was handed to the cast
         // (`SelectTarget`, `0x4935d5`) and is bound now, before the next call reads either.

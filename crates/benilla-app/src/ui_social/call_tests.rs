@@ -58,6 +58,9 @@ fn client() -> Social {
             r#"UNKNOWN = "Unknown"
             CHAT_FLAG_AFK = "<AFK>"
             CHAT_FLAG_DND = "<DND>"
+            ERR_FRIEND_NOT_FOUND = "ERR_FRIEND_NOT_FOUND"
+            ERR_IGNORE_ALREADY_S = "ERR_IGNORE_ALREADY_S %s"
+            ERR_IGNORE_NOT_FOUND = "ERR_IGNORE_NOT_FOUND"
             UPDATES = 0
             local f = CreateFrame("Frame")
             f:RegisterEvent("FRIENDLIST_UPDATE")
@@ -135,6 +138,15 @@ fn lines(s: &Social) -> Vec<&'static str> {
         .into_iter()
         .map(|e| e.key)
         .collect()
+}
+
+/// The chat lines the verbs showed inside their calls since the last read, in order: the VM's
+/// strings are their keys.
+fn shown(s: &Social) -> Vec<String> {
+    let chat = s.app.world().resource::<crate::ui_chat::ChatLog>();
+    let lines = chat.pending_lines();
+    chat.reset();
+    lines
 }
 
 fn cache(s: &mut Social, guid: u64, name: &str) {
@@ -455,9 +467,10 @@ fn the_friend_verbs_send_inside_their_calls() {
         [Sent::DelFriend(8), Sent::DelFriend(7),],
         "a numeric string is an index, and slot 3 is empty"
     );
+    let _ = shown(&s);
     run(&mut s, r#"RemoveFriend("Nobody")"#);
     assert!(sent(&s).is_empty());
-    assert_eq!(lines(&s), ["ERR_FRIEND_NOT_FOUND"]);
+    assert_eq!(shown(&s), ["ERR_FRIEND_NOT_FOUND"], "inside the call");
 
     let err = try_run(&mut s, "RemoveFriend({})").unwrap_err();
     assert!(
@@ -507,7 +520,7 @@ fn the_ignore_verbs_act_inside_their_calls() {
     packets(&mut s, vec![SessionEvent::IgnoreList { guids: vec![9] }]);
     feed_once(&mut s);
     let _ = sent(&s);
-    let _ = lines(&s);
+    let _ = shown(&s);
 
     run(&mut s, r#"AddOrDelIgnore("sPAM") AddOrDelIgnore("Other")"#);
     assert_eq!(
@@ -516,10 +529,28 @@ fn the_ignore_verbs_act_inside_their_calls() {
     );
     run(&mut s, r#"AddIgnore("Spam") DelIgnore("Nope")"#);
     assert!(sent(&s).is_empty());
-    assert_eq!(lines(&s), ["ERR_IGNORE_ALREADY_S", "ERR_IGNORE_NOT_FOUND"]);
+    assert_eq!(
+        shown(&s),
+        ["ERR_IGNORE_ALREADY_S Spam", "ERR_IGNORE_NOT_FOUND"],
+        "inside the calls, with the listed name"
+    );
     run(&mut s, r#"DelIgnore("spam") AddIgnore("Other")"#);
     assert_eq!(
         sent(&s),
         [Sent::DelIgnore(9), Sent::AddIgnore("Other".into()),]
     );
+}
+
+/// The world's teardown frees the list (`0x401ee0` → `0x5ae2d0` at `0x401fc6`), so a logout to the
+/// character list leaves no slot for the next character's shorter list to keep.
+#[test]
+fn a_logout_frees_the_list() {
+    let mut s = client();
+    cache(&mut s, 7, "Aaa");
+    cache(&mut s, 8, "Bbb");
+    list(&mut s, vec![offline(7), offline(8)]);
+    packets(&mut s, vec![SessionEvent::LoggedOut]);
+    list(&mut s, vec![offline(8)]);
+    feed_once(&mut s);
+    assert_eq!(eval::<i64>(&mut s, "return GetNumFriends()"), 1);
 }

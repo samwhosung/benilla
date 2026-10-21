@@ -158,6 +158,8 @@ function GuildControlDelRank(name) BenillaGuildRecord("GuildControlDelRank:" .. 
 
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    // The friends tab's `ShowFriends()` is a call the client's host applies; this VM keeps it.
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // Before the XML: `FriendsFrame_OnLoad` reads `GetGuildRosterMOTD()` and
     // `GuildControlPopupFrame_OnLoad` reads `GuildControlGetRankFlags()`.

@@ -901,6 +901,7 @@ mod tests {
                 guid: 7,
                 ..Default::default()
             }],
+            &|_| None,
         );
         crate::ui_social::net::ignore_list(&mut social, vec![9]);
         let on = GuildMemberNotify(true);
