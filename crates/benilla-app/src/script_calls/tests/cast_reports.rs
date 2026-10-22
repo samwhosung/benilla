@@ -111,7 +111,7 @@ fn a_refused_cast_shows_its_line_and_fails_inside_the_call() {
     assert_eq!(reports(&mut f).len(), 2);
     f.app
         .world_mut()
-        .run_system_once(crate::ui_cast::feed_cast_reports)
+        .run_system_once(crate::ui_cast::signal_reports)
         .unwrap();
     assert_eq!(
         reports(&mut f),

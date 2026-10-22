@@ -575,10 +575,7 @@ fn a_click_the_cursor_cannot_bind_deselects() {
             point,
             ray: None,
         };
-        world
-            .resource_mut::<crate::ui_cast::CastReports>()
-            .0
-            .clear();
+        world.resource_mut::<crate::ui_cast::CastReports>().clear();
         f.click(Hovered::default());
         f.app
             .world_mut()
@@ -596,7 +593,11 @@ fn a_click_the_cursor_cannot_bind_deselects() {
                 _ => None,
             })
             .collect();
-        let reports = &f.app.world().resource::<crate::ui_cast::CastReports>().0;
+        let reports = &f
+            .app
+            .world()
+            .resource::<crate::ui_cast::CastReports>()
+            .reports();
         let signalled = reports
             .iter()
             .filter(|r| matches!(r, crate::ui_cast::CastReport::Changed))

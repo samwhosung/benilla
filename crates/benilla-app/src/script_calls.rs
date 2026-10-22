@@ -3240,7 +3240,7 @@ mod tests {
                 .run_system_once(crate::spell::targeting::feed_targeting_to_vm)
                 .unwrap();
             world
-                .run_system_once(crate::ui_cast::feed_cast_reports)
+                .run_system_once(crate::ui_cast::signal_reports)
                 .unwrap();
         };
         run_hosted(
@@ -3315,7 +3315,7 @@ mod tests {
         );
         f.app
             .world_mut()
-            .run_system_once(crate::ui_cast::feed_cast_reports)
+            .run_system_once(crate::ui_cast::signal_reports)
             .unwrap();
         assert_eq!(seen(&mut f).len(), 3, "not again from the feed");
     }

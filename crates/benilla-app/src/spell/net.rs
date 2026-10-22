@@ -2057,7 +2057,7 @@ mod tests {
                 .resource_mut::<PendingCast>()
                 .fill_record_spell(spell_id);
             if pushes {
-                let before = world.resource::<CastReports>().0.len();
+                let before = world.resource::<CastReports>().len();
                 world
                     .run_system_once(
                         move |mut slots: crate::spell::CastSlots,
@@ -2066,7 +2066,7 @@ mod tests {
                         },
                     )
                     .unwrap();
-                world.resource_mut::<CastReports>().0.truncate(before);
+                world.resource_mut::<CastReports>().truncate(before);
             }
         }
 
@@ -2348,8 +2348,8 @@ mod tests {
             self.app
                 .world_mut()
                 .resource_mut::<CastReports>()
-                .0
-                .drain(..)
+                .take()
+                .into_iter()
                 .filter_map(|r| match r {
                     crate::ui_cast::CastReport::Refused(f) => {
                         Some(format!("REFUSED {:#04x}", f.reason))
@@ -2370,8 +2370,8 @@ mod tests {
             self.app
                 .world_mut()
                 .resource_mut::<CastReports>()
-                .0
-                .drain(..)
+                .take()
+                .into_iter()
                 .filter_map(|r| match r {
                     crate::ui_cast::CastReport::Bar(e) => Some(e),
                     _ => None,

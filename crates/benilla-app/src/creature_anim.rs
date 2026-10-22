@@ -1414,7 +1414,6 @@ mod attack_stand_tests {
         a.world.resource_mut::<crate::spell::AutoRepeatActive>().0 = Some(AUTO_SHOT);
         a.world
             .resource_mut::<crate::ui_cast::CastReports>()
-            .0
             .clear();
         let stop = |a: &mut Attack| {
             a.world
@@ -1440,8 +1439,8 @@ mod attack_stand_tests {
         let reports: Vec<&'static str> = a
             .world
             .resource_mut::<crate::ui_cast::CastReports>()
-            .0
-            .drain(..)
+            .take()
+            .into_iter()
             .map(|r| match r {
                 crate::ui_cast::CastReport::Changed => "CHANGED",
                 crate::ui_cast::CastReport::AutoRepeat(false) => "STOP_AUTOREPEAT",
@@ -1469,11 +1468,7 @@ mod attack_stand_tests {
         // Nothing running: nothing sent, nothing reported.
         stop(&mut a);
         assert!(a.sent().is_empty());
-        assert!(a
-            .world
-            .resource::<crate::ui_cast::CastReports>()
-            .0
-            .is_empty());
+        assert!(a.world.resource::<crate::ui_cast::CastReports>().is_empty());
     }
 }
 

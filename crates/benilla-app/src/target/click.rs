@@ -2648,10 +2648,7 @@ mod tests {
                     std::time::Instant::now(),
                 );
             }
-            world
-                .resource_mut::<crate::ui_cast::CastReports>()
-                .0
-                .clear();
+            world.resource_mut::<crate::ui_cast::CastReports>().clear();
             world
                 .resource_mut::<Messages<Interact>>()
                 .write(Interact(boar));

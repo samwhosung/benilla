@@ -266,7 +266,7 @@ mod tests {
         }
 
         fn reports(&mut self) -> Vec<CastReport> {
-            std::mem::take(&mut self.world().resource_mut::<CastReports>().0)
+            self.world().resource_mut::<CastReports>().take()
         }
 
         fn in_flight(&mut self) -> Option<u32> {

@@ -283,8 +283,7 @@ mod tests {
         const HEAL: u32 = 2050;
         let commit = crate::spell::cast_send::CastCommit::Spell;
         let changes = |world: &mut World| {
-            let reports =
-                std::mem::take(&mut world.resource_mut::<crate::ui_cast::CastReports>().0);
+            let reports = world.resource_mut::<crate::ui_cast::CastReports>().take();
             reports
                 .iter()
                 .filter(|r| matches!(r, crate::ui_cast::CastReport::Changed))

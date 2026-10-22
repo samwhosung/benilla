@@ -65,6 +65,20 @@ impl Stamp {
     fn first(&self) -> u64 {
         self.path[0]
     }
+
+    /// Whether the item was pushed at or after `mark`: its own count, the path's last, is.
+    pub(crate) fn since(&self, mark: Mark) -> bool {
+        self.path[usize::from(self.len) - 1] >= mark.0
+    }
+}
+
+/// The clock's count at a point ([`mark`]), which every stamp taken after it reaches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Mark(u64);
+
+/// The clock now: a call marks where it begins, and takes the items stamped since as its own.
+pub(crate) fn mark() -> Mark {
+    Mark(CLOCK.load(Ordering::Relaxed))
 }
 
 impl Ord for Stamp {

@@ -1070,7 +1070,7 @@ mod tests {
                 .run_system_once(|mut ladder: CastLadder| ladder.stop_targeting())
                 .unwrap();
             app.world_mut()
-                .run_system_once(crate::ui_cast::feed_cast_reports)
+                .run_system_once(crate::ui_cast::signal_reports)
                 .unwrap();
             up
         };

@@ -821,7 +821,7 @@ mod tests {
     /// Signal the reports the press queued, as the frame's feed does.
     fn signal(app: &mut App) {
         app.world_mut()
-            .run_system_once(crate::ui_cast::feed_cast_reports)
+            .run_system_once(crate::ui_cast::signal_reports)
             .unwrap();
     }
 

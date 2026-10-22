@@ -77,6 +77,11 @@ impl CastFailLines<'_, '_> {
         self.spells.as_deref()
     }
 
+    /// Whether a line waits on its item's record.
+    pub(crate) fn any_waiting(&self) -> bool {
+        !self.waiting.0.is_empty()
+    }
+
     /// `fail`'s line and its log line, `None` where the reference leaves before both now; an empty
     /// line shows nothing and still logs. A line whose item record is not cached waits in
     /// [`CastFailRedisplays`].

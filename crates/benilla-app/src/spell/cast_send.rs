@@ -1509,7 +1509,7 @@ mod tests {
             ),
             "the cancel and no cast: {sent:?}"
         );
-        let reports = &world.resource::<CastReports>().0;
+        let reports = &world.resource::<CastReports>().reports();
         assert!(
             matches!(
                 reports[..],
@@ -2221,8 +2221,8 @@ mod tests {
     fn stream(world: &mut World) -> Vec<&'static str> {
         world
             .resource_mut::<CastReports>()
-            .0
-            .drain(..)
+            .take()
+            .into_iter()
             .map(|r| match r {
                 crate::ui_cast::CastReport::Changed => "CHANGED",
                 crate::ui_cast::CastReport::Bar(crate::ui_cast::CastBarEdge::Failed) => "FAILED",
@@ -2232,6 +2232,7 @@ mod tests {
                 crate::ui_cast::CastReport::TradeSkillDisarm => "DISARM",
                 crate::ui_cast::CastReport::AutoRepeat(true) => "START_AUTOREPEAT",
                 crate::ui_cast::CastReport::AutoRepeat(false) => "STOP_AUTOREPEAT",
+                crate::ui_cast::CastReport::Redisplay => "REDISPLAY",
             })
             .collect()
     }
@@ -2461,7 +2462,7 @@ mod tests {
         );
 
         // The record is keyed (use-spell, entry); a spell press queries (spell, 0) and passes.
-        world.resource_mut::<CastReports>().0.clear();
+        world.resource_mut::<CastReports>().clear();
         world.insert_resource(crate::spell::PendingCast::default());
         send(&mut world, HEARTHSTONE, CastCommit::Spell);
         assert!(
@@ -2610,7 +2611,7 @@ mod tests {
             vec![CastFail::local(HEARTHSTONE, 0x4d)]
         );
 
-        world.resource_mut::<CastReports>().0.clear();
+        world.resource_mut::<CastReports>().clear();
         let base = ctx();
         let with_store = cast_target::CastContext {
             rel: cast_target::TargetRelations {

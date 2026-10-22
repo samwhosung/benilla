@@ -2,8 +2,8 @@
 //! (`ReportCastFailure 0x6e1a00`), the wire edges that become the `SPELLCAST_*` events stock
 //! `CastingBarFrame.lua:6-13` registers for, named from `Spell.dbc`, and the tradeskill repeat's
 //! disarm. A script call's reports are signalled inside the call ([`crate::script_calls`]), the
-//! rest by the frame's feed ([`feed_cast_reports`]), which also pushes the VM's cast state. The
-//! cast lifecycle is `crate::spell`'s.
+//! rest from their lane in the packets' order ([`fire_cast_reports`]), after the frame's feed has
+//! pushed the VM's cast state ([`feed_cast_reports`]). The cast lifecycle is `crate::spell`'s.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -59,21 +59,31 @@ pub(crate) enum CastReport {
     /// send stores it (`0x6e594c`, `0x6e5952`), `STOP_AUTOREPEAT_SPELL` (436) as
     /// `StopAutoRepeatSpell` clears it (`0x6ea16a`, `0x6ea170`).
     AutoRepeat(bool),
+    /// The frame's retry of the refused lines that wait on an item's record (`0x6e29b0`).
+    Redisplay,
 }
 
-/// Our cast's reports in the order they were made: one queue, so a refusal's line precedes its
-/// `SPELLCAST_FAILED` as `0x6e1a00` signals them.
+/// Our cast's reports in the order they were made: one lane ([`crate::lanes`]), so a refusal's line
+/// precedes its `SPELLCAST_FAILED` as `0x6e1a00` signals them, and each fires at its packet's place
+/// among the other lanes' items, as the spell handlers signal inside their packets.
 #[derive(Resource, Default)]
-pub(crate) struct CastReports(pub(crate) Vec<CastReport>);
+pub(crate) struct CastReports(std::collections::VecDeque<(crate::lanes::Stamp, CastReport)>);
 
 impl CastReports {
+    /// Stamp `report` and queue it behind everything stamped before it.
+    fn push(&mut self, report: CastReport) {
+        let stamp = crate::lanes::stamp();
+        let at = self.0.partition_point(|(s, _)| *s < stamp);
+        self.0.insert(at, (stamp, report));
+    }
+
     pub(crate) fn bar(&mut self, edge: CastBarEdge) {
-        self.0.push(CastReport::Bar(edge));
+        self.push(CastReport::Bar(edge));
     }
 
     /// A refusal's line; [`crate::spell::CastCore::report`] pushes its event tail after it.
     pub(crate) fn refused(&mut self, fail: CastFail) {
-        self.0.push(CastReport::Refused(fail));
+        self.push(CastReport::Refused(fail));
     }
 
     /// `SMSG_PET_CAST_FAILED` (`0x6e8eb0`): one message, no log line and no event.
@@ -82,17 +92,73 @@ impl CastReports {
     }
 
     pub(crate) fn trade_skill_disarm(&mut self) {
-        self.0.push(CastReport::TradeSkillDisarm);
+        self.push(CastReport::TradeSkillDisarm);
     }
 
     /// `0x4b3250` ([`CastReport::Changed`]).
     pub(crate) fn changed(&mut self) {
-        self.0.push(CastReport::Changed);
+        self.push(CastReport::Changed);
     }
 
     /// The auto-repeat key's edge ([`CastReport::AutoRepeat`]).
     pub(crate) fn auto_repeat(&mut self, on: bool) {
-        self.0.push(CastReport::AutoRepeat(on));
+        self.push(CastReport::AutoRepeat(on));
+    }
+
+    /// The lane's head.
+    fn peek(&self) -> Option<crate::lanes::Stamp> {
+        self.0.front().map(|(s, _)| *s)
+    }
+
+    /// Take the head if `until` admits it.
+    fn pop(&mut self, until: crate::lanes::Until) -> Option<(crate::lanes::Stamp, CastReport)> {
+        until
+            .admits(self.peek()?)
+            .then(|| self.0.pop_front())
+            .flatten()
+    }
+
+    /// Take the reports stamped since `mark` ([`crate::lanes::mark`]), in order: a call's own.
+    fn take_since(&mut self, mark: crate::lanes::Mark) -> Vec<CastReport> {
+        let (since, before): (std::collections::VecDeque<_>, _) = std::mem::take(&mut self.0)
+            .into_iter()
+            .partition(|(s, _)| s.since(mark));
+        self.0 = before;
+        since.into_iter().map(|(_, r)| r).collect()
+    }
+
+    /// The reports queued, in order.
+    #[cfg(test)]
+    pub(crate) fn reports(&self) -> Vec<&CastReport> {
+        self.0.iter().map(|(_, r)| r).collect()
+    }
+
+    /// Take every report queued, in order, unfired.
+    #[cfg(test)]
+    pub(crate) fn take(&mut self) -> Vec<CastReport> {
+        self.0.drain(..).map(|(_, r)| r).collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Drop every report queued, unfired.
+    #[cfg(test)]
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    /// Keep the first `len` reports queued.
+    #[cfg(test)]
+    pub(crate) fn truncate(&mut self, len: usize) {
+        self.0.truncate(len);
     }
 
     /// The refusals queued, in order.
@@ -100,7 +166,7 @@ impl CastReports {
     pub(crate) fn refusals(&self) -> Vec<CastFail> {
         self.0
             .iter()
-            .filter_map(|r| match r {
+            .filter_map(|(_, r)| match r {
                 CastReport::Refused(f) => Some(*f),
                 _ => None,
             })
@@ -120,7 +186,7 @@ impl CastReports {
     pub(crate) fn edges(&self) -> Vec<&CastBarEdge> {
         self.0
             .iter()
-            .filter_map(|r| match r {
+            .filter_map(|(_, r)| match r {
                 CastReport::Bar(e) => Some(e),
                 _ => None,
             })
@@ -323,6 +389,7 @@ impl CastReporter<'_, '_> {
                 CastReport::AutoRepeat(false) => {
                     out.push(Ready::Event("STOP_AUTOREPEAT_SPELL", vec![]))
                 }
+                CastReport::Redisplay => out.extend(self.redisplays(script)),
             }
         }
         out
@@ -352,13 +419,14 @@ pub(crate) struct CallReports<'w, 's> {
     reporter: CastReporter<'w, 's>,
 }
 
-/// Where a call's reports start in each queue.
+/// Where a call's reports start: the refusal keys' count, and the clock its cast reports are
+/// stamped after.
 #[derive(Clone, Copy)]
-pub(crate) struct ReportMark(usize, usize);
+pub(crate) struct ReportMark(usize, crate::lanes::Mark);
 
 impl CallReports<'_, '_> {
     pub(crate) fn mark(&self) -> ReportMark {
-        ReportMark(self.ui_errors.len(), self.reports.0.len())
+        ReportMark(self.ui_errors.len(), crate::lanes::mark())
     }
 
     /// The reports queued since `mark`, taken off their queues and readied.
@@ -376,19 +444,18 @@ impl CallReports<'_, '_> {
             })
             .filter_map(|shown| self.reporter.line(shown))
             .collect();
-        let start = reports.min(self.reports.0.len());
-        let reports: Vec<_> = self.reports.0.drain(start..).collect();
+        let reports = self.reports.take_since(reports);
         ready.extend(self.reporter.ready(script, reports));
         ready
     }
 }
 
-/// Signal the reports made outside any script call, and push the cast state the frame's packets
-/// and cancels left ([`CastState`]), which `SpellStopCasting` (`0x6e6e80`) and the bar's checked
-/// tests read: a queued strike and the spell awaiting its click count as in flight, so the first
-/// Esc stops it and `ToggleGameMenu` skips `ClearTarget()` (`UIParent.lua:1489-1492`). The active
-/// player's form change is signalled here too, off its descriptor edge (`OnShapeshiftFormChanged
-/// 0x5de010` → `0x5de016`), after the book's push, whose checked ring it lights.
+/// Push the cast state the frame's packets and cancels left ([`CastState`]), which
+/// `SpellStopCasting` (`0x6e6e80`) and the bar's checked tests read: a queued strike and the spell
+/// awaiting its click count as in flight, so the first Esc stops it and `ToggleGameMenu` skips
+/// `ClearTarget()` (`UIParent.lua:1489-1492`). The reports made outside any script call fire from
+/// their lane after every feed ([`fire_cast_reports`]), so a listener reads this push; a refused
+/// line that waits on its item's record is retried there, behind the frame's packets.
 pub(crate) fn feed_cast_reports(
     // The reports and the cast state, which the host's casts write.
     mut vm: crate::script_calls::VmWith<(
@@ -396,50 +463,97 @@ pub(crate) fn feed_cast_reports(
         CastReporter<'static, 'static>,
         CastState<'static, 'static>,
     )>,
-    mut edges: MessageReader<crate::net::FieldChanged>,
-    me: Query<Entity, With<crate::net::SelfPlayer>>,
 ) {
-    let me = me.iter().next();
-    let form_changed = edges.read().any(|e| {
-        e.unit_field(benilla_protocol::field::FIELD_UNIT_BYTES_1)
-            && Some(e.entity) == me
-            && (e.old >> 16) as u8 != (e.new >> 16) as u8
-    });
-    // The view and the reports read as an engine turn, then signalled with the host lent: a
-    // refusal's handler may cast again.
-    let ready = vm.turn(|script, (mut reports, mut reporter, cast_state)| {
-        if form_changed {
-            reports.0.insert(0, CastReport::Changed);
-        }
-        let script = script?;
+    vm.turn(|script, (mut reports, reporter, cast_state)| {
+        let Some(script) = script else {
+            return;
+        };
         script.set_cast_view(cast_state.view());
-        let mut ready = reporter.redisplays(script);
-        ready.extend(reporter.ready(script, std::mem::take(&mut reports.0)));
-        Some(ready)
-    });
-    let Some(ready) = ready else {
-        return;
-    };
-    vm.run(|script| {
-        if let Some(script) = script {
-            fire(script, ready);
+        if reporter.lines.any_waiting() {
+            reports.push(CastReport::Redisplay);
         }
     });
 }
 
-/// The report feed, drained before the VM ticks so an edge and its first `OnUpdate` share a
-/// frame, and after the local cancel so a move or Esc kills the bar on the next tick.
+/// The cast lane's `fire_until` ([`crate::lanes`]): each report the lane holds while `until`
+/// admits it, readied and signalled at its place with the host lent, as the spell handlers signal
+/// inside their packets (`0x6e1a00`, `0x6e7a2d`, `0x6e7550`); the lane stops after a report whose
+/// firing stamped anything, so what it pushed fires next. A refusal's handler may cast again.
+fn fire_cast_reports(
+    In(until): In<crate::lanes::Until>,
+    mut vm: crate::script_calls::VmWith<(
+        ResMut<'static, CastReports>,
+        CastReporter<'static, 'static>,
+    )>,
+) {
+    loop {
+        let Some((stamp, report)) = vm.own().0.pop(until) else {
+            return;
+        };
+        let ((), moved) = crate::lanes::firing(stamp, || {
+            let ready = vm.turn(|script, (_, mut reporter)| {
+                script.map(|script| reporter.ready(script, [report]))
+            });
+            if let Some(ready) = ready {
+                vm.run(|script| {
+                    if let Some(script) = script {
+                        fire(script, ready);
+                    }
+                });
+            }
+        });
+        if moved {
+            return;
+        }
+    }
+}
+
+/// The frame's cast-state push, then every report queued fired alone, for a test that drives the
+/// reports without the other lanes.
+#[cfg(test)]
+pub(crate) fn signal_reports(world: &mut World) {
+    use bevy::ecs::system::RunSystemOnce;
+    world.run_system_once(feed_cast_reports).unwrap();
+    fire_cast_lane(world);
+}
+
+/// The reports queued, fired alone, for a test that drives them without the other lanes.
+#[cfg(test)]
+pub(crate) fn fire_cast_lane(world: &mut World) {
+    use bevy::ecs::system::RunSystemOnce;
+    let until = crate::lanes::Until::all();
+    while world
+        .resource::<CastReports>()
+        .peek()
+        .is_some_and(|s| until.admits(s))
+    {
+        world
+            .run_system_once_with(fire_cast_reports, until)
+            .unwrap();
+    }
+}
+
+/// The cast-state push, before the VM ticks so an edge and its first `OnUpdate` share a frame, and
+/// after the local cancel so a move or Esc kills the bar on the next tick; and the cast lane.
 pub(crate) struct UiCastPlugin;
 
 impl Plugin for UiCastPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CastReports>().add_systems(
-            Update,
-            // After the spell's local cancel, whose edges this drains the same frame.
-            feed_cast_reports
-                .in_set(UnitFeed)
-                .after(crate::spell::LocalCancel),
-        );
+        use crate::lanes::LaneApp;
+        app.init_resource::<CastReports>()
+            .add_lane(
+                "cast reports",
+                |world| world.get_resource::<CastReports>()?.peek(),
+                fire_cast_reports,
+                None,
+            )
+            .add_systems(
+                Update,
+                // After the spell's local cancel, whose state this pushes the same frame.
+                feed_cast_reports
+                    .in_set(UnitFeed)
+                    .after(crate::spell::LocalCancel),
+            );
     }
 }
 

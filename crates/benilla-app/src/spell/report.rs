@@ -357,8 +357,8 @@ mod tests {
         /// by its reason.
         fn stream(&mut self) -> Vec<String> {
             self.reports
-                .0
-                .drain(..)
+                .take()
+                .into_iter()
                 .map(|r| match r {
                     CastReport::Changed => "CHANGED".into(),
                     CastReport::Bar(CastBarEdge::Stop) => "STOP".into(),
@@ -369,6 +369,7 @@ mod tests {
                     CastReport::TradeSkillDisarm => "DISARM".into(),
                     CastReport::AutoRepeat(true) => "START_AUTOREPEAT".into(),
                     CastReport::AutoRepeat(false) => "STOP_AUTOREPEAT".into(),
+                    CastReport::Redisplay => "REDISPLAY".into(),
                 })
                 .collect()
         }
