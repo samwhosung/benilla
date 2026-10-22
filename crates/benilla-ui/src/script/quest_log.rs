@@ -120,6 +120,8 @@ pub struct QuestRecordView {
     /// `GetQuestLogRequiredMoney` and `GetQuestLogRewardMoney`, in copper.
     pub required_money: u32,
     pub reward_money: u32,
+    /// The template's money at the top level (`+0x2c`), in copper.
+    pub reward_money_max_level: i32,
     /// `(item id, count)`, the ids that are set, in order (`+0x3c`, `+0x4c`).
     pub rewards: Vec<(u32, u32)>,
     pub choices: Vec<(u32, u32)>,
@@ -1865,6 +1867,10 @@ pub(crate) mod fixture {
         s.quest_log_changed(slots);
     }
 }
+
+#[cfg(test)]
+#[path = "quest_log_detail_tests.rs"]
+mod detail_tests;
 
 #[cfg(test)]
 mod tests {

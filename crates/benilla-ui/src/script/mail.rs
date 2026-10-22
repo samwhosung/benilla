@@ -1994,6 +1994,42 @@ mod tests {
             .unwrap());
     }
 
+    /// `GetSendMailItem` answers quality -1 for an attachment whose template's inventory type
+    /// (`+0x2c`) is 0, the template's quality (`+0x1c`) otherwise (`0x4ae6aa`, `0x4ae6bf`).
+    #[test]
+    fn an_attachment_of_inventory_type_zero_reads_quality_minus_one() {
+        use crate::script::cursor::CursorItem;
+        for (inventory_type, quality) in [(0, -1), (5, 1)] {
+            let mut s = kept();
+            s.set_item_template(
+                2589,
+                crate::script::ItemTemplateView {
+                    name: "Linen Cloth".into(),
+                    quality: 1,
+                    inventory_type,
+                    ..Default::default()
+                },
+            );
+            s.model_mut().mail_send_item = Some(CursorItem {
+                guid: 0x102,
+                bag: 0,
+                slot: 5,
+                item_id: 2589,
+                item_class: None,
+                texture: None,
+                link: Some("|cff...|Hitem:2589|h[Linen Cloth]|h|r".into()),
+                count: Some(1),
+                quality: Some(1),
+                equip_slots: Vec::new(),
+                bar_placeable: true,
+                consumable: false,
+            });
+            let (_, _, _, q): (String, Option<String>, i64, i64) =
+                s.eval("return GetSendMailItem()").unwrap();
+            assert_eq!(q, quality, "inventory type {inventory_type}");
+        }
+    }
+
     #[test]
     fn clear_send_item_resets_the_form() {
         use crate::script::cursor::{CursorItem, CursorPayload};

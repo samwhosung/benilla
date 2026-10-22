@@ -625,6 +625,7 @@ fn record_view(t: &QuestTemplate, tables: &RecordTables) -> QuestRecordView {
         end_text: t.end_text.clone(),
         required_money,
         reward_money,
+        reward_money_max_level: t.money_max_level as i32,
         rewards: set(&t.rewards),
         choices: set(&t.choices),
         // Quest text arrives with its `$N`, `$B`, `$G` and `$<n>w` macros unexpanded.
