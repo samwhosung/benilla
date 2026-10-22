@@ -159,7 +159,20 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             // (`0x55ba30`, the dedupe flag 0): each item's set-up (`0x5d8390`) and entry change's
             // (`0x5d96b0`), the loot window's rows (`0x4c2ac0`) and pushes (`0x491ee0`), the trade
             // getters' (`0x4c0340`) and the ammo getters' (`0x4c84f0`).
-            for callback in sc.items.take_callbacks(entry) {
+            let callbacks = sc.items.take_callbacks(entry);
+            // An answer an item of ours waited on changes what the bag view shows of it.
+            if answered
+                && callbacks.iter().any(|c| {
+                    matches!(
+                        c,
+                        crate::items::RecordCallback::SetUp(_)
+                            | crate::items::RecordCallback::Entry(_)
+                    )
+                })
+            {
+                sc.bag_view.wrote();
+            }
+            for callback in callbacks {
                 use crate::items::RecordCallback as Cb;
                 match callback {
                     // A refusal finishes no set-up (its found byte is clear, `0x5d83b8`) and runs

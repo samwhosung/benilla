@@ -335,7 +335,7 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
         }
     };
     sc.pass.copies.insert(guid, moved);
-    bag_write(&mut sc, guid);
+    bag_write(&mut sc, guid, None);
     notify_in_place(
         &mut sc,
         Notify::Create {
@@ -398,7 +398,7 @@ fn on_item_create(In(ev): In<SessionEvent>, mut sc: Scene) {
         }
     };
     sc.pass.copies.insert(guid, moved);
-    bag_write(&mut sc, guid);
+    bag_write(&mut sc, guid, None);
     notify_in_place(
         &mut sc,
         Notify::Create {
@@ -408,10 +408,21 @@ fn on_item_create(In(ev): In<SessionEvent>, mut sc: Scene) {
     );
 }
 
-/// A write of our player or an item: the frame's first stamps where the bag view changes
-/// ([`crate::ui_items::feed::BagView`]).
-fn bag_write(sc: &mut Scene, guid: u64) {
-    if sc.self_guid.0 == Some(guid) || benilla_protocol::guid::is_item(guid) {
+/// A write of what the bag view reads: any item or container object coming, changing or going,
+/// or our player's own create or release, or its seats or level (the keyring's size) in `sent`.
+/// The frame's first stamps where the view changes ([`crate::ui_items::feed::BagView`]).
+fn bag_write(sc: &mut Scene, guid: u64, sent: Option<&[u16]>) {
+    use benilla_protocol::field::{FIELD_PLAYER_INV_SLOT_HEAD, FIELD_UNIT_LEVEL};
+    /// The 113 seats, two fields each (`PLAYER_FIELD_INV_SLOT_HEAD` through the keyring's last).
+    const SEATS: std::ops::Range<u16> =
+        FIELD_PLAYER_INV_SLOT_HEAD..FIELD_PLAYER_INV_SLOT_HEAD + 226;
+    let read = benilla_protocol::guid::is_item(guid)
+        || (sc.self_guid.0 == Some(guid)
+            && sent.is_none_or(|f| {
+                f.iter()
+                    .any(|&i| i == FIELD_UNIT_LEVEL || SEATS.contains(&i))
+            }));
+    if read {
         sc.bag_view.wrote();
     }
 }
@@ -447,7 +458,7 @@ fn on_object_values(In(ev): In<SessionEvent>, mut sc: Scene) {
     };
     if let Some(moved) = moved {
         sc.pass.copies.insert(guid, moved);
-        bag_write(&mut sc, guid);
+        bag_write(&mut sc, guid, Some(&sent));
     }
     notify_in_place(&mut sc, Notify::Values { guid, sent });
 }
@@ -601,6 +612,7 @@ fn respawn(sc: &mut Scene, guid: u64, body: Body, store: ObjectFields, pose: Opt
         }
     }
     sc.pass.reactivated.push(guid);
+    bag_write(sc, guid, None);
 }
 
 /// The out-of-range list, which the protocol hands over only as a packet's first block
@@ -716,7 +728,7 @@ fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<N
     let Some(e) = sc.index.0.remove(&guid) else {
         return;
     };
-    bag_write(&mut sc, guid);
+    bag_write(&mut sc, guid, None);
     // An item has no model to fade, so it goes now with its countdown cells.
     if benilla_protocol::guid::is_item(guid) {
         sc.commands.entity(e).despawn();
@@ -749,6 +761,7 @@ fn release(sc: &mut Scene, guid: u64) {
     let Some(e) = sc.index.0.remove(&guid) else {
         return;
     };
+    bag_write(sc, guid, None);
     let kept = sc
         .stores
         .get(e)

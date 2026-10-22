@@ -283,7 +283,10 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
          and combo watchers (`0x5de011`, `0x5ddff0`), the unit-flags, health, power and \
          aura-state watchers, the selection and the cooldowns. Here it is one pass a frame over \
          the bar's 120 slots and the reactive list, diffed against the usable cache, so one \
-         caller's run cannot be cut out to fire at its own notice",
+         caller's run cannot be cut out to fire at its own notice. It also fires \
+         `SMSG_ITEM_COOLDOWN`'s `BAG_UPDATE_COOLDOWN` (`0x6e965b`), which the reference signals \
+         inside that packet's handler and which reaches here through the cooldowns' flush, a \
+         queue the call host holds and so no row of its own shows",
     ),
 ];
 

@@ -1468,7 +1468,10 @@ pub(crate) fn feed_containers(
 /// drain starts on last frame's view and swaps to this frame's at that write's stamp.
 ///
 /// The exact form is a view per packet (#2217): the bags here are last frame's or this frame's,
-/// never the one a packet between two writes left.
+/// never the one a packet between two writes left. And only the bag view swaps: while the old
+/// bags are up, an event's handler still reads this frame's state through everything else, among
+/// it `feed_char`'s inventory and bank-bag slots, `GetMoney`, and a verb a listener calls, which
+/// resolves against the live store (`ui_items::drain`).
 #[derive(Resource, Default)]
 pub(crate) struct BagView {
     /// The stamp of the frame's first handler call that wrote our player or an item.
