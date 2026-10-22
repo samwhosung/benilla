@@ -114,6 +114,7 @@ fn inventory_failure(failure: Failure, equip_errors: &mut EquipErrors, latch: &m
 #[cfg(test)]
 mod tests {
     use super::*;
+    use benilla_ui::script::UiScript;
 
     #[test]
     fn an_inventory_failure_on_the_looted_object_clears_the_latch() {
@@ -175,6 +176,189 @@ mod tests {
             ["UI_ERROR_MESSAGE", "ITEM_LOCK_CHANGED", "ITEM_LOCK_CHANGED"]
         );
         assert!(!s.item_locked(A) && !s.item_locked(B));
+    }
+
+    /// The client in the world as our player with empty bags pushed, and a VM whose
+    /// `UI_ERROR_MESSAGE`, `PLAYER_ENTERING_WORLD` and `BAG_UPDATE_COOLDOWN` handlers each note
+    /// `HasKey()` behind their letter.
+    fn keyring_client() -> App {
+        use crate::items::Items;
+        const ME: u64 = 0x7;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let world = app.world_mut();
+        world.resource_mut::<Items>().insert_template(
+            KEY,
+            Some(benilla_protocol::messages::ItemInfo {
+                bag_family: super::super::BAG_FAMILY_KEYS,
+                ..crate::items::test_template("Key")
+            }),
+        );
+        let me = world
+            .spawn((
+                crate::net::Guid(ME),
+                crate::net::SelfPlayer,
+                crate::net::ObjectStore(
+                    benilla_protocol::ObjectFields::default()
+                        .into_created(benilla_protocol::messages::ObjectType::Player),
+                ),
+            ))
+            .id();
+        world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(ME, me);
+        world.resource_mut::<SelfGuid>().0 = Some(ME);
+        let script = benilla_ui::script::UiScript::new().unwrap();
+        let line = super::super::equip_error::equip_error_key(REFUSAL);
+        script
+            .run(&format!(
+                "{line} = 'Refused.' SEEN = '' local f = CreateFrame('Frame') \
+                 local tag = {{UI_ERROR_MESSAGE = 'E', PLAYER_ENTERING_WORLD = 'W', \
+                 BAG_UPDATE_COOLDOWN = 'C'}} \
+                 for e in pairs(tag) do f:RegisterEvent(e) end \
+                 f:SetScript('OnEvent', function() \
+                 SEEN = SEEN .. tag[event] .. (HasKey() and 1 or 0) end)"
+            ))
+            .unwrap();
+        world.insert_non_send_resource(script);
+        world
+            .run_system_cached(super::super::feed::feed_containers)
+            .unwrap();
+        app
+    }
+
+    const KEY: u32 = 5396;
+    const REFUSAL: u8 = 0x16;
+
+    /// One frame's refusal (`SMSG_INVENTORY_CHANGE_FAILURE`) and a key landing in backpack slot 1
+    /// (its create, then our player's `PLAYER_FIELD_PACK_SLOT_1`, 532), the key first when
+    /// `key_first`, through the handlers; then the bag feed, `between` (what the feeds after it
+    /// fire), and the lanes' drain.
+    fn refusal_and_key_frame(app: &mut App, key_first: bool, between: fn(&mut UiScript)) {
+        let guid = u64::from(benilla_protocol::guid::HIGH_ITEM) << 48 | 0xA1;
+        let refusal = SessionEvent::InventoryFailure {
+            reason: REFUSAL,
+            required_level: None,
+            item_guid: 0,
+            item2_guid: 0,
+            bag_slot: 0xff,
+        };
+        let key = [
+            SessionEvent::ItemCreate {
+                guid,
+                container: false,
+                fields: benilla_protocol::ObjectFields::from_pairs(&[
+                    (2, 0x3),
+                    (3, KEY),
+                    (6, 0x7),
+                    (8, 0x7),
+                    (14, 1),
+                ])
+                .into_created(benilla_protocol::messages::ObjectType::Item),
+            },
+            SessionEvent::ObjectUpdateEnd,
+            SessionEvent::ObjectValues {
+                guid: 0x7,
+                fields: benilla_protocol::ObjectFields::from_pairs(&[
+                    (532, guid as u32),
+                    (533, (guid >> 32) as u32),
+                ]),
+            },
+            SessionEvent::ObjectUpdateEnd,
+        ];
+        let packets: Vec<SessionEvent> = if key_first {
+            key.into_iter().chain([refusal]).collect()
+        } else {
+            std::iter::once(refusal).chain(key).collect()
+        };
+        let world = app.world_mut();
+        crate::net::handlers::dispatch(world, packets);
+        world
+            .run_system_cached(super::super::feed::feed_containers)
+            .unwrap();
+        between(&mut world.non_send_resource_mut::<UiScript>());
+        crate::lanes::fire_in_order(world);
+    }
+
+    /// One frame's refusal and a key landing in the backpack, the key first when `key_first`,
+    /// over bags pushed empty; then what `HasKey()` read at the refusal's `UI_ERROR_MESSAGE`, and
+    /// after the frame.
+    fn refusal_and_key(key_first: bool) -> (String, bool) {
+        let mut app = keyring_client();
+        refusal_and_key_frame(&mut app, key_first, |_| {});
+        let s = app.world().non_send_resource::<UiScript>();
+        (
+            s.eval::<String>("return SEEN").unwrap(),
+            s.eval::<bool>("return HasKey() == 1").unwrap(),
+        )
+    }
+
+    /// The failure's handler shows its line and unlocks its items (`0x496720`, `0x5e3ac0`,
+    /// `0x5e3ad3`) inside its dispatch, so its handlers read the bags as the packets before it
+    /// left them: a key that lands after it is not there yet, and one that landed before it is.
+    #[test]
+    fn an_inventory_failures_handlers_read_the_bags_the_packets_before_it_left() {
+        assert_eq!(
+            refusal_and_key(false),
+            ("E0".into(), true),
+            "the key came after"
+        );
+        assert_eq!(
+            refusal_and_key(true),
+            ("E1".into(), true),
+            "the key came first"
+        );
+    }
+
+    /// The feeds' own events after the bag feed read this frame's bags, whatever the lanes owe:
+    /// the world-enter cascade `feed_units` fires after the seats it reads, and the cooldown
+    /// flush's `BAG_UPDATE_COOLDOWN` `fire_action_events` fires after the feed, while the refusal
+    /// a key followed reads the bags before the key.
+    #[test]
+    fn the_feeds_events_after_the_bag_feed_read_this_frames_bags() {
+        use crate::game_plugins::schedule_tests::{census, SyncPoints};
+        let mut app = keyring_client();
+        refusal_and_key_frame(&mut app, false, |s| {
+            s.fire_world_enter();
+            s.fire_event("BAG_UPDATE_COOLDOWN", vec![]);
+        });
+        let s = app.world().non_send_resource::<UiScript>();
+        assert_eq!(s.eval::<String>("return SEEN").unwrap(), "W1C1E0");
+        let c = census(
+            &mut crate::game_plugins::schedule_tests::headless_client(),
+            Update,
+            SyncPoints::Declared,
+        );
+        if !crate::game_plugins::schedule_tests::type_names_available(&c) {
+            eprintln!("skipped: this build carries no type names");
+            return;
+        }
+        let key = |suffix: &str| {
+            c.systems
+                .iter()
+                .find(|(_, i)| i.name.ends_with(suffix))
+                .map(|(k, _)| *k)
+                .unwrap_or_else(|| panic!("{suffix} is in Update"))
+        };
+        let feed = key("::ui_items::feed::feed_containers");
+        let mut after = std::collections::HashSet::new();
+        let mut stack = vec![feed];
+        while let Some(n) = stack.pop() {
+            for (a, b) in &c.dependencies {
+                if *a == n && after.insert(*b) {
+                    stack.push(*b);
+                }
+            }
+        }
+        for reader in [
+            "::ui_unit::feed_units",
+            "::ui_action::state::fire_action_events",
+        ] {
+            assert!(
+                after.contains(&key(reader)),
+                "{reader} runs after the bag feed"
+            );
+        }
     }
 
     /// A refusal that lands while no in-game interface is up is dropped by the frame, line and
