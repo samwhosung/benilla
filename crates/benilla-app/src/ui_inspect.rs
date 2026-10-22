@@ -109,14 +109,14 @@ fn inspect_slot_view(
     items: &Items,
     icons: Option<&ItemDisplays>,
     rolls: crate::items::RollCatalogs,
-    names: Option<&crate::names::NameCache>,
+    names: &crate::names::NameCache,
     slot0: u8,
 ) -> Option<InvSlotView> {
     let entry = store.0.player_visible_item_entry(slot0)?;
     let creator_guid = store.0.player_visible_item_creator(slot0);
-    let creator = names
-        .filter(|_| creator_guid != 0)
-        .and_then(|n| n.resolve_player(creator_guid, Ask::Read))
+    let creator = (creator_guid != 0)
+        .then(|| names.resolve_player(creator_guid, Ask::Read))
+        .flatten()
         .map(str::to_string);
     // The roll, the properties field's low word as the reference's inspect leg reads it into
     // `+0x424`, names the suffix only: its stat lines would sit in enchant slots 2-6, which 1.12
@@ -175,7 +175,7 @@ pub(crate) struct VisibleItemTables<'w> {
     icons: Option<Res<'w, ItemDisplays>>,
     enchants: Option<Res<'w, crate::items::Enchants>>,
     props: Option<Res<'w, crate::items::RandomProperties>>,
-    names: Option<Res<'w, crate::names::NameCache>>,
+    names: Res<'w, crate::names::NameCache>,
 }
 
 impl VisibleItemTables<'_> {
@@ -192,7 +192,7 @@ impl VisibleItemTables<'_> {
                 &self.items,
                 self.icons.as_deref(),
                 rolls,
-                self.names.as_deref(),
+                &self.names,
                 slot - 1,
             );
         }
@@ -203,7 +203,7 @@ impl VisibleItemTables<'_> {
     /// since `templates` and `names` last watched.
     fn moved(&self, templates: &mut gate::Watch, names: &mut gate::Watch) -> bool {
         let templates_moved = templates.moved(self.items.template_epoch());
-        let names_moved = names.moved(self.names.as_ref().map_or(0, |n| n.generation()));
+        let names_moved = names.moved(self.names.generation());
         templates_moved
             || names_moved
             || self.icons.as_ref().is_some_and(|i| i.is_changed())

@@ -1111,6 +1111,7 @@ mod tests {
             .init_resource::<crate::ui_inspect::InspectTarget>()
             .init_resource::<crate::ui_inspect::InspectFeedState>()
             .init_resource::<crate::items::Items>()
+            .init_resource::<crate::names::NameCache>()
             .insert_resource(crate::net::SelfGuid(Some(ME)))
             .insert_resource(factions())
             .insert_resource(NetCommands(tx))
