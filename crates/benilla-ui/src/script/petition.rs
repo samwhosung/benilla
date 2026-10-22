@@ -253,30 +253,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── The verbs ────────────────────────────────────────────────────────────────────────────
-    // The four that carry nothing; none touches the snapshot, which the server owns.
-    // `GetTabardInfo`'s stock caller is commented out (`GuildRegistrarFrame.xml:190`).
-    for (global, call) in [
-        ("TurnInGuildCharter", PetitionCall::TurnIn),
-        ("OfferPetition", PetitionCall::Offer),
-        ("ClosePetition", PetitionCall::Close),
-    ] {
-        g.set(
-            global,
-            lua.create_function(move |lua, ()| submit(lua, call.clone()))?,
-        )?;
-    }
-    // GetTabardInfo() (`0x4f5300`): the activate inside the call, then the registrar's close core
-    // (`0x4f5355` → `0x4f5010`), which needs the interaction latch and so stays latch-driven.
-    g.set(
-        "GetTabardInfo",
-        lua.create_function(|lua, ()| {
-            submit(lua, PetitionCall::TabardInfo)?;
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .registrar_close = true;
-            Ok(())
-        })?,
-    )?;
+    // The five that carry nothing, registered in the reference's table order; none touches the
+    // snapshot, which the server owns. `GetTabardInfo`'s stock caller is commented out
+    // (`GuildRegistrarFrame.xml:190`).
+    let call = |call: PetitionCall| lua.create_function(move |lua, ()| submit(lua, call.clone()));
+    g.set("TurnInGuildCharter", call(PetitionCall::TurnIn)?)?;
     // CloseGuildRegistrar() (`0x4f5010`) is the close core, which needs the interaction latch, so
     // it stays latch-driven ([`UiScript::take_registrar_close`]).
     g.set(
@@ -288,6 +269,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
+    // GetTabardInfo() (`0x4f5300`): the activate inside the call, then the registrar's close core
+    // (`0x4f5355` → `0x4f5010`), latch-driven as `CloseGuildRegistrar` is.
+    g.set(
+        "GetTabardInfo",
+        lua.create_function(|lua, ()| {
+            submit(lua, PetitionCall::TabardInfo)?;
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .registrar_close = true;
+            Ok(())
+        })?,
+    )?;
+    g.set("OfferPetition", call(PetitionCall::Offer)?)?;
+    g.set("ClosePetition", call(PetitionCall::Close)?)?;
 
     // SignPetition([n]) (`0x4f46d0`): the optional argument rides the wire as a byte defaulting to
     // 1, not 0 (`0x4f46d9`, `0x4f4749 Put8`); the server skips it.

@@ -49,9 +49,11 @@ impl GuildSteps<'_> {
         };
         // The re-sort's push and its bare `GUILD_ROSTER_UPDATE` (`0x4d1160(0)`), in the call.
         let resorted = |script: &mut UiScript, local: &mut GuildLocal| {
+            let show_offline = script.guild_show_offline();
             script.set_guild(feed::snapshot(
                 guild,
                 local,
+                show_offline,
                 areas.as_deref().map(|a| &a.0),
                 unit_names.get(),
                 net,
@@ -134,11 +136,10 @@ impl GuildSteps<'_> {
                     send(ClientCommand::GuildDelRank);
                 }
             }
-            GuildCall::Select(index) => local.select(index),
-            // `0x4d0f70`: a changed flag is stored, and with a member held the array is sorted
-            // and the roster signalled (`0x4d0f85`-`0x4d0f9f`).
-            GuildCall::SetShowOffline(flag) => {
-                if local.set_show_offline(flag) && guild.has_members() {
+            // `0x4d0f70` past its compare and its store, which the binding made: with a member held
+            // the array is sorted and the roster signalled (`0x4d0f85`-`0x4d0f9f`).
+            GuildCall::SetShowOffline => {
+                if guild.has_members() {
                     resorted(script, local);
                 }
             }

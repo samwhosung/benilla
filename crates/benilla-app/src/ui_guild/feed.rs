@@ -39,15 +39,14 @@ type GuildVm<'w, 's> = VmWith<'w, 's, (ResMut<'static, GuildState>, ResMut<'stat
 pub(super) fn snapshot(
     guild: &GuildState,
     local: &mut GuildLocal,
+    show_offline: i32,
     areas: Option<&AreaTableCatalog>,
     names: UnitNames<'_>,
     commands: &NetCommands,
 ) -> VmGuild {
     let identity = guild.resolve_identity(guild.guild_id, Ask::Event(commands));
-    let rows = display_rows(guild, local, areas, identity, names);
-    let display_order: Vec<u64> = rows.iter().map(|r| r.guid).collect();
-    let selection = index_of(&display_order, local.selection);
-    local.display_order = display_order;
+    let rows = display_rows(guild, local, show_offline, areas, identity, names);
+    local.display_order = rows.iter().map(|r| r.guid).collect();
     VmGuild {
         in_guild: guild.in_guild(),
         name: identity.map(|i| i.name.clone()).unwrap_or_default(),
@@ -60,7 +59,7 @@ pub(super) fn snapshot(
         rights: guild.own_rights(),
         motd: guild.motd.clone(),
         info_text: guild.info_text.clone(),
-        num_members: guild.num_members(local),
+        num_members: guild.num_members(show_offline),
         roster: rows.into_iter().map(|r| r.info).collect(),
         ranks: guild
             .rank_rights
@@ -73,8 +72,6 @@ pub(super) fn snapshot(
                 rights: *rights,
             })
             .collect(),
-        selection,
-        show_offline: local.show_offline,
     }
 }
 
@@ -100,11 +97,7 @@ pub(super) fn feed_guild(
         // guild. Their `PLAYER_GUILD_UPDATE` is the descriptor watchers' (`crate::field_watch`),
         // fired after this push.
         if let Some(store) = self_q.iter().next() {
-            guild.mirror_self(
-                &mut local,
-                store.0.player_guild_id(),
-                store.0.player_guild_rank(),
-            );
+            guild.mirror_self(store.0.player_guild_id(), store.0.player_guild_rank());
         }
 
         // `GUILD_INVITE_REQUEST` shows the popup. There is no hide edge: nothing in the 1.12 client
@@ -128,9 +121,11 @@ pub(super) fn feed_guild(
             return;
         }
         guild.dirty = false;
+        let show_offline = script.guild_show_offline();
         script.set_guild(snapshot(
             &guild,
             &mut local,
+            show_offline,
             areas.as_deref().map(|a| &a.0),
             unit_names.get(),
             &commands,
@@ -226,6 +221,7 @@ fn ginfo_lines(script: &UiScript, info: &GuildInfo) -> Vec<crate::ui_action::Sho
 pub(super) fn display_rows(
     guild: &GuildState,
     local: &GuildLocal,
+    show_offline: i32,
     areas: Option<&AreaTableCatalog>,
     identity: Option<&Identity>,
     names: UnitNames<'_>,
@@ -235,7 +231,7 @@ pub(super) fn display_rows(
         .iter()
         .map(|m| row(m, areas, identity, names))
         .collect();
-    local.sort.order(&mut rows, local.show_offline != 0);
+    local.sort.order(&mut rows, show_offline != 0);
     rows
 }
 
@@ -252,6 +248,7 @@ fn row(
         guid: m.guid,
         last_online_days: m.last_online_days,
         info: GuildMemberInfo {
+            guid: m.guid,
             name: m.name.clone(),
             rank: identity
                 .map(|i| i.rank_name(m.rank_id).to_string())
@@ -278,18 +275,6 @@ fn row(
             },
         },
     }
-}
-
-/// The 1-based row of a guid in the shown order, `0` when absent, as `GetGuildRosterSelection
-/// 0x4d1890` searches it (`0x4d1030`): a member who left reads as nothing selected.
-pub(super) fn index_of(order: &[u64], guid: u64) -> u32 {
-    if guid == 0 {
-        return 0;
-    }
-    order
-        .iter()
-        .position(|g| *g == guid)
-        .map_or(0, |i| i as u32 + 1)
 }
 
 /// The rank name, or `None` past vmangos's cap of 15, where it kicks the session
@@ -365,14 +350,6 @@ mod tests {
                 .last_online,
             Default::default()
         );
-    }
-
-    #[test]
-    fn the_shown_order_maps_both_ways() {
-        assert_eq!(index_of(&[11, 22, 33], 22), 2);
-        assert_eq!(index_of(&[22, 11, 33], 22), 1, "same player, new row");
-        assert_eq!(index_of(&[11, 33], 22), 0, "no longer listed");
-        assert_eq!(index_of(&[11, 22], 0), 0, "nothing selected");
     }
 
     #[test]

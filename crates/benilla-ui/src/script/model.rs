@@ -478,6 +478,10 @@ pub(crate) struct Model {
     pub(crate) guild: guild::GuildState,
     /// The rank editor's unsaved edits, apart from `guild` so a push cannot discard them.
     pub(crate) guild_control: guild::GuildRankEdit,
+    /// `SetGuildRosterShowOffline`'s integer (`0xb73124`) and `SetGuildRosterSelection`'s member
+    /// guid (`0xb73128`), the roster module's own cells, apart from `guild` so a push keeps them.
+    pub(crate) guild_show_offline: i32,
+    pub(crate) guild_selection: u64,
     /// The guilds `GetGuildInfo` missed, `(guild_id, guid)`, for the app to ask with a waiter.
     pub(crate) guild_info_asks: Vec<(u32, u64)>,
     /// The charter price and open petition, names resolved from caches as the reference does.
@@ -1547,6 +1551,8 @@ impl Model {
             guild: guild::GuildState::default(),
             guild_control: guild::GuildRankEdit::default(),
             guild_info_asks: Vec::new(),
+            guild_show_offline: 0,
+            guild_selection: 0,
             petition: petition::PetitionState::default(),
             registrar_close: false,
             // Per window, as the stock dock differs: 1 and 2 are the dock, the rest undocked.

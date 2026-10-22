@@ -1834,8 +1834,6 @@ pub(crate) mod schedule_tests {
          "both packets follow a stable master's gossip and a click in its window"),
         ("ui_summon.rs", "feed_summon", Because::PlayerRoundTrip,
          "only another player's Ritual of Summoning latches the ask (the duel's shape; coincidence-only residual)"),
-        ("ui_tabard.rs", "drain_tabard", Because::FilledByVm,
-         "the intents are Lua's; the event answers a Save intent"),
         ("ui_tabard.rs", "feed_tabard", Because::PlayerRoundTrip,
          "every latch follows a tabard-vendor click, and `reset_on_world_enter` zeroes the resource on entry"),
         ("ui_talent_wipe.rs", "feed_talent_wipe", Because::PlayerRoundTrip,

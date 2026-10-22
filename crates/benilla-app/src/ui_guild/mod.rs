@@ -135,17 +135,12 @@ pub(crate) struct GuildState {
 
 /// What the guild verbs write inside their calls ([`GuildSteps`]), apart from [`GuildState`] so
 /// the unit and item feeds that read the guild cache beside the VM can share the call host: the
-/// sort chain, the show-offline flag, the selection, the request deadline and the held invitation.
-/// Reset with the session, as [`GuildState`] is.
+/// sort chain, the shown order, the request deadline and the held invitation. Reset with the
+/// session, as [`GuildState`] is. The show-offline flag and the selection are the VM's
+/// ([`benilla_ui::script::UiScript::guild_show_offline`]).
 #[derive(Resource, Default)]
 pub(crate) struct GuildLocal {
     sort: SortStack,
-    /// `SetGuildRosterShowOffline`'s integer (`0xb73124`), 0 at start (`0x4d0a25`); the FrameXML
-    /// restores the saved value at `VARIABLES_LOADED`.
-    show_offline: i32,
-    /// The selected member as a guid, `0` for none, as `SetGuildRosterSelection 0x4d1820` stores
-    /// it (`0xb73128`, at `0x4d186a`/`0x4d1872`): a re-sort keeps the same player selected.
-    selection: u64,
     /// Member guids in the order last shown, mapping a Lua row index back to its player.
     display_order: Vec<u64>,
     /// Real-time seconds before which `GuildRoster()` is swallowed (`0xb73130`); `0.0` = allowed.
@@ -158,22 +153,6 @@ impl GuildLocal {
     /// `SortGuildRoster(field)`: the chain's step (`0x4d0fb0`); the caller re-sorts and signals.
     fn sort_by(&mut self, field: &str) {
         self.sort.select(SortField::parse(field));
-    }
-
-    /// `SetGuildRosterShowOffline(flag)` past `0x4d0f70`'s compare (`cmp ecx,[0xb73124]`):
-    /// `true` when the flag changed and was stored.
-    fn set_show_offline(&mut self, flag: i32) -> bool {
-        if self.show_offline == flag {
-            return false;
-        }
-        self.show_offline = flag;
-        true
-    }
-
-    /// `SetGuildRosterSelection(index)`: store the row's guid. No event: the stock click handler
-    /// repaints itself (`FriendsFrame.lua:706`).
-    fn select(&mut self, index: u32) {
-        self.selection = self.guid_at(index).unwrap_or(0);
     }
 
     /// The guid at a 1-based display row, over the whole roster, not the show-offline count.
@@ -205,7 +184,7 @@ impl GuildState {
 
     /// Mirror our descriptor's guild fields; `true` when either moved. Asks for nothing: the
     /// identity cache is lazy and the roster is the FrameXML's to request.
-    fn mirror_self(&mut self, local: &mut GuildLocal, guild_id: u32, rank_index: u32) -> bool {
+    fn mirror_self(&mut self, guild_id: u32, rank_index: u32) -> bool {
         if (self.guild_id, self.rank_index) == (guild_id, rank_index) {
             return false;
         }
@@ -222,7 +201,6 @@ impl GuildState {
             self.info_text.clear();
             self.rank_rights.clear();
             self.members.clear();
-            local.selection = 0;
         }
         if moved {
             self.note_roster_update(RosterUpdate::Applied);
@@ -272,7 +250,7 @@ impl GuildState {
     /// Mirrors our descriptor's guild id, as the feed does, for a test elsewhere.
     #[cfg(test)]
     pub(crate) fn join_for_test(&mut self, guild_id: u32) {
-        self.mirror_self(&mut GuildLocal::default(), guild_id, 0);
+        self.mirror_self(guild_id, 0);
     }
 
     /// Forgets the in-flight asks, as a world entry does, for a test elsewhere.
@@ -477,8 +455,8 @@ impl GuildState {
     /// `GetNumGuildMembers()`: the whole roster with show-offline on, else the online tally
     /// (`0x4d1190`, against `0xb73118`/`0xb7311c`). A loop bound, not the addressable range: with
     /// show-offline off the offline rows sort last ([`sort`]).
-    fn num_members(&self, local: &GuildLocal) -> usize {
-        if local.show_offline != 0 {
+    fn num_members(&self, show_offline: i32) -> usize {
+        if show_offline != 0 {
             self.members.len()
         } else {
             self.members.iter().filter(|m| m.is_online()).count()
@@ -963,29 +941,20 @@ mod tests {
             ..Default::default()
         });
 
-        let mut local = GuildLocal::default();
-        let rows = feed::display_rows(&guild, &local, None, None, Default::default());
+        let local = GuildLocal::default();
+        let rows = feed::display_rows(&guild, &local, 0, None, None, Default::default());
         assert_eq!(rows.len(), 3, "every member, always");
-        assert_eq!(
-            guild.num_members(&local),
-            2,
-            "but the count is the online tally"
-        );
+        assert_eq!(guild.num_members(0), 2, "but the count is the online tally");
         assert!(
             rows[..2].iter().all(|r| r.info.online),
             "and the counted rows are the leading ones"
         );
         assert!(!rows[2].info.online);
 
-        assert!(local.set_show_offline(1));
-        let rows = feed::display_rows(&guild, &local, None, None, Default::default());
+        let rows = feed::display_rows(&guild, &local, 1, None, None, Default::default());
         assert_eq!(rows.len(), 3);
-        assert_eq!(guild.num_members(&local), 3, "now the count is everybody");
-        assert!(
-            local.set_show_offline(2),
-            "the integer is compared (`0x4d0f70`)"
-        );
-        assert!(!local.set_show_offline(2), "an unchanged flag does nothing");
+        assert_eq!(guild.num_members(1), 3, "now the count is everybody");
+        assert_eq!(guild.num_members(2), 3, "any flag but 0 (`0x4d11ab`)");
     }
 
     #[test]
@@ -1132,28 +1101,22 @@ mod tests {
     fn leaving_the_guild_drops_the_roster_but_not_the_identities() {
         let mut guild = GuildState::default();
         guild.identities.insert(7, identity("Legacy", &["GM"]));
-        let mut local = GuildLocal::default();
-        assert!(guild.mirror_self(&mut local, 7, 0), "joined");
+        assert!(guild.mirror_self(7, 0), "joined");
         guild.apply_roster(GuildRoster {
             motd: "Raid at eight".into(),
             rank_rights: vec![0xffff, 0x3],
             members: vec![member(1, "Tigole", guild_presence::ONLINE)],
             ..Default::default()
         });
-        local.selection = 1;
         assert!(guild.in_guild());
 
-        assert!(guild.mirror_self(&mut local, 0, 0), "left");
+        assert!(guild.mirror_self(0, 0), "left");
         assert!(!guild.in_guild());
         assert!(guild.members.is_empty());
         assert!(guild.motd.is_empty());
-        assert_eq!(local.selection, 0);
         assert!(guild.identities.answered(7), "identities survive");
 
-        assert!(
-            !guild.mirror_self(&mut local, 0, 0),
-            "no edge when nothing moved"
-        );
+        assert!(!guild.mirror_self(0, 0), "no edge when nothing moved");
     }
 
     /// At login the MOTD event arrives before our descriptor names the guild.
@@ -1168,7 +1131,7 @@ mod tests {
         assert!(!guild.in_guild(), "the descriptor has not said yet");
 
         assert!(
-            guild.mirror_self(&mut GuildLocal::default(), 1, 3),
+            guild.mirror_self(1, 3),
             "the descriptor finally names the guild"
         );
         assert_eq!(
@@ -1186,7 +1149,7 @@ mod tests {
     #[test]
     fn own_rights_index_through_the_descriptor_rank() {
         let mut guild = GuildState::default();
-        guild.mirror_self(&mut GuildLocal::default(), 7, 1);
+        guild.mirror_self(7, 1);
         assert_eq!(guild.own_rights(), 0, "no roster yet");
         guild.apply_roster(GuildRoster {
             rank_rights: vec![0xffff, 0x00ff, 0x000f],
@@ -1194,7 +1157,7 @@ mod tests {
         });
         assert_eq!(guild.own_rights(), 0x00ff);
         assert_eq!(guild.rank_rights.len(), 3);
-        guild.mirror_self(&mut GuildLocal::default(), 7, 9); // a rank past the array
+        guild.mirror_self(7, 9); // a rank past the array
         assert_eq!(guild.own_rights(), 0);
     }
 
@@ -1211,7 +1174,7 @@ mod tests {
     #[test]
     fn a_rank_rename_patches_the_identity_cache() {
         let mut guild = GuildState::default();
-        guild.mirror_self(&mut GuildLocal::default(), 7, 0);
+        guild.mirror_self(7, 0);
         guild
             .identities
             .insert(7, identity("Legacy", &["GM", "Off"]));
@@ -1225,7 +1188,7 @@ mod tests {
     }
 
     #[test]
-    fn selection_follows_the_player_not_the_row() {
+    fn a_display_row_resolves_to_its_member() {
         let mut guild = GuildState::default();
         let mut local = GuildLocal::default();
         guild.apply_roster(GuildRoster {
@@ -1236,31 +1199,15 @@ mod tests {
             ..Default::default()
         });
         local.display_order = vec![11, 22];
-        local.select(2);
-        assert_eq!(local.selection, 22);
         assert_eq!(
             guild.member_at(&local, 2).map(|m| m.name.clone()),
             Some("Bob".to_string()),
             "a display row resolves to the member the wire wants by name"
         );
-
-        // Re-ordered: the same player stays selected.
         local.display_order = vec![22, 11];
-        assert_eq!(feed::index_of(&local.display_order, local.selection), 1);
-
-        local.select(0);
-        assert_eq!(local.selection, 0, "0 = nothing selected");
-        local.select(9);
-        assert_eq!(local.selection, 0, "past the end selects nothing");
-
-        // Bob leaves: the stored guid stops resolving.
-        local.selection = 22;
-        guild.apply_roster(GuildRoster {
-            members: vec![member(11, "Alice", guild_presence::ONLINE)],
-            ..Default::default()
-        });
-        local.display_order = vec![11];
-        assert_eq!(feed::index_of(&local.display_order, local.selection), 0);
+        assert_eq!(guild.member_at(&local, 2).map(|m| m.guid), Some(11));
+        assert!(guild.member_at(&local, 0).is_none());
+        assert!(guild.member_at(&local, 3).is_none());
     }
 
     #[test]

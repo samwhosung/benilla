@@ -346,7 +346,8 @@ impl Plugin for TabardUiPlugin {
             .add_systems(
                 Update,
                 (
-                    reset_on_world_enter.before(feed_tabard),
+                    // Moves what the save's call reads, so ahead of every host.
+                    reset_on_world_enter.before(crate::vm_pass::VmPass::Start),
                     feed_tabard.in_set(UiFeed),
                     drain_tabard.in_set(crate::ui_script::UiDrain),
                 ),
