@@ -264,13 +264,11 @@ pub(super) fn feed_ui_input(
                     // over terrain or nothing) is consumed now: the drop fires on the release, but
                     // the world click-pick and camera orbit act on the press. Over an object the
                     // reference runs SELECT with the payload still held.
-                    if btn == MouseButton::Left && hover.0.is_none() {
-                        use benilla_ui::script::WorldPick;
-                        let would_drop =
-                            script.cursor_payload().is_some() && world_pick != WorldPick::Object;
-                        if would_drop {
-                            click_consumed.0 = true;
-                        }
+                    if btn == MouseButton::Left
+                        && hover.0.is_none()
+                        && script.world_press_consumed()
+                    {
+                        click_consumed.0 = true;
                     }
                     // A press the UI consumed is not the world's, hovered frame or not.
                     press_consumed.0 |= script.mouse_button(x, y, name, true);

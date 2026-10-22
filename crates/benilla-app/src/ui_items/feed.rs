@@ -2229,6 +2229,122 @@ mod tests {
         assert_eq!(seats(0xB3), None, "not a container");
     }
 
+    /// `GetContainerItemInfo`'s readable flag (`0x4f97ba`): the item's `+0x74`, `0x5d9e10`, reads
+    /// the cached template's PageText (`[rec+0x19c]`), and only a zero falls back to the
+    /// instance's `ITEM_FIELD_ITEM_TEXT_ID` (`0x4f97c1`-`0x4f97cf`). A book reads readable; a
+    /// template not yet cached reads zero.
+    #[test]
+    fn a_template_page_text_makes_a_bag_item_readable() {
+        use crate::items::{test_template, Items, RollCatalogs};
+        use crate::names::NameCache;
+        use crate::ui_items::TestObjects;
+        use benilla_protocol::field::FIELD_OBJECT_ENTRY;
+        use benilla_protocol::ObjectFields;
+
+        let mut objs = TestObjects::new();
+        objs.spawn(
+            0xD1,
+            ObjectFields::from_pairs(&[(FIELD_OBJECT_ENTRY, 8383)]),
+        );
+        objs.spawn(
+            0xD2,
+            ObjectFields::from_pairs(&[(FIELD_OBJECT_ENTRY, 2589)]),
+        );
+        objs.spawn(
+            0xD3,
+            ObjectFields::from_pairs(&[(FIELD_OBJECT_ENTRY, 9999)]),
+        );
+        let mut items = Items::default();
+        let mut book = test_template("A Dusty Unsent Letter");
+        book.page_text = 1931;
+        items.insert_template(8383, Some(book));
+        items.insert_template(2589, Some(test_template("Linen Cloth")));
+        let names = NameCache::default();
+        let cooldowns = crate::spell::Cooldowns::default();
+        let petitions = crate::ui_petition::PetitionRecords::default();
+        let mut readable = |guid: u64| {
+            resolve_slot(
+                guid,
+                &objs.get(),
+                &items,
+                None,
+                RollCatalogs::NONE,
+                &cooldowns,
+                None,
+                &names,
+                &petitions,
+                std::time::Instant::now(),
+                0.0,
+                false,
+            )
+            .expect("an occupied slot")
+            .readable
+        };
+        assert!(readable(0xD1), "the template's page text");
+        assert!(!readable(0xD2), "no text anywhere");
+        assert!(!readable(0xD3), "an uncached template reads zero");
+    }
+
+    /// `0x5da2c0` skips its enchant leg for a record flagged `0x2000` (`0x5da2e3`, `0x5da2e6`), a
+    /// charter's: a binding enchant id in its slots binds nothing, and only `ITEM_FIELD_FLAGS & 1`
+    /// counts.
+    #[test]
+    fn a_charter_flagged_item_is_not_bound_by_an_enchant() {
+        use crate::items::{test_template, Enchants, Items, RollCatalogs};
+        use crate::names::NameCache;
+        use crate::ui_items::TestObjects;
+        use benilla_protocol::field::FIELD_OBJECT_ENTRY;
+        use benilla_protocol::ObjectFields;
+
+        /// A `SpellItemEnchantment` row whose `Flags & 1` binds the item.
+        const BINDING: u32 = 1900;
+        /// `ITEM_FIELD_ENCHANTMENT` slot 1's id.
+        const F_ENCHANT_1: u16 = 22 + 3;
+        let mut objs = TestObjects::new();
+        let enchanted = |entry: u32| {
+            ObjectFields::from_pairs(&[(FIELD_OBJECT_ENTRY, entry), (F_ENCHANT_1, BINDING)])
+        };
+        objs.spawn(0xE1, enchanted(5863));
+        objs.spawn(0xE2, enchanted(2589));
+        let mut items = Items::default();
+        let mut charter = test_template("Guild Charter");
+        charter.flags = benilla_protocol::messages::ITEM_FLAG_CHARTER;
+        items.insert_template(5863, Some(charter));
+        items.insert_template(2589, Some(test_template("Linen Cloth")));
+        let enchants = Enchants(benilla_formats::EnchantCatalog::from_rows(
+            Default::default(),
+            Default::default(),
+            [(BINDING, 1)].into(),
+        ));
+        let rolls = RollCatalogs {
+            props: None,
+            enchants: Some(&enchants),
+        };
+        let names = NameCache::default();
+        let cooldowns = crate::spell::Cooldowns::default();
+        let petitions = crate::ui_petition::PetitionRecords::default();
+        let mut bound = |guid: u64| {
+            resolve_slot(
+                guid,
+                &objs.get(),
+                &items,
+                None,
+                rolls,
+                &cooldowns,
+                None,
+                &names,
+                &petitions,
+                std::time::Instant::now(),
+                0.0,
+                false,
+            )
+            .expect("an occupied slot")
+            .already_bound
+        };
+        assert!(!bound(0xE1), "the charter's enchant leg is skipped");
+        assert!(bound(0xE2), "any other item's binding enchant binds it");
+    }
+
     /// A worn item answers the item cooldown query by its entry (`0x6e2ed0`): its answer is pushed
     /// under the live-API slot id, one past the descriptor slot. An on-use item with none running
     /// answers cold and enabled (`0x6e1406`); one with no use spell is absent, the query leaving

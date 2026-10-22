@@ -1364,6 +1364,74 @@ mod tests {
         }
     }
 
+    /// Containers 5-10, the bank bags, are no bag to the container bindings while no banker is
+    /// open: each resolves the bag through `0x4f93e0`, which tests the banker guid `[0xbdd038]`
+    /// (`0x4f93e9`-`0x4f93f9`): `GetContainerNumSlots` (`0x4f960b`), the slot resolver behind
+    /// the item verbs (`0x4f98d1`), `GetBagName` (`0x4fa720`) and `SetBagPortaitTexture`
+    /// (`0x4fa5d8`). The bank's own slots, container -1, are not gated.
+    #[test]
+    fn a_bank_bag_is_no_bag_until_the_bank_opens() {
+        use crate::script::{BankBagSlots, BankState, InvSlotView};
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        let bag = ContainerState {
+            name: Some("Linen Bag".into()),
+            ..backpack()
+        };
+        s.set_container(5, Some(bag));
+        s.set_container(-1, Some(backpack()));
+        let mut bank_bags: BankBagSlots = Default::default();
+        bank_bags[0] = Some(InvSlotView {
+            item_id: 4238,
+            icon: Some("Interface\\Icons\\INV_Misc_Bag_09".into()),
+            count: 1,
+            guid: 0x5b,
+            ..Default::default()
+        });
+        s.set_bank_bag_slots(bank_bags);
+        type Read = (
+            i64,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        );
+        let read = |s: &UiScript| {
+            s.eval::<Read>(
+                r#"local t = CreateFrame("Frame"):CreateTexture()
+                SetBagPortaitTexture(t, 5)
+                return GetContainerNumSlots(5), (GetContainerItemInfo(5, 1)),
+                    GetContainerItemLink(5, 1), GetBagName(5), t:GetTexture()"#,
+            )
+            .unwrap()
+        };
+        assert_eq!(read(&s), (0, None, None, None, None), "the bank is closed");
+        assert_eq!(
+            s.eval::<i64>("return GetContainerNumSlots(-1)").unwrap(),
+            16,
+            "the vault is not gated"
+        );
+        s.run("PickupContainerItem(5, 1)").unwrap();
+        assert!(s.cursor_payload().is_none(), "no slot to pick up from");
+        s.run("SplitContainerItem(5, 1, 2)").unwrap();
+        assert!(s.cursor_payload().is_none(), "no slot to split");
+        s.run("UseContainerItem(5, 1)").unwrap();
+        assert!(s.take_container_uses().is_empty(), "no slot to use");
+
+        s.set_bank(Some(BankState::default()));
+        let (slots, texture, link, name, portrait) = read(&s);
+        assert_eq!(slots, 16);
+        assert_eq!(
+            texture.as_deref(),
+            Some("Interface\\Icons\\INV_Misc_Food_16")
+        );
+        assert!(link.is_some_and(|l| l.contains("Tough Jerky")));
+        assert_eq!(name.as_deref(), Some("Linen Bag"));
+        assert!(portrait.is_some(), "the portrait is the bag's icon");
+        s.run("PickupContainerItem(5, 1)").unwrap();
+        assert!(s.cursor_item().is_some_and(|i| i.bag == 5 && i.slot == 1));
+    }
+
     #[test]
     fn an_armed_gift_wrap_spends_on_the_next_container_click() {
         let mut s = UiScript::new().unwrap();

@@ -902,6 +902,14 @@ impl super::UiScript {
         self.model_mut().world_pick = pick;
     }
 
+    /// Whether a left press on the world, over the pick fed this frame, is the payload's: the
+    /// app then keeps it from the world's click-pick and camera, as the drop on its release
+    /// ([`world_drop_click`]) consumes the click.
+    pub fn world_press_consumed(&self) -> bool {
+        let model = self.model_ref();
+        model.cursor.is_some() && model.world_pick != WorldPick::Object
+    }
+
     /// [`take_cursor_item_for_sale`], for the app's interact ladder.
     pub fn take_cursor_item_for_sale(&mut self) -> Option<CursorItem> {
         take_cursor_item_for_sale(&mut self.model_mut())
@@ -1438,6 +1446,59 @@ mod tests {
         );
         s.run("ClearCursor()").unwrap();
         assert_eq!(heard::take(&s), ["CURSOR_UPDATE"]);
+    }
+
+    /// A left click on the world with a payload held, by leg (`ui/mouseover`, "Payloads on the
+    /// world"): the ground leg clears a held vendor row (`0x492c90`, `0x492c99`) and goes on to the
+    /// ground click (`0x492cb0`), so the press stays the world's; the object leg clears it too
+    /// (`0x492ce0`) and selects; the nothing leg clears any payload but an item (`0x492de1`-
+    /// `0x492e04`) and deselects nothing, so it takes the press. Coins and a stabled pet survive
+    /// the ground and object legs.
+    #[test]
+    fn a_world_click_drops_a_vendor_row_on_every_leg_and_any_payload_on_nothing() {
+        use super::{
+            world_drop_click, CursorMerchantItem, CursorMoney, CursorStablePet, WorldPick,
+        };
+        let row = CursorPayload::Merchant(CursorMerchantItem {
+            item_id: 159,
+            row: 0,
+            texture: None,
+        });
+        let coins = CursorPayload::Money(CursorMoney { copper: 50 });
+        let pet = CursorPayload::StablePet(CursorStablePet {
+            slot: 1,
+            texture: "Interface\\Icons\\Ability_Hunter_Pet_Wolf".into(),
+        });
+        let cases = [
+            (&row, WorldPick::Terrain, false, true),
+            (&row, WorldPick::Object, false, true),
+            (&row, WorldPick::Nothing, true, true),
+            (&coins, WorldPick::Terrain, false, false),
+            (&coins, WorldPick::Object, false, false),
+            (&coins, WorldPick::Nothing, true, true),
+            (&pet, WorldPick::Terrain, false, false),
+            (&pet, WorldPick::Nothing, true, true),
+        ];
+        for (payload, pick, consumed, cleared) in cases {
+            let mut s = UiScript::new().unwrap();
+            s.set_cursor_for_test(payload.clone());
+            s.set_world_pick(pick);
+            assert_eq!(
+                s.world_press_consumed(),
+                consumed,
+                "{payload:?} {pick:?}: the press"
+            );
+            assert_eq!(
+                world_drop_click(&mut s.model_mut()),
+                consumed,
+                "{payload:?} {pick:?}: the release"
+            );
+            assert_eq!(
+                s.cursor_payload().is_none(),
+                cleared,
+                "{payload:?} {pick:?}: dropped"
+            );
+        }
     }
 
     /// Clearing a spell on terrain is the deviation documented on `world_drop_click`.

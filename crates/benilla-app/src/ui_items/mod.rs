@@ -24,6 +24,8 @@ pub(crate) mod feed;
 mod lock_openers;
 pub(crate) mod locks;
 mod net;
+#[cfg(test)]
+mod verb_tests;
 
 pub(crate) use drain::{dispatch_fork, send_auto_equip};
 use drain::{

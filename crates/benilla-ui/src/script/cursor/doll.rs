@@ -1356,4 +1356,74 @@ mod tests {
             }]
         );
     }
+
+    /// `EquipCursorItem(slot)` (`0x489660`) needs an item on the cursor: it reads the held guid
+    /// (`0x4896bd`) and returns at once on none (`0x4896c8`), so it never lifts the slot's item
+    /// and never hands it to an armed item pick.
+    #[test]
+    fn equip_cursor_item_on_an_empty_cursor_does_nothing() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.set_inventory_slots(doll_slots());
+        s.run("EquipCursorItem(1)").unwrap();
+        assert!(s.cursor_payload().is_none(), "nothing picked up");
+        assert!(!s.eval::<bool>("return IsInventoryItemLocked(1)").unwrap());
+        s.set_item_pick_armed(true);
+        s.run("EquipCursorItem(1)").unwrap();
+        assert!(s.cursor_payload().is_none());
+        assert!(s.take_script_calls().is_empty(), "no pick, no call");
+    }
+
+    /// Slot 0 or 256 auto-equips (`0x4896e3`, `0x4896ef`), as does a slot that refuses an item
+    /// held from anywhere but a worn slot (`0x48976f`-`0x489785`). Every auto-equip
+    /// `EquipCursorItem` makes passes 1 (`0x48979e`), which skips the bind question
+    /// (`0x5e15e3`): a bind-on-equip item is sent unasked.
+    #[test]
+    fn equip_cursor_item_auto_equips_without_the_bind_question() {
+        for chunk in [
+            "EquipCursorItem(0)",
+            "EquipCursorItem(256)",
+            "EquipCursorItem(19)",
+        ] {
+            let mut s = UiScript::new().unwrap();
+            s.keep_calls();
+            s.set_inventory_slots(doll_slots());
+            let mut bag = one_fitting_bag_item();
+            bag.slots.get_mut(&1).unwrap().bonding = 2;
+            s.set_container(0, Some(bag));
+            s.run(&format!("PickupContainerItem(0, 1) {chunk}"))
+                .unwrap();
+            assert_eq!(s.take_container_autoequips(), vec![(0, 1)], "{chunk}");
+            assert!(
+                s.take_container_equip_asks().is_empty(),
+                "{chunk}: never asked"
+            );
+            assert!(s.cursor_item().is_none(), "{chunk}");
+        }
+    }
+
+    /// `EquipCursorItem` swaps on `CheckItemForSlot` alone (`0x48972b`), with no lock test: a
+    /// locked occupant takes the swap (`0x489757`) and is locked again (`0x489761`).
+    #[test]
+    fn equip_cursor_item_swaps_over_a_locked_occupant() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.set_inventory_slots(doll_slots());
+        s.set_container(0, Some(one_fitting_bag_item()));
+        s.lock_item(0x10c);
+        s.run("PickupContainerItem(0, 1) EquipCursorItem(1)")
+            .unwrap();
+        assert_eq!(
+            s.take_container_moves(),
+            vec![ContainerMove {
+                src_bag: 0,
+                src_slot: 1,
+                dst_bag: EQUIPMENT_BAG,
+                dst_slot: 1,
+                count: None,
+            }]
+        );
+        assert!(s.cursor_item().is_none());
+        assert!(s.eval::<bool>("return IsInventoryItemLocked(1)").unwrap());
+    }
 }

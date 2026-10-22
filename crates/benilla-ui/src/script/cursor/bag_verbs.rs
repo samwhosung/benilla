@@ -779,4 +779,122 @@ mod tests {
         assert!(s.take_container_moves().is_empty());
         assert!(s.take_container_autoequips().is_empty());
     }
+
+    /// Past the empty-slot leg the worker reads the cursor (`0x4c7c65`, `0x4c7c70`): holding no
+    /// item and no vendor row it clears with `ClearCursor(1,1)` and answers nil (`0x4c7cdb`-
+    /// `0x4c7ce4` → `0x4c7eaf`), so a held spell, coins or bar item is dropped, and the clear's
+    /// `CURSOR_UPDATE` fires over an empty cursor too. The backpack is the same worker
+    /// (`0x4c7ed0`).
+    #[test]
+    fn a_payload_that_is_no_item_is_dropped_at_an_occupied_bag() {
+        use crate::script::cursor::{CursorAction, CursorMoney, CursorPayload, CursorSpell};
+        let payloads = [
+            None,
+            Some(CursorPayload::Spell(CursorSpell {
+                spell_id: 133,
+                texture: None,
+                passive: false,
+            })),
+            Some(CursorPayload::Money(CursorMoney { copper: 50 })),
+            Some(CursorPayload::Action(CursorAction {
+                src_slot: 1,
+                kind: Default::default(),
+                action: 117,
+                texture: None,
+                count: 0,
+                consumable: false,
+                state: None,
+            })),
+        ];
+        for verb in ["PutItemInBag(20)", "PutItemInBackpack()"] {
+            for payload in payloads.clone() {
+                let mut s = UiScript::new().unwrap();
+                s.keep_calls();
+                let mut doll: InventorySlots = Default::default();
+                doll[20] = Some(bag_slot_view(4500));
+                s.set_inventory_slots(doll);
+                if let Some(p) = payload.clone() {
+                    s.set_cursor_for_test(p);
+                }
+                heard::listen(&s, &["CURSOR_UPDATE"], None);
+                assert!(
+                    s.eval::<bool>(&format!("return {verb} == nil")).unwrap(),
+                    "{verb} {payload:?}"
+                );
+                assert!(s.cursor_payload().is_none(), "{verb} {payload:?}: dropped");
+                assert_eq!(heard::take(&s), ["CURSOR_UPDATE"], "{verb} {payload:?}");
+                assert!(s.take_script_calls().is_empty(), "{verb}: nothing sent");
+                assert!(s.take_bag_autostores().is_empty());
+            }
+        }
+    }
+
+    /// A held vendor row on an empty bag slot reaches the doll click (`0x4c7ca7`), which buys
+    /// into that slot (`0x4c78fd`): the payload test comes after the empty-slot leg.
+    #[test]
+    fn a_vendor_row_on_an_empty_bag_slot_buys_into_the_slot() {
+        use crate::script::{MerchantItem, MerchantState};
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.set_merchant(Some(MerchantState {
+            items: vec![MerchantItem {
+                item_id: 159,
+                quantity: 1,
+                num_available: -1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+        s.run("PickupMerchantItem(1)").unwrap();
+        assert!(s.eval::<bool>("return PutItemInBag(21) == nil").unwrap());
+        assert_eq!(s.take_merchant_slot_buys(), vec![(EQUIPMENT_BAG, 21, 159)]);
+        assert!(s.cursor_payload().is_none());
+    }
+
+    /// `PutItemInBackpack` is the worker with the player as the destination (`0x4c7ed0`,
+    /// `0x4c7c7d`): its control gate holds (`0x4c7c33`), and an item held from the backpack itself
+    /// is a cancel, its container being the player and its slot one of 23-38 (`0x4c7cf8`-
+    /// `0x4c7d11`): `ClearCursor(1,1)`, answer 1, nothing stored.
+    #[test]
+    fn put_item_in_backpack_cancels_a_backpack_item_and_needs_control() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.set_container(0, Some(backpack()));
+        s.run("PickupContainerItem(0, 2)").unwrap();
+        assert_eq!(s.eval::<i64>("return PutItemInBackpack()").unwrap(), 1);
+        assert!(s.cursor_item().is_none());
+        assert!(s.take_bag_autostores().is_empty(), "a cancel, not a store");
+        assert!(
+            !s.eval::<bool>("local _, _, l = GetContainerItemInfo(0, 2) return l == 1")
+                .unwrap(),
+            "the cancel unlocks"
+        );
+
+        let mut doll: InventorySlots = Default::default();
+        doll[1] = Some(InvSlotView {
+            item_id: 1234,
+            count: 1,
+            equip_slots: vec![1],
+            guid: 0x301,
+            ..Default::default()
+        });
+        s.set_inventory_slots(doll);
+        s.run("PickupInventoryItem(1)").unwrap();
+        s.set_player_control(false);
+        assert!(s.eval::<bool>("return PutItemInBackpack() == nil").unwrap());
+        assert!(s.cursor_item().is_some(), "no control: kept");
+        assert!(s.take_bag_autostores().is_empty());
+        s.set_player_control(true);
+        assert_eq!(s.eval::<i64>("return PutItemInBackpack()").unwrap(), 1);
+        assert_eq!(
+            s.take_bag_autostores(),
+            vec![BagAutoStore {
+                src_bag: EQUIPMENT_BAG,
+                src_slot: 1,
+                dst_bag: 0,
+                count: None,
+            }],
+            "a worn item is stored"
+        );
+    }
 }

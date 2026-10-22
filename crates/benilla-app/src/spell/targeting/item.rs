@@ -389,6 +389,14 @@ mod tests {
     /// record, so the pick takes the verdict arm; without them it takes the ungated one), a VM
     /// whose bag shows it, and a spell awaiting an item.
     fn item_targeting(template: bool) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
+        item_targeting_with(template, template)
+    }
+
+    /// [`item_targeting`] with the item's template and the spell's record each present or not.
+    fn item_targeting_with(
+        template: bool,
+        spell: bool,
+    ) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         let mut app = crate::game_plugins::schedule_tests::headless_client();
         let (tx, rx) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
@@ -410,6 +418,8 @@ mod tests {
             world
                 .resource_mut::<crate::items::Items>()
                 .insert_template(ENTRY, Some(crate::items::test_template("Rune")));
+        }
+        if spell {
             world.insert_resource(crate::ui_action::Spells {
                 catalog: benilla_formats::SpellCatalog::from_displays(
                     [(SPELL, benilla_formats::SpellDisplay::default())].into(),
@@ -585,6 +595,104 @@ mod tests {
             (0, true)
         );
         assert_eq!(pick(&mut app, &rx, "ReplaceEnchant()"), (1, false));
+    }
+
+    /// `0x495d60` returns with no report when the clicked item has no object (`0x495d95`,
+    /// `0x495da1`) or the pending spell no record (`0x495dce`), and `ReplaceEnchant` binds only
+    /// an item the object manager still finds (`0x48d31c`, `0x48d323`): no cast, the cursor kept.
+    #[test]
+    fn an_item_pick_on_an_unknown_spell_or_item_does_nothing() {
+        let (mut app, rx) = item_targeting_with(true, false);
+        assert_eq!(
+            pick(&mut app, &rx, "PickupContainerItem(0, 1)"),
+            (0, true),
+            "no spell record"
+        );
+        let (mut app, rx) = item_targeting(true);
+        app.world_mut()
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .remove(&ITEM);
+        assert_eq!(
+            pick(&mut app, &rx, "PickupContainerItem(0, 1)"),
+            (0, true),
+            "the item object is gone"
+        );
+        let (mut app, rx) = item_targeting(true);
+        app.world_mut().resource_mut::<EnchantConfirmItem>().0 = Some(ITEM);
+        app.world_mut()
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .remove(&ITEM);
+        assert_eq!(
+            pick(&mut app, &rx, "ReplaceEnchant()"),
+            (0, true),
+            "the parked item left the bags under the popup"
+        );
+    }
+
+    /// For an enchant effect `0x495d60` reads the item record's flags (`0x495df7`-`0x495e05`) and
+    /// exits silently on `0x2000` (`0x495e07`, `0x495e0a`), ahead of the equip gate: no bind, no
+    /// popup, no refusal, the cursor kept.
+    #[test]
+    fn an_enchant_on_a_charter_flagged_item_is_ignored() {
+        const ENCHANT: u32 = 1900;
+        for gated in [false, true] {
+            let (mut app, rx) = item_targeting(true);
+            let world = app.world_mut();
+            world.resource_mut::<crate::items::Items>().insert_template(
+                ENTRY,
+                Some(benilla_protocol::ItemInfo {
+                    inventory_type: 13,
+                    flags: benilla_protocol::messages::ITEM_FLAG_CHARTER,
+                    ..crate::items::test_template("Flagged")
+                }),
+            );
+            world.insert_resource(crate::ui_action::Spells {
+                catalog: benilla_formats::SpellCatalog::from_displays(
+                    [(
+                        SPELL,
+                        benilla_formats::SpellDisplay {
+                            effects: [benilla_formats::SPELL_EFFECT_ENCHANT_ITEM, 0, 0],
+                            effect_misc_value: [ENCHANT as i32, 0, 0],
+                            // A mask the item misses: the equip gate would refuse it.
+                            equipped_item_class: if gated { 4 } else { -1 },
+                            equipped_item_subclass_mask: u32::from(gated),
+                            ..Default::default()
+                        },
+                    )]
+                    .into(),
+                ),
+                ..crate::ui_action::Spells::empty_for_tests()
+            });
+            world.insert_resource(crate::items::Enchants(
+                benilla_formats::EnchantCatalog::from_rows(
+                    Default::default(),
+                    Default::default(),
+                    [(ENCHANT, 1)].into(),
+                ),
+            ));
+            world
+                .non_send_resource_mut::<benilla_ui::script::UiScript>()
+                .run(
+                    r#"local f = CreateFrame("Frame")
+                    f:RegisterEvent("BIND_ENCHANT")
+                    f:RegisterEvent("SPELLCAST_FAILED")
+                    f:SetScript("OnEvent", function() Heard = (Heard or 0) + 1 end)"#,
+                )
+                .unwrap();
+            assert_eq!(
+                pick(&mut app, &rx, "PickupContainerItem(0, 1)"),
+                (0, true),
+                "gated {gated}"
+            );
+            let heard = app
+                .world_mut()
+                .non_send_resource_mut::<benilla_ui::script::UiScript>()
+                .eval::<Option<i64>>("return Heard")
+                .unwrap();
+            assert_eq!(heard, None, "gated {gated}: no popup, no refusal");
+        }
     }
 
     #[test]
