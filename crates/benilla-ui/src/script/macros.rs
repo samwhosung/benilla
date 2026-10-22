@@ -154,9 +154,10 @@ fn cut_body(body: &str) -> String {
 impl MacroState {
     /// The table the file reader builds (`0x4f0600`), the account scope read first: per scope, in
     /// order, a record past the 18th is skipped (`0x4f06ee`); an id below the scope's base gets the
-    /// base added (`0x4f0737`); the largest id seen becomes the scope's last (`0x4f0744`); an id
-    /// that exists is skipped (`0x4f0789`); the local flag is cleared (`0x4f095c`). A view with no
-    /// id, the seed form, takes the scope's next. The name and body keep their verbs' caps.
+    /// base added (`0x4f0737`); the largest id seen becomes the scope's last (`0x4f0744`), both
+    /// compares signed; an id that exists is skipped (`0x4f0789`), then a read record with an
+    /// empty name (`0x4f07c8`); the local flag is cleared (`0x4f095c`). A view with no id, the seed
+    /// form, takes the scope's next. The name and body keep their verbs' caps.
     pub fn from_scopes(account: Vec<MacroView>, character: Vec<MacroView>) -> Self {
         let mut state = Self::default();
         for (per_character, views) in [(false, account), (true, character)] {
@@ -165,13 +166,16 @@ impl MacroState {
                 if state.count(per_character) >= MAX_MACROS {
                     break;
                 }
-                if view.id == 0 {
+                let seed = view.id == 0;
+                if seed {
                     view.id = state.last_id[scope] + 1;
-                } else if view.id < SCOPE_BASE[scope] {
-                    view.id += SCOPE_BASE[scope];
+                } else if (view.id as i32) < SCOPE_BASE[scope] as i32 {
+                    view.id = view.id.wrapping_add(SCOPE_BASE[scope]);
                 }
-                state.last_id[scope] = state.last_id[scope].max(view.id);
-                if state.by_id(view.id).is_some() {
+                if view.id as i32 > state.last_id[scope] as i32 {
+                    state.last_id[scope] = view.id;
+                }
+                if state.by_id(view.id).is_some() || (!seed && view.name.is_empty()) {
                     continue;
                 }
                 view.name = cut_name(&view.name);

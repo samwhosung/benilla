@@ -4,67 +4,98 @@
 //! `macros-cache.txt` drops into `benilla-config/macros/`. The number is the macro's id, which an
 //! action slot holds. A save writes a scope in name order, the sorted table's (`0x4f0ad0`); a load
 //! keeps the file's order as the list order the reference's sort and name lookups start from
-//! (`MacroState`). A name holding a `"` runs from the first quote to the last, since the
-//! reference's `"%s"` is unescaped.
+//! (`MacroState`). The writer's `"%s"` is unescaped and the reader's name token ends at the next
+//! quote, so a name holding a `"` does not survive the round trip.
 
-use benilla_ui::script::{macro_slot_word, MacroView, CHARACTER_ID_BASE, MAX_MACROS};
+use benilla_ui::script::{
+    macro_slot_word, s_str_to_int, s_str_tokenize, MacroView, CHARACTER_ID_BASE, MAX_MACROS,
+};
+
+/// The reader's and the writer's line buffers, and the reader's header token buffers: 0x100 bytes
+/// (`0x4f0677`, `0x4f0b93`, `0x4f06b3`).
+const LINE_BYTES: usize = 0x100;
+
+/// The header's name and icon delimiters (`0x84cb48`), with quotes on.
+const NAME_DELIMS: &[u8] = b" \"\r\n";
+
+/// A token as its buffer kept it. Deviation: the reference's 255-byte cut (`0x4f0677`,
+/// `0x4f0b93`) can end inside a character and keep its stray bytes; a `String` must stay UTF-8,
+/// so the cut backs off to the character's start.
+fn token_text(bytes: Vec<u8>) -> String {
+    match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(e) => {
+            let valid = e.utf8_error().valid_up_to();
+            let mut bytes = e.into_bytes();
+            bytes.truncate(valid);
+            String::from_utf8(bytes).unwrap_or_default()
+        }
+    }
+}
+
+/// The lines of `text` as the tokenizer splits them on CR and LF into a [`LINE_BYTES`] buffer:
+/// blank lines are no tokens, and each keeps its first 255 bytes.
+fn lines(text: &str) -> impl Iterator<Item = String> + '_ {
+    let mut cursor = text.as_bytes();
+    std::iter::from_fn(move || {
+        let line = s_str_tokenize(&mut cursor, LINE_BYTES, b"\r\n");
+        (!line.is_empty()).then(|| token_text(line))
+    })
+}
 
 /// The path prefix the client prepends to a stored icon basename (`0x84ca64`).
 pub(super) const ICON_PREFIX: &str = "Interface\\Icons\\";
 
 /// Parse one scope's file into its records in file order, each with its id, as the reader
-/// `0x4f0600` walks it: the file splits into lines on CR and LF, blank ones skipped (`0x4f0687`).
-/// With no record open, a line whose first space-separated token is `MACRO` without case opens one
-/// (`0x4f06c1`, `0x4f06d7`); a header with no id, or a zero one, is no record (`0x4f072a`). Within
-/// a record each line is body text followed by `\n` (`0x4f0a15`, `0x4f0a2b`), a `MACRO` line
-/// included (`0x4f06a2`), until a line that is `END` without case (`0x4f09d3`), where the body is
-/// stored (`0x4f09e4`): a record the file ends inside keeps an empty body. The table that takes
-/// the records skips what the scope cannot hold and any id it has, and gives an id below its base
-/// the base (`MacroState::from_scopes`).
+/// `0x4f0600` walks it: the file splits into [`lines`] (`0x4f0687`). With no record open, a line
+/// whose first space-separated token is `MACRO` without case is a header (`0x4f06c1`,
+/// `0x4f06d7`): its id is `SStrToInt` of the next space-separated token, and a zero one is no
+/// record (`0x4f0721`, `0x4f072a`); then the name and the icon are the next two tokens on
+/// `` "\r\n`` with quotes on (`0x4f07bb`, `0x4f0986`), so a name runs to the next quote. A header
+/// with an empty name is read but opens no record (`0x4f07c8`), the table skipping it once its
+/// id has counted. Within a record each line is body text followed by `\n` (`0x4f0a15`,
+/// `0x4f0a2b`), a `MACRO` line included (`0x4f06a2`), until a line that is `END` without case
+/// (`0x4f09d3`), where the body is stored (`0x4f09e4`): a record the file ends inside keeps an
+/// empty body. The table that takes the records skips what the scope cannot hold and any id it
+/// has, and gives an id below its base the base (`MacroState::from_scopes`).
 pub(super) fn parse(text: &str) -> Vec<MacroView> {
     let mut out: Vec<MacroView> = Vec::new();
     // The open record, its index in `out`, and the body read so far.
     let mut open: Option<(usize, String)> = None;
-    for line in text.split(['\r', '\n']).filter(|l| !l.is_empty()) {
+    for line in lines(text) {
         if let Some((at, body)) = &mut open {
-            if benilla_ui::crt::str_cmp_i(line, "END") == 0 {
+            if benilla_ui::crt::str_cmp_i(&line, "END") == 0 {
                 out[*at].body = std::mem::take(body);
                 open = None;
             } else {
-                body.push_str(line);
+                body.push_str(&line);
                 body.push('\n');
             }
             continue;
         }
-        let header = line.trim_start_matches(' ');
-        let (token, rest) = header.split_once(' ').unwrap_or((header, ""));
-        if benilla_ui::crt::str_cmp_i(token, "MACRO") != 0 {
+        let mut cursor = line.as_bytes();
+        let mut token = |delims: &[u8]| token_text(s_str_tokenize(&mut cursor, LINE_BYTES, delims));
+        if benilla_ui::crt::str_cmp_i(&token(b" "), "MACRO") != 0 {
             continue; // stray text between records
         }
-        let Some((id, name, icon)) = parse_header(rest) else {
+        let id = s_str_to_int(&token(b" ")) as u32;
+        if id == 0 {
             continue;
-        };
-        open = Some((out.len(), String::new()));
+        }
+        let name = token(NAME_DELIMS);
+        let icon = token(NAME_DELIMS);
+        if !name.is_empty() {
+            open = Some((out.len(), String::new()));
+        }
         out.push(MacroView {
             id,
             name,
-            texture: icon.map(icon_path),
+            texture: (!icon.is_empty()).then(|| icon_path(icon)),
             body: String::new(),
             local_only: false,
         });
     }
     out
-}
-
-/// The tail of a `MACRO ` header line: `<id> "<name>" <icon>`.
-fn parse_header(rest: &str) -> Option<(u32, String, Option<String>)> {
-    let (id, rest) = rest.split_once('"')?;
-    let id: u32 = id.trim().parse().ok().filter(|&id| id != 0)?;
-    // To the last quote on the line: the reference's `"%s"` is unescaped.
-    let close = rest.rfind('"')?;
-    let name = rest[..close].to_string();
-    let icon = rest[close + 1..].trim();
-    Some((id, name, (!icon.is_empty()).then(|| icon.to_string())))
 }
 
 /// The bar words of the builds that numbered macros by position, in the character file's terms
@@ -99,15 +130,15 @@ pub(super) fn legacy_character_words(records: &[MacroView]) -> Vec<(u32, u32)> {
 }
 
 /// Serialize a scope's macros back into the reference's format, in the order given: the header
-/// (`0x4f0b61`), each body line the tokenizer splits on CR and LF with its own line end, so a
-/// blank line writes nothing (`0x4f0b8c`-`0x4f0be5`), then `END` (`0x4f0bec`).
+/// (`0x4f0b61`), each of the body's [`lines`] with its own line end, so a blank line writes nothing
+/// (`0x4f0b8c`-`0x4f0be5`), then `END` (`0x4f0bec`).
 pub(super) fn write<'a>(macros: impl Iterator<Item = &'a MacroView>) -> String {
     let mut out = String::new();
     for m in macros {
         let icon = m.texture.as_deref().map(icon_token).unwrap_or_default();
         out.push_str(&format!("MACRO {} \"{}\" {}\n", m.id, m.name, icon));
-        for line in m.body.split(['\r', '\n']).filter(|l| !l.is_empty()) {
-            out.push_str(line);
+        for line in lines(&m.body) {
+            out.push_str(&line);
             out.push('\n');
         }
         out.push_str("END\n");
