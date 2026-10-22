@@ -198,9 +198,11 @@ pub(crate) fn seed_reloaded_vm(world: &mut World, script: &mut UiScript) {
     let seeded = world.run_system_cached_with(
         |bevy::ecs::system::InMut(script): bevy::ecs::system::InMut<UiScript>,
          view: GroupView,
+         world: crate::target::RelationWorld,
          mut seed: ResMut<ReloadSeed>| {
             let mut fed = FedParty::default();
-            push_group(&view, script, &mut fed, &gate::Gate::new(true), true);
+            let ffa = free_for_all(&world, &view);
+            push_group(&view, &ffa, script, &mut fed, &gate::Gate::new(true), true);
             seed.0 = Some((script.session(), view.group.signals.end()));
         },
         script,
@@ -284,15 +286,41 @@ pub(crate) struct GroupView<'w, 's> {
     map_catalog: Option<Res<'w, benilla_assets::MapCatalogRes>>,
     // The guild cache, every held member's guild leg.
     guild: Res<'w, crate::ui_guild::GuildState>,
-    // The object manager's units, the controller `UnitIsPVPFreeForAll` reads (`0x606170`).
-    world: crate::target::RelationWorld<'w, 's>,
+}
+
+/// `UnitIsPVPFreeForAll` (`0x516540`) for each held unit a group token can name, by guid.
+pub(super) type FreeForAll = std::collections::HashMap<u64, bool>;
+
+/// [`FreeForAll`] for the members, our own row and each one's pet, off the player controlling
+/// each (`0x606170`), read before the VM runs: the call host holds the reputation store the
+/// relation reads borrow.
+fn free_for_all(world: &crate::target::RelationWorld, view: &GroupView) -> FreeForAll {
+    let rel = world.get();
+    let store_of = |g: u64| view.index.0.get(&g).and_then(|e| view.stores.get(*e).ok());
+    let owners =
+        (view.group.members.iter().map(|m| m.guid)).chain(view.self_q.iter().map(|(_, g, _)| g.0));
+    let mut out = FreeForAll::new();
+    for owner in owners {
+        let live = store_of(owner).map(|s| &s.0);
+        let pets = [
+            view.group.party_pet_guid(owner, live),
+            view.group.raid_pet_guid(owner, live),
+        ];
+        for guid in std::iter::once(Some(owner)).chain(pets).flatten() {
+            if let Some(store) = store_of(guid) {
+                out.insert(guid, crate::ui_unit::pvp_free_for_all_of(&rel, guid, store));
+            }
+        }
+    }
+    out
 }
 
 /// Push the roster and the party unit snapshots into the VM and fire the party events on their
 /// edges. A member's unit state is their live descriptor when streamed, else their roster record.
 pub(crate) fn feed_party(
     view: GroupView,
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // The relation reads the call host also reaches, read before the VM runs with it lent.
+    mut vm: crate::script_calls::VmWith<crate::target::RelationWorld<'static, 'static>>,
     changed_stores: Query<(), Changed<ObjectStore>>,
     mut removed_stores: RemovedComponents<ObjectStore>,
     mut fed: Local<crate::ui_script::VmMemo<FedParty>>,
@@ -313,9 +341,9 @@ pub(crate) fn feed_party(
         here,
         map_catalog,
         guild,
-        world,
     } = &view;
-    hosted_vm.run(|script| {
+    let ffa = free_for_all(&vm.own(), &view);
+    vm.run(|script| {
         let Some(script) = script else {
             return;
         };
@@ -336,7 +364,6 @@ pub(crate) fn feed_party(
         let area_moved = fed.area.moved(here.area().map_or(u64::MAX, u64::from));
         let group_changed = group.is_changed();
         let index_changed = index.is_changed();
-        let rel = world.get();
         let look = pets::Lookup::new(
             index,
             stores,
@@ -344,7 +371,7 @@ pub(crate) fn feed_party(
             types,
             tables.catalog(),
             tables.study(),
-            &rel,
+            &ffa,
         );
         // Only the stores the merged view reads: a crowd's other stores change every frame. The
         // members' pets are the group's too, `partypetN` and `raidpetN` reading their descriptors.
@@ -401,7 +428,7 @@ pub(crate) fn feed_party(
         if gate.skip() {
             return;
         }
-        push_group(&view, script, fed, &gate, vm_reset);
+        push_group(&view, &ffa, script, fed, &gate, vm_reset);
         let self_guid = self_q.iter().next().map(|(_, g, _)| g.0);
 
         // ── The group events ────────────────────────────────────────────────────
@@ -499,6 +526,7 @@ pub(crate) fn feed_party(
 /// `fed` says it last pushed: the feed's pass, and a reload's seed ([`seed_reloaded_vm`]).
 fn push_group(
     view: &GroupView,
+    ffa: &FreeForAll,
     script: &mut UiScript,
     fed: &mut FedParty,
     gate: &gate::Gate,
@@ -516,11 +544,9 @@ fn push_group(
         here,
         map_catalog: _,
         guild,
-        world,
     } = view;
     let chr = tables.unit_names();
     let types = tables.types(names);
-    let rel = world.get();
     let look = pets::Lookup::new(
         index,
         stores,
@@ -528,7 +554,7 @@ fn push_group(
         types,
         tables.catalog(),
         tables.study(),
-        &rel,
+        ffa,
     );
     let self_pair = self_q.iter().next();
     let self_guid = self_pair.map(|(_, g, _)| g.0);
@@ -632,8 +658,8 @@ fn push_group(
                 chr,
                 types,
             );
-            if let Some(store) = held {
-                s.is_pvp_ffa = crate::ui_unit::pvp_free_for_all_of(&rel, m.guid, store);
+            if held.is_some() {
+                s.is_pvp_ffa = ffa.get(&m.guid).copied().unwrap_or_default();
             }
             s.tooltip.party = party_record(group, m.guid, area_names);
             s
@@ -692,7 +718,7 @@ fn push_group(
                     Some((_, _, store)) => {
                         let mut s = crate::ui_unit::snapshot(store, *guid, name, 0, chr, types);
                         s.guild = crate::ui_guild::cached_unit_guild(&store.0, guild);
-                        s.is_pvp_ffa = crate::ui_unit::pvp_free_for_all_of(&rel, *guid, store);
+                        s.is_pvp_ffa = ffa.get(guid).copied().unwrap_or_default();
                         s
                     }
                     // No object of ours, as across a worldport: the row's guid still names us,
@@ -728,8 +754,8 @@ fn push_group(
                     chr,
                     types,
                 );
-                if let Some(store) = held {
-                    s.is_pvp_ffa = crate::ui_unit::pvp_free_for_all_of(&rel, *guid, store);
+                if held.is_some() {
+                    s.is_pvp_ffa = ffa.get(guid).copied().unwrap_or_default();
                 }
                 s.tooltip.party = party_record(group, *guid, area_names);
                 Some(s)
