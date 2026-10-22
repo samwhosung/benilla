@@ -150,7 +150,6 @@ impl CastReports {
     }
 
     /// Drop every report queued, unfired.
-    #[cfg(test)]
     pub(crate) fn clear(&mut self) {
         self.0.clear();
     }
@@ -517,6 +516,12 @@ pub(crate) fn signal_reports(world: &mut World) {
     fire_cast_lane(world);
 }
 
+/// The session's end drops the reports no VM will hear, as the chat lane drops its lines: the
+/// Lua state they were for is replaced at the session end.
+fn end_session_reports(mut reports: ResMut<CastReports>) {
+    reports.clear();
+}
+
 /// The reports queued, fired alone, for a test that drives them without the other lanes.
 #[cfg(test)]
 pub(crate) fn fire_cast_lane(world: &mut World) {
@@ -553,6 +558,10 @@ impl Plugin for UiCastPlugin {
                 feed_cast_reports
                     .in_set(UnitFeed)
                     .after(crate::spell::LocalCancel),
+            )
+            .add_systems(
+                OnExit(crate::client_state::ClientState::InWorld),
+                end_session_reports,
             );
     }
 }
