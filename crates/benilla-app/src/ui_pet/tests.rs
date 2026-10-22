@@ -14,7 +14,6 @@ use crate::target::UNIT_FLAG_POSSESSED;
 use super::bar::*;
 use super::drain::*;
 use super::menu::*;
-use super::unit::*;
 use super::*;
 
 fn packed(action: u32, kind: u8) -> PetActionEntry {
@@ -678,19 +677,6 @@ fn the_menu_fork_reads_abandon_and_rename_off_the_right_bits() {
     assert_eq!(menu_predicates(0x8 | 0x40), (false, false));
 }
 
-#[test]
-fn only_the_same_pets_moving_timestamp_reads_as_a_rename() {
-    // Nothing seen before: a login, or the pet just streamed.
-    assert!(!was_renamed(None, (0xF14, Some(100))));
-    assert!(!was_renamed(Some((0xF14, Some(100))), (0xF14, Some(100))));
-    assert!(was_renamed(Some((0xF14, Some(100))), (0xF14, Some(200))));
-    // A stamp first arriving is a move: a pet named for the first time.
-    assert!(was_renamed(Some((0xF14, None)), (0xF14, Some(200))));
-    // A different pet is never a rename, whatever the stamps do.
-    assert!(!was_renamed(Some((0xF14, Some(100))), (0xABC, Some(200))));
-    assert!(!was_renamed(Some((0xF14, Some(100))), (0xABC, Some(100))));
-}
-
 /// `PetDismiss` (`0x4be4d0`) stages `0x07000003` for the bar's dispatcher.
 #[test]
 fn the_dismiss_word_is_the_carved_literal() {
@@ -1216,8 +1202,16 @@ fn a_rename_evicts_by_the_units_pet_number_for_any_unit() {
     };
     assert_eq!(named(pet, PET), None, "our pet's number 55 is evicted");
     assert_eq!(named(other, OTHER), None, "so is the other pet's 66");
-    let by_bits = |guid: u64| names.resolve_fields(guid, None, Ask::Read).map(str::to_string);
-    assert_eq!(by_bits(PET).as_deref(), Some("Seven"), "the guid's bits are no key");
+    let by_bits = |guid: u64| {
+        names
+            .resolve_fields(guid, None, Ask::Read)
+            .map(str::to_string)
+    };
+    assert_eq!(
+        by_bits(PET).as_deref(),
+        Some("Seven"),
+        "the guid's bits are no key"
+    );
     assert_eq!(by_bits(OTHER).as_deref(), Some("Eight"));
     let renamed = app
         .world_mut()

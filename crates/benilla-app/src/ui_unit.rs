@@ -25,7 +25,7 @@ mod held;
 mod relations;
 pub(crate) mod tooltip_facts;
 
-pub(crate) use held::{traits_from_name_cache, unit_reach};
+pub(crate) use held::{traits_from_name_cache, unheld_state, unit_reach};
 
 /// The unit-feed pass, gated so none of its login one-shots or per-VM memos runs before the in-game
 /// interface exists; the demo override orders itself after it.

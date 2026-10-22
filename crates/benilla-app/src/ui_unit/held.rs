@@ -233,7 +233,7 @@ pub(super) fn feed_chain_units(
 /// nothing else. Off the roster it does not exist (`0x491900`); on it, the VM reads the row's push.
 /// The name is read without asking: the lookup asks when `UnitName` reads it, and the VM hands
 /// the miss back ([`UiScript::take_unit_name_asks`]).
-fn unheld_state(
+pub(crate) fn unheld_state(
     names: &NameCache,
     group: &crate::ui_party::GroupState,
     guid: u64,
