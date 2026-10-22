@@ -69,7 +69,7 @@ fn app() -> Option<(App, u32)> {
 fn send(app: &mut App, ev: SessionEvent) {
     // The handler `register` binds to the event's kind.
     match ev {
-        SessionEvent::ReputationVisible { .. } => {
+        SessionEvent::ReputationVisible { .. } | SessionEvent::ReputationAtWar { .. } => {
             app.world_mut()
                 .run_system_cached_with(on_reputations, ev)
                 .unwrap();
@@ -191,4 +191,188 @@ fn a_female_player_asks_for_the_female_label() {
         )])));
     visible(&mut app, slot);
     assert_eq!(rank_lines(&app), [("Stormwind".to_string(), 4, true)]);
+}
+
+/// Stormwind's slot in [`synthetic_app`].
+const SLOT: usize = 19;
+
+/// The handlers over a logged-in human warrior and one reputation faction, Stormwind (72) on slot
+/// [`SLOT`] at base 0 for a human; runs without client data.
+fn synthetic_app() -> App {
+    use benilla_formats::FactionCatalog;
+    let catalog = FactionCatalog::from_rows(Default::default(), Default::default())
+        .with_reputation(72, SLOT as i32, 1, 0);
+    let mut app = App::new();
+    app.init_resource::<crate::net::GuidIndex>()
+        .insert_resource(SelfGuid(Some(ME)))
+        .init_resource::<crate::net::NetStatus>()
+        .init_resource::<crate::names::NameCache>()
+        .init_resource::<crate::items::Items>()
+        .init_resource::<crate::spell::Cooldowns>()
+        .init_resource::<Reputations>()
+        .init_resource::<crate::net::ServerTime>()
+        .init_resource::<crate::net::ServerWallClock>()
+        .init_resource::<crate::net::HomeBind>()
+        .init_resource::<crate::net::Proficiencies>()
+        .init_resource::<crate::net::DroppedOpcodes>()
+        .init_resource::<crate::ui_quest::QuestGiver>()
+        .init_resource::<crate::ui_chat::ChatLog>()
+        .insert_resource(crate::target::Factions::from_catalog(catalog))
+        .insert_resource(crate::net::NetCommands(crossbeam_channel::unbounded().0));
+    let me = app
+        .world_mut()
+        .spawn((
+            SelfPlayer,
+            ObjectStore(ObjectFields::from_pairs(&[(36, HUMAN_WARRIOR)])),
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<crate::net::GuidIndex>()
+        .0
+        .insert(ME, me);
+    app
+}
+
+fn store(app: &App) -> &Reputations {
+    app.world().resource::<Reputations>()
+}
+
+/// Seat Stormwind's slot at `flags` and wire standing `standing`.
+fn seat(app: &mut App, flags: u8, standing: i32) {
+    let mut slots = vec![(0, 0); SLOT + 1];
+    slots[SLOT] = (flags, standing);
+    app.world_mut()
+        .resource_mut::<Reputations>()
+        .set_slots(&slots);
+}
+
+/// `SMSG_SET_FACTION_STANDING`'s war rule (`0x4d5833`-`0x4d5849`), on the rank after the entry
+/// (`0x4d63a0`): below 2, Hostile or Hated, sets the at-war bit whatever the rank was; a rank that
+/// rose clears it; any other move leaves it as it was, the pane's or the server's.
+#[test]
+fn a_standing_sets_the_war_bit_below_unfriendly_and_a_rise_clears_it() {
+    use benilla_formats::faction_flags::{AT_WAR, VISIBLE};
+    let mut app = synthetic_app();
+    let war = |app: &App| store(app).flags(SLOT) & AT_WAR != 0;
+    for (flags, from, to, at_war, why) in [
+        (VISIBLE, 0, -4000, true, "Neutral to Hostile sets it"),
+        (
+            VISIBLE,
+            -9000,
+            -8000,
+            true,
+            "Hated, its rank unmoved, sets it",
+        ),
+        (
+            VISIBLE | AT_WAR,
+            -4000,
+            -2000,
+            false,
+            "Hostile up to Unfriendly clears it",
+        ),
+        (
+            VISIBLE | AT_WAR,
+            -2000,
+            -1500,
+            true,
+            "Unfriendly unmoved keeps it",
+        ),
+        (
+            VISIBLE | AT_WAR,
+            100,
+            -100,
+            true,
+            "Neutral down to Unfriendly keeps it",
+        ),
+        (
+            VISIBLE | AT_WAR,
+            -100,
+            100,
+            false,
+            "Unfriendly up to Neutral clears it",
+        ),
+        (
+            VISIBLE,
+            -100,
+            100,
+            false,
+            "a rise with the bit clear leaves it clear",
+        ),
+        (VISIBLE | AT_WAR, 9000, 21000, false, "any rise clears it"),
+    ] {
+        seat(&mut app, flags, from);
+        delta(&mut app, SLOT as u32, to);
+        assert_eq!(war(&app), at_war, "{why}");
+        assert_eq!(store(&app).standing(SLOT), to);
+    }
+}
+
+/// The rule reads the faction's rank (`0x4d5620`, `0x4d6370`): a slot no faction holds stands at
+/// 0, Neutral, before and after, so its bit stays.
+#[test]
+fn a_slot_no_faction_holds_keeps_its_war_bit() {
+    use benilla_formats::faction_flags::{AT_WAR, VISIBLE};
+    let mut app = synthetic_app();
+    let mut slots = vec![(0, 0); 31];
+    slots[30] = (VISIBLE | AT_WAR, -100);
+    app.world_mut()
+        .resource_mut::<Reputations>()
+        .set_slots(&slots);
+    delta(&mut app, 30, -9000);
+    assert_eq!(store(&app).flags(30), VISIBLE | AT_WAR);
+}
+
+/// A rank change refreshes the active player's reaction once per message (`0x4d58ac` latch,
+/// `0x4d5905` → `0x606e20`), however many entries moved; a move inside a rank refreshes nothing.
+#[test]
+fn a_rank_change_refreshes_the_players_reaction_once_per_message() {
+    use benilla_formats::faction_flags::VISIBLE;
+    let mut app = synthetic_app();
+    seat(&mut app, VISIBLE, 0);
+    let refreshes = |app: &App| store(app).player_refreshes();
+    let before = refreshes(&app);
+    delta(&mut app, SLOT as u32, 100);
+    assert_eq!(refreshes(&app), before, "Neutral to Neutral");
+    delta(&mut app, SLOT as u32, 3000);
+    assert_eq!(refreshes(&app), before + 1, "Neutral to Friendly");
+    send(
+        &mut app,
+        SessionEvent::ReputationDelta {
+            standings: vec![(SLOT as u32, -3500), (SLOT as u32, 9000)],
+        },
+    );
+    assert_eq!(refreshes(&app), before + 2, "two moves, one message");
+}
+
+/// `SMSG_SET_FACTION_ATWAR` (`0x4d56b0`) copies bit `0x02` of its byte into the slot's at-war bit
+/// and touches no other bit (`0x4d56d9`-`0x4d56e9`).
+#[test]
+fn the_at_war_message_copies_bit_1_alone() {
+    use benilla_formats::faction_flags::{AT_WAR, PEACE_FORCED, VISIBLE};
+    let mut app = synthetic_app();
+    seat(&mut app, VISIBLE, 0);
+    let at_war = |app: &mut App, flags: u8| {
+        send(
+            app,
+            SessionEvent::ReputationAtWar {
+                list_id: SLOT as u32,
+                flags,
+            },
+        );
+    };
+    at_war(&mut app, AT_WAR);
+    assert_eq!(store(&app).flags(SLOT), VISIBLE | AT_WAR);
+    at_war(&mut app, !AT_WAR);
+    assert_eq!(
+        store(&app).flags(SLOT),
+        VISIBLE,
+        "the other bits of the byte are read nowhere"
+    );
+    seat(&mut app, VISIBLE | PEACE_FORCED, 0);
+    at_war(&mut app, 0xff);
+    assert_eq!(
+        store(&app).flags(SLOT),
+        VISIBLE | PEACE_FORCED | AT_WAR,
+        "the message tests no peace-forced bit"
+    );
 }

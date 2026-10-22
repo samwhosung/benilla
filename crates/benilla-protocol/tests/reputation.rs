@@ -60,3 +60,34 @@ fn set_faction_visible_parses_and_decodes() {
         [SessionEvent::ReputationVisible { list_id: 13 }]
     ));
 }
+
+/// `SMSG_SET_FACTION_ATWAR` (787): a `u32` slot and a `u8` flag byte (`0x4d56be`, `0x4d56c9`;
+/// vmangos `FactionAtWarChange::AppendBodyTo`), whose bit `0x02` the handler copies.
+#[test]
+fn set_faction_at_war_parses_and_decodes() {
+    assert_eq!(opcode::SMSG_SET_FACTION_ATWAR, 787);
+    let p = messages::parse_server(opcode::SMSG_SET_FACTION_ATWAR, &hx("1500000002")).unwrap();
+    assert!(matches!(
+        p,
+        ServerPacket::SetFactionAtWar {
+            list_id: 21,
+            flags: 2
+        }
+    ));
+    assert!(matches!(
+        decode(p)[..],
+        [SessionEvent::ReputationAtWar {
+            list_id: 21,
+            flags: 2
+        }]
+    ));
+    // vmangos clears with 0.
+    let p = messages::parse_server(opcode::SMSG_SET_FACTION_ATWAR, &hx("1500000000")).unwrap();
+    assert!(matches!(
+        p,
+        ServerPacket::SetFactionAtWar {
+            list_id: 21,
+            flags: 0
+        }
+    ));
+}

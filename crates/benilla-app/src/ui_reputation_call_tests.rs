@@ -217,3 +217,93 @@ fn the_requests_write_the_slots_flags() {
         "{flags:#x}"
     );
 }
+
+/// `FactionToggleAtWar` writes the slot's at-war bit inside the call (`0x4d6074`), and the
+/// player's reaction toward a unit of that faction reads the bit live (`0x60640c` through
+/// `0x4d61b0`): `UnitReaction` and `UnitCanAttack` on the next line answer war, with no event
+/// between (`0x4d5fd0` signals nothing).
+#[test]
+fn the_reaction_after_a_toggle_reads_the_bit_the_toggle_wrote() {
+    use crate::target::relations::{RelUnit, RelationSnapshot};
+    use benilla_formats::{FactionCatalog, FactionTemplate};
+    use benilla_ui::script::UnitState;
+    use std::collections::HashMap;
+    /// A guard of Stormwind (`Faction.dbc` 72, slot 19) and the player's own template.
+    const GUARD: u64 = 0xF130_0000_0000_0044;
+    let catalog = FactionCatalog::from_rows(
+        HashMap::from([
+            (
+                1,
+                FactionTemplate {
+                    faction: 1,
+                    ..Default::default()
+                },
+            ),
+            (
+                11,
+                FactionTemplate {
+                    faction: 72,
+                    ..Default::default()
+                },
+            ),
+        ]),
+        HashMap::new(),
+    )
+    .with_reputation(72, 19, 1, 4000);
+    let factions = crate::target::Factions::from_catalog(catalog);
+    let (mut app, _rx) = client(0, flag::VISIBLE, state());
+    app.insert_resource(factions.clone());
+    let me = RelUnit {
+        guid: ME,
+        is_player: true,
+        flags: 0x8,
+        template: Some(1),
+        race: 1,
+        class: 1,
+        ..Default::default()
+    };
+    let guard = RelUnit {
+        guid: GUARD,
+        template: Some(11),
+        ..Default::default()
+    };
+    let snapshot = RelationSnapshot {
+        units: HashMap::from([(ME, me), (GUARD, guard)]),
+        factions: Some(factions),
+        reputations: app.world().resource::<Reputations>().clone(),
+        me: Some(ME),
+        roster: Default::default(),
+    };
+    {
+        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+        script.set_unit_relations(Some(std::rc::Rc::new(snapshot)));
+        for (token, guid) in [("player", ME), ("target", GUARD)] {
+            script.set_unit(
+                token,
+                Some(UnitState {
+                    exists: true,
+                    guid,
+                    ..Default::default()
+                }),
+            );
+        }
+    }
+    let ask = r#"R, A = UnitReaction("player", "target"), UnitCanAttack("player", "target")"#;
+    run(&mut app, ask);
+    assert_eq!(
+        eval::<(i64, Option<i64>)>(&mut app, "return R, A"),
+        (5, None)
+    );
+    run(&mut app, &format!("FactionToggleAtWar(3) {ask}"));
+    assert_eq!(
+        eval::<(i64, Option<i64>)>(&mut app, "return R, A"),
+        (2, Some(1)),
+        "hostile and attackable on the line after the toggle"
+    );
+    run(&mut app, &format!("FactionToggleAtWar(3) {ask}"));
+    assert_eq!(
+        eval::<(i64, Option<i64>)>(&mut app, "return R, A"),
+        (5, None),
+        "and peace on the line after the next"
+    );
+}
