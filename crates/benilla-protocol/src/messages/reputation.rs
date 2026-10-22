@@ -1,7 +1,8 @@
 //! The reputation pane's send verbs (vmangos `Misc.cpp`). A faction is addressed by its
 //! reputation-list id (`Faction.dbc` `reputationIndex`, its `SMSG_INITIALIZE_FACTIONS` slot),
-//! never by the DBC id or the panel row. None is acked: at-war and inactive return only at the
-//! next login, so the client keeps its own copy; the watched index returns as a descriptor update.
+//! never by the DBC id or the panel row. None is acked, so the client keeps its own copy: the
+//! inactive bit returns only at the next login, the at-war bit there or in the server's own
+//! `SMSG_SET_FACTION_ATWAR`, and the watched index as a descriptor update.
 
 /// Length of the reputation list `SMSG_INITIALIZE_FACTIONS` is positional in (vmangos `Misc.h:607`,
 /// `MAX_FACTION_COUNT`); every `repListId` on this wire indexes it.

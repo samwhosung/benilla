@@ -85,7 +85,7 @@ fn client(unit_flags: u32, stormwind: u8, list: ReputationState) -> (App, Receiv
     world.insert_resource(crate::net::SelfGuid(Some(ME)));
     let mut slots = vec![(flag::VISIBLE, 0); 21];
     slots[19].0 = stormwind;
-    world.resource_mut::<Reputations>().slots = slots;
+    world.resource_mut::<Reputations>().set_slots(&slots);
     let mut script = UiScript::new().expect("a VM");
     script.set_reputation(list);
     world.insert_non_send_resource(script);
@@ -210,7 +210,7 @@ fn the_requests_write_the_slots_flags() {
     run(&mut app, "FactionToggleAtWar(3) SetFactionInactive(3)");
     use bevy::ecs::system::RunSystemOnce;
     app.world_mut().run_system_once(feed_reputation).unwrap();
-    let flags = app.world().resource::<Reputations>().slots[19].0;
+    let flags = app.world().resource::<Reputations>().flags(19);
     assert_eq!(
         flags,
         flag::VISIBLE | flag::AT_WAR | flag::INACTIVE,

@@ -931,11 +931,7 @@ pub(crate) fn faction_standing(
         return;
     };
     for &(list_id, standing) in deltas.iter().take(1) {
-        let (flags, old) = reputations
-            .slots
-            .get(list_id as usize)
-            .copied()
-            .unwrap_or((0, 0));
+        let (flags, old) = reputations.slot(list_id as usize);
         if flags & benilla_formats::faction_flags::HIDDEN != 0 {
             continue;
         }

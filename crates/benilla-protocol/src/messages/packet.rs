@@ -326,6 +326,12 @@ pub enum ServerPacket {
     SetFactionVisible {
         list_id: u32,
     },
+    /// `SMSG_SET_FACTION_ATWAR`: one slot and a flag byte, whose bit `0x02` alone is the slot's
+    /// new at-war bit (`0x4d56d9`).
+    SetFactionAtWar {
+        list_id: u32,
+        flags: u8,
+    },
     /// `SMSG_NAME_QUERY_RESPONSE`: guid, name, realm (empty on one realm), race/gender/class as
     /// `u32`s (`NameQueryResponse::AppendBodyTo`); an unknown guid gets an empty name.
     NameQueryResponse {
@@ -1368,6 +1374,7 @@ impl ServerPacket {
             ServerPacket::SetFactionStanding { .. } => "SMSG_SET_FACTION_STANDING".into(),
             ServerPacket::SetForcedReactions { .. } => "SMSG_SET_FORCED_REACTIONS".into(),
             ServerPacket::SetFactionVisible { .. } => "SMSG_SET_FACTION_VISIBLE".into(),
+            ServerPacket::SetFactionAtWar { .. } => "SMSG_SET_FACTION_ATWAR".into(),
             ServerPacket::NameQueryResponse { .. } => "SMSG_NAME_QUERY_RESPONSE".into(),
             ServerPacket::CreatureQueryResponse { .. } => "SMSG_CREATURE_QUERY_RESPONSE".into(),
             ServerPacket::PetNameQueryResponse { .. } => "SMSG_PET_NAME_QUERY_RESPONSE".into(),

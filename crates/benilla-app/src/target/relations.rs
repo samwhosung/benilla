@@ -342,11 +342,7 @@ impl Relations<'_> {
                     .me
                     .and_then(|g| self.units.unit(g))
                     .map_or((0, 0), |me| (me.race, me.class));
-                let standing = self
-                    .reputations
-                    .slots
-                    .get(info.rep_index as usize)
-                    .map_or(0, |&(_flags, s)| s);
+                let standing = self.reputations.standing(info.rep_index as usize);
                 return reputation_rank(info.base_for(race, class) + standing);
             }
         }
@@ -510,9 +506,7 @@ pub(crate) fn at_war_with(
     let info = catalog.reputation_faction(faction_id)?;
     Some(
         usize::try_from(info.rep_index)
-            .ok()
-            .and_then(|i| reputations.slots.get(i))
-            .is_some_and(|&(flags, _)| flags & benilla_formats::faction_flags::AT_WAR != 0),
+            .is_ok_and(|i| reputations.flags(i) & benilla_formats::faction_flags::AT_WAR != 0),
     )
 }
 

@@ -1297,13 +1297,12 @@ mod tests {
     }
 
     fn rel_none() -> TargetRelations<'static> {
-        static EMPTY: Reputations = Reputations::from_slots(Vec::new());
         TargetRelations {
             target_store: None,
             target_owner_store: None,
             self_store: None,
             factions: None,
-            reputations: &EMPTY,
+            reputations: Reputations::empty(),
             types: Default::default(),
             group: Default::default(),
         }

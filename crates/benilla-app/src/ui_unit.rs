@@ -816,7 +816,7 @@ fn fire_faction_on_forced_table(
         let Some(script) = script else {
             return;
         };
-        let arrivals = reputations.forced_arrivals();
+        let arrivals = reputations.player_refreshes();
         let seen = seen.get(script);
         let arrived = seen.is_some_and(|last| last != arrivals);
         *seen = Some(arrivals);

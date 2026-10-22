@@ -78,6 +78,10 @@ pub const SMSG_SET_FACTION_STANDING: u16 = 0x0124;
 /// (`ReputationMgr::SendForceReactions`): a `u32` count, then `(faction id, reaction rank)` pairs
 /// of two `u32`s.
 pub const SMSG_SET_FORCED_REACTIONS: u16 = 0x02A5;
+/// A slot's at-war bit from the server: a `u32` slot and a `u8` whose bit `0x02` is the new bit
+/// (`0x4d56b0`). vmangos sends it when a creature of an unwarred faction enters combat with the
+/// player, and clears it as the player leaves combat (`Player::SendFactionAtWar`).
+pub const SMSG_SET_FACTION_ATWAR: u16 = 0x0313; // 787
 /// Set a faction's at-war flag from the reputation pane; none of the pane's three verbs is acked.
 pub const CMSG_SET_FACTION_ATWAR: u16 = 0x0125; // 293
 pub const CMSG_SET_FACTION_INACTIVE: u16 = 0x0317; // 791

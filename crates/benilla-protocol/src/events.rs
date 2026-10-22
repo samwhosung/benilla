@@ -438,6 +438,8 @@ pub enum SessionEvent {
     ForcedReactions { reactions: Vec<(u32, u32)> },
     /// `SMSG_SET_FACTION_VISIBLE`: sets the slot's visible flag, which decides if it is listed.
     ReputationVisible { list_id: u32 },
+    /// `SMSG_SET_FACTION_ATWAR`: the slot's at-war bit becomes bit `0x02` of `flags`.
+    ReputationAtWar { list_id: u32, flags: u8 },
     /// `SMSG_NAME_QUERY_RESPONSE`: names are never descriptor fields in 1.12, only query answers.
     /// An unknown guid answers with an empty `name`.
     PlayerName {

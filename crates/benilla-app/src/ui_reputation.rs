@@ -73,13 +73,8 @@ impl FactionFlagWrites {
     /// Fold every write into `store`, in the order made.
     fn apply(&self, store: &mut Reputations) {
         for (slot, bits, set) in std::mem::take(&mut *self.q()) {
-            if let Some((flags, _)) = store.slots.get_mut(slot) {
-                if set {
-                    *flags |= bits;
-                } else {
-                    *flags &= !bits;
-                }
-            }
+            let flags = store.flags(slot);
+            store.set_flags(slot, if set { flags | bits } else { flags & !bits });
         }
     }
 }
@@ -167,10 +162,7 @@ impl ReputationSteps<'_, '_> {
 
     /// The slot's flag byte as the server and the verbs left it.
     fn slot_flags(&self, slot: u32) -> u8 {
-        self.reputations
-            .slots
-            .get(slot as usize)
-            .map_or(0, |&(flags, _)| flags)
+        self.reputations.flags(slot as usize)
     }
 
     /// Write `bits` of slot `slot`'s flag byte (`0x4d5fc0`), for the feed to fold in.
@@ -219,7 +211,7 @@ pub(crate) fn visible_line(
     class: u8,
 ) -> Option<StandingLine> {
     use benilla_formats::faction_flags as flag;
-    let (flags, wire) = store.slots.get(list_id as usize).copied().unwrap_or((0, 0));
+    let (flags, wire) = store.slot(list_id as usize);
     if flags & flag::VISIBLE != 0 {
         return None;
     }
@@ -248,7 +240,7 @@ pub(crate) fn delta_lines(
             continue;
         };
         let base = info.base_for(race, class);
-        let (flags, old) = store.slots.get(list_id as usize).copied().unwrap_or((0, 0));
+        let (flags, old) = store.slot(list_id as usize);
         let (old_rank, rank) = (
             benilla_formats::reputation_rank(base + old),
             benilla_formats::reputation_rank(base + standing),
@@ -274,7 +266,7 @@ pub(crate) fn rank_moved(
     deltas.iter().any(|&(list_id, standing)| {
         faction_of_slot(catalog, list_id, race, class).is_some_and(|(_, info)| {
             let base = info.base_for(race, class);
-            let old = store.slots.get(list_id as usize).map_or(0, |&(_, s)| s);
+            let old = store.standing(list_id as usize);
             benilla_formats::reputation_rank(base + old)
                 != benilla_formats::reputation_rank(base + standing)
         })
@@ -412,11 +404,8 @@ pub(crate) fn feed_reputation(
         for (faction_id, info) in catalog.reputation_factions() {
             // An uncovered slot reads `(0, 0)`, unmet, and its row stays: a header's name rides on
             // it.
-            let (flags, wire) = usize::try_from(info.rep_index)
-                .ok()
-                .and_then(|i| reputations.slots.get(i))
-                .copied()
-                .unwrap_or((0, 0));
+            let (flags, wire) =
+                usize::try_from(info.rep_index).map_or((0, 0), |i| reputations.slot(i));
             if let Some(row) = reputation_row(faction_id, info, catalog, flags, wire, race, class) {
                 entries.push(row);
             }
@@ -451,8 +440,7 @@ pub(crate) fn faction_standing(
         .reputation_faction(faction_id)
         .and_then(|info| {
             let index = usize::try_from(info.rep_index).ok().filter(|&i| i < 64)?;
-            let wire = reputations.slots.get(index).map_or(0, |&(_, w)| w);
-            Some(info.base_for(race, class) + wire)
+            Some(info.base_for(race, class) + reputations.standing(index))
         })
         .unwrap_or(0)
 }
@@ -471,8 +459,10 @@ pub(crate) fn faction_standings(
         .reputation_factions()
         .filter_map(|(faction_id, info)| {
             let index = usize::try_from(info.rep_index).ok().filter(|&i| i < 64)?;
-            let wire = reputations.slots.get(index).map_or(0, |&(_, w)| w);
-            Some((faction_id, info.base_for(race, class) + wire))
+            Some((
+                faction_id,
+                info.base_for(race, class) + reputations.standing(index),
+            ))
         })
         .collect()
 }

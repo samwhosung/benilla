@@ -829,6 +829,9 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
         ServerPacket::SetFactionVisible { list_id } => {
             vec![SessionEvent::ReputationVisible { list_id }]
         }
+        ServerPacket::SetFactionAtWar { list_id, flags } => {
+            vec![SessionEvent::ReputationAtWar { list_id, flags }]
+        }
         ServerPacket::NameQueryResponse {
             guid,
             name,

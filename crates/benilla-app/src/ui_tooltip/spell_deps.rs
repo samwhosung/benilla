@@ -353,7 +353,7 @@ impl Seen {
 
     /// The standings the frame saw, which the reputation line reads.
     pub(super) fn with_reputations(mut self, reputations: &crate::net::Reputations) -> Self {
-        self.reputations = reputations.slots.iter().map(|&(_, w)| w).collect();
+        self.reputations = reputations.slots().map(|(_, w)| w).collect();
         self
     }
 

@@ -1400,8 +1400,7 @@ fn a_forced_reaction_table_arriving_recolours_the_target_plate() {
     // A standing moves: the questgiver and unit feeds wake, and no event fires.
     app.world_mut()
         .resource_mut::<Reputations>()
-        .slots
-        .push((0, 0));
+        .set_standing(63, 1);
     app.update();
     assert!(seen(&mut app).is_empty(), "no table arrived");
 

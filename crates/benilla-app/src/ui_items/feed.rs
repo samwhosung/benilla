@@ -729,11 +729,8 @@ pub(super) fn feed_player_req(
         let mut rep_ranks = std::collections::HashMap::new();
         if let Some(cat) = factions.as_deref().map(|f| f.catalog()) {
             for (id, info) in cat.reputation_factions() {
-                let standing = usize::try_from(info.rep_index)
-                    .ok()
-                    .and_then(|i| reputations.slots.get(i))
-                    .map(|&(_, s)| s)
-                    .unwrap_or(0);
+                let standing =
+                    usize::try_from(info.rep_index).map_or(0, |i| reputations.standing(i));
                 rep_ranks.insert(
                     id,
                     benilla_formats::reputation_rank(info.base_for(race, class) + standing),

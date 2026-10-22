@@ -58,6 +58,7 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::ReputationDelta, on_reputation_delta)
         .net_handler(K::ForcedReactions, on_reputations)
         .net_handler(K::ReputationVisible, on_reputations)
+        .net_handler(K::ReputationAtWar, on_reputations)
         .net_handler(K::BindPoint, on_player_store)
         .net_handler(K::Proficiency, on_player_store)
         .net_handler(K::PacketDropped, on_packet_dropped)
@@ -375,6 +376,7 @@ fn on_reputations(
             }
             reputation_visible(list_id, &mut b.reputations)
         }
+        SessionEvent::ReputationAtWar { .. } => {}
         _ => {}
     }
 }
@@ -759,7 +761,7 @@ fn server_unix_time(unix_time: u32, clock: &mut ServerWallClock) {
 /// `SMSG_INITIALIZE_FACTIONS`: the login reputation store.
 fn reputations(standings: Vec<(u8, i32)>, reputations: &mut Reputations) {
     info!("net: reputation store ({} slots)", standings.len());
-    reputations.slots = standings;
+    reputations.set_slots(&standings);
 }
 
 /// `SMSG_SET_FORCED_REACTIONS`: the server resends the table whole on every change, so it
@@ -781,12 +783,10 @@ fn reputation_delta(
         let Some(i) = reputation_slot(list_id, "SMSG_SET_FACTION_STANDING") else {
             continue;
         };
-        if reputations.slots.len() <= i {
-            reputations.slots.resize(i + 1, (0, 0));
-        }
-        reputations.slots[i].1 = standing;
-        if reputations.slots[i].0 & flag::HIDDEN == 0 {
-            reputations.slots[i].0 |= flag::VISIBLE;
+        reputations.set_standing(i, standing);
+        let flags = reputations.flags(i);
+        if flags & flag::HIDDEN == 0 {
+            reputations.set_flags(i, flags | flag::VISIBLE);
         }
     }
     // Standing feeds questgiver status (`SatisfyQuestReputation`); the reference re-asks here too.
@@ -799,10 +799,8 @@ fn reputation_visible(list_id: u32, reputations: &mut Reputations) {
     let Some(i) = reputation_slot(list_id, "SMSG_SET_FACTION_VISIBLE") else {
         return;
     };
-    if reputations.slots.len() <= i {
-        reputations.slots.resize(i + 1, (0, 0));
-    }
-    reputations.slots[i].0 |= benilla_formats::faction_flags::VISIBLE;
+    let flags = reputations.flags(i);
+    reputations.set_flags(i, flags | benilla_formats::faction_flags::VISIBLE);
 }
 
 /// A wire `repListId` as a store index, or `None` (logged) past the `FACTION_LIST_LEN` array
@@ -971,8 +969,8 @@ mod forced_reaction_tests {
         arrive(&mut app, &[]);
         assert!(forced(&app).is_empty(), "an empty table clears it");
         assert_eq!(
-            app.world().resource::<Reputations>().slots,
-            [(0x20, 5)],
+            app.world().resource::<Reputations>().slot(0),
+            (0x20, 5),
             "the standings are not the table's"
         );
     }
