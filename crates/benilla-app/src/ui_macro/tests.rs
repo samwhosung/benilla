@@ -905,3 +905,31 @@ fn an_edit_derives_against_the_book_at_its_call() {
     app.update();
     assert_eq!(bound_of(&app, 1), BoundSpell::Spell(205));
 }
+
+/// A load and our player's arrival in one pass derive every record once: the next pass, with
+/// neither, derives nothing, so a spell learned after them leaves a `/cast` at -1.
+#[test]
+fn a_load_and_an_arrival_in_one_pass_derive_once() {
+    use super::run::BoundSpell;
+    let mut script = UiScript::new().unwrap();
+    script.set_macros(MacroState::from_scopes(
+        vec![macro_view("Pyro", "/cast Pyroblast")],
+        Vec::new(),
+    ));
+    let mut app = rebind_app(script);
+    app.world_mut().spawn(crate::net::SelfPlayer);
+    app.update();
+    assert_eq!(bound_of(&app, 1), BoundSpell::Unresolved);
+    learn(&mut app, vec![book_slot(11366, "Pyroblast")]);
+    // A change that runs the pass: the macro table's generation moves with no derive owed.
+    app.world_mut()
+        .non_send_resource::<UiScript>()
+        .run("CreateMacro('Other', 1, '/say hi')")
+        .unwrap();
+    app.update();
+    assert_eq!(
+        bound_of(&app, 1),
+        BoundSpell::Unresolved,
+        "the load's flag was taken with the arrival's"
+    );
+}
