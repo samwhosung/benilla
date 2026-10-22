@@ -459,7 +459,9 @@ impl Plugin for VideoPlugin {
             .init_resource::<GxRestarts>()
             .init_resource::<RefreshPacing>()
             .add_systems(Last, pace_to_refresh)
-            .add_systems(PostUpdate, show_screen_size)
+            // Ahead of the glue's size callback (`ui_script::glue::watch_glue_aspect`) and of
+            // every `GetCVar`, so both read the screen the window has this frame.
+            .add_systems(PreUpdate, show_screen_size)
             .add_systems(Startup, (log_display_session, check_window_pinned).chain())
             .add_systems(
                 Update,

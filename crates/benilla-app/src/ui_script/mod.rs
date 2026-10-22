@@ -379,8 +379,12 @@ impl Plugin for UiScriptPlugin {
                 (
                     run_pending_reload,
                     // The glue's `ConsoleExec` lines the last frame left and its top's size
-                    // callback, then the rebuild either asked for.
-                    (glue::drain_glue_console, glue::watch_glue_aspect)
+                    // callback, then the rebuild either asked for. The callback reads the
+                    // `gxResolution` the screen shows this frame.
+                    (
+                        glue::drain_glue_console,
+                        glue::watch_glue_aspect.after(crate::video::show_screen_size),
+                    )
                         .chain()
                         .run_if(glue::glue_ui_up),
                     glue::run_pending_glue_rebuild,
