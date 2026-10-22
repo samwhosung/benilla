@@ -211,6 +211,13 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     (Row::Queue, "::ui_stable::StableErrors", "the stable errors"),
     (
         Row::HostHeld,
+        "::ui_pet::PetAttackLatch",
+        "the pet's attack latch, which a new pet's `SMSG_PET_SPELLS` lowers (`0x4bc8ce`) inside \
+         `SetPet`, whose own `PET_BAR_UPDATE` (`0x4bc90c`) `feed_pet_bar` fires; the selection's \
+         release and `PetStopAttack`, acting in their calls, hold it in the host",
+    ),
+    (
+        Row::HostHeld,
         "::ui_stable::StableOpen",
         "the stable's packets, which `feed_stable` fires from; the stable verbs and the pet's \
          abandon, acting in their calls, read it in the host",
@@ -354,6 +361,8 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::RandomProperties",
     "::ChrClassTable",
     "::ChrRaceTable",
+    "::RacePvpTeams",
+    "::MacroBoundSpells",
     "::NameCache",
     "::ServerTime",
     "::GuidIndex",
