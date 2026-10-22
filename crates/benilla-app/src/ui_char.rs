@@ -451,7 +451,8 @@ fn slot_view(
     let object_link = crate::ui_items::object_link(obj, t, rolls);
     let (name, quality, display, link, equip_slots, kind, bar_placeable, consumable) = match t {
         Some(t) => {
-            let name = rolls.name(&t.name, obj.item_random_properties_id());
+            // The item object's name (`0x5d8bc0`): the roll's suffix, unless it is wrapped.
+            let name = crate::ui_items::object_name(obj, t, rolls);
             (
                 Some(name.clone()),
                 t.quality as i32,
