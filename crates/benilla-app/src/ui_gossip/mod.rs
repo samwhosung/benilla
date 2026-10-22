@@ -138,6 +138,8 @@ impl GossipState {
 }
 
 mod net;
+#[cfg(test)]
+mod verb_tests;
 /// The opener the server's menu runs, for the latch's tests.
 #[cfg(test)]
 pub(crate) use net::gossip_menu as open_menu;

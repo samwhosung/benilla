@@ -657,6 +657,39 @@ mod tests {
         );
     }
 
+    /// `GetQuestItemInfo` answers `isUsable` through the item-usable predicate for a cached
+    /// template (`0x50188d` into `0x5ea930`): nil for one the gate refuses. A row whose template
+    /// is in flight stays usable, as `0x501700` seeds it (`0x50172e`).
+    #[test]
+    fn a_giver_row_answers_the_usable_gate_and_one_in_flight_reads_usable() {
+        let mut s = UiScript::new().unwrap();
+        s.set_player_req_state(crate::script::PlayerReqState {
+            level: 10,
+            class_id: 1,
+            race_id: 1,
+            ..Default::default()
+        });
+        s.set_item_template(
+            7278,
+            crate::script::ItemTemplateView {
+                name: "Brdle Leather Boots".into(),
+                quality: 2,
+                inventory_type: 8,
+                required_level: 20,
+                allowable_class: -1,
+                allowable_race: -1,
+                ..Default::default()
+            },
+        );
+        s.set_quest(Some(detail()));
+        assert!(s
+            .eval::<bool>(r#"local _, _, _, _, u = GetQuestItemInfo("reward", 1) return u == nil"#)
+            .unwrap());
+        assert!(s
+            .eval::<bool>(r#"local _, _, _, _, u = GetQuestItemInfo("choice", 2) return u == 1"#)
+            .unwrap());
+    }
+
     #[test]
     fn detail_panel_getters_read() {
         let mut s = UiScript::new().unwrap();

@@ -192,6 +192,8 @@ pub(crate) fn questgiver_failed_key(reason: u32) -> &'static str {
 
 mod lines;
 mod net;
+#[cfg(test)]
+pub(crate) mod verb_tests;
 
 #[cfg(test)]
 pub(crate) use lines::test_template;
@@ -885,6 +887,50 @@ mod tests {
         // No template yet: no name, and white.
         assert!(snap.rewards[0].name.is_none());
         assert_eq!(snap.rewards[0].quality, 1);
+    }
+
+    /// `GetQuestItemInfo`'s quality (`0x501700`): -1 for a template whose inventory type is 0
+    /// (`0x5017fa`), its own quality otherwise, and the seeded 0 while the template is in flight
+    /// (`0x501728`).
+    #[test]
+    fn a_giver_rows_quality_reads_minus_one_for_no_slot_and_zero_in_flight() {
+        let mut items = Items::default();
+        let mut boots = crate::items::test_template("Boots");
+        (boots.inventory_type, boots.quality) = (8, 2);
+        items.insert_template(3000, Some(crate::items::test_template("Ale")));
+        items.insert_template(3001, Some(boots));
+        let mut giver = QuestGiver::default();
+        giver.open(
+            0x42,
+            QuestView::Detail(QuestDetails {
+                npc: 0x42,
+                quest_id: 100,
+                title: "A Threat Within".into(),
+                details: String::new(),
+                objectives: String::new(),
+                auto_finish: 1,
+                choices: Vec::new(),
+                rewards: vec![triple(3000), triple(3001), triple(3002)],
+                money: 0,
+                reward_spell: 0,
+            }),
+        );
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let snap = snapshot(
+            &giver,
+            &items,
+            None,
+            Ask::New(&commands),
+            &crate::npc_text::MacroContext {
+                subject: None,
+                states: &crate::world_state::WorldStates::default(),
+            },
+            None,
+        )
+        .expect("open");
+        let qualities: Vec<i64> = snap.rewards.iter().map(|r| r.quality as i64).collect();
+        assert_eq!(qualities, [-1, 2, 0]);
     }
 
     #[test]

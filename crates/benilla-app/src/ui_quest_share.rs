@@ -164,7 +164,7 @@ impl Plugin for QuestSharePlugin {
 }
 
 /// Resolves the queued names and shows what they unlock: verdict lines and `QUEST_ACCEPT_CONFIRM`.
-fn feed_quest_share(
+pub(crate) fn feed_quest_share(
     mut hosted_vm: crate::script_calls::HostedVm,
     mut share: ResMut<QuestShare>,
     names: Res<NameCache>,
