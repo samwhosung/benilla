@@ -1088,4 +1088,100 @@ mod tests {
             .insert_player(GIVER, "Giver".into(), None);
         assert!(tick(&mut app).is_empty(), "a landed name fires nothing");
     }
+
+    /// The feed over a headless client's world, registered once so its memo lasts from run to
+    /// run, and a VM that records the panel events in `SEEN`.
+    fn quest_app() -> (App, bevy::ecs::system::SystemId) {
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                "SEEN = {} local f = CreateFrame('Frame') \
+                 for _, e in ipairs({'QUEST_GREETING', 'QUEST_DETAIL', 'QUEST_PROGRESS', \
+                 'QUEST_COMPLETE', 'QUEST_ITEM_UPDATE'}) do f:RegisterEvent(e) end \
+                 f:SetScript('OnEvent', function() table.insert(SEEN, event) end)",
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        let feed = app.world_mut().register_system(feed_quest);
+        (app, feed)
+    }
+
+    fn quest_tick(app: &mut App, feed: bevy::ecs::system::SystemId) -> Vec<String> {
+        app.world_mut().run_system(feed).unwrap();
+        let s = app.world_mut().non_send_resource_mut::<UiScript>();
+        let seen = s.eval::<Vec<String>>("return SEEN").unwrap();
+        s.run("SEEN = {}").unwrap();
+        seen
+    }
+
+    fn offer(quest_id: u32, title: &str, choice: u32) -> QuestView {
+        QuestView::Detail(benilla_protocol::messages::QuestDetails {
+            npc: 0x10,
+            quest_id,
+            title: title.into(),
+            details: String::new(),
+            objectives: String::new(),
+            auto_finish: 0,
+            choices: vec![triple(choice)],
+            rewards: Vec::new(),
+            money: 0,
+            reward_spell: 0,
+        })
+    }
+
+    /// Each panel setter fires its event at its end, every time (`0x500ee5`, `0x50105d`,
+    /// `0x501120`): a second offer fires `QUEST_DETAIL` again, an identical one too.
+    /// `QUEST_ITEM_UPDATE` fires only from the callback `GetQuestItemInfo`'s lookup keeps
+    /// (`0x5017ce`), once per call, when the record lands (`0x5018fe`-`0x501903`); a record no
+    /// call asked for fires nothing.
+    #[test]
+    fn panel_events_fire_per_publish_and_item_updates_per_callback() {
+        let (mut app, feed) = quest_app();
+        let publish = |app: &mut App, view| open_panel(app.world_mut(), 0x10, view);
+        publish(&mut app, offer(100, "A Threat Within", 901));
+        assert_eq!(quest_tick(&mut app, feed), ["QUEST_DETAIL"]);
+        publish(&mut app, offer(101, "Kobold Camp Cleanup", 902));
+        assert_eq!(
+            quest_tick(&mut app, feed),
+            ["QUEST_DETAIL"],
+            "a second offer"
+        );
+        publish(&mut app, offer(101, "Kobold Camp Cleanup", 902));
+        assert_eq!(
+            quest_tick(&mut app, feed),
+            ["QUEST_DETAIL"],
+            "an identical one"
+        );
+
+        let land = |app: &mut App, entry| {
+            app.world_mut()
+                .resource_mut::<Items>()
+                .insert_template(entry, Some(crate::items::test_template("Sword")));
+        };
+        // No call asked for 902: its landing repaints in place and fires nothing.
+        land(&mut app, 902);
+        assert!(quest_tick(&mut app, feed).is_empty());
+
+        publish(&mut app, offer(102, "Westbrook Garrison", 903));
+        assert_eq!(quest_tick(&mut app, feed), ["QUEST_DETAIL"]);
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run("GetQuestItemInfo('choice', 1) GetQuestItemInfo('choice', 1)")
+            .unwrap();
+        assert!(
+            quest_tick(&mut app, feed).is_empty(),
+            "the record is still out"
+        );
+        land(&mut app, 903);
+        assert_eq!(
+            quest_tick(&mut app, feed),
+            ["QUEST_ITEM_UPDATE", "QUEST_ITEM_UPDATE"],
+            "one per call"
+        );
+        assert!(
+            quest_tick(&mut app, feed).is_empty(),
+            "the callbacks are spent"
+        );
+    }
 }

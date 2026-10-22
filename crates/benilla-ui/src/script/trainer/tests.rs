@@ -1410,3 +1410,29 @@ fn a_mount_trainer_always_builds_the_known_group_first() {
         2
     );
 }
+
+/// `GetTrainerServiceTypeFilter("type")` (`0x4da510`) maps the name through `0x4da390`, without
+/// case, and raises its two errors: a non-string first (`0x84ac78`), an unknown name (`0x84ac48`).
+#[test]
+fn the_type_filter_getter_reads_any_case_and_raises_the_exes_errors() {
+    let mut s = UiScript::new().unwrap();
+    s.set_trainer(Some(trainer()));
+    s.reset_trainer_list_state(0);
+    assert_eq!(
+        s.eval::<(Option<i64>, Option<i64>)>(
+            "return GetTrainerServiceTypeFilter('AVAILABLE'), GetTrainerServiceTypeFilter('Used')"
+        )
+        .unwrap(),
+        (Some(1), None)
+    );
+    let raises = |s: &mut UiScript, call: &str, text: &str| {
+        let err = s.run(call).expect_err(call).to_string();
+        assert!(err.contains(text), "{call}: {err}");
+    };
+    let usage = r#"Usage: GetTrainerServiceTypeFilter("type")"#;
+    let bad = "Bad service type in GetTrainerServiceTypeFilter";
+    raises(&mut s, "GetTrainerServiceTypeFilter()", usage);
+    raises(&mut s, "GetTrainerServiceTypeFilter({})", usage);
+    raises(&mut s, "GetTrainerServiceTypeFilter('all')", bad);
+    raises(&mut s, "GetTrainerServiceTypeFilter(1)", bad);
+}

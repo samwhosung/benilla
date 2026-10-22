@@ -1677,6 +1677,47 @@ mod re_derive {
             .unwrap();
         assert!(kinds.contains(&"unavailable".to_string()), "{kinds:?}");
     }
+
+    /// The list files a row the server sent known into the known group, key -1 (`0x4d77e8`), and
+    /// the state pass writes -1 into every row it leaves known (`0x4d82b2`-`0x4d82c1`), never back:
+    /// a known row re-derived to learnable stays under the known header until the next list.
+    #[test]
+    fn a_row_keyed_known_keeps_the_key_until_the_next_list() {
+        let mut app = super::feed_app(catalog(), skill_lines());
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run("KNOWN_TALENTS_HEADER = 'My Talents'")
+            .unwrap();
+        let mut known = service(RANK1_WRAPPER);
+        known.state = trainer_spell_state::GRAY;
+        let list = |app: &mut App, row: TrainerSpell| {
+            app.world_mut()
+                .resource_mut::<TrainerOpen>()
+                .open(0x10, 1, vec![row], String::new());
+        };
+        let header = |app: &mut App| -> String {
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .eval::<String>(
+                    "SetTrainerServiceTypeFilter('all') SEEN = {} \
+                     return (GetTrainerServiceInfo(1))",
+                )
+                .unwrap()
+        };
+        list(&mut app, known.clone());
+        assert_eq!(super::tick(&mut app), ["TRAINER_SHOW"]);
+        assert_eq!(header(&mut app), "My Talents");
+        // RANK1 is not in the book: the pass reads it learnable, and the key stays -1.
+        app.world_mut()
+            .resource_mut::<TrainerOpen>()
+            .trigger_re_derive();
+        assert_eq!(super::tick(&mut app), ["TRAINER_UPDATE"]);
+        assert_eq!(header(&mut app), "My Talents");
+        // The next list files it by its state again.
+        list(&mut app, service(RANK1_WRAPPER));
+        assert_eq!(super::tick(&mut app), ["TRAINER_SHOW"]);
+        assert_eq!(header(&mut app), "Skill 1");
+    }
 }
 
 /// A mistyped key yields an empty header, which [`probe_strings`] cannot catch. Skips without
@@ -2158,4 +2199,40 @@ fn an_item_record_a_getter_missed_runs_the_state_pass() {
         "the pass sorts from the order the list left"
     );
     assert!(tick(&mut app).is_empty(), "the callback is spent");
+}
+
+/// `0x4d7d40` runs, and fires `TRAINER_UPDATE` (`0x4d83f9`), once per trigger: two triggers in
+/// one frame are two passes, and a record two getter calls missed is two callbacks (`0x4d907e`,
+/// dedupe flag 0), so two passes when it lands.
+#[test]
+fn the_state_pass_runs_once_per_trigger_and_per_callback() {
+    let mut app = feed_app(
+        icon_catalog(),
+        benilla_formats::SkillLineCatalog::from_spell_lines([]),
+    );
+    app.world_mut().resource_mut::<TrainerOpen>().open(
+        0x10,
+        TRAINER_TYPE_TRADESKILL,
+        vec![wire(100, trainer_spell_state::GREEN, 5, 1, 0)],
+        String::new(),
+    );
+    assert_eq!(tick(&mut app), ["TRAINER_SHOW"]);
+    {
+        let mut open = app.world_mut().resource_mut::<TrainerOpen>();
+        open.trigger_re_derive();
+        open.trigger_re_derive();
+    }
+    assert_eq!(tick(&mut app), ["TRAINER_UPDATE", "TRAINER_UPDATE"]);
+    assert!(tick(&mut app).is_empty());
+
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run("for i = 1, 2 do GetTrainerServiceIcon(i) end GetTrainerServiceIcon(2)")
+        .unwrap();
+    assert!(tick(&mut app).is_empty(), "the record is still out");
+    app.world_mut()
+        .resource_mut::<Items>()
+        .insert_template(777, Some(crate::items::test_template("Copper Shortsword")));
+    assert_eq!(tick(&mut app), ["TRAINER_UPDATE", "TRAINER_UPDATE"]);
+    assert!(tick(&mut app).is_empty(), "the callbacks are spent");
 }

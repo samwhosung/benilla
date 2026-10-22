@@ -1638,6 +1638,50 @@ mod tests {
         assert_eq!(item_asks(&rx), 0);
     }
 
+    /// `MERCHANT_SHOW` and `MERCHANT_UPDATE` have their own producers (`0x4fad92`; `0x4facaa`,
+    /// `0x4faea5`, `0x4faebd`, `0x4fb115`, `0x4fb575`), none of them the vendor's name: its landing
+    /// fires nothing.
+    #[test]
+    fn the_vendors_name_landing_fires_no_merchant_update() {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.init_resource::<Items>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<MerchantOpen>()
+            .init_resource::<MerchantErrors>()
+            .init_resource::<NameCache>()
+            .init_resource::<crate::net::Reputations>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .insert_resource(NetCommands(tx))
+            .add_systems(Update, feed_merchant);
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                "SEEN = {} local f = CreateFrame('Frame') f:RegisterEvent('MERCHANT_SHOW') \
+                 f:RegisterEvent('MERCHANT_UPDATE') \
+                 f:SetScript('OnEvent', function() table.insert(SEEN, event) end)",
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        let tick = |app: &mut App| -> Vec<String> {
+            app.update();
+            let s = app.world_mut().non_send_resource_mut::<UiScript>();
+            let seen = s.eval::<Vec<String>>("return SEEN").unwrap();
+            s.run("SEEN = {}").unwrap();
+            seen
+        };
+        const VENDOR: u64 = 0x10;
+        app.world_mut()
+            .resource_mut::<MerchantOpen>()
+            .open(VENDOR, Vec::new());
+        assert_eq!(tick(&mut app), ["MERCHANT_SHOW"]);
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(VENDOR, "Vendor".into(), None);
+        assert!(tick(&mut app).is_empty(), "a landed name fires nothing");
+    }
+
     /// Every merchant close runs the core `0x4fadf0`, whose tail clears a vendor row held on the
     /// cursor (`0x4fae31`-`0x4fae4a`): `CloseMerchant` here, through the feed's close edge.
     #[test]
