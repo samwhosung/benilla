@@ -862,6 +862,12 @@ pub(crate) struct Model {
     pub(crate) trainer_collapsed: HashSet<u32>,
     /// The skill-line filter `ds:0xb73a20`: bit n set shows header group n, every bit on a list.
     pub(crate) trainer_line_filter: u32,
+    /// The whole row array `ds:0xb737b0` in its last sorted order, and the visible count
+    /// `ds:0xb73a18`: each finalize sorts it from the order it left (`0x4d857e`).
+    pub(crate) trainer_rows: Vec<trainer::Row>,
+    pub(crate) trainer_visible: usize,
+    /// A list packet reset the array: the next push lays it out as the builder does.
+    pub(crate) trainer_rows_fresh: bool,
 
     /// The open taxi map, whether a `CloseTaxiMap` call left the latch to release, and whether
     /// we ride.
@@ -1705,6 +1711,9 @@ impl Model {
             trainer_filter: [true; 3],
             trainer_collapsed: HashSet::new(),
             trainer_line_filter: u32::MAX,
+            trainer_rows: Vec::new(),
+            trainer_visible: 0,
+            trainer_rows_fresh: false,
             taxi: None,
             taxi_close: false,
             taxi_riding: false,

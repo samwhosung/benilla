@@ -296,12 +296,21 @@ fn state_filter_takes_a_groups_header_with_its_last_service() {
 
     // The rows remain: the getters bound on the total `ds:0xb73a10` (`0x4d89b0`), not the visible
     // count `ds:0xb73a18`.
+    let mut names: Vec<String> = (1..=5)
+        .map(|i| {
+            s.eval::<String>(&format!("return (GetTrainerServiceInfo({i}))"))
+                .unwrap()
+        })
+        .collect();
+    names.sort();
     assert_eq!(
-        s.eval::<String>("return (GetTrainerServiceInfo(1))")
-            .unwrap(),
-        "Arms",
-        "row 1 is still the Arms header, now in the hidden tail"
+        names,
+        ["Arms", "Bloodrage", "Cleave", "Fury", "Heroic Strike"],
+        "every row is still in the hidden tail"
     );
+    assert!(s
+        .eval::<bool>("return GetTrainerServiceInfo(6) == nil")
+        .unwrap());
     assert_eq!(
         s.eval::<i64>("return GetTrainerSelectionIndex()").unwrap(),
         0,
@@ -1081,4 +1090,84 @@ fn setting_the_skill_line_filter_signals_trainer_update() {
         2,
         "a refusal signals nothing"
     );
+}
+
+/// The whole row array as `(visible count, rows)`: each service by its spell id, a header as -1.
+fn array(s: &mut UiScript) -> (i64, Vec<i64>) {
+    let visible = s.eval::<i64>("return GetNumTrainerServices()").unwrap();
+    let rows = s
+        .eval::<Vec<i64>>(
+            r#"
+            local out, i = {}, 1
+            while GetTrainerServiceInfo(i) ~= nil or GetTrainerServiceIcon(i) ~= nil do
+                local icon = GetTrainerServiceIcon(i)
+                table.insert(out, icon and tonumber((string.gsub(icon, ".*_", ""))) or -1)
+                i = i + 1
+            end
+            return out
+            "#,
+        )
+        .unwrap();
+    (visible, rows)
+}
+
+/// The finalizer `0x4d8410` sorts the one persistent row array with the CRT `qsort` (`0x4d857e`)
+/// from the order it left, every group's rows and the hidden ones together, so the rows its
+/// comparator ties (a service with no spell record, `0x4d868d`; two hidden rows, `0x4d85e0`)
+/// land where that history puts them. Each expected array is the client's own: `0x4d8410` run in
+/// the emulator over the same list, from the builder's layout (the services in list order, then
+/// the header rows), under the same filters in turn.
+#[test]
+fn every_finalize_sorts_the_whole_array_from_its_last_order() {
+    for trainer_type in [0, 2] {
+        let row = |id: u32, name: Option<&str>, cat, key: u32, group: &str| {
+            let mut s = svc(id, "", cat, key, group);
+            s.name = name.map(Into::into);
+            s.subtext = name.map(|_| "Rank 1".into());
+            s.level_req = 1;
+            s
+        };
+        use TrainerServiceCategory::{Available as A, Unavailable as U, Used};
+        let services = vec![
+            row(100, Some("Zeta"), A, 26, "Arms"),
+            row(101, None, A, 26, "Arms"),
+            row(102, Some("Alpha"), A, 26, "Arms"),
+            row(103, None, A, 26, "Arms"),
+            row(106, Some("Alpha"), A, 26, "Arms"),
+            row(104, Some("Beta"), Used, 256, "Fury"),
+            row(105, Some("Gamma"), U, 256, "Fury"),
+        ];
+        let mut s = UiScript::new().unwrap();
+        s.reset_trainer_list_state(trainer_type);
+        s.set_trainer(Some(TrainerState {
+            guid: 0,
+            greeting: String::new(),
+            trainer_type,
+            groups: Vec::new(),
+            services,
+        }));
+        let mut seen = vec![array(&mut s)];
+        for lua in [
+            "SetTrainerServiceTypeFilter('unavailable', 0)",
+            "SetTrainerServiceTypeFilter('used', 1)",
+            "SetTrainerServiceTypeFilter('unavailable', 1)",
+            "CollapseTrainerSkillLine(1)",
+            "ExpandTrainerSkillLine(0)",
+        ] {
+            s.run(lua).unwrap();
+            seen.push(array(&mut s));
+        }
+        assert_eq!(
+            seen,
+            [
+                (8, vec![-1, 102, 103, 101, 106, 100, -1, 105, 104]),
+                (6, vec![-1, 103, 101, 102, 106, 100, 105, 104, -1]),
+                (8, vec![-1, 101, 102, 103, 106, 100, -1, 104, 105]),
+                (9, vec![-1, 102, 103, 101, 106, 100, -1, 104, 105]),
+                (4, vec![-1, -1, 104, 105, 100, 101, 103, 102, 106]),
+                (9, vec![-1, 102, 106, 100, 101, 103, -1, 104, 105]),
+            ],
+            "trainer type {trainer_type}"
+        );
+    }
 }

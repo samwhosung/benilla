@@ -188,12 +188,23 @@ impl super::UiScript {
                 model.trainer_selection = None;
                 model.trainer_collapsed.clear();
                 model.trainer = None;
+                model.trainer_rows.clear();
+                model.trainer_visible = 0;
             }
             Some(mut s) => {
                 s.groups = build_groups(&s.services, s.trainer_type);
                 let live: std::collections::HashSet<u32> = s.groups.iter().map(|g| g.key).collect();
                 model.trainer_collapsed.retain(|sl| live.contains(sl));
+                let model = &mut *model;
+                let kept = if std::mem::take(&mut model.trainer_rows_fresh) {
+                    Vec::new()
+                } else {
+                    let old = model.trainer.as_ref().map_or(&[][..], |t| &t.groups[..]);
+                    carry_rows(&model.trainer_rows, old, &s)
+                };
+                model.trainer_rows = laid_out(kept, &s);
                 model.trainer = Some(s);
+                finalize(model);
             }
         }
     }
@@ -216,6 +227,13 @@ impl super::UiScript {
         // The skill-line filter resets to every group with the list (`0x4d7560`).
         model.trainer_line_filter = u32::MAX;
         model.trainer_selection = None;
+        // The builder lays the array out anew (`0x4d7807`-`0x4d7b35`) and finalizes it.
+        model.trainer_rows = model
+            .trainer
+            .as_ref()
+            .map_or_else(Vec::new, |t| laid_out(Vec::new(), t));
+        model.trainer_rows_fresh = true;
+        finalize(&mut model);
     }
 
     /// Whether `CloseTrainer` was called since the last drain; the close sends no packet.
@@ -255,8 +273,8 @@ fn submit(lua: &Lua, call: TrainerCall) -> mlua::Result<()> {
 }
 
 /// One row: a header by group index, or a service by its position in [`TrainerState::services`].
-#[derive(Clone, Copy)]
-enum Row {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Row {
     Header(usize),
     Service(usize),
 }
@@ -334,93 +352,167 @@ fn talent_order(a: &TrainerService, b: &TrainerService) -> i32 {
     }
 }
 
-/// Group the services by [`TrainerService::group_key`], dropping key 0, and sort each group's rows
-/// with the CRT `qsort` (`0x73f727`, called at `0x4d857e`) and the type's comparator, which ties a
-/// row it cannot order; headers sort by raw key at type 2 (`0x4d7c30`), else by name
-/// (`0x4d7b90`). The reference sorts the whole row array in one pass, every group's rows and the
-/// hidden ones together; sorting group by group orders the same rows wherever the comparator
-/// decides, and only rows it ties may sit otherwise.
+/// Group the services by [`TrainerService::group_key`], dropping key 0, each header made where its
+/// key is first met in list order (`0x4d78a3`-`0x4d79c3`), then the header array sorted by the
+/// CRT `qsort` (`0x73f727`, called at `0x4d7a0e`): by raw key at type 2 (`0x4d7c30`), else
+/// `0x4d7b90`. The rows themselves sort in [`finalize`].
 fn build_groups(services: &[TrainerService], trainer_type: u32) -> Vec<TrainerGroup> {
-    let mut map: std::collections::HashMap<u32, TrainerGroup> = std::collections::HashMap::new();
+    let mut groups: Vec<TrainerGroup> = Vec::new();
     for (i, s) in services.iter().enumerate() {
         if s.group_key == 0 {
             continue;
         }
-        map.entry(s.group_key)
-            .or_insert_with(|| TrainerGroup {
-                key: s.group_key,
-                name: s.group_name.clone(),
-                line_name: s.line_name.clone(),
-                services: Vec::new(),
-            })
-            .services
-            .push(i);
-    }
-    let mut groups: Vec<TrainerGroup> = map.into_values().collect();
-    let order = match trainer_type {
-        TRAINER_TYPE_TRADESKILL => tradeskill_order,
-        TRAINER_TYPE_MOUNT => talent_order,
-        _ => class_order,
-    };
-    for g in &mut groups {
-        crate::crt::qsort(&mut g.services, |&a, &b| order(&services[a], &services[b]));
+        let gi = match groups.iter().position(|g| g.key == s.group_key) {
+            Some(gi) => gi,
+            None => {
+                groups.push(TrainerGroup {
+                    key: s.group_key,
+                    name: s.group_name.clone(),
+                    line_name: s.line_name.clone(),
+                    services: Vec::new(),
+                });
+                groups.len() - 1
+            }
+        };
+        groups[gi].services.push(i);
     }
     if trainer_type == TRAINER_TYPE_TRADESKILL {
-        groups.sort_by_key(|g| g.key);
+        crate::crt::qsort(&mut groups, |a, b| {
+            sign((a.key as i32).cmp(&(b.key as i32)))
+        });
     } else {
         // `0x4d7b90`: the known group first, then name. Its middle key, `hdr[+0x24] == 0` first, is
-        // untraced and not built.
-        groups.sort_by(|a, b| {
-            (a.key != TRAINER_GROUP_KNOWN)
-                .cmp(&(b.key != TRAINER_GROUP_KNOWN))
-                .then_with(|| crate::crt::str_cmp_i(&a.name, &b.name).cmp(&0))
-                .then_with(|| a.key.cmp(&b.key))
+        // not built.
+        crate::crt::qsort(&mut groups, |a, b| {
+            match (a.key != TRAINER_GROUP_KNOWN).cmp(&(b.key != TRAINER_GROUP_KNOWN)) {
+                std::cmp::Ordering::Equal => crate::crt::str_cmp_i(&a.name, &b.name),
+                o => sign(o),
+            }
         });
     }
     groups
 }
 
-/// The client's whole row array and its visible count: visible rows in display order, then every
-/// hidden row in a tail. The finalizer `0x4d8410` only clears a hidden record's visible flag
-/// (`0x4d8546`) and sorts it behind (`0x4d857e`), and the getters bound on the total
-/// (`0x4d89b0`, `ds:0xb73a10`), so a hidden row keeps its index. A group the filter empties hides
-/// its header too (`0x4d8535`); a collapsed one keeps it (`0x4d853d`). The tail's order here is
-/// tree order, not the client's; the stock window reaches the tail only by the selection's index.
-fn rows(model: &Model) -> (Vec<Row>, usize) {
+/// The rows of `old`'s array that still exist in `new`, in the array's order: a service by its
+/// position, a header by its key.
+fn carry_rows(rows: &[Row], old: &[TrainerGroup], new: &TrainerState) -> Vec<Row> {
+    rows.iter()
+        .filter_map(|&row| match row {
+            Row::Service(si) => new
+                .services
+                .get(si)
+                .filter(|s| s.group_key != 0)
+                .map(|_| row),
+            Row::Header(gi) => {
+                let key = old.get(gi)?.key;
+                new.groups
+                    .iter()
+                    .position(|g| g.key == key)
+                    .map(Row::Header)
+            }
+        })
+        .collect()
+}
+
+/// `kept`, then every row of `t` it lacks as the builder lays them out: the services in list
+/// order, key 0 dropped (`0x4d7807`), then one header row per group in the header array's order
+/// (`0x4d7af4`-`0x4d7b27`).
+fn laid_out(mut kept: Vec<Row>, t: &TrainerState) -> Vec<Row> {
+    let builder = t
+        .services
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.group_key != 0)
+        .map(|(si, _)| Row::Service(si))
+        .chain((0..t.groups.len()).map(Row::Header));
+    let fresh: Vec<Row> = builder.filter(|r| !kept.contains(r)).collect();
+    kept.extend(fresh);
+    kept
+}
+
+/// The finalizer `0x4d8410` over the whole row array. A service is hidden when its state is
+/// filtered out (`0x4d84ba`); any row when its group shows nothing, no member passing the state
+/// filter or the skill-line filter clearing the group (`0x4d8447`-`0x4d8508`, `0x4d8535`); a
+/// service, not a header, when its group is collapsed (`0x4d853d`-`0x4d8546`). Then the CRT
+/// `qsort` (`0x73f727`) sorts the array from the order it left (`0x4d857e`) with the type's
+/// comparator, which puts the visible rows first, two hidden rows tying (`0x4d85e0`,
+/// `0x4d8736`), and the visible ones by group, its header first, then by the type's keys.
+fn finalize(model: &mut Model) {
     let Some(t) = model.trainer.as_ref() else {
-        return (Vec::new(), 0);
+        model.trainer_rows.clear();
+        model.trainer_visible = 0;
+        return;
     };
-    let mut shown = Vec::new();
-    let mut tail = Vec::new();
+    let mut group_of = vec![0; t.services.len()];
     for (gi, g) in t.groups.iter().enumerate() {
-        let (passes, filtered): (Vec<usize>, Vec<usize>) = g
-            .services
-            .iter()
-            .copied()
-            .partition(|&si| model.trainer_filter[t.services[si].category.filter_slot()]);
-        // A group the skill-line filter clears is hidden whole (`0x4d8508`), header included.
-        let line_shown = model.trainer_line_filter & 1u32.wrapping_shl(gi as u32) != 0;
-        if !line_shown {
-            tail.push(Row::Header(gi));
-            tail.extend(passes.into_iter().map(Row::Service));
-        } else if passes.is_empty() {
-            // The filter hid every service, so the header goes too.
-            tail.push(Row::Header(gi));
-        } else {
-            shown.push(Row::Header(gi));
-            // A collapsed group keeps its header on screen and parks its services behind.
-            let into = if model.trainer_collapsed.contains(&g.key) {
-                &mut tail
-            } else {
-                &mut shown
-            };
-            into.extend(passes.into_iter().map(Row::Service));
+        for &si in &g.services {
+            group_of[si] = gi;
         }
-        tail.extend(filtered.into_iter().map(Row::Service));
     }
-    let visible = shown.len();
-    shown.extend(tail);
-    (shown, visible)
+    let passes = |si: usize| model.trainer_filter[t.services[si].category.filter_slot()];
+    let group_shown: Vec<bool> = t
+        .groups
+        .iter()
+        .enumerate()
+        .map(|(gi, g)| {
+            model.trainer_line_filter & 1u32.wrapping_shl(gi as u32) != 0
+                && g.services.iter().any(|&si| passes(si))
+        })
+        .collect();
+    let visible = |row: &Row| match *row {
+        Row::Header(gi) => group_shown[gi],
+        Row::Service(si) => {
+            let gi = group_of[si];
+            passes(si) && group_shown[gi] && !model.trainer_collapsed.contains(&t.groups[gi].key)
+        }
+    };
+    let order = match t.trainer_type {
+        TRAINER_TYPE_TRADESKILL => tradeskill_order,
+        TRAINER_TYPE_MOUNT => talent_order,
+        _ => class_order,
+    };
+    // The group a row sorts by: the raw key at type 2 (`0x4d878b`), else the header array's
+    // index (`0x4d85fe`-`0x4d8643`).
+    let group = |row: &Row| -> i64 {
+        let gi = match *row {
+            Row::Header(gi) => gi,
+            Row::Service(si) => group_of[si],
+        };
+        if t.trainer_type == TRAINER_TYPE_TRADESKILL {
+            i64::from(t.groups[gi].key as i32)
+        } else {
+            gi as i64
+        }
+    };
+    let compare = |a: &Row, b: &Row| -> i32 {
+        match (visible(a), visible(b)) {
+            (false, false) => return 0,
+            (false, true) => return 1,
+            (true, false) => return -1,
+            (true, true) => {}
+        }
+        let (ga, gb) = (group(a), group(b));
+        if ga != gb {
+            return if ga > gb { 1 } else { -1 };
+        }
+        // A header's id is -1 (`0x4d8653`, `0x4d870a`): it sorts first.
+        match (*a, *b) {
+            (Row::Header(_), _) => -1,
+            (_, Row::Header(_)) => 1,
+            (Row::Service(sa), Row::Service(sb)) => order(&t.services[sa], &t.services[sb]),
+        }
+    };
+    let mut rows = std::mem::take(&mut model.trainer_rows);
+    crate::crt::qsort(&mut rows, compare);
+    model.trainer_visible = rows.iter().filter(|r| visible(r)).count();
+    model.trainer_rows = rows;
+}
+
+/// The client's whole row array and its visible count, as the last [`finalize`] left them: the
+/// visible rows in display order, then the hidden ones, each keeping its index for the getters,
+/// which bound on the total (`0x4d89b0`, `ds:0xb73a10`).
+fn rows(model: &Model) -> (&[Row], usize) {
+    (&model.trainer_rows, model.trainer_visible)
 }
 
 /// The service at a 1-based row index; `None` for a header. `GameTooltip:SetTrainerService`
@@ -462,6 +554,7 @@ fn selected_row(model: &Model) -> Option<usize> {
 /// (`0x4d8cc0`, `0x4d8ce0`). The stock window's filter click (`Blizzard_TrainerUI.lua:524`) does
 /// not repaint.
 fn raise_trainer_update(model: &mut Model) {
+    finalize(model);
     model.raise("TRAINER_UPDATE", Vec::new());
 }
 
