@@ -289,7 +289,7 @@ fn resolve_buyback(
 
 /// One item's repair cost, by the reference's `0x4faf30` arithmetic
 /// ([`benilla_formats::DurabilityTables`]), after the price `discount` (`0x4faf8a`). The template
-/// is only read (`0x5da368`).
+/// is only read (`0x5da368`); a wrapped item costs 0 (`ITEM_FIELD_FLAGS & 0x8`, `0x5da387`).
 fn item_repair_cost(
     guid: u64,
     objects: &Objects,
@@ -300,6 +300,9 @@ fn item_repair_cost(
     let Some(obj) = objects.object(guid) else {
         return 0;
     };
+    if obj.item_flags().unwrap_or(0) & benilla_protocol::messages::ITEM_DYNFLAG_WRAPPED != 0 {
+        return 0;
+    }
     let cur = obj.item_durability().unwrap_or(0);
     let max = obj.item_max_durability().unwrap_or(0);
     let entry = obj.object_entry().unwrap_or(0);
