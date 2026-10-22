@@ -1095,6 +1095,11 @@ pub(crate) fn pvp_free_for_all(rel: &Relations, unit: &RelUnit) -> bool {
             .is_some_and(|c| c.player_flags & PLAYER_FLAGS_FFA_PVP != 0)
 }
 
+/// [`pvp_free_for_all`] on a held object's descriptor.
+pub(crate) fn pvp_free_for_all_of(rel: &Relations, guid: u64, store: &ObjectStore) -> bool {
+    pvp_free_for_all(rel, &RelUnit::of(guid, store))
+}
+
 /// Fill the guid-keyed tooltip fields: `is_player`, or a creature's record fields and its
 /// faction-name line.
 pub(crate) fn enrich_unit(

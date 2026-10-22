@@ -284,6 +284,8 @@ pub(crate) struct GroupView<'w, 's> {
     map_catalog: Option<Res<'w, benilla_assets::MapCatalogRes>>,
     // The guild cache, every held member's guild leg.
     guild: Res<'w, crate::ui_guild::GuildState>,
+    // The object manager's units, the controller `UnitIsPVPFreeForAll` reads (`0x606170`).
+    world: crate::target::RelationWorld<'w, 's>,
 }
 
 /// Push the roster and the party unit snapshots into the VM and fire the party events on their
@@ -311,6 +313,7 @@ pub(crate) fn feed_party(
         here,
         map_catalog,
         guild,
+        world,
     } = &view;
     hosted_vm.run(|script| {
         let Some(script) = script else {
@@ -333,6 +336,7 @@ pub(crate) fn feed_party(
         let area_moved = fed.area.moved(here.area().map_or(u64::MAX, u64::from));
         let group_changed = group.is_changed();
         let index_changed = index.is_changed();
+        let rel = world.get();
         let look = pets::Lookup::new(
             index,
             stores,
@@ -340,6 +344,7 @@ pub(crate) fn feed_party(
             types,
             tables.catalog(),
             tables.study(),
+            &rel,
         );
         // Only the stores the merged view reads: a crowd's other stores change every frame. The
         // members' pets are the group's too, `partypetN` and `raidpetN` reading their descriptors.
@@ -511,9 +516,11 @@ fn push_group(
         here,
         map_catalog: _,
         guild,
+        world,
     } = view;
     let chr = tables.unit_names();
     let types = tables.types(names);
+    let rel = world.get();
     let look = pets::Lookup::new(
         index,
         stores,
@@ -521,6 +528,7 @@ fn push_group(
         types,
         tables.catalog(),
         tables.study(),
+        &rel,
     );
     let self_pair = self_q.iter().next();
     let self_guid = self_pair.map(|(_, g, _)| g.0);
@@ -612,10 +620,11 @@ fn push_group(
     for (i, token) in PARTY_TOKENS.iter().enumerate() {
         let member = slots.get(i);
         let snap = member.map(|m| {
+            let held = index.0.get(&m.guid).and_then(|e| stores.get(*e).ok());
             let mut s = member_unit_state(
                 m,
                 group.stats.get(&m.guid),
-                index.0.get(&m.guid).and_then(|e| stores.get(*e).ok()),
+                held,
                 group,
                 own_group.clone(),
                 names,
@@ -623,6 +632,9 @@ fn push_group(
                 chr,
                 types,
             );
+            if let Some(store) = held {
+                s.is_pvp_ffa = crate::ui_unit::pvp_free_for_all_of(&rel, m.guid, store);
+            }
             s.tooltip.party = party_record(group, m.guid, area_names);
             s
         });
@@ -680,6 +692,7 @@ fn push_group(
                     Some((_, _, store)) => {
                         let mut s = crate::ui_unit::snapshot(store, *guid, name, 0, chr, types);
                         s.guild = crate::ui_guild::cached_unit_guild(&store.0, guild);
+                        s.is_pvp_ffa = crate::ui_unit::pvp_free_for_all_of(&rel, *guid, store);
                         s
                     }
                     // No object of ours, as across a worldport: the row's guid still names us,
@@ -703,10 +716,11 @@ fn push_group(
                 Some(s)
             } else {
                 let m = group.members.iter().find(|m| m.guid == *guid)?;
+                let held = index.0.get(guid).and_then(|e| stores.get(*e).ok());
                 let mut s = member_unit_state(
                     m,
                     group.stats.get(guid),
-                    index.0.get(guid).and_then(|e| stores.get(*e).ok()),
+                    held,
                     group,
                     own_group.clone(),
                     names,
@@ -714,6 +728,9 @@ fn push_group(
                     chr,
                     types,
                 );
+                if let Some(store) = held {
+                    s.is_pvp_ffa = crate::ui_unit::pvp_free_for_all_of(&rel, *guid, store);
+                }
                 s.tooltip.party = party_record(group, *guid, area_names);
                 Some(s)
             }

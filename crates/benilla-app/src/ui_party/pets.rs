@@ -58,6 +58,8 @@ pub(super) struct Lookup<'a, 'w, 's, 'q> {
     /// `Spell.dbc`, which the tooltip's owner line reads a creating spell from.
     catalog: Option<&'a benilla_formats::SpellCatalog>,
     study: crate::ui_unit::tooltip_facts::StudySources<'a>,
+    /// The object manager's units, the owner `UnitIsPVPFreeForAll` reads (`0x606170`).
+    rel: &'a crate::target::Relations<'a>,
 }
 
 impl<'a, 'w, 's, 'q> Lookup<'a, 'w, 's, 'q> {
@@ -68,6 +70,7 @@ impl<'a, 'w, 's, 'q> Lookup<'a, 'w, 's, 'q> {
         types: CreatureTypeSources<'a>,
         catalog: Option<&'a benilla_formats::SpellCatalog>,
         study: crate::ui_unit::tooltip_facts::StudySources<'a>,
+        rel: &'a crate::target::Relations<'a>,
     ) -> Self {
         Self {
             index,
@@ -77,6 +80,7 @@ impl<'a, 'w, 's, 'q> Lookup<'a, 'w, 's, 'q> {
             types,
             catalog,
             study,
+            rel,
         }
     }
 
@@ -148,6 +152,7 @@ pub(super) fn member_pet(
                 .map(str::to_string);
             let mut s =
                 crate::ui_unit::snapshot(store, guid, name, 0, Default::default(), look.types);
+            s.is_pvp_ffa = crate::ui_unit::pvp_free_for_all_of(look.rel, guid, store);
             let object = |g: u64| look.store(g);
             let sources = crate::ui_unit::tooltip_facts::TooltipSources {
                 names: look.names,
