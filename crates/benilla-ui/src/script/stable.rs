@@ -85,11 +85,15 @@ pub enum StableIntent {
 /// A stable verb the host applies inside its call ([`super::ScriptCall::Stable`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StableCall {
-    /// A request past its binding's checks: its packet, to the open master.
+    /// `StablePet()` or `BuyStableSlot()` past the binding's checks: its packet, sent only while a
+    /// master is stored (`0x4cae56`, `0x4cb0ae`).
     Request(StableIntent),
+    /// A `ClickStablePet` drop's request, sent with the stored master's guid, 0 when none, with no
+    /// test of it (`0x4cb4e9`, `0x4cb57a`, `0x4cb623`, `0x4cb693`).
+    Drop(StableIntent),
     /// `UnstablePet(index)` past its index, by the pet number found: the host refuses it while the
     /// active player holds a charm or a summon, or is not held (`0x4caf4e`-`0x4caf88`), then sends
-    /// the unstable request (`0x4cafef`).
+    /// the unstable request with the stored master's guid, 0 when none (`0x4caff7`-`0x4cb00c`).
     Unstable(u32),
 }
 
@@ -144,7 +148,7 @@ impl super::UiScript {
         self.take_stable_calls()
             .into_iter()
             .map(|call| match call {
-                StableCall::Request(intent) => intent,
+                StableCall::Request(intent) | StableCall::Drop(intent) => intent,
                 StableCall::Unstable(pet_number) => StableIntent::Unstable(pet_number),
             })
             .collect()
@@ -438,7 +442,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     if let Some(intent) = intent {
                         super::calls::submit(
                             lua,
-                            super::ScriptCall::Stable(StableCall::Request(intent)),
+                            super::ScriptCall::Stable(StableCall::Drop(intent)),
                         )?;
                     }
                     super::tick::verb(lua, super::cursor::clear_cursor);

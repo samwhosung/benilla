@@ -137,3 +137,21 @@ fn unstable_pet_is_refused_while_we_hold_a_summon() {
     drain(&mut s);
     assert_eq!(sent(&s), Vec::<String>::new());
 }
+
+/// After a close, which clears only the master's guid (`0x4cae10`), `StablePet` and
+/// `BuyStableSlot` send nothing (`0x4cae56`, `0x4cb0ae`), while `UnstablePet` and a drop send with
+/// guid 0, testing no master (`0x4cb001`, `0x4cb693`).
+#[test]
+fn unstable_and_drops_send_with_no_master_stored() {
+    let mut s = client(0);
+    s.app.world_mut().resource_mut::<super::StableOpen>().npc = None;
+    run(
+        &mut s,
+        "StablePet() BuyStableSlot() UnstablePet(1) PickupStablePet(1) ClickStablePet(0)",
+    );
+    let unstable = ClientCommand::UnstablePet {
+        npc: 0,
+        pet_number: 3,
+    };
+    assert_eq!(sent(&s), lines(&[unstable.clone(), unstable]));
+}

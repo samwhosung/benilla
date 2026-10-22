@@ -325,22 +325,28 @@ fn show_refusals(
 /// ([`crate::script_calls::ScriptCallHost`]).
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct StableSteps<'w, 's> {
-    /// Absent in a world with no stable window, which drops the calls.
+    /// The stored master; absent in a world with no stable window, which stores none.
     open: Option<Res<'w, StableOpen>>,
     commands: Res<'w, NetCommands>,
     self_q: Query<'w, 's, &'static crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
 }
 
 impl StableSteps<'_, '_> {
-    /// One stable verb inside its call, aimed at the open master: each request needs one stored
-    /// (`0x4cae56`, `0x4cb0a4`).
+    /// One stable verb inside its call, sent with the stored master's guid `[0xb72240]`.
+    /// `StablePet` and `BuyStableSlot` send only while one is stored (`0x4cae56`, `0x4cb0ae`); a
+    /// drop and `UnstablePet` send without testing it, 0 when none (`0x4cb4e9`, `0x4cb57a`,
+    /// `0x4cb623`, `0x4cb693`, `0x4cb001`).
     pub(crate) fn apply(&mut self, call: StableCall) {
-        let Some(npc) = self.open.as_ref().and_then(|o| o.npc) else {
-            debug!("ui_stable: {call:?} with no open stable — ignored");
-            return;
-        };
-        let intent = match call {
-            StableCall::Request(intent) => intent,
+        let master = self.open.as_ref().and_then(|o| o.npc);
+        let (npc, intent) = match call {
+            StableCall::Request(intent) => {
+                let Some(npc) = master else {
+                    debug!("ui_stable: {intent:?} with no stable master stored, not sent");
+                    return;
+                };
+                (npc, intent)
+            }
+            StableCall::Drop(intent) => (master.unwrap_or(0), intent),
             // `UnstablePet`'s own gate: the active player held (`0x4caf6d`), with neither a charm
             // nor a summon (`0x4caf73`-`0x4caf88`).
             StableCall::Unstable(pet_number) => {
@@ -353,7 +359,7 @@ impl StableSteps<'_, '_> {
                     debug!("ui_stable: unstable refused, a charm or a summon is out");
                     return;
                 }
-                StableIntent::Unstable(pet_number)
+                (master.unwrap_or(0), StableIntent::Unstable(pet_number))
             }
         };
         debug!("ui_stable: {intent:?} (stable master {npc:#x})");
