@@ -24,6 +24,11 @@ enum Row {
     /// An exclusive system of the phase, whose access bevy does not report, by a suffix of its
     /// system's name.
     Exclusive,
+    /// A queue the handlers fill that the call host holds too, by a suffix of its type's name:
+    /// every feed that lends the host holds it, so no access tells the feed that takes it apart,
+    /// and the row is found by reading the feed, not by this guard. It is stale once the host or
+    /// the handlers no longer hold the queue.
+    HostHeld,
 }
 
 /// What still fires in the frame's system order rather than the packets', with what it is. A
@@ -210,7 +215,12 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "::ui_taxi::TaxiState",
         "the flight master's packets",
     ),
-    (Row::Queue, "::ui_trade::TradeSession", "the trade session"),
+    (
+        Row::HostHeld,
+        "::ui_trade::TradeSession",
+        "the trade session, which `feed_trade` fires from; the trade verbs, acting in their \
+         calls, hold it in the host",
+    ),
     (
         Row::Queue,
         "::ui_trainer::TrainerErrors",
@@ -268,6 +278,8 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::Enchants",
     "::Items",
     "::RandomProperties",
+    "::ChrClassTable",
+    "::ChrRaceTable",
     "::NameCache",
     "::ServerTime",
     "::GuidIndex",
@@ -535,66 +547,75 @@ fn every_handler_queue_a_feed_takes_is_on_a_lane_or_listed() {
         .classes
         .caches;
     let queues = handler_queues(app.world(), &caches);
-    let (taken, exclusive, systems) = app.world_mut().schedule_scope(Update, |world, schedule| {
-        schedule.graph_mut().systems.initialize(world);
-        let vm = world
-            .components()
-            .get_resource_id(TypeId::of::<benilla_ui::script::UiScript>());
-        let host = call_host_access(world);
-        let lanes: Vec<ComponentId> = [
-            TypeId::of::<crate::field_watch::NoticeLane>(),
-            TypeId::of::<crate::ui_chat::ChatLog>(),
-        ]
-        .into_iter()
-        .filter_map(|t| world.components().get_resource_id(t))
-        .collect();
-        let graph = schedule.graph();
-        let in_feed = |node: NodeId| in_feed(graph, node);
-        let mut taken = BTreeSet::new();
-        let mut exclusive = BTreeSet::new();
-        let mut systems = BTreeSet::new();
-        for (key, system, _) in graph.systems.iter() {
-            let name = system.name().to_string();
-            systems.insert(name.clone());
-            if !in_feed(NodeId::System(key)) {
-                continue;
-            }
-            if system.is_exclusive() {
-                exclusive.insert(name);
-                continue;
-            }
-            let Some(with_access) = graph.systems.get(key) else {
-                continue;
-            };
-            let access = with_access.access.combined_access();
-            if !vm.is_some_and(|vm| access.has_resource_write(vm)) {
-                continue;
-            }
-            for &id in &queues {
-                if Some(id) == vm || lanes.contains(&id) {
+    let (taken, exclusive, systems, host_held) =
+        app.world_mut().schedule_scope(Update, |world, schedule| {
+            schedule.graph_mut().systems.initialize(world);
+            let vm = world
+                .components()
+                .get_resource_id(TypeId::of::<benilla_ui::script::UiScript>());
+            let host = call_host_access(world);
+            let lanes: Vec<ComponentId> = [
+                TypeId::of::<crate::field_watch::NoticeLane>(),
+                TypeId::of::<crate::ui_chat::ChatLog>(),
+            ]
+            .into_iter()
+            .filter_map(|t| world.components().get_resource_id(t))
+            .collect();
+            let graph = schedule.graph();
+            let in_feed = |node: NodeId| in_feed(graph, node);
+            let mut taken = BTreeSet::new();
+            let mut exclusive = BTreeSet::new();
+            let mut systems = BTreeSet::new();
+            let host_held: BTreeSet<String> = queues
+                .iter()
+                .filter(|&&id| Some(id) != vm && !lanes.contains(&id))
+                .filter(|&&id| !is_messages(world, id))
+                .filter(|&&id| !ends_with_any(&self::name(world, id), FILLED_THROUGH_A_READ))
+                .filter(|&&id| host.has_resource_read(id))
+                .map(|&id| self::name(world, id))
+                .collect();
+            for (key, system, _) in graph.systems.iter() {
+                let name = system.name().to_string();
+                systems.insert(name.clone());
+                if !in_feed(NodeId::System(key)) {
                     continue;
                 }
-                let n = self::name(world, id);
-                let through_a_read = ends_with_any(&n, FILLED_THROUGH_A_READ);
-                let takes = if through_a_read {
-                    access.has_resource_read(id)
-                } else if is_messages(world, id) {
-                    // A reader, not a writer: the host's own messages are pushes.
-                    access.has_resource_read(id)
-                        && !access.has_resource_write(id)
-                        && !host.has_resource_read(id)
-                } else {
-                    access.has_resource_write(id)
-                        && !host.has_resource_read(id)
-                        && !host.has_resource_write(id)
+                if system.is_exclusive() {
+                    exclusive.insert(name);
+                    continue;
+                }
+                let Some(with_access) = graph.systems.get(key) else {
+                    continue;
                 };
-                if takes {
-                    taken.insert(n);
+                let access = with_access.access.combined_access();
+                if !vm.is_some_and(|vm| access.has_resource_write(vm)) {
+                    continue;
+                }
+                for &id in &queues {
+                    if Some(id) == vm || lanes.contains(&id) {
+                        continue;
+                    }
+                    let n = self::name(world, id);
+                    let through_a_read = ends_with_any(&n, FILLED_THROUGH_A_READ);
+                    let takes = if through_a_read {
+                        access.has_resource_read(id)
+                    } else if is_messages(world, id) {
+                        // A reader, not a writer: the host's own messages are pushes.
+                        access.has_resource_read(id)
+                            && !access.has_resource_write(id)
+                            && !host.has_resource_read(id)
+                    } else {
+                        access.has_resource_write(id)
+                            && !host.has_resource_read(id)
+                            && !host.has_resource_write(id)
+                    };
+                    if takes {
+                        taken.insert(n);
+                    }
                 }
             }
-        }
-        (taken, exclusive, systems)
-    });
+            (taken, exclusive, systems, host_held)
+        });
     if !systems.iter().any(|n| n.contains("benilla_app::")) {
         eprintln!("skipped: this build carries no type names");
         return;
@@ -621,6 +642,11 @@ fn every_handler_queue_a_feed_takes_is_on_a_lane_or_listed() {
         .into_iter()
         .filter(|s| !taken.iter().any(|n| n.ends_with(s)))
         .collect();
+    stale.extend(
+        rows(Row::HostHeld)
+            .into_iter()
+            .filter(|s| !host_held.iter().any(|n| n.ends_with(s))),
+    );
     stale.extend(
         rows(Row::Exclusive)
             .into_iter()
