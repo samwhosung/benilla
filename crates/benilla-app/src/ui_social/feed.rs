@@ -118,21 +118,31 @@ pub(super) fn feed_social(
             if answer_goes_to_the_frame(script.who_to_ui(), social.who.len()) {
                 fires.post("WHO_LIST_UPDATE", Vec::new());
             } else {
-                // In wire order: each line is composed inside the parse loop (`0x5ae0a1`), before
-                // the `qsort` at `0x5ae0e2` orders the array `GetWhoInfo` reads.
                 let printed = {
                     let get = |key: &str| script.lua().globals().get::<String>(key).ok();
-                    let wire_order: Vec<WhoInfo> = social
-                        .who
-                        .iter()
-                        .map(|e| who_row(e, areas, unit_names.get()))
-                        .collect();
-                    who_lines(&wire_order, social.who_total, &get)
+                    printed_lines(&social, areas, unit_names.get(), &get)
                 };
                 crate::ui_action::show_messages(script, &mut sink, "ui_social", printed);
             }
         }
     })
+}
+
+/// The chat lines the last `/who` answer prints when it goes to chat: in wire order, each composed
+/// inside the parse loop (`0x5ae0a1`) before the `qsort` at `0x5ae0e2` orders the array
+/// `GetWhoInfo` reads, then the count line (`0x5ae0f1`).
+pub(super) fn printed_lines(
+    social: &SocialState,
+    areas: Option<&AreaTableCatalog>,
+    names: UnitNames<'_>,
+    get: &dyn Fn(&str) -> Option<String>,
+) -> Vec<Shown> {
+    let wire_order: Vec<WhoInfo> = social
+        .who
+        .iter()
+        .map(|e| who_row(e, areas, names))
+        .collect();
+    who_lines(&wire_order, social.who_total, get)
 }
 
 /// The VM's snapshot of `lists`, with the selections as the engine holds them now and the `/who`
