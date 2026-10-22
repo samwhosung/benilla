@@ -110,8 +110,15 @@ mod net {
         }
     }
 
-    fn on_confirm_accept(In(ev): In<SessionEvent>, mut share: ResMut<QuestShare>) {
+    fn on_confirm_accept(
+        In(ev): In<SessionEvent>,
+        mut share: ResMut<QuestShare>,
+        mut giver: ResMut<crate::ui_quest::QuestGiver>,
+    ) {
         if let SessionEvent::QuestConfirmAccept(c) = ev {
+            // The quest `ConfirmAcceptQuest` answers, written at the packet (`0x5019c7`) and
+            // never cleared.
+            giver.confirm = c.quest_id;
             quest_confirm_accept(c, &mut share);
         }
     }
@@ -216,9 +223,6 @@ pub(crate) fn feed_quest_share(
         if let Some(c) = share.pending_confirm.as_ref() {
             if let Some(name) = names.resolve_player(c.sender, ask).map(str::to_string) {
                 let title = c.title.clone();
-                // `ConfirmAcceptQuest()` takes no argument (`StaticPopup.lua:731-733`): it answers
-                // the confirm the client holds (`[0xbe0840]`).
-                script.set_quest_confirm(Some(c.quest_id));
                 share.pending_confirm = None;
                 script.fire_event(
                     "QUEST_ACCEPT_CONFIRM",

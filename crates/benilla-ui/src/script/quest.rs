@@ -144,8 +144,9 @@ pub enum QuestCall {
     /// (`0x501d89`-`0x501da8`): on the reward panel, the latch, the choice's range, which raises
     /// from the verb, and `CMSG_QUESTGIVER_CHOOSE_REWARD`.
     Reward(i32),
-    /// `ConfirmAcceptQuest()` (`0x5021b0`): `CMSG_QUEST_CONFIRM_ACCEPT` with the held quest.
-    ConfirmAccept(u32),
+    /// `ConfirmAcceptQuest()` (`0x5021b0`): `CMSG_QUEST_CONFIRM_ACCEPT` with the quest the last
+    /// confirm held (`[0xbe0840]`, `0x5021e0`), an engine cell the host keeps.
+    ConfirmAccept,
     /// `AbandonQuest()` on the marked quest's row (`0x4df070`): `CMSG_QUESTLOG_REMOVE_QUEST` with
     /// its slot (`0x4df0ca`).
     Abandon(u8),
@@ -184,11 +185,6 @@ impl super::UiScript {
     /// `QUEST_FINISHED` raised through `OnHide`.
     pub fn take_quest_close(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().quest_close)
-    }
-
-    /// The escort confirm's quest (`[0xbe0840]`), which `ConfirmAcceptQuest` sends.
-    pub fn set_quest_confirm(&mut self, quest_id: Option<u32>) {
-        self.model_mut().quest_confirm = quest_id;
     }
 
     /// The quest calls a harness's VM kept ([`Self::keep_calls`]), in call order.
@@ -471,17 +467,35 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── Verbs ──
-    // The row is the 1-based number (`_ftol`), passed less one (`0x501cc4`, `0x501d04`).
-    fn install_select(lua: &Lua, name: &str, active: bool) -> mlua::Result<()> {
+    // The row is a number or numeric string (`0x501ca8`, `0x501ce8`) truncated (`_ftol`,
+    // `0x501cbd`), else the binding's usage raises; the host takes it less one (`0x501cc4`,
+    // `0x501d04`).
+    fn install_select(
+        lua: &Lua,
+        name: &str,
+        active: bool,
+        usage: &'static str,
+    ) -> mlua::Result<()> {
         lua.globals().set(
             name,
-            lua.create_function(move |lua, i: u32| {
-                submit(lua, QuestCall::Select(QuestSelect { active, index: i }))
+            lua.create_function(move |lua, i: Value| {
+                let index = binding_abi::index_arg32(lua, i, usage)?;
+                submit(lua, QuestCall::Select(QuestSelect { active, index }))
             })?,
         )
     }
-    install_select(lua, "SelectActiveQuest", true)?;
-    install_select(lua, "SelectAvailableQuest", false)?;
+    install_select(
+        lua,
+        "SelectActiveQuest",
+        true,
+        "Usage: SelectActiveQuest(index)",
+    )?;
+    install_select(
+        lua,
+        "SelectAvailableQuest",
+        false,
+        "Usage: SelectAvailableQuest(index)",
+    )?;
 
     fn install_verb(lua: &Lua, name: &str, call: QuestCall) -> mlua::Result<()> {
         lua.globals()
@@ -548,20 +562,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ConfirmAcceptQuest(): the escort confirm's Yes (`StaticPopup.lua:731-733`), which answers the
-    // confirm the client holds (`[0xbe0840]`, `0x5021e0`); none held sends nothing.
-    g.set(
-        "ConfirmAcceptQuest",
-        lua.create_function(|lua, ()| {
-            let quest = lua
-                .app_data_ref::<Model>()
-                .expect("model app_data")
-                .quest_confirm;
-            match quest {
-                Some(quest) => submit(lua, QuestCall::ConfirmAccept(quest)),
-                None => Ok(()),
-            }
-        })?,
-    )?;
+    // confirm the client holds (`[0xbe0840]`, `0x5021e0`), with no test.
+    install_verb(lua, "ConfirmAcceptQuest", QuestCall::ConfirmAccept)?;
 
     // GetQuestReward([choice]): stock passes the 1-based row (`QuestFrame.lua:100`). A number is
     // `trunc(n) - 1` (`0x501da8`), read as signed; an absent or non-number one leaves -1
@@ -998,18 +1000,15 @@ mod tests {
         assert!(!s.take_quest_close(), "taken");
     }
 
-    /// `ConfirmAcceptQuest` answers the held confirm's quest (`[0xbe0840]`, `0x5021e0`).
+    /// `ConfirmAcceptQuest` is a call each time, held confirm or none (`0x5021b0`).
     #[test]
-    fn confirm_accept_quest_sends_the_held_quest() {
+    fn confirm_accept_quest_is_a_call_each_time() {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
-        s.run("ConfirmAcceptQuest()").unwrap();
-        assert!(s.take_quest_calls().is_empty(), "no confirm held");
-        s.set_quest_confirm(Some(5));
         s.run("ConfirmAcceptQuest() ConfirmAcceptQuest()").unwrap();
         assert_eq!(
             s.take_quest_calls(),
-            vec![QuestCall::ConfirmAccept(5), QuestCall::ConfirmAccept(5)]
+            vec![QuestCall::ConfirmAccept, QuestCall::ConfirmAccept]
         );
     }
 }

@@ -22,9 +22,8 @@ fn setup() -> UiScript {
     s
 }
 
-/// The confirm as the share feed raises it: the quest held (`[0xbe0840]`), then the event.
+/// The confirm as the share feed raises it.
 fn confirm(s: &mut UiScript, who: &str, quest: &str) {
-    s.set_quest_confirm(Some(5));
     s.fire_event(
         "QUEST_ACCEPT_CONFIRM",
         vec![
@@ -60,7 +59,7 @@ fn yes_answers_once() {
     s.run("StaticPopup_OnClick(StaticPopup1, 1)").unwrap();
     assert_eq!(
         s.take_quest_calls(),
-        [benilla_ui::script::QuestCall::ConfirmAccept(5)]
+        [benilla_ui::script::QuestCall::ConfirmAccept]
     );
     assert!(
         !s.eval::<bool>("return StaticPopup1:IsVisible()").unwrap(),

@@ -54,6 +54,11 @@ pub(crate) struct QuestGiver {
     /// (`0x5013d3`, no report) or `DeclineQuest`'s (`0x5014aa`, report). The core holds the
     /// whole world, so [`drain_quest`] runs it.
     pub(crate) teardown: Option<bool>,
+    /// The greeting's two pools, which only the selects read.
+    pub(crate) pools: QuestPools,
+    /// The reference's `0xbe0840`: the last escort confirm's quest, written by its packet
+    /// (`0x5019c7`), never cleared, and sent by `ConfirmAcceptQuest` (`0x5021e0`).
+    pub(crate) confirm: u32,
     /// Per-guid dialog status from `SMSG_QUESTGIVER_STATUS`, the `!`/`?` marker's value.
     statuses: HashMap<u64, u32>,
     /// Messages queued for [`feed_quest`], each a GlobalStrings key and its fills.
@@ -70,9 +75,41 @@ pub(crate) struct QuestGiver {
     panels_asked: u64,
 }
 
+/// The greeting's pools, the available quests (`0xbdfe60`, its count `0xbe0834`) with each row's
+/// one-click flag, and the active ones (`0xbde690`, `0xbe0838`): 32 rows each, cleared whole and
+/// refilled by a greeting (`0x500c41`, `0x500e40`, `0x500e90`) and zeroed at world enter
+/// (`0x500b21`), so they outlive the greeting panel and the window.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct QuestPools {
+    pub(crate) available: Vec<(u32, bool)>,
+    pub(crate) active: Vec<u32>,
+}
+
+impl QuestPools {
+    /// The rows each pool holds.
+    pub(crate) const ROWS: usize = 32;
+
+    /// A greeting's rows: active for icon 3 or 4, else available, one-click for icon 0
+    /// (`0x5dbbfe`-`0x5dbc13`).
+    fn of(list: &QuestGiverList) -> Self {
+        let mut pools = Self::default();
+        for q in &list.quests {
+            if row_is_active(q.icon) {
+                pools.active.push(q.quest_id);
+            } else {
+                pools.available.push((q.quest_id, row_is_one_click(q.icon)));
+            }
+        }
+        pools
+    }
+}
+
 impl QuestGiver {
     /// Open (or replace) the window with a fresh wire view for `npc`.
     pub(crate) fn open(&mut self, npc: u64, view: QuestView) {
+        if let QuestView::Greeting(list) = &view {
+            self.pools = QuestPools::of(list);
+        }
         self.npc = Some(npc);
         self.view = Some(view);
         self.panels = self.panels.wrapping_add(1);
@@ -166,6 +203,7 @@ impl QuestGiver {
         self.acted = false;
         self.chosen_reward = 0;
         self.teardown = None;
+        self.pools = QuestPools::default();
     }
 }
 
@@ -571,31 +609,38 @@ enum DeclineLeg {
     QuestgiverHello,
 }
 
-/// `DeclineQuest`'s fork (`0x5013f0`, called by its binding `0x501d30`); the re-open legs leave
-/// the window up, and items and players are taken by guid shape. In order:
+/// `DeclineQuest`'s fork (`0x5013f0`, called by its binding `0x501d30`) on the source's type mask
+/// and NPC flags, `None` when it is not in view; the re-open legs leave the window up. In order:
 ///
-/// 1. the already-acted latch set, or the source unresolvable: nothing;
-/// 2. a unit with the gossip NPC flag: `CMSG_GOSSIP_HELLO`, whatever `0xbe0824` says;
-/// 3. an item, a player, or a non-zero `0xbe0824`: the teardown `0x501130(0,1)`;
-/// 4. a GameObject: its interact virtual `[vtbl+0x60]` (`0x5014d0`), whose override is untraced,
-///    so it takes the teardown here;
-/// 5. any other unit: `CMSG_QUESTGIVER_HELLO`.
-fn decline_leg(npc: u64, acted: bool, close_on_cancel: u32, npc_flags: Option<u32>) -> DeclineLeg {
-    use benilla_protocol::guid;
+/// 1. the already-acted latch set (`0x5013fe`), or the source unresolved (`0x50142c`): nothing;
+/// 2. a unit with the gossip NPC flag, and the active player (`0x50143b`-`0x50146b`):
+///    `CMSG_GOSSIP_HELLO`, whatever `0xbe0824` says;
+/// 3. an item, a player, or a non-zero `0xbe0824` (`0x501496`-`0x5014a2`): the teardown
+///    `0x501130(0,1)`;
+/// 4. a GameObject (`0x5014bf`): its interact virtual `[vtbl+0x60]` (`0x5014d0`), whose override
+///    is untraced, so it takes the teardown here;
+/// 5. anything else: `CMSG_QUESTGIVER_HELLO` (`0x501526`).
+fn decline_leg(
+    acted: bool,
+    close_on_cancel: u32,
+    source: Option<(u32, u32)>,
+    player: bool,
+) -> DeclineLeg {
+    // `TYPEMASK_ITEM`, `_UNIT`, `_PLAYER` and `_GAMEOBJECT`.
+    const ITEM: u32 = 0x2;
+    const UNIT: u32 = 0x8;
+    const PLAYER: u32 = 0x10;
+    const GAMEOBJECT: u32 = 0x20;
     if acted {
         return DeclineLeg::Nothing;
     }
-    if guid::is_player(npc) || guid::is_item(npc) {
-        return DeclineLeg::Teardown;
-    }
-    let Some(flags) = npc_flags else {
+    let Some((mask, flags)) = source else {
         return DeclineLeg::Nothing;
     };
-    let unit = guid::is_creature_or_pet(npc);
-    if unit && flags & crate::target::cursor_mode::npc_flags::GOSSIP != 0 {
+    if mask & UNIT != 0 && flags & crate::target::cursor_mode::npc_flags::GOSSIP != 0 && player {
         return DeclineLeg::GossipHello;
     }
-    if close_on_cancel != 0 || !unit {
+    if mask & (ITEM | PLAYER) != 0 || close_on_cancel != 0 || mask & GAMEOBJECT != 0 {
         return DeclineLeg::Teardown;
     }
     DeclineLeg::QuestgiverHello

@@ -334,13 +334,16 @@ fn the_escort_confirm_is_on_the_wire_before_the_next_line() {
         world
             .resource_mut::<crate::names::NameCache>()
             .insert_player(0x9, "Bob".into(), None);
-        world
-            .resource_mut::<crate::ui_quest_share::QuestShare>()
-            .set_confirm(QuestConfirmAccept {
-                quest_id: 5,
-                title: "Escort".into(),
-                sender: 0x9,
-            });
+        crate::net::handlers::dispatch(
+            world,
+            vec![benilla_protocol::SessionEvent::QuestConfirmAccept(
+                QuestConfirmAccept {
+                    quest_id: 5,
+                    title: "Escort".into(),
+                    sender: 0x9,
+                },
+            )],
+        );
         world
             .run_system_cached(crate::ui_quest_share::feed_quest_share)
             .expect("the feed runs");
@@ -552,7 +555,6 @@ fn the_pools_outlive_the_greeting_panel_and_the_window() {
     c.open(greeting());
     c.run("CloseQuest()").unwrap();
     c.drain();
-    c.app.update();
     c.sent();
     c.run("SelectActiveQuest(1)").unwrap();
     assert_eq!(c.sent(), ["QuestgiverComplete { npc: 0, quest: 5 }"]);
