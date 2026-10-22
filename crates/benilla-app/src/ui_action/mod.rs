@@ -93,7 +93,7 @@ pub(crate) struct PlayerActions {
     /// macro rebind drains it ([`crate::ui_macro`]).
     pub superseded: Vec<(u32, u32)>,
     /// The spells `SMSG_REMOVED_SPELL` unlearned (`0x5e9fe0`), in arrival order, whose bar slots
-    /// the unlearn clears (`0x5ea253` into `0x4e5e20`); drained by `unlearn::clear_unlearned_slots`.
+    /// the unlearn clears (`0x5ea253` into `0x4e5e20`), drained by the bar's clear (`unlearn`).
     pub unlearned: Vec<u32>,
     /// Set by every book or bar change, cleared once the feed re-resolves slot identity, which a
     /// landed item template ([`crate::items::Items::template_epoch`]) also triggers. Between

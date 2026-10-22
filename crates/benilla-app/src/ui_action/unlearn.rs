@@ -3,14 +3,64 @@
 
 use bevy::prelude::*;
 
-use super::PlayerActions;
+use benilla_protocol::messages::{ACTION_KIND_ITEM, ACTION_KIND_SPELL};
+use benilla_ui::script::macro_slot_id;
 
-/// Drains the unlearned spells the removed-spell message queued ([`PlayerActions::unlearned`]).
-pub(super) fn clear_unlearned_slots(mut actions: ResMut<PlayerActions>) {
+use super::PlayerActions;
+use crate::items::Items;
+use crate::net::{ClientCommand, NetCommands};
+use crate::query_cache::Ask;
+use crate::ui_macro::{BoundSpell, MacroBoundSpells};
+
+/// `0x4e5e20` for each spell the removed-spell message unlearned ([`PlayerActions::unlearned`]):
+/// the 120 slots in order, each whose spell `0x4e5a50` resolves to it cleared with a send of 0
+/// (`0x4e5e40` into `0x4e5db0`). A spell slot resolves to its word, a macro slot to its cached
+/// spell whatever its book (`0x4e5ba0`), an item slot to its template's on-use spell
+/// (`0x4e5ae0`), none while the template is not cached. The identity feed then signals each
+/// cleared slot.
+pub(super) fn clear_unlearned_slots(
+    mut actions: ResMut<PlayerActions>,
+    bound: Res<MacroBoundSpells>,
+    items: Res<Items>,
+    commands: Res<NetCommands>,
+) {
     if actions.unlearned.is_empty() {
         return;
     }
-    actions.unlearned.clear();
+    let unlearned = std::mem::take(&mut actions.unlearned);
+    for spell in unlearned {
+        let mut slots: Vec<u8> = actions
+            .buttons
+            .values()
+            .filter(|b| {
+                let resolved = match b.kind {
+                    ACTION_KIND_SPELL => Some(b.action),
+                    ACTION_KIND_ITEM => items
+                        .template(b.action, 0, Ask::Read)
+                        .and_then(|t| t.use_spell)
+                        .map(|u| u.spell_id),
+                    kind => macro_slot_id(kind, b.action)
+                        .and_then(|id| bound.0.get(&id))
+                        .and_then(|b| match b.spell {
+                            BoundSpell::Spell(s) => Some(s),
+                            _ => None,
+                        }),
+                };
+                resolved == Some(spell)
+            })
+            .map(|b| b.slot)
+            .collect();
+        slots.sort_unstable();
+        for slot in slots {
+            actions.buttons.remove(&slot);
+            actions.dirty = true;
+            debug!("ui_action: unlearned spell {spell} clears wire slot {slot}");
+            let _ = commands.0.send(ClientCommand::SetActionButton {
+                button: slot,
+                packed: 0,
+            });
+        }
+    }
 }
 
 #[cfg(test)]
