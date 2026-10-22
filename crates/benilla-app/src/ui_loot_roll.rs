@@ -330,36 +330,105 @@ impl Plugin for UiLootRollPlugin {
     }
 }
 
-/// Pick and fill an announcement: the enUS strings of `GlobalStrings.lua:2614-2633`, inlined where
-/// the reference reads the install's. It branches on `roll_number` first: a Greed vote is
-/// `(128, 2)`, a Greed dice roll `(1..=100, 2)`. The dice line has no self form: the reference's
-/// shared tail (`0x61c320`) picks `ROLLED_GREED` for rollType 2, else `ROLLED_NEED`, with no self
-/// test.
+/// Pick and fill an announcement: the key's template from the install's strings
+/// (`FrameScript_GetText`, `0x703bf0`), filled with the pieces the reference pushes, or `None` for
+/// no line, as for a key the strings lack.
 ///
-/// `detailed` is `showLootSpam` (`0xb4e2bc`). At 0, vote and dice lines drop (`0x61c0b0`, `None`
-/// here) and the won line (`0x61b9e0`) takes `*_NO_SPAM_NEED`/`_GREED` with the roll number, Need
-/// on `rollType == 1`; all-passed is never gated (`0x61b640`).
+/// A vote or dice line (`0x61c0b0`) branches on `roll_number` as a signed byte and the type: a
+/// negative number with type 2 is a Greed vote (`0x61c162`-`0x61c16c`), any other negative one a
+/// pass (`0x61c1ae`), a non-negative one with type 0 a Need vote (`0x61c1f5`), and anything else a
+/// dice result, `ROLLED_GREED` for type 2 and `ROLLED_NEED` otherwise, with no self form
+/// (`0x61c320`). A vote has a `_SELF` form for the active player (`0x61c144`-`0x61c159`); another's
+/// takes the name first (`0x61c266`), and a dice line the number first and the name last
+/// (`0x61c326`, `0x61c33d`).
+///
+/// `detailed` is `showLootSpam` (`0xb4e2bc`). At 0, vote and dice lines drop (`0x61c0b9`) and the
+/// won line (`0x61b9e0`) takes `*_NO_SPAM_NEED` on `rollType == 1`, else `_GREED`, with the roll
+/// number after the name (`0x61baa2`, `0x61bb6a`); all-passed is never gated (`0x61b640`).
 fn format_line(
     line: &RollLine,
     name: Option<&str>,
     is_self: bool,
     item: &RollItem,
     detailed: bool,
-    _get: &dyn Fn(&str) -> Option<String>,
+    get: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    if !detailed {
-        if let RollLine::Announce(_) = line {
-            // `0x61c0b9`: the composer frees the node and returns.
-            return None;
+    use benilla_ui::strings::{fill, Arg};
+    let color = format!("|c{}", crate::ui_items::quality_color(item.quality));
+    let pieces = [
+        Arg::S(&color),
+        Arg::D(i64::from(item.item_id as i32)),
+        Arg::D(0),
+        Arg::D(i64::from(item.random_property_id as i32)),
+        Arg::D(0),
+        Arg::S(&item.name),
+        Arg::S("|r"),
+    ];
+    let name = Arg::S(name.unwrap_or_default());
+    let (key, args): (&str, Vec<Arg<'_>>) = match line {
+        RollLine::Announce(_) if !detailed => return None,
+        RollLine::Announce(p) => {
+            let number = p.roll_number as i8;
+            let vote = |own: &'static str, other: &'static str| {
+                if is_self {
+                    (own, pieces.to_vec())
+                } else {
+                    (other, [&[name][..], &pieces].concat())
+                }
+            };
+            match (number < 0, p.roll_type) {
+                (true, roll_vote::GREED) => vote("LOOT_ROLL_GREED_SELF", "LOOT_ROLL_GREED"),
+                (true, _) => vote("LOOT_ROLL_PASSED_SELF", "LOOT_ROLL_PASSED"),
+                _ if !is_dice(p) => vote("LOOT_ROLL_NEED_SELF", "LOOT_ROLL_NEED"),
+                (false, roll_type) => (
+                    if roll_type == roll_vote::GREED {
+                        "LOOT_ROLL_ROLLED_GREED"
+                    } else {
+                        "LOOT_ROLL_ROLLED_NEED"
+                    },
+                    [&[Arg::D(i64::from(number))][..], &pieces, &[name]].concat(),
+                ),
+            }
         }
-    }
-    Some(format_line_detailed(
-        line,
-        name,
-        is_self,
-        &item.link(),
-        detailed,
-    ))
+        RollLine::Won(_) if detailed => {
+            if is_self {
+                ("LOOT_ROLL_YOU_WON", pieces.to_vec())
+            } else {
+                ("LOOT_ROLL_WON", [&[name][..], &pieces].concat())
+            }
+        }
+        RollLine::Won(p) => {
+            let need = p.roll_type == roll_vote::NEED;
+            let number = Arg::D(i64::from(p.roll_number as i8));
+            match (is_self, need) {
+                (true, true) => (
+                    "LOOT_ROLL_YOU_WON_NO_SPAM_NEED",
+                    [&[number][..], &pieces].concat(),
+                ),
+                (true, false) => (
+                    "LOOT_ROLL_YOU_WON_NO_SPAM_GREED",
+                    [&[number][..], &pieces].concat(),
+                ),
+                (false, true) => (
+                    "LOOT_ROLL_WON_NO_SPAM_NEED",
+                    [&[name, number][..], &pieces].concat(),
+                ),
+                (false, false) => (
+                    "LOOT_ROLL_WON_NO_SPAM_GREED",
+                    [&[name, number][..], &pieces].concat(),
+                ),
+            }
+        }
+        RollLine::AllPassed(_) => ("LOOT_ROLL_ALL_PASSED", pieces.to_vec()),
+    };
+    let text = fill(&get(key)?, &args);
+    (!text.is_empty()).then_some(text)
+}
+
+/// Whether an announcement is a dice result: a roll number non-negative as a signed byte, with a
+/// type other than 0, the Need vote's (`0x61c1ae`, `0x61c1f5`).
+fn is_dice(p: &LootRoll) -> bool {
+    p.roll_number as i8 >= 0 && p.roll_type != 0
 }
 
 /// The item pieces every roll line's template carries after its names: the quality's colour
@@ -372,83 +441,8 @@ struct RollItem {
     name: String,
 }
 
-impl RollItem {
-    /// The pieces as one item link.
-    fn link(&self) -> String {
-        crate::ui_items::item_link_full(
-            self.item_id,
-            0,
-            self.random_property_id,
-            0,
-            &self.name,
-            self.quality,
-        )
-    }
-}
-
-fn format_line_detailed(
-    line: &RollLine,
-    name: Option<&str>,
-    is_self: bool,
-    link: &str,
-    detailed: bool,
-) -> String {
-    match line {
-        // A dice result, checked before the vote shapes.
-        RollLine::Announce(p) if p.is_dice() => {
-            let n = p.roll_number;
-            let w = name.unwrap_or_default();
-            // `LOOT_ROLL_ROLLED_NEED`/`_GREED`, with no self form: `is_self` is unread. Need on
-            // type 1, else Greed, where the reference's tail takes Greed on 2, else Need: the two
-            // agree on the 1 and 2 vmangos sends (`Group.cpp:1163,1214`).
-            match p.roll_type {
-                roll_vote::NEED => format!("Need Roll - {n} for {link} by {w}"),
-                _ => format!("Greed Roll - {n} for {link} by {w}"),
-            }
-        }
-        RollLine::Announce(p) => match (is_self, p.vote()) {
-            // `LOOT_ROLL_NEED_SELF`, `_GREED_SELF`, `_PASSED_SELF`.
-            (true, Some(roll_vote::NEED)) => format!("You have selected Need for: {link}"),
-            (true, Some(roll_vote::GREED)) => format!("You have selected Greed for: {link}"),
-            (true, _) => format!("You passed on: {link}"),
-            // `LOOT_ROLL_NEED`, `_GREED`, `_PASSED`.
-            (false, Some(roll_vote::NEED)) => {
-                format!("{} has selected Need for: {link}", name.unwrap_or_default())
-            }
-            (false, Some(roll_vote::GREED)) => {
-                format!(
-                    "{} has selected Greed for: {link}",
-                    name.unwrap_or_default()
-                )
-            }
-            (false, _) => format!("{} passed on: {link}", name.unwrap_or_default()),
-        },
-        // `*_NO_SPAM_*`: with detail off this is the roll's only line, so it carries the number.
-        RollLine::Won(p) if !detailed => {
-            let kind = if p.roll_type == roll_vote::NEED {
-                "Need"
-            } else {
-                "Greed"
-            };
-            let n = p.roll_number;
-            if is_self {
-                format!("You won: {link} |cff818181({kind} - {n})|r")
-            } else {
-                format!(
-                    "{} won: {link} |cff818181({kind} - {n})|r",
-                    name.unwrap_or_default()
-                )
-            }
-        }
-        // `LOOT_ROLL_YOU_WON`, `LOOT_ROLL_WON`.
-        RollLine::Won(_) if is_self => format!("You won: {link}"),
-        RollLine::Won(_) => format!("{} won: {link}", name.unwrap_or_default()),
-        // `LOOT_ROLL_ALL_PASSED` names nobody.
-        RollLine::AllPassed(_) => format!("Everyone passed on: {link}"),
-    }
-}
-
-/// Render one queued announcement, or `None` while a name it needs is in flight.
+/// Render one queued announcement: `Some(None)` for no line, `None` while a name it needs is in
+/// flight.
 fn render(
     line: &RollLine,
     self_guid: Option<u64>,
@@ -458,7 +452,7 @@ fn render(
     rolls: crate::items::RollCatalogs,
     detailed: bool,
     get: &dyn Fn(&str) -> Option<String>,
-) -> Option<String> {
+) -> Option<Option<String>> {
     // Every line embeds the item link, so the template comes first.
     let (looted_item, roll, roller) = match line {
         RollLine::Announce(p) => (p.item_id, p.random_property_id, Some(p.roller)),
@@ -478,7 +472,7 @@ fn render(
 
     // Every third-person line needs a name, and so does our own dice line (no self form).
     let needs_name = match line {
-        RollLine::Announce(p) => p.is_dice() || !is_self,
+        RollLine::Announce(p) => is_dice(p) || !is_self,
         RollLine::Won(_) => !is_self,
         RollLine::AllPassed(_) => false,
     };
@@ -487,8 +481,14 @@ fn render(
         _ => None,
     };
 
-    // Never `None` here: the caller drops suppressed lines, as a `None` from here means retry.
-    format_line(line, name.as_deref(), is_self, &item, detailed, get)
+    Some(format_line(
+        line,
+        name.as_deref(),
+        is_self,
+        &item,
+        detailed,
+        get,
+    ))
 }
 
 /// Post the queued announcements as `CHAT_MSG_LOOT` lines, as the reference does.
@@ -519,7 +519,8 @@ fn drain_lines(
         match render(
             &p.line, self_guid, items, names, ask, catalogs, detailed, get,
         ) {
-            Some(text) => chat.push_event(ChatEvent::text_only(ChatEventKind::Loot, text)),
+            Some(Some(text)) => chat.push_event(ChatEvent::text_only(ChatEventKind::Loot, text)),
+            Some(None) => {}
             None => {
                 p.tries += 1;
                 if p.tries < LINE_MAX_TRIES {

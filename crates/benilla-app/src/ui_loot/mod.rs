@@ -924,16 +924,25 @@ impl Candidates<'_> {
     }
 }
 
-/// `OnItemPush`'s self line (`0x491bfb`): its `%s` is an item link (`0x52adb0`, at `0x491c43`),
-/// so a count after it takes the line's own colour. The strings are `GlobalStrings.lua:2599-2605`,
-/// with no space before `x%d`; created wins over received (`0x491c04`-`0x491c1b`).
-fn receive_line(r: &PendingReceive, name: &str, quality: u32) -> String {
-    let verb = if r.created {
-        "You create"
-    } else if r.from_npc {
-        "You receive item"
-    } else {
-        "You receive loot"
+/// `OnItemPush`'s self line (`0x491bfb`): the template read through `FrameScript_GetText`
+/// (`0x491c25`, `0x491c81`), created winning over pushed by an NPC over looted
+/// (`0x491c04`-`0x491c1b`), each with a `_MULTIPLE` form for a count above 1 (`jg`), filled with
+/// the item's link (`0x52adb0`, at `0x491c43`) and the count; `None`, for no line, when the
+/// strings lack it.
+fn receive_line(
+    r: &PendingReceive,
+    name: &str,
+    quality: u32,
+    get: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    use benilla_ui::strings::{fill, Arg};
+    let key = match (r.created, r.from_npc, r.count > 1) {
+        (true, _, false) => "LOOT_ITEM_CREATED_SELF",
+        (true, _, true) => "LOOT_ITEM_CREATED_SELF_MULTIPLE",
+        (false, true, false) => "LOOT_ITEM_PUSHED_SELF",
+        (false, true, true) => "LOOT_ITEM_PUSHED_SELF_MULTIPLE",
+        (false, false, false) => "LOOT_ITEM_SELF",
+        (false, false, true) => "LOOT_ITEM_SELF_MULTIPLE",
     };
     let link = crate::ui_items::item_link_full(
         r.entry,
@@ -943,17 +952,13 @@ fn receive_line(r: &PendingReceive, name: &str, quality: u32) -> String {
         name,
         quality,
     );
-    if r.count > 1 {
-        format!("{verb}: {link}x{}.", r.count)
-    } else {
-        format!("{verb}: {link}.")
-    }
+    let text = fill(
+        &get(key)?,
+        &[Arg::S(&link), Arg::D(i64::from(r.count as i32))],
+    );
+    (!text.is_empty()).then_some(text)
 }
 
-/// Emits each push whose template has landed, in `OnItemPush`'s order: `ITEM_PUSH` first
-/// (`0x491be8`), then the chat line if the wire asked for it. Deviation: a push is dropped after
-/// [`RECEIVE_MAX_TRIES`] frames, where the reference waits on the item-cache callback with no
-/// timeout, because an entry the server never describes would otherwise stay queued.
 fn drain_receives(
     pending: Vec<PendingReceive>,
     items: &Items,
@@ -991,10 +996,18 @@ fn drain_receives(
                         vec![ScriptValue::Int(r.container), ScriptValue::Str(icon)],
                     );
                 }
-                if r.in_chat {
+                let line = r.in_chat.then(|| {
+                    receive_line(
+                        &r,
+                        &rolls.name(&name, r.random_property_id),
+                        quality,
+                        &|key| benilla_ui::strings::global(script.lua(), key),
+                    )
+                });
+                if let Some(text) = line.flatten() {
                     chat.push_event(crate::ui_chat::ChatEvent::text_only(
                         crate::ui_chat::ChatEventKind::Loot,
-                        receive_line(&r, &rolls.name(&name, r.random_property_id), quality),
+                        text,
                     ));
                 }
             }
@@ -2653,26 +2666,46 @@ mod tests {
         );
     }
 
+    thread_local! {
+        /// The install's `GlobalStrings.lua`, for the receive lines' enUS text.
+        static STRINGS: UiScript = {
+            let s = UiScript::new().expect("VM");
+            crate::ui_script::test_ui::load_ui(&s, "Interface\\FrameXML\\GlobalStrings.lua");
+            s
+        };
+    }
+
+    /// [`receive_line`] from the install's strings.
+    fn receive_text(r: &PendingReceive, name: &str, quality: u32) -> String {
+        STRINGS.with(|s| {
+            receive_line(r, name, quality, &|key| {
+                benilla_ui::strings::global(s.lua(), key)
+            })
+            .expect("a template for every receive line")
+        })
+    }
+
     /// The count after the link's `|r` takes the line's own colour.
     #[test]
     fn receive_line_carries_a_quality_colored_item_link() {
+        let _data = benilla_formats::wow_data_or_skip!();
         // Common, single: `LOOT_ITEM_SELF`.
         assert_eq!(
-            receive_line(&pending(2589, 1, false, false), "Linen Cloth", 1),
+            receive_text(&pending(2589, 1, false, false), "Linen Cloth", 1),
             "You receive loot: |cffffffff|Hitem:2589:0:0:0|h[Linen Cloth]|h|r."
         );
         // Poor, stacked: `LOOT_ITEM_SELF_MULTIPLE`, with no space before `x2`.
         assert_eq!(
-            receive_line(&pending(7092, 2, false, false), "Chipped Claw", 0),
+            receive_text(&pending(7092, 2, false, false), "Chipped Claw", 0),
             "You receive loot: |cff9d9d9d|Hitem:7092:0:0:0|h[Chipped Claw]|h|rx2."
         );
         // The (created, received) pair picks the verb, created winning over received.
         assert_eq!(
-            receive_line(&pending(4306, 1, true, false), "Silk Cloth", 2),
+            receive_text(&pending(4306, 1, true, false), "Silk Cloth", 2),
             "You receive item: |cff1eff00|Hitem:4306:0:0:0|h[Silk Cloth]|h|r."
         );
         assert_eq!(
-            receive_line(&pending(2320, 4, true, true), "Coarse Thread", 1),
+            receive_text(&pending(2320, 4, true, true), "Coarse Thread", 1),
             "You create: |cffffffff|Hitem:2320:0:0:0|h[Coarse Thread]|h|rx4."
         );
     }
@@ -2680,6 +2713,7 @@ mod tests {
     /// `|Hitem:id:0:randomPropertyId:suffixFactor|h`, `0x52adb0`'s argument order.
     #[test]
     fn receive_line_carries_the_wire_random_property_fields() {
+        let _data = benilla_formats::wow_data_or_skip!();
         let mut loot = LootState::default();
         loot.push_receive(
             &ItemPushResult {
@@ -2691,7 +2725,7 @@ mod tests {
         );
         let r = loot.take_push().expect("queued");
         assert_eq!(
-            receive_line(&r, "Bloodrazor", 3),
+            receive_text(&r, "Bloodrazor", 3),
             "You receive loot: |cff0070dd|Hitem:15268:0:862:1234|h[Bloodrazor]|h|r."
         );
     }
@@ -2743,8 +2777,9 @@ mod tests {
     /// `0x52ad90` clamps a quality outside the table to 1, white.
     #[test]
     fn receive_line_clamps_an_out_of_range_quality_to_white() {
+        let _data = benilla_formats::wow_data_or_skip!();
         assert_eq!(
-            receive_line(&pending(1, 1, false, false), "Odd Thing", 9),
+            receive_text(&pending(1, 1, false, false), "Odd Thing", 9),
             "You receive loot: |cffffffff|Hitem:1:0:0:0|h[Odd Thing]|h|r."
         );
     }
