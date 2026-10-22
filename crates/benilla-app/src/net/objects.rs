@@ -84,7 +84,8 @@ pub(crate) struct Scene<'w, 's> {
     riders: Query<'w, 's, &'static mut crate::transport::TransportRider>,
     speeds: Query<'w, 's, &'static mut UnitSpeeds>,
     field_changes: MessageWriter<'w, FieldChanged>,
-    item_notices: MessageWriter<'w, crate::item_watch::ItemNotice>,
+    /// The item watchers' runs ([`crate::item_lane`]).
+    item_lane: ResMut<'w, crate::item_lane::ItemLane>,
     field_notices: ResMut<'w, crate::field_watch::NoticeLane>,
     /// The guid-scoped selection teardowns (`0x493910(guid, 1)`) a watcher raises.
     deselect: MessageWriter<'w, crate::target::DeselectGuid>,
@@ -157,27 +158,21 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             let trade_waiters = sc.items.take_trade_waiters(entry);
             let ammo_waiters = sc.items.take_ammo_waiters(entry);
             if landed {
-                let (notices, signals) = {
+                let runs = {
                     let (index, stores) = (&sc.index, &sc.stores);
-                    let held = || {
-                        index
-                            .0
-                            .iter()
-                            .filter_map(|(&g, &e)| stores.get(e).ok().map(|s| (g, &s.0)))
-                    };
-                    let watch = item_watch(index, stores, &sc.self_guid, &sc.items);
-                    (
-                        watch.record_landed(entry, held(), &waiters),
-                        watch.landed_signals(entry, held(), &waiters),
-                    )
+                    let held = index
+                        .0
+                        .iter()
+                        .filter_map(|(&g, &e)| stores.get(e).ok().map(|s| (g, &s.0)));
+                    item_watch(index, stores, &sc.self_guid, &sc.items)
+                        .landed_runs(entry, held, &waiters)
                 };
-                for notice in &notices {
-                    if let crate::item_watch::ItemNotice::Record { guid, .. } = *notice {
+                for run in runs {
+                    if let Some(crate::item_watch::ItemNotice::Record { guid, .. }) = run.notice {
                         replay_enchant_times(&mut sc.items, &mut sc.countdowns, &sc.index, guid);
                     }
+                    sc.item_lane.push(run);
                 }
-                sc.item_notices.write_batch(notices);
-                sc.field_notices.write_batch(signals);
             }
             // The combat log's callback for its held lines (`0x6294b0`), which writes each one
             // whose item the cache now holds.
@@ -192,10 +187,12 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             // The trade getters' and the ammo getters' callbacks run for a ready record only
             // (`0x4c0343`, `0x4c84f6`).
             if answered {
-                sc.item_notices.write_batch(std::iter::repeat_n(
-                    crate::item_watch::ItemNotice::TradeRecord { entry },
-                    trade_waiters,
-                ));
+                for _ in 0..trade_waiters {
+                    sc.item_lane.push(crate::item_watch::Run {
+                        notice: Some(crate::item_watch::ItemNotice::TradeRecord { entry }),
+                        signals: Vec::new(),
+                    });
+                }
                 sc.field_notices.write_batch(std::iter::repeat_n(
                     crate::field_watch::FieldNotice::Player {
                         id: crate::field_watch::id::UNIT_INVENTORY_CHANGED,
@@ -1187,9 +1184,8 @@ mod tests {
             ]),
         );
         let notices: Vec<ItemNotice> = world
-            .resource_mut::<Messages<ItemNotice>>()
-            .drain()
-            .collect();
+            .resource_mut::<crate::item_lane::ItemLane>()
+            .drain_notices();
         assert_eq!(
             notices,
             [
@@ -1240,9 +1236,8 @@ mod tests {
             super::wire(vec![answer(4306, true), answer(7777, false)]),
         );
         let notices: Vec<ItemNotice> = world
-            .resource_mut::<Messages<ItemNotice>>()
-            .drain()
-            .collect();
+            .resource_mut::<crate::item_lane::ItemLane>()
+            .drain_notices();
         assert_eq!(
             notices,
             [
@@ -1257,17 +1252,15 @@ mod tests {
             super::wire(vec![answer(4306, true), answer(7777, true)]),
         );
         assert!(world
-            .resource_mut::<Messages<ItemNotice>>()
-            .drain()
-            .next()
-            .is_none());
+            .resource_mut::<crate::item_lane::ItemLane>()
+            .drain_notices()
+            .is_empty());
         // The one still waiting runs on its own answer.
         super::super::handlers::dispatch(world, super::wire(vec![answer(2592, true)]));
         assert_eq!(
             world
-                .resource_mut::<Messages<ItemNotice>>()
-                .drain()
-                .collect::<Vec<_>>(),
+                .resource_mut::<crate::item_lane::ItemLane>()
+                .drain_notices(),
             [ItemNotice::TradeRecord { entry: 2592 }]
         );
     }
@@ -1339,9 +1332,22 @@ mod tests {
                 SessionEvent::ObjectDestroyed(HELM),
             ]),
         );
-        let inventory: Vec<FieldNotice> = world
+        // Both lanes, in stamp order: the item watchers' runs carry their own signals.
+        let mut stamped: Vec<(crate::lanes::Stamp, FieldNotice)> = world
             .resource_mut::<crate::field_watch::NoticeLane>()
-            .drain()
+            .drain_stamped()
+            .collect();
+        stamped.extend(
+            world
+                .resource_mut::<crate::item_lane::ItemLane>()
+                .drain_stamped()
+                .into_iter()
+                .flat_map(|(s, r)| r.signals.into_iter().map(move |n| (s, n))),
+        );
+        stamped.sort_by_key(|&(s, _)| s);
+        let inventory: Vec<FieldNotice> = stamped
+            .into_iter()
+            .map(|(_, n)| n)
             .filter(|n| match *n {
                 FieldNotice::Unit { id, .. }
                 | FieldNotice::Signal { id, .. }
@@ -1618,9 +1624,8 @@ mod tests {
 
     fn drain_notices(world: &mut World) -> Vec<crate::item_watch::ItemNotice> {
         world
-            .resource_mut::<Messages<crate::item_watch::ItemNotice>>()
-            .drain()
-            .collect()
+            .resource_mut::<crate::item_lane::ItemLane>()
+            .drain_notices()
     }
 
     /// Every item's first create asks for its record with the callback `0x5d8390` (`0x5d8300`),

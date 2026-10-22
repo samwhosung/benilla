@@ -610,10 +610,7 @@ impl Plugin for UiTradePlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_cvar);
         net::register(app);
-        // A UI-only harness has no net stack; declaring a message twice is idempotent.
-        app.add_message::<crate::item_watch::ItemNotice>();
         app.init_resource::<TradeSession>()
-            .init_resource::<TradeTouchCursor>()
             .init_resource::<BlockTrades>()
             .add_latched_window::<TradeSession>()
             .add_sweep_leg(SweepLeg::Trade, cancel_trade_on_leave_world)
@@ -624,11 +621,6 @@ impl Plugin for UiTradePlugin {
                     // the input pass, with the drain after it, so each lands the same frame. The
                     // latch's watchdog leashes the partner at 14 yd.
                     feed_trade.after(crate::ui_unit::UnitFeed).in_set(UiFeed),
-                    // Each item handler runs the action bar's recount before the trade scan
-                    // (`0x5d94e1` then `0x5d94f0`).
-                    resignal_trade_items
-                        .in_set(crate::ui_unit::UnitFeed)
-                        .after(crate::ui_action::recount_item_actions),
                     // Ahead of the feed, so an accepted partner shows the frame the window opens.
                     answer_trade_request
                         .after(crate::player::ControlRestore)
@@ -941,111 +933,115 @@ impl TradeRows<'_> {
     }
 }
 
-/// Where the trade scan has read the item notices to, shared by its scheduled run and the close
-/// paths' early one so no notice is scanned twice.
-#[derive(Resource, Default)]
-pub(crate) struct TradeTouchCursor(
-    bevy::ecs::message::MessageCursor<crate::item_watch::ItemNotice>,
-);
-
-/// Run the trade scan ([`resignal_trade_items`]) on the notices not yet read, ahead of a close: the
-/// destroys of the traded items arrive before the close in the packet stream, and their scan ran
-/// at their turn in the reference.
+/// Run the trade half of every item watcher run still on the item lane, ahead of a close
+/// ([`crate::item_lane::ItemLane::take_trade_touches`]): vmangos sends the traded items' destroys
+/// before `TRADE_COMPLETE` (`TradeHandler.cpp:469`, `Player.cpp:10710`, then `:526`), the destroy
+/// releases at once (`0x4674cf` → `0x464920`), so the clears and `TRADE_PLAYER_ITEM_CHANGED`
+/// belong ahead of the close, not at the lanes' drain after it.
 fn drain_trade_touches(world: &mut World) {
-    if world.get_resource::<TradeTouchCursor>().is_none()
-        || world
-            .get_resource::<Messages<crate::item_watch::ItemNotice>>()
-            .is_none()
-    {
+    let touches = world
+        .get_resource_mut::<crate::item_lane::ItemLane>()
+        .map(|mut lane| lane.take_trade_touches())
+        .unwrap_or_default();
+    if touches.is_empty() {
         return;
     }
-    let _ = crate::script_calls::run_cached(world, resignal_trade_items);
+    let _ = world.run_system_cached_with(scan_trade_touches, touches);
+    crate::creature_anim::apply_unit_edits(world);
 }
 
-/// The item watchers' trade half, after the action bar's recount in each handler: an item of
-/// ours that one of our slots holds re-signals the slot (`0x4bfb10`, `0x4bfb60` into `0x4bfa70`).
-/// Gone, the slot clears with `CMSG_CLEAR_TRADE_ITEM` (`0x5d4480`), as a click's clear does;
-/// restacked or enchanted, the same item is placed again with `CMSG_SET_TRADE_ITEM` from the
-/// position it was placed from (`0x5d4380`), our session's offer left as it is. vmangos refuses an
-/// item its trade already holds and cancels the trade (`TradeHandler.cpp:716-720`), as it does
-/// for the reference's send. Neither scan asks whether a trade is open.
-///
-/// The scan reads the notices through [`TradeTouchCursor`], which the close paths share
-/// ([`drain_trade_touches`]): vmangos sends the traded items' destroys before `TRADE_COMPLETE`
-/// (`TradeHandler.cpp:469`, `Player.cpp:10710`, then `:526`), the destroy releases at once
-/// (`0x4674cf` → `0x464920`), so the clears and `TRADE_PLAYER_ITEM_CHANGED` belong ahead of the
-/// close, not a stage after it.
-#[allow(clippy::too_many_arguments)] // the scan's reads
-fn resignal_trade_items(
+/// [`touch_trade`] on each of `touches`, in order, as one engine turn.
+fn scan_trade_touches(
+    In(touches): In<Vec<crate::item_watch::TradeTouch>>,
     mut vm: crate::script_calls::VmWith<ResMut<'static, TradeSession>>,
-    mut cursor: ResMut<TradeTouchCursor>,
-    messages: Res<Messages<crate::item_watch::ItemNotice>>,
-    commands: Res<NetCommands>,
-    objects: Objects,
-    items: Res<Items>,
-    icons: Option<Res<ItemDisplays>>,
-    names: Res<NameCache>,
-    rolls: crate::items::Rolls,
+    reads: TouchReads,
 ) {
-    let rolls = rolls.get();
     vm.turn(|script, mut trade| {
-        use crate::item_watch::TradeTouch;
-        let touches: Vec<TradeTouch> = cursor
-            .0
-            .read(&messages)
-            .filter_map(crate::item_watch::ItemNotice::trade)
-            .collect();
         let Some(script) = script else {
             return;
         };
         for touch in touches {
-            match touch {
-                TradeTouch::Gone(guid) => {
-                    let Some((slot, _, _)) = script.trade_slot_holding(guid) else {
-                        continue;
-                    };
-                    info!(target: "trade", "item {guid:#x} gone from slot {}; sending \
-                                            CMSG_CLEAR_TRADE_ITEM", slot + 1);
-                    trade.send_edit(
-                        &commands,
-                        ClientCommand::ClearTradeItem { trade_slot: slot },
-                    );
-                    trade.clear_own_item(u32::from(slot) + 1);
-                    script.empty_trade_slot(slot);
-                }
-                TradeTouch::Changed(guid) => {
-                    let Some((slot, bag, bag_slot)) = script.trade_slot_holding(guid) else {
-                        continue;
-                    };
-                    // The send refuses with no active player or no item object (`0x5d43af`,
-                    // `0x5d43da`), and then nothing is stored or signalled (`0x4bfab3`).
-                    let count = objects
-                        .object(guid)
-                        .and_then(|f| f.item_stack_count())
-                        .unwrap_or(1);
-                    let (Some(_), Some(item), Some((wire_bag, wire_slot))) = (
-                        objects.player(),
-                        own_item(guid, count, &objects, &items),
-                        crate::ui_items::wire_pos(bag, bag_slot),
-                    ) else {
-                        continue;
-                    };
-                    info!(target: "trade", "item {guid:#x} in slot {} changed; sending \
-                                            CMSG_SET_TRADE_ITEM", slot + 1);
-                    trade.send_edit(
-                        &commands,
-                        ClientCommand::SetTradeItem {
-                            trade_slot: slot,
-                            bag: wire_bag,
-                            slot: wire_slot,
-                        },
-                    );
-                    let row = resolve_slot(&item, &items, icons.as_deref(), &names, rolls);
-                    script.replace_trade_slot(slot, row);
-                }
-            }
+            touch_trade(script, &mut trade, touch, &reads);
         }
     })
+}
+
+/// What the trade scan reads beside the session: the socket its sends go out on, the objects,
+/// the item records and what a placed row's view reads.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct TouchReads<'w, 's> {
+    pub(crate) commands: Res<'w, NetCommands>,
+    pub(crate) objects: Objects<'w, 's>,
+    pub(crate) items: Res<'w, Items>,
+    icons: Option<Res<'w, ItemDisplays>>,
+    names: Res<'w, NameCache>,
+    rolls: crate::items::Rolls<'w>,
+}
+
+/// An item watcher's trade half, after the action bar's recount in its handler: an item of ours
+/// that one of our slots holds re-signals the slot (`0x4bfb10`, `0x4bfb60` into `0x4bfa70`). Gone,
+/// the slot clears with `CMSG_CLEAR_TRADE_ITEM` (`0x5d4480`), as a click's clear does; restacked
+/// or enchanted, the same item is placed again with `CMSG_SET_TRADE_ITEM` from the position it was
+/// placed from (`0x5d4380`), our session's offer left as it is. vmangos refuses an item its trade
+/// already holds and cancels the trade (`TradeHandler.cpp:716-720`), as it does for the
+/// reference's send. Neither scan asks whether a trade is open.
+pub(crate) fn touch_trade(
+    script: &mut UiScript,
+    trade: &mut TradeSession,
+    touch: crate::item_watch::TradeTouch,
+    reads: &TouchReads,
+) {
+    use crate::item_watch::TradeTouch;
+    let TouchReads {
+        commands,
+        objects,
+        items,
+        icons,
+        names,
+        rolls,
+    } = reads;
+    match touch {
+        TradeTouch::Gone(guid) => {
+            let Some((slot, _, _)) = script.trade_slot_holding(guid) else {
+                return;
+            };
+            info!(target: "trade", "item {guid:#x} gone from slot {}; sending \
+                                    CMSG_CLEAR_TRADE_ITEM", slot + 1);
+            trade.send_edit(commands, ClientCommand::ClearTradeItem { trade_slot: slot });
+            trade.clear_own_item(u32::from(slot) + 1);
+            script.empty_trade_slot(slot);
+        }
+        TradeTouch::Changed(guid) => {
+            let Some((slot, bag, bag_slot)) = script.trade_slot_holding(guid) else {
+                return;
+            };
+            // The send refuses with no active player or no item object (`0x5d43af`,
+            // `0x5d43da`), and then nothing is stored or signalled (`0x4bfab3`).
+            let count = objects
+                .object(guid)
+                .and_then(|f| f.item_stack_count())
+                .unwrap_or(1);
+            let (Some(_), Some(item), Some((wire_bag, wire_slot))) = (
+                objects.player(),
+                own_item(guid, count, objects, items),
+                crate::ui_items::wire_pos(bag, bag_slot),
+            ) else {
+                return;
+            };
+            info!(target: "trade", "item {guid:#x} in slot {} changed; sending \
+                                    CMSG_SET_TRADE_ITEM", slot + 1);
+            trade.send_edit(
+                commands,
+                ClientCommand::SetTradeItem {
+                    trade_slot: slot,
+                    bag: wire_bag,
+                    slot: wire_slot,
+                },
+            );
+            let row = resolve_slot(&item, items, icons.as_deref(), names, rolls.get());
+            script.replace_trade_slot(slot, row);
+        }
+    }
 }
 
 /// Push the trade into the VM and fire its events on a change, diffed against `Local` memory;
@@ -1272,39 +1268,28 @@ fn feed_trade(
     })
 }
 
-/// `TRADE_UPDATE`, whose one producer is the callback `0x4c0340` (`0x4c034f`) that the item
-/// getters register when they find a filled slot whose template the cache lacks (`0x4c017f`,
+/// The callbacks behind `TRADE_UPDATE`, whose one producer is `0x4c0340` (`0x4c034f`), which the
+/// item getters register when they find a filled slot whose template the cache lacks (`0x4c017f`,
 /// `0x4c0582` into `0x55ba30`). A hit never calls it. Each such getter call registers one
 /// callback, with no dedupe (`0x55bbb3`), and each runs when the record lands, for a ready record
 /// only; a refusal frees them silent. The asks the script queued are registered here, after its
-/// tick, and the landed records ([`crate::item_watch::ItemNotice::TradeRecord`]) signal, after
-/// the feed pushed the answered rows. The waiters are the getters' own asks, which a frameless VM
-/// never makes.
-fn run_record_callbacks(
-    script: &mut UiScript,
-    items: &Items,
-    commands: &NetCommands,
-    notices: &mut MessageReader<crate::item_watch::ItemNotice>,
-) {
+/// tick; the landed records signal on the item lane, at the answer's packet
+/// ([`crate::item_watch::ItemNotice::TradeRecord`]). The waiters are the getters' own asks, which
+/// a frameless VM never makes.
+fn register_record_callbacks(script: &mut UiScript, items: &Items, commands: &NetCommands) {
     for entry in script.take_trade_record_asks() {
         // The getter's lookup with the callback: a miss asks, a refused entry again.
         if items.template(entry, 0, Ask::Event(commands)).is_none() {
             items.wait_for_trade_record(entry);
         }
     }
-    for notice in notices.read() {
-        if matches!(notice, crate::item_watch::ItemNotice::TradeRecord { .. }) {
-            script.fire_event("TRADE_UPDATE", vec![]);
-        }
-    }
 }
 
 /// After the tick: `CloseTrade`'s close core, which the interaction latch runs (`0x4bfdd9` →
-/// `0x4bf4e0(0, 0)`), and the item getters' record callbacks ([`run_record_callbacks`]). Every
-/// other trade verb acts inside its call ([`TradeSteps`]).
+/// `0x4bf4e0(0, 0)`), and the item getters' record callbacks ([`register_record_callbacks`]).
+/// Every other trade verb acts inside its call ([`TradeSteps`]).
 fn drain_trade(
     mut hosted: crate::script_calls::HostedVm,
-    mut notices: MessageReader<crate::item_watch::ItemNotice>,
     mut world_commands: Commands,
     commands: Res<NetCommands>,
     items: Res<Items>,
@@ -1313,7 +1298,7 @@ fn drain_trade(
         let Some(script) = script else {
             return;
         };
-        run_record_callbacks(script, &items, &commands, &mut notices);
+        register_record_callbacks(script, &items, &commands);
         // The core's cancel goes out open or not (`0x4bf527`).
         if script.take_trade_close() {
             crate::ui_session::queue(&mut world_commands, close_core);

@@ -84,7 +84,6 @@ fn app() -> App {
         .insert_resource(NetCommands(tx))
         // The usable refresh's callers and the cast targeting the walk reads.
         .add_message::<crate::net::FieldChanged>()
-        .add_message::<crate::item_watch::ItemNotice>()
         .add_message::<crate::net::WorldEnterCascadeMessage>()
         .insert_resource(crate::net::SelfGuid(Some(ME)))
         .init_resource::<crate::spell::AutoSelfCast>()

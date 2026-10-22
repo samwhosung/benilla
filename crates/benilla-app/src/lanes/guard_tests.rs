@@ -52,11 +52,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::Queue,
-        "Messages<benilla_app::item_watch::ItemNotice>",
-        "the item notices",
-    ),
-    (
-        Row::Queue,
         "Messages<benilla_app::net::FieldChanged>",
         "the field changes",
     ),
@@ -260,6 +255,22 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::Edge,
+        "::ui_items::feed::feed_containers",
+        "`BAG_UPDATE`, `BAG_CLOSED` and `PLAYERBANKSLOTS_CHANGED`, found by comparing the bags' \
+         views and guids, where the reference signals them inside the item and seat watchers' \
+         runs (`0x4f9480` from `0x5d94ff`, `0x5d85e8` and `0x5d9b1b`; `0x4f8db0`, `0x4f90d0`, \
+         `0x4f91a0`, `0x5ddcf0`)",
+    ),
+    (
+        Row::Edge,
+        "::ui_items::locks::apply_item_releases",
+        "the seat, restack and arrival unlocks' `ITEM_LOCK_CHANGED`, found by comparing the seats \
+         and the stacks, where the reference runs them first in those watchers' runs (`0x4f8e15`, \
+         `0x4f912c`, `0x5ddd50`, `0x5d94af`, `0x5d8590`); they move with `BAG_UPDATE`, which \
+         follows them",
+    ),
+    (
+        Row::Edge,
         "::ui_unit::feed_units",
         "the selection's change, `PLAYER_TARGET_CHANGED`",
     ),
@@ -366,9 +377,10 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 6] {
+fn lane_types() -> [TypeId; 7] {
     [
         TypeId::of::<crate::field_watch::NoticeLane>(),
+        TypeId::of::<crate::item_lane::ItemLane>(),
         TypeId::of::<crate::ui_chat::ChatLog>(),
         TypeId::of::<crate::ui_cast::CastReports>(),
         TypeId::of::<crate::ui_auction::HouseLane>(),
@@ -515,6 +527,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "cast reports",
             "chat",
             "field notices",
+            "item watchers",
             "party"
         ]
     );
@@ -759,10 +772,6 @@ const NOT_YET_PLACED: &[(&str, &str)] = &[
         "::target::scan::auto_acquire",
         "the attacked and cast-at acquires' `SelectTarget`, which the reference runs inside its \
          packet (`0x6259fe`, `0x6e799c`), off the swings and the spell starts",
-    ),
-    (
-        "::ui_trade::drain_trade",
-        "the trade records' `TRADE_UPDATE`, off the item notices after the tick",
     ),
     (
         "::ui_tradeskill::drain_trade_skill",

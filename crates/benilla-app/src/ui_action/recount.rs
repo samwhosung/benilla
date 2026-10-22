@@ -1,15 +1,17 @@
 //! The action bar's item recount, `0x4e5c70(entry)`, for each entry an item watcher passes it
-//! ([`ItemNotice::recounts`]): the entry is counted once (`0x4e5c75`), and every item slot holding
-//! it, in slot order, stores that count (`0x4e5caa`) and signals `ACTIONBAR_SLOT_CHANGED` with no
-//! change test (`0x4e5cb1` into `0x4e58e0`). An item slot's count moves only here and where a
-//! slot is written (`0x4e5d90`, `0x4e66f1`), never by polling the bags.
+//! ([`ItemNotice::recounts`]), run in its watcher's run on the item lane ([`crate::item_lane`]):
+//! the entry is counted once (`0x4e5c75`), and every item slot holding it, in slot order, stores
+//! that count (`0x4e5caa`) and signals `ACTIONBAR_SLOT_CHANGED` with no change test (`0x4e5cb1`
+//! into `0x4e58e0`). An item slot's count moves only there and where a slot is written
+//! (`0x4e5d90`, `0x4e66f1`), never by polling the bags.
+//!
+//! [`ItemNotice::recounts`]: crate::item_watch::ItemNotice::recounts
 
 use bevy::prelude::*;
 
 use benilla_protocol::messages::ACTION_KIND_ITEM;
 use benilla_ui::script::{ScriptValue, UiScript};
 
-use crate::item_watch::ItemNotice;
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer, WorldEnterCascadeMessage};
 use crate::query_cache::Ask;
@@ -18,11 +20,9 @@ use crate::ui_items::action_count;
 /// The bar's 120 slots, as Lua action ids.
 const ACTION_SLOTS: std::ops::RangeInclusive<u32> = 1..=120;
 
-/// Run our own player's arrival pass, if it arrived, then the recounts the frame's item notices
-/// owe, in their order.
+/// Our own player's arrival pass, if it arrived ([`arrival_counts`]).
 pub(crate) fn recount_item_actions(
     mut hosted_vm: crate::script_calls::HostedVm,
-    mut notices: MessageReader<ItemNotice>,
     mut arrivals: MessageReader<WorldEnterCascadeMessage>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     objects: Objects,
@@ -31,22 +31,17 @@ pub(crate) fn recount_item_actions(
 ) {
     hosted_vm.run(|script| {
         let arrived = arrivals.read().count() > 0;
-        let notices: Vec<ItemNotice> = notices.read().cloned().collect();
         let Some(script) = script else {
             return;
         };
-        let store = self_q.iter().next();
-        let counter = Counter {
-            store,
-            objects: &objects,
-            items: &items,
-            commands: &commands,
-        };
         if arrived {
+            let counter = Counter {
+                store: self_q.iter().next(),
+                objects: &objects,
+                items: &items,
+                commands: &commands,
+            };
             arrival_counts(script, &counter);
-        }
-        for entry in notices.iter().flat_map(ItemNotice::recounts) {
-            recount(script, &counter, entry);
         }
     })
 }
@@ -74,11 +69,11 @@ fn arrival_counts(script: &mut UiScript, counter: &Counter) {
 }
 
 /// What `0x4e6d20` reads: the active player, the item objects and the template cache.
-struct Counter<'a> {
-    store: Option<&'a ObjectStore>,
-    objects: &'a Objects<'a, 'a>,
-    items: &'a Items,
-    commands: &'a NetCommands,
+pub(crate) struct Counter<'a> {
+    pub(crate) store: Option<&'a ObjectStore>,
+    pub(crate) objects: &'a Objects<'a, 'a>,
+    pub(crate) items: &'a Items,
+    pub(crate) commands: &'a NetCommands,
 }
 
 impl Counter<'_> {
@@ -94,7 +89,7 @@ impl Counter<'_> {
 
 /// `0x4e5c70(entry)`: no active player counts 0 (`0x4e6d20`). Each slot is read as the VM holds it
 /// when its turn comes, so a handler that rewrites a later slot is seen.
-fn recount(script: &mut UiScript, counter: &Counter, entry: u32) {
+pub(crate) fn recount(script: &mut UiScript, counter: &Counter, entry: u32) {
     let count = counter.count(entry);
     for action in ACTION_SLOTS {
         let Some(mut slot) = script
@@ -115,6 +110,7 @@ fn recount(script: &mut UiScript, counter: &Counter, entry: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::item_watch::ItemNotice;
     use benilla_protocol::field::{FIELD_ITEM_STACK_COUNT, FIELD_OBJECT_ENTRY};
     use benilla_protocol::ObjectFields;
     use benilla_ui::script::ActionSlot;
@@ -131,8 +127,7 @@ mod tests {
     fn app() -> App {
         let mut app = App::new();
         let (tx, rx) = crossbeam_channel::unbounded();
-        app.add_message::<ItemNotice>()
-            .add_message::<WorldEnterCascadeMessage>()
+        app.add_message::<WorldEnterCascadeMessage>()
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<Items>()
             .insert_resource(NetCommands(tx))
@@ -177,6 +172,7 @@ mod tests {
             )
             .unwrap();
         app.insert_non_send_resource(script);
+        crate::item_lane::seat_item_lane(app.world_mut());
         app
     }
 
@@ -187,11 +183,19 @@ mod tests {
             .unwrap()
     }
 
+    /// Each notice's run on the item lane, with no signals, fired after the frame's systems.
     fn notify(app: &mut App, notices: impl IntoIterator<Item = ItemNotice>) {
-        app.world_mut()
-            .resource_mut::<Messages<ItemNotice>>()
-            .write_batch(notices);
+        let world = app.world_mut();
+        for notice in notices {
+            world
+                .resource_mut::<crate::item_lane::ItemLane>()
+                .push(crate::item_watch::Run {
+                    notice: Some(notice),
+                    signals: Vec::new(),
+                });
+        }
         app.update();
+        crate::item_lane::fire_item_lane(app.world_mut());
     }
 
     /// `0x4e5c70`: the entry's slots in slot order, each with the count it stores, and the same

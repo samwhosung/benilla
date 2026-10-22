@@ -461,6 +461,19 @@ impl<'a> Notified<'a> {
             && range.into_iter().any(|i| self.visits(i))
     }
 
+    /// The place of a watch on `list` over the whole dwords of `range`, when it runs
+    /// ([`Self::runs`]): the first field of the range the block visits.
+    pub(crate) fn place(&self, range: std::ops::Range<u16>, list: List) -> Option<Place> {
+        if !self.runs(range.clone()) {
+            return None;
+        }
+        let first = range.start;
+        range
+            .into_iter()
+            .find(|&i| self.visits(i))
+            .map(|fired| (fired, first, list))
+    }
+
     /// The moved dwords the block visits, as `(index, copy, now)`: the edges
     /// [`crate::net::FieldChanged`] carries.
     pub(crate) fn edges(&self) -> impl Iterator<Item = (u16, u32, u32)> + '_ {
@@ -515,10 +528,11 @@ impl Pass {
 }
 
 /// One step of a block's notify in the watchers' order: a field edge, whose watcher may write a
-/// chat line, or a notice.
+/// chat line, a notice, or an item watcher's run ([`crate::item_watch::Run`]).
 pub(crate) enum Step {
     Edge { index: u16, old: u32, new: u32 },
     Notice(FieldNotice),
+    Item(crate::item_watch::Run),
 }
 
 /// The type watch an edge's chat line is written in, by the edge's field: the aura watcher
@@ -539,15 +553,21 @@ fn edge_place(block: &Notified, index: u16) -> Place {
     (index, index, List::Type)
 }
 
-/// A block's edges and notices in the one ascending walk the notify pass makes (`0x465330`): by
-/// field, the type watchers ahead of the object's own, an edge ahead of a notice at one place.
-/// Each takes its stamp as it is written in this order, so a line a later system words off an
-/// edge fires among the notices where its watcher ran.
-pub(crate) fn in_watch_order(block: &Notified, notices: Vec<(Place, FieldNotice)>) -> Vec<Step> {
+/// A block's edges, item watchers' runs and notices in the one ascending walk the notify pass makes
+/// (`0x465330`): by field, the type watchers ahead of the object's own, an edge ahead of a run and
+/// a run ahead of a notice at one place, as one callback's recounts precede its signals
+/// (`0x5dee9e`, `0x5deea9` before `0x5deecb`). Each takes its stamp as it is written in this order,
+/// so a line a later system words off an edge fires among the notices where its watcher ran.
+pub(crate) fn in_watch_order(
+    block: &Notified,
+    notices: Vec<(Place, FieldNotice)>,
+    runs: Vec<(Place, crate::item_watch::Run)>,
+) -> Vec<Step> {
     let mut steps: Vec<(Place, Step)> = block
         .edges()
         .map(|(index, old, new)| (edge_place(block, index), Step::Edge { index, old, new }))
         .collect();
+    steps.extend(runs.into_iter().map(|(at, r)| (at, Step::Item(r))));
     steps.extend(notices.into_iter().map(|(at, n)| (at, Step::Notice(n))));
     steps.sort_by_key(|&(at, _)| at);
     steps.into_iter().map(|(_, step)| step).collect()
@@ -1781,11 +1801,12 @@ mod tests {
         };
         let block = Notified::new(Sent::Fields(&sent), &moved);
         let placed = placed_values(&around, MOB, ObjectType::Unit, &mob, &block);
-        let steps: Vec<String> = in_watch_order(&block, placed)
+        let steps: Vec<String> = in_watch_order(&block, placed, Vec::new())
             .into_iter()
             .map(|s| match s {
                 Step::Edge { index, .. } => format!("edge {index}"),
                 Step::Notice(n) => format!("{n:?}"),
+                Step::Item(r) => format!("{r:?}"),
             })
             .collect();
         assert_eq!(

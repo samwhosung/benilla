@@ -717,14 +717,8 @@ fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<N
 /// the item's (`0x5d8660`) and the party member's, which snapshots its record and sends
 /// `CMSG_REQUEST_PARTY_MEMBER_STATS`.
 fn deactivate(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
-    let (gone, signals) = {
-        let watch = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items);
-        let gone = watch.destroyed(guid);
-        let signals: Vec<_> = gone.iter().flat_map(|n| watch.signals(n)).collect();
-        (gone, signals)
-    };
-    sc.item_notices.write_batch(gone);
-    sc.field_notices.write_batch(signals);
+    let gone = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items).destroyed_run(guid);
+    sc.item_lane.push(gone.unwrap_or_default());
     let held = |g: u64| sc.index.0.get(&g).and_then(|e| sc.stores.get(*e).ok());
     crate::ui_party::net::member_deactivated(
         guid,
@@ -905,12 +899,14 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
     if !bridged {
         placed.retain(|(_, n)| !matches!(n, crate::field_watch::FieldNotice::Unit { .. }));
     }
-    let (notices, item_signals) = {
+    // The item watchers' runs, each with the signals its handler ends in, at their watches' places.
+    let runs: Vec<(crate::field_watch::Place, crate::item_watch::Run)> = {
         let watch = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items);
-        let notices = watch.values(guid, kind, fields, &block);
-        // An item block has no field watch of its own: its handlers' signals follow in its order.
-        let signals: Vec<_> = notices.iter().flat_map(|n| watch.signals(n)).collect();
-        (notices, signals)
+        watch
+            .placed_values(guid, kind, fields, &block)
+            .into_iter()
+            .map(|(at, n)| (at, watch.run(n)))
+            .collect()
     };
     let stamp = crate::field_watch::guild_timestamp(&block, kind, fields);
     // `OnCharmOrSummonChanged` (`0x5e2660`) on the active player or a party or raid member
@@ -931,21 +927,21 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
     }
     // An entry change that missed the cache asks and waits on the answer (`0x5d9652` asks with
     // `0x5d96b0`).
-    for n in &notices {
-        if let crate::item_watch::ItemNotice::Entry {
+    for (_, run) in &runs {
+        if let Some(crate::item_watch::ItemNotice::Entry {
             guid,
             new,
             new_cached: false,
             ..
-        } = *n
+        }) = run.notice
         {
             sc.items.template(new, guid, Ask::Event(&sc.net));
             sc.items.wait_for_entry(guid, new);
         }
     }
-    sc.item_notices.write_batch(notices);
-    // The edges and the notices in the watchers' one walk, each stamped where it is written.
-    for step in crate::field_watch::in_watch_order(&block, placed) {
+    // The edges, the runs and the notices in the watchers' one walk, each stamped where it is
+    // written.
+    for step in crate::field_watch::in_watch_order(&block, placed, runs) {
         match step {
             crate::field_watch::Step::Edge { index, old, new } => {
                 sc.field_changes.write(FieldChanged {
@@ -959,9 +955,9 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
                 });
             }
             crate::field_watch::Step::Notice(n) => sc.field_notices.write(n),
+            crate::field_watch::Step::Item(run) => sc.item_lane.push(run),
         }
     }
-    sc.field_notices.write_batch(item_signals);
     // The active player's coinage watcher `OnMoneyChanged` (`0x5ddf30`), registered on its own
     // object (`0x5dd8a0`): the trade offer's trim, at the packet.
     if kind == ObjectType::Player
@@ -999,20 +995,17 @@ fn create_hook(sc: &mut Scene, guid: u64, kind: Created, script: Option<&UiScrip
         Created::Item => {
             // The record, set up at once when cached, for our item in the world, and its signal
             // for the owner of any item.
-            let (hook, signal) = {
-                let watch = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items);
-                (watch.created(guid, &fields), watch.created_signal(&fields))
-            };
+            let run = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items)
+                .created_run(guid, &fields);
             // The set-up asks for the record of every item, whoever's, with the callback
             // `0x5d8390` (`0x5d8300` into `0x55ba30`): the readers of a held item only read it.
             if let Some(entry) = fields.object_entry() {
                 sc.items.template(entry, guid, Ask::Event(&sc.net));
             }
-            if let Some(crate::item_watch::ItemNotice::Record { guid, .. }) = hook {
+            if let Some(crate::item_watch::ItemNotice::Record { guid, .. }) = run.notice {
                 super::replay_enchant_times(&mut sc.items, &mut sc.countdowns, &sc.index, guid);
             }
-            sc.item_notices.write_batch(hook);
-            sc.field_notices.write_batch(signal);
+            sc.item_lane.push(run);
         }
         Created::World(EntityKind::Player) => {
             resolve_display_records(sc, guid, &fields);

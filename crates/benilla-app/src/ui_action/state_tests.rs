@@ -21,7 +21,6 @@ const ME: u64 = 0x10;
 /// guid and the self-cast flag the cast targeting reads.
 fn feed_inputs(app: &mut App) {
     app.add_message::<crate::net::FieldChanged>()
-        .add_message::<crate::item_watch::ItemNotice>()
         .add_message::<crate::net::WorldEnterCascadeMessage>()
         .init_resource::<crate::ui_items::feed::BagUpdates>()
         .insert_resource(crate::net::SelfGuid(Some(ME)))
@@ -716,7 +715,6 @@ fn a_broken_worn_weapon_draws_no_equipped_border() {
         app.insert_resource(actions)
             .insert_resource(crate::ui_macro::MacroBoundSpells::default())
             .insert_resource(Spells::empty_for_tests())
-            .add_message::<crate::item_watch::ItemNotice>()
             .add_message::<crate::net::WorldEnterCascadeMessage>()
             .init_resource::<Cooldowns>()
             .init_resource::<crate::spell::SpellModifiers>()
@@ -1683,16 +1681,6 @@ fn bag_update_cooldown_fires_from_the_item_legs_alone() {
         frame(&mut app),
         [PAIR[0], PAIR[1], "SPELL_UPDATE_USABLE"],
         "a held global cooldown"
-    );
-    app.world_mut()
-        .write_message(crate::item_watch::ItemNotice::SpellCharges {
-            guid: 0x4000_0000_0000_0042,
-            entry: 5512,
-        });
-    assert_eq!(
-        frame(&mut app),
-        ["BAG_UPDATE_COOLDOWN"],
-        "the spell charges watcher"
     );
     assert!(frame(&mut app).is_empty(), "and a quiet frame after");
 }

@@ -5,7 +5,8 @@
 //! order: the cooldown pair (`0x4b31b0`) on a cooldown change; `ACTIONBAR_UPDATE_USABLE` when a
 //! refresh of the usable cache (`0x4e5c00`) finds a pair changed, each reactive spell's
 //! `SPELL_ACTIVE` ([`super::reactive`]) and `SPELL_UPDATE_USABLE` from the usable refresh
-//! `0x4b31c0`'s callers; `BAG_UPDATE_COOLDOWN` (`0x4f93d0`) from the item legs. Combat enter and
+//! `0x4b31c0`'s callers; `BAG_UPDATE_COOLDOWN` (`0x4f93d0`) from the cooldown flush, as the spell
+//! charges watcher's own fires on the item lane ([`crate::item_lane`]). Combat enter and
 //! leave are signalled in their attack packets (`crate::creature_anim`).
 //! `IsCurrentAction` reads the cast state live, and its pair (`0x4b3250`) is signalled where the
 //! cast changes, as are autorepeat start and stop where the key is stored and cleared
@@ -23,7 +24,6 @@ use benilla_formats::RangeTargets;
 use benilla_protocol::messages::{ACTION_KIND_ITEM, ACTION_KIND_SPELL};
 use benilla_ui::script::{macro_slot_id, ActionState};
 
-use crate::item_watch::ItemNotice;
 use crate::items::Items;
 use crate::net::{FieldChanged, NetCommands, ObjectStore, SelfPlayer};
 use crate::spell::Cooldowns;
@@ -306,11 +306,10 @@ pub(super) fn feed_action_state(
     (items, commands): (Res<Items>, Res<NetCommands>),
     // `ItemSubClass.dbc`, whose flags the walk's ammo leg reads.
     sub_classes: Option<Res<crate::ui_items::ItemSubClasses>>,
-    // The usable refresh's field-watch callers, the spell charges watcher, the enter cascade,
-    // the bag feed's `BAG_UPDATE`s, the events owed and the memory about the VM.
-    (mut edges, mut item_notices, mut entries, bag_updates, mut owed, mut memory): (
+    // The usable refresh's field-watch callers, the enter cascade, the bag feed's `BAG_UPDATE`s,
+    // the events owed and the memory about the VM.
+    (mut edges, mut entries, bag_updates, mut owed, mut memory): (
         MessageReader<FieldChanged>,
-        MessageReader<ItemNotice>,
         MessageReader<crate::net::WorldEnterCascadeMessage>,
         Option<Res<crate::ui_items::feed::BagUpdates>>,
         ResMut<ActionEvents>,
@@ -389,10 +388,6 @@ pub(super) fn feed_action_state(
         memory.usable_refreshes = cooldowns.usable_refreshes;
         let mut bags = cooldowns.bag_flushes != memory.bag_flushes;
         memory.bag_flushes = cooldowns.bag_flushes;
-        // The spell charges watcher on an item of the player's (`0x5d9587`).
-        bags |= item_notices.read().fold(false, |hit, n| {
-            hit | matches!(n, ItemNotice::SpellCharges { .. })
-        });
         if new_vm {
             (refresh, bags) = (false, false);
         }

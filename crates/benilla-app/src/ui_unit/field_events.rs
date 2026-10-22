@@ -198,7 +198,11 @@ pub(super) fn drop_field_notices(mut lane: ResMut<NoticeLane>) {
 }
 
 /// One callback's signals.
-fn fire(script: &mut UiScript, sink: &mut crate::ui_action::MessageSink, notice: FieldNotice) {
+pub(crate) fn fire(
+    script: &mut UiScript,
+    sink: &mut crate::ui_action::MessageSink,
+    notice: FieldNotice,
+) {
     match notice {
         // A unit with no token flags carries no bridge (`0x60c4a0`).
         FieldNotice::Unit { guid, id } => {
