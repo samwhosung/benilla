@@ -107,7 +107,7 @@ impl ObjectFields {
     pub fn unit_persuaded(&self) -> Option<u64> {
         self.get_guid(FIELD_UNIT_PERSUADED).filter(|&g| g != 0)
     }
-    /// `UNIT_CREATED_BY_SPELL`: the summoning spell; `0x6ea1e0` requires it to feed a pet.
+    /// `UNIT_CREATED_BY_SPELL`: the summoning spell.
     pub fn unit_created_by_spell(&self) -> Option<u32> {
         self.get_u32(FIELD_UNIT_CREATED_BY_SPELL)
             .filter(|&s| s != 0)

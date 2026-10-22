@@ -80,7 +80,10 @@ fn client(alive: bool, pet_number: u32) -> Feed {
     world
         .resource_mut::<crate::items::Items>()
         .insert_template(117, Some(crate::items::test_template("Tough Jerky")));
-    world.resource_mut::<crate::ui_pet::PetBar>().spells.pet_guid = PET;
+    world
+        .resource_mut::<crate::ui_pet::PetBar>()
+        .spells
+        .pet_guid = PET;
     world
         .resource_mut::<crate::ui_action::LearnedAbilities>()
         .feed_pet = Some(FEED_PET);
@@ -154,7 +157,10 @@ fn casts(f: &Feed) -> Vec<String> {
 }
 
 fn held(f: &Feed) -> Option<CursorPayload> {
-    f.app.world().non_send_resource::<UiScript>().cursor_payload()
+    f.app
+        .world()
+        .non_send_resource::<UiScript>()
+        .cursor_payload()
 }
 
 /// Food dropped on the target frame with our pet targeted feeds it: `"target"` resolves to the
@@ -173,7 +179,10 @@ fn food_dropped_on_our_targeted_pet_feeds_it() {
             }
         )]
     );
-    assert!(held(&f).is_none(), "the feed cleared the cursor (`0x48da96`)");
+    assert!(
+        held(&f).is_none(),
+        "the feed cleared the cursor (`0x48da96`)"
+    );
 }
 
 /// The feed runs the attempt's rungs before it binds the food (`0x6ea266`): dead, Feed Pet is
