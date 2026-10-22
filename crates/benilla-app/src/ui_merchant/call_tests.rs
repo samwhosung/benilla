@@ -170,6 +170,9 @@ fn a_cursor_sale_sends_inside_the_call_with_the_split_count_and_the_cell() {
             "RandomRoll { min: 1, max: 2 }".to_string(),
         ]
     );
+    // The sale keeps the item locked until the server answers, so a fresh client sells again.
+    let (mut app, rx) = client();
+    let _ = sent(&rx);
     app.world_mut().resource_mut::<MerchantOpen>().clear();
     run(&mut app, "PickupContainerItem(0, 1) PickupMerchantItem(0)");
     assert_eq!(

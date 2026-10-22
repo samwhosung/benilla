@@ -837,15 +837,10 @@ pub(crate) struct Model {
     pub(crate) repair_all_cost: u32,
     /// The repair costs `SetInventoryItem` and `SetBagItem` return.
     pub(crate) repair_costs: merchant::RepairCosts,
-    pub(crate) merchant_buys: Vec<(u32, u32)>,
-    /// The held `(bag, slot)` when `PickupMerchantItem` sells, sent as `CMSG_SELL_ITEM`.
-    pub(crate) merchant_cursor_sells: Vec<(i64, u32)>,
     /// A held vendor row dropped in a bag, `(bag, slot, item entry)`, for `CMSG_BUY_ITEM_IN_SLOT`.
     pub(crate) merchant_slot_buys: Vec<(i64, u32, u32)>,
     pub(crate) merchant_close: bool,
-    /// `BuybackItem` 1-based slots, the `RepairAllItems` flag and repair mode (`InRepairMode`).
-    pub(crate) merchant_buybacks: Vec<u32>,
-    pub(crate) repair_all: bool,
+    /// Repair mode (`InRepairMode`).
     pub(crate) repair_mode: bool,
 
     /// The stable window: snapshot, selection, drag and queued calls, reset together on close.
@@ -1697,12 +1692,8 @@ impl Model {
             merchant: None,
             repair_all_cost: 0,
             repair_costs: Default::default(),
-            merchant_buys: Vec::new(),
-            merchant_cursor_sells: Vec::new(),
             merchant_slot_buys: Vec::new(),
             merchant_close: false,
-            merchant_buybacks: Vec::new(),
-            repair_all: false,
             repair_mode: false,
             stable: Default::default(),
             bank: None,

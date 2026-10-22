@@ -1,7 +1,8 @@
 //! The merchant window's app side: [`MerchantOpen`] holds the `SMSG_LIST_INVENTORY` rows,
 //! [`feed_merchant`] pushes them with the buyback and repair rows, the purse and the refusals,
-//! [`feed_repair_costs`] the repair costs, and [`drain_merchant`] sends the Lua intents. A
-//! bag click sells through [`crate::ui_items`].
+//! [`feed_repair_costs`] the repair costs, [`MerchantSteps`] applies the verbs inside their calls,
+//! and [`drain_merchant`] takes the close and a held row's drop into a bag. A bag click sells
+//! through [`crate::ui_items`].
 
 use benilla_protocol::messages::{buy_result, sell_result, VendorItem};
 use benilla_world::interact::WorldRightPress;
@@ -14,7 +15,7 @@ use crate::items::Items;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, NetCommands, ObjectStore, Objects, SelfPlayer};
 use crate::query_cache::Ask;
-use crate::ui_items::{item_link, slot_guid, wire_pos};
+use crate::ui_items::{item_link, wire_pos};
 use crate::ui_script::{gate, SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 use benilla_protocol::messages::BAG_PLAYER_INVENTORY;
@@ -52,12 +53,11 @@ impl MerchantOpen {
         self.vendor.is_some()
     }
 
-    /// The item entry at a 1-based row: `CMSG_BUY_ITEM` buys by entry, not by vendor slot.
-    pub(crate) fn entry_at(&self, index_1based: u32) -> Option<u32> {
+    /// The row at a 1-based index: `CMSG_BUY_ITEM` buys by its entry, not by its vendor slot.
+    pub(crate) fn row_at(&self, index_1based: u32) -> Option<&VendorItem> {
         index_1based
             .checked_sub(1)
             .and_then(|i| self.items.get(i as usize))
-            .map(|it| it.entry)
     }
 
     /// `SMSG_BUY_ITEM`'s new count for the row at 1-based vendor `slot`; the bought item itself
@@ -98,7 +98,9 @@ pub(crate) enum MerchantRefusal {
     Sell(u8),
 }
 
+mod calls;
 mod net;
+pub(crate) use calls::MerchantSteps;
 
 pub(crate) struct UiMerchantPlugin;
 
@@ -742,16 +744,14 @@ fn drop_held_vendor_row(script: &mut UiScript) {
     }
 }
 
-/// Drain the Lua intents: a buy sends `CMSG_BUY_ITEM` by item entry, a buyback
-/// `CMSG_BUYBACK_ITEM` with the absolute slot (69-80), a repair-all `CMSG_REPAIR_ITEM` with guid
-/// 0 when the purse covers the worn gear, and a close clears locally, as there is no close packet.
+/// Drain what still waits for the frame: a held vendor row dropped into a bag slot, and
+/// `CloseMerchant`, which clears locally, as there is no close packet. Every other merchant verb
+/// applies inside its call ([`MerchantSteps`]).
 fn drain_merchant(
     mut hosted_vm: crate::script_calls::HostedVm,
     open: Res<MerchantOpen>,
     commands: Res<NetCommands>,
     self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
-    objects: Objects,
-    mut purse: RepairPurse,
     mut commands_q: Commands,
 ) {
     hosted_vm.run(|script| {
@@ -760,75 +760,6 @@ fn drain_merchant(
         };
         let self_pair = self_q.iter().next();
         let self_store = self_pair.map(|(store, _)| store);
-        for index in script.take_merchant_buybacks() {
-            let Some(vendor) = open.vendor else { continue };
-            let Some(store) = self_store else {
-                continue;
-            };
-            let order = buyback_order(&store.0);
-            match usize::try_from(index)
-                .ok()
-                .and_then(|i| i.checked_sub(1))
-                .and_then(|i| order.get(i))
-            {
-                Some(&idx) => {
-                    let slot = BUYBACK_SLOT_FIRST + u32::from(idx);
-                    debug!("ui_merchant: buyback list index {index} → absolute slot {slot}");
-                    let _ = commands.0.send(ClientCommand::BuybackItem { vendor, slot });
-                }
-                None => debug!("ui_merchant: BuybackItem({index}) out of range — ignored"),
-            }
-        }
-        if script.take_repair_all() {
-            if let (Some(vendor), Some(me)) = (open.vendor, self_store) {
-                // `RepairAllItems` (`0x4fbfe0`) prices only the equipped slots 0-18 for its purse
-                // test (`0x4fc026`–`0x4fc063`), not the bags `GetRepairAllCost` also sweeps.
-                let worn = (0..19u8).filter_map(|i| me.0.player_inv_slot(i));
-                if !purse.refuses(script, &open, me, worn) {
-                    debug!("ui_merchant: repair all");
-                    let _ = commands.0.send(ClientCommand::RepairItem {
-                        vendor,
-                        item_guid: 0,
-                    });
-                }
-            }
-        }
-        for (index, quantity) in script.take_merchant_buys() {
-            let Some(vendor) = open.vendor else { continue };
-            match open.entry_at(index) {
-                Some(entry) => {
-                    // Stack count is a u8 on the wire (`CMSG_BUY_ITEM`); clamp the Lua quantity.
-                    let count = quantity.clamp(1, u32::from(u8::MAX)) as u8;
-                    debug!("ui_merchant: buy row {index} (entry {entry} ×{count})");
-                    let _ = commands.0.send(ClientCommand::BuyItem {
-                        vendor,
-                        entry,
-                        count,
-                    });
-                }
-                None => debug!("ui_merchant: BuyMerchantItem({index}) out of range — ignored"),
-            }
-        }
-        // `PickupMerchantItem`'s sell arm, a bag item dropped on the window, sold by its item guid
-        // so an emptied slot is a no-op. It runs before the close below, as `0x4fb760`'s sell arm
-        // runs before its vendor check (`0x4fb7f7`), so a drop on a closing window still sells.
-        for (bag, slot) in script.take_merchant_cursor_sells() {
-            let Some(vendor) = open.vendor else { continue };
-            let slot0 = u8::try_from(slot.saturating_sub(1)).unwrap_or(0);
-            match self_store.and_then(|s| slot_guid(&s.0, bag, slot0, &objects)) {
-                Some(item_guid) => {
-                    debug!("ui_merchant: cursor sell bag {bag} slot {slot} (item {item_guid:#x})");
-                    let _ = commands.0.send(ClientCommand::SellItem {
-                        vendor,
-                        item_guid,
-                        count: 0,
-                    });
-                }
-                None => {
-                    debug!("ui_merchant: cursor sell on an empty slot ({bag}, {slot}) — ignored")
-                }
-            }
-        }
         // A held vendor row dropped into a slot: `CMSG_BUY_ITEM_IN_SLOT` with count 1, the
         // reference's fixed count on all three drop paths.
         for (bag, slot, entry) in script.take_merchant_slot_buys() {
@@ -1199,7 +1130,7 @@ mod tests {
         assert_eq!(costs.own.get(&SWORD), Some(&full));
     }
 
-    /// `RepairAllItems()` through the feed and the drain, at [`purse_fixture`]'s vendor carrying
+    /// `RepairAllItems()` through the feed and the host, at [`purse_fixture`]'s vendor carrying
     /// `npc_flags`, with the sword at `slot_field` and `money` copper: the packets, the
     /// `UI_ERROR_MESSAGE` lines and the message rows queued for their sound.
     fn repair_all(
@@ -1233,16 +1164,26 @@ mod tests {
         }
         app.world_mut()
             .spawn((SelfPlayer, Guid(0x5e1f), player(slot_field, money)));
-        let script = UiScript::new().unwrap();
+        let mut script = UiScript::new().unwrap();
+        script.keep_calls();
         record_errors(&script);
         app.insert_non_send_resource(script);
         app.world_mut().run_system_once(feed_merchant).unwrap();
         while rx.try_recv().is_ok() {} // the feed's name query for the vendor
-        app.world()
-            .non_send_resource::<UiScript>()
-            .run("RepairAllItems()")
+        let mut calls = {
+            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            script.run("RepairAllItems()").unwrap();
+            script.take_merchant_calls()
+        };
+        app.world_mut()
+            .run_system_once(
+                move |mut steps: MerchantSteps, mut script: NonSendMut<UiScript>| {
+                    for call in std::mem::take(&mut calls) {
+                        steps.apply(&mut script, call);
+                    }
+                },
+            )
             .unwrap();
-        app.world_mut().run_system_once(drain_merchant).unwrap();
         let sent = rx.try_iter().collect();
         let lines = shown(app.world().non_send_resource::<UiScript>());
         (sent, lines, sounded(app.world()))
@@ -1551,15 +1492,16 @@ mod tests {
     }
 
     #[test]
-    fn entry_at_maps_the_one_based_row() {
+    fn row_at_maps_the_one_based_row() {
         let mut open = MerchantOpen::default();
         assert!(!open.is_open());
         open.open(0x42, vec![row(159, 1, STOCK_UNLIMITED), row(4540, 2, 5)]);
         assert!(open.is_open());
-        assert_eq!(open.entry_at(1), Some(159));
-        assert_eq!(open.entry_at(2), Some(4540));
-        assert_eq!(open.entry_at(3), None); // out of range
-        assert_eq!(open.entry_at(0), None); // 0 has no row (1-based)
+        let entry = |row| open.row_at(row).map(|r| r.entry);
+        assert_eq!(entry(1), Some(159));
+        assert_eq!(entry(2), Some(4540));
+        assert_eq!(entry(3), None); // out of range
+        assert_eq!(entry(0), None); // 0 has no row (1-based)
     }
 
     #[test]
