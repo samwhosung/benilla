@@ -1418,6 +1418,109 @@ mod tests {
         }
     }
 
+    /// The close our own cast's GO owes (`0x60d040` at `0x6e7fc5`, its tail `0x60d10b`): at rest
+    /// the full one, on the move (`& 0x200f`, falling included) the move-start one, which a
+    /// response's own tail (`0x5ebc40`, the low byte alone) does not owe while falling.
+    #[derive(Clone, Copy, Debug)]
+    enum Owed {
+        AtRest,
+        MoveStart,
+    }
+
+    impl Owed {
+        const BOTH: [(Owed, u32); 2] = [
+            (Owed::AtRest, 0),
+            (Owed::MoveStart, crate::creature_anim::move_flags::FALLING),
+        ];
+
+        fn owe(self, world: &mut World) {
+            match self {
+                Owed::AtRest => world.resource_mut::<super::super::LootCloseAtRest>().0 = true,
+                Owed::MoveStart => world.resource_mut::<super::super::LootMoveStart>().0 = true,
+            }
+        }
+    }
+
+    fn drain(world: &mut World) {
+        world
+            .run_system_once(super::super::drain_loot)
+            .expect("the drain runs as a one-shot system");
+    }
+
+    fn releases(rx: &crossbeam_channel::Receiver<ClientCommand>) -> Vec<u64> {
+        rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::LootRelease { guid } => Some(guid),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A gather's or an opening's GO runs its close inside its own packet (`0x60d10b` →
+    /// `0x48f200`), where no window is open (`0x48f23f`), so it closes nothing. The chest's
+    /// response behind it opens a window the frame's drain keeps, unreleased.
+    #[test]
+    fn a_close_the_go_ahead_owed_never_takes_the_window_its_response_opens() {
+        for (owed, flags) in Owed::BOTH {
+            let (mut world, rx) = tabbed_world();
+            seat_drain(&mut world, crate::player::Player::with_move_flags(flags));
+            world.resource_mut::<LootLatch>().0 = Some(CHEST);
+            owed.owe(&mut world);
+            respond(&mut world, CHEST, 1);
+            drain(&mut world);
+            assert_eq!(
+                world.resource::<LootState>().source(),
+                Some(CHEST),
+                "{owed:?}"
+            );
+            assert_eq!(world.resource::<LootLatch>().0, Some(CHEST), "{owed:?}");
+            assert!(releases(&rx).is_empty(), "{owed:?}");
+        }
+    }
+
+    /// The same close with a window open at the GO closes that one, released and its dead body
+    /// deselected (`0x48f369`), and the next response opens on a clean slate.
+    #[test]
+    fn a_close_the_go_ahead_owed_takes_the_window_open_then() {
+        for (owed, flags) in Owed::BOTH {
+            let (mut world, rx) = tabbed_world();
+            seat_drain(&mut world, crate::player::Player::with_move_flags(flags));
+            world.resource_mut::<LootLatch>().0 = Some(CORPSE);
+            respond(&mut world, CORPSE, 1);
+            world.init_resource::<crate::names::NameCache>();
+            super::super::feed_loot_once(&mut world);
+            deselects(&mut world);
+            world.resource_mut::<LootLatch>().0 = Some(CHEST);
+            owed.owe(&mut world);
+            respond(&mut world, CHEST, 1);
+            drain(&mut world);
+            assert_eq!(
+                world.resource::<LootState>().source(),
+                Some(CHEST),
+                "{owed:?}"
+            );
+            assert_eq!(releases(&rx), [CORPSE], "{owed:?}");
+            assert_eq!(deselects(&mut world), [CORPSE], "{owed:?}");
+        }
+    }
+
+    /// A close owed after the response, by a GO behind it or a step, still takes its window in
+    /// the drain.
+    #[test]
+    fn a_close_owed_after_the_response_takes_its_window() {
+        for (owed, flags) in Owed::BOTH {
+            let (mut world, rx) = tabbed_world();
+            seat_drain(&mut world, crate::player::Player::with_move_flags(flags));
+            world.resource_mut::<LootLatch>().0 = Some(CHEST);
+            respond(&mut world, CHEST, 1);
+            owed.owe(&mut world);
+            drain(&mut world);
+            assert_eq!(world.resource::<LootState>().source(), None, "{owed:?}");
+            assert_eq!(world.resource::<LootLatch>().0, None, "{owed:?}");
+            assert_eq!(releases(&rx), [CHEST], "{owed:?}");
+        }
+    }
+
     /// With the byte the click stored set, the copier `0x4c1cb0` sweeps the window (`0x4c1fa0`)
     /// before the response's movement close (`0x5ebc51`), so a body auto-looted on the run is
     /// taken, then released.
