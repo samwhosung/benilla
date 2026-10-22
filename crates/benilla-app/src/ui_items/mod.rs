@@ -1013,8 +1013,7 @@ impl Plugin for UiItemsPlugin {
         crate::item_lane::add_item_lane(app);
         equip_error::add_equip_error_lane(app);
         // The icons come from the equipment renderer's `ItemDisplays`.
-        app.init_resource::<crate::ui_items::locks::ItemReleases>()
-            .init_resource::<crate::ui_items::locks::HeldItemLocks>()
+        app.init_resource::<crate::ui_items::locks::HeldItemLocks>()
             .init_resource::<crate::ui_items::locks::LockWatch>()
             // The soulbind confirmations' pending records: the client's pending-equip array and
             // its one bind-on-use cell.
@@ -1028,8 +1027,8 @@ impl Plugin for UiItemsPlugin {
             .add_systems(
                 Update,
                 (
-                    // The releases the handlers queue without a VM, ahead of both inventory
-                    // feeds.
+                    // The loot window's owed unlocks and the dead objects' locks, ahead of both
+                    // inventory feeds.
                     crate::ui_items::locks::apply_item_releases
                         .in_set(crate::ui_script::UiFeed)
                         .before(feed_containers)

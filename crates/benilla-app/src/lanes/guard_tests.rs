@@ -145,12 +145,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "::ui_instance::InstanceState",
         "the instance state",
     ),
-    (
-        Row::Queue,
-        "::ui_items::locks::ItemReleases",
-        "the sale refusal's unlock (`0x5dd26b`), which follows its line, the merchant errors' \
-         (`MerchantErrors`): it moves with them; and the loot window's owed unlocks",
-    ),
     (Row::Queue, "::ui_logout::LogoutState", "the logout state"),
     (Row::Queue, "::ui_loot_roll::LootRolls", "the loot rolls"),
     (

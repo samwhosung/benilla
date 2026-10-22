@@ -63,13 +63,13 @@ fn on_buy_failed(
 fn on_sell_failed(
     In(ev): In<SessionEvent>,
     mut errors: ResMut<MerchantErrors>,
-    mut releases: ResMut<crate::ui_items::locks::ItemReleases>,
+    mut lane: ResMut<crate::item_lane::ItemLane>,
 ) {
     if let SessionEvent::VendorSellFailed {
         item_guid, reason, ..
     } = ev
     {
-        vendor_sell_failed(reason, item_guid, &mut errors, &mut releases);
+        vendor_sell_failed(reason, item_guid, &mut errors, &mut lane);
     }
 }
 
@@ -118,19 +118,26 @@ fn vendor_buy_failed(
 
 /// `SMSG_SELL_ITEM` (`0x5dd1f0`): a zero result is a success and returns at once (`0x5dd221`);
 /// any other queues the message line and unlocks the item the sale locked (`0x5dd26b`), a zero
-/// guid excepted (`0x5dd267`). A success's item leaves its slot, which unlocks it.
+/// guid excepted (`0x5dd267`), on the item lane at the packet's place. A success's item leaves
+/// its slot, which unlocks it.
 fn vendor_sell_failed(
     reason: u8,
     item_guid: u64,
     errors: &mut MerchantErrors,
-    releases: &mut crate::ui_items::locks::ItemReleases,
+    lane: &mut crate::item_lane::ItemLane,
 ) {
     if reason == 0 {
         return;
     }
     debug!("net: sell failed (reason {reason}, item {item_guid:#x})");
     errors.0.push(MerchantRefusal::Sell(reason));
-    releases.unlock(item_guid);
+    lane.push(crate::item_watch::Run {
+        unlocks: (item_guid != 0)
+            .then_some(crate::item_watch::Unlock::Item(item_guid))
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    });
 }
 
 #[cfg(test)]
@@ -142,7 +149,6 @@ mod tests {
 
     use super::*;
     use crate::net::{Guid, NetCommands, ObjectStore, SelfPlayer};
-    use crate::ui_items::locks::ItemReleases;
 
     const VENDOR: u64 = 0xF130_0000_0000_0043;
     const WATER: u32 = 159;
@@ -165,7 +171,6 @@ mod tests {
             .init_resource::<crate::ui_quest_log::QuestLog>()
             .init_resource::<MerchantOpen>()
             .init_resource::<MerchantErrors>()
-            .init_resource::<ItemReleases>()
             .init_resource::<crate::item_lane::ItemLane>()
             .init_resource::<crate::field_watch::NoticeLane>()
             .add_systems(Update, crate::ui_quest_log::feed_quest_log);
@@ -278,11 +283,13 @@ mod tests {
     fn a_refused_sale_unlocks_its_item_and_a_success_does_nothing() {
         const ITEM: u64 = 0x4000_0000_0000_0042;
         let mut errors = MerchantErrors::default();
-        let mut releases = ItemReleases::default();
-        vendor_sell_failed(0, ITEM, &mut errors, &mut releases);
-        assert!(errors.0.is_empty() && releases.0.is_empty());
-        vendor_sell_failed(1, ITEM, &mut errors, &mut releases);
+        let mut lane = crate::item_lane::ItemLane::default();
+        vendor_sell_failed(0, ITEM, &mut errors, &mut lane);
+        assert!(errors.0.is_empty() && lane.drain_stamped().is_empty());
+        vendor_sell_failed(1, ITEM, &mut errors, &mut lane);
         assert_eq!(errors.0.len(), 1);
-        assert_eq!(releases.0, [ITEM]);
+        let runs: Vec<_> = lane.drain_stamped().into_iter().map(|(_, r)| r).collect();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].unlocks, [crate::item_watch::Unlock::Item(ITEM)]);
     }
 }

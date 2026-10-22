@@ -4,8 +4,9 @@
 //! runs on the item lane, at their packets' places ([`crate::item_watch::Unlock`]): a seat whose
 //! guid changes unlocks the item now in it (`0x5ddd50`, `0x4f8e15`, `0x4f912c`), and an item of
 //! ours set up or changing its stack count unlocks its entry or itself (`0x5d8590`, `0x5d85ab`,
-//! `0x5d94af`, `0x5d94ca`); a refusal's on its own lane ([`super::EquipErrors`]). The handlers
-//! with neither queue theirs in [`ItemReleases`]: a sale's refusal and a loot window's release.
+//! `0x5d94af`, `0x5d94ca`); a sale's refusal's on the item lane too (`0x5dd26b`); an inventory
+//! refusal's on its own lane ([`super::EquipErrors`]). What is left here is the loot window's
+//! release the loot lane did not run, and the locks whose objects went ([`apply_item_releases`]).
 
 use std::collections::HashMap;
 
@@ -13,28 +14,6 @@ use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 
 use crate::net::Objects;
-
-/// The `UnlockItem`s (`0x495420`) the handlers without a VM queue, run into the VM by
-/// [`apply_item_releases`]: each `ITEM_LOCK_CHANGED` fires whether or not the guid names an item
-/// we hold (`0x495450`).
-#[derive(Resource, Default, Debug)]
-pub(crate) struct ItemReleases(pub(crate) Vec<u64>);
-
-impl ItemReleases {
-    /// `UnlockItem` on `guid`; a zero guid does nothing (`0x49542d`).
-    pub(crate) fn unlock(&mut self, guid: u64) {
-        if guid != 0 {
-            self.0.push(guid);
-        }
-    }
-
-    /// Run every queued release into the VM, in order.
-    pub(crate) fn apply(&mut self, script: &mut UiScript) {
-        for guid in self.0.drain(..) {
-            script.unlock_item(guid);
-        }
-    }
-}
 
 /// The VM's locks between a VM and the next: the reference's bit lives on the item object
 /// (`item+0x314`), which a `/reload` keeps, while ours lives in the VM it rebuilds.
@@ -99,30 +78,28 @@ pub(crate) struct LockWatch {
     lock_owners: HashMap<u64, Entity>,
 }
 
-/// Run the releases the handlers without a VM queued, and forget the locks whose objects went:
-/// a locked item whose object went away, or came back as a new one (a cross-map worldport
-/// rebuilds them all), loses the lock silently, as it lived on the old object and the new one is
-/// built unlocked (`0x5d821f`, `0x5d823e`).
+/// Run the loot window's owed unlocks, each `UnlockItem` (`0x495420`) whose `ITEM_LOCK_CHANGED`
+/// fires whether or not the guid names an item we hold (`0x495450`), and forget the locks whose
+/// objects went: a locked item whose object went away, or came back as a new one (a cross-map
+/// worldport rebuilds them all), loses the lock silently, as it lived on the old object and the
+/// new one is built unlocked (`0x5d821f`, `0x5d823e`).
 pub(crate) fn apply_item_releases(
     mut vm: crate::script_calls::VmWith<Option<ResMut<'static, crate::ui_loot::LootState>>>,
     objects: Objects,
-    mut queued: ResMut<ItemReleases>,
     mut watch: ResMut<LockWatch>,
 ) {
     vm.turn(|script, loot| {
         // Read before taking, so a frame owing nothing leaves the session unchanged for its feed.
-        if let Some(mut loot) = loot.filter(|l| l.owes_unlocks()) {
-            queued.0.extend(
-                loot.take_item_unlocks()
-                    .into_iter()
-                    .filter(|&(guid, live)| {
-                        !live || objects.object(guid).is_some_and(|f| f.is_item())
-                    })
-                    .map(|(guid, _)| guid),
-            );
-        }
+        let owed: Vec<u64> = match loot.filter(|l| l.owes_unlocks()) {
+            Some(mut loot) => loot
+                .take_item_unlocks()
+                .into_iter()
+                .filter(|&(guid, live)| !live || objects.object(guid).is_some_and(|f| f.is_item()))
+                .map(|(guid, _)| guid)
+                .collect(),
+            None => Vec::new(),
+        };
         let Some(script) = script else {
-            queued.0.clear();
             return;
         };
         let mut owners = HashMap::new();
@@ -137,7 +114,9 @@ pub(crate) fn apply_item_releases(
             }
         }
         watch.lock_owners = owners;
-        queued.apply(script);
+        for guid in owed {
+            script.unlock_item(guid);
+        }
     })
 }
 
@@ -169,7 +148,6 @@ mod tests {
     fn arrow_world() -> App {
         let mut app = App::new();
         app.init_resource::<crate::items::Items>()
-            .init_resource::<ItemReleases>()
             .init_resource::<LockWatch>()
             .init_resource::<crate::net::GuidIndex>()
             .add_systems(Update, apply_item_releases);
@@ -260,20 +238,5 @@ mod tests {
         app.update();
         assert_eq!(heard(&mut app), 1);
         assert!(!app.world().non_send_resource::<UiScript>().item_locked(A));
-    }
-
-    /// A sale's refusal (`0x5dd26b`) queues its unlock here, which runs with its event.
-    #[test]
-    fn a_queued_release_unlocks_with_its_event() {
-        let mut app = arrow_world();
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .lock_item(A);
-        let _ = heard(&mut app);
-        app.world_mut().resource_mut::<ItemReleases>().unlock(A);
-        app.update();
-        assert_eq!(heard(&mut app), 1);
-        assert!(!app.world().non_send_resource::<UiScript>().item_locked(A));
-        assert!(app.world().resource::<ItemReleases>().0.is_empty());
     }
 }

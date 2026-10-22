@@ -6,7 +6,6 @@ use bevy::prelude::*;
 
 use super::{EquipError, EquipErrors};
 use crate::net::{NetHandlerApp, SelfGuid};
-use crate::ui_items::locks::ItemReleases;
 use crate::ui_loot::LootLatch;
 
 pub(super) fn register(app: &mut App) {
@@ -15,16 +14,14 @@ pub(super) fn register(app: &mut App) {
         .net_handler(SessionEventKind::Disconnected, on_session_end);
 }
 
-/// The queued unlocks die with the session, never to fire into a later VM: the reference's lock
-/// is item-object state (`item+0x314`), and the objects are rebuilt at every world entry. The
-/// refusals queued with theirs go too, lines and all: they were the ended world's.
+/// The queued refusals die with the session, lines and unlocks, never to fire into a later VM:
+/// the reference's lock is item-object state (`item+0x314`), and the objects are rebuilt at every
+/// world entry.
 fn on_session_end(
     In(_): In<SessionEvent>,
-    mut releases: ResMut<ItemReleases>,
     mut equip_errors: ResMut<EquipErrors>,
     held: Option<ResMut<super::locks::HeldItemLocks>>,
 ) {
-    releases.0.clear();
     equip_errors.clear();
     if let Some(mut held) = held {
         *held = Default::default();
@@ -203,15 +200,11 @@ mod tests {
     fn the_session_end_drops_every_queued_unlock() {
         let mut app = App::new();
         app.init_resource::<EquipErrors>()
-            .init_resource::<ItemReleases>()
             .init_resource::<crate::item_lane::ItemLane>()
             .init_resource::<crate::item_watch::BagCache>()
             .init_resource::<LootLatch>()
             .init_resource::<SelfGuid>();
         register(&mut app);
-        app.world_mut()
-            .resource_mut::<ItemReleases>()
-            .unlock(0x4000_0000_0000_0007);
         app.world_mut()
             .resource_mut::<EquipErrors>()
             .push(EquipError {
@@ -230,12 +223,8 @@ mod tests {
         );
 
         assert!(
-            app.world().resource::<ItemReleases>().0.is_empty(),
-            "no ITEM_LOCK_CHANGED for the old session's items"
-        );
-        assert!(
             app.world().resource::<EquipErrors>().queued().is_empty(),
-            "nor a refusal's line or unlocks"
+            "no refusal's line or unlocks for the old session's items"
         );
     }
 }
