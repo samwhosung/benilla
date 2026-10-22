@@ -1524,6 +1524,7 @@ mod bind_confirm_tests {
         slots.insert(
             1,
             ContainerSlot {
+                uncached_link: None,
                 use_fork: Default::default(),
                 item_class: None,
                 duration_ms: None,

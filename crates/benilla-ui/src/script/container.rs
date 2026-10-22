@@ -48,6 +48,10 @@ pub struct ContainerSlot {
     pub item_id: u32,
     /// An `|Hitem:…|h[Name]|h` link once the name is known.
     pub link: Option<String>,
+    /// The link `0x52ae00` builds while the record is not cached, white and nameless (`0x52aec5`,
+    /// `0x5d8b40`); `None` once [`Self::link`] is set. `GetInventoryItemLink` answers it for the
+    /// vault and keyring bands (`0x4c8ce2`).
+    pub uncached_link: Option<String>,
     /// The item object's guid, 0 while unresolved: what the client's lock (`item+0x314`) and
     /// every lock read key on.
     pub guid: u64,
@@ -1329,6 +1333,7 @@ mod tests {
         slots.insert(
             1,
             ContainerSlot {
+                uncached_link: None,
                 use_fork: Default::default(),
                 item_class: None,
                 duration_ms: None,
@@ -2158,6 +2163,7 @@ mod tests {
         state.slots.insert(
             5,
             ContainerSlot {
+                uncached_link: None,
                 use_fork: Default::default(),
                 item_class: None,
                 duration_ms: None,

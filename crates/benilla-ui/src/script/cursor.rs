@@ -1185,6 +1185,7 @@ mod tests {
         slots.insert(
             1,
             crate::script::container::ContainerSlot {
+                uncached_link: None,
                 use_fork: Default::default(),
                 item_class: None,
                 duration_ms: None,

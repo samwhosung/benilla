@@ -875,6 +875,7 @@ fn resolve_slot(
         return Some(ContainerSlot {
             durability: None,
             guid,
+            uncached_link: Some(crate::ui_items::object_link(fields, None, rolls)),
             item_id: entry,
             count,
             readable,
@@ -892,6 +893,7 @@ fn resolve_slot(
         });
     };
     Some(ContainerSlot {
+        uncached_link: None,
         use_fork: super::drain::use_fork(&t, flags, fields.item_text_id().unwrap_or(0)),
         item_class: Some(t.class),
         bonding: t.bonding,
@@ -920,7 +922,7 @@ fn resolve_slot(
         item_id: entry,
         // `GetContainerItemLink` links the object (`0x4f997f` → `0x52ae00`); the tooltip reads its
         // name back off it.
-        link: Some(crate::ui_items::object_link(fields, &t, rolls)),
+        link: Some(crate::ui_items::object_link(fields, Some(&t), rolls)),
         guid,
         readable,
         creator,

@@ -444,21 +444,19 @@ fn slot_view(
         }),
         rolls.enchants,
     );
-    // `ITEM_FIELD_RANDOM_PROPERTIES_ID`, the roll behind an "of the Bear" name; its enchants are
-    // already in the slots above.
-    let roll = obj.item_random_properties_id();
     // Only read, as the inventory getters read it (`0x4c8a0a`, `0x4c8d34`): the item's create asked.
     let t = items.template(entry, guid, Ask::Read);
+    // `GetInventoryItemLink` links the player's own item object (`0x4c8ce2` → `0x52ae00`), its
+    // record cached or not.
+    let object_link = crate::ui_items::object_link(obj, t, rolls);
     let (name, quality, display, link, equip_slots, kind, bar_placeable, consumable) = match t {
         Some(t) => {
-            let name = rolls.name(&t.name, roll);
+            let name = rolls.name(&t.name, obj.item_random_properties_id());
             (
                 Some(name.clone()),
                 t.quality as i32,
                 t.display_info_id,
-                // `GetInventoryItemLink` links the player's own item object (`0x4c8ce2` →
-                // `0x52ae00`).
-                Some(crate::ui_items::object_link(obj, t, rolls)),
+                Some(object_link.clone()),
                 find_equip_slot(t.inventory_type, has_relic_slot),
                 (t.class, t.subclass),
                 t.placeable_on_action_bar(),
@@ -503,6 +501,7 @@ fn slot_view(
         contents_count,
         quality,
         name,
+        uncached_link: t.is_none().then_some(object_link),
         link,
         durability,
         flags,
@@ -586,6 +585,7 @@ fn inventory_slots(
             .and_then(|i| i.catalog.get(display))
             .and_then(|d| d.icon.clone());
         inv[0] = Some(InvSlotView {
+            uncached_link: None,
             inventory_type,
             durability: None,
             flags: 0,

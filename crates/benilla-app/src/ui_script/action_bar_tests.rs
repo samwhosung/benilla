@@ -1216,6 +1216,7 @@ fn shipped_bag_frame_drives_end_to_end() {
     slots.insert(
         1,
         ContainerSlot {
+            uncached_link: None,
             use_fork: Default::default(),
             item_class: None,
             duration_ms: None,

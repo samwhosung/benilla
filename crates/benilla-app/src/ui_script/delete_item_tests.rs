@@ -14,6 +14,7 @@ fn one_item_backpack(item_id: u32, name: &str, quality: u32) -> ContainerState {
     slots.insert(
         1,
         ContainerSlot {
+            uncached_link: None,
             use_fork: Default::default(),
             item_class: None,
             duration_ms: None,

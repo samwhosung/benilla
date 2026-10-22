@@ -454,6 +454,7 @@ mod tests {
     fn doll_slots() -> crate::script::InventorySlots {
         let mut slots: crate::script::InventorySlots = Default::default();
         slots[1] = Some(InvSlotView {
+            uncached_link: None,
             duration_ms: None,
             field_duration: 0,
             already_bound: false,
@@ -484,6 +485,7 @@ mod tests {
             spell_charges: [0; 5],
         });
         slots[11] = Some(InvSlotView {
+            uncached_link: None,
             duration_ms: None,
             field_duration: 0,
             already_bound: false,
@@ -514,6 +516,7 @@ mod tests {
             spell_charges: [0; 5],
         });
         slots[19] = Some(InvSlotView {
+            uncached_link: None,
             duration_ms: None,
             field_duration: 0,
             already_bound: false,
@@ -551,6 +554,7 @@ mod tests {
         slots.insert(
             1,
             ContainerSlot {
+                uncached_link: None,
                 use_fork: Default::default(),
                 item_class: None,
                 duration_ms: None,
@@ -720,6 +724,7 @@ mod tests {
         });
         // An equipped bag in Bag0Slot (id 20): its equip_slots is the four bag slots.
         slots[20] = Some(InvSlotView {
+            uncached_link: None,
             duration_ms: None,
             field_duration: 0,
             already_bound: false,
@@ -770,6 +775,7 @@ mod tests {
         slots.insert(
             3,
             ContainerSlot {
+                uncached_link: None,
                 use_fork: Default::default(),
                 item_class: None,
                 duration_ms: None,

@@ -226,6 +226,11 @@ pub struct InvSlotView {
     pub use_fork: super::container::UseFork,
     /// An `|Hitem:…|h[Name]|h` link once the name is known.
     pub link: Option<String>,
+    /// The link `0x52ae00` builds of an own item object whose record the cache lacks, white and
+    /// nameless (`0x52aec5`, `0x5d8b40`), which `GetInventoryItemLink` answers (`0x4c8ce2`); `None`
+    /// once [`Self::link`] is set, and for another player's visible item, which links nothing
+    /// without its record (`0x4c8d3d`).
+    pub uncached_link: Option<String>,
     /// The item object's guid, 0 while unresolved: `IsInventoryItemLocked` reads the client's lock
     /// on it.
     pub guid: u64,
@@ -706,6 +711,7 @@ impl InvSlotView {
             spell_0: slot.spell_0,
             spell_charges: slot.spell_charges,
             link: slot.link.clone(),
+            uncached_link: slot.uncached_link.clone(),
             guid: slot.guid,
             creator: slot.creator.clone(),
             gift_creator: slot.gift_creator.clone(),
@@ -1082,8 +1088,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetInventoryItemLink(unit, slot) → `|cff…|Hitem:…|h[Name]|h|r`, or nil until the template
-    // arrives with the name and quality.
+    // GetInventoryItemLink(unit, slot) → `|cff…|Hitem:…|h[Name]|h|r` (`0x4c8c10`). Every no-item
+    // exit pushes nothing (`0x4c8c56`): the reach gate, an empty slot, and a visible item whose
+    // record is not cached (`0x4c8d3d`); an own item links without its record (`0x4c8ce2`).
     g.set(
         "GetInventoryItemLink",
         lua.create_function(|lua, (unit, slot): (Value, Value)| {
@@ -1106,14 +1113,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             }
             let token = Some(token);
             super::unit::check_unit_token(&token)?;
-            Ok(
-                match player_inv_slot(lua, &token, i64::from(slot0) + 1).and_then(|v| v.link) {
-                    Some(link) => {
-                        MultiValue::from_vec(vec![Value::String(lua.create_string(&link)?)])
-                    }
-                    None => MultiValue::from_vec(vec![Value::Nil]),
-                },
-            )
+            let link = player_inv_slot(lua, &token, i64::from(slot0) + 1)
+                .and_then(|v| v.link.or(v.uncached_link));
+            Ok(match link {
+                Some(link) => MultiValue::from_vec(vec![Value::String(lua.create_string(&link)?)]),
+                None => MultiValue::new(),
+            })
         })?,
     )?;
 
