@@ -799,6 +799,12 @@ fn superceded_spell(
     announce_learn(new_spell_id, spells, errors);
     // The same flag flashes the tab of the new rank.
     tab_flash.0.push(new_spell_id);
+    // That unlearn (`UnlearnSpell(old, 1)`, `0x5e6392` into `0x5e9fe0`) then clears every bar slot
+    // still standing for the old rank (`0x5ea253`), an item's on-use spell included; a spell with
+    // no record unlearns nothing (`0x5ea02a`).
+    if spells.is_some_and(|s| s.catalog.get(old_spell_id).is_some()) {
+        actions.unlearned.push(old_spell_id);
+    }
 }
 
 /// The server's verdict on our cast (`SMSG_CAST_RESULT`, `HandleCastResult 0x6e7330`).
