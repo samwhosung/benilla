@@ -44,15 +44,17 @@ pub struct IgnoreInfo {
 }
 
 /// One `/who` row in `GetWhoInfo`'s order, names localized; race comes before class, where the
-/// wire has class first.
+/// wire has class first. A race, class or zone is `None` for an id with no row, which
+/// `GetWhoInfo` answers `UNKNOWN` (`0x5ad782`, `0x5ad7c5`, `0x5ad816`) and the sort ties
+/// (`0x5adbb2`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WhoInfo {
     pub name: String,
     pub guild: String,
     pub level: u32,
-    pub race: String,
-    pub class: String,
-    pub zone: String,
+    pub race: Option<String>,
+    pub class: Option<String>,
+    pub zone: Option<String>,
 }
 
 /// The social snapshot the app pushes whole; the default is a fresh login's.
@@ -430,6 +432,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // GetWhoInfo(index) (`0x5ad6e0`): the row's six values, each name the localized one or the
+    // global `UNKNOWN` for an id with no row, read at the call (`0x703bf0`).
     g.set(
         "GetWhoInfo",
         lua.create_function(|lua, index: Value| {
@@ -439,6 +443,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 index,
                 "Usage: GetWhoInfo(index)",
             )?);
+            let unknown = super::glue_core::global_text(lua, "UNKNOWN");
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let row = usize::try_from(index - 1)
                 .ok()
@@ -457,9 +462,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Value::String(lua.create_string(&row.name)?),
                 Value::String(lua.create_string(&row.guild)?),
                 Value::Integer(i64::from(row.level)),
-                Value::String(lua.create_string(&row.race)?),
-                Value::String(lua.create_string(&row.class)?),
-                Value::String(lua.create_string(&row.zone)?),
+                Value::String(lua.create_string(row.race.as_deref().unwrap_or(&unknown))?),
+                Value::String(lua.create_string(row.class.as_deref().unwrap_or(&unknown))?),
+                Value::String(lua.create_string(row.zone.as_deref().unwrap_or(&unknown))?),
             ))
         })?,
     )?;
@@ -538,9 +543,9 @@ mod tests {
             name: name.to_string(),
             guild: String::new(),
             level,
-            race: "Human".to_string(),
-            class: "Warrior".to_string(),
-            zone: zone.to_string(),
+            race: Some("Human".to_string()),
+            class: Some("Warrior".to_string()),
+            zone: Some(zone.to_string()),
         }
     }
 

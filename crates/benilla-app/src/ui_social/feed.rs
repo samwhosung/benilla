@@ -168,8 +168,12 @@ fn who_lines(rows: &[WhoInfo], total: u32, get: &dyn Fn(&str) -> Option<String>)
     let chat = |text: String| {
         (!text.is_empty()).then(|| Shown::unkeyed(benilla_ui::messages::MsgKind::Chat, text))
     };
+    // The composer's name for an id with no row (`0x5ae199`, `0x5ae1d2`, `0x5ae20b`).
+    let unknown = get("UNKNOWN").unwrap_or_default();
+    let named = |name: &Option<String>| name.clone().unwrap_or_else(|| unknown.clone());
     let mut lines = Vec::with_capacity(rows.len() + 1);
     for row in rows {
+        let (race, class, zone) = (named(&row.race), named(&row.class), named(&row.zone));
         let key = if row.guild.is_empty() {
             WHO_KEYS[0]
         } else {
@@ -184,13 +188,13 @@ fn who_lines(rows: &[WhoInfo], total: u32, get: &dyn Fn(&str) -> Option<String>)
             Arg::S(&row.name),
             Arg::S(&row.name),
             Arg::D(i64::from(row.level)),
-            Arg::S(&row.race),
-            Arg::S(&row.class),
+            Arg::S(&race),
+            Arg::S(&class),
         ];
         if !row.guild.is_empty() {
             args.push(Arg::S(&row.guild));
         }
-        args.push(Arg::S(&row.zone));
+        args.push(Arg::S(&zone));
         lines.extend(chat(fill(&template, &args)));
     }
     // `_P1` for any total but one, `GetText`'s plural rule, so zero reads "0 players total".
@@ -306,26 +310,25 @@ fn who_rows(
     rows
 }
 
-/// One `/who` row, ids resolved; the wire carries class before race, the Lua API race first.
+/// One `/who` row, ids resolved, `None` for an id with no row; the wire carries class before
+/// race, the Lua API race first. Each id is bounded whole and signed (`0x5ad75d`, `0x5ad7a0`,
+/// `0x5ad7e3`), never by its low byte.
 fn who_row(entry: &WhoEntry, areas: Option<&AreaTableCatalog>, names: UnitNames<'_>) -> WhoInfo {
+    let id = |v: u32| u8::try_from(v).ok();
     WhoInfo {
         name: entry.name.clone(),
         guild: entry.guild.clone(),
         level: entry.level,
-        race: names
-            .race(entry.race as u8)
-            .map(|(display, _)| display)
-            .unwrap_or_default()
-            .to_string(),
-        class: names
-            .class(entry.class as u8)
-            .map(|(display, _)| display)
-            .unwrap_or_default()
-            .to_string(),
+        race: id(entry.race)
+            .and_then(|r| names.race(r))
+            .map(|(display, _)| display.to_string()),
+        class: id(entry.class)
+            .and_then(|c| names.class(c))
+            .map(|(display, _)| display.to_string()),
         zone: areas
+            .filter(|_| (entry.zone as i32) >= 0)
             .and_then(|a| a.name(entry.zone))
-            .unwrap_or_default()
-            .to_string(),
+            .map(str::to_string),
     }
 }
 
@@ -579,9 +582,9 @@ mod tests {
                 name: name.into(),
                 level,
                 guild: guild.into(),
-                race: race.into(),
-                class: class.into(),
-                zone: zone.into(),
+                race: Some(race.into()),
+                class: Some(class.into()),
+                zone: Some(zone.into()),
             };
         let lines: Vec<String> = who_lines(
             &[
@@ -642,8 +645,8 @@ mod tests {
         let korean = crate::ui_unit::TestNames::korean();
         let row = who_row(&entry, None, korean.names());
         assert_eq!(
-            (row.race.as_str(), row.class.as_str()),
-            ("언데드", "마법사")
+            (row.race.as_deref(), row.class.as_deref()),
+            (Some("언데드"), Some("마법사"))
         );
     }
 

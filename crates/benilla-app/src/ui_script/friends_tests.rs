@@ -20,9 +20,9 @@ fn who(name: &str, level: u32, class: &str, zone: &str) -> WhoInfo {
         name: name.to_string(),
         guild: String::new(),
         level,
-        race: "Human".to_string(),
-        class: class.to_string(),
-        zone: zone.to_string(),
+        race: Some("Human".to_string()),
+        class: Some(class.to_string()),
+        zone: Some(zone.to_string()),
     }
 }
 
@@ -366,9 +366,9 @@ fn who_rows_fill_their_columns() {
                 name: "Tigole".to_string(),
                 guild: "Legacy of Steel".to_string(),
                 level: 40,
-                race: "Human".to_string(),
-                class: "Rogue".to_string(),
-                zone: "Westfall".to_string(),
+                race: Some("Human".to_string()),
+                class: Some("Rogue".to_string()),
+                zone: Some("Westfall".to_string()),
             }],
             who_total: 1,
             ..Default::default()
@@ -418,9 +418,9 @@ fn the_who_dropdown_switches_the_variable_column() {
                 name: "Tigole".to_string(),
                 guild: "Legacy of Steel".to_string(),
                 level: 40,
-                race: "Human".to_string(),
-                class: "Rogue".to_string(),
-                zone: "Westfall".to_string(),
+                race: Some("Human".to_string()),
+                class: Some("Rogue".to_string()),
+                zone: Some("Westfall".to_string()),
             }],
             who_total: 1,
             ..Default::default()
@@ -754,9 +754,9 @@ fn the_who_list_reaches_its_last_row_at_the_bars_end() {
             name: format!("Who{i:02}"),
             guild: String::new(),
             level: 60,
-            race: "Human".to_string(),
-            class: "Warrior".to_string(),
-            zone: "Elwynn Forest".to_string(),
+            race: Some("Human".to_string()),
+            class: Some("Warrior".to_string()),
+            zone: Some("Elwynn Forest".to_string()),
         })
         .collect();
     push(

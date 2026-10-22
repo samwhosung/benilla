@@ -68,9 +68,9 @@ impl WhoSortKey {
             // `a+0x90`, an i32, lower level first.
             Self::Level => a.level.cmp(&b.level),
             // The localized `ChrClasses`/`ChrRaces`/`AreaTable` name the app resolved into the row.
-            Self::Class => dbc_name_cmp(&a.class, &b.class),
-            Self::Race => dbc_name_cmp(&a.race, &b.race),
-            Self::Zone => dbc_name_cmp(&a.zone, &b.zone),
+            Self::Class => dbc_name_cmp(a.class.as_deref(), b.class.as_deref()),
+            Self::Race => dbc_name_cmp(a.race.as_deref(), b.race.as_deref()),
+            Self::Zone => dbc_name_cmp(a.zone.as_deref(), b.zone.as_deref()),
             // `0x5adbb2` is the chain loop's continue label.
             Self::Group => Ordering::Equal,
         }
@@ -150,19 +150,17 @@ fn ascii_ci_cmp(a: &str, b: &str) -> Ordering {
     a.len().cmp(&b.len())
 }
 
-/// The class, race and zone arms (`0x5ada7b`, `0x5adadf`, `0x5adb40`): an id with no DBC row, an
-/// empty name here, sorts after every resolved name, not first as `""`. Two misses tie and pass
-/// to the next key (`0x5adbb2`), as there. The empty name is the miss marker: the reference's
-/// `GetWhoInfo` (`0x5ad6e0`) shows `UNKNOWN` for it, benilla's an empty cell, and a row that
-/// carried `UNKNOWN` would sort on that word.
-fn dbc_name_cmp(a: &str, b: &str) -> Ordering {
-    match (a.is_empty(), b.is_empty()) {
-        (true, true) => Ordering::Equal,
+/// The class, race and zone arms (`0x5ada7b`, `0x5adadf`, `0x5adb40`): an id with no DBC row
+/// (`None`) sorts after every resolved name, and two misses tie and pass to the next key
+/// (`0x5adbb2`), as there.
+fn dbc_name_cmp(a: Option<&str>, b: Option<&str>) -> Ordering {
+    match (a, b) {
+        (None, None) => Ordering::Equal,
         // Deviation: the reference ties a miss against a hit (`0x5adab6`); no total order can, and
         // `sort_by` may panic on one that is not, so the miss goes last.
-        (true, false) => Ordering::Greater,
-        (false, true) => Ordering::Less,
-        (false, false) => ascii_ci_cmp(a, b),
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(a), Some(b)) => ascii_ci_cmp(a, b),
     }
 }
 
@@ -170,14 +168,19 @@ fn dbc_name_cmp(a: &str, b: &str) -> Ordering {
 mod tests {
     use super::*;
 
+    /// A DBC name, the empty string standing for an id with no row.
+    fn looked_up(name: &str) -> Option<String> {
+        (!name.is_empty()).then(|| name.to_string())
+    }
+
     fn row(name: &str, level: u32, class: &str, zone: &str) -> WhoInfo {
         WhoInfo {
             name: name.to_string(),
             guild: String::new(),
             level,
-            race: "Human".to_string(),
-            class: class.to_string(),
-            zone: zone.to_string(),
+            race: looked_up("Human"),
+            class: looked_up(class),
+            zone: looked_up(zone),
         }
     }
 
@@ -332,9 +335,9 @@ mod tests {
     /// Each DBC-backed key as a single-key comparator, with the setter for its field.
     fn dbc_keys() -> [(&'static str, Setter); 3] {
         [
-            ("class", |r, v| r.class = v.to_string()),
-            ("race", |r, v| r.race = v.to_string()),
-            ("zone", |r, v| r.zone = v.to_string()),
+            ("class", |r, v| r.class = looked_up(v)),
+            ("race", |r, v| r.race = looked_up(v)),
+            ("zone", |r, v| r.zone = looked_up(v)),
         ]
     }
 
@@ -389,9 +392,9 @@ mod tests {
             let mut rows = mixed_rows(set, 64);
             chain.sort(&mut rows);
             let field = |r: &WhoInfo| match key {
-                "class" => r.class.clone(),
-                "race" => r.race.clone(),
-                _ => r.zone.clone(),
+                "class" => r.class.clone().unwrap_or_default(),
+                "race" => r.race.clone().unwrap_or_default(),
+                _ => r.zone.clone().unwrap_or_default(),
             };
             let first_miss = rows.iter().position(|r| field(r).is_empty()).unwrap();
             assert!(
