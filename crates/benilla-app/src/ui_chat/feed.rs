@@ -1495,9 +1495,10 @@ fn fire_one(
                 // The base name; `stamp_channel` adds arg4's number and arg7-arg9 below.
                 let channel_base = msg.channel.clone().unwrap_or_default();
                 // `$`-macros expand for the monster, boss and BG system types only, against
-                // [`macro_subject_guid`]. A failed expansion (`0x49dac2`-`0x49db1e`, `0x49d9c9`) with a zero
-                // subject or a known name drops the line, one with an unknown name holds it for
-                // the name query (`tries`), and only a second failure shows the raw text.
+                // [`macro_subject_guid`]. A failed expansion (`0x49dac2`-`0x49db1e`, `0x49d9c9`)
+                // with a zero subject or a known name drops the line, one with an unknown name
+                // holds it for the name query (`tries`), and only a second failure shows the raw
+                // text.
                 let expanded = if MACRO_EXPANDED_TYPES.contains(&msg.chat_type) {
                     let subject_guid = macro_subject_guid(&msg);
                     let subject = crate::npc_text::subject_for_guid(
