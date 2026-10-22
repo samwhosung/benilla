@@ -526,7 +526,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `GuildStatus_Update` and no `GuildRoster` (`FriendsFrame.xml:442-446`).
     g.set(
         "SortGuildRoster",
-        lua.create_function(|lua, field: String| submit(lua, GuildCall::Sort(field)))?,
+        lua.create_function(|lua, field: Value| {
+            // `lua_isstring` (`0x4d1cb8`), else the binary's own spelling (`0x849bf0`).
+            let field = binding_abi::string_arg(lua, field, "Usgae: SortGuildRoster(\"type\")")?;
+            submit(lua, GuildCall::Sort(field))
+        })?,
     )?;
 
     // CloseGuildRoster() is `xor eax,eax; ret` in the reference: a no-op that sends nothing.
