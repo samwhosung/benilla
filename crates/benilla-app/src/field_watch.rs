@@ -509,21 +509,18 @@ pub(crate) enum Step {
 
 /// The type watch an edge's chat line is written in, by the edge's field: the aura watcher
 /// `0x604d00` over `UNIT_FIELD_AURA` and `AURAFLAGS` (fields 47-100), whose removals and adds log
-/// (`0x612320` → `0x62b480`, `0x6123f0`), the applications watcher `0x604ea0` (113-124,
-/// `0x612450` → `0x62b800`), and each other field's own, the health's `0x6046f0` and the loyalty
-/// byte's `0x604530` (→ `0x5ff860` → `0x62d440`) among them.
+/// (`0x612320` → `0x62b480`, `0x6123f0`), and each other field's own: the applications watcher
+/// `0x604ea0` is 48 one-byte watches, one per byte of fields 113-124 (the loop at `0x60423b`), so
+/// each runs at its own field (`0x612450` → `0x62b800`), as do the health's `0x6046f0` and the
+/// loyalty byte's `0x604530` (→ `0x5ff860` → `0x62d440`).
 fn edge_place(block: &Notified, index: u16) -> Place {
-    use benilla_protocol::field::{FIELD_UNIT_AURA, FIELD_UNIT_AURAAPPLICATIONS};
+    use benilla_protocol::field::FIELD_UNIT_AURA;
     const AURA_WATCH: u16 = 54;
-    const APPLICATIONS_WATCH: u16 = 12;
-    for (base, dwords) in [
-        (FIELD_UNIT_AURA, AURA_WATCH),
-        (FIELD_UNIT_AURAAPPLICATIONS, APPLICATIONS_WATCH),
-    ] {
-        if (base..base + dwords).contains(&index) {
-            let fired = block.fired(base, 0, 4 * dwords).unwrap_or(index);
-            return (fired, base, List::Type);
-        }
+    if (FIELD_UNIT_AURA..FIELD_UNIT_AURA + AURA_WATCH).contains(&index) {
+        let fired = block
+            .fired(FIELD_UNIT_AURA, 0, 4 * AURA_WATCH)
+            .unwrap_or(index);
+        return (fired, FIELD_UNIT_AURA, List::Type);
     }
     (index, index, List::Type)
 }
