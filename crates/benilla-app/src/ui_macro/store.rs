@@ -12,38 +12,44 @@ use benilla_ui::script::{macro_slot_word, MacroView, CHARACTER_ID_BASE, MAX_MACR
 /// The path prefix the client prepends to a stored icon basename (`0x84ca64`).
 pub(super) const ICON_PREFIX: &str = "Interface\\Icons\\";
 
-/// Parse one scope's file into its records in file order, each with its id. A header with no id, or
-/// a zero one, is no record (`0x4f072a`); the table that takes them skips what the scope cannot
-/// hold and any id it has, and gives an id below its base the base (`MacroState::from_scopes`).
+/// Parse one scope's file into its records in file order, each with its id, as the reader
+/// `0x4f0600` walks it: the file splits into lines on CR and LF, blank ones skipped (`0x4f0687`).
+/// With no record open, a line whose first space-separated token is `MACRO` without case opens one
+/// (`0x4f06c1`, `0x4f06d7`); a header with no id, or a zero one, is no record (`0x4f072a`). Within
+/// a record each line is body text followed by `\n` (`0x4f0a15`, `0x4f0a2b`), a `MACRO` line
+/// included (`0x4f06a2`), until a line that is `END` without case (`0x4f09d3`), where the body is
+/// stored (`0x4f09e4`): a record the file ends inside keeps an empty body. The table that takes
+/// the records skips what the scope cannot hold and any id it has, and gives an id below its base
+/// the base (`MacroState::from_scopes`).
 pub(super) fn parse(text: &str) -> Vec<MacroView> {
     let mut out: Vec<MacroView> = Vec::new();
-    let mut lines = text.lines().peekable();
-    while let Some(line) = lines.next() {
-        let Some(rest) = line.trim_start().strip_prefix("MACRO ") else {
+    // The open record, its index in `out`, and the body read so far.
+    let mut open: Option<(usize, String)> = None;
+    for line in text.split(['\r', '\n']).filter(|l| !l.is_empty()) {
+        if let Some((at, body)) = &mut open {
+            if benilla_ui::crt::str_cmp_i(line, "END") == 0 {
+                out[*at].body = std::mem::take(body);
+                open = None;
+            } else {
+                body.push_str(line);
+                body.push('\n');
+            }
+            continue;
+        }
+        let header = line.trim_start_matches(' ');
+        let (token, rest) = header.split_once(' ').unwrap_or((header, ""));
+        if benilla_ui::crt::str_cmp_i(token, "MACRO") != 0 {
             continue; // stray text between records
-        };
+        }
         let Some((id, name, icon)) = parse_header(rest) else {
             continue;
         };
-        // The body runs to a bare END, or to the next MACRO or EOF, so a truncated file keeps its
-        // last macro.
-        let mut body: Vec<&str> = Vec::new();
-        loop {
-            match lines.peek() {
-                None => break,
-                Some(l) if l.trim() == "END" => {
-                    lines.next();
-                    break;
-                }
-                Some(l) if l.trim_start().starts_with("MACRO ") => break,
-                Some(_) => body.push(lines.next().unwrap_or_default()),
-            }
-        }
+        open = Some((out.len(), String::new()));
         out.push(MacroView {
             id,
             name,
             texture: icon.map(icon_path),
-            body: body.join("\n"),
+            body: String::new(),
             local_only: false,
         });
     }
@@ -92,14 +98,16 @@ pub(super) fn legacy_character_words(records: &[MacroView]) -> Vec<(u32, u32)> {
         .collect()
 }
 
-/// Serialize a scope's macros back into the reference's format, in the order given.
+/// Serialize a scope's macros back into the reference's format, in the order given: the header
+/// (`0x4f0b61`), each body line the tokenizer splits on CR and LF with its own line end, so a
+/// blank line writes nothing (`0x4f0b8c`-`0x4f0be5`), then `END` (`0x4f0bec`).
 pub(super) fn write<'a>(macros: impl Iterator<Item = &'a MacroView>) -> String {
     let mut out = String::new();
     for m in macros {
         let icon = m.texture.as_deref().map(icon_token).unwrap_or_default();
         out.push_str(&format!("MACRO {} \"{}\" {}\n", m.id, m.name, icon));
-        if !m.body.is_empty() {
-            out.push_str(&m.body);
+        for line in m.body.split(['\r', '\n']).filter(|l| !l.is_empty()) {
+            out.push_str(line);
             out.push('\n');
         }
         out.push_str("END\n");

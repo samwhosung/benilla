@@ -28,9 +28,10 @@ fn a_saved_macro_table_round_trips_through_benilla_macros() {
     let account = crate::local_state::macros_account_path().unwrap();
     let character = crate::local_state::macros_character_path("Test Realm", "Probeone").unwrap();
 
+    // Bodies as the reader builds them, each line followed by a newline (`0x4f0a2b`).
     let state = MacroState::from_scopes(
-        vec![macro_view("Ambush", "/cast Ambush\n/say pew")],
-        vec![macro_view("Charge", "/cast Charge")],
+        vec![macro_view("Ambush", "/cast Ambush\n/say pew\n")],
+        vec![macro_view("Charge", "/cast Charge\n")],
     );
     crate::local_state::write_atomic(
         &account,

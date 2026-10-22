@@ -54,7 +54,8 @@ pub struct MacroView {
     /// The icon's texture path, kept by name because the reference saves the icon by name
     /// (`MACRO %d "%s" %s`, `0x84cb60`).
     pub texture: Option<String>,
-    /// The macro's lines, `\n`-separated.
+    /// The macro's text: as a verb gave it, or as the file reader builds it, each line followed
+    /// by `\n` (`0x4f0a2b`).
     pub body: String,
     /// `isLocal` and the `local` argument, carried but not saved here. The 1.12 client saves these
     /// to `macros-local.txt` beside `macros-cache.txt` (`0x45de74`, `0x45de88`); the stock UI never
