@@ -305,6 +305,9 @@ impl super::Model {
     }
 
     /// The slot a container binding finds at `(bag, slot)`, through [`Self::bag`].
+    // Deviation: the backpack is bounded by its own 16 slots, where `0x4f990f` bounds bag 0 by
+    // the player list's count (0x71), a reference bug that lets the backpack index read other
+    // containers.
     pub(crate) fn bag_slot(&self, bag: i64, slot: u32) -> Option<&ContainerSlot> {
         self.bag(bag)?.slots.get(&slot)
     }
