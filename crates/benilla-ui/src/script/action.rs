@@ -17,6 +17,10 @@ pub(crate) const ACTION_KIND_SPELL: u8 = 0x00;
 pub(crate) const ACTION_KIND_MACRO: u8 = 0x40;
 pub(crate) const ACTION_KIND_ITEM: u8 = 0x80;
 
+/// The icon directory a macro's basename is formatted after (`0x84c988`, the string at
+/// `0x84ca64`).
+const MACRO_ICON_DIR: &str = "Interface\\Icons\\";
+
 /// The macro id a slot word holds, if it is a macro's: the word with bit 30 cleared when its top
 /// nibble is 4 (`0x4e5030`, `0x4e5ba0`, `0x4e7086`; `0x4e7090 and ecx,0xbfffffff`). A character
 /// macro's id has bit 24 set, so its slot's kind byte is 0x41 (vmangos `ACTION_BUTTON_CMACRO`).
@@ -362,14 +366,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `is-number` else `Usage: GetActionTexture(slot)` (`0x84bf78`, `0x4e6e5a`).
             let action = binding_abi::index_arg32(lua, action, "Usage: GetActionTexture(slot)")?;
             // A macro slot reads its macro's icon live (`0x4e6bf9` into `0x4f0fd0`), so a handler
-            // of the edit's own slot signal sees the new one.
+            // of the edit's own slot signal sees the new one. The arm formats the icon directory
+            // and the basename (`0x4f0ffa`) and the binding pushes the buffer (`0x4e6e42`), so a
+            // macro with no icon gives the directory alone.
             let tex = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 model
                     .actions
                     .get(&action)
                     .and_then(|s| match macro_slot_id(s.kind, s.action) {
-                        Some(id) => model.macros.by_id(id).and_then(|m| m.texture.clone()),
+                        Some(id) => model.macros.by_id(id).map(|m| {
+                            m.texture
+                                .clone()
+                                .unwrap_or_else(|| MACRO_ICON_DIR.to_string())
+                        }),
                         None => s.texture.clone(),
                     })
             };
