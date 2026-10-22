@@ -2266,6 +2266,61 @@ mod tests {
         }
     }
 
+    /// Every no-item exit of `GetInventoryItemLink` jumps to `0x4c8c56` (`xor eax,eax`) and pushes
+    /// nothing, never a nil: the reach gate (`0x4c8cae`), an empty own slot (`0x4c8cda`) and a
+    /// visible item whose record the cache lacks (`0x4c8d3d`).
+    #[test]
+    fn the_inventory_link_answers_no_values_without_an_item() {
+        use crate::script::UnitReach;
+        use std::collections::HashMap;
+        const MATE: u64 = 0x20;
+        const FAR: u64 = 0x30;
+        let mut s = seated();
+        let mut own: crate::script::InventorySlots = Default::default();
+        own[1] = Some(InvSlotView {
+            item_id: 1,
+            name: Some("Helm".into()),
+            link: Some("|cffffffff|Hitem:1:0:0:0|h[Helm]|h|r".into()),
+            ..Default::default()
+        });
+        s.set_inventory_slots(own);
+        // The mate's helm, its record not cached: no name and no link.
+        let mut visible: crate::script::InventorySlots = Default::default();
+        visible[1] = Some(InvSlotView {
+            item_id: 2,
+            count: 1,
+            ..Default::default()
+        });
+        s.set_visible_equipment(MATE, Some(visible));
+        s.set_unit_guids(&UnitGuids {
+            player: ME,
+            target: MATE,
+            party: [FAR, 0, 0, 0],
+            held: HashMap::from([(ME, 0), (MATE, 0), (FAR, 0)]),
+            ..Default::default()
+        });
+        let near = UnitReach {
+            dist_sq: 16.0,
+            inspectable: true,
+        };
+        let far = UnitReach {
+            dist_sq: 400.0,
+            inspectable: true,
+        };
+        s.set_unit_reach(HashMap::from([(MATE, near), (FAR, far)]));
+        let count = |s: &UiScript, call: &str| s.arity(call).unwrap();
+        assert_eq!(count(&s, r#"GetInventoryItemLink("player", 1)"#), 1);
+        for call in [
+            r#"GetInventoryItemLink("player", 2)"#,
+            r#"GetInventoryItemLink("player", 20)"#,
+            r#"GetInventoryItemLink("target", 1)"#,
+            r#"GetInventoryItemLink("target", 2)"#,
+            r#"GetInventoryItemLink("party1", 1)"#,
+        ] {
+            assert_eq!(count(&s, call), 0, "{call}");
+        }
+    }
+
     /// The ammo slot's texture and quality getters look the record up with the callback
     /// `0x4c84f0` (`0x4c83bc`, `0x4c89cf`): each call that misses registers one, the texture's
     /// only while the player carries some (`0x4c83a0`, `CountInventoryItemsByEntry`). A cached

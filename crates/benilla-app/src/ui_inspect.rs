@@ -289,6 +289,7 @@ mod tests {
                 ..Default::default()
             })
             .init_resource::<crate::ui_party::GroupState>()
+            .init_resource::<crate::names::NameCache>()
             .add_systems(Update, feed_inspect);
         for guid in guids {
             let e = app
@@ -422,6 +423,65 @@ mod tests {
             .eval::<String>(r#"return GetInventoryItemLink("target", 1)"#)
             .unwrap();
         assert!(link.contains("|Hitem:7366:1900:0:0|h"), "{link}");
+    }
+
+    /// A slot's creator is the first two words of its visible-item block, which the tooltip copies
+    /// to its `+0x410` (`0x5333cd`-`0x5333d5`) for the maker line (`0x52e1d5`), and which vmangos
+    /// fills from the item's creator (`Player.cpp:10589`). The view carries the guid, and the
+    /// name once the name cache holds it: a name that lands rebuilds the views.
+    #[test]
+    fn an_inspected_slot_carries_its_creator() {
+        use benilla_protocol::field::FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR;
+        const MATE: u64 = 0x2001;
+        const SMITH: u64 = 0x77;
+        const ROBE: u32 = 7366;
+        let (mut app, _rx) = world([MATE, 0x2002], ROBE);
+        let mate = app.world().resource::<GuidIndex>().0[&MATE];
+        app.world_mut()
+            .entity_mut(mate)
+            .get_mut::<ObjectStore>()
+            .unwrap()
+            .0
+            .merge(benilla_protocol::ObjectFields::from_pairs(&[
+                (FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR, SMITH as u32),
+                (
+                    FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR + 1,
+                    (SMITH >> 32) as u32,
+                ),
+            ]));
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(ROBE, Some(crate::items::test_template("Robe")));
+        let view = |app: &mut App| {
+            app.world_mut()
+                .run_system_once(
+                    move |tables: VisibleItemTables, stores: Query<&ObjectStore>| {
+                        tables.slots(stores.get(mate).unwrap())[1]
+                            .clone()
+                            .expect("the robe")
+                    },
+                )
+                .unwrap()
+        };
+        let v = view(&mut app);
+        assert_eq!((v.creator_guid, v.creator), (SMITH, None));
+        let builds = |app: &mut App| {
+            app.update();
+            app.world_mut()
+                .resource_scope(|world, mut feed: Mut<InspectFeedState>| {
+                    feed.vm.get(world.non_send_resource::<UiScript>()).builds
+                })
+        };
+        let before = builds(&mut app);
+        assert_eq!(builds(&mut app), before, "nothing moved");
+        app.world_mut()
+            .resource_mut::<crate::names::NameCache>()
+            .insert_player(SMITH, "Smith".into(), None);
+        assert_eq!(view(&mut app).creator.as_deref(), Some("Smith"));
+        assert!(
+            builds(&mut app) > before,
+            "the name's landing rebuilds the views"
+        );
     }
 
     /// A player's 19 views are rebuilt when their visible-item block moves, not on any write to

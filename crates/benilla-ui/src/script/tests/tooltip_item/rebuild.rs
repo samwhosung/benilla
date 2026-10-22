@@ -427,3 +427,55 @@ fn an_action_items_late_maker_name_adds_its_line() {
     );
     assert!(s.take_errors().is_empty());
 }
+
+/// An inspected slot's maker is its visible-item block's creator, which `SetInventoryItem` copies
+/// to the tooltip's `+0x410` (`0x5333cd`-`0x5333d5`) and the maker line reads (`0x52e1d5`): the
+/// build asks the name, and the inspected view carrying it once the app re-pushes it rebuilds the
+/// tooltip with the line.
+#[test]
+fn an_inspected_slots_maker_name_that_arrives_adds_its_line() {
+    const MATE: u64 = 0x20;
+    let mut s = fixture();
+    let worn = |creator: Option<&str>| {
+        let mut slots: InventorySlots = Default::default();
+        slots[5] = Some(InvSlotView {
+            item_id: BAR,
+            count: 1,
+            quality: 1,
+            name: Some("Copper Bar".into()),
+            link: Some(format!("|cffffffff|Hitem:{BAR}:0:0:0|h[Copper Bar]|h|r")),
+            creator_guid: SMITH,
+            creator: creator.map(str::to_string),
+            ..Default::default()
+        });
+        slots
+    };
+    s.set_visible_equipment(MATE, Some(worn(None)));
+    s.set_unit_guids(&UnitGuids {
+        target: MATE,
+        held: HashMap::from([(MATE, 0)]),
+        ..Default::default()
+    });
+    s.set_unit_reach(HashMap::from([(
+        MATE,
+        UnitReach {
+            dist_sq: 16.0,
+            inspectable: true,
+        },
+    )]));
+    s.run("TT:SetOwner(Slot, 'ANCHOR_RIGHT') TT:SetInventoryItem('target', 5)")
+        .unwrap();
+    assert_eq!(lines(&mut s, "TT"), ["Copper Bar"]);
+    assert_eq!(
+        s.take_item_name_asks(),
+        vec![SMITH],
+        "the build asks the app"
+    );
+    s.set_visible_equipment(MATE, Some(worn(Some("Smith"))));
+    s.tick(0.1);
+    assert_eq!(
+        lines(&mut s, "TT"),
+        ["Copper Bar", "|cff00ff00[CREATED_BY Smith]|r"]
+    );
+    assert!(s.take_errors().is_empty());
+}

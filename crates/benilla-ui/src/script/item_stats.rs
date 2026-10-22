@@ -783,6 +783,36 @@ mod get_item_info_tests {
         assert_eq!(texture.as_deref(), Some("Interface\\Icons\\INV_Sword_04"));
     }
 
+    /// The name is `0x5d8b00(entry, property)` (`0x48e194`-`0x48e1a7`): an `ItemRandomProperties`
+    /// row with a suffix joins it through `ITEM_SUFFIX_TEMPLATE` (`0x5d8b78`); id 0, a negative id
+    /// and an unknown one take the plain name (`0x5d8b47`-`0x5d8b51`).
+    #[test]
+    fn get_item_info_names_the_links_random_suffix() {
+        let mut s = UiScript::new().unwrap();
+        s.set_item_template(25, worn_shortsword());
+        s.set_random_properties(std::collections::HashMap::from([(
+            584,
+            crate::script::RandomPropertyView {
+                suffix: "of the Monkey".into(),
+                enchants: Vec::new(),
+            },
+        )]));
+        s.run(r#"ITEM_SUFFIX_TEMPLATE = "%s %s""#).unwrap();
+        let name = |s: &UiScript, arg: &str| {
+            s.eval::<String>(&format!("return (GetItemInfo({arg:?}))"))
+                .unwrap()
+        };
+        assert_eq!(name(&s, "item:25:0:584:0"), "Worn Shortsword of the Monkey");
+        assert_eq!(
+            s.eval::<String>(r#"local _, l = GetItemInfo("item:25:0:584:0") return l"#)
+                .unwrap(),
+            "item:25:0:584:0"
+        );
+        for plain in ["item:25:0:0:0", "item:25:0:-584:0", "item:25:0:585:0", "25"] {
+            assert_eq!(name(&s, plain), "Worn Shortsword", "{plain}");
+        }
+    }
+
     /// Ashbringer, item 13262: required level 60, item level 76 in vmangos `item_template`.
     #[test]
     fn position_four_is_the_required_level_not_the_item_level() {

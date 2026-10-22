@@ -1123,6 +1123,96 @@ mod tests {
         assert_eq!(link, "|cffffffff|Hitem:7366:1900:862:7|h[Helm]|h|r");
     }
 
+    /// An own item whose record the cache lacks still links: `0x52ae00` answers null only for a
+    /// null object (`0x52ae24`), takes quality 1 without a record (`0x52aec5`), and the name
+    /// builder leaves the name empty (`0x5d8b25`, the miss at `0x5d8b40`).
+    #[test]
+    fn an_equipped_item_with_no_record_links_white_and_nameless() {
+        use benilla_protocol::field::FIELD_PLAYER_INV_SLOT_HEAD;
+        const HELM: u64 = 0x4000_0000_0000_0b02;
+        const HELM_ID: u32 = 7366;
+        let mut app = world_with_bank_bag(None);
+        set_self(
+            &mut app,
+            &[
+                (FIELD_PLAYER_INV_SLOT_HEAD, HELM as u32),
+                (FIELD_PLAYER_INV_SLOT_HEAD + 1, (HELM >> 32) as u32),
+            ],
+        );
+        crate::items::test_spawn_item(
+            app.world_mut(),
+            HELM,
+            ObjectFields::from_pairs(&[(F_OBJECT_ENTRY, HELM_ID), (22, 1900), (43, 7), (44, 862)]),
+            false,
+        );
+        app.world_mut().run_system_once(feed_char).unwrap();
+        let link = app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .eval::<Option<String>>(r#"return GetInventoryItemLink("player", 1)"#)
+            .unwrap();
+        assert_eq!(
+            link.as_deref(),
+            Some("|cffffffff|Hitem:7366:1900:862:7|h[]|h|r")
+        );
+    }
+
+    /// A wrapped item names no random property (`0x5d8bc0`: `ITEM_FIELD_FLAGS & 0x8` passes 0 to
+    /// `0x5d8b00`, `0x5d8bc9`-`0x5d8bcf`), so a worn slot's name, the tooltip's title, carries no
+    /// suffix of the item inside.
+    #[test]
+    fn a_wrapped_items_slot_name_hides_the_roll() {
+        use benilla_formats::{RandomProperty, RandomPropertyCatalog};
+        use benilla_protocol::field::FIELD_OBJECT_ENTRY;
+        const GIFT_ID: u32 = 5043;
+        /// `ITEM_FIELD_FLAGS`.
+        const F_ITEM_FLAGS: u16 = 21;
+        /// `ITEM_FIELD_RANDOM_PROPERTIES_ID`.
+        const F_ROLL: u16 = 44;
+        let props = crate::items::RandomProperties(RandomPropertyCatalog::from_rows(
+            std::collections::HashMap::from([(
+                862,
+                RandomProperty {
+                    suffix: "of the Bear".into(),
+                    enchants: [0; 5],
+                },
+            )]),
+        ));
+        let mut items = Items::default();
+        items.insert_template(
+            GIFT_ID,
+            Some(crate::items::test_template("Red Ribboned Gift")),
+        );
+        let names = crate::names::NameCache::default();
+        let mut objs = crate::ui_items::TestObjects::new();
+        for (guid, flags) in [(0xC1, 0), (0xC2, 0x8)] {
+            objs.spawn(
+                guid,
+                ObjectFields::from_pairs(&[
+                    (2, 0x3),
+                    (FIELD_OBJECT_ENTRY, GIFT_ID),
+                    (F_ROLL, 862),
+                    (F_ITEM_FLAGS, flags),
+                ]),
+            );
+        }
+        let mut name = |guid: u64| {
+            let rolls = crate::items::RollCatalogs {
+                enchants: None,
+                props: Some(&props),
+            };
+            slot_view(&objs.get(), &items, None, rolls, &names, None, false, guid)
+                .expect("a view")
+                .name
+        };
+        assert_eq!(
+            name(0xC1).as_deref(),
+            Some("Red Ribboned Gift of the Bear"),
+            "unwrapped, the roll names"
+        );
+        assert_eq!(name(0xC2).as_deref(), Some("Red Ribboned Gift"));
+    }
+
     /// The ammo view only reads the record: what asks it are the texture and quality getters'
     /// lookups with the callback `0x4c84f0` (`0x4c83ce`, `0x4c8a0a`), so a frame no getter read
     /// the slot in sends nothing.
