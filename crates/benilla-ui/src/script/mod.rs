@@ -265,10 +265,10 @@ pub use cvar_checks::{
     check_small_cull, check_tex_lod_bias, check_triple_buffer, CvarCheck, CvarRows, CvarVerdict,
 };
 pub use cvar_checks::{
-    check_dist_cull, check_error_filter, check_footstep_bias, check_horizon_farclip,
-    check_lod_dist, check_map_obj_light_lod, check_max_lights, check_particle_density,
-    check_shadow_bias, check_target_nearest_distance, check_texture_lod_dist, check_unit_draw_dist,
-    check_water_lod,
+    check_dist_cull, check_error_filter, check_ffx_echo, check_footstep_bias,
+    check_horizon_farclip, check_lod_dist, check_map_obj_light_lod, check_max_lights,
+    check_particle_density, check_shadow_bias, check_target_nearest_distance,
+    check_texture_lod_dist, check_unit_draw_dist, check_water_lod,
 };
 pub use cvars::small_cull_text;
 pub use cvars::{

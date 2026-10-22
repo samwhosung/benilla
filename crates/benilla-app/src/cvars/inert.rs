@@ -12,7 +12,8 @@
 //! `0x50bfe0`, `0x50c000`, `0x50c040`), the error filter's (`0x4030f0`), the target range's
 //! (`0x490720`) and the world's (`0x688b70`, `0x688bd0`, `0x688f00`, `0x688fb0`, `0x689000`,
 //! `0x689050`, `0x689250`, `0x689450`, `0x6d8530`). The two LOD distances' (`0x688ab0`,
-//! `0x6891f0`) never refuse but print a line out of range, and run too. The trailing address is
+//! `0x6891f0`) never refuse but print a line out of range, and `ffxRectangle`'s (`0x6cde30`)
+//! prints its state; they run too. The trailing address is
 //! the register site in `reference/cvars.tsv`.
 
 use super::table::{same, Registered};
@@ -215,7 +216,7 @@ pub(super) const INERT: &[Registered] = &[
     same("ErrorLevelMax", "3"),             // 0x402d07
     same("ErrorLevelMin", "1"),             // 0x402ce4
     same("Errors", "0"),                    // 0x402c9e
-    same("ffxRectangle", "1"),              // 0x6cd007
+    same("ffxRectangle", "1").checked(benilla_ui::script::check_ffx_echo), // 0x6cd007
     same("footstepBias", "0.125").checked(benilla_ui::script::check_footstep_bias), // 0x6888b4
     same("FootstepSounds", "1"),            // 0x623133
     same("fullAlpha", "0"),                 // 0x6884b2

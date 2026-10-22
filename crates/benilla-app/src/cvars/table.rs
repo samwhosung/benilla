@@ -723,16 +723,17 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // ── The stock Video Options window's other boxes (`OptionsFrame.lua:5-22`) ───────────────────
     //
     // `ffx` (`0x6ccfe3`: name `0x86f2ac`, record `[0xce8a04]`), `ffxGlow` (`0x6cc17d`, name
-    // `0x86f200`) and `ffxDeath` (`0x6cc6d1`, name `0x86f238`): each "1", flags 1, with the echo stub
-    // `0x6cde30` as callback, and each record's integer read every frame. The FFX begin/end pair
+    // `0x86f200`) and `ffxDeath` (`0x6cc6d1`, name `0x86f238`): each "1", flags 1, with the echo
+    // callback `0x6cde30` ([`benilla_ui::script::check_ffx_echo`]), and each record's integer read
+    // every frame. The FFX begin/end pair
     // (`0x6cd890`/`0x6cda70`) runs the active pass only while `ffx` (`0x6cd8a6`), `pixelShaders`
     // (`0x6cd8b6`) and that pass's own enable hold: `CFFXGlow` (`0x6cc5a0`) reads `ffxGlow` at
     // `0x6cc5a8`, `CFFXDeath` (`0x6cded0`) reads `ffxDeath` at `0x6cdf10`. The stock Okay writes
     // `ffx` as Enable All Shaders (`OptionsFrame.lua:202-204`). The knob is
     // [`benilla_world::ffx_glow::FfxSwitches`].
-    same("ffx", "1"),
-    same("ffxGlow", "1"),
-    same("ffxDeath", "1"),
+    same("ffx", "1").checked(benilla_ui::script::check_ffx_echo),
+    same("ffxGlow", "1").checked(benilla_ui::script::check_ffx_echo),
+    same("ffxDeath", "1").checked(benilla_ui::script::check_ffx_echo),
     // `pixelShaders` (`0x688712`: name `0x869560`, "0", flags 1, callback `0x688f40`, record
     // `[0xc7f360]`) and `specular` (`0x6886a0`: name `0x8695d8`, "0", flags 1, callback `0x688e20`,
     // record `[0xc7f2cc]`), Enable All Shaders and Terrain Highlights. Both callbacks act only on a

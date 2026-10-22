@@ -95,6 +95,30 @@ fn shortsort<T>(items: &mut [T], lo: usize, mut hi: usize, cmp: &mut impl FnMut(
     }
 }
 
+/// `atoi` (`0x41449c`), the runtime's `_atol` (`0x414411`): C-locale white space, one `+` or `-`,
+/// then decimal digits into a wrapping 32-bit value; 0 when no digit follows.
+pub fn atoi(s: &str) -> i32 {
+    let b = s.as_bytes();
+    let mut i = b
+        .iter()
+        .take_while(|c| matches!(c, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r'))
+        .count();
+    let negative = b.get(i) == Some(&b'-');
+    if matches!(b.get(i), Some(b'+' | b'-')) {
+        i += 1;
+    }
+    let mut n: i32 = 0;
+    while let Some(&c) = b.get(i).filter(|c| c.is_ascii_digit()) {
+        n = n.wrapping_mul(10).wrapping_add(i32::from(c - b'0'));
+        i += 1;
+    }
+    if negative {
+        n.wrapping_neg()
+    } else {
+        n
+    }
+}
+
 /// `SStrCmpI(a, b, 0x7fffffff)` (`0x64a4c0`): `_strnicmp` (`0x414310`) in its C-locale path, `A` to
 /// `Z` folded to lower case and the first pair that differs deciding -1 or 1 by its unsigned
 /// bytes; a NUL ends either string, and a string that ends first sorts first.
