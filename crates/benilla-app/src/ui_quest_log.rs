@@ -34,6 +34,8 @@ use crate::ui_action::Spells;
 use crate::ui_script::UiFeed;
 use crate::ui_unit::UnitFeed;
 
+pub(crate) use net::on_item_bought;
+
 /// Marks a GameObject objective's entry on the wire (vmangos `Quest.cpp:512-516`).
 const GO_OBJECTIVE_BIT: u32 = 0x8000_0000;
 
@@ -275,7 +277,7 @@ mod net {
 
     /// What an added item's toast reads off the player: the bags and the item cache.
     #[derive(SystemParam)]
-    struct ItemBook<'w, 's> {
+    pub(crate) struct ItemBook<'w, 's> {
         self_q: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
         objects: Objects<'w, 's>,
         items: Res<'w, Items>,
@@ -352,6 +354,21 @@ mod net {
                     return;
                 }
             }
+        }
+    }
+
+    /// `SMSG_BUY_ITEM`'s quest progress (`0x5dced0`): the merchant handler's bought row, its item
+    /// (`[+4]`) and the bought count, through the same walk over the 20 log slots
+    /// (`0x5dcf70`-`0x5dd02e`), which `0x5dd060` ends on the first quest needing the item.
+    pub(crate) fn on_item_bought(
+        In(bought): In<Option<(u32, u32)>>,
+        book: ItemBook,
+        quest_log: ResMut<QuestLog>,
+        script: Option<NonSend<UiScript>>,
+    ) {
+        if let Some((item_id, count)) = bought {
+            let ev = SessionEvent::QuestObjectiveItem { item_id, count };
+            on_item_added(In(ev), book, quest_log, script);
         }
     }
 

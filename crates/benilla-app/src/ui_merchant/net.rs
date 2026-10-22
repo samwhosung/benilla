@@ -10,7 +10,10 @@ use crate::net::NetHandlerApp;
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
     app.net_handler(K::VendorInventory, on_inventory)
-        .net_handler(K::VendorBuyResult, on_buy_result)
+        .net_handler(
+            K::VendorBuyResult,
+            on_buy_result.pipe(crate::ui_quest_log::on_item_bought),
+        )
         .net_handler(K::VendorBuyFailed, on_buy_failed)
         .net_handler(K::VendorSellFailed, on_sell_failed)
         .net_handler(K::Disconnected, on_session_end);
@@ -22,16 +25,22 @@ fn on_inventory(In(ev): In<SessionEvent>, mut commands: Commands) {
     }
 }
 
-fn on_buy_result(In(ev): In<SessionEvent>, mut merchant: ResMut<MerchantOpen>) {
-    if let SessionEvent::VendorBuyResult {
+/// `SMSG_BUY_ITEM` (`0x5dced0`): the stock, then the bought row's item and count for the quest
+/// log's walk ([`crate::ui_quest_log::on_item_bought`]).
+fn on_buy_result(
+    In(ev): In<SessionEvent>,
+    mut merchant: ResMut<MerchantOpen>,
+) -> Option<(u32, u32)> {
+    let SessionEvent::VendorBuyResult {
         vendor,
         slot,
         new_count,
-        ..
+        purchase_count,
     } = ev
-    {
-        vendor_buy_result(vendor, slot, new_count, &mut merchant);
-    }
+    else {
+        return None;
+    };
+    vendor_buy_result(vendor, slot, new_count, &mut merchant).map(|entry| (entry, purchase_count))
 }
 
 fn on_buy_failed(
@@ -67,11 +76,19 @@ fn on_session_end(In(_): In<SessionEvent>, mut merchant: ResMut<MerchantOpen>) {
     merchant.clear_session();
 }
 
-/// `SMSG_BUY_ITEM`'s new stock count, applied only to the open vendor.
-fn vendor_buy_result(vendor: u64, slot: u32, new_count: u32, merchant: &mut MerchantOpen) {
-    if merchant.vendor == Some(vendor) {
-        merchant.update_stock(slot, new_count);
+/// `SMSG_BUY_ITEM`'s new stock count, applied only to the open vendor (`0x5dcf20`-`0x5dcf35`) and
+/// to the row its slot names (`0x5dcf42`-`0x5dcf61`), whose item it answers; a slot no row holds
+/// skips the quest walk (`0x5dcf54`).
+fn vendor_buy_result(
+    vendor: u64,
+    slot: u32,
+    new_count: u32,
+    merchant: &mut MerchantOpen,
+) -> Option<u32> {
+    if merchant.vendor != Some(vendor) {
+        return None;
     }
+    merchant.update_stock(slot, new_count)
 }
 
 /// `SMSG_BUY_FAILED`: queue the message line, and for `ITEM_ALREADY_SOLD` zero the refused row of
@@ -115,8 +132,128 @@ fn vendor_sell_failed(
 
 #[cfg(test)]
 mod tests {
+    use benilla_protocol::messages::field::FIELD_PLAYER_QUEST_LOG_1_1;
+    use benilla_protocol::messages::{QuestObjective, VendorItem};
+    use benilla_protocol::ObjectFields;
+    use benilla_ui::script::UiScript;
+
     use super::*;
+    use crate::net::{Guid, NetCommands, ObjectStore, SelfPlayer};
     use crate::ui_items::locks::{ItemReleases, Release};
+
+    const VENDOR: u64 = 0xF130_0000_0000_0043;
+    const WATER: u32 = 159;
+
+    /// A vendor open on [`VENDOR`] selling water in slot 3, quest 7 in the log needing five
+    /// waters, the quest and item records cached, the quest log's feed showing the toasts, and the
+    /// shown lines recorded in `SEEN`.
+    fn quest_rig() -> App {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<crate::names::NameCache>()
+            .init_resource::<crate::items::Items>()
+            .init_resource::<crate::world_state::WorldStates>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .init_resource::<crate::ui_quest::QuestLines>()
+            .init_resource::<crate::ui_quest::QuestGiver>()
+            .init_resource::<crate::ui_quest_log::QuestLog>()
+            .init_resource::<MerchantOpen>()
+            .init_resource::<MerchantErrors>()
+            .init_resource::<ItemReleases>()
+            .add_message::<crate::item_watch::ItemNotice>()
+            .init_resource::<crate::field_watch::NoticeLane>()
+            .add_systems(Update, crate::ui_quest_log::feed_quest_log);
+        register(&mut app);
+        let world = app.world_mut();
+        let mut objectives = std::array::from_fn(|_| QuestObjective {
+            creature_or_go: 0,
+            required_count: 0,
+            item_id: 0,
+            item_count: 0,
+            text: String::new(),
+        });
+        objectives[0].item_id = WATER;
+        objectives[0].item_count = 5;
+        let mut quest = crate::ui_quest::test_template(7, "Water", 0);
+        quest.objectives = objectives;
+        world
+            .resource_mut::<crate::ui_quest_log::QuestLog>()
+            .insert_template(quest);
+        world
+            .resource_mut::<crate::items::Items>()
+            .insert_template(WATER, Some(crate::items::test_template("Water")));
+        world.spawn((
+            ObjectStore(ObjectFields::from_pairs(&[(FIELD_PLAYER_QUEST_LOG_1_1, 7)])),
+            Guid(0x2A),
+            SelfPlayer,
+        ));
+        world.resource_mut::<MerchantOpen>().open(
+            VENDOR,
+            vec![VendorItem {
+                slot: 3,
+                entry: WATER,
+                display_id: 18084,
+                current_count: 9,
+                price: 25,
+                max_durability: 0,
+                buy_count: 1,
+            }],
+        );
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                r#"
+                SEEN = ""
+                ERR_QUEST_ADD_ITEM_SII = "%s: %d/%d"
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("UI_INFO_MESSAGE")
+                f:SetScript("OnEvent", function() SEEN = SEEN .. arg1 .. ";" end)
+                "#,
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        app.update();
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .fire_world_enter();
+        app.update();
+        app
+    }
+
+    /// The lines one `SMSG_BUY_ITEM` showed.
+    fn bought(app: &mut App, vendor: u64, slot: u32, count: u32) -> String {
+        let ev = SessionEvent::VendorBuyResult {
+            vendor,
+            slot,
+            new_count: 4,
+            purchase_count: count,
+        };
+        crate::net::handlers::dispatch(app.world_mut(), vec![ev]);
+        app.update();
+        let script = app.world_mut().non_send_resource_mut::<UiScript>();
+        let seen = script.eval::<String>("return SEEN").unwrap();
+        script.run("SEEN = ''").unwrap();
+        seen
+    }
+
+    /// `SMSG_BUY_ITEM` walks the quest log for the bought row's item (`0x5dcf70`-`0x5dd02e`):
+    /// from the open vendor (`0x5dcf20`), on the row its slot names (`0x5dcf42`), with the
+    /// packet's bought count (`0x5dd00b`-`0x5dd017`); another vendor or a slot no row holds
+    /// shows nothing (`0x5dcf26`, `0x5dcf54`).
+    #[test]
+    fn a_purchase_reports_the_bought_items_quest_progress() {
+        let mut app = quest_rig();
+        assert_eq!(bought(&mut app, VENDOR + 1, 3, 2), "");
+        assert_eq!(bought(&mut app, VENDOR, 4, 2), "");
+        assert_eq!(bought(&mut app, VENDOR, 3, 2), "Water: 2/5;");
+        assert_eq!(
+            app.world().resource::<MerchantOpen>().items[0].current_count,
+            4
+        );
+    }
 
     /// A refused sale unlocks the item it names (`0x5dd26b`); a zero result is a success, which
     /// unlocks nothing and shows nothing (`0x5dd221`).

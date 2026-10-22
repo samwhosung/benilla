@@ -60,12 +60,12 @@ impl MerchantOpen {
             .and_then(|i| self.items.get(i as usize))
     }
 
-    /// `SMSG_BUY_ITEM`'s new count for the row at 1-based vendor `slot`; the bought item itself
-    /// arrives as an object create.
-    pub(crate) fn update_stock(&mut self, slot: u32, new_count: u32) {
-        if let Some(it) = self.items.iter_mut().find(|it| it.slot == slot) {
-            it.current_count = new_count;
-        }
+    /// `SMSG_BUY_ITEM`'s new count for the row at 1-based vendor `slot`, answering its item, or
+    /// `None` with no such row; the bought item itself arrives as an object create.
+    pub(crate) fn update_stock(&mut self, slot: u32, new_count: u32) -> Option<u32> {
+        let it = self.items.iter_mut().find(|it| it.slot == slot)?;
+        it.current_count = new_count;
+        Some(it.entry)
     }
 
     /// Zero every row of `entry`, as the reference's `ITEM_ALREADY_SOLD` arm writes 0 (`0x5dcdbf`)
@@ -1606,9 +1606,9 @@ mod tests {
     fn update_stock_moves_the_matching_row() {
         let mut open = MerchantOpen::default();
         open.open(0x42, vec![row(159, 1, STOCK_UNLIMITED), row(4540, 2, 5)]);
-        open.update_stock(2, 4);
+        assert_eq!(open.update_stock(2, 4), Some(4540));
         assert_eq!(open.items[1].current_count, 4);
-        open.update_stock(99, 0); // no such slot: a no-op
+        assert_eq!(open.update_stock(99, 0), None); // no such slot: a no-op
         assert_eq!(open.items[0].current_count, STOCK_UNLIMITED);
     }
 
