@@ -10,12 +10,12 @@ use benilla_formats::{
     LearnEffect, SkillLineCatalog, SpellCatalog, TokenContext, SPELL_EFFECT_LEARN_PET_SPELL,
     SPELL_EFFECT_SKILL_STEP,
 };
-use benilla_protocol::messages::TrainerSpell;
+use benilla_protocol::messages::{trainer_spell_state, TrainerSpell};
 use bevy::prelude::*;
 
 use benilla_ui::script::{
     CallTail, TrainerAbilityReq, TrainerCall, TrainerService, TrainerServiceCategory,
-    TrainerSkillReq, TrainerState, TrainerTooltip, UiScript,
+    TrainerSkillReq, TrainerState, TrainerTooltip, UiScript, TRAINER_GROUP_KNOWN,
 };
 
 use crate::entities::ItemDisplays;
@@ -54,10 +54,14 @@ pub(crate) struct TrainerOpen {
     /// the reference's builder resets them per list (`0x4d7b42` for the selection); an open window
     /// repaints through [`reeval`], never a second list.
     pub(crate) fresh_list: bool,
-    /// One of the reference's twelve re-evaluation triggers fired with the window open; the feed
-    /// re-derives and fires `TRAINER_UPDATE` even if no state moved, as `0x4d7d40`'s tail does
-    /// (`0x4d83f4`), and the stock window re-reads `GetMoney()` on it.
-    pub(crate) re_derive: bool,
+    /// The passes of `0x4d7d40` owed, one per trigger of the reference's twelve that fired with
+    /// the window open: each re-derives, sorts and fires `TRAINER_UPDATE` even if no state moved,
+    /// as its tail does (`0x4d83f4`), and the stock window re-reads `GetMoney()` on it.
+    pub(crate) re_derive: u32,
+    /// Per service, whether its record's group key is the known group's -1: written by the list
+    /// for a row it gets known at a mount trainer (`0x4d77e8`) and by each pass for a row it leaves
+    /// known (`0x4d82b2`-`0x4d82c1`), and never written back until the next list.
+    pub(crate) known_key: Vec<bool>,
     /// The item records the icon and description getters' calls missed, one per call: the item
     /// cache's callbacks `0x4d9140` and `0x4d9db0`, which outlive the window and run `0x4d7d40`
     /// when their record lands (`0x4d914a`, `0x4d9dba`), on whatever trainer is open then.
@@ -75,18 +79,28 @@ impl TrainerOpen {
     ) {
         self.trainer = Some(trainer);
         self.trainer_type = trainer_type;
+        self.known_key = services
+            .iter()
+            .map(|w| trainer_type == TRAINER_TYPE_MOUNT && w.state == trainer_spell_state::GRAY)
+            .collect();
         self.services = services;
         self.greeting = greeting;
         // A fresh list carries the server's own states, so nothing is pending against it.
         self.fresh_list = true;
-        self.re_derive = false;
+        self.re_derive = 0;
     }
 
-    /// One of the twelve triggers fired: re-derive on the next feed, if a window is open.
+    /// One of the twelve triggers fired: one more pass on the next feed, if a window is open.
     pub(crate) fn trigger_re_derive(&mut self) {
         if self.trainer.is_some() {
-            self.re_derive = true;
+            self.re_derive += 1;
         }
+    }
+
+    /// Whether a pass is owed.
+    #[cfg(test)]
+    pub(crate) fn re_derive_owed(&self) -> bool {
+        self.re_derive > 0
     }
 
     /// A client-side close; a re-open re-lists.
@@ -95,8 +109,9 @@ impl TrainerOpen {
         self.services.clear();
         self.trainer_type = 0;
         self.greeting.clear();
+        self.known_key.clear();
         self.fresh_list = false;
-        self.re_derive = false;
+        self.re_derive = 0;
     }
 
     /// Disconnect: drop the open window, and the item callbacks with the asks they wait on.
@@ -105,19 +120,21 @@ impl TrainerOpen {
         self.item_waits.clear();
     }
 
-    /// Spend the waits whose item record answered. One that brought a record is a trigger of the
-    /// pass, which the feed runs once a frame however many fired; a refusal runs its callback with
-    /// status 0, which does nothing (`0x4d9146`, `0x4d9db6`).
+    /// Spend the waits whose item record answered: each one that brought a record is a trigger of
+    /// its own pass; a refusal runs its callback with status 0, which does nothing (`0x4d9146`,
+    /// `0x4d9db6`).
     fn item_answers(&mut self, items: &Items) {
-        let mut landed = false;
+        let mut landed = 0;
         self.item_waits.retain(|&entry| {
             if !items.template_answered(entry) {
                 return true;
             }
-            landed |= items.template(entry, 0, Ask::Read).is_some();
+            if items.template(entry, 0, Ask::Read).is_some() {
+                landed += 1;
+            }
             false
         });
-        if landed {
+        for _ in 0..landed {
             self.trigger_re_derive();
         }
     }
@@ -365,8 +382,9 @@ fn snapshot(
         services: open
             .services
             .iter()
-            .map(|w| {
-                resolve_service(
+            .zip(open.known_key.iter().chain(std::iter::repeat(&false)))
+            .map(|(w, &known_key)| {
+                let mut service = resolve_service(
                     w,
                     open.trainer_type,
                     spells,
@@ -377,7 +395,14 @@ fn snapshot(
                     ask,
                     text,
                     get,
-                )
+                );
+                // The record keeps the -1 a list or a pass wrote, whatever its state now.
+                if known_key && service.group_key != TRAINER_GROUP_KNOWN {
+                    service.group_key = TRAINER_GROUP_KNOWN;
+                    service.group_name = get("KNOWN_TALENTS_HEADER").unwrap_or_default();
+                    service.line_name = None;
+                }
+                service
             })
             .collect(),
         // The engine builds the tree in `set_trainer` from each service's group key.
@@ -427,6 +452,7 @@ pub(crate) fn feed_trainer(
     mut last: crate::ui_script::WindowMemo<Option<TrainerState>>,
     mut closes: CoreCloses,
 ) {
+    let mut extra_passes = 0;
     vm.feed(|script, mut re_eval, fires| {
         let Some(script) = script else {
             return;
@@ -484,14 +510,19 @@ pub(crate) fn feed_trainer(
                 open.trigger_re_derive();
             }
         }
-        // `0x4d7d40` over every row, then `TRAINER_UPDATE` unconditionally, as its tail fires it.
-        let forced = open.re_derive && open.trainer.is_some();
+        // `0x4d7d40` over every row, then `TRAINER_UPDATE` unconditionally, as its tail fires it,
+        // once per trigger.
+        let passes = if open.trainer.is_some() {
+            std::mem::take(&mut open.re_derive)
+        } else {
+            0
+        };
+        let forced = passes > 0;
         // The stock window calls `GetTrainerServiceIcon` and `GetTrainerServiceDescription`, which
         // look the product up with a callback (`0x4d9096`, `0x4d9d07`), at `TRAINER_SHOW` and
         // `TRAINER_UPDATE`: a list, a re-derive, or a window this VM has not shown.
         let ask = Ask::at(last.is_none() || listed || forced, &commands);
         if forced {
-            open.re_derive = false;
             let player = reeval::PlayerView {
                 known: actions.spells.clone(),
                 level: self_player
@@ -534,6 +565,7 @@ pub(crate) fn feed_trainer(
             let TrainerOpen {
                 services,
                 trainer_type,
+                known_key,
                 ..
             } = &mut *open;
             reeval::re_derive_all(
@@ -543,6 +575,12 @@ pub(crate) fn feed_trainer(
                 &skill_lines.catalog,
                 &player,
             );
+            // `0x4d82b2`-`0x4d82c1`: a row the pass leaves known takes the -1 key at type 1.
+            if *trainer_type == TRAINER_TYPE_MOUNT {
+                for (key, wire) in known_key.iter_mut().zip(services.iter()) {
+                    *key |= wire.state == trainer_spell_state::GRAY;
+                }
+            }
         }
         // The spell tooltip's description reads (`0x52f717`), and `0x6e3159`'s charm-else-summon
         // for a `LEARN_PET_SPELL` row.
@@ -675,11 +713,25 @@ pub(crate) fn feed_trainer(
         // repaint with neither fires nothing; the close is the core's.
         if shows {
             fires.post("TRAINER_SHOW", vec![]);
+            extra_passes = passes;
         } else if forced && fresh.is_some() {
             fires.post("TRAINER_UPDATE", vec![]);
+            extra_passes = passes - 1;
         }
         *last = fresh;
-    })
+    });
+    // The passes past the first, each its own sort from the order the last left and its own
+    // `TRAINER_UPDATE`, whose handlers run before the next pass sorts.
+    if extra_passes > 0 {
+        vm.run(|script| {
+            if let Some(script) = script {
+                for _ in 0..extra_passes {
+                    script.rerun_trainer_finalize();
+                    script.fire_event("TRAINER_UPDATE", vec![]);
+                }
+            }
+        });
+    }
 }
 
 /// The trainer's cell `[0xb73a00]`; `CloseTrainer` (`0x4d8d50`) is the core with a zero guid.

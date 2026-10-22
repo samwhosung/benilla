@@ -1253,17 +1253,17 @@ fn every_list_packet_begins_a_window_session() {
     // A pending re-derivation never survives a list: the packet carries the server's own states.
     open.fresh_list = false;
     open.trigger_re_derive();
-    assert!(open.re_derive);
+    assert!(open.re_derive_owed());
     open.open(TRAINER, 0, list(), "Greetings".into());
     assert!(
-        !open.re_derive,
+        !open.re_derive_owed(),
         "a fresh list is the server's states — nothing pending against it"
     );
 
     // A trigger with no window open does nothing (`0x4d7d46`'s early-out).
     open.clear();
     open.trigger_re_derive();
-    assert!(!open.re_derive);
+    assert!(!open.re_derive_owed());
 }
 
 mod re_derive {

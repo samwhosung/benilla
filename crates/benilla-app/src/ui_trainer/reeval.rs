@@ -1,8 +1,10 @@
 //! The trainer's state re-evaluator, the reference's `0x4d7d40`: on any of its twelve triggers it
 //! re-derives every service's state from the player's book, skills, level and pet, so the wire
 //! state lasts only until the first. A skill line the player lacks entirely reads green where the
-//! server sends red (`0x4d8082` → `0x4d8123`), as in the 1.12 client. Not built: at a type-1
-//! trainer the reference also severs the group key of a row re-derived to state 2 (`0x4d82c1`).
+//! server sends red (`0x4d8082` → `0x4d8123`), as in the 1.12 client. At a type-1 trainer the
+//! pass also writes the known group's -1 into the key of every row it leaves in state 2
+//! (`0x4d82b2`-`0x4d82c1`) and never writes it back, which the feed keeps
+//! ([`super::TrainerOpen::known_key`]).
 
 use std::collections::BTreeSet;
 

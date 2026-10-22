@@ -49,15 +49,6 @@ impl TrainerServiceCategory {
     fn filter_bit(self) -> u32 {
         1 << self.state_key()
     }
-
-    fn from_filter_str(s: &str) -> Option<Self> {
-        match s {
-            "available" => Some(TrainerServiceCategory::Available),
-            "unavailable" => Some(TrainerServiceCategory::Unavailable),
-            "used" => Some(TrainerServiceCategory::Used),
-            _ => None,
-        }
-    }
 }
 
 /// `0x4da390`: the filter bit a type name names, compared without case (`0x64a4c0`); `None` is
@@ -215,6 +206,12 @@ impl super::UiScript {
     /// only the collapsed groups that still exist, so a fold survives a content update.
     pub fn set_trainer(&mut self, state: Option<TrainerState>) {
         self.push_trainer(state, true);
+    }
+
+    /// One more pass of the state re-evaluator's tail over the rows as they stand: the finalizer
+    /// `0x4d8410`, which sorts from the order the last pass left (`0x4d83ef`).
+    pub fn rerun_trainer_finalize(&mut self) {
+        finalize(&mut self.model_mut());
     }
 
     /// Push the open trainer's new text or icons with no finalize: the rows keep their order and
@@ -947,14 +944,22 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // GetTrainerServiceTypeFilter("type") (`0x4da510`): 1 when the named state shows, else nil;
+    // the name through `0x4da390`, without case, and `"all"` is no name here.
     g.set(
         "GetTrainerServiceTypeFilter",
-        lua.create_function(|lua, kind: String| {
+        lua.create_function(|lua, kind: Value| {
+            // `is-number-or-string` else the usage (`0x84ac78`, `0x4da521`).
+            let kind = binding_abi::string_arg(
+                lua,
+                kind,
+                r#"Usage: GetTrainerServiceTypeFilter("type")"#,
+            )?;
+            let bit = filter_bit_named(&kind).ok_or_else(|| {
+                mlua::Error::runtime("Bad service type in GetTrainerServiceTypeFilter")
+            })?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(match TrainerServiceCategory::from_filter_str(&kind) {
-                Some(c) => binding_abi::flag(model.trainer_filter & c.filter_bit() != 0),
-                None => Value::Nil,
-            })
+            Ok(binding_abi::flag(model.trainer_filter & bit != 0))
         })?,
     )?;
     // SetTrainerServiceTypeFilter("type", on [, exclusive]) (`0x4da260`): `"all"` sets the mask to
