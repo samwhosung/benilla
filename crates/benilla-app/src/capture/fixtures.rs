@@ -105,20 +105,20 @@ pub(super) fn seed_ui_fixture(
             ResMut<'static, crate::ui_bank::BankOpen>,
             MessageWriter<'static, AppExit>,
             ResMut<'static, crate::loading_screen::LoadingScreen>,
+            ResMut<'static, crate::ui_gossip::GossipState>,
+            ResMut<'static, crate::ui_quest::QuestGiver>,
         ),
     )>,
     mut ctx: ResMut<CaptureCtx>,
     mut commands: Commands,
     progress: Res<WorldLoadProgress>,
-    mut gossip: ResMut<crate::ui_gossip::GossipState>,
-    mut quest: ResMut<crate::ui_quest::QuestGiver>,
     mut quest_log: ResMut<crate::ui_quest_log::QuestLog>,
     mut trainer: ResMut<crate::ui_trainer::TrainerOpen>,
     icons: Option<Res<crate::entities::ItemDisplays>>,
 ) {
     vm.turn(|mut script, parts| {
         let (mut merchant, mut loot, mut names, mut selection, mut player, store, rest) = parts;
-        let (mut actions, mut bank, mut exit, mut loading) = rest;
+        let (mut actions, mut bank, mut exit, mut loading, mut gossip, mut quest) = rest;
         let (mut items, mut index, mut home_bind) = store;
         // A glue-screen capture has no world scenario, and no glue screen opens a UI fixture.
         let Some(scenario) = ctx.scenario else {

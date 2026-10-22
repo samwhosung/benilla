@@ -1,5 +1,6 @@
 //! The gossip window's app side: [`GossipState`] holds the menu and the NPC-text records,
-//! [`feed_gossip`] pushes the menu and fires its events, and [`drain_gossip`] sends the selects.
+//! [`feed_gossip`] pushes the menu and fires its events, the selects apply in their calls
+//! ([`GossipVerbs`]), and [`drain_gossip`] runs `CloseGossip`'s teardown.
 //! As in the reference's `0x4e2010`, a menu opens only once its greeting is drawn.
 
 use std::collections::HashMap;
@@ -10,9 +11,9 @@ use bevy::prelude::*;
 use benilla_ui::script::{GossipMenu, GossipOptionView, GossipQuestRow, UiScript};
 
 use crate::names::NameCache;
-use crate::net::{ClientCommand, Guid, NetCommands, ObjectStore, SelfPlayer};
+use crate::net::{Guid, NetCommands, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
-use crate::ui_quest::{row_is_active, row_is_one_click};
+use crate::ui_quest::row_is_active;
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 
@@ -138,6 +139,8 @@ impl GossipState {
 }
 
 mod net;
+mod verbs;
+pub(crate) use verbs::GossipVerbs;
 #[cfg(test)]
 mod verb_tests;
 /// The opener the server's menu runs, for the latch's tests.
@@ -324,90 +327,21 @@ fn feed_gossip(
     })
 }
 
-/// Drain the Lua intents: an option sends `CMSG_GOSSIP_SELECT_OPTION` with its wire `index`, a
-/// quest row its questgiver query, and `CloseGossip` runs the core, as there is no close packet.
-/// A coded option is not sent: the reference's code prompt (`GOSSIP_ENTER_CODE`, `0x4e237e`) is
-/// not built.
-fn drain_gossip(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    state: Res<GossipState>,
-    commands: Res<NetCommands>,
-    mut world_commands: Commands,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        for pos in script.take_gossip_selects() {
-            let Some(npc) = state.npc else { continue };
-            // Refused while the text query is out, as the reference's `SelectGossipOption`
-            // (`0x4e2320`) refuses under the latch `0xbbb670`.
-            if state.text_pending() {
-                debug!(
-                "ui_gossip: SelectGossipOption({pos}) while the text query is in flight — refused"
-            );
-                continue;
-            }
-            // Lua position is 1-based; resolve it to the option's wire `index`.
-            match pos
-                .checked_sub(1)
-                .and_then(|i| state.options.get(i as usize))
-            {
-                Some(opt) if !opt.coded => {
-                    debug!("ui_gossip: select option {} (index {})", pos, opt.index);
-                    let _ = commands.0.send(ClientCommand::GossipSelectOption {
-                        guid: npc,
-                        option: opt.index,
-                    });
-                }
-                Some(_) => {
-                    debug!("ui_gossip: ignoring coded option {pos} (coded options are greyed)")
-                }
-                None => debug!("ui_gossip: SelectGossipOption({pos}) out of range — ignored"),
-            }
-        }
-        // Quest-row clicks: the 1-based row picks the quest.
-        for pos in script.take_gossip_quest_selects() {
-            let Some(npc) = state.npc else { continue };
-            // Refused while pending too; the reference's latch is traced for option selects only.
-            if state.text_pending() {
-                debug!(
-                "ui_gossip: SelectGossipQuest({pos}) while the text query is in flight — refused"
-            );
-                continue;
-            }
-            match pos
-                .checked_sub(1)
-                .and_then(|i| state.quests.get(i as usize))
-            {
-                Some((quest_id, icon, _level, _title)) => {
-                    let (quest, icon) = (*quest_id, *icon);
-                    let active = row_is_active(icon);
-                    // As on the quest greeting panel: an active row is a turn-in, and so is an
-                    // available one with its one-click flag.
-                    let cmd = if active || row_is_one_click(icon) {
-                        ClientCommand::QuestgiverComplete { npc, quest }
-                    } else {
-                        ClientCommand::QuestgiverQuery { npc, quest }
-                    };
-                    debug!(
-                        "ui_gossip: quest row {pos} (quest {quest}, icon {icon}, active {active})"
-                    );
-                    let _ = commands.0.send(cmd);
-                }
-                None => debug!("ui_gossip: SelectGossipQuest({pos}) out of range — ignored"),
-            }
-        }
-        if script.take_gossip_close() {
-            debug!("ui_gossip: client-side close (no packet)");
-            crate::ui_session::queue(&mut world_commands, close_core);
-        }
-    })
+/// `CloseGossip()`'s teardown, which holds the whole world, as there is no close packet; the
+/// selects apply in their calls ([`verbs::GossipVerbs`]).
+fn drain_gossip(mut hosted_vm: crate::script_calls::HostedVm, mut world_commands: Commands) {
+    let closed = hosted_vm.run(|script| script.is_some_and(|s| s.take_gossip_close()));
+    if closed {
+        debug!("ui_gossip: client-side close (no packet)");
+        crate::ui_session::queue(&mut world_commands, close_core);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::ClientCommand;
+    use bevy::ecs::system::RunSystemOnce;
 
     /// The one type in [`GOSSIP_ICON_TYPES`] with no art in the 1.12 install.
     const GOSSIP_ICON_TYPE_UNSHIPPED: &str = "auctioneer";
@@ -568,6 +502,35 @@ mod tests {
         }]
     }
 
+    /// A host that applies the gossip calls alone, as the whole client's applies them.
+    struct GossipHost<'a, 'w>(&'a mut super::verbs::GossipVerbs<'w>);
+
+    impl benilla_ui::script::CallHost for GossipHost<'_, '_> {
+        fn apply(
+            &mut self,
+            _: &mut UiScript,
+            call: benilla_ui::script::ScriptCall,
+        ) -> Option<benilla_ui::script::CallTail> {
+            if let benilla_ui::script::ScriptCall::Gossip(call) = call {
+                self.0.apply(call);
+            }
+            None
+        }
+    }
+
+    /// Run `lua` with the gossip host lent.
+    fn select(app: &mut App, lua: &'static str) {
+        app.world_mut()
+            .run_system_once(
+                move |mut script: NonSendMut<UiScript>, mut verbs: super::verbs::GossipVerbs| {
+                    script
+                        .hosted(&mut GossipHost(&mut verbs), |s| s.run(lua))
+                        .expect("the chunk runs");
+                },
+            )
+            .expect("the hosted chunk runs as a one-shot system");
+    }
+
     /// The selects sent; the channel also carries the feed's name query.
     fn selects_sent(rx: &crossbeam_channel::Receiver<ClientCommand>) -> usize {
         rx.try_iter()
@@ -611,10 +574,7 @@ mod tests {
                 "the hold fires nothing — the previous menu stays painted"
             );
         }
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .run("SelectGossipOption(1)")
-            .unwrap();
+        select(&mut app, "SelectGossipOption(1)");
         let _ = tick(&mut app);
         assert_eq!(
             selects_sent(&rx),
@@ -631,10 +591,7 @@ mod tests {
                 "The bank is north of here.".to_string()
             )
         );
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .run("SelectGossipOption(1)")
-            .unwrap();
+        select(&mut app, "SelectGossipOption(1)");
         let _ = tick(&mut app);
         assert_eq!(selects_sent(&rx), 1);
 

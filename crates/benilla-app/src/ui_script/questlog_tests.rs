@@ -95,6 +95,7 @@ fn shipped_questlog_frame_loads_clean() {
 fn the_collapse_all_button_repaints_the_list_in_place() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for f in [
         "Interface\\FrameXML\\GlobalStrings.lua",
@@ -145,6 +146,7 @@ fn the_collapse_all_button_repaints_the_list_in_place() {
 fn shipped_questlog_frame_drives_end_to_end() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -322,6 +324,7 @@ fn shipped_questlog_frame_drives_end_to_end() {
 fn shift_click_toggles_the_watch_checkbox_and_the_tracker_hud() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // The check seats off measured widths during the update (`QuestLogFrame.lua:224-233`).
     s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));
@@ -448,6 +451,7 @@ fn shift_click_toggles_the_watch_checkbox_and_the_tracker_hud() {
 fn watch_guards_no_op_without_erroring() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -546,6 +550,7 @@ fn watch_guards_no_op_without_erroring() {
 fn progress_auto_watches_for_five_minutes() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -623,6 +628,7 @@ fn progress_auto_watches_for_five_minutes() {
 fn the_auto_watch_flag_is_the_references_uvar_and_gates_the_watch() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -674,6 +680,7 @@ fn the_auto_watch_flag_is_the_references_uvar_and_gates_the_watch() {
 fn the_row_tag_is_its_own_right_flush_string_and_the_state_word_wins() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // The state words are the GlobalStrings `COMPLETE` and `FAILED`.
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
@@ -755,6 +762,7 @@ fn the_row_tag_is_its_own_right_flush_string_and_the_state_word_wins() {
 fn empty_quest_log_hides_rows_and_disables_abandon() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -812,6 +820,7 @@ fn empty_quest_log_hides_rows_and_disables_abandon() {
 fn reward_rows_follow_the_refs_two_per_row_layout() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -952,6 +961,7 @@ fn overflowing_entry() -> Vec<LogQuest> {
 fn overflowing_detail_content_clips_to_the_scrollframe_rect() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -1019,6 +1029,7 @@ fn overflowing_detail_content_clips_to_the_scrollframe_rect() {
 fn wheel_over_the_detail_pane_changes_vertical_scroll() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
@@ -1077,6 +1088,7 @@ fn wheel_over_the_detail_pane_changes_vertical_scroll() {
 fn selection_change_resets_detail_scroll_but_a_quest_log_update_refresh_does_not() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
@@ -1145,6 +1157,7 @@ fn reward_row_hover_serves_the_shared_item_tooltip() {
     use benilla_ui::script::ItemTemplateView;
 
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -1235,6 +1248,7 @@ fn reward_row_hover_serves_the_shared_item_tooltip() {
 fn popup_children_inherit_the_dialog_stratum() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -1286,6 +1300,7 @@ fn popup_children_inherit_the_dialog_stratum() {
 fn reward_rows_preview_and_post_and_a_plain_click_stays_inert() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -1371,6 +1386,7 @@ fn reward_rows_preview_and_post_and_a_plain_click_stays_inert() {
 fn shift_click_on_a_title_posts_the_quest_name_with_chat_open_and_watches_with_it_closed() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -1466,6 +1482,7 @@ fn entries_sharable(ids: &[u32]) -> Vec<LogQuest> {
 fn share_quest_needs_both_a_sharable_selection_and_a_party() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -1542,6 +1559,7 @@ fn share_quest_needs_both_a_sharable_selection_and_a_party() {
 fn share_quest_is_dark_on_an_empty_log_even_in_a_party() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -1576,6 +1594,7 @@ fn share_quest_is_dark_on_an_empty_log_even_in_a_party() {
 fn share_quest_click_queues_the_selected_quests_id() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -1615,6 +1634,7 @@ fn share_quest_click_queues_the_selected_quests_id() {
 fn the_stock_title_width_cap_bites_and_is_sticky_per_row_button() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // The cap reads `questTitleTag:GetWidth()` inside the update, so the harness needs a measurer.
     s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));
@@ -1719,6 +1739,7 @@ fn mate_on(guid: u64, name: &str, ids: &[u32]) -> benilla_ui::script::UnitState 
 fn quest_rows_count_the_party_members_on_each_quest() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");

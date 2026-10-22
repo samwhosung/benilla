@@ -27,6 +27,7 @@ fn frame_rect(quads: &[ExtractedQuad], w: f32, h: f32) -> benilla_ui::layout::Re
 fn shipped_gossip_frame_drives_end_to_end() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // `GossipResize` reads `GetTextHeight()` right after `SetText`, so the harness installs the
     // synchronous measurer the app always has; without one a row sizes from last frame's text.
@@ -197,6 +198,7 @@ fn shipped_gossip_frame_drives_end_to_end() {
 fn shipped_gossip_frame_renders_quest_rows_above_options() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
     load_xml(&s, r"Interface\FrameXML\Fonts.xml");
@@ -316,6 +318,7 @@ fn shipped_gossip_frame_renders_quest_rows_above_options() {
 fn shipped_gossip_rows_grow_to_their_wrapped_labels() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // `GossipResize` reads `GetTextHeight()` right after `SetText`, so the harness installs the
     // synchronous measurer the app always has; without one a row sizes from last frame's text.
@@ -420,6 +423,7 @@ fn shipped_gossip_rows_grow_to_their_wrapped_labels() {
 fn gossip_show_hide_plays_open_and_close_kits() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
     load_xml(&s, r"Interface\FrameXML\Fonts.xml");
@@ -465,6 +469,7 @@ fn gossip_show_hide_plays_open_and_close_kits() {
 fn shipped_panel_slot_replaces_gossip_with_merchant() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for f in crate::ui_script::test_ui::production_order(&[
         &[
@@ -550,6 +555,7 @@ fn shipped_panel_slot_replaces_gossip_with_merchant() {
 fn displacing_an_npc_window_ends_the_displaced_session() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for f in crate::ui_script::test_ui::production_order(&[
         &[
@@ -603,6 +609,7 @@ fn displacing_an_npc_window_ends_the_displaced_session() {
 fn shipped_panel_slot_pushable_promotes_to_center() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for f in crate::ui_script::test_ui::production_order(&[
         &[
@@ -697,6 +704,8 @@ fn gossip_bank_option_hands_the_left_slot_to_the_bank() {
 
     let order_first = |bank_first: bool| {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.keep_calls();
         s.set_screen_size(1024.0, 768.0);
         load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
         load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -767,6 +776,7 @@ fn gossip_bank_option_hands_the_left_slot_to_the_bank() {
 fn an_overflowing_gossip_menu_scrolls_instead_of_spilling() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // `GossipResize` reads `GetTextHeight()` right after `SetText`, so the harness installs the
     // synchronous measurer the app always has; without one a row sizes from last frame's text.
@@ -905,6 +915,7 @@ fn an_overflowing_gossip_menu_scrolls_instead_of_spilling() {
 fn an_addons_own_frame_registered_in_uipanelwindows_takes_the_left_slot() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
     load_xml(&s, r"Interface\FrameXML\Fonts.xml");
@@ -1014,6 +1025,7 @@ fn the_panel_registry_rows_match_the_reference_bytes() {
 fn a_dead_player_opens_only_whiledead_windows() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
@@ -1081,6 +1093,7 @@ fn a_dead_player_opens_only_whiledead_windows() {
 fn a_frame_arriving_at_center_puts_the_child_windows_away() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");

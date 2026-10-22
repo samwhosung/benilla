@@ -1053,22 +1053,20 @@ impl super::UiScript {
         self.model_ref().quest_log_selection
     }
 
-    /// Drain the abandons `AbandonQuest()` confirmed, as the log slots of their rows: the app
-    /// sends each slot's `CMSG_QUESTLOG_REMOVE_QUEST`.
+    /// The slots of the abandons a harness's VM kept ([`Self::keep_calls`]), in call order.
     pub fn take_quest_log_abandons(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.model_mut().quest_log_abandons)
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Quest(super::QuestCall::Abandon(slot)) => Some(*slot),
+            _ => None,
+        })
     }
 
-    /// Drain the shares `QuestLogPushQuest()` queued, as quest ids; the app sends one
-    /// `CMSG_PUSHQUESTTOPARTY` each.
+    /// The quest ids of the shares a harness's VM kept ([`Self::keep_calls`]), in call order.
     pub fn take_quest_log_pushes(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().quest_log_pushes)
-    }
-
-    /// Drain the `ConfirmAcceptQuest()` calls as a count: the verb carries no quest id, so the app
-    /// answers the confirm it holds.
-    pub fn take_quest_confirms(&mut self) -> u32 {
-        std::mem::take(&mut self.model_mut().quest_confirms)
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Quest(super::QuestCall::Push(id)) => Some(*id),
+            _ => None,
+        })
     }
 
     /// Set the selection.
@@ -1635,23 +1633,28 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "AbandonQuest",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let mark = model.quest_log_abandon_mark;
-            let slot = (mark != 0)
-                .then(|| {
-                    model
-                        .quest_log
-                        .entries
-                        .iter()
-                        .find(|e| !e.is_header && e.quest_id == mark)
-                        .map(|e| e.slot)
-                })
-                .flatten();
-            if let Some(slot) = slot {
-                model.quest_log_abandon_mark = 0;
-                model.quest_log_abandons.push(slot);
+            let slot = {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                let mark = model.quest_log_abandon_mark;
+                let slot = (mark != 0)
+                    .then(|| {
+                        model
+                            .quest_log
+                            .entries
+                            .iter()
+                            .find(|e| !e.is_header && e.quest_id == mark)
+                            .map(|e| e.slot)
+                    })
+                    .flatten();
+                if slot.is_some() {
+                    model.quest_log_abandon_mark = 0;
+                }
+                slot
+            };
+            match slot {
+                Some(slot) => super::quest::submit(lua, super::QuestCall::Abandon(slot)),
+                None => Ok(()),
             }
-            Ok(())
         })?,
     )?;
 
@@ -1862,22 +1865,25 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "QuestLogPushQuest",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // The verb checks the party and the sharable bit itself (`0x4e13a6`), as a macro can
-            // call it solo. The id is resolved now; a header has no quest and never queues.
-            if model.party.members.is_empty() {
-                return Ok(());
+            // call it solo; a header has no quest and sends nothing.
+            let id = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                let index = model.quest_log_selection as usize;
+                (!model.party.members.is_empty())
+                    .then(|| {
+                        model
+                            .quest_row_parts(index)
+                            .filter(|(r, _)| r.pushable)
+                            .and_then(|_| model.quest_row(index))
+                            .map(|e| e.quest_id)
+                    })
+                    .flatten()
+            };
+            match id {
+                Some(id) => super::quest::submit(lua, super::QuestCall::Push(id)),
+                None => Ok(()),
             }
-            let index = model.quest_log_selection as usize;
-            let id = model
-                .quest_row_parts(index)
-                .filter(|(r, _)| r.pushable)
-                .and_then(|_| model.quest_row(index))
-                .map(|e| e.quest_id);
-            if let Some(id) = id {
-                model.quest_log_pushes.push(id);
-            }
-            Ok(())
         })?,
     )?;
     // The watch tracker's set (`QuestLogFrame.lua:469`, `:613`), keyed by quest id. At most
@@ -2017,6 +2023,8 @@ pub(crate) mod fixture {
         }
         s.set_quest_log_player(true);
         s.quest_log_changed(slots);
+        // The abandon and share verbs' calls are kept for the tests to read.
+        s.keep_calls();
     }
 }
 

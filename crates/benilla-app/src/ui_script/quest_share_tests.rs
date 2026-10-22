@@ -7,6 +7,7 @@ use super::test_ui::load_ui as load_xml;
 
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -21,7 +22,9 @@ fn setup() -> UiScript {
     s
 }
 
+/// The confirm as the share feed raises it: the quest held (`[0xbe0840]`), then the event.
 fn confirm(s: &mut UiScript, who: &str, quest: &str) {
+    s.set_quest_confirm(Some(5));
     s.fire_event(
         "QUEST_ACCEPT_CONFIRM",
         vec![
@@ -55,8 +58,10 @@ fn yes_answers_once() {
     let mut s = setup();
     confirm(&mut s, "Thrall", "Escort Duty");
     s.run("StaticPopup_OnClick(StaticPopup1, 1)").unwrap();
-    assert_eq!(s.take_quest_confirms(), 1);
-    assert_eq!(s.take_quest_confirms(), 0, "drained");
+    assert_eq!(
+        s.take_quest_calls(),
+        [benilla_ui::script::QuestCall::ConfirmAccept(5)]
+    );
     assert!(
         !s.eval::<bool>("return StaticPopup1:IsVisible()").unwrap(),
         "answering closes it"
@@ -71,12 +76,18 @@ fn no_and_escape_send_nothing() {
     let mut s = setup();
     confirm(&mut s, "Thrall", "Escort Duty");
     s.run("StaticPopup_OnClick(StaticPopup1, 2)").unwrap();
-    assert_eq!(s.take_quest_confirms(), 0, "No must not answer the server");
+    assert!(
+        s.take_quest_calls().is_empty(),
+        "No must not answer the server"
+    );
     assert!(!s.eval::<bool>("return StaticPopup1:IsVisible()").unwrap());
 
     confirm(&mut s, "Thrall", "Escort Duty");
     s.run("StaticPopup_EscapePressed()").unwrap();
-    assert_eq!(s.take_quest_confirms(), 0, "ESC must not answer the server");
+    assert!(
+        s.take_quest_calls().is_empty(),
+        "ESC must not answer the server"
+    );
     assert!(!s.eval::<bool>("return StaticPopup1:IsVisible()").unwrap());
 }
 

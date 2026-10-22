@@ -152,6 +152,11 @@ pub enum ScriptCall {
     /// its packet inside the call, so a chunk's group packets go out in call order with every
     /// other verb's.
     Party(super::PartyRequest),
+    /// A questgiver, quest-log or share verb ([`super::QuestCall`]): its gates and its packet
+    /// inside the call, so a chunk's quest packets go out in call order with every other verb's.
+    Quest(super::QuestCall),
+    /// A gossip select ([`super::GossipCall`]): its packet inside the call.
+    Gossip(super::GossipCall),
     /// A mail verb past its binding's guards: its packet, and for `GetInboxText` the read mark
     /// and the body's ask ([`super::MailCall`]).
     Mail(super::MailCall),

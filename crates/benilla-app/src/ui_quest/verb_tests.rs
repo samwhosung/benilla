@@ -46,25 +46,37 @@ pub(crate) struct Client {
 
 impl Client {
     pub(crate) fn new(npc_flags: u32) -> Self {
+        Self::streaming(Some(npc_flags))
+    }
+
+    /// [`Self::new`], with `NPC` streamed with `npc_flags`, or not at all for `None`.
+    pub(crate) fn streaming(npc_flags: Option<u32>) -> Self {
         let mut app = crate::game_plugins::schedule_tests::headless_client();
         let (tx, rx) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
         let world = app.world_mut();
         world.spawn((SelfPlayer, Guid(ME), ObjectStore::default()));
-        // 147 = `UNIT_NPC_FLAGS` (the descriptor index `unit_npc_flags()` reads).
-        let fields = benilla_protocol::ObjectFields::from_pairs(&[(147, npc_flags)]);
-        let npc = world.spawn((Guid(NPC), ObjectStore(fields))).id();
-        world.resource_mut::<GuidIndex>().0.insert(NPC, npc);
+        if let Some(flags) = npc_flags {
+            // 147 = `UNIT_NPC_FLAGS` (the descriptor index `unit_npc_flags()` reads).
+            let fields = benilla_protocol::ObjectFields::from_pairs(&[(147, flags)]);
+            let npc = world.spawn((Guid(NPC), ObjectStore(fields))).id();
+            world.resource_mut::<GuidIndex>().0.insert(NPC, npc);
+        }
         world.insert_non_send_resource(UiScript::new().expect("a VM"));
         Self { app, rx }
     }
 
     /// Open `view` on `NPC` and run the feed, which pushes it to the VM and fires its event.
     pub(crate) fn open(&mut self, view: QuestView) {
+        self.open_on(NPC, view);
+    }
+
+    /// [`Self::open`] on `source`.
+    pub(crate) fn open_on(&mut self, source: u64, view: QuestView) {
         self.app
             .world_mut()
             .resource_mut::<QuestGiver>()
-            .open(NPC, view);
+            .open(source, view);
         self.app
             .world_mut()
             .run_system_cached(super::feed_quest)
@@ -335,4 +347,146 @@ fn the_log_verbs_are_on_the_wire_before_the_next_line() {
     c.run("SetAbandonQuest() AbandonQuest() RandomRoll(1, 100)")
         .unwrap();
     assert_eq!(c.sent(), ["QuestlogRemove { slot: 0 }", ROLL]);
+}
+
+// ── DeclineQuest and CloseQuest ──────────────────────────────────────────────
+
+const SHARER: u64 = 0x0000_0000_0000_002A; // HIGHGUID_PLAYER: a zero high word
+
+/// A detail panel on `source` with `0xbe0824` at `close_on_cancel`; the sends and whether the
+/// window is still open after `lua`, its drain and the flush.
+fn decline_after(
+    npc_flags: Option<u32>,
+    source: u64,
+    close_on_cancel: u32,
+    lua: &str,
+) -> (Vec<String>, bool) {
+    let mut c = Client::streaming(npc_flags);
+    c.open_on(source, detail());
+    // The latch is written by the packet, after the open (as `net::quest_detail` does).
+    c.app
+        .world_mut()
+        .resource_mut::<QuestGiver>()
+        .close_on_cancel = close_on_cancel;
+    c.run(lua).unwrap();
+    c.drain();
+    let open = c.app.world().resource::<QuestGiver>().is_open();
+    (c.sent(), open)
+}
+
+/// Both verbs reach the teardown `0x501130(0,1)`: `CloseQuest` directly, `DeclineQuest` through
+/// its player leg.
+#[test]
+fn every_way_out_of_a_shared_quest_answers_the_sharer() {
+    let decline = format!(
+        "{:?}",
+        ClientCommand::QuestPushResult {
+            sharer: SHARER,
+            msg: benilla_protocol::messages::QuestShareMsg::DECLINE_QUEST,
+        }
+    );
+    for verb in ["DeclineQuest()", "CloseQuest()"] {
+        let (sent, open) = decline_after(None, SHARER, 0, verb);
+        assert_eq!(
+            sent,
+            std::slice::from_ref(&decline),
+            "{verb} must answer the sharer"
+        );
+        assert!(!open, "{verb}");
+    }
+}
+
+/// A plain questgiver gets `CMSG_QUESTGIVER_HELLO` (`0x501526`), a gossip-flagged one
+/// `CMSG_GOSSIP_HELLO` (`0x501474`), whatever `0xbe0824` says (`0x50143b` before `0x5014a2`).
+#[test]
+fn a_decline_reopens_the_givers_list() {
+    use crate::target::cursor_mode::npc_flags;
+    let hello = format!("QuestgiverHello {{ npc: {NPC} }}");
+    let gossip = format!("GossipHello {{ guid: {NPC} }}");
+    assert_eq!(
+        decline_after(Some(0), NPC, 0, "DeclineQuest()"),
+        (vec![hello], true)
+    );
+    for latch in [0, 1] {
+        assert_eq!(
+            decline_after(Some(npc_flags::GOSSIP), NPC, latch, "DeclineQuest()"),
+            (vec![gossip.clone()], true),
+            "latch {latch}"
+        );
+    }
+}
+
+/// `0xbe0824`'s one reader is `0x5014a2`: set, a plain unit's decline takes the teardown
+/// (`0x5014aa`), silently.
+#[test]
+fn a_latched_decline_closes_the_window_silently() {
+    assert_eq!(
+        decline_after(Some(0), NPC, 1, "DeclineQuest()"),
+        (Vec::new(), false)
+    );
+}
+
+/// `CloseQuest` tears the window down; `DeclineQuest` bails first (`0x50142c`) and leaves it.
+#[test]
+fn an_unstreamed_giver_ends_the_session_silently() {
+    assert_eq!(
+        decline_after(None, NPC, 0, "CloseQuest()"),
+        (Vec::new(), false)
+    );
+    assert_eq!(
+        decline_after(None, NPC, 0, "DeclineQuest()"),
+        (Vec::new(), true)
+    );
+}
+
+#[test]
+fn declining_an_item_quest_closes_silently() {
+    const ITEM: u64 = 0x4000_0000_0000_0099; // HIGHGUID_ITEM
+    assert_eq!(
+        decline_after(None, ITEM, 0, "DeclineQuest()"),
+        (Vec::new(), false)
+    );
+}
+
+/// ESC, the X and the greeting's Goodbye all reach `CloseQuest` through `QuestFrame_OnHide`
+/// (`QuestFrame.lua:293`), which sends nothing for an NPC.
+#[test]
+fn close_quest_on_an_npc_is_network_silent() {
+    use crate::target::cursor_mode::npc_flags;
+    for flags in [0, npc_flags::GOSSIP] {
+        for latch in [0, 1] {
+            assert_eq!(
+                decline_after(Some(flags), NPC, latch, "CloseQuest()"),
+                (Vec::new(), false),
+                "flags {flags:#x}, latch {latch}"
+            );
+        }
+    }
+}
+
+/// The acted latch `0xbe0844` refuses the second `DeclineQuest` and the `AcceptQuest`, and the
+/// re-opening leg leaves the window up for the server's answer.
+#[test]
+fn a_reopening_decline_keeps_the_window_and_latches_acted() {
+    assert_eq!(
+        decline_after(
+            Some(0),
+            NPC,
+            0,
+            "DeclineQuest() DeclineQuest() AcceptQuest()"
+        ),
+        (vec![format!("QuestgiverHello {{ npc: {NPC} }}")], true)
+    );
+}
+
+/// `AcceptQuest` closes the window as it sends (`0x5013d3`), before any answer.
+#[test]
+fn an_accept_closes_the_window_on_the_click() {
+    assert_eq!(
+        decline_after(Some(0), NPC, 0, "AcceptQuest()"),
+        (
+            vec![format!("QuestgiverAccept {{ npc: {NPC}, quest: 100 }}")],
+            false
+        )
+    );
 }

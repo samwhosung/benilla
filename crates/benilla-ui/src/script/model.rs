@@ -827,12 +827,9 @@ pub(crate) struct Model {
     /// A ColorSelect wheel or value-bar drag, press to release.
     pub(crate) color_drag: Option<colorselect::ColorDrag>,
 
-    /// The open gossip menu, the `SelectGossipOption` calls and whether `CloseGossip` ran.
+    /// The open gossip menu, and whether `CloseGossip` ran.
     pub(crate) gossip: Option<gossip::GossipMenu>,
-    pub(crate) gossip_selects: Vec<u32>,
     pub(crate) gossip_close: bool,
-    /// `SelectGossipQuest` 1-based rows, each sent as `CMSG_QUESTGIVER_QUERY_QUEST` for its quest.
-    pub(crate) gossip_quest_selects: Vec<u32>,
 
     /// The open vendor's stock, the `BuyMerchantItem` calls and whether `CloseMerchant` ran.
     pub(crate) merchant: Option<merchant::MerchantState>,
@@ -1012,28 +1009,23 @@ pub(crate) struct Model {
     /// table, which the next open clears).
     pub(crate) trade_offered: [Option<cursor::CursorItem>; super::trade::TRADE_SLOTS],
 
-    /// The open questgiver panel, its greeting-row selects and its button calls.
+    /// The open questgiver panel, and whether `CloseQuest` ran.
     pub(crate) quest: Option<quest::QuestState>,
+    pub(crate) quest_close: bool,
     /// The levels of the last greeting's two pools (`0xbde690`, `0xbdfe60`), which outlive the
     /// panel until the next list fills them.
     pub(crate) quest_pool_levels: quest::PoolLevels,
-    pub(crate) quest_selects: Vec<quest::QuestSelect>,
-    pub(crate) quest_actions: Vec<quest::QuestAction>,
 
     /// Death countdowns and offers, and the release, reclaim and resurrect calls.
     pub(crate) death: death::DeathUiState,
     pub(crate) death_actions: Vec<death::DeathAction>,
 
-    /// The quest log, selection (1-based), abandon mark (a quest id, `0xbb7484`) and abandons.
+    /// The quest log, selection (1-based) and abandon mark (a quest id, `0xbb7484`).
     pub(crate) quest_log: quest_log::QuestLogState,
     pub(crate) quest_log_selection: u32,
     pub(crate) quest_log_abandon_mark: u32,
-    /// The log slots of the confirmed abandons, for the app to send.
-    pub(crate) quest_log_abandons: Vec<u8>,
-    /// `QuestLogPushQuest()` quest ids, resolved at the click so a log change cannot retarget one.
-    pub(crate) quest_log_pushes: Vec<u32>,
-    /// `ConfirmAcceptQuest()` calls, the escort confirm; the app holds the pending quest.
-    pub(crate) quest_confirms: u32,
+    /// The escort confirm's quest (`[0xbe0840]`), which `ConfirmAcceptQuest` sends.
+    pub(crate) quest_confirm: Option<u32>,
     /// Item id to its tooltip view.
     pub(crate) item_templates: HashMap<u32, ItemTemplateView>,
     /// Item ids asked for and missing, for the app to answer: a lookup with a callback, which
@@ -1705,9 +1697,7 @@ impl Model {
             slider_drag: None,
             color_drag: None,
             gossip: None,
-            gossip_selects: Vec::new(),
             gossip_close: false,
-            gossip_quest_selects: Vec::new(),
             merchant: None,
             repair_all_cost: 0,
             repair_costs: Default::default(),
@@ -1792,16 +1782,13 @@ impl Model {
             trade_offered: Default::default(),
             quest: None,
             quest_pool_levels: Default::default(),
-            quest_selects: Vec::new(),
-            quest_actions: Vec::new(),
+            quest_close: false,
             death: death::DeathUiState::default(),
             death_actions: Vec::new(),
             quest_log: quest_log::QuestLogState::default(),
             quest_log_selection: 0,
             quest_log_abandon_mark: 0,
-            quest_log_abandons: Vec::new(),
-            quest_log_pushes: Vec::new(),
-            quest_confirms: 0,
+            quest_confirm: None,
             item_templates: HashMap::new(),
             item_sets: HashMap::new(),
             item_set_asks: HashSet::new(),
