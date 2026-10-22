@@ -667,6 +667,45 @@ mod tests {
         assert_eq!(name(&app, "target").as_deref(), Some("Pushed"));
     }
 
+    /// `UnitIsPVPFreeForAll` (`0x516540`) on a held unit: `UNIT_FIELD_FLAGS` 0x8
+    /// (`0x5165ad`-`0x5165bf`), then the player controlling it (`0x606170` at `0x5165c3`, its
+    /// charmer, else its creator, else itself, when that is a player) and that player's
+    /// `PLAYER_FLAGS` 0x80 (`0x5165cc`-`0x5165d5`). A creature charmed by a free-for-all player
+    /// answers 1 with no player flags of its own; a player without bit 0x8 answers nil though
+    /// flagged; a creature that answers to nobody is no player and answers nil.
+    #[test]
+    fn unit_is_pvp_free_for_all_reads_the_controlling_players_flag() {
+        const FLAGS: u16 = benilla_protocol::field::FIELD_UNIT_FLAGS;
+        const CHARMEDBY: u16 = 10;
+        const PLAYER_FLAGS: u16 = 190;
+        let mut app = app();
+        let set = |app: &mut App, guid: u64, pairs: &[(u16, u32)]| {
+            let e = app.world().resource::<GuidIndex>().0[&guid];
+            let mut store = app.world_mut().get_mut::<ObjectStore>(e).unwrap();
+            store.0.merge(ObjectFields::from_pairs(pairs));
+        };
+        // `MOB` (`playertarget`) is charmed by `A` (`targettarget`), free-for-all; `BOSS`
+        // (`party1target`) is player-controlled with no owner.
+        set(&mut app, A, &[(FLAGS, 0x8), (PLAYER_FLAGS, 0x80)]);
+        set(
+            &mut app,
+            MOB,
+            &[(FLAGS, 0x8), (CHARMEDBY, A as u32), (CHARMEDBY + 1, (A >> 32) as u32)],
+        );
+        set(&mut app, BOSS, &[(FLAGS, 0x8), (PLAYER_FLAGS, 0x80)]);
+        app.update();
+        let ffa = |app: &App, token: &str| {
+            holds(app, &format!("UnitIsPVPFreeForAll({token:?}) == 1"))
+        };
+        assert!(ffa(&app, "targettarget"), "a flagged player");
+        assert!(ffa(&app, "playertarget"), "a creature its charmer flags");
+        assert!(!ffa(&app, "party1target"), "a creature, its own controller");
+        set(&mut app, A, &[(FLAGS, 0)]);
+        app.update();
+        assert!(!ffa(&app, "targettarget"), "a player without bit 0x8");
+        assert!(ffa(&app, "playertarget"), "the charmer's own bit 0x8 is not asked");
+    }
+
     /// A chain ending on a guid nobody holds answers what the client knows of it, each getter
     /// by its no-object leg: `UnitName` the name cache by guid, which asks a miss as it reads it,
     /// once while pending, and answers `UNKNOWNOBJECT` (`0x5171eb`, `0x517216`);
