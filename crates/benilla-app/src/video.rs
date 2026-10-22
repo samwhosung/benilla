@@ -593,7 +593,7 @@ fn publish_display_modes(
             height: res.height() as u32,
         })
         .filter(|r| r.width > 0 && r.height > 0);
-        let offered = offered_modes(&monitors, widescreen);
+        let offered = offered_modes(monitors.iter(), widescreen);
         // Keyed by VM: a `ReloadUI` VM has been pushed nothing, so a plain `Local` would skip it.
         let memo = last.get(script);
         if memo.as_ref() == Some(&(offered.clone(), current)) {

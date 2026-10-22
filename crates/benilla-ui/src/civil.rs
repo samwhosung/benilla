@@ -149,7 +149,10 @@ mod zone {
         tm.tm_isdst = i32::from(isdst);
         // SAFETY: `mktime` reads and normalises the fields it is given.
         let t = unsafe { libc::mktime(&mut tm) };
-        (t != -1).then_some(i64::from(t))
+        // `time_t` is 32 bits on some unix targets.
+        #[allow(clippy::useless_conversion)]
+        let t = i64::from(t);
+        (t != -1).then_some(t)
     }
 
     pub(super) fn name(isdst: bool) -> Vec<u8> {
@@ -187,18 +190,19 @@ mod zone {
     /// when negative, plus `_dstbias` for daylight time.
     pub(super) fn mktime(utc: i32, _f: super::TmFields, isdst: bool) -> Option<i64> {
         reread();
+        // `long` is 32 bits on Windows.
         let (mut zone, mut bias): (libc::c_long, libc::c_long) = (0, 0);
         // SAFETY: each writes the one long it is handed.
         unsafe {
             libc::get_timezone(&mut zone);
             libc::get_dstbias(&mut bias);
         }
-        let mut t = utc.wrapping_add(zone as i32);
+        let mut t = utc.wrapping_add(zone);
         if t < 0 {
             return None;
         }
         if isdst {
-            t = t.wrapping_add(bias as i32);
+            t = t.wrapping_add(bias);
         }
         Some(i64::from(t))
     }
