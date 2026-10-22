@@ -352,3 +352,22 @@ fn an_inventory_refusal_shows_and_unlocks_at_its_packet() {
         ]
     );
 }
+
+/// A refused sale unlocks the item it names inside its handler (`0x5dd26b`).
+#[test]
+fn a_refused_sales_unlock_fires_at_its_packet() {
+    let mut app = client();
+    let refused = || SessionEvent::VendorSellFailed {
+        vendor: 0xF130_0000_0000_0001,
+        item_guid: POTIONS,
+        reason: 1,
+    };
+    assert_eq!(
+        frame(&mut app, vec![combo(2), refused()]),
+        ["PLAYER_COMBO_POINTS:nil", "ITEM_LOCK_CHANGED:nil"]
+    );
+    assert_eq!(
+        frame(&mut app, vec![refused(), combo(0)]),
+        ["ITEM_LOCK_CHANGED:nil", "PLAYER_COMBO_POINTS:nil"]
+    );
+}
