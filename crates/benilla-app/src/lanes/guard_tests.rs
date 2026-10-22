@@ -357,8 +357,9 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // The bag cache the open-container handler numbers its `BAG_OPEN`s from.
     "::BagCache",
     "::NetCommands",
-    // Read-only to the combat log's handlers alone: the reputation handlers write it, and so
-    // does every handler that lends the call host, whose reputation verbs write the slots.
+    // Read-only to the handlers that only judge relations (the combat log's, the cast result's
+    // and the loot response's): the reputation handlers write it, and so does every handler that
+    // lends the call host, whose reputation verbs write the slots.
     "::Reputations",
     "::SelfGuid",
     "::OwnControlLost",
