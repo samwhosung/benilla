@@ -589,6 +589,8 @@ pub(crate) mod net {
         units: HeldUnits,
         mut notices: ResMut<NoticeLane>,
         chat: Option<Res<crate::ui_chat::ChatLog>>,
+        // The auction lists whose getters missed a name (`0x4cf167`, `0x4cf1c8`).
+        house: Option<ResMut<crate::ui_auction::HouseLane>>,
     ) {
         if let SessionEvent::PlayerName {
             guid,
@@ -604,6 +606,9 @@ pub(crate) mod net {
             if found {
                 if let Some(chat) = &chat {
                     chat.answer_landed(crate::ui_chat::Answer::Player(guid));
+                }
+                if let Some(mut house) = house {
+                    house.name_landed(guid);
                 }
             }
             if found && units.holds(guid) {

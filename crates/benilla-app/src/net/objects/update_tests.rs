@@ -420,6 +420,45 @@ fn the_coinage_watcher_trims_the_trade_offer_inside_its_packet() {
     );
 }
 
+/// An item record's answer runs the callbacks of the auction pages waiting on it inside its
+/// handler (`0x4cc9bf` registered, `0x4cca10` at the answer): a page that now waits on nothing
+/// has its tail stamped there.
+#[test]
+fn an_item_answer_runs_a_waiting_auction_pages_tail_in_its_handler() {
+    let mut app = client();
+    let world = app.world_mut();
+    let row = benilla_protocol::messages::AuctionListEntry {
+        auction_id: 1,
+        item_entry: 77,
+        perm_enchant: 0,
+        random_property_id: 0,
+        suffix_factor: 0,
+        count: 1,
+        spell_charges: 0,
+        owner_guid: 0x55,
+        start_bid: 100,
+        min_increment: 0,
+        buyout: 0,
+        time_left_ms: 3_600_000,
+        bidder_guid: 0,
+        current_bid: 0,
+    };
+    world
+        .resource_mut::<crate::ui_auction::AuctionOpen>()
+        .set_list(benilla_ui::script::LIST, vec![row], 1);
+    super::super::handlers::dispatch(
+        world,
+        vec![SessionEvent::ItemTemplate {
+            entry: 77,
+            info: Some(Box::new(crate::items::test_template("Cloth"))),
+        }],
+    );
+    assert_eq!(
+        world.resource::<crate::ui_auction::HouseLane>().tails(),
+        [benilla_ui::script::LIST]
+    );
+}
+
 /// A create for a held object writes every field, clearing those it leaves out (`0x466582`
 /// passes the clearing flag to `0x466590`), and notifies every field (`0x465d8a`, `dl = 1`): an
 /// omitted field reads 0 and its watch runs.

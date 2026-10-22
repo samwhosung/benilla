@@ -102,6 +102,9 @@ pub(crate) struct Scene<'w, 's> {
     guilds: Option<ResMut<'w, crate::ui_guild::GuildState>>,
     // The own offer the coinage watcher trims (`0x5ddf30`).
     trade: Option<ResMut<'w, crate::ui_trade::TradeSession>>,
+    // The auction lists whose pages wait on an item's record, and the steps their tails take.
+    auction: Option<ResMut<'w, crate::ui_auction::AuctionOpen>>,
+    house: Option<ResMut<'w, crate::ui_auction::HouseLane>>,
     pass: ResMut<'w, update::UpdatePass>,
     released: ResMut<'w, Released>,
     nets: Query<'w, 's, &'static NetEntity>,
@@ -180,6 +183,11 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             // whose item the cache now holds.
             if let Some(chat) = &sc.chat {
                 chat.answer_landed(crate::ui_chat::Answer::Item(entry));
+            }
+            // The auction lists' callbacks (`0x4cc9bf`, `0x4ccbff`, `0x4cce4f`), a record or a
+            // refusal: a page that now waits on nothing runs its tail.
+            if let (Some(auction), Some(house)) = (sc.auction.as_mut(), sc.house.as_mut()) {
+                crate::ui_auction::record_answered(auction, house, &sc.items, entry);
             }
             // The trade getters' and the ammo getters' callbacks run for a ready record only
             // (`0x4c0343`, `0x4c84f6`).

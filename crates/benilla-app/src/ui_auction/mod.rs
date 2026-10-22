@@ -36,8 +36,7 @@ use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 mod net;
 mod verbs;
 
-#[cfg(test)]
-pub(crate) use net::HouseLane;
+pub(crate) use net::{record_answered, HouseLane};
 pub(crate) use verbs::AuctionVerbs;
 
 #[cfg(test)]
@@ -92,6 +91,15 @@ pub(crate) struct AuctionListSlot {
     /// `0xb7264c`), so the list holds its event. The hello leaves it (`0x4cd570` writes no
     /// counter); the world-enter reset zeroes it (`0x4cc2c3`-`0x4cc2cd`).
     awaiting: Option<Vec<u32>>,
+}
+
+impl AuctionListSlot {
+    /// Whether the page waits on `entry` and, with it answered, on nothing more.
+    fn awaits_only_answered(&self, entry: u32, items: &Items) -> bool {
+        self.awaiting.as_ref().is_some_and(|items_of| {
+            items_of.contains(&entry) && items_of.iter().all(|&e| items.template_answered(e))
+        })
+    }
 }
 
 /// The three lists' key stacks as the app keeps them: seeded at world entry (`0x48f5f9` →
@@ -833,7 +841,7 @@ fn feed_auction(
     names: Res<NameCache>,
     commands: Res<NetCommands>,
     // The clock, and the steps the handlers readied that the lanes' drain has still to fire.
-    (time, steps): (Res<Time>, Option<Res<net::HouseLane>>),
+    (time, mut steps): (Res<Time>, Option<ResMut<net::HouseLane>>),
     catalogs: AuctionCatalogs,
     houses: Option<Res<AuctionHouses>>,
     mut sink: MessageSink,
@@ -842,7 +850,7 @@ fn feed_auction(
     mut last_open: crate::ui_script::WindowMemo<Option<u64>>,
     mut last_can_query: Local<crate::ui_script::VmMemo<bool>>,
     mut last_classes: Local<crate::ui_script::VmMemo<Vec<AuctionCategory>>>,
-    mut name_waits: Local<crate::ui_script::VmMemo<Vec<(u64, usize)>>>,
+    mut fresh_vm: Local<crate::ui_script::VmMemo<()>>,
     mut closes: CoreCloses,
 ) {
     vm.turn(|script, mut auction| {
@@ -895,14 +903,22 @@ fn feed_auction(
         }
 
         // The names `GetAuctionItemInfo` missed, asked with the reading list's callback
-        // (`0x4cf167`, `0x4cf1c8`), kept once per name and list (`0x55f080`'s dedupe flag 1) until
-        // the name lands.
-        let name_waits = name_waits.get(script);
-        for (guid, list) in script.take_auction_name_asks() {
+        // (`0x4cf167`, `0x4cf1c8`), kept on the house lane until the name lands, whose handler
+        // releases them ([`net::HouseLane::name_landed`]). A new VM's getters made none.
+        let (_, vm_reset) = fresh_vm.get_reset(script);
+        let asks = script.take_auction_name_asks();
+        for &(guid, _) in &asks {
             let _ = names.resolve_player(guid, Ask::Event(&commands));
-            if !name_waits.contains(&(guid, list)) {
-                name_waits.push((guid, list));
+        }
+        if let Some(lane) = steps.as_deref_mut() {
+            if vm_reset {
+                lane.clear_waits();
             }
+            for (guid, list) in asks {
+                lane.wait_for_name(guid, list);
+            }
+            // A name the cache already held when it was asked answers no packet: released here.
+            lane.release_named(|guid| names.resolve_player(guid, Ask::Read).is_some());
         }
 
         let self_guid = self_q.iter().next().map(|g| g.0);
@@ -941,9 +957,9 @@ fn feed_auction(
         let opened = last_open.is_none() && auction.auctioneer.is_some();
         let show_requested = std::mem::take(&mut auction.show_requested);
         auction.list_result_landed = [false; 3];
-        // Per list, the sort tail once every item its page waits on is answered, a record or a
-        // refusal, as the pending counter's last decrement runs it (`0x4cc9e8`, `0x4cca10`),
-        // whatever the session.
+        // Per list, a page whose items are all answered with no answer left to run its tail, as a
+        // page that landed with no VM is: its tail goes onto the house lane here
+        // ([`net::record_answered`] runs it at the answer otherwise).
         let tails: [bool; 3] = std::array::from_fn(|i| {
             auction.lists[i]
                 .awaiting
@@ -959,6 +975,13 @@ fn feed_auction(
         for (list, slot) in fresh.lists.iter_mut().zip(&auction.lists) {
             list.pending = slot.awaiting.is_some();
         }
+        if let Some(lane) = steps.as_deref_mut() {
+            for list in [LIST, BIDDER, OWNER] {
+                if tails[list] {
+                    lane.push(net::HouseStep::Tail(list));
+                }
+            }
+        }
         // The handlers' own steps meet the VM as the handlers left it: while any waits for the
         // lanes' drain, the push waits for the next frame.
         let steps_waiting = steps.as_ref().is_some_and(|l| !l.is_empty());
@@ -967,32 +990,6 @@ fn feed_auction(
         }
         if opened || (auction.auctioneer.is_some() && show_requested) {
             script.fire_event("AUCTION_HOUSE_SHOW", vec![]);
-        }
-        for list in [LIST, BIDDER, OWNER] {
-            if tails[list] {
-                script.sort_auction_list(list);
-            }
-        }
-        // Each landed name's callbacks, in the order they were kept: the reading list's update,
-        // with no pending test and sorting nothing (`0x4cf290`, `0x4cf2b0`, `0x4cf2d0`).
-        let landed: Vec<usize> = {
-            let mut landed = Vec::new();
-            name_waits.retain(|&(guid, list)| {
-                let named = names.resolve_player(guid, Ask::Read).is_some();
-                if named {
-                    landed.push(list);
-                }
-                !named
-            });
-            landed
-        };
-        for list in landed {
-            // Literal names: `reference_ui`'s producer test finds fire sites by literal.
-            match list {
-                LIST => script.fire_event("AUCTION_ITEM_LIST_UPDATE", vec![]),
-                BIDDER => script.fire_event("AUCTION_BIDDER_LIST_UPDATE", vec![]),
-                _ => script.fire_event("AUCTION_OWNED_LIST_UPDATE", vec![]),
-            }
         }
         if !steps_waiting {
             *last = Some(fresh);
@@ -1305,7 +1302,8 @@ mod tests {
             .init_resource::<NameCache>()
             .init_resource::<Time>()
             .init_resource::<crate::ui_chat::ChatLog>()
-            .init_resource::<crate::sound::MessageSounds>();
+            .init_resource::<crate::sound::MessageSounds>()
+            .init_resource::<net::HouseLane>();
         let (tx, rx) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
         app.world_mut()
@@ -1339,6 +1337,8 @@ mod tests {
         let feed = app.world_mut().register_system(feed_auction);
         let step = |app: &mut App| -> (Vec<String>, Option<String>) {
             app.world_mut().run_system(feed).unwrap();
+            // The lanes' drain, after the feed.
+            net::fire_house_lane(app.world_mut());
             let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
             s.resolve();
             let seen = s.eval::<Vec<String>>("return SEEN").unwrap();
