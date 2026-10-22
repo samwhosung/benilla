@@ -3637,6 +3637,12 @@ fn unit_combat_fires_at_its_place_in_the_drain() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut feed = super::notice_tests::Feed::new();
     feed.world.resource_mut::<crate::net::SelfGuid>().0 = Some(7);
+    feed.world
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .set_unit_guids(&benilla_ui::script::UnitGuids {
+            player: 7,
+            ..Default::default()
+        });
     feed.script()
         .run(
             r#"
@@ -3678,6 +3684,47 @@ fn unit_combat_fires_at_its_place_in_the_drain() {
             "PLAYER_LEAVE_COMBAT"
         ]
     );
+}
+
+/// `UNIT_COMBAT` fires once for each token naming the unit hit, in the token walk's order
+/// (`0x494600` through `0x515c50`): our pet is `"pet"`, and a pet we target is `"pet"` then
+/// `"target"`, so stock `PetFrame.lua:50-53` shows the pet's hit feedback.
+#[test]
+fn unit_combat_fires_for_every_token_naming_the_unit() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut feed = super::notice_tests::Feed::new();
+    feed.world.resource_mut::<crate::net::SelfGuid>().0 = Some(7);
+    feed.world
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .set_unit_guids(&benilla_ui::script::UnitGuids {
+            player: 7,
+            pet: 9,
+            target: 9,
+            ..Default::default()
+        });
+    feed.script()
+        .run(
+            r#"
+            Order = {}
+            Ord = CreateFrame("Frame", "BenillaPetCombatSpy")
+            Ord:SetScript("OnEvent", function() table.insert(Order, arg1 .. " " .. arg2) end)
+            Ord:RegisterEvent("UNIT_COMBAT")
+        "#,
+        )
+        .unwrap();
+    let wound = crate::ui_unit::UnitCombatFeedback {
+        guid: 9,
+        action: "WOUND",
+        flags: "",
+        amount: 12,
+        school: 0,
+    };
+    feed.world
+        .resource_mut::<super::ChatLog>()
+        .push_unit_combat(wound);
+    feed.drain();
+    let order = feed.script().eval::<Vec<String>>("return Order").unwrap();
+    assert_eq!(order, ["pet WOUND", "target WOUND"]);
 }
 
 /// The honor line's rank title genders off the active player's own descriptor, `PLAYER_BYTES_3`

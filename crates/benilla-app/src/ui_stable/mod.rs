@@ -19,6 +19,8 @@ use crate::ui_pet_stats::{PetFamilyTables, PetStatTables};
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 
+#[cfg(test)]
+mod call_tests;
 mod net;
 
 pub(crate) struct UiStablePlugin;

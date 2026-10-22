@@ -29,6 +29,8 @@ pub(crate) use drain::drain_click_casts;
 #[cfg(test)]
 mod drain_tests;
 pub(crate) mod drop_item;
+#[cfg(test)]
+mod drop_item_tests;
 mod errors;
 mod feed;
 pub(crate) use feed::{bonus_bar_offset, spell_action_icon, MISSING_ITEM_ICON};

@@ -1079,3 +1079,150 @@ fn the_pet_feed_fires_no_attack_event() {
         assert!(seen.is_empty(), "flags {flags:#x}: {seen:?}");
     }
 }
+
+/// The `"pet"` token names the pet's guid whether or not its object is held (`0x515a5e`-
+/// `0x515a6e`), and `UnitExists` (`0x515fb0`) falls to `0x491900` with no object (`0x515ff8`),
+/// whose leg `0x4e80a0` answers 1 for the active player's own pet (`0x4e80cb`-`0x4e8108`): a pet
+/// out of view exists, has no object, and the stock pet frame stays up.
+#[test]
+fn a_pet_with_no_object_exists_and_is_not_visible() {
+    use bevy::prelude::*;
+    const PET: u64 = 0xF140_0000_0000_002A;
+
+    let mut app = App::new();
+    app.add_message::<crate::net::FieldChanged>()
+        .init_resource::<crate::net::GuidIndex>()
+        .insert_resource(crate::net::SelfGuid(Some(0x77)))
+        .init_resource::<crate::names::NameCache>()
+        .insert_resource(PetBar {
+            spells: PetSpells {
+                pet_guid: PET,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .add_systems(Update, feed_pet_unit);
+    let (tx, rx) = crossbeam_channel::unbounded();
+    // Kept alive for the run: a dropped receiver would fail the name query.
+    std::mem::forget(rx);
+    app.insert_resource(NetCommands(tx));
+    app.insert_non_send_resource(benilla_ui::script::UiScript::new().unwrap());
+
+    app.update();
+    let (exists, visible) = app
+        .world_mut()
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .eval::<(Option<f64>, Option<f64>)>("return UnitExists('pet'), UnitIsVisible('pet')")
+        .unwrap();
+    assert_eq!(exists, Some(1.0), "the pet exists with no object");
+    assert_eq!(visible, None, "and has none to see");
+
+    // The bar torn down: no pet at all.
+    app.world_mut().resource_mut::<PetBar>().spells.pet_guid = 0;
+    app.update();
+    let exists = app
+        .world_mut()
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .eval::<Option<f64>>("return UnitExists('pet')")
+        .unwrap();
+    assert_eq!(exists, None);
+}
+
+/// A moved `UNIT_FIELD_PET_NAME_TIMESTAMP` on any unit evicts the pet-name cache under that
+/// unit's own `UNIT_FIELD_PETNUMBER` (`0x604ac6`-`0x604ad8`, unit field `0x85`), never the guid's
+/// bits, and only our own pet's signals `LOCALPLAYER_PET_RENAMED` (`0x604b00`-`0x604b17`).
+#[test]
+fn a_rename_evicts_by_the_units_pet_number_for_any_unit() {
+    use crate::query_cache::Ask;
+    use benilla_protocol::messages::ObjectType;
+    use benilla_protocol::ObjectFields;
+    use bevy::prelude::*;
+    const ME: u64 = 0x77;
+    /// Our pet and another hunter's, each guid's bits 24-47 naming a number its descriptor
+    /// does not carry.
+    const PET: u64 = 0xF140_0000_0700_002A;
+    const OTHER: u64 = 0xF140_0000_0800_002B;
+    const SUMMONEDBY: u16 = 12;
+    const PETNUMBER: u16 = 139;
+    const STAMP: u16 = 140;
+
+    let mut names = crate::names::NameCache::default();
+    for (number, name) in [(55, "Rex"), (66, "Fang"), (7, "Seven"), (8, "Eight")] {
+        names.insert_pet(number, name.into());
+    }
+    let mut app = App::new();
+    app.add_message::<crate::net::FieldChanged>()
+        .init_resource::<crate::net::GuidIndex>()
+        .insert_resource(crate::net::SelfGuid(Some(ME)))
+        .insert_resource(names)
+        .insert_resource(PetBar {
+            spells: PetSpells {
+                pet_guid: PET,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .add_systems(Update, feed_pet_unit);
+    let (tx, rx) = crossbeam_channel::unbounded();
+    // Kept alive for the run: a dropped receiver would fail the name query.
+    std::mem::forget(rx);
+    app.insert_resource(NetCommands(tx));
+    let mut spawn = |guid: u64, number: u32, owner: u32| {
+        let store = ObjectFields::from_pairs(&[
+            (2, 0x9),
+            (SUMMONEDBY, owner),
+            (PETNUMBER, number),
+            (STAMP, 1),
+        ])
+        .into_created(ObjectType::Unit);
+        let e = app
+            .world_mut()
+            .spawn((crate::net::Guid(guid), ObjectStore(store)))
+            .id();
+        app.world_mut()
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(guid, e);
+        e
+    };
+    let pet = spawn(PET, 55, ME as u32);
+    let other = spawn(OTHER, 66, 0x99);
+    let script = benilla_ui::script::UiScript::new().unwrap();
+    script
+        .run(
+            r#"RENAMED = 0
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("LOCALPLAYER_PET_RENAMED")
+            f:SetScript("OnEvent", function() RENAMED = RENAMED + 1 end)"#,
+        )
+        .unwrap();
+    app.insert_non_send_resource(script);
+    app.update();
+
+    for e in [pet, other] {
+        crate::net::apply_fields_for_test(
+            app.world_mut(),
+            e,
+            ObjectFields::from_pairs(&[(STAMP, 2)]),
+        );
+    }
+    app.update();
+    let names = app.world().resource::<crate::names::NameCache>();
+    let named = |e: Entity, guid: u64| {
+        let store = app.world().get::<ObjectStore>(e).unwrap();
+        names
+            .resolve_unit(guid, Some(store), Ask::Read)
+            .map(str::to_string)
+    };
+    assert_eq!(named(pet, PET), None, "our pet's number 55 is evicted");
+    assert_eq!(named(other, OTHER), None, "so is the other pet's 66");
+    let by_bits = |guid: u64| names.resolve_fields(guid, None, Ask::Read).map(str::to_string);
+    assert_eq!(by_bits(PET).as_deref(), Some("Seven"), "the guid's bits are no key");
+    assert_eq!(by_bits(OTHER).as_deref(), Some("Eight"));
+    let renamed = app
+        .world_mut()
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .eval::<i64>("return RENAMED")
+        .unwrap();
+    assert_eq!(renamed, 1, "only our own pet's rename signals");
+}

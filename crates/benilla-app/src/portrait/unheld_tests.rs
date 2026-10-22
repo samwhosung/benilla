@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 
-use super::{player_temporary_portrait, target_subject, Subject};
+use super::{pet_subject, player_temporary_portrait, target_subject, Subject};
 use crate::names::NameCache;
 use crate::target::Selection;
 use crate::ui_party::GroupState;
@@ -64,4 +64,29 @@ fn a_selection_with_no_object_draws_its_stand_in() {
             ..Default::default()
         }
     );
+}
+
+/// Our own pet with no object: `SetPortraitTexture` empties the texture first (`0x519fc1`-
+/// `0x519fd3`), and a guid that is no player's looks only in the group's pet records
+/// (`0x51a0c4` → `0x496420`), which never hold our own pet, so the portrait stays empty
+/// (`0x51a0ce`). No stand-in: the client has no `TemporaryPortrait-Monster`.
+#[test]
+fn our_pet_with_no_object_draws_nothing() {
+    let roster = GroupState::default();
+    let names = NameCache::default();
+    const PET: u64 = 0xF140_0000_0700_002A;
+    assert_eq!(
+        pet_subject(PET, |_| None, &roster, &names),
+        Subject::default(),
+        "no object, no bake, no stand-in"
+    );
+    let object = World::new().spawn_empty().id();
+    assert_eq!(
+        pet_subject(PET, |_| Some(object), &roster, &names),
+        Subject {
+            entity: Some(object),
+            ..Default::default()
+        }
+    );
+    assert_eq!(pet_subject(0, |_| Some(object), &roster, &names), Subject::default());
 }

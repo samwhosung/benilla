@@ -911,12 +911,12 @@ mod tests {
         s.keep_calls();
         s.set_pet_actions(true, true, true, slots());
 
-        s.run("CastPetAction(1) CastPetAction(3) CastPetAction(9)")
+        s.run("CastPetAction(1) CastPetAction(3) CastPetAction(9) CastPetAction(11)")
             .unwrap();
         assert_eq!(
             s.take_pet_actions(),
-            vec![1],
-            "empty + out-of-range dropped"
+            vec![1, 3, 9],
+            "an empty slot is pressed, the eleventh is not (`0x4be416`)"
         );
         assert!(s.take_pet_actions().is_empty(), "drain empties");
 
@@ -1434,5 +1434,72 @@ mod tests {
         );
         assert_eq!(orders.len(), 6, "{orders:?}");
         assert!(orders.iter().all(|c| matches!(c, ScriptCall::PetOrder(_))));
+    }
+
+    /// `CastPetAction` (`0x4be330`) presses any slot of the ten, an empty one included: its zero
+    /// word falls through the dispatcher's type switch to the send (`0x4bd233`), and the press
+    /// plays `GAMEABILITYACTIVATE` after it (`0x4be436`-`0x4be43b`).
+    #[test]
+    fn an_empty_slot_press_sends_its_word_and_plays_the_ability_sound() {
+        use crate::script::SoundRequest;
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.set_pet_actions(true, true, true, slots());
+        s.run("CastPetAction(3)").unwrap();
+        assert_eq!(s.take_pet_actions(), vec![3]);
+        assert_eq!(
+            s.take_sounds(),
+            vec![SoundRequest::KitName("GAMEABILITYACTIVATE".into())]
+        );
+        // A spell slot's press plays it too.
+        s.run("CastPetAction(2)").unwrap();
+        assert_eq!(s.take_pet_actions(), vec![2]);
+        assert_eq!(
+            s.take_sounds(),
+            vec![SoundRequest::KitName("GAMEABILITYACTIVATE".into())]
+        );
+        // The eleventh slot passes the index check (`0x4be388`) but is pressed by nothing
+        // (`0x4be419`), and no sound plays.
+        s.run("CastPetAction(11)").unwrap();
+        assert!(s.take_pet_actions().is_empty());
+        assert!(s.take_sounds().is_empty());
+    }
+
+    /// An index past the eleventh slot raises the binding's own line (`0x4be38d`, `0x8479b4`).
+    #[test]
+    fn a_slot_past_the_eleventh_raises_invalid_slot() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.set_pet_actions(true, true, true, slots());
+        for i in [0, 12] {
+            let e = s.run(&format!("CastPetAction({i})")).unwrap_err().to_string();
+            assert!(e.contains("Invalid slot in CastPetAction"), "{i}: {e}");
+        }
+        assert!(s.take_pet_actions().is_empty());
+    }
+
+    /// With a pet action held, `CastPetAction` clears the cursor (`0x4be3e8`) and drops the action
+    /// on the pressed slot through `0x4bce00` (`0x4be3f9`), then returns: no press, no sound.
+    #[test]
+    fn a_held_pet_action_drops_on_the_pressed_slot_and_presses_nothing() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        let mut v = slots();
+        v[1].packed = 0xC100_0BC2;
+        s.set_pet_actions(true, true, true, v);
+        s.run("PickupPetAction(2)").unwrap();
+        assert!(s.cursor_payload().is_some(), "Claw is held");
+        let _ = s.take_sounds();
+        s.run("CastPetAction(3)").unwrap();
+        assert!(s.take_pet_actions().is_empty(), "the held action is dropped, not cast");
+        assert!(s.take_sounds().is_empty());
+        assert!(s.cursor_payload().is_none(), "the cursor cleared");
+        assert_eq!(
+            s.eval::<Option<String>>("return (GetPetActionInfo(3))")
+                .unwrap()
+                .as_deref(),
+            Some("Claw"),
+            "slot 3 took the held action"
+        );
     }
 }

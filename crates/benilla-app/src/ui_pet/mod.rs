@@ -33,6 +33,8 @@ use menu::{drain_pet_menu, feed_pet_menu};
 pub(crate) use unit::feed_pet_unit;
 
 #[cfg(test)]
+mod call_tests;
+#[cfg(test)]
 mod flush_tests;
 #[cfg(test)]
 mod press_tests;
