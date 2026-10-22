@@ -962,6 +962,18 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
         }
     }
     sc.field_notices.write_batch(item_signals);
+    // The active player's coinage watcher `OnMoneyChanged` (`0x5ddf30`), registered on its own
+    // object (`0x5dd8a0`): the trade offer's trim, at the packet.
+    if kind == ObjectType::Player
+        && me == Some(guid)
+        && block
+            .edges()
+            .any(|(index, _, _)| index == benilla_protocol::field::FIELD_PLAYER_FIELD_COINAGE)
+    {
+        if let (Some(trade), Some(purse)) = (sc.trade.as_mut(), fields.player_money()) {
+            crate::ui_trade::trim_offer_to_purse(trade, purse, &sc.net);
+        }
+    }
     if let Some(((guild_id, stamp), guilds)) = stamp.zip(sc.guilds.as_mut()) {
         guilds.stamp_changed(guild_id, stamp, &sc.net);
     }

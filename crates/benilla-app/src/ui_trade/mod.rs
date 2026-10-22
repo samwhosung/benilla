@@ -12,7 +12,7 @@ use benilla_ui::script::{ScriptValue, TradeSideState, TradeSlotItem, TradeState,
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::names::NameCache;
-use crate::net::{ClientCommand, GuidIndex, NetCommands, ObjectStore, Objects, SelfPlayer};
+use crate::net::{ClientCommand, GuidIndex, NetCommands, ObjectStore, Objects};
 use crate::query_cache::Ask;
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
@@ -632,10 +632,6 @@ impl Plugin for UiTradePlugin {
                     // Ahead of the feed, so an accepted partner shows the frame the window opens.
                     answer_trade_request
                         .after(crate::player::ControlRestore)
-                        .before(feed_trade),
-                    // The coinage-change reflex's trade half, after the world's fields land.
-                    trim_offer_to_purse
-                        .after(crate::ui_unit::UnitFeed)
                         .before(feed_trade),
                     drain_trade.in_set(crate::ui_script::UiDrain),
                 ),
@@ -1325,34 +1321,14 @@ fn drain_trade(
     })
 }
 
-/// The coinage-change reflex (`0x5ddf30`): an offer above the purse is trimmed to the purse.
-fn trimmed_offer(offer: u32, purse: u32) -> Option<u32> {
-    (offer > purse).then_some(purse)
-}
-
-/// On each `PLAYER_FIELD_COINAGE` change with a trade open, re-send an offer past the purse as an
-/// absolute `CMSG_SET_TRADE_GOLD` of the purse; the coin sound and `PLAYER_MONEY` fire elsewhere.
-fn trim_offer_to_purse(
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    mut trade: ResMut<TradeSession>,
-    commands: Res<NetCommands>,
-    mut prev: Local<Option<u32>>,
-) {
-    let Some(money) = self_q
-        .iter()
-        .next()
-        .and_then(|store| store.0.player_money())
-    else {
-        *prev = None;
-        return;
-    };
-    let old = prev.replace(money);
-    if !matches!(old, Some(p) if p != money) || !trade.is_open() {
-        return;
-    }
-    if let Some(trimmed) = trimmed_offer(trade.our.gold, money) {
-        trade.set_own_gold(trimmed);
-        trade.send_edit(&commands, ClientCommand::SetTradeGold { copper: trimmed });
+/// The trade half of `OnMoneyChanged` (`0x5ddf30`), the active player's coinage watcher, run inside
+/// the packet that moved the purse: an own offer above the purse (`TradeGetPlayerMoney 0x5d4760`,
+/// `0x5ddfab`) loses the difference (`TradeSubtractMoney 0x5d45f0`, `0x5ddfda`), which sends the new
+/// total, the purse. A closed trade's offer is 0 (`0x5d4884`-`0x5d48a2`), so no open test is needed.
+pub(crate) fn trim_offer_to_purse(trade: &mut TradeSession, purse: u32, commands: &NetCommands) {
+    if trade.our.gold > purse {
+        trade.set_own_gold(purse);
+        trade.send_edit(commands, ClientCommand::SetTradeGold { copper: purse });
     }
 }
 

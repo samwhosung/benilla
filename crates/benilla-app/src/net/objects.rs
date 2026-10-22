@@ -100,6 +100,8 @@ pub(crate) struct Scene<'w, 's> {
     group: ResMut<'w, crate::ui_party::GroupState>,
     pet_bar: Option<Res<'w, crate::ui_pet::PetBar>>,
     guilds: Option<ResMut<'w, crate::ui_guild::GuildState>>,
+    // The own offer the coinage watcher trims (`0x5ddf30`).
+    trade: Option<ResMut<'w, crate::ui_trade::TradeSession>>,
     pass: ResMut<'w, update::UpdatePass>,
     released: ResMut<'w, Released>,
     nets: Query<'w, 's, &'static NetEntity>,
