@@ -1121,6 +1121,9 @@ pub enum SessionEvent {
         nearest_node: u32,
         known_mask: TaxiMask,
     },
+    /// `SMSG_SHOWTAXINODES` in mode 0, which names no flight master: the known nodes for the
+    /// console, and no map (`0x5ecf7f`).
+    TaxiNodesListed { known_mask: TaxiMask },
     /// Whether the flight master's nearest node is known (`SMSG_TAXINODE_STATUS`); also sent with
     /// [`Self::NewTaxiPath`] on a first visit (vmangos `SendLearnNewTaxiNode`).
     TaxiNodeStatus { guid: u64, known: bool },

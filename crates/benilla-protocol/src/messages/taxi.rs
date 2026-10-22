@@ -75,16 +75,16 @@ pub fn activate_taxi_express(flightmaster_guid: u64, total_cost: u32, nodes: &[u
     body
 }
 
-/// Read `SMSG_SHOWTAXINODES` (vmangos `TaxiHandler.cpp:82-96`): a `u32` gate, then, only when it
-/// is nonzero (client `0x5ece60`), the flight master, the nearest node and the [`TaxiMask`].
-/// vmangos always sends 1.
+/// Read `SMSG_SHOWTAXINODES` (vmangos `TaxiHandler.cpp:82-96`): a `u32` mode, then, only when it
+/// is nonzero, the flight master and the nearest node (client `0x5ece97`-`0x5ececa`), then the
+/// [`TaxiMask`] either way (`0x5ecee0`-`0x5ecf2e`). vmangos always sends 1.
 pub(super) fn read_show_taxi_nodes(r: &mut &[u8]) -> io::Result<(u32, u64, u32, TaxiMask)> {
     let window = read_u32_le(r)?;
-    if window == 0 {
-        return Ok((0, 0, 0, TaxiMask::default()));
-    }
-    let flightmaster = read_u64_le(r)?;
-    let nearest_node = read_u32_le(r)?;
+    let (flightmaster, nearest_node) = if window == 0 {
+        (0, 0)
+    } else {
+        (read_u64_le(r)?, read_u32_le(r)?)
+    };
     let mut mask = [0u32; 8];
     for word in &mut mask {
         *word = read_u32_le(r)?;

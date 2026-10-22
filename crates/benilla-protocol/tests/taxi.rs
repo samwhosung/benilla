@@ -105,13 +105,19 @@ fn show_taxi_nodes_wire() {
         other => panic!("taxi nodes shown event, got {other:?}"),
     }
 
-    // The leading word gates the reference's parse: 0 ends the body (vmangos never sends 0).
-    let gated = 0u32.to_le_bytes().to_vec();
-    let packet = messages::parse_server(messages::opcode::SMSG_SHOWTAXINODES, &gated).unwrap();
-    assert!(
-        decode(packet).is_empty(),
-        "a zero-gated SHOWTAXINODES carries no menu and yields no event"
-    );
+    // Mode 0 skips the flight master and the node and reads the mask alone (`0x5ece9a`), for the
+    // console's list (`0x5ecf37`); vmangos never sends it.
+    let mut listed = 0u32.to_le_bytes().to_vec();
+    for w in mask_words {
+        listed.extend_from_slice(&w.to_le_bytes());
+    }
+    let packet = messages::parse_server(messages::opcode::SMSG_SHOWTAXINODES, &listed).unwrap();
+    match decode(packet).as_slice() {
+        [SessionEvent::TaxiNodesListed { known_mask }] => {
+            assert_eq!(*known_mask, TaxiMask(mask_words))
+        }
+        other => panic!("taxi nodes listed event, got {other:?}"),
+    }
 }
 
 #[test]

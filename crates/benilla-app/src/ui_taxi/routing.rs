@@ -96,6 +96,11 @@ impl TaxiCatalogs {
         }
     }
 
+    /// The `TaxiNodes.dbc` name of node `id`, `None` with no row.
+    pub(super) fn node_name(&self, id: u32) -> Option<&str> {
+        self.nodes.get(id).map(|n| n.name.as_str())
+    }
+
     /// `0x4dbbd0(to, from)`: the length of the path from `to` back to `from` (`0x4dbbf2` reads
     /// `to * 256 + from`), [`NO_POINTS`] when it has no points. The reference reads that row with
     /// no null test (`0x4dbc02`) and faults on a pair with only the forward row; here such a pair

@@ -11,6 +11,7 @@ use crate::net::{GuidIndex, NetHandlerApp};
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
     app.net_handler(K::TaxiNodesShown, on_nodes_shown)
+        .net_handler(K::TaxiNodesListed, on_nodes_listed)
         .net_handler(K::TaxiNodeStatus, on_node_status)
         .net_handler(K::ActivateTaxiReply, on_activate_reply)
         .net_handler(K::NewTaxiPath, on_new_path)
@@ -43,6 +44,30 @@ fn on_nodes_shown(In(ev): In<SessionEvent>, mut commands: Commands) {
             }
         });
     }
+}
+
+/// `SMSG_SHOWTAXINODES` in mode 0 (`0x5ecf7f`): no map, only a console line per known node. The
+/// console prints to the log ([`crate::console`]).
+fn on_nodes_listed(In(ev): In<SessionEvent>, catalogs: Option<Res<super::TaxiCatalogs>>) {
+    if let SessionEvent::TaxiNodesListed { known_mask } = ev {
+        let name = |id| catalogs.as_deref().and_then(|c| c.node_name(id));
+        for line in listed_nodes(&known_mask, name) {
+            info!("console: {line}");
+        }
+    }
+}
+
+/// Mode 0's lines: for each known node from 1 to 256 (`0x5ecf95`-`0x5ed008`) that has a
+/// `TaxiNodes.dbc` row (`0x5ecfb3`-`0x5ecfc9`), `[%02d]: %s` (`0x8606b0`) of its id and name,
+/// through `ConsolePrintf` (`0x5ecfde`).
+fn listed_nodes<'a>(
+    mask: &benilla_protocol::messages::TaxiMask,
+    name: impl Fn(u32) -> Option<&'a str>,
+) -> Vec<String> {
+    (1..=256)
+        .filter(|&id| mask.is_known(id))
+        .filter_map(|id| Some(format!("[{id:02}]: {}", name(id)?)))
+        .collect()
 }
 
 fn on_node_status(In(ev): In<SessionEvent>, mut commands: Commands, index: Res<GuidIndex>) {
@@ -100,4 +125,32 @@ fn taxi_activate_reply(code: u32, taxi: &mut TaxiState) {
 fn taxi_new_path(taxi: &mut TaxiState) {
     debug!("net: taxi — first-visit node learned (SMSG_NEW_TAXI_PATH)");
     taxi.discovered = true;
+}
+
+#[cfg(test)]
+mod tests {
+    use benilla_protocol::messages::TaxiMask;
+
+    use super::*;
+
+    /// Mode 0 lists each known node with a row as `[%02d]: %s` (`0x8606b0`), in id order, the
+    /// mask's bit `n` naming node `n + 1` (`0x5ecf87`); a node with no row prints nothing.
+    #[test]
+    fn mode_zero_lists_the_known_nodes_with_rows() {
+        let mask = TaxiMask([0b1010_0010, 0, 0, 0, 0, 0, 0, 0x8000_0000]);
+        let name = |id| match id {
+            2 => Some("Stormwind, Elwynn"),
+            8 => Some("Thelsamar, Loch Modan"),
+            256 => Some("Last"),
+            _ => None,
+        };
+        assert_eq!(
+            listed_nodes(&mask, name),
+            [
+                "[02]: Stormwind, Elwynn",
+                "[08]: Thelsamar, Loch Modan",
+                "[256]: Last"
+            ]
+        );
+    }
 }

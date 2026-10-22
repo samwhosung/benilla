@@ -984,9 +984,10 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
             nearest_node,
             known,
         } => {
-            // The reference parser gates on this word: zero carries no menu; vmangos sends 1.
+            // The mode word: zero prints the known nodes and opens no map (`0x5ecf37`); vmangos
+            // sends 1.
             if window == 0 {
-                vec![]
+                vec![SessionEvent::TaxiNodesListed { known_mask: known }]
             } else {
                 vec![SessionEvent::TaxiNodesShown {
                     flightmaster,
