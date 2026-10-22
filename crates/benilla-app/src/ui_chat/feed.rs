@@ -164,11 +164,15 @@ impl Pending {
         }
     }
 
-    /// The `$`-macro subject of a monster or battleground line: the addressee, else the sender,
-    /// as the battleground lines carry one guid only.
+    /// The `$`-macro subject of a monster or battleground line whose expansion needs it: the
+    /// addressee, else the sender, as the battleground lines carry one guid only. A line that
+    /// expands with no subject never waits (`0x49dac2` `jne 0x49db31` past the queue).
     fn macro_subject(&self) -> Option<u64> {
         match self {
-            Pending::Wire { msg, .. } if MACRO_EXPANDED_TYPES.contains(&msg.chat_type) => {
+            Pending::Wire { msg, .. }
+                if MACRO_EXPANDED_TYPES.contains(&msg.chat_type)
+                    && crate::npc_text::needs_subject(&msg.text) =>
+            {
                 Some(if msg.target_guid != 0 {
                     msg.target_guid
                 } else {

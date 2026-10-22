@@ -146,6 +146,17 @@ pub(crate) fn substitute_checked(text: &str, ctx: &MacroContext) -> (String, boo
     (out, clean)
 }
 
+/// Whether `text`'s expansion fails with no subject: it holds a person token, or one outside the
+/// set. Only such a failure makes the chat path wait on the subject's name (`0x49dac2`).
+pub(crate) fn needs_subject(text: &str) -> bool {
+    let states = crate::world_state::WorldStates::default();
+    let ctx = MacroContext {
+        subject: None,
+        states: &states,
+    };
+    !substitute_checked(text, &ctx).1
+}
+
 /// Parses a `first:second;` branch body: the two arms and the index past the `;`.
 fn parse_branch(chars: &[char], start: usize) -> Option<(&[char], &[char], usize)> {
     let colon = (start..chars.len()).find(|&j| chars[j] == ':' || chars[j] == ';')?;

@@ -385,6 +385,34 @@ fn a_monster_line_whose_subject_answers_later_in_the_frame_fires_at_the_answer()
     );
 }
 
+/// A boar's `$`-free line to [`STRANGER`].
+fn monster_greets_the_stranger(_: In<SessionEvent>, log: Res<crate::ui_chat::ChatLog>) {
+    log.push_wire(ChatMessage {
+        chat_type: benilla_protocol::messages::CHAT_MSG_MONSTER_SAY,
+        language: 0,
+        sender_guid: 0xF130_0000_0045_0003,
+        target_guid: STRANGER,
+        sender_name: Some("Boar".into()),
+        channel: None,
+        text: "Hello there".into(),
+        chat_tag: 0,
+    });
+}
+
+/// A monster line with no `$`-macro expands at its packet whatever the cache holds, so it waits
+/// for no name: only a failed expansion queues the line (`0x49dac2`).
+#[test]
+fn a_monster_line_with_no_macro_fires_at_its_packet() {
+    let mut app = client(|app| {
+        app.net_handler(SessionEventKind::LoggedOut, monster_greets_the_stranger)
+            .net_handler(SessionEventKind::LogoutResponse, friend_whispers);
+    });
+    assert_eq!(
+        frame(&mut app, vec![p1(), p4(), stranger_named()]),
+        ["CHAT_MSG_MONSTER_SAY:Hello there", "CHAT_MSG_WHISPER:hi"]
+    );
+}
+
 /// The handlers the answers come by queue the release behind a line that reads them: the item
 /// handler's (`0x6294b0`) and the name handler's (`0x49ccc0`), for a monster line's subject and a
 /// player line's sender.
