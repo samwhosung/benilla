@@ -29,6 +29,10 @@ fn on_trade_status(
             world_commands.queue(move |world: &mut World| match window {
                 Window::Open => super::open_window(world),
                 Window::Close { canceled, done } => super::server_close(world, canceled, done),
+                // Status 13's `PLAYER_MONEY` (`0x5d48a8`), the only thing it signals.
+                Window::Money => crate::ui_session::fire(world, |script| {
+                    script.fire_event("PLAYER_MONEY", vec![]);
+                }),
             });
         }
     }
@@ -43,6 +47,9 @@ pub(super) enum Window {
     /// `CANCELED`, `COMPLETE` or `CLOSE_WINDOW`; only `CANCELED` signals `TRADE_REQUEST_CANCEL`,
     /// and only `COMPLETE` closes with `done` 1 (`0x4bf862`).
     Close { canceled: bool, done: bool },
+    /// Code 13: the handler's clear and `PLAYER_MONEY` (`0x5d4884`-`0x5d48a8`), with no arm in
+    /// the dispatcher (`0x4bfa02`); the window stays.
+    Money,
 }
 
 fn on_trade_status_extended(In(ev): In<SessionEvent>, mut trade: ResMut<TradeSession>) {
@@ -141,7 +148,6 @@ fn trade_status(
         | TradeStatus::NoTarget
         | TradeStatus::TargetTooFar
         | TradeStatus::WrongFaction
-        | TradeStatus::Unknown13
         | TradeStatus::IgnoreYou
         | TradeStatus::YouStunned
         | TradeStatus::TargetStunned
@@ -150,6 +156,10 @@ fn trade_status(
         | TradeStatus::YouLogout
         | TradeStatus::TargetLogout
         | TradeStatus::TrialAccount => trade.clear_pending(),
+        TradeStatus::Unknown13 => {
+            trade.clear_pending();
+            return Some(Window::Money);
+        }
         // Past `0x16`: the bare epilogue `0x4bfa02`, as for case 13; vmangos never sends one.
         TradeStatus::Unknown(_) => {}
     }
@@ -390,6 +400,7 @@ mod tests {
                         done: false,
                     },
                 ),
+                (13, Window::Money),
             ]
         );
     }

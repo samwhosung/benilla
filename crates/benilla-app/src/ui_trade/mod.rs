@@ -576,9 +576,12 @@ fn close_core_done(world: &mut World, done: bool) {
 pub(crate) fn server_close(world: &mut World, canceled: bool, done: bool) {
     drain_trade_touches(world);
     crate::ui_session::fire(world, |script| {
-        // The statuses zero both offers before any of it (`0x5d4884`-`0x5d48a2`).
+        // The statuses zero both offers before any of it (`0x5d4884`-`0x5d48a2`), and
+        // `CANCELED`'s handler arm signals `PLAYER_MONEY` there (`0x5d48a8`), ahead of the
+        // dispatcher's `TRADE_REQUEST_CANCEL`.
         script.zero_trade_gold();
         if canceled {
+            script.fire_event("PLAYER_MONEY", vec![]);
             script.fire_event("TRADE_REQUEST_CANCEL", vec![]);
         }
         script.unlock_trade_items();
