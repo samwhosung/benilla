@@ -265,16 +265,78 @@ mod tests {
         assert_eq!(write(m.iter()), "MACRO 1 \"a\" \n/say one\n/say two\nEND\n");
     }
 
+    /// The name token is the tokenizer's with `` "\r\n`` as delimiters and quotes on (`0x4f07bb`,
+    /// `0x84cb48`): a leading `"` opens a span the next `"` closes, so a name runs to the next
+    /// quote, and the icon token (`0x4f0986`) starts after it. A name holding a quote does not
+    /// survive the round trip; an empty name is no record (`0x4f07c8`).
     #[test]
-    fn a_quoted_name_round_trips_the_way_the_reference_would_write_it() {
-        let m = vec![MacroView {
+    fn a_name_runs_to_the_next_quote() {
+        let m = [MacroView {
             id: 4,
             name: "say \"hi\"".into(),
             texture: Some("Interface\\Icons\\Ability_Ambush".into()),
             body: "/say hi\n".into(),
             local_only: false,
         }];
-        assert_eq!(parse(&write(m.iter())), m);
+        let text = write(m.iter());
+        assert_eq!(
+            text,
+            "MACRO 4 \"say \"hi\"\" Ability_Ambush\n/say hi\nEND\n"
+        );
+        let back = parse(&text);
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].name, "say ");
+        assert_eq!(back[0].texture.as_deref(), Some("Interface\\Icons\\hi"));
+        let empty = parse("MACRO 2 \"\" Ability_Ambush\n/say x\nEND\n");
+        assert_eq!(
+            empty.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(),
+            [""],
+            "read, for the table to skip after it has counted its id"
+        );
+        let state = MacroState::from_scopes(empty, Vec::new());
+        assert_eq!(state.count(false), 0);
+    }
+
+    /// The id is `SStrToInt` of its space-separated token (`0x4f0721`): leading digits, a sign, and
+    /// a negative id below the scope's base gets the base added (`0x4f0737`, a signed compare).
+    #[test]
+    fn the_id_is_read_as_sstrtoint_reads_it() {
+        let macros =
+            parse("MACRO 12x \"a\" Ability_Ambush\nEND\nMACRO -5 \"b\" Ability_Ambush\nEND\n");
+        let ids: Vec<u32> = macros.iter().map(|m| m.id).collect();
+        assert_eq!(ids, [12, (-5i32) as u32]);
+        let state = MacroState::from_scopes(Vec::new(), macros);
+        let ids: Vec<u32> = state.saved(true).iter().map(|m| m.id).collect();
+        assert_eq!(ids, [CHARACTER_ID_BASE + 12, CHARACTER_ID_BASE - 5]);
+    }
+
+    /// The reader's line buffer and the writer's are 0x100 bytes (`0x4f0677`, `0x4f0b93`), so each
+    /// keeps a line's first 255 bytes; a cut inside a character backs off to its start.
+    #[test]
+    fn a_line_keeps_its_first_255_bytes() {
+        let long = "a".repeat(300);
+        let wide = "\u{e9}".repeat(200);
+        let text = format!("MACRO 1 \"m\" Ability_Ambush\n{long}\n{wide}\nEND\n");
+        let body = &parse(&text)[0].body;
+        assert_eq!(
+            body,
+            &format!("{}\n{}\n", "a".repeat(255), "\u{e9}".repeat(127))
+        );
+        let m = [MacroView {
+            id: 1,
+            name: "m".into(),
+            texture: None,
+            body: format!("{long}\n{wide}"),
+            local_only: false,
+        }];
+        assert_eq!(
+            write(m.iter()),
+            format!(
+                "MACRO 1 \"m\" \n{}\n{}\nEND\n",
+                "a".repeat(255),
+                "\u{e9}".repeat(127)
+            )
+        );
     }
 
     #[test]

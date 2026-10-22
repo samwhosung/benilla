@@ -722,6 +722,39 @@ mod tests {
     use super::*;
     use crate::script::UiScript;
 
+    /// The reader counts a header's id into the scope's last before it reads the name, and skips
+    /// a record with an empty one only then (`0x4f0744`, `0x4f07c8`): the next create takes the id
+    /// after it.
+    #[test]
+    fn an_unnamed_record_is_skipped_after_its_id_counts() {
+        let state = MacroState::from_scopes(
+            vec![MacroView {
+                id: 5,
+                ..Default::default()
+            }],
+            Vec::new(),
+        );
+        assert_eq!(state.count(false), 0);
+        assert_eq!(state.last_id[0], 5);
+    }
+
+    /// `GetActionTexture`'s macro arm formats `"%s%s"` of the icon directory and the record's
+    /// basename (`0x4f0fd0`, `0x4f0ffa`) and the binding pushes the buffer (`0x4e6e42`), so a macro
+    /// with no icon gives the directory alone, where `GetMacroInfo` gives nil.
+    #[test]
+    fn a_macro_with_no_icon_shows_the_icon_directory_on_the_bar() {
+        let s = seeded();
+        s.run(r#"CreateMacro("bare", 99, "") PickupMacro(1) PlaceAction(5)"#)
+            .unwrap();
+        assert_eq!(
+            s.eval::<(Option<String>, Option<String>)>(
+                "local _, t = GetMacroInfo(1) return t, GetActionTexture(5)"
+            )
+            .unwrap(),
+            (None, Some("Interface\\Icons\\".into()))
+        );
+    }
+
     fn seeded() -> UiScript {
         let mut s = UiScript::new().unwrap();
         s.set_macro_icons(vec![
