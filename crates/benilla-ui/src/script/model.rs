@@ -641,9 +641,10 @@ pub(crate) struct Model {
     /// Bumped by every `EditMacro` that names a macro, whose worker `0x4f1280` ends in the action
     /// bar's usable refresh (`0x4f132e`).
     pub(crate) macro_edits: u64,
-    /// The bound-spell derivations the table owes the app since its last take.
+    /// The load's derivations the table owes the app since its last take.
     pub(crate) macro_derives: macros::MacroDerives,
-    /// Each macro's cached cast by id, from the app; an absent macro reads unbound.
+    /// Each macro's cached cast by id, derived in the verbs and the app's pass; an absent macro
+    /// reads unbound.
     pub(crate) macro_bindings: HashMap<u32, macros::MacroBinding>,
     /// The macro icon chooser's paths, behind `GetMacroIconInfo`: `0x4f0090`'s listing of
     /// `Interface\Icons\`, not `SpellIcon.dbc`.

@@ -9,11 +9,14 @@
 //! ([`crate::crt`]) and rebuilt after every create, edit and delete (`0x4f0d30`), so the first
 //! character macro is index 19 however few account macros there are. An action slot holds the id
 //! (`macroId | 0x40000000`, `0x4e62e0`), never the position. A macro's bound spell
-//! (`0x4e5a50`'s macro arm returns `[rec+0x564]`) is the app's to derive: it needs the spell catalog
-//! and the player's book.
+//! (`0x4e5a50`'s macro arm returns `[rec+0x564]`) is derived here from the pushed books
+//! ([`bind`]): inside a create or an edit, and when the app's pass asks.
 
+mod bind;
 #[cfg(test)]
 mod lua_tests;
+
+pub use bind::macro_lines;
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -64,7 +67,8 @@ pub struct MacroView {
 }
 
 /// A macro record's cached cast, the reference's `([rec+0x564], [rec+0x568])` pair (`0x4efe00`):
-/// the bound spell and the book it resolved from, which the app derives.
+/// the bound spell and the book it resolved from. A create or an edit derives it inside its call
+/// (`0x4f123c`, `0x4f1313`); the app's pass derives the rest ([`UiScript::derive_macro_bindings`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MacroBinding {
     /// The bound spell id; 0 for none, -1 for a `/cast` that did not resolve.
@@ -73,29 +77,22 @@ pub struct MacroBinding {
     pub pet_book: bool,
 }
 
-/// The bound-spell derivations (`0x4efe00`) the table owes, which the app makes: it holds the
-/// spell catalog and the alias table. The reference derives inside the worker that owes one.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct MacroDerives {
-    /// The table was loaded, which derives every record (`0x4f0a55` into `0x4f0ca0`); each is new,
-    /// with its book selector clear (`0x4f1ca0`).
-    pub loaded: bool,
-    /// The records made since, by id, each derived alone (`0x4f123c`), its selector clear.
-    pub created: Vec<u32>,
-    /// The records edited since, by id, each derived alone (`0x4f1313`), keeping its selector.
-    pub edited: Vec<u32>,
+impl MacroBinding {
+    /// Whether `0x4f0ce0` derives this record again when the pet's spell list arrives
+    /// (`0x4f0cfb`-`0x4f0d11`): a `/cast` that did not resolve (`[rec+0x564] < 0`), or any record
+    /// whose book selector is the pet's (`[rec+0x568] != 0`), whatever it is bound to now. Any
+    /// other record keeps its cast.
+    pub fn follows_the_pet_book(self) -> bool {
+        self.spell < 0 || self.pet_book
+    }
 }
 
-impl MacroDerives {
-    /// Whether `id` is owed a derivation.
-    pub fn owes(&self, id: u32) -> bool {
-        self.loaded || self.created.contains(&id) || self.edited.contains(&id)
-    }
-
-    /// Whether `id` is a new record, whose selector starts clear.
-    pub fn is_new(&self, id: u32) -> bool {
-        self.loaded || self.created.contains(&id)
-    }
+/// The derivations a load owes: the load derives every record (`0x4f0a55` into `0x4f0ca0`), each
+/// new with its selector clear (`0x4f1ca0`). The app makes them once the VM holds the book.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MacroDerives {
+    /// The table was loaded since the last take.
+    pub loaded: bool,
 }
 
 /// A record and the scope it belongs to (`rec+0x1c`).
@@ -301,10 +298,8 @@ impl super::UiScript {
         model.macros = state;
         model.macros_dirty = false;
         model.macros_generation += 1;
-        model.macro_derives = MacroDerives {
-            loaded: true,
-            ..Default::default()
-        };
+        model.macro_derives = MacroDerives { loaded: true };
+        model.macro_bindings.clear();
     }
 
     /// Take the derivations owed since the last take ([`MacroDerives`]).
@@ -320,6 +315,34 @@ impl super::UiScript {
     /// Push every macro's cached cast by id, replacing the last push.
     pub fn set_macro_bindings(&mut self, bindings: std::collections::HashMap<u32, MacroBinding>) {
         self.model_mut().macro_bindings = bindings;
+    }
+
+    /// Each macro's cached cast by id; a record with none is bound to nothing.
+    pub fn macro_bindings(&self) -> std::collections::HashMap<u32, MacroBinding> {
+        self.model_ref().macro_bindings.clone()
+    }
+
+    /// Derive again (`0x4efe00`) each record `pick` names by its id and its cast now, against the
+    /// books and the `/cast` aliases as they stand: the load's and the arrival's every record
+    /// (`0x4f0ca0`), the pet message's followers (`0x4f0ce0`).
+    pub fn derive_macro_bindings(&mut self, pick: impl Fn(u32, MacroBinding) -> bool) {
+        let aliases = bind::cast_aliases(self.lua());
+        let mut model = self.model_mut();
+        let model = &mut *model;
+        for record in &model.macros.list {
+            let id = record.view.id;
+            let was = model.macro_bindings.get(&id).copied().unwrap_or_default();
+            if pick(id, was) {
+                let next = bind::derive(
+                    &aliases,
+                    &record.view.body,
+                    &model.spellbook,
+                    &model.pet_book,
+                    was,
+                );
+                model.macro_bindings.insert(id, next);
+            }
+        }
     }
 
     /// Whether a script changed the table since the last call; the app then saves it. The verbs
@@ -368,8 +391,8 @@ fn create_macro(
     name: &str,
     texture: Option<String>,
     body: &str,
-    local_only: bool,
-    per_character: bool,
+    (local_only, per_character): (bool, bool),
+    aliases: &[String],
 ) -> mlua::Result<usize> {
     let state = &mut model.macros;
     if state.count(per_character) >= MAX_MACROS {
@@ -390,7 +413,15 @@ fn create_macro(
             local_only,
         },
     });
-    model.macro_derives.created.push(id);
+    // The new record's cast, its selector clear (`0x4f1ca0`), derived in the call (`0x4f123c`).
+    let binding = bind::derive(
+        aliases,
+        &cut_body(body),
+        &model.spellbook,
+        &model.pet_book,
+        MacroBinding::default(),
+    );
+    model.macro_bindings.insert(id, binding);
     model.macros_dirty = true;
     model.macros_generation += 1;
     // The order's rebuild (`0x4f125c` into `0x4f0d30`), which signals no slot.
@@ -408,10 +439,9 @@ fn create_macro(
 fn edit_macro(
     model: &mut Model,
     index: usize,
-    name: Option<String>,
-    texture: Option<String>,
-    body: Option<String>,
+    (name, texture, body): (Option<String>, Option<String>, Option<String>),
     local_only: bool,
+    aliases: &[String],
 ) -> usize {
     let id = model.macros.id_at(index);
     if let Some(record) = model
@@ -431,7 +461,10 @@ fn edit_macro(
             view.body = cut_body(&body);
         }
         view.local_only = local_only;
-        model.macro_derives.edited.push(id);
+        // The record's cast derived again in the call (`0x4f1313`), against the book as it is.
+        let was = model.macro_bindings.get(&id).copied().unwrap_or_default();
+        let binding = bind::derive(aliases, &view.body, &model.spellbook, &model.pet_book, was);
+        model.macro_bindings.insert(id, binding);
         model.macros_dirty = true;
         model.macros_generation += 1;
         model.macro_edits += 1;
@@ -469,6 +502,7 @@ fn delete_macro(model: &mut Model, index: usize) -> bool {
         return false;
     };
     model.macros.list.remove(at);
+    model.macro_bindings.remove(&id);
     super::cursor::clear_macro_slots(model, id);
     model.macros_dirty = true;
     model.macros_generation += 1;
@@ -640,11 +674,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 .get(2)
                 .and_then(|v| super::binding_abi::optional_string(lua, v))
                 .unwrap_or_default();
-            let (local_only, per_character) = (flag(a.get(3)), flag(a.get(4)));
+            let flags = (flag(a.get(3)), flag(a.get(4)));
+            let aliases = bind::cast_aliases(lua);
             super::tick::verb(lua, |model| {
                 // `0x4f1632`, `0x4f163c`.
                 let texture = icon_at(model, icon);
-                create_macro(model, &name, texture, &body, local_only, per_character)
+                create_macro(model, &name, texture, &body, flags, &aliases)
             })
             .map(|i| Value::Integer(i as i64))
         })?,
@@ -681,11 +716,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let name = a.get(1).and_then(|v| binding_abi::optional_string(lua, v));
             let body = a.get(3).and_then(|v| binding_abi::optional_string(lua, v));
             let local_only = flag(a.get(4));
+            let aliases = bind::cast_aliases(lua);
             let at = super::tick::verb(lua, |model| {
                 // `0x4f1966`-`0x4f1983`: a miss leaves the pointer null, and the macro its old
                 // icon.
                 let texture = icon.and_then(|n| icon_at(model, n));
-                edit_macro(model, index, name, texture, body, local_only)
+                edit_macro(model, index, (name, texture, body), local_only, &aliases)
             });
             Ok(Value::Integer(at as i64))
         })?,

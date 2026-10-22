@@ -237,11 +237,11 @@ struct BindingsSeen {
     pet_book: Option<u64>,
 }
 
-/// Derive the bound spells where the reference's four callers of `0x4efe00` do, and nowhere else:
+/// Derive the bound spells the engine's verbs do not (they derive the record a create or an edit
+/// touches inside the call, `0x4f123c`, `0x4f1313`), where the reference's other callers of
+/// `0x4efe00` do, and nowhere else:
 /// - every record after the macro files load (`0x4f0a55` into `0x4f0ca0`) and after our player's
 ///   arrival learns its initial spells (`0x5deacc`);
-/// - the one record a create or an edit touches (`0x4f123c`, `0x4f1313`), as the engine records
-///   ([`benilla_ui::script::MacroDerives`]);
 /// - at the pet's spell list (`0x4bdae0` into `0x4f0ce0`), the records that follow the pet's book:
 ///   a `/cast` that did not resolve and any record whose selector is the pet's (`0x4f0cfb`-
 ///   `0x4f0d11`).
@@ -249,12 +249,11 @@ struct BindingsSeen {
 /// A learned spell derives nothing, so a `/cast` of a spell not yet known stays -1 until its macro
 /// is edited, loaded again or the player arrives again. A superseded rank rewrites the cached
 /// spell of each macro on the bar that holds the old one (`0x4e5e60`'s macro arm, `0x4e5ec4`),
-/// derived from nothing. Runs after the book's feed, so a derivation reads the book as it stands.
-#[allow(clippy::type_complexity)] // a Bevy system's full input set
+/// derived from nothing. Runs after the book's feed, so a derivation reads the book as it stands,
+/// and copies the engine's records out for the action bar.
 fn rebind_macro_spells(
     // The bar, whose supersede queue this drains, which the host's action presses also read.
     mut vm: crate::script_calls::VmWith<ResMut<'static, crate::ui_action::PlayerActions>>,
-    table: Option<Res<crate::ui_chat::commands::SlashCommands>>,
     mut bound: ResMut<MacroBoundSpells>,
     arrivals: Query<(), Added<crate::net::SelfPlayer>>,
     mut owed: Local<(bool, crate::ui_script::VmMemo<BindingsSeen>)>,
@@ -272,7 +271,7 @@ fn rebind_macro_spells(
         (actions.superseded.clone(), on_bar)
     };
     let applied = vm.run(|script| {
-        let (Some(script), Some(table)) = (script, table) else {
+        let Some(script) = script else {
             return false;
         };
         let seen = seen.get(script);
@@ -285,55 +284,27 @@ fn rebind_macro_spells(
         }
         seen.macros = Some(generation);
         seen.pet_book = Some(pet_generation);
-        let every = std::mem::take(arrived);
-        let derives = script.take_macro_derives();
+        let every = std::mem::take(arrived) || script.take_macro_derives().loaded;
 
-        let (macros, book, pet_book) =
-            (script.macros(), script.spellbook(), script.pet_spellbook());
-        let mut fresh = std::collections::HashMap::new();
-        for m in macros.views() {
-            // A new record's spell and selector start clear (`0x4f1ca0`).
-            let mut was = if derives.is_new(m.id) {
-                Bound::default()
-            } else {
-                bound.0.get(&m.id).copied().unwrap_or_default()
-            };
-            if on_bar.contains(&m.id) {
+        if !superseded.is_empty() {
+            let mut records = script.macro_bindings();
+            for (_, b) in records.iter_mut().filter(|(id, _)| on_bar.contains(id)) {
                 for &(old, new) in &superseded {
-                    if was.spell == BoundSpell::Spell(old) {
-                        was.spell = BoundSpell::Spell(new);
+                    if b.spell == old as i32 {
+                        b.spell = new as i32;
                     }
                 }
             }
-            let derive = every || derives.owes(m.id) || (pet_moved && was.follows_the_pet_book());
-            let next = if derive {
-                run::bound_spell(&table, &m.body, &book, &pet_book, was)
-            } else {
-                was
-            };
-            fresh.insert(m.id, next);
+            script.set_macro_bindings(records);
         }
-        // The engine's copy, for `GetActionAutocast`, re-pushed on every recompute so a fresh VM
-        // has it.
-        script.set_macro_bindings(
-            fresh
-                .iter()
-                .map(|(&id, b)| {
-                    let spell = match b.spell {
-                        BoundSpell::None => 0,
-                        BoundSpell::Unresolved => -1,
-                        BoundSpell::Spell(id) => id as i32,
-                    };
-                    (
-                        id,
-                        benilla_ui::script::MacroBinding {
-                            spell,
-                            pet_book: b.pet_book,
-                        },
-                    )
-                })
-                .collect(),
-        );
+        script.derive_macro_bindings(|_, b| every || (pet_moved && b.follows_the_pet_book()));
+
+        let records = script.macro_bindings();
+        let fresh: std::collections::HashMap<u32, Bound> = script
+            .macros()
+            .views()
+            .map(|m| (m.id, records.get(&m.id).copied().unwrap_or_default().into()))
+            .collect();
         if fresh != bound.0 {
             let spells = fresh
                 .values()

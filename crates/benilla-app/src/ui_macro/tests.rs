@@ -323,16 +323,14 @@ fn the_entry_vms_icon_chooser_is_listed_on_first_use() {
         .starts_with("Interface\\Icons\\"));
 }
 
-/// A mini app around [`super::rebind_macro_spells`]: the VM, an empty bar and the `/cast` alias.
+/// A mini app around [`super::rebind_macro_spells`]: the VM with the shipped `/cast` alias, which
+/// the derivation reads from the globals (`0x703bf0`), and an empty bar.
 fn rebind_app(script: UiScript) -> bevy::prelude::App {
     use bevy::prelude::*;
+    script.run(r#"SLASH_CAST1 = "/cast""#).unwrap();
     let mut app = App::new();
     app.init_resource::<crate::ui_action::PlayerActions>()
         .init_resource::<super::MacroBoundSpells>()
-        .insert_resource(crate::ui_chat::commands::SlashCommands::build(
-            |name| (name == "SLASH_CAST1").then(|| "/cast".to_string()),
-            |_| None,
-        ))
         .insert_non_send_resource(script)
         .add_systems(Update, super::rebind_macro_spells);
     app
@@ -809,10 +807,10 @@ fn a_superseded_rank_rewrites_the_cached_spell_of_a_macro_on_the_bar() {
     );
 }
 
-/// A supersede waits for the VM and the alias table: the pairs are applied by the first pass that
-/// runs, not dropped by the passes that cannot.
+/// A supersede waits for the VM: the pairs are applied by the first pass that runs, not dropped by
+/// the passes that cannot.
 #[test]
-fn a_supersede_with_no_table_yet_is_kept_for_the_first_pass() {
+fn a_supersede_with_no_vm_yet_is_kept_for_the_first_pass() {
     use super::run::BoundSpell;
     use benilla_protocol::messages::{ActionButton, ACTION_KIND_MACRO};
     let mut script = UiScript::new().unwrap();
@@ -839,16 +837,16 @@ fn a_supersede_with_no_table_yet_is_kept_for_the_first_pass() {
     app.update();
     assert_eq!(bound_of(&app, 1), BoundSpell::Spell(116));
 
-    let table = app
+    let script = app
         .world_mut()
-        .remove_resource::<crate::ui_chat::commands::SlashCommands>()
+        .remove_non_send_resource::<UiScript>()
         .unwrap();
     app.world_mut()
         .resource_mut::<crate::ui_action::PlayerActions>()
         .superseded
         .push((116, 205));
     app.update();
-    app.world_mut().insert_resource(table);
+    app.world_mut().insert_non_send_resource(script);
     app.update();
     assert_eq!(bound_of(&app, 1), BoundSpell::Spell(205));
 }
