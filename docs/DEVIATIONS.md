@@ -36,7 +36,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-lua](#benilla-lua): 11
 - [benilla-protocol](#benilla-protocol): 27
 - [benilla-srp](#benilla-srp): 2
-- [benilla-ui](#benilla-ui): 127
+- [benilla-ui](#benilla-ui): 128
 - [benilla-world](#benilla-world): 49
 
 ### benilla-app
@@ -460,7 +460,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### ui_talent_wipe
 
 - Vmangos answers a reset with nothing to reset by asking again with a zero guid (`SkillHandler.cpp:52`), which the 1.12 client takes as its Accept and answers, looping; this drops a zero-guid question, because it means there is nothing to ask. ([`src/ui_talent_wipe.rs:14`](../crates/benilla-app/src/ui_talent_wipe.rs#L14))
-- The reference never clears its latch (`0xc4d7a0`); this does once the answer is sent, because the reference's dialog is gone by then and a second Accept would reset twice. ([`src/ui_talent_wipe.rs:153`](../crates/benilla-app/src/ui_talent_wipe.rs#L153))
+- The reference never clears its latch (`0xc4d7a0`); this does once the answer is sent, because the reference's dialog is gone by then and a second Accept would reset twice. ([`src/ui_talent_wipe.rs:141`](../crates/benilla-app/src/ui_talent_wipe.rs#L141))
 
 #### ui_text
 
@@ -764,6 +764,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - One signal per missed record, where the reference runs every callback of every miss as its record lands (creatures in `0x556e20` at `0x556f91`, items in `0x55bc70` via `0x55bdb0` from `0x555140`; `0x4e07ea`, `0x4e083a`), 2^k - 1 updates for a walking handler over k first-seen records. ([`src/script/quest_log.rs:1056`](../crates/benilla-ui/src/script/quest_log.rs#L1056))
 - A local clock step mid-session (an NTP correction) jumps the reference's countdown but not ours, because the step changes no time the quest has left. ([`src/script/quest_log.rs:1111`](../crates/benilla-ui/src/script/quest_log.rs#L1111))
 - Four set ids count 4, where the loop's exit `jmp 0x4e0a4c` (`0x4e0a42`) skips the store at `0x4e0a49` and answers 0, a client bug. ([`src/script/quest_log.rs:1461`](../crates/benilla-ui/src/script/quest_log.rs#L1461))
+- The folds are keyed by header, not by the reference's mask positions, whose rebuild folds bit N-1 by registration index before the sort (`0x4d5d49`-`0x4d5d68`) and whose fold verbs search `0xb736c0` before `0x4d5c40` sorts it (`0x4d6400`), so Inactive opens at login whenever a childless header exists and inactivating a header's last child shows it expanded; that is a reference bug, and the folds follow the header the player clicked. ([`src/script/reputation.rs:329`](../crates/benilla-ui/src/script/reputation.rs#L329))
 - Nesting stops at 32 where the reference recurses uncapped (its indent saturates at `0x80`), so a hostile structure cannot exhaust the stack. ([`src/script/saved.rs:21`](../crates/benilla-ui/src/script/saved.rs#L21))
 - The reference rewrites it from the live defaults (`0x51f865`–`0x51f970`), which would cost the player the whole file for one typo in a hand edit. ([`src/script/saved.rs:27`](../crates/benilla-ui/src/script/saved.rs#L27))
 - The writer's escapes are undone (`unescape`), where the reference sets the bytes between the quotes raw, so a string holding a quote or a backslash would grow every session. ([`src/script/saved.rs:199`](../crates/benilla-ui/src/script/saved.rs#L199))
