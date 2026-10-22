@@ -248,11 +248,9 @@ pub(crate) fn aura_lines(
     }
 }
 
-/// Slots below it are helpful (`0x61238e`).
-const FIRST_HARMFUL_SLOT: u16 = 0x20;
-
+/// Whether an aura slot is harmful: slots below 0x20 are helpful (`0x61238e`).
 fn harmful(slot: u16) -> bool {
-    slot >= FIRST_HARMFUL_SLOT
+    slot >= 0x20
 }
 
 /// `slot`'s spell dword on the unit as the edge `e` found it: the old dword of the first watcher
