@@ -979,3 +979,62 @@ fn canceled_and_code_13_signal_the_purse_ahead_of_the_dispatcher() {
     status(&mut t, TradeStatus::Complete);
     assert!(!order(&mut t).contains("PLAYER_MONEY"));
 }
+
+/// The open leg's item path asks for the held item's guid and its source container's
+/// (`0x4bf667`, `0x4bf674`): an item from bag 1 with no bag known in inventory slot 20 leaves the
+/// cursor and the offer alone, and the world click asks no trade for it; with the bag seated
+/// both go on.
+#[test]
+fn the_open_leg_takes_no_item_whose_bag_has_no_guid() {
+    for seated in [false, true] {
+        let mut t = client();
+        with_hosted_vm(t.app.world_mut(), |vm| {
+            let vm = vm.expect("a VM");
+            let mut bag = ContainerState {
+                num_slots: 4,
+                ..Default::default()
+            };
+            bag.slots.insert(
+                1,
+                ContainerSlot {
+                    item_id: 2589,
+                    guid: CLOTH,
+                    count: 1,
+                    ..Default::default()
+                },
+            );
+            vm.set_container(1, Some(bag));
+            if seated {
+                let mut slots: benilla_ui::script::InventorySlots = Default::default();
+                slots[20] = Some(benilla_ui::script::InvSlotView {
+                    item_id: 4496,
+                    guid: 0x4000_0000_0000_0b01,
+                    ..Default::default()
+                });
+                vm.set_inventory_slots(slots);
+            }
+        });
+        run(&mut t, "PickupContainerItem(1, 1)");
+        // The world click's trade leg asks the same of the payload (`0x49264d`).
+        click_on(&mut t, BOB);
+        assert_eq!(
+            matches!(sent(&t)[..], [ClientCommand::InitiateTrade { .. }]),
+            seated,
+            "seated {seated}: the click"
+        );
+        t.app
+            .world_mut()
+            .resource_mut::<super::TradeSession>()
+            .initiate(BOB, true);
+        status(&mut t, TradeStatus::OpenWindow);
+        let placed = sent(&t)
+            .iter()
+            .any(|c| matches!(c, ClientCommand::SetTradeItem { trade_slot: 0, .. }));
+        assert_eq!(placed, seated, "seated {seated}");
+        assert_eq!(
+            eval::<bool>(&mut t, "return CursorHasItem() == 1"),
+            !seated,
+            "seated {seated}"
+        );
+    }
+}
