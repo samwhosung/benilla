@@ -29,6 +29,8 @@ mod call_tests;
 mod calls;
 mod net;
 #[cfg(test)]
+mod receive_tests;
+#[cfg(test)]
 mod sweep_tests;
 
 /// `ItemBondingType::BIND_WHEN_PICKED_UP`, the first conjunct of the `LOOT_BIND` confirm: the

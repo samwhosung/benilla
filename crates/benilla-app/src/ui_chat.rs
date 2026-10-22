@@ -35,6 +35,8 @@ mod input;
 mod language;
 /// `LoggingChat`/`LoggingCombat`: the two log files `/chatlog` and `/combatlog` toggle.
 pub(crate) mod logging;
+#[cfg(test)]
+mod monster_tests;
 mod net;
 #[cfg(test)]
 mod notice_tests;

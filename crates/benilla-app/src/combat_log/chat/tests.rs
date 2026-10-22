@@ -119,6 +119,7 @@ mod emitters {
 
     use super::super::ChatCtx;
 
+    mod dispel;
     mod lines;
     mod words;
 
@@ -214,6 +215,15 @@ mod emitters {
     /// No pose held: every endpoint is in range.
     struct NoPoses;
 
+    /// Each unit's place, by entity.
+    struct At(HashMap<Entity, Vec3>);
+
+    impl Poses for At {
+        fn pose(&self, entity: Entity) -> Option<Vec3> {
+            self.0.get(&entity).copied()
+        }
+    }
+
     impl Poses for NoPoses {
         fn pose(&self, _: Entity) -> Option<Vec3> {
             None
@@ -293,6 +303,15 @@ mod emitters {
             &self,
             emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &NoPoses, &ChatLog),
         ) -> ChatLog {
+            self.run_posed(&NoPoses, emit)
+        }
+
+        /// [`Self::run`] with the units at `poses`.
+        fn run_posed<P: Poses>(
+            &self,
+            poses: &P,
+            emit: impl FnOnce(&ChatCtx, &HashMap<Entity, ObjectStore>, &P, &ChatLog),
+        ) -> ChatLog {
             let (self_guid, reputations, ranges) = (
                 SelfGuid(Some(ME)),
                 Reputations::default(),
@@ -314,7 +333,7 @@ mod emitters {
                 periodic: true,
             };
             let mut log = ChatLog::default();
-            emit(&ctx, &self.stores, &NoPoses, &mut log);
+            emit(&ctx, &self.stores, poses, &mut log);
             log
         }
     }

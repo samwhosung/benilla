@@ -167,4 +167,31 @@ mod tests {
         // Past the table, which `0x494706` indexes unbounded and no server sends.
         assert!(swing(9, 0, 0).is_empty());
     }
+
+    /// `0x4946d0` passes the swing record's first sub-damage school as `UNIT_COMBAT`'s fifth
+    /// argument (`0x4946fc` `mov edx,[ecx+0x18]`, `0x494705` `push edx`), so a fire elemental's hit
+    /// on you draws spell-yellow on your portrait (`CombatFeedback.lua:42-46`).
+    #[test]
+    fn a_swings_unit_combat_carries_its_school() {
+        let log = ChatLog::default();
+        let s = crate::creature_anim::SwingMessage {
+            attacker: bevy::prelude::Entity::PLACEHOLDER,
+            victim: None,
+            hit_info: 0,
+            victim_state: 1,
+            damage: 30,
+            school: 2,
+            displayed: true,
+            seq: 0,
+        };
+        let player =
+            crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(2, 0x19)]));
+        crate::ui_unit::melee_unit_combat(&log, &s, Some((1, &player)));
+        let schools: Vec<u32> = log
+            .pending_unit_combat()
+            .into_iter()
+            .map(|f| f.school)
+            .collect();
+        assert_eq!(schools, [2]);
+    }
 }

@@ -702,6 +702,9 @@ fn drain_loot_rolls(
 }
 
 #[cfg(test)]
+mod line_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use benilla_ui::script::UiScript;
