@@ -1,7 +1,7 @@
 //! The taxi-map bindings the stock `TaxiFrame.lua` runs on, over a node list the app resolves
-//! and pushes (types, positions, fares and routes); `TakeTaxiNode` and `CloseTaxiMap` queue
-//! intents the app drains. Positions are normalized 0..1 from the map's bottom-left, which the Lua
-//! scales by the 316x352 map.
+//! and pushes (types, positions, fares and routes); `TakeTaxiNode` and `CloseTaxiMap` act inside
+//! their calls through the host ([`TaxiCall`]). Positions are normalized 0..1 from the map's
+//! bottom-left, which the Lua scales by the 316x352 map.
 
 use mlua::{Lua, Value};
 
@@ -96,16 +96,39 @@ impl super::UiScript {
         self.model_mut().taxi_riding = riding;
     }
 
-    /// Drain the 1-based indices `TakeTaxiNode` queued; the app sends the activate for each.
-    pub fn take_taxi_node(&mut self) -> Vec<usize> {
-        std::mem::take(&mut self.model_mut().taxi_takes)
+    /// A `CloseTaxiMap` call closed the map; the latch's release waits for the app's drain
+    /// ([`Self::take_taxi_close`]).
+    pub fn note_taxi_closed(&mut self) {
+        self.model_mut().taxi_close = true;
     }
 
-    /// Whether `CloseTaxiMap` was called since the last drain; it sends no packet, as the server
-    /// holds no window session for the map.
+    /// Whether a `CloseTaxiMap` call closed the map since the last take.
     pub fn take_taxi_close(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().taxi_close)
     }
+
+    /// The taxi calls a harness's VM kept ([`Self::keep_calls`]), in call order.
+    pub fn take_taxi_calls(&mut self) -> Vec<TaxiCall> {
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Taxi(call) => Some(*call),
+            _ => None,
+        })
+    }
+}
+
+/// A taxi verb, which the host applies inside the call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaxiCall {
+    /// `TakeTaxiNode(slot)` (`0x4dc8d0`), the Lua number as given: a slot under the count
+    /// (`0x4dc8dc`) is refused or activated with the flight master's cell as it stands.
+    Take(i32),
+    /// `CloseTaxiMap()` (`0x4dcce0`): the close core `0x4dc0f0`, which sends no packet.
+    Close,
+}
+
+/// Hand `call` to the host, which applies it before this returns ([`super::calls::submit`]).
+fn submit(lua: &Lua, call: TaxiCall) -> mlua::Result<()> {
+    super::calls::submit(lua, super::ScriptCall::Taxi(call))
 }
 
 /// What `TaxiNodePosition` and `TaxiNodeCost` raise for a slot the map lacks (`0x84b008`).
@@ -247,27 +270,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "TakeTaxiNode",
         lua.create_function(|lua, i: Value| {
             // `is-number` else `Usage: TakeTaxiNode(slot)` (`0x84b064`, `0x4dccb1`).
-            let i = i64::from(binding_abi::number_arg(
-                lua,
-                i,
-                "Usage: TakeTaxiNode(slot)",
-            )?);
-            if let Ok(i) = usize::try_from(i) {
-                lua.app_data_mut::<Model>()
-                    .expect("model")
-                    .taxi_takes
-                    .push(i);
-            }
-            Ok(())
+            let i = binding_abi::number_arg(lua, i, "Usage: TakeTaxiNode(slot)")?;
+            submit(lua, TaxiCall::Take(i))
         })?,
     )?;
 
     g.set(
         "CloseTaxiMap",
-        lua.create_function(|lua, ()| {
-            lua.app_data_mut::<Model>().expect("model").taxi_close = true;
-            Ok(())
-        })?,
+        lua.create_function(|lua, ()| submit(lua, TaxiCall::Close))?,
     )?;
 
     // The map's continent art (`TAXIMAP<map>`, the app's pick) onto the given texture. With no

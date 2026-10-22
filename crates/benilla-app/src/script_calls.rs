@@ -97,6 +97,7 @@ pub(crate) struct ScriptCallHost<'w, 's> {
                     crate::ui_quest::QuestVerbs<'w, 's>,
                     crate::ui_gossip::GossipVerbs<'w, 's>,
                     crate::ui_trainer::TrainerSteps<'w, 's>,
+                    crate::ui_taxi::TaxiSteps<'w, 's>,
                 ),
             >,
             crate::ui_pet::PetPress<'w, 's>,
@@ -214,6 +215,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             }
             ScriptCall::Trade(call) => tail = appliers.p4().p6().apply(call),
             ScriptCall::Trainer(call) => tail = appliers.p5().p5().apply(call),
+            ScriptCall::Taxi(call) => tail = appliers.p5().p6().apply(call),
         }
         // A selection this call made with the targeting cursor up was handed to the cast
         // (`SelectTarget`, `0x4935d5`) and is bound now, before the next call reads either.

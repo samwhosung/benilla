@@ -1,12 +1,13 @@
 //! The taxi bindings stock `TaxiFrame.lua` reads over a pushed snapshot, and the node and close
-//! intents.
+//! calls.
 
 use super::common::script;
 use crate::script::*;
 
 #[test]
-fn taxi_snapshot_surfaces_and_intents_drain() {
+fn taxi_snapshot_surfaces_and_calls() {
     let mut s = script();
+    s.keep_calls();
     s.set_screen_size(800.0, 600.0);
     s.set_taxi(Some(TaxiUiState {
         art: "Interface\\TaxiFrame\\TAXIMAP1".into(),
@@ -57,9 +58,7 @@ fn taxi_snapshot_surfaces_and_intents_drain() {
     )
     .unwrap();
 
-    assert_eq!(s.take_taxi_node(), vec![2]);
-    assert!(s.take_taxi_close());
-    assert!(!s.take_taxi_close(), "the close flag drains");
+    assert_eq!(s.take_taxi_calls(), [TaxiCall::Take(2), TaxiCall::Close]);
 
     s.resolve();
     assert!(

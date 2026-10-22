@@ -165,6 +165,9 @@ pub enum ScriptCall {
     /// A trainer verb past its binding's checks ([`super::TrainerCall`]): its packet inside the
     /// call.
     Trainer(super::TrainerCall),
+    /// A taxi verb ([`super::TaxiCall`]): `TakeTaxiNode`'s refusal or packet, `CloseTaxiMap`'s close,
+    /// inside the call.
+    Taxi(super::TaxiCall),
 }
 
 /// The mode the four `TargetNearest*` shims hand the TAB cycler `0x493f60`, the only byte that

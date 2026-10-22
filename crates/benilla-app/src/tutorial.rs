@@ -599,7 +599,10 @@ impl Plugin for TutorialPlugin {
                 (
                     on_world_enter.before(run_world_enter_cascade),
                     run_world_enter_cascade.before(feed_tutorials),
-                    watch_windows.before(feed_tutorials),
+                    // Among the hosts: a `CloseTaxiMap` call clears the map it reads.
+                    watch_windows
+                        .before(feed_tutorials)
+                        .in_set(crate::vm_pass::VmPass::Member),
                     watch_self
                         .after(on_world_enter)
                         .after(crate::player::ControlRestore)

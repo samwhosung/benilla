@@ -8,6 +8,7 @@ use bevy::ecs::system::RunSystemOnce;
 use crossbeam_channel::Receiver;
 
 use super::*;
+use crate::net::ClientCommand;
 use crate::script_calls::with_hosted_vm;
 
 const ME: u64 = 0x10;
@@ -57,7 +58,7 @@ fn client(data: &std::path::Path) -> (App, Receiver<ClientCommand>) {
             HEARD = ""
             local f = CreateFrame("Frame")
             f:RegisterEvent("TAXIMAP_CLOSED")
-            f:RegisterEvent("UI_ERROR_MESSAGE")
+            f:RegisterEvent("UI_INFO_MESSAGE")
             f:SetScript("OnEvent", function()
                 HEARD = HEARD .. event .. "(" .. tostring(arg1) .. ") "
             end)
@@ -95,8 +96,8 @@ fn sent(rx: &Receiver<ClientCommand>) -> Vec<String> {
 /// so `TAXIMAP_CLOSED` fires twice before the next line (`0x4dc105`, `0x4dc15f`), and every fare
 /// reads 0 there (`0x4dc423`). The chunk's `TakeTaxiNode` then reads the zeroed cell
 /// (`0x4dc113`): a direct path activates with guid 0 (`0x4dc9ac`), and a slot only a route
-/// reaches finds its route freed (`0x4dc145`) and shows `0xab` (`0x4dc999`) inside the call,
-/// ahead of the roll the chunk sends after it.
+/// reaches finds its route freed (`0x4dc145`) and shows `0xab`, a yellow line, inside the call
+/// (`0x4dc999`), ahead of the roll the chunk sends after it.
 #[test]
 fn close_taxi_map_closes_inside_the_call() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -114,7 +115,7 @@ fn close_taxi_map_closes_inside_the_call() {
     );
     assert_eq!(closed, "TAXIMAP_CLOSED(nil) TAXIMAP_CLOSED(nil) ");
     assert_eq!(cost, 0);
-    assert_eq!(heard, "UI_ERROR_MESSAGE(taxi no such path) ");
+    assert_eq!(heard, "UI_INFO_MESSAGE(taxi no such path) ");
     assert_eq!(
         sent(&rx),
         [
@@ -123,6 +124,10 @@ fn close_taxi_map_closes_inside_the_call() {
         ]
     );
     assert!(app.world().resource::<TaxiState>().open.is_none());
+    // The latch's own release is the drain's (`0x4dc105`).
+    app.world_mut()
+        .run_system_once(super::drain_taxi)
+        .expect("the drain runs");
     assert_eq!(
         app.world()
             .resource::<crate::ui_session::InteractLatch>()

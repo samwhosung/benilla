@@ -868,9 +868,9 @@ pub(crate) struct Model {
     /// The skill-line filter `ds:0xb73a20`: bit n set shows header group n, every bit on a list.
     pub(crate) trainer_line_filter: u32,
 
-    /// The open taxi map, the `TakeTaxiNode` calls, whether `CloseTaxiMap` ran and whether we ride.
+    /// The open taxi map, whether a `CloseTaxiMap` call left the latch to release, and whether
+    /// we ride.
     pub(crate) taxi: Option<taxi::TaxiUiState>,
-    pub(crate) taxi_takes: Vec<usize>,
     pub(crate) taxi_close: bool,
     pub(crate) taxi_riding: bool,
 
@@ -1715,7 +1715,6 @@ impl Model {
             trainer_collapsed: HashSet::new(),
             trainer_line_filter: u32::MAX,
             taxi: None,
-            taxi_takes: Vec::new(),
             taxi_close: false,
             taxi_riding: false,
             trade_skill: None,

@@ -1,4 +1,4 @@
-//! The map through its feed, its drain and its close, over the shipped tables: the race the route
+//! The map through its feed, its calls and its close, over the shipped tables: the race the route
 //! search filters by, `TakeTaxiNode`'s refusals and sends (`0x4dc8d0`), and the close that keeps
 //! the slots (`0x4dc0f0`).
 
@@ -12,13 +12,14 @@ use bevy::ecs::system::RunSystemOnce;
 use crossbeam_channel::Receiver;
 
 use super::*;
+use crate::net::ClientCommand;
 
 const MASTER: u64 = 0xF130_0000_0000_0099;
 /// `UNIT_FIELD_BYTES_0`'s absolute index; its low byte is the race (`[+0x110]+0x78`, `0x4dbd2d`).
 const BYTES_0: u16 = 36;
 
 /// The map open on [`MASTER`] at `current` knowing `known`, for a player of `race` on mount
-/// display `mount`, with the three taxi refusals' strings set and every shown line recorded.
+/// display `mount`, its VM keeping its calls for [`take`] to apply.
 fn taxi_app(
     data: &Path,
     current: u32,
@@ -37,11 +38,15 @@ fn taxi_app(
         .init_resource::<NameCache>()
         .init_resource::<crate::ui_chat::ChatLog>()
         .init_resource::<crate::sound::MessageSounds>()
+        .init_resource::<crate::ui_action::UiErrorKeys>()
         .insert_resource(NetCommands(tx))
         .insert_resource(catalogs)
         .insert_resource(factions)
         .insert_resource(reps)
         .insert_non_send_resource(UiScript::new().unwrap());
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .keep_calls();
     app.world_mut().spawn((
         SelfPlayer,
         crate::net::Guid(0x10),
@@ -74,21 +79,6 @@ fn taxi_app(
     app.world_mut()
         .resource_mut::<TaxiState>()
         .open(MASTER, current, mask);
-    app.world_mut()
-        .non_send_resource_mut::<UiScript>()
-        .run(
-            r#"
-            ERR_TAXISAMENODE = "taxi same node"
-            ERR_TAXINOSUCHPATH = "taxi no such path"
-            ERR_TAXIPLAYERALREADYMOUNTED = "taxi mounted"
-            BENILLA_TEST_LINES = {}
-            local f = CreateFrame("Frame")
-            f:RegisterEvent("UI_ERROR_MESSAGE")
-            f:RegisterEvent("UI_INFO_MESSAGE")
-            f:SetScript("OnEvent", function() table.insert(BENILLA_TEST_LINES, arg1) end)
-            "#,
-        )
-        .unwrap();
     (app, rx)
 }
 
@@ -109,17 +99,24 @@ fn slot_of(app: &mut App, name: &str) -> i64 {
     )
 }
 
-/// `TakeTaxiNode(slot)` and the drain: the activates sent and the lines shown since the last.
+/// `TakeTaxiNode(slot)` and its call: the activates sent and the refusals raised since the last.
 fn take(
     app: &mut App,
     rx: &Receiver<ClientCommand>,
     slot: i64,
-) -> (Vec<ClientCommand>, Vec<String>) {
-    eval::<()>(
-        app,
-        &format!("BENILLA_TEST_LINES = {{}} TakeTaxiNode({slot})"),
-    );
-    app.world_mut().run_system_once(drain_taxi).unwrap();
+) -> (Vec<ClientCommand>, Vec<&'static str>) {
+    eval::<()>(app, &format!("TakeTaxiNode({slot})"));
+    let mut calls = app
+        .world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .take_taxi_calls();
+    app.world_mut()
+        .run_system_once(move |mut steps: TaxiSteps| {
+            for call in std::mem::take(&mut calls) {
+                steps.apply(call);
+            }
+        })
+        .unwrap();
     let sent = rx
         .try_iter()
         .filter(|c| {
@@ -129,7 +126,14 @@ fn take(
             )
         })
         .collect();
-    (sent, eval(app, "return BENILLA_TEST_LINES"))
+    let shown = app
+        .world()
+        .resource::<crate::ui_action::UiErrorKeys>()
+        .take()
+        .into_iter()
+        .map(|e| e.key)
+        .collect();
+    (sent, shown)
 }
 
 /// The feed filters the route search by the player's race (`0x4dbd2d`-`0x4dbd56`): a human at
@@ -175,7 +179,7 @@ fn take_taxi_node_refuses_a_mounted_player_then_the_current_node() {
     for slot in [sentinel, stormwind] {
         let (sent, shown) = take(&mut app, &rx, slot);
         assert!(sent.is_empty(), "mounted, slot {slot}: {sent:?}");
-        assert_eq!(shown, ["taxi mounted"], "slot {slot}");
+        assert_eq!(shown, ["ERR_TAXIPLAYERALREADYMOUNTED"], "slot {slot}");
     }
 
     let player = app
@@ -193,7 +197,7 @@ fn take_taxi_node_refuses_a_mounted_player_then_the_current_node() {
         ])));
     let (sent, shown) = take(&mut app, &rx, stormwind);
     assert!(sent.is_empty(), "the current node: {sent:?}");
-    assert_eq!(shown, ["taxi same node"]);
+    assert_eq!(shown, ["ERR_TAXISAMENODE"]);
     let (sent, shown) = take(&mut app, &rx, sentinel);
     assert!(
         matches!(
@@ -219,7 +223,7 @@ fn take_taxi_node_on_a_slot_with_no_route_shows_no_such_path() {
     let stormwind = slot_of(&mut app, "Stormwind, Elwynn");
     let (sent, shown) = take(&mut app, &rx, stormwind);
     assert!(sent.is_empty(), "{sent:?}");
-    assert_eq!(shown, ["taxi no such path"]);
+    assert_eq!(shown, ["ERR_TAXINOSUCHPATH"]);
 }
 
 /// The close (`0x4dc0f0`) clears the flight master's cell and frees each slot's route
@@ -279,7 +283,7 @@ fn the_closed_map_keeps_its_slots() {
     assert!(shown.is_empty());
     let (sent, shown) = take(&mut app, &rx, thelsamar);
     assert!(sent.is_empty(), "{sent:?}");
-    assert_eq!(shown, ["taxi no such path"]);
+    assert_eq!(shown, ["ERR_TAXINOSUCHPATH"]);
 }
 
 /// The leave-world leg `0x4db700` frees the slots before the close (`0x4db630`, the count to 0 at
