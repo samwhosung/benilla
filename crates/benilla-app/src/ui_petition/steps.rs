@@ -91,9 +91,7 @@ impl PetitionSteps<'_, '_> {
             // in-flight latch, so a close while our signature is outstanding is no decline.
             PetitionCall::Sign(byte) => {
                 let petition = self.petition.as_deref_mut().expect("checked above");
-                let Some(item) = petition.open_item() else {
-                    return None;
-                };
+                let item = petition.open_item()?;
                 send(&self.net, ClientCommand::PetitionSign { item, byte });
                 petition.signing = true;
             }
@@ -101,9 +99,10 @@ impl PetitionSteps<'_, '_> {
             // `0x4f4930`: the open item's guid first (`0x4f495e`), and with none nothing at all
             // (`0x4f4970`); then the name check's line or the send (`0x4f4987`-`0x4f49d5`).
             PetitionCall::Rename { name, refusal } => {
-                let Some(item) = self.petition.as_deref().and_then(PetitionState::open_item) else {
-                    return None;
-                };
+                let item = self
+                    .petition
+                    .as_deref()
+                    .and_then(PetitionState::open_item)?;
                 match refusal {
                     Some(key) => self.show(script, lines::name_refused_line(key)),
                     None => send(&self.net, ClientCommand::PetitionRename { item, name }),
@@ -111,9 +110,7 @@ impl PetitionSteps<'_, '_> {
             }
             PetitionCall::Close => {
                 let petition = self.petition.as_deref_mut().expect("checked above");
-                if petition.open_item().is_none() {
-                    return None; // `0x4f3f7c`: nothing open, no event
-                }
+                petition.open_item()?; // `0x4f3f7c`: nothing open, no event
                 let records = self.records.as_deref().expect("checked above");
                 petition.decline_on_close(records, me, &self.net);
                 petition.close();
