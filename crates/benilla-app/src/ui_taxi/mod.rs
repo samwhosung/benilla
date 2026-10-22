@@ -629,7 +629,7 @@ mod tests {
                 }],
             );
             app.world_mut().flush();
-            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            let script = app.world_mut().non_send_resource_mut::<UiScript>();
             let heard = script.eval::<String>("return HEARD").unwrap();
             script.run("HEARD = ''").unwrap();
             heard
