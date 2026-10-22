@@ -399,4 +399,31 @@ mod tests {
         assert_eq!(held.session(), Some(world_session));
         assert_eq!(held.get("PVP_RANK_7_1"), Some("Feldwebel"));
     }
+
+    /// The builder reads its globals through `_G`'s `__index` (`lua_gettable`, `0x70436e`) only
+    /// when a name rebuilds (`0x5ec9e0`, `0x609370`), so a steady frame runs no Lua: an addon's
+    /// `__index` is called by the VM's first read and not again until a rebuild asks.
+    #[test]
+    fn a_steady_frame_runs_no_index_metamethod() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<crate::nameplates::NameLineStrings>();
+        world.insert_non_send_resource(vm(r#"INDEXED = 0
+            setmetatable(getfenv(0), { __index = function(t, k)
+                rawset(t, "INDEXED", rawget(t, "INDEXED") + 1)
+            end })"#));
+        let indexed = |world: &World| -> i64 {
+            world
+                .non_send_resource::<UiScript>()
+                .eval("return rawget(getfenv(0), 'INDEXED')")
+                .unwrap()
+        };
+        world.run_system_once(feed_name_line_strings).unwrap();
+        let first = indexed(&world);
+        assert!(first > 0, "the VM's first read asks the metamethod");
+        for _ in 0..3 {
+            world.run_system_once(feed_name_line_strings).unwrap();
+        }
+        assert_eq!(indexed(&world), first, "no rebuild, no read");
+    }
 }

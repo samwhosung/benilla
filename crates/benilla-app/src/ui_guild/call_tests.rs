@@ -286,6 +286,7 @@ fn a_login_resets_the_sort_and_the_request_deadline_and_a_reload_keeps_them() {
     assert!(sent(&g).is_empty(), "and the deadline");
 
     new_vm(&mut g, false);
+    three_online(&mut g);
     assert_eq!(
         second(&mut g),
         "Birch",
@@ -293,4 +294,24 @@ fn a_login_resets_the_sort_and_the_request_deadline_and_a_reload_keeps_them() {
     );
     run(&mut g, "GuildRoster()");
     assert_eq!(sent(&g), ["GuildRosterRequest"], "and allows the request");
+}
+
+/// `InitGuildRoster` also zeroes the member, online and rank counts (`0x4d0a13`-`0x4d0a1f`), so a
+/// relog's VM holds no roster and no ranks until the server sends them; a `/reload`'s keeps both.
+#[test]
+fn a_login_empties_the_roster_and_the_ranks_and_a_reload_keeps_them() {
+    let mut g = client();
+    three_online(&mut g);
+    let counts = |g: &mut Guild| -> (i64, i64) {
+        eval(g, "return GetNumGuildMembers(), GuildControlGetNumRanks()")
+    };
+    assert_eq!(counts(&mut g), (3, 5));
+    new_vm(&mut g, true);
+    assert_eq!(counts(&mut g), (3, 5), "the reload keeps them");
+    new_vm(&mut g, false);
+    assert_eq!(
+        counts(&mut g),
+        (0, 0),
+        "the login's InitGuildRoster zeroed them"
+    );
 }
