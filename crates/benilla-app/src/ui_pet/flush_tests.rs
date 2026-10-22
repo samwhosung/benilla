@@ -636,17 +636,15 @@ fn the_pet_spells_packet_back_dates_its_cooldowns_and_reads_the_held_bit() {
 
     rig.receive(vec![SessionEvent::PetSpells(Box::new(with(2000, &bar)))]);
     rig.frame();
+    let now = ui(&mut rig).eval::<f64>("return GetTime()").unwrap();
     let (start, duration, enable) = rig.cooldown(1);
     assert!(
         (duration - 5.0).abs() < 1e-9,
         "Growl's own 5 s, not the 2 s remainder: {duration}"
     );
-    // The app's own timer, on the clock it was seeded by: at most the 2 s remainder left.
-    let (left_ms, duration_ms) = rig.pet_reads(GROWL, &growl());
-    assert_eq!(duration_ms, 5000);
     assert!(
-        left_ms > 0 && left_ms <= 2000,
-        "ending 2 s after the seed: {left_ms} ms left, start {start}"
+        (start + duration - now - 2.0).abs() < 0.75,
+        "ending 2 s from now: start {start}, now {now}"
     );
     assert_eq!(enable, 1);
 
