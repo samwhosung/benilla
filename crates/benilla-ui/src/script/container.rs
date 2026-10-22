@@ -985,10 +985,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let key = container_key(lua, bag, slot, "Usage: GetContainerItemLink(index, slot)")?;
             let link = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                key.and_then(|(bag, slot)| model.bag_slot(bag, slot)?.link.clone())
+                key.and_then(|(bag, slot)| {
+                    let s = model.bag_slot(bag, slot)?;
+                    s.link.clone().or_else(|| s.uncached_link.clone())
+                })
             };
-            // Nothing at all on every miss: the resolver failing, no item object or no template
-            // name (`0x4f996b`, `0x4f9979`, `0x4f99a5`).
+            // Nothing at all when the resolver fails or finds no item object (`0x4f996b`,
+            // `0x4f997b`, both to `0x4f99a5`); any object links (`0x4f997f` → `0x52ae00`), with
+            // no record white and nameless.
             match link {
                 Some(l) => Ok(MultiValue::from_vec(vec![Value::String(
                     lua.create_string(&l)?,
