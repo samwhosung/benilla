@@ -10,10 +10,7 @@ use crate::net::NetHandlerApp;
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
     app.net_handler(K::VendorInventory, on_inventory)
-        .net_handler(
-            K::VendorBuyResult,
-            on_buy_result.pipe(crate::ui_quest_log::on_item_bought),
-        )
+        .net_handler(K::VendorBuyResult, on_buy_result)
         .net_handler(K::VendorBuyFailed, on_buy_failed)
         .net_handler(K::VendorSellFailed, on_sell_failed)
         .net_handler(K::Disconnected, on_session_end);
@@ -25,12 +22,15 @@ fn on_inventory(In(ev): In<SessionEvent>, mut commands: Commands) {
     }
 }
 
-/// `SMSG_BUY_ITEM` (`0x5dced0`): the stock, then the bought row's item and count for the quest
+/// `SMSG_BUY_ITEM` (`0x5dced0`): the stock, then the bought row's item and count through the quest
 /// log's walk ([`crate::ui_quest_log::on_item_bought`]).
 fn on_buy_result(
     In(ev): In<SessionEvent>,
     mut merchant: ResMut<MerchantOpen>,
-) -> Option<(u32, u32)> {
+    book: crate::ui_quest_log::ItemBook,
+    quest_log: ResMut<crate::ui_quest_log::QuestLog>,
+    script: Option<NonSend<benilla_ui::script::UiScript>>,
+) {
     let SessionEvent::VendorBuyResult {
         vendor,
         slot,
@@ -38,9 +38,11 @@ fn on_buy_result(
         purchase_count,
     } = ev
     else {
-        return None;
+        return;
     };
-    vendor_buy_result(vendor, slot, new_count, &mut merchant).map(|entry| (entry, purchase_count))
+    let bought = vendor_buy_result(vendor, slot, new_count, &mut merchant)
+        .map(|entry| (entry, purchase_count));
+    crate::ui_quest_log::on_item_bought(In(bought), book, quest_log, script);
 }
 
 fn on_buy_failed(

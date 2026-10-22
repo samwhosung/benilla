@@ -34,7 +34,7 @@ use crate::ui_action::Spells;
 use crate::ui_script::UiFeed;
 use crate::ui_unit::UnitFeed;
 
-pub(crate) use net::on_item_bought;
+pub(crate) use net::{on_item_bought, ItemBook};
 
 /// Marks a GameObject objective's entry on the wire (vmangos `Quest.cpp:512-516`).
 const GO_OBJECTIVE_BIT: u32 = 0x8000_0000;
