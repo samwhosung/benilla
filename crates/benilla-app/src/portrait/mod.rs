@@ -569,8 +569,9 @@ pub(crate) struct BoothCam(pub(crate) String);
 /// [`framing::pane_model_scale`]. Defaults to `4/3`, where the factor is 1.0.
 ///
 /// Deviation: this reads the window's aspect, not `gxResolution`'s, because the window here takes
-/// any shape a drag gives it, where the reference's keeps `gxResolution`'s (`0x5989d7`); in
-/// fullscreen the two agree.
+/// any shape a drag gives it, where the reference's keeps `gxResolution`'s (`0x5989d7`). In
+/// fullscreen the window is the screen in logical pixels and `gxResolution` the screen in device
+/// pixels, so their aspects agree and their sizes need not.
 #[derive(Resource)]
 pub(crate) struct GxAspect(pub(crate) f32);
 

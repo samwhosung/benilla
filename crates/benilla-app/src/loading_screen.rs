@@ -60,7 +60,8 @@ pub(crate) fn widescreen(cvars: Option<&crate::cvars::Cvars>) -> bool {
 ///
 /// Deviation: the live window's aspect stands in for `gxResolution`'s, as in `portrait`'s
 /// `GxAspect`, because the window here takes any shape a drag gives it, where the reference's
-/// keeps `gxResolution`'s (`0x5989d7`); in fullscreen the two agree.
+/// keeps `gxResolution`'s (`0x5989d7`). In fullscreen the window is the screen in logical pixels
+/// and `gxResolution` the screen in device pixels, so their aspects agree and their sizes need not.
 pub(crate) fn scaled_aspect(window: Vec2, widescreen: bool) -> f32 {
     if widescreen && window.x > 0.0 && window.y > 0.0 {
         window.x / window.y * ASPECT_TO_FIT

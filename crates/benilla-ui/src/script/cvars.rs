@@ -807,8 +807,9 @@ fn install_video_verbs(lua: &Lua) -> mlua::Result<()> {
     //
     // Deviation: the index is of the live window size, not of the `gxResolution` CVar the
     // reference parses (`0x48bf20`), because the window here can be dragged to any size, where the
-    // reference's backbuffer stays at `gxResolution`'s, and `CT_Viewport` scales by the live one;
-    // in fullscreen the two agree.
+    // reference's backbuffer stays at `gxResolution`'s, and `CT_Viewport` scales by the live one.
+    // The list and the window are logical pixels and the fullscreen `gxResolution` device pixels,
+    // so on a scaled display the entry this picks is not the size `GetCVar` answers.
     lua.globals().set(
         "GetCurrentResolution",
         lua.create_function(|lua, ()| {
