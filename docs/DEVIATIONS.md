@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 244
+- [benilla-app](#benilla-app): 245
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 22
@@ -344,7 +344,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_gossip
 
-- 14 (a NULL, pushed as `nil`) and 15 up (a read past the table's end) give `"gossip"`, because the reference's behaviour there is a missing bounds check. ([`src/ui_gossip/mod.rs:203`](../crates/benilla-app/src/ui_gossip/mod.rs#L203))
+- 14 (a NULL, pushed as `nil`) and 15 up (a read past the table's end) give `"gossip"`, because the reference's behaviour there is a missing bounds check. ([`src/ui_gossip/mod.rs:228`](../crates/benilla-app/src/ui_gossip/mod.rs#L228))
 
 #### ui_guild
 
@@ -414,6 +414,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### ui_pet_stats
 
 - Fired when the bucket or its two tooltip figures change, not on every change of the happiness field as in the reference, because no stock consumer reads the raw value. ([`src/ui_pet_stats.rs:180`](../crates/benilla-app/src/ui_pet_stats.rs#L180))
+
+#### ui_quest
+
+- The row one past a full pool is read from the cells after it (`0xbe07e0` and `0xbe0828` for the available pool, `0xbdf010` for the active one), which benilla does not copy, so that select sends nothing and only sets the latch the send would. ([`src/ui_quest/verbs.rs:111`](../crates/benilla-app/src/ui_quest/verbs.rs#L111))
 
 #### ui_quest_share
 
@@ -756,10 +760,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A third `%s` gets an empty string, because the reference pushes two varargs (`0x6093f2 add esp,0x14`) and would read uninitialised stack. ([`src/script/pvp/mod.rs:262`](../crates/benilla-ui/src/script/pvp/mod.rs#L262))
 - A token resolving to guid 0 answers nil too. The reference jumps from the guid test (`0x5172f6`) to `return 1` (`0x517343`) with nothing pushed, so the one value is its top argument, the token it read (`0x5172e6`); that is a stack quirk, not an answer. ([`src/script/pvp/mod.rs:510`](../crates/benilla-ui/src/script/pvp/mod.rs#L510))
 - With `UNIT_PVP_NAME` or the title missing from `_G` (no install) this answers the plain name, where the reference would format an empty string, because the decoration is install data. ([`src/script/pvp/mod.rs:514`](../crates/benilla-ui/src/script/pvp/mod.rs#L514))
-- An in-flight name reads `...`, where the reference's reads `" "` (`0x82ee00`), because a blank looks like a nameless objective. ([`src/script/quest_log.rs:55`](../crates/benilla-ui/src/script/quest_log.rs#L55))
-- One signal per missed record, where the reference runs every callback of every miss as its record lands (creatures in `0x556e20` at `0x556f91`, items in `0x55bc70` via `0x55bdb0` from `0x555140`; `0x4e07ea`, `0x4e083a`), 2^k - 1 updates for a walking handler over k first-seen records. ([`src/script/quest_log.rs:961`](../crates/benilla-ui/src/script/quest_log.rs#L961))
-- A local clock step mid-session (an NTP correction) jumps the reference's countdown but not ours, because the step changes no time the quest has left. ([`src/script/quest_log.rs:1018`](../crates/benilla-ui/src/script/quest_log.rs#L1018))
-- Four set ids count 4, where the loop's exit `jmp 0x4e0a4c` (`0x4e0a42`) skips the store at `0x4e0a49` and answers 0, a client bug. ([`src/script/quest_log.rs:1318`](../crates/benilla-ui/src/script/quest_log.rs#L1318))
+- An in-flight name reads `...`, where the reference's reads `" "` (`0x82ee00`), because a blank looks like a nameless objective. ([`src/script/quest_log.rs:54`](../crates/benilla-ui/src/script/quest_log.rs#L54))
+- One signal per missed record, where the reference runs every callback of every miss as its record lands (creatures in `0x556e20` at `0x556f91`, items in `0x55bc70` via `0x55bdb0` from `0x555140`; `0x4e07ea`, `0x4e083a`), 2^k - 1 updates for a walking handler over k first-seen records. ([`src/script/quest_log.rs:1056`](../crates/benilla-ui/src/script/quest_log.rs#L1056))
+- A local clock step mid-session (an NTP correction) jumps the reference's countdown but not ours, because the step changes no time the quest has left. ([`src/script/quest_log.rs:1111`](../crates/benilla-ui/src/script/quest_log.rs#L1111))
+- Four set ids count 4, where the loop's exit `jmp 0x4e0a4c` (`0x4e0a42`) skips the store at `0x4e0a49` and answers 0, a client bug. ([`src/script/quest_log.rs:1461`](../crates/benilla-ui/src/script/quest_log.rs#L1461))
 - Nesting stops at 32 where the reference recurses uncapped (its indent saturates at `0x80`), so a hostile structure cannot exhaust the stack. ([`src/script/saved.rs:21`](../crates/benilla-ui/src/script/saved.rs#L21))
 - The reference rewrites it from the live defaults (`0x51f865`–`0x51f970`), which would cost the player the whole file for one typo in a hand edit. ([`src/script/saved.rs:27`](../crates/benilla-ui/src/script/saved.rs#L27))
 - The writer's escapes are undone (`unescape`), where the reference sets the bytes between the quotes raw, so a string holding a quote or a backslash would grow every session. ([`src/script/saved.rs:199`](../crates/benilla-ui/src/script/saved.rs#L199))
