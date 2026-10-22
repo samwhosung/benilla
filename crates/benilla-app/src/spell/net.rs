@@ -748,6 +748,11 @@ fn removed_spell(
     if actions.spells.remove(&spell_id) {
         actions.dirty = true;
     }
+    // `UnlearnSpell 0x5e9fe0` does nothing for a spell with no record (`0x5ea02a`); otherwise it
+    // clears the bar slots that stand for the spell (`0x5ea253`), which the bar's queue makes.
+    if spells.is_some_and(|s| s.catalog.get(spell_id).is_some()) {
+        actions.unlearned.push(spell_id);
+    }
     // `0x5ea24c`: every unlearn runs `0x4b2c50`.
     unlist_opener(spell_id, actions);
     announce_unlearn(spell_id, spells, errors);

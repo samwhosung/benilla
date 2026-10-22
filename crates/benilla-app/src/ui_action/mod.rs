@@ -47,6 +47,7 @@ pub(crate) mod recount;
 mod state;
 pub(crate) use state::ActionStates;
 pub(crate) mod toggle;
+mod unlearn;
 mod weapon_icon;
 
 /// Every feed that pushes cooldown triples runs `.before` this set: [`state::fire_action_events`]
@@ -91,6 +92,9 @@ pub(crate) struct PlayerActions {
     /// `0x4e5e60`: a macro on the bar whose cached spell is `old` gets `new` (`0x4e5ec4`). The
     /// macro rebind drains it ([`crate::ui_macro`]).
     pub superseded: Vec<(u32, u32)>,
+    /// The spells `SMSG_REMOVED_SPELL` unlearned (`0x5e9fe0`), in arrival order, whose bar slots
+    /// the unlearn clears (`0x5ea253` into `0x4e5e20`); drained by `unlearn::clear_unlearned_slots`.
+    pub unlearned: Vec<u32>,
     /// Set by every book or bar change, cleared once the feed re-resolves slot identity, which a
     /// landed item template ([`crate::items::Items::template_epoch`]) also triggers. Between
     /// resolves an item slot's count moves only by the item watchers' recount (`recount`).
@@ -380,6 +384,12 @@ impl Plugin for UiActionPlugin {
                     // input pass, in any order: a gesture fills only one of their queues.
                     ranks::normalize_action_ranks
                         .in_set(UnitFeed)
+                        .before(feed::feed_actions),
+                    // The unlearns' clears, after the macros' bound spells a macro slot resolves
+                    // through, before the identity feed that consumes their `dirty`.
+                    unlearn::clear_unlearned_slots
+                        .in_set(UnitFeed)
+                        .after(crate::ui_macro::MacroBindings)
                         .before(feed::feed_actions),
                     // Our player's arrival recount, after the server's unlocks.
                     recount::recount_item_actions
