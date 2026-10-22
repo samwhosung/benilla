@@ -423,16 +423,6 @@ fn on_reputation_delta(
             &chat_log,
         );
         if let (Some(f), Some(me)) = (factions.as_deref(), self_facts(&b)) {
-            let moved = crate::ui_reputation::rank_moved(
-                &standings,
-                &b.reputations,
-                f.catalog(),
-                me.race,
-                me.class,
-            );
-            if let (true, Some(mut quest_log)) = (moved, quest_log) {
-                quest_log.note_faction_rank_move();
-            }
             let lines = crate::ui_reputation::delta_lines(
                 &standings,
                 &b.reputations,
@@ -446,7 +436,14 @@ fn on_reputation_delta(
             .as_deref()
             .zip(self_facts(&b))
             .map(|(f, me)| (f.catalog(), me.race, me.class));
-        reputation_delta(standings, &mut b.reputations, ranks, &mut quest);
+        // A moved rank rebuilds the quest log and refreshes the active player's reaction once
+        // for the message (`0x4d58ea`-`0x4d5905`); `ranks` holds only with the player.
+        if reputation_delta(standings, &mut b.reputations, ranks, &mut quest) {
+            if let Some(mut quest_log) = quest_log {
+                quest_log.note_faction_rank_move();
+            }
+            b.reputations.refresh_player_reaction();
+        }
     }
 }
 
@@ -782,19 +779,22 @@ fn forced_reactions(reactions: Vec<(u32, u32)>, reputations: &mut Reputations) {
 /// set by the faction's rank after the entry below Unfriendly (`0x4d5833`), else cleared when that
 /// rank rose (`0x4d583f`). `ranks` is the catalog and the active player's race and class the rank
 /// reads its base by (`0x4d63a0`); without them the rule is skipped, as every rank reads Neutral
-/// before the player's rebuild names the slots (`0x4d54ee`).
+/// before the player's rebuild names the slots (`0x4d54ee`). Whether an entry moved its slot's
+/// rank, `HIDDEN` or not, the latch the quest log and the reaction refresh read (`0x4d5880`,
+/// `0x4d58a9`, `0x4d58ac`).
 fn reputation_delta(
     standings: Vec<(u32, i32)>,
     reputations: &mut Reputations,
     ranks: Option<(&benilla_formats::FactionCatalog, u8, u8)>,
     quest: &mut QuestGiver,
-) {
+) -> bool {
     use benilla_formats::faction_flags as flag;
     let rank = |reputations: &Reputations, slot: usize| {
         ranks.map(|(catalog, race, class)| {
             crate::ui_reputation::slot_rank(catalog, reputations, race, class, slot)
         })
     };
+    let mut moved = false;
     for (list_id, standing) in standings {
         let Some(i) = reputation_slot(list_id, "SMSG_SET_FACTION_STANDING") else {
             continue;
@@ -806,6 +806,7 @@ fn reputation_delta(
             flags |= flag::VISIBLE;
         }
         if let (Some(old), Some(new)) = (old, rank(reputations, i)) {
+            moved |= new != old;
             if new < 2 {
                 flags |= flag::AT_WAR;
             } else if new > old {
@@ -816,6 +817,7 @@ fn reputation_delta(
     }
     // Standing feeds questgiver status (`SatisfyQuestReputation`); the reference re-asks here too.
     quest.bump_reask();
+    moved
 }
 
 /// `SMSG_SET_FACTION_VISIBLE`: sets `FACTION_FLAG_VISIBLE` on the slot and nothing else; it

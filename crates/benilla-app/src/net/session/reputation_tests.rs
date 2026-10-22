@@ -342,6 +342,14 @@ fn a_rank_change_refreshes_the_players_reaction_once_per_message() {
         },
     );
     assert_eq!(refreshes(&app), before + 2, "two moves, one message");
+    // The latch tests no flag (`0x4d5880`): a `HIDDEN` faction and one not yet listed move it too.
+    use benilla_formats::faction_flags::HIDDEN;
+    for flags in [VISIBLE | HIDDEN, 0] {
+        seat(&mut app, flags, 0);
+        let before = refreshes(&app);
+        delta(&mut app, SLOT as u32, -1001);
+        assert_eq!(refreshes(&app), before + 1, "{flags:#x}");
+    }
 }
 
 /// `SMSG_SET_FACTION_ATWAR` (`0x4d56b0`) copies bit `0x02` of its byte into the slot's at-war bit

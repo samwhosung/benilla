@@ -165,7 +165,7 @@ impl Plugin for UiUnitPlugin {
                 // After the aura feed, whose guids it covers.
                 held::feed_chain_units.after(crate::ui_aura::AuraEvents),
                 // After every snapshot above is pushed, so a handler reads the new reaction.
-                fire_faction_on_forced_table.after(crate::ui_aura::AuraEvents),
+                fire_faction_on_player_refresh.after(crate::ui_aura::AuraEvents),
                 held::feed_name_candidates,
                 // After the control edge, whose flag the exemption is asked for.
                 control_gate::feed_control_bypass,
@@ -799,15 +799,16 @@ fn dist_sq(q: Vec3, p: Vec3) -> f64 {
     (dz * dz + dx * dx) + dy * dy
 }
 
-/// `UNIT_FACTION` for every unit token, on each arrival of the forced-reaction table. The
-/// reference's handler `0x4d59a0` calls `0x606e20` on the active player (`0x4d5a5e`): event 29
-/// through `0x515e50` for the player and its summons and charms, then a sweep of every other
-/// unit (`0x468380` with `0x606f20`), so each token naming a unit hears it, and the target frame
-/// repaints its plate (`TargetFrame.lua:75-79`). The table is no descriptor field, so no field
-/// edge reaches this. Tokens come from the resolver's inputs the aura feed pushes
-/// ([`UiScript::bound_unit_tokens`]), the fan-out `0x515c50` builds; the first sight of a VM only
-/// seats the count, since a table that landed before it signalled no interface that exists now.
-fn fire_faction_on_forced_table(
+/// `UNIT_FACTION` for every unit token, on each `RefreshReaction` a wire message runs on the active
+/// player (`0x606e20`): the forced-reaction table's arrival (`0x4d5a5e`) and a standing message
+/// that moved a rank (`0x4d5905`). It signals event 29 through `0x515e50` for the player and its
+/// summons and charms, then sweeps every other unit (`0x468380` with `0x606f20`), so each token
+/// naming a unit hears it, and the target frame repaints its plate (`TargetFrame.lua:75-79`).
+/// Neither message is a descriptor field, so no field edge reaches this. Tokens come from the
+/// resolver's inputs the aura feed pushes ([`UiScript::bound_unit_tokens`]), the fan-out
+/// `0x515c50` builds; the first sight of a VM only seats the count, since a refresh before it
+/// signalled no interface that exists now.
+fn fire_faction_on_player_refresh(
     mut hosted_vm: crate::script_calls::HostedVm,
     reputations: Res<Reputations>,
     mut seen: Local<crate::ui_script::VmMemo<Option<u64>>>,
@@ -816,11 +817,11 @@ fn fire_faction_on_forced_table(
         let Some(script) = script else {
             return;
         };
-        let arrivals = reputations.player_refreshes();
+        let refreshes = reputations.player_refreshes();
         let seen = seen.get(script);
-        let arrived = seen.is_some_and(|last| last != arrivals);
-        *seen = Some(arrivals);
-        if !arrived {
+        let refreshed = seen.is_some_and(|last| last != refreshes);
+        *seen = Some(refreshes);
+        if !refreshed {
             return;
         }
         for token in script.bound_unit_tokens() {
@@ -1782,7 +1783,7 @@ pub(crate) fn add_unit_feed(app: &mut App) {
                 feed_units.in_set(UnitSnapshots),
                 feed_player_control.before(crate::ui_action::CooldownEvents),
                 fire_unit_events.after(crate::ui_action::CooldownEvents),
-                fire_faction_on_forced_table,
+                fire_faction_on_player_refresh,
                 field_events::fire_field_notices,
             )
                 .chain(),
