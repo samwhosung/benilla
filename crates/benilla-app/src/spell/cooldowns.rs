@@ -833,36 +833,38 @@ impl Cooldowns {
         );
     }
 
-    /// One `SMSG_PET_SPELLS` cooldown: remainders, starting now. The category duration's
-    /// [`PET_COOLDOWN_PERMANENT`] marker is stripped, or it would read as a 37-hour sweep.
-    ///
-    /// The handler seeds through `StartCooldown 0x6e2c60` (`0x4bdabf`), which calls no flush.
+    /// One `SMSG_PET_SPELLS` cooldown (`0x4bd990`), seeded through [`Self::start_cooldown`] on
+    /// the pet's list (`0x4bdabf`, pet=1, no item): the category dword's bit 31 is the held flag,
+    /// masked off the remainder (`0x4bda97`, `0x4bdaab`). vmangos marks a permanent pet cooldown
+    /// with bit 27 instead (`Unit.cpp:11270-11271`), which is stripped here as well, or it would read
+    /// as a 37-hour sweep. A spell `Spell.dbc` lacks seeds nothing (`0x6e2cbd`). No flush.
     pub(crate) fn seed_pet(
         &mut self,
         cd: &benilla_protocol::messages::PetSpellCooldown,
         spell: Option<&SpellDisplay>,
+        mods: &SpellModifiers,
+        pad: CategoryPad,
         now: Instant,
     ) {
         use benilla_protocol::messages::PET_COOLDOWN_PERMANENT;
-        let category_ms = cd.category_cd_ms & !PET_COOLDOWN_PERMANENT;
-        self.add(
+        let Some(spell) = spell else {
+            return;
+        };
+        self.start_cooldown(
+            StartCooldown {
+                spell_id: cd.spell_id,
+                item_id: 0,
+                category: u32::from(cd.category),
+                recovery_ms: cd.spell_cd_ms as i32,
+                category_recovery_ms: (cd.category_cd_ms & 0x7fff_ffff & !PET_COOLDOWN_PERMANENT)
+                    as i32,
+                held: cd.category_cd_ms & 0x8000_0000 != 0,
+            },
+            spell,
+            None,
+            mods,
+            pad,
             now,
-            cd.spell_id,
-            0,
-            Timer {
-                start: now,
-                duration: Duration::from_millis(u64::from(cd.spell_cd_ms)),
-            },
-            u32::from(cd.category),
-            // Off the catalog when present, else not a wildcard.
-            spell.is_some_and(|s| s.category_wildcard),
-            Timer {
-                start: now,
-                duration: Duration::from_millis(u64::from(category_ms)),
-            },
-            false,
-            0,
-            0,
         );
     }
 

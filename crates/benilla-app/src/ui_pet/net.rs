@@ -36,9 +36,17 @@ fn on_session_end(In(_): In<SessionEvent>, mut bar: ResMut<PetBar>) {
     bar.clear();
 }
 
-fn on_spells(In(ev): In<SessionEvent>, catalog: Option<Res<Spells>>, mut bar: ResMut<PetBar>) {
+fn on_spells(
+    In(ev): In<SessionEvent>,
+    catalog: Option<Res<Spells>>,
+    mods: Option<Res<crate::spell::SpellModifiers>>,
+    player: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
+    mut bar: ResMut<PetBar>,
+) {
     if let SessionEvent::PetSpells(spells) = ev {
-        pet_spells(*spells, catalog.as_deref(), &mut bar);
+        // The pet list's category pad (`0x6e2b60` with the pet flag): op 11 alone.
+        let pad = crate::spell::CategoryPad::for_list(true, player.iter().next());
+        pet_spells(*spells, catalog.as_deref(), mods.as_deref(), pad, &mut bar);
     }
 }
 
@@ -92,7 +100,13 @@ fn on_dismiss_sound(In(ev): In<SessionEvent>, mut sounds: MessageWriter<PetDismi
 
 /// `SMSG_PET_SPELLS`: replace the whole bar and reseed the pet's cooldowns from its tail. A zero
 /// guid is the teardown (`Player::RemovePetActionBar`), cooldowns included.
-fn pet_spells(spells: PetSpells, catalog: Option<&Spells>, bar: &mut PetBar) {
+fn pet_spells(
+    spells: PetSpells,
+    catalog: Option<&Spells>,
+    mods: Option<&crate::spell::SpellModifiers>,
+    pad: crate::spell::CategoryPad,
+    bar: &mut PetBar,
+) {
     if spells.pet_guid == 0 {
         if bar.spells.pet_guid != 0 {
             debug!("net: pet bar torn down");
@@ -159,9 +173,11 @@ fn pet_spells(spells: PetSpells, catalog: Option<&Spells>, bar: &mut PetBar) {
     bar.expires = (spells.duration_ms != 0)
         .then(|| now + std::time::Duration::from_millis(u64::from(spells.duration_ms)));
     bar.cooldowns.clear_silent();
+    let no_mods = crate::spell::SpellModifiers::default();
     for cd in &spells.cooldowns {
         let display = catalog.and_then(|c| c.catalog.get(cd.spell_id));
-        bar.cooldowns.seed_pet(cd, display, now);
+        bar.cooldowns
+            .seed_pet(cd, display, mods.unwrap_or(&no_mods), pad, now);
     }
     bar.spells = spells;
     // `SetPet` (`0x4bc7e0`) ends in `SignalEvent(0x161)` on every packet (`0x4bc90c`), whatever
@@ -281,10 +297,22 @@ mod tests {
     #[test]
     fn a_zero_guid_tears_the_whole_bar_down() {
         let mut bar = PetBar::default();
-        pet_spells(a_bar(0x2A), None, &mut bar);
+        pet_spells(
+            a_bar(0x2A),
+            None,
+            None,
+            crate::spell::CategoryPad::NoPlayer,
+            &mut bar,
+        );
         assert_eq!(bar.spells.pet_guid, 0x2A);
 
-        pet_spells(PetSpells::default(), None, &mut bar);
+        pet_spells(
+            PetSpells::default(),
+            None,
+            None,
+            crate::spell::CategoryPad::NoPlayer,
+            &mut bar,
+        );
         assert_eq!(bar.spells, PetSpells::default());
         assert!(!bar.has_bar());
     }
@@ -297,24 +325,54 @@ mod tests {
         let mut charm = a_bar(0x2A);
         charm.duration_ms = 60_000;
         let before = Instant::now();
-        pet_spells(charm.clone(), None, &mut bar);
+        pet_spells(
+            charm.clone(),
+            None,
+            None,
+            crate::spell::CategoryPad::NoPlayer,
+            &mut bar,
+        );
         let left = bar.expires.expect("armed").duration_since(before);
         assert!(
             left >= std::time::Duration::from_secs(60) && left < std::time::Duration::from_secs(61)
         );
 
-        pet_spells(a_bar(0x2A), None, &mut bar);
+        pet_spells(
+            a_bar(0x2A),
+            None,
+            None,
+            crate::spell::CategoryPad::NoPlayer,
+            &mut bar,
+        );
         assert_eq!(bar.expires, None, "a 0 duration clears it");
-        pet_spells(charm, None, &mut bar);
+        pet_spells(
+            charm,
+            None,
+            None,
+            crate::spell::CategoryPad::NoPlayer,
+            &mut bar,
+        );
         assert!(bar.expires.is_some());
-        pet_spells(PetSpells::default(), None, &mut bar);
+        pet_spells(
+            PetSpells::default(),
+            None,
+            None,
+            crate::spell::CategoryPad::NoPlayer,
+            &mut bar,
+        );
         assert_eq!(bar.expires, None, "the teardown clears it");
     }
 
     #[test]
     fn pet_mode_only_writes_its_own_bar() {
         let mut bar = PetBar::default();
-        pet_spells(a_bar(0x2A), None, &mut bar);
+        pet_spells(
+            a_bar(0x2A),
+            None,
+            None,
+            crate::spell::CategoryPad::NoPlayer,
+            &mut bar,
+        );
 
         pet_mode(
             PetMode {
@@ -341,13 +399,31 @@ mod tests {
     #[test]
     fn the_attack_latch_survives_a_resend_and_dies_on_a_new_pet() {
         let mut bar = PetBar::default();
-        pet_spells(a_bar(0x2A), None, &mut bar);
+        pet_spells(
+            a_bar(0x2A),
+            None,
+            None,
+            crate::spell::CategoryPad::NoPlayer,
+            &mut bar,
+        );
         bar.attacking = true;
 
-        pet_spells(a_bar(0x2A), None, &mut bar);
+        pet_spells(
+            a_bar(0x2A),
+            None,
+            None,
+            crate::spell::CategoryPad::NoPlayer,
+            &mut bar,
+        );
         assert!(bar.attacking, "the same pet re-sending keeps its attack");
 
-        pet_spells(a_bar(0x99), None, &mut bar);
+        pet_spells(
+            a_bar(0x99),
+            None,
+            None,
+            crate::spell::CategoryPad::NoPlayer,
+            &mut bar,
+        );
         assert!(!bar.attacking, "a different pet is not attacking");
     }
 
