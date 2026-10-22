@@ -318,6 +318,21 @@ mod tests {
         assert!(!strings.contains_key("GARBAGE_KEY"), "only the title keys");
     }
 
+    /// The name line's flag tags are read with the titles (`0x5eca17`, `0x5eca54`, `0x5eca99`).
+    #[test]
+    fn the_strings_read_takes_the_chat_flag_tags() {
+        let strings = pvp_name_strings(&vm(r#"CHAT_FLAG_AFK = "<Away>"
+               CHAT_FLAG_DND = "<Busy>"
+               CHAT_FLAG_GM = "<GM>""#));
+        for (key, value) in [
+            ("CHAT_FLAG_AFK", "<Away>"),
+            ("CHAT_FLAG_DND", "<Busy>"),
+            ("CHAT_FLAG_GM", "<GM>"),
+        ] {
+            assert_eq!(strings.get(key).map(String::as_str), Some(value), "{key}");
+        }
+    }
+
     /// Each VM is read once, the first frame it is in the world, so a world VM whose addon renames
     /// a title reaches the overhead line.
     #[test]

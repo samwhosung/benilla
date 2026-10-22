@@ -23,6 +23,8 @@ use crate::query_cache::QueryCache;
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
 use crate::ui_session::{LatchApp, LatchedWindow, NpcWindow};
 
+#[cfg(test)]
+mod call_tests;
 mod feed;
 mod lines;
 

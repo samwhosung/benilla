@@ -1,0 +1,257 @@
+//! The guild verbs through the whole client's host: each sends its packet, changes the roster's
+//! order or answers its getters inside its call, as the reference's bindings do (`0x48aef0`,
+//! `0x4d10d0`, `0x4d1cb0` → `0x4d0fb0`, `0x4d1e10` → `0x4d0f70`, `0x4d15e0`), and the roster's
+//! status return reads the `CHAT_FLAG_*` globals at the call (`0x4d13ed`, `0x4d1404`).
+
+use benilla_protocol::messages::{guild_presence, GuildRoster, GuildRosterMember};
+use benilla_protocol::SessionEvent;
+use benilla_ui::script::UiScript;
+use bevy::ecs::system::SystemId;
+use bevy::prelude::*;
+use crossbeam_channel::Receiver;
+
+use crate::net::{ClientCommand, NetCommands};
+use crate::script_calls::with_hosted_vm;
+
+struct Guild {
+    app: App,
+    rx: Receiver<ClientCommand>,
+    /// The guild feed, registered once so its memory persists.
+    feed: SystemId,
+}
+
+/// The whole client, headless, with a VM that counts `GUILD_ROSTER_UPDATE`.
+fn client() -> Guild {
+    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    app.insert_resource(NetCommands(tx));
+    let script = UiScript::new().expect("a VM");
+    script
+        .run(
+            r#"UPDATES = 0
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("GUILD_ROSTER_UPDATE")
+            f:SetScript("OnEvent", function() UPDATES = UPDATES + 1 end)"#,
+        )
+        .expect("the counter installs");
+    app.world_mut().insert_non_send_resource(script);
+    let feed = app.world_mut().register_system(super::feed::feed_guild);
+    Guild { app, rx, feed }
+}
+
+fn member(guid: u64, name: &str, presence: u8, rank_id: u32, level: u8) -> GuildRosterMember {
+    GuildRosterMember {
+        guid,
+        presence,
+        name: name.to_string(),
+        rank_id,
+        level,
+        ..Default::default()
+    }
+}
+
+/// `members` as `SMSG_GUILD_ROSTER`, then the feed's push, the counter reset.
+fn roster(g: &mut Guild, members: Vec<GuildRosterMember>) {
+    crate::net::handlers::dispatch(
+        g.app.world_mut(),
+        vec![SessionEvent::GuildRoster(GuildRoster {
+            rank_rights: vec![0; 5],
+            members,
+            ..Default::default()
+        })],
+    );
+    feed(g);
+    run(g, "UPDATES = 0");
+}
+
+fn feed(g: &mut Guild) {
+    let feed = g.feed;
+    g.app.world_mut().run_system(feed).expect("the feed runs");
+}
+
+fn run(g: &mut Guild, lua: &str) {
+    with_hosted_vm(g.app.world_mut(), |vm| vm.expect("a VM").run(lua)).expect("the chunk runs");
+}
+
+fn eval<T: benilla_ui::mlua::FromLuaMulti>(g: &mut Guild, lua: &str) -> T {
+    with_hosted_vm(g.app.world_mut(), |vm| vm.expect("a VM").eval::<T>(lua))
+        .expect("the chunk runs")
+}
+
+/// The packets sent since the last read, the name queries left out.
+fn sent(g: &Guild) -> Vec<String> {
+    g.rx.try_iter()
+        .map(|c| format!("{c:?}"))
+        .filter(|c| !c.starts_with("NameQuery") && !c.starts_with("GuildQuery"))
+        .collect()
+}
+
+/// Rank ids above level order: the default chain (`0x4d0a00`, slot `i` key `i`) sorts rank first,
+/// the higher id first (`0x4d0d77`).
+fn three_online(g: &mut Guild) {
+    let on = guild_presence::ONLINE;
+    roster(
+        g,
+        vec![
+            member(1, "Alder", on, 2, 10),
+            member(2, "Birch", on, 1, 30),
+            member(3, "Cedar", on, 0, 20),
+        ],
+    );
+}
+
+/// `GuildInviteByName` sends at `0x48af64` and `GuildRoster` at `0x4d10d0`'s send, each inside
+/// its call, so a chunk's packets leave in call order with `RandomRoll`'s (`0x48c832`).
+#[test]
+fn the_guild_verbs_send_inside_their_calls() {
+    let mut g = client();
+    run(
+        &mut g,
+        "GuildInviteByName('Bob') RandomRoll(1, 2) GuildRoster() GuildSetMOTD('hi') \
+         GuildLeave()",
+    );
+    assert_eq!(
+        sent(&g),
+        [
+            "GuildInvite { name: \"Bob\" }",
+            "RandomRoll { min: 1, max: 2 }",
+            "GuildRosterRequest",
+            "GuildMotd { motd: \"hi\" }",
+            "GuildLeave",
+        ]
+    );
+}
+
+/// `SortGuildRoster` (`0x4d1cb0` → `0x4d0fb0`) re-sorts the array and signals
+/// `GUILD_ROSTER_UPDATE` before it returns (`0x4d1022`), so the chunk's next line reads the new
+/// order and the handlers have run; the feed after it announces nothing more.
+#[test]
+fn a_sort_reorders_and_signals_inside_its_call() {
+    let mut g = client();
+    three_online(&mut g);
+    assert_eq!(
+        eval::<String>(&mut g, "return (GetGuildRosterInfo(2))"),
+        "Birch"
+    );
+    run(
+        &mut g,
+        "SortGuildRoster('level') SECOND = GetGuildRosterInfo(2) SEEN = UPDATES",
+    );
+    assert_eq!(eval::<String>(&mut g, "return SECOND"), "Cedar");
+    assert_eq!(eval::<i64>(&mut g, "return SEEN"), 1);
+    feed(&mut g);
+    assert_eq!(eval::<i64>(&mut g, "return UPDATES"), 1, "announced once");
+}
+
+/// `SetGuildRosterShowOffline` stores `GetScriptFlagArg`'s integer (`0x4d1e17`) and `0x4d0f70`
+/// compares it raw (`cmp ecx,[0xb73124]`): a 2 after a 1 is a change, which re-sorts and signals
+/// in the call (`0x4d0f87`-`0x4d0f9f`); an unchanged value does nothing.
+#[test]
+fn show_offline_compares_the_integer_and_signals_inside_its_call() {
+    let mut g = client();
+    let on = guild_presence::ONLINE;
+    roster(
+        &mut g,
+        vec![
+            member(1, "Alder", on, 0, 10),
+            member(2, "Birch", guild_presence::OFFLINE, 0, 30),
+        ],
+    );
+    run(
+        &mut g,
+        "SetGuildRosterShowOffline(1) A = GetNumGuildMembers() \
+         SetGuildRosterShowOffline(2) SetGuildRosterShowOffline(2) SEEN = UPDATES \
+         SetGuildRosterShowOffline(0) B = GetNumGuildMembers()",
+    );
+    assert_eq!(eval::<i64>(&mut g, "return A"), 2);
+    assert_eq!(eval::<i64>(&mut g, "return SEEN"), 2, "0 to 1, then 1 to 2");
+    assert_eq!(eval::<i64>(&mut g, "return B"), 1);
+    assert_eq!(
+        eval::<Option<i64>>(
+            &mut g,
+            "SetGuildRosterShowOffline(2) return GetGuildRosterShowOffline()"
+        ),
+        Some(1),
+        "the getter answers 1 or nil (`0x4d1e30`)"
+    );
+}
+
+/// With no member held `0x4d0f70` stores the flag and returns before the sort and the signal
+/// (`0x4d0f85`), and nothing later announces it.
+#[test]
+fn show_offline_on_an_empty_roster_signals_nothing() {
+    let mut g = client();
+    run(&mut g, "SetGuildRosterShowOffline(1)");
+    feed(&mut g);
+    assert_eq!(eval::<i64>(&mut g, "return UPDATES"), 0);
+    assert_eq!(
+        eval::<Option<i64>>(&mut g, "return GetGuildRosterShowOffline()"),
+        Some(1)
+    );
+}
+
+/// `GetGuildRosterInfo`'s tenth return is `FrameScript_GetText` of `CHAT_FLAG_DND` for presence
+/// bit 4 (`0x4d13ed`), else of `CHAT_FLAG_AFK` for bit 2 (`0x4d1404`), read at the call: an addon's
+/// own string shows, and a missing one is the empty string (`0x703bf0`).
+#[test]
+fn the_roster_status_reads_the_chat_flag_globals_at_the_call() {
+    let mut g = client();
+    let on = guild_presence::ONLINE;
+    roster(
+        &mut g,
+        vec![
+            member(1, "Alder", on | guild_presence::AFK, 0, 10),
+            member(2, "Birch", on | guild_presence::DND, 0, 20),
+        ],
+    );
+    let status = |g: &mut Guild, name: &str| -> String {
+        eval(
+            g,
+            &format!(
+                "for i = 1, 2 do local n = GetGuildRosterInfo(i) \
+                 if n == '{name}' then \
+                 local _, _, _, _, _, _, _, _, _, status = GetGuildRosterInfo(i) \
+                 return status end end"
+            ),
+        )
+    };
+    run(&mut g, "CHAT_FLAG_AFK = '<Away>' CHAT_FLAG_DND = nil");
+    assert_eq!(status(&mut g, "Alder"), "<Away>");
+    assert_eq!(status(&mut g, "Birch"), "");
+    run(&mut g, "CHAT_FLAG_DND = '<Busy>'");
+    assert_eq!(status(&mut g, "Birch"), "<Busy>");
+}
+
+/// `GuildRosterSetPublicNote` (`0x4d15e0`) compares the new text with the stored note
+/// (`0x64a480` at `0x4d1668`) and sends `CMSG_GUILD_SET_PUBLIC_NOTE` inside the call; it writes
+/// nothing locally, so the roster keeps the old note until the server's next roster, and the same
+/// text sends again.
+#[test]
+fn a_note_sends_inside_its_call_and_leaves_the_stored_note() {
+    let mut g = client();
+    let mut alder = member(1, "Alder", guild_presence::ONLINE, 0, 10);
+    alder.public_note = "old".into();
+    roster(&mut g, vec![alder]);
+    run(&mut g, "GuildRosterSetPublicNote(1, 'new')");
+    assert_eq!(
+        sent(&g),
+        ["GuildSetPublicNote { name: \"Alder\", note: \"new\" }"]
+    );
+    feed(&mut g);
+    assert_eq!(
+        eval::<String>(
+            &mut g,
+            "local _, _, _, _, _, _, note = GetGuildRosterInfo(1) return note"
+        ),
+        "old"
+    );
+    run(
+        &mut g,
+        "GuildRosterSetPublicNote(1, 'new') GuildRosterSetPublicNote(1, 'old')",
+    );
+    assert_eq!(
+        sent(&g),
+        ["GuildSetPublicNote { name: \"Alder\", note: \"new\" }"],
+        "the stored text still differs from the first; the second matches it"
+    );
+}

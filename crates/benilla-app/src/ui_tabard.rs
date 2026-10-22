@@ -467,6 +467,104 @@ mod tests {
         assert_eq!(seen_in(&app).len(), 3, "a second close is silent");
     }
 
+    /// `Save` (`0x502bd0` → `0x5e03f0`) runs the checks, sends `MSG_SAVE_GUILD_EMBLEM`, sets the
+    /// latch and signals `TABARD_SAVE_PENDING` before it returns (`0x5e05eb`-`0x5e05fc`), and a
+    /// refusal shows its line there; the drain after it sends nothing more.
+    #[test]
+    fn a_save_checks_sends_and_signals_inside_its_call() {
+        use crate::net::{ClientCommand, NetCommands, ObjectStore};
+        use crate::script_calls::with_hosted_vm;
+        use benilla_ui::script::{TabardHost, UnitState};
+        const VENDOR: u64 = 0xF130_0000_0000_0042;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        let world = app.world_mut();
+        world.spawn((
+            crate::net::SelfPlayer,
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (191, 5),
+                (192, 0),
+                (1176, 200_000),
+            ])),
+        ));
+        {
+            let mut guild = world.resource_mut::<GuildState>();
+            guild.join_for_test(5);
+            guild.land_for_test(5, "Probe Guild");
+        }
+        world.resource_mut::<TabardOpen>().open(VENDOR);
+        let mut script = UiScript::new().expect("a VM");
+        script.set_unit(
+            "player",
+            Some(UnitState {
+                exists: true,
+                ..Default::default()
+            }),
+        );
+        script.set_tabard_host(TabardHost {
+            guild_record: Some([1, 2, 3, 4, 5]),
+            save_pending: false,
+        });
+        script
+            .run(
+                r#"HEARD = ""
+                ERR_NOT_ENOUGH_MONEY = "Not enough money."
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("TABARD_SAVE_PENDING")
+                f:RegisterEvent("UI_ERROR_MESSAGE")
+                f:SetScript("OnEvent", function()
+                    HEARD = HEARD .. event .. "(" .. tostring(arg1) .. ") "
+                end)
+                TM = CreateFrame("TabardModel", "TM")
+                TM:InitializeTabardColors()
+                TM:CycleVariation(1, 1)"#,
+            )
+            .expect("the designer seeds");
+        world.insert_non_send_resource(script);
+        let drain = world.register_system(drain_tabard);
+        let run = |app: &mut App, lua: &str| {
+            with_hosted_vm(app.world_mut(), |vm| vm.expect("a VM").run(lua))
+                .expect("the chunk runs");
+        };
+        let eval = |app: &mut App, lua: &str| -> String {
+            with_hosted_vm(app.world_mut(), |vm| vm.expect("a VM").eval::<String>(lua))
+                .expect("the chunk runs")
+        };
+        let sent = |rx: &crossbeam_channel::Receiver<ClientCommand>| -> Vec<String> {
+            rx.try_iter()
+                .map(|c| format!("{c:?}"))
+                .filter(|c| !c.starts_with("GuildQuery"))
+                .collect()
+        };
+        run(&mut app, "TM:Save() SEEN = HEARD HEARD = ''");
+        assert_eq!(eval(&mut app, "return SEEN"), "TABARD_SAVE_PENDING(nil) ");
+        assert_eq!(
+            sent(&rx),
+            [format!(
+                "SaveGuildEmblem {{ vendor: {VENDOR}, design: [2, 2, 3, 4, 5] }}"
+            )]
+        );
+        assert!(app.world().resource::<TabardOpen>().save_pending);
+        app.world_mut().run_system(drain).expect("the drain runs");
+        assert!(sent(&rx).is_empty(), "sent once");
+
+        // The purse below the price: the client's own `ERR_NOT_ENOUGH_MONEY`, in the call.
+        app.world_mut().resource_mut::<TabardOpen>().save_pending = false;
+        let mut me = app
+            .world_mut()
+            .query_filtered::<&mut ObjectStore, With<crate::net::SelfPlayer>>();
+        me.single_mut(app.world_mut()).expect("our store").0.merge(
+            benilla_protocol::ObjectFields::from_pairs(&[(1176, 99_999)]),
+        );
+        run(&mut app, "TM:Save() SEEN = HEARD HEARD = ''");
+        assert_eq!(
+            eval(&mut app, "return SEEN"),
+            "UI_ERROR_MESSAGE(Not enough money.) "
+        );
+        assert!(sent(&rx).is_empty());
+    }
+
     /// An activate from the vendor whose designer is open writes the cell before it registers,
     /// so `0x493310` finds the designer and closes it, cell and all: it reopens holding the latch
     /// with no cell.

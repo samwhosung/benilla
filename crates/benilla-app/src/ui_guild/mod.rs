@@ -18,6 +18,8 @@ use crate::net::{ClientCommand, NetCommands};
 use crate::query_cache::{Ask, QueryCache, Refused};
 use crate::ui_script::UiFeed;
 
+#[cfg(test)]
+mod call_tests;
 mod feed;
 mod lines;
 mod sort;

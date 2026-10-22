@@ -539,6 +539,36 @@ mod tests {
         );
     }
 
+    /// Both verbs test argument 1 with `lua_isstring` (`0x6f3510`, `0x4f5268`, `0x4f493f`), which a
+    /// number passes; nil, a boolean or a table raises the binding's own line (`0x84d090` at
+    /// `0x4f5271`, `0x84cfec` at `0x4f4948`), the rename's unbalanced as shipped.
+    #[test]
+    fn a_non_string_name_raises_each_verbs_usage_line() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        let raised = |s: &UiScript, call: &str| -> String {
+            s.eval::<String>(&format!(
+                "local ok, e = pcall(function() {call} end) \
+                 if ok then return \"<no raise>\" end return tostring(e)"
+            ))
+            .unwrap()
+        };
+        for arg in ["", "nil", "true", "{}"] {
+            let got = raised(&s, &format!("BuyGuildCharter({arg})"));
+            assert!(
+                got.contains("Usage: BuyGuildCharter(guildName)"),
+                "BuyGuildCharter({arg}): {got}"
+            );
+            let got = raised(&s, &format!("RenamePetition({arg})"));
+            assert!(
+                got.contains("Usage(RenamePetition(\"name\")"),
+                "RenamePetition({arg}): {got}"
+            );
+        }
+        assert_eq!(raised(&s, "BuyGuildCharter(5)"), "<no raise>");
+        assert_eq!(raised(&s, "RenamePetition(5)"), "<no raise>");
+    }
+
     /// One word per list, so a test can tell which lists a check searches.
     struct ThreeWords;
 

@@ -1032,6 +1032,23 @@ mod tests {
         assert_eq!(line(&cfg, &female, 0, "Alice"), "Sergeant (f) Alice");
     }
 
+    /// The a1-a3 slots read `CHAT_FLAG_AFK`, `CHAT_FLAG_DND` and `CHAT_FLAG_GM` through
+    /// `FrameScript_GetText` (`0x5eca1c`, `0x5eca59`, `0x5eca9e`): an addon's own string shows, and
+    /// a missing or empty one adds no tag (`0x5eca23`, `0x5eca28`).
+    #[test]
+    fn the_flag_tags_are_the_chat_flag_globals() {
+        let strings = strings_of(1, &[("CHAT_FLAG_AFK", "<Away>"), ("CHAT_FLAG_GM", "<Dev>")]);
+        assert_eq!(
+            name_line(0x2 | 0x4 | 0x8, None, &strings, "Bob"),
+            "<Away><Dev>Bob"
+        );
+        assert_eq!(
+            name_line(0x2, None, &PvpNameStrings::default(), "Bob"),
+            "Bob",
+            "no strings, no tag"
+        );
+    }
+
     /// The decoration is `0x609370`'s: title first, `None` off rank 0 or a key the install lacks.
     #[test]
     fn the_snapshot_decorates_a_ranked_name() {
