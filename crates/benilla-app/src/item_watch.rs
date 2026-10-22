@@ -150,7 +150,12 @@ impl Run {
 /// rescans it (`0x4f8cc0`, `0x4f8da6`); a bag seat's watcher rescans it (`0x4f8f66`). A bag in it
 /// has its slots watched (`0x4f932a`, removed at `0x4f9299`) and a number its events carry.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct BagCache(pub(crate) [u64; 10]);
+pub(crate) struct BagCache(
+    pub(crate) [u64; 10],
+    /// Each bag's watched slots: its slot count when the rescan stored it, read off the bag
+    /// object (`0x4f92e3`, `0x4f92fd`), and none for a bag the rescan did not find (`0x4f92ec`).
+    pub(crate) [u8; 10],
+);
 
 impl BagCache {
     /// The guid in the seat of bag `n`, 1 to 10: seat `n + 18` for 1-4, `n + 58` for 5-10
@@ -185,11 +190,26 @@ impl BagCache {
             .collect()
     }
 
+    /// How many of `bag`'s slots are watched: its count when the cache stored it.
+    fn watched(&self, bag: u64) -> u8 {
+        self.0
+            .iter()
+            .zip(self.1)
+            .filter(|&(&g, _)| g == bag)
+            .map(|(_, n)| n)
+            .max()
+            .unwrap_or(0)
+    }
+
     /// The rescan `0x4f91a0` over the active player's bag seats: a bag whose guid differs from the
     /// cache fires `BAG_CLOSED` when the old one was not zero (`0x4f9245`, `0x4f92b5`), is stored
-    /// (`0x4f92c7`), and fires `BAG_UPDATE` when the new one is not zero (`0x4f92cc`, `0x4f9343`),
-    /// bag by bag.
-    fn rescan(&mut self, player: &ObjectFields) -> Vec<BagEvent> {
+    /// (`0x4f92c7`) with its slots watched over the count `lookup` finds (`0x4f92fd`), and fires
+    /// `BAG_UPDATE` when the new one is not zero (`0x4f92cc`, `0x4f9343`), bag by bag.
+    fn rescan<'a>(
+        &mut self,
+        player: &ObjectFields,
+        lookup: &dyn Fn(u64) -> Option<&'a ObjectFields>,
+    ) -> Vec<BagEvent> {
         let mut out = Vec::new();
         for n in 1..=10u8 {
             let i = usize::from(n - 1);
@@ -201,6 +221,7 @@ impl BagCache {
                 out.push(BagEvent::Closed(i64::from(n)));
             }
             self.0[i] = now;
+            self.1[i] = slot_count(now, lookup);
             if now != 0 {
                 out.push(BagEvent::Update(i64::from(n)));
             }
@@ -209,11 +230,29 @@ impl BagCache {
     }
 
     /// The world-enter cascade's set-up of the cache (`0x4f8cc0`: zeroed, then rescanned at
-    /// `0x4f8da6`), which leaves it holding the player's bags; its `BAG_UPDATE`s fire with the
-    /// interface's world-enter events.
-    pub(crate) fn seat(&mut self, player: &ObjectFields) {
+    /// `0x4f8da6`), which leaves it holding the player's bags, each watched over its count; its
+    /// `BAG_UPDATE`s fire with the interface's world-enter events.
+    pub(crate) fn seat<'a>(
+        &mut self,
+        player: &ObjectFields,
+        lookup: &dyn Fn(u64) -> Option<&'a ObjectFields>,
+    ) {
         self.0 = std::array::from_fn(|i| Self::seat_of(player, i as u8 + 1));
+        self.1 = self.0.map(|g| slot_count(g, lookup));
     }
+}
+
+/// The slot count the rescan registers a bag's watchers over: the container's first field, read
+/// off the object `0x468460(guid, TYPEMASK_CONTAINER)` finds (`0x4f92d9`-`0x4f9300`), none when
+/// it finds none or the count is not positive (`0x4f9304`).
+fn slot_count<'a>(bag: u64, lookup: &dyn Fn(u64) -> Option<&'a ObjectFields>) -> u8 {
+    if bag == 0 {
+        return 0;
+    }
+    lookup(bag)
+        .filter(|f| f.is_container())
+        .and_then(|f| f.container_num_slots())
+        .map_or(0, |n| n.min(36) as u8)
 }
 
 /// The scopes of the inventory walk `0x622420` the entry unlocks take (`0x6221e0`): the arrival's
@@ -471,9 +510,9 @@ where
             _ => {}
         }
         // A bag's own seats, watched while it is in the bag cache (`0x4f932a`, `0x4f9299`).
-        if kind == ObjectType::Container && bags.0.contains(&guid) {
+        if kind == ObjectType::Container {
             let count = fields.container_num_slots().unwrap_or(0);
-            for j in 0..36u8 {
+            for j in 0..bags.watched(guid) {
                 let lo = FIELD_CONTAINER_SLOT_1 + 2 * u16::from(j);
                 let Some(at) = place(lo..lo + 2, List::Object) else {
                     continue;
@@ -553,7 +592,7 @@ where
                             .unwrap_or_default();
                         let run = Run {
                             notice: Some(ItemNotice::Bag { entries }),
-                            bags: bags.rescan(fields),
+                            bags: bags.rescan(fields, &self.lookup),
                             ..Run::default()
                         };
                         out.push((at, run));
@@ -1464,6 +1503,7 @@ mod tests {
             .unwrap()
             .merge(ObjectFields::from_pairs(&[(lo, 0), (lo + 1, 0)]));
         w.bags.0[2] = BAG;
+        w.bags.1[2] = 4;
         let runs = w.runs(BAG, &fill);
         assert_eq!(
             bag_steps(&runs),
@@ -1603,7 +1643,7 @@ mod tests {
         assert_eq!(cache.opens(Some(ME), ME), [0]);
         assert_eq!(cache.opens(Some(ME), BAG), [2, 8]);
         assert!(cache.opens(Some(ME), POTION).is_empty());
-        cache.seat(&player(&[(20, POTION), (68, BAG)]));
+        cache.seat(&player(&[(20, POTION), (68, BAG)]), &|_| None);
         assert_eq!(cache.0, [0, POTION, 0, 0, 0, 0, 0, 0, 0, BAG]);
     }
 

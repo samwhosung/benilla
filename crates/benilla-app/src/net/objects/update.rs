@@ -1022,7 +1022,15 @@ fn create_hook(sc: &mut Scene, guid: u64, kind: Created, script: Option<&UiScrip
             // Our own create runs the world-enter cascade (`0x5deb60` → `0x4908c0`), whose bag
             // watcher set-up zeroes and rescans the bag cache (`0x49098d` → `0x4f8cc0`).
             if sc.self_guid.0 == Some(guid) {
-                sc.bag_cache.seat(&fields);
+                let (index, stores) = (&sc.index, &sc.stores);
+                let lookup = |g: u64| {
+                    index
+                        .0
+                        .get(&g)
+                        .and_then(|&e| stores.get(e).ok())
+                        .map(|s| &s.0)
+                };
+                sc.bag_cache.seat(&fields, &lookup);
             }
             resolve_display_records(sc, guid, &fields);
             sc.names.lookup_fields(guid, &fields, &sc.net);
