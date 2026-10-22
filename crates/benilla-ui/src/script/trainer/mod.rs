@@ -185,9 +185,20 @@ pub struct TrainerState {
 }
 
 impl super::UiScript {
-    /// Push the open trainer, or clear it with `None`. A push builds the tree ([`build_groups`])
-    /// and keeps only the collapsed groups that still exist, so a fold survives a content update.
+    /// Push the open trainer and finalize its rows, as a list (`0x4d7b3b`) and the state pass
+    /// `0x4d7d40` do, or clear it with `None`. A push builds the tree ([`build_groups`]) and keeps
+    /// only the collapsed groups that still exist, so a fold survives a content update.
     pub fn set_trainer(&mut self, state: Option<TrainerState>) {
+        self.push_trainer(state, true);
+    }
+
+    /// Push the open trainer's new text or icons with no finalize: the rows keep their order and
+    /// their visible count until the reference's own triggers re-sort them.
+    pub fn refresh_trainer(&mut self, state: Option<TrainerState>) {
+        self.push_trainer(state, false);
+    }
+
+    fn push_trainer(&mut self, state: Option<TrainerState>, finalizes: bool) {
         let mut model = self.model_mut();
         match state {
             None => {
@@ -196,6 +207,7 @@ impl super::UiScript {
                 model.trainer = None;
                 model.trainer_rows.clear();
                 model.trainer_visible = 0;
+                model.trainer_rows_fresh = false;
             }
             Some(mut s) => {
                 s.groups = build_groups(&s.services, s.trainer_type);
@@ -210,7 +222,9 @@ impl super::UiScript {
                 };
                 model.trainer_rows = laid_out(kept, &s);
                 model.trainer = Some(s);
-                finalize(model);
+                if finalizes {
+                    finalize(model);
+                }
             }
         }
     }
@@ -233,13 +247,9 @@ impl super::UiScript {
         // The skill-line filter resets to every group with the list (`0x4d7560`).
         model.trainer_line_filter = u32::MAX;
         model.trainer_selection = None;
-        // The builder lays the array out anew (`0x4d7807`-`0x4d7b35`) and finalizes it.
-        model.trainer_rows = model
-            .trainer
-            .as_ref()
-            .map_or_else(Vec::new, |t| laid_out(Vec::new(), t));
+        // The list's push lays the array out anew (`0x4d7807`-`0x4d7b35`); the caller pushes
+        // every list, an identical one too.
         model.trainer_rows_fresh = true;
-        finalize(&mut model);
     }
 
     /// Whether `CloseTrainer` was called since the last drain; the close sends no packet.

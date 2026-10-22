@@ -1881,3 +1881,77 @@ fn ability_req_asks_the_pets_book_for_a_pet_spell_and_none_without_a_record() {
         "no record for the service spell: met"
     );
 }
+
+/// The rows sort only where the reference finalizes them, the list (`0x4d7b3b`) and the state
+/// pass `0x4d7d40`, each from the order the last left (`0x4d857e`): an identical re-list lays them
+/// out anew and the re-derive after it carries them, and a name that lands re-sorts nothing, so
+/// rows the comparator ties (here four with no `Spell.dbc` record, `0x4d87cd`) keep their places.
+#[test]
+fn the_trainer_rows_sort_only_at_a_list_and_a_re_derive() {
+    const TRAINER: u64 = 0x10;
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    let mut app = App::new();
+    app.add_message::<crate::net::FieldChanged>()
+        .insert_resource(NetCommands(tx))
+        .init_resource::<TrainerOpen>()
+        .init_resource::<TrainerErrors>()
+        .init_resource::<TrainerTooltipSubjects>()
+        .init_resource::<PlayerActions>()
+        .init_resource::<Items>()
+        .init_resource::<NameCache>()
+        .init_resource::<GuidIndex>()
+        .init_resource::<crate::ui_pet::PetBar>()
+        .init_resource::<crate::spell::SpellModifiers>()
+        .insert_resource(Spells {
+            catalog: icon_catalog(),
+            ..Spells::empty_for_tests()
+        })
+        .insert_resource(SkillLines {
+            catalog: benilla_formats::SkillLineCatalog::from_spell_lines([]),
+        })
+        .add_systems(Update, feed_trainer);
+    app.insert_non_send_resource(UiScript::new().unwrap());
+    let list = |app: &mut App| {
+        app.world_mut().resource_mut::<TrainerOpen>().open(
+            TRAINER,
+            TRAINER_TYPE_TRADESKILL,
+            (1..=4)
+                .map(|cost| wire(300 + cost, trainer_spell_state::GREEN, cost, 1, 0))
+                .collect(),
+            String::new(),
+        );
+    };
+    // Each row by its cost, a header as 0.
+    let rows = |app: &mut App| -> Vec<i64> {
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .eval::<Vec<i64>>(
+                "local out = {} for i = 1, 5 do out[i] = (GetTrainerServiceCost(i)) end return out",
+            )
+            .unwrap()
+    };
+    list(&mut app);
+    app.update();
+    let first = rows(&mut app);
+    app.world_mut()
+        .resource_mut::<NameCache>()
+        .insert_player(TRAINER, "Trainer".into(), None);
+    app.update();
+    assert_eq!(rows(&mut app), first, "a landed name re-sorts nothing");
+    list(&mut app);
+    app.update();
+    assert_eq!(
+        rows(&mut app),
+        first,
+        "an identical re-list lays the rows out anew"
+    );
+    app.world_mut()
+        .resource_mut::<TrainerOpen>()
+        .trigger_re_derive();
+    app.update();
+    let carried = rows(&mut app);
+    assert_ne!(
+        carried, first,
+        "the re-derive sorts from the order the list left"
+    );
+}

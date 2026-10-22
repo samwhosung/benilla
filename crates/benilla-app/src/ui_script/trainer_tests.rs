@@ -760,7 +760,9 @@ fn a_new_list_packet_resets_the_filter_mask_and_the_collapse_set() {
         .unwrap());
     assert!(s.eval::<i64>("return GetNumTrainerServices()").unwrap() < 6);
 
+    // The list's reset, then its push, which lays the rows out and finalizes them (`0x4d7b3b`).
     s.reset_trainer_list_state(0);
+    s.set_trainer(Some(menu()));
     assert!(
         !s.eval::<bool>("return GetTrainerServiceTypeFilter('used') == 1")
             .unwrap(),

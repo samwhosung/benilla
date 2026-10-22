@@ -616,10 +616,17 @@ pub(crate) fn feed_trainer(
             names.resolve_unit(g, store, ask).map(str::to_string)
         });
         let name_changed = *last_name != trainer_name;
-        if fresh == *last && !name_changed && !forced {
+        // A list lays the rows out anew, so it pushes even when it matches the last.
+        if fresh == *last && !name_changed && !forced && !listed {
             return;
         }
-        script.set_trainer(fresh.clone());
+        // The rows sort only where the reference finalizes them: a list (`0x4d7b3b`) and the
+        // state pass `0x4d7d40`; a name or icon that lands leaves their order (and their ties).
+        if listed || forced || last.is_none() {
+            script.set_trainer(fresh.clone());
+        } else {
+            script.refresh_trainer(fresh.clone());
+        }
         match (&*last, &fresh) {
             (None, Some(_)) => fires.post("TRAINER_SHOW", vec![]),
             (Some(_), Some(_)) => fires.post("TRAINER_UPDATE", vec![]),
