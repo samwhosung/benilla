@@ -825,6 +825,7 @@ mod tests {
             race: "Human".into(),
             class: "Warrior".into(),
             gender: 0,
+            player: true,
         };
         let snap = snapshot(
             &giver,

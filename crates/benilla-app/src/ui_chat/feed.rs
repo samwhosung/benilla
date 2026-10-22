@@ -1518,7 +1518,9 @@ fn fire_one(
                     if clean {
                         Some(text)
                     } else if subject_guid == 0
-                        || names.resolve_unit(subject_guid, None, Ask::Read).is_some()
+                        // The player-name cache's record, valid, drops it too (`0x49daea`,
+                        // `0x49daf1`).
+                        || names.resolve_player(subject_guid, Ask::Read).is_some()
                     {
                         debug!(
                             "chat: dropping unexpandable [{:#04x}] {:?} (subject \

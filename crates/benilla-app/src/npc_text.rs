@@ -18,8 +18,8 @@ use crate::net::{Guid, GuidIndex, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::ui_unit::UnitNames;
 
-/// The unit a `$`-macro expands against: the self player, or the speaker at the reference's four
-/// chat sites.
+/// The unit a `$`-macro expands against: the self player, or a chat line's subject at the
+/// reference's four chat sites.
 pub(crate) struct Subject {
     pub name: String,
     /// `UNIT_FIELD_BYTES_0` bytes 0 and 1 resolved through `ChrRaces` and `ChrClasses`, at the
@@ -28,6 +28,9 @@ pub(crate) struct Subject {
     pub class: String,
     /// `UNIT_FIELD_BYTES_0` byte 2; `$G` takes the first arm on 0, the second on anything else.
     pub gender: u8,
+    /// A player: a unit with the player type bit, or a name-cache record. `$R` and `$C` print any
+    /// other unit's name instead (`0x50715d`-`0x50716b`, `0x5071ea`-`0x5071f7`).
+    pub player: bool,
 }
 
 /// Everything a `$`-token can read; `states` is the reference's global world-state table
@@ -98,6 +101,12 @@ pub(crate) fn substitute_checked(text: &str, ctx: &MacroContext) -> (String, boo
                 None => fail = true,
             },
             Some(tok @ ('R' | 'r' | 'C' | 'c')) => match subject {
+                // A unit that is not a player prints its name, straight to the tail: the
+                // lower-casing (`0x5071a3`) is on the table arm only.
+                Some(s) if !s.player => {
+                    out.push_str(&s.name);
+                    i = j + 1;
+                }
                 Some(s) => {
                     // An id outside the table faults the reference; we emit nothing.
                     let name = if matches!(tok, 'R' | 'r') {
@@ -193,6 +202,7 @@ pub(crate) fn player_identity(
         race: race_word(unit_names, store.0.unit_race().unwrap_or(0)),
         class: class_word(unit_names, store.0.unit_class().unwrap_or(0)),
         gender: store.0.unit_gender().unwrap_or(0),
+        player: true,
     })
 }
 
@@ -210,9 +220,11 @@ fn class_word(names: UnitNames<'_>, class: u8) -> String {
         .map_or_else(String::new, |(n, _)| n.to_string())
 }
 
-/// The chat feed's [`Subject`] for any guid: the object manager's descriptors, else the name
-/// cache (`0x506f70`), which the expansion only reads (`0x506fd4`); the chat handler's own lookup
-/// with a callback asks for it (`0x49d9f5`), as `ask` says. Guid 0 has no subject.
+/// The chat feed's [`Subject`] for any guid, resolved as the expander `0x506f70` resolves it: the
+/// unit the object manager holds (type mask 8, `0x506fad`), else the player-name cache's record
+/// (`0x506fcf`, `0x506fd4`), which the expansion only reads; the chat handler's own lookup with a
+/// callback asks for it (`0x49d9f5`, `0x49daea`), as `ask` says. A creature not streamed has no
+/// record there, and guid 0 no subject.
 pub(crate) fn subject_for_guid(
     guid: u64,
     index: &GuidIndex,
@@ -224,24 +236,29 @@ pub(crate) fn subject_for_guid(
     if guid == 0 {
         return None;
     }
-    let store = index.0.get(&guid).and_then(|e| stores.get(*e).ok());
-    let name = names.resolve_unit(guid, store, ask)?.to_string();
+    let store = index
+        .0
+        .get(&guid)
+        .and_then(|e| stores.get(*e).ok())
+        .filter(|s| s.is_unit());
     if let Some(store) = store {
         return Some(Subject {
-            name,
+            name: names.resolve_unit(guid, Some(store), ask)?.to_string(),
             race: race_word(unit_names, store.0.unit_race().unwrap_or(0)),
             class: class_word(unit_names, store.0.unit_class().unwrap_or(0)),
             gender: store.0.unit_gender().unwrap_or(0),
+            // The player type bit, `[object+8]+8 & 0x10` (`0x507160`-`0x507166`).
+            player: store.0.object_type_mask().unwrap_or(0) & 0x10 != 0,
         });
     }
-    // A creature lands on zeros, so `$R` and `$C` emit nothing; the reference's non-player arm
-    // emits the unit's name (`0x50716b`, `0x5071f7`), which is not built.
+    let name = names.resolve_player(guid, ask)?.to_string();
     let (race, class, gender) = names.player_traits(guid).unwrap_or((0, 0, 0));
     Some(Subject {
         name,
         race: race_word(unit_names, race),
         class: class_word(unit_names, class),
         gender,
+        player: true,
     })
 }
 
@@ -258,6 +275,7 @@ mod tests {
             race: super::race_word(names.names(), 4),
             class: super::class_word(names.names(), 5),
             gender,
+            player: true,
         }
     }
 
@@ -326,6 +344,21 @@ mod tests {
             ..subject(0)
         };
         assert_eq!(expand("[$C]", Some(&unknown)), "[]");
+    }
+
+    /// A subject that is not a player gives its own name for `$R` and `$C`, in either case
+    /// (`0x50716b`, `0x5071f7`).
+    #[test]
+    fn race_and_class_of_a_creature_are_its_name() {
+        let fang = Subject {
+            name: "Fang".into(),
+            player: false,
+            ..subject(0)
+        };
+        assert_eq!(
+            expand("$C, $c, $R, $r", Some(&fang)),
+            "Fang, Fang, Fang, Fang"
+        );
     }
 
     /// `$R` and `$C` are the table's words at the install's locale, not English.
