@@ -112,9 +112,15 @@ fn name_of(model: &Model, guid: u64) -> Option<String> {
     let held = bags.filter_map(|s| {
         of(s.creator_guid, &s.creator).or_else(|| of(s.gift_creator_guid, &s.gift_creator))
     });
-    let worn = model.inventory_slots.iter().flatten().filter_map(|s| {
-        of(s.creator_guid, &s.creator).or_else(|| of(s.gift_creator_guid, &s.gift_creator))
-    });
+    // Our own worn items, and the inspected players', whose maker is the visible block's creator.
+    let worn = model
+        .inventory_slots
+        .iter()
+        .chain(model.visible_equipment.values().flat_map(|v| v.iter()))
+        .flatten()
+        .filter_map(|s| {
+            of(s.creator_guid, &s.creator).or_else(|| of(s.gift_creator_guid, &s.gift_creator))
+        });
     let traded = model
         .trade
         .iter()

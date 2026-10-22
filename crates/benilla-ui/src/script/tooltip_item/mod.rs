@@ -209,7 +209,8 @@ pub(super) fn owned_instance(model: &Model, item_id: u32) -> Option<render::Item
 }
 
 /// A worn (or inspected) slot's item as the builder's item: an object of the player's own, else
-/// the visible-item record (`0x533354`), which has no durability or creator to show.
+/// the visible-item record (`0x533354`), which has no durability to show and whose creator guid
+/// the leg copies to `+0x410` (`0x5333cd`).
 pub(super) fn worn_instance(s: &crate::script::InvSlotView, object: bool) -> render::ItemInstance {
     render::ItemInstance {
         // App-composed, with the suffix off `ITEM_FIELD_RANDOM_PROPERTIES_ID`.
@@ -452,10 +453,10 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // GameTooltip:SetInventoryItem(unit, slot [, nameOnly]) -> hasItem, hasCooldown, repairCost
     // (`0x532ee0`), three as `PaperDollFrame.lua:741` reads them; the arity is that consumer's,
     // not byte-read as `SetBagItem`'s two is (`0x534985`). Unit-keyed through `Model::inv_slot`:
-    // an inspected item (`InspectPaperDollFrame.xml:20`) has no durability or creator, so those
-    // lines do not show, as in the reference. An armed shopping tooltip renders the compare
-    // shape; the arm is consumed either way. repairCost is the item's cost (`0x5332fb`), 0 for an
-    // inspected unit's.
+    // an inspected item (`InspectPaperDollFrame.xml:20`) has no durability, so that line does not
+    // show, and its maker is the visible block's creator (`0x5333cd`). An armed shopping tooltip
+    // renders the compare shape; the arm is consumed either way. repairCost is the item's cost
+    // (`0x5332fb`), 0 for an inspected unit's.
     m.set(
         "SetInventoryItem",
         lua.create_function(

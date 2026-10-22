@@ -41,6 +41,8 @@ struct InspectFeedMemo {
     /// What was last pushed, by player guid.
     pushed: HashMap<u64, Pushed>,
     templates: gate::Watch,
+    /// The name cache's generation: a creator's name that lands repaints its slot.
+    names: gate::Watch,
     /// How many players' views were built, the feed's cost.
     builds: u64,
 }
@@ -52,19 +54,23 @@ struct Pushed {
 }
 
 /// The fields of a player's visible-item block (`PLAYER_VISIBLE_ITEM_1_CREATOR` on, 12 a slot)
-/// that its views read: per slot the entry, the 7 enchants and the properties.
-type VisibleBlock = [u32; 19 * 9];
+/// that its views read: per slot the creator's two halves, the entry, the 7 enchants and the
+/// properties.
+type VisibleBlock = [u32; 19 * 11];
 
 fn visible_block(store: &ObjectStore) -> VisibleBlock {
-    let mut block = [0; 19 * 9];
+    let mut block = [0; 19 * 11];
     for slot0 in 0..19u8 {
-        let at = usize::from(slot0) * 9;
-        block[at] = store.0.player_visible_item_entry(slot0).unwrap_or(0);
+        let at = usize::from(slot0) * 11;
+        let creator = store.0.player_visible_item_creator(slot0);
+        block[at] = creator as u32;
+        block[at + 1] = (creator >> 32) as u32;
+        block[at + 2] = store.0.player_visible_item_entry(slot0).unwrap_or(0);
         for j in 0..7u8 {
-            block[at + 1 + usize::from(j)] =
+            block[at + 3 + usize::from(j)] =
                 store.0.player_visible_item_enchant(slot0, j).unwrap_or(0);
         }
-        block[at + 8] = store.0.player_visible_item_properties(slot0);
+        block[at + 10] = store.0.player_visible_item_properties(slot0);
     }
     block
 }
@@ -92,7 +98,9 @@ impl Plugin for InspectUiPlugin {
 
 /// One slot from a player's visible-item entry; `slot0` is the 0-based `EQUIPMENT_SLOT_*` index,
 /// `slot0 + 1` in Lua. With no item object the count is the reference's always-1 and durability,
-/// flags, locks and creator stay inert. Only the enchants broadcast, at
+/// flags and locks stay inert. The block's creator guid is the maker line's (`0x5333cd` copies it
+/// to the tooltip's `+0x410`, read at `0x52e1d5`); its name is read, and the tooltip build asks
+/// it. Only the enchants broadcast, at
 /// `PLAYER_VISIBLE_ITEM_<slot>_0 + 1 + j`, and 1.12 fills PERM and TEMP alone (vmangos
 /// `SetVisibleItemSlot`, `MAX_INSPECTED_ENCHANTMENT_SLOT`). The record is read, never asked: the
 /// getters' lookup passes no callback (`0x4c8420` → `0x5f0d60` → `0x62eb40`).
@@ -101,9 +109,15 @@ fn inspect_slot_view(
     items: &Items,
     icons: Option<&ItemDisplays>,
     rolls: crate::items::RollCatalogs,
+    names: Option<&crate::names::NameCache>,
     slot0: u8,
 ) -> Option<InvSlotView> {
     let entry = store.0.player_visible_item_entry(slot0)?;
+    let creator_guid = store.0.player_visible_item_creator(slot0);
+    let creator = names
+        .filter(|_| creator_guid != 0)
+        .and_then(|n| n.resolve_player(creator_guid, Ask::Read))
+        .map(str::to_string);
     // The roll, the properties field's low word as the reference's inspect leg reads it into
     // `+0x424`, names the suffix only: its stat lines would sit in enchant slots 2-6, which 1.12
     // servers leave empty.
@@ -134,6 +148,8 @@ fn inspect_slot_view(
         inventory_type: t.map(|t| t.inventory_type),
         name,
         link,
+        creator,
+        creator_guid,
         // `0x5da2c0` reads an item object's `ITEM_FIELD_FLAGS`, which inspected gear lacks, so the
         // tooltip prints the template's bind line, as the reference's does.
         already_bound: false,
@@ -151,14 +167,15 @@ fn inspect_slot_view(
 }
 
 /// What a player's visible-item views read beside the descriptor: the item records, the icons,
-/// and the `SpellItemEnchantment` and `ItemRandomProperties` catalogs that name the enchant lines
-/// and the roll suffix.
+/// the `SpellItemEnchantment` and `ItemRandomProperties` catalogs that name the enchant lines
+/// and the roll suffix, and the name cache that names the creator.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct VisibleItemTables<'w> {
     items: Res<'w, Items>,
     icons: Option<Res<'w, ItemDisplays>>,
     enchants: Option<Res<'w, crate::items::Enchants>>,
     props: Option<Res<'w, crate::items::RandomProperties>>,
+    names: Option<Res<'w, crate::names::NameCache>>,
 }
 
 impl VisibleItemTables<'_> {
@@ -170,17 +187,25 @@ impl VisibleItemTables<'_> {
         };
         let mut slots: InventorySlots = Default::default();
         for slot in 1..=19u8 {
-            slots[usize::from(slot)] =
-                inspect_slot_view(store, &self.items, self.icons.as_deref(), rolls, slot - 1);
+            slots[usize::from(slot)] = inspect_slot_view(
+                store,
+                &self.items,
+                self.icons.as_deref(),
+                rolls,
+                self.names.as_deref(),
+                slot - 1,
+            );
         }
         slots
     }
 
-    /// Whether a landed record, a new icon or a new catalog can have changed any view since
-    /// `templates` last watched.
-    fn moved(&self, templates: &mut gate::Watch) -> bool {
+    /// Whether a landed record or name, a new icon or a new catalog can have changed any view
+    /// since `templates` and `names` last watched.
+    fn moved(&self, templates: &mut gate::Watch, names: &mut gate::Watch) -> bool {
         let templates_moved = templates.moved(self.items.template_epoch());
+        let names_moved = names.moved(self.names.as_ref().map_or(0, |n| n.generation()));
         templates_moved
+            || names_moved
             || self.icons.as_ref().is_some_and(|i| i.is_changed())
             || self.enchants.as_ref().is_some_and(|c| c.is_changed())
             || self.props.as_ref().is_some_and(|c| c.is_changed())
@@ -225,7 +250,7 @@ pub(crate) fn feed_inspect(
             target.token = None;
         }
 
-        let tables_moved = tables.moved(&mut memo.templates);
+        let tables_moved = tables.moved(&mut memo.templates, &mut memo.names);
         // Every player a token can name, but the active one, whose own items the getters read.
         let mut held = HashSet::new();
         for guid in script.held_unit_guids() {

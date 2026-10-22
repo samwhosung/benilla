@@ -111,6 +111,14 @@ impl ObjectFields {
     pub fn container_slot(&self, i: u8) -> Option<u64> {
         (i < 36).then(|| self.get_guid(FIELD_CONTAINER_SLOT_1 + 2 * u16::from(i)))?
     }
+    /// `PLAYER_VISIBLE_ITEM_<slot>_CREATOR`: the creator guid of the item worn in equipment slot
+    /// `i`, the visible-item block's first two dwords (`0x5333cd`), 0 for none.
+    pub fn player_visible_item_creator(&self, i: u8) -> u64 {
+        (i < 19)
+            .then(|| self.get_guid(FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR + 12 * u16::from(i)))
+            .flatten()
+            .unwrap_or(0)
+    }
     /// `PLAYER_VISIBLE_ITEM_<slot>_0`: the public entry worn in equipment slot `i`, which other
     /// clients render from; each slot is 12 dwords, the entry after a 2-dword creator.
     pub fn player_visible_item_entry(&self, i: u8) -> Option<u32> {

@@ -236,12 +236,12 @@ pub struct InvSlotView {
     pub guid: u64,
     /// The 1-based live-API slots this item could be equipped into; empty if none.
     pub equip_slots: Vec<u8>,
-    /// The resolved `ITEM_FIELD_CREATOR` name, the tooltip's "<Made by %s>" line.
+    /// The resolved name of [`Self::creator_guid`], the tooltip's "<Made by %s>" line.
     pub creator: Option<String>,
     /// The resolved `ITEM_FIELD_GIFTCREATOR` name, the tooltip's `ITEM_WRAPPED_BY` line.
     pub gift_creator: Option<String>,
-    /// The `ITEM_FIELD_CREATOR` guid, 0 for none: with no [`Self::creator`] yet, the name the
-    /// tooltip waits for.
+    /// The `ITEM_FIELD_CREATOR` guid, or an inspected slot's `PLAYER_VISIBLE_ITEM_<slot>_CREATOR`
+    /// (`0x5333cd`), 0 for none: with no [`Self::creator`] yet, the name the tooltip waits for.
     pub creator_guid: u64,
     /// The `ITEM_FIELD_GIFTCREATOR` guid, 0 for none, as [`Self::creator_guid`].
     pub gift_creator_guid: u64,
