@@ -209,8 +209,8 @@ impl BagCache {
     }
 
     /// The world-enter cascade's set-up of the cache (`0x4f8cc0`: zeroed, then rescanned at
-    /// `0x4f8da6`), which leaves it holding the player's bags; its `BAG_UPDATE`s are the cascade's
-    /// (`UiScript::fire_world_enter`).
+    /// `0x4f8da6`), which leaves it holding the player's bags; its `BAG_UPDATE`s fire with the
+    /// interface's world-enter events.
     pub(crate) fn seat(&mut self, player: &ObjectFields) {
         self.0 = std::array::from_fn(|i| Self::seat_of(player, i as u8 + 1));
     }
