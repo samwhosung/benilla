@@ -26,8 +26,9 @@ enum Row {
     Exclusive,
     /// A queue the handlers fill that the call host holds too, by a suffix of its type's name:
     /// every feed that lends the host holds it, so no access tells the feed that takes it apart,
-    /// and the row is found by reading the feed, not by this guard. It is stale once the host or
-    /// the handlers no longer hold the queue.
+    /// and the row is found by reading the feed, not by this guard. Every such queue needs its
+    /// row or a place in [`HOST_HELD_UNREAD`]; a row is stale once the host or the handlers no
+    /// longer hold the queue.
     HostHeld,
 }
 
@@ -134,6 +135,18 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "::ui_guild::GuildLocal",
         "the held guild invitation, which `feed_guild` fires from; the guild verbs, acting in \
          their calls, hold it in the host",
+    ),
+    (
+        Row::HostHeld,
+        "::ui_mail::MailOpen",
+        "the mailbox's list and results, the send result's equip refusal line among them, which \
+         `feed_mail` fires from; the mail verbs, acting in their calls, hold it in the host",
+    ),
+    (
+        Row::HostHeld,
+        "::ui_mail::pending::MailPending",
+        "the pending-mail notices, whose `UPDATE_PENDING_MAIL` `feed_mail` fires; the mail verbs \
+         hold it in the host",
     ),
     (
         Row::Queue,
@@ -272,6 +285,44 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
          the bar's 120 slots and the reactive list, diffed against the usable cache, so one \
          caller's run cannot be cut out to fire at its own notice",
     ),
+];
+
+/// The host-held queues a handler fills that are yet to be read for what their feeds fire: the
+/// check finds a queue the handlers and the host both hold, but not whether a feed fires off it
+/// what a packet raised. Each, once its feeds are read, leaves for a [`Row::HostHeld`] row when
+/// one does, or is named quiet beside why when none does; the list only shrinks.
+const HOST_HELD_UNREAD: &[&str] = &[
+    "::creature_anim::AttackStopInFlight",
+    "::creature_anim::PlaySeq",
+    "::items::Items",
+    "::net::GuidIndex",
+    "::net::Reputations",
+    "::net::SelfGuid",
+    "::net::game_time::ServerTime",
+    "::spell::cast_send::HeldForPick",
+    "::spell::cast_send::ScriptCastPermit",
+    "::spell::cast_send::unit_caster::PetGcdsOwed",
+    "::spell::cast_send::unit_caster::UnitAttackOwed",
+    "::spell::cooldowns::Cooldowns",
+    "::spell::inflight::ActiveChannel",
+    "::spell::inflight::AutoRepeatActive",
+    "::spell::inflight::PendingCast",
+    "::spell::inflight::QueuedMeleeSpell",
+    "::spell::mods::SpellModifiers",
+    "::spell::targeting::CursorPicks",
+    "::spell::targeting::SpellTargeting",
+    "::target::Selection",
+    "::ui_action::PlayerActions",
+    "::ui_auction::AuctionOpen",
+    "::ui_loot::AutoLootByte",
+    "::ui_loot::LootLatch",
+    "::ui_merchant::MerchantOpen",
+    "::ui_pet::PetBar",
+    "::ui_petition::GuildRegistrarState",
+    "::ui_petition::PetitionRecords",
+    "::ui_session::latch::InteractLatch",
+    "::ui_social::SocialState",
+    "::ui_tradeskill::TradeSkillOpens",
 ];
 
 /// The resources the handlers fill through a shared reference, which their declared access shows
@@ -431,6 +482,21 @@ fn call_host_access(world: &mut World) -> bevy::ecs::query::Access {
     System::initialize(&mut host, world)
         .combined_access()
         .clone()
+}
+
+/// The resources a handler that does not lend the call host writes: a handler that lends it
+/// holds all the host holds, so its access names the host's state, not what its packet fills.
+fn filled_apart_from_the_host(app: &mut App) -> std::collections::HashSet<ComponentId> {
+    let host = call_host_access(app.world_mut());
+    let host_writes: Vec<ComponentId> = host.resource_writes().collect();
+    let handlers = app.world().resource::<crate::net::handlers::NetHandlers>();
+    handlers
+        .accesses
+        .iter()
+        .map(|(_, a)| a.combined_access())
+        .filter(|a| !host_writes.iter().all(|&id| a.has_resource_write(id)))
+        .flat_map(|a| a.resource_writes().collect::<Vec<_>>())
+        .collect()
 }
 
 /// Whether `node` sits in the `UiFeed` phase, through any set.
@@ -608,6 +674,7 @@ fn every_handler_queue_a_feed_takes_is_on_a_lane_or_listed() {
         .classes
         .caches;
     let queues = handler_queues(app.world(), &caches);
+    let filled_apart = filled_apart_from_the_host(&mut app);
     let (taken, exclusive, systems, host_held) =
         app.world_mut().schedule_scope(Update, |world, schedule| {
             schedule.graph_mut().systems.initialize(world);
@@ -630,6 +697,7 @@ fn every_handler_queue_a_feed_takes_is_on_a_lane_or_listed() {
                 .filter(|&&id| !is_messages(world, id))
                 .filter(|&&id| !ends_with_any(&self::name(world, id), FILLED_THROUGH_A_READ))
                 .filter(|&&id| host.has_resource_read(id))
+                .filter(|id| filled_apart.contains(id))
                 .map(|&id| self::name(world, id))
                 .collect();
             for (key, system, _) in graph.systems.iter() {
@@ -696,10 +764,24 @@ fn every_handler_queue_a_feed_takes_is_on_a_lane_or_listed() {
             .filter(|n| !ends_with_any(n, &rows(Row::Exclusive)))
             .map(|n| format!("exclusive {n}")),
     );
+    unlisted.extend(
+        host_held
+            .iter()
+            .filter(|n| {
+                !ends_with_any(n, &rows(Row::HostHeld)) && !ends_with_any(n, HOST_HELD_UNREAD)
+            })
+            .map(|n| format!("host-held {n}")),
+    );
     let mut stale: Vec<&str> = rows(Row::Queue)
         .into_iter()
         .filter(|s| !taken.iter().any(|n| n.ends_with(s)))
         .collect();
+    stale.extend(
+        HOST_HELD_UNREAD
+            .iter()
+            .filter(|s| !host_held.iter().any(|n| n.ends_with(*s)))
+            .copied(),
+    );
     stale.extend(
         rows(Row::HostHeld)
             .into_iter()
