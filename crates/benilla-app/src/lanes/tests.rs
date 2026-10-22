@@ -581,43 +581,98 @@ fn an_auction_line_fires_at_its_packet() {
     );
 }
 
-/// `SMSG_GROUP_LIST` naming one member under us as leader, as its handler applies it.
-fn group_listed(_: In<SessionEvent>, mut group: ResMut<crate::ui_party::GroupState>) {
-    let member = benilla_protocol::messages::GroupMemberEntry {
-        name: "Friend".into(),
-        guid: FRIEND,
-        status: 1,
-        flags: 0,
-    };
-    group.apply_list(0, 0, vec![member], ME, None, Some(ME));
+/// `SMSG_GROUP_LIST` as the wire carries it: one member under us as leader, with the loot tail a
+/// list with members carries (`0x5e6e12`).
+fn group_list() -> SessionEvent {
+    SessionEvent::GroupList {
+        group_type: 0,
+        own_flags: 0,
+        members: vec![benilla_protocol::messages::GroupMemberEntry {
+            name: "Friend".into(),
+            guid: FRIEND,
+            status: 1,
+            flags: 0,
+        }],
+        leader: ME,
+        loot: Some(benilla_protocol::messages::GroupLootInfo {
+            method: 3,
+            master: 0,
+            threshold: 2,
+        }),
+    }
 }
 
-/// The group list's handler signals the roster events inside it (`0x5e6c66`, `0x4e82a9`, a
-/// party's board clear `0x4ba5db`), so they fire whole before a later packet's events and after an
-/// earlier one's.
+/// The group list's handler, run whole at its packet: the members change after the seat loop
+/// (`0x5e6c66`), the leader store (`0x5e6c7e` → `0x4e82a9`), the line of a new group we lead
+/// (`0x5e6cc1`), the loot store's lines and its event on every list with members (`0x5e6e52` →
+/// `0x4e86f0`, `0x4e87fa`), then a party's board clear (`0x4ba5db`); all before a later packet's
+/// events and after an earlier one's.
 #[test]
 fn the_roster_events_fire_at_their_packet() {
     let mut app = client(|app| {
         app.add_plugins(crate::ui_party::UiPartyPlugin)
-            .net_handler(SessionEventKind::LoggedOut, group_listed)
             .net_handler(SessionEventKind::LoginQueued, enter);
     });
+    app.world_mut().resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
+    app.world_mut()
+        .init_resource::<crate::ui_quest::QuestGiver>();
+    app.world_mut()
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .run(
+            r#"
+            ERR_JOINED_GROUP_S = "%s joins the party."
+            ERR_SET_LOOT_GROUP = "Looting set to group loot."
+            ERR_SET_LOOT_THRESHOLD_S = "Loot threshold set to %s."
+            ITEM_QUALITY2_DESC = "Uncommon"
+            "#,
+        )
+        .unwrap();
     assert_eq!(
-        frame(&mut app, vec![p2(), p1()]),
+        frame(&mut app, vec![p2(), group_list()]),
         [
             "PLAYER_ENTER_COMBAT",
             "PARTY_MEMBERS_CHANGED",
             "PARTY_LEADER_CHANGED",
+            "CHAT_MSG_SYSTEM:Friend joins the party.",
+            "CHAT_MSG_SYSTEM:Looting set to group loot.",
+            "CHAT_MSG_SYSTEM:Loot threshold set to Uncommon.",
+            "PARTY_LOOT_METHOD_CHANGED",
             "RAID_TARGET_UPDATE"
         ]
     );
     assert_eq!(
-        frame(&mut app, vec![p1(), p2()]),
+        frame(&mut app, vec![group_list(), p2()]),
         [
             "PARTY_MEMBERS_CHANGED",
             "PARTY_LEADER_CHANGED",
+            "PARTY_LOOT_METHOD_CHANGED",
             "RAID_TARGET_UPDATE",
             "PLAYER_ENTER_COMBAT"
-        ]
+        ],
+        "the same list again: the loot store's event, whatever the tail says"
     );
+}
+
+/// The session's end drops what the cast and house lanes hold, as the chat lane's end drops its
+/// lines: the Lua state they were readied for is replaced.
+#[test]
+fn the_session_end_drops_the_cast_and_house_lanes() {
+    let mut app = cast_client(|app| {
+        app.add_plugins(crate::ui_auction::UiAuctionPlugin);
+    });
+    app.add_plugins(bevy::state::app::StatesPlugin)
+        .insert_state(crate::client_state::ClientState::InWorld);
+    let world = app.world_mut();
+    world
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .run(r#"ERR_AUCTION_HIGHER_BID = "You have been outbid.""#)
+        .unwrap();
+    world
+        .resource_mut::<crate::ui_cast::CastReports>()
+        .bar(crate::ui_cast::CastBarEdge::Stop);
+    crate::net::handlers::dispatch(world, vec![outbid()]);
+    world.run_schedule(OnExit(crate::client_state::ClientState::InWorld));
+    assert!(world.resource::<crate::ui_cast::CastReports>().is_empty());
+    fire_frame(world);
+    assert!(heard(&mut app).is_empty(), "nothing left to fire");
 }
