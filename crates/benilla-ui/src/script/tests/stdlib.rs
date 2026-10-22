@@ -592,7 +592,8 @@ fn date_and_time_read_the_local_zone() {
         }
     }
     // `_mktime` adds the zone's offset as it stands now, not the one the zone kept on the
-    // table's date: Moscow ran three hours east in 2012 and three now, four in between (2011-14).
+    // table's date: Moscow ran four hours east in 2012 (2011-14) and runs three now, so the sum
+    // takes three.
     #[cfg(unix)]
     {
         let _zone = crate::civil::ZoneGuard::set("Europe/Moscow");

@@ -435,9 +435,6 @@ mod tests {
         assert_eq!(spelled(PLATFORM_X86), "x86");
     }
 
-    /// The whole challenge for account `AB` on an enGB install: the locale tag as `0x5b2115` loads
-    /// it, `0x656e4742`, goes out little-endian like `'WoW'` and `'x86'` (benilla-re
-    /// `net/login#logon-challenge`).
     /// Holds `TZ` for a test: the lock keeps two zone tests apart, the drop restores it.
     struct Zone {
         old: Option<std::ffi::OsString>,
@@ -483,6 +480,9 @@ mod tests {
         assert_eq!(bias("UTC0"), 0);
     }
 
+    /// The whole challenge for account `AB` on an enGB install: the locale tag as `0x5b2115` loads
+    /// it, `0x656e4742`, goes out little-endian like `'WoW'` and `'x86'` (benilla-re
+    /// `net/login#logon-challenge`).
     #[test]
     fn the_challenge_carries_the_locale_tag() {
         let _zone = Zone::set("UTC0");

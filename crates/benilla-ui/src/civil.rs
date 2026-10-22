@@ -121,6 +121,9 @@ mod zone {
         unsafe { tzset() };
     }
 
+    /// Deviation: the zone database's offset for the date, where the reference's CRT applies
+    /// today's rules, so a date in a zone whose offset has since changed does not round-trip
+    /// through `time{}`.
     pub(super) fn localtime(secs: i64) -> Option<libc::tm> {
         reread();
         let time = secs as libc::time_t;

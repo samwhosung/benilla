@@ -539,7 +539,6 @@ fn push_water_foam(
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WaterFoamSet;
 
-/// The water foam plugin.
 /// `waterRipples` (`0x673750`, `[0x86a03c]`, initialised 1): the emitter (`0x68bda0`) returns at
 /// once for 0 (`0x68bda3`), so no record is made; live records age out as before.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
@@ -551,6 +550,7 @@ impl Default for WaterRipples {
     }
 }
 
+/// The water foam plugin.
 pub(crate) struct WaterFxPlugin;
 
 impl Plugin for WaterFxPlugin {
