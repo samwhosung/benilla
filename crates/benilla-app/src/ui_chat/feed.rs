@@ -164,24 +164,35 @@ impl Pending {
         }
     }
 
-    /// The `$`-macro subject of a monster or battleground line whose expansion needs it: the
-    /// addressee, else the sender, as the battleground lines carry one guid only. A line that
-    /// expands with no subject never waits (`0x49dac2` `jne 0x49db31` past the queue).
+    /// The `$`-macro subject of a monster or battleground line whose expansion needs it
+    /// ([`macro_subject_guid`]). A line that expands with no subject never waits (`0x49dac2`
+    /// `jne 0x49db31` past the queue).
     fn macro_subject(&self) -> Option<u64> {
         match self {
             Pending::Wire { msg, .. }
                 if MACRO_EXPANDED_TYPES.contains(&msg.chat_type)
                     && crate::npc_text::needs_subject(&msg.text) =>
             {
-                Some(if msg.target_guid != 0 {
-                    msg.target_guid
-                } else {
-                    msg.sender_guid
-                })
-                .filter(|&g| g != 0)
+                Some(macro_subject_guid(msg)).filter(|&g| g != 0)
             }
             _ => None,
         }
+    }
+}
+
+/// The guid a macro-expanded line's `$`-tokens expand against: a battleground system line's one
+/// guid (`0x49d961`, read at `0x49d967`), the addressee of any other (`0x49da60`, passed at
+/// `0x49daab`). The speaker's guid a monster say or yell carries first (`0x49d5dc`) is never
+/// passed on, so a line with no addressee has no subject.
+fn macro_subject_guid(msg: &ChatMessage) -> u64 {
+    use benilla_protocol::messages::{
+        CHAT_MSG_BG_SYSTEM_ALLIANCE, CHAT_MSG_BG_SYSTEM_HORDE, CHAT_MSG_BG_SYSTEM_NEUTRAL,
+    };
+    match msg.chat_type {
+        CHAT_MSG_BG_SYSTEM_NEUTRAL | CHAT_MSG_BG_SYSTEM_ALLIANCE | CHAT_MSG_BG_SYSTEM_HORDE => {
+            msg.sender_guid
+        }
+        _ => msg.target_guid,
     }
 }
 
@@ -1483,17 +1494,12 @@ fn fire_one(
                 }
                 // The base name; `stamp_channel` adds arg4's number and arg7-arg9 below.
                 let channel_base = msg.channel.clone().unwrap_or_default();
-                // `$`-macros expand for the monster, boss and BG system types only, against the
-                // addressee. A failed expansion (`0x49dac2`-`0x49db1e`, `0x49d9c9`) with a zero
+                // `$`-macros expand for the monster, boss and BG system types only, against
+                // [`macro_subject_guid`]. A failed expansion (`0x49dac2`-`0x49db1e`, `0x49d9c9`) with a zero
                 // subject or a known name drops the line, one with an unknown name holds it for
                 // the name query (`tries`), and only a second failure shows the raw text.
                 let expanded = if MACRO_EXPANDED_TYPES.contains(&msg.chat_type) {
-                    // The addressee, else the sender: the BG system lines carry one guid only.
-                    let subject_guid = if msg.target_guid != 0 {
-                        msg.target_guid
-                    } else {
-                        msg.sender_guid
-                    };
+                    let subject_guid = macro_subject_guid(&msg);
                     let subject = crate::npc_text::subject_for_guid(
                         subject_guid,
                         guids,

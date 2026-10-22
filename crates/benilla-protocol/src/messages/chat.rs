@@ -118,7 +118,7 @@ pub(super) fn read_message_chat(r: &mut &[u8]) -> io::Result<ChatMessage> {
     let chat_type = read_u8(r)?;
     let language = read_u32_le(r)?;
     let mut sender_guid = 0u64;
-    // 0 unless the shape carries an addressee; the macro expander then uses `sender_guid`.
+    // 0 unless the shape carries an addressee.
     let mut target_guid = 0u64;
     let mut sender_name = None;
     let mut channel = None;
