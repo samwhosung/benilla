@@ -260,10 +260,12 @@ pub(super) fn feed_ui_input(
             }
             for (btn, name) in UI_MOUSE_BUTTONS {
                 if buttons.just_pressed(btn) {
-                    // A left press that would drop into the world (`world_drop_click`: any payload
-                    // over terrain or nothing) is consumed now: the drop fires on the release, but
-                    // the world click-pick and camera orbit act on the press. Over an object the
-                    // reference runs SELECT with the payload still held.
+                    // A left press whose release the payload takes (`world_press_consumed`: an
+                    // item, a spell or an action over terrain, any payload over nothing) is
+                    // consumed now: the drop fires on the release, but the world click-pick and
+                    // camera orbit act on the press. A vendor row over terrain or an object is put
+                    // down and the click goes on, to the ground click or the select (`0x492c90`,
+                    // `0x492ce0`).
                     if btn == MouseButton::Left
                         && hover.0.is_none()
                         && script.world_press_consumed()
