@@ -372,8 +372,54 @@ mod tests {
     /// The whole challenge for account `AB` on an enGB install: the locale tag as `0x5b2115` loads
     /// it, `0x656e4742`, goes out little-endian like `'WoW'` and `'x86'` (benilla-re
     /// `net/login#logon-challenge`).
+    /// Holds `TZ` for a test: the lock keeps two zone tests apart, the drop restores it.
+    struct Zone(
+        Option<std::ffi::OsString>,
+        std::sync::MutexGuard<'static, ()>,
+    );
+
+    impl Zone {
+        fn set(tz: &str) -> Self {
+            static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let old = std::env::var_os("TZ");
+            std::env::set_var("TZ", tz);
+            Self(old, lock)
+        }
+    }
+
+    impl Drop for Zone {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(v) => std::env::set_var("TZ", v),
+                None => std::env::remove_var("TZ"),
+            }
+        }
+    }
+
+    /// The dword after the locale is `OsGetTimeZoneBias` (`0x4297c0`, stored at `0x5b2127`):
+    /// the zone's bias negated, minutes east of UTC, without daylight saving's.
+    #[test]
+    fn the_challenge_carries_the_time_zone_bias() {
+        let bias = |tz: &str| {
+            let _zone = Zone::set(tz);
+            let mut out = Vec::new();
+            write_logon_challenge(&mut out, "AB", 5875, LOCALE_TAG_EN_US).unwrap();
+            i32::from_le_bytes(out[25..29].try_into().unwrap())
+        };
+        assert_eq!(bias("NPT-05:45"), 345);
+        let east_coast = if cfg!(windows) {
+            "EST5EDT"
+        } else {
+            "EST5EDT,M3.2.0,M11.1.0"
+        };
+        assert_eq!(bias(east_coast), -300);
+        assert_eq!(bias("UTC0"), 0);
+    }
+
     #[test]
     fn the_challenge_carries_the_locale_tag() {
+        let _zone = Zone::set("UTC0");
         let mut out = Vec::new();
         write_logon_challenge(&mut out, "AB", 5875, u32::from_be_bytes(*b"enGB")).unwrap();
         let mut want = vec![

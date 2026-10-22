@@ -198,10 +198,13 @@ impl Plugin for ScreenshotPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
     use benilla_ui::script::UiScript;
 
     #[test]
     fn names_follow_the_reference_and_never_collide() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _tz = EnvGuard::set("TZ", "UTC0");
         let mut s = ScreenshotState::default();
         // 2026-08-21T13:45:07Z.
         assert_eq!(s.next_name(1_787_319_907), "WoWScrnShot_082126_134507.png");
@@ -216,6 +219,17 @@ mod tests {
         assert_eq!(s.next_name(1_787_319_908), "WoWScrnShot_082126_134508.png");
         // 2001-01-02T03:04:05Z: every field needs its `%02d` zero.
         assert_eq!(s.next_name(978_404_645), "WoWScrnShot_010201_030405.png");
+    }
+
+    /// The stamp is the local time (`0x429450`, `strftime` of `localtime`): 5:45 east of UTC,
+    /// 13:45:07Z is 19:30:07, and 20:00Z is past local midnight.
+    #[test]
+    fn names_stamp_the_local_time() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _tz = EnvGuard::set("TZ", "NPT-05:45");
+        let mut s = ScreenshotState::default();
+        assert_eq!(s.next_name(1_787_319_907), "WoWScrnShot_082126_193007.png");
+        assert_eq!(s.next_name(1_787_342_400), "WoWScrnShot_082226_014500.png");
     }
 
     /// An ask made during frame N is spawned on frame N+1.
