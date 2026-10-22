@@ -49,8 +49,9 @@ pub(super) fn control(
         crate::tutorial::InputHooks,
         // The loot window's move-start close (`0x60e990`).
         ResMut<crate::ui_loot::LootMoveStart>,
-        // `SMSG_STANDSTATE_UPDATE`, applied locally and ungated, with nothing sent back.
-        MessageReader<super::ServerStandState>,
+        // `SMSG_STANDSTATE_UPDATE`, and a change a script call sent, applied locally and ungated,
+        // with nothing sent back.
+        MessageReader<super::StandStateApply>,
     ),
     mut speed_capsule: (
         Res<MoveSpeed>,

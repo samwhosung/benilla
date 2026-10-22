@@ -1,5 +1,5 @@
 //! The player's packet handlers: `SMSG_STANDSTATE_UPDATE` goes to [`super::posture`] as a
-//! [`ServerStandState`], applied in `control`, which holds the body query and sheath queue;
+//! [`StandStateApply`], applied in `control`, which holds the body query and sheath queue;
 //! `SMSG_PLAYER_SKINNED`, among the player object's messages in the reference (`0x5e3010`),
 //! signals `PLAYER_SKINNED`.
 
@@ -7,7 +7,7 @@ use benilla_protocol::{SessionEvent, SessionEventKind};
 use benilla_ui::script::ScriptValue;
 use bevy::prelude::*;
 
-use super::ServerStandState;
+use super::StandStateApply;
 use crate::net::NetHandlerApp;
 
 /// Registers the handlers; called from [`super::PlayerPlugin`].
@@ -28,9 +28,9 @@ pub(super) fn register(app: &mut App) {
         );
 }
 
-fn on_stand_state_update(In(ev): In<SessionEvent>, mut out: MessageWriter<ServerStandState>) {
+fn on_stand_state_update(In(ev): In<SessionEvent>, mut out: MessageWriter<StandStateApply>) {
     if let SessionEvent::StandStateUpdate { state } = ev {
-        out.write(ServerStandState { state });
+        out.write(StandStateApply { state });
     }
 }
 

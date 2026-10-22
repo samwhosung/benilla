@@ -8,6 +8,7 @@ use benilla_protocol::ObjectFields;
 use bevy::prelude::*;
 
 use super::{move_trace, state, BodyQuery, ClientCommand, NetCommands, Player, StandStateRequest};
+use crate::net::{ObjectStore, SelfPlayer};
 
 /// What the posture verbs read of the player beyond its body's components.
 #[derive(Clone, Copy, Debug, Default)]
@@ -30,7 +31,7 @@ pub(super) fn update(
     sheath: &mut MessageWriter<crate::creature_anim::SheathRequest>,
     loot_close: &mut crate::ui_loot::LootMoveStart,
     asks: &mut MessageReader<StandStateRequest>,
-    server: &mut MessageReader<super::ServerStandState>,
+    applies: &mut MessageReader<super::StandStateApply>,
     reads: PlayerReads,
     classes: Option<&benilla_formats::ChrClasses>,
     moving: bool,
@@ -54,11 +55,12 @@ pub(super) fn update(
     if player.stand_pending == Some(stand_byte) {
         player.stand_pending = None; // the echo landed
     }
-    // `SMSG_STANDSTATE_UPDATE` reaches the local apply directly, with no refusal gate and no
-    // `CMSG_STANDSTATECHANGE` back, before the volunteered logic below; the last packet wins.
-    if let Some(s) = server.read().last().map(|m| m.state) {
+    // `SMSG_STANDSTATE_UPDATE` and a script call's sent change reach the local apply directly,
+    // with no refusal gate and no `CMSG_STANDSTATECHANGE` back, each in its order, before the
+    // volunteered logic below.
+    for s in applies.read().map(|m| m.state) {
         let stand_now = player.stand_pending.unwrap_or(stand_byte);
-        move_trace::posture("server", s, stand_now, player.move_flags());
+        move_trace::posture("apply", s, stand_now, player.move_flags());
         apply_locally(player, s, stand_now, body, commands, sheath, loot_close);
     }
     let stand_state = player.stand_pending.unwrap_or(stand_byte);
@@ -139,6 +141,45 @@ pub(super) fn update(
     }
 
     stand_now
+}
+
+/// `SetStandState` (`0x5ed430`) run inside a script call on the active player: its gate
+/// ([`state::stand_state_refused`]), then `CMSG_STANDSTATECHANGE` (`0x5ed501`), so the packet leaves
+/// ahead of whatever the call sends next, then the local apply (`0x5ed53f`), which [`update`] makes
+/// from the [`super::StandStateApply`] it is owed. The setter tests no current state: a sit while
+/// sitting sends again.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct StandSetter<'w, 's> {
+    net: Res<'w, NetCommands>,
+    /// The mover's flags, the `[[this+0x118]+0x40]` the gate reads.
+    player: Res<'w, Player>,
+    me: Query<'w, 's, (Entity, &'static ObjectStore), With<SelfPlayer>>,
+    /// The precast as the queued unit edits leave it, which a link of the VM pass reads in place
+    /// of the component.
+    edits: Res<'w, crate::creature_anim::UnitEdits>,
+    apply: MessageWriter<'w, super::StandStateApply>,
+}
+
+impl StandSetter<'_, '_> {
+    /// Change the active player's stand state to `s`; `false` when the gate refuses.
+    pub(crate) fn set(&mut self, s: u8) -> bool {
+        let Ok((me, store)) = self.me.single() else {
+            return false;
+        };
+        let gates = stand_gates(&store.0, self.edits.precast(me).is_some());
+        let (from, flags) = (store.0.unit_stand_state(), self.player.move_flags());
+        if state::stand_state_refused(gates, flags, s) {
+            debug!("stand state {s} refused in a call ({gates:?}, the client's `0x5ed430` gate)");
+            move_trace::posture("REFUSED", s, from, flags);
+            return false;
+        }
+        move_trace::posture("call", s, from, flags);
+        let _ = self.net.0.send(ClientCommand::StandStateChange {
+            state: u32::from(s),
+        });
+        self.apply.write(super::StandStateApply { state: s });
+        true
+    }
 }
 
 /// [`state::StandGates`] off the body's descriptor and cast state.

@@ -1,7 +1,8 @@
 //! `DoEmote`'s engine half, which the call host runs inside the verb ([`EmoteDoer`]): the binding
 //! (`0x49fd30`) finds the `EmotesText` row by name (`0x49fd72`-`0x49fda6`) and the target
 //! (`0x49fdb1`-`0x49fdee`), then `0x5ef560` (`0x49fe16`) runs the gates, the stow, the posture or
-//! the play, and `CMSG_TEXT_EMOTE`, so the packet goes out before the verb returns.
+//! the play, and `CMSG_TEXT_EMOTE`, each inside the call, so the stow's `CMSG_SETSHEATHED` and the
+//! posture's `CMSG_STANDSTATECHANGE` go out ahead of the emote's packet, before the verb returns.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -26,7 +27,7 @@ pub(crate) struct EmoteDoer<'w, 's> {
     engaged: Query<'w, 's, (), (With<SelfPlayer>, With<crate::creature_anim::Engaged>)>,
     loot_kneel: Option<Res<'w, crate::ui_loot::LootKneel>>,
     errors: Res<'w, crate::ui_action::UiErrorKeys>,
-    out: EmoteOut<'w>,
+    out: EmoteOut<'w, 's>,
     /// The target the emote names when its argument does not (`0xb4e2d8`).
     selection: Res<'w, crate::target::Selection>,
     names: Res<'w, crate::names::NameCache>,
@@ -38,9 +39,11 @@ pub(crate) struct EmoteDoer<'w, 's> {
 
 /// The stow, the posture, the play and their order stamp.
 #[derive(SystemParam)]
-pub(crate) struct EmoteOut<'w> {
-    sheath: Option<MessageWriter<'w, crate::creature_anim::SheathRequest>>,
-    stand: Option<MessageWriter<'w, crate::player::StandStateRequest>>,
+pub(crate) struct EmoteOut<'w, 's> {
+    /// Our committed sheath state, which the stow sets inside the call (`0x5ef630`).
+    sheath: Query<'w, 's, &'static mut crate::creature_anim::CommittedSheath, With<SelfPlayer>>,
+    /// `SetStandState`, run inside the call (`0x5ef652`); a world without the player has none.
+    stand: Option<crate::player::StandSetter<'w, 's>>,
     /// The local play (`0x5ef660`).
     anim: Option<MessageWriter<'w, crate::creature_anim::EmoteAnim>>,
     play_seq: Option<ResMut<'w, crate::creature_anim::PlaySeq>>,
@@ -113,20 +116,22 @@ impl EmoteDoer<'_, '_> {
             return;
         }
         let me = self.player.single().ok().map(|(e, m)| (e, *m));
-        // The stow (`0x5ef630`), unconditional here: every emote past the gates sheathes
-        // instantly, mid-fight too.
-        if let (Some((entity, _)), Some(sheath)) = (me, self.out.sheath.as_mut()) {
-            sheath.write(crate::creature_anim::SheathRequest {
-                entity,
-                state: 0,
-                ceremony: false,
-            });
+        // The stow, `SetSheatheState(0, 1, 1)` (`0x5ef630`): every emote past the gates sheathes
+        // instantly, mid-fight too, and its `CMSG_SETSHEATHED` goes out now (`0x611dbc`).
+        let fields = self.store.single().ok().map(|s| &s.0);
+        if let Ok(mut committed) = self.out.sheath.single_mut() {
+            if committed.set_now(0, fields, None) {
+                let _ = self
+                    .commands
+                    .0
+                    .send(ClientCommand::SetSheathed { state: 0 });
+            }
         }
         // The posture branch (`EmoteSpecProc == 1` → `SetStandState`) is the whole visible
         // effect: the server plays nothing for SIT, SLEEP and KNEEL (`ChatHandler.cpp:728`).
         if let Some(state) = posture {
             if let Some(stand) = self.out.stand.as_mut() {
-                stand.write(crate::player::StandStateRequest { state: state as u8 });
+                stand.set(state as u8);
             }
         }
         // The play (`0x5ef660`, `0x5fe2f0` at `0x5ef66f`) is the posture branch's else: a posture

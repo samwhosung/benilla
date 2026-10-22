@@ -96,6 +96,8 @@ pub(crate) use approach::{
     can_auto_interact, cancel_move_action_on_ui_shutdown, Approach, ApproachVerb, AutoMove,
     Refused, Subject, RANGE_STOP_FRACTION, TALK_STOP,
 };
+/// `SetStandState` run inside a script call.
+pub(crate) use posture::StandSetter;
 use state::{
     MoveSpeed, PlayerRide, AIR_NUDGE_SPEED, FALL_FAR_DROP, FALL_FAR_TIME, FOOT_CONE_HEIGHT,
     GROUND_COS, GROUND_PROBE, JUMP_SPEED, LAND_PROBE, MOUSELOOK_PITCH_CLAMP, RUN_BACK_RATIO,
@@ -153,20 +155,21 @@ pub(crate) const UNIT_FLAG_IN_COMBAT: u32 = 0x0008_0000;
 pub(crate) const UNIT_FLAG_TAXI_FLIGHT: u32 = 0x0010_0000;
 
 /// A stand-state request for [`posture`]'s one setter, the client's `SetStandState` (`0x5ed430`:
-/// send `CMSG_STANDSTATECHANGE` and apply locally through `0x6127b0`). The posture emotes (`/sit`,
-/// `/sleep`, `/kneel`, `/stand`, `/lay`) send it, as `DoEmote`'s `EmoteSpecProc == 1` branch calls
-/// the setter the `X` key does; the server sets no posture for a state text emote
-/// (`ChatHandler.cpp:729-733`). States are `UnitStandStateType`: 0 stand, 1 sit, 3 sleep, 8 kneel.
+/// send `CMSG_STANDSTATECHANGE` and apply locally through `0x6127b0`), made where no call runs it
+/// at once: the attack's stand, the idle sit, the approach's stand. A script call runs the setter
+/// inside the call ([`StandSetter`]). States are `UnitStandStateType`: 0 stand, 1 sit, 3 sleep, 8
+/// kneel.
 #[derive(bevy::ecs::message::Message, Clone, Copy, Debug)]
 pub(crate) struct StandStateRequest {
     pub(crate) state: u8,
 }
 
-/// `SMSG_STANDSTATE_UPDATE` for our body (the eat and drink sit, the stand on damage), applied by
-/// [`posture`] through the same local setter with no refusal and no packet back (`0x603e50` →
-/// `0x6127b0`).
+/// A stand state for [`posture`]'s local apply alone, with no refusal and no packet:
+/// `SMSG_STANDSTATE_UPDATE` for our body (the eat and drink sit, the stand on damage, `0x603e50` →
+/// `0x6127b0`), and the apply owed by a change a script call's setter sent (`0x5ed53f`), each
+/// applied in the order it came.
 #[derive(bevy::ecs::message::Message, Clone, Copy, Debug)]
-pub(crate) struct ServerStandState {
+pub(crate) struct StandStateApply {
     pub(crate) state: u8,
 }
 
@@ -313,7 +316,7 @@ impl Plugin for PlayerPlugin {
         )
         // The posture queue (the `/sit` family), which `control` alone executes.
         .add_message::<StandStateRequest>()
-        .add_message::<ServerStandState>()
+        .add_message::<StandStateApply>()
         // Land-here, before `control`, so the frame that applies the teleport takes control back.
         .add_message::<land::LandHere>()
         .add_systems(

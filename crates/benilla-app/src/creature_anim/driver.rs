@@ -721,7 +721,7 @@ pub(super) fn drive_animations(
         // ── Sheath state: the committed cache (`[+0xd40]`), not the descriptor byte, adopting the
         // byte whenever it changes (`0x604c70`). Every SetSheatheState (`0x611cf0`) snaps except
         // the manual toggle's ceremony, which carries the draw/stow sound.
-        let sheath_frame_start = committed.cur;
+        let sheath_frame_start = committed.driven;
         let fields = store.map(|s| &s.0);
         let sheath_byte = fields.and_then(|f| f.unit_sheath_state()).unwrap_or(0);
         // The constructor seeds the state from the byte untested (`0x5fafa0`), once per unit: a
@@ -1419,6 +1419,7 @@ pub(super) fn drive_animations(
                 .entity(entity)
                 .remove::<(super::NockedAmmo, super::NockLatch)>();
         }
+        committed.driven = committed.cur;
         // Translating or swimming un-nocks too, keeping the ammo and the draw: `0x60e480` arm 0
         // (`0x60e4ac call 0x60f530`) runs on MSG_MOVE_START_{FORWARD, BACKWARD, STRAFE_LEFT,
         // STRAFE_RIGHT, SWIM} (181/182/184/185/202); turning and stopping do not. A level test

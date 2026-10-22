@@ -20,12 +20,37 @@ pub(crate) struct CommittedSheath {
     pub(super) cur: Option<u8>,
     /// The last descriptor sheath byte, to detect changes (`0x604c70`).
     pub(super) byte: Option<u8>,
+    /// The state the driver's last pass left, so a change made between its passes, such as a
+    /// script call's, still meets its leave-ranged edge.
+    pub(super) driven: Option<u8>,
 }
 
 impl CommittedSheath {
     /// The client-side sheath state, `None` until driven.
     pub(crate) fn state(&self) -> Option<u8> {
         self.cur
+    }
+
+    /// `SetSheatheState(state, 1, 1)` (`0x611cf0`) made inside a script call, so its packet goes
+    /// out ahead of the rest of the call's: refused for a ranged state the class cannot draw
+    /// (`0x611cff`-`0x611d44`), nothing for the state already committed (`0x611d50`), else
+    /// committed now. The driver snaps the models to it as to any instant change. Returns whether
+    /// it changed, and so whether the active player's `CMSG_SETSHEATHED` is owed (`0x611dbc`). A
+    /// state not yet seeded is the descriptor's byte, as the constructor seeds it (`0x5fafa0`).
+    pub(crate) fn set_now(
+        &mut self,
+        state: u8,
+        fields: Option<&benilla_protocol::ObjectFields>,
+        classes: Option<&benilla_formats::ChrClasses>,
+    ) -> bool {
+        let byte = fields.and_then(|f| f.unit_sheath_state()).unwrap_or(0);
+        let cur = *self.cur.get_or_insert(byte);
+        self.byte.get_or_insert(byte);
+        if setter_refuses(state, fields, classes) || state == cur {
+            return false;
+        }
+        self.cur = Some(state);
+        true
     }
 }
 
