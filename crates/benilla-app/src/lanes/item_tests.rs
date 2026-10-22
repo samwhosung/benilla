@@ -1,13 +1,14 @@
-//! The item watchers' events in the packets' order. A watcher's callback runs inside the notify
-//! pass of the update that moved its field (`0x465570` → `0x4655dc`), so its events fire inside
-//! that packet's handler (`0x537aa0`), in the packets' order (`0x5384d0`): whole before a later
-//! packet's events and after an earlier one's.
+//! The item watchers' and the loot window's events in the packets' order. A watcher's callback
+//! runs inside the notify pass of the update that moved its field (`0x465570` → `0x4655dc`), and
+//! the loot packets' handlers change the window and show the pushes inside them, so the events
+//! fire inside their packet's handler (`0x537aa0`), in the packets' order (`0x5384d0`): whole
+//! before a later packet's events and after an earlier one's.
 
 use benilla_protocol::field::{
     FIELD_ITEM_SPELL_CHARGES, FIELD_ITEM_STACK_COUNT, FIELD_OBJECT_ENTRY,
     FIELD_PLAYER_INV_SLOT_HEAD,
 };
-use benilla_protocol::messages::{ObjectType, ACTION_KIND_ITEM};
+use benilla_protocol::messages::{ItemPushResult, LootItem, ObjectType, ACTION_KIND_ITEM};
 use benilla_protocol::{ObjectFields, SessionEvent};
 use benilla_ui::script::{ActionSlot, UiScript};
 use bevy::prelude::*;
@@ -21,6 +22,10 @@ const HELM_ID: u32 = 7366;
 const POTION: u32 = 118;
 /// An item a trade getter asked for, not cached.
 const SWORD: u32 = 4306;
+/// Linen, not cached.
+const LINEN: u32 = 2589;
+/// A fishing bobber, a loot source the server opens with the latch cold (`0x5eb953`).
+const BOBBER: u64 = 0xF110_0000_0000_0051;
 /// `PLAYER_FIELD_BYTES`, whose byte 1 is the combo count (`0x5ddff0`).
 const PLAYER_FIELD_BYTES: u16 = 188 + 0x1028 / 4;
 
@@ -102,11 +107,16 @@ fn client() -> App {
             Heard = {}
             local f = CreateFrame("Frame")
             for _, e in ipairs({"ACTIONBAR_SLOT_CHANGED", "BAG_UPDATE_COOLDOWN",
-                    "UNIT_INVENTORY_CHANGED", "TRADE_UPDATE", "PLAYER_COMBO_POINTS"}) do
+                    "UNIT_INVENTORY_CHANGED", "TRADE_UPDATE", "PLAYER_COMBO_POINTS",
+                    "LOOT_OPENED", "LOOT_SLOT_CLEARED", "LOOT_CLOSED", "CHAT_MSG_LOOT"}) do
                 f:RegisterEvent(e)
             end
             f:SetScript("OnEvent", function()
-                table.insert(Heard, event .. ":" .. tostring(arg1))
+                if event == "CHAT_MSG_LOOT" then
+                    table.insert(Heard, event)
+                else
+                    table.insert(Heard, event .. ":" .. tostring(arg1))
+                end
             end)
             "#,
         )
@@ -209,5 +219,140 @@ fn a_trade_getters_record_callback_signals_at_the_answer() {
     assert_eq!(
         frame(&mut app, vec![answer(), combo()]),
         ["TRADE_UPDATE:nil", "PLAYER_COMBO_POINTS:nil"]
+    );
+}
+
+/// The bobber as a game object we hold, for the loot response's lookup (`0x5ebb33`).
+fn stream_bobber(app: &mut App) {
+    let world = app.world_mut();
+    let e = world
+        .spawn((
+            crate::net::Guid(BOBBER),
+            crate::net::ObjectStore(
+                ObjectFields::from_pairs(&[(2, 0x21)]).into_created(ObjectType::GameObject),
+            ),
+        ))
+        .id();
+    world
+        .resource_mut::<crate::net::GuidIndex>()
+        .0
+        .insert(BOBBER, e);
+}
+
+/// `SMSG_LOOT_RESPONSE` for the bobber, a fishing window over `rows`.
+fn fished(rows: &[(u8, u32)]) -> SessionEvent {
+    SessionEvent::LootResponse {
+        guid: BOBBER,
+        loot_type: benilla_protocol::messages::loot_type::FISHING,
+        gold: 0,
+        items: rows
+            .iter()
+            .map(|&(slot, item_id)| LootItem {
+                slot,
+                item_id,
+                count: 1,
+                display_info_id: 0,
+                random_property_id: 0,
+                slot_type: benilla_protocol::messages::slot_type::ALLOW_LOOT,
+            })
+            .collect(),
+    }
+}
+
+/// `SMSG_ITEM_PUSH_RESULT` of `entry` for us, shown in chat.
+fn pushed(entry: u32) -> SessionEvent {
+    SessionEvent::ItemPushResult(ItemPushResult {
+        player_guid: ME,
+        from_npc: false,
+        created: false,
+        show_in_chat: true,
+        bag_slot: 0xFF,
+        item_slot: 24,
+        item_entry: entry,
+        suffix_factor: 0,
+        random_property_id: 0,
+        count: 1,
+    })
+}
+
+/// `entry`'s record, as `SMSG_ITEM_QUERY_SINGLE_RESPONSE` answers it.
+fn answered(entry: u32, name: &str) -> SessionEvent {
+    SessionEvent::ItemTemplate {
+        entry,
+        info: Some(Box::new(crate::items::test_template(name))),
+    }
+}
+
+/// A removal's `ClearLootRow` (`0x5ebeb0` → `0x4c1f00`) signals `LOOT_SLOT_CLEARED` inside its
+/// packet, and the response's copier ends with `LOOT_OPENED` inside its own (`0x4c1ea8`).
+#[test]
+fn the_loot_windows_steps_fire_at_their_packets() {
+    let mut app = client();
+    stream_bobber(&mut app);
+    assert_eq!(
+        frame(&mut app, vec![combo(), fished(&[(0, POTION), (1, POTION)])]),
+        ["PLAYER_COMBO_POINTS:nil", "LOOT_OPENED:nil"]
+    );
+    let removed = |slot: u8| SessionEvent::LootRemoved { slot };
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![removed(0), values(ME, &[(PLAYER_FIELD_BYTES, 0)])]
+        ),
+        ["LOOT_SLOT_CLEARED:1", "PLAYER_COMBO_POINTS:nil"]
+    );
+    // The last row's removal empties the window, which closes inside the packet (`0x4c2a70`,
+    // `0x4c1f8d`).
+    assert_eq!(
+        frame(&mut app, vec![combo(), removed(1)]),
+        [
+            "PLAYER_COMBO_POINTS:nil",
+            "LOOT_SLOT_CLEARED:2",
+            "LOOT_CLOSED:nil"
+        ]
+    );
+}
+
+/// A response whose row's record the cache lacks ends its copier inside the record's answer
+/// (`0x4c2ac0`, `0x4c2afc`): behind a packet between the two.
+#[test]
+fn a_copier_waiting_on_a_record_ends_at_the_answer() {
+    let mut app = client();
+    stream_bobber(&mut app);
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![
+                fished(&[(0, LINEN)]),
+                combo(),
+                answered(LINEN, "Linen Cloth")
+            ]
+        ),
+        ["PLAYER_COMBO_POINTS:nil", "LOOT_OPENED:nil"]
+    );
+}
+
+/// `OnItemPush` (`0x491a60`) shows its line inside its packet, and one whose record the cache
+/// lacks inside the record's answer (`0x491ee0`), behind a packet between the two.
+#[test]
+fn an_item_push_shows_at_its_packet_or_its_records_answer() {
+    let mut app = client();
+    assert_eq!(
+        frame(&mut app, vec![combo(), pushed(POTION)]),
+        ["PLAYER_COMBO_POINTS:nil", "CHAT_MSG_LOOT"]
+    );
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![pushed(POTION), values(ME, &[(PLAYER_FIELD_BYTES, 0)])]
+        ),
+        ["CHAT_MSG_LOOT", "PLAYER_COMBO_POINTS:nil"]
+    );
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![pushed(LINEN), combo(), answered(LINEN, "Linen Cloth")]
+        ),
+        ["PLAYER_COMBO_POINTS:nil", "CHAT_MSG_LOOT"]
     );
 }
