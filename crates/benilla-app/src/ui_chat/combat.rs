@@ -1082,13 +1082,15 @@ impl PendingCombat {
 impl PendingCombat {
     /// Fill the names as `GetObjectName 0x6264e0` names an object: a unit by what `name` prints
     /// now ([`logged_name`]), never waiting. Only an item the item cache has not answered holds the
-    /// line (`0x628f40`, `0x629610`, `0x629760`, `0x6298a0` waiting through `0x55ba30`); `false`
-    /// while it holds. A guid of 0 is a name the fills already carry.
+    /// line (`0x628f40`, `0x629610`, `0x629760`, `0x6298a0` waiting through `0x55ba30`), and one it
+    /// refuses drops it: the callback `0x6294b0` asks again without a callback (`0x6294fd`), finds
+    /// no valid record and leaves before the formatter (`0x629504`). A guid of 0 is a name the
+    /// fills already carry.
     pub(crate) fn fill_names(
         &mut self,
         name: impl Fn(u64) -> String,
         item: impl FnOnce(u32) -> ItemName,
-    ) -> bool {
+    ) -> Filled {
         if self.subject != 0 {
             self.fills.attacker = name(self.subject);
         }
@@ -1096,22 +1098,32 @@ impl PendingCombat {
             self.fills.victim = name(self.object);
         }
         match self.named {
-            Named::Ready => true,
+            Named::Ready => Filled::Ready,
             Named::Unit(guid) => {
                 self.fills.named = name(guid);
-                true
+                Filled::Ready
             }
             Named::Item(entry) => match item(entry) {
                 ItemName::Named(text) => {
                     self.fills.named = text;
-                    true
+                    Filled::Ready
                 }
-                // The server answered the item unknown: the line goes out with what the arm left.
-                ItemName::Unknown => true,
-                ItemName::Waiting => false,
+                ItemName::Unknown => Filled::Dropped,
+                ItemName::Waiting => Filled::Waiting,
             },
         }
     }
+}
+
+/// What [`PendingCombat::fill_names`] leaves a line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Filled {
+    /// Every name is in: the line is written.
+    Ready,
+    /// Its item has no answer yet: the line keeps waiting.
+    Waiting,
+    /// Its item was refused: no line, and no word after it.
+    Dropped,
 }
 
 /// What the item cache answers a line waiting on an item's name.

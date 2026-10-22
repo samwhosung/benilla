@@ -737,7 +737,7 @@ fn a_unit_name_never_holds_a_line_and_an_item_name_does() {
     )
     .unwrap();
     let named = |guid: u64| if guid == 1 { "Pat" } else { "Unknown" }.to_string();
-    assert!(line.fill_names(named, |_| ItemName::Waiting));
+    assert_eq!(line.fill_names(named, |_| ItemName::Waiting), Filled::Ready);
     assert_eq!(
         (line.fills.attacker.as_str(), line.fills.victim.as_str()),
         ("Unknown", "Pat")
@@ -747,16 +747,30 @@ fn a_unit_name_never_holds_a_line_and_an_item_name_does() {
         named: Named::Unit(9),
         ..line.clone()
     };
-    assert!(pet.fill_names(|_| "Unknown".into(), |_| ItemName::Waiting));
+    assert_eq!(
+        pet.fill_names(|_| "Unknown".into(), |_| ItemName::Waiting),
+        Filled::Ready
+    );
     assert_eq!(pet.fills.named, "Unknown");
 
     let mut made = PendingCombat {
         named: Named::Item(2589),
         ..line.clone()
     };
-    assert!(!made.fill_names(named, |_| ItemName::Waiting));
-    assert!(made.fill_names(named, |_| ItemName::Named("Linen Cloth".into())));
+    assert_eq!(
+        made.fill_names(named, |_| ItemName::Waiting),
+        Filled::Waiting
+    );
+    assert_eq!(
+        made.fill_names(named, |_| ItemName::Named("Linen Cloth".into())),
+        Filled::Ready
+    );
     assert_eq!(made.fills.named, "Linen Cloth");
+    assert_eq!(
+        made.fill_names(named, |_| ItemName::Unknown),
+        Filled::Dropped,
+        "a refused item (`0x629504`)"
+    );
 }
 
 /// A name nothing holds prints the miss of the getter `0x6264e0` went through: a held unit's

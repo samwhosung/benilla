@@ -1832,10 +1832,11 @@ fn fire_one(
                         None => super::combat::ItemName::Waiting,
                     },
                 );
-                if !ready {
-                    return Some(Pending::Combat(line));
+                match ready {
+                    super::combat::Filled::Waiting => return Some(Pending::Combat(line)),
+                    super::combat::Filled::Dropped => return None,
+                    super::combat::Filled::Ready => write_combat_line(script, windows, &line),
                 }
-                write_combat_line(script, windows, &line);
             }
             Pending::Standing {
                 faction,
