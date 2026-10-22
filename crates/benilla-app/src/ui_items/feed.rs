@@ -859,7 +859,11 @@ fn resolve_slot(
         // The tooltip's unlocked (0x4) and wrapped (0x8) bits.
         fields.item_flags().unwrap_or(0),
         // `0x5da2c0`: soulbound, or carrying a binding enchant, off the raw descriptor.
-        crate::items::already_bound(fields, rolls.enchants),
+        crate::items::already_bound(
+            fields,
+            crate::items::record_flags(items, fields.object_entry().unwrap_or(0), guid),
+            rolls.enchants,
+        ),
         // All seven enchant slots with charges and countdowns: our own items stream whole,
         // where others' carry two slots.
         crate::items::enchant_lines(

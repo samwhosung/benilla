@@ -268,13 +268,28 @@ pub(crate) fn creator_guids(fields: &ObjectFields) -> (u64, u64) {
     )
 }
 
-/// `0x5da2c0`: already bound when `ITEM_FIELD_FLAGS & 1` is set or a live enchant slot names a
-/// binding `SpellItemEnchantment` row (`0x5da300` to `0x5da320`). The enchant cursor's bind
-/// question (gate `0x495d60`) and the tooltip's Soulbound line both read it. It reads the raw
-/// descriptor, not [`enchant_lines`]: Firestone and Orb of Fire both bind and print no line.
-pub(crate) fn already_bound(fields: &ObjectFields, cat: Option<&Enchants>) -> bool {
+/// `0x5da2c0`: already bound when `ITEM_FIELD_FLAGS & 1` is set or, for an item whose record
+/// flags ([`record_flags`]) lack `0x2000` (`0x5da2e3`, a charter's), a live
+/// enchant slot names a binding `SpellItemEnchantment` row (`0x5da300` to `0x5da320`). The enchant
+/// cursor's bind question (gate `0x495d60`) and the tooltip's Soulbound line both read it. It
+/// reads the raw descriptor, not [`enchant_lines`]: Firestone and Orb of Fire both bind and print
+/// no line.
+pub(crate) fn already_bound(
+    fields: &ObjectFields,
+    record_flags: u32,
+    cat: Option<&Enchants>,
+) -> bool {
     fields.item_flags().is_some_and(|f| f & 0x1 != 0)
-        || (0..7).any(|slot| live_enchant(fields, slot, cat).is_some_and(|id| binds(id, cat)))
+        || (record_flags & benilla_protocol::messages::ITEM_FLAG_CHARTER == 0
+            && (0..7).any(|slot| live_enchant(fields, slot, cat).is_some_and(|id| binds(id, cat))))
+}
+
+/// The item record's flags as `0x5da2a0` reads them: the cached template's, 0 while it is not
+/// cached. Only read.
+pub(crate) fn record_flags(items: &Items, entry: u32, guid: u64) -> u32 {
+    items
+        .template(entry, guid, Ask::Read)
+        .map_or(0, |t| t.flags)
 }
 
 /// One enchant slot as the bind checks read it (`0x495eec`): the raw id must be positive (`jl` at
@@ -1201,36 +1216,45 @@ mod tests {
         let cat = catalog();
         let cat = Some(&cat);
         assert!(
-            already_bound(&item(0x1, 0), cat),
+            already_bound(&item(0x1, 0), 0, cat),
             "ITEM_FIELD_FLAGS & 1 — already soulbound"
         );
         assert!(
-            !already_bound(&item(0x0, 0), cat),
+            !already_bound(&item(0x0, 0), 0, cat),
             "no flag, no enchant — the plain BoE"
         );
         assert!(
-            !already_bound(&item(0x8, 0), cat),
+            !already_bound(&item(0x8, 0), 0, cat),
             "a WRAPPED gift is not a bound item — the bit is 0x1, not any bit"
         );
         assert!(
-            already_bound(&item(0x0, 11), cat),
+            already_bound(&item(0x0, 11), 0, cat),
             "a live enchant slot naming a binding row"
         );
         assert!(
-            !already_bound(&item(0x0, 13), cat),
+            !already_bound(&item(0x0, 13), 0, cat),
             "a non-binding enchant leaves the item unbound"
         );
         assert!(
-            !already_bound(&item(0x0, 99), cat),
+            !already_bound(&item(0x0, 99), 0, cat),
             "an id that names no row binds nothing (the reference's `testl` after the table load)"
         );
         assert!(
-            !already_bound(&item(0x0, 11), None),
+            !already_bound(&item(0x0, 11), 0, None),
             "no catalog loaded — the enchant half cannot answer, and does not guess"
+        );
+        let charter = benilla_protocol::messages::ITEM_FLAG_CHARTER;
+        assert!(
+            !already_bound(&item(0x0, 11), charter, cat),
+            "a record flagged 0x2000 skips the enchant leg (0x5da2e3)"
+        );
+        assert!(
+            already_bound(&item(0x1, 11), charter, cat),
+            "but not the instance's own bound bit"
         );
         // The case that pins the design: bound, and no line.
         assert!(
-            already_bound(&item(0x0, 12), cat),
+            already_bound(&item(0x0, 12), 0, cat),
             "the Firestone shape — binds AND hides its line"
         );
         assert!(

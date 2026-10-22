@@ -111,12 +111,13 @@ impl BindGate<'_> {
         let Some(fields) = objects.object(item_guid) else {
             return false;
         };
-        if crate::items::already_bound(fields, self.enchants.as_deref()) {
-            return false;
-        }
-        let Some(entry) = objects.object(item_guid).and_then(|o| o.object_entry()) else {
+        let Some(entry) = fields.object_entry() else {
             return false;
         };
+        let flags = crate::items::record_flags(items, entry, item_guid);
+        if crate::items::already_bound(fields, flags, self.enchants.as_deref()) {
+            return false;
+        }
         let Some(t) = items.template(entry, item_guid, Ask::Read) else {
             return false;
         };
@@ -130,12 +131,13 @@ impl BindGate<'_> {
         let Some(fields) = objects.object(item_guid) else {
             return false;
         };
-        if crate::items::already_bound(fields, self.enchants.as_deref()) {
-            return false;
-        }
-        let Some(entry) = objects.object(item_guid).and_then(|o| o.object_entry()) else {
+        let Some(entry) = fields.object_entry() else {
             return false;
         };
+        let flags = crate::items::record_flags(items, entry, item_guid);
+        if crate::items::already_bound(fields, flags, self.enchants.as_deref()) {
+            return false;
+        }
         items
             .template(entry, item_guid, Ask::Read)
             .is_some_and(|t| t.bonding == BIND_WHEN_USE)

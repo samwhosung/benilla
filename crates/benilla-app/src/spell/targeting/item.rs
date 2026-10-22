@@ -30,6 +30,8 @@ pub(crate) struct ClickedItem {
     /// `ITEM_FIELD_ENCHANTMENT` PERM (0) and TEMP (1); `None` for empty, a negative id, or an id
     /// with no `SpellItemEnchantment` row.
     pub(crate) existing_enchant: [Option<u32>; 2],
+    /// The record's flags (`0x5da2a0`, through the item's `+0x110` vtable at `0x495e05`).
+    pub(crate) record_flags: u32,
 }
 
 /// The enchant the cast would apply, `SpellItemEnchantment[EffectMiscValue]`.
@@ -47,6 +49,8 @@ pub(crate) struct NewEnchant {
 pub(crate) enum ItemBind {
     /// `BindTarget 0x6e5b40`: bind the item and send.
     Bind,
+    /// The silent exit (`0x49605d`): no bind, no popup, no report, the mode kept.
+    Ignore,
     /// `0x6e1a00(spell, 0x0a)`, no packet: the line, `SPELLCAST_FAILED`, and the cursor down.
     Refuse(u8),
     /// Park the guid and fire `BIND_ENCHANT` (event 402, no args); its Yes, `BindEnchant
@@ -60,6 +64,8 @@ pub(crate) enum ItemBind {
 /// `0x495d60`, run at the click, for an `ENCHANT_ITEM` (53) or `ENCHANT_ITEM_TEMPORARY` (54)
 /// effect, in this order:
 ///
+/// 0. The record flag: an item whose record has `0x2000` (vmangos `ITEM_FLAG_CHARTER`) is
+///    [`ItemBind::Ignore`] (`0x495e07`, `0x495e0a`).
 /// 1. The equip gate: with a nonzero `EquippedItemSubClassMask` the class must match and the
 ///    subclass bit be set; with a nonzero `EquippedItemInventoryTypeMask` the InventoryType bit
 ///    must be set. A miss is [`ItemBind::Refuse`], "Invalid target", no packet.
@@ -80,6 +86,9 @@ pub(crate) fn item_bind_verdict(
     let perm = def.effects[0] == benilla_formats::SPELL_EFFECT_ENCHANT_ITEM;
     if !perm && def.effects[0] != benilla_formats::SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY {
         return ItemBind::Bind;
+    }
+    if item.record_flags & benilla_protocol::messages::ITEM_FLAG_CHARTER != 0 {
+        return ItemBind::Ignore;
     }
     if def.equipped_item_subclass_mask != 0 {
         let class_ok = i64::from(item.class) == i64::from(def.equipped_item_class);
@@ -161,8 +170,8 @@ pub(crate) fn pick_item(
 }
 
 /// A confirm popup's Yes on the parked item, inside its call: `BindEnchant 0x48d2e0` re-runs
-/// `0x495d60` confirmed, so it may raise the replace popup next; `ReplaceEnchant 0x48d300` binds
-/// through `0x6e5b40` directly, with no gate re-run.
+/// `0x495d60` confirmed, so it may raise the replace popup next; `ReplaceEnchant 0x48d300` looks
+/// the item up and binds it through `0x6e5b40` directly, with no gate re-run.
 pub(crate) fn confirm_enchant(
     ladder: &mut crate::spell::CastLadder,
     enchants: Option<&crate::items::Enchants>,
@@ -175,6 +184,12 @@ pub(crate) fn confirm_enchant(
             gate_item(ladder, enchants, parked, item_guid, true, answer.may_cast)
         }
         benilla_ui::script::EnchantConfirm::Replace => {
+            // Only an item the object manager still finds binds (`0x48d31c`, `0x48d323`): one
+            // traded, sold or destroyed under the popup leaves the Yes doing nothing.
+            if ladder.objects.object(item_guid).is_none() {
+                debug!("ui_action: replace-enchant on a gone item {item_guid:#x} — nothing done");
+                return None;
+            }
             let (spell_id, commit) = ladder.ground.pending_for(TargetingWants::Item)?;
             if answer.may_cast {
                 debug!(
@@ -286,24 +301,39 @@ fn gate_item(
     let Some((spell_id, commit)) = ladder.ground.pending_for(TargetingWants::Item) else {
         return None; // a click raced a cancel
     };
-    // An unresolved template binds ungated and the server judges.
-    let entry = ladder
-        .objects
-        .object(item_guid)
-        .and_then(|o| o.object_entry());
-    let clicked = match entry {
-        // Only read (`0x495f76`).
-        Some(entry) => ladder
-            .items
-            .template(entry, item_guid, Ask::Read)
-            .map(|t| (t.class, t.subclass, t.inventory_type)),
-        None => None,
+    // The item through the object manager (`0x495d95`) and the pending spell's record
+    // (`0x495da7`-`0x495dce`): either missing returns with no report and no bind.
+    let Some(fields) = ladder.objects.object(item_guid) else {
+        debug!("ui_action: item pick — no object for item {item_guid:#x}; nothing done");
+        return None;
     };
-    let def = ladder
+    let Some(def) = ladder
         .spells
         .as_deref()
-        .and_then(|s| s.catalog.get(spell_id));
-    let (Some(def), Some((class, subclass, inventory_type))) = (def, clicked) else {
+        .and_then(|s| s.catalog.get(spell_id))
+    else {
+        debug!("ui_action: item pick — no record for spell {spell_id}; nothing done");
+        return None;
+    };
+    // The record's type fields and flags, only read (`0x495f76`); an uncached record binds
+    // ungated and the server judges.
+    let clicked = fields
+        .object_entry()
+        .and_then(|entry| ladder.items.template(entry, item_guid, Ask::Read))
+        .map(|t| {
+            let flags = t.flags;
+            ClickedItem {
+                class: t.class,
+                subclass: t.subclass,
+                inventory_type: t.inventory_type,
+                record_flags: flags,
+                // `0x5da2c0`, the same predicate as the tooltip's Soulbound line.
+                already_bound: crate::items::already_bound(fields, flags, enchants),
+                existing_enchant: [0u8, 1]
+                    .map(|slot| crate::items::live_enchant(fields, slot, enchants)),
+            }
+        });
+    let Some(item) = clicked else {
         debug!("ui_action: item pick — cast {spell_id} at item {item_guid:#x} (ungated)");
         if may_cast {
             ladder.commit_targeted(
@@ -313,16 +343,6 @@ fn gate_item(
             );
         }
         return None;
-    };
-    let fields = ladder.objects.object(item_guid);
-    let item = ClickedItem {
-        class,
-        subclass,
-        inventory_type,
-        // `0x5da2c0`, the same predicate as the tooltip's Soulbound line.
-        already_bound: fields.is_some_and(|f| crate::items::already_bound(f, enchants)),
-        existing_enchant: [0u8, 1]
-            .map(|slot| fields.and_then(|f| crate::items::live_enchant(f, slot, enchants))),
     };
     // `EffectMiscValue` is signed; the reference rejects a negative one before the row lookup.
     let new = u32::try_from(def.effect_misc_value[0])
@@ -360,6 +380,10 @@ fn gate_item(
                 new: name(new),
             })
         }
+        ItemBind::Ignore => {
+            debug!("ui_action: item pick — cast {spell_id} ignores flagged item {item_guid:#x}");
+            None
+        }
         ItemBind::Bind if !may_cast => {
             debug!("ui_action: item pick — cast {spell_id} refused by the protected-action gate");
             None
@@ -385,11 +409,11 @@ mod tests {
     const ENTRY: u32 = 777;
     const SPELL: u32 = 5555;
 
-    /// A world with one carried item (`template` gives it a cached template and the spell a
-    /// record, so the pick takes the verdict arm; without them it takes the ungated one), a VM
-    /// whose bag shows it, and a spell awaiting an item.
+    /// A world with one carried item (`template` gives it a cached template, so the pick takes
+    /// the verdict arm; without it the ungated one), a VM whose bag shows it, and a spell with a
+    /// record awaiting an item.
     fn item_targeting(template: bool) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
-        item_targeting_with(template, template)
+        item_targeting_with(template, true)
     }
 
     /// [`item_targeting`] with the item's template and the spell's record each present or not.

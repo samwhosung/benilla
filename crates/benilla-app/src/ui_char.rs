@@ -420,7 +420,11 @@ fn slot_view(
     let flags = obj.item_flags().unwrap_or(0);
     // Soulbound or carrying a binding enchant (`0x5da2c0`), read off the raw descriptor, never off
     // the enchant lines below.
-    let already_bound = crate::items::already_bound(obj, rolls.enchants);
+    let already_bound = crate::items::already_bound(
+        obj,
+        crate::items::record_flags(items, entry, guid),
+        rolls.enchants,
+    );
     // Only read: the tooltip build asks the creator (`crate::ui_items::feed::ask_item_build_lookups`).
     let creator = obj
         .item_creator()
