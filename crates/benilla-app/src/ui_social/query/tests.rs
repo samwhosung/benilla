@@ -151,8 +151,8 @@ fn name_and_guild_take_the_text_after_their_tag() {
     assert_eq!(sent("N-bob n-al").name, b"al");
     // `SStrCopy` into 48 bytes (`0x5aed0a`, `0x5aed49`): 47 kept.
     let long = "x".repeat(60);
-    assert_eq!(sent(&format!("n-{long}")).name, long[..47].as_bytes());
-    assert_eq!(sent(&format!("g-{long}")).guild, long[..47].as_bytes());
+    assert_eq!(sent(&format!("n-{long}")).name, &long.as_bytes()[..47]);
+    assert_eq!(sent(&format!("g-{long}")).guild, &long.as_bytes()[..47]);
 }
 
 /// Only the five localized tags are tags; any other token is kept whole as a term.
