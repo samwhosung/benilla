@@ -964,13 +964,19 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
             sc.items.wait_for_entry(guid, new);
         }
     }
+    // The aura watcher's one call (`0x604d00`), on a unit whose fields 47 to 100 moved.
+    let mut aura_call = matches!(kind, ObjectType::Unit | ObjectType::Player)
+        .then(|| crate::net::aura_watch_span(fields, block.edges()))
+        .flatten()
+        .map(|(old, new)| (old, new, fields.unit_health().unwrap_or(0)));
     // The edges, the runs and the notices in the watchers' one walk, each stamped where it is
     // written.
     for step in crate::field_watch::in_watch_order(&block, placed, runs) {
         match step {
             crate::field_watch::Step::Edge { index, old, new } => {
+                let at = crate::lanes::stamp();
                 sc.field_changes.write(FieldChanged {
-                    at: crate::lanes::stamp(),
+                    at,
                     entity: e,
                     guid,
                     kind,
@@ -978,6 +984,19 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
                     old,
                     new,
                 });
+                // The watcher runs at its range's place, where its first edge is written.
+                if crate::net::in_aura_watch(index) {
+                    if let Some((old, new, health)) = aura_call.take() {
+                        sc.aura_watch.write(crate::net::AuraFieldsChanged {
+                            at,
+                            entity: e,
+                            guid,
+                            old,
+                            new,
+                            health,
+                        });
+                    }
+                }
             }
             crate::field_watch::Step::Notice(n) => sc.field_notices.write(n),
             crate::field_watch::Step::Item(run) => sc.item_lane.push(run),

@@ -83,6 +83,8 @@ pub(crate) struct Scene<'w, 's> {
     riders: Query<'w, 's, &'static mut crate::transport::TransportRider>,
     speeds: Query<'w, 's, &'static mut UnitSpeeds>,
     field_changes: MessageWriter<'w, FieldChanged>,
+    /// The aura watcher's calls ([`super::AuraFieldsChanged`]), one per block.
+    aura_watch: MessageWriter<'w, super::AuraFieldsChanged>,
     /// The item watchers' runs ([`crate::item_lane`]).
     item_lane: ResMut<'w, crate::item_lane::ItemLane>,
     /// The bag cache `0xbdd060` the bag seats' runs rescan and the bag events number from.
