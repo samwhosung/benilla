@@ -152,14 +152,18 @@ fn next_code_point(copy: &[u8], at: usize) -> (u32, usize) {
     (point, more + 1)
 }
 
-/// `iswspace` (`0x74006f`) of a code point's low 16 bits: tab to carriage return and the space
-/// from the C table below `0x100`, which has no bit from `0x80` on (so not `U+00A0`), and the
-/// system's space class above it (`GetStringTypeW` through `0x413ed3`), here Unicode's
-/// `White_Space`; `0xffff` is none.
+/// `iswspace` (`0x74006f`) of a code point's low 16 bits: `_iswctype` (`0x7458e4`) answers 0 for
+/// `0xffff`, reads the C table `_pwctype` (`0x831720`) below `0x100`, where only tab to carriage
+/// return and the space carry `_SPACE` (so not `U+00A0`), and above it asks
+/// `___crtGetStringTypeW` (`0x413ed3`), which calls `GetStringTypeW(CT_CTYPE1, &unit, 1, &type)`
+/// through `0x8824a0` and tests `C1_SPACE`.
 fn is_space(c: u32) -> bool {
     match c as u16 {
         0xffff => false,
         w @ 0..=0xff => matches!(w, 0x09..=0x0d | 0x20),
+        // Deviation: `C1_SPACE` from `GetStringTypeW` is the Windows system's own table, which
+        // no file of the client holds; benilla answers Unicode's `White_Space` for those units,
+        // and nothing for a lone surrogate.
         w => char::from_u32(u32::from(w)).is_some_and(char::is_whitespace),
     }
 }
