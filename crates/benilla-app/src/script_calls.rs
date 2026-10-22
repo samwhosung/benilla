@@ -211,12 +211,11 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 .confirm_bind_on_use(script, may_cast),
             ScriptCall::Item(call) => appliers.p5().p0().p1().apply(script, call),
             ScriptCall::CastPetSpell { spell_id, on_self } => {
-                let send =
-                    crate::ui_pet_book::begin_pet_book_cast(
-                        &mut appliers.p6().p0(),
-                        spell_id,
-                        on_self,
-                    );
+                let send = crate::ui_pet_book::begin_pet_book_cast(
+                    &mut appliers.p6().p0(),
+                    spell_id,
+                    on_self,
+                );
                 if let Some(send) = send {
                     // `GetTargetingSpellId 0x6e48e0` is this spell: the press lowers the cursor
                     // and sends nothing (`0x4b3474`-`0x4b347d`).

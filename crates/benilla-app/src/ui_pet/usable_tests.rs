@@ -2,7 +2,6 @@
 //! its exits alone must grey `GetPetActionsUsable`, and must stop a press, an order, both autocast
 //! toggles and the drag's writes, while a pet that trips none of them takes all of it as before.
 
-use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 
 use benilla_protocol::messages::{
