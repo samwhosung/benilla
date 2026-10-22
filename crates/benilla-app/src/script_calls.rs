@@ -206,7 +206,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 let check = call == benilla_ui::script::TradeCall::TargetEnchant;
                 appliers.p1().trade_enchant(script, partner, check);
             }
-            ScriptCall::Trade(call) => appliers.p4().p6().apply(script, call),
+            ScriptCall::Trade(call) => tail = appliers.p4().p6().apply(call),
         }
         // A selection this call made with the targeting cursor up was handed to the cast
         // (`SelectTarget`, `0x4935d5`) and is bound now, before the next call reads either.

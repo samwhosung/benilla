@@ -381,9 +381,11 @@ fn slot_click_routes_player_to_clear_and_recipient_to_inert() {
     s.run("TradePlayerItem1ItemButton:Click()").unwrap();
     assert_eq!(s.cursor_item().map(|i| i.slot), Some(1), "the item is back");
     s.run("ClearCursor()").unwrap();
-    assert_eq!(
-        s.take_trade_calls(),
-        [TradeCall::ClearItem(0)],
+    assert!(
+        matches!(
+            s.take_trade_calls()[..],
+            [TradeCall::ClearItem { slot: 0, .. }]
+        ),
         "clicking our filled slot clears it (ClickTradeButton)"
     );
 

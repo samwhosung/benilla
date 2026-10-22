@@ -1001,11 +1001,11 @@ pub(crate) struct Model {
     pub(crate) trade_close: bool,
     /// The close core's done flag `[0xb71748]`, which `CloseTrade` tests (`0x4bfdc0`).
     pub(crate) trade_done: bool,
-    /// The host refused the set send the applying `0x4bfa70` made ([`super::TradeCall::SetItem`]).
-    pub(crate) trade_send_refused: bool,
-    /// Both accept flags, ours first, when the host's [`super::TradeCall::Accept`] moved ours:
-    /// the verb signals them before it sends (`0x4bf260`, `0x4bf26d`).
-    pub(crate) trade_accept_moved: Option<(bool, bool)>,
+    /// The placements whose send the host has yet to answer, by the id their call carries
+    /// ([`super::TradeCall::SetItem`]): what `0x4bfa70` writes and its caller does once it knows.
+    pub(crate) trade_placing: std::collections::HashMap<u64, super::trade::Placing>,
+    /// The last id handed to a placement.
+    pub(crate) trade_place_seq: u64,
     /// The item each of our trade slots holds, as the client's own table records it at the click
     /// (`[0xb716d0]`, written by `0x4bfa70`): the item a later click puts back on the cursor, and
     /// one the client keeps locked until the trade closes (`0x4bfcf0` unlocks them and leaves the
@@ -1787,8 +1787,8 @@ impl Model {
             trade_record_asks: Vec::new(),
             trade_close: false,
             trade_done: false,
-            trade_send_refused: false,
-            trade_accept_moved: None,
+            trade_placing: std::collections::HashMap::new(),
+            trade_place_seq: 0,
             trade_offered: Default::default(),
             quest: None,
             quest_pool_levels: Default::default(),

@@ -74,9 +74,9 @@ pub enum TradeCall {
     /// (`0x48a18a`). Nothing tests the target.
     Initiate(u64),
     /// `AcceptTrade()` (`0x4c06e0`) with `true`, `CancelTradeAccept()` (`0x4c06f0`) with `false`:
-    /// `0x4bf230(flag)`'s store (`0x4bf25a`). A flag that moved is reported back
-    /// ([`UiScript::trade_accept_moved`]); the verb then signals `TRADE_ACCEPT_UPDATE`
-    /// (`0x4bf260`) and makes [`Self::SendAccept`] (`0x4bf26d`, `0x4bf272`).
+    /// `0x4bf230(flag)`'s store (`0x4bf25a`). A flag that moved finishes in the host's tail
+    /// ([`UiScript::finish_trade_accept`]): `TRADE_ACCEPT_UPDATE` (`0x4bf260`), then
+    /// [`Self::SendAccept`] (`0x4bf26d`, `0x4bf272`).
     Accept(bool),
     /// `0x4bf230`'s send, after its signal: `CMSG_ACCEPT_TRADE` (`0x5d4230`) for `true`,
     /// `CMSG_UNACCEPT_TRADE` (`0x5d42a0`) for `false`.
@@ -89,16 +89,19 @@ pub enum TradeCall {
     /// with the new offer, counted as an own edit.
     Gold(u32),
     /// `0x4bfa70`'s set: `CMSG_SET_TRADE_ITEM` (`0x5d4380`) for our 0-based `slot`, which refuses
-    /// with no active player or no object for `guid` (`0x5d43af`, `0x5d43da`); a refusal is
-    /// reported back ([`UiScript::refuse_trade_send`]) and the slot is not written.
+    /// with no active player or no object for `guid` (`0x5d43af`, `0x5d43da`). The host hands the
+    /// answer to [`UiScript::finish_trade_placement`] with `place`, in its tail, wherever the call
+    /// applies: a refusal writes nothing (`0x4bfab3`).
     SetItem {
         slot: u8,
         guid: u64,
         bag: i64,
         bag_slot: u32,
+        place: u64,
     },
-    /// `0x4bfa70`'s clear: `CMSG_CLEAR_TRADE_ITEM` (`0x5d4480`) for our 0-based slot.
-    ClearItem(u8),
+    /// `0x4bfa70`'s clear: `CMSG_CLEAR_TRADE_ITEM` (`0x5d4480`) for our 0-based `slot`, its answer
+    /// ignored (`0x4bfa95`); finished as [`Self::SetItem`] is.
+    ClearItem { slot: u8, place: u64 },
     /// `ClickTargetTradeButton(7)` with no coins held (`0x4c00dd`): the enchant clash check
     /// `0x496170` on the partner's slot 7.
     TargetEnchant,
@@ -167,16 +170,33 @@ impl super::UiScript {
         self.model_mut().trade_done = done;
     }
 
-    /// The host's answer to a [`TradeCall::SetItem`] whose send refused: `0x4bfa70` returns 0
-    /// (`0x4bfab3`) and writes nothing.
-    pub fn refuse_trade_send(&mut self) {
-        self.model_mut().trade_send_refused = true;
+    /// The rest of the placement `place` once its send has answered `sent`, run in the host's
+    /// tail: `0x4bfa70` writes our slot and signals it only past a set that went (`0x4bfab1`) or
+    /// after any clear (`0x4bfa95`), then its caller goes on with the answer: the slot click
+    /// puts the slot's old item on the cursor, lifting the lock only when nothing went
+    /// (`0x4c004a`-`0x4c0064`), and `0x4bfc50` clears the cursor keeping the lock only when it
+    /// went (`0x4bfcd4`).
+    pub fn finish_trade_placement(&mut self, place: u64, sent: bool) {
+        finish_placement(&self.lua, place, sent);
     }
 
-    /// The host's answer to a [`TradeCall::Accept`] that moved our flag: both flags, ours first,
-    /// for the verb's `TRADE_ACCEPT_UPDATE` (`0x4bf24e`).
-    pub fn trade_accept_moved(&mut self, mine: bool, theirs: bool) {
-        self.model_mut().trade_accept_moved = Some((mine, theirs));
+    /// The rest of `0x4bf230(flag)` once its store moved our flag, run in the host's tail: the
+    /// signal with both flags, ours first, in place (`0x4bf24e`-`0x4bf260`), then the send
+    /// (`0x4bf26d`, `0x4bf272`), whose call applies inside the tail.
+    pub fn finish_trade_accept(&mut self, flag: bool, mine: bool, theirs: bool) {
+        let lua = self.lua.clone();
+        super::tick::verb(&lua, |model| {
+            model.raise(
+                "TRADE_ACCEPT_UPDATE",
+                vec![
+                    super::ScriptValue::Int(i64::from(mine)),
+                    super::ScriptValue::Int(i64::from(theirs)),
+                ],
+            )
+        });
+        if let Err(e) = submit(&lua, TradeCall::SendAccept(flag)) {
+            self.model_mut().record_lua_error(&e);
+        }
     }
 
     /// `TRADE_REPLACE_ENCHANT` with the enchant already on the partner's slot 7 and the one the
@@ -275,12 +295,7 @@ impl super::UiScript {
         let Some((slot, item)) = pick else {
             return Ok(());
         };
-        if place_in_slot(&self.lua, slot, Some(item))? {
-            super::tick::verb(&self.lua, |model| {
-                cursor::clear(model, cursor::Clear::KEEP_LOCK)
-            });
-        }
-        Ok(())
+        place(&self.lua, slot, Some(item), AfterPlace::Offer)
     }
 
     /// The world click's refusal of the held item before its trade leg (`0x4926bc`-`0x49271f`): a
@@ -549,77 +564,120 @@ fn click_trade_button(lua: &Lua, id: i32) -> mlua::Result<()> {
         return Ok(());
     }
     // `0x4bfa70`: a slot outside the seven sends nothing.
-    let sent = match index {
-        Some(i) => place_in_slot(lua, i, held)?,
-        None => false,
-    };
-    cursor::set_cursor(lua, !sent, |_| old.map(CursorPayload::Item));
-    Ok(())
+    match index {
+        Some(i) => place(lua, i, held, AfterPlace::Click { old }),
+        None => {
+            cursor::set_cursor(lua, true, |_| old.map(CursorPayload::Item));
+            Ok(())
+        }
+    }
+}
+
+/// What `0x4bfa70`'s caller does once the send has answered.
+#[derive(Clone, Debug)]
+pub(crate) enum AfterPlace {
+    /// `ClickTradeButton`: the slot's old item back on the cursor (`0x4c004a`-`0x4c0064`).
+    Click { old: Option<cursor::CursorItem> },
+    /// `0x4bfc50`: the cursor cleared keeping the lock, on success only (`0x4bfcd4`).
+    Offer,
+}
+
+/// A placement waiting for its send's answer ([`Model::trade_placing`]).
+#[derive(Clone, Debug)]
+pub(crate) struct Placing {
+    slot: usize,
+    held: Option<cursor::CursorItem>,
+    then: AfterPlace,
 }
 
 /// `0x4bfa70` on our 0-based slot `i`: the send first, `CMSG_SET_TRADE_ITEM` for `held` or
-/// `CMSG_CLEAR_TRADE_ITEM` for none, inside its call; a set that refused returns 0 (`0x4bfab3`)
-/// and writes nothing, while the clear's answer is ignored (`0x4bfa95`). Then the table keeps the
-/// item whole (what comes back is the stack) and the slot signals (`0x4bfac1`-`0x4bfaef`).
-fn place_in_slot(lua: &Lua, i: usize, held: Option<cursor::CursorItem>) -> mlua::Result<bool> {
-    lua.app_data_mut::<Model>()
-        .expect("model app_data")
-        .trade_send_refused = false;
-    match &held {
-        Some(item) => submit(
-            lua,
-            TradeCall::SetItem {
-                slot: i as u8,
-                guid: item.guid,
-                bag: item.bag,
-                bag_slot: item.slot,
+/// `CMSG_CLEAR_TRADE_ITEM` for none, as a call; the write, the signal and `then` wait for the
+/// host's answer ([`finish_placement`]), so they follow it wherever the call applies. A harness
+/// with no host keeps the call and takes the send as gone.
+fn place(
+    lua: &Lua,
+    i: usize,
+    held: Option<cursor::CursorItem>,
+    then: AfterPlace,
+) -> mlua::Result<()> {
+    let kept = !super::host::open(lua);
+    let id = {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        model.trade_place_seq += 1;
+        let id = model.trade_place_seq;
+        model.trade_placing.insert(
+            id,
+            Placing {
+                slot: i,
+                held: held.clone(),
+                then,
             },
-        )?,
-        None => submit(lua, TradeCall::ClearItem(i as u8))?,
-    }
-    let refused = std::mem::take(
-        &mut lua
-            .app_data_mut::<Model>()
+        );
+        id
+    };
+    let call = match &held {
+        Some(item) => TradeCall::SetItem {
+            slot: i as u8,
+            guid: item.guid,
+            bag: item.bag,
+            bag_slot: item.slot,
+            place: id,
+        },
+        None => TradeCall::ClearItem {
+            slot: i as u8,
+            place: id,
+        },
+    };
+    if let Err(e) = submit(lua, call) {
+        lua.app_data_mut::<Model>()
             .expect("model app_data")
-            .trade_send_refused,
-    );
-    if refused {
-        return Ok(false);
+            .trade_placing
+            .remove(&id);
+        return Err(e);
     }
-    super::tick::verb(lua, |model| {
-        let placed = held.as_ref().map(|item| trade_slot_item(model, item));
-        model.trade_offered[i] = held.map(|item| cursor::CursorItem {
-            count: None,
-            ..item
-        });
-        write_player_slot(model, i, placed);
-    });
-    Ok(true)
+    if kept {
+        finish_placement(lua, id, true);
+    }
+    Ok(())
 }
 
-/// `0x4bf230(flag)`: the store (the host's [`TradeCall::Accept`]); a flag that moved signals
-/// `TRADE_ACCEPT_UPDATE` with both flags, ours first, in place (`0x4bf260`), then sends
-/// (`0x4bf26d`). An unchanged flag does nothing (`0x4bf247`).
-fn set_accept(lua: &Lua, flag: bool) -> mlua::Result<()> {
-    submit(lua, TradeCall::Accept(flag))?;
-    let moved = lua
+/// [`UiScript::finish_trade_placement`].
+fn finish_placement(lua: &Lua, place: u64, sent: bool) {
+    let placing = lua
         .app_data_mut::<Model>()
         .expect("model app_data")
-        .trade_accept_moved
-        .take();
-    let Some((mine, theirs)) = moved else {
-        return Ok(());
+        .trade_placing
+        .remove(&place);
+    let Some(Placing { slot, held, then }) = placing else {
+        return;
     };
-    super::tick::verb(lua, |model| {
-        model.raise(
-            "TRADE_ACCEPT_UPDATE",
-            vec![
-                super::ScriptValue::Int(i64::from(mine)),
-                super::ScriptValue::Int(i64::from(theirs)),
-            ],
-        )
-    });
-    submit(lua, TradeCall::SendAccept(flag))
+    let wrote = sent || held.is_none();
+    if wrote {
+        super::tick::verb(lua, |model| {
+            let placed = held.as_ref().map(|item| trade_slot_item(model, item));
+            model.trade_offered[slot] = held.map(|item| cursor::CursorItem {
+                count: None,
+                ..item
+            });
+            write_player_slot(model, slot, placed);
+        });
+    }
+    match then {
+        AfterPlace::Click { old } => {
+            cursor::set_cursor(lua, !wrote, |_| old.map(CursorPayload::Item));
+        }
+        AfterPlace::Offer if wrote => {
+            super::tick::verb(lua, |model| cursor::clear(model, cursor::Clear::KEEP_LOCK));
+        }
+        AfterPlace::Offer => {}
+    }
+}
+
+/// `0x4bf230(flag)`: the store, the host's [`TradeCall::Accept`], whose tail signals and sends
+/// when the flag moved ([`UiScript::finish_trade_accept`]). An unchanged flag does nothing
+/// (`0x4bf247`).
+fn set_accept(lua: &Lua, flag: bool) -> mlua::Result<()> {
+    submit(lua, TradeCall::Accept(flag))
 }
 
 /// The bag record behind a held item, as the reference reads its object: `(bound, bonding,
@@ -1038,7 +1096,7 @@ mod tests {
     /// The 1-based slots the calls kept clearing since the last read.
     fn clears(s: &mut UiScript) -> Vec<u32> {
         s.take_calls_where(|c| match c {
-            crate::script::ScriptCall::Trade(TradeCall::ClearItem(slot)) => {
+            crate::script::ScriptCall::Trade(TradeCall::ClearItem { slot, .. }) => {
                 Some(u32::from(*slot) + 1)
             }
             _ => None,
