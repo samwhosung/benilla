@@ -17,8 +17,9 @@
 //! The watches here: the unit-field bridge `0x51bbb0` on every unit with token flags; the unit
 //! type watchers `0x6041f0` and the player type watchers `0x5e2510` whose callbacks signal; the
 //! active player's `0x5de4b0`, rest-state and charmed-by watches registered in `0x5dd8a0`, its
-//! skill watches `0x5de180` and `0x5de470`, its ammunition watch `0x4c70b0`, and the weapon arms
-//! of the visible-item watch `0x5e2810`. The item watchers' signals are [`crate::item_watch`]'s.
+//! skill watches `0x5de180`, `0x5de450` and `0x5de470`, its ammunition watch `0x4c70b0`, and the
+//! weapon arms of the visible-item watch `0x5e2810`. The item watchers' signals are
+//! [`crate::item_watch`]'s.
 
 use benilla_protocol::messages::ObjectType;
 use benilla_protocol::{ObjectFields, OwnerFallback};
@@ -309,10 +310,12 @@ const PLAYER_EVENT_WATCHES: [(u16, u16, u16); 11] = [
 const REST_STATE: u16 = 0x1b;
 
 /// The skill block: entry `k` at `0x848 + 12k` of the player section, 128 entries (`0x5dda54` to
-/// `0x5ddaf0`). The value watch covers the value word at `+4` and the temporary-bonus watch the
-/// word at `+8`, two bytes each.
+/// `0x5ddaf0`). Each entry's four watches cover two bytes each: the value at `+4`, the maximum at
+/// `+6`, the temporary bonus at `+8` and the permanent bonus at `+0xa`.
 const SKILL_VALUE: u16 = 0x84c;
+const SKILL_MAX: u16 = 0x84e;
 const SKILL_TEMP_BONUS: u16 = 0x850;
+const SKILL_PERM_BONUS: u16 = 0x852;
 const SKILL_STRIDE: u16 = 12;
 const SKILLS: u16 = 128;
 
@@ -839,17 +842,29 @@ pub(crate) fn placed_values(
             let id = id::UNIT_INVENTORY_CHANGED;
             pass.push(at, FieldNotice::Player { id });
         }
+        // Each entry's watches in their registration order (`0x5dda6c`, `0x5dda8e`, `0x5ddaaf`,
+        // `0x5ddad1`), the order they run in at one field.
         for k in 0..SKILLS {
-            let value = SKILL_VALUE + SKILL_STRIDE * k;
-            if let Some(at) = at(PLAYER_SECTION, (value, 2), List::Object) {
+            let entry = SKILL_STRIDE * k;
+            if let Some(at) = at(PLAYER_SECTION, (SKILL_VALUE + entry, 2), List::Object) {
+                // `0x5de180`: past its gate, `0x5ed990` (`0x5de214`), then the rebuild
+                // (`0x5de2a7`) and the line.
                 let (old, _) = block.edge(at.0).unwrap_or_default();
-                if skill_value_signals(fields, k, old) {
+                if let Some(notice) = skill_value_notice(fields, k, old) {
                     pass.push(at, FieldNotice::CombatSkill);
+                    pass.push(at, notice);
                 }
             }
-            let bonus = SKILL_TEMP_BONUS + SKILL_STRIDE * k;
-            if let Some(at) = at(PLAYER_SECTION, (bonus, 2), List::Object) {
+            // `0x5de450` on the maximum and the permanent bonus: the rebuild (`0x5de45c`).
+            for half in [SKILL_MAX, SKILL_PERM_BONUS] {
+                if let Some(at) = at(PLAYER_SECTION, (half + entry, 2), List::Object) {
+                    pass.push(at, FieldNotice::SkillLines);
+                }
+            }
+            // `0x5de470`: `0x5ed990` (`0x5de495`), then the rebuild (`0x5de49a`).
+            if let Some(at) = at(PLAYER_SECTION, (SKILL_TEMP_BONUS + entry, 2), List::Object) {
                 pass.push(at, FieldNotice::CombatSkill);
+                pass.push(at, FieldNotice::SkillLines);
             }
         }
         for slot in WEAPON_SLOTS {
@@ -865,18 +880,21 @@ pub(crate) fn placed_values(
 /// `0x5de180`'s gate ahead of its `0x5ed990` call: the new shown value, the value plus the
 /// permanent bonus when the value is above 0 (`0x5de1f8`, `0x5de207`), against the old value word
 /// the watch passes (`0x5de18f`), equal skipping to the end (`0x5de20c`). `old` is the value's
-/// whole dword before the block.
-fn skill_value_signals(fields: &ObjectFields, k: u16, old: u32) -> bool {
-    let Some(slot) = fields.player_skill(k as u8) else {
-        return true;
+/// whole dword before the block. Past the gate, the watch's rebuild and line, for the slot's
+/// skill.
+fn skill_value_notice(fields: &ObjectFields, k: u16, old: u32) -> Option<FieldNotice> {
+    let old = (old & 0xffff) as u16;
+    let slot = fields.player_skill(k as u8);
+    let value = slot.map_or(0, |s| u32::from(s.value));
+    let shown = match value {
+        0 => 0,
+        v => v + slot.map_or(0, |s| u32::from(s.perm_bonus as u16)),
     };
-    let value = u32::from(slot.value);
-    let shown = if value > 0 {
-        value + u32::from(slot.perm_bonus as u16)
-    } else {
-        0
-    };
-    shown != old & 0xffff
+    (shown != u32::from(old)).then(|| FieldNotice::SkillValue {
+        skill_id: slot.map_or(0, |s| s.skill_id),
+        old,
+        shown,
+    })
 }
 
 /// `RefreshReaction`'s sweep for the active player `me` (`0x468380` with `0x606f20`) over the held
@@ -1109,9 +1127,15 @@ mod tests {
     }
 
     /// The value watch signals when the shown value differs from the old value word; the
-    /// temporary-bonus watch on any change; the maximum and permanent bonus run neither.
+    /// temporary-bonus watch on any change; the maximum and permanent bonus only rebuild.
     #[test]
     fn the_skill_watches_reach_the_combat_signals() {
+        let combat = |notices: Vec<FieldNotice>| {
+            notices
+                .into_iter()
+                .filter(|n| *n == FieldNotice::CombatSkill)
+                .collect::<Vec<_>>()
+        };
         let mut me = player();
         let value = pf(SKILL_VALUE);
         let bonus = pf(SKILL_TEMP_BONUS);
@@ -1123,21 +1147,21 @@ mod tests {
             &[(value - 1, 95), (value, (300 << 16) | 1)],
         );
         assert_eq!(
-            block(&mut me, Some(ME), ME, &[(value, (300 << 16) | 2)]),
+            combat(block(&mut me, Some(ME), ME, &[(value, (300 << 16) | 2)])),
             [FieldNotice::CombatSkill]
         );
-        // The maximum alone (`0x5de450`), and the permanent bonus alone, signal nothing.
-        assert!(block(&mut me, Some(ME), ME, &[(value, (305 << 16) | 2)]).is_empty());
-        assert!(block(&mut me, Some(ME), ME, &[(bonus, 5 << 16)]).is_empty());
+        // The maximum alone (`0x5de450`), and the permanent bonus alone, signal none.
+        assert!(combat(block(&mut me, Some(ME), ME, &[(value, (305 << 16) | 2)])).is_empty());
+        assert!(combat(block(&mut me, Some(ME), ME, &[(bonus, 5 << 16)])).is_empty());
         // The temporary bonus, in entry 1.
         assert_eq!(
-            block(&mut me, Some(ME), ME, &[(bonus + 3, 10)]),
+            combat(block(&mut me, Some(ME), ME, &[(bonus + 3, 10)])),
             [FieldNotice::CombatSkill]
         );
         // With a permanent bonus of 5: a value of 2 → 7 shows 12 against the old word 2, and a
         // drop of exactly the bonus, 7 → 2, shows 7, the old word itself, so the gate skips it.
         assert_eq!(
-            block(&mut me, Some(ME), ME, &[(value, (305 << 16) | 7)]),
+            combat(block(&mut me, Some(ME), ME, &[(value, (305 << 16) | 7)])),
             [FieldNotice::CombatSkill]
         );
         assert!(block(&mut me, Some(ME), ME, &[(value, (305 << 16) | 2)]).is_empty());

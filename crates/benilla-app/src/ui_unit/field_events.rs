@@ -8,6 +8,7 @@
 use bevy::prelude::*;
 
 use benilla_ui::script::{ScriptValue, UiScript};
+use benilla_ui::strings::Arg;
 
 use crate::field_watch::{FieldNotice, NoticeLane};
 use crate::lanes::Until;
@@ -31,6 +32,9 @@ pub(crate) struct NoticeFiring<'w, 's> {
     tutorials: Option<Res<'w, crate::tutorial::Tutorials>>,
     // The form table the bonus bar's offset reads (`0x4e4fc0`).
     spells: Option<Res<'w, crate::ui_action::Spells>>,
+    // The skill value watch's line reads the line's name and race-class row (`0x5de2f2`,
+    // `0x5de340`).
+    skill_lines: Option<Res<'w, crate::ui_spellbook::SkillLines>>,
 }
 
 impl NoticeFiring<'_, '_> {
@@ -54,6 +58,20 @@ impl NoticeFiring<'_, '_> {
             drunk(script, &mut self.sink, &self.names, guid, old, new);
             return;
         }
+        if notice == FieldNotice::SkillLines {
+            script.rebuild_skills();
+            return;
+        }
+        if let FieldNotice::SkillValue {
+            skill_id,
+            old,
+            shown,
+        } = notice
+        {
+            script.rebuild_skills();
+            self.skill_line(script, skill_id, old, shown);
+            return;
+        }
         if notice == FieldNotice::Shapeshift {
             // `0x5de016` → `0x4b3250`: `0x4e5bf0`'s event, then its own (`0x4b325a`).
             script.fire_event("ACTIONBAR_UPDATE_STATE", vec![]);
@@ -66,6 +84,53 @@ impl NoticeFiring<'_, '_> {
             return;
         }
         fire(script, &mut self.sink, notice);
+    }
+}
+
+impl NoticeFiring<'_, '_> {
+    /// `0x5de180`'s line after its rebuild (`0x5de345`-`0x5de41c`), for a line with a `SkillLine`
+    /// row and a race-class row without flags `0x402` (`0x5de34a`-`0x5de35f`): over an old value
+    /// of 0 `ERR_SKILL_GAINED_S` (`0x5de378`), else, on a shown value above 0,
+    /// `ERR_SKILL_UP_SI` with it (`0x5de417`), each a `CHAT_MSG_SKILL` line shown in place
+    /// (`0x496720`, the catalog rows' chat type 23).
+    fn skill_line(&mut self, script: &mut UiScript, skill_id: u16, old: u16, shown: u32) {
+        let line_id = u32::from(skill_id);
+        let Some(catalog) = self.skill_lines.as_ref().map(|l| &l.catalog) else {
+            return;
+        };
+        let Some(name) = catalog.line(line_id).map(|l| l.name.clone()) else {
+            return;
+        };
+        let (race, class) = self.me.iter().next().map_or((0, 0), |s| {
+            (s.0.unit_race().unwrap_or(0), s.0.unit_class().unwrap_or(0))
+        });
+        if !catalog.announces_skill_ups(line_id, race, class) {
+            return;
+        }
+        let (key, args): (&str, Vec<Arg<'_>>) = if old == 0 {
+            ("ERR_SKILL_GAINED_S", vec![Arg::S(&name)])
+        } else if shown > 0 {
+            (
+                "ERR_SKILL_UP_SI",
+                vec![Arg::S(&name), Arg::D(i64::from(shown))],
+            )
+        } else {
+            return;
+        };
+        let Some(template) = script
+            .lua()
+            .globals()
+            .get::<String>(key)
+            .ok()
+            .filter(|t| !t.is_empty())
+        else {
+            return;
+        };
+        let event = crate::ui_chat::ChatEvent::text_only(
+            crate::ui_chat::ChatEventKind::Skill,
+            benilla_ui::strings::fill(&template, &args),
+        );
+        self.sink.chat.show_now(script, &event);
     }
 }
 
@@ -245,8 +310,8 @@ pub(crate) fn fire(
         }
         // `0x5ddffa`.
         FieldNotice::ComboPoints => script.fire_event("PLAYER_COMBO_POINTS", vec![]),
-        // Fired by [`NoticeFiring::fire`], which holds the slots, the banks, the names and the
-        // form table.
+        // Fired by [`NoticeFiring::fire`], which holds the slots, the banks, the names, the form
+        // table and the skill lines.
         FieldNotice::QuestLog
         | FieldNotice::Tutorial { .. }
         | FieldNotice::Drunk { .. }
