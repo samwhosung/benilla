@@ -50,10 +50,10 @@ pub(crate) struct QuestGiver {
     /// (`0x50161a`) for the turn-in's item line (`0x5dc676`-`0x5dc6c6`), and zeroed by a panel
     /// publish (`0x500d8c`), world enter (`0x500b15`) and the turn-in.
     pub(crate) chosen_reward: u32,
-    /// The teardown `0x501130` a verb's call asked for, with its report flag: `AcceptQuest`'s
-    /// (`0x5013d3`, no report) or `DeclineQuest`'s (`0x5014aa`, report). The core holds the
-    /// whole world, so [`drain_quest`] runs it.
-    pub(crate) teardown: Option<bool>,
+    /// The source whose teardown `0x501130` a call began, its report sent and its cell zeroed
+    /// there (`0x501201`): the close core's rest holds the whole world, so [`drain_quest`] runs
+    /// it, and a verb later in the chunk sees the cell zero, as the reference's does.
+    pub(crate) closing: Option<u64>,
     /// The greeting's two pools, which only the selects read.
     pub(crate) pools: QuestPools,
     /// The reference's `0xbe0840`: the last escort confirm's quest, written by its packet
@@ -119,9 +119,10 @@ impl QuestGiver {
         self.chosen_reward = 0;
     }
 
+    /// Whether the cell `[0xbe0810]` holds a source.
     #[allow(dead_code)]
     pub(crate) fn is_open(&self) -> bool {
-        self.view.is_some()
+        self.npc.is_some()
     }
 
     /// The one-shot turn-in fanfare, which the reference plays from the packet, not from Lua.
@@ -129,9 +130,10 @@ impl QuestGiver {
         std::mem::take(&mut self.completed_fanfare)
     }
 
+    /// Zero the cell; the panel and its kind `[0xbe0818]` stay, as `0x501130` leaves them, for
+    /// the panel verbs, and the feed shows nothing with the cell zero.
     pub(crate) fn clear(&mut self) {
         self.npc = None;
-        self.view = None;
     }
 
     pub(crate) fn set_status(&mut self, npc: u64, status: u32) {
@@ -202,7 +204,8 @@ impl QuestGiver {
         self.close_on_cancel = 0;
         self.acted = false;
         self.chosen_reward = 0;
-        self.teardown = None;
+        self.closing = None;
+        self.view = None;
         self.pools = QuestPools::default();
     }
 }
@@ -277,8 +280,9 @@ fn close_quest_on_leave_world(world: &mut World) {
 impl LatchedWindow for QuestGiver {
     const WINDOW: NpcWindow = NpcWindow::Quest;
 
+    /// The cell, or the source a call zeroed it from until the drain's teardown.
     fn cell(&self) -> Option<u64> {
-        self.npc
+        self.npc.or(self.closing)
     }
 
     fn dispatched(world: &mut World) {
@@ -294,9 +298,17 @@ impl LatchedWindow for QuestGiver {
 /// `report`, a sharing player is sent `MSG_QUEST_PUSH_RESULT` DECLINE (`0x501159`-`0x5011e0`), as
 /// the reference's player lookup there resolves only a player; then the cell is zeroed
 /// (`0x501201`) before the latch release (`0x50120d`), so the core never re-enters, and
-/// `QUEST_FINISHED` fires once (`0x501217`).
+/// `QUEST_FINISHED` fires once (`0x501217`). A teardown a call began ([`QuestGiver::closing`]) has
+/// sent its report and zeroed its cell already. The panel kind `[0xbe0818]` stays.
 pub(crate) fn close_core(world: &mut World, report: bool) {
-    let Some(giver) = world.resource::<QuestGiver>().npc else {
+    let source = {
+        let mut quest = world.resource_mut::<QuestGiver>();
+        match quest.closing.take() {
+            Some(source) => Some((source, false)),
+            None => quest.npc.map(|source| (source, report)),
+        }
+    };
+    let Some((giver, report)) = source else {
         return;
     };
     if report && benilla_protocol::guid::is_player(giver) {
@@ -415,6 +427,8 @@ fn snapshot(
 ) -> Option<QuestState> {
     // The wire sends quest text unexpanded; the client substitutes `$N`, `$B` and `$G`.
     let sub = |t: &str| crate::npc_text::substitute(t, macros);
+    // The cell zero is a closed window, whatever panel its kind still names.
+    giver.npc?;
     Some(match giver.view.as_ref()? {
         QuestView::Greeting(l) => {
             let mut active_titles = Vec::new();
@@ -591,11 +605,6 @@ fn close_quest_reporting(world: &mut World) {
     close_core(world, true);
 }
 
-/// `AcceptQuest()`'s close (`0x5013d3`): the core with no report.
-fn close_quest_silently(world: &mut World) {
-    close_core(world, false);
-}
-
 /// The leg of `DeclineQuest()`'s core `0x5013f0` a source takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DeclineLeg {
@@ -646,20 +655,15 @@ fn decline_leg(
     DeclineLeg::QuestgiverHello
 }
 
-/// The teardowns `0x501130`, which hold the whole world: the one a verb's call asked for
-/// ([`QuestGiver::teardown`]), then `CloseQuest()`'s (`0x501a10` → `0x501130(0,1)`); the verbs
-/// themselves apply in their calls ([`verbs::QuestVerbs`]).
+/// The rest of the teardown `0x501130` a call began ([`QuestGiver::closing`]), `CloseQuest()`'s
+/// (`0x501a10` → `0x501130(0,1)`) among them, which holds the whole world; the verbs themselves
+/// apply in their calls ([`verbs::QuestVerbs`]).
 fn drain_quest(
     mut vm: crate::script_calls::VmWith<ResMut<'static, QuestGiver>>,
     mut world_commands: Commands,
 ) {
     let closed = vm.run(|script| script.is_some_and(|s| s.take_quest_close()));
-    match vm.own().teardown.take() {
-        Some(true) => crate::ui_session::queue(&mut world_commands, close_quest_reporting),
-        Some(false) => crate::ui_session::queue(&mut world_commands, close_quest_silently),
-        None => {}
-    }
-    if closed {
+    if closed || vm.own().closing.is_some() {
         crate::ui_session::queue(&mut world_commands, close_quest_reporting);
     }
 }

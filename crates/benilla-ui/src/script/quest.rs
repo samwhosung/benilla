@@ -144,6 +144,9 @@ pub enum QuestCall {
     /// (`0x501d89`-`0x501da8`): on the reward panel, the latch, the choice's range, which raises
     /// from the verb, and `CMSG_QUESTGIVER_CHOOSE_REWARD`.
     Reward(i32),
+    /// `CloseQuest()` (`0x501a10` → `0x501130(0,1)`): a sharer's decline and the zeroed cell
+    /// (`0x501201`) in the call; the window's teardown and `QUEST_FINISHED` follow at the drain.
+    Close,
     /// `ConfirmAcceptQuest()` (`0x5021b0`): `CMSG_QUEST_CONFIRM_ACCEPT` with the quest the last
     /// confirm held (`[0xbe0840]`, `0x5021e0`), an engine cell the host keeps.
     ConfirmAccept,
@@ -511,6 +514,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "CloseQuest",
         lua.create_function(|lua, ()| {
+            submit(lua, QuestCall::Close)?;
             lua.app_data_mut::<Model>()
                 .expect("model app_data")
                 .quest_close = true;
@@ -995,7 +999,10 @@ mod tests {
         s.keep_calls();
         s.set_quest(Some(detail()));
         s.run("DeclineQuest() CloseQuest()").unwrap();
-        assert_eq!(s.take_quest_calls(), vec![QuestCall::Decline]);
+        assert_eq!(
+            s.take_quest_calls(),
+            vec![QuestCall::Decline, QuestCall::Close]
+        );
         assert!(s.take_quest_close());
         assert!(!s.take_quest_close(), "taken");
     }

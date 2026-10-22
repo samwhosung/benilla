@@ -2,8 +2,8 @@
 //! call ([`crate::script_calls::ScriptCallHost`]): each verb's gates and its packet before the verb
 //! returns, as the reference's bindings send in their own bodies (`0x5012a0`, `0x501320`,
 //! `0x501380`, `0x5013f0`, `0x501560`, `0x5015b0`, `0x5021b0`, `0x4df070`, `0x4e1340`). A verb that
-//! closes the window leaves its close core, which holds the whole world, to
-//! [`super::drain_quest`] ([`QuestGiver::teardown`]).
+//! closes the window zeroes its cell in the call and leaves the rest of the close core, which
+//! holds the whole world, to [`super::drain_quest`] ([`QuestGiver::closing`]).
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -44,6 +44,34 @@ impl QuestVerbs<'_, '_> {
             QuestCall::Decline => self.decline(),
             QuestCall::Complete => self.complete(),
             QuestCall::Reward(choice) => self.reward(script, choice),
+            QuestCall::Close => self.teardown(true),
+        }
+    }
+
+    /// The teardown `0x501130(0, report)` as far as the call goes: nothing with the cell zero
+    /// (`0x501149`); with `report`, a sharing player in view is sent `MSG_QUEST_PUSH_RESULT`
+    /// DECLINE (`0x501159`-`0x5011e0`); then the cell is zeroed (`0x501201`). The latch release
+    /// and `QUEST_FINISHED` hold the whole world, so they wait for the drain (`closing`).
+    fn teardown(&mut self, report: bool) {
+        let Some(source) = self.giver.as_deref().and_then(|g| g.npc) else {
+            return;
+        };
+        // The lookup resolves only a player (`0x50116a`, type mask `0x10`).
+        let sharer = self
+            .objects
+            .object(source)
+            .and_then(|f| f.object_type_mask())
+            .is_some_and(|mask| mask & 0x10 != 0);
+        if report && sharer {
+            debug!("ui_quest: closing {source:#x}'s shared quest — declining it");
+            let _ = self.net.0.send(ClientCommand::QuestPushResult {
+                sharer: source,
+                msg: benilla_protocol::messages::QuestShareMsg::DECLINE_QUEST,
+            });
+        }
+        if let Some(giver) = self.giver.as_deref_mut() {
+            giver.npc = None;
+            giver.closing = Some(source);
         }
     }
 
@@ -76,12 +104,16 @@ impl QuestVerbs<'_, '_> {
             ),
         };
         let index = select.index.wrapping_sub(1) as usize;
-        // The row one past the count is the cleared row (`0x500c46`); past a full pool it lies in
-        // other cells, which nothing here holds.
+        // The row one past the count is the cleared row (`0x500c46`).
         let Some((quest, one_click)) =
             row.or((index == count && count < QuestPools::ROWS).then_some((0, false)))
         else {
-            debug!("ui_quest: greeting select {select:?} out of range — ignored");
+            // Deviation: the row one past a full pool is read from the cells after it (`0xbe07e0`
+            // and `0xbe0828` for the available pool, `0xbdf010` for the active one), which benilla
+            // does not copy, so that select sends nothing and only sets the latch the send would.
+            if index == count && !giver.acted && player {
+                giver.acted = true;
+            }
             return;
         };
         if giver.acted || !player {
@@ -97,12 +129,13 @@ impl QuestVerbs<'_, '_> {
         giver.acted = true;
     }
 
-    /// `0x501380`: the detail panel (`[0xbe0818] == 1`), the active player and the latch clear
-    /// (`0x5013b0`); then `CMSG_QUESTGIVER_ACCEPT_QUEST` (`0x5013c0`), the latch (`0x5013c9`), the
-    /// close `0x501130(0,0)` (`0x5013d3`) and the Quest Log tutorial (`0x5013df`).
+    /// `0x501380`: the detail panel (`[0xbe0818] == 1`, which a close leaves), the active player
+    /// and the latch clear (`0x5013b0`); then `CMSG_QUESTGIVER_ACCEPT_QUEST` to the cell, 0 once
+    /// closed (`0x5013c0`), the latch (`0x5013c9`), the close `0x501130(0,0)` (`0x5013d3`) and the
+    /// Quest Log tutorial (`0x5013df`).
     fn accept(&mut self, script: &mut UiScript) {
         let player = self.objects.player().is_some();
-        let Some((npc, giver)) = open(&mut self.giver) else {
+        let Some(giver) = self.giver.as_deref_mut() else {
             return;
         };
         let Some(QuestView::Detail(d)) = giver.view.as_ref() else {
@@ -111,14 +144,13 @@ impl QuestVerbs<'_, '_> {
         if !player || giver.acted {
             return;
         }
-        let quest = d.quest_id;
+        let (npc, quest) = (giver.npc.unwrap_or(0), d.quest_id);
         let _ = self
             .net
             .0
             .send(ClientCommand::QuestgiverAccept { npc, quest });
         giver.acted = true;
-        // The close core needs the whole world: later verbs in this chunk see the window open.
-        giver.teardown = Some(false);
+        self.teardown(false);
         script.queue_tutorial_trigger(crate::tutorial::id::QUEST_LOG);
     }
 
@@ -141,8 +173,8 @@ impl QuestVerbs<'_, '_> {
         debug!("ui_quest: decline on {npc:#x} — {leg:?}");
         match leg {
             DeclineLeg::Nothing => {}
-            // The close core needs the whole world: later verbs in this chunk see the window open.
-            DeclineLeg::Teardown => giver.teardown = Some(true),
+            // The teardown leaves the latch clear (`0x5014aa`).
+            DeclineLeg::Teardown => self.teardown(true),
             DeclineLeg::GossipHello => {
                 let _ = self.net.0.send(ClientCommand::GossipHello { guid: npc });
                 giver.acted = true;
@@ -159,7 +191,7 @@ impl QuestVerbs<'_, '_> {
     /// (`0x5015a4`).
     fn complete(&mut self) {
         let player = self.objects.player().is_some();
-        let Some((npc, giver)) = open(&mut self.giver) else {
+        let Some(giver) = self.giver.as_deref_mut() else {
             return;
         };
         let Some(QuestView::Progress(p)) = giver.view.as_ref() else {
@@ -168,7 +200,7 @@ impl QuestVerbs<'_, '_> {
         if giver.acted || !player {
             return;
         }
-        let quest = p.quest_id;
+        let (npc, quest) = (giver.npc.unwrap_or(0), p.quest_id);
         let _ = self
             .net
             .0
@@ -184,7 +216,7 @@ impl QuestVerbs<'_, '_> {
     /// and the latch (`0x501643`).
     fn reward(&mut self, script: &mut UiScript, choice: i32) {
         let player = self.objects.player().is_some();
-        let Some((npc, giver)) = open(&mut self.giver) else {
+        let Some(giver) = self.giver.as_deref_mut() else {
             return;
         };
         let Some(QuestView::Reward(o)) = giver.view.as_ref() else {
@@ -193,7 +225,7 @@ impl QuestVerbs<'_, '_> {
         if !player || giver.acted {
             return;
         }
-        let quest = o.quest_id;
+        let (npc, quest) = (giver.npc.unwrap_or(0), o.quest_id);
         let offered = o.choices.len() as i32;
         if offered > 0 {
             let Some(item) = usize::try_from(choice)
@@ -213,10 +245,4 @@ impl QuestVerbs<'_, '_> {
         });
         giver.acted = true;
     }
-}
-
-/// The window's giver and panel, `None` with none open.
-fn open<'a>(giver: &'a mut Option<ResMut<'_, QuestGiver>>) -> Option<(u64, &'a mut QuestGiver)> {
-    let giver = giver.as_deref_mut()?;
-    Some((giver.npc?, giver))
 }
