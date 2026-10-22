@@ -248,7 +248,8 @@ impl super::UiScript {
     }
 
     /// `OpenTrainer`'s close (`0x5df680` → `0x4d7440` with a zero guid), which the host asks for
-    /// once it has the player: the close core runs where every `CloseTrainer` does.
+    /// once it has the player: the close core runs where every `CloseTrainer` does, as it needs
+    /// the latch (Part of #2202).
     pub fn close_trainer_for_own_list(&mut self) {
         self.model_mut().trainer_close = true;
     }
@@ -1111,7 +1112,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CloseTrainer(): sends no packet; the app clears its state on the flag.
+    // CloseTrainer(): sends no packet; the app runs the close core on the flag, as the core needs
+    // the latch (Part of #2202).
     g.set(
         "CloseTrainer",
         lua.create_function(|lua, ()| {

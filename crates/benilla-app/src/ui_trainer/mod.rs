@@ -724,8 +724,9 @@ impl TrainerSteps<'_, '_> {
     }
 }
 
-/// `CloseTrainer` runs the close core, which sends nothing; every other trainer verb applies
-/// inside its call ([`TrainerSteps`]).
+/// `CloseTrainer` runs the close core, which sends nothing; the core needs the latch, so it waits
+/// for the drain (Part of #2202). Every other trainer verb applies inside its call
+/// ([`TrainerSteps`]).
 fn drain_trainer(mut hosted_vm: crate::script_calls::HostedVm, mut world_commands: Commands) {
     hosted_vm.run(|script| {
         if script.is_some_and(|script| script.take_trainer_close()) {

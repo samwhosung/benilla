@@ -99,7 +99,8 @@ fn release_closed(world: &mut World) {
     crate::ui_session::note_closed(world, NpcWindow::Taxi);
 }
 
-/// A `CloseTaxiMap` call's latch release ([`release_closed`]), outside any core's fire.
+/// A `CloseTaxiMap` call's latch release ([`release_closed`]), outside any core's fire: the release
+/// needs the latch, which the call host holds only to read (Part of #2202).
 fn drain_taxi(mut hosted_vm: crate::script_calls::HostedVm, mut world_commands: Commands) {
     hosted_vm.run(|script| {
         if script.is_some_and(|script| script.take_taxi_close()) {

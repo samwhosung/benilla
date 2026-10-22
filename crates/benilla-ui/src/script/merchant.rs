@@ -436,6 +436,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // CloseMerchant(): sends no packet; the app runs the close core on the flag, as the core
+    // needs the latch (Part of #2202).
     g.set(
         "CloseMerchant",
         lua.create_function(|lua, ()| {
