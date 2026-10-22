@@ -290,3 +290,145 @@ fn a_rest_line_shows_ahead_of_a_later_packets_whisper() {
         ]
     );
 }
+
+/// Linen Cloth, the item a crafting line names.
+const LINEN: u32 = 2589;
+/// A creature the monster line addresses, of entry [`WOLF_ENTRY`].
+const WOLF: u64 = 0xF130_0000_0044_0002;
+const WOLF_ENTRY: u32 = 299;
+
+fn crafted(_: In<SessionEvent>, log: Res<crate::ui_chat::ChatLog>) {
+    use crate::ui_chat::combat;
+    let line = combat::queue(
+        crate::ui_chat::ChatEventKind::SpellTradeskills,
+        combat::TRADESKILL_LOG,
+        (ME, combat::UnitClass::Me),
+        (ME, combat::UnitClass::Me),
+        combat::Fills::default(),
+        combat::Named::Item(LINEN),
+    )
+    .unwrap();
+    log.push_combat(line);
+}
+
+/// The item cache's answer as the item handler lands it: the record, then the combat log's
+/// callback for the lines that waited on it (`0x6294b0`).
+fn linen_answers(
+    In(ev): In<SessionEvent>,
+    mut items: ResMut<crate::items::Items>,
+    log: Res<crate::ui_chat::ChatLog>,
+) {
+    if let SessionEvent::ItemTemplate { entry, info } = ev {
+        items.insert_template(entry, info.map(|b| *b));
+        log.answer_landed(crate::ui_chat::Answer::Item(entry));
+    }
+}
+
+fn linen_named() -> SessionEvent {
+    SessionEvent::ItemTemplate {
+        entry: LINEN,
+        info: Some(Box::new(crate::items::test_template("Linen Cloth"))),
+    }
+}
+
+/// The active player, whose crafting line speaks in the first person.
+const ME: u64 = 7;
+
+/// A crafting line whose item the cache lacks, then a whisper, then the item's answer, in one
+/// frame: the line waited at its packet in the combat log's list (`0x6293a0`) and is written
+/// inside the answer's callback (`0x6294b0`), behind the whisper.
+#[test]
+fn a_line_whose_item_answers_later_in_the_frame_fires_at_the_answer() {
+    let mut app = client(|app| {
+        app.net_handler(SessionEventKind::LoggedOut, crafted)
+            .net_handler(SessionEventKind::LogoutResponse, friend_whispers)
+            .net_handler(SessionEventKind::ItemTemplate, linen_answers);
+    });
+    app.world_mut().resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
+    app.world_mut()
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .run(r#"TRADESKILL_LOG_FIRSTPERSON = "You create %s.""#)
+        .unwrap();
+    assert_eq!(
+        frame(&mut app, vec![p1(), p4(), linen_named()]),
+        [
+            "CHAT_MSG_WHISPER:hi",
+            "CHAT_MSG_SPELL_TRADESKILLS:You create Linen Cloth."
+        ]
+    );
+}
+
+fn monster_hails_the_wolf(_: In<SessionEvent>, log: Res<crate::ui_chat::ChatLog>) {
+    log.push_wire(ChatMessage {
+        chat_type: benilla_protocol::messages::CHAT_MSG_MONSTER_SAY,
+        language: 0,
+        sender_guid: 0xF130_0000_0045_0003,
+        target_guid: WOLF,
+        sender_name: Some("Boar".into()),
+        channel: None,
+        text: "Hello $n".into(),
+        chat_tag: 0,
+    });
+}
+
+fn wolf_named() -> SessionEvent {
+    SessionEvent::CreatureName {
+        entry: WOLF_ENTRY,
+        name: Some("Wolf".into()),
+        subname: None,
+        creature_type: Some(1),
+        pet_family: 0,
+        rank: 0,
+        type_flags: 0,
+        pet_spell_list: 0,
+        display_id: 0,
+        civilian: false,
+        racial_leader: false,
+    }
+}
+
+/// A monster line whose `$n` names a creature the cache has no record of waits for the record,
+/// and one whose record answers later in its frame shows at the answer, behind the packets
+/// between, as a player sender's line does at its name's.
+#[test]
+fn a_monster_line_whose_subject_answers_later_in_the_frame_fires_at_the_answer() {
+    use benilla_protocol::messages::ObjectType;
+    let mut app = client(|app| {
+        app.net_handler(SessionEventKind::LoggedOut, monster_hails_the_wolf)
+            .net_handler(SessionEventKind::LogoutResponse, friend_whispers);
+    });
+    let fields = benilla_protocol::ObjectFields::from_pairs(&[(2, 0x9), (3, WOLF_ENTRY)])
+        .into_created(ObjectType::Unit);
+    let wolf = app.world_mut().spawn(crate::net::ObjectStore(fields)).id();
+    app.world_mut()
+        .resource_mut::<crate::net::GuidIndex>()
+        .0
+        .insert(WOLF, wolf);
+    assert_eq!(
+        frame(&mut app, vec![p1(), p4(), wolf_named()]),
+        ["CHAT_MSG_WHISPER:hi", "CHAT_MSG_MONSTER_SAY:Hello Wolf"]
+    );
+}
+
+/// The handlers the answers come by queue the release behind a line that reads them: the item
+/// handler's (`0x6294b0`), the creature and the player name handlers' (`0x49ccc0`).
+#[test]
+fn each_answer_handler_queues_a_release_behind_a_line_that_reads_it() {
+    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let world = app.world_mut();
+    let log = || crate::ui_chat::ChatLog::default();
+    for (line, answer) in [
+        (
+            crafted as fn(In<SessionEvent>, Res<crate::ui_chat::ChatLog>),
+            linen_named(),
+        ),
+        (monster_hails_the_wolf, wolf_named()),
+        (stranger_whispers, stranger_named()),
+    ] {
+        world.insert_resource(log());
+        bevy::ecs::system::RunSystemOnce::run_system_once_with(&mut *world, line, p1()).unwrap();
+        crate::net::handlers::dispatch(world, vec![answer]);
+        let kinds = world.resource::<crate::ui_chat::ChatLog>().pending_kinds();
+        assert_eq!(kinds.last(), Some(&"release"), "{kinds:?}");
+    }
+}

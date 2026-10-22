@@ -59,7 +59,7 @@ pub(crate) use edit::ChannelState;
 #[cfg(test)]
 pub(crate) use event::event_name;
 pub(crate) use event::{default_color, ChatEvent, ChatEventKind};
-pub(crate) use feed::ChatLog;
+pub(crate) use feed::{Answer, ChatLog};
 /// The chat applier off a bare world, for the tests that send through it.
 #[cfg(test)]
 pub(crate) use input::{chat_world, run_chat};

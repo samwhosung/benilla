@@ -603,7 +603,7 @@ pub(crate) mod net {
             player_name(guid, name, race, class, gender, &mut names);
             if found {
                 if let Some(chat) = &chat {
-                    chat.answer_landed(Some(guid));
+                    chat.answer_landed(crate::ui_chat::Answer::Player(guid));
                 }
             }
             if found && units.holds(guid) {
@@ -679,7 +679,7 @@ pub(crate) mod net {
             if found {
                 // A monster line's `$`-macro may name a unit of the entry.
                 if let Some(chat) = &chat {
-                    chat.answer_landed(None);
+                    chat.answer_landed(crate::ui_chat::Answer::Creature(entry));
                 }
                 for guid in units.matching(|s| s.0.object_entry() == Some(entry)) {
                     notices.write_batch([

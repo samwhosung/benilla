@@ -174,12 +174,14 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
                 sc.item_notices.write_batch(notices);
                 sc.field_notices.write_batch(signals);
             }
+            // The combat log's callback for its held lines (`0x6294b0`), which writes each one
+            // whose item the cache now holds.
+            if let Some(chat) = &sc.chat {
+                chat.answer_landed(crate::ui_chat::Answer::Item(entry));
+            }
             // The trade getters' and the ammo getters' callbacks run for a ready record only
-            // (`0x4c0343`, `0x4c84f6`), as does the combat log's for its held lines (`0x6294b0`).
+            // (`0x4c0343`, `0x4c84f6`).
             if answered {
-                if let Some(chat) = &sc.chat {
-                    chat.answer_landed(None);
-                }
                 sc.item_notices.write_batch(std::iter::repeat_n(
                     crate::item_watch::ItemNotice::TradeRecord { entry },
                     trade_waiters,

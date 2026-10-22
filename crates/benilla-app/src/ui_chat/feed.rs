@@ -138,11 +138,12 @@ impl Pending {
         self
     }
 
-    /// The players whose names the item waits on, as `0x49ccc0`'s list holds a line for its
-    /// sender's name: a player line's sender, a channel notice's two, an addon line's or a roll's
-    /// sender, an emote's performer.
-    fn player_names(&self) -> [Option<u64>; 2] {
-        let some = |g: u64| (g != 0).then_some(g);
+    /// The records the item waits on that it names itself: a player's name, as `0x49ccc0`'s list
+    /// holds a line for its sender's (a player line's sender, a channel notice's two, an addon
+    /// line's or a roll's sender, an emote's performer), and an item's, as the combat log's list
+    /// holds a line for its item (`0x6293a0`).
+    fn waits_on(&self) -> [Option<Answer>; 2] {
+        let some = |g: u64| (g != 0).then_some(Answer::Player(g));
         match self {
             Pending::Wire { msg, .. } if msg.sender_name.is_none() && needs_name(msg.chat_type) => {
                 [some(msg.sender_guid), None]
@@ -150,7 +151,35 @@ impl Pending {
             Pending::Notice { a_guid, b_guid, .. } => [some(*a_guid), some(*b_guid)],
             Pending::Addon { guid, .. } | Pending::Roll { guid, .. } => [some(*guid), None],
             Pending::TextEmote { performer, .. } => [some(*performer), None],
+            Pending::Combat(line) => match line.named {
+                super::combat::Named::Item(entry) => [Some(Answer::Item(entry)), None],
+                _ => [None, None],
+            },
             _ => [None, None],
+        }
+    }
+
+    /// The `$`-macro subject of a monster or battleground line, the addressee or else the sender,
+    /// whose name a creature's record gives: the unit's entry, when it is held.
+    fn macro_subject(&self) -> Option<u64> {
+        match self {
+            Pending::Wire { msg, .. } if MACRO_EXPANDED_TYPES.contains(&msg.chat_type) => {
+                Some(if msg.target_guid != 0 {
+                    msg.target_guid
+                } else {
+                    msg.sender_guid
+                })
+                .filter(|&g| g != 0)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether the item might wait on `answer`, for an answer queued only where a line could be.
+    fn could_wait_on(&self, answer: Answer) -> bool {
+        match answer {
+            Answer::Creature(_) => self.macro_subject().is_some(),
+            _ => self.waits_on().contains(&Some(answer)),
         }
     }
 }
@@ -223,12 +252,20 @@ struct Queued {
     item: Pending,
 }
 
+/// A record a held line may read, landed in a packet: a player's name by guid, a creature's
+/// record by entry, an item's by entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Answer {
+    Player(u64),
+    Creature(u32),
+    Item(u32),
+}
+
 /// Why a [`Pending::Release`] retries the held lines.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Release {
-    /// A record a held line may read landed: a player's name (its guid), or a creature's, a
-    /// pet's or an item's (`None`).
-    Answer(Option<u64>),
+    /// A record a held line may read landed.
+    Answer(Answer),
     /// The frame's pass, which ages each line held before `before` by a frame.
     Age { before: u64 },
 }
@@ -241,7 +278,7 @@ impl ChatQueue {
         if matches!(
             item,
             Pending::Release {
-                cause: Release::Answer(Some(_)),
+                cause: Release::Answer(_),
                 ..
             }
         ) {
@@ -280,7 +317,7 @@ impl ChatLog {
         if matches!(
             head.item,
             Pending::Release {
-                cause: Release::Answer(Some(_)),
+                cause: Release::Answer(_),
                 ..
             }
         ) {
@@ -320,9 +357,9 @@ impl ChatLog {
         self.q().push(Pending::Release { cause, from });
     }
 
-    /// Whether `guid`'s name answers later in the lane than `at`: a line stamped `at` that reads
-    /// it waits for that answer, as the reference's lookup missed at its packet.
-    fn answered_after(&self, guid: u64, at: crate::lanes::Stamp) -> bool {
+    /// Whether `answer` lands later in the lane than `at`: a line stamped `at` that reads the
+    /// record waits for it, as the reference's lookup missed at its packet.
+    fn answered_after(&self, answer: Answer, at: crate::lanes::Stamp) -> bool {
         let q = self.q();
         q.answers > 0
             && q.pending.iter().any(|item| {
@@ -330,28 +367,24 @@ impl ChatLog {
                     && matches!(
                         item.item,
                         Pending::Release {
-                            cause: Release::Answer(Some(g)),
+                            cause: Release::Answer(a),
                             ..
-                        } if g == guid
+                        } if a == answer
                     )
             })
     }
 
-    /// A record a held line may read landed in the packet being handled: a player's name for
-    /// `Some(guid)`. The lines waiting on it show here, in the packets' order, as the cache runs
-    /// the callbacks waiting on a record (`0x55f426`-`0x55f452`) and the chat's shows them
-    /// (`0x49ccc0`). Queued only when a line could be waiting.
-    pub(crate) fn answer_landed(&self, guid: Option<u64>) {
+    /// A record a held line may read landed in the packet being handled. The lines waiting on it
+    /// show here, in the packets' order, as the caches run the callbacks waiting on a record: the
+    /// name cache's (`0x55f426`-`0x55f452`), whose chat callback shows the lines (`0x49ccc0`), and
+    /// the item cache's, whose combat-log callback writes them (`0x6294b0`). Queued only when a
+    /// line could be waiting: one held, or one queued ahead of the answer that reads it.
+    pub(crate) fn answer_landed(&self, answer: Answer) {
         let mut q = self.q();
-        let waits = !q.held.is_empty()
-            || guid.is_some_and(|g| {
-                q.pending
-                    .iter()
-                    .any(|item| item.item.player_names().contains(&Some(g)))
-            });
+        let waits = !q.held.is_empty() || q.pending.iter().any(|i| i.item.could_wait_on(answer));
         if waits {
             q.push(Pending::Release {
-                cause: Release::Answer(guid),
+                cause: Release::Answer(answer),
                 from: 0,
             });
         }
@@ -1315,8 +1348,8 @@ fn release(
 }
 
 /// Fire one item at `at`, or hand it back to wait: for a name the cache lacks, for one whose
-/// answer comes later in the frame than `at`, so the name the reference's lookup missed there
-/// is not read early, or for an item's name.
+/// answer comes later in the frame than `at`, so the record the reference's lookup missed there
+/// is not read early (a player's or a creature's name, an item's), or for an item's name.
 fn fire_one(
     reads: &mut ChatReads,
     log: &ChatLog,
@@ -1325,11 +1358,19 @@ fn fire_one(
     item: Pending,
     at: crate::lanes::Stamp,
 ) -> Option<Pending> {
+    let creature = item
+        .macro_subject()
+        .and_then(|g| reads.guids.0.get(&g))
+        .and_then(|&e| reads.stores.get(e).ok())
+        .filter(|s| s.0.created_as() != Some(benilla_protocol::messages::ObjectType::Player))
+        .and_then(|s| s.0.object_entry())
+        .map(Answer::Creature);
     if item
-        .player_names()
+        .waits_on()
         .into_iter()
+        .chain([creature])
         .flatten()
-        .any(|guid| log.answered_after(guid, at))
+        .any(|answer| log.answered_after(answer, at))
     {
         return Some(item);
     }
