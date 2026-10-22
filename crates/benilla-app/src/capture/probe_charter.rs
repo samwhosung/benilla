@@ -326,18 +326,18 @@ fn probe_guild_name(prefix: &str) -> String {
 fn charter_probe(
     time: ProbeClock,
     mut probe: ResMut<CharterProbe>,
-    gossip: Res<GossipState>,
     registrar: Res<GuildRegistrarState>,
     objects: Objects,
     items: Res<Items>,
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // The gossip slots wait outside the VM's turn: the gossip verbs write them in the host.
+    mut vm: crate::script_calls::VmWith<Res<'static, GossipState>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     player: Res<Player>,
     units: Query<(&Guid, &NetEntity, &ObjectStore, &Transform), Without<SelfPlayer>>,
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, gossip| {
         let Ok(store) = self_q.single() else {
             return; // not in-world yet
         };
@@ -1165,6 +1165,7 @@ fn assert_icon_and_select(
     let _ = net.0.send(ClientCommand::GossipSelectOption {
         guid: npc,
         option: opt.index,
+        code: None,
     });
     info!(
         "PROBE_CHARTER: 4 (registrar) GossipSelectOption({npc:#x}, wire index {}) sent for {:?}",

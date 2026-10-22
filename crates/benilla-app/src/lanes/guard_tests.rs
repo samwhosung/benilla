@@ -320,7 +320,6 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::MailOpen",
     "::Stationery",
     "::MerchantOpen",
-    "::GossipState",
     "::PetBar",
     "::QuestLog",
     "::UiClock",

@@ -94,7 +94,7 @@ pub(crate) struct ScriptCallHost<'w, 's> {
                     crate::ui_loot::LootSteps<'w, 's>,
                     crate::ui_mail::MailVerbs<'w>,
                     crate::ui_quest::QuestVerbs<'w, 's>,
-                    crate::ui_gossip::GossipVerbs<'w>,
+                    crate::ui_gossip::GossipVerbs<'w, 's>,
                 ),
             >,
             crate::ui_pet::PetPress<'w, 's>,
@@ -199,7 +199,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Social(call) => appliers.p4().p4().apply(script, call),
             ScriptCall::Party(request) => appliers.p4().p5().apply(script, request),
             ScriptCall::Quest(call) => appliers.p5().p3().apply(script, call),
-            ScriptCall::Gossip(call) => appliers.p5().p4().apply(call),
+            ScriptCall::Gossip(call) => appliers.p5().p4().apply(script, call),
             ScriptCall::Mail(call) => appliers.p5().p2().apply(script, call),
             // The partner's slot 7 is the trade's, the bind the targeting cursor's.
             ScriptCall::Trade(

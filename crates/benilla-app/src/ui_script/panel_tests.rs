@@ -302,9 +302,9 @@ fn shipped_gossip_frame_renders_quest_rows_above_options() {
     );
 
     // Button 3, the active quest, calls `SelectGossipActiveQuest(1)`, its place in the active list
-    // (`GossipFrame.lua:53-61`); the binding maps it to menu position 1, the packet's order.
+    // (`GossipFrame.lua:53-61`), which the host finds among the message's rows.
     s.run("GossipTitleButton3:Click()").unwrap();
-    assert_eq!(s.take_gossip_quest_selects(), vec![1]);
+    assert_eq!(s.take_gossip_quest_selects(), vec![(true, 1)]);
     assert!(
         s.take_gossip_selects().is_empty(),
         "a quest-row click never queues SelectGossipOption"

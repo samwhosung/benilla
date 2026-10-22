@@ -51,7 +51,7 @@ fn each_gossip_verb_is_on_the_wire_before_the_next_line() {
     for (verb, packet) in [
         (
             "SelectGossipOption(1)",
-            format!("GossipSelectOption {{ guid: {NPC}, option: 3 }}"),
+            format!("GossipSelectOption {{ guid: {NPC}, option: 3, code: None }}"),
         ),
         (
             "SelectGossipAvailableQuest(1)",
@@ -130,9 +130,9 @@ fn an_option_select_resets_the_menus_slots() {
     );
     assert_eq!(
         c.eval(
-            "return select('#', GetGossipOptions()) .. ',' .. \
-             select('#', GetGossipAvailableQuests()) .. ',' .. \
-             select('#', GetGossipActiveQuests()) .. ',' .. GetGossipText()"
+            "local function n(...) return arg.n end \
+             return n(GetGossipOptions()) .. ',' .. n(GetGossipAvailableQuests()) .. ',' .. \
+             n(GetGossipActiveQuests()) .. ',' .. GetGossipText()"
         ),
         "0,0,0,Hello"
     );

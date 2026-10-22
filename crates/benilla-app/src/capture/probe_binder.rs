@@ -182,18 +182,18 @@ fn vm_bind_location(script: &UiScript) -> String {
 fn binder_probe(
     time: ProbeClock,
     mut probe: ResMut<BinderProbe>,
-    gossip: Res<GossipState>,
     binder: Res<BinderState>,
     mut home: ResMut<HomeBind>,
     areas: Option<Res<AreaTableRes>>,
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // The gossip slots wait outside the VM's turn: the gossip verbs write them in the host.
+    mut vm: crate::script_calls::VmWith<Res<'static, GossipState>>,
     self_player: Query<(), With<SelfPlayer>>,
     player: Res<Player>,
     units: Query<(&Guid, &NetEntity, &ObjectStore, &Transform), Without<SelfPlayer>>,
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, gossip| {
         if self_player.is_empty() {
             return; // not in-world yet
         }
@@ -515,6 +515,7 @@ fn assert_icon_and_select(
     let _ = net.0.send(ClientCommand::GossipSelectOption {
         guid: innkeeper,
         option: opt.index,
+        code: None,
     });
     info!(
         "PROBE_BINDER: (4 select) GossipSelectOption({innkeeper:#x}, wire index {}) sent for {:?}",

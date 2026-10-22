@@ -1421,10 +1421,11 @@ pub(super) fn writer_loop(
                     ClientCommand::Emote { emote } => w.emote(emote),
                     ClientCommand::TextEmote { text_id, target } => w.text_emote(text_id, target),
                     ClientCommand::GossipHello { guid } => w.gossip_hello(guid),
-                    ClientCommand::GossipSelectOption { guid, option } => {
-                        // No code is sent: coded options are greyed, never selected.
-                        w.gossip_select_option(guid, option, None)
-                    }
+                    ClientCommand::GossipSelectOption {
+                        guid,
+                        option,
+                        code,
+                    } => w.gossip_select_option(guid, option, code.as_deref()),
                     ClientCommand::NpcTextQuery { text_id, guid } => w.npc_text_query(text_id, guid),
                     ClientCommand::ListInventory { guid } => w.list_inventory(guid),
                     ClientCommand::BuyItem {

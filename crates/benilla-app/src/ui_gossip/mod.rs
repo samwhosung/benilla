@@ -1,6 +1,6 @@
 //! The gossip window's app side: [`GossipState`] holds the menu and the NPC-text records,
-//! [`feed_gossip`] pushes the menu and fires its events, the selects apply in their calls
-//! ([`GossipVerbs`]), and [`drain_gossip`] runs `CloseGossip`'s teardown.
+//! [`feed_gossip`] pushes the menu and fires its events, the selects apply in their calls over its
+//! slots ([`GossipVerbs`]), and [`drain_gossip`] runs `CloseGossip`'s teardown.
 //! As in the reference's `0x4e2010`, a menu opens only once its greeting is drawn.
 
 use std::collections::HashMap;
@@ -262,35 +262,34 @@ fn snapshot(state: &GossipState) -> Option<GossipMenu> {
 }
 
 /// Push the menu into the VM and fire `GOSSIP_SHOW` on a change; the close is the core's
-/// ([`close_core`]).
+/// ([`close_core`]). The menu the VM holds is the memory: `SelectGossipOption`'s reset writes
+/// both sides, so it reads as no change. The slots wait outside the VM's turn, since the gossip
+/// verbs write them in the host.
 fn feed_gossip(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    state: Res<GossipState>,
+    mut vm: crate::script_calls::VmWith<Res<'static, GossipState>>,
     self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
     objects: crate::net::Objects,
     unit_names: crate::ui_unit::NameTables,
     states: Res<crate::world_state::WorldStates>,
-    mut last: crate::ui_script::WindowMemo<Option<GossipMenu>>,
     mut last_name: crate::ui_script::WindowMemo<Option<String>>,
     mut closes: CoreCloses,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, state| {
         let Some(script) = script else {
             return;
         };
-        let last = last.get(script);
         let last_name = last_name.get(script);
         if closes.since_last(script, NpcWindow::Gossip) {
-            *last = None;
             *last_name = None;
         }
+        let shown = script.gossip();
         // `GOSSIP_SHOW` carries no argument (`SignalEvent` `0x4e22b5`) and the stock window titles
         // with `UnitName("npc")` (`GossipFrame.lua:33`), so the name's landing alone re-fires it.
         // Asked before the hold, so the name query goes out beside the text query; `UnitName` looks
         // it up with a callback (`0x5171b8`), at the show a gossip packet brings.
-        let ask = Ask::at(last.is_none() || state.is_changed(), &commands);
+        let ask = Ask::at(shown.is_none() || state.is_changed(), &commands);
         let npc_name = state
             .npc
             .and_then(|g| names.resolve(&objects, g, ask).map(str::to_string));
@@ -313,7 +312,7 @@ fn feed_gossip(
             );
         }
         let name_changed = *last_name != npc_name;
-        if fresh == *last && !name_changed {
+        if fresh == shown && !name_changed {
             return;
         }
         script.set_gossip(fresh.clone());
@@ -322,7 +321,6 @@ fn feed_gossip(
         if fresh.is_some() {
             script.fire_event("GOSSIP_SHOW", vec![]);
         }
-        *last = fresh;
         *last_name = npc_name;
     })
 }
@@ -503,16 +501,16 @@ mod tests {
     }
 
     /// A host that applies the gossip calls alone, as the whole client's applies them.
-    struct GossipHost<'a, 'w>(&'a mut super::verbs::GossipVerbs<'w>);
+    struct GossipHost<'a, 'w, 's>(&'a mut super::verbs::GossipVerbs<'w, 's>);
 
-    impl benilla_ui::script::CallHost for GossipHost<'_, '_> {
+    impl benilla_ui::script::CallHost for GossipHost<'_, '_, '_> {
         fn apply(
             &mut self,
-            _: &mut UiScript,
+            script: &mut UiScript,
             call: benilla_ui::script::ScriptCall,
         ) -> Option<benilla_ui::script::CallTail> {
             if let benilla_ui::script::ScriptCall::Gossip(call) = call {
-                self.0.apply(call);
+                self.0.apply(script, call);
             }
             None
         }

@@ -1,10 +1,10 @@
 //! The gossip bindings: the app pushes the open menu ([`UiScript::set_gossip`]), each select hands
-//! the host its call ([`GossipCall`]), which sends before the verb returns, and `CloseGossip`
-//! leaves its teardown to the app.
+//! the host its call ([`GossipCall`]), which reads the message's slots and sends before the verb
+//! returns, and `CloseGossip` leaves its teardown to the app.
 //!
 //! `GetGossipOptions()` returns flat `(text, type)` pairs, `type` the lowercase icon name the app
-//! maps from the wire `GOSSIP_ICON`. A coded option is not built: the app drops its select, where
-//! the reference fires `GOSSIP_ENTER_CODE` and the stock popup (`StaticPopup.lua:1383`) calls
+//! maps from the wire `GOSSIP_ICON`. A coded option selected with no code fires
+//! `GOSSIP_ENTER_CODE`, whose stock popup (`StaticPopup.lua:1383`) calls
 //! `SelectGossipOption(index, code)`.
 //!
 //! A menu is pushed only once its greeting (`SMSG_NPC_TEXT_UPDATE`) has arrived; until then the
@@ -49,15 +49,15 @@ pub struct GossipMenu {
 }
 
 /// A gossip select, which the host applies inside the call: its packet before the verb returns.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GossipCall {
-    /// `SelectGossipOption(i)` (`0x4e2a30` → `0x4e2320`), the 1-based option:
-    /// `CMSG_GOSSIP_SELECT_OPTION` with its wire index (`0x4e23ef`).
-    Option(u32),
+    /// `SelectGossipOption(i [, code])` (`0x4e2a30` → `0x4e2320`), the 1-based slot and the code,
+    /// a string or a number (`0x4e2a60`): `CMSG_GOSSIP_SELECT_OPTION` with the slot's wire index
+    /// (`0x4e23ef`), or `GOSSIP_ENTER_CODE` for a coded slot and no code.
+    Option { index: u32, code: Option<String> },
     /// `SelectGossipAvailableQuest(i)` (`0x4e24b0`) or `SelectGossipActiveQuest(i)`
-    /// (`0x4e2600`), as the row's 1-based place in the whole menu: the questgiver query or
-    /// turn-in for its quest.
-    Quest(u32),
+    /// (`0x4e2600`), the 1-based row in its own list: the questgiver query or turn-in for it.
+    Quest { active: bool, index: u32 },
 }
 
 /// Hand `call` to the host, which applies it before this returns ([`super::calls::submit`]).
@@ -71,10 +71,24 @@ impl super::UiScript {
         self.model_mut().gossip = menu;
     }
 
-    /// The 1-based options of the selects a harness's VM kept ([`Self::keep_calls`]).
+    /// The menu the VM holds, as last pushed.
+    pub fn gossip(&self) -> Option<GossipMenu> {
+        self.model_ref().gossip.clone()
+    }
+
+    /// `ResetGossipOptions` (`0x4e26a0`) as the getters see it: no option and no quest row; the
+    /// text stays.
+    pub fn reset_gossip_slots(&mut self) {
+        if let Some(menu) = self.model_mut().gossip.as_mut() {
+            menu.options.clear();
+            menu.quests.clear();
+        }
+    }
+
+    /// The 1-based slots of the selects a harness's VM kept ([`Self::keep_calls`]).
     pub fn take_gossip_selects(&mut self) -> Vec<u32> {
         self.take_calls_where(|call| match call {
-            super::ScriptCall::Gossip(GossipCall::Option(i)) => Some(*i),
+            super::ScriptCall::Gossip(GossipCall::Option { index, .. }) => Some(*index),
             _ => None,
         })
     }
@@ -84,11 +98,13 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().gossip_close)
     }
 
-    /// The 1-based whole-menu rows of the quest selects a harness's VM kept
-    /// ([`Self::keep_calls`]).
-    pub fn take_gossip_quest_selects(&mut self) -> Vec<u32> {
+    /// The quest selects a harness's VM kept ([`Self::keep_calls`]): whether active, and the
+    /// 1-based row in its list.
+    pub fn take_gossip_quest_selects(&mut self) -> Vec<(bool, u32)> {
         self.take_calls_where(|call| match call {
-            super::ScriptCall::Gossip(GossipCall::Quest(n)) => Some(*n),
+            super::ScriptCall::Gossip(GossipCall::Quest { active, index }) => {
+                Some((*active, *index))
+            }
             _ => None,
         })
     }
@@ -134,14 +150,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SelectGossipOption(i [, ...]): the 1-based option. Further arguments, a code among them,
-    // are ignored: coded options are not built, so no code is ever sent.
+    // SelectGossipOption(i [, code]): the 1-based slot, and the code when the second argument is
+    // a string or a number (`0x4e2a60`, `0x4e2a70`).
     g.set(
         "SelectGossipOption",
-        lua.create_function(|lua, (i, _rest): (Value, mlua::MultiValue)| {
+        lua.create_function(|lua, (i, code): (Value, Value)| {
             // `is-number` else `Usage: SelectGossipOption(index)` (`0x84b984`, `0x4e2a86`).
-            let i = binding_abi::index_arg32(lua, i, "Usage: SelectGossipOption(index)")?;
-            submit(lua, GossipCall::Option(i))
+            let index = binding_abi::index_arg32(lua, i, "Usage: SelectGossipOption(index)")?;
+            let code = match code {
+                Value::String(_) | Value::Integer(_) | Value::Number(_) => lua
+                    .coerce_string(code)?
+                    .map(|s| s.to_string_lossy().to_string()),
+                _ => None,
+            };
+            submit(lua, GossipCall::Option { index, code })
         })?,
     )?;
 
@@ -186,39 +208,34 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // A select's index is 1-based within its own list, as `GossipFrame.lua:73` numbers the
-    // buttons; it maps back to the whole-menu position the host's call carries.
-    fn select_quest(lua: &Lua, active: bool, index: usize) -> mlua::Result<()> {
-        let whole = {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            model.gossip.as_ref().and_then(|m| {
-                m.quests
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, q)| q.active == active)
-                    .nth(index.wrapping_sub(1))
-                    .map(|(n, _)| n as u32 + 1)
-            })
-        };
-        match whole {
-            Some(n) => submit(lua, GossipCall::Quest(n)),
-            None => Ok(()),
-        }
-    }
-
+    // buttons; the host scans the message's rows for it (`0x4e2ad7`, `0x4e2b17`).
     g.set(
         "SelectGossipAvailableQuest",
         lua.create_function(|lua, i: Value| {
             // `is-number` else `Usage: SelectGossipAvailableQuest(index)` (`0x84b9a8`, `0x4e2ab1`).
-            let i = binding_abi::index_arg(lua, i, "Usage: SelectGossipAvailableQuest(index)")?;
-            select_quest(lua, false, i)
+            let index =
+                binding_abi::index_arg32(lua, i, "Usage: SelectGossipAvailableQuest(index)")?;
+            submit(
+                lua,
+                GossipCall::Quest {
+                    active: false,
+                    index,
+                },
+            )
         })?,
     )?;
     g.set(
         "SelectGossipActiveQuest",
         lua.create_function(|lua, i: Value| {
             // `is-number` else `Usage: SelectGossipActiveQuest(index)` (`0x84b9d4`, `0x4e2af1`).
-            let i = binding_abi::index_arg(lua, i, "Usage: SelectGossipActiveQuest(index)")?;
-            select_quest(lua, true, i)
+            let index = binding_abi::index_arg32(lua, i, "Usage: SelectGossipActiveQuest(index)")?;
+            submit(
+                lua,
+                GossipCall::Quest {
+                    active: true,
+                    index,
+                },
+            )
         })?,
     )?;
 
@@ -274,8 +291,34 @@ mod tests {
         assert_eq!(t2, "gossip");
 
         s.run("SelectGossipOption(1)").unwrap();
-        s.run("SelectGossipOption(2, 'unused-code')").unwrap(); // extra arg ignored
-        assert_eq!(s.take_gossip_selects(), vec![1, 2]);
+        s.run(
+            "SelectGossipOption(2, 'a code') SelectGossipOption(3, 12) SelectGossipOption(4, {})",
+        )
+        .unwrap();
+        assert_eq!(
+            s.take_calls_where(|c| match c {
+                crate::script::ScriptCall::Gossip(c) => Some(c.clone()),
+                _ => None,
+            }),
+            [
+                super::GossipCall::Option {
+                    index: 1,
+                    code: None
+                },
+                super::GossipCall::Option {
+                    index: 2,
+                    code: Some("a code".into())
+                },
+                super::GossipCall::Option {
+                    index: 3,
+                    code: Some("12".into())
+                },
+                super::GossipCall::Option {
+                    index: 4,
+                    code: None
+                },
+            ]
+        );
         assert!(s.take_gossip_selects().is_empty(), "taken");
 
         assert!(!s.take_gossip_close());
@@ -330,13 +373,15 @@ mod tests {
             ("Report to Goldshire".to_string(), 5)
         );
 
-        // Available #2 is the menu's third row.
-        s.run("SelectGossipAvailableQuest(2)").unwrap();
-        assert_eq!(s.take_gossip_quest_selects(), vec![3]);
-        s.run("SelectGossipActiveQuest(1)").unwrap();
-        assert_eq!(s.take_gossip_quest_selects(), vec![1]);
-        s.run("SelectGossipAvailableQuest(9) SelectGossipActiveQuest(0)")
-            .unwrap();
+        // Each select is a call with its own list's row; the host reads the message's rows.
+        s.run(
+            "SelectGossipAvailableQuest(2) SelectGossipActiveQuest(1) SelectGossipActiveQuest(0)",
+        )
+        .unwrap();
+        assert_eq!(
+            s.take_gossip_quest_selects(),
+            vec![(false, 2), (true, 1), (true, 0)]
+        );
         assert!(s.take_gossip_quest_selects().is_empty(), "taken");
     }
 

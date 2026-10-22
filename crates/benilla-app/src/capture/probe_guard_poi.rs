@@ -133,6 +133,7 @@ fn guard_poi_probe(
                 let _ = net.0.send(ClientCommand::GossipSelectOption {
                     guid: guard,
                     option,
+                    code: None,
                 });
                 probe.phase = Phase::Asked { sent_at: now };
             } else if now - sent_at > 8.0 {
