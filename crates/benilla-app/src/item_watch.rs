@@ -419,20 +419,6 @@ where
             entry: fields.object_entry().unwrap_or(0),
         })
     }
-
-    /// A record answer for `entry` that the cache did not hold ([`Self::landed_runs`]'s notices).
-    #[cfg(test)]
-    pub(crate) fn record_landed<'b>(
-        &self,
-        entry: u32,
-        held: impl IntoIterator<Item = (u64, &'b ObjectFields)>,
-        entry_waiters: &[u64],
-    ) -> Vec<ItemNotice> {
-        self.landed_runs(entry, held, entry_waiters)
-            .into_iter()
-            .filter_map(|r| r.notice)
-            .collect()
-    }
 }
 
 impl<'a, F> Watch<'a, F>
@@ -442,7 +428,7 @@ where
     /// The unit signals a notice's handler ends in: `NotifyItemSlotChanged` ([`Self::slot_changed`])
     /// closes the destroy (`0x5d87c1`), the stack count's (`0x5d950e`), the entry's once its record
     /// is cached (`0x5d9694`) or answered (`0x5d96d5`), and the enchantment's (`0x5d9b2a`). The
-    /// record set-up's signal is [`Self::created_signal`]'s and [`Self::landed_runs`]'.
+    /// record set-up's signal is [`Self::created_signal`]'s and [`Self::set_up_run`]'s.
     pub(crate) fn signals(&self, notice: &ItemNotice) -> Vec<FieldNotice> {
         match *notice {
             ItemNotice::Destroyed { guid, .. }
@@ -500,55 +486,30 @@ where
             .flatten()
     }
 
-    /// A record answer's unit signals, in its callbacks' order ([`Self::landed_runs`]).
-    #[cfg(test)]
-    pub(crate) fn landed_signals<'b>(
-        &self,
-        entry: u32,
-        held: impl IntoIterator<Item = (u64, &'b ObjectFields)>,
-        entry_waiters: &[u64],
-    ) -> Vec<FieldNotice> {
-        self.landed_runs(entry, held, entry_waiters)
-            .into_iter()
-            .flat_map(|r| r.signals)
-            .collect()
+    /// The create set-up's callback `0x5d8390` on `guid`, as its record answers: it finds the item
+    /// (mask 2) and finishes its set-up (`0x5d8440`) while in the world (`0x5d84ff`), one of ours
+    /// as an [`ItemNotice::Record`], and anyone's with its owner's signal at the end (`0x5d85ed`-
+    /// `0x5d8606`). An item gone since runs nothing.
+    pub(crate) fn set_up_run(&self, guid: u64, entry: u32) -> Run {
+        let Some(f) = (self.lookup)(guid).filter(|f| f.is_item()) else {
+            return Run::default();
+        };
+        if !self.in_world() {
+            return Run::default();
+        }
+        Run {
+            notice: self.ours(f).then_some(ItemNotice::Record { guid, entry }),
+            signals: owner_signal(f).into_iter().collect(),
+        }
     }
 
-    /// The callbacks a record answer for `entry` that the cache did not hold runs, each a run.
-    /// Every item with that entry still waiting on its create's request finishes its set-up
-    /// (`0x5d8390` into `0x5d8440`), in guid order, while in the world: one of ours as a
-    /// [`ItemNotice::Record`], and anyone's with its owner's signal at the end (`0x5d85ed`-
-    /// `0x5d8606`). Then each [`ItemNotice::Entry`] miss waiting on it (`entry_waiters`, in request
-    /// order) runs its callback `0x5d96b0`, ungated, ending in its slot run (`0x5d96d5`). `held`
-    /// lists the live objects.
-    pub(crate) fn landed_runs<'b>(
-        &self,
-        entry: u32,
-        held: impl IntoIterator<Item = (u64, &'b ObjectFields)>,
-        entry_waiters: &[u64],
-    ) -> Vec<Run> {
-        let mut finished: Vec<(u64, &ObjectFields)> = if self.in_world() {
-            held.into_iter()
-                .filter(|(g, f)| {
-                    f.is_item() && f.object_entry() == Some(entry) && !entry_waiters.contains(g)
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        finished.sort_unstable_by_key(|&(g, _)| g);
-        finished
-            .into_iter()
-            .map(|(guid, f)| Run {
-                notice: self.ours(f).then_some(ItemNotice::Record { guid, entry }),
-                signals: owner_signal(f).into_iter().collect(),
-            })
-            .chain(entry_waiters.iter().map(|&guid| Run {
-                notice: Some(ItemNotice::EntryRecord { guid, entry }),
-                signals: self.slot_changed(guid),
-            }))
-            .filter(|r| !r.is_empty())
-            .collect()
+    /// An entry change's callback `0x5d96b0` on `guid`, as its record answers, ungated: the new
+    /// entry's slots recount (`0x5d96bd`), then its slot run (`0x5d96d5`).
+    pub(crate) fn entry_run(&self, guid: u64, entry: u32) -> Run {
+        Run {
+            notice: Some(ItemNotice::EntryRecord { guid, entry }),
+            signals: self.slot_changed(guid),
+        }
     }
 }
 
@@ -871,26 +832,20 @@ mod tests {
         // Before our player arrives, the latch is clear.
         w.objects.remove(&ME);
         assert_eq!(w.watch().created(POTION, &potion), None);
-        assert!(w
-            .watch()
-            .record_landed(POTION_ID, [(POTION, &potion)], &[])
-            .is_empty());
+        w.objects.insert(POTION, potion);
+        assert!(w.watch().set_up_run(POTION, POTION_ID).is_empty());
         w.objects.insert(ME, player(&[]));
-        let other = item(POTION_ID, ME);
         assert_eq!(
-            w.watch()
-                .record_landed(POTION_ID, [(ARROWS, &other), (POTION, &potion)], &[]),
-            [
-                ItemNotice::Record {
-                    guid: POTION,
-                    entry: POTION_ID
-                },
-                ItemNotice::Record {
-                    guid: ARROWS,
-                    entry: POTION_ID
-                }
-            ],
-            "in guid order"
+            w.watch().set_up_run(POTION, POTION_ID).notice,
+            Some(ItemNotice::Record {
+                guid: POTION,
+                entry: POTION_ID
+            }),
+            "the answer's callback finds the item (`0x5d8390`)"
+        );
+        assert!(
+            w.watch().set_up_run(ARROWS, POTION_ID).is_empty(),
+            "an item gone since"
         );
     }
 
@@ -1001,8 +956,7 @@ mod tests {
 
     /// The record set-up's last act signals `UNIT_INVENTORY_CHANGED` for the tokens of the item's
     /// owner, whoever's the item, while in the world (`0x5d8504`, `0x5d85ed`-`0x5d8606`): at a
-    /// create whose record is cached, and for each item a landed answer finishes, in guid order,
-    /// ahead of the entry changes' callbacks (`0x5d96d5`).
+    /// create whose record is cached, and from the callback of each item an answer finishes.
     #[test]
     fn a_record_set_up_signals_its_owner_and_an_answer_its_waiters_after() {
         const HELM: u64 = 0x4000_0000_0000_0201;
@@ -1019,21 +973,15 @@ mod tests {
         assert_eq!(w.watch().created_signal(&ours), Some(owner(ME)));
         assert_eq!(w.watch().created_signal(&theirs), Some(owner(OTHER)));
         w.objects.insert(ME, player(&[(0, HELM)]));
-        assert_eq!(
-            w.watch().landed_signals(
-                POTION_ID,
-                [(ARROWS, &theirs), (POTION, &ours), (HELM, &ours)],
-                &[HELM]
-            ),
-            [owner(ME), owner(OTHER), INVENTORY],
-            "the set-ups in guid order, then the entry change's slot run"
-        );
+        w.objects.insert(ARROWS, theirs);
+        w.objects.insert(POTION, ours.clone());
+        assert_eq!(w.watch().set_up_run(POTION, POTION_ID).signals, [owner(ME)]);
+        let run = w.watch().set_up_run(ARROWS, POTION_ID);
+        assert_eq!(run.notice, None, "another's item: its owner's signal alone");
+        assert_eq!(run.signals, [owner(OTHER)]);
         w.objects.remove(&ME);
         assert_eq!(w.watch().created_signal(&ours), None, "out of the world");
-        assert!(w
-            .watch()
-            .landed_signals(POTION_ID, [(POTION, &ours)], &[])
-            .is_empty());
+        assert!(w.watch().set_up_run(POTION, POTION_ID).is_empty());
     }
 
     /// A trade getter's record callback (`0x4c0340`) touches neither the bar nor a trade slot.
@@ -1061,30 +1009,15 @@ mod tests {
     #[test]
     fn an_entry_miss_runs_its_own_callback_when_the_answer_lands() {
         let mut w = World::new();
-        let potion = item(POTION_ID, ME);
-        let changed = item(POTION_ID, ME);
-        let both = || [(POTION, &potion), (ARROWS, &changed)];
-        assert_eq!(
-            w.watch().record_landed(POTION_ID, both(), &[ARROWS]),
-            [
-                ItemNotice::Record {
-                    guid: POTION,
-                    entry: POTION_ID
-                },
-                ItemNotice::EntryRecord {
-                    guid: ARROWS,
-                    entry: POTION_ID
-                }
-            ]
-        );
+        w.objects.insert(ARROWS, item(POTION_ID, ME));
         w.objects.remove(&ME);
         assert_eq!(
-            w.watch().record_landed(POTION_ID, both(), &[ARROWS]),
-            [ItemNotice::EntryRecord {
+            w.watch().entry_run(ARROWS, POTION_ID).notice,
+            Some(ItemNotice::EntryRecord {
                 guid: ARROWS,
                 entry: POTION_ID
-            }],
-            "out of the world only the callback runs"
+            }),
+            "out of the world the callback still runs"
         );
         assert_eq!(
             ItemNotice::EntryRecord {

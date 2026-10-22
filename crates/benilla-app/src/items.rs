@@ -437,16 +437,29 @@ pub(crate) struct Items {
     /// when the item is set up (`0x5d8440`), counting seconds from then; they live as long as the
     /// player, here the session. `SMSG_ITEM_TIME_UPDATE` has no such list.
     pending_enchant_times: Vec<(u64, u32, u32)>,
-    /// `(guid, entry)` of our items whose entry changed to one the cache missed, each waiting on
-    /// the answer with the entry watcher's callback `0x5d96b0`, in request order.
-    entry_waiters: Vec<(u64, u32)>,
-    /// The entry each trade getter call that missed the cache asked for, in call order: one
-    /// callback `0x4c0340` per call, with no dedupe (`0x4c017f`, `0x4c0582`). A lookup registers
-    /// it, so it is locked like the in-flight asks and registering takes `&self`.
-    trade_waiters: std::sync::Mutex<Vec<u32>>,
-    /// The ammunition entry each ammo-slot getter call that missed asked for, in call order: one
-    /// callback `0x4c84f0` per call (`0x4c83bc`, `0x4c89cf`), registered after the script's tick.
-    ammo_waiters: std::sync::Mutex<Vec<u32>>,
+    /// The callbacks the lookups that missed registered, each with the entry it waits on, in the
+    /// order they asked: an answer runs its entry's in that order (`0x55ba30` keeps each with no
+    /// dedupe for the dedupe flag 0, `dbcache/callbacks#callback-order`). A getter registers one
+    /// from a lookup, so the list is locked like the in-flight asks and registering takes `&self`.
+    callbacks: std::sync::Mutex<Vec<(u32, RecordCallback)>>,
+}
+
+/// A callback an item record's lookup registered, which the record's answer runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RecordCallback {
+    /// An item's create set-up (`0x5d8300` asks with `0x5d8390`, `0x5d8321`-`0x5d833f`).
+    SetUp(u64),
+    /// An item of ours whose entry changed to one the cache missed (`0x5d9652` asks with
+    /// `0x5d96b0`).
+    Entry(u64),
+    /// A loot row's record, asked by the copier (`0x4c1e77` with `0x4c2ac0`).
+    LootRow,
+    /// An item push's record (`0x491b05` with `0x491ee0`).
+    Push,
+    /// A trade getter call (`0x4c017f`, `0x4c0582` with `0x4c0340`), one per call.
+    Trade,
+    /// An ammo-slot getter call (`0x4c83bc`, `0x4c89cf` with `0x4c84f0`), one per call.
+    Ammo,
 }
 
 impl Items {
@@ -457,56 +470,60 @@ impl Items {
         self.pending_enchant_times.push((guid, slot, seconds));
     }
 
-    /// An entry change asked for the record of `entry` with the callback `0x5d96b0`.
-    pub(crate) fn wait_for_entry(&mut self, guid: u64, entry: u32) {
-        self.entry_waiters.push((guid, entry));
+    /// A lookup of `entry` that missed registered `callback`.
+    pub(crate) fn wait(&self, entry: u32, callback: RecordCallback) {
+        self.callbacks.lock_recover().push((entry, callback));
     }
 
-    /// The answer for `entry` landed: the items whose entry change waited on it, in request order.
-    pub(crate) fn take_entry_waiters(&mut self, entry: u32) -> Vec<u64> {
+    /// The answer for `entry` landed, or refused it: the callbacks waiting on it, in the order
+    /// they asked, spent either way.
+    pub(crate) fn take_callbacks(&mut self, entry: u32) -> Vec<RecordCallback> {
+        let callbacks = self.callbacks.get_mut().unwrap_or_else(|e| e.into_inner());
         let mut taken = Vec::new();
-        self.entry_waiters.retain(|&(g, e)| {
+        callbacks.retain(|&(e, cb)| {
             let hit = e == entry;
             if hit {
-                taken.push(g);
+                taken.push(cb);
             }
             !hit
         });
         taken
     }
 
-    /// A trade getter missed the cache on `entry` and asked with the callback `0x4c0340`.
-    pub(crate) fn wait_for_trade_record(&self, entry: u32) {
-        self.trade_waiters.lock_recover().push(entry);
+    /// An entry change asked for the record of `entry` with the callback `0x5d96b0`.
+    pub(crate) fn wait_for_entry(&mut self, guid: u64, entry: u32) {
+        self.wait(entry, RecordCallback::Entry(guid));
     }
 
-    /// The answer for `entry` landed, or refused it: how many trade getter calls were waiting on
-    /// it, whose callbacks are spent either way.
-    pub(crate) fn take_trade_waiters(&mut self, entry: u32) -> usize {
-        let waiters = self
-            .trade_waiters
-            .get_mut()
-            .unwrap_or_else(|e| e.into_inner());
-        let before = waiters.len();
-        waiters.retain(|&e| e != entry);
-        before - waiters.len()
+    /// A trade getter missed the cache on `entry` and asked with the callback `0x4c0340`.
+    pub(crate) fn wait_for_trade_record(&self, entry: u32) {
+        self.wait(entry, RecordCallback::Trade);
     }
 
     /// An ammo-slot getter missed the cache on `entry` and asked with the callback `0x4c84f0`.
     pub(crate) fn wait_for_ammo_record(&self, entry: u32) {
-        self.ammo_waiters.lock_recover().push(entry);
+        self.wait(entry, RecordCallback::Ammo);
     }
 
-    /// The answer for `entry` landed, or refused it: how many ammo-slot getter calls were
-    /// waiting on it, whose callbacks are spent either way.
+    /// The trade getter calls waiting on `entry`, spent.
+    #[cfg(test)]
+    pub(crate) fn take_trade_waiters(&mut self, entry: u32) -> usize {
+        self.take_waiters(entry, RecordCallback::Trade)
+    }
+
+    /// The ammo-slot getter calls waiting on `entry`, spent.
+    #[cfg(test)]
     pub(crate) fn take_ammo_waiters(&mut self, entry: u32) -> usize {
-        let waiters = self
-            .ammo_waiters
-            .get_mut()
-            .unwrap_or_else(|e| e.into_inner());
-        let before = waiters.len();
-        waiters.retain(|&e| e != entry);
-        before - waiters.len()
+        self.take_waiters(entry, RecordCallback::Ammo)
+    }
+
+    /// The answer for `entry` landed: how many callbacks of `kind` waited on it, which it spends.
+    #[cfg(test)]
+    pub(crate) fn take_waiters(&mut self, entry: u32, kind: RecordCallback) -> usize {
+        let callbacks = self.callbacks.get_mut().unwrap_or_else(|e| e.into_inner());
+        let before = callbacks.len();
+        callbacks.retain(|&(e, cb)| !(e == entry && cb == kind));
+        before - callbacks.len()
     }
 
     /// The item `guid` arrived: its queued enchant updates in arrival order, unlinked (`0x5ebde0`).
@@ -600,12 +617,7 @@ impl Items {
     /// item objects and their countdowns go with the index's sweep.
     pub(crate) fn clear_session(&mut self) {
         self.pending_enchant_times.clear();
-        self.entry_waiters.clear();
-        self.trade_waiters
-            .get_mut()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
-        self.ammo_waiters
+        self.callbacks
             .get_mut()
             .unwrap_or_else(|e| e.into_inner())
             .clear();

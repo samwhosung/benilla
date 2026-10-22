@@ -1000,7 +1000,14 @@ fn create_hook(sc: &mut Scene, guid: u64, kind: Created, script: Option<&UiScrip
             // The set-up asks for the record of every item, whoever's, with the callback
             // `0x5d8390` (`0x5d8300` into `0x55ba30`): the readers of a held item only read it.
             if let Some(entry) = fields.object_entry() {
-                sc.items.template(entry, guid, Ask::Event(&sc.net));
+                if sc
+                    .items
+                    .template(entry, guid, Ask::Event(&sc.net))
+                    .is_none()
+                {
+                    sc.items
+                        .wait(entry, crate::items::RecordCallback::SetUp(guid));
+                }
             }
             if let Some(crate::item_watch::ItemNotice::Record { guid, .. }) = run.notice {
                 super::replay_enchant_times(&mut sc.items, &mut sc.countdowns, &sc.index, guid);

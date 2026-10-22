@@ -14,7 +14,6 @@ use bevy::prelude::*;
 use crate::go_templates::GameObjectTemplates;
 use crate::items::Items;
 use crate::names::NameCache;
-use crate::query_cache::Ask;
 use benilla_world::model_fade::DespawnFade;
 use benilla_world::vis_chain::VisChainOnly;
 
@@ -150,30 +149,60 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
         SessionEvent::ItemTemplate { entry, info } => {
             let info = info.map(|b| *b);
             debug!("net: item template {entry} → {info:?}");
-            // The answer finishes the set-up of every item of ours waiting on it (`0x5d8390`); a
-            // negative answer finishes nothing (its found byte is clear, `0x5d83b8`).
             let answered = info.is_some();
-            let landed = answered && sc.items.template(entry, 0, Ask::Read).is_none();
             sc.items.insert_template(entry, info);
-            // A negative answer releases the waiters with nothing run (`0x5d96bb`).
-            let waiters = sc.items.take_entry_waiters(entry);
-            let trade_waiters = sc.items.take_trade_waiters(entry);
-            let ammo_waiters = sc.items.take_ammo_waiters(entry);
-            if landed {
-                let runs = {
-                    let (index, stores) = (&sc.index, &sc.stores);
-                    let held = index
-                        .0
-                        .iter()
-                        .filter_map(|(&g, &e)| stores.get(e).ok().map(|s| (g, &s.0)));
-                    item_watch(index, stores, &sc.self_guid, &sc.items)
-                        .landed_runs(entry, held, &waiters)
-                };
-                for run in runs {
-                    if let Some(crate::item_watch::ItemNotice::Record { guid, .. }) = run.notice {
-                        replay_enchant_times(&mut sc.items, &mut sc.countdowns, &sc.index, guid);
+            // The callbacks the lookups that missed registered, in the order they asked
+            // (`0x55ba30`, the dedupe flag 0): each item's set-up (`0x5d8390`) and entry change's
+            // (`0x5d96b0`), the loot window's rows (`0x4c2ac0`) and pushes (`0x491ee0`), the trade
+            // getters' (`0x4c0340`) and the ammo getters' (`0x4c84f0`).
+            for callback in sc.items.take_callbacks(entry) {
+                use crate::items::RecordCallback as Cb;
+                match callback {
+                    // A refusal finishes no set-up (its found byte is clear, `0x5d83b8`) and runs
+                    // no entry change (`0x5d96bb`).
+                    Cb::SetUp(_) | Cb::Entry(_) if !answered => {}
+                    Cb::SetUp(guid) => {
+                        let run = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items)
+                            .set_up_run(guid, entry);
+                        if run.notice.is_some() {
+                            replay_enchant_times(
+                                &mut sc.items,
+                                &mut sc.countdowns,
+                                &sc.index,
+                                guid,
+                            );
+                        }
+                        sc.item_lane.push(run);
                     }
-                    sc.item_lane.push(run);
+                    Cb::Entry(guid) => {
+                        let run = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items)
+                            .entry_run(guid, entry);
+                        sc.item_lane.push(run);
+                    }
+                    // A refusal releases a row ([`crate::ui_loot`]'s deviation).
+                    Cb::LootRow => {
+                        if let Some(loot) = sc.loot.as_mut() {
+                            loot.row_answered(&sc.items);
+                        }
+                    }
+                    Cb::Push => {
+                        if let Some(loot) = sc.loot.as_mut() {
+                            loot.push_answered(&sc.items, entry);
+                        }
+                    }
+                    // The trade and the ammo getters' callbacks run for a ready record only
+                    // (`0x4c0343`, `0x4c84f6`).
+                    Cb::Trade if answered => sc.item_lane.push(crate::item_watch::Run {
+                        notice: Some(crate::item_watch::ItemNotice::TradeRecord { entry }),
+                        signals: Vec::new(),
+                    }),
+                    Cb::Ammo if answered => {
+                        sc.field_notices
+                            .write(crate::field_watch::FieldNotice::Player {
+                                id: crate::field_watch::id::UNIT_INVENTORY_CHANGED,
+                            })
+                    }
+                    Cb::Trade | Cb::Ammo => {}
                 }
             }
             // The combat log's callback for its held lines (`0x6294b0`), which writes each one
@@ -185,26 +214,6 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             // refusal: a page that now waits on nothing runs its tail.
             if let (Some(auction), Some(house)) = (sc.auction.as_mut(), sc.house.as_mut()) {
                 crate::ui_auction::record_answered(auction, house, &sc.items, entry);
-            }
-            // The loot window's row callback (`0x4c2ac0`) and the pushes' (`0x491ee0`).
-            if let Some(loot) = sc.loot.as_mut() {
-                loot.record_answered(&sc.items, entry);
-            }
-            // The trade getters' and the ammo getters' callbacks run for a ready record only
-            // (`0x4c0343`, `0x4c84f6`).
-            if answered {
-                for _ in 0..trade_waiters {
-                    sc.item_lane.push(crate::item_watch::Run {
-                        notice: Some(crate::item_watch::ItemNotice::TradeRecord { entry }),
-                        signals: Vec::new(),
-                    });
-                }
-                sc.field_notices.write_batch(std::iter::repeat_n(
-                    crate::field_watch::FieldNotice::Player {
-                        id: crate::field_watch::id::UNIT_INVENTORY_CHANGED,
-                    },
-                    ammo_waiters,
-                ));
             }
         }
         // `0x5e4f30`'s two arms share the item lookup (`0x468460`, `TYPEMASK_ITEM`) and differ on

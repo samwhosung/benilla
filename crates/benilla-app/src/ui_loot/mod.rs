@@ -53,7 +53,7 @@ const PUSH_KEYRING_SLOTS: std::ops::RangeInclusive<u32> = 81..=112;
 
 /// A push, on the lane at its packet or waiting on its item template. `OnItemPush 0x491a60` defers
 /// both of its outputs the same way: on a cache miss (`0x491a93`) it re-enters from the cache
-/// callback `0x491ee0`, at the answer ([`LootState::record_answered`]).
+/// callback `0x491ee0`, at the answer ([`LootState::push_answered`]).
 #[derive(Clone, Debug)]
 struct PendingReceive {
     /// Crafted or conjured: "You create: …".
@@ -213,17 +213,18 @@ enum Step {
     /// flagged when it needs a live item object.
     Unlocks(Vec<(u64, bool)>),
     /// A response's copier (`0x4c1cb0`): the cells its teardown leaves, the ended session's with
-    /// the source zeroed (`0x4c1da0`), then the window it fills, and whether a row's record was
-    /// outstanding when its handler asked for each (`0x4c1e77`, `0x4c1ea6`), unknown for a window
-    /// no handler asked for.
+    /// the source zeroed (`0x4c1da0`), then the window it fills, and whether its end ran inside
+    /// its packet, every row's record held when its handler asked for each (`0x4c1e77`,
+    /// `0x4c1ea6`); unknown for a window no handler asked for.
     Opened {
         ended: Window,
         window: Window,
-        waited: Option<bool>,
+        ends: Option<bool>,
     },
     /// The copier's end a response's pending records held, run by the cache callback at the last
-    /// answer (`0x4c2ac0`, `0x4c2afc`).
-    CopierEnd,
+    /// answer (`0x4c2ac0`, `0x4c2afc`), on its own session's window: a later response in the
+    /// frame replaced the live cells.
+    CopierEnd(Window),
     /// The sweep a close with no VM owed a disenchant window with rows left (`0x48f264` →
     /// `0x4c1fa0`).
     Sweep,
@@ -300,24 +301,33 @@ impl LootState {
         self.queue(Step::Opened {
             ended,
             window: self.window.clone(),
-            waited: None,
+            ends: None,
         });
     }
 
     /// The copier's asks at its packet (`0x4c1e77`): each row's record looked up with the callback
     /// `0x4c2ac0`, the copier returning with any outstanding (`0x4c1ea6`), so its end waits for
-    /// the last answer ([`Step::CopierEnd`]) whatever lands before the lane fires it.
+    /// the last answer ([`Step::CopierEnd`]) whatever lands before the lane fires it; with none
+    /// outstanding it ends inside the packet, whatever a later packet does to the window.
     pub(crate) fn ask_rows(&mut self, items: &Items, commands: &NetCommands) {
         for it in &self.window.items {
-            let _ = items.template(it.item_id, 0, Ask::Event(commands));
+            if items
+                .template(it.item_id, 0, Ask::Event(commands))
+                .is_none()
+            {
+                items.wait(it.item_id, crate::items::RecordCallback::LootRow);
+            }
         }
-        let pending = self.records_pending(items);
+        let ends = !self.records_pending(items);
+        if ends {
+            self.copier_due = false;
+        }
         let opened = self.steps.iter_mut().rev().find_map(|(_, s)| match s {
-            Step::Opened { waited, .. } => Some(waited),
+            Step::Opened { ends, .. } => Some(ends),
             _ => None,
         });
-        if let Some(waited) = opened {
-            *waited = Some(pending);
+        if let Some(verdict) = opened {
+            *verdict = Some(ends);
         }
     }
 
@@ -354,23 +364,25 @@ impl LootState {
         self.steps.iter().any(|(_, s)| !matches!(s, Step::Push(_)))
     }
 
-    /// An item record answered (`SMSG_ITEM_QUERY_SINGLE_RESPONSE`): each push waiting on `entry`
-    /// runs from its callback (`0x491ee0`) once the record is held, and the copier's end a
-    /// response's rows held runs at the last of their answers, a refusal included
-    /// ([`templates_outstanding`]'s deviation; `0x4c2afc`).
-    pub(crate) fn record_answered(&mut self, items: &Items, entry: u32) {
-        if items.template(entry, 0, Ask::Read).is_some() {
-            let (ready, still): (Vec<_>, Vec<_>) = std::mem::take(&mut self.waiting)
-                .into_iter()
-                .partition(|r| r.entry == entry);
-            self.waiting = still;
-            for r in ready {
-                self.queue(Step::Push(r));
-            }
+    /// A row's record answered, or was refused (`0x4c2ac0`; [`templates_outstanding`]'s
+    /// deviation): at the last of the session's answers the copier ends (`0x4c2afc`), on the
+    /// session's window as the answer finds it.
+    pub(crate) fn row_answered(&mut self, items: &Items) {
+        if self.copier_due && !self.records_pending(items) {
+            self.copier_due = false;
+            self.queue(Step::CopierEnd(self.window.clone()));
         }
-        let asked = self.window.items.iter().any(|it| it.item_id == entry);
-        if asked && self.copier_due && !self.records_pending(items) {
-            self.queue(Step::CopierEnd);
+    }
+
+    /// A push's record answered (`0x491ee0`): the first push waiting on `entry` runs, once its
+    /// record is held.
+    pub(crate) fn push_answered(&mut self, items: &Items, entry: u32) {
+        if items.template(entry, 0, Ask::Read).is_none() {
+            return;
+        }
+        if let Some(at) = self.waiting.iter().position(|r| r.entry == entry) {
+            let r = self.waiting.remove(at);
+            self.queue(Step::Push(r));
         }
     }
 
@@ -1131,7 +1143,7 @@ fn fire_step(vm: &mut LootVm, reads: &LootReads, step: Step) {
         Step::Opened {
             ended,
             window: w,
-            waited,
+            ends,
         } => {
             let replaced = vm.own().0.loot.replaced();
             // The copier ends the session the VM shows (`0x4c1ccb`-`0x4c1dac`): its
@@ -1146,37 +1158,31 @@ fn fire_step(vm: &mut LootVm, reads: &LootReads, step: Step) {
             });
             restore_live(vm, live);
             vm.own().0.loot.pending_bind_confirm = None;
-            let waiting = vm.turn(|script, _| {
+            let ends = vm.turn(|script, (mut steps, _)| {
                 let Some(script) = script else {
-                    return true;
+                    return false;
                 };
                 // Then the type cell (`0x4c1dd6`), the window, and each row's record asked
                 // for (`0x4c1e77`).
                 script.set_loot_type(w.loot_type);
                 let snap = reads.view(&w, Ask::Event(&reads.commands));
-                let waiting = waited.unwrap_or_else(|| reads.waits(&snap));
+                // A window no handler asked for decides here, on the session as it stands.
+                let ends = ends.unwrap_or_else(|| {
+                    let ends = steps.loot.copier_due && !reads.waits(&snap);
+                    steps.loot.copier_due &= !ends;
+                    ends
+                });
                 show(script, snap);
-                waiting
+                ends
             });
-            if !waiting {
-                if replaced {
-                    let moving = vm.own().1 .0;
-                    end_superseded_open(vm, w, moving);
-                } else if vm.own().0.loot.copier_due {
-                    let moving = std::mem::take(&mut vm.own().1 .0);
-                    end_open(vm, moving);
-                }
+            if ends {
+                end_session_open(vm, w, replaced);
             }
         }
-        Step::CopierEnd => {
-            let ready = vm.turn(|script, (steps, _)| {
-                script.is_some()
-                    && steps.loot.copier_due
-                    && !reads.waits(&reads.view(&steps.loot.window, Ask::Read))
-            });
-            if ready {
-                let moving = std::mem::take(&mut vm.own().1 .0);
-                end_open(vm, moving);
+        Step::CopierEnd(w) => {
+            if vm.turn(|script, _| script.is_some()) {
+                let replaced = vm.own().0.loot.replaced();
+                end_session_open(vm, w, replaced);
             }
         }
         Step::Sweep => {
@@ -1228,6 +1234,19 @@ fn feed_loot(mut vm: VmWith<(LootSteps<'static, 'static>, ())>, reads: LootReads
     });
 }
 
+/// A copier's end on its session `own`: one a later response in the frame replaced on the cells
+/// it left ([`end_superseded_open`]), else on the live ones, where a later packet's change has
+/// already landed, as it would have in the reference after the end ran.
+fn end_session_open(vm: &mut LootVm, own: Window, replaced: bool) {
+    if replaced {
+        let moving = vm.own().1 .0;
+        end_superseded_open(vm, own, moving);
+    } else {
+        let moving = std::mem::take(&mut vm.own().1 .0);
+        end_open(vm, moving);
+    }
+}
+
 /// The copier end of a response a later one in the same frame replaced, which the reference ran
 /// inside its own packet's dispatch (`0x4c1ea8`-`0x4c1ee6`) before the next arrived: on its own
 /// window, which the live cells take for the while, then the next copier's resets over what it
@@ -1243,7 +1262,6 @@ fn end_superseded_open<X: bevy::ecs::system::SystemParam + 'static>(
     restore_live(vm, live);
     let (mut s, _) = vm.own();
     let loot = &mut *s.loot;
-    loot.copier_due = true;
     loot.coin_line_shown = false;
     loot.sweep_owed = false;
     loot.pending_bind_confirm = None;
@@ -1287,7 +1305,6 @@ fn end_open<X: bevy::ecs::system::SystemParam + 'static>(
     moving: bool,
 ) {
     vm.turn(|script, (mut steps, _)| {
-        steps.loot.copier_due = false;
         if let Some(script) = script {
             steps.copier_end(script);
         }
@@ -1965,7 +1982,7 @@ mod tests {
                 .resource_mut::<Items>()
                 .insert_template(TOUGH_JERKY, answer.clone());
             world.resource_scope(|world, mut loot: Mut<LootState>| {
-                loot.record_answered(world.resource::<Items>(), TOUGH_JERKY)
+                loot.row_answered(world.resource::<Items>())
             });
             app.update();
             assert_eq!(opens(&mut app), 1, "opened when the last template answered");

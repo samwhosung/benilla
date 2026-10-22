@@ -241,7 +241,13 @@ fn on_item_push_result(
 ) {
     if let SessionEvent::ItemPushResult(p) = ev {
         // The push's lookup with the callback `0x491ee0` (`0x491b05`).
-        let held = |entry: u32| items.template(entry, 0, Ask::Event(&commands)).is_some();
+        let held = |entry: u32| {
+            let held = items.template(entry, 0, Ask::Event(&commands)).is_some();
+            if !held {
+                items.wait(entry, crate::items::RecordCallback::Push);
+            }
+            held
+        };
         item_push_result(p, &self_guid, &mut loot, &mut tutorials.lock(), held);
     }
 }
