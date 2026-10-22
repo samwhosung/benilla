@@ -89,9 +89,9 @@ pub(super) fn feed_petition(
     }
 
     let mut registrar_shown = false;
-    let edge = vm.turn(|script, mut petition| {
+    let (edge, deferred) = vm.turn(|script, mut petition| {
         let Some(script) = script else {
-            return Edge::None;
+            return (Edge::None, None);
         };
         let fed_registrar = fed_registrar.get(script);
         if closes.since_last(script, NpcWindow::Registrar) {
@@ -153,12 +153,12 @@ pub(super) fn feed_petition(
             (None, _) => true,
         };
 
-        script.set_petition(VmPetition {
+        let now = VmPetition {
             charter_cost: registrar.cost(),
             signers: signers.clone(),
             record: record.clone(),
             can_sign,
-        });
+        };
 
         // ── The registrar's open; its close is the core's ([`super::close_core`]), and a
         //    disconnect's clear tells the VM nothing.
@@ -179,10 +179,25 @@ pub(super) fn feed_petition(
             (Some(_), Some(_)) if fed.shown != record || fed.shown_signers != signers => Edge::Show,
             _ => Edge::None,
         };
+        // A close signals over the old charter's record with its signers freed (`0x4f3ef0`): the
+        // record goes, or the next one's lookup replaces it, only after the signal
+        // (`0x4f402c`, then `0x4f4061` or `0x4f4078`). The new state is pushed after it.
+        let deferred = if matches!(edge, Edge::Closed | Edge::Switch) {
+            script.set_petition(VmPetition {
+                charter_cost: registrar.cost(),
+                signers: Vec::new(),
+                record: fed.shown.clone(),
+                can_sign: true,
+            });
+            Some(now)
+        } else {
+            script.set_petition(now);
+            None
+        };
         fed.shown_charter = now_charter;
         fed.shown = record;
         fed.shown_signers = signers;
-        edge
+        (edge, deferred)
     });
 
     // Each signal bare, with the host lent.
@@ -193,39 +208,29 @@ pub(super) fn feed_petition(
             }
         });
     }
-    match edge {
-        Edge::None => {}
-        Edge::Show => {
-            vm.run(|s| {
-                if let Some(s) = s {
-                    s.fire_event("PETITION_SHOW", vec![]);
-                }
-            });
-        }
-        Edge::Closed => {
-            vm.run(|s| {
-                if let Some(s) = s {
-                    s.fire_event("PETITION_CLOSED", vec![]);
-                }
-            });
-        }
-        // The replace leg of `0x4f3f60` signals the old one's close with the item's guid zeroed
-        // (`0x4f4020`-`0x4f402c`), so the frame's `OnHide`, whose `ClosePetition()` applies in
-        // its call, finds nothing to close or decline; the new charter is set after it.
-        Edge::Switch => {
-            let held = vm.own().open.take();
-            vm.run(|s| {
-                if let Some(s) = s {
-                    s.fire_event("PETITION_CLOSED", vec![]);
-                }
-            });
-            vm.own().open = held;
-            vm.run(|s| {
-                if let Some(s) = s {
-                    s.fire_event("PETITION_SHOW", vec![]);
-                }
-            });
-        }
+    // The close signals with the item's guid zeroed (`0x4f4020`-`0x4f402c`), so the frame's
+    // `OnHide`, whose `ClosePetition()` applies in its call, finds nothing to close or decline;
+    // the next charter, if any, is set after it (`0x4f403b`).
+    if matches!(edge, Edge::Closed | Edge::Switch) {
+        let held = vm.own().open.take();
+        vm.run(|s| {
+            if let Some(s) = s {
+                s.fire_event("PETITION_CLOSED", vec![]);
+            }
+        });
+        vm.own().open = held;
+        vm.run(|s| {
+            if let (Some(s), Some(now)) = (s, deferred) {
+                s.set_petition(now);
+            }
+        });
+    }
+    if matches!(edge, Edge::Show | Edge::Switch) {
+        vm.run(|s| {
+            if let Some(s) = s {
+                s.fire_event("PETITION_SHOW", vec![]);
+            }
+        });
     }
 }
 

@@ -2,7 +2,7 @@
 //! or closes the window before the verb returns, as the reference's bindings do (`0x4f46d0`,
 //! `0x4f4790`, `0x4f4930`, `0x4f5050`, `0x4f5300`, `0x4f3f60`, `0x5ef2b0`).
 
-use benilla_ui::script::{PetitionCall, UiScript};
+use benilla_ui::script::{CallTail, PetitionCall, UiScript};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
@@ -34,11 +34,12 @@ pub(crate) struct PetitionSteps<'w, 's> {
 }
 
 impl PetitionSteps<'_, '_> {
-    /// Apply `call` inside its verb.
-    pub(crate) fn apply(&mut self, script: &mut UiScript, call: PetitionCall) {
+    /// Apply `call` inside its verb; `ClosePetition`'s record drop is the tail, after the held
+    /// `PETITION_CLOSED` handlers.
+    pub(crate) fn apply(&mut self, script: &mut UiScript, call: PetitionCall) -> Option<CallTail> {
         if self.petition.is_none() || self.records.is_none() || self.registrar.is_none() {
             debug!("ui_petition: no charter state in this world; {call:?} dropped");
-            return;
+            return None;
         }
         let me = self.self_guid.as_ref().and_then(|g| g.0).unwrap_or(0);
         let registrar_npc = self.registrar.as_deref().and_then(GuildRegistrarState::npc);
@@ -51,7 +52,7 @@ impl PetitionSteps<'_, '_> {
             PetitionCall::Buy(name) => {
                 let Some(npc) = registrar_npc else {
                     debug!("ui_petition: BuyGuildCharter with no registrar open — dropped");
-                    return;
+                    return None;
                 };
                 send(&self.net, ClientCommand::PetitionBuy { npc, name });
             }
@@ -91,7 +92,7 @@ impl PetitionSteps<'_, '_> {
             PetitionCall::Sign(byte) => {
                 let petition = self.petition.as_deref_mut().expect("checked above");
                 let Some(item) = petition.open_item() else {
-                    return;
+                    return None;
                 };
                 send(&self.net, ClientCommand::PetitionSign { item, byte });
                 petition.signing = true;
@@ -101,7 +102,7 @@ impl PetitionSteps<'_, '_> {
             // (`0x4f4970`); then the name check's line or the send (`0x4f4987`-`0x4f49d5`).
             PetitionCall::Rename { name, refusal } => {
                 let Some(item) = self.petition.as_deref().and_then(PetitionState::open_item) else {
-                    return;
+                    return None;
                 };
                 match refusal {
                     Some(key) => self.show(script, lines::name_refused_line(key)),
@@ -111,19 +112,22 @@ impl PetitionSteps<'_, '_> {
             PetitionCall::Close => {
                 let petition = self.petition.as_deref_mut().expect("checked above");
                 if petition.open_item().is_none() {
-                    return; // `0x4f3f7c`: nothing open, no event
+                    return None; // `0x4f3f7c`: nothing open, no event
                 }
                 let records = self.records.as_deref().expect("checked above");
                 petition.decline_on_close(records, me, &self.net);
                 petition.close();
                 petition.fed.closed();
-                // `0x4f3ef0` frees the signers, then `PETITION_CLOSED` (`0x4f402c`), then the
-                // record goes (`0x4f4078`).
+                // `0x4f3ef0` frees the signers, then `PETITION_CLOSED` (`0x4f402c`), whose
+                // handlers still read the record, which goes after them (`0x4f4078`).
                 script.free_petition_signers();
                 script.fire_event("PETITION_CLOSED", vec![]);
-                script.drop_petition_record();
+                return Some(Box::new(|script: &mut UiScript| {
+                    script.drop_petition_record()
+                }));
             }
         }
+        None
     }
 
     /// `OfferPetition()` (`0x4f4790`): nothing without a petition (`0x4f47ac`) or a target

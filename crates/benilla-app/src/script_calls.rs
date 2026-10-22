@@ -230,7 +230,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Taxi(call) => tail = appliers.p5().p6().apply(call),
             ScriptCall::Merchant(call) => appliers.p5().p7().apply(script, call),
             ScriptCall::Guild(call) => appliers.p4().p7().p0().apply(script, call),
-            ScriptCall::Petition(call) => appliers.p4().p7().p1().apply(script, call),
+            ScriptCall::Petition(call) => tail = appliers.p4().p7().p1().apply(script, call),
             ScriptCall::Tabard(call) => appliers.p4().p7().p2().apply(script, call),
         }
         // A selection this call made with the targeting cursor up was handed to the cast
