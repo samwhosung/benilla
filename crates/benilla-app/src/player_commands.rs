@@ -4,15 +4,15 @@
 //! `0x63ce00`, which has no category gate. `ClientDestroyGame` unregisters all six (slot 1,
 //! `0x401f86` to `0x405390`) and `whois` too (`0x5ae316`), so the reference holds them from world
 //! entry only. Registered for the process here they answer the same: the one route into `execute`
-//! at the glue is `drain_glue_console`, and stock GlueXML never calls `ConsoleExec`. Each is a
-//! send to the server; whether the account may use it is the server's to say.
+//! at the glue is `drain_glue_console`, and stock GlueXML never calls `ConsoleExec`. Each but
+//! `showplayer` is a send to the server; whether the account may use it is the server's to say.
 
 use benilla_assets::coords::bevy_to_wow;
 use benilla_assets::MapCatalogRes;
 use benilla_ui::script::{s_str_to_float, s_str_tokenize};
 use bevy::prelude::*;
 
-use crate::console::{ConsoleCommandApp, DEBUG, GAME};
+use crate::console::{ConsoleCommandApp, DEBUG, GAME, GRAPHICS};
 use crate::net::{ClientCommand, NetCommands};
 use crate::player::Player;
 
@@ -21,13 +21,38 @@ pub(crate) struct PlayerCommandsPlugin;
 impl Plugin for PlayerCommandsPlugin {
     fn build(&self, app: &mut App) {
         // Registered in the reference's order, none with a help string (`0x4049e0`-`0x404a48`):
-        // category 0 for the three that move the player, 4 for the two toggles.
+        // category 0 for the three that move the player, 1 for `showplayer`, 4 for the two
+        // toggles.
         app.console_command("port", DEBUG, None, port)
             .console_command("worldport", DEBUG, None, worldport)
             .console_command("setrawpos", DEBUG, None, setrawpos)
+            .console_command("showplayer", GRAPHICS, None, show_player)
             .console_command("togglehelm", GAME, None, toggle_helm)
             .console_command("togglecloak", GAME, None, toggle_cloak);
     }
+}
+
+/// `showplayer` (`0x405220`): with the world frame up (`[0xb4b2bc]`, tested at `0x405229`) it
+/// toggles the own-model flag (`ToggleShowOwnModel`, `0x5ec8c0`) and prints `player visible` when
+/// the flag is now set, else `player hidden` (`0x40522e`); with none it does nothing. The camera's
+/// fade writes the flag again on its next update while it follows the player (`0x482c41`).
+fn show_player(world: &mut World, _args: &str) -> Vec<String> {
+    let in_world = world
+        .get_resource::<State<crate::client_state::ClientState>>()
+        .is_some_and(|s| *s.get() == crate::client_state::ClientState::InWorld);
+    if !in_world {
+        return Vec::new();
+    }
+    let Some(mut rig) = world.get_resource_mut::<crate::player::CameraControl>() else {
+        return Vec::new();
+    };
+    let shown = rig.toggle_own_model();
+    vec![if shown {
+        "player visible"
+    } else {
+        "player hidden"
+    }
+    .to_string()]
 }
 
 /// What `port` and `setrawpos` split their arguments at (`0x82ef90`): tab, CR, LF, `"`, space and

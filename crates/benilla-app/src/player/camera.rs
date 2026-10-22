@@ -536,6 +536,10 @@ pub(crate) struct CameraControl {
     /// The self-avatar's alpha from the camera-to-pivot distance, 1 in third person to 0 in first
     /// (`self_model_fade_alpha`); applied by [`apply_self_model_fade`].
     pub(super) self_fade_alpha: f32,
+    /// The own-model flag `[0xc4d74c]` clear: the camera's fade writes it each update as whether
+    /// its alpha byte is nonzero (`0x482c41`), and `showplayer` toggles it (`0x5ec8c0`). Nothing
+    /// here reads it: the fade itself hides the body ([`apply_self_model_fade`]).
+    pub(super) own_model_hidden: bool,
     /// The auto-follow's state; on the rig because it is pose, not setting.
     pub(super) follow: FollowRig,
     /// The framing pivot's height channel ([`PivotGlide`]), on the camera rather than the body so
@@ -577,6 +581,13 @@ impl CameraControl {
     /// reference's shadow diffuse rides the body's model fade slot (`[model+0x180]`).
     pub(crate) fn self_fade(&self) -> f32 {
         self.self_fade_alpha
+    }
+
+    /// `ToggleShowOwnModel` (`0x5ec8c0`): flip the own-model flag and answer whether the model is
+    /// now shown.
+    pub(crate) fn toggle_own_model(&mut self) -> bool {
+        self.own_model_hidden = !self.own_model_hidden;
+        !self.own_model_hidden
     }
 }
 
@@ -1254,6 +1265,8 @@ pub(super) fn seat_camera(
         dynamics.nearclip,
         SELF_FADE_WINDOW,
     );
+    // The fade's byte, truncated (`0x50efc0`), sets the own-model flag (`0x482c3a`-`0x482c41`).
+    rig.own_model_hidden = (rig.self_fade_alpha * 255.0) as u8 == 0;
 }
 
 /// Apply the self-avatar fade ([`CameraControl::self_fade_alpha`]) to the body parts and every
