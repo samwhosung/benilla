@@ -636,6 +636,7 @@ dependencies = [
  "benilla-srp",
  "clap",
  "flate2",
+ "libc",
  "num-bigint",
  "rand 0.8.6",
  "sha1",

@@ -35,6 +35,72 @@ const fn client_os() -> u32 {
     }
 }
 
+/// `OsGetTimeZoneBias` (`0x4297c0`): `GetTimeZoneInformation`'s bias negated, so the zone's
+/// standard offset in minutes east of UTC, daylight saving left out; 0 when the query fails.
+/// Off Windows the zone's standard offset is read off the year's January and July, whichever is
+/// not daylight time.
+fn os_time_zone_bias() -> i32 {
+    zone::standard_offset_east().map_or(0, |secs| (secs / 60) as i32)
+}
+
+#[cfg(unix)]
+mod zone {
+    extern "C" {
+        fn tzset();
+    }
+
+    pub(super) fn standard_offset_east() -> Option<i64> {
+        // SAFETY: `tzset` takes nothing and only rereads the zone.
+        unsafe { tzset() };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        // The year's 1 January and 1 July, by days from the epoch (civil-from-days inverted).
+        let days = |y: i64, m: i64| {
+            let y = if m <= 2 { y - 1 } else { y };
+            let era = y.div_euclid(400);
+            let yoe = y.rem_euclid(400);
+            let mp = if m > 2 { m - 3 } else { m + 9 };
+            let doy = (153 * mp + 2) / 5;
+            era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468
+        };
+        let year = 1970 + now.div_euclid(86_400 * 3652425 / 10000);
+        let samples: Vec<(i64, bool)> = [1, 7]
+            .into_iter()
+            .filter_map(|m| {
+                let time = (days(year, m) * 86_400) as libc::time_t;
+                // SAFETY: zeroed is valid for `tm`'s integers and its nullable zone pointer;
+                // `localtime_r` writes it whole and reads only `time`.
+                let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };
+                let got = unsafe { libc::localtime_r(&time, &mut tm) };
+                #[allow(clippy::useless_conversion)]
+                let off = i64::from(tm.tm_gmtoff);
+                (!got.is_null()).then_some((off, tm.tm_isdst > 0))
+            })
+            .collect();
+        samples
+            .iter()
+            .find(|s| !s.1)
+            .or_else(|| samples.iter().min_by_key(|s| s.0))
+            .map(|s| s.0)
+    }
+}
+
+#[cfg(windows)]
+mod zone {
+    /// The runtime's `_timezone`, `GetTimeZoneInformation`'s standard bias in seconds west.
+    pub(super) fn standard_offset_east() -> Option<i64> {
+        let mut west: libc::c_long = 0;
+        // SAFETY: `_tzset` only rereads the zone; `_get_timezone` writes the one long it is
+        // handed.
+        let err = unsafe {
+            libc::tzset();
+            libc::get_timezone(&mut west)
+        };
+        (err == 0).then_some(-i64::from(west))
+    }
+}
+
 /// The enUS locale tag, for the tools that log in with no install of their own to read one from;
 /// the client sends its install's ([`write_logon_challenge`]).
 pub const LOCALE_TAG_EN_US: u32 = u32::from_be_bytes(*b"enUS");
@@ -112,7 +178,7 @@ pub fn write_logon_challenge(
     body.extend_from_slice(&PLATFORM_X86.to_le_bytes());
     body.extend_from_slice(&client_os().to_le_bytes());
     body.extend_from_slice(&locale.to_le_bytes());
-    body.extend_from_slice(&0u32.to_le_bytes()); // utc_timezone_offset
+    body.extend_from_slice(&os_time_zone_bias().to_le_bytes()); // utc_timezone_offset
     body.extend_from_slice(&Ipv4Addr::LOCALHOST.octets()); // client_ip_address (network order)
     body.push(account_name.len() as u8);
     body.extend_from_slice(account_name.as_bytes());
@@ -373,10 +439,10 @@ mod tests {
     /// it, `0x656e4742`, goes out little-endian like `'WoW'` and `'x86'` (benilla-re
     /// `net/login#logon-challenge`).
     /// Holds `TZ` for a test: the lock keeps two zone tests apart, the drop restores it.
-    struct Zone(
-        Option<std::ffi::OsString>,
-        std::sync::MutexGuard<'static, ()>,
-    );
+    struct Zone {
+        old: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
 
     impl Zone {
         fn set(tz: &str) -> Self {
@@ -384,13 +450,13 @@ mod tests {
             let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let old = std::env::var_os("TZ");
             std::env::set_var("TZ", tz);
-            Self(old, lock)
+            Self { old, _lock: lock }
         }
     }
 
     impl Drop for Zone {
         fn drop(&mut self) {
-            match self.0.take() {
+            match self.old.take() {
                 Some(v) => std::env::set_var("TZ", v),
                 None => std::env::remove_var("TZ"),
             }
