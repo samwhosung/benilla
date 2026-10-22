@@ -252,6 +252,44 @@ fn pet_book_state(leg: PetBookLeg) -> ActionState {
     st
 }
 
+/// The float `ActionHasRange` compares each range with (`0x8029d4`): 0x34800000, 2^-22.
+const HAS_RANGE_BOUND: f32 = f32::from_bits(0x3480_0000);
+
+/// What the two range queries read beside the spell.
+struct RangeLeg<'a, 'w> {
+    caster: benilla_formats::RangeUnit,
+    mods: &'a crate::spell::SpellModifiers,
+    cast_ctx: &'a crate::spell::cast_target::CastContext<'w>,
+    /// Whether there is an active player, which `IsActionInRange` requires (`0x4e572b`).
+    player: bool,
+}
+
+/// `ActionHasRange` and `IsActionInRange` for the spell a book-0 slot stands for:
+/// - `0x4e5810` asks `GetMinMaxRange` with a null target (`0x4e5852`) and answers whether `|min|`
+///   or `|max|` is not below [`HAS_RANGE_BOUND`] (`fcomp`, `test ah,5`, `0x4e5885`, `0x4e5898`),
+///   which an unordered compare passes too. The auto-attack target the melee arm falls back to
+///   cannot move that: its max is at least the 5.0 floor;
+/// - `0x4e56f0` is nil with no player, else the pre-check `0x6e4440` on the selection, whose
+///   compare `0x6e47b0` hands `GetMinMaxRange` that target (`0x6e47ca`): its reach pads a ranged
+///   row, and its motion with the caster's earns the moving bonus.
+fn range_answers(
+    d: &benilla_formats::SpellDisplay,
+    spells: Option<&Spells>,
+    leg: &RangeLeg<'_, '_>,
+) -> (bool, Option<bool>) {
+    let row = spells.and_then(|s| s.ranges.get(d.range_index));
+    let a_range = |x: f32| x.abs() >= HAS_RANGE_BOUND || x.is_nan();
+    let has_range = leg
+        .mods
+        .min_max_range(d, row, leg.caster, RangeTargets::default())
+        .is_some_and(|(min, max)| a_range(min) || a_range(max));
+    let in_range = leg
+        .player
+        .then(|| crate::spell::range_check::action_in_range(d, leg.cast_ctx, row, leg.mods))
+        .flatten();
+    (has_range, in_range)
+}
+
 /// The events one pass of [`feed_action_state`] raised, which [`fire_action_events`] signals.
 #[derive(Resource, Default)]
 pub(crate) struct ActionEvents {
@@ -540,6 +578,12 @@ impl ActionStates<'_, '_> {
             .and_then(|g| objects.entity(g))
             .and_then(|e| units.get(e).ok());
         let cast_ctx = targeting.context();
+        let range_leg = RangeLeg {
+            caster,
+            mods: spell_mods,
+            cast_ctx: &cast_ctx,
+            player: me.is_some(),
+        };
         // The pet gate `0x4bcf70`, asked once for every slot bound to a pet spell: the bar those
         // slots read the history of, and the pet's object when the gate holds.
         let pet_leg = pet_bar.as_deref().map(|bar| {
@@ -633,23 +677,8 @@ impl ActionStates<'_, '_> {
                     } else {
                         st.usable = true;
                     }
-                    let row = spells.as_ref().and_then(|s| s.ranges.get(d.range_index));
-                    // `ActionHasRange 0x4e5810` asks `GetMinMaxRange` with a null target
-                    // (`0x4e5852`) and tests `|min|` and `|max|` against `FLT_EPSILON`. The
-                    // auto-attack target the melee arm falls back to cannot move that: its max is
-                    // at least the 5.0 floor.
-                    st.has_range = spell_mods
-                        .min_max_range(d, row, caster, RangeTargets::default())
-                        .is_some_and(|(min, max)| {
-                            min.abs() > f32::EPSILON || max.abs() > f32::EPSILON
-                        });
-                    // `IsActionInRange 0x4e56f0`: nil with no player (`0x4e572b`), else the
-                    // pre-check `0x6e4440` on the selection, whose compare `0x6e47b0` hands
-                    // `GetMinMaxRange` that target (`0x6e47ca`): its reach pads a ranged row, and
-                    // its motion with the caster's earns the moving bonus.
-                    st.in_range = me.and_then(|_| {
-                        crate::spell::range_check::action_in_range(d, &cast_ctx, row, spell_mods)
-                    });
+                    let range = range_answers(d, spells.as_deref(), &range_leg);
+                    (st.has_range, st.in_range) = range;
                     let info = cooldowns.info(button.action, 0, Some(d), now);
                     st.cooldown = info.ui_triple(anchor, ui_now);
                     if st.cooldown.is_some() && trace_cd {
@@ -727,6 +756,13 @@ impl ActionStates<'_, '_> {
                     }
                     if let Some(u) = use_spell {
                         let d = spells.as_ref().and_then(|s| s.catalog.get(u.spell_id));
+                        // Both range queries resolve the slot to this spell with book 0
+                        // (`0x4e5a50` into `0x4e5ae0`) and test it as a spell slot's; a missing
+                        // record answers none (`0x4e5846`, `0x4e5752`).
+                        if let Some(d) = d {
+                            (st.has_range, st.in_range) =
+                                range_answers(d, spells.as_deref(), &range_leg);
+                        }
                         let info =
                             cooldowns.info_item(u.spell_id, button.action, u.category, d, now);
                         st.cooldown = info.ui_triple(anchor, ui_now);
