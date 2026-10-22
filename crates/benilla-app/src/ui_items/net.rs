@@ -182,17 +182,26 @@ mod tests {
     /// `UI_ERROR_MESSAGE`, `PLAYER_ENTERING_WORLD` and `BAG_UPDATE_COOLDOWN` handlers each note
     /// `HasKey()` behind their letter.
     fn keyring_client() -> App {
-        use crate::items::Items;
+        let mut app = keyring_client_without_the_record();
+        app.world_mut()
+            .resource_mut::<crate::items::Items>()
+            .insert_template(KEY, Some(key_record()));
+        app
+    }
+
+    /// The key's record: a key-family item.
+    fn key_record() -> benilla_protocol::messages::ItemInfo {
+        benilla_protocol::messages::ItemInfo {
+            bag_family: super::super::BAG_FAMILY_KEYS,
+            ..crate::items::test_template("Key")
+        }
+    }
+
+    /// [`keyring_client`] before the key's record is known.
+    fn keyring_client_without_the_record() -> App {
         const ME: u64 = 0x7;
         let mut app = crate::game_plugins::schedule_tests::headless_client();
         let world = app.world_mut();
-        world.resource_mut::<Items>().insert_template(
-            KEY,
-            Some(benilla_protocol::messages::ItemInfo {
-                bag_family: super::super::BAG_FAMILY_KEYS,
-                ..crate::items::test_template("Key")
-            }),
-        );
         let me = world
             .spawn((
                 crate::net::Guid(ME),
@@ -235,6 +244,11 @@ mod tests {
     /// `key_first`, through the handlers; then the bag feed, `between` (what the feeds after it
     /// fire), and the lanes' drain.
     fn refusal_and_key_frame(app: &mut App, key_first: bool, between: fn(&mut UiScript)) {
+        frame(app, Vec::new(), packets_of(key_first), between);
+    }
+
+    /// The refusal, and the key's create and seat, in that order or the key first.
+    fn packets_of(key_first: bool) -> Vec<SessionEvent> {
         let guid = u64::from(benilla_protocol::guid::HIGH_ITEM) << 48 | 0xA1;
         let refusal = SessionEvent::InventoryFailure {
             reason: REFUSAL,
@@ -266,13 +280,28 @@ mod tests {
             },
             SessionEvent::ObjectUpdateEnd,
         ];
-        let packets: Vec<SessionEvent> = if key_first {
+        if key_first {
             key.into_iter().chain([refusal]).collect()
         } else {
             std::iter::once(refusal).chain(key).collect()
-        };
+        }
+    }
+
+    /// The refusal alone.
+    fn refusal() -> SessionEvent {
+        packets_of(false).swap_remove(0)
+    }
+
+    /// One frame: `ahead`, then `packets`, through the handlers; the bag feed, `between`, and the
+    /// lanes' drain.
+    fn frame(
+        app: &mut App,
+        ahead: Vec<SessionEvent>,
+        packets: Vec<SessionEvent>,
+        between: fn(&mut UiScript),
+    ) {
         let world = app.world_mut();
-        crate::net::handlers::dispatch(world, packets);
+        crate::net::handlers::dispatch(world, ahead.into_iter().chain(packets).collect());
         world
             .run_system_cached(super::super::feed::feed_containers)
             .unwrap();
@@ -308,6 +337,46 @@ mod tests {
             ("E1".into(), true),
             "the key came first"
         );
+    }
+
+    /// A write of our player that the bags do not read, its health's regeneration, stamps no
+    /// swap: the refusal after it still reads the bags before the key that follows it.
+    #[test]
+    fn a_write_the_bags_do_not_read_leaves_the_refusal_on_the_old_bags() {
+        let mut app = keyring_client();
+        let regen = SessionEvent::ObjectValues {
+            guid: 0x7,
+            fields: benilla_protocol::ObjectFields::from_pairs(&[(22, 80)]),
+        };
+        frame(
+            &mut app,
+            vec![regen, SessionEvent::ObjectUpdateEnd],
+            packets_of(false),
+            |_| {},
+        );
+        let s = app.world().non_send_resource::<UiScript>();
+        assert_eq!(s.eval::<String>("return SEEN").unwrap(), "E0");
+    }
+
+    /// The record answer for a key already in the backpack changes what the bags show of it
+    /// (`HasKey()` reads the key family off the record): a refusal ahead of the answer reads the
+    /// bags before it.
+    #[test]
+    fn a_record_answer_after_a_refusal_swaps_the_bags_at_the_answer() {
+        let mut app = keyring_client_without_the_record();
+        let key = packets_of(true);
+        frame(&mut app, Vec::new(), key[..4].to_vec(), |_| {});
+        let s = app.world_mut().non_send_resource_mut::<UiScript>();
+        assert!(!s.eval::<bool>("return HasKey() == 1").unwrap());
+        s.run("SEEN = ''").unwrap();
+        let answer = SessionEvent::ItemTemplate {
+            entry: KEY,
+            info: Some(Box::new(key_record())),
+        };
+        frame(&mut app, Vec::new(), vec![refusal(), answer], |_| {});
+        let s = app.world().non_send_resource::<UiScript>();
+        assert_eq!(s.eval::<String>("return SEEN").unwrap(), "E0");
+        assert!(s.eval::<bool>("return HasKey() == 1").unwrap());
     }
 
     /// The feeds' own events after the bag feed read this frame's bags, whatever the lanes owe:
