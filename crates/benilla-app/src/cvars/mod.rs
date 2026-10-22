@@ -1637,6 +1637,11 @@ mod tests {
         let mut app = cvar_app();
         apply(&mut app, "MusicVolume", "0.7");
         assert_eq!(res::<SoundConfig>(&app).music, 0.7);
+        // `widescreen`'s integer, as `0x48bcac` and `0x4901e0` read it.
+        apply(&mut app, "widescreen", "0");
+        assert!(!res::<crate::video::Widescreen>(&app).0);
+        apply(&mut app, "widescreen", "2");
+        assert!(res::<crate::video::Widescreen>(&app).0);
         // A string row reaches its knob; a value that is not an address leaves the knob alone.
         apply(&mut app, "realmList", "logon.example.org:3724");
         assert_eq!(
@@ -2677,6 +2682,7 @@ mod tests {
             .init_resource::<benilla_world::weather::WeatherState>()
             .init_resource::<benilla_world::particles::ParticleTuning>()
             .init_resource::<crate::video::SpellEffectLevel>()
+            .init_resource::<crate::video::Widescreen>()
             .init_resource::<crate::ui_gamma::DisplayGamma>()
             .init_resource::<ClickConfig>()
             .init_resource::<crate::target::AssistAttack>()
