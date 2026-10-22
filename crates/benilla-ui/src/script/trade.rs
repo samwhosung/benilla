@@ -63,6 +63,11 @@ pub struct TradeSlotItem {
     /// The escaped item link the link verbs answer; `None` while the template is in flight, since
     /// it embeds the name and the quality.
     pub link: Option<String>,
+    /// Our own side only: the link `0x52ae00` builds of the item object while its record is not
+    /// cached, white and nameless (`0x52aec5`, `0x5d8b40`), which `GetTradePlayerItemLink` answers
+    /// (`0x4c06bc`); `None` once [`Self::link`] is set. The partner's slot links nothing without
+    /// its record (`0x4c03ef`).
+    pub uncached_link: Option<String>,
 }
 
 /// A trade verb past its binding's checks, which the host applies inside the call
@@ -790,6 +795,7 @@ fn trade_slot_item(model: &Model, item: &cursor::CursorItem) -> TradeSlotItem {
         .and_then(|c| c.slots.get(&item.slot))
         .filter(|s| s.item_id == item.item_id)
         .map(|s| TradeSlotItem {
+            uncached_link: None,
             item_id: s.item_id,
             name: name(s.link.as_deref()),
             texture: s.texture.clone(),
@@ -1135,6 +1141,7 @@ mod tests {
 
     fn item(item_id: u32, count: u32, quality: u32) -> TradeSlotItem {
         TradeSlotItem {
+            uncached_link: None,
             item_id,
             name: Some("Linen Cloth".into()),
             texture: Some("Interface\\Icons\\INV_Fabric_Linen_01".into()),
@@ -1186,6 +1193,7 @@ mod tests {
         let mut st = state();
         // A slot whose template is in flight has no link.
         st.target.slots[1] = Some(TradeSlotItem {
+            uncached_link: None,
             item_id: 4306,
             name: None,
             texture: None,
@@ -1225,6 +1233,46 @@ mod tests {
         assert!(s
             .eval::<bool>("return GetTradePlayerItemLink(9) == nil")
             .unwrap());
+    }
+
+    /// Both link verbs push nothing, never a nil, for no trade, an empty slot or an index past
+    /// the seven (`0x4c06b8` → `0x4c066f`; `0x4c03be`, `0x4c03d0` → `0x4c039f`), and the
+    /// partner's slot nothing without its record (`0x4c03ef`). Our own uncached item links through
+    /// `0x52ae00` (`0x4c06bc`), white and nameless.
+    #[test]
+    fn the_trade_link_verbs_push_nothing_without_an_item() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        for call in ["GetTradePlayerItemLink(1)", "GetTradeTargetItemLink(1)"] {
+            assert_eq!(s.arity(call).unwrap(), 0, "no trade: {call}");
+        }
+        let nameless = "|cffffffff|Hitem:2589:1900:0:0|h[]|h|r";
+        let mut st = state();
+        st.target.slots[1] = Some(TradeSlotItem {
+            item_id: 4306,
+            count: 1,
+            ..Default::default()
+        });
+        st.player.slots[1] = Some(TradeSlotItem {
+            item_id: 2589,
+            count: 1,
+            uncached_link: Some(nameless.into()),
+            ..Default::default()
+        });
+        s.set_trade(Some(st));
+        assert_eq!(
+            s.eval::<String>("return GetTradePlayerItemLink(2)")
+                .unwrap(),
+            nameless
+        );
+        for call in [
+            "GetTradeTargetItemLink(2)",
+            "GetTradeTargetItemLink(3)",
+            "GetTradePlayerItemLink(7)",
+            "GetTradePlayerItemLink(9)",
+        ] {
+            assert_eq!(s.arity(call).unwrap(), 0, "{call}");
+        }
     }
 
     #[test]

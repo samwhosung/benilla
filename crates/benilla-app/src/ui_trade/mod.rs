@@ -787,6 +787,7 @@ fn resolve_slot(
         .flatten()
         .map(str::to_string);
     TradeSlotItem {
+        uncached_link: None,
         item_id: item.entry,
         name,
         texture,
@@ -805,6 +806,17 @@ fn resolve_slot(
         durability: (item.durability, item.max_durability),
         link,
     }
+}
+
+/// [`resolve_slot`] for a slot of our own.
+fn resolve_own_slot(
+    item: &TradeItem,
+    items: &Items,
+    icons: Option<&ItemDisplays>,
+    names: &NameCache,
+    rolls: crate::items::RollCatalogs,
+) -> TradeSlotItem {
+    resolve_slot(item, items, icons, names, rolls)
 }
 
 /// Our item object `guid` as a wire [`TradeItem`] of `count`.

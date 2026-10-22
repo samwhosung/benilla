@@ -37,6 +37,7 @@ fn load_ui(script: &UiScript) {
 
 fn item(item_id: u32, name: &str, count: u32, quality: u32) -> TradeSlotItem {
     TradeSlotItem {
+        uncached_link: None,
         item_id,
         name: Some(name.to_string()),
         texture: Some("Interface\\Icons\\INV_Fabric_Linen_01".to_string()),

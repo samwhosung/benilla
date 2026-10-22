@@ -148,6 +148,40 @@ fn an_own_slot_links_from_the_item_object() {
     );
 }
 
+/// Our own item with no cached record still links (`0x4c06bc` → `0x52ae00`): white
+/// (`0x52aec5`) and nameless (`0x5d8b40`), with the object's enchant, roll and seed, the record's
+/// flags reading 0 without it (`0x5da2a0`).
+#[test]
+fn an_own_slot_with_no_record_links_white_and_nameless() {
+    use bevy::ecs::system::RunSystemOnce;
+    const GUID: u64 = 0x4000_0000_0000_0123;
+    let mut world = World::new();
+    world.init_resource::<GuidIndex>();
+    world.insert_resource(Items::default());
+    crate::items::test_spawn_item(
+        &mut world,
+        GUID,
+        benilla_protocol::ObjectFields::from_pairs(&[(3, 1234), (22, 1900), (43, 7), (44, 862)]),
+        false,
+    );
+    let item = world
+        .run_system_once(|objects: Objects, items: Res<Items>| own_item(GUID, 1, &objects, &items))
+        .unwrap()
+        .expect("the item streams");
+    let row = resolve_own_slot(
+        &item,
+        world.resource::<Items>(),
+        None,
+        &NameCache::default(),
+        crate::items::RollCatalogs::NONE,
+    );
+    assert_eq!(row.link, None);
+    assert_eq!(
+        row.uncached_link.as_deref(),
+        Some("|cffffffff|Hitem:1234:1900:862:7|h[]|h|r")
+    );
+}
+
 /// A wrapped gift's giver rides both columns: the partner's block carries the wire's wrapped
 /// word and gift creator (`0x534559`, `0x534574`), our placed item's object the same; only a
 /// wrapped item names it, a zero guid names no one, and a name not yet answered is `None`.
