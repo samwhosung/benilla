@@ -266,5 +266,4 @@ pub(super) const INERT: &[Registered] = &[
     same("UnitNameRenderMode", "2"),        // 0x48fdc3
     same("violenceLevel", "2"),             // 0x6c5ae1
     same("waterLOD", "0").checked(benilla_ui::script::check_water_lod), // 0x688784
-    same("widescreen", "1"),                // 0x63a74f
 ];

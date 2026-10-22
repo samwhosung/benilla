@@ -579,6 +579,11 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // (`GetScriptMemory 0x46da10`, `SetScriptMemory 0x46da50`) and watched each frame in the
     // world (`0x495599`), [`crate::ui_memory`].
     same("scriptMemory", "49152"),
+    // `widescreen` (`0x63a74f`: name `0x837050`, "1", flags 0, record `[0xc4ec08]`): off, the
+    // resolution list is the four fixed sizes (`0x48bcac`, [`crate::video`]) and the glue's and
+    // the interface's aspect is 4/3 (`0x46ab40`, `0x4901e0`; `crate::ui_script::glue`,
+    // [`crate::portrait::GxAspect`]).
+    same("widescreen", "1"),
     // `gxApi` (`0x63a833`: name `0x842a64`, default `0x864f7c` "direct3d", flags 3, callback
     // `0x63b030`, record `[0xc4ea94]`): the reference builds D3D9 unless it reads "OpenGl"
     // (`0x63a3c4`, `0x842a5c`). Here it reports the wgpu backend (`wgpu::Backend::to_str`), pushed

@@ -564,12 +564,13 @@ pub(crate) struct PartyBooths<'w, 's> {
 #[derive(Component)]
 pub(crate) struct BoothCam(pub(crate) String);
 
-/// The display aspect the client's `screencoord` scale uses: `gxResolution`'s width/height with
-/// `widescreen` on (its default), `4/3` off. Read by [`framing::pane_model_scale`].
+/// The display aspect the client's `screencoord` scale uses (`0x4901e0`): `gxResolution`'s
+/// width/height with `widescreen` on (its default), `4/3` off. Read by
+/// [`framing::pane_model_scale`]. Defaults to `4/3`, where the factor is 1.0.
 ///
-/// Deviation: this reads the window's aspect, not `gxResolution` (here only the windowed size)
-/// under `widescreen` (not registered), because fullscreen is the monitor's own size with no mode
-/// list, where the two agree. Defaults to `4/3`, where the factor is 1.0.
+/// Deviation: this reads the window's aspect, not `gxResolution`'s, because the window here takes
+/// any shape a drag gives it, where the reference's keeps `gxResolution`'s (`0x5989d7`); in
+/// fullscreen the two agree.
 #[derive(Resource)]
 pub(crate) struct GxAspect(pub(crate) f32);
 
@@ -579,20 +580,25 @@ impl Default for GxAspect {
     }
 }
 
-/// Track the primary window's aspect into [`GxAspect`].
+/// Track the primary window's aspect into [`GxAspect`], or 4/3 with `widescreen` off.
 fn feed_gx_aspect(
     mut gx: ResMut<GxAspect>,
     window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    cvars: Option<Res<crate::cvars::Cvars>>,
 ) {
     let Ok(w) = window.single() else {
         return;
     };
     let (px_w, px_h) = (w.resolution.width(), w.resolution.height());
-    if px_h > 0.0 {
-        let a = px_w / px_h;
-        if (a - gx.0).abs() > 1e-4 {
-            gx.0 = a;
-        }
+    let a = if !crate::loading_screen::widescreen(cvars.as_deref()) {
+        4.0 / 3.0
+    } else if px_h > 0.0 {
+        px_w / px_h
+    } else {
+        return;
+    };
+    if (a - gx.0).abs() > 1e-4 {
+        gx.0 = a;
     }
 }
 

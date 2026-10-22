@@ -505,8 +505,8 @@ fn offerable(r: ScreenResolution) -> bool {
 }
 
 /// The reference's four hardcoded modes, in its append order (`0x48bda2`, `0x48bddf`, `0x48be43`,
-/// `0x48bea7`), used when no enumerated mode survives [`offerable`]. The reference also takes this
-/// path when `widescreen` (`0x63a747`, default `"1"`) is 0; benilla does not register that CVar.
+/// `0x48bea7`), used when no enumerated mode survives [`offerable`], and alone when `widescreen`
+/// is 0 (`0x48bcac`-`0x48bcc1`).
 const SCREEN_FALLBACK: [ScreenResolution; 4] = [
     ScreenResolution {
         width: 800,
@@ -527,14 +527,18 @@ const SCREEN_FALLBACK: [ScreenResolution; 4] = [
 ];
 
 /// The rows `GetScreenResolutions` offers from the monitors' sizes and modes: [`offerable`] ones
-/// in ascending area, else [`SCREEN_FALLBACK`].
+/// in ascending area, else [`SCREEN_FALLBACK`], which `widescreen` off takes whatever the
+/// display offers, never mixed with its modes (`0x48bd79`-`0x48bd91`).
 fn offered_modes<'a>(
     monitors: impl IntoIterator<Item = &'a Monitor>,
-    _widescreen: bool,
+    widescreen: bool,
 ) -> Vec<ScreenResolution> {
     let mut offered: Vec<ScreenResolution> = Vec::new();
     for m in monitors {
         // The monitor's own scale, not the window's: these rows describe the panel.
+    if !widescreen {
+        return SCREEN_FALLBACK.to_vec();
+    }
         let scale = if m.scale_factor > 0.0 {
             m.scale_factor
         } else {
@@ -572,8 +576,10 @@ fn publish_display_modes(
 ) {
     hosted_vm.run(|script| {
         let Some(script) = script else {
+    cvars: Option<Res<crate::cvars::Cvars>>,
             return;
         };
+    let widescreen = crate::loading_screen::widescreen(cvars.as_deref());
         let Ok(window) = windows.single() else {
             return;
         };
@@ -583,7 +589,7 @@ fn publish_display_modes(
             height: res.height() as u32,
         })
         .filter(|r| r.width > 0 && r.height > 0);
-        let offered = offered_modes(&monitors, true);
+        let offered = offered_modes(&monitors, widescreen);
         // Keyed by VM: a `ReloadUI` VM has been pushed nothing, so a plain `Local` would skip it.
         let memo = last.get(script);
         if memo.as_ref() == Some(&(offered.clone(), current)) {
