@@ -935,9 +935,11 @@ pub(crate) mod schedule_tests {
     ///   `quest_markers::bake_seat_scale`. It reads its two units' poses for the display range;
     ///   those move booth, emitter and marker-seat entities, never a unit;
     /// - the lanes' drain (`lanes::fire_in_order`), exclusive as the handler table's drain is,
-    ///   against the world systems no UI phase orders, which bevy lists with no component: its
-    ///   lanes' firings read the chat log, the notice lane, the names and the VM with the call
-    ///   host, and of those the world systems touch only the name cache, a pure cache.
+    ///   against the 80 world systems no declared order places against it, which bevy lists with
+    ///   no component. What they meet of the drain's (its lanes' firings, the VM with the call host,
+    ///   and the unit edits it applies in place: `Casting`, the auto-repeat arm, a precast, the
+    ///   cast events) is the name cache alone, a pure cache, which the persisted-name load writes;
+    ///   `lanes::guard_tests` checks that it stays so.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource

@@ -597,7 +597,8 @@ mod tests {
 
     /// A global notice fires its event bare, once, whatever unit raised it; the PvP preference
     /// shows its toast for the new state, then its verbose sentence as a chat line, whose
-    /// `CHAT_MSG_SYSTEM` fires inside the watcher's run (`0x496822`-`0x496842`).
+    /// `CHAT_MSG_SYSTEM` fires inside the watcher's run, its line function called directly
+    /// (`0x5eeb5d` → `0x49a870`).
     #[test]
     fn a_global_notice_fires_bare_and_the_pvp_preference_speaks() {
         let mut app = world(seated());

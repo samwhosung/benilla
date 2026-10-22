@@ -23,6 +23,11 @@ use bevy::prelude::*;
 /// How deep a stamp nests: an item pushed by one fired that deep is stamped as a fresh one and
 /// waits for the next drain, so a listener that queues an item each time it hears one cannot
 /// hold the frame.
+///
+/// Deviation: the reference has no such cap. A signal raised inside a listener runs nested in
+/// its call, bounded only by `luaD_call`'s C-stack count of 200 (`0x6f65ae`), whose error ends
+/// the innermost listener alone. The cap exists only because verbs a listener calls still queue
+/// onto a lane instead of firing inside the call (#2202), and goes once none does.
 const DEPTH: usize = 4;
 
 /// An item's place in the order: the clock's count when it was pushed, under the stamps of the
@@ -133,7 +138,12 @@ struct Lane {
 
 /// Every lane, in registration order.
 #[derive(Resource, Default)]
-pub(crate) struct Lanes(Vec<Lane>);
+pub(crate) struct Lanes(
+    Vec<Lane>,
+    /// Each lane's firing's declared access, for the tests that ask what the drain touches.
+    #[cfg(test)]
+    pub(crate) Vec<bevy::ecs::query::FilteredAccessSet>,
+);
 
 impl Lanes {
     /// The lanes' names, for the tests.
@@ -193,7 +203,16 @@ impl LaneApp for App {
         {
             return self;
         }
+        // Initialized here, its access kept: the run initializes it again, on the same state.
+        #[cfg(test)]
+        let (fire, access) = {
+            let mut system = IntoSystem::into_system(fire);
+            let access = bevy::ecs::system::System::initialize(&mut system, self.world_mut());
+            (system, access)
+        };
         let fire = self.world_mut().register_system(fire);
+        #[cfg(test)]
+        self.world_mut().resource_mut::<Lanes>().1.push(access);
         self.world_mut().resource_mut::<Lanes>().0.push(Lane {
             name,
             peek,
@@ -362,7 +381,8 @@ mod unit_tests {
         );
     }
 
-    /// Past [`DEPTH`] a pushed item is stamped fresh and waits for the next drain.
+    /// benilla's own choice, not the reference's ([`DEPTH`]'s `Deviation:`): past four levels a
+    /// pushed item is stamped fresh and waits for the next drain.
     #[test]
     fn a_chain_of_pushes_past_the_depth_waits_for_the_next_drain() {
         let mut app = app(&[

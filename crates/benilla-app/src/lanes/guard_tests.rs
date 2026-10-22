@@ -630,3 +630,101 @@ fn every_handler_queue_a_feed_takes_is_on_a_lane_or_listed() {
     );
     assert!(stale.is_empty(), "stale rows: {stale:?}");
 }
+
+/// The drain is exclusive, so bevy lists its pairs with every system no declared order places
+/// against it with no component. What those systems meet of the drain's (its lanes' firings'
+/// access, and the unit edits it applies in place after each: a cast's `Casting`, the auto-repeat
+/// arm, a precast, the cast events and their sequence) is a pure cache at most, which commutes:
+/// the ambiguity ceiling's reason for these pairs.
+#[test]
+fn the_systems_unordered_against_the_drain_meet_it_only_on_a_pure_cache() {
+    use bevy::ecs::query::{Access, AccessConflicts};
+    let mut app = headless_client();
+    let mut drain = Access::new();
+    for a in &app.world().resource::<super::Lanes>().1 {
+        drain.extend(a.combined_access());
+    }
+    {
+        let world = app.world_mut();
+        for id in [
+            world.register_component::<crate::creature_anim::Casting>(),
+            world.register_component::<crate::creature_anim::AutoRepeatArmed>(),
+            world.register_component::<crate::creature_anim::Precast>(),
+        ] {
+            drain.add_component_write(id);
+        }
+        for t in [
+            TypeId::of::<crate::creature_anim::PlaySeq>(),
+            TypeId::of::<bevy::ecs::message::Messages<crate::creature_anim::CastEvent>>(),
+        ] {
+            if let Some(id) = world.components().get_resource_id(t) {
+                drain.add_resource_write(id);
+            }
+        }
+    }
+    // Each system's access, read before the census builds the schedule.
+    let accesses: HashMap<_, Access> = app.world_mut().schedule_scope(Update, |world, schedule| {
+        schedule.graph_mut().systems.initialize(world);
+        let graph = schedule.graph();
+        graph
+            .systems
+            .iter()
+            .filter_map(|(k, _, _)| {
+                Some((k, graph.systems.get(k)?.access.combined_access().clone()))
+            })
+            .collect()
+    });
+    let c = census(&mut app, Update, SyncPoints::Declared);
+    if !type_names_available(&c) {
+        eprintln!("skipped: this build carries no type names");
+        return;
+    }
+    let (drain_key, _) = c
+        .systems
+        .iter()
+        .find(|(_, s)| s.name.ends_with("::lanes::fire_in_order"))
+        .expect("the drain is in Update");
+    let mut next: HashMap<_, Vec<_>> = HashMap::new();
+    let mut prev: HashMap<_, Vec<_>> = HashMap::new();
+    for (a, b) in &c.dependencies {
+        next.entry(*a).or_default().push(*b);
+        prev.entry(*b).or_default().push(*a);
+    }
+    let reach = |edges: &HashMap<_, Vec<_>>| {
+        let mut seen = std::collections::HashSet::new();
+        let mut stack = vec![*drain_key];
+        while let Some(n) = stack.pop() {
+            for m in edges.get(&n).into_iter().flatten() {
+                if seen.insert(*m) {
+                    stack.push(*m);
+                }
+            }
+        }
+        seen
+    };
+    let (after, before) = (reach(&next), reach(&prev));
+    let world = app.world();
+    let mut hazards = Vec::new();
+    for (k, a) in &accesses {
+        if k == drain_key || after.contains(k) || before.contains(k) || a.is_compatible(&drain) {
+            continue;
+        }
+        let met: Vec<String> = match a.get_conflicts(&drain) {
+            AccessConflicts::All => vec!["everything".to_string()],
+            AccessConflicts::Individual(ids) => ids
+                .ones()
+                .map(ComponentId::new)
+                .filter(|id| !c.classes.caches.contains(id))
+                .map(|id| name(world, id))
+                .collect(),
+        };
+        if !met.is_empty() {
+            hazards.push(format!("{}: {met:?}", c.name(*k)));
+        }
+    }
+    assert!(
+        hazards.is_empty(),
+        "these run in no declared order against the drain and meet what it touches; order them:\n  {}",
+        hazards.join("\n  ")
+    );
+}
