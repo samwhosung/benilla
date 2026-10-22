@@ -17,3 +17,6 @@ roxmltree = "0.20"
 # The script host's Lua: benilla's own interpreter, through a crate that answers to the name
 # `mlua` (`src/lib.rs`).
 benilla-mlua = { path = "../benilla-mlua" }
+# `date` and `time`'s local zone: `localtime_r`, `mktime` and `tzname` on unix, the CRT's
+# `localtime_s` and zone globals on Windows (`civil`).
+libc = "0.2"

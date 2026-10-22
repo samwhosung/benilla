@@ -242,11 +242,8 @@ format = string.format
 
 /// `time([t])` and `date([format [, when]])`: 1.12 engine globals (`0x7035a0`, `0x7033a0`), Lua
 /// 5.0's `os.time`/`os.date` hoisted, over the client's statically linked MSVC runtime. `time` is
-/// wall-clock epoch seconds, as addons persist it across sessions.
-///
-/// Deviation: both read and format time as UTC where the reference uses local time, because the
-/// tree has no timezone database: the reference as it runs in a zone with no offset and no
-/// daylight saving.
+/// wall-clock epoch seconds, as addons persist it across sessions; a table and `date` read the
+/// system's zone through the platform's runtime ([`crate::civil::local`]).
 fn install_time(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
     g.set(
@@ -256,7 +253,10 @@ fn install_time(lua: &Lua) -> mlua::Result<()> {
             let Some(t) = t else {
                 return Ok(mlua::Value::Number(crate::civil::unix_seconds() as f64));
             };
-            Ok(match mktime(&date_fields(lua, &t)?) {
+            let (fields, isdst) = date_fields(lua, &t)?;
+            let secs =
+                mktime_utc(&fields).and_then(|utc| crate::civil::local_seconds(utc, fields, isdst));
+            Ok(match secs {
                 Some(secs) => mlua::Value::Number(f64::from(secs)),
                 None => mlua::Value::Nil,
             })
@@ -273,13 +273,23 @@ fn install_time(lua: &Lua) -> mlua::Result<()> {
                 -1 => crate::civil::unix_seconds(),
                 s => i64::from(s),
             };
-            // A leading `!` is `gmtime` (`0x7033f0`), else `localtime`: both UTC here.
-            let body = fmt.strip_prefix(b"!").unwrap_or(fmt);
+            // A leading `!` is `gmtime` (`0x7033f0`), else `localtime` (`0x73f125`).
+            let (body, utc) = match fmt.strip_prefix(b"!") {
+                Some(body) => (body, true),
+                None => (fmt, false),
+            };
             // Either refuses a negative time (`0x7421ee`), and `date` answers nil (`0x70341d`).
             if secs < 0 {
                 return Ok(mlua::Value::Nil);
             }
-            let c = crate::civil::from_unix(secs);
+            let (c, isdst) = if utc {
+                (crate::civil::from_unix(secs), false)
+            } else {
+                match crate::civil::local(secs) {
+                    Some(local) => local,
+                    None => return Ok(mlua::Value::Nil),
+                }
+            };
             // `*t` exactly, its NUL compared too (`0x70343c`), answers a table.
             if body == b"*t" {
                 let t = lua.create_table()?;
@@ -294,12 +304,11 @@ fn install_time(lua: &Lua) -> mlua::Result<()> {
                 t.set("wday", c.weekday + 1)?;
                 // Already 1-based, as in Lua.
                 t.set("yday", c.yearday)?;
-                // UTC has no daylight saving.
-                t.set("isdst", false)?;
+                t.set("isdst", isdst)?;
                 return Ok(mlua::Value::Table(t));
             }
             // An empty or 256-byte answer is `strftime`'s 0 (`0x70350d`).
-            match strftime(&c, body) {
+            match strftime(&c, isdst, body) {
                 Some(text) => Ok(mlua::Value::String(lua.create_string(text)?)),
                 None => Err(mlua::Error::RuntimeError("`date' format too long".into())),
             }
@@ -309,21 +318,12 @@ fn install_time(lua: &Lua) -> mlua::Result<()> {
 }
 
 /// The `struct tm` fields `time` reads from its table (`0x7035f3`..`0x703666`), in its order:
-/// `sec`, `min`, `hour`, `day`, `month` less 1 and `year` less 1900, as `int`s.
-struct TmFields {
-    sec: i32,
-    min: i32,
-    hour: i32,
-    mday: i32,
-    mon: i32,
-    year: i32,
-}
-
-/// 5.0's `getfield` (`0x7036f0`) for each field: `lua_gettable`, so `__index` answers; a number
+/// `sec`, `min`, `hour`, `day`, `month` less 1 and `year` less 1900, as `int`s, by 5.0's
+/// `getfield` (`0x7036f0`) for each field: `lua_gettable`, so `__index` answers; a number
 /// or numeric string through `__ftol`, else the default, and `day`, `month` and `year` have none.
-/// `isdst` (`getboolfield`, `0x7036b0`) is read last and moves nothing in a zone without daylight
-/// saving (`_dstbias` 0, `0x41465d`).
-fn date_fields(lua: &Lua, t: &mlua::Table) -> mlua::Result<TmFields> {
+/// `isdst` (`getboolfield`, `0x7036b0`) is read last, as `lua_toboolean`: nil is false, never the
+/// C library's "unknown".
+fn date_fields(lua: &Lua, t: &mlua::Table) -> mlua::Result<(crate::civil::TmFields, bool)> {
     let field = |key: &str, default: Option<i32>| -> mlua::Result<i32> {
         let v: mlua::Value = t.get(key)?;
         match (lua.coerce_number(v)?, default) {
@@ -334,7 +334,7 @@ fn date_fields(lua: &Lua, t: &mlua::Table) -> mlua::Result<TmFields> {
             ))),
         }
     };
-    let f = TmFields {
+    let f = crate::civil::TmFields {
         sec: field("sec", Some(0))?,
         min: field("min", Some(0))?,
         hour: field("hour", Some(12))?,
@@ -342,14 +342,18 @@ fn date_fields(lua: &Lua, t: &mlua::Table) -> mlua::Result<TmFields> {
         mon: field("month", None)?.wrapping_sub(1),
         year: field("year", None)?.wrapping_sub(1900),
     };
-    let _isdst: mlua::Value = t.get("isdst")?;
-    Ok(f)
+    let isdst: mlua::Value = t.get("isdst")?;
+    Ok((
+        f,
+        !matches!(isdst, mlua::Value::Nil | mlua::Value::Boolean(false)),
+    ))
 }
 
-/// The runtime's `_mktime` (`0x74066b`, through `0x740687`) at a zero `_timezone`: `tm_year` in
+/// The runtime's `_mktime` (`0x74066b`, through `0x740687`) up to its zone: `tm_year` in
 /// 69..=139, the month folded into the year, then days, hours, minutes and seconds, each step
-/// refused on a 32-bit overflow; `localtime` then refuses a negative time. `None` is its -1.
-fn mktime(f: &TmFields) -> Option<i32> {
+/// refused on a 32-bit overflow (`0x740864`). `None` is its -1; the zone is
+/// [`crate::civil::local_seconds`].
+fn mktime_utc(f: &crate::civil::TmFields) -> Option<i32> {
     // `_days` (`0x832834`): the days before each month, less one.
     const DAYS: [i32; 13] = [-1, 30, 58, 89, 119, 150, 180, 211, 242, 272, 303, 333, 364];
     let years = 69..=139;
@@ -374,15 +378,13 @@ fn mktime(f: &TmFields) -> Option<i32> {
     }
     // Days since 1970 less one: `(y - 70) * 365 + ((y - 1) >> 2) - 17` (`0x740701`-`0x74070c`).
     let days = year * 365 + ((year - 1) >> 2) + before - 25_567;
-    let secs = days
-        .checked_add(f.mday)?
+    days.checked_add(f.mday)?
         .checked_mul(24)?
         .checked_add(f.hour)?
         .checked_mul(60)?
         .checked_add(f.min)?
         .checked_mul(60)?
-        .checked_add(f.sec)?;
-    (secs >= 0).then_some(secs)
+        .checked_add(f.sec)
 }
 
 const DAYS: [&str; 7] = [
@@ -415,15 +417,13 @@ const SHORT_DATE: &[u8] = b"M/d/yy";
 const LONG_DATE: &[u8] = b"dddd, MMMM dd, yyyy";
 const TIME_OF_DAY: &[u8] = b"H:mm:ss";
 
-/// `%z` and `%Z` (`0x413916`): `_tzname[isdst]`, which `__tzset` (`0x4145a5`) takes from the
-/// Windows zone's standard name; the UTC zone's.
-const ZONE_NAME: &[u8] = b"Coordinated Universal Time";
-
 /// The runtime's `strftime` (`0x4134e3`) into the 256-byte buffer `date` gives it (`0x7034fd`):
-/// `None` when it answers 0, its output empty or filling the buffer.
-fn strftime(c: &crate::civil::Civil, fmt: &[u8]) -> Option<Vec<u8>> {
+/// `None` when it answers 0, its output empty or filling the buffer. `isdst` is the time's
+/// `tm_isdst`, false for `gmtime`'s.
+fn strftime(c: &crate::civil::Civil, isdst: bool, fmt: &[u8]) -> Option<Vec<u8>> {
     let mut w = TimeWriter {
         c,
+        isdst,
         out: Vec::with_capacity(64),
         left: 256,
         alternate: false,
@@ -454,6 +454,7 @@ fn strftime(c: &crate::civil::Civil, fmt: &[u8]) -> Option<Vec<u8>> {
 /// (`0xcf7284`), the `#` mark.
 struct TimeWriter<'a> {
     c: &'a crate::civil::Civil,
+    isdst: bool,
     out: Vec<u8>,
     left: usize,
     alternate: bool,
@@ -570,7 +571,8 @@ impl TimeWriter<'_> {
             }
             b'y' => self.num(tm_year % 100, 2),
             b'Y' => self.num((tm_year / 100 + 19) * 100 + tm_year % 100, 4),
-            b'z' | b'Z' => self.text(ZONE_NAME),
+            // `_tzname[isdst]` (`0x413916`), the zone's standard name after `!`.
+            b'z' | b'Z' => self.text(&crate::civil::zone_name(self.isdst)),
             b'%' => self.byte(b'%'),
             _ => {}
         }

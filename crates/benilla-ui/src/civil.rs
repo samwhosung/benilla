@@ -1,8 +1,8 @@
-//! Broken-down UTC time from an epoch second, the calendar behind `date()` and screenshot names.
-//! Deviation: UTC where the reference's callers use local time, because this crate has no
-//! timezone source.
+//! Broken-down time from an epoch second, the calendar behind `date()` and screenshot names: UTC by
+//! arithmetic, and local time through the platform's own runtime, as the reference's `localtime`
+//! (`0x73f125`) and `_mktime` (`0x74066b`) read the system's zone.
 
-/// Broken-down UTC time.
+/// Broken-down time.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Civil {
     pub year: i64,
@@ -66,6 +66,163 @@ fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
+/// An epoch second broken down in the system's zone, with whether daylight saving is in force:
+/// the platform's `localtime`. `None` where it refuses the time.
+pub fn local(secs: i64) -> Option<(Civil, bool)> {
+    let tm = zone::localtime(secs)?;
+    let c = Civil {
+        year: i64::from(tm.tm_year) + 1900,
+        month: (tm.tm_mon + 1) as u32,
+        day: tm.tm_mday as u32,
+        hour: tm.tm_hour as u32,
+        min: tm.tm_min as u32,
+        sec: tm.tm_sec as u32,
+        weekday: tm.tm_wday as u32,
+        yearday: (tm.tm_yday + 1) as u32,
+    };
+    Some((c, tm.tm_isdst > 0))
+}
+
+/// The fields `_mktime` reads, as `struct tm` holds them: `year` from 1900 and `mon` from 0.
+#[derive(Clone, Copy, Debug)]
+pub struct TmFields {
+    pub sec: i32,
+    pub min: i32,
+    pub hour: i32,
+    pub mday: i32,
+    pub mon: i32,
+    pub year: i32,
+}
+
+/// The epoch second the fields name in the system's zone, `isdst` saying whether they are
+/// daylight time: `_mktime`'s local half (`0x740806`-`0x740842`). `utc` is the same fields read as
+/// UTC, which the caller has range-checked as the runtime does. The answer is a 32-bit `time_t`,
+/// so one past it, or a negative one (`localtime` refuses it, `0x740825`), is `None`.
+pub fn local_seconds(utc: i32, fields: TmFields, isdst: bool) -> Option<i32> {
+    zone::mktime(utc, fields, isdst)
+        .and_then(|t| i32::try_from(t).ok())
+        .filter(|&t| t >= 0)
+}
+
+/// The system zone's name for daylight time or standard, `_tzname[isdst]`.
+pub fn zone_name(isdst: bool) -> Vec<u8> {
+    zone::name(isdst)
+}
+
+/// The platform's half: the C runtime's zone, read afresh (`tzset`) at each call so a change of
+/// `TZ` reaches it.
+#[cfg(unix)]
+mod zone {
+    use std::ffi::{c_char, CStr};
+
+    extern "C" {
+        fn tzset();
+        static tzname: [*const c_char; 2];
+    }
+
+    pub(super) fn reread() {
+        // SAFETY: `tzset` takes nothing and only rereads the zone.
+        unsafe { tzset() };
+    }
+
+    pub(super) fn localtime(secs: i64) -> Option<libc::tm> {
+        reread();
+        let time = secs as libc::time_t;
+        // SAFETY: `localtime_r` fully writes the out-param and reads nothing from it; zeroed is
+        // valid for its integers and its nullable zone-name pointer.
+        let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };
+        // SAFETY: both pointers are to live locals of the types it takes.
+        let got = unsafe { libc::localtime_r(&time, &mut tm) };
+        (!got.is_null()).then_some(tm)
+    }
+
+    pub(super) fn mktime(_utc: i32, f: super::TmFields, isdst: bool) -> Option<i64> {
+        reread();
+        // SAFETY: zeroed is valid for `tm`'s integers and its nullable zone-name pointer.
+        let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };
+        tm.tm_sec = f.sec;
+        tm.tm_min = f.min;
+        tm.tm_hour = f.hour;
+        tm.tm_mday = f.mday;
+        tm.tm_mon = f.mon;
+        tm.tm_year = f.year;
+        tm.tm_isdst = i32::from(isdst);
+        // SAFETY: `mktime` reads and normalises the fields it is given.
+        let t = unsafe { libc::mktime(&mut tm) };
+        (t != -1).then_some(i64::from(t))
+    }
+
+    pub(super) fn name(isdst: bool) -> Vec<u8> {
+        reread();
+        // SAFETY: `tzset` filled both names; each is a NUL-terminated string the runtime owns.
+        unsafe {
+            let names = std::ptr::addr_of!(tzname).read();
+            let p = names[usize::from(isdst)];
+            if p.is_null() {
+                return Vec::new();
+            }
+            CStr::from_ptr(p).to_bytes().to_vec()
+        }
+    }
+}
+
+/// The platform's half on Windows: the CRT's own zone, the one the reference's statically linked
+/// runtime reads (`__tzset`, `0x4145a5`).
+#[cfg(windows)]
+mod zone {
+    pub(super) fn reread() {
+        // SAFETY: `_tzset` takes nothing and only rereads the zone.
+        unsafe { libc::tzset() };
+    }
+
+    pub(super) fn localtime(secs: i64) -> Option<libc::tm> {
+        reread();
+        let time = secs as libc::time_t;
+        // SAFETY: zeroed is valid for `tm`'s integers; `localtime_s` writes it whole on success.
+        let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };
+        (unsafe { libc::localtime_s(&mut tm, &time) } == 0).then_some(tm)
+    }
+
+    /// The runtime's own sum (`0x740811`-`0x74083b`): the UTC reading plus `_timezone`, refused
+    /// when negative, plus `_dstbias` for daylight time.
+    pub(super) fn mktime(utc: i32, _f: super::TmFields, isdst: bool) -> Option<i64> {
+        reread();
+        let (mut zone, mut bias): (libc::c_long, libc::c_long) = (0, 0);
+        // SAFETY: each writes the one long it is handed.
+        unsafe {
+            libc::get_timezone(&mut zone);
+            libc::get_dstbias(&mut bias);
+        }
+        let mut t = utc.wrapping_add(zone as i32);
+        if t < 0 {
+            return None;
+        }
+        if isdst {
+            t = t.wrapping_add(bias as i32);
+        }
+        Some(i64::from(t))
+    }
+
+    pub(super) fn name(isdst: bool) -> Vec<u8> {
+        reread();
+        let mut buf = [0u8; 64];
+        let mut len: libc::size_t = 0;
+        // SAFETY: the runtime writes at most `buf.len()` bytes, NUL included, and the length.
+        let err = unsafe {
+            libc::get_tzname(
+                &mut len,
+                buf.as_mut_ptr().cast(),
+                buf.len(),
+                i32::from(isdst),
+            )
+        };
+        if err != 0 {
+            return Vec::new();
+        }
+        buf[..len.saturating_sub(1).min(buf.len())].to_vec()
+    }
+}
+
 /// Wall-clock seconds since the Unix epoch; a clock set before 1970 reads 0 rather than raising.
 pub fn unix_seconds() -> i64 {
     std::time::SystemTime::now()
@@ -105,16 +262,9 @@ impl Drop for ZoneGuard {
     }
 }
 
-/// The runtime's `tzset`, which rereads `TZ`.
 #[cfg(test)]
 fn reread_zone() {
-    extern "C" {
-        #[cfg_attr(windows, link_name = "_tzset")]
-        fn tzset();
-    }
-    // SAFETY: `tzset` takes nothing and only rereads the zone; the guard's lock keeps the zone
-    // tests from racing it.
-    unsafe { tzset() };
+    zone::reread();
 }
 
 #[cfg(test)]
