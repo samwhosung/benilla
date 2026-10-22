@@ -6,16 +6,17 @@ use benilla_protocol::messages::{ChatMessage, CHAT_MSG_WHISPER};
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
-use super::{Broadcast, ChatEvent, ChatEventKind, ChatLog};
+use super::{Broadcast, ChatLog};
 use crate::net::{ClientCommand, NetCommands, NetHandlerApp, PlayedTimeAnswer, ServerSaidMessage};
 use crate::ui_action::{UiErrorKeys, UiErrorTexts};
 use crate::ui_social::SocialState;
 
-/// Register the chat window's handlers and its session-end listener.
+/// Register the chat window's handlers and its session-end listener, the channel list's among
+/// them.
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
+    super::roster::register(app);
     app.net_handler(K::Chat, on_chat)
-        .net_handler(K::ChannelList, on_channel_list)
         .net_handler(K::ChatPlayerNotFound, on_whisper_refusal)
         .net_handler(K::ChatWrongFaction, on_whisper_refusal)
         .net_handler(K::ZoneUnderAttack, on_broadcast)
@@ -40,15 +41,6 @@ fn on_chat(
 ) {
     if let SessionEvent::Chat(m) = ev {
         chat(m, &chat_log, &social, &commands, &mut server_said);
-    }
-}
-
-fn on_channel_list(In(ev): In<SessionEvent>, chat_log: Res<ChatLog>) {
-    if let SessionEvent::ChannelList {
-        channel, members, ..
-    } = ev
-    {
-        channel_list(channel, &members, &chat_log);
     }
 }
 
@@ -118,8 +110,13 @@ fn on_random_roll(In(ev): In<SessionEvent>, chat_log: Res<ChatLog>) {
 }
 
 /// Clear the chat log's session state when the session ends.
-fn on_session_end(In(_): In<SessionEvent>, chat_log: Res<ChatLog>) {
+fn on_session_end(
+    In(_): In<SessionEvent>,
+    chat_log: Res<ChatLog>,
+    mut rosters: ResMut<super::roster::ChannelRosters>,
+) {
     chat_log.clear_session();
+    rosters.clear();
 }
 
 /// A spoken line (`SMSG_MESSAGECHAT`). System lines (`0x0A`), the server's answers to GM
@@ -181,17 +178,6 @@ fn chat(
         return;
     }
     chat_log.push_wire(m);
-}
-
-/// The `/chatlist` roster (`SMSG_CHANNEL_LIST`). Members arrive as guids and are not resolved,
-/// so the line gives their count where the reference lists their names (`0x49c690`).
-fn channel_list(channel: String, members: &[(u64, u8)], chat_log: &ChatLog) {
-    let mut ev = ChatEvent::text_only(
-        ChatEventKind::ChannelList,
-        format!("{} member(s)", members.len()),
-    );
-    ev.channel = channel;
-    chat_log.push_event(ev);
 }
 
 /// A whisper target is offline: message 241, `ERR_CHAT_PLAYER_NOT_FOUND_S`, with the server's

@@ -3399,6 +3399,57 @@ fn a_channel_list_prints_its_members_by_name() {
     );
 }
 
+/// A list with a name the cache lacks asks for it (`0x49c7a2`) and prints at the answer, after
+/// the cache files it (the callback `0x49ccc0`'s walk, `0x49d09a`); a refused name leaves the
+/// list (`0x49d03b`-`0x49d087`).
+#[test]
+fn a_channel_list_prints_at_its_last_name_answer() {
+    use benilla_protocol::SessionEvent;
+
+    let mut app = bevy::prelude::App::new();
+    crate::names::net::register(&mut app);
+    super::net::register(&mut app);
+    let world = app.world_mut();
+    world.init_resource::<super::ChatLog>();
+    world.init_resource::<crate::names::NameCache>();
+    world.init_resource::<crate::net::GuidIndex>();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    world.insert_resource(crate::net::NetCommands(tx));
+    world.insert_resource(super::edit::ChannelState {
+        joined: vec![super::edit::ChannelSlot::confirmed("Trade - City", 2).into()],
+        ..Default::default()
+    });
+    let answer = |guid, name: &str| SessionEvent::PlayerName {
+        guid,
+        name: name.into(),
+        race: 1,
+        gender: 0,
+        class: 1,
+    };
+    crate::net::handlers::dispatch(
+        world,
+        vec![SessionEvent::ChannelList {
+            channel: "Trade - City".into(),
+            flags: 0,
+            members: vec![(7, 0), (8, 0)],
+        }],
+    );
+    assert_eq!(rx.try_iter().count(), 2, "both names asked");
+    crate::net::handlers::dispatch(world, vec![answer(7, "Ann")]);
+    assert!(world
+        .resource::<super::ChatLog>()
+        .pending_events()
+        .is_empty());
+    crate::net::handlers::dispatch(world, vec![answer(8, "")]);
+    let texts: Vec<String> = world
+        .resource::<super::ChatLog>()
+        .pending_events()
+        .into_iter()
+        .map(|e| e.text)
+        .collect();
+    assert_eq!(texts, ["Ann"]);
+}
+
 /// `RequestTimePlayed()` (`0x48a900`) sends its empty `CMSG_PLAYED_TIME` inside the call
 /// (`0x48a936`): it is on the wire when the script's next line runs.
 #[test]

@@ -41,6 +41,8 @@ mod notice_tests;
 /// The `AUTO_JOIN_GUILD_CHANNEL` cascade, the one place the client joins or leaves
 /// `GuildRecruitment - City` on its own.
 mod recruitment;
+/// `/chatlist`'s member list, held on its channel's slot until every name is known.
+mod roster;
 /// The chat windows' saved look: tab tint, alpha and font size, read at login, saved at logout.
 pub(crate) mod settings;
 #[cfg(test)]
@@ -189,7 +191,7 @@ impl Plugin for UiChatPlugin {
                 Update,
                 channels::seed_channels.in_set(crate::ui_script::UiFeed),
             )
-            // `RequestTimePlayed()` -> `CMSG_PLAYED_TIME`; `SMSG_PLAYED_TIME` -> `TIME_PLAYED_MSG`.
+            // `SMSG_PLAYED_TIME` -> `TIME_PLAYED_MSG`.
             .add_systems(Update, feed::played_time_bridge.in_set(UiFeed))
             .add_systems(
                 Update,

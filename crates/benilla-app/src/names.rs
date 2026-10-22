@@ -372,6 +372,12 @@ impl NameCache {
         self.creatures.iter().map(|(&e, r)| (e, r.name.as_str()))
     }
 
+    /// Whether the server refused the player's name, an empty name answered for the guid, and
+    /// nothing has asked for it since.
+    pub(crate) fn player_answered_unknown(&self, guid: u64) -> bool {
+        self.players.answered_unknown(guid)
+    }
+
     /// Whether the server refused `entry` and nothing has asked for it since.
     pub(crate) fn creature_answered_unknown(&self, entry: u32) -> bool {
         self.creatures.answered_unknown(entry)
