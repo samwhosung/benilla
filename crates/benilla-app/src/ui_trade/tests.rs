@@ -372,8 +372,9 @@ fn own_offer_is_tracked_optimistically() {
     assert!(s.our.slots[1].is_some(), "our slot 2 shows the placed item");
     assert_eq!(
         (s.our_accept, s.their_accept),
-        (false, false),
-        "changing our offer resets both accepts"
+        (true, true),
+        "our edit leaves both accepts: only `0x4bf230` and `0x4bf280` write them, on the \
+         server's `BACK_TO_TRADE` or status"
     );
 
     s.set_own_gold(500);

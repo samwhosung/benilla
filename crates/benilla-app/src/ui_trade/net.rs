@@ -7,7 +7,7 @@ use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
 use super::{NamedLine, TradeSession};
-use crate::net::{ClientCommand, NetCommands, NetHandlerApp};
+use crate::net::NetHandlerApp;
 use crate::ui_action::{UiError, UiErrorKeys};
 
 /// Register the trade's handlers: one per kind, plus the session-end listener.
@@ -22,11 +22,10 @@ fn on_trade_status(
     In(ev): In<SessionEvent>,
     mut trade: ResMut<TradeSession>,
     errors: Res<UiErrorKeys>,
-    commands: Res<NetCommands>,
     mut world_commands: Commands,
 ) {
     if let SessionEvent::TradeStatus { status } = ev {
-        if let Some(window) = trade_status(status, &mut trade, &errors, &commands) {
+        if let Some(window) = trade_status(status, &mut trade, &errors) {
             world_commands.queue(move |world: &mut World| match window {
                 Window::Open => super::open_window(world),
                 Window::Close { canceled, done } => super::server_close(world, canceled, done),
@@ -66,7 +65,6 @@ fn trade_status(
     status: TradeStatus,
     trade: &mut TradeSession,
     errors: &UiErrorKeys,
-    commands: &NetCommands,
 ) -> Option<Window> {
     bevy::log::info!(target: "trade", "SMSG_TRADE_STATUS {status:?}");
 
@@ -106,15 +104,11 @@ fn trade_status(
         // neither touches ours, closes anything or is in the tail's clear set.
         TradeStatus::Accept => trade.partner_accepted(),
         TradeStatus::Rejected => trade.partner_unaccepted(),
-        // Case 7 (`0x4bf81a`) drops both accepts, ours through `0x4bf230(0)`, which sends
-        // `CMSG_UNACCEPT_TRADE` when the flag was up; vmangos then passes a `BACK_TO_TRADE` on to
-        // the partner (`TradeHandler.cpp:539`).
-        TradeStatus::BackToTrade => {
-            if trade.we_accepted() {
-                let _ = commands.0.send(ClientCommand::UnacceptTrade);
-            }
-            trade.back_to_trade();
-        }
+        // Case 7 (`0x4bf81a`) drops both accepts, ours through `0x4bf230(0)`, which signals and
+        // then sends `CMSG_UNACCEPT_TRADE` when the flag was up, then the partner's; the feed
+        // replays the steps. vmangos then passes a `BACK_TO_TRADE` on to the partner
+        // (`TradeHandler.cpp:539`).
+        TradeStatus::BackToTrade => trade.back_to_trade(),
         // The three that close the window through the core ([`super::server_close`]), which sends
         // `CMSG_CANCEL_TRADE` as the reference's does (`0x4bf527`); vmangos ignores it once the
         // trade is gone (`Player.cpp:11739`). The tail's clear runs here, the core's reset later.
@@ -220,6 +214,7 @@ mod tests {
     use benilla_ui::messages::{kind_of, MsgKind};
 
     use super::*;
+    use crate::net::{ClientCommand, NetCommands};
     use crate::ui_session::LatchApp;
 
     fn every_status() -> Vec<TradeStatus> {
@@ -365,9 +360,9 @@ mod tests {
         let windows: Vec<(u32, Window)> = every_status()
             .into_iter()
             .filter_map(|status| {
-                let (errors, commands, _rx) = sink();
+                let (errors, _commands, _rx) = sink();
                 let mut trade = open_trade();
-                trade_status(status, &mut trade, &errors, &commands).map(|w| (status.code(), w))
+                trade_status(status, &mut trade, &errors).map(|w| (status.code(), w))
             })
             .collect();
         assert_eq!(
@@ -407,9 +402,9 @@ mod tests {
             if !matches!(code, 0 | 5 | 6 | 10 | 11 | 13 | 14..=21) {
                 continue;
             }
-            let (errors, commands, _rx) = sink();
+            let (errors, _commands, _rx) = sink();
             let mut trade = open_trade();
-            trade_status(status, &mut trade, &errors, &commands);
+            trade_status(status, &mut trade, &errors);
             assert!(trade.is_open(), "{status:?} must not close the window");
             assert!(
                 trade.line_names().is_none(),
@@ -424,9 +419,9 @@ mod tests {
 
     #[test]
     fn rejected_only_drops_the_partners_accept() {
-        let (errors, commands, _rx) = sink();
+        let (errors, _commands, _rx) = sink();
         let mut trade = open_trade();
-        trade_status(TradeStatus::Rejected, &mut trade, &errors, &commands);
+        trade_status(TradeStatus::Rejected, &mut trade, &errors);
         assert!(trade.is_open());
         assert!(trade.we_accepted(), "ours is untouched");
         assert!(!trade.partner_has_accepted(), "theirs is dropped");
@@ -434,18 +429,27 @@ mod tests {
         assert!(trade.line_names().is_some(), "9 is not in the clear set");
     }
 
+    /// `BACK_TO_TRADE` (`0x4bf81c`, `0x4bf823`): `0x4bf230(0)` signals our drop and then sends the
+    /// un-accept, and `0x4bf280(0)` signals the partner's own drop after it; each only when its
+    /// flag was up, so the signal can come twice, once or not at all.
     #[test]
-    fn back_to_trade_unaccepts_on_the_wire_but_only_if_we_had_accepted() {
-        let (errors, commands, rx) = sink();
+    fn back_to_trade_signals_each_drop_and_unaccepts_after_ours() {
+        use super::super::AcceptStep::{SendUnaccept, Signal};
+        let (errors, _commands, _rx) = sink();
         let mut trade = open_trade(); // we accepted
-        trade_status(TradeStatus::BackToTrade, &mut trade, &errors, &commands);
-        assert!(matches!(rx.try_recv(), Ok(ClientCommand::UnacceptTrade)));
+        trade.partner_accepted();
+        assert_eq!(trade.take_accept_steps(), [Signal(true, true)]);
+        trade_status(TradeStatus::BackToTrade, &mut trade, &errors);
+        assert_eq!(
+            trade.take_accept_steps(),
+            [Signal(false, true), SendUnaccept, Signal(false, false)]
+        );
         assert!(!trade.we_accepted());
         assert!(errors.is_empty(), "the bounce is silent");
 
-        // Idempotent: a second bounce with no accept up sends nothing.
-        trade_status(TradeStatus::BackToTrade, &mut trade, &errors, &commands);
-        assert!(rx.try_recv().is_err());
+        // A second bounce with neither flag up does nothing.
+        trade_status(TradeStatus::BackToTrade, &mut trade, &errors);
+        assert!(trade.take_accept_steps().is_empty());
     }
 
     /// `0xff` names the gold; an out-of-range slot (200) is dropped.
@@ -455,16 +459,11 @@ mod tests {
         for (slot, expect_gold, expect_slot2) in
             [(1u8, 700u32, false), (0xff, 0, true), (200, 700, true)]
         {
-            let (errors, commands, _rx) = sink();
+            let (errors, _commands, _rx) = sink();
             let mut trade = open_trade();
             trade.place_own_item(2, item());
             trade.set_own_gold(700);
-            trade_status(
-                TradeStatus::OnlyConjured { slot },
-                &mut trade,
-                &errors,
-                &commands,
-            );
+            trade_status(TradeStatus::OnlyConjured { slot }, &mut trade, &errors);
             assert!(trade.is_open(), "slot {slot}: the window stays up");
             let (gold, filled) = trade.own_offer_for_test();
             assert_eq!(gold, expect_gold, "slot {slot}");
@@ -486,11 +485,11 @@ mod tests {
             TradeStatus::IgnoreYou,
         ] {
             // We asked: the line is owed, naming our target.
-            let (errors, commands, _rx) = sink();
+            let (errors, _commands, _rx) = sink();
             let mut trade = TradeSession::default();
             trade.initiate(0x7, false);
             trade.take_named_lines_for_test();
-            trade_status(status, &mut trade, &errors, &commands);
+            trade_status(status, &mut trade, &errors);
             assert_eq!(
                 trade.take_named_lines_for_test(),
                 vec![NamedLine {
@@ -506,11 +505,11 @@ mod tests {
             assert!(errors.is_empty(), "a %s line waits for the name cache");
 
             // We did not ask: the refuser's own echo is silent.
-            let (errors, commands, _rx) = sink();
+            let (errors, _commands, _rx) = sink();
             let mut trade = TradeSession::default();
             trade.request(0x7);
             trade.begin(0x7); // accepted an incoming request: no latch
-            trade_status(status, &mut trade, &errors, &commands);
+            trade_status(status, &mut trade, &errors);
             assert!(
                 trade.take_named_lines_for_test().is_empty() && errors.is_empty(),
                 "{status:?}: the side that did not initiate hears nothing"
@@ -520,11 +519,11 @@ mod tests {
 
     #[test]
     fn the_plain_refusals_are_raised_immediately() {
-        let (errors, commands, _rx) = sink();
+        let (errors, _commands, _rx) = sink();
         let mut trade = TradeSession::default();
         trade.initiate(0x7, false);
         trade.take_named_lines_for_test();
-        trade_status(TradeStatus::TargetDead, &mut trade, &errors, &commands);
+        trade_status(TradeStatus::TargetDead, &mut trade, &errors);
         assert_eq!(
             errors.snapshot(),
             vec![UiError::key("ERR_TRADE_TARGET_DEAD")]

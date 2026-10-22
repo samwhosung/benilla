@@ -36,6 +36,15 @@ struct TradeOffer {
     enchant_spell_id: u32,
 }
 
+/// One step a status's accept drop left for [`feed_trade`] ([`TradeSession::back_to_trade`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AcceptStep {
+    /// `TRADE_ACCEPT_UPDATE(mine, theirs)`.
+    Signal(bool, bool),
+    /// `CMSG_UNACCEPT_TRADE`.
+    SendUnaccept,
+}
+
 /// The trade session [`net`] fills and [`feed_trade`] reads, cleared on a close and on disconnect.
 #[derive(Resource, Default)]
 pub(crate) struct TradeSession {
@@ -56,14 +65,14 @@ pub(crate) struct TradeSession {
     open: bool,
     our: TradeOffer,
     their: TradeOffer,
-    /// We pressed Trade: optimistic, dropped by `BACK_TO_TRADE`, an offer change or a close.
+    /// Our accept flag `[0xb71730]`: written by `0x4bf230` alone, and zeroed with no signal by the
+    /// window's open (`0x4bf5c0`).
     our_accept: bool,
-    /// The partner pressed Trade (`TRADE_ACCEPT`).
+    /// The partner's `[0xb71734]`: written by `0x4bf280` alone, and zeroed by the open (`0x4bf5c6`).
     their_accept: bool,
-    /// The two flags as `TRADE_ACCEPT_UPDATE` last announced them: `0x4bf230` and `0x4bf280` signal
-    /// only a change of their own flag, so a flag change made where the signal already fired (the
-    /// accept verbs' calls) is not announced again by the feed.
-    accept_shown: (bool, bool),
+    /// What a status's `0x4bf230(0)` and `0x4bf280` did, in order, for [`feed_trade`] to replay:
+    /// each moved flag's signal, and our un-accept's send after its signal (`0x4bf260`, `0x4bf272`).
+    accept_steps: Vec<AcceptStep>,
     /// Our 0-based slots `InvalidateTradeSlot` (`0x4bfbd0`) runs on, owed to [`feed_trade`].
     invalidated: Vec<u8>,
     /// The own-edit counter `[0xc4bea8]`: 1 at `OPEN_WINDOW` (`0x5d4825`), one more for each
@@ -166,7 +175,6 @@ impl TradeSession {
         self.money_seen = [0, 0];
         self.our_accept = false;
         self.their_accept = false;
-        self.accept_shown = (false, false);
     }
 
     /// `0x5d3f80`: our initiate is pending and came from a cursor drop, so the window's open moves
@@ -198,6 +206,8 @@ impl TradeSession {
             );
             return;
         }
+        // `0x4bf2b0` first drops both accepts (`0x4bf2b6`, `0x4bf2bd`).
+        self.back_to_trade();
         // Our side's slot that held an item and comes back empty is invalidated (`0x5d4ad3`,
         // `0x5d4b33`).
         if !ext.their_window {
@@ -234,8 +244,6 @@ impl TradeSession {
                 self.money_changed.push(partner);
             }
         }
-        self.our_accept = false;
-        self.their_accept = false;
     }
 
     /// Place our item in trade slot `id_1based` client-side: vmangos sends a placement to the
@@ -246,7 +254,6 @@ impl TradeSession {
             .and_then(|i| self.our.slots.get_mut(i as usize))
         {
             *slot = Some(item);
-            self.our_offer_changed();
         }
     }
 
@@ -300,32 +307,51 @@ impl TradeSession {
             .and_then(|i| self.our.slots.get_mut(i as usize))
         {
             *slot = None;
-            self.our_offer_changed();
         }
     }
 
     /// Set our gold client-side: vmangos sends it to the partner only (`TradeData.cpp:118`).
     pub(crate) fn set_own_gold(&mut self, copper: u32) {
         self.our.gold = copper;
-        self.our_offer_changed();
     }
 
-    /// Any change to our offer drops both accepts, as vmangos does.
-    fn our_offer_changed(&mut self) {
-        self.our_accept = false;
-        self.their_accept = false;
+    /// `0x4bf230(0)` from a status: our flag down, which signals both flags (`0x4bf260`) and
+    /// then sends `CMSG_UNACCEPT_TRADE` (`0x4bf272`), only when it was up (`0x4bf247`).
+    fn unaccept_ours(&mut self) {
+        if self.our_accept {
+            self.our_accept = false;
+            self.accept_steps
+                .push(AcceptStep::Signal(false, self.their_accept));
+            self.accept_steps.push(AcceptStep::SendUnaccept);
+        }
     }
 
-    /// `TRADE_ACCEPT`: the partner pressed Trade.
+    /// `0x4bf280(flag)`: the partner's flag, which signals both flags when it moved (`0x4bf286`,
+    /// `0x4bf29f`) and sends nothing.
+    fn set_partner_accept(&mut self, flag: bool) {
+        if self.their_accept != flag {
+            self.their_accept = flag;
+            self.accept_steps
+                .push(AcceptStep::Signal(self.our_accept, flag));
+        }
+    }
+
+    /// `TRADE_ACCEPT` (case 4, `0x4bf810`): `0x4bf280(1)`.
     pub(crate) fn partner_accepted(&mut self) {
-        self.their_accept = true;
+        self.set_partner_accept(true);
     }
 
-    /// `BACK_TO_TRADE`: an accept was withdrawn (an offer change, the partner's un-accept, or the
-    /// 200 ms scam-delay bounce), so both drop.
+    /// `BACK_TO_TRADE` (case 7, `0x4bf81c`, `0x4bf823`), and every extended status before its
+    /// records are compared (`0x4bf2b6`, `0x4bf2bd`): `0x4bf230(0)`, then `0x4bf280(0)`. vmangos
+    /// sends it for any offer change, so our own edits drop the flags through it.
     pub(crate) fn back_to_trade(&mut self) {
-        self.our_accept = false;
-        self.their_accept = false;
+        self.unaccept_ours();
+        self.set_partner_accept(false);
+    }
+
+    /// The steps the statuses left, in order ([`Self::accept_steps`]).
+    pub(crate) fn take_accept_steps(&mut self) -> Vec<AcceptStep> {
+        std::mem::take(&mut self.accept_steps)
     }
 
     /// Our flag up with no signal, for a test that seats an accept.
@@ -334,6 +360,7 @@ impl TradeSession {
         self.our_accept = true;
     }
 
+    #[cfg(test)]
     /// Our accept flag, the reference's `[0xb71730]`, which `0x4bf230` reads before it changes it
     /// or sends `CMSG_UNACCEPT_TRADE`.
     pub(crate) fn we_accepted(&self) -> bool {
@@ -347,7 +374,6 @@ impl TradeSession {
             return false;
         }
         self.our_accept = flag;
-        self.accept_shown = (self.our_accept, self.their_accept);
         true
     }
 
@@ -405,10 +431,9 @@ impl TradeSession {
         }
     }
 
-    /// `TRADE_REJECTED` (case 9, `0x4bf821`): drop the partner's accept and nothing else; vmangos
-    /// never sends it.
+    /// `TRADE_REJECTED` (case 9, `0x4bf821`): `0x4bf280(0)`; vmangos never sends it.
     pub(crate) fn partner_unaccepted(&mut self) {
-        self.their_accept = false;
+        self.set_partner_accept(false);
     }
 
     /// `ONLY_CONJURED` (case 22, `0x4bf9ec` → `0x4bfbd0`): empty the offending slot of our offer,
@@ -1043,6 +1068,32 @@ fn feed_trade(
     mut last_open: crate::ui_script::WindowMemo<bool>,
     mut closes: CoreCloses,
 ) {
+    // The statuses' accept drops first, as `0x4bf2b0` runs them ahead of its compares: each
+    // signal in place, its handlers' calls applying inside it, and our un-accept's send after
+    // its signal (`0x4bf260`, `0x4bf272`).
+    let steps = vm.own().take_accept_steps();
+    if !steps.is_empty() {
+        vm.run(|mut script| {
+            for step in steps {
+                match step {
+                    AcceptStep::Signal(mine, theirs) => {
+                        if let Some(script) = script.as_deref_mut() {
+                            script.fire_event(
+                                "TRADE_ACCEPT_UPDATE",
+                                vec![
+                                    ScriptValue::Int(i64::from(mine)),
+                                    ScriptValue::Int(i64::from(theirs)),
+                                ],
+                            );
+                        }
+                    }
+                    AcceptStep::SendUnaccept => {
+                        let _ = commands.0.send(ClientCommand::UnacceptTrade);
+                    }
+                }
+            }
+        });
+    }
     vm.turn(|script, mut trade| {
         let Some(script) = script else {
             return;
@@ -1209,19 +1260,6 @@ fn feed_trade(
                 }
             }
             script.fire_event("TRADE_SHOW", vec![]);
-        }
-
-        // `TRADE_ACCEPT_UPDATE(mine, theirs)` on a change while open that no call announced.
-        let accept = trade.accepts();
-        if trade.is_open() && accept != trade.accept_shown {
-            script.fire_event(
-                "TRADE_ACCEPT_UPDATE",
-                vec![
-                    ScriptValue::Int(i64::from(accept.0)),
-                    ScriptValue::Int(i64::from(accept.1)),
-                ],
-            );
-            trade.accept_shown = accept;
         }
 
         *last = fresh;
