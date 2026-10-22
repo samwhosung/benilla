@@ -582,6 +582,7 @@ mod tests {
     use crossbeam_channel::Receiver;
 
     mod cast_reports;
+    mod selection;
 
     const ME: u64 = 0x10;
     /// The unit selected before the script runs.
