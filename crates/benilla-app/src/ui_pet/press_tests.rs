@@ -740,7 +740,8 @@ fn an_aura_cancel_press_starts_no_pet_gcd() {
 /// What a press latched: the mode word, its signal count and the attack latch.
 pub(super) fn latched(rig: &Rig) -> (u32, u32, bool) {
     let bar = rig.app.world().resource::<PetBar>();
-    (bar.spells.state, bar.bar_signals, bar.attacking)
+    let latch = rig.app.world().resource::<super::PetAttackLatch>();
+    (bar.spells.state, bar.bar_signals, latch.up())
 }
 
 /// Everything a refused spell press leaves untouched: no command on the wire, nothing latched, no

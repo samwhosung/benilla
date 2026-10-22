@@ -95,6 +95,9 @@ pub(crate) struct ScriptCallHost<'w, 's> {
                             crate::ui_reputation::ReputationSteps<'w, 's>,
                         ),
                     >,
+                    // The action slots' states, whose usable refresh a selection change runs
+                    // inside its call; absent in a harness without the action feed's inputs.
+                    Option<crate::ui_action::ActionStates<'w, 's>>,
                 ),
             >,
             crate::spell::ScriptCast<'w, 's>,
@@ -169,6 +172,8 @@ impl CallHost for ScriptCallHost<'_, '_> {
         // tag 2 passed there. The ladder reads it while this call applies.
         appliers.p3().ladder.permit(call.may_cast());
         let selected_before = appliers.p0().selected();
+        // The pet's attack latch, which the selection's release can lower (`0x493a18`).
+        let latched_before = appliers.p6().p1().attack_latched();
         let report_mark = appliers.p2().p2().mark();
         let mut tail: Option<CallTail> = None;
         // The confirm popup an item pick or a Yes raised, signalled with the call's reports.
@@ -321,14 +326,23 @@ impl CallHost for ScriptCallHost<'_, '_> {
         // Whatever casts next is the engine's own, which asks no gate.
         appliers.p3().ladder.permit(true);
         // The selection the call committed (`SetSelection 0x493540`, inside every selecting
-        // verb) is `"target"` for the script's next line. The reference signals
-        // `PLAYER_TARGET_CHANGED` there too, so inside this call's input events; the unit feed
-        // signals it a step later, and asks for them.
+        // verb) is `"target"` for the script's next line, and what `SetSelection` signals it
+        // signals here, inside the call and under its input events, in its order: the release's
+        // `PET_BAR_UPDATE` when it called a possessed unit off (`0x493a18` → `0x4bd6b4`), the
+        // usable refresh (`0x493892`, `0x493a69`), then `PLAYER_TARGET_CHANGED` (`0x49389c`,
+        // `0x493a73`). The unit feed takes the change as heard.
         let selected_after = appliers.p0().selected();
-        let input = script.input_events();
         if selected_after != selected_before {
             script.seat_selection(appliers.p0().seated());
-            script.note_selection_cause(selected_after, input);
+            if latched_before && !appliers.p6().p1().attack_latched() {
+                script.lower_pet_attack();
+                script.fire_event("PET_BAR_UPDATE", vec![]);
+            }
+            if let Some(states) = appliers.p2().p4().as_mut() {
+                states.usable_refresh(script).fire(script);
+            }
+            script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+            script.announce_selection(selected_after);
         }
         // The reports the call made, in its order: a refusal's `UI_ERROR_MESSAGE` and its
         // `SPELLCAST_FAILED` (`ReportCastFailure 0x6e1a00` inside `TryCast 0x6e4b60`), a cancel's
@@ -1965,11 +1979,10 @@ mod tests {
     }
 
     /// `SetSelection` signals `PLAYER_TARGET_CHANGED` inside `ExecuteBinding` (`0x4b7b02`-
-    /// `0x4b7b11`), so an insecure addon's handler that casts passes after a TAB press. Here the
-    /// unit feed signals it a step after the call is applied, with the call's input events raised
-    /// again around it: the stock `TARGETNEARESTENEMY` binding moves the target, the addon's handler
-    /// casts at the new one. A change no call made (the server's) hears it with none up, and its
-    /// cast is refused.
+    /// `0x4b7b11`), so an insecure addon's handler that casts passes after a TAB press: the call
+    /// signals it in place, under the key's input events, as the stock `TARGETNEARESTENEMY`
+    /// binding moves the target, and the addon's handler casts at the new one. A change no call
+    /// made (the server's) hears it from the unit feed with none up, and its cast is refused.
     #[test]
     fn a_tab_targets_and_the_addons_target_handler_casts() {
         benilla_formats::wow_data_or_skip!();

@@ -359,6 +359,14 @@ pub(crate) struct AttackSeam<'w, 's> {
     pub(crate) loot_latch: ResMut<'w, crate::ui_loot::LootLatch>,
     /// Our stop in flight (`[+0xc54]`), which StopAttack's send sets and StartAttack reads.
     stop_word: ResMut<'w, AttackStopInFlight>,
+    /// The pet's attack latch, which the selection's release lowers for a possessed unit
+    /// (`0x493a18`); absent in a harness without the pet plugin.
+    pub(crate) pet_latch: Option<ResMut<'w, crate::ui_pet::PetAttackLatch>>,
+    /// The object manager's lookup (`0x468460`) and our guid, for the possessed unit `0x5ee5a0`
+    /// answers.
+    index: Option<Res<'w, crate::net::GuidIndex>>,
+    stores: Query<'w, 's, &'static crate::net::ObjectStore>,
+    self_guid: Option<Res<'w, crate::net::SelfGuid>>,
 }
 
 impl AttackSeam<'_, '_> {
@@ -399,6 +407,22 @@ impl AttackSeam<'_, '_> {
                 Some(&self.net),
             );
         }
+    }
+
+    /// The selection release's pet leg (`0x493910`): `0x5ee5a0` asked of the player
+    /// (`0x493a0f`), and for the unit it answers `PetStopAttack` (`0x4bd650` at `0x493a18`), after
+    /// the release's `StopAttack` and before its send. Whether it called the unit off.
+    pub(crate) fn call_pet_off(&mut self) -> bool {
+        let Some(latch) = self.pet_latch.as_deref_mut() else {
+            return false;
+        };
+        let player = self.self_store.iter().next();
+        let farsight = player.and_then(|p| p.0.player_farsight());
+        let unit = farsight
+            .and_then(|g| self.index.as_ref()?.0.get(&g).copied())
+            .and_then(|e| self.stores.get(e).ok());
+        let me = self.self_guid.as_ref().and_then(|g| g.0);
+        crate::ui_pet::call_pet_off(latch, &self.net, farsight, unit, player, me)
     }
 
     /// StopAttack (`0x5ecac0`).

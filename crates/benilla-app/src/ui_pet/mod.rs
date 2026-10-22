@@ -27,7 +27,7 @@ pub(crate) use usable::actions_usable as pet_actions_usable;
 
 use bar::{feed_pet_bar, fire_pet_cooldown_events};
 // A pet bar press and the pet's other verbs, applied in call order by `crate::script_calls`.
-pub(crate) use drain::pet_stop_on_old_target_clear;
+pub(crate) use drain::call_pet_off;
 pub(crate) use drain::{cast_pet_press, PetPress, PetStep};
 use menu::feed_pet_menu;
 pub(crate) use steps::PetSteps;
@@ -55,11 +55,6 @@ pub(crate) struct PetBar {
     /// press's GCD. Each mutation but the seed fires the flush, off [`Cooldowns::generation`]
     /// (`bar::fire_pet_cooldown_events`).
     pub(crate) cooldowns: Cooldowns,
-    /// The client's `[0xb714b0]`, a local latch: all of `IsPetAttackActive`, and the only thing
-    /// that lights Attack (`0x4bdf16`-`0x4bdf22`). Raised only for a possessed unit (`0x4bd420`),
-    /// so never on a hunter's bar; lowered by `PetStopAttack` (`0x4bd650`), a new pet (`0x4bc8ce`)
-    /// and the old-target clear (`0x493a18`). `PET_ATTACK_*` read the pet's flag `0x800` instead.
-    pub(crate) attacking: bool,
     /// `PET_BAR_UPDATE` signals, counted. Both state writes signal unconditionally (`0x4bc940`,
     /// `0x4bc960`), and `OnClick`'s `SetChecked(0)` needs that repaint to relight a press on the
     /// current mode, so the count is in the feed's dedup key. Wrapping: only a change is read.
@@ -67,6 +62,23 @@ pub(crate) struct PetBar {
     /// `[0xb714a8]`: the charm or possess expiry, the packet's duration past its arrival; `None`
     /// when the duration is 0, as for a hunter's or warlock's own pet.
     pub(crate) expires: Option<Instant>,
+}
+
+/// The client's `[0xb714b0]`, a local latch: all of `IsPetAttackActive`, and the only thing that
+/// lights Attack (`0x4bdf16`-`0x4bdf22`). Raised only for a possessed unit (`0x4bd420`), so never
+/// on a hunter's bar; lowered by `PetStopAttack` (`0x4bd650`), a new pet (`0x4bc8ce`) and the
+/// selection's release (`0x493a18`). `PET_ATTACK_*` read the pet's flag `0x800` instead. Up, it
+/// holds the bar's guid it was raised under (`[0xb714a0]`), the guid the stop is sent for, which
+/// a new pet's lowering keeps the bar's; apart from [`PetBar`], so the selection's release
+/// reaches it beside every holder of the bar.
+#[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PetAttackLatch(pub(crate) Option<u64>);
+
+impl PetAttackLatch {
+    /// Whether the latch is up.
+    pub(crate) fn up(&self) -> bool {
+        self.0.is_some()
+    }
 }
 
 impl PetBar {
@@ -92,37 +104,35 @@ pub(crate) struct UiPetPlugin;
 impl Plugin for UiPetPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
-        app.init_resource::<PetBar>().add_systems(
-            Update,
-            (
-                // Feeds ride the unit feed, before the VM ticks; every verb is a script call
-                // (`PetPress`, `PetSteps`). The old-target clear precedes the bar feed so Attack
-                // goes dark the frame the selection moves.
-                pet_stop_on_old_target_clear
-                    .in_set(UnitFeed)
-                    .before(feed_pet_bar),
-                // The GCDs the attempt's sends owe the pet's list, in before the bar reads it.
-                drain::arm_owed_pet_gcds
-                    .in_set(UnitFeed)
-                    .before(feed_pet_bar),
-                // After the pet snapshot: these feeds' events reach Lua at once, and their
-                // handlers read `HasPetUI()`, which `crate::ui_pet_stats` pushes. The bar pushes
-                // its cooldown triples before the cooldown events and the pet's flush fires after
-                // them, so the buttons it wakes read the new list.
-                feed_pet_bar
-                    .in_set(UnitFeed)
-                    .after(crate::ui_pet_stats::PetSnapshot)
-                    .before(CooldownEvents),
-                fire_pet_cooldown_events
-                    .in_set(UnitFeed)
-                    .after(CooldownEvents),
-                feed_pet_unit
-                    .in_set(UnitFeed)
-                    .in_set(crate::ui_unit::field_events::FieldEventPushes)
-                    .after(crate::ui_pet_stats::PetSnapshot),
-                feed_pet_menu.in_set(UnitFeed),
-            ),
-        );
+        app.init_resource::<PetBar>()
+            .init_resource::<PetAttackLatch>()
+            .add_systems(
+                Update,
+                (
+                    // Feeds ride the unit feed, before the VM ticks; every verb is a script call
+                    // (`PetPress`, `PetSteps`).
+                    // The GCDs the attempt's sends owe the pet's list, in before the bar reads it.
+                    drain::arm_owed_pet_gcds
+                        .in_set(UnitFeed)
+                        .before(feed_pet_bar),
+                    // After the pet snapshot: these feeds' events reach Lua at once, and their
+                    // handlers read `HasPetUI()`, which `crate::ui_pet_stats` pushes. The bar pushes
+                    // its cooldown triples before the cooldown events and the pet's flush fires after
+                    // them, so the buttons it wakes read the new list.
+                    feed_pet_bar
+                        .in_set(UnitFeed)
+                        .after(crate::ui_pet_stats::PetSnapshot)
+                        .before(CooldownEvents),
+                    fire_pet_cooldown_events
+                        .in_set(UnitFeed)
+                        .after(CooldownEvents),
+                    feed_pet_unit
+                        .in_set(UnitFeed)
+                        .in_set(crate::ui_unit::field_events::FieldEventPushes)
+                        .after(crate::ui_pet_stats::PetSnapshot),
+                    feed_pet_menu.in_set(UnitFeed),
+                ),
+            );
     }
 }
 

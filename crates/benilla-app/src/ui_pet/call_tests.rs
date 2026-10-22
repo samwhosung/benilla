@@ -187,7 +187,10 @@ fn pet_rename_raises_its_refusals_in_the_call() {
 #[test]
 fn pet_stop_attack_sends_and_repaints_in_its_call() {
     let mut rig = scene();
-    rig.app.world_mut().resource_mut::<PetBar>().attacking = true;
+    rig.app
+        .world_mut()
+        .resource_mut::<super::PetAttackLatch>()
+        .0 = Some(PET);
     rig.frame();
     assert!(ui(&mut rig, |s| s
         .eval::<bool>("return IsPetAttackActive(2)")
@@ -204,7 +207,7 @@ fn pet_stop_attack_sends_and_repaints_in_its_call() {
         lines(rig.sent()),
         lines(vec![ClientCommand::PetStopAttack { pet_guid: PET }])
     );
-    assert!(!rig.app.world().resource::<PetBar>().attacking);
+    assert!(!rig.app.world().resource::<super::PetAttackLatch>().up());
     assert_eq!(
         ui(&mut rig, |s| s
             .eval::<Option<bool>>("return ATTACKING")

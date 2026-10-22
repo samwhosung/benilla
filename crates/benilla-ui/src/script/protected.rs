@@ -265,23 +265,6 @@ fn refuse(lua: &Lua, context: &Context) {
 }
 
 impl UiScript {
-    /// Note that the call applied under `events` moved the selection to `guid`. The reference
-    /// signals `PLAYER_TARGET_CHANGED` inside `SetSelection`, so inside the key or click that made
-    /// the call; the app's unit feed signals it when it sees the change, so it asks for these
-    /// ([`Self::take_selection_cause`]) and raises them around that event.
-    pub fn note_selection_cause(&mut self, guid: Option<u64>, events: InputEvents) {
-        self.model_mut().selection_cause = Some((guid, events));
-    }
-
-    /// The events the selection change to `guid` was made under, if a call noted one; none
-    /// otherwise (a click, the server). Spent by the asking.
-    pub fn take_selection_cause(&mut self, guid: Option<u64>) -> InputEvents {
-        match self.model_mut().selection_cause.take() {
-            Some((cause, events)) if cause == guid => events,
-            _ => InputEvents::default(),
-        }
-    }
-
     /// The input events running now, for a call the app applies after they end.
     pub fn input_events(&self) -> InputEvents {
         events(self.lua())

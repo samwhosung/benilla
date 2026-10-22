@@ -239,13 +239,13 @@ struct BindingsSeen {
 /// reference keeps it until the macro is edited, where the next table or bar change here derives
 /// it again.
 fn rebind_macro_spells(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // The records, which the call host's usable refresh reads, so a turn: no Lua runs here.
+    mut vm: crate::script_calls::VmWith<ResMut<'static, MacroBoundSpells>>,
     actions: Res<crate::ui_action::PlayerActions>,
     table: Option<Res<crate::ui_chat::commands::SlashCommands>>,
-    mut bound: ResMut<MacroBoundSpells>,
     mut seen: Local<crate::ui_script::VmMemo<BindingsSeen>>,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, mut bound| {
         let (Some(script), Some(table)) = (script, table) else {
             return;
         };

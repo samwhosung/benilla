@@ -500,6 +500,10 @@ pub(super) fn commit(
         // `0x493a08`: the real StopAttack, which also un-queues a next-swing strike (`0x6e6f30`).
         seam.stop(engaged);
     }
+    if had_old {
+        // `0x493a0f`-`0x493a18`: the release calls a possessed unit off after its StopAttack.
+        seam.call_pet_off();
+    }
     let _ = seam.net.0.send(ClientCommand::SetSelection { guid });
     let swung = stop_and_repoint && new_attackable && self_guid != Some(guid);
     if swung {

@@ -1678,8 +1678,13 @@ fn feed_units(
         }
 
         // `PLAYER_TARGET_CHANGED`, argless, when the selection changes, owed to
-        // [`fire_unit_events`]. A `/reload`'s fresh memo finds none: the shutdown dropped the
-        // target and told the dying VM (`0x490bdf`).
+        // [`fire_unit_events`]; a script call signalled its own change inside itself, as
+        // `SetSelection` does (`0x49389c`, `0x493a73`), so the feed hears only a change no call
+        // made. A `/reload`'s fresh memo finds none: the shutdown dropped the target and told the
+        // dying VM (`0x490bdf`).
+        if let Some(announced) = script.take_announced_selection() {
+            memo.target_guid = announced;
+        }
         if selection.guid != memo.target_guid {
             gate.audit("feed_units", "the PLAYER_TARGET_CHANGED edge");
             memo.target_guid = selection.guid;
@@ -1765,29 +1770,19 @@ impl OwedUnitEvents {
     }
 }
 
-/// The event [`feed_units`]' pushes owe, signalled after the action feed's usable refresh as the
-/// reference orders them: `SelectTarget` stores the target (`0x4936e2`) and refreshes (`0x493892`)
-/// before `PLAYER_TARGET_CHANGED` (`0x49389c`), and so does a release (`0x4939d3`, `0x493a69`,
+/// The event [`feed_units`]' pushes owe for a selection change no script call made (a world
+/// click, the server's), signalled after the action feed's usable refresh as the reference orders
+/// them: `SelectTarget` stores the target (`0x4936e2`) and refreshes (`0x493892`) before
+/// `PLAYER_TARGET_CHANGED` (`0x49389c`), and so does a release (`0x4939d3`, `0x493a69`,
 /// `0x493a73`). A usable handler reads the new target, and hears this after it.
-fn fire_unit_events(
-    // What the host also reaches, read before the VM runs with the host lent.
-    mut hosted: ParamSet<(Res<Selection>, crate::script_calls::HostedVm)>,
-    mut feed: ResMut<UnitFeedState>,
-) {
-    let selection = *hosted.p0();
-    hosted.p1().run(|script| {
+fn fire_unit_events(mut hosted_vm: crate::script_calls::HostedVm, mut feed: ResMut<UnitFeedState>) {
+    hosted_vm.run(|script| {
         let Some(script) = script else {
             return;
         };
         let pending = std::mem::take(&mut feed.vm.get(script).pending);
         if pending.target_changed {
-            // The reference signals it inside `SetSelection`, so inside the key or click whose
-            // call moved the selection; a change that call made hears it under that call's input
-            // events.
-            let cause = script.take_selection_cause(selection.guid);
-            script.with_input_events(cause, |script| {
-                script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
-            });
+            script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
         }
     })
 }

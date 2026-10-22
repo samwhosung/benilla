@@ -16,7 +16,7 @@ use crate::target::{is_possessed_by, Selection};
 use crate::ui_action::Spells;
 
 use super::bar::active_aura_press;
-use super::{PetBar, PetUnit};
+use super::{PetAttackLatch, PetBar, PetUnit};
 
 /// What a pet bar press reads and writes: `CastPetAction`, `PetAttack` and the other orders, and
 /// the pet book's `CastSpell(id, "pet")`.
@@ -255,7 +255,13 @@ impl PetPress<'_, '_> {
         } else {
             false
         };
-        if !commit_press(bar, entry, refused, possessing) {
+        if !commit_press(
+            bar,
+            seam.pet_latch.as_deref_mut(),
+            entry,
+            refused,
+            possessing,
+        ) {
             debug!("ui_pet: slot {slot} refused by the attack validator — no packet");
             return None;
         }
@@ -341,42 +347,39 @@ pub(super) fn toggle_slot_autocast(bar: &mut PetBar, slot: u32) -> Option<PetAct
     Some(flipped)
 }
 
-/// `PetStopAttack`'s core (`0x4bd650`): send `CMSG_PET_STOP_ATTACK` and lower the latch, or do
-/// nothing when it is already down (`0x4bd65e`). Returns whether it sent.
-pub(super) fn stop_pet_attack(bar: &mut PetBar, commands: &NetCommands) -> bool {
-    let pet_guid = bar.spells.pet_guid;
-    if !bar.attacking || pet_guid == 0 {
+/// `PetStopAttack`'s core (`0x4bd650`): send `CMSG_PET_STOP_ATTACK` for the bar's guid and lower
+/// the latch (`0x4bd662`-`0x4bd6ae`), or do nothing when it is already down (`0x4bd65e`). Returns
+/// whether it sent; the caller signals `PET_BAR_UPDATE` (`0x4bd6b4`).
+pub(super) fn stop_pet_attack(latch: &mut PetAttackLatch, commands: &NetCommands) -> bool {
+    let Some(pet_guid) = latch.0.take() else {
         return false;
-    }
+    };
     let _ = commands.0.send(ClientCommand::PetStopAttack { pet_guid });
-    bar.attacking = false;
     true
 }
 
-/// `0x493910`'s entry gate: the old-target clear runs only when a selection existed (`0x493937`)
-/// and is being replaced or dropped (`0x493949`/`0x493951`).
-pub(super) fn old_target_cleared(previous: Option<u64>, now: Option<u64>) -> bool {
-    previous.is_some() && previous != now
-}
-
-/// The old-target clear's `PetStopAttack` (`0x493910`, at `0x493a18` when `0x5ee5a0` finds a
-/// possessed unit at `0x493a0f`). It sits before the notify branch, so every selection writer runs
-/// it; a re-select runs no clear (`0x493540`).
-pub(crate) fn pet_stop_on_old_target_clear(
-    selection: Res<Selection>,
-    mut previous: Local<Option<u64>>,
-    mut bar: ResMut<PetBar>,
-    commands: Res<NetCommands>,
-) {
-    let now = selection.guid;
-    if *previous == now {
-        return;
+/// The selection's release `0x493910` with the player object held: `0x5ee5a0` asked of the player
+/// (`0x493a0f`), and with a unit answered, `PetStopAttack` (`0x4bd650` at `0x493a18`). `farsight`
+/// is the player's `PLAYER_FARSIGHT` and `unit` that unit's descriptor; whether it sent.
+pub(crate) fn call_pet_off(
+    latch: &mut PetAttackLatch,
+    commands: &NetCommands,
+    farsight: Option<u64>,
+    unit: Option<&ObjectStore>,
+    player: Option<&ObjectStore>,
+    me: Option<u64>,
+) -> bool {
+    let Some(unit_guid) = farsight else {
+        return false;
+    };
+    if !possessing(unit_guid, unit, player, me) {
+        return false;
     }
-    let cleared = old_target_cleared(*previous, now);
-    *previous = now;
-    if cleared && stop_pet_attack(&mut bar, &commands) {
-        debug!("ui_pet: the old-target clear called the pet off (0x493a18)");
+    let sent = stop_pet_attack(latch, commands);
+    if sent {
+        debug!("ui_pet: the selection's release called the possessed unit off (0x493a18)");
     }
+    sent
 }
 
 /// Whether the bar's unit is `0x5ee5a0`'s answer, which a spell press takes to the attempt
@@ -411,6 +414,7 @@ pub(super) fn is_attack_order(entry: PetActionEntry) -> bool {
 /// the possession compare after it (`0x4bd420`) costs only the latch (`0x4bd427` to the send).
 pub(super) fn commit_press(
     bar: &mut PetBar,
+    latch: Option<&mut PetAttackLatch>,
     entry: PetActionEntry,
     refused: bool,
     possessing: bool,
@@ -418,7 +422,7 @@ pub(super) fn commit_press(
     if refused {
         return false;
     }
-    latch_press(bar, entry, possessing);
+    latch_press(bar, latch, entry, possessing);
     true
 }
 
@@ -429,7 +433,12 @@ pub(super) fn commit_press(
 /// `PET_BAR_UPDATE` in place (`0x4bc956`, `0x4bc979`). Attack raises a possessed unit's attack
 /// latch instead (`0x4bd42e`), behind the validator only this side runs, so its signal
 /// (`0x4bd438`) is the feed's.
-pub(super) fn latch_press(bar: &mut PetBar, entry: PetActionEntry, possessing: bool) {
+pub(super) fn latch_press(
+    bar: &mut PetBar,
+    latch: Option<&mut PetAttackLatch>,
+    entry: PetActionEntry,
+    possessing: bool,
+) {
     let action = entry.action();
     match entry.kind() {
         benilla_protocol::messages::PET_ACT_COMMAND
@@ -441,7 +450,9 @@ pub(super) fn latch_press(bar: &mut PetBar, entry: PetActionEntry, possessing: b
             if action == PET_COMMAND_ATTACK && possessing =>
         {
             // `0x4bd42e` signals too; an ordinary pet never gets here.
-            bar.attacking = true;
+            if let Some(latch) = latch {
+                latch.0 = Some(bar.spells.pet_guid);
+            }
             bar.bar_signals = bar.bar_signals.wrapping_add(1);
         }
         benilla_protocol::messages::PET_ACT_REACTION => {

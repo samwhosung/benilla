@@ -1867,10 +1867,11 @@ pub(super) fn clear(
         selection.target = None;
         selection.lit = None;
         // The teardown `0x493910` closes the old target's loot, then stops our attack
-        // (`0x493a08 call 0x5ecac0`, which also un-queues an on-next-swing strike), then sends
-        // (`0x493a2a`).
+        // (`0x493a08 call 0x5ecac0`, which also un-queues an on-next-swing strike), calls a
+        // possessed unit off (`0x493a0f`-`0x493a18`), then sends (`0x493a2a`).
         seam.close_loot_on(old);
         seam.stop(engaged);
+        seam.call_pet_off();
         let _ = seam.net.0.send(ClientCommand::SetSelection { guid: 0 });
     }
 }

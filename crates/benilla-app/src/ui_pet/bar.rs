@@ -174,13 +174,16 @@ pub(crate) fn active_aura_press(
 /// of the cooldowns alone is pushed without an event: the pet's cooldown events fire off the
 /// list's generation, so a natural expiry fires none, as in the reference.
 pub(super) fn feed_pet_bar(
-    mut vm: crate::script_calls::VmWith<Res<'static, PetBar>>,
+    mut vm: crate::script_calls::VmWith<(
+        Res<'static, PetBar>,
+        Res<'static, super::PetAttackLatch>,
+    )>,
     spells: Option<Res<Spells>>,
     clock: Res<crate::ui_script::UiClock>,
     pet: PetUnit,
     mut memory: Local<crate::ui_script::VmMemo<PetBarMemory>>,
 ) {
-    vm.feed(|script, bar, fires| {
+    vm.feed(|script, (bar, latch), fires| {
         let Some(script) = script else {
             return;
         };
@@ -197,7 +200,7 @@ pub(super) fn feed_pet_bar(
         // so possession stays out of `usable`; an unstreamed pet has no flags to test and lifts
         // nothing.
         let pickup_allowed = pet_flags.is_some_and(|flags| flags & UNIT_FLAG_POSSESSED == 0);
-        let pet_attacking = bar.attacking;
+        let pet_attacking = latch.up();
         // `GetPetTimeRemaining`'s expiry on the VM clock, signed both ways around the anchor
         // sample.
         script.set_pet_expiry(bar.expires.map(|t| match t.checked_duration_since(anchor) {

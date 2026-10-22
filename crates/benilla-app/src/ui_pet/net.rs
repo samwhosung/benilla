@@ -32,8 +32,13 @@ pub(super) fn register(app: &mut App) {
 }
 
 /// A lost socket sends no zero-guid `SMSG_PET_SPELLS`, so the session end resets the bar itself.
-fn on_session_end(In(_): In<SessionEvent>, mut bar: ResMut<PetBar>) {
+fn on_session_end(
+    In(_): In<SessionEvent>,
+    mut bar: ResMut<PetBar>,
+    mut latch: ResMut<super::PetAttackLatch>,
+) {
     bar.clear();
+    latch.0 = None;
 }
 
 fn on_spells(
@@ -42,11 +47,14 @@ fn on_spells(
     mods: Option<Res<crate::spell::SpellModifiers>>,
     player: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
     mut bar: ResMut<PetBar>,
+    mut latch: ResMut<super::PetAttackLatch>,
 ) {
     if let SessionEvent::PetSpells(spells) = ev {
         // The pet list's category pad (`0x6e2b60` with the pet flag): op 11 alone.
         let pad = crate::spell::CategoryPad::for_list(true, player.iter().next());
-        pet_spells(*spells, catalog.as_deref(), mods.as_deref(), pad, &mut bar);
+        if pet_spells(*spells, catalog.as_deref(), mods.as_deref(), pad, &mut bar) {
+            latch.0 = None;
+        }
     }
 }
 
@@ -99,24 +107,22 @@ fn on_dismiss_sound(In(ev): In<SessionEvent>, mut sounds: MessageWriter<PetDismi
 }
 
 /// `SMSG_PET_SPELLS`: replace the whole bar and reseed the pet's cooldowns from its tail. A zero
-/// guid is the teardown (`Player::RemovePetActionBar`), cooldowns included.
+/// guid is the teardown (`Player::RemovePetActionBar`), cooldowns included. Whether the pet guid
+/// changed, which lowers the attack latch (`0x4bc8ce`); a re-send from the same pet keeps it.
 fn pet_spells(
     spells: PetSpells,
     catalog: Option<&Spells>,
     mods: Option<&crate::spell::SpellModifiers>,
     pad: crate::spell::CategoryPad,
     bar: &mut PetBar,
-) {
+) -> bool {
+    let new_pet = bar.spells.pet_guid != spells.pet_guid;
     if spells.pet_guid == 0 {
         if bar.spells.pet_guid != 0 {
             debug!("net: pet bar torn down");
         }
         bar.clear();
-        return;
-    }
-    // A new pet guid clears the attack latch (`0x4bc8ce`); a re-send from the same pet keeps it.
-    if bar.spells.pet_guid != spells.pet_guid {
-        bar.attacking = false;
+        return new_pet;
     }
     debug!(
         "net: pet bar for {:#x} — react {} command {} {}, {} known spell(s), {} cooldown(s)",
@@ -183,6 +189,7 @@ fn pet_spells(
     // `SetPet` (`0x4bc7e0`) ends in `SignalEvent(0x161)` on every packet (`0x4bc90c`), whatever
     // changed: the one repaint a packet that moves only the pet's cooldowns gets.
     bar.bar_signals = bar.bar_signals.wrapping_add(1);
+    new_pet
 }
 
 /// `SMSG_PET_MODE`: the state word alone, applied only to the bar of the pet it names.
@@ -399,32 +406,18 @@ mod tests {
     #[test]
     fn the_attack_latch_survives_a_resend_and_dies_on_a_new_pet() {
         let mut bar = PetBar::default();
-        pet_spells(
-            a_bar(0x2A),
-            None,
-            None,
-            crate::spell::CategoryPad::NoPlayer,
-            &mut bar,
-        );
-        bar.attacking = true;
-
-        pet_spells(
-            a_bar(0x2A),
-            None,
-            None,
-            crate::spell::CategoryPad::NoPlayer,
-            &mut bar,
-        );
-        assert!(bar.attacking, "the same pet re-sending keeps its attack");
-
-        pet_spells(
-            a_bar(0x99),
-            None,
-            None,
-            crate::spell::CategoryPad::NoPlayer,
-            &mut bar,
-        );
-        assert!(!bar.attacking, "a different pet is not attacking");
+        let mut spells = |guid| {
+            pet_spells(
+                a_bar(guid),
+                None,
+                None,
+                crate::spell::CategoryPad::NoPlayer,
+                &mut bar,
+            )
+        };
+        assert!(spells(0x2A), "the first pet");
+        assert!(!spells(0x2A), "the same pet re-sending keeps its attack");
+        assert!(spells(0x99), "a different pet is not attacking");
     }
 
     #[test]

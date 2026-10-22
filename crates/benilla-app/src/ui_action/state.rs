@@ -280,7 +280,6 @@ pub(crate) struct ActionStates<'w, 's> {
     pet_bar: Option<Res<'w, crate::ui_pet::PetBar>>,
     actions: Res<'w, PlayerActions>,
     spells: Option<Res<'w, Spells>>,
-    clock: Res<'w, crate::ui_script::UiClock>,
     // Macro bindings, spell mods, the range units, the control flag and the skill lines.
     cast_state: (
         Res<'w, crate::ui_macro::MacroBoundSpells>,
@@ -312,6 +311,10 @@ pub(crate) struct ActionStates<'w, 's> {
 #[derive(Resource, Default)]
 pub(crate) struct ActionStateMemory {
     vm: crate::ui_script::VmMemo<StateMemory>,
+    /// The frame's (`Instant`, `GetTime`) pair the feed last read ([`crate::ui_script::UiClock`]):
+    /// every frame's pair maps a store `Instant` onto the same `GetTime`, so a refresh between
+    /// feeds derives the same cooldown starts.
+    clock: Option<(Instant, f64)>,
     cache: UsableCache,
     reactive: super::reactive::ReactiveList,
 }
@@ -319,6 +322,8 @@ pub(crate) struct ActionStateMemory {
 /// One pass over the slots: when it runs, and which of the refreshes it is.
 struct Pass {
     now: Instant,
+    /// The (`Instant`, `GetTime`) pair cooldown starts are mapped through.
+    clock: (Instant, f64),
     /// The cooldown-clock trace's once-a-second line is due.
     trace_cd: bool,
     /// The usable refresh `0x4b31c0` runs, which re-checks the reactive list.
@@ -362,8 +367,11 @@ impl ActionStates<'_, '_> {
     ) -> UsableSignals {
         let selection = self.targeting.selection.guid;
         self.memory.vm.get(script).selection = selection;
+        let now = Instant::now();
+        let clock = self.memory.clock.unwrap_or((now, script.now()));
         let pass = Pass {
-            now: Instant::now(),
+            now,
+            clock,
             trace_cd: false,
             refresh: true,
             refresh_cache: true,
@@ -381,6 +389,7 @@ impl ActionStates<'_, '_> {
     fn feed(
         &mut self,
         script: &mut benilla_ui::script::UiScript,
+        clock: (Instant, f64),
         edges: &mut MessageReader<FieldChanged>,
         entered: bool,
         bag_updates: u64,
@@ -457,8 +466,10 @@ impl ActionStates<'_, '_> {
             }
         }
 
+        self.memory.clock = Some(clock);
         let pass = Pass {
             now,
+            clock,
             trace_cd,
             refresh,
             refresh_cache,
@@ -482,6 +493,7 @@ impl ActionStates<'_, '_> {
     ) -> (bool, Vec<String>) {
         let Pass {
             now,
+            clock: (anchor, ui_now),
             trace_cd,
             refresh,
             refresh_cache,
@@ -493,7 +505,6 @@ impl ActionStates<'_, '_> {
             pet_bar,
             actions,
             spells,
-            clock,
             cast_state,
             self_q,
             objects,
@@ -508,11 +519,9 @@ impl ActionStates<'_, '_> {
             vm,
             cache,
             reactive,
+            ..
         } = &mut **memory;
         let memory = vm.get(script);
-        // Every cooldown pushes its absolute start on the `GetTime` clock, derived from this one
-        // pair, so a running cooldown derives the same start every frame.
-        let (anchor, ui_now) = (clock.anchor, clock.ui_now);
         let (bound, spell_mods, range_units, own_control, skill_lines) = &*cast_state;
         let skill_catalog = skill_lines.as_deref().map(|s| &s.catalog);
         let sub_classes = sub_classes.as_deref().map(|s| &s.0);
@@ -818,7 +827,11 @@ pub(super) fn feed_action_state(
     // The active player's creation, whose arrival (`0x5dea50`) writes every slot (`0x5deafc`) and
     // empties the reactive list (`0x5dea86`); a reload reaches neither.
     created: Query<(), Added<SelfPlayer>>,
+    // Every cooldown pushes its absolute start on the `GetTime` clock, derived from this frame's
+    // pair, so a running cooldown derives the same start every frame.
+    clock: Res<crate::ui_script::UiClock>,
 ) {
+    let clock = (clock.anchor, clock.ui_now);
     let entered = entries.read().count() > 0;
     let bag_updates = item_lane.map_or(0, |l| l.bag_raises());
     let arrived = !created.is_empty();
@@ -826,7 +839,15 @@ pub(super) fn feed_action_state(
         let Some(script) = script else {
             return;
         };
-        states.feed(script, &mut edges, entered, bag_updates, arrived, &mut owed);
+        states.feed(
+            script,
+            clock,
+            &mut edges,
+            entered,
+            bag_updates,
+            arrived,
+            &mut owed,
+        );
     })
 }
 

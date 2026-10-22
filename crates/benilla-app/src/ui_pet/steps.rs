@@ -12,7 +12,7 @@ use crate::net::{ClientCommand, NetCommands};
 
 use super::drain::{stop_pet_attack, toggle_slot_autocast};
 use super::menu::UNIT_FLAG_PET_RENAME;
-use super::{PetBar, PetUnit};
+use super::{PetAttackLatch, PetBar, PetUnit};
 
 /// The rename sender's silent truncation, `0x64a7f0(dst, 0x50, "%s", name)` at `0x4bd8ee`: 79
 /// plus the NUL. The popup's 12-letter cap is FrameXML's, a layer above.
@@ -23,6 +23,7 @@ const PET_NAME_MAX: usize = 79;
 #[derive(SystemParam)]
 pub(crate) struct PetSteps<'w, 's> {
     bar: ResMut<'w, PetBar>,
+    latch: ResMut<'w, PetAttackLatch>,
     commands: Res<'w, NetCommands>,
     pet: PetUnit<'w, 's>,
     /// Absent in a world with no stable window.
@@ -69,7 +70,7 @@ impl PetSteps<'_, '_> {
             // `0x4bd650`: with the latch up, the send, the latch down and `PET_BAR_UPDATE`
             // (`0x4bd662`-`0x4bd6b4`); with it down, nothing.
             PetCall::StopAttack => {
-                if stop_pet_attack(&mut self.bar, &self.commands) {
+                if stop_pet_attack(&mut self.latch, &self.commands) {
                     debug!("ui_pet: stop attack");
                     script.lower_pet_attack();
                     script.fire_event("PET_BAR_UPDATE", vec![]);
@@ -132,6 +133,11 @@ impl PetSteps<'_, '_> {
         let name = clamp_pet_name(name.as_deref().unwrap_or_default());
         debug!("ui_pet: renaming pet {pet_guid:#x} to {name:?}");
         self.send(ClientCommand::PetRename { pet_guid, name });
+    }
+
+    /// Whether the attack latch is up (`[0xb714b0]`).
+    pub(crate) fn attack_latched(&self) -> bool {
+        self.latch.up()
     }
 
     fn send(&self, command: ClientCommand) {

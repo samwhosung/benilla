@@ -76,9 +76,11 @@ fn with_pet_attacking(f: &mut Frame, possessed: bool) {
             ]),
         );
     }
-    let mut bar = world.resource_mut::<crate::ui_pet::PetBar>();
-    bar.spells.pet_guid = PET;
-    bar.attacking = true;
+    world
+        .resource_mut::<crate::ui_pet::PetBar>()
+        .spells
+        .pet_guid = PET;
+    world.resource_mut::<crate::ui_pet::PetAttackLatch>().0 = Some(PET);
 }
 
 /// `SetSelection` refreshes the usable states (`0x493892`) and signals `PLAYER_TARGET_CHANGED`
@@ -106,13 +108,12 @@ fn a_selection_call_signals_its_target_change_inside_the_call() {
     assert_eq!(seen(&mut f), "SPELL_UPDATE_USABLE,PLAYER_TARGET_CHANGED");
     feeds(&mut f);
     assert_eq!(events(&mut f).len(), 2, "the release's, once");
-    // A change no call made is the feeds' to signal.
+    // A change no call made is the feeds' to signal, each once.
     f.app.world_mut().resource_mut::<Selection>().guid = Some(NEW);
     feeds(&mut f);
-    assert_eq!(
-        events(&mut f),
-        ["SPELL_UPDATE_USABLE", "PLAYER_TARGET_CHANGED"]
-    );
+    let mut heard = events(&mut f);
+    heard.sort();
+    assert_eq!(heard, ["PLAYER_TARGET_CHANGED", "SPELL_UPDATE_USABLE"]);
 }
 
 /// The release `0x493910` calls a possessed unit off (`0x4bd650` at `0x493a18`) behind
@@ -136,7 +137,11 @@ fn a_deselect_calls_a_possessed_unit_off_before_it_deselects() {
         seen(&mut f),
         "PET_BAR_UPDATE,SPELL_UPDATE_USABLE,PLAYER_TARGET_CHANGED"
     );
-    assert!(!f.app.world().resource::<crate::ui_pet::PetBar>().attacking);
+    assert!(!f
+        .app
+        .world()
+        .resource::<crate::ui_pet::PetAttackLatch>()
+        .up());
 }
 
 /// Without `0x5ee5a0`'s answer the release asks nothing of the pet: the latch stays up and no
@@ -150,5 +155,9 @@ fn a_deselect_without_a_possession_leaves_the_pets_attack() {
     run(&mut f, "ClearTarget()");
     feeds(&mut f);
     assert_eq!(stops_and_selections(&f), ["SetSelection 0x0"]);
-    assert!(f.app.world().resource::<crate::ui_pet::PetBar>().attacking);
+    assert!(f
+        .app
+        .world()
+        .resource::<crate::ui_pet::PetAttackLatch>()
+        .up());
 }
