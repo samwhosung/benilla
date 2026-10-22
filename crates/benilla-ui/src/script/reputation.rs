@@ -325,6 +325,12 @@ fn slot_of(model: &Model, faction: i64) -> Option<u32> {
 
 /// Fold or unfold by 1-based visible index; `0` or any non-header index acts on every header, the
 /// reference's own fall-through (`0x4d6a50`, `0x4d6aa0`).
+///
+/// Deviation: the folds are keyed by header, not by the reference's mask positions, whose rebuild
+/// folds bit N-1 by registration index before the sort (`0x4d5d49`-`0x4d5d68`) and whose fold
+/// verbs search `0xb736c0` before `0x4d5c40` sorts it (`0x4d6400`), so Inactive opens at login
+/// whenever a childless header exists and inactivating a header's last child shows it expanded;
+/// that is a reference bug, and the folds follow the header the player clicked.
 fn set_collapsed(model: &mut Model, index: usize, collapse: bool) {
     let one = index
         .checked_sub(1)
