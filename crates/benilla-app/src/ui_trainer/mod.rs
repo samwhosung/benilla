@@ -58,6 +58,10 @@ pub(crate) struct TrainerOpen {
     /// re-derives and fires `TRAINER_UPDATE` even if no state moved, as `0x4d7d40`'s tail does
     /// (`0x4d83f4`), and the stock window re-reads `GetMoney()` on it.
     pub(crate) re_derive: bool,
+    /// The item records the icon and description getters' calls missed, one per call: the item
+    /// cache's callbacks `0x4d9140` and `0x4d9db0`, which outlive the window and run `0x4d7d40`
+    /// when their record lands (`0x4d914a`, `0x4d9dba`), on whatever trainer is open then.
+    pub(crate) item_waits: Vec<u32>,
 }
 
 impl TrainerOpen {
@@ -95,9 +99,27 @@ impl TrainerOpen {
         self.re_derive = false;
     }
 
-    /// Disconnect: drop the open window.
+    /// Disconnect: drop the open window, and the item callbacks with the asks they wait on.
     pub(crate) fn clear_session(&mut self) {
         self.clear();
+        self.item_waits.clear();
+    }
+
+    /// Spend the waits whose item record answered. One that brought a record is a trigger of the
+    /// pass, which the feed runs once a frame however many fired; a refusal runs its callback with
+    /// status 0, which does nothing (`0x4d9146`, `0x4d9db6`).
+    fn item_answers(&mut self, items: &Items) {
+        let mut landed = false;
+        self.item_waits.retain(|&entry| {
+            if !items.template_answered(entry) {
+                return true;
+            }
+            landed |= items.template(entry, 0, Ask::Read).is_some();
+            false
+        });
+        if landed {
+            self.trigger_re_derive();
+        }
     }
 }
 
@@ -243,15 +265,36 @@ fn resolve_service(
             wire.spell
         );
     }
+    let (mut icon_wait, mut description_wait) = (None, None);
+    // Over the wire spell, like the name and subtext ([`service_icon`]).
+    let texture = service_icon_waiting(
+        wire.spell,
+        trainer_type,
+        spells,
+        icons,
+        items,
+        ask,
+        &mut icon_wait,
+    );
+    let description = service_description_waiting(
+        wire,
+        trainer_type,
+        spells,
+        items,
+        ask,
+        text,
+        &mut description_wait,
+    );
     TrainerService {
         spell_id: wire.spell,
         name: display.map(|d| d.name.clone()),
         // `0x4d8b50` answers the record's NameSubtext, "" for a rankless spell (`0x4d8b84`), and
         // NULL without a Spell record (`0x4d8b58`), which `0x6f3890` pushes as nil.
         subtext: display.map(|d| d.rank.clone().unwrap_or_default()),
-        // Over the wire spell, like the name and subtext ([`service_icon`]).
-        texture: service_icon(wire.spell, trainer_type, spells, icons, items, ask),
-        description: service_description(wire, trainer_type, spells, items, ask, text),
+        texture,
+        icon_wait,
+        description,
+        description_wait,
         cost: wire.cost,
         prof_first_rank: wire.is_primary_prof_first_rank,
         category: cat,
@@ -382,7 +425,6 @@ pub(crate) fn feed_trainer(
     names: Res<NameCache>,
     mut tooltip_subjects: ResMut<TrainerTooltipSubjects>,
     mut last: crate::ui_script::WindowMemo<Option<TrainerState>>,
-    mut last_name: crate::ui_script::WindowMemo<Option<String>>,
     mut closes: CoreCloses,
 ) {
     vm.feed(|script, mut re_eval, fires| {
@@ -390,10 +432,8 @@ pub(crate) fn feed_trainer(
             return;
         };
         let last = last.get(script);
-        let last_name = last_name.get(script);
         if closes.since_last(script, NpcWindow::Trainer) {
             *last = None;
-            *last_name = None;
         }
         // Refusals go to the log only, as the reference prints them only to its console.
         for code in errors.0.drain(..) {
@@ -407,6 +447,9 @@ pub(crate) fn feed_trainer(
         let Some(skill_lines) = skill_lines.as_deref() else {
             return;
         };
+        // The getters' item callbacks, kept by their calls; a record that answered one is a trigger.
+        open.item_waits.extend(script.take_trainer_item_waits());
+        open.item_answers(&items);
         // The per-list reset goes in before the snapshot, so `TRAINER_SHOW` finds it; the stock
         // window re-applies its saved filter only on its own `ADDON_LOADED`.
         let listed = open.fresh_list;
@@ -603,38 +646,39 @@ pub(crate) fn feed_trainer(
         if *tooltip_subjects != fresh_tooltip_subjects {
             *tooltip_subjects = fresh_tooltip_subjects;
         }
-        // `TRAINER_SHOW` and `TRAINER_UPDATE` carry no argument (`SignalEvent` `0x4d7b73`,
-        // `0x4d83f9`) and the stock window titles with `UnitName("npc")`
-        // (`Blizzard_TrainerUI.lua:90`), so a name-only change re-fires `TRAINER_UPDATE` to repaint
-        // it.
-        let trainer_name = open.trainer.and_then(|g| {
+        // The stock window titles with `UnitName("npc")` (`Blizzard_TrainerUI.lua:90`), which
+        // looks the name up with a callback (`0x5171b8`) at its events; its landing fires nothing.
+        if let Some(g) = open.trainer {
             let store = re_eval
                 .index
                 .0
                 .get(&g)
                 .and_then(|&e| re_eval.stores.get(e).ok());
-            names.resolve_unit(g, store, ask).map(str::to_string)
-        });
-        let name_changed = *last_name != trainer_name;
+            let _ = names.resolve_unit(g, store, ask);
+        }
         // A list lays the rows out anew, so it pushes even when it matches the last.
-        if fresh == *last && !name_changed && !forced && !listed {
+        if fresh == *last && !forced && !listed {
             return;
         }
         // The rows sort only where the reference finalizes them: a list (`0x4d7b3b`) and the
-        // state pass `0x4d7d40`; a name or icon that lands leaves their order (and their ties).
-        if listed || forced || last.is_none() {
+        // state pass `0x4d7d40`, which an item record a getter missed runs too (`0x4d914a`,
+        // `0x4d9dba`); a name, an icon or a record no getter asked for leaves their order (and
+        // their ties).
+        let shows = fresh.is_some() && (listed || last.is_none());
+        if shows || forced {
             script.set_trainer(fresh.clone());
         } else {
             script.refresh_trainer(fresh.clone());
         }
-        match (&*last, &fresh) {
-            (None, Some(_)) => fires.post("TRAINER_SHOW", vec![]),
-            (Some(_), Some(_)) => fires.post("TRAINER_UPDATE", vec![]),
-            // The core told the VM; a disconnect's clear tells it nothing.
-            (Some(_), None) | (None, None) => {}
+        // Each event has its own producers, neither carrying an argument: `TRAINER_SHOW` the list
+        // builder's (`0x4d7b73`), every list; `TRAINER_UPDATE` the state pass's (`0x4d83f9`). A
+        // repaint with neither fires nothing; the close is the core's.
+        if shows {
+            fires.post("TRAINER_SHOW", vec![]);
+        } else if forced && fresh.is_some() {
+            fires.post("TRAINER_UPDATE", vec![]);
         }
         *last = fresh;
-        *last_name = trainer_name;
     })
 }
 
@@ -745,9 +789,11 @@ fn drain_trainer(mut hosted_vm: crate::script_calls::HostedVm, mut world_command
 
 mod law;
 use law::{
-    category, service_description, service_group, service_icon, service_kind, service_tooltip,
-    ServiceText,
+    category, service_description_waiting, service_group, service_icon_waiting, service_kind,
+    service_tooltip, ServiceText,
 };
+#[cfg(test)]
+use law::{service_description, service_icon};
 
 #[cfg(test)]
 mod call_tests;

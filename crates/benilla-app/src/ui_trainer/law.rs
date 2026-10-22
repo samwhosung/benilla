@@ -21,8 +21,8 @@ use crate::query_cache::Ask;
 /// `GetTrainerServiceIcon 0x4d8f50`: at a tradeskill trainer (`[0xb73a08]`), the item the wire
 /// spell's first learn effect (`0x4d8ff5`/`0x4d8ffa`) teaches to create (`0x4d906a`); otherwise
 /// the wire spell's own icon (`0x4d9008`), never the taught spell's (`0x4d8fd7`). An uncached
-/// template reads `None` until its answer re-fires `TRAINER_UPDATE`, as the client's cache
-/// callback does (`0x4d9140`).
+/// template reads `None`, and the getter's call keeps a callback on it ([`service_icon_waiting`]).
+#[cfg(test)]
 pub(super) fn service_icon(
     wire_spell: u32,
     trainer_type: u32,
@@ -30,6 +30,28 @@ pub(super) fn service_icon(
     icons: Option<&ItemDisplays>,
     items: &Items,
     ask: Ask<'_>,
+) -> Option<String> {
+    service_icon_waiting(
+        wire_spell,
+        trainer_type,
+        spells,
+        icons,
+        items,
+        ask,
+        &mut None,
+    )
+}
+
+/// [`service_icon`], with `wait` set to the product whose record the lookup (`0x4d9096`) missed:
+/// the callback `0x4d9140` each getter call keeps on it (`0x4d907e`) runs `0x4d7d40` when it lands.
+pub(super) fn service_icon_waiting(
+    wire_spell: u32,
+    trainer_type: u32,
+    spells: &SpellCatalog,
+    icons: Option<&ItemDisplays>,
+    items: &Items,
+    ask: Ask<'_>,
+    wait: &mut Option<u32>,
 ) -> Option<String> {
     let wire = spells.get(wire_spell)?;
     if trainer_type == TRAINER_TYPE_TRADESKILL {
@@ -46,10 +68,11 @@ pub(super) fn service_icon(
             .map(|d| d.effect_item_type[0])
             .filter(|&e| e != 0)
         {
-            return items
-                .template(product, 0, ask)
-                .map(|t| t.display_info_id)
-                .and_then(|d| item_icon(icons, d));
+            let Some(template) = items.template(product, 0, ask) else {
+                *wait = Some(product);
+                return None;
+            };
+            return item_icon(icons, template.display_info_id);
         }
     }
     wire.icon.clone()
@@ -114,6 +137,7 @@ pub(super) struct ServiceText<'a> {
 /// the Description column, and the modifiers applied. `None` is the nil the binding pushes
 /// (`0x4d9d90`): the wire spell has no record (`0x4d9bd7`), or no arm found text and the wire
 /// spell's own is null or empty (`0x4d9d44`, `0x4d9d49`).
+#[cfg(test)]
 pub(super) fn service_description(
     wire: &TrainerSpell,
     trainer_type: u32,
@@ -121,6 +145,21 @@ pub(super) fn service_description(
     items: &Items,
     ask: Ask<'_>,
     text: &ServiceText,
+) -> Option<String> {
+    service_description_waiting(wire, trainer_type, spells, items, ask, text, &mut None)
+}
+
+/// [`service_description`], with `wait` set to the recipe's product whose record the lookup
+/// (`0x4d9d07`) missed: the callback `0x4d9db0` each getter call keeps on it (`0x4d9cef`) runs
+/// `0x4d7d40` when it lands. A product id of 0 is never looked up, so it keeps none.
+pub(super) fn service_description_waiting(
+    wire: &TrainerSpell,
+    trainer_type: u32,
+    spells: &SpellCatalog,
+    items: &Items,
+    ask: Ask<'_>,
+    text: &ServiceText,
+    wait: &mut Option<u32>,
 ) -> Option<String> {
     let d = spells.get(wire.spell)?;
     let learn = (0..3).find(|&i| {
@@ -151,12 +190,14 @@ pub(super) fn service_description(
             if taught.attributes & SPELL_ATTR_IS_TRADESKILL != 0
                 && taught.effects[0] == SPELL_EFFECT_CREATE_ITEM
             {
-                if let Some(t) = items
-                    .template(taught.effect_item_type[0], 0, ask)
-                    .map(|item| item.description.clone())
-                    .filter(|t| !t.is_empty())
-                {
-                    return Some(t);
+                let product = taught.effect_item_type[0];
+                match items.template(product, 0, ask) {
+                    Some(item) if !item.description.is_empty() => {
+                        return Some(item.description.clone());
+                    }
+                    Some(_) => {}
+                    None if product != 0 => *wait = Some(product),
+                    None => {}
                 }
             }
         }
@@ -231,11 +272,15 @@ pub(super) fn service_kind(wire_spell: u32, spells: &SpellCatalog) -> (bool, Opt
     (trade_skill, learn_spell)
 }
 
-/// A wire `state` byte's category; anything but GREEN or GRAY, an unexpected value too, is gated.
+/// A `state` byte's category. The finalizer shows a row whose `1 << state` is in the filter
+/// (`0x4d84ba`), whose bits past 2 nothing sets (`0x4da390`), so a state from 3 up is hidden: the
+/// re-evaluator's 3 (`0x4d7e3e`, `0x4d83a4`) and an unexpected wire byte up to 31, where the shift
+/// would wrap; vmangos sends 0 to 2 (`NPCHandler.cpp:113`).
 pub(super) fn category(state: u8) -> TrainerServiceCategory {
     match state {
-        trainer_spell_state::GRAY => TrainerServiceCategory::Used,
         trainer_spell_state::GREEN => TrainerServiceCategory::Available,
-        _ => TrainerServiceCategory::Unavailable,
+        trainer_spell_state::RED => TrainerServiceCategory::Unavailable,
+        trainer_spell_state::GRAY => TrainerServiceCategory::Used,
+        _ => TrainerServiceCategory::Hidden,
     }
 }

@@ -9,42 +9,45 @@ use mlua::{Lua, MultiValue, Value};
 use super::binding_abi;
 use super::Model;
 
-/// A service's state (the wire's `TrainerSpellState`): green learnable, red gated, gray known.
+/// A service's state byte `[+0x30]` (the wire's `TrainerSpellState`): green learnable, red gated,
+/// gray known, and the state the re-evaluator writes at a mount trainer for a rank the player has
+/// passed (`0x4d7e3e`, `0x4d83a4`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TrainerServiceCategory {
     #[default]
     Available,
     Unavailable,
     Used,
+    /// State 3: no filter shows it, as `SetTrainerServiceTypeFilter` names bits 0-2 only
+    /// (`0x4da390`).
+    Hidden,
 }
 
 impl TrainerServiceCategory {
-    /// `GetTrainerServiceInfo`'s type string, which the stock window colours each row by.
+    /// `GetTrainerServiceInfo`'s type string, which the stock window colours each row by: every
+    /// state but 0 and 2 reads `"unavailable"` (`0x4d8ba0`).
     fn era_str(self) -> &'static str {
         match self {
             TrainerServiceCategory::Available => "available",
-            TrainerServiceCategory::Unavailable => "unavailable",
+            TrainerServiceCategory::Unavailable | TrainerServiceCategory::Hidden => "unavailable",
             TrainerServiceCategory::Used => "used",
         }
     }
 
-    /// The filter-flag slot this category occupies ([`Model::trainer_filter`]).
-    fn filter_slot(self) -> usize {
-        match self {
-            TrainerServiceCategory::Available => 0,
-            TrainerServiceCategory::Unavailable => 1,
-            TrainerServiceCategory::Used => 2,
-        }
-    }
-
     /// The record's state byte `[+0x30]`, which `0x4d8ba0` maps to the type string; at type 1 it is
-    /// also a sort key ([`talent_order`]), so it stays apart from the equal filter slot.
+    /// also a sort key ([`talent_order`]).
     fn state_key(self) -> u8 {
         match self {
             TrainerServiceCategory::Available => 0,
             TrainerServiceCategory::Unavailable => 1,
             TrainerServiceCategory::Used => 2,
+            TrainerServiceCategory::Hidden => 3,
         }
+    }
+
+    /// The state filter's bit for this state (`0x4d84b0`-`0x4d84ba`: `1 << [+0x30]`).
+    fn filter_bit(self) -> u32 {
+        1 << self.state_key()
     }
 
     fn from_filter_str(s: &str) -> Option<Self> {
@@ -56,6 +59,22 @@ impl TrainerServiceCategory {
         }
     }
 }
+
+/// `0x4da390`: the filter bit a type name names, compared without case (`0x64a4c0`); `None` is
+/// its 6, another name.
+fn filter_bit_named(name: &str) -> Option<u32> {
+    [
+        TrainerServiceCategory::Available,
+        TrainerServiceCategory::Unavailable,
+        TrainerServiceCategory::Used,
+    ]
+    .into_iter()
+    .find(|c| crate::crt::str_cmp_i(name, c.era_str()) == 0)
+    .map(TrainerServiceCategory::filter_bit)
+}
+
+/// The state mask `"all"` sets (`0x4da2a9`): the three states a filter can name.
+const TRAINER_FILTER_ALL: u32 = 7;
 
 /// A service's skill requirement (`GetTrainerServiceSkillReq`). The wire has no per-gate bit, so
 /// `met` comes from the service's `category`.
@@ -118,8 +137,14 @@ pub struct TrainerService {
     /// record and answers nil (`0x4d8b58`).
     pub subtext: Option<String>,
     pub texture: Option<String>,
+    /// The item whose record the icon's product lookup (`0x4d9096`) misses: each
+    /// `GetTrainerServiceIcon` call on the row keeps the callback `0x4d9140` on it.
+    pub icon_wait: Option<u32>,
     /// The expanded text; `None` answers nil (`0x4d9d90`).
     pub description: Option<String>,
+    /// The item whose record the description's product lookup (`0x4d9d07`) misses: each
+    /// `GetTrainerServiceDescription` call on the row keeps the callback `0x4d9db0` on it.
+    pub description_wait: Option<u32>,
     /// In copper, already reputation-discounted by the server.
     pub cost: u32,
     /// A primary profession's first rank: the stock window's `cpCost2 > 0`, which asks to confirm.
@@ -199,6 +224,12 @@ impl super::UiScript {
     }
 
     fn push_trainer(&mut self, state: Option<TrainerState>, finalizes: bool) {
+        // The known group's header text, which `0x4d8b11` reads by name.
+        let known_header = self
+            .lua()
+            .globals()
+            .get::<String>("KNOWN_TALENTS_HEADER")
+            .unwrap_or_default();
         let mut model = self.model_mut();
         match state {
             None => {
@@ -210,7 +241,7 @@ impl super::UiScript {
                 model.trainer_rows_fresh = false;
             }
             Some(mut s) => {
-                s.groups = build_groups(&s.services, s.trainer_type);
+                s.groups = build_groups(&s.services, s.trainer_type, &known_header);
                 let live: std::collections::HashSet<u32> = s.groups.iter().map(|g| g.key).collect();
                 model.trainer_collapsed.retain(|sl| live.contains(sl));
                 let model = &mut *model;
@@ -239,9 +270,9 @@ impl super::UiScript {
         let mut model = self.model_mut();
         // Mask 5 at a mount trainer shows available and known services, so the known group shows.
         model.trainer_filter = if trainer_type == TRAINER_TYPE_MOUNT {
-            [true, false, true]
+            5
         } else {
-            [true, true, false]
+            3
         };
         model.trainer_collapsed.clear();
         // The skill-line filter resets to every group with the list (`0x4d7560`).
@@ -250,6 +281,13 @@ impl super::UiScript {
         // The list's push lays the array out anew (`0x4d7807`-`0x4d7b35`); the caller pushes
         // every list, an identical one too.
         model.trainer_rows_fresh = true;
+    }
+
+    /// The item records the icon and description getters' calls missed since the last take, one
+    /// per call: the callbacks `0x4d9140` and `0x4d9db0` the item cache keeps (dedupe flag 0,
+    /// `0x4d9076`, `0x4d9ce7`), each of which runs `0x4d7d40` when its record lands.
+    pub fn take_trainer_item_waits(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.model_mut().trainer_item_waits)
     }
 
     /// Whether `CloseTrainer` was called since the last drain; the close sends no packet.
@@ -372,9 +410,22 @@ fn talent_order(a: &TrainerService, b: &TrainerService) -> i32 {
 /// Group the services by [`TrainerService::group_key`], dropping key 0, each header made where its
 /// key is first met in list order (`0x4d78a3`-`0x4d79c3`), then the header array sorted by the
 /// CRT `qsort` (`0x73f727`, called at `0x4d7a0e`): by raw key at type 2 (`0x4d7c30`), else
-/// `0x4d7b90`. The rows themselves sort in [`finalize`].
-fn build_groups(services: &[TrainerService], trainer_type: u32) -> Vec<TrainerGroup> {
+/// `0x4d7b90`. A mount trainer's known group, headed `known_header`, is made first and always,
+/// member or none (`0x4d7609`-`0x4d7697`). The rows themselves sort in [`finalize`].
+fn build_groups(
+    services: &[TrainerService],
+    trainer_type: u32,
+    known_header: &str,
+) -> Vec<TrainerGroup> {
     let mut groups: Vec<TrainerGroup> = Vec::new();
+    if trainer_type == TRAINER_TYPE_MOUNT {
+        groups.push(TrainerGroup {
+            key: TRAINER_GROUP_KNOWN,
+            name: known_header.to_string(),
+            line_name: None,
+            services: Vec::new(),
+        });
+    }
     for (i, s) in services.iter().enumerate() {
         if s.group_key == 0 {
             continue;
@@ -466,7 +517,7 @@ fn finalize(model: &mut Model) {
             group_of[si] = gi;
         }
     }
-    let passes = |si: usize| model.trainer_filter[t.services[si].category.filter_slot()];
+    let passes = |si: usize| model.trainer_filter & t.services[si].category.filter_bit() != 0;
     let group_shown: Vec<bool> = t
         .groups
         .iter()
@@ -702,8 +753,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: GetTrainerServiceIcon(index)` (`0x84a8cc`, `0x4d8f81`).
             let index = binding_abi::index_arg(lua, index, "Usage: GetTrainerServiceIcon(index)")?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            opt_str(lua, service(&model, index).and_then(|s| s.texture.as_ref()))
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let (texture, wait) = service(&model, index)
+                .map(|s| (s.texture.clone(), s.icon_wait))
+                .unwrap_or_default();
+            // The miss keeps its callback (`0x4d907e`) and pushes nil (`0x4d90a4`).
+            model.trainer_item_waits.extend(wait);
+            opt_str(lua, texture.as_ref())
         })?,
     )?;
 
@@ -714,11 +770,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `0x4d9b71`).
             let index =
                 binding_abi::index_arg(lua, index, "Usage: GetTrainerServiceDescription(index)")?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            opt_str(
-                lua,
-                service(&model, index).and_then(|s| s.description.as_ref()),
-            )
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let (description, wait) = service(&model, index)
+                .map(|s| (s.description.clone(), s.description_wait))
+                .unwrap_or_default();
+            // The miss keeps its callback (`0x4d9cef`).
+            model.trainer_item_waits.extend(wait);
+            opt_str(lua, description.as_ref())
         })?,
     )?;
 
@@ -894,23 +952,54 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, kind: String| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(match TrainerServiceCategory::from_filter_str(&kind) {
-                Some(c) => binding_abi::flag(model.trainer_filter[c.filter_slot()]),
+                Some(c) => binding_abi::flag(model.trainer_filter & c.filter_bit() != 0),
                 None => Value::Nil,
             })
         })?,
     )?;
+    // SetTrainerServiceTypeFilter("type", on [, exclusive]) (`0x4da260`): `"all"` sets the mask to
+    // 7 and reads nothing more (`0x4da2a9`); otherwise the named bit, cleared by an `on` that
+    // truncates to 0 (`0x4da31a`), the whole mask for a third argument that is a number truncating
+    // to nonzero (`0x4da359`), else added (`0x4da36f`). Every path commits through `0x4d8c90`: the
+    // finalizer, then `TRAINER_UPDATE`, also when the mask did not move.
     g.set(
         "SetTrainerServiceTypeFilter",
-        lua.create_function(|lua, (kind, on): (String, Value)| {
-            if let Some(c) = TrainerServiceCategory::from_filter_str(&kind) {
-                // The stock window passes 1 or 0; nil, false and 0 disable.
-                let enable = !matches!(on, Value::Nil | Value::Integer(0) | Value::Boolean(false));
-                super::tick::verb(lua, |model| {
-                    model.trainer_filter[c.filter_slot()] = enable;
-                    // Fires even when the bit did not move, as the reference's setter does.
-                    raise_trainer_update(model);
-                });
-            }
+        lua.create_function(|lua, (kind, on, exclusive): (Value, Value, Value)| {
+            // `is-number-or-string` else the usage (`0x84ab60`, `0x4da273`).
+            let kind = binding_abi::string_arg(
+                lua,
+                kind,
+                r#"Usage: SetTrainerServiceTypeFilter("type" [, on\off, exclusive])"#,
+            )?;
+            let mask = if crate::crt::str_cmp_i(&kind, "all") == 0 {
+                TRAINER_FILTER_ALL
+            } else {
+                let bit = filter_bit_named(&kind).ok_or_else(|| {
+                    mlua::Error::runtime("Bad service type in SetTrainerServiceTypeFilter")
+                })?;
+                let on = binding_abi::number_arg(
+                    lua,
+                    on,
+                    "Missing on//off parameter in SetTrainerServiceTypeFilter",
+                )?;
+                let current = lua
+                    .app_data_ref::<Model>()
+                    .expect("model app_data")
+                    .trainer_filter;
+                if on == 0 {
+                    current & !bit
+                } else if binding_abi::is_number(lua, exclusive)
+                    .is_some_and(|n| binding_abi::ftol(n) != 0)
+                {
+                    bit
+                } else {
+                    current | bit
+                }
+            };
+            super::tick::verb(lua, |model| {
+                model.trainer_filter = mask;
+                raise_trainer_update(model);
+            });
             Ok(())
         })?,
     )?;

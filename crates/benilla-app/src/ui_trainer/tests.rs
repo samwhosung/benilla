@@ -511,8 +511,9 @@ fn category_maps_the_wire_state_byte() {
         category(trainer_spell_state::GRAY),
         TrainerServiceCategory::Used
     );
-    // An unexpected value is gated, never learnable.
-    assert_eq!(category(99), TrainerServiceCategory::Unavailable);
+    // The re-evaluator's 3 and any other byte name a bit no filter sets (`0x4d84ba`, `0x4da390`).
+    assert_eq!(category(3), TrainerServiceCategory::Hidden);
+    assert_eq!(category(10), TrainerServiceCategory::Hidden);
 }
 
 #[test]

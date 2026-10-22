@@ -829,8 +829,10 @@ pub(crate) struct Model {
     pub(crate) trainer: Option<trainer::TrainerState>,
     pub(crate) trainer_selection: Option<u32>,
     pub(crate) trainer_close: bool,
-    /// Available, unavailable and used filters, all on by default; they hide services, not headers.
-    pub(crate) trainer_filter: [bool; 3],
+    /// The state filter `ds:0xb73a1c`: bit n set shows the services in state n.
+    pub(crate) trainer_filter: u32,
+    /// The item records the trainer getters' calls missed, one per call, until the app takes them.
+    pub(crate) trainer_item_waits: Vec<u32>,
     /// Collapsed skill-line ids, kept across a re-push and cleared when the trainer closes.
     pub(crate) trainer_collapsed: HashSet<u32>,
     /// The skill-line filter `ds:0xb73a20`: bit n set shows header group n, every bit on a list.
@@ -1664,7 +1666,8 @@ impl Model {
             trainer: None,
             trainer_selection: None,
             trainer_close: false,
-            trainer_filter: [true; 3],
+            trainer_filter: 7,
+            trainer_item_waits: Vec::new(),
             trainer_collapsed: HashSet::new(),
             trainer_line_filter: u32::MAX,
             trainer_rows: Vec::new(),
