@@ -51,7 +51,7 @@ impl Plugin for WorldMapPlugin {
 
 /// Announce every [`CurrentMap`] flip as a [`MapChange`]; the startup seed and a same-map
 /// worldport announce nothing.
-fn announce_map_change(
+pub(crate) fn announce_map_change(
     map: Option<Res<CurrentMap>>,
     mut last: Local<Option<u32>>,
     mut changes: MessageWriter<MapChange>,
