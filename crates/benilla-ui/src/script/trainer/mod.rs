@@ -1107,6 +1107,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let index = binding_abi::index_arg(lua, index, "Usage: BuyTrainerService(index)")?;
             let buy = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
+                // A header row: the reference tests its `+0x30`, which no write sets for a header
+                // (`0x4d7af4`-`0x4d7b27`), a stale byte; benilla sends nothing for one.
                 service(&model, index)
                     .filter(|s| s.category == TrainerServiceCategory::Available)
                     .zip(model.trainer.as_ref())
