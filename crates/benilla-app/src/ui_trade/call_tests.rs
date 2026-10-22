@@ -896,3 +896,53 @@ fn an_accept_made_in_an_engine_turn_signals_and_sends_when_it_applies() {
         [ClientCommand::AcceptTrade { flag: 1 }]
     ));
 }
+
+/// `BACK_TO_TRADE` with both flags up (`0x4bf81c`, `0x4bf823`): our drop signals, then the
+/// un-accept goes out, then the partner's drop signals; a handler's packet in the first signal
+/// leaves ahead of the un-accept.
+#[test]
+fn back_to_trade_signals_ours_sends_then_signals_theirs() {
+    let mut t = client();
+    open_with_bob(&mut t);
+    run(&mut t, "AcceptTrade()");
+    status(&mut t, TradeStatus::Accept);
+    let _ = sent(&t);
+    let _ = heard(&mut t);
+    run(
+        &mut t,
+        r#"local f = CreateFrame("Frame")
+        f:RegisterEvent("TRADE_ACCEPT_UPDATE")
+        f:SetScript("OnEvent", function() RandomRoll(arg2, 9) end)"#,
+    );
+    status(&mut t, TradeStatus::BackToTrade);
+    assert_eq!(
+        heard(&mut t),
+        "TRADE_ACCEPT_UPDATE(0,1) TRADE_ACCEPT_UPDATE(0,0) "
+    );
+    let sent: Vec<String> = sent(&t).into_iter().map(|c| format!("{c:?}")).collect();
+    assert_eq!(
+        sent,
+        [
+            "RandomRoll { min: 1, max: 9 }",
+            "UnacceptTrade",
+            "RandomRoll { min: 0, max: 9 }",
+        ]
+    );
+}
+
+/// An extended status drops both accepts through `0x4bf230(0)` and `0x4bf280(0)` before its
+/// compares (`0x4bf2b6`, `0x4bf2bd`): the signal, the un-accept, then the slot's own signal.
+#[test]
+fn an_extended_status_unaccepts_with_its_signal_and_send() {
+    let mut t = client();
+    open_with_bob(&mut t);
+    run(&mut t, "AcceptTrade()");
+    let _ = sent(&t);
+    let _ = heard(&mut t);
+    partner_gold(&mut t, 300);
+    assert_eq!(
+        heard(&mut t),
+        "TRADE_ACCEPT_UPDATE(0,0) TRADE_MONEY_CHANGED(nil,nil) "
+    );
+    assert!(matches!(sent(&t)[..], [ClientCommand::UnacceptTrade]));
+}
