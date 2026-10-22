@@ -1,5 +1,6 @@
 //! The reputation pane's feed: the player's wire reputation slots resolved against `Faction.dbc`,
-//! pushed as one snapshot with `UPDATE_FACTION` on a change, and the pane's three verbs sent.
+//! pushed as one snapshot with `UPDATE_FACTION` on a change, and the pane's verbs' engine half
+//! ([`ReputationSteps`]), which the call host applies inside each call.
 //!
 //! A faction is a row when it has a reputation slot and one of its four race/class mask slots
 //! fits the player; the client adds it inside the accept block that picks the base value
@@ -22,7 +23,7 @@
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{FactionEntry, ReputationSend, ReputationState};
+use benilla_ui::script::{CallTail, FactionEntry, ReputationCall, ReputationState, UiScript};
 
 use crate::net::{ClientCommand, NetCommands, ObjectStore, Reputations, SelfPlayer};
 use crate::target::Factions;
@@ -39,17 +40,144 @@ pub(crate) struct UiReputationPlugin;
 
 impl Plugin for UiReputationPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.init_resource::<FactionFlagWrites>().add_systems(
             Update,
-            (
-                // A seat: the world-enter cascade's rebuild signals over the list it pushes.
-                feed_reputation
-                    .in_set(UiFeed)
-                    .in_set(crate::ui_unit::field_events::FieldEventPushes)
-                    .in_set(crate::ui_unit::WorldEnterSeats),
-                drain_reputation_sends.in_set(crate::ui_script::UiDrain),
-            ),
+            // A seat: the world-enter cascade's rebuild signals over the list it pushes.
+            feed_reputation
+                .in_set(UiFeed)
+                .in_set(crate::ui_unit::field_events::FieldEventPushes)
+                .in_set(crate::ui_unit::WorldEnterSeats),
         );
+    }
+}
+
+/// The slot flag bytes the verbs wrote inside their calls (`0x4d6074`, `0x4d612c`), as
+/// `(slot, bits, set)`, for the feed to fold into [`Reputations`] ahead of its build: the host reads
+/// the store and cannot write it, as most of its appliers read it through the relation inputs.
+/// An append-only sink shared through `&self`, as [`crate::ui_action::UiErrorKeys`] is.
+#[derive(Resource, Default)]
+pub(crate) struct FactionFlagWrites(std::sync::Mutex<Vec<(usize, u8, bool)>>);
+
+impl FactionFlagWrites {
+    fn q(&self) -> std::sync::MutexGuard<'_, Vec<(usize, u8, bool)>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Whether a write waits.
+    fn pending(&self) -> bool {
+        !self.q().is_empty()
+    }
+
+    /// Fold every write into `store`, in the order made.
+    fn apply(&self, store: &mut Reputations) {
+        for (slot, bits, set) in std::mem::take(&mut *self.q()) {
+            if let Some((flags, _)) = store.slots.get_mut(slot) {
+                if set {
+                    *flags |= bits;
+                } else {
+                    *flags &= !bits;
+                }
+            }
+        }
+    }
+}
+
+/// The reputation verbs' engine half: the player's combat flag and watched slot, the slots' flag
+/// bytes, and what the verbs send through.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct ReputationSteps<'w, 's> {
+    self_q: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
+    reputations: Res<'w, Reputations>,
+    writes: Option<Res<'w, FactionFlagWrites>>,
+    net: Res<'w, NetCommands>,
+    sink: crate::ui_action::MessageSink<'w>,
+}
+
+impl ReputationSteps<'_, '_> {
+    /// Apply one reputation call; the VM's half of a flag write is the tail's.
+    pub(crate) fn apply(
+        &mut self,
+        script: &mut UiScript,
+        call: ReputationCall,
+    ) -> Option<CallTail> {
+        use benilla_formats::faction_flags as flag;
+        match call {
+            ReputationCall::AtWar {
+                rep_list_id,
+                at_war,
+            } => {
+                // In combat (unit flags bit 19, `0x4d6032`-`0x4d603e`): `ERR_NOT_IN_COMBAT`
+                // (`0x4d6040`), and nothing written or sent.
+                let in_combat = self
+                    .self_q
+                    .iter()
+                    .next()
+                    .is_some_and(|s| s.0.unit_flags() & 0x8_0000 != 0);
+                if in_combat {
+                    let input = script.input_events();
+                    let line = crate::ui_action::keyed_line(script, "ERR_NOT_IN_COMBAT")
+                        .map(|l| l.under(input));
+                    crate::ui_action::show_messages(script, &mut self.sink, "ui_reputation", line);
+                    return None;
+                }
+                // War sets the bit unless peace is forced; anything else clears it (`0x4d6065`-
+                // `0x4d606f`). The packet carries the war asked for (`0x4d60a9`).
+                let flags = self.slot_flags(rep_list_id);
+                let now = at_war && flags & flag::PEACE_FORCED == 0;
+                self.write(rep_list_id, flag::AT_WAR, now);
+                let _ = self.net.0.send(ClientCommand::SetFactionAtWar {
+                    rep_list_id,
+                    at_war,
+                });
+                Some(Box::new(move |script: &mut UiScript| {
+                    script.set_faction_at_war(rep_list_id, now);
+                }))
+            }
+            ReputationCall::Inactive {
+                rep_list_id,
+                inactive,
+            } => {
+                self.write(rep_list_id, flag::INACTIVE, inactive);
+                let _ = self.net.0.send(ClientCommand::SetFactionInactive {
+                    rep_list_id,
+                    inactive,
+                });
+                Some(Box::new(move |script: &mut UiScript| {
+                    script.set_faction_inactive(rep_list_id, inactive);
+                }))
+            }
+            // An absent player sends nothing; a slot the field holds already, nothing either
+            // (`0x4d626e`, `0x4d6276`). No watch is -1 on the wire: slot 0 is the Bloodsail
+            // Buccaneers.
+            ReputationCall::Watch(slot) => {
+                let store = self.self_q.iter().next()?;
+                if store.0.player_watched_faction().unwrap_or(0) == slot {
+                    return None;
+                }
+                let _ = self
+                    .net
+                    .0
+                    .send(ClientCommand::SetWatchedFaction { rep_list_id: slot });
+                None
+            }
+        }
+    }
+
+    /// The slot's flag byte as the server and the verbs left it.
+    fn slot_flags(&self, slot: u32) -> u8 {
+        self.reputations
+            .slots
+            .get(slot as usize)
+            .map_or(0, |&(flags, _)| flags)
+    }
+
+    /// Write `bits` of slot `slot`'s flag byte (`0x4d5fc0`), for the feed to fold in.
+    fn write(&self, slot: u32, bits: u8, set: bool) {
+        if let Some(writes) = self.writes.as_deref() {
+            writes.q().push((slot as usize, bits, set));
+        }
     }
 }
 
@@ -231,21 +359,26 @@ pub(crate) fn reputation_row(
 /// The by-value inputs of the feed's gate, `(race, class, watched)`; the other two are resources.
 type ReputationInputs = Option<(u8, u8, Option<u32>)>;
 
-/// Push the snapshot and fire `UPDATE_FACTION` when it differs. The build (54 rows of names and
+/// Push the snapshot and fire `UPDATE_FACTION` when it differs from the list the VM holds. The
+/// flag bytes the verbs wrote are folded in first ([`FactionFlagWrites`]), and the VM's list
+/// already holds them, so a verb's write signals nothing here. The build (54 rows of names and
 /// descriptions) runs only when the wire slots, the catalog, race/class or the watched index
 /// move, and the equality check behind it keeps a change to no listed row quiet. The first push
 /// into a VM is silent: it needs the active player, as the rebuild does (`0x4d5453`), and comes on
 /// the frame the world-enter cascade runs over it, whose rebuild signals with the player seated
 /// (`crate::ui_unit::WorldEnterSeats`).
 pub(crate) fn feed_reputation(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    mut vm: crate::script_calls::VmWith<ResMut<'static, Reputations>>,
+    writes: Option<Res<FactionFlagWrites>>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
-    reputations: Res<Reputations>,
     factions: Option<Res<Factions>>,
     mut last: Local<crate::ui_script::VmMemo<Option<ReputationState>>>,
     mut last_inputs: Local<crate::ui_script::VmMemo<ReputationInputs>>,
 ) {
-    hosted_vm.run(|script| {
+    vm.feed(|script, mut reputations, fires| {
+        if let Some(writes) = writes.as_deref().filter(|w| w.pending()) {
+            writes.apply(&mut reputations);
+        }
         let Some(script) = script else {
             return;
         };
@@ -292,14 +425,15 @@ pub(crate) fn feed_reputation(
         entries.sort_by_key(|e| e.faction_id);
 
         let fresh = ReputationState { entries, watched };
-        if last.as_ref() == Some(&fresh) {
+        if script.reputation_matches(&fresh) {
+            *last = Some(fresh);
             return;
         }
         let bare = faction_fires(last.as_ref(), &fresh);
         script.set_reputation(fresh.clone());
         *last = Some(fresh);
         for _ in 0..bare {
-            script.fire_event("UPDATE_FACTION", vec![]);
+            fires.post("UPDATE_FACTION", vec![]);
         }
     })
 }
@@ -355,44 +489,6 @@ fn faction_fires(prev: Option<&ReputationState>, fresh: &ReputationState) -> usi
         None => 0,
         Some(p) => usize::from(p.entries != fresh.entries),
     }
-}
-
-/// Send the pane's queued verbs; none is acked, and the engine already holds its own copy.
-fn drain_reputation_sends(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    commands: Res<NetCommands>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        for send in script.take_reputation_sends() {
-            let cmd = match send {
-                ReputationSend::AtWar {
-                    rep_list_id,
-                    at_war,
-                } => ClientCommand::SetFactionAtWar {
-                    rep_list_id,
-                    at_war,
-                },
-                ReputationSend::Inactive {
-                    rep_list_id,
-                    inactive,
-                } => ClientCommand::SetFactionInactive {
-                    rep_list_id,
-                    inactive,
-                },
-                // No watch is -1 on the wire: slot 0 is the Bloodsail Buccaneers.
-                ReputationSend::Watch(slot) => ClientCommand::SetWatchedFaction {
-                    rep_list_id: slot
-                        .map_or(benilla_protocol::messages::WATCHED_FACTION_NONE, |s| {
-                            s as i32
-                        }),
-                },
-            };
-            let _ = commands.0.send(cmd);
-        }
-    })
 }
 
 #[cfg(test)]

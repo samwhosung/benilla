@@ -61,7 +61,7 @@ pub(crate) struct ScriptCallHost<'w, 's> {
             crate::target::ScriptSelect<'w, 's>,
             crate::spell::ScriptCursor<'w, 's>,
             // The cast's own state: its cancel, the view the VM reads after each call, and the
-            // reports the call made.
+            // reports the call made; and the character panel's verbs.
             ParamSet<
                 'w,
                 's,
@@ -69,6 +69,17 @@ pub(crate) struct ScriptCallHost<'w, 's> {
                     crate::spell::SelfCancel<'w>,
                     crate::spell::CastState<'w, 's>,
                     crate::ui_cast::CallReports<'w, 's>,
+                    // The character panel's tabs: talents, skills and reputation. A further tab's
+                    // applier joins this set.
+                    ParamSet<
+                        'w,
+                        's,
+                        (
+                            crate::ui_talent::TalentSteps<'w, 's>,
+                            crate::ui_char::SkillSteps<'w>,
+                            crate::ui_reputation::ReputationSteps<'w, 's>,
+                        ),
+                    >,
                 ),
             >,
             crate::spell::ScriptCast<'w, 's>,
@@ -232,6 +243,9 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Guild(call) => appliers.p4().p7().p0().apply(script, call),
             ScriptCall::Petition(call) => tail = appliers.p4().p7().p1().apply(script, call),
             ScriptCall::Tabard(call) => appliers.p4().p7().p2().apply(script, call),
+            ScriptCall::Talent(call) => appliers.p2().p3().p0().apply(script, call),
+            ScriptCall::Skill(call) => appliers.p2().p3().p1().apply(call),
+            ScriptCall::Reputation(call) => tail = appliers.p2().p3().p2().apply(script, call),
         }
         // A selection this call made with the targeting cursor up was handed to the cast
         // (`SelectTarget`, `0x4935d5`) and is bound now, before the next call reads either.

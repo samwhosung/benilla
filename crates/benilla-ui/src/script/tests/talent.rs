@@ -134,13 +134,27 @@ fn talent_flags_are_one_or_nil() {
     assert!(s.take_errors().is_empty());
 }
 
+/// `LearnTalent` hands the talent id and its rank count to the host (`0x4f37c7`, `0x4f37d1`) for a
+/// talent below its maximum (`0x4f378f`), and `ConfirmTalentWipe` its answer.
 #[test]
-fn learn_talent_queues_for_the_app_drain() {
+fn learn_talent_hands_the_talent_and_its_rank() {
     let mut s = script();
-    s.set_talents(one_tab_state());
-    s.run("LearnTalent(1, 1); LearnTalent(1, 2)").unwrap();
-    assert_eq!(s.take_talent_learns(), vec![(1, 1), (1, 2)]);
-    assert!(s.take_talent_learns().is_empty(), "drain empties the queue");
+    s.keep_calls();
+    let mut state = one_tab_state();
+    state.talents[0][1].rank = 5;
+    s.set_talents(state);
+    s.run("LearnTalent(1, 1); LearnTalent(1, 2); LearnTalent(2, 1); ConfirmTalentWipe()")
+        .unwrap();
+    assert_eq!(
+        s.take_talent_calls(),
+        [
+            crate::script::TalentCall::Learn {
+                talent_id: 100,
+                rank: 3
+            },
+            crate::script::TalentCall::ConfirmWipe,
+        ]
+    );
     assert!(s.take_errors().is_empty());
 }
 

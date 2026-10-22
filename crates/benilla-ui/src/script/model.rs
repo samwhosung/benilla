@@ -663,10 +663,6 @@ pub(crate) struct Model {
     pub(crate) spell_targetable_units: HashSet<u64>,
 
     pub(crate) talents: super::talent::TalentUiState,
-    /// `LearnTalent(tab, index)` calls queued.
-    pub(crate) talent_learns: Vec<(u32, u32)>,
-    /// `ConfirmTalentWipe()` calls, one `MSG_TALENT_WIPE_CONFIRM` each; the app holds the trainer.
-    pub(crate) talent_wipe_confirms: u32,
     /// `CheckTalentMasterDist()`: the respec question is live and in range; false hides its dialog.
     pub(crate) talent_master_pending: bool,
     // ── The dialog engine's verbs (`0x48dca0` is the first below) ──
@@ -1189,15 +1185,18 @@ pub(crate) struct Model {
     /// The host's relation functions the six relation verbs ask; `None` holds no unit.
     pub(crate) unit_relations: Option<std::rc::Rc<dyn super::UnitRelations>>,
 
-    /// The skills pane's snapshot and the display tree built from it.
+    /// The skill list as the last rebuild made it, its rows' values refreshed by each push, and the
+    /// display tree built from it.
     pub(crate) skills: skills::SkillsState,
     pub(crate) skills_groups: Vec<skills::SkillGroup>,
-    /// Collapsed skill categories by id, kept across a re-push.
+    /// The lines as last pushed, which the next rebuild lists.
+    pub(crate) skills_live: skills::SkillsState,
+    /// Whether this VM's list has been built: its first push builds it.
+    pub(crate) skills_built: bool,
+    /// Collapsed skill categories by id: the mask `0xb731c8`, which only a rebuild resets.
     pub(crate) skills_collapsed: HashSet<u32>,
-    /// The selection as a skill id, not a row.
+    /// The selection as a skill id, not a row (`0xb731c4`).
     pub(crate) skills_selected: Option<u32>,
-    /// `AbandonSkill` ids for `CMSG_UNLEARN_SKILL`; nothing changes until the server's update.
-    pub(crate) skill_abandons: Vec<u32>,
     /// The skill points chosen on each line and not yet accepted (row `+0x10`): `AddSkillUp` and
     /// `RemoveSkillUp` move them, a rebuild or `CancelSkillUps` clears them.
     pub(crate) skills_pending: HashMap<u32, u32>,
@@ -1211,13 +1210,12 @@ pub(crate) struct Model {
     /// The reputation pane's snapshot and the display tree built from it.
     pub(crate) reputation: reputation::ReputationState,
     pub(crate) reputation_groups: Vec<reputation::FactionGroup>,
-    /// Folded headers by key (a `Faction.dbc` id, 0 "Other", -1 "Inactive"), reset on every push
-    /// to all open but Inactive, as the client's rebuild does.
+    /// Folded headers by key (a `Faction.dbc` id, 0 "Other", -1 "Inactive"): the mask `0x84a0a4`.
     pub(crate) reputation_collapsed: HashSet<i64>,
-    /// The selection as a reputation-list slot, not a row.
-    pub(crate) reputation_selected: Option<u32>,
-    /// Reputation calls queued, applied locally first because none of the three sends is acked.
-    pub(crate) reputation_sends: Vec<reputation::ReputationSend>,
+    /// The header keys registered since the last rebuild (`0x4d5c20`), empty before the first.
+    pub(crate) reputation_headers: HashSet<i64>,
+    /// The selection as a faction id, a header's key included (`0xb73768`); 0 until set.
+    pub(crate) reputation_selected: i64,
     /// Every faction with a reputation index under 64, by `Faction.dbc` id: the base for the
     /// player's race and class plus the wire standing (`0x4d6370`). Unlike the pane's rows, a
     /// faction no race/class column fits is here at base 0 (`0x4d5426`, `0x4d553c`).
@@ -1626,8 +1624,6 @@ impl Model {
             spell_targeting: false,
             spell_targetable_units: HashSet::new(),
             talents: super::talent::TalentUiState::default(),
-            talent_learns: Vec::new(),
-            talent_wipe_confirms: 0,
             talent_master_pending: false,
             pet_unlearn_confirms: 0,
             pet_untrainer_pending: false,
@@ -1893,7 +1889,8 @@ impl Model {
             skills_groups: Vec::new(),
             skills_collapsed: HashSet::new(),
             skills_selected: None,
-            skill_abandons: Vec::new(),
+            skills_live: skills::SkillsState::default(),
+            skills_built: false,
             skills_pending: HashMap::new(),
             skill_tiers: HashMap::new(),
             unserved_sends: Vec::new(),
@@ -1901,8 +1898,8 @@ impl Model {
             reputation: reputation::ReputationState::default(),
             reputation_groups: Vec::new(),
             reputation_collapsed: HashSet::new(),
-            reputation_selected: None,
-            reputation_sends: Vec::new(),
+            reputation_headers: HashSet::new(),
+            reputation_selected: 0,
             faction_standings: HashMap::new(),
         }
     }

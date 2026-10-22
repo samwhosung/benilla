@@ -216,9 +216,16 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
          in its call, holds it in the host",
     ),
     (
-        Row::Queue,
+        Row::HostHeld,
         "::ui_talent_wipe::TalentWipeState",
-        "the talent wipe confirm",
+        "the talent wipe question, which `feed_talent_wipe` fires from; `ConfirmTalentWipe`, \
+         acting in its call, holds it in the host",
+    ),
+    (
+        Row::Queue,
+        "::ui_reputation::FactionFlagWrites",
+        "the flag bytes the reputation verbs write in their calls, which `feed_reputation` folds \
+         into the slots; the list's own copy changed in the call, so the fold fires nothing",
     ),
     (
         Row::HostHeld,
@@ -282,11 +289,15 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
 ];
 
 /// The resources the handlers fill through a shared reference, which their declared access shows
-/// as a read: the error keys a refusal pushes and the tutorial banks a watcher fires. The lanes
+/// as a read: the error keys a refusal pushes, the tutorial banks a watcher fires and the flag
+/// bytes the reputation verbs write. The lanes
 /// and the host's two other sinks (the message sounds and the unit edits, which raise no event)
 /// are not queues here.
-const FILLED_THROUGH_A_READ: &[&str] =
-    &["::ui_action::errors::UiErrorKeys", "::tutorial::Tutorials"];
+const FILLED_THROUGH_A_READ: &[&str] = &[
+    "::ui_action::errors::UiErrorKeys",
+    "::tutorial::Tutorials",
+    "::ui_reputation::FactionFlagWrites",
+];
 
 /// Every other resource a handler reads and does not write: state, tables and caches it
 /// consults, none of them a queue a feed takes. A new one fails until it is placed here or in

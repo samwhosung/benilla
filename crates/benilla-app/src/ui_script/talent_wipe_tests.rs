@@ -1,7 +1,7 @@
 //! The stock respec confirm, `CONFIRM_TALENT_WIPE`, driven as `ui_talent_wipe`'s feed and the
 //! app's NPC range guard drive it.
 
-use benilla_ui::script::{ScriptValue, UiScript};
+use benilla_ui::script::{ScriptValue, TalentCall, UiScript};
 
 use super::test_ui::load_ui as load_xml;
 
@@ -9,6 +9,7 @@ use super::test_ui::load_ui as load_xml;
 /// loads before StaticPopup.xml, whose coin row inherits `SmallMoneyFrameTemplate`.
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
@@ -24,7 +25,8 @@ fn setup() -> UiScript {
     s
 }
 
-/// Accept's one `ConfirmTalentWipe()` becomes the outbound `MSG_TALENT_WIPE_CONFIRM`.
+/// Accept's one `ConfirmTalentWipe()` hands its answer to the host, which sends the outbound
+/// `MSG_TALENT_WIPE_CONFIRM`.
 #[test]
 fn the_confirm_shows_and_accept_queues_the_wipe() {
     benilla_formats::wow_data_or_skip!();
@@ -42,7 +44,7 @@ fn the_confirm_shows_and_accept_queues_the_wipe() {
     );
 
     s.run("StaticPopup_OnClick(StaticPopup1, 1)").unwrap();
-    assert_eq!(s.take_talent_wipe_confirms(), 1);
+    assert_eq!(s.take_talent_calls(), [TalentCall::ConfirmWipe]);
     assert!(
         !s.eval::<bool>("return StaticPopup1:IsVisible()").unwrap(),
         "accepting closes it"
@@ -96,11 +98,11 @@ fn declining_sends_nothing() {
     let mut s = setup();
     s.fire_event("CONFIRM_TALENT_WIPE", vec![ScriptValue::Int(15_000)]);
     s.run("StaticPopup_OnClick(StaticPopup1, 2)").unwrap();
-    assert_eq!(s.take_talent_wipe_confirms(), 0);
+    assert!(s.take_talent_calls().is_empty());
 
     s.fire_event("CONFIRM_TALENT_WIPE", vec![ScriptValue::Int(15_000)]);
     s.run("ToggleGameMenu()").unwrap();
-    assert_eq!(s.take_talent_wipe_confirms(), 0);
+    assert!(s.take_talent_calls().is_empty());
     assert!(
         !s.eval::<bool>("return StaticPopup1:IsVisible()").unwrap(),
         "hideOnEscape takes it down"
@@ -125,5 +127,5 @@ fn leaving_the_trainers_range_hides_the_confirm() {
         !s.eval::<bool>("return StaticPopup1:IsVisible()").unwrap(),
         "out of range, the dialog takes itself down"
     );
-    assert_eq!(s.take_talent_wipe_confirms(), 0, "and sends nothing");
+    assert!(s.take_talent_calls().is_empty(), "and sends nothing");
 }

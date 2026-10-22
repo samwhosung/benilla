@@ -10,9 +10,8 @@ use bevy::prelude::*;
 use benilla_protocol::messages::PLAYER_SKILL_SLOTS;
 use benilla_ui::script::{
     weapon_subclass_skill, BankBagSlots, InvSlotView, InventorySlots, ScriptValue, SkillEntry,
-    SkillsState, UiScript, UnitCombatStats, BANK_BAG_SLOT_COUNT, SKILL_DEFENSE, SKILL_UNARMED,
+    SkillsState, UnitCombatStats, BANK_BAG_SLOT_COUNT, SKILL_DEFENSE, SKILL_UNARMED,
 };
-use benilla_ui::strings::Arg;
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
@@ -75,9 +74,12 @@ impl Plugin for UiCharPlugin {
                         .before(crate::ui_items::feed::feed_containers)
                         .in_set(UiFeed)
                         .in_set(crate::ui_unit::field_events::FieldEventPushes),
-                    watch_skill_ups.in_set(UiFeed),
-                    feed_skills.in_set(UiFeed),
-                    drain_skill_abandons.in_set(crate::ui_script::UiDrain),
+                    // A seat, and ahead of the notice lane: the world-enter cascade's rebuild and
+                    // the skill watches' list what this pushed.
+                    feed_skills
+                        .in_set(UiFeed)
+                        .in_set(crate::ui_unit::field_events::FieldEventPushes)
+                        .in_set(crate::ui_unit::WorldEnterSeats),
                 ),
             );
     }
@@ -102,150 +104,10 @@ fn load_skill_tiers(mut commands: Commands, assets: Option<Res<benilla_assets::W
     }
 }
 
-/// The skill block [`watch_skill_ups`] last announced: the self guid and its `skillId → value`
-/// map, the diff base for the chat lines and the event.
-type SkillBlock = Option<(u64, std::collections::HashMap<u16, u16>)>;
-
-/// One skill-up chat line, `ERR_SKILL_UP_SI` or `ERR_SKILL_GAINED_S`, pushed as `CHAT_MSG_SKILL`.
-/// The server sends no skill-up message; the reference's watcher on the skill value words
-/// (`0x5de180`) prints these through `0x496720`, silent for a line whose `SkillRaceClassInfo`
-/// flags carry `0x402` or that no row admits for this race and class (`0x5de352`), so a level-up
-/// prints none. Not `ui_action::show_messages`: that sink sends every chat row as
-/// `CHAT_MSG_SYSTEM`, and these two ask for `CHAT_MSG_SKILL` (23).
-fn skill_line(script: &UiScript, chat: &crate::ui_chat::ChatLog, key: &str, args: &[Arg<'_>]) {
-    let Some(template) = script
-        .lua()
-        .globals()
-        .get::<String>(key)
-        .ok()
-        .filter(|t| !t.is_empty())
-    else {
-        return;
-    };
-    chat.push_event(crate::ui_chat::ChatEvent::text_only(
-        crate::ui_chat::ChatEventKind::Skill,
-        benilla_ui::strings::fill(&template, args),
-    ));
-}
-
-fn watch_skill_ups(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    self_guid: Res<crate::net::SelfGuid>,
-    self_store: Query<&ObjectStore, With<SelfPlayer>>,
-    skill_lines: Option<Res<crate::ui_spellbook::SkillLines>>,
-    chat: Res<crate::ui_chat::ChatLog>,
-    mut prev: Local<crate::ui_script::VmMemo<SkillBlock>>,
-) {
-    hosted_vm.run(|script| {
-        let (Some(guid), Ok(store)) = (self_guid.0, self_store.single()) else {
-            return;
-        };
-        // The memo is per VM and a new VM re-seeds silently; with no VM nothing is diffed, or a
-        // stale skill-up would replay at the next login. `SKILL_LINES_CHANGED` fires here only when
-        // a line is added, removed or changes value; the reference fires it at the end of every
-        // skill-list rebuild (`0x4d2fec`), which its value, max, permanent-bonus and
-        // temporary-bonus watchers run (registered `0x5dda54`-`0x5ddaf0`), and from both header
-        // collapse and expand verbs.
-        let Some(script) = script else {
-            return;
-        };
-        let prev = prev.get(script);
-        let mut cur = std::collections::HashMap::new();
-        for i in 0..PLAYER_SKILL_SLOTS {
-            if let Some(s) = store.0.player_skill(i) {
-                if s.skill_id != 0 {
-                    cur.insert(s.skill_id, s.value);
-                }
-            }
-        }
-        match prev.as_ref() {
-            // First fill: seed silently, no lines; the event fires once.
-            None => {
-                if cur.is_empty() {
-                    return;
-                }
-                script.fire_event("SKILL_LINES_CHANGED", vec![]);
-                *prev = Some((guid, cur));
-            }
-            Some((prev_guid, _)) if *prev_guid != guid => {
-                // A different character: re-seed, never diff across characters.
-                script.fire_event("SKILL_LINES_CHANGED", vec![]);
-                *prev = Some((guid, cur));
-            }
-            Some((_, prev_map)) => {
-                if *prev_map == cur {
-                    return;
-                }
-                // The `0x402` gate reads the player's own race and class row, as `skills_row` does.
-                let (race, class) = (
-                    store.0.unit_race().unwrap_or(0),
-                    store.0.unit_class().unwrap_or(0),
-                );
-                for (&id, &value) in &cur {
-                    let line_id = u32::from(id);
-                    let name = || {
-                        skill_lines
-                            .as_ref()
-                            .and_then(|s| s.catalog.line(line_id))
-                            .map(|l| l.name.clone())
-                    };
-                    let announces = || {
-                        skill_lines
-                            .as_ref()
-                            .is_some_and(|s| s.catalog.announces_skill_ups(line_id, race, class))
-                    };
-                    match prev_map.get(&id) {
-                        // A rank-up: `ERR_SKILL_UP_SI` (catalog row 54), not `SKILL_RANK_UP`, the
-                        // same enUS sentence with no catalog row.
-                        Some(&old) if value > old => {
-                            if let Some(name) = name() {
-                                if announces() {
-                                    debug!("chat: skill-up announced ({name} {old}→{value})");
-                                    skill_line(
-                                        script,
-                                        &chat,
-                                        "ERR_SKILL_UP_SI",
-                                        &[Arg::S(&name), Arg::D(i64::from(value))],
-                                    );
-                                } else {
-                                    debug!(
-                                        "chat: skill-up silenced ({name} {old}→{value}, the \
-                                            0x402 gate)"
-                                    );
-                                }
-                            }
-                        }
-                        // A new line: `ERR_SKILL_GAINED_S` (catalog row 53).
-                        None => {
-                            if let Some(name) = name() {
-                                if announces() {
-                                    debug!("chat: skill-gain announced ({name} at {value})");
-                                    skill_line(
-                                        script,
-                                        &chat,
-                                        "ERR_SKILL_GAINED_S",
-                                        &[Arg::S(&name)],
-                                    );
-                                } else {
-                                    debug!(
-                                        "chat: skill-gain silenced ({name} at {value}, the 0x402 \
-                                         gate)"
-                                    );
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                script.fire_event("SKILL_LINES_CHANGED", vec![]);
-                *prev = Some((guid, cur));
-            }
-        }
-    })
-}
-
 /// The skills-pane feed: every `PLAYER_SKILL_INFO` line the reference lists, as a flat
-/// [`SkillEntry`] pushed through `set_skills` on change; the engine groups, sorts and folds.
+/// [`SkillEntry`] pushed through `set_skills` on change; the engine groups, sorts and folds at its
+/// rebuilds, which the skill watches' notices run (`crate::field_watch`) and the world-enter
+/// cascade.
 fn feed_skills(
     mut hosted_vm: crate::script_calls::HostedVm,
     self_store: Query<Ref<ObjectStore>, With<SelfPlayer>>,
@@ -345,18 +207,22 @@ pub(crate) fn skills_row(
     })
 }
 
-/// Each queued `AbandonSkill` becomes one `CMSG_UNLEARN_SKILL`; nothing changes locally, as the
-/// server's `SetSkill(id, 0, 0)` (vmangos `SkillHandler.cpp:69`) returns as a skill-field update.
-fn drain_skill_abandons(mut hosted_vm: crate::script_calls::HostedVm, commands: Res<NetCommands>) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        for skill_id in script.take_skill_abandons() {
-            debug!("ui_char: abandon skill line {skill_id}");
-            let _ = commands.0.send(ClientCommand::UnlearnSkill { skill_id });
-        }
-    })
+/// The skills verbs' engine half, which the call host applies inside each call
+/// ([`crate::script_calls::ScriptCallHost`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct SkillSteps<'w> {
+    net: Res<'w, NetCommands>,
+}
+
+impl SkillSteps<'_> {
+    /// `AbandonSkill`'s `CMSG_UNLEARN_SKILL` (`0x4d3b40`); nothing changes locally, as the
+    /// server's `SetSkill(id, 0, 0)` (vmangos `SkillHandler.cpp:69`) returns as a skill-field
+    /// update.
+    pub(crate) fn apply(&mut self, call: benilla_ui::script::SkillCall) {
+        let benilla_ui::script::SkillCall::Abandon(skill_id) = call;
+        debug!("ui_char: abandon skill line {skill_id}");
+        let _ = self.net.0.send(ClientCommand::UnlearnSkill { skill_id });
+    }
 }
 
 /// The item entry in an equipped slot; `None` for an empty slot or an item not yet streamed.
@@ -1012,6 +878,7 @@ fn weapon_enchant(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use benilla_ui::script::UiScript;
 
     /// A worn bag's view says how many of its seats are filled, which `ClickTradeButton` reads
     /// to refuse it (`0x4bff50`, then `0x4bffae` for an empty one in a bag slot).

@@ -1,6 +1,7 @@
 //! The talent bindings: the app pushes the class's pages and talents, resolved from `Talent.dbc`
-//! and `Spell.dbc` ([`UiScript::set_talents`]), and `LearnTalent(tab, index)` queues clicks for
-//! `CMSG_LEARN_TALENT`. Grid seats, ranks, prerequisites and availability are the app's.
+//! and `Spell.dbc` ([`UiScript::set_talents`]), and `LearnTalent(tab, index)` sends
+//! `CMSG_LEARN_TALENT` inside its call ([`TalentCall`]). Grid seats, ranks, prerequisites and
+//! availability are the app's.
 //!
 //! The tuples are what `Blizzard_TalentUI.lua` reads (`:154`, `:180`): `GetTalentTabInfo(i)` gives
 //! name, texture, pointsSpent, fileName; `GetTalentInfo(tab, i)` name, icon, tier, column, rank,
@@ -89,15 +90,12 @@ impl super::UiScript {
         self.model_mut().talents = state;
     }
 
-    /// Drain the queued `LearnTalent(tab, index)` clicks, both 1-based.
-    pub fn take_talent_learns(&mut self) -> Vec<(u32, u32)> {
-        std::mem::take(&mut self.model_mut().talent_learns)
-    }
-
-    /// Drain the count of `ConfirmTalentWipe()` calls, each an outbound `MSG_TALENT_WIPE_CONFIRM`;
-    /// a count, since the app holds the trainer's guid.
-    pub fn take_talent_wipe_confirms(&mut self) -> u32 {
-        std::mem::take(&mut self.model_mut().talent_wipe_confirms)
+    /// The talent verbs a harness's VM kept ([`Self::keep_calls`]), in call order.
+    pub fn take_talent_calls(&mut self) -> Vec<TalentCall> {
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Talent(call) => Some(*call),
+            _ => None,
+        })
     }
 
     /// Push whether a trainer's respec question is live and in range, which
@@ -108,6 +106,18 @@ impl super::UiScript {
             model.talent_master_pending = pending;
         }
     }
+}
+
+/// A talent verb the host applies inside its call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TalentCall {
+    /// `LearnTalent(tab, index)` (`0x4f36a0`) on a talent below its maximum (`0x4f378f`):
+    /// `CMSG_LEARN_TALENT` (`0x251`) with the talent id and its rank count, the 0-based next rank
+    /// (`0x4f37c7`, `0x4f37d1`).
+    Learn { talent_id: u32, rank: u32 },
+    /// `ConfirmTalentWipe()` (`0x48dc40`): the respec dialog `0x5df980` with a zero guid, which
+    /// answers the trainer it latched.
+    ConfirmWipe,
 }
 
 /// One talent by its 1-based (tab, index).
@@ -230,7 +240,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The app gates the send on its own `learnable`; the server re-validates
+    // LearnTalent(tab, index): the talent's rank is its known ranks, and one at its maximum sends
+    // nothing (`0x4f378f`), the client's only gate; points and prerequisites are the server's
     // (vmangos `Player::LearnTalent`).
     g.set(
         "LearnTalent",
@@ -238,22 +249,30 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `is-number` on args 1 and 2 else `Usage: LearnTalent(tabIndex, talentIndex)`
             // (`0x84ce70`, `0x4f380c`).
             let tab =
-                binding_abi::index_arg32(lua, tab, "Usage: LearnTalent(tabIndex, talentIndex)")?;
-            let i = binding_abi::index_arg32(lua, i, "Usage: LearnTalent(tabIndex, talentIndex)")?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.talent_learns.push((tab, i));
-            Ok(())
+                binding_abi::index_arg(lua, tab, "Usage: LearnTalent(tabIndex, talentIndex)")?;
+            let i = binding_abi::index_arg(lua, i, "Usage: LearnTalent(tabIndex, talentIndex)")?;
+            let learn = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                talent_at(&model, tab, i)
+                    .filter(|t| t.rank < t.max_rank)
+                    .map(|t| TalentCall::Learn {
+                        talent_id: t.talent_id,
+                        rank: t.rank,
+                    })
+            };
+            match learn {
+                Some(call) => super::calls::submit(lua, super::ScriptCall::Talent(call)),
+                None => Ok(()),
+            }
         })?,
     )?;
 
-    // ConfirmTalentWipe(): the `CONFIRM_TALENT_WIPE` Accept, the one call that unlearns talents.
-    // No argument: the reference sends the trainer guid it latched (`0xc4d7a0`); the app holds it.
+    // ConfirmTalentWipe(): the `CONFIRM_TALENT_WIPE` Accept, the one call that unlearns talents. No
+    // argument: the reference answers the trainer guid it latched (`0xc4d7a0`), which the app holds.
     g.set(
         "ConfirmTalentWipe",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.talent_wipe_confirms += 1;
-            Ok(())
+            super::calls::submit(lua, super::ScriptCall::Talent(TalentCall::ConfirmWipe))
         })?,
     )?;
 

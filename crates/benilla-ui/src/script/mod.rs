@@ -349,14 +349,14 @@ pub(crate) use region::{
     load_blend_mode, load_texture_file, load_texture_name, load_xml_font_file,
     texture_name_verdict, FileLoad,
 };
-pub use reputation::{FactionEntry, ReputationSend, ReputationState};
+pub use reputation::{FactionEntry, ReputationCall, ReputationState};
 pub use session::SessionRequest;
 pub use shapeshift::ShapeshiftFormView;
 pub(crate) use simplehtml::{
     element_fonts_lua as simplehtml_element_fonts_lua,
     element_of_xml_tag as simplehtml_element_of_xml_tag,
 };
-pub use skills::{SkillEntry, SkillsState};
+pub use skills::{SkillCall, SkillEntry, SkillsState};
 pub use social::{FriendInfo, IgnoreInfo, SocialCall, SocialState, WhoInfo};
 pub use sound::{MusicRequest, SoundRequest};
 pub use spellbook::{
@@ -365,7 +365,7 @@ pub use spellbook::{
 };
 pub use stable::{StableIntent, StablePetSlot, StableState, NUM_STABLE_SLOTS};
 pub use summon::SummonConfirmUiState;
-pub use talent::{TalentPrereqView, TalentTabView, TalentUiState, TalentView};
+pub use talent::{TalentCall, TalentPrereqView, TalentTabView, TalentUiState, TalentView};
 pub use taxi::{TaxiCall, TaxiNodeType, TaxiUiNode, TaxiUiState};
 pub use tooltip_aura::{AuraKey, AuraTooltipView};
 pub use tooltip_spell::{ReputationRequirement, SpellTooltipView};

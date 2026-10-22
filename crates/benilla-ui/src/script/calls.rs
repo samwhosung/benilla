@@ -180,6 +180,14 @@ pub enum ScriptCall {
     /// The tabard designer's `Save` ([`super::TabardCall`]): its checks, its packet and its
     /// `TABARD_SAVE_PENDING` inside the call.
     Tabard(super::TabardCall),
+    /// A talent verb ([`super::TalentCall`]): `LearnTalent`'s packet, `ConfirmTalentWipe`'s answer
+    /// or refusal, inside the call.
+    Talent(super::TalentCall),
+    /// A skills verb ([`super::SkillCall`]): `AbandonSkill`'s packet inside the call.
+    Skill(super::SkillCall),
+    /// A reputation verb past its binding's checks ([`super::ReputationCall`]): its refusal, its
+    /// flag write and its packet inside the call.
+    Reputation(super::ReputationCall),
 }
 
 /// The mode the four `TargetNearest*` shims hand the TAB cycler `0x493f60`, the only byte that

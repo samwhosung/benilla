@@ -1,5 +1,5 @@
 //! The talent window feed: the class's pages from `Talent.dbc` and `TalentTab.dbc`, the known
-//! spells and `PLAYER_CHARACTER_POINTS1/2`, and `LearnTalent` clicks as `CMSG_LEARN_TALENT`. A
+//! spells and `PLAYER_CHARACTER_POINTS1/2`, and the talent verbs' engine half ([`TalentSteps`]). A
 //! talent's rank is its highest known rank spell (learning grants every lower rank, vmangos
 //! `Player::LearnTalent`); an unlearned one wears rank 1's name and icon.
 //!
@@ -13,7 +13,9 @@ use std::collections::BTreeSet;
 use bevy::prelude::*;
 
 use benilla_formats::{Talent, TalentCatalog};
-use benilla_ui::script::{ScriptValue, TalentPrereqView, TalentTabView, TalentUiState, TalentView};
+use benilla_ui::script::{
+    ScriptValue, TalentCall, TalentPrereqView, TalentTabView, TalentUiState, TalentView, UiScript,
+};
 use benilla_ui::strings::{fill, Arg};
 
 use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfPlayer};
@@ -36,10 +38,8 @@ impl Plugin for UiTalentPlugin {
             .add_systems(
                 Update,
                 (
-                    // Feed before the input pass, so an open this frame sees a populated
-                    // window; drain after it, so a click sends the same frame.
+                    // Feed before the input pass, so an open this frame sees a populated window.
                     feed_talents.in_set(UnitFeed),
-                    drain_talent_learns.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }
@@ -287,58 +287,40 @@ pub(crate) fn build_pages(
     }
 }
 
-/// Drains `LearnTalent(tab, index)` clicks into `CMSG_LEARN_TALENT` for the current rank count,
-/// the 0-based next rank, which vmangos learns up to.
-fn drain_talent_learns(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    talents: Option<Res<Talents>>,
-    actions: Res<PlayerActions>,
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    commands: Res<NetCommands>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        let clicks = script.take_talent_learns();
-        if clicks.is_empty() {
-            return;
-        }
-        let Some(talents) = talents.as_deref() else {
-            return;
-        };
-        let Ok(store) = self_q.single() else {
-            return;
-        };
-        let race = store.0.unit_race().unwrap_or(0);
-        let class = store.0.unit_class().unwrap_or(0);
-        let tabs = talents.catalog.tabs_for_class(race, class);
-        for (tab, index) in clicks {
-            // 1-based Lua-facing pair; a 0 from a stray script is a miss, never an underflow.
-            let Some(t) = (tab as usize)
-                .checked_sub(1)
-                .and_then(|i| tabs.get(i))
-                .and_then(|tab| {
-                    (index as usize)
-                        .checked_sub(1)
-                        .and_then(|i| talents.catalog.talents_in_tab(tab.id).get(i))
-                })
-            else {
-                continue;
-            };
-            let rank = rank_of(t, &actions.spells);
-            // Not at max is the client's only send gate (`LearnTalent` `0x4f36a0`); points and
-            // prereqs are the server's to enforce.
-            if rank >= t.max_rank() {
-                continue;
+/// The talent verbs' engine half, which the call host applies inside each call
+/// ([`crate::script_calls::ScriptCallHost`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct TalentSteps<'w, 's> {
+    net: Res<'w, NetCommands>,
+    /// Absent in a world with no trainer flow, which drops the Accept.
+    wipe: Option<ResMut<'w, crate::ui_talent_wipe::TalentWipeState>>,
+    self_q: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
+    sink: crate::ui_action::MessageSink<'w>,
+}
+
+impl TalentSteps<'_, '_> {
+    /// Apply one talent call.
+    pub(crate) fn apply(&mut self, script: &mut UiScript, call: TalentCall) {
+        match call {
+            // The packet (`0x4f379b`-`0x4f37e0`), the server learning up to the rank.
+            TalentCall::Learn { talent_id, rank } => {
+                debug!("ui_talent: learn talent {talent_id} rank {rank}");
+                let _ = self
+                    .net
+                    .0
+                    .send(ClientCommand::LearnTalent { talent_id, rank });
             }
-            debug!("ui_talent: learn talent {} rank {}", t.id, rank);
-            let _ = commands.0.send(ClientCommand::LearnTalent {
-                talent_id: t.id,
-                rank,
-            });
+            // `0x48dc40` finds the active player first (`0x48dc78`).
+            TalentCall::ConfirmWipe => {
+                let (Some(wipe), Ok(store)) = (self.wipe.as_deref_mut(), self.self_q.single())
+                else {
+                    return;
+                };
+                let money = store.0.player_money().unwrap_or(0);
+                crate::ui_talent_wipe::accept(wipe, money, &self.net, script, &mut self.sink);
+            }
         }
-    })
+    }
 }
 
 #[cfg(test)]

@@ -55,10 +55,11 @@ impl super::UiScript {
     /// a load armed it (read at `0x49094b`, cleared at `0x49095e`), then `PLAYER_ENTERING_WORLD`
     /// (272, `0x49096a`) every time, then the minimap's zoom reseed
     /// ([`Self::minimap_enter_world`]), the quest log's rebuild and its `QUEST_LOG_UPDATE`
-    /// ([`Self::quest_log_enter_world`]) and the reputation list's rebuild and its `UPDATE_FACTION`
-    /// ([`Self::reputation_enter_world`]). The cascade runs with the player object in the world, so its
-    /// caller seats `"player"` first, and inside its own sound-suppression bracket (`0x4908d5` to
-    /// `0x490a56`), so a handler's `PlaySound` is dropped.
+    /// ([`Self::quest_log_enter_world`]), the reputation list's rebuild and its `UPDATE_FACTION`
+    /// ([`Self::reputation_enter_world`]) and the skill list's rebuild and its
+    /// `SKILL_LINES_CHANGED` ([`Self::rebuild_skills`]). The cascade runs with the player object in
+    /// the world, so its caller seats `"player"` first, and inside its own sound-suppression
+    /// bracket (`0x4908d5` to `0x490a56`), so a handler's `PlaySound` is dropped.
     pub fn fire_world_enter(&mut self) {
         let armed = std::mem::take(&mut self.model_mut().player_login_armed);
         self.push_sound_suppression();
@@ -69,11 +70,12 @@ impl super::UiScript {
         }
         self.fire_event("PLAYER_ENTERING_WORLD", Vec::new());
         // The calls after the signal, inside the bracket: the minimap initializer first
-        // (`0x49096f`), then among the rest the quest log's set-up (`0x4909a1`) and the
-        // reputation rebuild (`0x4909d3`).
+        // (`0x49096f`), then among the rest the quest log's set-up (`0x4909a1`), the reputation
+        // rebuild (`0x4909d3`) and the skill list's (`0x4909f1` → `0x4d2c90`).
         self.minimap_enter_world();
         self.quest_log_enter_world();
         self.reputation_enter_world();
+        self.rebuild_skills();
         self.pop_sound_suppression();
     }
 }
