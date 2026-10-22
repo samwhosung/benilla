@@ -651,17 +651,47 @@ fn placed_queues() -> [TypeId; 1] {
     >()]
 }
 
-/// The systems that push onto a lane off a handler queue at their own place because the
-/// reference does too, by a suffix of the system's name, with the reason.
-const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[(
-    "::creature_anim::impact::route_swing_impacts",
-    "a melee swing's record waits for its animation's impact key, which dispatches it in the \
-     frame that crosses the key (`0x6247d0`), not at the packet",
-)];
+/// The systems that take a handler queue and may push onto a lane at their own place, by a
+/// suffix of the system's name, with why that place is right.
+const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[
+    (
+        "::creature_anim::impact::route_swing_impacts",
+        "a melee swing's record waits for its animation's impact key, which dispatches it in the \
+         frame that crosses the key (`0x6247d0`), not at the packet",
+    ),
+    (
+        "::ui_script::glue_mgr::drive_glue_mgr",
+        "the login and character screens' answers, which come before the in-game interface: \
+         the drain runs only with it up",
+    ),
+    (
+        "::ui_chat::channels::auto_join_zone_channels",
+        "world entry only arms the zone-channel walk, an engine turn that runs no Lua",
+    ),
+    (
+        "::ui_chat::channels::end_session_channels_on_disconnect",
+        "a dead socket ends the channel session, and no packet follows it",
+    ),
+];
+
+/// The systems outside the phase that lend the call host and take a handler queue, firing off it
+/// in system order: remaining work, which only shrinks, by a suffix of the system's name.
+const NOT_YET_PLACED: &[(&str, &str)] = &[
+    (
+        "::ui_trade::drain_trade",
+        "the trade records' `TRADE_UPDATE`, off the item notices after the tick",
+    ),
+    (
+        "::ui_tradeskill::drain_trade_skill",
+        "the repeat craft's hook, which the reference runs inside the cast's go (`0x6e81d3`), \
+         off the cast events",
+    ),
+];
 
 /// A system of any phase that takes a handler queue and pushes onto a lane stamps the push where
 /// it runs, behind every packet of the frame, unless the queue's items carry their place
-/// ([`placed_queues`]). Each such system needs a row in [`AT_THEIR_OWN_PLACE`].
+/// ([`placed_queues`]). Each such system needs a row in [`AT_THEIR_OWN_PLACE`] or
+/// [`NOT_YET_PLACED`].
 #[test]
 fn every_lane_push_off_a_handler_queue_keeps_its_place() {
     let mut app = headless_client();
@@ -693,16 +723,16 @@ fn every_lane_push_off_a_handler_queue_keeps_its_place() {
             let access = with_access.access.combined_access();
             let fires = vm.is_some_and(|vm| access.has_resource_write(vm));
             // A feed of the phase that fires is the other guard's, and an exclusive one is its
-            // row. A system that lends the call host holds the lanes as the host's verbs do,
-            // which push in their call: what it pushes itself is not told apart here.
+            // row; a system that lends the call host outside the phase is judged here, by the
+            // queues it reads: a plain resource it writes is its verbs' own state.
             if system.is_exclusive()
                 || (fires && in_feed(graph, bevy::ecs::schedule::NodeId::System(key)))
-                || host.is_subset_resources(access)
                 || !lanes.iter().any(|&l| access.has_resource_read(l))
             {
                 continue;
             }
             let name = system.name().to_string();
+            let lends = host.is_subset_resources(access);
             for &q in &queues {
                 if Some(q) == vm || lanes.contains(&q) || placed.contains(&q) {
                     continue;
@@ -716,7 +746,8 @@ fn every_lane_push_off_a_handler_queue_keeps_its_place() {
                         && !access.has_resource_write(q)
                         && !host.has_resource_read(q)
                 } else {
-                    access.has_resource_write(q)
+                    !lends
+                        && access.has_resource_write(q)
                         && !host.has_resource_read(q)
                         && !host.has_resource_write(q)
                 };
@@ -731,7 +762,11 @@ fn every_lane_push_off_a_handler_queue_keeps_its_place() {
         eprintln!("skipped: this build carries no type names");
         return;
     }
-    let rows: Vec<&str> = AT_THEIR_OWN_PLACE.iter().map(|(s, _)| *s).collect();
+    let rows: Vec<&str> = AT_THEIR_OWN_PLACE
+        .iter()
+        .chain(NOT_YET_PLACED)
+        .map(|(s, _)| *s)
+        .collect();
     let unlisted: Vec<&String> = pushes
         .iter()
         .filter(|(system, _)| !ends_with_any(system, &rows))
@@ -740,7 +775,7 @@ fn every_lane_push_off_a_handler_queue_keeps_its_place() {
     assert!(
         unlisted.is_empty(),
         "these push onto a lane off a handler queue at their own place: stamp each push at its \
-         item's place, or give the system a row in AT_THEIR_OWN_PLACE:\n  {}",
+         item's place, or give the system a row in AT_THEIR_OWN_PLACE or NOT_YET_PLACED:\n  {}",
         unlisted
             .iter()
             .map(|s| s.as_str())
