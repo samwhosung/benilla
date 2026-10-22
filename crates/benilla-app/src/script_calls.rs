@@ -170,7 +170,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
         let appliers = &mut self.appliers;
         // The gate's answer for this call, made where the Lua verb ran: its casts start only if
         // tag 2 passed there. The ladder reads it while this call applies.
-        appliers.p3().ladder.permit(call.may_cast());
+        let outer_permit = appliers.p3().ladder.permit(call.may_cast());
         let selected_before = appliers.p0().selected();
         // The pet's attack latch, which the selection's release can lower (`0x493a18`).
         let latched_before = appliers.p6().p1().attack_latched();
@@ -323,8 +323,9 @@ impl CallHost for ScriptCallHost<'_, '_> {
         if let Some(owed) = appliers.p3().ladder.take_unit_attack() {
             pet_in_order!(appliers, begin_attack_from_cast(owed));
         }
-        // Whatever casts next is the engine's own, which asks no gate.
-        appliers.p3().ladder.permit(true);
+        // Whatever casts next is the caller's: the engine's own, which asks no gate, or the call
+        // whose signal point this call applied at.
+        appliers.p3().ladder.permit(outer_permit);
         // The selection the call committed (`SetSelection 0x493540`, inside every selecting
         // verb) is `"target"` for the script's next line, and what `SetSelection` signals it
         // signals here, inside the call and under its input events, in its order: the release's

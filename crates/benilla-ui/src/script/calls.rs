@@ -414,11 +414,15 @@ fn run_held(lua: &Lua, held: Held) {
     }
 }
 
-/// How deep calls made while applying a call may nest: a macro whose line presses a macro, and so
-/// on. A call made at the ninth level (a macro that presses itself) is not applied: its verb
-/// raises [`TOO_DEEP`] in the Lua that made it, which reports it as that script's error, and the
-/// eight calls under it stand applied. So such a chain always ends inside its frame. The
-/// reference's own bound on it is not read.
+/// How deep calls made while applying a call may nest: a macro whose line presses a macro, a
+/// handler at a signal point whose verb signals again, and so on. A call made at the ninth level (a
+/// macro that presses itself) is not applied: its verb raises [`TOO_DEEP`] in the Lua that made
+/// it, which reports it as that script's error, and the eight calls under it stand applied. So
+/// such a chain always ends inside its frame.
+///
+/// Deviation: the reference's only bound is `luaD_call`'s count of 200 nested calls (`0x6f65ae`),
+/// past which it raises `C stack overflow` (`0x6f65bf`); eight here, as each level keeps an
+/// apply's frame on the Rust stack.
 pub(crate) const MAX_NESTING: u8 = 8;
 
 /// What a verb raises when no host is lent: an entry ran Lua without lending one.
@@ -553,10 +557,11 @@ pub(crate) fn drain(lua: &Lua) {
     }
 }
 
-/// Run what an applied call left while its host was out, now that it is back: the handlers it
-/// fired at this call's level, so a call one makes is the call's own nested call, and a call made
-/// meanwhile one level in. The reference runs both inside the call.
-fn settle(lua: &Lua, script: &mut UiScript) {
+/// Run what an applied call left while its host was out, now that it is back, as it returns or at
+/// a signal point inside it ([`UiScript::signal_point`]): the handlers it fired at this call's
+/// level, so a call one makes is the call's own nested call, and a call made meanwhile one level
+/// in. The reference runs both inside the call.
+pub(super) fn settle(lua: &Lua, script: &mut UiScript) {
     let mut left = take_waiting(lua);
     while let Some(item) = left.pop_front() {
         if !super::host::free(lua) {

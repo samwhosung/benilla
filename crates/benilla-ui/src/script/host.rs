@@ -9,7 +9,9 @@
 //! ([`UiScript::host_out`]) and a call's apply ([`CallHost::apply`]). The handlers either fires
 //! (an event's listeners, a widget's script) are held ([`holding`]) and run as soon as the host
 //! is back, in the order fired, so a call a handler makes applies in place, inside its verb, as
-//! the reference's does: they read the state the step left, not the state at the signal.
+//! the reference's does: they read the state the step left, not the state at the signal. An apply
+//! that goes on after a signal, as the reference's verb does, lends the host back there
+//! ([`UiScript::signal_point`]), so what it held runs before its next step.
 
 use std::cell::Cell;
 use std::ptr::NonNull;
@@ -22,8 +24,9 @@ use super::{ScriptCall, UiScript};
 pub trait CallHost {
     /// Apply `call`, with the input events it was made under raised. The host is out of the VM
     /// while this runs, so a call a handler makes meanwhile waits, and applies next, ahead of any
-    /// made after this one. Whatever must run Lua with the host back in place (an event this call
-    /// signals, a macro's lines) is returned as the tail.
+    /// made after this one, or at a signal point the apply reaches ([`UiScript::signal_point`]).
+    /// Whatever must run Lua with the host back in place (an event this call signals, a macro's
+    /// lines) is returned as the tail.
     fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail>;
 }
 
@@ -226,8 +229,18 @@ impl UiScript {
         super::calls::refuse_waiting(self.lua())
     }
 
-    /// A signal point inside a call's apply.
-    pub fn signal_point(&mut self, _host: &mut dyn CallHost) {}
+    /// A signal point inside a call's apply, where the reference goes on after a signal:
+    /// `SignalEvent` (`0x703e50`) walks every listener before it returns. `host`, the host out
+    /// applying the call, is lent back and nothing is held while what the apply held so far runs,
+    /// in the order made, so the calls its handlers make apply here, nested, before the apply's
+    /// next step. Then the host is out and holding again, unwinding included. The caller carries
+    /// nothing borrowed from the host across the point.
+    pub fn signal_point(&mut self, host: &mut dyn CallHost) {
+        let lua = self.lua().clone();
+        lend(&lua, host, || {
+            unheld(&lua, || super::calls::settle(&lua, self));
+        });
+    }
 
     /// Whether a host is lent and free to apply a call now.
     pub fn host_free(&self) -> bool {

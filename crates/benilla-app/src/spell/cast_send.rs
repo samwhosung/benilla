@@ -125,7 +125,8 @@ pub(crate) struct UnitPress {
 /// Whether the script call being applied passed the protected-action gate's tag 2, which opens
 /// `TryCastSpell` (`0x6e4bc1`, `0x494a50`): the answer the Lua verb got, where the stack that decides
 /// it was still there. A cast the engine starts (a click, a chain, a held press resumed) asks no
-/// gate, so it reads the default, passed; [`crate::script_calls`] sets it per call and resets it.
+/// gate, so it reads the default, passed; [`crate::script_calls`] sets it per call and puts back
+/// what it found, so a call nested at another's signal point leaves the outer call's answer.
 #[derive(Resource)]
 pub(crate) struct ScriptCastPermit(bool);
 
@@ -295,10 +296,12 @@ impl CastLadder<'_, '_> {
         true
     }
 
-    /// Set what the gate's tag 2 allowed the script call about to be applied.
-    pub(crate) fn permit(&mut self, may_cast: bool) {
-        if let Some(permit) = self.permit.as_mut() {
-            permit.0 = may_cast;
+    /// Set what the gate's tag 2 allowed the script call about to be applied; what it was before,
+    /// for the call to put back as it returns.
+    pub(crate) fn permit(&mut self, may_cast: bool) -> bool {
+        match self.permit.as_mut() {
+            Some(permit) => std::mem::replace(&mut permit.0, may_cast),
+            None => true,
         }
     }
 
