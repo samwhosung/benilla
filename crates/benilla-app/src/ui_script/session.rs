@@ -14,6 +14,8 @@ pub(crate) struct VmMemo<T> {
     session: u64,
     /// The world it is about, for [`VmMemo::get_in_world`]: the sweeps run before it was written.
     world: u64,
+    /// A reset that [`VmMemo::get_leaving_reset`] made and the next [`VmMemo::get_reset`] reports.
+    unreported: bool,
     inner: T,
 }
 
@@ -22,6 +24,7 @@ impl<T: Default> Default for VmMemo<T> {
         Self {
             session: 0,
             world: 0,
+            unreported: false,
             inner: T::default(),
         }
     }
@@ -56,6 +59,14 @@ impl<T: Default> VmMemo<T> {
         self.get(script)
     }
 
+    /// [`VmMemo::get`] for a reader ahead of the memo's owner, as a script call ahead of its
+    /// feed: a reset it makes is still reported by the owner's next [`VmMemo::get_reset`].
+    pub(crate) fn get_leaving_reset(&mut self, script: &UiScript) -> &mut T {
+        let (_, reset) = self.get_reset_for(Some(script));
+        self.unreported |= reset;
+        &mut self.inner
+    }
+
     fn get_reset_for(&mut self, script: Option<&UiScript>) -> (&mut T, bool) {
         let now = script.map_or(0, UiScript::session);
         let reset = self.session != now;
@@ -63,6 +74,7 @@ impl<T: Default> VmMemo<T> {
             self.session = now;
             self.inner = T::default();
         }
+        let reset = reset || std::mem::take(&mut self.unreported);
         (&mut self.inner, reset)
     }
 }

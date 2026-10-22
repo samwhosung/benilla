@@ -367,7 +367,8 @@ impl ActionStates<'_, '_> {
         script: &mut benilla_ui::script::UiScript,
     ) -> UsableSignals {
         let selection = self.targeting.selection.guid;
-        self.memory.vm.get(script).selection = selection;
+        // Ahead of the feed's first pass on a new VM, that pass still meets the VM as new.
+        self.memory.vm.get_leaving_reset(script).selection = selection;
         let now = Instant::now();
         let clock = self.memory.clock.unwrap_or((now, script.now()));
         let pass = Pass {
@@ -522,7 +523,7 @@ impl ActionStates<'_, '_> {
             reactive,
             ..
         } = &mut **memory;
-        let memory = vm.get(script);
+        let memory = vm.get_leaving_reset(script);
         let (bound, spell_mods, range_units, own_control, skill_lines) = &*cast_state;
         let skill_catalog = skill_lines.as_deref().map(|s| &s.catalog);
         let sub_classes = sub_classes.as_deref().map(|s| &s.0);
