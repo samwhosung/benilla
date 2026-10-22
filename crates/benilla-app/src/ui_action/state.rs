@@ -274,6 +274,7 @@ pub(crate) struct ActionEvents {
 /// selection runs its usable refresh inside the call ([`ActionStates::usable_refresh`]), as
 /// `SetSelection` does (`0x493892`, `0x493a69`).
 #[derive(bevy::ecs::system::SystemParam)]
+#[allow(clippy::type_complexity)] // every input the slot walk reads, as one param
 pub(crate) struct ActionStates<'w, 's> {
     cooldowns: ResMut<'w, Cooldowns>,
     targeting: crate::spell::cast_target::CastTargeting<'w, 's>,
@@ -617,7 +618,7 @@ impl ActionStates<'_, '_> {
                             store,
                             target: selection.guid.zip(target.map(|(s, _)| s)),
                             rel: relations.get(),
-                            cooldowns: &cooldowns,
+                            cooldowns,
                             stacks: &stacks,
                             spell_mods,
                             control_lost,
@@ -625,7 +626,7 @@ impl ActionStates<'_, '_> {
                             sub_classes,
                         };
                         let (u, oom) =
-                            usable::spell_usable(button.action, d, sp, &ctx, &objects, &items);
+                            usable::spell_usable(button.action, d, sp, &ctx, objects, items);
                         st.usable = u;
                         st.not_enough_mana = oom;
                     } else {
@@ -665,7 +666,7 @@ impl ActionStates<'_, '_> {
                     // Only the `Copy` on-use spell, not a clone of the template per slot per frame.
                     // The getter's lookup passes a callback (`0x4e5b3f`) on the bar's events, which
                     // no event here marks: an entry is asked when it first shows.
-                    let template = items.template(button.action, 0, Ask::New(&commands));
+                    let template = items.template(button.action, 0, Ask::New(commands));
                     // A missing record is asked with the callback `0x6e2f70` by the slot's cooldown
                     // query and its usable test (`0x6e2efb`, `0x6e2fea`).
                     if template.is_none() && !items.template_answered_unknown(button.action) {
@@ -687,7 +688,7 @@ impl ActionStates<'_, '_> {
                     st.equipped = me.is_some_and(|(s, _)| {
                         crate::ui_items::find_item(
                             &s.0,
-                            &objects,
+                            objects,
                             button.action,
                             crate::ui_items::ItemSearch {
                                 equipment_only: true,
@@ -704,7 +705,7 @@ impl ActionStates<'_, '_> {
                             store,
                             target: selection.guid.zip(target.map(|(s, _)| s)),
                             rel: relations.get(),
-                            cooldowns: &cooldowns,
+                            cooldowns,
                             stacks: &stacks,
                             spell_mods,
                             control_lost,
@@ -717,8 +718,8 @@ impl ActionStates<'_, '_> {
                             count > 0,
                             &ctx,
                             spells.as_deref(),
-                            &objects,
-                            &items,
+                            objects,
+                            items,
                         );
                         st.usable = u;
                         st.not_enough_mana = oom;
@@ -792,7 +793,7 @@ impl ActionStates<'_, '_> {
                     store,
                     target: selection.guid.zip(target.map(|(s, _)| s)),
                     rel: relations.get(),
-                    cooldowns: &cooldowns,
+                    cooldowns,
                     stacks: &stacks,
                     spell_mods,
                     control_lost,
@@ -802,7 +803,7 @@ impl ActionStates<'_, '_> {
                 list.refresh(|id| {
                     sp.catalog
                         .get(id)
-                        .is_some_and(|d| usable::spell_usable(id, d, sp, &ctx, &objects, &items).0)
+                        .is_some_and(|d| usable::spell_usable(id, d, sp, &ctx, objects, items).0)
                 })
             }
             _ => Vec::new(),
