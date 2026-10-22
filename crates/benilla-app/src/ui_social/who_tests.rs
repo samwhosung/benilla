@@ -299,3 +299,149 @@ fn a_logout_seeds_the_sort_chain_again() {
     crate::net::handlers::dispatch(w.app.world_mut(), vec![SessionEvent::LoggedOut]);
     assert_eq!(social(&w).who_sort, WhoSortChain::default());
 }
+
+/// One `SMSG_WHO` answer through its handler, then the feed.
+fn answer(w: &mut Who, displayed: u32, total: u32, entries: Vec<WhoEntry>) {
+    crate::net::handlers::dispatch(
+        w.app.world_mut(),
+        vec![SessionEvent::WhoResults(WhoResults {
+            displayed,
+            total,
+            entries,
+        })],
+    );
+    w.app
+        .world_mut()
+        .run_system(w.feed)
+        .expect("the social feed runs");
+}
+
+fn levelled(name: &str, level: u32) -> WhoEntry {
+    WhoEntry {
+        level,
+        ..entry(name, 1, 1, ELWYNN)
+    }
+}
+
+type WhoRow = (
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+/// `GetWhoInfo(index)`'s values, their count first.
+fn who_info(w: &mut Who, index: i64) -> WhoRow {
+    let call = format!("GetWhoInfo({index})");
+    let count = with_hosted_vm(w.app.world_mut(), |vm| vm.expect("a VM").arity(&call))
+        .expect("the call runs") as i64;
+    let (name, guild, level, race, class, zone) = eval(w, &format!("return {call}"));
+    (count, name, guild, level, race, class, zone)
+}
+
+fn miss() -> WhoRow {
+    (6, None, None, Some(0), None, None, None)
+}
+
+/// The parser keeps the count capped at 50 (`0x5adf87`-`0x5adf92`) and stores the first 50
+/// records (`0x5ae045`); `GetNumWhoResults` answers that count and the total.
+#[test]
+fn an_answer_keeps_at_most_fifty_rows() {
+    let mut w = client();
+    let entries = (0..60).map(|i| levelled(&format!("P{i:02}"), 60)).collect();
+    answer(&mut w, 60, 60, entries);
+    assert_eq!(
+        eval::<(i64, i64)>(&mut w, "return GetNumWhoResults()"),
+        (50, 60)
+    );
+    // Index 51 is the slot after the array, which the reference reads past its end.
+    assert_eq!(who_info(&mut w, 51), miss());
+}
+
+/// The count line takes the answer's first dword, the raw count, both as the number and as the
+/// plural's selector (`0x5ae0f1`-`0x5ae0fb`), never the server's total.
+#[test]
+fn the_count_line_prints_the_raw_count() {
+    let mut w = client();
+    crate::net::handlers::dispatch(
+        w.app.world_mut(),
+        vec![SessionEvent::WhoResults(WhoResults {
+            displayed: 1,
+            total: 7,
+            entries: vec![levelled("Solo", 1)],
+        })],
+    );
+    let get = |key: &str| match key {
+        "WHO_LIST_FORMAT" => Some("%s %s %d %s %s - %s".to_string()),
+        "WHO_NUM_RESULTS" => Some("%d player total".to_string()),
+        "WHO_NUM_RESULTS_P1" => Some("%d players total".to_string()),
+        "UNKNOWN" => Some("Unknown".to_string()),
+        _ => None,
+    };
+    let names = crate::ui_unit::TestNames::english();
+    let lines: Vec<String> = super::feed::printed_lines(social(&w), None, names.names(), &get)
+        .iter()
+        .map(|s| s.text().to_string())
+        .collect();
+    assert_eq!(lines.last().map(String::as_str), Some("1 player total"));
+}
+
+/// `GetWhoInfo` takes `index - 1` unsigned against the kept count with `ja` (`0x5ad71a`-`0x5ad71f`),
+/// so 0, a negative index and anything past the count plus one miss with `nil, nil, 0, nil, nil,
+/// nil` (`0x5ad836`-`0x5ad862`).
+#[test]
+fn get_who_info_misses_with_a_zero_level() {
+    let mut w = client();
+    answer(&mut w, 1, 1, vec![levelled("Solo", 1)]);
+    for index in [0, -1, 3, 99] {
+        assert_eq!(who_info(&mut w, index), miss(), "GetWhoInfo({index})");
+    }
+}
+
+/// The index one past the count reads the array's next slot (`0x5ad726`): zeros before any answer
+/// filled it (an empty name, level 0 and ids with no row), else what an earlier, longer answer
+/// left there in its sorted order. The array outlives the session; only the count is reset
+/// (`0x5add18`).
+#[test]
+fn the_index_past_the_count_reads_the_next_slot() {
+    let mut w = client();
+    let unknown = || Some("Unknown".to_string());
+    assert_eq!(
+        who_info(&mut w, 1),
+        (
+            6,
+            Some(String::new()),
+            Some(String::new()),
+            Some(0),
+            unknown(),
+            unknown(),
+            unknown()
+        )
+    );
+    let name = |w: &mut Who, index: i64| who_info(w, index).1;
+    let three = || vec![levelled("Aa", 30), levelled("Bb", 10), levelled("Cc", 20)];
+    // Sorted zone, then level: Bb, Cc, Aa. One row over it leaves Cc and Aa behind it.
+    answer(&mut w, 3, 3, three());
+    answer(&mut w, 1, 1, vec![levelled("Zz", 5)]);
+    assert_eq!(name(&mut w, 2).as_deref(), Some("Cc"));
+    assert_eq!(who_info(&mut w, 3), miss());
+    // A click re-sorts the array itself (`0x5ad9d6`): by name, Aa, Bb, Cc.
+    answer(&mut w, 3, 3, three());
+    run(&mut w, r#"SortWho("name")"#);
+    answer(&mut w, 1, 1, vec![levelled("Zz", 5)]);
+    assert_eq!(name(&mut w, 2).as_deref(), Some("Bb"));
+    // After a logout the count is 0 and the array's first slot still holds Zz.
+    crate::net::handlers::dispatch(w.app.world_mut(), vec![SessionEvent::LoggedOut]);
+    w.app
+        .world_mut()
+        .run_system(w.feed)
+        .expect("the social feed runs");
+    assert_eq!(
+        eval::<(i64, i64)>(&mut w, "return GetNumWhoResults()"),
+        (0, 0)
+    );
+    assert_eq!(name(&mut w, 1).as_deref(), Some("Zz"));
+}
