@@ -1,6 +1,6 @@
 //! `ItemRandomProperties.dbc`, the random-suffix table: the "of the Monkey" roll an item carries
 //! and the enchants it grants. The name formatter `0x5d8b00` joins name and suffix through
-//! `ITEM_SUFFIX_TEMPLATE` (`"%s %s"`), taking its plain-name exit (`0x5d8ba5`) for an id that is
+//! `ITEM_SUFFIX_TEMPLATE`, taking its plain-name exit (`0x5d8ba5`) for an id that is
 //! `0`, negative, past the table or suffix-less and its suffix exit (`0x5d8b84`) otherwise. The
 //! tooltip (`0x52b7bf`-`0x52b7fb`) copies the row's five enchant ids (`row+0x8..+0x18`) into its
 //! enchant slots 2..6 for `0x52c991` to print, so a linked item shows its stat lines, not
@@ -45,15 +45,6 @@ impl RandomPropertyCatalog {
     /// negative and unknown ids name none.
     pub fn get(&self, id: i32) -> Option<&RandomProperty> {
         (id > 0).then(|| self.rows.get(&(id as u32)))?
-    }
-
-    /// The display name as `0x5d8b00` builds it: `ITEM_SUFFIX_TEMPLATE` (`"%s %s"`) for a
-    /// resolved suffix, else the plain name.
-    pub fn suffixed_name(&self, name: &str, id: i32) -> String {
-        match self.get(id) {
-            Some(row) => format!("{name} {}", row.suffix),
-            None => name.to_string(),
-        }
     }
 
     /// Every row as `(id, row)`, for the whole-table push to the engine.
@@ -137,14 +128,9 @@ mod tests {
         let row = cat.get(5).expect("row 5");
         assert_eq!(row.suffix, "of Intellect");
         assert_eq!(row.enchants, [79, 0, 0, 0, 0]);
-        // The name join is the client's `ITEM_SUFFIX_TEMPLATE` "%s %s".
-        assert_eq!(
-            cat.suffixed_name("Chipped Claw", 5),
-            "Chipped Claw of Intellect"
-        );
-        // The formatter's plain-name exit: 0, negative, and an id past the table.
+        // The formatter's plain-name exit: 0, negative, and an id past the table name no row.
         for id in [0, -1, 999_999] {
-            assert_eq!(cat.suffixed_name("Chipped Claw", id), "Chipped Claw");
+            assert!(cat.get(id).is_none(), "{id}");
         }
     }
 }

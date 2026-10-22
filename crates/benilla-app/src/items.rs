@@ -362,17 +362,27 @@ impl RandomProperties {
 }
 
 /// The item's display name, the reference's one formatter `0x5d8b00(entry, randomPropertyId)`:
-/// `ITEM_SUFFIX_TEMPLATE` (`"%s %s"`) with the roll's suffix, or the plain name when the id names
-/// no suffixed row. Every surface that shows an item name goes through here.
+/// `SStrPrintf(ITEM_SUFFIX_TEMPLATE, name, suffix)` (`0x5d8b78`-`0x5d8b8c`) for an id naming a
+/// suffixed row, else the plain name (`0x5d8ba5`). The template is the VM's
+/// ([`RandomProperties::suffix_template`]); before a VM has been read, the stock `"%s %s"`. Every
+/// surface that shows an item name goes through here.
 pub(crate) fn item_display_name(
     base: &str,
     random_property_id: i32,
     props: Option<&RandomProperties>,
 ) -> String {
-    match props.and_then(|p| p.catalog.get(random_property_id)) {
-        Some(row) => format!("{base} {}", row.suffix),
-        None => base.to_string(),
-    }
+    let Some((props, row)) = props.and_then(|p| Some((p, p.catalog.get(random_property_id)?)))
+    else {
+        return base.to_string();
+    };
+    let template = props.suffix_template.as_deref().unwrap_or("%s %s");
+    benilla_ui::strings::fill(
+        template,
+        &[
+            benilla_ui::strings::Arg::S(base),
+            benilla_ui::strings::Arg::S(&row.suffix),
+        ],
+    )
 }
 
 /// The tooltip lines of a roll, for a source with no item object: the reference (`0x52b7bf` to

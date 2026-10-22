@@ -530,8 +530,8 @@ fn suffixed_name(lua: &Lua, name: &str, property: i32) -> String {
     };
     match suffix {
         Some(suffix) => {
-            // `FrameScript_GetText` answers "" for a missing key, and the format then writes "".
-            let template = crate::strings::global(lua, "ITEM_SUFFIX_TEMPLATE").unwrap_or_default();
+            // `FrameScript_GetText` (`0x703bf0`): "" for a missing key, which formats "".
+            let template = super::glue_core::global_text(lua, "ITEM_SUFFIX_TEMPLATE");
             crate::strings::fill(
                 &template,
                 &[

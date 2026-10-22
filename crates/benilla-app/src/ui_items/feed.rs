@@ -456,7 +456,7 @@ pub(super) fn feed_item_sets(
 /// has no hover loop to repaint a late answer.
 pub(super) fn feed_random_properties(
     mut hosted_vm: crate::script_calls::HostedVm,
-    props: Option<Res<crate::items::RandomProperties>>,
+    mut props: Option<ResMut<crate::items::RandomProperties>>,
     enchants: Option<Res<crate::items::Enchants>>,
     mut pushed: Local<crate::ui_script::VmMemo<bool>>,
     mut names_pushed: Local<crate::ui_script::VmMemo<bool>>,
@@ -465,6 +465,14 @@ pub(super) fn feed_random_properties(
         let Some(script) = script else {
             return;
         };
+        // The name formatter's `ITEM_SUFFIX_TEMPLATE` (`0x5d8b78`), as `FrameScript_GetText` reads
+        // it (`0x703bf0`); written only on a change, so the name feeds rebuild then alone.
+        if let Some(props) = props.as_mut() {
+            let template = script.global_text("ITEM_SUFFIX_TEMPLATE");
+            if props.suffix_template.as_deref() != Some(template.as_str()) {
+                props.suffix_template = Some(template);
+            }
+        }
         // The enchant names a link's bare id reads (`0x52c9f2`): every named row, as the builder's
         // loop tests no flag before it prints the name (`0x52ca23`..`0x52ca8b`).
         if let Some(enchants) = enchants.as_deref() {
@@ -482,10 +490,10 @@ pub(super) fn feed_random_properties(
             return;
         }
         // Without the enchant catalog every row would push empty, never to be retried.
-        let (Some(props), Some(enchants)) = (props, enchants) else {
+        let (Some(props), Some(enchants)) = (props.as_deref(), enchants) else {
             return;
         };
-        let rows = crate::items::random_property_views(&props, Some(&enchants));
+        let rows = crate::items::random_property_views(props, Some(&enchants));
         let with_lines = rows.values().filter(|v| !v.enchants.is_empty()).count();
         info!(
             "random-property table: {} rows pushed, {with_lines} with enchant lines",
