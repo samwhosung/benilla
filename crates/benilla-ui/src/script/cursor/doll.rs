@@ -171,8 +171,12 @@ pub(super) fn doll_click(model: &mut Model, id: u32, may_cast: bool) -> DollClic
             };
             if row.item_id == held.item_id {
                 model
-                    .merchant_slot_buys
-                    .push((EQUIPMENT_BAG, id, row.item_id));
+                    .merchant_drops
+                    .push(crate::script::MerchantCall::BuyInSlot {
+                        bag: EQUIPMENT_BAG,
+                        slot: id,
+                        entry: row.item_id,
+                    });
             }
             clear_cursor(model);
             DollClick::Done(true)

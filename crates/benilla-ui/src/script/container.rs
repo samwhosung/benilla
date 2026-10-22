@@ -762,7 +762,9 @@ fn pickup_container_item(
                 .filter(|it| it.item_id == held.item_id)
                 .map(|it| it.item_id);
             if let Some(entry) = entry {
-                model.merchant_slot_buys.push((bag, slot, entry));
+                model
+                    .merchant_drops
+                    .push(super::MerchantCall::BuyInSlot { bag, slot, entry });
             }
             cursor::clear_cursor(model);
             ContainerClick::Done

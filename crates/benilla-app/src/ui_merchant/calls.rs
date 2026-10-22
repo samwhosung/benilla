@@ -2,7 +2,7 @@
 //! ([`crate::script_calls::ScriptCallHost`]): each refuses or sends with the vendor cell as it
 //! stands (`[0xbddfa0]`) before the verb returns, as the reference's bindings send in their own
 //! bodies (`0x4fb850`, `0x4fb760`, `0x4fb950`, `0x4fbfe0`), and a held row's drop in its slot's
-//! (`0x4f9f35`, `0x4c78fd`).
+//! (`0x4f9f35`, `0x4c78fd`) or its bag's (`0x4c7e66`).
 
 use benilla_ui::script::{MerchantCall, UiScript};
 use bevy::ecs::system::SystemParam;
@@ -99,6 +99,22 @@ impl MerchantSteps<'_, '_> {
                         item_guid: 0,
                     });
                 }
+            }
+            // The bag's guid as the drop read it, or the player's own for the backpack
+            // (`0x4c7c7d`), slot `0xFF` so the server picks, count the fixed 1 (`0x4c7e9c`).
+            MerchantCall::BuyIntoBag { bag_guid, entry } => {
+                let (Some(vendor), Some((_, me))) = (open.vendor, me_pair) else {
+                    return;
+                };
+                let bag_guid = bag_guid.unwrap_or(me.0);
+                debug!("ui_merchant: bag buy entry {entry} → bag {bag_guid:#x}");
+                let _ = net.0.send(ClientCommand::BuyItemInSlot {
+                    vendor,
+                    entry,
+                    bag_guid,
+                    bag_slot: 0xFF,
+                    count: 1,
+                });
             }
             // The container's guid names the slot: the player's for the player's own array
             // (`BAG_PLAYER_INVENTORY`), the bag's for a real bag; the count is the fixed 1.

@@ -201,6 +201,10 @@ pub enum MerchantCall {
     /// A held vendor row dropped into a bag or doll slot (`0x4f9f35`, `0x4c78fd`):
     /// `CMSG_BUY_ITEM_IN_SLOT` (`0x1a3`) for the row's item into Lua's `(bag, slot)`, count 1.
     BuyInSlot { bag: i64, slot: u32, entry: u32 },
+    /// A held vendor row dropped on a bag slot or the backpack button (`0x4c7e66`-`0x4c7eaa`):
+    /// `CMSG_BUY_ITEM_IN_SLOT` into the item in that bag slot, `None` the player's own for the
+    /// backpack (`0x4c7c7d`), slot `0xFF` so the server picks, count 1.
+    BuyIntoBag { bag_guid: Option<u64>, entry: u32 },
 }
 
 /// Hand `call` to the host, which applies it before this returns ([`super::calls::submit`]).
@@ -208,17 +212,17 @@ fn submit(lua: &Lua, call: MerchantCall) -> mlua::Result<()> {
     super::calls::submit(lua, super::ScriptCall::Merchant(call))
 }
 
-/// Hand the host the slot buys the drop verb just made (`Model::merchant_slot_buys`), before the
-/// verb returns, as the reference sends from the drop itself.
+/// Hand the host the buys the drop verb just made (`Model::merchant_drops`), before the verb
+/// returns, as the reference sends from the drop itself.
 pub(super) fn submit_slot_buys(lua: &Lua) -> mlua::Result<()> {
     let buys = std::mem::take(
         &mut lua
             .app_data_mut::<Model>()
             .expect("model app_data")
-            .merchant_slot_buys,
+            .merchant_drops,
     );
-    for (bag, slot, entry) in buys {
-        submit(lua, MerchantCall::BuyInSlot { bag, slot, entry })?;
+    for call in buys {
+        submit(lua, call)?;
     }
     Ok(())
 }
