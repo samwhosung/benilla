@@ -2066,6 +2066,25 @@ mod tests {
             .is_some());
     }
 
+    /// A call puts back the cast permit it found as it returns, so a call nested inside another's
+    /// apply, at a signal point, leaves the outer call's answer for the rest of that apply.
+    #[test]
+    fn a_call_puts_back_the_cast_permit_it_found() {
+        let mut f = frame(true);
+        f.app
+            .world_mut()
+            .run_system_once(|mut ladder: crate::spell::CastLadder| {
+                ladder.permit(false);
+            })
+            .expect("the ladder runs as a one-shot system");
+        run(&mut f, "ClearTarget()");
+        assert!(!f
+            .app
+            .world()
+            .resource::<crate::spell::ScriptCastPermit>()
+            .allows());
+    }
+
     /// The Attack slot is a cast too (`UseAction` → `TryCast`, `0x6e4c90`), behind the same first
     /// rung: a macro's press outside an input event swings at nothing, not even at a target
     /// already selected.
