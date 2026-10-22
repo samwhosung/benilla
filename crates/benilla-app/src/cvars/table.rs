@@ -607,14 +607,17 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // and macOS offer no mode-set and X11's leaves the desktop changed after a crash
     // ([`crate::video`]).
     same_by_locale("gxWindow", "0", &[(ZH_CN, "1")]).latched(),
-    // `gxResolution`, a string row parsed by `video::on_cvar`. Here it is only the windowed size:
-    // fullscreen is the monitor's own and no mode list is offered.
+    // `gxResolution` (`0x63a7c1`, "640x480", flags 3, callback `0x63aa00`), a string row parsed by
+    // `video::on_cvar` into the windowed size. In fullscreen it answers the borderless window's
+    // device pixels, the size the screen runs at, over that windowed size, which is what it saves
+    // (`video::show_screen_size`).
     deviates(
         "gxResolution",
         "1600x900",
         "640x480",
-        "narrowed to the WINDOWED size only — fullscreen is the monitor's own and we expose \
-         no mode list, and 640x480 is not a window anyone would ship a client at",
+        "the saved value is the WINDOWED size, as fullscreen is the borderless window over the \
+         monitor, whose size the row answers while it holds; and 640x480 is not a window anyone \
+         would ship a client at",
     )
     .latched(),
     // benilla's own: a body pane's doll renders at half the frame rate while the pane is open; the

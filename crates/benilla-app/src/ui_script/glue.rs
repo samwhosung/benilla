@@ -222,10 +222,10 @@ impl GlueRebuild {
 }
 
 /// The glue's aspect (`0x46ab40`): 4/3 with `widescreen` off, else the applied `gxResolution`
-/// scanned as width, separator, height (`0x46ab8f`). Not the window's: benilla writes
-/// `gxResolution` only through the CVar set path (the config load, `SetCVar`, `/console set`,
-/// `SetScreenResolution`, each committed at `RestartGx` as the row is latched), never from a
-/// window drag. A size `video::parse_resolution` refuses, a zero or unparsable extent, is no value.
+/// scanned as width, separator, height (`0x46ab8f`). Not the window's: `gxResolution` moves only
+/// through the CVar set path (the config load, `SetCVar`, `/console set`, `SetScreenResolution`,
+/// each committed at `RestartGx` as the row is latched) and, in fullscreen, to the screen's own
+/// size (`video::show_screen_size`), never with a window drag. A size `video::parse_resolution` refuses, a zero or unparsable extent, is no value.
 fn gx_aspect(cvars: Option<&crate::cvars::Cvars>) -> Option<f32> {
     let cvars = cvars?;
     if cvars.flag("widescreen") == Some(false) {

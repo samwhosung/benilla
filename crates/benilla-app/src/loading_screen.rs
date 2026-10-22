@@ -59,7 +59,8 @@ pub(crate) fn widescreen(cvars: Option<&crate::cvars::Cvars>) -> bool {
 /// `0x406b02` path) and the tip's wrap is `515·W/1024`.
 ///
 /// Deviation: the live window's aspect stands in for `gxResolution`'s, as in `portrait`'s
-/// `GxAspect` (fullscreen is the monitor's own size with no mode list, where the two agree).
+/// `GxAspect`, because the window here takes any shape a drag gives it, where the reference's
+/// keeps `gxResolution`'s (`0x5989d7`); in fullscreen the two agree.
 pub(crate) fn scaled_aspect(window: Vec2, widescreen: bool) -> f32 {
     if widescreen && window.x > 0.0 && window.y > 0.0 {
         window.x / window.y * ASPECT_TO_FIT

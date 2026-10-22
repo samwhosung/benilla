@@ -118,6 +118,9 @@ pub(crate) struct Row {
     /// registration keeps it (`0x63dc6c`); else the first value the CVar's own console command
     /// stored (`0x63de23`); else none, and the default stands in.
     pub(crate) reset: Option<String>,
+    /// The engine's value shown over the player's, `(shown, held)` ([`Cvars::show`]): the save
+    /// writes `held` while `value` is still `shown`.
+    overlay: Option<(String, String)>,
 }
 
 /// What a write did.
@@ -212,6 +215,7 @@ impl Cvars {
                 latched: r.latched,
                 check: r.check,
                 reset: None,
+                overlay: None,
             });
         }
         cvars
@@ -556,6 +560,7 @@ impl Cvars {
             check: None,
             // The saved value is the reset text of the record its line made.
             reset: saved,
+            overlay: None,
         });
     }
 
@@ -721,7 +726,12 @@ impl Cvars {
                 .keys()
                 .find(|k| k.eq_ignore_ascii_case(&row.name))
                 .cloned();
-            let text = row.pending.as_ref().unwrap_or(&row.value);
+            let held = row
+                .overlay
+                .as_ref()
+                .filter(|(shown, _)| *shown == row.value)
+                .map(|(_, held)| held);
+            let text = row.pending.as_ref().or(held).unwrap_or(&row.value);
             // `SaveConfig` skips a value equal to its default case-blind (`0x63da4a`).
             if same_text(text, &row.default) {
                 if let Some(k) = existing {
@@ -734,10 +744,46 @@ impl Cvars {
         out
     }
 
-    /// Show the engine's own value for a row over the player's, which the row holds for the save,
-    /// or end the overlay with `None`.
+    /// The engine's value [`Self::show`] put over a row, while the row still answers it.
+    pub(crate) fn shown(&self, name: &str) -> Option<&str> {
+        let row = self.row(name)?;
+        row.overlay
+            .as_ref()
+            .filter(|(shown, _)| *shown == row.value)
+            .map(|(shown, _)| shown.as_str())
+    }
+
+    /// Show the engine's own value for a row over the player's, or end it with `None`: what the
+    /// row answers (`GetCVar`, the console, a new VM's mirror) is the shown value, the save writes
+    /// the player's, and nothing fires, as the engine already applied it. A write that moves the
+    /// row off the shown value is the player's own and ends the overlay; the next show holds it.
     pub(crate) fn show(&mut self, name: &str, shown: Option<&str>) {
-        let _ = (name, shown);
+        let Some(i) = self.slot(name) else {
+            warn!("cvar {name}: not registered — shown value ignored");
+            return;
+        };
+        let row = &mut self.rows[i];
+        // An overlay a write has moved the row off holds nothing any more.
+        if row
+            .overlay
+            .as_ref()
+            .is_some_and(|(was, _)| *was != row.value)
+        {
+            row.overlay = None;
+        }
+        let next = match (shown, row.overlay.take()) {
+            (Some(shown), held) => {
+                let held = held.map_or_else(|| row.value.clone(), |(_, held)| held);
+                row.overlay = Some((shown.to_string(), held));
+                shown.to_string()
+            }
+            (None, Some((_, held))) => held,
+            (None, None) => return,
+        };
+        if row.value != next {
+            row.value = next;
+            self.outbox.push((row.name.clone(), row.value.clone()));
+        }
     }
 
     /// The account name earlier builds kept in a file of its own

@@ -1,5 +1,6 @@
 //! Video settings that reach the window and the presentation path: 1.12's `gxWindow` and
-//! `gxVSync` rows (`OptionsFrame.lua:14`, `:9`) and the `gxResolution` windowed size.
+//! `gxVSync` rows (`OptionsFrame.lua:14`, `:9`) and `gxResolution`, the windowed size and, in
+//! fullscreen, the size the screen runs at.
 //!
 //! Deviation: `gxWindow "0"` is borderless fullscreen, not 1.12's exclusive mode-set at
 //! `gxResolution`, because Wayland has no client mode-setting (winit ignores
@@ -173,7 +174,8 @@ pub(crate) struct VideoConfig {
     pub(crate) display: DisplayMode,
     /// `gxMaximize`: a windowed window fills the monitor, borderless ([`window_mode`]).
     pub(crate) maximize: bool,
-    /// The windowed size, `gxResolution`. Kept while fullscreen so leaving it can restore it.
+    /// The windowed size, `gxResolution`'s own value. Kept while fullscreen, where the row
+    /// answers the screen's size ([`show_screen_size`]), so leaving it can restore it.
     pub(crate) windowed: UVec2,
 }
 
@@ -443,6 +445,7 @@ impl Plugin for VideoPlugin {
             .init_resource::<GxRestarts>()
             .init_resource::<RefreshPacing>()
             .add_systems(Last, pace_to_refresh)
+            .add_systems(PostUpdate, show_screen_size)
             .add_systems(Startup, (log_display_session, check_window_pinned).chain())
             .add_systems(
                 Update,
@@ -533,12 +536,12 @@ fn offered_modes<'a>(
     monitors: impl IntoIterator<Item = &'a Monitor>,
     widescreen: bool,
 ) -> Vec<ScreenResolution> {
-    let mut offered: Vec<ScreenResolution> = Vec::new();
-    for m in monitors {
-        // The monitor's own scale, not the window's: these rows describe the panel.
     if !widescreen {
         return SCREEN_FALLBACK.to_vec();
     }
+    let mut offered: Vec<ScreenResolution> = Vec::new();
+    for m in monitors {
+        // The monitor's own scale, not the window's: these rows describe the panel.
         let scale = if m.scale_factor > 0.0 {
             m.scale_factor
         } else {
@@ -566,20 +569,21 @@ type PublishedModes = Option<(Vec<ScreenResolution>, Option<ScreenResolution>)>;
 /// The host half of `GetScreenResolutions` / `GetCurrentResolution`: the monitors' mode sizes and
 /// full sizes through [`offerable`], else [`SCREEN_FALLBACK`]; a pick sets the windowed size,
 /// `gxResolution`. The engine adds the live window size when missing, which `CT_Viewport.lua:201`
-/// needs. Deviation: sizes are logical px, because `gxResolution` is a logical inner size here.
+/// needs. Deviation: sizes are logical px, because the windowed `gxResolution` is a logical inner
+/// size here.
 /// The list is recomputed on change; the reference builds its list once and never invalidates it.
 fn publish_display_modes(
     mut hosted_vm: crate::script_calls::HostedVm,
     windows: Query<&Window, With<PrimaryWindow>>,
     monitors: Query<&bevy::window::Monitor>,
+    cvars: Option<Res<crate::cvars::Cvars>>,
     mut last: Local<crate::ui_script::VmMemo<PublishedModes>>,
 ) {
+    let widescreen = crate::loading_screen::widescreen(cvars.as_deref());
     hosted_vm.run(|script| {
         let Some(script) = script else {
-    cvars: Option<Res<crate::cvars::Cvars>>,
             return;
         };
-    let widescreen = crate::loading_screen::widescreen(cvars.as_deref());
         let Ok(window) = windows.single() else {
             return;
         };
@@ -795,14 +799,35 @@ pub(crate) fn apply_window_mode(
     );
 }
 
-/// `gxResolution` reads the size the screen runs at.
+/// `gxResolution` answers the size the screen runs at. 1.12.1's fullscreen runs at the mode the
+/// CVar names, so the CVar always describes the backbuffer; benilla's fullscreen is the borderless
+/// window over the monitor, so while it holds, the row shows that window's device pixels
+/// ([`crate::cvars::Cvars::show`]). The windowed size, [`VideoConfig::windowed`], stays the row's
+/// own value: it is what the save writes and what the row answers again once the window is back.
 pub(crate) fn show_screen_size(
     cfg: Res<VideoConfig>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cvars: Option<ResMut<crate::cvars::Cvars>>,
 ) {
-    let _ = (cfg, windows, cvars);
+    let Some(mut cvars) = cvars else {
+        return;
+    };
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let res = &window.resolution;
+    let screen = (cfg.display == DisplayMode::Fullscreen
+        && matches!(window.mode, WindowMode::BorderlessFullscreen(_))
+        && res.physical_width() > 0
+        && res.physical_height() > 0)
+        .then(|| format!("{}x{}", res.physical_width(), res.physical_height()));
+    if cvars.shown(GX_RESOLUTION) == screen.as_deref() {
+        return;
+    }
+    cvars.show(GX_RESOLUTION, screen.as_deref());
 }
+
+const GX_RESOLUTION: &str = "gxResolution";
 
 #[cfg(test)]
 mod tests {
