@@ -376,7 +376,9 @@ fn on_reputations(
             }
             reputation_visible(list_id, &mut b.reputations)
         }
-        SessionEvent::ReputationAtWar { .. } => {}
+        SessionEvent::ReputationAtWar { list_id, flags } => {
+            reputation_at_war(list_id, flags, &mut b.reputations)
+        }
         _ => {}
     }
 }
@@ -440,7 +442,11 @@ fn on_reputation_delta(
             );
             crate::ui_reputation::queue_standing_lines(lines, f.catalog(), me.female, &chat_log);
         }
-        reputation_delta(standings, &mut b.reputations, &mut quest);
+        let ranks = factions
+            .as_deref()
+            .zip(self_facts(&b))
+            .map(|(f, me)| (f.catalog(), me.race, me.class));
+        reputation_delta(standings, &mut b.reputations, ranks, &mut quest);
     }
 }
 
@@ -771,23 +777,42 @@ fn forced_reactions(reactions: Vec<(u32, u32)>, reputations: &mut Reputations) {
     reputations.set_forced(reactions);
 }
 
-/// `SMSG_SET_FACTION_STANDING`: overwrites the changed slots, growing the store with flags 0,
-/// and makes each visible unless it is `HIDDEN`, as the reference's handler does (`0x4d5760`).
+/// `SMSG_SET_FACTION_STANDING` (`0x4d5760`), entry by entry: the slot's standing stored, the
+/// slot made visible unless it is visible or `HIDDEN` already (`0x4d5815`), and its at-war bit
+/// set by the faction's rank after the entry below Unfriendly (`0x4d5833`), else cleared when that
+/// rank rose (`0x4d583f`). `ranks` is the catalog and the active player's race and class the rank
+/// reads its base by (`0x4d63a0`); without them the rule is skipped, as every rank reads Neutral
+/// before the player's rebuild names the slots (`0x4d54ee`).
 fn reputation_delta(
     standings: Vec<(u32, i32)>,
     reputations: &mut Reputations,
+    ranks: Option<(&benilla_formats::FactionCatalog, u8, u8)>,
     quest: &mut QuestGiver,
 ) {
     use benilla_formats::faction_flags as flag;
+    let rank = |reputations: &Reputations, slot: usize| {
+        ranks.map(|(catalog, race, class)| {
+            crate::ui_reputation::slot_rank(catalog, reputations, race, class, slot)
+        })
+    };
     for (list_id, standing) in standings {
         let Some(i) = reputation_slot(list_id, "SMSG_SET_FACTION_STANDING") else {
             continue;
         };
+        let old = rank(reputations, i);
         reputations.set_standing(i, standing);
-        let flags = reputations.flags(i);
-        if flags & flag::HIDDEN == 0 {
-            reputations.set_flags(i, flags | flag::VISIBLE);
+        let mut flags = reputations.flags(i);
+        if flags & (flag::VISIBLE | flag::HIDDEN) == 0 {
+            flags |= flag::VISIBLE;
         }
+        if let (Some(old), Some(new)) = (old, rank(reputations, i)) {
+            if new < 2 {
+                flags |= flag::AT_WAR;
+            } else if new > old {
+                flags &= !flag::AT_WAR;
+            }
+        }
+        reputations.set_flags(i, flags);
     }
     // Standing feeds questgiver status (`SatisfyQuestReputation`); the reference re-asks here too.
     quest.bump_reask();
@@ -801,6 +826,25 @@ fn reputation_visible(list_id: u32, reputations: &mut Reputations) {
     };
     let flags = reputations.flags(i);
     reputations.set_flags(i, flags | benilla_formats::faction_flags::VISIBLE);
+}
+
+/// `SMSG_SET_FACTION_ATWAR` (`0x4d56b0`): bit `0x02` of the wire byte becomes the slot's at-war
+/// bit and the byte's other bits are read nowhere (`0x4d56d9`-`0x4d56e9`). It sorts nothing and
+/// refreshes no reaction; the pane's list signals `UPDATE_FACTION` when the bit moved a row.
+fn reputation_at_war(list_id: u32, wire: u8, reputations: &mut Reputations) {
+    use benilla_formats::faction_flags::AT_WAR;
+    let Some(i) = reputation_slot(list_id, "SMSG_SET_FACTION_ATWAR") else {
+        return;
+    };
+    let flags = reputations.flags(i);
+    reputations.set_flags(
+        i,
+        if wire & AT_WAR != 0 {
+            flags | AT_WAR
+        } else {
+            flags & !AT_WAR
+        },
+    );
 }
 
 /// A wire `repListId` as a store index, or `None` (logged) past the `FACTION_LIST_LEN` array

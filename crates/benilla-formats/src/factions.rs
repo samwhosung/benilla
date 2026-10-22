@@ -182,7 +182,8 @@ pub mod faction_flags {
     /// Listed in the reputation pane, the only flag that gates membership; the server sets it on
     /// first contact and sends `SMSG_SET_FACTION_VISIBLE`.
     pub const VISIBLE: u8 = 0x01;
-    /// The player has declared war on this faction.
+    /// At war: the player's reaction toward the faction's units is hostile (`0x60640c`). The
+    /// pane's toggle, `SMSG_SET_FACTION_ATWAR` and a standing of Hostile or below write it.
     pub const AT_WAR: u8 = 0x02;
     /// Suppresses the standing-change auto-reveal and rank-change chat line; the row stays listed.
     pub const HIDDEN: u8 = 0x04;

@@ -224,6 +224,23 @@ pub(crate) fn delta_lines(
     lines
 }
 
+/// `GetFactionStandingReaction 0x4d63a0` of the faction slot `slot` holds (`0x4d5620`): its base for
+/// `race`/`class` plus the slot's wire standing, ranked; a slot no faction holds stands at 0, so
+/// Neutral (`0x4d6390`).
+pub(crate) fn slot_rank(
+    catalog: &benilla_formats::FactionCatalog,
+    store: &Reputations,
+    race: u8,
+    class: u8,
+    slot: usize,
+) -> u8 {
+    let standing = catalog
+        .reputation_factions()
+        .find(|(_, f)| usize::try_from(f.rep_index) == Ok(slot))
+        .map_or(0, |(_, f)| f.base_for(race, class) + store.standing(slot));
+    benilla_formats::reputation_rank(standing)
+}
+
 /// Whether `SMSG_SET_FACTION_STANDING` moves any faction's rank (`0x4d5880`), `HIDDEN` or not,
 /// which the handler answers with one `0x4de510(0)` after its entries (`0x4d58ea`-`0x4d58f3`).
 pub(crate) fn rank_moved(

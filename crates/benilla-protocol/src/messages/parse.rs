@@ -1229,6 +1229,10 @@ fn parse_server_body(
         opcode::SMSG_SET_FACTION_VISIBLE => ServerPacket::SetFactionVisible {
             list_id: read_u32_le(&mut r)?,
         },
+        opcode::SMSG_SET_FACTION_ATWAR => ServerPacket::SetFactionAtWar {
+            list_id: read_u32_le(&mut r)?,
+            flags: read_u8(&mut r)?,
+        },
         opcode::SMSG_NAME_QUERY_RESPONSE => {
             let guid = read_u64_le(&mut r)?;
             let name = read_cstring(&mut r)?;
