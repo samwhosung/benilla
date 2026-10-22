@@ -753,16 +753,15 @@ fn pickup_container_item(
         }
         // Mode 5, a held vendor row, buys into this slot whatever it holds (`0x4f9efa` tests
         // `[0xb4d900] == 5`): `CMSG_BUY_ITEM_IN_SLOT` (0x1a3) with count 1, and the cursor clears
-        // either way; with no vendor open the row stays held (`0x4f9f0f`). Deviation: a row that
-        // no longer resolves is refused, as `0x4c7300` does, because this path dereferences it
-        // unchecked (`0x4f9f35`), a latent null deref.
+        // either way, the item the row names now; with no vendor open the row stays held
+        // (`0x4f9f0f`). Deviation: a row index the list no longer holds buys nothing and drops,
+        // where this path reads through a null row (`0x4f9f35`).
         Some(CursorPayload::Merchant(_)) if model.merchant.is_none() => ContainerClick::Done,
         Some(CursorPayload::Merchant(held)) => {
             let entry = model
                 .merchant
                 .as_ref()
                 .and_then(|m| m.items.get(held.row as usize))
-                .filter(|it| it.item_id == held.item_id)
                 .map(|it| it.item_id);
             if let Some(entry) = entry {
                 model
