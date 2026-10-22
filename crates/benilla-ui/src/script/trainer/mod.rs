@@ -66,10 +66,16 @@ pub struct TrainerSkillReq {
     pub met: bool,
 }
 
-/// A prerequisite ability (`GetTrainerServiceAbilityReq`); `met` is whether the player knows it.
+/// One of a service's three required-ability slots (`+0x24`), by position
+/// (`GetTrainerServiceAbilityReq`); `met` is whether the book knows it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TrainerAbilityReq {
-    pub name: String,
+    /// The slot's id as the wire sent it, read signed: `GetTrainerServiceNumAbilityReq` counts the
+    /// slots above 0 (`0x4d9653`).
+    pub spell_id: i32,
+    /// `%s (%s)` (`0x8468b0`) of the record's name and rank, the name alone with no rank
+    /// (`0x4d9808`); `None` with no `Spell.dbc` record, which answers nil (`0x4d97c8`, `0x4d98d1`).
+    pub name: Option<String>,
     pub met: bool,
 }
 
@@ -762,7 +768,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let index =
                 binding_abi::index_arg(lua, index, "Usage: GetTrainerServiceAbilityReq(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(service(&model, index).map_or(0, |s| s.ability_reqs.len()) as i64)
+            Ok(service(&model, index).map_or(0, |s| {
+                s.ability_reqs.iter().filter(|r| r.spell_id > 0).count()
+            }) as i64)
         })?,
     )?;
 
@@ -775,6 +783,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 binding_abi::index_arg(lua, index, "Usage: GetTrainerServiceAbilityReq(index)")?;
             let i = binding_abi::index_arg(lua, i, "Usage: GetTrainerServiceAbilityReq(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
+            // The slot `i - 1` read in place, bounded by the three (`0x4d979c`), not by the count.
             let Some(req) = service(&model, index)
                 .and_then(|s| i.checked_sub(1).and_then(|n| s.ability_reqs.get(n)))
             else {
@@ -782,7 +791,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(binding_abi::tuple(&[None, Some(1)]));
             };
             Ok(MultiValue::from_vec(vec![
-                Value::String(lua.create_string(&req.name)?),
+                opt_str(lua, req.name.as_ref())?,
                 binding_abi::flag(req.met),
             ]))
         })?,

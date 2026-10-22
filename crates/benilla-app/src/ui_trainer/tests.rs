@@ -528,7 +528,8 @@ fn resolve_reads_cost_state_and_gates_with_no_catalog() {
     assert_eq!(svc.category, TrainerServiceCategory::Unavailable);
     assert_eq!(svc.level_req, 20);
     // The skill gate follows the category; the ability gate reads met, as no service spell
-    // record reaches the known test (`0x4d9842`).
+    // record reaches the known test (`0x4d9842`), and a requirement with no record answers nil
+    // (`0x4d97c8`, `0x4d98d1`). Every slot stays in place (`0x4d97a5`).
     assert_eq!(
         svc.skill_req,
         Some(TrainerSkillReq {
@@ -539,10 +540,23 @@ fn resolve_reads_cost_state_and_gates_with_no_catalog() {
     );
     assert_eq!(
         svc.ability_reqs,
-        vec![TrainerAbilityReq {
-            name: "Spell 78".to_string(),
-            met: true,
-        }]
+        vec![
+            TrainerAbilityReq {
+                spell_id: 78,
+                name: None,
+                met: true,
+            },
+            TrainerAbilityReq {
+                spell_id: 0,
+                name: None,
+                met: true,
+            },
+            TrainerAbilityReq {
+                spell_id: 0,
+                name: None,
+                met: true,
+            },
+        ]
     );
     assert!(!svc.is_trade_skill, "no record: nil (`0x4d9fcf`)");
     assert!(svc.prof_first_rank == w.is_primary_prof_first_rank);
@@ -558,7 +572,10 @@ fn resolve_reads_cost_state_and_gates_with_no_catalog() {
         &BTreeSet::new(),
     );
     assert_eq!(plain.skill_req, None);
-    assert!(plain.ability_reqs.is_empty());
+    assert!(plain
+        .ability_reqs
+        .iter()
+        .all(|r| r.spell_id == 0 && r.name.is_none()));
     assert!(!plain.is_trade_skill);
 }
 
@@ -603,15 +620,31 @@ fn ability_req_shows_the_required_rank_on_real_data() {
     let svc = resolve_service(&w, 0, &spells, None, &known);
     assert_eq!(
         svc.ability_reqs,
-        vec![TrainerAbilityReq {
-            name: "Heroic Strike (Rank 1)".to_string(),
-            met: true,
-        }],
+        vec![
+            TrainerAbilityReq {
+                spell_id: 78,
+                name: Some("Heroic Strike (Rank 1)".to_string()),
+                met: true,
+            },
+            TrainerAbilityReq {
+                spell_id: 0,
+                name: None,
+                met: true,
+            },
+            TrainerAbilityReq {
+                spell_id: 0,
+                name: None,
+                met: true,
+            },
+        ],
         "the prereq shows its rank and reads met because the player knows it"
     );
     let svc = resolve_service(&w, 0, &spells, None, &BTreeSet::new());
     assert!(!svc.ability_reqs[0].met);
-    assert_eq!(svc.ability_reqs[0].name, "Heroic Strike (Rank 1)");
+    assert_eq!(
+        svc.ability_reqs[0].name.as_deref(),
+        Some("Heroic Strike (Rank 1)")
+    );
 }
 
 /// `GetTrainerServiceDescription 0x4d9b40`: a class trainer's plain ability row expands the wire

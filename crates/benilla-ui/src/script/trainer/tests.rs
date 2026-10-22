@@ -217,7 +217,8 @@ fn service_getters_read_the_row_at_a_visible_index() {
         met: true,
     });
     t.services[0].ability_reqs = vec![TrainerAbilityReq {
-        name: "Apprentice".into(),
+        spell_id: 2,
+        name: Some("Apprentice".into()),
         met: false,
     }];
     s.set_trainer(Some(t));
@@ -1170,4 +1171,50 @@ fn every_finalize_sorts_the_whole_array_from_its_last_order() {
             "trainer type {trainer_type}"
         );
     }
+}
+
+/// `GetTrainerServiceNumAbilityReq` (`0x4d9600`) counts the slots whose id is above 0
+/// (`0x4d9653`); `GetTrainerServiceAbilityReq(index, i)` (`0x4d96e0`) reads slot `i - 1` in place
+/// (`0x4d97a5`), so a gap answers nil and a slot past the count still answers, and a requirement
+/// with no `Spell.dbc` record names nothing (`0x4d97c8`), its flag left at 1 (`0x4d9761`).
+#[test]
+fn ability_reqs_read_their_slots_in_place() {
+    let mut s = UiScript::new().unwrap();
+    let mut t = trainer();
+    t.services[0].ability_reqs = vec![
+        TrainerAbilityReq {
+            spell_id: 0,
+            name: None,
+            met: true,
+        },
+        TrainerAbilityReq {
+            spell_id: 78,
+            name: Some("Heroic Strike (Rank 1)".into()),
+            met: false,
+        },
+        TrainerAbilityReq {
+            spell_id: 99999,
+            name: None,
+            met: true,
+        },
+    ];
+    s.set_trainer(Some(t));
+    let req = |s: &mut UiScript, i: i64| {
+        s.eval::<(Option<String>, Option<i64>)>(&format!(
+            "return GetTrainerServiceAbilityReq(2, {i})"
+        ))
+        .unwrap()
+    };
+    assert_eq!(
+        s.eval::<i64>("return GetTrainerServiceNumAbilityReq(2)")
+            .unwrap(),
+        2
+    );
+    assert_eq!(req(&mut s, 1), (None, Some(1)));
+    assert_eq!(
+        req(&mut s, 2),
+        (Some("Heroic Strike (Rank 1)".into()), None)
+    );
+    assert_eq!(req(&mut s, 3), (None, Some(1)));
+    assert_eq!(req(&mut s, 4), (None, Some(1)));
 }

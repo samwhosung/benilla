@@ -209,21 +209,18 @@ fn resolve_service(
         Some(d) if d.effects.contains(&SPELL_EFFECT_LEARN_PET_SPELL) => books.pet,
         Some(_) => Some(books.player),
     };
+    // All three slots, in place: the getter reads slot `i - 1` (`0x4d97a5`).
     let ability_reqs = wire
         .req_spells
         .iter()
-        .filter(|&&s| s != 0)
         .map(|&s| {
             let req = spells.get(s);
-            let name = match req {
-                Some(d) => d.ranked_name(),
-                None => format!("Spell {s}"),
-            };
             let known = |book: &BTreeSet<u32>| {
                 book.contains(&s) || skill_lines.is_some_and(|c| c.higher_rank_known(s, book))
             };
             TrainerAbilityReq {
-                name,
+                spell_id: s as i32,
+                name: req.map(|d| d.ranked_name()),
                 met: req.is_none() || book.is_none_or(known),
             }
         })

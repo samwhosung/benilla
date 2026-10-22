@@ -186,7 +186,8 @@ pub(super) fn menu() -> TrainerState {
                 }),
                 // Gated by level and skill, but the prerequisite is learned, so it reads white.
                 vec![TrainerAbilityReq {
-                    name: "Charge (Rank 1)".into(),
+                    spell_id: 100,
+                    name: Some("Charge (Rank 1)".into()),
                     met: true,
                 }],
             ),
