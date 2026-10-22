@@ -101,11 +101,11 @@ pub(crate) struct ChannelState {
     /// cache loader (`0x499a18`) and tested first by the walk (`0x49a219`); the saver writes
     /// nothing from `None`.
     pub zone_mask: Option<u32>,
-    /// The custom channels to re-join at the next login, the chat cache's `CHANNELS` list. The
-    /// reference writes it from its confirmed id-0 slots at teardown (`0x499b90`-`0x499bb1`); ours
-    /// are cleared before the flush, so the list is kept here: seated from the file, grown by a
-    /// confirmed custom join, shrunk by an explicit leave and by the free of its slot.
-    pub custom: Vec<String>,
+    /// The chat cache's `CHANNELS` list as the slots gave it when the session's end cleared them
+    /// ([`Self::cache_channels`]): the reference's writer reads the live slots at teardown
+    /// (`0x499b90`-`0x499bb1`), and ours are cleared a frame before the flush. `None` while the
+    /// slots are live: from the login's seat and from any slot's claim on.
+    pub ended_custom: Option<Vec<String>>,
     /// The chat cache's `CHANNELS` names still to join, the reference's deferred-join list
     /// (`0xb4fdd8` count, `0xb4fddc` names): the walk's third pass registers and joins each with
     /// id 0 after the zone channels (`0x49a5b4`-`0x49a675`), then frees the list (`0x49a692`).
@@ -226,9 +226,32 @@ impl ChannelState {
         }
     }
 
-    /// An explicit leave drops a custom channel, case-insensitively as the server's names are.
-    pub(crate) fn note_custom_channel_left(&mut self, name: &str) {
-        self.custom.retain(|c| !c.eq_ignore_ascii_case(name));
+    /// The custom channels the chat cache's header lists (`0x499b90`-`0x499bb1`): every slot with
+    /// a number (`0x499b90`), in state 0 (`0x499b9f`) and with row id 0 (`0x499baa`), in slot
+    /// order; a custom channel whose join the server has not confirmed is not written. After the
+    /// session's end, the slots as it found them.
+    pub(crate) fn cache_channels(&self) -> Vec<String> {
+        self.ended_custom
+            .clone()
+            .unwrap_or_else(|| self.live_custom_channels())
+    }
+
+    fn live_custom_channels(&self) -> Vec<String> {
+        self.joined
+            .iter()
+            .filter_map(SlotRecord::held)
+            .filter(|s| s.state == SlotState::Confirmed && s.id == 0)
+            .map(|s| s.name.clone())
+            .collect()
+    }
+
+    /// The session's end clears the slots: the cache's list is kept as they give it, unless they
+    /// are already clear.
+    pub(crate) fn end_session_slots(&mut self) {
+        if !self.joined.is_empty() {
+            self.ended_custom = Some(self.live_custom_channels());
+        }
+        self.joined.clear();
     }
 
     /// Whether the mask carries `id`'s bit, the walk's live predicate `0x49a494`.
@@ -288,8 +311,8 @@ impl ChannelState {
     /// The `YOU_JOINED` arm's confirm (`0x49c0c2` → `0x49bb20`): the first slot of the name not in
     /// state 0 (`0x49bb43`-`0x49bb6c`) takes state 0 (`0x49bb8b`) and its id's mask bit
     /// (`0x49bbaf`); a name with no such slot changes nothing, so no notice creates a slot. A
-    /// confirmed custom slot enters [`Self::custom`], as the teardown writes the confirmed id-0
-    /// slots (`0x499b90`-`0x499baa`). Returns the slot's number.
+    /// confirmed custom slot is one the chat cache's writer lists ([`Self::cache_channels`]).
+    /// Returns the slot's number.
     pub(crate) fn confirm_slot(&mut self, name: &str) -> Option<u32> {
         let i = self.joined.iter().position(|c| {
             c.held().is_some_and(|c| {
@@ -307,9 +330,6 @@ impl ChannelState {
                 "chat: {name:?} joined before the zone mask was seated — bit {bit:#x} dropped"
             ),
             None => {}
-        }
-        if id == 0 && !self.custom.iter().any(|c| c.eq_ignore_ascii_case(&name)) {
-            self.custom.push(name);
         }
         self.recompute_defense_channel();
         Some(i as u32 + 1)
@@ -394,6 +414,8 @@ impl ChannelState {
         if let Some(n) = self.number_of(name) {
             return Some(n);
         }
+        // The slots are live again: the cache's list reads them.
+        self.ended_custom = None;
         let slot = SlotRecord::Held(ChannelSlot::pending(name, id));
         if let Some(i) = self.joined.iter().position(|r| r.held().is_none()) {
             self.joined[i] = slot;
@@ -423,17 +445,13 @@ impl ChannelState {
     }
 
     /// Free the slot holding `name` in place (`0x49bbd0`), so no other channel renumbers; the
-    /// record keeps its id. A freed custom slot leaves [`Self::custom`]: the teardown writes only
-    /// live slots (`0x499b90`).
+    /// record keeps its id. A freed custom slot has no number, so the chat cache's writer skips it
+    /// (`0x499b90`).
     pub(crate) fn free_slot(&mut self, name: &str) -> Option<u32> {
         let n = self.number_of(name)?;
         let record = &mut self.joined[n as usize - 1];
         let id = record.id();
-        if let SlotRecord::Held(slot) = std::mem::replace(record, SlotRecord::Freed { id }) {
-            if slot.id == 0 {
-                self.note_custom_channel_left(&slot.name);
-            }
-        }
+        *record = SlotRecord::Freed { id };
         self.recompute_defense_channel();
         Some(n)
     }

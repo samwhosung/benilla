@@ -197,7 +197,6 @@ fn the_four_refusals_free_the_slot_after_their_line() {
         n::INVALID_NAME,
     ] {
         let mut v = Verbs::new(vec![custom("World"), custom("MyChan")]);
-        v.channels.custom = vec!["World".into(), "MyChan".into()];
         let line = v.notice(byte, "MyChan");
         assert_eq!(
             line.channel, "2. MyChan",
@@ -205,7 +204,7 @@ fn the_four_refusals_free_the_slot_after_their_line() {
         );
         assert_eq!(v.channels.number_of("MyChan"), None, "notice {byte}");
         assert_eq!(v.channels.number_of("World"), Some(1), "notice {byte}");
-        assert_eq!(v.channels.custom, ["World"], "notice {byte}");
+        assert_eq!(v.channels.cache_channels(), ["World"], "notice {byte}");
     }
     let mut v = Verbs::new(vec![custom("MyChan")]);
     v.notice(n::NOT_MODERATOR, "MyChan");
@@ -222,8 +221,9 @@ fn the_four_refusals_free_the_slot_after_their_line() {
 #[test]
 fn a_banned_notice_frees_the_slot_after_its_line() {
     let mut v = Verbs::new(vec![custom("World")]);
-    v.channels.custom = vec!["World".into(), "MyChan".into()];
     v.apply(join("MyChan", 0));
+    v.channels.confirm_slot("MyChan");
+    assert_eq!(v.channels.cache_channels(), ["World", "MyChan"]);
     let line = v.notice(n::BANNED, "MyChan");
     assert_eq!(
         line.channel, "2. MyChan",
@@ -231,7 +231,7 @@ fn a_banned_notice_frees_the_slot_after_its_line() {
     );
     assert_eq!(v.channels.number_of("MyChan"), None);
     assert_eq!(
-        v.channels.custom,
+        v.channels.cache_channels(),
         ["World"],
         "not re-joined at the next login"
     );

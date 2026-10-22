@@ -29,13 +29,12 @@ pub(in crate::ui_chat) fn apply(
         }
         C::Leave { name } => {
             // `LeaveChannelByName` (`0x4a0000` → `0x49ee70`): a number names a confirmed slot or
-            // the call does nothing. Only a leave clears the zone mask and the custom re-join
-            // list, the walk's own LEAVE never.
+            // the call does nothing. Only a leave clears the zone mask, the walk's own LEAVE
+            // never; the slot frees on the server's `YOU_LEFT`.
             let Some(name) = channels.channel_key(&name) else {
                 return;
             };
             channels.note_zone_channel_left(&name);
-            channels.note_custom_channel_left(&name);
             ClientCommand::LeaveChannel { name }
         }
         C::ListAll => {

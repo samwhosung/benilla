@@ -483,9 +483,8 @@ pub(crate) fn restore_chat_looks(world: &mut World, script: &mut UiScript) {
         // `Some` is the reference's "chat system ready" flag (`0x499a18`): the zone walk and the
         // guild-recruitment cascade wait for it.
         channels.zone_mask = Some(mask);
-        // The custom re-join list, seated here, then moved by a confirmed join, a leave and the
-        // free of a slot.
-        channels.custom = parsed.joined.clone();
+        // The header's list is the live slots' from here on, none until a re-join confirms.
+        channels.ended_custom = None;
         // The header's `CHANNELS` names, joined by the walk's third pass after the zone channels
         // (`0x49a5b4`), which the loader runs (`0x499a22`).
         channels.deferred_joins = parsed.joined.clone();
@@ -554,7 +553,7 @@ fn write(script: &UiScript, channels: &super::edit::ChannelState, path: &std::pa
     let body = render(
         &script.chat_window_looks(),
         &script.chat_colors(),
-        &channels.custom,
+        &channels.cache_channels(),
         zone_mask,
         script.guild_recruitment_mode() != 0,
     );
@@ -860,8 +859,12 @@ mod tests {
         );
     }
 
+    /// The header's `CHANNELS` is the slots' at write time (`0x499b90`-`0x499bb1`): a slot with a
+    /// number, in state 0 and with row id 0, so a zone channel, a join the server has not
+    /// confirmed and a freed slot are not written; and after the session's end, the slots as it
+    /// found them, until a slot is claimed again.
     #[test]
-    fn the_custom_list_moves_on_a_confirmed_join_and_a_leave() {
+    fn the_custom_list_is_the_confirmed_custom_slots() {
         let mut state = super::super::edit::ChannelState {
             channels: benilla_formats::ChatChannelsCatalog::from_rows(vec![
                 benilla_formats::ChatChannelRow {
@@ -873,18 +876,34 @@ mod tests {
             ]),
             ..Default::default()
         };
-        // The teardown writes the confirmed slots with id 0 (`0x499b90`-`0x499baa`).
         state.claim_slot("General - Elwynn Forest", 1);
         state.confirm_slot("General - Elwynn Forest");
-        assert!(state.custom.is_empty(), "a zone channel travels as its bit");
+        assert!(
+            state.cache_channels().is_empty(),
+            "a zone channel travels as its bit"
+        );
         state.claim_slot("MyChan", 0);
-        assert!(state.custom.is_empty(), "not yet confirmed");
+        assert!(state.cache_channels().is_empty(), "not yet confirmed");
         state.confirm_slot("MyChan");
         state.claim_slot("mychan", 0);
         state.confirm_slot("mychan");
-        assert_eq!(state.custom, vec!["MyChan".to_string()], "once, by name");
-        state.note_custom_channel_left("MYCHAN");
-        assert!(state.custom.is_empty(), "an explicit leave drops it");
+        state.claim_slot("Other", 0);
+        assert_eq!(state.cache_channels(), ["MyChan"], "once, by name");
+        state.end_session_slots();
+        state.end_session_slots();
+        assert_eq!(
+            state.cache_channels(),
+            ["MyChan"],
+            "the slots as the session's end found them"
+        );
+        state.claim_slot("MyChan", 0);
+        assert!(state.cache_channels().is_empty(), "live again, pending");
+        state.confirm_slot("MyChan");
+        state.free_slot("MyChan");
+        assert!(
+            state.cache_channels().is_empty(),
+            "a freed slot has no number"
+        );
     }
 
     /// The teardown write ignores the dirty flag, as the reference's does, so a `/leave` persists.
