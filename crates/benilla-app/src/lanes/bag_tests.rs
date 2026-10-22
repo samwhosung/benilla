@@ -144,7 +144,8 @@ fn client() -> App {
             local f = CreateFrame("Frame")
             for _, e in ipairs({"BAG_UPDATE", "BAG_CLOSED", "BAG_OPEN", "ITEM_LOCK_CHANGED",
                     "PLAYERBANKSLOTS_CHANGED", "PLAYER_MONEY", "PLAYER_COMBO_POINTS",
-                    "ACTIONBAR_SLOT_CHANGED", "UNIT_INVENTORY_CHANGED", "UI_ERROR_MESSAGE"}) do
+                    "ACTIONBAR_SLOT_CHANGED", "UNIT_INVENTORY_CHANGED", "UI_ERROR_MESSAGE",
+                    "CHAT_MSG_MONSTER_SAY"}) do
                 f:RegisterEvent(e)
             end
             f:SetScript("OnEvent", function()
@@ -226,6 +227,19 @@ fn a_bags_slot_watchers_unlock_the_arrival_and_update_the_bag_at_its_packet() {
             "PLAYER_COMBO_POINTS:nil"
         ]
     );
+    let back: Vec<(u16, u32)> = guid_pair(lo, INNER)
+        .into_iter()
+        .chain(guid_pair(lo + 2, 0))
+        .collect();
+    assert_eq!(
+        frame(&mut app, vec![combo(0), values(BAG, &back)]),
+        [
+            "PLAYER_COMBO_POINTS:nil",
+            "ITEM_LOCK_CHANGED:nil",
+            "BAG_UPDATE:1",
+            "BAG_UPDATE:1"
+        ]
+    );
 }
 
 /// A bag seat's watcher (`0x4f8ec0`) rescans the ten bags against the cache (`0x4f91a0`): a bag
@@ -247,6 +261,18 @@ fn a_bag_seat_closes_and_updates_its_bag_at_its_packet() {
             "PLAYER_COMBO_POINTS:nil"
         ]
     );
+    assert_eq!(
+        frame(&mut app, vec![values(ME, &seat(19, 0)), combo(2)]),
+        ["BAG_CLOSED:1", "PLAYER_COMBO_POINTS:nil"]
+    );
+    assert_eq!(
+        frame(&mut app, vec![combo(0), values(ME, &seat(19, BAG))]),
+        [
+            "PLAYER_COMBO_POINTS:nil",
+            "ITEM_LOCK_CHANGED:nil",
+            "BAG_UPDATE:1"
+        ]
+    );
 }
 
 /// The inventory watcher (`0x5ddcf0`) on a bank seat unlocks the item now in it (`0x5ddd50`),
@@ -263,6 +289,16 @@ fn a_bank_seat_signals_the_bank_slots_at_its_packet() {
             "PLAYERBANKSLOTS_CHANGED:nil",
             "ITEM_LOCK_CHANGED:nil",
             "PLAYERBANKSLOTS_CHANGED:nil"
+        ]
+    );
+    let back: Vec<(u16, u32)> = seat(39, BANKED).into_iter().chain(seat(40, 0)).collect();
+    assert_eq!(
+        frame(&mut app, vec![values(ME, &back), combo(0)]),
+        [
+            "ITEM_LOCK_CHANGED:nil",
+            "PLAYERBANKSLOTS_CHANGED:nil",
+            "PLAYERBANKSLOTS_CHANGED:nil",
+            "PLAYER_COMBO_POINTS:nil"
         ]
     );
 }
@@ -283,6 +319,18 @@ fn a_banked_items_restack_signals_the_bank_slots_with_player_at_its_packet() {
             "BAG_UPDATE:0",
             "PLAYERBANKSLOTS_CHANGED:player",
             "PLAYER_COMBO_POINTS:nil"
+        ]
+    );
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![combo(0), values(BANKED, &[(FIELD_ITEM_STACK_COUNT, 4)])]
+        ),
+        [
+            "PLAYER_COMBO_POINTS:nil",
+            "ITEM_LOCK_CHANGED:nil",
+            "BAG_UPDATE:0",
+            "PLAYERBANKSLOTS_CHANGED:player"
         ]
     );
 }
@@ -388,5 +436,45 @@ fn a_loot_refusals_unlock_fires_at_its_packet() {
     assert_eq!(
         frame(&mut app, vec![refused(), combo(0)]),
         ["ITEM_LOCK_CHANGED:nil", "PLAYER_COMBO_POINTS:nil"]
+    );
+}
+
+/// A monster's line with no `$`-macro, which shows inside its own packet's handler (`0x49dac2`).
+fn boar_says() -> SessionEvent {
+    SessionEvent::Chat(benilla_protocol::messages::ChatMessage {
+        chat_type: benilla_protocol::messages::CHAT_MSG_MONSTER_SAY,
+        language: 0,
+        sender_guid: 0xF130_0000_0045_0003,
+        target_guid: 0,
+        sender_name: Some("Boar".into()),
+        channel: None,
+        text: "Grr".into(),
+        chat_tag: 0,
+    })
+}
+
+/// A restack's events and another packet's chat line come out in the packets' order, whichever
+/// lane holds each.
+#[test]
+fn a_restacks_events_and_a_chat_line_keep_their_packets_order() {
+    let mut app = client();
+    let restack = |n: u32| values(POTIONS, &[(FIELD_ITEM_STACK_COUNT, n)]);
+    assert_eq!(
+        frame(&mut app, vec![boar_says(), restack(5)]),
+        [
+            "CHAT_MSG_MONSTER_SAY:Grr",
+            "ITEM_LOCK_CHANGED:nil",
+            "ACTIONBAR_SLOT_CHANGED:5",
+            "BAG_UPDATE:0"
+        ]
+    );
+    assert_eq!(
+        frame(&mut app, vec![restack(6), boar_says()]),
+        [
+            "ITEM_LOCK_CHANGED:nil",
+            "ACTIONBAR_SLOT_CHANGED:5",
+            "BAG_UPDATE:0",
+            "CHAT_MSG_MONSTER_SAY:Grr"
+        ]
     );
 }
