@@ -1228,8 +1228,6 @@ pub(crate) struct Model {
     /// The world points our own `Minimap:PingLocation` calls pinged, for the host's wire send
     /// (`0x1d5`, `0x4eef72`) and its process-wide copy of the ping.
     pub(crate) minimap_pings_sent: Vec<(f32, f32)>,
-    /// `RequestTimePlayed()` calls, one empty `CMSG_PLAYED_TIME` each.
-    pub(crate) played_time_asks: u32,
     /// `OpeningCinematic()` calls, one empty `CMSG_OPENING_CINEMATIC` each.
     pub(crate) opening_cinematic_asks: u32,
     /// `Screenshot()` calls, one capture each.
@@ -1785,7 +1783,6 @@ impl Model {
             cursor_pos: (0.0, 0.0),
             minimap: crate::widget::MinimapStatics::default(),
             minimap_pings_sent: Vec::new(),
-            played_time_asks: 0,
             opening_cinematic_asks: 0,
             screenshot_asks: 0,
             realm_name: String::new(),

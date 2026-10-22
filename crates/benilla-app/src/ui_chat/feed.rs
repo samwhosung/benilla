@@ -1926,22 +1926,18 @@ fn needs_name(chat_type: u8) -> bool {
     )
 }
 
-/// `/played` for scripts: each `RequestTimePlayed()` sends one empty `CMSG_PLAYED_TIME`, and the
-/// answer fires `TIME_PLAYED_MSG`. The stock `ChatFrame_OnEvent` prints that event as the
-/// `TIME_PLAYED_TOTAL` and `TIME_PLAYED_LEVEL` lines (`ChatFrame.lua:1279`), so the English lines
-/// `ui_chat::net::played_time` also prints are a duplicate.
+/// `/played`'s answer for scripts: `SMSG_PLAYED_TIME` fires `TIME_PLAYED_MSG(total, level)`
+/// (`0x4018df`), which the stock `ChatFrame_OnEvent` prints as the `TIME_PLAYED_TOTAL` and
+/// `TIME_PLAYED_LEVEL` lines (`ChatFrame.lua:1279`), the answer's one printer. The ask,
+/// `RequestTimePlayed()`, sends inside its call ([`super::ChatSender::request_time_played`]).
 pub(crate) fn played_time_bridge(
     mut hosted_vm: crate::script_calls::HostedVm,
-    commands: Res<NetCommands>,
     answer: Option<ResMut<crate::net::PlayedTimeAnswer>>,
 ) {
     hosted_vm.run(|script| {
         let Some(script) = script else {
             return;
         };
-        for _ in 0..script.take_played_time_asks() {
-            let _ = commands.0.send(crate::net::ClientCommand::PlayedTime);
-        }
         let Some(mut answer) = answer else {
             return;
         };

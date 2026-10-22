@@ -1,8 +1,8 @@
 //! The chat verbs the host applies inside their calls ([`ChatSender`]): `SendChatMessage`
 //! (`0x49f1e0`) past its binding's checks, from the group gates to the packet, the sends of
-//! `RandomRoll` (`0x48c832`), `UninviteByName` (`0x48a669`) and `SendAddonMessage` (`0x49faff`),
-//! and the channel verbs' slots and packets. No slash grammar runs here: an addon sending
-//! `"/dance"` says six characters.
+//! `RandomRoll` (`0x48c832`), `RequestTimePlayed` (`0x48a936`), `UninviteByName` (`0x48a669`) and
+//! `SendAddonMessage` (`0x49faff`), and the channel verbs' slots and packets. No slash grammar runs
+//! here: an addon sending `"/dance"` says six characters.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -55,6 +55,11 @@ impl ChatSender<'_, '_> {
     /// `MSG_RANDOM_ROLL` (`0x48c832`), the binding having checked the range.
     pub(crate) fn random_roll(&self, min: u32, max: u32) {
         let _ = self.commands.0.send(ClientCommand::RandomRoll { min, max });
+    }
+
+    /// `RequestTimePlayed`'s empty `CMSG_PLAYED_TIME` (`0x48a936`).
+    pub(crate) fn request_time_played(&self) {
+        let _ = self.commands.0.send(ClientCommand::PlayedTime);
     }
 
     /// `UninviteByName`'s `CMSG_GROUP_UNINVITE` (`0x48a669`).
@@ -349,6 +354,7 @@ pub(crate) fn run_chat(world: &mut World, lua: &str) -> benilla_ui::mlua::Result
             }
             benilla_ui::script::ScriptCall::Channel(cmd) => sender.channel(script, cmd),
             benilla_ui::script::ScriptCall::Uninvite(name) => sender.uninvite(name),
+            benilla_ui::script::ScriptCall::RequestTimePlayed => sender.request_time_played(),
             benilla_ui::script::ScriptCall::AddonMessage(send) => sender.addon_message(send),
             other => panic!("not a chat call: {other:?}"),
         });

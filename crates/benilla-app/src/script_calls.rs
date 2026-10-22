@@ -233,6 +233,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Channel(cmd) => appliers.p4().p1().channel(script, cmd),
             ScriptCall::DoEmote(request) => appliers.p4().p2().do_emote(request),
             ScriptCall::Uninvite(name) => appliers.p4().p1().uninvite(name),
+            ScriptCall::RequestTimePlayed => appliers.p4().p1().request_time_played(),
             ScriptCall::AddonMessage(send) => appliers.p4().p1().addon_message(send),
             ScriptCall::PickItem(pick) => popup = appliers.p1().pick_item(pick),
             ScriptCall::EnchantConfirm(answer) => popup = appliers.p1().confirm_enchant(answer),

@@ -84,16 +84,13 @@ fn on_toast(In(ev): In<SessionEvent>, mut errors: ResMut<UiErrorTexts>) {
     }
 }
 
-/// Print the `/played` breakdown, and fill the mailbox `feed::played_time_bridge` fires as
-/// `TIME_PLAYED_MSG`.
-fn on_played_time(
-    In(ev): In<SessionEvent>,
-    mut answer: ResMut<PlayedTimeAnswer>,
-    chat_log: Res<ChatLog>,
-) {
+/// Fill the mailbox `feed::played_time_bridge` fires as `TIME_PLAYED_MSG`, the handler's one
+/// event (`0x4018df`): the reference prints nothing to chat itself (its lines go to the console,
+/// `0x401878`-`0x4018c8`), and the stock `ChatFrame_DisplayTimePlayed` prints the answer
+/// (`ChatFrame.lua:1279`).
+fn on_played_time(In(ev): In<SessionEvent>, mut answer: ResMut<PlayedTimeAnswer>) {
     if let SessionEvent::PlayedTime { total, level } = ev {
         answer.0 = Some((total, level));
-        played_time(total, level, &chat_log);
     }
 }
 
@@ -232,23 +229,6 @@ fn area_trigger_message(text: String, errors: &mut UiErrorTexts) {
 fn broadcast(b: Broadcast, chat_log: &ChatLog) {
     info!("net: world broadcast — {b:?}");
     chat_log.push_broadcast(b);
-}
-
-/// The `/played` answer as two system lines, in English, shaped like `TIME_PLAYED_TOTAL` and
-/// `TIME_PLAYED_LEVEL` over `TIME_DAYHOURMINUTESECOND` (`GlobalStrings.lua:4243-4247`).
-fn played_time(total: u32, level: u32, chat_log: &ChatLog) {
-    for (label, secs) in [
-        ("Total time played", total),
-        ("Time played this level", level),
-    ] {
-        let (d, rem) = (secs / 86_400, secs % 86_400);
-        let (h, rem) = (rem / 3_600, rem % 3_600);
-        let (m, sec) = (rem / 60, rem % 60);
-        chat_log.push_event(ChatEvent::text_only(
-            ChatEventKind::System,
-            format!("{label}: {d} days, {h} hours, {m} minutes, {sec} seconds"),
-        ));
-    }
 }
 
 #[cfg(test)]

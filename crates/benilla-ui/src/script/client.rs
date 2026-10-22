@@ -200,15 +200,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `RequestTimePlayed()` queues a `CMSG_PLAYED_TIME` and returns nothing; the answer is the
-    // `TIME_PLAYED_MSG(total, level)` the app fires when `SMSG_PLAYED_TIME` lands.
+    // `RequestTimePlayed()` (`0x48a900`) sends the empty `CMSG_PLAYED_TIME` (0x1cc, `0x48a936`)
+    // inside the call and returns nothing; the answer is the `TIME_PLAYED_MSG(total, level)` the
+    // app fires when `SMSG_PLAYED_TIME` lands (`0x4018df`).
     g.set(
         "RequestTimePlayed",
         lua.create_function(|lua, ()| {
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .played_time_asks += 1;
-            Ok(())
+            super::calls::submit(lua, super::ScriptCall::RequestTimePlayed)
         })?,
     )?;
 
@@ -237,10 +235,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 }
 
 impl super::UiScript {
-    /// Drain the `RequestTimePlayed()` asks, each a `CMSG_PLAYED_TIME`: a count, as the request
-    /// body is empty.
+    /// The `RequestTimePlayed()` sends a harness's VM kept ([`Self::keep_calls`]): a count, as the
+    /// request body is empty.
     pub fn take_played_time_asks(&mut self) -> u32 {
-        std::mem::take(&mut self.model_mut().played_time_asks)
+        self.take_calls_where(|call| {
+            matches!(call, super::ScriptCall::RequestTimePlayed).then_some(())
+        })
+        .len() as u32
     }
 
     /// Drain the `OpeningCinematic()` calls, each an empty `CMSG_OPENING_CINEMATIC`.
