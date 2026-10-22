@@ -279,3 +279,136 @@ fn a_log_reward_of_inventory_type_zero_reads_quality_minus_one() {
         );
     }
 }
+
+/// The headers by title, each with whether it reads collapsed.
+fn headers(s: &UiScript) -> Vec<(String, bool)> {
+    s.eval::<Vec<String>>(
+        "local t = {} for i = 1, GetNumQuestLogEntries() do \
+           local title, _, _, header, collapsed = GetQuestLogTitle(i) \
+           if header then table.insert(t, (collapsed == 1 and '+' or '-') .. title) end \
+         end return t",
+    )
+    .unwrap()
+    .into_iter()
+    .map(|h| (h[1..].to_string(), h.starts_with('+')))
+    .collect()
+}
+
+/// The same slots again, which rebuilds the list (`0x4de510`).
+fn rebuild(s: &mut UiScript, ids: &[u32]) {
+    let mut slots = [Default::default(); super::QUEST_LOG_SLOTS];
+    for (i, &id) in ids.iter().enumerate() {
+        slots[i] = slot(id, 0, 0);
+    }
+    s.quest_log_changed(slots);
+}
+
+/// Each header's fold is its own bit of `0xbb748c`, by its place among the sorted ids
+/// (`0x4ded8e`): two groups that share a name fold apart.
+#[test]
+fn two_groups_of_one_name_fold_apart() {
+    let mut s = UiScript::new().unwrap();
+    seat(
+        &mut s,
+        &[
+            (10, record("Wolves", 5, 12, "Elwynn Forest"), slot(10, 0, 0)),
+            (11, record("Bears", 5, 99, "Elwynn Forest"), slot(11, 0, 0)),
+        ],
+    );
+    s.run("CollapseQuestHeader(1)").unwrap();
+    assert_eq!(
+        headers(&s),
+        [
+            ("Elwynn Forest".to_string(), true),
+            ("Elwynn Forest".to_string(), false)
+        ]
+    );
+}
+
+/// A rebuild snapshots each old id as it is when folded and negated when open (`0x4de5bc`,
+/// `0x4de5c4`), opens every header (`0x4de608`), and folds each new id equal to a snapshot
+/// entry (`0x4de777`, `0x4de78d`): an open group 0 matches its own snapshot and folds.
+#[test]
+fn a_rebuild_folds_the_group_of_id_zero() {
+    let mut s = UiScript::new().unwrap();
+    seat(
+        &mut s,
+        &[
+            (10, record("Wolves", 5, 0, "Misc"), slot(10, 0, 0)),
+            (11, record("Bears", 5, 12, "Elwynn Forest"), slot(11, 0, 0)),
+        ],
+    );
+    assert_eq!(
+        headers(&s),
+        [
+            ("Misc".to_string(), false),
+            ("Elwynn Forest".to_string(), false)
+        ]
+    );
+    rebuild(&mut s, &[10, 11]);
+    assert_eq!(
+        headers(&s),
+        [
+            ("Misc".to_string(), true),
+            ("Elwynn Forest".to_string(), false)
+        ]
+    );
+}
+
+/// The negated snapshot of an open group `N` is `-N`, which a group of id `-N` matches: after a
+/// rebuild, open zone 12 and open sort -12 both fold, and a folded group stays folded.
+#[test]
+fn a_rebuild_folds_by_id_through_the_negated_snapshot() {
+    let mut s = UiScript::new().unwrap();
+    seat(
+        &mut s,
+        &[
+            (10, record("Wolves", 5, 12, "Elwynn Forest"), slot(10, 0, 0)),
+            (11, record("Bears", 5, -12, "Seasonal"), slot(11, 0, 0)),
+            (12, record("Boars", 5, 40, "Westfall"), slot(12, 0, 0)),
+        ],
+    );
+    // Westfall, the third header, folds.
+    s.run("CollapseQuestHeader(5)").unwrap();
+    rebuild(&mut s, &[10, 11, 12]);
+    assert_eq!(
+        headers(&s),
+        [
+            ("Elwynn Forest".to_string(), true),
+            ("Seasonal".to_string(), true),
+            ("Westfall".to_string(), true)
+        ]
+    );
+}
+
+/// The mask and the header ids are engine globals a `/reload` keeps: a new VM seated from the
+/// old one's carry folds by the old snapshot at its first rebuild.
+#[test]
+fn the_folds_outlive_the_vm_by_id() {
+    let mut s = UiScript::new().unwrap();
+    seat(
+        &mut s,
+        &[
+            (10, record("Wolves", 5, 12, "Elwynn Forest"), slot(10, 0, 0)),
+            (11, record("Bears", 5, 99, "Elwynn Forest"), slot(11, 0, 0)),
+        ],
+    );
+    s.run("CollapseQuestHeader(1)").unwrap();
+    let carry = s.quest_log_carry();
+    let mut t = UiScript::new().unwrap();
+    t.seed_quest_log_carry(carry);
+    seat(
+        &mut t,
+        &[
+            (10, record("Wolves", 5, 12, "Elwynn Forest"), slot(10, 0, 0)),
+            (11, record("Bears", 5, 99, "Elwynn Forest"), slot(11, 0, 0)),
+        ],
+    );
+    assert_eq!(
+        headers(&t),
+        [
+            ("Elwynn Forest".to_string(), true),
+            ("Elwynn Forest".to_string(), false)
+        ]
+    );
+}

@@ -939,6 +939,26 @@ mod tests {
         );
     }
 
+    /// The row selects take a number or numeric string (`0x501ca8`, `0x501ce8`), truncated
+    /// (`0x501cbd`), and raise their own usage for anything else (`0x84ed60`, `0x84ed84`); a row
+    /// of 0 or below reaches the host, whose unsigned bound refuses it.
+    #[test]
+    fn the_row_selects_read_their_number_as_the_reference_does() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.run("SelectAvailableQuest(0) SelectActiveQuest(-1) SelectAvailableQuest('2.7')")
+            .unwrap();
+        let select = |active, index| QuestCall::Select(QuestSelect { active, index });
+        assert_eq!(
+            s.take_quest_calls(),
+            [select(false, 0), select(true, u32::MAX), select(false, 2)]
+        );
+        for verb in ["SelectAvailableQuest", "SelectActiveQuest"] {
+            let err = s.run(&format!("{verb}('x')")).unwrap_err().to_string();
+            assert!(err.contains(&format!("Usage: {verb}(index)")), "{err}");
+        }
+    }
+
     /// `GetQuestReward` (`0x501d80`) passes `trunc(n) - 1`, signed (`0x501da8`), and -1 for an
     /// absent or non-number argument (`0x501d89`); `0x5015b0` judges it in the host.
     #[test]

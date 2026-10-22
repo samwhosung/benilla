@@ -57,13 +57,21 @@ impl Client {
         let world = app.world_mut();
         world.spawn((SelfPlayer, Guid(ME), ObjectStore::default()));
         if let Some(flags) = npc_flags {
-            // 147 = `UNIT_NPC_FLAGS` (the descriptor index `unit_npc_flags()` reads).
-            let fields = benilla_protocol::ObjectFields::from_pairs(&[(147, flags)]);
+            // 2 = `OBJECT_FIELD_TYPE`, a creature's mask 9; 147 = `UNIT_NPC_FLAGS`.
+            let fields = benilla_protocol::ObjectFields::from_pairs(&[(2, 9), (147, flags)]);
             let npc = world.spawn((Guid(NPC), ObjectStore(fields))).id();
             world.resource_mut::<GuidIndex>().0.insert(NPC, npc);
         }
         world.insert_non_send_resource(UiScript::new().expect("a VM"));
         Self { app, rx }
+    }
+
+    /// Stream `guid` with the type mask `mask` (`OBJECT_FIELD_TYPE`).
+    pub(crate) fn stream(&mut self, guid: u64, mask: u32) {
+        let world = self.app.world_mut();
+        let fields = benilla_protocol::ObjectFields::from_pairs(&[(2, mask)]);
+        let e = world.spawn((Guid(guid), ObjectStore(fields))).id();
+        world.resource_mut::<GuidIndex>().0.insert(guid, e);
     }
 
     /// Open `view` on `NPC` and run the feed, which pushes it to the VM and fires its event.
@@ -96,6 +104,25 @@ impl Client {
             .world_mut()
             .run_system_cached(super::drain_quest)
             .expect("the drain runs");
+    }
+
+    /// `lua`'s string value, read with no host lent.
+    pub(crate) fn eval(&self, lua: &str) -> String {
+        self.app
+            .world()
+            .non_send_resource::<UiScript>()
+            .eval::<String>(lua)
+            .expect("the chunk runs")
+    }
+
+    /// Take the active player out of the world.
+    pub(crate) fn drop_player(&mut self) {
+        let world = self.app.world_mut();
+        let me = world
+            .query_filtered::<Entity, With<SelfPlayer>>()
+            .single(world)
+            .expect("the player");
+        world.despawn(me);
     }
 
     /// What went on the wire since the last read.
@@ -361,7 +388,20 @@ fn decline_after(
     close_on_cancel: u32,
     lua: &str,
 ) -> (Vec<String>, bool) {
+    decline_on(npc_flags, (source, None), close_on_cancel, lua)
+}
+
+/// [`decline_after`] with the source streamed under the type mask beside it, if any.
+fn decline_on(
+    npc_flags: Option<u32>,
+    (source, mask): (u64, Option<u32>),
+    close_on_cancel: u32,
+    lua: &str,
+) -> (Vec<String>, bool) {
     let mut c = Client::streaming(npc_flags);
+    if let Some(mask) = mask {
+        c.stream(source, mask);
+    }
     c.open_on(source, detail());
     // The latch is written by the packet, after the open (as `net::quest_detail` does).
     c.app
@@ -386,7 +426,8 @@ fn every_way_out_of_a_shared_quest_answers_the_sharer() {
         }
     );
     for verb in ["DeclineQuest()", "CloseQuest()"] {
-        let (sent, open) = decline_after(None, SHARER, 0, verb);
+        // A player's mask, 0x19.
+        let (sent, open) = decline_on(None, (SHARER, Some(0x19)), 0, verb);
         assert_eq!(
             sent,
             std::slice::from_ref(&decline),
@@ -442,8 +483,9 @@ fn an_unstreamed_giver_ends_the_session_silently() {
 #[test]
 fn declining_an_item_quest_closes_silently() {
     const ITEM: u64 = 0x4000_0000_0000_0099; // HIGHGUID_ITEM
+                                             // An item's mask, 3.
     assert_eq!(
-        decline_after(None, ITEM, 0, "DeclineQuest()"),
+        decline_on(None, (ITEM, Some(3)), 0, "DeclineQuest()"),
         (Vec::new(), false)
     );
 }
@@ -489,4 +531,118 @@ fn an_accept_closes_the_window_on_the_click() {
             false
         )
     );
+}
+
+// ── The pools, the row past them and the confirm ─────────────────────────────
+
+/// The two pools (`0xbdfe60`, `0xbde690`) are written by a greeting and read by the selects
+/// alone, so they outlive the greeting panel, and the window's close, which zeroes the giver's
+/// cell `[0xbe0810]` (`0x501201`) and not the pools: a select then sends for guid 0.
+#[test]
+fn the_pools_outlive_the_greeting_panel_and_the_window() {
+    let mut c = Client::new(0);
+    c.open(greeting());
+    c.open(detail());
+    c.run("SelectAvailableQuest(1)").unwrap();
+    assert_eq!(
+        c.sent(),
+        [format!("QuestgiverQuery {{ npc: {NPC}, quest: 6 }}")]
+    );
+
+    c.open(greeting());
+    c.run("CloseQuest()").unwrap();
+    c.drain();
+    c.app.update();
+    c.sent();
+    c.run("SelectActiveQuest(1)").unwrap();
+    assert_eq!(c.sent(), ["QuestgiverComplete { npc: 0, quest: 5 }"]);
+}
+
+/// The bound is `cmp index,count; ja` on the index less one (`0x5012a8`, `0x501328`), so the
+/// 1-based row one past the pool is taken: the cleared row (`0x500c46`), quest 0, not one-click.
+/// Two past it, and row 0, whose index wraps, send nothing.
+#[test]
+fn the_row_one_past_each_pool_is_its_cleared_row() {
+    for (lua, sent) in [
+        (
+            "SelectActiveQuest(2)",
+            vec![format!("QuestgiverComplete {{ npc: {NPC}, quest: 0 }}")],
+        ),
+        (
+            "SelectAvailableQuest(3)",
+            vec![format!("QuestgiverQuery {{ npc: {NPC}, quest: 0 }}")],
+        ),
+        ("SelectActiveQuest(3)", Vec::new()),
+        ("SelectAvailableQuest(4)", Vec::new()),
+        ("SelectAvailableQuest(0)", Vec::new()),
+    ] {
+        let mut c = Client::new(0);
+        c.open(greeting());
+        c.run(lua).unwrap();
+        assert_eq!(c.sent(), sent, "{lua}");
+    }
+}
+
+/// The world-enter reset zeroes both pools' rows and counts (`0x500b21`-`0x500b5c`).
+#[test]
+fn world_enter_clears_the_pools() {
+    let mut c = Client::new(0);
+    c.open(greeting());
+    super::net::world_enter_reset(&mut c.app.world_mut().resource_mut::<QuestGiver>());
+    c.run("SelectActiveQuest(1)").unwrap();
+    assert_eq!(
+        c.sent(),
+        [format!("QuestgiverComplete {{ npc: {NPC}, quest: 0 }}")]
+    );
+}
+
+/// `ConfirmAcceptQuest` sends `[0xbe0840]` with no test (`0x5021e0`): 0 before any confirm, and
+/// the last confirm's quest, which its packet writes (`0x5019c7`) and nothing clears.
+#[test]
+fn confirm_accept_quest_sends_the_last_confirm_or_zero() {
+    let mut c = Client::new(0);
+    c.run("ConfirmAcceptQuest()").unwrap();
+    assert_eq!(c.sent(), ["QuestConfirmAccept { quest: 0 }"]);
+    crate::net::handlers::dispatch(
+        c.app.world_mut(),
+        vec![benilla_protocol::SessionEvent::QuestConfirmAccept(
+            QuestConfirmAccept {
+                quest_id: 5,
+                title: "Escort".into(),
+                sender: 0x9,
+            },
+        )],
+    );
+    c.run("ConfirmAcceptQuest() ConfirmAcceptQuest()").unwrap();
+    assert_eq!(
+        c.sent(),
+        [
+            "QuestConfirmAccept { quest: 5 }",
+            "QuestConfirmAccept { quest: 5 }"
+        ]
+    );
+}
+
+/// `DeclineQuest` resolves its source first (`0x501423`, `0x50142c`) and does nothing for one
+/// out of view; a streamed item or sharer takes the teardown by its type mask (`0x501496`,
+/// `0x5014a0`).
+#[test]
+fn a_decline_needs_its_source_in_view() {
+    const ITEM: u64 = 0x4000_0000_0000_0099;
+    for source in [SHARER, ITEM] {
+        let (sent, open) = decline_after(None, source, 0, "DeclineQuest()");
+        assert_eq!((sent, open), (Vec::new(), true), "{source:#x} out of view");
+    }
+}
+
+/// The gossip leg needs the active player too (`0x50144e`-`0x50146b`); without one a gossip
+/// unit takes the plain leg, `CMSG_QUESTGIVER_HELLO` (`0x501526`).
+#[test]
+fn a_gossip_units_decline_with_no_player_reopens_the_quest_list() {
+    use crate::target::cursor_mode::npc_flags;
+    let mut c = Client::new(npc_flags::GOSSIP);
+    c.open(detail());
+    c.drop_player();
+    c.run("DeclineQuest()").unwrap();
+    assert_eq!(c.sent(), [format!("QuestgiverHello {{ npc: {NPC} }}")]);
 }

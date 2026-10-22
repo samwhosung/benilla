@@ -50,7 +50,7 @@ fn on_worldport(In(ev): In<SessionEvent>, mut quest: ResMut<QuestGiver>) {
     }
 }
 
-fn world_enter_reset(quest: &mut QuestGiver) {
+pub(super) fn world_enter_reset(quest: &mut QuestGiver) {
     quest.close_on_cancel = 0;
     // The same reset zeroes the chosen reward (`0x500b15`).
     quest.chosen_reward = 0;

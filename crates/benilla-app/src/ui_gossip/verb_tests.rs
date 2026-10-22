@@ -68,3 +68,148 @@ fn each_gossip_verb_is_on_the_wire_before_the_next_line() {
         assert_eq!(c.sent(), [packet, ROLL.to_string()], "{verb}");
     }
 }
+
+/// Records `GOSSIP_SHOW` and `GOSSIP_ENTER_CODE` with their first argument.
+const RECORDER: &str = "SEEN = {} local f = CreateFrame('Frame') \
+    f:RegisterEvent('GOSSIP_SHOW') f:RegisterEvent('GOSSIP_ENTER_CODE') \
+    f:SetScript('OnEvent', function() table.insert(SEEN, event .. ':' .. tostring(arg1)) end)";
+
+/// `NPC`'s menu with `options` and the two quest rows, its text cached when `drawn`.
+fn menu_of(c: &mut Client, options: Vec<GossipOption>, drawn: bool) {
+    let world = c.app.world_mut();
+    {
+        let mut state = world.resource_mut::<GossipState>();
+        if drawn {
+            state.remember_record(
+                7,
+                vec![NpcTextBlock {
+                    probability: 1.0,
+                    male: "Hello".into(),
+                    female: "Hello".into(),
+                }],
+            );
+        }
+        state.open_menu(
+            NPC,
+            7,
+            options,
+            vec![(5, 3, 1, "Active".into()), (6, 5, 1, "Available".into())],
+            0,
+        );
+    }
+    world
+        .run_system_cached(super::feed_gossip)
+        .expect("the feed runs");
+}
+
+fn option(index: u32, coded: bool) -> GossipOption {
+    GossipOption {
+        index,
+        icon: 0,
+        coded,
+        message: format!("Option {index}"),
+    }
+}
+
+/// After its send `SelectGossipOption` resets the slots (`0x4e23f4` → `0x4e26a0`): every option's
+/// index to -1, which the select refuses (`0x4e235f`) and `GetGossipOptions` skips, and every quest
+/// id to 0, which ends both quest scans. The text stays, and no event fires.
+#[test]
+fn an_option_select_resets_the_menus_slots() {
+    let mut c = Client::new(0);
+    menu_of(&mut c, vec![option(3, false), option(4, false)], true);
+    c.run(RECORDER).unwrap();
+    c.sent();
+    c.run("SelectGossipOption(1) SelectGossipOption(2) SelectGossipAvailableQuest(1)")
+        .unwrap();
+    assert_eq!(
+        c.sent(),
+        [format!(
+            "GossipSelectOption {{ guid: {NPC}, option: 3, code: None }}"
+        )]
+    );
+    assert_eq!(
+        c.eval(
+            "return select('#', GetGossipOptions()) .. ',' .. \
+             select('#', GetGossipAvailableQuests()) .. ',' .. \
+             select('#', GetGossipActiveQuests()) .. ',' .. GetGossipText()"
+        ),
+        "0,0,0,Hello"
+    );
+    c.app
+        .world_mut()
+        .run_system_cached(super::feed_gossip)
+        .expect("the feed runs");
+    assert_eq!(c.eval("return table.concat(SEEN, ',')"), "");
+}
+
+/// A coded option and no code fires `GOSSIP_ENTER_CODE` with the 1-based index and sends nothing
+/// (`0x4e2365`-`0x4e237e`); with a code, a string or a number (`0x4e2a60`), the packet carries it
+/// (`0x4e23e4`), and an uncoded option's packet never does (`0x4e23d4`).
+#[test]
+fn a_coded_option_asks_for_its_code_and_sends_it() {
+    let mut c = Client::new(0);
+    menu_of(&mut c, vec![option(4, false), option(3, true)], true);
+    c.run(RECORDER).unwrap();
+    c.sent();
+    c.run("SelectGossipOption(2)").unwrap();
+    assert!(c.sent().is_empty());
+    assert_eq!(
+        c.eval("return table.concat(SEEN, ',')"),
+        "GOSSIP_ENTER_CODE:2"
+    );
+    for (lua, packet) in [
+        (
+            "SelectGossipOption(2, 'open sesame')",
+            format!("GossipSelectOption {{ guid: {NPC}, option: 3, code: Some(\"open sesame\") }}"),
+        ),
+        (
+            "SelectGossipOption(2, 77)",
+            format!("GossipSelectOption {{ guid: {NPC}, option: 3, code: Some(\"77\") }}"),
+        ),
+        (
+            "SelectGossipOption(1, 'unused')",
+            format!("GossipSelectOption {{ guid: {NPC}, option: 4, code: None }}"),
+        ),
+    ] {
+        menu_of(&mut c, vec![option(4, false), option(3, true)], true);
+        c.sent();
+        c.run(lua).unwrap();
+        assert_eq!(c.sent(), [packet], "{lua}");
+    }
+}
+
+/// A slot whose index is -1 is unused (`0x4e235f`), and only 16 slots exist (`0x4e2343`).
+#[test]
+fn an_unused_slot_and_a_slot_past_sixteen_send_nothing() {
+    let mut c = Client::new(0);
+    menu_of(&mut c, vec![option(u32::MAX, false)], true);
+    c.sent();
+    c.run("SelectGossipOption(1)").unwrap();
+    assert!(c.sent().is_empty());
+    menu_of(&mut c, (0..17).map(|i| option(i, false)).collect(), true);
+    c.sent();
+    c.run("SelectGossipOption(17)").unwrap();
+    assert!(c.sent().is_empty());
+}
+
+/// The quest rows' selects test only for the active player (`0x4e250b`, `0x4e2657`), not the
+/// pending greeting the option select waits on, and read the rows the message wrote.
+#[test]
+fn a_quest_row_selects_while_the_text_is_pending_but_not_without_a_player() {
+    let mut c = Client::new(0);
+    menu_of(&mut c, vec![option(3, false)], false);
+    c.sent();
+    c.run("SelectGossipOption(1) SelectGossipActiveQuest(1) SelectGossipAvailableQuest(1)")
+        .unwrap();
+    assert_eq!(
+        c.sent(),
+        [
+            format!("QuestgiverComplete {{ npc: {NPC}, quest: 5 }}"),
+            format!("QuestgiverQuery {{ npc: {NPC}, quest: 6 }}"),
+        ]
+    );
+    c.drop_player();
+    c.run("SelectGossipActiveQuest(1)").unwrap();
+    assert!(c.sent().is_empty());
+}
