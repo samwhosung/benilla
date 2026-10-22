@@ -3,30 +3,35 @@
 //! setter `Z` drives (2 inferred to be the chair sit, vmangos's `UNIT_STAND_STATE_SIT_CHAIR`), and
 //! the toggle refuses on the stand state this frame committed. Both refuse silently, with no
 //! packet, so the `sit` trace tag ([`super::move_trace::posture`]) records each commit and refusal.
+//! Both act on the active player alone (`0x5ed46c`, `0x5eb4ba`), whichever body is driven: under
+//! possession `X`, the `/sit` family and `Z` read and change the character, and the possessed
+//! unit's movement stands nobody.
 
 use benilla_protocol::ObjectFields;
 use bevy::prelude::*;
 
-use super::{move_trace, state, BodyQuery, ClientCommand, NetCommands, Player, StandStateRequest};
+use super::{
+    move_trace, state, BodyQuery, ClientCommand, NetCommands, Player, SelfPosture,
+    StandStateRequest,
+};
 use crate::net::{ObjectStore, SelfPlayer};
 
-/// What the posture verbs read of the player beyond its body's components.
+/// What the posture verbs read of the player beyond its own components.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct PlayerReads {
     /// Our own control lost ([`super::OwnControlLost`]): `IsClientControlled` (`0x5fa5f0`) reads
     /// the unit's `[+0xc58] & 0x400`, which `0x5fa600` writes beside that flag for our character.
     pub(super) control_lost: bool,
-    /// The body holds a precast spell ([`crate::creature_anim::Precast`], `+0xc8c`).
-    pub(super) precast: bool,
 }
 
-/// Runs this frame's stand-state decision and sheath toggle, and returns the committed stand
-/// state: the local commit over the server's echoed byte, which the pose and sheath guard read.
+/// Runs this frame's stand-state decision and sheath toggle on the active player, and returns the
+/// driven body's stand state, which its pose reads: the active player's local commit over its
+/// echoed byte, or a possessed unit's own byte.
 pub(super) fn update(
     player: &mut Player,
     pending: &mut super::StandPending,
     body: &BodyQuery,
-    _me: &super::SelfPosture,
+    me: &SelfPosture,
     binds: &crate::bindings::BindingsState,
     net: &NetCommands,
     commands: &mut Commands,
@@ -39,18 +44,19 @@ pub(super) fn update(
     moving: bool,
     turned: bool,
 ) -> u8 {
+    let me = me.single().ok();
+    let precast = me.is_some_and(|(.., precast, _)| precast);
+    // The driven body is the active player's own, which the movement stand-up needs.
+    let embodied = me.is_some_and(|(.., embodied)| embodied);
     // The echo into `UNIT_FIELD_BYTES_1` drives every observer's pose; `pending`, the local
     // commit ([`apply_locally`]), overlays it until it lands.
-    let (stand_byte, gates) = body
-        .single()
-        .ok()
-        .and_then(|(.., store, _, _, _, _, _)| {
-            store.map(|s| (s.0.unit_stand_state(), stand_gates(&s.0, reads.precast)))
-        })
+    let (stand_byte, gates) = me
+        .and_then(|(_, _, store, ..)| store)
+        .map(|s| (s.0.unit_stand_state(), stand_gates(&s.0, precast)))
         .unwrap_or((
             0,
             state::StandGates {
-                precast: reads.precast,
+                precast,
                 ..default()
             },
         ));
@@ -62,7 +68,7 @@ pub(super) fn update(
     if let Some(s) = server.read().last().map(|m| m.state) {
         let stand_now = pending.stand_state(stand_byte);
         move_trace::posture("server", s, stand_now, player.move_flags());
-        apply_locally(pending, s, stand_now, body, commands, sheath, loot_close);
+        apply_locally(pending, s, stand_now, me, commands, sheath, loot_close);
     }
     let stand_state = pending.stand_state(stand_byte);
     // The queued asks (the `/sit` family) ran in the reference's message pass, before the X key
@@ -77,8 +83,11 @@ pub(super) fn update(
     // though a release within 200 ms is a right-click, whose action stands you. A knockback's move
     // event stands us too (`0x60e139`: `GetStandState` `0x60be50`, then `0x60be30(0)`), read off
     // the latch [`super::wire_in::apply_server_moves`] armed this frame, as the mover runs later.
+    // The wrapper acts on the mover, and only a player (`0x60be39`) that is the active one
+    // (`0x5ed471`): a possessed unit's movement stands nobody.
     let knocked_out_of_it = player.knockback.is_some();
-    if (moving || turned || knocked_out_of_it || binds.fired(crate::bindings::Input::Jump))
+    if embodied
+        && (moving || turned || knocked_out_of_it || binds.fired(crate::bindings::Input::Jump))
         && stand_state != 0
         && request_stand.is_none()
     {
@@ -99,26 +108,25 @@ pub(super) fn update(
         move_trace::posture("REFUSED", s, stand_state, player.move_flags());
         request_stand = None;
     }
-    if let Some(s) = request_stand.filter(|&s| s != stand_state) {
+    // Nothing to sit before our own object streams in: the setter runs on the active player.
+    if let Some(s) = request_stand.filter(|&s| s != stand_state && me.is_some()) {
         move_trace::posture("commit", s, stand_state, player.move_flags());
         // `0x5ed430` sends at `0x5ed501`, then calls the local apply at `0x5ed53f`.
         let _ = net.0.send(ClientCommand::StandStateChange {
             state: u32::from(s),
         });
-        apply_locally(pending, s, stand_state, body, commands, sheath, loot_close);
+        apply_locally(pending, s, stand_state, me, commands, sheath, loot_close);
     }
     let stand_now = pending.stand_state(stand_byte);
     // The sheath toggle (Z) cycles the anim layer's committed sheath state through its one setter
     // ([`crate::creature_anim::SheathRequest`]), which sends `CMSG_SETSHEATHED`; only it plays the
     // ceremony (`bInstant = 0` in `ToggleSheath` `0x5eb480`). No body model yet drops the press.
     if binds.fired(crate::bindings::Input::ToggleSheath) {
-        if let Ok((e, _, _, _, Some((drv, committed)), store, engaged, _, _, wielded, _)) =
-            body.single()
-        {
+        if let Some((e, Some((drv, committed)), store, engaged, wielded, precast, _)) = me {
             let toggle = ToggleGates {
                 control_lost: reads.control_lost,
                 engaged,
-                precast: reads.precast,
+                precast,
                 seated: stand_now != 0,
                 mid_ceremony: drv.sheath_ceremony_active(),
             };
@@ -141,7 +149,15 @@ pub(super) fn update(
         }
     }
 
-    stand_now
+    if embodied || me.is_none() {
+        stand_now
+    } else {
+        // A possessed unit poses by its own byte; the prediction is the active player's.
+        body.single()
+            .ok()
+            .and_then(|(.., store, _, _, _, _, _)| store)
+            .map_or(0, |s| s.0.unit_stand_state())
+    }
 }
 
 /// The active player's posture setters run inside a script call, so their packets leave ahead of
@@ -301,14 +317,13 @@ fn apply_locally(
     pending: &mut super::StandPending,
     s: u8,
     stand_now: u8,
-    body: &BodyQuery,
+    me: Option<SelfPostureItem>,
     commands: &mut Commands,
     sheath: &mut MessageWriter<crate::creature_anim::SheathRequest>,
     loot_close: &mut crate::ui_loot::LootMoveStart,
 ) {
-    let body = body.single().ok();
-    let drawn = body
-        .and_then(|(_, _, _, _, drv, ..)| drv)
+    let drawn = me
+        .and_then(|(_, drv, ..)| drv)
         .and_then(|(_, committed)| committed.state())
         .unwrap_or(0)
         != 0;
@@ -321,7 +336,7 @@ fn apply_locally(
         loot_close.0 = true;
         commands.run_system_cached(stop_attack_for_stand_state);
     }
-    if let (true, Some((e, ..))) = (apply.stow, body) {
+    if let (true, Some((e, ..))) = (apply.stow, me) {
         sheath.write(crate::creature_anim::SheathRequest {
             entity: e,
             state: 0,
@@ -329,6 +344,20 @@ fn apply_locally(
         });
     }
 }
+
+/// One row of [`SelfPosture`], the active player as the posture verbs read it.
+type SelfPostureItem<'a> = (
+    Entity,
+    Option<(
+        &'a crate::creature_anim::AnimDriver,
+        &'a crate::creature_anim::CommittedSheath,
+    )>,
+    Option<&'a crate::net::ObjectStore>,
+    bool,
+    Option<&'a crate::creature_anim::Wielded>,
+    bool,
+    bool,
+);
 
 /// What the local apply (`0x6127b0`) does for state `s` over the committed `stand_now`, with the
 /// body's weapons `drawn` or not.

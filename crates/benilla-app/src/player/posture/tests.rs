@@ -211,7 +211,7 @@ fn a_sit_closes_the_loot_and_stops_the_attack_and_a_stand_does_neither() {
         world
             .run_system_once(
                 move |mut player: ResMut<crate::player::StandPending>,
-                      body: super::BodyQuery,
+                      me: super::super::SelfPosture,
                       mut commands: Commands,
                       mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
                       mut loot: ResMut<crate::ui_loot::LootMoveStart>| {
@@ -219,7 +219,7 @@ fn a_sit_closes_the_loot_and_stops_the_attack_and_a_stand_does_neither() {
                         &mut player,
                         s,
                         stand_now,
-                        &body,
+                        me.single().ok(),
                         &mut commands,
                         &mut sheath,
                         &mut loot,
@@ -317,6 +317,7 @@ fn under_possession_the_posture_verbs_act_on_the_active_player() {
     let (tx, rx) = crossbeam_channel::unbounded();
     world.insert_resource(NetCommands(tx));
     world.init_resource::<super::Player>();
+    world.init_resource::<crate::player::StandPending>();
     world.init_resource::<crate::ui_loot::LootMoveStart>();
     world.init_resource::<crate::bindings::BindingsState>();
     world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
@@ -331,13 +332,14 @@ fn under_possession_the_posture_verbs_act_on_the_active_player() {
         .id();
     world.spawn((Embodied, Transform::default(), ObjectStore(alive(&[]))));
 
-    let mut frame = |world: &mut World, ask: Option<u8>, moving: bool| -> (u8, Vec<String>) {
+    let frame = |world: &mut World, ask: Option<u8>, moving: bool| -> (u8, Vec<String>) {
         if let Some(state) = ask {
             world.write_message(super::StandStateRequest { state });
         }
         let stand = world
             .run_system_once(
                 move |mut player: ResMut<super::Player>,
+                      mut pending: ResMut<crate::player::StandPending>,
                       body: super::BodyQuery,
                       me: super::super::SelfPosture,
                       binds: Res<crate::bindings::BindingsState>,
@@ -349,6 +351,7 @@ fn under_possession_the_posture_verbs_act_on_the_active_player() {
                       mut server: MessageReader<super::super::ServerStandState>| {
                     super::update(
                         &mut player,
+                        &mut pending,
                         &body,
                         &me,
                         &binds,
@@ -383,7 +386,7 @@ fn under_possession_the_posture_verbs_act_on_the_active_player() {
     let (stand, sent) = frame(&mut world, Some(1), false);
     assert_eq!(sent, ["StandStateChange { state: 1 }"], "the priest sits");
     assert_eq!(stand, 0, "the creature poses by its own byte");
-    assert_eq!(world.resource::<super::Player>().stand_pending, Some(1));
+    assert_eq!(world.resource::<crate::player::StandPending>().0, Some(1));
     assert_eq!(
         frame(&mut world, None, true).1,
         Vec::<String>::new(),
