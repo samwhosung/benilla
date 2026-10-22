@@ -132,10 +132,12 @@ fn load_macros(
         files.character = crate::local_state::macros_character_path(realm, character);
         *files.identity.get(script) = Some(id.clone());
 
-        let read = |path: &Option<std::path::PathBuf>| -> Vec<benilla_ui::script::MacroView> {
+        let read = |path: &Option<std::path::PathBuf>,
+                    per_character: bool|
+         -> Vec<benilla_ui::script::MacroView> {
             let Some(path) = path else { return Vec::new() };
             match std::fs::read_to_string(path) {
-                Ok(text) => store::parse(&text),
+                Ok(text) => store::parse(&text, per_character),
                 // Absent is the first run, not a failure.
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
                 Err(e) => {
@@ -144,9 +146,9 @@ fn load_macros(
                 }
             }
         };
-        let character_records = read(&files.character);
+        let character_records = read(&files.character, true);
         let moves = store::legacy_character_words(&character_records);
-        let state = MacroState::from_scopes(read(&files.account), character_records);
+        let state = MacroState::from_scopes(read(&files.account, false), character_records);
         info!(
             "ui_macro: {} account + {} character macros for {character} on {realm}",
             state.count(false),

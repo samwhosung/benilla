@@ -147,3 +147,59 @@ mod tests {
         assert_eq!(sent, [(0, 0), (2, 0), (4, 0), (5, 0)], "lowest first");
     }
 }
+
+#[cfg(test)]
+mod order_tests {
+    use crate::game_plugins::schedule_tests::{
+        census, headless_client, type_names_available, SyncPoints,
+    };
+    use bevy::ecs::schedule::SystemKey;
+    use bevy::prelude::*;
+    use std::collections::{HashMap, HashSet};
+
+    /// The supersede's unlearn clears what still stands for the old rank after `0x4e5e60` moved the
+    /// rest, so the clear runs after the rank pass, which stands in for that move on spell slots,
+    /// and both bar writers run before the identity feed that consumes their `dirty`.
+    #[test]
+    fn the_unlearn_clear_runs_after_the_rank_pass_and_before_the_feed() {
+        let mut app = headless_client();
+        let c = census(&mut app, Update, SyncPoints::Declared);
+        if !type_names_available(&c) {
+            eprintln!(
+                "skipped: this build carries no type names (bevy/debug rides with the dev feature)"
+            );
+            return;
+        }
+        let one = |suffix: &str| -> SystemKey {
+            let mut hits = c.systems.iter().filter(|(_, s)| s.name.ends_with(suffix));
+            match (hits.next(), hits.next()) {
+                (Some((k, _)), None) => *k,
+                _ => panic!("exactly one system named `…{suffix}` in Update"),
+            }
+        };
+        let mut succ: HashMap<SystemKey, Vec<SystemKey>> = HashMap::new();
+        for (a, b) in &c.dependencies {
+            succ.entry(*a).or_default().push(*b);
+        }
+        let reach = |start: SystemKey| {
+            let mut seen = HashSet::new();
+            let mut stack = vec![start];
+            while let Some(n) = stack.pop() {
+                for m in succ.get(&n).into_iter().flatten() {
+                    if seen.insert(*m) {
+                        stack.push(*m);
+                    }
+                }
+            }
+            seen
+        };
+        let ranks = one("::ui_action::ranks::normalize_action_ranks");
+        let clear = one("::ui_action::unlearn::clear_unlearned_slots");
+        let feed = one("::ui_action::feed::feed_actions");
+        assert!(
+            reach(ranks).contains(&clear),
+            "the clear runs after the rank pass"
+        );
+        assert!(reach(clear).contains(&feed), "and before the identity feed");
+    }
+}

@@ -56,8 +56,8 @@ fn a_saved_macro_table_round_trips_through_benilla_macros() {
     );
 
     let back = MacroState::from_scopes(
-        super::store::parse(&std::fs::read_to_string(&account).unwrap()),
-        super::store::parse(&std::fs::read_to_string(&character).unwrap()),
+        super::store::parse(&std::fs::read_to_string(&account).unwrap(), false),
+        super::store::parse(&std::fs::read_to_string(&character).unwrap(), true),
     );
     assert_eq!(back, state);
     std::fs::remove_dir_all(&tmp).ok();
@@ -511,7 +511,7 @@ fn a_save_writes_the_sorted_table_and_a_load_sorts_it_again() {
         text.starts_with("MACRO 2 \"B\""),
         "the table's order: {text}"
     );
-    let loaded = MacroState::from_scopes(super::store::parse(&text), Vec::new());
+    let loaded = MacroState::from_scopes(super::store::parse(&text, false), Vec::new());
     assert_eq!(loaded.get(1).unwrap().name, "b");
     std::fs::remove_dir_all(&tmp).ok();
 }
@@ -807,4 +807,103 @@ fn a_superseded_rank_rewrites_the_cached_spell_of_a_macro_on_the_bar() {
         (bound_of(&app, 1), bound_of(&app, 2)),
         (BoundSpell::Spell(205), BoundSpell::Spell(116))
     );
+}
+
+/// A supersede waits for the VM and the alias table: the pairs are applied by the first pass that
+/// runs, not dropped by the passes that cannot.
+#[test]
+fn a_supersede_with_no_table_yet_is_kept_for_the_first_pass() {
+    use super::run::BoundSpell;
+    use benilla_protocol::messages::{ActionButton, ACTION_KIND_MACRO};
+    let mut script = UiScript::new().unwrap();
+    script.set_spellbook(benilla_ui::script::SpellBookState {
+        tabs: Vec::new(),
+        slots: vec![book_slot(116, "Frostbolt")],
+    });
+    script.set_macros(MacroState::from_scopes(
+        vec![macro_view("Bar", "/cast Frostbolt")],
+        Vec::new(),
+    ));
+    let mut app = rebind_app(script);
+    app.world_mut()
+        .resource_mut::<crate::ui_action::PlayerActions>()
+        .buttons
+        .insert(
+            4,
+            ActionButton {
+                slot: 4,
+                action: 1,
+                kind: ACTION_KIND_MACRO,
+            },
+        );
+    app.update();
+    assert_eq!(bound_of(&app, 1), BoundSpell::Spell(116));
+
+    let table = app
+        .world_mut()
+        .remove_resource::<crate::ui_chat::commands::SlashCommands>()
+        .unwrap();
+    app.world_mut()
+        .resource_mut::<crate::ui_action::PlayerActions>()
+        .superseded
+        .push((116, 205));
+    app.update();
+    app.world_mut().insert_resource(table);
+    app.update();
+    assert_eq!(bound_of(&app, 1), BoundSpell::Spell(205));
+}
+
+/// `EditMacroRecord` derives the record inside the call (`0x4f1313`), against the book as it
+/// stands then: a `/cast Frostbolt(Rank 1)` edited while rank 1 is known binds it, and a
+/// supersede arriving after the call moves it to rank 2 (`0x4e5ec4`). Derived a frame late,
+/// against the book the supersede left, it would find no rank 1.
+#[test]
+fn an_edit_derives_against_the_book_at_its_call() {
+    use super::run::BoundSpell;
+    use benilla_protocol::messages::{ActionButton, ACTION_KIND_MACRO};
+    let ranked = |id: u32, rank: &str| benilla_ui::script::SpellSlotView {
+        rank: Some(rank.into()),
+        ..book_slot(id, "Frostbolt")
+    };
+    let mut script = UiScript::new().unwrap();
+    script.set_spellbook(benilla_ui::script::SpellBookState {
+        tabs: Vec::new(),
+        slots: vec![ranked(116, "Rank 1")],
+    });
+    script.set_macros(MacroState::from_scopes(
+        vec![macro_view("Bar", "/say hi")],
+        Vec::new(),
+    ));
+    let mut app = rebind_app(script);
+    app.world_mut()
+        .resource_mut::<crate::ui_action::PlayerActions>()
+        .buttons
+        .insert(
+            4,
+            ActionButton {
+                slot: 4,
+                action: 1,
+                kind: ACTION_KIND_MACRO,
+            },
+        );
+    app.update();
+    assert_eq!(bound_of(&app, 1), BoundSpell::None);
+
+    app.world_mut()
+        .non_send_resource::<UiScript>()
+        .run("EditMacro(1, nil, nil, '/cast Frostbolt(Rank 1)')")
+        .unwrap();
+    // The next packet: rank 2 supersedes rank 1.
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .set_spellbook(benilla_ui::script::SpellBookState {
+            tabs: Vec::new(),
+            slots: vec![ranked(205, "Rank 2")],
+        });
+    app.world_mut()
+        .resource_mut::<crate::ui_action::PlayerActions>()
+        .superseded
+        .push((116, 205));
+    app.update();
+    assert_eq!(bound_of(&app, 1), BoundSpell::Spell(205));
 }

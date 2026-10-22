@@ -58,7 +58,8 @@ pub(super) const ICON_PREFIX: &str = "Interface\\Icons\\";
 /// (`0x4f09d3`), where the body is stored (`0x4f09e4`): a record the file ends inside keeps an
 /// empty body. The table that takes the records skips what the scope cannot hold and any id it
 /// has, and gives an id below its base the base (`MacroState::from_scopes`).
-pub(super) fn parse(text: &str) -> Vec<MacroView> {
+pub(super) fn parse(text: &str, per_character: bool) -> Vec<MacroView> {
+    let _ = per_character;
     let mut out: Vec<MacroView> = Vec::new();
     // The open record, its index in `out`, and the body read so far.
     let mut open: Option<(usize, String)> = None;
@@ -180,7 +181,7 @@ mod tests {
 
     #[test]
     fn a_real_1_12_macros_cache_file_parses_in_file_order_with_its_ids() {
-        let macros = parse(REAL_112_FILE);
+        let macros = parse(REAL_112_FILE, false);
         assert_eq!(macros.len(), 3);
         // The file's order is the list order; the ids are the file's own.
         let seen: Vec<(u32, &str)> = macros.iter().map(|m| (m.id, m.name.as_str())).collect();
@@ -199,14 +200,14 @@ mod tests {
 
     #[test]
     fn write_then_parse_round_trips_and_matches_the_reference_shape() {
-        let macros = parse(REAL_112_FILE);
+        let macros = parse(REAL_112_FILE, false);
         let text = write(macros.iter());
         // The reference's line shape, each record under its own id.
         assert!(text.starts_with("MACRO 1 \"f\" Ability_Ambush\n"));
         assert!(text.contains("\nMACRO 3 \"ns\" Ability_BackStab\n"));
         assert!(text.contains("\nMACRO 2 \"w\" Ability_Creature_Cursed_05\n"));
         assert!(text.ends_with("END\n"));
-        assert_eq!(parse(&text), macros, "round trip");
+        assert_eq!(parse(&text, false), macros, "round trip");
         assert_eq!(text, REAL_112_FILE, "the file as it was read");
     }
 
@@ -221,7 +222,7 @@ mod tests {
         }];
         let text = write(m.iter());
         assert_eq!(text, "MACRO 1 \"bare\" \nEND\n");
-        assert_eq!(parse(&text), m);
+        assert_eq!(parse(&text, false), m);
     }
 
     /// A file truncated before its last `END` still yields that macro, with an empty body: the
@@ -239,7 +240,7 @@ mod tests {
              END\n\
              MACRO 3 \"truncated\" Ability_Ambush\n\
              /say bye\n";
-        let macros = parse(text);
+        let macros = parse(text, false);
         assert_eq!(macros.len(), 2);
         assert_eq!((macros[0].id, macros[0].name.as_str()), (2, "good"));
         assert_eq!((macros[1].id, macros[1].name.as_str()), (3, "truncated"));
@@ -262,7 +263,7 @@ mod tests {
              MACRO 3 \"c\" Ability_Ambush\n\
              \x20 /say three \n\
              End\n";
-        let macros = parse(text);
+        let macros = parse(text, false);
         let seen: Vec<(u32, &str)> = macros.iter().map(|m| (m.id, m.body.as_str())).collect();
         assert_eq!(
             seen,
@@ -277,7 +278,7 @@ mod tests {
     /// case (`0x4f06c1`, `0x4f06d7`).
     #[test]
     fn a_header_is_read_without_case() {
-        let macros = parse("  macro 7 \"m\" Ability_Ambush\n/say hi\nEND\n");
+        let macros = parse("  macro 7 \"m\" Ability_Ambush\n/say hi\nEND\n", false);
         assert_eq!(macros.len(), 1);
         assert_eq!((macros[0].id, macros[0].body.as_str()), (7, "/say hi\n"));
     }
@@ -314,11 +315,11 @@ mod tests {
             text,
             "MACRO 4 \"say \"hi\"\" Ability_Ambush\n/say hi\nEND\n"
         );
-        let back = parse(&text);
+        let back = parse(&text, false);
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].name, "say ");
         assert_eq!(back[0].texture.as_deref(), Some("Interface\\Icons\\hi"));
-        let empty = parse("MACRO 2 \"\" Ability_Ambush\n/say x\nEND\n");
+        let empty = parse("MACRO 2 \"\" Ability_Ambush\n/say x\nEND\n", false);
         assert_eq!(
             empty.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(),
             [""],
@@ -332,13 +333,66 @@ mod tests {
     /// a negative id below the scope's base gets the base added (`0x4f0737`, a signed compare).
     #[test]
     fn the_id_is_read_as_sstrtoint_reads_it() {
-        let macros =
-            parse("MACRO 12x \"a\" Ability_Ambush\nEND\nMACRO -5 \"b\" Ability_Ambush\nEND\n");
+        let macros = parse(
+            "MACRO 12x \"a\" Ability_Ambush\nEND\nMACRO -5 \"b\" Ability_Ambush\nEND\n",
+            true,
+        );
         let ids: Vec<u32> = macros.iter().map(|m| m.id).collect();
         assert_eq!(ids, [12, (-5i32) as u32]);
         let state = MacroState::from_scopes(Vec::new(), macros);
         let ids: Vec<u32> = state.saved(true).iter().map(|m| m.id).collect();
         assert_eq!(ids, [CHARACTER_ID_BASE + 12, CHARACTER_ID_BASE - 5]);
+    }
+
+    /// A header whose id the table holds opens no record (`0x4f0789` into `0x4f0a30`), so the
+    /// reader looks for a header on the next line: a `MACRO` line in that body is one. Before
+    /// that, a full scope opens none either (`0x4f06f8`).
+    #[test]
+    fn a_header_with_an_id_already_read_opens_no_record() {
+        let text = "MACRO 1 \"a\" Ability_Ambush\n/say a\nEND\n\
+             MACRO 1 \"b\" Ability_Ambush\n\
+             MACRO 2 \"c\" Ability_Ambush\n/say c\nEND\n";
+        let seen: Vec<(u32, String, String)> = parse(text, false)
+            .into_iter()
+            .map(|m| (m.id, m.name, m.body))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (1, "a".to_string(), "/say a\n".to_string()),
+                (2, "c".to_string(), "/say c\n".to_string())
+            ]
+        );
+        // A character file's small id is the same record as its full one (`0x4f0737` first).
+        let text = format!(
+            "MACRO {} \"a\" Ability_Ambush\nEND\nMACRO 1 \"b\" Ability_Ambush\n\
+             MACRO 2 \"c\" Ability_Ambush\nEND\n",
+            CHARACTER_ID_BASE + 1
+        );
+        let names: Vec<String> = parse(&text, true).into_iter().map(|m| m.name).collect();
+        assert_eq!(names, ["a", "c"]);
+        let full: String = (1..=19)
+            .map(|i| format!("MACRO {i} \"m{i}\" Ability_Ambush\nEND\n"))
+            .chain([
+                "MACRO 30 \"late\" Ability_Ambush\nMACRO 31 \"x\" Ability_Ambush\nEND\n".into(),
+            ])
+            .collect();
+        let ids: Vec<u32> = parse(&full, false).into_iter().map(|m| m.id).collect();
+        assert_eq!(ids, (1..=18).collect::<Vec<u32>>(), "nothing past the 18th");
+    }
+
+    /// The header is formatted with `%d` (`0x84cb60`, pushed at `0x4f0b61`): an id is written
+    /// signed.
+    #[test]
+    fn the_writer_writes_the_id_signed() {
+        let m = [MacroView {
+            id: (-5i32) as u32,
+            name: "n".into(),
+            texture: None,
+            body: String::new(),
+            local_only: false,
+        }];
+        assert_eq!(write(m.iter()), "MACRO -5 \"n\" \nEND\n");
     }
 
     /// The reader's line buffer and the writer's are 0x100 bytes (`0x4f0677`, `0x4f0b93`), so each
@@ -348,7 +402,7 @@ mod tests {
         let long = "a".repeat(300);
         let wide = "\u{e9}".repeat(200);
         let text = format!("MACRO 1 \"m\" Ability_Ambush\n{long}\n{wide}\nEND\n");
-        let body = &parse(&text)[0].body;
+        let body = &parse(&text, false)[0].body;
         assert_eq!(
             body,
             &format!("{}\n{}\n", "a".repeat(255), "\u{e9}".repeat(127))
@@ -373,7 +427,7 @@ mod tests {
     #[test]
     fn a_full_path_icon_token_is_taken_whole() {
         let text = "MACRO 1 \"custom\" Interface\\Buttons\\UI-Panel-Button\nEND\n";
-        let macros = parse(text);
+        let macros = parse(text, false);
         assert_eq!(
             macros[0].texture.as_deref(),
             Some("Interface\\Buttons\\UI-Panel-Button")
@@ -388,7 +442,7 @@ mod tests {
         let text: String = (1..=25)
             .map(|i| format!("MACRO {i} \"m{i}\" Ability_Ambush\nEND\n"))
             .collect();
-        let state = MacroState::from_scopes(parse(&text), Vec::new());
+        let state = MacroState::from_scopes(parse(&text, false), Vec::new());
         assert_eq!(state.count(false), MAX_MACROS);
         assert_eq!(state.count(true), 0);
     }
@@ -398,13 +452,13 @@ mod tests {
     #[test]
     fn a_character_file_with_small_ids_is_rebased_and_saved_with_the_full_id() {
         let text = "MACRO 1 \"mine\" Ability_Ambush\n/say hi\nEND\n";
-        let state = MacroState::from_scopes(Vec::new(), parse(text));
+        let state = MacroState::from_scopes(Vec::new(), parse(text, true));
         let saved = write(state.saved(true).into_iter());
         assert!(
             saved.starts_with("MACRO 16777217 \"mine\" Ability_Ambush\n"),
             "{saved}"
         );
-        let again = MacroState::from_scopes(Vec::new(), parse(&saved));
+        let again = MacroState::from_scopes(Vec::new(), parse(&saved, true));
         assert_eq!(again, state, "the full id loads as itself");
     }
 }

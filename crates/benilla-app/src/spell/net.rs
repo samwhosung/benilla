@@ -1852,6 +1852,12 @@ mod tests {
         let mut flash = LearnedInTab::default();
         superceded_spell(78, 284, &mut actions, Some(&spells), &errors, &mut flash);
 
+        assert_eq!(
+            actions.unlearned,
+            [78],
+            "the handler's `UnlearnSpell(old, 1)` clears what still stands for the old rank \
+             (`0x5e6392` into `0x5e9fe0`, `0x5ea253`)"
+        );
         assert_eq!(errors.len(), 1, "one line for a rank-up, not two");
         assert_eq!(
             flash.0,
