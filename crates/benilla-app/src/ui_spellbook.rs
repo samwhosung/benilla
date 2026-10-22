@@ -47,6 +47,10 @@ const GENERAL_TAB_ICON: &str = "Interface\\Icons\\Ability_Kick";
 #[derive(Resource, Default)]
 pub(crate) struct LearnedInTab(pub(crate) Vec<u32>);
 
+/// The book's feed, which the macros' bound spells read after ([`crate::ui_macro`]).
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct BookFeed;
+
 pub(crate) struct UiSpellbookPlugin;
 
 impl Plugin for UiSpellbookPlugin {
@@ -59,6 +63,7 @@ impl Plugin for UiSpellbookPlugin {
                 // re-read its cooldowns. A click's cast is a script call (`cast_spell`).
                 feed_spellbook
                     .in_set(UnitFeed)
+                    .in_set(BookFeed)
                     .before(crate::ui_action::CooldownEvents)
                     .before(crate::ui_cast::feed_cast_reports),
             );

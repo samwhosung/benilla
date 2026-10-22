@@ -73,6 +73,31 @@ pub struct MacroBinding {
     pub pet_book: bool,
 }
 
+/// The bound-spell derivations (`0x4efe00`) the table owes, which the app makes: it holds the
+/// spell catalog and the alias table. The reference derives inside the worker that owes one.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MacroDerives {
+    /// The table was loaded, which derives every record (`0x4f0a55` into `0x4f0ca0`); each is new,
+    /// with its book selector clear (`0x4f1ca0`).
+    pub loaded: bool,
+    /// The records made since, by id, each derived alone (`0x4f123c`), its selector clear.
+    pub created: Vec<u32>,
+    /// The records edited since, by id, each derived alone (`0x4f1313`), keeping its selector.
+    pub edited: Vec<u32>,
+}
+
+impl MacroDerives {
+    /// Whether `id` is owed a derivation.
+    pub fn owes(&self, id: u32) -> bool {
+        self.loaded || self.created.contains(&id) || self.edited.contains(&id)
+    }
+
+    /// Whether `id` is a new record, whose selector starts clear.
+    pub fn is_new(&self, id: u32) -> bool {
+        self.loaded || self.created.contains(&id)
+    }
+}
+
 /// A record and the scope it belongs to (`rec+0x1c`).
 #[derive(Clone, Debug, PartialEq)]
 struct Record {
@@ -272,6 +297,15 @@ impl super::UiScript {
         model.macros = state;
         model.macros_dirty = false;
         model.macros_generation += 1;
+        model.macro_derives = MacroDerives {
+            loaded: true,
+            ..Default::default()
+        };
+    }
+
+    /// Take the derivations owed since the last take ([`MacroDerives`]).
+    pub fn take_macro_derives(&mut self) -> MacroDerives {
+        std::mem::take(&mut self.model_mut().macro_derives)
     }
 
     /// The live table, for the app's save.
@@ -352,6 +386,7 @@ fn create_macro(
             local_only,
         },
     });
+    model.macro_derives.created.push(id);
     model.macros_dirty = true;
     model.macros_generation += 1;
     // The order's rebuild (`0x4f125c` into `0x4f0d30`), which signals no slot.
@@ -392,6 +427,7 @@ fn edit_macro(
             view.body = cut_body(&body);
         }
         view.local_only = local_only;
+        model.macro_derives.edited.push(id);
         model.macros_dirty = true;
         model.macros_generation += 1;
         model.macro_edits += 1;

@@ -34,6 +34,10 @@ pub(crate) struct MacroBoundSpells(pub(crate) std::collections::HashMap<u32, Bou
 
 pub(crate) use run::{Bound, BoundSpell};
 
+/// The bound spells' derivation, which the action-state feed reads after ([`crate::ui_action`]).
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct MacroBindings;
+
 pub(crate) struct UiMacroPlugin;
 
 impl Plugin for UiMacroPlugin {
@@ -43,11 +47,12 @@ impl Plugin for UiMacroPlugin {
             .add_systems(
                 Update,
                 (
-                    // Before the action feeds read it (they run in `UnitFeed`), so a macro edited
-                    // this frame reports its new spell's cooldown the same frame.
+                    // After the book's feed, which a derivation reads; the action-state feed
+                    // follows it ([`crate::ui_action`]).
                     rebind_macro_spells
-                        .in_set(crate::ui_script::UiFeed)
-                        .before(crate::ui_unit::UnitFeed),
+                        .in_set(crate::ui_unit::UnitFeed)
+                        .in_set(MacroBindings)
+                        .after(crate::ui_spellbook::BookFeed),
                     // In-world only: the per-character file needs the character. Ahead of the
                     // rank pass, which rewrites the bar's words too, as the one-time move of a
                     // character's old buttons does.
@@ -230,48 +235,78 @@ struct BindingsSeen {
     pet_book: Option<u64>,
 }
 
-/// Derive every macro's bound spell again on any change to the macro table (the engine's macro
-/// generation) or to the action store (change detection), as the first pass of a VM does. When only
-/// the pet's spell list changes, derive the records that follow the pet's book alone, as `0x4f0ce0`
-/// does: a `/cast` that did not resolve and any record whose book selector is the pet's
-/// (`0x4f0cfb`-`0x4f0d11`). A `CastSpellByName` that missed keeps its 0 through that alone; the
-/// reference keeps it until the macro is edited, where the next table or bar change here derives
-/// it again.
+/// Derive the bound spells where the reference's four callers of `0x4efe00` do, and nowhere else:
+/// - every record after the macro files load (`0x4f0a55` into `0x4f0ca0`) and after our player's
+///   arrival learns its initial spells (`0x5deacc`);
+/// - the one record a create or an edit touches (`0x4f123c`, `0x4f1313`), as the engine records
+///   ([`benilla_ui::script::MacroDerives`]);
+/// - at the pet's spell list (`0x4bdae0` into `0x4f0ce0`), the records that follow the pet's book:
+///   a `/cast` that did not resolve and any record whose selector is the pet's (`0x4f0cfb`-
+///   `0x4f0d11`).
+///
+/// A learned spell derives nothing, so a `/cast` of a spell not yet known stays -1 until its macro
+/// is edited, loaded again or the player arrives again. A superseded rank rewrites the cached
+/// spell of each macro on the bar that holds the old one (`0x4e5e60`'s macro arm, `0x4e5ec4`),
+/// derived from nothing. Runs after the book's feed, so a derivation reads the book as it stands.
+#[allow(clippy::type_complexity)] // a Bevy system's full input set
 fn rebind_macro_spells(
-    // The records, which the call host's usable refresh reads, so a turn: no Lua runs here.
-    mut vm: crate::script_calls::VmWith<ResMut<'static, MacroBoundSpells>>,
-    actions: Res<crate::ui_action::PlayerActions>,
+    // The bar, whose supersede queue this drains, which the host's action presses also read.
+    mut vm: crate::script_calls::VmWith<ResMut<'static, crate::ui_action::PlayerActions>>,
     table: Option<Res<crate::ui_chat::commands::SlashCommands>>,
-    mut seen: Local<crate::ui_script::VmMemo<BindingsSeen>>,
+    mut bound: ResMut<MacroBoundSpells>,
+    arrivals: Query<(), Added<crate::net::SelfPlayer>>,
+    mut owed: Local<(bool, crate::ui_script::VmMemo<BindingsSeen>)>,
 ) {
-    vm.turn(|script, mut bound| {
+    let (arrived, seen) = &mut *owed;
+    *arrived |= !arrivals.is_empty();
+    // The queue is drained without marking the bar changed: the supersede marked it already. The
+    // macros the bar holds are the ones a supersede reaches (`0x4e5e70`-`0x4e5ece`).
+    let (superseded, on_bar) = {
+        let mut actions = vm.own();
+        let on_bar: std::collections::HashSet<u32> = actions
+            .buttons
+            .values()
+            .filter_map(|b| benilla_ui::script::macro_slot_id(b.kind, b.action))
+            .collect();
+        let superseded = std::mem::take(&mut actions.bypass_change_detection().superseded);
+        (superseded, on_bar)
+    };
+    vm.run(|script| {
         let (Some(script), Some(table)) = (script, table) else {
             return;
         };
         let seen = seen.get(script);
-        let first = seen.macros.is_none();
         let generation = script.macros_generation();
         let pet_generation = script.pet_book_generation();
-        let table_moved = seen.macros != Some(generation) || actions.is_changed();
+        let table_moved = seen.macros != Some(generation);
         let pet_moved = seen.pet_book != Some(pet_generation);
-        if !table_moved && !pet_moved {
+        if !table_moved && !pet_moved && !*arrived && superseded.is_empty() {
             return;
         }
         seen.macros = Some(generation);
         seen.pet_book = Some(pet_generation);
+        let every = std::mem::take(arrived);
+        let derives = script.take_macro_derives();
 
         let (macros, book, pet_book) =
             (script.macros(), script.spellbook(), script.pet_spellbook());
         let mut fresh = std::collections::HashMap::new();
         for m in macros.views() {
-            // The records are new on a VM's first pass, with no book selector to keep.
-            let was = bound
-                .0
-                .get(&m.id)
-                .copied()
-                .filter(|_| !first)
-                .unwrap_or_default();
-            let next = if table_moved || was.follows_the_pet_book() {
+            // A new record's spell and selector start clear (`0x4f1ca0`).
+            let mut was = if derives.is_new(m.id) {
+                Bound::default()
+            } else {
+                bound.0.get(&m.id).copied().unwrap_or_default()
+            };
+            if on_bar.contains(&m.id) {
+                for &(old, new) in &superseded {
+                    if was.spell == BoundSpell::Spell(old) {
+                        was.spell = BoundSpell::Spell(new);
+                    }
+                }
+            }
+            let derive = every || derives.owes(m.id) || (pet_moved && was.follows_the_pet_book());
+            let next = if derive {
                 run::bound_spell(&table, &m.body, &book, &pet_book, was)
             } else {
                 was

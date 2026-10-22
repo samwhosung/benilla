@@ -318,8 +318,8 @@ pub use lock_check::{check_lock, LockCheck, LockOpener, LockOpeners, LockSlotVie
 pub use loot::{LootCall, LootRow, LootState, LOOT_PORTRAIT_UNIT};
 pub use loot_roll::{LootRollEntry, LootRollsState};
 pub use macros::{
-    MacroBinding, MacroState, MacroView, CHARACTER_ID_BASE, MAX_MACROS, MAX_MACRO_BODY,
-    MAX_MACRO_NAME,
+    MacroBinding, MacroDerives, MacroState, MacroView, CHARACTER_ID_BASE, MAX_MACROS,
+    MAX_MACRO_BODY, MAX_MACRO_NAME,
 };
 pub use mail::{
     MailCall, MailInboxRow, MailInvoice, MailRowVerb, MailSendRequest, MailState, PackageView,
