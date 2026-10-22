@@ -3601,6 +3601,15 @@ mod tests {
     #[test]
     fn the_chat_drains_unit_combat_names_the_target_as_it_signals() {
         let mut f = frame(true);
+        // The VM shows the selection the frame's feed would have pushed.
+        f.app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .set_unit_guids(&benilla_ui::script::UnitGuids {
+                player: ME,
+                target: OLD,
+                ..Default::default()
+            });
         f.app
             .world_mut()
             .non_send_resource_mut::<UiScript>()

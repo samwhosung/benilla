@@ -1257,7 +1257,7 @@ pub(super) struct ChatReads<'w, 's> {
     commands: Res<'w, NetCommands>,
     // The text-emote tables, and our guid for the "are you the performer?" test.
     emote_texts: Option<Res<'w, EmoteTexts>>,
-    // Our guid: `UNIT_COMBAT`'s `"player"` token.
+    // Our guid, for the lines that test or name the active player.
     self_guid: Res<'w, SelfGuid>,
     // The `$`-macro subject: monster and BG lines expand against their addressee's descriptors.
     guids: Res<'w, GuidIndex>,
@@ -1275,8 +1275,7 @@ pub(super) struct ChatReads<'w, 's> {
 }
 
 /// The chat lane's firing: the VM, the slots the channel notices write between their Lua and the
-/// host its calls apply through, whose selection `UNIT_COMBAT`'s `"target"` token reads between
-/// the queue's items; the log; and the rest of what a line reads.
+/// host its calls apply through; the log; and the rest of what a line reads.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct ChatFiring<'w, 's> {
     vm: crate::script_calls::VmWith<'w, 's, ResMut<'static, ChannelState>>,
