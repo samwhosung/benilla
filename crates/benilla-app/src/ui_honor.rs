@@ -93,17 +93,15 @@ impl Plugin for UiHonorPlugin {
 fn feed_name_line_strings(
     script: Option<NonSend<UiScript>>,
     mut strings: ResMut<crate::nameplates::NameLineStrings>,
-    mut keys: Local<Vec<String>>,
 ) {
+    static KEYS: std::sync::LazyLock<Vec<String>> =
+        std::sync::LazyLock::new(|| name_line_keys().collect());
     let Some(script) = script else {
         return;
     };
-    if keys.is_empty() {
-        *keys = name_line_keys().collect();
-    }
     let globals = script.lua().globals();
     let held = strings.session() == Some(script.session())
-        && keys.iter().all(
+        && KEYS.iter().all(
             |key| match globals.get::<benilla_ui::mlua::Value>(key.as_str()) {
                 Ok(benilla_ui::mlua::Value::String(s)) => strings.holds(key, Some(&s.as_bytes())),
                 Ok(benilla_ui::mlua::Value::Nil) => strings.holds(key, None),
