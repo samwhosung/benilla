@@ -301,6 +301,17 @@ fn pace_to_refresh(
 
 pub(crate) struct VideoPlugin;
 
+/// `widescreen` (`0x63a74f`, default "1"), as its readers take its integer: the resolution list
+/// (`0x48bcac`) and the display aspect (`0x46ab40`, `0x4901e0`).
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Widescreen(pub(crate) bool);
+
+impl Default for Widescreen {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
 /// The change callbacks of the reference's video-options registration block (`0x688470`); each
 /// arm writes only its own resource.
 pub(crate) fn on_cvar(
@@ -315,6 +326,7 @@ pub(crate) fn on_cvar(
     particles: Option<ResMut<benilla_world::particles::ParticleTuning>>,
     mut spell_effect_level: ResMut<SpellEffectLevel>,
     mut ffx: ResMut<benilla_world::ffx_glow::FfxSwitches>,
+    mut widescreen: ResMut<Widescreen>,
     mut cvars: ResMut<crate::cvars::Cvars>,
 ) {
     use benilla_world::view::{FARCLIP_RANGE, MSAA_RANGE};
@@ -326,6 +338,7 @@ pub(crate) fn on_cvar(
             None => warn!("cvar gxResolution: unparseable value '{}' ignored", ev.new),
         },
         "gxvsync" => cfg.vsync = ev.flag(),
+        "widescreen" => widescreen.0 = ev.flag(),
         // The reference's polarity: `1` is windowed (the row is "Windowed Mode").
         "gxwindow" => cfg.display = display_from_flag(v),
         // Latched like `gxWindow`: the commit is `RestartGx`, which rebuilds the window
@@ -439,7 +452,8 @@ pub(crate) fn spell_effect_scale(level: i32) -> f32 {
 
 impl Plugin for VideoPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SpellEffectLevel>();
+        app.init_resource::<SpellEffectLevel>()
+            .init_resource::<Widescreen>();
         app.add_observer(on_cvar);
         app.init_resource::<VideoConfig>()
             .init_resource::<GxRestarts>()
@@ -576,10 +590,10 @@ fn publish_display_modes(
     mut hosted_vm: crate::script_calls::HostedVm,
     windows: Query<&Window, With<PrimaryWindow>>,
     monitors: Query<&bevy::window::Monitor>,
-    cvars: Option<Res<crate::cvars::Cvars>>,
+    widescreen: Option<Res<Widescreen>>,
     mut last: Local<crate::ui_script::VmMemo<PublishedModes>>,
 ) {
-    let widescreen = crate::loading_screen::widescreen(cvars.as_deref());
+    let widescreen = widescreen.is_none_or(|w| w.0);
     hosted_vm.run(|script| {
         let Some(script) = script else {
             return;

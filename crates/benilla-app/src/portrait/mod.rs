@@ -584,13 +584,13 @@ impl Default for GxAspect {
 fn feed_gx_aspect(
     mut gx: ResMut<GxAspect>,
     window: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    cvars: Option<Res<crate::cvars::Cvars>>,
+    widescreen: Option<Res<crate::video::Widescreen>>,
 ) {
     let Ok(w) = window.single() else {
         return;
     };
     let (px_w, px_h) = (w.resolution.width(), w.resolution.height());
-    let a = if !crate::loading_screen::widescreen(cvars.as_deref()) {
+    let a = if widescreen.is_some_and(|w| !w.0) {
         4.0 / 3.0
     } else if px_h > 0.0 {
         px_w / px_h
@@ -1729,13 +1729,13 @@ mod tests {
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
         world.init_resource::<GxAspect>();
-        world.insert_resource(crate::cvars::Cvars::default());
+        world.init_resource::<crate::video::Widescreen>();
         let mut window = Window::default();
         window.resolution.set(1920.0, 1080.0);
         world.spawn((window, bevy::window::PrimaryWindow));
         world.run_system_once(feed_gx_aspect).unwrap();
         assert!((world.resource::<GxAspect>().0 - 16.0 / 9.0).abs() < 1e-6);
-        world.insert_resource(crate::cvars::Cvars::with_value("widescreen", "0"));
+        world.insert_resource(crate::video::Widescreen(false));
         world.run_system_once(feed_gx_aspect).unwrap();
         assert_eq!(world.resource::<GxAspect>().0, 4.0 / 3.0);
     }
