@@ -132,7 +132,10 @@ fn the_autocast_toggles_send_what_they_flipped() {
             entries: vec![(0, off)],
         }])
     );
-    assert_eq!(rig.app.world().resource::<PetBar>().spells.bar[0].packed, off);
+    assert_eq!(
+        rig.app.world().resource::<PetBar>().spells.bar[0].packed,
+        off
+    );
     run(&mut rig, "ToggleSpellAutocast(1, BOOKTYPE_PET)");
     assert_eq!(
         lines(rig.sent()),
@@ -203,7 +206,9 @@ fn pet_stop_attack_sends_and_repaints_in_its_call() {
     );
     assert!(!rig.app.world().resource::<PetBar>().attacking);
     assert_eq!(
-        ui(&mut rig, |s| s.eval::<Option<bool>>("return ATTACKING").unwrap()),
+        ui(&mut rig, |s| s
+            .eval::<Option<bool>>("return ATTACKING")
+            .unwrap()),
         Some(false),
         "the handler ran in the verb and read the latch down"
     );

@@ -1472,7 +1472,10 @@ mod tests {
         s.keep_calls();
         s.set_pet_actions(true, true, true, slots());
         for i in [0, 12] {
-            let e = s.run(&format!("CastPetAction({i})")).unwrap_err().to_string();
+            let e = s
+                .run(&format!("CastPetAction({i})"))
+                .unwrap_err()
+                .to_string();
             assert!(e.contains("Invalid slot in CastPetAction"), "{i}: {e}");
         }
         assert!(s.take_pet_actions().is_empty());
@@ -1491,7 +1494,10 @@ mod tests {
         assert!(s.cursor_payload().is_some(), "Claw is held");
         let _ = s.take_sounds();
         s.run("CastPetAction(3)").unwrap();
-        assert!(s.take_pet_actions().is_empty(), "the held action is dropped, not cast");
+        assert!(
+            s.take_pet_actions().is_empty(),
+            "the held action is dropped, not cast"
+        );
         assert!(s.take_sounds().is_empty());
         assert!(s.cursor_payload().is_none(), "the cursor cleared");
         assert_eq!(

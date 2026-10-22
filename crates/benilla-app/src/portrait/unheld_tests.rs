@@ -88,5 +88,8 @@ fn our_pet_with_no_object_draws_nothing() {
             ..Default::default()
         }
     );
-    assert_eq!(pet_subject(0, |_| Some(object), &roster, &names), Subject::default());
+    assert_eq!(
+        pet_subject(0, |_| Some(object), &roster, &names),
+        Subject::default()
+    );
 }
