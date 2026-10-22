@@ -780,6 +780,7 @@ fn superceded_spell(
     debug!("net: superceded spell {old_spell_id} -> {new_spell_id}");
     actions.spells.remove(&old_spell_id);
     actions.spells.insert(new_spell_id);
+    actions.superseded.push((old_spell_id, new_spell_id));
     actions.dirty = true;
     // `0x4b2f50` unlists the old rank and registers the new one at the tail; the player's own
     // unlearn of the old rank (`0x5e6392` → `0x5ea24c`) then runs the removal once more, and its

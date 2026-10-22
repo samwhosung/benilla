@@ -87,6 +87,10 @@ pub(crate) struct PlayerActions {
     /// item tooltip's lock walk `0x5da5e0` scan it from the front, so its order picks between
     /// 6478 "Opening" and 22810 "Opening - No Text", which open the same locks.
     pub openers: Vec<u32>,
+    /// `SMSG_SUPERCEDED_SPELL`'s `(old, new)` pairs in arrival order, for the macro arm of
+    /// `0x4e5e60`: a macro on the bar whose cached spell is `old` gets `new` (`0x4e5ec4`). The
+    /// macro rebind drains it ([`crate::ui_macro`]).
+    pub superseded: Vec<(u32, u32)>,
     /// Set by every book or bar change, cleared once the feed re-resolves slot identity, which a
     /// landed item template ([`crate::items::Items::template_epoch`]) also triggers. Between
     /// resolves an item slot's count moves only by the item watchers' recount (`recount`).
