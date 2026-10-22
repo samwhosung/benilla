@@ -295,7 +295,9 @@ const HOST_HELD_UNREAD: &[&str] = &[
     "::creature_anim::PlaySeq",
     "::items::Items",
     "::net::GuidIndex",
-    "::net::Reputations",
+    // Read, and quiet: the feeds that hold it fire nothing off it, as the reputation messages'
+    // `UPDATE_FACTION` and `UNIT_FACTION` go on the notice lane at their packets.
+    "::net::reputations::Reputations",
     "::net::SelfGuid",
     "::net::game_time::ServerTime",
     "::spell::cast_send::HeldForPick",
