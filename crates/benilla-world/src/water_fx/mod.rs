@@ -340,10 +340,13 @@ fn emit_water_foam(
     units: Query<(Entity, &Transform, &WorldUnit), Without<ViewerUnit>>,
     water: Query<(Entity, &WaterChunkInfo, &FoamPatch)>,
     index: Res<WaterIndex>,
+    ripples: Option<Res<WaterRipples>>,
 ) {
     if materials.is_none() {
         return;
     }
+    // `0x68bda3`: the emitter makes no record while `waterRipples` is 0.
+    let emits = ripples.is_none_or(|r| r.0 != 0);
     let now = time.elapsed_secs();
     let dt = time.delta_secs().max(1.0e-4);
 
@@ -382,7 +385,9 @@ fn emit_water_foam(
             } = &mut *foam;
             let uf = units.get_mut(&Entity::PLACEHOLDER).expect("inserted above");
             let mut alloc = |rec: FoamRecord| {
-                pool[alloc_slot(self_cursor, 0, SELF_SLOTS)] = Some(rec);
+                if emits {
+                    pool[alloc_slot(self_cursor, 0, SELF_SLOTS)] = Some(rec);
+                }
             };
             drive_unit(uf, &mut alloc, body, state, scale, h, &water, &index, now);
         }
@@ -433,7 +438,9 @@ fn emit_water_foam(
             } = &mut *foam;
             let uf = units.get_mut(&entity).expect("inserted above");
             let mut alloc = |rec: FoamRecord| {
-                pool[alloc_slot(other_cursor, SELF_SLOTS, POOL_SIZE - SELF_SLOTS)] = Some(rec);
+                if emits {
+                    pool[alloc_slot(other_cursor, SELF_SLOTS, POOL_SIZE - SELF_SLOTS)] = Some(rec);
+                }
             };
             drive_unit(
                 uf, &mut alloc, pos, state, unit.scale, h, &water, &index, now,

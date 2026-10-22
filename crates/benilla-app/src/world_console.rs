@@ -2,13 +2,48 @@
 //! through `ConsoleCommandRegister` (`0x66fa1d`-`0x66faf5`), each in category 1 with no help, and
 //! `InitSky`'s `SkySunGlare` (`0x6d1d4d`). `/console` and `ConsoleExec` (`0x515f10`) reach them
 //! through `0x63ce00`, which has no category gate. Each handler writes the world's flags
-//! ([`WorldFlags`]) or a level ([`WorldLevels`]) and prints what its own `ConsoleWrite` does.
+//! ([`WorldFlags`]), the ripple gate ([`WaterRipples`]) or a level no pass reads yet
+//! ([`WorldLevels`]), and prints what its own `ConsoleWrite` does.
 
 use benilla_ui::script::scanf_d;
-use benilla_world::world_flags::{WorldFlags, WorldLevels};
+use benilla_world::water_fx::WaterRipples;
+use benilla_world::world_flags::WorldFlags;
 use bevy::prelude::*;
 
 use crate::console::{ConsoleCommandApp, ConsoleHandler, GRAPHICS};
+
+/// The levels the world's console commands store besides the flags and the ripple gate, at their
+/// start-up values. No world pass reads them yet, so they stay here until one does.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WorldLevels {
+    /// `maxLOD` (`0x673200`): the near chunk level `[0x867964]`, 2 or 3, 3 at start-up
+    /// (`0x66f8ae`).
+    pub(crate) max_lod: u32,
+    /// `waterMaxLOD` (`0x6736c0`): `[0x86a030]`, 0 to 4, initialised 4.
+    pub(crate) water_max_lod: i32,
+    /// `waterWaves` (`0x673710`): `[0x86a034]`, initialised 2.
+    pub(crate) water_waves: i32,
+    /// `waterSpecular` (`0x673730`): `[0x86a038]`, initialised 1.
+    pub(crate) water_specular: i32,
+    /// `showSimpleDoodads` (`0x673ac0`): `[0xc7b2c4]`, cleared at start-up (`0x66f714`).
+    pub(crate) simple_doodads: bool,
+    /// `setShadow` (`0x673290`): the shadow colour `0x672590` stores, packed first float in the
+    /// top byte, which the world frame writes back from the light state each frame (`0x66fff3`).
+    pub(crate) shadow_color: Option<u32>,
+}
+
+impl Default for WorldLevels {
+    fn default() -> Self {
+        Self {
+            max_lod: 3,
+            water_max_lod: 4,
+            water_waves: 2,
+            water_specular: 1,
+            simple_doodads: false,
+            shadow_color: None,
+        }
+    }
+}
 
 pub(crate) struct WorldConsolePlugin;
 
@@ -16,6 +51,7 @@ impl Plugin for WorldConsolePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorldFlags>()
             .init_resource::<WorldLevels>()
+            .init_resource::<WaterRipples>()
             .init_resource::<benilla_world::sun::SunGlare>();
         // `0x66f6c0`'s order.
         const WORLD: [(&str, ConsoleHandler); 13] = [
@@ -147,8 +183,7 @@ fn water_max_lod(world: &mut World, args: &str) -> Vec<String> {
 }
 
 /// A `%d` straight into a level, kept when no number parses, with no bound: `waterWaves`
-/// (`0x673710`, `[0x86a034]`), `waterSpecular` (`0x673730`, `[0x86a038]`) and `waterRipples`
-/// (`0x673750`, `[0x86a03c]`). Prints nothing.
+/// (`0x673710`, `[0x86a034]`) and `waterSpecular` (`0x673730`, `[0x86a038]`). Prints nothing.
 fn scan_level(world: &mut World, args: &str, level: fn(&mut WorldLevels) -> &mut i32) {
     if let Some(v) = scanf_d(args) {
         *level(&mut world.get_resource_or_init::<WorldLevels>()) = v as i32;
@@ -165,8 +200,12 @@ fn water_specular(world: &mut World, args: &str) -> Vec<String> {
     Vec::new()
 }
 
+/// `0x673750`: the `%d` straight into `[0x86a03c]`, kept when no number parses, with no bound;
+/// the ripple emitter's gate (`0x68bda3`). Prints nothing.
 fn water_ripples(world: &mut World, args: &str) -> Vec<String> {
-    scan_level(world, args, |l| &mut l.water_ripples);
+    if let Some(v) = scanf_d(args) {
+        world.get_resource_or_init::<WaterRipples>().0 = v as i32;
+    }
     Vec::new()
 }
 
@@ -243,7 +282,8 @@ mod tests {
     use super::*;
     use crate::console::{execute, ConsolePlugin};
     use crate::cvars::Cvars;
-    use benilla_world::world_flags::{WorldFlags, WorldLevels};
+    use benilla_world::water_fx::WaterRipples;
+    use benilla_world::world_flags::WorldFlags;
 
     fn world_app() -> App {
         let mut app = App::new();
@@ -362,9 +402,14 @@ mod tests {
         run(&mut app, "waterWaves");
         run(&mut app, "waterSpecular -5");
         run(&mut app, "waterRipples 0");
+        run(&mut app, "waterRipples x");
         let l = levels(&app);
         assert_eq!(
-            (l.water_waves, l.water_specular, l.water_ripples),
+            (
+                l.water_waves,
+                l.water_specular,
+                app.world().resource::<WaterRipples>().0
+            ),
             (7, -5, 0)
         );
     }

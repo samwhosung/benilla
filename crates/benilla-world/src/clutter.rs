@@ -418,9 +418,14 @@ fn frustum_corner_reach(fov_y: f32, aspect: f32) -> f32 {
 
 /// Build a chunk's clutter when its box comes within the fade reach, and tear it down past it,
 /// where the fade is already zero. The reference builds and unlinks per chunk at 70 yd
-/// (`[0x867958]`), by the nearest view depth of the chunk's bounding sphere.
+/// (`[0x867958]`), by the nearest view depth of the chunk's bounding sphere. With world flag
+/// 0x100000 clear (`showDetailDoodads`) every chunk takes the far leg (`0x6847c9`, `0x6847fc`):
+/// nothing builds, and the built tufts stop drawing but keep their meshes.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn stream_chunk_clutter(
     mut commands: Commands,
+    flags: Option<Res<crate::world_flags::WorldFlags>>,
+    mut shown: Local<Option<bool>>,
     cam: Query<(&GlobalTransform, Option<&Projection>), With<WorldCamera>>,
     mut chunks: Query<(Entity, &mut ClutterChunk)>,
     cfg: Res<ClutterConfig>,
@@ -430,6 +435,26 @@ pub(crate) fn stream_chunk_clutter(
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<WowModelMaterial>>,
 ) {
+    let show = flags
+        .as_deref()
+        .copied()
+        .unwrap_or_default()
+        .has(crate::world_flags::WorldFlags::DETAIL_DOODADS);
+    if shown.replace(show) != Some(show) {
+        let vis = if show {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        for (_, cc) in &chunks {
+            for &e in &cc.built {
+                commands.entity(e).try_insert(vis);
+            }
+        }
+    }
+    if !show {
+        return;
+    }
     // Both are absent without an install, and a hard `ResMut` would fail validation and panic.
     let (Some(mut geometry), Some(mut assets)) = (geometry, assets) else {
         return;
