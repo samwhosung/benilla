@@ -7,7 +7,8 @@
 //!
 //! A booth mirrors the unit's live dressed look ([`PortraitPart`]), so a gear change re-bakes;
 //! until the model loads the slot shows a 2D stand-in, where the reference leaves it blank
-//! (`0x519fcc`) and loads a stand-in only for a unit it holds no object for (`0x525ba0`).
+//! (`0x519fcc`) and loads a stand-in only for a unit it holds no object for: a player's
+//! (`0x525ba0`) or a group pet record's (`0x525cb0`).
 //! Framing is the model's
 //! authored portrait camera, the one `cameraLookup[0]` selects (`0x713540`), through the
 //! diagonal-FOV projection ([`WowPortraitProjection`]); a camera-less model falls back to
@@ -1111,8 +1112,9 @@ fn sync_portraits(
         return; // the test bake owns the booths
     }
     for token in SLOTS {
-        // A unit the object manager does not hold draws the 2D stand-in (`0x525ba0`), not the
-        // blank, which is for a model not ready (`0x519fcc`); `unseen` carries that art.
+        // A unit the object manager does not hold draws what `0x519fe6` gives its guid: a
+        // player's stand-in by race and sex (`0x525ba0`), a group pet record's (`0x525cb0`), or
+        // nothing; `unseen` carries that art.
         let mut unseen: Option<String> = None;
         let mut occupant: Option<u64> = None;
         let unit: Option<Entity> = match token {
@@ -1625,19 +1627,22 @@ struct Subject {
     unseen: Option<String>,
 }
 
-/// `"pet"`'s subject: the object of the pet bar's guid, or the stand-in of a pet the object
-/// manager does not hold.
+/// `"pet"`'s subject: the object of the pet bar's guid, or for a pet the object manager does not
+/// hold, what any such guid draws (`0x519fe6`, [`unseen_portrait`]): our own pet is in no group
+/// pet record (`0x496420`), so its portrait stays empty (`0x51a0ce`).
 fn pet_subject(
     pet_guid: u64,
     entity_of: impl Fn(u64) -> Option<Entity>,
-    _roster: &crate::ui_party::GroupState,
-    _names: &crate::names::NameCache,
+    roster: &crate::ui_party::GroupState,
+    names: &crate::names::NameCache,
 ) -> Subject {
     let entity = (pet_guid != 0).then(|| entity_of(pet_guid)).flatten();
     Subject {
         entity,
         occupant: None,
-        unseen: (entity.is_none() && pet_guid != 0).then(creature_temporary_portrait),
+        unseen: (entity.is_none() && pet_guid != 0)
+            .then(|| unseen_portrait(roster, names, pet_guid))
+            .flatten(),
     }
 }
 
