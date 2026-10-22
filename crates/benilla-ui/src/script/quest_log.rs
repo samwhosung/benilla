@@ -810,9 +810,8 @@ pub(crate) fn selected_quest_item(
         name: template.map(|t| t.name.clone()),
         texture: template.and_then(|t| t.icon.clone()),
         count,
-        quality: template.map_or(1, |t| t.quality),
+        quality: template.map_or(1, |t| t.quality as i32),
         item_id,
-        usable: true,
         link: template.map(|t| super::item_stats::item_link(item_id, &t.name, t.quality)),
     })
 }

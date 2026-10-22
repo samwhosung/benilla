@@ -299,8 +299,9 @@ pub(crate) fn row_is_one_click(icon: u32) -> bool {
 /// One greeting pool as `(quest_id, wire icon)` rows; the icon feeds [`row_is_one_click`].
 type Pool = Vec<(u32, u32)>;
 
-/// One wire item row for Lua; the name and quality are `None` and white until the template lands.
-/// Read as `ask` says: `GetQuestItemInfo` looks it up with a callback (`0x5017de`).
+/// One wire item row for Lua; the name is `None` and the quality the seeded 0 (`0x501728`) until
+/// the template lands. Read as `ask` says: `GetQuestItemInfo` looks it up with a callback
+/// (`0x5017de`).
 fn resolve_item(
     it: &QuestRewardItem,
     items: &Items,
@@ -309,21 +310,26 @@ fn resolve_item(
 ) -> QuestItemView {
     let template = items.template(it.item_id, 0, ask);
     let name = template.map(|t| t.name.clone());
-    let quality = template.map(|t| t.quality).unwrap_or(1);
+    // The template's quality (`+0x1c`) for an item with an inventory type (`+0x2c`), else -1
+    // (`0x5017fa`).
+    let quality = template.map_or(0, |t| {
+        if t.inventory_type != 0 {
+            t.quality as i32
+        } else {
+            -1
+        }
+    });
     let texture = icons
         .and_then(|i| i.catalog.get(it.display_id))
         .and_then(|d| d.icon.clone());
     // `GetQuestItemLink`'s payload; `None` until the template gives the name and quality.
-    let link = name
-        .as_ref()
-        .map(|n| crate::ui_items::item_link(it.item_id, n, quality));
+    let link = template.map(|t| crate::ui_items::item_link(it.item_id, &t.name, t.quality));
     QuestItemView {
         name,
         texture,
         count: it.count,
         quality,
         item_id: it.item_id,
-        usable: true, // not computed; the stock frame tints unusable ones red
         link,
     }
 }
@@ -884,9 +890,9 @@ mod tests {
         assert_eq!(snap.choices.len(), 1);
         assert_eq!(snap.rewards.len(), 1);
         assert_eq!(snap.reward_money, 1234);
-        // No template yet: no name, and white.
+        // No template yet: no name, and the seeded quality 0 (`0x501728`).
         assert!(snap.rewards[0].name.is_none());
-        assert_eq!(snap.rewards[0].quality, 1);
+        assert_eq!(snap.rewards[0].quality, 0);
     }
 
     /// `GetQuestItemInfo`'s quality (`0x501700`): -1 for a template whose inventory type is 0

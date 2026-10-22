@@ -329,7 +329,11 @@ fn set_quest_item_view(
     item: Option<crate::script::quest::QuestItemView>,
 ) -> mlua::Result<()> {
     match item {
-        Some(it) => render_by_id(lua, this, it.item_id, it.name.clone(), Some(it.quality)),
+        // The row's -1 (no inventory type) names no colour.
+        Some(it) => {
+            let quality = u32::try_from(it.quality).ok();
+            render_by_id(lua, this, it.item_id, it.name.clone(), quality)
+        }
         None => {
             let h = frame_handle_of(lua, this)?;
             clear_silent(lua, h);

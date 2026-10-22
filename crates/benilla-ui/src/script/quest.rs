@@ -29,13 +29,10 @@ pub struct QuestItemView {
     pub name: Option<String>,
     pub texture: Option<String>,
     pub count: u32,
-    /// 0 poor to 5 legendary; 1 until the template lands.
-    pub quality: u32,
+    /// 0 poor to 5 legendary, -1 for an item with no inventory type; 0 until the template lands.
+    pub quality: i32,
     /// The item id the quest tooltips render by; 0 until the wire row resolves.
     pub item_id: u32,
-    /// Whether the player can use the item, `isUsable` as 1 or nil; stock tints the row red when
-    /// not (`QuestFrame.lua:393`). The app always sends `true`.
-    pub usable: bool,
     /// The escaped item link `GetQuestItemLink` and `GetQuestLogItemLink` serve; `None` until the
     /// template lands, since it embeds the name and the quality.
     pub link: Option<String>,
@@ -388,13 +385,22 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 list.get(row as usize).cloned()
             };
             let (name, texture, count, quality, usable) = match item {
-                Some(it) => (
-                    it.name.unwrap_or_default(),
-                    it.texture,
-                    it.count,
-                    it.quality,
-                    it.usable,
-                ),
+                Some(it) => {
+                    // `isUsable` seeds 1 (`0x50172e`) and the item-usable predicate clears it for
+                    // a cached template it refuses (`0x501882`-`0x501899`); the stock frame tints
+                    // the row red by it (`QuestFrame.lua:393`).
+                    let usable = it.name.is_none() || {
+                        let model = lua.app_data_ref::<Model>().expect("model app_data");
+                        super::item_stats::item_usable_by_id(&model, it.item_id)
+                    };
+                    (
+                        it.name.unwrap_or_default(),
+                        it.texture,
+                        it.count,
+                        it.quality,
+                        usable,
+                    )
+                }
                 None => (String::new(), Some(EMPTY_ROW_ICON.to_string()), 0, 0, true),
             };
             Ok(MultiValue::from_vec(vec![
@@ -592,7 +598,6 @@ mod tests {
                 texture: Some("Interface\\Icons\\INV_Boots_01".into()),
                 count: 1,
                 quality: 2,
-                usable: true,
                 link: Some("|cff1eff00|Hitem:7278:0:0:0|h[Brdle Leather Boots]|h|r".into()),
             }],
             choices: vec![
@@ -602,7 +607,6 @@ mod tests {
                     texture: None,
                     count: 1,
                     quality: 1,
-                    usable: true,
                     ..Default::default()
                 },
                 QuestItemView {
@@ -611,7 +615,6 @@ mod tests {
                     texture: None,
                     count: 1,
                     quality: 1,
-                    usable: true,
                     ..Default::default()
                 },
             ],
@@ -900,7 +903,6 @@ mod tests {
                 texture: None,
                 count: 8,
                 quality: 0,
-                usable: true,
                 ..Default::default()
             }],
             required_money: 500,

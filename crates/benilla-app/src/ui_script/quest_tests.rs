@@ -175,13 +175,12 @@ fn detail_panel_reward_grid_follows_the_refs_two_per_row_layout() {
     load_xml(&s, "Interface\\FrameXML\\QuestFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\QuestLogFrame.xml");
 
-    let choice = |name: &str, quality: u32| benilla_ui::script::QuestItemView {
+    let choice = |name: &str, quality: i32| benilla_ui::script::QuestItemView {
         item_id: 0,
         name: Some(name.into()),
         texture: None,
         count: 1,
         quality,
-        usable: true,
         ..Default::default()
     };
     s.set_quest(Some(QuestState {
@@ -276,7 +275,6 @@ fn reward_panel_choice_click_selects_and_completes_with_zero_based_index() {
         texture: None,
         count: 1,
         quality: 1,
-        usable: true,
         ..Default::default()
     };
     s.set_quest(Some(QuestState {
@@ -768,7 +766,6 @@ fn reward_rows_preview_and_post_without_selecting_the_choice() {
         texture: None,
         count: 1,
         quality: 1,
-        usable: true,
         link: Some(link.into()),
     };
     s.set_quest(Some(QuestState {
