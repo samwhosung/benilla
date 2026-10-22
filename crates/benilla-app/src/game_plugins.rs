@@ -941,12 +941,19 @@ pub(crate) mod schedule_tests {
     ///   the precast tail's loot release) is the name cache alone, a pure cache, which the
     ///   persisted-name load writes; `lanes::guard_tests` checks that it stays so, and that no
     ///   exclusive system is among them. Commands a firing defers, which the drain applies after
-    ///   it, are outside that model.
+    ///   it, are outside that model;
+    /// - the coinage reflex's trade half (`ui_trade::trim_offer_to_purse`) against five systems
+    ///   that lend the call host, whose trade verbs hold `TradeSession`: `minimap::blips::
+    ///   drive_blip_tooltip`, `ui_auction::feed_auction`, `ui_mail::feed_mail`,
+    ///   `ui_merchant::feed_merchant` and `ui_script::demo_unit_feed`. They meet only when a
+    ///   script there edits the offer in the frame the purse moves, and no frame order is the
+    ///   reference's: its reflex trims inside the coinage field's watcher, at the packet
+    ///   (`0x5ddf30`).
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 1_779;
+    const UPDATE_ACTIONABLE_CEILING: usize = 1_784;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
