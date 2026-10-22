@@ -390,6 +390,8 @@ fn a_quest_givers_gossip_displaces_the_open_reader() {
     use benilla_ui::script::GossipMenu;
 
     let mut s = UiScript::new().unwrap();
+    // `CloseGossip` is a call, which this VM keeps with no host.
+    s.keep_calls();
     load_ui(&s);
     // The stock gossip window, off the chain.
     common::load_ui(&s, "Interface\\FrameXML\\GossipFrame.xml");

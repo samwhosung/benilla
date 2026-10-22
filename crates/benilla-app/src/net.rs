@@ -1205,7 +1205,7 @@ pub(crate) enum ClientCommand {
     GossipSelectOption {
         guid: u64,
         option: u32,
-        code: Option<String>,
+        code: Option<Vec<u8>>,
     },
     /// `CMSG_NPC_TEXT_QUERY`, asked once per `text_id` on menu receipt.
     NpcTextQuery {

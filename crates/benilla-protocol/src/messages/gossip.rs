@@ -31,12 +31,14 @@ pub fn gossip_hello(npc_guid: u64) -> Vec<u8> {
 
 /// `CMSG_GOSSIP_SELECT_OPTION` body: guid, the option's `index`, then the code only for a coded
 /// option; the server reads a code whenever bytes remain, so omit it otherwise (`Npc.cpp:78-86`).
-pub fn gossip_select_option(npc_guid: u64, gossip_list_id: u32, code: Option<&str>) -> Vec<u8> {
+/// The code is a C string, its bytes up to the first NUL (`0x418430`, `strlen + 1`).
+pub fn gossip_select_option(npc_guid: u64, gossip_list_id: u32, code: Option<&[u8]>) -> Vec<u8> {
     let mut body = Vec::with_capacity(12);
     body.extend_from_slice(&npc_guid.to_le_bytes());
     body.extend_from_slice(&gossip_list_id.to_le_bytes());
     if let Some(code) = code {
-        body.extend_from_slice(code.as_bytes());
+        let len = code.iter().position(|&b| b == 0).unwrap_or(code.len());
+        body.extend_from_slice(&code[..len]);
         body.push(0);
     }
     body
@@ -56,14 +58,16 @@ pub(super) fn read_gossip_message(
 ) -> io::Result<(u64, u32, Vec<GossipOption>, Vec<QuestOption>)> {
     let npc_guid = read_u64_le(r)?;
     let text_id = read_u32_le(r)?;
-    let option_count = read_u32_le(r)?;
-    // vmangos `GOSSIP_MAX_MENU_ITEMS` 32 (`GossipDef.h:32`, "client supports showing max 32").
-    let mut options = Vec::with_capacity(capacity_hint(option_count, 32));
+    // A count of 16 or more reads as 15 (`0x4e271d`-`0x4e2722`), and the quest count is read from
+    // the bytes after those 15, as the reference reads it: no 16th option exists.
+    let option_count = read_u32_le(r)?.min(15);
+    let mut options = Vec::with_capacity(capacity_hint(option_count, 15));
     for _ in 0..option_count {
         options.push(GossipOption {
             index: read_u32_le(r)?,
             icon: read_u8(r)?,
-            coded: read_u8(r)? != 0,
+            // The coded byte's low bit alone (`0x4e2365`, `0x4e23d4`).
+            coded: read_u8(r)? & 1 != 0,
             message: read_cstring(r)?,
         });
     }

@@ -19,7 +19,7 @@ impl WorldWriter {
         &mut self,
         npc_guid: u64,
         gossip_list_id: u32,
-        code: Option<&str>,
+        code: Option<&[u8]>,
     ) -> Result<()> {
         self.send(
             opcode::CMSG_GOSSIP_SELECT_OPTION,

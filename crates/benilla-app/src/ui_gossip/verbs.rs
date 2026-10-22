@@ -34,6 +34,13 @@ impl GossipVerbs<'_, '_> {
         };
         let npc = state.npc.unwrap_or(0);
         match call {
+            GossipCall::Close => {
+                // `0x4e1fa0` with a zero guid as far as the call goes: the cell zeroed
+                // (`0x4e1fcc`); the release and `GOSSIP_CLOSED` follow at the drain.
+                if let Some(source) = state.npc.take() {
+                    state.closing = Some(source);
+                }
+            }
             GossipCall::Option { index, code } => {
                 // `0x4e2320`: refused while the greeting is pending (`0xbbb670`, `0x4e2335`), for a
                 // slot outside the 16 (`0x4e233d`, `0x4e2346`) or an unused one, whose index is -1

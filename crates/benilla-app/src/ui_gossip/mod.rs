@@ -33,6 +33,14 @@ pub(crate) struct GossipState {
     records: HashMap<u32, Vec<NpcTextBlock>>,
     /// The drawn record had no line for the NPC's gender: the close core is owed.
     missing_text: bool,
+    /// The reference's text-pending latch `[0xbbb670]`: set on the text's cache miss
+    /// (`0x4e2050`), cleared once the record is found (`0x4e206e`); no close touches it.
+    pending: bool,
+    /// The messages latched so far, which the feed shows each of once.
+    generation: u64,
+    /// The source whose close a call began, its cell zeroed there (`0x4e1fcc`): the latch
+    /// release and `GOSSIP_CLOSED` hold the whole world, so the drain runs them.
+    pub(crate) closing: Option<u64>,
 }
 
 impl GossipState {
@@ -51,9 +59,9 @@ impl GossipState {
     }
 
     /// The reference's text-pending latch (`[0xbbb670]`): a menu whose text query is out, or was
-    /// never sent (`text_id` 0). While it holds, nothing fires and every select is refused.
+    /// never sent (`text_id` 0). While it holds, nothing fires and the option select is refused.
     pub(crate) fn text_pending(&self) -> bool {
-        self.npc.is_some() && self.greeting.is_none()
+        self.pending
     }
 
     /// Latch a `SMSG_GOSSIP_MESSAGE` menu; `true` when the caller owes the `CMSG_NPC_TEXT_QUERY`.
@@ -71,6 +79,9 @@ impl GossipState {
         self.options = options;
         self.quests = quests;
         self.greeting = None;
+        self.generation += 1;
+        // A miss, id 0 included (`0x55d530`), holds the latch until the record lands.
+        self.pending = true;
         if text_id == 0 {
             return false;
         }
@@ -88,7 +99,7 @@ impl GossipState {
     /// query it was registered for.
     pub(crate) fn text_arrived(&mut self, text_id: u32, blocks: Vec<NpcTextBlock>, npc_gender: u8) {
         self.remember_record(text_id, blocks);
-        if self.npc.is_some() && self.text_id == text_id && self.greeting.is_none() {
+        if self.pending && self.text_id == text_id && text_id != 0 {
             self.resolve_greeting(npc_gender);
         }
     }
@@ -97,6 +108,7 @@ impl GossipState {
     /// gender: the reference's missing-text path (`0x4e216e`) logs "Missing gossip text!" and
     /// runs the close core (`0x4e2197`), which [`Self::take_missing_text`] hands the caller.
     fn resolve_greeting(&mut self, npc_gender: u8) {
+        self.pending = false;
         match self.draw_greeting(self.text_id, npc_gender) {
             Some(line) => self.greeting = Some(line),
             None => {
@@ -122,7 +134,7 @@ fn greeting_roll() -> f32 {
 }
 
 impl GossipState {
-    /// Close the menu; the records stay.
+    /// Forget the menu, its slots and its latches; the records stay.
     pub(crate) fn clear(&mut self) {
         self.npc = None;
         self.text_id = 0;
@@ -130,6 +142,8 @@ impl GossipState {
         self.options.clear();
         self.quests.clear();
         self.missing_text = false;
+        self.pending = false;
+        self.closing = None;
     }
 
     /// The disconnect clear; NPC text is static per id, so the records stay.
@@ -171,8 +185,9 @@ impl Plugin for UiGossipPlugin {
 impl LatchedWindow for GossipState {
     const WINDOW: NpcWindow = NpcWindow::Gossip;
 
+    /// The cell, or the source a call zeroed it from until the drain's teardown.
     fn cell(&self) -> Option<u64> {
-        self.npc
+        self.npc.or(self.closing)
     }
 
     fn dispatched(world: &mut World) {
@@ -185,19 +200,24 @@ impl LatchedWindow for GossipState {
 }
 
 /// The close core, `0x4e1fa0` with a zero guid: nothing with no menu (`0x4e1fb8`, a zero guid
-/// against a zero cell), else the latch release (`0x4e1fc5`), the cell cleared, and
-/// `GOSSIP_CLOSED` (`0x4e1fdc`). A menu still waiting on its text was latched at its open, so its
-/// close fires too. `SMSG_GOSSIP_COMPLETE` (`0x4e2824`), the missing-text path (`0x4e2197`) and the
-/// leave-world sweep's leg (`0x490ac1` → `0x4e1f60`) call it as it is.
+/// against a zero cell), else the latch release (`0x4e1fc5`), the cell zeroed (`0x4e1fcc`), and
+/// `GOSSIP_CLOSED` (`0x4e1fdc`); the slots, the text and its latch stay, and their getters read
+/// them still. A menu still waiting on its text was latched at its open, so its close fires too.
+/// `SMSG_GOSSIP_COMPLETE` (`0x4e2824`), the missing-text path (`0x4e2197`) and the leave-world
+/// sweep's leg (`0x490ac1` → `0x4e1f60`) call it as it is; a `CloseGossip` call has zeroed the
+/// cell already ([`GossipState::closing`]).
 pub(crate) fn close_core(world: &mut World) {
-    let Some(npc) = world.resource::<GossipState>().npc else {
+    let source = {
+        let mut state = world.resource_mut::<GossipState>();
+        state.closing.take().or(state.npc)
+    };
+    let Some(npc) = source else {
         return;
     };
     crate::ui_session::release(world, npc);
-    world.resource_mut::<GossipState>().clear();
+    world.resource_mut::<GossipState>().npc = None;
     crate::ui_session::note_closed(world, NpcWindow::Gossip);
     crate::ui_session::fire(world, |script| {
-        script.set_gossip(None);
         script.fire_event("GOSSIP_CLOSED", vec![]);
     });
 }
@@ -233,10 +253,9 @@ const GOSSIP_ICON_TYPES: [&str; 14] = [
     "gossip",
 ];
 
-/// The Lua-facing menu, `None` with no menu open. [`feed_gossip`] never calls it while the text
-/// is pending, so its `None` never means pending.
+/// The Lua-facing menu, the slots and the text as the getters read them, which a close leaves;
+/// `None` before any text. [`feed_gossip`] never calls it while the text is pending.
 fn snapshot(state: &GossipState) -> Option<GossipMenu> {
-    state.npc?;
     Some(GossipMenu {
         greeting: state.greeting.clone()?,
         // Active or available by the wire icon: the reference's `{3,4}` test in `0x4e2430` and
@@ -261,10 +280,10 @@ fn snapshot(state: &GossipState) -> Option<GossipMenu> {
     })
 }
 
-/// Push the menu into the VM and fire `GOSSIP_SHOW` on a change; the close is the core's
-/// ([`close_core`]). The menu the VM holds is the memory: `SelectGossipOption`'s reset writes
-/// both sides, so it reads as no change. The slots wait outside the VM's turn, since the gossip
-/// verbs write them in the host.
+/// Push the menu into the VM and, with the window open, fire `GOSSIP_SHOW` for each message and
+/// on a change; the close is the core's ([`close_core`]). The menu the VM holds is the memory:
+/// `SelectGossipOption`'s reset writes both sides, so it reads as no change. The slots wait
+/// outside the VM's turn, since the gossip verbs write them in the host.
 fn feed_gossip(
     mut vm: crate::script_calls::VmWith<Res<'static, GossipState>>,
     self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
@@ -274,6 +293,7 @@ fn feed_gossip(
     unit_names: crate::ui_unit::NameTables,
     states: Res<crate::world_state::WorldStates>,
     mut last_name: crate::ui_script::WindowMemo<Option<String>>,
+    mut shown_message: crate::ui_script::WindowMemo<u64>,
     mut closes: CoreCloses,
 ) {
     vm.turn(|script, state| {
@@ -281,6 +301,7 @@ fn feed_gossip(
             return;
         };
         let last_name = last_name.get(script);
+        let shown_message = shown_message.get(script);
         if closes.since_last(script, NpcWindow::Gossip) {
             *last_name = None;
         }
@@ -312,24 +333,28 @@ fn feed_gossip(
             );
         }
         let name_changed = *last_name != npc_name;
-        if fresh == shown && !name_changed {
+        let new_message = std::mem::replace(shown_message, state.generation) != state.generation;
+        if fresh == shown && !name_changed && !new_message {
             return;
         }
         script.set_gossip(fresh.clone());
-        // Opened, or changed while open; a close is the core's, and a disconnect's clear tells the
-        // VM nothing.
-        if fresh.is_some() {
+        // A message, or a change while open; a close is the core's, and a disconnect's clear
+        // tells the VM nothing.
+        if fresh.is_some() && state.npc.is_some() {
             script.fire_event("GOSSIP_SHOW", vec![]);
         }
         *last_name = npc_name;
     })
 }
 
-/// `CloseGossip()`'s teardown, which holds the whole world, as there is no close packet; the
+/// The rest of a `CloseGossip()` call's close core, which holds the whole world; the
 /// selects apply in their calls ([`verbs::GossipVerbs`]).
-fn drain_gossip(mut hosted_vm: crate::script_calls::HostedVm, mut world_commands: Commands) {
-    let closed = hosted_vm.run(|script| script.is_some_and(|s| s.take_gossip_close()));
-    if closed {
+fn drain_gossip(
+    mut vm: crate::script_calls::VmWith<Res<'static, GossipState>>,
+    mut world_commands: Commands,
+) {
+    let closed = vm.run(|script| script.is_some_and(|s| s.take_gossip_close()));
+    if closed || vm.own().closing.is_some() {
         debug!("ui_gossip: client-side close (no packet)");
         crate::ui_session::queue(&mut world_commands, close_core);
     }
@@ -595,15 +620,19 @@ mod tests {
 
         // Controls: a real end still closes, and a first visit from a closed frame stays shut
         // until its text answers.
+        // The close leaves the text and the slots, which the getters still read (`0x4e1fa0`).
         close_core(app.world_mut());
         assert_eq!(
             tick(&mut app),
-            (vec!["GOSSIP_CLOSED".to_string()], String::new())
+            (
+                vec!["GOSSIP_CLOSED".to_string()],
+                "The bank is north of here.".to_string()
+            )
         );
         assert!(state(&mut app).open_menu(GUARD, 52, option("Goodbye"), Vec::new(), 0));
         assert_eq!(
             tick(&mut app),
-            (Vec::new(), String::new()),
+            (Vec::new(), "The bank is north of here.".to_string()),
             "hidden stays hidden through the hold"
         );
         state(&mut app).text_arrived(52, record("Yes?"), 0);

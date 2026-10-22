@@ -38,7 +38,7 @@ fn gossip_bodies_golden() {
     let mut with_code = hx(concat!("f0debc9a78563412", "03000000"));
     with_code.extend_from_slice(b"1234\0");
     assert_eq!(
-        messages::gossip_select_option(0x1234_5678_9abc_def0, 3, Some("1234")),
+        messages::gossip_select_option(0x1234_5678_9abc_def0, 3, Some(b"1234")),
         with_code,
         "CMSG_GOSSIP_SELECT_OPTION body, coded option with a real code"
     );
@@ -46,7 +46,7 @@ fn gossip_bodies_golden() {
     let mut cut = hx(concat!("f0debc9a78563412", "03000000"));
     cut.extend_from_slice(b"ab\0");
     assert_eq!(
-        messages::gossip_select_option(0x1234_5678_9abc_def0, 3, Some("ab\0cd")),
+        messages::gossip_select_option(0x1234_5678_9abc_def0, 3, Some(b"ab\0cd")),
         cut,
         "CMSG_GOSSIP_SELECT_OPTION body, a code cut at its NUL"
     );

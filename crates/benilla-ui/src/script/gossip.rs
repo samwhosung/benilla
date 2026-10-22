@@ -54,10 +54,13 @@ pub enum GossipCall {
     /// `SelectGossipOption(i [, code])` (`0x4e2a30` → `0x4e2320`), the 1-based slot and the code,
     /// a string or a number (`0x4e2a60`): `CMSG_GOSSIP_SELECT_OPTION` with the slot's wire index
     /// (`0x4e23ef`), or `GOSSIP_ENTER_CODE` for a coded slot and no code.
-    Option { index: u32, code: Option<String> },
+    Option { index: u32, code: Option<Vec<u8>> },
     /// `SelectGossipAvailableQuest(i)` (`0x4e24b0`) or `SelectGossipActiveQuest(i)`
     /// (`0x4e2600`), the 1-based row in its own list: the questgiver query or turn-in for it.
     Quest { active: bool, index: u32 },
+    /// `CloseGossip()` (`0x4e2b20` → `0x4e1fa0` with a zero guid): the cell zeroed in the call
+    /// (`0x4e1fcc`); the window's teardown and `GOSSIP_CLOSED` follow at the drain.
+    Close,
 }
 
 /// Hand `call` to the host, which applies it before this returns ([`super::calls::submit`]).
@@ -158,20 +161,28 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `is-number` else `Usage: SelectGossipOption(index)` (`0x84b984`, `0x4e2a86`).
             let index = binding_abi::index_arg32(lua, i, "Usage: SelectGossipOption(index)")?;
             let code = match code {
-                Value::String(_) | Value::Integer(_) | Value::Number(_) => lua
-                    .coerce_string(code)?
-                    .map(|s| s.to_string_lossy().to_string()),
+                // `lua_tostring`'s C string: its bytes up to the first NUL.
+                Value::String(_) | Value::Integer(_) | Value::Number(_) => {
+                    lua.coerce_string(code)?.map(|s| {
+                        let bytes = s.as_bytes();
+                        let len = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+                        bytes[..len].to_vec()
+                    })
+                }
                 _ => None,
             };
             submit(lua, GossipCall::Option { index, code })
         })?,
     )?;
 
+    // CloseGossip(): the cell zeroed in the call, and the teardown owed to the app.
     g.set(
         "CloseGossip",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.gossip_close = true;
+            submit(lua, GossipCall::Close)?;
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .gossip_close = true;
             Ok(())
         })?,
     )?;
@@ -307,11 +318,11 @@ mod tests {
                 },
                 super::GossipCall::Option {
                     index: 2,
-                    code: Some("a code".into())
+                    code: Some(b"a code".to_vec())
                 },
                 super::GossipCall::Option {
                     index: 3,
-                    code: Some("12".into())
+                    code: Some(b"12".to_vec())
                 },
                 super::GossipCall::Option {
                     index: 4,
