@@ -74,6 +74,49 @@ pub fn unix_seconds() -> i64 {
         .unwrap_or(0)
 }
 
+/// Holds the process's time zone at a `TZ` value for a test, so a local-time answer is the same on
+/// every machine: the lock keeps two zone tests apart, and the drop puts the old `TZ` back.
+#[cfg(test)]
+pub(crate) struct ZoneGuard {
+    old: Option<std::ffi::OsString>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl ZoneGuard {
+    pub(crate) fn set(tz: &str) -> Self {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let old = std::env::var_os("TZ");
+        std::env::set_var("TZ", tz);
+        reread_zone();
+        Self { old, _lock: lock }
+    }
+}
+
+#[cfg(test)]
+impl Drop for ZoneGuard {
+    fn drop(&mut self) {
+        match self.old.take() {
+            Some(v) => std::env::set_var("TZ", v),
+            None => std::env::remove_var("TZ"),
+        }
+        reread_zone();
+    }
+}
+
+/// The runtime's `tzset`, which rereads `TZ`.
+#[cfg(test)]
+fn reread_zone() {
+    extern "C" {
+        #[cfg_attr(windows, link_name = "_tzset")]
+        fn tzset();
+    }
+    // SAFETY: `tzset` takes nothing and only rereads the zone; the guard's lock keeps the zone
+    // tests from racing it.
+    unsafe { tzset() };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

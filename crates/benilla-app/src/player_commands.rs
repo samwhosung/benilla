@@ -245,6 +245,36 @@ mod tests {
         (app, rx)
     }
 
+    /// `showplayer` (`0x405220`, category 1, no help): with the world frame up it toggles the
+    /// own-model flag `[0xc4d74c]` (`0x5ec8c0`) and prints the new state, `player visible` or
+    /// `player hidden`; without one it does nothing. Neither reads the arguments.
+    #[test]
+    fn showplayer_toggles_the_own_model_flag_in_the_world() {
+        let (mut app, _rx) = commands_app();
+        app.insert_resource(crate::player::CameraControl::default());
+        let run = |app: &mut App, line: &str| execute(app.world_mut(), line);
+        assert!(run(&mut app, "showplayer").is_empty(), "no world frame");
+        app.insert_resource(State::new(crate::client_state::ClientState::Login));
+        assert!(run(&mut app, "showplayer").is_empty(), "the glue has none");
+        app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
+        assert_eq!(run(&mut app, "ShowPlayer 1"), ["player hidden"]);
+        assert_eq!(run(&mut app, "showplayer"), ["player visible"]);
+        assert_eq!(
+            run(&mut app, "help showplayer"),
+            [
+                "Help for command showplayer:",
+                "     showplayer No help yet"
+            ]
+        );
+        let graphics = run(&mut app, "help graphics");
+        assert!(
+            graphics[1..]
+                .iter()
+                .any(|l| l.split(", ").any(|n| n == "showplayer")),
+            "{graphics:?}"
+        );
+    }
+
     /// The same, with an active player at world (100, 200, 30) facing 1 radian, and a `Map.dbc`
     /// of maps 0 and 1.
     fn in_world() -> (App, Receiver<ClientCommand>) {

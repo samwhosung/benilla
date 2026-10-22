@@ -635,6 +635,72 @@ mod tests {
         );
     }
 
+    /// `SkySunGlare 0` clears both glares' enabled word: the draw skips the glare (`0x7e57fe`) and
+    /// its visibility term answers 0 (`0x7e578e`), so nothing of the flare shows; set again, the
+    /// envelope rises from where it fell.
+    #[test]
+    fn a_disabled_glare_draws_nothing() {
+        let dir = Vec3::new(0.0, 0.5, -1.0).normalize();
+        let glare_alpha = |enabled: bool| {
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin));
+            // A tenth of a second a frame, so the envelope's slew shows within a few frames.
+            app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_millis(100),
+            ));
+            app.init_resource::<TerrainStreamer>();
+            app.init_resource::<CameraInteriorClaim>();
+            app.init_resource::<CloudCoverage>();
+            app.init_resource::<DebugState>();
+            app.init_resource::<crate::liquid::SubmergedEye>();
+            app.insert_resource(super::super::SunGlare { enabled });
+            app.insert_resource(WowLighting {
+                celestial_dir: dir,
+                sun_flare_dn: 1.0,
+                sun_disc_scale: 1.0,
+                celestial_tint: [1.0, 1.0, 1.0],
+                ..default()
+            });
+            app.insert_resource(Assets::<AdtTile>::default());
+            let mut mats = Assets::<CelestialMaterial>::default();
+            let mat = mats.add(CelestialMaterial {
+                base: StandardMaterial::default(),
+                extension: super::super::materials::CelestialExt::default(),
+            });
+            app.insert_resource(mats);
+            app.world_mut().spawn((
+                crate::view::WorldCamera,
+                Transform::default().looking_to(dir, Vec3::Y),
+                GlobalTransform::default(),
+                Projection::Perspective(PerspectiveProjection::default()),
+            ));
+            app.world_mut().spawn((
+                SunSprite {
+                    part: SunPart::Glare,
+                },
+                Transform::default(),
+                GlobalTransform::default(),
+                MeshMaterial3d(mat.clone()),
+            ));
+            app.add_systems(PostUpdate, follow_sun);
+            for _ in 0..4 {
+                app.update();
+            }
+            app.world()
+                .resource::<Assets<CelestialMaterial>>()
+                .get(&mat)
+                .unwrap()
+                .base
+                .base_color
+                .alpha()
+        };
+        assert!(
+            glare_alpha(true) > 0.0,
+            "the control: an enabled glare shows"
+        );
+        assert_eq!(glare_alpha(false), 0.0);
+    }
+
     /// Height oracle: a flat plain at WoW z = 0, with a 30-unit ridge crest everywhere more than
     /// 300 horizontal units out.
     fn ridge(p: Vec3) -> Option<f32> {

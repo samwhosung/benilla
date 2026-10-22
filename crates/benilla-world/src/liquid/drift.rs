@@ -761,6 +761,58 @@ mod tests {
         }
     }
 
+    /// With `waterParticulates` off, world flag `0x2000000` clear: entering water configures
+    /// nothing (`0x680afa`) and a configured cloud neither advects (`0x66fee0`) nor draws
+    /// (`0x6701e0`).
+    #[test]
+    fn without_particulates_the_cloud_neither_scatters_nor_draws() {
+        use crate::world_flags::WorldFlags;
+        use bevy::ecs::system::RunSystemOnce;
+
+        let world_with = |flags: u32, cloud: DriftCloud| {
+            let mut world = World::new();
+            world.insert_resource(EffectQuads::default());
+            world.insert_resource(Time::<()>::default());
+            world.insert_resource(DriftAssets {
+                motes: Handle::default(),
+            });
+            world.insert_resource(cloud);
+            world.insert_resource(Underwater(Submersion::Water));
+            world.insert_resource(WorldFlags(flags));
+            world.spawn((
+                WorldCamera,
+                GlobalTransform::default(),
+                Projection::default(),
+            ));
+            world
+        };
+        let off = WorldFlags::START & !WorldFlags::PARTICULATES;
+
+        let mut world = world_with(off, DriftCloud::default());
+        world.run_system_once(simulate_drift).unwrap();
+        assert_eq!(world.resource::<DriftCloud>().mode, None, "no re-scatter");
+        let mut world = world_with(WorldFlags::START, DriftCloud::default());
+        world.run_system_once(simulate_drift).unwrap();
+        assert_eq!(
+            world.resource::<DriftCloud>().mode,
+            Some(DriftMode::Water),
+            "the control: the bit set, entering water configures the cloud"
+        );
+
+        let mut c = DriftCloud::default();
+        c.scatter(DriftMode::Water);
+        let mut world = world_with(off, c);
+        world.run_system_once(push_drift).unwrap();
+        assert!(world.resource::<EffectQuads>().draws.is_empty(), "no draw");
+        world.resource_mut::<WorldFlags>().0 = WorldFlags::START;
+        world.run_system_once(push_drift).unwrap();
+        assert_eq!(
+            world.resource::<EffectQuads>().draws.len(),
+            1,
+            "the control"
+        );
+    }
+
     #[test]
     fn slime_has_no_motes_and_going_dry_keeps_the_configuration() {
         let mut c = cloud(DriftMode::Water);

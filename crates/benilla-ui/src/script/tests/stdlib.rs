@@ -381,6 +381,7 @@ fn the_lua_5_0_dialect_vanilla_addons_are_written_in_runs_here() {
 /// `_G` (slots 34 and 33 of its base registry); addons save `time()` and compare across logins.
 #[test]
 fn time_is_epoch_seconds_and_date_formats_them() {
+    let _zone = crate::civil::ZoneGuard::set("UTC0");
     let s = script();
 
     // A plausible wall clock, between 2020 and 2100, not GetTime's 0-based one.
@@ -429,6 +430,7 @@ fn time_is_epoch_seconds_and_date_formats_them() {
 /// specifier writes nothing. An empty or 256-byte answer raises, a negative time answers nil.
 #[test]
 fn date_formats_as_msvcs_strftime() {
+    let _zone = crate::civil::ZoneGuard::set("UTC0");
     let s = script();
     let date = |args: &str| -> String {
         s.eval::<String>(&format!("return date({args})"))
@@ -447,10 +449,7 @@ fn date_formats_as_msvcs_strftime() {
         (r#""%#d.%#m %#H:%#M %#j", 1000000000"#, "9.9 1:46 252"),
         (r#""%U %W", 1000086400"#, "36 37"),
         (r#""%U %W", 1000000000"#, "36 36"),
-        (
-            r#""%Z|%z", 1000000000"#,
-            "Coordinated Universal Time|Coordinated Universal Time",
-        ),
+        (r#""%Z|%z", 1000000000"#, "UTC|UTC"),
         (r#""a%Qb%hc%ed", 1000000000"#, "abcd"),
         (r#""*tx", 1000000000"#, "*tx"),
         (r#""%Y", "1000000000""#, "2001"),
@@ -483,6 +482,7 @@ fn date_formats_as_msvcs_strftime() {
 /// negative time nil.
 #[test]
 fn time_converts_a_date_table() {
+    let _zone = crate::civil::ZoneGuard::set("UTC0");
     let s = script();
     let time = |t: &str| -> String {
         s.eval::<mlua::Value>(&format!("return time({t})"))
@@ -533,6 +533,85 @@ fn time_converts_a_date_table() {
         )
         .unwrap();
     assert!(round, "a date table converts back");
+}
+
+/// `date` and `time` read the system's zone as 1.12.1's runtime does: `localtime` (`0x73f125`)
+/// unless the format leads with `!`, which is `gmtime` (`0x7033f0`), and `_mktime` (`0x74066b`),
+/// which adds the zone's offset and, for a table whose `isdst` is true, its daylight bias
+/// (`0x740811`, `0x740836`). `%Z` is the zone's name for the time's `isdst`, the standard one
+/// after `!` (`0x413916`).
+#[test]
+fn date_and_time_read_the_local_zone() {
+    let s = script();
+    let eval = |src: &str| -> String {
+        s.eval::<mlua::Value>(src)
+            .map(|v| match v {
+                mlua::Value::Nil => "nil".to_string(),
+                mlua::Value::Boolean(b) => b.to_string(),
+                mlua::Value::String(t) => t.to_str().unwrap().to_string(),
+                v => format!("{}", v.as_f64().unwrap()),
+            })
+            .unwrap_or_else(|e| format!("error: {e}"))
+    };
+    {
+        // 5:45 east of UTC, no daylight saving.
+        let _zone = crate::civil::ZoneGuard::set("NPT-05:45");
+        for (src, want) in [
+            (r#"return date("%H:%M", 0)"#, "05:45"),
+            (r#"return date("!%H:%M", 0)"#, "00:00"),
+            (
+                r#"return date("%Y-%m-%d %H:%M", 72000)"#,
+                "1970-01-02 01:45",
+            ),
+            (
+                r#"local t = date("*t", 72000) return t.day * 100 + t.hour"#,
+                "201",
+            ),
+            (r#"return date("!*t", 72000).hour"#, "20"),
+            (r#"return date("*t", 0).isdst"#, "false"),
+            (r#"return date("%Z", 0)"#, "NPT"),
+            (r#"return date("!%Z", 0)"#, "NPT"),
+            (
+                "return time{year=1970, month=1, day=1, hour=5, min=45}",
+                "0",
+            ),
+            ("return time{year=1970, month=1, day=1, hour=0}", "nil"),
+            ("return time(date('*t', 1000000000))", "1000000000"),
+        ] {
+            assert_eq!(eval(src), want, "{src}");
+        }
+    }
+    // Five hours west, an hour less in summer: 1_000_000_000 is 2001-09-08 21:46:40 EDT.
+    let zone = if cfg!(windows) {
+        "EST5EDT"
+    } else {
+        "EST5EDT,M3.2.0,M11.1.0"
+    };
+    let _zone = crate::civil::ZoneGuard::set(zone);
+    for (src, want) in [
+        (
+            r#"return date("%Y-%m-%d %H:%M:%S", 1000000000)"#,
+            "2001-09-08 21:46:40",
+        ),
+        (r#"return date("*t", 1000000000).isdst"#, "true"),
+        (r#"return date("!*t", 1000000000).isdst"#, "false"),
+        (r#"return date("%Z", 1000000000)"#, "EDT"),
+        (r#"return date("!%Z", 1000000000)"#, "EST"),
+        (r#"return date("%H", 980000000)"#, "09"),
+        (r#"return date("%Z", 980000000)"#, "EST"),
+        // `isdst` read as a boolean, so nil is 0: the fields are standard time, an hour later.
+        (
+            "return time{year=2001, month=9, day=8, hour=21, min=46, sec=40}",
+            "1000003600",
+        ),
+        (
+            "return time{year=2001, month=9, day=8, hour=21, min=46, sec=40, isdst=true}",
+            "1000000000",
+        ),
+        ("return time(date('*t', 1000000000))", "1000000000"),
+    ] {
+        assert_eq!(eval(src), want, "{src}");
+    }
 }
 
 // ── RunScript ──

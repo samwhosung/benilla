@@ -1716,6 +1716,24 @@ mod tests {
     use super::*;
     use crate::entities::ItemModelKind;
 
+    /// The screen basis's aspect is `0x4901e0`'s: the display's width over height while
+    /// `widescreen` is on, 4/3 when it is 0.
+    #[test]
+    fn the_gx_aspect_is_four_thirds_with_widescreen_off() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<GxAspect>();
+        world.insert_resource(crate::cvars::Cvars::default());
+        let mut window = Window::default();
+        window.resolution.set(1920.0, 1080.0);
+        world.spawn((window, bevy::window::PrimaryWindow));
+        world.run_system_once(feed_gx_aspect).unwrap();
+        assert!((world.resource::<GxAspect>().0 - 16.0 / 9.0).abs() < 1e-6);
+        world.insert_resource(crate::cvars::Cvars::with_value("widescreen", "0"));
+        world.run_system_once(feed_gx_aspect).unwrap();
+        assert_eq!(world.resource::<GxAspect>().0, 4.0 / 3.0);
+    }
+
     /// The stock pet frame binds `"partypetN"` (`PartyFrameTemplates.xml`, `UnitFrame_Initialize`),
     /// and `SetPortraitTexture` draws only a token a slot bakes.
     #[test]

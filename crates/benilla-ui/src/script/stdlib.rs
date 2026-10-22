@@ -732,6 +732,7 @@ mod date_table_tests {
     /// string return never does.
     #[test]
     fn date_star_t_answers_a_table_that_walks_with_its_argument() {
+        let _zone = crate::civil::ZoneGuard::set("UTC0");
         let s = UiScript::new().unwrap();
         // A Wednesday at 00:00 UTC: wday 4, counting from Sunday = 1.
         let t: i64 = 1_786_492_800;

@@ -553,6 +553,36 @@ const SCREEN_FALLBACK: [ScreenResolution; 4] = [
     },
 ];
 
+/// The rows `GetScreenResolutions` offers from the monitors' sizes and modes: [`offerable`] ones
+/// in ascending area, else [`SCREEN_FALLBACK`].
+fn offered_modes<'a>(
+    monitors: impl IntoIterator<Item = &'a Monitor>,
+    _widescreen: bool,
+) -> Vec<ScreenResolution> {
+    let mut offered: Vec<ScreenResolution> = Vec::new();
+    for m in monitors {
+        // The monitor's own scale, not the window's: these rows describe the panel.
+        let scale = if m.scale_factor > 0.0 {
+            m.scale_factor
+        } else {
+            1.0
+        };
+        let logical = |size: UVec2| ScreenResolution {
+            width: (size.x as f64 / scale).round() as u32,
+            height: (size.y as f64 / scale).round() as u32,
+        };
+        offered.push(logical(m.physical_size()));
+        offered.extend(m.video_modes.iter().map(|v| logical(v.physical_size)));
+    }
+    offered.retain(|r| offerable(*r));
+    if offered.is_empty() {
+        offered.extend(SCREEN_FALLBACK);
+    }
+    offered.sort_by_key(|r| (u64::from(r.width) * u64::from(r.height), r.width, r.height));
+    offered.dedup();
+    offered
+}
+
 /// The list [`publish_display_modes`] last pushed and the current entry.
 type PublishedModes = Option<(Vec<ScreenResolution>, Option<ScreenResolution>)>;
 
@@ -580,27 +610,7 @@ fn publish_display_modes(
             height: res.height() as u32,
         })
         .filter(|r| r.width > 0 && r.height > 0);
-        let mut offered: Vec<ScreenResolution> = Vec::new();
-        for m in &monitors {
-            // The monitor's own scale, not the window's: these rows describe the panel.
-            let scale = if m.scale_factor > 0.0 {
-                m.scale_factor
-            } else {
-                1.0
-            };
-            let logical = |size: UVec2| ScreenResolution {
-                width: (size.x as f64 / scale).round() as u32,
-                height: (size.y as f64 / scale).round() as u32,
-            };
-            offered.push(logical(m.physical_size()));
-            offered.extend(m.video_modes.iter().map(|v| logical(v.physical_size)));
-        }
-        offered.retain(|r| offerable(*r));
-        if offered.is_empty() {
-            offered.extend(SCREEN_FALLBACK);
-        }
-        offered.sort_by_key(|r| (u64::from(r.width) * u64::from(r.height), r.width, r.height));
-        offered.dedup();
+        let offered = offered_modes(&monitors, true);
         // Keyed by VM: a `ReloadUI` VM has been pushed nothing, so a plain `Local` would skip it.
         let memo = last.get(script);
         if memo.as_ref() == Some(&(offered.clone(), current)) {
@@ -804,6 +814,15 @@ pub(crate) fn apply_window_mode(
             ""
         }
     );
+}
+
+/// `gxResolution` reads the size the screen runs at.
+pub(crate) fn show_screen_size(
+    cfg: Res<VideoConfig>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cvars: Option<ResMut<crate::cvars::Cvars>>,
+) {
+    let _ = (cfg, windows, cvars);
 }
 
 #[cfg(test)]
@@ -1144,6 +1163,45 @@ mod tests {
         ));
     }
 
+    /// In fullscreen `gxResolution` answers the size the screen runs at, the borderless window's
+    /// device pixels, as 1.12.1's fullscreen runs at the mode it names; the windowed size stays
+    /// the row's saved value and comes back when the window does.
+    #[test]
+    fn gxresolution_reads_the_screen_size_in_fullscreen() {
+        let mut app = App::new();
+        app.insert_resource(VideoConfig {
+            vsync: true,
+            display: DisplayMode::Fullscreen,
+            maximize: false,
+            windowed: UVec2::new(1600, 900),
+        })
+        .insert_resource(crate::cvars::Cvars::with_value("gxResolution", "1600x900"))
+        .add_systems(Update, show_screen_size);
+        let mut window = Window {
+            mode: WindowMode::BorderlessFullscreen(MonitorSelection::Primary),
+            ..default()
+        };
+        window.resolution = WindowResolution::new(2880, 1800).with_scale_factor_override(2.0);
+        let win = app.world_mut().spawn((window, PrimaryWindow)).id();
+        app.update();
+        let gx = |app: &App| {
+            app.world()
+                .resource::<crate::cvars::Cvars>()
+                .get("gxResolution")
+                .map(str::to_string)
+        };
+        assert_eq!(gx(&app).as_deref(), Some("2880x1800"));
+        app.world_mut().resource_mut::<VideoConfig>().display = DisplayMode::Windowed;
+        {
+            let mut e = app.world_mut().entity_mut(win);
+            let mut w = e.get_mut::<Window>().unwrap();
+            w.mode = WindowMode::Windowed;
+            w.resolution.set(1600.0, 900.0);
+        }
+        app.update();
+        assert_eq!(gx(&app).as_deref(), Some("1600x900"));
+    }
+
     /// `gxMaximize` counts only while windowed, and there it is the reference's popup over the
     /// whole screen (`0x58cf10`: style `0x90000000`, `GetSystemMetrics` 0 and 1).
     #[test]
@@ -1208,6 +1266,40 @@ mod tests {
         assert_eq!(
             (w.resolution.width(), w.resolution.height()),
             (1024.0, 768.0)
+        );
+    }
+
+    /// With `widescreen` 0 the list is the four fixed sizes (`0x48bcac`-`0x48bcc1`), never mixed
+    /// with the display's modes (`0x48bd79`-`0x48bd91`); on, the display's offerable modes.
+    #[test]
+    fn widescreen_off_offers_the_four_fixed_sizes() {
+        let monitor = Monitor {
+            name: None,
+            physical_height: 1080,
+            physical_width: 1920,
+            physical_position: IVec2::ZERO,
+            refresh_rate_millihertz: None,
+            scale_factor: 1.0,
+            video_modes: vec![bevy::window::VideoMode {
+                physical_size: UVec2::new(1280, 720),
+                bit_depth: 32,
+                refresh_rate_millihertz: 60_000,
+            }],
+        };
+        let size = |r: &ScreenResolution| (r.width, r.height);
+        assert_eq!(
+            offered_modes([&monitor], true)
+                .iter()
+                .map(size)
+                .collect::<Vec<_>>(),
+            [(1280, 720), (1920, 1080)]
+        );
+        assert_eq!(
+            offered_modes([&monitor], false)
+                .iter()
+                .map(size)
+                .collect::<Vec<_>>(),
+            [(800, 600), (1024, 768), (1280, 1024), (1600, 1200)]
         );
     }
 

@@ -161,6 +161,7 @@ pub mod wdl;
 pub mod weather;
 pub mod wmo_portal;
 pub mod world_census;
+pub mod world_flags;
 pub mod world_map;
 pub mod world_plugins;
 pub mod world_point;

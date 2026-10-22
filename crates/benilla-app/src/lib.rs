@@ -190,6 +190,7 @@ mod vm_pass;
 mod vplates;
 mod weapon_trail;
 mod world_backdrop;
+mod world_console;
 mod world_state;
 mod world_state_ui;
 

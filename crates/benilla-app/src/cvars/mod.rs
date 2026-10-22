@@ -734,6 +734,12 @@ impl Cvars {
         out
     }
 
+    /// Show the engine's own value for a row over the player's, which the row holds for the save,
+    /// or end the overlay with `None`.
+    pub(crate) fn show(&mut self, name: &str, shown: Option<&str>) {
+        let _ = (name, shown);
+    }
+
     /// The account name earlier builds kept in a file of its own
     /// ([`crate::local_state::legacy_account_path`]), taken once into the `accountName` row (the
     /// record `GetSavedAccountName` reads, `0x46cdd0`) when `config.toml` holds none: its value and
@@ -2746,6 +2752,65 @@ mod tests {
             world.trigger(event);
         }
         outcome
+    }
+
+    /// An engine value shown over a row (`gxResolution` in fullscreen, the screen's own size) is
+    /// what `GetCVar`, the console and a new VM read, fires nothing, and leaves the player's value
+    /// for the save; a player write replaces the held value, and ending the overlay brings the
+    /// held value back.
+    #[test]
+    fn a_shown_value_answers_and_the_held_one_saves() {
+        let mut cvars = registry(&[("gxResolution", "1280x720")]);
+        cvars.take_events();
+        cvars.show("gxResolution", Some("2880x1800"));
+        assert_eq!(cvars.get("gxResolution"), Some("2880x1800"));
+        assert!(!cvars.has_events(), "the engine's value fires no callback");
+        assert_eq!(
+            cvars.compose().get("gxResolution").map(String::as_str),
+            Some("1280x720")
+        );
+        let mut script = UiScript::new().unwrap();
+        cvars.seed_vm(&mut script);
+        assert_eq!(script.cvar("gxResolution").as_deref(), Some("2880x1800"));
+        assert_eq!(cvars.set("gxResolution", "1024x768"), SetOutcome::Staged);
+        assert_eq!(cvars.commit_latched(), 1);
+        assert_eq!(cvars.get("gxResolution"), Some("1024x768"));
+        cvars.show("gxResolution", Some("2880x1800"));
+        assert_eq!(
+            cvars.compose().get("gxResolution").map(String::as_str),
+            Some("1024x768"),
+            "the player's write is what saves"
+        );
+        cvars.show("gxResolution", None);
+        assert_eq!(cvars.get("gxResolution"), Some("1024x768"));
+        cvars.show("gxResolution", None);
+        assert_eq!(cvars.get("gxResolution"), Some("1024x768"));
+    }
+
+    /// `ffx`, `ffxGlow`, `ffxDeath` and `ffxRectangle` share the change callback `0x6cde30`: the
+    /// value's `atoi` (`0x41449c`), "enabled" (`0x853764`) when nonzero, else "disabled"
+    /// (`0x853758`), and the write taken (`mov al,1`), on the console write, `SetCVar` and the
+    /// host's own writes alike.
+    #[test]
+    fn the_ffx_rows_echo_their_state() {
+        let mut cvars = registry(&[]);
+        let mut script = UiScript::new().unwrap();
+        cvars.seed_vm(&mut script);
+        script
+            .run(
+                r#"ConsoleExec("ffxGlow 0") SetCVar("ffxDeath", " +2") ConsoleExec("ffx abc")
+                   SetCVar("ffxRectangle", "0")"#,
+            )
+            .unwrap();
+        assert_eq!(script.cvar("ffxGlow").as_deref(), Some("0"));
+        assert_eq!(script.cvar("ffx").as_deref(), Some("abc"));
+        cvars.drain_vm(&mut script);
+        assert_eq!(cvars.get("ffxDeath"), Some(" +2"));
+        cvars.set("ffxGlow", "1");
+        assert_eq!(
+            cvars.take_console_lines(),
+            ["disabled", "enabled", "disabled", "disabled", "enabled"]
+        );
     }
 
     /// `ConsoleExec(line)` as the typed `/console` runs it: on a VM seeded from the app's registry,

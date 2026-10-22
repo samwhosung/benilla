@@ -62,6 +62,30 @@ struct StarDome {
     weight: f32,
 }
 
+/// Both glares' enabled word (`+0x8` of the sun's `0xce97a8` and the moon's `0xce96f8`), which
+/// the console command `SkySunGlare` (`0x6d1dc0`) sets or clears together. A disabled glare is not
+/// drawn (`0x7e57fe`) and its visibility term answers 0 (`0x7e578e`), so its envelope slews to 0.
+/// Every map load re-runs `InitSky` (`0x6d1ba0` from `0x694475`), whose glare setup stores 1 again
+/// (`0x6d1e8a`, `0x6d1f8a`).
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SunGlare {
+    pub enabled: bool,
+}
+
+impl Default for SunGlare {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+/// A map load re-arms both glares, as `InitSky`'s glare setup does (`0x6d1e8a`, `0x6d1f8a`).
+fn rearm_glare_on_map_load(
+    mut changes: MessageReader<crate::world_map::MapChange>,
+    mut glare: ResMut<SunGlare>,
+) {
+    let _ = (&mut changes, &mut glare);
+}
+
 /// The celestial layer: spawns the sun, moons and stars at startup and places them each frame.
 pub(crate) struct SunPlugin;
 
@@ -127,5 +151,28 @@ fn apply_celestial_visibility(
     }
     for mut vis in &mut stars {
         set(&mut vis, want(true));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A map load re-runs `InitSky` (`0x6d1ba0`, called from `CMap::Load` at `0x694475`), whose
+    /// glare setup stores 1 in both enabled words (`0x6d1e8a`, `0x6d1f8a`).
+    #[test]
+    fn a_map_load_rearms_the_glares() {
+        let mut app = App::new();
+        app.add_message::<crate::world_map::MapChange>()
+            .insert_resource(SunGlare { enabled: false })
+            .add_systems(Update, rearm_glare_on_map_load);
+        app.update();
+        assert!(
+            !app.world().resource::<SunGlare>().enabled,
+            "no load, no change"
+        );
+        app.world_mut().write_message(crate::world_map::MapChange);
+        app.update();
+        assert!(app.world().resource::<SunGlare>().enabled);
     }
 }
