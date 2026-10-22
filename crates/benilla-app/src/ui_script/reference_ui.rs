@@ -1924,11 +1924,6 @@ mod tests {
                  `0x48f440`); benilla does not read that packet, and vmangos never sends it",
             ),
             (
-                "GOSSIP_ENTER_CODE",
-                "UIParent.lua — the code-entry gossip option (a door with a combination); \
-                 benilla's gossip feed carries no code-entry option kind yet",
-            ),
-            (
                 "TRADE_REQUEST",
                 "UIParent.lua — the trade ASK dialog, and the one entry on this list that is \
                  UNPRODUCEABLE rather than unbuilt: the 5875 client registers the event and \
