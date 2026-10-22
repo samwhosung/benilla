@@ -335,6 +335,7 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
         }
     };
     sc.pass.copies.insert(guid, moved);
+    bag_write(&mut sc, guid);
     notify_in_place(
         &mut sc,
         Notify::Create {
@@ -397,6 +398,7 @@ fn on_item_create(In(ev): In<SessionEvent>, mut sc: Scene) {
         }
     };
     sc.pass.copies.insert(guid, moved);
+    bag_write(&mut sc, guid);
     notify_in_place(
         &mut sc,
         Notify::Create {
@@ -404,6 +406,14 @@ fn on_item_create(In(ev): In<SessionEvent>, mut sc: Scene) {
             kind: Created::Item,
         },
     );
+}
+
+/// A write of our player or an item: the frame's first stamps where the bag view changes
+/// ([`crate::ui_items::feed::BagView`]).
+fn bag_write(sc: &mut Scene, guid: u64) {
+    if sc.self_guid.0 == Some(guid) || benilla_protocol::guid::is_item(guid) {
+        sc.bag_view.wrote();
+    }
 }
 
 /// A values block (`0x467160`): written into a held object, or one it brings back; a guid the
@@ -437,6 +447,7 @@ fn on_object_values(In(ev): In<SessionEvent>, mut sc: Scene) {
     };
     if let Some(moved) = moved {
         sc.pass.copies.insert(guid, moved);
+        bag_write(&mut sc, guid);
     }
     notify_in_place(&mut sc, Notify::Values { guid, sent });
 }
@@ -705,6 +716,7 @@ fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<N
     let Some(e) = sc.index.0.remove(&guid) else {
         return;
     };
+    bag_write(&mut sc, guid);
     // An item has no model to fade, so it goes now with its countdown cells.
     if benilla_protocol::guid::is_item(guid) {
         sc.commands.entity(e).despawn();

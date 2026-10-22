@@ -1078,7 +1078,12 @@ pub(crate) fn feed_containers(
         Res<crate::ui_petition::PetitionRecords>,
     ),
     mut memory: Local<crate::ui_script::VmMemo<FeedMemory>>,
+    mut view: ResMut<BagView>,
 ) {
+    // The frame's first write of our player or an item, and a swap the last drain left half
+    // done (it ended with no VM): the view it put back gives way to the one it owed.
+    let written = view.written.take();
+    let owed = view.swap.take().filter(|s| !s.back).map(|s| s.new);
     // The bags, read off the host's cooldowns among the rest. The push signals nothing: the bag
     // events are the watchers' and the handlers', fired after it on the lanes
     // ([`crate::item_lane`]).
@@ -1154,6 +1159,7 @@ pub(crate) fn feed_containers(
             props: catalogs.1.as_deref(),
         };
         let player = inv.self_store.iter().next();
+        let mut key_pair = None;
 
         let mut fresh: HashMap<i64, ContainerState> = HashMap::new();
         // The class's relic flag; without client data it is false, an ordinary ranged slot.
@@ -1369,6 +1375,7 @@ pub(crate) fn feed_containers(
             // `HasKey()`, which decides whether the keyring shows at all, pushed with the
             // containers so it is fresh on every `BAG_UPDATE` frame.
             let key = has_key(&store.0, &inv.objects, &items);
+            key_pair = Some((memory.had_key, key));
             if key != memory.had_key {
                 gate.audit("feed_containers", "the HasKey() flip");
                 debug!(
@@ -1377,7 +1384,6 @@ pub(crate) fn feed_containers(
                 );
                 memory.had_key = key;
             }
-            script.set_has_key(key);
 
             // The worn items' use cooldowns, for the tooltip line; no event rides them.
             let worn = worn_cooldowns(
@@ -1411,36 +1417,194 @@ pub(crate) fn feed_containers(
                 );
             }
         }
-        Some((player.is_some().then_some(fresh), gate))
+        Some((player.is_some().then_some(fresh), key_pair, vm_reset, gate))
     });
-    if let Some((source, gate)) = bags {
-        vm.run(|script| {
-            let Some(script) = script else {
-                return;
-            };
-            let memory = memory.get(script);
-            if push_containers(script, memory, source) {
-                gate.audit("feed_containers", "a bag diff");
-            }
+    vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        if let Some(owed) = owed {
+            owed.put(script);
+        }
+        let Some((source, key_pair, vm_reset, gate)) = bags else {
+            return;
+        };
+        let memory = memory.get(script);
+        let changed = push_changed(script, memory, source);
+        if !changed.is_empty() {
+            gate.audit("feed_containers", "a bag diff");
+        }
+        let Some((had_key, key)) = key_pair else {
+            return;
+        };
+        script.set_has_key(key);
+        // A fresh VM had no view before this one, so nothing stamped earlier reads an older one.
+        let Some(at) = written.filter(|_| !vm_reset) else {
+            return;
+        };
+        if changed.is_empty() && had_key == key {
+            return;
+        }
+        let (old, new) = changed
+            .into_iter()
+            .map(|(bag, old, new)| ((bag, old), (bag, new)))
+            .unzip();
+        view.swap = Some(Swap {
+            at,
+            back: true,
+            old: View {
+                bags: old,
+                key: had_key,
+            },
+            new: View { bags: new, key },
         });
+    });
+}
+
+/// The bag view the lanes' events read, as the packets left it. The feed pushes the frame's whole
+/// view, which the feeds' own events after it read (the world-enter cascade's `BAG_UPDATE`s, the
+/// cooldown flush's `BAG_UPDATE_COOLDOWN`). An event a handler raised before the frame's first
+/// write of our player or an item reads the view that write changed, so when a lane holds one the
+/// drain starts on last frame's view and swaps to this frame's at that write's stamp.
+///
+/// The exact form is a view per packet (#2217): the bags here are last frame's or this frame's,
+/// never the one a packet between two writes left.
+#[derive(Resource, Default)]
+pub(crate) struct BagView {
+    /// The stamp of the frame's first handler call that wrote our player or an item.
+    written: Option<crate::lanes::Stamp>,
+    swap: Option<Swap>,
+}
+
+/// One frame's change to the bag view: what the VM held before and after it.
+struct Swap {
+    /// The write's stamp, where the drain swaps to the new view.
+    at: crate::lanes::Stamp,
+    /// The drain's start still owes the old view.
+    back: bool,
+    old: View,
+    new: View,
+}
+
+/// The bags that changed and `HasKey()`.
+struct View {
+    bags: Vec<(i64, Option<ContainerState>)>,
+    key: bool,
+}
+
+impl View {
+    fn put(self, script: &mut UiScript) {
+        for (bag, state) in self.bags {
+            script.set_container(bag, state);
+        }
+        script.set_has_key(self.key);
     }
 }
 
-/// Push every bag whose view changed since the last push, firing nothing: a bag's events are its
-/// watchers' runs (`0x4f8db0`, `0x4f90d0`, `0x4f8ec0`, `0x4f9480`, [`crate::item_watch`]), fired
-/// after this push on the item lane. Whether anything went into the VM, for the caller's gate
-/// audit.
-///
-/// `None` is an absent self store (before login, or the logout despawn frames before the VM shuts
-/// down), never "no items": the VM keeps its last push, as the reference's UI shutdown
-/// (`0x490bd0`) runs with the inventory intact.
+impl BagView {
+    /// A handler wrote our player or an item: the first of the frame stamps the swap.
+    pub(crate) fn wrote(&mut self) {
+        if self.written.is_none() {
+            self.written = Some(crate::lanes::stamp());
+        }
+    }
+
+    /// The old view at the drain's start, then the new one at the write.
+    fn peek(&self) -> Option<crate::lanes::Stamp> {
+        self.swap.as_ref().map(|s| {
+            if s.back {
+                crate::lanes::Stamp::origin()
+            } else {
+                s.at
+            }
+        })
+    }
+}
+
+/// The lane and its drop, under the exact complement of the drain's gate.
+pub(super) fn add_bag_view_lane(app: &mut App) {
+    use crate::lanes::LaneApp;
+    app.init_resource::<BagView>()
+        .add_lane(
+            "bag view",
+            |world| world.get_resource::<BagView>()?.peek(),
+            fire_bag_view,
+            None,
+        )
+        .add_systems(
+            Update,
+            drop_bag_view
+                .in_set(crate::ui_script::UiFeed)
+                .run_if(not(crate::ui_script::ingame_ui_up)),
+        );
+}
+
+fn drop_bag_view(mut view: ResMut<BagView>) {
+    *view = BagView::default();
+}
+
+/// The lane's `fire_until` ([`crate::lanes`]): at the drain's start, last frame's view when an
+/// item stamped before the write is due ahead of it, else nothing to swap; at the write, the new.
+fn fire_bag_view(
+    In(until): In<crate::lanes::Until>,
+    mut vm: crate::script_calls::HostedVm,
+    mut view: ResMut<BagView>,
+) {
+    let Some(swap) = view.swap.as_mut() else {
+        return;
+    };
+    let put = if swap.back {
+        if until.admits(swap.at) {
+            view.swap = None;
+            return;
+        }
+        swap.back = false;
+        std::mem::replace(
+            &mut swap.old,
+            View {
+                bags: Vec::new(),
+                key: false,
+            },
+        )
+    } else {
+        let Some(swap) = view.swap.take() else {
+            return;
+        };
+        swap.new
+    };
+    vm.run(|script| {
+        if let Some(script) = script {
+            put.put(script);
+        }
+    });
+}
+
+/// [`push_changed`], with whether anything went into the VM.
+#[cfg(test)]
 pub(crate) fn push_containers(
     script: &mut UiScript,
     memory: &mut FeedMemory,
     source: Option<HashMap<i64, ContainerState>>,
 ) -> bool {
+    !push_changed(script, memory, source).is_empty()
+}
+
+/// Push every bag whose view changed since the last push, firing nothing: a bag's events are its
+/// watchers' runs (`0x4f8db0`, `0x4f90d0`, `0x4f8ec0`, `0x4f9480`, [`crate::item_watch`]), fired
+/// after this push on the item lane. Each changed bag with its view before and after, for the
+/// caller's gate audit and the lanes' swap ([`BagView`]).
+///
+/// `None` is an absent self store (before login, or the logout despawn frames before the VM shuts
+/// down), never "no items": the VM keeps its last push, as the reference's UI shutdown
+/// (`0x490bd0`) runs with the inventory intact.
+#[allow(clippy::type_complexity)] // (bag, before, after)
+fn push_changed(
+    script: &mut UiScript,
+    memory: &mut FeedMemory,
+    source: Option<HashMap<i64, ContainerState>>,
+) -> Vec<(i64, Option<ContainerState>, Option<ContainerState>)> {
     let Some(fresh) = source else {
-        return false;
+        return Vec::new();
     };
     let changed: Vec<i64> = fresh
         .keys()
@@ -1451,7 +1615,7 @@ pub(crate) fn push_containers(
         .filter(|b| fresh.get(b) != memory.pushed.get(b))
         .collect();
     if changed.is_empty() {
-        return false;
+        return Vec::new();
     }
     for &bag in &changed {
         script.set_container(bag, fresh.get(&bag).cloned());
@@ -1465,8 +1629,12 @@ pub(crate) fn push_containers(
             .collect::<Vec<_>>()
             .join(" ")
     );
+    let out = changed
+        .iter()
+        .map(|&b| (b, memory.pushed.get(&b).cloned(), fresh.get(&b).cloned()))
+        .collect();
     memory.pushed = fresh;
-    true
+    out
 }
 
 #[cfg(test)]

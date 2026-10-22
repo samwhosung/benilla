@@ -287,10 +287,12 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
 ];
 
-/// The host-held queues a handler fills that are yet to be read for what their feeds fire: the
-/// check finds a queue the handlers and the host both hold, but not whether a feed fires off it
-/// what a packet raised. Each, once its feeds are read, leaves for a [`Row::HostHeld`] row when
-/// one does, or is named quiet beside why when none does; the list only shrinks.
+/// The host-held queues a handler fills that are yet to be read for what their feeds fire, so
+/// the list is the whole of that remaining work and must only shrink: the check finds a queue
+/// the handlers and the host both hold, but not whether a feed fires off it what a packet
+/// raised. Each goes once its feeds are read, to a [`Row::HostHeld`] row when one does, or named
+/// quiet beside why when none does; a new one fails, and an entry whose queue the handlers or the
+/// host no longer hold fails as stale.
 const HOST_HELD_UNREAD: &[&str] = &[
     "::creature_anim::AttackStopInFlight",
     "::creature_anim::PlaySeq",
@@ -423,8 +425,9 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 9] {
+fn lane_types() -> [TypeId; 10] {
     [
+        TypeId::of::<crate::ui_items::feed::BagView>(),
         TypeId::of::<crate::field_watch::NoticeLane>(),
         TypeId::of::<crate::item_lane::ItemLane>(),
         TypeId::of::<crate::ui_items::EquipErrors>(),
@@ -588,6 +591,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
         lanes,
         [
             "auction house",
+            "bag view",
             "cast reports",
             "chat",
             "equip errors",

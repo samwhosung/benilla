@@ -87,6 +87,8 @@ pub(crate) struct Scene<'w, 's> {
     item_lane: ResMut<'w, crate::item_lane::ItemLane>,
     /// The bag cache `0xbdd060` the bag seats' runs rescan and the bag events number from.
     bag_cache: ResMut<'w, crate::item_watch::BagCache>,
+    /// Where the frame's bag view changes: its first write of our player or an item.
+    bag_view: ResMut<'w, crate::ui_items::feed::BagView>,
     field_notices: ResMut<'w, crate::field_watch::NoticeLane>,
     /// The guid-scoped selection teardowns (`0x493910(guid, 1)`) a watcher raises.
     deselect: MessageWriter<'w, crate::target::DeselectGuid>,
