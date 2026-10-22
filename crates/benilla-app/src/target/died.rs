@@ -280,6 +280,60 @@ mod tests {
         }
     }
 
+    /// Our own death runs `0x5e99b0`'s active-player leg first (`0x605860` at `0x60588d`), in its
+    /// order: the target cleared (`0x493540(0, 0)` at `0x5e9a45`), the loot window closed with its
+    /// release (`0x48f200(1, 0, 0)` at `0x5e9a5c`), the cast cancelled whatever it is bound to
+    /// (`CancelCast(1, 1, 0x1c)` at `0x5e9a6c`), and with `UNIT_FIELD_FLAGS` 0x100000 a release
+    /// asked at once (`0x5e9a7d` → `0x5e0ae0`, `CMSG_REPOP_REQUEST`); without it, none.
+    #[test]
+    fn our_own_death_clears_the_target_closes_the_loot_cancels_the_cast_and_releases() {
+        for flagged in [true, false] {
+            let mut c = client();
+            let (me, mob) = (c.me, c.mob);
+            c.select(MOB, mob);
+            c.cast(FIREBALL);
+            c.world()
+                .resource_mut::<crate::ui_loot::LootState>()
+                .open(OTHER, 1, 0, Vec::new());
+            if flagged {
+                c.world()
+                    .get_mut::<ObjectStore>(me)
+                    .unwrap()
+                    .0
+                    .merge(ObjectFields::from_pairs(&[(
+                        FIELD_UNIT_FLAGS,
+                        0x8 | 0x10_0000,
+                    )]));
+            }
+            c.sent();
+            c.reports();
+
+            c.dies(me, ME, ObjectType::Player);
+            let mut want = vec![
+                "SetSelection { guid: 0 }".to_string(),
+                format!("LootRelease {{ guid: {OTHER} }}"),
+                format!("CancelCast {{ spell_id: {FIREBALL} }}"),
+            ];
+            if flagged {
+                want.push("RepopRequest".to_string());
+            }
+            let sent: Vec<String> = c.sent().iter().map(|s| format!("{s:?}")).collect();
+            assert_eq!(sent, want, "flagged: {flagged}");
+            assert_eq!(c.world().resource::<Selection>().guid, None);
+            assert_eq!(
+                c.world().resource::<crate::ui_loot::LootState>().source(),
+                None
+            );
+            assert_eq!(c.in_flight(), None, "the cast is popped");
+            assert!(
+                c.reports()
+                    .iter()
+                    .any(|r| matches!(r, CastReport::Bar(CastBarEdge::Failed))),
+                "and fails"
+            );
+        }
+    }
+
     /// `0x6058b3`-`0x6058e0`: a spell in flight (`0x6e3d30`) whose record target (`0x6e3d50`,
     /// `0xceac60`) is the dying unit is cancelled with `0x6e4940(1, 1, 0x65)`: `CMSG_CANCEL_CAST`,
     /// the pop, and `SPELLCAST_FAILED` for the player's record. Another unit's death leaves it,
