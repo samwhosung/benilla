@@ -293,6 +293,22 @@ pub(crate) fn incapacitated_flags(flags: u32, translate_gated: bool, turn_gated:
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct OwnControlLost(pub(crate) bool);
 
+/// A stand state committed locally, sent or from `SMSG_STANDSTATE_UPDATE`, whose echo into
+/// `UNIT_FIELD_BYTES_1` has not landed: the reference's predicted cache `[player+0x1d68]`
+/// (`0x5f0790`). A resource of its own, so a script call's stand change writes it inside the call
+/// while the call host's other readers of [`Player`] read on.
+#[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StandPending(pub(super) Option<u8>);
+
+impl StandPending {
+    /// `CGPlayer_C::GetStandState` (`0x5ed570`) for the active player: the local state
+    /// `[player+0x1d68]`, a committed change ahead of its echo, else `descriptor`, the
+    /// `UNIT_FIELD_BYTES_1` byte 0 it tracks.
+    pub(crate) fn stand_state(&self, descriptor: u8) -> u8 {
+        self.0.unwrap_or(descriptor)
+    }
+}
+
 /// Our avatar: until `active` the camera free-flies, then we drive the body the server placed.
 /// `PartialEq` serves the test that the session end resets the whole of it to `Player::default()`.
 #[derive(Resource, Default, PartialEq)]
@@ -346,10 +362,6 @@ pub(crate) struct Player {
     /// rest is sent on its own ([`super::movement_net::stream_self_movement`]) before the next
     /// facing change can carry it as a move.
     pub(super) last_pos: [f32; 3],
-    /// A stand state committed locally, sent or from `SMSG_STANDSTATE_UPDATE`, whose echo into
-    /// `UNIT_FIELD_BYTES_1` has not landed: the reference's predicted cache `[player+0x1d68]`
-    /// (`0x6127b0`).
-    pub(super) stand_pending: Option<u8>,
     /// Holding the body still, gravity off, after a teleport, summon or login until the
     /// destination's colliders stream in. Released by the terrain streamer on residency or at
     /// [`SETTLE_TIMEOUT`], never by ground contact, which a flyer or a swimmer never makes.
@@ -562,13 +574,6 @@ impl Player {
     /// (turning) on them, as the reference's ripple driver `0x5fa760` does.
     pub(crate) fn move_flags(&self) -> u32 {
         self.move_flags
-    }
-
-    /// `CGPlayer_C::GetStandState` (`0x5ed570`) for the active player: the local state
-    /// `[player+0x1d68]`, a committed change ahead of its echo, else `descriptor`, the
-    /// `UNIT_FIELD_BYTES_1` byte 0 it tracks.
-    pub(crate) fn stand_state(&self, descriptor: u8) -> u8 {
-        self.stand_pending.unwrap_or(descriptor)
     }
 
     /// The states on this resource that stop WASD, comma-joined, or `"none"`: an instrument for the

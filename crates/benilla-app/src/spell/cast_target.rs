@@ -339,6 +339,8 @@ pub(crate) struct CastTargeting<'w, 's> {
     /// `Option`: the body exists only in world, and the cast-result handler must fetch this param
     /// anywhere. With no body the moving gate passes and the server decides.
     player: Option<Res<'w, crate::player::Player>>,
+    /// The predicted stand state `GetStandState` reads (`0x5ed570`).
+    stand_pending: Option<Res<'w, crate::player::StandPending>>,
     /// `[0xb4b3e4]`, for the cast tail's start of melee.
     own_control: Option<Res<'w, crate::player::OwnControlLost>>,
     /// The caster's and the selection's reach and motion, for the range gate.
@@ -497,7 +499,9 @@ impl CastTargeting<'_, '_> {
             self_move_flags: self.player.as_deref().map_or(0, |p| p.move_flags()),
             self_stand_state: {
                 let byte = self_store.map_or(0, |s| s.0.unit_stand_state());
-                self.player.as_deref().map_or(byte, |p| p.stand_state(byte))
+                self.stand_pending
+                    .as_deref()
+                    .map_or(byte, |p| p.stand_state(byte))
             },
             // The cached state, seeded from `UNIT_FIELD_BYTES_2` byte 0 and moved by the local
             // setter `0x611cf0` ahead of its echo; the descriptor's byte until it is driven.

@@ -108,6 +108,13 @@ impl AttackPress<'_, '_> {
         seam.toggle(guid, engaged);
     }
 
+    /// A stand state change's attack stop inside its call, `0x5ecac0` at `0x5f07e7` while we
+    /// attack (`0x60ecb0`).
+    pub(crate) fn stop_for_stand(&mut self) {
+        let engaged = self.pick.engaged();
+        self.seam.stop(engaged);
+    }
+
     /// TryCast's attack pick (`0x6e4efb`) for a spell press held there
     /// ([`crate::spell::HeldForPick`]): the validator alone, with no swing after it. Whether the
     /// cast goes on, at the unit the pick left selected.

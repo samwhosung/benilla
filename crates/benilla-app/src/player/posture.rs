@@ -24,6 +24,7 @@ pub(super) struct PlayerReads {
 /// state: the local commit over the server's echoed byte, which the pose and sheath guard read.
 pub(super) fn update(
     player: &mut Player,
+    pending: &mut super::StandPending,
     body: &BodyQuery,
     binds: &crate::bindings::BindingsState,
     net: &NetCommands,
@@ -31,13 +32,13 @@ pub(super) fn update(
     sheath: &mut MessageWriter<crate::creature_anim::SheathRequest>,
     loot_close: &mut crate::ui_loot::LootMoveStart,
     asks: &mut MessageReader<StandStateRequest>,
-    applies: &mut MessageReader<super::StandStateApply>,
+    server: &mut MessageReader<super::ServerStandState>,
     reads: PlayerReads,
     classes: Option<&benilla_formats::ChrClasses>,
     moving: bool,
     turned: bool,
 ) -> u8 {
-    // The echo into `UNIT_FIELD_BYTES_1` drives every observer's pose; `stand_pending`, the local
+    // The echo into `UNIT_FIELD_BYTES_1` drives every observer's pose; `pending`, the local
     // commit ([`apply_locally`]), overlays it until it lands.
     let (stand_byte, gates) = body
         .single()
@@ -52,18 +53,17 @@ pub(super) fn update(
                 ..default()
             },
         ));
-    if player.stand_pending == Some(stand_byte) {
-        player.stand_pending = None; // the echo landed
+    if pending.0 == Some(stand_byte) {
+        pending.0 = None; // the echo landed
     }
-    // `SMSG_STANDSTATE_UPDATE` and a script call's sent change reach the local apply directly,
-    // with no refusal gate and no `CMSG_STANDSTATECHANGE` back, each in its order, before the
-    // volunteered logic below.
-    for s in applies.read().map(|m| m.state) {
-        let stand_now = player.stand_pending.unwrap_or(stand_byte);
-        move_trace::posture("apply", s, stand_now, player.move_flags());
-        apply_locally(player, s, stand_now, body, commands, sheath, loot_close);
+    // `SMSG_STANDSTATE_UPDATE` reaches the local apply directly, with no refusal gate and no
+    // `CMSG_STANDSTATECHANGE` back, before the volunteered logic below; the last packet wins.
+    if let Some(s) = server.read().last().map(|m| m.state) {
+        let stand_now = pending.stand_state(stand_byte);
+        move_trace::posture("server", s, stand_now, player.move_flags());
+        apply_locally(pending, s, stand_now, body, commands, sheath, loot_close);
     }
-    let stand_state = player.stand_pending.unwrap_or(stand_byte);
+    let stand_state = pending.stand_state(stand_byte);
     // The queued asks (the `/sit` family) ran in the reference's message pass, before the X key
     // is read; the last writer wins, and all land on the single commit below.
     let mut request_stand = asks.read().last().map(|r| r.state);
@@ -104,9 +104,9 @@ pub(super) fn update(
         let _ = net.0.send(ClientCommand::StandStateChange {
             state: u32::from(s),
         });
-        apply_locally(player, s, stand_state, body, commands, sheath, loot_close);
+        apply_locally(pending, s, stand_state, body, commands, sheath, loot_close);
     }
-    let stand_now = player.stand_pending.unwrap_or(stand_byte);
+    let stand_now = pending.stand_state(stand_byte);
     // The sheath toggle (Z) cycles the anim layer's committed sheath state through its one setter
     // ([`crate::creature_anim::SheathRequest`]), which sends `CMSG_SETSHEATHED`; only it plays the
     // ceremony (`bInstant = 0` in `ToggleSheath` `0x5eb480`). No body model yet drops the press.
@@ -143,42 +143,86 @@ pub(super) fn update(
     stand_now
 }
 
-/// `SetStandState` (`0x5ed430`) run inside a script call on the active player: its gate
-/// ([`state::stand_state_refused`]), then `CMSG_STANDSTATECHANGE` (`0x5ed501`), so the packet leaves
-/// ahead of whatever the call sends next, then the local apply (`0x5ed53f`), which [`update`] makes
-/// from the [`super::StandStateApply`] it is owed. The setter tests no current state: a sit while
-/// sitting sends again.
+/// The active player's posture setters run inside a script call, so their packets leave ahead of
+/// whatever the call sends next: the instant stow `SetSheatheState(0, 1, 1)` (`0x611cf0`) and
+/// `SetStandState` (`0x5ed430`): its gate ([`state::stand_state_refused`]), `CMSG_STANDSTATECHANGE`
+/// (`0x5ed501`) and the local apply (`0x5ed53f` → `0x6127b0`). The setter tests no current state:
+/// a sit while sitting sends again. A world without the player's resources reads them empty.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct StandSetter<'w, 's> {
     net: Res<'w, NetCommands>,
     /// The mover's flags, the `[[this+0x118]+0x40]` the gate reads.
-    player: Res<'w, Player>,
+    player: Option<Res<'w, Player>>,
+    /// The prediction `[player+0x1d68]` the local apply writes (`0x5f07a3`).
+    pending: Option<ResMut<'w, super::StandPending>>,
     me: Query<'w, 's, (Entity, &'static ObjectStore), With<SelfPlayer>>,
+    /// The committed sheath state the stow sets (`[+0xd40]`).
+    sheath: Query<'w, 's, &'static mut crate::creature_anim::CommittedSheath, With<SelfPlayer>>,
     /// The precast as the queued unit edits leave it, which a link of the VM pass reads in place
     /// of the component.
-    edits: Res<'w, crate::creature_anim::UnitEdits>,
-    apply: MessageWriter<'w, super::StandStateApply>,
+    edits: Option<Res<'w, crate::creature_anim::UnitEdits>>,
 }
 
 impl StandSetter<'_, '_> {
-    /// Change the active player's stand state to `s`; `false` when the gate refuses.
-    pub(crate) fn set(&mut self, s: u8) -> bool {
-        let Ok((me, store)) = self.me.single() else {
-            return false;
+    /// `SetSheatheState(0, 1, 1)` (`0x611cf0`): stowed now, its `CMSG_SETSHEATHED` sent
+    /// (`0x611dbc`) when the state changed.
+    pub(crate) fn stow(&mut self) {
+        let fields = self.me.single().ok().map(|(_, s)| &s.0);
+        if let Ok(mut committed) = self.sheath.single_mut() {
+            if committed.set_now(0, fields, None) {
+                let _ = self.net.0.send(ClientCommand::SetSheathed { state: 0 });
+            }
+        }
+    }
+
+    /// `SetStandState(s)` up to its local apply's leave: the gate, the packet, and the prediction
+    /// written on a change (`0x5f0799`-`0x5f07a3`). `None` when the gate refuses; else whether the
+    /// change leaves, to a state but 0 (`0x5f07a9`), which owes the loot close (`0x48f200` at
+    /// `0x5f07d5`) and the attack stop (`0x5ecac0` at `0x5f07e7`) the caller runs before
+    /// [`Self::finish`]. Not built: the input resume on a stand (`0x5f07ba`).
+    pub(crate) fn set(&mut self, s: u8) -> Option<bool> {
+        let (byte, gates) = {
+            let (me, store) = self.me.single().ok()?;
+            let precast = self
+                .edits
+                .as_deref()
+                .is_some_and(|e| e.precast(me).is_some());
+            (store.0.unit_stand_state(), stand_gates(&store.0, precast))
         };
-        let gates = stand_gates(&store.0, self.edits.precast(me).is_some());
-        let (from, flags) = (store.0.unit_stand_state(), self.player.move_flags());
+        let flags = self.player.as_deref().map_or(0, Player::move_flags);
         if state::stand_state_refused(gates, flags, s) {
             debug!("stand state {s} refused in a call ({gates:?}, the client's `0x5ed430` gate)");
-            move_trace::posture("REFUSED", s, from, flags);
-            return false;
+            move_trace::posture("REFUSED", s, byte, flags);
+            return None;
         }
-        move_trace::posture("call", s, from, flags);
+        move_trace::posture("call", s, byte, flags);
         let _ = self.net.0.send(ClientCommand::StandStateChange {
             state: u32::from(s),
         });
-        self.apply.write(super::StandStateApply { state: s });
-        true
+        let now = self
+            .pending
+            .as_deref()
+            .map_or(byte, |p| p.stand_state(byte));
+        if now == s {
+            return Some(false);
+        }
+        if let Some(pending) = self.pending.as_deref_mut() {
+            pending.0 = Some(s);
+        }
+        Some(s != 0)
+    }
+
+    /// The local apply's tail (`0x6127cc`-`0x6127fb`): drawn weapons stow for a stand state but 0
+    /// or 2.
+    pub(crate) fn finish(&mut self) {
+        let byte = self.me.single().map_or(0, |(_, s)| s.0.unit_stand_state());
+        let now = self
+            .pending
+            .as_deref()
+            .map_or(byte, |p| p.stand_state(byte));
+        if now != 0 && now != 2 {
+            self.stow();
+        }
     }
 }
 
@@ -253,7 +297,7 @@ fn toggle_worn(
 /// Not built: the input resume on a stand (`0x5f07ba`) and the follow-camera re-acquire each call
 /// (`0x48ec90`).
 fn apply_locally(
-    player: &mut Player,
+    pending: &mut super::StandPending,
     s: u8,
     stand_now: u8,
     body: &BodyQuery,
@@ -269,7 +313,7 @@ fn apply_locally(
         != 0;
     let apply = local_apply(s, stand_now, drawn);
     if apply.predict {
-        player.stand_pending = Some(s);
+        pending.0 = Some(s);
     }
     if apply.leave {
         // The same close as the movement start's (`0x60e9dd`), under the same `0x6126b0`.

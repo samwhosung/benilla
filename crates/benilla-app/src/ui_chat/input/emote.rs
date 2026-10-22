@@ -13,6 +13,9 @@ use super::{emote_gate, emote_target, EmoteGate};
 use crate::creature_anim::{move_flags, MovementState};
 use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfPlayer};
 
+/// The stand states the posture branch sets, `[0x85ff10]`: 0, 1, 3 and 8.
+const POSTURE_STATES: u32 = 0x10b;
+
 /// What `DoEmote` reaches outside the VM, as the call host holds it. The writers and the roster
 /// are optional, so a world without them still lends a host; a world without the emote tables
 /// sends no emote.
@@ -40,35 +43,46 @@ pub(crate) struct EmoteDoer<'w, 's> {
 /// The stow, the posture, the play and their order stamp.
 #[derive(SystemParam)]
 pub(crate) struct EmoteOut<'w, 's> {
-    /// Our committed sheath state, which the stow sets inside the call (`0x5ef630`).
-    sheath: Query<'w, 's, &'static mut crate::creature_anim::CommittedSheath, With<SelfPlayer>>,
-    /// `SetStandState`, run inside the call (`0x5ef652`); a world without the player has none.
-    stand: Option<crate::player::StandSetter<'w, 's>>,
+    /// The instant stow (`0x5ef630`) and `SetStandState` (`0x5ef652`), run inside the call.
+    stand: crate::player::StandSetter<'w, 's>,
     /// The local play (`0x5ef660`).
     anim: Option<MessageWriter<'w, crate::creature_anim::EmoteAnim>>,
     play_seq: Option<ResMut<'w, crate::creature_anim::PlaySeq>>,
 }
 
+/// An emote past its gates, stow and posture or play, owing its packet ([`EmoteDoer::finish`]).
+#[derive(Debug)]
+pub(crate) struct EmoteStep {
+    text_id: u32,
+    arg: Option<String>,
+    /// The posture changed to a state but 0, so its local apply owes the loot close and the
+    /// attack stop (`0x5f07d5`, `0x5f07e7`) ahead of the packet.
+    pub(crate) leave: bool,
+}
+
 impl EmoteDoer<'_, '_> {
-    /// `DoEmote(token, target)` inside its call: a token with no `EmotesText` row does nothing
-    /// (`0x49fda8`).
-    pub(crate) fn do_emote(&mut self, request: EmoteRequest) {
+    /// `DoEmote(token, target)` inside its call, up to its packet: a token with no `EmotesText`
+    /// row does nothing (`0x49fda8`).
+    pub(crate) fn do_emote(&mut self, request: EmoteRequest) -> Option<EmoteStep> {
         let text_id = self
             .emotes
             .as_deref()
             .and_then(|c| c.text_id(&request.token));
         match text_id {
-            Some(text_id) => self.emote(text_id, request.target.as_deref()),
-            None => debug!(
-                "chat: DoEmote({:?}): no EmotesText row for that token",
-                request.token
-            ),
+            Some(text_id) => self.emote(text_id, request.target),
+            None => {
+                debug!(
+                    "chat: DoEmote({:?}): no EmotesText row for that token",
+                    request.token
+                );
+                None
+            }
         }
     }
 
     /// `0x5ef560` on text emote `text_id`: the gates in the client's order, then the stow, the
-    /// posture or the play, and the packet. `arg` is the target argument.
-    pub(crate) fn emote(&mut self, text_id: u32, arg: Option<&str>) {
+    /// posture or the play, up to the packet [`Self::finish`] sends. `arg` is the target argument.
+    pub(crate) fn emote(&mut self, text_id: u32, arg: Option<String>) -> Option<EmoteStep> {
         let (stand_state, flags) = self
             .player
             .single()
@@ -102,7 +116,7 @@ impl EmoteDoer<'_, '_> {
             debug!("chat: emote {text_id} refused — moving (ERR_NOEMOTEWHILERUNNING)");
             self.errors
                 .push(crate::ui_action::UiError::key("ERR_NOEMOTEWHILERUNNING"));
-            return;
+            return None;
         }
         let eligible = gate != EmoteGate::Suppressed;
         // Gate B (`0x5ef5f3`): asleep, only a posture emote gets through, so `/stand` ends
@@ -113,26 +127,20 @@ impl EmoteDoer<'_, '_> {
                 "chat: emote {text_id} suppressed (eligible {eligible}, awake-or-posture \
                  {awake_or_posture}, stand {stand_state})"
             );
-            return;
+            return None;
         }
         let me = self.player.single().ok().map(|(e, m)| (e, *m));
         // The stow, `SetSheatheState(0, 1, 1)` (`0x5ef630`): every emote past the gates sheathes
         // instantly, mid-fight too, and its `CMSG_SETSHEATHED` goes out now (`0x611dbc`).
-        let fields = self.store.single().ok().map(|s| &s.0);
-        if let Ok(mut committed) = self.out.sheath.single_mut() {
-            if committed.set_now(0, fields, None) {
-                let _ = self
-                    .commands
-                    .0
-                    .send(ClientCommand::SetSheathed { state: 0 });
-            }
-        }
+        self.out.stand.stow();
         // The posture branch (`EmoteSpecProc == 1` → `SetStandState`) is the whole visible
-        // effect: the server plays nothing for SIT, SLEEP and KNEEL (`ChatHandler.cpp:728`).
+        // effect: the server plays nothing for SIT, SLEEP and KNEEL (`ChatHandler.cpp:728`). Only
+        // a state in the mask `[0x85ff10]` = `0x10b` (stand, sit, sleep, kneel) takes it
+        // (`0x5ef63e`-`0x5ef64d`); any other falls through to the play.
+        let posture = posture.filter(|&state| (1u32 << (state & 31)) & POSTURE_STATES != 0);
+        let mut leave = false;
         if let Some(state) = posture {
-            if let Some(stand) = self.out.stand.as_mut() {
-                stand.set(state as u8);
-            }
+            leave = self.out.stand.set(state as u8).unwrap_or(false);
         }
         // The play (`0x5ef660`, `0x5fe2f0` at `0x5ef66f`) is the posture branch's else: a posture
         // emote plays no clip, and the rest play here only while moving. Its `SMSG_EMOTE` echo then
@@ -165,10 +173,22 @@ impl EmoteDoer<'_, '_> {
                 }
             }
         }
+        Some(EmoteStep {
+            text_id,
+            arg,
+            leave,
+        })
+    }
+
+    /// The emote's tail once the caller has run its leave: the stand state's local apply ends
+    /// (`0x6127cc`), then the target and `CMSG_TEXT_EMOTE`.
+    pub(crate) fn finish(&mut self, step: EmoteStep) {
+        let EmoteStep { text_id, arg, .. } = step;
+        self.out.stand.finish();
         let fallback = crate::ui_party::GroupState::default();
         let group = self.group.as_deref().unwrap_or(&fallback);
         let target = emote_target(
-            arg,
+            arg.as_deref(),
             &self.selection,
             |name| self.players.find(&self.names, group, &self.guids, name),
             self.self_guid.as_deref().and_then(|g| g.0),

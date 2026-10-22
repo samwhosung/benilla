@@ -367,6 +367,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::SelfGuid",
     "::OwnControlLost",
     "::Player",
+    "::player::state::StandPending",
     "::BarUnitOutdoors",
     "::PlayerOutdoors",
     "::EmoteSounds",

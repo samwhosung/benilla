@@ -78,6 +78,13 @@ pub(crate) struct LootSteps<'w, 's> {
 }
 
 impl LootSteps<'_, '_> {
+    /// A stand state change's loot close inside its call, `0x48f200(1, 1, 0)` at `0x5f07d5`: the
+    /// movement start's close ([`super::LootMoveStart`]), its release sent now.
+    pub(crate) fn close_for_stand(&mut self) {
+        let closed = super::close_on_move_start(&mut self.loot, &mut self.latch, &self.net);
+        self.dead.after_close(closed);
+    }
+
     /// Apply `call` inside its verb. What its signals' listeners leave it to do runs in its tail,
     /// a call of its own once they have returned ([`LootCall::Resume`]).
     pub(crate) fn apply(&mut self, script: &mut UiScript, call: LootCall) -> Option<CallTail> {

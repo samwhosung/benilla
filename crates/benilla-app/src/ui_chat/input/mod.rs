@@ -769,7 +769,7 @@ pub(super) fn drain_chat_input(
             }),
             LineWork::Emote { text_id, arg } => {
                 if let Some(host) = vm.parts().1.p1().as_mut() {
-                    host.emote(text_id, arg.as_deref());
+                    host.emote(text_id, arg);
                 }
             }
         }

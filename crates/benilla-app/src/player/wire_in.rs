@@ -552,12 +552,14 @@ pub(super) fn release_on_session_end(
     mut lost: MessageReader<crate::net::DisconnectedMessage>,
     mut player: ResMut<Player>,
     mut own_control: ResMut<OwnControlLost>,
+    mut stand: ResMut<super::StandPending>,
 ) {
     // `|`, not `||`: both readers must drain, or the unread one carries into the next frame.
     if logouts.read().next().is_some() | lost.read().any(|m| m.session_over) {
         // vmangos re-sends the modes the new session holds (`Player.cpp:19297-19311`).
         *player = Player::default();
         *own_control = OwnControlLost::default();
+        *stand = super::StandPending::default();
     }
 }
 
@@ -572,6 +574,7 @@ mod session_end_tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<Player>()
             .init_resource::<OwnControlLost>()
+            .init_resource::<super::super::StandPending>()
             .add_message::<LoggedOutMessage>()
             .add_message::<DisconnectedMessage>()
             .add_systems(Update, release_on_session_end);

@@ -49,9 +49,8 @@ pub(super) fn control(
         crate::tutorial::InputHooks,
         // The loot window's move-start close (`0x60e990`).
         ResMut<crate::ui_loot::LootMoveStart>,
-        // `SMSG_STANDSTATE_UPDATE`, and a change a script call sent, applied locally and ungated,
-        // with nothing sent back.
-        MessageReader<super::StandStateApply>,
+        // `SMSG_STANDSTATE_UPDATE`, applied locally and ungated, with nothing sent back.
+        MessageReader<super::ServerStandState>,
     ),
     mut speed_capsule: (
         Res<MoveSpeed>,
@@ -74,6 +73,8 @@ pub(super) fn control(
         Query<Has<crate::creature_anim::Precast>, (With<Embodied>, Without<FlyCam>)>,
         // `ChrClasses.dbc`, whose relic flag the sheath toggle's ranged candidate reads.
         Option<Res<crate::chr_classes::ChrClassTable>>,
+        // The predicted stand state `[player+0x1d68]`, which the posture verbs write.
+        ResMut<super::StandPending>,
     ),
     mut commands: Commands,
     mut player: ResMut<Player>,
@@ -190,7 +191,7 @@ pub(super) fn control(
     // which skips the turn and pitch emitters (`0x514755`). Dead fails the shared precondition
     // `0x5144e0` (health above zero), so a corpse is stunned to the input tick; a ghost has
     // health 1. The stand state gates the mouse alone: `0x5145e0` wants the predicted
-    // `GetStandState() == 0` (`0x5ed570`; `stand_pending` is `[player+0x1d68]`).
+    // `GetStandState() == 0` (`0x5ed570`; [`super::StandPending`] is `[player+0x1d68]`).
     let (stunned, dead, stand_byte) = body
         .single()
         .ok()
@@ -204,7 +205,7 @@ pub(super) fn control(
             })
         })
         .unwrap_or((false, false, 0));
-    let stand_state = player.stand_pending.unwrap_or(stand_byte);
+    let stand_state = speed_capsule.13.stand_state(stand_byte);
     // The shared precondition `0x5144e0`, once per tick. Its far-sight conjunct,
     // `!(IsActivePlayer(mover) && [mover+0x1c70] & 1)`, reads the resolved subject (`0x5ee290`
     // latches only once resolved) and spares a possessed mover, which sets the same field.
@@ -499,6 +500,7 @@ pub(super) fn control(
         };
         let stand_now = posture::update(
             &mut player,
+            &mut speed_capsule.13,
             &body,
             binds,
             &net.0,

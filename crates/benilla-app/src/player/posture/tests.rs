@@ -200,7 +200,7 @@ fn a_sit_closes_the_loot_and_stops_the_attack_and_a_stand_does_neither() {
     world.init_resource::<crate::spell::SpellTargeting>();
     world.init_resource::<crate::ui_cast::CastReports>();
     world.init_resource::<crate::creature_anim::AttackStopInFlight>();
-    world.init_resource::<super::Player>();
+    world.init_resource::<crate::player::StandPending>();
     world.init_resource::<crate::ui_loot::LootMoveStart>();
     world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
     world.spawn((
@@ -210,7 +210,7 @@ fn a_sit_closes_the_loot_and_stops_the_attack_and_a_stand_does_neither() {
     let mut apply = |s: u8, stand_now: u8| {
         world
             .run_system_once(
-                move |mut player: ResMut<super::Player>,
+                move |mut player: ResMut<crate::player::StandPending>,
                       body: super::BodyQuery,
                       mut commands: Commands,
                       mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,

@@ -33,6 +33,21 @@ macro_rules! attack_in_order {
     }};
 }
 
+/// `DoEmote` (`0x5ef560`) in the reference's order: a posture emote's stand change to a state but 0
+/// runs its local apply's leave (`0x5f0790`), the loot close (`0x48f200` at `0x5f07d5`) then the
+/// attack stop (`0x5ecac0` at `0x5f07e7`), ahead of the emote's `CMSG_TEXT_EMOTE`.
+macro_rules! emote_in_order {
+    ($appliers:expr, $step:expr) => {{
+        if let Some(step) = $step {
+            if step.leave {
+                $appliers.p5().p1().close_for_stand();
+                $appliers.p7().stop_for_stand();
+            }
+            $appliers.p4().p2().finish(step);
+        }
+    }};
+}
+
 /// The pet bar's Attack (`0x4bd40d`) runs the same validator, so a cast it binds to a standing
 /// targeting cursor goes out ahead of the `CMSG_PET_ACTION` it validated. A spell press the bar
 /// hands to the attempt (`0x4bd385`) casts through the ladder instead.
@@ -141,8 +156,9 @@ pub(crate) struct ScriptCallHost<'w, 's> {
 
 impl ScriptCallHost<'_, '_> {
     /// A probe line's text emote, run as `DoEmote` runs it inside its call (`0x5ef560`).
-    pub(crate) fn emote(&mut self, text_id: u32, arg: Option<&str>) {
-        self.appliers.p4().p2().emote(text_id, arg);
+    pub(crate) fn emote(&mut self, text_id: u32, arg: Option<String>) {
+        let appliers = &mut self.appliers;
+        emote_in_order!(appliers, appliers.p4().p2().emote(text_id, arg));
     }
 }
 
@@ -231,7 +247,9 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::SendChat(send) => appliers.p4().p1().send_chat(script, send),
             ScriptCall::RandomRoll { min, max } => appliers.p4().p1().random_roll(min, max),
             ScriptCall::Channel(cmd) => appliers.p4().p1().channel(script, cmd),
-            ScriptCall::DoEmote(request) => appliers.p4().p2().do_emote(request),
+            ScriptCall::DoEmote(request) => {
+                emote_in_order!(appliers, appliers.p4().p2().do_emote(request));
+            }
             ScriptCall::Uninvite(name) => appliers.p4().p1().uninvite(name),
             ScriptCall::RequestTimePlayed => appliers.p4().p1().request_time_played(),
             ScriptCall::AddonMessage(send) => appliers.p4().p1().addon_message(send),

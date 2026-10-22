@@ -106,9 +106,9 @@ use state::{
     WEDGE_STALL_RATIO, WEDGE_STILL_FRAMES,
 };
 pub(crate) use state::{
-    OwnControlLost, Player, PlayerCapsule, CAPSULE_HEIGHT, CAPSULE_RADIUS, CREATURE_STEP_UP_HEIGHT,
-    DEFAULT_COLLISION_HEIGHT, FEATHER_TERMINAL_VELOCITY, GRAVITY, HOVER_CLIMB_RATE, HOVER_HEIGHT,
-    SETTLE_TIMEOUT, STEP_UP_HEIGHT, TERMINAL_VELOCITY,
+    OwnControlLost, Player, PlayerCapsule, StandPending, CAPSULE_HEIGHT, CAPSULE_RADIUS,
+    CREATURE_STEP_UP_HEIGHT, DEFAULT_COLLISION_HEIGHT, FEATHER_TERMINAL_VELOCITY, GRAVITY,
+    HOVER_CLIMB_RATE, HOVER_HEIGHT, SETTLE_TIMEOUT, STEP_UP_HEIGHT, TERMINAL_VELOCITY,
 };
 /// The swim boundary `0.75·h`, also the wade ceiling, for the creature swim marker and the
 /// footstep splash, which have no `Player`.
@@ -164,12 +164,11 @@ pub(crate) struct StandStateRequest {
     pub(crate) state: u8,
 }
 
-/// A stand state for [`posture`]'s local apply alone, with no refusal and no packet:
-/// `SMSG_STANDSTATE_UPDATE` for our body (the eat and drink sit, the stand on damage, `0x603e50` →
-/// `0x6127b0`), and the apply owed by a change a script call's setter sent (`0x5ed53f`), each
-/// applied in the order it came.
+/// `SMSG_STANDSTATE_UPDATE` for our body (the eat and drink sit, the stand on damage), applied by
+/// [`posture`] through the same local setter with no refusal and no packet back (`0x603e50` →
+/// `0x6127b0`).
 #[derive(bevy::ecs::message::Message, Clone, Copy, Debug)]
-pub(crate) struct StandStateApply {
+pub(crate) struct ServerStandState {
     pub(crate) state: u8,
 }
 
@@ -273,6 +272,7 @@ impl Plugin for PlayerPlugin {
         app.init_resource::<camera_zoom::ZoomLimit>();
         app.init_resource::<camera::FollowConfig>();
         app.init_resource::<OwnControlLost>();
+        app.init_resource::<StandPending>();
         app.init_resource::<camera_dynamics::CameraOptions>();
         // Far sight resolves `PLAYER_FARSIGHT` to a pose before `control` seats the camera: a
         // separate system, as `control` holds our `Transform` mutably and cannot read another's.
@@ -316,7 +316,7 @@ impl Plugin for PlayerPlugin {
         )
         // The posture queue (the `/sit` family), which `control` alone executes.
         .add_message::<StandStateRequest>()
-        .add_message::<StandStateApply>()
+        .add_message::<ServerStandState>()
         // Land-here, before `control`, so the frame that applies the teleport takes control back.
         .add_message::<land::LandHere>()
         .add_systems(
