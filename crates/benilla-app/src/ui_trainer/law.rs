@@ -207,6 +207,30 @@ pub(super) fn service_group(
     (line, name)
 }
 
+/// `IsTrainerServiceTradeSkill` (`0x4d9f70`) and `IsTrainerServiceLearnSpell` (`0x4d9e70`) over
+/// the wire spell's three effect slots; the trainer's type plays no part. The first answers 1 for
+/// any `LEARN_SPELL` slot teaching a spell with `Attributes & 0x20` (`0x4d9fe0`-`0x4d9ffe`). The
+/// second stops at the first slot that decides: a `LEARN_SPELL` teaching a missing or unflagged
+/// spell is `Some(false)` (`0x4d9ed9`-`0x4d9f01`), a `LEARN_PET_SPELL` `Some(true)` (`0x4d9f03`),
+/// and a flagged `LEARN_SPELL` moves on (`0x4d9f08`). No record answers nil for both.
+pub(super) fn service_kind(wire_spell: u32, spells: &SpellCatalog) -> (bool, Option<bool>) {
+    let Some(wire) = spells.get(wire_spell) else {
+        return (false, None);
+    };
+    let flagged = |slot: usize| {
+        spells
+            .get(wire.effect_trigger_spell[slot])
+            .is_some_and(|t| t.attributes & SPELL_ATTR_IS_TRADESKILL != 0)
+    };
+    let trade_skill = (0..3).any(|i| wire.effects[i] == SPELL_EFFECT_LEARN_SPELL && flagged(i));
+    let learn_spell = (0..3).find_map(|i| match wire.effects[i] {
+        SPELL_EFFECT_LEARN_SPELL if !flagged(i) => Some(false),
+        SPELL_EFFECT_LEARN_PET_SPELL => Some(true),
+        _ => None,
+    });
+    (trade_skill, learn_spell)
+}
+
 /// A wire `state` byte's category; anything but GREEN or GRAY, an unexpected value too, is gated.
 pub(super) fn category(state: u8) -> TrainerServiceCategory {
     match state {

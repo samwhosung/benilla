@@ -856,10 +856,9 @@ pub(crate) struct Model {
     pub(crate) bank_purchase: bool,
     pub(crate) bank_close: bool,
 
-    /// The open trainer, its buys, selection and close. The selection is a spell id, since
-    /// filters, collapses and re-lists all move row numbers.
+    /// The open trainer, its selection and close. The selection is a spell id, since filters,
+    /// collapses and re-lists all move row numbers.
     pub(crate) trainer: Option<trainer::TrainerState>,
-    pub(crate) trainer_buys: Vec<u32>,
     pub(crate) trainer_selection: Option<u32>,
     pub(crate) trainer_close: bool,
     /// Available, unavailable and used filters, all on by default; they hide services, not headers.
@@ -868,8 +867,6 @@ pub(crate) struct Model {
     pub(crate) trainer_collapsed: HashSet<u32>,
     /// The skill-line filter `ds:0xb73a20`: bit n set shows header group n, every bit on a list.
     pub(crate) trainer_line_filter: u32,
-    /// `OpenTrainer` asked for the player's own trainer list; the app drains it.
-    pub(crate) trainer_open_own: bool,
 
     /// The open taxi map, the `TakeTaxiNode` calls, whether `CloseTaxiMap` ran and whether we ride.
     pub(crate) taxi: Option<taxi::TaxiUiState>,
@@ -1712,13 +1709,11 @@ impl Model {
             bank_purchase: false,
             bank_close: false,
             trainer: None,
-            trainer_buys: Vec::new(),
             trainer_selection: None,
             trainer_close: false,
             trainer_filter: [true; 3],
             trainer_collapsed: HashSet::new(),
             trainer_line_filter: u32::MAX,
-            trainer_open_own: false,
             taxi: None,
             taxi_takes: Vec::new(),
             taxi_close: false,

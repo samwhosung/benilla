@@ -27,6 +27,7 @@ fn svc(
         skill_req: None,
         ability_reqs: vec![],
         is_trade_skill: false,
+        learn_spell: Some(false),
         group_key,
         group_name: group_name.into(),
         skill_step: false,
@@ -56,6 +57,7 @@ fn trainer() -> TrainerState {
         "Fury",
     );
     TrainerState {
+        guid: 0x42,
         greeting: "What would you like to learn?".into(),
         trainer_type: 0,
         groups: Vec::new(),
@@ -373,20 +375,26 @@ fn collapse_survives_a_content_update_and_resets_on_close() {
 
 /// The reference's buy refuses any state byte but 0 (`0x4d89d0`, `0x4d89e5`).
 #[test]
-fn buy_queues_an_available_services_spell_id_and_refuses_every_other_row() {
+fn buy_calls_with_an_available_services_spell_id_and_refuses_every_other_row() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trainer(Some(trainer()));
     s.run("BuyTrainerService(2)").unwrap();
-    assert_eq!(s.take_trainer_buys(), vec![78]);
-    assert!(s.take_trainer_buys().is_empty(), "drained");
+    assert_eq!(
+        s.take_trainer_calls(),
+        vec![TrainerCall::Buy {
+            trainer: 0x42,
+            spell_id: 78
+        }]
+    );
 
     s.run("BuyTrainerService(1)").unwrap();
-    assert!(s.take_trainer_buys().is_empty(), "a header is not buyable");
+    assert!(s.take_trainer_calls().is_empty(), "a header is not buyable");
 
     s.run("BuyTrainerService(3)").unwrap();
     s.run("BuyTrainerService(5)").unwrap();
     assert!(
-        s.take_trainer_buys().is_empty(),
+        s.take_trainer_calls().is_empty(),
         "only state byte 0 — available — reaches the wire"
     );
 }
@@ -440,6 +448,7 @@ fn tradeskill_and_talent_flags() {
     );
     recipe.is_trade_skill = true;
     s.set_trainer(Some(TrainerState {
+        guid: 0,
         greeting: String::new(),
         trainer_type: 2,
         groups: Vec::new(),
@@ -453,6 +462,7 @@ fn tradeskill_and_talent_flags() {
         .unwrap());
 
     s.set_trainer(Some(TrainerState {
+        guid: 0,
         greeting: String::new(),
         trainer_type: 1,
         groups: Vec::new(),
@@ -506,6 +516,7 @@ fn row_names_compare_byte_for_byte_and_headers_ignore_case() {
     ];
     let mut s = UiScript::new().unwrap();
     s.set_trainer(Some(TrainerState {
+        guid: 0,
         greeting: String::new(),
         trainer_type: 0,
         groups: Vec::new(),
@@ -685,6 +696,7 @@ fn tradeskill_trainer_matches_the_emulated_reference_order() {
 
     let mut s = UiScript::new().unwrap();
     s.set_trainer(Some(TrainerState {
+        guid: 0,
         greeting: "Care to learn how to turn the ore that you find into weapons?".into(),
         trainer_type: 2,
         groups: Vec::new(),
@@ -757,6 +769,7 @@ fn mount_trainer_folds_known_services_into_my_talents() {
     ];
     let mut s = UiScript::new().unwrap();
     s.set_trainer(Some(TrainerState {
+        guid: 0,
         greeting: "Ready to ride?".into(),
         trainer_type: 1,
         groups: Vec::new(),
@@ -795,6 +808,7 @@ fn talent_order_sorts_on_state_within_a_group() {
     ];
     let mut s = UiScript::new().unwrap();
     s.set_trainer(Some(TrainerState {
+        guid: 0,
         greeting: String::new(),
         trainer_type: 1,
         groups: Vec::new(),
@@ -805,6 +819,7 @@ fn talent_order_sorts_on_state_within_a_group() {
 
     // At a class trainer the same three sort by name: equal levels, no skill gates.
     s.set_trainer(Some(TrainerState {
+        guid: 0,
         greeting: String::new(),
         trainer_type: 0,
         groups: Vec::new(),
@@ -830,18 +845,17 @@ fn the_filter_and_collapse_verbs_fire_trainer_update_in_place() {
     assert_eq!(seen, ["TRAINER_UPDATE 4", "TRAINER_UPDATE 3"]);
 }
 
-/// `OpenTrainer` (`0x4d8cf0`) asks for the player's own list: it queues the intent for the app,
-/// which owns the player, and takes no argument.
+/// `OpenTrainer` (`0x4d8cf0`) asks for the player's own list: it hands the host its call, which
+/// holds the player, and takes no argument.
 #[test]
-fn open_trainer_queues_a_close_and_the_own_list_request() {
+fn open_trainer_calls_for_the_own_list() {
     let mut s = UiScript::new().unwrap();
-    assert!(!s.take_trainer_open_own());
+    s.keep_calls();
     s.run("OpenTrainer()").unwrap();
-    assert!(s.take_trainer_open_own());
-    assert!(!s.take_trainer_open_own(), "drained");
+    assert_eq!(s.take_trainer_calls(), vec![TrainerCall::OpenOwn]);
     assert!(
         !s.take_trainer_close(),
-        "the close waits on the player, which the app sees"
+        "the close waits on the player, which the host sees"
     );
 }
 

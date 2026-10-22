@@ -46,6 +46,7 @@ fn client() -> (App, Receiver<ClientCommand>) {
     world.resource_mut::<TrainerOpen>().fresh_list = false;
     let mut script = UiScript::new().expect("a VM");
     script.set_trainer(Some(TrainerState {
+        guid: TRAINER,
         services: vec![TrainerService {
             spell_id: 78,
             name: Some("Heroic Strike".into()),

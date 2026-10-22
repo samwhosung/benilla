@@ -1084,6 +1084,7 @@ fn set_trainer_service_selects_the_builder_and_never_renders_its_own_line() {
     // altCaster is the builder's unit selector, which reads the pet's view.
     s.set_pet_spell_tooltip(200, heroic_strike);
     s.set_trainer(Some(TrainerState {
+        guid: 0,
         services: vec![
             trainer_service(2756, "Copper Shortsword", TrainerTooltip::Item(2847)),
             trainer_service(
@@ -1613,8 +1614,10 @@ fn the_unit_selector_setters_read_the_pet_view() {
         tabs: Vec::new(),
         slots: vec![slot],
     });
-    let service = |alt_caster| {
-        trainer_service(
+    // The pet's row a level below, so the comparator orders the two (`0x4d86a0`).
+    let service = |alt_caster: bool| TrainerService {
+        level_req: if alt_caster { 1 } else { 2 },
+        ..trainer_service(
             100,
             "Sacrifice",
             TrainerTooltip::Spell {
@@ -1624,6 +1627,7 @@ fn the_unit_selector_setters_read_the_pet_view() {
         )
     };
     s.set_trainer(Some(TrainerState {
+        guid: 0,
         services: vec![service(true), service(false)],
         ..Default::default()
     }));

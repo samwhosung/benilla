@@ -81,7 +81,10 @@ fn resolve_service(
             trainer_type,
             spells,
             skill_lines,
-            known,
+            &ReqBooks {
+                player: known,
+                pet: None,
+            },
             None,
             &deps.items,
             Ask::New(&deps.commands),
@@ -113,7 +116,10 @@ fn snap(open: &TrainerOpen, spells: &SpellCatalog) -> Option<TrainerState> {
             open,
             spells,
             None,
-            &BTreeSet::new(),
+            &ReqBooks {
+                player: &BTreeSet::new(),
+                pet: None,
+            },
             None,
             &deps.items,
             Ask::New(&deps.commands),
@@ -560,8 +566,12 @@ fn resolve_reads_cost_state_and_gates_with_no_catalog() {
 /// reads met.
 #[test]
 fn ability_req_met_tracks_known_spells_not_the_service_category() {
-    // The service spell has a record, so the known test is reached (`0x4d9821`-`0x4d9842`).
-    let spells = SpellCatalog::from_displays(HashMap::from([(845, taught_ability())]));
+    // The service spell and the requirement have records, so the known test is reached
+    // (`0x4d97c8`, `0x4d9842`).
+    let spells = SpellCatalog::from_displays(HashMap::from([
+        (845, taught_ability()),
+        (78, taught_ability()),
+    ]));
     let mut w = wire(845, trainer_spell_state::RED, 100, 20, 0); // unavailable (gated by level)
     w.req_spells = [78, 0, 0]; // requires Heroic Strike (78)
 
@@ -905,7 +915,10 @@ fn service_description_on_real_data_reads_astral_recalls_bind_area() {
             0,
             &spells,
             None,
-            &BTreeSet::new(),
+            &ReqBooks {
+                player: &BTreeSet::new(),
+                pet: None,
+            },
             None,
             &deps.items,
             Ask::New(&deps.commands),
@@ -1616,6 +1629,7 @@ fn the_group_header_keys_resolve_in_the_real_global_strings() {
 /// (`0x4d8d24`), the open window included.
 #[test]
 fn open_trainer_closes_the_window_and_asks_for_the_players_own_list() {
+    use bevy::ecs::system::RunSystemOnce;
     const ME: u64 = 0x10;
     const TRAINER: u64 = 0xF130_0000_4500_0001;
     let run = |with_player: bool| {
@@ -1631,10 +1645,24 @@ fn open_trainer_closes_the_window_and_asks_for_the_players_own_list() {
         app.world_mut()
             .resource_mut::<TrainerOpen>()
             .open(TRAINER, 0, Vec::new(), String::new());
-        app.world_mut()
-            .non_send_resource::<UiScript>()
-            .run("OpenTrainer()")
+        let mut calls = {
+            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            script.keep_calls();
+            script.run("OpenTrainer()").unwrap();
+            script.take_trainer_calls()
+        };
+        let tails = app
+            .world_mut()
+            .run_system_once(move |mut steps: TrainerSteps| {
+                std::mem::take(&mut calls)
+                    .into_iter()
+                    .filter_map(|call| steps.apply(call))
+                    .collect::<Vec<_>>()
+            })
             .unwrap();
+        for tail in tails {
+            tail(&mut app.world_mut().non_send_resource_mut::<UiScript>());
+        }
         app.update();
         let open = app.world().resource::<TrainerOpen>().trainer;
         (open, rx.try_iter().collect::<Vec<_>>())
@@ -1715,8 +1743,21 @@ fn resolve_with_pet(
     player: &BTreeSet<u32>,
     pet: Option<&BTreeSet<u32>>,
 ) -> TrainerService {
-    let _ = pet;
-    resolve_service(wire, 0, spells, skill_lines, player)
+    let deps = Deps::new();
+    with_text(spells, 0, 0, None, |text| {
+        super::resolve_service(
+            wire,
+            0,
+            spells,
+            skill_lines,
+            &ReqBooks { player, pet },
+            None,
+            &deps.items,
+            Ask::New(&deps.commands),
+            text,
+            &probe_strings,
+        )
+    })
 }
 
 /// `IsTrainerServiceTradeSkill` (`0x4d9f70`) answers from the wire spell's effects, never the

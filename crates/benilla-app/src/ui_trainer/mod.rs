@@ -1,19 +1,21 @@
 //! The trainer feed: [`TrainerOpen`] from `SMSG_TRAINER_LIST`, [`feed_trainer`] resolving it into
-//! Lua [`TrainerService`]s and firing the trainer events, and [`drain_trainer`] sending the buys;
-//! `CloseTrainer` sends nothing. A bought row repaints through the re-evaluator ([`reeval`]),
-//! never through `SMSG_TRAINER_BUY_SUCCEEDED`, and a refusal goes only to the log.
+//! Lua [`TrainerService`]s and firing the trainer events, and [`TrainerSteps`] sending the buys
+//! inside their calls; `CloseTrainer` sends nothing, and [`drain_trainer`] runs its close core. A
+//! bought row repaints through the re-evaluator ([`reeval`]), never through
+//! `SMSG_TRAINER_BUY_SUCCEEDED`, and a refusal goes only to the log.
 
 use std::collections::BTreeSet;
 
 use benilla_formats::{
-    LearnEffect, SkillLineCatalog, SpellCatalog, TokenContext, SPELL_EFFECT_SKILL_STEP,
+    LearnEffect, SkillLineCatalog, SpellCatalog, TokenContext, SPELL_EFFECT_LEARN_PET_SPELL,
+    SPELL_EFFECT_SKILL_STEP,
 };
 use benilla_protocol::messages::TrainerSpell;
 use bevy::prelude::*;
 
 use benilla_ui::script::{
-    TrainerAbilityReq, TrainerService, TrainerServiceCategory, TrainerSkillReq, TrainerState,
-    TrainerTooltip, UiScript,
+    CallTail, TrainerAbilityReq, TrainerCall, TrainerService, TrainerServiceCategory,
+    TrainerSkillReq, TrainerState, TrainerTooltip, UiScript,
 };
 
 use crate::entities::ItemDisplays;
@@ -35,8 +37,7 @@ use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 use crate::ui_spellbook::SkillLines;
 
 /// `SMSG_TRAINER_LIST`'s `trainer_type` for a tradeskill trainer (0 class, 1 mount, 2 tradeskill,
-/// 3 pet). `IsTrainerServiceTradeSkill` answers it for every service, where the 1.12 verb
-/// (`0x4d9f70`) answers per service; the stock window never calls it.
+/// 3 pet), which picks the group key, the icon and the row order.
 const TRAINER_TYPE_TRADESKILL: u32 = 2;
 /// A mount trainer, which the client calls "talent" (`IsTalentTrainer 0x4d8ed0`).
 const TRAINER_TYPE_MOUNT: u32 = 1;
@@ -158,14 +159,23 @@ fn train_error_log_line(code: u32) -> &'static str {
     }
 }
 
-/// Resolve one wire [`TrainerSpell`] into the Lua [`TrainerService`]; `known` is the player's
-/// known-spell set, which colours each prerequisite ability.
+/// The spellbooks `GetTrainerServiceAbilityReq` asks (`0x4d9850`-`0x4d9882`): the player's, and for
+/// a `LEARN_PET_SPELL` service the unit `UNIT_FIELD_SUMMON` names, `None` when no such object is
+/// streamed. `IsSpellKnown` reads a unit's book only as the pet bar's unit (`0x60c77a`-`0x60c790`),
+/// so any other summon's is empty.
+pub(super) struct ReqBooks<'a> {
+    pub(super) player: &'a BTreeSet<u32>,
+    pub(super) pet: Option<&'a BTreeSet<u32>>,
+}
+
+/// Resolve one wire [`TrainerSpell`] into the Lua [`TrainerService`]; `books` colour each
+/// prerequisite ability.
 fn resolve_service(
     wire: &TrainerSpell,
     trainer_type: u32,
     spells: &SpellCatalog,
     skill_lines: Option<&SkillLineCatalog>,
-    known: &BTreeSet<u32>,
+    books: &ReqBooks,
     icons: Option<&ItemDisplays>,
     items: &Items,
     ask: Ask<'_>,
@@ -190,24 +200,35 @@ fn resolve_service(
         rank: wire.req_skill_value,
         met: skill_met,
     });
-    // `GetTrainerServiceAbilityReq`'s hasReq is `IsSpellKnown` per requirement, apart from the
-    // category (`0x4d96e0`), on a real ability id with no hop; the client also ORs
-    // `KnownHigherRank`, which this does not.
+    // `GetTrainerServiceAbilityReq`'s flag (`0x4d96e0`), apart from the category: it starts at 1
+    // (`0x4d9761`) and clears only when the requirement's record and the service spell's resolve
+    // (`0x4d97c8`, `0x4d9842`) and the book holds neither the ability (`0x60c740`) nor a later
+    // rank of it (`0x60c8d0`). A pet-learn service asks the pet's book, and no pet keeps the 1.
+    let book = match display {
+        None => None,
+        Some(d) if d.effects.contains(&SPELL_EFFECT_LEARN_PET_SPELL) => books.pet,
+        Some(_) => Some(books.player),
+    };
     let ability_reqs = wire
         .req_spells
         .iter()
         .filter(|&&s| s != 0)
         .map(|&s| {
-            let name = match spells.get(s) {
+            let req = spells.get(s);
+            let name = match req {
                 Some(d) => d.ranked_name(),
                 None => format!("Spell {s}"),
             };
+            let known = |book: &BTreeSet<u32>| {
+                book.contains(&s) || skill_lines.is_some_and(|c| c.higher_rank_known(s, book))
+            };
             TrainerAbilityReq {
                 name,
-                met: known.contains(&s),
+                met: req.is_none() || book.is_none_or(known),
             }
         })
         .collect();
+    let (is_trade_skill, learn_spell) = service_kind(wire.spell, spells);
     // The wrapper is never in `SkillLineAbility`, so the skill-line arm keys on the taught spell;
     // a service it cannot place drops, as in the client's builder, and is logged.
     let (group_key, group_name) = service_group(
@@ -240,7 +261,8 @@ fn resolve_service(
         level_req: u32::from(wire.req_level),
         skill_req,
         ability_reqs,
-        is_trade_skill: trainer_type == TRAINER_TYPE_TRADESKILL,
+        is_trade_skill,
+        learn_spell,
         group_key,
         group_name,
         tooltip: service_tooltip(wire.spell, spells),
@@ -288,15 +310,16 @@ fn snapshot(
     open: &TrainerOpen,
     spells: &SpellCatalog,
     skill_lines: Option<&SkillLineCatalog>,
-    known: &BTreeSet<u32>,
+    books: &ReqBooks,
     icons: Option<&ItemDisplays>,
     items: &Items,
     ask: Ask<'_>,
     text: &ServiceText,
     get: &dyn Fn(&str) -> Option<String>,
 ) -> Option<TrainerState> {
-    open.trainer?;
+    let guid = open.trainer?;
     Some(TrainerState {
+        guid,
         greeting: open.greeting.clone(),
         trainer_type: open.trainer_type,
         services: open
@@ -308,7 +331,7 @@ fn snapshot(
                     open.trainer_type,
                     spells,
                     skill_lines,
-                    known,
+                    books,
                     icons,
                     items,
                     ask,
@@ -523,11 +546,30 @@ pub(crate) fn feed_trainer(
                 skill: &pet_skill,
                 ..ctx
             };
+            // `UNIT_FIELD_SUMMON`'s unit (`0x4d9860`-`0x4d987d`), its book read only as the pet
+            // bar's (`0x60c77a`).
+            let pet_book: Option<BTreeSet<u32>> = store
+                .and_then(|s| s.0.unit_summon())
+                .filter(|guid| re_eval.index.0.contains_key(guid))
+                .map(|guid| {
+                    let bar = &re_eval.pet_bar.spells;
+                    if guid != bar.pet_guid {
+                        return BTreeSet::new();
+                    }
+                    bar.spells
+                        .iter()
+                        .filter(|e| e.is_spell())
+                        .map(|e| e.action())
+                        .collect()
+                });
             snapshot(
                 &open,
                 &spells.catalog,
                 Some(&skill_lines.catalog),
-                &actions.spells,
+                &ReqBooks {
+                    player: &actions.spells,
+                    pet: pet_book.as_ref(),
+                },
                 icons.as_deref(),
                 &items,
                 ask,
@@ -647,45 +689,49 @@ pub(crate) fn open_trainer(
         .open(trainer, trainer_type, services, greeting);
 }
 
-/// Each `BuyTrainerService` becomes `CMSG_TRAINER_BUY_SPELL` and `OpenTrainer` a
-/// `CMSG_TRAINER_LIST` for the player after the close core; `CloseTrainer` runs the core and
-/// sends nothing.
-fn drain_trainer(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    open: Res<TrainerOpen>,
-    commands: Res<NetCommands>,
-    mut world_commands: Commands,
-    me: Query<&Guid, With<SelfPlayer>>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        for spell_id in script.take_trainer_buys() {
-            let Some(trainer) = open.trainer else {
-                debug!(
-                "ui_trainer: BuyTrainerService(spell {spell_id}) with no open trainer — ignored"
-            );
-                continue;
-            };
-            debug!("ui_trainer: buy service (trainer {trainer:#x}, spell {spell_id})");
-            let _ = commands
-                .0
-                .send(ClientCommand::TrainerBuySpell { trainer, spell_id });
-        }
-        // `OpenTrainer` closes the window and then asks for the player's own list (`0x5df680`),
-        // which the server answers with nothing for a player. All of it waits on the player
-        // (`0x4d8d24`).
-        if script.take_trainer_open_own() {
-            if let Ok(&Guid(trainer)) = me.single() {
+/// The trainer verbs' engine half, which the call host applies inside each call
+/// ([`crate::script_calls::ScriptCallHost`]).
+#[derive(SystemParam)]
+pub(crate) struct TrainerSteps<'w, 's> {
+    net: Res<'w, NetCommands>,
+    me: Query<'w, 's, &'static Guid, With<SelfPlayer>>,
+}
+
+impl TrainerSteps<'_, '_> {
+    /// Apply one trainer call; `OpenTrainer`'s close is left to the tail, where every
+    /// `CloseTrainer` goes.
+    pub(crate) fn apply(&mut self, call: TrainerCall) -> Option<CallTail> {
+        match call {
+            // The trainer's cell as the VM's open window holds it (`0x4d8a11`).
+            TrainerCall::Buy { trainer, spell_id } => {
+                debug!("ui_trainer: buy service (trainer {trainer:#x}, spell {spell_id})");
+                let _ = self
+                    .net
+                    .0
+                    .send(ClientCommand::TrainerBuySpell { trainer, spell_id });
+                None
+            }
+            // `TalkToTrainer` on the player's own guid (`0x5df680`), which the server answers
+            // with nothing for a player; all of it waits on the player (`0x4d8d24`).
+            TrainerCall::OpenOwn => {
+                let &Guid(trainer) = self.me.single().ok()?;
                 debug!(
                     "ui_trainer: OpenTrainer closes the window and asks for the player's own list"
                 );
-                crate::ui_session::queue(&mut world_commands, close_core);
-                let _ = commands.0.send(ClientCommand::TrainerList { trainer });
+                let _ = self.net.0.send(ClientCommand::TrainerList { trainer });
+                Some(Box::new(|script: &mut UiScript| {
+                    script.close_trainer_for_own_list()
+                }))
             }
         }
-        if script.take_trainer_close() {
+    }
+}
+
+/// `CloseTrainer` runs the close core, which sends nothing; every other trainer verb applies
+/// inside its call ([`TrainerSteps`]).
+fn drain_trainer(mut hosted_vm: crate::script_calls::HostedVm, mut world_commands: Commands) {
+    hosted_vm.run(|script| {
+        if script.is_some_and(|script| script.take_trainer_close()) {
             debug!("ui_trainer: client-side close (no packet)");
             crate::ui_session::queue(&mut world_commands, close_core);
         }
@@ -694,7 +740,8 @@ fn drain_trainer(
 
 mod law;
 use law::{
-    category, service_description, service_group, service_icon, service_tooltip, ServiceText,
+    category, service_description, service_group, service_icon, service_kind, service_tooltip,
+    ServiceText,
 };
 
 #[cfg(test)]

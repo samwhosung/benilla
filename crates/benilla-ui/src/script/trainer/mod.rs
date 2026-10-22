@@ -122,7 +122,13 @@ pub struct TrainerService {
     pub level_req: u32,
     pub skill_req: Option<TrainerSkillReq>,
     pub ability_reqs: Vec<TrainerAbilityReq>,
+    /// `IsTrainerServiceTradeSkill` (`0x4d9f70`): a `LEARN_SPELL` slot of the wire spell teaches
+    /// a spell with `Attributes & 0x20`.
     pub is_trade_skill: bool,
+    /// `IsTrainerServiceLearnSpell` (`0x4d9e70`): `Some(false)` for a `LEARN_SPELL` slot teaching
+    /// a missing or unflagged spell, `Some(true)` for a `LEARN_PET_SPELL` slot, the first such
+    /// slot deciding; `None` answers nil, nil.
+    pub learn_spell: Option<bool>,
     /// The tree group: the taught spell's `SkillLine` at types 0, 1 and 3, where 0 (unresolved)
     /// drops the service and a known service at type 1 takes `TRAINER_GROUP_KNOWN`; at type 2, 1
     /// when the wire spell has a `SKILL_STEP` (44) effect, else 2 (`0x4d77b6`), so a tradeskill
@@ -161,6 +167,8 @@ pub struct TrainerGroup {
 /// The open trainer, pushed whole by the app.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TrainerState {
+    /// The trainer's cell `[0xb73a00]`, which `CMSG_TRAINER_BUY_SPELL` names (`0x4d8a11`).
+    pub guid: u64,
     pub services: Vec<TrainerService>,
     /// `SMSG_TRAINER_LIST`'s trailing string.
     pub greeting: String,
@@ -210,22 +218,40 @@ impl super::UiScript {
         model.trainer_selection = None;
     }
 
-    /// Drain the spell ids `BuyTrainerService` queued, each already resolved from its row.
-    pub fn take_trainer_buys(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().trainer_buys)
-    }
-
     /// Whether `CloseTrainer` was called since the last drain; the close sends no packet.
     pub fn take_trainer_close(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().trainer_close)
     }
 
-    /// Whether `OpenTrainer` was called since the last drain: with a player, the app closes the
-    /// window and asks the server for the player's own trainer list (`CMSG_TRAINER_LIST`), as
-    /// `TalkToTrainer` (`0x5df680`) does.
-    pub fn take_trainer_open_own(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().trainer_open_own)
+    /// `OpenTrainer`'s close (`0x5df680` → `0x4d7440` with a zero guid), which the host asks for
+    /// once it has the player: the close core runs where every `CloseTrainer` does.
+    pub fn close_trainer_for_own_list(&mut self) {
+        self.model_mut().trainer_close = true;
     }
+
+    /// The trainer calls a harness's VM kept ([`Self::keep_calls`]), in call order.
+    pub fn take_trainer_calls(&mut self) -> Vec<TrainerCall> {
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Trainer(call) => Some(*call),
+            _ => None,
+        })
+    }
+}
+
+/// A trainer verb past its binding's checks, which the host applies inside the call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrainerCall {
+    /// `BuyTrainerService(index)` on an available row (`0x4d89d0`): `CMSG_TRAINER_BUY_SPELL` with
+    /// the trainer's cell and the row's spell id (`0x4d8a11`-`0x4d8a26`).
+    Buy { trainer: u64, spell_id: u32 },
+    /// `OpenTrainer()` (`0x4d8cf0`): with a player (`0x4d8d24`), `TalkToTrainer` (`0x5df680`) on
+    /// the player's own guid, which closes the window and sends `CMSG_TRAINER_LIST`.
+    OpenOwn,
+}
+
+/// Hand `call` to the host, which applies it before this returns ([`super::calls::submit`]).
+fn submit(lua: &Lua, call: TrainerCall) -> mlua::Result<()> {
+    super::calls::submit(lua, super::ScriptCall::Trainer(call))
 }
 
 /// One row: a header by group index, or a service by its position in [`TrainerState::services`].
@@ -235,12 +261,15 @@ enum Row {
     Service(usize),
 }
 
-/// Folds case, raw bytes breaking ties. The reference's row comparators call the case-sensitive
-/// `0x64a480`, its header comparator the case-insensitive `0x64a4c0` (`0x4d7c12`).
-fn collate(a: &str, b: &str) -> std::cmp::Ordering {
-    a.to_lowercase()
-        .cmp(&b.to_lowercase())
-        .then_with(|| a.cmp(b))
+/// `SStrCmp` (`0x64a480` → `_strncmp`), the row comparators' name and rank compare: byte for byte,
+/// so an upper-case letter sorts before every lower-case one.
+fn str_cmp(a: &str, b: &str) -> i32 {
+    a.as_bytes().cmp(b.as_bytes()) as i32
+}
+
+/// A comparator's three-way answer as the sign `qsort` reads.
+fn sign(o: std::cmp::Ordering) -> i32 {
+    o as i32
 }
 
 const TRAINER_TYPE_TRADESKILL: u32 = 2;
@@ -256,40 +285,61 @@ fn skill_value(s: &TrainerService) -> u32 {
     s.skill_req.as_ref().map_or(0, |r| r.rank)
 }
 
-/// Rows at a class or pet trainer (`0x4d85c0`; `0x4d8561` sends pet here too): required level,
-/// skill value, name, then rank, all ascending.
-fn class_order(a: &TrainerService, b: &TrainerService) -> std::cmp::Ordering {
-    let name = |s: &TrainerService| s.name.clone().unwrap_or_default();
+/// Both rows' `Spell.dbc` records, which every comparator needs for its name keys: a row with none
+/// ties with every row of its group (`0x4d868d`, `0x4d87ca`, `0x4d892b`). The name is `Some`
+/// exactly when the record is, and so is the rank text.
+fn names<'a>(a: &'a TrainerService, b: &'a TrainerService) -> Option<(&'a str, &'a str)> {
+    Some((a.name.as_deref()?, b.name.as_deref()?))
+}
+
+/// Rows at a class or pet trainer (`0x4d85c0`; `0x4d8561` sends pet here too): required level
+/// (`0x4d86a0`), skill value (`0x4d86aa`), name (`0x4d86db`), then rank (`0x4d86fe`), all
+/// ascending.
+fn class_order(a: &TrainerService, b: &TrainerService) -> i32 {
+    let Some((an, bn)) = names(a, b) else {
+        return 0;
+    };
     let rank = |s: &TrainerService| s.subtext.clone().unwrap_or_default();
-    a.level_req
+    match a
+        .level_req
         .cmp(&b.level_req)
         .then_with(|| skill_value(a).cmp(&skill_value(b)))
-        .then_with(|| collate(&name(a), &name(b)))
-        .then_with(|| collate(&rank(a), &rank(b)))
+    {
+        std::cmp::Ordering::Equal => match str_cmp(an, bn) {
+            0 => str_cmp(&rank(a), &rank(b)),
+            o => o,
+        },
+        o => sign(o),
+    }
 }
 
 /// Rows at a tradeskill trainer (`0x4d8760`): required skill value ascending (`0x4d87d9`), then
-/// name. It has no level key and no rank key.
-fn tradeskill_order(a: &TrainerService, b: &TrainerService) -> std::cmp::Ordering {
-    let name = |s: &TrainerService| s.name.clone().unwrap_or_default();
-    skill_value(a)
-        .cmp(&skill_value(b))
-        .then_with(|| collate(&name(a), &name(b)))
+/// name (`0x4d87f8`). It has no level key and no rank key.
+fn tradeskill_order(a: &TrainerService, b: &TrainerService) -> i32 {
+    let Some((an, bn)) = names(a, b) else {
+        return 0;
+    };
+    match skill_value(a).cmp(&skill_value(b)) {
+        std::cmp::Ordering::Equal => str_cmp(an, bn),
+        o => sign(o),
+    }
 }
 
 /// Rows at a mount trainer (`0x4d8850`): the state byte ascending (`0x4d88f1`: available,
-/// unavailable, used), then name.
-fn talent_order(a: &TrainerService, b: &TrainerService) -> std::cmp::Ordering {
-    let name = |s: &TrainerService| s.name.clone().unwrap_or_default();
-    a.category
-        .state_key()
-        .cmp(&b.category.state_key())
-        .then_with(|| collate(&name(a), &name(b)))
+/// unavailable, used), read before the records, then name (`0x4d894e`).
+fn talent_order(a: &TrainerService, b: &TrainerService) -> i32 {
+    match a.category.state_key().cmp(&b.category.state_key()) {
+        std::cmp::Ordering::Equal => names(a, b).map_or(0, |(an, bn)| str_cmp(an, bn)),
+        o => sign(o),
+    }
 }
 
 /// Group the services by [`TrainerService::group_key`], dropping key 0, and sort each group's rows
-/// by the type's comparator; headers sort by raw key at type 2 (`0x4d7c30`), else by name
-/// (`0x4d7b90`).
+/// with the CRT `qsort` (`0x73f727`, called at `0x4d857e`) and the type's comparator, which ties a
+/// row it cannot order; headers sort by raw key at type 2 (`0x4d7c30`), else by name
+/// (`0x4d7b90`). The reference sorts the whole row array in one pass, every group's rows and the
+/// hidden ones together; sorting group by group orders the same rows wherever the comparator
+/// decides, and only rows it ties may sit otherwise.
 fn build_groups(services: &[TrainerService], trainer_type: u32) -> Vec<TrainerGroup> {
     let mut map: std::collections::HashMap<u32, TrainerGroup> = std::collections::HashMap::new();
     for (i, s) in services.iter().enumerate() {
@@ -313,8 +363,7 @@ fn build_groups(services: &[TrainerService], trainer_type: u32) -> Vec<TrainerGr
         _ => class_order,
     };
     for g in &mut groups {
-        g.services
-            .sort_by(|&a, &b| order(&services[a], &services[b]));
+        crate::crt::qsort(&mut g.services, |&a, &b| order(&services[a], &services[b]));
     }
     if trainer_type == TRAINER_TYPE_TRADESKILL {
         groups.sort_by_key(|g| g.key);
@@ -324,7 +373,7 @@ fn build_groups(services: &[TrainerService], trainer_type: u32) -> Vec<TrainerGr
         groups.sort_by(|a, b| {
             (a.key != TRAINER_GROUP_KNOWN)
                 .cmp(&(b.key != TRAINER_GROUP_KNOWN))
-                .then_with(|| collate(&a.name, &b.name))
+                .then_with(|| crate::crt::str_cmp_i(&a.name, &b.name).cmp(&0))
                 .then_with(|| a.key.cmp(&b.key))
         });
     }
@@ -670,8 +719,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // IsTrainerServiceLearnSpell(index) → isLearnSpell, isPetLearnSpell: any service that is not a
-    // tradeskill is a learn spell; isPetLearnSpell is not built and always answers nil.
+    // IsTrainerServiceLearnSpell(index) → isLearnSpell, isPetLearnSpell: 1, nil for a learn
+    // slot teaching an unflagged spell (`0x4d9f28`), 1, 1 for a pet-learn slot (`0x4d9f46`), and
+    // nil, nil otherwise (`0x4d9f11`).
     g.set(
         "IsTrainerServiceLearnSpell",
         lua.create_function(|lua, index: Value| {
@@ -679,10 +729,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let index =
                 binding_abi::index_arg(lua, index, "Usage: IsTrainerServiceLearnSpell(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let learn = service(&model, index).is_some_and(|s| !s.is_trade_skill);
+            let learn = service(&model, index).and_then(|s| s.learn_spell);
             Ok(MultiValue::from_vec(vec![
-                binding_abi::flag(learn),
-                Value::Nil,
+                binding_abi::flag(learn.is_some()),
+                binding_abi::flag(learn == Some(true)),
             ]))
         })?,
     )?;
@@ -698,13 +748,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // IsTalentTrainer(): trainer type 1 (`0x4d8ed0`), which vmangos gives its mount trainers.
+    // IsTalentTrainer() (`0x4d8ed0`): 1 with no trainer open (`0x4d8edb`, a zero guid) or at type
+    // 1 (`0x4d8ee4`), which vmangos gives its mount trainers.
     g.set(
         "IsTalentTrainer",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(binding_abi::flag(
-                model.trainer.as_ref().is_some_and(|t| t.trainer_type == 1),
+                model
+                    .trainer
+                    .as_ref()
+                    .is_none_or(|t| t.trainer_type == TRAINER_TYPE_MOUNT),
             ))
         })?,
     )?;
@@ -750,14 +804,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // OpenTrainer() (`0x4d8cf0`): `TalkToTrainer` (`0x5df680`) with the player's own guid, which
     // first closes the window (`0x4d7440` with a zero guid) and then sends `CMSG_TRAINER_LIST`
-    // for that guid. All of it waits on the player (`0x4d8d24`), which only the app can see.
+    // for that guid. All of it waits on the player (`0x4d8d24`), which the host holds.
     g.set(
         "OpenTrainer",
-        lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.trainer_open_own = true;
-            Ok(())
-        })?,
+        lua.create_function(|lua, ()| submit(lua, TrainerCall::OpenOwn))?,
     )?;
 
     // IsTrainerServiceSkillStep(index) (`0x4d9dd0`): 1 when the row's wire spell has a skill-step
@@ -933,8 +983,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // BuyTrainerService(index): queue the row's spell id. `0x4d89d0` bounds through the getters'
-    // gate and refuses any state byte but 0 (`0x4d89e5`), so only an available service queues.
+    // BuyTrainerService(index): the row's buy. `0x4d89d0` bounds through the getters' gate and
+    // refuses any state byte but 0 (`0x4d89e5`), so only an available service sends.
     // Deviation: index 0 is a no-op, because one stray call would spend the purse; the reference
     // buys every visible service for any index at or below 0 (`0x4da244`, `0x4d8a70`).
     g.set(
@@ -942,14 +992,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: BuyTrainerService(index)` (`0x84aad0`, `0x4da221`).
             let index = binding_abi::index_arg(lua, index, "Usage: BuyTrainerService(index)")?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let buyable = service(&model, index)
-                .filter(|s| s.category == TrainerServiceCategory::Available)
-                .map(|s| s.spell_id);
-            if let Some(spell_id) = buyable {
-                model.trainer_buys.push(spell_id);
+            let buy = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                service(&model, index)
+                    .filter(|s| s.category == TrainerServiceCategory::Available)
+                    .zip(model.trainer.as_ref())
+                    .map(|(s, t)| TrainerCall::Buy {
+                        trainer: t.guid,
+                        spell_id: s.spell_id,
+                    })
+            };
+            match buy {
+                Some(buy) => submit(lua, buy),
+                None => Ok(()),
             }
-            Ok(())
         })?,
     )?;
 

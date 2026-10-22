@@ -373,8 +373,8 @@ pub use tooltip_text::{KeyedArg, TextPart, TooltipText};
 pub use trade::{TradeCall, TradeOpenItem, TradeSideState, TradeSlotItem, TradeState, TRADE_SLOTS};
 pub use tradeskill::{TradeSkillDifficulty, TradeSkillReagent, TradeSkillRecipe, TradeSkillState};
 pub use trainer::{
-    TrainerAbilityReq, TrainerGroup, TrainerService, TrainerServiceCategory, TrainerSkillReq,
-    TrainerState, TrainerTooltip, TRAINER_GROUP_KNOWN,
+    TrainerAbilityReq, TrainerCall, TrainerGroup, TrainerService, TrainerServiceCategory,
+    TrainerSkillReq, TrainerState, TrainerTooltip, TRAINER_GROUP_KNOWN,
 };
 pub(crate) use types::{monochrome_flag, FontMask, MeasuredText, RegionData};
 pub use types::{
