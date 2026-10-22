@@ -644,11 +644,11 @@ type CasterReads<'w, 's> = (
 /// `SMSG_INITIALIZE_FACTIONS` standing), honor rank and medals, the known spells, and the
 /// skinning value the unit tooltip colours by, pushed on change.
 pub(super) fn feed_player_req(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // The reputation slots, which a call can write: an engine turn.
+    mut vm: crate::script_calls::VmWith<Res<'static, crate::net::Reputations>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     changed_self: Query<(), (With<SelfPlayer>, Changed<ObjectStore>)>,
     proficiencies: Res<crate::net::Proficiencies>,
-    reputations: Res<crate::net::Reputations>,
     factions: Option<Res<crate::target::Factions>>,
     actions: Res<crate::ui_action::PlayerActions>,
     spells: Option<Res<crate::ui_action::Spells>>,
@@ -659,7 +659,7 @@ pub(super) fn feed_player_req(
     ),
     mut last: Local<crate::ui_script::VmMemo<Option<benilla_ui::script::PlayerReqState>>>,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, reputations| {
         let (learned, skill_lines) = skinning;
         let Some(script) = script else {
             return;

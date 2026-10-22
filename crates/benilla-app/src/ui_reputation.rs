@@ -56,7 +56,7 @@ impl Plugin for UiReputationPlugin {
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ReputationSteps<'w, 's> {
     self_q: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
-    reputations: Res<'w, Reputations>,
+    reputations: ResMut<'w, Reputations>,
     net: Res<'w, NetCommands>,
     sink: crate::ui_action::MessageSink<'w>,
 }
@@ -138,8 +138,11 @@ impl ReputationSteps<'_, '_> {
 
     /// Write `bits` of slot `slot`'s flag byte in the store (`0x4d5fc0`), which the reaction reads
     /// on the call's next line.
-    fn write(&self, slot: u32, bits: u8, set: bool) {
-        self.reputations.write_flag_bits(slot as usize, bits, set);
+    fn write(&mut self, slot: u32, bits: u8, set: bool) {
+        let slot = slot as usize;
+        let flags = self.reputations.flags(slot);
+        self.reputations
+            .set_flags(slot, if set { flags | bits } else { flags & !bits });
     }
 }
 
@@ -319,25 +322,21 @@ pub(crate) fn reputation_row(
 /// The by-value inputs of the feed's gate, `(race, class, watched)`; the other two are resources.
 type ReputationInputs = Option<(u8, u8, Option<u32>)>;
 
-/// Push the snapshot and fire `UPDATE_FACTION` when it differs from the list the VM holds. A flag
-/// byte a verb wrote in its call is in the store and the VM's list already, so it signals nothing
-/// here; it marks the store changed for the feeds that judge reactions off it. The build (54 rows of names and
-/// descriptions) runs only when the wire slots, the catalog, race/class or the watched index
-/// move, and the equality check behind it keeps a change to no listed row quiet. The first push
-/// into a VM is silent: it needs the active player, as the rebuild does (`0x4d5453`), and comes on
-/// the frame the world-enter cascade runs over it, whose rebuild signals with the player seated
+/// Push the snapshot when it differs from the list the VM holds; it signals nothing. The messages
+/// signal `UPDATE_FACTION` at their packets on the notice lane, which fires after this push
+/// (`0x4d5699`, `0x4d56f6`, `0x4d5984` and the sort's `0x4d5dab`), the list's verbs in their calls,
+/// and the world-enter rebuild in its cascade. The build (54 rows of names and descriptions) runs
+/// only when the wire slots, the catalog, race/class or the watched index move. The first push
+/// into a VM comes on the frame the world-enter cascade runs over it
 /// (`crate::ui_unit::WorldEnterSeats`).
 pub(crate) fn feed_reputation(
-    mut vm: crate::script_calls::VmWith<ResMut<'static, Reputations>>,
+    mut vm: crate::script_calls::VmWith<Res<'static, Reputations>>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     factions: Option<Res<Factions>>,
     mut last: Local<crate::ui_script::VmMemo<Option<ReputationState>>>,
     mut last_inputs: Local<crate::ui_script::VmMemo<ReputationInputs>>,
 ) {
-    vm.feed(|script, mut reputations, fires| {
-        if reputations.take_verb_write() {
-            reputations.set_changed();
-        }
+    vm.turn(|script, reputations| {
         let Some(script) = script else {
             return;
         };
@@ -385,12 +384,8 @@ pub(crate) fn feed_reputation(
             *last = Some(fresh);
             return;
         }
-        let bare = faction_fires(last.as_ref(), &fresh);
         script.set_reputation(fresh.clone());
         *last = Some(fresh);
-        for _ in 0..bare {
-            fires.post("UPDATE_FACTION", vec![]);
-        }
     })
 }
 
@@ -432,20 +427,6 @@ pub(crate) fn faction_standings(
             ))
         })
         .collect()
-}
-
-/// How many bare `UPDATE_FACTION` signals a transition makes. The standing, flag and rebuild
-/// producers (`0x4d569e`, `0x4d56f6`, `0x4d5984`, `0x4d5db0`) signal bare through `0x703e50`. A
-/// first push signals none: the initialize message lands before the player's create (vmangos
-/// `SendInitialPacketsBeforeAddToMap`, `Player.cpp:19256`), so its rebuild finds no player
-/// (`0x4d5453`) and the list is the world-enter rebuild's (`0x4909d3`), which signals itself. The
-/// watched index is pushed here and signals `("player")` from its own field watch (`0x5ddcce`,
-/// [`crate::field_watch`]), never from this diff.
-fn faction_fires(prev: Option<&ReputationState>, fresh: &ReputationState) -> usize {
-    match prev {
-        None => 0,
-        Some(p) => usize::from(p.entries != fresh.entries),
-    }
 }
 
 #[cfg(test)]
@@ -503,48 +484,6 @@ mod tests {
             benilla_protocol::ObjectFields::from_pairs(&[(FIELD_WATCHED, 3)]),
         );
         assert!(seen(&mut app).is_empty());
-    }
-
-    /// The list's bare signals: none for the first push, one per list change, none for the
-    /// watched index alone.
-    #[test]
-    fn the_list_and_the_watched_index_are_two_producers() {
-        let entry = |id: u32| FactionEntry {
-            faction_id: id,
-            rep_list_id: id,
-            parent_id: 0,
-            name: String::new(),
-            description: String::new(),
-            standing: 0,
-            standing_id: 4,
-            bar_min: 0,
-            bar_max: 3000,
-            visible: true,
-            is_header: false,
-            at_war: false,
-            can_toggle_at_war: true,
-            inactive: false,
-        };
-        let base = ReputationState {
-            entries: vec![entry(1)],
-            watched: None,
-        };
-        assert_eq!(faction_fires(None, &base), 0);
-        let watched = ReputationState {
-            watched: Some(3),
-            ..base.clone()
-        };
-        assert_eq!(faction_fires(Some(&base), &watched), 0);
-        let listed = ReputationState {
-            entries: vec![entry(1), entry(2)],
-            ..base.clone()
-        };
-        assert_eq!(faction_fires(Some(&base), &listed), 1);
-        let both = ReputationState {
-            entries: vec![entry(2)],
-            watched: Some(1),
-        };
-        assert_eq!(faction_fires(Some(&base), &both), 1);
     }
 
     /// The pane's bar reads [`RANK_BOUNDS`], the nameplate the rank function: they must agree.

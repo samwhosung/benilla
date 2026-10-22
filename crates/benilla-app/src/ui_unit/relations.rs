@@ -8,7 +8,7 @@ use bevy::prelude::*;
 
 use crate::net::{Guid, ObjectStore};
 use crate::target::relations::RelationSnapshot;
-use crate::target::{RelUnit, RelationWorld};
+use crate::target::RelUnit;
 use crate::ui_script::VmMemo;
 
 /// The units [`feed_unit_relations`] last pushed into a VM.
@@ -25,12 +25,11 @@ pub(super) struct RelationMemo {
 /// or a creature record arrived, and the copy is pushed only when a unit's relation facts, the set
 /// of units or a relation input moved.
 pub(super) fn feed_unit_relations(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    world: RelationWorld,
+    mut vm: crate::script_calls::VmWith<crate::target::RelationWorld<'static, 'static>>,
     units: Query<(&Guid, Ref<ObjectStore>)>,
     mut memo: Local<VmMemo<RelationMemo>>,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, world| {
         let Some(script) = script else {
             return;
         };

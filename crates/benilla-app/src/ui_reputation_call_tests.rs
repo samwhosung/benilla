@@ -307,3 +307,20 @@ fn the_reaction_after_a_toggle_reads_the_bit_the_toggle_wrote() {
         "and peace on the line after the next"
     );
 }
+
+/// The verbs write the store through `&mut` (`0x4d5fc0`), so a toggle a late handler makes marks
+/// it changed in its own frame: a feed gated on the relation inputs re-reads at its next run,
+/// whatever its order against the handler, with no fold between.
+#[test]
+fn a_toggle_from_a_late_handler_wakes_the_feeds_gated_on_the_store() {
+    let (mut app, _rx) = client(0, flag::VISIBLE, state());
+    let reader = app
+        .world_mut()
+        .register_system(|w: crate::target::RelationWorld| w.inputs_changed());
+    let read = |app: &mut App| app.world_mut().run_system(reader).unwrap();
+    read(&mut app);
+    assert!(!read(&mut app), "nothing moved");
+    run(&mut app, "FactionToggleAtWar(3)");
+    assert!(read(&mut app), "the toggle's write");
+    assert!(!read(&mut app), "and once");
+}

@@ -178,6 +178,7 @@ pub(crate) mod id {
     pub(crate) const PET_ATTACK_START: u16 = 334;
     pub(crate) const PET_ATTACK_STOP: u16 = 335;
     pub(crate) const PLAYER_GUILD_UPDATE: u16 = 345;
+    pub(crate) const UPDATE_FACTION: u16 = 372;
     pub(crate) const TABARD_CANSAVE_CHANGED: u16 = 376;
     pub(crate) const PLAYER_UNGHOST: u16 = 401;
     pub(crate) const PLAYER_UPDATE_RESTING: u16 = 405;
@@ -526,17 +527,8 @@ impl Pass {
     /// for its `SUMMON` (`0x606e9d`) and its `CHARM` (`0x606edf`) when set, then, for the active
     /// player, for every other unit not its own (`0x606efb`).
     fn reaction(&mut self, at: Place, guid: u64, fields: &ObjectFields, around: &Around) {
-        self.signal(at, guid, id::UNIT_FACTION);
-        for pet in [fields.unit_summon(), fields.unit_charm()]
-            .into_iter()
-            .flatten()
-        {
-            self.signal(at, pet, id::UNIT_FACTION);
-        }
-        if around.me == Some(guid) {
-            for other in (around.others)() {
-                self.signal(at, other, id::UNIT_FACTION);
-            }
+        for notice in reaction_signals(guid, fields, around.me, around.others) {
+            self.push(at, notice);
         }
     }
 
@@ -912,6 +904,34 @@ fn skill_value_notice(fields: &ObjectFields, k: u16, old: u32) -> Option<FieldNo
         old,
         shown,
     })
+}
+
+/// `CGUnit_C::RefreshReaction` (`0x606e20`) on `guid`, its signals in order: `UNIT_FACTION` for it
+/// (`0x606e57`), for its `SUMMON` (`0x606e9d`) and its `CHARM` (`0x606edf`) when set, then, for the
+/// active player `me`, for every other unit `others` sweeps (`0x606efb`, [`reaction_sweep`]).
+pub(crate) fn reaction_signals(
+    guid: u64,
+    fields: &ObjectFields,
+    me: Option<u64>,
+    others: &dyn Fn() -> Vec<u64>,
+) -> Vec<FieldNotice> {
+    let mut guids = vec![guid];
+    guids.extend(
+        [fields.unit_summon(), fields.unit_charm()]
+            .into_iter()
+            .flatten(),
+    );
+    if me == Some(guid) {
+        guids.extend(others());
+    }
+    guids
+        .into_iter()
+        .filter(|&g| g != 0)
+        .map(|guid| FieldNotice::Signal {
+            guid,
+            id: id::UNIT_FACTION,
+        })
+        .collect()
 }
 
 /// `RefreshReaction`'s sweep for the active player `me` (`0x468380` with `0x606f20`) over the held

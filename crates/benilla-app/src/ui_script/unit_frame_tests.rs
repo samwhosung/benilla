@@ -1282,7 +1282,8 @@ fn a_values_block_moves_the_target_health_bar_and_a_retarget_fires_no_unit_event
 }
 
 /// A forced-reaction table arriving recolours the target plate: the reference's handler `0x4d59a0`
-/// fires `UNIT_FACTION` for every token naming a unit (`0x4d5a5e` → `0x606e20`), where the plate
+/// refreshes the active player's reaction (`0x4d5a5e` → `0x606e20`), whose sweep signals
+/// `UNIT_FACTION` for the held target too, where the plate
 /// listens for it (`TargetFrame.lua:75-79`) and no field edge moves. A change of the standings
 /// alone fires nothing, a resend of the same table fires again, and a table naming another
 /// faction still fires: the handler tests nothing.
@@ -1385,6 +1386,23 @@ fn a_forced_reaction_table_arriving_recolours_the_target_plate() {
         out
     };
     let plate = |app: &mut App| plate_color(&mut script(app));
+    // `SMSG_SET_FORCED_REACTIONS` as its handler applies it: the table, then `RefreshReaction` on
+    // the active player (`0x4d5a5e`), its signals on the notice lane.
+    let arrive = |app: &mut App, table: Vec<(u32, u32)>| {
+        app.world_mut()
+            .resource_mut::<Reputations>()
+            .set_forced(table);
+        let world = app.world_mut();
+        let mut q = world.query::<(&Guid, &ObjectStore)>();
+        let units: Vec<(u64, benilla_protocol::ObjectFields)> =
+            q.iter(world).map(|(g, s)| (g.0, s.0.clone())).collect();
+        let me = units.iter().find(|(g, _)| *g == ME).map(|(_, f)| f.clone());
+        let others = || crate::field_watch::reaction_sweep(ME, units.iter().map(|(g, f)| (*g, f)));
+        let notices = crate::field_watch::reaction_signals(ME, &me.unwrap(), Some(ME), &others);
+        world
+            .resource_mut::<crate::field_watch::NoticeLane>()
+            .write_batch(notices);
+    };
     let is_green =
         |c: [f32; 4]| c[0].abs() < 1e-6 && (c[1] - 1.0).abs() < 1e-6 && c[2].abs() < 1e-6;
     let is_red = |c: [f32; 4]| (c[0] - 1.0).abs() < 1e-6 && c[1].abs() < 1e-6 && c[2].abs() < 1e-6;
@@ -1405,9 +1423,7 @@ fn a_forced_reaction_table_arriving_recolours_the_target_plate() {
     assert!(seen(&mut app).is_empty(), "no table arrived");
 
     // A table naming another faction still fires: the handler tests nothing (`0x4d5a5e`).
-    app.world_mut()
-        .resource_mut::<Reputations>()
-        .set_forced(vec![(faction + 1000, 0)]);
+    arrive(&mut app, vec![(faction + 1000, 0)]);
     app.update();
     assert_eq!(
         seen(&mut app),
@@ -1420,27 +1436,21 @@ fn a_forced_reaction_table_arriving_recolours_the_target_plate() {
     );
 
     // The guard's faction forced to Hated: the plate follows `UNIT_FACTION`, not a retarget.
-    app.world_mut()
-        .resource_mut::<Reputations>()
-        .set_forced(vec![(faction, 0)]);
+    arrive(&mut app, vec![(faction, 0)]);
     app.update();
     assert_eq!(seen(&mut app), ["player", "target"]);
     let after = plate(&mut app);
     assert!(is_red(after), "forced Hated reads red, got {after:?}");
 
     // The same table sent again fires again, and the aura's removal (an empty table) repaints.
-    app.world_mut()
-        .resource_mut::<Reputations>()
-        .set_forced(vec![(faction, 0)]);
+    arrive(&mut app, vec![(faction, 0)]);
     app.update();
     assert_eq!(
         seen(&mut app),
         ["player", "target"],
         "a resend is an arrival"
     );
-    app.world_mut()
-        .resource_mut::<Reputations>()
-        .set_forced(Vec::new());
+    arrive(&mut app, Vec::new());
     app.update();
     assert_eq!(seen(&mut app), ["player", "target"]);
     let cleared = plate(&mut app);

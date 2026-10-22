@@ -502,10 +502,10 @@ pub(crate) fn feed_targeting_to_vm(
     mut vm: crate::script_calls::VmWith<(
         Res<'static, SpellTargeting>,
         crate::ui_unit::UnitTokens<'static, 'static>,
+        BindChecks<'static, 'static>,
     )>,
-    checks: BindChecks,
 ) {
-    vm.turn(|script, (targeting, tokens)| {
+    vm.turn(|script, (targeting, tokens, checks)| {
         if let Some(script) = script {
             push_targeting_view(script, &targeting, &checks, &tokens);
         }

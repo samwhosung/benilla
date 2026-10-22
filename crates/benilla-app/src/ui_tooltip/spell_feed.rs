@@ -700,7 +700,11 @@ pub(super) struct SpellTooltipSources<'w> {
 /// hovered, as the reference reads them all locally; an ask for any other id or aura too.
 #[allow(clippy::type_complexity)] // a Bevy system's full input set
 pub(super) fn feed_spell_tooltips(
-    mut vm: crate::script_calls::VmWith<ResMut<'static, Items>>,
+    // The item cache and the standings, which the host's calls write too: an engine turn.
+    mut vm: crate::script_calls::VmWith<(
+        ResMut<'static, Items>,
+        Option<Res<'static, crate::net::Reputations>>,
+    )>,
     actions: Option<Res<PlayerActions>>,
     spell_sources: SpellTooltipSources,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
@@ -715,15 +719,14 @@ pub(super) fn feed_spell_tooltips(
         Option<Res<crate::ui_items::ItemSubClasses>>,
         Res<crate::spell::SpellModifiers>,
         Option<Res<crate::ui_spellbook::SkillLines>>,
-        // `Faction.dbc` and the standings, the reputation line's.
+        // `Faction.dbc`, the reputation line's.
         Option<Res<crate::target::Factions>>,
-        Option<Res<crate::net::Reputations>>,
     ),
     commands: Res<NetCommands>,
     mut memory: Local<crate::ui_script::VmMemo<SpellFeedMemory>>,
 ) {
-    vm.turn(|script, mut items| {
-        let (sub_classes, spell_mods, skill_lines, factions, reputations) = &lookups;
+    vm.turn(|script, (mut items, reputations)| {
+        let (sub_classes, spell_mods, skill_lines, factions) = &lookups;
         let SpellTooltipSources {
             spells,
             trainer_subjects,

@@ -191,6 +191,7 @@ fn feed_taxi(
     mut vm: crate::script_calls::VmWith<(
         ResMut<'static, TaxiState>,
         ResMut<'static, TaxiRouteCache>,
+        crate::target::RelationWorld<'static, 'static>,
     )>,
     catalogs: Option<Res<TaxiCatalogs>>,
     names: Res<NameCache>,
@@ -198,14 +199,13 @@ fn feed_taxi(
     index: Res<GuidIndex>,
     stores: Query<&ObjectStore>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    relations: crate::target::RelationWorld,
     mut last: crate::ui_script::WindowMemo<Option<TaxiUiState>>,
     mut closes: CoreCloses,
     mut sink: crate::ui_action::MessageSink,
     // Absent in a harness with no tutorials.
     mut tutorials: Option<ResMut<Messages<crate::tutorial::TutorialEvent>>>,
 ) {
-    vm.feed(|script, (mut state, mut cache), fires| {
+    vm.feed(|script, (mut state, mut cache, relations), fires| {
         let Some(script) = script else {
             return;
         };

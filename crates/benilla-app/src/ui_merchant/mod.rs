@@ -503,16 +503,15 @@ struct RepairFeedMemo {
 
 /// Push each item's repair cost, and `GetRepairAllCost`'s total while a repairer is open.
 fn feed_repair_costs(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    mut vm: crate::script_calls::VmWith<crate::target::RelationWorld<'static, 'static>>,
     open: Res<MerchantOpen>,
     mut inv: crate::items::Inventory,
     items: Res<Items>,
     units: Query<(&Guid, &ObjectStore), Without<SelfPlayer>>,
-    relations: crate::target::RelationWorld,
     tables: Option<Res<RepairTables>>,
     mut memo: Local<crate::ui_script::VmMemo<RepairFeedMemo>>,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, relations| {
         let Some(script) = script else {
             return;
         };

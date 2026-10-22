@@ -278,6 +278,7 @@ pub(super) fn feed_action_state(
         ResMut<'static, Cooldowns>,
         crate::spell::cast_target::CastTargeting<'static, 'static>,
         Option<Res<'static, crate::ui_pet::PetBar>>,
+        crate::target::RelationWorld<'static, 'static>,
     )>,
     actions: Res<PlayerActions>,
     spells: Option<Res<Spells>>,
@@ -301,7 +302,6 @@ pub(super) fn feed_action_state(
     // One param for the guid index and the item store, for the same ceiling.
     objects: crate::net::Objects,
     units: Query<(&ObjectStore, &Transform), Without<SelfPlayer>>,
-    relations: crate::target::RelationWorld,
     // The item cache and the channel its misses query on, one param for the same ceiling.
     (items, commands): (Res<Items>, Res<NetCommands>),
     // `ItemSubClass.dbc`, whose flags the walk's ammo leg reads.
@@ -320,7 +320,7 @@ pub(super) fn feed_action_state(
     // The reactive list, which lives from one arrival to the next, not for a VM.
     mut reactive: Local<super::reactive::ReactiveList>,
 ) {
-    vm.turn(|script, (mut cooldowns, targeting, pet_bar)| {
+    vm.turn(|script, (mut cooldowns, targeting, pet_bar, relations)| {
         let Some(script) = script else {
             return;
         };

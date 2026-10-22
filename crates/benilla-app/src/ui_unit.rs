@@ -14,7 +14,7 @@ use benilla_ui::script::{
 
 use crate::creature_type::CreatureTypeSources;
 use crate::names::NameCache;
-use crate::net::{Guid, NetCommands, ObjectStore, Reputations, SelfPlayer};
+use crate::net::{Guid, NetCommands, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::target::{Factions, RelUnit, Relations, Selection};
 use crate::ui_script::{gate, SweepApp};
@@ -164,8 +164,6 @@ impl Plugin for UiUnitPlugin {
                     .after(crate::ui_action::CooldownEvents),
                 // After the aura feed, whose guids it covers.
                 held::feed_chain_units.after(crate::ui_aura::AuraEvents),
-                // After every snapshot above is pushed, so a handler reads the new reaction.
-                fire_faction_on_player_refresh.after(crate::ui_aura::AuraEvents),
                 held::feed_name_candidates,
                 // After the control edge, whose flag the exemption is asked for.
                 control_gate::feed_control_bypass,
@@ -799,37 +797,6 @@ fn dist_sq(q: Vec3, p: Vec3) -> f64 {
     (dz * dz + dx * dx) + dy * dy
 }
 
-/// `UNIT_FACTION` for every unit token, on each `RefreshReaction` a wire message runs on the active
-/// player (`0x606e20`): the forced-reaction table's arrival (`0x4d5a5e`) and a standing message
-/// that moved a rank (`0x4d5905`). It signals event 29 through `0x515e50` for the player and its
-/// summons and charms, then sweeps every other unit (`0x468380` with `0x606f20`), so each token
-/// naming a unit hears it, and the target frame repaints its plate (`TargetFrame.lua:75-79`).
-/// Neither message is a descriptor field, so no field edge reaches this. Tokens come from the
-/// resolver's inputs the aura feed pushes ([`UiScript::bound_unit_tokens`]), the fan-out
-/// `0x515c50` builds; the first sight of a VM only seats the count, since a refresh before it
-/// signalled no interface that exists now.
-fn fire_faction_on_player_refresh(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    reputations: Res<Reputations>,
-    mut seen: Local<crate::ui_script::VmMemo<Option<u64>>>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        let refreshes = reputations.player_refreshes();
-        let seen = seen.get(script);
-        let refreshed = seen.is_some_and(|last| last != refreshes);
-        *seen = Some(refreshes);
-        if !refreshed {
-            return;
-        }
-        for token in script.bound_unit_tokens() {
-            script.fire_event("UNIT_FACTION", vec![ScriptValue::Str(token)]);
-        }
-    })
-}
-
 /// `PLAYER_CONTROL_LOST`/`GAINED` on a change of the flag `SMSG_CLIENT_CONTROL_UPDATE` writes
 /// (`0x4958e0`), for our own character only (`0x5fa6d0`); the boot value, and a fresh VM's memo, is in control (`0x48f626`).
 fn feed_player_control(
@@ -885,12 +852,14 @@ fn feed_farsight_focus(
 /// chain reaches, and the VM resolves a verb's token to one of them or to a guid with no entry. Ungated: distances move every
 /// frame, and no event keys off the map.
 fn feed_unit_reach(
-    mut vm: crate::script_calls::VmWith<UnitTokens<'static, 'static>>,
+    mut vm: crate::script_calls::VmWith<(
+        UnitTokens<'static, 'static>,
+        crate::target::RelationWorld<'static, 'static>,
+    )>,
     self_q: Query<(&Transform, &ObjectStore), With<SelfPlayer>>,
     transforms: Query<&Transform>,
-    world: crate::target::RelationWorld,
 ) {
-    vm.turn(|script, tokens| {
+    vm.turn(|script, (tokens, world)| {
         let Some(script) = script else {
             return;
         };
@@ -1368,7 +1337,10 @@ pub(crate) fn run_feed_units_once(world: &mut World) {
 
 fn feed_units(
     // What the host also reaches, read before the VM runs with the host lent.
-    mut hosted: ParamSet<(Res<Selection>, crate::script_calls::HostedVm)>,
+    mut vm: crate::script_calls::VmWith<(
+        Res<'static, Selection>,
+        crate::target::RelationWorld<'static, 'static>,
+    )>,
     tables: SnapshotTables,
 
     self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
@@ -1379,7 +1351,6 @@ fn feed_units(
     mut feed: ResMut<UnitFeedState>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
-    world: crate::target::RelationWorld,
     group: Res<crate::ui_party::GroupState>,
     // Chat and the message-sound queue, for the rest and PvP lines.
     sink: crate::ui_action::MessageSink,
@@ -1391,12 +1362,15 @@ fn feed_units(
     arrivals: Query<(), Added<SelfPlayer>>,
 ) {
     let arrived = !arrivals.is_empty();
-    let p = hosted.p0();
-    let selection_changed = p.is_changed();
-    let selection = *p;
-    hosted.p1().run(|script| {
+    // The pushes are an engine turn, as they read the relation inputs a call can write; the
+    // events they owe fire after it with the host lent, so a call their handlers make applies
+    // inside the verb.
+    let owed = vm.turn(|script, (selection, world)| {
+        let selection_changed = selection.is_changed();
+        let selection = *selection;
+        let mut owed = OwedUnitEvents::default();
         let Some(script) = script else {
-            return;
+            return owed;
         };
         let chr = tables.unit_names();
         let types = tables.types(&names);
@@ -1444,7 +1418,7 @@ fn feed_units(
         );
         stores.removed.clear();
         if gate.skip() {
-            return;
+            return owed;
         }
 
         // A missing unit is `None`, which `set_unit` clears; a name miss lands on a later frame.
@@ -1608,27 +1582,8 @@ fn feed_units(
                 let prev = memo.last_level.replace(level);
                 if prev.is_some_and(|p| level != p) {
                     gate.audit("feed_units", "the level edge");
-                    // All nine, as the reference formats them (`%d` nine times) and
-                    // `ChatFrame.lua:1283-1320` reads them; missing gains are zeros, since stock's
-                    // `if ( argN > 0 )` raises on nil.
                     let (info, talent_points) = sink.chat.take_level_up_gains(level).unzip();
-                    let gain = |f: fn(&benilla_protocol::messages::LevelUpInfo) -> i32| {
-                        ScriptValue::Int(i64::from(info.as_ref().map_or(0, f)))
-                    };
-                    script.fire_event(
-                        "PLAYER_LEVEL_UP",
-                        vec![
-                            ScriptValue::Int(i64::from(level)),
-                            gain(|l| l.health),
-                            gain(|l| l.powers[0]),
-                            ScriptValue::Int(i64::from(talent_points.unwrap_or(0))),
-                            gain(|l| l.stats[0]),
-                            gain(|l| l.stats[1]),
-                            gain(|l| l.stats[2]),
-                            gain(|l| l.stats[3]),
-                            gain(|l| l.stats[4]),
-                        ],
-                    );
+                    owed.level_up = Some((level, info, talent_points.unwrap_or(0)));
                 }
             }
         }
@@ -1663,10 +1618,8 @@ fn feed_units(
                 // The arrival's ghost state (`0x5deb2a` → `0x5de9c0`) runs ahead of its cascade
                 // (`0x5deb60`): alive, `PLAYER_UNGHOST` (`0x5dea2a`), with no gate before it; a
                 // ghost's leg is its tutorial (`crate::tutorial`).
-                if arrived && store.0.player_flags() & 0x10 == 0 {
-                    script.fire_event("PLAYER_UNGHOST", vec![]);
-                }
-                script.fire_world_enter();
+                owed.unghost = arrived && store.0.player_flags() & 0x10 == 0;
+                owed.world_enter = true;
                 memo.entered_world = true;
             }
         } else if memo.entered_world {
@@ -1736,7 +1689,58 @@ fn feed_units(
                 script.set_combo_points(banked.0, banked.1);
             }
         }
-    })
+        owed
+    });
+    vm.run(|script| {
+        if let Some(script) = script {
+            owed.fire(script);
+        }
+    });
+}
+
+/// The events [`feed_units`]' turn owes, fired after it in its order with the host lent.
+#[derive(Default)]
+struct OwedUnitEvents {
+    /// `PLAYER_LEVEL_UP`: the new level, the gains `SMSG_LEVELUP_INFO` carried and the talent
+    /// points.
+    level_up: Option<(u32, Option<benilla_protocol::messages::LevelUpInfo>, u32)>,
+    /// `PLAYER_UNGHOST`, ahead of the arrival's cascade.
+    unghost: bool,
+    /// The world-enter cascade.
+    world_enter: bool,
+}
+
+impl OwedUnitEvents {
+    fn fire(self, script: &mut UiScript) {
+        if let Some((level, info, talent_points)) = self.level_up {
+            // All nine, as the reference formats them (`%d` nine times) and
+            // `ChatFrame.lua:1283-1320` reads them; missing gains are zeros, since stock's
+            // `if ( argN > 0 )` raises on nil.
+            let gain = |f: fn(&benilla_protocol::messages::LevelUpInfo) -> i32| {
+                ScriptValue::Int(i64::from(info.as_ref().map_or(0, f)))
+            };
+            script.fire_event(
+                "PLAYER_LEVEL_UP",
+                vec![
+                    ScriptValue::Int(i64::from(level)),
+                    gain(|l| l.health),
+                    gain(|l| l.powers[0]),
+                    ScriptValue::Int(i64::from(talent_points)),
+                    gain(|l| l.stats[0]),
+                    gain(|l| l.stats[1]),
+                    gain(|l| l.stats[2]),
+                    gain(|l| l.stats[3]),
+                    gain(|l| l.stats[4]),
+                ],
+            );
+        }
+        if self.unghost {
+            script.fire_event("PLAYER_UNGHOST", vec![]);
+        }
+        if self.world_enter {
+            script.fire_world_enter();
+        }
+    }
 }
 
 /// The event [`feed_units`]' pushes owe, signalled after the action feed's usable refresh as the
@@ -1783,7 +1787,6 @@ pub(crate) fn add_unit_feed(app: &mut App) {
                 feed_units.in_set(UnitSnapshots),
                 feed_player_control.before(crate::ui_action::CooldownEvents),
                 fire_unit_events.after(crate::ui_action::CooldownEvents),
-                fire_faction_on_player_refresh,
                 field_events::fire_field_notices,
             )
                 .chain(),
@@ -1793,6 +1796,7 @@ pub(crate) fn add_unit_feed(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::Reputations;
 
     /// `0x6243e0` raises `UNIT_COMBAT` for a displayed swing on a victim held as a unit, and
     /// returns past it for a swing `0x625e40` hides (`0x624414`).

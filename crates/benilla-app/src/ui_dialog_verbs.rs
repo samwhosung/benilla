@@ -837,12 +837,16 @@ fn poll_area_spirit_healer(
         ),
         Without<SelfPlayer>,
     >,
-    relations: crate::target::RelationWorld,
     commands: Res<NetCommands>,
-    mut hosted_vm: crate::script_calls::HostedVm,
+    // The relation inputs, which a call the event's handlers make can write: read first.
+    mut vm: crate::script_calls::VmWith<crate::target::RelationWorld<'static, 'static>>,
 ) {
-    hosted_vm.run(|mut script| {
-        let mut apply = |outcome: SetHealerOutcome| {
+    let outcomes = {
+        let relations = vm.own();
+        poll_outcomes(&mut spirit, &me, &units, &relations)
+    };
+    vm.run(|mut script| {
+        for outcome in outcomes {
             if outcome.cancel_aura {
                 // `0x6e7040(0xA18)`: the event with no argument, the packet with no guid.
                 if let Some(script) = script.as_deref_mut() {
@@ -857,59 +861,73 @@ fn poll_area_spirit_healer(
                     .0
                     .send(ClientCommand::AreaSpiritHealerQuery { healer });
             }
-        };
-
-        let Ok((self_store, self_tf)) = me.single() else {
-            apply(spirit.set_healer(None));
-            return;
-        };
-        if !self_store.0.player_is_ghost() {
-            apply(spirit.set_healer(None));
-            return;
-        }
-        let here = self_tf.translation;
-
-        // Retain: a guid that no longer streams drops like one out of range (an `ObjectPtr` miss).
-        if let Some(cached) = spirit.healer() {
-            let still = units.iter().find(|(guid, ..)| guid.0 == cached);
-            let keep = still.is_some_and(|(_, _, _, tf)| {
-                tf.translation.distance_squared(here)
-                    <= SPIRIT_GUIDE_RETAIN_YD * SPIRIT_GUIDE_RETAIN_YD
-            });
-            if !keep {
-                apply(spirit.set_healer(None));
-            }
-        }
-        if spirit.healer().is_some() {
-            return;
-        }
-
-        // Acquire: `CanAssist 0x6066f0` with the guide as `this` (`0x492506`).
-        let (rel, Some(me)) = (relations.get(), relations.me()) else {
-            return;
-        };
-        let mut adopted = None;
-        for (guid, kind, store, tf) in units.iter() {
-            if kind.kind != benilla_protocol::EntityKind::Unit {
-                continue;
-            }
-            if store.0.unit_npc_flags() & NPC_FLAG_SPIRITGUIDE == 0 {
-                continue;
-            }
-            if tf.translation.distance_squared(here)
-                > SPIRIT_GUIDE_ACQUIRE_YD * SPIRIT_GUIDE_ACQUIRE_YD
-            {
-                continue;
-            }
-            if !rel.can_assist(&relations.unit_of(guid.0, store), &me) {
-                continue;
-            }
-            adopted = Some(guid.0); // last wins: the callback never stops the walk
-        }
-        if let Some(guid) = adopted {
-            apply(spirit.set_healer(Some(guid)));
         }
     })
+}
+
+/// [`poll_area_spirit_healer`]'s walk: what each healer change it makes owes, in order.
+fn poll_outcomes(
+    spirit: &mut AreaSpiritHealer,
+    me: &Query<(&ObjectStore, &Transform), With<SelfPlayer>>,
+    units: &Query<
+        (
+            &crate::net::Guid,
+            &crate::net::NetEntity,
+            &ObjectStore,
+            &Transform,
+        ),
+        Without<SelfPlayer>,
+    >,
+    relations: &crate::target::RelationWorld,
+) -> Vec<SetHealerOutcome> {
+    let Ok((self_store, self_tf)) = me.single() else {
+        return vec![spirit.set_healer(None)];
+    };
+    if !self_store.0.player_is_ghost() {
+        return vec![spirit.set_healer(None)];
+    }
+    let here = self_tf.translation;
+    let mut out = Vec::new();
+
+    // Retain: a guid that no longer streams drops like one out of range (an `ObjectPtr` miss).
+    if let Some(cached) = spirit.healer() {
+        let still = units.iter().find(|(guid, ..)| guid.0 == cached);
+        let keep = still.is_some_and(|(_, _, _, tf)| {
+            tf.translation.distance_squared(here) <= SPIRIT_GUIDE_RETAIN_YD * SPIRIT_GUIDE_RETAIN_YD
+        });
+        if !keep {
+            out.push(spirit.set_healer(None));
+        }
+    }
+    if spirit.healer().is_some() {
+        return out;
+    }
+
+    // Acquire: `CanAssist 0x6066f0` with the guide as `this` (`0x492506`).
+    let (rel, Some(me)) = (relations.get(), relations.me()) else {
+        return out;
+    };
+    let mut adopted = None;
+    for (guid, kind, store, tf) in units.iter() {
+        if kind.kind != benilla_protocol::EntityKind::Unit {
+            continue;
+        }
+        if store.0.unit_npc_flags() & NPC_FLAG_SPIRITGUIDE == 0 {
+            continue;
+        }
+        if tf.translation.distance_squared(here) > SPIRIT_GUIDE_ACQUIRE_YD * SPIRIT_GUIDE_ACQUIRE_YD
+        {
+            continue;
+        }
+        if !rel.can_assist(&relations.unit_of(guid.0, store), &me) {
+            continue;
+        }
+        adopted = Some(guid.0); // last wins: the callback never stops the walk
+    }
+    if let Some(guid) = adopted {
+        out.push(spirit.set_healer(Some(guid)));
+    }
+    out
 }
 
 /// The dialog verbs' packet handlers: each parks a question or a countdown for the feed.

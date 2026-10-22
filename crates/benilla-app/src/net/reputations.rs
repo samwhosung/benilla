@@ -4,11 +4,13 @@
 //!
 //! The wire writes the slots, the reputation verbs write a slot's flag byte inside their call
 //! (`0x4d5fc0` from `0x4d6074` and `0x4d612c`), and the reaction reads the byte live (`0x60640c`
-//! through `0x4d61b0`). So the slots live behind one shared handle: a clone of [`Reputations`] is
-//! the same slots, which the Lua API's relation functions hold, and the call host writes them
-//! through a shared reference, as most of its appliers read the store through the relation inputs.
+//! through `0x4d61b0`). Every write goes through `&mut`, the wire's handlers' and the call host's,
+//! so a write marks the resource changed in the frame it happens. The slots sit behind one shared
+//! handle for one reader outside the world: the Lua API's relation functions, whose snapshot the
+//! VM holds between pushes, hold a clone, which is the same slots, so a verb's write is in their
+//! answer on the call's next line.
 
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU8, Ordering};
 use std::sync::Arc;
 
 use benilla_protocol::messages::FACTION_LIST_LEN;
@@ -21,17 +23,15 @@ struct Slot {
     standing: AtomicI32,
 }
 
-/// The 64 slots, and whether a verb wrote one since the store last told the frame.
+/// The 64 slots.
 struct Slots {
     cells: [Slot; FACTION_LIST_LEN],
-    verb_wrote: AtomicBool,
 }
 
 impl Default for Slots {
     fn default() -> Self {
         Self {
             cells: std::array::from_fn(|_| Slot::default()),
-            verb_wrote: AtomicBool::new(false),
         }
     }
 }
@@ -49,15 +49,12 @@ impl Default for Slots {
 /// templates or our standing say. Both halves live on one resource so a change to either wakes the
 /// unit feed and the questgiver-marker re-query that read reactions.
 ///
-/// A clone shares the slots and copies the rest.
+/// A clone shares the slots and copies the rest: the shared handle is there for the Lua API's
+/// relation snapshot alone, which reads the slots live between pushes.
 #[derive(Resource, Default, Clone)]
 pub(crate) struct Reputations {
     slots: Arc<Slots>,
     pub(crate) forced: Vec<(u32, u32)>,
-    /// How many times a wire message ran `CGUnit_C::RefreshReaction` on the active player
-    /// (`0x606e20`): each forced table's arrival (`0x4d5a5e`), a resend of the same table included,
-    /// and each standing message that moved a rank (`0x4d5905`). A feed counts these, not diffs.
-    player_refreshes: u64,
 }
 
 impl Reputations {
@@ -125,45 +122,15 @@ impl Reputations {
         }
     }
 
-    /// A verb's write of `bits` of slot `slot`'s flag byte inside its call (`0x4d5fc0` from
-    /// `0x4d6074` and `0x4d612c`): every holder of the store reads it at once, and the frame hears
-    /// of it at [`Self::take_verb_write`].
-    pub(crate) fn write_flag_bits(&self, slot: usize, bits: u8, set: bool) {
-        let Some(cell) = self.slots.cells.get(slot) else {
-            return;
-        };
-        if set {
-            cell.flags.fetch_or(bits, Ordering::Relaxed);
-        } else {
-            cell.flags.fetch_and(!bits, Ordering::Relaxed);
-        }
-        self.slots.verb_wrote.store(true, Ordering::Relaxed);
-    }
-
-    /// Whether a verb wrote a slot since the last ask.
-    pub(crate) fn take_verb_write(&self) -> bool {
-        self.slots.verb_wrote.swap(false, Ordering::Relaxed)
-    }
-
-    /// `SMSG_SET_FORCED_REACTIONS`: the table replaces the last whole (`0x4d59a0`), then refreshes
-    /// the active player's reaction (`0x4d5a5e`).
+    /// `SMSG_SET_FORCED_REACTIONS`: the table replaces the last whole (`0x4d59a0`).
     pub(crate) fn set_forced(&mut self, table: Vec<(u32, u32)>) {
         self.forced = table;
-        self.refresh_player_reaction();
     }
 
-    /// Drops the table: the reference's teardown zeroes the count (`0x4d5419`).
-    pub(crate) fn clear_forced(&mut self) {
+    /// The teardown (`0x4d5360`): the forced table's count zeroed (`0x4d5419`) and all 64 slots
+    /// with it (`0x4d541f`-`0x4d542b`).
+    pub(crate) fn tear_down(&mut self) {
         self.forced.clear();
-    }
-
-    /// A wire message ran `RefreshReaction` on the active player (`0x606e20`).
-    pub(crate) fn refresh_player_reaction(&mut self) {
-        self.player_refreshes += 1;
-    }
-
-    /// The active player's reaction refreshes so far.
-    pub(crate) fn player_refreshes(&self) -> u64 {
-        self.player_refreshes
+        self.set_slots(&[]);
     }
 }

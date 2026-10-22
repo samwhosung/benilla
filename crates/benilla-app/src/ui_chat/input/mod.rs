@@ -130,6 +130,8 @@ pub(super) fn drain_chat_input(
         MessageWriter<'static, crate::creature_anim::CastEvent>,
         ResMut<'static, crate::creature_anim::PlaySeq>,
         ChatOut<'static, 'static>,
+        // The dev probes read the relation inputs a call can write.
+        ChatProbes<'static, 'static>,
     )>,
     chat_log: Res<super::feed::ChatLog>,
     commands: Res<NetCommands>,
@@ -137,13 +139,13 @@ pub(super) fn drain_chat_input(
     self_player: Query<(Entity, &MovementState, &GlobalTransform), With<SelfPlayer>>,
     mut go_targets: MessageWriter<crate::creature_anim::SpellGoTargets>,
     table: Res<super::commands::SlashCommands>,
-    probes: ChatProbes,
 ) {
     // The lines are taken in turns, and a line's Lua runs between them with the host lent, so a
     // call it makes applies inside its verb, before the next line is taken.
     let mut lines: Option<std::vec::IntoIter<(String, ParsedChat)>> = None;
     while let Some(work) = vm.turn(|script, parts| {
-        let (selection, mut group, mut names, mut cast_events, mut play_seq, mut chat_out) = parts;
+        let (selection, mut group, mut names, mut cast_events, mut play_seq, mut chat_out, probes) =
+            parts;
         let ChatProbes {
             camera: world_camera,
             clock,

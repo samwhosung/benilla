@@ -121,7 +121,7 @@ pub(super) struct ChainMemo {
 /// held as anything but a unit gets no snapshot. A token without a hop reads its own push, not
 /// these.
 pub(super) fn feed_chain_units(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    mut vm: crate::script_calls::VmWith<crate::target::RelationWorld<'static, 'static>>,
     tables: super::SnapshotTables,
     // The object manager's lookup (`0x468460`) on its own, not through [`super::UnitTokens`],
     // whose pet-bar read would order this feed against the pet feed it does not depend on.
@@ -129,7 +129,6 @@ pub(super) fn feed_chain_units(
     stores: Query<&ObjectStore>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
-    world: crate::target::RelationWorld,
     group: Res<crate::ui_party::GroupState>,
     guild: Res<crate::ui_guild::GuildState>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
@@ -137,7 +136,7 @@ pub(super) fn feed_chain_units(
     mut removed: RemovedComponents<Guid>,
     mut memo: Local<VmMemo<ChainMemo>>,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, world| {
         let Some(script) = script else {
             return;
         };
@@ -297,7 +296,7 @@ pub(crate) struct CandidateMemo {
 /// change until the unit's next update. Without an active player object nothing is a candidate,
 /// as the reference resolves nothing then (`0x493ae0`).
 pub(crate) fn feed_name_candidates(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    mut vm: crate::script_calls::VmWith<crate::target::RelationWorld<'static, 'static>>,
     tables: super::SnapshotTables,
     // [`GlobalTransform`], as [`crate::target::PlayerLookup`] reads it: `Transform` would put
     // this feed in an undeclared order against every system that moves a unit.
@@ -305,14 +304,13 @@ pub(crate) fn feed_name_candidates(
     self_q: Query<(&Guid, &GlobalTransform, Option<&ObjectStore>), With<SelfPlayer>>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
-    world: crate::target::RelationWorld,
     group: Res<crate::ui_party::GroupState>,
     guild: Res<crate::ui_guild::GuildState>,
     // The object manager's lookup, which the tooltip's owner line names an owner through.
     index: Option<Res<crate::net::GuidIndex>>,
     mut memo: Local<VmMemo<CandidateMemo>>,
 ) {
-    hosted_vm.run(|script| {
+    vm.turn(|script, world| {
         let Some(script) = script else {
             return;
         };

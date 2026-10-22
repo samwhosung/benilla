@@ -515,13 +515,14 @@ struct AuraUnits<'w> {
 }
 
 fn feed_auras(
-    mut vm: crate::script_calls::VmWith<AuraUnits<'static>>,
+    mut vm: crate::script_calls::VmWith<(
+        AuraUnits<'static>,
+        crate::target::RelationWorld<'static, 'static>,
+    )>,
     self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
     stores: Query<&ObjectStore>,
     spells: Option<Res<Spells>>,
     index: Res<GuidIndex>,
-    // The `UnitBuff` gate's inputs, the relation model the selection ring and nameplates use.
-    relations: crate::target::RelationWorld,
     // Read-only: the net path writes the stamps and only the session's end drops them.
     durations: Res<AuraDurations>,
     mut cache: ResMut<PlayerAuraCache>,
@@ -533,7 +534,8 @@ fn feed_auras(
     actions: Option<Res<crate::ui_action::PlayerActions>>,
     mut mem: ResMut<AuraFeedMemory>,
 ) {
-    vm.feed(|script, units, fires| {
+    // The `UnitBuff` gate's inputs are the relation model the selection ring and nameplates use.
+    vm.feed(|script, (units, relations), fires| {
         let Some(script) = script else {
             return;
         };

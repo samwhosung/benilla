@@ -213,12 +213,13 @@ fn on_logged_out(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
             &mut b.self_guid,
             &mut e.logged_out,
         );
-        // The reference zeroes the forced table's count only in teardown `0x4d5360` (`0x4d5419`),
-        // whose one caller is `ShutdownGame 0x491180` (`0x4911dc`), never on a worldport. The
-        // session's end stands in for that shutdown: the table is the character's, and one left
-        // here would colour the next character's world. The server resends it at login for a
-        // saved aura (vmangos `Unit.cpp:3511` → `SpellAuras.cpp:2744-2745`).
-        b.reputations.clear_forced();
+        // The reference zeroes the forced table's count and the 64 slots only in teardown
+        // `0x4d5360` (`0x4d5419`, `0x4d541f`), whose one caller is `ShutdownGame 0x491180`
+        // (`0x4911dc`), never on a worldport. The session's end stands in for that shutdown: the
+        // table and the standings are the character's, and ones left here would colour the next
+        // character's world. The server resends the table at login for a saved aura (vmangos
+        // `Unit.cpp:3511` → `SpellAuras.cpp:2744-2745`).
+        b.reputations.tear_down();
     }
 }
 
@@ -231,7 +232,7 @@ fn on_disconnected(
 ) {
     if let SessionEvent::Disconnected { reason, end } = ev {
         // The same teardown as `on_logged_out`'s.
-        b.reputations.clear_forced();
+        b.reputations.tear_down();
         // Leaving the world frees the released objects with the live ones (`0x467700`).
         released.clear();
         disconnected(
@@ -351,16 +352,62 @@ fn on_clock(In(ev): In<SessionEvent>, mut b: Bridge, step: Res<FrameStep>) {
     }
 }
 
+/// `UPDATE_FACTION` (`0x703e50` with 0x174) as a reputation message signals it, on the notice lane
+/// in the packets' order.
+const UPDATE_FACTION: crate::field_watch::FieldNotice = crate::field_watch::FieldNotice::Global {
+    id: crate::field_watch::id::UPDATE_FACTION,
+};
+
+/// `CGUnit_C::RefreshReaction` (`0x606e20`) on the active player from a reputation message, once,
+/// when the object manager holds the player (`0x4d5a55`, `0x4d58ff`): `UNIT_FACTION` for it, its
+/// summon and its charm, then for every held unit the sweep reaches, on the notice lane.
+fn refresh_player_reaction(b: &Bridge, lane: &mut crate::field_watch::NoticeLane) {
+    let Some(me) = b.self_guid.0 else {
+        return;
+    };
+    let Some(store) = b.index.0.get(&me).and_then(|&e| b.stores.get(e).ok()) else {
+        return;
+    };
+    let others = || {
+        let units = b.index.0.iter().filter_map(|(&g, &e)| {
+            let s = b.stores.get(e).ok()?;
+            s.is_unit().then_some((g, &s.0))
+        });
+        crate::field_watch::reaction_sweep(me, units)
+    };
+    lane.write_batch(crate::field_watch::reaction_signals(
+        me,
+        &store.0,
+        Some(me),
+        &others,
+    ));
+}
+
 fn on_reputations(
     In(ev): In<SessionEvent>,
     mut b: Bridge,
     factions: Option<Res<crate::target::ring::Factions>>,
     chat: Res<crate::ui_chat::ChatLog>,
+    // Absent in a harness with no interface.
+    mut lane: Option<ResMut<crate::field_watch::NoticeLane>>,
 ) {
+    let signal = |n: usize, lane: &mut Option<ResMut<crate::field_watch::NoticeLane>>| {
+        if let Some(lane) = lane.as_deref_mut() {
+            lane.write_batch(std::iter::repeat_n(UPDATE_FACTION, n));
+        }
+    };
     match ev {
-        SessionEvent::Reputations { standings } => reputations(standings, &mut b.reputations),
+        SessionEvent::Reputations { standings } => {
+            reputations(standings, &mut b.reputations);
+            // The rebuild's sort signals with the player held (`0x4d5694` → `0x4d55de`), then the
+            // message's own (`0x4d5699`).
+            signal(1 + usize::from(self_facts(&b).is_some()), &mut lane);
+        }
         SessionEvent::ForcedReactions { reactions } => {
-            forced_reactions(reactions, &mut b.reputations)
+            forced_reactions(reactions, &mut b.reputations);
+            if let Some(lane) = lane.as_deref_mut() {
+                refresh_player_reaction(&b, lane);
+            }
         }
         SessionEvent::ReputationVisible { list_id } => {
             // The chat line names the rank, so it reads the store before the flag lands.
@@ -374,10 +421,14 @@ fn on_reputations(
                 );
                 crate::ui_reputation::queue_standing_lines(line, f.catalog(), me.female, &chat);
             }
-            reputation_visible(list_id, &mut b.reputations)
+            // A slot newly visible is sorted, which signals (`0x4d574a` → `0x4d5dab`).
+            let listed = reputation_visible(list_id, &mut b.reputations);
+            signal(usize::from(listed), &mut lane);
         }
         SessionEvent::ReputationAtWar { list_id, flags } => {
-            reputation_at_war(list_id, flags, &mut b.reputations)
+            reputation_at_war(list_id, flags, &mut b.reputations);
+            // Whether or not the bit moved (`0x4d56f6`).
+            signal(1, &mut lane);
         }
         _ => {}
     }
@@ -414,6 +465,8 @@ fn on_reputation_delta(
     chat_log: Res<crate::ui_chat::ChatLog>,
     mut quest: ResMut<QuestGiver>,
     quest_log: Option<ResMut<crate::ui_quest_log::QuestLog>>,
+    // Absent in a harness with no interface.
+    mut lane: Option<ResMut<crate::field_watch::NoticeLane>>,
 ) {
     if let SessionEvent::ReputationDelta { standings } = ev {
         crate::combat_log::chat::faction_standing(
@@ -436,13 +489,26 @@ fn on_reputation_delta(
             .as_deref()
             .zip(self_facts(&b))
             .map(|(f, me)| (f.catalog(), me.race, me.class));
+        let latches = reputation_delta(standings, &mut b.reputations, ranks, &mut quest);
+        // A flag byte that moved re-sorts, which signals (`0x4d58c8` → `0x4d5dab`).
+        if latches.flags_moved {
+            if let Some(lane) = lane.as_deref_mut() {
+                lane.write(UPDATE_FACTION);
+            }
+        }
         // A moved rank rebuilds the quest log and refreshes the active player's reaction once
         // for the message (`0x4d58ea`-`0x4d5905`); `ranks` holds only with the player.
-        if reputation_delta(standings, &mut b.reputations, ranks, &mut quest) {
+        if latches.rank_moved {
             if let Some(mut quest_log) = quest_log {
                 quest_log.note_faction_rank_move();
             }
-            b.reputations.refresh_player_reaction();
+            if let Some(lane) = lane.as_deref_mut() {
+                refresh_player_reaction(&b, lane);
+            }
+        }
+        // The message's own signal, whatever it held, none included (`0x4d597f`-`0x4d5984`).
+        if let Some(lane) = lane.as_deref_mut() {
+            lane.write(UPDATE_FACTION);
         }
     }
 }
@@ -779,22 +845,20 @@ fn forced_reactions(reactions: Vec<(u32, u32)>, reputations: &mut Reputations) {
 /// set by the faction's rank after the entry below Unfriendly (`0x4d5833`), else cleared when that
 /// rank rose (`0x4d583f`). `ranks` is the catalog and the active player's race and class the rank
 /// reads its base by (`0x4d63a0`); without them the rule is skipped, as every rank reads Neutral
-/// before the player's rebuild names the slots (`0x4d54ee`). Whether an entry moved its slot's
-/// rank, `HIDDEN` or not, the latch the quest log and the reaction refresh read (`0x4d5880`,
-/// `0x4d58a9`, `0x4d58ac`).
+/// before the player's rebuild names the slots (`0x4d54ee`).
 fn reputation_delta(
     standings: Vec<(u32, i32)>,
     reputations: &mut Reputations,
     ranks: Option<(&benilla_formats::FactionCatalog, u8, u8)>,
     quest: &mut QuestGiver,
-) -> bool {
+) -> DeltaLatches {
     use benilla_formats::faction_flags as flag;
     let rank = |reputations: &Reputations, slot: usize| {
         ranks.map(|(catalog, race, class)| {
             crate::ui_reputation::slot_rank(catalog, reputations, race, class, slot)
         })
     };
-    let mut moved = false;
+    let mut latches = DeltaLatches::default();
     for (list_id, standing) in standings {
         let Some(i) = reputation_slot(list_id, "SMSG_SET_FACTION_STANDING") else {
             continue;
@@ -806,28 +870,41 @@ fn reputation_delta(
             flags |= flag::VISIBLE;
         }
         if let (Some(old), Some(new)) = (old, rank(reputations, i)) {
-            moved |= new != old;
+            latches.rank_moved |= new != old;
             if new < 2 {
                 flags |= flag::AT_WAR;
             } else if new > old {
                 flags &= !flag::AT_WAR;
             }
         }
+        latches.flags_moved |= flags != reputations.flags(i);
         reputations.set_flags(i, flags);
     }
     // Standing feeds questgiver status (`SatisfyQuestReputation`); the reference re-asks here too.
     quest.bump_reask();
-    moved
+    latches
 }
 
-/// `SMSG_SET_FACTION_VISIBLE`: sets `FACTION_FLAG_VISIBLE` on the slot and nothing else; it
-/// carries no standing, and the reputation pane lists a faction by this bit.
-fn reputation_visible(list_id: u32, reputations: &mut Reputations) {
+/// What a standing message's entries latched for after them.
+#[derive(Default)]
+struct DeltaLatches {
+    /// A slot's flag byte moved (`0x4d585d`-`0x4d5876`): the list re-sorts.
+    flags_moved: bool,
+    /// A slot's rank moved, `HIDDEN` or not (`0x4d5880`, `0x4d58a9`, `0x4d58ac`): the quest log and
+    /// the reaction refresh read it.
+    rank_moved: bool,
+}
+
+/// `SMSG_SET_FACTION_VISIBLE`: sets `FACTION_FLAG_VISIBLE` on a slot without it, which the pane
+/// lists by (`0x4d572e`-`0x4d5745`); it carries no standing. Whether the slot was newly listed.
+fn reputation_visible(list_id: u32, reputations: &mut Reputations) -> bool {
+    use benilla_formats::faction_flags::VISIBLE;
     let Some(i) = reputation_slot(list_id, "SMSG_SET_FACTION_VISIBLE") else {
-        return;
+        return false;
     };
     let flags = reputations.flags(i);
-    reputations.set_flags(i, flags | benilla_formats::faction_flags::VISIBLE);
+    reputations.set_flags(i, flags | VISIBLE);
+    flags & VISIBLE == 0
 }
 
 /// `SMSG_SET_FACTION_ATWAR` (`0x4d56b0`): bit `0x02` of the wire byte becomes the slot's at-war
@@ -1036,6 +1113,30 @@ mod forced_reaction_tests {
             assert_eq!(forced(&app).len(), 1);
             dispatch(app.world_mut(), vec![end.clone()]);
             assert!(forced(&app).is_empty(), "{end:?} left the table");
+        }
+    }
+
+    /// The session's end is the teardown (`0x4d5360`), which zeroes all 64 slots
+    /// (`0x4d541f`-`0x4d542b`), so no standing or at-war bit outlives the character.
+    #[test]
+    fn the_session_end_zeroes_the_slots() {
+        for end in [
+            SessionEvent::LoggedOut,
+            SessionEvent::Disconnected {
+                reason: "gone".into(),
+                end: SessionEnd::LoggedOut,
+            },
+        ] {
+            let mut app = app();
+            dispatch(
+                app.world_mut(),
+                vec![SessionEvent::Reputations {
+                    standings: vec![(0x03, 5000); 64],
+                }],
+            );
+            dispatch(app.world_mut(), vec![end.clone()]);
+            let reps = app.world().resource::<Reputations>();
+            assert!(reps.slots().all(|s| s == (0, 0)), "{end:?} left a slot");
         }
     }
 }

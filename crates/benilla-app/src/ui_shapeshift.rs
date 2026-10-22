@@ -130,14 +130,17 @@ impl Plugin for UiShapeshiftPlugin {
 /// Build the bar from the known spells and the catalog (module doc), and diff-push it.
 #[allow(clippy::type_complexity)] // a Bevy system's full input set
 fn feed_shapeshift_bar(
-    mut vm: crate::script_calls::VmWith<(Res<'static, Cooldowns>, Res<'static, Selection>)>,
+    mut vm: crate::script_calls::VmWith<(
+        Res<'static, Cooldowns>,
+        Res<'static, Selection>,
+        crate::target::RelationWorld<'static, 'static>,
+    )>,
     actions: Res<PlayerActions>,
     spells: Option<Res<Spells>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     // The selection's guid index, and the bag walk behind each form's reagent leg.
     objects: Objects,
     units: Query<&ObjectStore, Without<SelfPlayer>>,
-    relations: crate::target::RelationWorld,
     items: Res<Items>,
     clock: Res<crate::ui_script::UiClock>,
     spell_mods: Res<crate::spell::SpellModifiers>,
@@ -150,7 +153,7 @@ fn feed_shapeshift_bar(
 ) {
     // The forms, read off the host's cooldowns and selection; their push signals, so it runs
     // with the host lent.
-    let Some((fresh, form_byte)) = vm.turn(|script, (cooldowns, selection)| {
+    let Some((fresh, form_byte)) = vm.turn(|script, (cooldowns, selection, relations)| {
         // No VM, no bar.
         script?;
         let spells = spells?;
