@@ -293,9 +293,6 @@ fn a_rest_line_shows_ahead_of_a_later_packets_whisper() {
 
 /// Linen Cloth, the item a crafting line names.
 const LINEN: u32 = 2589;
-/// A creature the monster line addresses, of entry [`WOLF_ENTRY`].
-const WOLF: u64 = 0xF130_0000_0044_0002;
-const WOLF_ENTRY: u32 = 299;
 
 fn crafted(_: In<SessionEvent>, log: Res<crate::ui_chat::ChatLog>) {
     use crate::ui_chat::combat;
@@ -358,12 +355,13 @@ fn a_line_whose_item_answers_later_in_the_frame_fires_at_the_answer() {
     );
 }
 
-fn monster_hails_the_wolf(_: In<SessionEvent>, log: Res<crate::ui_chat::ChatLog>) {
+/// A boar's line to [`STRANGER`], whose `$n` names its addressee.
+fn monster_hails_the_stranger(_: In<SessionEvent>, log: Res<crate::ui_chat::ChatLog>) {
     log.push_wire(ChatMessage {
         chat_type: benilla_protocol::messages::CHAT_MSG_MONSTER_SAY,
         language: 0,
         sender_guid: 0xF130_0000_0045_0003,
-        target_guid: WOLF,
+        target_guid: STRANGER,
         sender_name: Some("Boar".into()),
         channel: None,
         text: "Hello $n".into(),
@@ -371,47 +369,25 @@ fn monster_hails_the_wolf(_: In<SessionEvent>, log: Res<crate::ui_chat::ChatLog>
     });
 }
 
-fn wolf_named() -> SessionEvent {
-    SessionEvent::CreatureName {
-        entry: WOLF_ENTRY,
-        name: Some("Wolf".into()),
-        subname: None,
-        creature_type: Some(1),
-        pet_family: 0,
-        rank: 0,
-        type_flags: 0,
-        pet_spell_list: 0,
-        display_id: 0,
-        civilian: false,
-        racial_leader: false,
-    }
-}
-
-/// A monster line whose `$n` names a creature the cache has no record of waits for the record,
-/// and one whose record answers later in its frame shows at the answer, behind the packets
-/// between, as a player sender's line does at its name's.
+/// A monster line whose `$n` names a subject the name cache lacks waits for the subject's name,
+/// a player's as any other (`0x49daea` asks `0x55f080` by guid with `0x49ccc0`), and one whose
+/// name answers later in its frame shows at the answer, behind the packets between, as a player
+/// sender's line does.
 #[test]
 fn a_monster_line_whose_subject_answers_later_in_the_frame_fires_at_the_answer() {
-    use benilla_protocol::messages::ObjectType;
     let mut app = client(|app| {
-        app.net_handler(SessionEventKind::LoggedOut, monster_hails_the_wolf)
+        app.net_handler(SessionEventKind::LoggedOut, monster_hails_the_stranger)
             .net_handler(SessionEventKind::LogoutResponse, friend_whispers);
     });
-    let fields = benilla_protocol::ObjectFields::from_pairs(&[(2, 0x9), (3, WOLF_ENTRY)])
-        .into_created(ObjectType::Unit);
-    let wolf = app.world_mut().spawn(crate::net::ObjectStore(fields)).id();
-    app.world_mut()
-        .resource_mut::<crate::net::GuidIndex>()
-        .0
-        .insert(WOLF, wolf);
     assert_eq!(
-        frame(&mut app, vec![p1(), p4(), wolf_named()]),
-        ["CHAT_MSG_WHISPER:hi", "CHAT_MSG_MONSTER_SAY:Hello Wolf"]
+        frame(&mut app, vec![p1(), p4(), stranger_named()]),
+        ["CHAT_MSG_WHISPER:hi", "CHAT_MSG_MONSTER_SAY:Hello Stranger"]
     );
 }
 
 /// The handlers the answers come by queue the release behind a line that reads them: the item
-/// handler's (`0x6294b0`), the creature and the player name handlers' (`0x49ccc0`).
+/// handler's (`0x6294b0`) and the name handler's (`0x49ccc0`), for a monster line's subject and a
+/// player line's sender.
 #[test]
 fn each_answer_handler_queues_a_release_behind_a_line_that_reads_it() {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
@@ -422,10 +398,12 @@ fn each_answer_handler_queues_a_release_behind_a_line_that_reads_it() {
             crafted as fn(In<SessionEvent>, Res<crate::ui_chat::ChatLog>),
             linen_named(),
         ),
-        (monster_hails_the_wolf, wolf_named()),
+        (monster_hails_the_stranger, stranger_named()),
         (stranger_whispers, stranger_named()),
     ] {
         world.insert_resource(log());
+        // Each answer finds the cache without it, so its lookup's callback runs.
+        world.insert_resource(crate::names::NameCache::default());
         bevy::ecs::system::RunSystemOnce::run_system_once_with(&mut *world, line, p1()).unwrap();
         crate::net::handlers::dispatch(world, vec![answer]);
         let kinds = world.resource::<crate::ui_chat::ChatLog>().pending_kinds();

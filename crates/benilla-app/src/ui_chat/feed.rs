@@ -140,14 +140,19 @@ impl Pending {
 
     /// The records the item waits on that it names itself: a player's name, as `0x49ccc0`'s list
     /// holds a line for its sender's (a player line's sender, a channel notice's two, an addon
-    /// line's or a roll's sender, an emote's performer), and an item's, as the combat log's list
+    /// line's or a roll's sender, an emote's performer) and a monster or battleground line for
+    /// its `$`-macro subject's, by guid whatever the subject is (`0x49daea` asks the name cache
+    /// `0xc0e228` through `0x55f080` with that callback); and an item's, as the combat log's list
     /// holds a line for its item (`0x6293a0`).
     fn waits_on(&self) -> [Option<Answer>; 2] {
         let some = |g: u64| (g != 0).then_some(Answer::Player(g));
         match self {
-            Pending::Wire { msg, .. } if msg.sender_name.is_none() && needs_name(msg.chat_type) => {
-                [some(msg.sender_guid), None]
-            }
+            Pending::Wire { msg, .. } => [
+                (msg.sender_name.is_none() && needs_name(msg.chat_type))
+                    .then(|| some(msg.sender_guid))
+                    .flatten(),
+                self.macro_subject().map(Answer::Player),
+            ],
             Pending::Notice { a_guid, b_guid, .. } => [some(*a_guid), some(*b_guid)],
             Pending::Addon { guid, .. } | Pending::Roll { guid, .. } => [some(*guid), None],
             Pending::TextEmote { performer, .. } => [some(*performer), None],
@@ -159,8 +164,8 @@ impl Pending {
         }
     }
 
-    /// The `$`-macro subject of a monster or battleground line, the addressee or else the sender,
-    /// whose name a creature's record gives: the unit's entry, when it is held.
+    /// The `$`-macro subject of a monster or battleground line: the addressee, else the sender,
+    /// as the battleground lines carry one guid only.
     fn macro_subject(&self) -> Option<u64> {
         match self {
             Pending::Wire { msg, .. } if MACRO_EXPANDED_TYPES.contains(&msg.chat_type) => {
@@ -172,14 +177,6 @@ impl Pending {
                 .filter(|&g| g != 0)
             }
             _ => None,
-        }
-    }
-
-    /// Whether the item might wait on `answer`, for an answer queued only where a line could be.
-    fn could_wait_on(&self, answer: Answer) -> bool {
-        match answer {
-            Answer::Creature(_) => self.macro_subject().is_some(),
-            _ => self.waits_on().contains(&Some(answer)),
         }
     }
 }
@@ -252,12 +249,10 @@ struct Queued {
     item: Pending,
 }
 
-/// A record a held line may read, landed in a packet: a player's name by guid, a creature's
-/// record by entry, an item's by entry.
+/// A record a held line may read, landed in a packet: a name by guid, an item's by entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Answer {
     Player(u64),
-    Creature(u32),
     Item(u32),
 }
 
@@ -381,7 +376,10 @@ impl ChatLog {
     /// line could be waiting: one held, or one queued ahead of the answer that reads it.
     pub(crate) fn answer_landed(&self, answer: Answer) {
         let mut q = self.q();
-        let waits = !q.held.is_empty() || q.pending.iter().any(|i| i.item.could_wait_on(answer));
+        let waits = !q.held.is_empty()
+            || q.pending
+                .iter()
+                .any(|i| i.item.waits_on().contains(&Some(answer)));
         if waits {
             q.push(Pending::Release {
                 cause: Release::Answer(answer),
@@ -1349,7 +1347,7 @@ fn release(
 
 /// Fire one item at `at`, or hand it back to wait: for a name the cache lacks, for one whose
 /// answer comes later in the frame than `at`, so the record the reference's lookup missed there
-/// is not read early (a player's or a creature's name, an item's), or for an item's name.
+/// is not read early (a name, an item's), or for an item's name.
 fn fire_one(
     reads: &mut ChatReads,
     log: &ChatLog,
@@ -1358,17 +1356,9 @@ fn fire_one(
     item: Pending,
     at: crate::lanes::Stamp,
 ) -> Option<Pending> {
-    let creature = item
-        .macro_subject()
-        .and_then(|g| reads.guids.0.get(&g))
-        .and_then(|&e| reads.stores.get(e).ok())
-        .filter(|s| s.0.created_as() != Some(benilla_protocol::messages::ObjectType::Player))
-        .and_then(|s| s.0.object_entry())
-        .map(Answer::Creature);
     if item
         .waits_on()
         .into_iter()
-        .chain([creature])
         .flatten()
         .any(|answer| log.answered_after(answer, at))
     {

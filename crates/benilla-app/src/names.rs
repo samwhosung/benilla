@@ -645,7 +645,6 @@ pub(crate) mod net {
         mut names: ResMut<NameCache>,
         units: HeldUnits,
         mut notices: ResMut<NoticeLane>,
-        chat: Option<Res<crate::ui_chat::ChatLog>>,
     ) {
         if let SessionEvent::CreatureName {
             entry,
@@ -677,10 +676,6 @@ pub(crate) mod net {
                 &mut names,
             );
             if found {
-                // A monster line's `$`-macro may name a unit of the entry.
-                if let Some(chat) = &chat {
-                    chat.answer_landed(crate::ui_chat::Answer::Creature(entry));
-                }
                 for guid in units.matching(|s| s.0.object_entry() == Some(entry)) {
                     notices.write_batch([
                         FieldNotice::Signal {
