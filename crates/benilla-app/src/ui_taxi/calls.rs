@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use super::{TaxiCatalogs, TaxiRouteCache, TaxiState};
 use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfPlayer};
 use crate::ui_action::{UiError, UiErrorKeys};
-use crate::ui_session::InteractLatch;
+use crate::ui_session::{InteractLatch, LatchedWindow};
 
 /// The map, its slots and what the verbs send through.
 #[derive(SystemParam)]
@@ -24,6 +24,30 @@ pub(crate) struct TaxiSteps<'w, 's> {
     errors: Res<'w, UiErrorKeys>,
     /// Read only: the release itself waits for the drain ([`super::release_closed`]).
     latch: Option<Res<'w, InteractLatch>>,
+    ahead: AheadOfTaxi<'w>,
+}
+
+/// The cells `0x493310` tests ahead of the taxi map's (`0x493341`-`0x4933b6`), read only: trade,
+/// item text and merchant. Gossip and quest are left out: each writes a guid into its cell only
+/// just after its own register (`0x4e1fe9` → `0x4e1ff0`, `0x500d74` → `0x500d86`), which closes a
+/// latched map first, so neither holds the flight master's guid while the map is latched. The
+/// item text writes its cell at the read (`0x4e3364`) and registers only when the text arrives
+/// (`0x4e349a`).
+#[derive(SystemParam)]
+pub(crate) struct AheadOfTaxi<'w> {
+    trade: Option<Res<'w, crate::ui_trade::TradeSession>>,
+    item_text: Option<Res<'w, crate::ui_item_text::ItemTextOpen>>,
+    merchant: Option<Res<'w, crate::ui_merchant::MerchantOpen>>,
+}
+
+impl AheadOfTaxi<'_> {
+    /// Whether a window `0x493310` closes before the taxi map's holds `guid`.
+    fn hold(&self, guid: u64) -> bool {
+        fn holds<T: LatchedWindow>(w: &Option<Res<T>>, guid: u64) -> bool {
+            w.as_deref().and_then(T::cell) == Some(guid)
+        }
+        holds(&self.trade, guid) || holds(&self.item_text, guid) || holds(&self.merchant, guid)
+    }
 }
 
 impl TaxiSteps<'_, '_> {
@@ -47,7 +71,7 @@ impl TaxiSteps<'_, '_> {
                 );
                 None
             }
-            TaxiCall::Close => close(state, cache, self.latch.as_deref()),
+            TaxiCall::Close => close(state, cache, self.latch.as_deref(), &self.ahead),
         }
     }
 }
@@ -124,21 +148,21 @@ fn take(
 /// The close core `0x4dc0f0` inside `CloseTaxiMap`'s call: with a map open, the cell cleared
 /// (`0x4dc113`) and each slot's route freed (`0x4dc130`-`0x4dc145`), then `TAXIMAP_CLOSED`
 /// (`0x4dc15f`). While the latch names the flight master its release (`0x4dc105`) runs
-/// `0x493310`, which re-enters the core ahead of that, so the event fires twice. The slots stay,
+/// `0x493310`, which closes the first window in its order holding that guid: the taxi map itself
+/// when none ahead of it does, re-entering the core, so the event fires twice. The slots stay,
 /// their fares 0 with no flight master ([`UiScript::close_taxi`]). The latch's own release, the
-/// goodbye and its clear, is the drain's ([`super::release_closed`]), which finds no cell to
-/// re-enter.
+/// goodbye, its clear and a window ahead's close, is the drain's ([`super::release_closed`]), as
+/// it needs the latch (Part of #2202).
 fn close(
     state: &mut TaxiState,
     cache: &mut TaxiRouteCache,
     latch: Option<&InteractLatch>,
+    ahead: &AheadOfTaxi,
 ) -> Option<CallTail> {
     let flightmaster = state.open.as_ref()?.flightmaster;
-    let fires = if latch.and_then(InteractLatch::guid) == Some(flightmaster) {
-        2
-    } else {
-        1
-    };
+    let reenters =
+        latch.and_then(InteractLatch::guid) == Some(flightmaster) && !ahead.hold(flightmaster);
+    let fires = if reenters { 2 } else { 1 };
     state.clear();
     state.released = Some(flightmaster);
     for slot in &mut cache.slots {
