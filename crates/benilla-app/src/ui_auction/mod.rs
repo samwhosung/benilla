@@ -36,6 +36,8 @@ use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 mod net;
 mod verbs;
 
+#[cfg(test)]
+pub(crate) use net::HouseLane;
 pub(crate) use verbs::AuctionVerbs;
 
 #[cfg(test)]
@@ -830,7 +832,8 @@ fn feed_auction(
     icons: Option<Res<ItemDisplays>>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
-    time: Res<Time>,
+    // The clock, and the steps the handlers readied that the lanes' drain has still to fire.
+    (time, steps): (Res<Time>, Option<Res<net::HouseLane>>),
     catalogs: AuctionCatalogs,
     houses: Option<Res<AuctionHouses>>,
     mut sink: MessageSink,
@@ -956,7 +959,10 @@ fn feed_auction(
         for (list, slot) in fresh.lists.iter_mut().zip(&auction.lists) {
             list.pending = slot.awaiting.is_some();
         }
-        if last.as_ref() != Some(&fresh) {
+        // The handlers' own steps meet the VM as the handlers left it: while any waits for the
+        // lanes' drain, the push waits for the next frame.
+        let steps_waiting = steps.as_ref().is_some_and(|l| !l.is_empty());
+        if !steps_waiting && last.as_ref() != Some(&fresh) {
             script.set_auction(fresh.clone());
         }
         if opened || (auction.auctioneer.is_some() && show_requested) {
@@ -988,7 +994,9 @@ fn feed_auction(
                 _ => script.fire_event("AUCTION_OWNED_LIST_UPDATE", vec![]),
             }
         }
-        *last = Some(fresh);
+        if !steps_waiting {
+            *last = Some(fresh);
+        }
         *last_open = auction.auctioneer;
 
         // The browse gate, pushed when it changes; the Search button polls it every frame.

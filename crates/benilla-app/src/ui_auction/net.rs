@@ -1,7 +1,9 @@
 //! The auction house's packet handlers: every `SMSG_AUCTION_*` is written into [`AuctionOpen`],
-//! and what the reference's handler shows and signals as it goes is done before the handler
-//! returns, in its order ([`settle`]): each line, each row a bid patches with its list's update,
-//! each removal, the requests and the wave. [`super::feed_auction`] pushes the pages.
+//! its requests and the wave sent as the handler goes, and what the reference's handler shows and
+//! signals inside it is readied in its order onto the house lane ([`settle`], [`HouseLane`]): each
+//! line, each row a bid patches with its list's update, each removal, each page. The lanes' drain
+//! fires them at the packet's place among what the other packets raised ([`crate::lanes`]).
+//! [`super::feed_auction`] pushes the pages a handler could not.
 
 use benilla_protocol::messages::{
     auction_action, auction_error, AuctionBidderNotification, AuctionCommandTail, AuctionListEntry,
@@ -18,11 +20,18 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, NetCommands, NetHandlerApp, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::script_calls::VmWith;
-use crate::ui_action::{show_messages, MessageSink};
+use crate::ui_action::{show_now, MessageSink, Shown};
 
-/// One handler per `SMSG_AUCTION_*` kind, plus the session-end listener.
+/// One handler per `SMSG_AUCTION_*` kind, plus the session-end listener, and the house lane.
 pub(super) fn register(app: &mut App) {
+    use crate::lanes::LaneApp;
     use SessionEventKind as K;
+    app.init_resource::<HouseLane>().add_lane(
+        "auction house",
+        |world| world.get_resource::<HouseLane>()?.peek(),
+        fire_house,
+        None,
+    );
     app.net_handler(K::AuctionHello, on_hello)
         .net_handler(K::AuctionCommandResult, on_command_result)
         .net_handler(K::AuctionListResult, on_list_result)
@@ -81,7 +90,8 @@ pub(super) struct House<'w, 's> {
     wire: HouseWire<'w>,
     items: Option<Res<'w, Items>>,
     names: Option<Res<'w, NameCache>>,
-    sink: MessageSink<'w>,
+    /// The steps the handler readies for the VM.
+    lane: ResMut<'w, HouseLane>,
     /// The player's guid as the feed reads it, so a patched row resolves as its push would.
     self_q: Query<'w, 's, &'static Guid, With<SelfPlayer>>,
     icons: Option<Res<'w, crate::entities::ItemDisplays>>,
@@ -92,7 +102,7 @@ pub(super) struct House<'w, 's> {
 /// A handler's VM and its [`House`].
 type HouseVm<'w, 's> = VmWith<'w, 's, House<'static, 'static>>;
 
-/// Run one handler's body on the house, then do the VM's half of what it wrote ([`settle`]).
+/// Run one handler's body on the house, then ready the VM's half of what it wrote ([`settle`]).
 fn handle(vm: &mut HouseVm, body: impl FnOnce(&mut AuctionOpen, Wire)) {
     {
         let mut h = vm.own();
@@ -102,45 +112,100 @@ fn handle(vm: &mut HouseVm, body: impl FnOnce(&mut AuctionOpen, Wire)) {
     settle(vm);
 }
 
-/// The VM's half of what a handler wrote, in its order ([`HouseEffect`]): a line shown now, or
-/// left for the feed while its item's record is out; a patched row written into the VM's copy of
-/// the page, then the list's update; a removal from the VM's lists; the wave. The Lua each update
-/// runs makes its calls with the host lent.
+/// One step of what a handler did that the VM sees, readied as the handler ran it, for the house
+/// lane to apply at the packet's place: the handler's own reads (its strings, its tick, the rows
+/// it wrote) are taken as it runs, and only the VM's writes and the signals wait.
+pub(crate) enum HouseStep {
+    /// A line shown (`0x496720`), whose chat line fires inside it (`0x49a870`).
+    Line(Shown),
+    /// A row a bid patched, then its list's update ([`UiScript::patch_auction_row`]).
+    Patch {
+        list: usize,
+        page: u32,
+        auction_id: u32,
+        bid: benilla_ui::script::AuctionRowBid,
+    },
+    /// An auction gone from the lists holding it on those pages
+    /// ([`UiScript::remove_auction_from`]).
+    Remove {
+        auction_id: u32,
+        pages: [Option<u32>; 3],
+    },
+    /// A list result's page, and its sort tail when every item was known
+    /// ([`UiScript::set_auction_list`], [`UiScript::sort_auction_list`]).
+    Page {
+        list: usize,
+        state: benilla_ui::script::AuctionListState,
+        sorts: [benilla_ui::auction_sort::AuctionSortStack; 3],
+        tail: bool,
+    },
+}
+
+/// The house lane: the handlers' steps, each stamped as the handler readies it
+/// ([`crate::lanes::stamp`]), fired in stamp order among the other lanes ([`fire_house`]).
+#[derive(Resource, Default)]
+pub(crate) struct HouseLane(std::collections::VecDeque<(crate::lanes::Stamp, HouseStep)>);
+
+impl HouseLane {
+    fn push(&mut self, step: HouseStep) {
+        let stamp = crate::lanes::stamp();
+        let at = self.0.partition_point(|(s, _)| *s < stamp);
+        self.0.insert(at, (stamp, step));
+    }
+
+    fn peek(&self) -> Option<crate::lanes::Stamp> {
+        self.0.front().map(|(s, _)| *s)
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn pop(&mut self, until: crate::lanes::Until) -> Option<(crate::lanes::Stamp, HouseStep)> {
+        until
+            .admits(self.peek()?)
+            .then(|| self.0.pop_front())
+            .flatten()
+    }
+}
+
+/// What a handler wrote that the VM sees, in its order ([`HouseEffect`]), each readied onto the
+/// house lane as the handler reaches it: a line worded now, or left for the feed while its item's
+/// record is out; a patched row's bid; a removal; a page and whether its tail runs. A request or
+/// the wave goes out here, in its place among the handler's steps.
 fn settle(vm: &mut HouseVm) {
     let effects = std::mem::take(&mut vm.own().auction.effects);
     for effect in effects {
         match effect {
             HouseEffect::Line(msg) => show_line(vm, msg),
             HouseEffect::Edit { list, auction_id } => {
-                let bid = {
-                    let h = vm.own();
-                    let self_guid = h.self_q.iter().next().map(|g| g.0);
-                    h.names
-                        .as_deref()
-                        .and_then(|names| h.auction.row_bid(list, auction_id, self_guid, names))
-                };
+                let mut h = vm.own();
+                let self_guid = h.self_q.iter().next().map(|g| g.0);
+                let bid = h
+                    .names
+                    .as_deref()
+                    .and_then(|names| h.auction.row_bid(list, auction_id, self_guid, names));
                 if let Some((page, bid)) = bid {
-                    vm.run(|script| {
-                        if let Some(script) = script {
-                            script.patch_auction_row(list, page, auction_id, bid);
-                        }
+                    h.lane.push(HouseStep::Patch {
+                        list,
+                        page,
+                        auction_id,
+                        bid,
                     });
                 }
             }
-            HouseEffect::Remove { auction_id, pages } => vm.run(|script| {
-                if let Some(script) = script {
-                    script.remove_auction_from(auction_id, pages);
-                }
-            }),
+            HouseEffect::Remove { auction_id, pages } => {
+                vm.own().lane.push(HouseStep::Remove { auction_id, pages });
+            }
             HouseEffect::Send(command) => vm.own().wire.view().send(command),
             HouseEffect::Page(list) => land_page(vm, list),
         }
     }
 }
 
-/// A list result's page into the VM as its handler writes it, the tail run there when every item
-/// is known ([`AuctionOpen::land_page`]), each item asked with the list's callback (`0x4cc9bf`,
-/// `0x4ccbff`, `0x4cce4f`). With no VM the feed pushes it.
+/// A list result's page as its handler writes it, the tail run there when every item is known
+/// ([`AuctionOpen::land_page`]), each item asked with the list's callback (`0x4cc9bf`,
+/// `0x4ccbff`, `0x4cce4f`), readied onto the house lane. With no VM the feed pushes it.
 fn land_page(vm: &mut HouseVm, list: usize) {
     vm.turn(|script, mut h| {
         let Some(script) = script else {
@@ -169,15 +234,18 @@ fn land_page(vm: &mut HouseVm, list: usize) {
             None => crate::query_cache::Ask::Read,
         };
         let state = h.auction.list_state(list, tick, &reads, ask);
-        script.set_auction_list(list, state, h.auction.sorts.0);
-        if tail {
-            script.sort_auction_list(list);
-        }
+        let sorts = h.auction.sorts.0;
+        h.lane.push(HouseStep::Page {
+            list,
+            state,
+            sorts,
+            tail,
+        });
     });
 }
 
-/// A line shown now through the VM's strings, unless it names an item not cached: then the feed
-/// shows it once the record lands (`0x4cd190`), asking for it.
+/// A line worded now through the VM's strings and readied onto the house lane, unless it names
+/// an item not cached: then the feed shows it once the record lands (`0x4cd190`), asking for it.
 fn show_line(vm: &mut HouseVm, msg: AuctionMessage) {
     vm.turn(|script, mut h| {
         let fill = match msg.item {
@@ -201,9 +269,73 @@ fn show_line(vm: &mut HouseVm, msg: AuctionMessage) {
             h.auction.messages.push(msg);
             return;
         };
-        let line = msg.shown(script, fill);
-        show_messages(script, &mut h.sink, "ui_auction", line);
+        if let Some(line) = msg.shown(script, fill) {
+            h.lane.push(HouseStep::Line(line));
+        }
     });
+}
+
+/// The house lane's `fire_until` ([`crate::lanes`]): each step `until` admits applied to the VM
+/// with the host lent, so the Lua its update runs makes its calls inside the verb; a line shown in
+/// place, as `DisplayError` shows it (`0x496720`). The lane stops after a step whose firing
+/// stamped anything, so what it pushed fires next. With no VM the steps are dropped.
+fn fire_house(
+    In(until): In<crate::lanes::Until>,
+    mut hosted: crate::script_calls::HostedVm,
+    mut lane: ResMut<HouseLane>,
+    mut sink: MessageSink,
+) {
+    while let Some((stamp, step)) = lane.pop(until) {
+        let ((), moved) = crate::lanes::firing(stamp, || {
+            hosted.run(|script| {
+                if let Some(script) = script {
+                    apply_step(script, &mut sink, step);
+                }
+            })
+        });
+        if moved {
+            return;
+        }
+    }
+}
+
+/// One step's VM half.
+fn apply_step(script: &mut benilla_ui::script::UiScript, sink: &mut MessageSink, step: HouseStep) {
+    match step {
+        HouseStep::Line(line) => show_now(script, sink, "ui_auction", line),
+        HouseStep::Patch {
+            list,
+            page,
+            auction_id,
+            bid,
+        } => script.patch_auction_row(list, page, auction_id, bid),
+        HouseStep::Remove { auction_id, pages } => script.remove_auction_from(auction_id, pages),
+        HouseStep::Page {
+            list,
+            state,
+            sorts,
+            tail,
+        } => {
+            script.set_auction_list(list, state, sorts);
+            if tail {
+                script.sort_auction_list(list);
+            }
+        }
+    }
+}
+
+/// The steps waiting, fired alone, for a test that drives the house without the other lanes.
+#[cfg(test)]
+pub(crate) fn fire_house_lane(world: &mut World) {
+    use bevy::ecs::system::RunSystemOnce;
+    let until = crate::lanes::Until::all();
+    while world
+        .resource::<HouseLane>()
+        .peek()
+        .is_some_and(|s| until.admits(s))
+    {
+        world.run_system_once_with(fire_house, until).unwrap();
+    }
 }
 
 /// The `MSG_AUCTION_HELLO` reply opens the window, as in the reference's hello handler `0x4cc420`.

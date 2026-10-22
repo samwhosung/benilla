@@ -111,9 +111,12 @@ impl House {
             .insert_player(guid, name.into(), None);
     }
 
+    /// The packet, the frame's feeds, then the house lane's steps, as the lanes' drain follows the
+    /// feeds.
     fn dispatch(&mut self, event: SessionEvent) {
         crate::net::handlers::dispatch(self.app.world_mut(), vec![event]);
         self.app.update();
+        super::net::fire_house_lane(self.app.world_mut());
     }
 
     fn open(&mut self, auctioneer: u64) {
@@ -199,10 +202,11 @@ impl House {
             .unwrap()
     }
 
-    /// The packet through its handlers alone, with no frame after: what the handler signals
-    /// itself.
+    /// The packet through its handlers and the house lane alone, with no frame after: what the
+    /// handler signals itself.
     fn handle(&mut self, event: SessionEvent) {
         crate::net::handlers::dispatch(self.app.world_mut(), vec![event]);
+        super::net::fire_house_lane(self.app.world_mut());
     }
 
     /// From here on, each list update with its first row's bid as the update's handler reads it,
@@ -1043,6 +1047,7 @@ fn a_patch_in_its_pages_frame_signals_after_the_page() {
             outbid(),
         ],
     );
+    super::net::fire_house_lane(h.app.world_mut());
     assert_eq!(
         h.heard(),
         ["AUCTION_ITEM_LIST_UPDATE=0", "AUCTION_ITEM_LIST_UPDATE=900"]
