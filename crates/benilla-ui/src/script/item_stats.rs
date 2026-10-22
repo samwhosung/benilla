@@ -842,6 +842,24 @@ mod get_item_info_tests {
         }
     }
 
+    /// Each `item:` field is `SStrToInt`'s signed answer (`0x64ac60`), printed back through
+    /// `"item:%d:%d:%d:%d"` (`0x842d4c`, `0x48e1da`), so a negative field keeps its sign.
+    #[test]
+    fn get_item_info_keeps_the_links_signed_fields() {
+        let mut s = UiScript::new().unwrap();
+        s.set_item_template(5, worn_shortsword());
+        assert_eq!(
+            s.eval::<String>(r#"local _, l = GetItemInfo("item:5:-1:-3:0") return l"#)
+                .unwrap(),
+            "item:5:-1:-3:0"
+        );
+        assert_eq!(
+            s.eval::<String>(r#"local _, l = GetItemInfo("item:5:7:0:-9") return l"#)
+                .unwrap(),
+            "item:5:7:0:-9"
+        );
+    }
+
     /// Ashbringer, item 13262: required level 60, item level 76 in vmangos `item_template`.
     #[test]
     fn position_four_is_the_required_level_not_the_item_level() {

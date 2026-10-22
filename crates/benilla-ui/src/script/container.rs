@@ -1587,6 +1587,37 @@ mod tests {
             .unwrap());
     }
 
+    /// A bag item whose record the cache lacks still links: `GetContainerItemLink` pushes nothing
+    /// only when it finds no item object (`0x4f996b`, `0x4f997b` → `0x4f99a5`), and `0x52ae00`
+    /// links any object (`0x4f997f`), white and nameless without a record (`0x52aec5`, `0x5d8b40`).
+    #[test]
+    fn an_uncached_bag_item_links_white_and_nameless() {
+        let mut s = UiScript::new().unwrap();
+        let mut bag = backpack();
+        let nameless = "|cffffffff|Hitem:2589:0:0:0|h[]|h|r";
+        bag.slots.insert(
+            3,
+            ContainerSlot {
+                item_id: 2589,
+                count: 1,
+                uncached_link: Some(nameless.into()),
+                ..Default::default()
+            },
+        );
+        s.set_container(0, Some(bag));
+        assert_eq!(
+            s.eval::<Option<String>>("return GetContainerItemLink(0, 3)")
+                .unwrap()
+                .as_deref(),
+            Some(nameless)
+        );
+        assert_eq!(
+            s.arity("GetContainerItemLink(0, 2)").unwrap(),
+            0,
+            "no object"
+        );
+    }
+
     /// The keyring, the bank and an out-of-range id answer no slots and no name, however the
     /// snapshot holds them (`0x4f95fb`, `0x4fa712`); the keyring is sized by `GetKeyRingSize`.
     #[test]
