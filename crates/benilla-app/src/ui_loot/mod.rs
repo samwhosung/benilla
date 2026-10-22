@@ -1,9 +1,11 @@
 //! The app side of the loot window. The net handlers change [`LootState`] at their packets, each
-//! change a step that [`feed_loot`] shows the VM in wire order, with the item pushes queued
-//! between them: the window's rows, `LOOT_SLOT_CLEARED`, `UPDATE_MASTER_LOOT_LIST` and
-//! `LOOT_CLOSED`, and at a response the copier's end, `LOOT_OPENED` or the auto-loot sweep. The
-//! loot verbs and a row's click apply inside their calls ([`calls::LootSteps::apply`]), and
-//! [`drain_loot`] takes the closes a movement and the precast's end owe.
+//! change a step on the loot lane, stamped at its packet with the item pushes among them, which
+//! [`fire_loot`] shows the VM at the packet's place among the other lanes ([`crate::lanes`]): the
+//! window's rows, `LOOT_SLOT_CLEARED`, `UPDATE_MASTER_LOOT_LIST` and `LOOT_CLOSED`, at a response
+//! the copier's end, `LOOT_OPENED` or the auto-loot sweep, and each push's `ITEM_PUSH` and line.
+//! The loot verbs and a row's click apply inside their calls ([`calls::LootSteps::apply`]),
+//! [`feed_loot`] pushes the window as it stands, and [`drain_loot`] takes the closes a movement and
+//! the precast's end owe.
 
 use benilla_protocol::messages::{ItemPushResult, LootItem, BAG_PLAYER_INVENTORY};
 use bevy::prelude::*;
@@ -49,9 +51,10 @@ const RECEIVE_MAX_TRIES: u16 = 120;
 /// descriptor's full 32 positions, wider than the 16 vmangos uses from `KEYRING_SLOT_START` 81.
 const PUSH_KEYRING_SLOTS: std::ops::RangeInclusive<u32> = 81..=112;
 
-/// A push waiting on its item template. `OnItemPush 0x491a60` defers both of its outputs the same
-/// way: on a cache miss (`0x491a93`) it re-enters from the cache callback `0x491ee0`.
-#[derive(Clone)]
+/// A push, on the lane at its packet or waiting on its item template. `OnItemPush 0x491a60` defers
+/// both of its outputs the same way: on a cache miss (`0x491a93`) it re-enters from the cache
+/// callback `0x491ee0`, at the answer ([`LootState::record_answered`]).
+#[derive(Clone, Debug)]
 struct PendingReceive {
     /// Crafted or conjured: "You create: …".
     created: bool,
@@ -64,11 +67,8 @@ struct PendingReceive {
     /// (`0x491bf3`), so a silent push still animates.
     in_chat: bool,
     container: i64,
+    /// The frames it has waited on its template.
     tries: u16,
-    /// How many of the frame's window steps ([`LootState::steps`]) came before it: each packet's
-    /// events fire inside its dispatch (`0x537aa0`), so `ITEM_PUSH` reads the window the packets
-    /// before it left.
-    at: usize,
 }
 
 /// `ITEM_PUSH`'s `arg1`, the reference's selector at `0x491bb5`-`0x491bd6`: a wire bag other than
@@ -199,7 +199,8 @@ impl Window {
     }
 }
 
-/// A change to the window the feed has yet to show, with the window it left.
+/// What a packet did that the VM has yet to hear, in its order on the loot lane: a change to the
+/// window, with the window it left, or an item push.
 #[derive(Clone, Debug)]
 enum Step {
     /// A removal (`0x4c1f00`, `0x4c2750`) or a close (`0x4c1cb0(0)`).
@@ -212,19 +213,35 @@ enum Step {
     /// flagged when it needs a live item object.
     Unlocks(Vec<(u64, bool)>),
     /// A response's copier (`0x4c1cb0`): the cells its teardown leaves, the ended session's with
-    /// the source zeroed (`0x4c1da0`), then the window it fills.
-    Opened { ended: Window, window: Window },
+    /// the source zeroed (`0x4c1da0`), then the window it fills, and whether a row's record was
+    /// outstanding when its handler asked for each (`0x4c1e77`, `0x4c1ea6`), unknown for a window
+    /// no handler asked for.
+    Opened {
+        ended: Window,
+        window: Window,
+        waited: Option<bool>,
+    },
+    /// The copier's end a response's pending records held, run by the cache callback at the last
+    /// answer (`0x4c2ac0`, `0x4c2afc`).
+    CopierEnd,
+    /// The sweep a close with no VM owed a disenchant window with rows left (`0x48f264` →
+    /// `0x4c1fa0`).
+    Sweep,
+    /// `SMSG_ITEM_PUSH_RESULT`'s `OnItemPush` (`0x491a60`): `ITEM_PUSH` and the line, reading the
+    /// window the packets before it left.
+    Push(PendingReceive),
 }
 
-/// The loot session: the window, the steps the feed has yet to show, the push queue, which
-/// outlives the window, and what the loot calls owe.
+/// The loot session: the window, the loot lane, the pushes waiting on their records, which outlive
+/// the window, and what the loot calls owe.
 #[derive(Resource, Default)]
 pub(crate) struct LootState {
     window: Window,
-    receives: Vec<PendingReceive>,
-    /// The window's changes since the feed last ran, in wire order, each shown as the window it
-    /// left, with the pushes queued between them ([`PendingReceive::at`]).
-    steps: Vec<Step>,
+    /// The pushes waiting on their item templates, each queued again at its answer.
+    waiting: Vec<PendingReceive>,
+    /// The loot lane: what the packets did that the VM has yet to hear, each stamped where it was
+    /// done ([`crate::lanes::stamp`]), the window's changes each shown as the window it left.
+    steps: std::collections::VecDeque<(crate::lanes::Stamp, Step)>,
     /// The row a `LOOT_BIND_CONFIRM` is open for, the reference's `[0x847cec]`: set after the
     /// signal's handlers (`0x4c2917`, `0x4c21dc`), cleared by the confirmed send (`0x4c281a`) and
     /// by the next response (`0x4c1df5`), not by a close.
@@ -235,7 +252,8 @@ pub(crate) struct LootState {
     /// (`Player.cpp:8080`), just ahead of its response. Staging keeps it out of later windows.
     pending_master_candidates: Vec<u64>,
     /// A close with `dl` clear found a disenchant window with rows left and owes its sweep
-    /// (`0x48f264` → `0x4c1fa0`), run by [`feed_loot`], which holds the VM.
+    /// (`0x48f264` → `0x4c1fa0`), run by its step on the lane ([`Step::Sweep`]), which holds the
+    /// VM; a response or a close since cancels it.
     sweep_owed: bool,
     /// The `UnlockItem` (`0x495420`) calls the loot paths owe, run ahead of the inventory feeds
     /// ([`crate::ui_items::locks::apply_item_releases`]); a window's clear keeps them. The flag
@@ -279,10 +297,81 @@ impl LootState {
         self.pending_bind_confirm = None; // `0x4c1df5`
         self.sweep_owed = false;
         self.copier_due = true;
-        self.steps.push(Step::Opened {
+        self.queue(Step::Opened {
             ended,
             window: self.window.clone(),
+            waited: None,
         });
+    }
+
+    /// The copier's asks at its packet (`0x4c1e77`): each row's record looked up with the callback
+    /// `0x4c2ac0`, the copier returning with any outstanding (`0x4c1ea6`), so its end waits for
+    /// the last answer ([`Step::CopierEnd`]) whatever lands before the lane fires it.
+    pub(crate) fn ask_rows(&mut self, items: &Items, commands: &NetCommands) {
+        for it in &self.window.items {
+            let _ = items.template(it.item_id, 0, Ask::Event(commands));
+        }
+        let pending = self.records_pending(items);
+        let opened = self.steps.iter_mut().rev().find_map(|(_, s)| match s {
+            Step::Opened { waited, .. } => Some(waited),
+            _ => None,
+        });
+        if let Some(waited) = opened {
+            *waited = Some(pending);
+        }
+    }
+
+    /// Queue `step` on the lane behind everything stamped before it.
+    fn queue(&mut self, step: Step) {
+        let stamp = crate::lanes::stamp();
+        let at = self.steps.partition_point(|(s, _)| *s < stamp);
+        self.steps.insert(at, (stamp, step));
+    }
+
+    /// The lane's head.
+    fn peek(&self) -> Option<crate::lanes::Stamp> {
+        self.steps.front().map(|(s, _)| *s)
+    }
+
+    /// Take the head if `until` admits it.
+    fn pop(&mut self, until: crate::lanes::Until) -> Option<(crate::lanes::Stamp, Step)> {
+        until
+            .admits(self.peek()?)
+            .then(|| self.steps.pop_front())
+            .flatten()
+    }
+
+    /// Whether a later response's copier is queued: the steps ahead of it ran on the cells their
+    /// session left, as each packet's dispatch ran them before the next arrived.
+    fn replaced(&self) -> bool {
+        self.steps
+            .iter()
+            .any(|(_, s)| matches!(s, Step::Opened { .. }))
+    }
+
+    /// Whether a change to the window is queued, which the window as it stands must not overtake.
+    fn window_steps_queued(&self) -> bool {
+        self.steps.iter().any(|(_, s)| !matches!(s, Step::Push(_)))
+    }
+
+    /// An item record answered (`SMSG_ITEM_QUERY_SINGLE_RESPONSE`): each push waiting on `entry`
+    /// runs from its callback (`0x491ee0`) once the record is held, and the copier's end a
+    /// response's rows held runs at the last of their answers, a refusal included
+    /// ([`templates_outstanding`]'s deviation; `0x4c2afc`).
+    pub(crate) fn record_answered(&mut self, items: &Items, entry: u32) {
+        if items.template(entry, 0, Ask::Read).is_some() {
+            let (ready, still): (Vec<_>, Vec<_>) = std::mem::take(&mut self.waiting)
+                .into_iter()
+                .partition(|r| r.entry == entry);
+            self.waiting = still;
+            for r in ready {
+                self.queue(Step::Push(r));
+            }
+        }
+        let asked = self.window.items.iter().any(|it| it.item_id == entry);
+        if asked && self.copier_due && !self.records_pending(items) {
+            self.queue(Step::CopierEnd);
+        }
     }
 
     /// Stages a list for the next open; an open window takes it at once, as a refresh.
@@ -301,7 +390,7 @@ impl LootState {
             return false; // `0x4c1f22`
         }
         w.taken.push(wire_slot);
-        self.steps.push(Step::Changed(self.window.clone()));
+        self.queue(Step::Changed(self.window.clone()));
         true
     }
 
@@ -312,10 +401,11 @@ impl LootState {
             return false;
         }
         self.take_coin();
-        self.steps.push(match self.window.source {
+        let step = match self.window.source {
             Some(_) => Step::Changed(self.window.clone()),
             None => Step::SlotCleared(1),
-        });
+        };
+        self.queue(step);
         true
     }
 
@@ -324,9 +414,10 @@ impl LootState {
         self.window.gold = 0;
     }
 
-    /// Queues a push the net handler has already checked is ours.
-    pub(crate) fn push_receive(&mut self, p: &ItemPushResult) {
-        self.receives.push(PendingReceive {
+    /// Queues a push the net handler has already checked is ours, at its packet, or, when its
+    /// record was not `held` there (`0x491a93`), keeps it for the record's answer.
+    pub(crate) fn push_receive(&mut self, p: &ItemPushResult, held: bool) {
+        let r = PendingReceive {
             created: p.created,
             entry: p.item_entry,
             count: p.count,
@@ -336,15 +427,19 @@ impl LootState {
             in_chat: p.show_in_chat,
             container: push_container(p.bag_slot, p.item_slot),
             tries: 0,
-            at: self.steps.len(),
-        });
+        };
+        if held {
+            self.queue(Step::Push(r));
+        } else {
+            self.waiting.push(r);
+        }
     }
 
     /// The close's teardown (`0x4c1cb0(0)`): the source goes (`0x4c1da0`) and the rows stay; the
-    /// feed signals `LOOT_CLOSED` for a window it showed. Queued pushes outlive it.
+    /// lane signals `LOOT_CLOSED` for a window it showed. Queued pushes outlive it.
     pub(crate) fn clear(&mut self) {
         if self.window.source.take().is_some() {
-            self.steps.push(Step::Changed(self.window.clone()));
+            self.queue(Step::Changed(self.window.clone()));
             self.coin_line_shown = false; // `0x4c1d95`
         }
         self.copier_due = false;
@@ -379,8 +474,8 @@ impl LootState {
         self.item_unlocks.len()
     }
 
-    /// Signal the unlocks a close owed past `mark` in their place in the steps, ahead of its
-    /// teardown's step: for a close inside a packet, which the feed shows.
+    /// Signal the unlocks a close owed past `mark` in their place on the lane, ahead of its
+    /// teardown's step, the last queued: for a close inside a packet, which the lane shows.
     pub(crate) fn defer_close_unlocks(&mut self, mark: usize) {
         let unlocks = self
             .item_unlocks
@@ -388,8 +483,11 @@ impl LootState {
         if unlocks.is_empty() {
             return;
         }
-        let at = self.steps.len().saturating_sub(1);
-        self.steps.insert(at, Step::Unlocks(unlocks));
+        let teardown = self.steps.pop_back().map(|(_, step)| step);
+        self.queue(Step::Unlocks(unlocks));
+        if let Some(step) = teardown {
+            self.queue(step);
+        }
     }
 
     /// Whether any unlock is owed.
@@ -402,10 +500,28 @@ impl LootState {
         std::mem::take(&mut self.item_unlocks)
     }
 
-    /// Queued pushes, for the net handler's self-gate test.
+    /// The last push queued, taken off the lane.
+    #[cfg(test)]
+    fn take_push(&mut self) -> Option<PendingReceive> {
+        let at = self
+            .steps
+            .iter()
+            .rposition(|(_, s)| matches!(s, Step::Push(_)))?;
+        match self.steps.remove(at)?.1 {
+            Step::Push(r) => Some(r),
+            _ => None,
+        }
+    }
+
+    /// Queued and waiting pushes, for the net handler's self-gate test.
     #[cfg(test)]
     pub(crate) fn pending_receive_count(&self) -> usize {
-        self.receives.len()
+        let queued = self
+            .steps
+            .iter()
+            .filter(|(_, s)| matches!(s, Step::Push(_)))
+            .count();
+        queued + self.waiting.len()
     }
 
     /// The open loot's guid; the chest lid watcher in [`crate::go_anim`] reads it too.
@@ -452,9 +568,10 @@ impl LootState {
         })
     }
 
-    /// Owe the hold's sweep to the feed, from a close with no VM at hand.
+    /// Owe the hold's sweep to the lane, from a close with no VM at hand.
     pub(crate) fn owe_sweep(&mut self) {
         self.sweep_owed = true;
+        self.queue(Step::Sweep);
     }
 }
 
@@ -581,7 +698,9 @@ impl Plugin for UiLootPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
         app.add_observer(on_cvar);
+        use crate::lanes::LaneApp;
         app.init_resource::<LootState>()
+            .add_lane("loot", peek_loot, fire_loot, None)
             .init_resource::<LootConfig>()
             .init_resource::<LootLatch>()
             .init_resource::<LootKneel>()
@@ -592,10 +711,13 @@ impl Plugin for UiLootPlugin {
             .add_systems(
                 Update,
                 (
-                    // Feed before the input pass and drain after it: an open shows the same
-                    // frame. The drain's deselect lands before the selection writers read it, and
-                    // their teardown's close finds this frame's window.
+                    // The window as it stands before the input pass and the drain after it. The
+                    // drain's deselect lands before the selection writers read it, and their
+                    // teardown's close finds this frame's window.
                     feed_loot.in_set(UiFeed),
+                    drop_loot_steps
+                        .in_set(UiFeed)
+                        .run_if(not(crate::ui_script::ingame_ui_up)),
                     drain_loot
                         .in_set(crate::ui_script::UiDrain)
                         .before(crate::target::TargetUpdate),
@@ -608,6 +730,13 @@ impl Plugin for UiLootPlugin {
                 ),
             );
     }
+}
+
+/// The window's changes readied while no in-game interface is up, taken unshown: there is no VM to
+/// show them to, and the one that comes up later is pushed the window as it stands
+/// ([`feed_loot`]). The pushes wait for it, as they wait for a VM.
+fn drop_loot_steps(mut loot: ResMut<LootState>) {
+    loot.steps.retain(|(_, s)| matches!(s, Step::Push(_)));
 }
 
 /// The coin row's name: each nonzero denomination as "<n> <Word>", joined by spaces. The
@@ -868,160 +997,235 @@ impl LootSourceObjects<'_, '_> {
     }
 }
 
-/// Shows the frame's window steps in wire order, each a turn whose handlers run as it ends, with
-/// the pushes queued between them fired in their places: each packet's events fire inside its
-/// dispatch (`0x537aa0`), so `ITEM_PUSH` (`0x491be8`) reads the window the packets before it left.
-/// A response's step ends with its copier's end. Then the window as it stands: a hold's owed
-/// sweep, a copier's end a late item record let through, and the names and candidates that
-/// resolved since.
-fn feed_loot(
-    mut vm: VmWith<(LootSteps<'static, 'static>, ResMut<'static, LootMoveStart>)>,
-    items: Res<Items>,
-    icons: Option<Res<ItemDisplays>>,
-    commands: Res<NetCommands>,
-    chat: Res<crate::ui_chat::ChatLog>,
+/// What the loot lane's firing and the window's push read beside the session: the item records
+/// and icons a row and a push resolve through, the roll catalogs, the candidates' names and the
+/// object manager the portrait asks, and the socket and the chat a push asks and speaks through.
+#[derive(bevy::ecs::system::SystemParam)]
+struct LootReads<'w, 's> {
+    items: Res<'w, Items>,
+    icons: Option<Res<'w, ItemDisplays>>,
+    commands: Res<'w, NetCommands>,
+    chat: Res<'w, crate::ui_chat::ChatLog>,
     // The random-suffix catalogs: a loot slot has no item object to carry the roll.
-    props: Option<Res<crate::items::RandomProperties>>,
-    enchants: Option<Res<crate::items::Enchants>>,
-    group: Res<GroupState>,
-    names: Res<NameCache>,
-    objects: LootSourceObjects,
-) {
-    let rolls = RollCatalogs {
-        props: props.as_deref(),
-        enchants: enchants.as_deref(),
-    };
-    let who = Candidates {
-        group: &group,
-        names: &names,
-    };
-    let view = |w: &Window, ask: Ask<'_>| {
-        snapshot(w, &items, icons.as_deref(), ask, rolls, who).map(|mut snap| {
-            snap.source_unit = w.source.is_some_and(|g| objects.is_unit(g));
+    props: Option<Res<'w, crate::items::RandomProperties>>,
+    enchants: Option<Res<'w, crate::items::Enchants>>,
+    group: Res<'w, GroupState>,
+    names: Res<'w, NameCache>,
+    objects: LootSourceObjects<'w, 's>,
+}
+
+impl LootReads<'_, '_> {
+    fn rolls(&self) -> RollCatalogs<'_> {
+        RollCatalogs {
+            props: self.props.as_deref(),
+            enchants: self.enchants.as_deref(),
+        }
+    }
+
+    /// `w` as the VM shows it.
+    fn view(&self, w: &Window, ask: Ask<'_>) -> Option<LootSnapshot> {
+        let who = Candidates {
+            group: &self.group,
+            names: &self.names,
+        };
+        snapshot(
+            w,
+            &self.items,
+            self.icons.as_deref(),
+            ask,
+            self.rolls(),
+            who,
+        )
+        .map(|mut snap| {
+            snap.source_unit = w.source.is_some_and(|g| self.objects.is_unit(g));
             snap
         })
-    };
-    let waits = |snap: &Option<LootSnapshot>| {
-        snap.as_ref()
-            .is_some_and(|snap| templates_outstanding(&items, snap))
-    };
-    let pushes = PushInputs {
-        items: &items,
-        icons: icons.as_deref(),
-        commands: &commands,
-        chat: &chat,
-        rolls,
-    };
-    let (receives, steps) = {
-        let (mut s, _) = vm.own();
-        (
-            std::mem::take(&mut s.loot.receives),
-            std::mem::take(&mut s.loot.steps),
-        )
-    };
-    let mut between: Vec<Vec<PendingReceive>> = (0..=steps.len()).map(|_| Vec::new()).collect();
-    for r in receives {
-        let k = r.at.min(steps.len());
-        between[k].push(r);
     }
-    let last_open = steps.iter().rposition(|s| matches!(s, Step::Opened { .. }));
-    // A step of a session a later response replaced runs on the cells it left, as its packet's
-    // dispatch ran it before the next arrived; the steps after the last response, on the window.
-    let replaced = |k: usize| last_open.is_some_and(|last| k < last);
-    let mut between = between.into_iter();
-    let mut still = emit_pushes(&mut vm, between.next().unwrap_or_default(), &pushes);
-    for ((k, step), after) in steps.into_iter().enumerate().zip(between) {
-        match step {
-            Step::Changed(w) => {
-                let live = replaced(k).then(|| swap_in_cells(&mut vm, w.clone()));
-                vm.turn(|script, _| {
-                    if let Some(script) = script {
-                        show(script, view(&w, Ask::Read));
-                    }
-                });
-                if let Some(live) = live {
-                    restore_live(&mut vm, live);
+
+    /// Whether `snap` still waits on a row's record.
+    fn waits(&self, snap: &Option<LootSnapshot>) -> bool {
+        snap.as_ref()
+            .is_some_and(|snap| templates_outstanding(&self.items, snap))
+    }
+
+    fn pushes(&self) -> PushInputs<'_> {
+        PushInputs {
+            items: &self.items,
+            icons: self.icons.as_deref(),
+            commands: &self.commands,
+            chat: &self.chat,
+            rolls: self.rolls(),
+        }
+    }
+}
+
+/// The loot window's VM and session, and the move-start close a response's end takes.
+type LootVm<'w, 's> = VmWith<'w, 's, (LootSteps<'static, 'static>, ResMut<'static, LootMoveStart>)>;
+
+/// The loot lane's head ([`crate::lanes`]).
+fn peek_loot(world: &World) -> Option<crate::lanes::Stamp> {
+    world.get_resource::<LootState>()?.peek()
+}
+
+/// The loot lane's `fire_until`: each step `until` admits, a turn whose handlers run as it ends;
+/// the lane stops after a step whose firing stamped anything, so what it pushed fires next. Each
+/// packet's events fire inside its dispatch (`0x537aa0`), so `ITEM_PUSH` (`0x491be8`) reads the
+/// window the packets before it left.
+fn fire_loot(In(until): In<crate::lanes::Until>, mut vm: LootVm, reads: LootReads) {
+    loop {
+        let Some((stamp, step)) = vm.own().0.loot.pop(until) else {
+            return;
+        };
+        let ((), moved) = crate::lanes::firing(stamp, || fire_step(&mut vm, &reads, step));
+        if moved {
+            return;
+        }
+    }
+}
+
+/// Every step waiting, fired alone, for a test that drives the loot window without the lanes.
+#[cfg(test)]
+pub(crate) fn fire_loot_lane(world: &mut World) {
+    use crate::lanes::Until;
+    while world
+        .resource::<LootState>()
+        .peek()
+        .is_some_and(|s| Until::all().admits(s))
+    {
+        world
+            .run_system_cached_with(fire_loot, Until::all())
+            .expect("the loot lane fires");
+    }
+}
+
+/// One step. A step of a session a later response replaced runs on the cells it left, as its
+/// packet's dispatch ran it before the next arrived. A response's step ends with its copier's end.
+fn fire_step(vm: &mut LootVm, reads: &LootReads, step: Step) {
+    match step {
+        Step::Changed(w) => {
+            let live = vm
+                .own()
+                .0
+                .loot
+                .replaced()
+                .then(|| swap_in_cells(vm, w.clone()));
+            vm.turn(|script, _| {
+                if let Some(script) = script {
+                    show(script, reads.view(&w, Ask::Read));
                 }
+            });
+            if let Some(live) = live {
+                restore_live(vm, live);
             }
-            Step::SlotCleared(row) => vm.turn(|script, _| {
-                if let Some(script) = script {
-                    script.fire_event("LOOT_SLOT_CLEARED", vec![ScriptValue::Int(i64::from(row))]);
+        }
+        Step::SlotCleared(row) => vm.turn(|script, _| {
+            if let Some(script) = script {
+                script.fire_event("LOOT_SLOT_CLEARED", vec![ScriptValue::Int(i64::from(row))]);
+            }
+        }),
+        Step::Unlocks(unlocks) => vm.turn(|script, (steps, _)| {
+            if let Some(script) = script {
+                fire_unlocks(script, unlocks, &steps.objects);
+            }
+        }),
+        Step::Opened {
+            ended,
+            window: w,
+            waited,
+        } => {
+            let replaced = vm.own().0.loot.replaced();
+            // The copier ends the session the VM shows (`0x4c1ccb`-`0x4c1dac`): its
+            // `LOOT_CLOSED` handlers run on the cells the teardown leaves, the source zeroed,
+            // before the new source is stored (`0x4c1dc2`), so their `CloseLoot` finds no
+            // window (`0x48f23f`). The stash clear comes after them (`0x4c1df5`).
+            let live = swap_in_cells(vm, ended);
+            vm.turn(|script, _| {
+                if let Some(script) = script.filter(|s| s.shown_loot().is_some()) {
+                    show(script, None);
                 }
-            }),
-            Step::Unlocks(unlocks) => vm.turn(|script, (steps, _)| {
-                if let Some(script) = script {
-                    fire_unlocks(script, unlocks, &steps.objects);
-                }
-            }),
-            Step::Opened { ended, window: w } => {
-                // The copier ends the session the VM shows (`0x4c1ccb`-`0x4c1dac`): its
-                // `LOOT_CLOSED` handlers run on the cells the teardown leaves, the source zeroed,
-                // before the new source is stored (`0x4c1dc2`), so their `CloseLoot` finds no
-                // window (`0x48f23f`). The stash clear comes after them (`0x4c1df5`).
-                let live = swap_in_cells(&mut vm, ended);
-                vm.turn(|script, _| {
-                    if let Some(script) = script.filter(|s| s.shown_loot().is_some()) {
-                        show(script, None);
-                    }
-                });
-                restore_live(&mut vm, live);
-                vm.own().0.loot.pending_bind_confirm = None;
-                let waiting = vm.turn(|script, _| {
-                    let Some(script) = script else {
-                        return true;
-                    };
-                    // Then the type cell (`0x4c1dd6`), the window, and each row's record asked
-                    // for (`0x4c1e77`).
-                    script.set_loot_type(w.loot_type);
-                    let snap = view(&w, Ask::Event(&commands));
-                    let waiting = waits(&snap);
-                    show(script, snap);
-                    waiting
-                });
-                if !waiting {
-                    if Some(k) != last_open {
-                        let moving = vm.own().1 .0;
-                        end_superseded_open(&mut vm, w, moving);
-                    } else if vm.own().0.loot.copier_due {
-                        let moving = std::mem::take(&mut vm.own().1 .0);
-                        end_open(&mut vm, moving);
-                    }
+            });
+            restore_live(vm, live);
+            vm.own().0.loot.pending_bind_confirm = None;
+            let waiting = vm.turn(|script, _| {
+                let Some(script) = script else {
+                    return true;
+                };
+                // Then the type cell (`0x4c1dd6`), the window, and each row's record asked
+                // for (`0x4c1e77`).
+                script.set_loot_type(w.loot_type);
+                let snap = reads.view(&w, Ask::Event(&reads.commands));
+                let waiting = waited.unwrap_or_else(|| reads.waits(&snap));
+                show(script, snap);
+                waiting
+            });
+            if !waiting {
+                if replaced {
+                    let moving = vm.own().1 .0;
+                    end_superseded_open(vm, w, moving);
+                } else if vm.own().0.loot.copier_due {
+                    let moving = std::mem::take(&mut vm.own().1 .0);
+                    end_open(vm, moving);
                 }
             }
         }
-        still.extend(emit_pushes(&mut vm, after, &pushes));
-    }
-    if vm.own().0.loot.sweep_owed {
-        vm.turn(|script, (mut steps, _)| {
-            steps.loot.sweep_owed = false;
-            if let (Some(script), true) = (script, steps.loot.source().is_some()) {
-                steps.sweep(script, false);
+        Step::CopierEnd => {
+            let ready = vm.turn(|script, (steps, _)| {
+                script.is_some()
+                    && steps.loot.copier_due
+                    && !reads.waits(&reads.view(&steps.loot.window, Ask::Read))
+            });
+            if ready {
+                let moving = std::mem::take(&mut vm.own().1 .0);
+                end_open(vm, moving);
             }
-        });
-        run_then(&mut vm);
+        }
+        Step::Sweep => {
+            if !vm.own().0.loot.sweep_owed {
+                return;
+            }
+            vm.turn(|script, (mut steps, _)| {
+                steps.loot.sweep_owed = false;
+                if let (Some(script), true) = (script, steps.loot.source().is_some()) {
+                    steps.sweep(script, false);
+                }
+            });
+            run_then(vm);
+        }
+        Step::Push(r) => {
+            let still = emit_pushes(vm, vec![r], &reads.pushes());
+            vm.own().0.loot.waiting.extend(still);
+        }
     }
-    let late = vm.turn(|script, (steps, _)| {
+}
+
+/// The window as it stands, once no change to it is queued: a new VM's type cell (`/reload`; the C
+/// cell outlives the interface) and its window, and the names and candidates that resolved since.
+/// A push waiting on its record whose record is held, one that found no VM, is queued for this
+/// frame; every other counts the frame, and one waiting past [`RECEIVE_MAX_TRIES`] is dropped
+/// ([`drain_receives`]' deviation).
+fn feed_loot(mut vm: VmWith<(LootSteps<'static, 'static>, ())>, reads: LootReads) {
+    vm.turn(|script, (mut steps, _)| {
         let Some(script) = script else {
-            return false;
+            return;
         };
-        // A new VM's type cell too (`/reload`): the C cell outlives the interface.
-        script.set_loot_type(steps.loot.window.loot_type);
-        let snap = view(&steps.loot.window, Ask::Read);
-        let ready = steps.loot.copier_due && !waits(&snap);
-        show(script, snap);
-        ready
+        let loot = &mut *steps.loot;
+        let (held, mut still): (Vec<_>, Vec<_>) = std::mem::take(&mut loot.waiting)
+            .into_iter()
+            .partition(|r| reads.items.template(r.entry, 0, Ask::Read).is_some());
+        still.retain_mut(|r| {
+            r.tries += 1;
+            r.tries < RECEIVE_MAX_TRIES
+        });
+        loot.waiting = still;
+        for r in held {
+            loot.queue(Step::Push(r));
+        }
+        if loot.window_steps_queued() {
+            return;
+        }
+        script.set_loot_type(loot.window.loot_type);
+        show(script, reads.view(&loot.window, Ask::Read));
     });
-    if late {
-        let moving = std::mem::take(&mut vm.own().1 .0);
-        end_open(&mut vm, moving);
-    }
-    // What waits on its template fires ahead of the next frame's steps.
-    let (mut s, _) = vm.own();
-    for r in &mut still {
-        r.at = 0;
-    }
-    still.append(&mut s.loot.receives);
-    s.loot.receives = still;
 }
 
 /// The copier end of a response a later one in the same frame replaced, which the reference ran
@@ -1045,10 +1249,10 @@ fn end_superseded_open<X: bevy::ecs::system::SystemParam + 'static>(
     loot.pending_bind_confirm = None;
 }
 
-/// The live window and the steps' mark, set aside while a step runs on the cells it left.
+/// The live window and the clock's mark, set aside while a step runs on the cells it left.
 struct Live {
     window: Window,
-    mark: usize,
+    mark: crate::lanes::Mark,
 }
 
 /// Put `cells`, the loot cells as a step left them, in the window's place for that step's turn.
@@ -1059,7 +1263,7 @@ fn swap_in_cells<X: bevy::ecs::system::SystemParam + 'static>(
     let (mut s, _) = vm.own();
     Live {
         window: std::mem::replace(&mut s.loot.window, cells),
-        mark: s.loot.steps.len(),
+        mark: crate::lanes::mark(),
     }
 }
 
@@ -1071,7 +1275,7 @@ fn restore_live<X: bevy::ecs::system::SystemParam + 'static>(
 ) {
     let (mut s, _) = vm.own();
     s.loot.window = live.window;
-    s.loot.steps.truncate(live.mark);
+    s.loot.steps.retain(|(stamp, _)| !stamp.since(live.mark));
 }
 
 /// A response's end, once its window is filled: the copier's end ([`LootSteps::copier_end`]) and
@@ -1179,14 +1383,22 @@ fn emit_pushes<P: bevy::ecs::system::SystemParam + 'static>(
     })
 }
 
-/// [`feed_loot`] as a one-shot, for a test that drives the window from outside the module.
+/// The frame's loot: [`feed_loot`], then the loot lane, as the schedule runs them, for a test that
+/// drives the window without the lanes.
 #[cfg(test)]
-pub(crate) fn feed_loot_once(world: &mut World) {
+pub(crate) fn loot_frame(world: &mut World) {
     use bevy::ecs::system::RunSystemOnce;
-    seat_loot_steps(world);
     world
         .run_system_once(feed_loot)
         .expect("the loot feed runs as a one-shot system");
+    fire_loot_lane(world);
+}
+
+/// [`loot_frame`] over a seated world, for a test that drives the window from outside the module.
+#[cfg(test)]
+pub(crate) fn feed_loot_once(world: &mut World) {
+    seat_loot_steps(world);
+    loot_frame(world);
 }
 
 /// Seat what [`LootSteps`] reads that a harness's world need not hold; the commands are the
@@ -1384,7 +1596,7 @@ type OwedCloses = (
 
 /// The closes the frame owes from outside the VM, after the input pass: the movement start's
 /// ([`LootMoveStart`]) and the precast end's at rest ([`LootCloseAtRest`]), which sweeps a
-/// disenchant window with rows left instead. The feed signals `LOOT_CLOSED` for them.
+/// disenchant window with rows left instead. The loot lane signals `LOOT_CLOSED` for them.
 fn drain_loot(mut vm: VmWith<(LootSteps<'static, 'static>, OwedCloses)>) {
     vm.turn(|script, (mut steps, (mut move_start, mut at_rest))| {
         if std::mem::take(&mut move_start.0) {
@@ -1658,7 +1870,7 @@ mod tests {
         use benilla_protocol::ObjectFields;
         for (unit, expected) in [(true, true), (false, false)] {
             let (mut app, _rx) = bare_app();
-            app.add_systems(bevy::prelude::Update, feed_loot);
+            app.add_systems(bevy::prelude::Update, loot_frame);
             // OBJECT_FIELD_TYPE (2): TYPEMASK_OBJECT | TYPEMASK_UNIT for a creature, | 0x20 for a
             // game object.
             let kind = if unit { 0x9 } else { 0x21 };
@@ -1704,7 +1916,7 @@ mod tests {
             None,
         ] {
             let (mut app, rx) = bare_app();
-            app.add_systems(bevy::prelude::Update, feed_loot);
+            app.add_systems(bevy::prelude::Update, loot_frame);
             app.world_mut().resource_mut::<LootState>().open(
                 0x42,
                 loot_type::CORPSE,
@@ -1747,9 +1959,14 @@ mod tests {
             app.update();
             assert_eq!(opens(&mut app), 0);
 
-            app.world_mut()
+            // The answer as the item handler lands it: the record, then its callbacks.
+            let world = app.world_mut();
+            world
                 .resource_mut::<Items>()
                 .insert_template(TOUGH_JERKY, answer.clone());
+            world.resource_scope(|world, mut loot: Mut<LootState>| {
+                loot.record_answered(world.resource::<Items>(), TOUGH_JERKY)
+            });
             app.update();
             assert_eq!(opens(&mut app), 1, "opened when the last template answered");
             app.update();
@@ -2008,7 +2225,7 @@ mod tests {
     #[test]
     fn the_auto_loot_sweep_raises_exactly_one_bind_confirm() {
         let (mut app, rx) = auto_loot_app("");
-        app.world_mut().run_system_once(feed_loot).unwrap();
+        loot_frame(app.world_mut());
 
         assert_eq!(
             confirms(&mut app),
@@ -2030,7 +2247,7 @@ mod tests {
     #[test]
     fn a_swept_bind_confirm_is_accepted_after_the_sweep() {
         let (mut app, rx) = auto_loot_app("");
-        app.world_mut().run_system_once(feed_loot).unwrap();
+        loot_frame(app.world_mut());
         assert!(matches!(
             sent(&rx)[..],
             [ClientCommand::AutostoreLootItem { slot: 7 }]
@@ -2238,8 +2455,8 @@ mod tests {
 
     fn pending(entry: u32, count: u32, from_npc: bool, created: bool) -> PendingReceive {
         let mut loot = LootState::default();
-        loot.push_receive(&push(entry, count, from_npc, created));
-        loot.receives.pop().expect("queued")
+        loot.push_receive(&push(entry, count, from_npc, created), true);
+        loot.take_push().expect("queued")
     }
 
     #[test]
@@ -2385,12 +2602,20 @@ mod tests {
     fn clear_closes_but_keeps_receives() {
         let mut loot = LootState::default();
         loot.open(0x42, loot_type::CORPSE, 0, vec![item(0, 117, 1)]);
-        loot.push_receive(&push(117, 1, false, false));
+        loot.push_receive(&push(117, 1, false, false), true);
         loot.clear();
         assert!(loot.source().is_none());
-        assert_eq!(loot.receives.len(), 1, "a receive line outlives the window");
+        assert_eq!(
+            loot.pending_receive_count(),
+            1,
+            "a receive line outlives the window"
+        );
         loot.clear_session();
-        assert!(loot.receives.is_empty(), "disconnect drops receive lines");
+        assert_eq!(
+            loot.pending_receive_count(),
+            0,
+            "disconnect drops receive lines"
+        );
     }
 
     /// The count after the link's `|r` takes the line's own colour.
@@ -2421,12 +2646,15 @@ mod tests {
     #[test]
     fn receive_line_carries_the_wire_random_property_fields() {
         let mut loot = LootState::default();
-        loot.push_receive(&ItemPushResult {
-            random_property_id: 862,
-            suffix_factor: 1234,
-            ..push(15268, 1, false, false)
-        });
-        let r = loot.receives.pop().expect("queued");
+        loot.push_receive(
+            &ItemPushResult {
+                random_property_id: 862,
+                suffix_factor: 1234,
+                ..push(15268, 1, false, false)
+            },
+            true,
+        );
+        let r = loot.take_push().expect("queued");
         assert_eq!(
             receive_line(&r, "Bloodrazor", 3),
             "You receive loot: |cff0070dd|Hitem:15268:0:862:1234|h[Bloodrazor]|h|r."
@@ -2992,7 +3220,7 @@ mod tests {
         use crate::ui_script::SweepApp;
         let (mut app, rx) = bare_app();
         app.add_sweep_leg(SweepLeg::Loot, close_loot_on_leave_world)
-            .add_systems(Update, feed_loot);
+            .add_systems(Update, loot_frame);
         (app, rx)
     }
 
@@ -3117,17 +3345,17 @@ mod tests {
 
     /// Every close but the sweep's and the reload's (`CloseLoot`, the release response, the
     /// auto-release, the at-rest close) owes an item source's two unlocks (`0x48f2bd`, `0x4c1d36`)
-    /// to `apply_item_releases` and leaves `LOOT_CLOSED` to the feed. Both unlocks come before the
+    /// to `apply_item_releases` and leaves `LOOT_CLOSED` to the lane. Both unlocks come before the
     /// teardown signals it (`0x4c1dac`), so the releases run first and each `ITEM_LOCK_CHANGED`
     /// handler reads the window open. The VM pass holds the order by registration
     /// (`crate::vm_pass`), so a move that flips it fails here.
     #[test]
-    fn the_owed_unlocks_run_before_the_feeds_loot_closed() {
+    fn the_owed_unlocks_run_before_the_lanes_loot_closed() {
         let mut app = crate::game_plugins::schedule_tests::headless_client();
         assert!(crate::test_support::runs_before(
             &mut app,
             crate::ui_items::locks::apply_item_releases,
-            feed_loot,
+            crate::lanes::fire_in_order,
         ));
     }
 
@@ -3221,7 +3449,7 @@ mod tests {
             .unwrap();
         app.insert_non_send_resource(script);
         let mut loot = app.world_mut().resource_mut::<LootState>();
-        loot.push_receive(&push(2589, 1, false, false));
+        loot.push_receive(&push(2589, 1, false, false), true);
         loot.open(CORPSE, loot_type::CORPSE, 0, vec![item(0, 2589, 1)]);
         app.update();
         let s = app.world().non_send_resource::<UiScript>();
@@ -3303,9 +3531,9 @@ mod tests {
         assert_eq!(seen_order(&app), "OPENED");
         let mut loot = app.world_mut().resource_mut::<LootState>();
         loot.remove_slot(0);
-        loot.push_receive(&push(LINEN, 1, false, false));
+        loot.push_receive(&push(LINEN, 1, false, false), true);
         loot.remove_slot(1);
-        loot.push_receive(&push(WOOL, 1, false, false));
+        loot.push_receive(&push(WOOL, 1, false, false), true);
         app.update();
         assert_eq!(seen_order(&app), "OPENED,CLEARED1,PUSH01,CLEARED2,PUSH00");
     }
@@ -3317,7 +3545,7 @@ mod tests {
         let mut app = push_order_app();
         let mut loot = app.world_mut().resource_mut::<LootState>();
         loot.open(CORPSE, loot_type::CORPSE, 0, vec![item(0, LINEN, 1)]);
-        loot.push_receive(&push(WOOL, 1, false, false));
+        loot.push_receive(&push(WOOL, 1, false, false), true);
         app.update();
         assert_eq!(seen_order(&app), "OPENED,PUSH10");
     }

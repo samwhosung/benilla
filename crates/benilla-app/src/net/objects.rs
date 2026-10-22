@@ -106,6 +106,8 @@ pub(crate) struct Scene<'w, 's> {
     // The auction lists whose pages wait on an item's record, and the steps their tails take.
     auction: Option<ResMut<'w, crate::ui_auction::AuctionOpen>>,
     house: Option<ResMut<'w, crate::ui_auction::HouseLane>>,
+    // The loot window's rows and the pushes that wait on an item's record.
+    loot: Option<ResMut<'w, crate::ui_loot::LootState>>,
     pass: ResMut<'w, update::UpdatePass>,
     released: ResMut<'w, Released>,
     nets: Query<'w, 's, &'static NetEntity>,
@@ -183,6 +185,10 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             // refusal: a page that now waits on nothing runs its tail.
             if let (Some(auction), Some(house)) = (sc.auction.as_mut(), sc.house.as_mut()) {
                 crate::ui_auction::record_answered(auction, house, &sc.items, entry);
+            }
+            // The loot window's row callback (`0x4c2ac0`) and the pushes' (`0x491ee0`).
+            if let Some(loot) = sc.loot.as_mut() {
+                loot.record_answered(&sc.items, entry);
             }
             // The trade getters' and the ammo getters' callbacks run for a ready record only
             // (`0x4c0343`, `0x4c84f6`).

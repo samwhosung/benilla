@@ -1,9 +1,9 @@
-//! The loot window's reference functions, shared by the verbs' calls and the feed's turns
+//! The loot window's reference functions, shared by the verbs' calls and the loot lane's turns
 //! ([`LootSteps`]): the take dispatcher `0x4c2790`, `EndLootWindow 0x48f200` with the VM at hand,
 //! the auto-loot sweep `0x4c1fa0`, the interactions' `SetAutoLoot 0x5df460`, `OpenItem
 //! 0x5edc80`'s send and the master-loot give `0x4c2940`. A function that signals goes
 //! on once its listeners have returned (`SignalEvent` runs them in place), so what it does after
-//! the signal is a [`Then`], run by the call's tail ([`UiScript::resume_loot`]) or by the feed's
+//! the signal is a [`Then`], run by the call's tail ([`UiScript::resume_loot`]) or by the lane's
 //! next turn ([`super::run_then`]): the listeners read the state as the signal left it.
 
 use benilla_protocol::messages::{loot_type, slot_type};
@@ -59,7 +59,7 @@ pub(super) enum Then {
 }
 
 /// The loot window's state and what its functions send and signal through: the engine half of
-/// the loot calls ([`crate::script_calls::ScriptCallHost`]) and of the feed's and the drain's
+/// the loot calls ([`crate::script_calls::ScriptCallHost`]) and of the lane's and the drain's
 /// turns.
 #[derive(SystemParam)]
 pub(crate) struct LootSteps<'w, 's> {

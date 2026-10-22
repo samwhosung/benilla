@@ -156,11 +156,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     (Row::Queue, "::ui_loot_roll::LootRolls", "the loot rolls"),
     (
         Row::Queue,
-        "::ui_loot::LootMoveStart",
-        "the loot window's steps",
-    ),
-    (
-        Row::Queue,
         "::ui_merchant::MerchantErrors",
         "the merchant errors",
     ),
@@ -377,10 +372,12 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 7] {
+fn lane_types() -> [TypeId; 8] {
     [
         TypeId::of::<crate::field_watch::NoticeLane>(),
         TypeId::of::<crate::item_lane::ItemLane>(),
+        // The loot lane: the session's steps and pushes, stamped at their packets.
+        TypeId::of::<crate::ui_loot::LootState>(),
         TypeId::of::<crate::ui_chat::ChatLog>(),
         TypeId::of::<crate::ui_cast::CastReports>(),
         TypeId::of::<crate::ui_auction::HouseLane>(),
@@ -528,6 +525,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "chat",
             "field notices",
             "item watchers",
+            "loot",
             "party"
         ]
     );
