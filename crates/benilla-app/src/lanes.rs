@@ -26,9 +26,9 @@ use bevy::prelude::*;
 ///
 /// Deviation: the reference has no such cap. A signal raised inside a listener runs nested in
 /// its call, bounded by `luaD_call`'s C-stack count of 200 (`0x6f65ae`), whose error ends the
-/// innermost listener alone, or by the main thread's 1 MB stack (the image's reserve), whichever
-/// comes first: a chain through the chat line function `0x49a870` takes an 8 KB frame each
-/// (`0x49a873`, `0x1f0c` bytes). The cap exists only because verbs a listener calls still queue
+/// innermost listener alone, or by the stack of the thread that runs the loop, which the image's
+/// stack reserve of 0x100000 bounds, whichever comes first: a chain through the chat line
+/// function `0x49a870` takes an 8 KB frame each (`0x49a873`, `0x1f0c` bytes). The cap exists only because verbs a listener calls still queue
 /// onto a lane instead of firing inside the call (#2202), and goes once none does.
 const DEPTH: usize = 4;
 
