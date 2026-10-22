@@ -46,7 +46,7 @@ pub(crate) struct QuestLog {
     refused: Vec<u32>,
     /// The fold mask and the selected quest a dying VM left ([`fold_dying_vm_quest_folds`]),
     /// seated in the next.
-    folds: (HashSet<String>, Option<u32>),
+    folds: benilla_ui::script::QuestLogCarry,
     /// The quest-update toasts the handlers resolved, shown by the next feed.
     toasts: Vec<Toast>,
     /// `(quest id, item id, count)` pairs of an added item whose quest record was not cached, held

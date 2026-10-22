@@ -1089,8 +1089,9 @@ pub(crate) struct Model {
     pub(crate) quest_log_headers: Vec<(i32, String)>,
     /// The slots, the quest records and the lookups in flight the quest-log verbs read.
     pub(crate) quest_store: quest_log::QuestLogStore,
-    /// The collapsed headers by title, the reference's fold mask `0xbb748c`.
-    pub(crate) quest_log_collapsed: HashSet<String>,
+    /// The folded headers' ids: the reference's mask `0xbb748c` holds a bit per sorted header,
+    /// clear for a folded one, which its rebuild carries across by id (`0x4de5bc`, `0x4de777`).
+    pub(crate) quest_log_collapsed: HashSet<i32>,
     /// A selected quest a previous VM left, placed at the first push.
     pub(crate) quest_log_selection_seed: Option<u32>,
     /// Watched quest ids in watch order, pruned when a quest leaves the log.

@@ -272,6 +272,22 @@ fn rebuild(model: &mut Model) -> bool {
                 .is_some_and(|left| left < 0)
         })
         .collect();
+    // The fold snapshot (`0x4de5b0`-`0x4de5c4`): each old id as it is when folded, negated when
+    // open. Every new header opens (`0x4de608`) and one whose id is in the snapshot folds
+    // (`0x4de777`, `0x4de78d`), so an open group 0 folds, and an open `-N` folds a group `N`.
+    let snapshot: Vec<i32> = model
+        .quest_log_headers
+        .iter()
+        .map(|&(id, _)| match model.quest_log_collapsed.contains(&id) {
+            true => id,
+            false => id.wrapping_neg(),
+        })
+        .collect();
+    model.quest_log_collapsed = headers
+        .iter()
+        .map(|&(id, _)| id)
+        .filter(|id| snapshot.contains(id))
+        .collect();
     model.quest_log_watched.retain(|id| ids.contains(id));
     model.quest_log.num_quests = num_quests;
     model.quest_log.entries = rows;
@@ -377,7 +393,7 @@ fn sort_rows(model: &mut Model, selected: Option<u32>) {
     let folds = |ordinal: usize| {
         headers
             .get(ordinal)
-            .is_some_and(|(_, name)| collapsed.contains(name))
+            .is_some_and(|(id, _)| collapsed.contains(id))
     };
     // A row's group ordinal and record: a header's by its own id, a quest's by its record's
     // `ZoneOrSort` (`[rec+0xc]`, `0x4deb9a`), looked up with no callback (`0x4deb2d`).
@@ -511,20 +527,16 @@ fn set_collapsed(model: &mut Model, index: u32, collapse: bool) {
         .checked_sub(1)
         .and_then(|i| model.quest_log.entries.get(i))
         .filter(|e| e.is_header)
-        .map(|e| e.header.clone());
+        .map(|e| e.zone_or_sort);
     match (header, collapse) {
-        (Some(title), true) => {
-            model.quest_log_collapsed.insert(title);
+        (Some(id), true) => {
+            model.quest_log_collapsed.insert(id);
         }
-        (Some(title), false) => {
-            model.quest_log_collapsed.remove(&title);
+        (Some(id), false) => {
+            model.quest_log_collapsed.remove(&id);
         }
         (None, true) => {
-            let all: Vec<String> = model
-                .quest_log_headers
-                .iter()
-                .map(|(_, name)| name.clone())
-                .collect();
+            let all: Vec<i32> = model.quest_log_headers.iter().map(|&(id, _)| id).collect();
             model.quest_log_collapsed.extend(all);
         }
         (None, false) => model.quest_log_collapsed.clear(),
@@ -816,27 +828,47 @@ pub(crate) fn selected_quest_item(
     })
 }
 
+/// The engine state the log keeps past its VM ([`super::UiScript::quest_log_carry`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct QuestLogCarry {
+    /// The sorted header ids (`0xbb7040`), which the next rebuild snapshots.
+    headers: Vec<i32>,
+    /// The folded ones among them, the mask `0xbb748c`'s clear bits.
+    collapsed: HashSet<i32>,
+    /// The selected quest's id (`0xbb7480`).
+    selected: Option<u32>,
+}
+
 impl super::UiScript {
-    /// The engine state the log keeps past its VM: the collapsed headers by title, the fold
-    /// mask (`[0xbb748c]`), and the selected quest's id (`[0xbb7480]`). A `/reload` resets
-    /// neither: only the game init clears the selection (`0x48f5bd` → `0x4de390`), and nothing
-    /// but the verbs and the rebuild writes the mask.
-    pub fn quest_log_carry(&self) -> (HashSet<String>, Option<u32>) {
+    /// The engine state the log keeps past its VM: the header ids (`[0xbb7040]`), the fold mask
+    /// (`[0xbb748c]`) and the selected quest's id (`[0xbb7480]`). A `/reload` resets none: only
+    /// the game init clears the selection (`0x48f5bd` → `0x4de390`), and nothing but the verbs
+    /// and the rebuild writes the ids and the mask.
+    pub fn quest_log_carry(&self) -> QuestLogCarry {
         let model = self.model_ref();
         let selected = (model.quest_log_selection as usize)
             .checked_sub(1)
             .and_then(|i| model.quest_log.entries.get(i))
             .filter(|e| !e.is_header)
             .map(|e| e.quest_id);
-        (model.quest_log_collapsed.clone(), selected)
+        QuestLogCarry {
+            headers: model.quest_log_headers.iter().map(|&(id, _)| id).collect(),
+            collapsed: model.quest_log_collapsed.clone(),
+            selected,
+        }
     }
 
     /// Seat what [`Self::quest_log_carry`] read off a previous VM, before any file or event
-    /// runs; the selection lands on its quest at the first rebuild.
-    pub fn seed_quest_log_carry(&mut self, (collapsed, selected): (HashSet<String>, Option<u32>)) {
+    /// runs; the first rebuild folds by its snapshot, and the selection lands on its quest.
+    pub fn seed_quest_log_carry(&mut self, carry: QuestLogCarry) {
         let mut model = self.model_mut();
-        model.quest_log_collapsed = collapsed;
-        model.quest_log_selection_seed = selected;
+        model.quest_log_headers = carry
+            .headers
+            .into_iter()
+            .map(|id| (id, String::new()))
+            .collect();
+        model.quest_log_collapsed = carry.collapsed;
+        model.quest_log_selection_seed = carry.selected;
     }
 
     /// The slots as the descriptor now holds them, with no rebuild: a VM's seat before the world
