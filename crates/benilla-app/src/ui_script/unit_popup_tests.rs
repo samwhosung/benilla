@@ -350,6 +350,7 @@ fn solo_target_trade_click_queues_an_initiate() {
 fn solo_target_follow_click_queues_an_exact_by_name_follow() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     bake_strings(&s);
     load_popup_frames(&s);
@@ -419,6 +420,7 @@ fn solo_target_follow_click_queues_an_exact_by_name_follow() {
 fn solo_target_inspect_click_reaches_inspect_unit() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     bake_strings(&s);
     load_popup_frames(&s);
@@ -609,6 +611,7 @@ fn right_click_the_pet_frame(s: &mut UiScript) {
 fn the_pet_menu_forks_between_abandon_and_dismiss() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     bake_pet_strings(&s);
     load_pet_menu_frames(&s);
@@ -677,6 +680,7 @@ fn the_pet_menu_forks_between_abandon_and_dismiss() {
 fn dismiss_sends_immediately_and_abandon_waits_for_the_confirm() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     bake_pet_strings(&s);
     load_pet_menu_frames(&s);
@@ -729,6 +733,7 @@ fn dismiss_sends_immediately_and_abandon_waits_for_the_confirm() {
 fn renaming_a_pet_reads_the_name_back_before_sending_it() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     bake_pet_strings(&s);
     load_pet_menu_frames(&s);
@@ -752,7 +757,7 @@ fn renaming_a_pet_reads_the_name_back_before_sending_it() {
     click_frame(&mut s, "StaticPopup1Button1");
     assert_eq!(
         s.take_pet_renames(),
-        Vec::<String>::new(),
+        Vec::<Option<String>>::new(),
         "accepting the NAME dialog sends nothing — it only asks again"
     );
     assert!(
@@ -769,7 +774,7 @@ fn renaming_a_pet_reads_the_name_back_before_sending_it() {
     click_frame(&mut s, "StaticPopup2Button1");
     assert_eq!(
         s.take_pet_renames(),
-        vec!["Rexxar".to_string()],
+        vec![Some("Rexxar".to_string())],
         "only the CONFIRM sends, and it sends the name from the box"
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
@@ -780,6 +785,7 @@ fn renaming_a_pet_reads_the_name_back_before_sending_it() {
 fn the_pet_details_row_opens_the_pet_paper_doll() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     bake_pet_strings(&s);
     load_pet_menu_frames(&s);

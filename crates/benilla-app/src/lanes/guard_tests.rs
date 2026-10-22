@@ -204,9 +204,10 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (Row::Queue, "::ui_stable::StableErrors", "the stable errors"),
     (
-        Row::Queue,
+        Row::HostHeld,
         "::ui_stable::StableOpen",
-        "the stable's packets",
+        "the stable's packets, which `feed_stable` fires from; the stable verbs and the pet's \
+         abandon, acting in their calls, read it in the host",
     ),
     (Row::Queue, "::ui_summon::SummonState", "the summon state"),
     (
@@ -367,6 +368,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::TaxiCatalogs",
     "::InteractLatch",
     "::PetBar",
+    "::ui_stable::StableOpen",
     "::QuestLog",
     "::UiClock",
     "::InteractNpc",

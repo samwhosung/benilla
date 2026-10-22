@@ -29,6 +29,32 @@ const fn order(kind: u8, action: u32) -> u32 {
     (kind as u32) << 24 | action
 }
 
+/// `PetDismiss`'s word, the Dismiss command `0x4bd6e0` stores and presses (`0x4bd701`).
+pub const PET_DISMISS_WORD: u32 = order(PET_ACT_COMMAND, 3);
+
+/// A pet verb the host applies inside its call ([`super::ScriptCall::Pet`]), past the binding's
+/// own checks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PetCall {
+    /// `TogglePetAutocast(slot)` (`0x4be290` → `0x4bcbb0`), the 1-based slot the VM flipped: the
+    /// app's word flips and `CMSG_PET_SET_ACTION` goes out (`0x4bcc4f`).
+    ToggleAutocast(u32),
+    /// One bar write of the drag, the assign core with its send flag (`0x4bc9a0`): one
+    /// `CMSG_PET_SET_ACTION` of one or two `(0-based position, word)` pairs, sent whole, since the
+    /// server tells the two forms apart by body size (`0x4bcad4`).
+    SetActions(Vec<(u32, u32)>),
+    /// `PetStopAttack()` (`0x4bd650`).
+    StopAttack,
+    /// `PetAbandon()` past its gate (`0x4bd740`).
+    Abandon,
+    /// `PetRename(name)` (`0x4be4e0` → `0x4bd840`): the name as `lua_tostring` read it, `None`
+    /// for none.
+    Rename(Option<String>),
+    /// `ToggleSpellAutocast(id, "pet")` past its gate (`0x4bccb0`), by the spell the VM flipped:
+    /// `CMSG_PET_SPELL_AUTOCAST` names the spell.
+    SpellAutocast(u32),
+}
+
 /// One pet bar slot, resolved by the app.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PetActionView {
@@ -258,14 +284,20 @@ impl super::UiScript {
         })
     }
 
-    /// Drain the 1-based slot indices `TogglePetAutocast` queued.
+    /// The `TogglePetAutocast` calls a harness VM kept, as 1-based slots.
     pub fn take_pet_autocast_toggles(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().pet_autocast_toggles)
+        self.take_calls_where(|c| match c {
+            super::ScriptCall::Pet(PetCall::ToggleAutocast(slot)) => Some(*slot),
+            _ => None,
+        })
     }
 
-    /// Drain the count of `PetStopAttack()` calls.
+    /// How many `PetStopAttack()` calls a harness VM kept.
     pub fn take_pet_stop_attacks(&mut self) -> u32 {
-        std::mem::replace(&mut self.model_mut().pet_stop_attacks, 0)
+        self.take_calls_where(|c| {
+            matches!(c, super::ScriptCall::Pet(PetCall::StopAttack)).then_some(())
+        })
+        .len() as u32
     }
 
     /// Take the one-shot orders (`PetAttack` and the rest) out of the call stream, each a packed
@@ -282,25 +314,43 @@ impl super::UiScript {
         self.model_mut().player_control = in_control;
     }
 
-    /// Drain the drag's bar writes, already applied here: one `Vec` per `CMSG_PET_SET_ACTION` of
-    /// one or two `(0-based position, packed word)` pairs. Send each whole: the server tells the
-    /// two forms apart by body size.
+    /// The drag's bar writes a harness VM kept, already applied here: one `Vec` per
+    /// `CMSG_PET_SET_ACTION` of one or two `(0-based position, packed word)` pairs.
     pub fn take_pet_set_actions(&mut self) -> Vec<Vec<(u32, u32)>> {
-        std::mem::take(&mut self.model_mut().pet_set_actions)
+        self.take_calls_where(|c| match c {
+            super::ScriptCall::Pet(PetCall::SetActions(entries)) => Some(entries.clone()),
+            _ => None,
+        })
     }
 
-    /// Drain the `PetAbandon()` and `PetDismiss()` call counts, as `(abandons, dismisses)`.
+    /// The `PetAbandon()` and `PetDismiss()` calls a harness VM kept, counted, as
+    /// `(abandons, dismisses)`.
     pub fn take_pet_gives_up(&mut self) -> (u32, u32) {
-        let m = &mut *self.model_mut();
-        (
-            std::mem::replace(&mut m.pet_abandons, 0),
-            std::mem::replace(&mut m.pet_dismisses, 0),
-        )
+        let abandons = self.take_calls_where(|c| {
+            matches!(c, super::ScriptCall::Pet(PetCall::Abandon)).then_some(())
+        });
+        let dismisses = self.take_calls_where(|c| {
+            matches!(c, super::ScriptCall::PetOrder(PET_DISMISS_WORD)).then_some(())
+        });
+        (abandons.len() as u32, dismisses.len() as u32)
     }
 
-    /// Drain the names `PetRename(name)` queued, in order.
-    pub fn take_pet_renames(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.model_mut().pet_renames)
+    /// The names the `PetRename` calls a harness VM kept carry, in order; `None` for none.
+    pub fn take_pet_renames(&mut self) -> Vec<Option<String>> {
+        self.take_calls_where(|c| match c {
+            super::ScriptCall::Pet(PetCall::Rename(name)) => Some(name.clone()),
+            _ => None,
+        })
+    }
+
+    /// `PetStopAttack`'s repaint (`0x4bd6ae`-`0x4bd6b4`): the attack latch down on every slot and
+    /// the command tokens relit from the state word, for the `PET_BAR_UPDATE` the host signals.
+    pub fn lower_pet_attack(&mut self) {
+        let bar = &mut self.model_mut().pet_bar;
+        for slot in &mut bar.slots {
+            slot.view.attack_active = false;
+        }
+        repaint_tokens(bar);
     }
 }
 
@@ -464,7 +514,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 (model.pet_bar.pickup_allowed, model.pet_bar.has_bar)
             };
-            if pickup_allowed && super::cursor::pet::clear_and_drop(lua, i).is_some() {
+            if pickup_allowed && super::cursor::pet::clear_and_drop(lua, i)?.is_some() {
                 return Ok(());
             }
             if !has_bar || i > 10 {
@@ -508,23 +558,23 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     "Invalid slot in TogglePetAutocast".into(),
                 ));
             }
-            if super::cursor::pet::clear_and_drop(lua, i).is_some() {
+            if super::cursor::pet::clear_and_drop(lua, i)?.is_some() {
                 return Ok(());
             }
             // `TogglePetSlotAutocast 0x4bcbb0` opens on the gate's tag 2 (`0x4bcbc2`).
             if !protected::gate(lua, Tag::CAST) {
                 return Ok(());
             }
-            super::tick::verb(lua, |model| {
+            let flipped = super::tick::verb(lua, |model| {
                 let Some(n) = i
                     .checked_sub(1)
                     .map(|n| n as usize)
                     .filter(|&n| n < model.pet_bar.slots.len())
                 else {
-                    return;
+                    return false;
                 };
                 if !model.pet_bar.actions_usable || !model.pet_bar.slots[n].view.autocast_allowed {
-                    return;
+                    return false;
                 }
                 let view = &mut model.pet_bar.slots[n].view;
                 view.packed ^= AUTOCAST_ON;
@@ -541,9 +591,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         set_book_word(book, word);
                     }
                 }
-                model.pet_autocast_toggles.push(i);
-                model.raise("PET_BAR_UPDATE", Vec::new());
+                true
             });
+            // The send (`0x4bcc4f`), then the signal (`0x4bcc81`).
+            if flipped {
+                super::calls::submit(lua, super::ScriptCall::Pet(PetCall::ToggleAutocast(i)))?;
+                super::tick::verb(lua, |model| model.raise("PET_BAR_UPDATE", Vec::new()));
+            }
             Ok(())
         })?,
     )?;
@@ -707,12 +761,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         )?;
     }
 
+    // `0x4bd650`, with no gate: the host sends and lowers the latch, and signals the repaint.
     g.set(
         "PetStopAttack",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.pet_stop_attacks += 1;
-            Ok(())
+            super::calls::submit(lua, super::ScriptCall::Pet(PetCall::StopAttack))
         })?,
     )?;
 
@@ -740,38 +793,41 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             // `SendPetAbandon 0x4bd740` opens on the gate's tag 2 (`0x4bd74b`).
             if protected::gate(lua, Tag::CAST) {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.pet_abandons += 1;
+                super::calls::submit(lua, super::ScriptCall::Pet(PetCall::Abandon))?;
             }
             Ok(())
         })?,
     )?;
 
-    // The menu row itself, with no confirm (`UnitPopup.lua:591`).
+    // The menu row itself, with no confirm (`UnitPopup.lua:591`): `PressPetDismiss 0x4bd6e0`
+    // presses the Dismiss word with a zero target (`0x4bd701`-`0x4bd70e`), behind the press's own
+    // tag-2 gate, then signals `PET_DISMISS_START` with 10000 (`0x4bd713`-`0x4bd722`), whether or not
+    // the press sent.
     g.set(
         "PetDismiss",
         lua.create_function(|lua, ()| {
-            // `PressPetDismiss 0x4bd6e0` re-enters `PressPetAction`, behind its tag-2 gate.
             if protected::gate(lua, Tag::CAST) {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.pet_dismisses += 1;
+                super::calls::submit(lua, super::ScriptCall::PetOrder(PET_DISMISS_WORD))?;
             }
+            super::tick::verb(lua, |model| {
+                model.raise(
+                    "PET_DISMISS_START",
+                    vec![super::ScriptValue::Int(10_000)],
+                )
+            });
             Ok(())
         })?,
     )?;
 
-    // A number coerces, as `lua_tostring` does (`0x6f3690` → `0x6f7c80`); an empty or over-long
-    // name is still queued, since the reference raises `ERR_NULL_PETNAME` or truncates at send.
+    // `0x4be4e0`: the name as `lua_tostring` reads it (`0x6f3690`), a number coerced and anything
+    // else none, handed to `0x4bd840`, whose gates and send the host runs.
     g.set(
         "PetRename",
-        lua.create_function(|lua, name: Option<mlua::String>| {
-            let Some(name) = name else {
-                return Ok(());
-            };
-            let name = name.to_str()?.to_string();
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.pet_renames.push(name);
-            Ok(())
+        lua.create_function(|lua, name: Value| {
+            let name = lua
+                .coerce_string(name)?
+                .map(|s| String::from_utf8_lossy(&s.as_bytes()).into_owned());
+            super::calls::submit(lua, super::ScriptCall::Pet(PetCall::Rename(name)))
         })?,
     )?;
 
@@ -788,6 +844,7 @@ mod tests {
     #[test]
     fn pet_time_remaining_counts_down_to_the_expiry() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert!(s
             .eval::<Option<f64>>("return GetPetTimeRemaining()")
             .unwrap()
@@ -843,6 +900,7 @@ mod tests {
     #[test]
     fn slot_info_reads_and_out_of_range_is_one_nil() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert!(s.eval::<bool>("return PetHasActionBar() == nil").unwrap());
         assert!(s.eval::<bool>("return GetPetActionInfo(1) == nil").unwrap());
 
@@ -900,6 +958,7 @@ mod tests {
     #[test]
     fn cooldown_triple_stamps_to_the_vm_clock_and_goes_cold() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.tick(10.0); // GetTime == 10
         s.set_pet_actions(true, true, true, slots());
 
@@ -957,6 +1016,7 @@ mod tests {
     #[test]
     fn a_slot_autocast_toggle_repaints_in_place() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_pet_book(crate::script::PetBookState {
             token: Some("PET".into()),
             slots: vec![crate::script::SpellSlotView {
@@ -996,6 +1056,7 @@ mod tests {
     #[test]
     fn attack_active_is_a_per_slot_boolean() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_pet_actions(true, true, true, slots());
         assert!(s.eval::<bool>("return IsPetAttackActive(1)").unwrap());
         assert!(!s.eval::<bool>("return IsPetAttackActive(2)").unwrap());
@@ -1008,6 +1069,7 @@ mod tests {
     #[test]
     fn the_menu_predicates_fork_the_rows_and_the_verbs_queue() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
 
         // No pet pushed: every row is off.
         assert!(s
@@ -1038,12 +1100,18 @@ mod tests {
         assert_eq!(s.take_pet_gives_up(), (1, 2));
         assert_eq!(s.take_pet_gives_up(), (0, 0), "drain empties");
 
-        // An empty name is queued for the send's error, a number coerces, no argument queues none.
+        // Every call goes to the sender, whose gates raise the errors (`0x4bd840`): a number
+        // coerces, and no argument is no name (`0x6f3690`).
         s.run("PetRename(\"Bruce\") PetRename(\"\") PetRename(7) PetRename()")
             .unwrap();
         assert_eq!(
             s.take_pet_renames(),
-            vec!["Bruce".to_string(), String::new(), "7".to_string()]
+            vec![
+                Some("Bruce".to_string()),
+                Some(String::new()),
+                Some("7".to_string()),
+                None
+            ]
         );
         assert!(s.take_pet_renames().is_empty(), "drain empties");
     }
@@ -1051,6 +1119,7 @@ mod tests {
     #[test]
     fn pushing_the_bar_leaves_the_stats_and_the_menu_alone() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_pet_menu(true, true);
         s.set_pet_stats(
             true,
@@ -1072,6 +1141,7 @@ mod tests {
     #[test]
     fn a_disabled_bar_is_still_a_bar() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_pet_actions(true, false, true, slots());
         assert_eq!(s.eval::<i64>("return PetHasActionBar()").unwrap(), 1);
         assert!(s
@@ -1189,6 +1259,7 @@ mod tests {
     #[test]
     fn has_full_control_follows_the_hosts_flag() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert_eq!(s.eval::<i64>("return HasFullControl()").unwrap(), 1);
         s.set_player_control(false);
         assert!(s.eval::<bool>("return HasFullControl() == nil").unwrap());
@@ -1199,6 +1270,7 @@ mod tests {
     #[test]
     fn the_pet_icon_answers_a_path_or_a_real_nil() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert!(s.eval::<bool>("return GetPetIcon() == nil").unwrap());
 
         s.set_pet_stats(true, hunter_stats());
@@ -1235,6 +1307,7 @@ mod tests {
     #[test]
     fn a_hunters_pet_answers_every_stat_binding() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_pet_stats(true, hunter_stats());
 
         assert!(s
@@ -1262,6 +1335,7 @@ mod tests {
     #[test]
     fn a_non_hunter_pet_fails_three_different_ways() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_pet_stats(
             true,
             PetStats {
@@ -1293,6 +1367,7 @@ mod tests {
     #[test]
     fn happiness_bucket_zero_is_not_the_failure_case() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_pet_stats(
             true,
             PetStats {
@@ -1327,6 +1402,7 @@ mod tests {
     #[test]
     fn unit_creature_family_is_nil_on_every_absent_path() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         // No pet pushed.
         assert!(s
             .eval::<bool>(r#"return UnitCreatureFamily("pet") == nil"#)
@@ -1369,6 +1445,7 @@ mod tests {
     #[test]
     fn get_pet_food_types_returns_one_value_per_diet() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert_eq!(s.arity("GetPetFoodTypes()").unwrap(), 0);
 
         s.set_pet_stats(true, hunter_stats());
@@ -1398,6 +1475,7 @@ mod tests {
     #[test]
     fn the_family_word_answers_for_a_non_hunter_pet() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_pet_stats(
             true,
             PetStats {
@@ -1420,6 +1498,7 @@ mod tests {
     #[test]
     fn a_held_pet_action_answers_the_polls_now() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.tick(10.0);
         let mut v = slots();
         v[1].cooldown = Some((0, 1, false));
@@ -1441,6 +1520,7 @@ mod tests {
     fn pet_presses_apply_in_the_call_with_a_host_lent() {
         use crate::script::ScriptCall;
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_pet_actions(true, true, true, slots());
         assert_eq!(
             crate::script::host::test_support::applied_in_call(&mut s, "CastPetAction(1)"),
@@ -1491,10 +1571,7 @@ mod tests {
         s.keep_calls();
         s.set_pet_actions(true, true, true, slots());
         for i in [0, 12] {
-            let e = s
-                .run(&format!("CastPetAction({i})"))
-                .unwrap_err()
-                .to_string();
+            let e = s.run(&format!("CastPetAction({i})")).unwrap_err().to_string();
             assert!(e.contains("Invalid slot in CastPetAction"), "{i}: {e}");
         }
         assert!(s.take_pet_actions().is_empty());
@@ -1513,10 +1590,7 @@ mod tests {
         assert!(s.cursor_payload().is_some(), "Claw is held");
         let _ = s.take_sounds();
         s.run("CastPetAction(3)").unwrap();
-        assert!(
-            s.take_pet_actions().is_empty(),
-            "the held action is dropped, not cast"
-        );
+        assert!(s.take_pet_actions().is_empty(), "the held action is dropped, not cast");
         assert!(s.take_sounds().is_empty());
         assert!(s.cursor_payload().is_none(), "the cursor cleared");
         assert_eq!(

@@ -19,17 +19,18 @@ pub(crate) use bar::active_aura_press;
 mod drain;
 mod menu;
 mod net;
+mod steps;
 mod unit;
 mod usable;
 // The predicate `0x4bcf70` over what the caller already holds, for the action bar's pet legs.
 pub(crate) use usable::actions_usable as pet_actions_usable;
 
 use bar::{feed_pet_bar, fire_pet_cooldown_events};
-pub(crate) use drain::drain_pet_actions;
-// A pet bar press, applied in call order by `crate::script_calls`.
+// A pet bar press and the pet's other verbs, applied in call order by `crate::script_calls`.
 pub(crate) use drain::pet_stop_on_old_target_clear;
 pub(crate) use drain::{cast_pet_press, PetPress, PetStep};
-use menu::{drain_pet_menu, feed_pet_menu};
+use menu::feed_pet_menu;
+pub(crate) use steps::PetSteps;
 pub(crate) use unit::feed_pet_unit;
 
 #[cfg(test)]
@@ -94,9 +95,8 @@ impl Plugin for UiPetPlugin {
         app.init_resource::<PetBar>().add_systems(
             Update,
             (
-                // Feeds ride the unit feed, before the VM ticks; drains run after the input pass so
-                // a click is sent that frame (a press is a script call, `PetPress`). The old-target
-                // clear precedes the bar feed so Attack
+                // Feeds ride the unit feed, before the VM ticks; every verb is a script call
+                // (`PetPress`, `PetSteps`). The old-target clear precedes the bar feed so Attack
                 // goes dark the frame the selection moves.
                 pet_stop_on_old_target_clear
                     .in_set(UnitFeed)
@@ -121,10 +121,6 @@ impl Plugin for UiPetPlugin {
                     .in_set(crate::ui_unit::field_events::FieldEventPushes)
                     .after(crate::ui_pet_stats::PetSnapshot),
                 feed_pet_menu.in_set(UnitFeed),
-                // After this frame's presses, as the one drain before it ran them ahead of the
-                // toggles, stops and writes.
-                drain_pet_actions.in_set(crate::ui_script::UiDrain),
-                drain_pet_menu.in_set(crate::ui_script::UiDrain),
             ),
         );
     }

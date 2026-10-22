@@ -1,5 +1,5 @@
-//! The bar's click intents onto the wire, and the state a press latches locally: vmangos answers
-//! no command or reaction press (`PetHandler.cpp:81-99`) and no autocast toggle
+//! The bar's presses onto the wire, and the state a press latches locally: vmangos answers no
+//! command or reaction press (`PetHandler.cpp:81-99`) and no autocast toggle
 //! (`PetHandler.cpp:203-300`), and sends `SMSG_PET_MODE` only from `Pet::SetEnabled`
 //! (`Pet.cpp:2362-2377`), so the client applies them itself until the next `SMSG_PET_SPELLS`.
 
@@ -316,75 +316,6 @@ pub(crate) fn arm_owed_pet_gcds(
         };
         arm_pet_gcd(&mut bar, spell_id, d, &mods, at);
     }
-}
-
-/// Send the bar's other intents under [`PetBar`]'s pet guid: the autocast toggles, the stops and
-/// the drag writes. A toggle asks the usability predicate first (`0x4bcbcf`), so on an unusable
-/// pet it flips nothing and sends nothing. The stops do not (`0x4bd650`); the drag's writes were
-/// gated where the VM applied them (`0x4bc9d0`), on the answer the bar last pushed.
-pub(crate) fn drain_pet_actions(
-    mut vm: crate::script_calls::VmWith<ResMut<'static, PetBar>>,
-    commands: Res<NetCommands>,
-    pet: PetUnit,
-) {
-    vm.turn(|script, mut bar| {
-        let Some(script) = script else {
-            return;
-        };
-        let toggles = script.take_pet_autocast_toggles();
-        let stops = script.take_pet_stop_attacks();
-        let writes = script.take_pet_set_actions();
-        if toggles.is_empty() && stops == 0 && writes.is_empty() {
-            return;
-        }
-        let pet_guid = bar.spells.pet_guid;
-        if pet_guid == 0 {
-            debug!("ui_pet: dropping queued pet intents — the bar is gone");
-            return;
-        }
-        // The repaint is `latch_press`'s alone, not every click's: a refused `TogglePetAutocast`
-        // (`0x4bcbf7`: any right-click on a token) signals nothing, so after `OnClick`'s
-        // `SetChecked(0)` that button stays unlit until the next repaint, as in the reference.
-        for slot in toggles {
-            if !pet.actions_usable(&bar) {
-                debug!(
-                "ui_pet: autocast toggle on slot {slot} refused, the pet's actions are not usable"
-            );
-                continue;
-            }
-            let Some(flipped) = toggle_slot_autocast(&mut bar, slot) else {
-                continue;
-            };
-            debug!(
-                "ui_pet: autocast {} for spell {} (slot {slot})",
-                flipped.autocast_on(),
-                flipped.action()
-            );
-            let _ = commands.0.send(ClientCommand::PetSetAction {
-                pet_guid,
-                // Lua slots are 1-based, the wire's 0-based; `slot_entry` already refused 0.
-                entries: vec![(slot - 1, flipped.packed)],
-            });
-        }
-        for _ in 0..stops {
-            if stop_pet_attack(&mut bar, &commands) {
-                debug!("ui_pet: stop attack");
-            }
-        }
-        // The drag's `(0-based position, word)` pairs: mirrored here and sent as one batch, since
-        // the server tells one pair from two by body size.
-        for entries in writes {
-            for &(position, packed) in &entries {
-                if let Some(e) = bar.spells.bar.get_mut(position as usize) {
-                    *e = PetActionEntry::from(packed);
-                }
-            }
-            debug!("ui_pet: bar write {entries:?}");
-            let _ = commands
-                .0
-                .send(ClientCommand::PetSetAction { pet_guid, entries });
-        }
-    })
 }
 
 /// `TogglePetAutocast`'s local half (`0x4bcbb0`): flip bit 30 in place and return the whole word

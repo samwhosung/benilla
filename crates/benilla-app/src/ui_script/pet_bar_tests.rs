@@ -114,6 +114,7 @@ fn texture_rect(
 fn the_shipped_pet_bar_drives_end_to_end() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_pet_bar(&s);
     declare_token_strings(&s);
@@ -273,6 +274,7 @@ fn clicks_route_through_the_attack_toggle_fork() {
 fn a_click_drops_the_ring_and_the_repaint_restores_it() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_pet_bar(&s);
     declare_token_strings(&s);
@@ -314,6 +316,7 @@ fn a_click_drops_the_ring_and_the_repaint_restores_it() {
 fn a_disabled_bar_greys_rather_than_hides() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_pet_bar(&s);
     declare_token_strings(&s);
@@ -347,6 +350,7 @@ fn a_disabled_bar_greys_rather_than_hides() {
 /// The pet bar with the bottom-left multibar up or not: shelf strips drawn, top of Attack's icon.
 fn pet_bar_row(with_multibar: bool) -> (usize, f32) {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_pet_bar(&s);
     if with_multibar {
@@ -401,6 +405,7 @@ fn the_pet_bar_rises_and_sheds_its_shelf_over_the_bottom_left_bar() {
 fn dragging_a_pet_spell_between_slots_moves_it_through_the_shipped_handlers() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_pet_bar(&s);
     declare_token_strings(&s);
@@ -466,6 +471,7 @@ fn dragging_a_pet_spell_between_slots_moves_it_through_the_shipped_handlers() {
 fn the_lock_stops_the_pet_bar_drag_but_not_its_shift_click() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_pet_bar(&s);
     declare_token_strings(&s);
@@ -514,6 +520,7 @@ fn the_lock_stops_the_pet_bar_drag_but_not_its_shift_click() {
 fn shift_clicking_a_pet_button_picks_it_up_rather_than_casting() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_pet_bar(&s);
     declare_token_strings(&s);
@@ -600,6 +607,7 @@ const CLAW_BUTTON: (f32, f32) = (201.0, 71.0);
 
 fn hovered_pet_bar() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     // The app's registries: `BONUSACTIONBUTTON1` binds CTRL-1 and `UberTooltips` reads "1".
     crate::ui_script::load_stock_bindings(&mut s);

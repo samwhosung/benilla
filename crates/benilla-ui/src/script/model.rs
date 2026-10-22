@@ -648,8 +648,6 @@ pub(crate) struct Model {
     pub(crate) macro_icons: Vec<String>,
     /// What builds `macro_icons` while it is empty; `None` builds nothing.
     pub(crate) macro_icon_source: Option<MacroIconSource>,
-    /// `ToggleSpellAutocast` ids for `CMSG_PET_SPELL_AUTOCAST` (`0x2F3`), which names a spell.
-    pub(crate) pet_spell_autocasts: Vec<u32>,
     /// The player's cast state, which `IsCurrentAction`, `IsAutoRepeatAction` and
     /// `SpellStopCasting()` (`0x6e6e80`) read: the last's 1 or nil matters, as the ESC chain
     /// (`UIParent.lua:1489`) reaches `CloseAllWindows()` on nil.
@@ -728,24 +726,12 @@ pub(crate) struct Model {
 
     /// The pet bar's ten slots and two bar-wide bits, replaced whole by every `SMSG_PET_SPELLS`.
     pub(crate) pet_bar: super::pet::PetBarState,
-    /// 1-based slot indices `TogglePetAutocast` queued.
-    pub(crate) pet_autocast_toggles: Vec<u32>,
-    /// `PetStopAttack()` calls.
-    pub(crate) pet_stop_attacks: u32,
     /// `HasFullControl`, the reference's `[0xb4b3e4]`: set by `SMSG_CLIENT_CONTROL_UPDATE` for the
     /// player, boots 1, and every cast, item and cursor gate refuses at 0.
     pub(crate) player_control: bool,
     /// The on-use spells that pass the item dispatcher's control gate without control of the
     /// character (`0x5d8ec0`-`0x5d8f6a`), fed by the app.
     pub(crate) control_bypass: HashSet<u32>,
-    /// One `CMSG_PET_SET_ACTION` per entry, its one or two `(position, packed word)` pairs: the
-    /// server tells the forms apart by body size, so a move's two pairs must not be flattened.
-    pub(crate) pet_set_actions: Vec<Vec<(u32, u32)>>,
-    /// `PetAbandon()` and `PetDismiss()` calls, counted apart though both end at one opcode.
-    pub(crate) pet_abandons: u32,
-    pub(crate) pet_dismisses: u32,
-    /// Names `PetRename` queued, from the `PETRENAMECONFIRM` popup.
-    pub(crate) pet_renames: Vec<String>,
 
     /// Bag contents by API bag id (0 is the backpack).
     pub(crate) containers: HashMap<i64, container::ContainerState>,
@@ -1601,7 +1587,6 @@ impl Model {
             macro_bindings: HashMap::new(),
             macro_icons: Vec::new(),
             macro_icon_source: None,
-            pet_spell_autocasts: Vec::new(),
             cast_view: Default::default(),
             spell_targeting: false,
             spell_targetable_units: HashSet::new(),
@@ -1639,14 +1624,8 @@ impl Model {
             tutorial_resets: 0,
             shapeshift_forms: Vec::new(),
             pet_bar: super::pet::PetBarState::default(),
-            pet_autocast_toggles: Vec::new(),
-            pet_stop_attacks: 0,
             player_control: true,
             control_bypass: HashSet::new(),
-            pet_set_actions: Vec::new(),
-            pet_abandons: 0,
-            pet_dismisses: 0,
-            pet_renames: Vec::new(),
             containers: HashMap::new(),
             container_cooldowns: HashMap::new(),
             worn_cooldowns: HashMap::new(),

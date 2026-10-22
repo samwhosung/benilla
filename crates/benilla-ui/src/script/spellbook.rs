@@ -168,10 +168,14 @@ impl super::UiScript {
         })
     }
 
-    /// Drain the spell ids `ToggleSpellAutocast` queued: `CMSG_PET_SPELL_AUTOCAST` (0x2F3, sent by
-    /// `0x4bccb0`) names a spell id, where the pet bar's toggle sends `CMSG_PET_SET_ACTION`.
+    /// The spell ids the `ToggleSpellAutocast` calls a harness VM kept carry:
+    /// `CMSG_PET_SPELL_AUTOCAST` (0x2F3, sent by `0x4bccb0`) names a spell id, where the pet bar's
+    /// toggle sends `CMSG_PET_SET_ACTION`.
     pub fn take_pet_spell_autocasts(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().pet_spell_autocasts)
+        self.take_calls_where(|c| match c {
+            ScriptCall::Pet(super::PetCall::SpellAutocast(spell_id)) => Some(*spell_id),
+            _ => None,
+        })
     }
 
     /// The pushed book, for resolving a macro's spell by the rule `CastSpellByName` uses, so the
@@ -589,9 +593,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // ToggleSpellAutocast(id, bookType), the pet book's right click (`0x4b4240` → `0x4bccb0`): on a
     // usable pet (`0x4bccce`) an autocast-allowed word (`0x4bccf5`) flips bit 30, every bar slot
-    // holding the same action takes the bit (`0x4bcd20`-`0x4bcd5a`), the app's
-    // `CMSG_PET_SPELL_AUTOCAST` is queued, and `PET_BAR_UPDATE` fires before the verb returns
-    // (`0x4bcdcb`).
+    // holding the same action takes the bit (`0x4bcd20`-`0x4bcd5a`), the host sends
+    // `CMSG_PET_SPELL_AUTOCAST` inside the call, and `PET_BAR_UPDATE` fires before the verb
+    // returns (`0x4bcdcb`).
     g.set(
         "ToggleSpellAutocast",
         lua.create_function(|lua, (id, book_type): (Value, Value)| {
@@ -600,16 +604,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if !is_pet_book(&book_type) || !protected::gate(lua, Tag::CAST) {
                 return Ok(());
             }
-            super::tick::verb(lua, |model| {
+            let flipped = super::tick::verb(lua, |model| {
                 if !model.pet_bar.actions_usable {
-                    return;
+                    return None;
                 }
-                let Some(book) = slot_index(id).and_then(|i| model.pet_book.slots.get_mut(i))
-                else {
-                    return;
-                };
+                let book = slot_index(id).and_then(|i| model.pet_book.slots.get_mut(i))?;
                 if !book.autocast.is_some_and(|(allowed, _)| allowed) {
-                    return;
+                    return None;
                 }
                 let word = book.packed ^ super::pet::AUTOCAST_ON;
                 super::pet::set_book_word(book, word);
@@ -622,9 +623,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         view.autocast_enabled = view.packed & super::pet::AUTOCAST_ON != 0;
                     }
                 }
-                model.pet_spell_autocasts.push(spell_id);
-                model.raise("PET_BAR_UPDATE", Vec::new());
+                Some(spell_id)
             });
+            if let Some(spell_id) = flipped {
+                super::calls::submit(
+                    lua,
+                    ScriptCall::Pet(super::PetCall::SpellAutocast(spell_id)),
+                )?;
+                super::tick::verb(lua, |model| model.raise("PET_BAR_UPDATE", Vec::new()));
+            }
             Ok(())
         })?,
     )?;
@@ -1400,6 +1407,7 @@ mod tests {
     #[test]
     fn a_book_autocast_toggle_repaints_book_and_bar_in_place() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_pet_book(pet_book());
         let growl = crate::script::PetActionView {
             name: Some("Growl".into()),
@@ -1438,6 +1446,7 @@ mod tests {
     #[test]
     fn only_an_autocastable_pet_slot_queues_a_toggle() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_spellbook(book());
         s.set_pet_book(pet_book());
         s.set_pet_actions(true, true, true, Vec::new());

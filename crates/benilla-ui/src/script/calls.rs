@@ -191,6 +191,12 @@ pub enum ScriptCall {
     /// A bag, cursor or paper-doll verb's send or answer ([`super::ItemCall`]): its packet, its
     /// question or its unlock inside the call.
     Item(super::ItemCall),
+    /// A pet verb past its binding's checks ([`super::PetCall`]): its packet, the bar it writes
+    /// and the repaint it signals inside the call.
+    Pet(super::PetCall),
+    /// A stable request past its binding's checks ([`super::StableCall`]): its packet inside the
+    /// call.
+    Stable(super::StableCall),
 }
 
 /// The mode the four `TargetNearest*` shims hand the TAB cycler `0x493f60`, the only byte that

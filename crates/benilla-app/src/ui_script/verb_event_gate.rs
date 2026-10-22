@@ -38,13 +38,6 @@ const GAP: &[(&str, &str, &str)] = &[
         "the same thunk and the same no-op as CollapseCraftSkillLine",
     ),
     (
-        "PetDismiss",
-        "PET_DISMISS_START",
-        "the worker 0x4bd6e0 sends the dismiss and fires this with a duration (`%d`, 10000); \
-         no shipped file listens, the dismiss reaches the \
-         wire through the app's drain, and the pet frame follows the unit's departure",
-    ),
-    (
         "SelectGossipOption",
         "GOSSIP_ENTER_CODE",
         "a coded option raises the code-entry popup in the reference (the worker 0x4e2320); here \

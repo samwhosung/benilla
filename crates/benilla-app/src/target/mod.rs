@@ -391,14 +391,8 @@ impl Plugin for TargetPlugin {
                     (
                         by_name::target_by_name_requests,
                         by_name::assist_requests,
-                        // After the pet bar's and pet book's drains, which write `PetBar`. The
-                        // two commute: the `FollowUnit` resolver reads only the pet's guid
-                        // (`spells.pet_guid`), which neither writes; the order keeps them declared.
                         // After the follow drain, so a `FollowUnit` starts the frame it is made.
-                        by_name::follow_requests
-                            .after(crate::ui_pet::drain_pet_actions)
-                            .after(crate::ui_pet_book::drain_pet_book)
-                            .after(crate::ui_follow::drain_follow),
+                        by_name::follow_requests.after(crate::ui_follow::drain_follow),
                     )
                         .chain(),
                     scan::auto_acquire,
