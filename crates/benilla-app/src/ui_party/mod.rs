@@ -205,7 +205,7 @@ pub struct ListOutcome {
 /// A group event as a packet's handler signals it; only the invite carries an argument
 /// (benilla-re `tables/event_args.tsv`).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum GroupSignal {
+pub(crate) enum GroupSignal {
     /// `PARTY_MEMBERS_CHANGED`: every list (`0x5e6c66`), a party seat's name answer (`0x4e8495`),
     /// the raid's last pending name (`0x4badb0`) and every ending (`0x4e85c5`).
     MembersChanged,
@@ -223,6 +223,9 @@ pub enum GroupSignal {
     /// `0x48f420`, event `0x118`). Its partner `PARTY_INVITE_CANCEL` is `SMSG_GROUP_CANCEL`'s
     /// alone (`0x5e6784` → `0x48f440`), which vmangos never sends and benilla does not read.
     InviteRequest(String),
+    /// A list handler's line, shown in its place among the list's signals (`0x5e6c19`,
+    /// `0x5e6cc1`, `0x5e6d37`, `0x4e87fa`'s setter lines, the raid roster's).
+    Line(UiError),
 }
 
 /// The group events signalled, oldest first, each stamped where its handler signals it
@@ -291,6 +294,15 @@ impl SignalLog {
         self.base = self.end();
         self.entries.clear();
         self.aged = self.base;
+    }
+
+    /// Every entry but the lines, which leaves the log empty.
+    #[cfg(test)]
+    pub(crate) fn take_events(&mut self) -> Vec<GroupSignal> {
+        self.take()
+            .into_iter()
+            .filter(|s| !matches!(s, GroupSignal::Line(_)))
+            .collect()
     }
 
     /// Every entry, which leaves the log empty.
@@ -371,16 +383,7 @@ impl GroupState {
         cached_name: &dyn Fn(u64) -> Option<String>,
     ) -> ListOutcome {
         let missed = |guid: u64| lookup(guid).is_none();
-        // Every path of the handler reaches the event (`0x5e6c66`), the leave list and a party's
-        // list alike, and then the leader store (`0x5e6c7e` into `0x4e8250`), against a cell the
-        // handler's own emptier zeroed first (`0x5e6b19` into `0x4e84a0(0)`, `0x4e85a9`): it
-        // signals for every list naming a leader, the same one included, and returns on the
-        // all-zero list's 0 (`0x4e8267`).
         self.listed = true;
-        self.signal(GroupSignal::MembersChanged);
-        if leader != 0 {
-            self.signal(GroupSignal::LeaderChanged);
-        }
         let mut out = ListOutcome::default();
         let raid = group_type == GROUPTYPE_RAID;
         // The two stores as this list finds them: the party slots unless an opcode emptied them,
@@ -409,15 +412,24 @@ impl GroupState {
                 // Seated into no group: no line, but the chime (`0x5e6dc6`).
                 out.invite_accept = true;
             } else if !raid && !held_slots.contains(&m.guid) {
-                // New to a party we held (`0x5e6c19`, `0x5e6c24`).
-                out.lines.push(UiError::s("ERR_JOINED_GROUP_S", &m.name));
+                // New to a party we held, inside the seat loop (`0x5e6c19`, `0x5e6c24`).
+                self.line(&mut out, UiError::s("ERR_JOINED_GROUP_S", &m.name));
                 out.invite_accept = true;
             }
+        }
+        // Every path of the handler reaches the event after the seat loop (`0x5e6c66`), the leave
+        // list and a party's list alike, and then the leader store (`0x5e6c7e` into `0x4e8250`),
+        // against a cell the handler's own emptier zeroed first (`0x5e6b19` into `0x4e84a0(0)`,
+        // `0x4e85a9`): it signals for every list naming a leader, the same one included, and
+        // returns on the all-zero list's 0 (`0x4e8267`).
+        self.signal(GroupSignal::MembersChanged);
+        if leader != 0 {
+            self.signal(GroupSignal::LeaderChanged);
         }
         // A new group we lead: one line, for the last member listed (`0x5e6c94`-`0x5e6cc1`).
         if !held && self_guid.is_some_and(|me| me == leader) {
             if let Some(last) = members.last().filter(|m| !m.name.is_empty()) {
-                out.lines.push(UiError::s("ERR_JOINED_GROUP_S", &last.name));
+                self.line(&mut out, UiError::s("ERR_JOINED_GROUP_S", &last.name));
             }
         }
         // Each seat's `0x4e82d0` call, its argument the row's online bit (`0x5e6c40`): a member
@@ -435,7 +447,7 @@ impl GroupState {
             for guid in &held_slots {
                 if !seated.iter().any(|m| m.guid == *guid) {
                     if let Some(name) = cached_name(*guid) {
-                        out.lines.push(UiError::s("ERR_LEFT_GROUP_S", name));
+                        self.line(&mut out, UiError::s("ERR_LEFT_GROUP_S", name));
                     }
                     released.push(RosterRelease::Departed(*guid));
                 }
@@ -445,7 +457,9 @@ impl GroupState {
         // carries the loot tail (`0x5e6e12`): the lines of what the tail changes, then the event,
         // which it signals whatever the tail says (`0x4e87fa`), ahead of the raid legs.
         if let Some(loot) = loot {
-            out.lines.extend(self.store_loot(loot, cached_name));
+            for line in self.store_loot(loot, cached_name) {
+                self.line(&mut out, line);
+            }
             self.signal(GroupSignal::LootMethodChanged);
         }
         if raid {
@@ -488,13 +502,13 @@ impl GroupState {
                     match lookup(guid) {
                         None => self.name_waits.push(NameWait::Notice(guid, key)),
                         Some(name) if key == ADDED || self_guid.is_some() => {
-                            out.lines.push(UiError::s(key, name));
+                            self.line(&mut out, UiError::s(key, name));
                         }
                         Some(_) => {}
                     }
                 }
             } else {
-                out.lines.push(UiError::key("ERR_RAID_YOU_JOINED"));
+                self.line(&mut out, UiError::key("ERR_RAID_YOU_JOINED"));
                 out.ask_raid_targets = true;
             }
             // The rebuild counts afresh (`0x4ba89e`): each new row's lookup, ours after the
@@ -517,7 +531,7 @@ impl GroupState {
             // list's included; vmangos resends any icons after a party's list for it
             // (`Group.cpp:1358`).
             if raid_held {
-                out.lines.push(UiError::key("ERR_RAID_YOU_LEFT"));
+                self.line(&mut out, UiError::key("ERR_RAID_YOU_LEFT"));
                 self.signal(GroupSignal::RaidRosterUpdate);
             }
             self.raid_targets = [0; 8];
@@ -615,6 +629,12 @@ impl GroupState {
         self.signals.push(signal);
     }
 
+    /// A list's line, shown where its handler shows it (`0x496720`), among its signals.
+    fn line(&mut self, out: &mut ListOutcome, line: UiError) {
+        out.lines.push(line.clone());
+        self.signal(GroupSignal::Line(line));
+    }
+
     /// A name answer for `guid`, found or refused, and what it shows: a pending node runs its
     /// callbacks either way (`0x556f05`, `0x556f91`). Each party seat's signals
     /// `PARTY_MEMBERS_CHANGED` (`0x4e8495`); each raid row's counts the pending names down and,
@@ -635,7 +655,13 @@ impl GroupState {
         for wait in run {
             match wait {
                 NameWait::Seat(_) => self.signal(GroupSignal::MembersChanged),
-                NameWait::Notice(_, key) => lines.extend(filed.map(|name| UiError::s(key, name))),
+                NameWait::Notice(_, key) => {
+                    if let Some(name) = filed {
+                        let line = UiError::s(key, name);
+                        lines.push(line.clone());
+                        self.signal(GroupSignal::Line(line));
+                    }
+                }
                 NameWait::Row(_) => {
                     if self.raid_names_pending != 0 {
                         self.raid_names_pending -= 1;
@@ -1041,7 +1067,7 @@ mod tests {
         let list = |g: &mut GroupState, members: Vec<GroupMemberEntry>, leader| {
             let loot = (!members.is_empty()).then_some(tail);
             g.apply_list(0, 0, members, leader, loot, Some(ME));
-            g.signals.take()
+            g.signals.take_events()
         };
         let full = [
             MembersChanged,
@@ -1079,21 +1105,22 @@ mod tests {
         );
 
         g.leave_group();
-        assert_eq!(g.signals.take(), [], "leaving is not a list");
+        assert_eq!(g.signals.take_events(), [], "leaving is not a list");
         assert!(g.listed);
         g.clear_session();
         assert!(!g.listed);
     }
 
-    /// One list's signals in the handler's order: the members change (`0x5e6c66`), the leader
-    /// store (`0x5e6c7e`), the loot store (`0x5e6e52`), then the raid legs (`0x5e6eb4`,
-    /// `0x5e6ebb`), here the drop's roster update (`0x4ba57b`) and board clear (`0x4ba5db`).
+    /// One list's signals and lines in the handler's order: the members change (`0x5e6c66`), the
+    /// leader store (`0x5e6c7e`), the loot store's lines then its event (`0x5e6e52` →
+    /// `0x4e86f0`, `0x4e87fa`), then the raid legs (`0x5e6eb4`, `0x5e6ebb`), here the drop's line,
+    /// its roster update (`0x4ba57b`) and the board clear (`0x4ba5db`).
     #[test]
     fn a_list_signals_in_its_handlers_order() {
         use GroupSignal::*;
         let mut g = GroupState::default();
         g.apply_list(1, 0, vec![sub("Alice", 1, 0)], ME, None, Some(ME));
-        g.signals.take();
+        g.signals.take_events();
         let loot = GroupLootInfo {
             method: 2,
             master: 1,
@@ -1105,7 +1132,14 @@ mod tests {
             [
                 MembersChanged,
                 LeaderChanged,
+                Line(UiError::key("ERR_SET_LOOT_MASTER")),
+                Line(UiError::s("ERR_NEW_LOOT_MASTER_S", "Alice")),
+                Line(UiError::args(
+                    "ERR_SET_LOOT_THRESHOLD_S",
+                    vec![FillArg::Global("ITEM_QUALITY3_DESC".into())]
+                )),
                 LootMethodChanged,
+                Line(UiError::key("ERR_RAID_YOU_LEFT")),
                 RaidRosterUpdate,
                 RaidTargetUpdate
             ]
@@ -1147,7 +1181,7 @@ mod tests {
         let mut g = GroupState::default();
         let raid = |g: &mut GroupState, members: Vec<GroupMemberEntry>| {
             g.apply_list(1, 0, members, 1, None, Some(ME));
-            g.signals.take()
+            g.signals.take_events()
         };
 
         let (alice, bob) = (sub("Alice", 1, 0), sub("Bob", 2, 1));
@@ -1179,7 +1213,7 @@ mod tests {
         );
 
         g.leave_group();
-        assert_eq!(g.signals.take(), [], "leaving is not a list");
+        assert_eq!(g.signals.take_events(), [], "leaving is not a list");
     }
 
     /// A list that is not a raid runs no roster writer, so a party's list signals nothing; one that
@@ -1190,7 +1224,7 @@ mod tests {
         let mut g = GroupState::default();
         let list = |g: &mut GroupState, group_type: u8, members: Vec<GroupMemberEntry>, leader| {
             g.apply_list(group_type, 0, members, leader, None, Some(ME));
-            count(&g.signals.take(), GroupSignal::RaidRosterUpdate)
+            count(&g.signals.take_events(), GroupSignal::RaidRosterUpdate)
         };
         let party = vec![sub("Alice", 1, 0)];
 
@@ -1250,11 +1284,11 @@ mod tests {
                 &|guid| (!missing.contains(&guid)).then(String::new),
                 &|_| Some(String::new()),
             );
-            g.signals.take()
+            g.signals.take_events()
         };
         let answer = |g: &mut GroupState, guid: u64| {
             let _ = g.apply_player_name(guid, None);
-            g.signals.take()
+            g.signals.take_events()
         };
 
         assert_eq!(
@@ -1313,24 +1347,24 @@ mod tests {
         };
         list(&mut g);
         list(&mut g);
-        g.signals.take();
+        g.signals.take_events();
         let _ = g.apply_player_name(2, None);
-        assert_eq!(g.signals.take(), [], "Bob holds no seat of ours");
+        assert_eq!(g.signals.take_events(), [], "Bob holds no seat of ours");
         let _ = g.apply_player_name(1, None);
         assert_eq!(
-            g.signals.take(),
+            g.signals.take_events(),
             [MembersChanged, MembersChanged],
             "one per list"
         );
         let _ = g.apply_player_name(1, None);
-        assert_eq!(g.signals.take(), []);
+        assert_eq!(g.signals.take_events(), []);
 
         list(&mut g);
         g.apply_list(0, 0, Vec::new(), 0, None, Some(ME));
-        g.signals.take();
+        g.signals.take_events();
         let _ = g.apply_player_name(1, None);
         assert_eq!(
-            g.signals.take(),
+            g.signals.take_events(),
             [MembersChanged],
             "the group's end leaves the lookup"
         );
@@ -1359,10 +1393,10 @@ mod tests {
         };
         list(&mut g, 1);
         list(&mut g, 0);
-        g.signals.take();
+        g.signals.take_events();
         let _ = g.apply_player_name(1, None);
         assert_eq!(
-            g.signals.take(),
+            g.signals.take_events(),
             [
                 MembersChanged,
                 RaidRosterUpdate,
@@ -1555,12 +1589,12 @@ mod tests {
                 None,
                 Some(ME),
             );
-            g.signals.take();
+            g.signals.take_events();
             end(&mut g);
             assert_eq!(g.party_slots().count(), 0, "ending {i}: the slots");
             assert_eq!(g.leader, 0, "ending {i}: the leader cell");
             assert_eq!(
-                g.signals.take(),
+                g.signals.take_events(),
                 [GroupSignal::MembersChanged],
                 "ending {i}: signalled, and the leader store finds the 0 already there"
             );
@@ -1576,7 +1610,7 @@ mod tests {
                 "ending {i}: the all-zero list drops the raid"
             );
             assert_eq!(
-                count(&g.signals.take(), GroupSignal::LeaderChanged),
+                count(&g.signals.take_events(), GroupSignal::LeaderChanged),
                 0,
                 "ending {i}: and leads nobody new"
             );
@@ -1721,14 +1755,14 @@ mod tests {
             vec![UiError::key("ERR_RAID_YOU_JOINED")],
             "no roster held, so joined again"
         );
-        g.signals.take();
+        g.signals.take_events();
         assert_eq!(
             g.apply_list(0, 0, Vec::new(), ME, None, Some(ME)).lines,
             Vec::new(),
             "no raid to leave"
         );
         assert_eq!(
-            count(&g.signals.take(), GroupSignal::RaidRosterUpdate),
+            count(&g.signals.take_events(), GroupSignal::RaidRosterUpdate),
             0,
             "and none to drop"
         );
@@ -2014,7 +2048,8 @@ mod tests {
     #[test]
     fn every_party_list_clears_the_board_and_signals() {
         let mut g = GroupState::default();
-        let marks = |g: &mut GroupState| count(&g.signals.take(), GroupSignal::RaidTargetUpdate);
+        let marks =
+            |g: &mut GroupState| count(&g.signals.take_events(), GroupSignal::RaidTargetUpdate);
         let party = || vec![member("Ally", 0x22)];
         g.apply_list(0, 0, party(), 0x22, None, None);
         assert_eq!(marks(&mut g), 1, "a party's first list");
@@ -2314,7 +2349,7 @@ mod tests {
                 &cached,
             )
             .lines;
-        let signals = g.signals.take();
+        let signals = g.signals.take_events();
         (lines, signals)
     }
 

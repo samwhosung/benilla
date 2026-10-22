@@ -167,6 +167,16 @@ fn fire_signal(
             }
             return;
         }
+        GroupSignal::Line(line) => {
+            let shown = crate::ui_action::ui_error_text(&line, &|key| {
+                script.lua().globals().get::<String>(key).ok()
+            })
+            .map(|text| crate::ui_action::Shown::keyed(line.key, text));
+            if let Some(shown) = shown {
+                crate::ui_action::show_now(script, sink, "ui_party", shown);
+            }
+            return;
+        }
     };
     script.fire_event(signalled, args);
 }
@@ -2289,11 +2299,11 @@ mod tests {
         use GroupSignal::*;
         let mut g = GroupState::default();
         synthetic_roster(&mut g, None);
-        g.signals.take();
+        g.signals.take_events();
         let same = PartyRequest::LootThreshold(3);
         assert!(test_apply_local(&mut g, &same, Some(ME)));
         assert_eq!(
-            g.signals.take(),
+            g.signals.take_events(),
             [
                 MembersChanged,
                 LeaderChanged,
@@ -2303,7 +2313,7 @@ mod tests {
             "a threshold it already had, under the leader it already had"
         );
         assert!(test_apply_local(&mut g, &PartyRequest::Leave, Some(ME)));
-        assert_eq!(g.signals.take(), [MembersChanged, RaidTargetUpdate]);
+        assert_eq!(g.signals.take_events(), [MembersChanged, RaidTargetUpdate]);
     }
 
     /// The sandbox stands in for the server, whose echo of each group intent is a list.
