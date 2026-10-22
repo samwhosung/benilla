@@ -224,7 +224,8 @@ where
             .collect()
     }
 
-    /// [`Self::values`], each with its watch's place in the notify pass
+    /// The notices of one block's notify on `guid` ([`crate::field_watch::Notified`]), `fields` the
+    /// store now, each with its watch's place in the notify pass
     /// ([`crate::field_watch::in_watch_order`]): the item type watchers `0x5d9360` registers
     /// (`0x468070`) and the visible-item ones of `0x5e2510`, on the type list; the seat watchers
     /// `0x4f8cc0` and `0x4f932a` register on the player and on each bag (`0x467e70`), on the
@@ -441,7 +442,7 @@ where
     /// The unit signals a notice's handler ends in: `NotifyItemSlotChanged` ([`Self::slot_changed`])
     /// closes the destroy (`0x5d87c1`), the stack count's (`0x5d950e`), the entry's once its record
     /// is cached (`0x5d9694`) or answered (`0x5d96d5`), and the enchantment's (`0x5d9b2a`). The
-    /// record set-up's signal is [`Self::created_signal`]'s and [`Self::landed_signals`]'.
+    /// record set-up's signal is [`Self::created_signal`]'s and [`Self::landed_runs`]'.
     pub(crate) fn signals(&self, notice: &ItemNotice) -> Vec<FieldNotice> {
         match *notice {
             ItemNotice::Destroyed { guid, .. }
