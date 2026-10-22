@@ -1015,3 +1015,114 @@ fn a_charged_item_slot_shows_the_uses_left() {
     app.update();
     assert_eq!(jerky_count(&mut app), 2, "|-2| charges, one item");
 }
+
+/// Only `EditMacro` signals a macro's slots (`0x4f1329` into `0x4e5cc0`), inside its call: the feed
+/// pushes a macro slot's new icon and name silently, so a load (`0x4f0600`, which ends in the order
+/// rebuild alone) and a create (`0x4f1010`) signal no slot, and an edit's slots are not signalled
+/// a second time.
+#[test]
+fn the_feed_signals_no_macro_slot_of_its_own() {
+    use benilla_protocol::messages::ACTION_KIND_MACRO;
+    use benilla_ui::script::{MacroState, MacroView};
+
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    let mut app = App::new();
+    let mut actions = PlayerActions::default();
+    // Macro 1 on slots 1 and 3, macro 2 on slot 2.
+    for (slot, id) in [(0u8, 1u32), (1, 2), (2, 1)] {
+        actions.buttons.insert(
+            slot,
+            ActionButton {
+                slot,
+                action: id,
+                kind: ACTION_KIND_MACRO,
+            },
+        );
+    }
+    actions.dirty = true;
+    app.insert_resource(actions)
+        .init_resource::<Items>()
+        .init_resource::<crate::net::GuidIndex>()
+        .init_resource::<MountErrors>()
+        .init_resource::<PetTameFailures>()
+        .init_resource::<UiErrorKeys>()
+        .init_resource::<UiErrorTexts>()
+        .init_resource::<crate::ui_chat::ChatLog>()
+        .init_resource::<crate::sound::MessageSounds>()
+        .insert_resource(NetCommands(tx));
+    let mut script = UiScript::new().unwrap();
+    script.set_macro_icons(vec!["Interface\\Icons\\Spell_Fire_FlameBolt".into()]);
+    let view = |name: &str, icon: &str| MacroView {
+        name: name.into(),
+        texture: Some(format!("Interface\\Icons\\{icon}")),
+        ..Default::default()
+    };
+    script.set_macros(MacroState::from_scopes(
+        vec![view("a", "Ability_Ambush"), view("b", "Ability_BackStab")],
+        Vec::new(),
+    ));
+    app.insert_non_send_resource(script);
+    app.add_systems(Update, feed_actions);
+    app.update();
+    app.world_mut()
+        .non_send_resource::<UiScript>()
+        .run(
+            r#"
+            SLOT_EVENTS = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
+            f:SetScript("OnEvent", function() table.insert(SLOT_EVENTS, arg1) end)
+            "#,
+        )
+        .unwrap();
+    let events = |app: &mut App| {
+        app.world_mut()
+            .non_send_resource::<UiScript>()
+            .eval::<Vec<i64>>("local t = SLOT_EVENTS SLOT_EVENTS = {} return t")
+            .unwrap()
+    };
+
+    // A load with new icons for both macros.
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .set_macros(MacroState::from_scopes(
+            vec![view("a", "Spell_Holy_Heal"), view("b", "Spell_Holy_Renew")],
+            Vec::new(),
+        ));
+    app.update();
+    assert_eq!(
+        events(&mut app),
+        Vec::<i64>::new(),
+        "a load signals no slot"
+    );
+    assert_eq!(
+        app.world()
+            .non_send_resource::<UiScript>()
+            .eval::<String>("return GetActionTexture(3)")
+            .unwrap(),
+        "Interface\\Icons\\Spell_Holy_Heal",
+        "but the slot shows the loaded icon"
+    );
+
+    app.world_mut()
+        .non_send_resource::<UiScript>()
+        .run(r#"CreateMacro("c", 1, "")"#)
+        .unwrap();
+    app.update();
+    assert_eq!(
+        events(&mut app),
+        Vec::<i64>::new(),
+        "a create signals no slot"
+    );
+
+    app.world_mut()
+        .non_send_resource::<UiScript>()
+        .run("EditMacro(GetMacroIndexByName('a'), nil, 1)")
+        .unwrap();
+    app.update();
+    assert_eq!(
+        events(&mut app),
+        [1, 3],
+        "the edit's two slots, once each, and not macro 2's"
+    );
+}

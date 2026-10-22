@@ -647,3 +647,163 @@ fn a_position_numbered_character_bar_moves_to_macro_ids_once() {
     );
     std::fs::remove_dir_all(&tmp).ok();
 }
+
+/// The bound spell of macro `id` in a [`rebind_app`].
+fn bound_of(app: &bevy::prelude::App, id: u32) -> super::run::BoundSpell {
+    app.world().resource::<super::MacroBoundSpells>().0[&id].spell
+}
+
+fn learn(app: &mut bevy::prelude::App, slots: Vec<benilla_ui::script::SpellSlotView>) {
+    let ids: Vec<u32> = slots.iter().map(|s| s.spell_id).collect();
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .set_spellbook(benilla_ui::script::SpellBookState {
+            tabs: Vec::new(),
+            slots,
+        });
+    let mut actions = app
+        .world_mut()
+        .resource_mut::<crate::ui_action::PlayerActions>();
+    actions.spells.extend(ids);
+    actions.dirty = true;
+}
+
+/// `0x4efe00` has four callers (`0x4f0cbd`, `0x4f0d11`, `0x4f123c`, `0x4f1313`): a learned spell
+/// derives nothing, and a create or an edit derives the one record it touches. So a `/cast` of a
+/// spell not yet known stays -1 until that macro is edited, whatever else changes.
+#[test]
+fn only_a_create_or_an_edit_of_that_macro_derives_its_spell_again() {
+    use super::run::BoundSpell;
+    let mut script = UiScript::new().unwrap();
+    script.set_macros(MacroState::from_scopes(
+        vec![
+            macro_view("Pyro", "/cast Pyroblast"),
+            macro_view("Say", "/say hi"),
+        ],
+        Vec::new(),
+    ));
+    let mut app = rebind_app(script);
+    app.update();
+    assert_eq!(bound_of(&app, 1), BoundSpell::Unresolved, "not yet known");
+
+    learn(&mut app, vec![book_slot(11366, "Pyroblast")]);
+    app.update();
+    assert_eq!(
+        bound_of(&app, 1),
+        BoundSpell::Unresolved,
+        "a learned spell derives nothing"
+    );
+
+    app.world_mut()
+        .non_send_resource::<UiScript>()
+        .run("EditMacro(GetMacroIndexByName('Say'), nil, nil, '/say yo')")
+        .unwrap();
+    app.update();
+    assert_eq!(
+        bound_of(&app, 1),
+        BoundSpell::Unresolved,
+        "an edit of another macro derives only that one"
+    );
+
+    app.world_mut()
+        .non_send_resource::<UiScript>()
+        .run(r#"CreateMacro("Again", 1, "/cast Pyroblast")"#)
+        .unwrap();
+    app.update();
+    assert_eq!(
+        (bound_of(&app, 1), bound_of(&app, 3)),
+        (BoundSpell::Unresolved, BoundSpell::Spell(11366)),
+        "a create derives the new record alone"
+    );
+
+    app.world_mut()
+        .non_send_resource::<UiScript>()
+        .run("EditMacro(GetMacroIndexByName('Pyro'), 'Pyro')")
+        .unwrap();
+    app.update();
+    assert_eq!(
+        bound_of(&app, 1),
+        BoundSpell::Spell(11366),
+        "its own edit does"
+    );
+}
+
+/// The active player's arrival learns the initial spells, then derives every record (`0x5deacc`
+/// into `0x4f0ca0`).
+#[test]
+fn the_players_arrival_derives_every_macro() {
+    use super::run::BoundSpell;
+    let mut script = UiScript::new().unwrap();
+    script.set_macros(MacroState::from_scopes(
+        vec![macro_view("Pyro", "/cast Pyroblast")],
+        Vec::new(),
+    ));
+    let mut app = rebind_app(script);
+    app.update();
+    assert_eq!(bound_of(&app, 1), BoundSpell::Unresolved);
+    // The book the arrival's learns built, with no bar or macro change beside it.
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .set_spellbook(benilla_ui::script::SpellBookState {
+            tabs: Vec::new(),
+            slots: vec![book_slot(11366, "Pyroblast")],
+        });
+    app.update();
+    assert_eq!(
+        bound_of(&app, 1),
+        BoundSpell::Unresolved,
+        "a book alone derives nothing"
+    );
+    app.world_mut().spawn(crate::net::SelfPlayer);
+    app.update();
+    assert_eq!(bound_of(&app, 1), BoundSpell::Spell(11366));
+}
+
+/// `SMSG_SUPERCEDED_SPELL` (`0x5e6356` into `0x4e5e60`) walks the 120 slots: a macro slot whose
+/// spell (`0x4e5a50`) is the old rank gets the new one in its record's cached spell (`0x4e5ec4`),
+/// derived from nothing. A macro on no slot keeps the old rank.
+#[test]
+fn a_superseded_rank_rewrites_the_cached_spell_of_a_macro_on_the_bar() {
+    use super::run::BoundSpell;
+    use benilla_protocol::messages::{ActionButton, ACTION_KIND_MACRO};
+    let mut script = UiScript::new().unwrap();
+    script.set_spellbook(benilla_ui::script::SpellBookState {
+        tabs: Vec::new(),
+        slots: vec![book_slot(116, "Frostbolt")],
+    });
+    script.set_macros(MacroState::from_scopes(
+        vec![
+            macro_view("Bar", "/cast Frostbolt"),
+            macro_view("Off", "/cast Frostbolt"),
+        ],
+        Vec::new(),
+    ));
+    let mut app = rebind_app(script);
+    app.world_mut()
+        .resource_mut::<crate::ui_action::PlayerActions>()
+        .buttons
+        .insert(
+            4,
+            ActionButton {
+                slot: 4,
+                action: 1,
+                kind: ACTION_KIND_MACRO,
+            },
+        );
+    app.update();
+    assert_eq!(
+        (bound_of(&app, 1), bound_of(&app, 2)),
+        (BoundSpell::Spell(116), BoundSpell::Spell(116))
+    );
+
+    learn(&mut app, vec![book_slot(205, "Frostbolt")]);
+    app.world_mut()
+        .resource_mut::<crate::ui_action::PlayerActions>()
+        .superseded
+        .push((116, 205));
+    app.update();
+    assert_eq!(
+        (bound_of(&app, 1), bound_of(&app, 2)),
+        (BoundSpell::Spell(205), BoundSpell::Spell(116))
+    );
+}

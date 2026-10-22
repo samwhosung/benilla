@@ -342,3 +342,88 @@ fn get_macro_index_by_name_takes_its_argument_as_the_reference_does() {
         );
     }
 }
+
+/// `EditMacroRecord` (`0x4f1280`) rebuilds the order, whose tail signals `UPDATE_MACROS`
+/// (`0x4f1322` into `0x4f0d30`), then signals each slot that holds the edited macro, lowest first
+/// (`0x4f1329` into `0x4e5cc0`), all inside the call. A slot holding another macro hears nothing,
+/// and a handler reads the macro's new icon (`GetActionTexture`'s macro arm, `0x4e6bf9`).
+#[test]
+fn an_edit_signals_only_the_slots_that_hold_the_macro() {
+    let mut s = script();
+    make(&s, "b", false);
+    make(&s, "d", false);
+    s.run(
+        "PickupMacro(2) PlaceAction(9) PickupMacro(2) PlaceAction(5) PickupMacro(1) PlaceAction(7)",
+    )
+    .unwrap();
+    s.take_action_sets();
+    heard::listen(
+        &s,
+        &["UPDATE_MACROS", "ACTIONBAR_SLOT_CHANGED"],
+        Some("arg1"),
+    );
+    s.run("EditMacro(2, 'dd')").unwrap();
+    assert_eq!(
+        heard::take(&s),
+        [
+            "UPDATE_MACROS nil",
+            "ACTIONBAR_SLOT_CHANGED 5",
+            "ACTIONBAR_SLOT_CHANGED 9"
+        ]
+    );
+
+    heard::listen(
+        &s,
+        &["ACTIONBAR_SLOT_CHANGED"],
+        Some("arg1 .. ' ' .. tostring(GetActionTexture(arg1))"),
+    );
+    s.run("EditMacro(GetMacroIndexByName('dd'), nil, 2)")
+        .unwrap();
+    assert_eq!(
+        heard::take(&s),
+        [
+            "ACTIONBAR_SLOT_CHANGED 5 Interface\\Icons\\Ability_BackStab",
+            "ACTIONBAR_SLOT_CHANGED 9 Interface\\Icons\\Ability_BackStab"
+        ]
+    );
+    assert!(s.take_action_sets().is_empty(), "a notify sends nothing");
+
+    heard::listen(&s, &["UPDATE_MACROS", "ACTIONBAR_SLOT_CHANGED"], None);
+    s.run("EditMacro(30, 'none')").unwrap();
+    assert!(
+        heard::take(&s).is_empty(),
+        "no record, no work (`0x4f1333`)"
+    );
+}
+
+/// `CreateMacro`'s worker (`0x4f1010`) rebuilds the order (`0x4f125c`) and signals no slot, even
+/// one whose word already names the id it hands out.
+#[test]
+fn a_create_signals_only_the_order() {
+    let mut s = script();
+    make(&s, "b", false);
+    s.set_action(
+        3,
+        Some(crate::script::ActionSlot {
+            kind: 0x40,
+            action: 2,
+            ..Default::default()
+        }),
+    );
+    heard::listen(&s, &["UPDATE_MACROS", "ACTIONBAR_SLOT_CHANGED"], None);
+    make(&s, "d", false);
+    assert_eq!(heard::take(&s), ["UPDATE_MACROS"]);
+}
+
+/// `DeleteMacro`'s worker (`0x4f1340`) clears and signals the macro's slots (`0x4f1449`) before
+/// it rebuilds the order (`0x4f1451`), inside the call.
+#[test]
+fn a_delete_signals_its_slots_then_the_order() {
+    let mut s = script();
+    make(&s, "b", false);
+    s.run("PickupMacro(1) PlaceAction(4)").unwrap();
+    s.take_action_sets();
+    heard::listen(&s, &["UPDATE_MACROS", "ACTIONBAR_SLOT_CHANGED"], None);
+    s.run("DeleteMacro(1)").unwrap();
+    assert_eq!(heard::take(&s), ["ACTIONBAR_SLOT_CHANGED", "UPDATE_MACROS"]);
+}

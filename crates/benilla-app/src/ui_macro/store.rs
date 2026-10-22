@@ -151,8 +151,11 @@ mod tests {
             Some("Interface\\Icons\\Ability_Ambush"),
             "the stored token is a basename; the client's own prefix completes it"
         );
-        assert_eq!(macros[0].body, ".cheat fly on\n.modify aspeed 10");
-        assert_eq!(macros[2].body, ".wchange 0 0");
+        assert_eq!(
+            macros[0].body, ".cheat fly on\n.modify aspeed 10\n",
+            "each line is followed by a newline, the last too (`0x4f0a2b`)"
+        );
+        assert_eq!(macros[2].body, ".wchange 0 0\n");
     }
 
     #[test]
@@ -165,6 +168,7 @@ mod tests {
         assert!(text.contains("\nMACRO 2 \"w\" Ability_Creature_Cursed_05\n"));
         assert!(text.ends_with("END\n"));
         assert_eq!(parse(&text), macros, "round trip");
+        assert_eq!(text, REAL_112_FILE, "the file as it was read");
     }
 
     #[test]
@@ -181,8 +185,9 @@ mod tests {
         assert_eq!(parse(&text), m);
     }
 
-    /// A file truncated before its last `END` still yields that macro. A header with a zero or
-    /// no id is no record (`0x4f0728`).
+    /// A file truncated before its last `END` still yields that macro, with an empty body: the
+    /// body is stored at `END` alone (`0x4f09e4`). A header with a zero or no id is no record
+    /// (`0x4f0728`).
     #[test]
     fn malformed_records_lose_only_themselves() {
         let text = "garbage line\n\
@@ -199,7 +204,57 @@ mod tests {
         assert_eq!(macros.len(), 2);
         assert_eq!((macros[0].id, macros[0].name.as_str()), (2, "good"));
         assert_eq!((macros[1].id, macros[1].name.as_str()), (3, "truncated"));
-        assert_eq!(macros[1].body, "/say bye", "no END is still a macro");
+        assert_eq!(macros[0].body, "/say hi\n");
+        assert_eq!(macros[1].body, "", "no END is still a macro, with no body");
+    }
+
+    /// Within a record only a line that is `END` without case closes it (`0x4f09c8`, `SStrCmpI`
+    /// on the whole line): a `MACRO` line, or an `END` with a space before it, is body text.
+    /// Blank lines are no tokens of the reader's line split on CR and LF (`0x4f0687`), so they
+    /// vanish.
+    #[test]
+    fn only_an_end_line_closes_a_record() {
+        let text = "MACRO 1 \"a\" Ability_Ambush\r\n\
+             /say one\r\n\
+             \r\n\
+             MACRO 2 \"b\" Ability_Ambush\r\n\
+             \x20END\r\n\
+             end\r\n\
+             MACRO 3 \"c\" Ability_Ambush\n\
+             \x20 /say three \n\
+             End\n";
+        let macros = parse(text);
+        let seen: Vec<(u32, &str)> = macros.iter().map(|m| (m.id, m.body.as_str())).collect();
+        assert_eq!(
+            seen,
+            [
+                (1, "/say one\nMACRO 2 \"b\" Ability_Ambush\n END\n"),
+                (3, "  /say three \n")
+            ]
+        );
+    }
+
+    /// The reader opens a record on a line whose first space-separated token is `MACRO` without
+    /// case (`0x4f06c1`, `0x4f06d7`).
+    #[test]
+    fn a_header_is_read_without_case() {
+        let macros = parse("  macro 7 \"m\" Ability_Ambush\n/say hi\nEND\n");
+        assert_eq!(macros.len(), 1);
+        assert_eq!((macros[0].id, macros[0].body.as_str()), (7, "/say hi\n"));
+    }
+
+    /// The writer tokenizes the body on CR and LF (`0x4f0b8c`) and writes each token with its own
+    /// line end (`0x4f0bc5`, `0x4f0bdb`), so a blank line or a trailing newline writes no line.
+    #[test]
+    fn the_writer_writes_no_blank_line() {
+        let m = vec![MacroView {
+            id: 1,
+            name: "a".into(),
+            texture: None,
+            body: "/say one\n\n/say two\r\n".into(),
+            local_only: false,
+        }];
+        assert_eq!(write(m.iter()), "MACRO 1 \"a\" \n/say one\n/say two\nEND\n");
     }
 
     #[test]
@@ -208,7 +263,7 @@ mod tests {
             id: 4,
             name: "say \"hi\"".into(),
             texture: Some("Interface\\Icons\\Ability_Ambush".into()),
-            body: "/say hi".into(),
+            body: "/say hi\n".into(),
             local_only: false,
         }];
         assert_eq!(parse(&write(m.iter())), m);
