@@ -533,6 +533,17 @@ fn push_water_foam(
 pub struct WaterFoamSet;
 
 /// The water foam plugin.
+/// `waterRipples` (`0x673750`, `[0x86a03c]`, initialised 1): the emitter (`0x68bda0`) returns at
+/// once for 0 (`0x68bda3`), so no record is made; live records age out as before.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WaterRipples(pub i32);
+
+impl Default for WaterRipples {
+    fn default() -> Self {
+        Self(1)
+    }
+}
+
 pub(crate) struct WaterFxPlugin;
 
 impl Plugin for WaterFxPlugin {
@@ -556,7 +567,20 @@ mod tests {
     /// An empty or stale index means no foam anywhere, which no helper-level test catches.
     #[test]
     fn the_emitter_finds_its_water_through_the_index() {
+        assert_eq!(emitted(WaterRipples::default()).len(), 1);
+    }
+
+    /// `waterRipples 0` makes the emitter return before any record (`0x68bda3`).
+    #[test]
+    fn water_ripples_zero_emits_nothing() {
+        assert!(emitted(WaterRipples(0)).is_empty());
+        assert_eq!(emitted(WaterRipples(-3)).len(), 1, "any nonzero emits");
+    }
+
+    /// The live pool slots after one frame of a wader stepping in, and a dry control.
+    fn emitted(ripples: WaterRipples) -> Vec<usize> {
         let mut app = App::new();
+        app.insert_resource(ripples);
         app.init_resource::<Time>()
             .init_resource::<WaterIndex>()
             .init_resource::<WaterFoam>()
@@ -611,11 +635,15 @@ mod tests {
             .enumerate()
             .filter_map(|(i, r)| r.as_ref().map(|_| i))
             .collect();
-        assert_eq!(live.len(), 1, "one record: the wader's, not the dry unit's");
         assert!(
-            live[0] >= SELF_SLOTS,
+            live.len() <= 1,
+            "one record at most: the wader's, not the dry unit's"
+        );
+        assert!(
+            live.iter().all(|&i| i >= SELF_SLOTS),
             "a streamed unit allocates from the other partition"
         );
+        live
     }
 
     #[test]

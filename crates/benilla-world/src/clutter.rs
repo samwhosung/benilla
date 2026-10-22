@@ -551,6 +551,33 @@ mod tests {
         assert!(ramp(61.11, 70.0) > DETAIL_DOODAD_ALPHA_REF);
     }
 
+    /// With world flag 0x100000 clear (`showDetailDoodads`) the chunk pass takes its far leg
+    /// (`0x6847c9`, `0x6847fc`): a built chunk's tufts stop drawing and keep their batch, and come
+    /// back with the flag.
+    #[test]
+    fn show_detail_doodads_off_hides_the_built_clutter() {
+        use crate::world_flags::WorldFlags;
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<ClutterConfig>();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<Image>>();
+        world.init_resource::<Assets<WowModelMaterial>>();
+        world.insert_resource(WorldFlags(WorldFlags::START & !WorldFlags::DETAIL_DOODADS));
+        world.spawn((WorldCamera, GlobalTransform::default()));
+        let tuft = world.spawn(Visibility::Inherited).id();
+        world.spawn(ClutterChunk {
+            bounds: (Vec3::splat(-1.0), Vec3::splat(1.0)),
+            models: Vec::new(),
+            built: vec![tuft],
+        });
+        world.run_system_once(stream_chunk_clutter).unwrap();
+        assert_eq!(world.get::<Visibility>(tuft), Some(&Visibility::Hidden));
+        world.resource_mut::<WorldFlags>().0 = WorldFlags::START;
+        world.run_system_once(stream_chunk_clutter).unwrap();
+        assert_eq!(world.get::<Visibility>(tuft), Some(&Visibility::Inherited));
+    }
+
     #[test]
     fn box_distance_measures_the_nearest_point() {
         let b = (Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0));
