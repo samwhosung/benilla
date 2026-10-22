@@ -9,6 +9,7 @@ use benilla_ui::script::{ContainerSlot, ContainerState};
 use crossbeam_channel::Receiver;
 
 use super::*;
+use crate::net::ClientCommand;
 use crate::script_calls::with_hosted_vm;
 
 const ME: u64 = 0x10;
@@ -194,4 +195,33 @@ fn buy_merchant_item_clears_the_cursor_first() {
     })
     .expect("the chunk runs");
     assert!(!held);
+}
+
+/// A held vendor row dropped on a bag slot (`0x4f9f35`) or a doll slot (`0x4c78fd`) sends
+/// `CMSG_BUY_ITEM_IN_SLOT` inside the drop's call, count 1, so the roll after it leaves after it.
+#[test]
+fn a_held_rows_drop_buys_into_its_slot_inside_the_call() {
+    let (mut app, rx) = client();
+    let _ = sent(&rx);
+    run(
+        &mut app,
+        "PickupMerchantItem(1) PickupContainerItem(0, 2) RandomRoll(1, 2) \
+         PickupMerchantItem(1) PickupInventoryItem(16) RandomRoll(3, 4)",
+    );
+    let sent = sent(&rx);
+    assert_eq!(sent.len(), 4, "{sent:?}");
+    assert!(
+        sent[0].starts_with(&format!(
+            "BuyItemInSlot {{ vendor: {VENDOR}, entry: 159, bag_guid: {ME}, bag_slot: 24"
+        )),
+        "{sent:?}"
+    );
+    assert_eq!(sent[1], "RandomRoll { min: 1, max: 2 }");
+    assert!(
+        sent[2].starts_with(&format!(
+            "BuyItemInSlot {{ vendor: {VENDOR}, entry: 159, bag_guid: {ME}, bag_slot: 15"
+        )),
+        "{sent:?}"
+    );
+    assert_eq!(sent[3], "RandomRoll { min: 3, max: 4 }");
 }

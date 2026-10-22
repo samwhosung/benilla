@@ -1,14 +1,17 @@
 //! The merchant verbs' engine half, which the call host applies inside each call
 //! ([`crate::script_calls::ScriptCallHost`]): each refuses or sends with the vendor cell as it
 //! stands (`[0xbddfa0]`) before the verb returns, as the reference's bindings send in their own
-//! bodies (`0x4fb850`, `0x4fb760`, `0x4fb950`, `0x4fbfe0`).
+//! bodies (`0x4fb850`, `0x4fb760`, `0x4fb950`, `0x4fbfe0`), and a held row's drop in its slot's
+//! (`0x4f9f35`, `0x4c78fd`).
 
 use benilla_ui::script::{MerchantCall, UiScript};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use super::{buyback_order, MerchantOpen, RepairPurse, BUYBACK_SLOT_FIRST};
-use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfPlayer};
+use benilla_protocol::messages::BAG_PLAYER_INVENTORY;
+
+use super::{buyback_order, wire_pos, MerchantOpen, RepairPurse, BUYBACK_SLOT_FIRST};
+use crate::net::{ClientCommand, Guid, NetCommands, ObjectStore, SelfPlayer};
 
 /// The open vendor, the player, and what the verbs send through.
 #[derive(SystemParam)]
@@ -16,7 +19,7 @@ pub(crate) struct MerchantSteps<'w, 's> {
     /// Absent in a world with no merchant window, which drops the calls.
     open: Option<Res<'w, MerchantOpen>>,
     net: Res<'w, NetCommands>,
-    self_q: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
+    self_q: Query<'w, 's, (&'static ObjectStore, &'static Guid), With<SelfPlayer>>,
     purse: RepairPurse<'w, 's>,
 }
 
@@ -33,7 +36,8 @@ impl MerchantSteps<'_, '_> {
             debug!("ui_merchant: no merchant window in this world; {call:?} dropped");
             return;
         };
-        let me = self_q.iter().next();
+        let me_pair = self_q.iter().next();
+        let me = me_pair.map(|(store, _)| store);
         match call {
             // With a player (`0x4fb88e`), the row in range (`0x4fb904`-`0x4fb90e`), a vendor cell
             // (`0x4fb91d`) and a row slot (`0x4fb92e`): the row's item, `CMSG_BUY_ITEM`
@@ -95,6 +99,36 @@ impl MerchantSteps<'_, '_> {
                         item_guid: 0,
                     });
                 }
+            }
+            // The container's guid names the slot: the player's for the player's own array
+            // (`BAG_PLAYER_INVENTORY`), the bag's for a real bag; the count is the fixed 1.
+            MerchantCall::BuyInSlot { bag, slot, entry } => {
+                let (Some(vendor), Some((store, guid))) = (open.vendor, me_pair) else {
+                    return;
+                };
+                let Some((bag_index, bag_slot)) = wire_pos(bag, slot) else {
+                    debug!(
+                        "ui_merchant: slot buy to an unaddressable slot ({bag}, {slot}) — ignored"
+                    );
+                    return;
+                };
+                let bag_guid = if bag_index == BAG_PLAYER_INVENTORY {
+                    Some(guid.0)
+                } else {
+                    store.0.player_inv_slot(bag_index).filter(|g| *g != 0)
+                };
+                let Some(bag_guid) = bag_guid else {
+                    debug!("ui_merchant: slot buy into an absent bag {bag} — ignored");
+                    return;
+                };
+                debug!("ui_merchant: slot buy entry {entry} → bag {bag_guid:#x} slot {bag_slot}");
+                let _ = net.0.send(ClientCommand::BuyItemInSlot {
+                    vendor,
+                    entry,
+                    bag_guid,
+                    bag_slot,
+                    count: 1,
+                });
             }
         }
     }

@@ -837,7 +837,8 @@ pub(crate) struct Model {
     pub(crate) repair_all_cost: u32,
     /// The repair costs `SetInventoryItem` and `SetBagItem` return.
     pub(crate) repair_costs: merchant::RepairCosts,
-    /// A held vendor row dropped in a bag, `(bag, slot, item entry)`, for `CMSG_BUY_ITEM_IN_SLOT`.
+    /// A held vendor row a drop verb bought into a slot, `(bag, slot, item entry)`, handed to the
+    /// host as the verb returns ([`merchant::MerchantCall::BuyInSlot`]).
     pub(crate) merchant_slot_buys: Vec<(i64, u32, u32)>,
     pub(crate) merchant_close: bool,
     /// Repair mode (`InRepairMode`).

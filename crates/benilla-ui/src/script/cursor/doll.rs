@@ -21,7 +21,9 @@ pub(super) fn pickup_inventory_item(lua: &Lua, id: u32) -> mlua::Result<bool> {
     // An armed item-targeting spell binds the item through `BindSpellTargetObject`, behind the
     // gate's tag 2.
     let may_cast = protected::gate(lua, Tag::CAST);
-    Ok(match verb(lua, |model| doll_click(model, id, may_cast)) {
+    let click = verb(lua, |model| doll_click(model, id, may_cast));
+    crate::script::merchant::submit_slot_buys(lua)?;
+    Ok(match click {
         DollClick::Done(repaint) => repaint,
         DollClick::PickUp(item) => {
             pick_up_item(lua, item);

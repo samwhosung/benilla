@@ -1106,7 +1106,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     super::calls::submit(lua, super::ScriptCall::PickItem(pick))?
                 }
             }
-            Ok(())
+            super::merchant::submit_slot_buys(lua)
         })?,
     )?;
 
@@ -2435,6 +2435,7 @@ mod tests {
     #[test]
     fn held_vendor_row_buys_into_bag_before_repair_mode() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_container(0, Some(backpack()));
         s.set_merchant(Some(MerchantState {
             items: vec![MerchantItem {
@@ -2630,6 +2631,7 @@ mod tests {
     fn a_bag_click_over_another_payload_picks_up_or_clears() {
         use crate::script::cursor::{CursorAction, CursorMerchantItem, CursorPayload, CursorSpell};
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_container(0, Some(backpack()));
         s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
             spell_id: 133,

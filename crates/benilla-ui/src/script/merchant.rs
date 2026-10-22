@@ -132,9 +132,15 @@ impl super::UiScript {
         })
     }
 
-    /// Drain the `(bag, slot, entry)` of held rows dropped into bags (`CMSG_BUY_ITEM_IN_SLOT`).
+    /// The `(bag, slot, entry)` of held rows a harness's VM kept dropped into slots
+    /// ([`Self::keep_calls`], `CMSG_BUY_ITEM_IN_SLOT`).
     pub fn take_merchant_slot_buys(&mut self) -> Vec<(i64, u32, u32)> {
-        std::mem::take(&mut self.model_mut().merchant_slot_buys)
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Merchant(MerchantCall::BuyInSlot { bag, slot, entry }) => {
+                Some((*bag, *slot, *entry))
+            }
+            _ => None,
+        })
     }
 
     /// Whether `CloseMerchant` was called since the last drain; the close sends no packet.
@@ -192,11 +198,29 @@ pub enum MerchantCall {
     /// `RepairAllItems()` (`0x4fbfe0`) at a repairing vendor: the purse test, then
     /// `CMSG_REPAIR_ITEM` with guid 0.
     RepairAll,
+    /// A held vendor row dropped into a bag or doll slot (`0x4f9f35`, `0x4c78fd`):
+    /// `CMSG_BUY_ITEM_IN_SLOT` (`0x1a3`) for the row's item into Lua's `(bag, slot)`, count 1.
+    BuyInSlot { bag: i64, slot: u32, entry: u32 },
 }
 
 /// Hand `call` to the host, which applies it before this returns ([`super::calls::submit`]).
 fn submit(lua: &Lua, call: MerchantCall) -> mlua::Result<()> {
     super::calls::submit(lua, super::ScriptCall::Merchant(call))
+}
+
+/// Hand the host the slot buys the drop verb just made (`Model::merchant_slot_buys`), before the
+/// verb returns, as the reference sends from the drop itself.
+pub(super) fn submit_slot_buys(lua: &Lua) -> mlua::Result<()> {
+    let buys = std::mem::take(
+        &mut lua
+            .app_data_mut::<Model>()
+            .expect("model app_data")
+            .merchant_slot_buys,
+    );
+    for (bag, slot, entry) in buys {
+        submit(lua, MerchantCall::BuyInSlot { bag, slot, entry })?;
+    }
+    Ok(())
 }
 
 /// 1 or nil, as the client pushes a usable flag (`pushnumber(1.0)` / `pushnil`).
@@ -1127,6 +1151,7 @@ mod tests {
     #[test]
     fn pickup_merchant_item_grabs_a_row_as_mode_5() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_merchant(Some(stock()));
 
         s.run("PickupMerchantItem(1)").unwrap();
@@ -1146,6 +1171,7 @@ mod tests {
     #[test]
     fn pickup_merchant_item_refuses_silently_and_clears() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_merchant(Some(stock()));
 
         for bad in [
@@ -1211,6 +1237,7 @@ mod tests {
     #[test]
     fn a_held_vendor_row_dropped_in_a_bag_is_a_buy() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_merchant(Some(stock()));
         s.run("PickupMerchantItem(1)").unwrap();
         s.run("PickupContainerItem(0, 3)").unwrap();
@@ -1231,6 +1258,7 @@ mod tests {
     #[test]
     fn a_stale_vendor_row_drops_without_buying() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_merchant(Some(stock()));
         s.run("PickupMerchantItem(2)").unwrap();
         // The list is replaced while the cursor holds row 2 of the old one.
@@ -1248,6 +1276,7 @@ mod tests {
     #[test]
     fn the_action_bar_refuses_a_vendor_row_and_keeps_it_held() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_merchant(Some(stock()));
         s.run("PickupMerchantItem(1)").unwrap();
         s.run("PlaceAction(1)").unwrap();
