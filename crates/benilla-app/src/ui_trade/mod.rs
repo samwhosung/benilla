@@ -808,7 +808,9 @@ fn resolve_slot(
     }
 }
 
-/// [`resolve_slot`] for a slot of our own.
+/// [`resolve_slot`] for a slot of our own, which `GetTradePlayerItemLink` links off the item
+/// object (`0x4c06bc` → `0x52ae00`) with its record cached or not: white (`0x52aec5`) and nameless
+/// (`0x5d8b40`) without one.
 fn resolve_own_slot(
     item: &TradeItem,
     items: &Items,
@@ -816,7 +818,21 @@ fn resolve_own_slot(
     names: &NameCache,
     rolls: crate::items::RollCatalogs,
 ) -> TradeSlotItem {
-    resolve_slot(item, items, icons, names, rolls)
+    let row = resolve_slot(item, items, icons, names, rolls);
+    let uncached = items.template(item.entry, 0, Ask::Read).is_none();
+    TradeSlotItem {
+        uncached_link: uncached.then(|| {
+            crate::ui_items::item_link_full(
+                item.entry,
+                item.perm_enchant,
+                item.random_prop_id,
+                item.suffix_factor,
+                "",
+                1,
+            )
+        }),
+        ..row
+    }
 }
 
 /// Our item object `guid` as a wire [`TradeItem`] of `count`.
@@ -832,9 +848,8 @@ fn own_item(guid: u64, count: u32, objects: &Objects, items: &Items) -> Option<T
     let display_id = template.map(|t| t.display_info_id).unwrap_or(0);
     // What `GetTradePlayerItemLink` links (`0x4c06bc` → `0x52ae00`) and `GetTradePlayerItemInfo`
     // names (`0x4c04f5` → `0x5d8bc0`): the object's enchant, roll and seed, none when wrapped.
-    let (perm_enchant, random_prop_id, suffix_factor) = template
-        .map(|t| crate::ui_items::object_link_numbers(fields, t))
-        .unwrap_or_default();
+    let (perm_enchant, random_prop_id, suffix_factor) =
+        crate::ui_items::object_link_numbers(fields, template);
     Some(TradeItem {
         entry,
         display_id,
@@ -857,9 +872,10 @@ fn own_item(guid: u64, count: u32, objects: &Objects, items: &Items) -> Option<T
 const ENCHANT_SLOT: usize = TRADE_SLOT_COUNT - 1;
 
 /// `enchant` is the name the column's slot 7 shows: the `Spell.dbc` name of the spell cast on it,
-/// read for a filled slot only (`0x4c02b0`, `0x4c05c6`).
+/// read for a filled slot only (`0x4c02b0`, `0x4c05c6`). `own` is our column ([`resolve_own_slot`]).
 fn resolve_side(
     offer: &TradeOffer,
+    own: bool,
     enchant: Option<&str>,
     items: &Items,
     icons: Option<&ItemDisplays>,
@@ -869,7 +885,10 @@ fn resolve_side(
     let mut slots: [Option<TradeSlotItem>; TRADE_SLOT_COUNT] = Default::default();
     for (i, s) in offer.slots.iter().enumerate() {
         slots[i] = s.map(|it| {
-            let mut row = resolve_slot(&it, items, icons, names, rolls);
+            let mut row = match own {
+                true => resolve_own_slot(&it, items, icons, names, rolls),
+                false => resolve_slot(&it, items, icons, names, rolls),
+            };
             if i == ENCHANT_SLOT {
                 row.enchantment = enchant.map(str::to_string);
             }
@@ -904,6 +923,7 @@ fn snapshot(
         // The partner's window carries the spell they cast on our slot 7 (`0x4c05d1`, side 1).
         player: resolve_side(
             &trade.our,
+            true,
             name(trade.their.enchant_spell_id),
             items,
             icons,
@@ -913,6 +933,7 @@ fn snapshot(
         // Our window carries the spell we cast on theirs (`0x4c02b7`, side 0).
         target: resolve_side(
             &trade.their,
+            false,
             name(trade.our.enchant_spell_id),
             items,
             icons,
@@ -1051,7 +1072,7 @@ pub(crate) fn touch_trade(
                     slot: wire_slot,
                 },
             );
-            let row = resolve_slot(&item, items, icons.as_deref(), names, rolls.get());
+            let row = resolve_own_slot(&item, items, icons.as_deref(), names, rolls.get());
             script.replace_trade_slot(slot, row);
         }
     }

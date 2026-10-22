@@ -795,7 +795,6 @@ fn trade_slot_item(model: &Model, item: &cursor::CursorItem) -> TradeSlotItem {
         .and_then(|c| c.slots.get(&item.slot))
         .filter(|s| s.item_id == item.item_id)
         .map(|s| TradeSlotItem {
-            uncached_link: None,
             item_id: s.item_id,
             name: name(s.link.as_deref()),
             texture: s.texture.clone(),
@@ -812,6 +811,7 @@ fn trade_slot_item(model: &Model, item: &cursor::CursorItem) -> TradeSlotItem {
             charges: 0,
             durability: (0, 0),
             link: s.link.clone(),
+            uncached_link: s.uncached_link.clone(),
         })
         .unwrap_or_else(|| TradeSlotItem {
             item_id: item.item_id,
@@ -905,11 +905,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     } else {
                         slot_at(&model, id, |t| &t.target)
                     };
-                    slot.and_then(|s| s.link.clone())
+                    // Our own item links off its object, its record cached or not (`0x4c06bc`);
+                    // the partner's needs its record (`0x4c03ef`).
+                    slot.and_then(|s| match side {
+                        true => s.link.or(s.uncached_link),
+                        false => s.link,
+                    })
                 };
+                // Nothing on every miss (`0x4c066f`, `0x4c039f`).
                 match link {
-                    Some(link) => Ok(Value::String(lua.create_string(&link)?)),
-                    None => Ok(Value::Nil),
+                    Some(link) => Ok(MultiValue::from_vec(vec![Value::String(
+                        lua.create_string(&link)?,
+                    )])),
+                    None => Ok(MultiValue::new()),
                 }
             })?,
         )?;

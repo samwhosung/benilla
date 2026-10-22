@@ -811,7 +811,10 @@ pub(crate) fn object_name(
     template: &benilla_protocol::messages::ItemInfo,
     rolls: crate::items::RollCatalogs,
 ) -> String {
-    rolls.name(&template.name, object_link_numbers(fields, template).1)
+    rolls.name(
+        &template.name,
+        object_link_numbers(fields, Some(template)).1,
+    )
 }
 
 /// The three numbers `0x52ae00` passes `0x52adb0` for an item object: the permanent enchant
@@ -820,16 +823,11 @@ pub(crate) fn object_name(
 /// wrapped item (`ITEM_FIELD_FLAGS & 0x8`) passes 0 for all three (`0x52ae66`-`0x52ae80`).
 pub(crate) fn object_link_numbers(
     fields: &ObjectFields,
-    template: &benilla_protocol::messages::ItemInfo,
+    template: Option<&benilla_protocol::messages::ItemInfo>,
 ) -> (u32, u32, u32) {
-    link_numbers(
-        fields,
-        template.flags & benilla_protocol::messages::ITEM_FLAG_CHARTER != 0,
-    )
-}
-
-/// [`object_link_numbers`] by the record's charter flag.
-fn link_numbers(fields: &ObjectFields, charter: bool) -> (u32, u32, u32) {
+    // No record reads flags 0 (`0x5da2a0`): no charter.
+    let charter =
+        template.is_some_and(|t| t.flags & benilla_protocol::messages::ITEM_FLAG_CHARTER != 0);
     let wrapped =
         fields.item_flags().unwrap_or(0) & benilla_protocol::messages::ITEM_DYNFLAG_WRAPPED != 0;
     if wrapped {
@@ -861,7 +859,7 @@ pub(crate) fn object_link(
     let entry = fields.object_entry().unwrap_or(0);
     match template {
         Some(t) => {
-            let (enchant, roll, seed) = object_link_numbers(fields, t);
+            let (enchant, roll, seed) = object_link_numbers(fields, Some(t));
             item_link_full(
                 entry,
                 enchant,
@@ -872,7 +870,7 @@ pub(crate) fn object_link(
             )
         }
         None => {
-            let (enchant, roll, seed) = link_numbers(fields, false);
+            let (enchant, roll, seed) = object_link_numbers(fields, None);
             item_link_full(entry, enchant, roll, seed, "", 1)
         }
     }
