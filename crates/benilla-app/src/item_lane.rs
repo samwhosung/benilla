@@ -96,6 +96,7 @@ pub(crate) fn add_item_lane(app: &mut App) {
             Update,
             drop_item_runs
                 .in_set(crate::ui_script::UiFeed)
+                .before(crate::ui_unit::UnitFeed)
                 .run_if(not(crate::ui_script::ingame_ui_up)),
         );
 }
