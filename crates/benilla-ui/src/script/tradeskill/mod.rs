@@ -113,6 +113,8 @@ pub struct TradeSkillState {
     /// The `SkillLine.dbc` id, the persistence key (`0xbde064`).
     pub line: u32,
     pub line_name: String,
+    /// `GetTradeSkillLine`'s rank and maximum: the slot's halves with the permanent bonus
+    /// (`0x4fdd40`); the recipes are banded on the raw value.
     pub rank: u32,
     pub max_rank: u32,
     /// Unordered: the engine sorts them (`0x4fca20`), and Lua indexes the visible rows, not this.
