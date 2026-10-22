@@ -395,18 +395,20 @@ impl AttackSeam<'_, '_> {
     /// `CMSG_SET_SELECTION` 0 (`0x493a2a`), which this does not.
     pub(crate) fn close_loot_on(&mut self, outgoing: u64) {
         if self.loot.source() == Some(outgoing) {
-            // `dl` clear (`0x493970`): a disenchant window with rows left is swept, not closed.
-            if self.loot.disenchant_holds() {
-                self.loot.owe_sweep();
-                return;
-            }
             debug!("target: the selection teardown closes the loot on {outgoing:#x}");
-            crate::ui_loot::close_interaction(
-                &mut self.loot,
-                &mut self.loot_latch,
-                Some(&self.net),
-            );
+            self.close_loot();
         }
+    }
+
+    /// `0x48f200(1, 0, 0)`, the close with its release and `dl` clear (`0x493970`, `0x5e9a58`):
+    /// a disenchant window with rows left is swept, not closed; any other window closes as
+    /// `CloseLoot` does. Nothing with no window open (`0x48f23f`).
+    pub(crate) fn close_loot(&mut self) {
+        if self.loot.disenchant_holds() {
+            self.loot.owe_sweep();
+            return;
+        }
+        crate::ui_loot::close_interaction(&mut self.loot, &mut self.loot_latch, Some(&self.net));
     }
 
     /// The selection release's pet leg (`0x493910`): `0x5ee5a0` asked of the player
