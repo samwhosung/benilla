@@ -36,9 +36,8 @@ fn on_nodes_shown(In(ev): In<SessionEvent>, mut commands: Commands) {
                 super::open_map(world, flightmaster, nearest_node, known_mask);
                 return;
             }
-            if let Some(errors) = world.get_resource::<crate::ui_action::UiErrorKeys>() {
-                errors.push(crate::ui_action::UiError::key("ERR_TAXINOPATHS"));
-            }
+            // `DisplayError` shows the line inside the handler, before the close's event.
+            let _ = crate::script_calls::run_cached(world, show_no_paths);
             if world.contains_resource::<crate::ui_gossip::GossipState>() {
                 crate::ui_gossip::close_core(world);
             }
@@ -68,6 +67,21 @@ fn listed_nodes<'a>(
         .filter(|&id| mask.is_known(id))
         .filter_map(|id| Some(format!("[{id:02}]: {}", name(id)?)))
         .collect()
+}
+
+/// `0xb5`, `ERR_TAXINOPATHS`, through `DisplayError` (`0x5ecf44` → `0x496720`), which shows it now.
+fn show_no_paths(
+    mut hosted_vm: crate::script_calls::HostedVm,
+    mut sink: crate::ui_action::MessageSink,
+) {
+    hosted_vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        if let Some(line) = crate::ui_action::keyed_line(script, "ERR_TAXINOPATHS") {
+            crate::ui_action::show_now(script, &mut sink, "ui_taxi", line);
+        }
+    });
 }
 
 fn on_node_status(In(ev): In<SessionEvent>, mut commands: Commands, index: Res<GuidIndex>) {

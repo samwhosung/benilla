@@ -591,19 +591,31 @@ mod tests {
     }
 
     /// `SMSG_SHOWTAXINODES` counts the mask's known nodes (`0x5eced7`-`0x5ecf2e`): under two
-    /// (`0x5ecf39`) it shows `0xb5`, `ERR_TAXINOPATHS` (`0x5ecf3f`), closes the gossip menu
-    /// (`0x4e1fa0` with a zero guid, `0x5ecf55`) and opens no map. Two open it.
+    /// (`0x5ecf39`) it shows `0xb5`, `ERR_TAXINOPATHS`, inside the handler (`0x5ecf44` →
+    /// `0x496720`), then closes the gossip menu (`0x4e1fa0` with a zero guid, `0x5ecf55`), whose
+    /// `GOSSIP_CLOSED` follows the line, and opens no map. Two open it.
     #[test]
     fn a_mask_with_fewer_than_two_known_nodes_opens_no_map() {
         use benilla_protocol::SessionEvent;
         const MASTER: u64 = 0xF130_0000_0000_0099;
-        let mut app = App::new();
-        app.init_resource::<TaxiState>()
-            .init_resource::<TaxiRouteCache>()
-            .init_resource::<GuidIndex>()
-            .init_resource::<crate::ui_action::UiErrorKeys>()
-            .init_resource::<crate::ui_gossip::GossipState>();
-        net::register(&mut app);
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                r#"
+                ERR_TAXINOPATHS = "no paths"
+                HEARD = ""
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("GOSSIP_CLOSED")
+                f:RegisterEvent("UI_INFO_MESSAGE")
+                f:RegisterEvent("UI_ERROR_MESSAGE")
+                f:SetScript("OnEvent", function()
+                    HEARD = HEARD .. event .. "(" .. tostring(arg1) .. ") "
+                end)
+                "#,
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
         app.world_mut()
             .resource_mut::<crate::ui_gossip::GossipState>()
             .npc = Some(MASTER);
@@ -617,17 +629,13 @@ mod tests {
                 }],
             );
             app.world_mut().flush();
-            app.world()
-                .resource::<crate::ui_action::UiErrorKeys>()
-                .take()
-                .into_iter()
-                .map(|e| e.key)
-                .collect::<Vec<_>>()
+            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            let heard = script.eval::<String>("return HEARD").unwrap();
+            script.run("HEARD = ''").unwrap();
+            heard
         };
-        assert_eq!(
-            shown(&mut app, [0b10, 0, 0, 0, 0, 0, 0, 0]),
-            ["ERR_TAXINOPATHS"]
-        );
+        let heard = shown(&mut app, [0b10, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(heard, "UI_ERROR_MESSAGE(no paths) GOSSIP_CLOSED(nil) ");
         assert_eq!(app.world().resource::<TaxiState>().cell(), None);
         assert_eq!(
             app.world().resource::<crate::ui_gossip::GossipState>().npc,
@@ -635,7 +643,7 @@ mod tests {
             "the gossip menu closed"
         );
         // The count spans the whole mask: two bits in different words open the map.
-        assert!(shown(&mut app, [0b10, 0, 0, 0, 0, 0, 0, 0x8000_0000]).is_empty());
+        assert_eq!(shown(&mut app, [0b10, 0, 0, 0, 0, 0, 0, 0x8000_0000]), "");
         assert_eq!(app.world().resource::<TaxiState>().cell(), Some(MASTER));
     }
 
