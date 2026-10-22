@@ -941,7 +941,10 @@ pub(crate) mod schedule_tests {
     ///   the precast tail's loot release) is the name cache alone, a pure cache, which the
     ///   persisted-name load writes; `lanes::guard_tests` checks that it stays so, and that no
     ///   exclusive system is among them. Commands a firing defers, which the drain applies after
-    ///   it, are outside that model.
+    ///   it, are outside that model;
+    /// - the minimap's draw (`minimap::emit_minimap`), which reads `QuestGiver`'s dialog statuses,
+    ///   against `ui_panes::feed_character_panes`, which lends the call host, whose quest verbs
+    ///   write that window's panel latches and never a status.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource

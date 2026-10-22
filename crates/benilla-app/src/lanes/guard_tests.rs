@@ -184,9 +184,10 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "the quest lines",
     ),
     (
-        Row::Queue,
+        Row::HostHeld,
         "::ui_quest::QuestGiver",
-        "the quest giver's packets",
+        "the quest giver's packets, which `feed_quest` fires from; the quest verbs, acting in \
+         their calls, hold it in the host",
     ),
     (
         Row::Queue,
@@ -319,6 +320,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::MailOpen",
     "::Stationery",
     "::MerchantOpen",
+    "::GossipState",
     "::PetBar",
     "::QuestLog",
     "::UiClock",
