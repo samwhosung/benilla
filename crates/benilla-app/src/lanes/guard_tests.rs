@@ -242,6 +242,16 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "::ui_unit::feed_units",
         "the selection's change, `PLAYER_TARGET_CHANGED`",
     ),
+    (
+        Row::Edge,
+        "::ui_action::state::fire_action_events",
+        "the usable refresh `0x4b31c0` (`ACTIONBAR_UPDATE_USABLE`, `SPELL_ACTIVE`, \
+         `SPELL_UPDATE_USABLE`), which the reference runs inside each caller's packet: the form \
+         and combo watchers (`0x5de011`, `0x5ddff0`), the unit-flags, health, power and \
+         aura-state watchers, the selection and the cooldowns. Here it is one pass a frame over \
+         the bar's 120 slots and the reactive list, diffed against the usable cache, so one \
+         caller's run cannot be cut out to fire at its own notice",
+    ),
 ];
 
 /// The resources the handlers fill through a shared reference, which their declared access shows
@@ -309,7 +319,6 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::MailOpen",
     "::Stationery",
     "::MerchantOpen",
-    "::GroupState",
     "::PetBar",
     "::QuestLog",
     "::UiClock",
@@ -327,12 +336,15 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 4] {
+fn lane_types() -> [TypeId; 6] {
     [
         TypeId::of::<crate::field_watch::NoticeLane>(),
         TypeId::of::<crate::ui_chat::ChatLog>(),
         TypeId::of::<crate::ui_cast::CastReports>(),
         TypeId::of::<crate::ui_auction::HouseLane>(),
+        // The party lane: the group's signal log and the lane's place in it.
+        TypeId::of::<crate::ui_party::GroupState>(),
+        TypeId::of::<crate::ui_party::PartyLane>(),
     ]
 }
 
@@ -709,8 +721,9 @@ const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[
 const NOT_YET_PLACED: &[(&str, &str)] = &[
     (
         "::swing_refusal::apply_swing_refusals",
-        "the server's swing stop, whose repeat stop the reference reports inside its packet \
-         (`0x625ab8`, `0x5e7dd0`), off the swing refusals",
+        "the server's swing stop `0x5ecac0`, `CancelNextSwingSpells` (`0x6e6f30`) and the \
+         tutorials 0xa and 0xb, which the reference runs inside its packet (`0x625ab8`, \
+         `0x5e7dd0`), off the swing refusals",
     ),
     (
         "::target::scan::auto_acquire",
@@ -745,6 +758,15 @@ fn every_lane_push_off_a_handler_queue_keeps_its_place() {
         let id = |t: TypeId| world.components().get_resource_id(t);
         let vm = id(TypeId::of::<benilla_ui::script::UiScript>());
         let lanes: Vec<ComponentId> = lane_types().into_iter().filter_map(id).collect();
+        // The chat lane is pushed through a shared reference, the others through a write.
+        let chat = id(TypeId::of::<crate::ui_chat::ChatLog>());
+        let pushes_onto = |access: &bevy::ecs::query::Access, lane: ComponentId| {
+            if Some(lane) == chat {
+                access.has_resource_read(lane)
+            } else {
+                access.has_resource_write(lane)
+            }
+        };
         let placed: Vec<ComponentId> = placed_queues().into_iter().filter_map(id).collect();
         let graph = schedule.graph();
         let mut pushes = BTreeSet::new();
@@ -761,7 +783,7 @@ fn every_lane_push_off_a_handler_queue_keeps_its_place() {
             // queues it reads: a plain resource it writes is its verbs' own state.
             if system.is_exclusive()
                 || (fires && in_feed(graph, bevy::ecs::schedule::NodeId::System(key)))
-                || !lanes.iter().any(|&l| access.has_resource_read(l))
+                || !lanes.iter().any(|&l| pushes_onto(access, l))
             {
                 continue;
             }
