@@ -436,3 +436,32 @@ fn one_answer_runs_its_callbacks_in_the_order_asked() {
         ]
     );
 }
+
+/// The close our own gather's GO owes runs inside the GO (`0x60d10b` → `0x48f200`), ahead of the
+/// response behind it: it takes the window open then, or nothing (`0x48f23f`), never the one
+/// the response opens.
+#[test]
+fn a_close_owed_ahead_of_a_response_takes_only_the_window_before_it() {
+    let mut app = client();
+    stream_bobber(&mut app);
+    let owe = |app: &mut App| {
+        app.world_mut()
+            .resource_mut::<crate::ui_loot::LootCloseAtRest>()
+            .0 = true
+    };
+    let open = |app: &App| app.world().resource::<crate::ui_loot::LootState>().source();
+    owe(&mut app);
+    assert_eq!(
+        frame(&mut app, vec![fished(&[(0, POTION)])]),
+        ["LOOT_OPENED:nil"]
+    );
+    assert_eq!(open(&app), Some(BOBBER));
+    // Settled at the response: nothing is left owed for the frame's drain to close it with.
+    assert!(!app.world().resource::<crate::ui_loot::LootCloseAtRest>().0);
+    owe(&mut app);
+    assert_eq!(
+        frame(&mut app, vec![fished(&[(1, POTION)])]),
+        ["LOOT_CLOSED:nil", "LOOT_OPENED:nil"]
+    );
+    assert_eq!(open(&app), Some(BOBBER));
+}
