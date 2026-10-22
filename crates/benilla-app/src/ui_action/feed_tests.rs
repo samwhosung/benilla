@@ -1041,6 +1041,7 @@ fn the_players_form_change_signals_the_cast_changed_pair() {
         )
         .unwrap();
     let edge = |entity, old: u32, new: u32| crate::net::FieldChanged {
+        at: crate::lanes::stamp(),
         entity,
         guid: 1,
         kind: ObjectType::Player,

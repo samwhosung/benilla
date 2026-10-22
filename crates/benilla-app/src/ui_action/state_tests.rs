@@ -1202,6 +1202,7 @@ fn edge(
 ) {
     let entity = app.world().resource::<crate::net::GuidIndex>().0[&guid];
     app.world_mut().write_message(crate::net::FieldChanged {
+        at: crate::lanes::stamp(),
         entity,
         guid,
         kind,

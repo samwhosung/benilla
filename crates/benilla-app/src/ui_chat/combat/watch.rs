@@ -69,8 +69,9 @@ impl WatchCtx<'_> {
 const ATTR_PASSIVE: u32 = 0x40;
 
 /// Queue one single-endpoint line, gated the way its formatter gates, with the word it raises once
-/// written.
+/// written, at the place of the field edge `at` that words it ([`push_at`]).
 fn queue_one(
+    at: crate::lanes::Stamp,
     log: &ChatLog,
     ctx: &WatchCtx,
     poses: &Query<&Transform>,
@@ -84,17 +85,28 @@ fn queue_one(
     if !ctx.in_range(subject.0, range, poses) {
         return;
     }
-    log.push_combat(PendingCombat {
-        kind,
-        family,
-        variant: Variant::of(subject.1, UnitClass::Creature),
-        subject: subject.0,
-        object: 0,
-        fills,
-        named: Named::Ready,
-        tries: 0,
-        word,
-    });
+    push_at(
+        at,
+        log,
+        PendingCombat {
+            kind,
+            family,
+            variant: Variant::of(subject.1, UnitClass::Creature),
+            subject: subject.0,
+            object: 0,
+            fills,
+            named: Named::Ready,
+            tries: 0,
+            word,
+        },
+    );
+}
+
+/// Queue `line` at the place of the field edge `at` that words it: the reference's field callback
+/// writes it inside the update's handler (`0x465330`), so it fires there among what the packets
+/// queued, not where this system runs.
+fn push_at(at: crate::lanes::Stamp, log: &ChatLog, line: PendingCombat) {
+    crate::lanes::firing(at, || log.push_combat(line));
 }
 
 /// The creating spell's (`UNIT_CREATED_BY_SPELL`) `Spell.dbc` `Effect[0]` values that word a death
@@ -144,6 +156,7 @@ pub(crate) fn death_lines(
             (_, false) => super::UNITDIES,
         };
         queue_one(
+            e.at,
             &log,
             &ctx,
             &poses,
@@ -217,6 +230,7 @@ pub(crate) fn aura_lines(
                 };
                 let word = word(message_type, &spell);
                 queue_one(
+                    e.at,
                     &log,
                     &ctx,
                     &poses,
@@ -245,6 +259,7 @@ pub(crate) fn aura_lines(
                 };
                 let word = word(message_type, &spell);
                 queue_one(
+                    e.at,
                     &log,
                     &ctx,
                     &poses,
@@ -289,6 +304,7 @@ pub(crate) fn aura_lines(
                 continue;
             };
             queue_one(
+                e.at,
                 &log,
                 &ctx,
                 &poses,
@@ -332,21 +348,25 @@ pub(crate) fn pet_loyalty_lines(
         if ctx.classify(e.guid, &stores) != UnitClass::MyPet {
             continue;
         }
-        log.push_combat(PendingCombat {
-            kind: ChatEventKind::CombatMiscInfo,
-            family: if level > before {
-                super::PET_LOYALTY_GAIN
-            } else {
-                super::PET_LOYALTY_LOSS
+        push_at(
+            e.at,
+            &log,
+            PendingCombat {
+                kind: ChatEventKind::CombatMiscInfo,
+                family: if level > before {
+                    super::PET_LOYALTY_GAIN
+                } else {
+                    super::PET_LOYALTY_LOSS
+                },
+                variant: Variant::OtherOther,
+                subject: 0,
+                object: 0,
+                fills: Fills::default(),
+                named: Named::Ready,
+                tries: 0,
+                word: None,
             },
-            variant: Variant::OtherOther,
-            subject: 0,
-            object: 0,
-            fills: Fills::default(),
-            named: Named::Ready,
-            tries: 0,
-            word: None,
-        });
+        );
     }
 }
 

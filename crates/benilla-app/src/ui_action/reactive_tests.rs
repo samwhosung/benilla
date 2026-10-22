@@ -150,6 +150,7 @@ fn step(app: &mut App, aura_state: u32) -> Vec<String> {
     store.0 = ObjectFields::from_pairs(&[(22, 100), (23, 500), (AURA_STATE, aura_state)]);
     if old != aura_state {
         app.world_mut().write_message(crate::net::FieldChanged {
+            at: crate::lanes::stamp(),
             entity,
             guid: ME,
             kind: benilla_protocol::messages::ObjectType::Player,

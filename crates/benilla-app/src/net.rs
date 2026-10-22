@@ -263,8 +263,13 @@ impl ObjectStore {
 ///
 /// `kind` is the store's class from its create block, since a raw index differs per class (`36`
 /// is a unit's `BYTES_0` and a corpse's `DYNAMIC_FLAGS`).
+///
+/// `at` is the edge's place among what the packets queue ([`crate::lanes::stamp`]), taken as the
+/// handler writes it, so a line a later system words off the edge fires where the reference's
+/// field callback wrote it, inside the update's handler.
 #[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FieldChanged {
+    pub at: crate::lanes::Stamp,
     pub entity: Entity,
     pub guid: u64,
     pub kind: benilla_protocol::messages::ObjectType,
@@ -321,6 +326,7 @@ pub(crate) fn apply_fields_for_test(world: &mut World, entity: Entity, delta: Ob
             let moved = write_fields(&mut store.0, delta);
             if let Some(kind) = store.0.created_as() {
                 edges.extend(moved.into_iter().map(|(index, old, new)| FieldChanged {
+                    at: crate::lanes::stamp(),
                     entity,
                     guid,
                     kind,
@@ -2510,9 +2516,11 @@ mod tests {
             unit,
             ObjectFields::from_pairs(&[(FIELD_UNIT_LEVEL, 9), (FIELD_UNIT_HEALTH, 0)]),
         );
+        let edges = drain(&mut world);
         assert_eq!(
-            drain(&mut world),
+            edges,
             vec![FieldChanged {
+                at: edges[0].at,
                 entity: unit,
                 guid: 0xF130_0000_0000_0042,
                 kind: ObjectType::Unit,

@@ -857,6 +857,7 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
     };
     sc.field_changes
         .write_batch(block.edges().map(|(index, old, new)| FieldChanged {
+            at: crate::lanes::stamp(),
             entity: e,
             guid,
             kind,

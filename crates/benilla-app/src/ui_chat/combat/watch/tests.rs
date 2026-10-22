@@ -74,6 +74,7 @@ fn slot(health: u32, guid: u64, slot: u16, old: u32, new: u32) -> Vec<(String, O
     let mut app = world(health);
     let entity = app.world().resource::<GuidIndex>().0[&guid];
     app.world_mut().write_message(FieldChanged {
+        at: crate::lanes::stamp(),
         entity,
         guid,
         kind: if guid == ME {
@@ -145,5 +146,29 @@ fn a_passive_aura_or_one_leaving_the_dead_writes_nothing() {
         slot(0, ME, 0, 0, FORTITUDE).len(),
         1,
         "an arrival on the dead still writes"
+    );
+}
+
+/// An aura line takes its field edge's place among what the packets queued: the reference's
+/// callback writes it inside the update's handler (`0x465330`), so a later packet's item fires
+/// behind it though this system runs after both were handled.
+#[test]
+fn an_aura_line_fires_at_its_field_edges_place() {
+    let mut app = world(100);
+    let entity = app.world().resource::<GuidIndex>().0[&ME];
+    app.world_mut().write_message(FieldChanged {
+        at: crate::lanes::stamp(),
+        entity,
+        guid: ME,
+        kind: ObjectType::Player,
+        index: FIELD_UNIT_AURA,
+        old: 0,
+        new: FORTITUDE,
+    });
+    app.world().resource::<ChatLog>().push_combat_edge(true);
+    app.world_mut().run_system_once(super::aura_lines).unwrap();
+    assert_eq!(
+        app.world().resource::<ChatLog>().pending_kinds(),
+        ["combat", "PLAYER_ENTER_COMBAT"]
     );
 }

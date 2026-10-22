@@ -58,6 +58,7 @@ fn award(app: &mut App, victim: u64, total: u32, kill: bool) {
 fn dies(app: &mut App, guid: u64) -> Vec<String> {
     let entity = app.world().resource::<GuidIndex>().0[&guid];
     app.world_mut().write_message(crate::net::FieldChanged {
+        at: crate::lanes::stamp(),
         entity,
         guid,
         kind: ObjectType::Unit,

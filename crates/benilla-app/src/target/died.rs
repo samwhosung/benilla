@@ -248,6 +248,7 @@ mod tests {
         fn dies(&mut self, entity: Entity, guid: u64, kind: ObjectType) {
             let world = self.world();
             world.write_message(FieldChanged {
+                at: crate::lanes::stamp(),
                 entity,
                 guid,
                 kind,

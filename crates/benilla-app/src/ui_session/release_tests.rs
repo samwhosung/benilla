@@ -53,6 +53,7 @@ fn edge(
     new: u32,
 ) -> FieldChanged {
     FieldChanged {
+        at: crate::lanes::stamp(),
         entity,
         guid,
         kind,
