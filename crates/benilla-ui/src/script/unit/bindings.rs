@@ -918,24 +918,26 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|_, ()| Ok(Value::Nil))?,
     )?;
 
-    // TargetUnit(unit) (`0x4899d0`): the host resolves the token and selects through `SetSelection
-    // 0x493540` before the verb returns, so the next line reads the new `"target"`; a token naming
-    // no unit is a no-op, as in the reference. With the targeting cursor up `SelectTarget` binds
-    // the unit to the cast instead and selects nothing (`0x4935d5`); the gate's tag 2 of that bind
-    // (`0x6e5ba5`) is asked here, where the stack that decides it is.
+    // TargetUnit(unit) (`0x4899d0`): a non-string raises `Usage:` (`0x4899f8` → `0x489a25`) and a
+    // token the resolver does not know `Unknown unit name` (`0x515970` at `0x489a08`); then the
+    // host selects through `SetSelection 0x493540` before the verb returns, so the next line reads
+    // the new `"target"`. A token naming no unit is a no-op (`0x489a40`). With the targeting cursor
+    // up `SelectTarget` binds the unit to the cast instead and selects nothing (`0x4935d5`); the
+    // gate's tag 2 of that bind (`0x6e5ba5`) is asked here, where the stack that decides it is.
     g.set(
         "TargetUnit",
-        lua.create_function(|lua, token: Option<String>| {
-            if let Some(token) = token {
-                let may_cast = select_may_cast(lua);
-                submit(
-                    lua,
-                    ScriptCall::Select {
-                        request: SelectionRequest::Unit(token),
-                        may_cast,
-                    },
-                )?;
-            }
+        lua.create_function(|lua, token: Value| {
+            let token =
+                super::super::binding_abi::string_arg(lua, token, r#"Usage: TargetUnit("unit")"#)?;
+            check_unit_token(&Some(token.clone()))?;
+            let may_cast = select_may_cast(lua);
+            submit(
+                lua,
+                ScriptCall::Select {
+                    request: SelectionRequest::Unit(token),
+                    may_cast,
+                },
+            )?;
             Ok(())
         })?,
     )?;

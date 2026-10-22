@@ -186,8 +186,8 @@ mod tests {
     }
 
     /// The selection calls from Lua, through the binding bodies of ASSISTTARGET (`AssistUnit`) and
-    /// TARGETLASTHOSTILE (`TargetLastEnemy`): an empty basis, a garbage token to `TargetUnit` and a
-    /// stale memory are each a no-op (`0x489a40`'s bare `ret`), never a deselect or a panic.
+    /// TARGETLASTHOSTILE (`TargetLastEnemy`): an empty basis and a stale memory are each a no-op
+    /// (`0x489a40`'s bare `ret`), and an unknown token raises, never a deselect or a panic.
     #[test]
     fn the_selection_calls_run_assist_and_last_enemy_without_ever_deselecting() {
         use crate::net::{Guid, ObjectStore, SelfPlayer};
@@ -261,7 +261,11 @@ mod tests {
             world.resource::<super::super::Selection>().guid,
             Some(VICTIM)
         );
-        assert_eq!(run(&mut world, r#"TargetUnit("nosuchunit")"#), Some(VICTIM));
+        // `TargetUnit`'s resolver raises alike (`0x489a08` → `0x515970`).
+        assert!(world
+            .non_send_resource_mut::<UiScript>()
+            .eval::<()>(r#"TargetUnit("nosuchunit")"#)
+            .is_err());
 
         // TargetLastEnemy with nothing remembered: also a no-op.
         assert_eq!(run(&mut world, "TargetLastEnemy()"), Some(VICTIM));
