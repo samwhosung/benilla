@@ -331,10 +331,8 @@ fn target_unit_queues_the_token_for_the_app_to_resolve() {
     let mut s = UiScript::new().unwrap();
     s.keep_calls();
     assert!(s.take_selection_requests().is_empty());
-    // A nil token is not queued.
     s.eval::<()>(r#"TargetUnit("player")"#).unwrap();
     s.eval::<()>(r#"TargetUnit("target")"#).unwrap();
-    s.eval::<()>(r#"TargetUnit(nil)"#).unwrap();
     assert_eq!(
         s.take_selection_requests(),
         vec![
@@ -343,6 +341,32 @@ fn target_unit_queues_the_token_for_the_app_to_resolve() {
         ]
     );
     assert!(s.take_selection_requests().is_empty());
+}
+
+/// `TargetUnit` (`0x4899d0`) raises its usage for an argument `lua_isstring` refuses (`0x4899f1`,
+/// `0x4899f8` → `0x489a25`, the string at `0x842644`), nil and no argument included, and the
+/// resolver `0x515970` (`0x489a08`) raises `Unknown unit name` for a token it does not know, both
+/// before the select (`0x489a16`). A number passes `lua_isstring` and is read as its string.
+#[test]
+fn target_unit_raises_for_a_non_string_or_an_unknown_token() {
+    use crate::script::SelectionRequest;
+    let mut s = UiScript::new().unwrap();
+    s.keep_calls();
+    for call in ["TargetUnit()", "TargetUnit(nil)", "TargetUnit({})"] {
+        let err = s.run(call).expect_err(call).to_string();
+        assert!(err.contains(r#"Usage: TargetUnit("unit")"#), "{call}: {err}");
+    }
+    let err = s
+        .run(r#"TargetUnit("bogus")"#)
+        .expect_err("an unknown token")
+        .to_string();
+    assert!(err.contains("Unknown unit name: bogus"), "{err}");
+    assert!(s.take_selection_requests().is_empty(), "nothing selects");
+    s.run(r#"TargetUnit("")"#).expect("an empty token names nobody");
+    assert_eq!(
+        s.take_selection_requests(),
+        vec![SelectionRequest::Unit(String::new())]
+    );
 }
 
 /// A nil `AssistUnit` argument raises its usage (`0x489c22`) and queues nothing.
