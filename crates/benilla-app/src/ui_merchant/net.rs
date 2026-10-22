@@ -166,7 +166,7 @@ mod tests {
             .init_resource::<MerchantOpen>()
             .init_resource::<MerchantErrors>()
             .init_resource::<ItemReleases>()
-            .add_message::<crate::item_watch::ItemNotice>()
+            .init_resource::<crate::item_lane::ItemLane>()
             .init_resource::<crate::field_watch::NoticeLane>()
             .add_systems(Update, crate::ui_quest_log::feed_quest_log);
         register(&mut app);
