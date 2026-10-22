@@ -289,7 +289,17 @@ pub(in crate::ui_party) mod tests {
             )
             .unwrap();
         app.insert_non_send_resource(script);
-        app.add_systems(Update, super::super::feed::feed_party);
+        // The feed, then the party lane, as the lanes' drain follows the feeds.
+        app.init_resource::<crate::ui_party::PartyLane>()
+            .add_systems(
+                Update,
+                (
+                    super::super::feed::feed_party,
+                    crate::ui_party::fire_party_lane
+                        .after(super::super::feed::feed_party)
+                        .before(super::super::feed::drain_party),
+                ),
+            );
         app
     }
 

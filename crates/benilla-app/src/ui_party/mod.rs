@@ -28,13 +28,22 @@ pub(crate) use feed::{
 };
 #[cfg(test)]
 pub(crate) use feed::{feed_party, PARTY_PET_TOKENS};
+#[cfg(test)]
+pub(crate) use feed::{fire_party_lane, PartyLane};
 pub(crate) use records::record_notices;
 
 pub(crate) struct UiPartyPlugin;
 
 impl Plugin for UiPartyPlugin {
     fn build(&self, app: &mut App) {
+        use crate::lanes::LaneApp;
         net::register(app);
+        app.init_resource::<feed::PartyLane>().add_lane(
+            "party",
+            feed::peek_group_signals,
+            feed::fire_group_signals,
+            None,
+        );
         // A UI-only harness has no sound stack; the list handler queues the join chime, the stats
         // handler the unit events of a record.
         app.init_resource::<GroupState>()
@@ -216,26 +225,26 @@ pub enum GroupSignal {
     InviteRequest(String),
 }
 
-/// The group events signalled, oldest first. The reference signals each inside its packet's
-/// handler (`FrameScript_SignalEvent`, `0x703e50`), so one drain's packets signal in wire order
-/// and the feed fires them in that order, once each (`feed::feed_party`). Sequence numbers run on
-/// across trims and sessions, so a cursor into the log stays good. An entry lives two ages, as a
-/// bevy message lives two updates: `feed::drain_party` ages the log every frame, and the feed,
-/// which also runs every frame, fires everything logged before the last age before the next one
-/// drops it. A frame with no VM drops what no VM heard; the next VM is a fresh one, and its
-/// catch-up stands in.
+/// The group events signalled, oldest first, each stamped where its handler signals it
+/// ([`crate::lanes::stamp`]). The reference signals each inside its packet's handler
+/// (`FrameScript_SignalEvent`, `0x703e50`), so the party lane fires them at their packets' places
+/// among the other lanes' items, once each ([`feed::fire_group_signals`]). Sequence numbers run on
+/// across trims and sessions, so a cursor into the log stays good. An entry lives two ages:
+/// `feed::drain_party` ages the log every frame, and the lane, which fires every frame the
+/// in-game interface is up, fires everything logged before the next age drops it. A frame with
+/// no VM drops what no VM heard; the next VM is a fresh one, and its catch-up stands in.
 #[derive(Default)]
 pub(crate) struct SignalLog {
     /// The sequence number of `entries[0]`.
     base: u64,
-    entries: Vec<GroupSignal>,
+    entries: Vec<(crate::lanes::Stamp, GroupSignal)>,
     /// The log's end at the last [`Self::age`].
     aged: u64,
 }
 
 impl SignalLog {
     fn push(&mut self, signal: GroupSignal) {
-        self.entries.push(signal);
+        self.entries.push((crate::lanes::stamp(), signal));
     }
 
     /// One past the newest entry's sequence number.
@@ -243,12 +252,27 @@ impl SignalLog {
         self.base + self.entries.len() as u64
     }
 
+    /// The entry with sequence number `seq` and its stamp, while the log holds it.
+    pub(crate) fn at(&self, seq: u64) -> Option<&(crate::lanes::Stamp, GroupSignal)> {
+        self.entries
+            .get(usize::try_from(seq.checked_sub(self.base)?).ok()?)
+    }
+
+    /// The oldest sequence number the log still holds.
+    pub(crate) fn first(&self) -> u64 {
+        self.base
+    }
+
     /// The entries from sequence number `cursor` on, oldest first.
-    pub(crate) fn since(&self, cursor: u64) -> &[GroupSignal] {
+    #[cfg(test)]
+    pub(crate) fn since(&self, cursor: u64) -> Vec<GroupSignal> {
         let skip = cursor
             .saturating_sub(self.base)
             .min(self.entries.len() as u64);
-        &self.entries[skip as usize..]
+        self.entries[skip as usize..]
+            .iter()
+            .map(|(_, s)| s.clone())
+            .collect()
     }
 
     /// Drop the entries logged before the previous age.
@@ -272,7 +296,7 @@ impl SignalLog {
     /// Every entry, which leaves the log empty.
     #[cfg(test)]
     pub(crate) fn take(&mut self) -> Vec<GroupSignal> {
-        let all = self.entries.clone();
+        let all = self.entries.iter().map(|(_, s)| s.clone()).collect();
         self.clear();
         all
     }

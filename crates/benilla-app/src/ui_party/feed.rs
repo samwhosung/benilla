@@ -26,8 +26,6 @@ use crate::query_cache::Ask;
 /// What the feed last pushed: the values its event edges fire on.
 #[derive(Default)]
 pub(crate) struct FedParty {
-    /// How far into [`GroupState::signals`] the feed has fired.
-    signals: u64,
     units: [Option<UnitState>; 4],
     /// Each party slot's (member guid, object streamed) pair, the `PARTY_MEMBER_ENABLE`/`DISABLE`
     /// edge; with the guid in it a new occupant is a roster edge, not an activation.
@@ -78,6 +76,99 @@ fn catch_up(group: &GroupState) -> Vec<GroupSignal> {
     .into_iter()
     .filter_map(|(signal, owed)| owed.then_some(signal))
     .collect()
+}
+
+/// The party lane's place in [`GroupState::signals`]: the sequence number of the first entry it
+/// has not fired.
+#[derive(Resource, Default)]
+pub(crate) struct PartyLane {
+    fired: u64,
+}
+
+/// The party lane's head ([`crate::lanes`]): the stamp of the first entry it has not fired.
+pub(super) fn peek_group_signals(world: &World) -> Option<crate::lanes::Stamp> {
+    let log = &world.get_resource::<GroupState>()?.signals;
+    let fired = world.get_resource::<PartyLane>()?.fired;
+    log.at(fired.max(log.first())).map(|(stamp, _)| *stamp)
+}
+
+/// The party lane's `fire_until`: each group event `until` admits, signalled with the host lent at
+/// its handler's place among the other lanes' items, after the roster and unit snapshots the
+/// feed pushed, which their handlers read. The lane stops after an event whose firing stamped
+/// anything, so what it pushed fires next.
+pub(super) fn fire_group_signals(
+    In(until): In<crate::lanes::Until>,
+    mut vm: crate::script_calls::VmWith<(Res<'static, GroupState>, ResMut<'static, PartyLane>)>,
+    mut sink: crate::ui_action::MessageSink,
+) {
+    loop {
+        let next = {
+            let (group, mut lane) = vm.own();
+            let seq = lane.fired.max(group.signals.first());
+            match group.signals.at(seq) {
+                Some((stamp, signal)) if until.admits(*stamp) => {
+                    lane.fired = seq + 1;
+                    Some((*stamp, signal.clone()))
+                }
+                _ => None,
+            }
+        };
+        let Some((stamp, signal)) = next else {
+            return;
+        };
+        let ((), moved) = crate::lanes::firing(stamp, || {
+            vm.run(|script| {
+                if let Some(script) = script {
+                    fire_signal(script, &mut sink, signal);
+                }
+            })
+        });
+        if moved {
+            return;
+        }
+    }
+}
+
+/// The group events waiting, fired alone, for a test that drives them without the other lanes.
+#[cfg(test)]
+pub(crate) fn fire_party_lane(world: &mut World) {
+    use bevy::ecs::system::RunSystemOnce;
+    let until = crate::lanes::Until::all();
+    while peek_group_signals(world).is_some_and(|s| until.admits(s)) {
+        world
+            .run_system_once_with(fire_group_signals, until)
+            .unwrap();
+    }
+}
+
+/// One group event as its handler signals it.
+fn fire_signal(
+    script: &mut UiScript,
+    sink: &mut crate::ui_action::MessageSink,
+    signal: GroupSignal,
+) {
+    let (signalled, args) = match signal {
+        GroupSignal::MembersChanged => ("PARTY_MEMBERS_CHANGED", vec![]),
+        GroupSignal::LeaderChanged => ("PARTY_LEADER_CHANGED", vec![]),
+        GroupSignal::LootMethodChanged => ("PARTY_LOOT_METHOD_CHANGED", vec![]),
+        GroupSignal::RaidRosterUpdate => ("RAID_ROSTER_UPDATE", vec![]),
+        GroupSignal::RaidTargetUpdate => ("RAID_TARGET_UPDATE", vec![]),
+        // `0x5e6730` signals the event (`0x5e6747`), then shows `ERR_INVITED_TO_GROUP_S` (message
+        // `0x3c`, `0x5e6752`), so the line follows the popup's handlers.
+        GroupSignal::InviteRequest(inviter) => {
+            script.fire_event(
+                "PARTY_INVITE_REQUEST",
+                vec![ScriptValue::Str(inviter.clone())],
+            );
+            if let Some(line) =
+                crate::ui_action::keyed_line_s(script, "ERR_INVITED_TO_GROUP_S", &[&inviter])
+            {
+                crate::ui_action::show_now(script, sink, "ui_party", line);
+            }
+            return;
+        }
+    };
+    script.fire_event(signalled, args);
 }
 
 /// The VM a `/reload` built and [`seed_reloaded_vm`] seeded, by its session, and how far into
@@ -196,6 +287,7 @@ pub(crate) fn feed_party(
     chat: Res<crate::ui_chat::ChatLog>,
     seeded: Option<Res<ReloadSeed>>,
     mut sink: crate::ui_action::MessageSink,
+    mut lane: ResMut<PartyLane>,
 ) {
     let GroupView {
         tables,
@@ -300,53 +392,33 @@ pub(crate) fn feed_party(
         // ── The group events ────────────────────────────────────────────────────
         //
         // `PARTY_MEMBERS_CHANGED`, `PARTY_LEADER_CHANGED`, `PARTY_LOOT_METHOD_CHANGED`,
-        // `RAID_ROSTER_UPDATE` and `RAID_TARGET_UPDATE`, each as its handler signalled it, in
-        // packet order and once ([`GroupState::signals`]), after the snapshots above, which their
+        // `RAID_ROSTER_UPDATE` and `RAID_TARGET_UPDATE` fire from the party lane, each at its
+        // handler's place ([`fire_group_signals`]), after the snapshots above, which their
         // handlers read. Nothing gates one on a difference: a list that changes nothing still
         // signals, and a stats packet signals none. `RAID_ROSTER_UPDATE`'s fourth site, the world
         // entry's fill of a zero row (`0x4ba1a2`), is not built: our row holds our guid
         // ([`GroupState::own_raid_row`]). A world entry's fresh VM heard none of them and is told
-        // [`catch_up`] instead; a reload's seeded VM only what came after its seed.
-        let seed = seeded
-            .as_ref()
-            .and_then(|s| s.0)
-            .filter(|&(session, _)| session == script.session());
-        let owed = if let (true, Some((_, cursor))) = (vm_reset, seed) {
-            group.signals.since(cursor).to_vec()
-        } else if vm_reset {
-            catch_up(group)
-        } else {
-            group.signals.since(fed.signals).to_vec()
-        };
-        fed.signals = group.signals.end();
-        if !owed.is_empty() {
-            gate.audit("feed_party", "a group signal");
-        }
-        for signal in owed {
-            let (signalled, args) = match signal {
-                GroupSignal::MembersChanged => ("PARTY_MEMBERS_CHANGED", vec![]),
-                GroupSignal::LeaderChanged => ("PARTY_LEADER_CHANGED", vec![]),
-                GroupSignal::LootMethodChanged => ("PARTY_LOOT_METHOD_CHANGED", vec![]),
-                GroupSignal::RaidRosterUpdate => ("RAID_ROSTER_UPDATE", vec![]),
-                GroupSignal::RaidTargetUpdate => ("RAID_TARGET_UPDATE", vec![]),
-                // `0x5e6730` signals the event (`0x5e6747`), then shows `ERR_INVITED_TO_GROUP_S`
-                // (message `0x3c`, `0x5e6752`), so the line follows the popup's handlers.
-                GroupSignal::InviteRequest(inviter) => {
-                    script.fire_event(
-                        "PARTY_INVITE_REQUEST",
-                        vec![ScriptValue::Str(inviter.clone())],
-                    );
-                    if let Some(line) = crate::ui_action::keyed_line_s(
-                        script,
-                        "ERR_INVITED_TO_GROUP_S",
-                        &[&inviter],
-                    ) {
-                        crate::ui_action::show_now(script, &mut sink, "ui_party", line);
+        // [`catch_up`] here instead, the lane passing over what was logged; a reload's seeded VM
+        // hears from the lane only what came after its seed.
+        if vm_reset {
+            let seed = seeded
+                .as_ref()
+                .and_then(|s| s.0)
+                .filter(|&(session, _)| session == script.session());
+            let from = match seed {
+                Some((_, cursor)) => cursor,
+                None => {
+                    let owed = catch_up(group);
+                    if !owed.is_empty() {
+                        gate.audit("feed_party", "the catch-up's group signals");
                     }
-                    continue;
+                    for signal in owed {
+                        fire_signal(script, &mut sink, signal);
+                    }
+                    group.signals.end()
                 }
             };
-            script.fire_event(signalled, args);
+            lane.fired = lane.fired.max(from);
         }
 
         // ── READY_CHECK ─────────────────────────────────────────────────────────
@@ -2160,9 +2232,9 @@ mod tests {
         assert_eq!(catch_up(&g), [MembersChanged], "the group ended");
     }
 
-    /// The feed and the drain in the schedule's order, with a system between them that logs a
-    /// signal, as the chat input's `/partytest` can: the drain's age keeps it, the next frame's
-    /// feed fires it once, and the ages after drop it.
+    /// The feed, the party lane and the drain in the schedule's order, with a system between the
+    /// lane and the drain that logs a signal, as the chat input's `/partytest` can: the drain's
+    /// age keeps it, the next frame's lane fires it once, and the ages after drop it.
     #[test]
     fn a_signal_logged_between_the_feed_and_the_drain_fires_on_the_next_frame_once() {
         #[derive(Resource, Default)]
@@ -2176,7 +2248,10 @@ mod tests {
         app.init_resource::<crate::net::Reputations>()
             .init_resource::<crate::ui_action::UiErrorKeys>()
             .init_resource::<Mark>();
-        app.add_systems(Update, (mark.after(feed_party), drain_party.after(mark)));
+        app.add_systems(
+            Update,
+            (mark.after(super::fire_party_lane), drain_party.after(mark)),
+        );
         let script = app.world_mut().non_send_resource_mut::<UiScript>();
         script
             .run(
@@ -2198,8 +2273,8 @@ mod tests {
         marks(&mut app);
 
         app.world_mut().resource_mut::<Mark>().0 = true;
-        assert_eq!(marks(&mut app), 0, "logged after this frame's feed");
-        assert_eq!(marks(&mut app), 1, "the next frame's feed");
+        assert_eq!(marks(&mut app), 0, "logged after this frame's lane");
+        assert_eq!(marks(&mut app), 1, "the next frame's lane");
         marks(&mut app);
         assert_eq!(marks(&mut app), 0, "once");
         let log = &app.world().resource::<GroupState>().signals;
