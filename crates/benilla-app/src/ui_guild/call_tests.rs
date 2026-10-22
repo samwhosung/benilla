@@ -257,3 +257,40 @@ fn a_note_sends_inside_its_call_and_leaves_the_stored_note() {
         "the stored text still differs from the first; the second matches it"
     );
 }
+
+/// Swap in a fresh VM as the lifecycle does, a `/reload`'s (`reload`) or a world entry's, and
+/// push the roster to it.
+fn new_vm(g: &mut Guild, reload: bool) {
+    let world = g.app.world_mut();
+    super::fold_dying_vm_guild(world);
+    let mut script = UiScript::new().expect("a VM");
+    super::seed_vm_guild(world, &mut script, reload);
+    world.insert_non_send_resource(script);
+    feed(g);
+}
+
+/// A world entry runs `InitGuildRoster` from `InitializeGame` (`0x48f5ea` → `0x4d0a00`), which
+/// zeroes the request deadline (`0x4d0a41`) and seeds the sort chain afresh (`0x4d0a50`); a
+/// `/reload` (`0x495664`, `0x495669`) runs neither, so both stand across it.
+#[test]
+fn a_login_resets_the_sort_and_the_request_deadline_and_a_reload_keeps_them() {
+    let mut g = client();
+    three_online(&mut g);
+    run(&mut g, "SortGuildRoster('level') GuildRoster()");
+    assert_eq!(sent(&g), ["GuildRosterRequest"]);
+    let second = |g: &mut Guild| eval::<String>(g, "return (GetGuildRosterInfo(2))");
+
+    new_vm(&mut g, true);
+    assert_eq!(second(&mut g), "Cedar", "the reload keeps the level sort");
+    run(&mut g, "GuildRoster()");
+    assert!(sent(&g).is_empty(), "and the deadline");
+
+    new_vm(&mut g, false);
+    assert_eq!(
+        second(&mut g),
+        "Birch",
+        "the login's chain sorts by rank again"
+    );
+    run(&mut g, "GuildRoster()");
+    assert_eq!(sent(&g), ["GuildRosterRequest"], "and allows the request");
+}
