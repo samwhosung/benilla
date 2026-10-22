@@ -672,6 +672,7 @@ fn whiff_slowdown_spares_a_non_swing_oneshot() {
         hit_info: 0,
         victim_state: 2, // dodge, a whiff
         damage: 0,
+        school: 0,
         displayed: true,
         seq: 2,
     });
@@ -743,6 +744,7 @@ fn same_frame_collision_fast_paths_the_second_combat_clip() {
         hit_info: 0x2,
         victim_state: 1,
         damage: 21,
+        school: 0,
         displayed: true,
         seq: 1,
     });
@@ -765,6 +767,7 @@ fn same_frame_collision_fast_paths_the_second_combat_clip() {
         hit_info: 0x2,
         victim_state: 1,
         damage: 21,
+        school: 0,
         displayed: true,
         seq: 4,
     });
@@ -896,6 +899,7 @@ fn a_movement_flag_change_cuts_a_full_body_oneshot_immediately() {
         hit_info: 0x2,
         victim_state: 1,
         damage: 21,
+        school: 0,
         displayed: true,
         seq: 1,
     });
@@ -930,6 +934,7 @@ fn a_movement_flag_change_cuts_a_full_body_oneshot_immediately() {
         hit_info: 0x2,
         victim_state: 1,
         damage: 21,
+        school: 0,
         displayed: true,
         seq: 2,
     });
@@ -1923,6 +1928,7 @@ fn a_midair_deferred_park_survives_the_level_and_dies_at_the_landing_play() {
         hit_info: 0x2,
         victim_state: 1,
         damage: 21,
+        school: 0,
         displayed: true,
         seq: 2,
     });
@@ -2045,6 +2051,7 @@ fn a_landed_swing_snaps_its_attacker_out_of_the_ranged_stance() {
             hit_info: 0,
             victim_state: 1,
             damage: 7,
+            school: 0,
             displayed: true,
             seq: 0,
         });
@@ -3532,6 +3539,7 @@ fn a_disarmed_attacker_swings_and_stands_unarmed() {
                 hit_info,
                 victim_state: 1,
                 damage: 7,
+                school: 0,
                 displayed: true,
                 seq,
             });
@@ -3609,6 +3617,7 @@ fn an_off_hand_only_fighter_is_the_case_that_punches_off_hand() {
         hit_info: 0x4,
         victim_state: 1,
         damage: 7,
+        school: 0,
         displayed: true,
         seq: 1,
     });
@@ -3974,6 +3983,7 @@ fn a_combat_over_combat_fast_path_does_not_raise_the_anim_edge() {
         hit_info: 0x2,
         victim_state: 1,
         damage: 21,
+        school: 0,
         displayed: true,
         seq: 2,
     });

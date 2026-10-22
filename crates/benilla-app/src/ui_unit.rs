@@ -1831,6 +1831,7 @@ mod tests {
             hit_info: 0x80,
             victim_state: 1,
             damage: 40,
+            school: 0,
             displayed,
             seq: 0,
         };

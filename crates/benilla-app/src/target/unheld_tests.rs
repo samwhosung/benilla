@@ -341,6 +341,7 @@ fn an_attacker_never_replaces_a_selection_with_no_object() {
             hit_info: 0,
             victim_state: 1,
             damage: 1,
+            school: 0,
             displayed: true,
             seq: 0,
         });

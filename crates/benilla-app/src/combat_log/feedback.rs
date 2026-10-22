@@ -133,6 +133,7 @@ mod tests {
             hit_info,
             victim_state,
             damage,
+            school: 0,
             displayed: true,
             seq: 0,
         };

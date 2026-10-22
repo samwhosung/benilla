@@ -328,6 +328,7 @@ fn a_charmed_player_is_refused_by_every_selector() {
                         hit_info: 0,
                         victim_state: 1,
                         damage: 1,
+                        school: 0,
                         displayed: true,
                         seq: 0,
                     });
@@ -414,6 +415,7 @@ fn an_attacker_acquired_with_the_cursor_up_is_bound() {
             hit_info: 0,
             victim_state: 1,
             damage: 1,
+            school: 0,
             displayed: true,
             seq: 0,
         });

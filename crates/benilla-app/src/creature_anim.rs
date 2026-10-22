@@ -594,6 +594,8 @@ pub(crate) struct SwingMessage {
     /// 8 deflect.
     pub(crate) victim_state: u32,
     pub(crate) damage: u32,
+    /// The first sub-damage block's school (`rec+0x18`, read at `0x625cb1`), 0 physical.
+    pub(crate) school: u32,
     /// `0x625e40`'s display verdict: it gates the floating number and the victim's `UNIT_COMBAT`
     /// (`0x62440d`, returning past both at `0x624414`); animation, flinch, blood, sounds and
     /// timers run regardless.
