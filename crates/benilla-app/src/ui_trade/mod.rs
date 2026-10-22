@@ -1074,9 +1074,20 @@ fn feed_trade(
     // The statuses' accept drops first, as `0x4bf2b0` runs them ahead of its compares: each
     // signal in place, its handlers' calls applying inside it, and our un-accept's send after
     // its signal (`0x4bf260`, `0x4bf272`).
-    let steps = vm.own().take_accept_steps();
-    if !steps.is_empty() {
+    // Our slots an extended status emptied go first, as the handler runs `InvalidateTradeSlot`
+    // (`0x4bfbd0`: the unlock and its own `TRADE_PLAYER_ITEM_CHANGED`) as it stores the records
+    // (`0x5d4ad3`, `0x5d4b33`), before `0x4bf2b0` (`0x5d4b67`); the diff below then skips them.
+    let (invalidated, steps) = {
+        let mut trade = vm.own();
+        (trade.take_invalidated(), trade.take_accept_steps())
+    };
+    if !invalidated.is_empty() || !steps.is_empty() {
         vm.run(|mut script| {
+            if let Some(script) = script.as_deref_mut() {
+                for &slot in &invalidated {
+                    script.invalidate_trade_slot(slot);
+                }
+            }
             for step in steps {
                 match step {
                     AcceptStep::Signal(mine, theirs) => {
@@ -1144,12 +1155,7 @@ fn feed_trade(
         // The per-slot events the stock `TradeFrame.lua` repaints one slot on, arg1 the 1-based
         // slot (`0x4bf414`/`0x4bf452` target, `0x4bf487`/`0x4bfaef` player). An offer change
         // signals nothing else: `TRADE_UPDATE` has one producer, the getters' record callback
-        // ([`run_record_callbacks`]). `InvalidateTradeSlot` (`0x4bfbd0`) on our slots: the unlock
-        // and its own `TRADE_PLAYER_ITEM_CHANGED`, which the diff below then skips.
-        let invalidated = trade.take_invalidated();
-        for &slot in &invalidated {
-            script.invalidate_trade_slot(slot);
-        }
+        // ([`run_record_callbacks`]). Our invalidated slots signalled ahead of this turn.
         if changed && trade.is_open() && !opened {
             let empty = TradeState::default();
             let old = last.as_ref().unwrap_or(&empty);

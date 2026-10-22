@@ -29,8 +29,10 @@ fn on_trade_status(
             world_commands.queue(move |world: &mut World| match window {
                 Window::Open => super::open_window(world),
                 Window::Close { canceled, done } => super::server_close(world, canceled, done),
-                // Status 13's `PLAYER_MONEY` (`0x5d48a8`), the only thing it signals.
+                // Status 13's `PLAYER_MONEY` (`0x5d48a8`), the only thing it signals, after both
+                // offers are zeroed (`0x5d489c`, `0x5d48a2`).
                 Window::Money => crate::ui_session::fire(world, |script| {
+                    script.zero_trade_gold();
                     script.fire_event("PLAYER_MONEY", vec![]);
                 }),
             });
