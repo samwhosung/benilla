@@ -371,3 +371,22 @@ fn a_refused_sales_unlock_fires_at_its_packet() {
         ["ITEM_LOCK_CHANGED:nil", "PLAYER_COMBO_POINTS:nil"]
     );
 }
+
+/// A loot error for a guid the window is not on takes the refusal leg (`0x5eb944` → `0x5eb963`)
+/// and unlocks the guid inside its handler (`0x5eb9de`).
+#[test]
+fn a_loot_refusals_unlock_fires_at_its_packet() {
+    let mut app = client();
+    let refused = || SessionEvent::LootError {
+        guid: POTIONS,
+        error: 8,
+    };
+    assert_eq!(
+        frame(&mut app, vec![combo(2), refused()]),
+        ["PLAYER_COMBO_POINTS:nil", "ITEM_LOCK_CHANGED:nil"]
+    );
+    assert_eq!(
+        frame(&mut app, vec![refused(), combo(0)]),
+        ["ITEM_LOCK_CHANGED:nil", "PLAYER_COMBO_POINTS:nil"]
+    );
+}
