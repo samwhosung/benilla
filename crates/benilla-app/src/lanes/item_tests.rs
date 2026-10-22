@@ -356,3 +356,83 @@ fn an_item_push_shows_at_its_packet_or_its_records_answer() {
         ["PLAYER_COMBO_POINTS:nil", "CHAT_MSG_LOOT"]
     );
 }
+
+/// A response whose copier waits on a record ends inside the answer (`0x4c2afc`) on its own
+/// window, though a later response in the frame replaced it: the second copier's teardown closes
+/// what the first opened (`0x4c1ccb`), then ends its own inside its packet (`0x4c1ea8`).
+#[test]
+fn a_waiting_copier_ends_on_its_own_window_before_a_later_response() {
+    let mut app = client();
+    stream_bobber(&mut app);
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![
+                fished(&[(0, LINEN)]),
+                answered(LINEN, "Linen Cloth"),
+                fished(&[(0, POTION)])
+            ]
+        ),
+        ["LOOT_OPENED:nil", "LOOT_CLOSED:nil", "LOOT_OPENED:nil"]
+    );
+}
+
+/// A response whose rows' records are all held ends its copier inside its packet (`0x4c1ea8`), so
+/// a release in the same frame closes a window that opened (`0x5ec0f3`).
+#[test]
+fn a_held_copier_ends_inside_its_packet_before_a_later_close() {
+    let mut app = client();
+    stream_bobber(&mut app);
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![
+                fished(&[(0, POTION)]),
+                SessionEvent::LootReleaseResponse {
+                    guid: BOBBER,
+                    result: 1
+                }
+            ]
+        ),
+        ["LOOT_OPENED:nil", "LOOT_CLOSED:nil"]
+    );
+}
+
+/// One answer runs its record's callbacks in the order they were asked (`0x5d8321`-`0x5d833f`):
+/// a push ahead of its item's create on the wire shows its line (`0x491ee0`) before the item's
+/// set-up recounts the bar and signals its owner (`0x5d8390`, `0x5d85ce`, `0x5d8606`).
+#[test]
+fn one_answer_runs_its_callbacks_in_the_order_asked() {
+    let mut app = client();
+    const LINENS: u64 = 0x4000_0000_0000_0044;
+    let world = app.world_mut();
+    let mut script = world.non_send_resource_mut::<UiScript>();
+    script.set_unit_guids(&benilla_ui::script::UnitGuids {
+        player: ME,
+        ..Default::default()
+    });
+    script.set_action(
+        7,
+        Some(ActionSlot {
+            kind: ACTION_KIND_ITEM,
+            action: LINEN,
+            ..Default::default()
+        }),
+    );
+    script.run("Heard = {}").unwrap();
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![
+                pushed(LINEN),
+                item(LINENS, LINEN),
+                answered(LINEN, "Linen Cloth")
+            ]
+        ),
+        [
+            "CHAT_MSG_LOOT",
+            "ACTIONBAR_SLOT_CHANGED:7",
+            "UNIT_INVENTORY_CHANGED:player"
+        ]
+    );
+}

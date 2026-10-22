@@ -1830,6 +1830,69 @@ fn the_trade_re_signal_follows_the_bar_recount_in_the_watchers_run() {
     );
 }
 
+/// The destroy's handler (`0x5d8660`) runs whole in its order: the bar recount (`0x5d8798`), the
+/// trade scan (`0x5d87a7`), the quest log's ask for the item (`0x5d87b2`), then the slot's signal
+/// (`0x5d87c1`).
+#[test]
+fn the_destroy_run_recounts_scans_asks_then_signals() {
+    use benilla_ui::script::{QuestObjectiveView, QuestRecordView, QuestSlotView, QUEST_LOG_SLOTS};
+    let (mut app, _rx) = resignal_app();
+    let world = app.world_mut();
+    let mut vm = world.non_send_resource_mut::<UiScript>();
+    vm.set_action(
+        4,
+        Some(benilla_ui::script::ActionSlot {
+            kind: benilla_protocol::messages::ACTION_KIND_ITEM,
+            action: 2589,
+            ..Default::default()
+        }),
+    );
+    let mut record = QuestRecordView {
+        title: "Cloth".into(),
+        ..Default::default()
+    };
+    record.objectives[0] = QuestObjectiveView {
+        item_id: 2589,
+        item_count: 4,
+        ..Default::default()
+    };
+    vm.seed_quest_record(77, record);
+    vm.set_quest_log_player(true);
+    let mut slots = [QuestSlotView::default(); QUEST_LOG_SLOTS];
+    slots[0].quest_id = 77;
+    vm.quest_log_changed(slots);
+    vm.run(
+        "f = CreateFrame('Frame') \
+         for _, e in ipairs({'ACTIONBAR_SLOT_CHANGED', 'QUEST_LOG_UPDATE', \
+             'UNIT_INVENTORY_CHANGED'}) do f:RegisterEvent(e) end \
+         f:SetScript('OnEvent', function() table.insert(SEEN, event) end)",
+    )
+    .unwrap();
+    seen(&mut app);
+    app.world_mut()
+        .resource_mut::<crate::item_lane::ItemLane>()
+        .push(crate::item_watch::Run {
+            notice: Some(crate::item_watch::ItemNotice::Destroyed {
+                guid: LINEN,
+                entry: 2589,
+            }),
+            signals: vec![crate::field_watch::FieldNotice::Player {
+                id: crate::field_watch::id::UNIT_INVENTORY_CHANGED,
+            }],
+        });
+    app.update();
+    crate::item_lane::fire_item_lane(app.world_mut());
+    assert_eq!(
+        seen(&mut app),
+        [
+            "ACTIONBAR_SLOT_CHANGED",
+            "TRADE_PLAYER_ITEM_CHANGED",
+            "QUEST_LOG_UPDATE",
+            "UNIT_INVENTORY_CHANGED"
+        ]
+    );
+}
+
 /// Slot 7's spell per side (`0x4bf2b0`): the partner's window carries the spell cast on our
 /// slot 7, which repaints ours and names its enchantment; our window carries ours on theirs.
 /// A resend of the same spell signals nothing, and the record compare ignores the name.
