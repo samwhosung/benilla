@@ -49,8 +49,9 @@ pub(super) const ICON_PREFIX: &str = "Interface\\Icons\\";
 /// Parse one scope's file into its records in file order, each with its id, as the reader
 /// `0x4f0600` walks it: the file splits into [`lines`] (`0x4f0687`). With no record open, a line
 /// whose first space-separated token is `MACRO` without case is a header (`0x4f06c1`,
-/// `0x4f06d7`): its id is `SStrToInt` of the next space-separated token, and a zero one is no
-/// record (`0x4f0721`, `0x4f072a`); then the name and the icon are the next two tokens on
+/// `0x4f06d7`), which opens nothing in a scope that holds 18 (`0x4f06f8`): its id is `SStrToInt`
+/// of the next space-separated token, and a zero one, or one the scope's file opened already, is
+/// no record (`0x4f072a`, `0x4f078b`); then the name and the icon are the next two tokens on
 /// `` "\r\n`` with quotes on (`0x4f07bb`, `0x4f0986`), so a name runs to the next quote. A header
 /// with an empty name is read but opens no record (`0x4f07c8`), the table skipping it once its
 /// id has counted. Within a record each line is body text followed by `\n` (`0x4f0a15`,
@@ -59,8 +60,11 @@ pub(super) const ICON_PREFIX: &str = "Interface\\Icons\\";
 /// empty body. The table that takes the records skips what the scope cannot hold and any id it
 /// has, and gives an id below its base the base (`MacroState::from_scopes`).
 pub(super) fn parse(text: &str, per_character: bool) -> Vec<MacroView> {
-    let _ = per_character;
+    let base = if per_character { CHARACTER_ID_BASE } else { 0 };
     let mut out: Vec<MacroView> = Vec::new();
+    // The ids of the records opened so far, as the table holds them: past the base
+    // (`0x4f0737`, a signed compare).
+    let mut held: std::collections::HashSet<u32> = std::collections::HashSet::new();
     // The open record, its index in `out`, and the body read so far.
     let mut open: Option<(usize, String)> = None;
     for line in lines(text) {
@@ -79,13 +83,27 @@ pub(super) fn parse(text: &str, per_character: bool) -> Vec<MacroView> {
         if benilla_ui::crt::str_cmp_i(&token(b" "), "MACRO") != 0 {
             continue; // stray text between records
         }
+        // A full scope opens no record (`0x4f06f8`).
+        if held.len() >= MAX_MACROS {
+            continue;
+        }
         let id = s_str_to_int(&token(b" ")) as u32;
         if id == 0 {
+            continue;
+        }
+        // An id the table holds opens no record (`0x4f078b`).
+        let as_held = if (id as i32) < base as i32 {
+            id.wrapping_add(base)
+        } else {
+            id
+        };
+        if held.contains(&as_held) {
             continue;
         }
         let name = token(NAME_DELIMS);
         let icon = token(NAME_DELIMS);
         if !name.is_empty() {
+            held.insert(as_held);
             open = Some((out.len(), String::new()));
         }
         out.push(MacroView {
@@ -137,7 +155,8 @@ pub(super) fn write<'a>(macros: impl Iterator<Item = &'a MacroView>) -> String {
     let mut out = String::new();
     for m in macros {
         let icon = m.texture.as_deref().map(icon_token).unwrap_or_default();
-        out.push_str(&format!("MACRO {} \"{}\" {}\n", m.id, m.name, icon));
+        // `%d`: the id signed.
+        out.push_str(&format!("MACRO {} \"{}\" {}\n", m.id as i32, m.name, icon));
         for line in lines(&m.body) {
             out.push_str(&line);
             out.push('\n');
