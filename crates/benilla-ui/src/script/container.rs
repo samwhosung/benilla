@@ -2561,6 +2561,34 @@ mod tests {
         assert!(s.take_container_uses().is_empty());
     }
 
+    /// The slot buy reads the held row's item from the list as it stands (`0x4f9f35`): a row
+    /// whose item changed since the pickup buys what it now names, and a row the list no longer
+    /// holds buys nothing and drops.
+    #[test]
+    fn a_held_vendor_row_buys_into_a_slot_what_the_row_now_names() {
+        let vendor = |item_id: Option<u32>| MerchantState {
+            items: item_id
+                .map(|item_id| MerchantItem {
+                    item_id,
+                    ..Default::default()
+                })
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.set_container(0, Some(backpack()));
+        for (now, bought) in [(Some(2589), vec![(0, 1, 2589)]), (None, vec![])] {
+            s.set_merchant(Some(vendor(Some(159))));
+            s.run("PickupMerchantItem(1)").unwrap();
+            s.set_merchant(Some(vendor(now)));
+            s.run("PickupContainerItem(0, 1)").unwrap();
+            assert_eq!(s.take_merchant_slot_buys(), bought, "{now:?}");
+            assert!(s.cursor_payload().is_none(), "{now:?}: the row drops");
+        }
+    }
+
     #[test]
     fn held_item_places_before_repair_mode() {
         let mut s = UiScript::new().unwrap();
