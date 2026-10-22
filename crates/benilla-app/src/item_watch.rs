@@ -1471,6 +1471,30 @@ mod tests {
         );
     }
 
+    /// A bag's slot watchers are registered over its slot count as the rescan stores it
+    /// (`0x4f92fd`, `0x4f932a`): none for a bag the rescan does not find (`0x4f92ec`), and none
+    /// past the count.
+    #[test]
+    fn a_bags_slot_watchers_cover_its_count_when_cached() {
+        let mut w = World::new();
+        w.objects.insert(ME, player(&[]));
+        w.objects.insert(POTION, item(POTION_ID, ME));
+        let fill = |j: u16| {
+            let lo = FIELD_CONTAINER_SLOT_1 + 2 * j;
+            [(lo, POTION as u32), (lo + 1, (POTION >> 32) as u32)]
+        };
+        let _ = w.runs(ME, &seat(19, BAG));
+        w.objects.insert(BAG, bag(BAG_ID, &[]));
+        assert!(
+            w.runs(BAG, &fill(0)).is_empty(),
+            "the seat came before the bag: no rescan found it"
+        );
+        let _ = w.runs(ME, &seat(19, 0));
+        let _ = w.runs(ME, &seat(19, BAG));
+        assert_eq!(w.runs(BAG, &fill(1)).len(), 1);
+        assert!(w.runs(BAG, &fill(4)).is_empty(), "past its four slots");
+    }
+
     /// The item type watchers' runs: the stack count unlocks a stacking entry's items through the
     /// walk (`0x5d94af`) and anything else alone (`0x5d94ca`), then raises the item's container
     /// (`0x5d94ff` → `0x4f9480`): the player's 0, a cached bag's number, or none past the cache.
