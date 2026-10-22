@@ -147,7 +147,9 @@ pub(crate) fn substitute_checked(text: &str, ctx: &MacroContext) -> (String, boo
 }
 
 /// Whether `text`'s expansion fails with no subject: it holds a person token, or one outside the
-/// set. Only such a failure makes the chat path wait on the subject's name (`0x49dac2`).
+/// set. Only such a failure makes the chat path wait on the subject's name (`0x49dac2`). The
+/// world-state tokens never refuse, a missing key reading 0 (`0x507537`, `0x507544`, `0x4c5810`),
+/// so the empty table answers as the live one would.
 pub(crate) fn needs_subject(text: &str) -> bool {
     let states = crate::world_state::WorldStates::default();
     let ctx = MacroContext {

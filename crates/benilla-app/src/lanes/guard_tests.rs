@@ -234,17 +234,8 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     (
         Row::Edge,
         "::ui_party::feed::feed_party",
-        "the roster's diff",
-    ),
-    (
-        Row::Edge,
-        "::ui_cast::feed_cast_reports",
-        "the form's change",
-    ),
-    (
-        Row::Edge,
-        "::ui_unit::feed_units",
-        "the combo points' change",
+        "the ready check, the saved instances and the members' presence, found by comparing \
+         the group's state",
     ),
     (
         Row::Edge,
@@ -335,6 +326,16 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::creature_anim::edits::UnitEdits",
 ];
 
+/// Every lane's queue, by type: what a handler fills there fires in the packets' order.
+fn lane_types() -> [TypeId; 4] {
+    [
+        TypeId::of::<crate::field_watch::NoticeLane>(),
+        TypeId::of::<crate::ui_chat::ChatLog>(),
+        TypeId::of::<crate::ui_cast::CastReports>(),
+        TypeId::of::<crate::ui_auction::HouseLane>(),
+    ]
+}
+
 /// Whether `id` names a `Messages<T>` buffer, which a reader takes from through a read.
 fn is_messages(world: &World, id: ComponentId) -> bool {
     name(world, id).contains("Messages<")
@@ -416,14 +417,10 @@ fn every_resource_a_handler_reads_is_a_known_queue_or_read_only() {
     let vm = world
         .components()
         .get_resource_id(TypeId::of::<benilla_ui::script::UiScript>());
-    let lanes = [
-        world
-            .components()
-            .get_resource_id(TypeId::of::<crate::ui_chat::ChatLog>()),
-        world
-            .components()
-            .get_resource_id(TypeId::of::<crate::field_watch::NoticeLane>()),
-    ];
+    let lanes: Vec<Option<ComponentId>> = lane_types()
+        .into_iter()
+        .map(|t| world.components().get_resource_id(t))
+        .collect();
     let mut reads = BTreeSet::new();
     for (_, access) in &handlers.accesses {
         let access = access.combined_access();
@@ -463,13 +460,22 @@ fn every_resource_a_handler_reads_is_a_known_queue_or_read_only() {
 }
 
 /// The drain runs once a frame after every feed and before the tick, gated as the feeds of the
-/// in-game interface are, and holds the chat and notice lanes.
+/// in-game interface are, and holds the lanes.
 #[test]
 fn the_drain_runs_after_the_feeds_and_before_the_tick() {
     let mut app = headless_client();
     let mut lanes = app.world().resource::<super::Lanes>().names();
     lanes.sort_unstable();
-    assert_eq!(lanes, ["chat", "field notices"]);
+    assert_eq!(
+        lanes,
+        [
+            "auction house",
+            "cast reports",
+            "chat",
+            "field notices",
+            "party"
+        ]
+    );
     let c = census(&mut app, Update, SyncPoints::Declared);
     if !type_names_available(&c) {
         eprintln!("skipped: this build carries no type names");
@@ -554,13 +560,10 @@ fn every_handler_queue_a_feed_takes_is_on_a_lane_or_listed() {
                 .components()
                 .get_resource_id(TypeId::of::<benilla_ui::script::UiScript>());
             let host = call_host_access(world);
-            let lanes: Vec<ComponentId> = [
-                TypeId::of::<crate::field_watch::NoticeLane>(),
-                TypeId::of::<crate::ui_chat::ChatLog>(),
-            ]
-            .into_iter()
-            .filter_map(|t| world.components().get_resource_id(t))
-            .collect();
+            let lanes: Vec<ComponentId> = lane_types()
+                .into_iter()
+                .filter_map(|t| world.components().get_resource_id(t))
+                .collect();
             let graph = schedule.graph();
             let in_feed = |node: NodeId| in_feed(graph, node);
             let mut taken = BTreeSet::new();
@@ -692,7 +695,8 @@ const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[
     ),
     (
         "::ui_chat::channels::auto_join_zone_channels",
-        "world entry only arms the zone-channel walk, an engine turn that runs no Lua",
+        "world entry only arms the zone-channel walk, an engine turn that runs no Lua: its one \
+         push is a walk's refusal into `UiErrorKeys`, which the action feed shows",
     ),
     (
         "::ui_chat::channels::end_session_channels_on_disconnect",
@@ -704,13 +708,23 @@ const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[
 /// in system order: remaining work, which only shrinks, by a suffix of the system's name.
 const NOT_YET_PLACED: &[(&str, &str)] = &[
     (
+        "::swing_refusal::apply_swing_refusals",
+        "the server's swing stop, whose repeat stop the reference reports inside its packet \
+         (`0x625ab8`, `0x5e7dd0`), off the swing refusals",
+    ),
+    (
+        "::target::scan::auto_acquire",
+        "the attacked and cast-at acquires' `SelectTarget`, which the reference runs inside its \
+         packet (`0x6259fe`, `0x6e799c`), off the swings and the spell starts",
+    ),
+    (
         "::ui_trade::drain_trade",
         "the trade records' `TRADE_UPDATE`, off the item notices after the tick",
     ),
     (
         "::ui_tradeskill::drain_trade_skill",
-        "the repeat craft's hook, which the reference runs inside the cast's go (`0x6e81d3`), \
-         off the cast events",
+        "the repeat craft's hook, which the reference runs inside the cast's go, its call to \
+         `0x4fd7b0` (`0x6e81e7`), off the cast events",
     ),
 ];
 
@@ -730,13 +744,7 @@ fn every_lane_push_off_a_handler_queue_keeps_its_place() {
         let host = call_host_access(world);
         let id = |t: TypeId| world.components().get_resource_id(t);
         let vm = id(TypeId::of::<benilla_ui::script::UiScript>());
-        let lanes: Vec<ComponentId> = [
-            TypeId::of::<crate::field_watch::NoticeLane>(),
-            TypeId::of::<crate::ui_chat::ChatLog>(),
-        ]
-        .into_iter()
-        .filter_map(id)
-        .collect();
+        let lanes: Vec<ComponentId> = lane_types().into_iter().filter_map(id).collect();
         let placed: Vec<ComponentId> = placed_queues().into_iter().filter_map(id).collect();
         let graph = schedule.graph();
         let mut pushes = BTreeSet::new();
