@@ -543,6 +543,7 @@ pub(crate) fn in_watch_order(block: &Notified, notices: Vec<(Place, FieldNotice)
 }
 
 /// The notices of one block's notify on `guid`, created as `kind`: `fields` is the store now.
+#[cfg(test)]
 pub(crate) fn values(
     around: &Around,
     guid: u64,
