@@ -130,11 +130,6 @@ pub(crate) struct ScriptCallHost<'w, 's> {
 }
 
 impl ScriptCallHost<'_, '_> {
-    /// The selected unit, as the calls applied so far left it.
-    pub(crate) fn target(&mut self) -> Option<Entity> {
-        self.appliers.p0().target()
-    }
-
     /// A probe line's text emote, run as `DoEmote` runs it inside its call (`0x5ef560`).
     pub(crate) fn emote(&mut self, text_id: u32, arg: Option<&str>) {
         self.appliers.p4().p2().emote(text_id, arg);

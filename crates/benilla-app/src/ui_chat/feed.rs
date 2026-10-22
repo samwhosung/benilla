@@ -1385,14 +1385,6 @@ fn fire_one(
         text_filter,
     } = reads;
     let windows: &mut ChatWindows = windows;
-    let is_target = match &item {
-        Pending::UnitCombat(ev) => set
-            .p1()
-            .as_mut()
-            .and_then(|h| h.target())
-            .is_some_and(|t| guids.0.get(&ev.guid) == Some(&t)),
-        _ => false,
-    };
     // A channel line's record, read as the composer reads it (`0x49aa1e`-`0x49aa48`) before
     // the line's Lua runs.
     let record = match &item {
@@ -1453,12 +1445,7 @@ fn fire_one(
     crate::script_calls::lent(script, set.p1().as_mut(), |script| {
         match item {
             Pending::UnitCombat(ev) => {
-                crate::ui_unit::fire_unit_combat(
-                    script,
-                    &ev,
-                    self_guid.0 == Some(ev.guid),
-                    is_target,
-                );
+                crate::ui_unit::fire_unit_combat(script, &ev);
             }
             Pending::CombatEdge { entered } => {
                 let combat_edge = if entered {

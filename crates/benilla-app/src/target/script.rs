@@ -35,11 +35,6 @@ impl ScriptSelect<'_, '_> {
         self.commit.selection.guid
     }
 
-    /// The unit selected now.
-    pub(crate) fn target(&self) -> Option<Entity> {
-        self.commit.selection.target
-    }
-
     /// The selection as the VM seats it after a call moved it: the guid, whether its object is
     /// held, its `UNIT_FIELD_TARGET` (`0x515a0f`-`0x515a25`, the hop `"targettarget"` makes) and
     /// whether that unit is held.

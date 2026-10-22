@@ -473,33 +473,22 @@ pub(crate) fn combat_text_args(
     ]
 }
 
-/// Fire one [`UnitCombatFeedback`] as `UNIT_COMBAT` for `"player"` and `"target"` only, the tokens
-/// `is_self` and `is_target` say name its unit; the reference fires once per token naming the
-/// unit, and stock `PetFrame.lua:13` listens for `"pet"`. The chat drain calls it at the event's
-/// place in its queue.
-pub(crate) fn fire_unit_combat(
-    script: &mut UiScript,
-    ev: &UnitCombatFeedback,
-    is_self: bool,
-    is_target: bool,
-) {
-    let mut fire = |token: &str| {
+/// Fire one [`UnitCombatFeedback`] as `UNIT_COMBAT` once for each token naming its unit, in the
+/// token walk's order (`0x494600` through `0x515c50`): `"player"`, `"pet"`, `"target"`, a group
+/// row, `"npc"`, `"mouseover"`, so stock `PetFrame.lua:50-53` hears its pet's hits. The chat drain
+/// calls it at the event's place in its queue.
+pub(crate) fn fire_unit_combat(script: &mut UiScript, ev: &UnitCombatFeedback) {
+    for token in script.unit_tokens_of(ev.guid) {
         script.fire_event(
             "UNIT_COMBAT",
             vec![
-                ScriptValue::Str(token.to_string()),
+                ScriptValue::Str(token),
                 ScriptValue::Str(ev.action.to_string()),
                 ScriptValue::Str(ev.flags.to_string()),
                 ScriptValue::Int(i64::from(ev.amount)),
                 ScriptValue::Int(i64::from(ev.school)),
             ],
         );
-    };
-    if is_self {
-        fire("player");
-    }
-    if is_target {
-        fire("target");
     }
 }
 
