@@ -648,3 +648,71 @@ fn a_gossip_units_decline_with_no_player_reopens_the_quest_list() {
     c.run("DeclineQuest()").unwrap();
     assert_eq!(c.sent(), [format!("QuestgiverHello {{ npc: {NPC} }}")]);
 }
+
+// ── The closes in their calls ────────────────────────────────────────────────
+
+/// `DeclineQuest`'s teardown `0x501130(0,1)` (`0x5014b1`) zeroes the cell inside the call
+/// (`0x501201`) and leaves the latch clear, while the panel kind `[0xbe0818]` stays: an
+/// `AcceptQuest` on the chunk's next line still sends, for guid 0.
+#[test]
+fn a_shared_quests_decline_zeroes_the_cell_before_the_next_line() {
+    let mut c = Client::streaming(None);
+    c.stream(SHARER, 0x19);
+    c.open_on(SHARER, detail());
+    c.run("DeclineQuest() AcceptQuest()").unwrap();
+    assert_eq!(
+        c.sent(),
+        [
+            format!(
+                "{:?}",
+                ClientCommand::QuestPushResult {
+                    sharer: SHARER,
+                    msg: benilla_protocol::messages::QuestShareMsg::DECLINE_QUEST,
+                }
+            ),
+            "QuestgiverAccept { npc: 0, quest: 100 }".to_string(),
+        ]
+    );
+}
+
+/// `CloseQuest` (`0x501a10` → `0x501130(0,1)`) zeroes the cell in its call too; the window's
+/// event teardown waits for the drain, and the panel verbs read the kind it leaves.
+#[test]
+fn close_quest_zeroes_the_cell_before_the_next_line() {
+    let mut c = Client::new(0);
+    c.open(detail());
+    c.run("CloseQuest() AcceptQuest()").unwrap();
+    assert_eq!(c.sent(), ["QuestgiverAccept { npc: 0, quest: 100 }"]);
+    c.drain();
+    assert!(!c.app.world().resource::<QuestGiver>().is_open());
+
+    let mut c = Client::new(0);
+    c.open(progress());
+    c.run("CloseQuest()").unwrap();
+    c.drain();
+    c.sent();
+    c.run("CompleteQuest()").unwrap();
+    assert_eq!(c.sent(), ["QuestgiverRequestReward { npc: 0, quest: 100 }"]);
+}
+
+/// A greeting of 32 available quests.
+fn full_greeting() -> QuestView {
+    QuestView::Greeting(QuestGiverList {
+        npc: NPC,
+        greeting: "Hail.".into(),
+        emote_delay: 0,
+        emote: 0,
+        quests: (1..=32).map(|q| row(q, 5)).collect(),
+    })
+}
+
+/// On a full pool the row past it is read from the cells after the pool, which the reference
+/// sends and latches; benilla sends nothing and latches as the send would (`0x501313`).
+#[test]
+fn the_row_past_a_full_pool_sends_nothing_and_latches() {
+    let mut c = Client::new(0);
+    c.open(full_greeting());
+    c.run("SelectAvailableQuest(33) SelectAvailableQuest(1)")
+        .unwrap();
+    assert!(c.sent().is_empty());
+}

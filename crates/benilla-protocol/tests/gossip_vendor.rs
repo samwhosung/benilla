@@ -42,6 +42,47 @@ fn gossip_bodies_golden() {
         with_code,
         "CMSG_GOSSIP_SELECT_OPTION body, coded option with a real code"
     );
+    // The code goes as a C string, up to its first NUL (`0x418430`: `strlen + 1`).
+    let mut cut = hx(concat!("f0debc9a78563412", "03000000"));
+    cut.extend_from_slice(b"ab\0");
+    assert_eq!(
+        messages::gossip_select_option(0x1234_5678_9abc_def0, 3, Some("ab\0cd")),
+        cut,
+        "CMSG_GOSSIP_SELECT_OPTION body, a code cut at its NUL"
+    );
+}
+
+/// `0x4e271d`-`0x4e2722` reads a count of 16 or more as 15, reads 15 options and takes the quest
+/// count from the bytes after them, here the 16th option's index, 0; and the coded byte is tested
+/// `& 1` (`0x4e2365`, `0x4e23d4`), so 2 is not coded.
+#[test]
+fn a_sixteenth_gossip_option_is_never_read() {
+    let mut body = 0xAAu64.to_le_bytes().to_vec();
+    body.extend_from_slice(&100u32.to_le_bytes());
+    body.extend_from_slice(&16u32.to_le_bytes());
+    for i in 1..=16u32 {
+        // The 16th option's index is 0.
+        body.extend_from_slice(&(i % 16).to_le_bytes());
+        body.push(0);
+        body.push(2);
+        body.extend_from_slice(format!("Option {i}\0").as_bytes());
+    }
+    body.extend_from_slice(&1u32.to_le_bytes()); // questOptionCount: 1
+    body.extend_from_slice(&42u32.to_le_bytes());
+    body.extend_from_slice(&7u32.to_le_bytes());
+    body.extend_from_slice(&10u32.to_le_bytes());
+    body.extend_from_slice(b"A Quest\0");
+    match messages::parse_server(messages::opcode::SMSG_GOSSIP_MESSAGE, &body).unwrap() {
+        ServerPacket::GossipMessage {
+            options, quests, ..
+        } => {
+            assert_eq!(options.len(), 15);
+            assert_eq!(options[14].message, "Option 15");
+            assert!(options.iter().all(|o| !o.coded));
+            assert!(quests.is_empty());
+        }
+        other => panic!("gossip message, got {}", other.name()),
+    }
 }
 
 #[test]

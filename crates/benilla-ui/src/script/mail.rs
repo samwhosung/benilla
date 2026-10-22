@@ -2039,6 +2039,34 @@ mod tests {
         }
     }
 
+    /// With the attachment's template not cached, `GetSendMailItem` answers `nil, nil, 0, 0`
+    /// (`0x4ae60e` → `0x4ae6d1`), whatever the cursor knew.
+    #[test]
+    fn an_attachment_whose_template_is_not_cached_reads_nothing() {
+        use crate::script::cursor::CursorItem;
+        let mut s = kept();
+        s.model_mut().mail_send_item = Some(CursorItem {
+            guid: 0x102,
+            bag: 0,
+            slot: 5,
+            item_id: 2589,
+            item_class: None,
+            texture: Some("Interface\\Icons\\INV_Fabric_Linen_01".into()),
+            link: Some("|cff...|Hitem:2589|h[Linen Cloth]|h|r".into()),
+            count: Some(1),
+            quality: Some(1),
+            equip_slots: Vec::new(),
+            bar_placeable: true,
+            consumable: false,
+        });
+        assert!(s
+            .eval::<bool>(
+                "local n, t, c, q = GetSendMailItem() \
+                 return n == nil and t == nil and c == 0 and q == 0"
+            )
+            .unwrap());
+    }
+
     #[test]
     fn clear_send_item_resets_the_form() {
         use crate::script::cursor::{CursorItem, CursorPayload};

@@ -161,11 +161,17 @@ fn a_coded_option_asks_for_its_code_and_sends_it() {
     for (lua, packet) in [
         (
             "SelectGossipOption(2, 'open sesame')",
-            format!("GossipSelectOption {{ guid: {NPC}, option: 3, code: Some(\"open sesame\") }}"),
+            format!(
+                "GossipSelectOption {{ guid: {NPC}, option: 3, code: Some({:?}) }}",
+                b"open sesame".to_vec()
+            ),
         ),
         (
             "SelectGossipOption(2, 77)",
-            format!("GossipSelectOption {{ guid: {NPC}, option: 3, code: Some(\"77\") }}"),
+            format!(
+                "GossipSelectOption {{ guid: {NPC}, option: 3, code: Some({:?}) }}",
+                b"77".to_vec()
+            ),
         ),
         (
             "SelectGossipOption(1, 'unused')",
@@ -212,4 +218,67 @@ fn a_quest_row_selects_while_the_text_is_pending_but_not_without_a_player() {
     c.drop_player();
     c.run("SelectGossipActiveQuest(1)").unwrap();
     assert!(c.sent().is_empty());
+}
+
+/// The code keeps its bytes up to its first NUL (`0x4e2a70`, `0x418430`), not a lossy text.
+#[test]
+fn a_code_keeps_its_bytes_up_to_its_nul() {
+    let mut c = Client::new(0);
+    for (lua, code) in [
+        ("SelectGossipOption(1, 'ab\\0cd')", b"ab".to_vec()),
+        ("SelectGossipOption(1, '\\255x')", vec![255, b'x']),
+    ] {
+        menu_of(&mut c, vec![option(3, true)], true);
+        c.sent();
+        c.run(lua).unwrap();
+        assert_eq!(
+            c.sent(),
+            [format!(
+                "GossipSelectOption {{ guid: {NPC}, option: 3, code: Some({code:?}) }}"
+            )],
+            "{lua}"
+        );
+    }
+}
+
+/// `CloseGossip` (`0x4e2b20` → `0x4e1fa0`) zeroes the cell inside its call (`0x4e1fcc`) and
+/// leaves the slots: a select on the chunk's next line sends for guid 0, and so does one after
+/// the drain's `GOSSIP_CLOSED`, whose getters still read the slots.
+#[test]
+fn close_gossip_zeroes_the_cell_and_keeps_the_slots() {
+    let mut c = Client::new(0);
+    menu_of(&mut c, vec![option(3, false)], true);
+    c.sent();
+    c.run("CloseGossip() SelectGossipOption(1)").unwrap();
+    assert_eq!(
+        c.sent(),
+        ["GossipSelectOption { guid: 0, option: 3, code: None }"]
+    );
+
+    menu_of(&mut c, vec![option(3, false)], true);
+    c.run(RECORDER).unwrap();
+    c.run(
+        "local g = CreateFrame('Frame') g:RegisterEvent('GOSSIP_CLOSED') \
+         g:SetScript('OnEvent', function() table.insert(SEEN, event) end)",
+    )
+    .unwrap();
+    c.sent();
+    c.run("CloseGossip()").unwrap();
+    c.app
+        .world_mut()
+        .run_system_cached(super::drain_gossip)
+        .expect("the drain runs");
+    c.app
+        .world_mut()
+        .run_system_cached(super::feed_gossip)
+        .expect("the feed runs");
+    assert_eq!(
+        c.eval("local function n(...) return arg.n end return n(GetGossipOptions()) .. ',' .. table.concat(SEEN, ',')"),
+        "2,GOSSIP_CLOSED"
+    );
+    c.run("SelectGossipOption(1)").unwrap();
+    assert_eq!(
+        c.sent(),
+        ["GossipSelectOption { guid: 0, option: 3, code: None }"]
+    );
 }
