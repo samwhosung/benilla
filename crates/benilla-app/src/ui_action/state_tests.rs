@@ -1602,6 +1602,39 @@ fn a_usable_handler_reads_this_frames_target_and_health() {
     );
 }
 
+/// A selection call's usable refresh (`0x4b31c0` at `0x493892`) that runs ahead of the feed's
+/// first pass on a new VM leaves that pass the new VM's: the cooldown list's refresh and flush
+/// counts an earlier VM ran up (`0x6e2e85`, `0x6e3076`) reach it as the state it meets, and it
+/// signals neither `SPELL_UPDATE_USABLE` nor `BAG_UPDATE_COOLDOWN`.
+#[test]
+fn a_calls_refresh_ahead_of_the_feed_leaves_the_new_vm_its_first_pass() {
+    use bevy::ecs::system::RunSystemOnce;
+    let mut app = feed_app(&[], Spells::empty_for_tests(), 5.0);
+    {
+        let mut cds = app.world_mut().resource_mut::<Cooldowns>();
+        cds.usable_refreshes = 3;
+        cds.bag_flushes = 2;
+    }
+    record(&mut app, &["SPELL_UPDATE_USABLE", "BAG_UPDATE_COOLDOWN"]);
+    select(&mut app, Some(OTHER));
+    app.world_mut()
+        .run_system_once(
+            |mut states: super::ActionStates, mut script: NonSendMut<UiScript>| {
+                states.usable_refresh(&mut script).fire(&mut script);
+            },
+        )
+        .expect("the call's refresh runs as a one-shot system");
+    let script = app.world().non_send_resource::<UiScript>();
+    let heard = script.eval::<Vec<String>>("return HEARD").unwrap();
+    assert_eq!(heard, ["SPELL_UPDATE_USABLE"], "the call's own refresh");
+    script.run("HEARD = {}").unwrap();
+
+    assert!(
+        frame(&mut app).is_empty(),
+        "the new VM's first pass hears none"
+    );
+}
+
 /// `BAG_UPDATE_COOLDOWN` (`0x4f93d0`) comes from the item legs alone: `SMSG_ITEM_COOLDOWN`
 /// (`0x6e965b`), the player's start or removal of a spell's records (`0x6e3089`) and its list clear
 /// (`0x6e9721`), and the spell charges watcher (`0x5d9587`). The global cooldown's start
