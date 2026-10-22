@@ -1667,6 +1667,77 @@ mod tests {
         );
     }
 
+    /// A copier waiting on a record ends at the answer (`0x4c2afc`), ahead of a release in the
+    /// same frame: its sweep belongs to its own window while it is open, so a window the release
+    /// closed since sweeps nothing and signals `LOOT_OPENED` as an unswept end does.
+    #[test]
+    fn a_sweep_owed_to_a_window_closed_since_sends_nothing() {
+        const LINEN: u32 = 2589;
+        let mut app = App::new();
+        let rx = seat_tabbed(app.world_mut());
+        seat_drain(app.world_mut(), crate::player::Player::with_move_flags(0));
+        app.insert_resource(super::super::AutoLootByte(true))
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::names::NameCache>()
+            .insert_non_send_resource(benilla_ui::script::UiScript::new().expect("VM"))
+            .add_systems(
+                Update,
+                (super::super::loot_frame, super::super::drain_loot).chain(),
+            );
+        app.world_mut()
+            .non_send_resource_mut::<benilla_ui::script::UiScript>()
+            .run(
+                "OPENS = 0 local f = CreateFrame('Frame') f:RegisterEvent('LOOT_OPENED') \
+                 f:SetScript('OnEvent', function() OPENS = OPENS + 1 end)",
+            )
+            .unwrap();
+        let world = app.world_mut();
+        world.resource_mut::<LootLatch>().0 = Some(CORPSE);
+        world
+            .run_system_once_with(
+                on_response,
+                SessionEvent::LootResponse {
+                    guid: CORPSE,
+                    loot_type: 1,
+                    gold: 0,
+                    items: vec![benilla_protocol::messages::LootItem {
+                        slot: 0,
+                        item_id: LINEN,
+                        count: 1,
+                        display_info_id: 1,
+                        random_property_id: 0,
+                        slot_type: 0,
+                    }],
+                },
+            )
+            .expect("the handler runs as a one-shot system");
+        world
+            .resource_mut::<crate::items::Items>()
+            .insert_template(LINEN, Some(crate::items::test_template("Linen Cloth")));
+        world.resource_scope(|world, mut loot: Mut<LootState>| {
+            loot.row_answered(world.resource::<crate::items::Items>())
+        });
+        world
+            .run_system_once_with(
+                on_release_response,
+                SessionEvent::LootReleaseResponse {
+                    guid: CORPSE,
+                    result: 1,
+                },
+            )
+            .expect("the handler runs as a one-shot system");
+        rx.try_iter().for_each(drop);
+        app.update();
+        let sent: Vec<_> = rx.try_iter().collect();
+        assert!(sent.is_empty(), "{sent:?}");
+        let opens = app
+            .world_mut()
+            .non_send_resource_mut::<benilla_ui::script::UiScript>()
+            .eval::<i64>("return OPENS")
+            .unwrap();
+        assert_eq!(opens, 1);
+    }
+
     /// The issue's spot on the stock frames: a body's window that opens on the run is shown by
     /// `LOOT_OPENED` and hidden by `LOOT_CLOSED` in the same frame (`LootFrame.lua:13-16`,
     /// `:53-55`), its one release

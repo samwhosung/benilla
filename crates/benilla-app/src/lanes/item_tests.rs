@@ -398,13 +398,11 @@ fn a_held_copier_ends_inside_its_packet_before_a_later_close() {
     );
 }
 
-/// One answer runs its record's callbacks in the order they were asked (`0x5d8321`-`0x5d833f`):
-/// a push ahead of its item's create on the wire shows its line (`0x491ee0`) before the item's
-/// set-up recounts the bar and signals its owner (`0x5d8390`, `0x5d85ce`, `0x5d8606`).
-#[test]
-fn one_answer_runs_its_callbacks_in_the_order_asked() {
+/// Uncached linen, on the bar's slot 7, about to be looted: a push and an item create each wait
+/// on its record, the item's set-up recounting the bar and signalling its owner at the answer
+/// (`0x5d8390`, `0x5d85ce`, `0x5d8606`), the push showing its line (`0x491ee0`).
+fn linen_on_the_bar() -> App {
     let mut app = client();
-    const LINENS: u64 = 0x4000_0000_0000_0044;
     let world = app.world_mut();
     let mut script = world.non_send_resource_mut::<UiScript>();
     script.set_unit_guids(&benilla_ui::script::UnitGuids {
@@ -420,6 +418,17 @@ fn one_answer_runs_its_callbacks_in_the_order_asked() {
         }),
     );
     script.run("Heard = {}").unwrap();
+    app
+}
+
+/// The looted linen's guid.
+const LINENS: u64 = 0x4000_0000_0000_0044;
+
+/// One answer runs its record's callbacks in the order they were asked (`0x5d8321`-`0x5d833f`):
+/// a push ahead of its item's create on the wire shows its line before the item's set-up.
+#[test]
+fn one_answer_runs_its_callbacks_in_the_order_asked() {
+    let mut app = linen_on_the_bar();
     assert_eq!(
         frame(
             &mut app,
@@ -433,6 +442,29 @@ fn one_answer_runs_its_callbacks_in_the_order_asked() {
             "CHAT_MSG_LOOT",
             "ACTIONBAR_SLOT_CHANGED:7",
             "UNIT_INVENTORY_CHANGED:player"
+        ]
+    );
+}
+
+/// A looted item's create comes ahead of its push (vmangos `StoreNewItem`, `Player.cpp:10403`,
+/// then `SendNewItem`, `LootHandler.cpp:191`), so the set-up asks first and runs first at the
+/// answer, then the push's line.
+#[test]
+fn a_looted_items_set_up_runs_ahead_of_its_push_at_the_answer() {
+    let mut app = linen_on_the_bar();
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![
+                item(LINENS, LINEN),
+                pushed(LINEN),
+                answered(LINEN, "Linen Cloth")
+            ]
+        ),
+        [
+            "ACTIONBAR_SLOT_CHANGED:7",
+            "UNIT_INVENTORY_CHANGED:player",
+            "CHAT_MSG_LOOT"
         ]
     );
 }
