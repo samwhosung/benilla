@@ -416,12 +416,13 @@ fn selection_and_close_intents() {
     assert!(!s.take_trainer_close(), "drained");
 }
 
-/// `IsTradeskillTrainer` tests type 2 (`0x4d8ea0`), `IsTalentTrainer` type 1 (`0x4d8ed0`).
+/// `IsTradeskillTrainer` tests type 2 (`0x4d8ea0`); `IsTalentTrainer` answers 1 with no trainer
+/// open (`0x4d8edb`, the zero guid) or at type 1 (`0x4d8ee4`).
 #[test]
 fn tradeskill_and_talent_flags() {
     let mut s = UiScript::new().unwrap();
     assert!(s
-        .eval::<bool>("return IsTradeskillTrainer() == nil")
+        .eval::<bool>("return IsTradeskillTrainer() == nil and IsTalentTrainer() == 1")
         .unwrap());
 
     s.set_trainer(Some(trainer()));
@@ -466,6 +467,61 @@ fn tradeskill_and_talent_flags() {
     assert!(s
         .eval::<bool>("return IsTalentTrainer() == 1 and IsTradeskillTrainer() == nil")
         .unwrap());
+
+    // A class trainer answers nil, and the close answers 1 again.
+    s.set_trainer(Some(trainer()));
+    assert!(s.eval::<bool>("return IsTalentTrainer() == nil").unwrap());
+    s.set_trainer(None);
+    assert!(s.eval::<bool>("return IsTalentTrainer() == 1").unwrap());
+}
+
+/// The row comparators compare names and ranks with `SStrCmp` (`0x64a480` → `_strncmp`), byte for
+/// byte (`0x4d86db`, `0x4d86fe`): at a warlock trainer "Curse of Weakness" sorts before "Curse of
+/// the Elements", `W` (0x57) below `t` (0x74). The headers keep `SStrCmpI` (`0x4d7c12`), so
+/// "affliction" sorts before "Demonology".
+#[test]
+fn row_names_compare_byte_for_byte_and_headers_ignore_case() {
+    let curse = |id: u32, name: &str, rank: &str| {
+        let mut s = svc(
+            id,
+            name,
+            TrainerServiceCategory::Available,
+            355,
+            "affliction",
+        );
+        s.level_req = 32;
+        s.subtext = Some(rank.into());
+        s
+    };
+    let services = vec![
+        svc(
+            706,
+            "Demon Armor",
+            TrainerServiceCategory::Available,
+            354,
+            "Demonology",
+        ),
+        curse(1490, "Curse of the Elements", "Rank 1"),
+        curse(7646, "Curse of Weakness", "Rank 4"),
+    ];
+    let mut s = UiScript::new().unwrap();
+    s.set_trainer(Some(TrainerState {
+        greeting: String::new(),
+        trainer_type: 0,
+        groups: Vec::new(),
+        services,
+    }));
+    let got: Vec<String> = visible(&mut s).into_iter().map(|(n, _)| n).collect();
+    assert_eq!(
+        got,
+        [
+            "affliction",
+            "Curse of Weakness",
+            "Curse of the Elements",
+            "Demonology",
+            "Demon Armor",
+        ]
+    );
 }
 
 #[test]

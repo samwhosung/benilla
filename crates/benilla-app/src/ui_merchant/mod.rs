@@ -1053,6 +1053,9 @@ pub(crate) mod purse_fixture {
 }
 
 #[cfg(test)]
+mod call_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

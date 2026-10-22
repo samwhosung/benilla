@@ -521,7 +521,8 @@ fn resolve_reads_cost_state_and_gates_with_no_catalog() {
     assert_eq!(svc.cost, 1000);
     assert_eq!(svc.category, TrainerServiceCategory::Unavailable);
     assert_eq!(svc.level_req, 20);
-    // The skill gate follows the category; the ability gate is unmet as the player lacks 78.
+    // The skill gate follows the category; the ability gate reads met, as no service spell
+    // record reaches the known test (`0x4d9842`).
     assert_eq!(
         svc.skill_req,
         Some(TrainerSkillReq {
@@ -534,10 +535,10 @@ fn resolve_reads_cost_state_and_gates_with_no_catalog() {
         svc.ability_reqs,
         vec![TrainerAbilityReq {
             name: "Spell 78".to_string(),
-            met: false,
+            met: true,
         }]
     );
-    assert!(svc.is_trade_skill, "trainer_type 2 → tradeskill");
+    assert!(!svc.is_trade_skill, "no record: nil (`0x4d9fcf`)");
     assert!(svc.prof_first_rank == w.is_primary_prof_first_rank);
     // No catalog at a tradeskill trainer: the learn group, as type 2 never drops a row.
     assert_eq!(svc.group_key, 2);
@@ -559,7 +560,8 @@ fn resolve_reads_cost_state_and_gates_with_no_catalog() {
 /// reads met.
 #[test]
 fn ability_req_met_tracks_known_spells_not_the_service_category() {
-    let spells = empty_catalog();
+    // The service spell has a record, so the known test is reached (`0x4d9821`-`0x4d9842`).
+    let spells = SpellCatalog::from_displays(HashMap::from([(845, taught_ability())]));
     let mut w = wire(845, trainer_spell_state::RED, 100, 20, 0); // unavailable (gated by level)
     w.req_spells = [78, 0, 0]; // requires Heroic Strike (78)
 
@@ -1702,4 +1704,106 @@ fn a_refused_product_is_asked_at_the_next_list_never_by_a_frame() {
     list(&mut app);
     app.update();
     assert_eq!(product_asks(&rx), 1, "the next list does, once");
+}
+
+/// [`resolve_service`] with the pet's book beside the player's, as `GetTrainerServiceAbilityReq`
+/// asks it for a `LEARN_PET_SPELL` service (`0x4d9850`-`0x4d9882`).
+fn resolve_with_pet(
+    wire: &TrainerSpell,
+    spells: &SpellCatalog,
+    skill_lines: Option<&SkillLineCatalog>,
+    player: &BTreeSet<u32>,
+    pet: Option<&BTreeSet<u32>>,
+) -> TrainerService {
+    let _ = pet;
+    resolve_service(wire, 0, spells, skill_lines, player)
+}
+
+/// `IsTrainerServiceTradeSkill` (`0x4d9f70`) answers from the wire spell's effects, never the
+/// trainer's type: 1 for a `LEARN_SPELL` (36) slot teaching a spell with `Attributes & 0x20`
+/// (`0x4d9fe0`-`0x4d9ffe`). A profession rank at a tradeskill trainer teaches a plain spell, and a
+/// rogue's poison at a class trainer teaches a 0x20 one; a wire spell with no record answers nil.
+#[test]
+fn trade_skill_answers_from_the_taught_spells_attribute_not_the_trainer_type() {
+    let poison = SpellDisplay {
+        name: "Instant Poison".into(),
+        attributes: SPELL_ATTR_IS_TRADESKILL,
+        ..Default::default()
+    };
+    let spells = SpellCatalog::from_displays(HashMap::from([
+        (2020, wrapper(SPELL_EFFECT_LEARN_SPELL, 0, 2018)),
+        (2018, taught_ability()),
+        (8681, wrapper(SPELL_EFFECT_LEARN_SPELL, 1, 8680)),
+        (8680, poison),
+    ]));
+    let rank = |spell, trainer_type| {
+        resolve_service(
+            &wire(spell, trainer_spell_state::GREEN, 10, 5, 0),
+            trainer_type,
+            &spells,
+            None,
+            &BTreeSet::new(),
+        )
+    };
+    assert!(!rank(2020, TRAINER_TYPE_TRADESKILL).is_trade_skill);
+    assert!(rank(8681, 0).is_trade_skill);
+    assert!(!rank(9999, TRAINER_TYPE_TRADESKILL).is_trade_skill);
+}
+
+/// `GetTrainerServiceAbilityReq` (`0x4d96e0`) reads a requirement met when the player knows it
+/// (`0x60c740`) or a later rank of it (`0x60c8d0`, the `SkillLineAbility` successor chain): a
+/// learned Heroic Strike rank 2 lists rank 1, which left the book with the learn.
+#[test]
+fn ability_req_is_met_by_a_known_higher_rank() {
+    const RANK1: u32 = 78;
+    const RANK2: u32 = 284;
+    let spells = SpellCatalog::from_displays(HashMap::from([
+        (285, wrapper(SPELL_EFFECT_LEARN_SPELL, 0, RANK2)),
+        (RANK1, taught_ability()),
+        (RANK2, taught_ability()),
+    ]));
+    let row = |skill_id, forward| benilla_formats::SlaInfo {
+        skill_id,
+        req_skill_value: 0,
+        forward_spell_id: forward,
+        trivial_low: 0,
+        trivial_high: 0,
+    };
+    let lines = SkillLineCatalog::from_abilities([(RANK1, row(26, RANK2)), (RANK2, row(26, 0))]);
+    let mut w = wire(285, trainer_spell_state::GRAY, 10, 8, 0);
+    w.req_spells = [RANK1, 0, 0];
+    let known: BTreeSet<u32> = [RANK2].into_iter().collect();
+    let svc = resolve_with_pet(&w, &spells, Some(&lines), &known, None);
+    assert!(svc.ability_reqs[0].met, "rank 2 known: rank 1 is met");
+    let svc = resolve_with_pet(&w, &spells, Some(&lines), &BTreeSet::new(), None);
+    assert!(!svc.ability_reqs[0].met, "neither rank known");
+}
+
+/// The flag starts at 1 (`0x4d9761`) and only a resolved service spell reaches the tests
+/// (`0x4d9821`-`0x4d9842`), so a wire spell with no record reads met whatever the book holds.
+/// A `LEARN_PET_SPELL` (57) service asks the pet's book (`0x4d9850`-`0x4d9882`), and with no pet
+/// the flag stays 1 (`0x4d9884`).
+#[test]
+fn ability_req_asks_the_pets_book_for_a_pet_spell_and_none_without_a_record() {
+    let spells = SpellCatalog::from_displays(HashMap::from([
+        (700, wrapper(SPELL_EFFECT_LEARN_PET_SPELL, 0, 301)),
+        (300, taught_ability()),
+    ]));
+    let mut w = wire(700, trainer_spell_state::GREEN, 10, 1, 0);
+    w.req_spells = [300, 0, 0];
+    let player: BTreeSet<u32> = [300].into_iter().collect();
+    let empty = BTreeSet::new();
+    let met = |pet: Option<&BTreeSet<u32>>, player: &BTreeSet<u32>| {
+        resolve_with_pet(&w, &spells, None, player, pet).ability_reqs[0].met
+    };
+    assert!(!met(Some(&empty), &player), "the pet lacks it: unmet");
+    assert!(met(Some(&player), &empty), "the pet knows it: met");
+    assert!(met(None, &empty), "no pet: met");
+
+    let mut stray = wire(9999, trainer_spell_state::GREEN, 10, 1, 0);
+    stray.req_spells = [300, 0, 0];
+    assert!(
+        resolve_with_pet(&stray, &spells, None, &empty, None).ability_reqs[0].met,
+        "no record for the service spell: met"
+    );
 }

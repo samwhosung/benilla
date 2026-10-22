@@ -698,4 +698,6 @@ use law::{
 };
 
 #[cfg(test)]
+mod call_tests;
+#[cfg(test)]
 mod tests;

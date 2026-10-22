@@ -412,6 +412,8 @@ impl Plugin for UiTaxiPlugin {
 }
 
 #[cfg(test)]
+mod call_tests;
+#[cfg(test)]
 mod drain_tests;
 
 #[cfg(test)]
@@ -619,6 +621,55 @@ mod tests {
         open(&mut app);
         app.update();
         assert_eq!(crate::query_cache::queries(&rx).len(), 1);
+    }
+
+    /// `SMSG_SHOWTAXINODES` counts the mask's known nodes (`0x5eced7`-`0x5ecf2e`): under two
+    /// (`0x5ecf39`) it shows `0xb5`, `ERR_TAXINOPATHS` (`0x5ecf3f`), closes the gossip menu
+    /// (`0x4e1fa0` with a zero guid, `0x5ecf55`) and opens no map. Two open it.
+    #[test]
+    fn a_mask_with_fewer_than_two_known_nodes_opens_no_map() {
+        use benilla_protocol::SessionEvent;
+        const MASTER: u64 = 0xF130_0000_0000_0099;
+        let mut app = App::new();
+        app.init_resource::<TaxiState>()
+            .init_resource::<TaxiRouteCache>()
+            .init_resource::<GuidIndex>()
+            .init_resource::<crate::ui_action::UiErrorKeys>()
+            .init_resource::<crate::ui_gossip::GossipState>();
+        net::register(&mut app);
+        app.world_mut()
+            .resource_mut::<crate::ui_gossip::GossipState>()
+            .npc = Some(MASTER);
+        let shown = |app: &mut App, known: [u32; 8]| {
+            crate::net::handlers::dispatch(
+                app.world_mut(),
+                vec![SessionEvent::TaxiNodesShown {
+                    flightmaster: MASTER,
+                    nearest_node: 2,
+                    known_mask: TaxiMask(known),
+                }],
+            );
+            app.world_mut().flush();
+            app.world()
+                .resource::<crate::ui_action::UiErrorKeys>()
+                .take()
+                .into_iter()
+                .map(|e| e.key)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            shown(&mut app, [0b10, 0, 0, 0, 0, 0, 0, 0]),
+            ["ERR_TAXINOPATHS"]
+        );
+        assert_eq!(app.world().resource::<TaxiState>().cell(), None);
+        assert_eq!(
+            app.world().resource::<crate::ui_gossip::GossipState>().npc,
+            None,
+            "the gossip menu closed"
+        );
+        // The count spans the whole mask: two bits in different words open the map.
+        assert!(shown(&mut app, [0b10, 0, 0, 0, 0, 0, 0, 0x8000_0000]).is_empty());
+        assert_eq!(app.world().resource::<TaxiState>().cell(), Some(MASTER));
     }
 
     #[test]
