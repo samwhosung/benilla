@@ -587,13 +587,10 @@ fn the_keybind_pair_pushes_and_casts_without_the_clicks_forks() {
     s.run("PetActionButtonUp(1)").unwrap();
     assert_eq!(s.take_pet_actions(), vec![1], "one press, one cast");
 
-    // Slot 2 is empty: `CastPetAction`'s own guard makes it inert.
+    // Slot 2 is empty: `CastPetAction` presses it all the same, its zero word sent (`0x4bd233`).
     s.run("PetActionButtonDown(2) PetActionButtonUp(2)")
         .unwrap();
-    assert!(
-        s.take_pet_actions().is_empty(),
-        "an unnamed slot queues nothing"
-    );
+    assert_eq!(s.take_pet_actions(), vec![2], "an empty slot is pressed too");
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 

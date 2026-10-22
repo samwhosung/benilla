@@ -442,31 +442,50 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // An empty slot, whose button shows only under show-grid, queues nothing; the reference sends
-    // its zero word (`0x4bd230` falls to the send at `0x4bd444`), which vmangos ignores
-    // (`PetHandler.cpp:178`).
+    // `CastPetAction(index)` (`0x4be330`): an index past the eleventh slot raises its own line
+    // (`0x4be388`). With the pet's object held and not possessed (`0x4be3c9`-`0x4be3de`) it clears
+    // the cursor (`ClearCursor(1,1)`, `0x4be3e8`), and a held pet action drops on the slot
+    // (`0x4be3f9`) and ends the verb. Otherwise, with a pet and one of the ten slots
+    // (`0x4be414`, `0x4be419`), it presses the slot with a zero target (`0x4be431`), an empty one
+    // included: its zero word falls through the dispatcher's type switch to the send
+    // (`0x4bd233`), which vmangos ignores (`PetHandler.cpp:178`). Then `GAMEABILITYACTIVATE`
+    // plays (`0x4be436`-`0x4be43b`), whatever the press did.
     g.set(
         "CastPetAction",
         lua.create_function(|lua, i: Value| {
             // `is-number` else `Usage: CastPetAction(index)` (`0x8479d4`, `0x4be35b`).
             let i = binding_abi::index_arg32(lua, i, "Usage: CastPetAction(index)")?;
-            // `PressPetAction 0x4bd1d0` opens on the gate's tag 2 (`0x4bd1e5`), ahead of its bar
-            // test and every effect; a refusal is silent.
-            if !protected::gate(lua, Tag::CAST) {
+            if i.wrapping_sub(1) > 10 {
+                return Err(mlua::Error::RuntimeError(
+                    "Invalid slot in CastPetAction".into(),
+                ));
+            }
+            let (pickup_allowed, has_bar) = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                (model.pet_bar.pickup_allowed, model.pet_bar.has_bar)
+            };
+            if pickup_allowed && super::cursor::pet::clear_and_drop(lua, i).is_some() {
                 return Ok(());
             }
-            let pressed = super::tick::verb(lua, |model| {
-                let Some(packed) = slot_at(model, i)
-                    .filter(|s| s.view.name.is_some())
-                    .map(|s| s.view.packed)
-                else {
-                    return false;
-                };
-                latch_press(model, packed);
-                true
-            });
-            if pressed {
+            if !has_bar || i > 10 {
+                return Ok(());
+            }
+            // `PressPetAction 0x4bd1d0` opens on the gate's tag 2 (`0x4bd1e5`), ahead of its bar
+            // test and every effect; a refusal is silent.
+            if protected::gate(lua, Tag::CAST) {
+                super::tick::verb(lua, |model| {
+                    if let Some(packed) = slot_at(model, i).map(|s| s.view.packed) {
+                        latch_press(model, packed);
+                    }
+                });
                 super::calls::submit(lua, super::ScriptCall::PetAction(i))?;
+            }
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            // `PlaySoundByName` drops a play during the UI load (`0x458046`).
+            if model.sound_suppression == 0 {
+                model
+                    .sound_queue
+                    .push(super::SoundRequest::KitName("GAMEABILITYACTIVATE".into()));
             }
             Ok(())
         })?,
