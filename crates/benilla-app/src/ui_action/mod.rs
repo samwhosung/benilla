@@ -231,6 +231,7 @@ impl Spells {
 #[cfg(test)]
 pub(crate) fn run_feed_action_state_once(world: &mut World) {
     use bevy::ecs::system::RunSystemOnce;
+    world.init_resource::<state::ActionStateMemory>();
     world
         .run_system_once(state::feed_action_state)
         .expect("the action-state feed runs as a one-shot system");
@@ -353,6 +354,7 @@ impl Plugin for UiActionPlugin {
         // A UI-only harness has no net stack; declaring a message twice is idempotent.
         app.add_message::<crate::net::FieldChanged>()
             .init_resource::<state::ActionEvents>()
+            .init_resource::<state::ActionStateMemory>()
             .add_message::<crate::net::WorldEnterCascadeMessage>()
             .init_resource::<PlayerActions>()
             .init_resource::<LearnedAbilities>()

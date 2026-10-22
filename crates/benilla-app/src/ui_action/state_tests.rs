@@ -32,16 +32,18 @@ fn feed_inputs(app: &mut App) {
 
 /// The feed's two halves, around the unit snapshots as the plugin orders them.
 fn add_action_feed(app: &mut App) {
-    app.init_resource::<ActionEvents>().add_systems(
-        Update,
-        (
-            feed_action_state.before(crate::ui_unit::UnitSnapshots),
-            fire_action_events
-                .in_set(crate::ui_action::CooldownEvents)
-                .after(crate::ui_unit::UnitSnapshots),
-        )
-            .chain(),
-    );
+    app.init_resource::<ActionEvents>()
+        .init_resource::<super::ActionStateMemory>()
+        .add_systems(
+            Update,
+            (
+                feed_action_state.before(crate::ui_unit::UnitSnapshots),
+                fire_action_events
+                    .in_set(crate::ui_action::CooldownEvents)
+                    .after(crate::ui_unit::UnitSnapshots),
+            )
+                .chain(),
+        );
 }
 
 /// A profession opener (`Effect[0]` 47) names the window `IsCurrentAction` checks it against
