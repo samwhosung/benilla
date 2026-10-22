@@ -73,6 +73,10 @@ pub(crate) struct QuestGiver {
     /// with a callback (`0x5017de`).
     panels: u64,
     panels_asked: u64,
+    /// The item records `GetQuestItemInfo`'s calls missed, one per call: the item cache's
+    /// callbacks `0x5018c0`, which outlive the panel and fire `QUEST_ITEM_UPDATE` when their
+    /// record lands (`0x5018fe`-`0x501903`), whatever the window shows then.
+    item_waits: Vec<u32>,
 }
 
 /// The greeting's pools, the available quests (`0xbdfe60`, its count `0xbe0834`) with each row's
@@ -207,6 +211,24 @@ impl QuestGiver {
         self.closing = None;
         self.view = None;
         self.pools = QuestPools::default();
+        self.item_waits.clear();
+    }
+
+    /// Spend the waits whose item record answered: how many brought a record, each its own
+    /// `QUEST_ITEM_UPDATE`; a refusal runs its callback with status 0, which fires nothing
+    /// (`0x5018d6`-`0x5018e0`).
+    fn item_answers(&mut self, items: &Items) -> usize {
+        let mut landed = 0;
+        self.item_waits.retain(|&entry| {
+            if !items.template_answered(entry) {
+                return true;
+            }
+            if items.template(entry, 0, Ask::Read).is_some() {
+                landed += 1;
+            }
+            false
+        });
+        landed
     }
 }
 
@@ -496,8 +518,9 @@ fn panel_event(panel: QuestPanel) -> &'static str {
     }
 }
 
-/// Push the quest view into the VM and fire its events: a panel's open event on a new panel,
-/// `QUEST_ITEM_UPDATE` on a content change. The close is the core's ([`close_core`]).
+/// Push the quest view into the VM and fire its events: a panel's event on each publish,
+/// `QUEST_ITEM_UPDATE` on each item record a `GetQuestItemInfo` call missed. The close is the
+/// core's ([`close_core`]).
 pub(crate) fn feed_quest(
     mut vm: crate::script_calls::VmWith<ResMut<'static, QuestGiver>>,
     objects: crate::net::Objects,
@@ -539,11 +562,12 @@ pub(crate) fn feed_quest(
         show_messages(script, &mut sink, "ui_quest", lines);
         let player = crate::npc_text::player_identity(&self_q, &names, unit_names.get());
         // A panel's publish, or a window this VM has not shown, is the stock frame's getter calls.
-        let ask = Ask::at(
-            last.is_none() || giver.panels != giver.panels_asked,
-            &commands,
-        );
+        let published = giver.panels != giver.panels_asked;
+        let ask = Ask::at(last.is_none() || published, &commands);
         giver.panels_asked = giver.panels;
+        let waits = script.take_quest_item_waits();
+        giver.item_waits.extend(waits);
+        let item_updates = giver.item_answers(&items);
         let fresh = snapshot(
             &giver,
             &items,
@@ -574,22 +598,23 @@ pub(crate) fn feed_quest(
         if let Some(g) = giver.npc {
             let _ = names.resolve(&objects, g, ask);
         }
-        if fresh == *last {
-            return;
+        // Each panel setter fires its event at its end, every publish (`0x500ee5`, `0x50105d`,
+        // `0x501120`); a window this VM has not shown takes it too. No event carries an argument.
+        // A close is the core's, which told the VM; a disconnect's clear tells it nothing.
+        let shows = fresh
+            .as_ref()
+            .filter(|_| published || last.is_none())
+            .map(|f| f.panel);
+        if fresh != *last {
+            script.set_quest(fresh.clone());
+            *last = fresh;
         }
-        script.set_quest(fresh.clone());
-        // The panel events carry no argument. A close is the core's, which told the VM; a
-        // disconnect's clear tells it nothing.
-        if let Some(f) = &fresh {
-            let same_panel = last.as_ref().is_some_and(|l| l.panel == f.panel);
-            let event = if same_panel {
-                "QUEST_ITEM_UPDATE"
-            } else {
-                panel_event(f.panel)
-            };
-            fires.post(event, vec![]);
+        if let Some(panel) = shows {
+            fires.post(panel_event(panel), vec![]);
         }
-        *last = fresh;
+        for _ in 0..item_updates {
+            fires.post("QUEST_ITEM_UPDATE", vec![]);
+        }
     })
 }
 

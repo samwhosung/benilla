@@ -980,6 +980,8 @@ pub(crate) struct Model {
 
     /// The open questgiver panel, and whether `CloseQuest` ran.
     pub(crate) quest: Option<quest::QuestState>,
+    /// The item records `GetQuestItemInfo`'s calls missed, one per call, until the app takes them.
+    pub(crate) quest_item_waits: Vec<u32>,
     pub(crate) quest_close: bool,
     /// The levels of the last greeting's two pools (`0xbde690`, `0xbdfe60`), which outlive the
     /// panel until the next list fills them.
@@ -1731,6 +1733,7 @@ impl Model {
             trade_place_seq: 0,
             trade_offered: Default::default(),
             quest: None,
+            quest_item_waits: Vec::new(),
             quest_pool_levels: Default::default(),
             quest_close: false,
             death: death::DeathUiState::default(),
