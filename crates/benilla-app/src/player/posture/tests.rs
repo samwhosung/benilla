@@ -300,3 +300,93 @@ fn a_paladin_with_a_libram_goes_from_drawn_to_stowed() {
         "without the table the bow is kept"
     );
 }
+
+/// The stand-state setter `0x5ed430` and the sheathe toggle `0x5eb480` act on the active player
+/// alone (`0x5ed46c`, `0x5eb4ba`), and the bindings hand them the active player (`0x48b936`,
+/// `0x48a086`). Under possession a sit reads the character's gates, so the character's channel
+/// refuses it, and with none it seats the character, while the possessed unit poses by its own
+/// byte; the possessed unit's movement stands nobody (`0x60be39`, `0x5ed471`).
+#[test]
+fn under_possession_the_posture_verbs_act_on_the_active_player() {
+    use bevy::ecs::message::Messages;
+    use bevy::ecs::system::RunSystemOnce;
+
+    use crate::net::{Embodied, ObjectStore, SelfPlayer};
+
+    let mut world = World::new();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    world.insert_resource(NetCommands(tx));
+    world.init_resource::<super::Player>();
+    world.init_resource::<crate::ui_loot::LootMoveStart>();
+    world.init_resource::<crate::bindings::BindingsState>();
+    world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
+    world.init_resource::<Messages<super::StandStateRequest>>();
+    world.init_resource::<Messages<super::super::ServerStandState>>();
+    // The priest channels Mind Control; the creature it drives stands, unchannelled.
+    let priest = world
+        .spawn((
+            SelfPlayer,
+            ObjectStore(alive(&[(FIELD_UNIT_CHANNEL_SPELL, 605)])),
+        ))
+        .id();
+    world.spawn((Embodied, Transform::default(), ObjectStore(alive(&[]))));
+
+    let mut frame = |world: &mut World, ask: Option<u8>, moving: bool| -> (u8, Vec<String>) {
+        if let Some(state) = ask {
+            world.write_message(super::StandStateRequest { state });
+        }
+        let stand = world
+            .run_system_once(
+                move |mut player: ResMut<super::Player>,
+                      body: super::BodyQuery,
+                      me: super::super::SelfPosture,
+                      binds: Res<crate::bindings::BindingsState>,
+                      net: Res<NetCommands>,
+                      mut commands: Commands,
+                      mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
+                      mut loot: ResMut<crate::ui_loot::LootMoveStart>,
+                      mut asks: MessageReader<super::StandStateRequest>,
+                      mut server: MessageReader<super::super::ServerStandState>| {
+                    super::update(
+                        &mut player,
+                        &body,
+                        &me,
+                        &binds,
+                        &net,
+                        &mut commands,
+                        &mut sheath,
+                        &mut loot,
+                        &mut asks,
+                        &mut server,
+                        super::PlayerReads::default(),
+                        None,
+                        moving,
+                        false,
+                    )
+                },
+            )
+            .unwrap();
+        let sent = rx.try_iter().map(|c| format!("{c:?}")).collect();
+        (stand, sent)
+    };
+
+    assert_eq!(
+        frame(&mut world, Some(1), false),
+        (0, vec![]),
+        "the priest's channel refuses the sit"
+    );
+    world
+        .get_mut::<ObjectStore>(priest)
+        .unwrap()
+        .0
+        .merge(ObjectFields::from_pairs(&[(FIELD_UNIT_CHANNEL_SPELL, 0)]));
+    let (stand, sent) = frame(&mut world, Some(1), false);
+    assert_eq!(sent, ["StandStateChange { state: 1 }"], "the priest sits");
+    assert_eq!(stand, 0, "the creature poses by its own byte");
+    assert_eq!(world.resource::<super::Player>().stand_pending, Some(1));
+    assert_eq!(
+        frame(&mut world, None, true).1,
+        Vec::<String>::new(),
+        "the creature's movement stands nobody"
+    );
+}
