@@ -386,9 +386,10 @@ impl Plugin for UiActionPlugin {
                         .before(crate::ui_aura::AuraEvents),
                     // A seat: the world-enter events' handlers read the slots' state, which the
                     // reference's arrival stores before its enter cascade (`0x5deafc`, `0x5deb60`).
-                    // After the bag feed, so each `BAG_UPDATE`'s cache refresh (`0x4f9374`) lands
-                    // in its own frame. After the pet's old-target clear, which writes the bar a
-                    // macro bound to a pet spell reads the guid and history of.
+                    // After the pet's old-target clear, which writes the bar a macro bound to a
+                    // pet spell reads the guid and history of. After the bag feed, a seat too: left
+                    // to the VM pass, the pair links through one more command barrier
+                    // ([`crate::vm_pass`]).
                     state::feed_action_state
                         .in_set(UnitFeed)
                         .in_set(crate::ui_unit::WorldEnterSeats)

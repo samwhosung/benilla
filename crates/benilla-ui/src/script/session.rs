@@ -50,11 +50,28 @@ impl super::UiScript {
         self.model_mut().player_login_armed = true;
     }
 
+    /// The bag watchers' set-up in the world-enter cascade (`0x4f8cc0`): the bag cache zeroed,
+    /// then rescanned (`0x4f8da6` → `0x4f91a0`), so each of bags 1 to 10 the player holds fires
+    /// `BAG_UPDATE` with its number, in order (`0x4f9343`); the backpack, the bank and the keyring
+    /// are no bags of the cache. A bag held is a container pushed for its number.
+    fn bags_enter_world(&mut self) {
+        let held: Vec<i64> = {
+            let model = self.model_ref();
+            (1..=10)
+                .filter(|n| model.containers.contains_key(n))
+                .collect()
+        };
+        for n in held {
+            self.fire_event("BAG_UPDATE", vec![super::ScriptValue::Int(n)]);
+        }
+    }
+
     /// The world-enter cascade's events (`0x4908c0`): a full collection
     /// (`FrameScriptCollectGarbage(1)`, `0x490946`), then `PLAYER_LOGIN` (270, `0x490959`) only if
     /// a load armed it (read at `0x49094b`, cleared at `0x49095e`), then `PLAYER_ENTERING_WORLD`
     /// (272, `0x49096a`) every time, then the minimap's zoom reseed
-    /// ([`Self::minimap_enter_world`]), the quest log's rebuild and its `QUEST_LOG_UPDATE`
+    /// ([`Self::minimap_enter_world`]), the bags' `BAG_UPDATE`s ([`Self::bags_enter_world`]), the
+    /// quest log's rebuild and its `QUEST_LOG_UPDATE`
     /// ([`Self::quest_log_enter_world`]), the reputation list's rebuild and its `UPDATE_FACTION`
     /// ([`Self::reputation_enter_world`]) and the skill list's rebuild and its
     /// `SKILL_LINES_CHANGED` ([`Self::rebuild_skills`]). The cascade runs with the player object in
@@ -70,9 +87,11 @@ impl super::UiScript {
         }
         self.fire_event("PLAYER_ENTERING_WORLD", Vec::new());
         // The calls after the signal, inside the bracket: the minimap initializer first
-        // (`0x49096f`), then among the rest the quest log's set-up (`0x4909a1`), the reputation
-        // rebuild (`0x4909d3`) and the skill list's (`0x4909f1` → `0x4d2c90`).
+        // (`0x49096f`), then among the rest the bag watchers' set-up (`0x49098d`), the quest log's
+        // (`0x4909a1`), the reputation rebuild (`0x4909d3`) and the skill list's (`0x4909f1` →
+        // `0x4d2c90`).
         self.minimap_enter_world();
+        self.bags_enter_world();
         self.quest_log_enter_world();
         self.reputation_enter_world();
         self.rebuild_skills();

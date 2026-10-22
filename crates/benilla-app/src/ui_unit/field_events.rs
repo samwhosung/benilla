@@ -465,6 +465,7 @@ fn global_event(id: u16) -> Option<&'static str> {
         id::PLAYER_UPDATE_RESTING => "PLAYER_UPDATE_RESTING",
         id::PET_UI_UPDATE => "PET_UI_UPDATE",
         id::PLAYTIME_CHANGED => "PLAYTIME_CHANGED",
+        id::PLAYER_MONEY => "PLAYER_MONEY",
         _ => return None,
     })
 }
@@ -477,6 +478,7 @@ fn player_event(id: u16) -> Option<&'static str> {
         186 => "UNIT_INVENTORY_CHANGED",
         189 => "PLAYER_XP_UPDATE",
         201 => "PLAYER_DAMAGE_DONE_MODS",
+        347 => "PLAYERBANKSLOTS_CHANGED",
         372 => "UPDATE_FACTION",
         406 => "UPDATE_EXHAUSTION",
         523 => "PLAYER_PVP_KILLS_CHANGED",

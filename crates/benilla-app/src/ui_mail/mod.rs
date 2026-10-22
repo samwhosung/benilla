@@ -87,8 +87,8 @@ fn package_view(row: &benilla_formats::PackageRow) -> benilla_ui::script::Packag
 /// result owes the event, success included; the stock handler only re-enables the send button.
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct MailResult {
-    /// The message key of the line the arm shows: a send's "mail sent" or a refusal other than an
-    /// equip error, which goes through the equip-error table.
+    /// The message key of the line the arm shows: a send's "mail sent", or a refusal's, an equip
+    /// error's through the equip-error table (`0x4ad12e` → `0x622630`).
     pub(crate) line: Option<&'static str>,
     /// A `SEND` result and whether it succeeded: it lifts the send-pending flag (`0x4ad159`), and a
     /// success resets the compose tab (`0x4ad0ca`).
@@ -2018,7 +2018,6 @@ mod tests {
         // A take edits its row in place and fires its arm's own event (`0x4ad7a3`), once: the
         // row's change is not announced a second time, and no list is asked for.
         let (tx, rx) = crossbeam_channel::unbounded();
-        let mut equip = crate::ui_items::EquipErrors::default();
         let mut paid = entry(1, Some(0xA), 0, 30.0);
         paid.money = 50;
         net::mail_list(
@@ -2040,8 +2039,6 @@ mod tests {
             None,
             &mut app.world_mut().resource_mut::<MailOpen>(),
             &NetCommands(tx),
-            &mut equip,
-            Default::default(),
         );
         app.update();
         assert_eq!(logged(&mut app), 6, "the arm's event, once");

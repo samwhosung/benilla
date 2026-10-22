@@ -1359,6 +1359,7 @@ mod tests {
                 .push(crate::item_watch::Run {
                     notice: Some(notice),
                     signals,
+                    ..Default::default()
                 });
         }
 

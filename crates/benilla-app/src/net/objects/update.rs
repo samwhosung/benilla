@@ -899,15 +899,15 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
     if !bridged {
         placed.retain(|(_, n)| !matches!(n, crate::field_watch::FieldNotice::Unit { .. }));
     }
-    // The item watchers' runs, each with the signals its handler ends in, at their watches' places.
-    let runs: Vec<(crate::field_watch::Place, crate::item_watch::Run)> = {
-        let watch = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items);
-        watch
-            .placed_values(guid, kind, fields, &block)
-            .into_iter()
-            .map(|(at, n)| (at, watch.run(n)))
-            .collect()
-    };
+    // The item watchers' runs, each with its unlocks, its bag events and the signals its handler
+    // ends in, at their watches' places; a bag seat's rescans the bag cache.
+    let runs: Vec<(crate::field_watch::Place, crate::item_watch::Run)> = item_watch(
+        &sc.index,
+        &sc.stores,
+        &sc.self_guid,
+        &sc.items,
+    )
+    .placed_values(guid, kind, fields, &block, &mut sc.bag_cache);
     let stamp = crate::field_watch::guild_timestamp(&block, kind, fields);
     // `OnCharmOrSummonChanged` (`0x5e2660`) on the active player or a party or raid member
     // (`0x5e266b`, `0x4918e0`): an old pet the object manager holds no unit of has its selection
@@ -959,7 +959,8 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
         }
     }
     // The active player's coinage watcher `OnMoneyChanged` (`0x5ddf30`), registered on its own
-    // object (`0x5dd8a0`): the trade offer's trim, at the packet.
+    // object (`0x5dd8a0`): the trade offer's trim (`0x5ddfda`), at the packet, behind the
+    // `PLAYER_MONEY` its notice stamped (`0x5ddf4b`); the trim signals nothing.
     if kind == ObjectType::Player
         && me == Some(guid)
         && block
@@ -995,8 +996,11 @@ fn create_hook(sc: &mut Scene, guid: u64, kind: Created, script: Option<&UiScrip
         Created::Item => {
             // The record, set up at once when cached, for our item in the world, and its signal
             // for the owner of any item.
-            let run = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items)
-                .created_run(guid, &fields);
+            let run = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items).created_run(
+                guid,
+                &fields,
+                &sc.bag_cache,
+            );
             // The set-up asks for the record of every item, whoever's, with the callback
             // `0x5d8390` (`0x5d8300` into `0x55ba30`): the readers of a held item only read it.
             if let Some(entry) = fields.object_entry() {
@@ -1015,6 +1019,11 @@ fn create_hook(sc: &mut Scene, guid: u64, kind: Created, script: Option<&UiScrip
             sc.item_lane.push(run);
         }
         Created::World(EntityKind::Player) => {
+            // Our own create runs the world-enter cascade (`0x5deb60` → `0x4908c0`), whose bag
+            // watcher set-up zeroes and rescans the bag cache (`0x49098d` → `0x4f8cc0`).
+            if sc.self_guid.0 == Some(guid) {
+                sc.bag_cache.seat(&fields);
+            }
             resolve_display_records(sc, guid, &fields);
             sc.names.lookup_fields(guid, &fields, &sc.net);
             sc.field_notices

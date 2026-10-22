@@ -432,13 +432,14 @@ fn the_hawk_reminder_is_suppressed_only_once_frames_are_locked() {
 /// The arrows' item guid.
 const ARROW_GUID: u64 = 0x4000_0000_0000_0a12;
 
-/// An arrow stack one lighter, its watcher's release then the bag push through
-/// [`crate::ui_items::feed::apply_container_source`], as a server update is: the release's
-/// `ITEM_LOCK_CHANGED` starts Quiver's reload.
+/// An arrow stack one lighter, as a server update is: the bag pushed through
+/// [`crate::ui_items::feed::push_containers`] ahead of the lanes' drain, then the stack count
+/// watcher's run, its entry unlock (`0x5d94af`) and the backpack's `BAG_UPDATE` (`0x5d94ff`): the
+/// unlock's `ITEM_LOCK_CHANGED` starts Quiver's reload.
 #[test]
 fn spending_an_arrow_starts_quivers_reload_through_the_real_item_feed() {
     benilla_formats::wow_data_or_skip!();
-    use crate::ui_items::feed::{apply_container_source, FeedMemory};
+    use crate::ui_items::feed::{push_containers, FeedMemory};
     use benilla_ui::script::{ContainerSlot, ContainerState};
     use std::collections::HashMap;
 
@@ -467,33 +468,18 @@ fn spending_an_arrow_starts_quivers_reload_through_the_real_item_feed() {
         )]))
     };
     let mut memory = FeedMemory::default();
-    apply_container_source(
-        &mut s,
-        &mut memory,
-        quiver(200),
-        Default::default(),
-        Vec::new(),
-    );
+    push_containers(&mut s, &mut memory, quiver(200));
 
     s.fire_event("START_AUTOREPEAT_SPELL", Vec::new());
     s.tick(0.1);
     let (_, reloading_before, _, _) = shot_state(&mut s);
     assert!(!reloading_before, "no shot has landed yet");
 
-    // The server's stack count drops by one: a fired shot. Its watcher's entry unlock fires
-    // first (`0x5d94af`), then the feed pushes the bag.
-    let mut releases = crate::ui_items::locks::ItemReleases::default();
-    releases
-        .0
-        .push(crate::ui_items::locks::Release::Entry(vec![ARROW_GUID]));
-    releases.apply(&mut s);
-    apply_container_source(
-        &mut s,
-        &mut memory,
-        quiver(199),
-        Default::default(),
-        Vec::new(),
-    );
+    // The server's stack count drops by one: a fired shot. The feed pushes the bag, then the
+    // watcher's run unlocks the entry and updates the backpack.
+    push_containers(&mut s, &mut memory, quiver(199));
+    s.unlock_entry_items(&[ARROW_GUID]);
+    s.fire_event("BAG_UPDATE", vec![benilla_ui::script::ScriptValue::Int(0)]);
     s.tick(0.1);
 
     let (_, reloading, reload_left, _) = shot_state(&mut s);

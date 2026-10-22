@@ -16,10 +16,10 @@
 //!
 //! The watches here: the unit-field bridge `0x51bbb0` on every unit with token flags; the unit
 //! type watchers `0x6041f0` and the player type watchers `0x5e2510` whose callbacks signal; the
-//! active player's `0x5de4b0`, rest-state and charmed-by watches registered in `0x5dd8a0`, its
-//! skill watches `0x5de180`, `0x5de450` and `0x5de470`, its ammunition watch `0x4c70b0`, and the
-//! weapon arms of the visible-item watch `0x5e2810`. The item watchers' signals are
-//! [`crate::item_watch`]'s.
+//! active player's `0x5de4b0`, rest-state, coinage and charmed-by watches registered in
+//! `0x5dd8a0`, its skill watches `0x5de180`, `0x5de450` and `0x5de470`, its ammunition watch
+//! `0x4c70b0`, and the weapon arms of the visible-item watch `0x5e2810`. The item watchers' and the
+//! inventory watcher's runs are [`crate::item_watch`]'s.
 
 use benilla_protocol::messages::ObjectType;
 use benilla_protocol::{ObjectFields, OwnerFallback};
@@ -40,7 +40,8 @@ pub(crate) enum FieldNotice {
     /// A callback's `FrameScript_SignalEvent2(id, "%s", "player")`: `0x5de4b0` on the active
     /// player, the event its registration pushes as the argument (`0x5de4b3`, `0x5de4c1`); the
     /// ammunition watch's, the item slot path's and the ammo getters' record callback's
-    /// `UNIT_INVENTORY_CHANGED` (`0x4c7110`, `0x4c72e0`, `0x4c8509`).
+    /// `UNIT_INVENTORY_CHANGED` (`0x4c7110`, `0x4c72e0`, `0x4c8509`); the item slot path's
+    /// `PLAYERBANKSLOTS_CHANGED` (`0x4c728d`).
     Player { id: u16 },
     /// `0x5de4e0` on `PLAYER_BYTES_2` byte 3: `UPDATE_EXHAUSTION` bare (`0x5de4e8`), then the
     /// rest-state line for the new state.
@@ -167,6 +168,8 @@ pub(crate) mod id {
     pub(crate) const UNIT_AURA: u16 = 41;
     pub(crate) const UNIT_NAME_UPDATE: u16 = 183;
     pub(crate) const UNIT_INVENTORY_CHANGED: u16 = 186;
+    pub(crate) const PLAYER_MONEY: u16 = 200;
+    pub(crate) const PLAYERBANKSLOTS_CHANGED: u16 = 347;
     pub(crate) const UNIT_CLASSIFICATION_CHANGED: u16 = 187;
     pub(crate) const PLAYER_FLAGS_CHANGED: u16 = 407;
     pub(crate) const UNIT_QUEST_LOG_CHANGED: u16 = 522;
@@ -305,6 +308,10 @@ const PLAYER_EVENT_WATCHES: [(u16, u16, u16); 11] = [
     // `UPDATE_FACTION`, the watched faction index (`0x5ddcce`).
     (0x10c4, 4, 372),
 ];
+
+/// The coinage watch `OnMoneyChanged` (`0x5ddf30`) registered in `0x5dd8a0`:
+/// `PLAYER_FIELD_COINAGE`, the purse it reads at `+0xf70` (`0x5ddfa5`).
+const COINAGE: (u16, u16) = (0xf70, 4);
 
 /// `0x5de4e0`'s range, `PLAYER_BYTES_2` byte 3 (`0x5ddb0b`).
 const REST_STATE: u16 = 0x1b;
@@ -836,6 +843,16 @@ pub(crate) fn placed_values(
             if let Some(at) = at(PLAYER_SECTION, (offset, len), List::Object) {
                 pass.push(at, FieldNotice::Player { id });
             }
+        }
+        // `0x5ddf30` signals `PLAYER_MONEY` (`0x5ddf4b`) ahead of the trade offer's trim
+        // (`0x5ddfda`), which signals nothing and runs at the packet ([`crate::ui_trade`]).
+        if let Some(at) = at(PLAYER_SECTION, COINAGE, List::Object) {
+            pass.push(
+                at,
+                FieldNotice::Global {
+                    id: id::PLAYER_MONEY,
+                },
+            );
         }
         // `0x4c70b0` sets the ammunition model (`0x4c70fc`, not built) and signals (`0x4c7110`).
         if let Some(at) = at(PLAYER_SECTION, AMMO_ID, List::Object) {

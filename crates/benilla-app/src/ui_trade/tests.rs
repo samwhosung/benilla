@@ -1299,6 +1299,7 @@ fn trade_update_comes_only_from_a_landed_record_a_getter_asked_for() {
             .push(crate::item_watch::Run {
                 notice: Some(ItemNotice::TradeRecord { entry: 4306 }),
                 signals: Vec::new(),
+                ..Default::default()
             });
     }
     app.update();
@@ -1589,6 +1590,7 @@ fn queue(app: &mut App, notice: crate::item_watch::ItemNotice) {
         .push(crate::item_watch::Run {
             notice: Some(notice),
             signals: Vec::new(),
+            ..Default::default()
         });
 }
 
@@ -1879,6 +1881,7 @@ fn the_destroy_run_recounts_scans_asks_then_signals() {
             signals: vec![crate::field_watch::FieldNotice::Player {
                 id: crate::field_watch::id::UNIT_INVENTORY_CHANGED,
             }],
+            ..Default::default()
         });
     app.update();
     crate::item_lane::fire_item_lane(app.world_mut());

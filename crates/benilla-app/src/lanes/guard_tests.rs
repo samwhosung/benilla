@@ -145,13 +145,12 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "::ui_instance::InstanceState",
         "the instance state",
     ),
-    (Row::Queue, "::ui_items::EquipErrors", "the equip errors"),
     (
         Row::Queue,
         "::ui_items::locks::ItemReleases",
-        "the item releases",
+        "the sale refusal's unlock (`0x5dd26b`), which follows its line, the merchant errors' \
+         (`MerchantErrors`): it moves with them; and the loot window's owed unlocks",
     ),
-    (Row::Queue, "::ui_items::net::BagOpens", "the bag opens"),
     (Row::Queue, "::ui_logout::LogoutState", "the logout state"),
     (Row::Queue, "::ui_loot_roll::LootRolls", "the loot rolls"),
     (
@@ -258,22 +257,6 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::Edge,
-        "::ui_items::feed::feed_containers",
-        "`BAG_UPDATE`, `BAG_CLOSED` and `PLAYERBANKSLOTS_CHANGED`, found by comparing the bags' \
-         views and guids, where the reference signals them inside the item and seat watchers' \
-         runs (`0x4f9480` from `0x5d94ff`, `0x5d85e8` and `0x5d9b1b`; `0x4f8db0`, `0x4f90d0`, \
-         `0x4f91a0`, `0x5ddcf0`)",
-    ),
-    (
-        Row::Edge,
-        "::ui_items::locks::apply_item_releases",
-        "the seat, restack and arrival unlocks' `ITEM_LOCK_CHANGED`, found by comparing the seats \
-         and the stacks, where the reference runs them first in those watchers' runs (`0x4f8e15`, \
-         `0x4f912c`, `0x5ddd50`, `0x5d94af`, `0x5d8590`); they move with `BAG_UPDATE`, which \
-         follows them",
-    ),
-    (
-        Row::Edge,
         "::ui_unit::feed_units",
         "the selection's change, `PLAYER_TARGET_CHANGED`",
     ),
@@ -323,6 +306,8 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::NameCache",
     "::ServerTime",
     "::GuidIndex",
+    // The bag cache the open-container handler numbers its `BAG_OPEN`s from.
+    "::BagCache",
     "::NetCommands",
     "::Reputations",
     "::SelfGuid",
@@ -385,10 +370,11 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 8] {
+fn lane_types() -> [TypeId; 9] {
     [
         TypeId::of::<crate::field_watch::NoticeLane>(),
         TypeId::of::<crate::item_lane::ItemLane>(),
+        TypeId::of::<crate::ui_items::EquipErrors>(),
         // The loot lane: the session's steps and pushes, stamped at their packets.
         TypeId::of::<crate::ui_loot::LootState>(),
         TypeId::of::<crate::ui_chat::ChatLog>(),
@@ -536,6 +522,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "auction house",
             "cast reports",
             "chat",
+            "equip errors",
             "field notices",
             "item watchers",
             "loot",

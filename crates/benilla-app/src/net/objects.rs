@@ -85,6 +85,8 @@ pub(crate) struct Scene<'w, 's> {
     field_changes: MessageWriter<'w, FieldChanged>,
     /// The item watchers' runs ([`crate::item_lane`]).
     item_lane: ResMut<'w, crate::item_lane::ItemLane>,
+    /// The bag cache `0xbdd060` the bag seats' runs rescan and the bag events number from.
+    bag_cache: ResMut<'w, crate::item_watch::BagCache>,
     field_notices: ResMut<'w, crate::field_watch::NoticeLane>,
     /// The guid-scoped selection teardowns (`0x493910(guid, 1)`) a watcher raises.
     deselect: MessageWriter<'w, crate::target::DeselectGuid>,
@@ -163,7 +165,7 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
                     Cb::SetUp(_) | Cb::Entry(_) if !answered => {}
                     Cb::SetUp(guid) => {
                         let run = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items)
-                            .set_up_run(guid, entry);
+                            .set_up_run(guid, entry, &sc.bag_cache);
                         if run.notice.is_some() {
                             replay_enchant_times(
                                 &mut sc.items,
@@ -176,7 +178,7 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
                     }
                     Cb::Entry(guid) => {
                         let run = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items)
-                            .entry_run(guid, entry);
+                            .entry_run(guid, entry, &sc.bag_cache);
                         sc.item_lane.push(run);
                     }
                     // A refusal releases a row ([`crate::ui_loot`]'s deviation).
@@ -194,7 +196,7 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
                     // (`0x4c0343`, `0x4c84f6`).
                     Cb::Trade if answered => sc.item_lane.push(crate::item_watch::Run {
                         notice: Some(crate::item_watch::ItemNotice::TradeRecord { entry }),
-                        signals: Vec::new(),
+                        ..Default::default()
                     }),
                     Cb::Ammo if answered => {
                         sc.field_notices

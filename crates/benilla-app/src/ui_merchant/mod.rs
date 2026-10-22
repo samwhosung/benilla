@@ -644,14 +644,14 @@ fn feed_merchant(
             })
             .collect();
         crate::ui_action::show_messages(script, &mut sink, "ui_merchant", refusals);
-        // The purse (`PLAYER_FIELD_COINAGE`): on a change, push it and fire `PLAYER_MONEY`, which
-        // the money frames repaint on.
+        // The purse (`PLAYER_FIELD_COINAGE`), pushed on a change for `GetMoney`; its
+        // `PLAYER_MONEY` is the coinage watcher's (`0x5ddf4b`, [`crate::field_watch`]), fired
+        // after this push.
         if let Some(store) = self_q.iter().next() {
             if let Some(copper) = store.0.player_money() {
                 let copper = u64::from(copper);
                 if *last_money != Some(copper) {
                     script.set_money(copper);
-                    script.fire_event("PLAYER_MONEY", vec![]);
                     *last_money = Some(copper);
                 }
             }

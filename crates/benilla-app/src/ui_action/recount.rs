@@ -192,6 +192,7 @@ mod tests {
                 .push(crate::item_watch::Run {
                     notice: Some(notice),
                     signals: Vec::new(),
+                    ..Default::default()
                 });
         }
         app.update();

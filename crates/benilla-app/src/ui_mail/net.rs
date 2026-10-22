@@ -11,7 +11,6 @@ use super::{
 };
 use crate::net::{ClientCommand, NetCommands, NetHandlerApp};
 use crate::query_cache::Ask;
-use crate::ui_items::{EquipError, EquipErrors};
 
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
@@ -92,8 +91,6 @@ fn on_send_mail_result(
     In(ev): In<SessionEvent>,
     mut mail: ResMut<MailOpen>,
     commands: Res<NetCommands>,
-    mut equip_errors: ResMut<EquipErrors>,
-    ticks: bevy::ecs::system::SystemChangeTick,
 ) {
     if let SessionEvent::SendMailResult {
         mail_id,
@@ -111,8 +108,6 @@ fn on_send_mail_result(
             item,
             &mut mail,
             &commands,
-            &mut equip_errors,
-            ticks.this_run(),
         );
     }
 }
@@ -256,9 +251,6 @@ pub(super) fn send_mail_result(
     _item: Option<(u32, u32)>,
     mail: &mut MailOpen,
     commands: &NetCommands,
-    equip_errors: &mut EquipErrors,
-    // The handler call's change tick, its refusal's place on the wire ([`EquipError::at`]).
-    at: bevy::ecs::change_detection::Tick,
 ) {
     // ITEM_TAKEN's `(entry, count)` tail is unused; vmangos sends no `SMSG_ITEM_PUSH_RESULT` for a
     // mail take (`MailHandler.cpp:675`). Every result lifts the request lock at the handler's
@@ -267,21 +259,14 @@ pub(super) fn send_mail_result(
     // Every result owes the feed its tail `MAIL_FAILED`, whatever its action (`0x4ad15f`).
     let mut result = MailResult::default();
     if action == mail_action::SEND {
-        if error == mail_error::EQUIP_ERROR {
-            equip_errors.0.push(EquipError {
-                unlocks: [0, 0],
-                reason: equip_error.unwrap_or(0) as u8,
-                required_level: None,
-                // The result carries no bag slot: 255 is the wire's "own array" sentinel, so
-                // reason 16 names no container.
-                bag_slot: 255,
-                at,
-            });
-        }
         result.send = Some(error == mail_error::OK);
         result.line = match error {
             mail_error::OK => Some(MAIL_SENT_KEY),
-            mail_error::EQUIP_ERROR => None,
+            // The equip-error table's line, with no fill: the result carries no bag slot and no
+            // level, and unlocks nothing.
+            mail_error::EQUIP_ERROR => Some(crate::ui_items::equip_error_key(
+                equip_error.unwrap_or(0) as u8,
+            )),
             other => Some(mail_refusal(other)),
         };
         mail.results.push(result);
@@ -319,13 +304,11 @@ pub(super) fn send_mail_result(
                 }
             }
         }
-        mail_error::EQUIP_ERROR => equip_errors.0.push(EquipError {
-            unlocks: [0, 0],
-            reason: equip_error.unwrap_or(0) as u8,
-            required_level: None,
-            bag_slot: 255,
-            at,
-        }),
+        mail_error::EQUIP_ERROR => {
+            result.line = Some(crate::ui_items::equip_error_key(
+                equip_error.unwrap_or(0) as u8
+            ))
+        }
         other => result.line = Some(mail_refusal(other)),
     }
     mail.results.push(result);
@@ -367,7 +350,6 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<MailOpen>()
             .init_resource::<MailPending>()
-            .init_resource::<EquipErrors>()
             .insert_resource(NetCommands(tx));
         register(&mut app);
 
@@ -395,7 +377,6 @@ mod tests {
     fn every_mail_result_lifts_the_request_lock() {
         let (tx, _rx) = crossbeam_channel::unbounded();
         let commands = NetCommands(tx);
-        let mut equip = EquipErrors::default();
         for (action, error) in [
             (mail_action::SEND, mail_error::OK),
             (mail_action::MONEY_TAKEN, mail_error::OK),
@@ -406,17 +387,7 @@ mod tests {
         ] {
             let mut mail = MailOpen::default();
             mail.click(0x20);
-            send_mail_result(
-                7,
-                action,
-                error,
-                None,
-                None,
-                &mut mail,
-                &commands,
-                &mut equip,
-                Default::default(),
-            );
+            send_mail_result(7, action, error, None, None, &mut mail, &commands);
             assert!(mail.request_resolved, "action {action} error {error}");
         }
     }
@@ -428,7 +399,6 @@ mod tests {
     fn every_mail_result_signals_mail_failed_once() {
         let (tx, _rx) = crossbeam_channel::unbounded();
         let commands = NetCommands(tx);
-        let mut equip = EquipErrors::default();
         let mut mail = MailOpen::default();
         mail.click(0x20);
         let mut cod = super::super::tests::entry(7, Some(0xA), 0, 30.0);
@@ -441,17 +411,7 @@ mod tests {
             (mail_action::ITEM_TAKEN, mail_error::EQUIP_ERROR),
             (mail_action::SEND, mail_error::OK),
         ] {
-            send_mail_result(
-                7,
-                action,
-                error,
-                None,
-                None,
-                &mut mail,
-                &commands,
-                &mut equip,
-                Default::default(),
-            );
+            send_mail_result(7, action, error, None, None, &mut mail, &commands);
         }
         assert_eq!(mail.results.len(), 5, "one per result");
 
@@ -507,7 +467,6 @@ mod tests {
         action: u32,
     ) -> crossbeam_channel::Receiver<ClientCommand> {
         let (tx, rx) = crossbeam_channel::unbounded();
-        let mut equip = EquipErrors::default();
         send_mail_result(
             id,
             action,
@@ -516,8 +475,6 @@ mod tests {
             None,
             mail,
             &NetCommands(tx),
-            &mut equip,
-            Default::default(),
         );
         rx
     }
@@ -529,7 +486,6 @@ mod tests {
     fn a_take_edits_its_row_in_place_and_asks_for_no_list() {
         let (tx, rx) = crossbeam_channel::unbounded();
         let commands = NetCommands(tx);
-        let mut equip = EquipErrors::default();
         let mut mail = MailOpen::default();
         mail.click(0x20);
         let mut row = super::super::tests::entry(7, Some(0xA), 0, 30.0);
@@ -541,17 +497,7 @@ mod tests {
             (mail_action::ITEM_TAKEN, 7),
             (mail_action::MADE_PERMANENT, 7),
         ] {
-            send_mail_result(
-                id,
-                action,
-                mail_error::OK,
-                None,
-                None,
-                &mut mail,
-                &commands,
-                &mut equip,
-                Default::default(),
-            );
+            send_mail_result(id, action, mail_error::OK, None, None, &mut mail, &commands);
         }
         let row = &mail.mails[0];
         assert_eq!((row.money, row.item.is_none()), (0, true));
@@ -604,7 +550,6 @@ mod tests {
             row.item_text_id = text;
             row.message_type = kind;
             mail.mails.push(row);
-            let mut equip = EquipErrors::default();
             send_mail_result(
                 7,
                 mail_action::ITEM_TAKEN,
@@ -613,8 +558,6 @@ mod tests {
                 None,
                 &mut mail,
                 &NetCommands(tx),
-                &mut equip,
-                Default::default(),
             );
             assert_eq!(
                 sent_commands(&rx).is_empty(),
@@ -633,7 +576,6 @@ mod tests {
         let mut cod = super::super::tests::entry(7, Some(0xA), 0, 30.0);
         cod.checked = CHECKED_COD_PAYMENT;
         mail.mails.push(cod);
-        let mut equip = EquipErrors::default();
         send_mail_result(
             7,
             mail_action::MONEY_TAKEN,
@@ -642,8 +584,6 @@ mod tests {
             None,
             &mut mail,
             &NetCommands(tx),
-            &mut equip,
-            Default::default(),
         );
         assert_eq!(sent_commands(&rx), [("delete", 7)]);
         assert_eq!(mail.results[0].close_inbox, Some(1));

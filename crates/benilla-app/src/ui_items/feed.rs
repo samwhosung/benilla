@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
 use benilla_protocol::ItemInfo;
-use benilla_ui::script::{ContainerSlot, ContainerState, ScriptValue, UiScript};
+use benilla_ui::script::{ContainerSlot, ContainerState, UiScript};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
@@ -14,17 +14,15 @@ use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::ui_script::gate;
 
-use super::equip_error::equip_error_key;
 use super::{
-    find_equip_slot, has_key, keyring_size, EquipErrors, BAGS, BAG_SLOT_FIRST, BANK_BAGS,
-    BANK_BAG_ID_FIRST, BANK_BAG_SLOT_FIRST, BANK_CONTAINER, BANK_SLOTS, KEYRING_CONTAINER,
-    KEYRING_SLOTS, PACK_SLOTS,
+    find_equip_slot, has_key, keyring_size, BAGS, BAG_SLOT_FIRST, BANK_BAGS, BANK_BAG_ID_FIRST,
+    BANK_CONTAINER, BANK_SLOTS, KEYRING_CONTAINER, KEYRING_SLOTS, PACK_SLOTS,
 };
 
 /// The doll's equipment slots, 0-based descriptor slots 0..=18 (live-API ids 1..=19).
 const WORN_SLOTS: u8 = 19;
 
-/// What the container feed last pushed, for per-bag change events.
+/// What the container feed last pushed, so a push happens on change only.
 #[derive(Default)]
 pub(crate) struct FeedMemory {
     pushed: HashMap<i64, ContainerState>,
@@ -38,29 +36,6 @@ pub(crate) struct FeedMemory {
     names_generation: gate::Watch,
     petition_records: gate::Watch,
     enchant_deadlines: gate::Watch,
-    /// The last [`SlotGuids::bags`], diffed for `BAG_CLOSED`.
-    bag_guids: [u64; 10],
-    /// The last [`SlotGuids::vault`], diffed for `PLAYERBANKSLOTS_CHANGED`.
-    vault_guids: [u64; BANK_SLOTS as usize],
-    /// The `BAG_UPDATE`s fired since the feed last counted them into [`BagUpdates`].
-    bag_updates: u64,
-}
-
-/// How many `BAG_UPDATE`s the bag feed has signalled. Each is a `RaiseBagUpdate 0x4f9370`, which
-/// first runs the action bar's usable refresh `0x4e5c00` (`0x4f9374`), so the action feed refreshes
-/// on its edge.
-#[derive(Resource, Default)]
-pub(crate) struct BagUpdates(pub(crate) u64);
-
-/// The item guids in the player's bag and vault slots, as the reference's watchers read them
-/// (`0x5dd8a0` installs `0x5ddcf0` over the guid fields): which item, where a pushed slot view only
-/// says what it looks like, so two identical items swapped still register.
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub(crate) struct SlotGuids {
-    /// The bag in containers 1..=10 (equipped, then bank bags), indexed `id - 1`.
-    pub bags: [u64; 10],
-    /// The 24 vault slots, indexed `slot - 1`.
-    pub vault: [u64; BANK_SLOTS as usize],
 }
 
 /// A spell's `$`-substituted description, for item trigger and set-bonus lines. An empty one
@@ -1038,35 +1013,6 @@ fn worn_cooldowns(
         .collect()
 }
 
-/// Reason 16's `%s`, the target bag's `BagFamily` name ("Only Arrows can be placed in that."), or
-/// `None` to keep the generic line. `bag_slot` is the bag's player-array slot, and the reference's
-/// `0x5ede00` names nothing for 255 (the player's own array) or for a slot at or past
-/// `[player+0x1d38]`, 113 for the local player, so equipped bags (19..22) and bank bags (63..68)
-/// both resolve. It reads the bag family, not the subclass the errorId's name suggests.
-fn bag_family_name(
-    player: Option<&ObjectStore>,
-    bag_slot: u8,
-    objects: &Objects,
-    items: &Items,
-    families: Option<&benilla_formats::ItemBagFamilyCatalog>,
-) -> Option<String> {
-    let store = player?;
-    let families = families?;
-    let guid = match bag_slot {
-        s if (BAG_SLOT_FIRST..BAG_SLOT_FIRST + BAGS).contains(&s) => store.0.player_inv_slot(s),
-        s if (BANK_BAG_SLOT_FIRST..BANK_BAG_SLOT_FIRST + BANK_BAGS).contains(&s) => {
-            store.0.player_bank_bag_slot(s - BANK_BAG_SLOT_FIRST)
-        }
-        // 255, the player's own array, names no bag.
-        _ => None,
-    }
-    .filter(|&g| g != 0)?;
-    let entry = objects.object(guid)?.object_entry().filter(|&e| e != 0)?;
-    // Only read (`0x5da08d`).
-    let family = items.template(entry, guid, Ask::Read)?.bag_family;
-    families.name(family).map(str::to_string)
-}
-
 /// The item build's own lookups, asked as it asks them. The creator's and the giver's names
 /// (`0x52e204`, `0x52e29d`) and a charter's record and owner (`0x52b93b`, `0x52b9d2`) pass a
 /// callback at every build, and a hovered bag or paper-doll slot builds again each frame
@@ -1126,40 +1072,16 @@ pub(crate) fn feed_containers(
     ),
     mut inv: crate::items::Inventory,
     spells: Option<Res<crate::ui_action::Spells>>,
-    equip: (ResMut<EquipErrors>, crate::ui_action::MessageSink),
-    // Reason 16's `%s` source; absent, every 16 keeps the generic line.
-    bag_families: Option<Res<crate::ui_items::ItemBagFamilies>>,
-    mut opens: ResMut<super::net::BagOpens>,
-    mut bag_updates: ResMut<BagUpdates>,
     names: Res<crate::names::NameCache>,
     clock_and_petitions: (
         Res<crate::ui_script::UiClock>,
         Res<crate::ui_petition::PetitionRecords>,
     ),
     mut memory: Local<crate::ui_script::VmMemo<FeedMemory>>,
-    writes: BagWrites,
 ) {
-    // A refusal's handler shows its line and unlocks its items inside its dispatch (`0x496720`,
-    // then `0x5e3ac0`, `0x5e3ad3`), so its handlers read the bags the packets before it left: one
-    // a later packet's write follows fires ahead of the frame's bag push, the rest after it.
-    let (mut equip_errors, mut sink) = equip;
-    let ahead = equip_errors
-        .0
-        .iter()
-        .take_while(|e| writes.after(e.at))
-        .count();
-    let behind = equip_errors.0.split_off(ahead);
-    let refusing = Refusing {
-        me: &inv.self_store,
-        objects: &inv.objects,
-        items: &items,
-        bag_families: bag_families.as_deref(),
-    };
-    if !equip_errors.0.is_empty() {
-        vm.run(|script| refusing.show(script, &mut equip_errors.0, &mut sink));
-    }
-    // The bags, read off the host's cooldowns among the rest; their push signals `BAG_UPDATE`
-    // and `BAG_OPEN`, so it runs with the host lent.
+    // The bags, read off the host's cooldowns among the rest. The push signals nothing: the bag
+    // events are the watchers' and the handlers', fired after it on the lanes
+    // ([`crate::item_lane`]).
     let bags = vm.turn(|script, cooldowns| {
         let script = script?;
         let (clock, petitions) = clock_and_petitions;
@@ -1185,8 +1107,6 @@ pub(crate) fn feed_containers(
         let enchants_changed = catalogs.0.as_ref().is_some_and(|r| r.is_changed())
             || catalogs.1.as_ref().is_some_and(|r| r.is_changed());
         let spells_changed = spells.as_ref().is_some_and(|r| r.is_changed());
-        let families_changed = bag_families.as_ref().is_some_and(|r| r.is_changed());
-        let opens_held = !opens.0.is_empty();
         gate::trace(
             "feed_containers",
             &[
@@ -1202,8 +1122,6 @@ pub(crate) fn feed_containers(
                 ("icons", icons_changed),
                 ("enchants", enchants_changed),
                 ("spells", spells_changed),
-                ("families", families_changed),
-                ("opens", opens_held),
             ],
         );
         let gate = gate::Gate::new(
@@ -1219,9 +1137,7 @@ pub(crate) fn feed_containers(
             || self_changed
             || icons_changed
             || enchants_changed
-            || spells_changed
-            || families_changed
-            || opens_held,
+            || spells_changed,
         );
         if gate.skip() {
             return None;
@@ -1238,8 +1154,6 @@ pub(crate) fn feed_containers(
             props: catalogs.1.as_deref(),
         };
         let player = inv.self_store.iter().next();
-        // Server-opened bags fire `BAG_OPEN(id)` after the slot push below.
-        let opened: Vec<i64> = std::mem::take(&mut opens.0);
 
         let mut fresh: HashMap<i64, ContainerState> = HashMap::new();
         // The class's relic flag; without client data it is false, an ordinary ranged slot.
@@ -1497,238 +1411,37 @@ pub(crate) fn feed_containers(
                 );
             }
         }
-        Some((
-            player.is_some().then_some(fresh),
-            SlotGuids {
-                bags: std::array::from_fn(|i| player.map_or(0, |s| bag_slot_guid(s, i as i64 + 1))),
-                vault: std::array::from_fn(|i| player.map_or(0, |s| vault_slot_guid(s, i as u8))),
-            },
-            opened,
-            gate,
-        ))
+        Some((player.is_some().then_some(fresh), gate))
     });
-    if let Some((source, guids, opened, gate)) = bags {
+    if let Some((source, gate)) = bags {
         vm.run(|script| {
             let Some(script) = script else {
                 return;
             };
             let memory = memory.get(script);
-            if apply_container_source(script, memory, source, guids, opened) {
-                gate.audit("feed_containers", "a bag diff or a server-opened bag");
+            if push_containers(script, memory, source) {
+                gate.audit("feed_containers", "a bag diff");
             }
-            bag_updates.0 = bag_updates
-                .0
-                .wrapping_add(std::mem::take(&mut memory.bag_updates));
         });
     }
-    equip_errors.0.extend(behind);
-    if !equip_errors.0.is_empty() {
-        vm.run(|script| refusing.show(script, &mut equip_errors.0, &mut sink));
-    }
 }
 
-/// Our own player or an item, written since the feed last ran.
-type BagWritten = (
-    Or<(With<crate::items::ItemObject>, With<SelfPlayer>)>,
-    Changed<ObjectStore>,
-);
-
-/// The writes to our own player and the items this frame, by change tick: each packet's handler
-/// call is its own system run, so a later packet's writes carry newer ticks.
-#[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct BagWrites<'w, 's> {
-    written: Query<'w, 's, Ref<'static, ObjectStore>, BagWritten>,
-    ticks: bevy::ecs::system::SystemChangeTick,
-}
-
-impl BagWrites<'_, '_> {
-    /// Whether a packet after the handler call at `at` wrote our player or an item.
-    fn after(&self, at: bevy::ecs::change_detection::Tick) -> bool {
-        let now = self.ticks.this_run();
-        self.written
-            .iter()
-            .any(|s| s.last_changed().is_newer_than(at, now))
-    }
-}
-
-/// What a refusal's line reads.
-struct Refusing<'a, 'w, 's> {
-    me: &'a Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
-    objects: &'a Objects<'w, 's>,
-    items: &'a Items,
-    bag_families: Option<&'a crate::ui_items::ItemBagFamilies>,
-}
-
-impl Refusing<'_, '_, '_> {
-    /// Show `refusals` as the failure's handler does, in a run with the host lent: each line, then
-    /// the unlocks (`0x496720`, then `0x5e3ac0`, `0x5e3ad3`). With no VM up the unlocks are
-    /// dropped, as they would fire into a later VM's locks, as the release queue's are, and the
-    /// lines wait.
-    fn show(
-        &self,
-        script: Option<&mut UiScript>,
-        refusals: &mut Vec<super::EquipError>,
-        sink: &mut crate::ui_action::MessageSink,
-    ) {
-        let Some(script) = script else {
-            for e in refusals.iter_mut() {
-                e.unlocks = [0; 2];
-            }
-            return;
-        };
-        // Refusals become the red error line through `equip_error_key`. An empty or missing
-        // string prints nothing, as the reference's sink guard (`0x4945b4`) drops it; that
-        // silences 59.
-        let player = self.me.iter().next();
-        let mut lines = Vec::new();
-        let mut unlocks = Vec::new();
-        for e in refusals.drain(..) {
-            unlocks.extend(e.unlocks);
-            // Reason 16 names the bag's family when the bag resolves, as `0x5ede00` does.
-            let subclass_fill = (e.reason == 16)
-                .then(|| {
-                    bag_family_name(
-                        player,
-                        e.bag_slot,
-                        self.objects,
-                        self.items,
-                        self.bag_families.map(|c| &c.0),
-                    )
-                })
-                .flatten();
-            let key = match subclass_fill {
-                Some(_) => "ERR_WRONG_BAG_TYPE_SUBCLASS",
-                None => equip_error_key(e.reason),
-            };
-            let text = script
-                .lua()
-                .globals()
-                .get::<String>(key)
-                .unwrap_or_default();
-            if text.is_empty() {
-                continue;
-            }
-            // Reason 1 fills `%d` and 16 `%s`; neither carries the other's fill.
-            let text = match e.required_level {
-                Some(d) => text.replace("%d", &d.to_string()),
-                None => text,
-            };
-            let text = match subclass_fill {
-                Some(family) => text.replace("%s", &family),
-                None => text,
-            };
-            lines.push(crate::ui_action::Shown::keyed(key, text));
-        }
-        // Through the one sink, which also plays the error speech 18 of these keys carry.
-        crate::ui_action::show_messages(script, sink, "ui_items", lines);
-        // A refusal's unlocks follow its line (`0x496720`, then `0x5e3ac0`, `0x5e3ad3`).
-        for guid in unlocks {
-            script.unlock_item(guid);
-        }
-    }
-}
-
-/// Diffs `source` against the last push, pushes each changed bag and fires the reference's events:
-/// `BAG_UPDATE(bagID)` (`PLAYERBANKSLOTS_CHANGED` for the vault), then `BAG_OPEN`.
+/// Push every bag whose view changed since the last push, firing nothing: a bag's events are its
+/// watchers' runs (`0x4f8db0`, `0x4f90d0`, `0x4f8ec0`, `0x4f9480`, [`crate::item_watch`]), fired
+/// after this push on the item lane. Whether anything went into the VM, for the caller's gate
+/// audit.
 ///
 /// `None` is an absent self store (before login, or the logout despawn frames before the VM shuts
 /// down), never "no items": the VM keeps its last push, as the reference's UI shutdown
-/// (`0x490bd0`) runs with the inventory intact, where a burst of size-0 `BAG_UPDATE`s would have a
-/// bag-saving addon record empty bags. Server-opened bags still flush, never to fire into a later
-/// VM.
-pub(crate) fn apply_container_source(
+/// (`0x490bd0`) runs with the inventory intact.
+pub(crate) fn push_containers(
     script: &mut UiScript,
     memory: &mut FeedMemory,
     source: Option<HashMap<i64, ContainerState>>,
-    // Beside the source, since an absent source must leave the guid memory alone too.
-    guids: SlotGuids,
-    opened: Vec<i64>,
 ) -> bool {
-    let mut pushed = false;
-    if let Some(fresh) = source {
-        pushed |= diff_and_push(script, memory, fresh, guids);
-    }
-    // The reference fires `BAG_OPEN(id)` from the handler (`0x5e3b35`); here it follows this
-    // frame's `BAG_UPDATE`s, so the frame shown paints the bag as it is.
-    pushed |= !opened.is_empty();
-    for bag in opened {
-        script.fire_event("BAG_OPEN", vec![ScriptValue::Int(bag)]);
-    }
-    // Whether anything went into the VM, for the caller's gate audit.
-    pushed
-}
-
-/// The item guid in vault slot `i` (0-based; player slots 39..62), 0 when empty. The reference's
-/// band `0x5dd8a0` watches these fields with `0x5ddcf0`.
-fn vault_slot_guid(store: &ObjectStore, i: u8) -> u64 {
-    store.0.player_bank_slot(i).unwrap_or(0)
-}
-
-/// The guid of the bag in container `id` (1..=10, equipped then bank bags), 0 when empty or for any
-/// other id. These are the ten slots whose watcher (`0x4f8cc0` installs `0x4f8ec0`) can close a
-/// window; the backpack and keyring loops (`0x4f8db0`) never reach the event.
-fn bag_slot_guid(store: &ObjectStore, id: i64) -> u64 {
-    match id {
-        1..=4 => store.0.player_inv_slot(BAG_SLOT_FIRST + (id as u8 - 1)),
-        5..=10 => store.0.player_bank_bag_slot(id as u8 - 5),
-        _ => None,
-    }
-    .unwrap_or(0)
-}
-
-/// The present-source half of [`apply_container_source`]: push every changed bag, announce each.
-fn diff_and_push(
-    script: &mut UiScript,
-    memory: &mut FeedMemory,
-    fresh: HashMap<i64, ContainerState>,
-    guids: SlotGuids,
-) -> bool {
-    // `BAG_CLOSED` (one fire site, `0x4f92b5`) is the only thing that hides a bag window. It fires
-    // when the bag's guid changes from nonzero (`0x4f923d`, `0x4f9247`), so a swapped bag closes
-    // and then updates; diffed on the guid, as two identical bags swapped leave the states equal.
-    let closed: Vec<i64> = (1..=10)
-        .filter(|&id| {
-            let (was, now) = (
-                memory.bag_guids[id as usize - 1],
-                guids.bags[id as usize - 1],
-            );
-            was != 0 && now != was
-        })
-        .collect();
-    // A removed bag fires `BAG_CLOSED` and no `BAG_UPDATE` (`0x4f92cc`).
-    let emptied: Vec<i64> = closed
-        .iter()
-        .copied()
-        .filter(|&id| guids.bags[id as usize - 1] == 0)
-        .collect();
-    memory.bag_guids = guids.bags;
-    for id in &closed {
-        script.fire_event("BAG_CLOSED", vec![ScriptValue::Int(*id)]);
-    }
-    // `PLAYERBANKSLOTS_CHANGED` has two producers in the reference: the slot's guid changing
-    // (`0x5ddcf0` fires `0x5ddd6e`) with no arguments, and the same item's fields changing
-    // (`0x4c7180` fires `0x4c728d`) with `arg1 = "player"`. So the slot's guid decides, not its
-    // view: two identical stacks swapped push equal views and still fire the argless one twice.
-    // Planned before `memory` is rewritten, fired after the push, outside the `changed` gate.
-    let vault: Vec<bool> = {
-        let empty = HashMap::new();
-        let now = fresh.get(&BANK_CONTAINER).map_or(&empty, |c| &c.slots);
-        let was = memory
-            .pushed
-            .get(&BANK_CONTAINER)
-            .map_or(&empty, |c| &c.slots);
-        (1..=u32::from(BANK_SLOTS))
-            .filter_map(|slot| {
-                let i = slot as usize - 1;
-                if guids.vault[i] != memory.vault_guids[i] {
-                    Some(false)
-                } else {
-                    (now.get(&slot) != was.get(&slot)).then_some(true)
-                }
-            })
-            .collect()
+    let Some(fresh) = source else {
+        return false;
     };
-    memory.vault_guids = guids.vault;
     let changed: Vec<i64> = fresh
         .keys()
         .chain(memory.pushed.keys())
@@ -1737,54 +1450,28 @@ fn diff_and_push(
         .into_iter()
         .filter(|b| fresh.get(b) != memory.pushed.get(b))
         .collect();
-    if !changed.is_empty() {
-        // A stack-count write's `ITEM_LOCK_CHANGED` (the entry walk's `0x5d94b9`, or the lone
-        // unlock's `0x5d94ca`) fired ahead of this push, from
-        // [`crate::ui_items::locks::apply_item_releases`].
-        for &bag in &changed {
-            script.set_container(bag, fresh.get(&bag).cloned());
-        }
-        debug!(
-            "ui_items: fed {} changed bag(s) — {}",
-            changed.len(),
-            changed
-                .iter()
-                .map(|b| format!("{b}:{}", fresh.get(b).map_or(0, |c| c.slots.len())))
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
-        for &bag in &changed {
-            // Every changed bag but the vault fires `BAG_UPDATE`: `0x4f8cc0` installs no container
-            // listener over the vault's fields, which fire only `PLAYERBANKSLOTS_CHANGED`.
-            if bag != BANK_CONTAINER && !emptied.contains(&bag) {
-                script.fire_event("BAG_UPDATE", vec![ScriptValue::Int(bag)]);
-                memory.bag_updates += 1;
-            }
-        }
-        memory.pushed = fresh;
+    if changed.is_empty() {
+        return false;
     }
-    // One event per changed vault slot, with no slot argument: every bank button repaints from
-    // its own slot (`feed_char` fires the same event for the bank-bag buttons).
-    for &same_item in &vault {
-        if same_item {
-            script.fire_event(
-                "PLAYERBANKSLOTS_CHANGED",
-                vec![ScriptValue::Str("player".into())],
-            );
-        } else {
-            script.fire_event("PLAYERBANKSLOTS_CHANGED", vec![]);
-        }
+    for &bag in &changed {
+        script.set_container(bag, fresh.get(&bag).cloned());
     }
-    // A `BAG_CLOSED` or vault event alone still went into the VM.
-    !changed.is_empty() || !closed.is_empty() || !vault.is_empty()
+    debug!(
+        "ui_items: fed {} changed bag(s) — {}",
+        changed.len(),
+        changed
+            .iter()
+            .map(|b| format!("{b}:{}", fresh.get(b).map_or(0, |c| c.slots.len())))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    memory.pushed = fresh;
+    true
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        apply_container_source, ask_build_lookups, resolve_slot, ContainerSlot, FeedMemory,
-        SlotGuids, BANK_CONTAINER, BANK_SLOTS,
-    };
+    use super::{ask_build_lookups, push_containers, resolve_slot, ContainerSlot, FeedMemory};
 
     /// The view carries what `GetTradeSkillItemStats` reads beyond the tooltip: the item level, and
     /// the five spell slots whose id names a `Spell.dbc` row with their charges, in slot order.
@@ -2503,308 +2190,24 @@ mod tests {
         assert_eq!(worn, want);
     }
 
-    /// No bags and an empty vault.
-    const NO_BAGS: SlotGuids = SlotGuids {
-        bags: [0; 10],
-        vault: [0; BANK_SLOTS as usize],
-    };
-
-    /// The handler's container ids reach the VM as `BAG_OPEN`'s `arg1`.
-    #[test]
-    fn a_server_opened_bag_fires_bag_open_with_its_container_id() {
-        let mut s = UiScript::new().unwrap();
-        s.run(
-            "SEEN = {} \
-             local f = CreateFrame('Frame') \
-             f:RegisterEvent('BAG_OPEN') \
-             f:RegisterEvent('BAG_UPDATE') \
-             f:SetScript('OnEvent', function() \
-                 table.insert(SEEN, event .. ' ' .. tostring(arg1)) end)",
-        )
-        .unwrap();
-        let mut memory = FeedMemory::default();
-        // A bag equipped into the second bag slot, and nothing else changed this frame.
-        assert!(apply_container_source(
-            &mut s,
-            &mut memory,
-            None,
-            NO_BAGS,
-            vec![2]
-        ));
-        let seen = s.eval::<Vec<String>>("return SEEN").unwrap();
-        assert_eq!(seen, vec!["BAG_OPEN 2"]);
-        // Nothing queued: nothing fired, and the push reports nothing went in.
-        s.run("SEEN = {}").unwrap();
-        assert!(!apply_container_source(
-            &mut s,
-            &mut memory,
-            None,
-            NO_BAGS,
-            Vec::new()
-        ));
-        assert!(s.eval::<Vec<String>>("return SEEN").unwrap().is_empty());
-    }
-
-    /// A new guid fires the argless event, a restack fires it with `"player"`, and two identical
-    /// items swapped fire the argless one twice though the views are equal.
-    #[test]
-    fn playerbankslots_changed_names_its_producer_by_the_slot_guid() {
-        let mut s = UiScript::new().unwrap();
-        s.run(
-            "SEEN = {} \
-             local f = CreateFrame('Frame') \
-             f:RegisterEvent('PLAYERBANKSLOTS_CHANGED') \
-             f:SetScript('OnEvent', function() \
-                 table.insert(SEEN, event .. ' ' .. tostring(arg1)) end)",
-        )
-        .unwrap();
-        let seen = |s: &mut UiScript| {
-            let out = s.eval::<Vec<String>>("return SEEN").unwrap();
-            s.run("SEEN = {}").unwrap();
-            out
-        };
-        // The vault, with `slot` holding `count` of item 1234.
-        let vault = |slot: u32, count: u32| {
-            HashMap::from([(
-                BANK_CONTAINER,
-                ContainerState {
-                    name: None,
-                    num_slots: u32::from(BANK_SLOTS),
-                    slots: HashMap::from([(
-                        slot,
-                        ContainerSlot {
-                            item_id: 1234,
-                            count,
-                            ..Default::default()
-                        },
-                    )]),
-                },
-            )])
-        };
-        let mut guids = NO_BAGS;
-        let mut memory = FeedMemory::default();
-
-        // An item arrives in vault slot 1: the descriptor path, no arguments.
-        guids.vault[0] = 0xF00D;
-        apply_container_source(&mut s, &mut memory, Some(vault(1, 5)), guids, Vec::new());
-        assert_eq!(seen(&mut s), vec!["PLAYERBANKSLOTS_CHANGED nil"]);
-
-        // The same item restacks: the item watcher's path, with the unit token.
-        apply_container_source(&mut s, &mut memory, Some(vault(1, 9)), guids, Vec::new());
-        assert_eq!(seen(&mut s), vec!["PLAYERBANKSLOTS_CHANGED player"]);
-
-        apply_container_source(&mut s, &mut memory, Some(vault(1, 9)), guids, Vec::new());
-        assert!(seen(&mut s).is_empty(), "an unchanged vault says nothing");
-
-        // Two identical stacks swapped between slots 1 and 2: the guids are the only witness.
-        let two = || {
-            HashMap::from([(
-                BANK_CONTAINER,
-                ContainerState {
-                    name: None,
-                    num_slots: u32::from(BANK_SLOTS),
-                    slots: HashMap::from([
-                        (
-                            1,
-                            ContainerSlot {
-                                item_id: 1234,
-                                count: 9,
-                                ..Default::default()
-                            },
-                        ),
-                        (
-                            2,
-                            ContainerSlot {
-                                item_id: 1234,
-                                count: 9,
-                                ..Default::default()
-                            },
-                        ),
-                    ]),
-                },
-            )])
-        };
-        guids.vault[1] = 0xBEEF;
-        apply_container_source(&mut s, &mut memory, Some(two()), guids, Vec::new());
-        assert_eq!(seen(&mut s), vec!["PLAYERBANKSLOTS_CHANGED nil"]);
-        guids.vault.swap(0, 1);
-        let pushed = apply_container_source(&mut s, &mut memory, Some(two()), guids, Vec::new());
-        assert_eq!(
-            seen(&mut s),
-            vec![
-                "PLAYERBANKSLOTS_CHANGED nil".to_string(),
-                "PLAYERBANKSLOTS_CHANGED nil".to_string()
-            ],
-            "the swap the pushed containers cannot see"
-        );
-        assert!(pushed, "and the feed reports that it spoke to the VM");
-    }
-
-    /// `BAG_CLOSED` (`0x4f92b5`): a swap fires it, an unequip fires it without `BAG_UPDATE`, and
-    /// two identical bags swapped still close both windows.
-    #[test]
-    fn bag_closed_fires_on_the_bag_guid_moving_and_only_off_a_non_empty_slot() {
-        let mut s = UiScript::new().unwrap();
-        s.run(
-            "SEEN = {} \
-             local f = CreateFrame('Frame') \
-             f:RegisterEvent('BAG_CLOSED') \
-             f:RegisterEvent('BAG_UPDATE') \
-             f:SetScript('OnEvent', function() \
-                 table.insert(SEEN, event .. ' ' .. tostring(arg1)) end)",
-        )
-        .unwrap();
-        let seen = |s: &mut UiScript| {
-            let out = s.eval::<Vec<String>>("return SEEN").unwrap();
-            s.run("SEEN = {}").unwrap();
-            out
-        };
-        let pouch = |n: u32| {
-            HashMap::from([(
-                1,
-                ContainerState {
-                    name: Some("Small Brown Pouch".into()),
-                    num_slots: n,
-                    slots: HashMap::new(),
-                },
-            )])
-        };
-        let mut guids = NO_BAGS;
-        let mut memory = FeedMemory::default();
-
-        // Equipped into an empty slot: `BAG_UPDATE` only (`0x4f9247`).
-        guids.bags[0] = 0xAAAA;
-        apply_container_source(&mut s, &mut memory, Some(pouch(6)), guids, Vec::new());
-        assert_eq!(seen(&mut s), vec!["BAG_UPDATE 1"]);
-
-        apply_container_source(&mut s, &mut memory, Some(pouch(6)), guids, Vec::new());
-        assert!(
-            seen(&mut s).is_empty(),
-            "an unchanged container says nothing"
-        );
-
-        // Swapped for another bag: closed, then updated.
-        guids.bags[0] = 0xBBBB;
-        apply_container_source(&mut s, &mut memory, Some(pouch(10)), guids, Vec::new());
-        assert_eq!(seen(&mut s), vec!["BAG_CLOSED 1", "BAG_UPDATE 1"]);
-
-        // Unequipped: closed, and no `BAG_UPDATE`.
-        guids.bags[0] = 0;
-        apply_container_source(&mut s, &mut memory, Some(HashMap::new()), guids, Vec::new());
-        assert_eq!(seen(&mut s), vec!["BAG_CLOSED 1"]);
-
-        // Two identical empty bags swapped between containers 5 and 6: equal states, both close.
-        let mut memory = FeedMemory::default();
-        let two = || {
-            HashMap::from([
-                (
-                    5,
-                    ContainerState {
-                        name: Some("Linen Bag".into()),
-                        num_slots: 6,
-                        slots: HashMap::new(),
-                    },
-                ),
-                (
-                    6,
-                    ContainerState {
-                        name: Some("Linen Bag".into()),
-                        num_slots: 6,
-                        slots: HashMap::new(),
-                    },
-                ),
-            ])
-        };
-        let mut guids = NO_BAGS;
-        guids.bags[4] = 0x1111;
-        guids.bags[5] = 0x2222;
-        apply_container_source(&mut s, &mut memory, Some(two()), guids, Vec::new());
-        let _ = seen(&mut s);
-        guids.bags.swap(4, 5);
-        let pushed = apply_container_source(&mut s, &mut memory, Some(two()), guids, Vec::new());
-        assert_eq!(seen(&mut s), vec!["BAG_CLOSED 5", "BAG_CLOSED 6"]);
-        assert!(
-            pushed,
-            "a BAG_CLOSED with no container change still went into the VM — the gate audit reads \
-             this return"
-        );
-    }
     use crate::ui_action::real_spells;
     use benilla_protocol::messages::ItemSpellEntry;
     use benilla_ui::script::{ContainerState, UiScript};
     use std::collections::HashMap;
 
-    /// An absent self store is no source, never an empty bag burst; a present source that lost a
-    /// bag still announces.
+    /// The push fires nothing: a bag's events are its watchers' ([`crate::item_watch`]). An absent
+    /// self store is no source, which keeps the VM's bags; a present one that lost a bag pushes.
     #[test]
-    fn an_absent_self_player_is_no_source_never_an_empty_bag_burst() {
+    fn the_push_fires_nothing_and_an_absent_source_keeps_the_bags() {
         let mut s = UiScript::new().unwrap();
         s.run(
-            "BAG_EVENTS = 0 \
+            "SEEN = 0 \
              local f = CreateFrame('Frame') \
-             f:RegisterEvent('BAG_UPDATE') \
-             f:SetScript('OnEvent', function() BAG_EVENTS = BAG_EVENTS + 1 end)",
-        )
-        .unwrap();
-        let bag0 = ContainerState {
-            name: None,
-            num_slots: 16,
-            slots: HashMap::new(),
-        };
-        let mut memory = FeedMemory::default();
-
-        // In session: a new bag is pushed and announced.
-        apply_container_source(
-            &mut s,
-            &mut memory,
-            Some(HashMap::from([(0, bag0)])),
-            NO_BAGS,
-            Vec::new(),
-        );
-        assert_eq!(s.eval::<i64>("return GetContainerNumSlots(0)").unwrap(), 16);
-        assert_eq!(s.eval::<i64>("return BAG_EVENTS").unwrap(), 1);
-
-        // The logout despawn frame: the VM keeps its bags and nothing fires.
-        apply_container_source(&mut s, &mut memory, None, NO_BAGS, Vec::new());
-        assert_eq!(
-            s.eval::<i64>("return GetContainerNumSlots(0)").unwrap(),
-            16,
-            "an absent source must not empty the VM's containers"
-        );
-        assert_eq!(
-            s.eval::<i64>("return BAG_EVENTS").unwrap(),
-            1,
-            "an absent source must not fire a BAG_UPDATE burst"
-        );
-
-        // A present source without the bag is a real transition.
-        apply_container_source(
-            &mut s,
-            &mut memory,
-            Some(HashMap::new()),
-            NO_BAGS,
-            Vec::new(),
-        );
-        assert_eq!(s.eval::<i64>("return GetContainerNumSlots(0)").unwrap(), 0);
-        assert_eq!(s.eval::<i64>("return BAG_EVENTS").unwrap(), 2);
-    }
-
-    /// The feed fires only the bag's `BAG_UPDATE` for a restack: the stack-count write's
-    /// `ITEM_LOCK_CHANGED` is the lock watcher's, fired ahead of this push
-    /// ([`crate::ui_items::locks::apply_item_releases`]).
-    #[test]
-    fn a_restack_is_a_bag_update_alone_to_the_feed() {
-        use benilla_ui::script::ContainerSlot;
-
-        let mut s = UiScript::new().unwrap();
-        s.run(
-            "ORDER = {} \
-             local f = CreateFrame('Frame') \
-             f:RegisterEvent('ITEM_LOCK_CHANGED') \
-             f:RegisterEvent('BAG_UPDATE') \
-             f:SetScript('OnEvent', function() \
-                 table.insert(ORDER, event .. ':' .. tostring(arg1) .. ',' .. tostring(arg2)) \
-             end)",
+             for _, e in ipairs({'BAG_UPDATE', 'BAG_CLOSED', 'BAG_OPEN', \
+                     'PLAYERBANKSLOTS_CHANGED', 'ITEM_LOCK_CHANGED'}) do \
+                 f:RegisterEvent(e) \
+             end \
+             f:SetScript('OnEvent', function() SEEN = SEEN + 1 end)",
         )
         .unwrap();
         let bag = |count: u32| {
@@ -2816,7 +2219,7 @@ mod tests {
                     slots: HashMap::from([(
                         1,
                         ContainerSlot {
-                            item_id: 2512, // Rough Arrow
+                            item_id: 2512,
                             count,
                             ..Default::default()
                         },
@@ -2825,15 +2228,20 @@ mod tests {
             )])
         };
         let mut memory = FeedMemory::default();
-        for count in [200, 199] {
-            s.run("ORDER = {}").unwrap();
-            apply_container_source(&mut s, &mut memory, Some(bag(count)), NO_BAGS, Vec::new());
-            assert_eq!(
-                s.eval::<String>("return table.concat(ORDER, ' ')").unwrap(),
-                "BAG_UPDATE:0,nil",
-                "{count}"
-            );
-        }
+        assert!(push_containers(&mut s, &mut memory, Some(bag(200))));
+        assert!(push_containers(&mut s, &mut memory, Some(bag(199))));
+        assert!(!push_containers(&mut s, &mut memory, Some(bag(199))));
+        assert_eq!(s.eval::<i64>("return GetContainerNumSlots(0)").unwrap(), 16);
+        // The logout despawn frame: the VM keeps its bags.
+        assert!(!push_containers(&mut s, &mut memory, None));
+        assert_eq!(
+            s.eval::<i64>("return GetContainerNumSlots(0)").unwrap(),
+            16,
+            "an absent source must not empty the VM's containers"
+        );
+        assert!(push_containers(&mut s, &mut memory, Some(HashMap::new())));
+        assert_eq!(s.eval::<i64>("return GetContainerNumSlots(0)").unwrap(), 0);
+        assert_eq!(s.eval::<i64>("return SEEN").unwrap(), 0);
     }
 
     fn slot(spell_id: u32, charges: i32) -> ItemSpellEntry {

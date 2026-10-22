@@ -22,7 +22,7 @@ const ME: u64 = 0x10;
 fn feed_inputs(app: &mut App) {
     app.add_message::<crate::net::FieldChanged>()
         .add_message::<crate::net::WorldEnterCascadeMessage>()
-        .init_resource::<crate::ui_items::feed::BagUpdates>()
+        .init_resource::<crate::item_lane::ItemLane>()
         .insert_resource(crate::net::SelfGuid(Some(ME)))
         .init_resource::<crate::spell::AutoSelfCast>()
         .init_resource::<Selection>()
@@ -1845,9 +1845,8 @@ fn a_bag_query_on_a_missing_record_flushes_when_the_record_lands() {
 /// It signals before `PLAYER_TARGET_CHANGED` (`0x493892` ahead of `0x49389c`), `UNIT_HEALTH` and
 /// `UNIT_MANA` (the type watchers ahead of the object's bridge at one field, `0x46544a`),
 /// `PLAYER_REGEN_DISABLED` (`0x5ff51b` ahead of `0x5ff533`), `PLAYER_COMBO_POINTS` (`0x5ddff0`)
-/// and the form's cast change (`0x5de011` ahead of `0x5de016`). The bag feed runs ahead of the
-/// push half, whose usable cache each `BAG_UPDATE` refreshes (`0x4f9374`), so the refresh lands in
-/// the update's own frame. Read off the declared graph; skips where bevy carries no system names.
+/// and the form's cast change (`0x5de011` ahead of `0x5de016`). Read off the declared graph; skips
+/// where bevy carries no system names.
 #[test]
 fn the_feed_runs_around_the_snapshots_and_before_the_events_its_producers_precede() {
     use crate::game_plugins::schedule_tests::{census, headless_client, SyncPoints};
@@ -1888,10 +1887,6 @@ fn the_feed_runs_around_the_snapshots_and_before_the_events_its_producers_preced
     };
     let key = |name: &str| named(name).unwrap_or_else(|| panic!("{name} is scheduled"));
     let fire = key("::fire_action_events");
-    assert!(
-        later_than(key("::ui_items::feed::feed_containers")).contains(&push),
-        "the bag feed runs before the push half"
-    );
     assert!(
         later_than(push).contains(&key("::ui_unit::feed_units")),
         "the push half runs before the unit snapshots"
@@ -2027,9 +2022,16 @@ fn the_cache_refreshes_alone_at_a_reload_a_bag_update_and_a_macro_edit() {
     set_mana_quietly(&mut app, 500);
     assert!(frame(&mut app).is_empty());
     app.world_mut()
-        .resource_mut::<crate::ui_items::feed::BagUpdates>()
-        .0 += 1;
-    assert_eq!(frame(&mut app), ["ACTIONBAR_UPDATE_USABLE"], "a BAG_UPDATE");
+        .resource_mut::<crate::item_lane::ItemLane>()
+        .push(crate::item_watch::Run {
+            bags: vec![crate::item_watch::BagEvent::Raise(None)],
+            ..Default::default()
+        });
+    assert_eq!(
+        frame(&mut app),
+        ["ACTIONBAR_UPDATE_USABLE"],
+        "a RaiseBagUpdate, even one that signals nothing (`0x4f9374`)"
+    );
 
     set_mana_quietly(&mut app, 100);
     assert!(frame(&mut app).is_empty());

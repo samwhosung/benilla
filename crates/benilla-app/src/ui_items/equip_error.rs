@@ -1,4 +1,6 @@
-//! The wire `InventoryResult` to the `GlobalStrings` key of its red error line.
+//! The inventory refusals: `SMSG_INVENTORY_CHANGE_FAILURE`'s line and unlocks, fired on a lane of
+//! their own at the packet's place ([`EquipErrors`]), and the wire `InventoryResult` to the
+//! `GlobalStrings` key of its red error line.
 //!
 //! Reason 59 (`EQUIP_ERR_NONE`) only clears a pending lock (`ItemHandler.cpp:865`, `:963`), and
 //! after a failed item use rides beside the real refusal (`SpellHandler.cpp:130`). The reference
@@ -6,6 +8,205 @@
 //! `DisplayError` `0x496720`) to a key with no 1.12 string, which the sink's empty-string guard
 //! (`0x4945b4`) drops. Reason 0, the one coded suppression (`0x5e39a9`), is dropped earlier, by
 //! `benilla_protocol::events`.
+
+use std::collections::VecDeque;
+
+use benilla_ui::script::UiScript;
+use bevy::prelude::*;
+
+use crate::items::Items;
+use crate::lanes::{Stamp, Until};
+use crate::net::{ObjectStore, Objects, SelfPlayer};
+use crate::query_cache::Ask;
+
+use super::{BAGS, BAG_SLOT_FIRST, BANK_BAGS, BANK_BAG_SLOT_FIRST};
+
+/// One inventory refusal off the wire, with the fills of the only two reasons that format one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EquipError {
+    /// The wire `InventoryResult`.
+    pub reason: u8,
+    /// Reason 1's `%d`, the packet's `requiredLevel`.
+    pub required_level: Option<u32>,
+    /// Reason 16's `%s` source: the destination bag's player slot (255 names no bag), which the
+    /// firing resolves to the bag's `BagFamily` name.
+    pub bag_slot: u8,
+    /// The item guids a refused inventory operation unlocks after its line (`0x5e3ac0`,
+    /// `0x5e3ad3`); none for a mail refusal.
+    pub unlocks: [u64; 2],
+}
+
+/// The refusals the handlers queue, each stamped as its handler queued it
+/// ([`crate::lanes::stamp`]): the lane that shows each line and runs its unlocks at its packet's
+/// place, as the failure's handler does inside its dispatch (`0x496720`, then `0x5e3ac0`,
+/// `0x5e3ad3`).
+#[derive(Resource, Default)]
+pub(crate) struct EquipErrors(VecDeque<(Stamp, EquipError)>);
+
+impl EquipErrors {
+    /// Queue `refusal` behind everything stamped before it.
+    pub(crate) fn push(&mut self, refusal: EquipError) {
+        let stamp = crate::lanes::stamp();
+        let at = self.0.partition_point(|(s, _)| *s < stamp);
+        self.0.insert(at, (stamp, refusal));
+    }
+
+    /// Everything queued, dropped.
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    /// The refusals queued, in order.
+    #[cfg(test)]
+    pub(crate) fn queued(&self) -> Vec<EquipError> {
+        self.0.iter().map(|(_, e)| *e).collect()
+    }
+
+    fn peek(&self) -> Option<Stamp> {
+        self.0.front().map(|(s, _)| *s)
+    }
+}
+
+/// The lane and its drop: [`drop_equip_errors`] under the exact complement of the drain's gate, so
+/// a refusal is fired or dropped the frame it lands, never to fire into a later interface.
+pub(crate) fn add_equip_error_lane(app: &mut App) {
+    use crate::lanes::LaneApp;
+    app.init_resource::<EquipErrors>()
+        .add_lane(
+            "equip errors",
+            |world| world.get_resource::<EquipErrors>()?.peek(),
+            fire_equip_errors,
+            None,
+        )
+        .add_systems(
+            Update,
+            drop_equip_errors
+                .in_set(crate::ui_script::UiFeed)
+                .run_if(not(crate::ui_script::ingame_ui_up)),
+        );
+}
+
+fn drop_equip_errors(mut errors: ResMut<EquipErrors>) {
+    errors.clear();
+}
+
+/// What a refusal's line reads: the player, the bag it names and that bag's family.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct RefusalReads<'w, 's> {
+    me: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
+    objects: Objects<'w, 's>,
+    items: Res<'w, Items>,
+    // Reason 16's `%s` source; absent, every 16 keeps the generic line.
+    bag_families: Option<Res<'w, super::ItemBagFamilies>>,
+}
+
+/// The lane's `fire_until` ([`crate::lanes`]): each refusal `until` admits, its Lua run with the
+/// host lent; the lane stops after one whose firing stamped anything, so what it pushed fires next.
+fn fire_equip_errors(
+    In(until): In<Until>,
+    mut vm: crate::script_calls::HostedVm,
+    mut errors: ResMut<EquipErrors>,
+    reads: RefusalReads,
+    mut sink: crate::ui_action::MessageSink,
+) {
+    while let Some(stamp) = errors.peek().filter(|&s| until.admits(s)) {
+        let Some((_, refusal)) = errors.0.pop_front() else {
+            return;
+        };
+        let ((), moved) = crate::lanes::firing(stamp, || {
+            vm.run(|script| {
+                if let Some(script) = script {
+                    show_refusal(script, &mut sink, &reads, refusal);
+                }
+            })
+        });
+        if moved {
+            return;
+        }
+    }
+}
+
+/// One refusal as the failure's handler shows it: its line through the one sink, which also plays
+/// the error speech 18 of these keys carry, then its unlocks (`0x496720`, then `0x5e3ac0`,
+/// `0x5e3ad3`). An empty or missing string prints nothing, as the reference's sink guard
+/// (`0x4945b4`) drops it; that silences 59.
+fn show_refusal(
+    script: &mut UiScript,
+    sink: &mut crate::ui_action::MessageSink,
+    reads: &RefusalReads,
+    refusal: EquipError,
+) {
+    // Reason 16 names the bag's family when the bag resolves, as `0x5ede00` does.
+    let subclass_fill = (refusal.reason == 16)
+        .then(|| {
+            bag_family_name(
+                reads.me.iter().next(),
+                refusal.bag_slot,
+                &reads.objects,
+                &reads.items,
+                reads.bag_families.as_deref().map(|c| &c.0),
+            )
+        })
+        .flatten();
+    let key = match subclass_fill {
+        Some(_) => "ERR_WRONG_BAG_TYPE_SUBCLASS",
+        None => equip_error_key(refusal.reason),
+    };
+    let text = script
+        .lua()
+        .globals()
+        .get::<String>(key)
+        .unwrap_or_default();
+    if !text.is_empty() {
+        // Reason 1 fills `%d` and 16 `%s`; neither carries the other's fill.
+        let text = match refusal.required_level {
+            Some(d) => text.replace("%d", &d.to_string()),
+            None => text,
+        };
+        let text = match subclass_fill {
+            Some(family) => text.replace("%s", &family),
+            None => text,
+        };
+        crate::ui_action::show_messages(
+            script,
+            sink,
+            "ui_items",
+            vec![crate::ui_action::Shown::keyed(key, text)],
+        );
+    }
+    for guid in refusal.unlocks {
+        script.unlock_item(guid);
+    }
+}
+
+/// Reason 16's `%s`, the target bag's `BagFamily` name ("Only Arrows can be placed in that."), or
+/// `None` to keep the generic line. `bag_slot` is the bag's player-array slot, and the reference's
+/// `0x5ede00` names nothing for 255 (the player's own array) or for a slot at or past
+/// `[player+0x1d38]`, 113 for the local player, so equipped bags (19..22) and bank bags (63..68)
+/// both resolve. It reads the bag family, not the subclass the errorId's name suggests.
+fn bag_family_name(
+    player: Option<&ObjectStore>,
+    bag_slot: u8,
+    objects: &Objects,
+    items: &Items,
+    families: Option<&benilla_formats::ItemBagFamilyCatalog>,
+) -> Option<String> {
+    let store = player?;
+    let families = families?;
+    let guid = match bag_slot {
+        s if (BAG_SLOT_FIRST..BAG_SLOT_FIRST + BAGS).contains(&s) => store.0.player_inv_slot(s),
+        s if (BANK_BAG_SLOT_FIRST..BANK_BAG_SLOT_FIRST + BANK_BAGS).contains(&s) => {
+            store.0.player_bank_bag_slot(s - BANK_BAG_SLOT_FIRST)
+        }
+        // 255, the player's own array, names no bag.
+        _ => None,
+    }
+    .filter(|&g| g != 0)?;
+    let entry = objects.object(guid)?.object_entry().filter(|&e| e != 0)?;
+    // Only read (`0x5da08d`).
+    let family = items.template(entry, guid, Ask::Read)?.bag_family;
+    families.name(family).map(str::to_string)
+}
 
 /// A refusal reason's key, total like the reference's errorId table (`0x622794`). Positions are
 /// vmangos `ItemDefines.h` with every band up to 5875 (stunned 37, dead 38, inventory full 50).

@@ -142,7 +142,7 @@ mod tests {
 
     use super::*;
     use crate::net::{Guid, NetCommands, ObjectStore, SelfPlayer};
-    use crate::ui_items::locks::{ItemReleases, Release};
+    use crate::ui_items::locks::ItemReleases;
 
     const VENDOR: u64 = 0xF130_0000_0000_0043;
     const WATER: u32 = 159;
@@ -283,6 +283,6 @@ mod tests {
         assert!(errors.0.is_empty() && releases.0.is_empty());
         vendor_sell_failed(1, ITEM, &mut errors, &mut releases);
         assert_eq!(errors.0.len(), 1);
-        assert_eq!(releases.0, [Release::Item(ITEM)]);
+        assert_eq!(releases.0, [ITEM]);
     }
 }

@@ -43,7 +43,7 @@ pub(super) struct StateMemory {
     /// The selection's guid and the control flag, whose changes call the usable refresh.
     selection: Option<u64>,
     control_lost: bool,
-    /// The VM's macro edits and the bag feed's `BAG_UPDATE`s as last read.
+    /// The VM's macro edits and the item lane's `RaiseBagUpdate` calls as last read.
     macro_edits: u64,
     bag_updates: u64,
     last_cd_trace: Option<Instant>,
@@ -306,12 +306,12 @@ pub(super) fn feed_action_state(
     (items, commands): (Res<Items>, Res<NetCommands>),
     // `ItemSubClass.dbc`, whose flags the walk's ammo leg reads.
     sub_classes: Option<Res<crate::ui_items::ItemSubClasses>>,
-    // The usable refresh's field-watch callers, the enter cascade, the bag feed's `BAG_UPDATE`s,
-    // the events owed and the memory about the VM.
-    (mut edges, mut entries, bag_updates, mut owed, mut memory): (
+    // The usable refresh's field-watch callers, the enter cascade, the item lane's
+    // `RaiseBagUpdate` calls, the events owed and the memory about the VM.
+    (mut edges, mut entries, item_lane, mut owed, mut memory): (
         MessageReader<FieldChanged>,
         MessageReader<crate::net::WorldEnterCascadeMessage>,
-        Option<Res<crate::ui_items::feed::BagUpdates>>,
+        Option<Res<crate::item_lane::ItemLane>>,
         ResMut<ActionEvents>,
         Local<crate::ui_script::VmMemo<StateMemory>>,
     ),
@@ -393,13 +393,13 @@ pub(super) fn feed_action_state(
         }
         // The usable cache's other refreshes (`0x4e5c00`): world entry (`0x4e4f90`, from the enter
         // cascade at our player's arrival or a reload's), `EditMacro` (`0x4f132e`) and each
-        // `BAG_UPDATE` (`0x4f9374`).
+        // `RaiseBagUpdate` a watcher's run calls (`0x4f9374`).
         let entered = entries.read().count() > 0;
         // Our player's creation, whose arrival (`0x5dea50`) writes every slot (`0x5deafc`) and
         // empties the reactive list (`0x5dea86`); a reload reaches neither.
         let arrived = !created.is_empty();
         let macro_edits = script.macro_edits();
-        let bag_updates = bag_updates.map_or(0, |b| b.0);
+        let bag_updates = item_lane.map_or(0, |l| l.bag_raises());
         let refresh_cache = refresh
             || entered
             || new_vm
