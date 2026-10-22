@@ -284,18 +284,13 @@ fn queued_verbs_read_their_flags_through_get_bool_or_default() {
 
     // SetWhoToUI(flag) 0x5ad877, default 0.
     for (arg, want) in cases(false) {
+        s.run("SetWhoToUI(1)").unwrap();
         s.run(&format!("SetWhoToUI({arg})")).unwrap();
-        assert_eq!(
-            s.take_social_requests(),
-            vec![SocialRequest::SetWhoToUi(want)],
-            "SetWhoToUI({arg})"
-        );
+        assert_eq!(s.who_to_ui(), want, "SetWhoToUI({arg})");
     }
+    s.run("SetWhoToUI(1)").unwrap();
     s.run("SetWhoToUI()").unwrap();
-    assert_eq!(
-        s.take_social_requests(),
-        vec![SocialRequest::SetWhoToUi(false)]
-    );
+    assert!(!s.who_to_ui());
 
     // TargetByName / FollowByName exact-match flag, default 0 (`0x489d8e`, `0x489f14`).
     for (arg, want) in cases(false) {

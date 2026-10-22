@@ -13,7 +13,7 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{coerced_number, ftol, number_arg, tuple};
-use super::social::SocialRequest;
+use super::social::SocialCall;
 use super::Model;
 
 /// The five literal type names `GetLFGTypes` pushes from `0x84c158` (types 1 to 5).
@@ -121,14 +121,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Some(v) => number_arg(lua, v, "").unwrap_or(0) as u32,
                 None => 0,
             };
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if kind < 6 && (entry as usize) < type_list(&model, kind as usize).0 {
-                model.social_requests.push(SocialRequest::LfgQuery {
-                    criterion: kind.wrapping_shl(24) & entry,
-                    class,
-                });
+            let inside = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                kind < 6 && (entry as usize) < type_list(&model, kind as usize).0
+            };
+            if !inside {
+                return Ok(());
             }
-            Ok(())
+            let criterion = kind.wrapping_shl(24) & entry;
+            super::calls::submit(
+                lua,
+                super::ScriptCall::Social(SocialCall::LfgQuery { criterion, class }),
+            )
         })?,
     )?;
 
@@ -364,8 +368,9 @@ mod tests {
     /// with `(type << 24) & entry` and the class number (0 if not a number).
     #[test]
     fn lfg_query_sends_inside_the_counts_only() {
-        use crate::script::SocialRequest::LfgQuery;
+        use crate::script::SocialCall::LfgQuery;
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_lfg_dungeons(table());
         s.set_unit("player", Some(player(20, Some("Alliance"))));
         // Type 1 has 2 entries at level 20 (Alliance).
@@ -375,7 +380,7 @@ mod tests {
             .unwrap();
         // `(1 << 24) & entry` is 0 for any real entry (the reference's `and`, not an `or`). The
         // bare `LFGQuery(1)` is entry 0, and a class that is no number is 0.
-        let sent = s.take_social_requests();
+        let sent = s.take_social_calls();
         let class = |c| LfgQuery {
             criterion: 0,
             class: c,
@@ -387,7 +392,7 @@ mod tests {
         s.set_quest_slots(slots);
         s.run("LFGQuery(3, 0) LFGQuery(3, 1)").unwrap();
         assert_eq!(
-            s.take_social_requests(),
+            s.take_social_calls(),
             [LfgQuery {
                 criterion: 0,
                 class: 0

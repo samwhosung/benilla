@@ -1,16 +1,19 @@
-//! The friend and ignore verbs inside their calls ([`SocialSteps`]): each sends its packet, moves
-//! its selection or shows its line before the verb returns, as the reference's `FriendList`
-//! functions do.
+//! The friend, ignore, `/who` and looking-for-group verbs inside their calls ([`SocialSteps`]):
+//! each sends its packet, moves its selection or shows its line before the verb returns, as the
+//! reference's `FriendList` and `PartyFrame` functions do.
 
 use benilla_ui::script::{SocialCall, UiScript};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
+use super::query::{WhoTags, WHO_TAG_KEYS};
 use super::{SocialState, FRIEND_SLOTS, IGNORE_SLOTS};
+use crate::area::AreaTableRes;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
 use crate::query_cache::Ask;
 use crate::ui_action::{UiError, UiErrorKeys};
+use crate::ui_unit::NameTables;
 
 /// The social state and what its verbs send through: the engine half of the social calls
 /// ([`crate::script_calls::ScriptCallHost`]).
@@ -20,6 +23,9 @@ pub(crate) struct SocialSteps<'w> {
     names: Res<'w, NameCache>,
     net: Res<'w, NetCommands>,
     errors: Res<'w, UiErrorKeys>,
+    /// The tables the `/who` zone, race and class tags search.
+    areas: Option<Res<'w, AreaTableRes>>,
+    unit_names: NameTables<'w>,
 }
 
 impl SocialSteps<'_> {
@@ -35,6 +41,15 @@ impl SocialSteps<'_> {
             SocialCall::DelIgnore(name) => self.del_ignore(&name),
             SocialCall::AddOrDelIgnore(name) => self.add_or_del_ignore(name),
             SocialCall::SelectIgnore(index) => self.select_ignore(index),
+            SocialCall::Who(filter) => self.send_who(script, &filter),
+            // `0x5ad980`: the chain the binding sorted the VM's rows by.
+            SocialCall::SortWho(sort_type) => self.social.who_sort.promote(&sort_type),
+            SocialCall::LfgQuery { criterion, class } => {
+                self.send(ClientCommand::LfgQuery { criterion, class })
+            }
+            SocialCall::SetLookingForGroup { slots, comment } => {
+                self.send(ClientCommand::SetLookingForGroup { slots, comment })
+            }
         }
         script.set_social_selection(
             self.social.selected_friend_index(),
@@ -44,6 +59,17 @@ impl SocialSteps<'_> {
 
     fn send(&self, command: ClientCommand) {
         let _ = self.net.0.send(command);
+    }
+
+    /// `FriendList::SendWhoQuery` (`0x5aebb0`): the query built against the tags as the VM's
+    /// globals hold them (`0x703bf0`), sent at `0x5af168`.
+    fn send_who(&self, script: &UiScript, filter: &[u8]) {
+        let tags = WhoTags::from_texts(WHO_TAG_KEYS.map(|key| script.global_text(key)));
+        let areas = self.areas.as_deref().map(|a| &a.0);
+        let request = super::who_query(filter, &tags, areas, self.unit_names.get());
+        self.send(ClientCommand::Who {
+            request: Box::new(request),
+        });
     }
 
     /// `FriendList::AddFriend` (`0x5ae670`): tutorial 21 seen (`0x5ae677`), then `CMSG_ADD_FRIEND`

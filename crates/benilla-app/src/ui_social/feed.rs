@@ -1,15 +1,14 @@
-//! The social feed and drain: the snapshot the FriendsFrame reads, the list events, the `/who`
-//! lines, and the sends for the Lua-side `/who` and LFG [`SocialRequest`] intents. The reference
-//! resolves races, classes and zones engine-side too, before Lua sees a row (`0x5ae160`).
+//! The social feed: the snapshot the FriendsFrame reads, the list events and the `/who` lines. The
+//! reference resolves races, classes and zones engine-side too, before Lua sees a row (`0x5ae160`).
 
 use benilla_formats::AreaTableCatalog;
 use benilla_protocol::messages::WhoEntry;
-use benilla_ui::script::{FriendInfo, IgnoreInfo, SocialRequest, SocialState as VmSocial, WhoInfo};
+use benilla_ui::script::{FriendInfo, IgnoreInfo, SocialState as VmSocial, WhoInfo};
 use bevy::prelude::*;
 
 use crate::area::AreaTableRes;
 use crate::names::NameCache;
-use crate::net::{ClientCommand, NetCommands};
+use crate::net::NetCommands;
 use crate::script_calls::VmWith;
 use crate::ui_action::{show_now, ui_error_text, MessageSink, Shown};
 use crate::ui_unit::{NameTables, UnitNames};
@@ -116,7 +115,7 @@ pub(super) fn feed_social(
         // `SMSG_WHO`'s two exits ([`WHO_CHAT_MAX`]); a sort fires its own event inside `SortWho`.
         if social.who_dirty {
             social.who_dirty = false;
-            if answer_goes_to_the_frame(social.who_to_ui, social.who.len()) {
+            if answer_goes_to_the_frame(script.who_to_ui(), social.who.len()) {
                 fires.post("WHO_LIST_UPDATE", Vec::new());
             } else {
                 // In wire order: each line is composed inside the parse loop (`0x5ae0a1`), before
@@ -332,53 +331,10 @@ fn who_row(entry: &WhoEntry, areas: Option<&AreaTableCatalog>, names: UnitNames<
     }
 }
 
-/// Turn the Lua API's `/who` and LFG intents into their sends; the friend and ignore verbs act in
-/// their calls ([`super::SocialSteps`]).
-pub(super) fn drain_social(
-    mut vm: VmWith<ResMut<'static, SocialState>>,
-    commands: Res<NetCommands>,
-    areas: Option<Res<AreaTableRes>>,
-    unit_names: NameTables,
-) {
-    vm.turn(|script, mut social| {
-        let Some(script) = script else {
-            return;
-        };
-        for request in script.take_social_requests() {
-            match request {
-                SocialRequest::SetLookingForGroup { slots, comment } => {
-                    let _ = commands
-                        .0
-                        .send(ClientCommand::SetLookingForGroup { slots, comment });
-                }
-                SocialRequest::LfgQuery { criterion, class } => {
-                    let _ = commands
-                        .0
-                        .send(ClientCommand::LfgQuery { criterion, class });
-                }
-                SocialRequest::Who(filter) => {
-                    let tags = super::query::WhoTags::from_texts(
-                        super::query::WHO_TAG_KEYS.map(|key| script.global_text(key)),
-                    );
-                    let areas = areas.as_deref().map(|a| &a.0);
-                    let request =
-                        super::who_query(filter.as_bytes(), &tags, areas, unit_names.get());
-                    let _ = commands.0.send(ClientCommand::Who {
-                        request: Box::new(request),
-                    });
-                }
-                // Mirror the click the binding applied to the VM's chain. No `who_dirty`: `SortWho`
-                // already fired `WHO_LIST_UPDATE`, once per click as the reference does.
-                SocialRequest::SortWho(sort_type) => social.who_sort.promote(&sort_type),
-                SocialRequest::SetWhoToUi(on) => social.who_to_ui = on,
-            }
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::ClientCommand;
     use benilla_protocol::messages::{friend_result, FriendEntry, FriendStatusUpdate, WhoResults};
     use benilla_ui::script::UiScript;
 

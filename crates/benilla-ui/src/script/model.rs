@@ -466,8 +466,8 @@ pub(crate) struct Model {
     pub(crate) reset_instance_asks: u32,
     /// Friends, ignores and the last `/who`, display-resolved as the reference resolves them.
     pub(crate) social: social::SocialState,
-    /// Social calls (`AddFriend`, `RemoveFriend`, `SendWho`, …) queued.
-    pub(crate) social_requests: Vec<social::SocialRequest>,
+    /// `SetWhoToUI`'s flag (`0xc2a12c`), written only by the binding (`0x5ad87c`).
+    pub(crate) who_to_ui: bool,
     /// `LFGDungeons.dbc`, pushed by the app.
     pub(crate) lfg_dungeons: Vec<super::lfg::LfgDungeon>,
     /// The client-local LFG slot words (`[0xbc70a0]`) and comment (`[0xbc6e98]`, 0x80 bytes) that
@@ -1552,7 +1552,7 @@ impl Model {
             can_reset_instances: false,
             reset_instance_asks: 0,
             social: social::SocialState::default(),
-            social_requests: Vec::new(),
+            who_to_ui: false,
             lfg_dungeons: Vec::new(),
             lfg_slots: [0; 3],
             lfg_comment: String::new(),

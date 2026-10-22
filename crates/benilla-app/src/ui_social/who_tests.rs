@@ -142,19 +142,49 @@ fn send_who_without_a_filter_raises_its_usage() {
     assert!(sent(&w).is_empty());
 }
 
-/// `SortWho` promotes the engine's chain (`0x5ad980`) and `SetWhoToUI` stores its flag
-/// (`0x5ad87c`) before each returns.
+/// `SortWho` promotes the engine's chain (`0x5ad980`) before it returns.
 #[test]
-fn sort_who_and_set_who_to_ui_act_inside_their_call() {
+fn sort_who_promotes_the_engines_chain_inside_its_call() {
     let mut w = client();
     run(&mut w, r#"SortWho("level")"#);
     let mut level = WhoSortChain::default();
     level.promote("level");
     assert_eq!(social(&w).who_sort, level);
+}
+
+/// `SetWhoToUI(1)` sends the next answer, three rows or fewer, to `WHO_LIST_UPDATE` and not to
+/// chat (`0x5adf9c`-`0x5adfce`); `SetWhoToUI(0)` sends it back to chat.
+#[test]
+fn set_who_to_ui_routes_the_next_answer() {
+    let mut w = client();
+    run(
+        &mut w,
+        r#"UPDATES = 0
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("WHO_LIST_UPDATE")
+        f:SetScript("OnEvent", function() UPDATES = UPDATES + 1 end)"#,
+    );
+    let answer = |w: &mut Who| {
+        crate::net::handlers::dispatch(
+            w.app.world_mut(),
+            vec![SessionEvent::WhoResults(WhoResults {
+                displayed: 1,
+                total: 1,
+                entries: vec![entry("Solo", 1, 1, ELWYNN)],
+            })],
+        );
+        w.app
+            .world_mut()
+            .run_system(w.feed)
+            .expect("the social feed runs");
+        let n: i64 = eval(w, "return UPDATES");
+        run(w, "UPDATES = 0");
+        n
+    };
     run(&mut w, "SetWhoToUI(1)");
-    assert!(social(&w).who_to_ui);
+    assert_eq!(answer(&mut w), 1, "the frame's");
     run(&mut w, "SetWhoToUI(0)");
-    assert!(!social(&w).who_to_ui);
+    assert_eq!(answer(&mut w), 0, "chat's");
 }
 
 /// `LFGQuery` sends `MSG_LOOKING_FOR_GROUP` in the call (`0x4e9840`), `SetLookingForGroup` its

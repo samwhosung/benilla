@@ -50,7 +50,7 @@ fn read(body: &[u8]) -> Sent {
     };
     let min = u32_();
     let max = u32_();
-    let mut cstr = |at: &mut usize| {
+    let cstr = |at: &mut usize| {
         let n = body[*at..].iter().position(|&b| b == 0).unwrap();
         let s = body[*at..*at + n].to_vec();
         *at += n + 1;

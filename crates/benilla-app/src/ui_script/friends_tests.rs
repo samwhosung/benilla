@@ -2,9 +2,7 @@
 //! snapshot, then the list event. The VM keeps the friend and ignore calls its verbs make, which
 //! the client's host applies inside them (`ui_social::call_tests`).
 
-use benilla_ui::script::{
-    FriendInfo, IgnoreInfo, SocialCall, SocialRequest, SocialState, UiScript, WhoInfo,
-};
+use benilla_ui::script::{FriendInfo, IgnoreInfo, SocialCall, SocialState, UiScript, WhoInfo};
 
 /// The window's own manifest slice, in `load_default_ui` order.
 fn setup() -> UiScript {
@@ -427,7 +425,7 @@ fn the_who_dropdown_switches_the_variable_column() {
         },
         "WHO_LIST_UPDATE",
     );
-    let _ = s.take_social_requests();
+    let _ = s.take_social_calls();
 
     s.run("UIDropDownMenu_SetSelectedID(WhoFrameDropDown, 2); WhoList_Update()")
         .unwrap();
@@ -439,8 +437,8 @@ fn the_who_dropdown_switches_the_variable_column() {
 
     s.run("WhoFrameColumnHeader3:Click()").unwrap();
     assert_eq!(
-        s.take_social_requests(),
-        vec![SocialRequest::SortWho("level".to_string())]
+        s.take_social_calls(),
+        vec![SocialCall::SortWho("level".to_string())]
     );
 }
 
@@ -463,15 +461,15 @@ fn the_who_headers_sort_and_a_repeated_click_reverses() {
         },
         "WHO_LIST_UPDATE",
     );
-    let _ = s.take_social_requests();
+    let _ = s.take_social_calls();
     assert_eq!(who_name(&s, 1), "Galas", "the server's order, unsorted");
 
     // Header 1 is Name (`FriendsFrame.xml:1313`).
     s.run("WhoFrameColumnHeader1:Click()").unwrap();
     assert_eq!(who_name(&s, 1), "Erdrin", "Name, ascending");
     assert_eq!(
-        s.take_social_requests(),
-        vec![SocialRequest::SortWho("name".to_string())],
+        s.take_social_calls(),
+        vec![SocialCall::SortWho("name".to_string())],
         "and the app hears the click too"
     );
 
@@ -554,19 +552,11 @@ fn the_who_buttons_need_a_selected_row() {
 #[test]
 fn showing_the_who_frame_claims_the_next_answer() {
     let _data = benilla_formats::wow_data_or_skip!();
-    let mut s = setup();
+    let s = setup();
     s.run("ShowWhoPanel()").unwrap();
-    assert!(
-        s.take_social_requests()
-            .contains(&SocialRequest::SetWhoToUi(true)),
-        "showing the frame routes results to it"
-    );
+    assert!(s.who_to_ui(), "showing the frame routes results to it");
     s.run("HideUIPanel(FriendsFrame)").unwrap();
-    assert!(
-        s.take_social_requests()
-            .contains(&SocialRequest::SetWhoToUi(false)),
-        "hiding it routes them back to chat"
-    );
+    assert!(!s.who_to_ui(), "hiding it routes them back to chat");
 }
 
 #[test]
@@ -574,13 +564,13 @@ fn the_who_edit_box_sends_its_filter() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
     s.run("ShowWhoPanel()").unwrap();
-    let _ = s.take_social_requests();
+    let _ = s.take_social_calls();
     s.run("WhoFrameEditBox:SetText(\"z-\\\"Elwynn Forest\\\" 1-10\")")
         .unwrap();
     s.run("WhoFrameEditBox_OnEnterPressed()").unwrap();
     assert_eq!(
-        s.take_social_requests(),
-        vec![SocialRequest::Who("z-\"Elwynn Forest\" 1-10".to_string())]
+        s.take_social_calls(),
+        vec![SocialCall::Who(b"z-\"Elwynn Forest\" 1-10".to_vec())]
     );
 }
 

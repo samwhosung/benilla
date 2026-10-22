@@ -142,8 +142,6 @@ pub(crate) struct SocialState {
     /// The `/who` sort chain (`SortWho`'s seven `{key, dir}` slots at `0xc2817c`), pushed with the
     /// rows so the binding can re-sort synchronously.
     who_sort: benilla_ui::script::WhoSortChain,
-    /// `SetWhoToUI`, which the Who frame sets on show and clears on hide.
-    who_to_ui: bool,
     /// The lookups that missed, in the order made.
     waits: Vec<NameWait>,
     /// The list events and lines since the last feed, in order, each with the lists it left.
@@ -163,7 +161,6 @@ impl Default for SocialState {
             who: Vec::new(),
             who_total: 0,
             who_sort: Default::default(),
-            who_to_ui: false,
             waits: Vec::new(),
             steps: Vec::new(),
             who_dirty: false,
@@ -792,7 +789,8 @@ pub(crate) mod net {
     }
 }
 
-/// The social window's session: the wire mirror, the VM feed, and the outbound intents.
+/// The social window's session: the wire mirror and the VM feed; the verbs act in their calls
+/// ([`SocialSteps`]).
 pub(crate) struct UiSocialPlugin;
 
 impl Plugin for UiSocialPlugin {
@@ -810,13 +808,7 @@ impl Plugin for UiSocialPlugin {
                 Startup,
                 load_lfg_dungeons.after(benilla_assets::AssetSet::Open),
             )
-            .add_systems(
-                Update,
-                (
-                    feed::feed_social.in_set(UiFeed),
-                    feed::drain_social.in_set(crate::ui_script::UiDrain),
-                ),
-            );
+            .add_systems(Update, feed::feed_social.in_set(UiFeed));
     }
 }
 
@@ -1027,7 +1019,6 @@ mod tests {
             &Cached,
         );
         social.apply_ignore_list(&[9], &Cached);
-        social.who_to_ui = true;
         social.who_sort.promote("level");
         social.who_sort.promote("level"); // descending
 
@@ -1035,7 +1026,6 @@ mod tests {
         assert!(guids(&social).is_empty());
         assert!(!social.is_ignored(9));
         assert!(social.who.is_empty());
-        assert!(!social.who_to_ui, "the frame is closed after a logout");
         assert_eq!(
             social.who_sort,
             benilla_ui::script::WhoSortChain::default(),

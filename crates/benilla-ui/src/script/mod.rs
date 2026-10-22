@@ -357,7 +357,7 @@ pub(crate) use simplehtml::{
     element_of_xml_tag as simplehtml_element_of_xml_tag,
 };
 pub use skills::{SkillEntry, SkillsState};
-pub use social::{FriendInfo, IgnoreInfo, SocialCall, SocialRequest, SocialState, WhoInfo};
+pub use social::{FriendInfo, IgnoreInfo, SocialCall, SocialState, WhoInfo};
 pub use sound::{MusicRequest, SoundRequest};
 pub use spellbook::{
     resolve_spell_in_books, NamedSpell, PetBookState, SpellBookState, SpellSlotView, SpellTabName,

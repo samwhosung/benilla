@@ -1,9 +1,9 @@
-//! The social API: friends, ignores and `/who`. The app pushes a display-ready [`SocialState`]
-//! (the reference's formatter `0x5ae160` also resolves names engine-side). The friend and ignore
-//! verbs act inside their calls through the host ([`SocialCall`]); the `/who` and LFG ones queue
-//! [`SocialRequest`]s for the app's drain. Selection is engine state in the reference (guids at
-//! FriendList `+0x648` and `+0x720`, read back by `0x5ae510` and `0x5ae630`), so the host seats the
-//! index its call leaves before the verb returns.
+//! The social API: friends, ignores, `/who` and the looking-for-group pair. The app pushes a
+//! display-ready [`SocialState`] (the reference's formatter `0x5ae160` also resolves names
+//! engine-side). The verbs act inside their calls through the host ([`SocialCall`]), as the
+//! reference's send their packets before they return. Selection is engine state in the reference
+//! (guids at FriendList `+0x648` and `+0x720`, read back by `0x5ae510` and `0x5ae630`), so the host
+//! seats the index its call leaves before the verb returns.
 
 use mlua::{Lua, Value};
 
@@ -80,25 +80,9 @@ pub struct SocialState {
     pub who_sort: WhoSortChain,
 }
 
-/// Outbound `/who` and LFG intents, drained by the app.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SocialRequest {
-    /// A changed `SetLookingForGroup`: slots and comment for `CMSG_SET_LOOKING_FOR_GROUP`.
-    SetLookingForGroup { slots: [u32; 3], comment: String },
-    /// `SendWho(filter)`, the raw filter; parsing it needs the DBCs, so the app does it.
-    Who(String),
-    /// `SortWho(sortType)`, the raw argument; the binding has already sorted the snapshot.
-    SortWho(String),
-    /// `LFGQuery(type, entry)` that passed its bounds: `MSG_LOOKING_FOR_GROUP` with the criterion
-    /// word and the class.
-    LfgQuery { criterion: u32, class: u32 },
-    /// `SetWhoToUI(flag)`: the next `/who` answer goes to the Who frame (true) or chat (false).
-    SetWhoToUi(bool),
-}
-
-/// A friend or ignore verb past its argument check, which the host applies inside the call
-/// ([`super::ScriptCall::Social`]). An index is the binding's `_ftol` of its argument, still
-/// 1-based: the engine's own functions take it less one, compared unsigned.
+/// A friend, ignore, `/who` or looking-for-group verb past its argument check, which the host
+/// applies inside the call ([`super::ScriptCall::Social`]). An index is the binding's `_ftol` of
+/// its argument, still 1-based: the engine's own functions take it less one, compared unsigned.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SocialCall {
     /// `ShowFriends()` (`0x5ad340`): `CMSG_FRIEND_LIST`.
@@ -119,6 +103,17 @@ pub enum SocialCall {
     AddOrDelIgnore(String),
     /// `SetSelectedIgnore(index)` (`0x5ad55c` → `0x5ae5f0`).
     SelectIgnore(u32),
+    /// `SendWho(filter)` (`0x5ad3b0` → `0x5aebb0`): the filter's bytes, which the host builds into
+    /// `CMSG_WHO` against the tables.
+    Who(Vec<u8>),
+    /// `SortWho(sortType)` (`0x5ad890`): the engine's chain takes the click the binding sorted by.
+    SortWho(String),
+    /// `LFGQuery(type, entry, class)` (`0x4e9760`) inside its counts: `MSG_LOOKING_FOR_GROUP` with
+    /// the criterion word and the class (`0x4e9840`).
+    LfgQuery { criterion: u32, class: u32 },
+    /// A changed `SetLookingForGroup` (`0x4e96b0` → `0x4e88c0`): `CMSG_SET_LOOKING_FOR_GROUP` with
+    /// the slots and the comment.
+    SetLookingForGroup { slots: [u32; 3], comment: String },
 }
 
 impl super::UiScript {
@@ -127,9 +122,9 @@ impl super::UiScript {
         self.model_mut().social = state;
     }
 
-    /// Drain the social intents queued since the last call.
-    pub fn take_social_requests(&mut self) -> Vec<SocialRequest> {
-        std::mem::take(&mut self.model_mut().social_requests)
+    /// `SetWhoToUI`'s flag (`0xc2a12c`): whether the next `/who` answer goes to the Who frame.
+    pub fn who_to_ui(&self) -> bool {
+        self.model_ref().who_to_ui
     }
 
     /// Seat the selections a call left, as `GetSelectedFriend` and `GetSelectedIgnore` answer
@@ -304,14 +299,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     changed = true;
                 }
             }
-            if changed {
-                let slots = model.lfg_slots;
-                let comment = model.lfg_comment.clone();
-                model
-                    .social_requests
-                    .push(SocialRequest::SetLookingForGroup { slots, comment });
+            if !changed {
+                return Ok(());
             }
-            Ok(())
+            let slots = model.lfg_slots;
+            let comment = model.lfg_comment.clone();
+            drop(model);
+            submit(lua, SocialCall::SetLookingForGroup { slots, comment })
         })?,
     )?;
 
@@ -469,22 +463,29 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // SendWho(filter) (`0x5ad3b0`): `lua_isstring`, else the usage (`0x85daac`); then the builder
+    // `0x5aebb0` on `lua_tostring`'s bytes (`0x5ad3e3`), a number its text.
     g.set(
         "SendWho",
-        lua.create_function(|lua, filter: Option<String>| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model
-                .social_requests
-                .push(SocialRequest::Who(filter.unwrap_or_default()));
-            Ok(())
+        lua.create_function(|lua, filter: Value| {
+            let filter = match filter {
+                Value::String(_) | Value::Integer(_) | Value::Number(_) => {
+                    lua.coerce_string(filter)?
+                }
+                _ => None,
+            };
+            let Some(filter) = filter else {
+                return Err(mlua::Error::runtime("Usage: SendWho(\"filter\")"));
+            };
+            submit(lua, SocialCall::Who(filter.as_bytes().to_vec()))
         })?,
     )?;
 
     // SortWho(sortType) (`0x5ad890`): promotes the key in the seven-slot chain, reversing it if
     // it is already in front, sorts the list, and fires `WHO_LIST_UPDATE` synchronously
     // (`0x5ad9ed`, `SignalEvent` `0x703e50`), so the list redraws before the click's sound. The
-    // app gets the same click for its own chain. Returns nothing; an argument neither string nor
-    // number raises with the client's own typo (`0x85db88`, `0x5ad898`'s `0x6f3510` guard).
+    // engine's chain takes the same click in the call. Returns nothing; an argument neither string
+    // nor number raises with the client's own typo (`0x85db88`, `0x5ad898`'s `0x6f3510` guard).
     g.set(
         "SortWho",
         lua.create_function(|lua, sort_type: Value| {
@@ -494,23 +495,24 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let model = &mut *model;
                 model.social.who_sort.promote(&sort_type);
                 model.social.who_sort.sort(&mut model.social.who);
-                model
-                    .social_requests
-                    .push(SocialRequest::SortWho(sort_type));
             }
+            submit(lua, SocialCall::SortWho(sort_type))?;
             super::tick::fire_event_into(lua, "WHO_LIST_UPDATE", Vec::new());
             Ok(())
         })?,
     )?;
 
-    // SetWhoToUI(flag) (`0x5ad870`): the Who frame passes 1 on show and 0 on hide; the flag goes
-    // through `GetBoolOrDefault` (`0x5ad877`) with default 0.
+    // SetWhoToUI(flag) (`0x5ad870`): the Who frame passes 0 on load and hide and 1 on show; the
+    // flag goes through `GetBoolOrDefault` (`0x5ad877`) with default 0 and is stored in the call
+    // (`0x5ad87c`). Only `SMSG_WHO`'s routing reads it (`0x5adf9c`), and the feed that routes an
+    // answer reads it here.
     g.set(
         "SetWhoToUI",
         lua.create_function(|lua, flag: Option<Value>| {
             let on = bool_or_default(flag.as_ref(), false);
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.social_requests.push(SocialRequest::SetWhoToUi(on));
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .who_to_ui = on;
             Ok(())
         })?,
     )?;
@@ -535,7 +537,7 @@ fn friend_at(friends: &[FriendInfo], index: u32) -> Option<std::borrow::Cow<'_, 
 
 #[cfg(test)]
 mod tests {
-    use super::{SocialRequest, SocialState, WhoInfo};
+    use super::{SocialCall, SocialState, WhoInfo};
     use crate::script::UiScript;
 
     fn who(name: &str, level: u32, zone: &str) -> WhoInfo {
@@ -552,6 +554,7 @@ mod tests {
     /// Two `/who` hits and a `WHO_LIST_UPDATE` handler that records the order it sees.
     fn seated() -> UiScript {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.run(
             r#"
             fired = 0
@@ -593,9 +596,9 @@ mod tests {
             "the handler must already see the sorted list"
         );
         assert_eq!(
-            s.take_social_requests(),
-            vec![SocialRequest::SortWho("name".into())],
-            "and the app hears the same click, so its copy of the chain follows"
+            s.take_social_calls(),
+            vec![SocialCall::SortWho("name".into())],
+            "and the engine's chain takes the same click"
         );
         // Returns nothing (`0x5ad9f8`, `xor eax,eax; ret`).
         assert_eq!(s.arity(r#"SortWho("name")"#).unwrap(), 0);
@@ -644,7 +647,7 @@ mod tests {
             "Erdrin,Galas,",
             "an unrecognised key is the name key"
         );
-        let _ = s.take_social_requests();
+        let _ = s.take_social_calls();
 
         let err = s.run("SortWho({})").unwrap_err().to_string();
         assert!(
@@ -661,6 +664,7 @@ mod tests {
     #[test]
     fn the_lfg_pair_stores_the_comment_and_sends_only_on_a_change() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert_eq!(s.arity("GetLookingForGroup()").unwrap(), 4);
         assert!(s
             .eval::<bool>(
@@ -669,16 +673,13 @@ mod tests {
             .unwrap());
         // Three admissible pairs: every word packs to 0, so nothing changes or sends.
         s.run("SetLookingForGroup(1, 3, 3, 12, 5, 0)").unwrap();
-        assert!(
-            s.take_social_requests().is_empty(),
-            "the AND pack stores zero"
-        );
+        assert!(s.take_social_calls().is_empty(), "the AND pack stores zero");
         // A comment behind the gate: argument 4 is a number, argument 7 the text.
         s.run(r#"SetLookingForGroup(1, 3, 3, 12, 5, 0, "LF2M UBRS")"#)
             .unwrap();
         assert_eq!(
-            s.take_social_requests(),
-            vec![SocialRequest::SetLookingForGroup {
+            s.take_social_calls(),
+            vec![SocialCall::SetLookingForGroup {
                 slots: [0; 3],
                 comment: "LF2M UBRS".into()
             }]
@@ -690,11 +691,11 @@ mod tests {
         );
         s.run(r#"SetLookingForGroup(1, 3, 3, 12, 5, 0, "LF2M UBRS")"#)
             .unwrap();
-        assert!(s.take_social_requests().is_empty());
+        assert!(s.take_social_calls().is_empty());
         // Argument 4 nil: the comment at 7 is not read.
         s.run(r#"SetLookingForGroup(1, 3, nil, nil, nil, nil, "ignored")"#)
             .unwrap();
-        assert!(s.take_social_requests().is_empty());
+        assert!(s.take_social_calls().is_empty());
         assert_eq!(
             s.eval::<String>("local _, _, _, comment = GetLookingForGroup() return comment")
                 .unwrap(),
