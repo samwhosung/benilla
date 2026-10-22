@@ -261,21 +261,19 @@ fn rebind_macro_spells(
 ) {
     let (arrived, seen) = &mut *owed;
     *arrived |= !arrivals.is_empty();
-    // The queue is drained without marking the bar changed: the supersede marked it already. The
-    // macros the bar holds are the ones a supersede reaches (`0x4e5e70`-`0x4e5ece`).
+    // The macros the bar holds are the ones a supersede reaches (`0x4e5e70`-`0x4e5ece`).
     let (superseded, on_bar) = {
-        let mut actions = vm.own();
+        let actions = vm.own();
         let on_bar: std::collections::HashSet<u32> = actions
             .buttons
             .values()
             .filter_map(|b| benilla_ui::script::macro_slot_id(b.kind, b.action))
             .collect();
-        let superseded = std::mem::take(&mut actions.bypass_change_detection().superseded);
-        (superseded, on_bar)
+        (actions.superseded.clone(), on_bar)
     };
-    vm.run(|script| {
+    let applied = vm.run(|script| {
         let (Some(script), Some(table)) = (script, table) else {
-            return;
+            return false;
         };
         let seen = seen.get(script);
         let generation = script.macros_generation();
@@ -283,7 +281,7 @@ fn rebind_macro_spells(
         let table_moved = seen.macros != Some(generation);
         let pet_moved = seen.pet_book != Some(pet_generation);
         if !table_moved && !pet_moved && !*arrived && superseded.is_empty() {
-            return;
+            return false;
         }
         seen.macros = Some(generation);
         seen.pet_book = Some(pet_generation);
@@ -347,7 +345,13 @@ fn rebind_macro_spells(
             );
             bound.0 = fresh;
         }
-    })
+        true
+    });
+    // A pass that ran took the pairs; one that could not keeps them for the next. The queue
+    // empties without marking the bar changed: the supersede marked it already.
+    if applied {
+        vm.own().bypass_change_detection().superseded.clear();
+    }
 }
 
 /// The event each macro line is fired as: id `0x188`, whose registry slot `0xbe17b8` is written
