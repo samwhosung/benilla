@@ -86,32 +86,23 @@ impl Plugin for UiHonorPlugin {
     }
 }
 
-/// The overhead name's strings ([`crate::nameplates::NameLineStrings`]), checked against the VM
-/// every frame and read again when one differs: the reference's builder reads each global at
-/// every rebuild (`0x5eca17`, `0x609370`), so a tag an addon sets later reaches the next line.
-/// A steady frame compares the held strings and allocates nothing.
+/// The overhead name's strings ([`crate::nameplates::NameLineStrings`]), read with the host lent
+/// the first frame a VM is in the world and after a player line rebuilds: the reference's builder
+/// reads each through `lua_gettable` (`0x70436e`, so `_G`'s `__index` runs) only when a name
+/// rebuilds (`0x5ec9e0`, `0x609370`), so a steady frame runs no Lua.
 fn feed_name_line_strings(
-    script: Option<NonSend<UiScript>>,
+    mut vm: crate::script_calls::HostedVm,
     mut strings: ResMut<crate::nameplates::NameLineStrings>,
 ) {
-    static KEYS: std::sync::LazyLock<Vec<String>> =
-        std::sync::LazyLock::new(|| name_line_keys().collect());
-    let Some(script) = script else {
-        return;
-    };
-    let globals = script.lua().globals();
-    let held = strings.session() == Some(script.session())
-        && KEYS.iter().all(
-            |key| match globals.get::<benilla_ui::mlua::Value>(key.as_str()) {
-                Ok(benilla_ui::mlua::Value::String(s)) => strings.holds(key, Some(&s.as_bytes())),
-                Ok(benilla_ui::mlua::Value::Nil) => strings.holds(key, None),
-                // A number reads as its string (`lua_tostring`); the full read settles it.
-                _ => false,
-            },
-        );
-    if !held {
-        strings.set(script.session(), name_line_strings(&script));
-    }
+    vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
+        // Both read, so a new VM's read also spends a pending ask.
+        if (strings.session() != Some(script.session())) | strings.take_reread() {
+            strings.set(script.session(), name_line_strings(script));
+        }
+    });
 }
 
 /// The name line's global keys: the flag tags ([`crate::nameplates::FLAG_PREFIXES`]) and the
@@ -355,11 +346,11 @@ mod tests {
     }
 
     /// Each VM is read the first frame it is in the world, so a world VM whose addon renames a
-    /// title reaches the overhead line, and read again when a global changes: the builder reads
-    /// the title (`0x609370`) and the flag tags (`0x5eca17`, `0x5eca54`, `0x5eca99`) at every
-    /// rebuild.
+    /// title reaches the overhead line, and read again after a player line rebuilds: the builder
+    /// reads the title (`0x609370`) and the flag tags (`0x5eca17`, `0x5eca54`, `0x5eca99`) at
+    /// every rebuild, and only then.
     #[test]
-    fn each_vm_is_read_and_read_again_on_a_change() {
+    fn each_vm_is_read_and_read_again_after_a_rebuild() {
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
         world.init_resource::<crate::nameplates::NameLineStrings>();
@@ -381,11 +372,16 @@ mod tests {
         assert_eq!(held.session(), Some(boot_session));
         assert_eq!(held.get("PVP_RANK_7_1"), Some("Sergeant"));
 
-        // A global the same VM sets later reaches the held strings, a flag tag's included.
+        // A global the same VM sets later waits for a rebuild, then reaches the held strings, a
+        // flag tag's included.
         world
             .non_send_resource::<UiScript>()
             .run(r#"PVP_RANK_7_1 = "Later" CHAT_FLAG_AFK = "<Away>""#)
             .expect("global set");
+        world.run_system_once(feed_name_line_strings).unwrap();
+        let held = world.resource::<crate::nameplates::NameLineStrings>();
+        assert_eq!(held.get("PVP_RANK_7_1"), Some("Sergeant"), "no rebuild yet");
+        held.ask_reread();
         world.run_system_once(feed_name_line_strings).unwrap();
         let held = world.resource::<crate::nameplates::NameLineStrings>();
         assert_eq!(held.get("PVP_RANK_7_1"), Some("Later"));
@@ -425,5 +421,10 @@ mod tests {
             world.run_system_once(feed_name_line_strings).unwrap();
         }
         assert_eq!(indexed(&world), first, "no rebuild, no read");
+        world
+            .resource::<crate::nameplates::NameLineStrings>()
+            .ask_reread();
+        world.run_system_once(feed_name_line_strings).unwrap();
+        assert_eq!(indexed(&world), 2 * first, "a rebuild's read asks it again");
     }
 }

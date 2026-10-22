@@ -96,9 +96,10 @@ fn flag_prefix(player_flags: u32, strings: &NameLineStrings) -> String {
 }
 
 /// The strings the name line resolves, the a1-a3 flag tags ([`FLAG_PREFIXES`]) and the a4 rank
-/// prefix's (`UNIT_PVP_NAME` and the `PVP_RANK_*` titles), which the honor feed checks against
-/// the VM every frame ([`crate::ui_honor`]), as `0x5ec9e0`-`0x5ecabb` and `0x609370` read them at
-/// every rebuild: the world-text pass runs without the VM.
+/// prefix's (`UNIT_PVP_NAME` and the `PVP_RANK_*` titles). `0x5ec9e0`-`0x5ecabb` and `0x609370`
+/// read them at every rebuild; the world-text pass runs without the VM, so a player line's rebuild
+/// asks ([`Self::ask_reread`]) and the honor feed reads them the next frame with the host lent
+/// ([`crate::ui_honor`]), a change rebuilding the lines that used them.
 #[derive(Resource, Default)]
 pub(crate) struct NameLineStrings {
     /// The VM session the strings were read from; `None` before the first VM.
@@ -106,9 +107,22 @@ pub(crate) struct NameLineStrings {
     /// Moves when a read changes the strings, so a line built from the old ones rebuilds.
     generation: u64,
     strings: HashMap<String, String>,
+    /// A player line rebuilt from the held strings since the last read.
+    reread: std::sync::atomic::AtomicBool,
 }
 
 impl NameLineStrings {
+    /// A player line was rebuilt: read the strings again.
+    pub(crate) fn ask_reread(&self) {
+        self.reread
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether a rebuild asked for a read since the last one, clearing the ask.
+    pub(crate) fn take_reread(&mut self) -> bool {
+        std::mem::take(self.reread.get_mut())
+    }
+
     /// The VM session the strings were read from; `None` before the first VM.
     pub(crate) fn session(&self) -> Option<u64> {
         self.session
@@ -122,12 +136,6 @@ impl NameLineStrings {
             self.strings = strings;
             self.generation += 1;
         }
-    }
-
-    /// Whether the held string for `key` is `value`, the bytes of a string global; a missing or
-    /// empty one is held as none.
-    pub(crate) fn holds(&self, key: &str, value: Option<&[u8]>) -> bool {
-        self.strings.get(key).map(String::as_bytes) == value.filter(|v| !v.is_empty())
     }
 
     /// One held string, for the feed's tests.
@@ -598,6 +606,9 @@ pub(crate) fn drive_nameplates(
                     }
                 }
                 let mut lines = vec![name_line(flags, key, &pvp_strings, name)];
+                if net.kind == EntityKind::Player {
+                    pvp_strings.ask_reread();
+                }
                 if let Some(bracketed) = bracketed {
                     lines.push(format!("<{bracketed}>"));
                 }
