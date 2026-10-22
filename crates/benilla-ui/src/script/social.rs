@@ -72,8 +72,11 @@ pub struct SocialState {
     pub ignores: Vec<IgnoreInfo>,
     /// The selected ignore, on the same scale.
     pub selected_ignore: u32,
-    /// The last `/who` answer's rows, at most 49.
+    /// The kept `/who` rows (`0xc2a120`, at most 50), in the array's order.
     pub who: Vec<WhoInfo>,
+    /// The array's slot after the kept rows, which `GetWhoInfo(count + 1)` reads (`0x5ad71f`): what
+    /// an earlier, longer answer left there, or an empty record. `None` after a full 50.
+    pub who_next: Option<WhoInfo>,
     /// The total match count, `GetNumWhoResults`'s second return; it can exceed `who.len()`.
     pub who_total: u32,
     /// The `/who` sort chain, pushed so `SortWho` can re-sort before its synchronous redraw.
@@ -439,14 +442,23 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             )?);
             let unknown = super::glue_core::global_text(lua, "UNKNOWN");
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let row = usize::try_from(index - 1)
-                .ok()
-                .and_then(|i| model.social.who.get(i));
+            // `index - 1` against the kept count, unsigned, with `ja` (`0x5ad71a`-`0x5ad71f`): the
+            // count's own slot passes.
+            let slot = (index as u32).wrapping_sub(1) as usize;
+            let who = &model.social.who;
+            let row = match slot.cmp(&who.len()) {
+                std::cmp::Ordering::Less => who.get(slot),
+                // Deviation: after a full 50 the reference reads the 160 bytes past the array
+                // (`0xc2a0f8`, the counts at `0xc2a120` among them); benilla answers the miss.
+                std::cmp::Ordering::Equal => model.social.who_next.as_ref(),
+                std::cmp::Ordering::Greater => None,
+            };
+            // `nil, nil, 0, nil, nil, nil` (`0x5ad836`-`0x5ad862`).
             let Some(row) = row else {
                 return Ok((
                     Value::Nil,
                     Value::Nil,
-                    Value::Nil,
+                    Value::Integer(0),
                     Value::Nil,
                     Value::Nil,
                     Value::Nil,

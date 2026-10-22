@@ -29,7 +29,7 @@ const WHO_KEYS: [&str; 4] = [
 /// parser (`0x5adf60`) sends more than three rows to `WHO_LIST_UPDATE` and three or fewer to chat
 /// lines, with no event (`0x5adfca`); with `SetWhoToUI` set the event always fires. It compares the
 /// raw wire count, not the 50-capped copy (`0x5adf92`).
-const WHO_CHAT_MAX: usize = 3;
+const WHO_CHAT_MAX: u32 = 3;
 
 /// What the feed last announced, so the list events fire on edges.
 #[derive(Default)]
@@ -113,9 +113,8 @@ pub(super) fn feed_social(
             fires.post("IGNORELIST_UPDATE", Vec::new());
         }
         // `SMSG_WHO`'s two exits ([`WHO_CHAT_MAX`]); a sort fires its own event inside `SortWho`.
-        if social.who_dirty {
-            social.who_dirty = false;
-            if answer_goes_to_the_frame(script.who_to_ui(), social.who.len()) {
+        if let Some(raw) = social.who_answer.as_ref().map(|a| a.raw) {
+            if answer_goes_to_the_frame(script.who_to_ui(), raw) {
                 fires.post("WHO_LIST_UPDATE", Vec::new());
             } else {
                 let printed = {
@@ -124,25 +123,29 @@ pub(super) fn feed_social(
                 };
                 crate::ui_action::show_messages(script, &mut sink, "ui_social", printed);
             }
+            social.who_answer = None;
         }
     })
 }
 
 /// The chat lines the last `/who` answer prints when it goes to chat: in wire order, each composed
 /// inside the parse loop (`0x5ae0a1`) before the `qsort` at `0x5ae0e2` orders the array
-/// `GetWhoInfo` reads, then the count line (`0x5ae0f1`).
+/// `GetWhoInfo` reads, then the count line with the raw count (`0x5ae0f1`).
 pub(super) fn printed_lines(
     social: &SocialState,
     areas: Option<&AreaTableCatalog>,
     names: UnitNames<'_>,
     get: &dyn Fn(&str) -> Option<String>,
 ) -> Vec<Shown> {
-    let wire_order: Vec<WhoInfo> = social
-        .who
+    let Some(answer) = &social.who_answer else {
+        return Vec::new();
+    };
+    let wire_order: Vec<WhoInfo> = answer
+        .wire
         .iter()
         .map(|e| who_row(e, areas, names))
         .collect();
-    who_lines(&wire_order, social.who_total, get)
+    who_lines(&wire_order, answer.raw, get)
 }
 
 /// The VM's snapshot of `lists`, with the selections as the engine holds them now and the `/who`
@@ -159,19 +162,26 @@ fn view(
         ignores: ignore_rows(lists),
         selected_ignore: row_of(lists.ignores.iter().copied(), social.selected_ignore),
         who: who_rows(social, areas, names),
+        // The slot `GetWhoInfo(count + 1)` reads; past the 50th there is none in the array.
+        who_next: social
+            .who_slots
+            .get(social.who_count as usize)
+            .map(|e| who_row(e, areas, names)),
         who_total: social.who_total,
         // The chain rides along: `SortWho` re-sorts inside the binding.
         who_sort: social.who_sort.clone(),
     }
 }
 
-/// Whether an `SMSG_WHO` answer fires `WHO_LIST_UPDATE` (true) or prints chat lines (false).
-fn answer_goes_to_the_frame(to_ui: bool, shown: usize) -> bool {
-    to_ui || shown > WHO_CHAT_MAX
+/// Whether an `SMSG_WHO` answer of `raw` records fires `WHO_LIST_UPDATE` (true) or prints chat
+/// lines (false).
+fn answer_goes_to_the_frame(to_ui: bool, raw: u32) -> bool {
+    to_ui || raw > WHO_CHAT_MAX
 }
 
-/// The chat-routed `/who` output: one line per row in the order given, then the total (`0x5ae0f1`).
-fn who_lines(rows: &[WhoInfo], total: u32, get: &dyn Fn(&str) -> Option<String>) -> Vec<Shown> {
+/// The chat-routed `/who` output: one line per row in the order given, then the count line
+/// (`0x5ae0f1`).
+fn who_lines(rows: &[WhoInfo], count: u32, get: &dyn Fn(&str) -> Option<String>) -> Vec<Shown> {
     use benilla_ui::strings::{fill, Arg};
 
     let chat = |text: String| {
@@ -206,10 +216,11 @@ fn who_lines(rows: &[WhoInfo], total: u32, get: &dyn Fn(&str) -> Option<String>)
         args.push(Arg::S(&zone));
         lines.extend(chat(fill(&template, &args)));
     }
-    // `_P1` for any total but one, `GetText`'s plural rule, so zero reads "0 players total".
-    let total_key = if total == 1 { WHO_KEYS[2] } else { WHO_KEYS[3] };
-    if let Some(template) = get(total_key) {
-        lines.extend(chat(fill(&template, &[Arg::D(i64::from(total))])));
+    // `_P1` for any count but one, `GetText`'s plural rule on the count (`0x5ae0f1`), so zero
+    // reads "0 players total".
+    let count_key = if count == 1 { WHO_KEYS[2] } else { WHO_KEYS[3] };
+    if let Some(template) = get(count_key) {
+        lines.extend(chat(fill(&template, &[Arg::D(i64::from(count))])));
     }
     lines
 }
@@ -303,26 +314,26 @@ fn friend_row(
     }
 }
 
-/// The `/who` rows, resolved, then sorted by the chain as the reference sorts every answer
-/// (`0x5ae0e2`); the comparator compares resolved names, so the sort runs after [`who_row`].
+/// The kept `/who` records, resolved, in the array's order, which the chain sorted.
 fn who_rows(
     social: &SocialState,
     areas: Option<&AreaTableCatalog>,
     names: UnitNames<'_>,
 ) -> Vec<WhoInfo> {
-    let mut rows: Vec<WhoInfo> = social
-        .who
+    social.who_slots[..social.who_count as usize]
         .iter()
         .map(|e| who_row(e, areas, names))
-        .collect();
-    social.who_sort.sort(&mut rows);
-    rows
+        .collect()
 }
 
 /// One `/who` row, ids resolved, `None` for an id with no row; the wire carries class before
 /// race, the Lua API race first. Each id is bounded whole and signed (`0x5ad75d`, `0x5ad7a0`,
 /// `0x5ad7e3`), never by its low byte.
-fn who_row(entry: &WhoEntry, areas: Option<&AreaTableCatalog>, names: UnitNames<'_>) -> WhoInfo {
+pub(super) fn who_row(
+    entry: &WhoEntry,
+    areas: Option<&AreaTableCatalog>,
+    names: UnitNames<'_>,
+) -> WhoInfo {
     let id = |v: u32| u8::try_from(v).ok();
     WhoInfo {
         name: entry.name.clone(),
@@ -359,6 +370,10 @@ mod tests {
         }
     }
 
+    fn apply(social: &mut SocialState, results: WhoResults) {
+        social.apply_who(results, None, Default::default());
+    }
+
     fn names(rows: &[WhoInfo]) -> Vec<&str> {
         rows.iter().map(|r| r.name.as_str()).collect()
     }
@@ -368,15 +383,18 @@ mod tests {
     #[test]
     fn the_answer_is_presented_in_the_sort_chains_order() {
         let mut social = SocialState::default();
-        social.apply_who(WhoResults {
-            displayed: 3,
-            total: 3,
-            entries: vec![
-                entry("Galas", 60, ""),
-                entry("erdrin", 12, ""),
-                entry("Bruk", 60, ""),
-            ],
-        });
+        apply(
+            &mut social,
+            WhoResults {
+                displayed: 3,
+                total: 3,
+                entries: vec![
+                    entry("Galas", 60, ""),
+                    entry("erdrin", 12, ""),
+                    entry("Bruk", 60, ""),
+                ],
+            },
+        );
 
         // The seeded chain is zone → level → class → group → name → …: one zone and one class
         // here, so it resolves on level, then name.
@@ -388,6 +406,7 @@ mod tests {
 
         // A Name click: ascending and case-folded, so `erdrin` sorts among the capitals.
         social.who_sort.promote("name");
+        social.sort_who(None, Default::default());
         assert_eq!(
             names(&who_rows(&social, None, Default::default())),
             ["Bruk", "erdrin", "Galas"]
@@ -395,17 +414,21 @@ mod tests {
 
         // The same click again reverses.
         social.who_sort.promote("name");
+        social.sort_who(None, Default::default());
         assert_eq!(
             names(&who_rows(&social, None, Default::default())),
             ["Galas", "erdrin", "Bruk"]
         );
 
         // A fresh answer arrives into that same chain.
-        social.apply_who(WhoResults {
-            displayed: 2,
-            total: 2,
-            entries: vec![entry("Aaa", 1, ""), entry("Zzz", 1, "")],
-        });
+        apply(
+            &mut social,
+            WhoResults {
+                displayed: 2,
+                total: 2,
+                entries: vec![entry("Aaa", 1, ""), entry("Zzz", 1, "")],
+            },
+        );
         assert_eq!(
             names(&who_rows(&social, None, Default::default())),
             ["Zzz", "Aaa"]
@@ -426,24 +449,23 @@ mod tests {
     #[test]
     fn the_chat_lines_come_out_in_wire_order_with_the_total_last() {
         let mut social = SocialState::default();
-        social.apply_who(WhoResults {
-            displayed: 2,
-            total: 2,
-            entries: vec![entry("Zzz", 60, ""), entry("Aaa", 12, "")],
-        });
+        apply(
+            &mut social,
+            WhoResults {
+                displayed: 2,
+                total: 2,
+                entries: vec![entry("Zzz", 60, ""), entry("Aaa", 12, "")],
+            },
+        );
         // A chain that would order them the other way round, to prove it is not consulted.
         social.who_sort.promote("name");
+        social.sort_who(None, Default::default());
         assert_eq!(
             names(&who_rows(&social, None, Default::default())),
             ["Aaa", "Zzz"],
             "the frame's order"
         );
 
-        let wire: Vec<WhoInfo> = social
-            .who
-            .iter()
-            .map(|e| who_row(e, None, Default::default()))
-            .collect();
         // The shipped templates: FrameXML never names these keys, so a stub would echo a guess.
         let data = benilla_formats::wow_data_or_skip!();
         let mut chain = benilla_formats::open_chain(&data).expect("open chain");
@@ -452,12 +474,11 @@ mod tests {
             .expect("GlobalStrings.lua in the chain");
         let vm = benilla_ui::script::UiScript::new().expect("VM");
         vm.run(&String::from_utf8_lossy(&src)).expect("runs clean");
-        let lines: Vec<String> = who_lines(&wire, social.who_total, &|key| {
-            vm.lua().globals().get::<String>(key).ok()
-        })
-        .iter()
-        .map(|s| s.text().to_string())
-        .collect();
+        let get = |key: &str| vm.lua().globals().get::<String>(key).ok();
+        let lines: Vec<String> = printed_lines(&social, None, Default::default(), &get)
+            .iter()
+            .map(|s| s.text().to_string())
+            .collect();
 
         assert_eq!(lines.len(), 3, "one per row plus the total: {lines:?}");
         assert!(

@@ -42,8 +42,13 @@ impl SocialSteps<'_> {
             SocialCall::AddOrDelIgnore(name) => self.add_or_del_ignore(name),
             SocialCall::SelectIgnore(index) => self.select_ignore(index),
             SocialCall::Who(filter) => self.send_who(script, &filter),
-            // `0x5ad980`: the chain the binding sorted the VM's rows by.
-            SocialCall::SortWho(sort_type) => self.social.who_sort.promote(&sort_type),
+            // `0x5ad980` and the `qsort` at `0x5ad9d6`: the chain the binding sorted the VM's rows
+            // by, and the array.
+            SocialCall::SortWho(sort_type) => {
+                self.social.who_sort.promote(&sort_type);
+                let areas = self.areas.as_deref().map(|a| &a.0);
+                self.social.sort_who(areas, self.unit_names.get());
+            }
             SocialCall::LfgQuery { criterion, class } => {
                 self.send(ClientCommand::LfgQuery { criterion, class })
             }
