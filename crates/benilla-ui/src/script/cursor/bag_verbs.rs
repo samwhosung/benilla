@@ -921,6 +921,45 @@ mod tests {
         assert!(s.cursor_payload().is_none());
     }
 
+    /// The bag worker's buy reads the held row's item from the list as it stands
+    /// (`0x4c7e9a`-`0x4c7eaa`): a row whose item changed since the pickup buys what it now names,
+    /// and a row the list no longer holds buys nothing and drops.
+    #[test]
+    fn a_held_vendor_row_buys_what_the_row_now_names() {
+        use crate::script::{MerchantCall, MerchantItem, MerchantState};
+        let vendor = |item_id: Option<u32>| MerchantState {
+            items: item_id
+                .map(|item_id| MerchantItem {
+                    item_id,
+                    quantity: 1,
+                    num_available: -1,
+                    ..Default::default()
+                })
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        for (now, bought) in [
+            (
+                Some(2589),
+                vec![MerchantCall::BuyIntoBag {
+                    bag_guid: None,
+                    entry: 2589,
+                }],
+            ),
+            (None, vec![]),
+        ] {
+            s.set_merchant(Some(vendor(Some(159))));
+            s.run("PickupMerchantItem(1)").unwrap();
+            s.set_merchant(Some(vendor(now)));
+            s.run("PutItemInBackpack()").unwrap();
+            assert_eq!(s.take_merchant_calls(), bought, "{now:?}");
+            assert!(s.cursor_payload().is_none(), "{now:?}: the row drops");
+        }
+    }
+
     /// `PutItemInBackpack` is the worker with the player as the destination (`0x4c7ed0`,
     /// `0x4c7c7d`): its control gate holds (`0x4c7c33`), and an item held from the backpack itself
     /// is a cancel, its container being the player and its slot one of 23-38 (`0x4c7cf8`-
