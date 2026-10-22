@@ -177,8 +177,9 @@ pub struct UnitState {
     /// disconnected, which greys a stock mana bar (`UnitFrame.lua:214`), so a hand-built live
     /// unit must set it; the app's `snapshot` does for every held one.
     pub is_connected: bool,
-    /// `UnitIsPVPFreeForAll`: `PLAYER_FLAGS` bit `0x80`, or the roster status byte's `0x10`;
-    /// independent of [`Self::pvp`].
+    /// `UnitIsPVPFreeForAll` (`0x516540`): a held unit's `UNIT_FIELD_FLAGS` 0x8 and its
+    /// controlling player's `PLAYER_FLAGS` 0x80, or for one with no object the roster status
+    /// byte's `0x10`; independent of [`Self::pvp`].
     pub is_pvp_ffa: bool,
     /// `UnitPVPRank`: the current rank on the internal `0..=18` scale (0 none), from the public
     /// `PLAYER_BYTES_3` byte 3. The private lifetime highest rides

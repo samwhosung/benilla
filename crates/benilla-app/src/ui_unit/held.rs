@@ -85,6 +85,7 @@ impl HeldUnits<'_> {
         let factions = self.rel.factions;
         let reaction = unit_reaction(&self.rel, &unit, self.me.as_ref());
         let mut s = snapshot(store, guid, name, reaction, self.unit_names, self.types);
+        s.is_pvp_ffa = super::pvp_free_for_all(&self.rel, &unit);
         s.player_reaction = player_reaction(&self.rel, &unit, self.me.as_ref());
         s.raid_target = self.group.raid_target_index(guid);
         s.faction_group = faction_group(store, factions);

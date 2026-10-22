@@ -1048,8 +1048,13 @@ pub(crate) fn snapshot(
             .unwrap_or(0),
         // `UnitAffectingCombat` (`0x517e10`): bit 19, the one combat bit for every token.
         in_combat: store.0.unit_flags() & crate::player::UNIT_FLAG_IN_COMBAT != 0,
-        // Free-for-all PvP, `PLAYER_FLAGS` bit 7 (vmangos `Player.h:322`); false on a creature.
-        is_pvp_ffa: store.0.player_flags() & 0x80 != 0,
+        // `UnitIsPVPFreeForAll` as the unit alone answers it: a player that answers to nobody is
+        // its own controller ([`pvp_free_for_all`]); a held unit's view asks its controller.
+        is_pvp_ffa: matches!(store.0.object_type(), Some(ObjectType::Player))
+            && store.0.unit_charmed_by().is_none()
+            && store.0.unit_created_by().is_none()
+            && store.0.unit_flags() & 0x8 != 0
+            && store.0.player_flags() & PLAYER_FLAGS_FFA_PVP != 0,
         // The honor rank, `PLAYER_BYTES_3` byte 3 (0..=18), public for every player in view.
         pvp_rank: store.0.player_pvp_rank().unwrap_or(0),
         // The team digit of `PVP_RANK_<rank>_<team>`, from the race ([`race_pvp_team`]).
@@ -1080,6 +1085,20 @@ pub(crate) fn snapshot(
         // `is_player` and the creature-record fields come from [`enrich_unit`].
         ..Default::default()
     }
+}
+
+/// `PLAYER_FLAGS` bit 7, free-for-all PvP (vmangos `Player.h:322`).
+const PLAYER_FLAGS_FFA_PVP: u32 = 0x80;
+
+/// `UnitIsPVPFreeForAll` (`0x516540`) on a held unit: `UNIT_FIELD_FLAGS` 0x8 (`0x5165ad`-
+/// `0x5165bf`), then the player controlling it (`0x606170` at `0x5165c3`) and that player's
+/// `PLAYER_FLAGS` 0x80 (`0x5165cc`-`0x5165d5`), so a pet or a charmed unit answers with its
+/// owner's or charmer's flag.
+pub(crate) fn pvp_free_for_all(rel: &Relations, unit: &RelUnit) -> bool {
+    unit.player_controlled()
+        && rel
+            .controller(unit)
+            .is_some_and(|c| c.player_flags & PLAYER_FLAGS_FFA_PVP != 0)
 }
 
 /// Fill the guid-keyed tooltip fields: `is_player`, or a creature's record fields and its
@@ -1305,19 +1324,24 @@ pub(crate) fn live_player_seat(
     group: Res<crate::ui_party::GroupState>,
     factions: Option<Res<Factions>>,
     guild: Res<crate::ui_guild::GuildState>,
+    world: crate::target::RelationWorld,
 ) -> Option<LivePlayerSeat> {
     let (store, guid) = self_q.iter().next()?;
+    let mut state = player_snapshot(
+        store,
+        guid.0,
+        &tables,
+        &names,
+        &commands,
+        &group,
+        factions.as_deref(),
+        &guild,
+    );
+    if let Some(me) = world.me() {
+        state.is_pvp_ffa = pvp_free_for_all(&world.get(), &me);
+    }
     Some(LivePlayerSeat {
-        state: player_snapshot(
-            store,
-            guid.0,
-            &tables,
-            &names,
-            &commands,
-            &group,
-            factions.as_deref(),
-            &guild,
-        ),
+        state,
         xp: xp_pair(store),
     })
 }
@@ -1424,7 +1448,7 @@ fn feed_units(
         // A missing unit is `None`, which `set_unit` clears; a name miss lands on a later frame.
         let self_pair = self_q.iter().next();
         let player = self_pair.map(|(store, guid)| {
-            player_snapshot(
+            let mut s = player_snapshot(
                 store,
                 guid.0,
                 &tables,
@@ -1433,7 +1457,11 @@ fn feed_units(
                 &group,
                 world.factions(),
                 &guild,
-            )
+            );
+            if let Some(me) = world.me() {
+                s.is_pvp_ffa = pvp_free_for_all(&world.get(), &me);
+            }
+            s
         });
         // Log once when our template names no side, almost always GM mode (vmangos forces template
         // 35, group mask 0): every `UnitFactionGroup` surface loses its side, as in the reference.
