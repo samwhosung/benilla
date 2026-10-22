@@ -17,6 +17,10 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::Disconnected, on_session_end);
 }
 
+/// `SMSG_SHOWTAXINODES` (`0x5ece60`): the mask's known nodes counted over all 256 bits
+/// (`0x5eced7`-`0x5ecf2e`); under two (`0x5ecf39`) it shows `0xb5`, `ERR_TAXINOPATHS`
+/// (`0x5ecf3f`), closes the gossip menu (`0x4e1fa0` with a zero guid, `0x5ecf55`) and opens no
+/// map; else the map opens.
 fn on_nodes_shown(In(ev): In<SessionEvent>, mut commands: Commands) {
     if let SessionEvent::TaxiNodesShown {
         flightmaster,
@@ -24,9 +28,19 @@ fn on_nodes_shown(In(ev): In<SessionEvent>, mut commands: Commands) {
         known_mask,
     } = ev
     {
-        debug!("net: taxi map on {flightmaster:#x} — nearest node {nearest_node}");
+        let known: u32 = known_mask.0.iter().map(|w| w.count_ones()).sum();
+        debug!("net: taxi map on {flightmaster:#x} — nearest node {nearest_node}, {known} known");
         commands.queue(move |world: &mut World| {
-            super::open_map(world, flightmaster, nearest_node, known_mask);
+            if known >= 2 {
+                super::open_map(world, flightmaster, nearest_node, known_mask);
+                return;
+            }
+            if let Some(errors) = world.get_resource::<crate::ui_action::UiErrorKeys>() {
+                errors.push(crate::ui_action::UiError::key("ERR_TAXINOPATHS"));
+            }
+            if world.contains_resource::<crate::ui_gossip::GossipState>() {
+                crate::ui_gossip::close_core(world);
+            }
         });
     }
 }
