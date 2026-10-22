@@ -1138,15 +1138,14 @@ fn sync_portraits(
                 })
                 .flatten(),
             "pet" => {
-                let guid = party.pet_bar.spells.pet_guid;
-                let entity = (guid != 0)
-                    .then(|| party.index.0.get(&guid))
-                    .flatten()
-                    .copied();
-                if entity.is_none() && guid != 0 {
-                    unseen = Some(creature_temporary_portrait());
-                }
-                entity
+                let subject = pet_subject(
+                    party.pet_bar.spells.pet_guid,
+                    |g| party.index.0.get(&g).copied(),
+                    &party.roster,
+                    &party.names,
+                );
+                unseen = subject.unseen;
+                subject.entity
             }
             "npc" => interact_npc.0,
             // Gated on the UI drawing it, as `"targettarget"`: no stock file binds it.
@@ -1624,6 +1623,22 @@ struct Subject {
     entity: Option<Entity>,
     occupant: Option<u64>,
     unseen: Option<String>,
+}
+
+/// `"pet"`'s subject: the object of the pet bar's guid, or the stand-in of a pet the object
+/// manager does not hold.
+fn pet_subject(
+    pet_guid: u64,
+    entity_of: impl Fn(u64) -> Option<Entity>,
+    _roster: &crate::ui_party::GroupState,
+    _names: &crate::names::NameCache,
+) -> Subject {
+    let entity = (pet_guid != 0).then(|| entity_of(pet_guid)).flatten();
+    Subject {
+        entity,
+        occupant: None,
+        unseen: (entity.is_none() && pet_guid != 0).then(creature_temporary_portrait),
+    }
 }
 
 /// `"target"`'s subject: the selection's object, or, for a selection with no object, a party
