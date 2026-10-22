@@ -64,7 +64,7 @@ impl Plugin for UiHonorPlugin {
         net::register(app);
         app.init_resource::<InspectHonor>()
             .init_resource::<HonorFeedState>()
-            .init_resource::<crate::nameplates::PvpNameStrings>()
+            .init_resource::<crate::nameplates::NameLineStrings>()
             // Ahead of the unit feed: the reference writes the block with the create whose hook
             // runs the world-enter cascade, so `PLAYER_ENTERING_WORLD`'s repaint reads it, and
             // the field events' handlers read it too.
@@ -79,33 +79,36 @@ impl Plugin for UiHonorPlugin {
             // lines the frame it arrives.
             .add_systems(
                 Update,
-                feed_pvp_name_strings
+                feed_name_line_strings
                     .after(crate::ui_script::UiInput)
                     .before(crate::nameplates::drive_nameplates),
             );
     }
 }
 
-/// The overhead name's rank strings ([`crate::nameplates::PvpNameStrings`]), read off a VM the
+/// The overhead name's strings ([`crate::nameplates::NameLineStrings`]), read off a VM the
 /// first frame it is in the world. Every VM is installed whole, outside `Update` (the glue VM after
 /// its GlueXML, a world VM after its FrameXML and addon load), so the read sees what the load
 /// defined; any other frame pays one compare.
-fn feed_pvp_name_strings(
+fn feed_name_line_strings(
     script: Option<NonSend<UiScript>>,
-    mut strings: ResMut<crate::nameplates::PvpNameStrings>,
+    mut strings: ResMut<crate::nameplates::NameLineStrings>,
 ) {
     let Some(script) = script else {
         return;
     };
     if strings.session() != Some(script.session()) {
-        strings.set(script.session(), pvp_name_strings(&script));
+        strings.set(script.session(), name_line_strings(&script));
     }
 }
 
-/// The [`benilla_ui::script::pvp_name_global_keys`] that `script` defines, with their values.
-fn pvp_name_strings(script: &UiScript) -> HashMap<String, String> {
-    benilla_ui::script::pvp_name_global_keys()
-        .into_iter()
+/// The name line's globals that `script` defines, with their values: the flag tags
+/// ([`crate::nameplates::FLAG_PREFIXES`]) and the [`benilla_ui::script::pvp_name_global_keys`].
+fn name_line_strings(script: &UiScript) -> HashMap<String, String> {
+    crate::nameplates::FLAG_PREFIXES
+        .iter()
+        .map(|(_, key)| key.to_string())
+        .chain(benilla_ui::script::pvp_name_global_keys())
         .filter_map(|key| benilla_ui::strings::global(script.lua(), &key).map(|value| (key, value)))
         .collect()
 }
@@ -303,7 +306,7 @@ mod tests {
     /// nothing else.
     #[test]
     fn the_rank_strings_read_takes_only_the_title_keys() {
-        let strings = pvp_name_strings(&vm(r#"UNIT_PVP_NAME = "%s %s"
+        let strings = name_line_strings(&vm(r#"UNIT_PVP_NAME = "%s %s"
                PVP_RANK_7_1 = "Sergeant"
                PVP_RANK_7_1_FEMALE = "Sergeant (f)"
                GARBAGE_KEY = "x""#));
@@ -321,7 +324,7 @@ mod tests {
     /// The name line's flag tags are read with the titles (`0x5eca17`, `0x5eca54`, `0x5eca99`).
     #[test]
     fn the_strings_read_takes_the_chat_flag_tags() {
-        let strings = pvp_name_strings(&vm(r#"CHAT_FLAG_AFK = "<Away>"
+        let strings = name_line_strings(&vm(r#"CHAT_FLAG_AFK = "<Away>"
                CHAT_FLAG_DND = "<Busy>"
                CHAT_FLAG_GM = "<GM>""#));
         for (key, value) in [
@@ -339,11 +342,11 @@ mod tests {
     fn each_new_vm_is_read_once() {
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
-        world.init_resource::<crate::nameplates::PvpNameStrings>();
-        world.run_system_once(feed_pvp_name_strings).unwrap();
+        world.init_resource::<crate::nameplates::NameLineStrings>();
+        world.run_system_once(feed_name_line_strings).unwrap();
         assert_eq!(
             world
-                .resource::<crate::nameplates::PvpNameStrings>()
+                .resource::<crate::nameplates::NameLineStrings>()
                 .session(),
             None,
             "no VM, no read"
@@ -353,8 +356,8 @@ mod tests {
         let boot = vm(stock);
         let boot_session = boot.session();
         world.insert_non_send_resource(boot);
-        world.run_system_once(feed_pvp_name_strings).unwrap();
-        let held = world.resource::<crate::nameplates::PvpNameStrings>();
+        world.run_system_once(feed_name_line_strings).unwrap();
+        let held = world.resource::<crate::nameplates::NameLineStrings>();
         assert_eq!(held.session(), Some(boot_session));
         assert_eq!(held.get("PVP_RANK_7_1"), Some("Sergeant"));
 
@@ -363,15 +366,15 @@ mod tests {
             .non_send_resource::<UiScript>()
             .run(r#"PVP_RANK_7_1 = "Later""#)
             .expect("global set");
-        world.run_system_once(feed_pvp_name_strings).unwrap();
-        let held = world.resource::<crate::nameplates::PvpNameStrings>();
+        world.run_system_once(feed_name_line_strings).unwrap();
+        let held = world.resource::<crate::nameplates::NameLineStrings>();
         assert_eq!(held.get("PVP_RANK_7_1"), Some("Sergeant"));
 
         let world_vm = vm(&format!("{stock}\nPVP_RANK_7_1 = \"Feldwebel\""));
         let world_session = world_vm.session();
         world.insert_non_send_resource(world_vm);
-        world.run_system_once(feed_pvp_name_strings).unwrap();
-        let held = world.resource::<crate::nameplates::PvpNameStrings>();
+        world.run_system_once(feed_name_line_strings).unwrap();
+        let held = world.resource::<crate::nameplates::NameLineStrings>();
         assert_eq!(held.session(), Some(world_session));
         assert_eq!(held.get("PVP_RANK_7_1"), Some("Feldwebel"));
     }
