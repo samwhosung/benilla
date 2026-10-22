@@ -1704,7 +1704,7 @@ mod re_derive {
                 )
                 .unwrap()
         };
-        list(&mut app, known.clone());
+        list(&mut app, known);
         assert_eq!(super::tick(&mut app), ["TRAINER_SHOW"]);
         assert_eq!(header(&mut app), "My Talents");
         // RANK1 is not in the book: the pass reads it learnable, and the key stays -1.
