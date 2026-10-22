@@ -634,6 +634,15 @@ fn the_pet_spells_packet_back_dates_its_cooldowns_and_reads_the_held_bit() {
     };
     let bar = rig.app.world().resource::<PetBar>().spells.clone();
 
+    // The frame's clock pair taken where the packet lands, as the UI step re-anchors it every
+    // frame; the rig runs no step, so the pair would otherwise date from the rig's build.
+    let now = ui(&mut rig).now();
+    *rig.app
+        .world_mut()
+        .resource_mut::<crate::ui_script::UiClock>() = crate::ui_script::UiClock {
+        anchor: Instant::now(),
+        ui_now: now,
+    };
     rig.receive(vec![SessionEvent::PetSpells(Box::new(with(2000, &bar)))]);
     rig.frame();
     let now = ui(&mut rig).eval::<f64>("return GetTime()").unwrap();
@@ -643,7 +652,7 @@ fn the_pet_spells_packet_back_dates_its_cooldowns_and_reads_the_held_bit() {
         "Growl's own 5 s, not the 2 s remainder: {duration}"
     );
     assert!(
-        (start + duration - now - 2.0).abs() < 0.75,
+        (start + duration - now - 2.0).abs() < 0.25,
         "ending 2 s from now: start {start}, now {now}"
     );
     assert_eq!(enable, 1);
