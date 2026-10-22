@@ -495,9 +495,10 @@ pub(crate) fn forced_rank(reputations: &Reputations, faction: u32) -> Option<u8>
 }
 
 /// Whether we are at war with the `Faction.dbc` faction a template names (`0x4d61b0`, bit 1 of its
-/// reputation slot's flag byte); `None` when it has no reputation slot (`0x605fc0`). The bit is the
-/// one the reputation pane's war checkbox writes, so declaring war moves the plate, the cursor and
-/// attackability at once. `/reaction` prints it.
+/// reputation slot's flag byte); `None` when it has no reputation slot (`0x605fc0`). The pane's war
+/// checkbox writes the bit in its call (`0x4d6074`), `SMSG_SET_FACTION_ATWAR` and a Hostile
+/// standing on the wire, so each moves the plate, the cursor and attackability at once.
+/// `/reaction` prints it.
 pub(crate) fn at_war_with(
     catalog: &benilla_formats::FactionCatalog,
     reputations: &Reputations,
