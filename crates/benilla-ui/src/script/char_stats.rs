@@ -381,11 +381,6 @@ impl super::UiScript {
             _ => None,
         })
     }
-
-    /// Drain equipped slots clicked in repair mode, for `CMSG_REPAIR_ITEM`.
-    pub fn take_inventory_repairs(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().inventory_repairs)
-    }
 }
 
 /// The 12 alert statuses off the doll snapshot (`0x4c7ee0`'s recompute), without the event.

@@ -4,7 +4,7 @@
 use mlua::Lua;
 
 use crate::script::tick::verb;
-use crate::script::Model;
+use crate::script::{ItemCall, Model};
 
 use super::{
     clear, clear_cursor, set_cursor, Clear, CursorItem, CursorPayload, EQUIPMENT_BAG,
@@ -91,16 +91,18 @@ pub(crate) fn auto_equip_held(model: &mut Model, suppress: bool) -> AutoEquip {
 }
 
 /// `AutoEquipCursorItem()` (`0x48a040` into `0x5e1480`), a click or drop on the doll's model
-/// (`PaperDollFrame.lua:31-35`), queueing the send or the question for the app. Returns whether
-/// to repaint.
+/// (`PaperDollFrame.lua:31-35`), filing the send or the question for the host
+/// ([`ItemCall::AutoEquip`], [`ItemCall::EquipAsk`]). Returns whether to repaint.
 pub(crate) fn auto_equip_cursor_item(model: &mut Model) -> bool {
     match auto_equip_held(model, false) {
         AutoEquip::Sent { bag, slot, .. } => {
-            model.container_autoequips.push((bag, slot));
+            model.item_calls.push(ItemCall::AutoEquip { bag, slot });
             true
         }
         AutoEquip::Asked { bag, slot, guid } => {
-            model.container_equip_asks.push((bag, slot, guid));
+            model
+                .item_calls
+                .push(ItemCall::EquipAsk { bag, slot, guid });
             false
         }
         AutoEquip::Back => true,
@@ -314,6 +316,7 @@ mod tests {
     #[test]
     fn a_bind_on_equip_item_stays_held_and_locked_under_the_question() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_container(0, Some(boe_bag(2, false)));
         s.run("PickupContainerItem(0, 1) AutoEquipCursorItem()")
             .unwrap();
@@ -336,6 +339,7 @@ mod tests {
             (3, false, false),
         ] {
             let mut s = UiScript::new().unwrap();
+            s.keep_calls();
             s.set_container(0, Some(boe_bag(bonding, bound)));
             s.run("PickupContainerItem(0, 1) AutoEquipCursorItem()")
                 .unwrap();
@@ -348,6 +352,7 @@ mod tests {
         }
         // A level-60 axe on a level-10 player is never asked about (`0x5ea930`).
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_container(0, Some(boe_bag(2, false)));
         s.set_player_req_state(crate::script::PlayerReqState {
             level: 10,

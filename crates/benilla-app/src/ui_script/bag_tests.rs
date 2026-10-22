@@ -813,6 +813,7 @@ fn readable_letter_hover_shows_the_inspect_magnifier() {
 fn drag_across_two_slots_queues_the_same_move_a_click_pickup_would() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for file in crate::ui_script::test_ui::production_order(&[
         BAG_UI,
@@ -1327,6 +1328,7 @@ fn typing_a_number_into_the_split_spinner_sets_the_count() {
 fn split_okay_then_a_placement_queues_the_split_move() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     let (x, y) = open_backpack_with_a_five_stack(&mut s);
     s.set_modifiers(true, false, false);
@@ -1802,6 +1804,7 @@ fn a_hovered_key_shows_its_tooltip_through_its_inventory_slot() {
 fn a_key_dropped_on_the_button_files_itself() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     keyring_surface(&s);
     s.set_money(0);

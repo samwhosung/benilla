@@ -4,11 +4,11 @@ use crate::layout::{LayoutInput, LayoutSolver, Rect};
 use crate::widget::{FrameHandle, RegionHandle, WidgetArena};
 
 use super::{
-    auction, backdrop, bank, bind_confirm, camera_view, char_stats, chat_window, colorselect,
-    container, craft, cursor, death, duel, follow, gossip, guild, item_text, loot, loot_roll,
-    macros, mail, merchant, parse_unit_token, party, petition, pvp, quest, quest_log, reputation,
-    session, simplehtml, skills, slider, social, spellbook, stable, taxi, trade, tradeskill,
-    trainer, weapon_enchant, ActionSlot, AuraState, FontObject, ItemTemplateView, MusicRequest,
+    auction, backdrop, bank, camera_view, char_stats, chat_window, colorselect, container, craft,
+    cursor, death, duel, follow, gossip, guild, item_calls, item_text, loot, loot_roll, macros,
+    mail, merchant, parse_unit_token, party, petition, pvp, quest, quest_log, reputation, session,
+    simplehtml, skills, slider, social, spellbook, stable, taxi, trade, tradeskill, trainer,
+    weapon_enchant, ActionSlot, AuraState, FontObject, ItemTemplateView, MusicRequest,
     PlayerReqState, RegionData, ScriptValue, SoundRequest, UnitBase, UnitState, UnitTokenParse,
 };
 
@@ -770,19 +770,14 @@ pub(crate) struct Model {
     /// The world pick under the cursor (`[this+0x350]`): a world click drops no payload on an
     /// object, only an item on terrain, and anything over nothing.
     pub(crate) world_pick: cursor::WorldPick,
-    /// Held-item bag moves, sent as `CMSG_SWAP_INV_ITEM` or `CMSG_SPLIT_ITEM`.
-    pub(crate) container_moves: Vec<container::ContainerMove>,
-    /// `(bag, slot)` clicks made in repair mode.
-    pub(crate) container_repairs: Vec<(i64, u32)>,
+    /// The item calls the verb segment running now filed, which its binding hands the host as the
+    /// segment ends ([`item_calls::submit_item_calls`]).
+    pub(crate) item_calls: Vec<item_calls::ItemCall>,
     /// Targeting wants an item (`0x6e6330`): a bag or paper-doll click becomes a pick.
     pub(crate) item_pick_armed: bool,
-    /// `DeleteCursorItem`'s `(bag, slot, count)`, 0 for the whole stack, as `CMSG_DESTROYITEM`.
-    pub(crate) container_destroys: Vec<(i64, u32, u32)>,
     /// The wrapping paper a right-click armed (`0x5edea0`: lock it, cursor mode 2, no packet). Not
     /// a cursor payload: the reference sets only the cursor mode, so `CursorHasItem()` stays nil.
     pub(crate) pending_wrap: Option<container::PendingWrap>,
-    /// `(giftBag, giftSlot, itemBag, itemSlot)` per completed wrap, in `CMSG_WRAP_ITEM`'s order.
-    pub(crate) container_wraps: Vec<(i64, u32, i64, u32)>,
     /// The cursor mode Lua set (`0xbe2c2c`); `ResetCursor` returns it to the world's mode.
     pub(crate) ui_cursor: Option<container::UiCursorMode>,
     /// A FrameXML cursor call ran. The mode is a write, not a level: `0xbe2c2c` keeps its value
@@ -791,13 +786,6 @@ pub(crate) struct Model {
     /// The name the last custom cursor loaded under (`0xbe2c70`, copied at `0x523cf5`), which
     /// [`container::UiCursorMode::Custom`] shows; kept across every other mode.
     pub(crate) custom_cursor_name: String,
-    /// `AutoEquipCursorItem`'s `(bag, slot)` sources, sent as `CMSG_AUTOEQUIP_ITEM`.
-    pub(crate) container_autoequips: Vec<(i64, u32)>,
-    /// `AutoEquipCursorItem`'s bind-on-equip questions, `(bag, slot, guid)`: the item stays held.
-    pub(crate) container_equip_asks: Vec<(i64, u32, u64)>,
-    /// `PutItemInBag` and `PutItemInBackpack` stores, sent as `CMSG_AUTOSTORE_BAG_ITEM`, or
-    /// `CMSG_SPLIT_ITEM` for a split stack.
-    pub(crate) bag_autostores: Vec<container::BagAutoStore>,
 
     /// `RegisterForDrag` buttons per frame, compared case-insensitively. Nothing destroys a frame,
     /// so this, `scripts` and `frame_events` are never pruned; a destroy path must prune all three.
@@ -915,10 +903,6 @@ pub(crate) struct Model {
     /// The 1-based selection, 0 for none, carried across a re-push by the recipe's spell id.
     pub(crate) craft_selection: u32,
     pub(crate) craft_close: bool,
-
-    /// `EquipPendingItem`/`CancelPendingEquip` answers in order, and `ConfirmBindOnUse()` calls.
-    pub(crate) pending_equip_answers: Vec<bind_confirm::PendingEquipAnswer>,
-    pub(crate) bind_on_use_confirms: Vec<bool>,
 
     /// The open loot as the app pushed it; the verbs over it are script calls
     /// ([`loot::LootCall`]).
@@ -1154,8 +1138,6 @@ pub(crate) struct Model {
     pub(crate) bank_bag_slots: char_stats::BankBagSlots,
     /// `GetInventoryAlertStatus` in `0x806eb8` order; every push fires `UPDATE_INVENTORY_ALERTS`.
     pub(crate) inventory_alerts: [u8; 12],
-    /// Equipped slot ids clicked while the merchant repair cursor is armed.
-    pub(crate) inventory_repairs: Vec<u32>,
     /// Main- and off-hand temporary enchants in `GetWeaponEnchantInfo`'s order, pushed each frame.
     pub(crate) weapon_enchants: [Option<weapon_enchant::WeaponEnchant>; 2],
 
@@ -1673,18 +1655,12 @@ impl Model {
             cursor: None,
             cursor_grid: false,
             world_pick: cursor::WorldPick::default(),
-            container_moves: Vec::new(),
-            container_repairs: Vec::new(),
+            item_calls: Vec::new(),
             item_pick_armed: false,
-            container_destroys: Vec::new(),
             pending_wrap: None,
-            container_wraps: Vec::new(),
             ui_cursor: None,
             ui_cursor_dirty: false,
             custom_cursor_name: String::new(),
-            container_autoequips: Vec::new(),
-            container_equip_asks: Vec::new(),
-            bag_autostores: Vec::new(),
             drag_registered: HashMap::new(),
             drag: None,
             moving: None,
@@ -1737,8 +1713,6 @@ impl Model {
             craft_close: false,
             loot: None,
             loot_type: 0,
-            pending_equip_answers: Vec::new(),
-            bind_on_use_confirms: Vec::new(),
             loot_rolls: loot_roll::LootRollsState::default(),
             loot_roll_votes: Vec::new(),
             item_text: None,
@@ -1870,7 +1844,6 @@ impl Model {
             inventory_slots: Default::default(),
             bank_bag_slots: Default::default(),
             inventory_alerts: [0; 12],
-            inventory_repairs: Vec::new(),
             weapon_enchants: [None; 2],
             visible_equipment: HashMap::new(),
             inspect_notifies: Vec::new(),

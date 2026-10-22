@@ -188,6 +188,9 @@ pub enum ScriptCall {
     /// A reputation verb past its binding's checks ([`super::ReputationCall`]): its refusal, its
     /// flag write and its packet inside the call.
     Reputation(super::ReputationCall),
+    /// A bag, cursor or paper-doll verb's send or answer ([`super::ItemCall`]): its packet, its
+    /// question or its unlock inside the call.
+    Item(super::ItemCall),
 }
 
 /// The mode the four `TargetNearest*` shims hand the TAB cycler `0x493f60`, the only byte that
@@ -216,6 +219,7 @@ impl ScriptCall {
             ScriptCall::UseInventoryItem { may_cast, .. } => *may_cast,
             ScriptCall::PickItem(pick) => pick.may_cast,
             ScriptCall::EnchantConfirm(answer) => answer.may_cast,
+            ScriptCall::Item(super::ItemCall::BindOnUse { may_cast }) => *may_cast,
             ScriptCall::CastSpell { may_cast, .. } => *may_cast,
             ScriptCall::CastShapeshiftForm { may_cast, .. } => *may_cast,
             ScriptCall::Select { may_cast, .. }

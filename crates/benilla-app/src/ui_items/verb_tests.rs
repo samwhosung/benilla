@@ -441,8 +441,9 @@ fn the_bind_answers_act_inside_their_calls() {
 
     let mut h = Bags::new();
     h.run("PickupContainerItem(0, 7) PickupInventoryItem(1)");
-    let locked: Option<i64> =
-        h.eval("CancelPendingEquip(0) return (select(3, GetContainerItemInfo(0, 7)))");
+    let locked: Option<i64> = h.eval(
+        "CancelPendingEquip(0) local _, _, locked = GetContainerItemInfo(0, 7) return locked",
+    );
     assert_eq!(
         locked, None,
         "the cancel unlocked the item before the next line"

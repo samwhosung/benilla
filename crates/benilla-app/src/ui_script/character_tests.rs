@@ -566,6 +566,7 @@ fn cursor_update_highlights_fitting_doll_slots_while_holding_a_bag_item() {
 fn model_pane_click_auto_equips_a_held_bag_item() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for f in super::test_ui::CHARACTER_UI {
         super::test_ui::load_ui_strict(&s, f);

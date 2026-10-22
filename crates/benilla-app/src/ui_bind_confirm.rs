@@ -25,8 +25,8 @@ pub(crate) const BIND_WHEN_USE: u32 = 3;
 /// the same sender with `suppress` set, so a slot that changed under the dialog is re-judged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PendingEquip {
-    /// `EQUIP_BIND_CONFIRM`, in Lua space so the re-issue goes back through the move drain's own
-    /// sender, which re-derives the wire pair and takes the pending-op lock.
+    /// `EQUIP_BIND_CONFIRM`, in Lua space so the re-issue goes back through the move's own sender,
+    /// which re-derives the wire pair.
     Swap {
         src_bag: i64,
         src_slot: u32,

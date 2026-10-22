@@ -7,7 +7,7 @@ use crate::script::binding_abi::{self, flag};
 use crate::script::container::ContainerMove;
 use crate::script::protected::{self, Tag};
 use crate::script::tick::verb;
-use crate::script::Model;
+use crate::script::{ItemCall, Model};
 
 use super::{
     clear, clear_cursor, equip::auto_equip_cursor_item, item_locked, lock_item, pick_up_item,
@@ -22,6 +22,7 @@ pub(super) fn pickup_inventory_item(lua: &Lua, id: u32) -> mlua::Result<bool> {
     // gate's tag 2.
     let may_cast = protected::gate(lua, Tag::CAST);
     let click = verb(lua, |model| doll_click(model, id, may_cast));
+    crate::script::item_calls::submit_item_calls(lua)?;
     crate::script::merchant::submit_slot_buys(lua)?;
     Ok(match click {
         DollClick::Done(repaint) => repaint,
@@ -79,7 +80,7 @@ pub(super) fn doll_click(model: &mut Model, id: u32, may_cast: bool) -> DollClic
                 may_cast,
             });
         } else if usable && (1..=19).contains(&id) {
-            model.inventory_repairs.push(id);
+            model.item_calls.push(ItemCall::RepairWorn(id));
         }
         return DollClick::Done(false);
     }
@@ -142,13 +143,13 @@ pub(super) fn doll_click(model: &mut Model, id: u32, may_cast: bool) -> DollClic
                 }
                 return DollClick::Done(auto_equip_cursor_item(model));
             }
-            model.container_moves.push(ContainerMove {
+            model.item_calls.push(ItemCall::Move(ContainerMove {
                 src_bag: held.bag,
                 src_slot: held.slot,
                 dst_bag: EQUIPMENT_BAG,
                 dst_slot: id,
                 count: None,
-            });
+            }));
             // The swap send clears with `ClearCursor(0,1)` (`0x5e0fe7`), then `LockItem` on the
             // occupant (`0x4c78c8`), an empty slot's zero guid signalling nothing (`0x4953ed`).
             clear(model, Clear::KEEP_LOCK);
@@ -210,6 +211,7 @@ pub(super) fn use_inventory_item(lua: &Lua, id: u32, on_self: bool) -> mlua::Res
     verb(lua, |model| {
         use_cleared(model, id, on_self, may_cast, &mut call)
     });
+    crate::script::item_calls::submit_item_calls(lua)?;
     if let Some(call) = call {
         crate::script::calls::submit(lua, call)?;
     }
@@ -261,7 +263,7 @@ fn use_cleared(
             .inv_slot("player", id as usize)
             .is_some_and(|s| s.item_id != 0)
     {
-        model.inventory_repairs.push(id);
+        model.item_calls.push(ItemCall::RepairWorn(id));
     }
 }
 
@@ -318,7 +320,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "AutoEquipCursorItem",
         lua.create_function(|lua, ()| {
             verb(lua, auto_equip_cursor_item);
-            Ok(())
+            crate::script::item_calls::submit_item_calls(lua)
         })?,
     )?;
     g.set(
@@ -560,6 +562,7 @@ mod tests {
     #[test]
     fn place_fitting_bag_item_onto_doll_slot_queues_move_and_clears() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_inventory_slots(doll_slots());
         s.set_container(0, Some(one_fitting_bag_item()));
 
@@ -585,6 +588,7 @@ mod tests {
     #[test]
     fn a_misfit_drop_auto_equips_or_goes_back() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_inventory_slots(doll_slots());
         // The bag item only fits HeadSlot (1); place it on NeckSlot (2).
         s.set_container(0, Some(one_fitting_bag_item()));
@@ -606,6 +610,7 @@ mod tests {
     #[test]
     fn doll_to_doll_ring_swap_fits_via_shared_equip_slots() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_inventory_slots(doll_slots());
 
         assert!(pickup_inventory_item(&s.lua, 11).unwrap());
@@ -700,6 +705,7 @@ mod tests {
     #[test]
     fn place_a_bag_onto_a_bag_slot_queues_the_equip_move() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_inventory_slots(doll_slots());
         let mut slots = std::collections::HashMap::new();
         slots.insert(
@@ -796,10 +802,12 @@ mod tests {
     #[test]
     fn auto_equip_cursor_item_queues_source_and_clears() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_container(0, Some(one_fitting_bag_item()));
         s.run("PickupContainerItem(0, 1)").unwrap();
 
         assert!(auto_equip_cursor_item(&mut s.model_mut()));
+        s.submit_filed_item_calls();
         assert!(s.cursor_item().is_none());
         assert_eq!(s.take_container_autoequips(), vec![(0, 1)]);
     }
@@ -811,6 +819,7 @@ mod tests {
     fn a_doll_place_locks_an_occupant_after_its_clear_and_an_empty_slot_signals_nothing() {
         use crate::script::tick::heard;
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         let slots = doll_slots();
         let head = slots[1].as_ref().unwrap().guid;
         let ring = slots[11].as_ref().unwrap().guid;
@@ -849,6 +858,7 @@ mod tests {
         use crate::script::tick::heard;
         const ARROWS: u64 = 0x4000_0000_0000_0a12;
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_inventory_slots(doll_slots());
         let mut bag = one_fitting_bag_item();
         bag.slots.insert(
@@ -902,6 +912,7 @@ mod tests {
 
         s.run("PickupInventoryItem(1)").unwrap();
         assert!(auto_equip_cursor_item(&mut s.model_mut()));
+        s.submit_filed_item_calls();
         assert!(s.cursor_item().is_none(), "put back");
         assert!(s.take_container_autoequips().is_empty());
 
@@ -910,6 +921,7 @@ mod tests {
         s.set_container(0, Some(state));
         s.run("SplitContainerItem(0, 1, 2)").unwrap();
         assert!(!auto_equip_cursor_item(&mut s.model_mut()));
+        s.submit_filed_item_calls();
         assert!(s.cursor_item().is_some(), "kept");
         assert!(s.take_container_autoequips().is_empty());
     }
@@ -990,6 +1002,7 @@ mod tests {
     #[test]
     fn repair_mode_queues_an_equipped_slot_without_picking_it_up() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_inventory_slots(doll_slots());
         s.set_merchant(Some(crate::script::MerchantState {
             can_repair: true,
@@ -1010,6 +1023,7 @@ mod tests {
     fn repair_mode_follows_the_doll_clicks_order() {
         use crate::script::cursor::CursorMoney;
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         let slots = doll_slots();
         let guid = slots[1].as_ref().unwrap().guid;
         s.set_inventory_slots(slots);
@@ -1044,6 +1058,7 @@ mod tests {
     #[test]
     fn repair_mode_right_click_puts_a_held_item_back_then_repairs() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_inventory_slots(doll_slots());
         s.run("PickupInventoryItem(11)").unwrap();
         assert!(s.cursor_item().is_some());
@@ -1083,6 +1098,7 @@ mod tests {
     #[test]
     fn equip_cursor_item_routes_through_pickup() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_inventory_slots(doll_slots());
         s.set_container(0, Some(one_fitting_bag_item()));
         s.run("PickupContainerItem(0, 1)").unwrap();
@@ -1156,7 +1172,9 @@ mod tests {
         s.set_item_pick_armed(true);
         s.run("PickupContainerItem(0, 1)").unwrap();
         assert!(
-            s.take_script_calls().is_empty(),
+            !s.take_script_calls()
+                .iter()
+                .any(|c| matches!(c, ScriptCall::PickItem(_))),
             "a click while carrying an item is a place, not a bind"
         );
         // The server's answer to the swap releases both ends.
@@ -1235,6 +1253,7 @@ mod tests {
     #[test]
     fn auto_equip_sends_a_bank_item_and_a_bank_bag() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         let mut vault = std::collections::HashMap::new();
         vault.insert(
             3,
@@ -1255,6 +1274,7 @@ mod tests {
         );
         s.run("PickupContainerItem(-1, 3)").unwrap();
         assert!(auto_equip_cursor_item(&mut s.model_mut()));
+        s.submit_filed_item_calls();
         assert_eq!(s.take_container_autoequips(), vec![(-1, 3)]);
         assert!(s.cursor_item().is_none());
 
@@ -1273,6 +1293,7 @@ mod tests {
             equip_slots: vec![20, 21, 22, 23],
         }));
         assert!(auto_equip_cursor_item(&mut s.model_mut()));
+        s.submit_filed_item_calls();
         assert_eq!(s.take_container_autoequips(), vec![(EQUIPMENT_BAG, 64)]);
     }
 

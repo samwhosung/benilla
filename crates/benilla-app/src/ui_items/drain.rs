@@ -1,5 +1,7 @@
-//! The per-frame drains that send the queued Lua container intents as `ClientCommand`s. The verbs
-//! lock what they touch in the call, as the reference's do; the drains only send.
+//! The item uses' engine half (`UseContainerItem`, `UseInventoryItem`, `ConfirmBindOnUse`) and
+//! the senders the item calls share ([`send_container_move`], [`send_auto_equip`]), all applied
+//! inside their verbs' calls. The verbs lock what they touch in the call, as the reference's do;
+//! these only send.
 
 use bevy::prelude::*;
 
@@ -47,97 +49,7 @@ pub(crate) fn send_auto_equip(
     }
 }
 
-/// Sends the auto-equips `AutoEquipCursorItem` queued through [`send_auto_equip`], and files the
-/// bind-on-equip questions it raised instead: those items stay held, so nothing is sent. The
-/// verb's clear kept the pickup's lock, an arrow's excepted (`0x5e1577`, `0x5e1711`).
-pub(super) fn drain_container_autoequips(
-    mut vm: crate::script_calls::VmWith<crate::ui_bind_confirm::BindGate<'static>>,
-    items: Res<Items>,
-    objects: Objects,
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    commands: Res<NetCommands>,
-) {
-    vm.turn(|script, mut gate| {
-        let Some(script) = script else {
-            return;
-        };
-        for (bag, slot, guid) in script.take_container_equip_asks() {
-            gate.defer_equip(
-                script,
-                crate::ui_bind_confirm::PendingEquip::AutoEquip { bag, slot, guid },
-            );
-        }
-        for (bag, slot) in script.take_container_autoequips() {
-            let Some((bag_index, wire_slot)) = wire_pos(bag, slot) else {
-                debug!("ui_items: autoequip ({bag}, {slot}) out of range — ignored");
-                continue;
-            };
-            let slot0 = u8::try_from(slot.saturating_sub(1)).unwrap_or(0);
-            let guid = self_q
-                .iter()
-                .next()
-                .and_then(|store| slot_guid(&store.0, bag, slot0, &objects));
-            send_auto_equip(
-                script, &objects, &items, &commands, bag_index, wire_slot, guid,
-            );
-        }
-    })
-}
-
-/// Sends the auto-stores `PutItemInBag`/`PutItemInBackpack` queued. The destination is a bag, not
-/// a slot (`0x4c7c00` to `0x5e12e0`): `CMSG_AUTOSTORE_BAG_ITEM` names `(srcbag, srcslot, dstbag)`
-/// and the server picks the slot. A split carry sends `CMSG_SPLIT_ITEM` instead (the reference's
-/// fork on `[0xb4b40c]`). Takes no pending lock.
-pub(super) fn drain_bag_autostores(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    commands: Res<NetCommands>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        for a in script.take_bag_autostores() {
-            let (Some((src_bag, src_slot)), Some((dst_bag, _))) =
-                (wire_pos(a.src_bag, a.src_slot), wire_pos(a.dst_bag, 1))
-            else {
-                debug!("ui_items: bag autostore {a:?} out of range — ignored");
-                continue;
-            };
-            match a.count {
-                None => {
-                    debug!(
-                        "ui_items: autostore lua {}/{} → bag {} (wire {src_bag}/{src_slot} → \
-                         {dst_bag})",
-                        a.src_bag, a.src_slot, a.dst_bag
-                    );
-                    let _ = commands.0.send(ClientCommand::AutoStoreBagItem {
-                        src_bag,
-                        src_slot,
-                        dst_bag,
-                    });
-                }
-                Some(n) => {
-                    let count = n.min(u32::from(u8::MAX)) as u8;
-                    debug!(
-                        "ui_items: autostore split lua {}/{} → bag {} × {count} (wire \
-                         {src_bag}/{src_slot} → {dst_bag})",
-                        a.src_bag, a.src_slot, a.dst_bag
-                    );
-                    let _ = commands.0.send(ClientCommand::SplitItem {
-                        src_bag,
-                        src_slot,
-                        dst_bag,
-                        // The reference's literal for no destination slot.
-                        dst_slot: 0xFF,
-                        count,
-                    });
-                }
-            }
-        }
-    })
-}
-
-/// What a `UseContainerItem` or `UseInventoryItem` call reads and writes.
+/// What a `UseContainerItem`, `UseInventoryItem` or `ConfirmBindOnUse` call reads and writes.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ScriptItemUse<'w, 's> {
     self_q: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
@@ -454,6 +366,42 @@ impl ScriptItemUse<'_, '_> {
         }
         None
     }
+
+    /// `ConfirmBindOnUse()` (`0x48d770`): the pending use re-issued through the cast ladder with
+    /// `suppress` set (`0x5d92c1`). The pending state is one cell, taken by the first accept
+    /// whatever the protected-action gate said (`0x5d92c6`-`0x5d92cc`), so a doubled accept does
+    /// nothing; the cast inside it asks tag 2 (`0x6e4bc1`).
+    pub(crate) fn confirm_bind_on_use(&mut self, script: &mut UiScript, may_cast: bool) {
+        let Self {
+            targeting,
+            ladder,
+            ui_errors,
+            gate,
+            ..
+        } = self;
+        let Some(it) = gate.on_use.0.take() else {
+            return;
+        };
+        if super::item_use_refused(script, it.guid) {
+            debug!("ui_items: bind-on-use confirmed on a locked item — refused");
+            return;
+        }
+        debug!(
+            "ui_items: bind-on-use confirmed for wire {}/{}",
+            it.bag_index, it.slot
+        );
+        ladder.permit(may_cast);
+        super::send_item_use(
+            it,
+            &targeting.context(),
+            ladder,
+            script,
+            gate,
+            true,
+            ui_errors,
+        );
+        ladder.permit(true);
+    }
 }
 
 /// Whether the call took a lock for `arm`, which a send that never goes out lets go. A projectile's
@@ -465,71 +413,7 @@ fn arm_locked(arm: UseArm) -> bool {
     )
 }
 
-/// Sends the repair-mode clicks, bag and paper doll, as `CMSG_REPAIR_ITEM`.
-pub(super) fn drain_container_repairs(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    merchant: Res<crate::ui_merchant::MerchantOpen>,
-    objects: Objects,
-    commands: Res<NetCommands>,
-    mut purse: crate::ui_merchant::RepairPurse,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        let me = self_q.iter().next();
-        // Repair-mode clicks (the reference's `0x4f9c7b` route) repair the one item: the purse test
-        // first (`0x4f9cc8`), then `ITEM_REPAIR` as it goes out (`0x4f9ce4`).
-        for (bag, slot) in script.take_container_repairs() {
-            let (Some(vendor), Some(me)) = (merchant.vendor, me) else {
-                continue;
-            };
-            let slot0 = u8::try_from(slot.saturating_sub(1)).unwrap_or(0);
-            match slot_guid(&me.0, bag, slot0, &objects) {
-                Some(guid) => {
-                    if purse.refuses(script, &merchant, me, [guid]) {
-                        continue;
-                    }
-                    debug!("ui_items: repair lua bag {bag} slot {slot} (item {guid:#x})");
-                    script.queue_sound_kit("ITEM_REPAIR");
-                    let _ = commands.0.send(ClientCommand::RepairItem {
-                        vendor,
-                        item_guid: guid,
-                    });
-                }
-                None => debug!("ui_items: repair on empty slot (bag {bag} slot {slot}) — ignored"),
-            }
-        }
-        // The paper doll's repair clicks (`0x4c7714`, `0x4c79c4`), the same arm on a worn item.
-        for id in script.take_inventory_repairs() {
-            let (Some(vendor), Some(me)) = (merchant.vendor, me) else {
-                continue;
-            };
-            let item_guid = u8::try_from(id.wrapping_sub(1))
-                .ok()
-                .and_then(|slot0| slot_guid(&me.0, EQUIPMENT_BAG, slot0, &objects));
-            match item_guid {
-                Some(guid) if (1..=19).contains(&id) => {
-                    if purse.refuses(script, &merchant, me, [guid]) {
-                        continue;
-                    }
-                    debug!("ui_items: repair worn lua slot {id} (item {guid:#x})");
-                    script.queue_sound_kit("ITEM_REPAIR");
-                    let _ = commands.0.send(ClientCommand::RepairItem {
-                        vendor,
-                        item_guid: guid,
-                    });
-                }
-                _ => debug!(
-                    "ui_items: repair on worn lua slot {id}, empty or out of range — ignored"
-                ),
-            }
-        }
-    })
-}
-
-/// The clicked item's send data, read at the drain.
+/// The clicked item's send data, read as the call applies.
 #[derive(Clone, Copy)]
 struct Clicked {
     guid: u64,
@@ -587,51 +471,6 @@ pub(crate) fn dispatch_fork(
     } else {
         UseFork::Plain
     }
-}
-
-/// Sends the gift wraps and the moves `PickupContainerItem`/`SplitContainerItem` queued, the moves
-/// through [`send_container_move`].
-pub(super) fn drain_container_moves(
-    mut vm: crate::script_calls::VmWith<crate::ui_bind_confirm::BindGate<'static>>,
-    commands: Res<NetCommands>,
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    objects: Objects,
-    items: Res<Items>,
-) {
-    vm.turn(|script, mut gate| {
-        let Some(script) = script else {
-            return;
-        };
-        let store = self_q.iter().next();
-        // A left-click that spent an armed paper: paper first, then the target. Eligibility is the
-        // server's, refused with an `ERR_CANT_WRAP_*` reason.
-        for (gift_bag, gift_slot, item_bag, item_slot) in script.take_container_wraps() {
-            let (Some((gift_bag_index, gift_wire_slot)), Some((item_bag_index, item_wire_slot))) =
-                (wire_pos(gift_bag, gift_slot), wire_pos(item_bag, item_slot))
-            else {
-                debug!(
-                    "ui_items: WrapItem({gift_bag}/{gift_slot} → {item_bag}/{item_slot}) out of \
-                 range — ignored"
-                );
-                continue;
-            };
-            debug!(
-                "ui_items: wrap {item_bag}/{item_slot} with the paper at {gift_bag}/{gift_slot} \
-             (wire {gift_bag_index}/{gift_wire_slot} → {item_bag_index}/{item_wire_slot})"
-            );
-            let _ = commands.0.send(ClientCommand::WrapItem {
-                gift_bag: gift_bag_index,
-                gift_slot: gift_wire_slot,
-                item_bag: item_bag_index,
-                item_slot: item_wire_slot,
-            });
-        }
-        for mv in script.take_container_moves() {
-            send_container_move(
-                script, &mut gate, &objects, &items, &commands, store, mv, false,
-            );
-        }
-    })
 }
 
 /// The equip deferral's positions (`0x5e0c40`): slots 0..=22 (equipment and equipped bags) and
@@ -737,55 +576,12 @@ pub(crate) fn send_container_move(
     true
 }
 
-/// Sends the destroys `DeleteCursorItem` queued as `CMSG_DESTROYITEM` (count 0 is the whole stack
-/// on both sides); the verb relocked the item (`0x4898bc`).
-pub(super) fn drain_container_destroys(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    commands: Res<NetCommands>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        for (bag, slot, count) in script.take_container_destroys() {
-            let Some((bag_index, wire_slot)) = wire_pos(bag, slot) else {
-                debug!("ui_items: destroy ({bag}, {slot}) out of range — ignored");
-                continue;
-            };
-            let count = count.min(u32::from(u8::MAX)) as u8;
-            debug!("ui_items: destroy lua {bag}/{slot} × {count} (wire {bag_index}/{wire_slot})");
-            let _ = commands.0.send(ClientCommand::DestroyItem {
-                bag_index,
-                slot: wire_slot,
-                count,
-            });
-        }
-    })
-}
-
-/// The bag clicks of a harness's VM ([`UiScript::keep_calls`]): the repair-mode drain, then the
-/// kept `UseContainerItem` calls through their applier and an open through the loot window's, as
-/// the app's host applies each inside its verb.
+/// The bag clicks of a harness's VM ([`UiScript::keep_calls`]), applied as the app's host applies
+/// each inside its verb ([`super::calls::apply_kept_calls`]).
 #[cfg(test)]
 fn run_container_clicks(world: &mut World) {
-    use benilla_ui::script::ScriptCall;
-    use bevy::ecs::system::{ParamSet, RunSystemOnce};
     crate::ui_loot::seat_loot_steps(world);
-    world.run_system_once(drain_container_repairs).unwrap();
-    world
-        .run_system_once(
-            |mut script: NonSendMut<UiScript>,
-             mut set: ParamSet<(ScriptItemUse, crate::ui_loot::LootSteps)>| {
-                for call in script.take_script_calls() {
-                    if let ScriptCall::UseContainerItem(call) = call {
-                        if let Some(open) = set.p0().use_container_item(&mut script, call) {
-                            let _ = set.p1().open_item(&mut script, open);
-                        }
-                    }
-                }
-            },
-        )
-        .unwrap();
+    super::calls::apply_kept_calls(world);
 }
 
 /// A VM with no engine behind it, which keeps its calls for the harness to apply.
@@ -1243,7 +1039,6 @@ mod tests {
     /// the class (`0x5e16ff`), not the inventory type.
     #[test]
     fn a_projectile_picked_up_unresolved_loads_by_class_and_unlocks() {
-        use bevy::ecs::system::RunSystemOnce;
         let (mut app, rx) = open_the_clam();
         while rx.try_recv().is_ok() {} // drain the clam's own send
         {
@@ -1276,9 +1071,7 @@ mod tests {
                 ..crate::items::test_template("Odd Arrow")
             }),
         );
-        app.world_mut()
-            .run_system_once(drain_container_autoequips)
-            .unwrap();
+        crate::ui_items::calls::apply_kept_item_calls(app.world_mut());
         assert!(matches!(
             rx.try_recv(),
             Ok(ClientCommand::SetAmmo { entry: CLAM_ENTRY })
@@ -1695,167 +1488,11 @@ mod tests {
     }
 }
 
-/// The answers to `EquipPendingItem`/`CancelPendingEquip`. Accept re-runs the original sender with
-/// `suppress` set, as the reference's `0x5e1be0` does: 1.12 has no confirm opcode, and a slot that
-/// changed under the dialog is judged afresh. Cancel sends nothing, unlocks the items the click
-/// locked and frees the record: a swap's two ends as they sit now (`0x5e1ca5`, `0x5e1d04`), an
-/// auto-equip's one item, its record naming no second container (`0x5e1cd1`).
-pub(super) fn drain_bind_confirm_answers(
-    mut vm: crate::script_calls::VmWith<(
-        crate::ui_bind_confirm::BindGate<'static>,
-        MessageWriter<'static, crate::sound::AutoEquipSound>,
-    )>,
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    objects: Objects,
-    items: Res<Items>,
-    commands: Res<NetCommands>,
-) {
-    vm.turn(|script, (mut gate, mut equip_sound)| {
-        let Some(script) = script else {
-            return;
-        };
-        let store = self_q.iter().next();
-        for answer in script.take_pending_equip_answers() {
-            // An unfiled index does nothing: `0x5e1be0` bounds-checks it and returns.
-            let Some(rec) = gate.equips.take(answer.index) else {
-                debug!(
-                    "ui_items: bind answer for index {} — no such pending equip",
-                    answer.index
-                );
-                continue;
-            };
-            if !answer.accept {
-                debug!("ui_items: pending equip {} cancelled", answer.index);
-                let at = |bag: i64, slot: u32| {
-                    let slot0 = u8::try_from(slot.saturating_sub(1)).unwrap_or(0);
-                    store.and_then(|s| slot_guid(&s.0, bag, slot0, &objects))
-                };
-                let locked = match rec {
-                    crate::ui_bind_confirm::PendingEquip::Swap {
-                        src_bag,
-                        src_slot,
-                        dst_bag,
-                        dst_slot,
-                    } => [at(src_bag, src_slot), at(dst_bag, dst_slot)],
-                    crate::ui_bind_confirm::PendingEquip::AutoEquip { guid, .. } => {
-                        [Some(guid), None]
-                    }
-                };
-                for guid in locked.into_iter().flatten() {
-                    script.unlock_item(guid);
-                }
-                continue;
-            }
-            match rec {
-                crate::ui_bind_confirm::PendingEquip::Swap {
-                    src_bag,
-                    src_slot,
-                    dst_bag,
-                    dst_slot,
-                } => {
-                    send_container_move(
-                        script,
-                        &mut gate,
-                        &objects,
-                        &items,
-                        &commands,
-                        store,
-                        benilla_ui::script::ContainerMove {
-                            src_bag,
-                            src_slot,
-                            dst_bag,
-                            dst_slot,
-                            count: None,
-                        },
-                        true,
-                    );
-                }
-                // The accept re-issues the pick-up and auto-equip from the slot as it stands
-                // (`0x5e1c23` into `0x5e1840`, `suppress` set): `SetCursorItem`'s clear drops and
-                // unlocks the held item, then the equip goes out. A slot emptied under the dialog
-                // sends nothing (`0x5e18da`).
-                crate::ui_bind_confirm::PendingEquip::AutoEquip { bag, slot, .. } => {
-                    if let benilla_ui::script::AutoEquip::Sent { bag, slot, guid } =
-                        script.auto_equip_slot(bag, slot, true)
-                    {
-                        if let Some((bag_index, wire_slot)) = wire_pos(bag, slot) {
-                            send_auto_equip(
-                                script,
-                                &objects,
-                                &items,
-                                &commands,
-                                bag_index,
-                                wire_slot,
-                                Some(guid),
-                            );
-                            // The re-issue's `SetCursorItem` and send clear play their pair inside
-                            // the answer (`0x494c4a`, `0x49520a`), after the held item's own clear.
-                            if let Some(display_id) = objects
-                                .object(guid)
-                                .and_then(|o| o.object_entry())
-                                .and_then(|entry| items.template(entry, guid, Ask::Read))
-                                .map(|t| t.display_info_id)
-                            {
-                                equip_sound.write(crate::sound::AutoEquipSound { display_id });
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    })
-}
-
-/// `ConfirmBindOnUse()`: re-issues the pending use through the cast ladder with `suppress` set.
-/// The pending state is one cell, taken on the first accept, so a doubled accept does nothing.
-pub(super) fn drain_bind_on_use_confirms(
-    mut vm: crate::script_calls::VmWith<(
-        crate::spell::cast_target::CastTargeting<'static, 'static>,
-        crate::spell::CastLadder<'static, 'static>,
-        crate::ui_bind_confirm::BindGate<'static>,
-    )>,
-    ui_errors: Res<crate::ui_action::UiErrorKeys>,
-) {
-    vm.turn(|script, (targeting, mut ladder, mut gate)| {
-        let Some(script) = script else {
-            return;
-        };
-        // The first accept spends the pending use, whatever the protected-action gate said; the
-        // cast inside it asks tag 2 (`0x5d92c1` → `0x6e4bc1`).
-        let Some(may_cast) = script.take_bind_on_use_casts().first().copied() else {
-            return;
-        };
-        let Some(it) = gate.on_use.0.take() else {
-            return;
-        };
-        if super::item_use_refused(script, it.guid) {
-            debug!("ui_items: bind-on-use confirmed on a locked item — refused");
-            return;
-        }
-        debug!(
-            "ui_items: bind-on-use confirmed for wire {}/{}",
-            it.bag_index, it.slot
-        );
-        ladder.permit(may_cast);
-        super::send_item_use(
-            it,
-            &targeting.context(),
-            &mut ladder,
-            script,
-            &mut gate,
-            true,
-            &ui_errors,
-        );
-        ladder.permit(true);
-    })
-}
-
 #[cfg(test)]
 mod bind_confirm_tests {
     use super::*;
     use benilla_protocol::messages::{ItemInfo, ObjectFields};
     use benilla_ui::script::{ContainerSlot, ContainerState};
-    use bevy::ecs::system::RunSystemOnce;
 
     /// Flurry Axe, a real `item_template` row: quality 4, bonding 2 (bind on equip).
     const FLURRY_AXE: u32 = 871;
@@ -1926,7 +1563,7 @@ mod bind_confirm_tests {
         }
     }
 
-    /// Places the axe from backpack slot 1 on the empty main hand and runs the move drain.
+    /// Places the axe from backpack slot 1 on the empty main hand and applies the move's call.
     fn place_the_axe_on_the_doll() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         place_the_axe_with(2, 4, false)
     }
@@ -1988,9 +1625,7 @@ mod bind_confirm_tests {
         script.run("PickupContainerItem(0, 1)").unwrap();
         script.run("PickupInventoryItem(16)").unwrap();
         app.insert_non_send_resource(script);
-        app.world_mut()
-            .run_system_once(drain_container_moves)
-            .unwrap();
+        crate::ui_items::calls::apply_kept_item_calls(app.world_mut());
         (app, rx)
     }
 
@@ -2004,8 +1639,8 @@ mod bind_confirm_tests {
     }
 
     /// The question is queued behind the place's own `CURSOR_UPDATE`, whose `StaticPopup_Hide`
-    /// (`UIParent.lua:357-359`) would otherwise cancel it unseen: benilla drains a step after the
-    /// input pass, where the reference defers inside the call. A later cursor change retires it.
+    /// (`UIParent.lua:357-359`) would otherwise cancel it unseen: the reference's signal waits for
+    /// the event pass as the queued event does. A later cursor change retires it.
     #[test]
     fn placing_a_boe_on_the_doll_asks_and_survives_its_own_cursor_update() {
         benilla_formats::wow_data_or_skip!();
@@ -2016,7 +1651,7 @@ mod bind_confirm_tests {
         );
         assert!(
             !shown(&mut app, "EQUIP_BIND"),
-            "the question is queued, so it is not up in the drain's own frame"
+            "the question is queued, so it is not up in the call's own frame"
         );
 
         // The next tick flushes the place's CURSOR_UPDATE, then the question.
@@ -2050,9 +1685,7 @@ mod bind_confirm_tests {
             !shown(&mut app, "EQUIP_BIND"),
             "a later cursor change still retires the stale question"
         );
-        app.world_mut()
-            .run_system_once(drain_bind_confirm_answers)
-            .unwrap();
+        crate::ui_items::calls::apply_kept_item_calls(app.world_mut());
         assert_eq!(
             app.world()
                 .resource::<crate::ui_bind_confirm::PendingEquips>()
@@ -2080,9 +1713,7 @@ mod bind_confirm_tests {
             .non_send_resource_mut::<UiScript>()
             .run("StaticPopup_OnClick(StaticPopup_FindVisible(\"EQUIP_BIND\"), 1)")
             .unwrap();
-        app.world_mut()
-            .run_system_once(drain_bind_confirm_answers)
-            .unwrap();
+        crate::ui_items::calls::apply_kept_item_calls(app.world_mut());
 
         // Backpack slot 1 is 255/23 and the main hand 255/15, both in the player's own array.
         let sent: Vec<_> = rx.try_iter().collect();
@@ -2136,14 +1767,12 @@ mod bind_confirm_tests {
             let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
             let answers = s.take_pending_equip_answers();
             assert_eq!(answers.len(), 2, "OnCancel and OnHide both fire");
-            // Back in the queue for the drain, as the popup filed them.
+            // Answered again as calls, as the popup made them.
             for a in answers {
                 s.run(&format!("CancelPendingEquip({})", a.index)).unwrap();
             }
         }
-        app.world_mut()
-            .run_system_once(drain_bind_confirm_answers)
-            .unwrap();
+        crate::ui_items::calls::apply_kept_item_calls(app.world_mut());
         assert!(rx.try_iter().next().is_none(), "a cancel never sends");
         assert!(!app
             .world()
@@ -2246,9 +1875,7 @@ mod bind_confirm_tests {
         script.run("PickupContainerItem(0, 1)").unwrap();
         script.run("AutoEquipCursorItem()").unwrap();
         app.insert_non_send_resource(script);
-        app.world_mut()
-            .run_system_once(drain_container_autoequips)
-            .unwrap();
+        crate::ui_items::calls::apply_kept_item_calls(app.world_mut());
 
         assert!(
             rx.try_iter().next().is_none(),
@@ -2279,9 +1906,7 @@ mod bind_confirm_tests {
             .non_send_resource_mut::<UiScript>()
             .run("StaticPopup_OnClick(StaticPopup_FindVisible(\"AUTOEQUIP_BIND\"), 1)")
             .unwrap();
-        app.world_mut()
-            .run_system_once(drain_bind_confirm_answers)
-            .unwrap();
+        crate::ui_items::calls::apply_kept_item_calls(app.world_mut());
         let sent: Vec<_> = rx.try_iter().collect();
         assert!(
             matches!(
@@ -2354,9 +1979,7 @@ mod bind_confirm_tests {
         script.run("PickupContainerItem(0, 1)").unwrap();
         script.run("AutoEquipCursorItem()").unwrap();
         app.insert_non_send_resource(script);
-        app.world_mut()
-            .run_system_once(drain_container_autoequips)
-            .unwrap();
+        crate::ui_items::calls::apply_kept_item_calls(app.world_mut());
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .tick(0.01);
@@ -2370,9 +1993,7 @@ mod bind_confirm_tests {
                 s.run(&format!("CancelPendingEquip({})", a.index)).unwrap();
             }
         }
-        app.world_mut()
-            .run_system_once(drain_bind_confirm_answers)
-            .unwrap();
+        crate::ui_items::calls::apply_kept_item_calls(app.world_mut());
 
         assert!(rx.try_iter().next().is_none(), "a cancel sends nothing");
         let script = app.world().non_send_resource::<UiScript>();
@@ -2422,9 +2043,7 @@ mod bind_confirm_tests {
             s.run("PickupInventoryItem(16)").unwrap();
         }
         let _ = rx.try_iter().count();
-        app.world_mut()
-            .run_system_once(drain_container_moves)
-            .unwrap();
+        crate::ui_items::calls::apply_kept_item_calls(app.world_mut());
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .tick(0.01);
@@ -2619,16 +2238,14 @@ mod bind_confirm_tests {
             .non_send_resource_mut::<UiScript>()
             .run("StaticPopup_OnClick(StaticPopup_FindVisible(\"USE_BIND\"), 1)")
             .unwrap();
-        app.world_mut()
-            .run_system_once(drain_bind_on_use_confirms)
-            .unwrap();
+        crate::ui_items::calls::apply_kept_calls(app.world_mut());
         assert!(
             rx.try_iter().count() > 0,
             "the accept re-issues the use rather than sending a confirm packet"
         );
     }
 
-    /// The question the call raised is filed whatever the slot holds by the time the drain runs:
+    /// The question the call raised is filed whatever the slot holds by the time it applies:
     /// the reference asked inside the call (`0x5e16c6`), the item is on the cursor, and the answer
     /// re-judges the slot. A miss here used to unlock the item and leave it held with no record.
     #[test]
@@ -2701,7 +2318,7 @@ mod bind_confirm_tests {
         script.set_container(0, Some(bag));
         script.run("UseContainerItem(0, 1)").unwrap();
         app.insert_non_send_resource(script);
-        // The frame applied a move before the drain: the slot is empty now.
+        // A move applied before the question's call: the slot is empty now.
         app.world_mut()
             .entity_mut(me)
             .insert(ObjectStore(ObjectFields::default()));
@@ -2735,18 +2352,14 @@ mod bind_confirm_tests {
             .non_send_resource_mut::<UiScript>()
             .run(r#"RunScript("ConfirmBindOnUse()")"#)
             .unwrap();
-        app.world_mut()
-            .run_system_once(drain_bind_on_use_confirms)
-            .unwrap();
+        crate::ui_items::calls::apply_kept_calls(app.world_mut());
         let sent: Vec<String> = rx.try_iter().map(|c| format!("{c:?}")).collect();
         assert_eq!(sent, Vec::<String>::new(), "the cast is refused");
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .run("ConfirmBindOnUse()")
             .unwrap();
-        app.world_mut()
-            .run_system_once(drain_bind_on_use_confirms)
-            .unwrap();
+        crate::ui_items::calls::apply_kept_calls(app.world_mut());
         assert_eq!(rx.try_iter().count(), 0, "the pending use was spent");
     }
 
@@ -2763,9 +2376,7 @@ mod bind_confirm_tests {
             s.run("StaticPopup_OnClick(StaticPopup_FindVisible(\"USE_BIND\"), 1)")
                 .unwrap();
         }
-        app.world_mut()
-            .run_system_once(drain_bind_on_use_confirms)
-            .unwrap();
+        crate::ui_items::calls::apply_kept_calls(app.world_mut());
         assert_eq!(rx.try_iter().count(), 0, "a locked item is not used");
     }
 

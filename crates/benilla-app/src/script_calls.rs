@@ -113,7 +113,7 @@ pub(crate) struct ScriptCallHost<'w, 's> {
                 'w,
                 's,
                 (
-                    crate::ui_items::ScriptItemUse<'w, 's>,
+                    crate::ui_items::BagSteps<'w, 's>,
                     crate::ui_loot::LootSteps<'w, 's>,
                     crate::ui_mail::MailVerbs<'w>,
                     crate::ui_quest::QuestVerbs<'w, 's>,
@@ -190,13 +190,21 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 }
             }
             ScriptCall::UseContainerItem(call) => {
-                if let Some(open) = appliers.p5().p0().use_container_item(script, call) {
+                if let Some(open) = appliers.p5().p0().p0().use_container_item(script, call) {
                     tail = appliers.p5().p1().open_item(script, open);
                 }
             }
-            ScriptCall::UseInventoryItem { slot, on_self, .. } => {
-                appliers.p5().p0().use_inventory_item(script, slot, on_self)
-            }
+            ScriptCall::UseInventoryItem { slot, on_self, .. } => appliers
+                .p5()
+                .p0()
+                .p0()
+                .use_inventory_item(script, slot, on_self),
+            ScriptCall::Item(benilla_ui::script::ItemCall::BindOnUse { may_cast }) => appliers
+                .p5()
+                .p0()
+                .p0()
+                .confirm_bind_on_use(script, may_cast),
+            ScriptCall::Item(call) => appliers.p5().p0().p1().apply(script, call),
             ScriptCall::CastPetSpell { spell_id, on_self } => {
                 let send =
                     crate::ui_pet_book::begin_pet_book_cast(&mut appliers.p6(), spell_id, on_self);

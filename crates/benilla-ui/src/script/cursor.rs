@@ -705,8 +705,8 @@ pub(crate) fn split_container_item(
     Ok(true)
 }
 
-/// `DeleteCursorItem()` (`0x4897b0`), the delete popup's accept: a held item queues its
-/// `(bag, slot, count)` destroy, count 0 for the whole stack, then `ClearCursor(1,1)`
+/// `DeleteCursorItem()` (`0x4897b0`), the delete popup's accept: a held item files its
+/// `(bag, slot, count)` destroy for the host, count 0 for the whole stack, then `ClearCursor(1,1)`
 /// (`0x4898af`) and `LockItem` on it again (`0x4898bc`) for the server's answer; anything else is
 /// a no-op.
 pub(crate) fn delete_cursor_item(model: &mut Model) {
@@ -714,9 +714,11 @@ pub(crate) fn delete_cursor_item(model: &mut Model) {
         return;
     };
     let item = item.clone();
-    model
-        .container_destroys
-        .push((item.bag, item.slot, item.count.unwrap_or(0)));
+    model.item_calls.push(super::ItemCall::Destroy {
+        bag: item.bag,
+        slot: item.slot,
+        count: item.count.unwrap_or(0),
+    });
     clear_cursor(model);
     lock_item(model, item.guid);
 }
@@ -1073,7 +1075,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "DeleteCursorItem",
         lua.create_function(|lua, ()| {
             super::tick::verb(lua, delete_cursor_item);
-            Ok(())
+            super::item_calls::submit_item_calls(lua)
         })?,
     )?;
 
@@ -1387,6 +1389,7 @@ mod tests {
     #[test]
     fn the_bag_place_arm_locks_the_destination_before_its_two_clears() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         let mut bag = one_item_backpack();
         let mut other = bag.slots[&1].clone();
         other.item_id = 118;
@@ -1556,6 +1559,7 @@ mod tests {
     #[test]
     fn delete_cursor_item_queues_destroy_and_clears() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_container(0, Some(one_item_backpack()));
         s.run("PickupContainerItem(0, 1)").unwrap();
         assert!(s.cursor_item().is_some());
@@ -1572,6 +1576,7 @@ mod tests {
     #[test]
     fn delete_cursor_item_unlocks_in_its_clear_and_locks_again() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_container(0, Some(one_item_backpack()));
         s.run("PickupContainerItem(0, 1)").unwrap();
         heard::listen(

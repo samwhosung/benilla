@@ -3,10 +3,11 @@
 //! [`feed`] builds each bag from the player's descriptor (the backpack's `PACK_SLOT` array, the
 //! equipped bags at `INV_SLOT` 19-22 with their own `CONTAINER_FIELD_SLOT` arrays, the keyring at
 //! 81.. with no container object, like the bank), the object index and the template cache, and
-//! fires `BAG_UPDATE(bagID)` per changed bag. [`drain`] sends the Lua intents over [`wire_pos`]:
-//! an equippable item that starts no quest goes out as `CMSG_AUTOEQUIP_ITEM`, anything else
-//! through [`send_item_use`]. The cursor verbs lock what they pick up and place onto, and the
-//! server's answer lifts it ([`crate::ui_items::locks`]).
+//! fires `BAG_UPDATE(bagID)` per changed bag. The verbs' calls send inside their verbs over
+//! [`wire_pos`]: [`drain`]'s item use takes an equippable item that starts no quest out as
+//! `CMSG_AUTOEQUIP_ITEM` and anything else through [`send_item_use`], and [`calls`] the cursor's
+//! moves, stores, repairs, destroys and bind answers. The cursor verbs lock what they pick up and
+//! place onto, and the server's answer lifts it ([`crate::ui_items::locks`]).
 
 use benilla_protocol::messages::{BAG_PLAYER_INVENTORY, SLOT_BAG_FIRST, SLOT_PACK_FIRST};
 use benilla_protocol::ObjectFields;
@@ -18,6 +19,7 @@ use crate::net::Objects;
 use crate::query_cache::Ask;
 use crate::ui_unit::UnitFeed;
 
+mod calls;
 mod drain;
 mod equip_error;
 pub(crate) mod feed;
@@ -28,12 +30,10 @@ mod net;
 mod verb_tests;
 
 pub(crate) use drain::{dispatch_fork, send_auto_equip};
-use drain::{
-    drain_bag_autostores, drain_container_autoequips, drain_container_destroys,
-    drain_container_moves, drain_container_repairs,
-};
 pub(crate) use equip_error::equip_error_key;
-// `UseContainerItem` and `UseInventoryItem`, applied in call order by `crate::script_calls`.
+// `UseContainerItem`, `UseInventoryItem` and the item verbs' calls, applied in call order by
+// `crate::script_calls`.
+pub(crate) use calls::BagSteps;
 pub(crate) use drain::ScriptItemUse;
 use feed::{
     ask_item_build_lookups, feed_containers, feed_item_sets, feed_item_stats, feed_player_req,
@@ -1082,22 +1082,6 @@ impl Plugin for UiItemsPlugin {
                     // The item tooltip's lock check: `Lock.dbc` once, the player's openers on change.
                     lock_openers::feed_lock_rows.in_set(UnitFeed),
                     lock_openers::feed_lock_openers.in_set(UnitFeed),
-                    // After the input pass, so a repair-mode click goes out the same frame; a
-                    // plain `UseContainerItem` is a script call.
-                    drain_container_repairs.in_set(crate::ui_script::UiDrain),
-                    // Pick, place and split: `CMSG_SWAP_INV_ITEM`, `CMSG_SWAP_ITEM` or
-                    // `CMSG_SPLIT_ITEM`.
-                    drain_container_moves.in_set(crate::ui_script::UiDrain),
-                    // The delete-confirm popup's accept: `CMSG_DESTROYITEM`.
-                    drain_container_destroys.in_set(crate::ui_script::UiDrain),
-                    // `AutoEquipCursorItem`: `CMSG_AUTOEQUIP_ITEM`.
-                    drain_container_autoequips.in_set(crate::ui_script::UiDrain),
-                    drain_bag_autostores.in_set(crate::ui_script::UiDrain),
-                    // The soulbind confirmations' answers (`EquipPendingItem`,
-                    // `CancelPendingEquip`, `ConfirmBindOnUse`). A dialog is answered in a later
-                    // frame than it was raised, so no order against the other drains is needed.
-                    drain::drain_bind_confirm_answers.in_set(crate::ui_script::UiDrain),
-                    drain::drain_bind_on_use_confirms.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

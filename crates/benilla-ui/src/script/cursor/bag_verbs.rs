@@ -4,7 +4,7 @@ use mlua::{Lua, MultiValue, Value};
 
 use crate::script::container::ContainerMove;
 use crate::script::tick::verb;
-use crate::script::Model;
+use crate::script::{ItemCall, Model};
 
 use super::doll::{doll_click, DollClick};
 use super::{
@@ -113,13 +113,13 @@ pub(super) fn put_item_in_bag(model: &mut Model, live: u32) -> bool {
         // A swap (`0x5e0c40`). A split stack cannot swap and stays held: the reference splits
         // only when storing.
         if held.count.is_none() {
-            model.container_moves.push(ContainerMove {
+            model.item_calls.push(ItemCall::Move(ContainerMove {
                 src_bag: held.bag,
                 src_slot: held.slot,
                 dst_bag: EQUIPMENT_BAG,
                 dst_slot: live,
                 count: None,
-            });
+            }));
             // `LockItem` on the occupant (`0x4c7d62`, `0x4c7dca`), then the swap send's
             // `ClearCursor(0,1)` (`0x5e0fe7`).
             lock_item(model, occupant.unwrap_or(0));
@@ -133,12 +133,14 @@ pub(super) fn put_item_in_bag(model: &mut Model, live: u32) -> bool {
     let Some(dst_bag) = autostore_container(live) else {
         return false;
     };
-    model.bag_autostores.push(crate::script::BagAutoStore {
-        src_bag: held.bag,
-        src_slot: held.slot,
-        dst_bag,
-        count: held.count,
-    });
+    model
+        .item_calls
+        .push(ItemCall::AutoStore(crate::script::BagAutoStore {
+            src_bag: held.bag,
+            src_slot: held.slot,
+            dst_bag,
+            count: held.count,
+        }));
     // `ClearCursor(0,1)` past the send (`0x4c7e55`), locking nothing new.
     clear(model, Clear::KEEP_LOCK);
     true
@@ -151,12 +153,14 @@ pub(super) fn put_item_in_backpack(model: &mut Model) -> bool {
     let Some(CursorPayload::Item(held)) = model.cursor.clone() else {
         return false;
     };
-    model.bag_autostores.push(crate::script::BagAutoStore {
-        src_bag: held.bag,
-        src_slot: held.slot,
-        dst_bag: 0,
-        count: held.count,
-    });
+    model
+        .item_calls
+        .push(ItemCall::AutoStore(crate::script::BagAutoStore {
+            src_bag: held.bag,
+            src_slot: held.slot,
+            dst_bag: 0,
+            count: held.count,
+        }));
     clear(model, Clear::KEEP_LOCK);
     true
 }
@@ -256,12 +260,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // `Invalid bag slot in PutItemInBag` (`0x848b84`) unless the slot reader passes and
             // the slot is a bag's or beyond, Lua 20 up (`0x4c8f13`, `0x4c8f1f`).
             let live = bag_slot(lua, live, "Invalid bag slot in PutItemInBag")?;
-            consumed(verb(lua, |model| put_item_in_bag(model, live)))
+            let answer = verb(lua, |model| put_item_in_bag(model, live));
+            crate::script::item_calls::submit_item_calls(lua)?;
+            crate::script::merchant::submit_slot_buys(lua)?;
+            consumed(answer)
         })?,
     )?;
     g.set(
         "PutItemInBackpack",
-        lua.create_function(|lua, ()| consumed(verb(lua, put_item_in_backpack)))?,
+        lua.create_function(|lua, ()| {
+            let answer = verb(lua, put_item_in_backpack);
+            crate::script::item_calls::submit_item_calls(lua)?;
+            consumed(answer)
+        })?,
     )?;
     g.set(
         "PickupBagFromSlot",
@@ -362,6 +373,7 @@ mod tests {
     #[test]
     fn an_empty_bag_slot_equips_the_held_bag_and_still_answers_nil() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_bank(Some(Default::default()));
         s.set_container(0, Some(backpack()));
         s.set_bank_bag_slots(Default::default());
@@ -387,6 +399,7 @@ mod tests {
     #[test]
     fn an_empty_bag_slot_auto_equips_an_ordinary_item() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_bank(Some(Default::default()));
         s.set_container(0, Some(backpack()));
         s.run("PickupContainerItem(0, 2)").unwrap();
@@ -401,6 +414,7 @@ mod tests {
     #[test]
     fn an_occupied_bag_slot_swaps_with_a_held_bag_and_answers_one() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_bank(Some(Default::default()));
         s.set_container(0, Some(backpack()));
         s.set_bank_bag_slots(one_bank_bag());
@@ -423,6 +437,7 @@ mod tests {
     #[test]
     fn an_occupied_bag_slot_auto_stores_an_ordinary_item() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_bank(Some(Default::default()));
         s.set_container(0, Some(backpack()));
         s.set_bank_bag_slots(one_bank_bag());
@@ -449,6 +464,7 @@ mod tests {
     #[test]
     fn only_the_swap_signals_a_lock_and_it_leads_the_clear() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_bank(Some(Default::default()));
         s.set_container(0, Some(backpack()));
         s.set_bank_bag_slots(one_bank_bag());
@@ -504,6 +520,7 @@ mod tests {
     #[test]
     fn a_worn_item_on_an_occupied_bag_slot_is_stored_not_swapped() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         let mut doll: InventorySlots = Default::default();
         doll[1] = Some(InvSlotView {
             item_id: 1234,
@@ -536,6 +553,7 @@ mod tests {
     #[test]
     fn a_bag_held_from_a_bag_slot_swaps_with_an_occupied_one() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         let mut doll: InventorySlots = Default::default();
         doll[20] = Some(bag_slot_view(4500));
         doll[21] = Some(bag_slot_view(4501));
@@ -561,6 +579,7 @@ mod tests {
     #[test]
     fn an_item_dropped_on_its_own_bag_cancels() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         let mut doll: InventorySlots = Default::default();
         doll[20] = Some(bag_slot_view(4500));
         s.set_inventory_slots(doll);
@@ -586,6 +605,7 @@ mod tests {
     #[test]
     fn the_backpack_button_always_auto_stores_even_a_bag() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_container(0, Some(backpack()));
         s.run("PickupContainerItem(0, 1)").unwrap();
 
@@ -605,6 +625,7 @@ mod tests {
     #[test]
     fn the_answer_is_the_number_one_not_the_boolean_true() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_bank(Some(Default::default()));
         s.set_container(0, Some(backpack()));
         s.set_bank_bag_slots(one_bank_bag());
