@@ -549,19 +549,18 @@ impl InputHooks<'_> {
 }
 
 /// The window edges the reference's handlers fire from: the trainer list (Trainers acknowledged,
-/// `0x4d74ae`), the vendor list (Vendors, `0x4fad32`) and the taxi map (Travel, `0x4dbaa2`). Raid
-/// Groups fires from the group list itself (`ui_party::net`).
+/// `0x4d74ae`) and the vendor list (Vendors, `0x4fad32`). The taxi map's Travel (`0x4dbaa2`) fires
+/// with its open's event (`ui_taxi`), and Raid Groups from the group list itself
+/// (`ui_party::net`).
 #[derive(Default)]
 struct WindowWatch {
     trainer: Option<u64>,
     vendor: Option<u64>,
-    taxi: bool,
 }
 
 fn watch_windows(
     trainer: Res<crate::ui_trainer::TrainerOpen>,
     merchant: Res<crate::ui_merchant::MerchantOpen>,
-    taxi: Res<crate::ui_taxi::TaxiState>,
     mut watch: Local<WindowWatch>,
     mut asks: MessageWriter<TutorialEvent>,
 ) {
@@ -573,11 +572,6 @@ fn watch_windows(
         asks.write(TutorialEvent::trigger(id::VENDORS));
     }
     watch.vendor = merchant.vendor;
-    let taxi_open = taxi.open.is_some();
-    if taxi_open && !watch.taxi {
-        asks.write(TutorialEvent::trigger(id::TRAVEL));
-    }
-    watch.taxi = taxi_open;
 }
 
 fn on_world_leave(tutorials: Res<Tutorials>, mut cascade: ResMut<WorldEnterCascade>) {
@@ -599,10 +593,7 @@ impl Plugin for TutorialPlugin {
                 (
                     on_world_enter.before(run_world_enter_cascade),
                     run_world_enter_cascade.before(feed_tutorials),
-                    // Among the hosts: a `CloseTaxiMap` call clears the map it reads.
-                    watch_windows
-                        .before(feed_tutorials)
-                        .in_set(crate::vm_pass::VmPass::Member),
+                    watch_windows.before(feed_tutorials),
                     watch_self
                         .after(on_world_enter)
                         .after(crate::player::ControlRestore)

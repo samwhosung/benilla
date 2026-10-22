@@ -41,6 +41,8 @@ pub(crate) struct TaxiState {
     /// The flight master a close inside `CloseTaxiMap`'s call cleared from the cell, whose latch
     /// release waits for [`release_closed`].
     pub(crate) released: Option<u64>,
+    /// An open whose `TAXIMAP_OPENED` has yet to fire, and the Travel tutorial with it.
+    pub(crate) opening: bool,
 }
 
 impl TaxiState {
@@ -50,6 +52,7 @@ impl TaxiState {
             nearest_node,
             known,
         });
+        self.opening = true;
     }
 
     /// A client-side close; the staged replies stay.
@@ -62,6 +65,7 @@ impl TaxiState {
         self.open = None;
         self.reply = None;
         self.discovered = false;
+        self.opening = false;
         self.released = None;
     }
 }
@@ -199,6 +203,8 @@ fn feed_taxi(
     mut last_name: crate::ui_script::WindowMemo<Option<String>>,
     mut closes: CoreCloses,
     mut sink: crate::ui_action::MessageSink,
+    // Absent in a harness with no tutorials.
+    mut tutorials: Option<ResMut<Messages<crate::tutorial::TutorialEvent>>>,
 ) {
     vm.feed(|script, (mut state, mut cache), fires| {
         let Some(script) = script else {
@@ -311,6 +317,15 @@ fn feed_taxi(
             // No arguments: the event's one fire site, `0x4dba96`, is a plain
             // `FrameScript_SignalEvent` (`0x703e50`). The close is the core's.
             fires.post("TAXIMAP_OPENED", Vec::new());
+            // The open's Travel tutorial follows its event (`0x4dbaa2`), whatever a handler of the
+            // event does to the map; a re-fire for the name raises none.
+            if std::mem::take(&mut state.opening) {
+                if let Some(tutorials) = tutorials.as_deref_mut() {
+                    tutorials.write(crate::tutorial::TutorialEvent::trigger(
+                        crate::tutorial::id::TRAVEL,
+                    ));
+                }
+            }
             *last = Some(fresh);
             *last_name = flightmaster_name;
         }

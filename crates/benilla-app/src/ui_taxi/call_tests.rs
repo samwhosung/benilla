@@ -185,3 +185,29 @@ fn close_taxi_map_fires_once_when_a_window_ahead_holds_the_master() {
         None
     );
 }
+
+/// The open's Travel tutorial follows its `TAXIMAP_OPENED` (`0x4dba96`, `0x4dbaa2`), raised where
+/// the event is, so a handler that closes the map inside its call cannot skip it; the close and
+/// the feeds after it raise no other.
+#[test]
+fn the_open_raises_the_travel_tutorial_with_its_event() {
+    use crate::tutorial::{id, TutorialEvent};
+    let data = benilla_formats::wow_data_or_skip!();
+    let (mut app, _rx) = client(&data);
+    let travel = |app: &App, cursor: &mut bevy::ecs::message::MessageCursor<TutorialEvent>| {
+        cursor
+            .read(app.world().resource::<Messages<TutorialEvent>>())
+            .filter(|e| **e == TutorialEvent::trigger(id::TRAVEL))
+            .count()
+    };
+    let mut cursor = app
+        .world()
+        .resource::<Messages<TutorialEvent>>()
+        .get_cursor();
+    assert_eq!(travel(&app, &mut cursor), 1, "the open raised it");
+    eval::<()>(&mut app, "CloseTaxiMap()");
+    app.world_mut()
+        .run_system_once(feed_taxi)
+        .expect("the feed runs");
+    assert_eq!(travel(&app, &mut cursor), 0);
+}
