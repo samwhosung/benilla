@@ -498,6 +498,8 @@ pub(crate) fn fire_unit_combat(script: &mut UiScript, ev: &UnitCombatFeedback) {
 pub(crate) struct UnitNames<'a> {
     pub(crate) races: Option<&'a ChrRaces>,
     pub(crate) classes: Option<&'a ChrClasses>,
+    /// Each race's PvP side off the chain.
+    pub(crate) teams: Option<&'a crate::chr_classes::RacePvpTeams>,
 }
 
 /// Race and class rows for a test: an enUS install's, and a koKR install's for a test that must
@@ -506,6 +508,7 @@ pub(crate) struct UnitNames<'a> {
 pub(crate) struct TestNames {
     pub(crate) races: ChrRaces,
     pub(crate) classes: ChrClasses,
+    pub(crate) teams: crate::chr_classes::RacePvpTeams,
 }
 
 #[cfg(test)]
@@ -534,6 +537,7 @@ impl TestNames {
                 (9, "Warlock", "WARLOCK"),
                 (11, "Druid", "DRUID"),
             ]),
+            teams: crate::chr_classes::RacePvpTeams::stock(),
         }
     }
 
@@ -561,6 +565,7 @@ impl TestNames {
                 (9, "흑마법사", "WARLOCK"),
                 (11, "드루이드", "DRUID"),
             ]),
+            teams: crate::chr_classes::RacePvpTeams::stock(),
         }
     }
 
@@ -568,6 +573,7 @@ impl TestNames {
         UnitNames {
             races: Some(&self.races),
             classes: Some(&self.classes),
+            teams: Some(&self.teams),
         }
     }
 
@@ -579,6 +585,7 @@ impl TestNames {
     pub(crate) fn insert_world(&self, world: &mut World) {
         world.insert_resource(crate::chr_classes::ChrRaceTable(self.races.clone()));
         world.insert_resource(crate::chr_classes::ChrClassTable(self.classes.clone()));
+        world.insert_resource(self.teams.clone());
     }
 }
 
@@ -591,6 +598,7 @@ pub(crate) fn world_unit_names(world: &World) -> UnitNames<'_> {
         classes: world
             .get_resource::<crate::chr_classes::ChrClassTable>()
             .map(|t| &t.0),
+        teams: world.get_resource::<crate::chr_classes::RacePvpTeams>(),
     }
 }
 
@@ -599,6 +607,7 @@ pub(crate) fn world_unit_names(world: &World) -> UnitNames<'_> {
 pub(crate) struct NameTables<'w> {
     races: Option<Res<'w, crate::chr_classes::ChrRaceTable>>,
     classes: Option<Res<'w, crate::chr_classes::ChrClassTable>>,
+    teams: Option<Res<'w, crate::chr_classes::RacePvpTeams>>,
 }
 
 impl NameTables<'_> {
@@ -606,6 +615,7 @@ impl NameTables<'_> {
         UnitNames {
             races: self.races.as_deref().map(|t| &t.0),
             classes: self.classes.as_deref().map(|t| &t.0),
+            teams: self.teams.as_deref(),
         }
     }
 }
@@ -615,6 +625,18 @@ impl<'a> UnitNames<'a> {
     /// the name); `None` for a race with no row.
     pub(crate) fn race(&self, race: u8) -> Option<(&'a str, &'a str)> {
         self.races?.names(u32::from(race))
+    }
+
+    /// The race's PvP team digit ([`crate::chr_classes::RacePvpTeams::team`]).
+    pub(crate) fn pvp_team(&self, race: u8) -> i8 {
+        race_pvp_team(race)
+    }
+
+    /// The race's side as a `FactionGroup` token, for where no faction template is at hand, as at
+    /// world entry, where addons concatenate `UnitFactionGroup("player")` at file scope;
+    /// [`faction_group`] reads the live template.
+    pub(crate) fn faction_group(&self, race: u8) -> Option<&'static str> {
+        race_faction_group(race)
     }
 
     /// The class byte's display name and its uppercase token (`"Warrior"`, `"WARRIOR"`); `None`
@@ -1058,7 +1080,7 @@ pub(crate) fn snapshot(
         // The honor rank, `PLAYER_BYTES_3` byte 3 (0..=18), public for every player in view.
         pvp_rank: store.0.player_pvp_rank().unwrap_or(0),
         // The team digit of `PVP_RANK_<rank>_<team>`, from the race ([`race_pvp_team`]).
-        pvp_team: store.0.unit_race().map_or(-1, race_pvp_team),
+        pvp_team: store.0.unit_race().map_or(-1, |r| tables.pvp_team(r)),
         // `PLAYER_BYTES_3` byte 2, the city-protector title (`PVP_MEDAL<n>`), unset by vmangos.
         pvp_medal: store.0.player_pvp_medal().unwrap_or(0),
         // The quest-log window, off a player alone: `IsUnitOnQuest` looks the guid up with

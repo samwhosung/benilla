@@ -1157,8 +1157,9 @@ fn seat_a_session(script: &mut UiScript) {
             // `UnitFactionGroup("player")`: every playable race has a side, and AceDB-2.0
             // concatenates it into its per-realm key at file scope.
             faction_group: Some("Alliance".into()),
-            // `0x5efe00`'s team digit for Human (race 1), the rank-title key's second `%d`.
-            pvp_team: crate::ui_unit::race_pvp_team(1),
+            // `0x5efe00`'s team digit for Human (race 1), the rank-title key's second `%d`: the
+            // stock row's template has group mask 3, Alliance.
+            pvp_team: 1,
             ..Default::default()
         }),
     );

@@ -691,20 +691,26 @@ mod tests {
         set(
             &mut app,
             MOB,
-            &[(FLAGS, 0x8), (CHARMEDBY, A as u32), (CHARMEDBY + 1, (A >> 32) as u32)],
+            &[
+                (FLAGS, 0x8),
+                (CHARMEDBY, A as u32),
+                (CHARMEDBY + 1, (A >> 32) as u32),
+            ],
         );
         set(&mut app, BOSS, &[(FLAGS, 0x8), (PLAYER_FLAGS, 0x80)]);
         app.update();
-        let ffa = |app: &App, token: &str| {
-            holds(app, &format!("UnitIsPVPFreeForAll({token:?}) == 1"))
-        };
+        let ffa =
+            |app: &App, token: &str| holds(app, &format!("UnitIsPVPFreeForAll({token:?}) == 1"));
         assert!(ffa(&app, "targettarget"), "a flagged player");
         assert!(ffa(&app, "playertarget"), "a creature its charmer flags");
         assert!(!ffa(&app, "party1target"), "a creature, its own controller");
         set(&mut app, A, &[(FLAGS, 0)]);
         app.update();
         assert!(!ffa(&app, "targettarget"), "a player without bit 0x8");
-        assert!(ffa(&app, "playertarget"), "the charmer's own bit 0x8 is not asked");
+        assert!(
+            ffa(&app, "playertarget"),
+            "the charmer's own bit 0x8 is not asked"
+        );
     }
 
     /// A chain ending on a guid nobody holds answers what the client knows of it, each getter

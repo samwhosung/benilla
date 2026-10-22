@@ -74,7 +74,7 @@ fn resolve_board(
             .map_or((0, 0), |(race, class, _)| (race, class));
         // The team comes from race, never the wire (`0x4aa200`, `0x5efe00`'s walk): 0 Horde,
         // 1 Alliance, -1 neither.
-        let faction = i32::from(crate::ui_unit::race_pvp_team(race));
+        let faction = i32::from(unit_names.pvp_team(race));
         let mut stats = [0u32; 8];
         for (slot, v) in stats.iter_mut().zip(&r.stats) {
             *slot = *v;

@@ -179,10 +179,12 @@ struct TitleKey {
 fn title_key(
     cfg: &NameConfig,
     strings: &NameLineStrings,
+    teams: Option<&crate::chr_classes::RacePvpTeams>,
     net: &NetEntity,
     store: Option<&ObjectStore>,
 ) -> Option<TitleKey> {
     let store = store?;
+    let _ = teams;
     (net.kind == EntityKind::Player).then(|| TitleKey {
         title: benilla_ui::script::RankTitle {
             rank: store.0.player_pvp_rank().unwrap_or(0),
@@ -452,6 +454,8 @@ pub(crate) fn drive_nameplates(
     // The guild cache, the a5 line's text; a miss sends `CMSG_GUILD_QUERY` through a shared read.
     guilds: Res<crate::ui_guild::GuildState>,
     net_commands: Res<NetCommands>,
+    // Each race's PvP side, the a4 rank title's team digit.
+    teams: Option<Res<crate::chr_classes::RacePvpTeams>>,
     camera: Query<&Transform, With<WorldCamera>>,
     mut atlas: Option<ResMut<UiFontAtlas>>,
     mut plates: ResMut<Nameplates>,
@@ -589,7 +593,7 @@ pub(crate) fn drive_nameplates(
         };
 
         seen.insert(entity);
-        let key = title_key(&name_cfg, &pvp_strings, net, store);
+        let key = title_key(&name_cfg, &pvp_strings, teams.as_deref(), net, store);
         match plates.live.get(&entity) {
             // The steady frame compares the inputs in place, allocating nothing; a rebuild from
             // these inputs is the stack `LiveName` holds.
@@ -1008,24 +1012,65 @@ mod tests {
         let bare = NameLineStrings::default();
         // Human (race 1 → team 1), rank 7.
         let (net, human) = unit(EntityKind::Player, &[HUMAN_MALE, RANK_7]);
-        let key = title_key(&cfg, &ready, &net, Some(&human)).unwrap();
+        let key = title_key(
+            &cfg,
+            &ready,
+            Some(&crate::chr_classes::RacePvpTeams::stock()),
+            &net,
+            Some(&human),
+        )
+        .unwrap();
         assert_eq!(
             (key.title.rank, key.title.team, key.title.female, key.on),
             (7, 1, false, true)
         );
         // Orc (race 2 → team 0), female; the CVar off, and the strings unloaded, each drop the bit.
         let (_, orc) = unit(EntityKind::Player, &[(36, 0x010102), RANK_7]);
-        let orc = title_key(&cfg, &ready, &net, Some(&orc)).unwrap();
+        let orc = title_key(
+            &cfg,
+            &ready,
+            Some(&crate::chr_classes::RacePvpTeams::stock()),
+            &net,
+            Some(&orc),
+        )
+        .unwrap();
         assert_eq!((orc.title.team, orc.title.female), (0, true));
         let off = NameConfig {
             player_pvp_title: false,
             ..cfg
         };
-        assert!(!title_key(&off, &ready, &net, Some(&human)).unwrap().on);
-        assert!(!title_key(&cfg, &bare, &net, Some(&human)).unwrap().on);
+        assert!(
+            !title_key(
+                &off,
+                &ready,
+                Some(&crate::chr_classes::RacePvpTeams::stock()),
+                &net,
+                Some(&human)
+            )
+            .unwrap()
+            .on
+        );
+        assert!(
+            !title_key(
+                &cfg,
+                &bare,
+                Some(&crate::chr_classes::RacePvpTeams::stock()),
+                &net,
+                Some(&human)
+            )
+            .unwrap()
+            .on
+        );
         let (creature, _) = unit(EntityKind::Unit, &[]);
         assert!(
-            title_key(&cfg, &ready, &creature, Some(&human)).is_none(),
+            title_key(
+                &cfg,
+                &ready,
+                Some(&crate::chr_classes::RacePvpTeams::stock()),
+                &creature,
+                Some(&human)
+            )
+            .is_none(),
             "a creature has no a4"
         );
     }
@@ -1046,7 +1091,13 @@ mod tests {
         let line = |cfg: &NameConfig, (net, store): &(NetEntity, ObjectStore), flags, name| {
             name_line(
                 flags,
-                title_key(cfg, &strings, net, Some(store)),
+                title_key(
+                    cfg,
+                    &strings,
+                    Some(&crate::chr_classes::RacePvpTeams::stock()),
+                    net,
+                    Some(store),
+                ),
                 &strings,
                 name,
             )
@@ -1146,7 +1197,13 @@ mod tests {
         let (net, store) = unit(EntityKind::Player, &[HUMAN_MALE, RANK_7]);
         let cfg = NameConfig::default();
         let built = |strings: &NameLineStrings| {
-            let key = title_key(&cfg, strings, &net, Some(&store));
+            let key = title_key(
+                &cfg,
+                strings,
+                Some(&crate::chr_classes::RacePvpTeams::stock()),
+                &net,
+                Some(&store),
+            );
             (key, name_line(0, key, strings, "Bob"))
         };
         let mut strings = strings_of(1, &[TEMPLATE, SERGEANT]);

@@ -354,7 +354,10 @@ fn target_unit_raises_for_a_non_string_or_an_unknown_token() {
     s.keep_calls();
     for call in ["TargetUnit()", "TargetUnit(nil)", "TargetUnit({})"] {
         let err = s.run(call).expect_err(call).to_string();
-        assert!(err.contains(r#"Usage: TargetUnit("unit")"#), "{call}: {err}");
+        assert!(
+            err.contains(r#"Usage: TargetUnit("unit")"#),
+            "{call}: {err}"
+        );
     }
     let err = s
         .run(r#"TargetUnit("bogus")"#)
@@ -362,7 +365,8 @@ fn target_unit_raises_for_a_non_string_or_an_unknown_token() {
         .to_string();
     assert!(err.contains("Unknown unit name: bogus"), "{err}");
     assert!(s.take_selection_requests().is_empty(), "nothing selects");
-    s.run(r#"TargetUnit("")"#).expect("an empty token names nobody");
+    s.run(r#"TargetUnit("")"#)
+        .expect("an empty token names nobody");
     assert_eq!(
         s.take_selection_requests(),
         vec![SelectionRequest::Unit(String::new())]
