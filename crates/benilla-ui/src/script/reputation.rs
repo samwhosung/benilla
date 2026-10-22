@@ -8,7 +8,9 @@
 //! name (`0x4d5e70`).
 //!
 //! Each verb resolves its index to the entry's faction id (`0x4d5fa0`), a header's included: its
-//! own id, or 0 and -1 for the two synthetic ones; an index past the rows names faction 0. The
+//! own id, or 0 and -1 for the two synthetic ones; an index past the visible rows names faction 0
+//! here. The reference bounds the index by the total entry count instead (`0xb73760`, `jbe` in
+//! `0x4d5fa0`, `jae` in `0x4d6400`), folded entries included, which this does not do yet. The
 //! selection holds such an id (`0xb73768`). The folds change at a rebuild (all open, Inactive
 //! folded, `0x4d5479`, `0x4d55d9`), at a header's registration (all open, `0x4d5c34`) and by the
 //! two fold verbs alone. The verbs that send do so inside their call ([`ReputationCall`]).
@@ -290,8 +292,9 @@ fn num_rows(model: &Model) -> usize {
     rows(model).len()
 }
 
-/// The faction id of the entry at a 1-based index (`0x4d5fa0`): a bar's own, a header's key, and 0
-/// past the rows.
+/// The faction id of the entry at a 1-based index into the visible rows (`0x4d5fa0`): a bar's own,
+/// a header's key, and 0 past them. The reference's bound is the total entry count (`0xb73760`),
+/// which reaches the folded entries too; that is not modelled yet.
 fn faction_at(model: &Model, index: usize) -> i64 {
     match index
         .checked_sub(1)
