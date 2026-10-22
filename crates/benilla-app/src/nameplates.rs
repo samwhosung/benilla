@@ -96,9 +96,9 @@ fn flag_prefix(player_flags: u32, strings: &NameLineStrings) -> String {
 }
 
 /// The strings the name line resolves, the a1-a3 flag tags ([`FLAG_PREFIXES`]) and the a4 rank
-/// prefix's (`UNIT_PVP_NAME` and the `PVP_RANK_*` titles), which the honor feed reads off each VM
-/// once ([`crate::ui_honor`]), where `0x5ec9e0`-`0x5ecabb` and `0x609370` read them live at every
-/// rebuild: the world-text pass runs without the VM.
+/// prefix's (`UNIT_PVP_NAME` and the `PVP_RANK_*` titles), which the honor feed checks against
+/// the VM every frame ([`crate::ui_honor`]), as `0x5ec9e0`-`0x5ecabb` and `0x609370` read them at
+/// every rebuild: the world-text pass runs without the VM.
 #[derive(Resource, Default)]
 pub(crate) struct NameLineStrings {
     /// The VM session the strings were read from; `None` before the first VM.
@@ -122,6 +122,12 @@ impl NameLineStrings {
             self.strings = strings;
             self.generation += 1;
         }
+    }
+
+    /// Whether the held string for `key` is `value`, the bytes of a string global; a missing or
+    /// empty one is held as none.
+    pub(crate) fn holds(&self, key: &str, value: Option<&[u8]>) -> bool {
+        self.strings.get(key).map(String::as_bytes) == value.filter(|v| !v.is_empty())
     }
 
     /// One held string, for the feed's tests.

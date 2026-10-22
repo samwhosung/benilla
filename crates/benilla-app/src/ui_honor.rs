@@ -86,29 +86,49 @@ impl Plugin for UiHonorPlugin {
     }
 }
 
-/// The overhead name's strings ([`crate::nameplates::NameLineStrings`]), read off a VM the
-/// first frame it is in the world. Every VM is installed whole, outside `Update` (the glue VM after
-/// its GlueXML, a world VM after its FrameXML and addon load), so the read sees what the load
-/// defined; any other frame pays one compare.
+/// The overhead name's strings ([`crate::nameplates::NameLineStrings`]), checked against the VM
+/// every frame and read again when one differs: the reference's builder reads each global at
+/// every rebuild (`0x5eca17`, `0x609370`), so a tag an addon sets later reaches the next line.
+/// A steady frame compares the held strings and allocates nothing.
 fn feed_name_line_strings(
     script: Option<NonSend<UiScript>>,
     mut strings: ResMut<crate::nameplates::NameLineStrings>,
+    mut keys: Local<Vec<String>>,
 ) {
     let Some(script) = script else {
         return;
     };
-    if strings.session() != Some(script.session()) {
+    if keys.is_empty() {
+        *keys = name_line_keys().collect();
+    }
+    let globals = script.lua().globals();
+    let held = strings.session() == Some(script.session())
+        && keys.iter().all(
+            |key| match globals.get::<benilla_ui::mlua::Value>(key.as_str()) {
+                Ok(benilla_ui::mlua::Value::String(s)) => strings.holds(key, Some(&s.as_bytes())),
+                Ok(benilla_ui::mlua::Value::Nil) => strings.holds(key, None),
+                // A number reads as its string (`lua_tostring`); the full read settles it.
+                _ => false,
+            },
+        );
+    if !held {
         strings.set(script.session(), name_line_strings(&script));
     }
+}
+
+/// The name line's global keys: the flag tags ([`crate::nameplates::FLAG_PREFIXES`]) and the
+/// [`benilla_ui::script::pvp_name_global_keys`].
+fn name_line_keys() -> impl Iterator<Item = String> {
+    crate::nameplates::FLAG_PREFIXES
+        .iter()
+        .map(|(_, key)| key.to_string())
+        .chain(benilla_ui::script::pvp_name_global_keys())
 }
 
 /// The name line's globals that `script` defines, with their values: the flag tags
 /// ([`crate::nameplates::FLAG_PREFIXES`]) and the [`benilla_ui::script::pvp_name_global_keys`].
 fn name_line_strings(script: &UiScript) -> HashMap<String, String> {
-    crate::nameplates::FLAG_PREFIXES
-        .iter()
-        .map(|(_, key)| key.to_string())
-        .chain(benilla_ui::script::pvp_name_global_keys())
+    name_line_keys()
         .filter_map(|key| benilla_ui::strings::global(script.lua(), &key).map(|value| (key, value)))
         .collect()
 }
