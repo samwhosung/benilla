@@ -77,6 +77,15 @@ impl EmoteSoundCatalog {
         self
     }
 
+    /// A catalog whose `Emotes.dbc` row `emote_id` is a stand-state emote (`EmoteSpecProc` 1) of
+    /// `state`, for tests of what reads it.
+    #[doc(hidden)]
+    pub fn with_posture(mut self, emote_id: u32, state: u32) -> Self {
+        self.spec_proc.insert(emote_id, 1);
+        self.spec_proc_param.insert(emote_id, state);
+        self
+    }
+
     /// A catalog holding one `EmotesText.dbc` row: its name, id and the `Emotes.dbc` id it plays,
     /// for tests of what reads them.
     #[doc(hidden)]

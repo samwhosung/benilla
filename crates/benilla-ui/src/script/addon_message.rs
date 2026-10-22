@@ -180,6 +180,28 @@ mod tests {
         assert!(s.take_addon_sends().is_empty());
     }
 
+    /// `prefix` and `message` are C strings (`0x49f958`, `0x49f966`), so each ends at its first
+    /// NUL: the compose joins what is before it (`0x49f9a2`), the escape scan sees only that, and
+    /// the usage test reads each first byte (`0x49f97f`, `0x49f984`).
+    #[test]
+    fn prefix_and_message_end_at_their_first_nul() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.run(
+            r#"SendAddonMessage("a\0b", "c")
+            SendAddonMessage("a\0|", "m")
+            SendAddonMessage("p", "x\0|z")"#,
+        )
+        .unwrap();
+        let texts: Vec<String> = s.take_addon_sends().into_iter().map(|a| a.text).collect();
+        assert_eq!(texts, ["a\tc", "a\tm", "p\tx"]);
+        let err = s
+            .run(r#"SendAddonMessage("\0x", "")"#)
+            .expect_err("both empty as C strings");
+        assert!(err.to_string().contains("Usage: SendAddonMessage"), "{err}");
+        assert!(s.take_addon_sends().is_empty());
+    }
+
     #[test]
     fn the_distribution_set_is_exactly_party_raid_guild_battleground() {
         let mut s = UiScript::new().unwrap();

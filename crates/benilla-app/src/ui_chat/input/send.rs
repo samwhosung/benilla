@@ -321,6 +321,7 @@ pub(crate) fn chat_world(script: UiScript) -> (World, crossbeam_channel::Receive
     world.init_resource::<crate::target::Selection>();
     world.init_resource::<crate::names::NameCache>();
     world.init_resource::<super::super::edit::ChannelState>();
+    world.init_resource::<crate::tutorial::Tutorials>();
     (world, rx)
 }
 

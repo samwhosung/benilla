@@ -303,6 +303,30 @@ mod tests {
         world.resource::<ChatLog>().pending_len()
     }
 
+    /// `SMSG_PLAYED_TIME` (`0x401850`) fills the mailbox `TIME_PLAYED_MSG` fires from (`0x4018df`)
+    /// and prints nothing to chat itself: its own lines go to the console (`0x401878`-`0x4018c8`),
+    /// and the stock `ChatFrame_DisplayTimePlayed` is the answer's one printer.
+    #[test]
+    fn the_played_time_answer_prints_no_chat_line_of_its_own() {
+        let mut world = World::new();
+        world.insert_resource(ChatLog::default());
+        world.init_resource::<PlayedTimeAnswer>();
+        world
+            .run_system_once_with(
+                on_played_time,
+                SessionEvent::PlayedTime {
+                    total: 360_000,
+                    level: 7_200,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            world.resource::<PlayedTimeAnswer>().0,
+            Some((360_000, 7_200))
+        );
+        assert_eq!(world.resource::<ChatLog>().pending_len(), 0);
+    }
+
     /// `SMSG_TRANSFER_ABORTED` reaches chat: its reason is parked for the line the resolve pass
     /// reads from the VM (`0x4019a0`).
     #[test]

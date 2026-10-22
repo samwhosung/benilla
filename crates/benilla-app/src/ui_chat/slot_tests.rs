@@ -524,6 +524,57 @@ fn the_chat_verbs_go_out_in_call_order() {
     );
 }
 
+/// `DoEmote`'s worker `0x5ef560` sends inside the call in its order: the stow's
+/// `CMSG_SETSHEATHED` (`0x5ef630`, sent at `0x611dbc`), a posture emote's
+/// `CMSG_STANDSTATECHANGE` (`0x5ef652`, sent at `0x5ed501`), then `CMSG_TEXT_EMOTE` (`0x5ef713`).
+/// A stowed player sends no sheath; the setter tests no current stand state, so a sit while
+/// sitting sends again.
+#[test]
+fn do_emote_sends_its_stow_and_posture_ahead_of_the_emote() {
+    use crate::net::{Guid, GuidIndex, ObjectStore, SelfGuid, SelfPlayer};
+
+    let mut c = Client::new(&[], UiScript::new().expect("a VM"));
+    c.world().insert_resource(crate::sound::EmoteSounds(
+        benilla_formats::EmoteSoundCatalog::default()
+            .with_text_emote("SIT", 86, 13)
+            .with_row(13, 0, 0)
+            .with_posture(13, 1),
+    ));
+    // Alive, weapons drawn: `UNIT_FIELD_BYTES_2` byte 0 is 1.
+    let me = c
+        .world()
+        .spawn((
+            SelfPlayer,
+            Guid(1),
+            ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(&[
+                (22, 100),
+                (28, 100),
+                (164, 1),
+            ])),
+            crate::creature_anim::MovementState::default(),
+            crate::creature_anim::CommittedSheath::default(),
+        ))
+        .id();
+    c.world().resource_mut::<GuidIndex>().0.insert(1, me);
+    c.world().insert_resource(SelfGuid(Some(1)));
+    c.world().init_resource::<crate::player::Player>();
+    let wire = |c: &mut Client| -> Vec<String> {
+        c.sent
+            .try_iter()
+            .filter_map(|cmd| match cmd {
+                ClientCommand::SetSheathed { state } => Some(format!("sheath {state}")),
+                ClientCommand::StandStateChange { state } => Some(format!("stand {state}")),
+                ClientCommand::TextEmote { text_id, .. } => Some(format!("emote {text_id}")),
+                _ => None,
+            })
+            .collect()
+    };
+    c.run("DoEmote('SIT')");
+    assert_eq!(wire(&mut c), ["sheath 0", "stand 1", "emote 86"]);
+    c.run("DoEmote('SIT')");
+    assert_eq!(wire(&mut c), ["stand 1", "emote 86"], "stowed already");
+}
+
 /// The leave body turns the auto-join off only when its key, a number read as its slot's name
 /// (`0x49e880`), is the `GuildRecruitment` row's composed name (`SStrCmpI` at `0x49ef84`, then
 /// `0x49ea70(0)` at `0x49ef8f`): `/leave GuildRecruitment` leaves the channel and keeps the
