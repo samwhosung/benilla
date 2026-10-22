@@ -343,8 +343,9 @@ fn format_line(
     line: &RollLine,
     name: Option<&str>,
     is_self: bool,
-    link: &str,
+    item: &RollItem,
     detailed: bool,
+    _get: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
     if !detailed {
         if let RollLine::Announce(_) = line {
@@ -352,7 +353,37 @@ fn format_line(
             return None;
         }
     }
-    Some(format_line_detailed(line, name, is_self, link, detailed))
+    Some(format_line_detailed(
+        line,
+        name,
+        is_self,
+        &item.link(),
+        detailed,
+    ))
+}
+
+/// The item pieces every roll line's template carries after its names: the quality's colour
+/// escape (`0x52ad90`, at `0x61c116`), the item id, 0, the roll's two property words, the item's
+/// name with its suffix (`0x5d8b00`, at `0x61c13f`) and the `|r` reset (`0x844538`).
+struct RollItem {
+    quality: u32,
+    item_id: u32,
+    random_property_id: u32,
+    name: String,
+}
+
+impl RollItem {
+    /// The pieces as one item link.
+    fn link(&self) -> String {
+        crate::ui_items::item_link_full(
+            self.item_id,
+            0,
+            self.random_property_id,
+            0,
+            &self.name,
+            self.quality,
+        )
+    }
 }
 
 fn format_line_detailed(
@@ -426,6 +457,7 @@ fn render(
     ask: Ask<'_>,
     rolls: crate::items::RollCatalogs,
     detailed: bool,
+    get: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
     // Every line embeds the item link, so the template comes first.
     let (looted_item, roll, roller) = match line {
@@ -435,14 +467,12 @@ fn render(
     };
     let t = items.template(looted_item, 0, ask)?;
     // The link names the rolled drop, suffix included, as the roll frame does.
-    let link = crate::ui_items::item_link_full(
-        looted_item,
-        0,
-        roll,
-        0,
-        &rolls.name(&t.name.clone(), roll),
-        t.quality,
-    );
+    let item = RollItem {
+        quality: t.quality,
+        item_id: looted_item,
+        random_property_id: roll,
+        name: rolls.name(&t.name.clone(), roll),
+    };
 
     let is_self = roller.is_some() && roller == self_guid;
 
@@ -458,7 +488,7 @@ fn render(
     };
 
     // Never `None` here: the caller drops suppressed lines, as a `None` from here means retry.
-    format_line(line, name.as_deref(), is_self, &link, detailed)
+    format_line(line, name.as_deref(), is_self, &item, detailed, get)
 }
 
 /// Post the queued announcements as `CHAT_MSG_LOOT` lines, as the reference does.
@@ -471,6 +501,7 @@ fn drain_lines(
     chat: &ChatLog,
     catalogs: crate::items::RollCatalogs,
     detailed: bool,
+    get: &dyn Fn(&str) -> Option<String>,
 ) {
     let pending = std::mem::take(&mut rolls.pending);
     let mut still = Vec::new();
@@ -485,7 +516,9 @@ fn drain_lines(
         // item lands, where the item's answer asks it (`0x61c4b0` → `0x61c53e` → `0x61c070`,
         // `0x61c08e`).
         let ask = Ask::at(p.tries == 0, commands);
-        match render(&p.line, self_guid, items, names, ask, catalogs, detailed) {
+        match render(
+            &p.line, self_guid, items, names, ask, catalogs, detailed, get,
+        ) {
             Some(text) => chat.push_event(ChatEvent::text_only(ChatEventKind::Loot, text)),
             None => {
                 p.tries += 1;
@@ -577,6 +610,7 @@ fn feed_loot_rolls(
             &chat,
             catalogs,
             loot.show_loot_spam,
+            &|key| benilla_ui::strings::global(script.lua(), key),
         );
 
         for r in rolls.active.iter_mut().filter(|r| !r.asked) {
@@ -696,9 +730,38 @@ mod tests {
 
     const LINK: &str = "|cffa335ee|Hitem:17182:0:0:0|h[Sulfuras]|h|r";
 
+    /// [`LINK`]'s pieces.
+    fn item() -> RollItem {
+        RollItem {
+            quality: 4,
+            item_id: 17182,
+            random_property_id: 0,
+            name: "Sulfuras".into(),
+        }
+    }
+
+    thread_local! {
+        /// The install's `GlobalStrings.lua`, for the lines' enUS text.
+        static STRINGS: UiScript = {
+            let s = UiScript::new().expect("VM");
+            crate::ui_script::test_ui::load_ui(&s, "Interface\\FrameXML\\GlobalStrings.lua");
+            s
+        };
+    }
+
+    /// [`format_line`] on [`item`], its templates read from the install's strings.
+    fn line(l: &RollLine, name: Option<&str>, is_self: bool, detailed: bool) -> Option<String> {
+        STRINGS.with(|s| {
+            format_line(l, name, is_self, &item(), detailed, &|key| {
+                benilla_ui::strings::global(s.lua(), key)
+            })
+        })
+    }
+
     /// `(128, 2)` is a Greed vote and `(57, 2)` a Greed dice roll: `roll_type` alone cannot tell.
     #[test]
     fn line_table_covers_every_shape() {
+        let _data = benilla_formats::wow_data_or_skip!();
         let other = Some("Bob");
         let me = Some("Aldric");
         // (packet, name, is_self, expected)
@@ -757,7 +820,7 @@ mod tests {
             ),
         ];
         for (p, name, is_self, expect) in cases {
-            let got = format_line(&RollLine::Announce(*p), *name, *is_self, LINK, true);
+            let got = line(&RollLine::Announce(*p), *name, *is_self, true);
             assert_eq!(
                 got,
                 Some(expect.replace("{L}", LINK)),
@@ -771,12 +834,12 @@ mod tests {
     /// `LOOT_ROLL_ROLLED_NEED_SELF` is in `GlobalStrings.lua`, but no client code reads it.
     #[test]
     fn our_own_dice_roll_prints_third_person() {
+        let _data = benilla_formats::wow_data_or_skip!();
         for roll_type in [roll_vote::NEED, roll_vote::GREED] {
-            let got = format_line(
+            let got = line(
                 &RollLine::Announce(announce(1, 57, roll_type)),
                 Some("Aldric"),
                 true, // is_self
-                LINK,
                 true,
             )
             .expect("detail on emits the dice line");
@@ -793,19 +856,18 @@ mod tests {
 
     #[test]
     fn greed_vote_and_greed_roll_differ() {
-        let vote = format_line(
+        let _data = benilla_formats::wow_data_or_skip!();
+        let vote = line(
             &RollLine::Announce(announce(1, 128, roll_vote::GREED)),
             Some("Bob"),
             false,
-            LINK,
             true,
         )
         .unwrap();
-        let dice = format_line(
+        let dice = line(
             &RollLine::Announce(announce(1, 57, roll_vote::GREED)),
             Some("Bob"),
             false,
-            LINK,
             true,
         )
         .unwrap();
@@ -816,6 +878,7 @@ mod tests {
 
     #[test]
     fn resolution_lines() {
+        let _data = benilla_formats::wow_data_or_skip!();
         let won = LootRollWon {
             looted_target: 0xAA,
             item_slot: 0,
@@ -826,12 +889,12 @@ mod tests {
             roll_type: roll_vote::NEED,
         };
         assert_eq!(
-            format_line(&RollLine::Won(won), Some("Bob"), false, LINK, true),
+            line(&RollLine::Won(won), Some("Bob"), false, true),
             Some(format!("Bob won: {LINK}"))
         );
         // The client reads `LOOT_ROLL_YOU_WON`: the won line has a self form.
         assert_eq!(
-            format_line(&RollLine::Won(won), None, true, LINK, true),
+            line(&RollLine::Won(won), None, true, true),
             Some(format!("You won: {LINK}"))
         );
         let passed = LootAllPassed {
@@ -841,7 +904,7 @@ mod tests {
             random_property_id: 0,
         };
         assert_eq!(
-            format_line(&RollLine::AllPassed(passed), Some("Bob"), false, LINK, true),
+            line(&RollLine::AllPassed(passed), Some("Bob"), false, true),
             Some(format!("Everyone passed on: {LINK}"))
         );
     }
@@ -849,6 +912,7 @@ mod tests {
     /// `showLootSpam` 0 (the CVar `0xb4e2bc`).
     #[test]
     fn detail_off_suppresses_the_roll_lines_and_reshapes_the_winner() {
+        let _data = benilla_formats::wow_data_or_skip!();
         for p in [
             announce(1, 128, roll_vote::NEED),
             announce(1, 128, roll_vote::GREED),
@@ -857,7 +921,7 @@ mod tests {
             announce(1, 57, roll_vote::GREED),
         ] {
             assert_eq!(
-                format_line(&RollLine::Announce(p), Some("Bob"), false, LINK, false),
+                line(&RollLine::Announce(p), Some("Bob"), false, false),
                 None,
                 "roll_number {} roll_type {}",
                 p.roll_number,
@@ -876,21 +940,21 @@ mod tests {
             roll_type: roll_vote::NEED,
         };
         assert_eq!(
-            format_line(&RollLine::Won(won), Some("Bob"), false, LINK, false),
+            line(&RollLine::Won(won), Some("Bob"), false, false),
             Some(format!("Bob won: {LINK} |cff818181(Need - 84)|r"))
         );
         assert_eq!(
-            format_line(&RollLine::Won(won), None, true, LINK, false),
+            line(&RollLine::Won(won), None, true, false),
             Some(format!("You won: {LINK} |cff818181(Need - 84)|r"))
         );
         won.roll_type = roll_vote::GREED;
         assert_eq!(
-            format_line(&RollLine::Won(won), Some("Bob"), false, LINK, false),
+            line(&RollLine::Won(won), Some("Bob"), false, false),
             Some(format!("Bob won: {LINK} |cff818181(Greed - 84)|r"))
         );
         // Anything but Need reads Greed, even a Pass-typed win.
         won.roll_type = roll_vote::PASS;
-        assert!(format_line(&RollLine::Won(won), None, true, LINK, false)
+        assert!(line(&RollLine::Won(won), None, true, false)
             .unwrap()
             .contains("(Greed - 84)"));
 
@@ -902,7 +966,7 @@ mod tests {
             random_property_id: 0,
         };
         assert_eq!(
-            format_line(&RollLine::AllPassed(passed), None, false, LINK, false),
+            line(&RollLine::AllPassed(passed), None, false, false),
             Some(format!("Everyone passed on: {LINK}"))
         );
     }
