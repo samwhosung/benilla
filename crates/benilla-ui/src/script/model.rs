@@ -1092,9 +1092,9 @@ pub(crate) struct Model {
     pub(crate) item_cache_waits: HashMap<FrameHandle, Vec<super::tooltip_item::build::CacheWait>>,
     /// The misses of the item build under way, handed to its tooltip as it ends.
     pub(crate) item_cache_misses: Vec<super::tooltip_item::build::CacheWait>,
-    /// Every quest-log row as the rebuild made it, each header followed by all its quests, which
-    /// [`quest_log::fold`] folds into the visible [`Self::quest_log`].
-    pub(crate) quest_log_rows: Vec<quest_log::QuestLogRow>,
+    /// The quest-log groups' `(ZoneOrSort, name)`, sorted by `0x4de8f0` (`0xbb7040`): a row's
+    /// group ordinal is its place here.
+    pub(crate) quest_log_headers: Vec<(i32, String)>,
     /// The slots, the quest records and the lookups in flight the quest-log verbs read.
     pub(crate) quest_store: quest_log::QuestLogStore,
     /// The collapsed headers by title, the reference's fold mask `0xbb748c`.
@@ -1827,7 +1827,7 @@ impl Model {
             item_builds: HashMap::new(),
             item_cache_waits: HashMap::new(),
             item_cache_misses: Vec::new(),
-            quest_log_rows: Vec::new(),
+            quest_log_headers: Vec::new(),
             quest_store: Default::default(),
             quest_log_collapsed: HashSet::new(),
             quest_log_selection_seed: None,
