@@ -104,6 +104,8 @@ fn client() -> App {
     script
         .run(
             r#"
+            LOOT_ITEM_SELF = "LOOT_ITEM_SELF %s"
+            LOOT_ITEM_SELF_MULTIPLE = "LOOT_ITEM_SELF_MULTIPLE %s %d"
             Heard = {}
             local f = CreateFrame("Frame")
             for _, e in ipairs({"ACTIONBAR_SLOT_CHANGED", "BAG_UPDATE_COOLDOWN",

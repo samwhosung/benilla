@@ -822,12 +822,13 @@ fn every_handler_queue_a_feed_takes_is_on_a_lane_or_listed() {
 
 /// The handler queues whose items carry their place among what the packets queued, so a system
 /// that pushes onto a lane off one pushes at the item's place, not its own: the field edges'
-/// `at`. A wrong entry lets a system that pushes at its own place, behind every packet of the
-/// frame, pass [`every_lane_push_off_a_handler_queue_keeps_its_place`].
-fn placed_queues() -> [TypeId; 1] {
-    [TypeId::of::<
-        bevy::ecs::message::Messages<crate::net::FieldChanged>,
-    >()]
+/// `at`, and the aura watcher's calls'. A wrong entry lets a system that pushes at its own place,
+/// behind every packet of the frame, pass [`every_lane_push_off_a_handler_queue_keeps_its_place`].
+fn placed_queues() -> [TypeId; 2] {
+    [
+        TypeId::of::<bevy::ecs::message::Messages<crate::net::FieldChanged>>(),
+        TypeId::of::<bevy::ecs::message::Messages<crate::net::AuraFieldsChanged>>(),
+    ]
 }
 
 /// The systems that take a handler queue and may push onto a lane at their own place, by a
