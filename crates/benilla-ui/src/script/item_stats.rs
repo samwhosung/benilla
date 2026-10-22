@@ -480,7 +480,7 @@ fn equip_loc_token(inventory_type: u32) -> &'static str {
 /// string `lua_isnumber` (`0x6f34d0`) coerces, is the id alone; another string (`0x6f3510`) must
 /// pass `strnicmp(s, "item:", 5)` (`0x64a4c0`) for its four fields, else it is id 0, so a name or
 /// a hyperlink finds nothing; anything else raises the usage error (`0x842d24`, via `0x6f4940`).
-fn parse_item_arg(v: &Value) -> mlua::Result<(i64, u32, u32, u32)> {
+fn parse_item_arg(v: &Value) -> mlua::Result<(i64, i32, i32, i32)> {
     let as_number = match v {
         Value::Integer(i) => Some(*i as f64),
         Value::Number(n) => Some(*n),
@@ -510,7 +510,8 @@ fn parse_item_arg(v: &Value) -> mlua::Result<(i64, u32, u32, u32)> {
         .splitn(4, ':')
         .map(crate::script::binding_abi::s_str_to_int);
     let id = i64::from(fields.next().unwrap_or(0));
-    let mut next = || u32::try_from(fields.next().unwrap_or(0)).unwrap_or(0);
+    // Signed, as `SStrToInt` answers them (`0x48e11d`, `0x48e140`, `0x48e16a`).
+    let mut next = || fields.next().unwrap_or(0);
     Ok((id, next(), next(), next()))
 }
 
@@ -518,12 +519,13 @@ fn parse_item_arg(v: &Value) -> mlua::Result<(i64, u32, u32, u32)> {
 /// table, `0x5d8b47`-`0x5d8b51`), whose suffix the app loads only when it is not empty (`0x5d8b6e`),
 /// `SStrPrintf(ITEM_SUFFIX_TEMPLATE, name, suffix)` (`0x5d8b78`-`0x5d8b8c`); else the name alone
 /// (`0x5d8ba5`).
-fn suffixed_name(lua: &Lua, name: &str, property: u32) -> String {
+fn suffixed_name(lua: &Lua, name: &str, property: i32) -> String {
     let suffix = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        (property != 0)
-            .then(|| model.random_properties.get(&property))
-            .flatten()
+        u32::try_from(property)
+            .ok()
+            .filter(|&p| p != 0)
+            .and_then(|p| model.random_properties.get(&p))
             .map(|row| row.suffix.clone())
     };
     match suffix {
