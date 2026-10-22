@@ -3296,6 +3296,39 @@ mod tests {
         assert_eq!(player_reaction(&rel, &druid, None), 0);
     }
 
+    /// A race's PvP side is the chain's (`0x5efe00`: `ChrRaces` field 2 to the template's group
+    /// mask), so a chain that moves Goblin (9) to the Horde and adds a race 10 on the Alliance
+    /// side answers both, in the snapshot's team digit and the race's faction group, and a race
+    /// with no row has no side.
+    #[test]
+    fn a_races_side_is_the_chains() {
+        use benilla_protocol::messages::ObjectFields;
+        /// `UNIT_FIELD_BYTES_0`, whose byte 0 is the race.
+        const BYTES_0: u16 = 36;
+        let teams = crate::chr_classes::RacePvpTeams(HashMap::from([(1, 1), (9, 0), (10, 1)]));
+        let names = UnitNames {
+            teams: Some(&teams),
+            ..Default::default()
+        };
+        let team = |race: u32| {
+            snapshot(
+                &ObjectStore(ObjectFields::from_pairs(&[(BYTES_0, race)])),
+                0,
+                None,
+                0,
+                names,
+                Default::default(),
+            )
+            .pvp_team
+        };
+        assert_eq!(team(9), 0, "the chain's Goblin is Horde");
+        assert_eq!(team(10), 1, "a race the stock chain lacks");
+        assert_eq!(team(2), -1, "a race this chain has no row for");
+        assert_eq!(names.faction_group(9), Some("Horde"));
+        assert_eq!(names.faction_group(10), Some("Alliance"));
+        assert_eq!(names.faction_group(2), None);
+    }
+
     /// `UNIT_DYNFLAG_DEAD` alone makes empty bars over real maxima, through `snapshot`'s wiring.
     #[test]
     fn a_feigning_unit_snapshots_empty_bars_over_a_real_maximum() {
