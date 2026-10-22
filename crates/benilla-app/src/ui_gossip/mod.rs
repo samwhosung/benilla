@@ -15,7 +15,7 @@ use crate::net::{Guid, NetCommands, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::ui_quest::row_is_active;
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed};
-use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
+use crate::ui_session::{LatchApp, LatchedWindow, NpcWindow};
 
 /// The open gossip menu, plus the NPC-text records by id, which outlive it. The cache holds whole
 /// records: the reference draws the greeting afresh at each open, from the NPC's gender and a roll.
@@ -280,9 +280,9 @@ fn snapshot(state: &GossipState) -> Option<GossipMenu> {
     })
 }
 
-/// Push the menu into the VM and, with the window open, fire `GOSSIP_SHOW` for each message and
-/// on a change; the close is the core's ([`close_core`]). The menu the VM holds is the memory:
-/// `SelectGossipOption`'s reset writes both sides, so it reads as no change. The slots wait
+/// Push the menu into the VM and, with the window open, fire `GOSSIP_SHOW` once for each message
+/// as its greeting is drawn; the close is the core's ([`close_core`]). The menu the VM holds is the
+/// memory: `SelectGossipOption`'s reset writes both sides, so it reads as no change. The slots wait
 /// outside the VM's turn, since the gossip verbs write them in the host.
 fn feed_gossip(
     mut vm: crate::script_calls::VmWith<Res<'static, GossipState>>,
@@ -292,28 +292,21 @@ fn feed_gossip(
     objects: crate::net::Objects,
     unit_names: crate::ui_unit::NameTables,
     states: Res<crate::world_state::WorldStates>,
-    mut last_name: crate::ui_script::WindowMemo<Option<String>>,
     mut shown_message: crate::ui_script::WindowMemo<u64>,
-    mut closes: CoreCloses,
 ) {
     vm.turn(|script, state| {
         let Some(script) = script else {
             return;
         };
-        let last_name = last_name.get(script);
         let shown_message = shown_message.get(script);
-        if closes.since_last(script, NpcWindow::Gossip) {
-            *last_name = None;
-        }
         let shown = script.gossip();
-        // `GOSSIP_SHOW` carries no argument (`SignalEvent` `0x4e22b5`) and the stock window titles
-        // with `UnitName("npc")` (`GossipFrame.lua:33`), so the name's landing alone re-fires it.
-        // Asked before the hold, so the name query goes out beside the text query; `UnitName` looks
-        // it up with a callback (`0x5171b8`), at the show a gossip packet brings.
+        // The stock window titles with `UnitName("npc")` (`GossipFrame.lua:33`), which looks the
+        // name up with a callback (`0x5171b8`) at the show a gossip packet brings; its landing
+        // fires nothing. Asked before the hold, so the name query goes out beside the text query.
         let ask = Ask::at(shown.is_none() || state.is_changed(), &commands);
-        let npc_name = state
-            .npc
-            .and_then(|g| names.resolve(&objects, g, ask).map(str::to_string));
+        if let Some(g) = state.npc {
+            let _ = names.resolve(&objects, g, ask);
+        }
         // While the text query is out, fire nothing and keep the last snapshot: the reference
         // returns at `0x4e2068` with no write and no event, so its frame keeps what it last showed.
         // Reading the hold as a close would flash an open window.
@@ -332,18 +325,16 @@ fn feed_gossip(
                 },
             );
         }
-        let name_changed = *last_name != npc_name;
         let new_message = std::mem::replace(shown_message, state.generation) != state.generation;
-        if fresh == shown && !name_changed && !new_message {
-            return;
+        if fresh != shown {
+            script.set_gossip(fresh.clone());
         }
-        script.set_gossip(fresh.clone());
-        // A message, or a change while open; a close is the core's, and a disconnect's clear
-        // tells the VM nothing.
-        if fresh.is_some() && state.npc.is_some() {
+        // `GOSSIP_SHOW` has one producer, `0x4e2010` (`0x4e22b5`, no argument), run by a message
+        // (`0x4e27df`) and by its text's arrival (`0x4e22f2`), which the hold above waits on. A
+        // close is the core's, and a disconnect's clear tells the VM nothing.
+        if new_message && fresh.is_some() && state.npc.is_some() {
             script.fire_event("GOSSIP_SHOW", vec![]);
         }
-        *last_name = npc_name;
     })
 }
 

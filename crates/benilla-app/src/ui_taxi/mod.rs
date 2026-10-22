@@ -200,7 +200,6 @@ fn feed_taxi(
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     relations: crate::target::RelationWorld,
     mut last: crate::ui_script::WindowMemo<Option<TaxiUiState>>,
-    mut last_name: crate::ui_script::WindowMemo<Option<String>>,
     mut closes: CoreCloses,
     mut sink: crate::ui_action::MessageSink,
     // Absent in a harness with no tutorials.
@@ -211,10 +210,8 @@ fn feed_taxi(
             return;
         };
         let last = last.get(script);
-        let last_name = last_name.get(script);
         if closes.since_last(script, NpcWindow::Taxi) {
             *last = None;
-            *last_name = None;
         }
 
         // The activate reply: a refusal shows where its message row says; `OK` closed the map in
@@ -264,7 +261,6 @@ fn feed_taxi(
         // ([`open_map`]); only the memo goes, so that open pushes and fires anew.
         let Some(open) = state.open.as_ref() else {
             *last = None;
-            *last_name = None;
             return;
         };
         let flightmaster = index
@@ -301,33 +297,30 @@ fn feed_taxi(
             nodes,
         };
 
-        // The flight master's name is tracked so its landing re-fires `TAXIMAP_OPENED`, whose stock
-        // handler titles the map with `UnitName("npc")` (`TaxiFrame.lua:27`); the reference fires
-        // it only on open. `UnitName("npc")` looks it up with a callback (`0x5171b8`), at the
-        // open's event.
-        let flightmaster_name = names
-            .resolve_unit(
-                open.flightmaster,
-                flightmaster,
-                Ask::at(last.is_none(), &commands),
-            )
-            .map(str::to_string);
-        if last.as_ref() != Some(&fresh) || *last_name != flightmaster_name {
+        // The stock handler titles the map with `UnitName("npc")` (`TaxiFrame.lua:27`), which
+        // looks the name up with a callback (`0x5171b8`) at the open's event; its landing fires
+        // nothing.
+        let _ = names.resolve_unit(
+            open.flightmaster,
+            flightmaster,
+            Ask::at(state.opening, &commands),
+        );
+        let opens = std::mem::take(&mut state.opening);
+        if last.as_ref() != Some(&fresh) {
             script.set_taxi(Some(fresh.clone()));
-            // No arguments: the event's one fire site, `0x4dba96`, is a plain
-            // `FrameScript_SignalEvent` (`0x703e50`). The close is the core's.
+            *last = Some(fresh);
+        }
+        // The event's one fire site, `0x4dba96`, is the map builder's, once per open; no
+        // arguments, a plain `FrameScript_SignalEvent` (`0x703e50`). The close is the core's.
+        if opens {
             fires.post("TAXIMAP_OPENED", Vec::new());
             // The open's Travel tutorial follows its event (`0x4dbaa2`), whatever a handler of the
-            // event does to the map; a re-fire for the name raises none.
-            if std::mem::take(&mut state.opening) {
-                if let Some(tutorials) = tutorials.as_deref_mut() {
-                    tutorials.write(crate::tutorial::TutorialEvent::trigger(
-                        crate::tutorial::id::TRAVEL,
-                    ));
-                }
+            // event does to the map.
+            if let Some(tutorials) = tutorials.as_deref_mut() {
+                tutorials.write(crate::tutorial::TutorialEvent::trigger(
+                    crate::tutorial::id::TRAVEL,
+                ));
             }
-            *last = Some(fresh);
-            *last_name = flightmaster_name;
         }
     })
 }

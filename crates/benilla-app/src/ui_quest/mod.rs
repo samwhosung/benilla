@@ -512,7 +512,6 @@ pub(crate) fn feed_quest(
     materials: Option<Res<crate::ui_item_text::PageMaterials>>,
     mut sink: MessageSink,
     mut last: crate::ui_script::WindowMemo<Option<QuestState>>,
-    mut last_name: crate::ui_script::WindowMemo<Option<String>>,
     mut closes: CoreCloses,
 ) {
     // The window is the host's too, so the feed reads and pushes it as an engine turn; the panel
@@ -522,10 +521,8 @@ pub(crate) fn feed_quest(
             return;
         };
         let last = last.get(script);
-        let last_name = last_name.get(script);
         if closes.since_last(script, NpcWindow::Quest) {
             *last = None;
-            *last_name = None;
         }
         if giver.take_completed_fanfare() {
             script.queue_sound_kit("QUESTCOMPLETED");
@@ -572,17 +569,17 @@ pub(crate) fn feed_quest(
             });
             st
         });
-        let npc_name = giver
-            .npc
-            .and_then(|g| names.resolve(&objects, g, ask).map(str::to_string));
-        let name_changed = *last_name != npc_name;
-        if fresh == *last && !name_changed {
+        // The frame reads `UnitName("npc")` (`QuestFrame.lua:63`), which looks the name up with a
+        // callback (`0x5171b8`) at the panel's event; its landing fires nothing.
+        if let Some(g) = giver.npc {
+            let _ = names.resolve(&objects, g, ask);
+        }
+        if fresh == *last {
             return;
         }
         script.set_quest(fresh.clone());
-        // The panel events carry no argument: the frame reads `UnitName("npc")`
-        // (`QuestFrame.lua:63`). A close is the core's, which told the VM; a disconnect's clear
-        // tells it nothing.
+        // The panel events carry no argument. A close is the core's, which told the VM; a
+        // disconnect's clear tells it nothing.
         if let Some(f) = &fresh {
             let same_panel = last.as_ref().is_some_and(|l| l.panel == f.panel);
             let event = if same_panel {
@@ -593,7 +590,6 @@ pub(crate) fn feed_quest(
             fires.post(event, vec![]);
         }
         *last = fresh;
-        *last_name = npc_name;
     })
 }
 
