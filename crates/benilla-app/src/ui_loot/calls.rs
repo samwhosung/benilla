@@ -293,7 +293,10 @@ impl LootSteps<'_, '_> {
     /// The copier's end (`0x4c1ea8`-`0x4c1ee6`, the cache callback's `0x4c2afe`-`0x4c2b37`): the
     /// sweep while the auto-loot byte is set (`0x4c1ed3`, `0x4c2b29`), else `LOOT_OPENED`. With
     /// `autoLootDefault` on, a pickpocket or disenchant window, which no interaction stores the
-    /// byte for, stores it here from the Shift held now ([`LootConfig`]'s deviation).
+    /// byte for, stores it here from the Shift held now ([`LootConfig`]'s deviation). The
+    /// reference ends the copier inside its packet, its window open; a close the lane fires
+    /// behind it has already taken the window, which leaves nothing to sweep, so the end clears
+    /// the byte as the sweep's would (`0x4c2219`) and signals `LOOT_OPENED`.
     pub(super) fn copier_end(&mut self, script: &mut UiScript) {
         if self.cfg.auto_loot
             && matches!(
@@ -303,9 +306,10 @@ impl LootSteps<'_, '_> {
         {
             self.byte.0 = interaction_byte(&self.cfg, script.shift_key_down());
         }
-        if self.byte.0 {
+        if self.byte.0 && self.loot.window.source.is_some() {
             self.sweep(script, false);
         } else {
+            self.byte.0 = false;
             script.fire_event("LOOT_OPENED", vec![]);
         }
     }
