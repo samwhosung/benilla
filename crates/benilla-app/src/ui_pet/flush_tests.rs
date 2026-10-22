@@ -656,3 +656,27 @@ fn the_pet_spells_packet_back_dates_its_cooldowns_and_reads_the_held_bit() {
     let (_, _, enable) = rig.cooldown(1);
     assert_eq!(enable, 0, "bit 31 holds the cooldown, and is no time");
 }
+
+/// The category dword loses only bit 31 (`0x4bdaab`): any other bit is time, bit 27 included, so a
+/// remainder of `0x0800_0bb8` runs 134 220.728 s.
+#[test]
+fn the_pet_spells_cooldown_keeps_every_bit_but_the_held_flag() {
+    let mut rig = growl_rig();
+    let bar = rig.app.world().resource::<PetBar>().spells.clone();
+    rig.receive(vec![SessionEvent::PetSpells(Box::new(PetSpells {
+        cooldowns: vec![PetSpellCooldown {
+            spell_id: GROWL,
+            category: 82,
+            spell_cd_ms: 0,
+            category_cd_ms: 0x0800_0bb8,
+        }],
+        ..bar
+    }))]);
+    rig.frame();
+    let (_, duration, enable) = rig.cooldown(1);
+    assert!(
+        (duration - 134_220.728).abs() < 1e-3,
+        "the whole remainder: {duration}"
+    );
+    assert_eq!(enable, 1);
+}

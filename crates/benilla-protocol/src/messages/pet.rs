@@ -51,10 +51,6 @@ pub const PET_STATE_BAR_DISABLED: u32 = 0x0800_0000;
 /// (`0x4bd075`). `UNIT_FLAG_POSSESSED` is not among them: a possessed unit's bar must work.
 pub const PET_UNUSABLE_UNIT_FLAGS: u32 = 0x0004_0000 | 0x0040_0000 | 0x0080_0000;
 
-/// Permanent-cooldown marker OR-ed into a pet cooldown's category duration (vmangos
-/// `Unit.cpp:11270-11271`); strip it before using the number as a duration.
-pub const PET_COOLDOWN_PERMANENT: u32 = 0x0800_0000;
-
 /// One packed pet action word, as the client decodes it (`0x4bdcc7`/`0x4bdccd`/`0x4bdce3`): the
 /// action in bits 0-15, the type in 24-29, autocast allowed in 31 and on in 30; bits 16-23 are
 /// never read. The raw word is kept because the client echoes it verbatim in [`pet_action`].
@@ -114,7 +110,7 @@ pub struct PetSpellCooldown {
     pub spell_id: u32,
     pub category: u16,
     pub spell_cd_ms: u32,
-    /// The category remainder, possibly carrying [`PET_COOLDOWN_PERMANENT`] in its top bits.
+    /// The category remainder in ms, bit 31 the held flag (`0x4bda97`).
     pub category_cd_ms: u32,
 }
 

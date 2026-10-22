@@ -835,9 +835,8 @@ impl Cooldowns {
 
     /// One `SMSG_PET_SPELLS` cooldown (`0x4bd990`), seeded through [`Self::start_cooldown`] on
     /// the pet's list (`0x4bdabf`, pet=1, no item): the category dword's bit 31 is the held flag,
-    /// masked off the remainder (`0x4bda97`, `0x4bdaab`). vmangos marks a permanent pet cooldown
-    /// with bit 27 instead (`Unit.cpp:11270-11271`), which is stripped here as well, or it would read
-    /// as a 37-hour sweep. A spell `Spell.dbc` lacks seeds nothing (`0x6e2cbd`). No flush.
+    /// masked off the remainder (`0x4bda97`, `0x4bdaab`), and every other bit is time. A spell
+    /// `Spell.dbc` lacks seeds nothing (`0x6e2cbd`). No flush.
     pub(crate) fn seed_pet(
         &mut self,
         cd: &benilla_protocol::messages::PetSpellCooldown,
@@ -846,7 +845,6 @@ impl Cooldowns {
         pad: CategoryPad,
         now: Instant,
     ) {
-        use benilla_protocol::messages::PET_COOLDOWN_PERMANENT;
         let Some(spell) = spell else {
             return;
         };
@@ -856,8 +854,7 @@ impl Cooldowns {
                 item_id: 0,
                 category: u32::from(cd.category),
                 recovery_ms: cd.spell_cd_ms as i32,
-                category_recovery_ms: (cd.category_cd_ms & 0x7fff_ffff & !PET_COOLDOWN_PERMANENT)
-                    as i32,
+                category_recovery_ms: (cd.category_cd_ms & 0x7fff_ffff) as i32,
                 held: cd.category_cd_ms & 0x8000_0000 != 0,
             },
             spell,
