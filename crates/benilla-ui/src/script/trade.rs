@@ -244,7 +244,9 @@ impl super::UiScript {
             let Some(CursorPayload::Item(item)) = model.cursor.clone() else {
                 return None;
             };
-            if item.guid == 0 {
+            // `GetCursorItemInfo`'s guid and source container, both nonzero (`0x4bf667`,
+            // `0x4bf674`).
+            if item.guid == 0 || !source_container(model, &item) {
                 return None;
             }
             let slot = if held_bound(model, &item) { 6 } else { 0 };
@@ -296,6 +298,15 @@ impl super::UiScript {
             return Ok(());
         };
         place(&self.lua, slot, Some(item), AfterPlace::Offer)
+    }
+
+    /// Whether the cursor holds an item with its guid and its source container's
+    /// (`[0xb4e248]`, `[0xb4b3c8]`), both nonzero, as the world click's trade leg asks
+    /// (`0x49263f`-`0x492659`).
+    pub fn cursor_item_from_container(&self) -> bool {
+        let model = self.model_ref();
+        matches!(&model.cursor, Some(CursorPayload::Item(item))
+            if item.guid != 0 && source_container(&model, item))
     }
 
     /// The world click's refusal of the held item before its trade leg (`0x4926bc`-`0x49271f`): a
@@ -696,6 +707,25 @@ fn held_record(model: &Model, item: &cursor::CursorItem) -> Option<(bool, u32, O
             .get(&item.slot)
             .filter(|s| s.guid == item.guid)?;
         Some((s.already_bound, s.bonding, s.occupied_seats))
+    }
+}
+
+/// Whether the held item's source container (`[0xb4b3c8]`) has a guid: the active player's own
+/// object for the backpack, the paper doll, the vault and the keyring; the bag item in the
+/// container's inventory slot (`ContainerIDToInventoryID`'s two bands) for a bag.
+fn source_container(model: &Model, item: &cursor::CursorItem) -> bool {
+    /// The vault's and the keyring's container ids.
+    const BANK: i64 = -1;
+    const KEYRING: i64 = -2;
+    match item.bag {
+        0 | BANK | KEYRING | cursor::EQUIPMENT_BAG => model.unit_guids.player != 0,
+        bag @ 1..=10 => {
+            let slot = if bag <= 4 { bag + 19 } else { bag + 59 };
+            model
+                .inv_slot("player", slot as usize)
+                .is_some_and(|s| s.guid != 0)
+        }
+        _ => false,
     }
 }
 

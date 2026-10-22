@@ -181,7 +181,7 @@ impl TradeLeg<'_, '_> {
             return;
         }
         let held = match script.cursor_payload() {
-            Some(CursorPayload::Item(item)) => item.guid != 0,
+            Some(CursorPayload::Item(_)) => script.cursor_item_from_container(),
             Some(CursorPayload::Money(money)) => money.copper > 0,
             _ => false,
         };
