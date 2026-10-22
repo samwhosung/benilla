@@ -120,6 +120,8 @@ fn every_query_binding_answers_the_reference_s_return_arity() {
     }
 
     let mut s = benilla_ui::script::UiScript::new().expect("VM");
+    // No engine behind it: a verb's call is kept, so the verb returns as it would with a host.
+    s.keep_calls();
     // A seated player: the `Unit*` bindings raise on a nil token and answer a real one.
     s.set_unit(
         "player",

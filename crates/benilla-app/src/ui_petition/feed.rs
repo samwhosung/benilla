@@ -185,31 +185,46 @@ pub(super) fn feed_petition(
         edge
     });
 
-    // Signal an event bare, with the host lent.
-    macro_rules! fire {
-        ($event:literal) => {
-            vm.run(|script| {
-                if let Some(script) = script {
-                    script.fire_event($event, vec![]);
-                }
-            })
-        };
-    }
+    // Each signal bare, with the host lent.
     if registrar_shown {
-        fire!("GUILD_REGISTRAR_SHOW");
+        vm.run(|s| {
+            if let Some(s) = s {
+                s.fire_event("GUILD_REGISTRAR_SHOW", vec![]);
+            }
+        });
     }
     match edge {
         Edge::None => {}
-        Edge::Show => fire!("PETITION_SHOW"),
-        Edge::Closed => fire!("PETITION_CLOSED"),
+        Edge::Show => {
+            vm.run(|s| {
+                if let Some(s) = s {
+                    s.fire_event("PETITION_SHOW", vec![]);
+                }
+            });
+        }
+        Edge::Closed => {
+            vm.run(|s| {
+                if let Some(s) = s {
+                    s.fire_event("PETITION_CLOSED", vec![]);
+                }
+            });
+        }
         // The replace leg of `0x4f3f60` signals the old one's close with the item's guid zeroed
         // (`0x4f4020`-`0x4f402c`), so the frame's `OnHide`, whose `ClosePetition()` applies in
         // its call, finds nothing to close or decline; the new charter is set after it.
         Edge::Switch => {
             let held = vm.own().open.take();
-            fire!("PETITION_CLOSED");
+            vm.run(|s| {
+                if let Some(s) = s {
+                    s.fire_event("PETITION_CLOSED", vec![]);
+                }
+            });
             vm.own().open = held;
-            fire!("PETITION_SHOW");
+            vm.run(|s| {
+                if let Some(s) = s {
+                    s.fire_event("PETITION_SHOW", vec![]);
+                }
+            });
         }
     }
 }
