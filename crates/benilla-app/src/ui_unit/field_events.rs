@@ -250,7 +250,9 @@ pub(crate) fn fire(
         FieldNotice::QuestLog
         | FieldNotice::Tutorial { .. }
         | FieldNotice::Drunk { .. }
-        | FieldNotice::Shapeshift => {}
+        | FieldNotice::Shapeshift
+        | FieldNotice::SkillLines
+        | FieldNotice::SkillValue { .. } => {}
         FieldNotice::PvpPreference { on } => {
             let (toast, verbose) = super::pvp_announcement(on);
             // The verbose sentence is no catalog row, so it goes `unkeyed` to chat:
@@ -804,6 +806,59 @@ mod tests {
                 .resource::<crate::sound::MessageSounds>()
                 .queued_cues(),
             ["TutorialPopup"]
+        );
+    }
+
+    /// A skill watch's rebuild signals `SKILL_LINES_CHANGED` (`0x4d2fec`); the value watch then
+    /// speaks its line (`0x5de365`-`0x5de417`): `ERR_SKILL_GAINED_S` over an old value of 0, else
+    /// `ERR_SKILL_UP_SI` with the shown value, the permanent bonus included, both as
+    /// `CHAT_MSG_SKILL`; a line whose race-class flags carry `0x402` stays silent (`0x5de358`).
+    #[test]
+    fn the_skill_notices_rebuild_the_list_and_speak() {
+        let mut app = world(seated());
+        app.insert_resource(crate::ui_spellbook::SkillLines {
+            catalog: benilla_formats::SkillLineCatalog::from_spell_lines([])
+                .with_line_names([(164, "Blacksmithing"), (762, "Riding")])
+                .with_race_class_flags([(164, 0), (762, 0x2)]),
+        });
+        // A human warrior: race and class 1 (`UNIT_FIELD_BYTES_0`).
+        app.world_mut().spawn((
+            crate::net::SelfPlayer,
+            crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(36, 0x0101)])),
+        ));
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run(
+                r#"ERR_SKILL_GAINED_S = "You have gained the %s skill."
+                ERR_SKILL_UP_SI = "Your skill in %s has increased to %d.""#,
+            )
+            .unwrap();
+        assert_eq!(
+            fired(&mut app, &[FieldNotice::SkillLines]),
+            ["SKILL_LINES_CHANGED nil"]
+        );
+        let value = |skill_id, old, shown| FieldNotice::SkillValue {
+            skill_id,
+            old,
+            shown,
+        };
+        assert_eq!(
+            fired(&mut app, &[value(164, 0, 1)]),
+            [
+                "SKILL_LINES_CHANGED nil",
+                "CHAT_MSG_SKILL You have gained the Blacksmithing skill."
+            ]
+        );
+        assert_eq!(
+            fired(&mut app, &[value(164, 1, 17)]),
+            [
+                "SKILL_LINES_CHANGED nil",
+                "CHAT_MSG_SKILL Your skill in Blacksmithing has increased to 17."
+            ]
+        );
+        assert_eq!(
+            fired(&mut app, &[value(762, 75, 150)]),
+            ["SKILL_LINES_CHANGED nil"]
         );
     }
 

@@ -1003,3 +1003,7 @@ mod live_wire_tests {
         assert!(s.errors().is_empty(), "{:#?}", s.errors());
     }
 }
+
+#[cfg(test)]
+#[path = "ui_reputation_call_tests.rs"]
+mod call_tests;

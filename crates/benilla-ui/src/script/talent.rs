@@ -47,6 +47,8 @@ pub struct TalentPrereqView {
 /// One talent button: `GetTalentInfo`'s source and the tooltip's context.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TalentView {
+    /// The `Talent.dbc` id, which `CMSG_LEARN_TALENT` carries (`0x4f37c7`).
+    pub talent_id: u32,
     pub name: String,
     pub texture: Option<String>,
     pub tier: u32,

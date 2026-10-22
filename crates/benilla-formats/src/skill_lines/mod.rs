@@ -217,6 +217,24 @@ impl SkillLineCatalog {
         self
     }
 
+    /// This catalog with a `SkillRaceClassInfo.dbc` row of `flags` for every race and class on
+    /// each line, for tests and fixtures.
+    pub fn with_race_class_flags(mut self, lines: impl IntoIterator<Item = (u32, u32)>) -> Self {
+        for (id, flags) in lines {
+            self.race_class.entry(id).or_default().push(SrciRow {
+                race_mask: 0,
+                class_mask: 0,
+                row: SkillRaceClass {
+                    flags,
+                    min_level: 0,
+                    tier_id: 0,
+                    cost_index: 0,
+                },
+            });
+        }
+        self
+    }
+
     /// The skill line a spell belongs to, if `SkillLineAbility.dbc` names one.
     pub fn spell_to_line(&self, spell_id: u32) -> Option<u32> {
         self.abilities.get(&spell_id).map(|a| a.skill_id)

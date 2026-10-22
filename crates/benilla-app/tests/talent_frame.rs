@@ -49,6 +49,7 @@ fn load_ui(script: &UiScript) {
 /// `points_spent` of 10 or more unlocks tier 3 (yellow, `1`); fewer draws it gray (`-1`).
 fn fixture(points_spent: u32) -> TalentUiState {
     let rend = TalentView {
+        talent_id: 100,
         name: "Improved Rend".into(),
         texture: Some("Interface\\Icons\\Ability_Gouge".into()),
         tier: 1,
@@ -64,6 +65,7 @@ fn fixture(points_spent: u32) -> TalentUiState {
         learnable: false,
     };
     let deep_wounds = TalentView {
+        talent_id: 101,
         name: "Deep Wounds".into(),
         texture: Some("Interface\\Icons\\Ability_BackStab".into()),
         tier: 3,

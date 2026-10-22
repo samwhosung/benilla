@@ -256,6 +256,7 @@ pub(crate) fn build_pages(
             // frame's gold, green and gray come from the stock Lua.
             let learnable = rank < max_rank && points.0 > 0;
             views.push(TalentView {
+                talent_id: t.id,
                 name: d.map(|d| d.name.clone()).unwrap_or_default(),
                 texture: d.and_then(|d| d.icon.clone()),
                 tier: t.row + 1,
@@ -412,3 +413,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "ui_talent_call_tests.rs"]
+mod call_tests;

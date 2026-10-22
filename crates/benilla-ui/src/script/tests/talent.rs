@@ -23,6 +23,7 @@ fn one_tab_state() -> TalentUiState {
         talents: vec![
             vec![
                 TalentView {
+                    talent_id: 100,
                     name: "Improved Fireball".into(),
                     texture: Some("Interface\\Icons\\Spell_Fire_FlameBolt".into()),
                     tier: 1,
@@ -38,6 +39,7 @@ fn one_tab_state() -> TalentUiState {
                     learnable: true,
                 },
                 TalentView {
+                    talent_id: 101,
                     name: "Ignite".into(),
                     texture: None,
                     tier: 2,

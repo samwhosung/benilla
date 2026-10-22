@@ -534,6 +534,31 @@ mod tests {
     };
     use std::collections::HashMap;
 
+    /// `GetTradeSkillLine` (`0x4fdd40`) adds the slot's permanent bonus to the value and to the
+    /// maximum, each only when it is above 0 (`0x4fddf0`-`0x4fddff`, `0x4fde63`-`0x4fde71`): a
+    /// gnome's Engineering at 225/300 with Engineering Specialization's +15 reads 240/315.
+    #[test]
+    fn the_line_rank_adds_the_permanent_bonus_to_each_nonzero_half() {
+        let store = |value: u32, max: u32, perm: u32| {
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (718, 202),
+                (719, (max << 16) | value),
+                (720, (perm << 16) | 7),
+            ]))
+        };
+        assert_eq!(skill_rank(&store(225, 300, 15), 202), (240, 315));
+        assert_eq!(
+            skill_rank(&store(0, 0, 15), 202),
+            (0, 0),
+            "no bonus on a zero"
+        );
+        assert_eq!(
+            skill_rank(&store(225, 300, 15), 164),
+            (0, 0),
+            "another line"
+        );
+    }
+
     /// A recipe with its own spell icon, so a wrong arm names itself in the assertion.
     fn recipe(effect: u32, item: u32) -> SpellDisplay {
         SpellDisplay {

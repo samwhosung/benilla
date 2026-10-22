@@ -79,6 +79,15 @@ pub(crate) enum FieldNotice {
     /// `OnComboPointsChanged` (`0x5ddff0`) on the active player's combo count: after the usable
     /// refresh (the action feed's), `PLAYER_COMBO_POINTS` (`0x5ddffa`).
     ComboPoints,
+    /// A skill watch's rebuild of the skill list (`0x4d2cb0`), which signals `SKILL_LINES_CHANGED`
+    /// (`0x4d2fec`): the maximum's and the permanent bonus's watch `0x5de450` (`0x5de45c`) and the
+    /// temporary bonus's `0x5de470` (`0x5de49a`).
+    SkillLines,
+    /// The skill value watch `0x5de180` past its gate (`0x5de20c`): the rebuild (`0x5de2a7`), then
+    /// its line for the active player: `ERR_SKILL_GAINED_S` over an old value of 0 (`0x5de378`),
+    /// else `ERR_SKILL_UP_SI` with the shown value (`0x5de417`). `old` is the value word's copy,
+    /// `shown` the value plus the permanent bonus when the value is above 0.
+    SkillValue { skill_id: u16, old: u16, shown: u32 },
 }
 
 /// The notice lane: each notice stamped as a handler writes it ([`crate::lanes::stamp`]), fired
@@ -1132,6 +1141,84 @@ mod tests {
             [FieldNotice::CombatSkill]
         );
         assert!(block(&mut me, Some(ME), ME, &[(value, (305 << 16) | 2)]).is_empty());
+    }
+
+    /// Each of the four watches of a skill slot (`0x5dda54`-`0x5ddaf0`) rebuilds the list: the value
+    /// past its gate after its combat signals (`0x5de214`, `0x5de2a7`), the maximum and the
+    /// permanent bonus (`0x5de450` → `0x5de45c`), and the temporary bonus after its combat signals
+    /// (`0x5de470` → `0x5de495`, `0x5de49a`); at one field the watches run in their registration
+    /// order, value, maximum, permanent bonus, temporary bonus (`0x5dda6c`, `0x5dda8e`,
+    /// `0x5ddaaf`, `0x5ddad1`).
+    #[test]
+    fn every_skill_watch_rebuilds_the_list() {
+        use FieldNotice::{CombatSkill, SkillLines, SkillValue};
+        let mut me = player();
+        let value = pf(SKILL_VALUE);
+        let bonus = pf(SKILL_TEMP_BONUS);
+        // Skill 95 (Defense) lands in entry 0 at 1/300.
+        assert_eq!(
+            block(
+                &mut me,
+                Some(ME),
+                ME,
+                &[(value - 1, 95), (value, (300 << 16) | 1)]
+            ),
+            [
+                CombatSkill,
+                SkillValue {
+                    skill_id: 95,
+                    old: 0,
+                    shown: 1
+                },
+                SkillLines,
+            ]
+        );
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(value, (300 << 16) | 2)]),
+            [
+                CombatSkill,
+                SkillValue {
+                    skill_id: 95,
+                    old: 1,
+                    shown: 2
+                }
+            ]
+        );
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(value, (305 << 16) | 2)]),
+            [SkillLines],
+            "the maximum alone"
+        );
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(bonus, 5 << 16)]),
+            [SkillLines],
+            "the permanent bonus alone"
+        );
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(bonus, (5 << 16) | 3)]),
+            [CombatSkill, SkillLines],
+            "the temporary bonus alone"
+        );
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(bonus, (6 << 16) | 4)]),
+            [SkillLines, CombatSkill, SkillLines],
+            "both bonuses: the permanent one's watch first"
+        );
+        // Shown 4 + 6 against the old word 2.
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(value, (310 << 16) | 4)]),
+            [
+                CombatSkill,
+                SkillValue {
+                    skill_id: 95,
+                    old: 2,
+                    shown: 10
+                },
+                SkillLines,
+            ],
+            "the value and the maximum in one dword"
+        );
+        assert!(block(&mut player(), Some(ME), 0x08, &[(value, 7)]).is_empty());
     }
 
     /// The visible-item watch signals on the three weapon slots only, on any of their 12 dwords.
