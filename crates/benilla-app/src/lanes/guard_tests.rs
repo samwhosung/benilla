@@ -218,9 +218,10 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "the talent wipe confirm",
     ),
     (
-        Row::Queue,
+        Row::HostHeld,
         "::ui_taxi::TaxiState",
-        "the flight master's packets",
+        "the flight master's packets, which `feed_taxi` fires from; the taxi verbs, acting in \
+         their calls, hold it in the host",
     ),
     (
         Row::HostHeld,
@@ -326,6 +327,11 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::MailOpen",
     "::Stationery",
     "::MerchantOpen",
+    // The repair discounts and the taxi graph the host's merchant and taxi verbs consult, and
+    // the latch the taxi close reads to count its events.
+    "::RepairTables",
+    "::TaxiCatalogs",
+    "::InteractLatch",
     "::PetBar",
     "::QuestLog",
     "::UiClock",
