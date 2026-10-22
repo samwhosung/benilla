@@ -73,8 +73,9 @@ pub struct ContainerSlot {
     /// tooltip's charges lines read them (`0x52d9e9`), and the merchant price scales by block 0's
     /// (`0x52e43d`).
     pub spell_charges: [i32; 5],
-    /// The instance carries `ITEM_FIELD_ITEM_TEXT_ID` (a mail copy): `GetContainerItemInfo`'s
-    /// `readable`, which shows the Inspect cursor (`ContainerFrame.lua:638`).
+    /// The template carries PageText (a book) or the instance `ITEM_FIELD_ITEM_TEXT_ID` (a mail
+    /// copy), in that order (`0x4f97ba`-`0x4f97cf`): `GetContainerItemInfo`'s `readable`, which
+    /// shows the Inspect cursor (`ContainerFrame.lua:638`).
     pub readable: bool,
     /// The `ITEM_FIELD_CREATOR` name for the "Written by" or "<Made by>" line, once resolved.
     pub creator: Option<String>,

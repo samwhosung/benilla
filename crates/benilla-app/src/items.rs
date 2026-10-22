@@ -284,6 +284,14 @@ pub(crate) fn already_bound(
             && (0..7).any(|slot| live_enchant(fields, slot, cat).is_some_and(|id| binds(id, cat))))
 }
 
+/// The item record's PageText as `0x5d9e10` reads it (`[rec+0x19c]`): the cached template's, 0
+/// while it is not cached. Only read.
+pub(crate) fn record_page_text(items: &Items, entry: u32, guid: u64) -> u32 {
+    items
+        .template(entry, guid, Ask::Read)
+        .map_or(0, |t| t.page_text)
+}
+
 /// The item record's flags as `0x5da2a0` reads them: the cached template's, 0 while it is not
 /// cached. Only read.
 pub(crate) fn record_flags(items: &Items, entry: u32, guid: u64) -> u32 {

@@ -847,9 +847,10 @@ fn resolve_slot(
             .item_durability()
             .zip(fields.item_max_durability())
             .filter(|&(_, max)| max > 0),
-        // Letter text on the instance, which the hover magnifier keys off; a template
-        // `PageText` book does not set it.
-        fields.item_text_id().is_some_and(|id| id != 0),
+        // `GetContainerItemInfo`'s readable flag (`0x4f97ba`): the cached template's PageText
+        // (`0x5d9e10`), 0 while uncached, else the instance's letter text (`0x4f97c1`).
+        crate::items::record_page_text(items, fields.object_entry().unwrap_or(0), guid) != 0
+            || fields.item_text_id().is_some_and(|id| id != 0),
         // The creator's name for "<Made by %s>" and "Written by %s", `None` until the
         // name query answers. The tooltip build asks it ([`ask_item_build_lookups`]).
         fields
