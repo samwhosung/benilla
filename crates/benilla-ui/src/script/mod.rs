@@ -283,8 +283,8 @@ pub use gm_survey::{GmSurveyTables, SurveyAnswerSend};
 pub use gm_ticket::{GmTicketIntent, GmTicketWrite};
 pub use gossip::{GossipCall, GossipMenu, GossipOptionView, GossipQuestRow};
 pub use guild::{
-    GuildCall, GuildMemberInfo, GuildRankEdit, GuildRankInfo, GuildState, LastOnline, UnitGuild,
-    MAX_RANKS, MIN_RANKS, RANK_RIGHT_BITS,
+    GuildCall, GuildCells, GuildMemberInfo, GuildRankEdit, GuildRankInfo, GuildState, LastOnline,
+    UnitGuild, MAX_RANKS, MIN_RANKS, RANK_RIGHT_BITS,
 };
 pub use host::{CallHost, CallTail};
 pub use input_verbs::{BindingInput, FiredInput, HeldInput};

@@ -218,6 +218,18 @@ pub enum GuildCall {
     Sort(String),
 }
 
+/// The roster module's cells a `/reload` keeps: `SetGuildRosterShowOffline`'s integer
+/// (`0xb73124`) and `SetGuildRosterSelection`'s member guid (`0xb73128`). Only `InitGuildRoster`
+/// zeroes them (`0x4d0a25`, `0x4d0a2b`), from `InitializeGame` (`0x48f5ea`), which the login runs
+/// and the reload (`0x495664`, `0x495669`) does not.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GuildCells {
+    /// The integer as stored, every reader testing it against 0.
+    pub show_offline: i32,
+    /// The selected member's guid, 0 for none.
+    pub selection: u64,
+}
+
 impl super::UiScript {
     /// Push the guild snapshot, replacing it. The app fires `GUILD_ROSTER_UPDATE`,
     /// `PLAYER_GUILD_UPDATE` and `GUILD_MOTD` on the edges.
@@ -228,7 +240,18 @@ impl super::UiScript {
     /// `SetGuildRosterShowOffline`'s integer as `0x4d0f70` stored it (`0xb73124`), every reader
     /// testing it against 0: the roster's order and `GetNumGuildMembers` follow it.
     pub fn guild_show_offline(&self) -> i32 {
-        self.model_ref().guild_show_offline
+        self.model_ref().guild_cells.show_offline
+    }
+
+    /// Take the roster's cells out of a dying VM, for [`Self::seed_guild_cells`] to seat in the
+    /// next.
+    pub fn take_guild_cells(&mut self) -> GuildCells {
+        std::mem::take(&mut self.model_mut().guild_cells)
+    }
+
+    /// Seat a `/reload`'s VM with the roster's cells the last one held, before anything runs on it.
+    pub fn seed_guild_cells(&mut self, cells: GuildCells) {
+        self.model_mut().guild_cells = cells;
     }
 
     /// The guilds `GetGuildInfo` found no record for since the last take, each `(guild_id, guid)`:
@@ -445,7 +468,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetGuildRosterSelection",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let guid = model.guild_selection;
+            let guid = model.guild_cells.selection;
             let row = (guid != 0)
                 .then(|| model.guild.roster.iter().position(|m| m.guid == guid))
                 .flatten();
@@ -463,7 +486,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             )?);
             // The row's member's guid, or 0 for an index out of range (`0x4d186a`/`0x4d1872`).
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.guild_selection = member_at(&model.guild.roster, index).map_or(0, |m| m.guid);
+            model.guild_cells.selection =
+                member_at(&model.guild.roster, index).map_or(0, |m| m.guid);
             Ok(())
         })?,
     )?;
@@ -473,7 +497,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetGuildRosterShowOffline",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(binding_abi::flag(model.guild_show_offline != 0))
+            Ok(binding_abi::flag(model.guild_cells.show_offline != 0))
         })?,
     )?;
     // SetGuildRosterShowOffline([flag]) (`0x4d1e10`): `GetScriptFlagArg` (`0x4d1e17`) with default
@@ -485,10 +509,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, args: MultiValue| {
             let flag = binding_abi::flag_or_default(args.front(), 1);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if model.guild_show_offline == flag {
+            if model.guild_cells.show_offline == flag {
                 return Ok(());
             }
-            model.guild_show_offline = flag;
+            model.guild_cells.show_offline = flag;
             if model.guild.roster.is_empty() {
                 return Ok(());
             }

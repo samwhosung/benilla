@@ -11,7 +11,7 @@ use benilla_protocol::messages::{
     GuildRosterMember, GUILD_RANKS_MAX_COUNT,
 };
 use benilla_protocol::ObjectFields;
-use benilla_ui::script::{LastOnline, UnitGuild};
+use benilla_ui::script::{LastOnline, UiScript, UnitGuild};
 use bevy::prelude::*;
 
 use crate::net::{ClientCommand, NetCommands};
@@ -137,7 +137,7 @@ pub(crate) struct GuildState {
 /// the unit and item feeds that read the guild cache beside the VM can share the call host: the
 /// sort chain, the shown order, the request deadline and the held invitation. Reset with the
 /// session, as [`GuildState`] is. The show-offline flag and the selection are the VM's
-/// ([`benilla_ui::script::UiScript::guild_show_offline`]).
+/// ([`benilla_ui::script::GuildCells`]).
 #[derive(Resource, Default)]
 pub(crate) struct GuildLocal {
     sort: SortStack,
@@ -167,6 +167,34 @@ impl GuildLocal {
     #[cfg(test)]
     pub(crate) fn invite(&self) -> Option<&(String, String)> {
         self.pending_invite.as_ref()
+    }
+}
+
+/// The roster's VM cells between a dying VM and the next ([`fold_dying_vm_guild`]).
+#[derive(Resource, Default)]
+struct GuildCellsCarry(benilla_ui::script::GuildCells);
+
+/// Take the roster's show-offline flag and selection out of the dying VM, which a `/reload`'s VM
+/// gets back ([`seed_vm_guild`]).
+pub(crate) fn fold_dying_vm_guild(world: &mut World) {
+    let Some(cells) = world
+        .get_non_send_resource_mut::<UiScript>()
+        .map(|mut s| s.take_guild_cells())
+    else {
+        return;
+    };
+    world.insert_resource(GuildCellsCarry(cells));
+}
+
+/// Seat a new in-game VM's roster state before its load runs. A `/reload` runs only the teardown
+/// and `UI_Init` (`0x495664`, `0x495669`), so its VM keeps the last one's cells; a world entry's
+/// starts with none, as `InitGuildRoster` zeroes them (`0x4d0a25`, `0x4d0a2b`).
+pub(crate) fn seed_vm_guild(world: &mut World, script: &mut UiScript, reload: bool) {
+    let carried = world
+        .remove_resource::<GuildCellsCarry>()
+        .unwrap_or_default();
+    if reload {
+        script.seed_guild_cells(carried.0);
     }
 }
 
