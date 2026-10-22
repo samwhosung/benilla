@@ -1455,7 +1455,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // `name, texture, numItems, quality, isUsable`, the giver panels' shape, as one stock routine
     // lays out both (`QuestFrameItems_Update`, `QuestFrame.lua:311`): five values, `isUsable` 1 or
-    // nil (`0x4e0b00`, `0x4e0cf0`). The selected quest's record is read without a callback
+    // nil (`0x4e0b00`, `0x4e0cf0`), which the stock frame tints red by. The selected quest's record is read without a callback
     // (`0x4e0b75`), the item's with `0x4e0830` (`0x4e0b9e`, `0x4e0d8e`), whose landing fires
     // `QUEST_LOG_UPDATE`. No selected quest, an index past the list or an item in flight answers
     // `nil, nil, 1, 0, nil` (`0x4e0ca8`); a non-number index raises the reward getter's Usage line
@@ -1475,12 +1475,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         usize::try_from(row).ok().and_then(|n| list.get(n)).copied()
                     });
                     pair.and_then(|(id, count)| {
-                        model
-                            .quest_item_lookup(id)
-                            .map(|(name, quality, icon)| (name, quality, icon, count))
+                        let (name, quality, icon) = model.quest_item_lookup(id)?;
+                        // Quality -1 for an inventory type of 0 (`+0x2c`, `0x4e0c3c`).
+                        let worn = model
+                            .item_templates
+                            .get(&id)
+                            .is_some_and(|t| t.inventory_type != 0);
+                        let quality = if worn { quality as i32 } else { -1 };
+                        // `isUsable` through the item-usable predicate (`0x4e0c83`, `0x4e0e73`).
+                        let usable = super::item_stats::item_usable_by_id(&model, id);
+                        Some((name, quality, icon, count, usable))
                     })
                 };
-                let Some((name, quality, icon, count)) = item else {
+                let Some((name, quality, icon, count, usable)) = item else {
                     return Ok(MultiValue::from_vec(vec![
                         Value::Nil,
                         Value::Nil,
@@ -1498,8 +1505,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     texture,
                     Value::Integer(i64::from(count)),
                     Value::Integer(i64::from(quality)),
-                    // Not computed: `0x5ea930`'s gate; the stock frame tints unusable ones red.
-                    flag(true),
+                    flag(usable),
                 ]))
             })?,
         )
@@ -2058,6 +2064,8 @@ mod tests {
             ItemTemplateView {
                 name: "Militia Hammer".into(),
                 quality: 1,
+                // INVTYPE_WEAPON: a worn item reads its own quality (`0x4e0c3c`).
+                inventory_type: 13,
                 ..Default::default()
             },
         );

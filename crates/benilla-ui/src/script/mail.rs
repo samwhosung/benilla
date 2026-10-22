@@ -921,8 +921,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetSendMailItem(): name, texture, stackCount, quality (`MailFrame.lua:511`). The reference
     // answers `nil, nil, 0, 0` both with nothing attached and before the template loads
-    // (`0x4ae590`). It answers quality -1 for an item whose InventoryType is 0 (`0x4ae6bf`); this
-    // answers the cached quality, or 0.
+    // (`0x4ae590`), and quality -1 for an item whose inventory type is 0 (`0x4ae6aa`,
+    // `0x4ae6bf`).
     g.set(
         "GetSendMailItem",
         lua.create_function(|lua, ()| {
@@ -952,8 +952,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Some(t) => Value::String(lua.create_string(t)?),
                 None => Value::Nil,
             };
-            // A number on every path, as in the reference.
-            let quality = Value::Integer(i64::from(it.quality.unwrap_or(0)));
+            // A number on every path, as in the reference: the template's (`+0x1c`) for an item
+            // with an inventory type (`+0x2c`), else -1.
+            let quality = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                match model.item_templates.get(&it.item_id) {
+                    Some(t) if t.inventory_type == 0 => -1,
+                    Some(t) => i64::from(t.quality),
+                    None => i64::from(it.quality.unwrap_or(0)),
+                }
+            };
+            let quality = Value::Integer(quality);
             Ok(MultiValue::from_vec(vec![
                 name,
                 texture,
