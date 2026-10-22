@@ -259,7 +259,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let call = |call: PetitionCall| lua.create_function(move |lua, ()| submit(lua, call.clone()));
     g.set("TurnInGuildCharter", call(PetitionCall::TurnIn)?)?;
     // CloseGuildRegistrar() (`0x4f5010`) is the close core, which needs the interaction latch, so
-    // it stays latch-driven ([`UiScript::take_registrar_close`]).
+    // it stays latch-driven ([`UiScript::take_registrar_close`]) and its `GUILD_REGISTRAR_CLOSED`
+    // signals after the verb, where the reference's signals inside it (`0x4f503a`).
     g.set(
         "CloseGuildRegistrar",
         lua.create_function(|lua, ()| {
@@ -270,7 +271,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     // GetTabardInfo() (`0x4f5300`): the activate inside the call, then the registrar's close core
-    // (`0x4f5355` → `0x4f5010`), latch-driven as `CloseGuildRegistrar` is.
+    // (`0x4f5355` → `0x4f5010`), latch-driven as `CloseGuildRegistrar` is, so its signal comes
+    // after the verb, not inside it (`0x4f503a`).
     g.set(
         "GetTabardInfo",
         lua.create_function(|lua, ()| {

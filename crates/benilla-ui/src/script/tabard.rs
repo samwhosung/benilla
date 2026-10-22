@@ -333,7 +333,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|_, ()| Ok(i64::from(TABARD_CREATION_COST)))?,
     )?;
     // `0x4f5900`, no packet: the close core (`0x4f58a0`) and its `CLOSE_TABARD_FRAME`, gated on a
-    // stored vendor; it needs the interaction latch, so it stays latch-driven.
+    // stored vendor; it needs the interaction latch, so it stays latch-driven, and the event
+    // signals after the verb, where the reference's signals inside it (`0x4f58f8`).
     g.set(
         "CloseTabardCreation",
         lua.create_function(|lua, _: mlua::MultiValue| {
