@@ -531,16 +531,36 @@ fn the_chat_verbs_go_out_in_call_order() {
 /// sitting sends again.
 #[test]
 fn do_emote_sends_its_stow_and_posture_ahead_of_the_emote() {
+    let (mut c, _) = seated_client(&[]);
+    c.run("DoEmote('SIT')");
+    assert_eq!(posture_wire(&mut c), ["sheath 0", "stand 1", "emote 86"]);
+    c.run("DoEmote('SIT')");
+    assert_eq!(
+        posture_wire(&mut c),
+        ["stand 1", "emote 86"],
+        "stowed already"
+    );
+}
+
+/// Who sits for the posture tests: alive, weapons drawn (`UNIT_FIELD_BYTES_2` byte 0 is 1), with
+/// `SIT` as emote 13 and `extra` as further posture emotes, each `(token, text id, emote id,
+/// state)`.
+fn seated_client(extra: &[(&str, u32, u32, u32)]) -> (Client, bevy::prelude::Entity) {
     use crate::net::{Guid, GuidIndex, ObjectStore, SelfGuid, SelfPlayer};
 
     let mut c = Client::new(&[], UiScript::new().expect("a VM"));
-    c.world().insert_resource(crate::sound::EmoteSounds(
-        benilla_formats::EmoteSoundCatalog::default()
-            .with_text_emote("SIT", 86, 13)
-            .with_row(13, 0, 0)
-            .with_posture(13, 1),
-    ));
-    // Alive, weapons drawn: `UNIT_FIELD_BYTES_2` byte 0 is 1.
+    let mut catalog = benilla_formats::EmoteSoundCatalog::default()
+        .with_text_emote("SIT", 86, 13)
+        .with_row(13, 0, 0)
+        .with_posture(13, 1);
+    for &(token, text_id, emote_id, state) in extra {
+        catalog = catalog
+            .with_text_emote(token, text_id, emote_id)
+            .with_row(emote_id, 0, 0)
+            .with_posture(emote_id, state);
+    }
+    c.world()
+        .insert_resource(crate::sound::EmoteSounds(catalog));
     let me = c
         .world()
         .spawn((
@@ -558,21 +578,64 @@ fn do_emote_sends_its_stow_and_posture_ahead_of_the_emote() {
     c.world().resource_mut::<GuidIndex>().0.insert(1, me);
     c.world().insert_resource(SelfGuid(Some(1)));
     c.world().init_resource::<crate::player::Player>();
-    let wire = |c: &mut Client| -> Vec<String> {
-        c.sent
-            .try_iter()
-            .filter_map(|cmd| match cmd {
-                ClientCommand::SetSheathed { state } => Some(format!("sheath {state}")),
-                ClientCommand::StandStateChange { state } => Some(format!("stand {state}")),
-                ClientCommand::TextEmote { text_id, .. } => Some(format!("emote {text_id}")),
-                _ => None,
-            })
-            .collect()
-    };
+    (c, me)
+}
+
+/// The posture wire `DoEmote` sent, in order.
+fn posture_wire(c: &mut Client) -> Vec<String> {
+    c.sent
+        .try_iter()
+        .filter_map(|cmd| match cmd {
+            ClientCommand::SetSheathed { state } => Some(format!("sheath {state}")),
+            ClientCommand::StandStateChange { state } => Some(format!("stand {state}")),
+            ClientCommand::LootRelease { guid } => Some(format!("release {guid:#x}")),
+            ClientCommand::AttackStop => Some("attack stop".into()),
+            ClientCommand::TextEmote { text_id, .. } => Some(format!("emote {text_id}")),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The posture branch takes only a state in the mask `[0x85ff10]` = `0x10b` (`0x5ef63e`-
+/// `0x5ef64d`): 0, 1, 3 and 8. A posture emote for state 2 falls through to the play and sends no
+/// stand change; kneel's 8 is in the mask.
+#[test]
+fn do_emote_sets_only_the_stand_states_in_its_mask() {
+    let (mut c, _) = seated_client(&[("CHAIR", 90, 14, 2), ("KNEEL", 91, 15, 8)]);
+    c.run("DoEmote('CHAIR')");
+    assert_eq!(posture_wire(&mut c), ["sheath 0", "emote 90"]);
+    c.run("DoEmote('KNEEL')");
+    assert_eq!(posture_wire(&mut c), ["stand 8", "emote 91"]);
+}
+
+/// A sit's local apply (`0x6127b0` at `0x5ed53f`) runs its leave inside the call (`0x5f0790`): the
+/// loot window closes (`0x48f200` at `0x5f07d5`, `CMSG_LOOT_RELEASE`) and the attack stops
+/// (`0x5ecac0` at `0x5f07e7`, `CMSG_ATTACKSTOP`), after the stand change and ahead of
+/// `CMSG_TEXT_EMOTE`.
+#[test]
+fn a_sit_emote_releases_the_loot_and_stops_the_attack_ahead_of_its_packet() {
+    const CORPSE: u64 = 0xf130_0000_0000_0042;
+    let (mut c, me) = seated_client(&[]);
+    c.world()
+        .entity_mut(me)
+        .insert(crate::creature_anim::Engaged(CORPSE));
+    c.world().resource_mut::<crate::ui_loot::LootState>().open(
+        CORPSE,
+        benilla_protocol::messages::loot_type::CORPSE,
+        0,
+        Vec::new(),
+    );
     c.run("DoEmote('SIT')");
-    assert_eq!(wire(&mut c), ["sheath 0", "stand 1", "emote 86"]);
-    c.run("DoEmote('SIT')");
-    assert_eq!(wire(&mut c), ["stand 1", "emote 86"], "stowed already");
+    assert_eq!(
+        posture_wire(&mut c),
+        [
+            "sheath 0",
+            "stand 1",
+            "release 0xf130000000000042",
+            "attack stop",
+            "emote 86"
+        ]
+    );
 }
 
 /// The leave body turns the auto-join off only when its key, a number read as its slot's name
