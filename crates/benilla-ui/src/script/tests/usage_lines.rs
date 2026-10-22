@@ -534,3 +534,22 @@ fn set_shadow_offset_raises_its_usage_line_on_a_font_and_a_simplehtml() {
     )
     .unwrap();
 }
+
+/// `SortGuildRoster` tests argument 1 with `lua_isstring` (`0x4d1cb8`), so a number is its
+/// string, and anything else raises `Usgae: SortGuildRoster("type")` (`0x849bf0`, `0x4d1cc7`),
+/// the binary's spelling, with no call made.
+#[test]
+fn sort_guild_roster_raises_its_own_usage_line() {
+    let mut s = UiScript::new().unwrap();
+    s.keep_calls();
+    for call in ["SortGuildRoster()", "SortGuildRoster({})"] {
+        let e = err(&s, call);
+        assert!(
+            e.contains(r#"Usgae: SortGuildRoster("type")"#),
+            "{call}: {e}"
+        );
+    }
+    assert!(s.take_guild_calls().is_empty());
+    s.run("SortGuildRoster(5)").unwrap();
+    assert_eq!(s.take_guild_calls(), [GuildCall::Sort("5".into())]);
+}

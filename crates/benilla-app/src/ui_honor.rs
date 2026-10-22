@@ -336,10 +336,12 @@ mod tests {
         }
     }
 
-    /// Each VM is read once, the first frame it is in the world, so a world VM whose addon renames
-    /// a title reaches the overhead line.
+    /// Each VM is read the first frame it is in the world, so a world VM whose addon renames a
+    /// title reaches the overhead line, and read again when a global changes: the builder reads
+    /// the title (`0x609370`) and the flag tags (`0x5eca17`, `0x5eca54`, `0x5eca99`) at every
+    /// rebuild.
     #[test]
-    fn each_new_vm_is_read_once() {
+    fn each_vm_is_read_and_read_again_on_a_change() {
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
         world.init_resource::<crate::nameplates::NameLineStrings>();
@@ -361,14 +363,15 @@ mod tests {
         assert_eq!(held.session(), Some(boot_session));
         assert_eq!(held.get("PVP_RANK_7_1"), Some("Sergeant"));
 
-        // The same VM is not read again: a global it sets later stays out.
+        // A global the same VM sets later reaches the held strings, a flag tag's included.
         world
             .non_send_resource::<UiScript>()
-            .run(r#"PVP_RANK_7_1 = "Later""#)
+            .run(r#"PVP_RANK_7_1 = "Later" CHAT_FLAG_AFK = "<Away>""#)
             .expect("global set");
         world.run_system_once(feed_name_line_strings).unwrap();
         let held = world.resource::<crate::nameplates::NameLineStrings>();
-        assert_eq!(held.get("PVP_RANK_7_1"), Some("Sergeant"));
+        assert_eq!(held.get("PVP_RANK_7_1"), Some("Later"));
+        assert_eq!(held.get("CHAT_FLAG_AFK"), Some("<Away>"));
 
         let world_vm = vm(&format!("{stock}\nPVP_RANK_7_1 = \"Feldwebel\""));
         let world_session = world_vm.session();

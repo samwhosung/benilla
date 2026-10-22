@@ -200,3 +200,91 @@ fn a_close_declines_and_signals_inside_its_call() {
     assert_eq!(heard(&mut c), "");
     assert!(sent(&c).is_empty());
 }
+
+/// A handler that notes the title `GetPetitionInfo` answers as `PETITION_CLOSED` runs, and closes
+/// the window as the stock frame's `OnHide` does.
+fn note_closed_title(c: &mut Charter) {
+    run(
+        c,
+        "CLOSED_SAW = 'unset' local f = CreateFrame('Frame') f:RegisterEvent('PETITION_CLOSED') \
+         f:SetScript('OnEvent', function() local _, t = GetPetitionInfo() CLOSED_SAW = t \
+         ClosePetition() end)",
+    );
+}
+
+fn closed_saw(c: &mut Charter) -> Option<String> {
+    eval(c, "return CLOSED_SAW")
+}
+
+fn title(c: &mut Charter) -> Option<String> {
+    eval(c, "local _, t = GetPetitionInfo() return t")
+}
+
+/// `ClosePetition`'s `0x4f3f60` signals `PETITION_CLOSED` (`0x4f402c`) before it drops the
+/// record (`0x4f4078`), so a handler still reads the charter's title; it is gone after the call.
+#[test]
+fn a_close_signals_over_the_record_and_drops_it_after() {
+    let mut c = client();
+    offered(&mut c);
+    note_closed_title(&mut c);
+    run(&mut c, "ClosePetition()");
+    assert_eq!(closed_saw(&mut c).as_deref(), Some("Legacy"));
+    assert_eq!(title(&mut c), None);
+}
+
+/// Another charter offered while one is shown; `record` says whether its record lands with it.
+fn offered_again(c: &mut Charter, record: bool) {
+    let mut events = vec![SessionEvent::PetitionShowSignatures(
+        PetitionShowSignatures {
+            item: SECOND,
+            owner: OWNER,
+            petition_id: 8,
+            signatures: Vec::<PetitionSignature>::new(),
+        },
+    )];
+    if record {
+        events.push(SessionEvent::PetitionQueryResponse(PetitionQueryResponse {
+            petition_id: 8,
+            owner: OWNER,
+            name: "Second".into(),
+            flags: 1,
+            min_signatures: 9,
+            ..Default::default()
+        }));
+    }
+    crate::net::handlers::dispatch(c.app.world_mut(), events);
+    frame(c);
+}
+
+const SECOND: u64 = 0x4000_0000_0000_009a;
+
+/// The replace leg of `0x4f3f60`: the old charter's `PETITION_CLOSED` signals over its own record
+/// with the item's guid zeroed (`0x4f4020`-`0x4f402c`), and only then is the next charter's record
+/// looked up (`0x4f4061`) and shown.
+#[test]
+fn a_replaced_charter_closes_over_its_own_record_first() {
+    let mut c = client();
+    offered(&mut c);
+    note_closed_title(&mut c);
+    offered_again(&mut c, true);
+    assert_eq!(closed_saw(&mut c).as_deref(), Some("Legacy"));
+    assert_eq!(heard(&mut c), "PETITION_CLOSED(nil) PETITION_SHOW(nil) ");
+    assert_eq!(title(&mut c).as_deref(), Some("Second"));
+}
+
+/// With the next charter's record still to come the old one closes at once, over its own record,
+/// and the handler's `ClosePetition()` finds no item (`0x4f4020`), so the next charter is neither
+/// closed nor declined.
+#[test]
+fn a_replaced_charter_closes_first_while_the_next_resolves() {
+    let mut c = client();
+    offered(&mut c);
+    note_closed_title(&mut c);
+    offered_again(&mut c, false);
+    assert_eq!(closed_saw(&mut c).as_deref(), Some("Legacy"));
+    assert_eq!(heard(&mut c), "PETITION_CLOSED(nil) ");
+    assert!(
+        !sent(&c).iter().any(|s| s.contains(&SECOND.to_string())),
+        "nothing sent for the next charter"
+    );
+}

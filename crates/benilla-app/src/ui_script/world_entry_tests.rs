@@ -784,6 +784,63 @@ fn a_ready_check_outlives_a_reload_and_not_a_login() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// `ReloadUI()` runs only the teardown and `UI_Init` (`0x495664`, `0x495669`); the roster's
+/// show-offline flag (`0xb73124`) is zeroed only by `InitGuildRoster` (`0x4d0a25`), from
+/// `InitializeGame` (`0x48f5ea`). So an addon's file scope, which runs before `VARIABLES_LOADED`
+/// sets the flag again, reads the last VM's flag after a reload and none after a login. The
+/// selection (`0xb73128`, `0x4d0a2b`) is carried the same way, though the stock
+/// `FriendsFrame_OnLoad` clears it before any addon runs (`FriendsFrame.lua:67`).
+#[test]
+fn the_roster_flag_outlives_a_reload_and_not_a_login() {
+    use benilla_ui::script::UiScript;
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_addon(
+        "guild-cells",
+        "GuildCellsProbe",
+        "## Interface: 11200\nGuildCellsProbe.lua\n",
+        "GuildCellsSeen = GetGuildRosterShowOffline() or 0\n",
+    );
+    let mut world = booted_world();
+    let seen = |world: &World| -> i64 {
+        world
+            .non_send_resource::<UiScript>()
+            .eval("return GuildCellsSeen")
+            .unwrap()
+    };
+
+    log_in_as(&mut world, "Onehunter", 1);
+    assert_eq!(
+        seen(&world),
+        0,
+        "a login's file scope finds the flag zeroed"
+    );
+    world
+        .non_send_resource::<UiScript>()
+        .run("SetGuildRosterShowOffline(1)")
+        .unwrap();
+
+    reload(&mut world, crate::client_state::ClientState::InWorld);
+    assert_eq!(
+        seen(&world),
+        1,
+        "the reloaded VM's file scope finds it kept"
+    );
+
+    super::end_ui_session(&mut world);
+    log_in_as(&mut world, "Onehunter", 1);
+    assert_eq!(
+        seen(&world),
+        0,
+        "the next login's InitGuildRoster zeroed it"
+    );
+
+    drop(world);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The connection's billing group reaches every in-game VM, as `GetBillingTimeRested` reads the
 /// session's word (`0x48ec59`), a reload's VM included; the world entry arms the play-time warning
 /// (`0x48f630`) and a reload, which jumps to `UI_Init` alone (`0x495669`), does not.
