@@ -724,18 +724,9 @@ mod tests {
             matches!(rx.try_recv(), Ok(ClientCommand::LootRelease { guid }) if guid == CHEST),
             "…and it is B that gets released"
         );
-        let unlocks: Vec<Vec<(u64, bool)>> = world
-            .resource::<LootState>()
-            .steps
-            .iter()
-            .filter_map(|(_, s)| match s {
-                super::super::Step::Unlocks(u) => Some(u.clone()),
-                _ => None,
-            })
-            .collect();
         assert_eq!(
-            unlocks,
-            [[(CHEST, false)]],
+            world.resource::<LootState>().queued_unlocks(),
+            [CHEST],
             "and `UnlockItem` runs on B's guid, an item or not (`0x5eb9de`), at the packet"
         );
     }
@@ -1830,14 +1821,8 @@ mod tests {
                 },
             )
             .expect("the handler runs as a one-shot system");
-        assert!(world
-            .resource_mut::<LootState>()
-            .take_item_unlocks()
-            .into_iter()
-            .map(|(g, _)| g)
-            .collect::<Vec<_>>()
-            .is_empty());
-        // TOO_FAR (4) does.
+        assert!(world.resource::<LootState>().queued_unlocks().is_empty());
+        // TOO_FAR (4) does, at the packet.
         world
             .run_system_once_with(
                 on_error,
@@ -1847,15 +1832,7 @@ mod tests {
                 },
             )
             .expect("the handler runs as a one-shot system");
-        assert_eq!(
-            world
-                .resource_mut::<LootState>()
-                .take_item_unlocks()
-                .into_iter()
-                .map(|(g, _)| g)
-                .collect::<Vec<_>>(),
-            [LOCKBOX]
-        );
+        assert_eq!(world.resource::<LootState>().queued_unlocks(), [LOCKBOX]);
     }
 
     const ME: u64 = 0x0000_0000_0000_002A;

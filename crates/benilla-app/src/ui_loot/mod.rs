@@ -475,6 +475,19 @@ impl LootState {
         }
     }
 
+    /// The guids the lane's queued unlock steps will unlock, in order.
+    #[cfg(test)]
+    pub(crate) fn queued_unlocks(&self) -> Vec<u64> {
+        self.steps
+            .iter()
+            .filter_map(|(_, s)| match s {
+                Step::Unlocks(u) => Some(u.iter().map(|&(g, _)| g)),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    }
+
     /// Owe the window teardown's `UnlockItem` on its source, which runs only when the source
     /// resolves as a live item object (`0x48f299`/`0x48f2ab`, `0x4c1cdf`/`0x4c1d23`): checked
     /// where the unlocks run, against the objects.

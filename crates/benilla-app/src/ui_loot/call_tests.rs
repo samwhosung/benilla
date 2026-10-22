@@ -647,9 +647,10 @@ fn a_refusal_for_another_session_shows_nothing_and_drops_the_target() {
             "held {held:?}: no line"
         );
         assert_eq!(world.resource::<LootLatch>().0, None, "held {held:?}");
-        assert!(
-            world.resource::<LootState>().owes_unlocks(),
-            "held {held:?}"
+        assert_eq!(
+            world.resource::<LootState>().queued_unlocks(),
+            [GONE],
+            "held {held:?}: unlocked at the packet"
         );
     }
 }
