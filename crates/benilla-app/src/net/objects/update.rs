@@ -855,16 +855,6 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
     let Some(kind) = fields.created_as() else {
         return;
     };
-    sc.field_changes
-        .write_batch(block.edges().map(|(index, old, new)| FieldChanged {
-            at: crate::lanes::stamp(),
-            entity: e,
-            guid,
-            kind,
-            index,
-            old,
-            new,
-        }));
     // The `UNIT_FIELD_DISPLAYID` watcher (`0x604990`) and the health watcher's return to life
     // (`0x6046f0`: old health not above 0, new above, `0x6047ee`-`0x604835`) rebuild the display.
     if matches!(kind, ObjectType::Unit | ObjectType::Player)
@@ -911,16 +901,16 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
         others: &others,
         pet_bar: sc.pet_bar.as_ref().map_or(0, |bar| bar.spells.pet_guid),
     };
-    let mut fired = crate::field_watch::values(&around, guid, kind, fields, &block);
+    let mut placed = crate::field_watch::placed_values(&around, guid, kind, fields, &block);
     if !bridged {
-        fired.retain(|n| !matches!(n, crate::field_watch::FieldNotice::Unit { .. }));
+        placed.retain(|(_, n)| !matches!(n, crate::field_watch::FieldNotice::Unit { .. }));
     }
-    let notices = {
+    let (notices, item_signals) = {
         let watch = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items);
         let notices = watch.values(guid, kind, fields, &block);
         // An item block has no field watch of its own: its handlers' signals follow in its order.
-        fired.extend(notices.iter().flat_map(|n| watch.signals(n)));
-        notices
+        let signals: Vec<_> = notices.iter().flat_map(|n| watch.signals(n)).collect();
+        (notices, signals)
     };
     let stamp = crate::field_watch::guild_timestamp(&block, kind, fields);
     // `OnCharmOrSummonChanged` (`0x5e2660`) on the active player or a party or raid member
@@ -954,7 +944,24 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
         }
     }
     sc.item_notices.write_batch(notices);
-    sc.field_notices.write_batch(fired);
+    // The edges and the notices in the watchers' one walk, each stamped where it is written.
+    for step in crate::field_watch::in_watch_order(&block, placed) {
+        match step {
+            crate::field_watch::Step::Edge { index, old, new } => {
+                sc.field_changes.write(FieldChanged {
+                    at: crate::lanes::stamp(),
+                    entity: e,
+                    guid,
+                    kind,
+                    index,
+                    old,
+                    new,
+                });
+            }
+            crate::field_watch::Step::Notice(n) => sc.field_notices.write(n),
+        }
+    }
+    sc.field_notices.write_batch(item_signals);
     if let Some(((guild_id, stamp), guilds)) = stamp.zip(sc.guilds.as_mut()) {
         guilds.stamp_changed(guild_id, stamp, &sc.net);
     }

@@ -124,6 +124,14 @@ impl NoticeLane {
     pub(crate) fn drain(&mut self) -> impl Iterator<Item = FieldNotice> + '_ {
         self.0.drain(..).map(|(_, n)| n)
     }
+
+    /// Take every notice waiting with its stamp, in order, unfired.
+    #[cfg(test)]
+    pub(crate) fn drain_stamped(
+        &mut self,
+    ) -> impl Iterator<Item = (crate::lanes::Stamp, FieldNotice)> + '_ {
+        self.0.drain(..)
+    }
 }
 
 /// The event ids the producers pass to `0x515e50`, by their event-table names.
@@ -332,7 +340,7 @@ const CHARMED_BY: (u16, u16) = (0x10, 8);
 
 /// Which list a watch sits on: at one field the type watchers run ahead of the object's own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum List {
+pub(crate) enum List {
     Type,
     Object,
 }
@@ -450,7 +458,7 @@ impl<'a> Notified<'a> {
 }
 
 /// A watch's place in the notify pass: the field it ran at, its range's first field, its list.
-type Place = (u16, u16, List);
+pub(crate) type Place = (u16, u16, List);
 
 /// The signals of one block in the notify pass's order. A stable sort keeps one callback's
 /// signals, and the watches of one list at one field, in the order they ran.
@@ -486,10 +494,52 @@ impl Pass {
         }
     }
 
-    fn into_notices(mut self) -> Vec<FieldNotice> {
+    fn into_placed(mut self) -> Vec<(Place, FieldNotice)> {
         self.0.sort_by_key(|&(at, _)| at);
-        self.0.into_iter().map(|(_, n)| n).collect()
+        self.0
     }
+}
+
+/// One step of a block's notify in the watchers' order: a field edge, whose watcher may write a
+/// chat line, or a notice.
+pub(crate) enum Step {
+    Edge { index: u16, old: u32, new: u32 },
+    Notice(FieldNotice),
+}
+
+/// The type watch an edge's chat line is written in, by the edge's field: the aura watcher
+/// `0x604d00` over `UNIT_FIELD_AURA` and `AURAFLAGS` (fields 47-100), whose removals and adds log
+/// (`0x612320` → `0x62b480`, `0x6123f0`), the applications watcher `0x604ea0` (113-124,
+/// `0x612450` → `0x62b800`), and each other field's own, the health's `0x6046f0` and the loyalty
+/// byte's `0x604530` (→ `0x5ff860` → `0x62d440`) among them.
+fn edge_place(block: &Notified, index: u16) -> Place {
+    use benilla_protocol::field::{FIELD_UNIT_AURA, FIELD_UNIT_AURAAPPLICATIONS};
+    const AURA_WATCH: u16 = 54;
+    const APPLICATIONS_WATCH: u16 = 12;
+    for (base, dwords) in [
+        (FIELD_UNIT_AURA, AURA_WATCH),
+        (FIELD_UNIT_AURAAPPLICATIONS, APPLICATIONS_WATCH),
+    ] {
+        if (base..base + dwords).contains(&index) {
+            let fired = block.fired(base, 0, 4 * dwords).unwrap_or(index);
+            return (fired, base, List::Type);
+        }
+    }
+    (index, index, List::Type)
+}
+
+/// A block's edges and notices in the one ascending walk the notify pass makes (`0x465330`): by
+/// field, the type watchers ahead of the object's own, an edge ahead of a notice at one place.
+/// Each takes its stamp as it is written in this order, so a line a later system words off an
+/// edge fires among the notices where its watcher ran.
+pub(crate) fn in_watch_order(block: &Notified, notices: Vec<(Place, FieldNotice)>) -> Vec<Step> {
+    let mut steps: Vec<(Place, Step)> = block
+        .edges()
+        .map(|(index, old, new)| (edge_place(block, index), Step::Edge { index, old, new }))
+        .collect();
+    steps.extend(notices.into_iter().map(|(at, n)| (at, Step::Notice(n))));
+    steps.sort_by_key(|&(at, _)| at);
+    steps.into_iter().map(|(_, step)| step).collect()
 }
 
 /// The notices of one block's notify on `guid`, created as `kind`: `fields` is the store now.
@@ -500,6 +550,20 @@ pub(crate) fn values(
     fields: &ObjectFields,
     block: &Notified,
 ) -> Vec<FieldNotice> {
+    placed_values(around, guid, kind, fields, block)
+        .into_iter()
+        .map(|(_, n)| n)
+        .collect()
+}
+
+/// [`values`], each with its watch's place, for [`in_watch_order`].
+pub(crate) fn placed_values(
+    around: &Around,
+    guid: u64,
+    kind: ObjectType,
+    fields: &ObjectFields,
+    block: &Notified,
+) -> Vec<(Place, FieldNotice)> {
     if block.is_quiet() || !matches!(kind, ObjectType::Unit | ObjectType::Player) {
         return Vec::new();
     }
@@ -748,7 +812,7 @@ pub(crate) fn values(
             }
         }
     }
-    pass.into_notices()
+    pass.into_placed()
 }
 
 /// `0x5de180`'s gate ahead of its `0x5ed990` call: the new shown value, the value plus the

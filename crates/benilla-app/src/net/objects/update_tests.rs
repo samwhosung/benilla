@@ -319,6 +319,63 @@ fn one_packets_blocks_for_one_object_notify_against_its_last_copy() {
     assert_eq!(edges(world), [(ME, XP, 40, 50); 2]);
 }
 
+/// One block's edges and notices take their stamps in the notify pass's one ascending walk: the
+/// health edge, the bridge's `UNIT_HEALTH` on field 22, then the aura edge, whose line the aura
+/// watcher `0x604d00` writes at field 47 after the notices of the lower fields and ahead of the
+/// bridge's `UNIT_AURA` there, the type watchers running first.
+#[test]
+fn a_blocks_edges_and_notices_are_stamped_in_field_order() {
+    use benilla_protocol::field::{FIELD_UNIT_AURA, FIELD_UNIT_HEALTH};
+    let mut app = client();
+    let world = app.world_mut();
+    world.resource_mut::<SelfGuid>().0 = Some(ME);
+    send(world, [unit(MOB, &[(FIELD_UNIT_HEALTH, 100)])]);
+    notices(world);
+    edges(world);
+
+    send(
+        world,
+        [values(
+            MOB,
+            &[(FIELD_UNIT_HEALTH, 50), (FIELD_UNIT_AURA, 1243)],
+        )],
+    );
+    let mut order: Vec<(crate::lanes::Stamp, String)> = world
+        .resource_mut::<crate::field_watch::NoticeLane>()
+        .drain_stamped()
+        .map(|(at, n)| (at, format!("{n:?}")))
+        .collect();
+    order.extend(
+        world
+            .resource_mut::<Messages<FieldChanged>>()
+            .drain()
+            .map(|e| (e.at, format!("edge {}", e.index))),
+    );
+    order.sort_by_key(|(at, _)| *at);
+    let order: Vec<String> = order.into_iter().map(|(_, s)| s).collect();
+    assert_eq!(
+        order,
+        [
+            "edge 22".to_string(),
+            format!(
+                "{:?}",
+                crate::field_watch::FieldNotice::Unit {
+                    guid: MOB,
+                    id: crate::field_watch::id::UNIT_HEALTH
+                }
+            ),
+            "edge 47".to_string(),
+            format!(
+                "{:?}",
+                crate::field_watch::FieldNotice::Unit {
+                    guid: MOB,
+                    id: crate::field_watch::id::UNIT_AURA
+                }
+            ),
+        ]
+    );
+}
+
 /// A create for a held object writes every field, clearing those it leaves out (`0x466582`
 /// passes the clearing flag to `0x466590`), and notifies every field (`0x465d8a`, `dl = 1`): an
 /// omitted field reads 0 and its watch runs.
