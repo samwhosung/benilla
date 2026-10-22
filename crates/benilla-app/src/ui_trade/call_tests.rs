@@ -946,3 +946,36 @@ fn an_extended_status_unaccepts_with_its_signal_and_send() {
     );
     assert!(matches!(sent(&t)[..], [ClientCommand::UnacceptTrade]));
 }
+
+/// Codes 3 and 13 signal `PLAYER_MONEY` in the status handler, ahead of the dispatcher
+/// (`0x5d4892`-`0x5d48a8`): `CANCELED` before its `TRADE_REQUEST_CANCEL` and the close, code 13
+/// alone with the window left up. `COMPLETE` and `CLOSE_WINDOW` share only the clear
+/// (`0x5d48eb`).
+#[test]
+fn canceled_and_code_13_signal_the_purse_ahead_of_the_dispatcher() {
+    let mut t = client();
+    run(
+        &mut t,
+        r#"ORDER = ""
+        local f = CreateFrame("Frame")
+        for _, e in ipairs({"PLAYER_MONEY", "TRADE_REQUEST_CANCEL", "TRADE_CLOSED"}) do
+            f:RegisterEvent(e)
+        end
+        f:SetScript("OnEvent", function() ORDER = ORDER .. event .. " " end)"#,
+    );
+    let order = |t: &mut Trade| eval::<String>(t, "local o = ORDER ORDER = \"\" return o");
+    open_with_bob(&mut t);
+    let _ = order(&mut t);
+    status(&mut t, TradeStatus::Unknown13);
+    assert_eq!(order(&mut t), "PLAYER_MONEY ");
+    assert!(t.app.world().resource::<super::TradeSession>().is_open());
+    status(&mut t, TradeStatus::Canceled);
+    assert!(
+        order(&mut t).starts_with("PLAYER_MONEY TRADE_REQUEST_CANCEL TRADE_CLOSED "),
+        "the purse first, then the arm and its close"
+    );
+    open_with_bob(&mut t);
+    let _ = order(&mut t);
+    status(&mut t, TradeStatus::Complete);
+    assert!(!order(&mut t).contains("PLAYER_MONEY"));
+}
