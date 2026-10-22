@@ -149,6 +149,12 @@ impl Tutorials {
         state.acknowledge(id);
         state.flush(commands);
     }
+
+    /// The acknowledged bank, as `TutorialsEnabled` (`0x4b5960`) reads it, for a VM told inside the
+    /// call that wrote it.
+    pub(crate) fn acknowledged_bank(&self) -> Option<Vec<u8>> {
+        self.lock().acknowledged.clone()
+    }
 }
 
 /// The two banks, the timers, and what the frame owes the VM and the wire.

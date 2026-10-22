@@ -147,6 +147,12 @@ pub(crate) fn push_system(chat: &ChatLog, line: String) {
     chat.push_event(ChatEvent::text_only(ChatEventKind::System, line));
 }
 
+/// Show one of the four lines inside the verb that prints it, as `0x49a870` does with type 0xa:
+/// its `CHAT_MSG_SYSTEM` fires before the call returns.
+pub(crate) fn show_system(chat: &ChatLog, script: &mut benilla_ui::script::UiScript, line: String) {
+    chat.show_now(script, &ChatEvent::text_only(ChatEventKind::System, line));
+}
+
 /// The last `PLAYER_FLAGS` the reconcile saw; `None` with no local player in the world.
 #[derive(Resource, Default)]
 pub(crate) struct AfkMirrorMemo(Option<u32>);

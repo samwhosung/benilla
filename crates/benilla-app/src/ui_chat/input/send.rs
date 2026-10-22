@@ -30,6 +30,8 @@ pub(crate) struct ChatSender<'w, 's> {
     /// The channel slots the channel verbs read and the join's allocator writes; a world with no
     /// chat has none.
     channels: Option<ResMut<'w, super::super::edit::ChannelState>>,
+    /// The tutorial banks `AcknowledgeTutorial(0x16)` writes inside the call (`0x49f5fc`).
+    tutorials: Option<Res<'w, crate::tutorial::Tutorials>>,
 }
 
 impl ChatSender<'_, '_> {
@@ -131,8 +133,9 @@ impl ChatSender<'_, '_> {
         if wire == ChatKind::Dnd {
             let strings = |key: &str| super::super::combat::global_string(script, key);
             let out = away::dnd_line(&send.text, self.player_flags() & 0x4 != 0, &strings);
+            // The echo, type 0xa through `0x49a870` (`0x49f588`), fires inside the call.
             if let Some(line) = out.line {
-                away::push_system(&self.chat_log, line);
+                away::show_system(&self.chat_log, script, line);
             }
             send.text = out.body;
         }
@@ -144,8 +147,12 @@ impl ChatSender<'_, '_> {
             return;
         }
         // `AcknowledgeTutorial(0x16)` (`0x49f5fc`), for every type that gets past the dead check,
-        // the living's say, yell and emote included.
-        script.queue_tutorial_acknowledge(crate::tutorial::id::CHATTING);
+        // the living's say, yell and emote included: its `CMSG_TUTORIAL_FLAG` goes out inside the
+        // call, ahead of the line's packet (`0x49f72a`).
+        if let Some(tutorials) = self.tutorials.as_deref() {
+            tutorials.acknowledge_now(crate::tutorial::id::CHATTING, &self.commands);
+            script.set_tutorial_bank(tutorials.acknowledged_bank());
+        }
         let mut text =
             benilla_ui::script::expand_target_tokens(&send.text, || self.target_name(script));
         // A drunk player's text goes through `0x508680` here (`0x49f614`-`0x49f656`), which
@@ -168,11 +175,12 @@ impl ChatSender<'_, '_> {
 
     /// The AFK arm: `SetAFK` (`0x5eb740`) or the forced `ClearAFK(1)` (`0x5eb830`), each echoing
     /// and sending its own packet, language 0 (`0x5eb7ed`), not the argument's.
-    fn afk(&mut self, script: &UiScript, msg: &str) {
+    fn afk(&mut self, script: &mut UiScript, msg: &str) {
         let strings = |key: &str| super::super::combat::global_string(script, key);
         let out = away::afk_line(msg, self.afk_mirror(), &strings);
+        // `SetAFK`'s echo (`0x5eb7a9`) and the forced clear's (`0x5eb878`) fire inside the call.
         if let Some(line) = out.line {
-            away::push_system(&self.chat_log, line);
+            away::show_system(&self.chat_log, script, line);
         }
         if let (Some(v), Some(mirror)) = (out.mirror, self.mirror.as_mut()) {
             mirror.0 = v;
@@ -180,15 +188,16 @@ impl ChatSender<'_, '_> {
         self.send_afk(out.body);
     }
 
-    /// `ClearAFK(0)` (`0x49f3d6`): with the mirror set and `autoClearAFK` on, the line, the mirror
-    /// zeroed and the empty AFK packet, ahead of the message's own.
-    fn clear_afk(&mut self, script: &UiScript) {
+    /// `ClearAFK(0)` (`0x49f3d6`): with the mirror set and `autoClearAFK` on, the line (fired
+    /// inside the call, `0x5eb878`), the mirror zeroed and the empty AFK packet, ahead of the
+    /// message's own.
+    fn clear_afk(&mut self, script: &mut UiScript) {
         let strings = |key: &str| super::super::combat::global_string(script, key);
         let Some(line) = away::auto_clear_line(self.afk_mirror(), auto_clear_afk(script), &strings)
         else {
             return;
         };
-        away::push_system(&self.chat_log, line);
+        away::show_system(&self.chat_log, script, line);
         if let Some(mirror) = self.mirror.as_mut() {
             mirror.0 = 0;
         }
