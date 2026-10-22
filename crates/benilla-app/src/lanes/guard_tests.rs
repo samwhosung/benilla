@@ -251,6 +251,14 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::Edge,
+        "::ui_items::locks::apply_item_releases",
+        "the item source's two unlocks a loot close owes (`0x48f2bd`, `0x4c1d36`) and the copier's \
+         ending's (`0x5ebc35` → `0x4c1d36`), taken off the loot session, a lane's type the queue \
+         check skips: `close_interaction` serves the packets' closes and the calls' and clicks' \
+         alike, so they move when it does",
+    ),
+    (
+        Row::Edge,
         "::ui_unit::feed_units",
         "the selection's change, `PLAYER_TARGET_CHANGED`",
     ),

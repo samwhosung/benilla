@@ -297,7 +297,7 @@ fn admit_response(
             let _ = net.0.send(ClientCommand::LootRelease { guid });
         }
         latch.0 = None; // not guid-matched: `0x5eb9d2` clears whatever was there
-        loot.unlock_item(guid);
+        loot.unlock_item_here(guid);
         return false;
     }
     true
@@ -371,7 +371,7 @@ fn loot_error(
     if latch.0 != Some(guid) {
         debug!("net: loot error {error} on {guid:#x}, not the loot target — dropped");
         latch.0 = None;
-        loot.unlock_item(guid);
+        loot.unlock_item_here(guid);
         return;
     }
     let LootRefusal { key, releases } = loot_refusal(error);
@@ -379,7 +379,7 @@ fn loot_error(
     errors.push(UiError::key(key));
     if releases {
         latch.0 = None;
-        loot.unlock_item(guid);
+        loot.unlock_item_here(guid);
     }
 }
 
@@ -724,15 +724,19 @@ mod tests {
             matches!(rx.try_recv(), Ok(ClientCommand::LootRelease { guid }) if guid == CHEST),
             "…and it is B that gets released"
         );
+        let unlocks: Vec<Vec<(u64, bool)>> = world
+            .resource::<LootState>()
+            .steps
+            .iter()
+            .filter_map(|(_, s)| match s {
+                super::super::Step::Unlocks(u) => Some(u.clone()),
+                _ => None,
+            })
+            .collect();
         assert_eq!(
-            world
-                .resource_mut::<LootState>()
-                .take_item_unlocks()
-                .into_iter()
-                .map(|(g, _)| g)
-                .collect::<Vec<_>>(),
-            [CHEST],
-            "and `UnlockItem` runs on B's guid, an item or not (`0x5eb9de`)"
+            unlocks,
+            [[(CHEST, false)]],
+            "and `UnlockItem` runs on B's guid, an item or not (`0x5eb9de`), at the packet"
         );
     }
 

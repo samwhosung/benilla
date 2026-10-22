@@ -233,7 +233,7 @@ mod tests {
             .lock_item(A);
         let _ = heard(&mut app);
         let mut loot = crate::ui_loot::LootState::default();
-        loot.unlock_item(A);
+        loot.unlock_item_source(A);
         app.insert_resource(loot);
         app.update();
         assert_eq!(heard(&mut app), 1);

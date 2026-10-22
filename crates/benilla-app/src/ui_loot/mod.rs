@@ -256,9 +256,11 @@ pub(crate) struct LootState {
     /// (`0x48f264` → `0x4c1fa0`), run by its step on the lane ([`Step::Sweep`]), which holds the
     /// VM; a response or a close since cancels it.
     sweep_owed: bool,
-    /// The `UnlockItem` (`0x495420`) calls the loot paths owe, run ahead of the inventory feeds
-    /// ([`crate::ui_items::locks::apply_item_releases`]); a window's clear keeps them. The flag
-    /// marks a window source's, owed only while the guid resolves as a live item object.
+    /// The `UnlockItem` (`0x495420`) calls the closes and the copier's ending owe on an item
+    /// source, run ahead of the inventory feeds ([`crate::ui_items::locks::apply_item_releases`])
+    /// unless the close's own path runs them; a window's clear keeps them. The flag marks a window
+    /// source's, owed only while the guid resolves as a live item object. A refusal's unlock rides
+    /// the lane instead ([`Self::unlock_item_here`]).
     item_unlocks: Vec<(u64, bool)>,
     /// The response's copier end, `LOOT_OPENED` or the sweep, waits on its item records: the
     /// copier returns with a fetch outstanding (`0x4c1ea6`) and the cache callback ends it at the
@@ -464,11 +466,12 @@ impl LootState {
         *self = LootState::default();
     }
 
-    /// Owe `UnlockItem` on `guid`, which fires its `ITEM_LOCK_CHANGED` whether or not the guid
-    /// names an item we hold (`0x495450`); a zero guid owes nothing (`0x49542d`).
-    pub(crate) fn unlock_item(&mut self, guid: u64) {
+    /// `UnlockItem` on `guid` inside a packet's handler, on the lane at the packet's place, its
+    /// `ITEM_LOCK_CHANGED` firing whether or not the guid names an item we hold (`0x495450`); a
+    /// zero guid unlocks nothing (`0x49542d`).
+    pub(crate) fn unlock_item_here(&mut self, guid: u64) {
         if guid != 0 {
-            self.item_unlocks.push((guid, false));
+            self.queue(Step::Unlocks(vec![(guid, false)]));
         }
     }
 
