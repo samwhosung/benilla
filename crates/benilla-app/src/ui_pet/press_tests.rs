@@ -252,7 +252,7 @@ impl Rig {
     }
 
     /// What the pet's own list reads for `spell_id`, as the bar's reader asks it.
-    fn pet_reads(&self, spell_id: u32, spell: &SpellDisplay) -> (u32, u32) {
+    pub(super) fn pet_reads(&self, spell_id: u32, spell: &SpellDisplay) -> (u32, u32) {
         let info = self.app.world().resource::<PetBar>().cooldowns.info(
             spell_id,
             0,
