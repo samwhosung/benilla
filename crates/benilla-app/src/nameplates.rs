@@ -184,14 +184,15 @@ fn title_key(
     store: Option<&ObjectStore>,
 ) -> Option<TitleKey> {
     let store = store?;
-    let _ = teams;
     (net.kind == EntityKind::Player).then(|| TitleKey {
         title: benilla_ui::script::RankTitle {
             rank: store.0.player_pvp_rank().unwrap_or(0),
+            // The race's side off the chain (`0x5efe00`), -1 with no table.
             team: store
                 .0
                 .unit_race()
-                .map_or(-1, crate::ui_unit::race_pvp_team),
+                .zip(teams)
+                .map_or(-1, |(race, teams)| teams.team(race)),
             female: store.0.unit_gender() == Some(1),
         },
         on: cfg.player_pvp_title && strings.ready(),

@@ -627,16 +627,19 @@ impl<'a> UnitNames<'a> {
         self.races?.names(u32::from(race))
     }
 
-    /// The race's PvP team digit ([`crate::chr_classes::RacePvpTeams::team`]).
+    /// A unit's PvP team digit, `0x5efe00`'s `0` Horde, `1` Alliance, `-1` no side, from the race
+    /// and never the live template ([`crate::chr_classes::RacePvpTeams`]), so a template-35 GM
+    /// keeps his rank title. Read by `GetPVPRankInfo` (`0x51a9af`, `0x51a9c8`), `UnitPVPName`
+    /// (`0x5efe60`) and the scoreboard (`0x4aa200`). With no table no race has a side.
     pub(crate) fn pvp_team(&self, race: u8) -> i8 {
-        race_pvp_team(race)
+        self.teams.map_or(-1, |t| t.team(race))
     }
 
     /// The race's side as a `FactionGroup` token, for where no faction template is at hand, as at
     /// world entry, where addons concatenate `UnitFactionGroup("player")` at file scope;
     /// [`faction_group`] reads the live template.
     pub(crate) fn faction_group(&self, race: u8) -> Option<&'static str> {
-        race_faction_group(race)
+        self.teams?.faction_group(race)
     }
 
     /// The class byte's display name and its uppercase token (`"Warrior"`, `"WARRIOR"`); `None`
@@ -650,37 +653,6 @@ impl<'a> UnitNames<'a> {
                 classes.file(class).unwrap_or_default(),
             )
         })
-    }
-}
-
-/// A playable race's fixed side, for where no faction template is at hand, as at world entry,
-/// where addons concatenate `UnitFactionGroup("player")` at file scope; [`faction_group`] reads
-/// the live template.
-pub(crate) fn race_faction_group(race: u8) -> Option<&'static str> {
-    if !(1..=8).contains(&race) {
-        return None;
-    }
-    // Human, Dwarf, Night Elf, Gnome.
-    Some(if [1, 3, 4, 7].contains(&race) {
-        "Alliance"
-    } else {
-        "Horde"
-    })
-}
-
-/// A unit's PvP team digit, `0x5efe00`'s `0` Horde, `1` Alliance, `-1` no side, from the race and
-/// never the live template: `ChrRaces.dbc` field 2 to `FactionTemplate.dbc` field 3's group mask,
-/// `& 4` Horde, else `& 2` Alliance, so a template-35 GM keeps his rank title. Read by
-/// `GetPVPRankInfo` (`0x51a9af`, `0x51a9c8`), `UnitPVPName` (`0x5efe60`) and the scoreboard
-/// (`0x4aa200`). A frozen copy of the shipped nine rows; race 9 (Goblin) answers Alliance.
-pub(crate) fn race_pvp_team(race: u8) -> i8 {
-    match race {
-        // Group mask 3, Player|Alliance: `& 4` clear, `& 2` set.
-        1 | 3 | 4 | 7 | 9 => 1,
-        // Group mask 5, Player|Horde: `& 4` set, tested first.
-        2 | 5 | 6 | 8 => 0,
-        // No `ChrRaces` row: the engine's bounds-failure `-1`, which names no GlobalString.
-        _ => -1,
     }
 }
 
@@ -1079,7 +1051,7 @@ pub(crate) fn snapshot(
             && store.0.player_flags() & PLAYER_FLAGS_FFA_PVP != 0,
         // The honor rank, `PLAYER_BYTES_3` byte 3 (0..=18), public for every player in view.
         pvp_rank: store.0.player_pvp_rank().unwrap_or(0),
-        // The team digit of `PVP_RANK_<rank>_<team>`, from the race ([`race_pvp_team`]).
+        // The team digit of `PVP_RANK_<rank>_<team>`, from the race ([`UnitNames::pvp_team`]).
         pvp_team: store.0.unit_race().map_or(-1, |r| tables.pvp_team(r)),
         // `PLAYER_BYTES_3` byte 2, the city-protector title (`PVP_MEDAL<n>`), unset by vmangos.
         pvp_medal: store.0.player_pvp_medal().unwrap_or(0),
@@ -2846,23 +2818,14 @@ mod tests {
         assert_eq!(got, ids);
     }
 
-    /// [`race_pvp_team`] against the shipped DBCs, walked as `0x5efe00` walks them.
+    /// The race load's walk of the shipped DBCs, as `0x5efe00` walks them: the stock chain's nine
+    /// rows, each with its side.
     #[test]
-    fn race_pvp_team_matches_the_shipped_tables() {
+    fn the_race_sides_load_off_the_shipped_tables() {
         let data = benilla_formats::wow_data_or_skip!();
         let mut chain = benilla_formats::open_chain(&data).expect("open chain");
-        let want = benilla_formats::load_race_pvp_teams(&mut chain).expect("ChrRaces walk");
-        // 1.12 ships nine rows; a truncated map would pass by asserting nothing.
-        assert_eq!(want.len(), 9, "ChrRaces.dbc row count");
-        for (&race, &team) in &want {
-            assert_eq!(race_pvp_team(race), team, "race {race}");
-        }
-        assert!(want.values().any(|&t| t == 0), "some race is Horde");
-        assert!(want.values().any(|&t| t == 1), "some race is Alliance");
-        for race in [0u8, 10, 255] {
-            assert!(!want.contains_key(&race));
-            assert_eq!(race_pvp_team(race), -1, "race {race} has no ChrRaces row");
-        }
+        let teams = benilla_formats::load_race_pvp_teams(&mut chain).expect("ChrRaces walk");
+        assert_eq!(teams, crate::chr_classes::RacePvpTeams::stock().0);
     }
 
     /// LOST going down, GAINED going up (boot is in control); far sight on every change.
