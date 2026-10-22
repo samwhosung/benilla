@@ -514,6 +514,34 @@ fn parse_item_arg(v: &Value) -> mlua::Result<(i64, u32, u32, u32)> {
     Ok((id, next(), next(), next()))
 }
 
+/// `0x5d8b00`'s join: with an `ItemRandomProperties` row for `property` (a positive id in the
+/// table, `0x5d8b47`-`0x5d8b51`), whose suffix the app loads only when it is not empty (`0x5d8b6e`),
+/// `SStrPrintf(ITEM_SUFFIX_TEMPLATE, name, suffix)` (`0x5d8b78`-`0x5d8b8c`); else the name alone
+/// (`0x5d8ba5`).
+fn suffixed_name(lua: &Lua, name: &str, property: u32) -> String {
+    let suffix = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        (property != 0)
+            .then(|| model.random_properties.get(&property))
+            .flatten()
+            .map(|row| row.suffix.clone())
+    };
+    match suffix {
+        Some(suffix) => {
+            // `FrameScript_GetText` answers "" for a missing key, and the format then writes "".
+            let template = crate::strings::global(lua, "ITEM_SUFFIX_TEMPLATE").unwrap_or_default();
+            crate::strings::fill(
+                &template,
+                &[
+                    crate::strings::Arg::S(name),
+                    crate::strings::Arg::S(&suffix),
+                ],
+            )
+        }
+        None => name.to_string(),
+    }
+}
+
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetItemQualityColor(quality) → r, g, b, escapeString (`0x48dfb0`). 7 and up, or a negative
     // quality, answer Common (`0x52ad70`/`0x52ad90`: an unsigned `cmp ecx,7; jb`), so
@@ -545,8 +573,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetItemInfo(itemID | "item:id:enchant:randomProperty:suffix") → itemName, itemLink,
     // itemQuality, itemMinLevel, itemType, itemSubType, itemStackCount, itemEquipLoc, itemTexture:
     // nine values (`0x48e070` ends `mov eax,0x9`); later clients insert `itemLevel` at 4. The name
-    // is the bare template name, where the reference appends the random suffix (`0x5d8b00`); the
-    // link is the item string (`0x48e1c9`, literal `0x842d4c`), not a hyperlink; the level is the
+    // is `0x5d8b00(entry, property)` (`0x48e1a7`), the record's name with the property row's
+    // suffix through `ITEM_SUFFIX_TEMPLATE` (`0x5d8b78`); the link is the item string (`0x48e1c9`, literal `0x842d4c`), not a hyperlink; the level is the
     // required one (`[record+0x3c]`; `ItemLevel` at `+0x38` is never pushed). An uncached
     // template answers no values and asks nothing: the lookup passes no callback (`0x48e172`), so
     // the cache (`0x55ba30`) returns null without a query (`0x55baac`), sending the binding to
@@ -569,9 +597,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(v) = view else {
                 return Ok(MultiValue::new());
             };
+            let name = suffixed_name(lua, &v.name, random_property);
             let str_or_empty = |s: &Option<String>| s.clone().unwrap_or_default();
             Ok(MultiValue::from_vec(vec![
-                Value::String(lua.create_string(&v.name)?),
+                Value::String(lua.create_string(&name)?),
                 Value::String(lua.create_string(format!(
                     "item:{item_id}:{enchant}:{random_property}:{suffix}"
                 ))?),
