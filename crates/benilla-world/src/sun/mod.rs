@@ -83,7 +83,9 @@ fn rearm_glare_on_map_load(
     mut changes: MessageReader<crate::world_map::MapChange>,
     mut glare: ResMut<SunGlare>,
 ) {
-    let _ = (&mut changes, &mut glare);
+    if changes.read().count() > 0 && !glare.enabled {
+        glare.enabled = true;
+    }
 }
 
 /// The celestial layer: spawns the sun, moons and stars at startup and places them each frame.
@@ -93,7 +95,10 @@ impl Plugin for SunPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<CelestialMaterial>::default())
             .add_plugins(MaterialPlugin::<StarMaterial>::default())
+            .init_resource::<SunGlare>()
+            .add_message::<crate::world_map::MapChange>()
             .add_systems(Startup, setup_sun.after(AssetSet::Open))
+            .add_systems(Update, rearm_glare_on_map_load)
             // After propagation, so the follows place from this frame's camera: a frame of lag is
             // ~1% of the glare's 12-unit distance, a visible swim.
             .add_systems(

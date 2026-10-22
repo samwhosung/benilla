@@ -2,7 +2,8 @@
 //! inside a liquid. The object is `World.cpp`'s own (`0xfa40` bytes from `0x66f971`, ctor
 //! `0x68e5a0`, held at `[0xc63180]`), sharing nothing with the weather manager `[0xc6326c]`. The
 //! advect (`0x66fee0`) and the draw (`0x6701e0`) both need the render-flag bit
-//! `[0xc7b2a4] & 0x2000000` and a camera-eye liquid type `[0xc7f288] != 0xf` ([`Underwater`]). The
+//! `[0xc7b2a4] & 0x2000000` (`waterParticulates`, [`WorldFlags`]) and a camera-eye liquid type
+//! `[0xc7f288] != 0xf` ([`Underwater`]). The
 //! draw (`0x483731`) is the frame's last world content, after the water surface and both M2
 //! transparent passes ([`Rung::DRIFT_CLOUD`](crate::sky_order::Rung::DRIFT_CLOUD)), and no
 //! `LightParams` value reaches a mote.
@@ -23,6 +24,7 @@ use crate::particles::buffer::{
 use crate::particles::emit::rand01;
 use crate::sky_order::Rung;
 use crate::view::WorldCamera;
+use crate::world_flags::WorldFlags;
 
 use super::Underwater;
 
@@ -301,12 +303,14 @@ fn setup_drift(
 fn simulate_drift(
     mut cloud: ResMut<DriftCloud>,
     underwater: Res<Underwater>,
+    flags: Option<Res<WorldFlags>>,
     cam: Query<&GlobalTransform, With<WorldCamera>>,
     time: Res<Time>,
 ) {
     let Ok(cam_tf) = cam.single() else {
         return;
     };
+    let particulates = particulates(flags.as_deref());
     let eye = cam_tf.translation();
     let now = underwater.0;
     if now != cloud.was {
@@ -317,6 +321,9 @@ fn simulate_drift(
             Submersion::Dry => {}
             // Slime disables outright, with no re-scatter (`0x680b6f`).
             Submersion::Slime => cloud.mode = None,
+            // Water and magma configure only with the particulates bit set (`0x680afa`,
+            // `0x680b39`), else keep what was there.
+            _ if !particulates => {}
             // One configuration: the cell set is keyed on liquid types 0 and 1 (`[0x86a0a0]`).
             Submersion::Water | Submersion::Ocean => {
                 cloud.scatter(DriftMode::Water);
@@ -328,9 +335,8 @@ fn simulate_drift(
             }
         }
     }
-    // The frame gate's second conjunct; the first, render-flag `0x2000000`, is the unwired
-    // `waterParticulates` console latch (default on, console table `0x63f9e0`, not a CVar).
-    if !now.any() || cloud.off {
+    // The frame gate (`0x66fee0`): the particulates bit and an eye in a liquid.
+    if !particulates || !now.any() || cloud.off {
         return;
     }
     let Some(mode) = cloud.mode else {
@@ -339,10 +345,19 @@ fn simulate_drift(
     cloud.advect(mode, eye, time.delta_secs());
 }
 
+/// World flag `0x2000000`, `waterParticulates`; the start-up flags where no world registered them.
+fn particulates(flags: Option<&WorldFlags>) -> bool {
+    flags
+        .copied()
+        .unwrap_or_default()
+        .has(WorldFlags::PARTICULATES)
+}
+
 /// Emit the surviving motes into the effect stream: the render leg (`0x6701e0` → `0x68efe0`).
 fn push_drift(
     mut cloud: ResMut<DriftCloud>,
     underwater: Res<Underwater>,
+    flags: Option<Res<WorldFlags>>,
     assets: Option<Res<DriftAssets>>,
     cam: Query<(Entity, &GlobalTransform, &Projection), With<WorldCamera>>,
     mut quads: ResMut<EffectQuads>,
@@ -352,6 +367,9 @@ fn push_drift(
     // Every exit yields a reason, so the instrument tells "off" from "broken".
     let status: &'static str = 'draw: {
         // The advect's two conjuncts again: the draw is gated on its own, not on the sim.
+        if !particulates(flags.as_deref()) {
+            break 'draw "off (waterParticulates)";
+        }
         if !underwater.0.any() {
             break 'draw "dry (the eye is not in a liquid)";
         }

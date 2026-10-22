@@ -181,6 +181,8 @@ pub(super) struct FlareGate<'w, 's> {
     submerged: Res<'w, crate::liquid::SubmergedEye>,
     /// The cloud coverage `occ1` samples; as in the reference, the visible clouds draw from it too.
     clouds: Res<'w, CloudCoverage>,
+    /// Both glares' enabled word; the start-up 1 where none is registered.
+    glare: Option<Res<'w, super::SunGlare>>,
     env: Local<'s, f32>,
     /// Cached cell verdicts (bit = clear); `primed` falls when the probe is skipped.
     mask: Local<'s, u16>,
@@ -202,6 +204,11 @@ fn celestial_alpha_seed(bcc: f32) -> Option<f32> {
 }
 
 impl FlareGate<'_, '_> {
+    /// Whether the glares are on (`SkySunGlare`, [`super::SunGlare`]).
+    fn enabled(&self) -> bool {
+        self.glare.as_deref().copied().unwrap_or_default().enabled
+    }
+
     /// The envelope along `dir`, `half` the quad's angular half-size. The submersion fade is inside
     /// the slew, so surfacing ramps the glare back in: the target `[glare+0x34]` (reset at
     /// `0x6cf499`) takes it at `0x6cf501`/`0x6cf504`, before the limiter reads it at `0x6cf59b`.
@@ -215,7 +222,8 @@ impl FlareGate<'_, '_> {
         rise: f32,
     ) -> f32 {
         let base = dn * horizon_gate(dir) * occ1 * submersion_glare_fade(self.submerged.depth);
-        let target = if base > 0.0 && self.camera_interior.0.is_none() {
+        // A disabled glare's visibility term answers 0 (`0x7e578e`).
+        let target = if base > 0.0 && self.camera_interior.0.is_none() && self.enabled() {
             // Resident ADT terrain first, the whole-map WDL surface elsewhere.
             let (streamer, adt_tiles, wdl) = (&self.streamer, &self.adt_tiles, &self.wdl);
             let tile = std::cell::RefCell::new(None);
@@ -292,6 +300,7 @@ pub(super) fn follow_sun(
         sun_half,
         SUN_FLARE_RISE,
     );
+    let enabled = gate.enabled();
     for (mut tf, mut gt, sprite, mat) in &mut sprites {
         tf.rotation = rot;
         match sprite.part {
@@ -328,9 +337,13 @@ pub(super) fn follow_sun(
                 let units = 3.0 + 17.0 * f;
                 tf.scale = Vec3::splat(if hidden { 0.0 } else { units });
                 // Alpha is `lerp(0.5, 1, f)` (`[glare+0x9c]`) × the envelope × the weather seed,
-                // `0x6cf490`'s `[+0x1b] = floor(255·lerp·[+0x30])` on the seed byte.
-                let env =
-                    benilla_assets::quantize((0.5 + 0.5 * f) * env30 * seed.unwrap_or(1.0), 255.0);
+                // `0x6cf490`'s `[+0x1b] = floor(255·lerp·[+0x30])` on the seed byte; a disabled
+                // glare is not drawn (`0x7e57fe`).
+                let env = if enabled {
+                    benilla_assets::quantize((0.5 + 0.5 * f) * env30 * seed.unwrap_or(1.0), 255.0)
+                } else {
+                    0.0
+                };
                 let color = Color::srgba(tint[0], tint[1], tint[2], env);
                 benilla_assets::write_gated(
                     &mut mats,
@@ -387,6 +400,7 @@ pub(super) fn follow_moons(
             MOON_FLARE_RISE,
         )
     };
+    let enabled = gate.enabled();
     for (mut tf, mut gt, moon, mat) in &mut sprites {
         // moon02 rides its own phase-precessed bearing; the disc and glare share the white moon's.
         let to_moon = match moon.part {
@@ -458,9 +472,13 @@ pub(super) fn follow_moons(
                 tf.scale = Vec3::splat(size);
                 // `lerp(0.1, 1, f)` (`[0xce9794]`) × the envelope, `0x6cf490`'s byte shape.
                 let f = view_lerp(*cam_gt.forward(), to_moon);
-                // × the weather seed on the glare's alpha byte (`0x6d2c74`).
-                let env =
-                    benilla_assets::quantize((0.1 + 0.9 * f) * env30 * seed.unwrap_or(1.0), 255.0);
+                // × the weather seed on the glare's alpha byte (`0x6d2c74`); a disabled glare is
+                // not drawn (`0x7e57fe`).
+                let env = if enabled {
+                    benilla_assets::quantize((0.1 + 0.9 * f) * env30 * seed.unwrap_or(1.0), 255.0)
+                } else {
+                    0.0
+                };
                 let color = Color::srgba(tint[0], tint[1], tint[2], env);
                 benilla_assets::write_gated(
                     &mut mats,

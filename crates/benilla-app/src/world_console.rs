@@ -1,11 +1,241 @@
-//! The world's console commands: the thirteen `CWorld::Initialize` (`0x66f6c0`) registers.
+//! The world's console commands: the thirteen `CWorld::Initialize` (`0x66f6c0`) registers
+//! through `ConsoleCommandRegister` (`0x66fa1d`-`0x66faf5`), each in category 1 with no help, and
+//! `InitSky`'s `SkySunGlare` (`0x6d1d4d`). `/console` and `ConsoleExec` (`0x515f10`) reach them
+//! through `0x63ce00`, which has no category gate. Each handler writes the world's flags
+//! ([`WorldFlags`]) or a level ([`WorldLevels`]) and prints what its own `ConsoleWrite` does.
 
+use benilla_ui::script::scanf_d;
+use benilla_world::world_flags::{WorldFlags, WorldLevels};
 use bevy::prelude::*;
+
+use crate::console::{ConsoleCommandApp, ConsoleHandler, GRAPHICS};
 
 pub(crate) struct WorldConsolePlugin;
 
 impl Plugin for WorldConsolePlugin {
-    fn build(&self, _app: &mut App) {}
+    fn build(&self, app: &mut App) {
+        app.init_resource::<WorldFlags>()
+            .init_resource::<WorldLevels>()
+            .init_resource::<benilla_world::sun::SunGlare>();
+        // `0x66f6c0`'s order.
+        const WORLD: [(&str, ConsoleHandler); 13] = [
+            ("showDetailDoodads", show_detail_doodads),
+            ("maxLOD", max_lod),
+            ("showCull", show_cull),
+            ("setShadow", set_shadow),
+            ("waterMaxLOD", water_max_lod),
+            ("waterWaves", water_waves),
+            ("waterSpecular", water_specular),
+            ("waterRipples", water_ripples),
+            ("waterParticulates", water_particulates),
+            ("showShadow", show_shadow),
+            ("showLowDetail", show_low_detail),
+            ("showSimpleDoodads", show_simple_doodads),
+            ("detailDoodadAlpha", detail_doodad_alpha),
+        ];
+        for (name, run) in WORLD {
+            app.console_command(name, GRAPHICS, None, run);
+        }
+        // Registered by `InitSky` at the first map load (`0x6d1d43`-`0x6d1d4d`).
+        app.console_command("SkySunGlare", GRAPHICS, Some("0, 1"), sky_sun_glare);
+        // Every world entry loads the map, which re-runs `InitSky` and re-arms the glares; a
+        // worldport's own load is `benilla_world::sun`'s.
+        app.add_systems(
+            OnEnter(crate::client_state::ClientState::InWorld),
+            |mut glare: ResMut<benilla_world::sun::SunGlare>| glare.enabled = true,
+        );
+    }
+}
+
+/// A world-flag toggle (`0x673050` and its siblings): the bit set is cleared with the first line,
+/// a clear one set with the second, each through `ConsoleWrite` in class 0.
+fn toggle(world: &mut World, bit: u32, off: &str, on: &str) -> Vec<String> {
+    let mut flags = world.get_resource_or_init::<WorldFlags>();
+    let line = if flags.has(bit) {
+        flags.0 &= !bit;
+        off
+    } else {
+        flags.0 |= bit;
+        on
+    };
+    vec![line.to_string()]
+}
+
+/// `0x673050`: bit 0x100000 (`0x867ac4`, `0x867aac`).
+fn show_detail_doodads(world: &mut World, _args: &str) -> Vec<String> {
+    toggle(
+        world,
+        WorldFlags::DETAIL_DOODADS,
+        "Detail doodads disabled.",
+        "Detail doodads enabled.",
+    )
+}
+
+/// `0x673250`: bit 0x20 (`0x867c34`, `0x867c18`).
+fn show_cull(world: &mut World, _args: &str) -> Vec<String> {
+    toggle(
+        world,
+        WorldFlags::CULL,
+        "Terrain culling disabled.",
+        "Terrain culling enabled.",
+    )
+}
+
+/// `0x673770`: bit 0x2000000 (`0x867ea0`, `0x867e88`).
+fn water_particulates(world: &mut World, _args: &str) -> Vec<String> {
+    toggle(
+        world,
+        WorldFlags::PARTICULATES,
+        "Particulates disabled",
+        "Particulates enabled",
+    )
+}
+
+/// `0x673a30`: bit 0x40 (`0x867fe8`, `0x867fd0`).
+fn show_shadow(world: &mut World, _args: &str) -> Vec<String> {
+    toggle(
+        world,
+        WorldFlags::SHADOW,
+        "Terrain shadow disabled.",
+        "Terrain shadow enabled.",
+    )
+}
+
+/// `0x673a70`: bit 0x4000000 (`0x868020`, `0x868004`).
+fn show_low_detail(world: &mut World, _args: &str) -> Vec<String> {
+    toggle(
+        world,
+        WorldFlags::LOW_DETAIL,
+        "Terrain low detail disabled.",
+        "Terrain low detail enabled.",
+    )
+}
+
+/// `0x673ac0`: the simple-doodad word `[0xc7b2c4]`, set to 1 or 0 (`0x868058`, `0x868040`).
+fn show_simple_doodads(world: &mut World, _args: &str) -> Vec<String> {
+    let mut levels = world.get_resource_or_init::<WorldLevels>();
+    levels.simple_doodads = !levels.simple_doodads;
+    let line = if levels.simple_doodads {
+        "Simple doodads enabled."
+    } else {
+        "Simple doodads disabled."
+    };
+    vec![line.to_string()]
+}
+
+/// The parse buffer's address `0xc4ee08`, which a handler's `push ecx` leaves in the slot its
+/// `sscanf("%d")` (`0x835154`) did not fill.
+const UNFILLED_SLOT: u32 = 0x00c4_ee08;
+
+/// `0x673200`: the `%d` slot, unsigned: above 3 stores 3 (`0x67321e`), below 2 stores 2
+/// (`0x673236`), into the near chunk level `[0x867964]`. Prints nothing.
+fn max_lod(world: &mut World, args: &str) -> Vec<String> {
+    let v = scanf_d(args).map_or(UNFILLED_SLOT, |v| v as u32);
+    world.get_resource_or_init::<WorldLevels>().max_lod = v.clamp(2, 3);
+    Vec::new()
+}
+
+/// `0x6736c0`: the `%d` straight into `[0x86a030]`, which no number leaves as it was, then held to
+/// 0..=4, signed. Prints nothing.
+fn water_max_lod(world: &mut World, args: &str) -> Vec<String> {
+    let mut levels = world.get_resource_or_init::<WorldLevels>();
+    if let Some(v) = scanf_d(args) {
+        levels.water_max_lod = v as i32;
+    }
+    levels.water_max_lod = levels.water_max_lod.clamp(0, 4);
+    Vec::new()
+}
+
+/// A `%d` straight into a level, kept when no number parses, with no bound: `waterWaves`
+/// (`0x673710`, `[0x86a034]`), `waterSpecular` (`0x673730`, `[0x86a038]`) and `waterRipples`
+/// (`0x673750`, `[0x86a03c]`). Prints nothing.
+fn scan_level(world: &mut World, args: &str, level: fn(&mut WorldLevels) -> &mut i32) {
+    if let Some(v) = scanf_d(args) {
+        *level(&mut world.get_resource_or_init::<WorldLevels>()) = v as i32;
+    }
+}
+
+fn water_waves(world: &mut World, args: &str) -> Vec<String> {
+    scan_level(world, args, |l| &mut l.water_waves);
+    Vec::new()
+}
+
+fn water_specular(world: &mut World, args: &str) -> Vec<String> {
+    scan_level(world, args, |l| &mut l.water_specular);
+    Vec::new()
+}
+
+fn water_ripples(world: &mut World, args: &str) -> Vec<String> {
+    scan_level(world, args, |l| &mut l.water_ripples);
+    Vec::new()
+}
+
+/// `0x673290`: `sscanf("%f %f %f %f")` (`0x867c7c`), then each float is refused below 0.0
+/// (`0x7ffd74`) or above 1.0 (`0x7ff9d8`) with "Color values must be in range (0.0,1.0)."
+/// (`0x867c50`), a NaN passing both; else `__ftol(v · 255)` of each, the first in the top byte,
+/// goes to the shadow colour setter `0x672590`. Prints nothing when it takes them.
+///
+/// Deviation: a float the scan leaves unread is 0.0, where the reference reads whatever its
+/// uninitialised stack slot holds.
+fn set_shadow(world: &mut World, args: &str) -> Vec<String> {
+    let mut v = [0.0f32; 4];
+    let mut rest = args;
+    for slot in &mut v {
+        let Some((f, used)) = benilla_ui::script::scanf_f_prefix(rest) else {
+            break;
+        };
+        *slot = f;
+        rest = &rest[used..];
+    }
+    if v.iter().any(|&f| f < 0.0 || f > 1.0) {
+        return vec!["Color values must be in range (0.0,1.0).".to_string()];
+    }
+    let byte = |f: f32| benilla_ui::script::ftol(f64::from(f) * 255.0) as u8;
+    let packed = v
+        .iter()
+        .fold(0u32, |acc, &f| (acc << 8) | u32::from(byte(f)));
+    world.get_resource_or_init::<WorldLevels>().shadow_color = Some(packed);
+    Vec::new()
+}
+
+/// `/console detailDoodadAlpha <n>`, the reference's console command (`0x6739a0`, registered by
+/// `0x63f9e0` as a command, not a CVar, so it never persists): the ground-clutter cutout that
+/// `texel.a x distance_ramp` is tested against (`[0xc7b2fc]`, 128 at `0x66f861`), so at the
+/// default grass ends ~61 yd out of the 70 yd horizon. `sscanf(args, "%d")` (`0x835154`), then an
+/// unsigned compare with 255 (`0x6739b9`): in range it is set without a word, above it (a
+/// negative too) only "Alpha ref range 0 - 255." (`0x867f6c`) is printed. With no number the
+/// slot keeps [`UNFILLED_SLOT`], which is above 255.
+fn detail_doodad_alpha(world: &mut World, args: &str) -> Vec<String> {
+    let alpha = scanf_d(args).map_or(UNFILLED_SLOT, |v| v as u32);
+    if alpha > 0xff {
+        return vec!["Alpha ref range 0 - 255.".to_string()];
+    }
+    if let Some(mut clutter) = world.get_resource_mut::<benilla_world::clutter::ClutterConfig>() {
+        clutter.alpha_ref = alpha as f32 / 255.0;
+    }
+    Vec::new()
+}
+
+/// `SkySunGlare` (`0x6d1dc0`): `sscanf("%d")` into a slot `push ecx` seeded with the name pointer.
+/// A nonzero answer and a nonzero slot set both glares' enabled word (`0xce97b0`, `0xce9700`) with
+/// "SunGlare enabled.  Don't look directly at it." (`0x86f4c4`); anything else clears both with
+/// "SunGlare disabled" (`0x86f4b0`). The runtime's `sscanf` answers `EOF` when the text ends
+/// before a conversion, which passes the test (`0x6d1dd6`) with the slot unfilled, so an empty
+/// or blank tail enables.
+fn sky_sun_glare(world: &mut World, args: &str) -> Vec<String> {
+    let blank = args
+        .bytes()
+        .all(|c| matches!(c, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r'));
+    let enabled = blank || scanf_d(args).is_some_and(|v| v as i32 != 0);
+    world
+        .get_resource_or_init::<benilla_world::sun::SunGlare>()
+        .enabled = enabled;
+    let line = if enabled {
+        "SunGlare enabled.  Don't look directly at it."
+    } else {
+        "SunGlare disabled"
+    };
+    vec![line.to_string()]
 }
 
 #[cfg(test)]
@@ -154,6 +384,37 @@ mod tests {
             );
         }
         assert_eq!(levels(&app).shadow_color, Some(0x7f3f_ff00));
+    }
+
+    /// `0x6739a0`: `sscanf %d` and an unsigned compare with 255. In range it sets the cutout and
+    /// says nothing; above it, a negative and text with no number print only the range line.
+    #[test]
+    fn detail_doodad_alpha_reads_like_the_references_command() {
+        let mut world = World::new();
+        world.insert_resource(benilla_world::clutter::ClutterConfig::default());
+        let at = |w: &World| {
+            (w.resource::<benilla_world::clutter::ClutterConfig>()
+                .alpha_ref
+                * 255.0)
+                .round() as u32
+        };
+        for (args, said, now) in [
+            ("12abc", None, 12),
+            (" +12", None, 12),
+            ("200", None, 200),
+            ("300", Some("Alpha ref range 0 - 255."), 200),
+            ("-1", Some("Alpha ref range 0 - 255."), 200),
+            ("", Some("Alpha ref range 0 - 255."), 200),
+            ("abc", Some("Alpha ref range 0 - 255."), 200),
+        ] {
+            let lines = detail_doodad_alpha(&mut world, args);
+            assert_eq!(
+                lines,
+                said.map(String::from).into_iter().collect::<Vec<_>>(),
+                "{args:?}"
+            );
+            assert_eq!(at(&world), now, "{args:?}");
+        }
     }
 
     /// The thirteen register in category 1 with no help, in `0x66f6c0`'s order

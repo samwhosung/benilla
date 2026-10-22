@@ -435,37 +435,10 @@ pub(crate) fn spell_effect_scale(level: i32) -> f32 {
     }
 }
 
-/// `/console detailDoodadAlpha <n>`, the reference's console command (`0x6739a0`, registered by
-/// `0x63f9e0` as a command, not a CVar, so it never persists): the ground-clutter cutout that
-/// `texel.a x distance_ramp` is tested against (`[0xc7b2fc]`, 128 at `0x66f861`), so at the
-/// default grass ends ~61 yd out of the 70 yd horizon. `sscanf(args, "%d")` (`0x835154`), then an
-/// unsigned compare with 255 (`0x6739b9`): in range it is set without a word, above it (a
-/// negative too) only "Alpha ref range 0 - 255." (`0x867f6c`) is printed. With no number the
-/// slot keeps what `push ecx` left in it, the parse buffer's address `0xc4ee08`, which is above
-/// 255.
-fn detail_doodad_alpha(world: &mut World, args: &str) -> Vec<String> {
-    let alpha = benilla_ui::script::scanf_d(args).map_or(0x00c4_ee08, |v| v as u32);
-    if alpha > 0xff {
-        return vec!["Alpha ref range 0 - 255.".to_string()];
-    }
-    if let Some(mut clutter) = world.get_resource_mut::<benilla_world::clutter::ClutterConfig>() {
-        clutter.alpha_ref = alpha as f32 / 255.0;
-    }
-    Vec::new()
-}
-
 impl Plugin for VideoPlugin {
     fn build(&self, app: &mut App) {
-        use crate::console::ConsoleCommandApp;
         app.init_resource::<SpellEffectLevel>();
         app.add_observer(on_cvar);
-        // Category 1 with no help (`0x66fae8`-`0x66faf5`).
-        app.console_command(
-            "detailDoodadAlpha",
-            crate::console::GRAPHICS,
-            None,
-            detail_doodad_alpha,
-        );
         app.init_resource::<VideoConfig>()
             .init_resource::<GxRestarts>()
             .init_resource::<RefreshPacing>()
@@ -829,36 +802,6 @@ pub(crate) fn show_screen_size(
 mod tests {
     use super::*;
 
-    /// `0x6739a0`: `sscanf %d` and an unsigned compare with 255. In range it sets the cutout and
-    /// says nothing; above it, a negative and text with no number print only the range line.
-    #[test]
-    fn detail_doodad_alpha_reads_like_the_references_command() {
-        let mut world = World::new();
-        world.insert_resource(benilla_world::clutter::ClutterConfig::default());
-        let at = |w: &World| {
-            (w.resource::<benilla_world::clutter::ClutterConfig>()
-                .alpha_ref
-                * 255.0)
-                .round() as u32
-        };
-        for (args, said, now) in [
-            ("12abc", None, 12),
-            (" +12", None, 12),
-            ("200", None, 200),
-            ("300", Some("Alpha ref range 0 - 255."), 200),
-            ("-1", Some("Alpha ref range 0 - 255."), 200),
-            ("", Some("Alpha ref range 0 - 255."), 200),
-            ("abc", Some("Alpha ref range 0 - 255."), 200),
-        ] {
-            let lines = detail_doodad_alpha(&mut world, args);
-            assert_eq!(
-                lines,
-                said.map(String::from).into_iter().collect::<Vec<_>>(),
-                "{args:?}"
-            );
-            assert_eq!(at(&world), now, "{args:?}");
-        }
-    }
     /// Synced is `Fifo`, not `AutoVsync` (`FifoRelaxed`, which tears on a late frame).
     #[test]
     fn the_default_is_synced_like_the_window_literal() {

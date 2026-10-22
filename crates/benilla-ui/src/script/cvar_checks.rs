@@ -515,6 +515,12 @@ pub fn check_ffx_echo(value: &str, _applied: &str, _rows: CvarRows<'_>) -> CvarV
 /// with at most one `.` (at least one digit), then `e`/`E` with an optional sign and digits,
 /// converted as a double and stored as a float. `None` when no number starts the string.
 fn scanf_f(s: &str) -> Option<f32> {
+    scanf_f_prefix(s).map(|(v, _)| v)
+}
+
+/// [`scanf_f`]'s conversion with the bytes it consumed, so a format of several `%f` goes on
+/// after it.
+pub fn scanf_f_prefix(s: &str) -> Option<(f32, usize)> {
     let b = s.as_bytes();
     let mut i = b
         .iter()
@@ -548,7 +554,7 @@ fn scanf_f(s: &str) -> Option<f32> {
             i = e;
         }
     }
-    s[start..i].parse::<f64>().ok().map(|v| v as f32)
+    s[start..i].parse::<f64>().ok().map(|v| (v as f32, i))
 }
 
 #[cfg(test)]
