@@ -136,7 +136,8 @@ pub(crate) struct GuildState {
 /// What the guild verbs write inside their calls ([`GuildSteps`]), apart from [`GuildState`] so
 /// the unit and item feeds that read the guild cache beside the VM can share the call host: the
 /// sort chain, the shown order, the request deadline and the held invitation. Reset with the
-/// session, as [`GuildState`] is. The show-offline flag and the selection are the VM's
+/// session, as [`GuildState`] is, and the sort and the deadline at each world entry
+/// ([`seed_vm_guild`]). The show-offline flag and the selection are the VM's
 /// ([`benilla_ui::script::GuildCells`]).
 #[derive(Resource, Default)]
 pub(crate) struct GuildLocal {
@@ -187,14 +188,19 @@ pub(crate) fn fold_dying_vm_guild(world: &mut World) {
 }
 
 /// Seat a new in-game VM's roster state before its load runs. A `/reload` runs only the teardown
-/// and `UI_Init` (`0x495664`, `0x495669`), so its VM keeps the last one's cells; a world entry's
-/// starts with none, as `InitGuildRoster` zeroes them (`0x4d0a25`, `0x4d0a2b`).
+/// and `UI_Init` (`0x495664`, `0x495669`), so its VM keeps the last one's cells. A world entry runs
+/// `InitGuildRoster` from `InitializeGame` (`0x48f5ea`), which zeroes the show-offline flag, the
+/// selection and the request deadline (`0x4d0a25`-`0x4d0a41`) and seeds the sort chain afresh
+/// (`0x4d0a50`).
 pub(crate) fn seed_vm_guild(world: &mut World, script: &mut UiScript, reload: bool) {
     let carried = world
         .remove_resource::<GuildCellsCarry>()
         .unwrap_or_default();
     if reload {
         script.seed_guild_cells(carried.0);
+    } else if let Some(mut local) = world.get_resource_mut::<GuildLocal>() {
+        local.sort = SortStack::default();
+        local.roster_allowed_at = 0.0;
     }
 }
 
