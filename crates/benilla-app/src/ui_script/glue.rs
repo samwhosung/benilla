@@ -733,7 +733,10 @@ mod tests {
             let mut app = App::new();
             app.init_resource::<GlueRebuild>()
                 .insert_resource(crate::cvars::Cvars::with_value("gxResolution", "1024x768"))
-                .add_systems(Update, watch_glue_aspect);
+                .add_systems(
+                    PreUpdate,
+                    watch_glue_aspect.after(crate::video::show_screen_size),
+                );
             let mut window = Window::default();
             window.resolution.set(1024.0, 768.0);
             let win = app
@@ -780,6 +783,39 @@ mod tests {
             !c.frame(1360.0, 768.0),
             "16:9 to 1.7708 moves the stored aspect by under a hundredth"
         );
+    }
+
+    /// A switch to fullscreen at the glue rebuilds it in the frame the window takes the screen:
+    /// the screen's size is shown first, so the callback compares the screen's aspect, and the
+    /// row answers the screen's size that frame. Wired as `UiScriptPlugin` and `VideoPlugin` wire
+    /// the two.
+    #[test]
+    fn a_switch_to_fullscreen_at_the_glue_rebuilds_it() {
+        use crate::video::{show_screen_size, DisplayMode, VideoConfig};
+        use bevy::window::{MonitorSelection, WindowMode};
+        let mut c = SizeCallback::new();
+        c.app
+            .insert_resource(VideoConfig {
+                vsync: true,
+                display: DisplayMode::Windowed,
+                maximize: false,
+                windowed: UVec2::new(1024, 768),
+            })
+            .add_systems(PreUpdate, show_screen_size);
+        assert!(!c.frame(1024.0, 768.0), "the size it was built at");
+        c.app.world_mut().resource_mut::<VideoConfig>().display = DisplayMode::Fullscreen;
+        c.app.world_mut().get_mut::<Window>(c.win).unwrap().mode =
+            WindowMode::BorderlessFullscreen(MonitorSelection::Current);
+        assert!(c.frame(1440.0, 900.0), "4:3 to 16:10 rebuilds");
+        assert_eq!(
+            c.app
+                .world()
+                .resource::<crate::cvars::Cvars>()
+                .get("gxResolution"),
+            Some("1440x900"),
+            "the row answers the screen that frame"
+        );
+        assert!(!c.frame(1440.0, 900.0), "once");
     }
 
     /// The window is not the aspect: a drag to any size with `gxResolution` unchanged stores the

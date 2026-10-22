@@ -1572,6 +1572,47 @@ pub(crate) mod schedule_tests {
         assert!(seen.contains(&vm), "the VM is built after the glyph cache");
     }
 
+    /// The fullscreen `gxResolution` is shown in `PreUpdate`, ahead of the glue's size callback,
+    /// which reads its aspect: shown after it, a windowed-to-fullscreen switch at the glue stored
+    /// the new size against the old aspect and never rebuilt.
+    #[test]
+    fn the_screen_size_is_shown_before_the_glue_reads_its_aspect() {
+        let mut app = headless_client();
+        let _ = census(&mut app, Update, SyncPoints::Declared);
+        let c = census(&mut app, PreUpdate, SyncPoints::Declared);
+        if !type_names_available(&c) {
+            eprintln!(
+                "skipped: this build carries no type names (bevy/debug rides with the dev feature)"
+            );
+            return;
+        }
+        let one = |suffix: &str| -> SystemKey {
+            let mut hits = c.systems.iter().filter(|(_, s)| s.name.ends_with(suffix));
+            match (hits.next(), hits.next()) {
+                (Some((k, _)), None) => *k,
+                _ => panic!("exactly one system named `…{suffix}` in PreUpdate"),
+            }
+        };
+        let mut succ: HashMap<SystemKey, Vec<SystemKey>> = HashMap::new();
+        for (a, b) in &c.dependencies {
+            succ.entry(*a).or_default().push(*b);
+        }
+        let (show, watch) = (
+            one("::video::show_screen_size"),
+            one("::ui_script::glue::watch_glue_aspect"),
+        );
+        let mut seen = HashSet::new();
+        let mut stack = vec![show];
+        while let Some(n) = stack.pop() {
+            for m in succ.get(&n).into_iter().flatten() {
+                if seen.insert(*m) {
+                    stack.push(*m);
+                }
+            }
+        }
+        assert!(seen.contains(&watch), "the show runs before the callback");
+    }
+
     /// The party feed fires `RAID_TARGET_UPDATE` after the unit feed has pushed this frame's
     /// snapshots: TargetFrame answers it with `GetRaidTargetIndex("target")`, which reads the
     /// target snapshot's `raid_target`, so a party feed that ran first left a new mark off the
