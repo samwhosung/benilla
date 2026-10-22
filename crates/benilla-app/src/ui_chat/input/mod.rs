@@ -10,6 +10,8 @@ use bevy::prelude::*;
 
 /// The channel verbs' slot writes and packets.
 mod channel;
+/// The drunk transform a drunk player's line goes through.
+mod drunk;
 /// `DoEmote`, applied inside its call.
 mod emote;
 mod parse;

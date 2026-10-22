@@ -117,7 +117,7 @@ pub(crate) fn auto_clear_line(
 }
 
 /// Fill the first `%s` of a GlobalString, which the reference `snprintf`s; `%%` is a percent.
-fn fill_one(template: &str, arg: &str) -> String {
+pub(super) fn fill_one(template: &str, arg: &str) -> String {
     let mut out = String::with_capacity(template.len() + arg.len());
     let mut chars = template.chars().peekable();
     let mut used = false;

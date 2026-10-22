@@ -32,6 +32,9 @@ pub(crate) struct ChatSender<'w, 's> {
     channels: Option<ResMut<'w, super::super::edit::ChannelState>>,
     /// The tutorial banks `AcknowledgeTutorial(0x16)` writes inside the call (`0x49f5fc`).
     tutorials: Option<Res<'w, crate::tutorial::Tutorials>>,
+    /// The profanity masker the drunk transform asks (`0x508891`), and its `profanityFilter` gate.
+    filter: Option<Res<'w, crate::text_filter::TextFilter>>,
+    switches: Option<Res<'w, crate::text_filter::TextFilterSwitches>>,
 }
 
 impl ChatSender<'_, '_> {
@@ -160,8 +163,15 @@ impl ChatSender<'_, '_> {
         }
         let mut text =
             benilla_ui::script::expand_target_tokens(&send.text, || self.target_name(script));
-        // A drunk player's text goes through `0x508680` here (`0x49f614`-`0x49f656`), which
-        // benilla does not build.
+        // A drunk player's text goes through `0x508680` (`0x49f614`-`0x49f656`), for every type
+        // past the AFK arm, and the escape scan and the packet take its output (`0x49f65b`).
+        let drunk = self
+            .player()
+            .and_then(|s| s.0.player_drunk_byte())
+            .unwrap_or(0);
+        if drunk != 0 {
+            text = self.slur(script, &text, drunk);
+        }
         if benilla_ui::script::validate_escapes(&mut text).is_err() {
             script.raise_in_call(benilla_ui::script::INVALID_ESCAPE);
             return;
@@ -176,6 +186,33 @@ impl ChatSender<'_, '_> {
         if self.commands.0.send(cmd).is_err() {
             warn!("chat: not connected; addon line dropped");
         }
+    }
+
+    /// `0x508680` over `text` for drunk byte `drunk` (`[[player+0xe68]+0x1d]`, `0x49f61a`): its
+    /// strength is the byte cut to 100 and scaled by 0.01 (`0x49f62c`-`0x49f64e`), its buffer 256
+    /// bytes (`0x49f651`). A longer line, which only `chat_send`'s deviation for `0x49f604` lets
+    /// through, is not cut here either.
+    fn slur(&self, script: &UiScript, text: &str, drunk: u8) -> String {
+        let cap = if text.len() < 0x100 {
+            0x100
+        } else {
+            usize::MAX
+        };
+        let enabled = self.switches.as_deref().is_none_or(|s| s.profanity);
+        let slurred_speech =
+            super::super::combat::global_string(script, "SLURRED_SPEECH").unwrap_or_default();
+        super::drunk::slur(
+            text,
+            crate::player::drunk::fraction(drunk),
+            cap,
+            rand::random::<u32>,
+            |probe| {
+                self.filter
+                    .as_deref()
+                    .is_some_and(|f| f.mask(enabled, probe))
+            },
+            &slurred_speech,
+        )
     }
 
     /// The AFK arm: `SetAFK` (`0x5eb740`) or the forced `ClearAFK(1)` (`0x5eb830`), each echoing
