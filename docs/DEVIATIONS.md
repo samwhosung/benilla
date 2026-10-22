@@ -186,8 +186,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The reference places collision and culling by the raw facing, ours follow the display facing, because a capsule and a sphere barely change under rotation. ([`src/net/motion/facing.rs:9`](../crates/benilla-app/src/net/motion/facing.rs#L9))
 - The reference paces a self move through the same replay chain as a remote's, which would only delay a correction to our own pose. ([`src/net/motion/remote.rs:84`](../crates/benilla-app/src/net/motion/remote.rs#L84))
 - Its rate-limited hover climb (`0x636fa1`, 7 yd/s) is not reproduced, because the cache gate needs a pure function; it converges to this answer. ([`src/net/motion/spline.rs:568`](../crates/benilla-app/src/net/motion/spline.rs#L568))
-- A first-pass values block the clear header byte left unwritten re-fires, for a live object, its last write's edges against the watch copy (`0x465570`, `0x466686`); benilla compares against this packet's copies, which hold none for it, so a stale edge never fires twice. ([`src/net/objects/update.rs:812`](../crates/benilla-app/src/net/objects/update.rs#L812))
-- The create notify uses its lookup's result untested (`0x465c97`, `0x465d79`). ([`src/net/objects/update.rs:824`](../crates/benilla-app/src/net/objects/update.rs#L824))
+- A first-pass values block the clear header byte left unwritten re-fires, for a live object, its last write's edges against the watch copy (`0x465570`, `0x466686`); benilla compares against this packet's copies, which hold none for it, so a stale edge never fires twice. ([`src/net/objects/update.rs:806`](../crates/benilla-app/src/net/objects/update.rs#L806))
+- The create notify uses its lookup's result untested (`0x465c97`, `0x465d79`). ([`src/net/objects/update.rs:818`](../crates/benilla-app/src/net/objects/update.rs#L818))
 
 #### no_install
 
@@ -373,11 +373,11 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_loot
 
-- It is the display row, where the reference's is the item index plus one (`0x4c2885`), so an addon's `GetLootSlotInfo(arg1)` reads the row the dialog is for. ([`src/ui_loot/mod.rs:231`](../crates/benilla-app/src/ui_loot/mod.rs#L231))
-- `autoLootDefault` is benilla's own option, 1.12 auto-looting only on a shift-click, and off is 1.12's behaviour. ([`src/ui_loot/mod.rs:469`](../crates/benilla-app/src/ui_loot/mod.rs#L469))
-- Our close paths clear it guid-matched, where `CloseInteraction` clears it unconditionally (`0x48f2c9`), so closing an old window keeps a newer `CMSG_LOOT`'s latch. ([`src/ui_loot/mod.rs:497`](../crates/benilla-app/src/ui_loot/mod.rs#L497))
-- A negative answer releases the row, where the reference's callback `0x4c2ac0` returns on a failed query and the window never opens, because an entry the server cannot describe would otherwise keep the loot shut for good. ([`src/ui_loot/mod.rs:682`](../crates/benilla-app/src/ui_loot/mod.rs#L682))
-- A push is dropped after `RECEIVE_MAX_TRIES` frames, where the reference waits on the item-cache callback with no timeout, because an entry the server never describes would otherwise stay queued. ([`src/ui_loot/mod.rs:795`](../crates/benilla-app/src/ui_loot/mod.rs#L795))
+- It is the display row, where the reference's is the item index plus one (`0x4c2885`), so an addon's `GetLootSlotInfo(arg1)` reads the row the dialog is for. ([`src/ui_loot/mod.rs:249`](../crates/benilla-app/src/ui_loot/mod.rs#L249))
+- `autoLootDefault` is benilla's own option, 1.12 auto-looting only on a shift-click, and off is 1.12's behaviour. ([`src/ui_loot/mod.rs:598`](../crates/benilla-app/src/ui_loot/mod.rs#L598))
+- Our close paths clear it guid-matched, where `CloseInteraction` clears it unconditionally (`0x48f2c9`), so closing an old window keeps a newer `CMSG_LOOT`'s latch. ([`src/ui_loot/mod.rs:626`](../crates/benilla-app/src/ui_loot/mod.rs#L626))
+- A negative answer releases the row, where the reference's callback `0x4c2ac0` returns on a failed query and the window never opens, because an entry the server cannot describe would otherwise keep the loot shut for good. ([`src/ui_loot/mod.rs:823`](../crates/benilla-app/src/ui_loot/mod.rs#L823))
+- A push is dropped after `RECEIVE_MAX_TRIES` frames, where the reference waits on the item-cache callback with no timeout, because an entry the server never describes would otherwise stay queued. ([`src/ui_loot/mod.rs:936`](../crates/benilla-app/src/ui_loot/mod.rs#L936))
 
 #### ui_loot_roll
 
@@ -480,7 +480,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_trade
 
-- An out-of-range slot is dropped, where the reference indexes its 7-slot mirror unchecked, because an out-of-bounds write is not a behaviour to reproduce. ([`src/ui_trade/mod.rs:440`](../crates/benilla-app/src/ui_trade/mod.rs#L440))
+- An out-of-range slot is dropped, where the reference indexes its 7-slot mirror unchecked, because an out-of-bounds write is not a behaviour to reproduce. ([`src/ui_trade/mod.rs:441`](../crates/benilla-app/src/ui_trade/mod.rs#L441))
 
 #### video
 
