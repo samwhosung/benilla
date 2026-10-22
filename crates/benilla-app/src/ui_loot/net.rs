@@ -5,7 +5,7 @@ use benilla_protocol::messages::ItemPushResult;
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
-use super::{LootLatch, LootMoveStart, LootState};
+use super::{LootCloseAtRest, LootLatch, LootMoveStart, LootState};
 use crate::net::{ClientCommand, NetCommands, NetHandlerApp, SelfGuid};
 use crate::ui_action::{UiError, UiErrorKeys};
 
@@ -29,12 +29,13 @@ pub(super) fn register(app: &mut App) {
 /// open on it. One for an object we lack shows `ERR_LOOT_DIDNT_KILL` and returns (`0x5ebb33`,
 /// mask 1, `0x5ebb3f`) before the latch (`0x5ebb60`) and the open. One that lands while our own
 /// body moves takes the move-start close (`0x5ebc3a`-`0x5ebc51`), which the feed runs after the
-/// copier's end, or the drain when the window waits on an item template.
+/// copier's end, or the drain when the window waits on an item template. A close owed ahead of
+/// it takes the window it found first ([`OwedAhead`]).
 fn on_response(
     In(ev): In<SessionEvent>,
     mut select: crate::target::SelectCommit,
     player: Option<Res<crate::player::Player>>,
-    mut move_start: ResMut<LootMoveStart>,
+    mut owed: OwedAhead,
     index: Res<crate::net::GuidIndex>,
     errors: Res<UiErrorKeys>,
 ) {
@@ -48,6 +49,7 @@ fn on_response(
         return;
     };
     let seam = &mut select.seam;
+    owed.settle(&mut seam.loot, &mut seam.loot_latch, &seam.net);
     if !admit_response(
         guid,
         loot_type,
@@ -74,7 +76,44 @@ fn on_response(
         p.foreign_mover.is_none()
             && p.move_flags() & crate::creature_anim::move_flags::STEERING != 0
     }) {
-        move_start.0 = true;
+        owed.move_start.0 = true;
+    }
+}
+
+/// The closes owed ahead of a response, which the reference runs where they are owed: our own
+/// cast's GO ends its precast with the tail's close (`0x60d10b` → `0x48f200`), on the move the
+/// move-start one ([`LootMoveStart`]), at rest the full one ([`LootCloseAtRest`]). They take the
+/// window open then, or nothing (`0x48f23f`), never the one this response opens.
+#[derive(bevy::ecs::system::SystemParam)]
+struct OwedAhead<'w, 's> {
+    move_start: ResMut<'w, LootMoveStart>,
+    at_rest: ResMut<'w, LootCloseAtRest>,
+    objects: crate::net::Objects<'w, 's>,
+    dead: super::DeadUnitDeselect<'w, 's>,
+}
+
+impl OwedAhead<'_, '_> {
+    /// Run the owed closes as the drain would, the move-start one first. A move-start close an
+    /// earlier response in this drain owes stays for the feed, which runs it after that window's
+    /// copier end (`0x5ebc51`). A disenchant hold's sweep (`0x48f264`) needs the VM and is owed
+    /// to the feed, which runs it unless this response's copier replaces the session.
+    fn settle(&mut self, loot: &mut LootState, latch: &mut LootLatch, net: &NetCommands) {
+        let response_owes = loot
+            .steps
+            .iter()
+            .any(|s| matches!(s, super::Step::Opened { .. }));
+        if !response_owes && std::mem::take(&mut self.move_start.0) {
+            let closed = super::close_on_move_start(loot, latch, net);
+            self.dead.after_close(closed);
+        }
+        if std::mem::take(&mut self.at_rest.0) {
+            if loot.disenchant_hold(&self.objects) {
+                loot.owe_sweep();
+            } else {
+                let closed = super::close_interaction(loot, latch, Some(net));
+                self.dead.after_close(closed);
+            }
+        }
     }
 }
 
@@ -1519,6 +1558,33 @@ mod tests {
             assert_eq!(world.resource::<LootLatch>().0, None, "{owed:?}");
             assert_eq!(releases(&rx), [CHEST], "{owed:?}");
         }
+    }
+
+    /// Two responses on the run in one drain: each one's own tail (`0x5ebc51`) closes its own
+    /// window after its copier, so each source is released once, the first not again by the
+    /// second's handler.
+    #[test]
+    fn two_responses_on_the_run_in_one_drain_release_each_window_once() {
+        let mut app = App::new();
+        let rx = seat_tabbed(app.world_mut());
+        seat_drain(
+            app.world_mut(),
+            crate::player::Player::with_move_flags(crate::creature_anim::move_flags::FORWARD),
+        );
+        app.init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::names::NameCache>()
+            .insert_non_send_resource(benilla_ui::script::UiScript::new().expect("VM"))
+            .add_systems(
+                Update,
+                (super::super::feed_loot, super::super::drain_loot).chain(),
+            );
+        app.world_mut().resource_mut::<LootLatch>().0 = Some(CORPSE);
+        respond(app.world_mut(), CORPSE, 1);
+        app.world_mut().resource_mut::<LootLatch>().0 = Some(CHEST);
+        respond(app.world_mut(), CHEST, 1);
+        app.update();
+        assert_eq!(releases(&rx), [CORPSE, CHEST]);
+        assert_eq!(app.world().resource::<LootState>().source(), None);
     }
 
     /// With the byte the click stored set, the copier `0x4c1cb0` sweeps the window (`0x4c1fa0`)

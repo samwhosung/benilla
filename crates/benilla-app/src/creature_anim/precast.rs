@@ -145,7 +145,8 @@ pub(crate) fn end_precast(commands: &mut Commands, entity: Entity, tail: Precast
 /// `0x48f200(1, moving, 0)`, `moving` its flags `& 0x200f`, the four directions and FALLING.
 /// Moving, that is the move-start close ([`crate::ui_loot::LootMoveStart`]); at rest the full one
 /// ([`crate::ui_loot::LootCloseAtRest`]). An end made in the VM pass applies after it, so its
-/// release reaches the loot drain the next frame.
+/// release reaches the loot drain the next frame. A loot response that lands before the drain
+/// takes it runs it first, on the window the end found.
 pub(super) fn end(world: &mut World, entity: Entity, spell: Option<u32>, tail: PrecastTail) {
     apply(world, entity, Change::End(spell), tail);
 }
