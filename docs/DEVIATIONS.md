@@ -284,7 +284,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 - The reference's arm reads the last object's stop (`0x611336` before `0x610383` stores this one's), so its first walk has no stop. ([`src/target/click.rs:493`](../crates/benilla-app/src/target/click.rs#L493))
 - It runs on the first frame with none, so an arrival that sends no stop (mid-air, rooted, under a held turn key) acts at once or on landing or release, where the reference waits for the next ground stop and can act long after, wherever the player then is. ([`src/target/click.rs:1341`](../crates/benilla-app/src/target/click.rs#L1341))
-- The rank is held to 7, the top of the ring scale's eight entries (`0..=7`), where the reference keeps any value; a server rank past 7 would index outside our palette. ([`src/target/relations.rs:491`](../crates/benilla-app/src/target/relations.rs#L491))
+- The rank is held to 7, the top of the ring scale's eight entries (`0..=7`), where the reference keeps any value; a server rank past 7 would index outside our palette. ([`src/target/relations.rs:487`](../crates/benilla-app/src/target/relations.rs#L487))
 - TAB uses Classic Era's screen-space priority, not 1.12's ±30° facing cone and snapshot cursor (`0x493f60`), because the cone skips a close mob in front of the camera, which sits behind the character. ([`src/target/scan.rs:3`](../crates/benilla-app/src/target/scan.rs#L3))
 - Our own body is never a candidate. The reference's friendly scan picks the player at some facings (`CanAssist(P, P)` is true, `0x6061e0`; the cone test `0x47f220`), but our scoring always puts the player dead centre at distance 0, so CTRL-TAB would pick us on every press. ([`src/target/scan.rs:194`](../crates/benilla-app/src/target/scan.rs#L194))
 - No scene-attach gate (the reference's `0x6704c0`), because the draw election hides every body outside the frustum, which would empty the off-screen tier. ([`src/target/scan.rs:368`](../crates/benilla-app/src/target/scan.rs#L368))
@@ -306,7 +306,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 - On a catalog miss the reference keeps the record's stale value (`0x4e4533`, `0x4e4550` skip the write); this answers from the joined expiry, because a stale value is no mechanism to reproduce. ([`src/ui_aura.rs:449`](../crates/benilla-app/src/ui_aura.rs#L449))
 - On other units' rows an id the catalog lacks stays visible, because every wire id is a real spell and failing closed would blank every aura on a catalog failure; the reference skips one there (`[0xc0d78c]`), though its player cache inserts one, as here. ([`src/ui_aura.rs:477`](../crates/benilla-app/src/ui_aura.rs#L477))
-- The reference never clears its expiry array (`0xbc5f68`); this does, because vmangos sends no durations at login to overwrite a kept stamp (`SMSG_UPDATE_AURA_DURATION` is an empty placeholder in `Player::SendInitialPacketsBeforeAddToMap`, `Player.cpp:19248`). ([`src/ui_aura.rs:758`](../crates/benilla-app/src/ui_aura.rs#L758))
+- The reference never clears its expiry array (`0xbc5f68`); this does, because vmangos sends no durations at login to overwrite a kept stamp (`SMSG_UPDATE_AURA_DURATION` is an empty placeholder in `Player::SendInitialPacketsBeforeAddToMap`, `Player.cpp:19248`). ([`src/ui_aura.rs:760`](../crates/benilla-app/src/ui_aura.rs#L760))
 
 #### ui_binder
 
@@ -317,7 +317,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - Not run on benilla's same-character reconnect, which the reference lacks (it returns to the login screen), so the window keeps its scrollback there. ([`src/ui_chat.rs:262`](../crates/benilla-app/src/ui_chat.rs#L262))
 - A missing global prints nothing, where the reference prints an empty line (`0x703c02`), because benilla's other `DisplayError` routes do the same. ([`src/ui_chat/broadcast.rs:156`](../crates/benilla-app/src/ui_chat/broadcast.rs#L156))
 - In a capital with a blank city word the walk composes `"Trade - "` (it tests the row pointer, not the string, `0x49a2e4`-`0x49a2ed`); we decline, because a wrong channel name is joined silently and for good. ([`src/ui_chat/channels.rs:157`](../crates/benilla-app/src/ui_chat/channels.rs#L157))
-- A probe's bare `/assist` assists the live selection, where the stock handler (`ChatFrame.lua:740`) resolves a selected player's name through `AssistByName`, because a name resolve can land on a different player. ([`src/ui_chat/input/mod.rs:603`](../crates/benilla-app/src/ui_chat/input/mod.rs#L603))
+- A probe's bare `/assist` assists the live selection, where the stock handler (`ChatFrame.lua:740`) resolves a selected player's name through `AssistByName`, because a name resolve can land on a different player. ([`src/ui_chat/input/mod.rs:605`](../crates/benilla-app/src/ui_chat/input/mod.rs#L605))
 - The files live in `benilla-config/Logs/`, not the install's `Logs`, because the install is read-only. ([`src/ui_chat/logging.rs:4`](../crates/benilla-app/src/ui_chat/logging.rs#L4))
 - No re-run when a remote player streams in, because the reference's re-run only repeats the join, which vmangos swallows, or the leave, whose "Not on channel" notice nothing prints. ([`src/ui_chat/recruitment.rs:7`](../crates/benilla-app/src/ui_chat/recruitment.rs#L7))
 - `set_chat_window_looks` drops an out-of-range window, where the reference's `WINDOW` bound is off by one (`0x498d1c`, `ja` where the array needs `jae`), because that write would land past the array. ([`src/ui_chat/settings.rs:31`](../crates/benilla-app/src/ui_chat/settings.rs#L31))
@@ -638,9 +638,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### events
 
-- `benilla::spell_mods` refuses an out-of-range pair, because the reference would overrun it. ([`src/events.rs:702`](../crates/benilla-protocol/src/events.rs#L702))
-- An out-of-range list past the first block reads no body in the write passes (`0x466076`), which misread every block behind it, while the notify pass reads past it (`0x465fd0`) and stays in step; benilla reads the list and drops it, keeping the blocks behind it whole. ([`src/events/decode.rs:1121`](../crates/benilla-protocol/src/events/decode.rs#L1121))
-- The flagged pass reads a movement block's guid as 8 raw bytes (`0x467140`, `0x46714d`) where the wire packs it, so unless the packed guid happens to be 8 bytes the reference misreads the rest of that pass; benilla reads the block once, packed, as pass 0 does (`0x467080`). ([`src/events/decode.rs:1138`](../crates/benilla-protocol/src/events/decode.rs#L1138))
+- `benilla::spell_mods` refuses an out-of-range pair, because the reference would overrun it. ([`src/events.rs:704`](../crates/benilla-protocol/src/events.rs#L704))
+- An out-of-range list past the first block reads no body in the write passes (`0x466076`), which misread every block behind it, while the notify pass reads past it (`0x465fd0`) and stays in step; benilla reads the list and drops it, keeping the blocks behind it whole. ([`src/events/decode.rs:1124`](../crates/benilla-protocol/src/events/decode.rs#L1124))
+- The flagged pass reads a movement block's guid as 8 raw bytes (`0x467140`, `0x46714d`) where the wire packs it, so unless the packed guid happens to be 8 bytes the reference misreads the rest of that pass; benilla reads the block once, packed, as pass 0 does (`0x467080`). ([`src/events/decode.rs:1141`](../crates/benilla-protocol/src/events/decode.rs#L1141))
 
 #### examples
 
@@ -656,8 +656,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - Zone and position are kept, not set to the viewer's zone and the object's position, because nothing in benilla reads them. ([`src/messages/group.rs:256`](../crates/benilla-protocol/src/messages/group.rs#L256))
 - String reads are unbounded. The reference `0x4191b0` caps each field, counting the NUL (roster name `0x30`, notes `0x80`, MOTD `0x200`, info `0x7d0`, guild name `0x60`, rank name `0x40`), and on overflow empties it and no-ops every later read in the packet. ([`src/messages/guild.rs:4`](../crates/benilla-protocol/src/messages/guild.rs#L4))
 - A reason of 3 or more is silent, where the reference prints an uninitialized stack buffer, because 3 is the server's `INSTANCERESET_FAIL_SILENTLY`. ([`src/messages/instance.rs:70`](../crates/benilla-protocol/src/messages/instance.rs#L70))
-- 2 or more prints nothing, because the reference prints an uninitialized buffer. ([`src/messages/opcode.rs:1026`](../crates/benilla-protocol/src/messages/opcode.rs#L1026))
-- The consumer refuses 64 and up, because there the reference's store overruns its table. ([`src/messages/packet.rs:622`](../crates/benilla-protocol/src/messages/packet.rs#L622))
+- 2 or more prints nothing, because the reference prints an uninitialized buffer. ([`src/messages/opcode.rs:1030`](../crates/benilla-protocol/src/messages/opcode.rs#L1030))
+- The consumer refuses 64 and up, because there the reference's store overruns its table. ([`src/messages/packet.rs:628`](../crates/benilla-protocol/src/messages/packet.rs#L628))
 - A body too short for the position gives `None` where the client redisplays a stale global, because showing a stale queue position as current is a client bug. ([`src/messages/parse.rs:285`](../crates/benilla-protocol/src/messages/parse.rs#L285))
 - A type outside 1-7 reads as nothing rather than the reference's default arm, which under-pushes its returns. ([`src/messages/pet.rs:71`](../crates/benilla-protocol/src/messages/pet.rs#L71))
 - Both are read, told apart exactly by the tail length (`12n` vs `1 + 14n`), since the 1.12 client mis-parses vmangos's. ([`src/messages/pet.rs:191`](../crates/benilla-protocol/src/messages/pet.rs#L191))
