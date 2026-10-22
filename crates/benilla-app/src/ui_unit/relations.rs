@@ -1,5 +1,5 @@
-//! The relation feed: the copy of the relation functions the Lua API asks
-//! ([`RelationSnapshot`]), pushed into the VM.
+//! The relation feed: the relation functions the Lua API asks ([`RelationSnapshot`]), the held
+//! units copied and the reputation slots shared, pushed into the VM.
 
 use std::collections::HashMap;
 use std::rc::Rc;

@@ -8,7 +8,7 @@
 //! the same slots, which the Lua API's relation functions hold, and the call host writes them
 //! through a shared reference, as most of its appliers read the store through the relation inputs.
 
-use std::sync::atomic::{AtomicI32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
 use std::sync::Arc;
 
 use benilla_protocol::messages::FACTION_LIST_LEN;
@@ -21,15 +21,17 @@ struct Slot {
     standing: AtomicI32,
 }
 
-/// The 64 slots.
+/// The 64 slots, and whether a verb wrote one since the store last told the frame.
 struct Slots {
     cells: [Slot; FACTION_LIST_LEN],
+    verb_wrote: AtomicBool,
 }
 
 impl Default for Slots {
     fn default() -> Self {
         Self {
             cells: std::array::from_fn(|_| Slot::default()),
+            verb_wrote: AtomicBool::new(false),
         }
     }
 }
@@ -121,6 +123,26 @@ impl Reputations {
         if let Some(cell) = self.slots.cells.get(slot) {
             cell.flags.store(flags, Ordering::Relaxed);
         }
+    }
+
+    /// A verb's write of `bits` of slot `slot`'s flag byte inside its call (`0x4d5fc0` from
+    /// `0x4d6074` and `0x4d612c`): every holder of the store reads it at once, and the frame hears
+    /// of it at [`Self::take_verb_write`].
+    pub(crate) fn write_flag_bits(&self, slot: usize, bits: u8, set: bool) {
+        let Some(cell) = self.slots.cells.get(slot) else {
+            return;
+        };
+        if set {
+            cell.flags.fetch_or(bits, Ordering::Relaxed);
+        } else {
+            cell.flags.fetch_and(!bits, Ordering::Relaxed);
+        }
+        self.slots.verb_wrote.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether a verb wrote a slot since the last ask.
+    pub(crate) fn take_verb_write(&self) -> bool {
+        self.slots.verb_wrote.swap(false, Ordering::Relaxed)
     }
 
     /// `SMSG_SET_FORCED_REACTIONS`: the table replaces the last whole (`0x4d59a0`), then refreshes

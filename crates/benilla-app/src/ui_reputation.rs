@@ -40,7 +40,7 @@ pub(crate) struct UiReputationPlugin;
 
 impl Plugin for UiReputationPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<FactionFlagWrites>().add_systems(
+        app.add_systems(
             Update,
             // A seat: the world-enter cascade's rebuild signals over the list it pushes.
             feed_reputation
@@ -51,41 +51,12 @@ impl Plugin for UiReputationPlugin {
     }
 }
 
-/// The slot flag bytes the verbs wrote inside their calls (`0x4d6074`, `0x4d612c`), as
-/// `(slot, bits, set)`, for the feed to fold into [`Reputations`] ahead of its build: the host reads
-/// the store and cannot write it, as most of its appliers read it through the relation inputs.
-/// An append-only sink shared through `&self`, as [`crate::ui_action::UiErrorKeys`] is.
-#[derive(Resource, Default)]
-pub(crate) struct FactionFlagWrites(std::sync::Mutex<Vec<(usize, u8, bool)>>);
-
-impl FactionFlagWrites {
-    fn q(&self) -> std::sync::MutexGuard<'_, Vec<(usize, u8, bool)>> {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    /// Whether a write waits.
-    fn pending(&self) -> bool {
-        !self.q().is_empty()
-    }
-
-    /// Fold every write into `store`, in the order made.
-    fn apply(&self, store: &mut Reputations) {
-        for (slot, bits, set) in std::mem::take(&mut *self.q()) {
-            let flags = store.flags(slot);
-            store.set_flags(slot, if set { flags | bits } else { flags & !bits });
-        }
-    }
-}
-
 /// The reputation verbs' engine half: the player's combat flag and watched slot, the slots' flag
 /// bytes, and what the verbs send through.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ReputationSteps<'w, 's> {
     self_q: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
     reputations: Res<'w, Reputations>,
-    writes: Option<Res<'w, FactionFlagWrites>>,
     net: Res<'w, NetCommands>,
     sink: crate::ui_action::MessageSink<'w>,
 }
@@ -165,11 +136,10 @@ impl ReputationSteps<'_, '_> {
         self.reputations.flags(slot as usize)
     }
 
-    /// Write `bits` of slot `slot`'s flag byte (`0x4d5fc0`), for the feed to fold in.
+    /// Write `bits` of slot `slot`'s flag byte in the store (`0x4d5fc0`), which the reaction reads
+    /// on the call's next line.
     fn write(&self, slot: u32, bits: u8, set: bool) {
-        if let Some(writes) = self.writes.as_deref() {
-            writes.q().push((slot as usize, bits, set));
-        }
+        self.reputations.write_flag_bits(slot as usize, bits, set);
     }
 }
 
@@ -351,9 +321,9 @@ pub(crate) fn reputation_row(
 /// The by-value inputs of the feed's gate, `(race, class, watched)`; the other two are resources.
 type ReputationInputs = Option<(u8, u8, Option<u32>)>;
 
-/// Push the snapshot and fire `UPDATE_FACTION` when it differs from the list the VM holds. The
-/// flag bytes the verbs wrote are folded in first ([`FactionFlagWrites`]), and the VM's list
-/// already holds them, so a verb's write signals nothing here. The build (54 rows of names and
+/// Push the snapshot and fire `UPDATE_FACTION` when it differs from the list the VM holds. A flag
+/// byte a verb wrote in its call is in the store and the VM's list already, so it signals nothing
+/// here; it marks the store changed for the feeds that judge reactions off it. The build (54 rows of names and
 /// descriptions) runs only when the wire slots, the catalog, race/class or the watched index
 /// move, and the equality check behind it keeps a change to no listed row quiet. The first push
 /// into a VM is silent: it needs the active player, as the rebuild does (`0x4d5453`), and comes on
@@ -361,15 +331,14 @@ type ReputationInputs = Option<(u8, u8, Option<u32>)>;
 /// (`crate::ui_unit::WorldEnterSeats`).
 pub(crate) fn feed_reputation(
     mut vm: crate::script_calls::VmWith<ResMut<'static, Reputations>>,
-    writes: Option<Res<FactionFlagWrites>>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     factions: Option<Res<Factions>>,
     mut last: Local<crate::ui_script::VmMemo<Option<ReputationState>>>,
     mut last_inputs: Local<crate::ui_script::VmMemo<ReputationInputs>>,
 ) {
     vm.feed(|script, mut reputations, fires| {
-        if let Some(writes) = writes.as_deref().filter(|w| w.pending()) {
-            writes.apply(&mut reputations);
+        if reputations.take_verb_write() {
+            reputations.set_changed();
         }
         let Some(script) = script else {
             return;

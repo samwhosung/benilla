@@ -1,6 +1,8 @@
 //! The relation functions as the Lua API asks them ([`UnitRelations`]): every unit the object
 //! manager holds, copied with the tables they are judged by, so the six relation verbs answer the
 //! model's verdict for any two of them, in the order the tokens come. `ui_unit`'s feed pushes it.
+//! The reputation slots are the store's own, not a copy: a verb's flag write is in the answer on
+//! its call's next line (`0x4d6074`, read at `0x60640c`).
 
 use std::collections::HashMap;
 
@@ -15,6 +17,7 @@ use crate::target::Factions;
 pub(crate) struct RelationSnapshot {
     pub(crate) units: HashMap<u64, RelUnit>,
     pub(crate) factions: Option<Factions>,
+    /// A clone of the store: its slots shared, its forced table copied at the push.
     pub(crate) reputations: Reputations,
     pub(crate) me: Option<u64>,
     pub(crate) roster: GroupRoster,
