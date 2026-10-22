@@ -43,14 +43,8 @@ impl WatchCtx<'_> {
         )
     }
 
-    /// A spell's display name, or `None` where the aura formatters write no line
-    /// ([`super::logged_spell`]).
-    fn spell_name(&self, spell_id: u32) -> Option<String> {
-        super::logged_spell(self.spells.as_deref(), spell_id).map(|d| d.name.clone())
-    }
-
-    /// [`Self::spell_name`] for the aura formatter `0x62b480`, which also writes nothing for a
-    /// passive spell (`Attributes & 0x40`, `0x62b4fb`).
+    /// A spell's display name for the aura formatter `0x62b480`, or `None` where it writes no
+    /// line: [`super::logged_spell`]'s gates and a passive spell (`Attributes & 0x40`, `0x62b4fb`).
     fn aura_spell_name(&self, spell_id: u32) -> Option<String> {
         super::logged_spell(self.spells.as_deref(), spell_id)
             .filter(|d| d.attributes & ATTR_PASSIVE == 0)
@@ -200,7 +194,8 @@ pub(crate) fn aura_lines(
         aura_call(&ctx, &stores, &poses, &log, call);
     }
 
-    // Stack counts: four slots per dword, one byte each, holding `stack - 1`.
+    // Stack counts: four slots per dword, one byte each, holding `stack - 1`. Each byte is its
+    // own watch (`0x604ea0`), and `0x612450` compares the bytes alone (`cmp`, `jbe`).
     for e in edges.read().filter(|e| {
         e.unit_array_slot(FIELD_UNIT_AURAAPPLICATIONS, SLOTS / 4)
             .is_some()
@@ -211,15 +206,17 @@ pub(crate) fn aura_lines(
         };
         for byte in 0..4u16 {
             let slot = word * 4 + byte;
-            let (before, now) = ((e.old >> (byte * 8)) & 0xff, (e.new >> (byte * 8)) & 0xff);
-            // A rise, to two or more, on a slot whose spell stayed put.
-            if now <= before || now == 0 || slot_moved(&calls, e.entity, slot) {
+            let (before, now) = ((e.old >> (byte * 8)) as u8, (e.new >> (byte * 8)) as u8);
+            if now <= before {
                 continue;
             }
-            let Some(aura) = store.0.unit_aura(slot as u8) else {
-                continue;
-            };
-            let Some(spell) = ctx.spell_name(aura.spell_id) else {
+            // `0x62b800` reads the slot's spell dword as the descriptor holds it then
+            // (`0x62b822`), and writes only for a spell whose `StackAmount` is above 1
+            // (`0x62b87c`, `jle`).
+            let spell_id = spell_at(&calls, store, e, slot);
+            let Some(display) = super::logged_spell(ctx.spells.as_deref(), spell_id)
+                .filter(|d| d.stack_amount as i32 > 1)
+            else {
                 continue;
             };
             let class = ctx.classify(e.guid, &stores);
@@ -240,8 +237,9 @@ pub(crate) fn aura_lines(
                 (e.guid, class),
                 ctx.ranges.class(class),
                 Fills {
-                    spell,
-                    amount: i64::from(now + 1),
+                    spell: display.name.clone(),
+                    // The byte plus one, as a byte (`0x62b9dc`).
+                    amount: i64::from(now.wrapping_add(1)),
                     ..Default::default()
                 },
                 None,
@@ -257,12 +255,17 @@ fn harmful(slot: u16) -> bool {
     slot >= FIRST_HARMFUL_SLOT
 }
 
-/// Whether a watcher call in the drain moved `slot`'s spell on `entity`.
-fn slot_moved(calls: &[AuraFieldsChanged], entity: Entity, slot: u16) -> bool {
-    let slot = usize::from(slot);
+/// `slot`'s spell dword on the unit as the edge `e` found it: the old dword of the first watcher
+/// call on the unit after the edge, or the descriptor's when none follows it in the drain.
+fn spell_at(calls: &[AuraFieldsChanged], store: &ObjectStore, e: &FieldChanged, slot: u16) -> u32 {
     calls
         .iter()
-        .any(|c| c.entity == entity && c.old[slot] != c.new[slot])
+        .filter(|c| c.entity == e.entity && c.at > e.at)
+        .min_by_key(|c| c.at)
+        .map_or_else(
+            || store.0.unit_aura_ids().nth(usize::from(slot)).unwrap_or(0),
+            |c| c.old[usize::from(slot)],
+        )
 }
 
 /// One slot's aura in the watcher's dwords: its spell when the spell is nonzero and the slot's
