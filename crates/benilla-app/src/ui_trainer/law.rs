@@ -273,9 +273,13 @@ pub(super) fn service_kind(wire_spell: u32, spells: &SpellCatalog) -> (bool, Opt
 }
 
 /// A `state` byte's category. The finalizer shows a row whose `1 << state` is in the filter
-/// (`0x4d84ba`), whose bits past 2 nothing sets (`0x4da390`), so a state from 3 up is hidden: the
-/// re-evaluator's 3 (`0x4d7e3e`, `0x4d83a4`) and an unexpected wire byte up to 31, where the shift
-/// would wrap; vmangos sends 0 to 2 (`NPCHandler.cpp:113`).
+/// (`0x4d84ba`), whose bits past 2 nothing sets (`0x4da390`), so states 3 to 31 are hidden, the
+/// re-evaluator's 3 (`0x4d7e3e`, `0x4d83a4`) among them; vmangos sends 0 to 2
+/// (`NPCHandler.cpp:113`).
+///
+/// Deviation: benilla hides every state from 3 up. The reference shows bytes 32 and up, because
+/// x86 `shl` wraps its count (bits 32-34 alias 0-2) and its group counter `[hdr+4+state*4]`
+/// (`0x4d7854`) runs past the header.
 pub(super) fn category(state: u8) -> TrainerServiceCategory {
     match state {
         trainer_spell_state::GREEN => TrainerServiceCategory::Available,
