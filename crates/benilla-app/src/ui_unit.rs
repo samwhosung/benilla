@@ -2738,13 +2738,17 @@ mod tests {
         /// vmangos's GM template: `FactionTemplate.dbc` group mask 0.
         const GM_TEMPLATE: u32 = 35;
 
+        let teams = crate::chr_classes::RacePvpTeams::stock();
         let team = |fields: &[(u16, u32)]| {
             snapshot(
                 &ObjectStore(ObjectFields::from_pairs(fields)),
                 0,
                 None,
                 0,
-                Default::default(),
+                UnitNames {
+                    teams: Some(&teams),
+                    ..Default::default()
+                },
                 Default::default(),
             )
             .pvp_team
