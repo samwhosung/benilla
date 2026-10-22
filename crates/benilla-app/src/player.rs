@@ -172,6 +172,28 @@ pub(crate) struct ServerStandState {
     pub(crate) state: u8,
 }
 
+/// The active player, whichever body is driven: what the posture verbs read and act on, as the
+/// stand-state setter `0x5ed430` and the sheathe toggle `0x5eb480` each refuse any unit but the
+/// active player (`0x5ed46c`, `0x5eb4ba`). Its entity, its driver and committed sheath state, its
+/// descriptor, its attack target, its hands, its precast, and whether it is the driven body.
+pub(super) type SelfPosture<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        Option<(
+            &'static crate::creature_anim::AnimDriver,
+            &'static crate::creature_anim::CommittedSheath,
+        )>,
+        Option<&'static crate::net::ObjectStore>,
+        Has<crate::creature_anim::Engaged>,
+        Option<&'static crate::creature_anim::Wielded>,
+        Has<crate::creature_anim::Precast>,
+        Has<Embodied>,
+    ),
+    (With<crate::net::SelfPlayer>, Without<FlyCam>),
+>;
+
 /// The body we drive: our own avatar, or a possessed creature. Everything reads its pivot, speeds,
 /// scale and descriptor off the entity, so a creature needs nothing special.
 pub(super) type BodyQuery<'w, 's> = Query<

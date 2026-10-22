@@ -26,6 +26,7 @@ pub(super) fn update(
     player: &mut Player,
     pending: &mut super::StandPending,
     body: &BodyQuery,
+    _me: &super::SelfPosture,
     binds: &crate::bindings::BindingsState,
     net: &NetCommands,
     commands: &mut Commands,
