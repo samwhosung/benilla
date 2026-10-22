@@ -255,7 +255,7 @@ mod tests {
     /// line end (`0x4f0bc5`, `0x4f0bdb`), so a blank line or a trailing newline writes no line.
     #[test]
     fn the_writer_writes_no_blank_line() {
-        let m = vec![MacroView {
+        let m = [MacroView {
             id: 1,
             name: "a".into(),
             texture: None,
