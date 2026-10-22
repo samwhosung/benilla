@@ -634,7 +634,7 @@ pub(crate) struct Model {
     pub(crate) pet_book_generation: u64,
     /// The player's macros, owned here as 1.12 macros have no server side; the app persists them.
     pub(crate) macros: macros::MacroState,
-    /// A script changed the macros: the save and `UPDATE_MACROS` cue.
+    /// A script changed the macros: the save's cue.
     pub(crate) macros_dirty: bool,
     /// Bumped by every seed and change, for readers that must not drain `macros_dirty`.
     pub(crate) macros_generation: u64,

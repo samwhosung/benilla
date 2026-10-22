@@ -284,8 +284,8 @@ impl super::UiScript {
         self.model_mut().macro_bindings = bindings;
     }
 
-    /// Whether a script changed the table since the last call; the app then saves it and fires
-    /// `UPDATE_MACROS` (`0x452460`).
+    /// Whether a script changed the table since the last call; the app then saves it. The verbs
+    /// signal `UPDATE_MACROS` (`0x852460`) themselves, from the order's rebuild (`0x4f0d30`).
     pub fn take_macros_dirty(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().macros_dirty)
     }
@@ -354,6 +354,8 @@ fn create_macro(
     });
     model.macros_dirty = true;
     model.macros_generation += 1;
+    // The order's rebuild (`0x4f125c` into `0x4f0d30`), which signals no slot.
+    model.raise("UPDATE_MACROS", vec![]);
     Ok(model.macros.index_of_id(id).unwrap_or(0))
 }
 
@@ -393,6 +395,22 @@ fn edit_macro(
         model.macros_dirty = true;
         model.macros_generation += 1;
         model.macro_edits += 1;
+        // The order's rebuild (`0x4f1322` into `0x4f0d30`), then each slot that holds the id,
+        // lowest first, signalled and sent nothing (`0x4f1329` into `0x4e5cc0`, `0x4e58e0`).
+        model.raise("UPDATE_MACROS", vec![]);
+        let mut held: Vec<u32> = model
+            .actions
+            .iter()
+            .filter(|(_, slot)| super::action::macro_slot_id(slot.kind, slot.action) == Some(id))
+            .map(|(&slot, _)| slot)
+            .collect();
+        held.sort_unstable();
+        for slot in held {
+            model.raise(
+                "ACTIONBAR_SLOT_CHANGED",
+                vec![crate::script::ScriptValue::Int(i64::from(slot))],
+            );
+        }
     }
     model.macros.index_of_id(id).unwrap_or(0)
 }
@@ -414,6 +432,8 @@ fn delete_macro(model: &mut Model, index: usize) -> bool {
     super::cursor::clear_macro_slots(model, id);
     model.macros_dirty = true;
     model.macros_generation += 1;
+    // The order's rebuild, after the slots (`0x4f1451` into `0x4f0d30`).
+    model.raise("UPDATE_MACROS", vec![]);
     true
 }
 
@@ -576,16 +596,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 ));
             }
             ensure_macro_icons(lua);
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            // `0x4f1632`, `0x4f163c`.
-            let texture = icon_at(&model, icon);
             let body = a
                 .get(2)
                 .and_then(|v| super::binding_abi::optional_string(lua, v))
                 .unwrap_or_default();
             let (local_only, per_character) = (flag(a.get(3)), flag(a.get(4)));
-            create_macro(&mut model, &name, texture, &body, local_only, per_character)
-                .map(|i| Value::Integer(i as i64))
+            super::tick::verb(lua, |model| {
+                // `0x4f1632`, `0x4f163c`.
+                let texture = icon_at(model, icon);
+                create_macro(model, &name, texture, &body, local_only, per_character)
+            })
+            .map(|i| Value::Integer(i as i64))
         })?,
     )?;
 
@@ -617,13 +638,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if names_macro && icon.is_some() {
                 ensure_macro_icons(lua);
             }
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            // `0x4f1966`-`0x4f1983`: a miss leaves the pointer null, and the macro its old icon.
-            let texture = icon.and_then(|n| icon_at(&model, n));
             let name = a.get(1).and_then(|v| binding_abi::optional_string(lua, v));
             let body = a.get(3).and_then(|v| binding_abi::optional_string(lua, v));
             let local_only = flag(a.get(4));
-            let at = edit_macro(&mut model, index, name, texture, body, local_only);
+            let at = super::tick::verb(lua, |model| {
+                // `0x4f1966`-`0x4f1983`: a miss leaves the pointer null, and the macro its old
+                // icon.
+                let texture = icon.and_then(|n| icon_at(model, n));
+                edit_macro(model, index, name, texture, body, local_only)
+            });
             Ok(Value::Integer(at as i64))
         })?,
     )?;

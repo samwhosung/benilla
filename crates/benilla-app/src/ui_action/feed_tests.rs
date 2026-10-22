@@ -433,8 +433,8 @@ fn a_macro_slot_shows_the_macros_own_icon_and_follows_an_edit() {
         "the generation gate re-resolved the slot"
     );
 
-    // A rename leaves the slot's texture, kind and id unchanged, so a value diff alone would
-    // fire nothing; the feed must re-fire the slot anyway.
+    // A rename leaves the slot's texture, kind and id unchanged: the edit signals the slot inside
+    // its call (`0x4f1329`), and the feed adds nothing.
     let events = |app: &mut App| {
         app.world_mut()
             .non_send_resource::<UiScript>()
@@ -458,7 +458,7 @@ fn a_macro_slot_shows_the_macros_own_icon_and_follows_an_edit() {
     assert_eq!(
         events(&mut app),
         1,
-        "a rename re-fires ACTIONBAR_SLOT_CHANGED for the slot"
+        "a rename fires ACTIONBAR_SLOT_CHANGED for the slot once"
     );
     assert_eq!(
         app.world_mut()

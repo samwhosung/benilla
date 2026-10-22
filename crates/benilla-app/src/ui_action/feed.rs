@@ -280,8 +280,9 @@ pub(super) fn feed_actions(
             // `ACTIONBAR_SLOT_CHANGED` only when what it pushes differs visibly from what the VM
             // shows, so the store catching up with a verb is no change. The item's ON_USE spell is
             // pushed but never signalled: the place leaves it to this re-feed, and no handler
-            // paints it. A macro rename changes the name line (`GetActionText`) but not the slot
-            // value, so a macro edit re-fires every macro slot.
+            // paints it. A macro slot whose word stands is signalled by `EditMacro` alone, inside
+            // its call (`0x4f1329` into `0x4e5cc0`), and reads its macro's icon and name live, so
+            // a load, a create or an edit pushes it silently.
             let held = script.action_slots();
             let shown = |s: Option<&ActionSlot>| {
                 s.map(|s| ActionSlot {
@@ -296,14 +297,15 @@ pub(super) fn feed_actions(
                 .collect::<HashSet<_>>()
                 .into_iter()
                 .filter_map(|a| {
-                    let macro_moved = macros_moved
-                        && fresh
-                            .get(&a)
-                            .is_some_and(|s| macro_slot_id(s.kind, s.action).is_some());
+                    let word = |s: Option<&ActionSlot>| s.map(|s| (s.kind, s.action));
+                    let macro_stands = fresh
+                        .get(&a)
+                        .is_some_and(|s| macro_slot_id(s.kind, s.action).is_some())
+                        && word(fresh.get(&a)) == word(memory.pushed.get(&a));
                     let moved = fresh.get(&a) != memory.pushed.get(&a);
                     let signal =
-                        macro_moved || (moved && shown(fresh.get(&a)) != shown(held.get(&a)));
-                    (moved || macro_moved).then_some((a, signal))
+                        moved && !macro_stands && shown(fresh.get(&a)) != shown(held.get(&a));
+                    moved.then_some((a, signal))
                 })
                 .collect();
             for &(action, _) in &changed {

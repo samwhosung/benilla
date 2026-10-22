@@ -361,9 +361,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, action: Value| {
             // `is-number` else `Usage: GetActionTexture(slot)` (`0x84bf78`, `0x4e6e5a`).
             let action = binding_abi::index_arg32(lua, action, "Usage: GetActionTexture(slot)")?;
+            // A macro slot reads its macro's icon live (`0x4e6bf9` into `0x4f0fd0`), so a handler
+            // of the edit's own slot signal sees the new one.
             let tex = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model.actions.get(&action).and_then(|s| s.texture.clone())
+                model
+                    .actions
+                    .get(&action)
+                    .and_then(|s| match macro_slot_id(s.kind, s.action) {
+                        Some(id) => model.macros.by_id(id).and_then(|m| m.texture.clone()),
+                        None => s.texture.clone(),
+                    })
             };
             match tex {
                 Some(t) => Ok(Value::String(lua.create_string(&t)?)),

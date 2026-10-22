@@ -203,7 +203,8 @@ fn migrate_character_bar(
     script.queue_action_sets(writes);
 }
 
-/// Persist on the engine's dirty edge, and fire `UPDATE_MACROS`.
+/// Persist on the engine's dirty edge. The verbs signal `UPDATE_MACROS` themselves, inside their
+/// calls.
 fn save_dirty_macros(mut hosted_vm: crate::script_calls::HostedVm, files: Res<MacroFiles>) {
     hosted_vm.run(|script| {
         let Some(script) = script else { return };
@@ -211,8 +212,6 @@ fn save_dirty_macros(mut hosted_vm: crate::script_calls::HostedVm, files: Res<Ma
             return;
         }
         let state = script.macros();
-        // Fire first: the redraw must not depend on the write landing.
-        script.fire_event("UPDATE_MACROS", vec![]);
         for (path, per_character) in [(&files.account, false), (&files.character, true)] {
             let Some(path) = path else { continue };
             let text = store::write(state.saved(per_character).into_iter());
