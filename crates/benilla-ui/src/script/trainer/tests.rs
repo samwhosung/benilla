@@ -778,6 +778,8 @@ fn mount_trainer_folds_known_services_into_my_talents() {
         ),
     ];
     let mut s = UiScript::new().unwrap();
+    // The header reads its text by name (`0x4d8b11`), not off a service.
+    s.run("KNOWN_TALENTS_HEADER = 'My Talents'").unwrap();
     s.set_trainer(Some(TrainerState {
         guid: 0,
         greeting: "Ready to ride?".into(),
@@ -1217,4 +1219,192 @@ fn ability_reqs_read_their_slots_in_place() {
     );
     assert_eq!(req(&mut s, 3), (None, Some(1)));
     assert_eq!(req(&mut s, 4), (None, Some(1)));
+}
+
+/// The state filter as `(available, unavailable, used)`.
+fn type_filter(s: &mut UiScript) -> (bool, bool, bool) {
+    let on = |s: &mut UiScript, kind: &str| {
+        s.eval::<Option<i64>>(&format!("return GetTrainerServiceTypeFilter('{kind}')"))
+            .unwrap()
+            .is_some()
+    };
+    (on(s, "available"), on(s, "unavailable"), on(s, "used"))
+}
+
+/// `SetTrainerServiceTypeFilter("type", on [, exclusive])` (`0x4da260`): `"all"` sets the mask to
+/// 7 and reads no second argument (`0x4da2a9`); a nonzero number third makes the one bit the whole
+/// mask (`0x4da359`-`0x4da364`); `on` and `exclusive` are truncated (`0x40a2b0`), so 0.5 is off;
+/// both names compare without case (`0x64a4c0`, `0x4da390`). Every path commits through
+/// `0x4d8c90`, which fires `TRAINER_UPDATE`.
+#[test]
+fn the_type_filter_takes_all_the_exclusive_mode_and_a_truncated_on() {
+    let mut s = UiScript::new().unwrap();
+    s.set_trainer(Some(trainer()));
+    s.reset_trainer_list_state(0);
+    s.run(
+        "n = 0 local f = CreateFrame('Frame') f:RegisterEvent('TRAINER_UPDATE') \
+         f:SetScript('OnEvent', function() n = n + 1 end)",
+    )
+    .unwrap();
+    assert_eq!(
+        type_filter(&mut s),
+        (true, true, false),
+        "the list's mask 3"
+    );
+
+    s.run("SetTrainerServiceTypeFilter('all')").unwrap();
+    assert_eq!(type_filter(&mut s), (true, true, true));
+    assert_eq!(visible(&mut s).len(), 5, "every row shows");
+    assert_eq!(s.eval::<i64>("return n").unwrap(), 1, "the commit fires");
+
+    s.run("SetTrainerServiceTypeFilter('used', 1, 1)").unwrap();
+    assert_eq!(type_filter(&mut s), (false, false, true), "exclusive");
+    s.run("SetTrainerServiceTypeFilter('ALL', 0)").unwrap();
+    assert_eq!(
+        type_filter(&mut s),
+        (true, true, true),
+        "\"all\" without case, its second argument never read"
+    );
+
+    s.run("SetTrainerServiceTypeFilter('Available', 0.5)")
+        .unwrap();
+    assert_eq!(
+        type_filter(&mut s),
+        (false, true, true),
+        "0.5 truncates to 0"
+    );
+    s.run("SetTrainerServiceTypeFilter('available', '1', 0.5)")
+        .unwrap();
+    assert_eq!(
+        type_filter(&mut s),
+        (true, true, true),
+        "a numeric string is a number, and 0.5 exclusive truncates to 0: added"
+    );
+    s.run("SetTrainerServiceTypeFilter('unavailable', -0.9)")
+        .unwrap();
+    assert_eq!(
+        type_filter(&mut s),
+        (true, false, true),
+        "-0.9 truncates to 0"
+    );
+    s.run("SetTrainerServiceTypeFilter('unavailable', 2, true)")
+        .unwrap();
+    assert_eq!(
+        type_filter(&mut s),
+        (true, true, true),
+        "a boolean third argument is no number: added"
+    );
+    s.run("SetTrainerServiceTypeFilter('used', 1, '1')")
+        .unwrap();
+    assert_eq!(type_filter(&mut s), (false, false, true));
+    assert_eq!(s.eval::<i64>("return n").unwrap(), 8);
+}
+
+/// `0x4da260`'s three refusals, in its order and words (`0x84ab60`, `0x84ab2c`, `0x84aaf0`): the
+/// name must be a string or a number (`0x6f3510`), then one the mapper `0x4da390` knows, then `on`
+/// must be a number (`0x6f34d0`). A refusal commits nothing and fires nothing.
+#[test]
+fn the_type_filter_raises_the_exes_errors() {
+    let mut s = UiScript::new().unwrap();
+    s.set_trainer(Some(trainer()));
+    s.reset_trainer_list_state(0);
+    s.run(
+        "n = 0 local f = CreateFrame('Frame') f:RegisterEvent('TRAINER_UPDATE') \
+         f:SetScript('OnEvent', function() n = n + 1 end)",
+    )
+    .unwrap();
+    let raises = |s: &mut UiScript, call: &str, text: &str| {
+        let err = s.run(call).expect_err(call).to_string();
+        assert!(err.contains(text), "{call}: {err}");
+    };
+    let usage = r#"Usage: SetTrainerServiceTypeFilter("type" [, on\off, exclusive])"#;
+    let bad = "Bad service type in SetTrainerServiceTypeFilter";
+    let missing = "Missing on//off parameter in SetTrainerServiceTypeFilter";
+    raises(&mut s, "SetTrainerServiceTypeFilter()", usage);
+    raises(&mut s, "SetTrainerServiceTypeFilter(nil, 1)", usage);
+    raises(&mut s, "SetTrainerServiceTypeFilter({}, 1)", usage);
+    raises(&mut s, "SetTrainerServiceTypeFilter('bogus', 1)", bad);
+    raises(&mut s, "SetTrainerServiceTypeFilter('bogus')", bad);
+    raises(&mut s, "SetTrainerServiceTypeFilter(1, 1)", bad);
+    raises(&mut s, "SetTrainerServiceTypeFilter('used')", missing);
+    raises(&mut s, "SetTrainerServiceTypeFilter('used', true)", missing);
+    raises(&mut s, "SetTrainerServiceTypeFilter('used', 'x')", missing);
+    assert_eq!(type_filter(&mut s), (true, true, false), "nothing moved");
+    assert_eq!(s.eval::<i64>("return n").unwrap(), 0, "nothing fired");
+}
+
+/// At a mount trainer the list builds the known group first, header 0 with key -1
+/// (`0x4d7609`-`0x4d7697`), whether or not a service is known: with no member its header is
+/// hidden (`0x4d8447`), but it is a skill line, the first, named by `KNOWN_TALENTS_HEADER`
+/// (`0x4d8b11`) and with no `SkillLine.dbc` row.
+#[test]
+fn a_mount_trainer_always_builds_the_known_group_first() {
+    let mut s = UiScript::new().unwrap();
+    s.run("KNOWN_TALENTS_HEADER = 'My Talents'").unwrap();
+    s.set_trainer(Some(TrainerState {
+        guid: 0,
+        greeting: String::new(),
+        trainer_type: 1,
+        groups: Vec::new(),
+        services: vec![
+            svc(
+                33,
+                "Riding",
+                TrainerServiceCategory::Available,
+                762,
+                "Riding",
+            ),
+            svc(
+                8394,
+                "Ram Riding",
+                TrainerServiceCategory::Available,
+                152,
+                "Ram Riding",
+            ),
+        ],
+    }));
+    let (n, first, second, third): (i64, Option<String>, Option<String>, Option<String>) = s
+        .eval(
+            "local n = function(...) return arg.n, arg[1], arg[2], arg[3] end \
+             return n(GetTrainerSkillLines())",
+        )
+        .unwrap();
+    assert_eq!(
+        (n, first, second.as_deref(), third.as_deref()),
+        (3, None, Some("Ram Riding"), Some("Riding"))
+    );
+    assert_eq!(
+        visible(&mut s)
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .collect::<Vec<_>>(),
+        ["Ram Riding", "Ram Riding", "Riding", "Riding"],
+        "the empty known group shows no header"
+    );
+    // The hidden header sits in the array's tail, past the visible count.
+    let (name, kind): (String, String) = s
+        .eval("local n, _, t = GetTrainerServiceInfo(5) return n, t")
+        .unwrap();
+    assert_eq!((name.as_str(), kind.as_str()), ("My Talents", "header"));
+    // The skill-line indices count it: group 2 is Ram Riding.
+    s.run("SetTrainerSkillLineFilter(2, 1, 1)").unwrap();
+    assert_eq!(
+        visible(&mut s)
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .collect::<Vec<_>>(),
+        ["Ram Riding", "Ram Riding"]
+    );
+    assert!(s
+        .eval::<Option<i64>>("return GetTrainerSkillLineFilter(3)")
+        .unwrap()
+        .is_none());
+
+    // A class trainer builds no such group.
+    s.set_trainer(Some(trainer()));
+    assert_eq!(
+        s.eval::<i64>("local n = function(...) return arg.n end return n(GetTrainerSkillLines())")
+            .unwrap(),
+        2
+    );
 }

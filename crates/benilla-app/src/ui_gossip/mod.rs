@@ -642,6 +642,27 @@ mod tests {
         );
     }
 
+    /// `GOSSIP_SHOW` fires only in `0x4e2010`, which a message (`0x4e27df`) or its text's arrival
+    /// (`0x4e22f2`) runs: the NPC's name landing fires nothing, and the next message fires again.
+    #[test]
+    fn the_npc_name_landing_fires_no_second_gossip_show() {
+        const SPEAKER: u64 = 0x10;
+        let (mut app, _rx) = feed_app(|s| s.run(RECORDER).unwrap());
+        let menu = |app: &mut App| {
+            let mut st = state(app);
+            st.remember_record(50, record("Well met."));
+            st.open_menu(SPEAKER, 50, option("Goodbye"), Vec::new(), 0);
+        };
+        menu(&mut app);
+        assert_eq!(tick(&mut app).0, ["GOSSIP_SHOW"]);
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(SPEAKER, "Gossiper".into(), None);
+        assert!(tick(&mut app).0.is_empty(), "a landed name fires nothing");
+        menu(&mut app);
+        assert_eq!(tick(&mut app).0, ["GOSSIP_SHOW"], "the next message does");
+    }
+
     /// The same sequence through stock `GossipFrame.xml`: the window stays up, silent, on the
     /// first menu, and the repaint plays no open kit, as `ShowUIPanel` returns early on a visible
     /// frame.

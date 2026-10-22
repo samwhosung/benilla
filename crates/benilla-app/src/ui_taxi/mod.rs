@@ -606,6 +606,53 @@ mod tests {
         assert_eq!(crate::query_cache::queries(&rx).len(), 1);
     }
 
+    /// `TAXIMAP_OPENED` fires only in the map builder `0x4db710` (`0x4dba96`), once per open: the
+    /// flight master's name landing fires nothing.
+    #[test]
+    fn the_flight_masters_name_landing_fires_no_second_open() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let catalogs = TaxiCatalogs::load(&mut chain).expect("taxi DBCs");
+        const MASTER: u64 = 0x10;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.init_resource::<TaxiState>()
+            .init_resource::<TaxiRouteCache>()
+            .init_resource::<GuidIndex>()
+            .init_resource::<NameCache>()
+            .init_resource::<crate::net::Reputations>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .insert_resource(NetCommands(tx))
+            .insert_resource(catalogs)
+            .add_systems(Update, feed_taxi);
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                "SEEN = {} local f = CreateFrame('Frame') f:RegisterEvent('TAXIMAP_OPENED') \
+                 f:SetScript('OnEvent', function() table.insert(SEEN, event) end)",
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        let tick = |app: &mut App| -> Vec<String> {
+            app.update();
+            let s = app.world_mut().non_send_resource_mut::<UiScript>();
+            let seen = s.eval::<Vec<String>>("return SEEN").unwrap();
+            s.run("SEEN = {}").unwrap();
+            seen
+        };
+        app.world_mut().resource_mut::<TaxiState>().open(
+            MASTER,
+            2,
+            TaxiMask([0b1010_1010, 0, 0, 0, 0, 0, 0, 0]),
+        );
+        assert_eq!(tick(&mut app), ["TAXIMAP_OPENED"]);
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(MASTER, "Flier".into(), None);
+        assert!(tick(&mut app).is_empty(), "a landed name fires nothing");
+    }
+
     /// `SMSG_SHOWTAXINODES` counts the mask's known nodes (`0x5eced7`-`0x5ecf2e`): under two
     /// (`0x5ecf39`) it shows `0xb5`, `ERR_TAXINOPATHS`, inside the handler (`0x5ecf44` →
     /// `0x496720`), then closes the gossip menu (`0x4e1fa0` with a zero guid, `0x5ecf55`), whose

@@ -266,3 +266,64 @@ fn the_death_edge_reads_health_signed() {
     app.update();
     assert_eq!(latch(&app), None, "a fall to -1");
 }
+
+/// The `UNIT_NPC_FLAGS` watcher (`0x604a20` → `0x60b420`) closes the window whose NPC lost the
+/// flag for it, testing each bit against its window's cell (`0x60b45c`-`0x60b552`): gossip `0x1`
+/// (`0x4e1fa0`), quest `0x2` (`0x501130`), taxi `0x8` (`0x4dc0f0`), trainer `0x10` (`0x4d7440`)
+/// and bank `0x100` (`0x4f84d0`). Each core is entered directly while its window holds the
+/// latch, so it fires its close twice, quest once. A flag kept or gained, another unit's loss and
+/// a merchant's lost vendor bit close nothing.
+#[test]
+fn an_npc_that_loses_a_service_flag_closes_its_window() {
+    use crate::target::cursor_mode::npc_flags as f;
+    use benilla_protocol::field::FIELD_UNIT_NPC_FLAGS;
+    const KEEP: u32 = f::VENDOR | f::INNKEEPER;
+    for (window, bit, event, times) in [
+        (NpcWindow::Gossip, f::GOSSIP, "GOSSIP_CLOSED", 2),
+        (NpcWindow::Quest, f::QUESTGIVER, "QUEST_FINISHED", 1),
+        (NpcWindow::Taxi, f::FLIGHTMASTER, "TAXIMAP_CLOSED", 2),
+        (NpcWindow::Trainer, f::TRAINER, "TRAINER_CLOSED", 2),
+        (NpcWindow::Bank, f::BANKER, "BANKFRAME_CLOSED", 2),
+    ] {
+        let (mut app, _) = app();
+        let npc = app.world_mut().spawn_empty().id();
+        let other = app.world_mut().spawn_empty().id();
+        open(&mut app, window, VENDOR);
+        let flags = |app: &mut App, entity, guid, old, new| {
+            app.world_mut().write_message(edge(
+                entity,
+                guid,
+                ObjectType::Unit,
+                FIELD_UNIT_NPC_FLAGS,
+                old,
+                new,
+            ));
+            app.update();
+        };
+        flags(&mut app, other, BANKER, bit | KEEP, KEEP);
+        flags(&mut app, npc, VENDOR, KEEP, bit | KEEP);
+        flags(&mut app, npc, VENDOR, bit | KEEP, bit);
+        assert!(seen_in(&app).is_empty(), "{window:?}: {:?}", seen_in(&app));
+        assert_eq!(latch(&app), Some(VENDOR), "{window:?}");
+
+        flags(&mut app, npc, VENDOR, bit | KEEP, KEEP);
+        assert_eq!(seen_in(&app), vec![event; times], "{window:?}");
+        assert_eq!(latch(&app), None, "{window:?}");
+    }
+
+    // The watcher has no vendor arm.
+    let (mut app, _) = app();
+    let npc = app.world_mut().spawn_empty().id();
+    open(&mut app, NpcWindow::Merchant, VENDOR);
+    app.world_mut().write_message(edge(
+        npc,
+        VENDOR,
+        ObjectType::Unit,
+        FIELD_UNIT_NPC_FLAGS,
+        u32::MAX,
+        0,
+    ));
+    app.update();
+    assert!(seen_in(&app).is_empty());
+    assert_eq!(latch(&app), Some(VENDOR));
+}

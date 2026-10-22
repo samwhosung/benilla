@@ -1049,4 +1049,47 @@ mod tests {
             Some("Your quest log is full.")
         );
     }
+
+    /// `QUEST_ITEM_UPDATE` fires only in the item-cache callback `0x5018c0` (`0x501903`), and the
+    /// panel's event once per panel: the giver's name landing fires nothing.
+    #[test]
+    fn the_givers_name_landing_fires_no_quest_event() {
+        const GIVER: u64 = 0x10;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                "SEEN = {} local f = CreateFrame('Frame') \
+                 for _, e in ipairs({'QUEST_GREETING', 'QUEST_ITEM_UPDATE'}) do \
+                 f:RegisterEvent(e) end \
+                 f:SetScript('OnEvent', function() table.insert(SEEN, event) end)",
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        open_panel(
+            app.world_mut(),
+            GIVER,
+            QuestView::Greeting(benilla_protocol::messages::QuestGiverList {
+                npc: GIVER,
+                greeting: "Greetings.".into(),
+                emote_delay: 0,
+                emote: 0,
+                quests: Vec::new(),
+            }),
+        );
+        // Registered once, so its memo lasts from run to run.
+        let feed = app.world_mut().register_system(feed_quest);
+        let tick = |app: &mut App| -> Vec<String> {
+            app.world_mut().run_system(feed).unwrap();
+            let s = app.world_mut().non_send_resource_mut::<UiScript>();
+            let seen = s.eval::<Vec<String>>("return SEEN").unwrap();
+            s.run("SEEN = {}").unwrap();
+            seen
+        };
+        assert_eq!(tick(&mut app), ["QUEST_GREETING"]);
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(GIVER, "Giver".into(), None);
+        assert!(tick(&mut app).is_empty(), "a landed name fires nothing");
+    }
 }
