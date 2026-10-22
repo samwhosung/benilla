@@ -29,8 +29,7 @@
 //!
 //! `IsUnitOnQuest` reads a unit's quest-log window off its snapshot ([`super::UnitState`]).
 //!
-//! Not built: `GetAbandonQuestItems` answers nil; a GameObject objective's name, which wears the
-//! placeholder.
+//! Not built: a GameObject objective's name, which wears the placeholder.
 
 use std::collections::{HashMap, HashSet};
 
@@ -1148,6 +1147,55 @@ fn live_seconds_left(model: &Model, row: &QuestLogRow) -> Option<i64> {
     seconds_left(slot, countdown_now(model)).filter(|&s| s >= 0)
 }
 
+/// `GetAbandonQuestItems`' list (`0x4dfbe0`): with the active player (`0x4dfc20`) and the marked
+/// quest's record (`0x4dfc52`), each of its four required items held (`0x622130`, `0x4dfc8a`) whose
+/// record, looked up with no callback (`0x55ba30`), binds as a quest item, 4 or 5 (`+0x194`,
+/// `0x4dfcb1`), kept in its slot; then each kept id another row's quest also requires is dropped
+/// (`0x4dfcf0`-`0x4dfd67`, the marked quest's own row skipped at `0x4dfd1c`), and the names of
+/// what is left, in slot order (`0x4dfd87`-`0x4dfdcf`).
+fn abandon_items(model: &Model) -> Vec<String> {
+    let store = &model.quest_store;
+    let mark = model.quest_log_abandon_mark;
+    if !store.player {
+        return Vec::new();
+    }
+    let Some(record) = (mark != 0).then(|| store.records.get(&mark)).flatten() else {
+        return Vec::new();
+    };
+    let mut kept: [u32; 4] = std::array::from_fn(|i| {
+        let id = record.objectives[i].item_id;
+        let held = store.held.get(&id).copied().unwrap_or(0) as i32;
+        let quest_item = model
+            .item_templates
+            .get(&id)
+            .is_some_and(|t| matches!(t.bonding, 4 | 5));
+        if (id as i32) > 0 && held > 0 && quest_item {
+            id
+        } else {
+            0
+        }
+    });
+    for row in &model.quest_log.entries {
+        if row.is_header || row.quest_id == mark {
+            continue;
+        }
+        let Some(other) = store.records.get(&row.quest_id) else {
+            continue;
+        };
+        for o in &other.objectives {
+            for k in kept.iter_mut() {
+                if (o.item_id as i32) > 0 && o.item_id == *k {
+                    *k = 0;
+                }
+            }
+        }
+    }
+    kept.iter()
+        .filter(|&&id| id != 0)
+        .filter_map(|id| model.item_templates.get(id).map(|t| t.name.clone()))
+        .collect()
+}
+
 /// Register the quest-log globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
@@ -1268,12 +1316,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetQuestLogQuestText",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let (desc, obj) = model.selected_quest_record().map_or(("", ""), |r| {
-                (r.description.as_str(), r.objectives_text.as_str())
-            });
+            // Two nils when the record is not held (`0x4dffdb`).
+            let Some(r) = model.selected_quest_record() else {
+                return Ok((Value::Nil, Value::Nil));
+            };
             Ok((
-                Value::String(lua.create_string(desc)?),
-                Value::String(lua.create_string(obj)?),
+                Value::String(lua.create_string(&r.description)?),
+                Value::String(lua.create_string(&r.objectives_text)?),
             ))
         })?,
     )?;
@@ -1522,23 +1571,43 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // The marked quest's title, "" for none, read off the quest cache by id (`0x4dfb60`).
+    // The marked quest's title, read off the quest cache by id with no callback (`0x4dfb60`); nil
+    // for none (`0x4dfbc3`).
     g.set(
         "GetAbandonQuestName",
         lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let mark = model.quest_log_abandon_mark;
-            let title = (mark != 0)
-                .then(|| model.quest_store.records.get(&mark))
-                .flatten()
-                .map_or("", |r| r.title.as_str());
-            Ok(Value::String(lua.create_string(title)?))
+            let title = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                let mark = model.quest_log_abandon_mark;
+                (mark != 0)
+                    .then(|| model.quest_store.records.get(&mark))
+                    .flatten()
+                    .map(|r| r.title.clone())
+            };
+            match title {
+                Some(t) => Ok(Value::String(lua.create_string(&t)?)),
+                None => Ok(Value::Nil),
+            }
         })?,
     )?;
-    // Not built: nil, so the popup never lists the quest items an abandon destroys.
+    // The popup's item list ([`abandon_items`]): one string of names, or no value at all.
     g.set(
         "GetAbandonQuestItems",
-        lua.create_function(|_, ()| Ok(Value::Nil))?,
+        lua.create_function(|lua, ()| {
+            let names = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                abandon_items(&model)
+            };
+            if names.is_empty() {
+                return Ok(MultiValue::new());
+            }
+            // The names with the list separator between (`0x84480c`, `0x4dfdb9`), joined by one
+            // `lua_concat` (`0x4dfde3`).
+            let joined = names.join(", ");
+            Ok(MultiValue::from_vec(vec![Value::String(
+                lua.create_string(&joined)?,
+            )]))
+        })?,
     )?;
     // The popup's Yes (`0x4dfe00` to `0x4df070`): the reference searches every row, folded ones
     // included (`0xbb71c0`), for the marked id; a hit sends its slot (`+0x4`) and clears the mark,
@@ -2203,13 +2272,13 @@ mod tests {
                  for i = 1, GetNumQuestLogEntries() do\n\
                    SelectQuestLogEntry(i)\n\
                    local desc, obj = GetQuestLogQuestText()\n\
-                   out = out .. i .. '=' .. desc .. '|'\n\
+                   out = out .. i .. '=' .. tostring(desc) .. '|'\n\
                  end\n\
                  return out",
             )
             .unwrap();
         assert_eq!(
-            walk, "1=|2=Speak with Marshal McBride.|3=The kobolds have overrun the camp.|",
+            walk, "1=nil|2=Speak with Marshal McBride.|3=The kobolds have overrun the camp.|",
             "each entry must answer with its OWN detail inside a single frame"
         );
     }
@@ -2239,7 +2308,7 @@ mod tests {
         let s = two_quests();
         assert!(s
             .eval::<bool>(
-                "SelectQuestLogEntry(1); local d = GetQuestLogQuestText(); return d == ''"
+                "SelectQuestLogEntry(1); local d = GetQuestLogQuestText(); return d == nil"
             )
             .unwrap());
     }

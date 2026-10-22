@@ -146,7 +146,7 @@ fn an_empty_abandon_list_answers_nothing() {
     s.set_quest_item_counts([(PELT, 3)].into_iter().collect());
     assert_eq!(s.arity("GetAbandonQuestItems()").unwrap(), 0);
     let mut s = abandon_log();
-    s.set_unit("player", None);
+    s.set_quest_log_player(false);
     assert_eq!(s.arity("GetAbandonQuestItems()").unwrap(), 0);
     let s = UiScript::new().unwrap();
     s.run("SetAbandonQuest()").unwrap();
