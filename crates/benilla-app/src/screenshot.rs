@@ -63,11 +63,11 @@ impl Default for ScreenshotState {
 }
 
 impl ScreenshotState {
-    /// `WoWScrnShot_MMDDYY_HHMMSS.png`, the reference's field order and padding.
+    /// `WoWScrnShot_MMDDYY_HHMMSS.png`, the reference's field order and padding, in local time
+    /// (`0x429450`, `strftime` of `localtime`); UTC where the platform refuses the time.
     ///
     /// A second capture in the same second gets `_2`, `_3`: the reference overwrites, so a burst
-    /// leaves one file, a data loss not copied. Deviation: UTC, not local time, because there is
-    /// no timezone source (as for Lua `date()`, [`benilla_ui::civil`]).
+    /// leaves one file, a data loss not copied.
     fn next_name(&mut self, now: i64) -> String {
         if now == self.last_second {
             self.within_second += 1;
@@ -75,7 +75,8 @@ impl ScreenshotState {
             self.last_second = now;
             self.within_second = 0;
         }
-        let c = benilla_ui::civil::from_unix(now);
+        let c = benilla_ui::civil::local(now)
+            .map_or_else(|| benilla_ui::civil::from_unix(now), |(c, _)| c);
         let base = format!(
             "{STEM}_{:02}{:02}{:02}_{:02}{:02}{:02}",
             c.month,
