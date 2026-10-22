@@ -1712,6 +1712,42 @@ mod tests {
         );
     }
 
+    /// The applications watcher `0x604ea0` is registered once per byte of fields 113-124, each a
+    /// one-byte watch (`0x60423b`-`0x604256`), so an edge on field 115 runs at 115: after the
+    /// bridge's `UNIT_AURA`-applications watch (id 107, 0x30 bytes from 113), which runs at the
+    /// first field of its range the block visits, and after the edge on 113.
+    #[test]
+    fn each_applications_byte_is_its_own_watch_at_its_own_field() {
+        let mut mob = ObjectFields::from_pairs(&[]).into_created(ObjectType::Unit);
+        let delta = ObjectFields::from_pairs(&[(113, 2), (115, 3)]);
+        let sent: Vec<u16> = delta.raw_fields().map(|(i, _)| i).collect();
+        let mut moved = Vec::new();
+        mob.merge_diff(delta, |i, o, n| moved.push((i, o, n)));
+        let around = Around {
+            me: Some(ME),
+            creature_lookup: &|_| false,
+            others: &Vec::new,
+            pet_bar: 0,
+        };
+        let block = Notified::new(Sent::Fields(&sent), &moved);
+        let placed = placed_values(&around, MOB, ObjectType::Unit, &mob, &block);
+        let steps: Vec<String> = in_watch_order(&block, placed)
+            .into_iter()
+            .map(|s| match s {
+                Step::Edge { index, .. } => format!("edge {index}"),
+                Step::Notice(n) => format!("{n:?}"),
+            })
+            .collect();
+        assert_eq!(
+            steps,
+            [
+                "edge 113".to_string(),
+                format!("{:?}", bridge(MOB, 107)),
+                "edge 115".to_string(),
+            ]
+        );
+    }
+
     /// The sweep leaves out the player and what it charms or summoned, by charmer first.
     #[test]
     fn the_sweep_leaves_out_the_player_and_its_own() {

@@ -376,6 +376,50 @@ fn a_blocks_edges_and_notices_are_stamped_in_field_order() {
     );
 }
 
+/// The active player's coinage watcher `OnMoneyChanged` (`0x5ddf30`) trims an own trade offer above
+/// the purse to the purse inside the packet that moved it (`0x5ddfab`, `0x5ddfda` →
+/// `TradeSubtractMoney 0x5d45f0`), with no system run after the handler; a rise trims nothing.
+#[test]
+fn the_coinage_watcher_trims_the_trade_offer_inside_its_packet() {
+    use benilla_protocol::field::FIELD_PLAYER_FIELD_COINAGE as COINAGE;
+    let mut app = client();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    app.insert_resource(NetCommands(tx));
+    let world = app.world_mut();
+    world.resource_mut::<SelfGuid>().0 = Some(ME);
+    send(world, [player(ME, &[(COINAGE, 500)])]);
+    world
+        .resource_mut::<crate::ui_trade::TradeSession>()
+        .set_own_gold(400);
+    let gold = |world: &World| {
+        world
+            .resource::<crate::ui_trade::TradeSession>()
+            .own_offer_for_test()
+            .0
+    };
+    let sent = |rx: &crossbeam_channel::Receiver<crate::net::ClientCommand>| -> Vec<String> {
+        rx.try_iter()
+            .filter(|c| matches!(c, crate::net::ClientCommand::SetTradeGold { .. }))
+            .map(|c| format!("{c:?}"))
+            .collect()
+    };
+    sent(&rx);
+
+    send(world, [values(ME, &[(COINAGE, 600)])]);
+    assert_eq!(gold(world), 400, "a rise leaves the offer");
+    assert!(sent(&rx).is_empty());
+
+    send(world, [values(ME, &[(COINAGE, 300)])]);
+    assert_eq!(gold(world), 300, "the offer is the purse");
+    assert_eq!(
+        sent(&rx),
+        [format!(
+            "{:?}",
+            crate::net::ClientCommand::SetTradeGold { copper: 300 }
+        )]
+    );
+}
+
 /// A create for a held object writes every field, clearing those it leaves out (`0x466582`
 /// passes the clearing flag to `0x466590`), and notifies every field (`0x465d8a`, `dl = 1`): an
 /// omitted field reads 0 and its watch runs.

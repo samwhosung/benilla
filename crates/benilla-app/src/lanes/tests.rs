@@ -438,3 +438,186 @@ fn each_answer_handler_queues_a_release_behind_a_line_that_reads_it() {
         assert_eq!(kinds.last(), Some(&"release"), "{kinds:?}");
     }
 }
+
+/// The active player's own watches over one values block of `delta` on a fresh descriptor, as the
+/// update handler runs them (`0x465330`).
+fn own_watches(delta: &[(u16, u32)]) -> Vec<FieldNotice> {
+    use benilla_protocol::messages::ObjectType;
+    use benilla_protocol::ObjectFields;
+    let mut me = ObjectFields::from_pairs(&[]).into_created(ObjectType::Player);
+    let delta = ObjectFields::from_pairs(delta);
+    let sent: Vec<u16> = delta.raw_fields().map(|(i, _)| i).collect();
+    let mut moved = Vec::new();
+    me.merge_diff(delta, |i, o, n| moved.push((i, o, n)));
+    let around = crate::field_watch::Around {
+        me: Some(ME),
+        creature_lookup: &|_| false,
+        others: &Vec::new,
+        pet_bar: 0,
+    };
+    let block = crate::field_watch::Notified::new(crate::field_watch::Sent::Fields(&sent), &moved);
+    crate::field_watch::placed_values(&around, ME, ObjectType::Player, &me, &block)
+        .into_iter()
+        .map(|(_, n)| n)
+        .collect()
+}
+
+/// `PLAYER_FIELD_BYTES`, whose byte 1 is the combo count.
+const PLAYER_FIELD_BYTES: u16 = 188 + 0x1028 / 4;
+/// `UNIT_FIELD_BYTES_1`, whose byte 2 is the form.
+const UNIT_FIELD_BYTES_1: u16 = 6 + 0x210 / 4;
+
+fn combo_lands(_: In<SessionEvent>, mut n: Notices) {
+    n.write_batch(own_watches(&[(PLAYER_FIELD_BYTES, 2 << 8)]));
+}
+
+fn form_changes(_: In<SessionEvent>, mut n: Notices) {
+    n.write_batch(own_watches(&[(UNIT_FIELD_BYTES_1, 1 << 16)]));
+}
+
+/// The combo count is a watcher on the active player (`0x5ddff0`, registered at `0x5dd9d0`), so
+/// `PLAYER_COMBO_POINTS` (`0x5ddffa`) fires inside its update packet, whole before a later
+/// packet's events and after an earlier one's.
+#[test]
+fn the_combo_watcher_signals_at_its_packet() {
+    let mut app = client(|app| {
+        app.net_handler(SessionEventKind::LoggedOut, combo_lands)
+            .net_handler(SessionEventKind::LoginQueued, enter);
+    });
+    assert_eq!(
+        frame(&mut app, vec![p1(), p2()]),
+        ["PLAYER_COMBO_POINTS", "PLAYER_ENTER_COMBAT"]
+    );
+    assert_eq!(
+        frame(&mut app, vec![p2(), p1()]),
+        ["PLAYER_ENTER_COMBAT", "PLAYER_COMBO_POINTS"]
+    );
+}
+
+/// The form byte is a watcher on the active player (`0x5de010`, registered at `0x5dda18`): the
+/// cast-change pair (`0x5de016` → `0x4b3250`), then the bonus bar's event (`0x5de01b` →
+/// `0x4e4fc0`, which signals on every change), inside its packet.
+#[test]
+fn the_form_watcher_signals_at_its_packet() {
+    let mut app = client(|app| {
+        app.net_handler(SessionEventKind::LoggedOut, form_changes)
+            .net_handler(SessionEventKind::LoginQueued, enter);
+    });
+    assert_eq!(
+        frame(&mut app, vec![p2(), p1()]),
+        [
+            "PLAYER_ENTER_COMBAT",
+            "ACTIONBAR_UPDATE_STATE",
+            "CURRENT_SPELL_CAST_CHANGED",
+            "UPDATE_BONUS_ACTIONBAR"
+        ]
+    );
+}
+
+fn cast_stops(_: In<SessionEvent>, mut reports: ResMut<crate::ui_cast::CastReports>) {
+    reports.bar(crate::ui_cast::CastBarEdge::Stop);
+}
+
+/// A client with the cast reports' lane too, and what their readying reads.
+fn cast_client(handlers: impl FnOnce(&mut App)) -> App {
+    let mut app = client(|app| {
+        app.add_plugins(crate::ui_cast::UiCastPlugin);
+        handlers(app);
+    });
+    app.world_mut()
+        .init_resource::<crate::ui_action::CastFailRedisplays>();
+    app
+}
+
+/// A cast's report fires inside its packet's handler (`SPELLCAST_STOP` from `SMSG_CAST_RESULT`,
+/// `0x6e741a`): whole before a later packet's events and after an earlier one's.
+#[test]
+fn a_cast_report_fires_at_its_packet() {
+    let mut app = cast_client(|app| {
+        app.net_handler(SessionEventKind::LoggedOut, cast_stops)
+            .net_handler(SessionEventKind::LoginQueued, enter);
+    });
+    assert_eq!(
+        frame(&mut app, vec![p1(), p2()]),
+        ["SPELLCAST_STOP", "PLAYER_ENTER_COMBAT"]
+    );
+    assert_eq!(
+        frame(&mut app, vec![p2(), p1()]),
+        ["PLAYER_ENTER_COMBAT", "SPELLCAST_STOP"]
+    );
+}
+
+/// `SMSG_AUCTION_COMMAND_RESULT` outbid in flight: its line shows inside the handler
+/// (`0x4cc728` → `0x496720`).
+fn outbid() -> SessionEvent {
+    SessionEvent::AuctionCommandResult {
+        auction_id: 7,
+        action: benilla_protocol::messages::auction_action::BID_PLACED,
+        error: benilla_protocol::messages::auction_error::HIGHER_BID,
+        tail: benilla_protocol::messages::AuctionCommandTail::HigherBid {
+            new_bidder_guid: 0x55,
+            new_bid: 200,
+            new_min_outbid: 10,
+        },
+    }
+}
+
+/// An auction handler's line fires inside it (`0x4cc728` → `0x496720`), so a packet ahead of it
+/// in the frame is heard first and one behind it after, not the reverse as when the handler
+/// signalled during the drain of the packets.
+#[test]
+fn an_auction_line_fires_at_its_packet() {
+    let mut app = client(|app| {
+        app.add_plugins(crate::ui_auction::UiAuctionPlugin)
+            .net_handler(SessionEventKind::LoggedOut, enter);
+    });
+    app.world_mut()
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .run(r#"ERR_AUCTION_HIGHER_BID = "You have been outbid.""#)
+        .unwrap();
+    assert_eq!(
+        frame(&mut app, vec![p1(), outbid()]),
+        ["PLAYER_ENTER_COMBAT", "UI_ERROR_MESSAGE"]
+    );
+}
+
+/// `SMSG_GROUP_LIST` naming one member under us as leader, as its handler applies it.
+fn group_listed(_: In<SessionEvent>, mut group: ResMut<crate::ui_party::GroupState>) {
+    let member = benilla_protocol::messages::GroupMemberEntry {
+        name: "Friend".into(),
+        guid: FRIEND,
+        status: 1,
+        flags: 0,
+    };
+    group.apply_list(0, 0, vec![member], ME, None, Some(ME));
+}
+
+/// The group list's handler signals the roster events inside it (`0x5e6c66`, `0x4e82a9`, a
+/// party's board clear `0x4ba5db`), so they fire whole before a later packet's events and after an
+/// earlier one's.
+#[test]
+fn the_roster_events_fire_at_their_packet() {
+    let mut app = client(|app| {
+        app.add_plugins(crate::ui_party::UiPartyPlugin)
+            .net_handler(SessionEventKind::LoggedOut, group_listed)
+            .net_handler(SessionEventKind::LoginQueued, enter);
+    });
+    assert_eq!(
+        frame(&mut app, vec![p2(), p1()]),
+        [
+            "PLAYER_ENTER_COMBAT",
+            "PARTY_MEMBERS_CHANGED",
+            "PARTY_LEADER_CHANGED",
+            "RAID_TARGET_UPDATE"
+        ]
+    );
+    assert_eq!(
+        frame(&mut app, vec![p1(), p2()]),
+        [
+            "PARTY_MEMBERS_CHANGED",
+            "PARTY_LEADER_CHANGED",
+            "RAID_TARGET_UPDATE",
+            "PLAYER_ENTER_COMBAT"
+        ]
+    );
+}
