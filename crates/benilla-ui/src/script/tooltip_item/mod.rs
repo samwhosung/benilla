@@ -621,22 +621,16 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 // The cooldown query asks a missing record with the callback `0x6e2f70`
                 // (`0x53483a`, `0x6e2efb`).
+                // Its bag lookup, `0x4f93e0` (`0x534747`).
                 if let Some(entry) = model
-                    .containers
-                    .get(&bag)
-                    .and_then(|c| c.slots.get(&slot))
+                    .bag_slot(bag, slot)
                     .filter(|s| s.record_pending())
                     .map(|s| s.item_id)
                 {
                     model.cooldown_record_asks.push(entry);
                 }
                 let cost = model.repair_costs.bags.get(&(bag, slot)).copied();
-                match model
-                    .containers
-                    .get(&bag)
-                    .and_then(|c| c.slots.get(&slot))
-                    .filter(|s| s.item_id != 0)
-                {
+                match model.bag_slot(bag, slot).filter(|s| s.item_id != 0) {
                     // `0x534620` takes the p6=1 leg iff the cooldown query `0x6e2ed0` reports
                     // enable, start and duration all non-zero; that boolean is the inverse of the
                     // openable gate. `hasCooldown` is the builder's own return. A charged

@@ -666,7 +666,8 @@ pub(crate) fn split_container_item(
 ) -> mlua::Result<bool> {
     let item = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        let Some(s) = model.containers.get(&bag).and_then(|c| c.slots.get(&slot)) else {
+        // The slot resolver (`0x4fa00a`), through the bag lookup `0x4f93e0`.
+        let Some(s) = model.bag_slot(bag, slot) else {
             return Ok(false);
         };
         if s.item_id == 0 || item_locked(&model, s.guid) {
