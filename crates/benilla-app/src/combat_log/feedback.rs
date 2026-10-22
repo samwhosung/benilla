@@ -71,10 +71,18 @@ const SWING_ACTIONS: [&str; 9] = [
 ];
 
 /// `0x4946d0(record)`: a swing's `UNIT_COMBAT`, its action the victim state's word (`0x494706`), its
-/// descriptor off the damage and hit info like every wrapper's. The table index has no bound: a
-/// state past it, which no server sends (vmangos `VictimState` ends at 8,
-/// `Objects/UnitDefines.h:247`), signals nothing here.
-pub(crate) fn swing(log: &ChatLog, guid: u64, victim_state: u32, hit_info: u32, damage: u32) {
+/// descriptor off the damage and hit info like every wrapper's, its school the first sub-damage
+/// block's (`0x4946fc`, `[rec+0x18]`). The table index has no bound: a state past it, which no
+/// server sends (vmangos `VictimState` ends at 8, `Objects/UnitDefines.h:247`), signals nothing
+/// here.
+pub(crate) fn swing(
+    log: &ChatLog,
+    guid: u64,
+    victim_state: u32,
+    hit_info: u32,
+    damage: u32,
+    school: u32,
+) {
     let Some(&action) = SWING_ACTIONS.get(victim_state as usize) else {
         return;
     };
@@ -83,8 +91,7 @@ pub(crate) fn swing(log: &ChatLog, guid: u64, victim_state: u32, hit_info: u32, 
         action,
         flags: wound_descriptor(damage, hit_info),
         amount: damage,
-        // The reference passes sub-damage 0's school (`0x4946fc`), which the swing does not carry.
-        school: 0,
+        school,
     });
 }
 
