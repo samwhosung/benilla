@@ -122,15 +122,14 @@ fn put_item(model: &mut Model, dest: Dest) -> bool {
         }
         Some(CursorPayload::Item(held)) => place_held(model, dest, held),
         // Mode 5 with a vendor open: one of the row's item into the bag, slot `0xFF`, count 1
-        // (`0x4c7e6f`-`0x4c7eaa`). Deviation: a row the list no longer holds buys nothing and
-        // drops, as `PickupContainerItem`'s drop does, where this site dereferences a null row
+        // (`0x4c7e6f`-`0x4c7eaa`), the item the row names now. Deviation: a row index the list no
+        // longer holds buys nothing and drops, where this site reads through a null row
         // (`0x4c7e9a`, `0x4c7ea5`).
         Some(CursorPayload::Merchant(row)) => {
             let entry = model
                 .merchant
                 .as_ref()
                 .and_then(|m| m.items.get(row.row as usize))
-                .filter(|it| it.item_id == row.item_id)
                 .map(|it| it.item_id);
             if let Some(entry) = entry {
                 model
