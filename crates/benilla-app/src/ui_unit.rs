@@ -43,8 +43,8 @@ pub(crate) struct WorldEnterSeats;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct UnitSnapshots;
 
-/// [`fire_unit_events`]' signals, `PLAYER_TARGET_CHANGED` and `PLAYER_COMBO_POINTS`: a feed whose
-/// state their handlers read runs `.before(UnitEvents)`.
+/// [`fire_unit_events`]' signal, `PLAYER_TARGET_CHANGED`: a feed whose state its handlers read
+/// runs `.before(UnitEvents)`.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct UnitEvents;
 
@@ -94,7 +94,7 @@ struct UnitFeedMemo {
     last_rest: Option<(u8, u32, u32)>,
     /// Our last level; the first sighting is the login descriptor, not a ding.
     last_level: Option<u32>,
-    /// `(count, banked target)`, diffed as a pair because the server writes them as one.
+    /// `(count, banked target)`, pushed as a pair because `GetComboPoints` reads both.
     last_combo: Option<(u8, u64)>,
     /// `(HIDE_HELM, HIDE_CLOAK)`, pushed on the edge only: the Options setter flips the VM's
     /// belief ahead of the server, and a per-frame push would snap it back.
@@ -109,7 +109,6 @@ struct UnitFeedMemo {
 #[derive(Default)]
 struct PendingUnitEvents {
     target_changed: bool,
-    combo_points: bool,
 }
 
 /// Adds the per-frame unit feed; the `Unit*` bindings live in `benilla-ui`.
@@ -1734,27 +1733,26 @@ fn feed_units(
         }
 
         // The combo count and its banked target, pushed as a pair since `GetComboPoints` reads
-        // both; only the count owes `PLAYER_COMBO_POINTS` (`0x5ddff0`), to [`fire_unit_events`].
+        // both. `PLAYER_COMBO_POINTS` is the count's watcher's (`0x5ddff0`), on the notice lane,
+        // which fires after this push.
         if let Some((store, _)) = self_q.iter().next() {
             let banked = (
                 store.0.player_combo_points().unwrap_or(0),
                 store.0.player_combo_target(),
             );
-            if let Some(fire) = combo_edge(memo.last_combo, banked) {
-                gate.audit("feed_units", "the combo-point edge");
+            if memo.last_combo != Some(banked) {
+                gate.audit("feed_units", "the combo-point push");
                 memo.last_combo = Some(banked);
                 script.set_combo_points(banked.0, banked.1);
-                memo.pending.combo_points |= fire;
             }
         }
     })
 }
 
-/// The events [`feed_units`]' pushes owe, signalled after the action feed's usable refresh as the
+/// The event [`feed_units`]' pushes owe, signalled after the action feed's usable refresh as the
 /// reference orders them: `SelectTarget` stores the target (`0x4936e2`) and refreshes (`0x493892`)
 /// before `PLAYER_TARGET_CHANGED` (`0x49389c`), and so does a release (`0x4939d3`, `0x493a69`,
-/// `0x493a73`); the combo-point watch refreshes (`0x5ddff0`) before `PLAYER_COMBO_POINTS`
-/// (`0x5ddffa`). A usable handler reads the new target and count, and hears these after it.
+/// `0x493a73`). A usable handler reads the new target, and hears this after it.
 fn fire_unit_events(
     // What the host also reaches, read before the VM runs with the host lent.
     mut hosted: ParamSet<(Res<Selection>, crate::script_calls::HostedVm)>,
@@ -1775,17 +1773,7 @@ fn fire_unit_events(
                 script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
             });
         }
-        if pending.combo_points {
-            script.fire_event("PLAYER_COMBO_POINTS", vec![]);
-        }
     })
-}
-
-/// The combo feed's edge: `None` when nothing moved, else whether `PLAYER_COMBO_POINTS` fires.
-/// Event 202 is a one-byte watch on the count (`+0x1029`, registered at `0x5dd9d9`) with no value
-/// test, so the drop to zero fires; the target has no watch, so a same-count re-bank is silent.
-fn combo_edge(last: Option<(u8, u64)>, now: (u8, u64)) -> Option<bool> {
-    (last != Some(now)).then(|| last.map(|(count, _)| count) != Some(now.0))
 }
 
 #[cfg(test)]
@@ -3262,35 +3250,6 @@ mod tests {
             "friendly from us"
         );
         assert_eq!(player_reaction(&rel, &druid, None), 0);
-    }
-
-    /// Either half moving pushes; only the count, the one byte the client watches, fires.
-    #[test]
-    fn only_the_count_fires_the_combo_event() {
-        const A: u64 = 0xF130_0000_0000_0001;
-        const B: u64 = 0xF130_0000_0000_0002;
-
-        assert_eq!(combo_edge(Some((1, A)), (1, A)), None, "nothing moved");
-        assert_eq!(
-            combo_edge(Some((1, A)), (2, A)),
-            Some(true),
-            "a builder lands: push and speak"
-        );
-        assert_eq!(
-            combo_edge(Some((5, A)), (0, 0)),
-            Some(true),
-            "the clear speaks too — the falling edge is what hides the dots"
-        );
-        assert_eq!(
-            combo_edge(Some((1, A)), (1, B)),
-            Some(false),
-            "re-banked onto another unit at the same count: pushed, but silent like the client"
-        );
-        assert_eq!(
-            combo_edge(None, (0, 0)),
-            Some(true),
-            "first sight announces once, as the descriptor block's first write does"
-        );
     }
 
     /// `UNIT_DYNFLAG_DEAD` alone makes empty bars over real maxima, through `snapshot`'s wiring.

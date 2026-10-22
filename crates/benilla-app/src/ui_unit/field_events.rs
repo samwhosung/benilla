@@ -29,6 +29,8 @@ pub(crate) struct NoticeFiring<'w, 's> {
     // The quest log's watcher reads the slots.
     me: Query<'w, 's, &'static crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
     tutorials: Option<Res<'w, crate::tutorial::Tutorials>>,
+    // The form table the bonus bar's offset reads (`0x4e4fc0`).
+    spells: Option<Res<'w, crate::ui_action::Spells>>,
 }
 
 impl NoticeFiring<'_, '_> {
@@ -50,6 +52,17 @@ impl NoticeFiring<'_, '_> {
         }
         if let FieldNotice::Drunk { guid, old, new } = notice {
             drunk(script, &mut self.sink, &self.names, guid, old, new);
+            return;
+        }
+        if notice == FieldNotice::Shapeshift {
+            // `0x5de016` → `0x4b3250`: `0x4e5bf0`'s event, then its own (`0x4b325a`).
+            script.fire_event("ACTIONBAR_UPDATE_STATE", vec![]);
+            script.fire_event("CURRENT_SPELL_CAST_CHANGED", vec![]);
+            // `0x5de01b` → `0x4e4fc0`: the offset stored, then the event, on every form change.
+            let offset =
+                crate::ui_action::bonus_bar_offset(self.me.iter().next(), self.spells.as_deref());
+            script.set_bonus_bar_offset(offset);
+            script.fire_event("UPDATE_BONUS_ACTIONBAR", vec![]);
             return;
         }
         fire(script, &mut self.sink, notice);
@@ -226,8 +239,14 @@ fn fire(script: &mut UiScript, sink: &mut crate::ui_action::MessageSink, notice:
                 script.fire_event(global, vec![]);
             }
         }
-        // Fired by [`NoticeFiring::fire`], which holds the slots, the banks and the names.
-        FieldNotice::QuestLog | FieldNotice::Tutorial { .. } | FieldNotice::Drunk { .. } => {}
+        // `0x5ddffa`.
+        FieldNotice::ComboPoints => script.fire_event("PLAYER_COMBO_POINTS", vec![]),
+        // Fired by [`NoticeFiring::fire`], which holds the slots, the banks, the names and the
+        // form table.
+        FieldNotice::QuestLog
+        | FieldNotice::Tutorial { .. }
+        | FieldNotice::Drunk { .. }
+        | FieldNotice::Shapeshift => {}
         FieldNotice::PvpPreference { on } => {
             let (toast, verbose) = super::pvp_announcement(on);
             // The verbose sentence is no catalog row, so it goes `unkeyed` to chat:

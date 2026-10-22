@@ -31,7 +31,7 @@ mod drain_tests;
 pub(crate) mod drop_item;
 mod errors;
 mod feed;
-pub(crate) use feed::{spell_action_icon, MISSING_ITEM_ICON};
+pub(crate) use feed::{bonus_bar_offset, spell_action_icon, MISSING_ITEM_ICON};
 #[cfg(test)]
 mod feed_tests;
 mod net;

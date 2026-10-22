@@ -15,6 +15,7 @@ use benilla_ui::script::macro_slot_id;
 use benilla_ui::script::{ActionSlot, ScriptValue};
 
 use crate::entities::ItemDisplays;
+use crate::field_watch::FieldNotice;
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, SelfPlayer};
 
@@ -28,6 +29,16 @@ use super::{
 /// An item action's icon when its template has not answered or its display id has no
 /// `ItemDisplayInfo` row: the reference's literal `0x847fe4`, from the resolver's `0x5d8927`.
 pub(crate) const MISSING_ITEM_ICON: &str = "Interface\\Icons\\INV_Misc_QuestionMark";
+
+/// `0x4e4fc0`'s offset: the second field of the `SpellShapeshiftForm` row of the player's form
+/// byte, 0 with no player or row (`0x4e4fc5`, `0x4e500f`).
+pub(crate) fn bonus_bar_offset(store: Option<&ObjectStore>, spells: Option<&Spells>) -> u8 {
+    let form = store.map(|s| s.0.unit_shapeshift_form()).unwrap_or(0);
+    spells
+        .and_then(|s| s.forms.get(&u32::from(form)))
+        .map(|f| f.bonus_bar)
+        .unwrap_or(0) as u8
+}
 
 /// The feed's memory of what it last pushed, for per-slot change events.
 #[derive(Default)]
@@ -64,6 +75,8 @@ pub(super) fn feed_actions(
     commands: Res<NetCommands>,
     mut memory: Local<crate::ui_script::VmMemo<FeedMemory>>,
     mut sink: MessageSink,
+    // The form watcher's notice still to fire this frame: the lanes' drain follows every feed.
+    form_notice: Option<Res<crate::field_watch::NoticeLane>>,
 ) {
     // The messages and the bonus bar's page, with the host lent: `UI_ERROR_MESSAGE`'s handlers and
     // `UPDATE_BONUS_ACTIONBAR`'s may make calls.
@@ -145,18 +158,19 @@ pub(super) fn feed_actions(
 
         let store = self_q.iter().next();
 
-        // Stance page: our form's bonus bar offset, with `UPDATE_BONUS_ACTIONBAR` on change.
-        let form = store.map(|s| s.0.unit_shapeshift_form()).unwrap_or(0);
-        let offset = spells
-            .as_ref()
-            .and_then(|s| s.forms.get(&u32::from(form)))
-            .map(|f| f.bonus_bar)
-            .unwrap_or(0) as u8;
+        // Stance page: our form's bonus bar offset, with `UPDATE_BONUS_ACTIONBAR` on change. A
+        // form change's own push and event are its watcher's (`0x5de01b`), on the notice lane.
+        let offset = bonus_bar_offset(store, spells.as_deref());
         if offset != memory.bonus_offset {
-            debug!("ui_action: bonus bar offset {} (form {form})", offset);
             memory.bonus_offset = offset;
-            script.set_bonus_bar_offset(offset);
-            script.fire_event("UPDATE_BONUS_ACTIONBAR", vec![]);
+            let form_changed = form_notice
+                .as_ref()
+                .is_some_and(|l| l.iter().any(|n| *n == FieldNotice::Shapeshift));
+            if !form_changed {
+                debug!("ui_action: bonus bar offset {offset}");
+                script.set_bonus_bar_offset(offset);
+                script.fire_event("UPDATE_BONUS_ACTIONBAR", vec![]);
+            }
         }
     });
 

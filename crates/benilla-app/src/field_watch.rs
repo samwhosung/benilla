@@ -71,6 +71,14 @@ pub(crate) enum FieldNotice {
     /// fire-once bit tested and set, then its `TutorialPopup` cue and `TUTORIAL_TRIGGER` at once,
     /// in the watcher's order.
     Tutorial { id: u32 },
+    /// `OnShapeshiftFormChanged` (`0x5de010`) on the active player's form byte: after the usable
+    /// refresh (`0x5de011`, the action feed's), `ACTIONBAR_UPDATE_STATE` and
+    /// `CURRENT_SPELL_CAST_CHANGED` (`0x5de016` → `0x4b3250`), then the bonus bar's offset and
+    /// `UPDATE_BONUS_ACTIONBAR` (`0x5de01b` → `0x4e4fc0`).
+    Shapeshift,
+    /// `OnComboPointsChanged` (`0x5ddff0`) on the active player's combo count: after the usable
+    /// refresh (the action feed's), `PLAYER_COMBO_POINTS` (`0x5ddffa`).
+    ComboPoints,
 }
 
 /// The notice lane: each notice stamped as a handler writes it ([`crate::lanes::stamp`]), fired
@@ -337,6 +345,12 @@ const GUILD_TIMESTAMP: (u16, u16) = (0x24, 4);
 /// The active player's own `CHARMEDBY` watch, `0x5de090` (`0x5dd9f4`): 8 bytes at the unit
 /// section's `+0x10`, refreshing its reaction (`0x5de0b5`).
 const CHARMED_BY: (u16, u16) = (0x10, 8);
+
+/// The active player's form watch `0x5de010`, `UNIT_FIELD_BYTES_1` byte 2, the unit section's
+/// `+0x212` (`0x5dda18`-`0x5dda21`), and its combo-count watch `0x5ddff0`, `PLAYER_FIELD_BYTES`
+/// byte 1, the player section's `+0x1029` (`0x5dd9d0`-`0x5dd9d9`), one byte each.
+const SHAPESHIFT_FORM: (u16, u16) = (0x212, 1);
+const COMBO_POINTS: (u16, u16) = (0x1029, 1);
 
 /// Which list a watch sits on: at one field the type watchers run ahead of the object's own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -760,6 +774,12 @@ pub(crate) fn placed_values(
     if kind == ObjectType::Player && around.me == Some(guid) {
         if let Some(at) = at(UNIT_SECTION, CHARMED_BY, List::Object) {
             pass.reaction(at, guid, fields, around);
+        }
+        if let Some(at) = at(UNIT_SECTION, SHAPESHIFT_FORM, List::Object) {
+            pass.push(at, FieldNotice::Shapeshift);
+        }
+        if let Some(at) = at(PLAYER_SECTION, COMBO_POINTS, List::Object) {
+            pass.push(at, FieldNotice::ComboPoints);
         }
         // Registered at world entry (`0x4de430`), after the bridge's watch on the same range.
         if let Some(at) = at(PLAYER_SECTION, QUEST_LOG_WATCH, List::Object) {
@@ -1707,6 +1727,39 @@ mod tests {
             block_around(&mut me, &around, ME, &[(12, 0x55)]),
             [signal(ME, 29), signal(MOB, 29)]
         );
+    }
+
+    /// The form watch `0x5de010` is one byte, `UNIT_FIELD_BYTES_1` byte 2, and the combo watch
+    /// `0x5ddff0` one byte, `PLAYER_FIELD_BYTES` byte 1, both on the active player's own object
+    /// (`0x5dda18`, `0x5dd9d0`): another byte of either dword, or another player, runs neither.
+    #[test]
+    fn the_form_and_combo_watches_are_one_byte_each_on_the_active_player() {
+        let (bytes_1, bytes) = (UNIT_SECTION + 0x210 / 4, pf(0x1028));
+        let ours = |notices: Vec<FieldNotice>| -> Vec<FieldNotice> {
+            notices
+                .into_iter()
+                .filter(|n| matches!(n, FieldNotice::Shapeshift | FieldNotice::ComboPoints))
+                .collect()
+        };
+        let mut me = player();
+        let mut other = player();
+        assert!(ours(block(&mut me, Some(ME), ME, &[(bytes_1, 1), (bytes, 1)])).is_empty());
+        assert_eq!(
+            ours(block(
+                &mut me,
+                Some(ME),
+                ME,
+                &[(bytes_1, 0x0001_0001), (bytes, 0x0201)]
+            )),
+            [FieldNotice::Shapeshift, FieldNotice::ComboPoints]
+        );
+        let theirs = block(
+            &mut other,
+            Some(ME),
+            0x08,
+            &[(bytes_1, 1 << 16), (bytes, 1 << 8)],
+        );
+        assert!(ours(theirs).is_empty());
     }
 
     /// The applications watcher `0x604ea0` is registered once per byte of fields 113-124, each a
