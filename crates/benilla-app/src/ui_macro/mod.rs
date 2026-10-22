@@ -252,35 +252,29 @@ struct BindingsSeen {
 /// derived from nothing. Runs after the book's feed, so a derivation reads the book as it stands,
 /// and copies the engine's records out for the action bar.
 fn rebind_macro_spells(
-    // The bar, whose supersede queue this drains, which the host's action presses also read.
-    mut vm: crate::script_calls::VmWith<ResMut<'static, crate::ui_action::PlayerActions>>,
-    mut bound: ResMut<MacroBoundSpells>,
+    // The bar, whose supersede queue this drains, and the records, which the call host's presses
+    // and usable refresh read, so a turn: no Lua runs here.
+    mut vm: crate::script_calls::VmWith<(
+        ResMut<'static, crate::ui_action::PlayerActions>,
+        ResMut<'static, MacroBoundSpells>,
+    )>,
     arrivals: Query<(), Added<crate::net::SelfPlayer>>,
     mut owed: Local<(bool, crate::ui_script::VmMemo<BindingsSeen>)>,
 ) {
     let (arrived, seen) = &mut *owed;
     *arrived |= !arrivals.is_empty();
-    // The macros the bar holds are the ones a supersede reaches (`0x4e5e70`-`0x4e5ece`).
-    let (superseded, on_bar) = {
-        let actions = vm.own();
-        let on_bar: std::collections::HashSet<u32> = actions
-            .buttons
-            .values()
-            .filter_map(|b| benilla_ui::script::macro_slot_id(b.kind, b.action))
-            .collect();
-        (actions.superseded.clone(), on_bar)
-    };
-    let applied = vm.run(|script| {
+    vm.turn(|script, (mut actions, mut bound)| {
+        // With no VM the supersede pairs wait for the first pass that can apply them.
         let Some(script) = script else {
-            return false;
+            return;
         };
         let seen = seen.get(script);
         let generation = script.macros_generation();
         let pet_generation = script.pet_book_generation();
         let table_moved = seen.macros != Some(generation);
         let pet_moved = seen.pet_book != Some(pet_generation);
-        if !table_moved && !pet_moved && !*arrived && superseded.is_empty() {
-            return false;
+        if !table_moved && !pet_moved && !*arrived && actions.superseded.is_empty() {
+            return;
         }
         seen.macros = Some(generation);
         seen.pet_book = Some(pet_generation);
@@ -288,7 +282,15 @@ fn rebind_macro_spells(
         let (arrival, load) = (std::mem::take(arrived), script.take_macro_derives().loaded);
         let every = arrival || load;
 
+        // The queue empties without marking the bar changed: the supersede marked it already.
+        let superseded = std::mem::take(&mut actions.bypass_change_detection().superseded);
         if !superseded.is_empty() {
+            // The macros the bar holds are the ones a supersede reaches (`0x4e5e70`-`0x4e5ece`).
+            let on_bar: std::collections::HashSet<u32> = actions
+                .buttons
+                .values()
+                .filter_map(|b| benilla_ui::script::macro_slot_id(b.kind, b.action))
+                .collect();
             let mut records = script.macro_bindings();
             for (_, b) in records.iter_mut().filter(|(id, _)| on_bar.contains(id)) {
                 for &(old, new) in &superseded {
@@ -318,13 +320,7 @@ fn rebind_macro_spells(
             );
             bound.0 = fresh;
         }
-        true
-    });
-    // A pass that ran took the pairs; one that could not keeps them for the next. The queue
-    // empties without marking the bar changed: the supersede marked it already.
-    if applied {
-        vm.own().bypass_change_detection().superseded.clear();
-    }
+    })
 }
 
 /// The event each macro line is fired as: id `0x188`, whose registry slot `0xbe17b8` is written
