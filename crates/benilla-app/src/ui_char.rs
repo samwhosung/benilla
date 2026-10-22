@@ -1170,7 +1170,7 @@ mod tests {
         const F_ITEM_FLAGS: u16 = 21;
         /// `ITEM_FIELD_RANDOM_PROPERTIES_ID`.
         const F_ROLL: u16 = 44;
-        let props = crate::items::RandomProperties(RandomPropertyCatalog::from_rows(
+        let props = crate::items::RandomProperties::new(RandomPropertyCatalog::from_rows(
             std::collections::HashMap::from([(
                 862,
                 RandomProperty {

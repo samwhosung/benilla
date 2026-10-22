@@ -2671,6 +2671,39 @@ mod ask_tests {
         assert_eq!(line, "Rockbiter 3");
     }
 
+    /// The name formatter's template is the VM's `ITEM_SUFFIX_TEMPLATE` (`0x5d8b78` →
+    /// `0x703bf0`), read off the VM into the catalog every surface names through, and read again
+    /// when it changes.
+    #[test]
+    fn the_suffix_template_is_read_off_the_vm() {
+        let mut app = App::new();
+        app.insert_resource(crate::items::RandomProperties::new(
+            benilla_formats::RandomPropertyCatalog::from_rows(std::collections::HashMap::from([(
+                862,
+                benilla_formats::RandomProperty {
+                    suffix: "of the Bear".into(),
+                    enchants: [0; 5],
+                },
+            )])),
+        ))
+        .add_systems(Update, super::feed_random_properties);
+        let script = benilla_ui::script::UiScript::new().unwrap();
+        script.run(r#"ITEM_SUFFIX_TEMPLATE = "%s -- %s""#).unwrap();
+        app.insert_non_send_resource(script);
+        app.update();
+        let name = |app: &App| {
+            let props = app.world().resource::<crate::items::RandomProperties>();
+            crate::items::item_display_name("Robe", 862, Some(props))
+        };
+        assert_eq!(name(&app), "Robe -- of the Bear");
+        app.world_mut()
+            .non_send_resource_mut::<benilla_ui::script::UiScript>()
+            .run(r#"ITEM_SUFFIX_TEMPLATE = nil"#)
+            .unwrap();
+        app.update();
+        assert_eq!(name(&app), "", "a missing key formats the empty string");
+    }
+
     /// The requirement state carries `PLAYER_FIELD_PVP_MEDALS` and the whole known-spell book: a
     /// held medal whites its line (`0x52d70a`), and a recipe whose craft the book holds, which the
     /// spellbook never lists, reads already known (`0x52d54f`).

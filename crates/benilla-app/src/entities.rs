@@ -964,7 +964,7 @@ fn setup_entities(
     match benilla_formats::load_random_property_catalog(&mut chain) {
         Ok(props) => {
             info!("random-property catalog: {} suffix rows", props.len());
-            commands.insert_resource(crate::items::RandomProperties(props));
+            commands.insert_resource(crate::items::RandomProperties::new(props));
         }
         Err(e) => {
             warn!("random properties unavailable: no item name suffix, no suffix line: {e:#}")

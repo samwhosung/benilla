@@ -90,17 +90,18 @@ fn a_partner_slot_links_with_the_wires_enchant_roll_and_suffix() {
         suffix_factor: 77,
         ..wire_item(1234)
     };
-    let props = crate::items::RandomProperties(benilla_formats::RandomPropertyCatalog::from_rows(
-        [(
-            862,
-            benilla_formats::RandomProperty {
-                suffix: "of the Monkey".into(),
-                enchants: [0; 5],
-            },
-        )]
-        .into_iter()
-        .collect(),
-    ));
+    let props =
+        crate::items::RandomProperties::new(benilla_formats::RandomPropertyCatalog::from_rows(
+            [(
+                862,
+                benilla_formats::RandomProperty {
+                    suffix: "of the Monkey".into(),
+                    enchants: [0; 5],
+                },
+            )]
+            .into_iter()
+            .collect(),
+        ));
     let rolls = crate::items::RollCatalogs {
         props: Some(&props),
         enchants: None,

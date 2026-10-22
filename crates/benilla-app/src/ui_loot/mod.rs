@@ -2699,7 +2699,7 @@ mod tests {
     fn a_rolled_drop_reads_its_suffix_in_the_row_the_link_and_the_lines() {
         use benilla_formats::{RandomProperty, RandomPropertyCatalog};
         // "of the Monkey" (row 584 of the shipped table): Agility +7, Stamina +7.
-        let props = crate::items::RandomProperties(RandomPropertyCatalog::from_rows(
+        let props = crate::items::RandomProperties::new(RandomPropertyCatalog::from_rows(
             [(
                 584,
                 RandomProperty {

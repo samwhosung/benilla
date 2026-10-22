@@ -1584,7 +1584,7 @@ mod tests {
         let states = crate::world_state::WorldStates::default();
         let mut items = Items::default();
         items.insert_template(2589, Some(crate::items::test_template("Linen Cloth")));
-        let props = crate::items::RandomProperties(
+        let props = crate::items::RandomProperties::new(
             benilla_formats::RandomPropertyCatalog::from_rows(std::collections::HashMap::from([(
                 7,
                 benilla_formats::RandomProperty {

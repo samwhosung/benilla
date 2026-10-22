@@ -345,7 +345,21 @@ fn enchant_lines_quiet(
 /// `ItemRandomProperties.dbc`, the random-suffix roll: a name suffix and tooltip enchant slots
 /// 2..6 (`0x52b7e0`). Optional: absent, names stay unsuffixed.
 #[derive(Resource)]
-pub(crate) struct RandomProperties(pub(crate) benilla_formats::RandomPropertyCatalog);
+pub(crate) struct RandomProperties {
+    pub(crate) catalog: benilla_formats::RandomPropertyCatalog,
+    /// `ITEM_SUFFIX_TEMPLATE` as `FrameScript_GetText` reads it off the VM (`0x5d8b78` →
+    /// `0x703bf0`), the empty string for a missing key; `None` until a VM has been read.
+    pub(crate) suffix_template: Option<String>,
+}
+
+impl RandomProperties {
+    pub(crate) fn new(catalog: benilla_formats::RandomPropertyCatalog) -> Self {
+        RandomProperties {
+            catalog,
+            suffix_template: None,
+        }
+    }
+}
 
 /// The item's display name, the reference's one formatter `0x5d8b00(entry, randomPropertyId)`:
 /// `ITEM_SUFFIX_TEMPLATE` (`"%s %s"`) with the roll's suffix, or the plain name when the id names
@@ -355,7 +369,7 @@ pub(crate) fn item_display_name(
     random_property_id: i32,
     props: Option<&RandomProperties>,
 ) -> String {
-    match props.and_then(|p| p.0.get(random_property_id)) {
+    match props.and_then(|p| p.catalog.get(random_property_id)) {
         Some(row) => format!("{base} {}", row.suffix),
         None => base.to_string(),
     }
@@ -385,7 +399,7 @@ pub(crate) fn random_property_views(
     enchants: Option<&Enchants>,
 ) -> std::collections::HashMap<u32, benilla_ui::script::RandomPropertyView> {
     props
-        .0
+        .catalog
         .iter()
         .map(|(id, row)| {
             (
@@ -439,7 +453,10 @@ impl RollCatalogs<'_> {
     /// [`random_property_lines`] for one id; the live surfaces read the engine's pushed table.
     #[cfg(test)]
     pub(crate) fn lines(&self, random_property_id: u32) -> Vec<benilla_ui::script::EnchantView> {
-        match self.props.and_then(|p| p.0.get(random_property_id as i32)) {
+        match self
+            .props
+            .and_then(|p| p.catalog.get(random_property_id as i32))
+        {
             Some(row) => random_property_lines(row, self.enchants),
             None => Vec::new(),
         }
