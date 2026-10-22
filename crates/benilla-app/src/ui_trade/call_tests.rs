@@ -1038,3 +1038,58 @@ fn the_open_leg_takes_no_item_whose_bag_has_no_guid() {
         );
     }
 }
+
+/// Our slot an own-side extended status empties signals first: the handler runs
+/// `InvalidateTradeSlot` as it stores the records (`0x5d4ad3`, `0x5d4b33`), then `0x4bf2b0`
+/// drops the accepts (`0x5d4b67` → `0x4bf2b6`).
+#[test]
+fn an_emptied_own_slot_signals_before_the_accept_drop() {
+    let mut t = client();
+    open_with_bob(&mut t);
+    run(
+        &mut t,
+        "PickupContainerItem(0, 1) ClickTradeButton(1) AcceptTrade()",
+    );
+    let _ = sent(&t);
+    let _ = heard(&mut t);
+    crate::net::handlers::dispatch(
+        t.app.world_mut(),
+        vec![SessionEvent::TradeStatusExtended {
+            state: Box::new(benilla_protocol::messages::TradeStatusExtended {
+                their_window: false,
+                sequence: 7,
+                flag: 7,
+                gold: 0,
+                enchant_spell_id: 0,
+                slots: [None; benilla_protocol::messages::TRADE_SLOT_COUNT],
+            }),
+        }],
+    );
+    let feed = t.feed;
+    run_system(&mut t, feed);
+    assert_eq!(
+        heard(&mut t),
+        "TRADE_PLAYER_ITEM_CHANGED(1,nil) TRADE_ACCEPT_UPDATE(0,0) "
+    );
+}
+
+/// Code 13 zeroes both offers before it signals `PLAYER_MONEY` (`0x5d489c`, `0x5d48a2`, then
+/// `0x5d48a8`), so a handler reads an offer of 0.
+#[test]
+fn code_13_signals_the_purse_over_zeroed_offers() {
+    let mut t = client();
+    open_with_bob(&mut t);
+    run(&mut t, "SetTradeMoney(500)");
+    let feed = t.feed;
+    run_system(&mut t, feed);
+    run(
+        &mut t,
+        r#"READ = nil
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("PLAYER_MONEY")
+        f:SetScript("OnEvent", function() READ = GetPlayerTradeMoney() end)"#,
+    );
+    assert_eq!(eval::<i64>(&mut t, "return GetPlayerTradeMoney()"), 500);
+    status(&mut t, TradeStatus::Unknown13);
+    assert_eq!(eval::<i64>(&mut t, "return READ"), 0);
+}
