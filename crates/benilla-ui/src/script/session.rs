@@ -125,3 +125,44 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::script::{ContainerState, UiScript};
+
+    /// The cascade's bag watcher set-up (`0x49098d` → `0x4f8cc0`) zeroes the bag cache and
+    /// rescans it (`0x4f8da6` → `0x4f91a0`): `BAG_UPDATE` for each of the ten bags present, in
+    /// order, after `PLAYER_ENTERING_WORLD`; the backpack, the bank and the keyring are no bags of
+    /// the cache.
+    #[test]
+    fn the_world_enter_cascade_updates_each_bag_present() {
+        let mut s = UiScript::new().unwrap();
+        for bag in [-2, -1, 0, 1, 3, 5, 10] {
+            s.set_container(
+                bag,
+                Some(ContainerState {
+                    name: None,
+                    num_slots: 4,
+                    slots: Default::default(),
+                }),
+            );
+        }
+        s.run(
+            "Heard = {} local f = CreateFrame('Frame') f:RegisterEvent('BAG_UPDATE') \
+             f:RegisterEvent('PLAYER_ENTERING_WORLD') \
+             f:SetScript('OnEvent', function() table.insert(Heard, event .. ':' .. tostring(arg1)) end)",
+        )
+        .unwrap();
+        s.fire_world_enter();
+        assert_eq!(
+            s.eval::<Vec<String>>("return Heard").unwrap(),
+            [
+                "PLAYER_ENTERING_WORLD:nil",
+                "BAG_UPDATE:1",
+                "BAG_UPDATE:3",
+                "BAG_UPDATE:5",
+                "BAG_UPDATE:10"
+            ]
+        );
+    }
+}
