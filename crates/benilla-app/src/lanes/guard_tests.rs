@@ -252,7 +252,10 @@ const FILLED_THROUGH_A_READ: &[&str] =
 
 /// Every other resource a handler reads and does not write: state, tables and caches it
 /// consults, none of them a queue a feed takes. A new one fails until it is placed here or in
-/// [`FILLED_THROUGH_A_READ`].
+/// [`FILLED_THROUGH_A_READ`]. The list is kept by hand: an entry a handler in fact fills through a
+/// shared reference leaves that queue out of [`handler_queues`], so a feed that takes it and fires
+/// in system order, or a system that pushes onto a lane off it at its own place, passes every
+/// check here unseen.
 const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::AreaTableRes",
     "::DamageTextGates",
@@ -354,6 +357,41 @@ fn handler_queues(
         );
     }
     out.into_iter().collect()
+}
+
+/// The call host's own state, which every system that lends it holds: what a call touches.
+fn call_host_access(world: &mut World) -> bevy::ecs::query::Access {
+    use bevy::ecs::system::System;
+    let mut host = IntoSystem::into_system(|_: crate::script_calls::ScriptCallHost| {});
+    System::initialize(&mut host, world)
+        .combined_access()
+        .clone()
+}
+
+/// Whether `node` sits in the `UiFeed` phase, through any set.
+fn in_feed(graph: &bevy::ecs::schedule::ScheduleGraph, node: bevy::ecs::schedule::NodeId) -> bool {
+    use bevy::ecs::schedule::graph::Direction;
+    use bevy::ecs::schedule::NodeId;
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        for parent in graph
+            .hierarchy()
+            .graph()
+            .neighbors_directed(n, Direction::Incoming)
+        {
+            if let NodeId::Set(set) = parent {
+                if graph
+                    .system_sets
+                    .get(set)
+                    .is_some_and(|s| format!("{s:?}") == "UiFeed")
+                {
+                    return true;
+                }
+                stack.push(parent);
+            }
+        }
+    }
+    false
 }
 
 /// Every resource a handler reads without writing is known: one the handlers fill through a
@@ -489,7 +527,6 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
 /// as each edge-comparing feed has one, and a row whose subject is gone is stale.
 #[test]
 fn every_handler_queue_a_feed_takes_is_on_a_lane_or_listed() {
-    use bevy::ecs::schedule::graph::Direction;
     use bevy::ecs::schedule::NodeId;
     let mut app = headless_client();
     // The census's pure caches, read off its own build of the schedule, then the graph read here
@@ -503,13 +540,7 @@ fn every_handler_queue_a_feed_takes_is_on_a_lane_or_listed() {
         let vm = world
             .components()
             .get_resource_id(TypeId::of::<benilla_ui::script::UiScript>());
-        // The call host's own state, which every feed that lends it holds: what a call touches.
-        let host = {
-            use bevy::ecs::system::System;
-            let mut host = IntoSystem::into_system(|_: crate::script_calls::ScriptCallHost| {});
-            System::initialize(&mut host, world)
-        };
-        let host = host.combined_access();
+        let host = call_host_access(world);
         let lanes: Vec<ComponentId> = [
             TypeId::of::<crate::field_watch::NoticeLane>(),
             TypeId::of::<crate::ui_chat::ChatLog>(),
@@ -518,28 +549,7 @@ fn every_handler_queue_a_feed_takes_is_on_a_lane_or_listed() {
         .filter_map(|t| world.components().get_resource_id(t))
         .collect();
         let graph = schedule.graph();
-        let in_feed = |node: NodeId| {
-            let mut stack = vec![node];
-            while let Some(n) = stack.pop() {
-                for parent in graph
-                    .hierarchy()
-                    .graph()
-                    .neighbors_directed(n, Direction::Incoming)
-                {
-                    if let NodeId::Set(set) = parent {
-                        if graph
-                            .system_sets
-                            .get(set)
-                            .is_some_and(|s| format!("{s:?}") == "UiFeed")
-                        {
-                            return true;
-                        }
-                        stack.push(parent);
-                    }
-                }
-            }
-            false
-        };
+        let in_feed = |node: NodeId| in_feed(graph, node);
         let mut taken = BTreeSet::new();
         let mut exclusive = BTreeSet::new();
         let mut systems = BTreeSet::new();
@@ -631,11 +641,126 @@ fn every_handler_queue_a_feed_takes_is_on_a_lane_or_listed() {
     assert!(stale.is_empty(), "stale rows: {stale:?}");
 }
 
+/// The handler queues whose items carry their place among what the packets queued, so a system
+/// that pushes onto a lane off one pushes at the item's place, not its own: the field edges'
+/// `at`. A wrong entry lets a system that pushes at its own place, behind every packet of the
+/// frame, pass [`every_lane_push_off_a_handler_queue_keeps_its_place`].
+fn placed_queues() -> [TypeId; 1] {
+    [TypeId::of::<
+        bevy::ecs::message::Messages<crate::net::FieldChanged>,
+    >()]
+}
+
+/// The systems that push onto a lane off a handler queue at their own place because the
+/// reference does too, by a suffix of the system's name, with the reason.
+const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[(
+    "::creature_anim::impact::route_swing_impacts",
+    "a melee swing's record waits for its animation's impact key, which dispatches it in the \
+     frame that crosses the key (`0x6247d0`), not at the packet",
+)];
+
+/// A system of any phase that takes a handler queue and pushes onto a lane stamps the push where
+/// it runs, behind every packet of the frame, unless the queue's items carry their place
+/// ([`placed_queues`]). Each such system needs a row in [`AT_THEIR_OWN_PLACE`].
+#[test]
+fn every_lane_push_off_a_handler_queue_keeps_its_place() {
+    let mut app = headless_client();
+    let caches = census(&mut headless_client(), Update, SyncPoints::Declared)
+        .classes
+        .caches;
+    let queues = handler_queues(app.world(), &caches);
+    let (pushes, systems) = app.world_mut().schedule_scope(Update, |world, schedule| {
+        schedule.graph_mut().systems.initialize(world);
+        let host = call_host_access(world);
+        let id = |t: TypeId| world.components().get_resource_id(t);
+        let vm = id(TypeId::of::<benilla_ui::script::UiScript>());
+        let lanes: Vec<ComponentId> = [
+            TypeId::of::<crate::field_watch::NoticeLane>(),
+            TypeId::of::<crate::ui_chat::ChatLog>(),
+        ]
+        .into_iter()
+        .filter_map(id)
+        .collect();
+        let placed: Vec<ComponentId> = placed_queues().into_iter().filter_map(id).collect();
+        let graph = schedule.graph();
+        let mut pushes = BTreeSet::new();
+        let mut systems = BTreeSet::new();
+        for (key, system, _) in graph.systems.iter() {
+            systems.insert(system.name().to_string());
+            let Some(with_access) = graph.systems.get(key) else {
+                continue;
+            };
+            let access = with_access.access.combined_access();
+            let fires = vm.is_some_and(|vm| access.has_resource_write(vm));
+            // A feed of the phase that fires is the other guard's, and an exclusive one is its
+            // row. A system that lends the call host holds the lanes as the host's verbs do,
+            // which push in their call: what it pushes itself is not told apart here.
+            if system.is_exclusive()
+                || (fires && in_feed(graph, bevy::ecs::schedule::NodeId::System(key)))
+                || host.is_subset_resources(access)
+                || !lanes.iter().any(|&l| access.has_resource_read(l))
+            {
+                continue;
+            }
+            let name = system.name().to_string();
+            for &q in &queues {
+                if Some(q) == vm || lanes.contains(&q) || placed.contains(&q) {
+                    continue;
+                }
+                let n = self::name(world, q);
+                // The host's own state is what a call touches, never a queue taken.
+                let takes = if ends_with_any(&n, FILLED_THROUGH_A_READ) {
+                    access.has_resource_read(q) && !host.has_resource_read(q)
+                } else if is_messages(world, q) {
+                    access.has_resource_read(q)
+                        && !access.has_resource_write(q)
+                        && !host.has_resource_read(q)
+                } else {
+                    access.has_resource_write(q)
+                        && !host.has_resource_read(q)
+                        && !host.has_resource_write(q)
+                };
+                if takes {
+                    pushes.insert((name.clone(), format!("{name} takes {n}")));
+                }
+            }
+        }
+        (pushes, systems)
+    });
+    if !systems.iter().any(|n| n.contains("benilla_app::")) {
+        eprintln!("skipped: this build carries no type names");
+        return;
+    }
+    let rows: Vec<&str> = AT_THEIR_OWN_PLACE.iter().map(|(s, _)| *s).collect();
+    let unlisted: Vec<&String> = pushes
+        .iter()
+        .filter(|(system, _)| !ends_with_any(system, &rows))
+        .map(|(_, line)| line)
+        .collect();
+    assert!(
+        unlisted.is_empty(),
+        "these push onto a lane off a handler queue at their own place: stamp each push at its \
+         item's place, or give the system a row in AT_THEIR_OWN_PLACE:\n  {}",
+        unlisted
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    );
+    let stale: Vec<&str> = rows
+        .into_iter()
+        .filter(|s| !pushes.iter().any(|(system, _)| system.ends_with(s)))
+        .collect();
+    assert!(stale.is_empty(), "stale rows: {stale:?}");
+}
+
 /// The drain is exclusive, so bevy lists its pairs with every system no declared order places
 /// against it with no component. What those systems meet of the drain's (its lanes' firings'
-/// access, and the unit edits it applies in place after each: a cast's `Casting`, the auto-repeat
-/// arm, a precast, the cast events and their sequence) is a pure cache at most, which commutes:
-/// the ambiguity ceiling's reason for these pairs.
+/// access, and the unit edits it applies in place after each: every component a change writes,
+/// the cast events and their sequence, the precast tail's loot release and what it reads) is a
+/// pure cache at most, which commutes: the ambiguity ceiling's reason for these pairs. Commands a
+/// firing defers, which the drain applies after it, are outside the model. An exclusive system
+/// shows bevy no access, so each one needs a declared order against the drain.
 #[test]
 fn the_systems_unordered_against_the_drain_meet_it_only_on_a_pure_cache() {
     use bevy::ecs::query::{Access, AccessConflicts};
@@ -645,35 +770,50 @@ fn the_systems_unordered_against_the_drain_meet_it_only_on_a_pure_cache() {
         drain.extend(a.combined_access());
     }
     {
+        use crate::creature_anim::UnitEdit;
         let world = app.world_mut();
-        for id in [
-            world.register_component::<crate::creature_anim::Casting>(),
-            world.register_component::<crate::creature_anim::AutoRepeatArmed>(),
-            world.register_component::<crate::creature_anim::Precast>(),
-        ] {
-            drain.add_component_write(id);
+        let writes: BTreeSet<TypeId> = UnitEdit::every(Entity::PLACEHOLDER)
+            .iter()
+            .flat_map(UnitEdit::writes)
+            .collect();
+        for t in writes {
+            if let Some(id) = world.components().get_id(t) {
+                drain.add_component_write(id);
+            }
         }
+        let player = world.register_component::<crate::net::SelfPlayer>();
+        drain.add_component_read(player);
         for t in [
             TypeId::of::<crate::creature_anim::PlaySeq>(),
             TypeId::of::<bevy::ecs::message::Messages<crate::creature_anim::CastEvent>>(),
+            TypeId::of::<crate::ui_loot::LootMoveStart>(),
+            TypeId::of::<crate::ui_loot::LootCloseAtRest>(),
         ] {
             if let Some(id) = world.components().get_resource_id(t) {
                 drain.add_resource_write(id);
             }
         }
+        if let Some(id) = world
+            .components()
+            .get_resource_id(TypeId::of::<crate::player::Player>())
+        {
+            drain.add_resource_read(id);
+        }
     }
     // Each system's access, read before the census builds the schedule.
-    let accesses: HashMap<_, Access> = app.world_mut().schedule_scope(Update, |world, schedule| {
-        schedule.graph_mut().systems.initialize(world);
-        let graph = schedule.graph();
-        graph
-            .systems
-            .iter()
-            .filter_map(|(k, _, _)| {
-                Some((k, graph.systems.get(k)?.access.combined_access().clone()))
-            })
-            .collect()
-    });
+    let accesses: HashMap<_, (Access, bool)> =
+        app.world_mut().schedule_scope(Update, |world, schedule| {
+            schedule.graph_mut().systems.initialize(world);
+            let graph = schedule.graph();
+            graph
+                .systems
+                .iter()
+                .filter_map(|(k, system, _)| {
+                    let access = graph.systems.get(k)?.access.combined_access().clone();
+                    Some((k, (access, system.is_exclusive())))
+                })
+                .collect()
+        });
     let c = census(&mut app, Update, SyncPoints::Declared);
     if !type_names_available(&c) {
         eprintln!("skipped: this build carries no type names");
@@ -705,8 +845,15 @@ fn the_systems_unordered_against_the_drain_meet_it_only_on_a_pure_cache() {
     let (after, before) = (reach(&next), reach(&prev));
     let world = app.world();
     let mut hazards = Vec::new();
-    for (k, a) in &accesses {
-        if k == drain_key || after.contains(k) || before.contains(k) || a.is_compatible(&drain) {
+    for (k, (a, exclusive)) in &accesses {
+        if k == drain_key || after.contains(k) || before.contains(k) {
+            continue;
+        }
+        if *exclusive {
+            hazards.push(format!("{}: exclusive, its access unknown", c.name(*k)));
+            continue;
+        }
+        if a.is_compatible(&drain) {
             continue;
         }
         let met: Vec<String> = match a.get_conflicts(&drain) {

@@ -937,9 +937,11 @@ pub(crate) mod schedule_tests {
     /// - the lanes' drain (`lanes::fire_in_order`), exclusive as the handler table's drain is,
     ///   against the 80 world systems no declared order places against it, which bevy lists with
     ///   no component. What they meet of the drain's (its lanes' firings, the VM with the call host,
-    ///   and the unit edits it applies in place: `Casting`, the auto-repeat arm, a precast, the
-    ///   cast events) is the name cache alone, a pure cache, which the persisted-name load writes;
-    ///   `lanes::guard_tests` checks that it stays so.
+    ///   and the unit edits it applies in place: every component a change writes, the cast events,
+    ///   the precast tail's loot release) is the name cache alone, a pure cache, which the
+    ///   persisted-name load writes; `lanes::guard_tests` checks that it stays so, and that no
+    ///   exclusive system is among them. Commands a firing defers, which the drain applies after
+    ///   it, are outside that model.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
