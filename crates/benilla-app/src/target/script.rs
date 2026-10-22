@@ -479,7 +479,6 @@ mod tests {
             "party1targetfoo",
             "party1foo",
             "party2target",
-            "npctarget",
         ] {
             assert_eq!(
                 run(&mut world, &format!(r#"TargetUnit("{token}")"#)),
@@ -487,6 +486,11 @@ mod tests {
                 "{token}"
             );
         }
+        // `npc` is compared whole, so `npctarget` is no token and raises (`0x515c14`).
+        assert!(world
+            .non_send_resource_mut::<UiScript>()
+            .eval::<()>(r#"TargetUnit("npctarget")"#)
+            .is_err());
 
         reset(&mut world);
         assert_eq!(
