@@ -33,10 +33,14 @@ const BUYBACK_SLOT_FIRST: u32 = 69;
 #[derive(Resource)]
 pub(crate) struct RepairTables(pub(crate) benilla_formats::DurabilityTables);
 
-/// The open vendor and its `SMSG_LIST_INVENTORY` rows, until a close or a disconnect.
+/// The open vendor, the cell `[0xbddfa0]` a close clears, and the list cache `0xc4c4a0` of the
+/// last `SMSG_LIST_INVENTORY` with its guid `[0xc4d498]`, which every list writes (`0x5db9c7`) and
+/// only the world reset zeroes (`0x5e2515`): a close keeps them.
 #[derive(Resource, Default)]
 pub(crate) struct MerchantOpen {
     pub(crate) vendor: Option<u64>,
+    /// The list cache's guid, which `SMSG_BUY_ITEM` matches (`0x5dcf20`).
+    pub(crate) listed: Option<u64>,
     /// In wire order, which is the 1-based display order.
     pub(crate) items: Vec<VendorItem>,
 }
@@ -44,6 +48,7 @@ pub(crate) struct MerchantOpen {
 impl MerchantOpen {
     pub(crate) fn open(&mut self, vendor: u64, items: Vec<VendorItem>) {
         self.vendor = Some(vendor);
+        self.listed = Some(vendor);
         self.items = items;
     }
 
@@ -75,15 +80,16 @@ impl MerchantOpen {
         }
     }
 
-    /// A client-side close; a re-open re-lists.
+    /// A client-side close (`0x4fadf0`): the cell alone; the list cache stays.
     pub(crate) fn clear(&mut self) {
         self.vendor = None;
-        self.items.clear();
     }
 
-    /// The disconnect clear.
+    /// The disconnect clear, the world reset's zeroed cache guid (`0x5e2515`) with it.
     pub(crate) fn clear_session(&mut self) {
         self.clear();
+        self.listed = None;
+        self.items.clear();
     }
 }
 
@@ -1577,6 +1583,9 @@ mod tests {
         open.open(0x42, vec![row(159, 1, 3)]);
         open.clear();
         assert!(!open.is_open());
+        assert_eq!(open.listed, Some(0x42), "the list cache outlives the close");
+        open.clear_session();
+        assert_eq!(open.listed, None);
         assert!(open.items.is_empty());
     }
 

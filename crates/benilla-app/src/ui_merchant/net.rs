@@ -78,16 +78,17 @@ fn on_session_end(In(_): In<SessionEvent>, mut merchant: ResMut<MerchantOpen>) {
     merchant.clear_session();
 }
 
-/// `SMSG_BUY_ITEM`'s new stock count, applied only to the open vendor (`0x5dcf20`-`0x5dcf35`) and
-/// to the row its slot names (`0x5dcf42`-`0x5dcf61`), whose item it answers; a slot no row holds
-/// skips the quest walk (`0x5dcf54`).
+/// `SMSG_BUY_ITEM`'s new stock count, applied only when the vendor is the list cache's
+/// (`[0xc4d498]`, `0x5dcf20`-`0x5dcf35`), open or closed since, and to the row its slot names
+/// (`0x5dcf42`-`0x5dcf61`), whose item it answers; a slot no row holds skips the quest walk
+/// (`0x5dcf54`).
 fn vendor_buy_result(
     vendor: u64,
     slot: u32,
     new_count: u32,
     merchant: &mut MerchantOpen,
 ) -> Option<u32> {
-    if merchant.vendor != Some(vendor) {
+    if merchant.listed != Some(vendor) {
         return None;
     }
     merchant.update_stock(slot, new_count)
@@ -255,6 +256,20 @@ mod tests {
             app.world().resource::<MerchantOpen>().items[0].current_count,
             4
         );
+    }
+
+    /// A close clears the vendor cell, not the list cache's guid (`[0xc4d498]`, written only by a
+    /// list and the world reset), so a purchase answered after the window closed still reports its
+    /// progress (`0x5dcf20`).
+    #[test]
+    fn a_purchase_answered_after_the_close_still_reports_progress() {
+        let mut app = quest_rig();
+        app.world_mut().resource_mut::<MerchantOpen>().clear();
+        assert_eq!(bought(&mut app, VENDOR, 3, 1), "Water: 1/5;");
+        app.world_mut()
+            .resource_mut::<MerchantOpen>()
+            .clear_session();
+        assert_eq!(bought(&mut app, VENDOR, 3, 1), "");
     }
 
     /// A refused sale unlocks the item it names (`0x5dd26b`); a zero result is a success, which
