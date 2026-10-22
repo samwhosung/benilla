@@ -616,7 +616,6 @@ fn feed_merchant(
     mut errors: ResMut<MerchantErrors>,
     mut last: crate::ui_script::WindowMemo<Option<MerchantState>>,
     mut last_money: Local<crate::ui_script::VmMemo<Option<u64>>>,
-    mut last_name: crate::ui_script::WindowMemo<Option<String>>,
     mut closes: CoreCloses,
     mut sink: crate::ui_action::MessageSink,
 ) {
@@ -626,10 +625,8 @@ fn feed_merchant(
         };
         let last = last.get(script);
         let last_money = last_money.get(script);
-        let last_name = last_name.get(script);
         if closes.since_last(script, NpcWindow::Merchant) {
             *last = None;
-            *last_name = None;
         }
         // Refusals show, and speak, as their message rows say; a silent code has no key.
         let refusals: Vec<_> = errors
@@ -671,26 +668,24 @@ fn feed_merchant(
             player,
             vendor_npc_flags(&open, &units),
         );
-        // `MERCHANT_SHOW` and `MERCHANT_UPDATE` carry no argument (`SignalEvent` `0x4fad92`,
-        // `0x4facaa`) and the stock window titles with `UnitName("NPC")` (`MerchantFrame.lua:67`),
-        // so the name's landing alone re-fires `MERCHANT_UPDATE`.
-        let vendor_name = open
-            .vendor
-            .and_then(|g| names.resolve(&objects, g, ask).map(str::to_string));
-        let name_changed = *last_name != vendor_name;
-        if fresh == *last && !name_changed {
+        // The stock window titles with `UnitName("NPC")` (`MerchantFrame.lua:67`), which looks
+        // the name up with a callback (`0x5171b8`) at its events; its landing fires nothing.
+        if let Some(g) = open.vendor {
+            let _ = names.resolve(&objects, g, ask);
+        }
+        if fresh == *last {
             return;
         }
         script.set_merchant(fresh.clone());
         match (&*last, &fresh) {
             (None, Some(_)) => script.fire_event("MERCHANT_SHOW", vec![]),
-            // A change while open: an item or the name landed, or the stock moved.
+            // A change while open: an item landed, or the list or stock moved. Neither event
+            // carries an argument (`SignalEvent` `0x4fad92`, `0x4facaa`).
             (Some(_), Some(_)) => script.fire_event("MERCHANT_UPDATE", vec![]),
             // The core told the VM; a disconnect's clear tells it nothing.
             (Some(_), None) | (None, None) => {}
         }
         *last = fresh;
-        *last_name = vendor_name;
     })
 }
 
