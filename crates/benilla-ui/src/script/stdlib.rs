@@ -254,8 +254,7 @@ fn install_time(lua: &Lua) -> mlua::Result<()> {
                 return Ok(mlua::Value::Number(crate::civil::unix_seconds() as f64));
             };
             let (fields, isdst) = date_fields(lua, &t)?;
-            let secs =
-                mktime_utc(&fields).and_then(|utc| crate::civil::local_seconds(utc, fields, isdst));
+            let secs = mktime_utc(&fields).and_then(|utc| crate::civil::local_seconds(utc, isdst));
             Ok(match secs {
                 Some(secs) => mlua::Value::Number(f64::from(secs)),
                 None => mlua::Value::Nil,
@@ -317,13 +316,23 @@ fn install_time(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
+/// The `struct tm` fields `time` reads, `year` from 1900 and `mon` from 0.
+struct TmFields {
+    sec: i32,
+    min: i32,
+    hour: i32,
+    mday: i32,
+    mon: i32,
+    year: i32,
+}
+
 /// The `struct tm` fields `time` reads from its table (`0x7035f3`..`0x703666`), in its order:
 /// `sec`, `min`, `hour`, `day`, `month` less 1 and `year` less 1900, as `int`s, by 5.0's
 /// `getfield` (`0x7036f0`) for each field: `lua_gettable`, so `__index` answers; a number
 /// or numeric string through `__ftol`, else the default, and `day`, `month` and `year` have none.
 /// `isdst` (`getboolfield`, `0x7036b0`) is read last, as `lua_toboolean`: nil is false, never the
 /// C library's "unknown".
-fn date_fields(lua: &Lua, t: &mlua::Table) -> mlua::Result<(crate::civil::TmFields, bool)> {
+fn date_fields(lua: &Lua, t: &mlua::Table) -> mlua::Result<(TmFields, bool)> {
     let field = |key: &str, default: Option<i32>| -> mlua::Result<i32> {
         let v: mlua::Value = t.get(key)?;
         match (lua.coerce_number(v)?, default) {
@@ -334,7 +343,7 @@ fn date_fields(lua: &Lua, t: &mlua::Table) -> mlua::Result<(crate::civil::TmFiel
             ))),
         }
     };
-    let f = crate::civil::TmFields {
+    let f = TmFields {
         sec: field("sec", Some(0))?,
         min: field("min", Some(0))?,
         hour: field("hour", Some(12))?,
@@ -353,7 +362,7 @@ fn date_fields(lua: &Lua, t: &mlua::Table) -> mlua::Result<(crate::civil::TmFiel
 /// 69..=139, the month folded into the year, then days, hours, minutes and seconds, each step
 /// refused on a 32-bit overflow (`0x740864`). `None` is its -1; the zone is
 /// [`crate::civil::local_seconds`].
-fn mktime_utc(f: &crate::civil::TmFields) -> Option<i32> {
+fn mktime_utc(f: &TmFields) -> Option<i32> {
     // `_days` (`0x832834`): the days before each month, less one.
     const DAYS: [i32; 13] = [-1, 30, 58, 89, 119, 150, 180, 211, 242, 272, 303, 333, 364];
     let years = 69..=139;

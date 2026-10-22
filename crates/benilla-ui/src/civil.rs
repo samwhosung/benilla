@@ -83,25 +83,21 @@ pub fn local(secs: i64) -> Option<(Civil, bool)> {
     Some((c, tm.tm_isdst > 0))
 }
 
-/// The fields `_mktime` reads, as `struct tm` holds them: `year` from 1900 and `mon` from 0.
-#[derive(Clone, Copy, Debug)]
-pub struct TmFields {
-    pub sec: i32,
-    pub min: i32,
-    pub hour: i32,
-    pub mday: i32,
-    pub mon: i32,
-    pub year: i32,
-}
-
-/// The epoch second the fields name in the system's zone, `isdst` saying whether they are
-/// daylight time: `_mktime`'s local half (`0x740806`-`0x740842`). `utc` is the same fields read as
-/// UTC, which the caller has range-checked as the runtime does. The answer is a 32-bit `time_t`,
-/// so one past it, or a negative one (`localtime` refuses it, `0x740825`), is `None`.
-pub fn local_seconds(utc: i32, fields: TmFields, isdst: bool) -> Option<i32> {
-    zone::mktime(utc, fields, isdst)
-        .and_then(|t| i32::try_from(t).ok())
-        .filter(|&t| t >= 0)
+/// The epoch second for fields the caller has summed as UTC (`utc`, range-checked as the
+/// runtime does), in the system's zone: `_mktime`'s local half, which adds `_timezone`, the
+/// zone's standard offset west of UTC as it stands now, refuses a negative time (`localtime`,
+/// `0x740825`), then adds `_dstbias` only when `isdst` is set (`0x740811`, `0x740836`). The sum is
+/// a 32-bit `time_t`'s, so a wrap past it is negative and refused.
+pub fn local_seconds(utc: i32, isdst: bool) -> Option<i32> {
+    let (zone, bias) = zone::biases();
+    let mut t = utc.wrapping_add(zone);
+    if t < 0 {
+        return None;
+    }
+    if isdst {
+        t = t.wrapping_add(bias);
+    }
+    (t >= 0).then_some(t)
 }
 
 /// The system zone's name for daylight time or standard, `_tzname[isdst]`.
@@ -136,23 +132,28 @@ mod zone {
         (!got.is_null()).then_some(tm)
     }
 
-    pub(super) fn mktime(_utc: i32, f: super::TmFields, isdst: bool) -> Option<i64> {
-        reread();
-        // SAFETY: zeroed is valid for `tm`'s integers and its nullable zone-name pointer.
-        let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };
-        tm.tm_sec = f.sec;
-        tm.tm_min = f.min;
-        tm.tm_hour = f.hour;
-        tm.tm_mday = f.mday;
-        tm.tm_mon = f.mon;
-        tm.tm_year = f.year;
-        tm.tm_isdst = i32::from(isdst);
-        // SAFETY: `mktime` reads and normalises the fields it is given.
-        let t = unsafe { libc::mktime(&mut tm) };
-        // `time_t` is 32 bits on some unix targets.
+    /// `_timezone` and `_dstbias` as the Windows runtime derives them from the zone's rules for
+    /// now: the standard offset west of UTC, and what daylight time adds to it (0 for a zone with
+    /// none), read off the year's January and July.
+    pub(super) fn biases() -> (i32, i32) {
+        let year = super::from_unix(super::unix_seconds()).year;
+        let offsets = [1, 7].map(|month| {
+            let t = super::days_from_civil(year, month, 1) * 86_400;
+            localtime(t).map(|tm| (gmtoff(&tm), tm.tm_isdst > 0))
+        });
+        let east = |dst: bool| offsets.iter().flatten().find(|o| o.1 == dst).map(|o| o.0);
+        let standard = east(false)
+            .or_else(|| offsets.iter().flatten().map(|o| o.0).min())
+            .unwrap_or(0);
+        let daylight = east(true).map_or(0, |d| d - standard);
+        (-standard as i32, -daylight as i32)
+    }
+
+    /// Seconds east of UTC; `long` is 32 bits on some unix targets.
+    fn gmtoff(tm: &libc::tm) -> i64 {
         #[allow(clippy::useless_conversion)]
-        let t = i64::from(t);
-        (t != -1).then_some(t)
+        let off = i64::from(tm.tm_gmtoff);
+        off
     }
 
     pub(super) fn name(isdst: bool) -> Vec<u8> {
@@ -186,9 +187,8 @@ mod zone {
         (unsafe { libc::localtime_s(&mut tm, &time) } == 0).then_some(tm)
     }
 
-    /// The runtime's own sum (`0x740811`-`0x74083b`): the UTC reading plus `_timezone`, refused
-    /// when negative, plus `_dstbias` for daylight time.
-    pub(super) fn mktime(utc: i32, _f: super::TmFields, isdst: bool) -> Option<i64> {
+    /// The runtime's own `_timezone` and `_dstbias`.
+    pub(super) fn biases() -> (i32, i32) {
         reread();
         // `long` is 32 bits on Windows.
         let (mut zone, mut bias): (libc::c_long, libc::c_long) = (0, 0);
@@ -197,14 +197,7 @@ mod zone {
             libc::get_timezone(&mut zone);
             libc::get_dstbias(&mut bias);
         }
-        let mut t = utc.wrapping_add(zone);
-        if t < 0 {
-            return None;
-        }
-        if isdst {
-            t = t.wrapping_add(bias);
-        }
-        Some(i64::from(t))
+        (zone, bias)
     }
 
     pub(super) fn name(isdst: bool) -> Vec<u8> {

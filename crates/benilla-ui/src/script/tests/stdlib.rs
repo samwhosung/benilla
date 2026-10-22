@@ -575,11 +575,31 @@ fn date_and_time_read_the_local_zone() {
                 "return time{year=1970, month=1, day=1, hour=5, min=45}",
                 "0",
             ),
+            // A zone with no daylight saving has no daylight bias (`_dstbias` 0), so `isdst`
+            // moves nothing (`0x740836`).
+            (
+                "return time{year=1970, month=1, day=2, hour=5, min=45, isdst=true}",
+                "86400",
+            ),
+            (
+                "return time{year=2001, month=7, day=1, hour=5, min=45, isdst=true}",
+                "993945600",
+            ),
             ("return time{year=1970, month=1, day=1, hour=0}", "nil"),
             ("return time(date('*t', 1000000000))", "1000000000"),
         ] {
             assert_eq!(eval(src), want, "{src}");
         }
+    }
+    // `_mktime` adds the zone's offset as it stands now, not the one the zone kept on the
+    // table's date: Moscow ran three hours east in 2012 and three now, four in between (2011-14).
+    #[cfg(unix)]
+    {
+        let _zone = crate::civil::ZoneGuard::set("Europe/Moscow");
+        assert_eq!(
+            eval("return time{year=2012, month=6, day=1, hour=0}"),
+            (1_338_508_800_i64 - 3 * 3600).to_string()
+        );
     }
     // Five hours west, an hour less in summer: 1_000_000_000 is 2001-09-08 21:46:40 EDT.
     let zone = if cfg!(windows) {
