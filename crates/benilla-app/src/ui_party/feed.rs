@@ -1812,6 +1812,7 @@ mod tests {
     /// `0x517bef`, `0x5164d1`, `0x51659f`), on `partyN` and `raidN` alike.
     #[test]
     fn a_held_members_dead_ghost_and_pvp_come_off_the_descriptor_alone() {
+        const OBJECT_TYPE: u16 = 2;
         const HEALTH: u16 = 22;
         const MAXHEALTH: u16 = 28;
         const UNIT_FLAGS: u16 = 46;
@@ -1841,12 +1842,15 @@ mod tests {
             frame(&mut app);
             assert_eq!(predicates(&mut app, token), [None; 5], "{token}");
 
-            // Dead, a ghost, PvP and free-for-all on the descriptor; the roster says none.
+            // Dead, a ghost, PvP and free-for-all on the descriptor; the roster says none. A
+            // player carries `UNIT_FIELD_FLAGS` 0x8, which free-for-all asks before the player
+            // that controls it, here the member itself (`0x5165ad`, `0x606170`).
             app.world_mut().entity_mut(held).insert(ObjectStore(
                 benilla_protocol::messages::ObjectFields::from_pairs(&[
+                    (OBJECT_TYPE, 0x19),
                     (HEALTH, 0),
                     (MAXHEALTH, 900),
-                    (UNIT_FLAGS, 0x1000),
+                    (UNIT_FLAGS, 0x1000 | 0x8),
                     (PLAYER_FLAGS, 0x10 | 0x80),
                 ]),
             ));
