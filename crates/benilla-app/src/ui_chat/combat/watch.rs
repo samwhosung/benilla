@@ -9,7 +9,7 @@ use super::{
     aura_gone_kind, classify, death_kind, in_range, periodic_kind, CombatLogRanges, Family, Fills,
     LineWord, Named, PendingCombat, UnitClass, Variant,
 };
-use crate::net::{FieldChanged, GuidIndex, ObjectStore, Reputations, SelfGuid};
+use crate::net::{AuraFieldsChanged, FieldChanged, GuidIndex, ObjectStore, Reputations, SelfGuid};
 use crate::target::ring::Factions;
 use crate::ui_chat::{ChatEventKind, ChatLog};
 use crate::ui_party::GroupState;
@@ -170,15 +170,14 @@ pub(crate) fn death_lines(
     }
 }
 
-/// The aura lines (`0x62b480`, `0x62b800`), one per field edge:
+/// The aura lines (`0x62b480`, `0x62b800`):
 ///
-/// - a `UNIT_FIELD_AURA` slot gaining a spell words `AURAADDED*` at the periodic chat types
-///   (`0x604d00`'s add arm);
-/// - a slot losing one words `AURAREMOVED*` at chat types `0x41`-`0x43`; a replace words both,
-///   the arrival first;
-/// - a `UNIT_FIELD_AURAAPPLICATIONS` byte rising on a slot whose spell did not move words
-///   `AURAAPPLICATIONADDED*` (`0x604ea0`). The reference gates it on `StackAmount > 1`, which
-///   holds for any count that rises; a first application moves the spell, so it is skipped.
+/// - each call of the aura watcher `0x604d00` walks the 48 slots twice: first every slot whose
+///   old aura is gone or replaced words `AURAREMOVED*` at chat types `0x41`-`0x43` (`0x604d40`-
+///   `0x604dd8`, `0x612320`), then every slot with a new aura words `AURAADDED*` at the periodic
+///   chat types (`0x604df5`-`0x604e85`, `0x6123f0`). A slot holds an aura when its spell is
+///   nonzero and its `UNIT_FIELD_AURAFLAGS` nibble has a bit of 0xe (`0x604d79`);
+/// - a `UNIT_FIELD_AURAAPPLICATIONS` byte rising words `AURAAPPLICATIONADDED*` (`0x604ea0`).
 ///
 /// Harmful is the slot index, `0x20`-`0x2f` (`0x61238e`), not `UNIT_FIELD_AURAFLAGS`. A line on
 /// you raises `AURA_START` or `AURA_START_HARMFUL` for an arrival and `AURA_END` or
@@ -188,97 +187,21 @@ pub(crate) fn death_lines(
 pub(crate) fn aura_lines(
     ctx: WatchCtx,
     stores: Query<(Entity, &ObjectStore)>,
+    mut calls: MessageReader<AuraFieldsChanged>,
     mut edges: MessageReader<FieldChanged>,
     poses: Query<&Transform>,
     log: Res<ChatLog>,
 ) {
-    use benilla_protocol::field::{FIELD_UNIT_AURA, FIELD_UNIT_AURAAPPLICATIONS};
-    /// Slots below it are helpful (`0x61238e`).
-    const FIRST_HARMFUL_SLOT: u16 = 0x20;
+    use benilla_protocol::field::FIELD_UNIT_AURAAPPLICATIONS;
     const SLOTS: u16 = benilla_protocol::messages::UNIT_AURA_SLOTS as u16;
-    let harmful = |slot: u16| slot >= FIRST_HARMFUL_SLOT;
 
-    // The whole batch first: the applications leg skips slots whose `AURA` dword moved in the
-    // same block.
-    let batch: Vec<FieldChanged> = edges.read().copied().collect();
-    let slot_edges: Vec<&FieldChanged> = batch
-        .iter()
-        .filter(|e| e.unit_array_slot(FIELD_UNIT_AURA, SLOTS).is_some())
-        .collect();
-    let slot_moved = |entity: Entity, slot: u16| {
-        slot_edges
-            .iter()
-            .any(|e| e.entity == entity && e.index - FIELD_UNIT_AURA == slot)
-    };
-
-    for e in &slot_edges {
-        let slot = e.index - FIELD_UNIT_AURA;
-        let class = ctx.classify(e.guid, &stores);
-        let word = |message_type: &'static str, spell: &str| {
-            (class == UnitClass::Me).then(|| LineWord::with(message_type, spell))
-        };
-        // Arrival first, so a replace words the new aura before the old one's removal.
-        if e.new != 0 {
-            if let (Some(spell), Some(kind)) = (
-                ctx.aura_spell_name(e.new),
-                periodic_kind(class, !harmful(slot)),
-            ) {
-                let (family, message_type) = if harmful(slot) {
-                    (super::AURAADDED_HARMFUL, "AURA_START_HARMFUL")
-                } else {
-                    (super::AURAADDED_HELPFUL, "AURA_START")
-                };
-                let word = word(message_type, &spell);
-                queue_one(
-                    e.at,
-                    &log,
-                    &ctx,
-                    &poses,
-                    kind,
-                    family,
-                    (e.guid, class),
-                    ctx.ranges.class(class),
-                    Fills {
-                        spell,
-                        ..Default::default()
-                    },
-                    word,
-                );
-            }
-        }
-        // The health is read signed (`0x62b50e`, `jg`).
-        let alive = stores
-            .get(e.entity)
-            .is_ok_and(|(_, st)| st.0.unit_health().unwrap_or(0) as i32 > 0);
-        if e.old != 0 && alive {
-            if let Some(spell) = ctx.aura_spell_name(e.old) {
-                let message_type = if harmful(slot) {
-                    "AURA_END_HARMFUL"
-                } else {
-                    "AURA_END"
-                };
-                let word = word(message_type, &spell);
-                queue_one(
-                    e.at,
-                    &log,
-                    &ctx,
-                    &poses,
-                    aura_gone_kind(class),
-                    super::AURAREMOVED,
-                    (e.guid, class),
-                    ctx.ranges.class(class),
-                    Fills {
-                        spell,
-                        ..Default::default()
-                    },
-                    word,
-                );
-            }
-        }
+    let calls: Vec<AuraFieldsChanged> = calls.read().copied().collect();
+    for call in &calls {
+        aura_call(&ctx, &stores, &poses, &log, call);
     }
 
     // Stack counts: four slots per dword, one byte each, holding `stack - 1`.
-    for e in batch.iter().filter(|e| {
+    for e in edges.read().filter(|e| {
         e.unit_array_slot(FIELD_UNIT_AURAAPPLICATIONS, SLOTS / 4)
             .is_some()
     }) {
@@ -290,7 +213,7 @@ pub(crate) fn aura_lines(
             let slot = word * 4 + byte;
             let (before, now) = ((e.old >> (byte * 8)) & 0xff, (e.new >> (byte * 8)) & 0xff);
             // A rise, to two or more, on a slot whose spell stayed put.
-            if now <= before || now == 0 || slot_moved(e.entity, slot) {
+            if now <= before || now == 0 || slot_moved(&calls, e.entity, slot) {
                 continue;
             }
             let Some(aura) = store.0.unit_aura(slot as u8) else {
@@ -324,6 +247,116 @@ pub(crate) fn aura_lines(
                 None,
             );
         }
+    }
+}
+
+/// Slots below it are helpful (`0x61238e`).
+const FIRST_HARMFUL_SLOT: u16 = 0x20;
+
+fn harmful(slot: u16) -> bool {
+    slot >= FIRST_HARMFUL_SLOT
+}
+
+/// Whether a watcher call in the drain moved `slot`'s spell on `entity`.
+fn slot_moved(calls: &[AuraFieldsChanged], entity: Entity, slot: u16) -> bool {
+    let slot = usize::from(slot);
+    calls
+        .iter()
+        .any(|c| c.entity == entity && c.old[slot] != c.new[slot])
+}
+
+/// One slot's aura in the watcher's dwords: its spell when the spell is nonzero and the slot's
+/// `AURAFLAGS` nibble has a bit of 0xe (`0x604d5d`-`0x604d79`), else `None`.
+fn held(span: &[u32; crate::net::AURA_WATCH_SPAN], slot: usize) -> Option<u32> {
+    const SLOTS: usize = benilla_protocol::messages::UNIT_AURA_SLOTS as usize;
+    let nibble = (span[SLOTS + slot / 8] >> ((slot % 8) * 4)) & 0xe;
+    (span[slot] != 0 && nibble != 0).then_some(span[slot])
+}
+
+/// One call of the aura watcher `0x604d00`: the removals, then the adds.
+fn aura_call(
+    ctx: &WatchCtx,
+    stores: &Query<(Entity, &ObjectStore)>,
+    poses: &Query<&Transform>,
+    log: &ChatLog,
+    call: &AuraFieldsChanged,
+) {
+    const SLOTS: usize = benilla_protocol::messages::UNIT_AURA_SLOTS as usize;
+    let class = ctx.classify(call.guid, stores);
+    let word = |message_type: &'static str, spell: &str| {
+        (class == UnitClass::Me).then(|| LineWord::with(message_type, spell))
+    };
+    // The health is read signed (`0x62b50e`, `jg`).
+    let alive = call.health as i32 > 0;
+    // A slot is removed when its old aura is not still there, the same spell under a nibble with
+    // a bit of 0xe (`0x604da3`-`0x604dc2`).
+    for slot in 0..SLOTS {
+        let Some(old) = held(&call.old, slot) else {
+            continue;
+        };
+        if held(&call.new, slot) == Some(old) || !alive {
+            continue;
+        }
+        let Some(spell) = ctx.aura_spell_name(old) else {
+            continue;
+        };
+        let message_type = if harmful(slot as u16) {
+            "AURA_END_HARMFUL"
+        } else {
+            "AURA_END"
+        };
+        let word = word(message_type, &spell);
+        queue_one(
+            call.at,
+            log,
+            ctx,
+            poses,
+            aura_gone_kind(class),
+            super::AURAREMOVED,
+            (call.guid, class),
+            ctx.ranges.class(class),
+            Fills {
+                spell,
+                ..Default::default()
+            },
+            word,
+        );
+    }
+    // A slot is added when its new aura was not already there, the same spell under an old
+    // nibble with a bit of 0xe (`0x604e31`-`0x604e6c`).
+    for slot in 0..SLOTS {
+        let Some(new) = held(&call.new, slot) else {
+            continue;
+        };
+        if held(&call.old, slot) == Some(new) {
+            continue;
+        }
+        let helpful = !harmful(slot as u16);
+        let (Some(spell), Some(kind)) = (ctx.aura_spell_name(new), periodic_kind(class, helpful))
+        else {
+            continue;
+        };
+        let (family, message_type) = if helpful {
+            (super::AURAADDED_HELPFUL, "AURA_START")
+        } else {
+            (super::AURAADDED_HARMFUL, "AURA_START_HARMFUL")
+        };
+        let word = word(message_type, &spell);
+        queue_one(
+            call.at,
+            log,
+            ctx,
+            poses,
+            kind,
+            family,
+            (call.guid, class),
+            ctx.ranges.class(class),
+            Fills {
+                spell,
+                ..Default::default()
+            },
+            word,
+        );
     }
 }
 
