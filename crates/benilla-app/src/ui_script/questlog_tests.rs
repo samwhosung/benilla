@@ -1637,13 +1637,13 @@ fn the_stock_title_width_cap_bites_and_is_sticky_per_row_button() {
     load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
 
-    // A long Dungeon-tagged title and the same untagged, a level under the rest so they sort to
-    // rows 2 and 3 (`0x4decd9`).
+    // A long Dungeon-tagged title and the same untagged, levels under the rest so they sort to
+    // rows 2 and 3 in that order (`0x4decd9`); one level would leave them in `qsort`'s order.
     const LONG: &str = "The Left Piece of Lord Valthalak's Amulet";
     let mut log = eight();
     log[0].record.title = LONG.into();
     log[0].record.tag = Some("Dungeon".into());
-    log[0].record.level = 4;
+    log[0].record.level = 3;
     log[1].record.title = LONG.into();
     log[1].record.level = 4;
     seat_cached(&mut s, &log);

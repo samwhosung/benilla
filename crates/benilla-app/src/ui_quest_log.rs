@@ -1094,10 +1094,13 @@ mod tests {
         std::array::from_fn(|_| obj(0, 0, 0, 0, ""))
     }
 
-    /// Quest `quest_id` in group 0, the reference's missing header, so it is row 2.
+    /// Quest `quest_id` in group 0, the reference's missing header, so it is row 2. Its level is
+    /// its id, so the rows sort in id order (`0x4decd9`), where one level and title would leave
+    /// them in `qsort`'s.
     fn quest_template(quest_id: u32, objectives: [QuestObjective; 4]) -> QuestTemplate {
         let mut t = crate::ui_quest::test_template(quest_id, "A Threat Within", 0);
         t.zone_or_sort = 0;
+        t.level = quest_id;
         t.objectives = objectives;
         t
     }
