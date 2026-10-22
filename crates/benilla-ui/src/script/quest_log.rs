@@ -1433,7 +1433,22 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // the store at `0x4e0a49` and answers 0, a client bug.
     install_detail_count(lua, "GetNumQuestLogRewards", |r| r.rewards.len() as i64)?;
     install_detail_count(lua, "GetNumQuestLogChoices", |r| r.choices.len() as i64)?;
-    install_detail_count(lua, "GetQuestLogRewardMoney", |r| i64::from(r.reward_money))?;
+    // `0x4e1070`: the base money when not negative (`0x4e10f7`), plus the top-level money
+    // (`+0x2c`, `0x4e1102`) for a player of level 60 or more (`0x4e10b2`, signed), summed as a
+    // signed dword (`fild` at `0x4e1108`).
+    g.set(
+        "GetQuestLogRewardMoney",
+        lua.create_function(|lua, ()| {
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let top = model
+                .unit("player")
+                .is_some_and(|p| p.exists && p.level as i32 >= 60);
+            Ok(model.selected_quest_record().map_or(0, |r| {
+                let bonus = if top { r.reward_money_max_level } else { 0 };
+                i64::from((r.reward_money as i32).wrapping_add(bonus))
+            }))
+        })?,
+    )?;
     install_detail_count(lua, "GetQuestLogRequiredMoney", |r| {
         i64::from(r.required_money)
     })?;
