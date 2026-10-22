@@ -57,6 +57,7 @@ pub(crate) mod id {
     pub(crate) const HEARTHSTONES: u32 = 0x1e;
     pub(crate) const PVP_COMBAT: u32 = 0x1f;
     pub(crate) const TRAVEL: u32 = 0x22;
+    pub(crate) const ELITE_QUESTS: u32 = 0x28;
     pub(crate) const WELCOME: u32 = 0x29;
     pub(crate) const RANGED_WEAPONS: u32 = 0x2b;
     pub(crate) const RAID_GROUPS: u32 = 0x2d;
@@ -328,7 +329,8 @@ fn feed_tutorials(
                 TutorialEvent::Acknowledge { id } => tutorials.acknowledge(id),
             }
         }
-        // The engine's sites: Quest Completion, a turn-in test that passed (`0x4df792`).
+        // The engine's sites: Quest Completion, a turn-in test that passed (`0x4df792`), and Elite
+        // Quests, an elite quest's accept (`0x5dde7d`).
         if let Some(script) = script.as_mut() {
             for id in script.take_tutorial_triggers() {
                 tutorials.trigger(id, 0, now);

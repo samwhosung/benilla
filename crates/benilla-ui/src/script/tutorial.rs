@@ -28,6 +28,12 @@ impl super::UiScript {
         self.model_mut().tutorial_flag_requests.push(id);
     }
 
+    /// A `TriggerTutorial(id, 0)` (`0x4b5390`) the engine makes beside a script, as a 0-based id,
+    /// drained with the VM's own ([`Self::take_tutorial_triggers`]).
+    pub fn queue_tutorial_trigger(&mut self, id: u32) {
+        self.model_mut().tutorial_triggers.push(id);
+    }
+
     /// `TriggerTutorial(id, 0)` asks the engine made since the last drain, as 0-based ids, for the
     /// app's fire-once bank.
     pub fn take_tutorial_triggers(&mut self) -> Vec<u32> {

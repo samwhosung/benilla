@@ -1,7 +1,8 @@
 //! The quest chat lines the reference raises from its packet and field handlers: the accept line
-//! from the quest-slot watcher, and the turn-in's completion, experience, money and item lines. A
-//! line whose quest or item record is not cached waits for it, as the reference's cache callbacks
-//! (`0x5ddeb0`, `0x5dc710`, `0x5dc7b0`) print on the record's arrival.
+//! from the quest-slot watcher, with an elite quest's tutorial, and the turn-in's completion,
+//! experience, money and item lines. A line whose quest or item record is not cached waits for it,
+//! as the reference's cache callbacks (`0x5ddeb0`, `0x5dc710`, `0x5dc7b0`) print on the record's
+//! arrival.
 
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
@@ -47,6 +48,9 @@ impl QuestLines {
 /// What a line resolves to this frame.
 enum Resolved {
     Show(UiError),
+    /// The accept line of a quest whose `Type` is 1, Elite: the line, then tutorial `0x28`
+    /// (`0x5dde6b`-`0x5dde7d`, the callback's `0x5ddf02`-`0x5ddf14`).
+    ShowElite(UiError),
     /// Its record is still in flight.
     Wait,
     /// The server does not know the quest or item, or the line has nothing to say.
@@ -88,6 +92,7 @@ fn feed_quest_lines(
         }
         let get = |key: &str| benilla_ui::strings::global(script.lua(), key);
         let mut shown = Vec::new();
+        let mut elite = 0;
         // A line's first read is its handler's lookup with a callback; a waiting line asks no more.
         let mut read = 0;
         let fed = lines.1;
@@ -101,12 +106,22 @@ fn feed_quest_lines(
                     }
                     false
                 }
+                Resolved::ShowElite(msg) => {
+                    if let Some(text) = ui_error_text(&msg, &get) {
+                        shown.push(Shown::keyed(msg.key, text));
+                    }
+                    elite += 1;
+                    false
+                }
                 Resolved::Wait => true,
                 Resolved::Drop => false,
             }
         });
         lines.1 = lines.0.len();
         show_messages(script, &mut sink, "ui_quest", shown);
+        for _ in 0..elite {
+            script.queue_tutorial_trigger(crate::tutorial::id::ELITE_QUESTS);
+        }
     })
 }
 
@@ -119,6 +134,10 @@ fn resolve(
 ) -> Resolved {
     match line {
         QuestLine::Accepted(id) => match quest(id, quest_log, ask) {
+            // `QuestInfo.dbc`'s 1 is Elite (`[record+0x10]`, `0x5dde6b`).
+            Ok(t) if t.quest_type == 1 => {
+                Resolved::ShowElite(UiError::s("ERR_QUEST_ACCEPTED_S", t.title.clone()))
+            }
             Ok(t) => Resolved::Show(UiError::s("ERR_QUEST_ACCEPTED_S", t.title.clone())),
             Err(r) => r,
         },
