@@ -181,7 +181,9 @@ fn show_offline_compares_the_integer_and_signals_inside_its_call() {
 #[test]
 fn show_offline_on_an_empty_roster_signals_nothing() {
     let mut g = client();
-    run(&mut g, "SetGuildRosterShowOffline(1)");
+    // The first push's own announcement, ahead of the verb.
+    feed(&mut g);
+    run(&mut g, "UPDATES = 0 SetGuildRosterShowOffline(1)");
     feed(&mut g);
     assert_eq!(eval::<i64>(&mut g, "return UPDATES"), 0);
     assert_eq!(

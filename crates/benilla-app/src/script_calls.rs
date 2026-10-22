@@ -83,6 +83,17 @@ pub(crate) struct ScriptCallHost<'w, 's> {
                     crate::ui_social::SocialSteps<'w>,
                     crate::ui_party::PartyCalls<'w, 's>,
                     crate::ui_trade::TradeSteps<'w, 's>,
+                    // The guild's windows: the roster, the charter and the tabard designer. A
+                    // further guild window's applier joins this set.
+                    ParamSet<
+                        'w,
+                        's,
+                        (
+                            crate::ui_guild::GuildSteps<'w>,
+                            crate::ui_petition::PetitionSteps<'w, 's>,
+                            crate::ui_tabard::TabardSteps<'w, 's>,
+                        ),
+                    >,
                 ),
             >,
             // The bags', the loot window's, the mailbox's, the questgiver's, the gossip menu's and
@@ -218,6 +229,9 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Trainer(call) => tail = appliers.p5().p5().apply(call),
             ScriptCall::Taxi(call) => tail = appliers.p5().p6().apply(call),
             ScriptCall::Merchant(call) => appliers.p5().p7().apply(script, call),
+            ScriptCall::Guild(call) => appliers.p4().p7().p0().apply(script, call),
+            ScriptCall::Petition(call) => appliers.p4().p7().p1().apply(script, call),
+            ScriptCall::Tabard(call) => appliers.p4().p7().p2().apply(script, call),
         }
         // A selection this call made with the targeting cursor up was handed to the cast
         // (`SelectTarget`, `0x4935d5`) and is bound now, before the next call reads either.

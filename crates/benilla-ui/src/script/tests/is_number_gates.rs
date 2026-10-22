@@ -38,6 +38,7 @@ fn action_has_range_answers_nil_for_a_non_number() {
 #[test]
 fn sign_petition_keeps_its_default_byte_for_a_non_number() {
     let mut s = gated();
+    s.keep_calls();
     for call in [
         "SignPetition('x')",
         "SignPetition({})",
@@ -46,15 +47,15 @@ fn sign_petition_keeps_its_default_byte_for_a_non_number() {
     ] {
         s.run(call).unwrap();
         assert_eq!(
-            s.take_petition_requests(),
-            vec![PetitionRequest::Sign(1)],
+            s.take_petition_calls(),
+            vec![PetitionCall::Sign(1)],
             "{call}"
         );
     }
     s.run("SignPetition('5') SignPetition(2.9)").unwrap();
     assert_eq!(
-        s.take_petition_requests(),
-        vec![PetitionRequest::Sign(5), PetitionRequest::Sign(2)]
+        s.take_petition_calls(),
+        vec![PetitionCall::Sign(5), PetitionCall::Sign(2)]
     );
 }
 

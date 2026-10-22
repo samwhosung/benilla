@@ -29,7 +29,7 @@ fn an_initial_item_cooldown_alone_reaches_the_bags() {
         .init_resource::<crate::ui_items::net::BagOpens>()
         .init_resource::<super::BagUpdates>()
         .init_resource::<crate::names::NameCache>()
-        .init_resource::<crate::ui_petition::PetitionState>()
+        .init_resource::<crate::ui_petition::PetitionRecords>()
         .insert_resource(crate::ui_script::UiClock {
             anchor: now,
             ui_now: 1000.0,

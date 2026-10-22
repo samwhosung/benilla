@@ -1,28 +1,23 @@
-//! The guild VM feed and drain: resolve the roster into the snapshot the guild windows read, fire
-//! the guild events on their edges, and send the Lua [`GuildRequest`] intents. Names resolve
-//! engine-side as in the reference: `GetGuildRosterInfo 0x4d1200` returns the localized class and
-//! zone names, not ids (`0x4d1355`, `0x4d1391`), and the rank name from the cached guild record.
+//! The guild VM feed: resolve the roster into the snapshot the guild windows read and fire the
+//! guild events on their edges. Names resolve engine-side as in the reference:
+//! `GetGuildRosterInfo 0x4d1200` returns the localized class and zone names, not ids (`0x4d1355`,
+//! `0x4d1391`), and the rank name from the cached guild record. The verbs act in their calls
+//! ([`super::GuildSteps`]), which push the same snapshot ([`snapshot`]).
 
 use benilla_formats::AreaTableCatalog;
-use benilla_protocol::messages::{
-    guild_presence, GuildInfo, GuildRosterMember, GUILD_RANKS_MAX_COUNT, GUILD_RANKS_MIN_COUNT,
-    GUILD_RANK_MAX_LENGTH,
-};
+use benilla_protocol::messages::{GuildInfo, GuildRosterMember, GUILD_RANK_MAX_LENGTH};
 use benilla_ui::script::{
-    GuildMemberInfo, GuildRankInfo, GuildRequest, GuildState as VmGuild, ScriptValue, UiScript,
+    GuildMemberInfo, GuildRankInfo, GuildState as VmGuild, ScriptValue, UiScript,
 };
 use bevy::prelude::*;
 
 use crate::area::AreaTableRes;
-use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfPlayer};
+use crate::net::{NetCommands, ObjectStore, SelfPlayer};
+use crate::query_cache::Ask;
+use crate::script_calls::VmWith;
 use crate::ui_unit::{NameTables, UnitNames};
 
-use super::{last_online, GuildState, Identity, RosterRow, ROSTER_REQUEST_THROTTLE_SECS};
-
-/// `CHAT_FLAG_AFK` and `CHAT_FLAG_DND` (`GlobalStrings.lua:534-535`), which the reference loads at
-/// `0x4d1404` and `0x4d13ed`.
-const CHAT_FLAG_AFK: &str = "<AFK>";
-const CHAT_FLAG_DND: &str = "<DND>";
+use super::{last_online, GuildLocal, GuildState, Identity, RosterRow};
 
 /// What the feed last announced, so the events fire on edges rather than every frame.
 #[derive(Default)]
@@ -34,10 +29,58 @@ pub(super) struct FedGuild {
     invite: Option<(String, String)>,
 }
 
+/// The guild state the feed writes beside the VM.
+type GuildVm<'w, 's> = VmWith<'w, 's, (ResMut<'static, GuildState>, ResMut<'static, GuildLocal>)>;
+
+/// The VM's guild snapshot of `guild`, in the order `local` keeps, whose shown order it records.
+/// The lazy identity fill: the reference's `GetGuildRosterInfo` asks inline on a miss with the
+/// callback `0x4d1480` (`0x4d1291`), and the answer fires a bare `GUILD_ROSTER_UPDATE`; a rebuild
+/// runs on a change, which stands for the stock frame's call.
+pub(super) fn snapshot(
+    guild: &GuildState,
+    local: &mut GuildLocal,
+    areas: Option<&AreaTableCatalog>,
+    names: UnitNames<'_>,
+    commands: &NetCommands,
+) -> VmGuild {
+    let identity = guild.resolve_identity(guild.guild_id, Ask::Event(commands));
+    let rows = display_rows(guild, local, areas, identity, names);
+    let display_order: Vec<u64> = rows.iter().map(|r| r.guid).collect();
+    let selection = index_of(&display_order, local.selection);
+    local.display_order = display_order;
+    VmGuild {
+        in_guild: guild.in_guild(),
+        name: identity.map(|i| i.name.clone()).unwrap_or_default(),
+        rank_name: identity
+            .map(|i| i.rank_name(guild.rank_index).to_string())
+            .unwrap_or_default(),
+        rank_index: guild.rank_index,
+        // `IsGuildLeader 0x516e40`: rank 0 in a guild; a guildless rank 0 is not a leader.
+        is_leader: guild.in_guild() && guild.rank_index == 0,
+        rights: guild.own_rights(),
+        motd: guild.motd.clone(),
+        info_text: guild.info_text.clone(),
+        num_members: guild.num_members(local),
+        roster: rows.into_iter().map(|r| r.info).collect(),
+        ranks: guild
+            .rank_rights
+            .iter()
+            .enumerate()
+            .map(|(i, rights)| GuildRankInfo {
+                name: identity
+                    .map(|id| id.rank_name(i as u32).to_string())
+                    .unwrap_or_default(),
+                rights: *rights,
+            })
+            .collect(),
+        selection,
+        show_offline: local.show_offline,
+    }
+}
+
 /// Build the display snapshot, push it, and fire the guild events on their edges.
 pub(super) fn feed_guild(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut guild: ResMut<GuildState>,
+    mut vm: GuildVm,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     areas: Option<Res<AreaTableRes>>,
     unit_names: NameTables,
@@ -45,7 +88,8 @@ pub(super) fn feed_guild(
     mut sink: crate::ui_action::MessageSink,
     mut fed: Local<crate::ui_script::VmMemo<FedGuild>>,
 ) {
-    hosted_vm.run(|script| {
+    let mut info_lines: Vec<crate::ui_action::Shown> = Vec::new();
+    vm.feed(|script, (mut guild, mut local), fires| {
         let Some(script) = script else {
             return;
         };
@@ -56,90 +100,20 @@ pub(super) fn feed_guild(
         // guild. Their `PLAYER_GUILD_UPDATE` is the descriptor watchers' (`crate::field_watch`),
         // fired after this push.
         if let Some(store) = self_q.iter().next() {
-            guild.mirror_self(store.0.player_guild_id(), store.0.player_guild_rank());
-        }
-
-        // Rebuilt only on a change: every apply and every local intent sets the flag.
-        if !guild.dirty && fed.seeded {
-            return;
-        }
-        guild.dirty = false;
-
-        // The lazy identity fill: the reference's `GetGuildRosterInfo` asks inline on a miss with
-        // the callback `0x4d1480` (`0x4d1291`), and the answer fires a bare `GUILD_ROSTER_UPDATE`.
-        // This rebuild runs on a change, which stands for the stock frame's call.
-        let guild_id = guild.guild_id;
-        let identity = guild
-            .resolve_identity(guild_id, crate::query_cache::Ask::Event(&commands))
-            .cloned();
-        let identity = identity.as_ref();
-
-        let rows = display_rows(
-            &guild,
-            areas.as_deref().map(|a| &a.0),
-            identity,
-            unit_names.get(),
-        );
-        let display_order: Vec<u64> = rows.iter().map(|r| r.guid).collect();
-        let selection = index_of(&display_order, guild.selection);
-        guild.display_order = display_order;
-
-        script.set_guild(VmGuild {
-            in_guild: guild.in_guild(),
-            name: identity.map(|i| i.name.clone()).unwrap_or_default(),
-            rank_name: identity
-                .map(|i| i.rank_name(guild.rank_index).to_string())
-                .unwrap_or_default(),
-            rank_index: guild.rank_index,
-            // `IsGuildLeader 0x516e40`: rank 0 in a guild; a guildless rank 0 is not a leader.
-            is_leader: guild.in_guild() && guild.rank_index == 0,
-            rights: guild.own_rights(),
-            motd: guild.motd.clone(),
-            info_text: guild.info_text.clone(),
-            num_members: guild.num_members(),
-            roster: rows.into_iter().map(|r| r.info).collect(),
-            ranks: guild
-                .rank_rights
-                .iter()
-                .enumerate()
-                .map(|(i, rights)| GuildRankInfo {
-                    name: identity
-                        .map(|id| id.rank_name(i as u32).to_string())
-                        .unwrap_or_default(),
-                    rights: *rights,
-                })
-                .collect(),
-            selection,
-            show_offline: guild.show_offline,
-        });
-
-        // `GUILD_ROSTER_UPDATE`; `super::RosterUpdate` decides whether it carries arg1.
-        let first = !fed.seeded;
-        fed.seeded = true;
-        if let Some(kind) = guild.roster_event.take().or(first.then_some(
-            // A frame loaded after the roster still needs one push to draw from.
-            super::RosterUpdate::Applied,
-        )) {
-            if kind.arg1() {
-                script.fire_event("GUILD_ROSTER_UPDATE", vec![ScriptValue::Int(1)]);
-            } else {
-                script.fire_event("GUILD_ROSTER_UPDATE", vec![]);
-            }
-        }
-
-        // `GUILD_MOTD` carries the text; its chat line is the FrameXML's
-        // (`ChatFrame.lua:1335-1340`).
-        if fed.motd != guild.motd {
-            fed.motd = guild.motd.clone();
-            script.fire_event("GUILD_MOTD", vec![ScriptValue::Str(guild.motd.clone())]);
+            guild.mirror_self(
+                &mut local,
+                store.0.player_guild_id(),
+                store.0.player_guild_rank(),
+            );
         }
 
         // `GUILD_INVITE_REQUEST` shows the popup. There is no hide edge: nothing in the 1.12 client
-        // raises `GUILD_INVITE_CANCEL` (its wrapper `0x48f470` has no callers).
-        if fed.invite != guild.pending_invite {
-            fed.invite = guild.pending_invite.clone();
-            if let Some((inviter, name)) = &guild.pending_invite {
-                script.fire_event(
+        // raises `GUILD_INVITE_CANCEL` (its wrapper `0x48f470` has no callers); the answer clears
+        // the held invitation, so a second one fires again.
+        if fed.invite != local.pending_invite {
+            fed.invite = local.pending_invite.clone();
+            if let Some((inviter, name)) = &local.pending_invite {
+                fires.post(
                     "GUILD_INVITE_REQUEST",
                     vec![
                         ScriptValue::Str(inviter.clone()),
@@ -149,15 +123,71 @@ pub(super) fn feed_guild(
             }
         }
 
+        // Rebuilt only on a change: every apply sets the flag.
+        if !guild.dirty && fed.seeded {
+            return;
+        }
+        guild.dirty = false;
+        script.set_guild(snapshot(
+            &guild,
+            &mut local,
+            areas.as_deref().map(|a| &a.0),
+            unit_names.get(),
+            &commands,
+        ));
+
+        // `GUILD_ROSTER_UPDATE`; `super::RosterUpdate` decides whether it carries arg1, whose
+        // signal clears the request deadline first (`0x4d1170`).
+        let first = !fed.seeded;
+        fed.seeded = true;
+        if let Some(kind) = guild.roster_event.take().or(first.then_some(
+            // A frame loaded after the roster still needs one push to draw from.
+            super::RosterUpdate::Applied,
+        )) {
+            if kind.arg1() {
+                local.roster_allowed_at = 0.0;
+                fires.post("GUILD_ROSTER_UPDATE", vec![ScriptValue::Int(1)]);
+            } else {
+                fires.post("GUILD_ROSTER_UPDATE", vec![]);
+            }
+        }
+
+        // `GUILD_MOTD` carries the text; its chat line is the FrameXML's
+        // (`ChatFrame.lua:1335-1340`).
+        if fed.motd != guild.motd {
+            fed.motd = guild.motd.clone();
+            fires.post("GUILD_MOTD", vec![ScriptValue::Str(guild.motd.clone())]);
+        }
+
         // `/ginfo`'s two lines, resolved here because their templates are not catalog rows.
-        let info_lines: Vec<crate::ui_action::Shown> = std::mem::take(&mut guild.pending_info)
+        info_lines = std::mem::take(&mut guild.pending_info)
             .iter()
             .flat_map(|info| ginfo_lines(script, info))
             .collect();
-        if !info_lines.is_empty() {
-            crate::ui_action::show_messages(script, &mut sink, "ui_guild", info_lines);
+    });
+    if !info_lines.is_empty() {
+        vm.run(|script| {
+            if let Some(script) = script {
+                crate::ui_action::show_messages(script, &mut sink, "ui_guild", info_lines);
+            }
+        });
+    }
+}
+
+/// Ask the guilds `GetGuildInfo` missed, each with its waiter (`0x4c93d2`): the getter's lookup,
+/// which the getter cannot send from inside the VM.
+pub(super) fn ask_missed_guilds(
+    mut vm: VmWith<ResMut<'static, GuildState>>,
+    commands: Res<NetCommands>,
+) {
+    vm.turn(|script, mut guild| {
+        let Some(script) = script else {
+            return;
+        };
+        for (guild_id, guid) in script.take_guild_info_asks() {
+            guild.wait_for_info(guild_id, guid, &commands);
         }
-    })
+    });
 }
 
 /// `SMSG_GUILD_INFO`'s chat lines, `GUILD_NAME_TEMPLATE` then `GUILD_INFO_TEMPLATE` (`0x5e6fb0`,
@@ -195,6 +225,7 @@ fn ginfo_lines(script: &UiScript, info: &GuildInfo) -> Vec<crate::ui_action::Sho
 /// answers, only the rank-name column is empty.
 pub(super) fn display_rows(
     guild: &GuildState,
+    local: &GuildLocal,
     areas: Option<&AreaTableCatalog>,
     identity: Option<&Identity>,
     names: UnitNames<'_>,
@@ -204,7 +235,7 @@ pub(super) fn display_rows(
         .iter()
         .map(|m| row(m, areas, identity, names))
         .collect();
-    guild.sort.order(&mut rows, guild.show_offline);
+    local.sort.order(&mut rows, local.show_offline != 0);
     rows
 }
 
@@ -238,7 +269,7 @@ fn row(
             note: m.public_note.clone(),
             officer_note: m.officer_note.clone(),
             online,
-            status: status_tag(m.presence).to_string(),
+            presence: m.presence,
             // No float on the wire for an online member; the formatter reads all zeroes as nil.
             last_online: if online {
                 Default::default()
@@ -246,18 +277,6 @@ fn row(
                 last_online(m.last_online_days)
             },
         },
-    }
-}
-
-/// The away tag, `GetGuildRosterInfo`'s tenth return: always a string, `""` rather than nil. DND
-/// is tested before AFK (`0x4d13e4`, `0x4d13fb`), so a member flagged both shows as DND.
-pub(super) fn status_tag(presence: u8) -> &'static str {
-    if presence & guild_presence::DND != 0 {
-        CHAT_FLAG_DND
-    } else if presence & guild_presence::AFK != 0 {
-        CHAT_FLAG_AFK
-    } else {
-        ""
     }
 }
 
@@ -273,156 +292,11 @@ pub(super) fn index_of(order: &[u64], guid: u64) -> u32 {
         .map_or(0, |i| i as u32 + 1)
 }
 
-/// Turn the Lua guild intents into their sends. The note verbs carry a 1-based display row where
-/// the wire wants a name; select, sort and show-offline are local and send nothing.
-pub(super) fn drain_guild(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut guild: ResMut<GuildState>,
-    commands: Res<NetCommands>,
-    time: Res<Time<Real>>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        let requests = script.take_guild_requests();
-        if requests.is_empty() {
-            return;
-        }
-        for request in requests {
-            match request {
-                GuildRequest::Roster => {
-                    // One request per 10 s, the rest swallowed silently (`0x4d10d0`, against
-                    // `0xb73130`). Real time: the virtual clock's 250 ms `max_delta` lags in a
-                    // hitch.
-                    let now = time.elapsed_secs_f64();
-                    if now >= guild.roster_allowed_at {
-                        guild.roster_allowed_at = now + ROSTER_REQUEST_THROTTLE_SECS;
-                        let _ = commands.0.send(ClientCommand::GuildRosterRequest);
-                    }
-                }
-                GuildRequest::Info => {
-                    let _ = commands.0.send(ClientCommand::GuildInfoRequest);
-                }
-                GuildRequest::InfoMiss { guild_id, guid } => {
-                    guild.wait_for_info(guild_id, guid, &commands);
-                }
-                GuildRequest::Invite(name) => {
-                    let _ = commands.0.send(ClientCommand::GuildInvite { name });
-                }
-                GuildRequest::Uninvite(name) => {
-                    let _ = commands.0.send(ClientCommand::GuildRemove { name });
-                }
-                GuildRequest::Promote(name) => {
-                    let _ = commands.0.send(ClientCommand::GuildPromote { name });
-                }
-                GuildRequest::Demote(name) => {
-                    let _ = commands.0.send(ClientCommand::GuildDemote { name });
-                }
-                GuildRequest::SetLeader(name) => {
-                    let _ = commands.0.send(ClientCommand::GuildLeader { name });
-                }
-                GuildRequest::Accept => {
-                    guild.clear_invite();
-                    let _ = commands.0.send(ClientCommand::GuildAccept);
-                }
-                GuildRequest::Decline => {
-                    guild.clear_invite();
-                    let _ = commands.0.send(ClientCommand::GuildDecline);
-                }
-                GuildRequest::Leave => {
-                    let _ = commands.0.send(ClientCommand::GuildLeave);
-                }
-                GuildRequest::Disband => {
-                    let _ = commands.0.send(ClientCommand::GuildDisband);
-                }
-                GuildRequest::SetMotd(motd) => {
-                    let _ = commands.0.send(ClientCommand::GuildMotd { motd });
-                }
-                GuildRequest::SetInfoText(text) => {
-                    // No local write: `SetGuildInfoText 0x4d2380` only sends, leaving `0xb72720` to
-                    // change with the next roster.
-                    let _ = commands.0.send(ClientCommand::GuildInfoText { text });
-                }
-                GuildRequest::SetPublicNote { index, note } => {
-                    set_note(&mut guild, &commands, index, note, false);
-                }
-                GuildRequest::SetOfficerNote { index, note } => {
-                    set_note(&mut guild, &commands, index, note, true);
-                }
-                GuildRequest::SaveRank {
-                    rank_index,
-                    rights,
-                    name,
-                } => {
-                    if let Some(name) = capped_rank_name(name) {
-                        let _ = commands.0.send(ClientCommand::GuildRank {
-                            rank_id: rank_index,
-                            rights,
-                            name,
-                        });
-                    }
-                }
-                GuildRequest::AddRank(name) => {
-                    // Ten ranks at most, and more than five to remove one, as the reference's
-                    // `GuildControlAddRank` (`0x4d2271`) and `GuildControlDelRank` (`0x4d22e6`)
-                    // check silently; the stock buttons follow them (`FriendsFrame.lua:887`,
-                    // `:908`).
-                    if guild.rank_rights.len() < GUILD_RANKS_MAX_COUNT {
-                        if let Some(name) = capped_rank_name(name) {
-                            let _ = commands.0.send(ClientCommand::GuildAddRank { name });
-                        }
-                    }
-                }
-                GuildRequest::DelRank => {
-                    if guild.rank_rights.len() > GUILD_RANKS_MIN_COUNT {
-                        let _ = commands.0.send(ClientCommand::GuildDelRank);
-                    }
-                }
-                GuildRequest::Select(index) => guild.select(index),
-                GuildRequest::SetShowOffline(on) => guild.set_show_offline(on),
-                GuildRequest::Sort(field) => guild.sort_by(&field),
-            }
-        }
-    })
-}
-
-/// A note verb: resolve the row to the member, write the note locally, and send only if it
-/// changed, as the reference gates the send on its own write (`0x4d15e0`, `0x64a480`).
-fn set_note(
-    guild: &mut GuildState,
-    commands: &NetCommands,
-    index: u32,
-    note: String,
-    officer: bool,
-) {
-    let Some(member) = guild.member_at_mut(index) else {
-        return;
-    };
-    let slot = if officer {
-        &mut member.officer_note
-    } else {
-        &mut member.public_note
-    };
-    if *slot == note {
-        return;
-    }
-    *slot = note.clone();
-    let name = member.name.clone();
-    guild.dirty = true;
-    let command = if officer {
-        ClientCommand::GuildSetOfficerNote { name, note }
-    } else {
-        ClientCommand::GuildSetPublicNote { name, note }
-    };
-    let _ = commands.0.send(command);
-}
-
 /// The rank name, or `None` past vmangos's cap of 15, where it kicks the session
 /// (`Handlers/GuildHandler.cpp:580-584`, `:600-604`); the stock edit box stops at 15. Deviation: a
 /// script's 16-letter name, which the reference's bindings pass (1 to 16 units, `0x4d20d0`,
 /// `0x4d2210`), is dropped rather than sent or truncated, because vmangos would kick the session.
-fn capped_rank_name(name: String) -> Option<String> {
+pub(super) fn capped_rank_name(name: String) -> Option<String> {
     if name.chars().count() > GUILD_RANK_MAX_LENGTH {
         warn!(
             "guild: refusing a {}-character rank name (the server kicks over {GUILD_RANK_MAX_LENGTH})",
@@ -436,16 +310,7 @@ fn capped_rank_name(name: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn dnd_wins_over_afk_and_the_tag_is_always_a_string() {
-        use guild_presence::{AFK, DND, OFFLINE, ONLINE};
-        assert_eq!(status_tag(ONLINE | AFK | DND), "<DND>");
-        assert_eq!(status_tag(ONLINE | DND), "<DND>");
-        assert_eq!(status_tag(ONLINE | AFK), "<AFK>");
-        assert_eq!(status_tag(ONLINE), "");
-        assert_eq!(status_tag(OFFLINE), "", "never nil, even offline");
-    }
+    use benilla_protocol::messages::guild_presence;
 
     #[test]
     fn online_is_the_whole_byte() {
@@ -482,7 +347,7 @@ mod tests {
         );
         assert!(!row.info.online);
         assert_eq!(row.info.last_online.days, 3);
-        assert_eq!(row.info.status, "");
+        assert_eq!(row.info.presence, guild_presence::OFFLINE);
         assert_eq!(row.guid, 5);
     }
 

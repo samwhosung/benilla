@@ -1289,7 +1289,7 @@ fn player_snapshot(
     commands: &NetCommands,
     group: &crate::ui_party::GroupState,
     factions: Option<&Factions>,
-    guild: &mut crate::ui_guild::GuildState,
+    guild: &crate::ui_guild::GuildState,
 ) -> UnitState {
     // The unit's create looked its name up with a callback (`0x5dec12`); a frame asks only
     // a name the cache holds nothing for, as one invalidated since, and a refused one waits
@@ -1345,7 +1345,7 @@ pub(crate) fn live_player_seat(
     commands: Res<NetCommands>,
     group: Res<crate::ui_party::GroupState>,
     factions: Option<Res<Factions>>,
-    mut guild: ResMut<crate::ui_guild::GuildState>,
+    guild: Res<crate::ui_guild::GuildState>,
 ) -> Option<LivePlayerSeat> {
     let (store, guid) = self_q.iter().next()?;
     Some(LivePlayerSeat {
@@ -1357,7 +1357,7 @@ pub(crate) fn live_player_seat(
             &commands,
             &group,
             factions.as_deref(),
-            &mut guild,
+            &guild,
         ),
         xp: xp_pair(store),
     })
@@ -1393,8 +1393,8 @@ fn feed_units(
     group: Res<crate::ui_party::GroupState>,
     // Chat and the message-sound queue, for the rest and PvP lines.
     sink: crate::ui_action::MessageSink,
-    // `ResMut` because the guild-identity cache is lazy: a miss sends `CMSG_GUILD_QUERY`.
-    mut guild: ResMut<crate::ui_guild::GuildState>,
+    // The guild-identity cache is lazy: a miss sends `CMSG_GUILD_QUERY` through a shared read.
+    guild: Res<crate::ui_guild::GuildState>,
     interact: Option<Res<crate::ui_session::InteractNpc>>,
     // Our player's create since this feed last ran: an arrival (`0x5dea50`), which a `/reload`'s
     // cascade lacks. The feed runs only with an interface up, so an arrival before one waits.
@@ -1468,7 +1468,7 @@ fn feed_units(
                 &commands,
                 &group,
                 world.factions(),
-                &mut guild,
+                &guild,
             )
         });
         // Log once when our template names no side, almost always GM mode (vmangos forces template

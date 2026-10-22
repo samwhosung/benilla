@@ -1,22 +1,21 @@
-//! The charter VM feed and drain: the snapshot the charter windows read, their four events, the
-//! composed lines, and the sends for the Lua [`PetitionRequest`]s.
+//! The charter VM feed: the snapshot the charter windows read, their four events and the packets'
+//! composed lines; the verbs act inside their calls ([`super::PetitionSteps`]).
 //!
 //! `PETITION_SHOW` waits for the record and every signer name (`0x4f419b`-`0x4f41ad`), then fires
 //! once (`0x4f4320` fires as the pending count reaches zero); the owner's name is not counted
 //! (`0x4f4186`/`0x4f42e8`). The getters answer at any time, nil where nothing has landed.
 
 use benilla_ui::script::{
-    PetitionRecordView, PetitionRequest, PetitionState as VmPetition, PETITION_TYPE_CHARTER,
-    PETITION_TYPE_PETITION,
+    PetitionRecordView, PetitionState as VmPetition, PETITION_TYPE_CHARTER, PETITION_TYPE_PETITION,
 };
 use bevy::prelude::*;
 
 use crate::names::NameCache;
-use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects, SelfGuid, SelfPlayer};
-use crate::ui_items::{find_item, ItemSearch};
+use crate::net::{NetCommands, ObjectStore, SelfGuid, SelfPlayer};
+use crate::script_calls::VmWith;
 use crate::ui_session::{CoreCloses, NpcWindow};
 
-use super::{lines, GuildRegistrarState, PetitionState};
+use super::{GuildRegistrarState, PetitionRecords, PetitionState};
 use crate::query_cache::Ask;
 
 /// What the feed last announced of the charter, so the events fire on edges rather than every
@@ -33,6 +32,11 @@ pub(super) struct FedPetition {
 }
 
 impl FedPetition {
+    /// Nothing shown: `ClosePetition` signalled the close inside its call.
+    pub(super) fn closed(&mut self) {
+        *self = Self::default();
+    }
+
     /// No signers announced, as the sweep's free (`0x4f3eb0`) leaves it with none to repaint.
     pub(super) fn forget_signers(&mut self) {
         self.shown_signers.clear();
@@ -45,11 +49,21 @@ pub(super) fn free_petition_signers_on_leave_world(mut petition: ResMut<Petition
     petition.free_signers();
 }
 
-/// Build the snapshot, push it, drain the queued lines, and fire the four events on their edges.
+/// The petition window's edge a feed found, fired once the snapshot is in.
+enum Edge {
+    None,
+    Show,
+    Closed,
+    /// Another charter while one is shown.
+    Switch,
+}
+
+/// Build the snapshot, push it, show the packets' lines, and fire the four events on their edges.
+#[allow(clippy::too_many_arguments)] // the feed's inputs, each read once
 pub(super) fn feed_petition(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    mut vm: VmWith<ResMut<'static, PetitionState>>,
     registrar: Res<GuildRegistrarState>,
-    mut petition: ResMut<PetitionState>,
+    records: Res<PetitionRecords>,
     names: Res<NameCache>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     self_guid: Res<SelfGuid>,
@@ -60,28 +74,29 @@ pub(super) fn feed_petition(
     mut fed_registrar: crate::ui_script::WindowMemo<Option<u64>>,
     mut closes: CoreCloses,
 ) {
-    hosted_vm.run(|script| {
+    // Shown before the snapshot, so a refusal lands the same frame as its state change; a key the
+    // VM's `GlobalStrings.lua` lacks shows nothing, as in the reference.
+    let composed = std::mem::take(&mut vm.own().lines);
+    if !composed.is_empty() {
+        vm.run(|script| {
+            let Some(script) = script else {
+                return;
+            };
+            let resolved: Vec<crate::ui_action::Shown> =
+                composed.iter().filter_map(|e| shown(script, e)).collect();
+            crate::ui_action::show_messages(script, &mut sink, "ui_petition", resolved);
+        });
+    }
+
+    let mut registrar_shown = false;
+    let edge = vm.turn(|script, mut petition| {
         let Some(script) = script else {
-            return;
+            return Edge::None;
         };
         let fed_registrar = fed_registrar.get(script);
         if closes.since_last(script, NpcWindow::Registrar) {
             *fed_registrar = None;
         }
-
-        // Shown before the snapshot, so a refusal lands the same frame as its state change; a key
-        // the VM's `GlobalStrings.lua` lacks shows nothing, as in the reference.
-        let composed = std::mem::take(&mut petition.lines);
-        let resolved: Vec<crate::ui_action::Shown> = composed
-            .iter()
-            .filter_map(|e| {
-                crate::ui_action::ui_error_text(e, &|key| {
-                    script.lua().globals().get::<String>(key).ok()
-                })
-                .map(|text| crate::ui_action::Shown::keyed(e.key, text))
-            })
-            .collect();
-        crate::ui_action::show_messages(script, &mut sink, "ui_petition", resolved);
 
         // Rebuilt every frame: reading the caches issues their queries, so a landing sets no flag
         // and only a rebuild sees it.
@@ -101,7 +116,7 @@ pub(super) fn feed_petition(
             .unwrap_or_default();
 
         let record = open.as_ref().and_then(|o| {
-            let r = petition.records.get(o.petition_id)?;
+            let r = records.records.get(o.petition_id)?;
             Some(PetitionRecordView {
                 petition_type: if r.is_charter {
                     PETITION_TYPE_CHARTER
@@ -148,236 +163,74 @@ pub(super) fn feed_petition(
         // ── The registrar's open; its close is the core's ([`super::close_core`]), and a
         //    disconnect's clear tells the VM nothing.
         let now_registrar = registrar.npc();
-        if now_registrar.is_some() && *fed_registrar != now_registrar {
-            script.fire_event("GUILD_REGISTRAR_SHOW", vec![]);
-        }
+        registrar_shown = now_registrar.is_some() && *fed_registrar != now_registrar;
         *fed_registrar = now_registrar;
 
         // ── The petition window's edges, once the record and every signer name have landed.
         let ready = record.is_some() && signers.iter().all(Option::is_some);
         let now_charter = open.as_ref().map(|o| o.item).filter(|_| ready);
         let fed = &mut petition.fed;
-        match (fed.shown_charter, now_charter) {
-            (Some(a), Some(b)) if a != b => {
-                // Another charter while one is shown: drop the queued close intent, or the drain
-                // would close the new charter and send a `MSG_PETITION_DECLINE` for it.
-                script.fire_event("PETITION_CLOSED", vec![]);
-                script.fire_event("PETITION_SHOW", vec![]);
-                let _ = script.drop_petition_close_intents();
-            }
+        let edge = match (fed.shown_charter, now_charter) {
+            (Some(a), Some(b)) if a != b => Edge::Switch,
             // The wait's end: the record landed or the last name resolved; fires once.
-            (None, Some(_)) => script.fire_event("PETITION_SHOW", vec![]),
-            (Some(_), None) => script.fire_event("PETITION_CLOSED", vec![]),
+            (None, Some(_)) => Edge::Show,
+            (Some(_), None) => Edge::Closed,
             // A rename echo, or a name resolving after the window was already up.
-            (Some(_), Some(_)) if fed.shown != record || fed.shown_signers != signers => {
-                script.fire_event("PETITION_SHOW", vec![])
-            }
-            _ => {}
-        }
+            (Some(_), Some(_)) if fed.shown != record || fed.shown_signers != signers => Edge::Show,
+            _ => Edge::None,
+        };
         fed.shown_charter = now_charter;
         fed.shown = record;
         fed.shown_signers = signers;
-    })
+        edge
+    });
+
+    if registrar_shown {
+        fire(&mut vm, "GUILD_REGISTRAR_SHOW");
+    }
+    match edge {
+        Edge::None => {}
+        Edge::Show => fire(&mut vm, "PETITION_SHOW"),
+        Edge::Closed => fire(&mut vm, "PETITION_CLOSED"),
+        // The replace leg of `0x4f3f60` signals the old one's close with the item's guid zeroed
+        // (`0x4f4020`-`0x4f402c`), so the frame's `OnHide`, whose `ClosePetition()` applies in
+        // its call, finds nothing to close or decline; the new charter is set after it.
+        Edge::Switch => {
+            let held = vm.own().open.take();
+            fire(&mut vm, "PETITION_CLOSED");
+            vm.own().open = held;
+            fire(&mut vm, "PETITION_SHOW");
+        }
+    }
 }
 
-/// Turn the Lua charter intents into sends. `ClosePetition` can send `MSG_PETITION_DECLINE`
-/// (`0x4f3f60`, `decline_on_close`); `CloseGuildRegistrar` sends nothing.
+/// Signal `event` bare, with the host lent.
+fn fire(vm: &mut VmWith<ResMut<'static, PetitionState>>, event: &str) {
+    vm.run(|script| {
+        if let Some(script) = script {
+            script.fire_event(event, vec![]);
+        }
+    });
+}
+
+/// A composed line resolved against the VM's strings.
+pub(super) fn shown(
+    script: &benilla_ui::script::UiScript,
+    e: &super::lines::Line,
+) -> Option<crate::ui_action::Shown> {
+    crate::ui_action::ui_error_text(e, &|key| script.lua().globals().get::<String>(key).ok())
+        .map(|text| crate::ui_action::Shown::keyed(e.key, text))
+}
+
+/// `CloseGuildRegistrar()` into its close core, which needs the interaction latch; every other
+/// charter verb applies inside its call ([`super::PetitionSteps`]).
 pub(super) fn drain_petition(
-    // What the host also reaches, read before the VM runs with the host lent.
-    mut hosted: ParamSet<(Res<crate::target::Selection>, crate::script_calls::HostedVm)>,
-    registrar: Res<GuildRegistrarState>,
-    mut petition: ResMut<PetitionState>,
-    names: Res<NameCache>,
-    objects: Objects,
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    self_guid: Res<SelfGuid>,
-    commands: Res<NetCommands>,
-    tabard: Res<crate::ui_tabard::TabardOpen>,
-    errors: Res<crate::ui_action::UiErrorKeys>,
+    mut hosted_vm: crate::script_calls::HostedVm,
     mut world_commands: Commands,
 ) {
-    let p = hosted.p0();
-    let selection = *p;
-    hosted.p1().run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        let requests = script.take_petition_requests();
-        if requests.is_empty() {
-            return;
-        }
-        let me = self_guid.0.unwrap_or(0);
-        for request in requests {
-            match request {
-                PetitionRequest::Buy(name) => {
-                    // The petition module's latch (`[0xbdceb0]`), not the target or `CGGameUI`'s
-                    // NPC.
-                    let Some(npc) = registrar.npc() else {
-                        debug!("ui_petition: BuyGuildCharter with no registrar open — dropped");
-                        continue;
-                    };
-                    let _ = commands.0.send(ClientCommand::PetitionBuy { npc, name });
-                }
-                PetitionRequest::TurnIn => {
-                    // A fresh bag scan per call (`0x5ef2b0`); the charter's `max_count` is 1.
-                    let charter = self_q.iter().next().and_then(|store| {
-                        find_item(
-                            &store.0,
-                            &objects,
-                            benilla_protocol::messages::CHARTER_ITEM_ENTRY,
-                            ItemSearch::default(),
-                        )
-                    });
-                    match charter {
-                        Some((_, _, item)) => {
-                            let _ = commands.0.send(ClientCommand::TurnInPetition { item });
-                        }
-                        // No charter, no packet: a red line (`0x5ef49a`).
-                        None => petition.lines.push(lines::no_charter_line()),
-                    }
-                }
-                // Sends nothing; the core runs.
-                PetitionRequest::CloseRegistrar => {
-                    crate::ui_session::queue(&mut world_commands, super::close_core);
-                }
-                PetitionRequest::TabardInfo => {
-                    let npc = registrar.npc().unwrap_or(0);
-                    if let Some(store) = self_q.iter().next() {
-                        tabard_vendor_activate(
-                            npc,
-                            tabard.npc().unwrap_or(0),
-                            store,
-                            &commands,
-                            &errors,
-                        );
-                    }
-                    crate::ui_session::queue(&mut world_commands, super::close_core);
-                }
-                PetitionRequest::ClosePetition => {
-                    petition.decline_on_close(me, &commands);
-                    petition.close();
-                }
-                PetitionRequest::Sign(byte) => {
-                    let Some(item) = petition.open_item() else {
-                        continue;
-                    };
-                    let _ = commands.0.send(ClientCommand::PetitionSign { item, byte });
-                    // The in-flight latch: a close while our signature is outstanding is no
-                    // decline.
-                    petition.signing = true;
-                }
-                PetitionRequest::Offer => {
-                    let Some(item) = petition.open_item() else {
-                        continue; // guard 1, silent
-                    };
-                    // `OfferPetition()` offers to the current target; with none it is silent (guard
-                    // 2).
-                    let Some(player) = selection.guid else {
-                        debug!("ui_petition: OfferPetition with no target — dropped");
-                        continue;
-                    };
-                    if player == me {
-                        // Guard 6; guards 3-5, 7 and 8 are not built, and the server refuses those.
-                        petition.lines.push(lines::self_offer_line());
-                        continue;
-                    }
-                    let _ = commands
-                        .0
-                        .send(ClientCommand::OfferPetition { item, player });
-                    // Printed on the send, unconfirmed: the server answers only the target.
-                    let name = names
-                        .resolve_player(player, Ask::Event(&commands))
-                        .unwrap_or_default()
-                        .to_string();
-                    petition.lines.push(lines::offered_line(&name));
-                }
-                PetitionRequest::Rename(name) => {
-                    let Some(item) = petition.open_item() else {
-                        continue;
-                    };
-                    let _ = commands
-                        .0
-                        .send(ClientCommand::PetitionRename { item, name });
-                }
-                // The client's own name validator refused it; no packet is built.
-                PetitionRequest::NameRefused(key) => {
-                    petition.lines.push(lines::name_refused_line(key));
-                }
-            }
+    hosted_vm.run(|script| {
+        if script.is_some_and(|script| script.take_registrar_close()) {
+            crate::ui_session::queue(&mut world_commands, super::close_core);
         }
     })
-}
-
-/// `0x5e00e0`, the designer's opener, for `GetTabardInfo` with the registrar's guid `npc`
-/// (`0x4f5338`): nothing while the designer is open on that guid (`0x5e00e6`-`0x5e00fc`, so two
-/// zero guids send nothing), the refusal while the player's `UNIT_FIELD_DISPLAYID` is not its
-/// `UNIT_FIELD_NATIVEDISPLAYID` (`0x5e0102`-`0x5e0116`, error `0x130`), else the packet.
-fn tabard_vendor_activate(
-    npc: u64,
-    designer: u64,
-    player: &ObjectStore,
-    commands: &NetCommands,
-    errors: &crate::ui_action::UiErrorKeys,
-) {
-    if designer == npc {
-        return;
-    }
-    if player.0.unit_displayid() != player.0.unit_native_displayid() {
-        errors.push(crate::ui_action::UiError::key(
-            "ERR_EMBLEMERROR_NOTABARDGEOSET",
-        ));
-        return;
-    }
-    let _ = commands.0.send(ClientCommand::TabardVendorActivate { npc });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ui_action::UiErrorKeys;
-    use benilla_protocol::ObjectFields;
-
-    /// The player's display ids, `UNIT_FIELD_DISPLAYID` (131) and `UNIT_FIELD_NATIVEDISPLAYID`.
-    fn player(display: u32, native: u32) -> ObjectStore {
-        ObjectStore(ObjectFields::from_pairs(&[(131, display), (132, native)]))
-    }
-
-    fn run(npc: u64, designer: u64, me: &ObjectStore) -> (Vec<ClientCommand>, Vec<&'static str>) {
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let errors = UiErrorKeys::default();
-        tabard_vendor_activate(npc, designer, me, &NetCommands(tx), &errors);
-        (
-            rx.try_iter().collect(),
-            errors.snapshot().iter().map(|e| e.key).collect(),
-        )
-    }
-
-    #[test]
-    fn get_tabard_info_opens_the_designer_for_the_registrar() {
-        let (sent, errors) = run(0x42, 0, &player(49, 49));
-        assert!(
-            matches!(
-                sent.as_slice(),
-                [ClientCommand::TabardVendorActivate { npc: 0x42 }]
-            ),
-            "{sent:?}"
-        );
-        assert!(errors.is_empty());
-    }
-
-    #[test]
-    fn get_tabard_info_sends_nothing_to_a_designer_already_open_on_that_npc() {
-        let (sent, errors) = run(0x42, 0x42, &player(49, 49));
-        assert!(sent.is_empty() && errors.is_empty());
-        // With no registrar and no designer both guids are 0: equal, so nothing.
-        let (sent, _) = run(0, 0, &player(49, 49));
-        assert!(sent.is_empty());
-    }
-
-    #[test]
-    fn get_tabard_info_refuses_a_shapeshifted_player() {
-        let (sent, errors) = run(0x42, 0, &player(2281, 49));
-        assert!(sent.is_empty());
-        assert_eq!(errors, ["ERR_EMBLEMERROR_NOTABARDGEOSET"]);
-    }
 }

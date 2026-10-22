@@ -228,7 +228,7 @@ mod tests {
             .init_resource::<BagOpens>()
             .init_resource::<super::super::feed::BagUpdates>()
             .init_resource::<crate::names::NameCache>()
-            .init_resource::<crate::ui_petition::PetitionState>()
+            .init_resource::<crate::ui_petition::PetitionRecords>()
             .insert_resource(crate::ui_script::UiClock {
                 anchor: std::time::Instant::now(),
                 ui_now: 1000.0,

@@ -1,7 +1,8 @@
 //! The guild bindings: roster, ranks, notes, MOTD and the membership verbs. The app pushes a
 //! display-ready [`GuildState`] ([`UiScript::set_guild`]) that joins two caches: the roster (MOTD,
 //! info text, rank rights, members) and the guild query (the name and ten rank names). Each verb
-//! queues a [`GuildRequest`] the app drains ([`UiScript::take_guild_requests`]).
+//! hands its [`GuildCall`] to the host, which applies it before the verb returns, as the
+//! reference's bindings send and re-sort in their own bodies (`0x48aef0`, `0x4d10d0`, `0x4d0fb0`).
 //!
 //! Two index bases: a roster `rankIndex` is 0-based with 0 the guild master
 //! (`FriendsFrame.lua:338`, `:393-398`), while the `GuildControl*` family is 1-based, driven by
@@ -112,9 +113,9 @@ pub struct GuildMemberInfo {
     /// Note; the frame gates on `CanViewOfficerNote` instead.
     pub officer_note: String,
     pub online: bool,
-    /// The tenth return: `""`, `"<AFK>"` or `"<DND>"`. Only the status view reads it, to choose
-    /// between the Online label and the tag (`FriendsFrame.lua:541`, `:548-551`).
-    pub status: String,
+    /// The record's presence byte (`+0x4c`), whose bits the tenth return reads at the call: bit 4
+    /// `CHAT_FLAG_DND`, else bit 2 `CHAT_FLAG_AFK`, else `""` (`0x4d13e4`, `0x4d13fb`).
+    pub presence: u8,
     /// Meaningful only offline; the wire omits it for online members.
     pub last_online: LastOnline,
 }
@@ -149,8 +150,9 @@ pub struct GuildState {
     /// The selected row, 1-based into [`Self::roster`], 0 for none (`FriendsFrame.lua:347` tests
     /// `> 0`).
     pub selection: u32,
-    /// Changes [`Self::num_members`] only, never [`Self::roster`].
-    pub show_offline: bool,
+    /// `GetScriptFlagArg`'s integer as `SetGuildRosterShowOffline` stored it (`0xb73124`), every
+    /// reader testing it against 0. Changes [`Self::num_members`] and the order, never the members.
+    pub show_offline: i32,
 }
 
 /// The rank-control popup's staging buffer, kept out of [`GuildState`] so a push mid-edit does not
@@ -164,12 +166,12 @@ pub struct GuildRankEdit {
     pub staged: [bool; 13],
 }
 
-/// Outbound guild intents, drained by the app ([`UiScript::take_guild_requests`]).
+/// A guild verb past its binding's checks, which the host applies inside the call
+/// ([`super::ScriptCall::Guild`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum GuildRequest {
-    /// `GuildRoster()` (`CMSG_GUILD_ROSTER`). The app throttles it to one per 10 s as the reference
-    /// does; the `GUILD_ROSTER_UPDATE` arg1 path clears the throttle first, so the FrameXML's own
-    /// request is never the one dropped.
+pub enum GuildCall {
+    /// `GuildRoster()` (`0x4d10d0`): `CMSG_GUILD_ROSTER` at most once per 10 000 ms of the
+    /// deadline `0xb73130`, which a stale `GUILD_ROSTER_UPDATE` clears (`0x4d1170`).
     Roster,
     /// `GuildInfo()`, the `/ginfo` query (`CMSG_GUILD_INFO`), answered as a chat line.
     Info,
@@ -195,8 +197,8 @@ pub enum GuildRequest {
     SetMotd(String),
     /// `SetGuildInfoText(text)`.
     SetInfoText(String),
-    /// `GuildRosterSetPublicNote(index, note)`: a 1-based display row the app resolves to the name
-    /// the wire takes.
+    /// `GuildRosterSetPublicNote(index, note)`: a 1-based roster row the host resolves to the
+    /// member whose name the wire takes.
     SetPublicNote { index: u32, note: String },
     /// `GuildRosterSetOfficerNote(index, note)`.
     SetOfficerNote { index: u32, note: String },
@@ -210,17 +212,16 @@ pub enum GuildRequest {
     AddRank(String),
     /// `GuildControlDelRank()`: no argument and an empty `0x233`; the server deletes the last rank.
     DelRank,
-    /// `SetGuildRosterSelection(index)`, mirrored so the next push agrees.
+    /// `SetGuildRosterSelection(index)` (`0x4d1820`): the host stores the row's member, as the
+    /// reference stores its guid (`0xb73128`).
     Select(u32),
-    /// `SetGuildRosterShowOffline(flag)`, mirrored so the next push agrees.
-    SetShowOffline(bool),
-    /// `SortGuildRoster(field)`: `"name"`, `"zone"`, `"level"`, `"class"`, `"rank"`, `"note"` or
-    /// `"online"`, the headers' `sortType`s (`FriendsFrame.xml:1895-1940`, `:2086-2131`). Sorting
-    /// is client-side: the app re-orders its roster and pushes it back.
+    /// `SetGuildRosterShowOffline(flag)` (`0x4d1e10` → `0x4d0f70`), the flag as
+    /// `GetScriptFlagArg` read it.
+    SetShowOffline(i32),
+    /// `SortGuildRoster(field)` (`0x4d1cb0` → `0x4d0fb0`): `"name"`, `"zone"`, `"level"`, `"class"`,
+    /// `"rank"`, `"note"` or `"online"`, the headers' `sortType`s (`FriendsFrame.xml:1895-1940`,
+    /// `:2086-2131`).
     Sort(String),
-    /// `GetGuildInfo(unit)` found no record for the unit's guild: the lookup with its callback
-    /// (`0x4c93d2`), which asks and leaves a waiter for the unit `guid`.
-    InfoMiss { guild_id: u32, guid: u64 },
 }
 
 impl super::UiScript {
@@ -230,16 +231,24 @@ impl super::UiScript {
         self.model_mut().guild = state;
     }
 
-    /// Drain the guild intents queued since the last call.
-    pub fn take_guild_requests(&mut self) -> Vec<GuildRequest> {
-        std::mem::take(&mut self.model_mut().guild_requests)
+    /// The guilds `GetGuildInfo` found no record for since the last take, each `(guild_id, guid)`:
+    /// the lookup with its callback (`0x4c93d2`), which asks and leaves a waiter for the unit.
+    pub fn take_guild_info_asks(&mut self) -> Vec<(u32, u64)> {
+        std::mem::take(&mut self.model_mut().guild_info_asks)
     }
 
-    /// Queue an intent from a slash command (`/ginvite`, `/gquit`, `/gpromote`, ...). The
-    /// reference's slash commands are Lua calling the same bindings; benilla parses them in Rust.
-    pub fn queue_guild_request(&mut self, request: GuildRequest) {
-        self.model_mut().guild_requests.push(request);
+    /// The guild calls a harness VM kept ([`Self::keep_calls`]), in call order.
+    pub fn take_guild_calls(&mut self) -> Vec<GuildCall> {
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Guild(call) => Some(call.clone()),
+            _ => None,
+        })
     }
+}
+
+/// Hand `call` to the host, which applies it before the verb returns.
+fn submit(lua: &Lua, call: GuildCall) -> mlua::Result<()> {
+    super::calls::submit(lua, super::ScriptCall::Guild(call))
 }
 
 /// A roster row by 1-based index.
@@ -306,8 +315,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // token, a non-player, a guildless player and an unarrived guild record all answer
     // `nil, nil, 0`, the third the number 0 (`mov eax,3` on both legs). Stock
     // `PaperDollFrame_SetGuild` calls it for `"player"` unguarded (`PaperDollFrame.lua:117`). A
-    // player's guild the cache lacks is asked with a waiter of the call's own ([`GuildRequest::InfoMiss`]);
-    // the zero key never is (`0x560e3d`).
+    // player's guild the cache lacks is asked with a waiter of the call's own
+    // ([`UiScript::take_guild_info_asks`]); the zero key never is (`0x560e3d`).
     g.set(
         "GetGuildInfo",
         lua.create_function(|lua, unit: Option<String>| {
@@ -317,13 +326,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok((Value::Nil, Value::Nil, Value::Integer(0)));
             };
             let Some(guild) = state.guild.as_ref() else {
-                let miss = (state.has_object && state.is_player && state.guild_id != 0).then_some(
-                    GuildRequest::InfoMiss {
-                        guild_id: state.guild_id,
-                        guid: state.guid,
-                    },
-                );
-                model.guild_requests.extend(miss);
+                let miss = (state.has_object && state.is_player && state.guild_id != 0)
+                    .then_some((state.guild_id, state.guid));
+                model.guild_info_asks.extend(miss);
                 return Ok((Value::Nil, Value::Nil, Value::Integer(0)));
             };
             Ok((
@@ -368,6 +373,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(m) = member_at(&model.guild.roster, index) else {
                 return Ok(MultiValue::from_vec(vec![Value::Nil; 10]));
             };
+            // `FrameScript_GetText` at the call, the empty string for a missing global
+            // (`0x703bf0`): do-not-disturb before away (`0x4d13ed`, `0x4d1404`).
+            let status = if m.presence & 0x4 != 0 {
+                super::glue_core::global_text(lua, "CHAT_FLAG_DND")
+            } else if m.presence & 0x2 != 0 {
+                super::glue_core::global_text(lua, "CHAT_FLAG_AFK")
+            } else {
+                String::new()
+            };
             Ok(MultiValue::from_vec(vec![
                 Value::String(lua.create_string(&m.name)?),
                 Value::String(lua.create_string(&m.rank)?),
@@ -378,7 +392,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Value::String(lua.create_string(&m.note)?),
                 Value::String(lua.create_string(&m.officer_note)?),
                 binding_abi::flag(m.online),
-                Value::String(lua.create_string(&m.status)?),
+                Value::String(lua.create_string(&status)?),
             ]))
         })?,
     )?;
@@ -425,8 +439,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetGuildRosterSelection() (`0x4d1890`) / SetGuildRosterSelection(index) (`0x4d1820`):
-    // 1-based, 0 for none. The setter writes the snapshot and queues the intent: the same Lua pass
-    // reads it back, and the app's state must follow so the next push agrees.
+    // 1-based, 0 for none. The setter writes the snapshot, which the getter reads back, and the
+    // host stores the row's member, so the next push agrees.
     g.set(
         "GetGuildRosterSelection",
         lua.create_function(|lua, ()| {
@@ -447,64 +461,58 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let len = model.guild.roster.len();
             let index = u32::try_from(index.clamp(0, len as i64)).unwrap_or(0);
             model.guild.selection = index;
-            model.guild_requests.push(GuildRequest::Select(index));
-            Ok(())
+            drop(model);
+            submit(lua, GuildCall::Select(index))
         })?,
     )?;
 
-    // GetGuildRosterShowOffline() (`0x4d1e30`) / SetGuildRosterShowOffline(flag): written in
-    // place and mirrored, as the selection is.
+    // GetGuildRosterShowOffline() (`0x4d1e30`) answers 1 for any stored value but 0.
     g.set(
         "GetGuildRosterShowOffline",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(binding_abi::flag(model.guild.show_offline))
+            Ok(binding_abi::flag(model.guild.show_offline != 0))
         })?,
     )?;
-    // `GetBoolOrDefault` (`0x4d1e17`) with default 1: no argument turns show-offline on, unlike an
-    // explicit `nil`, hence `MultiValue`.
+    // SetGuildRosterShowOffline([flag]) (`0x4d1e10`): `GetScriptFlagArg` (`0x4d1e17`) with default
+    // 1, so no argument turns show-offline on, unlike an explicit `nil`, hence `MultiValue`; its
+    // integer is what `0x4d0f70` compares and stores, so a 2 after a 1 is a change. Written here
+    // for the getter; the host re-sorts and signals a change (`0x4d0f87`-`0x4d0f9f`).
     g.set(
         "SetGuildRosterShowOffline",
         lua.create_function(|lua, args: MultiValue| {
-            let on = binding_abi::bool_or_default(args.front(), true);
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.guild.show_offline = on;
-            model.guild_requests.push(GuildRequest::SetShowOffline(on));
-            Ok(())
+            let flag = binding_abi::flag_or_default(args.front(), 1);
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .guild
+                .show_offline = flag;
+            submit(lua, GuildCall::SetShowOffline(flag))
         })?,
     )?;
 
-    // SortGuildRoster(field) (`0x4d1cb0`): the header's OnClick calls no `GuildStatus_Update` and
-    // no `GuildRoster` (`FriendsFrame.xml:442-446`), so the app re-orders and fires
-    // `GUILD_ROSTER_UPDATE` on the drain, without asking the server.
+    // SortGuildRoster(field) (`0x4d1cb0`): the host re-sorts and signals `GUILD_ROSTER_UPDATE`
+    // inside the call (`0x4d1022`), without asking the server; the header's OnClick calls no
+    // `GuildStatus_Update` and no `GuildRoster` (`FriendsFrame.xml:442-446`).
     g.set(
         "SortGuildRoster",
-        lua.create_function(|lua, field: String| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.guild_requests.push(GuildRequest::Sort(field));
-            Ok(())
-        })?,
+        lua.create_function(|lua, field: String| submit(lua, GuildCall::Sort(field)))?,
     )?;
 
     // CloseGuildRoster() is `xor eax,eax; ret` in the reference: a no-op that sends nothing.
     g.set("CloseGuildRoster", lua.create_function(|_, ()| Ok(()))?)?;
 
-    // The argument-less verbs; the app throttles `GuildRoster()` (`GuildRequest::Roster`).
-    for (global, request) in [
-        ("GuildRoster", GuildRequest::Roster),
-        ("GuildInfo", GuildRequest::Info),
-        ("AcceptGuild", GuildRequest::Accept),
-        ("DeclineGuild", GuildRequest::Decline),
-        ("GuildLeave", GuildRequest::Leave),
-        ("GuildDisband", GuildRequest::Disband),
+    // The argument-less verbs; the host throttles `GuildRoster()` ([`GuildCall::Roster`]).
+    for (global, call) in [
+        ("GuildRoster", GuildCall::Roster),
+        ("GuildInfo", GuildCall::Info),
+        ("AcceptGuild", GuildCall::Accept),
+        ("DeclineGuild", GuildCall::Decline),
+        ("GuildLeave", GuildCall::Leave),
+        ("GuildDisband", GuildCall::Disband),
     ] {
         g.set(
             global,
-            lua.create_function(move |lua, ()| {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.guild_requests.push(request.clone());
-                Ok(())
-            })?,
+            lua.create_function(move |lua, ()| submit(lua, call.clone()))?,
         )?;
     }
 
@@ -514,29 +522,25 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // invite, which it answers with `ERR_GUILD_PLAYER_NOT_FOUND_S`
     // (`Handlers/GuildHandler.cpp:77-83`).
     for (global, make) in [
-        ("GuildInviteByName", GuildRequest::Invite as fn(String) -> _),
+        ("GuildInviteByName", GuildCall::Invite as fn(String) -> _),
         (
             "GuildUninviteByName",
-            GuildRequest::Uninvite as fn(String) -> _,
+            GuildCall::Uninvite as fn(String) -> _,
         ),
-        (
-            "GuildPromoteByName",
-            GuildRequest::Promote as fn(String) -> _,
-        ),
-        ("GuildDemoteByName", GuildRequest::Demote as fn(String) -> _),
+        ("GuildPromoteByName", GuildCall::Promote as fn(String) -> _),
+        ("GuildDemoteByName", GuildCall::Demote as fn(String) -> _),
         (
             "GuildSetLeaderByName",
-            GuildRequest::SetLeader as fn(String) -> _,
+            GuildCall::SetLeader as fn(String) -> _,
         ),
     ] {
         g.set(
             global,
             lua.create_function(move |lua, name: String| {
-                if !name.trim().is_empty() {
-                    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                    model.guild_requests.push(make(name));
+                if name.trim().is_empty() {
+                    return Ok(());
                 }
-                Ok(())
+                submit(lua, make(name))
             })?,
         )?;
     }
@@ -544,32 +548,28 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GuildSetMOTD(text) (`0x48b270`) / SetGuildInfoText(text) (`0x4d2380`): an empty string is
     // sent, and clears the text.
     for (global, make) in [
-        ("GuildSetMOTD", GuildRequest::SetMotd as fn(String) -> _),
+        ("GuildSetMOTD", GuildCall::SetMotd as fn(String) -> _),
         (
             "SetGuildInfoText",
-            GuildRequest::SetInfoText as fn(String) -> _,
+            GuildCall::SetInfoText as fn(String) -> _,
         ),
     ] {
         g.set(
             global,
-            lua.create_function(move |lua, text: String| {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.guild_requests.push(make(text));
-                Ok(())
-            })?,
+            lua.create_function(move |lua, text: String| submit(lua, make(text)))?,
         )?;
     }
 
     // GuildRosterSetPublicNote(index, note) (`0x4d15e0`) / GuildRosterSetOfficerNote (`0x4d1700`)
-    // take a roster row, which the app resolves to the name the wire carries.
+    // take a roster row, which the host resolves to the name the wire carries.
     for (global, make) in [
         (
             "GuildRosterSetPublicNote",
-            (|index, note| GuildRequest::SetPublicNote { index, note }) as fn(u32, String) -> _,
+            (|index, note| GuildCall::SetPublicNote { index, note }) as fn(u32, String) -> _,
         ),
         (
             "GuildRosterSetOfficerNote",
-            (|index, note| GuildRequest::SetOfficerNote { index, note }) as fn(u32, String) -> _,
+            (|index, note| GuildCall::SetOfficerNote { index, note }) as fn(u32, String) -> _,
         ),
     ] {
         g.set(
@@ -578,11 +578,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let Ok(index) = u32::try_from(index) else {
                     return Ok(());
                 };
-                if index >= 1 {
-                    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                    model.guild_requests.push(make(index, note));
+                if index < 1 {
+                    return Ok(());
                 }
-                Ok(())
+                submit(lua, make(index, note))
             })?,
         )?;
     }
@@ -721,7 +720,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(name) = gated_rank_name(&name).map(str::to_string) else {
                 return Ok(());
             };
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
             let edit = model.guild_control.clone();
             // The reference's `[0x84966c] >= [0xb73120]`: no rank loaded (its -1, our 0) or one
             // past the rank count.
@@ -734,11 +733,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         rights &= !bit;
                     }
                 }
-                model.guild_requests.push(GuildRequest::SaveRank {
-                    rank_index: edit.rank - 1,
-                    rights,
-                    name,
-                });
+                drop(model);
+                return submit(
+                    lua,
+                    GuildCall::SaveRank {
+                        rank_index: edit.rank - 1,
+                        rights,
+                        name,
+                    },
+                );
             }
             Ok(())
         })?,
@@ -752,11 +755,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(name) = gated_rank_name(&name).map(str::to_string) else {
                 return Ok(());
             };
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if model.guild.ranks.len() < MAX_RANKS {
-                model.guild_requests.push(GuildRequest::AddRank(name));
+            let ranks = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .guild
+                .ranks
+                .len();
+            if ranks >= MAX_RANKS {
+                return Ok(());
             }
-            Ok(())
+            submit(lua, GuildCall::AddRank(name))
         })?,
     )?;
 
@@ -766,11 +774,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GuildControlDelRank",
         lua.create_function(|lua, _ignored: MultiValue| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if model.guild.ranks.len() > MIN_RANKS {
-                model.guild_requests.push(GuildRequest::DelRank);
+            let ranks = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .guild
+                .ranks
+                .len();
+            if ranks <= MIN_RANKS {
+                return Ok(());
             }
-            Ok(())
+            submit(lua, GuildCall::DelRank)
         })?,
     )?;
 
@@ -856,6 +869,7 @@ mod tests {
 
     fn guild_with_ranks(n: usize) -> crate::script::UiScript {
         let mut s = crate::script::UiScript::new().unwrap();
+        s.keep_calls();
         s.set_guild(GuildState {
             in_guild: true,
             ranks: (0..n)
@@ -875,9 +889,9 @@ mod tests {
     fn saving_a_rank_refuses_what_the_reference_refuses() {
         let mut s = guild_with_ranks(5);
         let saves = |s: &mut crate::script::UiScript| {
-            s.take_guild_requests()
+            s.take_guild_calls()
                 .into_iter()
-                .filter(|r| matches!(r, GuildRequest::SaveRank { .. }))
+                .filter(|r| matches!(r, GuildCall::SaveRank { .. }))
                 .count()
         };
 
@@ -917,9 +931,9 @@ mod tests {
         let mut s = guild_with_ranks(5);
         s.run(r#"GuildControlAddRank(""); GuildControlAddRank(string.rep("a", 17))"#)
             .unwrap();
-        assert!(s.take_guild_requests().is_empty());
+        assert!(s.take_guild_calls().is_empty());
         s.run(r#"GuildControlAddRank(" ")"#).unwrap();
-        assert_eq!(s.take_guild_requests().len(), 1);
+        assert_eq!(s.take_guild_calls().len(), 1);
     }
 
     /// `GuildStatus_Update` passes 0 before it tests the selection.

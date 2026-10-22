@@ -224,7 +224,9 @@ fn chat_window_flags_read_get_bool_or_default() {
 /// The guild flags: show-offline (`0x4d1e17`, default 1), the rank checkbox (`0x4d20b7`, default 0).
 #[test]
 fn guild_flags_read_get_bool_or_default() {
-    let s = script();
+    let mut s = script();
+    // The setter's call is the host's; this VM keeps it.
+    s.keep_calls();
     check(
         &s,
         "SetGuildRosterShowOffline",

@@ -53,19 +53,20 @@ pub struct PetitionState {
     pub can_sign: bool,
 }
 
-/// A charter intent queued from Lua for the app to send. Most get no answer of their own (a
-/// purchase shows only as the item, an offer answers the target, a refusal comes on the guild error
-/// channel), so none may update local state optimistically.
+/// A charter verb past its binding's checks, which the host applies inside the call
+/// ([`super::ScriptCall::Petition`]). Most get no answer of their own (a purchase shows only as
+/// the item, an offer answers the target, a refusal comes on the guild error channel), so none
+/// updates the snapshot ahead of the server.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PetitionRequest {
-    /// `BuyGuildCharter(name)`, after [`validate_guild_name`]; the app adds the registrar NPC
-    /// latched at `[0xbdceb0]`, not `CGGameUI`'s interaction pair.
+pub enum PetitionCall {
+    /// `BuyGuildCharter(name)` past [`validate_guild_name`]: the purchase `0x4f5050`, which sends
+    /// for the registrar NPC latched at `[0xbdceb0]`, not `CGGameUI`'s interaction pair.
     Buy(String),
-    /// `TurnInGuildCharter()`: the app scans the bags on every call, as the reference does
-    /// (`0x5ef2b0`).
+    /// `BuyGuildCharter(name)`'s name [`validate_guild_name`] refused, with the GlobalStrings key
+    /// `0x4f5160` shows (`0x496720`); no packet.
+    NameRefused(&'static str),
+    /// `TurnInGuildCharter()`: a bag scan on every call, as the reference does (`0x5ef2b0`).
     TurnIn,
-    /// `CloseGuildRegistrar()`: sends nothing (`0x4f5010`).
-    CloseRegistrar,
     /// `GetTabardInfo()` (`0x4f5300`), not a getter: with a player, `MSG_TABARDVENDOR_ACTIVATE`
     /// for the registrar's guid unless the designer is already open on that guid, or the
     /// `ERR_EMBLEMERROR_NOTABARDGEOSET` refusal while the player's display id is not its native
@@ -73,16 +74,18 @@ pub enum PetitionRequest {
     TabardInfo,
     /// `SignPetition([n])`: a wire byte defaulting to 1, not 0 (`0x4f46d9`); vmangos skips it.
     Sign(i8),
-    /// `OfferPetition()`: the app resolves the current target (`CGGameUI`'s selection pair, not its
-    /// interaction pair) and runs the eight guards.
+    /// `OfferPetition()`: the host resolves the current target (`CGGameUI`'s selection pair, not
+    /// its interaction pair) and runs the guards.
     Offer,
-    /// `RenamePetition(name)`, after [`validate_guild_name`].
-    Rename(String),
-    /// `ClosePetition()`: `0x4f3f60` sends `MSG_PETITION_DECLINE` when a petition was open, no sign
-    /// is in flight, a record is cached and we do not own it; the app decides.
-    ClosePetition,
-    /// A name [`validate_guild_name`] refused, with the GlobalStrings key to show; no packet.
-    NameRefused(&'static str),
+    /// `RenamePetition(name)`: the name and what [`validate_guild_name`] answered, which the host
+    /// shows or sends only with a petition open (`0x4f495e`-`0x4f4970`).
+    Rename {
+        name: String,
+        refusal: Option<&'static str>,
+    },
+    /// `ClosePetition()`: `0x4f3f60` sends `MSG_PETITION_DECLINE` when a petition was open, no
+    /// sign is in flight, a record is cached and we do not own it, then signals `PETITION_CLOSED`.
+    Close,
 }
 
 impl super::UiScript {
@@ -91,42 +94,38 @@ impl super::UiScript {
         self.model_mut().petition = state;
     }
 
-    /// Take the charter intents queued since the last drain.
-    pub fn take_petition_requests(&mut self) -> Vec<PetitionRequest> {
-        std::mem::take(&mut self.model_mut().petition_requests)
+    /// `0x4f3ef0` inside a close: the signers freed, the record still cached for the
+    /// `PETITION_CLOSED` handlers (`0x4f4016`, then `0x4f4078` after the signal).
+    pub fn free_petition_signers(&mut self) {
+        let mut model = self.model_mut();
+        model.petition.signers.clear();
+        model.petition.can_sign = true;
     }
 
-    /// Take the `CloseGuildRegistrar()` calls queued since the last drain, leaving the other
-    /// intents in order: a close core answers the call its own `GUILD_REGISTRAR_CLOSED` raised
-    /// through `OnHide`.
+    /// The close's last step (`0x4f4078`): the record goes.
+    pub fn drop_petition_record(&mut self) {
+        self.model_mut().petition.record = None;
+    }
+
+    /// Take the `CloseGuildRegistrar()` calls made since the last take: the close core needs the
+    /// interaction latch, which a core answers when its own `GUILD_REGISTRAR_CLOSED` raised the
+    /// call through `OnHide`.
     pub fn take_registrar_close(&mut self) -> bool {
-        let requests = &mut self.model_mut().petition_requests;
-        let before = requests.len();
-        requests.retain(|r| !matches!(r, PetitionRequest::CloseRegistrar));
-        requests.len() != before
+        std::mem::take(&mut self.model_mut().registrar_close)
     }
 
-    /// Drop the queued close intents, returning how many. Firing `PETITION_CLOSED` runs `OnHide`,
-    /// whose `ClosePetition()` queues a close; on a switch to a newly offered charter that close
-    /// would shut the new window and decline it on the wire. A user's close survives, as the feed
-    /// runs `before(UiInput)` and a click's `OnHide` queues after this.
-    pub fn drop_petition_close_intents(&mut self) -> usize {
-        let requests = &mut self.model_mut().petition_requests;
-        let before = requests.len();
-        requests.retain(|r| {
-            !matches!(
-                r,
-                PetitionRequest::CloseRegistrar | PetitionRequest::ClosePetition
-            )
-        });
-        before - requests.len()
+    /// The charter calls a harness VM kept ([`Self::keep_calls`]), in call order.
+    pub fn take_petition_calls(&mut self) -> Vec<PetitionCall> {
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Petition(call) => Some(call.clone()),
+            _ => None,
+        })
     }
+}
 
-    /// Queue one charter intent directly: the test seam.
-    #[cfg(test)]
-    pub fn queue_petition_request(&mut self, request: PetitionRequest) {
-        self.model_mut().petition_requests.push(request);
-    }
+/// Hand `call` to the host, which applies it before the verb returns.
+fn submit(lua: &Lua, call: PetitionCall) -> mlua::Result<()> {
+    super::calls::submit(lua, super::ScriptCall::Petition(call))
 }
 
 /// The guild-name check `BuyGuildCharter` and `RenamePetition` share (`0x4f5160`): the checker
@@ -254,75 +253,85 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── The verbs ────────────────────────────────────────────────────────────────────────────
-    // The five that carry and push nothing; none may touch the snapshot, which the server owns.
+    // The four that carry nothing; none touches the snapshot, which the server owns.
     // `GetTabardInfo`'s stock caller is commented out (`GuildRegistrarFrame.xml:190`).
-    for (global, request) in [
-        ("TurnInGuildCharter", PetitionRequest::TurnIn),
-        ("CloseGuildRegistrar", PetitionRequest::CloseRegistrar),
-        ("GetTabardInfo", PetitionRequest::TabardInfo),
-        ("OfferPetition", PetitionRequest::Offer),
-        ("ClosePetition", PetitionRequest::ClosePetition),
+    for (global, call) in [
+        ("TurnInGuildCharter", PetitionCall::TurnIn),
+        ("OfferPetition", PetitionCall::Offer),
+        ("ClosePetition", PetitionCall::Close),
     ] {
         g.set(
             global,
-            lua.create_function(move |lua, ()| {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.petition_requests.push(request.clone());
-                Ok(())
-            })?,
+            lua.create_function(move |lua, ()| submit(lua, call.clone()))?,
         )?;
     }
+    // GetTabardInfo() (`0x4f5300`): the activate inside the call, then the registrar's close core
+    // (`0x4f5355` → `0x4f5010`), which needs the interaction latch and so stays latch-driven.
+    g.set(
+        "GetTabardInfo",
+        lua.create_function(|lua, ()| {
+            submit(lua, PetitionCall::TabardInfo)?;
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .registrar_close = true;
+            Ok(())
+        })?,
+    )?;
+    // CloseGuildRegistrar() (`0x4f5010`) is the close core, which needs the interaction latch, so
+    // it stays latch-driven ([`UiScript::take_registrar_close`]).
+    g.set(
+        "CloseGuildRegistrar",
+        lua.create_function(|lua, ()| {
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .registrar_close = true;
+            Ok(())
+        })?,
+    )?;
 
     // SignPetition([n]) (`0x4f46d0`): the optional argument rides the wire as a byte defaulting to
     // 1, not 0 (`0x4f46d9`, `0x4f4749 Put8`); the server skips it.
     g.set(
         "SignPetition",
         lua.create_function(|lua, n: Value| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // `lua_isnumber` (`0x4f46e2`) gates the read, a miss keeping the 1 (`0x4f46d9`); `_ftol`
             // truncates toward zero, then the `Put8` keeps the low byte.
             let byte = crate::script::binding_abi::is_number(lua, n)
                 .map_or(1i8, |v| crate::script::binding_abi::ftol(v) as i8);
-            model.petition_requests.push(PetitionRequest::Sign(byte));
-            Ok(())
+            submit(lua, PetitionCall::Sign(byte))
         })?,
     )?;
 
     // BuyGuildCharter(guildName) (`0x4f5260`) returns 1 or nil for name validity, not for a send:
-    // `0x4f5294` runs the shared validator, and the action behind it has five silent refusals.
+    // `lua_isstring` (`0x4f5268`) else its usage line (`0x84d090`), then the shared validator
+    // (`0x4f5294`), whose refusal shows inside the call, and the purchase behind it.
     g.set(
         "BuyGuildCharter",
-        lua.create_function(|lua, name: String| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            match check(&model, &name) {
+        lua.create_function(|lua, name: Value| {
+            let name = binding_abi::string_arg(lua, name, "Usage: BuyGuildCharter(guildName)")?;
+            let checked = check(&lua.app_data_ref::<Model>().expect("model app_data"), &name);
+            match checked {
                 Ok(()) => {
-                    model.petition_requests.push(PetitionRequest::Buy(name));
+                    submit(lua, PetitionCall::Buy(name))?;
                     Ok(Value::Integer(1))
                 }
                 Err(key) => {
-                    model
-                        .petition_requests
-                        .push(PetitionRequest::NameRefused(key));
+                    submit(lua, PetitionCall::NameRefused(key))?;
                     Ok(Value::Nil)
                 }
             }
         })?,
     )?;
 
-    // RenamePetition(name) (`0x4f4930`): zero values, the same validator, silent beyond its
-    // message. A bad argument raises mlua's coercion error; the reference's usage string is
-    // `Usage(RenamePetition("name")`, unbalanced.
+    // RenamePetition(name) (`0x4f4930`): zero values; `lua_isstring` (`0x4f493f`) else the usage
+    // line as shipped, unbalanced (`0x84cfec`); then the host tests the open item before the
+    // name's answer counts (`0x4f495e`-`0x4f4970`).
     g.set(
         "RenamePetition",
-        lua.create_function(|lua, name: String| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            match check(&model, &name) {
-                Ok(()) => model.petition_requests.push(PetitionRequest::Rename(name)),
-                Err(key) => model
-                    .petition_requests
-                    .push(PetitionRequest::NameRefused(key)),
-            }
-            Ok(())
+        lua.create_function(|lua, name: Value| {
+            let name = binding_abi::string_arg(lua, name, "Usage(RenamePetition(\"name\")")?;
+            let refusal = check(&lua.app_data_ref::<Model>().expect("model app_data"), &name).err();
+            submit(lua, PetitionCall::Rename { name, refusal })
         })?,
     )?;
 
@@ -494,23 +503,26 @@ mod tests {
     #[test]
     fn sign_petition_defaults_its_wire_byte_to_one() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.run("SignPetition(); SignPetition(7); SignPetition(3.9)")
             .unwrap();
         assert_eq!(
-            s.take_petition_requests(),
+            s.take_petition_calls(),
             vec![
-                PetitionRequest::Sign(1),
-                PetitionRequest::Sign(7),
-                PetitionRequest::Sign(3),
+                PetitionCall::Sign(1),
+                PetitionCall::Sign(7),
+                PetitionCall::Sign(3),
             ],
             "absent = 1, present = truncated toward zero"
         );
     }
 
-    /// A refused name queues its message instead of a packet.
+    /// A refused name hands its message to the host instead of a packet; the rename hands both,
+    /// for the host to weigh against the open petition (`0x4f4970`).
     #[test]
-    fn the_name_validator_gates_both_verbs_and_only_buy_reports_it() {
+    fn the_name_validator_gates_both_verbs() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert_eq!(
             s.eval::<Option<u32>>("return BuyGuildCharter(\"Legacy\")")
                 .unwrap(),
@@ -529,12 +541,18 @@ mod tests {
         );
         s.run("RenamePetition(\"  spaced  \")").unwrap();
         assert_eq!(
-            s.take_petition_requests(),
+            s.take_petition_calls(),
             vec![
-                PetitionRequest::Buy("Legacy".into()),
-                PetitionRequest::NameRefused("ERR_GUILD_ENTER_NAME"),
-                PetitionRequest::Rename("Legacy".into()),
-                PetitionRequest::NameRefused("ERR_GUILD_NAME_INVALID_SPACE"),
+                PetitionCall::Buy("Legacy".into()),
+                PetitionCall::NameRefused("ERR_GUILD_ENTER_NAME"),
+                PetitionCall::Rename {
+                    name: "Legacy".into(),
+                    refusal: None
+                },
+                PetitionCall::Rename {
+                    name: "  spaced  ".into(),
+                    refusal: Some("ERR_GUILD_NAME_INVALID_SPACE")
+                },
             ]
         );
     }
@@ -587,9 +605,9 @@ mod tests {
     }
 
     /// What `BuyGuildCharter(name)` queues: the buy, or the refusal's key.
-    fn bought(s: &mut UiScript, name: &str) -> PetitionRequest {
+    fn bought(s: &mut UiScript, name: &str) -> PetitionCall {
         s.run(&format!("BuyGuildCharter({name:?})")).unwrap();
-        let mut requests = s.take_petition_requests();
+        let mut requests = s.take_petition_calls();
         assert_eq!(requests.len(), 1, "{name:?}: {requests:?}");
         requests.remove(0)
     }
@@ -601,8 +619,9 @@ mod tests {
     #[test]
     fn the_guild_name_check_is_the_clients() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_glue_name_lists(std::rc::Rc::new(ThreeWords));
-        let refused = |key: &'static str| PetitionRequest::NameRefused(key);
+        let refused = |key: &'static str| PetitionCall::NameRefused(key);
         for (name, want) in [
             ("", refused("ERR_GUILD_ENTER_NAME")),
             ("A", refused("ERR_GUILD_NAME_TOO_SHORT")),
@@ -631,19 +650,19 @@ mod tests {
             ),
             (
                 "Abcdefghij Abcdefghij Ab",
-                PetitionRequest::Buy("Abcdefghij Abcdefghij Ab".into()),
+                PetitionCall::Buy("Abcdefghij Abcdefghij Ab".into()),
             ),
             // A match in either profanity list is RESERVED (`0x6c9a51`, then `0x4f51b8`); the
             // reserved list is not searched.
             ("Darnwood", refused("ERR_GUILD_NAME_RESERVED")),
             ("Heckwood", refused("ERR_GUILD_NAME_RESERVED")),
-            ("Thrallwood", PetitionRequest::Buy("Thrallwood".into())),
+            ("Thrallwood", PetitionCall::Buy("Thrallwood".into())),
             (
                 "Legacy of Steel",
-                PetitionRequest::Buy("Legacy of Steel".into()),
+                PetitionCall::Buy("Legacy of Steel".into()),
             ),
-            ("Éclair", PetitionRequest::Buy("Éclair".into())),
-            ("Ab", PetitionRequest::Buy("Ab".into())),
+            ("Éclair", PetitionCall::Buy("Éclair".into())),
+            ("Ab", PetitionCall::Buy("Ab".into())),
         ] {
             assert_eq!(bought(&mut s, name), want, "{name:?}");
         }
@@ -652,8 +671,11 @@ mod tests {
         // RenamePetition runs the same check (`0x4f4987`).
         s.run("RenamePetition('A')").unwrap();
         assert_eq!(
-            s.take_petition_requests(),
-            vec![refused("ERR_GUILD_NAME_TOO_SHORT")]
+            s.take_petition_calls(),
+            vec![PetitionCall::Rename {
+                name: "A".into(),
+                refusal: Some("ERR_GUILD_NAME_TOO_SHORT")
+            }]
         );
     }
 
@@ -662,56 +684,30 @@ mod tests {
     #[test]
     fn the_guild_name_check_reads_the_locales_charsets() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_locale(4);
-        assert_eq!(
-            bought(&mut s, "李小龙"),
-            PetitionRequest::Buy("李小龙".into())
-        );
+        assert_eq!(bought(&mut s, "李小龙"), PetitionCall::Buy("李小龙".into()));
         assert_eq!(
             bought(&mut s, "李a"),
-            PetitionRequest::NameRefused("ERR_GUILD_NAME_INVALID")
+            PetitionCall::NameRefused("ERR_GUILD_NAME_INVALID")
         );
         let long: String = ["一", "二", "三", "四", "五", "六", "七", "八"].concat();
-        assert_eq!(bought(&mut s, &long), PetitionRequest::Buy(long.clone()));
+        assert_eq!(bought(&mut s, &long), PetitionCall::Buy(long.clone()));
     }
 
-    /// `GetTabardInfo()` pushes nothing (`0x4f535f`) and queues the designer's opener.
+    /// `GetTabardInfo()` pushes nothing (`0x4f535f`), hands the host the designer's opener and
+    /// leaves the registrar's close to the latch (`0x4f5355`).
     #[test]
-    fn get_tabard_info_is_an_intent_with_no_returns() {
+    fn get_tabard_info_is_a_call_with_no_returns() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert_eq!(
             s.eval::<i64>("local n = function(...) return arg.n end return n(GetTabardInfo())")
                 .unwrap(),
             0
         );
-        assert_eq!(
-            s.take_petition_requests(),
-            vec![PetitionRequest::TabardInfo]
-        );
-    }
-
-    #[test]
-    fn dropping_close_intents_leaves_the_other_verbs_untouched() {
-        let mut s = UiScript::new().unwrap();
-        s.run(
-            r#"
-            SignPetition()
-            ClosePetition()
-            BuyGuildCharter("Legacy")
-            CloseGuildRegistrar()
-            OfferPetition()
-        "#,
-        )
-        .unwrap();
-        assert_eq!(s.drop_petition_close_intents(), 2);
-        assert_eq!(
-            s.take_petition_requests(),
-            vec![
-                PetitionRequest::Sign(1),
-                PetitionRequest::Buy("Legacy".into()),
-                PetitionRequest::Offer,
-            ],
-        );
-        assert_eq!(s.drop_petition_close_intents(), 0);
+        assert_eq!(s.take_petition_calls(), vec![PetitionCall::TabardInfo]);
+        assert!(s.take_registrar_close());
+        assert!(!s.take_registrar_close(), "taken");
     }
 }

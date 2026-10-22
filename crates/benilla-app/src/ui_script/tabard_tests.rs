@@ -2,12 +2,14 @@
 //! cycle the design, Save follows `CanSaveTabardNow`, and closing calls `CloseTabardCreation`.
 
 use benilla_ui::script::{
-    emblem_mask_path, TabardHost, TabardIntent, UiScript, UnitGuild, UnitState,
+    emblem_mask_path, TabardCall, TabardHost, UiScript, UnitGuild, UnitState,
 };
 
 /// The player in a guild at `rank`, 0 the master; `GetGuildInfo("player")` reads the unit's guild.
 fn harness(rank: u32) -> UiScript {
     let mut s = UiScript::new().unwrap();
+    // `Save` is a call the client's host applies; this VM keeps it.
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for (token, name, guild) in [
         (
@@ -107,8 +109,8 @@ fn the_open_event_seeds_the_design_paints_the_cells_and_shows_the_window() {
     // Save sends the five values; the pending latch greys the button (`TabardFrame.lua:38`).
     s.run("TabardFrameAcceptButton:Click()").unwrap();
     assert_eq!(
-        s.take_tabard_intents(),
-        vec![TabardIntent::Save([13, 4, 1, 2, 7])]
+        s.take_tabard_calls(),
+        vec![TabardCall::Save([13, 4, 1, 2, 7])]
     );
     s.set_tabard_host(TabardHost {
         guild_record: Some([12, 4, 1, 2, 9]),
@@ -125,7 +127,7 @@ fn the_open_event_seeds_the_design_paints_the_cells_and_shows_the_window() {
     s.run("TabardFrameCancelButton:Click()").unwrap();
     s.resolve();
     assert!(!s.eval::<bool>("return TabardFrame:IsVisible()").unwrap());
-    assert_eq!(s.take_tabard_intents(), vec![TabardIntent::Close]);
+    assert!(s.take_tabard_close());
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 

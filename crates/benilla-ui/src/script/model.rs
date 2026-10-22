@@ -478,12 +478,12 @@ pub(crate) struct Model {
     pub(crate) guild: guild::GuildState,
     /// The rank editor's unsaved edits, apart from `guild` so a push cannot discard them.
     pub(crate) guild_control: guild::GuildRankEdit,
-    /// Guild calls (`GuildInviteByName`, `GuildSetMOTD`, `GuildControlSaveRank`, …) queued.
-    pub(crate) guild_requests: Vec<guild::GuildRequest>,
+    /// The guilds `GetGuildInfo` missed, `(guild_id, guid)`, for the app to ask with a waiter.
+    pub(crate) guild_info_asks: Vec<(u32, u64)>,
     /// The charter price and open petition, names resolved from caches as the reference does.
     pub(crate) petition: petition::PetitionState,
-    /// Charter calls (`BuyGuildCharter`, `SignPetition`, `TurnInGuildCharter`, …) queued.
-    pub(crate) petition_requests: Vec<petition::PetitionRequest>,
+    /// `CloseGuildRegistrar` was called: the interaction latch runs the close core.
+    pub(crate) registrar_close: bool,
     /// Per chat window from `ChatFrame1`, the tint, alpha and font size its tab menu can change.
     pub(crate) chat_window_looks: [chat_window::ChatWindowLook; chat_window::NUM_CHAT_WINDOWS],
     /// 0-based windows whose look Lua changed, the persist cue.
@@ -1175,7 +1175,8 @@ pub(crate) struct Model {
     pub(crate) tabard_designs: HashMap<crate::widget::FrameHandle, [i32; 5]>,
     pub(crate) tabard_preview: Option<[i32; 5]>,
     pub(crate) tabard_host: super::tabard::TabardHost,
-    pub(crate) tabard_intents: Vec<super::tabard::TabardIntent>,
+    /// `CloseTabardCreation` was called: the interaction latch runs the close core.
+    pub(crate) tabard_close: bool,
     /// The `WorldFrame` type's one-shot record: true once the first is made.
     pub(crate) world_frame_made: bool,
     /// Set while the XML loader's `CreateFrame` call builds a frame: the creation half only, so
@@ -1545,9 +1546,9 @@ impl Model {
             lfg_comment: String::new(),
             guild: guild::GuildState::default(),
             guild_control: guild::GuildRankEdit::default(),
-            guild_requests: Vec::new(),
+            guild_info_asks: Vec::new(),
             petition: petition::PetitionState::default(),
-            petition_requests: Vec::new(),
+            registrar_close: false,
             // Per window, as the stock dock differs: 1 and 2 are the dock, the rest undocked.
             chat_window_looks: std::array::from_fn(chat_window::ChatWindowLook::stock),
             chat_window_changes: HashSet::new(),
@@ -1879,7 +1880,7 @@ impl Model {
             tabard_designs: HashMap::new(),
             tabard_preview: None,
             tabard_host: Default::default(),
-            tabard_intents: Vec::new(),
+            tabard_close: false,
             world_frame_made: false,
             xml_creating: false,
             unit_reach: HashMap::new(),

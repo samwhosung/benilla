@@ -283,7 +283,7 @@ pub use gm_survey::{GmSurveyTables, SurveyAnswerSend};
 pub use gm_ticket::{GmTicketIntent, GmTicketWrite};
 pub use gossip::{GossipCall, GossipMenu, GossipOptionView, GossipQuestRow};
 pub use guild::{
-    GuildMemberInfo, GuildRankEdit, GuildRankInfo, GuildRequest, GuildState, LastOnline, UnitGuild,
+    GuildCall, GuildMemberInfo, GuildRankEdit, GuildRankInfo, GuildState, LastOnline, UnitGuild,
     MAX_RANKS, MIN_RANKS, RANK_RIGHT_BITS,
 };
 pub use host::{CallHost, CallTail};
@@ -292,12 +292,12 @@ pub use lfg::LfgDungeon;
 pub use lottery::UnservedSend;
 pub use modelframe::{CharacterPaneFrame, ModelPaneFrame, ModelWanted};
 pub use petition::{
-    validate_guild_name, PetitionRecordView, PetitionRequest, PetitionState, PETITION_TYPE_CHARTER,
+    validate_guild_name, PetitionCall, PetitionRecordView, PetitionState, PETITION_TYPE_CHARTER,
     PETITION_TYPE_PETITION,
 };
 pub use protected::InputEvents;
 pub use tabard::{
-    emblem_mask_path, TabardHost, TabardIntent, EMBLEM_MASK_TOKEN, TABARD_COUNTS,
+    emblem_mask_path, TabardCall, TabardHost, EMBLEM_MASK_TOKEN, TABARD_COUNTS,
     TABARD_CREATION_COST,
 };
 pub use video_pairs::VIDEO_PAIR_CVARS;

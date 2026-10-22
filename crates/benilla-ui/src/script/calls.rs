@@ -171,6 +171,15 @@ pub enum ScriptCall {
     /// A merchant verb past its binding's checks ([`super::MerchantCall`]): its refusal or packet
     /// inside the call.
     Merchant(super::MerchantCall),
+    /// A guild roster verb ([`super::GuildCall`]): its packet, its re-sort and its
+    /// `GUILD_ROSTER_UPDATE` inside the call.
+    Guild(super::GuildCall),
+    /// A charter verb ([`super::PetitionCall`]): its packet, its line and its close inside the
+    /// call.
+    Petition(super::PetitionCall),
+    /// The tabard designer's `Save` ([`super::TabardCall`]): its checks, its packet and its
+    /// `TABARD_SAVE_PENDING` inside the call.
+    Tabard(super::TabardCall),
 }
 
 /// The mode the four `TargetNearest*` shims hand the TAB cycler `0x493f60`, the only byte that

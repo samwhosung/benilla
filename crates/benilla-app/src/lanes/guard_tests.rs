@@ -128,7 +128,18 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "the pet unlearn confirm",
     ),
     (Row::Queue, "::ui_duel::DuelState", "the duel state"),
-    (Row::Queue, "::ui_guild::GuildState", "the guild state"),
+    (
+        Row::HostHeld,
+        "::ui_guild::GuildState",
+        "the guild state, which `feed_guild` fires from; the guild verbs, acting in their calls, \
+         read it in the host",
+    ),
+    (
+        Row::HostHeld,
+        "::ui_guild::GuildLocal",
+        "the held guild invitation, which `feed_guild` fires from; the guild verbs, acting in \
+         their calls, hold it in the host",
+    ),
     (
         Row::Queue,
         "::ui_honor::InspectHonor",
@@ -164,9 +175,10 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "the mirror timers",
     ),
     (
-        Row::Queue,
+        Row::HostHeld,
         "::ui_petition::PetitionState",
-        "the petition state",
+        "the petition state, which `feed_petition` fires from; the charter verbs, acting in their \
+         calls, hold it in the host",
     ),
     (
         Row::Queue,
@@ -208,9 +220,10 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (Row::Queue, "::ui_summon::SummonState", "the summon state"),
     (
-        Row::Queue,
+        Row::HostHeld,
         "::ui_tabard::TabardOpen",
-        "the tabard vendor's packets",
+        "the tabard vendor's packets, which `feed_tabard` fires from; the designer's save, acting \
+         in its call, holds it in the host",
     ),
     (
         Row::Queue,
@@ -321,6 +334,10 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::CombatLogRanges",
     "::LogPeriodicSpells",
     "::GuildMemberNotify",
+    "::ui_guild::GuildState",
+    "::GuildRegistrarState",
+    "::PetitionRecords",
+    "::ui_petition::PetitionState",
     "::ItemSubClasses",
     "::LootConfig",
     "::LootKneel",

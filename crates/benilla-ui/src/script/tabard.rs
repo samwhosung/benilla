@@ -1,7 +1,7 @@
 //! The guild tabard designer: the `TabardModel` method table (`0x84ee40`) and the window's two
 //! globals. Its state is five ints on the frame, which the constructor leaves unwritten until
-//! `InitializeTabardColors()` seeds them; the app pushes the guild record and save latch and runs
-//! the save's fourteen checks (`0x5e03f0`).
+//! `InitializeTabardColors()` seeds them; the app pushes the guild record and save latch, and the
+//! host runs the save's fourteen checks inside the call (`0x5e03f0`).
 
 use mlua::{Lua, Value};
 
@@ -39,13 +39,11 @@ pub struct TabardHost {
     pub save_pending: bool,
 }
 
-/// What the designer asks the app to do.
+/// The designer's verb the host applies inside its call ([`super::ScriptCall::Tabard`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TabardIntent {
-    /// `Save()`: the five values, for the checks and the send.
+pub enum TabardCall {
+    /// `Save()` (`0x502bd0`): the five values, for the checks and the send (`0x5e03f0`).
     Save([i32; 5]),
-    /// `CloseTabardCreation()`.
-    Close,
 }
 
 impl super::UiScript {
@@ -59,18 +57,19 @@ impl super::UiScript {
         self.model_ref().tabard_preview
     }
 
-    /// The queued intents since the last drain.
-    pub fn take_tabard_intents(&mut self) -> Vec<TabardIntent> {
-        std::mem::take(&mut self.model_mut().tabard_intents)
+    /// The designer's calls a harness VM kept ([`Self::keep_calls`]), in call order.
+    pub fn take_tabard_calls(&mut self) -> Vec<TabardCall> {
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Tabard(call) => Some(*call),
+            _ => None,
+        })
     }
 
-    /// Take the `CloseTabardCreation()` calls queued since the last drain, leaving the saves in
-    /// order: a close core answers the call its own `CLOSE_TABARD_FRAME` raised through `OnHide`.
+    /// Take the `CloseTabardCreation()` calls made since the last take: the close core needs the
+    /// interaction latch, which a core answers when its own `CLOSE_TABARD_FRAME` raised the call
+    /// through `OnHide`.
     pub fn take_tabard_close(&mut self) -> bool {
-        let intents = &mut self.model_mut().tabard_intents;
-        let before = intents.len();
-        intents.retain(|i| !matches!(i, TabardIntent::Close));
-        intents.len() != before
+        std::mem::take(&mut self.model_mut().tabard_close)
     }
 }
 
@@ -230,18 +229,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `0x502bd0`: the app runs the fourteen checks on the queued five.
+    // `0x502bd0`: the host runs the fourteen checks on the five inside the call.
     m.set(
         "Save",
         lua.create_function(|lua, this: Value| {
             let h = this_tabard(lua, &this)?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if !model.unit("player").is_some_and(|u| u.exists) {
-                return Ok(());
-            }
-            let five = design(&model, h);
-            model.tabard_intents.push(TabardIntent::Save(five));
-            Ok(())
+            let five = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                if !model.unit("player").is_some_and(|u| u.exists) {
+                    return Ok(());
+                }
+                design(&model, h)
+            };
+            super::calls::submit(lua, super::ScriptCall::Tabard(TabardCall::Save(five)))
         })?,
     )?;
 
@@ -332,15 +332,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetTabardCreationCost",
         lua.create_function(|_, ()| Ok(i64::from(TABARD_CREATION_COST)))?,
     )?;
-    // `0x4f5900`, no packet: the app runs the close (`0x4f58a0`) and its `CLOSE_TABARD_FRAME`,
-    // gated on a stored vendor.
+    // `0x4f5900`, no packet: the close core (`0x4f58a0`) and its `CLOSE_TABARD_FRAME`, gated on a
+    // stored vendor; it needs the interaction latch, so it stays latch-driven.
     g.set(
         "CloseTabardCreation",
         lua.create_function(|lua, _: mlua::MultiValue| {
             lua.app_data_mut::<Model>()
                 .expect("model app_data")
-                .tabard_intents
-                .push(TabardIntent::Close);
+                .tabard_close = true;
             Ok(())
         })?,
     )?;
@@ -558,11 +557,12 @@ mod tests {
                 .unwrap(),
             "never resolves this: a dot-call is fine"
         );
+        s.keep_calls();
         s.run("t:InitializeTabardColors() t:Save() CloseTabardCreation()")
             .unwrap();
-        let intents = s.take_tabard_intents();
-        assert!(matches!(intents[0], TabardIntent::Save(_)));
-        assert_eq!(intents[1], TabardIntent::Close);
-        assert!(s.take_tabard_intents().is_empty());
+        let calls = s.take_tabard_calls();
+        assert!(matches!(calls[..], [TabardCall::Save(_)]), "{calls:?}");
+        assert!(s.take_tabard_close());
+        assert!(s.take_tabard_calls().is_empty() && !s.take_tabard_close());
     }
 }
