@@ -22,6 +22,7 @@ fn an_initial_item_cooldown_alone_reaches_the_bags() {
     let mut app = App::new();
     app.init_resource::<Items>()
         .init_resource::<Cooldowns>()
+        .init_resource::<super::BagView>()
         .init_resource::<crate::net::GuidIndex>()
         .init_resource::<crate::ui_chat::ChatLog>()
         .init_resource::<crate::sound::MessageSounds>()
