@@ -284,7 +284,9 @@ fn rebind_macro_spells(
         }
         seen.macros = Some(generation);
         seen.pet_book = Some(pet_generation);
-        let every = std::mem::take(arrived) || script.take_macro_derives().loaded;
+        // Both taken, so neither stays owed to the next pass.
+        let (arrival, load) = (std::mem::take(arrived), script.take_macro_derives().loaded);
+        let every = arrival || load;
 
         if !superseded.is_empty() {
             let mut records = script.macro_bindings();

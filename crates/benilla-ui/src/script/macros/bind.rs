@@ -65,7 +65,9 @@ pub(crate) fn cast_name(aliases: &[String], body: &str) -> Option<(CastArm, Stri
             if !args.is_empty() {
                 return Some((CastArm::Slash, args.to_string()));
             }
-            // The reference tries arm B on this line, then the next line.
+            // The reference stores any alias hit's result and returns, -1 for a name that resolves
+            // nothing (`0x4eff28`-`0x4eff48`); under the trim above, an argument of spaces alone
+            // goes on to the next line instead.
             continue;
         }
         // Arm B, second, on the same line (`0x4efed5`): its quote decides the binding, so the walk
