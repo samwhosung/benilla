@@ -1351,4 +1351,189 @@ mod tests {
         assert_eq!(global::<String>(&s, "SEEN"), "00 01 ");
         assert_eq!(s.item_locks(), Vec::<u64>::new());
     }
+
+    /// The tag a test host notes a call by.
+    fn tag(call: &ScriptCall) -> &'static str {
+        match call {
+            ScriptCall::Select {
+                request: SelectionRequest::LastEnemy,
+                ..
+            } => "last",
+            ScriptCall::Select { .. } => "select",
+            ScriptCall::ClearTarget => "clear",
+            _ => "other",
+        }
+    }
+
+    /// Append `note` to the `ORDER` global, as a handler's line does.
+    fn note(script: &UiScript, note: &str) {
+        let globals = script.lua().globals();
+        let order: Option<String> = globals.get("ORDER").unwrap();
+        globals
+            .set("ORDER", format!("{}{note} ", order.unwrap_or_default()))
+            .unwrap();
+    }
+
+    /// A frame whose `event` handler runs `body`.
+    fn on(s: &UiScript, event: &str, body: &str) {
+        s.run(&format!(
+            r#"local f = CreateFrame("Frame")
+            f:RegisterEvent("{event}")
+            f:SetScript("OnEvent", function() {body} end)"#
+        ))
+        .unwrap();
+    }
+
+    /// A host that notes each call it applies on `ORDER` and, for the first `points` of them,
+    /// signals `PLAYER_TARGET_CHANGED` from inside the apply, stops at a signal point, then notes
+    /// the apply's next step.
+    struct Pointing {
+        points: usize,
+        applied: usize,
+    }
+
+    impl CallHost for Pointing {
+        fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
+            self.applied += 1;
+            note(script, tag(&call));
+            if self.points == 0 {
+                return None;
+            }
+            self.points -= 1;
+            script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+            script.signal_point(self);
+            note(script, "next");
+            None
+        }
+    }
+
+    /// `SignalEvent` (`0x703e50`) walks every listener before it returns, so the call a handler
+    /// makes at a signal point applies there, before the apply's next step, as `SetSelection`'s
+    /// `PLAYER_TARGET_CHANGED` (`0x49389c`) runs its handlers before the re-swing (`0x4938c8`).
+    #[test]
+    fn a_handlers_call_applies_at_the_point_before_the_applys_next_step() {
+        let mut s = UiScript::new().unwrap();
+        on(&s, "PLAYER_TARGET_CHANGED", "ClearTarget()");
+        let mut host = Pointing {
+            points: 1,
+            applied: 0,
+        };
+        s.hosted(&mut host, |s| s.run(r#"TargetUnit("player")"#))
+            .unwrap();
+        assert_eq!(global::<String>(&s, "ORDER"), "select clear next ");
+        assert_eq!(s.refuse_waiting(), 0, "nothing waits");
+    }
+
+    /// A host whose first apply signals `LOOT_OPENED` and runs `TargetLastEnemy()` in place, both
+    /// of which wait for the host, then stops at a signal point, notes its next step and signals
+    /// `LOOT_CLOSED`.
+    struct Ahead {
+        first: bool,
+    }
+
+    impl CallHost for Ahead {
+        fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
+            note(script, tag(&call));
+            if std::mem::take(&mut self.first) {
+                script.fire_event("LOOT_OPENED", vec![]);
+                script.run("TargetLastEnemy()").unwrap();
+                script.signal_point(self);
+                note(script, "next");
+                script.fire_event("LOOT_CLOSED", vec![]);
+            }
+            None
+        }
+    }
+
+    /// What the apply held before a signal point (a signal's handlers, a call Lua run in place
+    /// made) runs at the point, in the order made; what it signals after the point waits for the
+    /// apply to return.
+    #[test]
+    fn what_the_apply_held_before_a_point_runs_at_it() {
+        let mut s = UiScript::new().unwrap();
+        on(&s, "LOOT_OPENED", r#"ORDER = ORDER .. "opened ""#);
+        on(&s, "LOOT_CLOSED", r#"ORDER = ORDER .. "closed ""#);
+        let mut host = Ahead { first: true };
+        s.hosted(&mut host, |s| s.run(r#"TargetUnit("player")"#))
+            .unwrap();
+        assert_eq!(
+            global::<String>(&s, "ORDER"),
+            "select opened last next closed "
+        );
+    }
+
+    /// A handler that makes the call again at every point nests [`MAX_NESTING`] deep, each level
+    /// inside the point of the one above it; the verb past the bound raises [`TOO_DEEP`] in its
+    /// handler, and each level then finishes its apply, so the slot and the depth are as they were
+    /// and the next call applies.
+    #[test]
+    fn nesting_at_points_stops_at_the_bound_with_the_stack_intact() {
+        let mut s = UiScript::new().unwrap();
+        on(&s, "PLAYER_TARGET_CHANGED", "TargetLastEnemy()");
+        let mut host = Pointing {
+            points: usize::MAX,
+            applied: 0,
+        };
+        s.hosted(&mut host, |s| s.run("TargetLastEnemy()")).unwrap();
+        let levels = usize::from(MAX_NESTING);
+        assert_eq!(host.applied, levels);
+        assert_eq!(
+            global::<String>(&s, "ORDER"),
+            format!("{}{}", "last ".repeat(levels), "next ".repeat(levels))
+        );
+        let errors = s.take_errors();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains(TOO_DEEP), "{errors:?}");
+        assert_eq!(s.model_ref().call_depth, 0);
+        assert_eq!(s.refuse_waiting(), 0, "nothing waits");
+        assert!(!s.host_free());
+        let mut next = Pointing {
+            points: 0,
+            applied: 0,
+        };
+        s.hosted(&mut next, |s| s.run("ClearTarget()")).unwrap();
+        assert_eq!(next.applied, 1);
+    }
+
+    /// A host whose `ClearTarget` panics; its other calls signal `PLAYER_TARGET_CHANGED`, stop at a
+    /// signal point, catch what unwinds out of it, and note whether it did and how the slot stood
+    /// after: whether the host was free and handlers held.
+    #[derive(Default)]
+    struct Panicking {
+        after: Option<(bool, bool, bool)>,
+    }
+
+    impl CallHost for Panicking {
+        fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
+            if call == ScriptCall::ClearTarget {
+                panic!("inside a handler's call");
+            }
+            script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                script.signal_point(self)
+            }))
+            .is_err();
+            let lua = script.lua().clone();
+            self.after = Some((
+                caught,
+                super::super::host::free(&lua),
+                super::super::host::holding(&lua),
+            ));
+            None
+        }
+    }
+
+    /// A panic in a handler at a signal point unwinds out of the point with the slot as the apply
+    /// had it: the host out, handlers held.
+    #[test]
+    fn a_panic_at_a_point_leaves_the_slot_as_it_was() {
+        let mut s = UiScript::new().unwrap();
+        on(&s, "PLAYER_TARGET_CHANGED", "ClearTarget()");
+        let mut host = Panicking::default();
+        s.hosted(&mut host, |s| s.run(r#"TargetUnit("player")"#))
+            .unwrap();
+        assert_eq!(host.after, Some((true, false, true)));
+        assert!(!s.host_free());
+        assert_eq!(s.model_ref().call_depth, 0);
+    }
 }

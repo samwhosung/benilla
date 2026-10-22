@@ -226,6 +226,9 @@ impl UiScript {
         super::calls::refuse_waiting(self.lua())
     }
 
+    /// A signal point inside a call's apply.
+    pub fn signal_point(&mut self, _host: &mut dyn CallHost) {}
+
     /// Whether a host is lent and free to apply a call now.
     pub fn host_free(&self) -> bool {
         free(self.lua())
