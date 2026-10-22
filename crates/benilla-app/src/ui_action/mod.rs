@@ -372,8 +372,7 @@ impl Plugin for UiActionPlugin {
                     ranks::normalize_action_ranks
                         .in_set(UnitFeed)
                         .before(feed::feed_actions),
-                    // The item watchers' recounts, after the server's unlocks, which each handler
-                    // runs first (`0x5d94af` before `0x5d94e1`).
+                    // Our player's arrival recount, after the server's unlocks.
                     recount::recount_item_actions
                         .in_set(UnitFeed)
                         .after(crate::ui_items::locks::apply_item_releases)

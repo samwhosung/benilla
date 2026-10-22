@@ -1,7 +1,8 @@
 //! The trade window: [`net`] folds the two status packets into [`TradeSession`], [`feed_trade`]
 //! pushes it into the VM and fires the trade events, the trade verbs act inside their calls
 //! ([`TradeSteps`]), [`drain_trade`] runs `CloseTrade`'s close core,
-//! [`run_record_callbacks`] signals `TRADE_UPDATE` when a record a getter asked for lands, and
+//! [`register_record_callbacks`] registers the getters' record asks, whose answers signal
+//! `TRADE_UPDATE` on the item lane ([`crate::item_lane`]), and
 //! [`answer_trade_request`] answers an incoming request.
 
 use benilla_protocol::messages::{TradeItem, TradeStatusExtended, TRADE_SLOT_COUNT};
@@ -737,7 +738,7 @@ fn answer_trade_request(
 /// A wire [`TradeItem`] as the Lua row: name and quality from the item-template cache once it
 /// answers, the icon from `display_id` via `ItemDisplayInfo.dbc`; [`resolve_side`] names slot 7's
 /// `enchantment`. The template is only read: the getters' lookups ask for it
-/// ([`run_record_callbacks`]). The name joins the random property's suffix (`0x5d8b00`, at
+/// ([`register_record_callbacks`]). The name joins the random property's suffix (`0x5d8b00`, at
 /// `0x4c01b8` and `0x4c0405` for the partner's slots) and the link prints the record's permanent
 /// enchant, random property id and suffix factor (`0x4c040a`-`0x4c0431`); our own slots' records
 /// carry what `0x52ae00` reads off the object ([`own_item`]).
@@ -1147,7 +1148,7 @@ fn feed_trade(
         // The per-slot events the stock `TradeFrame.lua` repaints one slot on, arg1 the 1-based
         // slot (`0x4bf414`/`0x4bf452` target, `0x4bf487`/`0x4bfaef` player). An offer change
         // signals nothing else: `TRADE_UPDATE` has one producer, the getters' record callback
-        // ([`run_record_callbacks`]). Our invalidated slots signalled ahead of this turn.
+        // ([`register_record_callbacks`]). Our invalidated slots signalled ahead of this turn.
         if changed && trade.is_open() && !opened {
             let empty = TradeState::default();
             let old = last.as_ref().unwrap_or(&empty);
