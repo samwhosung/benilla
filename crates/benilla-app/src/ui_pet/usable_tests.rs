@@ -502,6 +502,9 @@ fn with_stock_ui(rig: &mut Rig) {
     let failures = crate::ui_script::load_default_ui(&script);
     assert!(failures.is_empty(), "manifest load errors: {failures:#?}");
     rig.app.world_mut().insert_non_send_resource(script);
+    // The bar's own `PET_BAR_UPDATE`, as its packet signals it (`0x4bc90c`), on the bar pushed.
+    rig.feed.run(rig.app.world_mut());
+    ui(rig, |s| s.fire_event("PET_BAR_UPDATE", vec![]));
 }
 
 /// The feeds, then the VM's clock and layout, so the bar's slide and repaint have happened.

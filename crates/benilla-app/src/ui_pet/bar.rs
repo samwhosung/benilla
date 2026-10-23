@@ -336,7 +336,11 @@ pub(super) fn feed_pet_bar(
                 if key.3 { "" } else { ", possessed" },
             );
             memory.pushed = Some(key);
-            fires.post("PET_BAR_UPDATE", vec![]);
+            // A signal from this side is `SetPetGuid`'s own, fired at its place (the notice lane's
+            // `PetGuidSet`, the world entry's reset); a repaint off any other source is the feed's.
+            if !resignalled {
+                fires.post("PET_BAR_UPDATE", vec![]);
+            }
         }
     })
 }

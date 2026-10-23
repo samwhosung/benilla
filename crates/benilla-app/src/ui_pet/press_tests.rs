@@ -193,15 +193,17 @@ pub(super) fn rig(
         commands,
         feed,
     };
-    // The bar arriving is `PET_BAR_UPDATE`'s; every test reads what a press adds to it.
-    assert_eq!(rig.frame(), ["PET_BAR_UPDATE"], "the bar arrives");
+    // The bar arrives with no event from its feed: a packet's `PET_BAR_UPDATE` is the notice
+    // lane's (`SetPetGuid`, `0x4bc90c`). Every test reads what a press adds to it.
+    assert_eq!(rig.frame(), Vec::<String>::new(), "the bar arrives");
     rig
 }
 
 impl Rig {
-    /// The bar's feeds for one frame, and the events they fired.
+    /// The bar's feeds for one frame, then the lanes' drain, and the events they fired.
     pub(super) fn frame(&mut self) -> Vec<String> {
         self.feed.run(self.app.world_mut());
+        crate::lanes::fire_in_order(self.app.world_mut());
         let mut script = self
             .app
             .world_mut()

@@ -805,8 +805,8 @@ fn a_cooldown_alone_is_pushed_with_no_event_from_the_bar_feed() {
     };
     assert_eq!(
         seen(&mut app),
-        vec!["PET_BAR_UPDATE".to_string()],
-        "the bar arrives"
+        Vec::<String>::new(),
+        "the bar arrives, its event its packet's (`0x4bc90c`)"
     );
     assert_eq!(seen(&mut app), Vec::<String>::new(), "nothing moved");
 

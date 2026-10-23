@@ -1762,7 +1762,9 @@ fn feed_units(
         return;
     };
     // `0x4909c9` → `0x4bc6f0`: `SetPetGuid(0, 0)` as an engine turn on the bar and the VM, its
-    // signals, then `CMSG_REQUEST_PET_INFO` (`0x4bc738`), then the cascade's rest.
+    // signals, then `CMSG_REQUEST_PET_INFO` (`0x4bc738`), then the cascade's rest. Its trainer
+    // refresh (`0x4bc872`) never runs here: the cascade zeroes the trainer cell before it
+    // (`0x4909ab` → `0x4d73e0`).
     let mut pet_bar_feed = pet_bar_feed;
     let dropped = vm.turn(|script, (_, _, bar, latch)| {
         let script = script?;

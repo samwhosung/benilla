@@ -41,6 +41,27 @@ use crate::ui_spellbook::SkillLines;
 const TRAINER_TYPE_TRADESKILL: u32 = 2;
 /// A mount trainer, which the client calls "talent" (`IsTalentTrainer 0x4d8ed0`).
 const TRAINER_TYPE_MOUNT: u32 = 1;
+/// A pet trainer, whose list `SetPetGuid` asks again on a new pet (`0x4bc872`).
+const TRAINER_TYPE_PET: u32 = 3;
+
+/// The open trainer's cell when it is a pet trainer: `SetPetGuid`'s test, the cell nonzero and the
+/// type 3 (`0x4bc860`-`0x4bc879`).
+pub(crate) fn open_pet_trainer(open: Option<&TrainerOpen>) -> Option<u64> {
+    let open = open?;
+    open.trainer
+        .filter(|_| open.trainer_type == TRAINER_TYPE_PET)
+}
+
+/// `TalkToTrainer` (`0x5df680`) on `trainer`: the window closed through the close core
+/// (`0x5df6bb` → `0x4d7440` with a zero guid), then `CMSG_TRAINER_LIST` for it (`0x5df6fc`). The
+/// asked guid it remembers (`0xc4d788`), which the list's open tests (`0x5dcc85`), has no cell
+/// here: every list opens.
+pub(crate) fn talk_to_trainer(world: &mut World, trainer: u64) {
+    close_core(world);
+    if let Some(net) = world.get_resource::<NetCommands>() {
+        let _ = net.0.send(ClientCommand::TrainerList { trainer });
+    }
+}
 
 /// The open trainer as `SMSG_TRAINER_LIST` delivered it.
 #[derive(Resource, Default)]

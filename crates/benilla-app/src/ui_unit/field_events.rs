@@ -38,20 +38,28 @@ pub(crate) struct NoticeFiring<'w, 's> {
     skill_lines: Option<Res<'w, crate::ui_spellbook::SkillLines>>,
     // The aura watcher's cache and the store its packet left.
     auras: crate::ui_aura::PlayerAuraWatch<'w, 's>,
+    // `SetPetGuid`'s trainer refresh reads the open trainer (`0x4bc860`-`0x4bc879`) and runs its
+    // close, which needs the latch, as a world turn after the notice.
+    trainer: Option<Res<'w, crate::ui_trainer::TrainerOpen>>,
+    commands: Commands<'w, 's>,
 }
 
 impl NoticeFiring<'_, '_> {
-    /// One notice's signals.
-    fn fire(&mut self, script: &mut UiScript, notice: FieldNotice) {
+    /// One notice's signals; whether it left a world turn the lane's firing must yield to, so the
+    /// turn runs before the next notice.
+    fn fire(&mut self, script: &mut UiScript, notice: FieldNotice) -> bool {
+        if let FieldNotice::PetGuidSet { changed } = notice {
+            return self.pet_guid_set(script, changed);
+        }
         if notice == FieldNotice::PlayerAuras {
             self.auras.run(script);
-            return;
+            return false;
         }
         if notice == FieldNotice::QuestLog {
             if let Some(store) = self.me.iter().next() {
                 script.quest_log_changed(crate::ui_quest_log::slot_views(&store.0));
             }
-            return;
+            return false;
         }
         if let FieldNotice::Tutorial { id } = notice {
             // `0x4b5390` with no delay, inside the watcher's run.
@@ -59,20 +67,20 @@ impl NoticeFiring<'_, '_> {
             if let Some(published) = published {
                 crate::tutorial::fire_published(script, &self.sink.sounds, published);
             }
-            return;
+            return false;
         }
         if let FieldNotice::Drunk { guid, old, new } = notice {
             drunk(script, &mut self.sink, &self.names, guid, old, new);
-            return;
+            return false;
         }
         if notice == FieldNotice::SkillLines {
             script.rebuild_skills();
-            return;
+            return false;
         }
         if notice == FieldNotice::SkillMax {
             script.rebuild_trade_skill(&mut |t| self.reband(t));
             script.rebuild_skills();
-            return;
+            return false;
         }
         if let FieldNotice::SkillValue {
             skill_id,
@@ -85,7 +93,7 @@ impl NoticeFiring<'_, '_> {
                 self.skill_line(script, skill_id, old, shown);
             }
             script.rebuild_trade_skill(&mut |t| self.reband(t));
-            return;
+            return false;
         }
         if notice == FieldNotice::Shapeshift {
             // `0x5de016` → `0x4b3250`: `0x4e5bf0`'s event, then its own (`0x4b325a`).
@@ -96,13 +104,37 @@ impl NoticeFiring<'_, '_> {
                 crate::ui_action::bonus_bar_offset(self.me.iter().next(), self.spells.as_deref());
             script.set_bonus_bar_offset(offset);
             script.fire_event("UPDATE_BONUS_ACTIONBAR", vec![]);
-            return;
+            return false;
         }
         fire(script, &mut self.sink, notice);
+        false
     }
 }
 
 impl NoticeFiring<'_, '_> {
+    /// `SetPetGuid`'s signals in its order (`0x4bc847`-`0x4bc911`): on a change, `UNIT_PET`, then,
+    /// with a pet trainer open and our player held, `TalkToTrainer` on it (`0x4bc8b2`), whose
+    /// close needs the latch and so runs as a world turn, `PET_BAR_UPDATE` after it; else
+    /// `PET_BAR_UPDATE` here.
+    fn pet_guid_set(&mut self, script: &mut UiScript, changed: bool) -> bool {
+        if changed {
+            script.fire_event("UNIT_PET", vec![super::player_token()]);
+            let trainer = crate::ui_trainer::open_pet_trainer(self.trainer.as_deref())
+                .filter(|_| self.me.iter().next().is_some());
+            if let Some(trainer) = trainer {
+                self.commands.queue(move |world: &mut World| {
+                    crate::ui_trainer::talk_to_trainer(world, trainer);
+                    crate::ui_session::fire(world, |script| {
+                        script.fire_event("PET_BAR_UPDATE", vec![]);
+                    });
+                });
+                return true;
+            }
+        }
+        script.fire_event("PET_BAR_UPDATE", vec![]);
+        false
+    }
+
     /// The profession list's rebuild by a skill watch, its bands and line rank read again.
     fn reband(&self, t: &mut benilla_ui::script::TradeSkillState) {
         crate::ui_tradeskill::reband(t, self.me.iter().next(), self.skill_lines.as_deref());
@@ -161,7 +193,7 @@ fn peek(world: &World) -> Option<crate::lanes::Stamp> {
 
 /// The notices `until` admits, in stamp order, each one's signals with the host lent; the lane's
 /// firing stops after a notice whose firing stamped anything, so the drain takes what it pushed
-/// next. With no VM there is nobody to hear them, and they are dropped, as below.
+/// next, or left a world turn, which runs as the firing returns. With no VM there is nobody to hear them, and they are dropped, as below.
 fn fire_lane(
     hosted_vm: &mut crate::script_calls::HostedVm,
     lane: &mut NoticeLane,
@@ -174,8 +206,8 @@ fn fire_lane(
             return;
         };
         while let Some((stamp, notice)) = lane.pop(until) {
-            let ((), moved) = crate::lanes::firing(stamp, || firing.fire(script, notice));
-            if moved {
+            let (yielded, moved) = crate::lanes::firing(stamp, || firing.fire(script, notice));
+            if moved || yielded {
                 break;
             }
         }
@@ -391,7 +423,8 @@ pub(crate) fn fire(
         | FieldNotice::PlayerAuras
         | FieldNotice::SkillLines
         | FieldNotice::SkillMax
-        | FieldNotice::SkillValue { .. } => {}
+        | FieldNotice::SkillValue { .. }
+        | FieldNotice::PetGuidSet { .. } => {}
         FieldNotice::PvpPreference { on } => {
             let (toast, verbose) = super::pvp_announcement(on);
             // The verbose sentence is no catalog row, so it goes `unkeyed` to chat:
@@ -549,8 +582,6 @@ fn global_event(id: u16) -> Option<&'static str> {
 /// signals with `"player"` ([`FieldNotice::Player`]).
 fn player_event(id: u16) -> Option<&'static str> {
     Some(match id {
-        // The pet bar's guid writer, on a change (`0x4bc84f`).
-        2 => "UNIT_PET",
         149 => "UNIT_RESISTANCES",
         186 => "UNIT_INVENTORY_CHANGED",
         189 => "PLAYER_XP_UPDATE",

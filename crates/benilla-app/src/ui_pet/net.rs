@@ -53,12 +53,13 @@ fn on_spells(
     if let SessionEvent::PetSpells(spells) = ev {
         // The pet list's category pad (`0x6e2b60` with the pet flag): op 11 alone.
         let pad = crate::spell::CategoryPad::for_list(true, player.iter().next());
-        if pet_spells(*spells, catalog.as_deref(), mods.as_deref(), pad, &mut bar) {
+        let changed = pet_spells(*spells, catalog.as_deref(), mods.as_deref(), pad, &mut bar);
+        if changed {
             latch.0 = None;
-            // `SetPet`'s `UNIT_PET("player")` on a new guid (`0x4bc84f`), at the packet's place:
-            // the pet frame's `UnitExists("pet")` reads our summon field as this packet left it.
-            lane.write(crate::field_watch::FieldNotice::Player { id: 2 });
         }
+        // `SetPetGuid`'s signals at the packet's place (`0x4bdaf0` → `0x4bc7e0`): the pet frame's
+        // `UnitExists("pet")` reads our summon field as this packet left it.
+        lane.write(crate::field_watch::FieldNotice::PetGuidSet { changed });
     }
 }
 
@@ -125,7 +126,10 @@ fn pet_spells(
         if bar.spells.pet_guid != 0 {
             debug!("net: pet bar torn down");
         }
+        // The teardown's `SetPet` signals too (`0x4bdaf0` → `0x4bc90c`): the count goes on.
+        let signals = bar.bar_signals.wrapping_add(1);
         bar.clear();
+        bar.bar_signals = signals;
         return new_pet;
     }
     debug!(

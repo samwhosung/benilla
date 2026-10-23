@@ -1536,8 +1536,10 @@ const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // The watchers' callbacks: the drunk line's name, the quest log's slots, the skill line's race
     // and class and the bonus bar's form off our live descriptor, and the aura watcher's join of
     // the durations the duration packet writes (`0x4e4390` into `0xbc5f68`), as the frame left them
-    // (#2217); the aura watcher's own store is the one its packet left.
-    ("field notices", &["names::NameCache", "net::ObjectStore", "ui_aura::AuraDurations"]),
+    // (#2217); the aura watcher's own store is the one its packet left. `SetPetGuid`'s trainer
+    // refresh reads the open trainer as the frame left it.
+    ("field notices", &["names::NameCache", "net::ObjectStore", "ui_aura::AuraDurations",
+        "ui_trainer::TrainerOpen"]),
     // The views lane reads the stores and records it rewinds as of each packet; the names, the
     // relations' stores and reputations, the selection and the guild as the frame left them
     // (#2217).

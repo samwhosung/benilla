@@ -338,9 +338,10 @@ fn a_new_vm_is_not_flushed_for_a_list_that_already_moved() {
     rig.receive(vec![go(PET, GROWL)]);
     assert_eq!(rig.frame(), FLUSH);
 
-    // The interface reloads: a new VM, the bar pushed into it afresh.
+    // The interface reloads: a new VM, the bar pushed into it afresh, its `PET_BAR_UPDATE` the
+    // world entry's reset's (`0x4bc6f0`), which this rig has none of.
     rig.app.world_mut().insert_non_send_resource(listening_vm());
-    assert_eq!(rig.frame(), ["PET_BAR_UPDATE"], "the bar, and no flush");
+    assert_eq!(rig.frame(), Vec::<String>::new(), "the bar, and no flush");
 
     rig.receive(vec![go(PET, GROWL)]);
     assert_eq!(rig.frame(), FLUSH, "the next mutation is a flush");
