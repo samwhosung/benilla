@@ -935,11 +935,14 @@ mod tests {
                 .query_filtered::<Entity, With<SelfPlayer>>()
                 .single(world)
                 .unwrap();
-            world.entity_mut(me).insert(unit(0x19, ALLY));
+            // Our `UNIT_FIELD_SUMMON` names the pet, the `"pet"` the resolver takes (`0x515a6e`).
+            let mut mine = unit(0x19, ALLY);
+            mine.0.merge(benilla_protocol::ObjectFields::from_pairs(&[
+                (8, PET as u32),
+                (9, (PET >> 32) as u32),
+            ]));
+            world.entity_mut(me).insert(mine);
             let pet = world.spawn((Guid(PET), unit(0x09, ALLY))).id();
-            let mut bar = crate::ui_pet::PetBar::default();
-            bar.spells.pet_guid = PET;
-            world.insert_resource(bar);
             let mut index = world.resource_mut::<crate::net::GuidIndex>();
             index.0.insert(ME, me);
             index.0.insert(ALLY, ally);
