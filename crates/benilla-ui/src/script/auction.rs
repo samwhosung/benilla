@@ -547,7 +547,7 @@ pub(crate) fn clear_sell_slot(model: &mut Model) {
 fn sell_refusal(model: &Model, item: &cursor::CursorItem) -> Option<&'static str> {
     let (bound, flags, duration, seats) = if item.bag == cursor::EQUIPMENT_BAG {
         let s = model
-            .inv_slot("player", item.slot as usize)
+            .player_slot_object(item.slot as usize)
             .filter(|s| s.guid == item.guid)?;
         (s.already_bound, s.flags, s.field_duration, s.occupied_seats)
     } else {

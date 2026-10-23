@@ -1149,7 +1149,7 @@ fn submit(lua: &Lua, call: MailCall) -> mlua::Result<()> {
 fn attach_refusal(model: &Model, item: &cursor::CursorItem) -> Option<&'static str> {
     let (bound, seats) = if item.bag == cursor::EQUIPMENT_BAG {
         let s = model
-            .inv_slot("player", item.slot as usize)
+            .player_slot_object(item.slot as usize)
             .filter(|s| s.guid == item.guid)?;
         (s.already_bound, s.occupied_seats)
     } else {
@@ -1184,7 +1184,7 @@ fn attach_refusal(model: &Model, item: &cursor::CursorItem) -> Option<&'static s
 fn holds(model: &Model, item: &cursor::CursorItem) -> bool {
     if item.bag == cursor::EQUIPMENT_BAG {
         model
-            .inv_slot("player", item.slot as usize)
+            .player_slot_object(item.slot as usize)
             .is_some_and(|s| s.guid == item.guid)
     } else {
         model

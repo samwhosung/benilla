@@ -701,7 +701,7 @@ fn set_accept(lua: &Lua, flag: bool) -> mlua::Result<()> {
 fn held_record(model: &Model, item: &cursor::CursorItem) -> Option<(bool, u32, Option<u32>)> {
     if item.bag == cursor::EQUIPMENT_BAG {
         let s = model
-            .inv_slot("player", item.slot as usize)
+            .player_slot_object(item.slot as usize)
             .filter(|s| s.guid == item.guid)?;
         Some((s.already_bound, s.bonding, s.occupied_seats))
     } else {
@@ -727,7 +727,7 @@ fn source_container(model: &Model, item: &cursor::CursorItem) -> bool {
         bag @ 1..=10 => {
             let slot = if bag <= 4 { bag + 19 } else { bag + 59 };
             model
-                .inv_slot("player", slot as usize)
+                .player_slot_object(slot as usize)
                 .is_some_and(|s| s.guid != 0)
         }
         _ => false,

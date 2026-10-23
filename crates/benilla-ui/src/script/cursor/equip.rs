@@ -104,7 +104,7 @@ fn held_facts(model: &Model, item: &CursorItem) -> Option<EquipFacts> {
         if bag == EQUIPMENT_BAG {
             usize::try_from(slot)
                 .ok()
-                .and_then(|slot| model.inv_slot("player", slot))
+                .and_then(|slot| model.player_slot_object(slot))
                 .filter(|v| v.guid == item.guid)
                 .map(|v| EquipFacts::of_inv(&v))
         } else {

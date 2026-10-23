@@ -595,6 +595,14 @@ impl Model {
         if bank_band && self.bank.is_none() {
             return None;
         }
+        self.player_slot_object(slot)
+    }
+
+    /// The item object at the active player's live-API id `slot`, with no bank gate: what the
+    /// client finds by the held item's guid (the object manager, not `GetItemInSlot`), so an item
+    /// held from a bank slot is still found after the banker closes. For the readers that stand in
+    /// for that guid lookup; a slot getter reads [`Self::inv_slot`].
+    pub(crate) fn player_slot_object(&self, slot: usize) -> Option<InvSlotView> {
         if let Some(view) = self.bank_inv_slot(slot) {
             return Some(view);
         }
