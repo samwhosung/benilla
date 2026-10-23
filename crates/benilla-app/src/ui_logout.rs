@@ -85,8 +85,10 @@ impl LogoutState {
         self.call_off();
     }
 
-    /// A world load (`0x401bc0`), which leaves the world first (`0x401bd4` → `0x5aae70(0)`).
-    pub(crate) fn apply_world_load(&mut self) {
+    /// The world left, `0x5aae70(0)`: by a world load (`0x401bd4`), by the logout's completion
+    /// (`0x5aaeb3` → `0x5aaf4f`, ahead of the teardown at `0x5aaeca`), and by a refused login
+    /// (`0x5aad76` → `0x5aaf4f`). A completed logout that was not forced fires `LOGOUT_CANCEL`.
+    pub(crate) fn apply_left_world(&mut self) {
         self.call_off();
     }
 
@@ -262,7 +264,8 @@ fn exit_on_logout_complete(
     if logged_out.read().count() == 0 {
         return;
     }
-    // Answered: disarm, or the next character's first logout would be swallowed.
+    // `0x5aaed7`: the pending byte clears, which the handler's leave of the world did already
+    // (`0x5aae9c`); otherwise the next character's first logout would be swallowed.
     logout.pending = false;
     // `0x5aaecf`: the quit byte decides, and stays, as the process ends.
     if logout.quitting {
@@ -281,7 +284,12 @@ impl Plugin for UiLogoutPlugin {
             .add_systems(
                 Update,
                 (
-                    feed_logout.in_set(UiFeed),
+                    // Ahead of a worldport's sweep: the world load marks the connection out of
+                    // the world (`0x401bd4`), firing `LOGOUT_CANCEL`, before it destroys the old
+                    // world, whose player destructor runs the sweep's `PLAYER_LEAVING_WORLD`.
+                    feed_logout
+                        .in_set(UiFeed)
+                        .before(crate::ui_script::sweep_on_worldport),
                     exit_on_logout_complete.in_set(crate::ui_script::UiDrain),
                 ),
             );
@@ -300,7 +308,9 @@ mod net {
         use SessionEventKind as K;
         app.net_handler(K::LogoutResponse, on_narration)
             .net_handler(K::LogoutCancelled, on_narration)
-            .net_handler(K::Worldport, on_narration);
+            .net_handler(K::Worldport, on_narration)
+            .net_handler(K::LoggedOut, on_narration)
+            .net_handler(K::CharacterLoginFailed, on_narration);
     }
 
     fn on_narration(In(ev): In<SessionEvent>, mut logout: ResMut<LogoutState>) {
@@ -310,8 +320,11 @@ mod net {
             }
             SessionEvent::LogoutCancelled => logout.apply_cancelled(),
             // `SMSG_NEW_WORLD`, and `SMSG_LOGIN_VERIFY_WORLD` for another map (`0x401ea4`): both
-            // run the world load `0x401bc0`.
-            SessionEvent::Worldport { .. } => logout.apply_world_load(),
+            // run the world load `0x401bc0`. `SMSG_LOGOUT_COMPLETE` (`0x5aaeb0`) and
+            // `SMSG_CHARACTER_LOGIN_FAILED` (`0x5aad70`) leave the world first.
+            SessionEvent::Worldport { .. }
+            | SessionEvent::LoggedOut
+            | SessionEvent::CharacterLoginFailed { .. } => logout.apply_left_world(),
             _ => {}
         }
     }
