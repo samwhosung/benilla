@@ -558,8 +558,7 @@ fn click_trade_button(lua: &Lua, id: i32) -> mlua::Result<()> {
             }
         };
         if let Some(key) = refusal {
-            super::tick::verb(lua, |model| model.push_ui_error(key));
-            return Ok(());
+            return super::calls::display_error(lua, key);
         }
     }
     // A slot outside the seven reads as empty (`0x4bffc5`-`0x4c0001`).

@@ -317,7 +317,8 @@ fn use_cleared(
                 )
             });
         if let Some(key) = refusal.filter(|_| !locked) {
-            model.push_ui_error(key);
+            // Shown inside the verb, as the gate's `DisplayError` (`0x496720`) is.
+            *call = Some(crate::script::ScriptCall::DisplayError(key));
         } else if !locked {
             *call = Some(crate::script::ScriptCall::UseInventoryItem {
                 slot: id,

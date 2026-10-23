@@ -440,7 +440,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             if check_cursor && model.cursor.is_some() {
                 drop(model);
-                super::cursor::place_action(lua, action);
+                super::cursor::place_action(lua, action)?;
             } else {
                 let item_locks = model.item_locks.iter().copied().collect();
                 drop(model);

@@ -1463,8 +1463,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 }
             };
             if let Some(key) = refusal {
-                super::tick::verb(lua, |model| model.push_ui_error(key));
-                return Ok(());
+                return super::calls::display_error(lua, key);
             }
             if cursor::click_attach_slot(lua, |model| &mut model.auction_sell_item) {
                 super::tick::verb(lua, |model| {

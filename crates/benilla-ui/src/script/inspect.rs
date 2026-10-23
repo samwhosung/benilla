@@ -151,9 +151,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Some(_) => None,
             };
             if let Some(key) = refusal {
-                lua.app_data_mut::<Model>()
-                    .expect("model app_data")
-                    .push_ui_error(key);
+                super::calls::display_error(lua, key)?;
             }
             let ok = reach.is_some_and(|r| r.inspectable && in_inspect_range(&r));
             Ok(if ok { Value::Integer(1) } else { Value::Nil })

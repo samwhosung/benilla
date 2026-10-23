@@ -691,7 +691,7 @@ mod tests {
             "the action bar's grid stays down — nothing can land there"
         );
         // PlaceAction refuses it outright and leaves it held.
-        assert!(!place_action(&s.lua, 1));
+        assert!(!place_action(&s.lua, 1).unwrap());
         assert!(matches!(
             s.cursor_payload(),
             Some(crate::script::CursorPayload::PetAction(_))

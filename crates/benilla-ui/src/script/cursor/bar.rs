@@ -69,7 +69,7 @@ fn lift(model: &Model, id: u32) -> Option<Option<CursorPayload>> {
 /// `0x4e5db0`, so the pickup's events still read the action in its slot: the setter's inner
 /// `ClearCursor(1,1)` signals on the empty cursor, then its tail. The slot clears even when no
 /// setter takes the action (`0x4e62ba`). Returns whether to repaint.
-pub(super) fn pickup_action(lua: &Lua, id: u32) -> bool {
+pub(super) fn pickup_action(lua: &Lua, id: u32) -> mlua::Result<bool> {
     let picked = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
         if matches!(
@@ -91,7 +91,7 @@ pub(super) fn pickup_action(lua: &Lua, id: u32) -> bool {
         return place_action(lua, id);
     };
     let Some(payload) = picked else {
-        return false;
+        return Ok(false);
     };
     if let Some(payload) = payload {
         set_cursor(lua, true, |_| Some(payload));
@@ -105,7 +105,7 @@ pub(super) fn pickup_action(lua: &Lua, id: u32) -> bool {
         model.action_sets.push((id, 0));
         raise_slot_changed(model, id);
     });
-    true
+    Ok(true)
 }
 
 /// `0x4e5d10`, which `DeleteMacro` runs once its record is gone (`0x4f1449`): every action slot
@@ -145,19 +145,24 @@ fn raise_slot_changed(model: &mut Model, id: u32) {
 /// An item stays in its bag, since a bar item is a reference, not a move. The cursor goes first
 /// and the slot after, as `0x4e62e0` writes the slot past the setter, so the cursor's events read
 /// the slot as it was. Returns whether to repaint.
-pub(crate) fn place_action(lua: &Lua, id: u32) -> bool {
+pub(crate) fn place_action(lua: &Lua, id: u32) -> mlua::Result<bool> {
     // A bar item's state, carried from its source slot, read before the place hops anything.
     let state = match &lua.app_data_ref::<Model>().expect("model app_data").cursor {
         Some(CursorPayload::Action(a)) => a.state,
         _ => None,
     };
     let (placed, displaced) = match verb(lua, |model| plan_place(model, id)) {
-        Place::Refused => return false,
+        Place::Refused => return Ok(false),
+        // The passive spell's line, shown inside the verb (`0x4e63ad` → `0x496720`).
+        Place::Shown(key) => {
+            crate::script::calls::display_error(lua, key)?;
+            return Ok(false);
+        }
         // The held action is already the slot's: `ClearCursor(1,1)` and no write (`0x4e63d4`,
         // `0x4e65db`, `0x4e673a`).
         Place::Same => {
             verb(lua, clear_cursor);
-            return false;
+            return Ok(false);
         }
         Place::Write(placed, displaced) => (placed, displaced),
     };
@@ -184,13 +189,15 @@ pub(crate) fn place_action(lua: &Lua, id: u32) -> bool {
         // Every arm writes through `0x4e684f` into `0x4e58e0`.
         raise_slot_changed(model, id);
     });
-    true
+    Ok(true)
 }
 
 /// `PlaceAction`'s decision.
 enum Place {
     /// An accept filter refused: the payload stays held.
     Refused,
+    /// An accept filter refused with its line: the payload stays held.
+    Shown(&'static str),
     /// The held action is already in the slot.
     Same,
     /// What the slot takes, and the occupant that hops ([`lift`]).
@@ -206,10 +213,7 @@ fn plan_place(model: &mut Model, id: u32) -> Place {
     // `DisplayError` (`0x4e63ad`, `0x496720`), where the item refusal is mute.
     match &model.cursor {
         Some(CursorPayload::Item(i)) if !i.bar_placeable => return Place::Refused,
-        Some(CursorPayload::Spell(s)) if s.passive => {
-            model.push_ui_error(PASSIVE_ON_BAR_ERROR);
-            return Place::Refused;
-        }
+        Some(CursorPayload::Spell(s)) if s.passive => return Place::Shown(PASSIVE_ON_BAR_ERROR),
         _ => {}
     }
     let Some(held) = model.cursor.as_ref() else {
@@ -315,7 +319,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, id: Value| {
             // `is-number` else `Usage: PickupAction(slot)` (`0x84c05c`, `0x4e71fe`).
             let id = binding_abi::index_arg32(lua, id, "Usage: PickupAction(slot)")?;
-            pickup_action(lua, id);
+            pickup_action(lua, id)?;
             Ok(())
         })?,
     )?;
@@ -324,7 +328,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, id: Value| {
             // `is-number` else `Usage: PlaceAction(slot)` (`0x84c078`, `0x4e726e`).
             let id = binding_abi::index_arg32(lua, id, "Usage: PlaceAction(slot)")?;
-            place_action(lua, id);
+            place_action(lua, id)?;
             Ok(())
         })?,
     )?;
@@ -355,7 +359,7 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.set_action(1, Some(action_slot("Interface\\Icons\\Spell_A", 0x00, 133)));
 
-        assert!(pickup_action(&s.lua, 1));
+        assert!(pickup_action(&s.lua, 1).unwrap());
         assert!(
             !s.eval::<bool>("return HasAction(1)").unwrap(),
             "removed from the engine's optimistic mirror"
@@ -470,7 +474,7 @@ mod tests {
     #[test]
     fn pickup_action_on_an_empty_slot_is_a_no_op() {
         let mut s = UiScript::new().unwrap();
-        assert!(!pickup_action(&s.lua, 5));
+        assert!(!pickup_action(&s.lua, 5).unwrap());
         assert!(s.cursor_payload().is_none());
         assert!(s.take_action_sets().is_empty());
     }
@@ -488,7 +492,7 @@ mod tests {
             state: None,
         }));
 
-        assert!(place_action(&s.lua, 7));
+        assert!(place_action(&s.lua, 7).unwrap());
         assert!(s.cursor_payload().is_none(), "empty destination clears");
         assert!(s.eval::<bool>("return HasAction(7)").unwrap());
         assert_eq!(
@@ -505,10 +509,10 @@ mod tests {
         s.set_action(1, Some(action_slot("Interface\\Icons\\Spell_A", 0x00, 111)));
         s.set_action(2, Some(action_slot("Interface\\Icons\\Spell_B", 0x00, 222)));
 
-        assert!(pickup_action(&s.lua, 1));
+        assert!(pickup_action(&s.lua, 1).unwrap());
         assert_eq!(s.take_action_sets(), vec![(1, 0)]);
 
-        assert!(place_action(&s.lua, 2));
+        assert!(place_action(&s.lua, 2).unwrap());
         assert_eq!(
             s.eval::<String>("return GetActionTexture(2)").unwrap(),
             "Interface\\Icons\\Spell_A"
@@ -542,7 +546,7 @@ mod tests {
             equip_slots: Vec::new(),
         }));
 
-        assert!(place_action(&s.lua, 4));
+        assert!(place_action(&s.lua, 4).unwrap());
         assert!(s.cursor_payload().is_none());
         // 0x80<<24 | 117.
         assert_eq!(s.take_action_sets(), vec![(4, 0x8000_0000 | 117)]);
@@ -561,7 +565,7 @@ mod tests {
             texture: Some("Interface\\Icons\\Spell_A".into()),
         }));
 
-        assert!(place_action(&s.lua, 9));
+        assert!(place_action(&s.lua, 9).unwrap());
         assert_eq!(s.take_action_sets(), vec![(9, 133)]); // 0x00<<24 | 133
     }
 
@@ -569,7 +573,7 @@ mod tests {
     fn place_action_with_an_empty_cursor_is_a_no_op() {
         let mut s = UiScript::new().unwrap();
         s.set_action(1, Some(action_slot("Interface\\Icons\\Spell_A", 0x00, 111)));
-        assert!(!place_action(&s.lua, 1));
+        assert!(!place_action(&s.lua, 1).unwrap());
         assert!(s.eval::<bool>("return HasAction(1)").unwrap(), "untouched");
         assert!(s.take_action_sets().is_empty());
     }
@@ -586,7 +590,7 @@ mod tests {
             consumable: false,
             state: None,
         }));
-        assert!(pickup_action(&s.lua, 5));
+        assert!(pickup_action(&s.lua, 5).unwrap());
         assert!(s.cursor_payload().is_none(), "placed onto the empty slot 5");
         assert!(s.eval::<bool>("return HasAction(5)").unwrap());
         assert_eq!(s.take_action_sets(), vec![(5, 111)]);
@@ -647,7 +651,7 @@ mod tests {
             equip_slots: Vec::new(),
         }));
 
-        assert!(!place_action(&s.lua, 4));
+        assert!(!place_action(&s.lua, 4).unwrap());
         assert!(!s.eval::<bool>("return HasAction(4)").unwrap(), "no store");
         assert!(s.take_action_sets().is_empty(), "no packet");
         assert!(
@@ -670,7 +674,7 @@ mod tests {
             passive: true,
         }));
 
-        assert!(!place_action(&s.lua, 4));
+        assert!(!place_action(&s.lua, 4).unwrap());
         assert!(!s.eval::<bool>("return HasAction(4)").unwrap());
         assert!(s.take_action_sets().is_empty());
         assert!(matches!(s.cursor_payload(), Some(CursorPayload::Spell(_))));
@@ -694,7 +698,7 @@ mod tests {
             passive: false,
         }));
 
-        assert!(place_action(&s.lua, 4));
+        assert!(place_action(&s.lua, 4).unwrap());
         assert!(s.eval::<bool>("return HasAction(4)").unwrap());
         assert!(s.take_ui_errors().is_empty());
     }
@@ -717,7 +721,7 @@ mod tests {
             equip_slots: vec![20, 21, 22, 23],
         }));
 
-        assert!(place_action(&s.lua, 4));
+        assert!(place_action(&s.lua, 4).unwrap());
         assert_eq!(s.take_action_sets(), vec![(4, 0x8000_0000u32 | 4496)]);
     }
 
@@ -791,7 +795,7 @@ mod tests {
         ));
         s.run("ClearCursor()").unwrap();
         crate::script::tick::heard::listen(&s, &["CURSOR_UPDATE"], None);
-        assert!(pickup_action(&s.lua, 3));
+        assert!(pickup_action(&s.lua, 3).unwrap());
         assert!(s.cursor_payload().is_none());
         assert!(
             crate::script::tick::heard::take(&s).is_empty(),
@@ -859,7 +863,7 @@ mod tests {
         ];
         for (slot, payload) in [1, 2, 3].into_iter().zip(held) {
             s.set_cursor_for_test(payload);
-            assert!(!place_action(&s.lua, slot));
+            assert!(!place_action(&s.lua, slot).unwrap());
             assert!(
                 s.cursor_payload().is_none(),
                 "slot {slot}: the cursor clears"
@@ -886,7 +890,7 @@ mod tests {
             passive: false,
         }));
         crate::script::tick::heard::listen(&s, &["CURSOR_UPDATE"], None);
-        assert!(place_action(&s.lua, 3));
+        assert!(place_action(&s.lua, 3).unwrap());
         assert!(s.cursor_payload().is_none(), "the spell is dropped");
         assert_eq!(crate::script::tick::heard::take(&s), ["CURSOR_UPDATE"]);
         assert_eq!(s.take_action_sets(), vec![(3, 133)]);
@@ -917,7 +921,7 @@ mod tests {
                 texture: None,
                 passive: false,
             }));
-            assert!(!place_action(&s.lua, slot));
+            assert!(!place_action(&s.lua, slot).unwrap());
             assert!(s.cursor_payload().is_none(), "slot {slot}: cleared");
             assert!(
                 s.take_action_sets().is_empty(),
@@ -930,7 +934,7 @@ mod tests {
             texture: None,
             passive: false,
         }));
-        assert!(place_action(&s.lua, 1));
+        assert!(place_action(&s.lua, 1).unwrap());
         assert!(matches!(s.cursor_payload(), Some(CursorPayload::Macro(_))));
     }
 
@@ -960,7 +964,7 @@ mod tests {
             &["ACTIONBAR_SLOT_CHANGED"],
             Some("GetActionTexture(arg1)"),
         );
-        assert!(place_action(&s.lua, 1));
+        assert!(place_action(&s.lua, 1).unwrap());
         assert_eq!(
             crate::script::tick::heard::take(&s),
             ["ACTIONBAR_SLOT_CHANGED ACTIVE"]

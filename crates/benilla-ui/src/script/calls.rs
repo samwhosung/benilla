@@ -452,6 +452,12 @@ pub(crate) const TOO_DEEP: &str = "script calls nested too deep";
 pub(crate) fn submit(lua: &Lua, call: ScriptCall) -> mlua::Result<()> {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     if !super::host::open(lua) {
+        // A VM with no host open queues a refusal's line for the app instead
+        // ([`super::Model::push_ui_error`]).
+        if let ScriptCall::DisplayError(key) = call {
+            model.push_ui_error(key);
+            return Ok(());
+        }
         return match model.kept_calls.as_mut() {
             Some(kept) => {
                 kept.push(call);
@@ -484,6 +490,13 @@ pub(crate) fn submit(lua: &Lua, call: ScriptCall) -> mlua::Result<()> {
         Some(at) => Err(mlua::Error::runtime(raised.remove(at).1)),
         None => Ok(()),
     }
+}
+
+/// `DisplayError` (`0x496720`) on the catalog row `key`, from inside a verb or an engine step that
+/// refuses: the host shows the line and signals `UI_ERROR_MESSAGE` before the verb returns, as
+/// `0x496720` signals before it returns ([`submit`]). The caller holds no borrow of the model.
+pub(crate) fn display_error(lua: &Lua, key: &'static str) -> mlua::Result<()> {
+    submit(lua, ScriptCall::DisplayError(key))
 }
 
 /// File what the call `seq` raised: for its verb, while that waits inside [`submit`]; else, its

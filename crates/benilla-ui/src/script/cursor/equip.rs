@@ -207,21 +207,26 @@ pub(crate) fn has_cursor_control(model: &Model) -> bool {
 /// locked. An item in the trade window is refused first with its line. A refused set (no control, not on a taxi) clears and sets nothing, and
 /// `AutoEquipCursorItem` runs all the same (`0x5e18c9` falls through to `0x5e18d5` with no test),
 /// on whatever the cursor holds.
-pub(crate) fn auto_equip_from(lua: &Lua, item: CursorItem, suppress: bool) -> AutoEquip {
-    // An item offered in the trade window shows `ERR_EQUIP_TRADE_ITEM` and ends the verb before
-    // the set (`0x5e1897`-`0x5e18b3`, `0x4bfd20`).
-    {
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        if model.trade_holds(item.guid) {
-            model.push_ui_error("ERR_EQUIP_TRADE_ITEM");
-            return AutoEquip::None;
-        }
+pub(crate) fn auto_equip_from(
+    lua: &Lua,
+    item: CursorItem,
+    suppress: bool,
+) -> mlua::Result<AutoEquip> {
+    // An item offered in the trade window shows `ERR_EQUIP_TRADE_ITEM` inside the verb and ends
+    // it before the set (`0x5e1897`-`0x5e18b3`, `0x4bfd20`).
+    let in_trade = lua
+        .app_data_ref::<Model>()
+        .expect("model app_data")
+        .trade_holds(item.guid);
+    if in_trade {
+        crate::script::calls::display_error(lua, "ERR_EQUIP_TRADE_ITEM")?;
+        return Ok(AutoEquip::None);
     }
     let control = has_cursor_control(&lua.app_data_ref::<Model>().expect("model app_data"));
     if control {
         set_cursor(lua, true, |_| Some(CursorPayload::Item(item)));
     }
-    verb(lua, |model| auto_equip_held(model, suppress))
+    Ok(verb(lua, |model| auto_equip_held(model, suppress)))
 }
 
 impl crate::script::UiScript {
@@ -254,10 +259,13 @@ impl crate::script::UiScript {
                 .filter(|s| s.guid != 0)
                 .map(|s| s.cursor_item(bag, slot))
         };
-        match item {
-            Some(item) => auto_equip_from(&self.lua, item, suppress),
-            None => AutoEquip::None,
-        }
+        let Some(item) = item else {
+            return AutoEquip::None;
+        };
+        auto_equip_from(&self.lua, item, suppress).unwrap_or_else(|e| {
+            self.push_error(e);
+            AutoEquip::None
+        })
     }
 
     /// `0x5e1840` on the bag item `guid`, the action bar's equip: `UseAction` resolves an entry to

@@ -13,6 +13,7 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{self, number_arg};
 use super::by_name::Filter;
+use super::calls::display_error;
 use super::Model;
 use crate::strings::{fill, global, Arg};
 
@@ -304,19 +305,6 @@ impl super::UiScript {
 
 /// `SetLootMethod`'s usage line (`0x84c42c`).
 const USAGE_SET_LOOT_METHOD: &str = "Usage: SetLootMethod(\"method\" [,master][,threshold])";
-
-/// `DisplayError` (`0x496720`) on an error row from inside a verb: the host shows it before the
-/// verb returns; a VM with no host queues it for the app ([`Model::push_ui_error`]). The caller
-/// holds no borrow of the model.
-fn display_error(lua: &Lua, key: &'static str) -> mlua::Result<()> {
-    if super::host::open(lua) {
-        return super::calls::submit(lua, super::ScriptCall::DisplayError(key));
-    }
-    lua.app_data_mut::<Model>()
-        .expect("model app_data")
-        .push_ui_error(key);
-    Ok(())
-}
 
 /// Hand `request` to the call host, which applies it before the verb returns. The caller holds
 /// no borrow of the model.

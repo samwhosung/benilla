@@ -560,7 +560,8 @@ fn use_cleared(
         if let Some(key) =
             super::use_gates::item_use_refusal(model, fork, item_id, use_spell, known)
         {
-            model.push_ui_error(key);
+            // Shown inside the verb, as the gate's `DisplayError` (`0x496720`) is.
+            *call = Some(super::ScriptCall::DisplayError(key));
             return None;
         }
     }
@@ -595,7 +596,7 @@ fn use_equip_arm(
 ) -> mlua::Result<()> {
     let guid = item.guid;
     let projectile = item.item_class == Some(cursor::ITEM_CLASS_PROJECTILE);
-    let step = cursor::equip::auto_equip_from(lua, item, false);
+    let step = cursor::equip::auto_equip_from(lua, item, false)?;
     super::tick::verb(lua, |model| {
         if !projectile {
             cursor::lock_item(model, guid);
