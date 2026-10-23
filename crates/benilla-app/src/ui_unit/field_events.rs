@@ -42,14 +42,17 @@ pub(crate) struct NoticeFiring<'w, 's> {
     // close, which needs the latch, as a world turn after the notice.
     trainer: Option<Res<'w, crate::ui_trainer::TrainerOpen>>,
     commands: Commands<'w, 's>,
+    // `SetPetGuid`'s unit lookup of the new guid (`0x4bc8e4`).
+    index: Option<Res<'w, crate::net::GuidIndex>>,
+    stores: Query<'w, 's, &'static crate::net::ObjectStore>,
 }
 
 impl NoticeFiring<'_, '_> {
     /// One notice's signals; whether it left a world turn the lane's firing must yield to, so the
     /// turn runs before the next notice.
     fn fire(&mut self, script: &mut UiScript, notice: FieldNotice) -> bool {
-        if let FieldNotice::PetGuidSet { changed } = notice {
-            return self.pet_guid_set(script, changed);
+        if let FieldNotice::PetGuidSet { changed, guid } = notice {
+            return self.pet_guid_set(script, changed, guid);
         }
         if notice == FieldNotice::PlayerAuras {
             self.auras.run(script);
@@ -113,26 +116,43 @@ impl NoticeFiring<'_, '_> {
 
 impl NoticeFiring<'_, '_> {
     /// `SetPetGuid`'s signals in its order (`0x4bc847`-`0x4bc911`): on a change, `UNIT_PET`, then,
-    /// with a pet trainer open and our player held, `TalkToTrainer` on it (`0x4bc8b2`), whose
-    /// close needs the latch and so runs as a world turn, `PET_BAR_UPDATE` after it; else
-    /// `PET_BAR_UPDATE` here.
-    fn pet_guid_set(&mut self, script: &mut UiScript, changed: bool) -> bool {
-        if changed {
-            script.fire_event("UNIT_PET", vec![super::player_token()]);
-            let trainer = crate::ui_trainer::open_pet_trainer(self.trainer.as_deref())
-                .filter(|_| self.me.iter().next().is_some());
-            if let Some(trainer) = trainer {
-                self.commands.queue(move |world: &mut World| {
-                    crate::ui_trainer::talk_to_trainer(world, trainer);
-                    crate::ui_session::fire(world, |script| {
-                        script.fire_event("PET_BAR_UPDATE", vec![]);
-                    });
-                });
-                return true;
-            }
+    /// with a pet trainer open and our player held, `TalkToTrainer` on it (`0x4bc8b2`), then, when
+    /// the new guid resolves as a unit (`0x4bc8e4`) that `IsPlayerOrHunterPet` passes (`0x4bc8ef`),
+    /// `PET_UI_CLOSE` (`0x4bc907`); then `PET_BAR_UPDATE`. The trainer's close needs the latch, so
+    /// with one to refresh the rest runs as a world turn after this notice.
+    fn pet_guid_set(&mut self, script: &mut UiScript, changed: bool, guid: u64) -> bool {
+        if !changed {
+            script.fire_event("PET_BAR_UPDATE", vec![]);
+            return false;
         }
-        script.fire_event("PET_BAR_UPDATE", vec![]);
-        false
+        script.fire_event("UNIT_PET", vec![super::player_token()]);
+        let player = self.me.iter().next();
+        let closes = guid != 0
+            && self
+                .index
+                .as_ref()
+                .and_then(|i| i.0.get(&guid))
+                .and_then(|&e| self.stores.get(e).ok())
+                .is_some_and(|unit| crate::ui_pet::is_player_or_hunter_pet(unit, guid, player));
+        let trainer = crate::ui_trainer::open_pet_trainer(self.trainer.as_deref())
+            .filter(|_| player.is_some());
+        let Some(trainer) = trainer else {
+            if closes {
+                script.fire_event("PET_UI_CLOSE", vec![]);
+            }
+            script.fire_event("PET_BAR_UPDATE", vec![]);
+            return false;
+        };
+        self.commands.queue(move |world: &mut World| {
+            crate::ui_trainer::talk_to_trainer(world, trainer);
+            crate::ui_session::fire(world, |script| {
+                if closes {
+                    script.fire_event("PET_UI_CLOSE", vec![]);
+                }
+                script.fire_event("PET_BAR_UPDATE", vec![]);
+            });
+        });
+        true
     }
 
     /// The profession list's rebuild by a skill watch, its bands and line rank read again.

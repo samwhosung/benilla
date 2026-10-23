@@ -107,6 +107,36 @@ impl PetBar {
     }
 }
 
+/// `CGUnit_C::IsPlayerOrHunterPet` (`0x6116e0`) on `unit`, held under `guid`: a player
+/// (`0x6116ec`), or a unit with a pet number (`0x611704`) that our charm, else our summon, names
+/// (`0x61172d`-`0x61174a`) while our class is Hunter (`0x611757`). `player` is our own object,
+/// `None` while it is not held (`0x611725`). The unit must resolve as a unit first (typemask 8).
+pub(crate) fn is_player_or_hunter_pet(
+    unit: &crate::net::ObjectStore,
+    guid: u64,
+    player: Option<&crate::net::ObjectStore>,
+) -> bool {
+    /// `TYPEMASK_UNIT` and `TYPEMASK_PLAYER`.
+    const UNIT: u32 = 0x8;
+    const PLAYER: u32 = 0x10;
+    /// `UNIT_FIELD_BYTES_0` byte 1, Hunter.
+    const CLASS_HUNTER: u8 = 3;
+    let mask = unit.0.object_type_mask().unwrap_or(0);
+    if mask & UNIT == 0 {
+        return false;
+    }
+    if mask & PLAYER != 0 {
+        return true;
+    }
+    if unit.0.unit_pet_number() == 0 {
+        return false;
+    }
+    let Some(player) = player else {
+        return false;
+    };
+    player.0.unit_pet_guid() == Some(guid) && player.0.unit_class() == Some(CLASS_HUNTER)
+}
+
 pub(crate) struct UiPetPlugin;
 
 impl Plugin for UiPetPlugin {

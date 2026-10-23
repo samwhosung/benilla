@@ -59,7 +59,10 @@ fn on_spells(
         }
         // `SetPetGuid`'s signals at the packet's place (`0x4bdaf0` → `0x4bc7e0`): the pet frame's
         // `UnitExists("pet")` reads our summon field as this packet left it.
-        lane.write(crate::field_watch::FieldNotice::PetGuidSet { changed });
+        lane.write(crate::field_watch::FieldNotice::PetGuidSet {
+            changed,
+            guid: bar.spells.pet_guid,
+        });
     }
 }
 

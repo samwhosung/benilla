@@ -73,10 +73,11 @@ pub(crate) enum FieldNotice {
     /// message's arm (`0x5e4092`-`0x5e410e`): the number's fire-once bit tested and set, then its
     /// `TutorialPopup` cue and `TUTORIAL_TRIGGER` at once, in the caller's order.
     Tutorial { id: u32 },
-    /// `SetPetGuid`'s signals (`0x4bc7e0`) at `SMSG_PET_SPELLS`'s tail (`0x4bdaf0`): on a change of
-    /// the guid, `UNIT_PET("player")` (`0x4bc84f`) and the pet trainer's refresh (`0x4bc872`); then
+    /// `SetPetGuid`'s signals (`0x4bc7e0`) at `SMSG_PET_SPELLS`'s tail (`0x4bdaf0`) for the bar's
+    /// new `guid`: on a change, `UNIT_PET("player")` (`0x4bc84f`), the pet trainer's refresh
+    /// (`0x4bc872`) and, for a player or our hunter's pet, `PET_UI_CLOSE` (`0x4bc907`); then
     /// `PET_BAR_UPDATE` every time (`0x4bc90c`).
-    PetGuidSet { changed: bool },
+    PetGuidSet { changed: bool, guid: u64 },
     /// `SMSG_LEVELUP_INFO`'s arm of the notice handler `0x5e38c0`: `PLAYER_LEVEL_UP` with the
     /// message's level, health, first power, `level >= 10` and five stats (`0x5e413e`).
     LevelUp(benilla_protocol::messages::LevelUpInfo),
