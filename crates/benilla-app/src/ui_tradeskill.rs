@@ -890,6 +890,83 @@ mod tests {
         assert_eq!(closes(&app), 2, "a close from outside the VM still signals");
     }
 
+    /// The open runs the build with flag 1 (`0x4fc985` → `0x4fca20`), whose tail signals
+    /// `TRADE_SKILL_UPDATE` (`0x4fd164`), then `TRADE_SKILL_SHOW` while the list holds a row
+    /// (`0x4fc98a`-`0x4fc999`); a change no rebuild runs on, as a cooldown starting, pushes
+    /// silently: the getter reads it live (`0x4fda20`).
+    #[test]
+    fn the_open_signals_update_then_show_and_a_bare_change_signals_nothing() {
+        const SPELL: u32 = 18_560;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        let mut actions = PlayerActions::default();
+        actions.spells.insert(SPELL);
+        let mooncloth = || SpellDisplay {
+            name: "Mooncloth".into(),
+            attributes: SPELL_ATTR_IS_TRADESKILL,
+            recovery_ms: 86_400_000,
+            ..Default::default()
+        };
+        app.init_resource::<TradeSkillOpen>()
+            .insert_resource(actions)
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<Items>()
+            .init_resource::<crate::spell::Cooldowns>()
+            .init_resource::<crate::ui_script::UiClock>()
+            .insert_resource(crate::net::NetCommands(tx))
+            .insert_resource(Spells {
+                catalog: benilla_formats::SpellCatalog::from_displays(
+                    [(SPELL, mooncloth())].into_iter().collect(),
+                ),
+                ..Spells::empty_for_tests()
+            })
+            .insert_resource(SkillLines {
+                catalog: benilla_formats::SkillLineCatalog::from_abilities([(
+                    SPELL,
+                    benilla_formats::SlaInfo {
+                        skill_id: 197,
+                        req_skill_value: 1,
+                        forward_spell_id: 0,
+                        trivial_low: 1,
+                        trivial_high: 2,
+                    },
+                )]),
+            });
+        app.world_mut()
+            .spawn((ObjectStore(Default::default()), SelfPlayer));
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                "HEARD = {} local f = CreateFrame('Frame') f:RegisterEvent('TRADE_SKILL_SHOW') \
+                 f:RegisterEvent('TRADE_SKILL_UPDATE') \
+                 f:SetScript('OnEvent', function() table.insert(HEARD, event) end)",
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        app.add_systems(Update, feed_trade_skill);
+        let heard = |app: &mut App| {
+            app.update();
+            app.world()
+                .non_send_resource::<UiScript>()
+                .eval::<Vec<String>>("local h = HEARD HEARD = {} return h")
+                .unwrap()
+        };
+        app.world_mut().resource_mut::<TradeSkillOpen>().line = Some(197);
+        assert_eq!(heard(&mut app), ["TRADE_SKILL_UPDATE", "TRADE_SKILL_SHOW"]);
+        let d = mooncloth();
+        app.world_mut()
+            .resource_mut::<crate::spell::Cooldowns>()
+            .start_spell(SPELL, &d, 0, Instant::now(), None);
+        assert!(heard(&mut app).is_empty());
+        assert!(
+            app.world()
+                .non_send_resource::<UiScript>()
+                .eval::<bool>("return GetTradeSkillCooldown(2) ~= nil")
+                .unwrap(),
+            "pushed, silently"
+        );
+    }
+
     /// Our GOs count the batch down and recast, a GO flagged `0x41` is not ours to count
     /// (`0x6e81de`), and the last craft recasts and signals nothing (`0x4fd7cf`).
     #[test]

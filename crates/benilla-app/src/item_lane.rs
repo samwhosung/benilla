@@ -315,4 +315,154 @@ mod tests {
         app.update();
         assert!(app.world().resource::<ItemLane>().0.is_empty());
     }
+
+    /// A VM with the profession window and the craft window open, each holding one row, and a
+    /// spy on their updates and `BAG_UPDATE`.
+    fn open_windows() -> App {
+        use benilla_ui::script::{
+            CraftDifficulty, CraftRecipe, CraftState, CraftTooltip, TradeSkillDifficulty,
+            TradeSkillRecipe, TradeSkillState,
+        };
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(crate::net::NetCommands(tx));
+        app.insert_non_send_resource(rx);
+        app.world_mut()
+            .spawn((SelfPlayer, ObjectStore(Default::default())));
+        let mut script = UiScript::new().unwrap();
+        script.set_trade_skill(Some(TradeSkillState {
+            line: 197,
+            line_name: "Tailoring".into(),
+            rank: 1,
+            max_rank: 75,
+            recipes: vec![TradeSkillRecipe {
+                group: Some((4, 1, "Cloth".into())),
+                spell_id: 2963,
+                name: "Bolt of Linen Cloth".into(),
+                difficulty: TradeSkillDifficulty::Optimal,
+                num_available: 0,
+                icon: None,
+                min_made: 1,
+                max_made: 1,
+                cooldown: None,
+                product_item: 2996,
+                product_inv_type: 0,
+                product_item_level: 5,
+                reagents: Vec::new(),
+                tools: Vec::new(),
+            }],
+        }));
+        script.set_craft(Some(CraftState {
+            name: "Enchanting".into(),
+            display_line: Some("Enchanting".into()),
+            rank: 1,
+            max_rank: 75,
+            craft_type: 3,
+            recipes: vec![CraftRecipe {
+                spell_id: 7418,
+                name: "Enchant Bracer - Minor Health".into(),
+                sub_name: String::new(),
+                difficulty: CraftDifficulty::Optimal,
+                num_available: 0,
+                icon: None,
+                description: None,
+                needs_item_target: true,
+                reagents: Vec::new(),
+                tools: Vec::new(),
+                tooltip: CraftTooltip::Spell(7418),
+                spell_level: 1,
+                skill_line: None,
+                training_point_cost: 0,
+                required_level: 0,
+            }],
+        }));
+        script
+            .run(
+                "HEARD = {} local f = CreateFrame('Frame') \
+                 for _, e in ipairs({'TRADE_SKILL_UPDATE', 'CRAFT_UPDATE', 'BAG_UPDATE'}) do \
+                 f:RegisterEvent(e) end \
+                 f:SetScript('OnEvent', function() table.insert(HEARD, event) end)",
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        seat_item_lane(app.world_mut());
+        app
+    }
+
+    /// Fire `notice`'s run with a `RaiseBagUpdate` of the backpack, and read what it signalled.
+    fn heard(app: &mut App, notice: ItemNotice) -> Vec<String> {
+        app.world_mut().resource_mut::<ItemLane>().push(Run {
+            notice: Some(notice),
+            bags: vec![BagEvent::Raise(Some(0))],
+            ..Run::default()
+        });
+        fire_item_lane(app.world_mut());
+        app.world()
+            .non_send_resource::<UiScript>()
+            .eval::<Vec<String>>("local h = HEARD HEARD = {} return h")
+            .unwrap()
+    }
+
+    /// Each bag and item watcher's run rebuilds the open lists, whether or not anything changed:
+    /// the profession window's (`0x4fca20(0)`, `TRADE_SKILL_UPDATE` at `0x4fd164`), then the craft
+    /// window's (`0x4f60c0`, `CRAFT_UPDATE` at `0x4f661a`). A seat's after its recounts and ahead
+    /// of its bag update (`0x4f917c` before `0x4f918e`); a bag's after its bag events (`0x4f8f6d`
+    /// behind `0x4f8f66`); the record set-up's, the destroy's, the stack count's and a visible
+    /// item's ahead of their recounts and bag updates (`0x5d85be`, `0x5d8788`, `0x5d94d1`,
+    /// `0x5dee70`). The spell charges and the entry watcher rebuild nothing, nor does a closed
+    /// window.
+    #[test]
+    fn each_bag_and_item_watcher_run_rebuilds_the_open_lists() {
+        let mut app = open_windows();
+        let rebuild_then_bag = ["TRADE_SKILL_UPDATE", "CRAFT_UPDATE", "BAG_UPDATE"];
+        for notice in [
+            ItemNotice::Seat {
+                old: None,
+                new: None,
+            },
+            ItemNotice::Record { guid: 1, entry: 2 },
+            ItemNotice::Destroyed { guid: 1, entry: 2 },
+            ItemNotice::StackCount { guid: 1, entry: 2 },
+            ItemNotice::Visible { old: 0, new: 2 },
+        ] {
+            assert_eq!(
+                heard(&mut app, notice.clone()),
+                rebuild_then_bag,
+                "{notice:?}"
+            );
+        }
+        assert_eq!(
+            heard(
+                &mut app,
+                ItemNotice::Bag {
+                    entries: Vec::new()
+                }
+            ),
+            ["BAG_UPDATE", "TRADE_SKILL_UPDATE", "CRAFT_UPDATE"]
+        );
+        assert_eq!(
+            heard(&mut app, ItemNotice::SpellCharges { guid: 1, entry: 2 }),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            heard(
+                &mut app,
+                ItemNotice::Entry {
+                    guid: 1,
+                    old: 2,
+                    new: 3,
+                    new_cached: true
+                }
+            ),
+            ["BAG_UPDATE"]
+        );
+        app.world()
+            .non_send_resource::<UiScript>()
+            .run("CloseTradeSkill() CloseCraft() HEARD = {}")
+            .unwrap();
+        assert_eq!(
+            heard(&mut app, ItemNotice::StackCount { guid: 1, entry: 2 }),
+            ["BAG_UPDATE"]
+        );
+    }
 }

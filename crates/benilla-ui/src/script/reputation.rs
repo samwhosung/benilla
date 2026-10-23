@@ -1018,6 +1018,63 @@ mod tests {
         assert!(s.errors().is_empty(), "{:#?}", s.errors());
     }
 
+    /// The index verbs read the whole entry list (`0x4d5fa0`, bounded by the entry count
+    /// `0xb73760`), the folded children after the displayed rows. The list is the rebuild's
+    /// (`0x4d5430`): the met rows from the last `Faction.dbc` row to the first, each followed by
+    /// the header its team first needs (`0x4d5b87`), then Inactive; the sort (`0x4d5c40`) is the
+    /// CRT's (`0x73f727`), where two folded children of different headers compare equal
+    /// (`0x4d5f02`). Emulated on the bytes' rules, folding every header leaves Inactive (shown
+    /// by no count, `0x4d5d86`), then Argent Dawn, Bloodsail Buccaneers, Ironforge, Stormwind and
+    /// Booty Bay, not their display order.
+    #[test]
+    fn the_index_verbs_read_the_folded_entries_in_the_order_the_sort_leaves() {
+        let s = seated();
+        s.run("CollapseFactionHeader(0)").unwrap();
+        assert_eq!(s.eval::<i64>("return GetNumFactions()").unwrap(), 3);
+        let all = s
+            .eval::<Vec<String>>(
+                "local t = {} for i = 1, 9 do t[i] = (GetFactionInfo(i)) or '-' end return t",
+            )
+            .unwrap();
+        assert_eq!(
+            all,
+            [
+                "Alliance",
+                "Steamwheedle Cartel",
+                "Other",
+                "Inactive",
+                "Argent Dawn",
+                "Bloodsail Buccaneers",
+                "Ironforge",
+                "Stormwind",
+                "Booty Bay",
+            ]
+        );
+        // A folded child takes the verbs by its index past the shown rows.
+        s.run("SetSelectedFaction(8)").unwrap();
+        s.run("ExpandFactionHeader(0)").unwrap();
+        assert_eq!(
+            s.eval::<i64>("return GetSelectedFaction()").unwrap(),
+            3,
+            "Stormwind, shown again"
+        );
+    }
+
+    /// Deviation pinned: an index one past the entry count reads nothing, as one further does.
+    #[test]
+    fn an_index_at_the_entry_count_reads_as_one_past_it() {
+        let s = seated();
+        assert_eq!(
+            s.eval::<String>("return (GetFactionInfo(10))").unwrap(),
+            s.eval::<String>("return (GetFactionInfo(11))").unwrap(),
+        );
+        assert_eq!(
+            s.eval::<String>("return (GetFactionInfo(10))").unwrap(),
+            "Other",
+            "faction 0, which the Other header answers"
+        );
+    }
+
     /// The synthetic header's text is a `_G` read (`0x703bf0`, a `lua_gettable`), so an `__index`
     /// that calls a verb runs inside `GetFactionInfo`; the Model must be free for it.
     #[test]

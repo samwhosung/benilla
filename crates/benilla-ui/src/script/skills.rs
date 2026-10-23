@@ -1138,6 +1138,33 @@ mod tests {
         }
     }
 
+    /// `GetAdjustedSkillPoints` (`0x4d3cb0`) answers `PLAYER_CHARACTER_POINTS2` (`+0xe4c`,
+    /// `0x4d3d09`) less the staged cost (`0xb731d0`, `0x4d3d0f`), pushed as a signed dword
+    /// (`fild dword` at `0x4d3d23`): a fresh character's 2 free professions read 2.
+    #[test]
+    fn adjusted_skill_points_answer_the_second_character_points_value() {
+        let mut s = UiScript::new().unwrap();
+        s.set_skills(state());
+        for (points, want) in [(2u32, 2i64), (0, 0), (u32::MAX, -1)] {
+            s.set_talents(crate::script::TalentUiState {
+                points: (5, points),
+                ..Default::default()
+            });
+            assert_eq!(
+                s.eval::<i64>("return GetAdjustedSkillPoints()").unwrap(),
+                want,
+                "points {points:#x}"
+            );
+        }
+        // A chosen point costs 0 (module doc), so staging one leaves the answer.
+        s.set_talents(crate::script::TalentUiState {
+            points: (0, 2),
+            ..Default::default()
+        });
+        s.run("AddSkillUp(2)").unwrap();
+        assert_eq!(s.eval::<i64>("return GetAdjustedSkillPoints()").unwrap(), 2);
+    }
+
     #[test]
     fn no_push_reports_zero_rows() {
         let s = UiScript::new().unwrap();

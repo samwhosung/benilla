@@ -692,6 +692,54 @@ mod tests {
         );
     }
 
+    /// `GetCraftDisplaySkillLine` (`0x4f6cb0`) answers only while the open craft type is 3
+    /// (`cmp ds:0xbdcfb8,0x3` at `0x4f6ce3`); any other type, a closed window (`0x4f5fe0` zeroes
+    /// the type and keeps the list) or a missing line answers nil, 0, 0 (`0x4f6e40`).
+    #[test]
+    fn the_display_skill_line_answers_only_for_enchanting() {
+        let mut s = UiScript::new().unwrap();
+        let triple = |s: &UiScript| {
+            s.eval::<(Option<String>, i64, i64)>("return GetCraftDisplaySkillLine()")
+                .unwrap()
+        };
+        s.set_craft(Some(state()));
+        assert_eq!(triple(&s), (Some("Enchanting".into()), 57, 75));
+        let mut beasts = state();
+        beasts.craft_type = CRAFT_TYPE_BEAST_TRAINING;
+        s.set_craft(Some(beasts));
+        assert_eq!(triple(&s), (None, 0, 0), "Beast Training");
+        assert_eq!(s.arity("GetCraftDisplaySkillLine()").unwrap(), 3);
+        s.set_craft(Some(state()));
+        s.run("CloseCraft()").unwrap();
+        assert_eq!(
+            triple(&s),
+            (None, 0, 0),
+            "closed in the verb, the list held"
+        );
+        let mut no_line = state();
+        no_line.display_line = None;
+        s.set_craft(Some(no_line));
+        assert_eq!(triple(&s), (None, 0, 0), "no line for the first spell");
+    }
+
+    /// A recipe row's sixth and seventh values are its training-point cost and the pet level it
+    /// needs (`0x4f7078`, `0x4f7088`).
+    #[test]
+    fn craft_info_answers_the_training_point_cost_and_the_required_level() {
+        let mut s = UiScript::new().unwrap();
+        let mut st = state();
+        for r in &mut st.recipes {
+            r.training_point_cost = 5;
+            r.required_level = 12;
+        }
+        s.set_craft(Some(st));
+        assert_eq!(
+            s.eval::<(i64, i64)>("local _,_,_,_,_,tp,l = GetCraftInfo(1) return tp, l")
+                .unwrap(),
+            (5, 12)
+        );
+    }
+
     #[test]
     fn snapshot_feeds_the_api_tuples() {
         let mut s = UiScript::new().unwrap();

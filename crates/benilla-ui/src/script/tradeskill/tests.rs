@@ -1335,3 +1335,88 @@ fn a_profession_openers_slot_is_current_while_its_window_is_open() {
     s.set_craft(None);
     assert!(!current(&s, 5));
 }
+
+/// The verbs index the whole sorted row array, the rows a fold hides after the displayed ones
+/// (`0x4fd380`), each bounded by the full count `0xbde04c` (`GetTradeSkillInfo` `0x4fd861`,
+/// `SelectTradeSkill` `0x4fc9b0`), and the selection index walks every row (`0x4fc9e0`): a folded
+/// selection answers a position past `GetNumTradeSkills()`, which the stock Lua tests for
+/// (`Blizzard_TradeSkillUI.lua:195`).
+#[test]
+fn a_folded_selection_answers_past_the_displayed_count() {
+    let mut s = UiScript::new().unwrap();
+    s.set_trade_skill(Some(state()));
+    s.run("SelectTradeSkill(8)").unwrap(); // Wind Cloak, Zephyr Cloak's only recipe
+    s.run("CollapseTradeSkillSubClass(7)").unwrap();
+    assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 9);
+    assert_eq!(
+        s.eval::<i64>("return GetTradeSkillSelectionIndex()")
+            .unwrap(),
+        10,
+        "the one hidden row trails the nine shown"
+    );
+    assert_eq!(row_kind(&mut s, 10), ("Wind Cloak".into(), "medium".into()));
+    assert!(
+        s.eval::<bool>("return GetTradeSkillInfo(11) == nil")
+            .unwrap(),
+        "past the full count"
+    );
+    assert_eq!(
+        s.eval::<String>("return GetTradeSkillIcon(10)").unwrap(),
+        "Interface\\Icons\\Spell_5"
+    );
+    s.run("SelectTradeSkill(2) SelectTradeSkill(10)").unwrap();
+    assert_eq!(
+        s.eval::<i64>("return GetTradeSkillSelectionIndex()")
+            .unwrap(),
+        10
+    );
+    s.run("DoTradeSkill(10)").unwrap();
+    assert_eq!(s.take_trade_skill_dos(), vec![(5, 1)]);
+}
+
+/// The hidden rows compare equal (`0x4fd51f`), so they trail in the order the CRT sort
+/// (`0x73f727`, `shortsort` for three rows) leaves them, and each mask setter re-sorts the array as
+/// the last sort left it (`0x4fd710`, `0x4fd750` → `0x4fd180`). Emulated on the bytes' rules from
+/// the pushed order Bolt, Robe, then the Cloth header: the build sorts Cloth, Robe, Bolt; a fold
+/// leaves Cloth, Bolt, Robe; the subclass filter's re-sort Robe, Bolt, Cloth; a fold of the hidden
+/// header, reached past the displayed count (`0x4fd650`), Bolt, Cloth, Robe.
+#[test]
+fn hidden_rows_trail_in_the_order_the_crt_sort_leaves_them() {
+    let mut s = UiScript::new().unwrap();
+    s.set_trade_skill(Some(two_recipe_state()));
+    let names = |s: &UiScript| {
+        s.eval::<Vec<String>>(
+            "local t = {} for i = 1, 4 do local n = GetTradeSkillInfo(i) t[i] = n or '-' end \
+             return t",
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        names(&s),
+        ["Cloth", "Simple Robe", "Bolt of Linen Cloth", "-"]
+    );
+    s.run("CollapseTradeSkillSubClass(1)").unwrap();
+    assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 1);
+    assert_eq!(
+        names(&s),
+        ["Cloth", "Bolt of Linen Cloth", "Simple Robe", "-"]
+    );
+    s.run("ExpandTradeSkillSubClass(1) SetTradeSkillSubClassFilter(1, 0)")
+        .unwrap();
+    assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 0);
+    assert_eq!(
+        names(&s),
+        ["Simple Robe", "Bolt of Linen Cloth", "Cloth", "-"]
+    );
+    s.run("CollapseTradeSkillSubClass(3)").unwrap();
+    assert_eq!(
+        names(&s),
+        ["Bolt of Linen Cloth", "Cloth", "Simple Robe", "-"]
+    );
+    let (_, kind, _, expanded) = s
+        .eval::<(String, String, i64, Option<i64>)>(
+            "local n,t,a,e = GetTradeSkillInfo(2) return n,t,a,e",
+        )
+        .unwrap();
+    assert_eq!((kind.as_str(), expanded), ("header", None));
+}
