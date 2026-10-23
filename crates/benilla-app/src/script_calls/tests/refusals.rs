@@ -177,3 +177,80 @@ fn an_attacks_refusal_shows_inside_its_call_after_the_cast_it_bound() {
         [format!("CastSpell {:x?}", Some(MOB)), "RandomRoll".into()]
     );
 }
+
+/// `SendChatMessage`'s raid gates (`0x49f379`, `0x49f3a4`), chat rows like the party gate: a raid
+/// line with no raid is `ERR_NOT_IN_RAID` (`0x19c`), and a raid warning from a plain member
+/// `ERR_NOT_LEADER` (`0x4b`), each inside the call.
+#[test]
+fn a_raid_lines_refusal_shows_inside_its_call() {
+    let mut f = frame(true);
+    in_world(&mut f);
+    assert_eq!(
+        shown_in_call(&mut f, r#"SendChatMessage("hi", "RAID")"#),
+        "ERR_NOT_IN_RAID"
+    );
+    let mut f = frame(true);
+    in_world(&mut f);
+    let member = |guid, rank| benilla_ui::script::RaidMemberInfo {
+        guid,
+        rank,
+        ..Default::default()
+    };
+    f.app
+        .world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .set_party(benilla_ui::script::PartyState {
+            leader_guid: NEW,
+            own_guid: ME,
+            raid: vec![member(ME, 0), member(NEW, 2)],
+            ..Default::default()
+        });
+    assert_eq!(
+        shown_in_call(&mut f, r#"SendChatMessage("hi", "RAID_WARNING")"#),
+        "ERR_NOT_LEADER"
+    );
+}
+
+/// The party verbs' own refusals, `DisplayError` (`0x496720`) inside the binding: `InviteByName`
+/// of our own name (`0x48a485`), `SetLootMethod("master")` with no name (`0x4e9453`), and
+/// `DoReadyCheck` while one runs (`0x4bb20c`).
+#[test]
+fn a_party_verbs_own_refusal_shows_inside_its_call() {
+    let mut f = frame(true);
+    {
+        let world = f.app.world_mut();
+        let mut script = world.non_send_resource_mut::<UiScript>();
+        script.set_unit(
+            "player",
+            Some(benilla_ui::script::UnitState {
+                exists: true,
+                guid: ME,
+                name: Some("Probe".into()),
+                ..Default::default()
+            }),
+        );
+        script.set_party(benilla_ui::script::PartyState {
+            members: vec![benilla_ui::script::PartyMemberInfo {
+                name: "Bob".into(),
+                guid: NEW,
+            }],
+            leader_guid: ME,
+            own_guid: ME,
+            ..Default::default()
+        });
+    }
+    assert_eq!(
+        shown_in_call(&mut f, r#"InviteByName("probe")"#),
+        "ERR_INVITE_SELF"
+    );
+    run(&mut f, "LINES = {}");
+    assert_eq!(
+        shown_in_call(&mut f, r#"SetLootMethod("master")"#),
+        "ERR_SPECIFY_MASTER_LOOTER"
+    );
+    run(&mut f, "DoReadyCheck() LINES = {}");
+    assert_eq!(
+        shown_in_call(&mut f, "DoReadyCheck()"),
+        "ERR_READY_CHECK_IN_PROGRESS"
+    );
+}
