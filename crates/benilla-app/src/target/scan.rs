@@ -7,7 +7,7 @@
 //! attackers first without pinning TAB to them.
 //!
 //! Kept from 1.12: the validity filters (`0x493e40`, `CanAttack 0x606980`, critters), the
-//! [`commit`] through `SetSelection` (`0x493540`), the attack acquire (`0x612df0` at `0x6130b5`),
+//! [`commit_owing`] through `SetSelection` (`0x493540`), the attack acquire (`0x612df0` at `0x6130b5`),
 //! the ATTACKERSTATEUPDATE and spell start acquires (`0x6259c9`–`0x6259fe`, `0x6e7963`-`0x6e799c`)
 //! and the 41 yd range.
 
@@ -443,7 +443,7 @@ impl TabHistory {
     }
 }
 
-/// What one [`commit`] did; `swung` means it ran the re-swing (`0x4938c8`), so a caller must not ask
+/// What one [`commit_owing`] did; `swung` means it ran the re-swing (`0x4938c8`), so a caller must not ask
 /// again. StartAttack's own gate may have refused it ([`crate::creature_anim::StartGate`]), and the
 /// caller's would refuse alike: `swung` says it was asked, not that `CMSG_ATTACKSWING` went out.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -553,37 +553,11 @@ impl OwedSwing {
 /// (`0x4938a1`, `0x5ecc48`).
 /// `entity` is the guid's object, which the select lights (`0x493701`); with none the guid is
 /// stored all the same (`0x4935c8` → `0x493605`), and neither `IsSelectable` nor the light runs.
-/// For a writer whose signal has no listeners to run first, the re-swing goes out here.
-/// `old_latches` is [`latches_on`] the selection as it stands. Whether we are attacking is
-/// [`crate::creature_anim::Engaged`] as the queued unit edits leave it ([`crate::creature_anim::AttackSeam::engaged`]),
-/// which StartAttack's send sets locally (`[+0xc48]`, `[+0xc50]` = 1, `0x5ecd51` → `0x47bf70`)
-/// and the stop's echo clears (`0x624e40`).
-pub(super) fn commit(
-    selection: &mut Selection,
-    seam: &mut crate::creature_anim::AttackSeam,
-    entity: Option<Entity>,
-    guid: u64,
-    target_store: Option<&ObjectStore>,
-    self_guid: Option<u64>,
-    new_attackable: bool,
-    old_latches: bool,
-) -> CommitOutcome {
-    let (out, owed) = commit_owing(
-        selection,
-        seam,
-        entity,
-        guid,
-        target_store,
-        self_guid,
-        new_attackable,
-        old_latches,
-    );
-    owed.pay(selection, seam);
-    out
-}
-
-/// [`commit`], owing what follows its signals ([`Owed`]), for a caller that runs their listeners
-/// in place before paying it. `old_latches` is [`latches_on`] the selection as it stands, which a
+/// Whether we are attacking is [`crate::creature_anim::Engaged`] as the queued unit edits leave it
+/// ([`crate::creature_anim::AttackSeam::engaged`]), which StartAttack's send sets locally
+/// (`[+0xc48]`, `[+0xc50]` = 1, `0x5ecd51` → `0x47bf70`) and the stop's echo clears (`0x624e40`).
+/// It owes what follows its signals ([`Owed`]), for a caller that runs their listeners in place
+/// before paying it. `old_latches` is [`latches_on`] the selection as it stands, which a
 /// selection made at another's signal finds to be that one's pick.
 pub(super) fn commit_owing(
     selection: &mut Selection,
@@ -655,6 +629,32 @@ pub(super) fn commit_owing(
         },
         Owed { send, swing },
     )
+}
+
+/// [`commit_owing`] paid at once, for a test whose signals have no listeners to run first.
+#[cfg(test)]
+pub(super) fn commit(
+    selection: &mut Selection,
+    seam: &mut crate::creature_anim::AttackSeam,
+    entity: Option<Entity>,
+    guid: u64,
+    target_store: Option<&ObjectStore>,
+    self_guid: Option<u64>,
+    new_attackable: bool,
+    old_latches: bool,
+) -> CommitOutcome {
+    let (out, owed) = commit_owing(
+        selection,
+        seam,
+        entity,
+        guid,
+        target_store,
+        self_guid,
+        new_attackable,
+        old_latches,
+    );
+    owed.pay(selection, seam);
+    out
 }
 
 /// One press on either side, as every `TargetNearest*` shim shares `0x493f60`: score the live
@@ -979,19 +979,14 @@ enum Acquire {
 ///
 /// Each is `SelectTarget` (`0x6259fe`, `0x6e799c`), whose front may bind the unit to a standing
 /// cursor's cast instead; a packet handler runs in no script, whose gate context passes tag 2.
+/// Each selection signals in place, its listeners running before the next ask is judged
+/// ([`crate::script_calls::ScriptCallHost::engine_select`]).
 pub(super) fn auto_acquire(
     mut swings: MessageReader<SwingMessage>,
     mut casts: MessageReader<crate::spell::net::CastAtPlayer>,
-    self_player: Query<(Entity, &Guid), With<SelfPlayer>>,
-    guids: Query<&Guid>,
-    // For `IsSelectable`: a `NOT_SELECTABLE` attacker is not acquired.
-    stores: Query<&ObjectStore>,
-    relations: RelationWorld,
-    mut selection: ResMut<Selection>,
-    mut seam: crate::creature_anim::AttackSeam,
-    mut front: super::front::SelectFront,
+    mut vm: crate::script_calls::VmWith<AcquireSelect<'static, 'static>>,
 ) {
-    let Ok((me, my_guid)) = self_player.single() else {
+    let Some((me, my_guid)) = vm.own().self_player.single().ok().map(|(e, g)| (e, g.0)) else {
         return;
     };
     let mut asks: Vec<(u64, Entity, Acquire)> = swings
@@ -1002,45 +997,75 @@ pub(super) fn auto_acquire(
         .collect();
     asks.sort_by_key(|&(seq, ..)| seq);
     for (_, unit, why) in asks {
-        let Ok(guid) = guids.get(unit) else {
-            continue;
-        };
-        let guid = guid.0;
+        let select = vm.own().select(unit, why, my_guid);
+        if let Some(select) = select {
+            vm.engine_select(select, |mut c, owed| {
+                owed.pay(&mut c.selection, &mut c.seam);
+            });
+        }
+    }
+}
+
+/// What [`auto_acquire`]'s selects read and write.
+#[derive(SystemParam)]
+pub(super) struct AcquireSelect<'w, 's> {
+    self_player: Query<'w, 's, (Entity, &'static Guid), With<SelfPlayer>>,
+    guids: Query<'w, 's, &'static Guid>,
+    // For `IsSelectable`: a `NOT_SELECTABLE` attacker is not acquired.
+    stores: Query<'w, 's, &'static ObjectStore>,
+    relations: RelationWorld<'w, 's>,
+    selection: ResMut<'w, Selection>,
+    seam: crate::creature_anim::AttackSeam<'w, 's>,
+    front: super::front::SelectFront<'w, 's>,
+}
+
+impl AcquireSelect<'_, '_> {
+    /// One ask's select of `unit`, owing what follows its signals, or `None` when it selects
+    /// nothing.
+    fn select(
+        &mut self,
+        unit: Entity,
+        why: Acquire,
+        my_guid: u64,
+    ) -> Option<crate::script_calls::EngineSelect> {
+        let guid = self.guids.get(unit).ok()?.0;
         match why {
             Acquire::Attacker => {
                 // `0x6259e6` tests the selected guid, so a party member selected out of range
                 // keeps the selection.
-                if selection.guid.is_some() {
-                    continue;
+                if self.selection.guid.is_some() {
+                    return None;
                 }
                 debug!("auto-target: attacker {guid:#x} (victim = me, no target)");
             }
             Acquire::Caster => {
-                let rel = relations.get();
-                let assists = match (relations.unit(guid), relations.me()) {
+                let rel = self.relations.get();
+                let assists = match (self.relations.unit(guid), self.relations.me()) {
                     (Some(caster), Some(player)) => rel.can_assist(&caster, &player),
-                    _ => continue,
+                    _ => return None,
                 };
-                if assists || selection.guid.is_some() {
-                    continue;
+                if assists || self.selection.guid.is_some() {
+                    return None;
                 }
                 debug!("auto-target: caster {guid:#x} (casting at me, no target)");
             }
         }
-        if front.takes(unit, guid, seam.slots.targeting()) {
-            continue;
+        if self.front.takes(unit, guid, self.seam.slots.targeting()) {
+            return None;
         }
+        let before = super::click::Standing::of(&self.selection, &self.seam);
         // The selection was empty, so no switch law: selection only.
-        commit(
-            &mut selection,
-            &mut seam,
+        let (_, owed) = commit_owing(
+            &mut self.selection,
+            &mut self.seam,
             Some(unit),
             guid,
-            stores.get(unit).ok(),
-            Some(my_guid.0),
+            self.stores.get(unit).ok(),
+            Some(my_guid),
             false,
             false,
         );
+        Some(before.owing(owed))
     }
 }
 

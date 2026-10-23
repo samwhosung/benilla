@@ -141,7 +141,7 @@ impl Died<'_, '_> {
     }
 
     /// What a deselect owes, paid with nothing to listen first.
-    fn pay(mut d: Died, owed: super::scan::Owed) {
+    fn pay(mut d: Died, owed: super::SelectDebt) {
         owed.pay(&mut d.selection, &mut d.seam);
     }
 }

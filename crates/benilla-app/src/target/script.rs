@@ -156,6 +156,12 @@ impl ScriptSelect<'_, '_> {
         self.commit.pay_now(debt);
     }
 
+    /// StartAttack (`0x5ecb70`) at `guid` from an engine writer, its own select (`0x5eccaa`)
+    /// owing the swing past its signals ([`SelectCommit::start_attack`]).
+    pub(crate) fn start_attack(&mut self, guid: u64) -> SelectDebt {
+        self.commit.owing(|commit| commit.start_attack(guid))
+    }
+
     /// `ClearTarget()` (`0x489ff0`): deselect whatever the calls before it left selected.
     pub(crate) fn clear_target(&mut self) -> SelectDebt {
         self.commit.owing(|commit| commit.clear())

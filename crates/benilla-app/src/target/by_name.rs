@@ -427,7 +427,7 @@ impl PlayerLookup<'_, '_> {
     }
 }
 
-/// `/target <name>` and the Lua `TargetByName(name, exactMatch)` through [`scan::commit`], the
+/// `/target <name>` and the Lua `TargetByName(name, exactMatch)` through [`scan::commit_owing`], the
 /// stop, select, re-swing path a click takes. `exact` is the Lua second argument, which `0x489d8e`
 /// reads with default 0 as the resolver's exact-only flag (consumed at `0x493cab`). The pick goes
 /// to `SetSelection` as it is (`0x489daa`), so a party member out of range is selected by guid. A
@@ -643,6 +643,33 @@ impl SelectDebt {
     pub(crate) fn owes_swings(&self) -> bool {
         !self.swings.is_empty()
     }
+
+    /// The debt of StartAttack's own select (`0x5eccaa`), then the rest of StartAttack at `guid`
+    /// past it (`0x5eccaf` on), after the select's signals and its re-swing.
+    pub(crate) fn then_tail(mut self, guid: u64) -> Self {
+        self.swings.push(OwedSwing::Tail { guid });
+        self
+    }
+
+    /// Pay all of it now, for an engine writer whose signals have no listeners to run first:
+    /// nothing ran since its commit, so a re-swing finds the guid it stored.
+    pub(crate) fn pay(
+        self,
+        selection: &mut Selection,
+        seam: &mut crate::creature_anim::AttackSeam,
+    ) {
+        if let Some(send) = self.send {
+            send.pay(selection, seam);
+        }
+        for swing in self.swings {
+            match swing {
+                OwedSwing::Again(owed) => owed.pay(selection, seam, StartTarget::Unheld),
+                OwedSwing::Tail { guid } => seam.start_tail(guid),
+                // The assist tail is a call's alone ([`SelectCommit::assist`]).
+                OwedSwing::Assist { .. } => {}
+            }
+        }
+    }
 }
 
 /// Where [`SelectCommit`] keeps what its verb owes while [`SelectCommit::owing`] runs.
@@ -652,7 +679,7 @@ pub(super) struct Owing {
     debt: SelectDebt,
 }
 
-/// Everything [`scan::commit`], the one `SetSelection` path, needs.
+/// Everything [`scan::commit_owing`], the one `SetSelection` path, needs.
 #[derive(SystemParam)]
 #[allow(clippy::type_complexity)] // one bundled param, the app's convention for big query sets
 pub(crate) struct SelectCommit<'w, 's> {
@@ -917,7 +944,7 @@ impl SelectCommit<'_, '_> {
         }
     }
 
-    /// Select the held object `entity`, `guid`, through [`scan::commit`], unless `SelectTarget`'s
+    /// Select the held object `entity`, `guid`, through [`scan::commit_owing`], unless `SelectTarget`'s
     /// front returns first ([`super::front`]): with the targeting cursor up the unit is bound to the
     /// cast and the selection stays.
     pub(super) fn commit(&mut self, entity: Entity, guid: u64) {

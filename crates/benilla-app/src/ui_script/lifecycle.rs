@@ -814,7 +814,8 @@ fn run_ui_shutdown_head(world: &mut World, loud: bool) {
         // A harness without the target stack has no selection to drop.
         let deselected =
             crate::script_calls::run_cached(world, crate::target::deselect_on_ui_shutdown)
-                .unwrap_or(false);
+                .ok()
+                .flatten();
         // The teardown's own loot close, on a window looting the target (`0x493959`-`0x493974`).
         let loot_closed = looting.is_some()
             && world
@@ -824,14 +825,11 @@ fn run_ui_shutdown_head(world: &mut World, loud: bool) {
         if loot_closed {
             let _ = crate::script_calls::run_cached(world, crate::ui_loot::tell_loot_closed);
         }
-        if deselected {
-            crate::script_calls::with_hosted_vm(world, |script| {
-                if let Some(script) = script {
-                    script.set_unit("target", None);
-                    script.set_unit("targettarget", None);
-                    script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
-                }
-            });
+        // Then its signals, in place, after the loot close (`0x493a2a`, `0x493a73`).
+        if let Some(select) = deselected {
+            let _ =
+                world.run_system_cached_with(crate::target::signal_ui_shutdown_deselect, select);
+            crate::creature_anim::apply_unit_edits(world);
         }
     } else {
         let _ = crate::script_calls::run_cached(

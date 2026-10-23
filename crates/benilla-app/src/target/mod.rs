@@ -84,7 +84,10 @@ pub(crate) use ring::{ring_variant, PlayerPath, SelectorInput};
 pub(crate) use ring::{selection_variant, Factions, RingVariant};
 
 pub use click::Interact;
-pub(crate) use click::{clear_selection_on_world_teardown, deselect_on_ui_shutdown, DeselectGuid};
+pub(crate) use click::{
+    clear_selection_on_world_teardown, deselect_on_ui_shutdown, signal_ui_shutdown_deselect,
+    DeselectGuid,
+};
 
 /// Our target, set the instant we click, as the 1.12 client does without waiting for the server.
 /// The selection is the guid `[0xb4e2d8]`: `SetSelection 0x493540` stores it whether or not the

@@ -295,11 +295,18 @@ fn on_spell_start(
 }
 
 /// The GO, then its deferred auto-attack start (`0x6e8402` → `0x6131a0` → `0x5ecb70`): StartAttack
-/// with its own select (`0x5eccaa`), which selects the hit unit whatever is selected.
+/// with its own select (`0x5eccaa`), which selects the hit unit whatever is selected and signals
+/// in place, behind the GO's reports, before the swing
+/// ([`crate::script_calls::ScriptCallHost::engine_start_attack`]).
+#[allow(clippy::type_complexity)] // a Bevy system's full input set
 fn on_spell_go(
     In(ev): In<SessionEvent>,
-    mut set: ParamSet<((Lifecycle, Scene), crate::target::SelectCommit)>,
+    mut set: ParamSet<(
+        (Lifecycle, Scene),
+        crate::script_calls::VmWith<crate::target::SelectCommit<'static, 'static>>,
+    )>,
 ) {
+    let mark = crate::lanes::mark();
     if let SessionEvent::SpellGo {
         caster,
         spell_id,
@@ -363,7 +370,8 @@ fn on_spell_go(
             )
         };
         if let Some(guid) = deferred {
-            set.p1().start_attack(guid);
+            set.p1()
+                .engine_start_attack(guid, mark, |mut commit| commit.start_attack(guid));
         }
     }
 }

@@ -147,7 +147,7 @@ pub(crate) struct EngineSelect {
     pub(crate) before: Option<u64>,
     pub(crate) latched: bool,
     pub(crate) mark: crate::lanes::Mark,
-    pub(crate) owed: crate::target::Owed,
+    pub(crate) owed: crate::target::SelectDebt,
 }
 
 impl ScriptCallHost<'_, '_> {
@@ -164,7 +164,29 @@ impl ScriptCallHost<'_, '_> {
                 latched: select.latched,
                 mark: self.appliers.p2().p2().mark_at(select.mark),
             };
-            self.settle_selection(script, &mut at, select.owed.into());
+            self.settle_selection(script, &mut at, select.owed);
+            self.commit_views(script);
+        });
+        script.hosted(self, |_| ());
+    }
+
+    /// An engine writer's StartAttack (`0x5ecb70`) at `guid` outside any call, such as a spell's
+    /// deferred melee start (`0x6e8402` → `0x6131a0`): its own select (`0x5eccaa`) signals in
+    /// place, before its swing, behind the cast reports made since `mark`.
+    pub(crate) fn engine_start_attack(
+        &mut self,
+        script: &mut UiScript,
+        guid: u64,
+        mark: crate::lanes::Mark,
+    ) {
+        script.host_out(|script| {
+            let mut at = Signalled {
+                selected: self.appliers.p0().selected(),
+                latched: self.appliers.p6().p1().attack_latched(),
+                mark: self.appliers.p2().p2().mark_at(mark),
+            };
+            let owed = self.appliers.p0().start_attack(guid);
+            self.settle_selection(script, &mut at, owed);
             self.commit_views(script);
         });
         script.hosted(self, |_| ());
@@ -706,7 +728,7 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
     pub(crate) fn engine_select(
         &mut self,
         select: EngineSelect,
-        pay: impl FnOnce(SystemParamItem<'_, '_, P>, crate::target::Owed),
+        pay: impl FnOnce(SystemParamItem<'_, '_, P>, crate::target::SelectDebt),
     ) {
         if let Some(script) = self.script.as_deref_mut() {
             if let Some(host) = self.set.p1().as_mut() {
@@ -715,6 +737,23 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
             }
         }
         pay(self.set.p0(), select.owed);
+    }
+
+    /// An engine writer's StartAttack at `guid`, its select signalled in place with the host
+    /// ([`ScriptCallHost::engine_start_attack`]); with no VM or no host, `start` runs it on `P`.
+    pub(crate) fn engine_start_attack(
+        &mut self,
+        guid: u64,
+        mark: crate::lanes::Mark,
+        start: impl FnOnce(SystemParamItem<'_, '_, P>),
+    ) {
+        if let Some(script) = self.script.as_deref_mut() {
+            if let Some(host) = self.set.p1().as_mut() {
+                host.engine_start_attack(script, guid, mark);
+                return;
+            }
+        }
+        start(self.set.p0());
     }
 }
 

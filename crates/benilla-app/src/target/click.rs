@@ -208,12 +208,22 @@ impl Standing {
 
     /// The commit's signals, owing `owed` after them.
     pub(super) fn owing(self, owed: scan::Owed) -> crate::script_calls::EngineSelect {
+        self.owing_debt(owed.into())
+    }
+
+    /// The commit's signals, owing `owed` after them.
+    pub(super) fn owing_debt(self, owed: super::SelectDebt) -> crate::script_calls::EngineSelect {
         crate::script_calls::EngineSelect {
             before: self.0,
             latched: self.1,
             mark: self.2,
             owed,
         }
+    }
+
+    /// The same, its reports counted from `mark`, where the writer's step began.
+    fn since(self, mark: crate::lanes::Mark) -> Self {
+        Self(self.0, self.1, mark)
     }
 }
 
@@ -422,11 +432,129 @@ enum Owed {
         in_reach: bool,
         walk: bool,
     },
+    /// The rest of StartAttack past its stand-up (`0x5ecca0` on): its own select (`0x5eccaa`),
+    /// whose signals run their listeners before its swing ([`attack_select`]); `attackable` is the
+    /// press's Attack classification, the re-swing's gate.
+    Attack {
+        entity: Entity,
+        guid: u64,
+        attackable: bool,
+    },
+}
+
+/// Pay what [`interact`] owed past its turn, on a [`crate::script_calls::VmWith`] whose set, bound
+/// by `$p`, `$parts` splits into the dispatchers and the selection: StartAttack's own select
+/// signalled in place before its swing ([`attack_select`]), or a leg's loot or use as a turn of
+/// its own. `$mark` is the clock where the click's step began.
+macro_rules! pay_owed {
+    ($vm:ident, $owed:expr, $mark:expr, |$p:pat_param| $parts:expr) => {
+        match $owed {
+            Some(Owed::Attack {
+                entity,
+                guid,
+                attackable,
+            }) => {
+                let select = {
+                    let $p = $vm.own();
+                    let (dispatch, selection) = $parts;
+                    attack_select(dispatch, selection, entity, guid, attackable, $mark)
+                };
+                $vm.engine_select(select, |$p, owed| {
+                    let (dispatch, selection) = $parts;
+                    owed.pay(selection, &mut dispatch.seam);
+                });
+            }
+            Some(owed) => $vm.turn(|_, $p| {
+                let (dispatch, _) = $parts;
+                owed.run(dispatch)
+            }),
+            None => {}
+        }
+    };
+}
+
+/// StartAttack's own select (`0x5eccaa`), past its gates and its stand-up and before its swing
+/// (`0x5eccfd`), owing the swing past its signals: the click's commit, with its stop and re-swing
+/// mid-combat. A unit already selected is the setter's dedup, and a cursor's bind has emptied the
+/// word by now, so a plate's unit is selected here; a bind in its place selects nothing. A commit
+/// that stopped and re-swung left `[+0xc54]` set, so the swing goes out a second time
+/// (`0x5eccda`).
+fn attack_select(
+    dispatch: &mut Dispatch,
+    selection: &mut ResMut<Selection>,
+    entity: Entity,
+    guid: u64,
+    attackable: bool,
+    mark: crate::lanes::Mark,
+) -> crate::script_calls::EngineSelect {
+    let before = Standing::of(selection, &dispatch.seam).since(mark);
+    let tail = |owed: scan::Owed| before.owing_debt(super::SelectDebt::from(owed).then_tail(guid));
+    if dispatch
+        .front
+        .takes(entity, guid, dispatch.seam.slots.targeting())
+    {
+        return tail(scan::Owed::default());
+    }
+    let me = dispatch.me().map(|(_, g)| g);
+    let target = dispatch.stores.get(entity).ok().map(|(s, _)| s);
+    let old_latches = scan::latches_on(&dispatch.relations, selection.guid);
+    let (_, owed) = scan::commit_owing(
+        selection,
+        &mut dispatch.seam,
+        Some(entity),
+        guid,
+        target,
+        me,
+        attackable,
+        old_latches,
+    );
+    tail(owed)
+}
+
+/// The INTERACT leg's select (`0x492870` → `SetSelection 0x493540`) on the press pick's unit,
+/// ahead of the object's dispatcher (`0x492881`): a GameObject and a corpse are not selectable
+/// (their slot `+0x58`, the base `0x469fe0`, answers 0), and a standing cursor binds the unit in
+/// its place. Deref'd only where it commits, so a click that selects nothing leaves the change
+/// tick alone.
+fn interact_select(
+    dispatch: &mut Dispatch,
+    selection: &mut ResMut<Selection>,
+    press: &PressPick,
+) -> Option<crate::script_calls::EngineSelect> {
+    if go_is_nearest(&press.hovered, &press.object) || press.hovered.corpse.is_some() {
+        return None;
+    }
+    let (Some(entity), Some(guid)) = (press.hovered.target, press.hovered.guid) else {
+        return None;
+    };
+    if dispatch
+        .front
+        .takes(entity, guid, dispatch.seam.slots.targeting())
+    {
+        return None;
+    }
+    let me = dispatch.me().map(|(_, g)| g);
+    let before = Standing::of(selection, &dispatch.seam);
+    let target = dispatch.stores.get(entity).ok().map(|(s, _)| s);
+    let old_latches = scan::latches_on(&dispatch.relations, selection.guid);
+    let (_, owed) = scan::commit_owing(
+        selection,
+        &mut dispatch.seam,
+        Some(entity),
+        guid,
+        target,
+        me,
+        press.attack(),
+        old_latches,
+    );
+    Some(before.owing(owed))
 }
 
 impl Owed {
     fn run(self, dispatch: &mut Dispatch) {
         match self {
+            // The callers pay it with its select ([`pay_owed`]); with none, the swing alone.
+            Owed::Attack { guid, .. } => dispatch.seam.start_tail(guid),
             Owed::LootCorpse { entity, guid, walk } => {
                 let can_loot = dispatch.can_loot_corpse(entity);
                 dispatch.loot_corpse(entity, guid, can_loot, walk);
@@ -986,7 +1114,21 @@ pub(super) fn act_on_right_click(
     if clicks.read().last().is_none() || vm.own().0.seam.player_is_charmed() {
         return;
     }
-    let owed = vm.turn(|script, (mut dispatch, mut selection)| {
+    let mark = crate::lanes::mark();
+    // The INTERACT leg's select signals inside the click, before the dispatcher
+    // ([`crate::script_calls::ScriptCallHost::engine_select`]).
+    if press.over_object() {
+        let select = {
+            let (mut dispatch, mut selection) = vm.own();
+            interact_select(&mut dispatch, &mut selection, &press)
+        };
+        if let Some(select) = select {
+            vm.engine_select(select, |(mut dispatch, mut selection), owed| {
+                owed.pay(&mut selection, &mut dispatch.seam);
+            });
+        }
+    }
+    let owed = vm.turn(|script, (mut dispatch, _)| {
         // The router's other legs: the world hit walks there (`0x5e0378`), and nothing walks along
         // the ray when the cursor is empty (`0x492d50`).
         if !press.over_object() {
@@ -1003,33 +1145,12 @@ pub(super) fn act_on_right_click(
             }
             return None;
         }
-        interact(&mut dispatch, script, &press, Select::First(&mut selection))
+        interact(&mut dispatch, script, &press)
     });
-    if let Some(owed) = owed {
-        vm.turn(|_, (mut dispatch, _)| owed.run(&mut dispatch));
-    }
-}
-
-/// Where [`interact`] selects its unit, if it does: the world click's entry (`0x492820`) selects
-/// first, whatever leg follows; a nameplate's click made that select already, at the click
-/// ([`select_on_plate_click`]), and the dispatcher runs after the cast it bound; a crate's
-/// [`Interact`] runs the dispatcher alone. The attack leg selects again through StartAttack
-/// (`0x5ecb70`, `SetSelection` at `0x5eccaa`), which finds the unit selected or, after a bind
-/// emptied the cursor's word, selects it.
-enum Select<'a, 'w> {
-    First(&'a mut ResMut<'w, Selection>),
-    Done(&'a mut ResMut<'w, Selection>),
-    OnAttack(&'a mut ResMut<'w, Selection>),
-}
-
-impl<'a, 'w> Select<'a, 'w> {
-    fn selection(&mut self) -> &mut ResMut<'w, Selection> {
-        match self {
-            Select::First(selection) | Select::Done(selection) | Select::OnAttack(selection) => {
-                selection
-            }
-        }
-    }
+    pay_owed!(vm, owed, mark, |(mut dispatch, mut selection)| (
+        &mut dispatch,
+        &mut selection
+    ));
 }
 
 /// Act on a pick by the cursor's classification of it: a GameObject, a corpse, an attack, loot,
@@ -1043,7 +1164,6 @@ fn interact(
     dispatch: &mut Dispatch,
     script: Option<&mut benilla_ui::script::UiScript>,
     press: &PressPick,
-    mut select: Select,
 ) -> Option<Owed> {
     let (hovered, hovered_object, cursor) = (&press.hovered, &press.object, &press.cursor);
     let walk = dispatch.auto.can_auto_interact();
@@ -1206,34 +1326,6 @@ fn interact(
             ),
         );
     }
-    let me = dispatch.me();
-    let relations = &dispatch.relations;
-    // A mid-combat click on a vendor or corpse switches and stops, never swings (`0x5ecb70`); the
-    // sword, not the fork, as the re-swing also needs the player's own legs.
-    // Deref'd only where it commits: a leg that does not select leaves the change tick alone.
-    let commit = |seam: &mut crate::creature_anim::AttackSeam,
-                  front: &mut super::front::SelectFront,
-                  selection: &mut ResMut<Selection>| {
-        // Both selects are `SelectTarget`'s (`0x492870`, `0x5eccaa`): charmed, or a standing
-        // cursor's bind in its place.
-        if front.takes(entity, guid, seam.slots.targeting()) {
-            return scan::CommitOutcome::default();
-        }
-        let old_latches = scan::latches_on(relations, selection.guid);
-        scan::commit(
-            selection,
-            seam,
-            Some(entity),
-            guid,
-            target,
-            me.map(|(_, g)| g),
-            press.attack(),
-            old_latches,
-        )
-    };
-    if let Select::First(selection) = &mut select {
-        commit(&mut dispatch.seam, &mut dispatch.front, selection);
-    }
     match unit_branch(attack, dead_fork, leg) {
         UnitBranch::Attack => {
             // `0x60c22b`, past the dead and mounted gates (`0x60c1a1`, `0x60c1bc`) and before
@@ -1268,15 +1360,12 @@ fn interact(
                 .seam
                 .start_head(crate::creature_anim::StartTarget::Attackable)
             {
-                // StartAttack's own select (`0x5eccaa`), past its gates and its stand-up and
-                // before the swing (`0x5eccfd`): the click's commit, with its stop and re-swing
-                // mid-combat. A unit already selected is its dedupe, and a cursor's bind has
-                // emptied the word by now, so a plate's unit is selected here, ahead of the swing.
-                commit(&mut dispatch.seam, &mut dispatch.front, select.selection());
                 debug!("right-click attack: {guid:#x}");
-                // A commit that stopped and re-swung left `[+0xc54]` set, so this swing goes out
-                // a second time (`0x5eccda`).
-                dispatch.seam.start_tail(guid);
+                return Some(Owed::Attack {
+                    entity,
+                    guid,
+                    attackable: press.attack(),
+                });
             }
         }
         UnitBranch::Dead(DeadUnitLeg::Loot) => {
@@ -1381,12 +1470,12 @@ pub(super) fn act_on_interact(
     // after its store's.
     let plates = plate_clicks.read().count();
     for _ in 0..plates {
-        let owed = vm.turn(|script, (mut set, mut selection)| {
-            interact(&mut set.p1(), script, &press, Select::Done(&mut selection))
-        });
-        if let Some(owed) = owed {
-            vm.turn(|_, (mut set, _)| owed.run(&mut set.p1()));
-        }
+        let mark = crate::lanes::mark();
+        let owed = vm.turn(|script, (mut set, _)| interact(&mut set.p1(), script, &press));
+        pay_owed!(vm, owed, mark, |(mut set, mut selection)| (
+            &mut set.p1(),
+            &mut selection
+        ));
     }
     let entities: Vec<Entity> = requests.read().map(|&Interact(entity)| entity).collect();
     for entity in entities {
@@ -1406,19 +1495,16 @@ pub(super) fn act_on_interact(
             }
             EntityKind::DynamicObject | EntityKind::Other => continue,
         }
-        let owed = vm.turn(|script, (mut set, mut selection)| {
+        let mark = crate::lanes::mark();
+        let owed = vm.turn(|script, (mut set, _)| {
             (pick.cursor, pick.attack_fork) =
                 cursor_mode::classify(&set.p0(), &pick.hovered, &pick.object);
-            interact(
-                &mut set.p1(),
-                script,
-                &pick,
-                Select::OnAttack(&mut selection),
-            )
+            interact(&mut set.p1(), script, &pick)
         });
-        if let Some(owed) = owed {
-            vm.turn(|_, (mut set, _)| owed.run(&mut set.p1()));
-        }
+        pay_owed!(vm, owed, mark, |(mut set, mut selection)| (
+            &mut set.p1(),
+            &mut selection
+        ));
     }
 }
 
@@ -1918,24 +2004,40 @@ pub(crate) fn clear_target_requests(
 }
 
 /// The UI shutdown's own deselect (`0x490bdf` → `SetSelection(0, 0)`), ahead of its
-/// active-player guard, so every shutdown root and a `/reload` drop the target: `true` when one
-/// was selected.
+/// active-player guard, so every shutdown root and a `/reload` drop the target: what its signals
+/// owe when one was selected, for [`signal_ui_shutdown_deselect`].
 pub(crate) fn deselect_on_ui_shutdown(
     mut selection: ResMut<Selection>,
     mut seam: crate::creature_anim::AttackSeam,
     me: Query<&crate::net::ObjectStore, With<SelfPlayer>>,
-) -> bool {
+) -> Option<crate::script_calls::EngineSelect> {
     // A charmed player's `SetSelection` returns at once (`0x493589`-`0x49359c`).
     if me
         .iter()
         .next()
         .is_some_and(|s| s.0.unit_charmed_by().is_some())
     {
-        return false;
+        return None;
     }
-    let had = selection.guid.is_some();
-    deselect(&mut selection, &mut seam);
-    had
+    selection.guid?;
+    let before = Standing::of(&selection, &seam);
+    let send = deselect_owing(&mut selection, &mut seam);
+    Some(before.owing(scan::Owed { send, swing: None }))
+}
+
+/// The shutdown deselect's signals, in place: its teardown's reports, `PET_BAR_UPDATE` and
+/// `PLAYER_TARGET_CHANGED` (`0x493a73`), each running its listeners there
+/// ([`crate::script_calls::ScriptCallHost::engine_select`]).
+pub(crate) fn signal_ui_shutdown_deselect(
+    In(select): In<crate::script_calls::EngineSelect>,
+    mut vm: crate::script_calls::VmWith<(
+        ResMut<'static, Selection>,
+        crate::creature_anim::AttackSeam<'static, 'static>,
+    )>,
+) {
+    vm.engine_select(select, |(mut selection, mut seam), owed| {
+        owed.pay(&mut selection, &mut seam);
+    });
 }
 
 /// The UI shutdown's `SetSelection(0, 0)` after the world's teardown, with no object manager:
@@ -1956,16 +2058,10 @@ pub(crate) fn clear_selection_on_world_teardown(mut selection: ResMut<Selection>
 pub(crate) struct DeselectGuid(pub(crate) u64);
 
 /// `SetSelection(0,0)` (`0x493540` → `0x4938f3`): the deselect of Esc, a click off and a target's
-/// death, which stamps the outgoing target into the last-target pair before [`clear`]. A no-op
-/// with nothing selected, the setter's dedup.
-pub(super) fn deselect(selection: &mut Selection, seam: &mut crate::creature_anim::AttackSeam) {
-    if let Some(send) = deselect_owing(selection, seam) {
-        send.pay(selection, seam);
-    }
-}
-
-/// [`deselect`], owing its send when the teardown signalled ([`scan::OwedSend`]), for a caller
-/// that runs the signal's listeners in place first.
+/// death, which stamps the outgoing target into the last-target pair before its teardown
+/// ([`clear_owing`]), owing its send when the teardown signalled ([`scan::OwedSend`]), for a caller
+/// that runs the signal's listeners in place first. A no-op with nothing selected, the setter's
+/// dedup.
 pub(super) fn deselect_owing(
     selection: &mut Selection,
     seam: &mut crate::creature_anim::AttackSeam,
