@@ -1348,7 +1348,7 @@ pub(crate) mod schedule_tests {
         ("::ui_script::sweep::arm_leaving_world_on_self_create",
          "`Added<SelfPlayer>` is relative to this system's own last run, so a tag that lands after a run is still seen at the next"),
         ("::ui_session::release::release_on_field_edges",
-         "it is in Net after `apply_net_updates`, unordered against the tag; its self-only branches need `old > 0` (the death edge) or a form change on a latch that is not open, which a create burst never raises"),
+         "it is in Net after `apply_net_updates`, unordered against the tag; its self-only branch needs a form change on a latch that is not open, which a create burst never raises"),
         ("::death::drive_death_look",
          "level-driven: it writes the fade from the ghost flag every frame and re-reads self each time, so a frame with no self is overwritten by the next"),
         ("::tutorial::run_world_enter_cascade",

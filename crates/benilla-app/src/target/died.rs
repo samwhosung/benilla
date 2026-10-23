@@ -2,9 +2,10 @@
 //! (`0x6046f0` at `0x6047a3`: the new health not above 0, the old above). In its order:
 //!
 //! - a player's own leg first (`0x5e99b0` at `0x60588d`): a groupmate's death line, here; for
-//!   the active player, in its order, the target cleared, the interaction latch released
-//!   ([`crate::ui_session`]'s), the loot window closed, the quest-giver statuses refreshed
-//!   ([`crate::quest_markers`]'), the cast cancelled and, on a taxi, the release asked;
+//!   the active player, in its order, the release timer armed ([`crate::death`]'s), the target
+//!   cleared, the interaction latch released ([`crate::ui_session`]'s), the loot window closed,
+//!   the quest-giver statuses refreshed ([`crate::quest_markers`]'), the cast cancelled and, on a
+//!   taxi, the release asked;
 //! - the dying unit's attack words zeroed (`0x605896`-`0x6058a8`): its target
 //!   ([`crate::creature_anim::Engaged`], `+0xc48`) and its stop in flight (`+0xc54`);
 //! - `PresentUnitDeath 0x625190` (`0x6058ae`), the death line, animation and sound, which the chat
@@ -16,108 +17,174 @@
 //! - the tail from `0x60590b`: the quest marker, the missiles, the effects, a sound, the auto-move
 //!   stop and `0x4931c0` on the unit's guid (`0x605950`).
 
+use bevy::ecs::system::SystemState;
 use bevy::prelude::*;
 
 use benilla_protocol::messages::ObjectType;
 
 use super::Selection;
 use crate::creature_anim::{AttackSeam, UnitEdit};
-use crate::net::{FieldChanged, ObjectStore};
+use crate::net::{FieldChanged, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::ui_action::{FillArg, UiError, UiErrorKeys};
 
 /// What a groupmate's death shows: message `0x4c` (`0x5e9a0e`).
 const PLAYER_DIED: &str = "ERR_PLAYER_DIED_S";
 
-/// Each unit's death, in the order the edges came. A deselect's `SetSelection` signals inside it
-/// ([`crate::script_calls::ScriptCallHost::engine_select`]), before the death goes on.
+/// Each unit's death, in the order the edges came, each leg in its place: a deselect's
+/// `SetSelection` signals inside it ([`crate::script_calls::ScriptCallHost::engine_select`]), a
+/// release of the interaction latch closes its window there ([`crate::ui_session::release_cell`]),
+/// and our own death's quest-giver sweep asks there ([`crate::quest_markers::sweep_statuses`]),
+/// before the death goes on.
 pub(super) fn on_unit_died(
-    mut edges: MessageReader<FieldChanged>,
+    world: &mut World,
+    edges: &mut SystemState<MessageReader<'static, 'static, FieldChanged>>,
+) {
+    let edges: Vec<FieldChanged> = edges
+        .get_mut(world)
+        .read()
+        .filter(|e| e.unit_died())
+        .copied()
+        .collect();
+    for e in edges {
+        let me = world
+            .query_filtered::<Entity, With<SelfPlayer>>()
+            .iter(world)
+            .next();
+        // `CGPlayer_C::OnDied 0x5e99b0`, for a player (`0x605882`).
+        if e.kind == ObjectType::Player && me == Some(e.entity) {
+            // The active player's leg (`0x5e99d8`-`0x5e99e4` match), in its order.
+            step(world, own_death_head, e);
+            // `0x4931c0(0xb4e2d0, dl = 0)` (`0x5e9a51`): the latch, with the goodbye.
+            crate::ui_session::release_latch(world, true);
+            step(world, own_death_loot, e);
+            // `0x5eb070` (`0x5e9a61`): the quest givers swept.
+            crate::quest_markers::sweep_statuses(world);
+            step(world, own_death_cast, e);
+        } else if e.kind == ObjectType::Player {
+            step(world, groupmate_died, e);
+        }
+        step(world, unit_died, e);
+        // The tail's `0x4931c0` on the unit's guid (`0x605950`, `dl = 1`): no goodbye.
+        crate::ui_session::release_cell(world, e.guid, false);
+    }
+}
+
+/// Run one leg of a death on `e` in place, its unit edits applied as it returns.
+fn step<M: 'static>(
+    world: &mut World,
+    leg: impl IntoSystem<In<FieldChanged>, (), M> + 'static,
+    e: FieldChanged,
+) {
+    if let Err(err) = world.run_system_cached_with(leg, e) {
+        // A harness without a leg's state runs the rest.
+        debug!("death: a leg did not run: {err}");
+    }
+    crate::creature_anim::apply_unit_edits(world);
+}
+
+/// Our own death's head: the release timer by `PLAYER_FIELD_BYTES` bit 0x8 (`[+0xe68]+0x1028`,
+/// `0x5e9a27`), then `SetSelection(0, 0)` (`0x5e9a45`), our attack target still set, as the unit
+/// leg zeroes it after.
+fn own_death_head(
+    In(e): In<FieldChanged>,
     mut vm: crate::script_calls::VmWith<Died<'static, 'static>>,
 ) {
-    let edges: Vec<FieldChanged> = edges.read().filter(|e| e.unit_died()).copied().collect();
-    if edges.is_empty() {
-        return;
+    let select = {
+        let mut d = vm.own();
+        let bit = d
+            .stores
+            .get(e.entity)
+            .is_ok_and(|s| s.0.player_release_timer_running());
+        let now = d.time.elapsed_secs_f64();
+        d.death.arm_release(bit, now);
+        d.deselect()
+    };
+    vm.engine_select(select, Died::pay);
+}
+
+/// Our own death past the latch: whatever loot window is open, closed with its release
+/// (`0x48f200(1, 0, 0)` at `0x5e9a5c`).
+fn own_death_loot(In(_): In<FieldChanged>, mut seam: AttackSeam) {
+    seam.close_loot();
+}
+
+/// Our own death past the quest-giver sweep: `CancelCast(1, 1, 0x1c)` (`0x5e9a6c`), asking
+/// nothing of the slot first; then with `UNIT_FIELD_FLAGS` bit 20 (`0x5e9a7d`) `0x5e0ae0` sends
+/// `CMSG_REPOP_REQUEST` at once while the player is dead or a ghost (`0x605f30`), as it is at its
+/// death edge.
+fn own_death_cast(In(e): In<FieldChanged>, mut d: Died) {
+    let seam = &mut d.seam;
+    let spells = seam.spells.as_deref();
+    seam.slots.core(&seam.net).cancel_reaping(
+        true,
+        true,
+        crate::spell::REASON_ERROR,
+        spells,
+        Some(e.entity),
+        &seam.edits,
+    );
+    let store = d.stores.get(e.entity).ok();
+    if store.is_some_and(|s| {
+        s.0.unit_flags() & crate::player::UNIT_FLAG_TAXI_FLIGHT != 0
+            && (s.0.unit_is_dead() || s.0.player_is_ghost())
+    }) {
+        let _ = d.seam.net.0.send(crate::net::ClientCommand::RepopRequest);
     }
-    for e in edges {
-        let me = vm.own().seam.me.single().ok();
-        // `CGPlayer_C::OnDied 0x5e99b0`, for a player (`0x605882`): another player than the
-        // active one (`0x5e99d8`-`0x5e99e4`) on one of our four party slots (`IsPartyMember
-        // 0x4918d0` → `0x4e7f70` at `0x5e99f7`) shows the line under `GetUnitName`'s name, the
-        // cache's with a callback or `UNKNOWNOBJECT` (`0x609210` at `0x5e9a08`, `0x496720` at
-        // `0x5e9a10`).
-        if e.kind == ObjectType::Player && me == Some(e.entity) {
-            // The active player's leg (`0x5e99d8`-`0x5e99e4` match): `SetSelection(0, 0)`
-            // (`0x5e9a45`), our attack target still set, as the unit leg below zeroes it after.
-            let select = vm.own().deselect();
-            vm.engine_select(select, Died::pay);
-            let mut d = vm.own();
-            let seam = &mut d.seam;
-            // `0x48f200(1, 0, 0)` (`0x5e9a5c`): whatever loot window is open, with its release.
-            seam.close_loot();
-            // `CancelCast(1, 1, 0x1c)` (`0x5e9a6c`), asking nothing of the slot first.
-            let spells = seam.spells.as_deref();
-            seam.slots.core(&seam.net).cancel_reaping(
+}
+
+/// A groupmate's death line: another player than the active one (`0x5e99d8`-`0x5e99e4`) on one of
+/// our four party slots (`IsPartyMember 0x4918d0` → `0x4e7f70` at `0x5e99f7`) shows the line under
+/// `GetUnitName`'s name, the cache's with a callback or `UNKNOWNOBJECT` (`0x609210` at `0x5e9a08`,
+/// `0x496720` at `0x5e9a10`).
+fn groupmate_died(In(e): In<FieldChanged>, d: Died) {
+    if d.group.party_slots().any(|m| m.guid == e.guid) {
+        let store = d.stores.get(e.entity).ok();
+        d.errors.push(
+            match d.names.resolve_unit(e.guid, store, Ask::Event(&d.seam.net)) {
+                Some(name) => UiError::s(PLAYER_DIED, name),
+                None => UiError::args(PLAYER_DIED, vec![FillArg::UnknownObject]),
+            },
+        );
+    }
+}
+
+/// Any unit's own legs: its attack words zeroed (`0x605896`-`0x6058a8`), a cast whose record names
+/// it cancelled (`0x6058e0`), and when it is the selection the deselect (`0x605901`), signalled in
+/// place, then the auto-repeat stop (`0x605906`).
+fn unit_died(In(e): In<FieldChanged>, mut vm: crate::script_calls::VmWith<Died<'static, 'static>>) {
+    let me = vm.own().seam.me.single().ok();
+    let selected = {
+        let mut d = vm.own();
+        d.seam.edits.push(UnitEdit::EndAttack(e.entity));
+        d.seam.clear_stop_word(e.entity);
+        let seam = &mut d.seam;
+        let spells = seam.spells.as_deref();
+        let mut core = seam.slots.core(&seam.net);
+        if core.slot().is_some() && core.pending.record_target() == Some(e.guid) {
+            core.cancel_reaping(
                 true,
                 true,
-                crate::spell::REASON_ERROR,
+                crate::spell::REASON_TARGETS_DEAD,
                 spells,
                 me,
                 &seam.edits,
             );
-            // `UNIT_FIELD_FLAGS` bit 20 (`0x5e9a7d`): `0x5e0ae0` sends `CMSG_REPOP_REQUEST` at
-            // once while the player is dead or a ghost (`0x605f30`), as it is at its death edge.
-            let store = d.stores.get(e.entity).ok();
-            if store.is_some_and(|s| {
-                s.0.unit_flags() & crate::player::UNIT_FLAG_TAXI_FLIGHT != 0
-                    && (s.0.unit_is_dead() || s.0.player_is_ghost())
-            }) {
-                let _ = d.seam.net.0.send(crate::net::ClientCommand::RepopRequest);
-            }
-        } else if e.kind == ObjectType::Player {
-            let d = vm.own();
-            if d.group.party_slots().any(|m| m.guid == e.guid) {
-                let store = d.stores.get(e.entity).ok();
-                d.errors.push(
-                    match d.names.resolve_unit(e.guid, store, Ask::Event(&d.seam.net)) {
-                        Some(name) => UiError::s(PLAYER_DIED, name),
-                        None => UiError::args(PLAYER_DIED, vec![FillArg::UnknownObject]),
-                    },
-                );
-            }
         }
-        let selected = {
-            let mut d = vm.own();
-            d.seam.edits.push(UnitEdit::EndAttack(e.entity));
-            d.seam.clear_stop_word(e.entity);
-            let seam = &mut d.seam;
-            let spells = seam.spells.as_deref();
-            let mut core = seam.slots.core(&seam.net);
-            if core.slot().is_some() && core.pending.record_target() == Some(e.guid) {
-                core.cancel_reaping(
-                    true,
-                    true,
-                    crate::spell::REASON_TARGETS_DEAD,
-                    spells,
-                    me,
-                    &seam.edits,
-                );
-            }
-            d.selection.guid == Some(e.guid)
-        };
-        // The dead target becomes the last one; a corpse selected afterwards stays selected, gray.
-        if selected {
-            let select = vm.own().deselect();
-            vm.engine_select(select, Died::pay);
-            let mut d = vm.own();
-            let seam = &mut d.seam;
-            crate::creature_anim::cancel_auto_repeat_local(
-                me,
-                &mut seam.auto_repeat,
-                &seam.edits,
-                &mut seam.slots.core(&seam.net),
-            );
-        }
+        d.selection.guid == Some(e.guid)
+    };
+    // The dead target becomes the last one; a corpse selected afterwards stays selected, gray.
+    if selected {
+        let select = vm.own().deselect();
+        vm.engine_select(select, Died::pay);
+        let mut d = vm.own();
+        let seam = &mut d.seam;
+        crate::creature_anim::cancel_auto_repeat_local(
+            me,
+            &mut seam.auto_repeat,
+            &seam.edits,
+            &mut seam.slots.core(&seam.net),
+        );
     }
 }
 
@@ -126,6 +193,10 @@ pub(super) fn on_unit_died(
 pub(super) struct Died<'w, 's> {
     selection: ResMut<'w, Selection>,
     seam: AttackSeam<'w, 's>,
+    /// The release timer our own death arms.
+    death: ResMut<'w, crate::death::DeathNet>,
+    /// The real clock the release timer counts on, as the death feed reads it.
+    time: Res<'w, Time<Real>>,
     group: Res<'w, crate::ui_party::GroupState>,
     names: Res<'w, crate::names::NameCache>,
     stores: Query<'w, 's, &'static ObjectStore>,
@@ -519,6 +590,94 @@ mod tests {
                 assert_eq!(left, -1.0, "no timer");
             }
         }
+    }
+
+    /// The guid the interaction latch holds.
+    fn latched(c: &mut Client) -> Option<u64> {
+        c.world()
+            .resource::<crate::ui_session::InteractLatch>()
+            .guid()
+    }
+
+    /// The latched units' lines written since the last look.
+    fn vocals(c: &mut Client) -> Vec<crate::ui_session::LatchVocal> {
+        c.world()
+            .resource_mut::<Messages<crate::ui_session::LatchVocal>>()
+            .drain()
+            .collect()
+    }
+
+    /// Our own death releases the latch with the goodbye (`0x4931c0(0xb4e2d0, 0)` at `0x5e9a51`;
+    /// the player who is dead hears none, `0x605f30`), closing the window.
+    #[test]
+    fn our_own_death_releases_the_latch_with_the_goodbye() {
+        let mut c = client();
+        let me = c.me;
+        crate::ui_merchant::open_merchant(c.world(), MOB, Vec::new());
+        vocals(&mut c);
+        c.dies(me, ME, ObjectType::Player);
+        assert_eq!(latched(&mut c), None);
+        assert_eq!(
+            vocals(&mut c),
+            [crate::ui_session::LatchVocal::Goodbye(MOB)]
+        );
+    }
+
+    /// The latched unit dying closes its window with no goodbye: the tail's `0x4931c0` on the
+    /// unit's guid (`dl = 1`, `0x605950`). Another unit's death leaves it, and a latched player's
+    /// death, a trade partner's, closes it as any unit's does.
+    #[test]
+    fn the_latched_units_death_closes_its_window_without_a_goodbye() {
+        let mut c = client();
+        let (mob, other) = (c.mob, c.other);
+        crate::ui_merchant::open_merchant(c.world(), MOB, Vec::new());
+        vocals(&mut c);
+        c.dies(other, OTHER, ObjectType::Unit);
+        assert_eq!(latched(&mut c), Some(MOB), "another unit's death");
+        c.dies(mob, MOB, ObjectType::Unit);
+        assert_eq!(latched(&mut c), None);
+        assert_eq!(vocals(&mut c), [], "dl = 1: the unit says no goodbye");
+
+        const PARTNER: u64 = 0x77;
+        let partner = c.world().spawn(Guid(PARTNER)).id();
+        let world = c.world();
+        world
+            .resource_mut::<crate::ui_trade::TradeSession>()
+            .begin(PARTNER);
+        crate::ui_trade::open_window(world);
+        assert_eq!(latched(&mut c), Some(PARTNER));
+        c.dies(partner, PARTNER, ObjectType::Player);
+        assert_eq!(latched(&mut c), None, "the trade partner's death");
+    }
+
+    /// The health watcher compares signed (`0x604774 jg`, `0x604778 jle`): a rise out of a negative
+    /// health to 0 is no death, and a fall to a negative one is.
+    #[test]
+    fn the_death_edge_reads_health_signed() {
+        let mut c = client();
+        let me = c.me;
+        crate::ui_merchant::open_merchant(c.world(), MOB, Vec::new());
+        let edge = |old: u32, new: u32| FieldChanged {
+            at: crate::lanes::stamp(),
+            entity: me,
+            guid: ME,
+            kind: ObjectType::Player,
+            index: FIELD_UNIT_HEALTH,
+            old,
+            new,
+        };
+        let world = c.world();
+        world.write_message(edge(0x8000_0000, 0));
+        world
+            .run_system_once(super::on_unit_died)
+            .expect("the death handler runs");
+        assert_eq!(latched(&mut c), Some(MOB), "the old health was not above 0");
+        let world = c.world();
+        world.write_message(edge(20, u32::MAX));
+        world
+            .run_system_once(super::on_unit_died)
+            .expect("the death handler runs");
+        assert_eq!(latched(&mut c), None, "a fall to -1");
     }
 
     /// `0x6058b3`-`0x6058e0`: a spell in flight (`0x6e3d30`) whose record target (`0x6e3d50`,

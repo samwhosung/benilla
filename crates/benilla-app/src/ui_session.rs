@@ -22,8 +22,8 @@ mod release;
 mod release_tests;
 
 pub(crate) use latch::{
-    dispatch, fire, note_closed, queue, register, release, with_script, CoreCloses, InteractLatch,
-    LatchApp, LatchVocal, LatchedWindow, NpcWindow,
+    dispatch, fire, note_closed, queue, register, release, release_cell, release_latch,
+    with_script, CoreCloses, InteractLatch, LatchApp, LatchVocal, LatchedWindow, NpcWindow,
 };
 pub(crate) use release::form_bars_interaction;
 
@@ -49,7 +49,8 @@ impl Plugin for UiSessionPlugin {
                 (
                     // Before the feeds, so a walk-away's `*_CLOSED` lands the frame it happens.
                     latch::watch_interaction_range.before(crate::ui_script::UiFeed),
-                    // The unit events that release the latch, off the apply pass's field edges.
+                    // The form change and the service flags that release the latch, off the
+                    // apply pass's field edges; a death's are its handler's (`crate::target`).
                     release::release_on_field_edges
                         .in_set(WorldStage::Net)
                         .after(crate::net::apply_net_updates)

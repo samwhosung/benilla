@@ -97,7 +97,8 @@ pub(super) fn query_statuses(
     }
     let generation = state.fields ^ (u64::from(quest.reask_epoch()) << 32);
     // The full sweep's triggers (`0x5eb3c0`): your revive, the `≤0 → >0` crossing (`0x6046f0`),
-    // and your own reaction inputs moving (`0x606e20`). Edges, since death is a light sweep.
+    // and your own reaction inputs moving (`0x606e20`). Edges, since death's light sweep is the
+    // death handler's ([`sweep_statuses`]).
     let alive = store.0.unit_health().unwrap_or(1) != 0;
     // Compared only between frames that both saw the field, or the template's arrival at login
     // would fire a full sweep.
@@ -201,6 +202,75 @@ pub(super) fn query_statuses(
     }
 }
 
+/// The light sweep `0x5eb070` now, in its caller's place: our own death runs it inside its handler
+/// (`0x5e99b0` at `0x5e9a61`), between the loot close and the cast cancel. Each object takes
+/// `0x5eb0a0`: a creature (typemask exactly `OBJECT|UNIT`, `0x5eb0d3`) Hated or Hostile toward us
+/// loses its marker (`0x5eb143`), else a quest giver is asked (`0x5eb159`); a GameObject with
+/// [`GO_FLAG_INTERACT_COND`] and a reaction toward us above 1 is asked (`0x5eb0ef`-`0x5eb101`).
+/// Nothing with no active player.
+#[allow(clippy::type_complexity)] // a Bevy system: one param per resource
+pub(super) fn sweep_statuses(
+    self_q: Query<&ObjectStore, With<SelfPlayer>>,
+    objects: Query<
+        (
+            Entity,
+            &crate::net::Guid,
+            &NetEntity,
+            &ObjectStore,
+            Option<&AskKey>,
+            Option<&crate::ui_taxi::FlightMasterStatus>,
+        ),
+        Without<SelfPlayer>,
+    >,
+    relations: crate::target::RelationWorld,
+    mut quest: ResMut<QuestGiver>,
+    commands: Res<NetCommands>,
+    mut ecs: Commands,
+) {
+    let Some(store) = self_q.iter().next() else {
+        return;
+    };
+    let (rel, me_unit) = (relations.get(), relations.me());
+    for (entity, guid, net, obj, ask, fm) in &objects {
+        match net.kind {
+            EntityKind::Unit => {
+                let reaction = me_unit.map_or(benilla_formats::Reaction::Neutral as u8, |me| {
+                    rel.reaction(&relations.unit_of(guid.0, obj), &me)
+                });
+                if reaction <= 1 {
+                    if ask != Some(&AskKey(None)) {
+                        ecs.entity(entity).try_insert(AskKey(None));
+                    }
+                    quest.clear_status(guid.0);
+                    if fm.is_some() {
+                        ecs.entity(entity)
+                            .remove::<crate::ui_taxi::FlightMasterStatus>();
+                    }
+                } else if obj.0.unit_npc_flags() & NPC_FLAG_QUESTGIVER != 0 {
+                    let _ = commands
+                        .0
+                        .send(ClientCommand::QuestgiverStatusQuery { npc: guid.0 });
+                }
+            }
+            EntityKind::GameObject => {
+                let reaction = go_reaction(
+                    relations.factions(),
+                    obj.0.gameobject_faction(),
+                    Some(store),
+                );
+                if obj.0.gameobject_flags() & GO_FLAG_INTERACT_COND != 0
+                    && reaction.is_none_or(|r| r > 1)
+                {
+                    let _ = commands
+                        .0
+                        .send(ClientCommand::QuestgiverStatusQuery { npc: guid.0 });
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// A unit's last judged [`unit_ask_key`], `None` when it was judged Hated or Hostile and torn down.
 /// It lives on the entity, so it dies with the object as the reference's per-unit state does.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
@@ -214,8 +284,8 @@ fn unit_ask_key(fields: &benilla_protocol::ObjectFields) -> u64 {
 }
 
 /// Folds the self descriptor fields the reference watches, one handler each (`0x468070`), into one
-/// value: level, the quest log, money, every skill, `PLAYER_FLAGS`, alive or dead, and the
-/// equipment and bag guids in place of the reference's `ITEM` watch.
+/// value: level, the quest log, money, every skill, `PLAYER_FLAGS`, and the equipment and bag
+/// guids in place of the reference's `ITEM` watch.
 fn self_generation(fields: &benilla_protocol::ObjectFields) -> u64 {
     const FNV_PRIME: u64 = 0x0000_0100_0000_01B3;
     let mut h = 0xcbf2_9ce4_8422_2325u64; // FNV offset
@@ -223,11 +293,10 @@ fn self_generation(fields: &benilla_protocol::ObjectFields) -> u64 {
         h ^= v;
         h = h.wrapping_mul(FNV_PRIME);
     };
+    // Health is not folded: the `UNIT_FIELD_HEALTH` watch (`0x6046f0`) sweeps only on a zero
+    // crossing, our own death lightly inside its handler ([`sweep_statuses`], `0x5e9a61`) and the
+    // revive fully (`0x6047f0`, `full` in [`query_statuses`]).
     fold(u64::from(fields.unit_level().unwrap_or(0)));
-    // Health enters as the alive bit: the `UNIT_FIELD_HEALTH` watch (`0x6046f0`) sweeps only on a
-    // zero crossing, death to the light sweep (`0x604774`) and revive to the full one
-    // (`0x6047f0`); damage and regen ticks reach neither.
-    fold(u64::from(fields.unit_health().unwrap_or(1) == 0));
     fold(u64::from(fields.player_flags()));
     fold(u64::from(fields.player_money().unwrap_or(0)));
     for slot in 0..benilla_protocol::messages::PLAYER_QUEST_LOG_SLOTS {

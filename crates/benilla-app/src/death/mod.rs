@@ -41,10 +41,28 @@ pub(crate) struct ResurrectOffer {
     pub(crate) has_timer: bool,
 }
 
+/// The release timer our own death arms (`0x5e99b0`, `0xb4e340` and its no-timer byte
+/// `0xb4e344`), which `GetReleaseTimeRemaining` reads (`0x4962a0`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum ReleaseTimer {
+    /// No death this session armed it.
+    #[default]
+    Unset,
+    /// Released at this real time: the death's time plus 360000 ms (`0x5e9a30` → `0x496250`).
+    At(f64),
+    /// No timer (`0x496280`): `GetReleaseTimeRemaining` answers -1.
+    Off,
+}
+
+/// The release window `0x5e9a30` arms, 0x57e40 ms.
+const RELEASE_WINDOW_SECS: f64 = 360.0;
+
 /// The death state the descriptor does not carry, filled from the wire and cleared at session
 /// teardown.
 #[derive(Resource, Default)]
 pub(crate) struct DeathNet {
+    /// The release timer our last death this session armed.
+    pub(crate) release: ReleaseTimer,
     /// When the corpse becomes reclaimable: `SMSG_CORPSE_RECLAIM_DELAY` anchored at arrival.
     pub(crate) reclaim_at: Option<f64>,
     /// Bumped per `SMSG_CORPSE_RECLAIM_DELAY`: the 1.12 client's handler re-fires the range
@@ -70,6 +88,16 @@ pub(crate) struct DeathNet {
 }
 
 impl DeathNet {
+    /// Our own death's timer, by `PLAYER_FIELD_BYTES` bit 0x8 as the death finds it (`0x5e9a27`):
+    /// armed at `now` plus the window when set, else off.
+    pub(crate) fn arm_release(&mut self, timer_bit: bool, now: f64) {
+        self.release = if timer_bit {
+            ReleaseTimer::At(now + RELEASE_WINDOW_SECS)
+        } else {
+            ReleaseTimer::Off
+        };
+    }
+
     /// Arm the spirit healer's XP-loss question. The reference raises it on the click with no
     /// packet (`0x5df730`), and vmangos also pushes `SMSG_SPIRIT_HEALER_CONFIRM`; both come here.
     pub(crate) fn ask_spirit_healer(&mut self, npc: u64) {
@@ -84,8 +112,8 @@ impl DeathNet {
 struct DeathFeedState {
     /// World-scoped: the last `(guid, dead, ghost)` the self body showed.
     mirror: Option<(u64, bool, bool)>,
-    /// World-scoped: the death edge, anchoring the release window. The wire carries only the
-    /// timer bit; the 1.12 client arms `now + 360000 ms` at its own death edge (`0x5e9a30`).
+    /// World-scoped: when the body was first seen dead, the release window's anchor while no
+    /// death this session armed the timer ([`ReleaseTimer::Unset`]).
     died_at: Option<f64>,
     /// VM-scoped: the announce latches.
     vm: crate::ui_script::VmMemo<DeathAnnounced>,
@@ -118,9 +146,6 @@ enum CorpseRange {
     In,
     InInstance,
 }
-
-/// The forced-release window, vmangos `CORPSE_REPOP_TIME` (`Player.h:71`); never on the wire.
-const RELEASE_WINDOW_SECS: f64 = 360.0;
 
 /// The corpse-range dialog radius, 40 yd inclusive: the 1.12 client compares d² ≤ `[0xb4e2ac]`
 /// (1600.0) against the corpse-query position. The server's reclaim gate,
@@ -169,11 +194,15 @@ fn feed_death(
         let ghost = store.0.player_is_ghost();
 
         // ── The snapshot, set before the events fire so their handlers read current values ──
-        let release_remaining = if store.0.player_release_timer_running() {
-            feed.died_at
-                .map(|t| ((t + RELEASE_WINDOW_SECS - now).max(0.0)) as f32)
-        } else {
-            None // GetReleaseTimeRemaining() == -1, the no-timer DEATH text
+        let release_remaining = match death_net.release {
+            ReleaseTimer::At(at) => Some((at - now).max(0.0) as f32),
+            ReleaseTimer::Off => None, // GetReleaseTimeRemaining() == -1, the no-timer DEATH text
+            // No death this session armed it (dead at login): the window from the first sight
+            // of the body dead, while the bit is set.
+            ReleaseTimer::Unset if store.0.player_release_timer_running() => feed
+                .died_at
+                .map(|t| ((t + RELEASE_WINDOW_SECS - now).max(0.0)) as f32),
+            ReleaseTimer::Unset => None,
         };
         let recovery_delay = death_net
             .reclaim_at

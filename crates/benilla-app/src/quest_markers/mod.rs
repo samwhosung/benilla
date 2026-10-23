@@ -512,6 +512,14 @@ fn re_seat_cards(
 
 pub(crate) struct QuestMarkersPlugin;
 
+/// The light sweep `0x5eb070` of every quest giver, now, for a caller with the world in hand: our
+/// own death runs it in place (`0x5e9a61`, [`query::sweep_statuses`]).
+pub(crate) fn sweep_statuses(world: &mut World) {
+    if let Err(err) = world.run_system_cached(query::sweep_statuses) {
+        debug!("quest markers: the sweep did not run: {err}");
+    }
+}
+
 impl Plugin for QuestMarkersPlugin {
     fn build(&self, app: &mut App) {
         // After the Net stage: a run between the drain's spawns and the self tag would see the
