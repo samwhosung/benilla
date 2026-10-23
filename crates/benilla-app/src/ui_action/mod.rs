@@ -450,7 +450,7 @@ impl Plugin for UiActionPlugin {
             )
             .add_systems(
                 OnExit(crate::client_state::ClientState::InWorld),
-                drop_held_lines,
+                drop_held_lines.in_set(crate::ui_script::SessionEnd::Clears),
             );
     }
 }

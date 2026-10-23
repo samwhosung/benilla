@@ -1052,7 +1052,7 @@ impl Plugin for UiDialogVerbsPlugin {
             )
             .add_systems(
                 OnExit(crate::client_state::ClientState::InWorld),
-                area_spirit_healer_leave_world,
+                area_spirit_healer_leave_world.in_set(crate::ui_script::SessionEnd::Clears),
             );
     }
 }

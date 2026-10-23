@@ -613,7 +613,10 @@ impl Plugin for TutorialPlugin {
                     drain_tutorials.in_set(crate::ui_script::UiDrain),
                 ),
             )
-            .add_systems(OnExit(ClientState::InWorld), on_world_leave);
+            .add_systems(
+                OnExit(ClientState::InWorld),
+                on_world_leave.in_set(crate::ui_script::SessionEnd::Clears),
+            );
     }
 }
 

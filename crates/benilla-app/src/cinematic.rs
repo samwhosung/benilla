@@ -165,7 +165,12 @@ impl Plugin for CinematicPlugin {
                 crate::ui_script::SweepLeg::Cinematic,
                 abandon_cinematic_on_leave_world,
             )
-            .add_systems(OnExit(ClientState::InWorld), abandon_on_leaving_world);
+            // After the shutdown, whose sweep tells the VM `CINEMATIC_STOP` for a cinematic in
+            // flight (`0x490b77`), and before the glue VM goes in.
+            .add_systems(
+                OnExit(ClientState::InWorld),
+                abandon_on_leaving_world.in_set(crate::ui_script::SessionEnd::Clears),
+            );
     }
 }
 

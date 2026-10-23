@@ -567,7 +567,7 @@ impl Plugin for UiCastPlugin {
             )
             .add_systems(
                 OnExit(crate::client_state::ClientState::InWorld),
-                end_session_reports,
+                end_session_reports.in_set(crate::ui_script::SessionEnd::Clears),
             );
     }
 }

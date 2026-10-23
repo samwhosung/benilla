@@ -24,7 +24,7 @@ pub(super) fn register(app: &mut App) {
         )
         .add_systems(
             OnExit(crate::client_state::ClientState::InWorld),
-            drop_unsignalled_skins,
+            drop_unsignalled_skins.in_set(crate::ui_script::SessionEnd::Clears),
         );
 }
 

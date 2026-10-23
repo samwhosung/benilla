@@ -769,8 +769,10 @@ pub(crate) enum ShutdownRoot {
 ///   (`0x493549` → `0x467d00`, `0x4939d3`, returning at `0x4939df` before the send and the
 ///   event), and `CMSG_CANCEL_TRADE` still goes. The guard then finds no player.
 ///
-/// The sweep runs only with our own player present: the guard's `0x468550`, and on the teardown
-/// the destructor's own gate (`0x5dd71c`), so a refused login sweeps nothing.
+/// The sweep runs only with our own player present: on a `/reload` the guard's `0x468550`; on the
+/// teardown the destructor's own gate (`0x5dd71c`), which the world latch stands for, as a logout
+/// despawns our avatar in its packet's frame, a frame before this runs: our own create arms it
+/// (`0x5deb60`), so a refused login sweeps nothing.
 fn run_shutdown_front(world: &mut World, root: ShutdownRoot) -> bool {
     let seated = world
         .query_filtered::<(), With<crate::net::SelfPlayer>>()
@@ -788,9 +790,7 @@ fn run_shutdown_front(world: &mut World, root: ShutdownRoot) -> bool {
             silenced
         }
         ShutdownRoot::WorldTeardown => {
-            if seated {
-                super::run_leave_world_sweep(world);
-            }
+            super::run_leave_world_sweep(world);
             let silenced = silence_ui_shutdown(world);
             run_ui_shutdown_head(world, false);
             silenced
@@ -1273,6 +1273,91 @@ mod tests {
         app.world_mut()
             .run_schedule(OnExit(crate::client_state::ClientState::InWorld));
         assert_eq!(*notes.borrow(), ["logout TRACK", "clear", "clear"]);
+    }
+
+    /// A cinematic in flight at the logout: the shutdown's sweep drops it and tells the VM
+    /// `CINEMATIC_STOP` (`0x490b69`-`0x490b77`) ahead of `PLAYER_LOGOUT` (`0x490c2a`), so the
+    /// cinematic's own drop at the session's end runs after it and cannot swallow the event.
+    #[test]
+    fn a_cinematic_in_flight_at_the_logout_stops_in_the_shutdowns_sweep() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
+            bevy::ecs::error::ignore,
+        ));
+        app.insert_resource(crate::cinematic::Cinematic::playing_for_test());
+        app.world_mut()
+            .resource_mut::<super::super::LeavingWorldArmed>()
+            .arm();
+        let notes: Rc<RefCell<Vec<String>>> = Rc::default();
+        let script = UiScript::new().expect("a VM");
+        let sink = notes.clone();
+        let note = script
+            .lua()
+            .create_function(move |_, text: String| {
+                sink.borrow_mut().push(text);
+                Ok(())
+            })
+            .expect("the note");
+        script.lua().globals().set("Note", note).expect("Note");
+        script
+            .run(
+                "local f = CreateFrame('Frame') f:RegisterEvent('CINEMATIC_STOP') \
+                 f:RegisterEvent('PLAYER_LEAVING_WORLD') f:RegisterEvent('PLAYER_LOGOUT') \
+                 f:SetScript('OnEvent', function() Note(event) end)",
+            )
+            .expect("the recorder installs");
+        app.insert_non_send_resource(script);
+        app.world_mut()
+            .run_schedule(OnExit(crate::client_state::ClientState::InWorld));
+        assert_eq!(
+            *notes.borrow(),
+            ["PLAYER_LEAVING_WORLD", "CINEMATIC_STOP", "PLAYER_LOGOUT"]
+        );
+    }
+
+    /// Every system of `OnExit(InWorld)` that fires into the dying interface or clears what it
+    /// reads runs in the session's end order ([`SessionEnd`]); the rest touch no Lua-visible
+    /// state (the sound's beds, kits and reverb, the camera's saved pose).
+    #[test]
+    fn every_session_end_system_that_reaches_the_lua_is_ordered() {
+        use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoints};
+        const NO_LUA: &[&str] = &[
+            "::sound::kit::stop_all_channels",
+            "::sound::reverb::leave_world",
+            "::sound::interior::leave_world",
+            "::sound::zone::leave_world",
+            "::camera_saved::save_on_session_end",
+            // The pass's end: the hosts' unit edits applied after them (`crate::vm_pass`).
+            "::creature_anim::edits::flush_unit_edits",
+        ];
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let exit = census(
+            &mut app,
+            OnExit(crate::client_state::ClientState::InWorld),
+            SyncPoints::Declared,
+        );
+        if !type_names_available(&exit) {
+            return;
+        }
+        let mut loose: Vec<&str> = exit
+            .systems
+            .values()
+            .filter(|s| {
+                !s.sets
+                    .iter()
+                    .any(|set| ["Shutdown", "Clears", "Glue"].contains(&set.as_str()))
+            })
+            .map(|s| s.name.as_str())
+            .filter(|n| !NO_LUA.iter().any(|ok| n.ends_with(ok)))
+            .collect();
+        loose.sort();
+        assert!(
+            loose.is_empty(),
+            "unordered against the session's end: {loose:?}"
+        );
     }
 
     /// The roster's stand-in `"player"` and the record `UnitRace`/`UnitClass` read carry the
@@ -1980,11 +2065,13 @@ mod tests {
         assert_eq!((selection.guid, selection.last), (None, Some(CORPSE)));
     }
 
-    /// A refused login has no player of ours to destroy, so no sweep; the head still cancels.
+    /// A refused login has no player of ours to destroy, so no sweep: no create of ours armed the
+    /// world latch; the head still cancels.
     #[test]
     fn a_refused_login_sweeps_nothing_and_cancels_the_trade() {
         use crate::net::ClientCommand;
         let (mut world, rx) = front_world(false, false);
+        world.insert_resource(super::super::LeavingWorldArmed::default());
         run_shutdown_front(&mut world, ShutdownRoot::WorldTeardown);
         assert!(front_seen(&world).is_empty());
         let sent: Vec<ClientCommand> = rx.try_iter().collect();

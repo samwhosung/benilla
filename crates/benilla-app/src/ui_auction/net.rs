@@ -35,7 +35,7 @@ pub(super) fn register(app: &mut App) {
         )
         .add_systems(
             OnExit(crate::client_state::ClientState::InWorld),
-            end_session_house,
+            end_session_house.in_set(crate::ui_script::SessionEnd::Clears),
         );
     app.net_handler(K::AuctionHello, on_hello)
         .net_handler(K::AuctionCommandResult, on_command_result)
