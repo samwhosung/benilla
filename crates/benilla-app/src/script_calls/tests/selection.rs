@@ -51,8 +51,10 @@ fn stops_and_selections(f: &Frame) -> Vec<String> {
         .collect()
 }
 
-/// The bar's attack latch up on `PET`; `possessed` makes it `0x5ee5a0`'s answer.
+/// The bar's attack latch up on `PET`; `possessed` makes it `0x5ee5a0`'s answer. The world is
+/// entered first, as the bar comes after it: the entry's pet reset drops a bar (`0x4bc6f0`).
 fn with_pet_attacking(f: &mut Frame, possessed: bool) {
+    settle(f);
     let world = f.app.world_mut();
     let pet = world
         .spawn((
@@ -686,8 +688,10 @@ fn an_assists_own_select_signals_inside_the_call_after_a_listener_retargets() {
 const SUMMONEDBY: u16 = 12;
 
 /// The bar's unit `PET`, alive, ours (summoned by us) or, `possessed`, possessed with our view on
-/// it, with `slot1` the bar's first word; the VM shows the bar, as its feed pushes it.
+/// it, with `slot1` the bar's first word; the VM shows the bar, as its feed pushes it. The world
+/// is entered first, as the bar comes after it: the entry's pet reset drops a bar (`0x4bc6f0`).
 fn with_pet(f: &mut Frame, possessed: bool, slot1: u32) {
+    settle(f);
     let world = f.app.world_mut();
     let mut fields = vec![(22, 100), (28, 100)];
     if possessed {

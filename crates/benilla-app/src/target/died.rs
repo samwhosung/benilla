@@ -1426,10 +1426,12 @@ mod tests {
     #[test]
     fn the_selections_death_signals_its_pet_stop_and_its_change_in_place() {
         let mut c = client();
+        // In the world before the bar: the entry's pet reset drops a bar (`0x4bc6f0`).
+        crate::script_calls::insert_test_vm(c.world());
+        crate::ui_unit::run_feed_units_once(c.world());
         possessing_an_attacker(&mut c);
         let mob = c.mob;
         c.select(MOB, mob);
-        crate::script_calls::insert_test_vm(c.world());
         crate::script_calls::with_hosted_vm(c.world(), |s| {
             s.expect("a VM").run(
                 r#"HEARD = {}
