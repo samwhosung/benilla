@@ -1676,6 +1676,84 @@ mod tests {
         );
     }
 
+    /// One auction notice's row with `subject` and `body` (text id 99), its item cached and the
+    /// player 0x42 named Bob: the invoice, `isInvoice` and the name queries the read sent.
+    fn invoice_row(
+        subject: &str,
+        body: &str,
+    ) -> (Option<benilla_ui::script::MailInvoice>, bool, usize) {
+        let states = crate::world_state::WorldStates::default();
+        let mut items = Items::default();
+        items.insert_template(2589, Some(crate::items::test_template("Linen Cloth")));
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut names = NameCache::default();
+        names.insert_player(0x42, "Bob".into(), None);
+        let mut bodies = QueryCache::default();
+        bodies.insert(99, body.into());
+        let mut e = entry(1, None, 0, 30.0);
+        (e.message_type, e.sender_id) = (mail_message_type::AUCTION, Some(1));
+        (e.subject, e.item_text_id) = (subject.into(), 99);
+        let row = resolve_row(
+            &e,
+            &bodies,
+            None,
+            &items,
+            None,
+            None,
+            None,
+            RowCatalogs::default(),
+            &names,
+            Ask::New(&commands),
+            crate::items::RollCatalogs::NONE,
+            &no_macros(&states),
+            &no_strings,
+        );
+        let asked = rx
+            .try_iter()
+            .filter(|c| matches!(c, ClientCommand::NameQuery { .. }))
+            .count();
+        (row.invoice, row.is_invoice, asked)
+    }
+
+    /// The invoice's item entry `[rec+0x250]` must be set (`0x4af3e8`-`0x4af3ee`), as must
+    /// `GetInboxText`'s `isInvoice` (`0x4af2eb`-`0x4af2f5`): a `0:x:1` subject has neither.
+    #[test]
+    fn an_invoice_needs_its_item_entry() {
+        let (invoice, is_invoice, _) = invoice_row("0:0:1", "42:500:600");
+        assert_eq!((invoice, is_invoice), (None, false));
+        let (invoice, is_invoice, _) = invoice_row("2589:0:1", "42:500:600");
+        assert!(invoice.is_some() && is_invoice);
+    }
+
+    /// The body is `sscanf`ed (`0x73fb5d` at `0x4af471` and `0x4af495`) over outputs zeroed first
+    /// (`0x4af440`-`0x4af44f`), and its count is never tested (`0x4af476 jmp 0x4af49d`): a partial
+    /// body answers the fields it parsed and zeros. A body whose guid does not parse leaves it 0,
+    /// which the name cache answers null at once, asking nothing (`0x55f0a5`-`0x55f0ac`).
+    #[test]
+    fn a_partial_invoice_body_answers_what_it_parsed() {
+        let (invoice, _, _) = invoice_row("2589:0:2", "42:500:x:9:9");
+        let invoice = invoice.expect("a seller invoice from a partial body");
+        assert_eq!(
+            (
+                invoice.player_name.as_str(),
+                invoice.bid,
+                invoice.buyout,
+                invoice.deposit,
+                invoice.consignment
+            ),
+            ("Bob", 500, 0, 0, 0)
+        );
+        let (invoice, _, _) = invoice_row("2589:0:1", "42");
+        assert_eq!(
+            invoice.map(|i| (i.bid, i.buyout)),
+            Some((0, 0)),
+            "the guid alone"
+        );
+        let (invoice, is_invoice, asked) = invoice_row("2589:0:1", "garbage");
+        assert_eq!((invoice, is_invoice, asked), (None, true, 0));
+    }
+
     #[test]
     fn resolve_row_reads_the_item_and_body_caches() {
         let states = crate::world_state::WorldStates::default();
