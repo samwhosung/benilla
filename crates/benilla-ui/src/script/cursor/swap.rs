@@ -258,6 +258,36 @@ mod tests {
         assert!(s.take_container_moves().is_empty());
     }
 
+    /// The other end's bag is looked up by its guid first (`0x5e0d1a`): with no bag object, or
+    /// none holding a slot list, `SwapItem` exits past both the send and its clear (`0x5e0d23`,
+    /// `0x5e0d32` → `0x5e0fec`), the accept's re-issue included. The held item stays held.
+    #[test]
+    fn a_swap_from_a_missing_bag_sends_nothing_and_keeps_the_cursor() {
+        let mut s = vm(0, true);
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        let from_no_bag = crate::script::ContainerMove {
+            src_bag: 3,
+            src_slot: 1,
+            dst_bag: super::EQUIPMENT_BAG,
+            dst_slot: 1,
+            count: None,
+        };
+        for confirm in [false, true] {
+            assert!(
+                !matches!(
+                    s.swap_items(from_no_bag.clone(), confirm),
+                    super::Swap::Sent(_)
+                ),
+                "confirm {confirm}: not sent"
+            );
+            assert_eq!(
+                s.cursor_item().map(|i| i.guid),
+                Some(HELM),
+                "confirm {confirm}: nothing cleared"
+            );
+        }
+    }
+
     /// With nothing to bind the same swaps send and clear (`0x5e0fe7`).
     #[test]
     fn an_unbound_swap_sends_and_clears() {
