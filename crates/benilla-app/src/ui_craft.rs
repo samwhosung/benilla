@@ -525,6 +525,12 @@ fn feed_craft(
             })
         })();
 
+        // The type stays open while a frame cannot resolve its book (a worldport's purge of our
+        // own player): only a close or the world-enter init ends it (`0x4f5fe0`, `0x4f5ee0`).
+        let fresh = match fresh {
+            None if open.line.is_some() => memo.state.clone(),
+            f => f,
+        };
         // `CloseCraft` closes the VM's window and signals `CRAFT_CLOSE` in the verb (`0x4f5fef`).
         let closed_in_place = !script.craft_open();
         // The getters' item callbacks, kept by their calls; each record that landed rebuilds

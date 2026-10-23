@@ -886,6 +886,9 @@ pub(crate) struct Model {
     /// rows first, and the displayed count (`0xbde054`).
     pub(crate) trade_skill_rows: Vec<tradeskill::view::Row>,
     pub(crate) trade_skill_visible: usize,
+    /// The world-enter init zeroed the counts (`0x4fc750`) and no build has run since: a push
+    /// holds the state without rows until a rebuild (`0x4fca20`) fills them.
+    pub(crate) trade_skill_unbuilt: bool,
     /// The header array as the last sort left it (`0xbde000`).
     pub(crate) trade_skill_headers: Vec<tradeskill::view::TradeSkillGroup>,
     pub(crate) trade_skill_close: bool,
@@ -1733,6 +1736,7 @@ impl Model {
             trade_skill_dos: Vec::new(),
             trade_skill_rows: Vec::new(),
             trade_skill_visible: 0,
+            trade_skill_unbuilt: false,
             trade_skill_headers: Vec::new(),
             trade_skill_close: false,
             trade_skill_collapsed: HashSet::new(),

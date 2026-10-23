@@ -169,7 +169,7 @@ impl super::UiScript {
     /// selection rides its spell id (`0xbde044`); fold and subclass keys are pruned to live groups,
     /// while the inv-slot mask (`0x84dd64`) is never pruned.
     /// `None` marks the window closed and keeps the list and selection, as the close does
-    /// (`0x4fc870`).
+    /// (`0x4fc870`). After the world-enter init no push builds rows until a rebuild does.
     pub fn set_trade_skill(&mut self, state: Option<TradeSkillState>) {
         let mut model = self.model_mut();
         model.trade_skill_open = state.is_some();
@@ -206,7 +206,9 @@ impl super::UiScript {
                     .as_ref()
                     .is_none_or(|t| spells(&t.recipes) != spells(&s.recipes));
                 model.trade_skill = Some(s);
-                view::build(&mut model, remake);
+                if !model.trade_skill_unbuilt {
+                    view::build(&mut model, remake);
+                }
             }
         }
     }
@@ -239,6 +241,7 @@ impl super::UiScript {
         if let Some(t) = model.trade_skill.as_mut() {
             refresh(t);
         }
+        model.trade_skill_unbuilt = false;
         let complete = view::build(&mut model, remake);
         note_build(&mut model);
         complete
@@ -248,6 +251,9 @@ impl super::UiScript {
     /// records in flight counted and waited on as any build's. Whether its update follows.
     pub fn trade_skill_open_build(&mut self) -> bool {
         let mut model = self.model_mut();
+        if std::mem::take(&mut model.trade_skill_unbuilt) {
+            view::build(&mut model, true);
+        }
         note_build(&mut model);
         model.trade_skill_pending == 0
     }
@@ -345,15 +351,18 @@ impl super::UiScript {
 
     /// The world-enter inits (`0x4908c0` at `0x4909bf` and `0x4909c4`), which a login, a
     /// cross-map worldport and a `/reload` all run, with no event: the tradeskill init `0x4fc750`
-    /// zeroes the selection (`[0xbde044]`), the visible and held counts (`[0xbde04c]`,
-    /// `[0xbde054]`), the line key (`[0xbde064]`), so the next push resets the filters, and the
-    /// armed spell (`[0xbde05c]`, `0x4fc76b`), keeping the count (`[0xbde060]`) and the open marker
-    /// (`[0xbde040]`); the craft init `0x4f5ee0` zeroes the craft open marker (`[0xbdcfb8]`), its
-    /// selection and its count (`[0xbdcfc8]`).
+    /// zeroes the selection (`[0xbde044]`), the row, displayed and header counts (`[0xbde04c]`,
+    /// `[0xbde054]`, `[0xbde050]`), the line key (`[0xbde064]`), so the next push resets the
+    /// filters, and the armed spell (`[0xbde05c]`, `0x4fc76b`), keeping the count (`[0xbde060]`)
+    /// and the open line (`[0xbde040]`), whose list waits for the next rebuild; the craft init
+    /// `0x4f5ee0` zeroes the craft type (`[0xbdcfb8]`), which closes its window, its selection and
+    /// its counts (`[0xbdcfbc]`-`[0xbdcfc8]`).
     pub fn reset_crafts_on_world_enter(&mut self) {
         let mut model = self.model_mut();
-        model.trade_skill = None;
-        view::build(&mut model, true);
+        model.trade_skill_rows.clear();
+        model.trade_skill_headers.clear();
+        model.trade_skill_visible = 0;
+        model.trade_skill_unbuilt = true;
         model.trade_skill_selected_spell = 0;
         model.trade_skill_last_line = 0;
         model.trade_skill_repeat_spell = 0;
