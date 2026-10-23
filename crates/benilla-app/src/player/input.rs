@@ -66,6 +66,14 @@ pub(super) fn look_input(
             binds.pressed(crate::bindings::Input::TurnRight),
             bit::TURN_RIGHT,
         );
+        set(
+            binds.pressed(crate::bindings::Input::PitchUp),
+            bit::PITCH_UP,
+        );
+        set(
+            binds.pressed(crate::bindings::Input::PitchDown),
+            bit::PITCH_DOWN,
+        );
         set(player.autorun, bit::AUTORUN);
         // The reference keeps these two in the camera's own Track and Fear bits; here one word
         // carries every edge.
@@ -167,8 +175,9 @@ pub(super) fn move_axes(
         both_buttons,
         autorun,
     );
-    // The 1.12 control model (`0x7c5360`): A/D turn the character unless right-mouse is held,
-    // when they strafe and the facing tracks the camera; Q/E always strafe. W walks along the
+    // A/D turn the character unless right-mouse is held, when they strafe and the facing tracks
+    // the camera: the turn emitter skips with bit 0x1 (`0x514f6d`) and the strafe emitter nets
+    // the turn bits under it (`0x514e98`-`0x514eb1`). Q/E always strafe. W walks along the
     // character's facing, so a left-drag orbit does not change it.
     let mouselook = both_buttons || rig.look == Some(LookButton::Right);
     // The strafe axis nets like `fwd_axis`: vmangos relays no packet carrying both strafe bits,
@@ -318,7 +327,7 @@ mod tests {
     }
 
     /// Turn keys are bits 0x100 and 0x200, outside the mask `0x10f0`, even while the right
-    /// button makes them strafe (`0x7c5360`).
+    /// button makes them strafe (`0x514e80`).
     #[test]
     fn a_turn_key_that_strafes_does_not_cancel() {
         let mouse = vec![

@@ -1482,6 +1482,10 @@ mod tests {
         assert_eq!(d["mousespeed"], LookConfig::default().sensitivity);
         assert_eq!(d["cameraDistanceMax"], ZoomLimit::default().distance_max());
         assert_eq!(d["cameraDistanceMaxFactor"], ZoomLimit::default().factor());
+        assert_eq!(
+            d["cameraDistanceMoveSpeed"],
+            ZoomLimit::default().move_speed
+        );
         let follow = FollowConfig::default();
         assert_eq!(
             d["cameraSmoothStyle"],
@@ -1784,6 +1788,14 @@ mod tests {
             );
             assert_eq!(res::<FollowConfig>(&app).yaw_speed, 30.0, "{text}");
         }
+        // The custom-view gate's switch (`0x50fc33`).
+        apply(&mut app, "cameraCustomViewSmoothing", "1");
+        assert!(res::<FollowConfig>(&app).custom_view_smoothing);
+        apply(&mut app, "cameraCustomViewSmoothing", "0");
+        assert!(!res::<FollowConfig>(&app).custom_view_smoothing);
+        // The distance axis's speed reaches the zoom (`0x5113d9`).
+        apply(&mut app, "cameraDistanceMoveSpeed", "20");
+        assert_eq!(res::<ZoomLimit>(&app).move_speed, 20.0);
         // The max orbit lands as yards on the knob: `cameraDistanceMax` x the factor, held to
         // [0, 50]; the factor is not held to its slider's 1 to 2.
         apply(&mut app, "cameraDistanceMaxFactor", "1");
@@ -2394,8 +2406,7 @@ mod tests {
         );
     }
 
-    /// A reference CVar nothing here reads (pfUI's afkcam sets `cameraCustomViewSmoothing`,
-    /// `0x50bad0`) is found by Lua's lookup, so `SetCVar` neither raises nor warns; it persists as
+    /// A reference CVar nothing here reads (`cameraDive`, `0x50be03`) is found by Lua's lookup, so `SetCVar` neither raises nor warns; it persists as
     /// a diff like any row, and its flag-bit1 neighbour stays latched.
     #[test]
     fn a_reference_cvar_nothing_reads_is_settable_and_persists_as_a_diff() {
@@ -2403,19 +2414,19 @@ mod tests {
         let mut script = UiScript::new().expect("VM");
         script.seed_cvars(cvars.vm_seed());
         script
-            .run(r#"SetCVar("cameraCustomViewSmoothing", "1") SetCVar("SoundOutputSystem", "1")"#)
+            .run(r#"SetCVar("cameraDive", "0") SetCVar("SoundOutputSystem", "1")"#)
             .expect("both names are the reference's registered ones");
         assert_eq!(
             script
-                .eval::<String>(r#"return GetCVarDefault("cameraCustomViewSmoothing")"#)
+                .eval::<String>(r#"return GetCVarDefault("cameraDive")"#)
                 .unwrap(),
-            "0"
+            "1"
         );
         assert_eq!(
             script
-                .eval::<String>(r#"return GetCVar("cameraCustomViewSmoothing")"#)
+                .eval::<String>(r#"return GetCVar("cameraDive")"#)
                 .unwrap(),
-            "1"
+            "0"
         );
         assert_eq!(
             script
@@ -2429,10 +2440,7 @@ mod tests {
             cvars.set_from_vm(&name, &value);
         }
         let out = cvars.compose();
-        assert_eq!(
-            out.get("cameraCustomViewSmoothing").map(String::as_str),
-            Some("1")
-        );
+        assert_eq!(out.get("cameraDive").map(String::as_str), Some("0"));
         assert_eq!(
             cvars.get("SoundOutputSystem"),
             Some("-1"),
@@ -2443,8 +2451,8 @@ mod tests {
             Some("1"),
             "but it is saved (`0x63da27`)"
         );
-        cvars.set("cameraCustomViewSmoothing", "0");
-        assert!(!cvars.compose().contains_key("cameraCustomViewSmoothing"));
+        cvars.set("cameraDive", "1");
+        assert!(!cvars.compose().contains_key("cameraDive"));
         // The camera block's range check rides along (`0x50c000`).
         let rate = cvars.set("cameraFoVSmoothSpeed", "9000");
         assert_eq!(rate, SetOutcome::Vetoed);

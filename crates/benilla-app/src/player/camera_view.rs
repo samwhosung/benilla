@@ -143,6 +143,21 @@ impl CameraViews {
         self.current == view
     }
 
+    /// Whether the live view is customised, `0x50fbc0` answering 0: one of its distance, pitch and
+    /// yaw is 0.001 or more from the view's default string (`0x84f488`, the angles in radians by
+    /// the flags `0x84f474`), or not comparable (`0x50fc07`). The reference's saved yaw is its
+    /// target, which `AngleWrap` keeps in [0, 2π) (`0x5102c6`), so it is compared wrapped so.
+    pub(crate) fn current_customised(&self) -> bool {
+        let (live, shipped) = (self.views[self.current], ViewPose::shipped(self.current));
+        [
+            (live.distance, shipped.distance),
+            (live.pitch, shipped.pitch),
+            (live.yaw.rem_euclid(std::f32::consts::TAU), shipped.yaw),
+        ]
+        .into_iter()
+        .any(|(a, b)| (a - b).abs() >= 0.001 || a.is_nan())
+    }
+
     /// `NextView`/`PrevView`, with no wrap at either end (`0x50faa0`, `0x50fac0`).
     fn step(&self, forward: bool) -> Option<usize> {
         if forward {
@@ -357,6 +372,49 @@ mod tests {
                 "a positive saved pitch looks DOWN for us"
             );
         }
+    }
+
+    /// `0x50fbc0`: the live view is customised once one of its three values is 0.001 or more from
+    /// its default string; another view's change does not count.
+    #[test]
+    fn the_live_view_is_customised_off_its_defaults() {
+        let mut views = CameraViews::default();
+        assert!(!views.current_customised());
+        let shipped = views.pose(1);
+        views.save(
+            1,
+            ViewPose {
+                distance: shipped.distance + 0.0005,
+                ..shipped
+            },
+        );
+        assert!(!views.current_customised(), "inside the 0.001 band");
+        views.save(
+            1,
+            ViewPose {
+                yaw: 0.5,
+                ..shipped
+            },
+        );
+        assert!(views.current_customised());
+        // The saved yaw wraps into [0, 2π) (`0x5102c6`): a hair left of the facing is near 2π.
+        for (yaw, customised) in [(0.0005, false), (-0.0005, true)] {
+            views.save(1, ViewPose { yaw, ..shipped });
+            assert_eq!(views.current_customised(), customised, "yaw {yaw}");
+        }
+        views.set(2);
+        assert!(!views.current_customised(), "only the live view counts");
+        views.save(
+            2,
+            ViewPose {
+                distance: f32::NAN,
+                ..views.pose(2)
+            },
+        );
+        assert!(
+            views.current_customised(),
+            "a NaN never compares (`0x50fc07`)"
+        );
     }
 
     #[test]

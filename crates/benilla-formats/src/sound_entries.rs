@@ -1,6 +1,7 @@
 //! `SoundEntries.dbc`, the sound-kit table every audio trigger resolves through: up to 10
 //! weighted variation files with volume, flags and distances. Kits play by id or by name:
-//! `PlaySoundByName` (`0x458030`), behind Lua's `PlaySound`, hashes the name into this table.
+//! `PlaySoundByName` (`0x458030`), behind Lua's `PlaySound`, hashes the name into the table of
+//! interface sounds `0x45c2c0` builds from the type-2 rows.
 //!
 //! 29 fields and 116-byte records in 5875. The wowdev wiki's 30-column layout, with separate
 //! `maxDistance` and `soundEntriesAdvancedID` columns, does not fit this build.
@@ -53,14 +54,21 @@ pub struct SoundKit {
 /// The names `0x4609b0` finds the two forced ambience beds by (`0x836444`, `0x836428`).
 const GHOST_BED_NAME: &str = "Ghost (DONOTRENAME)";
 const UNDERWATER_BED_NAME: &str = "Underwater (DONOTRENAME)";
+/// The name `0x623110` finds the dismount kit by (`0x8627bc`).
+const DISMOUNT_KIT_NAME: &str = "SpiritWolf (DONOTRENAME)";
 
-/// All kits, resolvable by id or, ignoring case, by name.
+/// The `SoundType` of the rows `0x45c2c0` enters into the interface-sound table (`0x45c306`).
+pub const INTERFACE_SOUND_TYPE: u32 = 2;
+
+/// All kits, resolvable by id, and the interface sounds by name.
 pub struct SoundKitCatalog {
     kits: HashMap<u32, SoundKit>,
-    /// Lowercased `Name` to id: the reference's name hash ignores case.
-    by_name: HashMap<String, u32>,
+    /// The interface-sound table `[0xb06bfc]`: lowercased `Name` to id over the type-2 rows, a
+    /// later row of a name replacing the id (`0x45c464`); `SStrHashHT` and `SStrCmpI` ignore case.
+    interface: HashMap<String, u32>,
     ghost_bed: Option<u32>,
     underwater_bed: Option<u32>,
+    dismount_kit: Option<u32>,
 }
 
 impl SoundKitCatalog {
@@ -68,11 +76,17 @@ impl SoundKitCatalog {
         self.kits.get(&id)
     }
 
-    /// A kit by its `Name`, ignoring case, as `PlaySoundByName` finds it.
-    pub fn by_name(&self, name: &str) -> Option<&SoundKit> {
-        self.by_name
+    /// The interface sound of a name, as `PlaySoundByName` (`0x458030`) finds it: a type-2 row,
+    /// ignoring case, the last row of the name winning. A row of any other type is no match.
+    pub fn interface_sound(&self, name: &str) -> Option<&SoundKit> {
+        self.interface
             .get(&name.to_ascii_lowercase())
             .and_then(|id| self.kits.get(id))
+    }
+
+    /// The dismount kit, the first row named exactly `"SpiritWolf (DONOTRENAME)"`: `[0xc4e0c8]`.
+    pub fn dismount_kit(&self) -> Option<u32> {
+        self.dismount_kit
     }
 
     /// The ambience bed a ghost hears, the row named `"Ghost (DONOTRENAME)"`: `[0xb06d48]`.
@@ -98,13 +112,19 @@ impl SoundKitCatalog {
         Self::from_kits(Vec::new())
     }
 
-    /// A catalog of file-less kits, `(id, name)` in row order, for consumers' unit tests.
+    /// A catalog of file-less kits of type 0, `(id, name)` in row order, for consumers' unit tests.
     pub fn named_for_tests(rows: &[(u32, &str)]) -> Self {
+        let rows: Vec<_> = rows.iter().map(|&(id, name)| (id, 0, name)).collect();
+        Self::typed_for_tests(&rows)
+    }
+
+    /// A catalog of file-less kits, `(id, type, name)` in row order, for consumers' unit tests.
+    pub fn typed_for_tests(rows: &[(u32, u32, &str)]) -> Self {
         Self::from_kits(
             rows.iter()
-                .map(|&(id, name)| SoundKit {
+                .map(|&(id, sound_type, name)| SoundKit {
                     id,
-                    sound_type: 0,
+                    sound_type,
                     name: name.to_owned(),
                     files: Vec::new(),
                     volume: 1.0,
@@ -117,23 +137,30 @@ impl SoundKitCatalog {
         )
     }
 
-    /// The catalog of `rows` in file order, with the two forced beds resolved once, as the
-    /// reference does at init.
+    /// The catalog of `rows` in file order, with the interface-sound table, the two forced beds
+    /// and the dismount kit resolved once, as the reference does at init.
     fn from_kits(rows: Vec<SoundKit>) -> Self {
         let (ghost_bed, underwater_bed) = resolve_forced_beds(&rows);
+        // `0x623110`: the first row whose name is exactly the constant (`0x64a480`, `strncmp`).
+        let dismount_kit = rows
+            .iter()
+            .find(|k| k.name == DISMOUNT_KIT_NAME)
+            .map(|k| k.id);
         let mut kits = HashMap::with_capacity(rows.len());
-        let mut by_name = HashMap::with_capacity(rows.len());
+        let mut interface = HashMap::new();
         for kit in rows {
-            if !kit.name.is_empty() {
-                by_name.insert(kit.name.to_ascii_lowercase(), kit.id);
+            // `0x45c2c0` walks every row in order and enters the type-2 ones alone (`0x45c306`).
+            if kit.sound_type == INTERFACE_SOUND_TYPE {
+                interface.insert(kit.name.to_ascii_lowercase(), kit.id);
             }
             kits.insert(kit.id, kit);
         }
         Self {
             kits,
-            by_name,
+            interface,
             ghost_bed,
             underwater_bed,
+            dismount_kit,
         }
     }
 }
@@ -257,11 +284,15 @@ mod tests {
         assert_eq!(kit.eax_def, 2);
 
         // The name lookup ignores case.
-        let ui = cat.by_name("IGMINIMAPZOOMIN").expect("UI kit by name");
+        let ui = cat
+            .interface_sound("IGMINIMAPZOOMIN")
+            .expect("UI kit by name");
         assert_eq!(ui.id, 823);
         assert_eq!(ui.sound_type, 2, "type 2 = UI");
 
-        let repair = cat.by_name("ITEM_REPAIR").expect("repair UI kit by name");
+        let repair = cat
+            .interface_sound("ITEM_REPAIR")
+            .expect("repair UI kit by name");
         assert_eq!(repair.id, 7994);
         assert_eq!(repair.flags & sound_kit_flags::NO_DUPLICATES, 0x20);
 
@@ -296,7 +327,7 @@ mod tests {
         let count = |name: &str| cat.kits.values().filter(|k| k.name == name).count();
         assert_eq!(count("Ghost (DONOTRENAME)"), 1);
         assert_eq!(count("Underwater (DONOTRENAME)"), 1);
-        assert!(cat.by_name("Ghost").is_none());
+        assert!(cat.interface_sound("Ghost").is_none());
     }
 
     /// `0x64a480` at length `0x7fffffff` is `strncmp` over the whole string: a case variant, a
@@ -314,11 +345,6 @@ mod tests {
             (7, ""),
         ]);
         assert_eq!((cat.ghost_bed(), cat.underwater_bed()), (None, None));
-        assert_eq!(
-            cat.by_name("GHOST").map(|k| k.id),
-            Some(3),
-            "PlaySoundByName folds case"
-        );
 
         let cat = SoundKitCatalog::named_for_tests(&[
             (1, "ghost (donotrename)"),
@@ -326,6 +352,87 @@ mod tests {
             (10, "Underwater (DONOTRENAME)"),
         ]);
         assert_eq!((cat.ghost_bed(), cat.underwater_bed()), (Some(9), Some(10)));
+    }
+
+    /// `0x45c2c0` enters only the type-2 rows (`0x45c306`), ignoring case, and a later row of a
+    /// name replaces the id (`0x45c464`): a row of another type neither resolves nor shadows.
+    #[test]
+    fn the_interface_sound_table_holds_the_type_2_rows_and_the_last_one_wins() {
+        let cat = SoundKitCatalog::typed_for_tests(&[
+            (1, 1, "SpellKit"),
+            (2, 2, "gsTitleQuit"),
+            (3, 0, "gsTitleQuit"),
+            (4, 2, "PVPMono"),
+            (5, 2, "pvpmono"),
+            (6, 3, "Footstep"),
+        ]);
+        let id = |name: &str| cat.interface_sound(name).map(|k| k.id);
+        assert_eq!(id("SpellKit"), None, "a type-1 row is no interface sound");
+        assert_eq!(id("Footstep"), None);
+        assert_eq!(
+            id("GSTITLEQUIT"),
+            Some(2),
+            "the type-0 row neither resolves nor shadows"
+        );
+        assert_eq!(id("PVPMONO"), Some(5), "the last type-2 row of a name wins");
+    }
+
+    /// `0x623110` takes the first row named exactly `SpiritWolf (DONOTRENAME)` (`0x64a480`,
+    /// `strncmp`), whatever its type, and stops there.
+    #[test]
+    fn the_dismount_kit_is_the_first_exact_name_of_any_type() {
+        let cat = SoundKitCatalog::typed_for_tests(&[
+            (1, 2, "spiritwolf (donotrename)"),
+            (2, 0, "SpiritWolf (DONOTRENAME)"),
+            (3, 2, "SpiritWolf (DONOTRENAME)"),
+        ]);
+        assert_eq!(cat.dismount_kit(), Some(2));
+        assert_eq!(
+            SoundKitCatalog::typed_for_tests(&[(1, 2, "SpiritWolf")]).dismount_kit(),
+            None
+        );
+    }
+
+    /// With the install: `AccountLogin.lua`'s `PlaySound("gsTitleQuit")` reaches row 779, not the
+    /// later type-0 row 786 of the same name, and the six `PVP*Mono` names reach rows 9373-9379,
+    /// not the later rows 9426-9432 of another type (`0x45c306`, `0x45c464`).
+    #[test]
+    fn real_interface_sounds_skip_the_later_rows_of_other_types() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let cat = load_sound_kit_catalog(&mut chain).expect("load sound kits");
+        assert_eq!(cat.interface_sound("gsTitleQuit").map(|k| k.id), Some(779));
+        assert_eq!(
+            cat.get(786).map(|k| (k.sound_type, k.name.as_str())),
+            Some((0, "gsTitleQuit"))
+        );
+        // Rows 9426-9432 are type-1 copies of 9373-9379, but row 9431 spells `PVPFlagTakenMono`
+        // where row 9378 has `PVPFlagTaken.Mono`, so six names are shadowed.
+        for later in (9426..=9432).filter(|&id| id != 9431) {
+            let row = cat.get(later).expect("row");
+            assert_eq!(row.sound_type, 1);
+            assert_eq!(
+                cat.interface_sound(&row.name).map(|k| k.id),
+                Some(later - 53),
+                "{}",
+                row.name
+            );
+        }
+        assert!(
+            cat.interface_sound("Invisibility Impact").is_none(),
+            "kit 3 is a type-1 spell kit"
+        );
+        assert!(cat.dismount_kit().is_some());
+        // The names the client plays through `0x458030` itself are all type-2 rows.
+        for name in [
+            "LOOTWINDOWCOINSOUND",
+            "ITEM_REPAIR",
+            "QUESTCOMPLETED",
+            "igQuestFailed",
+            "GAMEABILITYACTIVATE",
+        ] {
+            assert!(cat.interface_sound(name).is_some(), "{name}");
+        }
     }
 
     /// The walk runs from the last row down and stops once both are set: a duplicate name is

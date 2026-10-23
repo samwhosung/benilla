@@ -14,6 +14,8 @@ struct Hand {
     face_yaw: f32,
     left: Option<PressGesture>,
     right: Option<PressGesture>,
+    /// The session's answer: a motion reached the body's hand-off.
+    handed: bool,
 }
 
 /// `control`'s call of [`run_look_session`], with the both-button run read off the latch.
@@ -38,7 +40,7 @@ fn look_frame(
         nearclip: 0.2,
         surface_y: None,
     };
-    run_look_session(
+    hand.handed = run_look_session(
         &motion,
         both,
         &mut rig,
@@ -113,6 +115,18 @@ fn pointer(world: &mut World) -> Option<Vec2> {
 
 fn lua(world: &mut World, chunk: &str) {
     world.non_send_resource::<UiScript>().run(chunk).unwrap();
+}
+
+/// A binding body, as `ExecuteBinding` runs one: the movement gate passes.
+fn binding(world: &mut World, chunk: &str) {
+    world
+        .non_send_resource::<UiScript>()
+        .run_binding(chunk)
+        .unwrap();
+}
+
+fn looking(world: &World) -> bool {
+    world.resource::<CameraControl>().is_looking()
 }
 
 fn is_mouselooking(world: &World) -> bool {
@@ -195,6 +209,24 @@ fn a_press_the_ui_consumed_over_the_world_turns_nothing() {
     frame(&mut w, 40.0);
     assert_eq!(w.resource::<CameraControl>().look, Some(LookButton::Right));
     assert!(yaw(&mut w) < 0.0, "an unconsumed press turns it");
+}
+
+/// The motion handler hands the facing and pitch to the body on every motion while the mouse
+/// turns it (`0x514400` → `0x51446f` → `0x5103e0`), a yaw-only drag included, and not for a still
+/// mouse or a left-drag orbit.
+#[test]
+fn every_mouselook_motion_reaches_the_hand_off() {
+    let mut w = world(false);
+    lua(&mut w, "MouselookStart()");
+    frame(&mut w, 40.0);
+    assert!(w.resource::<Hand>().handed, "a yaw-only motion");
+    frame(&mut w, 0.0);
+    assert!(!w.resource::<Hand>().handed, "a still mouse");
+    let mut w = world(false);
+    press(&mut w, MouseButton::Left);
+    frame(&mut w, 40.0);
+    assert_eq!(w.resource::<CameraControl>().look, Some(LookButton::Left));
+    assert!(!w.resource::<Hand>().handed, "an orbit turns no body");
 }
 
 /// `MouselookStop` (`0x514240`) ends the session: the cursor comes back and the mouse turns
@@ -405,4 +437,70 @@ fn mouselook_start_under_a_left_drag_is_the_both_button_run() {
     frame(&mut w, 0.0);
     assert_eq!(w.resource::<CameraControl>().look, Some(LookButton::Right));
     assert!(w.resource::<Messages<WorldClick>>().is_empty());
+}
+
+/// `ToggleMouseMove` with no button enters mouselook (`0x50f910` → `0x50f930`): the cursor locks,
+/// the mouse turns the camera and not the body, since the hand-off wants the TurnOrAction bit
+/// (`0x5145e0`), and `IsMouselooking` still answers nil. It lasts with no button until the next
+/// call leaves it (`0x50f940(0)`).
+#[test]
+fn toggle_mouse_move_turns_the_camera_alone_until_toggled_back() {
+    let mut w = world(false);
+    lua(&mut w, "ToggleMouseMove()");
+    frame(&mut w, 0.0);
+    assert!(looking(&w));
+    assert_eq!(cursor(&mut w).grab_mode, CursorGrabMode::Locked);
+    frame(&mut w, 100.0);
+    assert!(yaw(&mut w) != 0.0, "the camera turns");
+    assert_eq!(w.resource::<Hand>().face_yaw, 0.0, "the body does not");
+    assert!(!is_mouselooking(&w));
+    frame(&mut w, 0.0);
+    assert!(looking(&w), "no button is needed to stay");
+    lua(&mut w, "ToggleMouseMove()");
+    frame(&mut w, 0.0);
+    assert!(!looking(&w));
+    assert_eq!(cursor(&mut w).grab_mode, CursorGrabMode::None);
+}
+
+/// A press under a toggled mouselook sets its bit, and that bit's release is the last mouse
+/// release, which leaves mouselook (`0x514b70` → `0x50f940`).
+#[test]
+fn a_button_released_under_a_toggled_mouselook_ends_it() {
+    let mut w = world(false);
+    lua(&mut w, "ToggleMouseMove()");
+    frame(&mut w, 0.0);
+    assert!(looking(&w));
+    press(&mut w, MouseButton::Left);
+    frame(&mut w, 0.0);
+    assert!(looking(&w));
+    release(&mut w, MouseButton::Left);
+    frame(&mut w, 0.0);
+    assert!(!looking(&w));
+}
+
+/// `CameraOrSelectOrMoveStop(1)` at the last mouse release sets the camera's sticky bit
+/// (`0x514c48` → `0x50f958`); a plain release clears it (`0x50f95d`), and so does a toggle's
+/// leave (`0x50f91b`).
+#[test]
+fn a_sticky_release_sets_the_cameras_bit_and_a_plain_one_clears_it() {
+    let mut w = world(false);
+    let sticky = |w: &World| w.resource::<CameraControl>().follow.sticky;
+    let drag = |w: &mut World, body: &str| {
+        press(w, MouseButton::Left);
+        frame(w, 0.0);
+        release(w, MouseButton::Left);
+        binding(w, body);
+        frame(w, 0.0);
+    };
+    drag(&mut w, "CameraOrSelectOrMoveStop(1)");
+    assert!(sticky(&w));
+    drag(&mut w, "CameraOrSelectOrMoveStop()");
+    assert!(!sticky(&w));
+    drag(&mut w, "CameraOrSelectOrMoveStop(1)");
+    lua(&mut w, "ToggleMouseMove()");
+    frame(&mut w, 0.0);
+    assert!(sticky(&w), "entering leaves the bit");
+    lua(&mut w, "ToggleMouseMove()");
+    frame(&mut w, 0.0);
+    assert!(!sticky(&w));
 }

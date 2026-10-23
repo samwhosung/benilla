@@ -353,6 +353,46 @@ mod tests {
         assert_eq!(back.fall_time, 42, "fall_time lands after the tail");
     }
 
+    /// The body of `MSG_MOVE_START_PITCH_UP` (0xbf), byte for byte: the movement block with
+    /// `SWIMMING | PITCH_UP` (`0x200040`) and its pitch tail. vmangos refuses a pitch start whose
+    /// flags lack the bit (`MovementAnticheat.cpp:1038-1041`).
+    #[test]
+    fn a_pitch_start_body_golden() {
+        let mut bytes = Vec::new();
+        info(MOVEMENT_FLAG_SWIMMING | 0x40).write(&mut bytes);
+        let golden: [u8; 32] = [
+            0x40, 0x00, 0x20, 0x00, // flags
+            0x39, 0x30, 0x00, 0x00, // time 12345
+            0x00, 0x00, 0x80, 0x3f, // x 1.0
+            0x00, 0x00, 0x00, 0x40, // y 2.0
+            0x00, 0x00, 0x40, 0x40, // z 3.0
+            0x00, 0x00, 0x00, 0x3f, // orientation 0.5
+            0x33, 0x33, 0x33, 0xbf, // pitch -0.7
+            0x2a, 0x00, 0x00, 0x00, // fall time 42
+        ];
+        assert_eq!(bytes, golden);
+    }
+
+    /// The body of `MSG_MOVE_SET_PITCH` (0xdb), byte for byte: the movement block of a swimmer,
+    /// `SWIMMING` (`0x200000`) with its pitch tail, which `0x615bc0` sends from a mouse-look pitch
+    /// set only while swimming (`0x60e0d4`).
+    #[test]
+    fn a_set_pitch_body_golden() {
+        let mut bytes = Vec::new();
+        info(MOVEMENT_FLAG_SWIMMING).write(&mut bytes);
+        let golden: [u8; 32] = [
+            0x00, 0x00, 0x20, 0x00, // flags
+            0x39, 0x30, 0x00, 0x00, // time 12345
+            0x00, 0x00, 0x80, 0x3f, // x 1.0
+            0x00, 0x00, 0x00, 0x40, // y 2.0
+            0x00, 0x00, 0x40, 0x40, // z 3.0
+            0x00, 0x00, 0x00, 0x3f, // orientation 0.5
+            0x33, 0x33, 0x33, 0xbf, // pitch -0.7
+            0x2a, 0x00, 0x00, 0x00, // fall time 42
+        ];
+        assert_eq!(bytes, golden);
+    }
+
     #[test]
     fn no_pitch_tail_when_not_swimming() {
         let mut swimming = Vec::new();

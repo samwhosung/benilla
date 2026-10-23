@@ -224,6 +224,10 @@ impl Bus {
     /// `CustomAttack[n]` column that replaces it (`0x6248ea`) and the parry or block clang
     /// (`0x623640` → `0x457dc0`). The deflect clang is a fixed kit on bus 0.
     pub(super) const MELEE_IMPACT: Bus = Bus(10);
+
+    /// Bus 3, cap 2: Lua's `PlaySoundFile` (`mov ecx,3` at `0x4587bc`), so a third file while two
+    /// still play is refused.
+    pub(super) const PLAY_SOUND_FILE: Bus = Bus(3);
 }
 
 /// The reference's cap table, `.data` `0x87ce60`: 13 dwords with no writer, read only at
@@ -366,7 +370,8 @@ impl Default for Volume {
     }
 }
 
-/// A kit to play, by id or by `PlaySoundByName` name.
+/// A kit to play, by id or by `PlaySoundByName` name: an interface sound, a type-2 row
+/// (`0x458030`, the table `0x45c2c0` builds).
 pub(crate) enum KitRef<'a> {
     Id(u32),
     Name(&'a str),
@@ -427,7 +432,7 @@ pub(super) fn play_kit_ext(
     }
     let kit = match kit_ref {
         KitRef::Id(id) => kits.catalog.get(id),
-        KitRef::Name(name) => kits.catalog.by_name(name),
+        KitRef::Name(name) => kits.catalog.interface_sound(name),
     }
     .ok_or_else(|| anyhow!("unknown sound kit"))?;
 
@@ -697,8 +702,17 @@ pub(super) fn stop_source(out: &mut SoundOutput, source: Entity) -> usize {
     before - out.channels.len()
 }
 
-/// The `PlaySoundFile` path: a raw file with no gates and no variation, volume 1.0, 2D on the
-/// caller's category, through the kit decode cache. Kit id 0 keeps it out of kit dedupe.
+/// The bus a `PlaySoundFile` opens on, or `None` when `0x7a5450`'s gate `0x7a66a0` refuses it:
+/// bus 3 already holds its cap of live channels (`0x7a66b5`). No duplicate test: the call passes
+/// flags 0 (`0x4587b6`).
+fn sound_file_bus(live: impl Iterator<Item = Bus>) -> Option<Bus> {
+    let bus = Bus::PLAY_SOUND_FILE;
+    (!bus_at_cap(live, bus)).then_some(bus)
+}
+
+/// The `PlaySoundFile` path: a raw file with no kit and no variation, volume 1.0, 2D on the
+/// caller's category, through the kit decode cache, on its own bus ([`sound_file_bus`]). Kit id
+/// 0 keeps it out of kit dedupe.
 pub(crate) fn play_file(
     kits: &mut SoundKits,
     assets: &WorldAssets,
@@ -711,6 +725,9 @@ pub(crate) fn play_file(
     if config.world_hold {
         return Ok(());
     }
+    let Some(bus) = sound_file_bus(out.channels.iter().map(|c| c.bus)) else {
+        return Ok(());
+    };
     let data = kits.sfx(assets, path)?;
     let amp = config.category_amp(category);
     let data = data.volume(mixer::amp_to_db(amp));
@@ -739,7 +756,7 @@ pub(crate) fn play_file(
         category,
         looping: false,
         amp,
-        bus: Bus::DEFAULT,
+        bus,
         latch: Latch::None,
     });
     Ok(())
@@ -1071,6 +1088,21 @@ mod tests {
 
         // Buses are independent domains: a saturated bus 5 does not gate bus 7.
         assert!(!bus_at_cap(live(5, 9), Bus(7)));
+    }
+
+    /// `PlaySoundFile` opens on bus 3 (`0x4587bc`), whose cap is 2 (`0x87ce60`): a third file
+    /// while two play is refused, and the plays of other buses do not count against it.
+    #[test]
+    fn play_sound_file_opens_on_bus_3_and_refuses_a_third() {
+        let live = |bus: u8, n: usize| std::iter::repeat_n(Bus(bus), n);
+        assert_eq!(sound_file_bus(std::iter::empty()), Some(Bus(3)));
+        assert_eq!(sound_file_bus(live(3, 1)), Some(Bus(3)));
+        assert_eq!(sound_file_bus(live(3, 2)), None, "the third is refused");
+        assert_eq!(
+            sound_file_bus(live(0, 50)),
+            Some(Bus(3)),
+            "bus 0 is another domain"
+        );
     }
 
     /// With all-1 weights every variation plays once per cycle (`0x45bb70`/`0x45bd40`).

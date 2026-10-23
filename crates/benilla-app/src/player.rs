@@ -29,6 +29,7 @@ mod net;
 // Writes the frame onto the body we drive: pose, `MovementState`, the counter-twist gap.
 mod body_pose;
 pub(crate) mod camera;
+mod camera_axes;
 mod camera_channel;
 mod camera_clip;
 pub(crate) mod camera_dynamics;
@@ -100,10 +101,10 @@ pub(crate) use approach::{
 pub(crate) use posture::{stand_up_for_attack, stand_up_refused, StandSetter};
 use state::{
     MoveSpeed, PlayerRide, AIR_NUDGE_SPEED, FALL_FAR_DROP, FALL_FAR_TIME, FOOT_CONE_HEIGHT,
-    GROUND_COS, GROUND_PROBE, JUMP_SPEED, LAND_PROBE, MOUSELOOK_PITCH_CLAMP, RUN_BACK_RATIO,
-    SKIN_WIDTH, STATIONARY_CHASE_RATE, STEP_SLOPE_RATIO, STEP_SNAP_SLACK, STEP_UP_ADVANCE_PER_YARD,
-    TURN_RATE, TURN_RATE_MOVING, WALK_RATIO, WATER_WALK_PITCH_FLOOR, WEDGE_MIN_FALL,
-    WEDGE_STALL_RATIO, WEDGE_STILL_FRAMES,
+    GROUND_COS, GROUND_PROBE, JUMP_SPEED, LAND_PROBE, RUN_BACK_RATIO, SKIN_WIDTH,
+    STATIONARY_CHASE_RATE, STEP_SLOPE_RATIO, STEP_SNAP_SLACK, STEP_UP_ADVANCE_PER_YARD, TURN_RATE,
+    TURN_RATE_MOVING, WALK_RATIO, WATER_WALK_PITCH_FLOOR, WEDGE_MIN_FALL, WEDGE_STALL_RATIO,
+    WEDGE_STILL_FRAMES,
 };
 pub(crate) use state::{
     OwnControlLost, Player, PlayerCapsule, StandPending, CAPSULE_HEIGHT, CAPSULE_RADIUS,

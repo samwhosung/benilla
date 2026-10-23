@@ -970,7 +970,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetRandomName",
         lua.create_function(|lua, _: MultiValue| {
-            let lists = model(lua).glue.name_lists();
+            let lists = model(lua).name_lists();
             let mut m = model(lua);
             let charsets = m.name_charsets();
             let c = &mut m.glue.create;
@@ -1007,7 +1007,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let (status, request) = {
                 let m = model(lua);
                 let status = match &name {
-                    Some(n) => check_char_name(Some(n), &*m.glue.name_lists(), m.name_charsets()),
+                    Some(n) => check_char_name(Some(n), &*m.name_lists(), m.name_charsets()),
                     None => 0x45,
                 };
                 let c = &m.glue.create;

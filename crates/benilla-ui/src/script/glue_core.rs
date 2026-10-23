@@ -556,17 +556,6 @@ pub(crate) struct GlueCore {
     pub(super) create: super::glue_create::GlueCreate,
     /// The AddOns screen's enable nodes ([`super::glue_addons`]).
     pub(super) addons: super::glue_addons::GlueAddons,
-    /// The character name check's lists ([`super::char_name`]), as the host seated them.
-    name_lists: Option<std::rc::Rc<dyn super::NameLists>>,
-}
-
-impl GlueCore {
-    /// The name check's lists; with none seated, nothing is reserved.
-    pub(super) fn name_lists(&self) -> std::rc::Rc<dyn super::NameLists> {
-        self.name_lists
-            .clone()
-            .unwrap_or_else(|| std::rc::Rc::new(super::NoNameLists))
-    }
 }
 
 /// `SetCurrentScreen`'s buffer, 0x40 bytes with its terminator (`0x46b860`, `SStrCopy`).
@@ -591,11 +580,6 @@ impl super::UiScript {
     /// Fire one of the glue manager's signals into this VM, as the manager's frame raises it.
     pub fn fire_glue_signal(&mut self, signal: GlueSignal) {
         fire_signal(&self.lua, signal);
-    }
-
-    /// Seat the lists the character name check searches (`0x6c91a0` compiles them at startup).
-    pub fn set_glue_name_lists(&mut self, lists: std::rc::Rc<dyn super::NameLists>) {
-        self.model_mut().glue.name_lists = Some(lists);
     }
 
     /// Store one agreement's flags in the cells this VM is seated with.

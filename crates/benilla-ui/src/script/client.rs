@@ -368,6 +368,12 @@ impl UiScript {
     pub fn set_client_region(&mut self, region: i32) {
         self.model_mut().client_region = region;
     }
+
+    /// Seat the word lists the character and guild name checks search, which start-up compiles
+    /// once for the whole client (`0x6c91a0`).
+    pub fn set_name_lists(&mut self, lists: std::rc::Rc<dyn super::NameLists>) {
+        self.model_mut().name_lists = Some(lists);
+    }
 }
 
 /// The locale name table `0x8558a4` at the VM's locale index, `GetLocale`'s answer in either state.

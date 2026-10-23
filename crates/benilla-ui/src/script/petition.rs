@@ -150,7 +150,7 @@ pub fn validate_guild_name(
 
 /// [`validate_guild_name`] against the lists and the charsets this VM's client holds.
 fn check(model: &Model, name: &str) -> Result<(), &'static str> {
-    validate_guild_name(name, &*model.glue.name_lists(), model.name_charsets())
+    validate_guild_name(name, &*model.name_lists(), model.name_charsets())
 }
 
 /// A cached name as a string, an uncached one as nil.
@@ -590,7 +590,7 @@ mod tests {
     fn the_guild_name_check_is_the_clients() {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
-        s.set_glue_name_lists(std::rc::Rc::new(ThreeWords));
+        s.set_name_lists(std::rc::Rc::new(ThreeWords));
         let refused = |key: &'static str| PetitionCall::NameRefused(key);
         for (name, want) in [
             ("", refused("ERR_GUILD_ENTER_NAME")),

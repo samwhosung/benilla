@@ -151,6 +151,10 @@ fn new_vm<E: std::fmt::Display>(
     script.set_locale(super::client_locale().index());
     // `[0x882730]`, `Wow.ini`'s `Region`, read once alike and handed to the name check.
     script.set_client_region(super::client_region());
+    // The name checks' word lists, client globals start-up compiles once (`0x402b7f` → `0x6c91a0`).
+    if let Some(names) = world.get_resource::<crate::text_filter::NameFilter>() {
+        script.set_name_lists(std::rc::Rc::new(names.clone()));
+    }
     seed_vm_clock(world, &mut script);
     seed_game_time(world, &mut script);
     // The reference seeds `rand` with the clock before `WinMain` (`0x5b800b`). Deviation: a
@@ -1423,6 +1427,37 @@ mod tests {
             let answer = script.eval::<String>("return GetLocale()").unwrap();
             assert_eq!(answer, want.name());
             assert_eq!(script.client_region(), super::super::client_region());
+        }
+    }
+
+    /// The word lists are client globals start-up compiles once (`0x402b7f` → `0x6c91a0`), so a
+    /// world VM's guild name check (`0x6c9b70`) searches them as the glue VM's name checks do: a
+    /// NamesProfanity or ChatProfanity hit is refused as reserved (`0x6c9a51`, `0x4f5160`), and
+    /// NamesReserved is not searched (`0x6c9b76`).
+    #[test]
+    fn a_world_vm_checks_a_guild_name_against_the_clients_word_lists() {
+        use benilla_ui::script::PetitionCall;
+        let list = |p: &str| {
+            vec![benilla_formats::FilterPattern {
+                id: 1,
+                pattern: p.into(),
+            }]
+        };
+        let mut world = World::new();
+        world.insert_resource(
+            crate::text_filter::TextFilter::new(&list("heck"), &[])
+                .name_filter(&list("darn"), &list("thrall")),
+        );
+        let mut script = new_vm(&mut world, UiScript::new).expect("a VM");
+        script.keep_calls();
+        let refused = PetitionCall::NameRefused("ERR_GUILD_NAME_RESERVED");
+        for (name, want) in [
+            ("Darnwood", refused.clone()),
+            ("Heckwood", refused),
+            ("Thrallwood", PetitionCall::Buy("Thrallwood".into())),
+        ] {
+            script.run(&format!("BuyGuildCharter({name:?})")).unwrap();
+            assert_eq!(script.take_petition_calls(), [want], "{name:?}");
         }
     }
 

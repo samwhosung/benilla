@@ -95,12 +95,15 @@ pub(crate) fn on_cvar(
             }
         }
         "cameradistancemaxfactor" => zoom.set_factor(v),
+        // The validator `0x50c040` has refused a value out of its range.
+        "cameradistancemovespeed" => zoom.move_speed = v,
         // The stock dropdown writes 1 Smart, 2 Always, 0 Never (`UIOptionsFrame.lua:518`).
         "camerasmoothstyle" => follow.style = FollowStyle::from_cvar(v),
         "camerasmoothtrackingstyle" => follow.tracking_style = FollowStyle::from_cvar(v),
         // The registry has refused a rate outside the validator's [0.1, 360] (`0x50c000`); the
         // follow reader takes the stored value as is (`0x512d75`).
         "camerayawsmoothspeed" => follow.yaw_speed = v,
+        "cameracustomviewsmoothing" => follow.custom_view_smoothing = ev.flag(),
         _ => {}
     }
 }
@@ -234,8 +237,7 @@ pub(super) enum FollowState {
     Idle,
 }
 
-/// The camera's input command word, 1.12's `[InputControl+0x4]` bit for bit. PitchUp and
-/// PitchDown are not built, so their bits are never set.
+/// The camera's input command word, 1.12's `[InputControl+0x4]` bit for bit.
 pub(super) mod follow_cmd {
     /// `TurnOrAction`: right mouse, mouselook.
     pub(in crate::player) const RIGHT_MOUSE: u32 = 0x1;
@@ -247,6 +249,9 @@ pub(super) mod follow_cmd {
     pub(in crate::player) const STRAFE_RIGHT: u32 = 0x80;
     pub(in crate::player) const TURN_LEFT: u32 = 0x100;
     pub(in crate::player) const TURN_RIGHT: u32 = 0x200;
+    /// `PitchUp` and `PitchDown`: in no state's mask (`0x510960`) and outside [`ARM_EDGES`].
+    pub(in crate::player) const PITCH_UP: u32 = 0x400;
+    pub(in crate::player) const PITCH_DOWN: u32 = 0x800;
     pub(in crate::player) const AUTORUN: u32 = 0x1000;
     /// The union of bits 20, 21 and 23, which the reference folds into the camera's `Track` flag.
     pub(in crate::player) const TRACK: u32 = 0x100000;
@@ -257,6 +262,12 @@ pub(super) mod follow_cmd {
     pub(in crate::player) const MOVE_BITS: u32 = FORWARD | BACKWARD | AUTORUN;
     pub(in crate::player) const STRAFE_BITS: u32 = STRAFE_LEFT | STRAFE_RIGHT;
     pub(in crate::player) const TURN_BITS: u32 = TURN_LEFT | TURN_RIGHT;
+    /// The bits whose edge arms a return: the binding handlers arm on a press or release in
+    /// `0x13f0` (`0x5148eb`, `0x514c0c`) and otherwise only on a mouse button's edge (`0x5149e8`,
+    /// `0x5149f5`, `0x514cd4`, `0x514ce1`); the track and external-control edges arm through
+    /// their own callers (`0x5110d7`, `0x5111f0`).
+    pub(in crate::player) const ARM_EDGES: u32 =
+        MOVE_BITS | STRAFE_BITS | TURN_BITS | RIGHT_MOUSE | LEFT_MOUSE | TRACK | FEAR;
 }
 
 /// The auto-follow's knobs: three 1.12 CVars at the reference's defaults.
@@ -269,6 +280,11 @@ pub(crate) struct FollowConfig {
     pub(crate) tracking_style: FollowStyle,
     /// `cameraYawSmoothSpeed`, °/s.
     pub(crate) yaw_speed: f32,
+    /// `cameraCustomViewSmoothing` (`[0xbe0f1c]`, default "0"): a customised view still returns.
+    pub(crate) custom_view_smoothing: bool,
+    /// Not a CVar: the live view is customised ([`super::camera_view::CameraViews`]), set per
+    /// frame by the controller.
+    pub(crate) view_customised: bool,
 }
 
 impl Default for FollowConfig {
@@ -277,7 +293,17 @@ impl Default for FollowConfig {
             style: FollowStyle::default(),
             tracking_style: FollowStyle::default(),
             yaw_speed: FOLLOW_SPEED_DEFAULT,
+            custom_view_smoothing: false,
+            view_customised: false,
         }
+    }
+}
+
+impl FollowConfig {
+    /// `0x50fc30`: a return may arm with `cameraCustomViewSmoothing` set, else only while the
+    /// live view is its default (`0x50fbc0`).
+    fn view_allows_return(&self) -> bool {
+        self.custom_view_smoothing || !self.view_customised
     }
 }
 
@@ -349,6 +375,10 @@ struct FollowArm {
 pub(super) struct FollowRig {
     last_command: Option<u32>,
     arm: Option<FollowArm>,
+    /// The camera's mode bit 0x20, written only by `0x50f940` at mouselook's end: set by a sticky
+    /// release (`0x50f958`), cleared by any other (`0x50f95d`). While set, `0x510940` answers 0
+    /// and `ArmAutoReturn` arms nothing (`0x510a3f`-`0x510a46`).
+    pub(super) sticky: bool,
 }
 
 impl FollowRig {
@@ -371,8 +401,8 @@ impl FollowRig {
             self.arm = None;
             return None;
         }
-        // Any change of the word re-evaluates, as the reference does on every binding call.
-        if let Some(p) = previous.filter(|p| *p != word) {
+        // A change in the arming bits re-evaluates; a pitch key's edge does not.
+        if let Some(p) = previous.filter(|p| (*p ^ word) & follow_cmd::ARM_EDGES != 0) {
             // `stopping`, the reference's second argument: a movement bit went away.
             let stopping = (p & !word)
                 & (follow_cmd::MOVE_BITS | follow_cmd::STRAFE_BITS | follow_cmd::TURN_BITS)
@@ -404,7 +434,12 @@ impl FollowRig {
     }
 
     /// The arming half (`0x510960` → `0x512c70`): pick the row, then cancel or snapshot a return.
+    /// A sticky camera, or a customised view without `cameraCustomViewSmoothing`, returns before
+    /// either, leaving any transition as it is: `0x510940` answers 0 (`0x510a46`).
     fn arm(&mut self, input: &FollowInput, cam_yaw: f32, stopping: bool) {
+        if self.sticky || !input.cfg.view_allows_return() {
+            return;
+        }
         let (delay, factor) = input.style().row(input.state(stopping));
         if factor == 0.0 {
             // Factor 0 cancels, keeping the offset (Smart standing still, and all of Never).
@@ -529,6 +564,11 @@ pub(crate) struct CameraControl {
     pub(super) freelook: bool,
     /// The mouse buttons the world owns this frame, latched by [`latch_world_mouse`].
     pub(super) world_mouse: WorldMouse,
+    /// `ToggleMouseMove` entered mouselook with no mouse bit (`0x50f910` → `0x50f930`): the
+    /// session lasts with no channel held, until a toggle or a button's release leaves it.
+    pub(super) toggled: bool,
+    /// The keyboard axes the `MoveView*` pairs drive ([`super::camera_axes`]).
+    pub(super) view_axes: super::camera_axes::ViewAxes,
     /// Logical cursor position captured when look began, to restore on release.
     pub(super) cursor_stash: Option<Vec2>,
     /// A look session is running with the OS cursor handed back: the window is unfocused.
@@ -624,6 +664,11 @@ pub(super) struct WorldMouse {
     scripted_rise: bool,
     /// A `MouselookStart`/`Stop` ran this frame; each disarms the pending click (`0x514810(0)`).
     disarmed: bool,
+    /// This frame's `ToggleMouseMove` calls.
+    toggles: u32,
+    /// The fourth argument of this frame's last mouse-bit release, which `0x50f940` stores as the
+    /// camera's sticky bit when the release ends mouselook; `None` with no release call.
+    release_sticky: Option<bool>,
 }
 
 impl WorldMouse {
@@ -670,6 +715,8 @@ impl WorldMouse {
     fn update(&mut self, buttons: &ButtonInput<MouseButton>, world_press: bool) {
         self.scripted_rise = false;
         self.disarmed = false;
+        self.toggles = 0;
+        self.release_sticky = None;
         for b in [LookButton::Right, LookButton::Left] {
             let i = b as usize;
             self.down[i] = world_press && buttons.just_pressed(b.button());
@@ -687,6 +734,18 @@ impl WorldMouse {
         } else {
             self.scripted = false;
             self.held[LookButton::Right as usize] = false;
+            // `0x515090(1, 0, now, 0)`: the release hands 0.
+            self.release_sticky = Some(false);
+        }
+    }
+
+    /// One look-session call from the VM, in call order.
+    fn call(&mut self, call: benilla_ui::script::LookCall) {
+        use benilla_ui::script::LookCall;
+        match call {
+            LookCall::Mouselook(on) => self.mouselook(on),
+            LookCall::ToggleMouseMove => self.toggles += 1,
+            LookCall::MouseRelease { sticky } => self.release_sticky = Some(sticky),
         }
     }
 }
@@ -717,7 +776,7 @@ pub(super) fn latch_world_mouse(
     hosted_vm.run(|mut script| {
         let calls = script
             .as_mut()
-            .map(|s| s.take_mouselook_calls())
+            .map(|s| s.take_look_calls())
             .unwrap_or_default();
         let Ok(camera) = cameras.single() else {
             return;
@@ -727,8 +786,8 @@ pub(super) fn latch_world_mouse(
         let wm = &mut rig.world_mouse;
         wm.update(&buttons, world_press);
         // The script's calls, made since the last latch, before this frame's release.
-        for on in calls {
-            wm.mouselook(on);
+        for call in calls {
+            wm.call(call);
         }
         // The right button's release ends a scripted channel too, wherever its press went: in
         // freelook every button event goes to the `WorldFrame` (`0x492b50`), whose TURNORACTION up
@@ -795,6 +854,9 @@ pub(crate) struct CameraPivot {
 /// select are independent: each primary press engages its session at once and arms a click test,
 /// and the release decides on [`PressGesture::is_click`] alone. A session lasts while its
 /// [`WorldMouse::channel`] is held, so a `MouselookStart` runs the right button's session.
+/// Returns whether a mouse motion reached the body's hand-off this frame: the motion handler
+/// `0x514400` hands the camera's facing and pitch on (`0x5103e0`) for each motion while the mouse
+/// turns the body (`0x51446f`), before the body gates of `0x5145e0`, which are the caller's.
 pub(super) fn run_look_session(
     mouse_motion: &AccumulatedMouseMotion,
     both_buttons: bool,
@@ -818,7 +880,7 @@ pub(super) fn run_look_session(
     now: f32,
     // The primary window has the OS focus.
     focused: bool,
-) {
+) -> bool {
     // The mouse moves the view only through a held cursor: motion while unfocused, or on the frame
     // that takes the cursor back, is the pointer travelling in another app.
     let motion = if sync_look_focus(rig, focused, window, cursor_opts) {
@@ -845,9 +907,44 @@ pub(super) fn run_look_session(
         test.pitch_travel += dpitch;
     }
 
+    // `ToggleMouseMove` (`0x50f910`), each call against the camera's mouselook bit as it stands:
+    // set, it leaves through `0x50f940(0)`, which also clears the sticky bit (`0x50f95d`); clear,
+    // it enters through `0x50f930` with no mouse bit, so the mouse turns the camera alone, as the
+    // body's hand-off wants the TurnOrAction bit (`0x5145e0`).
+    for _ in 0..rig.world_mouse.toggles {
+        if rig.look.is_some() {
+            *left_click = None;
+            *right_click = None;
+            rig.toggled = false;
+            rig.follow.sticky = false;
+            disengage_look(rig, window, cursor_opts);
+        } else {
+            engage_look(rig, LookButton::Left, focused, window, cursor_opts);
+            rig.toggled = true;
+        }
+    }
+
     // Both buttons engage their session on the down edge, with no threshold (`0x51491f`); the click
     // test rides along to the release. Looking hides and locks the cursor until the release.
-    if let Some(active) = rig.look {
+    if let (Some(_), true) = (rig.look, rig.toggled) {
+        // A toggled mouselook holds no mouse bit. A press sets one, and its release is the one
+        // that ends mouselook (`0x514b70` → `0x50f940`), so the session becomes that channel's,
+        // with the click test its down edge arms.
+        let held = [LookButton::Right, LookButton::Left]
+            .into_iter()
+            .find(|&b| rig.world_mouse.channel(b));
+        if let Some(b) = held {
+            rig.toggled = false;
+            rig.look = Some(b);
+            if rig.world_mouse.down(LookButton::Right) {
+                *right_click = (!rig.world_mouse.held(LookButton::Left) && !disarmed)
+                    .then(|| PressGesture::new(now));
+            } else if rig.world_mouse.down(LookButton::Left) && !inspect_enabled {
+                *left_click = (!click_consumed && !rig.world_mouse.turn() && !disarmed)
+                    .then(|| PressGesture::new(now));
+            }
+        }
+    } else if let Some(active) = rig.look {
         if !rig.world_mouse.channel(active) {
             // The channel went down: settle its click test (a chord already cancelled both).
             let test = match active {
@@ -875,6 +972,10 @@ pub(super) fn run_look_session(
             if rig.world_mouse.channel(other) {
                 rig.look = Some(other);
             } else {
+                // The last mouse bit's release, `0x514b70` → `0x50f940(extra)` (`0x514c48`): the
+                // camera leaves mouselook and keeps the release's fourth argument as its sticky
+                // bit (`0x50f958`/`0x50f95d`). A release no binding ran hands 0.
+                rig.follow.sticky = rig.world_mouse.release_sticky.unwrap_or(false);
                 disengage_look(rig, window, cursor_opts);
             }
         }
@@ -901,6 +1002,7 @@ pub(super) fn run_look_session(
     }
 
     // Look rotation; a right-drag also turns the character.
+    let mut handed = false;
     if let Some(active) = rig.look {
         let delta = motion;
         let d_yaw = -delta.x * yaw_rate;
@@ -926,11 +1028,13 @@ pub(super) fn run_look_session(
         }
         if active == LookButton::Right || both_buttons {
             *face_yaw = cam.yaw;
+            handed = motion != Vec2::ZERO;
         }
     }
     // Freelook is right-held mouse-look or a both-button run, which steers like it; a left-drag
     // orbit is not. This test and the `face_yaw` sync above must stay alike.
     rig.freelook = rig.look == Some(LookButton::Right) || (rig.look.is_some() && both_buttons);
+    handed
 }
 
 /// Start `button`'s look session: stash the cursor, then lock and hide it until the session ends,
@@ -1744,6 +1848,68 @@ mod tests {
         assert!(near(both.yaw_rate(), LOOK_SENSITIVITY * 1.5 * 1.5));
     }
 
+    /// The sticky bit (`0x50f958`): `0x510940` answers 0 and `ArmAutoReturn` arms nothing
+    /// (`0x510a46`), so a W edge under Always leaves a dragged offset where it is; cleared, the
+    /// same edge returns it.
+    #[test]
+    fn a_sticky_camera_arms_no_return() {
+        let cfg = FollowConfig {
+            style: FollowStyle::Always,
+            tracking_style: FollowStyle::Always,
+            yaw_speed: FOLLOW_SPEED_DEFAULT,
+            ..FollowConfig::default()
+        };
+        let input = |command| FollowInput {
+            cfg,
+            face_yaw: 0.0,
+            command,
+        };
+        let offset = std::f32::consts::FRAC_PI_2;
+        let mut rig = FollowRig {
+            sticky: true,
+            ..Default::default()
+        };
+        assert_eq!(rig.advance(&input(0), offset, 0.1, false), None);
+        assert_eq!(
+            rig.advance(&input(follow_cmd::FORWARD), offset, 0.1, false),
+            None
+        );
+        assert!(rig.probe().is_none(), "nothing armed");
+        rig.sticky = false;
+        assert!(rig.advance(&input(0), offset, 0.1, false).is_some());
+    }
+
+    /// `0x510940` → `0x50fc30`: with the live view customised, no edge arms a return unless
+    /// `cameraCustomViewSmoothing` is set.
+    #[test]
+    fn a_customised_view_arms_no_return_without_its_cvar() {
+        let mut cfg = FollowConfig {
+            style: FollowStyle::Always,
+            tracking_style: FollowStyle::Always,
+            view_customised: true,
+            ..FollowConfig::default()
+        };
+        let offset = std::f32::consts::FRAC_PI_2;
+        let run = |cfg: FollowConfig| {
+            let mut rig = FollowRig::default();
+            for command in [0, follow_cmd::FORWARD] {
+                let input = FollowInput {
+                    cfg,
+                    face_yaw: 0.0,
+                    command,
+                };
+                rig.advance(&input, offset, 0.1, false);
+            }
+            rig.probe().is_some()
+        };
+        assert!(!run(cfg), "a customised view stays where it is");
+        cfg.custom_view_smoothing = true;
+        assert!(run(cfg), "the CVar lets it return");
+        cfg.custom_view_smoothing = false;
+        cfg.view_customised = false;
+        assert!(run(cfg), "the default view returns");
+    }
+
     /// The auto-follow (`0x510960`, `0x50f160`): edge-armed, then unattended, a cosine over
     /// `|Δ| / rate × factor` clamped to [0.1 s, 2.0 s]; Smart's `Idle` and `Stop` rows cancel.
     #[test]
@@ -1757,6 +1923,7 @@ mod tests {
                 style,
                 tracking_style: style,
                 yaw_speed: FOLLOW_SPEED_DEFAULT,
+                ..FollowConfig::default()
             }
         }
         /// Run `secs` of frames at a fixed input word; returns the camera yaw it ends on.
@@ -1890,6 +2057,74 @@ mod tests {
             run(&mut rig, c, follow_cmd::FORWARD, parked, 1.0).abs() < 1.0e-4,
             "the release edge arms a fresh return"
         );
+    }
+
+    /// A pitch key is no arming edge: the binding handlers arm on a change in `0x13f0` or a mouse
+    /// button (`0x5148eb`, `0x514c0c`, `0x5149e8`-`0x5149f5`), so pressing or releasing one starts
+    /// no return, standing or running, and leaves the one in flight alone.
+    #[test]
+    fn a_pitch_key_neither_starts_nor_disturbs_a_return() {
+        const DT: f32 = 1.0 / 120.0;
+        const OFFSET: f32 = std::f32::consts::FRAC_PI_2;
+        let cfg = |style| FollowConfig {
+            style,
+            tracking_style: style,
+            yaw_speed: FOLLOW_SPEED_DEFAULT,
+            ..FollowConfig::default()
+        };
+        let run = |rig: &mut FollowRig, cfg, words: &[u32], mut yaw: f32| {
+            for &command in words {
+                let input = FollowInput {
+                    cfg,
+                    face_yaw: 0.0,
+                    command,
+                };
+                if let Some(y) = rig.advance(&input, yaw, DT, false) {
+                    yaw = y;
+                }
+            }
+            yaw
+        };
+        let frames = |word: u32, n: usize| vec![word; n];
+        // Always arms even on an edge into Idle; a pitch press from a standstill is none.
+        let always = cfg(FollowStyle::Always);
+        let mut rig = FollowRig::default();
+        let parked = run(&mut rig, always, &frames(0, 2), OFFSET);
+        let pressed = [frames(follow_cmd::PITCH_UP, 30), frames(0, 30)].concat();
+        assert_eq!(
+            run(&mut rig, always, &pressed, parked),
+            OFFSET,
+            "no return starts"
+        );
+        // Running with W held, home and then nudged off it: the pitch press arms nothing either.
+        let smart = cfg(FollowStyle::Smart);
+        let mut rig = FollowRig::default();
+        let _ = run(&mut rig, smart, &frames(0, 1), OFFSET);
+        let home = run(&mut rig, smart, &frames(follow_cmd::FORWARD, 120), OFFSET);
+        assert!(home.abs() < 1.0e-4, "home: {home}");
+        let words = [
+            frames(follow_cmd::FORWARD | follow_cmd::PITCH_UP, 30),
+            frames(follow_cmd::FORWARD, 30),
+        ]
+        .concat();
+        assert_eq!(run(&mut rig, smart, &words, 0.4), 0.4, "the nudge stays");
+        // A return in flight plays out the same with a pitch press and release inside it.
+        let swing = |words: &[u32]| {
+            let mut rig = FollowRig::default();
+            let _ = run(&mut rig, always, &frames(follow_cmd::FORWARD, 2), 0.0);
+            run(&mut rig, always, words, OFFSET)
+        };
+        let plain = swing(&frames(0, 40));
+        let pitched = swing(
+            &[
+                frames(0, 10),
+                frames(follow_cmd::PITCH_DOWN, 15),
+                frames(0, 15),
+            ]
+            .concat(),
+        );
+        assert!(plain > 0.0 && plain < OFFSET, "still in flight: {plain}");
+        assert_eq!(pitched, plain, "neither cancelled nor restarted");
     }
 
     /// A right-click the UI took (a Who-list row) sets no mouse bit in the camera's command word,
@@ -2086,6 +2321,7 @@ mod tests {
                 style: FollowStyle::Never,
                 tracking_style: FollowStyle::Always,
                 yaw_speed: FOLLOW_SPEED_DEFAULT,
+                ..FollowConfig::default()
             },
             face_yaw: 0.0,
             command: follow_cmd::TRACK | follow_cmd::FORWARD,

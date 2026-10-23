@@ -259,3 +259,61 @@ fn a_water_walk_or_hover_ack_ends_the_precast_and_a_root_or_feather_fall_ack_doe
         assert_eq!(released, ends, "{mode:?}: the loot release");
     }
 }
+
+/// The pitch keys' bits pitch the body wherever they survive (`0x7c53b9` tests `0xc0` in any
+/// mode, `0x7c4f80`), so a pitch held out of the water keeps pitching on land and rides the word;
+/// a root's `and 0xffe07f00` (`0x7c734f`) clears them.
+#[test]
+fn the_pitch_keys_pitch_a_body_out_of_the_water_until_a_root() {
+    use crate::creature_anim::move_flags;
+    use benilla_protocol::MoveMode;
+    let mut client = Client::new(Body::Own, |p| p.pitch_keys = Some(true));
+    let step = |client: &mut Client| {
+        client
+            .app
+            .world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(100));
+        client.frame(vec![], vec![]);
+    };
+    step(&mut client);
+    let pitched = client.player().mover_pitch;
+    assert!(pitched > 0.0, "the key pitches on land: {pitched}");
+    assert_eq!(client.player().move_flags & 0xc0, move_flags::PITCH_UP);
+    client
+        .app
+        .world_mut()
+        .write_message(crate::net::MoveModeMessage {
+            guid: ME,
+            counter: 1,
+            mode: MoveMode::Root,
+            apply: true,
+        });
+    step(&mut client);
+    assert_eq!(client.player().pitch_keys, None, "the root clears them");
+    let rooted = client.player().mover_pitch;
+    step(&mut client);
+    assert_eq!(client.player().mover_pitch, rooted);
+    assert_eq!(client.player().move_flags & 0xc0, 0);
+}
+
+/// The press that completes both mouse bits hands the camera's pitch to the body with no motion
+/// (`0x514924`-`0x514966` → `0x5103e0`), which clears the pitch keys (`0x7c6f70`).
+#[test]
+fn the_both_button_press_hands_the_pitch_off() {
+    use benilla_ui::script::HeldInput;
+    let mut client = Client::new(Body::Own, |p| {
+        p.pitch_keys = Some(true);
+        p.mover_pitch = 0.5;
+    });
+    client.frame(
+        vec![],
+        vec![
+            Start(HeldInput::TurnOrAction),
+            Start(HeldInput::CameraOrSelectOrMove),
+        ],
+    );
+    let player = client.player();
+    assert_eq!(player.pitch_keys, None);
+    assert_ne!(player.mover_pitch, 0.5, "the aim took it");
+}

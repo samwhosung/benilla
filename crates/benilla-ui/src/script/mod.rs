@@ -291,7 +291,7 @@ pub use guild::{
     UnitGuild, MAX_RANKS, MIN_RANKS, RANK_RIGHT_BITS,
 };
 pub use host::{CallHost, CallTail, Deferring};
-pub use input_verbs::{BindingInput, FiredInput, HeldInput};
+pub use input_verbs::{BindingInput, FiredInput, HeldInput, LookCall, ViewAxis};
 pub use item_calls::ItemCall;
 pub use lfg::LfgDungeon;
 pub use lottery::UnservedSend;

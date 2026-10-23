@@ -628,7 +628,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 (
                     record.character.guid,
                     record.character.name.clone(),
-                    m.glue.name_lists(),
+                    m.name_lists(),
                     m.name_charsets(),
                 )
             };
@@ -1367,7 +1367,7 @@ mod tests {
             }
         }
         let mut s = rename_vm();
-        s.set_glue_name_lists(std::rc::Rc::new(Reserved));
+        s.set_name_lists(std::rc::Rc::new(Reserved));
         for (call, key) in [
             ("RenameCharacter(2, 'X')", "CHAR_NAME_TOO_SHORT"),
             ("RenameCharacter(2, 'Abc1')", "CHAR_NAME_INVALID_CHARACTER"),

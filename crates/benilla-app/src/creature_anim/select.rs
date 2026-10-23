@@ -70,6 +70,9 @@ pub(crate) mod move_flags {
     /// The keyboard turn keys (with `TURN_RIGHT`), which rotate the facing (`0x7c4f30`).
     pub const TURN_LEFT: u32 = 0x10;
     pub const TURN_RIGHT: u32 = 0x20;
+    /// The pitch keys while swimming (`0x7c6df0`), which pitch the mover (`0x7c5c90`).
+    pub const PITCH_UP: u32 = 0x40;
+    pub const PITCH_DOWN: u32 = 0x80;
     /// Walk mode: it scales only the rate numerator, never the id choice.
     pub const WALK_MODE: u32 = 0x100;
     /// `MOVEFLAG_LEVITATING`: the swim decision `0x6030c0` bails on it first (`0x6030d2`), so

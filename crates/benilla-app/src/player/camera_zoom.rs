@@ -24,8 +24,8 @@ pub(crate) const CAM_DISTANCE_MAX_RANGE: std::ops::RangeInclusive<f32> =
     CAM_DIST_MIN..=CAM_DIST_MAX;
 /// Yards per wheel notch, the stock bindings' `CameraZoomIn(1.0)` (`Bindings.xml:707`).
 const CAM_ZOOM_STEP: f32 = 1.0;
-/// Zoom speed in yd/s, `cameraDistanceMoveSpeed`'s default: the reference glides the distance to
-/// the wheel target at this constant speed (`0x5112d0`), not an ease.
+/// Zoom speed in yd/s, `cameraDistanceMoveSpeed`'s default "8.33" (`0x50b7f3`): the reference runs
+/// the distance axis at this constant speed (`0x5112d0`), not an ease.
 const CAM_MOVE_SPEED: f32 = 8.33;
 
 /// The max orbit distance, yd, from `cameraDistanceMax` and `cameraDistanceMaxFactor`: 15 at the
@@ -36,6 +36,9 @@ pub(crate) struct ZoomLimit {
     pub(crate) max: f32,
     distance_max: f32,
     factor: f32,
+    /// `cameraDistanceMoveSpeed`, yd/s: the distance axis's rate (`[0xbe0fbc]`, `0x5113d9`), the
+    /// wheel's and `MoveViewIn`/`Out`'s alike. Its validator `0x50c040` has refused a bad value.
+    pub(crate) move_speed: f32,
 }
 
 impl Default for ZoomLimit {
@@ -45,6 +48,7 @@ impl Default for ZoomLimit {
             max: orbit_limit(distance_max, factor),
             distance_max,
             factor,
+            move_speed: CAM_MOVE_SPEED,
         }
     }
 }
@@ -94,10 +98,16 @@ fn orbit_limit(distance_max: f32, factor: f32) -> f32 {
 }
 
 /// Wheel zoom, run every frame: `CAMERAZOOMIN`/`OUT` move the target, and the distance glides to it
-/// at a constant `cameraDistanceMoveSpeed`, as the reference's does. `scroll` is this frame's net
-/// zoom-in in notches (positive is closer). `max` is [`ZoomLimit::max`], CVar-fed, so it bounds by
-/// `max`/`min`, never `f32::clamp`, which panics on a NaN or inverted bound.
-pub(super) fn apply_zoom_scroll(scroll: f32, dt: f32, rig: &mut CameraControl, max: f32) {
+/// at a constant `cameraDistanceMoveSpeed` (`speed`), as the reference's does. `scroll` is this
+/// frame's net zoom-in in notches (positive is closer). `max` is [`ZoomLimit::max`], CVar-fed, so
+/// it bounds by `max`/`min`, never `f32::clamp`, which panics on a NaN or inverted bound.
+pub(super) fn apply_zoom_scroll(
+    scroll: f32,
+    dt: f32,
+    rig: &mut CameraControl,
+    max: f32,
+    speed: f32,
+) {
     if scroll != 0.0 {
         rig.target_distance = (rig.target_distance - scroll * CAM_ZOOM_STEP)
             .max(CAM_DIST_MIN)
@@ -105,7 +115,7 @@ pub(super) fn apply_zoom_scroll(scroll: f32, dt: f32, rig: &mut CameraControl, m
     }
     // Re-clamp every frame, so lowering the max-distance slider pulls the camera in.
     rig.target_distance = rig.target_distance.min(max);
-    let max_step = CAM_MOVE_SPEED * dt;
+    let max_step = speed * dt;
     rig.distance += (rig.target_distance - rig.distance).clamp(-max_step, max_step);
 }
 
@@ -175,10 +185,10 @@ mod tests {
             distance: 10.0,
             ..default()
         };
-        apply_zoom_scroll(-1.0, 0.1, &mut rig, z.max);
+        apply_zoom_scroll(-1.0, 0.1, &mut rig, z.max, CAM_MOVE_SPEED);
         assert_eq!(rig.target_distance, 11.0);
         // Even a NaN bound handed straight in bounds nothing and panics nowhere.
-        apply_zoom_scroll(-1.0, 0.1, &mut rig, f32::NAN);
+        apply_zoom_scroll(-1.0, 0.1, &mut rig, f32::NAN, CAM_MOVE_SPEED);
         assert_eq!(rig.target_distance, 12.0);
     }
 
@@ -188,9 +198,9 @@ mod tests {
             target_distance: 44.5,
             ..default()
         };
-        apply_zoom_scroll(-1.0, 0.1, &mut rig, limit(15.0, 3.0));
+        apply_zoom_scroll(-1.0, 0.1, &mut rig, limit(15.0, 3.0), CAM_MOVE_SPEED);
         assert_eq!(rig.target_distance, 45.0);
-        apply_zoom_scroll(1000.0, 0.1, &mut rig, 45.0);
+        apply_zoom_scroll(1000.0, 0.1, &mut rig, 45.0, CAM_MOVE_SPEED);
         assert_eq!(rig.target_distance, CAM_DIST_MIN);
     }
 }

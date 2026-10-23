@@ -799,11 +799,17 @@ pub(crate) enum MoveKind {
     FallLand,
     StartSwim,
     StopSwim,
+    /// The pitch keys' sends, the drain's tags 0xb, 0xc and 0xd (`0x61a240`, `0x61a2e0`).
+    StartPitchUp,
+    StartPitchDown,
+    StopPitch,
     /// The walk/run toggle: sent from the toggle handler (`ToggleRun 0x513d50` to `0x617de0`),
     /// not the move broadcaster, so it goes out standing still (`0x61a99d` gates the latter).
     SetWalkMode,
     SetRunMode,
     SetFacing,
+    /// The mouse-look pitch set, tag 0x11 drained through `0x615bc0`.
+    SetPitch,
     Heartbeat,
 }
 
@@ -824,9 +830,13 @@ impl MoveKind {
             MoveKind::FallLand => op::MSG_MOVE_FALL_LAND,
             MoveKind::StartSwim => op::MSG_MOVE_START_SWIM,
             MoveKind::StopSwim => op::MSG_MOVE_STOP_SWIM,
+            MoveKind::StartPitchUp => op::MSG_MOVE_START_PITCH_UP,
+            MoveKind::StartPitchDown => op::MSG_MOVE_START_PITCH_DOWN,
+            MoveKind::StopPitch => op::MSG_MOVE_STOP_PITCH,
             MoveKind::SetWalkMode => op::MSG_MOVE_SET_WALK_MODE,
             MoveKind::SetRunMode => op::MSG_MOVE_SET_RUN_MODE,
             MoveKind::SetFacing => op::MSG_MOVE_SET_FACING,
+            MoveKind::SetPitch => op::MSG_MOVE_SET_PITCH,
             MoveKind::Heartbeat => op::MSG_MOVE_HEARTBEAT,
         }
     }

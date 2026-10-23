@@ -35,7 +35,8 @@ pub struct AreaEntry {
 pub struct ZoneMusicEntry {
     pub id: u32,
     pub set_name: String,
-    /// Silence between tracks in ms, uniform in `[min, max]`.
+    /// The bounds of the silence between tracks, ms; the client takes one fixed point between
+    /// them (`0x460100`).
     pub silence_min: [u32; 2],
     pub silence_max: [u32; 2],
     /// `SoundEntries` kits (type 28), the track pool per phase.
@@ -77,6 +78,24 @@ pub struct AreaAudio<'a> {
 }
 
 impl AreaSoundCatalog {
+    /// A catalog holding one `ZoneMusic` row of no tracks, `[day, night]` silence bounds, for
+    /// consumers' unit tests.
+    pub fn zone_music_for_tests(id: u32, silence_min: [u32; 2], silence_max: [u32; 2]) -> Self {
+        let row = ZoneMusicEntry {
+            id,
+            set_name: String::new(),
+            silence_min,
+            silence_max,
+            sounds: [0; 2],
+        };
+        Self {
+            areas: HashMap::new(),
+            zone_music: HashMap::from([(id, row)]),
+            intros: HashMap::new(),
+            ambience: HashMap::new(),
+        }
+    }
+
     pub fn area(&self, id: u32) -> Option<&AreaEntry> {
         self.areas.get(&id)
     }

@@ -20,8 +20,6 @@ use super::table::{same, Registered};
 
 pub(super) const INERT: &[Registered] = &[
     // ── The camera block ─────────────────────────────────────────────────────────────────────
-    same("cameraCustomViewSmoothing", "0"), // 0x50bad0
-    same("cameraDistanceMoveSpeed", "8.33").checked(benilla_ui::script::check_camera_decay), // 0x50b7f3
     same("cameraDistanceSmoothSpeed", "8.33").checked(benilla_ui::script::check_camera_decay), // 0x50b8a2
     same("cameraDive", "1"), // 0x50be03
     same("cameraFoVSmoothSpeed", "0.5").checked(benilla_ui::script::check_camera_rate), // 0x50b87f

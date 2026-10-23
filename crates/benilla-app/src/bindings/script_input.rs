@@ -7,6 +7,8 @@
 
 use benilla_ui::script::{BindingInput, FiredInput, HeldInput};
 
+pub(crate) use benilla_ui::script::ViewAxis;
+
 use super::BindingsState;
 
 /// One engine input a binding function drives: a held bit of `[InputControl+4]` or a one-shot.
@@ -28,6 +30,10 @@ pub(crate) enum Input {
     TurnOrAction,
     /// `CameraOrSelectOrMoveStart`/`Stop`, bit `0x2`.
     CameraOrSelectOrMove,
+    /// `PitchUpStart`/`Stop`, bit `0x400`.
+    PitchUp,
+    /// `PitchDownStart`/`Stop`, bit `0x800`.
+    PitchDown,
     /// `Jump()`.
     Jump,
     /// `ToggleRun()`, the walk toggle.
@@ -55,6 +61,8 @@ fn held_input(input: HeldInput) -> Input {
         HeldInput::StrafeRight => Input::StrafeRight,
         HeldInput::TurnOrAction => Input::TurnOrAction,
         HeldInput::CameraOrSelectOrMove => Input::CameraOrSelectOrMove,
+        HeldInput::PitchUp => Input::PitchUp,
+        HeldInput::PitchDown => Input::PitchDown,
     }
 }
 
@@ -98,6 +106,10 @@ impl BindingsState {
                     self.just.push(i);
                     self.amounts.push((i, amount));
                 }
+                // The camera's axes are its own state (`[cam+0x128]`), not `[InputControl+4]`:
+                // passed through in call order for the camera to apply.
+                BindingInput::ViewStart(axis) => self.view_calls.push((axis, true)),
+                BindingInput::ViewStop(axis) => self.view_calls.push((axis, false)),
             }
         }
     }
@@ -111,6 +123,7 @@ impl BindingsState {
         state.just.clear();
         state.fired.clear();
         state.amounts.clear();
+        state.view_calls.clear();
         state.apply_script_input(now);
         state
     }

@@ -276,6 +276,8 @@ pub(super) fn apply_server_moves(
         player.modes.set(m.mode, m.apply);
         if m.mode == MoveMode::Root && m.apply {
             movement_net::park_mover(&net_cmds.0, player);
+            // `0x7c734f`'s `and 0xffe07f00` takes the pitch-key bits with the direction bits.
+            player.pitch_keys = None;
             player.airborne_since = None;
             player.vel_y = 0.0;
             player.fall_far = false;
@@ -410,6 +412,10 @@ fn snap_near_teleport(player: &mut Player, cam_yaw: &mut f32, t: &TeleportMessag
     player.face_yaw = t.orientation;
     *cam_yaw = t.orientation;
     player.move_flags = 0;
+    // `0x617e90` places the mover through `0x7c69a0`, whose `and 0xfbc07f00` (`0x7c69c2`) clears
+    // the pitch-key bits and which zeroes the pitch (`0x7c69cc`).
+    player.pitch_keys = None;
+    player.mover_pitch = 0.0;
     player.airborne_since = None; // a snap ends any jump arc (no phantom FALL_LAND)
     player.settling = true; // hold (gravity off) until the destination loads
     player.settle_since = now;
@@ -854,8 +860,12 @@ mod teleport_tests {
             position: [-8_913.0, -136.0, 81.0],
             orientation: 1.25,
         };
+        player.pitch_keys = Some(true);
+        player.mover_pitch = 0.4;
         snap_near_teleport(&mut player, &mut cam_yaw, &t, 10.0);
         assert!(player.ride.is_none(), "the snap deboards");
+        assert_eq!(player.pitch_keys, None, "`0x7c69a0` clears the pitch keys");
+        assert_eq!(player.mover_pitch, 0.0, "and zeroes the pitch (`0x7c69cc`)");
         assert_eq!(player.pos, wow_to_bevy(t.position));
         assert_eq!((player.face_yaw, cam_yaw), (1.25, 1.25));
         assert!(player.settling && player.ride_abort && player.world_stale);

@@ -118,6 +118,13 @@ pub(super) fn this_frame(
             move_flags_now = 0;
         }
     }
+    // The pitch keys' bit, which `0x7c6df0` sets only on a swimmer but nothing clears on leaving
+    // the water by a jump (`0x7c61f0` keeps it), so it rides the fall and the land after it.
+    match player.pitch_keys {
+        Some(true) => move_flags_now |= move_flags::PITCH_UP,
+        Some(false) => move_flags_now |= move_flags::PITCH_DOWN,
+        None => {}
+    }
     // `MOVEFLAG_WALK_MODE` (`0x100`) is a mode, not a motion, so it goes on after the settle's
     // wipe and survives the root and stun suppressions: the reference's input allow-list
     // (`0x615c71`, table `0x618054`) blocks translation under a root and permits run/walk.
@@ -245,6 +252,59 @@ mod tests {
             0.0,
         );
         assert_eq!(f.wire & move_flags::WALK_MODE, 0);
+    }
+
+    /// The pitch keys ride the word as `0x40` or `0x80` (`0x7c6df0`) in every mode: a jump out of
+    /// the water (`0x7c61f0`) keeps them through the fall and onto the land.
+    #[test]
+    fn the_pitch_keys_ride_the_word_out_of_the_water() {
+        let mut player = Player {
+            pitch_keys: Some(true),
+            ..Default::default()
+        };
+        let word = |player: &mut Player, swim| {
+            this_frame(
+                player,
+                &still(),
+                swim,
+                false,
+                false,
+                false,
+                false,
+                true,
+                true,
+                1.0,
+                0.0,
+            )
+            .wire
+        };
+        assert_eq!(
+            word(&mut player, Some((0.0, 0.0))),
+            move_flags::SWIMMING | move_flags::PITCH_UP
+        );
+        player.pitch_keys = Some(false);
+        assert_eq!(
+            word(&mut player, Some((0.0, 0.0))),
+            move_flags::SWIMMING | move_flags::PITCH_DOWN
+        );
+        assert_eq!(word(&mut player, None), move_flags::PITCH_DOWN, "on land");
+        let falling = this_frame(
+            &mut player,
+            &still(),
+            None,
+            true,
+            false,
+            false,
+            false,
+            true,
+            true,
+            1.0,
+            0.0,
+        )
+        .wire;
+        assert_eq!(falling & 0xc0, move_flags::PITCH_DOWN, "in the fall");
+        player.pitch_keys = None;
+        assert_eq!(word(&mut player, None) & 0xc0, 0);
     }
 
     #[test]

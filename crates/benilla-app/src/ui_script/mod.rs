@@ -353,9 +353,11 @@ impl Plugin for UiScriptPlugin {
             .add_systems(
                 Startup,
                 // After the CVars load: the glue screens read the agreements as they come up. After
-                // the glyph cache, which measures the text their first show sizes frames by.
+                // the glyph cache, which measures the text their first show sizes frames by. After
+                // the word lists, which every VM is seated with as it is made.
                 setup_script
                     .after(benilla_assets::AssetSet::Open)
+                    .after(crate::text_filter::TextFilterLoad)
                     .after(crate::cvars::CvarLoad)
                     .after(crate::ui_text::FontAtlasInit),
             )

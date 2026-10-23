@@ -108,6 +108,16 @@ pub(crate) fn runs_before<MA, MB>(
     a: impl bevy::ecs::system::IntoSystem<(), (), MA>,
     b: impl bevy::ecs::system::IntoSystem<(), (), MB>,
 ) -> bool {
+    runs_before_in(app, bevy::app::Update, a, b)
+}
+
+/// [`runs_before`] in the built `label` schedule.
+pub(crate) fn runs_before_in<MA, MB>(
+    app: &mut bevy::app::App,
+    label: impl bevy::ecs::schedule::ScheduleLabel,
+    a: impl bevy::ecs::system::IntoSystem<(), (), MA>,
+    b: impl bevy::ecs::system::IntoSystem<(), (), MB>,
+) -> bool {
     use bevy::ecs::schedule::graph::Direction::{Incoming, Outgoing};
     use bevy::ecs::schedule::NodeId;
     use bevy::ecs::system::{IntoSystem, System};
@@ -118,41 +128,38 @@ pub(crate) fn runs_before<MA, MB>(
     let b = System::type_id(&IntoSystem::into_system(b));
     // `schedule_scope`, not `resource_scope::<Schedules>`: initializing the schedule inserts
     // `Schedules`, which a resource scope refuses.
-    app.world_mut()
-        .schedule_scope(bevy::app::Update, |world, schedule| {
+    app.world_mut().schedule_scope(label, |world, schedule| {
+        schedule.initialize(world).expect("the schedule builds");
+        let key = |id: TypeId| -> NodeId {
             schedule
-                .initialize(world)
-                .expect("the Update schedule builds");
-            let key = |id: TypeId| -> NodeId {
-                schedule
-                    .systems()
-                    .expect("initialized")
-                    .find(|&(_, s)| System::type_id(&**s) == id)
-                    .map(|(k, _)| NodeId::System(k))
-                    .expect("the system is in Update")
+                .systems()
+                .expect("initialized")
+                .find(|&(_, s)| System::type_id(&**s) == id)
+                .map(|(k, _)| NodeId::System(k))
+                .expect("the system is in the schedule")
+        };
+        let (a, b) = (key(a), key(b));
+        let dep = schedule.graph().dependency().graph();
+        let hier = schedule.graph().hierarchy().graph();
+        let (mut after, mut containers) = (HashSet::new(), HashSet::new());
+        let mut work = vec![(a, false)];
+        while let Some((n, is_after)) = work.pop() {
+            let fresh = if is_after {
+                after.insert(n)
+            } else {
+                containers.insert(n)
             };
-            let (a, b) = (key(a), key(b));
-            let dep = schedule.graph().dependency().graph();
-            let hier = schedule.graph().hierarchy().graph();
-            let (mut after, mut containers) = (HashSet::new(), HashSet::new());
-            let mut work = vec![(a, false)];
-            while let Some((n, is_after)) = work.pop() {
-                let fresh = if is_after {
-                    after.insert(n)
-                } else {
-                    containers.insert(n)
-                };
-                if !fresh {
-                    continue;
-                }
-                work.extend(dep.neighbors_directed(n, Outgoing).map(|m| (m, true)));
-                work.extend(hier.neighbors_directed(n, Incoming).map(|p| (p, false)));
-                if is_after {
-                    work.extend(hier.neighbors_directed(n, Outgoing).map(|c| (c, true)));
-                }
+            if !fresh {
+                continue;
             }
-            after.contains(&b)
-        })
+            work.extend(dep.neighbors_directed(n, Outgoing).map(|m| (m, true)));
+            work.extend(hier.neighbors_directed(n, Incoming).map(|p| (p, false)));
+            if is_after {
+                work.extend(hier.neighbors_directed(n, Outgoing).map(|c| (c, true)));
+            }
+        }
+        after.contains(&b)
+    })
 }
 
 #[cfg(test)]

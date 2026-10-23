@@ -1757,8 +1757,6 @@ pub(crate) struct LoginNews<'w, 's> {
     login_refusals: MessageReader<'w, 's, CharacterLoginFailedMessage>,
     /// What the login engine decided with no network message behind it.
     notices: MessageReader<'w, 's, LoginGuardRefused>,
-    /// The name check's lists, which the glue VM is seated with (`0x6c91a0`).
-    names: Option<Res<'w, crate::text_filter::NameFilter>>,
 }
 
 /// What the manager asks of the rest of the app.
@@ -1833,14 +1831,10 @@ pub(crate) fn drive_glue_mgr(
                     &shared,
                     s,
                     news.addon_reply.as_deref().and_then(|r| r.0.as_deref()),
-                    news.names.as_deref(),
                     tables.as_deref(),
                     realmlist.as_deref(),
                 );
                 fresh_vm = true;
-            }
-            if let Some(names) = news.names.as_ref().filter(|n| !fresh_vm && n.is_changed()) {
-                s.set_glue_name_lists(std::rc::Rc::new((**names).clone()));
             }
             // The create screen's catalog, on every new VM (the glue build's walk, `0x470430`) and
             // whenever a catalog behind it arrives.
@@ -2101,7 +2095,6 @@ fn seat_glue(
     shared: &SharedGlueMgr,
     s: &mut UiScript,
     addon_reply: Option<&[benilla_protocol::messages::AddonRecord]>,
-    names: Option<&crate::text_filter::NameFilter>,
     tables: Option<&crate::glue_session::realm::RealmTables>,
     realmlist: Option<&crate::realmlist::Realmlist>,
 ) {
@@ -2115,9 +2108,6 @@ fn seat_glue(
     s.set_glue_select_cells(mgr.select_cells);
     super::addons::seat_glue_addons(s, addon_reply);
     mgr.holder_moved = true;
-    if let Some(names) = names {
-        s.set_glue_name_lists(std::rc::Rc::new(names.clone()));
-    }
     if let Some(r) = tables {
         let (categories, types) = r.glue_setup();
         s.set_glue_realm_setup(categories, types);
@@ -2141,7 +2131,6 @@ pub(crate) fn seat_glue_build(world: &mut World, script: &mut UiScript) {
         world
             .get_resource::<AddonInfoReply>()
             .and_then(|r| r.0.as_deref()),
-        world.get_resource::<crate::text_filter::NameFilter>(),
         world.get_resource::<crate::glue_session::realm::RealmTables>(),
         world.get_resource::<crate::realmlist::Realmlist>(),
     );

@@ -471,6 +471,9 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // `0x50c000` → `0x50b330` refuses values outside [0.1, 360] rather than clamping.
     same("cameraYawMoveSpeed", "180.0").checked(benilla_ui::script::check_camera_rate),
     same("cameraPitchMoveSpeed", "90.0").checked(benilla_ui::script::check_camera_rate),
+    // The distance axis's yards a second (`0x50b7f3`, read at `0x5113d9`): the wheel's glide and
+    // `MoveViewIn`/`Out`. Its validator `0x50c040` refuses a value out of range.
+    same("cameraDistanceMoveSpeed", "8.33").checked(benilla_ui::script::check_camera_decay),
     // MOUSE_SENSITIVITY (`UIOptionsFrame.lua:87`): FrameXML's spelling of the binary's `mouseSpeed`
     // (`0x402c7b`); lookups are case-insensitive (`CVar::Lookup 0x63de30`), here as there. The
     // reference's default is `SPI_GETMOUSESPEED × 0.1`, "1.0" on stock Windows, and its record
@@ -497,6 +500,9 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // validator `0x50c000` refuses outside [0.1, 360] and the follow reader (`0x512d75`) uses the
     // stored value as is; 90 to 270 is only the stock slider's range.
     same("cameraYawSmoothSpeed", "180.0").checked(benilla_ui::script::check_camera_rate),
+    // `cameraCustomViewSmoothing` (`0x50bad0`, read at `0x50fc33`): with it set, a customised view
+    // still takes the auto-return.
+    same("cameraCustomViewSmoothing", "0"),
     // `UIOptionsFrame.lua:353` names `cameraPitchSmoothSpeed`, registered "45.0" (`0x50b90b`) with
     // the same validator, and `SetCVar` raises on a name no CVar has (`0x488c53`). `FollowRig` has
     // one rate, so nothing reads it.

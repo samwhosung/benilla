@@ -800,6 +800,9 @@ pub(crate) struct Model {
     /// `Wow.ini`'s `Region` as start-up hands it to the name check (`0x402b7f` → `0x6c91b8`,
     /// `[0x86c9e0]`): 0 until the host seats the install's.
     pub(crate) client_region: i32,
+    /// The name checks' word lists, client globals start-up compiles once (`0x402b7f` →
+    /// `0x6c91a0`), as the host seated them: none until it does.
+    pub(crate) name_lists: Option<std::rc::Rc<dyn super::NameLists>>,
     /// A Slider thumb drag, left press to release or pointer leave, handled here with no Lua.
     pub(crate) slider_drag: Option<slider::SliderDrag>,
     /// A ColorSelect wheel or value-bar drag, press to release.
@@ -1322,6 +1325,13 @@ impl Model {
         super::NameCharsets::for_client(self.client_region, self.locale)
     }
 
+    /// The lists the character and guild name checks search; with none seated, nothing matches.
+    pub(crate) fn name_lists(&self) -> std::rc::Rc<dyn super::NameLists> {
+        self.name_lists
+            .clone()
+            .unwrap_or_else(|| std::rc::Rc::new(super::NoNameLists))
+    }
+
     /// The text a `SetText` stores (`0x771d80` with its expand flag): the separator pass
     /// `0x771c50` while `SetEuropeanNumbers` holds the switch (`0x771d9f`), else the text itself.
     pub(crate) fn localized_text(&self, text: String) -> String {
@@ -1685,6 +1695,7 @@ impl Model {
             european_numbers: false,
             locale: 0,
             client_region: 0,
+            name_lists: None,
             slider_drag: None,
             color_drag: None,
             gossip: None,

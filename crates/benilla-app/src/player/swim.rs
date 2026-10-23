@@ -117,7 +117,89 @@ pub(super) fn update_swimming(player: &mut Player, surface_y: Option<f32>, now: 
 fn stop_pitch(player: &mut Player, was: bool) {
     if was && !player.swimming {
         player.mover_pitch = 0.0;
+        // `0x7c6e80`'s `and 0xffdfff3f` clears the pitch bits with SWIMMING, sending nothing.
+        player.pitch_keys = None;
     }
+}
+
+/// The pitch keys' share of the input tick `0x514640`. A swimmer that may turn runs the pitch
+/// emitter `0x515010` (`0x514766`, `0x514777`): with the TurnOrAction bit clear, the net of
+/// PitchUp (`0x400`) and PitchDown (`0x800`) starts a pitch while none is latched (`0x60dda0`,
+/// latch `0x80000`), and a zero net stops a latched one (`0x60ddd0`); a latched pitch holds
+/// through a change of direction until the net passes zero. A unit that may not turn stops a
+/// latched pitch instead, sending only while swimming (`0x5147ca`-`0x5147fa`). The latch is the
+/// input's, so it outlives the water.
+pub(super) fn pitch_emitter(
+    player: &mut Player,
+    (up, down): (bool, bool),
+    turn_or_action: bool,
+    may_turn: bool,
+    swimming: bool,
+) {
+    use crate::net::MoveKind;
+    if !may_turn {
+        if std::mem::take(&mut player.pitch_latch) && swimming {
+            stop_pitch_keys(player);
+        }
+        return;
+    }
+    if !swimming || turn_or_action {
+        return;
+    }
+    let net = i32::from(up) - i32::from(down);
+    match net.signum() {
+        0 => {
+            if std::mem::take(&mut player.pitch_latch) {
+                stop_pitch_keys(player);
+            }
+        }
+        sign if !player.pitch_latch => {
+            // Tags 0xb and 0xc (`0x61a240`): `0x7c6df0(up)` sets one bit and clears the other,
+            // and the drain sends 0xbf or 0xc0.
+            let up = sign > 0;
+            player.pitch_keys = Some(up);
+            player.pitch_send = Some(if up {
+                MoveKind::StartPitchUp
+            } else {
+                MoveKind::StartPitchDown
+            });
+            player.pitch_latch = true;
+        }
+        _ => {}
+    }
+}
+
+/// The mouse-look pitch hand-off, `0x515330` through `0x60de70` to `SetPitch` (`0x7c6f70`): the
+/// mover pitch takes the aim, held to ±89° by `0x5103e0` (`0x510412`-`0x510447`). `SetPitch`
+/// clears the pitch-key bits on every path (`0x7c6fa4`, `0x7c6fe1`), sending no stop, and the
+/// hand-off clears the input's pitch latch (`0x515378`), so a pitch key still held starts afresh
+/// at the emitter's next run. The queued set (tag 0x11, `0x6198a0`) drains through `0x615bc0`,
+/// which offers `MSG_MOVE_SET_PITCH` to the send ([`Player::set_pitch_due`]).
+pub(super) fn hand_off_pitch(player: &mut Player, aim: f32) {
+    use super::state::MOUSELOOK_PITCH_CLAMP;
+    player.mover_pitch = aim.clamp(-MOUSELOOK_PITCH_CLAMP, MOUSELOOK_PITCH_CLAMP);
+    player.pitch_keys = None;
+    player.pitch_latch = false;
+    player.set_pitch_due = true;
+}
+
+/// Tag 0xd (`0x61a2e0`): `0x7c6e30` clears both bits, and the drain sends 0xc1.
+fn stop_pitch_keys(player: &mut Player) {
+    player.pitch_keys = None;
+    player.pitch_send = Some(crate::net::MoveKind::StopPitch);
+}
+
+/// The pitch keys' integration (`0x7c4f80`): the mover pitch moves at the pitch rate `0x7c5c90`,
+/// the turn rate `+0x9c` up for `0x40` and down for `0x80`, three quarters of it while a
+/// direction bit is set (`0x7c5cb3`), and is held to ±π/2.
+pub(super) fn integrate_pitch_keys(player: &mut Player, turn_rate: f32, moving: bool, dt: f32) {
+    let Some(up) = player.pitch_keys else {
+        return;
+    };
+    let rate = turn_rate * if moving { 0.75 } else { 1.0 };
+    let step = if up { rate } else { -rate } * dt;
+    player.mover_pitch = (player.mover_pitch + step)
+        .clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
 }
 
 /// The take-off frame of a jump while swimming (`0x7c6230`), at any depth: [`SWIM_JUMP_SPEED`],
@@ -415,6 +497,117 @@ pub(super) fn translate_amounts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `0x515010`: a net press starts its pitch once, a zero net stops it, a switch of direction
+    /// with the latch set does nothing until the net passes zero, and TurnOrAction holds it.
+    #[test]
+    fn the_pitch_emitter_starts_and_stops_as_0x515010_does() {
+        use crate::net::MoveKind;
+        let mut p = Player::default();
+        let tick = |p: &mut Player, keys, turn, may_turn, swim| {
+            pitch_emitter(p, keys, turn, may_turn, swim);
+            p.pitch_send.take()
+        };
+        assert_eq!(
+            tick(&mut p, (true, false), false, true, false),
+            None,
+            "dry land"
+        );
+        assert!(!p.pitch_latch);
+        assert_eq!(
+            tick(&mut p, (true, false), false, true, true),
+            Some(MoveKind::StartPitchUp)
+        );
+        assert_eq!(p.pitch_keys, Some(true));
+        assert_eq!(tick(&mut p, (true, false), false, true, true), None, "held");
+        assert_eq!(
+            tick(&mut p, (false, true), false, true, true),
+            None,
+            "a latched pitch keeps its direction"
+        );
+        assert_eq!(p.pitch_keys, Some(true));
+        assert_eq!(
+            tick(&mut p, (true, true), false, true, true),
+            Some(MoveKind::StopPitch),
+            "a zero net stops it"
+        );
+        assert_eq!(p.pitch_keys, None);
+        assert_eq!(
+            tick(&mut p, (false, true), false, true, true),
+            Some(MoveKind::StartPitchDown)
+        );
+        assert_eq!(p.pitch_keys, Some(false));
+        assert_eq!(
+            tick(&mut p, (false, false), true, true, true),
+            None,
+            "the TurnOrAction bit skips the emitter"
+        );
+        assert_eq!(
+            tick(&mut p, (false, false), false, false, true),
+            Some(MoveKind::StopPitch),
+            "a stun stops a latched pitch"
+        );
+        assert!(!p.pitch_latch);
+        // The latch outlives the water: out of it nothing runs, and a stun clears it unsent.
+        assert_eq!(
+            tick(&mut p, (true, false), false, true, true),
+            Some(MoveKind::StartPitchUp)
+        );
+        assert_eq!(tick(&mut p, (false, false), false, true, false), None);
+        assert!(p.pitch_latch);
+        assert_eq!(tick(&mut p, (false, false), false, false, false), None);
+        assert!(!p.pitch_latch);
+    }
+
+    /// The mouse-look hand-off (`0x515330` → `0x7c6f70`): the aim lands under the ±89° clamp, the
+    /// pitch-key bits clear unsent (`0x7c6fa4`, `0x7c6fe1`) and the input's latch with them
+    /// (`0x515378`), so a pitch key held through the drag adds nothing and starts afresh after it.
+    #[test]
+    fn the_mouselook_hand_off_clears_the_pitch_keys_and_their_latch() {
+        use crate::net::MoveKind;
+        let mut p = Player::default();
+        pitch_emitter(&mut p, (true, false), false, true, true);
+        assert_eq!(p.pitch_send.take(), Some(MoveKind::StartPitchUp));
+        hand_off_pitch(&mut p, 0.3);
+        assert_eq!(
+            (p.mover_pitch, p.pitch_keys, p.pitch_latch),
+            (0.3, None, false)
+        );
+        assert_eq!(p.pitch_send, None, "the clear sends no stop");
+        integrate_pitch_keys(&mut p, 2.0, false, 0.25);
+        assert_eq!(p.mover_pitch, 0.3, "the held key adds no pitch");
+        pitch_emitter(&mut p, (true, false), true, true, true);
+        assert_eq!(p.pitch_send.take(), None, "the drag holds the emitter");
+        pitch_emitter(&mut p, (true, false), false, true, true);
+        assert_eq!(
+            p.pitch_send.take(),
+            Some(MoveKind::StartPitchUp),
+            "after the drag the held key starts afresh"
+        );
+        hand_off_pitch(&mut p, 2.0);
+        assert_eq!(p.mover_pitch, super::super::state::MOUSELOOK_PITCH_CLAMP);
+    }
+
+    /// `0x7c4f80` with the rate of `0x7c5c90`: the turn rate, three quarters while moving, held to
+    /// ±π/2.
+    #[test]
+    fn the_pitch_keys_pitch_at_the_turn_rate() {
+        let mut p = Player {
+            pitch_keys: Some(true),
+            ..Default::default()
+        };
+        integrate_pitch_keys(&mut p, 2.0, false, 0.25);
+        assert!((p.mover_pitch - 0.5).abs() < 1e-6);
+        p.pitch_keys = Some(false);
+        integrate_pitch_keys(&mut p, 2.0, true, 0.25);
+        assert!((p.mover_pitch - 0.125).abs() < 1e-6, "{}", p.mover_pitch);
+        p.pitch_keys = Some(true);
+        integrate_pitch_keys(&mut p, 2.0, false, 10.0);
+        assert_eq!(p.mover_pitch, std::f32::consts::FRAC_PI_2);
+        p.pitch_keys = None;
+        integrate_pitch_keys(&mut p, 2.0, false, 10.0);
+        assert_eq!(p.mover_pitch, std::f32::consts::FRAC_PI_2);
+    }
 
     /// `CreatureModelData.collisionHeight × displayScale` for three shipped bodies, as
     /// `benilla_formats`' `collision_height_is_the_m2_collision_box` pins them.

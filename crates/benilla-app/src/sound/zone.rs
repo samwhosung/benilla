@@ -3,18 +3,17 @@
 //! `CurrentArea` (MCNK areaId) → `AreaTable` → `ZoneMusic`/`SoundAmbience`/`ZoneIntroMusicTable`
 //! (parent-inherited, `AreaSoundCatalog::resolve`) → SoundEntries kits → streamed MP3/WAV.
 //!
-//! Music (`0x460040`–`0x460ca0`): same-zone tracks are spaced by a random per-phase silence
-//! interval (`0x4601f0`). A zone-music change (`0x4602e0`) or world entry (`0x45ffc0`, at
+//! Music (`0x460040`–`0x460ca0`): same-zone tracks are spaced by a per-phase silence interval
+//! (`0x4601f0`), the same fixed point between the row's bounds every time (`0x460100`). A zone-music change (`0x4602e0`) or world entry (`0x45ffc0`, at
 //! `0x45ffdb`) arms the next start to −1 at `0x836400`, so the incoming track opens that tick
 //! (`0x460240`) at full volume: no fade-in primitive (`0x7a57b0`, `0x7a5730`) is called on a
 //! music slot. A start that plays nothing (no kit, a file missing from the archive, a failed
 //! open) leaves that deadline armed, so every tick retries with a fresh weighted pick
 //! (`0x460240` writes `[0x836400]` on no failure path): a missing file costs a tick, not the zone.
 //!
-//! Server-pushed music (`SMSG_PLAY_MUSIC`) takes the same slot. The server re-pushes an event
-//! track to loop it (the Darkmoon Faire every 5 s, vmangos `go_scripts.cpp:318`), so a push for
-//! the kit already playing is a no-op, the reference's early-out at `0x460342`. Any other push
-//! takes the slot as a zone-music change does; the reference's handler is untraced.
+//! Server-pushed music (`SMSG_PLAY_MUSIC`, `0x460520`) has a slot of its own, `[0xb06cd0]`: it
+//! fades the zone track out and holds zone music until it ends, when the next zone track is
+//! scheduled 32.665 s on (`0x460100(30000, 60000)`). Both Lua music verbs fade it first.
 //!
 //! Ambience (`0x460b00`): an area, interior, day/night or ghost change crossfades over 5.0 s;
 //! submerge/emerge is instant (`0x458650` → `0x460af0`). Day is 05:30 ≤ t < 21:00 on the
@@ -81,6 +80,25 @@ fn forced_bed(kits: &SoundKits, ghost: bool, submerged: bool) -> Option<u32> {
 /// `0x7a5a10(0x40800000 = 4.0f)`.
 const MUSIC_FADE_OUT_MS: u64 = 4000;
 
+/// A server track's fades, of the track before it and of the zone track it displaces
+/// (`0x46055e`, `0x460578`), and its own under `PlayMusic`/`StopMusic` (`0x46045d`): 3.0 s.
+const SERVER_MUSIC_FADE_MS: u64 = 3000;
+
+/// `0x460100(lo, hi)`: `hi` when `hi ≤ lo`, else `lo + MulHigh32(hi − lo, r)`, where `r` is the
+/// first draw of a generator seeded with 0 on each call (`0x46011e`), always 0x16be8aa9.
+fn music_delay_ms(lo: u32, hi: u32) -> u32 {
+    if hi <= lo {
+        return hi;
+    }
+    lo + ((u64::from(hi - lo) * 0x16be_8aa9) >> 32) as u32
+}
+
+/// How long after a server track ends the zone track returns: `0x460100(30000, 60000)`
+/// (`0x46007e`-`0x460088`), 32 665 ms.
+fn server_music_return_secs() -> f64 {
+    f64::from(music_delay_ms(30_000, 60_000)) / 1000.0
+}
+
 /// The Lua `PlayMusic` slot's base volume, set with no fade under the MusicVolume slider
 /// (`0x460450` → `0x7a5dc0`; the glue theme uses 0.8, `0x45aeb0`).
 const LUA_MUSIC_VOLUME: f32 = 1.0;
@@ -141,10 +159,20 @@ pub(super) struct ZoneAudio {
     /// The music slot: a zone track, an intro, or a server-pushed event track.
     music: Option<StreamingSoundHandle<kira::sound::FromFileError>>,
     music_watch: mixer::StreamWatch,
-    /// The SoundEntries kit on the music slot (0 = none), what a repeat `SMSG_PLAY_MUSIC` is
-    /// compared against.
+    /// The SoundEntries kit on the music slot (0 = none).
     music_kit: u32,
     music_kit_vol: f32,
+    /// The file the music slot's stream opened, for the duplicate check ([`duplicate_refused`]).
+    music_path: String,
+    /// The music slot holds a zone intro, the reference's `[0xb06dc8]`, which refuses a server
+    /// track (`0x460523` → `0x4614a0`). Here the intro shares the zone track's slot.
+    music_intro: bool,
+    /// The server's track, `[0xb06cd0]` (`0x460570`), and its kit and volume.
+    server_music: Option<StreamingSoundHandle<kira::sound::FromFileError>>,
+    server_music_kit: u32,
+    server_music_kit_vol: f32,
+    /// The file the server's stream opened.
+    server_music_path: String,
     /// The Lua `PlayMusic` slot, the reference's `[0xb06ccc]`: a second music stream beside the
     /// zone track's `[0xb06cc4]`, driven only by `PlayMusic`/`StopMusic`.
     lua_music: Option<StreamingSoundHandle<kira::sound::FromFileError>>,
@@ -178,7 +206,6 @@ pub(super) struct ZoneAudio {
     interior: Option<super::interior::InteriorAudio>,
     /// Last submersion state; a flip makes the ambience swap instant.
     was_underwater: bool,
-    rng: u32,
 }
 
 impl Default for ZoneAudio {
@@ -189,6 +216,12 @@ impl Default for ZoneAudio {
             music_watch: mixer::StreamWatch::new("zone music"),
             music_kit: 0,
             music_kit_vol: 1.0,
+            music_path: String::new(),
+            music_intro: false,
+            server_music: None,
+            server_music_kit: 0,
+            server_music_kit_vol: 1.0,
+            server_music_path: String::new(),
             lua_music: None,
             lua_music_path: None,
             lua_music_watch: mixer::StreamWatch::new("Lua music"),
@@ -205,34 +238,15 @@ impl Default for ZoneAudio {
             area: None,
             interior: None,
             was_underwater: false,
-            rng: 0x1234_5677,
         }
     }
 }
 
 impl ZoneAudio {
-    fn rand(&mut self) -> u32 {
-        let mut x = self.rng;
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        self.rng = x;
-        x
-    }
-
     /// Whether a Lua `PlayMusic` track holds the override slot (`0x4603d6`); asked of the path,
     /// not the handle, so it stays true across the loop's restart gap.
     fn lua_slot_live(&self) -> bool {
         self.lua_music_path.is_some()
-    }
-
-    /// Uniform silence interval (ms) in `[min, max]` for the phase.
-    fn silence_ms(&mut self, min: u32, max: u32) -> u32 {
-        if max > min {
-            min + self.rand() % (max - min + 1)
-        } else {
-            min
-        }
     }
 }
 
@@ -322,12 +336,13 @@ fn zone_audio(
             }
         }
 
-        if music_row != zone.zone_music {
+        if music_row != zone.zone_music && !record_zone_music_only(zone, music_row) {
             zone.zone_music = music_row;
             // The fade finishes on the audio thread after the handle drops.
             if let Some(mut h) = zone.music.take() {
                 h.stop(mixer::fade(MUSIC_FADE_OUT_MS));
             }
+            zone.music_intro = false;
             let kit = zone_music_row(&areas.0, music_row).map(|m| m.sounds[phase]);
             begin_zone_music(zone, intro, kit, now, |zone, kit| {
                 start_music_stream(zone, &mut out, &mut kits, &assets, &config, kit)
@@ -374,19 +389,31 @@ fn zone_audio(
     land_ambience(zone, &mut out, &config, now);
 
     // ---- music transport ----
+    // A server track holds the zone pump while it plays (`0x46005d`); when it ends it is
+    // destroyed and the zone track scheduled (`0x460074`-`0x460096`).
+    let server_live = zone
+        .server_music
+        .as_ref()
+        .map(|h| h.state() != kira::sound::PlaybackState::Stopped);
+    if server_live == Some(false) {
+        zone.server_music = None;
+        zone.server_music_kit = 0;
+    }
+    let server_holds = server_track_holds(zone, server_live, now);
     // Reap a finished track and schedule the next after a silence interval (`0x4600b6`).
-    if let Some(h) = &zone.music {
+    if let Some(h) = zone.music.as_ref().filter(|_| !server_holds) {
         if h.state() == kira::sound::PlaybackState::Stopped {
             zone.music = None;
+            zone.music_intro = false;
             let zm = zone.zone_music;
             zone.next_track_at =
-                next_track_time(zone, &areas.0, zm, phase, now, config.zone_music_no_delay);
+                next_track_time(&areas.0, zm, phase, now, config.zone_music_no_delay);
         }
     }
     // The deadline passed: start the next track. Under a live Lua slot the reference's pump bails
     // before reading the deadline (`0x460057`); here the start is refused at the slot and the
     // deadline stays armed until the verb rewrites it, the same outcome.
-    if zone.next_track_at.is_some_and(|t| now >= t) && zone.music.is_none() {
+    if !server_holds && zone.next_track_at.is_some_and(|t| now >= t) && zone.music.is_none() {
         let kit = zone_music_row(&areas.0, zone.zone_music).map(|m| m.sounds[phase]);
         pump_zone_music(zone, kit, |zone, kit| {
             start_music_stream(zone, &mut out, &mut kits, &assets, &config, kit)
@@ -397,6 +424,12 @@ fn zone_audio(
     if let Some(h) = &mut zone.music {
         h.set_volume(
             mixer::amp_to_db(config.category_amp(SoundCategory::Music) * zone.music_kit_vol),
+            mixer::glide(),
+        );
+    }
+    if let Some(h) = &mut zone.server_music {
+        h.set_volume(
+            mixer::amp_to_db(config.category_amp(SoundCategory::Music) * zone.server_music_kit_vol),
             mixer::glide(),
         );
     }
@@ -428,6 +461,13 @@ fn apply_music_suppression(zone: &mut ZoneAudio, suppressed: bool, now: f64) {
         return;
     }
     zone.music_suppressed = suppressed;
+    // Pausing destroys a server track first, a cut (`0x4603c5` → `0x7a5700`).
+    if suppressed {
+        if let Some(mut h) = zone.server_music.take() {
+            h.stop(mixer::fade(0));
+        }
+        zone.server_music_kit = 0;
+    }
     // A live Lua track is paused and resumed, and nothing else: `0x4603b0` writes the flag
     // (`0x4603ba`), finds the slot live at `0x4603d6`, pauses it (`0x7a5ac0`) and returns
     // (`0x4603e0`), so the zone stream is not stopped and `[0x836400]` is never rearmed.
@@ -462,12 +502,12 @@ fn zone_music_row(cat: &AreaSoundCatalog, _id: u32) -> Option<&benilla_formats::
 }
 
 /// When the next track starts after this one ends, the reference's `0x4601f0` (called only from
-/// the natural-end reap `0x4600b6`): `now` plus the row's random per-phase silence interval, or
+/// the natural-end reap `0x4600b6`): `now` plus [`music_delay_ms`] over the row's per-phase
+/// silence bounds (`0x460224`, `0x460228`), or
 /// `now` under `SoundZoneMusicNoDelay` (`0x42c010`). That CVar removes only the same-zone gap; a
 /// zone change is immediate either way (`0x460346`). Its `== 0 → now + 6000 ms` arm is not a cold
 /// start: world entry never reaches this function.
 fn next_track_time(
-    zone: &mut ZoneAudio,
     cat: &AreaSoundCatalog,
     music_row: u32,
     phase: usize,
@@ -483,15 +523,9 @@ fn next_track_time(
     let interval =
         zone_music_row(cat, music_row).map(|m| (m.silence_min[phase], m.silence_max[phase]));
     Some(match interval {
-        Some((min, max)) => now + zone.silence_ms(min, max) as f64 / 1000.0,
+        Some((min, max)) => now + f64::from(music_delay_ms(min, max)) / 1000.0,
         None => now + 6.0,
     })
-}
-
-/// Whether the music slot is already running `kit_id`, the reference's early-out at `0x460342`
-/// (`cmp [0xb06cbc],eax; je`). A `Stopped` handle not yet reaped does not hold the slot.
-fn slot_holds(music_kit: u32, kit_id: u32, slot: Option<kira::sound::PlaybackState>) -> bool {
-    music_kit == kit_id && slot.is_some_and(|s| s != kira::sound::PlaybackState::Stopped)
 }
 
 /// A zone-music change's start: the intro if off cooldown, else the zone track now, on a change
@@ -514,6 +548,7 @@ fn begin_zone_music(
             .map(|t| t + intro.min_delay_minutes as f64 * 60.0);
         if ok_at.is_none_or(|t| now >= t) && intro.sound_id != 0 && start(zone, intro.sound_id) {
             zone.intro_last.insert(intro.id, now);
+            zone.music_intro = true;
             return;
         }
     }
@@ -572,42 +607,71 @@ fn start_music_stream(
     if zone.lua_slot_live() {
         return false;
     }
-    let Some(mixer_ref) = out.mixer.as_mut() else {
+    let Some((h, kit_vol, path)) = open_music_kit(zone, out, kits, assets, config, kit_id) else {
         return false;
     };
-    let Some((path, kit_vol)) = kits.pick_stream(kit_id) else {
-        return false;
-    };
-    // Every file FMOD opens is a loose-flagged open (`0x7a8860`).
+    // One stream per slot: a dropped kira handle keeps playing, so the old one fades.
+    if let Some(mut outgoing) = zone.music.replace(h) {
+        outgoing.stop(mixer::fade(MUSIC_FADE_OUT_MS));
+    }
+    zone.music_path = path;
+    zone.music_kit = kit_id;
+    zone.music_kit_vol = kit_vol;
+    zone.music_intro = false;
+    true
+}
+
+/// Open a music kit's stream at its volume under the Music slider: the kit's next file
+/// (`0x45bb70`), a loose-flagged open (`0x7a8860`) and the play; the handle and the kit's volume,
+/// or `None` when nothing started, a bad file reported once.
+fn open_music_kit(
+    zone: &mut ZoneAudio,
+    out: &mut SoundOutput,
+    kits: &mut SoundKits,
+    assets: &WorldAssets,
+    config: &SoundConfig,
+    kit_id: u32,
+) -> Option<(StreamingSoundHandle<FromFileError>, f32, String)> {
+    out.mixer.as_ref()?;
+    let (path, kit_vol) = kits.pick_stream(kit_id)?;
+    let h = open_music_file(zone, out, assets, config, &path, kit_vol)?;
+    Some((h, kit_vol, path))
+}
+
+/// Open one music file at `kit_vol` under the Music slider: a loose-flagged open (`0x7a8860`) and
+/// the play; `None` when nothing started, a bad file reported once.
+fn open_music_file(
+    zone: &mut ZoneAudio,
+    out: &mut SoundOutput,
+    assets: &WorldAssets,
+    config: &SoundConfig,
+    path: &str,
+    kit_vol: f32,
+) -> Option<StreamingSoundHandle<FromFileError>> {
+    let mixer_ref = out.mixer.as_mut()?;
     let bytes = assets
-        .read_file_or_loose(&path)
+        .read_file_or_loose(path)
         .ok_or_else(|| anyhow::anyhow!("not in the loose files or the patch chain"));
     let data = match bytes.and_then(mixer::stream_from_bytes) {
         Ok(d) => d,
         Err(e) => {
-            if first_unplayable(zone, &path) {
-                warn!("zone music: {path} — {e:#}");
+            if first_unplayable(zone, path) {
+                warn!("music: {path} — {e:#}");
             }
-            return false;
+            return None;
         }
     };
     let start_amp = config.category_amp(SoundCategory::Music) * kit_vol;
     match mixer_ref.play_stream(data.volume(mixer::amp_to_db(start_amp))) {
         Ok(h) => {
-            info!("zone music: {path}");
-            // One stream per slot: a dropped kira handle keeps playing, so the old one fades.
-            if let Some(mut outgoing) = zone.music.replace(h) {
-                outgoing.stop(mixer::fade(MUSIC_FADE_OUT_MS));
-            }
-            zone.music_kit = kit_id;
-            zone.music_kit_vol = kit_vol;
-            true
+            info!("music: {path}");
+            Some(h)
         }
         Err(e) => {
-            if first_unplayable(zone, &path) {
-                warn!("zone music: {path} — {e:#}");
+            if first_unplayable(zone, path) {
+                warn!("music: {path} — {e:#}");
             }
-            false
+            None
         }
     }
 }
@@ -644,10 +708,16 @@ fn set_lua_music(
     }
 }
 
-/// `0x460450`'s shared head: fade this slot out over 4.0 s (`0x460480`, so a second `PlayMusic`
-/// crossfades), clear it (`0x460485`) and rearm the zone pump. It never touches the zone track:
-/// `[0xb06cc4]` appears only past the NULL branch.
+/// `0x460450`'s shared head: fade the server track over 3.0 s and this slot over 4.0 s (`0x460480`,
+/// so a second `PlayMusic` crossfades), clear both (`0x46046f`, `0x460485`) and rearm the zone
+/// pump. It never touches the zone track: `[0xb06cc4]` appears only past the NULL branch.
 fn take_lua_music_slot(zone: &mut ZoneAudio, now: f64) {
+    // The server track first, over 3.0 s (`0x460453`-`0x46046f`).
+    if let Some(mut h) = zone.server_music.take() {
+        h.stop(mixer::fade(SERVER_MUSIC_FADE_MS));
+        info!("server music: faded out by a Lua music verb");
+    }
+    zone.server_music_kit = 0;
     if let Some(mut h) = zone.lua_music.take() {
         h.stop(mixer::fade(MUSIC_FADE_OUT_MS));
         info!("Lua music: stopped");
@@ -963,8 +1033,102 @@ fn lua_music(
     })
 }
 
+/// Whether an area change only records its music row (`0x460306`), leaving the zone slot and the
+/// schedule alone: a Lua or a server track plays (`0x46031e`, `0x460327`). The intro, which the
+/// reference plays on a slot of its own (`0x461260`), is not tried, as here it shares the zone
+/// track's.
+fn record_zone_music_only(zone: &mut ZoneAudio, music_row: u32) -> bool {
+    let held = zone.lua_slot_live() || zone.server_music_kit != 0;
+    if held {
+        zone.zone_music = music_row;
+    }
+    held
+}
+
+/// The zone pump's server leg, `live` the server slot's state (`None` empty): a live track holds
+/// zone music (`0x46006e`); one that ended schedules the zone track [`server_music_return_secs`]
+/// on and holds this frame too (`0x46009c`).
+fn server_track_holds(zone: &mut ZoneAudio, live: Option<bool>, now: f64) -> bool {
+    match live {
+        None => false,
+        Some(true) => true,
+        Some(false) => {
+            zone.next_track_at = Some(now + server_music_return_secs());
+            true
+        }
+    }
+}
+
+/// Whether `0x460520` refuses a server track before it opens one: a zone intro holds its slot
+/// (`0x460523`), a Lua track plays (`0x46052c`), or music is paused (`0x460535`), here a
+/// cinematic or `EnableMusic` off.
+fn server_push_refused(zone: &ZoneAudio, config: &SoundConfig) -> bool {
+    zone.music_intro || zone.lua_slot_live() || config.music_suppressed || !config.music_enabled
+}
+
+/// The open's duplicate check (`0x7a66c4`-`0x7a6706`), which `0x45ce60` asks for with the row's
+/// flag 0x20 (`0x458f40`): it fails while a sound of the same file name is live and not on the fade
+/// list, and `0x460520` then returns with the playing track untouched (`0x460552`). `live` is the
+/// music streams' files and states.
+fn duplicate_refused(
+    row_flags: u32,
+    path: &str,
+    live: &[(&str, kira::sound::PlaybackState)],
+) -> bool {
+    use kira::sound::PlaybackState as S;
+    row_flags & benilla_formats::sound_kit_flags::NO_DUPLICATES != 0
+        && live.iter().any(|&(p, s)| {
+            p.eq_ignore_ascii_case(path) && matches!(s, S::Playing | S::Paused | S::WaitingToResume)
+        })
+}
+
+/// `0x460520`: open the server's kit as music (`0x45ce60`) and, when it opens, fade the previous
+/// server track and the zone track over 3.0 s, clear the zone slot (`0x460582`) and keep the new
+/// track.
+fn play_server_music(
+    zone: &mut ZoneAudio,
+    out: &mut SoundOutput,
+    kits: &mut SoundKits,
+    assets: &WorldAssets,
+    config: &SoundConfig,
+    kit_id: u32,
+) -> bool {
+    if server_push_refused(zone, config) || out.mixer.is_none() {
+        return false;
+    }
+    let Some((path, kit_vol)) = kits.pick_stream(kit_id) else {
+        return false;
+    };
+    let flags = kits.catalog().get(kit_id).map_or(0, |k| k.flags);
+    let live: Vec<(&str, kira::sound::PlaybackState)> = [
+        (zone.server_music.as_ref(), zone.server_music_path.as_str()),
+        (zone.music.as_ref(), zone.music_path.as_str()),
+    ]
+    .into_iter()
+    .filter_map(|(h, p)| h.map(|h| (p, h.state())))
+    .collect();
+    if duplicate_refused(flags, &path, &live) {
+        return false;
+    }
+    let Some(h) = open_music_file(zone, out, assets, config, &path, kit_vol) else {
+        return false;
+    };
+    info!("server music: kit {kit_id}");
+    if let Some(mut old) = zone.server_music.replace(h) {
+        old.stop(mixer::fade(SERVER_MUSIC_FADE_MS));
+    }
+    zone.server_music_kit = kit_id;
+    zone.server_music_kit_vol = kit_vol;
+    zone.server_music_path = path;
+    if let Some(mut h) = zone.music.take() {
+        h.stop(mixer::fade(SERVER_MUSIC_FADE_MS));
+    }
+    zone.music_watch.reset();
+    true
+}
+
 /// Server-pushed sounds (`SMSG_PLAY_SOUND`/`PLAY_MUSIC`/`PLAY_OBJECT_SOUND`): kits go through
-/// the kit player, music takes the zone music slot until it ends.
+/// the kit player, music takes the server's slot ([`play_server_music`]).
 fn server_sounds(
     mut msgs: MessageReader<ServerSoundMessage>,
     mut zone: NonSendMut<ZoneAudio>,
@@ -990,15 +1154,7 @@ fn server_sounds(
     for m in msgs.read() {
         match m.kind {
             ServerSoundKind::Music => {
-                // A push for the track already on the slot is a no-op.
-                if slot_holds(
-                    zone.music_kit,
-                    m.sound_id,
-                    zone.music.as_ref().map(|h| h.state()),
-                ) {
-                    continue;
-                }
-                start_music_stream(&mut zone, &mut out, &mut kits, &assets, &config, m.sound_id);
+                play_server_music(&mut zone, &mut out, &mut kits, &assets, &config, m.sound_id);
             }
             ServerSoundKind::Sound2d | ServerSoundKind::ObjectSound => {
                 // At the source entity when it is streamed to us; otherwise flat.
@@ -1042,7 +1198,7 @@ fn server_sounds(
 
 /// `OnExit(InWorld)`: the world soundscape dies with the world. The reference destroys its world
 /// sound state outright; here the beds stop on a 250 ms declick, not the musical fades.
-/// `intro_last` and the RNG survive a relog, as process-global statics do in the reference.
+/// `intro_last` survives a relog, as process-global statics do in the reference.
 fn leave_world(mut zone: NonSendMut<ZoneAudio>) {
     stop_world_soundscape(&mut zone, "left world");
     // The Lua slot only here: a loading cover leaves the caller's track playing.
@@ -1054,10 +1210,16 @@ fn leave_world(mut zone: NonSendMut<ZoneAudio>) {
 fn stop_world_soundscape(zone: &mut ZoneAudio, reason: &str) {
     // Fast enough to read as a cut, long enough not to pop.
     const WORLD_TEARDOWN_FADE_MS: u64 = 250;
-    let had = zone.music.is_some() || zone.ambience.is_some();
+    let had = zone.music.is_some() || zone.ambience.is_some() || zone.server_music.is_some();
     if let Some(mut h) = zone.music.take() {
         h.stop(mixer::fade(WORLD_TEARDOWN_FADE_MS));
     }
+    // The teardown destroys the server track with the zone's (`0x460370`).
+    if let Some(mut h) = zone.server_music.take() {
+        h.stop(mixer::fade(WORLD_TEARDOWN_FADE_MS));
+    }
+    zone.server_music_kit = 0;
+    zone.music_intro = false;
     // The next track starts at position 0, behind this one's baseline.
     zone.music_watch.reset();
     if let Some(mut h) = zone.ambience.take() {
@@ -1088,6 +1250,7 @@ fn stop_world_soundscape(zone: &mut ZoneAudio, reason: &str) {
 fn report_stream_voices(zone: NonSend<ZoneAudio>, mut out: NonSendMut<super::SoundOutput>) {
     let live = |s: kira::sound::PlaybackState| s != kira::sound::PlaybackState::Stopped;
     out.zone_streams = usize::from(zone.music.as_ref().is_some_and(|h| live(h.state())))
+        + usize::from(zone.server_music.as_ref().is_some_and(|h| live(h.state())))
         + usize::from(zone.lua_music.as_ref().is_some_and(|h| live(h.state())))
         + usize::from(zone.ambience.as_ref().is_some_and(|h| live(h.state())));
 }
@@ -1123,16 +1286,19 @@ pub(super) fn plugin(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_music_suppression, begin_bed_open, begin_zone_music, first_unplayable, forced_bed,
-        open_bed, poll_bed_open, pump_zone_music, reap_stopped_bed, slot_holds, start_bed,
-        stop_world_soundscape, take_lua_music_slot, OpenedBed, ZoneAudio,
-        CINEMATIC_MUSIC_RESUME_SECS, LUA_MUSIC_SCHEDULE_SECS,
+        apply_music_suppression, begin_bed_open, begin_zone_music, duplicate_refused,
+        first_unplayable, forced_bed, music_delay_ms, next_track_time, open_bed, poll_bed_open,
+        pump_zone_music, reap_stopped_bed, record_zone_music_only, server_music_return_secs,
+        server_push_refused, server_track_holds, start_bed, stop_world_soundscape,
+        take_lua_music_slot, OpenedBed, ZoneAudio, CINEMATIC_MUSIC_RESUME_SECS,
+        LUA_MUSIC_SCHEDULE_SECS,
     };
     use crate::sound::kit::SoundKits;
     use crate::sound::mixer;
+    use crate::sound::SoundConfig;
     use benilla_formats::SoundKitCatalog;
     use kira::sound::streaming::StreamingSoundData;
-    use kira::sound::{FromFileError, PlaybackState};
+    use kira::sound::FromFileError;
     use std::sync::{mpsc, Arc, Mutex};
     use std::time::{Duration, Instant};
 
@@ -1144,12 +1310,17 @@ mod tests {
         tried: Vec<usize>,
         /// Picks to make first, then the RNG's.
         script: Vec<usize>,
+        /// xorshift32 for the unscripted picks.
+        rng: u32,
     }
 
     impl Kit {
-        fn start(&mut self, zone: &mut ZoneAudio, _kit: u32) -> bool {
+        fn start(&mut self, _zone: &mut ZoneAudio, _kit: u32) -> bool {
             let pick = if self.script.is_empty() {
-                zone.rand() as usize % self.files
+                self.rng ^= self.rng << 13;
+                self.rng ^= self.rng >> 17;
+                self.rng ^= self.rng << 5;
+                self.rng as usize % self.files
             } else {
                 self.script.remove(0)
             };
@@ -1180,6 +1351,7 @@ mod tests {
             present: vec![2],
             tried: vec![],
             script: vec![0, 1],
+            rng: 0x1234_5677,
         };
         frames(&mut zone, &mut kit, 600, || false);
         assert_eq!(kit.tried.last(), Some(&2), "a later frame found the track");
@@ -1201,6 +1373,7 @@ mod tests {
             present: vec![],
             tried: vec![],
             script: vec![0],
+            rng: 0x1234_5677,
         };
         begin_zone_music(&mut zone, None, Some(7), 5.0, |z, k| kit.start(z, k));
         assert_eq!(kit.tried.len(), 1, "the change starts inline");
@@ -1227,6 +1400,7 @@ mod tests {
             present: vec![0],
             tried: vec![],
             script: vec![],
+            rng: 0x1234_5677,
         };
         begin_zone_music(&mut zone, None, Some(7), 5.0, |z, k| kit.start(z, k));
         assert_eq!(zone.next_track_at, None);
@@ -1402,13 +1576,140 @@ mod tests {
         );
     }
 
-    /// 8440 is the Darkmoon Faire music the server re-pushes every 5 s.
+    /// `0x460520`'s refusals ahead of the open: a zone intro on its slot (`0x460523`), a Lua
+    /// track (`0x46052c`) and paused music (`0x460535`).
     #[test]
-    fn repeat_music_push_only_no_ops_while_the_track_plays() {
-        assert!(slot_holds(8440, 8440, Some(PlaybackState::Playing)));
-        assert!(!slot_holds(8440, 8440, Some(PlaybackState::Stopped)));
-        assert!(!slot_holds(8440, 8440, None));
-        assert!(!slot_holds(8440, 4123, Some(PlaybackState::Playing)));
+    fn a_server_track_is_refused_by_the_intro_the_lua_track_and_the_pause() {
+        let config = SoundConfig::default();
+        let zone = ZoneAudio::default();
+        assert!(!server_push_refused(&zone, &config));
+        let intro = ZoneAudio {
+            music_intro: true,
+            ..ZoneAudio::default()
+        };
+        assert!(server_push_refused(&intro, &config));
+        let lua = ZoneAudio {
+            lua_music_path: Some("Sound\\Music\\x.mp3".into()),
+            ..ZoneAudio::default()
+        };
+        assert!(server_push_refused(&lua, &config));
+        let paused = SoundConfig {
+            music_suppressed: true,
+            ..SoundConfig::default()
+        };
+        assert!(server_push_refused(&zone, &paused));
+        let off = SoundConfig {
+            music_enabled: false,
+            ..SoundConfig::default()
+        };
+        assert!(server_push_refused(&zone, &off));
+    }
+
+    /// The open's duplicate check (`0x7a66c4`-`0x7a6706`), asked for by a row's flag 0x20
+    /// (`0x458f40`): kit 8440, the Darkmoon Faire's (flags 0x20), refuses its repeat while its
+    /// file plays, a row without the flag opens afresh, and a track fading out does not count, so
+    /// a push during the 3 s fade opens fresh.
+    #[test]
+    fn a_repeat_push_is_refused_only_by_a_no_duplicates_row_whose_file_plays() {
+        use kira::sound::PlaybackState as S;
+        const FAIRE: &str = "Sound\\Music\\WorldEvents\\DarkMoonFaire_2.mp3";
+        let playing = [(FAIRE, S::Playing)];
+        assert!(duplicate_refused(0x20, FAIRE, &playing), "the 0x20 repeat");
+        assert!(
+            duplicate_refused(0x20, &FAIRE.to_ascii_uppercase(), &playing),
+            "the name hash ignores case"
+        );
+        assert!(
+            !duplicate_refused(0, FAIRE, &playing),
+            "a plain row restarts"
+        );
+        assert!(
+            !duplicate_refused(0x20, FAIRE, &[(FAIRE, S::Stopping)]),
+            "a fading track does not count"
+        );
+        assert!(
+            !duplicate_refused(0x20, FAIRE, &[("Sound\\Music\\other.mp3", S::Playing)]),
+            "another file opens"
+        );
+        assert!(!duplicate_refused(0x20, FAIRE, &[]), "nothing plays");
+    }
+
+    /// `0x460100(30000, 60000)` is 32 665 ms, its generator reseeded with 0 on every call; with
+    /// `hi ≤ lo` it is `hi`.
+    #[test]
+    fn the_music_delay_is_the_reseeded_draw() {
+        assert_eq!(music_delay_ms(30_000, 60_000), 32_665);
+        assert_eq!(music_delay_ms(5_000, 5_000), 5_000);
+        assert_eq!(music_delay_ms(9_000, 4_000), 4_000);
+        assert!((server_music_return_secs() - 32.665).abs() < 1e-9);
+    }
+
+    /// A zone track's silence is `0x460100` over the row's bounds (`0x46022d`): the same point
+    /// every time, 8.88 % of the way from the minimum, and the maximum when it is not above the
+    /// minimum.
+    #[test]
+    fn the_zone_silence_is_the_same_fixed_point_every_time() {
+        let cat = benilla_formats::AreaSoundCatalog::zone_music_for_tests(
+            7,
+            [180_000, 1_000],
+            [300_000, 500],
+        );
+        let at = |phase| next_track_time(&cat, 7, phase, 10.0, false);
+        assert_eq!(
+            at(0),
+            Some(10.0 + f64::from(music_delay_ms(180_000, 300_000)) / 1000.0)
+        );
+        assert_eq!(at(0), at(0), "no draw moves it");
+        assert_eq!(music_delay_ms(180_000, 300_000), 190_661);
+        assert_eq!(at(1), Some(10.5), "hi ≤ lo is hi");
+        assert_eq!(next_track_time(&cat, 7, 0, 10.0, true), Some(10.0));
+    }
+
+    /// A live server track holds the zone pump (`0x46006e`); its end schedules the zone track
+    /// 32.665 s on and holds that frame (`0x460096`); an empty slot holds nothing.
+    #[test]
+    fn a_server_track_holds_the_zone_pump_and_returns_it_late() {
+        let mut zone = ZoneAudio {
+            next_track_at: Some(1.0),
+            ..ZoneAudio::default()
+        };
+        assert!(!server_track_holds(&mut zone, None, 50.0));
+        assert!(server_track_holds(&mut zone, Some(true), 50.0));
+        assert_eq!(
+            zone.next_track_at,
+            Some(1.0),
+            "a live track leaves the schedule"
+        );
+        assert!(server_track_holds(&mut zone, Some(false), 50.0));
+        assert_eq!(zone.next_track_at, Some(50.0 + 32.665));
+    }
+
+    /// An area change under a Lua or server track records the row and touches nothing else
+    /// (`0x46031e`, `0x460327`).
+    #[test]
+    fn an_area_change_under_a_server_track_records_the_row_only() {
+        let mut zone = ZoneAudio {
+            zone_music: 1,
+            server_music_kit: 8440,
+            next_track_at: Some(9.0),
+            ..ZoneAudio::default()
+        };
+        assert!(record_zone_music_only(&mut zone, 2));
+        assert_eq!((zone.zone_music, zone.next_track_at), (2, Some(9.0)));
+        let mut free = ZoneAudio::default();
+        assert!(!record_zone_music_only(&mut free, 2));
+        assert_eq!(free.zone_music, 0, "the caller's change runs");
+    }
+
+    /// `PlayMusic` and `StopMusic` empty the server slot ahead of their own (`0x46046f`).
+    #[test]
+    fn the_lua_music_verbs_empty_the_server_slot() {
+        let mut zone = ZoneAudio {
+            server_music_kit: 8440,
+            ..ZoneAudio::default()
+        };
+        take_lua_music_slot(&mut zone, 0.0);
+        assert_eq!(zone.server_music_kit, 0);
     }
 
     /// A ghost hears its own bed whatever the water does, a swimmer the underwater one, and a

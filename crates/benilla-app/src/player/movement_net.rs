@@ -24,6 +24,8 @@ const OUTBOUND_FLAG_MASK: u32 = move_flags::FORWARD
     | move_flags::STRAFE_RIGHT
     | move_flags::TURN_LEFT
     | move_flags::TURN_RIGHT
+    | move_flags::PITCH_UP
+    | move_flags::PITCH_DOWN
     | move_flags::WALK_MODE
     | move_flags::FALLING
     | move_flags::FALLING_FAR
@@ -83,7 +85,8 @@ pub(super) struct ArcEdges {
 /// Whether a move message ends the mover's precast: the send `0x60e0a0` clears it (`0x60e15d`)
 /// ahead of every opcode but those it sends at once, which for our moves are the stops
 /// (0xb7, 0xba), the turns (0xbc to 0xbe) and the facing (0xda), class 0 of its table
-/// `0x60e408`. The heartbeat (0xee) and the landing (0xc9) never pass it: their sends call
+/// `0x60e408`, and the pitch sends (0xbf to 0xc1, 0xdb), class 1, at once while swimming
+/// (`0x60e0e1`). The heartbeat (0xee) and the landing (0xc9) never pass it: their sends call
 /// `0x600a30` directly (`0x616755`, `0x615e47`, `0x617162`, `0x5e221e`; `0x602e13`).
 fn ends_precast(kind: MoveKind) -> bool {
     !matches!(
@@ -93,7 +96,11 @@ fn ends_precast(kind: MoveKind) -> bool {
             | MoveKind::StartTurnLeft
             | MoveKind::StartTurnRight
             | MoveKind::StopTurn
+            | MoveKind::StartPitchUp
+            | MoveKind::StartPitchDown
+            | MoveKind::StopPitch
             | MoveKind::SetFacing
+            | MoveKind::SetPitch
             | MoveKind::Heartbeat
             | MoveKind::FallLand
     )
@@ -206,6 +213,11 @@ pub(super) fn stream_self_movement(
                 );
             }
             super::move_trace::sent($kind, wire_flags, facing, wow_pos);
+            // The build's copies (`0x600a5d`-`0x600a72`).
+            player.sent_facing = facing;
+            if wire_flags & move_flags::SWIMMING != 0 {
+                player.sent_pitch = player.mover_pitch;
+            }
             let _ = sender.send(ClientCommand::Move {
                 kind: $kind,
                 flags: wire_flags,
@@ -249,6 +261,11 @@ pub(super) fn stream_self_movement(
     } else if removed & move_flags::SWIMMING != 0 {
         send_move!(MoveKind::StopSwim);
     }
+    // The pitch keys' starts and stop go out as the emitter queued them (tags 0xb to 0xd), not
+    // off the flag delta: StopSwim clears the pitch bits with no stop of their own (`0x7c6e80`).
+    if let Some(kind) = player.pitch_send.take() {
+        send_move!(kind);
+    }
     // `SET_WALK_MODE` (0xc3) and `SET_RUN_MODE` (0xc2) go out the frame the bit flips, airborne or
     // standing still: the reference's `ToggleRun` enqueues its own event, since the broadcaster
     // gates on the locomotion nibble (`0x61a99d` test al,0xf) and would drop it.
@@ -283,12 +300,26 @@ pub(super) fn stream_self_movement(
     } else if removed & TURN != 0 && wire_flags & TURN == 0 {
         send_move!(MoveKind::StopTurn);
     }
-    // One `SET_FACING` per frame the facing changed, moving or not, with no rate limit: the
-    // reference drains each facing set into a send (`0x615fc6` push `0xda`). None while a turn bit
-    // is set, which already rotates the mover for observers, and not gated on `sent`: the facing
-    // report and the broadcaster are independent emitters.
-    if wire_flags & TURN == 0 && facing != player.last_facing {
+    // The facing set a mouse turn queues each frame the facing changed (`0x619860`, send byte 1
+    // at `0x619875`), drained into the send with 0xda (`0x615fae`-`0x615fd2`), which passes it
+    // only under the facing throttle ([`facing_set_passes`]): a smaller change rides the next
+    // packet. None while a turn bit is set, which already rotates the mover for observers, and
+    // not gated on `sent`: the facing set and the broadcaster are independent emitters.
+    let swimming = wire_flags & move_flags::SWIMMING != 0;
+    if wire_flags & TURN == 0
+        && facing != player.last_facing
+        && facing_set_passes(player, facing, swimming)
+    {
         send_move!(MoveKind::SetFacing);
+    }
+    // The mouse-look pitch set, drained after the facing set its hand-off queued first
+    // (`0x510582`, `0x51058e`). `MSG_MOVE_SET_PITCH` is class 1, sent only while swimming
+    // (`0x60e0d4`), under the same throttle.
+    if std::mem::take(&mut player.set_pitch_due)
+        && swimming
+        && facing_set_passes(player, facing, swimming)
+    {
+        send_move!(MoveKind::SetPitch);
     }
     // Boarding or leaving a deck has no opcode of its own, so a heartbeat carries the flip that
     // frame if nothing else went out.
@@ -356,6 +387,16 @@ fn stream_skipped_time(sender: &Sender<ClientCommand>, player: &mut Player, skip
     player.last_heartbeat += gated_ms as f32 / 1000.0;
 }
 
+/// `0x60e0a0`'s throttle on the facing and pitch sets, 0xda and 0xdb (`0x60e1da`-`0x60e22f`):
+/// the facing 0.1 or more from what the last built message carried (`[0x80c408]`), or, for a
+/// swimmer, the pitch; an unordered difference sends.
+fn facing_set_passes(player: &Player, facing: f32, swimming: bool) -> bool {
+    const STEP: f32 = 0.1;
+    let passes = |d: f32| d.abs() >= STEP || d.is_nan();
+    passes(facing - player.sent_facing)
+        || (swimming && passes(player.mover_pitch - player.sent_pitch))
+}
+
 /// Sends one flag-less `MSG_MOVE_STOP` when the controller stops driving the avatar (free-fly),
 /// as nothing else would clear the flags observers extrapolate from; a no-op once stopped.
 pub(super) fn park_mover(sender: &Sender<ClientCommand>, player: &mut Player) {
@@ -378,6 +419,7 @@ pub(super) fn park_mover(sender: &Sender<ClientCommand>, player: &mut Player) {
     });
     player.move_flags = 0;
     player.last_facing = facing;
+    player.sent_facing = facing;
 }
 
 /// The rider's deck-local pose for the `ON_TRANSPORT` tail, or `None` off a deck. `bevy_to_wow` is
@@ -559,6 +601,141 @@ mod tests {
         stream_skipped_time(&tx, &mut unnamed, gated);
         assert!(rx.try_recv().is_err());
         assert_eq!(unnamed.last_heartbeat, 0.0, "no send, no push");
+    }
+
+    /// The pitch keys' sends go out as queued (`0x61a240`, `0x61a2e0`: 0xbf, 0xc0, 0xc1) with the
+    /// swimmer's pitch and its pitch bit, and none ends the precast (`0x60e0e1`). StopSwim
+    /// clears the bit with no 0xc1 of its own (`0x7c6e80`).
+    #[test]
+    fn the_pitch_keys_send_their_own_opcodes() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut player = Player::default();
+        let arc = || ArcEdges {
+            jumped: false,
+            wire_launch: false,
+            air_nudged: false,
+            landed: false,
+            fall_time: 0,
+        };
+        let send = |player: &mut Player, flags: u32| {
+            stream_self_movement(
+                &tx,
+                player,
+                flags,
+                0.25,
+                arc(),
+                0.0,
+                &[],
+                None,
+                None,
+                no_skip(),
+            )
+        };
+        send(&mut player, move_flags::SWIMMING);
+        while rx.try_recv().is_ok() {}
+        let up = move_flags::SWIMMING | move_flags::PITCH_UP;
+        player.pitch_send = Some(MoveKind::StartPitchUp);
+        assert!(!send(&mut player, up), "no precast ends");
+        let ClientCommand::Move {
+            kind, flags, pitch, ..
+        } = rx.try_recv().expect("the start goes out")
+        else {
+            panic!("expected a Move command");
+        };
+        assert_eq!((kind, kind.opcode()), (MoveKind::StartPitchUp, 0x00BF));
+        assert_eq!((flags, pitch), (up, 0.25));
+        assert!(
+            rx.try_recv().is_err(),
+            "one packet, not a flag-delta second"
+        );
+        assert_eq!(MoveKind::StartPitchDown.opcode(), 0x00C0);
+        player.pitch_send = Some(MoveKind::StopPitch);
+        send(&mut player, move_flags::SWIMMING);
+        let Ok(ClientCommand::Move { kind, .. }) = rx.try_recv() else {
+            panic!("expected the stop");
+        };
+        assert_eq!((kind, kind.opcode()), (MoveKind::StopPitch, 0x00C1));
+        // Out of the water with the bit set: StopSwim alone.
+        send(&mut player, up);
+        while rx.try_recv().is_ok() {}
+        send(&mut player, 0);
+        let kinds: Vec<_> = rx
+            .try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::Move { kind, .. } => Some(kind),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(kinds, [MoveKind::StopSwim]);
+    }
+
+    /// The mouse-look pitch set (`0x615bc0`, opcode 0xdb) goes out only while swimming
+    /// (`0x60e0d4`) and only past the 0.1 throttle against the last built message's facing and
+    /// pitch (`0x60e1ea`-`0x60e22f`), so a drag sends one per tenth of a radian, not one per
+    /// motion; a facing set built first in the frame carries the pitch and suppresses it. None
+    /// ends the precast.
+    #[test]
+    fn the_mouselook_pitch_set_goes_out_under_its_throttle() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut player = Player::default();
+        let arc = || ArcEdges {
+            jumped: false,
+            wire_launch: false,
+            air_nudged: false,
+            landed: false,
+            fall_time: 0,
+        };
+        let frame = |player: &mut Player, flags: u32, pitch: f32| {
+            super::super::swim::hand_off_pitch(player, pitch);
+            let ended = stream_self_movement(
+                &tx,
+                player,
+                flags,
+                pitch,
+                arc(),
+                0.0,
+                &[],
+                None,
+                None,
+                no_skip(),
+            );
+            let sent: Vec<_> = rx
+                .try_iter()
+                .filter_map(|c| match c {
+                    ClientCommand::Move {
+                        kind, flags, pitch, ..
+                    } => Some((kind, flags, pitch)),
+                    _ => None,
+                })
+                .collect();
+            (sent, ended)
+        };
+        let swim = move_flags::SWIMMING;
+        let _ = frame(&mut player, swim, 0.0);
+        let (sent, ended) = frame(&mut player, swim, 0.3);
+        assert_eq!(sent, [(MoveKind::SetPitch, swim, 0.3)]);
+        assert_eq!(MoveKind::SetPitch.opcode(), 0x00DB);
+        assert!(!ended, "no precast ends");
+        assert!(
+            frame(&mut player, swim, 0.35).0.is_empty(),
+            "under the throttle"
+        );
+        assert_eq!(
+            frame(&mut player, swim, 0.45).0,
+            [(MoveKind::SetPitch, swim, 0.45)]
+        );
+        player.face_yaw = 1.0;
+        assert_eq!(
+            frame(&mut player, swim, 0.8).0,
+            [(MoveKind::SetFacing, swim, 0.8)],
+            "the facing set carries the pitch first"
+        );
+        let dry = frame(&mut player, 0, 1.2).0;
+        assert!(
+            dry.iter().all(|s| s.0 != MoveKind::SetPitch),
+            "dry, never: {dry:?}"
+        );
+        assert!(!player.set_pitch_due, "the offer is spent");
     }
 
     #[test]
@@ -1021,8 +1198,9 @@ mod tests {
             .collect();
         assert_eq!(
             kinds,
-            vec![MoveKind::StopTurn, MoveKind::SetFacing],
-            "the turn closes, then the facing reports — the frame already sent, so no heartbeat"
+            vec![MoveKind::StopTurn],
+            "the turn closes carrying the new facing, which the facing set then has no 0.1 to \
+             report, and the frame already sent, so no heartbeat"
         );
     }
 
@@ -1152,7 +1330,7 @@ mod tests {
     }
 
     #[test]
-    fn a_transition_does_not_swallow_the_facing_report() {
+    fn a_transition_carries_the_facing_the_throttle_holds() {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut player = Player {
             move_flags: move_flags::FORWARD,
@@ -1184,7 +1362,48 @@ mod tests {
                 _ => panic!("expected Move commands"),
             })
             .collect();
-        assert_eq!(kinds, vec![MoveKind::StartStrafeRight, MoveKind::SetFacing]);
+        assert_eq!(
+            kinds,
+            vec![MoveKind::StartStrafeRight],
+            "the strafe start carries the new facing, so the throttled facing set stays home"
+        );
+    }
+
+    /// A mouse turn of 0.03 rad a frame sends `SET_FACING` only once the facing is 0.1 from the
+    /// last built message's (`0x60e1f0`-`0x60e208`), not once per frame: frames 4 and 8 of 10.
+    #[test]
+    fn a_slow_mouse_turn_sends_a_facing_set_per_tenth_of_a_radian() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut player = Player::default();
+        let mut sent_on = Vec::new();
+        for k in 1..=10 {
+            player.face_yaw = k as f32 * 0.03;
+            stream_self_movement(
+                &tx,
+                &mut player,
+                0,
+                0.0,
+                ArcEdges {
+                    jumped: false,
+                    wire_launch: false,
+                    air_nudged: false,
+                    landed: false,
+                    fall_time: 0,
+                },
+                0.0,
+                &[],
+                None,
+                None,
+                no_skip(),
+            );
+            for c in rx.try_iter() {
+                if let ClientCommand::Move { kind, .. } = c {
+                    assert_eq!(kind, MoveKind::SetFacing);
+                    sent_on.push(k);
+                }
+            }
+        }
+        assert_eq!(sent_on, [4, 8]);
     }
 
     /// One idle frame at `pos`.
