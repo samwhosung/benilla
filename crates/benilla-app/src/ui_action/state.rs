@@ -201,7 +201,8 @@ struct PetBookLeg<'a> {
     player: Option<&'a ObjectStore>,
     /// The pet's object when the pet gate holds, else `None`.
     pet: Option<&'a ObjectStore>,
-    skill_lines: Option<&'a benilla_formats::SkillLineCatalog>,
+    /// What the player's level for the spell reads, its cost's level term.
+    skills: crate::spell::PlayerSkills<'a>,
     mods: &'a crate::spell::SpellModifiers,
     /// The pet's own history, the list at `0xcecb04`.
     cooldowns: &'a Cooldowns,
@@ -226,7 +227,7 @@ fn pet_book_state(leg: PetBookLeg) -> ActionState {
         let cost = usable::power_cost(
             leg.d,
             player,
-            leg.skill_lines,
+            leg.skills,
             leg.mods,
             &mut crate::spell::Unrecorded,
         );
@@ -620,7 +621,11 @@ impl ActionStates<'_, '_> {
                             spell,
                             player: me.map(|(s, _)| s),
                             pet,
-                            skill_lines: skill_catalog,
+                            skills: crate::spell::PlayerSkills {
+                                lines: skill_catalog,
+                                spells: spells.as_deref().map(|s| &s.catalog),
+                                items: Some(items),
+                            },
                             mods: spell_mods,
                             cooldowns: &bar.cooldowns,
                             now,

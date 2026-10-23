@@ -300,6 +300,33 @@ pub struct SpellCatalog {
     /// Spell id to the `Languages.dbc` id its first effect declares.
     declared_language: HashMap<u32, u32>,
     dispel_types: SpellDispelTypes,
+    /// The weapon-skill spell by weapon subclass ([`weapon_skill_table`]), `0xc4d730`.
+    weapon_skills: Vec<u32>,
+}
+
+/// The weapon subclasses the weapon-skill table holds: `0x5e2db0` sizes it one past the highest
+/// class-2 subclass in `ItemSubClass.dbc`, 20 (Fishing Pole) at build 5875.
+const WEAPON_SUBCLASSES: u32 = 21;
+
+/// The table `0x5e2ca0` builds at world entry from weapon subclass to the spell that teaches its
+/// skill (`0xc4d730`, data at `0xc4d738`): of the spells with `Attributes & 0x40`, each with
+/// `EquippedItemClass` 2 and a single subclass bit (`0x5e2e10`) writes its id for that subclass,
+/// walking the rows from last to first, so the first row wins (`0x5e2d30`-`0x5e2d9a`). Spell.dbc's
+/// rows run in id order. A subclass no spell names holds 0.
+fn weapon_skill_table(spells: &HashMap<u32, SpellDisplay>) -> Vec<u32> {
+    let mut table = vec![0; WEAPON_SUBCLASSES as usize];
+    let mut ids: Vec<u32> = spells.keys().copied().collect();
+    ids.sort_unstable_by(|a, b| b.cmp(a));
+    for id in ids {
+        let d = &spells[&id];
+        let mask = d.equipped_item_subclass_mask;
+        if d.attributes & 0x40 != 0 && d.equipped_item_class == 2 && mask.is_power_of_two() {
+            if let Some(slot) = table.get_mut(mask.trailing_zeros() as usize) {
+                *slot = id;
+            }
+        }
+    }
+    table
 }
 
 impl SpellCatalog {
@@ -324,12 +351,23 @@ impl SpellCatalog {
             })
             .collect();
         Self {
+            weapon_skills: weapon_skill_table(&spells),
             spells,
             learned_spell,
             learn_effects,
             declared_language: HashMap::new(),
             dispel_types: SpellDispelTypes::default(),
         }
+    }
+
+    /// The spell that teaches the skill of a weapon of `subclass`, the table `0xc4d738` that
+    /// `GetSkillSpell 0x5ea5d0` indexes by a hand's weapon subclass; `None` for a subclass with no
+    /// such spell (`0x5ea666`).
+    pub fn weapon_skill_spell(&self, subclass: u32) -> Option<u32> {
+        self.weapon_skills
+            .get(subclass as usize)
+            .copied()
+            .filter(|&id| id != 0)
     }
 
     /// A spell's learn effects in slot order, empty for a plain ability.
@@ -678,6 +716,7 @@ pub fn load_spell_catalog(chain: &mut Chain) -> Result<SpellCatalog> {
         );
     }
     Ok(SpellCatalog {
+        weapon_skills: weapon_skill_table(&spells),
         spells,
         learned_spell,
         learn_effects,

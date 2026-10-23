@@ -27,11 +27,11 @@ pub struct TokenContext<'a> {
     pub durations: &'a SpellDurationCatalog,
     pub radii: &'a SpellRadiusCatalog,
     pub ranges: Option<&'a SpellRangeCatalog>,
-    /// `0x5ea520` behind `0x6de040`: the active player's skill in a spell's `SkillLineAbility`
-    /// line, bonuses included, by spell id; 0 without a player or a line. Every per-level term
-    /// scales by the level derived from it ([`SpellDisplay::skill_level`]), not the character
-    /// level.
-    pub skill: &'a dyn Fn(u32) -> u32,
+    /// `GetSpellLevel 0x6e3130` for a record: the level every per-level term scales by, never
+    /// the character level. The player's is `GetSpellSkillLevel 0x5ea690` over 5, its skill in
+    /// the line of the spell `GetSkillSpell 0x5ea5d0` names, capped by that spell's `maxLevel`;
+    /// a pet's its level, capped by the record's ([`SpellDisplay::skill_level`]); 0 without one.
+    pub level: &'a dyn Fn(&SpellDisplay) -> u32,
     pub lookup: &'a dyn Fn(u32) -> Option<&'a SpellDisplay>,
     /// The caster's live spell-modifier tables; absent for contexts without a caster.
     pub mods: Option<&'a dyn SpellMods>,
@@ -145,9 +145,9 @@ fn tenths(ctx: &TokenContext, v: impl Into<f64>) -> String {
     (ctx.printf)("%.1f", &[TokenNumber::Float(v.into())])
 }
 
-/// `0x6e3130` for the active player (`0x6e318d`: `CGPlayer`'s `[vtbl+0xa8]`, `0x5ea690`).
+/// `0x6e3130` for the expander's caster (`0x6e318d`: the unit's `[vtbl+0xa8]`).
 fn skill_level(ctx: &TokenContext, d: &SpellDisplay) -> u32 {
-    d.skill_level((ctx.skill)(d.id))
+    (ctx.level)(d)
 }
 
 /// `0x6e3b80`'s verdict on an effect: whether its points round to whole numbers (its out-byte)
@@ -819,7 +819,7 @@ mod tests {
             durations,
             radii,
             ranges: None,
-            skill: &|_| 0,
+            level: &|_| 0,
             lookup,
             mods: None,
             power_cost: &|_| -1,
@@ -1418,7 +1418,7 @@ mod tests {
         let skill = std::cell::Cell::new(0);
         let skill_of = |_| skill.get();
         let c = TokenContext {
-            skill: &skill_of,
+            level: &|d: &SpellDisplay| d.skill_level(skill_of(d.id)),
             ..ctx(&durations, &radii, &lookup)
         };
         let at = |value: u32, id: u32| {
@@ -1450,7 +1450,7 @@ mod tests {
             ..points(10)
         };
         let c = TokenContext {
-            skill: &|_| 50,
+            level: &|d: &SpellDisplay| d.skill_level(50),
             ..ctx(&durations, &radii, &none_lookup)
         };
         assert_eq!(substitute("$s1", &d, &c), "20");
@@ -1481,13 +1481,13 @@ mod tests {
         };
         // The outer spell at level 30; the referenced ones in no line of the player's.
         let c = TokenContext {
-            skill: &|id| if id == 1 { 150 } else { 0 },
+            level: &|d: &SpellDisplay| d.skill_level(if d.id == 1 { 150 } else { 0 }),
             ..ctx(&durations, &radii, &lookup)
         };
         assert_eq!(substitute("$2s1 $3s1", &outer, &c), "19 39");
         // The outer spell at level 0: each takes its own, 100 capped at 10 × 5.
         let c = TokenContext {
-            skill: &|id| if id == 1 { 0 } else { 100 },
+            level: &|d: &SpellDisplay| d.skill_level(if d.id == 1 { 0 } else { 100 }),
             ..ctx(&durations, &radii, &lookup)
         };
         assert_eq!(substitute("$2s1 $3s1", &outer, &c), "19 29");
@@ -1509,7 +1509,7 @@ mod tests {
         let skill = std::cell::Cell::new(0);
         let skill_of = |_| skill.get();
         let c = TokenContext {
-            skill: &skill_of,
+            level: &|d: &SpellDisplay| d.skill_level(skill_of(d.id)),
             ..ctx(&durations, &radii, &lookup)
         };
         for (value, expected) in [
@@ -1544,7 +1544,7 @@ mod tests {
         let skill = std::cell::Cell::new(0);
         let skill_of = |_| skill.get();
         let c = TokenContext {
-            skill: &skill_of,
+            level: &|d: &SpellDisplay| d.skill_level(skill_of(d.id)),
             ..ctx(&durations, &radii, &none_lookup)
         };
         // Level 5, five under: 20 s less 5 s. Level 20: 30 s, the cap.
@@ -1572,7 +1572,7 @@ mod tests {
         };
         // Level 20, capped at 3: two more dice.
         let c = TokenContext {
-            skill: &|_| 100,
+            level: &|d: &SpellDisplay| d.skill_level(100),
             ..ctx(&durations, &radii, &none_lookup)
         };
         assert_eq!(substitute("$s1; $o1", &spell, &c), "<13..19>; <39..57>");

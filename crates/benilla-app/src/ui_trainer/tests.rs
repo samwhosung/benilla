@@ -41,13 +41,13 @@ fn with_text<R>(
     let durations = benilla_formats::SpellDurationCatalog::default();
     let radii = benilla_formats::SpellRadiusCatalog::default();
     let lookup = |id: u32| spells.get(id);
-    let skill_of = |_: u32| player_skill;
-    let pet_of = |_: u32| pet_skill;
+    let skill_of = |d: &benilla_formats::SpellDisplay| d.skill_level(player_skill);
+    let pet_of = |d: &benilla_formats::SpellDisplay| d.skill_level(pet_skill);
     let ctx = TokenContext {
         durations: &durations,
         radii: &radii,
         ranges: None,
-        skill: &skill_of,
+        level: &skill_of,
         lookup: &lookup,
         mods: None,
         power_cost: &|_| -1,
@@ -59,7 +59,7 @@ fn with_text<R>(
         printf: &crate::ui_script::token_printf,
     };
     let pet_ctx = TokenContext {
-        skill: &pet_of,
+        level: &pet_of,
         ..ctx
     };
     f(&ServiceText {

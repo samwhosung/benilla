@@ -931,9 +931,15 @@ fn send_spell_cast(
     // `UNIT_FIELD_POWER[type]` (a negative PowerType reads health) signed-compared against the
     // cost, refusing 0x4d. Local, because vmangos accepts the cast and its NO_POWER fail clears
     // the running GCD.
+    // The player's level for a spell reads its skill lines, and for a weapon spell the hands.
+    let skills = super::PlayerSkills {
+        lines: skill_lines,
+        spells: spells.map(|s| &s.catalog),
+        items: Some(items),
+    };
     if !commit.is_item() {
         if let (Some(d), Some(store)) = (def, ctx.rel.self_store) {
-            if !super::usable::can_afford(d, store, skill_lines, spell_mods) {
+            if !super::usable::can_afford(d, store, skills, spell_mods) {
                 debug!("ui_action: cast {spell_id} refused locally — not enough power (0x4d)");
                 refuse!(CastFail::local(spell_id, 0x4d));
             }
@@ -959,7 +965,7 @@ fn send_spell_cast(
     let cast_time_ms = def.map_or(0, |d| {
         let level = crate::spell::SpellLevel::Player {
             me: ctx.rel.self_store,
-            skill_lines,
+            skills,
         };
         let player = ctx.rel.self_store.map(|s| &s.0);
         spells.map_or(0, |s| s.cast_time_ms(d, player, level, spell_mods))

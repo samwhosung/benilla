@@ -1103,10 +1103,89 @@ fn the_power_tokens_print_the_cost_cells_numbers() {
         "Drains 40 mana, then 11 per second."
     );
     assert_eq!(deps.skill_lines, [7]);
-    let v = spell_tooltip_view(900_030, &spells, &mut t.pet_ctx(&objects, Some(&store), None))
-        .unwrap();
+    let v = spell_tooltip_view(
+        900_030,
+        &spells,
+        &mut t.pet_ctx(&objects, Some(&store), None),
+    )
+    .unwrap();
     // No pet: no cost to read, and level 0 for the per-second term, 1 + (0 - 5).
     assert_eq!(v.description, "Drains -1 mana, then -4 per second.");
+}
+
+/// A weapon spell's view scales by the wielded weapon's skill (`0x5ea5d0` in `0x5ea690`) and
+/// records what that read: the hands, which a weapon swap moves, and the weapon's line, not the
+/// spell's own.
+#[test]
+fn a_weapon_spells_view_reads_the_wielded_weapons_skill() {
+    use benilla_formats::SpellDisplay;
+    use benilla_protocol::messages::FIELD_PLAYER_SKILL_INFO_1_1 as SKILLS;
+    let mut spells = Spells::empty_for_tests();
+    spells.catalog = benilla_formats::SpellCatalog::from_displays(
+        [
+            (
+                201,
+                SpellDisplay {
+                    id: 201,
+                    attributes: 0x40,
+                    equipped_item_class: 2,
+                    equipped_item_subclass_mask: 1 << 7,
+                    ..Default::default()
+                },
+            ),
+            (
+                900_040,
+                SpellDisplay {
+                    id: 900_040,
+                    name: "Strike".into(),
+                    description: Some("Deals $s1 damage.".into()),
+                    equipped_item_class: 2,
+                    equipped_item_subclass_mask: 1 << 7,
+                    base_level: 1,
+                    effects: [2, 0, 0],
+                    effect_base_points: [9, 0, 0],
+                    effect_base_dice: [1, 0, 0],
+                    effect_die_sides: [1, 0, 0],
+                    effect_real_points_per_level: [1.0, 0.0, 0.0],
+                    ..Default::default()
+                },
+            ),
+        ]
+        .into(),
+    );
+    let mut objs = no_objects();
+    let objects = objs.get();
+    // A sword in the main hand, Swords (43) at 300, the spell's own line (26) at 50.
+    let store = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+        (258 + 2 + 12 * 15, 1001),
+        (SKILLS, 43),
+        (SKILLS + 1, 300 | 300 << 16),
+        (SKILLS + 3, 26),
+        (SKILLS + 4, 50 | 300 << 16),
+    ]));
+    let mut t = TestCtx::new();
+    t.skill_lines = Some(benilla_formats::SkillLineCatalog::from_spell_lines([
+        (201, 43),
+        (900_040, 26),
+    ]));
+    t.items.insert_template(
+        1001,
+        Some(benilla_protocol::messages::ItemInfo {
+            class: 2,
+            subclass: 7,
+            ..crate::items::test_template("Sword")
+        }),
+    );
+    let (view, deps) = build_view(
+        900_040,
+        &spells,
+        &mut t.ctx_for(&objects, 0, None, Some(&store)),
+    )
+    .unwrap();
+    // 10 + (60 - 1) × 1.
+    assert_eq!(Shown::of(&view).description, "Deals 69 damage.");
+    assert_eq!(deps.skill_lines, [43], "the weapon's line, not the spell's");
+    assert_eq!(deps.worn & 0x38000, 0x38000, "the three hands");
 }
 
 /// The range cell scales a ranged-slot spell's max by the player's ranged-slot item (`0x6e36aa`-

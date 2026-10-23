@@ -126,9 +126,121 @@ impl Plugin for SpellPlugin {
     }
 }
 
-/// The player's skill in `spell_id`'s own line, the input of every per-level term: `0x5ea690`
-/// hops spell to SkillLineAbility line (`0x6de040`), then `0x5ea520` reads that line's
-/// `PLAYER_SKILL_INFO` slot. Every missing input reads 0, like the reference's null paths.
+/// What the active player's level for a spell reads beside its skill slots: the skill line a spell
+/// belongs to (`0x6de040`), and for the weapon-skill substitution ([`skill_spell`]) the spell
+/// records and the item cache that names each hand's weapon. A missing one reads as the
+/// reference's null paths: no line is level 0, no records or cache leave the spell as it is.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct PlayerSkills<'a> {
+    pub(crate) lines: Option<&'a benilla_formats::SkillLineCatalog>,
+    pub(crate) spells: Option<&'a benilla_formats::SpellCatalog>,
+    pub(crate) items: Option<&'a crate::items::Items>,
+}
+
+/// The equipment slots of the three hands `GetVirtualItem 0x5ec240` reads: main hand, off hand,
+/// ranged (`0x5ec2db`, `0x5ec2aa`, `0x5ec25e`).
+const HAND_SLOTS: [u8; 3] = [15, 16, 17];
+
+/// The three hands as a [`SpellReads::item_search`] slot mask.
+const HAND_SLOT_MASK: u32 = 1 << 15 | 1 << 16 | 1 << 17;
+
+/// `Targets & 0x10` (`[rec+0x34]`), an item-targeted spell, which keeps its own skill
+/// (`0x5ea600`).
+const TARGETS_ITEM: u32 = 0x10;
+/// `AttributesEx2 & 0x8000000` (`[rec+0x20]`), vmangos `SPELL_ATTR_EX2_IGNORE_WEAPONSKILL`
+/// (`SpellDefines.h:895`), which keeps its own skill (`0x5ea60a`).
+const ATTR_EX2_IGNORE_WEAPON_SKILL: u32 = 0x0800_0000;
+/// `SPELL_EFFECT_WEAPON` 25, the weapon-skill spells' own effect, which keeps its own skill
+/// (`0x5ea613`).
+const SPELL_EFFECT_WEAPON: u32 = 0x19;
+
+/// The class and subclass of the weapon in a hand of the active player, `GetVirtualItem
+/// 0x5ec240(hand, raw)`: the visible entry of the hand's slot (`0x5f0d60`), none for an empty one
+/// (`0x5ec300`), its class and subclass from the item cache, 0 and 0 on a miss (`0x62ea20`,
+/// `0x62ea80`). Without `raw`, a visible flag with bit 0 is no weapon (`0x5ec2ee`), and a disarmed
+/// player (`UNIT_FIELD_FLAGS & 0x200000`) has no main-hand weapon while it holds one
+/// (`0x5ec2b8`-`0x5ec2d9`), and no off-hand weapon while only that hand holds one
+/// (`0x5ec26c`-`0x5ec2a4`). The ranged hand has no disarm gate.
+fn virtual_weapon(
+    me: &benilla_protocol::ObjectFields,
+    items: Option<&crate::items::Items>,
+    hand: usize,
+    raw: bool,
+) -> Option<(u32, u32)> {
+    if !raw && me.unit_flags() & crate::creature_anim::UNIT_FLAG_DISARMED != 0 {
+        let weapon = |h| virtual_weapon(me, items, h, true).is_some_and(|(class, _)| class == 2);
+        let hidden = match hand {
+            0 => weapon(0),
+            1 => !weapon(0) && weapon(1),
+            _ => false,
+        };
+        if hidden {
+            return None;
+        }
+    }
+    let slot = HAND_SLOTS[hand];
+    let entry = me.player_visible_item_entry(slot)?;
+    if !raw && me.player_visible_item_flags(slot) & 0x1 != 0 {
+        return None;
+    }
+    let record = items.and_then(|i| i.template(entry, 0, crate::query_cache::Ask::Read));
+    Some(record.map_or((0, 0), |t| (t.class, t.subclass)))
+}
+
+/// `CGPlayer_C::GetSkillSpell 0x5ea5d0`: the spell whose skill line a spell's level reads. A spell
+/// that needs a weapon (`EquippedItemClass` 2 with a subclass mask) takes the weapon-skill spell
+/// of the first hand, main, off then ranged, whose weapon is class 2 of a subclass the mask holds
+/// and the weapon-skill table names (`0x5ea62f`-`0x5ea680`); every other spell, and one no hand
+/// fits, is itself. An item-targeted spell (`Targets & 0x10`), one that ignores weapon skill and a
+/// weapon-skill spell keep their own. `reads` hears the hands when the hands are read.
+pub(crate) fn skill_spell(
+    me: &benilla_protocol::ObjectFields,
+    skills: PlayerSkills,
+    d: &benilla_formats::SpellDisplay,
+    reads: &mut dyn SpellReads,
+) -> u32 {
+    if d.targets & TARGETS_ITEM != 0
+        || d.attributes_ex2 & ATTR_EX2_IGNORE_WEAPON_SKILL != 0
+        || d.effects[0] == SPELL_EFFECT_WEAPON
+        || d.equipped_item_class != 2
+        || d.equipped_item_subclass_mask == 0
+    {
+        return d.id;
+    }
+    let _ = (me, skills, reads, virtual_weapon as fn(_, _, _, _) -> _, HAND_SLOT_MASK);
+    d.id
+}
+
+/// `GetSpellLevel 0x6e3130` for the active player: `CGPlayer_C::GetSpellSkillLevel 0x5ea690` over
+/// 5 (`0x6e3195`). The skill read is the total (`0x5ea520`) of the `SkillLineAbility` line of the
+/// spell [`skill_spell`] names (`0x5ea69b`-`0x5ea6d7`), capped at five times that spell's
+/// `maxLevel` when it has one (`0x5ea6dc`-`0x5ea6ea`); no player, no record or no line is 0
+/// (`0x5ea6f0`). `reads` hears the line and the hands.
+pub(crate) fn player_spell_level(
+    me: Option<&crate::net::ObjectStore>,
+    skills: PlayerSkills,
+    d: &benilla_formats::SpellDisplay,
+    reads: &mut dyn SpellReads,
+) -> u32 {
+    let Some(store) = me else { return 0 };
+    let id = skill_spell(&store.0, skills, d, reads);
+    let record = if id == d.id {
+        Some(d)
+    } else {
+        skills.spells.and_then(|c| c.get(id))
+    };
+    let Some(record) = record else { return 0 };
+    let Some(line) = skills.lines.and_then(|c| c.spell_to_line(id)) else {
+        return 0;
+    };
+    reads.skill_line(line);
+    record.skill_level(skill_line_value(me, line))
+}
+
+/// The player's skill in `spell_id`'s own line: `0x5ea690` hops spell to SkillLineAbility line
+/// (`0x6de040`), then `0x5ea520` reads that line's `PLAYER_SKILL_INFO` slot. Every missing input
+/// reads 0, like the reference's null paths. It is [`player_spell_level`]'s skill for a spell that
+/// needs no weapon, which the lock openers, skinning and the heals' wording read.
 pub(crate) fn spell_skill_value(
     me: Option<&crate::net::ObjectStore>,
     skill_lines: Option<&benilla_formats::SkillLineCatalog>,
@@ -280,6 +392,103 @@ mod tests {
         assert_eq!(
             super::line_skill_value(std::iter::once(slot(100, 0, 0)), 44),
             0
+        );
+    }
+
+    /// `GetSpellSkillLevel 0x5ea690` reads the line of the spell `GetSkillSpell 0x5ea5d0` names: a
+    /// spell needing a sword or a mace scales with the wielded weapon's skill (Swords 300, Maces
+    /// 100), not its own line's, capped by the weapon-skill spell's `maxLevel` (0, none), not its
+    /// own (10). An off hand fits when the main hand does not, a disarmed main hand is skipped,
+    /// and an item-targeted spell, a hand of the wrong class and an uncached record keep the
+    /// spell's own line.
+    #[test]
+    fn a_weapon_spell_scales_with_the_wielded_weapons_skill() {
+        use benilla_formats::{SkillLineCatalog, SpellCatalog, SpellDisplay};
+        use benilla_protocol::messages::FIELD_PLAYER_SKILL_INFO_1_1 as SKILLS;
+        const SWORDS: u32 = 43;
+        const MACES: u32 = 54;
+        const OWN: u32 = 26;
+        // The weapon-skill spells: `Attributes & 0x40`, class 2, one subclass bit each.
+        let weapon_skill = |id, subclass: u32| SpellDisplay {
+            id,
+            attributes: 0x40,
+            equipped_item_class: 2,
+            equipped_item_subclass_mask: 1 << subclass,
+            effects: [0x19, 0, 0],
+            ..Default::default()
+        };
+        let strike = || SpellDisplay {
+            id: 900_100,
+            equipped_item_class: 2,
+            equipped_item_subclass_mask: 1 << 7 | 1 << 4,
+            max_level: 10,
+            ..Default::default()
+        };
+        let catalog = SpellCatalog::from_displays(
+            [
+                (201, weapon_skill(201, 7)),
+                (198, weapon_skill(198, 4)),
+                (900_100, strike()),
+            ]
+            .into(),
+        );
+        let lines =
+            SkillLineCatalog::from_spell_lines([(201, SWORDS), (198, MACES), (900_100, OWN)]);
+        let mut items = crate::items::Items::default();
+        for (entry, class, subclass) in [(1001, 2, 7), (1002, 2, 4), (1003, 4, 6)] {
+            items.insert_template(
+                entry,
+                Some(benilla_protocol::messages::ItemInfo {
+                    class,
+                    subclass,
+                    ..crate::items::test_template("Weapon")
+                }),
+            );
+        }
+        // Visible entries in the main and off hand (`PLAYER_VISIBLE_ITEM_16_0`, `_17_0`).
+        let level = |main: u32, off: u32, flags: u32, d: &SpellDisplay| {
+            let store = crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (46, flags),
+                (258 + 2 + 12 * 15, main),
+                (258 + 2 + 12 * 16, off),
+                (SKILLS, SWORDS),
+                (SKILLS + 1, 300 | 300 << 16),
+                (SKILLS + 3, MACES),
+                (SKILLS + 4, 100 | 300 << 16),
+                (SKILLS + 6, OWN),
+                (SKILLS + 7, 40 | 300 << 16),
+            ]));
+            let skills = PlayerSkills {
+                lines: Some(&lines),
+                spells: Some(&catalog),
+                items: Some(&items),
+            };
+            player_spell_level(Some(&store), skills, d, &mut Unrecorded)
+        };
+        assert_eq!(
+            level(1001, 0, 0, &strike()),
+            60,
+            "a sword: Swords 300, uncapped"
+        );
+        assert_eq!(level(1002, 0, 0, &strike()), 20, "a mace: Maces 100");
+        assert_eq!(level(1003, 1002, 0, &strike()), 20, "the off hand's mace");
+        assert_eq!(level(0, 0, 0, &strike()), 8, "no weapon: its own line, 40");
+        assert_eq!(
+            level(1004, 0, 0, &strike()),
+            8,
+            "an uncached weapon reads class 0"
+        );
+        // Disarmed while the main hand holds a weapon: that hand is none.
+        assert_eq!(level(1001, 1002, 0x0020_0000, &strike()), 20);
+        assert_eq!(level(1001, 0, 0x0020_0000, &strike()), 8);
+        let item_targeted = SpellDisplay {
+            targets: 0x10,
+            ..strike()
+        };
+        assert_eq!(
+            level(1001, 0, 0, &item_targeted),
+            8,
+            "Targets & 0x10 keeps its own"
         );
     }
 }

@@ -1632,3 +1632,35 @@ fn creature_type_mask_rule() {
     );
     assert!(masked(1).admits_creature_type(33), "bit 32 wraps to bit 0");
 }
+
+/// The weapon-skill table `0x5e2ca0` builds (`0xc4d738`), by weapon subclass: One-Handed Axes
+/// 196, Bows 264, One-Handed Swords 201, Daggers 1180, Wands 5009, Fishing Poles 7738; the
+/// obsolete subclass 9 names none, and no weapon-skill spell names a subclass past 20, the last
+/// class-2 row of `ItemSubClass.dbc` that bounds the table.
+#[test]
+fn the_weapon_skill_table_reads_the_real_file() {
+    let data = crate::wow_data_or_skip!();
+    let mut chain = crate::open_chain(&data).expect("open chain");
+    let spells = load_spell_catalog(&mut chain).expect("load Spell.dbc");
+    for (subclass, spell) in [
+        (0, 196),
+        (2, 264),
+        (7, 201),
+        (15, 1180),
+        (19, 5009),
+        (20, 7738),
+    ] {
+        assert_eq!(
+            spells.weapon_skill_spell(subclass),
+            Some(spell),
+            "{subclass}"
+        );
+    }
+    assert_eq!(spells.weapon_skill_spell(9), None);
+    assert!(spells.iter().all(|(_, d)| {
+        !(d.attributes & 0x40 != 0
+            && d.equipped_item_class == 2
+            && d.equipped_item_subclass_mask.is_power_of_two())
+            || d.equipped_item_subclass_mask.trailing_zeros() <= 20
+    }));
+}

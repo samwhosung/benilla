@@ -376,22 +376,31 @@ fn feed_craft(
                 .map(|l| l.name.clone())
                 .unwrap_or_else(|| format!("Skill {line}"));
             let global = |key: &str| benilla_ui::strings::global(script.lua(), key);
+            // The player's level for a spell and its cost (`0x6e3130`, `0x6e31b0`, `0x6e3300`).
+            let skills = crate::spell::PlayerSkills {
+                lines: Some(&skill_lines.catalog),
+                spells: Some(&spells.catalog),
+                items: Some(&items),
+            };
             let ctx = benilla_formats::TokenContext {
                 durations: &spells.durations,
                 radii: &spells.radii,
                 ranges: Some(&spells.ranges),
-                skill: &|id| {
-                    crate::spell::spell_skill_value(Some(store), Some(&skill_lines.catalog), id)
+                level: &|d| {
+                    crate::spell::player_spell_level(
+                        Some(store),
+                        skills,
+                        d,
+                        &mut crate::spell::Unrecorded,
+                    )
                 },
                 lookup: &|id| spells.catalog.get(id),
                 mods: Some(&*spell_mods),
-                // `$c` and `$p` (`0x6e31b0`, `0x6e3300`) at the player's level and fields.
                 power_cost: &|d| {
-                    let lines = Some(&skill_lines.catalog);
                     crate::spell::usable::power_cost(
                         d,
                         store,
-                        lines,
+                        skills,
                         &spell_mods,
                         &mut crate::spell::Unrecorded,
                     )
@@ -399,7 +408,7 @@ fn feed_craft(
                 power_per_second: &|d| {
                     let level = crate::spell::SpellLevel::Player {
                         me: Some(store),
-                        skill_lines: Some(&skill_lines.catalog),
+                        skills,
                     };
                     crate::spell::usable::per_second_cost(d, level, &mut crate::spell::Unrecorded)
                 },

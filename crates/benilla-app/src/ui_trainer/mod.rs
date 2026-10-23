@@ -618,33 +618,36 @@ pub(crate) fn feed_trainer(
                 .as_deref()
                 .and_then(|b| b.0)
                 .and_then(|id| desc.area_names.as_deref()?.0.resolve(id as i32));
-            let player_skill =
-                |id: u32| crate::spell::spell_skill_value(store, Some(&skill_lines.catalog), id);
-            let pet_skill = |_: u32| crate::spell::pet_skill_value(pet.map(|p| &p.0));
+            let skills = crate::spell::PlayerSkills {
+                lines: Some(&skill_lines.catalog),
+                spells: Some(&spells.catalog),
+                items: Some(&items),
+            };
+            let player_level = |d: &benilla_formats::SpellDisplay| {
+                crate::spell::player_spell_level(store, skills, d, &mut crate::spell::Unrecorded)
+            };
+            let pet_skill_level = |d: &benilla_formats::SpellDisplay| {
+                d.skill_level(crate::spell::pet_skill_value(pet.map(|p| &p.0)))
+            };
             // `$c` and `$p` (`0x6e31b0`, `0x6e3300`) at the same caster's level and fields.
             let mods = &*desc.spell_mods;
             let player_cost = |d: &benilla_formats::SpellDisplay| {
                 store.map_or(-1, |s| {
-                    let lines = Some(&skill_lines.catalog);
                     crate::spell::usable::power_cost(
                         d,
                         s,
-                        lines,
+                        skills,
                         mods,
                         &mut crate::spell::Unrecorded,
                     )
                 })
             };
             let player_per_second = |d: &benilla_formats::SpellDisplay| {
-                let level = crate::spell::SpellLevel::Player {
-                    me: store,
-                    skill_lines: Some(&skill_lines.catalog),
-                };
+                let level = crate::spell::SpellLevel::Player { me: store, skills };
                 crate::spell::usable::per_second_cost(d, level, &mut crate::spell::Unrecorded)
             };
             let pet_level = |d: &benilla_formats::SpellDisplay| {
-                let skill = crate::spell::pet_skill_value(pet.map(|p| &p.0));
-                crate::spell::SpellLevel::Known(d.skill_level(skill))
+                crate::spell::SpellLevel::Known(pet_skill_level(d))
             };
             let pet_cost = |d: &benilla_formats::SpellDisplay| {
                 pet.map_or(-1, |p| {
@@ -677,7 +680,7 @@ pub(crate) fn feed_trainer(
                 durations: &spells.durations,
                 radii: &spells.radii,
                 ranges: Some(&spells.ranges),
-                skill: &player_skill,
+                level: &player_level,
                 lookup: &|id| spells.catalog.get(id),
                 mods: Some(mods),
                 power_cost: &player_cost,
@@ -689,7 +692,7 @@ pub(crate) fn feed_trainer(
                 printf: &crate::ui_script::token_printf,
             };
             let pet_ctx = TokenContext {
-                skill: &pet_skill,
+                level: &pet_skill_level,
                 power_cost: &pet_cost,
                 power_per_second: &pet_per_second,
                 ..ctx
