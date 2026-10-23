@@ -85,7 +85,7 @@ const COL_SPELL_FAMILY_FLAGS_LOW: usize = 161;
 /// `Targets` (`+0x34`): the seed the cast arm loads into its targeting word (`0x6e525a`).
 const COL_TARGETS: usize = 13;
 /// `TargetCreatureType` (`+0x38`): the creature-type mask `BindTarget` (`0x6e5c26`) and
-/// `SpellCanTargetUnit`'s mirror (`0x6e6544`) test the unit's type against, bit `type - 1`.
+/// `SpellCanTargetObject`'s mirror (`0x6e6544`) test the unit's type against, bit `type - 1`.
 const COL_TARGET_CREATURE_TYPE: usize = 14;
 /// `EffectImplicitTargetA[0]` (`+0x148`), the key of the cast arm's 62-case switch (`0x6e5484`).
 const COL_IMPLICIT_TARGET_A1: usize = 82;

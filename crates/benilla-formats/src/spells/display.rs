@@ -434,7 +434,7 @@ impl SpellDisplay {
     }
 
     /// `AttributesEx & 0x80000`: the caster is never a bind candidate, not in `BindTarget`
-    /// (`0x6e5b40` at `6e5bf7`), not for `SpellCanTargetUnit`'s unit leg (`0x6e6460` at `6e6507`)
+    /// (`0x6e5b40` at `6e5bf7`), not for `SpellCanTargetObject`'s unit leg (`0x6e6460` at `6e6507`)
     /// and not for the world pick (`0x6e61a0` at `6e61cf`).
     pub fn excludes_caster(&self) -> bool {
         self.attributes_ex & ATTR_EX_EXCLUDE_CASTER != 0

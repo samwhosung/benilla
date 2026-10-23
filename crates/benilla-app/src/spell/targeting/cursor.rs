@@ -953,7 +953,7 @@ mod tests {
         );
     }
 
-    /// The unit leg's range compare, the tail of `SpellCanTargetUnit 0x6e6460`, hands
+    /// The unit leg's range compare, the tail of `SpellCanTargetObject 0x6e6460`, hands
     /// `GetMinMaxRange` the hovered unit (`0x6e679b`, `0x6e67d1`): a melee spell is in range to
     /// 7.667 yards while the caster and that unit both run, and to the 5.0 floor otherwise.
     #[test]
