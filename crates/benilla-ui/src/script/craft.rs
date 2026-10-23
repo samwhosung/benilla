@@ -1093,8 +1093,10 @@ mod tests {
         assert_eq!(s.eval::<i64>("return GetNumCrafts()").unwrap(), 2);
     }
 
-    /// Beast Training's two groups: three line-261 abilities and one with no ability row, in
-    /// group 0, whose line has no `SkillLine.dbc` row.
+    /// Made-up two-group data for the header mechanism, not a real list: no shipped craft list
+    /// holds two groups (every learnable Beast Training spell has a line-261 row, so the real one
+    /// shows a single group and no header). Three rows in line 261 and one in group 0, whose line
+    /// has no `SkillLine.dbc` row; the names and ids are labels only.
     fn two_groups() -> CraftState {
         let row = |spell_id: u32, name: &str, group: u32| {
             let mut r = recipe(spell_id, name, CraftDifficulty::None, 0);
@@ -1115,6 +1117,67 @@ mod tests {
                 row(4187, "Great Stamina", 261),
             ],
         }
+    }
+
+    /// `isExpanded` reads the mask bit at the header's place in the array after the sort
+    /// (`0x4f6f4f` → `0x4f6b80`, `0x4f6bc1`), where the displayed rows follow the collapse words
+    /// the recount set before it (`0x4f6650` ahead of `0x4f6756`). A rebuild remakes the headers
+    /// in the order the recipes name them (`0x4f6404`), so one whose sort moves a header reads
+    /// the folded bit on the other group: the rows hide one group, the flag names the other.
+    #[test]
+    fn a_headers_expanded_flag_reads_its_bit_after_the_sort() {
+        let row = |spell_id: u32, name: &str, group: u32, line: &str| {
+            let mut r = recipe(spell_id, name, CraftDifficulty::None, 0);
+            r.group = group;
+            r.skill_line = Some(line.to_string());
+            r
+        };
+        // Made-up data: Zeta named first, Alpha sorting first.
+        let st = CraftState {
+            name: "Test".into(),
+            display_line: None,
+            rank: 0,
+            max_rank: 0,
+            craft_type: CRAFT_TYPE_BEAST_TRAINING,
+            recipes: vec![
+                row(1, "Zeta One", 270, "Zeta"),
+                row(2, "Alpha One", 261, "Alpha"),
+                row(3, "Alpha Two", 261, "Alpha"),
+            ],
+        };
+        let mut s = UiScript::new().unwrap();
+        s.set_craft(Some(st.clone()));
+        let header = |s: &UiScript, line: &str| {
+            (1..=2)
+                .find(|i| {
+                    s.eval::<bool>(&format!("return GetCraftInfo({i}) == '{line}'"))
+                        .unwrap()
+                })
+                .unwrap()
+        };
+        let expanded = |s: &UiScript, line: &str| {
+            let at = header(s, line);
+            s.eval::<Option<i64>>(&format!("local _,_,_,_,e = GetCraftInfo({at}) return e"))
+                .unwrap()
+        };
+        s.run(&format!("CollapseCraftSkillLine({})", header(&s, "Alpha")))
+            .unwrap();
+        assert_eq!(s.eval::<i64>("return GetNumCrafts()").unwrap(), 3);
+        assert_eq!(
+            (expanded(&s, "Alpha"), expanded(&s, "Zeta")),
+            (None, Some(1))
+        );
+        s.set_craft(Some(st));
+        assert_eq!(
+            s.eval::<i64>("return GetNumCrafts()").unwrap(),
+            4,
+            "Zeta's word took bit 0 before the sort"
+        );
+        assert_eq!(
+            (expanded(&s, "Alpha"), expanded(&s, "Zeta")),
+            (None, Some(1)),
+            "Alpha holds position 0 after it"
+        );
     }
 
     /// The rows the stock window walks, `(name, type, isExpanded)` for each displayed index.

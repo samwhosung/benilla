@@ -913,3 +913,35 @@ fn an_inventory_failure_signals_the_window_again_under_the_byte() {
         assert_eq!(seen.ends_with(",LOOT_OPENED"), byte, "byte {byte}: {seen}");
     }
 }
+
+/// The failure's tail reads whether a window is open at its own packet (`0x5e3af3`-`0x5e3aff`):
+/// a response later in the same drain opens its window after it, so the tail signals nothing,
+/// though the byte is set and that window's copier waits on its record.
+#[test]
+fn an_inventory_failure_reads_the_window_at_its_own_packet() {
+    let mut l = client();
+    run(&mut l, "ERR_INV_FULL = 'ERR_INV_FULL'");
+    l.app.world_mut().resource_mut::<AutoLootByte>().0 = true;
+    l.app.world_mut().resource_mut::<LootLatch>().0 = Some(CORPSE);
+    packets(
+        &mut l,
+        vec![
+            SessionEvent::InventoryFailure {
+                reason: 50,
+                required_level: None,
+                item_guid: 0,
+                item2_guid: 0,
+                bag_slot: 0,
+            },
+            SessionEvent::LootResponse {
+                guid: CORPSE,
+                loot_type: 1,
+                gold: 0,
+                items: vec![row(0, 40_000)],
+            },
+        ],
+    );
+    crate::lanes::fire_in_order(l.app.world_mut());
+    assert_eq!(seen(&mut l), "UI_ERROR_MESSAGE:ERR_INV_FULL");
+    assert!(l.app.world().resource::<AutoLootByte>().0, "no sweep ran");
+}
