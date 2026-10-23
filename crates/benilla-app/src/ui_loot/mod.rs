@@ -243,6 +243,9 @@ enum Step {
     /// answer (`0x4c2ac0`, `0x4c2afc`), on its own session's window: a later response in the
     /// frame replaced the live cells.
     CopierEnd(Window),
+    /// An inventory failure's tail (`0x5e3af3`-`0x5e3b20`): `LOOT_OPENED` again while a window
+    /// is open and the active player's auto-loot byte is set, read at the failure's place.
+    FailureTail,
     /// The sweep a close with no VM owed a disenchant window with rows left (`0x48f264` →
     /// `0x4c1fa0`).
     Sweep,
@@ -653,6 +656,11 @@ impl LootState {
                 && items.template(it.item_id, 0, Ask::Read).is_none()
                 && !items.template_answered_unknown(it.item_id)
         })
+    }
+
+    /// Owe an inventory failure's tail to the lane, behind its line and unlocks.
+    pub(crate) fn owe_failure_tail(&mut self) {
+        self.queue(Step::FailureTail);
     }
 
     /// Owe the hold's sweep to the lane, from a close with no VM at hand.
@@ -1322,6 +1330,12 @@ fn fire_step(vm: &mut LootVm, reads: &LootReads, step: Step) {
                 end_session_open(vm, w, replaced);
             }
         }
+        Step::FailureTail => vm.turn(|script, (steps, _)| {
+            let open = steps.loot.source().is_some() && steps.objects.player().is_some();
+            if let (Some(script), true) = (script, open && steps.byte.0) {
+                script.fire_event("LOOT_OPENED", vec![]);
+            }
+        }),
         Step::Sweep => {
             if !vm.own().0.loot.sweep_owed {
                 return;

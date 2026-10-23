@@ -6,7 +6,7 @@ use bevy::prelude::*;
 
 use super::{EquipError, EquipErrors};
 use crate::net::{NetHandlerApp, SelfGuid};
-use crate::ui_loot::LootLatch;
+use crate::ui_loot::{LootLatch, LootState};
 
 pub(super) fn register(app: &mut App) {
     app.net_handler(SessionEventKind::InventoryFailure, on_inventory_failure)
@@ -56,6 +56,7 @@ fn on_inventory_failure(
     In(ev): In<SessionEvent>,
     mut equip_errors: ResMut<EquipErrors>,
     mut latch: ResMut<LootLatch>,
+    mut loot: ResMut<LootState>,
 ) {
     if let SessionEvent::InventoryFailure {
         reason,
@@ -72,6 +73,9 @@ fn on_inventory_failure(
             bag_slot,
         };
         inventory_failure(failure, &mut equip_errors, &mut latch);
+        // The tail, after the unlocks: `LOOT_OPENED` again under an open window and a set
+        // auto-loot byte (`0x5e3aff`-`0x5e3b20`), on the loot lane at the packet's place.
+        loot.owe_failure_tail();
     }
 }
 
@@ -86,7 +90,8 @@ struct Failure {
 
 /// A refused inventory operation (reason 0 never arrives: `benilla_protocol::events` drops it):
 /// queues the error line, and after it the unlock of both guids the packet names (`0x5e3ac0`,
-/// the second only when nonzero, `0x5e3ad3`), on the refusal lane at the packet's place.
+/// the second only when nonzero, `0x5e3ad3`), on the refusal lane at the packet's place; the
+/// handler then owes the loot tail ([`LootState::owe_failure_tail`]).
 fn inventory_failure(failure: Failure, equip_errors: &mut EquipErrors, latch: &mut LootLatch) {
     let Failure {
         reason,
