@@ -24,20 +24,6 @@ const ELSEWHERE: &[(&str, &str, &str)] = &[];
 /// Pairs nothing fires on the verb's path, each with its reason.
 const GAP: &[(&str, &str, &str)] = &[
     (
-        "CollapseCraftSkillLine",
-        "CRAFT_UPDATE",
-        "the reference commits through the 21-byte thunk 0x4f6be0 (the trainer's 0x4d8c90 shape); \
-         a no-op here because the craft list is flat — the header law was never ported from \
-         TradeSkill — so there is nothing to repaint. Whether any 1.12 \
-         craft list carries more than one group is not established: Enchanting's does not, \
-         Beast Training is unchecked",
-    ),
-    (
-        "ExpandCraftSkillLine",
-        "CRAFT_UPDATE",
-        "the same thunk and the same no-op as CollapseCraftSkillLine",
-    ),
-    (
         "SelectGossipOption",
         "GOSSIP_ENTER_CODE",
         "a coded option raises the code-entry popup in the reference (the worker 0x4e2320); here \
