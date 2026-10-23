@@ -1381,6 +1381,9 @@ mod tests {
             can_repair: true,
             ..Default::default()
         }));
+        // A banker open too: the vault's slots read empty to the tooltip without one
+        // (`0x6228a0`).
+        script.set_bank(Some(benilla_ui::script::BankState::default()));
         app.insert_non_send_resource(script);
 
         let entity =

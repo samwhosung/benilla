@@ -771,6 +771,8 @@ fn item_bindings_return_the_pushed_repair_cost() {
     costs.bags.insert((0, 1), 567);
     costs.bags.insert((-1, 3), 89);
     s.set_repair_costs(costs);
+    // A banker open: the vault's slots read empty without one (`0x6228a0`).
+    s.set_bank(Some(crate::script::BankState::default()));
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot"); a:SetPoint("CENTER", 0, 0)
