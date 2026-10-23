@@ -515,3 +515,53 @@ fn player_dead_reads_its_packets_health_after_an_earlier_packets_line() {
     assert!(line < dead, "the earlier packet's line first: {seen:?}");
     assert_eq!(seen[dead.unwrap()], "PLAYER_DEAD:0", "{seen:?}");
 }
+
+/// Our own death's list signals ahead of its death line and `PLAYER_DEAD` after it: `0x5e99b0`'s
+/// deselect (`0x5e9a45`) at `0x60588d`, then `PresentUnitDeath` (`0x6058ae`), which writes the
+/// line (`0x62c160`) and ends in `SignalDeathState` (`0x6251cc` → `0x495850`).
+#[test]
+fn our_deaths_list_signals_before_its_line_and_player_dead_after() {
+    use bevy::ecs::system::RunSystemOnce;
+
+    let mut app = client();
+    app.world_mut()
+        .resource_mut::<crate::net::NetStatus>()
+        .connected = true;
+    app.world()
+        .non_send_resource::<UiScript>()
+        .run(
+            r#"UNITDIESSELF = "You die." UNITDIESOTHER = "%s dies."
+            local d = CreateFrame("Frame")
+            for _, e in ipairs({"PLAYER_TARGET_CHANGED", "CHAT_MSG_COMBAT_FRIENDLY_DEATH",
+                    "CHAT_MSG_COMBAT_HOSTILE_DEATH", "PLAYER_DEAD"}) do
+                d:RegisterEvent(e)
+            end
+            d:SetScript("OnEvent", function()
+                local death = string.find(event, "^CHAT_MSG_COMBAT_.*_DEATH$")
+                table.insert(Seen, death and "death line" or event)
+            end)"#,
+        )
+        .unwrap();
+    let world = app.world_mut();
+    #[cfg(debug_assertions)]
+    world
+        .run_system_once(crate::ui_unit::views::mark_frame_start)
+        .unwrap();
+    crate::net::handlers::dispatch(world, wire([values(ME, &health(0))]));
+    // The death line's watcher, which the frame runs ahead of the drain.
+    world
+        .run_system_once(crate::ui_chat::combat::watch::death_lines)
+        .unwrap();
+    crate::ui_unit::run_feed_units_once(world);
+    crate::lanes::fire_in_order(world);
+    let seen = world
+        .non_send_resource::<UiScript>()
+        .eval::<Vec<String>>("return Seen")
+        .unwrap();
+    let ours: Vec<&str> = seen
+        .iter()
+        .map(String::as_str)
+        .filter(|s| !s.starts_with("UNIT_"))
+        .collect();
+    assert_eq!(ours, ["PLAYER_TARGET_CHANGED", "death line", "PLAYER_DEAD"]);
+}

@@ -478,7 +478,7 @@ mod tests {
             super::fire_deaths_lane(world);
         }
 
-        /// A values block on `guid`, one packet.
+        /// A values block on `guid`, one packet, and the frame's lanes.
         fn values(&mut self, guid: u64, pairs: &[(u16, u32)]) {
             let block = SessionEvent::ObjectValues {
                 guid,
@@ -487,6 +487,12 @@ mod tests {
             let world = self.world();
             crate::net::handlers::dispatch(world, crate::net::wire([block]));
             super::fire_deaths_lane(world);
+            self.lanes();
+        }
+
+        /// The frame's lanes, where the packets' events fire.
+        fn lanes(&mut self) {
+            crate::lanes::fire_in_order(self.world());
         }
 
         /// The world's VM, its `script` run.
@@ -575,10 +581,11 @@ mod tests {
     }
 
     /// Our own death runs `0x5e99b0`'s list in its order (`0x5e9a41`-`0x5e9a6c`): the target
-    /// cleared, whose `PLAYER_TARGET_CHANGED` runs its listeners there (`0x5e9a45`); the
-    /// interaction latch released with its window's close (`0x4931c0(0xb4e2d0, 0)` at `0x5e9a51` →
-    /// `0x493310`); the loot closed with its release (`0x5e9a5c`); the quest givers asked again
-    /// (`0x5eb070` at `0x5e9a61`); then the cast cancelled (`0x5e9a6c`).
+    /// cleared (`0x5e9a45`); the interaction latch released with its window's close
+    /// (`0x4931c0(0xb4e2d0, 0)` at `0x5e9a51` → `0x493310`); the loot closed with its release
+    /// (`0x5e9a5c`); the quest givers asked again (`0x5eb070` at `0x5e9a61`); then the cast
+    /// cancelled (`0x5e9a6c`). Its `PLAYER_TARGET_CHANGED` and `MERCHANT_CLOSED` listeners run on
+    /// the deaths lane in that order, so their packets follow the death's own.
     #[test]
     fn our_own_death_runs_its_list_in_order() {
         const VENDOR: u64 = 0xF130_0000_0000_0050;
@@ -632,6 +639,7 @@ mod tests {
             .0
             .merge(ObjectFields::from_pairs(&[(FIELD_UNIT_HEALTH, 0)]));
         c.dies(me, ME, ObjectType::Player);
+        c.lanes();
         let sent: Vec<String> = c
             .sent()
             .iter()
@@ -650,11 +658,11 @@ mod tests {
             sent,
             [
                 "SetSelection 0x0",
-                "RandomRoll 1",
-                "RandomRoll 2",
                 "LootRelease",
                 "QuestgiverStatusQuery",
-                "CancelCast"
+                "CancelCast",
+                "RandomRoll 1",
+                "RandomRoll 2"
             ]
         );
     }
@@ -1292,9 +1300,9 @@ mod tests {
     }
 
     /// The selection's death deselects (`0x605901`), whose teardown calls a possessed unit off
-    /// (`0x493a18` → `0x4bd650`): `PetStopAttack` signals `PET_BAR_UPDATE` in place (`0x4bd6b4`),
-    /// so its listener's packet goes out ahead of the deselect's `CMSG_SET_SELECTION` 0, and
-    /// `PLAYER_TARGET_CHANGED` (`0x493a73`) is heard inside the death, once.
+    /// (`0x493a18` → `0x4bd650`): `PetStopAttack` signals `PET_BAR_UPDATE` (`0x4bd6b4`) ahead of
+    /// `PLAYER_TARGET_CHANGED` (`0x493a73`), each heard once. The listeners run on the deaths lane,
+    /// so the listener's packet follows the deselect's `CMSG_SET_SELECTION` 0.
     #[test]
     fn the_selections_death_signals_its_pet_stop_and_its_change_in_place() {
         let mut c = client();
@@ -1317,6 +1325,7 @@ mod tests {
         .expect("the listener is in");
         let _ = c.sent();
         c.dies(mob, MOB, ObjectType::Unit);
+        c.lanes();
         let wire: Vec<String> = c
             .sent()
             .into_iter()
@@ -1327,7 +1336,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(wire, ["PetStopAttack", "RandomRoll", "SetSelection 0x0"]);
+        assert_eq!(wire, ["PetStopAttack", "SetSelection 0x0", "RandomRoll"]);
         crate::ui_unit::run_feed_units_once(c.world());
         let heard: Vec<String> = crate::script_calls::eval_in_vm(c.world(), "return HEARD");
         assert_eq!(heard, ["PET_BAR_UPDATE", "PLAYER_TARGET_CHANGED"]);
