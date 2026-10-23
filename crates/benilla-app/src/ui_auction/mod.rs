@@ -531,6 +531,7 @@ impl Plugin for UiAuctionPlugin {
                     feed_auction
                         .after(crate::ui_unit::UnitFeed)
                         .in_set(UiFeed)
+                        .in_set(crate::ui_session::NpcWindowFeed)
                         .run_if(crate::ui_script::ingame_ui_up),
                     drain_auction.in_set(crate::ui_script::UiDrain),
                 ),

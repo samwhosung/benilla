@@ -621,7 +621,10 @@ impl Plugin for UiTradePlugin {
                     // The feed runs after `UnitFeed`, whose item templates it reads, and before
                     // the input pass, with the drain after it, so each lands the same frame. The
                     // latch's watchdog leashes the partner at 14 yd.
-                    feed_trade.after(crate::ui_unit::UnitFeed).in_set(UiFeed),
+                    feed_trade
+                        .after(crate::ui_unit::UnitFeed)
+                        .in_set(UiFeed)
+                        .in_set(crate::ui_session::NpcWindowFeed),
                     // Ahead of the feed, so an accepted partner shows the frame the window opens.
                     answer_trade_request
                         .after(crate::player::ControlRestore)

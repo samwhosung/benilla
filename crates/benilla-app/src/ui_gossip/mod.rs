@@ -174,7 +174,9 @@ impl Plugin for UiGossipPlugin {
             .add_systems(
                 Update,
                 (
-                    feed_gossip.in_set(UiFeed),
+                    feed_gossip
+                        .in_set(UiFeed)
+                        .in_set(crate::ui_session::NpcWindowFeed),
                     drain_gossip.in_set(crate::ui_script::UiDrain),
                 ),
             );

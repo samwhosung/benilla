@@ -178,6 +178,7 @@ impl Plugin for UiTrainerPlugin {
                     feed_trainer
                         .in_set(UiFeed)
                         .in_set(TrainerFeed)
+                        .in_set(crate::ui_session::NpcWindowFeed)
                         .after(crate::ui_unit::UnitFeed),
                     drain_trainer.in_set(crate::ui_script::UiDrain),
                 ),

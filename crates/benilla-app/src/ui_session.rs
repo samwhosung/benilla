@@ -33,6 +33,12 @@ pub(crate) struct UiSessionPlugin;
 
 impl Plugin for UiSessionPlugin {
     fn build(&self, app: &mut App) {
+        app.configure_sets(
+            Update,
+            NpcWindowFeed
+                .in_set(crate::ui_script::UiFeed)
+                .after(crate::ui_unit::UnitFeed),
+        );
         app.init_resource::<InteractLatch>()
             .add_message::<LatchVocal>()
             .init_resource::<InteractNpc>()
@@ -64,6 +70,13 @@ impl Plugin for UiSessionPlugin {
             );
     }
 }
+
+/// The feeds of the windows on the latch, whose show events the stock handlers answer with
+/// `UnitName("npc")` and `SetPortraitTexture(…, "npc")`: after [`crate::ui_unit::UnitFeed`],
+/// which seats the token. The reference writes `[0xb4e2d0]` as the packet is handled (`0x4e26fa`
+/// → `0x4e1fe9` → `0x4930d0`), before the show it fires (`0x4e27df`), so no show reads it stale.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct NpcWindowFeed;
 
 /// A question bound to a live NPC with a guid of its own, not the latch: the binder and
 /// talent-wipe questions and the pet trainer's, as the reference re-runs its interact-range test

@@ -282,7 +282,9 @@ impl Plugin for UiQuestPlugin {
                 (
                     // The feed before the input pass and the drain after it, so a click goes out
                     // the same frame.
-                    feed_quest.in_set(UiFeed),
+                    feed_quest
+                        .in_set(UiFeed)
+                        .in_set(crate::ui_session::NpcWindowFeed),
                     drain_quest.in_set(crate::ui_script::UiDrain),
                 ),
             );

@@ -369,6 +369,7 @@ impl Plugin for UiTaxiPlugin {
                     // After the roster publish, whose party slots the master's reaction reads.
                     feed_taxi
                         .in_set(UiFeed)
+                        .in_set(crate::ui_session::NpcWindowFeed)
                         .after(crate::spell::group_relation::publish_group_roster),
                     feed_on_taxi.in_set(UiFeed),
                     drain_taxi.in_set(crate::ui_script::UiDrain),

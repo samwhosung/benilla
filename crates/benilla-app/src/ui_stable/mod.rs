@@ -38,7 +38,9 @@ impl Plugin for UiStablePlugin {
             .add_systems(
                 Update,
                 (
-                    feed_stable.in_set(UiFeed),
+                    feed_stable
+                        .in_set(UiFeed)
+                        .in_set(crate::ui_session::NpcWindowFeed),
                     drain_stable.in_set(crate::ui_script::UiDrain),
                 ),
             );

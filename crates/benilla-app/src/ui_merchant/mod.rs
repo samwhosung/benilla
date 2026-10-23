@@ -122,7 +122,10 @@ impl Plugin for UiMerchantPlugin {
                 (
                     // After `UnitFeed`: `MERCHANT_SHOW`'s paint reads the item and
                     // player-requirement stores for `GetMerchantItemInfo`'s `isUsable`.
-                    feed_merchant.after(crate::ui_unit::UnitFeed).in_set(UiFeed),
+                    feed_merchant
+                        .after(crate::ui_unit::UnitFeed)
+                        .in_set(UiFeed)
+                        .in_set(crate::ui_session::NpcWindowFeed),
                     // Before `feed_char`: the `UPDATE_INVENTORY_ALERTS` its doll push fires, a
                     // repair's through the durability watcher's recompute (`0x5d9920` →
                     // `0x4c7ee0`, `0x4c8080`), repaints each doll slot, which refreshes the Repair

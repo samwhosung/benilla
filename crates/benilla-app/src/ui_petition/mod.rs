@@ -380,7 +380,9 @@ impl Plugin for UiPetitionPlugin {
             .add_systems(
                 Update,
                 (
-                    feed::feed_petition.in_set(UiFeed),
+                    feed::feed_petition
+                        .in_set(UiFeed)
+                        .in_set(crate::ui_session::NpcWindowFeed),
                     feed::drain_petition.in_set(crate::ui_script::UiDrain),
                 ),
             );
