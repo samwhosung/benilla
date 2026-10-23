@@ -54,21 +54,48 @@ fn on_session_end(In(_): In<SessionEvent>, mut open: ResMut<CraftOpen>) {
     *open = CraftOpen::default();
 }
 
-/// The line's `(rank, max, bonus)`: the Craft window bands difficulty on rank plus bonuses
-/// (`0x5ea520` in the Craft build `0x4f60c0`), where the TradeSkill window uses the raw rank.
-fn skill_rank(store: &ObjectStore, skill_id: u32) -> (u32, u32, i32) {
-    for i in 0..PLAYER_SKILL_SLOTS {
-        if let Some(s) = store.0.player_skill(i) {
-            if u32::from(s.skill_id) == skill_id {
-                return (
-                    u32::from(s.value),
-                    u32::from(s.max),
-                    i32::from(s.temp_bonus) + i32::from(s.perm_bonus),
-                );
-            }
-        }
+/// The first slot holding `skill_id` (`0x5ea3f0`).
+fn skill_slot(
+    store: &ObjectStore,
+    skill_id: u32,
+) -> Option<benilla_protocol::messages::PlayerSkillSlot> {
+    (0..PLAYER_SKILL_SLOTS)
+        .filter_map(|i| store.0.player_skill(i))
+        .find(|s| u32::from(s.skill_id) == skill_id)
+}
+
+/// `GetCraftDisplaySkillLine`'s answer (`0x4f6cb0`), for the Enchanting type alone (`0x4f6ce3`):
+/// the line of the first spell of the player's type-3 list (`0x4f6d0c`) by its ability row
+/// (`0x4f6d14`, `+0x04`, 0 failing at `0x4f6d26`), named by `SkillLine.dbc` (`0x4f6d61`), with the
+/// slot's rank and maximum, each plus the permanent bonus word when above 0 (`0x4f6d9d`,
+/// `0x4f6e10`). The known spells are a set here, so the first is the lowest id. A player with no
+/// slot for the line gives the slot -1, which the reads do not test (`0x4f6d52`): the words 12
+/// bytes below the first slot, `PLAYER_XP` for the rank and maximum and `PLAYER_NEXT_LEVEL_XP`'s
+/// high word for the bonus.
+fn display_line(
+    first: Option<u32>,
+    skill_lines: &SkillLines,
+    store: &ObjectStore,
+) -> Option<(String, u32, u32)> {
+    let line = skill_lines.catalog.ability(first?)?.skill_id;
+    if line == 0 {
+        return None;
     }
-    (0, 0, 0)
+    let name = skill_lines.catalog.line(line)?.name.clone();
+    let (rank, max, perm) = match skill_slot(store, line) {
+        Some(s) => (
+            u32::from(s.value),
+            u32::from(s.max),
+            u32::from(s.perm_bonus as u16),
+        ),
+        None => {
+            let xp = store.0.player_xp().unwrap_or(0);
+            let next = store.0.player_next_level_xp().unwrap_or(0);
+            (xp & 0xffff, xp >> 16, next >> 16)
+        }
+    };
+    let with_bonus = |v: u32| if v > 0 { v + perm } else { v };
+    Some((name, with_bonus(rank), with_bonus(max)))
 }
 
 /// Law D, the row icon: always the recipe's own `SpellIconID`, never the product. `GetCraftIcon`
@@ -124,8 +151,6 @@ fn feed_craft(
             let spells = spells.as_deref()?;
             let skill_lines = skill_lines.as_deref()?;
             let store = self_store.single().ok()?;
-            let (rank, max_rank, bonus) = skill_rank(store, line);
-            let effective = rank.saturating_add_signed(bonus);
             let name = skill_lines
                 .catalog
                 .line(line)
@@ -150,14 +175,26 @@ fn feed_craft(
             // Admission (`0x5e9c20`): known, not hidden (`Attributes & 0x20`), and `castUI` equal
             // to the craft type. The client walks its per-type list (`CGPlayer_C + 0x1cd0 +
             // 0x10*type`) and never consults `SkillLineAbility` for membership.
-            let recipes: Vec<CraftRecipe> = actions
+            let listed: Vec<u32> = actions
                 .spells
                 .iter()
-                .filter(|&&s| {
+                .copied()
+                .filter(|&s| {
                     spells.catalog.get(s).is_some_and(|d| {
                         d.cast_ui == craft_type && d.attributes & SPELL_ATTR_IS_TRADESKILL == 0
                     })
                 })
+                .collect();
+            let (display_line, rank, max_rank) = (craft_type == 3)
+                .then(|| display_line(listed.first().copied(), skill_lines, store))
+                .flatten()
+                .map_or((None, 0, 0), |(n, r, m)| (Some(n), r, m));
+            let effective = skill_slot(store, line).map_or(0, |s| {
+                u32::from(s.value)
+                    .saturating_add_signed(i32::from(s.temp_bonus) + i32::from(s.perm_bonus))
+            });
+            let recipes: Vec<CraftRecipe> = listed
+                .iter()
                 .filter_map(|&s| {
                     let d = spells.catalog.get(s)?;
                     let sla = skill_lines.catalog.ability(s)?;
@@ -243,7 +280,7 @@ fn feed_craft(
             // No sort here: the engine orders the rows by the craft type's own comparator
             // (`benilla_ui::script::craft::recipe_order`).
             Some(CraftState {
-                display_line: Some(name.clone()),
+                display_line,
                 name,
                 rank,
                 max_rank,

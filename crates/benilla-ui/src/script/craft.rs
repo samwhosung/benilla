@@ -137,7 +137,7 @@ pub struct CraftState {
     /// The title `GetCraftName` answers.
     pub name: String,
     /// `GetCraftDisplaySkillLine`'s name, with [`Self::rank`] and [`Self::max_rank`] its rank
-    /// and maximum; `None` answers nil, 0, 0.
+    /// and maximum, each with the permanent bonus; `None` answers nil, 0, 0.
     pub display_line: Option<String>,
     pub rank: u32,
     pub max_rank: u32,
@@ -151,6 +151,8 @@ pub struct CraftState {
 
 /// Beast Training's craft type, the `EffectMiscValue[0]` of spell 5149.
 const CRAFT_TYPE_BEAST_TRAINING: u32 = 1;
+/// Enchanting's craft type, the one `GetCraftDisplaySkillLine` answers for (`0x4f6ce3`).
+const CRAFT_TYPE_ENCHANTING: u32 = 3;
 
 /// The craft row order: difficulty tier (`[+0xc]`) ascending, then name (collator `0x64a4c0`),
 /// then, at Beast Training only (`0x4f6920`; every other type uses `0x4f67a0`), `spellLevel`
@@ -278,15 +280,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetCraftDisplaySkillLine() → name, rank, maxRank; the name is nil when closed, which hides
-    // the rank bar (`Blizzard_CraftUI.lua:108-109`).
+    // GetCraftDisplaySkillLine() (`0x4f6cb0`) → name, rank, maxRank, only while the open craft
+    // type is 3, Enchanting (`0x4f6ce3`); any other type, a closed window or a line the first
+    // spell lacks answers nil, 0, 0 (`0x4f6e40`), and the nil hides the stock rank bar
+    // (`Blizzard_CraftUI.lua:108-122`).
     g.set(
         "GetCraftDisplaySkillLine",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let enchanting = model.open_professions().craft == Some(CRAFT_TYPE_ENCHANTING);
             let (name, rank, max_rank) = match &model.craft {
-                Some(c) => (Some(c.name.clone()), c.rank, c.max_rank),
-                None => (None, 0, 0),
+                Some(c) if enchanting && c.display_line.is_some() => {
+                    (c.display_line.clone(), c.rank, c.max_rank)
+                }
+                _ => (None, 0, 0),
             };
             Ok(MultiValue::from_vec(vec![
                 opt_str(lua, name.as_ref())?,
@@ -579,9 +586,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 mod tests {
     use super::*;
     use crate::script::UiScript;
-
-    /// Enchanting's craft type, whose comparator has no `spellLevel` key.
-    const CRAFT_TYPE_ENCHANTING: u32 = 3;
 
     fn recipe(
         spell_id: u32,
