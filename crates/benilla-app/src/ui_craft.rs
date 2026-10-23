@@ -525,7 +525,7 @@ fn feed_craft(
         // `CloseCraft` closes the VM's window and signals `CRAFT_CLOSE` in the verb (`0x4f5fef`).
         let closed_in_place = !script.craft_open();
         // A learned or unlearned craft spell, any spell without `Attributes & 0x20` (`0x5e9c8e` →
-        // `0x5e9d83`), rebuilds the list (`0x5e9fb7`, `0x5ea25f`), each its own rebuild.
+        // `0x5e9d83`), rebuilds the list (`0x5e9e12`, `0x5ea240`), each its own rebuild.
         let known: BTreeSet<u32> = spells.as_deref().map_or_else(BTreeSet::new, |spells| {
             actions
                 .spells

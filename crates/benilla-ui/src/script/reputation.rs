@@ -1202,7 +1202,8 @@ mod tests {
         );
     }
 
-    /// Deviation pinned: an index one past the entry count reads nothing, as one further does.
+    /// Deviation pinned: an index one past the last entry names faction 0, as one further does,
+    /// which the Other header answers.
     #[test]
     fn an_index_at_the_entry_count_reads_as_one_past_it() {
         let s = seated();
