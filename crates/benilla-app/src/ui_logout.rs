@@ -309,6 +309,7 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
     use super::*;
+    use benilla_protocol::SessionEvent;
     use benilla_ui::script::UiScript;
 
     #[test]
@@ -328,7 +329,8 @@ mod tests {
         s.apply_response(0, false);
         assert_eq!(s.signals, vec![LogoutSignal::Quiting], "a quit says so");
 
-        // In combat: the error line, and the quit is disarmed so a later logout does not exit.
+        // In combat: the error line (`0x5aaf21`) and the pending byte cleared (`0x5aaf2e`); the
+        // quit byte stays, as only a request writes it (`0x5ab053`).
         let mut s = LogoutState {
             quitting: true,
             pending: true,
@@ -336,7 +338,7 @@ mod tests {
         };
         s.apply_response(1, false);
         assert_eq!(s.signals, vec![LogoutSignal::Refused]);
-        assert!(!s.quitting);
+        assert!(s.quitting, "the refusal leaves the quit byte");
         assert!(
             !s.pending,
             "the refusal arm clears the pending byte — otherwise a logout refused in combat \
@@ -425,8 +427,11 @@ mod tests {
         );
     }
 
+    /// `SMSG_LOGOUT_CANCEL_ACK` → `0x5aaf60`: `LOGOUT_CANCEL` only while a request is pending
+    /// (`0x5aaf63`-`0x5aaf6b`), then the pending byte clears (`0x5aaf77`); the quit byte is not
+    /// its to touch.
     #[test]
-    fn a_cancel_disarms_a_pending_quit() {
+    fn the_cancel_ack_fires_only_while_a_request_is_pending() {
         let mut s = LogoutState {
             quitting: true,
             pending: true,
@@ -434,6 +439,89 @@ mod tests {
         };
         s.apply_cancelled();
         assert_eq!(s.signals, vec![LogoutSignal::Cancelled]);
-        assert!(!s.quitting);
+        assert!(!s.pending);
+        assert!(s.quitting, "the ack leaves the quit byte");
+        s.signals.clear();
+        s.apply_cancelled();
+        assert!(s.signals.is_empty(), "nothing pending, nothing fired");
+    }
+
+    /// The ack of the player's own cancel fires nothing: `CancelLogout` (`0x5aaf80`) clears the
+    /// pending byte as it sends (`0x5aafc2`), so by the ack's `0x5aaf60` nothing is pending.
+    #[test]
+    fn the_ack_of_a_cancelled_logout_fires_nothing() {
+        let (mut app, rx) = client();
+        assert_eq!(
+            sent_by(&mut app, &rx, "Logout() CancelLogout() CancelLogout()"),
+            ["logout", "cancel", "cancel"]
+        );
+        crate::net::handlers::dispatch(
+            app.world_mut(),
+            vec![SessionEvent::LogoutCancelled, SessionEvent::LogoutCancelled],
+        );
+        assert!(app.world().resource::<LogoutState>().signals.is_empty());
+    }
+
+    /// A world load leaves the world first (`0x401bd4` → `0x5aae70(0)`), which fires
+    /// `LOGOUT_CANCEL` while a request is pending (`0x5aae88`-`0x5aae97`) and clears the byte
+    /// (`0x5aae9c`), so the next `Logout()` is heard; with nothing pending it fires nothing.
+    #[test]
+    fn a_world_load_calls_off_a_pending_logout() {
+        let (mut app, rx) = client();
+        let port = || SessionEvent::Worldport {
+            map_id: 1,
+            position: [0.0; 3],
+            orientation: 0.0,
+            needs_ack: true,
+        };
+        assert_eq!(sent_by(&mut app, &rx, "Logout()"), ["logout"]);
+        crate::net::handlers::dispatch(app.world_mut(), vec![port()]);
+        let logout = app.world().resource::<LogoutState>();
+        assert!(!logout.pending, "the load clears the pending byte");
+        assert_eq!(logout.signals, [LogoutSignal::Cancelled]);
+        app.world_mut()
+            .resource_mut::<LogoutState>()
+            .signals
+            .clear();
+        crate::net::handlers::dispatch(app.world_mut(), vec![port()]);
+        assert!(app.world().resource::<LogoutState>().signals.is_empty());
+        assert_eq!(sent_by(&mut app, &rx, "Logout()"), ["logout"]);
+    }
+
+    /// `SMSG_LOGOUT_COMPLETE` through [`exit_on_logout_complete`]: whether the process exits.
+    fn complete(app: &mut App) -> bool {
+        app.world_mut().write_message(LoggedOutMessage);
+        app.world_mut()
+            .run_system_once(exit_on_logout_complete)
+            .expect("complete");
+        app.world_mut()
+            .resource_mut::<Messages<AppExit>>()
+            .drain()
+            .next()
+            .is_some()
+    }
+
+    /// Only a request writes the quit byte (`0x5ab053`); `CancelLogout` (`0x5aaf80`) and its ack
+    /// (`0x5aaf60`) leave it. A completion no request asked for after a cancelled `Quit()` ends
+    /// the process (`0x5aaecf`), as 1.12.1's does, and a later `Logout()` stores 0 again, so its
+    /// completion ends only the session.
+    #[test]
+    fn a_cancelled_quit_keeps_the_quit_byte_until_the_next_request() {
+        let (mut app, rx) = client();
+        assert_eq!(
+            sent_by(&mut app, &rx, "Quit() CancelLogout()"),
+            ["logout", "cancel"]
+        );
+        crate::net::handlers::dispatch(app.world_mut(), vec![SessionEvent::LogoutCancelled]);
+        assert!(complete(&mut app), "the kept byte exits on a completion");
+
+        let (mut app, rx) = client();
+        sent_by(&mut app, &rx, "Quit() CancelLogout()");
+        crate::net::handlers::dispatch(app.world_mut(), vec![SessionEvent::LogoutCancelled]);
+        assert_eq!(sent_by(&mut app, &rx, "Logout()"), ["logout"]);
+        assert!(
+            !complete(&mut app),
+            "a later logout's completion ends the session alone"
+        );
     }
 }
