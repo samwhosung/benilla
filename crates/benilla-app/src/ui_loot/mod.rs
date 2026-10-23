@@ -203,6 +203,19 @@ impl Window {
     }
 }
 
+/// The cells a response's handler writes over before its copier runs, as the session it replaces
+/// left them: the latch (`0x5ebb60`), the bind stash (`[0x847cec]`, `0x4c1df5`) and whether a
+/// copier's end waits on records (`0x4c1e77`). The steps that session's packets queued ahead of
+/// the response run on these, as each packet's dispatch ran them before the response arrived.
+/// The auto-loot byte is none of them: only `SetAutoLoot` writes it (`0x5df468`), never a
+/// response, so every step reads it live.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Cells {
+    latch: Option<u64>,
+    stash: Option<u32>,
+    copier_due: bool,
+}
+
 /// What a packet did that the VM has yet to hear, in its order on the loot lane: a change to the
 /// window, with the window it left, or an item push.
 #[derive(Clone, Debug)]
@@ -224,6 +237,7 @@ enum Step {
         ended: Window,
         window: Window,
         ends: Option<bool>,
+        prior: Cells,
     },
     /// The copier's end a response's pending records held, run by the cache callback at the last
     /// answer (`0x4c2ac0`, `0x4c2afc`), on its own session's window: a later response in the
@@ -292,6 +306,11 @@ impl LootState {
             source: None,
             ..self.window.clone()
         };
+        let prior = Cells {
+            latch: self.window.source,
+            stash: self.pending_bind_confirm,
+            copier_due: self.copier_due,
+        };
         self.window = Window {
             source: Some(source),
             gold,
@@ -308,7 +327,32 @@ impl LootState {
             ended,
             window: self.window.clone(),
             ends: None,
+            prior,
         });
+    }
+
+    /// The latch as it stood before the response's handler wrote it (`0x5ebb60`), for the steps
+    /// of the session it replaces.
+    pub(crate) fn note_replaced_latch(&mut self, latch: Option<u64>) {
+        if let Some(prior) = self.replaced_cells_from_back() {
+            prior.latch = latch;
+        }
+    }
+
+    /// The last queued response's cells, the one a handler just queued.
+    fn replaced_cells_from_back(&mut self) -> Option<&mut Cells> {
+        self.steps.iter_mut().rev().find_map(|(_, s)| match s {
+            Step::Opened { prior, .. } => Some(prior),
+            _ => None,
+        })
+    }
+
+    /// The first queued response's cells: those of the session the steps ahead of it belong to.
+    fn replaced_cells(&mut self) -> Option<&mut Cells> {
+        self.steps.iter_mut().find_map(|(_, s)| match s {
+            Step::Opened { prior, .. } => Some(prior),
+            _ => None,
+        })
     }
 
     /// The copier's asks at its packet (`0x4c1e77`): each row's record looked up with the callback
@@ -1234,20 +1278,23 @@ fn fire_step(vm: &mut LootVm, reads: &LootReads, step: Step) {
             ended,
             window: w,
             ends,
+            prior,
         } => {
             let replaced = vm.own().0.loot.replaced();
             // The copier ends the session the VM shows (`0x4c1ccb`-`0x4c1dac`): its
             // `LOOT_CLOSED` handlers run on the cells the teardown leaves, the source zeroed,
             // before the new source is stored (`0x4c1dc2`), so their `CloseLoot` finds no
-            // window (`0x48f23f`). The stash clear comes after them (`0x4c1df5`).
+            // window (`0x48f23f`). The stash is the ended session's until the clear after them
+            // (`0x4c1df5`); the latch is already the response's (`0x5ebb60`).
             let live = swap_in_cells(vm, ended);
+            vm.own().0.loot.pending_bind_confirm = prior.stash;
             vm.turn(|script, _| {
                 if let Some(script) = script.filter(|s| s.shown_loot().is_some()) {
                     show(script, None);
                 }
             });
-            restore_live(vm, live);
             vm.own().0.loot.pending_bind_confirm = None;
+            restore_live(vm, live);
             let ends = vm.turn(|script, (mut steps, _)| {
                 let Some(script) = script else {
                     return false;
@@ -1361,9 +1408,13 @@ fn end_superseded_open<X: bevy::ecs::system::SystemParam + 'static>(
 struct Live {
     window: Window,
     mark: crate::lanes::Mark,
+    /// The replaced session's other cells were swapped in ([`exchange_replaced_cells`]).
+    cells: bool,
 }
 
-/// Put `cells`, the loot cells as a step left them, in the window's place for that step's turn.
+/// Put `cells`, the loot window as a step left it, in the window's place for that step's turn,
+/// and, for a session a later response replaced, the latch, the stash and the copier's wait it
+/// left ([`Cells`]).
 fn swap_in_cells<X: bevy::ecs::system::SystemParam + 'static>(
     vm: &mut VmWith<(LootSteps<'static, 'static>, X)>,
     cells: Window,
@@ -1372,10 +1423,27 @@ fn swap_in_cells<X: bevy::ecs::system::SystemParam + 'static>(
     Live {
         window: std::mem::replace(&mut s.loot.window, cells),
         mark: crate::lanes::mark(),
+        cells: exchange_replaced_cells(&mut s),
     }
 }
 
-/// Put the live window back: the later copier rewrote every cell (`0x4c1dc2` on), so what the
+/// Exchange the live [`Cells`] with those the first queued response holds for the session it
+/// replaces; run twice it puts the live ones back and keeps what the turn left in the replaced
+/// session's, for its next step. Whether a response is queued.
+fn exchange_replaced_cells(s: &mut LootSteps) -> bool {
+    let Some(mut cells) = s.loot.replaced_cells().copied() else {
+        return false;
+    };
+    std::mem::swap(&mut s.latch.0, &mut cells.latch);
+    std::mem::swap(&mut s.loot.pending_bind_confirm, &mut cells.stash);
+    std::mem::swap(&mut s.loot.copier_due, &mut cells.copier_due);
+    if let Some(prior) = s.loot.replaced_cells() {
+        *prior = cells;
+    }
+    true
+}
+
+/// Put the live cells back: the later copier rewrote every cell (`0x4c1dc2` on), so what the
 /// step's handlers changed in them goes, with the steps their calls queued.
 fn restore_live<X: bevy::ecs::system::SystemParam + 'static>(
     vm: &mut VmWith<(LootSteps<'static, 'static>, X)>,
@@ -1383,6 +1451,9 @@ fn restore_live<X: bevy::ecs::system::SystemParam + 'static>(
 ) {
     let (mut s, _) = vm.own();
     s.loot.window = live.window;
+    if live.cells {
+        exchange_replaced_cells(&mut s);
+    }
     s.loot.steps.retain(|(stamp, _)| !stamp.since(live.mark));
 }
 

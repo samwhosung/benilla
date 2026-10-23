@@ -68,6 +68,7 @@ fn on_response(
         return;
     }
     // A fishing bobber first arms here and still does not kneel: `LootKneel` decides the pose.
+    let latch_before = seam.loot_latch.0;
     seam.loot_latch.0 = Some(guid);
     debug!(
         "net: loot response {guid:#x} type {loot_type} gold {gold} {} item(s)",
@@ -76,6 +77,7 @@ fn on_response(
     select.select_unit(guid);
     let seam = &mut select.seam;
     seam.loot.open(guid, loot_type, gold, rows);
+    seam.loot.note_replaced_latch(latch_before);
     seam.loot.ask_rows(&items, &seam.net);
     if player.is_some_and(|p| {
         p.foreign_mover.is_none()
