@@ -108,3 +108,72 @@ fn a_raid_mark_refused_shows_inside_its_call() {
     let seen = shown_in_call(&mut f, r#"SetRaidTarget("target", 1)"#);
     assert_eq!(seen, "ERR_INVALID_RAID_TARGET");
 }
+
+/// `JoinChannelByName` past ten slots: the join body's claim (`0x49ede8` → `0x49b9c5`) shows
+/// `ERR_TOO_MANY_CHAT_CHANNELS` (message `0x199`) inside the call, and the body sends the join
+/// after it all the same (`0x49edf3`, `0x49ee02`), so the line's listener's packet goes out first.
+#[test]
+fn a_join_past_ten_channels_shows_its_refusal_inside_the_call_before_the_send() {
+    let mut f = frame(true);
+    in_world(&mut f);
+    for i in 1..=10 {
+        run(&mut f, &format!("JoinChannelByName('Chan{i}')"));
+    }
+    f.rx.try_iter().for_each(drop);
+    run(
+        &mut f,
+        r#"local roll = CreateFrame("Frame")
+        roll:RegisterEvent("CHAT_MSG_SYSTEM")
+        roll:SetScript("OnEvent", function() RandomRoll(1, 100) end)"#,
+    );
+    assert_eq!(
+        shown_in_call(&mut f, "JoinChannelByName('Eleventh')"),
+        "ERR_TOO_MANY_CHAT_CHANNELS"
+    );
+    let wire: Vec<String> =
+        f.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::RandomRoll { .. } => Some("RandomRoll".to_string()),
+                ClientCommand::JoinChannel { name, .. } => Some(format!("JoinChannel {name}")),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(wire, ["RandomRoll", "JoinChannel Eleventh"]);
+}
+
+/// The attack validator's refusal shows inside the call, after what the validator sent before
+/// it: with the targeting cursor up, the nearest enemy its scan picks is bound to the cast
+/// (`0x4941e6`), the friend stays selected, and the final gate refuses it (`0x613171`), so the
+/// cast goes out ahead of the line's listener's packet, and the chunk's next line reads the line.
+#[test]
+fn an_attacks_refusal_shows_inside_its_call_after_the_cast_it_bound() {
+    let mut f = frame(true);
+    with_factions(&mut f, FRIEND, &[]);
+    spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
+    with_the_cursor_up(&mut f);
+    run(
+        &mut f,
+        r#"local roll = CreateFrame("Frame")
+        roll:RegisterEvent("UI_ERROR_MESSAGE")
+        roll:SetScript("OnEvent", function() RandomRoll(1, 100) end)"#,
+    );
+    f.rx.try_iter().for_each(drop);
+    run_pressed(&mut f, r#"AttackTarget() SEEN = table.concat(LINES, ",")"#);
+    assert_eq!(
+        eval::<String>(&mut f, "return SEEN"),
+        "ERR_INVALID_ATTACK_TARGET"
+    );
+    let wire: Vec<String> =
+        f.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::CastSpell { target, .. } => Some(format!("CastSpell {target:x?}")),
+                ClientCommand::RandomRoll { .. } => Some("RandomRoll".to_string()),
+                ClientCommand::AttackSwing { .. } => Some("AttackSwing".to_string()),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(
+        wire,
+        [format!("CastSpell {:x?}", Some(MOB)), "RandomRoll".into()]
+    );
+}

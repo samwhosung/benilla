@@ -767,6 +767,50 @@ fn a_pet_attacks_pick_signals_its_target_change_before_the_order() {
     );
 }
 
+/// A possessed unit's Attack raises its attack latch (`0x4bd42e`) and signals `PET_BAR_UPDATE`
+/// (`0x4bd438`) past the validator and ahead of `CMSG_PET_ACTION` (`0x4bd4a4`): the listener's
+/// packet goes out between the pick's selection and the order, it reads the Attack button lit,
+/// and the bar's feed signals no second time.
+#[test]
+fn a_possessed_attacks_latch_signals_its_bar_before_the_order() {
+    let attack = benilla_protocol::messages::PET_COMMAND_ATTACK
+        | (u32::from(benilla_protocol::messages::PET_ACT_COMMAND) << 24);
+    let mut f = frame(true);
+    with_factions(&mut f, FRIEND, &[]);
+    spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
+    with_pet(&mut f, true, attack);
+    feeds(&mut f);
+    f.rx.try_iter().for_each(drop);
+    run(
+        &mut f,
+        r#"HEARD, LIT = 0, nil
+        local r = CreateFrame("Frame")
+        r:RegisterEvent("PET_BAR_UPDATE")
+        r:SetScript("OnEvent", function()
+            HEARD = HEARD + 1
+            local _, _, _, _, active = GetPetActionInfo(1)
+            LIT = active
+            RandomRoll(1, 100)
+        end)"#,
+    );
+    run_pressed(&mut f, "PetAttack()");
+    assert_eq!(
+        pet_wire(&f),
+        ["SetSelection 0x31", "RandomRoll", "PetAction 0x31"]
+    );
+    assert_eq!(eval::<i64>(&mut f, "return HEARD"), 1, "in the press");
+    assert!(
+        eval::<bool>(&mut f, "return LIT == 1"),
+        "the latch lit Attack"
+    );
+    feeds(&mut f);
+    assert_eq!(
+        eval::<i64>(&mut f, "return HEARD"),
+        1,
+        "the feed signals no second time"
+    );
+}
+
 /// A possessed unit's spell goes to the attempt with the unit as its caster (`0x4bd35e`), whose
 /// attack pick (`0x6e4efb`, the unit as its actor at `0x6e4ef4`) signals its selection before the
 /// send; TryCast's tail then presses the bar's Attack (`0x6e51de` → `0x6131a0` → `0x4bd630`) at
