@@ -767,25 +767,25 @@ fn a_click_off_a_dead_selection_while_attacking_swings_at_nothing() {
     let mob = f.mob;
     f.make_unit_with(old, &[(22, 0)]);
     f.make_unit(mob);
-    f.app.world_mut().resource_mut::<PressPick>().cursor.kind = super::cursor_mode::CursorKind::Attack;
+    f.app.world_mut().resource_mut::<PressPick>().cursor.kind =
+        super::cursor_mode::CursorKind::Attack;
     let over = f.over_the_mob();
     f.click(over);
     f.app
         .world_mut()
         .run_system_once(click::select_on_click)
         .expect("the click runs");
-    let sent: Vec<_> = f
-        .rx
-        .try_iter()
-        .filter(|c| {
-            matches!(
-                c,
-                ClientCommand::AttackStop
-                    | ClientCommand::SetSelection { .. }
-                    | ClientCommand::AttackSwing { .. }
-            )
-        })
-        .collect();
+    let sent: Vec<_> =
+        f.rx.try_iter()
+            .filter(|c| {
+                matches!(
+                    c,
+                    ClientCommand::AttackStop
+                        | ClientCommand::SetSelection { .. }
+                        | ClientCommand::AttackSwing { .. }
+                )
+            })
+            .collect();
     assert!(
         matches!(
             sent.as_slice(),
