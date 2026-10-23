@@ -444,11 +444,11 @@ fn drop_unit_views(mut log: ResMut<ViewLog>, mut views: ResMut<UnitViews>) {
 /// The units the tokens name as the drain begins, each by guid with the entity its live store is
 /// read from: `"player"`, `"target"` and `"npc"`.
 ///
-/// Deviation: each getter resolves its token at the call (`UnitHealth` calls `0x515970` at
-/// `0x517511`), so a listener for an earlier packet reads the unit the token named then. Here
-/// `"target"` and `"npc"` name the frame's last selection and interaction through the drain, and
-/// a token a call moves during it is left to that call's own seat; a later piece versions the
-/// selection and the interaction, and this goes.
+/// Each getter resolves its token at the call (`UnitHealth` calls `0x515970` at `0x517511`), so
+/// a listener for an earlier packet reads the unit the token named then. Not yet: `"target"` and
+/// `"npc"` name the frame's last selection and interaction through the drain, and a token a call
+/// moves during it is left to that call's own seat, until the selection and the interaction are
+/// versioned too (#2217).
 struct Seats {
     me: Option<(u64, Option<Entity>)>,
     target: Option<(u64, Option<Entity>)>,
