@@ -390,7 +390,7 @@ impl ScriptItemUse<'_, '_> {
             "ui_items: bind-on-use confirmed for wire {}/{}",
             it.bag_index, it.slot
         );
-        ladder.permit(may_cast);
+        let outer = ladder.permit(may_cast);
         super::send_item_use(
             it,
             &targeting.context(),
@@ -400,7 +400,7 @@ impl ScriptItemUse<'_, '_> {
             true,
             ui_errors,
         );
-        ladder.permit(true);
+        ladder.permit(outer);
     }
 }
 
