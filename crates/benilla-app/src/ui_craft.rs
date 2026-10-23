@@ -3,6 +3,8 @@
 //! description's `$` tokens resolve as a tooltip's do. An enchant is an item-targeted cast
 //! (`Targets = 0x10`) whose pick is the ordinary targeting cursor ([`crate::spell::targeting`]).
 
+use std::collections::BTreeSet;
+
 use bevy::prelude::*;
 
 use benilla_formats::{
@@ -353,16 +355,16 @@ fn feed_craft(
     objects: Objects,
     items: Res<Items>,
     commands: Res<NetCommands>,
-    mut last: Local<crate::ui_script::VmMemo<Option<CraftState>>>,
+    mut memo: Local<crate::ui_script::VmMemo<CraftMemo>>,
 ) {
     vm.feed(|script, pet_reads, fires| {
         let Some(script) = script else {
             return;
         };
-        let last = last.get(script);
+        let memo = memo.get(script);
         // The show stands for the stock frame's getter calls, whose lookups pass the callback
         // `0x4f7710` (`0x4f75f2`, `0x4f7a0a`); the rebuilds between read.
-        let ask = Ask::at(last.is_none() || open.is_changed(), &commands);
+        let ask = Ask::at(memo.state.is_none() || open.is_changed(), &commands);
         let fresh = (|| -> Option<CraftState> {
             let line = open.line?;
             let craft_type = open.craft_type;
@@ -522,32 +524,97 @@ fn feed_craft(
 
         // `CloseCraft` closes the VM's window and signals `CRAFT_CLOSE` in the verb (`0x4f5fef`).
         let closed_in_place = !script.craft_open();
-        if fresh == *last {
-            return;
+        // A learned or unlearned craft spell, any spell without `Attributes & 0x20` (`0x5e9c8e` →
+        // `0x5e9d83`), rebuilds the list (`0x5e9fb7`, `0x5ea25f`), each its own rebuild.
+        let known: BTreeSet<u32> = spells.as_deref().map_or_else(BTreeSet::new, |spells| {
+            actions
+                .spells
+                .iter()
+                .copied()
+                .filter(|&s| {
+                    spells.catalog.get(s).is_some_and(|d| {
+                        d.cast_ui != 0 && d.attributes & SPELL_ATTR_IS_TRADESKILL == 0
+                    })
+                })
+                .collect()
+        });
+        let learns = known.symmetric_difference(&memo.known).count();
+        // `SMSG_PET_SPELLS` rebuilds it (`0x4bd990` → `0x4bdafa`), read here as a new pet or book.
+        let pet_book = pet_reads.bar.as_deref().map(|bar| {
+            let book = bar.spells.spells.iter().map(|e| e.action()).collect();
+            (bar.spells.pet_guid, book)
+        });
+        let pet_rebuild = usize::from(pet_book != memo.pet_book);
+        let missing = fresh.as_ref().map_or_else(BTreeSet::new, missing_reagents);
+        let arrivals = memo.missing.difference(&missing).count();
+        let opened = match (&memo.state, &fresh) {
+            (None, Some(_)) => true,
+            (Some(l), Some(f)) => l.craft_type != f.craft_type || l.name != f.name,
+            _ => false,
+        };
+        // Every push is silent: the rebuilds signal, and the getters read the state at their call.
+        if fresh != memo.state {
+            script.set_craft(fresh.clone());
+            // Pre-ask the reagent templates `GetCraftReagentItemLink` reads.
+            if let Some(f) = &fresh {
+                script.ask_item_templates(
+                    f.recipes
+                        .iter()
+                        .flat_map(|r| r.reagents.iter().map(|re| re.item)),
+                );
+            }
         }
-        script.set_craft(fresh.clone());
-        // Pre-ask the reagent templates `GetCraftReagentItemLink` reads.
-        if let Some(f) = &fresh {
-            script.ask_item_templates(
-                f.recipes
-                    .iter()
-                    .flat_map(|r| r.reagents.iter().map(|re| re.item)),
-            );
-        }
-        match (&*last, &fresh) {
-            (None, Some(f)) => {
+        match (&memo.state, &fresh) {
+            (_, Some(f)) if opened => {
                 debug!("ui_craft: window opens — {} recipe(s)", f.recipes.len());
+                // The open's build signals the update (`0x4f661a`), then the show.
+                fires.post("CRAFT_UPDATE", vec![]);
                 fires.post("CRAFT_SHOW", vec![]);
             }
-            (Some(_), Some(_)) => fires.post("CRAFT_UPDATE", vec![]),
+            // Each learn's and pet book's rebuild, and each arriving record's callback
+            // (`0x4f7710`), signals the update.
+            (Some(_), Some(_)) => {
+                for _ in 0..learns + pet_rebuild + arrivals {
+                    fires.post("CRAFT_UPDATE", vec![]);
+                }
+            }
             (Some(_), None) if !closed_in_place => {
                 debug!("ui_craft: window closes");
                 fires.post("CRAFT_CLOSE", vec![]);
             }
-            (Some(_), None) | (None, None) => {}
+            _ => {}
         }
-        *last = fresh;
+        memo.state = fresh;
+        memo.known = known;
+        memo.pet_book = pet_book;
+        memo.missing = missing;
     })
+}
+
+/// What [`feed_craft`] remembers from its last frame.
+#[derive(Default)]
+struct CraftMemo {
+    /// The state it last pushed.
+    state: Option<CraftState>,
+    /// The known craft spells.
+    known: BTreeSet<u32>,
+    /// The pet bar's guid and book.
+    pet_book: Option<(u64, Vec<u32>)>,
+    /// The reagent records the list lacked.
+    missing: BTreeSet<u32>,
+}
+
+/// The reagent records a list's rows wait on, those with no name.
+fn missing_reagents(c: &CraftState) -> BTreeSet<u32> {
+    c.recipes
+        .iter()
+        .flat_map(|r| {
+            r.reagents
+                .iter()
+                .filter(|re| re.name.is_none())
+                .map(|re| re.item)
+        })
+        .collect()
 }
 
 /// Drains the Lua intents. `DoCraft` goes down the cast ladder: an enchant's `Targets = 0x10` arms

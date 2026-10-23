@@ -1421,3 +1421,24 @@ fn hidden_rows_trail_in_the_order_the_crt_sort_leaves_them() {
         .unwrap();
     assert_eq!((kind.as_str(), expanded), ("header", None));
 }
+
+/// A watcher's rebuild (`0x4fca20(0)`) counts each reagent again (`0x4fccfc`) before its update
+/// (`0x4fd164`), so the handler reads the new makeable counts; a closed window builds nothing
+/// (`0x4fcaee`).
+#[test]
+fn a_rebuild_counts_again_before_its_update() {
+    let mut s = UiScript::new().unwrap();
+    s.set_trade_skill(Some(two_recipe_state()));
+    s.run(
+        "N = nil local f = CreateFrame('Frame') f:RegisterEvent('TRADE_SKILL_UPDATE') \
+         f:SetScript('OnEvent', function() N = {} for i = 2, 3 do \
+         local _, _, n = GetTradeSkillInfo(i) table.insert(N, n) end end)",
+    )
+    .unwrap();
+    s.rebuild_trade_skill(&mut |t| t.recount(&|entry| if entry == 2589 { 7 } else { 0 }));
+    assert_eq!(s.eval::<Vec<u32>>("return N").unwrap(), [3, 3]);
+    s.run("N = nil").unwrap();
+    s.set_trade_skill(None);
+    s.rebuild_trade_skill(&mut |t| t.recount(&|_| 0));
+    assert!(s.eval::<Option<Vec<u32>>>("return N").unwrap().is_none());
+}

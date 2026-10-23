@@ -69,14 +69,22 @@ impl NoticeFiring<'_, '_> {
             script.rebuild_skills();
             return;
         }
+        if notice == FieldNotice::SkillMax {
+            script.rebuild_trade_skill(&mut |t| self.reband(t));
+            script.rebuild_skills();
+            return;
+        }
         if let FieldNotice::SkillValue {
             skill_id,
             old,
             shown,
         } = notice
         {
-            script.rebuild_skills();
-            self.skill_line(script, skill_id, old, shown);
+            if shown != u32::from(old) {
+                script.rebuild_skills();
+                self.skill_line(script, skill_id, old, shown);
+            }
+            script.rebuild_trade_skill(&mut |t| self.reband(t));
             return;
         }
         if notice == FieldNotice::Shapeshift {
@@ -95,6 +103,11 @@ impl NoticeFiring<'_, '_> {
 }
 
 impl NoticeFiring<'_, '_> {
+    /// The profession list's rebuild by a skill watch, its bands and line rank read again.
+    fn reband(&self, t: &mut benilla_ui::script::TradeSkillState) {
+        crate::ui_tradeskill::reband(t, self.me.iter().next(), self.skill_lines.as_deref());
+    }
+
     /// `0x5de180`'s line after its rebuild (`0x5de345`-`0x5de41c`), for a line with a `SkillLine`
     /// row and a race-class row without flags `0x402` (`0x5de34a`-`0x5de35f`): over an old value
     /// of 0 `ERR_SKILL_GAINED_S` (`0x5de378`), else, on a shown value above 0,
@@ -325,6 +338,7 @@ pub(crate) fn fire(
         | FieldNotice::Shapeshift
         | FieldNotice::PlayerAuras
         | FieldNotice::SkillLines
+        | FieldNotice::SkillMax
         | FieldNotice::SkillValue { .. } => {}
         FieldNotice::PvpPreference { on } => {
             let (toast, verbose) = super::pvp_announcement(on);

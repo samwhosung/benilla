@@ -2,8 +2,9 @@
 //! unit signals it ends in, fired at the packet's place among the other lanes ([`crate::lanes`]),
 //! whole and in its handler's order. A watcher's callback runs inside the notify pass of the update
 //! that moved its field (`0x465570` → `call [ebx+0x10]`, `0x4655dc`), and so do its signals. The
-//! record set-up (`0x5d8440`) runs the action bar's recount (`0x5d85ce`), the quest log's
-//! (`0x5d85d9`) and the owner's signal (`0x5d8606`); the destroy (`0x5d8660`) the recount
+//! record set-up (`0x5d8440`) runs the profession and craft lists' rebuilds (`0x5d85be`), the
+//! action bar's recount (`0x5d85ce`), the quest log's (`0x5d85d9`) and the owner's signal
+//! (`0x5d8606`); the destroy (`0x5d8660`) the recount
 //! (`0x5d8798`), the trade's column (`0x5d87a7`), the quest log (`0x5d87b2`) and the slot's
 //! signal (`0x5d87c1`); the stack count (`0x5d9400`) the recount (`0x5d94e1`), the trade
 //! (`0x5d94f0`), the slot's signal (`0x5d950e`) and the quest log (`0x5d9519`); the spell charges
@@ -193,11 +194,17 @@ fn fire_run(vm: &mut RunVm, reads: &mut RunReads, run: Run, touch: Option<TradeT
         });
         return;
     };
+    let rebuild = rebuild_at(&notice);
     vm.run(|script| {
         let Some(script) = script else {
             return;
         };
         fire_unlocks(script, unlocks);
+        if rebuild == Some(Rebuild::BeforeRecount) {
+            rebuild_lists(script, &|entry| {
+                carried(&reads.me, &reads.trade.objects, entry)
+            });
+        }
         let counter = crate::ui_action::recount::Counter {
             store: reads.me.iter().next(),
             objects: &reads.trade.objects,
@@ -217,9 +224,72 @@ fn fire_run(vm: &mut RunVm, reads: &mut RunReads, run: Run, touch: Option<TradeT
     }
     vm.run(|script| {
         if let Some(script) = script {
-            fire_tail(script, &mut reads.sink, &notice, &bags, signals);
+            let count = |entry| carried(&reads.me, &reads.trade.objects, entry);
+            fire_tail(
+                script,
+                &mut reads.sink,
+                &notice,
+                &bags,
+                signals,
+                (rebuild, &count),
+            );
         }
     });
+}
+
+/// Where a watcher's run rebuilds the open profession and craft lists, `0x4fca20(0)` then
+/// `0x4f60c0`, if it does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rebuild {
+    /// Ahead of the recount: the record set-up (`0x5d85be`), the destroy (`0x5d8788`), the stack
+    /// count (`0x5d94d1`) and a visible item (`0x5dee70`).
+    BeforeRecount,
+    /// After the recounts, ahead of the bag update: a backpack or keyring seat (`0x4f8e65`) and a
+    /// container's (`0x4f917c`).
+    BeforeBags,
+    /// After the bag events: a bag seat (`0x4f8f6d` behind `0x4f8f66`).
+    AfterBags,
+}
+
+/// The watchers that rebuild the lists, and where; the spell charges, enchantment and entry
+/// watchers rebuild nothing.
+fn rebuild_at(notice: &ItemNotice) -> Option<Rebuild> {
+    match notice {
+        ItemNotice::Record { .. }
+        | ItemNotice::Destroyed { .. }
+        | ItemNotice::StackCount { .. }
+        | ItemNotice::Visible { .. } => Some(Rebuild::BeforeRecount),
+        ItemNotice::Seat { .. } => Some(Rebuild::BeforeBags),
+        ItemNotice::Bag { .. } => Some(Rebuild::AfterBags),
+        ItemNotice::EntryRecord { .. }
+        | ItemNotice::SpellCharges { .. }
+        | ItemNotice::Entry { .. }
+        | ItemNotice::Enchantment { .. }
+        | ItemNotice::TradeRecord { .. } => None,
+    }
+}
+
+/// The two rebuilds, each signalling its window's update while that window is open; `count` is
+/// the carried count of an entry the builds read (`0x622130`).
+fn rebuild_lists(script: &mut UiScript, count: &dyn Fn(u32) -> u32) {
+    script.rebuild_trade_skill(&mut |t| t.recount(count));
+    script.rebuild_craft(&mut |c| c.recount(count));
+}
+
+/// The player's carried count of an entry, 0 with no active player.
+fn carried(
+    me: &Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
+    objects: &crate::net::Objects,
+    entry: u32,
+) -> u32 {
+    me.iter().next().map_or(0, |s| {
+        crate::ui_items::count_of(
+            &s.0,
+            objects,
+            entry,
+            crate::ui_items::InventoryScope::DEFAULT,
+        )
+    })
 }
 
 /// What a run does after its recount and trade half, in its handler's order: the quest log's ask
@@ -234,6 +304,7 @@ fn fire_tail(
     notice: &ItemNotice,
     bags: &[BagEvent],
     signals: Vec<FieldNotice>,
+    (rebuild, count): (Option<Rebuild>, &dyn Fn(u32) -> u32),
 ) {
     match *notice {
         ItemNotice::Record { entry, .. } | ItemNotice::Destroyed { entry, .. } => {
@@ -253,7 +324,13 @@ fn fire_tail(
         // Literal names: `reference_ui`'s producer test finds fire sites by literal.
         ItemNotice::TradeRecord { .. } => script.fire_event("TRADE_UPDATE", vec![]),
         _ => {
+            if rebuild == Some(Rebuild::BeforeBags) {
+                rebuild_lists(script, count);
+            }
             fire_bags(script, bags);
+            if rebuild == Some(Rebuild::AfterBags) {
+                rebuild_lists(script, count);
+            }
             fire_signals(script, sink, signals);
         }
     }

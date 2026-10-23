@@ -184,6 +184,20 @@ fn collate(a: &str, b: &str) -> std::cmp::Ordering {
         .then_with(|| a.cmp(b))
 }
 
+impl CraftState {
+    /// Each reagent's carried count from `count` (`0x622130`) and each row's available count
+    /// (`+8`) from them.
+    pub fn recount(&mut self, count: &dyn Fn(u32) -> u32) {
+        for r in &mut self.recipes {
+            for re in &mut r.reagents {
+                re.have = count(re.item);
+            }
+            r.num_available =
+                super::tradeskill::makeable(r.reagents.iter().map(|re| (re.have, re.need)));
+        }
+    }
+}
+
 impl super::UiScript {
     /// Push the open craft window's snapshot, or mark it closed with `None`, which keeps the
     /// list and selection as the reference's close does (`0x4f5fe0`). A push sorts the rows and
@@ -206,6 +220,25 @@ impl super::UiScript {
                     .map_or(0, |i| (i + 1) as u32);
                 model.craft = Some(s);
             }
+        }
+    }
+
+    /// A rebuild of the craft list (`0x4f60c0`), as the bag and item watchers run one on each of
+    /// their runs: while a craft window is open, the state read again where `refresh` brings the
+    /// watcher's change in, then `CRAFT_UPDATE` (`0x4f661a`), whether or not anything changed; the
+    /// rows the last push sorted sort the same. A closed window builds nothing (`0x4f60e3`).
+    pub fn rebuild_craft(&mut self, refresh: &mut dyn FnMut(&mut CraftState)) {
+        let open = {
+            let mut model = self.model_mut();
+            if model.craft_open {
+                if let Some(c) = model.craft.as_mut() {
+                    refresh(c);
+                }
+            }
+            model.craft_open
+        };
+        if open {
+            self.fire_event("CRAFT_UPDATE", Vec::new());
         }
     }
 

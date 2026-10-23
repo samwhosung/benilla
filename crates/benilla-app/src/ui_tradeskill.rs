@@ -9,6 +9,7 @@
 //! tool never reads red: the reference's `hasTool` for a focus is the literal 1.0 (`0x4ffa8b`),
 //! as the client holds no focus id or radius, and the server's refusal is the only feedback.
 
+use std::collections::BTreeSet;
 use std::time::Instant;
 
 use bevy::prelude::*;
@@ -216,6 +217,25 @@ fn skill_value(store: &ObjectStore, skill_id: u32) -> u32 {
     skill_slot(store, skill_id).map_or(0, |s| u32::from(s.value))
 }
 
+/// What a skill watch's rebuild reads again (`0x5de434`, `0x5de457`): the line's rank and
+/// maximum, and each recipe's band on the slot's value (`0x4fcc31`-`0x4fcc41`).
+pub(crate) fn reband(
+    t: &mut TradeSkillState,
+    store: Option<&ObjectStore>,
+    skill_lines: Option<&SkillLines>,
+) {
+    let (Some(store), Some(skill_lines)) = (store, skill_lines) else {
+        return;
+    };
+    let rank = skill_value(store, t.line);
+    (t.rank, t.max_rank) = skill_rank(store, t.line);
+    for r in &mut t.recipes {
+        if let Some(sla) = skill_lines.catalog.ability(r.spell_id) {
+            r.difficulty = difficulty(rank, sla.trivial_low, sla.trivial_high);
+        }
+    }
+}
+
 /// The difficulty band (`0x4fcbfc`), with a zero `trivialLow` read as `trivialHigh - 25`; the
 /// TradeSkill window passes the raw rank, the Craft window the rank with bonuses.
 pub(crate) fn difficulty(rank: u32, low: u32, high: u32) -> TradeSkillDifficulty {
@@ -376,17 +396,17 @@ fn feed_trade_skill(
     items: Res<Items>,
     commands: Res<NetCommands>,
     clock: Res<crate::ui_script::UiClock>,
-    mut last: Local<crate::ui_script::VmMemo<Option<TradeSkillState>>>,
+    mut memo: Local<crate::ui_script::VmMemo<TradeMemo>>,
 ) {
     vm.feed(|script, cooldowns, fires| {
         let Some(script) = script else {
             return;
         };
-        let last = last.get(script);
+        let memo = memo.get(script);
         // The list's build looks every record up with the callback `0x4fc8e0` (`0x4fcd4d`) at the
         // window's show; the rebuilds between read, as the getters' lookups stand for the stock
         // frame's calls (`0x4fdba8`), which the asks below make.
-        let ask = Ask::at(last.is_none() || open.is_changed(), &commands);
+        let ask = Ask::at(memo.state.is_none() || open.is_changed(), &commands);
         let fresh = (|| -> Option<TradeSkillState> {
             let line = open.line?;
             let spells = spells.as_deref()?;
@@ -441,32 +461,96 @@ fn feed_trade_skill(
         // `CloseTradeSkill` closes the VM's window and signals `TRADE_SKILL_CLOSE` in the verb
         // (`0x4fc884`).
         let closed_in_place = !script.trade_skill_open();
-        if fresh == *last {
-            return;
+        // A learned or unlearned profession spell (`Attributes & 0x20`) rebuilds with flag 1
+        // (`0x5e9c8e` → `0x5e9d79`, `0x5ea165`), each its own rebuild.
+        let known: BTreeSet<u32> = spells.as_deref().map_or_else(BTreeSet::new, |spells| {
+            actions
+                .spells
+                .iter()
+                .copied()
+                .filter(|&s| {
+                    spells
+                        .catalog
+                        .get(s)
+                        .is_some_and(|d| d.attributes & SPELL_ATTR_IS_TRADESKILL != 0)
+                })
+                .collect()
+        });
+        let learns = known.symmetric_difference(&memo.known).count();
+        let missing = fresh.as_ref().map_or_else(BTreeSet::new, missing_templates);
+        let arrivals = memo.missing.difference(&missing).count();
+        let opened = match (&memo.state, &fresh) {
+            (None, Some(_)) => true,
+            (Some(l), Some(f)) => l.line != f.line,
+            _ => false,
+        };
+        // Every push is silent: the rebuilds signal, and the getters read the state at their call.
+        if fresh != memo.state {
+            script.set_trade_skill(fresh.clone());
+            // The link verbs never query, as the client has every template cached by the time the
+            // list shows, so the feed asks for the missing ones here.
+            if let Some(f) = &fresh {
+                script.ask_item_templates(f.recipes.iter().flat_map(|r| {
+                    std::iter::once(r.product_item).chain(r.reagents.iter().map(|re| re.item))
+                }));
+            }
         }
-        script.set_trade_skill(fresh.clone());
-        // The link verbs never query, as the client has every template cached by the time the list
-        // shows, so the feed asks for the missing ones here.
-        if let Some(f) = &fresh {
-            script.ask_item_templates(f.recipes.iter().flat_map(|r| {
-                std::iter::once(r.product_item).chain(r.reagents.iter().map(|re| re.item))
-            }));
-        }
-        match (&*last, &fresh) {
-            (None, Some(f)) => {
+        match (&memo.state, &fresh) {
+            (_, Some(f)) if opened => {
                 debug!(
                     "ui_tradeskill: window opens — {} recipe(s), first group {:?}",
                     f.recipes.len(),
                     f.recipes.first().and_then(|r| r.group.clone())
                 );
-                fires.post("TRADE_SKILL_SHOW", vec![]);
+                // The open's build signals the update (`0x4fc985` → `0x4fd164`), then the show
+                // while the list holds a row (`0x4fc98a`-`0x4fc999`).
+                fires.post("TRADE_SKILL_UPDATE", vec![]);
+                if script.trade_skill_full_count() > 0 {
+                    fires.post("TRADE_SKILL_SHOW", vec![]);
+                }
             }
-            (Some(_), Some(_)) => fires.post("TRADE_SKILL_UPDATE", vec![]),
+            // Each learn's rebuild, and each arriving record's callback (`0x4fdc30` →
+            // `0x4fdc3c`), signals the update.
+            (Some(_), Some(_)) => {
+                for _ in 0..learns + arrivals {
+                    fires.post("TRADE_SKILL_UPDATE", vec![]);
+                }
+            }
             (Some(_), None) if !closed_in_place => fires.post("TRADE_SKILL_CLOSE", vec![]),
-            (Some(_), None) | (None, None) => {}
+            _ => {}
         }
-        *last = fresh;
+        memo.state = fresh;
+        memo.known = known;
+        memo.missing = missing;
     })
+}
+
+/// What [`feed_trade_skill`] remembers from its last frame.
+#[derive(Default)]
+struct TradeMemo {
+    /// The state it last pushed.
+    state: Option<TradeSkillState>,
+    /// The known profession spells.
+    known: BTreeSet<u32>,
+    /// The item records the list lacked.
+    missing: BTreeSet<u32>,
+}
+
+/// The item records a list's rows wait on: a product whose group is not named yet and a reagent
+/// with no name.
+fn missing_templates(t: &TradeSkillState) -> BTreeSet<u32> {
+    t.recipes
+        .iter()
+        .flat_map(|r| {
+            let product = (r.product_item != 0 && r.group.is_none()).then_some(r.product_item);
+            product.into_iter().chain(
+                r.reagents
+                    .iter()
+                    .filter(|re| re.name.is_none())
+                    .map(|re| re.item),
+            )
+        })
+        .collect()
 }
 
 /// Drain the Lua intents and feed the VM's repeat (`0x4fd7b0`) our own cast edges: `DoTradeSkill`
@@ -669,7 +753,7 @@ mod tests {
     /// No `TRADE_SKILL_UPDATE` sender runs off a cooldown's clock (`0x4fd164` in the rebuild
     /// `0x4fca20`, and the filter setters `0x4fd725`, `0x4fd745`, `0x4fd765`); the getter reads the
     /// seconds left at its call (`0x4fda20`). So a running cooldown pushes the same recipe every
-    /// frame, and the snapshot diff, which fires the event, never sees it tick.
+    /// frame.
     #[test]
     fn a_running_cooldown_leaves_the_recipe_unchanged_frame_to_frame() {
         use std::time::Duration;
@@ -965,6 +1049,84 @@ mod tests {
                 .unwrap(),
             "pushed, silently"
         );
+    }
+
+    /// The skill watches rebuild the open list, each at its place: the value watch on every run,
+    /// after its skill-list rebuild and its line past the gate (`0x5de2a7`, `0x5de417`,
+    /// `0x5de434`); the maximum's and permanent bonus's ahead of its skill-list rebuild
+    /// (`0x5de457`, `0x5de45c`); the temporary bonus's not at all (`0x5de470`).
+    #[test]
+    fn the_skill_watches_rebuild_the_open_list_in_their_order() {
+        use crate::field_watch::FieldNotice;
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        app.init_resource::<crate::field_watch::NoticeLane>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .init_resource::<crate::names::NameCache>()
+            .insert_resource(SkillLines {
+                catalog: benilla_formats::SkillLineCatalog::from_spell_lines([])
+                    .with_line_names([(197, "Tailoring")])
+                    .with_race_class_flags([(197, 0)]),
+            });
+        // A human warrior: race and class 1 (`UNIT_FIELD_BYTES_0`).
+        app.world_mut().spawn((
+            SelfPlayer,
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(36, 0x0101)])),
+        ));
+        let mut script = UiScript::new().unwrap();
+        script
+            .run(
+                r#"ERR_SKILL_GAINED_S = "You have gained the %s skill."
+                ERR_SKILL_UP_SI = "Your skill in %s has increased to %d."
+                HEARD = {} local f = CreateFrame('Frame') f:RegisterEvent('TRADE_SKILL_UPDATE')
+                f:RegisterEvent('SKILL_LINES_CHANGED') f:RegisterEvent('CHAT_MSG_SKILL')
+                f:SetScript('OnEvent', function() table.insert(HEARD, event) end)"#,
+            )
+            .unwrap();
+        script.set_trade_skill(Some(TradeSkillState {
+            line: 197,
+            line_name: "Tailoring".into(),
+            rank: 1,
+            max_rank: 75,
+            recipes: Vec::new(),
+        }));
+        app.insert_non_send_resource(script);
+        let mut fired = |notice: FieldNotice| {
+            app.world_mut()
+                .resource_mut::<crate::field_watch::NoticeLane>()
+                .write_batch([notice]);
+            app.world_mut()
+                .run_system_once(crate::ui_unit::field_events::fire_field_notices)
+                .unwrap();
+            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+            s.resolve();
+            s.eval::<Vec<String>>("local h = HEARD HEARD = {} return h")
+                .unwrap()
+        };
+        let value = |old, shown| FieldNotice::SkillValue {
+            skill_id: 197,
+            old,
+            shown,
+        };
+        assert_eq!(
+            fired(value(1, 2)),
+            [
+                "SKILL_LINES_CHANGED",
+                "CHAT_MSG_SKILL",
+                "TRADE_SKILL_UPDATE"
+            ]
+        );
+        assert_eq!(
+            fired(value(7, 7)),
+            ["TRADE_SKILL_UPDATE"],
+            "the gate's skip"
+        );
+        assert_eq!(
+            fired(FieldNotice::SkillMax),
+            ["TRADE_SKILL_UPDATE", "SKILL_LINES_CHANGED"]
+        );
+        assert_eq!(fired(FieldNotice::SkillLines), ["SKILL_LINES_CHANGED"]);
     }
 
     /// Our GOs count the batch down and recast, a GO flagged `0x41` is not ours to count

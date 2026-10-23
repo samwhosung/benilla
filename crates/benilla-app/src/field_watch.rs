@@ -81,17 +81,20 @@ pub(crate) enum FieldNotice {
     /// `OnComboPointsChanged` (`0x5ddff0`) on the active player's combo count: after the usable
     /// refresh (the action feed's), `PLAYER_COMBO_POINTS` (`0x5ddffa`).
     ComboPoints,
-    /// A skill watch's rebuild of the skill list (`0x4d2cb0`), which signals `SKILL_LINES_CHANGED`
-    /// (`0x4d2fec`): the maximum's and the permanent bonus's watch `0x5de450` (`0x5de45c`) and the
-    /// temporary bonus's `0x5de470` (`0x5de49a`).
+    /// The temporary bonus's watch `0x5de470`: the rebuild of the skill list (`0x4d2cb0`,
+    /// `0x5de49a`), which signals `SKILL_LINES_CHANGED` (`0x4d2fec`).
     SkillLines,
     /// `OnPlayerAurasChanged` (`0x4e4140`) on the active player's aura fields: the buff cache's
     /// rebuild and its `PLAYER_AURAS_CHANGED` (`0x4e4170`, `0x4e437f`).
     PlayerAuras,
-    /// The skill value watch `0x5de180` past its gate (`0x5de20c`): the rebuild (`0x5de2a7`), then
-    /// its line for the active player: `ERR_SKILL_GAINED_S` over an old value of 0 (`0x5de378`),
-    /// else `ERR_SKILL_UP_SI` with the shown value (`0x5de417`). `old` is the value word's copy,
-    /// `shown` the value plus the permanent bonus when the value is above 0.
+    /// The maximum's and the permanent bonus's watch `0x5de450`: the profession list's rebuild
+    /// (`0x5de457`), then the skill list's (`0x5de45c`).
+    SkillMax,
+    /// The skill value watch `0x5de180`. Past its gate (`0x5de20c`, `shown` unlike `old`): the
+    /// skill list's rebuild (`0x5de2a7`), then its line for the active player:
+    /// `ERR_SKILL_GAINED_S` over an old value of 0 (`0x5de378`), else `ERR_SKILL_UP_SI` with the
+    /// shown value (`0x5de417`). Either way, the profession list's rebuild (`0x5de434`). `old` is
+    /// the value word's copy, `shown` the value plus the permanent bonus when the value is above 0.
     SkillValue { skill_id: u16, old: u16, shown: u32 },
 }
 
@@ -870,17 +873,21 @@ pub(crate) fn placed_values(
             let entry = SKILL_STRIDE * k;
             if let Some(at) = at(PLAYER_SECTION, (SKILL_VALUE + entry, 2), List::Object) {
                 // `0x5de180`: past its gate, `0x5ed990` (`0x5de214`), then the rebuild
-                // (`0x5de2a7`) and the line.
+                // (`0x5de2a7`) and the line; on every run, the profession list's (`0x5de434`).
                 let (old, _) = block.edge(at.0).unwrap_or_default();
-                if let Some(notice) = skill_value_notice(fields, k, old) {
-                    pass.push(at, FieldNotice::CombatSkill);
-                    pass.push(at, notice);
+                let notice = skill_value_notice(fields, k, old);
+                if let FieldNotice::SkillValue { old, shown, .. } = notice {
+                    if shown != u32::from(old) {
+                        pass.push(at, FieldNotice::CombatSkill);
+                    }
                 }
+                pass.push(at, notice);
             }
-            // `0x5de450` on the maximum and the permanent bonus: the rebuild (`0x5de45c`).
+            // `0x5de450` on the maximum and the permanent bonus: the rebuilds (`0x5de457`,
+            // `0x5de45c`).
             for half in [SKILL_MAX, SKILL_PERM_BONUS] {
                 if let Some(at) = at(PLAYER_SECTION, (half + entry, 2), List::Object) {
-                    pass.push(at, FieldNotice::SkillLines);
+                    pass.push(at, FieldNotice::SkillMax);
                 }
             }
             // `0x5de470`: `0x5ed990` (`0x5de495`), then the rebuild (`0x5de49a`).
@@ -899,12 +906,11 @@ pub(crate) fn placed_values(
     pass.into_placed()
 }
 
-/// `0x5de180`'s gate ahead of its `0x5ed990` call: the new shown value, the value plus the
-/// permanent bonus when the value is above 0 (`0x5de1f8`, `0x5de207`), against the old value word
-/// the watch passes (`0x5de18f`), equal skipping to the end (`0x5de20c`). `old` is the value's
-/// whole dword before the block. Past the gate, the watch's rebuild and line, for the slot's
-/// skill.
-fn skill_value_notice(fields: &ObjectFields, k: u16, old: u32) -> Option<FieldNotice> {
+/// `0x5de180`'s notice for the slot's skill: the new shown value, the value plus the permanent
+/// bonus when the value is above 0 (`0x5de1f8`, `0x5de207`), beside the old value word the watch
+/// passes (`0x5de18f`), which its gate compares, equal skipping to the end (`0x5de20c`). `old` is
+/// the value's whole dword before the block.
+fn skill_value_notice(fields: &ObjectFields, k: u16, old: u32) -> FieldNotice {
     let old = (old & 0xffff) as u16;
     let slot = fields.player_skill(k as u8);
     let value = slot.map_or(0, |s| u32::from(s.value));
@@ -912,11 +918,11 @@ fn skill_value_notice(fields: &ObjectFields, k: u16, old: u32) -> Option<FieldNo
         0 => 0,
         v => v + slot.map_or(0, |s| u32::from(s.perm_bonus as u16)),
     };
-    (shown != u32::from(old)).then(|| FieldNotice::SkillValue {
+    FieldNotice::SkillValue {
         skill_id: slot.map_or(0, |s| s.skill_id),
         old,
         shown,
-    })
+    }
 }
 
 /// `CGUnit_C::RefreshReaction` (`0x606e20`) on `guid`, its signals in order: `UNIT_FACTION` for it
@@ -1214,18 +1220,27 @@ mod tests {
             combat(block(&mut me, Some(ME), ME, &[(value, (305 << 16) | 7)])),
             [FieldNotice::CombatSkill]
         );
-        assert!(block(&mut me, Some(ME), ME, &[(value, (305 << 16) | 2)]).is_empty());
+        // The gate skips its combat signals, not the run's notice (`0x5de20c` → `0x5de42d`).
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(value, (305 << 16) | 2)]),
+            [FieldNotice::SkillValue {
+                skill_id: 95,
+                old: 7,
+                shown: 7
+            }]
+        );
     }
 
-    /// Each of the four watches of a skill slot (`0x5dda54`-`0x5ddaf0`) rebuilds the list: the value
-    /// past its gate after its combat signals (`0x5de214`, `0x5de2a7`), the maximum and the
-    /// permanent bonus (`0x5de450` → `0x5de45c`), and the temporary bonus after its combat signals
-    /// (`0x5de470` → `0x5de495`, `0x5de49a`); at one field the watches run in their registration
+    /// Each of the four watches of a skill slot (`0x5dda54`-`0x5ddaf0`) rebuilds a list: the value
+    /// its notice, past its gate after its combat signals (`0x5de214`, `0x5de2a7`, `0x5de434`), the
+    /// maximum and the permanent bonus theirs (`0x5de450` → `0x5de457`, `0x5de45c`), and the
+    /// temporary bonus the skill list after its combat signals (`0x5de470` → `0x5de495`,
+    /// `0x5de49a`); at one field the watches run in their registration
     /// order, value, maximum, permanent bonus, temporary bonus (`0x5dda6c`, `0x5dda8e`,
     /// `0x5ddaaf`, `0x5ddad1`).
     #[test]
     fn every_skill_watch_rebuilds_the_list() {
-        use FieldNotice::{CombatSkill, SkillLines, SkillValue};
+        use FieldNotice::{CombatSkill, SkillLines, SkillMax, SkillValue};
         let mut me = player();
         let value = pf(SKILL_VALUE);
         let bonus = pf(SKILL_TEMP_BONUS);
@@ -1244,7 +1259,7 @@ mod tests {
                     old: 0,
                     shown: 1
                 },
-                SkillLines,
+                SkillMax,
             ]
         );
         assert_eq!(
@@ -1260,12 +1275,12 @@ mod tests {
         );
         assert_eq!(
             block(&mut me, Some(ME), ME, &[(value, (305 << 16) | 2)]),
-            [SkillLines],
+            [SkillMax],
             "the maximum alone"
         );
         assert_eq!(
             block(&mut me, Some(ME), ME, &[(bonus, 5 << 16)]),
-            [SkillLines],
+            [SkillMax],
             "the permanent bonus alone"
         );
         assert_eq!(
@@ -1275,7 +1290,7 @@ mod tests {
         );
         assert_eq!(
             block(&mut me, Some(ME), ME, &[(bonus, (6 << 16) | 4)]),
-            [SkillLines, CombatSkill, SkillLines],
+            [SkillMax, CombatSkill, SkillLines],
             "both bonuses: the permanent one's watch first"
         );
         // Shown 4 + 6 against the old word 2.
@@ -1288,7 +1303,7 @@ mod tests {
                     old: 2,
                     shown: 10
                 },
-                SkillLines,
+                SkillMax,
             ],
             "the value and the maximum in one dword"
         );
