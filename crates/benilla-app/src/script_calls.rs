@@ -1048,9 +1048,11 @@ mod tests {
     mod cast_reports;
     mod census;
     mod closes;
+    mod dialogs;
     mod refusals;
     mod selection;
     mod systems;
+    mod window_verbs;
 
     const ME: u64 = 0x10;
     /// The unit selected before the script runs.

@@ -223,6 +223,12 @@ impl LootRolls {
         }
     }
 
+    /// Whether roll `roll_id` is still listed.
+    #[cfg(test)]
+    pub(crate) fn holds(&self, roll_id: u32) -> bool {
+        self.active.iter().any(|r| r.roll_id == roll_id)
+    }
+
     /// Our own vote: drop the roll and return its wire identity; `None` for a stale click. The
     /// vote's `CANCEL_LOOT_ROLL` fired in the verb, so none is queued here.
     fn vote(&mut self, roll_id: u32) -> Option<(u64, u32)> {
