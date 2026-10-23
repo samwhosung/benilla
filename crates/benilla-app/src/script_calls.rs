@@ -2533,6 +2533,8 @@ mod tests {
                         item_class,
                         count: 1,
                         guid: POTION,
+                        // The record cached, as the feed pushes it.
+                        quality: Some(1),
                         ..Default::default()
                     },
                 )]),
@@ -2800,6 +2802,8 @@ mod tests {
             count: 1,
             bonding,
             equip_slots: equip,
+            // The record cached, as the feed pushes it.
+            quality: Some(1),
             ..Default::default()
         };
         let mut slots = std::collections::HashMap::new();
