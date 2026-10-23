@@ -2588,6 +2588,35 @@ mod ask_tests {
         assert!(crate::query_cache::queries(&rx).is_empty());
     }
 
+    /// A refusal on a record the cache held removes it (`0x556ec0`-`0x556f37`), so the VM's copy
+    /// goes too: its readers, the equip questions among them, miss where they read it before.
+    #[test]
+    fn a_refusal_on_a_held_record_leaves_the_vm_too() {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<Items>()
+            .init_resource::<crate::spell::SpellModifiers>()
+            .add_systems(Update, super::feed_item_stats);
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(25, Some(crate::items::test_template("Linen Cloth")));
+        app.insert_non_send_resource(benilla_ui::script::UiScript::new().unwrap());
+        let name = |app: &mut App| {
+            app.world_mut()
+                .non_send_resource_mut::<benilla_ui::script::UiScript>()
+                .eval::<Option<String>>("return (GetItemInfo(25))")
+                .unwrap()
+        };
+        app.update();
+        assert_eq!(name(&mut app).as_deref(), Some("Linen Cloth"));
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(25, None);
+        app.update();
+        assert_eq!(name(&mut app), None, "the refusal removed it");
+    }
+
     /// A miss the VM asks for is the getter's lookup with a callback: it queries, a frame between
     /// asks queries nothing, and the next ask queries a refused id again. A miss `GetItemInfo`
     /// reads never queries (`0x48e172`).
