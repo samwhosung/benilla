@@ -754,6 +754,7 @@ mod tests {
 
     mod cast_reports;
     mod census;
+    mod refusals;
     mod selection;
 
     const ME: u64 = 0x10;

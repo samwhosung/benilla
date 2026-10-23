@@ -1370,67 +1370,74 @@ mod tests {
         use benilla_ui::script::{UiScript, UnitState};
         use bevy::ecs::system::RunSystemOnce;
 
-        let run =
-            |leader: u64, members: Vec<GroupMemberEntry>| -> (Vec<ChatKind>, Vec<&'static str>) {
-                let mut script = UiScript::new().unwrap();
-                script.set_unit(
-                    "player",
-                    Some(UnitState {
-                        exists: true,
-                        name: Some("Me".into()),
-                        ..Default::default()
-                    }),
-                );
-                let mut app = app_with(script);
-                let (tx, rx) = crossbeam_channel::unbounded();
-                app.insert_resource(NetCommands(tx));
-                app.init_resource::<UiErrorKeys>()
-                    .init_resource::<MessageSounds>()
-                    .init_resource::<QuestGiver>()
-                    .init_resource::<crate::ui_chat::AfkMirror>()
-                    .init_resource::<crate::target::Selection>()
-                    .insert_resource(SelfGuid(Some(ME)));
-                let me = app
-                    .world_mut()
-                    .spawn((SelfPlayer, Guid(ME), ObjectStore::default()))
-                    .id();
-                app.world_mut().resource_mut::<GuidIndex>().0.insert(ME, me);
-                let group_type = if members.is_empty() {
-                    0
-                } else {
-                    GROUPTYPE_RAID
-                };
-                app.world_mut()
-                    .run_system_once_with(
-                        on_list,
-                        SessionEvent::GroupList {
-                            group_type,
-                            own_flags: 0,
-                            members,
-                            leader,
-                            loot: None,
-                        },
-                    )
-                    .expect("the group-list handler");
-                app.update();
-                crate::ui_chat::run_chat(app.world_mut(), r#"SendChatMessage("go", "RAID")"#)
-                    .expect("lua");
-                let sent = rx
-                    .try_iter()
-                    .filter_map(|c| match c {
-                        ClientCommand::Chat { kind, .. } => Some(kind),
-                        _ => None,
-                    })
-                    .collect();
-                let refused = app
-                    .world()
-                    .resource::<UiErrorKeys>()
-                    .snapshot()
-                    .iter()
-                    .map(|e| e.key)
-                    .collect();
-                (sent, refused)
+        let run = |leader: u64, members: Vec<GroupMemberEntry>| -> (Vec<ChatKind>, Vec<String>) {
+            let mut script = UiScript::new().unwrap();
+            script.set_unit(
+                "player",
+                Some(UnitState {
+                    exists: true,
+                    name: Some("Me".into()),
+                    ..Default::default()
+                }),
+            );
+            let mut app = app_with(script);
+            let (tx, rx) = crossbeam_channel::unbounded();
+            app.insert_resource(NetCommands(tx));
+            app.init_resource::<UiErrorKeys>()
+                .init_resource::<MessageSounds>()
+                .init_resource::<QuestGiver>()
+                .init_resource::<crate::ui_chat::AfkMirror>()
+                .init_resource::<crate::target::Selection>()
+                .insert_resource(SelfGuid(Some(ME)));
+            let me = app
+                .world_mut()
+                .spawn((SelfPlayer, Guid(ME), ObjectStore::default()))
+                .id();
+            app.world_mut().resource_mut::<GuidIndex>().0.insert(ME, me);
+            let group_type = if members.is_empty() {
+                0
+            } else {
+                GROUPTYPE_RAID
             };
+            app.world_mut()
+                .run_system_once_with(
+                    on_list,
+                    SessionEvent::GroupList {
+                        group_type,
+                        own_flags: 0,
+                        members,
+                        leader,
+                        loot: None,
+                    },
+                )
+                .expect("the group-list handler");
+            app.update();
+            // The refusal's chat line, `CHAT_MSG_SYSTEM` inside the call (`0x496720`).
+            crate::ui_chat::run_chat(
+                app.world_mut(),
+                r#"ERR_NOT_IN_RAID = "ERR_NOT_IN_RAID"
+                    REFUSED = {}
+                    local tap = CreateFrame("Frame")
+                    tap:RegisterEvent("CHAT_MSG_SYSTEM")
+                    tap:SetScript("OnEvent", function() table.insert(REFUSED, arg1) end)"#,
+            )
+            .expect("the tap is in");
+            crate::ui_chat::run_chat(app.world_mut(), r#"SendChatMessage("go", "RAID")"#)
+                .expect("lua");
+            let sent = rx
+                .try_iter()
+                .filter_map(|c| match c {
+                    ClientCommand::Chat { kind, .. } => Some(kind),
+                    _ => None,
+                })
+                .collect();
+            let refused = app
+                .world()
+                .non_send_resource::<UiScript>()
+                .eval::<Vec<String>>("return REFUSED")
+                .expect("the tap reads");
+            (sent, refused)
+        };
         let listed = |guid: u64, name: &str| GroupMemberEntry {
             name: name.into(),
             guid,

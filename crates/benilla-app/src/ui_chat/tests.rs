@@ -3001,7 +3001,7 @@ fn an_empty_line_sends_nothing_but_afk_and_dnd() {
 fn group_chat_sends(
     group: benilla_ui::script::PartyState,
     lua: &str,
-) -> (Vec<(crate::net::ChatKind, String)>, Vec<&'static str>, bool) {
+) -> (Vec<(crate::net::ChatKind, String)>, Vec<String>, bool) {
     let (sent, refused, afk) = chat_sends_as(group, None, lua);
     // Without the empty AFK packet that tells the server a sent line cleared the standing AFK.
     let sent = sent
@@ -3017,7 +3017,7 @@ fn chat_sends_as(
     group: benilla_ui::script::PartyState,
     fields: Option<&[(u16, u32)]>,
     lua: &str,
-) -> (Vec<(crate::net::ChatKind, String)>, Vec<&'static str>, bool) {
+) -> (Vec<(crate::net::ChatKind, String)>, Vec<String>, bool) {
     use crate::net::{Guid, GuidIndex, ObjectStore, SelfGuid, SelfPlayer};
 
     let mut script = in_world_vm();
@@ -3035,19 +3035,35 @@ fn chat_sends_as(
         world.resource_mut::<GuidIndex>().0.insert(1, me);
         world.insert_resource(SelfGuid(Some(1)));
     }
+    super::run_chat(&mut world, REFUSAL_TAP).expect("the tap is in");
     super::run_chat(&mut world, lua).expect("lua");
     let refused = world
-        .resource::<crate::ui_action::UiErrorKeys>()
-        .snapshot()
-        .iter()
-        .map(|e| e.key)
-        .collect();
+        .non_send_resource::<benilla_ui::script::UiScript>()
+        .eval::<Vec<String>>("return REFUSED")
+        .expect("the tap reads");
     (
         chat_packets(&rx),
         refused,
         world.resource::<super::away::AfkMirror>().is_afk(),
     )
 }
+
+/// Every message key defined as itself, and a frame that records each refusal a verb shows, red
+/// (`UI_ERROR_MESSAGE`) or in the chat window (`CHAT_MSG_SYSTEM`), into `REFUSED` as it fires;
+/// the AFK clear's line, whose string this VM lacks, is empty.
+const REFUSAL_TAP: &str = r#"
+    for _, key in ipairs({"ERR_NOT_IN_GROUP", "ERR_NOT_IN_RAID", "ERR_NOT_LEADER",
+            "ERR_CHAT_WHILE_DEAD"}) do
+        setglobal(key, key)
+    end
+    REFUSED = {}
+    local tap = CreateFrame("Frame")
+    tap:RegisterEvent("UI_ERROR_MESSAGE")
+    tap:RegisterEvent("CHAT_MSG_SYSTEM")
+    tap:SetScript("OnEvent", function()
+        if arg1 ~= "" then table.insert(REFUSED, arg1) end
+    end)
+"#;
 
 /// A drunk player's line goes through `0x508680` (`0x49f614`-`0x49f656`) on its way to the escape
 /// scan and the packet: at the full drunk byte, 100 (`PLAYER_BYTES_3` byte 1, `0x49f61a`), every

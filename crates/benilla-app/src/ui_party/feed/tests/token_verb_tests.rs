@@ -49,10 +49,24 @@ fn lua(app: &mut App, code: &str) {
     frame(app);
 }
 
-fn errors(app: &App) -> Vec<crate::ui_action::UiError> {
+/// The red lines a verb showed inside its call (`0x496720`), by key, since [`tap_errors`].
+fn errors(app: &App) -> Vec<String> {
     app.world()
-        .resource::<crate::ui_action::UiErrorKeys>()
-        .take()
+        .non_send_resource::<UiScript>()
+        .eval::<Vec<String>>("return SHOWN")
+        .expect("the tap reads")
+}
+
+/// Record each `UI_ERROR_MESSAGE` into `SHOWN`, with the mark's refusal defined as its own key.
+fn tap_errors(app: &mut App) {
+    hosted_run(
+        app,
+        r#"ERR_INVALID_RAID_TARGET = "ERR_INVALID_RAID_TARGET"
+        SHOWN = {}
+        local tap = CreateFrame("Frame")
+        tap:RegisterEvent("UI_ERROR_MESSAGE")
+        tap:SetScript("OnEvent", function() table.insert(SHOWN, arg1) end)"#,
+    );
 }
 
 /// `SetRaidTarget` turns any token into its guid (`0x515970` at `0x4bbeff`) and marks a unit that
@@ -67,6 +81,7 @@ fn set_raid_target_marks_any_unit_the_token_names() {
     resolve(&mut app, CREATURE, [0; 4]);
     frame(&mut app);
     let _ = marks(&rx);
+    tap_errors(&mut app);
     lua(&mut app, r#"SetRaidTarget("mouseover", 8)"#);
     assert_eq!(marks(&rx), [(7, CREATURE)]);
     assert!(errors(&app).is_empty());
@@ -84,12 +99,10 @@ fn set_raid_target_refuses_a_guid_no_roster_or_object_holds() {
     resolve(&mut app, STRANGER, [member(1), 0, 0, 0]);
     frame(&mut app);
     let _ = marks(&rx);
+    tap_errors(&mut app);
     lua(&mut app, r#"SetRaidTarget("target", 1)"#);
     assert_eq!(marks(&rx), []);
-    assert_eq!(
-        errors(&app),
-        [crate::ui_action::UiError::key("ERR_INVALID_RAID_TARGET")]
-    );
+    assert_eq!(errors(&app), ["ERR_INVALID_RAID_TARGET"]);
     lua(&mut app, r#"SetRaidTarget("party1", 2)"#);
     assert_eq!(marks(&rx), [(1, member(1))]);
 }
