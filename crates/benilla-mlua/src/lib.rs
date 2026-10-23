@@ -736,6 +736,56 @@ impl Lua {
         })
     }
 
+    /// `f` behind a check of its receiver, as each method of a 1.12 widget class opens: argument 1
+    /// read as a [`Receiver`] (`lua_type`, then `lua_rawgeti(1, 0)` and `lua_touserdata`, as
+    /// `Frame:Show` reads it at `0x775777`-`0x7757a6`), an `Err` from `check` raised as the
+    /// callback's own error is, and otherwise `f`'s own host closure run in the same call, with no
+    /// second call into the VM. `None` for a function that is no host closure.
+    pub fn guard_receiver<C>(&self, f: &Function, check: C) -> Result<Option<Function>>
+    where
+        C: Fn(&Lua, Receiver) -> Result<()> + 'static,
+    {
+        let (inner, name) = {
+            let vm = self.vm();
+            let V::Func(r) = f.0.get().unpack() else {
+                return Ok(None);
+            };
+            match vm.heap.func(r) {
+                benilla_lua::heap::FuncObj::Native {
+                    host: Some(host),
+                    name,
+                    ..
+                } => (host.clone(), *name),
+                _ => return Ok(None),
+            }
+        };
+        let host: HostFn = Rc::new(move |vm: &mut Vm, nargs: usize| {
+            let receiver = match vm.args(nargs).first().map(|v| v.unpack()) {
+                Some(V::Table(t)) => {
+                    match vm.heap.table(t).get(benilla_lua::Value::Num(0.0)).unpack() {
+                        V::Light(p) => Receiver::Object(p),
+                        _ => Receiver::NoObject,
+                    }
+                }
+                _ => Receiver::NotTable,
+            };
+            let lua = Lua::of_vm(vm);
+            in_callback(&lua, vm, || {
+                let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    check(&lua, receiver)
+                }));
+                match res {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => Err(raise(&lua, nargs, e)),
+                    Err(payload) => Err(raise_panic(lua.vm(), payload)),
+                }
+            })?;
+            inner(vm, nargs)
+        });
+        let g = self.vm().new_host(name, host);
+        Ok(Some(Function(self.make_ref(g))))
+    }
+
     /// Load a chunk. Unnamed, it is named after the Rust call site, as mlua names it.
     #[track_caller]
     pub fn load(&self, chunk: impl AsChunk) -> Chunk<'_> {
@@ -1080,6 +1130,17 @@ pub struct Thread(());
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LightUserData(pub *mut c_void);
+
+/// A method's argument 1 as the 1.12 member prologue reads it ([`Lua::guard_receiver`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Receiver {
+    /// No table, or no argument.
+    NotTable,
+    /// A table whose `[0]` holds no light userdata.
+    NoObject,
+    /// The light userdata at `[0]`, as its address.
+    Object(usize),
+}
 
 #[derive(Clone, Debug, Default)]
 pub enum Value {

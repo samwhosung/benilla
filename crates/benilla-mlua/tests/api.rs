@@ -181,3 +181,49 @@ fn an_objects_text_is_the_vms_tostring() {
         "{ts}"
     );
 }
+
+/// A guarded host function reads its receiver as the 1.12 member prologue does, raises the
+/// check's error before the function converts an argument, and otherwise runs the function itself
+/// with the call's arguments.
+#[test]
+fn a_guarded_function_checks_its_receiver_then_runs() {
+    use benilla_mlua::{LightUserData, Receiver, Table, Value};
+    let lua = Lua::new();
+    let f = lua
+        .create_function(|_, (this, n): (Table, i64)| Ok(this.raw_get::<i64>("k")? + n))
+        .unwrap();
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let log = seen.clone();
+    let g = lua
+        .guard_receiver(&f, move |_, r| {
+            log.borrow_mut().push(r);
+            match r {
+                Receiver::Object(7) => Ok(()),
+                _ => Err(benilla_mlua::Error::runtime("bad receiver")),
+            }
+        })
+        .unwrap()
+        .expect("a host function");
+    lua.globals().set("g", g).unwrap();
+    let t = lua.create_table().unwrap();
+    t.raw_set(0, Value::LightUserData(LightUserData(7 as *mut _)))
+        .unwrap();
+    t.raw_set("k", 40).unwrap();
+    lua.globals().set("t", t).unwrap();
+    assert_eq!(lua.load("return g(t, 2)").eval::<i64>().unwrap(), 42);
+    for (chunk, read) in [
+        ("return g()", Receiver::NotTable),
+        ("return g(5, 2)", Receiver::NotTable),
+        ("return g({}, 'x')", Receiver::NoObject),
+    ] {
+        let err = lua.load(chunk).eval::<i64>().unwrap_err().to_string();
+        assert!(err.contains("bad receiver"), "{chunk}: {err}");
+        assert_eq!(seen.borrow().last(), Some(&read), "{chunk}");
+    }
+    // A Lua function is no host closure.
+    let lua_fn: Function = lua.load("return function() end").eval().unwrap();
+    assert!(lua
+        .guard_receiver(&lua_fn, |_, _| Ok(()))
+        .unwrap()
+        .is_none());
+}
