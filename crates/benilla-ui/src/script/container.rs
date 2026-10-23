@@ -861,9 +861,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // up raise.
     lua.globals().set(
         "SetBagPortaitTexture",
-        lua.create_function(|lua, (region, container): (Table, Value)| {
-            // `is-number` else `Usage: SetBagPortaitTexture(texture, slot)` (`0x84d9c4`,
-            // `0x4fa58e`).
+        lua.create_function(|lua, (region, container): (Value, Value)| {
+            // The texture first, the member prologue against the Texture id (`0x4fa4f9`-
+            // `0x4fa56e`); then `is-number` else `Usage: SetBagPortaitTexture(texture, slot)`
+            // (`0x84d9c4`, `0x4fa58e`).
+            let rh = crate::script::region::this_texture(lua, &region)?;
             let container = i64::from(binding_abi::number_arg(
                 lua,
                 container,
@@ -892,7 +894,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     .and_then(|slot| model.inv_slot("player", slot))
                     .and_then(|v| v.icon.clone())
             };
-            let rh = crate::script::region::region_handle_of(lua, &region)?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // An empty slot's `None` is the answer: the reference clears first, then sets.
             let set = path.map_or(super::texel::TexSet::None, super::texel::TexSet::Portrait);

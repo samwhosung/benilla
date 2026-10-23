@@ -255,7 +255,8 @@ fn region_shown(model: &Model, rh: RegionHandle) -> bool {
 }
 
 /// Argument 1 of a global that takes a Texture as its `this` (`SetLootPortrait` `0x4c2b40`,
-/// `SetInventoryPortaitTexture` `0x4c9150`), with the member prologue's three raises: a non-table
+/// `SetInventoryPortaitTexture` `0x4c9150`, `SetBagPortaitTexture` `0x4fa4f0`,
+/// `SetPortraitTexture` `0x519ef0`, `SetTaxiMap` `0x4dca50`), with the member prologue's three raises: a non-table
 /// (`0x847ef8`), a table with no object at `[0]` (`0x847ec0`), and any object but a Texture, the
 /// `IsA` test against the Texture class token `[0xcf4cdc]` (`0x847e98`).
 pub(super) fn this_texture(lua: &Lua, this: &Value) -> mlua::Result<RegionHandle> {
@@ -432,16 +433,17 @@ pub(super) fn install_in_game(lua: &Lua) -> mlua::Result<()> {
     // or `SetPortraitToTexture` clears it.
     lua.globals().set(
         "SetPortraitTexture",
-        lua.create_function(|lua, (region, unit): (Table, Value)| {
-            // A non-string unit raises this exact error (`0x519fb4`, `0x8513b8`), which stock
-            // `Blizzard_InspectUI.lua:49` hits on a re-open; a token that resolves to nothing only
-            // blanks the portrait.
+        lua.create_function(|lua, (region, unit): (Value, Value)| {
+            // The texture first, the member prologue against the Texture id (`0x519f06`-
+            // `0x519faa`); then a non-string unit raises this exact error (`0x519fb4`,
+            // `0x8513b8`), which stock `Blizzard_InspectUI.lua:49` hits on a re-open. A token that
+            // resolves to nothing only blanks the portrait.
+            let rh = this_texture(lua, &region)?;
             let unit = crate::script::binding_abi::string_arg(
                 lua,
                 unit,
                 r#"Usage: SetPortraitTexture(texture, "unit")"#,
             )?;
-            let rh = region_handle_of(lua, &region)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             model.set_texel(rh, super::texel::TexSet::Own(None));
             let data = model.region_data.entry(rh).or_default();
