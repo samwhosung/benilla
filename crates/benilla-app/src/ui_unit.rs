@@ -24,6 +24,7 @@ pub(crate) mod field_events;
 mod held;
 mod relations;
 pub(crate) mod tooltip_facts;
+pub(crate) mod views;
 
 pub(crate) use held::{traits_from_name_cache, unheld_state, unit_reach};
 
@@ -117,6 +118,7 @@ pub(crate) struct UiUnitPlugin;
 impl Plugin for UiUnitPlugin {
     fn build(&self, app: &mut App) {
         field_events::add_notice_lane(app);
+        views::add_unit_views_lane(app);
         app.configure_sets(
             Update,
             UnitFeed
@@ -689,7 +691,8 @@ pub(crate) struct UnitTokens<'w, 's> {
     hovered_go: Option<Res<'w, crate::target::HoveredObject>>,
     interact: Option<Res<'w, crate::ui_session::InteractNpc>>,
     group: Res<'w, crate::ui_party::GroupState>,
-    pub(crate) stores: Query<'w, 's, &'static ObjectStore>,
+    /// The stores as of the drain's place, so a verb a listener calls reads its packet's.
+    pub(crate) stores: views::ViewStores<'w, 's>,
     me: Query<'w, 's, (Entity, &'static Guid), With<SelfPlayer>>,
 }
 
@@ -885,6 +888,8 @@ pub(crate) struct UnitStores<'w, 's> {
     changed: Query<'w, 's, (), (Changed<ObjectStore>, Without<crate::items::ItemObject>)>,
     /// Whose object left the manager, by [`Guid`]: a fading model keeps its store 2 s longer.
     removed: RemovedComponents<'w, 's, Guid>,
+    /// The stores as of the drain's place, for the tokens' snapshots.
+    views: Option<Res<'w, views::UnitViews>>,
 }
 
 /// The client tables [`snapshot`] reads beside a descriptor, as one parameter for the feeders that
@@ -1395,8 +1400,6 @@ fn feed_units(
         let Some(script) = script else {
             return owed;
         };
-        let chr = tables.unit_names();
-        let types = tables.types(&names);
         // One reborrow, so the memo and `warned_sideless` borrow disjointly rather than alias.
         let feed = &mut *feed;
         let (memo, vm_reset) = feed.vm.get_reset(script);
@@ -1445,23 +1448,45 @@ fn feed_units(
         }
 
         // A missing unit is `None`, which `set_unit` clears; a name miss lands on a later frame.
+        // Each store is read as of the drain's place ([`views::UnitViews::as_of`]), the live one
+        // here, ahead of the drain.
         let self_pair = self_q.iter().next();
-        let player = self_pair.map(|(store, guid)| {
-            let mut s = player_snapshot(
-                store,
-                guid.0,
-                &tables,
-                &names,
-                &commands,
-                &group,
-                world.factions(),
-                &guild,
-            );
-            if let Some(me) = world.me() {
-                s.is_pvp_ffa = pvp_free_for_all(&world.get(), &me);
-            }
-            s
-        });
+        let scratch = stores.views.as_deref();
+        let at = |guid: u64, live| match scratch {
+            Some(v) => v.as_of(guid, live),
+            None => live,
+        };
+        let held = |guid: u64, entity: Option<Entity>| {
+            let live = entity.and_then(|e| stores.all.get(e).ok());
+            Some((at(guid, live)?, guid))
+        };
+        let object = |guid: u64| {
+            let entity = index.as_ref().and_then(|i| i.0.get(&guid).copied());
+            held(guid, entity).map(|(s, _)| s)
+        };
+        let token_stores = views::TokenStores {
+            me: self_pair.and_then(|(s, g)| Some((at(g.0, Some(s))?, g.0))),
+            target: selection
+                .target
+                .zip(selection.guid)
+                .and_then(|(e, g)| held(g, Some(e))),
+            // `"npc"`: the interaction NPC, the reference's `[0xb4e2d0]` that
+            // `CGGameUI::SetInteractNPC` (`0x4930d0`) writes, which `InteractNpc` models.
+            npc: interact
+                .as_deref()
+                .and_then(|i| Some((i.0?, i.1?)))
+                .and_then(|(e, g)| held(g, Some(e))),
+            by_guid: &object,
+        };
+        let sources = views::TokenSources {
+            tables: &tables,
+            names: &names,
+            commands: &commands,
+            group: &group,
+            guild: &guild,
+            world: &world,
+        };
+        let [player, target, tot, npc] = views::token_views(&sources, &token_stores);
         // Log once when our template names no side, almost always GM mode (vmangos forces template
         // 35, group mask 0): every `UnitFactionGroup` surface loses its side, as in the reference.
         if let Some(p) = &player {
@@ -1477,43 +1502,6 @@ fn feed_units(
             }
             feed.warned_sideless = sideless;
         }
-        // What the three snapshots below (target, target-of-target, NPC) read besides a descriptor.
-        let object = |guid: u64| {
-            let entity = *index.as_ref()?.0.get(&guid)?;
-            stores.all.get(entity).ok()
-        };
-        let held = held::HeldUnits {
-            names: &names,
-            commands: &commands,
-            group: &group,
-            self_store: self_pair.map(|(s, _)| s),
-            unit_names: chr,
-            types,
-            rel: world.get(),
-            me: world.me(),
-            tooltip: tooltip_facts::TooltipSources {
-                names: &names,
-                catalog: tables.catalog(),
-                object: &object,
-                study: tables.study(),
-            },
-            guild: &guild,
-        };
-        let target = selection
-            .target
-            .zip(selection.guid)
-            .and_then(|(e, guid)| Some(held.state(stores.all.get(e).ok()?, guid)));
-
-        // `"targettarget"`: one hop off the target's `UNIT_FIELD_TARGET`, streamed guids only, for
-        // the stock frame's poll (`TargetofTarget_OnUpdate`, `TargetFrame.lua:494-538`): no unit
-        // event carries the hop, whose token is none of `0x515c50`'s.
-        let tot = selection
-            .target
-            .and_then(|e| stores.all.get(e).ok())
-            .and_then(|s| s.0.unit_target())
-            .filter(|guid| *guid != 0)
-            .and_then(|guid| Some((*index.as_ref()?.0.get(&guid)?, guid)))
-            .and_then(|(entity, guid)| Some(held.state(stores.all.get(entity).ok()?, guid)));
 
         // `"player"` is pushed only while its descriptor exists: the roster seat stands in before
         // arrival, and `PLAYER_LOGOUT` handlers still read `UnitName("player")`, as the reference's
@@ -1547,12 +1535,6 @@ fn feed_units(
             script.set_unit("targettarget", tot.clone());
         }
 
-        // `"npc"`: the interaction NPC, the reference's `[0xb4e2d0]` that
-        // `CGGameUI::SetInteractNPC` (`0x4930d0`) writes, which `InteractNpc` models.
-        let npc = interact
-            .as_deref()
-            .and_then(|i| Some((i.0?, i.1?)))
-            .and_then(|(entity, guid)| Some(held.state(stores.all.get(entity).ok()?, guid)));
         // Closing the window must clear the token, so the memo is written here, not only read.
         let npc_dirty = match (&npc, memo.last.get("npc")) {
             (Some(cur), Some(prev)) => cur != prev,

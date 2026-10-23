@@ -91,6 +91,12 @@ pub(crate) struct Scene<'w, 's> {
     bag_cache: ResMut<'w, crate::item_watch::BagCache>,
     /// Where the frame's bag view changes: its first write of our player or an item.
     bag_view: ResMut<'w, crate::ui_items::feed::BagView>,
+    /// What each packet changed in the stores, for the views a listener reads
+    /// ([`crate::ui_unit::views`]).
+    view_log: ResMut<'w, crate::ui_unit::views::ViewLog>,
+    /// What the tokens name, whose store a destroy logs.
+    selection: Option<Res<'w, crate::target::Selection>>,
+    interact: Option<Res<'w, crate::ui_session::InteractNpc>>,
     field_notices: ResMut<'w, crate::field_watch::NoticeLane>,
     /// The guid-scoped selection teardowns (`0x493910(guid, 1)`) a watcher raises.
     deselect: MessageWriter<'w, crate::target::DeselectGuid>,

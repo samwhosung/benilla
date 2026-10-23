@@ -274,8 +274,9 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
             found_live(&mut sc, e);
             object_create(&mut sc, block, &fields, Landing::Live(e));
             match sc.stores.get_mut(e) {
-                Ok(mut store) => write_fields(&mut store.0, fields),
+                Ok(mut store) => write_logged(&mut sc.view_log, guid, &mut store, fields),
                 Err(_) => {
+                    sc.view_log.replaced(guid, None);
                     sc.commands.entity(e).insert(ObjectStore(fields));
                     Vec::new()
                 }
@@ -313,10 +314,12 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
                 sc.commands.entity(e).insert(display);
             }
             sc.pass.reactivated.push(guid);
+            sc.view_log.replaced(guid, None);
             moved
         }
         (None, None) => {
             allocate(&mut sc, guid, world_type(kind));
+            sc.view_log.replaced(guid, None);
             let store = fields.clone();
             let e = object_create(
                 &mut sc,
@@ -427,6 +430,56 @@ fn bag_write(sc: &mut Scene, guid: u64, sent: Option<&[u16]>) {
     }
 }
 
+/// A block's write into a held store ([`write_fields`]), logged for the views a listener reads
+/// ([`crate::ui_unit::views::ViewLog`]): the dwords it moved, or the store whole when it had no
+/// type to diff by. An item's store no token names, and goes unlogged.
+fn write_logged(
+    log: &mut crate::ui_unit::views::ViewLog,
+    guid: u64,
+    store: &mut ObjectStore,
+    delta: ObjectFields,
+) -> Vec<(u16, u32, u32)> {
+    if guid::is_item(guid) {
+        return write_fields(&mut store.0, delta);
+    }
+    let untyped = store.0.created_as().is_none().then(|| store.clone());
+    let moved = write_fields(&mut store.0, delta);
+    match untyped {
+        Some(before) => log.replaced(guid, Some(before)),
+        None => log.moved(guid, &moved),
+    }
+    moved
+}
+
+/// A held object leaving the live table: the store it takes, logged for a guid a token names,
+/// whose view the frame's earlier listeners read off it.
+fn log_destroy(sc: &mut Scene, guid: u64) {
+    if guid::is_item(guid) || !token_named(sc, guid) {
+        return;
+    }
+    let Some(&e) = sc.index.0.get(&guid) else {
+        return;
+    };
+    let before = sc.stores.get(e).ok().cloned();
+    if before.is_some() {
+        sc.view_log.replaced(guid, before);
+    }
+}
+
+/// Whether `guid` is a unit the view tokens name: ourselves, the selection, its target or the
+/// interaction NPC.
+fn token_named(sc: &Scene, guid: u64) -> bool {
+    let selection = sc.selection.as_deref();
+    let target_of = selection
+        .and_then(|s| s.target)
+        .and_then(|e| sc.stores.get(e).ok())
+        .and_then(|s| s.0.unit_target());
+    sc.self_guid.0 == Some(guid)
+        || selection.and_then(|s| s.guid) == Some(guid)
+        || target_of == Some(guid)
+        || sc.interact.as_deref().and_then(|i| i.1) == Some(guid)
+}
+
 /// A values block (`0x467160`): written into a held object, or one it brings back; a guid the
 /// manager knows neither way is skipped (`0x465bb0`).
 fn on_object_values(In(ev): In<SessionEvent>, mut sc: Scene) {
@@ -440,10 +493,10 @@ fn on_object_values(In(ev): In<SessionEvent>, mut sc: Scene) {
     let moved = match sc.index.0.get(&guid).copied() {
         Some(e) => {
             found_live(&mut sc, e);
-            sc.stores
-                .get_mut(e)
-                .ok()
-                .map(|mut store| write_fields(&mut store.0, fields))
+            match sc.stores.get_mut(e) {
+                Ok(mut store) => Some(write_logged(&mut sc.view_log, guid, &mut store, fields)),
+                Err(_) => None,
+            }
         }
         None => sc.released.take(guid).map(
             |Kept {
@@ -612,6 +665,9 @@ fn respawn(sc: &mut Scene, guid: u64, body: Body, store: ObjectFields, pose: Opt
         }
     }
     sc.pass.reactivated.push(guid);
+    if !guid::is_item(guid) {
+        sc.view_log.replaced(guid, None);
+    }
     bag_write(sc, guid, None);
 }
 
@@ -699,6 +755,7 @@ fn unhold_releases(mut sc: Scene, script: Option<NonSend<UiScript>>) {
             release(&mut sc, guid);
         }
     }
+    sc.view_log.close();
 }
 
 /// `SMSG_DESTROY_OBJECT` (`0x4674a0`): the release, then the object freed at once, a released one
@@ -725,6 +782,8 @@ fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<N
         }
     }
     deactivate(&mut sc, guid, script.as_deref());
+    log_destroy(&mut sc, guid);
+    sc.view_log.close();
     let Some(e) = sc.index.0.remove(&guid) else {
         return;
     };
@@ -758,6 +817,7 @@ fn deactivate(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
 /// `0x464920` past the deactivate: the object leaves the live table for the released one, its
 /// fields and what it stood as kept, and its model fades out ([`super::tear_down`]).
 fn release(sc: &mut Scene, guid: u64) {
+    log_destroy(sc, guid);
     let Some(e) = sc.index.0.remove(&guid) else {
         return;
     };
@@ -859,6 +919,7 @@ fn on_update_end(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<NonSend
     for guid in reactivated {
         reactivated_end(&mut sc, guid, script.as_deref());
     }
+    sc.view_log.close();
 }
 
 /// One block's notify on a live object: its field edges, the field watches whose callbacks

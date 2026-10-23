@@ -427,15 +427,19 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::CurrentMap",
     "bevy_time::time::Time",
     "bevy_time::time::Time<bevy_time::real::Real>",
+    // The stores as of the drain's place, which the call host's token lookups read.
+    "::ui_unit::views::UnitViews",
     // The host's two sinks that raise no event.
     "::sound::message::MessageSounds",
     "::creature_anim::edits::UnitEdits",
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 10] {
+fn lane_types() -> [TypeId; 11] {
     [
         TypeId::of::<crate::ui_items::feed::BagView>(),
+        // The views lane: what each packet changed in the stores.
+        TypeId::of::<crate::ui_unit::views::ViewLog>(),
         TypeId::of::<crate::field_watch::NoticeLane>(),
         TypeId::of::<crate::item_lane::ItemLane>(),
         TypeId::of::<crate::ui_items::EquipErrors>(),
@@ -606,7 +610,8 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "field notices",
             "item watchers",
             "loot",
-            "party"
+            "party",
+            "unit views"
         ]
     );
     let c = census(&mut app, Update, SyncPoints::Declared);

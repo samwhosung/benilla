@@ -216,3 +216,122 @@ fn each_unit_mana_listener_reads_its_own_packets_mana() {
         ["UNIT_MANA:player:70", "UNIT_MANA:player:40"]
     );
 }
+
+/// The lane's own count of the builds it made, the views it pushed and the stores it checked at
+/// its end, read and reset.
+fn lane_counts(app: &mut App) -> (usize, usize, usize) {
+    let mut views = app
+        .world_mut()
+        .resource_mut::<crate::ui_unit::views::UnitViews>();
+    let counts = (views.builds, views.pushes, views.checked);
+    views.builds = 0;
+    views.pushes = 0;
+    views.checked = 0;
+    counts
+}
+
+/// The replay ends on the live stores: a frame of moved dwords, a re-create that clears a field,
+/// the target's target released out of range and brought back by a create, each with an event
+/// between, ends with every rewound store equal to the live one (the `debug_assert` in the
+/// lane's end) and none left rewound, so the stores read live again once the drain is done.
+#[test]
+fn the_replay_ends_on_the_live_stores() {
+    let mut app = client();
+    frame(&mut app, vec![values(WOLF, &targets(BOAR))]);
+    seat(&mut app, BOAR);
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(r#"function Look(event, unit) return UnitHealth("targettarget") end"#)
+        .unwrap();
+    lane_counts(&mut app);
+    let seen = frame(
+        &mut app,
+        vec![
+            fall(1),
+            values(BOAR, &health(40)),
+            fall(1),
+            // The re-create sends no `MAXHEALTH`: the descriptor's create clears it.
+            created(BOAR, EntityKind::Unit, &health(30)),
+            fall(1),
+            SessionEvent::ObjectsRemoved(vec![BOAR]),
+            fall(1),
+            created(BOAR, EntityKind::Unit, &health(20)),
+            fall(1),
+            values(ME, &health(90)),
+        ],
+    );
+    assert_eq!(
+        seen.iter()
+            .filter(|s| s.starts_with("UNIT_COMBAT"))
+            .collect::<Vec<_>>(),
+        [
+            "UNIT_COMBAT:player:50",
+            "UNIT_COMBAT:player:40",
+            "UNIT_COMBAT:player:30",
+            "UNIT_COMBAT:player:0",
+            "UNIT_COMBAT:player:20",
+        ],
+        "the target's target as each packet left it: gone between its release and its create"
+    );
+    assert_eq!(
+        lane_counts(&mut app).2,
+        2,
+        "the boar and we were rewound and checked"
+    );
+    let views = app.world().resource::<crate::ui_unit::views::UnitViews>();
+    assert!(
+        !views.holds(BOAR) && !views.holds(ME),
+        "and read live again"
+    );
+}
+
+/// Two packets with no event between them are one gap: the drain applies both and builds the
+/// views once. A fall ahead of the first reads the frame's start, one between the second and the
+/// third reads after the second, and the last packet's views are the feed's own, built by none.
+#[test]
+fn two_packets_with_no_event_between_make_one_build() {
+    let mut app = client();
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(r#"function Look(event, unit) return UnitHealth("targettarget") end"#)
+        .unwrap();
+    lane_counts(&mut app);
+    let seen = frame(
+        &mut app,
+        vec![
+            fall(1),
+            values(WOLF, &targets(BOAR)),
+            values(WOLF, &targets(ME)),
+            fall(1),
+            values(WOLF, &targets(BOAR)),
+            fall(1),
+        ],
+    );
+    assert_eq!(
+        seen,
+        [
+            "UNIT_COMBAT:player:0",
+            "UNIT_COMBAT:player:100",
+            "UNIT_COMBAT:player:50"
+        ]
+    );
+    assert_eq!(
+        lane_counts(&mut app).0,
+        2,
+        "the frame's start and the one gap"
+    );
+}
+
+/// A frame whose events all follow its last write needs no older view than the feed's push:
+/// the lane builds and pushes nothing.
+#[test]
+fn a_frame_whose_events_follow_every_write_pushes_no_old_view() {
+    let mut app = client();
+    lane_counts(&mut app);
+    assert_eq!(
+        frame(&mut app, vec![values(WOLF, &health(70)), fall(1)]),
+        ["UNIT_HEALTH:target:70", "UNIT_COMBAT:player:100"]
+    );
+    let (builds, pushes, _) = lane_counts(&mut app);
+    assert_eq!((builds, pushes), (0, 0));
+}

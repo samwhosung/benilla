@@ -154,7 +154,7 @@ struct Lane {
     name: &'static str,
     peek: fn(&World) -> Option<Stamp>,
     fire: SystemId<In<Until>>,
-    begin: Option<fn(&World)>,
+    begin: Option<fn(&mut World)>,
 }
 
 /// Every lane, in registration order.
@@ -188,7 +188,7 @@ pub(crate) trait LaneApp {
         name: &'static str,
         peek: fn(&World) -> Option<Stamp>,
         fire: impl IntoSystem<In<Until>, (), M> + 'static,
-        begin: Option<fn(&World)>,
+        begin: Option<fn(&mut World)>,
     ) -> &mut Self;
 }
 
@@ -198,7 +198,7 @@ impl LaneApp for App {
         name: &'static str,
         peek: fn(&World) -> Option<Stamp>,
         fire: impl IntoSystem<In<Until>, (), M> + 'static,
-        begin: Option<fn(&World)>,
+        begin: Option<fn(&mut World)>,
     ) -> &mut Self {
         if self.world().get_resource::<Lanes>().is_none() {
             self.init_resource::<Lanes>()
@@ -270,11 +270,14 @@ pub(crate) fn fire_in_order(world: &mut World) {
         else {
             break;
         };
+        // A head at the origin is a view's frame-start push, which raises nothing and commutes
+        // with another view's: it bounds no other lane.
         let bound = heads
             .iter()
             .enumerate()
             .filter(|(j, _)| *j != i)
             .filter_map(|(_, h)| *h)
+            .filter(|h| *h != Stamp::origin())
             .min();
         let lane = &lanes.0[i];
         if let Err(e) = world.run_system_with(lane.fire, Until { bound, fence }) {
