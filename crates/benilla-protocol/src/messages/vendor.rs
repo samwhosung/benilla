@@ -48,14 +48,19 @@ pub fn list_inventory(vendor_guid: u64) -> Vec<u8> {
     vendor_guid.to_le_bytes().to_vec()
 }
 
-/// Body of `CMSG_BUY_ITEM` (vmangos `Item.cpp:104-110`): `u64 vendorGuid`, `u32` template entry
-/// (not the row's `muid`), `u8 count` (stacks), `u8 unk1` (0); it fills the first free slot.
+/// `CMSG_BUY_ITEM`'s trailing byte: `SendBuyItem` (`0x5e1e90`) writes its third argument last
+/// (`0x5e1ee8`-`0x5e1eef`), and its one caller, `BuyMerchantItem`, passes 1 (`0x4fb933`). vmangos
+/// reads it as `unk1` and ignores it (`Item.cpp:104-110`).
+pub const BUY_ITEM_TRAILER: u8 = 1;
+
+/// Body of `CMSG_BUY_ITEM` (`0x5e1e90`): `u64 vendorGuid`, `u32` template entry (not the row's
+/// `muid`), `u8 count` (stacks), then [`BUY_ITEM_TRAILER`]; the server fills the first free slot.
 pub fn buy_item(vendor_guid: u64, entry: u32, count: u8) -> Vec<u8> {
     let mut body = Vec::with_capacity(14);
     body.extend_from_slice(&vendor_guid.to_le_bytes());
     body.extend_from_slice(&entry.to_le_bytes());
     body.push(count);
-    body.push(0); // unk1
+    body.push(BUY_ITEM_TRAILER);
     body
 }
 
