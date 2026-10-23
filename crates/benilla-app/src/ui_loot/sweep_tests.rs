@@ -85,18 +85,35 @@ fn the_sweep_prints_the_money_line_once_per_session() {
     );
 }
 
-/// `CloseLoot` on a disenchant window sweeps it, and the sweep's money line waits for the host
-/// behind the rows' stores, where 1.12.1 runs its listeners first (`0x4c2170` → `0x49a870`, ahead
-/// of `0x4c2180`): on the census list ([`crate::script_calls::census::SENDS_AHEAD`]).
+/// `CloseLoot` on a disenchant window sweeps it, and the sweep's money line runs its listeners in
+/// place, after the coin request and ahead of the rows' stores (`0x4c1ffc`, then `0x4c2170` →
+/// `AddChatLine 0x49a870`, then `0x4c2180`): nothing sends while one is held.
 #[test]
-fn a_sweep_sends_its_rows_ahead_of_its_held_money_line() {
+fn a_sweep_runs_its_money_lines_listeners_before_its_rows() {
     let mut l = client();
     note_money(&mut l);
+    run(
+        &mut l,
+        r#"local f = CreateFrame("Frame")
+        f:RegisterEvent("CHAT_MSG_MONEY")
+        f:SetScript("OnEvent", function() RandomRoll(1, 100) end)"#,
+    );
     open(&mut l, CORPSE, DISENCHANT, 500, vec![row(1, LINEN)]);
+    l.rx.try_iter().for_each(drop);
     benilla_ui::script::census::take();
     run(&mut l, "CloseLoot()");
     assert_eq!(money_lines(&mut l), ["You loot 5 Silver"]);
-    crate::script_calls::census::shows_only("Loot");
+    let wire: Vec<&str> =
+        l.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::LootMoney => Some("LootMoney"),
+                ClientCommand::RandomRoll { .. } => Some("RandomRoll"),
+                ClientCommand::AutostoreLootItem { .. } => Some("AutostoreLootItem"),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(wire, ["LootMoney", "RandomRoll", "AutostoreLootItem"]);
+    assert!(benilla_ui::script::census::take().is_empty());
 }
 
 /// A party member in the first party slot (`[0xbc6f48]`, `0x4c2030`) or a raid roster

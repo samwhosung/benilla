@@ -39,7 +39,7 @@ pub(super) const THRALL: u64 = 0x22;
 
 pub(super) struct Loot {
     pub(super) app: App,
-    rx: Receiver<ClientCommand>,
+    pub(super) rx: Receiver<ClientCommand>,
 }
 
 /// The whole client, headless, holding our player, [`CORPSE`] and [`LOCKBOX`], with the three
