@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 246
+- [benilla-app](#benilla-app): 245
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 22
@@ -390,7 +390,6 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_mail
 
-- A wrong field count is no invoice, because the reference would read the missing fields uninitialised. ([`src/ui_mail/invoice.rs:75`](../crates/benilla-app/src/ui_mail/invoice.rs#L75))
 - With no usable paper the reference reads the first record of an empty list through a null pointer (`0x4ad561`-`0x4ad56d`, `mov eax,[eax]` with `eax` 0) and faults; benilla keeps the row's wire id, so the inbox still opens. ([`src/ui_mail/net.rs:162`](../crates/benilla-app/src/ui_mail/net.rs#L162))
 - An open mailbox also re-lists at once, past `CheckInbox`'s 60 s throttle, because a mail announced while the player stands there should show; the reference waits for the close. ([`src/ui_mail/net.rs:325`](../crates/benilla-app/src/ui_mail/net.rs#L325))
 
@@ -800,9 +799,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The reference recurses without a bound (`0x52dbce` builds the product whatever the depth), so a product that teaches a recipe for itself would recurse until the stack overflows; benilla stops here, so a cyclic `Spell.dbc` chain cannot crash the client. ([`src/script/tooltip_item/render.rs:195`](../crates/benilla-ui/src/script/tooltip_item/render.rs#L195))
 - The reference's padding repeats a mana stat once per zero entry; not emulated, since only the internal test ring 6674 has one. ([`src/script/tooltip_item/render.rs:551`](../crates/benilla-ui/src/script/tooltip_item/render.rs#L551))
 - The unknown-skill "Requires %s" shares it, though its reference red is `0xffff0000`, because a 32/255 difference in G and B does not show. ([`src/script/tooltip_unit.rs:126`](../crates/benilla-ui/src/script/tooltip_unit.rs#L126))
-- The selection clears to 0, because the header the reference re-selects (`0x4d7b42`, reading 1) has no spell id; the stock window's `> 1` test treats 0 and 1 alike. ([`src/script/trainer/mod.rs:264`](../crates/benilla-ui/src/script/trainer/mod.rs#L264))
-- A header clears it too, because it has no spell id; the reference stores its `0xffffffff` (`0x4d7b05`) and reads back 1, which the stock window's `> 1` test treats the same as 0. ([`src/script/trainer/mod.rs:1171`](../crates/benilla-ui/src/script/trainer/mod.rs#L1171))
-- Index 0 is a no-op, because one stray call would spend the purse; the reference buys every visible service for any index at or below 0 (`0x4da244`, `0x4d8a70`). ([`src/script/trainer/mod.rs:1195`](../crates/benilla-ui/src/script/trainer/mod.rs#L1195))
+- The selection clears to 0, because the header the reference re-selects (`0x4d7b42`, reading 1) has no spell id; the stock window's `> 1` test treats 0 and 1 alike. ([`src/script/trainer/mod.rs:270`](../crates/benilla-ui/src/script/trainer/mod.rs#L270))
+- A header clears it too, because it has no spell id; the reference stores its `0xffffffff` (`0x4d7b05`) and reads back 1, which the stock window's `> 1` test treats the same as 0. ([`src/script/trainer/mod.rs:1210`](../crates/benilla-ui/src/script/trainer/mod.rs#L1210))
+- Index 0 is a no-op, because one stray call would spend the purse; the reference buys every visible service for any index at or below 0 (`0x4da244`, `0x4d8a70`). ([`src/script/trainer/mod.rs:1234`](../crates/benilla-ui/src/script/trainer/mod.rs#L1234))
 - Kept apart from `Self::vertex_color`, which the reference's `Texture:SetAlpha` (`0x79b580`) rewrites, because the drawn product differs only on a region that sets both, or a gradient and an alpha, which no stock code does, and a FontString's `SetAlpha` then keeps its font colour. ([`src/script/types.rs:421`](../crates/benilla-ui/src/script/types.rs#L421))
 - Among whole-name matches ours picks the nearest, because the reference's first-walked pick is order-dependent and reads as a bug. ([`src/script/unit/bindings.rs:990`](../crates/benilla-ui/src/script/unit/bindings.rs#L990))
 - The reference's matcher takes a whole-string hit at once only when it is nearer than the best so far (`0x493c88`-`0x493ca2`); an exact hit that is not nearer competes on prefix length alone (`0x493cf8`-`0x493d09`), so a nearer "Bobby" walked first beats an exact "Bob", and the pick follows the object list's order. ([`src/script/unit/by_name.rs:19`](../crates/benilla-ui/src/script/unit/by_name.rs#L19))
