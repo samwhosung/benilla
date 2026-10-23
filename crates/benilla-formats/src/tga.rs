@@ -24,8 +24,8 @@
 //! with 1 to 7 alpha bits, 33 to 39 with 9 to 15), then `0x5a41f0` returns 0 for a depth that is
 //! not 32, and the copy at `0x4492c4` reads through that null pointer: there is no result to match.
 //!
-//! [`tga_to_rgba`] checks the header before the pixels, so it can serve as the fallback after a
-//! failed `BLP2` sniff: TGA has no magic.
+//! [`tga_to_rgba`] checks the header before the pixels: TGA has no magic, and the reference picks
+//! this decoder by a file's `.tga` name alone (`0x449e16`-`0x449e3d`).
 
 use anyhow::{bail, Result};
 
@@ -43,10 +43,10 @@ pub const TGA_GATE_PREFIX: usize = 18 + 255 + 1;
 /// fails and the next candidate is tried. The loader returns the texture once the header opens
 /// (`0x5a3660`: the 18 bytes, then the id and the colour map the header declares, each read
 /// succeeding on any byte it gets, `0x64853b`-`0x64854a`) and `0x448450` makes the device texture
-/// at the header's size, refusing a width or height that is not a power of two below 1024
-/// (`0x4484ae`-`0x4484d0`). The pixels decode later, in `0x44a260`: a file [`tga_to_rgba`] refuses
-/// still has this texture, filled opaque white (`0x44a2eb`). A zero size passes the gate and draws
-/// nothing.
+/// at the header's size: a width or height that is not a power of two below 1024 makes none
+/// (`0x4484ae`-`0x4484d0`), and a side of 16 or less goes to `GxTexCreate` (`0x58ab10`), which
+/// refuses one below 8 (`0x58ab40`, `0x58ab4c`). The pixels decode later, in `0x44a260`: a file
+/// [`tga_to_rgba`] refuses still has this texture, filled opaque white (`0x44a2eb`).
 pub fn tga_texture_size(bytes: &[u8]) -> Option<(u32, u32)> {
     let header = bytes.get(..18)?;
     let id_length = usize::from(header[0]);
@@ -65,8 +65,7 @@ pub fn tga_texture_size(bytes: &[u8]) -> Option<(u32, u32)> {
     }
     let width = u32::from(u16::from_le_bytes([header[12], header[13]]));
     let height = u32::from(u16::from_le_bytes([header[14], header[15]]));
-    // `test ebx, ebx-1` lets 0 through (`0x44849d`), so a zero size passes.
-    let fits = |n: u32| n & n.wrapping_sub(1) == 0 && n < 1024;
+    let fits = |n: u32| n.is_power_of_two() && (8..1024).contains(&n);
     (fits(width) && fits(height)).then_some((width, height))
 }
 
@@ -563,21 +562,22 @@ mod tests {
     /// (`0x448450`): whether the pixels decode is `0x44a260`'s question, later.
     #[test]
     fn a_header_that_opens_makes_a_texture_at_its_size() {
-        // A 32-bit image with no alpha bits is refused by the decoder, and still a 4 by 2 texture.
-        let refused = tga(2, 4, 2, 32, 0x20, &[0; 32]);
+        // A 32-bit image with no alpha bits is refused by the decoder, and still a 16 by 8
+        // texture.
+        let refused = tga(2, 16, 8, 32, 0x20, &[0; 512]);
         assert!(tga_to_rgba(&refused).is_err());
-        assert_eq!(tga_texture_size(&refused), Some((4, 2)));
-        assert_eq!(tga_texture_size(&tga(2, 4, 2, 32, 0x20, &[])), Some((4, 2)));
+        assert_eq!(tga_texture_size(&refused), Some((16, 8)));
         assert_eq!(
-            tga_texture_size(&tga(99, 512, 1, 7, 0xff, &[])),
-            Some((512, 1))
+            tga_texture_size(&tga(2, 16, 8, 32, 0x20, &[])),
+            Some((16, 8))
+        );
+        assert_eq!(
+            tga_texture_size(&tga(99, 512, 8, 7, 0xff, &[])),
+            Some((512, 8))
         );
 
-        // A zero size passes `0x44849d`'s test; a size that is not a power of two below 1024
-        // makes no texture.
-        assert_eq!(tga_texture_size(&tga(2, 0, 4, 32, 0x28, &[])), Some((0, 4)));
-        assert_eq!(tga_texture_size(&tga(2, 4, 0, 32, 0x28, &[])), Some((4, 0)));
-        for (w, h) in [(3, 2), (4, 1024), (1024, 4), (65535, 2), (6, 6)] {
+        // A size that is not a power of two below 1024 makes no texture.
+        for (w, h) in [(24, 8), (8, 1024), (1024, 8), (65535, 8), (12, 12)] {
             assert_eq!(
                 tga_texture_size(&tga(2, w, h, 32, 0x28, &[0; 8])),
                 None,
@@ -643,28 +643,31 @@ mod tests {
     /// the reference sizes it (`0x5a3b40`): 32-bit entries count 3 bytes.
     #[test]
     fn the_id_and_map_reads_fail_the_open_only_with_no_bytes() {
-        let mut with_id = tga(2, 4, 2, 24, 0x20, &[]);
+        let mut with_id = tga(2, 16, 8, 24, 0x20, &[]);
         with_id[0] = 5;
         assert_eq!(tga_texture_size(&with_id), None, "no id byte");
         with_id.push(0);
-        assert_eq!(tga_texture_size(&with_id), Some((4, 2)), "a short id");
+        assert_eq!(tga_texture_size(&with_id), Some((16, 8)), "a short id");
 
-        let mut with_map = tga(1, 4, 2, 8, 0x20, &[]);
+        let mut with_map = tga(1, 16, 8, 8, 0x20, &[]);
         with_map[1] = 1; // colour-map type: present
         with_map[5..7].copy_from_slice(&4u16.to_le_bytes());
         with_map[7] = 32;
         assert_eq!(tga_texture_size(&with_map), None, "no map byte");
         with_map.push(0);
-        assert_eq!(tga_texture_size(&with_map), Some((4, 2)), "a short map");
+        assert_eq!(tga_texture_size(&with_map), Some((16, 8)), "a short map");
         // Past an id of 2, one byte reaches the map.
         with_map[0] = 2;
         assert_eq!(tga_texture_size(&with_map), None, "the id took the byte");
         with_map.extend([0, 0]);
-        assert_eq!(tga_texture_size(&with_map), Some((4, 2)));
+        assert_eq!(tga_texture_size(&with_map), Some((16, 8)));
         // No map type, no read, whatever the length field says.
         with_map[1] = 0;
-        assert_eq!(tga_texture_size(&tga(2, 4, 2, 24, 0x20, &[])), Some((4, 2)));
-        assert_eq!(tga_texture_size(&with_map), Some((4, 2)));
+        assert_eq!(
+            tga_texture_size(&tga(2, 16, 8, 24, 0x20, &[])),
+            Some((16, 8))
+        );
+        assert_eq!(tga_texture_size(&with_map), Some((16, 8)));
     }
 
     #[test]
