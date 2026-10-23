@@ -153,6 +153,7 @@ mod tests {
         s.keep_calls();
         s.set_container(0, Some(backpack(bonding, cached)));
         s.set_inventory_slots(doll());
+        s.seat_item_records();
         s
     }
 
@@ -209,6 +210,7 @@ mod tests {
             let mut pack = backpack(0, true);
             pack.slots.get_mut(&slot).unwrap().count = 5;
             s.set_container(0, Some(pack));
+            s.seat_item_records();
             s.run(&format!("SplitContainerItem(0, {slot}, 2)")).unwrap();
             assert!(s.cursor_item().is_some_and(|i| i.count == Some(2)));
             s.run(place).unwrap();
@@ -296,6 +298,7 @@ mod tests {
             .unwrap();
         assert!(s.take_container_moves().is_empty(), "parked");
         s.set_container(0, Some(backpack(0, true)));
+        s.seat_item_records();
         s.replay_swap(mv.clone()).unwrap();
         assert_eq!(s.take_container_moves(), vec![mv.clone()], "sent");
         assert!(s.cursor_item().is_none(), "and cleared");

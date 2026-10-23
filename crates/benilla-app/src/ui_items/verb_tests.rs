@@ -232,6 +232,23 @@ impl Bags {
             ..Default::default()
         });
         script.set_inventory_slots(doll);
+        // The record feed's copies of the templates above, which the equip questions read.
+        for (entry, bonding) in [
+            (LINEN, 0),
+            (HELM, 0),
+            (PAPER, 0),
+            (BOE, 2),
+            (BOU, 3),
+            (BAG_ENTRY, 0),
+        ] {
+            script.set_item_template(
+                entry,
+                benilla_ui::script::ItemTemplateView {
+                    bonding,
+                    ..Default::default()
+                },
+            );
+        }
         world.insert_non_send_resource(script);
         Self { app, rx }
     }

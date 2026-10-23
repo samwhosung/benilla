@@ -2963,6 +2963,7 @@ mod tests {
         );
         let mut s = UiScript::new().unwrap();
         s.set_container(0, Some(forked_bag(super::UseFork::Equip)));
+        s.seat_item_records();
         let equipped =
             crate::script::host::test_support::applied_in_call(&mut s, "UseContainerItem(0, 1)");
         let equip_arm = super::UseArm::Item(super::UseFork::Equip);

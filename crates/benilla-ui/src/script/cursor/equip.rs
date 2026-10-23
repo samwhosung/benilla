@@ -37,34 +37,29 @@ pub enum AutoEquip {
 /// bind when equipped.
 pub const BIND_WHEN_EQUIPPED: u32 = 2;
 
-/// What the two equip questions read of the item they would equip: its entry, whether it is
-/// bound (`0x5da2c0`), whether its record is cached (`0x55ba30`) and the record's bonding.
+/// What the two equip questions read of the item object they would equip: its entry and whether
+/// it is bound (`0x5da2c0`). Its record, the bonding and whether it is cached, they look up in
+/// the item cache by the entry ([`equip_question`]).
 #[derive(Clone, Copy, Debug)]
 pub(super) struct EquipFacts {
     pub(super) item_id: u32,
     pub(super) bound: bool,
-    pub(super) cached: bool,
-    pub(super) bonding: u32,
 }
 
 impl EquipFacts {
-    /// A bag slot's item; its record is pending while the feed has no quality for it.
+    /// A bag slot's item.
     pub(super) fn of_slot(s: &crate::script::ContainerSlot) -> Self {
         Self {
             item_id: s.item_id,
             bound: s.already_bound,
-            cached: !s.record_pending(),
-            bonding: s.bonding,
         }
     }
 
-    /// A player slot's item; its record is pending while the feed has no inventory type for it.
+    /// A player slot's item.
     pub(super) fn of_inv(v: &crate::script::InvSlotView) -> Self {
         Self {
             item_id: v.item_id,
             bound: v.already_bound,
-            cached: v.inventory_type.is_some(),
-            bonding: v.bonding,
         }
     }
 }
@@ -82,14 +77,18 @@ pub(super) enum Question {
 
 /// The question `AutoEquipCursorItem` and `SwapItem` share, in their order: a bound item
 /// (`0x5e15d6`, `0x5e0d75`) or a set `suppress` (`0x5e15e3`, `0x5e0d82`) sends; else the record
-/// lookup (`0x5e1603`, `0x5e0db1`) waits on a miss; else the record's bonding is 2
-/// (`0x5e163b`, `0x5e0e54`) and the player can use the item (`0x5ea930`) to ask. No quality leg.
+/// lookup in the item cache (`0x5e1603`, `0x5e0db1`) waits on a miss; else the record's bonding
+/// `+0x194` is 2 (`0x5e163b`, `0x5e0e54`) and the player can use the item (`0x5ea930`) to ask.
+/// No quality leg. The cache is the VM's copy of the app's item records (`Model::item_templates`,
+/// seated whole for a new VM and topped up as each record lands), not a bag view's fields.
 pub(super) fn equip_question(model: &Model, item: EquipFacts, suppress: bool) -> Question {
     if item.bound || suppress {
-        Question::Send
-    } else if !item.cached {
-        Question::Wait(item.item_id)
-    } else if item.bonding == BIND_WHEN_EQUIPPED
+        return Question::Send;
+    }
+    let Some(record) = model.item_templates.get(&item.item_id) else {
+        return Question::Wait(item.item_id);
+    };
+    if record.bonding == BIND_WHEN_EQUIPPED
         && crate::script::item_stats::item_usable_by_id(model, item.item_id)
     {
         Question::Ask
@@ -330,6 +329,7 @@ mod tests {
     fn the_pick_drops_the_held_item_and_the_send_clears_the_cursor() {
         let mut s = UiScript::new().unwrap();
         s.set_container(0, Some(bag(&[(1, 0x11, 4), (2, 0x12, 4)])));
+        s.seat_item_records();
         s.run("PickupContainerItem(0, 1)").unwrap();
         assert!(s.item_locked(0x11));
 
@@ -352,6 +352,7 @@ mod tests {
     fn a_projectile_signals_the_unlock_of_its_clear() {
         let mut s = UiScript::new().unwrap();
         s.set_container(0, Some(bag(&[(1, 0x11, 6)])));
+        s.seat_item_records();
         s.run(
             "SIGNALS = 0 local f = CreateFrame('Frame') f:RegisterEvent('ITEM_LOCK_CHANGED') \
              f:SetScript('OnEvent', function() SIGNALS = SIGNALS + 1 end)",
@@ -378,6 +379,7 @@ mod tests {
         let mut arrows = bag(&[(1, 0x11, 6)]);
         arrows.slots.get_mut(&1).unwrap().count = 200;
         s.set_container(0, Some(arrows));
+        s.seat_item_records();
         s.run("SplitContainerItem(0, 1, 50) AutoEquipCursorItem()")
             .unwrap();
         assert!(s.cursor_item().is_none(), "the split left the cursor");
@@ -439,6 +441,7 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
         s.set_container(0, Some(boe_bag(2, false)));
+        s.seat_item_records();
         s.run("PickupContainerItem(0, 1) AutoEquipCursorItem()")
             .unwrap();
 
@@ -476,6 +479,7 @@ mod tests {
         s.run("PickupContainerItem(0, 1) AutoEquipCursorItem()")
             .unwrap();
         s.set_container(0, Some(boe_bag(0, false)));
+        s.seat_item_records();
         s.replay_auto_equip(870).unwrap();
         assert!(s.cursor_item().is_some(), "another entry");
         s.replay_auto_equip(871).unwrap();
@@ -522,6 +526,7 @@ mod tests {
             let mut s = UiScript::new().unwrap();
             s.keep_calls();
             s.set_container(0, Some(boe_bag(bonding, bound)));
+            s.seat_item_records();
             s.run("PickupContainerItem(0, 1) AutoEquipCursorItem()")
                 .unwrap();
             assert_eq!(
@@ -563,6 +568,7 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
         s.set_container(0, Some(boe_bag(2, false)));
+        s.seat_item_records();
         s.run("UseContainerItem(0, 1)").unwrap();
 
         assert_eq!(s.cursor_item().map(|i| i.guid), Some(0x11));
@@ -582,6 +588,7 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
         s.set_container(0, Some(boe_bag(0, false)));
+        s.seat_item_records();
         s.run("UseContainerItem(0, 1)").unwrap();
 
         assert!(s.cursor_item().is_none());
@@ -625,6 +632,7 @@ mod tests {
         s.open_trade_window();
         s.set_container(0, Some(bag(&[(1, 0x11, 4), (2, 0x12, 4)])));
         // Offer the second item, then hold the first.
+        s.seat_item_records();
         s.run("PickupContainerItem(0, 2) ClickTradeButton(1) ClearCursor()")
             .unwrap();
         s.unlock_item(0x12);
@@ -658,6 +666,7 @@ mod tests {
         for held in [false, true] {
             let mut s = UiScript::new().unwrap();
             s.set_container(0, Some(bag(&[(1, 0x11, 4), (2, 0x12, 4)])));
+            s.seat_item_records();
             s.run(
                 "SEEN = '' local f = CreateFrame('Frame') f:RegisterEvent('CURSOR_UPDATE') \
                  f:SetScript('OnEvent', function() SEEN = SEEN .. (CursorHasItem() and 1 or 0) end)",

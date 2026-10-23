@@ -432,6 +432,7 @@ mod tests {
         s.set_bank(Some(Default::default()));
         s.set_container(0, Some(backpack()));
         s.set_bank_bag_slots(Default::default());
+        s.seat_item_records();
         s.run("PickupContainerItem(0, 1)").unwrap();
 
         assert!(s.eval::<bool>("return PutItemInBag(64) == nil").unwrap());
@@ -457,6 +458,7 @@ mod tests {
         s.keep_calls();
         s.set_bank(Some(Default::default()));
         s.set_container(0, Some(backpack()));
+        s.seat_item_records();
         s.run("PickupContainerItem(0, 2)").unwrap();
 
         assert!(s.eval::<bool>("return PutItemInBag(64) == nil").unwrap());
@@ -473,6 +475,7 @@ mod tests {
         s.set_bank(Some(Default::default()));
         s.set_container(0, Some(backpack()));
         s.set_bank_bag_slots(one_bank_bag());
+        s.seat_item_records();
         s.run("PickupContainerItem(0, 1)").unwrap();
 
         assert_eq!(s.eval::<i64>("return PutItemInBag(64)").unwrap(), 1);
@@ -523,6 +526,7 @@ mod tests {
         s.set_bank(Some(Default::default()));
         s.set_container(0, Some(backpack()));
         s.set_bank_bag_slots(one_bank_bag());
+        s.seat_item_records();
         let place = |s: &UiScript, pick: &str, put: &str| {
             s.run(pick).unwrap();
             heard::listen(

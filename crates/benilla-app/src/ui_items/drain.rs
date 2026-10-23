@@ -1007,16 +1007,16 @@ mod tests {
                 quality: cached.then_some(1),
                 ..Default::default()
             };
-            app.world_mut()
-                .non_send_resource_mut::<UiScript>()
-                .set_container(
-                    0,
-                    Some(benilla_ui::script::ContainerState {
-                        num_slots: 16,
-                        slots: std::collections::HashMap::from([(1, slot)]),
-                        ..Default::default()
-                    }),
-                );
+            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            script.set_container(
+                0,
+                Some(benilla_ui::script::ContainerState {
+                    num_slots: 16,
+                    slots: std::collections::HashMap::from([(1, slot)]),
+                    ..Default::default()
+                }),
+            );
+            script.seat_item_records();
         };
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
@@ -1193,6 +1193,8 @@ mod tests {
             feed_clam(&mut app);
             {
                 let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+                // The record feed's copy of the template, which the equip question reads.
+                script.seat_item_records();
                 script.unlock_item(CLAM);
                 script
                     .run(
@@ -1689,6 +1691,7 @@ mod bind_confirm_tests {
         let doll: benilla_ui::script::InventorySlots = Default::default();
         script.set_inventory_slots(doll);
         setup(&mut script);
+        script.seat_item_records();
         // Pick up and drop on the main hand: the swap's call, kept for the host.
         script.run("PickupContainerItem(0, 1)").unwrap();
         script.run("PickupInventoryItem(16)").unwrap();
@@ -1792,9 +1795,11 @@ mod bind_confirm_tests {
             Some(AXE_GUID)
         );
         // The bag view takes the record, then the callback replays the swap.
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .set_container(0, Some(bag_with_the_axe(4)));
+        {
+            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            script.set_container(0, Some(bag_with_the_axe(4)));
+            script.seat_item_records();
+        }
         app.world_mut()
             .run_system_once(crate::ui_bind_confirm::replay_equip_records)
             .unwrap();
@@ -1981,6 +1986,7 @@ mod bind_confirm_tests {
         script.set_screen_size(1024.0, 768.0);
         load_ui(&script);
         script.set_container(0, Some(bag_with_the_axe(4)));
+        script.seat_item_records();
         script.run("PickupContainerItem(0, 1)").unwrap();
         script.run("AutoEquipCursorItem()").unwrap();
         app.insert_non_send_resource(script);
@@ -2085,6 +2091,7 @@ mod bind_confirm_tests {
         script.set_screen_size(1024.0, 768.0);
         load_ui(&script);
         script.set_container(0, Some(bag_with_the_axe(4)));
+        script.seat_item_records();
         script.run("PickupContainerItem(0, 1)").unwrap();
         script.run("AutoEquipCursorItem()").unwrap();
         app.insert_non_send_resource(script);
@@ -2129,6 +2136,7 @@ mod bind_confirm_tests {
             s.set_item_template(
                 FLURRY_AXE,
                 benilla_ui::script::ItemTemplateView {
+                    bonding: 2,
                     required_level: 60,
                     allowable_class: -1,
                     allowable_race: -1,
@@ -2405,6 +2413,7 @@ mod bind_confirm_tests {
         bag.slots.get_mut(&1).unwrap().use_fork = UseFork::Equip;
         bag.slots.get_mut(&1).unwrap().item_class = Some(2);
         script.set_container(0, Some(bag));
+        script.seat_item_records();
         script.run("UseContainerItem(0, 1)").unwrap();
         app.insert_non_send_resource(script);
         // A move applied before the question's call: the slot is empty now.

@@ -682,11 +682,16 @@ impl Items {
         self.templates.clear_pending();
     }
 
-    /// Disconnect: drop the in-flight asks and the queued enchant times, keep the templates. The
-    /// item objects and their countdowns go with the index's sweep.
+    /// Disconnect: drop the in-flight asks, the callbacks waiting on them or on the VM, and the
+    /// queued enchant times, keep the templates. The item objects and their countdowns go with
+    /// the index's sweep.
     pub(crate) fn clear_session(&mut self) {
         self.pending_enchant_times.clear();
         self.callbacks
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.vm_callbacks
             .get_mut()
             .unwrap_or_else(|e| e.into_inner())
             .clear();

@@ -208,8 +208,8 @@ impl BindGate<'_> {
 }
 
 /// The lookup's miss (`0x55ba30`): ask the record with the callback, which its answer runs. A
-/// record the cache already answered, which the VM's view had not caught up with, runs it now
-/// rather than wait for an answer that has come.
+/// record the cache already answered, which the VM's copy of the cache had not caught up with,
+/// runs it now rather than wait for an answer that has come.
 fn wait_for(entry: u32, callback: RecordCallback, items: &Items, commands: &NetCommands) {
     if items.template_answered(entry) {
         items.run_with_vm(entry, callback, items.template_known(entry));
@@ -219,8 +219,8 @@ fn wait_for(entry: u32, callback: RecordCallback, items: &Items, commands: &NetC
     let _ = items.template(entry, 0, Ask::Event(commands));
 }
 
-/// The equip callbacks whose records answered, run with the VM and the host lent, after the bag
-/// and doll feeds have pushed what the answer changed. `0x5e1020` walks the table: each swap
+/// The equip callbacks whose records answered, run with the VM and the host lent, after the bag,
+/// doll and record feeds have pushed what the answer changed. `0x5e1020` walks the table: each swap
 /// parked on the entry replays when the record was found (`0x5e10c2`) and frees its record either
 /// way (`0x5e10cf`-`0x5e10e5`), a refusal leaving its items locked. `0x5e17a0` runs
 /// `AutoEquipCursorItem` again for a found record ([`UiScript::replay_auto_equip`]).
@@ -255,7 +255,8 @@ pub(crate) fn replay_equip_records(
 
 #[cfg(test)]
 mod tests {
-    /// The replays read the VM's views, so they run after the bag feed has pushed the answer.
+    /// The replays read the VM's views and its item records, so they run after the bag feed and
+    /// the record feed have pushed the answer.
     #[test]
     fn the_equip_replays_run_after_the_bag_feed() {
         let app = crate::game_plugins::schedule_tests::headless_client();
@@ -270,8 +271,8 @@ mod tests {
                 .position(|n| n.ends_with(name))
                 .unwrap_or_else(|| panic!("`{name}` is in the pass"))
         };
-        assert!(
-            at("::ui_items::feed::feed_containers") < at("::ui_bind_confirm::replay_equip_records")
-        );
+        let replay = at("::ui_bind_confirm::replay_equip_records");
+        assert!(at("::ui_items::feed::feed_containers") < replay);
+        assert!(at("::ui_items::feed::feed_item_stats") < replay);
     }
 }

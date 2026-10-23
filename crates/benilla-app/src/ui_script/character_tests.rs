@@ -533,6 +533,7 @@ fn cursor_update_highlights_fitting_doll_slots_while_holding_a_bag_item() {
     );
 
     s.set_container(0, Some(backpack_with_fitting_helm()));
+    s.seat_item_records();
     s.run("PickupContainerItem(0, 1)").unwrap();
     s.tick(0.0); // delivers the queued CURSOR_UPDATE
     assert!(s.errors().is_empty(), "{:?}", s.errors());
@@ -580,6 +581,7 @@ fn model_pane_click_auto_equips_a_held_bag_item() {
     s.resolve();
 
     s.set_container(0, Some(backpack_with_fitting_helm()));
+    s.seat_item_records();
     s.run("PickupContainerItem(0, 1)").unwrap();
     assert!(s.eval::<bool>("return CursorHasItem()").unwrap());
 

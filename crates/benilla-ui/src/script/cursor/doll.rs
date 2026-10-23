@@ -643,6 +643,7 @@ mod tests {
         s.set_inventory_slots(doll_slots());
         s.set_container(0, Some(one_fitting_bag_item()));
 
+        s.seat_item_records();
         s.run("PickupContainerItem(0, 1)").unwrap();
         assert_eq!(s.cursor_item().unwrap().equip_slots, vec![1]);
 
@@ -669,6 +670,7 @@ mod tests {
         s.set_inventory_slots(doll_slots());
         // The bag item only fits HeadSlot (1); place it on NeckSlot (2).
         s.set_container(0, Some(one_fitting_bag_item()));
+        s.seat_item_records();
         s.run("PickupContainerItem(0, 1)").unwrap();
 
         assert!(pickup_inventory_item(&s.lua, 2).unwrap());
@@ -830,6 +832,7 @@ mod tests {
                 slots,
             }),
         );
+        s.seat_item_records();
         s.run("PickupContainerItem(0, 3)").unwrap();
         assert!(s.eval::<bool>("return CursorCanGoInSlot(21)").unwrap());
 
@@ -883,6 +886,7 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
         s.set_container(0, Some(one_fitting_bag_item()));
+        s.seat_item_records();
         s.run("PickupContainerItem(0, 1)").unwrap();
 
         assert!(auto_equip_cursor_item(&mut s.model_mut()));
@@ -905,6 +909,7 @@ mod tests {
         s.set_inventory_slots(slots);
         s.set_container(0, Some(one_fitting_bag_item()));
         let helm = one_fitting_bag_item().slots[&1].guid;
+        s.seat_item_records();
         let place = |s: &UiScript, pick: &str, put: &str| {
             s.run(pick).unwrap();
             heard::listen(
@@ -956,6 +961,7 @@ mod tests {
         s.set_container(0, Some(bag));
         let helm = one_fitting_bag_item().slots[&1].guid;
         for verb in ["PickupInventoryItem(1)", "AutoEquipCursorItem()"] {
+            s.seat_item_records();
             s.run("PickupContainerItem(0, 2)").unwrap();
             heard::listen(&s, &["ITEM_LOCK_CHANGED"], None);
             s.run(verb).unwrap();
@@ -991,6 +997,7 @@ mod tests {
         s.keep_calls();
         s.set_inventory_slots(doll_slots());
 
+        s.seat_item_records();
         s.run("PickupInventoryItem(1)").unwrap();
         assert!(auto_equip_cursor_item(&mut s.model_mut()));
         s.submit_filed_item_calls();
@@ -1000,6 +1007,7 @@ mod tests {
         let mut state = one_fitting_bag_item();
         state.slots.get_mut(&1).unwrap().count = 5;
         s.set_container(0, Some(state));
+        s.seat_item_records();
         s.run("SplitContainerItem(0, 1, 2)").unwrap();
         assert!(auto_equip_cursor_item(&mut s.model_mut()));
         s.submit_filed_item_calls();
@@ -1182,6 +1190,7 @@ mod tests {
         s.keep_calls();
         s.set_inventory_slots(doll_slots());
         s.set_container(0, Some(one_fitting_bag_item()));
+        s.seat_item_records();
         s.run("PickupContainerItem(0, 1)").unwrap();
 
         equip_cursor_item(&s.lua, 1).unwrap();
@@ -1356,6 +1365,7 @@ mod tests {
                 slots: vault,
             }),
         );
+        s.seat_item_records();
         s.run("PickupContainerItem(-1, 3)").unwrap();
         assert!(auto_equip_cursor_item(&mut s.model_mut()));
         s.submit_filed_item_calls();
@@ -1371,6 +1381,7 @@ mod tests {
             ..Default::default()
         });
         s.set_bank_bag_slots(bank_bags);
+        s.seat_item_records();
         s.set_cursor_for_test(CursorPayload::Item(crate::script::cursor::CursorItem {
             item_class: None,
             guid: 0x112,
@@ -1525,6 +1536,7 @@ mod tests {
         s.set_inventory_slots(doll_slots());
         s.set_container(0, Some(one_fitting_bag_item()));
         s.lock_item(0x10c);
+        s.seat_item_records();
         s.run("PickupContainerItem(0, 1) EquipCursorItem(1)")
             .unwrap();
         assert_eq!(
