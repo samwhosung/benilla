@@ -237,6 +237,11 @@ impl UiScript {
     /// nothing borrowed from the host across the point.
     pub fn signal_point(&mut self, host: &mut dyn CallHost) {
         let lua = self.lua().clone();
+        // Inside an apply the host is out of the slot and handlers are held ([`with_host`]).
+        debug_assert!(
+            !free(&lua) && slot(&lua).hold.get(),
+            "a signal point is only inside a call's apply"
+        );
         #[cfg(any(test, feature = "test-support"))]
         super::census::point();
         lend(&lua, host, || {
@@ -360,6 +365,16 @@ mod tests {
             assert!(free(&lua));
         });
         assert!(!s.host_free());
+    }
+
+    /// A signal point is a step of a call's apply; reached outside one, it is refused.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "only inside a call's apply")]
+    fn a_signal_point_outside_an_apply_is_refused() {
+        let mut s = UiScript::new().unwrap();
+        let mut host = Count(0);
+        s.signal_point(&mut host);
     }
 
     #[test]
