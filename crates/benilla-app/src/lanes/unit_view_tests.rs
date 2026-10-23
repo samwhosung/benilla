@@ -488,3 +488,30 @@ fn updates_to_units_no_view_reads_build_nothing() {
     let (builds, pushes, _) = lane_counts(&mut app);
     assert_eq!((builds, pushes), (0, 0));
 }
+
+/// Our own death signals `PLAYER_DEAD` inside its packet (`0x6046f0` at `0x6047a3`, then
+/// `0x6058ae` → `0x6251cc` → `0x495850`), after the packets before it ran whole: it fires after
+/// the combat line an earlier packet of the frame queued, and `UnitHealth("player")` reads the
+/// health its packet left, 0.
+#[test]
+fn player_dead_reads_its_packets_health_after_an_earlier_packets_line() {
+    let mut app = client();
+    app.world_mut()
+        .resource_mut::<crate::net::NetStatus>()
+        .connected = true;
+    app.world()
+        .non_send_resource::<UiScript>()
+        .run(
+            r#"local d = CreateFrame("Frame") d:RegisterEvent("PLAYER_DEAD")
+            d:SetScript("OnEvent", function()
+                table.insert(Seen, event .. ":" .. UnitHealth("player"))
+            end)"#,
+        )
+        .unwrap();
+    let seen = frame(&mut app, vec![fall(30), values(ME, &health(0))]);
+    let at = |prefix: &str| seen.iter().position(|s| s.starts_with(prefix));
+    let (line, dead) = (at("UNIT_COMBAT:player"), at("PLAYER_DEAD"));
+    assert!(line.is_some() && dead.is_some(), "{seen:?}");
+    assert!(line < dead, "the earlier packet's line first: {seen:?}");
+    assert_eq!(seen[dead.unwrap()], "PLAYER_DEAD:0", "{seen:?}");
+}

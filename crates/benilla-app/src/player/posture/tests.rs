@@ -592,3 +592,34 @@ fn a_stand_sent_in_place_leaves_a_later_ask_for_it_nothing_to_send() {
     );
     assert_eq!(world.resource::<crate::player::StandPending>().0, Some(0));
 }
+
+/// Each queued ask is its own `SetStandState` in its order (`0x5ed430`): a sit asked ahead of the
+/// attack's stand sends its packet and applies, and the stand, sent at the attack, then applies
+/// over it.
+#[test]
+fn a_sit_asked_ahead_of_the_attacks_stand_still_sends() {
+    use crate::net::{Embodied, ObjectStore, SelfPlayer};
+
+    let (mut world, rx) = posture_world();
+    world.spawn((
+        SelfPlayer,
+        Embodied,
+        Transform::default(),
+        ObjectStore(alive(&[])),
+    ));
+    world.write_message(super::StandStateRequest {
+        state: 1,
+        sent: false,
+    });
+    world.write_message(super::StandStateRequest {
+        state: 0,
+        sent: true,
+    });
+    posture_frame(&mut world);
+    assert_eq!(
+        rx.try_iter().map(|c| format!("{c:?}")).collect::<Vec<_>>(),
+        ["StandStateChange { state: 1 }"],
+        "the sit's packet; the stand's went out at the attack"
+    );
+    assert_eq!(world.resource::<crate::player::StandPending>().0, Some(0));
+}

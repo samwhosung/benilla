@@ -437,6 +437,14 @@ pub(crate) struct ActiveMover;
 #[derive(Resource)]
 pub(crate) struct NetEvents(Receiver<SessionEvent>);
 
+impl NetEvents {
+    /// The inbound channel as `rx` brings it, for a test that feeds the drain.
+    #[cfg(test)]
+    pub(crate) fn for_test(rx: Receiver<SessionEvent>) -> Self {
+        Self(rx)
+    }
+}
+
 /// The outbound command channel.
 #[derive(Resource, Debug)]
 pub(crate) struct NetCommands(pub(crate) Sender<ClientCommand>);

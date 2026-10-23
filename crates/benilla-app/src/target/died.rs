@@ -694,6 +694,47 @@ mod tests {
         assert_eq!(seen, ["PLAYER_DEAD 300", "CURSOR_UPDATE 0"]);
     }
 
+    /// The death's sends keep their packet's place among the frame's: the selection's death
+    /// deselects (`CMSG_SET_SELECTION` 0, `0x605901`) ahead of the packet after it, whose duel
+    /// echo answers at once (`CMSG_DUEL_ACCEPTED`).
+    #[test]
+    fn a_deaths_sends_go_ahead_of_the_next_packets() {
+        let mut c = client();
+        let mob = c.mob;
+        c.select(MOB, mob);
+        let (tx, rx) = crossbeam_channel::unbounded();
+        c.world()
+            .insert_resource(crate::net::NetEvents::for_test(rx));
+        for ev in crate::net::wire([
+            SessionEvent::ObjectValues {
+                guid: MOB,
+                fields: ObjectFields::from_pairs(&[(FIELD_UNIT_HEALTH, 0)]),
+            },
+            SessionEvent::DuelRequested {
+                arbiter: 0x55,
+                challenger: ME,
+            },
+        ]) {
+            tx.send(ev).unwrap();
+        }
+        c.sent();
+        for _ in 0..2 {
+            let world = c.world();
+            crate::net::apply_net_updates(world);
+            crate::lanes::fire_in_order(world);
+        }
+        let order: Vec<&str> = c
+            .sent()
+            .iter()
+            .filter_map(|s| match s {
+                ClientCommand::SetSelection { guid: 0 } => Some("SetSelection 0"),
+                ClientCommand::DuelAccepted { .. } => Some("DuelAccepted"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(order, ["SetSelection 0", "DuelAccepted"]);
+    }
+
     /// The guid the interaction latch holds.
     fn latched(c: &mut Client) -> Option<u64> {
         c.world()
