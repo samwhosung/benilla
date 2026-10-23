@@ -555,12 +555,8 @@ impl Items {
     }
 
     /// The callbacks [`Self::run_with_vm`] queued, in order, spent.
-    pub(crate) fn take_vm_callbacks(&mut self) -> Vec<(u32, RecordCallback, bool)> {
-        std::mem::take(
-            self.vm_callbacks
-                .get_mut()
-                .unwrap_or_else(|e| e.into_inner()),
-        )
+    pub(crate) fn take_vm_callbacks(&self) -> Vec<(u32, RecordCallback, bool)> {
+        std::mem::take(&mut *self.vm_callbacks.lock_recover())
     }
 
     /// An entry change asked for the record of `entry` with the callback `0x5d96b0`.

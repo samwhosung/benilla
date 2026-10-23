@@ -225,7 +225,7 @@ fn wait_for(entry: u32, callback: RecordCallback, items: &Items, commands: &NetC
 /// way (`0x5e10cf`-`0x5e10e5`), a refusal leaving its items locked. `0x5e17a0` runs
 /// `AutoEquipCursorItem` again for a found record ([`UiScript::replay_auto_equip`]).
 pub(crate) fn replay_equip_records(
-    mut vm: crate::script_calls::VmWith<(ResMut<'static, Items>, ResMut<'static, PendingEquips>)>,
+    mut vm: crate::script_calls::VmWith<(Res<'static, Items>, ResMut<'static, PendingEquips>)>,
 ) {
     let ran = vm.own().0.take_vm_callbacks();
     for (entry, callback, found) in ran {
