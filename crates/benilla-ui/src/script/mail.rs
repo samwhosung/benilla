@@ -90,6 +90,7 @@ pub struct MailInboxRow {
 pub struct MailInvoice {
     /// `"seller"` (your auction sold) or `"buyer"` (you won), literal tokens, not global strings.
     pub seller: bool,
+    /// The item's name with its suffix, "" while the item cache lacks it (`0x5d8b25`).
     pub item_name: String,
     /// The counterparty: who bought it (seller invoice) or who sold it (buyer invoice).
     pub player_name: String,

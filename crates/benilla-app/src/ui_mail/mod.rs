@@ -471,7 +471,8 @@ fn resolve_row(
         .then(|| invoice::parse_subject(&entry.subject))
         .flatten();
     // The notice's item comes from the subject: a sold notice names an item it does not carry.
-    // The invoice names it with the roll's suffix (`0x4af430` → `0x5d8b00`).
+    // The invoice names it with the roll's suffix (`0x4af430` → `0x5d8b00`), "" while the cache
+    // lacks it: `0x5d8b00` clears its buffer first (`0x5d8b25`) and the verb never tests it.
     let notice_item_name = auction.and_then(|a| {
         items
             .template(a.entry, 0, ask)
@@ -491,11 +492,12 @@ fn resolve_row(
         .and_then(|a| {
             let seller = a.result == auction_mail::SOLD;
             let n = invoice::parse_body(raw_body?, seller)?;
-            // An unresolved counterparty fills in when its name lands, as in the reference.
+            // An unresolved counterparty is the verb's one miss past the body (`0x4af4b7`-
+            // `0x4af4c1`), filled in when its name lands.
             let player_name = names.resolve_player(n.player_guid, ask)?.to_string();
             Some(benilla_ui::script::MailInvoice {
                 seller,
-                item_name: notice_item_name.clone()?,
+                item_name: notice_item_name.unwrap_or_default(),
                 player_name,
                 bid: n.bid,
                 buyout: n.buyout,
