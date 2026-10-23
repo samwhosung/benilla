@@ -180,7 +180,10 @@ pub(crate) fn idle_handler(
         if action.sit {
             // Through the one setter, like the reference: `player::posture` refuses a swimmer and
             // drops a request equal to its pending state, so one `CMSG_STANDSTATECHANGE` goes out.
-            stand.write(crate::player::StandStateRequest { state: 1 });
+            stand.write(crate::player::StandStateRequest {
+                state: 1,
+                sent: false,
+            });
         }
 
         let strings = |key: &str| crate::ui_chat::combat::global_string(script, key);

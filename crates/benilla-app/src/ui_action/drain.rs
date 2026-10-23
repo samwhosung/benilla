@@ -89,23 +89,25 @@ impl AttackPress<'_, '_> {
 
     /// [`Self::attack_target`]'s second half, the toggle at the validated target.
     pub(crate) fn start_attack(&mut self, guid: u64) {
-        let Self { pick, seam, .. } = self;
+        let seam = &mut self.seam;
         if seam.me.single().is_err() {
             return;
         }
-        let engaged = pick.engaged();
         debug!(
             "attack {} at {guid:#x}",
-            if engaged { "toggled off" } else { "swing" }
+            if seam.engaged() {
+                "toggled off"
+            } else {
+                "swing"
+            }
         );
-        seam.toggle(guid, engaged);
+        seam.toggle(guid);
     }
 
     /// A stand state change's attack stop inside its call, `0x5ecac0` at `0x5f07e7` while we
     /// attack (`0x60ecb0`).
     pub(crate) fn stop_for_stand(&mut self) {
-        let engaged = self.pick.engaged();
-        self.seam.stop(engaged);
+        self.seam.stop();
     }
 
     /// The validator `0x612df0` up to its selection's re-read, for the call host, which runs the

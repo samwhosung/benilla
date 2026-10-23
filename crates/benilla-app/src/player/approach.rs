@@ -343,7 +343,10 @@ impl AutoMove<'_, '_> {
             pitch: None,
         });
         if !standing {
-            stand.write(super::StandStateRequest { state: 0 });
+            stand.write(super::StandStateRequest {
+                state: 0,
+                sent: false,
+            });
         }
         Ok(())
     }

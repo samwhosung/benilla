@@ -106,7 +106,6 @@ impl ScriptSelect<'_, '_> {
         mode: benilla_ui::script::NearestMode,
         reverse: bool,
     ) -> SelectDebt {
-        let engaged = self.commit.engaged();
         let now = self.time.elapsed_secs_f64();
         let (scan, history) = (&self.scan, &mut self.history);
         self.commit.owing(|commit| {
@@ -119,7 +118,6 @@ impl ScriptSelect<'_, '_> {
                 &mut commit.selection,
                 &mut commit.seam,
                 &mut commit.front,
-                engaged,
             );
             commit.owe_all(owed);
         })

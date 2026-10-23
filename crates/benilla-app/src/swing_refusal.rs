@@ -36,7 +36,7 @@ use std::time::Duration;
 use benilla_protocol::messages::AttackSwingError;
 use bevy::prelude::*;
 
-use crate::creature_anim::{AttackSeam, Engaged};
+use crate::creature_anim::AttackSeam;
 use crate::net::SelfPlayer;
 use crate::ui_action::{UiError, UiErrorKeys};
 
@@ -101,7 +101,6 @@ fn apply_swing_refusals(
     time: Res<Time>,
     mut refusal: ResMut<SwingRefusal>,
     mut seam: AttackSeam,
-    engaged: Query<(), (With<SelfPlayer>, With<Engaged>)>,
 ) {
     for edge in edges.read() {
         match edge {
@@ -118,7 +117,7 @@ fn apply_swing_refusals(
             SwingRefusalEdge::Refused(AttackSwingError::DeadOrUnattackable)
             | SwingRefusalEdge::CombatCancelled => {
                 debug!("swing stopped by the server — silently ({edge:?})");
-                seam.stop(!engaged.is_empty());
+                seam.stop();
             }
             SwingRefusalEdge::Landed => refusal.clear(),
         }
@@ -126,19 +125,20 @@ fn apply_swing_refusals(
 }
 
 /// The reference's per-player tick `0x5ec950`, gated in its order: an attack target set
-/// ([`Engaged`] is `[+0xc48]`), the cooldown, then the code; it re-arms only when a line shows.
+/// ([`crate::creature_anim::Engaged`] is `[+0xc48]`), the cooldown, then the code; it re-arms only when a line shows.
 /// It runs once per rendered frame (vtable `0x80af78` slot 14, called only from `0x48160c` on the
 /// world paint), as an `Update` system does.
 fn show_swing_refusal(
     time: Res<Time>,
     mut refusal: ResMut<SwingRefusal>,
-    engaged: Query<(), (With<SelfPlayer>, With<Engaged>)>,
+    me: Query<Entity, With<SelfPlayer>>,
+    edits: Res<crate::creature_anim::UnitEdits>,
     errors: Res<UiErrorKeys>,
 ) {
     let Some((code, due)) = refusal.0 else {
         return;
     };
-    if engaged.is_empty() {
+    if !me.single().is_ok_and(|me| edits.attacking(me)) {
         return; // `[+0xc48] == 0`: no attack target
     }
     let now = time.elapsed();

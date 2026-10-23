@@ -283,17 +283,17 @@ pub(crate) struct CastState<'w, 's> {
     targeting: Res<'w, SpellTargeting>,
     auto_repeat: Res<'w, AutoRepeatActive>,
     me: Query<'w, 's, SelfCastFacts, With<crate::net::SelfPlayer>>,
+    /// Our attack target as the queued unit edits leave it; a harness without them reads none.
+    edits: Option<Res<'w, crate::creature_anim::UnitEdits>>,
     /// The in-flight item's object, found by guid as an item (`0x4e53e1`); a harness without the
     /// index holds none.
     index: Option<Res<'w, GuidIndex>>,
     stores: Query<'w, 's, &'static crate::net::ObjectStore>,
 }
 
-/// The player's own cast facts: the attack flag and the form byte's store.
-type SelfCastFacts = (
-    Has<crate::creature_anim::Engaged>,
-    Option<&'static crate::net::ObjectStore>,
-);
+/// The player's own cast facts: the entity, whose attack target the edits answer, and the form
+/// byte's store.
+type SelfCastFacts = (Entity, Option<&'static crate::net::ObjectStore>);
 
 impl CastState<'_, '_> {
     /// The view as it stands now.
@@ -304,7 +304,11 @@ impl CastState<'_, '_> {
                 .map(Inflight::spell_id),
             targeting: self.targeting.spell(),
             auto_repeat: self.auto_repeat.0,
-            attacking: me.is_some_and(|(engaged, _)| engaged),
+            attacking: me.is_some_and(|(me, _)| {
+                self.edits
+                    .as_deref()
+                    .is_some_and(|edits| edits.attacking(me))
+            }),
             form: me
                 .and_then(|(_, store)| store)
                 .map_or(0, |store| store.0.unit_shapeshift_form()),

@@ -97,7 +97,7 @@ pub(crate) use approach::{
     Refused, Subject, RANGE_STOP_FRACTION, TALK_STOP,
 };
 /// `SetStandState` run inside a script call.
-pub(crate) use posture::StandSetter;
+pub(crate) use posture::{stand_up_for_attack, stand_up_refused, StandSetter};
 use state::{
     MoveSpeed, PlayerRide, AIR_NUDGE_SPEED, FALL_FAR_DROP, FALL_FAR_TIME, FOOT_CONE_HEIGHT,
     GROUND_COS, GROUND_PROBE, JUMP_SPEED, LAND_PROBE, MOUSELOOK_PITCH_CLAMP, RUN_BACK_RATIO,
@@ -156,12 +156,15 @@ pub(crate) const UNIT_FLAG_TAXI_FLIGHT: u32 = 0x0010_0000;
 
 /// A stand-state request for [`posture`]'s one setter, the client's `SetStandState` (`0x5ed430`:
 /// send `CMSG_STANDSTATECHANGE` and apply locally through `0x6127b0`), made where no call runs it
-/// at once: the attack's stand, the idle sit, the approach's stand. A script call runs the setter
-/// inside the call ([`StandSetter`]). States are `UnitStandStateType`: 0 stand, 1 sit, 3 sleep, 8
-/// kneel.
+/// at once: the idle sit, the approach's stand, and the attack's stand, whose packet goes out in
+/// place ([`stand_up_for_attack`]). A script call runs the setter inside the call
+/// ([`StandSetter`]). States are `UnitStandStateType`: 0 stand, 1 sit, 3 sleep, 8 kneel.
 #[derive(bevy::ecs::message::Message, Clone, Copy, Debug)]
 pub(crate) struct StandStateRequest {
     pub(crate) state: u8,
+    /// The packet went out where the request was made, past the gate: the setter owes the local
+    /// apply alone.
+    pub(crate) sent: bool,
 }
 
 /// `SMSG_STANDSTATE_UPDATE` for our body (the eat and drink sit, the stand on damage), applied by

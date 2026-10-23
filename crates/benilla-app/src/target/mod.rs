@@ -5,7 +5,6 @@
 
 use bevy::prelude::*;
 
-use crate::creature_anim::Engaged;
 use crate::net::{ClientCommand, Guid, NetCommands, ObjectStore, SelfPlayer};
 use crate::ui_script::InspectMode;
 use benilla_assets::AssetSet;

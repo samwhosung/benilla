@@ -99,7 +99,8 @@ pub(crate) struct Lifecycle<'w> {
 pub(crate) struct Scene<'w, 's> {
     commands: Commands<'w, 's>,
     casting: Query<'w, 's, &'static Casting>,
-    engaged_self: Query<'w, 's, (), (With<crate::creature_anim::Engaged>, With<SelfPlayer>)>,
+    /// Our own entity, whose attack target the queued edits answer.
+    self_player: Query<'w, 's, Entity, With<SelfPlayer>>,
     stores: Query<'w, 's, &'static mut ObjectStore>,
     items: ResMut<'w, crate::items::Items>,
     loot_latch: ResMut<'w, crate::ui_loot::LootLatch>,
@@ -315,7 +316,10 @@ fn on_spell_go(
     {
         let deferred = {
             let (mut l, mut sc) = set.p0();
-            let engaged = !sc.engaged_self.is_empty();
+            let engaged = sc
+                .self_player
+                .single()
+                .is_ok_and(|me| sc.edits.attacking(me));
             spell_go(
                 caster,
                 spell_id,

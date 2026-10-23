@@ -611,7 +611,7 @@ const UNHELD_SELECT_SOUND: &str = "igCharacterSelect";
 enum OwedSwing {
     Again(scan::OwedSwing),
     Assist { guid: u64 },
-    Tail { guid: u64, engaged: bool },
+    Tail { guid: u64 },
 }
 
 /// What a selecting verb owes after its signals, for its caller to pay once their listeners ran
@@ -658,17 +658,8 @@ pub(super) struct Owing {
 pub(crate) struct SelectCommit<'w, 's> {
     pub(super) selection: ResMut<'w, Selection>,
     pub(crate) seam: crate::creature_anim::AttackSeam<'w, 's>,
-    // Our own body: the guid, the store `can_attack` reads, and whether we are mid-swing.
-    me: Query<
-        'w,
-        's,
-        (
-            &'static Guid,
-            Option<&'static ObjectStore>,
-            Has<crate::creature_anim::Engaged>,
-        ),
-        With<SelfPlayer>,
-    >,
+    // Our own body: the guid and the store `can_attack` reads.
+    me: Query<'w, 's, (&'static Guid, Option<&'static ObjectStore>), With<SelfPlayer>>,
     pub(super) stores: Query<'w, 's, &'static ObjectStore>,
     /// The guid to entity map, `0x489a40`'s `0x468460` lookup.
     index: Res<'w, GuidIndex>,
@@ -776,7 +767,7 @@ impl SelectCommit<'_, '_> {
                     self.start_attack(guid);
                 }
             }
-            OwedSwing::Tail { guid, engaged } => self.seam.start_tail(guid, engaged),
+            OwedSwing::Tail { guid } => self.seam.start_tail(guid),
         }
     }
 
@@ -796,15 +787,14 @@ impl SelectCommit<'_, '_> {
     /// at the same guid and is deduped there. The rest is owed past that select's signals while
     /// [`Self::owing`] runs.
     pub(crate) fn start_attack(&mut self, guid: u64) {
-        let engaged = self.engaged();
         let verdict = self.start_target(guid);
-        if !self.seam.start_head(engaged, verdict) {
+        if !self.seam.start_head(verdict) {
             return;
         }
         if let Some(entity) = self.held_unit(guid) {
             self.commit(entity, guid);
         }
-        self.owe(OwedSwing::Tail { guid, engaged });
+        self.owe(OwedSwing::Tail { guid });
     }
 
     /// `StartAttack`'s target legs (`0x5ecc16`, `0x5ecc2e`) on the held object `entity`, `guid`:
@@ -842,17 +832,9 @@ impl SelectCommit<'_, '_> {
         self.owe(OwedSwing::Assist { guid });
     }
 
-    /// Whether we are mid-swing, which a deselect stops.
-    pub(super) fn engaged(&self) -> bool {
-        self.me.single().is_ok_and(|(_, _, engaged)| engaged)
-    }
-
     /// Deselect (`0x493540(0,0)`), a no-op with nothing selected; see [`super::click::clear`].
     pub(super) fn clear(&mut self) {
-        let engaged = self.engaged();
-        if let Some(send) =
-            super::click::deselect_owing(&mut self.selection, &mut self.seam, engaged)
-        {
+        if let Some(send) = super::click::deselect_owing(&mut self.selection, &mut self.seam) {
             self.owe_send(send);
         }
     }
@@ -923,8 +905,7 @@ impl SelectCommit<'_, '_> {
             None,
             guid,
             None,
-            me.is_some_and(|(_, _, engaged)| engaged),
-            me.map(|(g, _, _)| g.0),
+            me.map(|(g, _)| g.0),
             false,
             old_latches,
         );
@@ -953,8 +934,7 @@ impl SelectCommit<'_, '_> {
             Some(entity),
             guid,
             self.stores.get(entity).ok(),
-            me.is_some_and(|(_, _, engaged)| engaged),
-            me.map(|(g, _, _)| g.0),
+            me.map(|(g, _)| g.0),
             attackable,
             old_latches,
         );

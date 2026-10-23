@@ -165,6 +165,7 @@ fn the_stand_state_stop_sends_the_attack_stop_only_while_attacking() {
     world.init_resource::<crate::spell::SpellTargeting>();
     world.init_resource::<crate::ui_cast::CastReports>();
     world.init_resource::<crate::creature_anim::AttackStopInFlight>();
+    world.init_resource::<crate::creature_anim::UnitEdits>();
     let me = world.spawn(crate::net::SelfPlayer).id();
     let sent = |rx: &crossbeam_channel::Receiver<ClientCommand>| {
         rx.try_iter().map(|c| format!("{c:?}")).collect::<Vec<_>>()
@@ -200,6 +201,7 @@ fn a_sit_closes_the_loot_and_stops_the_attack_and_a_stand_does_neither() {
     world.init_resource::<crate::spell::SpellTargeting>();
     world.init_resource::<crate::ui_cast::CastReports>();
     world.init_resource::<crate::creature_anim::AttackStopInFlight>();
+    world.init_resource::<crate::creature_anim::UnitEdits>();
     world.init_resource::<crate::player::StandPending>();
     world.init_resource::<crate::ui_loot::LootMoveStart>();
     world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
@@ -334,7 +336,7 @@ fn under_possession_the_posture_verbs_act_on_the_active_player() {
 
     let frame = |world: &mut World, ask: Option<u8>, moving: bool| -> (u8, Vec<String>) {
         if let Some(state) = ask {
-            world.write_message(super::StandStateRequest { state });
+            world.write_message(super::StandStateRequest { state, sent: false });
         }
         let stand = world
             .run_system_once(
@@ -392,4 +394,74 @@ fn under_possession_the_posture_verbs_act_on_the_active_player() {
         Vec::<String>::new(),
         "the creature's movement stands nobody"
     );
+}
+
+/// The attack's stand-up sends its packet in place (`0x5ecc9b` → `0x5ed501`), so its ask owes the
+/// local apply alone (`0x5ed53f` → `0x6127b0`): the prediction, and no second packet.
+#[test]
+fn a_stand_ask_sent_in_place_applies_locally_and_sends_nothing() {
+    use bevy::ecs::message::Messages;
+    use bevy::ecs::system::RunSystemOnce;
+
+    use crate::net::{Embodied, ObjectStore, SelfPlayer};
+
+    let mut world = World::new();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    world.insert_resource(NetCommands(tx));
+    world.init_resource::<super::Player>();
+    world.init_resource::<crate::player::StandPending>();
+    world.init_resource::<crate::ui_loot::LootMoveStart>();
+    world.init_resource::<crate::bindings::BindingsState>();
+    world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
+    world.init_resource::<Messages<super::StandStateRequest>>();
+    world.init_resource::<Messages<super::super::ServerStandState>>();
+    world.spawn((
+        SelfPlayer,
+        Embodied,
+        Transform::default(),
+        ObjectStore(alive(&[(benilla_protocol::field::FIELD_UNIT_BYTES_1, 1)])),
+    ));
+    world.write_message(super::StandStateRequest {
+        state: 0,
+        sent: true,
+    });
+    world
+        .run_system_once(
+            |mut player: ResMut<super::Player>,
+             mut pending: ResMut<crate::player::StandPending>,
+             body: super::BodyQuery,
+             me: super::super::SelfPosture,
+             binds: Res<crate::bindings::BindingsState>,
+             net: Res<NetCommands>,
+             mut commands: Commands,
+             mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
+             mut loot: ResMut<crate::ui_loot::LootMoveStart>,
+             mut asks: MessageReader<super::StandStateRequest>,
+             mut server: MessageReader<super::super::ServerStandState>| {
+                super::update(
+                    &mut player,
+                    &mut pending,
+                    &body,
+                    &me,
+                    &binds,
+                    &net,
+                    &mut commands,
+                    &mut sheath,
+                    &mut loot,
+                    &mut asks,
+                    &mut server,
+                    super::PlayerReads::default(),
+                    None,
+                    false,
+                    false,
+                )
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        rx.try_iter().count(),
+        0,
+        "the packet went out at the attack"
+    );
+    assert_eq!(world.resource::<crate::player::StandPending>().0, Some(0));
 }

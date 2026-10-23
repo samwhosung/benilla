@@ -599,6 +599,7 @@ mod tests {
         let verdict =
             |spell: u32, talent: bool, self_reach: f32, engaged: Option<f32>, d: f32| -> bool {
                 let mut world = World::new();
+                world.init_resource::<crate::creature_anim::UnitEdits>();
                 world.init_resource::<WorldCursor>();
                 world.init_resource::<SpellTargeting>();
                 world.init_resource::<crate::target::Hovered>();

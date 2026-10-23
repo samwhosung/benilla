@@ -5,7 +5,6 @@
 
 use bevy::prelude::*;
 
-use crate::creature_anim::Engaged;
 use crate::net::{GuidIndex, ObjectStore, SelfGuid, SelfPlayer};
 
 use super::Selection;
@@ -39,7 +38,6 @@ pub(crate) struct Follow<'w, 's> {
     self_guid: Res<'w, SelfGuid>,
     self_store: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
     seam: crate::creature_anim::AttackSeam<'w, 's>,
-    engaged: Query<'w, 's, (), (With<Engaged>, With<SelfPlayer>)>,
 }
 
 /// [`follow_selection_object`]'s step: the teardown it ran, owing its signals.
@@ -52,7 +50,6 @@ fn follow(f: &mut Follow) -> Option<crate::script_calls::EngineSelect> {
         self_guid,
         self_store,
         seam,
-        engaged,
     } = f;
     let guid = selection.guid?;
     let now = index.0.get(&guid).copied();
@@ -79,7 +76,7 @@ fn follow(f: &mut Follow) -> Option<crate::script_calls::EngineSelect> {
     };
     if ends {
         let before = super::click::Standing::of(selection, seam);
-        let send = super::click::clear_owing(selection, seam, !engaged.is_empty());
+        let send = super::click::clear_owing(selection, seam);
         return Some(before.owing(super::scan::Owed { send, swing: None }));
     }
     if selection.target != now {

@@ -5,8 +5,8 @@
 //!   the active player, in its order, the target cleared, the interaction latch released
 //!   ([`crate::ui_session`]'s), the loot window closed, the quest-giver statuses refreshed
 //!   ([`crate::quest_markers`]'), the cast cancelled and, on a taxi, the release asked;
-//! - the dying unit's attack words zeroed (`0x605896`-`0x6058a8`): its target ([`Engaged`],
-//!   `+0xc48`) and its stop in flight (`+0xc54`);
+//! - the dying unit's attack words zeroed (`0x605896`-`0x6058a8`): its target
+//!   ([`crate::creature_anim::Engaged`], `+0xc48`) and its stop in flight (`+0xc54`);
 //! - `PresentUnitDeath 0x625190` (`0x6058ae`), the death line, animation and sound, which the chat
 //!   log, the animation driver and the creature sounds play off the same edge;
 //! - with a spell in flight (`0x6e3d30`) whose record's target (`0xceac60`, read through
@@ -21,8 +21,8 @@ use bevy::prelude::*;
 use benilla_protocol::messages::ObjectType;
 
 use super::Selection;
-use crate::creature_anim::{AttackSeam, Engaged};
-use crate::net::{FieldChanged, ObjectStore, SelfPlayer};
+use crate::creature_anim::{AttackSeam, UnitEdit};
+use crate::net::{FieldChanged, ObjectStore};
 use crate::query_cache::Ask;
 use crate::ui_action::{FillArg, UiError, UiErrorKeys};
 
@@ -39,8 +39,6 @@ pub(super) fn on_unit_died(
     if edges.is_empty() {
         return;
     }
-    // Our attack target as this pass leaves it: our own death zeroes it before a deselect reads it.
-    let mut me_engaged = !vm.own().engaged.is_empty();
     for e in edges {
         let me = vm.own().seam.me.single().ok();
         // `CGPlayer_C::OnDied 0x5e99b0`, for a player (`0x605882`): another player than the
@@ -51,7 +49,7 @@ pub(super) fn on_unit_died(
         if e.kind == ObjectType::Player && me == Some(e.entity) {
             // The active player's leg (`0x5e99d8`-`0x5e99e4` match): `SetSelection(0, 0)`
             // (`0x5e9a45`), our attack target still set, as the unit leg below zeroes it after.
-            let select = vm.own().deselect(me_engaged);
+            let select = vm.own().deselect();
             vm.engine_select(select, Died::pay);
             let mut d = vm.own();
             let seam = &mut d.seam;
@@ -90,13 +88,8 @@ pub(super) fn on_unit_died(
         }
         let selected = {
             let mut d = vm.own();
-            if let Ok(mut unit) = d.commands.get_entity(e.entity) {
-                unit.try_remove::<Engaged>();
-            }
+            d.seam.edits.push(UnitEdit::EndAttack(e.entity));
             d.seam.clear_stop_word(e.entity);
-            if me == Some(e.entity) {
-                me_engaged = false;
-            }
             let seam = &mut d.seam;
             let spells = seam.spells.as_deref();
             let mut core = seam.slots.core(&seam.net);
@@ -114,7 +107,7 @@ pub(super) fn on_unit_died(
         };
         // The dead target becomes the last one; a corpse selected afterwards stays selected, gray.
         if selected {
-            let select = vm.own().deselect(me_engaged);
+            let select = vm.own().deselect();
             vm.engine_select(select, Died::pay);
             let mut d = vm.own();
             let seam = &mut d.seam;
@@ -133,8 +126,6 @@ pub(super) fn on_unit_died(
 pub(super) struct Died<'w, 's> {
     selection: ResMut<'w, Selection>,
     seam: AttackSeam<'w, 's>,
-    commands: Commands<'w, 's>,
-    engaged: Query<'w, 's, (), (With<Engaged>, With<SelfPlayer>)>,
     group: Res<'w, crate::ui_party::GroupState>,
     names: Res<'w, crate::names::NameCache>,
     stores: Query<'w, 's, &'static ObjectStore>,
@@ -143,9 +134,9 @@ pub(super) struct Died<'w, 's> {
 
 impl Died<'_, '_> {
     /// `SetSelection(0, 0)`, owing its send when its teardown signals.
-    fn deselect(&mut self, engaged: bool) -> crate::script_calls::EngineSelect {
+    fn deselect(&mut self) -> crate::script_calls::EngineSelect {
         let before = super::click::Standing::of(&self.selection, &self.seam);
-        let send = super::click::deselect_owing(&mut self.selection, &mut self.seam, engaged);
+        let send = super::click::deselect_owing(&mut self.selection, &mut self.seam);
         before.owing(super::scan::Owed { send, swing: None })
     }
 
@@ -321,6 +312,8 @@ mod tests {
             world
                 .run_system_once(super::on_unit_died)
                 .expect("the death handler runs on the built client");
+            // The pass's end, which applies the unit edits it queued.
+            crate::creature_anim::apply_unit_edits(world);
         }
 
         fn sent(&self) -> Vec<ClientCommand> {
@@ -597,7 +590,7 @@ mod tests {
 
         let stop = |c: &mut Client| {
             c.world()
-                .run_system_once(|mut seam: AttackSeam| seam.stop(true))
+                .run_system_once(|mut seam: AttackSeam| seam.stop())
                 .expect("the stop runs on the built client");
             assert!(
                 c.world().resource::<AttackStopInFlight>().of(me),

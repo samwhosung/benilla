@@ -26,8 +26,8 @@ pub(crate) struct EmoteDoer<'w, 's> {
     /// Our stand state and move flags for the gates, and the entity the stow and play are for.
     player: Query<'w, 's, (Entity, &'static MovementState), With<SelfPlayer>>,
     store: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
-    /// Our own auto-attack target, a gate of the local play.
-    engaged: Query<'w, 's, (), (With<SelfPlayer>, With<crate::creature_anim::Engaged>)>,
+    /// Our own auto-attack target as the queued unit edits leave it, a gate of the local play.
+    edits: Option<Res<'w, crate::creature_anim::UnitEdits>>,
     loot_kneel: Option<Res<'w, crate::ui_loot::LootKneel>>,
     /// Where the moving refusal shows inside the call (`0x496720`).
     sink: crate::ui_action::MessageSink<'w>,
@@ -171,7 +171,11 @@ impl EmoteDoer<'_, '_> {
                 flying: m.flying,
                 loot_kneel: self.loot_kneel.as_deref().is_some_and(|k| k.0),
                 channeling: fields.unit_channel_spell() != 0,
-                engaged: !self.engaged.is_empty(),
+                engaged: self.player.single().is_ok_and(|(me, _)| {
+                    self.edits
+                        .as_deref()
+                        .is_some_and(|edits| edits.attacking(me))
+                }),
             };
             if crate::creature_anim::local_play_eligible(&gate) {
                 if let (Some(out), Some(seq)) = (self.out.anim.as_mut(), self.out.play_seq.as_mut())

@@ -8,8 +8,8 @@ use benilla_protocol::MoveSpeeds;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
+use crate::creature_anim::move_flags;
 use crate::creature_anim::select::unify;
-use crate::creature_anim::{move_flags, Engaged};
 use crate::net::{
     current_speed, CreatureSwimming, Embodied, GuidIndex, ObjectStore, RemoteMotion, SelfPlayer,
     Spline, UnitMoveModes, UnitSpeeds,
@@ -65,8 +65,8 @@ type UnitParts = (
 pub(crate) struct RangeUnits<'w, 's> {
     units: Query<'w, 's, UnitParts>,
     caster: Query<'w, 's, Entity, With<SelfPlayer>>,
-    /// The auto-attack target guid, `[unit+0xc48]`.
-    engaged: Query<'w, 's, &'static Engaged>,
+    /// The auto-attack target guid, `[unit+0xc48]`, as the queued unit edits leave it.
+    edits: Option<Res<'w, crate::creature_anim::UnitEdits>>,
     index: Option<Res<'w, GuidIndex>>,
     /// The flags word of the body we drive, [`Player::move_flags`].
     player: Option<Res<'w, Player>>,
@@ -104,7 +104,7 @@ impl RangeUnits<'_, '_> {
     /// arm (`0x6e3552`-`0x6e3584`). `None` with no target engaged or before it streams, where the
     /// arm reads the caster's own reach (`0x6e3594`).
     pub(crate) fn attack_target(&self, entity: Entity) -> Option<RangeUnit> {
-        let guid = self.engaged.get(entity).ok()?.0;
+        let guid = self.edits.as_deref()?.attack_target(entity)?;
         let target = *self.index.as_ref()?.0.get(&guid)?;
         self.unit(target)
     }
@@ -230,6 +230,7 @@ mod tests {
 
         let mut world = World::new();
         world.insert_resource(Player::with_move_flags(f::FORWARD));
+        world.init_resource::<crate::creature_anim::UnitEdits>();
         let run = UnitSpeeds(speeds());
         let me = world
             .spawn((SelfPlayer, Embodied, run, store(0x19, 2.0)))
@@ -241,7 +242,9 @@ mod tests {
         let wanderer = world.spawn((spline(5.0, 2), run, store(0x09, 1.5))).id();
         let idle = world.spawn((run, store(0x09, 1.5))).id();
         let bare = world.spawn(run).id();
-        world.entity_mut(me).insert(Engaged(MOB));
+        world
+            .entity_mut(me)
+            .insert(crate::creature_anim::Engaged(MOB));
         world.insert_resource(GuidIndex([(MOB, mob)].into_iter().collect()));
         world
             .run_system_once(move |units: RangeUnits| {

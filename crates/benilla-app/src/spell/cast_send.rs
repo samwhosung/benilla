@@ -150,8 +150,9 @@ pub(crate) struct CastLadder<'w, 's> {
     /// Absent in a world that never applies script calls.
     permit: Option<ResMut<'w, ScriptCastPermit>>,
     pub(crate) commands: Res<'w, NetCommands>,
-    pub(crate) self_player:
-        Query<'w, 's, (Entity, Has<crate::creature_anim::Engaged>), With<SelfPlayer>>,
+    /// Our own entity; whether we attack is the queued edits' answer
+    /// ([`crate::creature_anim::UnitEdits::attacking`]). The pair's second leg is always set.
+    pub(crate) self_player: Query<'w, 's, (Entity, Has<SelfPlayer>), With<SelfPlayer>>,
     pub(crate) spells: Option<Res<'w, Spells>>,
     pub(crate) items: Res<'w, Items>,
     /// `ItemSubClass.dbc`, whose `Flags` bit `0x10` lets a weapon fire without ammo (`0x6e4264`);
@@ -160,7 +161,7 @@ pub(crate) struct CastLadder<'w, 's> {
     /// The reagent check walks the bags through it; the item arms resolve an instance guid here.
     pub(crate) objects: Objects<'w, 's>,
     pub(crate) sheath: MessageWriter<'w, crate::creature_anim::SheathRequest>,
-    /// The stand-up an attack-initiating cast asks (`0x5ecc9b`).
+    /// The local apply of the stand-up an attack-initiating cast makes (`0x5ecc9b`).
     pub(crate) stand: MessageWriter<'w, crate::player::StandStateRequest>,
     /// The auto-repeat arm and clear, applied after the pass.
     pub(crate) edits: Res<'w, crate::creature_anim::UnitEdits>,
@@ -188,9 +189,6 @@ pub(crate) struct CastLadder<'w, 's> {
     /// The GCDs a unit caster's sends started in the pet's history (`0x6e58fb`); absent in a
     /// world with no pet bar.
     pet_gcds: Option<ResMut<'w, PetGcdsOwed>>,
-    /// The units attacking (`[unit+0xc48]`, which `0x60ecb0` tests): a unit caster's pick and
-    /// attack tail read its own.
-    engaged_units: Query<'w, 's, (), With<crate::creature_anim::Engaged>>,
     /// The attack a unit caster's send owes the pet bar (`0x6e51de`); absent in a world with no
     /// pet bar.
     unit_attack: Option<ResMut<'w, UnitAttackOwed>>,
@@ -524,7 +522,8 @@ impl CastLadder<'_, '_> {
                 engaged: commit
                     .unit_caster()
                     .and_then(|guid| self.objects.entity(guid))
-                    .is_some_and(|e| self.engaged_units.contains(e)),
+                    // `[unit+0xc48]`, which `0x60ecb0` tests: the pick and attack tail read it.
+                    .is_some_and(|e| self.edits.attacking(e)),
                 attack: self.unit_attack.as_deref_mut(),
             },
         );
@@ -620,7 +619,7 @@ fn send_spell_cast(
     // Set for a player's spell press, which parks in `held_for_pick` at the attack pick.
     hold: Option<HeldCast>,
     commands: &NetCommands,
-    self_player: &Query<(Entity, Has<crate::creature_anim::Engaged>), With<SelfPlayer>>,
+    self_player: &Query<(Entity, Has<SelfPlayer>), With<SelfPlayer>>,
     spells: Option<&Spells>,
     objects: &Objects,
     items: &Items,
@@ -781,7 +780,9 @@ fn send_spell_cast(
         // `0x60ecb0` on the caster (`0x6e4ee8`).
         let engaged = match commit.unit_caster() {
             Some(_) => unit.engaged,
-            None => self_player.single().is_ok_and(|(_, engaged)| engaged),
+            None => self_player
+                .single()
+                .is_ok_and(|(me, _)| edits.attacking(me)),
         };
         if def.is_some_and(|d| d.initiates_combat()) && !engaged {
             debug!("ui_action: cast {spell_id} holds for the attack pick");
@@ -1152,7 +1153,7 @@ fn send_spell_cast(
         cooldowns.start_gcd(spell_id, d, now, spell_mods);
     }
     if let Some(d) = def {
-        if let Ok((e, engaged)) = self_player.single() {
+        if let Ok((e, _)) = self_player.single() {
             // The ranged stance (`0x6e5930`, `SetSheatheState(2, 1, 1)`) for a ranged or
             // auto-repeat spell (`0x6e591c`, `0x6e5922`).
             if d.ranged_attack() {
@@ -1174,7 +1175,7 @@ fn send_spell_cast(
                 // queued strike, which the repeat's push moved into the save, so its cancel is
                 // the packet alone. This is where melee and auto-repeat are kept exclusive. It
                 // runs after the arm above, so it never cancels this repeat.
-                crate::creature_anim::stop_attack_local(Some(e), engaged, stop_word, core);
+                crate::creature_anim::stop_attack_local(Some(e), edits, stop_word, core);
             }
         }
     }
@@ -1190,13 +1191,13 @@ fn send_spell_cast(
     // whatever the spell bound (`0x6131a0` → `0x5ecb70`: sheath snap and `CMSG_ATTACKSWING`).
     if let (Some(d), Some(guid)) = (def, ctx.selection_guid) {
         if d.initiates_auto_attack() {
-            if let Ok((e, engaged)) = self_player.single() {
+            if let Ok((e, _)) = self_player.single() {
                 // The tail's own gate (`6e51cb call 0x60ecb0; 6e51d2 jne`, the attack lock
                 // `[player+0xc48]`, our `Engaged`) skips `0x6131a0` entirely, so a strike pressed
                 // mid-swing leaves a running repeat alone. The attack path's own test at
                 // `0x5eccda` would still reach the repeat cancel `0x5ecd8c`; this route never
                 // gets there.
-                if !engaged {
+                if !edits.attacking(e) {
                     debug!("ui_action: cast {spell_id} initiates auto-attack at {guid:#x}");
                     // The guid is the selection the attempt read, so StartAttack's select
                     // (`0x5eccaa`) is the setter's dedup, but for an on-self swap (`0x4b4afa`),
@@ -1205,7 +1206,6 @@ fn send_spell_cast(
                     crate::creature_anim::start_attack_local(
                         e,
                         guid,
-                        engaged,
                         crate::creature_anim::StartTarget::Attackable,
                         crate::creature_anim::StartGate::of(
                             ctx.rel.self_store,

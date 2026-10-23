@@ -72,10 +72,14 @@ pub(super) fn update(
     }
     let stand_state = pending.stand_state(stand_byte);
     // The queued asks (the `/sit` family) ran in the reference's message pass, before the X key
-    // is read; the last writer wins, and all land on the single commit below.
-    let mut request_stand = asks.read().last().map(|r| r.state);
+    // is read; the last writer wins, and all land on the single commit below. An ask whose packet
+    // went out where it was made, past its gate, owes the local apply alone.
+    let last_ask = asks.read().last().copied();
+    let mut request_stand = last_ask.map(|r| r.state);
+    let mut sent = last_ask.is_some_and(|r| r.sent);
     if binds.fired(crate::bindings::Input::SitOrStand) {
         request_stand = Some(u8::from(stand_state == 0));
+        sent = false;
     }
     // Movement stands us up, volunteered, as the server never does: translation, a keyboard turn
     // and jump reach the stand wrapper `0x60be30(0)` from any nonzero state; a left-drag orbit
@@ -98,8 +102,8 @@ pub(super) fn update(
     // sitting while translating or swimming. It covers the posture emotes too, whose `Emotes.dbc`
     // gate has no swim bit. The flags word is the live outbound one, a frame old, the
     // `[[this+0x118]+0x40]` the cast gates read.
-    if let Some(s) =
-        request_stand.filter(|&s| state::stand_state_refused(gates, player.move_flags(), s))
+    if let Some(s) = request_stand
+        .filter(|&s| !sent && state::stand_state_refused(gates, player.move_flags(), s))
     {
         debug!(
             "stand state {s} refused ({gates:?}, move flags {:#x} — the client's `0x5ed430` gate)",
@@ -112,9 +116,11 @@ pub(super) fn update(
     if let Some(s) = request_stand.filter(|&s| s != stand_state && me.is_some()) {
         move_trace::posture("commit", s, stand_state, player.move_flags());
         // `0x5ed430` sends at `0x5ed501`, then calls the local apply at `0x5ed53f`.
-        let _ = net.0.send(ClientCommand::StandStateChange {
-            state: u32::from(s),
-        });
+        if !sent {
+            let _ = net.0.send(ClientCommand::StandStateChange {
+                state: u32::from(s),
+            });
+        }
         apply_locally(pending, s, stand_state, me, commands, sheath, loot_close);
     }
     let stand_now = pending.stand_state(stand_byte);
@@ -241,6 +247,34 @@ impl StandSetter<'_, '_> {
             self.stow();
         }
     }
+}
+
+/// `SetStandState`'s descriptor legs (`0x5ed440`-`0x5ed4bd`): a channelling, mounted, flying or
+/// dead player changes no stand state. The precast legs (`0x5ed44b`, `0x5ed4cc`) are the
+/// caller's.
+pub(crate) fn stand_up_refused(fields: &ObjectFields) -> bool {
+    state::stand_state_refused(stand_gates(fields, false), 0, 0)
+}
+
+/// StartAttack's stand-up for a seated player (`0x5ecc90`-`0x5ecc9b`), `SetStandState(0)`: past
+/// its gate (`refused` is its descriptor and precast legs; a stand to 0 reads no movement,
+/// `0x5ed4f0`), `CMSG_STANDSTATECHANGE` goes out here (`0x5ed501`), ahead of the select and the
+/// swing, and the local apply follows in the posture pass ([`StandStateRequest::sent`]). A stand
+/// to 0 leaves nothing to close or stow.
+pub(crate) fn stand_up_for_attack(
+    refused: bool,
+    net: &NetCommands,
+    asks: &mut MessageWriter<StandStateRequest>,
+) {
+    if refused {
+        debug!("stand state 0 refused at the attack (the client's `0x5ed430` gate)");
+        return;
+    }
+    let _ = net.0.send(ClientCommand::StandStateChange { state: 0 });
+    asks.write(StandStateRequest {
+        state: 0,
+        sent: true,
+    });
 }
 
 /// [`state::StandGates`] off the body's descriptor and cast state.
@@ -386,14 +420,12 @@ fn local_apply(s: u8, stand_now: u8, drawn: bool) -> LocalApply {
 fn stop_attack_for_stand_state(
     mut slots: crate::spell::CastSlots,
     net: Res<NetCommands>,
-    me: Query<(Entity, Has<crate::creature_anim::Engaged>), With<crate::net::SelfPlayer>>,
+    me: Query<Entity, With<crate::net::SelfPlayer>>,
+    edits: Res<crate::creature_anim::UnitEdits>,
     mut word: ResMut<crate::creature_anim::AttackStopInFlight>,
 ) {
-    let (me, engaged) = me
-        .iter()
-        .next()
-        .map_or((None, false), |(me, engaged)| (Some(me), engaged));
-    crate::creature_anim::stop_attack_local(me, engaged, &mut word, &mut slots.core(&net));
+    let me = me.iter().next();
+    crate::creature_anim::stop_attack_local(me, &edits, &mut word, &mut slots.core(&net));
 }
 
 #[cfg(test)]
