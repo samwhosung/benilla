@@ -770,7 +770,10 @@ pub(super) fn drain_chat_input(
             LineWork::Emote { text_id, arg } => {
                 if let (Some(script), set) = vm.parts() {
                     if let Some(host) = set.p1().as_mut() {
-                        host.emote(script, text_id, arg);
+                        // The engine half runs as a turn, what it signals held, then its
+                        // listeners run with the host lent, as inside `DoEmote`'s call.
+                        script.host_out(|script| host.emote(script, text_id, arg));
+                        script.hosted(host, |_| ());
                     }
                 }
             }
