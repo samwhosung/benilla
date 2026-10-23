@@ -1325,6 +1325,7 @@ fn a_profession_openers_slot_is_current_while_its_window_is_open() {
     assert!(!current(&s, 3), "the close zeroes the marker");
     s.set_craft(Some(crate::script::craft::CraftState {
         name: "Enchanting".into(),
+        display_line: Some("Enchanting".into()),
         rank: 1,
         max_rank: 75,
         craft_type: 3,

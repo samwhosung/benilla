@@ -44,6 +44,57 @@ impl Default for CraftTooltip {
     }
 }
 
+/// A craft row's difficulty bucket (`[+0xc]`), the word `GetCraftInfo` pushes from the table at
+/// `0x807e00`: 0 none, 1 optimal, 2 medium, 3 easy, 4 trivial, 5 used.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CraftDifficulty {
+    /// No ability row, or one with a trivial high of 0 (`0x4f61ea`): every Beast Training row.
+    None,
+    Optimal,
+    Medium,
+    Easy,
+    Trivial,
+    /// A bucket-0 row whose learn effect names a spell already known (`0x4f6360`, `0x4f63cc`).
+    Used,
+}
+
+impl CraftDifficulty {
+    /// The word at `0x807e00 + 32 * bucket` (`0x4f6fbc`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Optimal => "optimal",
+            Self::Medium => "medium",
+            Self::Easy => "easy",
+            Self::Trivial => "trivial",
+            Self::Used => "used",
+        }
+    }
+
+    /// The bucket the comparators order by, ascending (`0x4f6a34`).
+    pub(crate) fn bucket(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::Optimal => 1,
+            Self::Medium => 2,
+            Self::Easy => 3,
+            Self::Trivial => 4,
+            Self::Used => 5,
+        }
+    }
+}
+
+impl From<super::TradeSkillDifficulty> for CraftDifficulty {
+    fn from(d: super::TradeSkillDifficulty) -> Self {
+        match d {
+            super::TradeSkillDifficulty::Optimal => Self::Optimal,
+            super::TradeSkillDifficulty::Medium => Self::Medium,
+            super::TradeSkillDifficulty::Easy => Self::Easy,
+            super::TradeSkillDifficulty::Trivial => Self::Trivial,
+        }
+    }
+}
+
 /// One recipe row: a known `SPELL_ATTR_IS_TRADESKILL` spell, resolved by the app.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CraftRecipe {
@@ -53,11 +104,8 @@ pub struct CraftRecipe {
     /// The rank subtext (`craftSubSpellName`), usually empty for an enchant; the stock window
     /// paints it in parentheses when set (`Blizzard_CraftUI.lua:217-221`).
     pub sub_name: String,
-    /// `GetCraftInfo`'s `craftType`: one of the four keys `CraftTypeColor` colours as
-    /// `TradeSkillTypeColor` does (`Blizzard_CraftUI.lua:6-13`). The reference's table
-    /// (`0x807e00`) adds `"none"` and `"used"` (a still-optimal Beast Training recipe teaching a
-    /// learnable spell); Enchanting never produces either, and neither is built.
-    pub difficulty: super::TradeSkillDifficulty,
+    /// `GetCraftInfo`'s `craftType`, the row's bucket.
+    pub difficulty: CraftDifficulty,
     /// `numAvailable`: the least `floor(have / need)` over the reagents.
     pub num_available: u32,
     pub icon: Option<String>,
@@ -77,13 +125,20 @@ pub struct CraftRecipe {
     /// The name of the recipe's group key, the skill line of the spell's ability (row `+0x04`,
     /// `0x4f61b1`), for `GetCraftSkillLine`; `None` when `SkillLine.dbc` has no such row.
     pub skill_line: Option<String>,
+    /// `GetCraftInfo`'s sixth value, the training-point cost (`0x4f7078`).
+    pub training_point_cost: u32,
+    /// `GetCraftInfo`'s seventh value, the pet level the learned spell needs (`0x4f7088`).
+    pub required_level: i32,
 }
 
 /// The open craft window, pushed whole by the app.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CraftState {
-    /// The title `GetCraftName` answers, also `GetCraftDisplaySkillLine`'s name.
+    /// The title `GetCraftName` answers.
     pub name: String,
+    /// `GetCraftDisplaySkillLine`'s name, with [`Self::rank`] and [`Self::max_rank`] its rank
+    /// and maximum; `None` answers nil, 0, 0.
+    pub display_line: Option<String>,
     pub rank: u32,
     pub max_rank: u32,
     /// The opener spell's `EffectMiscValue[0]`, stored at `ds:0xbdcfb8`: 1 Beast Training, 2
@@ -106,8 +161,8 @@ const CRAFT_TYPE_BEAST_TRAINING: u32 = 1;
 /// reproduce; ascending id is ascending rank in every 1.12 pet-ability family.
 fn recipe_order(a: &CraftRecipe, b: &CraftRecipe, craft_type: u32) -> std::cmp::Ordering {
     a.difficulty
-        .tier()
-        .cmp(&b.difficulty.tier())
+        .bucket()
+        .cmp(&b.difficulty.bucket())
         .then_with(|| collate(&a.name, &b.name))
         .then_with(|| {
             if craft_type == CRAFT_TYPE_BEAST_TRAINING {
@@ -531,7 +586,7 @@ mod tests {
     fn recipe(
         spell_id: u32,
         name: &str,
-        difficulty: super::super::TradeSkillDifficulty,
+        difficulty: CraftDifficulty,
         num_available: u32,
     ) -> CraftRecipe {
         CraftRecipe {
@@ -554,6 +609,8 @@ mod tests {
             tools: vec![("Runed Copper Rod".into(), true)],
             spell_level: 0,
             skill_line: None,
+            training_point_cost: 0,
+            required_level: 0,
         }
     }
 
@@ -561,6 +618,7 @@ mod tests {
     fn state() -> CraftState {
         CraftState {
             name: "Enchanting".into(),
+            display_line: Some("Enchanting".into()),
             rank: 57,
             max_rank: 75,
             craft_type: CRAFT_TYPE_ENCHANTING,
@@ -568,13 +626,13 @@ mod tests {
                 recipe(
                     7418,
                     "Enchant Weapon - Minor Beastslaying",
-                    super::super::TradeSkillDifficulty::Trivial,
+                    CraftDifficulty::Trivial,
                     5,
                 ),
                 recipe(
                     683,
                     "Enchant Weapon - Minor Health",
-                    super::super::TradeSkillDifficulty::Optimal,
+                    CraftDifficulty::Optimal,
                     0,
                 ),
             ],
@@ -753,7 +811,7 @@ mod tests {
 
         // Turning 7418 optimal moves it to index 1, and the selection follows the spell id.
         let mut promoted = state();
-        promoted.recipes[0].difficulty = super::super::TradeSkillDifficulty::Optimal;
+        promoted.recipes[0].difficulty = CraftDifficulty::Optimal;
         promoted.recipes[0].name = "Aaa Beastslaying".into();
         s.set_craft(Some(promoted));
         assert_eq!(s.eval::<i64>("return GetCraftSelectionIndex()").unwrap(), 1);
@@ -885,7 +943,7 @@ mod tests {
             tooltip: CraftTooltip::Spell(spell_id),
             name: name.into(),
             sub_name: format!("Rank {}", level / 10 - 1),
-            difficulty: super::super::TradeSkillDifficulty::Trivial,
+            difficulty: CraftDifficulty::Trivial,
             num_available: 0,
             icon: None,
             description: None,
@@ -894,6 +952,8 @@ mod tests {
             tools: vec![],
             spell_level: level,
             skill_line: None,
+            training_point_cost: 0,
+            required_level: 0,
         };
         // Shuffled on purpose.
         let recipes = vec![
@@ -909,6 +969,7 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.set_craft(Some(CraftState {
             name: "Beast Training".into(),
+            display_line: None,
             rank: 0,
             max_rank: 0,
             craft_type: CRAFT_TYPE_BEAST_TRAINING,
@@ -939,6 +1000,7 @@ mod tests {
         // fall to the spell-id tie-break, benilla's order rather than the reference's.
         s.set_craft(Some(CraftState {
             name: "Beast Training".into(),
+            display_line: None,
             rank: 0,
             max_rank: 0,
             craft_type: CRAFT_TYPE_ENCHANTING,

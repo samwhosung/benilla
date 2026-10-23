@@ -37,6 +37,7 @@ const COL_SLA_REQ_SKILL_VALUE: usize = 7;
 const COL_SLA_FORWARD_SPELL: usize = 8;
 const COL_SLA_TRIVIAL_HIGH: usize = 10;
 const COL_SLA_TRIVIAL_LOW: usize = 11;
+const COL_SLA_REQ_TRAIN_POINTS: usize = 14;
 
 /// Cap on a rank-chain walk; the 5875 data is acyclic, 9 hops at most, so only a bad DBC hits it.
 const MAX_RANK_CHAIN: usize = 16;
@@ -162,10 +163,23 @@ pub struct SlaInfo {
     pub trivial_high: u32,
 }
 
+/// The `SkillLineAbility.dbc` row `FindSkillLineAbilityBySkillLine` (`0x6de0d0`) returns for a
+/// skill line and a spell: the first in file order with both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LineAbility {
+    /// `supercededBySpell`, column 8 (`+0x20`): the next rank `KnowsHigherRank` (`0x60c8d0`) walks.
+    pub superseded_by: u32,
+    /// `reqtrainpoints`, column 14 (`+0x38`): the training-point cost `GetCraftInfo` answers
+    /// (`0x4f704b`).
+    pub train_points: u32,
+}
+
 /// The skill tables joined: a spell's line, a line's display, and the per-race/class routing.
 pub struct SkillLineCatalog {
     lines: HashMap<u32, SkillLineInfo>,
     abilities: HashMap<u32, SlaInfo>,
+    /// `(skill line, spell)` to its first row in file order, the linear scan `0x6de0d0`.
+    line_abilities: HashMap<(u32, u32), LineAbility>,
     /// `SkillLineCategory.dbc`: id to (name, displayOrder).
     categories: HashMap<u32, (String, u32)>,
     /// Skill line id to its `SkillRaceClassInfo` rows; empty if the DBC failed to load.
@@ -194,6 +208,7 @@ impl SkillLineCatalog {
                 })
                 .collect(),
             lines: HashMap::new(),
+            line_abilities: HashMap::new(),
             categories: HashMap::new(),
             race_class: HashMap::new(),
             rank_prev: HashMap::new(),
@@ -233,6 +248,23 @@ impl SkillLineCatalog {
             });
         }
         self
+    }
+
+    /// This catalog with `(skill line, spell, row)` triples for [`Self::line_ability`], for tests
+    /// and fixtures; the first triple for a pair wins, as file order does.
+    pub fn with_line_abilities(
+        mut self,
+        rows: impl IntoIterator<Item = (u32, u32, LineAbility)>,
+    ) -> Self {
+        for (line, spell, row) in rows {
+            self.line_abilities.entry((line, spell)).or_insert(row);
+        }
+        self
+    }
+
+    /// The first `SkillLineAbility.dbc` row in file order with `line` and `spell` (`0x6de0d0`).
+    pub fn line_ability(&self, line: u32, spell: u32) -> Option<&LineAbility> {
+        self.line_abilities.get(&(line, spell))
     }
 
     /// The skill line a spell belongs to, if `SkillLineAbility.dbc` names one.
@@ -311,6 +343,7 @@ impl SkillLineCatalog {
         Self {
             abilities,
             lines: HashMap::new(),
+            line_abilities: HashMap::new(),
             categories: HashMap::new(),
             race_class: HashMap::new(),
             rank_prev,
@@ -553,11 +586,18 @@ pub fn load_skill_line_catalog(chain: &mut Chain) -> Result<SkillLineCatalog> {
         "SkillLineAbility.dbc",
     )?;
     let mut abilities: HashMap<u32, SlaInfo> = HashMap::new();
+    let mut line_abilities: HashMap<(u32, u32), LineAbility> = HashMap::new();
     for r in sla_set.records() {
         if let (Some(skill_id), Some(spell_id)) =
             (u32_at(r, COL_SLA_SKILL_ID), u32_at(r, COL_SLA_SPELL_ID))
         {
             let forward_spell_id = u32_at(r, COL_SLA_FORWARD_SPELL).unwrap_or(0);
+            line_abilities
+                .entry((skill_id, spell_id))
+                .or_insert(LineAbility {
+                    superseded_by: forward_spell_id,
+                    train_points: u32_at(r, COL_SLA_REQ_TRAIN_POINTS).unwrap_or(0),
+                });
             // The first row in file order wins.
             let slot = abilities.entry(spell_id).or_insert(SlaInfo {
                 skill_id,
@@ -584,6 +624,7 @@ pub fn load_skill_line_catalog(chain: &mut Chain) -> Result<SkillLineCatalog> {
     Ok(SkillLineCatalog {
         lines,
         abilities,
+        line_abilities,
         categories,
         race_class,
         rank_prev,

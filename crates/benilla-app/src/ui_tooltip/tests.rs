@@ -1600,7 +1600,7 @@ fn the_spell_feed_runs_after_the_quest_feed() {
 #[test]
 fn the_feed_pushes_the_spells_the_vm_holds_before_a_hover() {
     use benilla_ui::script::{
-        AuraState, CraftRecipe, CraftState, CraftTooltip, PetActionView, TradeSkillDifficulty,
+        AuraState, CraftDifficulty, CraftRecipe, CraftState, CraftTooltip, PetActionView,
     };
     let spell = |name: &str, description: &str| benilla_formats::SpellDisplay {
         name: name.into(),
@@ -1645,6 +1645,7 @@ fn the_feed_pushes_the_spells_the_vm_holds_before_a_hover() {
     );
     script.set_craft(Some(CraftState {
         name: "Beast Training".into(),
+        display_line: Some("Beast Training".into()),
         rank: 0,
         max_rank: 0,
         craft_type: 1,
@@ -1653,7 +1654,7 @@ fn the_feed_pushes_the_spells_the_vm_holds_before_a_hover() {
             tooltip: CraftTooltip::Spell(17253),
             name: "Bite".into(),
             sub_name: String::new(),
-            difficulty: TradeSkillDifficulty::Optimal,
+            difficulty: CraftDifficulty::Optimal,
             num_available: 1,
             icon: None,
             description: None,
@@ -1662,6 +1663,8 @@ fn the_feed_pushes_the_spells_the_vm_holds_before_a_hover() {
             tools: vec![],
             spell_level: 0,
             skill_line: None,
+            training_point_cost: 0,
+            required_level: 0,
         }],
     }));
     // We target a mob that targets party1, whose list the VM holds by guid.

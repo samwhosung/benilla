@@ -3,8 +3,8 @@
 //! the reagent slots and the list rows' selection and hover.
 
 use benilla_ui::script::{
-    CraftRecipe, CraftState, CraftTooltip, TradeSkillDifficulty, TradeSkillReagent,
-    TradeSkillRecipe, TradeSkillState, UiScript,
+    CraftDifficulty, CraftRecipe, CraftState, CraftTooltip, TradeSkillDifficulty,
+    TradeSkillReagent, TradeSkillRecipe, TradeSkillState, UiScript,
 };
 
 mod common;
@@ -527,7 +527,7 @@ fn a_hovered_or_selected_craft_row_paints_its_label_white() {
         spell_id,
         name: name.into(),
         sub_name: String::new(),
-        difficulty: TradeSkillDifficulty::Medium,
+        difficulty: CraftDifficulty::Medium,
         num_available: 1,
         icon: Some("Interface\\Icons\\Spell_Holy_Heal".into()),
         description: None,
@@ -537,9 +537,12 @@ fn a_hovered_or_selected_craft_row_paints_its_label_white() {
         tooltip: CraftTooltip::Spell(spell_id),
         spell_level: 0,
         skill_line: None,
+        training_point_cost: 0,
+        required_level: 0,
     };
     s.set_craft(Some(CraftState {
         name: "Enchanting".into(),
+        display_line: Some("Enchanting".into()),
         rank: 100,
         max_rank: 150,
         craft_type: 3,

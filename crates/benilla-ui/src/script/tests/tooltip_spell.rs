@@ -1196,7 +1196,7 @@ fn set_craft_spell_selects_the_builder_like_the_trainer_hover_does() {
         tooltip,
         name: name.into(),
         sub_name: String::new(),
-        difficulty: TradeSkillDifficulty::Optimal,
+        difficulty: CraftDifficulty::Optimal,
         num_available: 1,
         icon: Some("Interface\\Icons\\Spell_Holy_Heal".into()),
         description: Some("the OLD two-line stub's second line".into()),
@@ -1205,9 +1205,12 @@ fn set_craft_spell_selects_the_builder_like_the_trainer_hover_does() {
         tools: vec![],
         spell_level: 0,
         skill_line: None,
+        training_point_cost: 0,
+        required_level: 0,
     };
     s.set_craft(Some(CraftState {
         name: "Enchanting".into(),
+        display_line: Some("Enchanting".into()),
         rank: 100,
         max_rank: 150,
         craft_type: 3,
@@ -1441,7 +1444,7 @@ fn craft_recipe(spell_id: u32, name: &str, tooltip: CraftTooltip) -> CraftRecipe
         tooltip,
         name: name.into(),
         sub_name: String::new(),
-        difficulty: TradeSkillDifficulty::Optimal,
+        difficulty: CraftDifficulty::Optimal,
         num_available: 1,
         icon: None,
         description: None,
@@ -1450,6 +1453,8 @@ fn craft_recipe(spell_id: u32, name: &str, tooltip: CraftTooltip) -> CraftRecipe
         tools: vec![],
         spell_level: 0,
         skill_line: None,
+        training_point_cost: 0,
+        required_level: 0,
     }
 }
 
@@ -1519,6 +1524,7 @@ fn the_spell_subjects_are_what_the_setters_read_from_the_vm() {
     );
     s.set_craft(Some(CraftState {
         name: "Beast Training".into(),
+        display_line: Some("Beast Training".into()),
         rank: 0,
         max_rank: 0,
         craft_type: 1,
@@ -1633,6 +1639,7 @@ fn the_unit_selector_setters_read_the_pet_view() {
     }));
     s.set_craft(Some(CraftState {
         name: "Beast Training".into(),
+        display_line: Some("Beast Training".into()),
         rank: 0,
         max_rank: 0,
         craft_type: 1,
@@ -1750,6 +1757,7 @@ fn a_hidden_miss_shows_and_an_enchant_link_fills_when_answered() {
     s.set_screen_size(800.0, 600.0);
     s.set_craft(Some(CraftState {
         name: "Beast Training".into(),
+        display_line: Some("Beast Training".into()),
         rank: 0,
         max_rank: 0,
         craft_type: 1,
@@ -1898,6 +1906,7 @@ fn a_wait_replaced_by_an_earlier_re_render_is_not_replayed() {
     s.set_screen_size(800.0, 600.0);
     s.set_craft(Some(CraftState {
         name: "Beast Training".into(),
+        display_line: Some("Beast Training".into()),
         rank: 0,
         max_rank: 0,
         craft_type: 1,

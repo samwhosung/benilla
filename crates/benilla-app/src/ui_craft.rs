@@ -216,7 +216,8 @@ fn feed_craft(
                             effective,
                             sla.trivial_low,
                             sla.trivial_high,
-                        ),
+                        )
+                        .into(),
                         num_available,
                         icon,
                         description: d
@@ -234,12 +235,15 @@ fn feed_craft(
                             .catalog
                             .line(sla.skill_id)
                             .map(|l| l.name.clone()),
+                        training_point_cost: 0,
+                        required_level: 0,
                     })
                 })
                 .collect();
             // No sort here: the engine orders the rows by the craft type's own comparator
             // (`benilla_ui::script::craft::recipe_order`).
             Some(CraftState {
+                display_line: Some(name.clone()),
                 name,
                 rank,
                 max_rank,

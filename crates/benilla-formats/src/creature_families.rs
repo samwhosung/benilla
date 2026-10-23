@@ -27,6 +27,9 @@ const FAMILY_MIN_SCALE_FIELD: usize = 1;
 const FAMILY_MIN_SCALE_LEVEL_FIELD: usize = 2;
 const FAMILY_MAX_SCALE_FIELD: usize = 3;
 const FAMILY_MAX_SCALE_LEVEL_FIELD: usize = 4;
+/// `skillLine[2]`, the pet's two ability lines that `FindSkillLineAbility` scans for a creature
+/// (`0x60c7f3`, `+0x14` and `+0x18`).
+const FAMILY_SKILL_LINE_FIELDS: [usize; 2] = [0x14 / 4, 0x18 / 4];
 const FAMILY_FOOD_MASK_FIELD: usize = 0x1c / 4;
 /// The name, the localized block's first column.
 const FAMILY_NAME_FIELD: usize = 0x20 / 4;
@@ -52,6 +55,8 @@ pub struct CreatureFamily {
     pub min_scale_level: u32,
     pub max_scale: f32,
     pub max_scale_level: u32,
+    /// The family's two skill lines, in the order `0x60c7c0` scans them; 0 for none.
+    pub skill_lines: [u32; 2],
 }
 
 impl CreatureFamily {
@@ -81,6 +86,29 @@ impl CreatureFamily {
 pub struct CreatureFamilies(HashMap<u32, CreatureFamily>);
 
 impl CreatureFamilies {
+    /// Families named `Family <id>` with only their skill lines, for tests and fixtures.
+    pub fn from_skill_lines(rows: impl IntoIterator<Item = (u32, [u32; 2])>) -> Self {
+        Self(
+            rows.into_iter()
+                .map(|(id, skill_lines)| {
+                    (
+                        id,
+                        CreatureFamily {
+                            name: format!("Family {id}"),
+                            icon: String::new(),
+                            pet_food_mask: 0,
+                            min_scale: 1.0,
+                            min_scale_level: 0,
+                            max_scale: 1.0,
+                            max_scale_level: 0,
+                            skill_lines,
+                        },
+                    )
+                })
+                .collect(),
+        )
+    }
+
     /// The row for a family id; the wire's 0 (no family) is `None`, `UnitCreatureFamily`'s nil.
     pub fn get(&self, id: u32) -> Option<&CreatureFamily> {
         self.0.get(&id)
@@ -193,6 +221,7 @@ pub fn load_creature_families(chain: &mut Chain) -> Result<CreatureFamilies> {
                 min_scale_level: u32_at(r, FAMILY_MIN_SCALE_LEVEL_FIELD).unwrap_or(0),
                 max_scale: f32_at(r, FAMILY_MAX_SCALE_FIELD).unwrap_or(1.0),
                 max_scale_level: u32_at(r, FAMILY_MAX_SCALE_LEVEL_FIELD).unwrap_or(0),
+                skill_lines: FAMILY_SKILL_LINE_FIELDS.map(|f| u32_at(r, f).unwrap_or(0)),
             },
         );
     }
