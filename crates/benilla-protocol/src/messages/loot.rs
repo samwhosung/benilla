@@ -123,7 +123,8 @@ pub fn loot_master_give(loot_guid: u64, slot: u8, player_guid: u64) -> Vec<u8> {
 }
 
 /// `SMSG_LOOT_START_ROLL` (`Loot.cpp:43-51`): a group roll opened on one drop, sent to every
-/// eligible roller. Its `randomSuffix` is always 0 (`Group/Group.cpp:765`) and is discarded.
+/// eligible roller. Its `randomSuffix`, 0 from vmangos (`Group/Group.cpp:765`), is
+/// [`Self::suffix_factor`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LootStartRoll {
     pub looted_target: u64,
@@ -207,7 +208,8 @@ pub(super) fn read_loot_start_roll(r: &mut &[u8]) -> io::Result<LootStartRoll> {
     let looted_target = read_u64_le(r)?;
     let item_slot = read_u32_le(r)?;
     let item_id = read_u32_le(r)?;
-    let _random_suffix = read_u32_le(r)?; // literal 0 on the wire (Group.cpp:765)
+    // Kept at `+0x24`, then `+0x20` (`0x61b3c7`, `0x61b3d2`).
+    let suffix_factor = read_u32_le(r)?;
     let random_property_id = read_u32_le(r)?;
     let countdown_ms = read_u32_le(r)?;
     Ok(LootStartRoll {
@@ -215,7 +217,7 @@ pub(super) fn read_loot_start_roll(r: &mut &[u8]) -> io::Result<LootStartRoll> {
         item_slot,
         item_id,
         random_property_id,
-        suffix_factor: 0,
+        suffix_factor,
         countdown_ms,
     })
 }
@@ -225,7 +227,8 @@ pub(super) fn read_loot_roll(r: &mut &[u8]) -> io::Result<LootRoll> {
     let item_slot = read_u32_le(r)?;
     let roller = read_u64_le(r)?;
     let item_id = read_u32_le(r)?;
-    let _random_suffix = read_u32_le(r)?; // literal 0 on the wire (Group.cpp:794)
+    // Kept at `+0x24`, then `+0x20` (`0x61bff4`, `0x61bfff`).
+    let suffix_factor = read_u32_le(r)?;
     let random_property_id = read_u32_le(r)?;
     let roll_number = read_u8(r)?;
     let roll_type = read_u8(r)?;
@@ -235,7 +238,7 @@ pub(super) fn read_loot_roll(r: &mut &[u8]) -> io::Result<LootRoll> {
         roller,
         item_id,
         random_property_id,
-        suffix_factor: 0,
+        suffix_factor,
         roll_number,
         roll_type,
     })
@@ -245,7 +248,8 @@ pub(super) fn read_loot_roll_won(r: &mut &[u8]) -> io::Result<LootRollWon> {
     let looted_target = read_u64_le(r)?;
     let item_slot = read_u32_le(r)?;
     let item_id = read_u32_le(r)?;
-    let _random_suffix = read_u32_le(r)?; // literal 0 on the wire (Group.cpp:821)
+    // Kept at `+0x24`, then `+0x20`, for a roll the client holds no record of (`0x61b92b`).
+    let suffix_factor = read_u32_le(r)?;
     let random_property_id = read_u32_le(r)?;
     let winner = read_u64_le(r)?;
     let roll_number = read_u8(r)?;
@@ -255,7 +259,7 @@ pub(super) fn read_loot_roll_won(r: &mut &[u8]) -> io::Result<LootRollWon> {
         item_slot,
         item_id,
         random_property_id,
-        suffix_factor: 0,
+        suffix_factor,
         winner,
         roll_number,
         roll_type,
@@ -266,14 +270,15 @@ pub(super) fn read_loot_all_passed(r: &mut &[u8]) -> io::Result<LootAllPassed> {
     let looted_target = read_u64_le(r)?;
     let item_slot = read_u32_le(r)?;
     let item_id = read_u32_le(r)?;
+    // The other way round: `+0x20`, then `+0x24` (`0x61b597`, `0x61b59d`).
     let random_property_id = read_u32_le(r)?;
-    let _random_suffix = read_u32_le(r)?; // the swapped tail, a literal 0 (Group.cpp:850)
+    let suffix_factor = read_u32_le(r)?;
     Ok(LootAllPassed {
         looted_target,
         item_slot,
         item_id,
         random_property_id,
-        suffix_factor: 0,
+        suffix_factor,
     })
 }
 

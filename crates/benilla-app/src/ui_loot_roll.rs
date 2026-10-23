@@ -360,7 +360,7 @@ fn format_line(
         Arg::D(i64::from(item.item_id as i32)),
         Arg::D(0),
         Arg::D(i64::from(item.random_property_id as i32)),
-        Arg::D(0),
+        Arg::D(i64::from(item.suffix_factor as i32)),
         Arg::S(&item.name),
         Arg::S("|r"),
     ];
@@ -432,7 +432,8 @@ fn is_dice(p: &LootRoll) -> bool {
 }
 
 /// The item pieces every roll line's template carries after its names: the quality's colour
-/// escape (`0x52ad90`, at `0x61c116`), the item id, 0, the roll's two property words, the item's
+/// escape (`0x52ad90`, at `0x61c116`), the item id, 0, the roll's two property words (`+0x20`,
+/// then `+0x24`, `0x61c16e`-`0x61c171`), the item's
 /// name with its suffix (`0x5d8b00`, at `0x61c13f`) and the `|r` reset (`0x844538`).
 struct RollItem {
     quality: u32,
