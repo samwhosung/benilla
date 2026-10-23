@@ -612,9 +612,9 @@ fn save_chat_looks(
 }
 
 /// The session-end flush, the reference's chat teardown (`0x499a80` from `0x490c55`), called from
-/// [`crate::ui_script::end_ui_session`] after the shutdown events and before the VM is replaced,
-/// on logout, character switch and `/reload` alike. Not an `OnExit(InWorld)` system: `/reload`
-/// never crosses it, and the debounce's state dies with the VM.
+/// the shutdown ([`crate::ui_script::SessionEnd::Shutdown`]) after its events and before the VM
+/// is replaced, on logout, character switch and `/reload` alike. Not an `OnExit(InWorld)` system:
+/// `/reload` never crosses it, and the debounce's state dies with the VM.
 pub(crate) fn fold_dying_vm_chat_cache(world: &mut World) {
     // No plugin in this world (a test world): nothing to flush.
     if !world.contains_resource::<ChatWindowFile>() {

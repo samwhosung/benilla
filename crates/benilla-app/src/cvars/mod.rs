@@ -1127,8 +1127,8 @@ pub(crate) fn sync_cvars(
     })
 }
 
-/// Fold the dying VM's last writes into the registry. Called from
-/// [`crate::ui_script::end_ui_session`] after the shutdown events (a `PLAYER_LOGOUT` handler may
+/// Fold the dying VM's last writes into the registry. Called from the shutdown
+/// ([`crate::ui_script::SessionEnd::Shutdown`]) after its events (a `PLAYER_LOGOUT` handler may
 /// `SetCVar`, and the reference keeps that write) and before the VM is replaced, so a final-frame
 /// write is not lost to the next VM's seed. The observers fire here.
 pub(crate) fn fold_dying_vm_cvars(world: &mut World) {

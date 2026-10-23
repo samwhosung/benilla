@@ -330,8 +330,8 @@ pub(crate) fn ingame_ui_up(
 /// `PreUpdate`, after [`run_pending_reload`] so a reload never interleaves an armed entry load:
 /// run the armed entry load once the cover has presented, at once when there is no cover (a
 /// capture booting straight `InWorld`). Leaving the world first drops the latch unrun, and
-/// [`end_ui_session`] then skips the shutdown writes, so a UI-less VM never overwrites the saved
-/// files.
+/// [`shut_down_session`] then skips the shutdown writes, so a UI-less VM never overwrites the
+/// saved files.
 pub(crate) fn run_pending_entry_load(world: &mut World) {
     if world.get_resource::<PendingEntryUiLoad>().is_none() {
         return;
@@ -878,12 +878,29 @@ pub(crate) fn shutdown_ui_state(script: &mut UiScript, identity: Option<&(String
     addons::save_enable_state(script, identity);
 }
 
-/// `OnExit(InWorld)`, a `/logout` or a disconnect (two of the reference's five roots): run the
-/// shutdown tail, then end this session's Lua state, so no frame, global or addon upvalue reaches
-/// the next login. The reference's state outlives `0x490bd0` and is replaced twice through
-/// `0x703b80`, in `ShutdownGame` (at `0x491231`) and then in the glue build (`0x46a7b0`), so the
-/// character screen runs on a state of its own. Ours is a fresh glue VM ([`install_glue_side_vm`]).
+/// The session's end in `OnExit(InWorld)`, in its order: the shutdown with its `PLAYER_LOGOUT`
+/// ([`shut_down_session`]), then the clears of what the dying state still shows (the chat
+/// windows, the channels, the auras), then the glue VM ([`install_session_glue`]). In the
+/// reference `0x490bd0` signals `PLAYER_LOGOUT` (`0x490c2a`) to the world's state while it is
+/// whole, and that state is replaced only in `ShutdownGame` (`0x491231`).
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum SessionEnd {
+    Shutdown,
+    Clears,
+    Glue,
+}
+
+/// The session's end at once, both halves with no clears between them, as a test runs it.
+#[cfg(test)]
 pub(crate) fn end_ui_session(world: &mut World) {
+    shut_down_session(world);
+    install_session_glue(world);
+}
+
+/// `OnExit(InWorld)`, a `/logout` or a disconnect (two of the reference's five roots), up to the
+/// glue VM: the shutdown tail and the session's folds. [`install_session_glue`] then ends this
+/// session's Lua state, so no frame, global or addon upvalue reaches the next login.
+pub(crate) fn shut_down_session(world: &mut World) {
     close_ui_session(world, ShutdownRoot::WorldTeardown);
     // `ShutdownGame`'s clear of the world session's read-only flags (`0x491240`-`0x49125d`); a
     // `/reload` never comes here.
@@ -904,6 +921,13 @@ pub(crate) fn end_ui_session(world: &mut World) {
     if let Some(mut petition) = world.get_resource_mut::<crate::ui_petition::PetitionState>() {
         petition.forget_announced();
     }
+}
+
+/// The session's end's last step: the glue VM in place of the world's. The reference's state
+/// outlives `0x490bd0` and is replaced twice through `0x703b80`, in `ShutdownGame` (at
+/// `0x491231`) and then in the glue build (`0x46a7b0`), so the character screen runs on a state
+/// of its own. Ours is a fresh glue VM ([`install_glue_side_vm`]).
+pub(crate) fn install_session_glue(world: &mut World) {
     // `0x401ee0`'s glue leg: `"charselect"` after a logout, `"login"` after a disconnect
     // (`0x402084`); the state this exit enters says which.
     let screen = match world
@@ -916,7 +940,8 @@ pub(crate) fn end_ui_session(world: &mut World) {
     install_glue_side_vm(world, screen.key());
 }
 
-/// [`end_ui_session`] up to the new VM: the shutdown tail, the folds and the host values reset.
+/// The shutdown a logout and a reload share, up to the new VM: the shutdown tail, the folds and
+/// the host values reset.
 fn close_ui_session(world: &mut World, root: ShutdownRoot) {
     // The front runs before the unpark, so a VM still parked (the load never ran) hears none of
     // it; the sweep's latch is spent at the root, so of this edge and the worldport's, the first
@@ -987,8 +1012,9 @@ fn close_ui_session(world: &mut World, root: ShutdownRoot) {
 pub(crate) struct ReloadUiPending(pub(crate) bool);
 
 /// Run a pending `ReloadUI()`: the reference's teardown and rebuild (`0x495664 call 0x490bd0`,
-/// `0x495669 call 0x48fbf0`), for us [`end_ui_session`] then the load without leaving the world,
-/// so a `DisableAddOn` staged in the dying VM reaches `AddOns.txt` before the rebuild reads it.
+/// `0x495669 call 0x48fbf0`), for us the session's shutdown then the load without leaving the
+/// world, so a `DisableAddOn` staged in the dying VM reaches `AddOns.txt` before the rebuild
+/// reads it.
 /// The load runs under the live player, which never left. `UI_Init` then enters the world-enter
 /// cascade itself (`0x490168`), firing the `PLAYER_LOGIN` it armed and `PLAYER_ENTERING_WORLD`;
 /// ours fire from [`crate::ui_unit`]'s feed on the new VM's first `Update`, once it has re-seated

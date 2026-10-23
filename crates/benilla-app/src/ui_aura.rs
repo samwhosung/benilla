@@ -114,7 +114,11 @@ impl Plugin for UiAuraPlugin {
             )
             .add_systems(Update, drain_aura_cancels.in_set(crate::ui_script::UiDrain))
             // Torn down only at the session's end, not with the avatar, which a worldport drops.
-            .add_systems(OnExit(ClientState::InWorld), end_session_aura_state);
+            // After the shutdown's `PLAYER_LOGOUT` and before the glue VM goes in.
+            .add_systems(
+                OnExit(ClientState::InWorld),
+                end_session_aura_state.in_set(crate::ui_script::SessionEnd::Clears),
+            );
     }
 }
 

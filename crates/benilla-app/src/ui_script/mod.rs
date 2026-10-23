@@ -365,10 +365,18 @@ impl Plugin for UiScriptPlugin {
                 OnEnter(crate::client_state::ClientState::InWorld),
                 lifecycle::arm_entry_ui_load,
             )
-            // The shutdown tail: events, then writes, in the reference's order.
+            // The shutdown tail: events, then writes, in the reference's order; the clears of what
+            // the dying state shows after its `PLAYER_LOGOUT`, then the glue VM.
+            .configure_sets(
+                OnExit(crate::client_state::ClientState::InWorld),
+                (SessionEnd::Shutdown, SessionEnd::Clears, SessionEnd::Glue).chain(),
+            )
             .add_systems(
                 OnExit(crate::client_state::ClientState::InWorld),
-                end_ui_session,
+                (
+                    lifecycle::shut_down_session.in_set(SessionEnd::Shutdown),
+                    lifecycle::install_session_glue.in_set(SessionEnd::Glue),
+                ),
             )
             // `init_` here and in `UiUnitPlugin`: either plugin may be built alone in a test.
             .init_world_leave_sweep()
@@ -529,8 +537,8 @@ fn arbitrate_pointer_over_ui(
 /// The session lifecycle: the VM's birth, identity, death and reload.
 mod lifecycle;
 pub(crate) use lifecycle::{
-    end_ui_session, ingame_ui_up, run_pending_reload, setup_script, strings_vm, AddOnIdentity,
-    PendingEntryUiLoad, ReloadUiPending,
+    ingame_ui_up, run_pending_reload, setup_script, strings_vm, AddOnIdentity, PendingEntryUiLoad,
+    ReloadUiPending, SessionEnd,
 };
 /// The leave-world sweep `0x490a80`: its latch, its schedule and its legs' order.
 mod sweep;
@@ -549,7 +557,7 @@ pub(crate) use lifecycle::load_ingame_ui_on_world_entry;
 use lifecycle::shutdown_on_exit;
 #[cfg(test)]
 pub(crate) use lifecycle::{
-    finish_ui_load, is_emote_token_line, seat_from_roster, shutdown_ui_state,
+    end_ui_session, finish_ui_load, is_emote_token_line, seat_from_roster, shutdown_ui_state,
 };
 
 /// The 30 world-frame times `GetFramerate()` averages (`0xc631c8`).

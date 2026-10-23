@@ -230,9 +230,12 @@ impl Plugin for UiChatPlugin {
                     .after(benilla_world::terrain_stream::AreaAuthoritySet)
                     .after(crate::player::WorldFocusSet),
             )
+            // After the shutdown's `PLAYER_LOGOUT`, whose handlers read the windows and the
+            // channels as they stood, and before the glue VM goes in.
             .add_systems(
                 OnExit(crate::client_state::ClientState::InWorld),
-                (channels::end_session_channels, end_session_chat),
+                (channels::end_session_channels, end_session_chat)
+                    .in_set(crate::ui_script::SessionEnd::Clears),
             );
         settings::plugin(app);
         logging::plugin(app);
