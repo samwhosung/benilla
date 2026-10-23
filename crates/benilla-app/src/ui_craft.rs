@@ -11,7 +11,7 @@ use benilla_formats::{
 };
 use benilla_protocol::messages::PLAYER_SKILL_SLOTS;
 use benilla_protocol::{SessionEvent, SessionEventKind};
-use benilla_ui::script::{CraftReagent, CraftRecipe, CraftState, CraftTooltip};
+use benilla_ui::script::{CraftDifficulty, CraftReagent, CraftRecipe, CraftState, CraftTooltip};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
@@ -34,6 +34,9 @@ pub(crate) struct CraftOpen {
     pub(crate) craft_type: u32,
 }
 
+/// `EffectImplicitTargetA`/`B` 5, the pet (`0x4f632a`).
+const TARGET_PET: u32 = 5;
+
 pub(crate) struct UiCraftPlugin;
 
 impl Plugin for UiCraftPlugin {
@@ -52,6 +55,159 @@ impl Plugin for UiCraftPlugin {
 /// The Craft window dies with the session.
 fn on_session_end(In(_): In<SessionEvent>, mut open: ResMut<CraftOpen>) {
     *open = CraftOpen::default();
+}
+
+/// The line's skill total the Craft window bands difficulty on (`0x5ea520` in the build
+/// `0x4f60c0`), where the TradeSkill window uses the raw rank: no slot is 0 (`0x5ea537`), else the
+/// rank, plus the permanent bonus when the rank is above 0 (`0x5ea571`), plus the signed temporary
+/// bonus, never below 0 (`0x5ea5bc`).
+fn skill_total(store: &ObjectStore, skill_id: u32) -> i32 {
+    let Some(s) = skill_slot(store, skill_id) else {
+        return 0;
+    };
+    let rank = i32::from(s.value);
+    let rank = if rank > 0 {
+        rank + i32::from(s.perm_bonus as u16)
+    } else {
+        rank
+    };
+    (rank + i32::from(s.temp_bonus)).max(0)
+}
+
+/// A unit the craft rows ask about a pet spell, as `0x468460` finds it by guid with type 8: its
+/// guid, and its creature family's two skill lines when its creature record names a family row.
+struct PetUnit {
+    guid: u64,
+    lines: Option<[u32; 2]>,
+}
+
+/// What the craft rows read of the pet: the pet bar's guid (`0xb714a0`) and its spellbook
+/// (`0xb6f098`), the units, and the family table.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct PetReads<'w> {
+    bar: Option<Res<'w, crate::ui_pet::PetBar>>,
+    names: Option<Res<'w, crate::names::NameCache>>,
+    families: Option<Res<'w, crate::ui_pet_stats::PetFamilyTables>>,
+}
+
+/// The pet as the craft rows see it, resolved once per build.
+struct PetView<'a> {
+    bar_guid: u64,
+    /// The pet book's spells, the ids `KnowsSpell` scans for the pet bar's unit (`0x60c7a0`):
+    /// the bar packet's book words that pass the book's add gate (`0x4b2f90`).
+    book: Vec<u32>,
+    reads: &'a PetReads<'a>,
+    skill_lines: &'a SkillLines,
+}
+
+impl PetView<'_> {
+    /// The unit behind `guid`, when it is a streamed unit.
+    fn unit(&self, objects: &Objects, guid: u64) -> Option<PetUnit> {
+        let fields = objects.object(guid).filter(|_| guid != 0)?;
+        if !matches!(
+            fields.object_type(),
+            Some(benilla_protocol::messages::ObjectType::Unit)
+                | Some(benilla_protocol::messages::ObjectType::Player)
+        ) {
+            return None;
+        }
+        let lines = fields
+            .object_entry()
+            .and_then(|e| self.reads.names.as_deref()?.creature_record(e))
+            .and_then(|r| self.reads.families.as_deref()?.families.get(r.pet_family))
+            .map(|f| f.skill_lines);
+        Some(PetUnit { guid, lines })
+    }
+
+    /// `KnowsSpell` (`0x60c740`) for a unit that is not the active player: only the pet bar's
+    /// unit knows anything (`0x60c77a`-`0x60c790`), the spells of its book.
+    fn knows(&self, unit: &PetUnit, spell: u32) -> bool {
+        unit.guid == self.bar_guid && self.book.contains(&spell)
+    }
+
+    /// `FindSkillLineAbility` (`0x60c7c0`) for a creature: the first row on its family's lines, in
+    /// their order (`0x60c7f3`-`0x60c80a`), each a file-order scan (`0x6de0d0`). A unit with no
+    /// family answers none here; the reference indexes a unit with no creature record by race
+    /// and class (`0x60c813`), which no pet bar holds.
+    fn ability(&self, unit: &PetUnit, spell: u32) -> Option<(u32, benilla_formats::LineAbility)> {
+        unit.lines?.into_iter().find_map(|line| {
+            self.skill_lines
+                .catalog
+                .line_ability(line, spell)
+                .map(|row| (line, *row))
+        })
+    }
+
+    /// `KnowsHigherRank` (`0x60c8d0`): a later rank down the unit's ability rows' supersede chain
+    /// (`+0x20`) that the unit knows.
+    fn knows_higher_rank(&self, unit: &PetUnit, spell: u32) -> bool {
+        let mut row = self.ability(unit, spell);
+        for _ in 0..16 {
+            let Some((_, r)) = row.filter(|(_, r)| r.superseded_by > 0) else {
+                return false;
+            };
+            if self.knows(unit, r.superseded_by) {
+                return true;
+            }
+            row = self.ability(unit, r.superseded_by);
+        }
+        false
+    }
+}
+
+/// A craft row's bucket (`0x4f61a8`-`0x4f63cc`). A missing ability row or a trivial high of 0
+/// leaves 0, `none` (`0x4f61dd`, `0x4f61ea`). Otherwise the ladder on the skill total of the row's
+/// line (`0x5ea520`), compared signed: a low of 0 is the high less 25, negative below 25
+/// (`0x4f61fc`-`0x4f6205`), and the mid is their sum halved toward zero (`0x4f622b`). A row still
+/// at 0 is `used` (`0x4f62f7`) when its first `LEARN_SPELL` (`0x4f6310`) teaches a spell the
+/// player knows (`0x4f6347` → `0x4f6360`), or, aimed at the pet (either target 5, `0x4f6323`,
+/// `0x4f6333`), one the unit `UNIT_FIELD_SUMMON` names knows or has a higher rank of (`0x4f6369`-
+/// `0x4f63b7` → `0x4f63cc`).
+fn craft_bucket(
+    d: &benilla_formats::SpellDisplay,
+    sla: Option<&benilla_formats::SlaInfo>,
+    store: &ObjectStore,
+    known: &std::collections::BTreeSet<u32>,
+    pet: Option<&PetView>,
+    objects: &Objects,
+) -> CraftDifficulty {
+    if let Some(sla) = sla.filter(|a| a.trivial_high != 0) {
+        let high = sla.trivial_high as i32;
+        let low = match sla.trivial_low as i32 {
+            0 => high - 25,
+            low => low,
+        };
+        let total = skill_total(store, sla.skill_id);
+        return if total < low {
+            CraftDifficulty::Optimal
+        } else if total < (low + high) / 2 {
+            CraftDifficulty::Medium
+        } else if total < high {
+            CraftDifficulty::Easy
+        } else {
+            CraftDifficulty::Trivial
+        };
+    }
+    let Some(i) = (0..3).find(|&i| d.effects[i] == SPELL_EFFECT_LEARN_SPELL) else {
+        return CraftDifficulty::None;
+    };
+    let taught = d.effect_trigger_spell[i];
+    let at_pet =
+        d.effect_implicit_target_a[i] == TARGET_PET || d.effect_implicit_target_b[i] == TARGET_PET;
+    let used = if !at_pet {
+        known.contains(&taught)
+    } else {
+        pet.zip(store.0.unit_summon())
+            .and_then(|(pet, guid)| Some((pet, pet.unit(objects, guid)?)))
+            .is_some_and(|(pet, unit)| {
+                pet.knows(&unit, taught) || pet.knows_higher_rank(&unit, taught)
+            })
+    };
+    if used {
+        CraftDifficulty::Used
+    } else {
+        CraftDifficulty::None
+    }
 }
 
 /// The first slot holding `skill_id` (`0x5ea3f0`).
@@ -123,7 +279,7 @@ fn craft_tooltip(spell_id: u32, d: &benilla_formats::SpellDisplay) -> CraftToolt
 
 /// Builds the craft snapshot, `None` while the window is closed or the catalogs are not loaded.
 fn feed_craft(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    mut vm: crate::script_calls::VmWith<PetReads<'static>>,
     open: Res<CraftOpen>,
     actions: Res<PlayerActions>,
     spells: Option<Res<Spells>>,
@@ -137,7 +293,7 @@ fn feed_craft(
     commands: Res<NetCommands>,
     mut last: Local<crate::ui_script::VmMemo<Option<CraftState>>>,
 ) {
-    hosted_vm.run(|script| {
+    vm.feed(|script, pet_reads, fires| {
         let Some(script) = script else {
             return;
         };
@@ -189,15 +345,24 @@ fn feed_craft(
                 .then(|| display_line(listed.first().copied(), skill_lines, store))
                 .flatten()
                 .map_or((None, 0, 0), |(n, r, m)| (Some(n), r, m));
-            let effective = skill_slot(store, line).map_or(0, |s| {
-                u32::from(s.value)
-                    .saturating_add_signed(i32::from(s.temp_bonus) + i32::from(s.perm_bonus))
+            let pet = pet_reads.bar.as_deref().map(|bar| PetView {
+                bar_guid: bar.spells.pet_guid,
+                book: bar
+                    .spells
+                    .spells
+                    .iter()
+                    .map(|e| e.action())
+                    .filter(|&s| spells.catalog.get(s).is_some_and(|d| d.in_pet_book()))
+                    .collect(),
+                reads: &pet_reads,
+                skill_lines,
             });
             let recipes: Vec<CraftRecipe> = listed
                 .iter()
                 .filter_map(|&s| {
                     let d = spells.catalog.get(s)?;
-                    let sla = skill_lines.catalog.ability(s)?;
+                    // A spell with no ability row keeps its row, in group 0 (`0x4f61b6`).
+                    let sla = skill_lines.catalog.ability(s);
                     let mut reagents = Vec::new();
                     let mut num_available = u32::MAX;
                     for &(entry, need) in d.reagents.iter().filter(|&&(e, n)| e != 0 && n != 0) {
@@ -249,12 +414,14 @@ fn feed_craft(
                         spell_id: s,
                         name: d.name.clone(),
                         sub_name: d.rank.clone().unwrap_or_default(),
-                        difficulty: crate::ui_tradeskill::difficulty(
-                            effective,
-                            sla.trivial_low,
-                            sla.trivial_high,
-                        )
-                        .into(),
+                        difficulty: craft_bucket(
+                            d,
+                            sla,
+                            store,
+                            &actions.spells,
+                            pet.as_ref(),
+                            &objects,
+                        ),
                         num_available,
                         icon,
                         description: d
@@ -267,10 +434,9 @@ fn feed_craft(
                         tooltip: craft_tooltip(s, d),
                         // `spellLevel` at `+0x74` (column 29), not `baseLevel` (column 28).
                         spell_level: d.spell_level,
-                        // The group key is the ability row's line (`0x4f61b1`).
-                        skill_line: skill_lines
-                            .catalog
-                            .line(sla.skill_id)
+                        // The group key is the ability row's line (`0x4f61b1`), 0 with none.
+                        skill_line: sla
+                            .and_then(|a| skill_lines.catalog.line(a.skill_id))
                             .map(|l| l.name.clone()),
                         training_point_cost: 0,
                         required_level: 0,
@@ -306,12 +472,12 @@ fn feed_craft(
         match (&*last, &fresh) {
             (None, Some(f)) => {
                 debug!("ui_craft: window opens — {} recipe(s)", f.recipes.len());
-                script.fire_event("CRAFT_SHOW", vec![]);
+                fires.post("CRAFT_SHOW", vec![]);
             }
-            (Some(_), Some(_)) => script.fire_event("CRAFT_UPDATE", vec![]),
+            (Some(_), Some(_)) => fires.post("CRAFT_UPDATE", vec![]),
             (Some(_), None) if !closed_in_place => {
                 debug!("ui_craft: window closes");
-                script.fire_event("CRAFT_CLOSE", vec![]);
+                fires.post("CRAFT_CLOSE", vec![]);
             }
             (Some(_), None) | (None, None) => {}
         }
