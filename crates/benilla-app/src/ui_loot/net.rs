@@ -1853,6 +1853,34 @@ mod tests {
         }
     }
 
+    /// Another member's push takes `0x491d9f`: no line for an item pushed but not created
+    /// (`0x491d9f`-`0x491dab`), nor with `showInChat` clear (`0x491db1`); any other queues for its
+    /// line.
+    #[test]
+    fn another_members_push_queues_for_its_line() {
+        let me = SelfGuid(Some(ME));
+        let queued = |from_npc: bool, created: bool, show_in_chat: bool| {
+            let mut loot = LootState::default();
+            item_push_result(
+                ItemPushResult {
+                    from_npc,
+                    created,
+                    ..push(THEM, show_in_chat)
+                },
+                &me,
+                &mut loot,
+                &mut crate::tutorial::TutorialState::default(),
+                |_| true,
+            );
+            loot.pending_receive_count()
+        };
+        assert_eq!(queued(false, false, true), 1, "looted");
+        assert_eq!(queued(false, true, true), 1, "created");
+        assert_eq!(queued(true, true, true), 1, "created and pushed");
+        assert_eq!(queued(true, false, true), 0, "pushed, not created");
+        assert_eq!(queued(false, false, false), 0, "not for the chat");
+    }
+
     #[test]
     fn only_our_own_pushes_reach_the_receive_queue() {
         let me = SelfGuid(Some(ME));

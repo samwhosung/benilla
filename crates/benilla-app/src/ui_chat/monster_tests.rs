@@ -45,6 +45,7 @@ fn client() -> App {
     let s = benilla_ui::script::UiScript::new().unwrap();
     s.run(
         r#"
+        UNKNOWNOBJECT = "Unknown"
         Heard = {}
         local f = CreateFrame("Frame")
         f:RegisterAllEvents()
@@ -243,5 +244,40 @@ fn the_lines_held_for_a_subject_are_capped_oldest_first() {
     assert_eq!(
         shown[0], "CHAT_MSG_MONSTER_SAY:1 X",
         "the first held is dropped"
+    );
+}
+
+/// A held unit is named by `GetUnitName` (`0x50710b` → `0x507124`, `0x609210`), whose miss is
+/// `UNKNOWNOBJECT`: the expansion never fails on it, so its line shows at once, for a pet whose
+/// name has not landed and for a player whose name is pending alike.
+#[test]
+fn a_held_subject_whose_name_is_missing_expands_as_unknown() {
+    const NAMELESS_PET: u64 = 0xF140_0000_0800_0001;
+    const STRANGER: u64 = 0x60;
+    let mut app = client();
+    for (guid, fields) in [
+        (NAMELESS_PET, vec![(2, 0x09), (139, 8)]),
+        (STRANGER, vec![(2, 0x19)]),
+    ] {
+        let store = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&fields));
+        let e = app.world_mut().spawn(store).id();
+        app.world_mut()
+            .resource_mut::<GuidIndex>()
+            .0
+            .insert(guid, e);
+    }
+    assert_eq!(
+        heard(
+            &mut app,
+            monster(CHAT_MSG_MONSTER_SAY, NAMELESS_PET, "Good $n.")
+        ),
+        ["CHAT_MSG_MONSTER_SAY:Good Unknown."]
+    );
+    assert_eq!(
+        heard(
+            &mut app,
+            monster(CHAT_MSG_MONSTER_SAY, STRANGER, "Hail, $n.")
+        ),
+        ["CHAT_MSG_MONSTER_SAY:Hail, Unknown."]
     );
 }
