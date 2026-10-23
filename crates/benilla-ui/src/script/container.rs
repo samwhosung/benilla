@@ -308,11 +308,23 @@ impl super::Model {
         id <= 0 || self.bag(id).is_some()
     }
 
-    /// The slot a container binding finds at `(bag, slot)`, through [`Self::bag`].
+    /// Whether container `id` is the vault while no banker is open: its slots are the player
+    /// list's 39 to 62, which `GetItemInSlot` (`0x6228a0`) answers empty then (`0x6228ad`-
+    /// `0x6228cf`, the banker guid `[0xbdd038]`; the list's bank flag `+0x10` is set at the
+    /// player's construction, `0x5dd44d`). The vault itself still resolves and keeps its size.
+    pub(crate) fn vault_shut(&self, id: i64) -> bool {
+        id == super::char_stats::BANK_CONTAINER && self.bank.is_none()
+    }
+
+    /// The slot a container binding finds at `(bag, slot)`, through [`Self::bag`] and
+    /// `GetItemInSlot`'s bank gate ([`Self::vault_shut`]).
     // Deviation: the backpack is bounded by its own 16 slots, where `0x4f990f` bounds bag 0 by
     // the player list's count (0x71), a reference bug that lets the backpack index read other
     // containers.
     pub(crate) fn bag_slot(&self, bag: i64, slot: u32) -> Option<&ContainerSlot> {
+        if self.vault_shut(bag) {
+            return None;
+        }
         self.bag(bag)?.slots.get(&slot)
     }
 }
@@ -512,10 +524,9 @@ fn use_cleared(
     may_cast: bool,
     call: &mut Option<super::ScriptCall>,
 ) -> Option<CursorItem> {
+    // The slot through `GetItemInSlot` (`0x4fa1a6`): a shut vault's reads empty.
     let s = model
-        .containers
-        .get(&bag)
-        .and_then(|c| c.slots.get(&slot))
+        .bag_slot(bag, slot)
         .filter(|s| s.item_id != 0 && !cursor::item_locked(model, s.guid))?;
     let (guid, fork, item_id, use_spell) = (s.guid, s.use_fork, s.item_id, s.use_spell);
     let equip = (fork == UseFork::Equip).then(|| s.cursor_item(bag, slot));
@@ -1121,13 +1132,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // An armed item-targeting spell binds the item through `BindSpellTargetObject`, behind
             // the gate's tag 2.
             let may_cast = protected::gate(lua, Tag::CAST);
-            // An unresolved bag ends the verb before anything is read (`0x4f9bb6`).
-            if !lua
-                .app_data_ref::<Model>()
-                .expect("model app_data")
-                .bag_resolves(bag)
+            // An unresolved bag ends the verb before anything is read (`0x4f9bb6`), and so does
+            // a vault slot with no banker open (`0x4f9bc6`-`0x4f9bf0`), a held item included.
             {
-                return Ok(());
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                if !model.bag_resolves(bag) || model.vault_shut(bag) {
+                    return Ok(());
+                }
             }
             let click = super::tick::verb(lua, |model| {
                 pickup_container_item(model, bag, slot, may_cast)

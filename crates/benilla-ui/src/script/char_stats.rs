@@ -536,7 +536,7 @@ const BANK_INV_SLOTS: std::ops::RangeInclusive<usize> = 40..=63;
 const BANK_BAG_INV_SLOTS: std::ops::RangeInclusive<usize> = 64..=69;
 
 /// The vault's container id; must match `ui_items::BANK_CONTAINER` in the app.
-const BANK_CONTAINER: i64 = -1;
+pub(super) const BANK_CONTAINER: i64 = -1;
 
 /// The keyring's live-API ids: `KeyRingButtonIDToInvSlotID` adds `0x51` to a 1-based button id
 /// (`0x4c818b`), and the slot reader takes 0-based 81..=112 (`0x4c8567`).
