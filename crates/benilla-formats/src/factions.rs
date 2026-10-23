@@ -821,4 +821,29 @@ mod tests {
             cat.faction_description(529)
         );
     }
+
+    /// The slot pick builds its bits with `dec ecx; shl reg,cl` on the zero-extended unit bytes
+    /// (`0x4d5512`..`0x4d552d`, and the tooltip's `0x52a7dd`..`0x52a802`): x86 masks the count to
+    /// five bits, so byte 33 tests bit 0 and byte 0 tests bit 31, and no byte panics.
+    #[test]
+    fn slot_bits_mask_the_shift_count_like_shl() {
+        let info = FactionInfo {
+            rep_index: 0,
+            team: 0,
+            race_masks: [1, 1 << 31, 0, 0],
+            class_masks: [1, 1 << 31, 0, 0],
+            base: [100, 200, 0, 0],
+            flags: [0, 0x4, 0, 0],
+        };
+        assert_eq!(info.slot_for(1, 1), Some(0));
+        assert_eq!(info.slot_for(33, 33), Some(0), "count 32 masks to bit 0");
+        assert_eq!(info.slot_for(0, 0), Some(1), "count -1 masks to bit 31");
+        assert_eq!(info.slot_for(32, 32), Some(1));
+        assert_eq!(info.slot_for(34, 1), None, "bit 1 is in no race mask");
+        assert_eq!(info.slot_for(255, 255), None, "count 254 masks to bit 30");
+        assert_eq!(info.base_for(33, 33), 100);
+        assert!(info.tooltip_shows_for(33, 33));
+        assert!(!info.tooltip_shows_for(0, 0), "slot 1 hides the line");
+        assert!(!info.tooltip_shows_for(255, 255));
+    }
 }
