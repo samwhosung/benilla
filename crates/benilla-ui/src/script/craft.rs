@@ -225,21 +225,17 @@ impl super::UiScript {
 
     /// A rebuild of the craft list (`0x4f60c0`), as the bag and item watchers run one on each of
     /// their runs: while a craft window is open, the state read again where `refresh` brings the
-    /// watcher's change in, then `CRAFT_UPDATE` (`0x4f661a`), whether or not anything changed; the
-    /// rows the last push sorted sort the same. A closed window builds nothing (`0x4f60e3`).
-    pub fn rebuild_craft(&mut self, refresh: &mut dyn FnMut(&mut CraftState)) {
-        let open = {
-            let mut model = self.model_mut();
-            if model.craft_open {
-                if let Some(c) = model.craft.as_mut() {
-                    refresh(c);
-                }
+    /// watcher's change in; the rows the last push sorted sort the same. Whether the window is
+    /// open, for the caller's `CRAFT_UPDATE` (`0x4f661a`), signalled whether or not anything
+    /// changed; a closed window builds nothing (`0x4f60e3`).
+    pub fn rebuild_craft(&mut self, refresh: &mut dyn FnMut(&mut CraftState)) -> bool {
+        let mut model = self.model_mut();
+        if model.craft_open {
+            if let Some(c) = model.craft.as_mut() {
+                refresh(c);
             }
-            model.craft_open
-        };
-        if open {
-            self.fire_event("CRAFT_UPDATE", Vec::new());
         }
+        model.craft_open
     }
 
     /// Drain the spell ids `DoCraft` queued, one per call, with no count.

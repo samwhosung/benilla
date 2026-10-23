@@ -273,7 +273,9 @@ fn rebuild_at(notice: &ItemNotice) -> Option<Rebuild> {
 /// the carried count of an entry the builds read (`0x622130`).
 fn rebuild_lists(script: &mut UiScript, count: &dyn Fn(u32) -> u32) {
     script.rebuild_trade_skill(&mut |t| t.recount(count));
-    script.rebuild_craft(&mut |c| c.recount(count));
+    if script.rebuild_craft(&mut |c| c.recount(count)) {
+        script.fire_event("CRAFT_UPDATE", vec![]);
+    }
 }
 
 /// The player's carried count of an entry, 0 with no active player.
