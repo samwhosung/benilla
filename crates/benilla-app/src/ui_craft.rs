@@ -26,8 +26,9 @@ use crate::ui_unit::UnitFeed;
 
 /// The open Craft window, client-local. A nonzero opener `EffectMiscValue[0]` routes here
 /// (`Spell_C::TryCast` `0x6e4b60`) and is the craft type (1 Beast Training, 3 Enchanting) the
-/// client keeps at `0xbdcfb8` for admission and row order. The session end clears it too: a
-/// logout's fresh VM never runs the old one's `OnHide`.
+/// client keeps at `0xbdcfb8` for admission and row order. The opener of the open type, the
+/// world-enter init (`0x4f5ee0`) and the session end clear it too: a logout's fresh VM never runs
+/// the old one's `OnHide`.
 #[derive(Resource, Default)]
 pub(crate) struct CraftOpen {
     pub(crate) line: Option<u32>,
