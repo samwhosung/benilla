@@ -63,6 +63,8 @@ impl FeedApp {
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<crate::spell::SpellModifiers>()
             .init_resource::<PlayerActions>()
+            // The attack target the range rows read, as the unit edits leave it.
+            .init_resource::<crate::creature_anim::UnitEdits>()
             .add_systems(Update, feed_spell_tooltips);
         let player = app
             .world_mut()
@@ -371,6 +373,7 @@ fn a_pet_view_reads_the_pets_and_its_targets_run() {
     .init_resource::<Items>()
     .init_resource::<crate::net::GuidIndex>()
     .init_resource::<crate::spell::SpellModifiers>()
+    .init_resource::<crate::creature_anim::UnitEdits>()
     .add_systems(Update, feed_spell_tooltips);
     let speeds = walking_and_running_speeds();
     let store = |pairs: &[(u16, u32)]| ObjectStore(ObjectFields::from_pairs(pairs));

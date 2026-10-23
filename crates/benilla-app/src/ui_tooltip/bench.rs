@@ -77,6 +77,7 @@ fn feed_cost_per_invalidation() {
         .init_resource::<GuidIndex>()
         .init_resource::<crate::spell::SpellModifiers>()
         .init_resource::<PlayerActions>()
+        .init_resource::<crate::creature_anim::UnitEdits>()
         .add_systems(Update, feed_spell_tooltips);
     app.world_mut()
         .resource_mut::<PlayerActions>()
