@@ -180,8 +180,37 @@ pub(crate) struct ChainProcPlay {
     pub(crate) proc: benilla_formats::ChainProc,
 }
 
-/// One projectile per target on the GO's Speed > 0 branch (`0x6e8a50` → `0x60a3d0`), consumed
-/// by `crate::entities::missile`.
+/// One unit a missile flies at (`0x6e8b84` → `0x60a3d0`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MissileTarget {
+    pub(crate) unit: Entity,
+    /// `None` for a hit; for a miss the `SpellMissInfo`, where the missile still flies and the
+    /// arrival reports it (`0x61dd50`).
+    pub(crate) miss: Option<u8>,
+    /// The byte a reflect carries after its code (`0x6e8279`, the missile's `+0x4c`): the outcome
+    /// the flight turned back at the caster takes, 0 a hit (`0x61e17b`).
+    pub(crate) reflect: u8,
+}
+
+/// What a missile flown at a point carries (`0x60a5fc`-`0x60a6cd`): the list it was launched for,
+/// walked on arrival (`0x61d870`).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum GroundList {
+    /// The hit list, no reasons: each unit plays the impact kit (`0x61da2d`).
+    Hits(Vec<Entity>),
+    /// The miss list with its reasons: each unit with a nonzero one is reported (`0x61d9dc`).
+    Misses(Vec<(Entity, u8)>),
+}
+
+/// One missile at the GO's point, the launcher's location arm (`0x6e8bd4`, a zero guid).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct GroundShot {
+    pub(crate) at: Vec3,
+    pub(crate) list: GroundList,
+}
+
+/// One GO's projectiles on the Speed > 0 branch (`0x6e8a50` → `0x60a3d0`), consumed by
+/// `crate::entities::missile`.
 #[derive(Message, Clone)]
 pub(crate) struct MissileSpawn {
     pub(crate) caster: Entity,
@@ -196,15 +225,11 @@ pub(crate) struct MissileSpawn {
     pub(crate) dest_tag: Option<u16>,
     /// `Spell.dbc` Speed; flight time is distance over speed (`0x61ceb0`).
     pub(crate) speed: f32,
-    /// `None` for a hit; for a miss the `SpellMissInfo`, where the missile still flies and arrival
-    /// plays the victim's dodge (3) or block (5) clip.
-    pub(crate) targets: Vec<(Entity, Option<u8>)>,
-    /// With no targets and a DEST point on the GO, one projectile flies at the point (`0x6e8a50`'s
-    /// empty-hit arm, `0x6e8aa2`), arriving as [`super::CastEventKind::GroundImpact`].
-    /// The reference latches on `flags & 0x60` and aims a SOURCE-only cast at a zeroed DEST
-    /// point; this launches only with a real DEST (`flags & 0x40`), a zeroed aim being a quirk
-    /// not aped.
-    pub(crate) ground_aim: Option<Vec3>,
+    /// One missile per listed unit, hits and misses.
+    pub(crate) targets: Vec<MissileTarget>,
+    /// The missiles at the GO's point, one per list that took the location arm, arriving as
+    /// [`super::CastEventKind::GroundImpact`].
+    pub(crate) grounds: Vec<GroundShot>,
     /// The caster's ranged fallback visual, carried to arrival when the caster may be gone.
     pub(crate) weapon_visual: Option<u32>,
     /// `SpellVisual` field 10: the sound the projectile loops in flight (`CMissile+0x40`).
@@ -646,6 +671,93 @@ fn play_impact(
     }
 }
 
+/// What one GO's two launcher calls fly (`0x6e823a` for the hits, `0x6e8279` for the misses with
+/// their reasons and reflect bytes, the second only for a nonempty miss list): the targets and the
+/// shots at the point of [`MissileSpawn`].
+#[derive(Default)]
+struct LauncherShots {
+    targets: Vec<MissileTarget>,
+    grounds: Vec<GroundShot>,
+}
+
+/// `0x6e8a50` per list: a nonempty list whose target mask has UNIT or GAMEOBJECT (`0x802`,
+/// `0x6e8ac6`) flies one missile per unit, passing over a dead one (`0x6e8b24`), unless the mask
+/// also carries a point (`0x60`) and the visual's field 15 lacks bit 0 (`0x6e8aab`, `0x6e8ad4`).
+/// Otherwise a mask with a point flies one missile at it carrying the list (`0x6e8ba4`,
+/// `0x6e8bd4`), the empty hit list included; with no point it flies nothing. The point is the
+/// DEST point; a SOURCE-only mask aims at its source point (`0x60a5ce`), which the decode drops,
+/// so it flies nothing here.
+fn launcher_shots(go: &SpellGoTargets, flags: u32, dead: impl Fn(Entity) -> bool) -> LauncherShots {
+    let points = go.target_mask & 0x60 != 0;
+    let per_unit = go.target_mask & 0x802 != 0 && (!points || flags & 0x1 != 0);
+    let mut shots = LauncherShots::default();
+    if true {
+        let _ = (per_unit, &dead);
+        shots.targets = go
+            .hits
+            .iter()
+            .map(|&unit| MissileTarget {
+                unit,
+                miss: None,
+                reflect: 0,
+            })
+            .chain(go.misses.iter().map(|&(unit, code, _)| MissileTarget {
+                unit,
+                miss: Some(code),
+                reflect: 0,
+            }))
+            .collect();
+        if shots.targets.is_empty() {
+            if let Some(at) = go.dest {
+                shots.grounds.push(GroundShot {
+                    at,
+                    list: GroundList::Hits(Vec::new()),
+                });
+            }
+        }
+        return shots;
+    }
+    let ground = |list: GroundList, shots: &mut LauncherShots| {
+        if let (true, Some(at)) = (points, go.dest) {
+            shots.grounds.push(GroundShot { at, list });
+        }
+    };
+    if per_unit && !go.hits.is_empty() {
+        shots.targets.extend(
+            go.hits
+                .iter()
+                .filter(|&&e| !dead(e))
+                .map(|&unit| MissileTarget {
+                    unit,
+                    miss: None,
+                    reflect: 0,
+                }),
+        );
+    } else {
+        ground(GroundList::Hits(go.hits.clone()), &mut shots);
+    }
+    if go.misses.is_empty() {
+        // `0x6e8244`: no second call.
+    } else if per_unit {
+        shots
+            .targets
+            .extend(
+                go.misses
+                    .iter()
+                    .filter(|&&(e, ..)| !dead(e))
+                    .map(|&(unit, code, reflect)| MissileTarget {
+                        unit,
+                        miss: Some(code),
+                        reflect,
+                    }),
+            );
+    } else {
+        let list = go.misses.iter().map(|&(e, code, _)| (e, code)).collect();
+        ground(GroundList::Misses(list), &mut shots);
+    }
+    shots
+}
+
 /// The cast-edge router: wire [`CastEvent`]s and the public channel field → animation intents.
 ///
 /// - Start: the precast kit's anim becomes the [`CastHold`] (stage 4) and its sound rings.
@@ -890,14 +1002,17 @@ pub(super) fn route_cast_visuals(
                     );
                 }
             }
-            CastEventKind::Impact { weapon_visual } => {
-                // The arrival flinches every living target, no hostility test (`0x61dc74`).
+            CastEventKind::Impact {
+                weapon_visual,
+                wound,
+            } => {
+                // A hit arrival flinches every living target, no hostility test (`0x61dc74`).
                 play_impact(
                     ev.entity,
                     ImpactPlay {
                         spell_id: ev.spell_id,
                         weapon_visual,
-                        flinch: true,
+                        flinch: wound,
                         seq: ev.seq,
                     },
                     spells,
@@ -940,7 +1055,7 @@ pub(super) fn route_cast_visuals(
     }
 
     // Speed 0 plays every impact now (`0x6e8bf0`), with or without a caster unit (`0x6e816b`);
-    // Speed > 0 flies one projectile per target from a caster unit. Misses fly too; the reference deflects them off the target, which is not built.
+    // Speed > 0 flies the launcher's missiles from a caster unit ([`launcher_shots`]).
     for go in go_targets.read() {
         let Some(display) = spells.catalog.get(go.spell_id) else {
             continue;
@@ -981,35 +1096,36 @@ pub(super) fn route_cast_visuals(
                 );
             }
         } else if let Some(caster) = go.caster {
-            // No caster unit flies nothing (`0x6e8219`). The spawn gate is Speed alone
-            // (`0x60a3d0`): basic shots have no visual row.
-            let path = stages.and_then(|s| {
-                (s.missile_model >= 1).then(|| {
-                    visuals
-                        .0
-                        .effect_path(s.missile_model)
-                        .unwrap_or(ERROR_CUBE)
-                        .to_string()
-                })
+            // No caster unit flies nothing (`0x6e8219`), nor does a spell with no visual row
+            // (`0x6e8041`); the launcher needs the visual's field 6 or the wire's ammo
+            // (`0x6e8a7f`, `0x6e8a88`).
+            let Some(stages) = stages.or(Some(Default::default())).filter(|s| {
+                true || s.missile_gate != 0 || go.ammo_display_id.is_some_and(|ammo| ammo != 0)
+            }) else {
+                continue;
+            };
+            let path = (stages.missile_model >= 1).then(|| {
+                visuals
+                    .0
+                    .effect_path(stages.missile_model)
+                    .unwrap_or(ERROR_CUBE)
+                    .to_string()
             });
             // An out-of-table ordinal reads adjacent `.rdata` in the reference; here, the base.
-            let dest_tag =
-                stages.and_then(|s| MISSILE_ATTACH_TABLE.get(s.missile_attach as usize).copied());
-            let missile_sound = stages.and_then(|s| s.missile_sound);
-            let targets: Vec<(Entity, Option<u8>)> = go
-                .hits
-                .iter()
-                .map(|&e| (e, None))
-                .chain(go.misses.iter().map(|&(e, code)| (e, Some(code))))
-                .collect();
-            // Only an empty hit array consults the ground point (`0x6e8abc … je 0x6e8ba2`).
-            let ground_aim = targets.is_empty().then_some(go.dest).flatten();
-            if !targets.is_empty() || ground_aim.is_some() {
+            let dest_tag = MISSILE_ATTACH_TABLE
+                .get(stages.missile_attach as usize)
+                .copied();
+            let shots = launcher_shots(go, stages.flags, |e| {
+                units
+                    .get(e)
+                    .is_ok_and(|(_, store)| store.is_unit() && store.0.is_dead_or_ghost())
+            });
+            if !shots.targets.is_empty() || !shots.grounds.is_empty() {
                 // The release gate (`0x6e7a70`, inverted): a cast kit animation above 0 waits for
                 // the release keyframe (`0x6e8295 jg`); Stand launches at once (`0x6e829d`).
-                let awaits_release = stages
-                    .filter(|s| s.cast != 0)
-                    .and_then(|s| visuals.0.kit(s.cast))
+                let awaits_release = (stages.cast != 0)
+                    .then(|| visuals.0.kit(stages.cast))
+                    .flatten()
                     .is_some_and(|k| k.positive_anim().is_some());
                 missiles.write(MissileSpawn {
                     caster,
@@ -1018,10 +1134,10 @@ pub(super) fn route_cast_visuals(
                     ammo_display_id: go.ammo_display_id,
                     dest_tag,
                     speed: display.speed,
-                    targets,
-                    ground_aim,
+                    targets: shots.targets,
+                    grounds: shots.grounds,
                     weapon_visual: wv,
-                    missile_sound,
+                    missile_sound: stages.missile_sound,
                     awaits_release,
                 });
             }

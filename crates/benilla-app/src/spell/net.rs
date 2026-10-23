@@ -1320,10 +1320,16 @@ fn spell_go(
         .iter()
         .filter_map(|&g| index.0.get(&g).map(|&e| (g, e)))
         .collect();
-    let misses: Vec<(Entity, u8)> = misses
+    let misses: Vec<(Entity, u8, u8)> = misses
         .iter()
-        .filter_map(|m| index.0.get(&m.target).map(|&e| (e, m.info)))
+        .filter_map(|m| {
+            index
+                .0
+                .get(&m.target)
+                .map(|&e| (e, m.info, m.reflect_result))
+        })
         .collect();
+    let target_mask = go_target_mask(target, go_target, dest);
     // The caster slot is the second guid looked up as a unit (`0x6e7f8b`, mask 8): a game object's
     // cast writes it 0, so it finds none and skips every leg that needs one.
     let unit = index
@@ -1342,6 +1348,7 @@ fn spell_go(
                 hits: hits.into_iter().map(|(_, e)| e).collect(),
                 misses,
                 dest: None,
+                target_mask,
                 ammo_display_id,
                 seq,
             });
@@ -1383,11 +1390,20 @@ fn spell_go(
             hits: hits.into_iter().map(|(_, e)| e).collect(),
             misses,
             dest,
+            target_mask,
             ammo_display_id,
             seq,
         });
     }
     deferred
+}
+
+/// The GO target block's mask bits the missile launcher reads (`0x6e8aa2`, `0x6e8ac6`), rebuilt
+/// from what the decode keeps: UNIT (0x2) iff it read a unit target, GAMEOBJECT (0x800) iff an
+/// object one without UNIT, DEST_LOCATION (0x40) iff a point. SOURCE_LOCATION (0x20) is dropped.
+fn go_target_mask(target: Option<u64>, go_target: Option<u64>, dest: Option<[f32; 3]>) -> u16 {
+    let bit = |set: bool, bit: u16| if set { bit } else { 0 };
+    bit(target.is_some(), 0x2) | bit(go_target.is_some(), 0x800) | bit(dest.is_some(), 0x40)
 }
 
 /// `SMSG_SPELL_FAILED_OTHER`: a cast was interrupted; ends the caster's `Casting` as [`spell_go`]

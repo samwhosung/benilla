@@ -179,8 +179,7 @@ pub struct VisualStages {
     pub state: u32,
     pub channel: u32,
     /// Field 7: the missile's `SpellVisualEffectName` id; 0 flies the ammo or weapon model, and an
-    /// id with no row the client's `Spells\ErrorCube.mdx` (`0x60a3d0`). A missile exists whenever
-    /// `Spell.dbc` Speed > 0, whatever this holds.
+    /// id with no row the client's `Spells\ErrorCube.mdx` (`0x60a3d0`).
     pub missile_model: u32,
     /// Field 9: the index into [`MISSILE_ATTACH_TABLE`].
     pub missile_attach: u32,
@@ -190,8 +189,9 @@ pub struct VisualStages {
     /// Field 14: the `SoundEntries.dbc` id the `$TRD` anim event plays at a craft's strike frame
     /// (`0x62faa0`), such as mining's pick clang, sound 1143.
     pub strike_sound: Option<u32>,
-    /// Field 6: `SMSG_SPELL_GO` spawns the dest one-shot at the packet's dest only when this is 0
-    /// and [`Self::area_effect`] is set (`0x6e8088`); the missile spawn ignores it.
+    /// Field 6: a travelling spell's GO launches missiles only when this is nonzero or the wire
+    /// carries an ammo display id (`0x6e8a7f`, `0x6e8a88`), and spawns the dest one-shot at the
+    /// packet's dest only when this is 0 and [`Self::area_effect`] is set (`0x6e8088`).
     pub missile_gate: u32,
     /// Field 11: a DynamicObject shows its own model only when this is nonzero (`0x5d57c0`).
     pub area_gate: u32,
@@ -201,6 +201,9 @@ pub struct VisualStages {
     /// Field 13: a DynamicObject's kit, for its emitters (`0x5d55c0` scans it for CharProc type 9)
     /// and its looping sound.
     pub area_kit: u32,
+    /// Field 15: bit 0 lets a GO whose target mask carries a point (`0x60`) still fly one missile
+    /// per listed unit (`0x6e8aab`); clear, such a GO flies one missile at the point.
+    pub flags: u32,
 }
 
 impl VisualStages {
@@ -531,6 +534,7 @@ pub fn load_spell_visual_catalog(chain: &mut Chain) -> Result<SpellVisualCatalog
                 area_gate: g(11),
                 area_effect: g(12),
                 area_kit: g(13),
+                flags: 0,
             },
         );
     }

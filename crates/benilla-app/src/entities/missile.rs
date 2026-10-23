@@ -14,14 +14,18 @@
 //! the missile homes on the target's live attachment and arrives on time (`0x61e2a0`).
 //!
 //! On arrival `0x61e1d0` picks an arm by whether the target guid still resolves, then by the hit
-//! bit `[missile+0x38] & 1`, set only at the spawn (`0x60a4e8`):
+//! bit `[missile+0x38] & 1`, set at the spawn (`0x60a4e8`) and by a reflection with no outcome
+//! (`0x61e19d`):
 //! - `0x61dc50`, a live target hit: wound, flinch and impact visual, no word; here
 //!   [`CastEventKind::Impact`].
 //! - `0x61dd50`, a live target missed: the outcome word, `UNIT_COMBAT` and chat, then the
-//!   disposition; here the defense clip and [`MissileMiss`].
-//! - `0x61d870`, no live target: plays on the caster, then walks the missile's guid list skipping
-//!   code 0; here [`CastEventKind::GroundImpact`]. A target that despawned mid-flight lands here as
-//!   well as a ground cast.
+//!   disposition; here the defense clip and [`MissileMiss`]. A reflection (code 11) then turns
+//!   back at its caster (`0x61e17b`) with the outcome the GO carried after the code, relaunched
+//!   from where it is (`0x61ceb0`), and its second arrival takes these arms again at the caster.
+//! - `0x61d870`, no live target: plays on the caster, then walks the missile's guid list: a hit
+//!   list plays each unit's impact, a miss list reports each nonzero reason; here
+//!   [`CastEventKind::GroundImpact`], then [`CastEventKind::Impact`] or [`MissileMiss`] per unit.
+//!   A target that despawned mid-flight lands here as well as a ground cast.
 //!
 //! With no visual-chain model a missile flies the wire's ammo (Auto Shot, Shoot, Throw: all
 //! `SpellVisual` 0), an `ItemDisplayInfo` row resolved by shape: a model in the right slot is
@@ -30,9 +34,10 @@
 //! thrown), and the shape rule matches it on every shipped row. With no model at all the missile
 //! flies invisible and still impacts on schedule.
 //!
-//! A GO with no unit targets but a point flies one projectile at it (`0x6e8a50`'s empty-hit-array
-//! arm calls `0x60a3d0` once, unit slot −1): the Flare, a bomb thrown at empty ground. It aims at a
-//! fixed point ([`Aim::Ground`]), arrives as [`CastEventKind::GroundImpact`] on the caster
+//! A GO at a point flies one projectile at it per list (`0x6e8bd4` calls `0x60a3d0` with a zero
+//! guid), unless its visual flies per unit there (`crate::creature_anim::MissileSpawn::grounds`):
+//! the Flare, a bomb or grenade thrown into a crowd. It aims at a fixed point ([`Aim::Ground`]),
+//! carries the list it was launched for, arrives as [`CastEventKind::GroundImpact`] on the caster
 //! (`0x61d870`) and flies the same straight, arrive-on-time line as a unit missile: the
 //! reference's flight is linear, with no gravity (`0x61ceb0`, `0x61e2a0`).
 //!
@@ -40,9 +45,8 @@
 //! weapon's HandArrow/Bullet attachment (`0x23`/`0x24`); homing aims at the attachment point, not
 //! the ray-sphere intercept `0x61d230`, the same body point in practice; and `0x61dd50`'s
 //! per-outcome disposition (jump table `0x61d76c`, cases `0x61d784`), which keeps a BLOCK 5000 ms
-//! (`0x61e7c0`), rebuilds a RESIST or IMMUNE model (`0x707350` on `0x861790`), curves a DEFLECT
-//! away (`0x4531e0`, `0x7be490`) and re-launches a REFLECT at the caster, where every miss here
-//! ends on arrival.
+//! (`0x61e7c0`), rebuilds a RESIST or IMMUNE model (`0x707350` on `0x861790`) and curves a
+//! DEFLECT away (`0x4531e0`, `0x7be490`), where every miss but a REFLECT ends on arrival here.
 
 use bevy::animation::transition::AnimationTransitions;
 use bevy::ecs::entity::EntityHashMap;
@@ -50,7 +54,7 @@ use bevy::prelude::*;
 
 use crate::creature_anim::{
     oneshot_is_live, AnimData, AnimDriver, AnimSoundEvent, CastEvent, CastEventKind, DefenseAnim,
-    MissileSpawn,
+    GroundList, MissileSpawn,
 };
 use benilla_assets::m2_url;
 
@@ -130,6 +134,16 @@ pub(super) struct Missile {
     /// A ground arrival plays on the caster (`0x61d870`), a unit arrival on the target.
     caster: Entity,
     aim: Aim,
+    /// The outcome a reflection turns back with (`+0x4c`, `0x61e188`); 0 is a hit.
+    reflect: u8,
+    /// The list a missile at a point carries and walks on arrival (`+0x5c`, `+0x6c`).
+    list: Option<GroundList>,
+    /// The speed the launch fitted (`+0x1c`, `0x61d0c3`), which a relaunch divides by.
+    speed: f32,
+    /// Seconds since the GO queued it (`now − +0x78`, `0x61cfe5`): queued, then in flight.
+    age: f32,
+    /// `SpellVisual` field 10, restarted by a relaunch's first step (`0x61e78f`).
+    missile_sound: Option<u32>,
     /// The [`SpellFx`] cache key; `None` flies invisible and still impacts.
     path: Option<String>,
     /// Remaining flight time in seconds, the arrive-on-time integrator's state.
@@ -243,7 +257,7 @@ impl PendingMissiles {
             dest_tag: None,
             speed: 40.0,
             targets: Vec::new(),
-            ground_aim: None,
+            grounds: Vec::new(),
             weapon_visual: None,
             missile_sound: None,
             awaits_release: true,
@@ -299,9 +313,8 @@ fn ensure_ammo_model(
 pub(crate) struct MissileMiss {
     /// The colour law's source class (`K`), and the line's caster.
     pub(crate) caster: Entity,
-    /// Always the missed target (`0x61ddb3`; `0x61d9dc`'s is the per-entry target). Reflect
-    /// floats over the target, as at the inline site (`0x6e7dd4`); the caster's word belongs to
-    /// the re-launched flight, which is not built.
+    /// Always the missed target (`0x61ddb3`; `0x61d9dc`'s is the per-entry target). A reflection
+    /// floats REFLECT over its target, then its turned-back flight the outcome over the caster.
     pub(crate) anchor: Entity,
     /// The colour law's `B` bit resolves off its record.
     pub(crate) spell_id: u32,
@@ -321,13 +334,33 @@ fn launch_outcome_code(code: u8) -> u8 {
 }
 
 /// The victim clip a missed arrival plays, as the melee `$CPP` dispatch's victim state
-/// ([`DefenseAnim`]): DODGE(3) plays Dodge (30), BLOCK(5) ShieldBlock (24), any other code
-/// nothing; PARRY(4) never arrives, as [`launch_outcome_code`] rewrote it.
+/// ([`DefenseAnim`]): DODGE(3) plays Dodge (30), BLOCK(5) ShieldBlock (24), and a REFLECT(11)
+/// Dodge, its flag 0x80 being none of `0x58` (`0x61ddf7`, `0x61de4e`); any other code nothing.
+/// PARRY(4) never arrives, as [`launch_outcome_code`] rewrote it.
 fn miss_defense_state(code: u8) -> Option<u32> {
     match code {
-        3 => Some(2), // SPELL_MISS_DODGE → the dispatch's DODGES state
+        3 => Some(2), // the dispatch's DODGES state
         5 => Some(5), // SPELL_MISS_BLOCK → BLOCKS
         _ => None,
+    }
+}
+
+/// `SPELL_MISS_REFLECT`, the code whose flag 0x80 (`0x61d720`) turns the missile back.
+const SPELL_MISS_REFLECT: u8 = 11;
+
+/// `0x80c854`: the speed a launch takes when its flight is already due, and the cap of a fitted
+/// one (`0x61d00b`, `0x61d0c3`).
+const DUE_SPEED: f32 = 100.0;
+
+/// The speed `0x61ceb0` fits for `distance` at `speed` after `queued` seconds since the GO: the
+/// flight's time left `t = distance / speed − queued` (`0x61cfda`-`0x61cff4`), then `distance / t`
+/// capped at 100 for `t > 0`, else 100 (`0x61cffa`-`0x61d018`).
+fn fitted_speed(distance: f32, speed: f32, queued: f32) -> f32 {
+    let t = distance / speed - queued;
+    if t > 0.0 {
+        (distance / t).min(DUE_SPEED)
+    } else {
+        DUE_SPEED
     }
 }
 
@@ -341,16 +374,21 @@ pub(super) struct ArrivalOut<'w> {
 }
 
 /// The arrival hand-off, by the arms of the reference's per-tick dispatch `0x61e1d0` (module docs).
+/// Returns whether the missile flies on: a reflection turned back at its caster (`0x61e17b`),
+/// relaunched from `at` with its flight fitted again (`0x61ceb0`).
 fn arrival_handoff(
-    missile: &Missile,
+    missile: &mut Missile,
     at: Vec3,
+    units: &AttachPosQuery,
+    joints: &Query<&GlobalTransform>,
     out: &mut ArrivalOut,
     play_seq: &mut crate::creature_anim::PlaySeq,
-) {
+) -> bool {
     // A fresh tick sorts the arrival after the frame's packet handlers, as the reference plays it.
+    let spell_id = missile.spell_id;
     let mut event = |entity, kind| CastEvent {
         entity,
-        spell_id: missile.spell_id,
+        spell_id,
         kind,
         cast_flags: 0,
         item_cast: false,
@@ -362,13 +400,14 @@ fn arrival_handoff(
         } => {
             let kind = CastEventKind::Impact {
                 weapon_visual: missile.weapon_visual,
+                wound: true,
             };
             out.impacts.write(event(target, kind));
         }
         Aim::Unit {
             target,
+            dest_tag,
             miss: Some(code),
-            ..
         } => {
             if let Some(victim_state) = miss_defense_state(code) {
                 out.defenses.write(DefenseAnim {
@@ -382,18 +421,64 @@ fn arrival_handoff(
                 spell_id: missile.spell_id,
                 code,
             });
+            if code == SPELL_MISS_REFLECT && false {
+                // The caster's guid becomes the target, the code the reflect byte, a hit for 0
+                // (`0x61e17f`-`0x61e1a0`); the launch classifies it again (`0x61cebb`).
+                let code = missile.reflect;
+                missile.aim = Aim::Unit {
+                    target: missile.caster,
+                    dest_tag,
+                    miss: (code != 0).then(|| launch_outcome_code(code)),
+                };
+                let Some(to) = aim_point(missile.aim, units, joints) else {
+                    return false; // the caster is gone
+                };
+                let distance = at.distance(to);
+                missile.speed = fitted_speed(distance, missile.speed, missile.age);
+                missile.arrive_in = distance / missile.speed;
+                return true;
+            }
         }
         Aim::Ground(_) => {
             out.impacts.write(event(
                 missile.caster,
                 CastEventKind::GroundImpact { pos: at },
             ));
+            // The list's units that still resolve (`0x61d98b`): a hit list plays each one's
+            // impact and state kits, no wound (`0x61da2d`, `0x61da65`); a miss list reports each
+            // nonzero reason (`0x61d9b2`), the word and `UNIT_COMBAT` then the line.
+            match missile.list.as_ref().filter(|_| false) {
+                Some(GroundList::Hits(hits)) => {
+                    for &unit in hits.iter().filter(|&&u| units.contains(u)) {
+                        let kind = CastEventKind::Impact {
+                            weapon_visual: missile.weapon_visual,
+                            wound: false,
+                        };
+                        out.impacts.write(event(unit, kind));
+                    }
+                }
+                Some(GroundList::Misses(misses)) => {
+                    for &(unit, code) in
+                        misses.iter().filter(|&&(u, c)| c != 0 && units.contains(u))
+                    {
+                        out.words.write(MissileMiss {
+                            caster: missile.caster,
+                            anchor: unit,
+                            spell_id: missile.spell_id,
+                            code,
+                        });
+                    }
+                }
+                None => {}
+            }
         }
     }
+    false
 }
 
-/// Launch one queued GO from `launch`: a missile per target, or the one ground shot, each flying
-/// `distance / speed − time queued` (`0x61ceb0`); one already past its deadline hands off at once.
+/// Launch one queued GO from `launch`: a missile per target and one per shot at the point, each
+/// flying `distance / speed − time queued` (`0x61ceb0`); one already past its deadline hands off
+/// at once, and flies on only when that turned it back.
 fn launch_go(
     go: &QueuedGo,
     launch: Vec3,
@@ -404,44 +489,53 @@ fn launch_go(
     out: &mut ArrivalOut,
     play_seq: &mut crate::creature_anim::PlaySeq,
 ) {
-    // The unit targets, else the location fallback's one ground shot: the reference reads the
-    // `flags & 0x60` latch only for an empty hit array.
-    let aims: Vec<Aim> = if go.spawn.targets.is_empty() {
-        go.spawn.ground_aim.map(Aim::Ground).into_iter().collect()
-    } else {
-        go.spawn
-            .targets
-            .iter()
-            .map(|&(target, miss)| Aim::Unit {
-                target,
-                dest_tag: go.spawn.dest_tag,
-                miss: miss.map(launch_outcome_code),
-            })
-            .collect()
-    };
-    for aim_at in aims {
+    let unit_shots = go.spawn.targets.iter().map(|t| {
+        let aim = Aim::Unit {
+            target: t.unit,
+            dest_tag: go.spawn.dest_tag,
+            miss: t.miss.map(launch_outcome_code),
+        };
+        (aim, t.reflect, None)
+    });
+    let ground_shots = go
+        .spawn
+        .grounds
+        .iter()
+        .map(|g| (Aim::Ground(g.at), 0, Some(g.list.clone())));
+    for (aim_at, reflect, list) in unit_shots.chain(ground_shots) {
         let Some(aim) = aim_point(aim_at, units, joints) else {
             continue; // target already gone
         };
-        let missile = Missile {
+        let distance = launch.distance(aim);
+        let mut missile = Missile {
             spell_id: go.spawn.spell_id,
             caster: go.spawn.caster,
             aim: aim_at,
+            reflect,
+            list,
+            speed: fitted_speed(distance, go.spawn.speed.max(f32::EPSILON), go.queued),
+            age: go.queued,
+            missile_sound: go.spawn.missile_sound,
             path: go.key.clone(),
-            arrive_in: launch.distance(aim) / go.spawn.speed.max(f32::EPSILON) - go.queued,
+            arrive_in: distance / go.spawn.speed.max(f32::EPSILON) - go.queued,
             // An invisible flight has no parts to wait on.
             parts_spawned: go.key.is_none(),
             weapon_visual: go.spawn.weapon_visual,
         };
-        if missile.arrive_in <= 0.0 {
-            arrival_handoff(&missile, aim, out, play_seq);
-            continue;
-        }
-        let dir = (aim - launch).normalize_or(-Vec3::Z);
+        let from = if missile.arrive_in <= 0.0 {
+            if !arrival_handoff(&mut missile, aim, units, joints, out, play_seq) {
+                continue;
+            }
+            aim
+        } else {
+            launch
+        };
+        let to = aim_point(missile.aim, units, joints).unwrap_or(aim);
+        let dir = (to - from).normalize_or(-Vec3::Z);
         let entity = commands
             .spawn((
                 missile,
-                Transform::from_translation(launch).with_rotation(missile_facing(dir)),
+                Transform::from_translation(from).with_rotation(missile_facing(dir)),
                 Visibility::default(),
             ))
             .id();
@@ -450,7 +544,7 @@ fn launch_go(
             sounds.write(MissileSound::Start {
                 entity,
                 kit_sound,
-                pos: launch,
+                pos: from,
             });
         }
     }
@@ -657,6 +751,7 @@ pub(super) fn move_missiles(
 ) {
     let dt = time.delta_secs();
     for (entity, mut missile, mut transform) in &mut missiles {
+        missile.age += dt;
         let Some(aim) = aim_point(missile.aim, &units, &joints) else {
             // A unit target streamed out mid-flight: the reference's `0x61d870` plays on the
             // caster and floats a word per guid from the missile's list (`0x61d9dc`, calling
@@ -667,9 +762,21 @@ pub(super) fn move_missiles(
         };
         let to_target = aim - transform.translation;
         if missile.arrive_in <= dt {
-            arrival_handoff(&missile, aim, &mut out, &mut play_seq);
+            transform.translation = aim;
+            // The arrival stops the flight sound (`0x61e204`); a relaunch's first step starts it
+            // again (`0x61e78f`).
             sounds.write(MissileSound::Stop { entity });
-            commands.entity(entity).despawn();
+            if arrival_handoff(&mut missile, aim, &units, &joints, &mut out, &mut play_seq) {
+                if let Some(kit_sound) = missile.missile_sound {
+                    sounds.write(MissileSound::Start {
+                        entity,
+                        kit_sound,
+                        pos: aim,
+                    });
+                }
+            } else {
+                commands.entity(entity).despawn();
+            }
             continue;
         }
         transform.translation += to_target * (dt / missile.arrive_in);
@@ -690,6 +797,7 @@ mod tests {
     use bevy::asset::AssetPlugin;
 
     use super::*;
+    use crate::creature_anim::spell_visual::{GroundShot, MissileTarget};
     use crate::creature_anim::PlaySeq;
 
     /// `Spell.dbc` Speed such that the test target's 24-unit range is a 1.000 s flight.
@@ -745,8 +853,12 @@ mod tests {
             ammo_display_id: None,
             dest_tag: None,
             speed: SPEED,
-            targets: vec![(target, None)],
-            ground_aim: None,
+            targets: vec![MissileTarget {
+                unit: target,
+                miss: None,
+                reflect: 0,
+            }],
+            grounds: Vec::new(),
             weapon_visual: None,
             missile_sound: None,
             awaits_release,
@@ -757,7 +869,10 @@ mod tests {
     fn ground_go(caster: Entity, at: Vec3) -> MissileSpawn {
         MissileSpawn {
             targets: Vec::new(),
-            ground_aim: Some(at),
+            grounds: vec![GroundShot {
+                at,
+                list: GroundList::Hits(Vec::new()),
+            }],
             ..go(caster, caster, false)
         }
     }
@@ -862,28 +977,6 @@ mod tests {
         assert_eq!(ground, 1, "aimed at the point, homing to nothing");
     }
 
-    /// The reference reads the location latch only for an empty hit array (`0x6e8abc`).
-    #[test]
-    fn a_dest_go_that_hit_units_flies_at_the_units_not_the_point() {
-        let mut app = app();
-        let caster = caster(&mut app, Vec3::ZERO);
-        let target = app
-            .world_mut()
-            .spawn(GlobalTransform::from_xyz(24.0, 0.0, 0.0))
-            .id();
-        let mut spawn = go(caster, target, false);
-        spawn.ground_aim = Some(Vec3::new(-50.0, 0.0, 0.0));
-        app.world_mut().write_message(spawn);
-        step(&mut app, 0.016);
-        let aims: Vec<bool> = app
-            .world_mut()
-            .query::<&Missile>()
-            .iter(app.world())
-            .map(|m| matches!(m.aim, Aim::Unit { .. }))
-            .collect();
-        assert_eq!(aims, vec![true], "one unit-homing shot, no ground shot");
-    }
-
     /// `0x61d870` plays the kit on the caster with `extra` = the landing point.
     #[test]
     fn a_ground_arrival_hands_off_to_the_caster_with_the_landing_point() {
@@ -943,8 +1036,7 @@ mod tests {
     }
 
     /// The `0x61dd50` arm: a miss plays the victim's dodge or block clip, never the impact, and
-    /// floats its word over the target. A parry reads `DEFLECT`, rewritten at launch; a Reflect
-    /// floats over the target, where the inline site re-anchors it to the caster (`0x6e7e51`).
+    /// floats its word over the target. A parry reads `DEFLECT`, rewritten at launch.
     #[test]
     fn missed_arrival_words_the_target_deflects_a_parry_and_plays_dodge_or_block() {
         for (code, expect_state, expect_word) in [
@@ -952,7 +1044,6 @@ mod tests {
             (5, Some(5), "BLOCK"),
             (1, None, "MISS"),
             (4, None, "DEFLECT"),
-            (11, None, "REFLECT"),
         ] {
             let mut app = app();
             let caster = caster(&mut app, Vec3::ZERO);
@@ -962,7 +1053,7 @@ mod tests {
                 .spawn(GlobalTransform::from_xyz(2.4, 0.0, 0.0))
                 .id();
             let mut spawn = go(caster, target, true);
-            spawn.targets = vec![(target, Some(code))];
+            spawn.targets[0].miss = Some(code);
             app.world_mut().write_message(spawn);
             step(&mut app, 0.10);
             step(&mut app, 0.10);
@@ -1033,5 +1124,157 @@ mod tests {
         assert_eq!(launched.len(), 1);
         assert_eq!(launched[0].1, hand);
         assert!((launched[0].0 - 1.0).abs() < 1e-3, "full flight time");
+    }
+
+    /// [`app`] with the flight, so an arrival lands and a relaunch flies on.
+    fn flying_app() -> App {
+        let mut app = app();
+        app.add_systems(Update, move_missiles.after(spawn_missiles));
+        app
+    }
+
+    fn drain<M: Message>(app: &mut App) -> Vec<M> {
+        app.world_mut()
+            .resource_mut::<Messages<M>>()
+            .drain()
+            .collect()
+    }
+
+    /// A reflected missile reports REFLECT and plays Dodge on the reflector (`0x61ddf7`), then
+    /// turns back at its caster (`0x61e17b`): relaunched from the reflector with its flight fitted
+    /// again (`0x61ceb0`), already due after a full flight, so at 100 yd/s (`0x61d00b`). Its second
+    /// arrival reports the reflect byte at the caster, or for 0 lands as a hit (`0x61e19d`).
+    #[test]
+    fn a_reflected_missile_turns_back_and_its_second_arrival_reports_the_reflect_byte() {
+        for reflect in [2u8, 0] {
+            let mut app = flying_app();
+            let caster = caster(&mut app, Vec3::new(0.0, 1.5, 0.0));
+            let reflector = app
+                .world_mut()
+                .spawn(GlobalTransform::from_xyz(24.0, 0.0, 0.0))
+                .id();
+            let mut spawn = go(caster, reflector, false);
+            spawn.targets[0] = MissileTarget {
+                unit: reflector,
+                miss: Some(11),
+                reflect,
+            };
+            app.world_mut().write_message(spawn);
+            step(&mut app, 0.016); // the launch: 24 yd at 24 yd/s
+            step(&mut app, 0.5);
+            step(&mut app, 0.5); // the reflector reached
+            let defenses: Vec<_> = drain::<DefenseAnim>(&mut app)
+                .into_iter()
+                .map(|d| (d.victim, d.victim_state))
+                .collect();
+            assert_eq!(defenses, [(reflector, 2)], "Dodge on the reflector");
+            let words: Vec<_> = drain::<MissileMiss>(&mut app)
+                .into_iter()
+                .map(|w| (w.anchor, w.caster, w.code))
+                .collect();
+            assert_eq!(
+                words,
+                [(reflector, caster, 11)],
+                "REFLECT over the reflector"
+            );
+            let flying = missiles(&mut app);
+            assert_eq!(flying.len(), 1, "the missile flies on");
+            let (arrive_in, at) = flying[0];
+            assert_eq!(at, Vec3::new(24.0, 0.0, 0.0), "from the reflector");
+            assert!(
+                (arrive_in - 24.0 / 100.0).abs() < 1e-4,
+                "24 yd back at 100 yd/s: {arrive_in}"
+            );
+            drain::<CastEvent>(&mut app);
+            step(&mut app, 0.25); // the caster reached
+            assert!(missiles(&mut app).is_empty(), "the second arrival ends it");
+            let words: Vec<_> = drain::<MissileMiss>(&mut app)
+                .into_iter()
+                .map(|w| (w.anchor, w.caster, w.code))
+                .collect();
+            let impacts: Vec<_> = drain::<CastEvent>(&mut app)
+                .into_iter()
+                .map(|e| (e.entity, e.kind))
+                .collect();
+            if reflect == 0 {
+                assert!(words.is_empty(), "a reflected hit reports nothing");
+                assert_eq!(
+                    impacts,
+                    [(
+                        caster,
+                        CastEventKind::Impact {
+                            weapon_visual: None,
+                            wound: true,
+                        }
+                    )],
+                    "the hit arrival at the caster"
+                );
+            } else {
+                assert_eq!(
+                    words,
+                    [(caster, caster, reflect)],
+                    "the outcome at the caster"
+                );
+                assert!(impacts.is_empty(), "no impact for a miss");
+            }
+        }
+    }
+
+    /// A missile at a point walks the list it carries on arrival (`0x61d870`): after the caster's
+    /// area kit, a hit list plays each unit's impact kits with no wound (`0x61da2d`), and a miss
+    /// list reports each unit with a nonzero reason (`0x61d9b2`), its code as the wire gave it.
+    #[test]
+    fn a_ground_arrival_walks_its_list() {
+        let mut app = app();
+        let caster = caster(&mut app, Vec3::ZERO);
+        let [a, b, c, d] = [(); 4].map(|_| {
+            app.world_mut()
+                .spawn(GlobalTransform::from_xyz(1.0, 0.0, 0.0))
+                .id()
+        });
+        // 0.24 yd at speed 24 = a 0.01 s flight; parked 0.2 s → arrival at the release.
+        let at = Vec3::new(0.24, 0.0, 0.0);
+        let mut spawn = ground_go(caster, at);
+        spawn.awaits_release = true;
+        spawn.grounds = vec![
+            GroundShot {
+                at,
+                list: GroundList::Hits(vec![a, b]),
+            },
+            GroundShot {
+                at,
+                list: GroundList::Misses(vec![(c, 4), (d, 0)]),
+            },
+        ];
+        app.world_mut().write_message(spawn);
+        step(&mut app, 0.10);
+        step(&mut app, 0.10);
+        app.world_mut().write_message(AnimSoundEvent {
+            entity: caster,
+            ident: *b"$CSL",
+            data: 0,
+            anim_id: 0,
+            pos: None,
+        });
+        step(&mut app, 0.016);
+        let events: Vec<_> = drain::<CastEvent>(&mut app)
+            .into_iter()
+            .map(|e| (e.entity, e.kind))
+            .collect();
+        let impact = CastEventKind::Impact {
+            weapon_visual: None,
+            wound: false,
+        };
+        let ground = CastEventKind::GroundImpact { pos: at };
+        assert_eq!(
+            events,
+            [(caster, ground), (a, impact), (b, impact), (caster, ground)],
+            "each shot's area kit, then the hit list's impacts"
+        );
+        let words: Vec<_> = drain::<MissileMiss>(&mut app)
+            .into_iter()
+            .map(|w| (w.anchor, w.caster, w.code))
+            .collect();
+        assert_eq!(words, [(c, caster, 4)], "the nonzero reason, unrewritten");
     }
 }

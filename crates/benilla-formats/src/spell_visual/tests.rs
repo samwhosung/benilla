@@ -106,6 +106,7 @@ fn parses_stage_kits_and_zero_means_no_kit_at_that_stage() {
                 area_gate: g(11),
                 area_effect: g(12),
                 area_kit: g(13),
+                flags: g(15),
             },
         );
     }
@@ -235,8 +236,12 @@ fn real_spell_visual_chain_resolves_fireball() {
             area_gate: 0,
             area_effect: 0,
             area_kit: 0,
+            flags: 0,
         }
     );
+    // Frostbolt's visual 13 sets field 15's bit 0: at a point it still flies one missile per
+    // unit (`0x6e8aab`).
+    assert_eq!(cat.stages(13).map(|s| s.flags), Some(1));
     assert_eq!(
         cat.stages(93).and_then(|s| s.strike_sound),
         Some(1143),
@@ -614,6 +619,7 @@ fn the_weapon_merge_fills_only_the_empty_slots() {
         area_gate: 1,
         area_effect: 7,
         area_kit: 9,
+        flags: 1, // +0x3c, never merged
     };
     // Multi-Shot's real shape: its own impact + missile, both body kits empty.
     let own = VisualStages {

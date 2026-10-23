@@ -644,13 +644,17 @@ pub(crate) enum CastEventKind {
     /// `0x614150(spell, 0)` with no cast edge of its own: the spell's kits stop on the unit, as
     /// the auto-repeat stop stops the repeat spell's (`0x6ea139`).
     Reap,
-    /// The spell landed on this unit (a missile arrival, `0x61dc50`): impact kit, then state kit.
-    /// `weapon_visual` is the caster's ranged-weapon `SpellVisual` (`0x60d450`), carried from the
-    /// GO since the caster may despawn.
-    Impact { weapon_visual: Option<u32> },
+    /// The spell landed on this unit: impact kit, then state kit. A missile's hit arrival
+    /// (`0x61dc50`) plays the wound first (`wound`); a missile at a point plays the kits alone on
+    /// each unit of its hit list (`0x61da2d`). `weapon_visual` is the caster's ranged-weapon
+    /// `SpellVisual` (`0x60d450`), carried from the GO since the caster may despawn.
+    Impact {
+        weapon_visual: Option<u32>,
+        wound: bool,
+    },
     /// A projectile with no live target at arrival (`0x61d870`, a despawned target too): the kit
     /// plays on the caster (`entity`) at `pos` (`0x61d8e7`), `SpellVisual` field 13, stage 3. Sent
-    /// here only for a dest-targeted GO's missile with no hit (`MissileSpawn::ground_aim`).
+    /// here for a missile flown at the GO's point (`MissileSpawn::grounds`).
     GroundImpact { pos: Vec3 },
 }
 
@@ -791,12 +795,15 @@ pub(crate) struct SpellGoTargets {
     pub(crate) spell_id: u32,
     /// Units the spell landed on; each gets the impact hand-off.
     pub(crate) hits: Vec<Entity>,
-    /// Missed units with `SpellMissInfo`: the arrival plays Dodge (30) or ShieldBlock (24), never
-    /// Parry (`0x61ceb0`), and no impact kit; the deflect glance-off flight is not built.
-    pub(crate) misses: Vec<(Entity, u8)>,
-    /// A dest-targeted cast's ground point, in bevy coords; not read, the reference's
-    /// dest-anchored launch visual is untraced.
+    /// Missed units with `SpellMissInfo` and the byte a reflect (11) carries after it
+    /// (`0x6e8279`), the outcome its turned-back flight takes at the caster (`0x61e17b`).
+    pub(crate) misses: Vec<(Entity, u8, u8)>,
+    /// A dest-targeted cast's ground point, in bevy coords.
     pub(crate) dest: Option<Vec3>,
+    /// The GO target block's mask, as far as the decode keeps it: UNIT (0x2) with a unit target,
+    /// GAMEOBJECT (0x800) with an object one, DEST_LOCATION (0x40) with a point. The decode drops
+    /// a SOURCE_LOCATION (0x20) point, and the bit with it.
+    pub(crate) target_mask: u16,
     /// The GO's ammo block (`castFlags & 0x20`): the ammo's `ItemDisplayInfo` id, the missile model
     /// when the visual chain has none (`0x479f40`).
     pub(crate) ammo_display_id: Option<u32>,
@@ -867,8 +874,8 @@ use spell_visual::{
 #[cfg(test)]
 pub(crate) use spell_visual::arm_aura_state_fx as arm_aura_state_fx_for_test;
 pub(crate) use spell_visual::{
-    held_strike_sound, ChainProcPlay, FxClass, FxStage, KitPush, MissileSpawn, PrecastTables,
-    PrecastVisuals, SpellKitFx, SpellKitShake, SpellKitSound, SpellVisuals,
+    held_strike_sound, ChainProcPlay, FxClass, FxStage, GroundList, KitPush, MissileSpawn,
+    PrecastTables, PrecastVisuals, SpellKitFx, SpellKitShake, SpellKitSound, SpellVisuals,
 };
 
 /// The per-unit animation state machine; `Transform` is required, its scale divides the rate, and

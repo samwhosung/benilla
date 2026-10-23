@@ -9,8 +9,8 @@ use benilla_formats::{SpellCatalog, SpellDisplay, SpellVisualCatalog, VisualKit,
 
 use super::super::{CastEvent, CastEventKind, CastHold, EmoteAnim, SheathRequest, WoundAnim};
 use super::{
-    route_cast_visuals, KitPush, MissileSpawn, SpellKitFx, SpellKitShake, SpellKitSound,
-    SpellVisuals,
+    launcher_shots, route_cast_visuals, GroundList, GroundShot, KitPush, MissileSpawn,
+    MissileTarget, SpellKitFx, SpellKitShake, SpellKitSound, SpellVisuals,
 };
 use crate::creature_anim::SpellGoTargets;
 
@@ -527,6 +527,7 @@ fn a_go_with_no_caster_unit_plays_its_instant_impacts() {
         hits: vec![target],
         misses: Vec::new(),
         dest: None,
+        target_mask: 0x2,
         ammo_display_id: None,
         seq: 1,
     });
@@ -893,6 +894,7 @@ fn a_harmful_go_wounds_each_hit_once_and_a_missile_arrival_always() {
             hits: vec![target],
             misses: Vec::new(),
             dest: None,
+            target_mask: 0x2,
             ammo_display_id: None,
             seq: 1,
         });
@@ -904,6 +906,7 @@ fn a_harmful_go_wounds_each_hit_once_and_a_missile_arrival_always() {
         HELPFUL,
         CastEventKind::Impact {
             weapon_visual: None,
+            wound: true,
         },
     ));
     app.update();
@@ -948,6 +951,7 @@ fn missile_spawn_defers_iff_the_cast_kit_animates() {
                 ANIMATED_VISUAL,
                 VisualStages {
                     cast: CAST_KIT,
+                    missile_gate: 1,
                     ..Default::default()
                 },
             ),
@@ -955,6 +959,7 @@ fn missile_spawn_defers_iff_the_cast_kit_animates() {
                 SILENT_VISUAL,
                 VisualStages {
                     cast: MUTE_KIT,
+                    missile_gate: 1,
                     ..Default::default()
                 },
             ),
@@ -962,6 +967,7 @@ fn missile_spawn_defers_iff_the_cast_kit_animates() {
                 STANDING_VISUAL,
                 VisualStages {
                     cast: STAND_KIT,
+                    missile_gate: 1,
                     ..Default::default()
                 },
             ),
@@ -1030,6 +1036,7 @@ fn missile_spawn_defers_iff_the_cast_kit_animates() {
             hits: vec![target],
             misses: Vec::new(),
             dest: None,
+            target_mask: 0x2,
             ammo_display_id: None,
             seq: 1,
         });
@@ -1114,6 +1121,7 @@ fn a_targetless_dest_go_spawns_a_ground_missile_whose_arrival_sounds_at_the_poin
         hits: Vec::new(),
         misses: Vec::new(),
         dest: Some(at),
+        target_mask: 0x40,
         ammo_display_id: None,
         seq: 1,
     });
@@ -1124,7 +1132,13 @@ fn a_targetless_dest_go_spawns_a_ground_missile_whose_arrival_sounds_at_the_poin
         .drain()
         .collect();
     assert_eq!(spawns.len(), 1, "one projectile at the point");
-    assert_eq!(spawns[0].ground_aim, Some(at));
+    assert_eq!(
+        spawns[0].grounds,
+        [GroundShot {
+            at,
+            list: GroundList::Hits(Vec::new())
+        }]
+    );
     assert!(spawns[0].targets.is_empty(), "no unit owns it");
     assert!(
         app.world_mut()
@@ -1932,6 +1946,7 @@ fn a_state_kits_anim_is_a_recompute_and_never_a_second_play() {
         hits: vec![victim],
         misses: Vec::new(),
         dest: None,
+        target_mask: 0x2,
         ammo_display_id: None,
         seq: 1,
     });
@@ -2614,4 +2629,160 @@ fn a_go_stops_the_running_auto_repeat_spells_hold_and_loop_on_its_caster() {
     );
     assert_eq!(hold(&app, hunter), Some(AUTO_SHOT));
     assert_eq!(loops.held(hunter), Some((AUTO_SHOT, AUTO_SHOT_LOOP)));
+}
+
+/// A GO of `hits` and `misses` (target, code, reflect byte) under `target_mask`, at `dest`.
+fn launcher_go(
+    target_mask: u16,
+    hits: Vec<Entity>,
+    misses: Vec<(Entity, u8, u8)>,
+    dest: Option<Vec3>,
+) -> SpellGoTargets {
+    SpellGoTargets {
+        caster: None,
+        spell_id: 1,
+        hits,
+        misses,
+        dest,
+        target_mask,
+        ammo_display_id: None,
+        seq: 1,
+    }
+}
+
+/// A ground-cast travelling spell with units in its area flies one missile at the point carrying
+/// the hit list (`0x6e8ba4`, `0x6e8bd4`), and a second one carrying the miss list with its reasons
+/// (`0x6e8279`); none flies at a unit.
+#[test]
+fn a_ground_go_flies_one_missile_at_the_point_per_list() {
+    let mut world = World::new();
+    let [a, b, c] = [(); 3].map(|_| world.spawn_empty().id());
+    let at = Vec3::new(5.0, 0.0, 9.0);
+    let go = launcher_go(0x40, vec![a, b], vec![(c, 2, 0)], Some(at));
+    let shots = launcher_shots(&go, 0, |_| false);
+    assert!(shots.targets.is_empty(), "no missile at a unit");
+    assert_eq!(
+        shots.grounds,
+        [
+            GroundShot {
+                at,
+                list: GroundList::Hits(vec![a, b]),
+            },
+            GroundShot {
+                at,
+                list: GroundList::Misses(vec![(c, 2)]),
+            },
+        ]
+    );
+}
+
+/// A point in the mask flies per unit only when the visual's field 15 has bit 0 (`0x6e8aab`,
+/// `0x6e8ad4`); with UNIT and no point it always does (`0x6e8ac6`), and a mask with neither flies
+/// nothing for a nonempty list (`0x6e8ba4`).
+#[test]
+fn a_point_flies_per_unit_only_under_the_visuals_bit() {
+    let mut world = World::new();
+    let a = world.spawn_empty().id();
+    let at = Vec3::ONE;
+    let hit = MissileTarget {
+        unit: a,
+        miss: None,
+        reflect: 0,
+    };
+    let per_unit = launcher_shots(&launcher_go(0x42, vec![a], Vec::new(), Some(at)), 1, |_| {
+        false
+    });
+    assert_eq!(
+        (per_unit.targets, per_unit.grounds),
+        (vec![hit], Vec::new())
+    );
+    let at_point = launcher_shots(&launcher_go(0x42, vec![a], Vec::new(), Some(at)), 0, |_| {
+        false
+    });
+    assert!(at_point.targets.is_empty());
+    assert_eq!(at_point.grounds.len(), 1, "one missile at the point");
+    let unit = launcher_shots(&launcher_go(0x2, vec![a], Vec::new(), None), 0, |_| false);
+    assert_eq!((unit.targets, unit.grounds), (vec![hit], Vec::new()));
+    let neither = launcher_shots(&launcher_go(0, vec![a], Vec::new(), None), 1, |_| false);
+    assert!(neither.targets.is_empty() && neither.grounds.is_empty());
+}
+
+/// The per-unit arm passes over a dead unit (`0x6e8b24`) and gives a missed one its reason and
+/// the byte a reflect carries (`0x6e8b3a`, the launcher's last argument at `0x6e8279`).
+#[test]
+fn the_per_unit_arm_skips_the_dead_and_carries_the_reflect_byte() {
+    let mut world = World::new();
+    let [alive, dead, reflector] = [(); 3].map(|_| world.spawn_empty().id());
+    let go = launcher_go(0x2, vec![alive, dead], vec![(reflector, 11, 2)], None);
+    let shots = launcher_shots(&go, 0, |e| e == dead);
+    assert_eq!(
+        shots.targets,
+        [
+            MissileTarget {
+                unit: alive,
+                miss: None,
+                reflect: 0,
+            },
+            MissileTarget {
+                unit: reflector,
+                miss: Some(11),
+                reflect: 2,
+            },
+        ]
+    );
+}
+
+/// The launcher needs the visual's field 6 or the wire's ammo (`0x6e8a7f`, `0x6e8a88`): a
+/// travelling spell with neither flies nothing, and so plays no impact.
+#[test]
+fn a_travelling_spell_without_a_missile_or_ammo_flies_nothing() {
+    const BOLT: u32 = 17483;
+    const BOLT_VISUAL: u32 = 900;
+    let mut app = app();
+    app.insert_resource(SpellVisuals(SpellVisualCatalog::from_tables(
+        HashMap::from([(
+            BOLT_VISUAL,
+            VisualStages {
+                impact: 286,
+                ..Default::default()
+            },
+        )]),
+        HashMap::new(),
+    )));
+    app.insert_resource(crate::ui_action::Spells {
+        catalog: SpellCatalog::from_displays(HashMap::from([(
+            BOLT,
+            SpellDisplay {
+                visual: BOLT_VISUAL,
+                speed: 24.0,
+                ..Default::default()
+            },
+        )])),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    let caster = app.world_mut().spawn_empty().id();
+    let target = app.world_mut().spawn_empty().id();
+    for ammo_display_id in [None, Some(5996)] {
+        app.world_mut().write_message(SpellGoTargets {
+            caster: Some(caster),
+            spell_id: BOLT,
+            hits: vec![target],
+            misses: Vec::new(),
+            dest: None,
+            target_mask: 0x2,
+            ammo_display_id,
+            seq: 1,
+        });
+        app.update();
+        let spawns = app
+            .world_mut()
+            .resource_mut::<Messages<MissileSpawn>>()
+            .drain()
+            .count();
+        assert_eq!(
+            spawns,
+            usize::from(ammo_display_id.is_some()),
+            "ammo {ammo_display_id:?}"
+        );
+    }
 }
