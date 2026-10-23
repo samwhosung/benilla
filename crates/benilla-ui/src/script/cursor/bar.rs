@@ -994,4 +994,20 @@ mod tests {
             ["ACTIONBAR_SLOT_CHANGED 1"]
         );
     }
+
+    /// A passive spell's refusal shows inside `PlaceAction` (`0x4e63ad` → `0x496720`): the chunk's
+    /// next line reads it.
+    #[test]
+    fn a_passive_spells_refusal_shows_inside_its_call() {
+        use crate::script::ui_errors::shown::seen_in_call;
+        let mut s = UiScript::new().unwrap();
+        s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
+            spell_id: 674,
+            texture: None,
+            passive: true,
+        }));
+        let (seen, _) = seen_in_call(&mut s, "PlaceAction(4)");
+        assert_eq!(seen, super::PASSIVE_ON_BAR_ERROR);
+        assert!(s.take_ui_errors().is_empty(), "nothing waits for the feed");
+    }
 }

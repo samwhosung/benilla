@@ -1557,4 +1557,26 @@ mod tests {
         assert!(s.cursor_item().is_none());
         assert!(s.eval::<bool>("return IsInventoryItemLocked(1)").unwrap());
     }
+
+    /// `UseInventoryItem`'s gate refusal shows inside the verb (`0x5d8eaa` → `0x496720`): the
+    /// chunk's next line reads it.
+    #[test]
+    fn a_worn_items_use_refusal_shows_inside_its_call() {
+        use crate::script::ui_errors::shown::seen_in_call;
+        let mut s = UiScript::new().unwrap();
+        let mut doll: crate::script::InventorySlots = Default::default();
+        doll[13] = Some(InvSlotView {
+            item_id: 871,
+            guid: 0x31,
+            link: Some("|Hitem:871:0:0:0|h[Trinket]|h".into()),
+            use_spell: 7744,
+            ..Default::default()
+        });
+        s.set_inventory_slots(doll);
+        s.set_player_control(false);
+        let (seen, host) = seen_in_call(&mut s, "UseInventoryItem(13)");
+        assert_eq!(seen, "ERR_CLIENT_LOCKED_OUT");
+        assert!(host.calls.is_empty(), "nothing else is asked");
+        assert!(s.take_ui_errors().is_empty(), "nothing waits for the feed");
+    }
 }

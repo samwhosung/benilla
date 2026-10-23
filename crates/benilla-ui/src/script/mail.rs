@@ -2578,6 +2578,69 @@ mod tests {
             "nothing known refuses"
         );
     }
+
+    /// Each mail verb's refusal shows inside its call (`0x496720`), so the chunk's next line reads
+    /// it: a row's unpayable COD (`0x4afa4c`), money beyond the purse, a bound attachment, and a
+    /// send whose attachment is gone, which shows its line before it drops the attachment and
+    /// signals (`0x4ae957` ahead of `0x4ae96f`-`0x4ae98d`).
+    #[test]
+    fn the_mail_verbs_refusals_show_inside_their_calls() {
+        use crate::script::cursor::two_item_bag;
+        use crate::script::ui_errors::shown::seen_in_call;
+        let mut s = UiScript::new().unwrap();
+        s.set_unit("player", Some(crate::script::UnitState::default()));
+        let mut cod = row(2589);
+        cod.cod = 100;
+        cod.mail_id = 1;
+        s.set_mail(Some(MailState {
+            inbox: vec![cod],
+            open: true,
+        }));
+        assert_eq!(
+            seen_in_call(&mut s, "TakeInboxItem(1)").0,
+            "ERR_NOT_ENOUGH_MONEY"
+        );
+        assert_eq!(
+            seen_in_call(&mut s, "SetSendMailMoney(9999)").0,
+            "ERR_NOT_ENOUGH_MONEY"
+        );
+        let mut bag = two_item_bag();
+        bag.slots.get_mut(&2).unwrap().already_bound = true;
+        s.set_container(0, Some(bag.clone()));
+        assert_eq!(
+            seen_in_call(
+                &mut s,
+                "PickupContainerItem(0, 2) ClickSendMailItemButton()"
+            )
+            .0,
+            "ERR_MAIL_BOUND_ITEM"
+        );
+        seen_in_call(
+            &mut s,
+            "ClearCursor() PickupContainerItem(0, 1) ClickSendMailItemButton()",
+        );
+        select_default_stationery(&mut s);
+        // A template, so `GetSendMailItem` answers the attachment (`0x4ae604`).
+        s.set_item_template(117, Default::default());
+        bag.slots.get_mut(&1).unwrap().guid += 0x1000;
+        s.set_container(0, Some(bag));
+        s.run(
+            r#"local f = CreateFrame("Frame")
+            f:RegisterEvent("UI_ERROR_MESSAGE")
+            f:SetScript("OnEvent", function() HELD = GetSendMailItem() ~= nil end)"#,
+        )
+        .unwrap();
+        assert_eq!(
+            seen_in_call(&mut s, "SendMail('Bob', 'Hi', 'b')").0,
+            "ERR_ITEM_NOT_FOUND"
+        );
+        assert!(
+            s.eval::<bool>("return HELD").unwrap(),
+            "the line's listener reads the attachment still held"
+        );
+        assert!(s.eval::<bool>("return GetSendMailItem() == nil").unwrap());
+        assert!(s.take_ui_errors().is_empty(), "nothing waits for the feed");
+    }
 }
 
 #[cfg(test)]
