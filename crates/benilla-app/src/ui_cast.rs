@@ -61,6 +61,9 @@ pub(crate) enum CastReport {
     AutoRepeat(bool),
     /// The frame's retry of the refused lines that wait on an item's record (`0x6e29b0`).
     Redisplay,
+    /// A line the cast validator shows itself through `CGGameUI::DisplayError 0x496720`, outside
+    /// `ReportCastFailure`: a learn rung's, or the tame rung's ahead of its report.
+    Line(crate::ui_action::UiError),
 }
 
 /// Our cast's reports in the order they were made: one lane ([`crate::lanes`]), so a refusal's line
@@ -84,6 +87,11 @@ impl CastReports {
     /// A refusal's line; [`crate::spell::CastCore::report`] pushes its event tail after it.
     pub(crate) fn refused(&mut self, fail: CastFail) {
         self.push(CastReport::Refused(fail));
+    }
+
+    /// [`CastReport::Line`].
+    pub(crate) fn line(&mut self, line: crate::ui_action::UiError) {
+        self.push(CastReport::Line(line));
     }
 
     /// `SMSG_PET_CAST_FAILED` (`0x6e8eb0`): one message, no log line and no event.
@@ -389,6 +397,12 @@ impl CastReporter<'_, '_> {
                     out.push(Ready::Event("STOP_AUTOREPEAT_SPELL", vec![]))
                 }
                 CastReport::Redisplay => out.extend(self.redisplays(script)),
+                CastReport::Line(e) => {
+                    let get = |key: &str| script.lua().globals().get::<String>(key).ok();
+                    if let Some(text) = crate::ui_action::ui_error_text(&e, &get).filter(|_| false) {
+                        out.extend(self.line(Shown::keyed(e.key, text)));
+                    }
+                }
             }
         }
         out

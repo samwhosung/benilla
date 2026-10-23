@@ -370,6 +370,7 @@ mod tests {
                     CastReport::AutoRepeat(true) => "START_AUTOREPEAT".into(),
                     CastReport::AutoRepeat(false) => "STOP_AUTOREPEAT".into(),
                     CastReport::Redisplay => "REDISPLAY".into(),
+                    CastReport::Line(e) => e.key.into(),
                 })
                 .collect()
         }

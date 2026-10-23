@@ -17,6 +17,7 @@ use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::net::{NetCommands, NetHandlerApp, ObjectStore, Objects, SelfPlayer};
 use crate::query_cache::Ask;
+use crate::spell::known::{PetReads, PetView};
 use crate::spell::{cast_target, CastCommit, CastLadder};
 use crate::ui_action::{PlayerActions, Spells};
 use crate::ui_items::{count_of, item_icon, InventoryScope};
@@ -75,147 +76,37 @@ fn skill_total(store: &ObjectStore, skill_id: u32) -> i32 {
     (rank + i32::from(s.temp_bonus)).max(0)
 }
 
-/// A unit the craft rows ask about a pet spell, as `0x468460` finds it by guid with type 8: its
-/// guid, and its creature family's two skill lines when its creature record names a family row.
-struct PetUnit {
-    guid: u64,
-    lines: Option<[u32; 2]>,
-    /// `UNIT_FIELD_BYTES_0`'s race and class bytes (`+0x78`, `+0x79`).
-    race: u8,
-    class: u8,
-}
-
-/// What the craft rows read of the pet: the pet bar's guid (`0xb714a0`) and its spellbook
-/// (`0xb6f098`), the units, and the family table.
-#[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct PetReads<'w> {
-    bar: Option<Res<'w, crate::ui_pet::PetBar>>,
-    names: Option<Res<'w, crate::names::NameCache>>,
-    families: Option<Res<'w, crate::ui_pet_stats::PetFamilyTables>>,
-}
-
-/// The pet as the craft rows see it, resolved once per build.
-struct PetView<'a> {
-    bar_guid: u64,
-    /// The pet book's spells, the ids `KnowsSpell` scans for the pet bar's unit (`0x60c7a0`):
-    /// the bar packet's book words that pass the book's add gate (`0x4b2f90`).
-    book: Vec<u32>,
-    reads: &'a PetReads<'a>,
-    skill_lines: &'a SkillLines,
-}
-
-impl PetView<'_> {
-    /// The unit behind `guid`, when it is a streamed unit.
-    fn unit(&self, objects: &Objects, guid: u64) -> Option<PetUnit> {
-        let fields = objects.object(guid).filter(|_| guid != 0)?;
-        if !matches!(
-            fields.object_type(),
-            Some(benilla_protocol::messages::ObjectType::Unit)
-                | Some(benilla_protocol::messages::ObjectType::Player)
-        ) {
-            return None;
+/// `GetCraftInfo`'s training-point cost and required level (`0x4f6fe6`-`0x4f7093`), from the
+/// pet bar's unit (`0xb714a0`): each effect slot that is `LEARN_SPELL` aimed at the pet
+/// (`+0x148` 5) or `LEARN_PET_SPELL` (`0x4f702e`-`0x4f7037`) names a learned spell; its ability
+/// row's `reqtrainpoints`, written only when found (`0x4f7049`), and its required level,
+/// written only when `0x60c840` answers. The last such slot wins; no pet unit is 0 and 0.
+fn cost_and_level(
+    pet: &PetView,
+    d: &benilla_formats::SpellDisplay,
+    objects: &Objects,
+) -> (u32, i32) {
+    let Some(unit) = pet.unit(objects, pet.bar_guid) else {
+        return (0, 0);
+    };
+    let (mut cost, mut level) = (0, 0);
+    for i in 0..3 {
+        let effect = d.effects[i];
+        let pet_learn = (effect == SPELL_EFFECT_LEARN_SPELL
+            && d.effect_implicit_target_a[i] == TARGET_PET)
+            || effect == SPELL_EFFECT_LEARN_PET_SPELL;
+        if !pet_learn {
+            continue;
         }
-        let lines = fields
-            .object_entry()
-            .and_then(|e| self.reads.names.as_deref()?.creature_record(e))
-            .and_then(|r| self.reads.families.as_deref()?.families.get(r.pet_family))
-            .map(|f| f.skill_lines);
-        Some(PetUnit {
-            guid,
-            lines,
-            race: fields.unit_race().unwrap_or(0),
-            class: fields.unit_class().unwrap_or(0),
-        })
-    }
-
-    /// `KnowsSpell` (`0x60c740`) for a unit that is not the active player: only the pet bar's
-    /// unit knows anything (`0x60c77a`-`0x60c790`), the spells of its book.
-    fn knows(&self, unit: &PetUnit, spell: u32) -> bool {
-        unit.guid == self.bar_guid && self.book.contains(&spell)
-    }
-
-    /// `FindSkillLineAbility` (`0x60c7c0`) for a creature: the first row on its family's lines, in
-    /// their order (`0x60c7f3`-`0x60c80a`), each a file-order scan (`0x6de0d0`). A unit with no
-    /// family answers none here; the reference indexes a unit with no creature record by race
-    /// and class (`0x60c813`), which no pet bar holds.
-    fn ability(&self, unit: &PetUnit, spell: u32) -> Option<(u32, benilla_formats::LineAbility)> {
-        unit.lines?.into_iter().find_map(|line| {
-            self.skill_lines
-                .catalog
-                .line_ability(line, spell)
-                .map(|row| (line, *row))
-        })
-    }
-
-    /// `GetSpellRequiredLevel` (`0x60c840`): `None` without a spell record or an ability row,
-    /// else the spell's `spellLevel` (`+0x74`) raised to the `SkillRaceClassInfo` level
-    /// (`+0x14`) of the row's line for the unit's race and class, when one admits them
-    /// (`0x60c891`-`0x60c8a4`). No pet line has such a row.
-    fn required_level(&self, unit: &PetUnit, spell: u32, spells: &Spells) -> Option<i32> {
-        let d = spells.catalog.get(spell)?;
-        let (line, _) = self.ability(unit, spell)?;
-        let level = d.spell_level as i32;
-        Some(
-            match self
-                .skill_lines
-                .catalog
-                .race_class(line, unit.race, unit.class)
-            {
-                Some(rc) => level.max(rc.min_level as i32),
-                None => level,
-            },
-        )
-    }
-
-    /// `GetCraftInfo`'s training-point cost and required level (`0x4f6fe6`-`0x4f7093`), from the
-    /// pet bar's unit (`0xb714a0`): each effect slot that is `LEARN_SPELL` aimed at the pet
-    /// (`+0x148` 5) or `LEARN_PET_SPELL` (`0x4f702e`-`0x4f7037`) names a learned spell; its ability
-    /// row's `reqtrainpoints`, written only when found (`0x4f7049`), and its required level,
-    /// written only when `0x60c840` answers. The last such slot wins; no pet unit is 0 and 0.
-    fn cost_and_level(
-        &self,
-        d: &benilla_formats::SpellDisplay,
-        objects: &Objects,
-        spells: &Spells,
-    ) -> (u32, i32) {
-        let Some(unit) = self.unit(objects, self.bar_guid) else {
-            return (0, 0);
-        };
-        let (mut cost, mut level) = (0, 0);
-        for i in 0..3 {
-            let effect = d.effects[i];
-            let pet_learn = (effect == SPELL_EFFECT_LEARN_SPELL
-                && d.effect_implicit_target_a[i] == TARGET_PET)
-                || effect == SPELL_EFFECT_LEARN_PET_SPELL;
-            if !pet_learn {
-                continue;
-            }
-            let taught = d.effect_trigger_spell[i];
-            if let Some((_, row)) = self.ability(&unit, taught) {
-                cost = row.train_points;
-            }
-            if let Some(l) = self.required_level(&unit, taught, spells) {
-                level = l;
-            }
+        let taught = d.effect_trigger_spell[i];
+        if let Some((_, row)) = pet.ability(&unit, taught) {
+            cost = row.train_points;
         }
-        (cost, level)
-    }
-
-    /// `KnowsHigherRank` (`0x60c8d0`): a later rank down the unit's ability rows' supersede chain
-    /// (`+0x20`) that the unit knows.
-    fn knows_higher_rank(&self, unit: &PetUnit, spell: u32) -> bool {
-        let mut row = self.ability(unit, spell);
-        for _ in 0..16 {
-            let Some((_, r)) = row.filter(|(_, r)| r.superseded_by > 0) else {
-                return false;
-            };
-            if self.knows(unit, r.superseded_by) {
-                return true;
-            }
-            row = self.ability(unit, r.superseded_by);
+        if let Some(l) = pet.required_level(&unit, taught) {
+            level = l;
         }
-        false
     }
+    (cost, level)
 }
 
 /// A craft row's bucket (`0x4f61a8`-`0x4f63cc`). A missing ability row or a trivial high of 0
@@ -436,18 +327,7 @@ fn feed_craft(
                 .then(|| display_line(listed.first().copied(), skill_lines, store))
                 .flatten()
                 .map_or((None, 0, 0), |(n, r, m)| (Some(n), r, m));
-            let pet = pet_reads.bar.as_deref().map(|bar| PetView {
-                bar_guid: bar.spells.pet_guid,
-                book: bar
-                    .spells
-                    .spells
-                    .iter()
-                    .map(|e| e.action())
-                    .filter(|&s| spells.catalog.get(s).is_some_and(|d| d.in_pet_book()))
-                    .collect(),
-                reads: &pet_reads,
-                skill_lines,
-            });
+            let pet = PetView::of(&pet_reads, &skill_lines.catalog, &spells.catalog);
             let recipes: Vec<CraftRecipe> = listed
                 .iter()
                 .filter_map(|&s| {
@@ -505,7 +385,7 @@ fn feed_craft(
                     let icon = craft_icon(d);
                     let (training_point_cost, required_level) = pet
                         .as_ref()
-                        .map_or((0, 0), |p| p.cost_and_level(d, &objects, spells));
+                        .map_or((0, 0), |p| cost_and_level(p, d, &objects));
                     Some(CraftRecipe {
                         spell_id: s,
                         name: d.name.clone(),

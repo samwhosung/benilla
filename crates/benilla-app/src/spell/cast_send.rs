@@ -194,6 +194,16 @@ pub(crate) struct CastLadder<'w, 's> {
     unit_attack: Option<ResMut<'w, UnitAttackOwed>>,
     /// Our stop in flight (`[+0xc54]`).
     stop_word: ResMut<'w, crate::creature_anim::AttackStopInFlight>,
+    /// What the validator's learn rungs ask the caster and its pet know (`0x60c740`-`0x60c8d0`).
+    known: KnownReads<'w>,
+}
+
+/// The known spells the validator's learn rungs read: the active player's book (`0xb710fc`), and
+/// the pet's book, records and family lines.
+#[derive(SystemParam)]
+pub(crate) struct KnownReads<'w> {
+    actions: Option<Res<'w, crate::ui_action::PlayerActions>>,
+    pet: super::known::PetReads<'w>,
 }
 
 /// Whether `ReportCastFailure 0x6e1a00` reaches its tail for `fail`
@@ -526,7 +536,38 @@ impl CastLadder<'_, '_> {
                     .is_some_and(|e| self.edits.attacking(e)),
                 attack: self.unit_attack.as_deref_mut(),
             },
+            &self.known,
         );
+    }
+}
+
+/// The `DisplayError` line of a validator rung ([`validator::RefusalLine`]): a spell's name at the
+/// client's locale (`[rec + locale·4 + 0x1e0]`, `0x609876`, `0x609920`), `"UNKNOWN"`
+/// (`0x838044`) for a taught spell with no record.
+fn refusal_line(
+    line: validator::RefusalLine,
+    spells: Option<&Spells>,
+) -> crate::ui_action::UiError {
+    use crate::ui_action::{FillArg, UiError};
+    let name = |id: u32| {
+        spells
+            .and_then(|s| s.catalog.get(id))
+            .map_or_else(|| "UNKNOWN".to_string(), |d| d.name.clone())
+    };
+    match line {
+        validator::RefusalLine::AlreadyKnown(taught) => UiError {
+            key: "ERR_SPELL_ALREADY_KNOWN_S",
+            args: vec![FillArg::S(name(taught))],
+        },
+        validator::RefusalLine::PetAlreadyKnown(cast) => UiError {
+            key: "ERR_PET_SPELL_ALREADY_KNOWN_S",
+            args: vec![FillArg::S(name(cast))],
+        },
+        // `0x6e6a20(2)` resolves `PETTAME_TOOMANY` and passes it as `ERR_TAME_FAILED`'s `%s`.
+        validator::RefusalLine::TooManyPets => UiError {
+            key: "ERR_TAME_FAILED",
+            args: vec![FillArg::Global("PETTAME_TOOMANY".to_string())],
+        },
     }
 }
 
@@ -639,6 +680,7 @@ fn send_spell_cast(
     // Our stop in flight (`[+0xc54]`), which the send's StopAttack sets and its attack tail reads.
     stop_word: &mut crate::creature_anim::AttackStopInFlight,
     unit: UnitCaster<'_>,
+    known: &KnownReads,
 ) {
     // A refusal through the reporter, then the attempt's `xor al,al` exit.
     macro_rules! refuse {
@@ -956,6 +998,7 @@ fn send_spell_cast(
         // The charm arm compares the charmer with the active player (`0x60994d` asks `0x468550`),
         // so a unit the player possesses casts.
         guid: unit.active.filter(|_| !player_caster).or(ctx.self_guid),
+        active: player_caster,
         stand_state: ctx.self_stand_state,
         sheathe_state: ctx.self_sheathe_state,
         move_flags: ctx.self_move_flags,
@@ -993,10 +1036,35 @@ fn send_spell_cast(
             )
         })
     };
+    // `KnowsSpell 0x60c740` on the caster: the active player's book, else the pet bar's unit's.
+    let pet_view = spells
+        .zip(skill_lines)
+        .and_then(|(s, lines)| super::known::PetView::of(&known.pet, lines, &s.catalog));
+    let knows = |spell: u32| match commit.unit_caster() {
+        None => known
+            .actions
+            .as_deref()
+            .is_some_and(|a| a.spells.contains(&spell)),
+        Some(guid) => pet_view.as_ref().is_some_and(|pet| {
+            pet.unit(objects, guid)
+                .is_some_and(|unit| pet.knows(&unit, spell))
+        }),
+    };
+    // The pet learn rung asks the pet unit (`0x609792`) what it may learn and what it knows.
+    let pet_learn = |guid: u64, taught: u32| {
+        let pet = pet_view.as_ref()?;
+        let unit = pet.unit(objects, guid)?;
+        Some(validator::PetLearn {
+            learnable: pet.required_level(&unit, taught).is_some(),
+            known: pet.knows(&unit, taught) || pet.knows_higher_rank(&unit, taught),
+        })
+    };
     let inputs = validator::SpellInputs {
         cast_time_ms,
         form_is_stance,
         standing: &standing,
+        knows: &knows,
+        pet_learn: &pet_learn,
     };
     // The crowd-control scan `0x6e9ca0` for one aura type, over the caster's raw aura slot ids,
     // unfiltered, as the reference reads them.
@@ -1009,14 +1077,18 @@ fn send_spell_cast(
         })
     };
     if let Some(refusal) = validator::caster_refusal(def, &caster, &inputs, &mut scan) {
-        debug!(
-            "ui_action: cast {spell_id} refused locally — the validator ({:#x}, arg {:?})",
-            refusal.reason, refusal.arg
-        );
-        refuse!(match refusal.arg {
-            Some(arg) => CastFail::local_arg(spell_id, refusal.reason, arg),
-            None => CastFail::local(spell_id, refusal.reason),
-        });
+        debug!("ui_action: cast {spell_id} refused locally — the validator ({refusal:?})");
+        if let Some(line) = refusal.line {
+            core.reports.line(refusal_line(line, spells));
+        }
+        match refusal.report {
+            Some(r) => refuse!(match r.arg {
+                Some(arg) => CastFail::local_arg(spell_id, r.reason, arg),
+                None => CastFail::local(spell_id, r.reason),
+            }),
+            // A learn rung reports nothing: the attempt's `xor al,al` exit alone (`0x60988e`).
+            None => return,
+        }
     }
     // Every rung passed: the attempt fills the pending record with the spell (`0x6e4f88`) and its
     // caster (`0x6e4fb1`), ahead of the arm and whatever it decides.
@@ -2244,6 +2316,7 @@ mod tests {
                 crate::ui_cast::CastReport::AutoRepeat(true) => "START_AUTOREPEAT",
                 crate::ui_cast::CastReport::AutoRepeat(false) => "STOP_AUTOREPEAT",
                 crate::ui_cast::CastReport::Redisplay => "REDISPLAY",
+                crate::ui_cast::CastReport::Line(e) => e.key,
             })
             .collect()
     }
@@ -2698,6 +2771,87 @@ mod tests {
             world.resource_mut::<CastReports>().take_refusals(),
             vec![CastFail::local(FIREBALL, 0x3c)],
             "\"Spell is not ready yet\", not \"You have no target\""
+        );
+    }
+
+    /// A learn rung shows its line and reports nothing (`0x609854`-`0x60988e`): a press of a spell
+    /// teaching the player Fireball, which it knows, queues `ERR_SPELL_ALREADY_KNOWN_S` filled
+    /// with "Fireball", no refusal and no packet. The tame rung queues its line, then its 0x17
+    /// report (`0x60a01e`, `0x60a02d`).
+    #[test]
+    fn a_learn_rung_shows_its_line_and_the_tame_rung_reports_after_its_line() {
+        use benilla_formats::SpellDisplay;
+        const FIREBALL: u32 = 133;
+        const TEACH: u32 = 900_300;
+        const TAME: u32 = 1515;
+        let (mut world, rx) = world();
+        let mut spells = crate::ui_action::Spells::empty_for_tests();
+        spells.catalog = benilla_formats::SpellCatalog::from_displays(
+            [
+                (
+                    FIREBALL,
+                    SpellDisplay {
+                        id: FIREBALL,
+                        name: "Fireball".into(),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    TEACH,
+                    SpellDisplay {
+                        id: TEACH,
+                        effects: [0x24, 0, 0],
+                        effect_trigger_spell: [FIREBALL, 0, 0],
+                        ..Default::default()
+                    },
+                ),
+                (
+                    TAME,
+                    SpellDisplay {
+                        id: TAME,
+                        attributes_ex2: 0x1_0000,
+                        ..Default::default()
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        world.insert_resource(spells);
+        world.insert_resource(crate::ui_action::PlayerActions {
+            spells: [FIREBALL].into(),
+            ..Default::default()
+        });
+        // A player (type 0x19) at full health, controlling a pet (`PLAYER_FIELD_BYTES` bit 0).
+        let me = crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+            (2, 0x19),
+            (22, 100),
+            (1222, 0x1),
+        ]));
+        let stream_of = |world: &mut World, spell: u32| {
+            let me = me.clone();
+            world
+                .run_system_once(move |mut ladder: CastLadder| {
+                    let mut c = ctx();
+                    c.rel.self_store = Some(&me);
+                    ladder.send(spell, &c, CastCommit::Spell);
+                })
+                .expect("one-shot");
+            stream(world)
+        };
+        assert_eq!(stream_of(&mut world, TEACH), ["ERR_SPELL_ALREADY_KNOWN_S"]);
+        assert!(rx.try_recv().is_err(), "nothing sent");
+        assert_eq!(stream_of(&mut world, TAME), ["ERR_TAME_FAILED", "REFUSED"]);
+        assert!(rx.try_recv().is_err(), "nothing sent");
+        let line = refusal_line(
+            validator::RefusalLine::AlreadyKnown(FIREBALL),
+            world.get_resource::<crate::ui_action::Spells>(),
+        );
+        assert_eq!(line.args, [crate::ui_action::FillArg::S("Fireball".into())]);
+        let unknown = refusal_line(validator::RefusalLine::AlreadyKnown(1), None);
+        assert_eq!(
+            unknown.args,
+            [crate::ui_action::FillArg::S("UNKNOWN".into())]
         );
     }
 

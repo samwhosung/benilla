@@ -273,6 +273,63 @@ impl Refusal {
     }
 }
 
+/// A line a rung of the validator shows through `CGGameUI::DisplayError 0x496720`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RefusalLine {
+    /// `ERR_SPELL_ALREADY_KNOWN_S` (message 0x32) with the taught spell's name (`0x609884`), or
+    /// `"UNKNOWN"` (`0x838044`) when it has no record (`0x60989b`).
+    AlreadyKnown(u32),
+    /// `ERR_PET_SPELL_ALREADY_KNOWN_S` (0x33) with the cast spell's name (`0x60992e`).
+    PetAlreadyKnown(u32),
+    /// `ShowPetTameFailure 0x6e6a20` with reason 2: `ERR_TAME_FAILED` (0xee) filled with
+    /// `PETTAME_TOOMANY` (`0x60a01c`).
+    TooManyPets,
+}
+
+/// What a refusing rung of the validator does: the line it shows first, then what it reports
+/// through `ReportCastFailure 0x6e1a00`. A learn rung shows its line and reports nothing
+/// (`0x60988b`, `0x609935`); the tame rung shows its line and reports 0x17 (`0x60a02d`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CasterRefusal {
+    pub(crate) line: Option<RefusalLine>,
+    pub(crate) report: Option<Refusal>,
+}
+
+impl From<Refusal> for CasterRefusal {
+    fn from(report: Refusal) -> Self {
+        Self {
+            line: None,
+            report: Some(report),
+        }
+    }
+}
+
+impl CasterRefusal {
+    const fn of(reason: u8) -> Self {
+        Self {
+            line: None,
+            report: Some(Refusal::of(reason)),
+        }
+    }
+
+    const fn line(line: RefusalLine) -> Self {
+        Self {
+            line: Some(line),
+            report: None,
+        }
+    }
+}
+
+/// What the pet learn rung (`0x60976c`-`0x6097e0`) finds of the pet a learn effect aims at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PetLearn {
+    /// `GetSpellRequiredLevel 0x60c840` answers: the pet's family lines hold an ability row for
+    /// the taught spell (`0x6097b1`).
+    pub(crate) learnable: bool,
+    /// `KnowsSpell 0x60c740` or `KnowsHigherRank 0x60c8d0` (`0x6097c5`, `0x6097d9`).
+    pub(crate) known: bool,
+}
+
 /// The caster as the validator's rungs past its power test read it: the active player, or the
 /// pet bar's unit the attempt passes (`0x6e4f3b`).
 pub(crate) struct CasterState<'a> {
@@ -281,6 +338,8 @@ pub(crate) struct CasterState<'a> {
     /// The active player's guid (`0x60994d` asks `0x468550`), which the charm arm compares the
     /// caster's charmer with (`0x60995e`).
     pub(crate) guid: Option<u64>,
+    /// The caster is the active player, whose guid the tame rung compares (`0x609ffb`).
+    pub(crate) active: bool,
     /// `GetStandState`, the caster's vtable slot 41 (`0x609cad`): the active player's local state
     /// (`0x5ed570`), a unit's descriptor byte (`0x60be50`).
     pub(crate) stand_state: u8,
@@ -301,7 +360,22 @@ pub(crate) struct SpellInputs<'a> {
     pub(crate) cast_time_ms: u32,
     pub(crate) form_is_stance: bool,
     pub(crate) standing: &'a dyn Fn(u32) -> i32,
+    /// `KnowsSpell 0x60c740` on the caster (`0x6096e1`).
+    pub(crate) knows: &'a dyn Fn(u32) -> bool,
+    /// The pet learn rung's answers for the unit at a guid and a taught spell, `None` when the
+    /// guid names no unit (`0x609792` with mask 8).
+    pub(crate) pet_learn: &'a dyn Fn(u64, u32) -> Option<PetLearn>,
 }
+
+/// `SPELL_EFFECT_LEARN_SPELL` 36 (`0x6096c6`, `0x609767`).
+const EFFECT_LEARN_SPELL: u32 = 0x24;
+
+/// `AttributesEx2 & 0x10000`, vmangos `SPELL_ATTR_EX2_NO_ACTIVE_PETS` (`SpellDefines.h:884`):
+/// the tame rung's spell (`0x609fd7`).
+const ATTR_EX2_NO_ACTIVE_PETS: u32 = 0x1_0000;
+
+/// `OBJECT_FIELD_TYPE` bit 4, a player (`0x6096d1`, `0x609fe6`).
+const TYPEMASK_PLAYER: u32 = 0x10;
 
 /// `AURA_INTERRUPT_DISMOUNT_CANCELS` and `AURA_INTERRUPT_SHEATHING_CANCELS` (vmangos
 /// `SpellDefines.h:545`, `:548`): an aura that ends on a dismount needs a mount, one that ends on
@@ -336,8 +410,11 @@ const TARGET_PET: u32 = 5;
 ///
 /// | rung | reason | test |
 /// |---|---|---|
-/// | each effect (`0x6096c3`-`0x6097fc`) | `4`/`5` | a summon or charm with `UNIT_FIELD_CHARM`, else `_SUMMON`, held, unless [`ATTR_EX_DISMISS_PET_FIRST`] |
+/// | each effect (`0x6096c3`-`0x6097fc`) | line `0x32` | a player teaching itself a spell it knows ([`RefusalLine::AlreadyKnown`]) |
+/// | | `4`/`5` | a summon or charm with `UNIT_FIELD_CHARM`, else `_SUMMON`, held, unless [`ATTR_EX_DISMISS_PET_FIRST`] |
 /// | | `0x4c` | an effect aimed at the pet with neither held |
+/// | | `0x63` | teaching that pet a spell its family has no ability row for |
+/// | | line `0x33` | teaching that pet a spell or a rank below one it knows ([`RefusalLine::PetAlreadyKnown`]) |
 /// | living caster (`0x60980d`) | `0x61` | a player logging out, `PLAYER_FIELD_BYTES` bit `0x4` (`0x60982b`) |
 /// | | crowd control | [`cast_cc_refusal`] |
 /// | `0x609ba1` | `0x41` | [`INTERRUPT_SHEATHING`] with the weapon away, `[unit+0xd40] == 0` |
@@ -355,19 +432,22 @@ const TARGET_PET: u32 = 5;
 /// | `0x609f1f` | `0x8f` | `MinFactionId` standing below `MinReputation`'s floor (`0x80928c`) |
 /// | `0x609f59` | `0x52` | [`ATTR_ONLY_INDOORS`] outdoors (`0x612cc0`) |
 /// | | `0x4b`/`0x55` | [`ATTR_ONLY_OUTDOORS`] indoors: `0x4b` when an effect applies the mount aura |
-///
-/// Not built: the learn rungs, which show a line of their own through `0x496720` (`0x6098a2`,
-/// `0x609920`) or ask a pet's knowledge (`0x609904`); and the tame rung `0x17` (`0x609fd7`), which
-/// shows its pet tame failure through `0x6e6a20` first.
+/// | `0x609fd7` | `0x17` | [`ATTR_EX2_NO_ACTIVE_PETS`] on the active player controlling a pet, after [`RefusalLine::TooManyPets`] |
 pub(crate) fn caster_refusal(
     spell: Option<&SpellDisplay>,
     caster: &CasterState,
     inputs: &SpellInputs,
     scan: &mut dyn FnMut(u32) -> CcExemption,
-) -> Option<Refusal> {
+) -> Option<CasterRefusal> {
     let fields = caster.fields;
+    let player = fields.object_type_mask().unwrap_or(0) & TYPEMASK_PLAYER != 0;
     if let Some(d) = spell {
         for i in 0..3 {
+            let taught = d.effect_trigger_spell[i];
+            // A player teaching itself a spell it knows (`0x6096c6`-`0x6096e8`).
+            if d.effects[i] == EFFECT_LEARN_SPELL && player && (inputs.knows)(taught) && false {
+                return Some(CasterRefusal::line(RefusalLine::AlreadyKnown(taught)));
+            }
             let summons = SUMMON_EFFECTS.contains(&d.effects[i])
                 || CHARM_AURAS.contains(&d.effect_apply_aura[i]);
             if summons
@@ -375,7 +455,7 @@ pub(crate) fn caster_refusal(
                 && d.attributes_ex & ATTR_EX_DISMISS_PET_FIRST == 0
             {
                 // 4 "You already control a charmed creature" while charming, else 5 (`0x6098ce`).
-                return Some(Refusal::of(if fields.unit_charm().is_some() {
+                return Some(CasterRefusal::of(if fields.unit_charm().is_some() {
                     4
                 } else {
                     5
@@ -383,8 +463,23 @@ pub(crate) fn caster_refusal(
             }
             let at_pet = d.effect_implicit_target_a[i] == TARGET_PET
                 || d.effect_implicit_target_b[i] == TARGET_PET;
-            if at_pet && fields.unit_pet_guid().is_none() {
-                return Some(Refusal::of(0x4c));
+            if !at_pet {
+                continue;
+            }
+            let Some(pet) = fields.unit_pet_guid() else {
+                return Some(CasterRefusal::of(0x4c));
+            };
+            // Teaching the pet (`0x609767`-`0x6097e0`): a pet not streamed is not asked.
+            if d.effects[i] == EFFECT_LEARN_SPELL && false {
+                match (inputs.pet_learn)(pet, taught) {
+                    Some(PetLearn {
+                        learnable: false, ..
+                    }) => return Some(CasterRefusal::of(0x63)),
+                    Some(PetLearn { known: true, .. }) => {
+                        return Some(CasterRefusal::line(RefusalLine::PetAlreadyKnown(d.id)))
+                    }
+                    _ => {}
+                }
             }
         }
     }
@@ -393,63 +488,63 @@ pub(crate) fn caster_refusal(
     let alive = fields.unit_health().is_none_or(|h| h as i32 > 0);
     if alive {
         if fields.player_logging_out() {
-            return Some(Refusal::of(0x61));
+            return Some(CasterRefusal::of(0x61));
         }
         // The charm arm refuses only when someone else holds the charm (`0x60995e`).
         let charmed_by_other = fields
             .unit_charmed_by()
             .is_some_and(|charmer| Some(charmer) != caster.guid);
         if let Some(r) = cast_cc_refusal(fields.unit_flags(), charmed_by_other, spell, scan) {
-            return Some(r);
+            return Some(r.into());
         }
     }
     let attributes = spell.map_or(0, |d| d.attributes);
     let mount_display = fields.unit_mount_display_id() as i32;
     if let Some(d) = spell {
         if interrupt_flag_requires(d, INTERRUPT_SHEATHING) && caster.sheathe_state == 0 {
-            return Some(Refusal::of(0x41));
+            return Some(CasterRefusal::of(0x41));
         }
         // `0x609c18 jg`: a signed display id.
         if interrupt_flag_requires(d, INTERRUPT_DISMOUNT) && mount_display <= 0 {
-            return Some(Refusal::of(0x53));
+            return Some(CasterRefusal::of(0x53));
         }
     }
     if cast_mounted_refusal(mount_display > 0, spell) {
-        return Some(Refusal::of(0x39));
+        return Some(CasterRefusal::of(0x39));
     }
     if attributes & ATTR_ALLOW_WHILE_SITTING == 0 && caster.stand_state != 0 {
-        return Some(Refusal::of(0x3e));
+        return Some(CasterRefusal::of(0x3e));
     }
     if attributes & ATTR_DAYTIME_ONLY != 0 && !caster.daytime {
-        return Some(Refusal::of(0x51));
+        return Some(CasterRefusal::of(0x51));
     }
     if attributes & ATTR_NIGHT_ONLY != 0 && caster.daytime {
-        return Some(Refusal::of(0x54));
+        return Some(CasterRefusal::of(0x54));
     }
     if let Some(reason) = cast_water_refusal(caster.move_flags, spell) {
-        return Some(Refusal::of(reason));
+        return Some(CasterRefusal::of(reason));
     }
     if cast_moving_refusal(caster.move_flags, inputs.cast_time_ms, spell) {
-        return Some(Refusal::of(0x2e));
+        return Some(CasterRefusal::of(0x2e));
     }
     let d = spell?;
     if let Some(refusal) = d.form_refusal(fields.unit_shapeshift_form(), inputs.form_is_stance) {
-        return Some(Refusal::of(refusal.reason()));
+        return Some(CasterRefusal::of(refusal.reason()));
     }
     if attributes & ATTR_ONLY_STEALTHED != 0 && !fields.unit_is_stealthed() {
-        return Some(Refusal::of(0x57));
+        return Some(CasterRefusal::of(0x57));
     }
     if attributes & ATTR_NOT_IN_COMBAT_ONLY_PEACEFUL != 0
         && fields.unit_flags() & crate::player::UNIT_FLAG_IN_COMBAT != 0
     {
         // `SPELL_FAILED_AFFECTING_COMBAT`, reason 0 (`0x609ed0 xor dl,dl`).
-        return Some(Refusal::of(0));
+        return Some(CasterRefusal::of(0));
     }
     // `shl edx,cl` (`0x609ef9`) takes the count mod 32.
     if d.caster_aura_state != 0
         && fields.unit_aura_state() & 1u32.wrapping_shl(d.caster_aura_state - 1) == 0
     {
-        return Some(Refusal::of(0x12));
+        return Some(CasterRefusal::of(0x12));
     }
     if d.min_faction_id != 0 {
         // A signed compare against the rank's floor (`0x609f3b jge`); Spell.dbc ranks run 0 to 7.
@@ -458,21 +553,34 @@ pub(crate) fn caster_refusal(
             .copied()
             .unwrap_or(i32::MAX);
         if (inputs.standing)(d.min_faction_id) < floor {
-            return Some(Refusal::of(0x8f));
+            return Some(CasterRefusal::of(0x8f));
         }
     }
     // One question for either bit (`0x609f5c`, `0x609f63`).
     if attributes & (ATTR_ONLY_INDOORS | ATTR_ONLY_OUTDOORS) != 0 {
         if caster.outdoors {
             if attributes & ATTR_ONLY_INDOORS != 0 {
-                return Some(Refusal::of(0x52));
+                return Some(CasterRefusal::of(0x52));
             }
         } else if attributes & ATTR_ONLY_OUTDOORS != 0 {
             // `SPELL_FAILED_NO_MOUNTS_ALLOWED` for an effect applying `SPELL_AURA_MOUNTED` (6 and
             // 78 in the same effect, `0x609fa1`, `0x609fa6`), else `ONLY_OUTDOORS`.
             let mounts = (0..3).any(|i| d.effects[i] == 6 && d.effect_apply_aura[i] == 78);
-            return Some(Refusal::of(if mounts { 0x4b } else { 0x55 }));
+            return Some(CasterRefusal::of(if mounts { 0x4b } else { 0x55 }));
         }
+    }
+    // The tame rung (`0x609fd7`-`0x60a02d`): the active player with a pet under control,
+    // `PLAYER_FIELD_BYTES` byte 0 bit 0 (vmangos `PLAYER_FIELD_BYTE_CONTROLLING_PET`).
+    if d.attributes_ex2 & ATTR_EX2_NO_ACTIVE_PETS != 0
+        && player
+        && caster.active
+        && fields.player_controlling_pet()
+        && false
+    {
+        return Some(CasterRefusal {
+            line: Some(RefusalLine::TooManyPets),
+            report: Some(Refusal::of(0x17)),
+        });
     }
     None
 }

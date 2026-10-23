@@ -66,11 +66,20 @@ struct Me {
     outdoors: bool,
     standing: i32,
     cast_ms: u32,
+    /// The caster is the active player.
+    active: bool,
+    /// The caster's known spells (`0x60c740`).
+    known: Vec<u32>,
+    /// What the pet learn rung finds of the pet, `None` for a pet not streamed.
+    pet: Option<PetLearn>,
 }
 
 impl Default for Me {
     fn default() -> Self {
         Self {
+            active: true,
+            known: Vec::new(),
+            pet: None,
             pairs: vec![(HEALTH, 100)],
             stand: 0,
             sheathe: 0,
@@ -99,11 +108,12 @@ impl Me {
         &self,
         d: Option<&SpellDisplay>,
         scan: &mut dyn FnMut(u32) -> CcExemption,
-    ) -> Option<Refusal> {
+    ) -> Option<CasterRefusal> {
         let fields = ObjectFields::from_pairs(&self.pairs);
         let caster = CasterState {
             fields: &fields,
             guid: Some(ME),
+            active: self.active,
             stand_state: self.stand,
             sheathe_state: self.sheathe,
             move_flags: self.move_flags,
@@ -111,16 +121,29 @@ impl Me {
             outdoors: self.outdoors,
         };
         let standing = |_: u32| self.standing;
+        let knows = |spell: u32| self.known.contains(&spell);
+        let pet_learn = |guid: u64, _: u32| (guid != 0).then_some(self.pet).flatten();
         let inputs = SpellInputs {
             cast_time_ms: self.cast_ms,
             form_is_stance: false,
             standing: &standing,
+            knows: &knows,
+            pet_learn: &pet_learn,
         };
         caster_refusal(d, &caster, &inputs, scan)
     }
 
+    /// What the rungs report, the learn rungs' lines aside.
+    fn refusal_reported(
+        &self,
+        d: Option<&SpellDisplay>,
+        scan: &mut dyn FnMut(u32) -> CcExemption,
+    ) -> Option<Refusal> {
+        self.refusal_with(d, scan).and_then(|r| r.report)
+    }
+
     fn refuse(&self, d: &SpellDisplay) -> Option<u8> {
-        self.refusal_with(Some(d), &mut no_auras())
+        self.refusal_reported(Some(d), &mut no_auras())
             .map(|r| r.reason)
     }
 }
@@ -501,7 +524,7 @@ fn the_stance_rungs_precede_the_mount_and_the_mount_the_posture() {
     };
     assert_eq!(sitting.refuse(&sitting_cast), None, "Attributes bit 27");
     assert_eq!(
-        sitting.refusal_with(None, &mut no_auras()),
+        sitting.refusal_reported(None, &mut no_auras()),
         Some(Refusal::of(0x3e)),
         "no record, no exemption"
     );
@@ -693,4 +716,149 @@ fn the_place_rungs_ask_the_outdoors_test_after_reputation() {
         Some(0x8f),
         "reputation first"
     );
+}
+
+// ── The learn and tame rungs (`0x6096c6`-`0x6097e0`, `0x609fd7`) ──
+
+/// `OBJECT_FIELD_TYPE`: a player's mask, `0x19`, and a creature's, 9.
+const TYPE: u16 = 2;
+
+/// A spell whose first effect teaches `taught` to the caster, or with `at_pet` to its pet.
+fn teaching(taught: u32, at_pet: bool) -> SpellDisplay {
+    SpellDisplay {
+        id: 900_200,
+        effects: [EFFECT_LEARN_SPELL, 0, 0],
+        effect_trigger_spell: [taught, 0, 0],
+        effect_implicit_target_a: [if at_pet { TARGET_PET } else { 1 }, 0, 0],
+        ..Default::default()
+    }
+}
+
+/// A player teaching itself a spell it knows shows `ERR_SPELL_ALREADY_KNOWN_S` with the taught
+/// spell and reports nothing (`0x6096c6`-`0x6096e8` → `0x609854`); a spell it does not know, and
+/// a caster that is no player, pass. The rung comes before the summon rung of the same effect.
+#[test]
+fn a_player_teaching_itself_a_known_spell_shows_its_line_and_reports_nothing() {
+    let me = Me {
+        known: vec![133],
+        ..Me::default()
+    }
+    .with(TYPE, 0x19);
+    let line = Some(CasterRefusal {
+        line: Some(RefusalLine::AlreadyKnown(133)),
+        report: None,
+    });
+    assert_eq!(
+        me.refusal_with(Some(&teaching(133, false)), &mut no_auras()),
+        line
+    );
+    assert_eq!(
+        me.refusal_with(Some(&teaching(116, false)), &mut no_auras()),
+        None
+    );
+    let creature = me.clone().with(TYPE, 0x09);
+    assert_eq!(
+        creature.refusal_with(Some(&teaching(133, false)), &mut no_auras()),
+        None
+    );
+    // The learn test of effect 0 precedes the summon test of effect 0 (`0x6096f4`).
+    let summoning = SpellDisplay {
+        effect_apply_aura: [6, 0, 0],
+        ..teaching(133, false)
+    };
+    let holding = me.with(SUMMON, 42);
+    assert_eq!(
+        holding.refusal_with(Some(&summoning), &mut no_auras()),
+        line
+    );
+}
+
+/// Teaching the pet (`0x609767`-`0x6097e0`): a family with no ability row for the spell refuses
+/// `0x63`; a pet that knows it or a higher rank shows `ERR_PET_SPELL_ALREADY_KNOWN_S` with the
+/// cast spell and reports nothing; a pet that may learn it, and one not streamed, pass. No pet at
+/// all is `0x4c`, before any of them.
+#[test]
+fn teaching_the_pet_asks_what_it_may_learn_and_knows() {
+    let with_pet = |pet: Option<PetLearn>| {
+        Me {
+            pet,
+            ..Me::default()
+        }
+        .with(TYPE, 0x19)
+        .with(SUMMON, 42)
+    };
+    let d = teaching(2649, true);
+    let cannot = PetLearn {
+        learnable: false,
+        known: true,
+    };
+    assert_eq!(
+        with_pet(Some(cannot)).refusal_with(Some(&d), &mut no_auras()),
+        Some(CasterRefusal::of(0x63))
+    );
+    let knows = PetLearn {
+        learnable: true,
+        known: true,
+    };
+    assert_eq!(
+        with_pet(Some(knows)).refusal_with(Some(&d), &mut no_auras()),
+        Some(CasterRefusal {
+            line: Some(RefusalLine::PetAlreadyKnown(900_200)),
+            report: None,
+        })
+    );
+    let may = PetLearn {
+        learnable: true,
+        known: false,
+    };
+    assert_eq!(
+        with_pet(Some(may)).refusal_with(Some(&d), &mut no_auras()),
+        None
+    );
+    assert_eq!(with_pet(None).refusal_with(Some(&d), &mut no_auras()), None);
+    let petless = Me {
+        pet: Some(cannot),
+        ..Me::default()
+    }
+    .with(TYPE, 0x19);
+    assert_eq!(
+        petless.refusal_with(Some(&d), &mut no_auras()),
+        Some(CasterRefusal::of(0x4c))
+    );
+}
+
+/// The tame rung (`0x609fd7`-`0x60a02d`): a spell with `AttributesEx2 & 0x10000` cast by the active
+/// player while `PLAYER_FIELD_BYTES` byte 0 has bit 0 shows `ERR_TAME_FAILED` with
+/// `PETTAME_TOOMANY`, then reports 0x17. Without the bit, the attribute or the active player it
+/// passes, and the place rungs come first.
+#[test]
+fn the_tame_rung_refuses_a_second_pet_after_its_line() {
+    let tame = SpellDisplay {
+        attributes_ex2: 0x1_0000,
+        ..Default::default()
+    };
+    let controlling = Me::default().with(TYPE, 0x19).with(PLAYER_BYTES, 0x1);
+    assert_eq!(
+        controlling.refusal_with(Some(&tame), &mut no_auras()),
+        Some(CasterRefusal {
+            line: Some(RefusalLine::TooManyPets),
+            report: Some(Refusal::of(0x17)),
+        })
+    );
+    assert_eq!(Me::default().with(TYPE, 0x19).refuse(&tame), None);
+    assert_eq!(controlling.refuse(&SpellDisplay::default()), None);
+    let unit = Me {
+        active: false,
+        ..controlling.clone()
+    };
+    assert_eq!(unit.refuse(&tame), None);
+    let indoors = Me {
+        outdoors: false,
+        ..controlling
+    };
+    let outdoor_tame = SpellDisplay {
+        attributes: 0x8000,
+        ..tame
+    };
+    assert_eq!(indoors.refuse(&outdoor_tame), Some(0x55));
 }

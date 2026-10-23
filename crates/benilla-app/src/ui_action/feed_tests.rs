@@ -613,6 +613,49 @@ fn report_feed(spells: crate::ui_action::Spells, reports: crate::ui_cast::CastRe
     app
 }
 
+/// A validator rung's own line (`0x496720` from `0x6098a2`, `0x609930`, `0x6e6ab4`) shows as its
+/// catalog record does, its `%s` filled: `ERR_SPELL_ALREADY_KNOWN_S` with the taught spell's name,
+/// and `ERR_TAME_FAILED` with the `PETTAME_TOOMANY` string, each a `UI_ERROR_MESSAGE`.
+#[test]
+fn a_validator_line_shows_as_its_message_does() {
+    use crate::ui_action::{FillArg, Spells, UiError};
+    let mut reports = crate::ui_cast::CastReports::default();
+    reports.line(UiError {
+        key: "ERR_SPELL_ALREADY_KNOWN_S",
+        args: vec![FillArg::S("Fireball".into())],
+    });
+    reports.line(UiError {
+        key: "ERR_TAME_FAILED",
+        args: vec![FillArg::Global("PETTAME_TOOMANY".into())],
+    });
+    let mut app = report_feed(Spells::empty_for_tests(), reports);
+    app.world_mut()
+        .non_send_resource::<UiScript>()
+        .run(
+            r#"ERR_SPELL_ALREADY_KNOWN_S = "You already know %s.";
+               ERR_TAME_FAILED = "%s.";
+               PETTAME_TOOMANY = "You have too many pets already";
+               SEEN = {}
+               local f = CreateFrame("Frame")
+               f:RegisterEvent("UI_ERROR_MESSAGE")
+               f:SetScript("OnEvent", function() table.insert(SEEN, arg1) end)"#,
+        )
+        .unwrap();
+    app.update();
+    let seen = app
+        .world_mut()
+        .non_send_resource::<UiScript>()
+        .eval::<Vec<String>>("return SEEN")
+        .unwrap();
+    assert_eq!(
+        seen,
+        [
+            "You already know Fireball.",
+            "You have too many pets already."
+        ]
+    );
+}
+
 /// `HandleCastFailed 0x6e1a00` logs through `0x62c360`; `HandlePetCastFailed 0x6e8eb0` calls only
 /// the packet readers and `0x496720`, with no log line and no error sound. Both entries name the
 /// same spell, so only the caster differs.
