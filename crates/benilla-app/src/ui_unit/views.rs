@@ -621,17 +621,24 @@ struct Readable {
 }
 
 /// One guid's store from `live` back to the frame's start, undoing `entries`' changes to it in
-/// reverse, checked against the frame-start snapshot `start` when given; with each unit its
-/// `UNIT_FIELD_TARGET` named on the way.
+/// reverse, checked against the frame-start snapshot `start` when given; with every unit it named
+/// on the way, by the fields a token resolves through: `UNIT_FIELD_TARGET` (a `target` chain,
+/// `0x515970`), `UNIT_FIELD_CHARM` and `UNIT_FIELD_SUMMON` (a pet token, `0x4e8204`-`0x4e821a`).
 fn undo_frame(
     guid: u64,
     live: Option<ObjectStore>,
     entries: &mut [Entry],
     start: Option<&FrameStart>,
 ) -> (Option<ObjectStore>, Vec<u64>) {
-    let hop = |s: &Option<ObjectStore>| s.as_ref().and_then(|s| s.0.unit_target());
+    let hop = |s: &Option<ObjectStore>| {
+        s.as_ref()
+            .map(|s| [s.0.unit_target(), s.0.unit_charm(), s.0.unit_summon()])
+            .into_iter()
+            .flatten()
+            .flatten()
+    };
     let mut store = live;
-    let mut hops: Vec<u64> = hop(&store).into_iter().collect();
+    let mut hops: Vec<u64> = hop(&store).collect();
     // The store where the frame-start snapshot was taken, past the entries logged before it.
     let mark = start.map_or(0, |s| s.mark);
     let mut at_mark = None;
@@ -763,30 +770,36 @@ impl UnitViews {
         stores.sort_unstable();
         stores.dedup();
         let mut scratch = HashMap::new();
-        // The target first: `"targettarget"` reads each unit its `UNIT_FIELD_TARGET` named during
-        // the frame.
-        if let Some((guid, entity)) = seats.target.filter(|(g, _)| stores.contains(g)) {
-            let (store, hops) = undo_frame(
-                guid,
-                entity.and_then(&live),
-                &mut entries,
-                start_for(guid, entity),
-            );
-            readable.all.extend(hops.into_iter().filter(|&g| g != 0));
-            scratch.insert(guid, (entity, store));
-        }
         // Only a unit some view reads is rewound: what the others' entries hold drops unreplayed.
-        for guid in stores {
-            if scratch.contains_key(&guid) || !readable.all.contains(&guid) {
+        // A view reads too each unit a readable one named during the frame, by its target or its
+        // pet (`"targettarget"`, `"partypet1"` before a swap), and a pet a member's earlier record
+        // named; so each rewound store's names join the readable, and are rewound in turn.
+        let mut queue: Vec<u64> = Vec::new();
+        let mut name = |g: u64, readable: &mut Readable, queue: &mut Vec<u64>| {
+            if g != 0 && readable.all.insert(g) && stores.binary_search(&g).is_ok() {
+                queue.push(g);
+            }
+        };
+        for (_, change) in entries.iter().flat_map(|e| &e.changes) {
+            if let Change::Record(Some(record)) = change {
+                name(record.pet_guid.unwrap_or(0), &mut readable, &mut queue);
+            }
+        }
+        queue.extend(stores.iter().filter(|g| readable.all.contains(g)));
+        while let Some(guid) = queue.pop() {
+            if scratch.contains_key(&guid) {
                 continue;
             }
             let entity = entity_of(guid);
-            let (store, _) = undo_frame(
+            let (store, named) = undo_frame(
                 guid,
                 entity.and_then(&live),
                 &mut entries,
                 start_for(guid, entity),
             );
+            for g in named {
+                name(g, &mut readable, &mut queue);
+            }
             scratch.insert(guid, (entity, store));
         }
         // An untouched store the snapshot holds is not rewound, but is checked all the same.
