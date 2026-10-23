@@ -673,4 +673,85 @@ mod tests {
         assert_eq!(lines(&mut c, mob, MOB, ObjectType::Unit), [], "a creature");
         assert_eq!(lines(&mut c, me, ME, ObjectType::Player), [], "our own");
     }
+
+    /// A possessed unit's attack, latched: charmed by us, flagged possessed, our view on it, as
+    /// `0x5ee5a0` answers it.
+    fn possessing_an_attacker(c: &mut Client) {
+        const PET: u64 = 0xF140_0000_0000_0099;
+        let world = c.world();
+        let pet = world
+            .spawn((
+                Guid(PET),
+                ObjectStore(ObjectFields::from_pairs(&[
+                    (2, 0x9),
+                    (FIELD_UNIT_HEALTH, 100),
+                    (10, ME as u32),
+                    (FIELD_UNIT_FLAGS, crate::target::UNIT_FLAG_POSSESSED),
+                ])),
+            ))
+            .id();
+        world.resource_mut::<GuidIndex>().0.insert(PET, pet);
+        let me = c.me;
+        let world = c.world();
+        world
+            .get_mut::<ObjectStore>(me)
+            .unwrap()
+            .0
+            .merge(ObjectFields::from_pairs(&[
+                (712, PET as u32),
+                (713, (PET >> 32) as u32),
+            ]));
+        world
+            .resource_mut::<crate::ui_pet::PetBar>()
+            .spells
+            .pet_guid = PET;
+        world.resource_mut::<crate::ui_pet::PetAttackLatch>().0 = Some(PET);
+    }
+
+    /// The selection's death deselects (`0x605901`), whose teardown calls a possessed unit off
+    /// (`0x493a18` → `0x4bd650`): `PetStopAttack` signals `PET_BAR_UPDATE` in place (`0x4bd6b4`),
+    /// so its listener's packet goes out ahead of the deselect's `CMSG_SET_SELECTION` 0, and
+    /// `PLAYER_TARGET_CHANGED` (`0x493a73`) is heard inside the death, once.
+    #[test]
+    fn the_selections_death_signals_its_pet_stop_and_its_change_in_place() {
+        let mut c = client();
+        possessing_an_attacker(&mut c);
+        let mob = c.mob;
+        c.select(MOB, mob);
+        c.world()
+            .insert_non_send_resource(benilla_ui::script::UiScript::new().expect("a VM"));
+        crate::script_calls::with_hosted_vm(c.world(), |s| {
+            s.expect("a VM").run(
+                r#"HEARD = {}
+                local r = CreateFrame("Frame")
+                r:RegisterEvent("PET_BAR_UPDATE")
+                r:RegisterEvent("PLAYER_TARGET_CHANGED")
+                r:SetScript("OnEvent", function()
+                    table.insert(HEARD, event)
+                    if event == "PET_BAR_UPDATE" then RandomRoll(1, 100) end
+                end)"#,
+            )
+        })
+        .expect("the listener is in");
+        let _ = c.sent();
+        c.dies(mob, MOB, ObjectType::Unit);
+        let wire: Vec<String> = c
+            .sent()
+            .into_iter()
+            .filter_map(|cmd| match cmd {
+                ClientCommand::PetStopAttack { .. } => Some("PetStopAttack".to_string()),
+                ClientCommand::RandomRoll { .. } => Some("RandomRoll".to_string()),
+                ClientCommand::SetSelection { guid } => Some(format!("SetSelection {guid:#x}")),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(wire, ["PetStopAttack", "RandomRoll", "SetSelection 0x0"]);
+        crate::ui_unit::run_feed_units_once(c.world());
+        let heard: Vec<String> = c
+            .world()
+            .non_send_resource::<benilla_ui::script::UiScript>()
+            .eval("return HEARD")
+            .unwrap();
+        assert_eq!(heard, ["PET_BAR_UPDATE", "PLAYER_TARGET_CHANGED"]);
+    }
 }

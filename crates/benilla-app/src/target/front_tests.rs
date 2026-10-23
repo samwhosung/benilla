@@ -797,3 +797,68 @@ fn a_click_off_a_dead_selection_while_attacking_swings_at_nothing() {
         "{sent:?}"
     );
 }
+
+/// The world click's `SetSelection` signals inside the click (`0x49389c`), so a
+/// `PLAYER_TARGET_CHANGED` listener's packet goes out between the selection and the re-swing
+/// (`0x4938c8`), and the unit feed hears the change no second time.
+#[test]
+fn a_world_click_signals_its_target_change_before_the_re_swing() {
+    let mut f = fix(false);
+    let world = f.app.world_mut();
+    let index = &world.resource::<GuidIndex>().0;
+    let (me, old) = (index[&ME], index[&OLD]);
+    world
+        .entity_mut(me)
+        .insert(crate::creature_anim::Engaged(OLD));
+    let mob = f.mob;
+    f.make_unit(old);
+    f.make_unit(mob);
+    f.app
+        .world_mut()
+        .insert_non_send_resource(benilla_ui::script::UiScript::new().expect("a VM"));
+    crate::ui_unit::run_feed_units_once(f.app.world_mut());
+    crate::script_calls::with_hosted_vm(f.app.world_mut(), |s| {
+        s.expect("a VM").run(
+            r#"HEARD = 0
+            local r = CreateFrame("Frame")
+            r:RegisterEvent("PLAYER_TARGET_CHANGED")
+            r:SetScript("OnEvent", function() HEARD = HEARD + 1 RandomRoll(1, 100) end)"#,
+        )
+    })
+    .expect("the listener is in");
+    f.app.world_mut().resource_mut::<PressPick>().cursor.kind =
+        super::cursor_mode::CursorKind::Attack;
+    let over = f.over_the_mob();
+    f.click(over);
+    f.app
+        .world_mut()
+        .run_system_once(click::select_on_click)
+        .expect("the click runs");
+    let wire: Vec<String> =
+        f.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::AttackStop => Some("AttackStop".to_string()),
+                ClientCommand::SetSelection { guid } => Some(format!("SetSelection {guid:#x}")),
+                ClientCommand::RandomRoll { .. } => Some("RandomRoll".to_string()),
+                ClientCommand::AttackSwing { guid } => Some(format!("AttackSwing {guid:#x}")),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(
+        wire,
+        [
+            "AttackStop",
+            "SetSelection 0x31",
+            "RandomRoll",
+            "AttackSwing 0x31"
+        ]
+    );
+    crate::ui_unit::run_feed_units_once(f.app.world_mut());
+    let heard: i64 = f
+        .app
+        .world()
+        .non_send_resource::<benilla_ui::script::UiScript>()
+        .eval("return HEARD")
+        .unwrap();
+    assert_eq!(heard, 1, "heard in the click alone");
+}
