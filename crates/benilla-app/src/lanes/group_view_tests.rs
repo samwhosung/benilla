@@ -340,3 +340,67 @@ fn a_lists_own_signal_reads_the_records_it_wrote() {
         .unwrap();
     assert_eq!(heard, ["nil"]);
 }
+
+/// A member's object arriving and leaving signals at its packet's place: `PARTY_MEMBER_ENABLE`
+/// from the player's post-init (`0x5dec35` → `0x4e85d0`, signalled at `0x4e86b6`) and
+/// `PARTY_MEMBER_DISABLE` from its release (`0x5e9aa0`, at `0x5e9b78`), each with the member's
+/// party slot, after the list ahead of it in the frame signalled (`0x5e6c66`).
+#[test]
+fn a_members_object_signals_at_its_packet() {
+    let mut app = party_client();
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"
+            Roster = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("PARTY_MEMBERS_CHANGED")
+            f:RegisterEvent("PARTY_MEMBER_ENABLE")
+            f:RegisterEvent("PARTY_MEMBER_DISABLE")
+            f:SetScript("OnEvent", function()
+                table.insert(Roster, event .. ":" .. tostring(arg1))
+            end)
+            "#,
+        )
+        .unwrap();
+    let list = || SessionEvent::GroupList {
+        group_type: 0,
+        own_flags: 0,
+        members: vec![GroupMemberEntry {
+            name: "Brisca".into(),
+            guid: MATE,
+            status: member_status::ONLINE,
+            flags: 0,
+        }],
+        leader: ME,
+        loot: None,
+    };
+    let heard = |app: &mut App| {
+        let s = app.world_mut().non_send_resource_mut::<UiScript>();
+        let out = s.eval::<Vec<String>>("return Roster").unwrap();
+        s.run("Roster = {}").unwrap();
+        out
+    };
+    let mut packets = vec![list()];
+    packets.extend(crate::lanes::unit_view_tests::wire_packets(vec![vec![
+        created(
+            MATE,
+            EntityKind::Player,
+            &[(benilla_protocol::field::FIELD_UNIT_HEALTH, 100)],
+        ),
+    ]]));
+    frame(&mut app, packets);
+    assert_eq!(
+        heard(&mut app),
+        ["PARTY_MEMBERS_CHANGED:nil", "PARTY_MEMBER_ENABLE:1"]
+    );
+    let mut packets = vec![list()];
+    packets.extend(crate::lanes::unit_view_tests::wire_packets(vec![vec![
+        SessionEvent::ObjectsRemoved(vec![MATE]),
+    ]]));
+    frame(&mut app, packets);
+    assert_eq!(
+        heard(&mut app),
+        ["PARTY_MEMBERS_CHANGED:nil", "PARTY_MEMBER_DISABLE:1"]
+    );
+}
