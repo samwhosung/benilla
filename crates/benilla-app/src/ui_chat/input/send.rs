@@ -80,6 +80,11 @@ impl ChatSender<'_, '_> {
         let _ = self.commands.0.send(packet);
     }
 
+    /// A verb's own refusal, `DisplayError` (`0x496720`), shown inside its call.
+    pub(crate) fn display_error(&mut self, script: &mut UiScript, key: &'static str) {
+        self.refuse(script, key);
+    }
+
     /// `MSG_RANDOM_ROLL` (`0x48c832`), the binding having checked the range.
     pub(crate) fn random_roll(&self, min: u32, max: u32) {
         let _ = self.commands.0.send(ClientCommand::RandomRoll { min, max });

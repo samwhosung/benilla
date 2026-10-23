@@ -305,6 +305,19 @@ impl super::UiScript {
 /// `SetLootMethod`'s usage line (`0x84c42c`).
 const USAGE_SET_LOOT_METHOD: &str = "Usage: SetLootMethod(\"method\" [,master][,threshold])";
 
+/// `DisplayError` (`0x496720`) on an error row from inside a verb: the host shows it before the
+/// verb returns; a VM with no host queues it for the app ([`Model::push_ui_error`]). The caller
+/// holds no borrow of the model.
+fn display_error(lua: &Lua, key: &'static str) -> mlua::Result<()> {
+    if super::host::open(lua) {
+        return super::calls::submit(lua, super::ScriptCall::DisplayError(key));
+    }
+    lua.app_data_mut::<Model>()
+        .expect("model app_data")
+        .push_ui_error(key);
+    Ok(())
+}
+
 /// Hand `request` to the call host, which applies it before the verb returns. The caller holds
 /// no borrow of the model.
 fn call(lua: &Lua, request: PartyRequest) -> mlua::Result<()> {
@@ -615,10 +628,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     .is_some_and(|own| own.eq_ignore_ascii_case(&name))
             };
             if ours {
-                lua.app_data_mut::<Model>()
-                    .expect("model app_data")
-                    .push_ui_error("ERR_INVITE_SELF");
-                return Ok(());
+                return display_error(lua, "ERR_INVITE_SELF");
             }
             call(lua, PartyRequest::InviteName(name))
         })?,
@@ -700,10 +710,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if master {
                 let name = binding_abi::optional_string(lua, &arg(1)).filter(|n| !n.is_empty());
                 let Some(name) = name else {
-                    lua.app_data_mut::<Model>()
-                        .expect("model app_data")
-                        .push_ui_error("ERR_SPECIFY_MASTER_LOOTER");
-                    return Ok(());
+                    return display_error(lua, "ERR_SPECIFY_MASTER_LOOTER");
                 };
                 let found = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
@@ -890,8 +897,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // A running check (`GetReadyCheckMsLeft`, `0x4bb203`) shows message `0x1c7` and
                 // ends the call (`0x4bb20c`).
                 if model.ready_check.deadline.is_some_and(|d| now < d) {
-                    model.push_ui_error("ERR_READY_CHECK_IN_PROGRESS");
-                    return Ok(());
+                    drop(model);
+                    return display_error(lua, "ERR_READY_CHECK_IN_PROGRESS");
                 }
                 // Every roster member but the caller is flagged pending (`0x4bb24c`, `0x4bb258`).
                 // A party has no raid roster, so nothing is flagged and the leader's echo closes

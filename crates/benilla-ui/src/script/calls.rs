@@ -116,6 +116,9 @@ pub enum ScriptCall {
     /// host runs the rest of the verb inside the call, from the group gates to the packet, and
     /// raises its escape error there ([`UiScript::raise_in_call`]).
     SendChat(super::ChatSend),
+    /// `DisplayError` (`0x496720`) on a catalog row a verb refuses with itself: the host shows the
+    /// line, its event and its sound, before the verb returns.
+    DisplayError(&'static str),
     /// `RandomRoll(min, max)` (`0x48c7b0`) past its range check (`0x48c807`-`0x48c830`):
     /// `MSG_RANDOM_ROLL` (`0x48c832`).
     RandomRoll { min: u32, max: u32 },

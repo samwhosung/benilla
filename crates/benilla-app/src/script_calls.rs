@@ -445,6 +445,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 self.pet_step(script, &mut at, step);
             }
             ScriptCall::SendChat(send) => appliers.p4().p1().send_chat(script, send),
+            ScriptCall::DisplayError(key) => appliers.p4().p1().display_error(script, key),
             ScriptCall::RandomRoll { min, max } => appliers.p4().p1().random_roll(min, max),
             ScriptCall::Channel(cmd) => {
                 if let Some((packet, refused)) = appliers.p4().p1().channel(script, cmd) {
