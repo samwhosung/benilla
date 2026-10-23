@@ -571,3 +571,122 @@ fn a_summon_signals_unit_pet_at_the_bar_and_again_at_our_summon_field() {
     );
     assert_eq!(seen, ["UNIT_PET:player:nil", "UNIT_PET:player:1"]);
 }
+
+/// A spy on `UNIT_PET`, `PET_BAR_UPDATE` and `TRAINER_CLOSED`, each with what `UnitExists("pet")`
+/// answers as it fires.
+fn spy_pet_signals(app: &mut App) {
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("UNIT_PET")
+            f:RegisterEvent("PET_BAR_UPDATE")
+            f:RegisterEvent("TRAINER_CLOSED")
+            f:SetScript("OnEvent", function()
+                table.insert(Seen, event .. ":" .. tostring(UnitExists("pet")))
+            end)
+            "#,
+        )
+        .unwrap();
+}
+
+/// `SMSG_PET_SPELLS` naming `guid`.
+fn bar_for(guid: u64) -> SessionEvent {
+    SessionEvent::PetSpells(Box::new(benilla_protocol::messages::PetSpells {
+        pet_guid: guid,
+        ..Default::default()
+    }))
+}
+
+/// `SetPetGuid` signals in its order at its packet's place (`0x4bdaf0` → `0x4bc7e0`):
+/// `UNIT_PET` on the change (`0x4bc84f`), then `PET_BAR_UPDATE` (`0x4bc90c`), both ahead of the
+/// next packet's summon field and its watch's `UNIT_PET`; a re-send of the same bar is
+/// `PET_BAR_UPDATE` alone.
+#[test]
+fn the_bar_signals_unit_pet_then_its_update_at_the_packet() {
+    let mut app = party_client();
+    frame(
+        &mut app,
+        crate::lanes::unit_view_tests::wire_packets(vec![vec![created(
+            PET,
+            EntityKind::Unit,
+            &super::unit_view_tests::health(60),
+        )]]),
+    );
+    spy_pet_signals(&mut app);
+    let seen = frame(
+        &mut app,
+        crate::lanes::unit_view_tests::wire_packets(vec![
+            vec![bar_for(PET)],
+            vec![values(ME, &summons(PET))],
+        ]),
+    );
+    assert_eq!(seen, ["UNIT_PET:nil", "PET_BAR_UPDATE:nil", "UNIT_PET:1"]);
+    let seen = frame(&mut app, vec![bar_for(PET)]);
+    assert_eq!(seen, ["PET_BAR_UPDATE:1"], "the same pet: no change");
+}
+
+/// A new pet with a pet trainer's list open asks for it again (`0x4bc872`-`0x4bc8b2`):
+/// `TalkToTrainer` closes the window (`0x5df6bb` → `0x4d7440`) and sends `CMSG_TRAINER_LIST` for
+/// it (`0x5df6fc`), between `UNIT_PET` and `PET_BAR_UPDATE`. The close signals `TRAINER_CLOSED`
+/// twice, as the trainer is still the interaction target (`0x4d7474` → `0x493310`, which closes
+/// again with the cell still set, `0x493434`). Another trainer type, or the same pet again,
+/// leaves the window be.
+#[test]
+fn a_new_pet_asks_an_open_pet_trainer_for_its_list_again() {
+    const TRAINER: u64 = 0xF130_0000_0055_0009;
+    for (trainer_type, refreshed) in [(3, true), (0, false)] {
+        let mut app = party_client();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(crate::net::NetCommands(tx));
+        crate::ui_trainer::open_trainer(
+            app.world_mut(),
+            TRAINER,
+            trainer_type,
+            Vec::new(),
+            String::new(),
+        );
+        spy_pet_signals(&mut app);
+        let seen = frame(&mut app, vec![bar_for(PET)]);
+        let asked: Vec<u64> = rx
+            .try_iter()
+            .filter_map(|c| match c {
+                crate::net::ClientCommand::TrainerList { trainer } => Some(trainer),
+                _ => None,
+            })
+            .collect();
+        let open = app
+            .world()
+            .resource::<crate::ui_trainer::TrainerOpen>()
+            .trainer;
+        if refreshed {
+            assert_eq!(
+                seen,
+                [
+                    "UNIT_PET:nil",
+                    "TRAINER_CLOSED:nil",
+                    "TRAINER_CLOSED:nil",
+                    "PET_BAR_UPDATE:nil"
+                ]
+            );
+            assert_eq!(asked, [TRAINER]);
+            assert_eq!(open, None, "the window closed for the new list");
+            // The same pet again: no change, no refresh.
+            crate::ui_trainer::open_trainer(
+                app.world_mut(),
+                TRAINER,
+                trainer_type,
+                Vec::new(),
+                String::new(),
+            );
+            let seen = frame(&mut app, vec![bar_for(PET)]);
+            assert_eq!(seen, ["PET_BAR_UPDATE:nil"]);
+            assert_eq!(rx.try_iter().count(), 0);
+        } else {
+            assert_eq!(seen, ["UNIT_PET:nil", "PET_BAR_UPDATE:nil"]);
+            assert!(asked.is_empty(), "type {trainer_type}: {asked:?}");
+            assert_eq!(open, Some(TRAINER));
+        }
+    }
+}

@@ -704,3 +704,75 @@ fn the_pet_spells_cooldown_keeps_every_bit_but_the_held_flag() {
     );
     assert_eq!(enable, 1);
 }
+
+/// The world entry's `SetPetGuid(0, 0)` (`0x4bc6fd`) clears the guid and the expiry alone. The
+/// slots and the mode word stay, unread, as every reader tests the guid first
+/// (`GetPetActionInfo` `0x4bdc9d`); the pet book stays, counted by `HasPetSpells` with no guid
+/// (`0x4b4416`); and so does the pet's cooldown list. The next packet replaces all of it.
+#[test]
+fn the_world_entry_reset_clears_the_guid_and_keeps_the_book() {
+    let mut rig = growl_rig();
+    {
+        let mut bar = rig.app.world_mut().resource_mut::<PetBar>();
+        bar.spells.spells = bar.spells.bar.to_vec();
+        bar.spells.state = 0x0000_0102;
+        bar.expires = Some(Instant::now() + Duration::from_secs(60));
+    }
+    rig.receive(vec![go(PET, GROWL)]);
+    rig.frame();
+    let book = |rig: &mut Rig| -> Option<f64> {
+        rig.app
+            .world_mut()
+            .non_send_resource_mut::<benilla_ui::script::UiScript>()
+            .eval("return (HasPetSpells())")
+            .unwrap()
+    };
+    assert_eq!(book(&mut rig), Some(1.0), "the book before");
+    let before = rig.app.world().resource::<PetBar>().spells.clone();
+
+    let world = rig.app.world_mut();
+    world.resource_scope(|world, mut bar: bevy::prelude::Mut<PetBar>| {
+        world.resource_scope(
+            |world, mut latch: bevy::prelude::Mut<super::PetAttackLatch>| {
+                world.resource_scope(|world, mut feed: bevy::prelude::Mut<super::PetBarFeed>| {
+                    let mut script = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
+                    assert!(super::drop_bar(
+                        &mut script,
+                        &mut bar,
+                        &mut latch,
+                        Some(&mut feed)
+                    ));
+                })
+            },
+        )
+    });
+    assert_eq!(rig.frame(), Vec::<String>::new(), "the feed adds no signal");
+
+    {
+        let bar = rig.app.world().resource::<PetBar>();
+        assert_eq!(bar.spells.pet_guid, 0);
+        assert_eq!(bar.expires, None);
+        assert_eq!(
+            (bar.spells.bar, &bar.spells.spells, bar.spells.state),
+            (before.bar, &before.spells, before.state),
+            "the slots, the raw list and the mode word stay"
+        );
+        let growl_cd = bar
+            .cooldowns
+            .info(GROWL, 0, Some(&growl()), Instant::now())
+            .remaining_ms;
+        assert!(growl_cd > 0, "the pet's cooldown list stays");
+    }
+    assert_eq!(book(&mut rig), Some(1.0), "the book stays");
+    let (bar_shown, info): (Option<f64>, Option<String>) = rig
+        .app
+        .world_mut()
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .eval("return PetHasActionBar(), (GetPetActionInfo(1))")
+        .unwrap();
+    assert_eq!(
+        (bar_shown, info),
+        (None, None),
+        "no bar reads without its guid"
+    );
+}
