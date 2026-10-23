@@ -92,10 +92,9 @@ impl FactionTemplate {
 }
 
 /// The mask bit for a 1-based race or class byte, `dec ecx; shl reg,cl` (`0x4d5512`, `0x52a7dd`):
-/// x86 masks the count to five bits, so 33 tests bit 0. A zero byte reads as 1 here; the
-/// reference's `dec` makes it bit 31.
+/// x86 masks the count to five bits, so 0 tests bit 31 and 33 tests bit 0.
 fn unit_byte_bit(byte: u8) -> u32 {
-    1u32.wrapping_shl(u32::from(byte.max(1)) - 1)
+    1u32.wrapping_shl(u32::from(byte).wrapping_sub(1))
 }
 
 /// One `Faction.dbc` row's reputation identity: its list slot and the race/class-gated base values

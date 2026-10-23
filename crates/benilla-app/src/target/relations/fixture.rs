@@ -47,13 +47,16 @@ pub(crate) fn factions() -> Factions {
     ))
 }
 
-/// A player-controlled player of this template.
+/// A player-controlled Human Warrior of this template: race and class 1, the bytes a reputation
+/// slot's masks test (`0x4d5512`), where a 0 would test bit 31.
 pub(crate) fn player(guid: u64, template: u32) -> RelUnit {
     RelUnit {
         guid,
         is_player: true,
         flags: PC,
         template: Some(template),
+        race: 1,
+        class: 1,
         ..Default::default()
     }
 }
