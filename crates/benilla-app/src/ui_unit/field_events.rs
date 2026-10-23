@@ -198,14 +198,21 @@ fn fire_notices(
 fn level_up(script: &mut UiScript, info: &benilla_protocol::messages::LevelUpInfo) {
     let level = info.level as i32;
     let int = |v: i32| ScriptValue::Int(i64::from(v));
-    let mut args = vec![
-        int(level),
-        int(info.health),
-        int(info.powers[0]),
-        int(i32::from(level >= 10)),
-    ];
-    args.extend(info.stats.iter().map(|&s| int(s)));
-    script.fire_event("PLAYER_LEVEL_UP", args);
+    let [str, agi, sta, int_, spi] = info.stats;
+    script.fire_event(
+        "PLAYER_LEVEL_UP",
+        vec![
+            int(level),
+            int(info.health),
+            int(info.powers[0]),
+            int(i32::from(level >= 10)),
+            int(str),
+            int(agi),
+            int(sta),
+            int(int_),
+            int(spi),
+        ],
+    );
 }
 
 /// `SMSG_LEVELUP_INFO`'s arm of the notice handler `0x5e38c0`. Only while the active player is
