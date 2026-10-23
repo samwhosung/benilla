@@ -505,7 +505,7 @@ mod tests {
             .id();
         world.resource_mut::<GuidIndex>().0.insert(GIVER, giver);
         crate::ui_merchant::open_merchant(world, VENDOR, Vec::new());
-        world.insert_non_send_resource(benilla_ui::script::UiScript::new().expect("a VM"));
+        crate::script_calls::insert_test_vm(world);
         crate::script_calls::with_hosted_vm(world, |s| {
             s.expect("a VM").run(
                 r#"local f = CreateFrame("Frame")
@@ -564,7 +564,7 @@ mod tests {
             let me = c.me;
             let world = c.world();
             world.resource_mut::<crate::net::NetStatus>().connected = true;
-            world.insert_non_send_resource(benilla_ui::script::UiScript::new().expect("a VM"));
+            crate::script_calls::insert_test_vm(world);
             let bit = |set: bool| u32::from(set) * 0x8;
             world
                 .get_mut::<ObjectStore>(me)
@@ -678,6 +678,130 @@ mod tests {
             .run_system_once(super::on_unit_died)
             .expect("the death handler runs");
         assert_eq!(latched(&mut c), None, "a fall to -1");
+    }
+
+    /// The death handler is exclusive, so bevy lists its pairs with every system no declared
+    /// order places against it with no component. What those systems meet of its legs' access
+    /// (each leg's declared access, the quest-giver sweep's, and the unit edits it applies after
+    /// each: every component a change writes) is a pure cache at most, which commutes: the
+    /// ambiguity ceiling's reason for these pairs. The latch's close cores are world functions
+    /// outside the model. An exclusive system shows bevy no access, so each one needs a declared
+    /// order against the handler.
+    #[test]
+    fn the_systems_unordered_against_the_death_handler_meet_it_only_on_a_pure_cache() {
+        use crate::game_plugins::schedule_tests::{
+            census, headless_client, type_names_available, SyncPoints,
+        };
+        use bevy::ecs::component::ComponentId;
+        use bevy::ecs::query::{Access, AccessConflicts};
+        use bevy::ecs::system::System;
+        use std::collections::{HashMap, HashSet};
+        let mut app = headless_client();
+        let mut handler = Access::new();
+        {
+            let world = app.world_mut();
+            fn leg<M>(
+                world: &mut World,
+                handler: &mut Access,
+                system: impl IntoSystem<In<FieldChanged>, (), M>,
+            ) {
+                let mut system = IntoSystem::into_system(system);
+                handler.extend(System::initialize(&mut system, world).combined_access());
+            }
+            leg(world, &mut handler, super::own_death_head);
+            leg(world, &mut handler, super::own_death_loot);
+            leg(world, &mut handler, super::own_death_cast);
+            leg(world, &mut handler, super::groupmate_died);
+            leg(world, &mut handler, super::unit_died);
+            handler.extend(&crate::quest_markers::sweep_access(world));
+            for edit in crate::creature_anim::UnitEdit::every(Entity::PLACEHOLDER) {
+                for t in edit.writes() {
+                    if let Some(id) = world.components().get_id(t) {
+                        handler.add_component_write(id);
+                    }
+                }
+            }
+        }
+        let accesses: HashMap<_, (Access, bool)> =
+            app.world_mut().schedule_scope(Update, |world, schedule| {
+                schedule.graph_mut().systems.initialize(world);
+                let graph = schedule.graph();
+                graph
+                    .systems
+                    .iter()
+                    .filter_map(|(k, system, _)| {
+                        let access = graph.systems.get(k)?.access.combined_access().clone();
+                        Some((k, (access, system.is_exclusive())))
+                    })
+                    .collect()
+            });
+        let c = census(&mut app, Update, SyncPoints::Declared);
+        if !type_names_available(&c) {
+            eprintln!("skipped: this build carries no type names");
+            return;
+        }
+        let (key, _) = c
+            .systems
+            .iter()
+            .find(|(_, s)| s.name.ends_with("::target::died::on_unit_died"))
+            .expect("the death handler is in Update");
+        let mut next: HashMap<_, Vec<_>> = HashMap::new();
+        let mut prev: HashMap<_, Vec<_>> = HashMap::new();
+        for (a, b) in &c.dependencies {
+            next.entry(*a).or_default().push(*b);
+            prev.entry(*b).or_default().push(*a);
+        }
+        let reach = |edges: &HashMap<_, Vec<_>>| {
+            let mut seen = HashSet::new();
+            let mut stack = vec![*key];
+            while let Some(n) = stack.pop() {
+                for m in edges.get(&n).into_iter().flatten() {
+                    if seen.insert(*m) {
+                        stack.push(*m);
+                    }
+                }
+            }
+            seen
+        };
+        let (after, before) = (reach(&next), reach(&prev));
+        let world = app.world();
+        let mut hazards = Vec::new();
+        for (k, (a, exclusive)) in &accesses {
+            if k == key || after.contains(k) || before.contains(k) {
+                continue;
+            }
+            if *exclusive {
+                hazards.push(format!("{}: exclusive, its access unknown", c.name(*k)));
+                continue;
+            }
+            if a.is_compatible(&handler) {
+                continue;
+            }
+            let met: Vec<String> = match a.get_conflicts(&handler) {
+                AccessConflicts::All => vec!["everything".to_string()],
+                AccessConflicts::Individual(ids) => ids
+                    .ones()
+                    .map(ComponentId::new)
+                    .filter(|id| !c.classes.caches.contains(id))
+                    .map(|id| {
+                        world
+                            .components()
+                            .get_name(id)
+                            .map_or_else(|| "?".to_string(), |n| n.to_string())
+                    })
+                    .collect(),
+            };
+            if !met.is_empty() {
+                hazards.push(format!("{}: {met:?}", c.name(*k)));
+            }
+        }
+        hazards.sort();
+        assert!(
+            hazards.is_empty(),
+            "these run in no declared order against the death handler and meet what it \
+             touches; order them:\n  {}",
+            hazards.join("\n  ")
+        );
     }
 
     /// `0x6058b3`-`0x6058e0`: a spell in flight (`0x6e3d30`) whose record target (`0x6e3d50`,
