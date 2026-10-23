@@ -572,7 +572,7 @@ fn a_summon_signals_unit_pet_at_the_bar_and_again_at_our_summon_field() {
     assert_eq!(seen, ["UNIT_PET:player:nil", "UNIT_PET:player:1"]);
 }
 
-/// A spy on `UNIT_PET`, `PET_BAR_UPDATE` and `TRAINER_CLOSED`, each with what `UnitExists("pet")`
+/// A spy on `UNIT_PET`, `PET_BAR_UPDATE`, `TRAINER_CLOSED` and `PET_UI_CLOSE`, each with what `UnitExists("pet")`
 /// answers as it fires.
 fn spy_pet_signals(app: &mut App) {
     app.world_mut()
@@ -583,6 +583,7 @@ fn spy_pet_signals(app: &mut App) {
             f:RegisterEvent("UNIT_PET")
             f:RegisterEvent("PET_BAR_UPDATE")
             f:RegisterEvent("TRAINER_CLOSED")
+            f:RegisterEvent("PET_UI_CLOSE")
             f:SetScript("OnEvent", function()
                 table.insert(Seen, event .. ":" .. tostring(UnitExists("pet")))
             end)
@@ -688,5 +689,47 @@ fn a_new_pet_asks_an_open_pet_trainer_for_its_list_again() {
             assert!(asked.is_empty(), "type {trainer_type}: {asked:?}");
             assert_eq!(open, Some(TRAINER));
         }
+    }
+}
+
+/// `SetPetGuid`'s `PET_UI_CLOSE` (`0x4bc8f8`-`0x4bc907`, event 428): on a change to a guid that
+/// resolves as a unit (`0x4bc8e4`) and passes `IsPlayerOrHunterPet` (`0x6116e0`), between
+/// `UNIT_PET` and `PET_BAR_UPDATE`. A creature passes as a pet number's holder that our charm,
+/// else our summon, names while our class is Hunter (`0x611704`-`0x61175a`); a warrior's, or a
+/// unit with no pet number, does not.
+#[test]
+fn a_hunters_new_pet_signals_pet_ui_close_before_the_bar_update() {
+    /// `UNIT_FIELD_BYTES_0`, the class in byte 1, and `UNIT_FIELD_PETNUMBER`.
+    const BYTES_0: u16 = 36;
+    const PETNUMBER: u16 = 139;
+    for (class, pet_number, closes) in [(3, 7, true), (1, 7, false), (3, 0, false)] {
+        let mut app = party_client();
+        frame(
+            &mut app,
+            crate::lanes::unit_view_tests::wire_packets(vec![vec![
+                created(
+                    PET,
+                    EntityKind::Unit,
+                    &[
+                        (OBJECT_TYPE, TYPE_UNIT),
+                        (22, 60),
+                        (28, 60),
+                        (PETNUMBER, pet_number),
+                    ],
+                ),
+                values(ME, &[(BYTES_0, class << 8)]),
+                values(ME, &summons(PET)),
+            ]]),
+        );
+        spy_pet_signals(&mut app);
+        let seen = frame(&mut app, vec![bar_for(PET)]);
+        let mut heard = vec!["UNIT_PET:1"];
+        if closes {
+            heard.push("PET_UI_CLOSE:1");
+        }
+        heard.push("PET_BAR_UPDATE:1");
+        assert_eq!(seen, heard, "class {class}, pet number {pet_number}");
+        let seen = frame(&mut app, vec![bar_for(PET)]);
+        assert_eq!(seen, ["PET_BAR_UPDATE:1"], "the same pet: no change");
     }
 }
