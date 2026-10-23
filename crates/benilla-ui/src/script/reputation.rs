@@ -126,39 +126,43 @@ pub(crate) struct HeaderObject {
 }
 
 impl super::UiScript {
-    /// Push the reputation snapshot: a newly met faction is added (`0x4d5a70`), and the list sorted
-    /// when one was or a flag moved. No row leaves but at the rebuild. The folds stay, as no
-    /// standing or flag message writes the mask (`0x4d5760`, `0x4d56b0`, `0x4d5710`), unless an
-    /// added row registers a header: its registration opens every header (`0x4d5c34`), Inactive's
-    /// included. The first push into a VM is the rebuild's ([`Self::reputation_enter_world`]).
+    /// Push the reputation snapshot, the slots' names, standings and flags: the list moves only by
+    /// the messages' ops ([`Self::apply_reputation_ops`]) and the verbs, and no row leaves it but
+    /// at the rebuild. The first push into a VM is the rebuild's
+    /// ([`Self::reputation_enter_world`]).
     pub fn set_reputation(&mut self, state: ReputationState) {
         let mut model = self.model_mut();
-        let old = std::mem::replace(&mut model.reputation, state);
+        model.reputation = state;
         if model.reputation_headers.is_empty() {
             rebuild(&mut model);
-            return;
-        }
-        // A met faction joins the list (`0x4d5738`, `0x4d5826`), and a flag the server moved
-        // re-sorts it (`0x4d5876` → `0x4d58c8`).
-        let flags = |e: &FactionEntry| (e.visible, e.at_war, e.is_header, e.inactive);
-        let moved = model.reputation.entries.iter().any(|e| {
-            old.entries
-                .iter()
-                .find(|o| o.faction_id == e.faction_id)
-                .is_none_or(|o| flags(o) != flags(e))
-        });
-        let mut added = false;
-        for e in &met(&model) {
-            added |= add(&mut model, e);
-        }
-        if added || moved {
-            sort(&mut model);
         }
     }
 
     /// Apply the list's half of the reputation messages, in arrival order.
+    /// An added row that registers a header opens every header (`0x4d5c34`), Inactive's
+    /// included; no message writes the folds otherwise (`0x4d5760`, `0x4d56b0`, `0x4d5710`).
     pub fn apply_reputation_ops(&mut self, ops: Vec<ReputationListOp>) {
-        let _ = ops;
+        let mut model = self.model_mut();
+        for op in ops {
+            match op {
+                ReputationListOp::Visible(slot) => {
+                    add_slot(&mut model, slot);
+                    sort(&mut model);
+                }
+                ReputationListOp::Standing {
+                    listed,
+                    flags_moved,
+                } => {
+                    for slot in listed {
+                        add_slot(&mut model, slot);
+                    }
+                    if flags_moved {
+                        sort(&mut model);
+                    }
+                }
+                ReputationListOp::Rebuild => rebuild(&mut model),
+            }
+        }
     }
 
     /// The world-enter cascade's rebuild (`0x4909d3` calls `0x4d5430`): the player in the world,
@@ -284,10 +288,10 @@ fn register(model: &mut Model, key: i64) {
 /// header registered for a header row (`0x4d5b16`), or, for any other row whose team no header
 /// entry names (`0x4d5b6a`-`0x4d5b83`), its team's header after it, with the team's slot
 /// (`0x4d5b87`-`0x4d5bdc`).
-fn add(model: &mut Model, e: &FactionEntry) -> bool {
+fn add(model: &mut Model, e: &FactionEntry) {
     let slot = i64::from(e.rep_list_id);
     if model.reputation_rows.iter().any(|r| r.slot == slot) {
-        return false;
+        return;
     }
     let faction = i64::from(e.faction_id);
     if e.is_header {
@@ -299,7 +303,7 @@ fn add(model: &mut Model, e: &FactionEntry) -> bool {
             pos: 0,
             key: faction,
         });
-        return true;
+        return;
     }
     let team = i64::from(e.parent_id);
     let listed = model
@@ -324,7 +328,20 @@ fn add(model: &mut Model, e: &FactionEntry) -> bool {
         });
         register(model, team);
     }
-    true
+}
+
+/// The adder on a slot (`0x4d5a70`), for the slot's pushed entry; a slot the push lacks adds
+/// nothing.
+fn add_slot(model: &mut Model, slot: u32) {
+    let entry = model
+        .reputation
+        .entries
+        .iter()
+        .find(|e| e.rep_list_id == slot)
+        .cloned();
+    if let Some(e) = entry {
+        add(model, &e);
+    }
 }
 
 /// The key a row counts under (`0x4d5c72`-`0x4d5c89`): -1 while its slot is inactive

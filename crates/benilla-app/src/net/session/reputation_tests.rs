@@ -516,6 +516,40 @@ fn the_initialize_message_signals_both_rebuild_sorts_and_its_own() {
     );
 }
 
+/// Each message hands the pane's list what its handler does to it: a visible message the slot it
+/// lists (`0x4d5738`), a standing message the slots its entries made visible and whether a flag
+/// byte moved (`0x4d5826`, `0x4d58c8`), an at-war message nothing, as it sorts nothing
+/// (`0x4d56b0`).
+#[test]
+fn each_message_hands_the_list_its_own_ops() {
+    use benilla_formats::faction_flags::{AT_WAR, VISIBLE};
+    use benilla_ui::script::ReputationListOp as Op;
+    let mut app = synthetic_app();
+    seat(&mut app, VISIBLE, 0);
+    let ops =
+        |app: &mut App| std::mem::take(&mut app.world_mut().resource_mut::<Reputations>().list_ops);
+    let _ = ops(&mut app);
+    visible(&mut app, 40);
+    visible(&mut app, 40);
+    assert_eq!(ops(&mut app), [Op::Visible(40)]);
+    send(
+        &mut app,
+        SessionEvent::ReputationAtWar {
+            list_id: SLOT as u32,
+            flags: AT_WAR,
+        },
+    );
+    assert!(ops(&mut app).is_empty());
+    delta(&mut app, 30, 5);
+    assert_eq!(
+        ops(&mut app),
+        [Op::Standing {
+            listed: vec![30],
+            flags_moved: true
+        }]
+    );
+}
+
 /// `SMSG_SET_FACTION_ATWAR` (`0x4d56b0`) copies bit `0x02` of its byte into the slot's at-war bit
 /// and touches no other bit (`0x4d56d9`-`0x4d56e9`).
 #[test]

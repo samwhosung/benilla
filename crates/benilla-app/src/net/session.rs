@@ -11,6 +11,7 @@ use crate::names::NameCache;
 use crate::ui_quest::QuestGiver;
 
 use benilla_protocol::{SessionEvent, SessionEventKind};
+use benilla_ui::script::ReputationListOp;
 use bevy::ecs::system::SystemParam;
 
 use super::{clock_tick, ServerTime};
@@ -423,9 +424,13 @@ fn on_reputations(
     match ev {
         SessionEvent::Reputations { standings } => {
             reputations(standings, &mut b.reputations);
-            // With the player held, the rebuild's two sorts signal (`0x4d5694` → `0x4d55d9` →
-            // `0x4d6457`, and `0x4d55de`), then the message's own (`0x4d5699`).
-            signal(1 + 2 * usize::from(self_facts(&b).is_some()), &mut lane);
+            // With the player held, the rebuild (`0x4d5694`), whose two sorts signal
+            // (`0x4d55d9` → `0x4d6457`, and `0x4d55de`), then the message's own (`0x4d5699`).
+            let held = self_facts(&b).is_some();
+            if held {
+                b.reputations.list_ops.push(ReputationListOp::Rebuild);
+            }
+            signal(1 + 2 * usize::from(held), &mut lane);
         }
         SessionEvent::ForcedReactions { reactions } => {
             forced_reactions(reactions, &mut b.reputations);
@@ -445,8 +450,14 @@ fn on_reputations(
                 );
                 crate::ui_reputation::queue_standing_lines(line, f.catalog(), me.female, &chat);
             }
-            // A slot newly visible is sorted, which signals (`0x4d574a` → `0x4d5dab`).
+            // A slot newly visible is added and sorted, which signals (`0x4d5738`, `0x4d574a` →
+            // `0x4d5dab`).
             let listed = reputation_visible(list_id, &mut b.reputations);
+            if listed {
+                b.reputations
+                    .list_ops
+                    .push(ReputationListOp::Visible(list_id));
+            }
             signal(usize::from(listed), &mut lane);
         }
         SessionEvent::ReputationAtWar { list_id, flags } => {
@@ -514,6 +525,10 @@ fn on_reputation_delta(
             .zip(self_facts(&b))
             .map(|(f, me)| (f.catalog(), me.race, me.class));
         let latches = reputation_delta(standings, &mut b.reputations, ranks, &mut quest);
+        b.reputations.list_ops.push(ReputationListOp::Standing {
+            listed: latches.listed.clone(),
+            flags_moved: latches.flags_moved,
+        });
         // A flag byte that moved re-sorts, which signals (`0x4d58c8` → `0x4d5dab`).
         if latches.flags_moved {
             if let Some(lane) = lane.as_deref_mut() {
@@ -892,6 +907,8 @@ fn reputation_delta(
         let mut flags = reputations.flags(i);
         if flags & (flag::VISIBLE | flag::HIDDEN) == 0 {
             flags |= flag::VISIBLE;
+            // The adder, which lists the slot (`0x4d5826`).
+            latches.listed.push(list_id);
         }
         if let (Some(old), Some(new)) = (old, rank(reputations, i)) {
             latches.rank_moved |= new != old;
@@ -914,6 +931,8 @@ fn reputation_delta(
 struct DeltaLatches {
     /// A slot's flag byte moved (`0x4d585d`-`0x4d5876`): the list re-sorts.
     flags_moved: bool,
+    /// The slots the entries made visible, in their order, each handed to the adder (`0x4d5826`).
+    listed: Vec<u32>,
     /// A slot's rank moved, `HIDDEN` or not (`0x4d5880`, `0x4d58a9`, `0x4d58ac`): the quest log and
     /// the reaction refresh read it.
     rank_moved: bool,

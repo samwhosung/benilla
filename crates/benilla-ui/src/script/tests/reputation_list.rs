@@ -72,8 +72,8 @@ fn names(s: &UiScript) -> Vec<String> {
 }
 
 /// `SMSG_SET_FACTION_STANDING` (`0x4d5760`) writes none of the mask's writers, so a standing
-/// change keeps every fold, the Inactive header's included; a push that lists a header key not
-/// registered before registers it, and the registration sets the mask to all ones (`0x4d5c34`).
+/// change keeps every fold, the Inactive header's included; a newly visible row whose team has no
+/// header registers one, and the registration sets the mask to all ones (`0x4d5c34`).
 #[test]
 fn a_standing_push_keeps_the_folds_and_a_new_header_opens_every_one() {
     let mut s = seated();
@@ -90,7 +90,7 @@ fn a_standing_push_keeps_the_folds_and_a_new_header_opens_every_one() {
 
     // A row moved to Inactive and its header opened, then a standing change: still open.
     ticked.entries[1].inactive = true; // Argent Dawn
-    s.set_reputation(ticked.clone());
+    s.set_faction_inactive(13, true);
     let n = names(&s).len();
     s.run(&format!("ExpandFactionHeader({n})")).unwrap();
     assert_eq!(names(&s).last().unwrap(), "Argent Dawn", "Inactive opened");
@@ -109,6 +109,7 @@ fn a_standing_push_keeps_the_folds_and_a_new_header_opens_every_one() {
         .push(entry(889, 21, 892, "Warsong Outriders"));
     ticked.entries.push(header(892, 22, "Horde Forces"));
     s.set_reputation(ticked);
+    s.apply_reputation_ops(vec![crate::script::ReputationListOp::Visible(21)]);
     let all = names(&s);
     assert!(
         all.iter().any(|n| n == "Ironforge") && all.iter().any(|n| n == "Warsong Outriders"),
