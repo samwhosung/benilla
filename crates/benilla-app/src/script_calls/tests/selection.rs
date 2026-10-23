@@ -603,7 +603,11 @@ fn an_attacks_pick_signals_its_target_change_before_the_swing() {
             ["SetSelection 0x31", "RandomRoll", "AttackSwing 0x31"],
             "{lua}"
         );
-        assert_eq!(seen(&mut f), "SPELL_UPDATE_USABLE,PLAYER_TARGET_CHANGED", "{lua}");
+        assert_eq!(
+            seen(&mut f),
+            "SPELL_UPDATE_USABLE,PLAYER_TARGET_CHANGED",
+            "{lua}"
+        );
         feeds(&mut f);
         assert_eq!(events(&mut f).len(), 2, "{lua}: heard once, in the call");
     }
@@ -660,11 +664,7 @@ fn an_assists_own_select_signals_inside_the_call_after_a_listener_retargets() {
         ]
     );
     let heard = seen(&mut f);
-    assert_eq!(
-        heard.matches("PLAYER_TARGET_CHANGED").count(),
-        3,
-        "{heard}"
-    );
+    assert_eq!(heard.matches("PLAYER_TARGET_CHANGED").count(), 3, "{heard}");
     feeds(&mut f);
     let again = events(&mut f);
     assert_eq!(
@@ -674,5 +674,140 @@ fn an_assists_own_select_signals_inside_the_call_after_a_listener_retargets() {
             .count(),
         3,
         "heard in the call alone: {again:?}"
+    );
+}
+
+/// `UNIT_FIELD_SUMMONEDBY`.
+const SUMMONEDBY: u16 = 12;
+
+/// The bar's unit `PET`, alive, ours (summoned by us) or, `possessed`, possessed with our view on
+/// it, with `slot1` the bar's first word; the VM shows the bar, as its feed pushes it.
+fn with_pet(f: &mut Frame, possessed: bool, slot1: u32) {
+    let world = f.app.world_mut();
+    let mut fields = vec![(22, 100), (28, 100)];
+    if possessed {
+        fields.extend([
+            (CHARMEDBY, ME as u32),
+            (FLAGS, crate::target::UNIT_FLAG_POSSESSED),
+        ]);
+    } else {
+        fields.push((SUMMONEDBY, ME as u32));
+    }
+    let pet = world
+        .spawn((
+            Guid(PET),
+            Transform::default(),
+            GlobalTransform::default(),
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&fields)),
+        ))
+        .id();
+    world.resource_mut::<GuidIndex>().0.insert(PET, pet);
+    if possessed {
+        let me = world.resource::<GuidIndex>().0[&ME];
+        world.get_mut::<ObjectStore>(me).unwrap().0.merge(
+            benilla_protocol::ObjectFields::from_pairs(&[
+                (FARSIGHT, PET as u32),
+                (FARSIGHT + 1, (PET >> 32) as u32),
+            ]),
+        );
+    }
+    let mut bar = world.resource_mut::<crate::ui_pet::PetBar>();
+    bar.spells.pet_guid = PET;
+    bar.spells.bar[0] = benilla_protocol::messages::PetActionEntry::from(slot1);
+    world.non_send_resource_mut::<UiScript>().set_pet_actions(
+        true,
+        true,
+        false,
+        vec![
+            benilla_ui::script::PetActionView {
+                packed: slot1,
+                ..Default::default()
+            };
+            10
+        ],
+    );
+}
+
+/// The selections, rolls and the pet's casts and orders sent, in order.
+fn pet_wire(f: &Frame) -> Vec<String> {
+    f.rx.try_iter()
+        .filter_map(|c| match c {
+            ClientCommand::SetSelection { guid } => Some(format!("SetSelection {guid:#x}")),
+            ClientCommand::RandomRoll { .. } => Some("RandomRoll".to_string()),
+            ClientCommand::PetCastSpell { spell_id, .. } => {
+                Some(format!("PetCastSpell {spell_id}"))
+            }
+            ClientCommand::PetAction { target_guid, .. } => {
+                Some(format!("PetAction {target_guid:#x}"))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The pet bar's Attack (`0x4bd1d0`) runs the validator with the pet as its actor (`0x4bd40d`),
+/// whose pick commits through `SetSelection` and signals `PLAYER_TARGET_CHANGED` (`0x49389c`)
+/// inside it, ahead of `CMSG_PET_ACTION` (`0x4bd4a4`): the listener's packet goes out between the
+/// selection and the order, which goes at the pick.
+#[test]
+fn a_pet_attacks_pick_signals_its_target_change_before_the_order() {
+    let attack = benilla_protocol::messages::PET_COMMAND_ATTACK
+        | (u32::from(benilla_protocol::messages::PET_ACT_COMMAND) << 24);
+    let mut f = frame(true);
+    with_factions(&mut f, FRIEND, &[]);
+    spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
+    with_pet(&mut f, false, attack);
+    feeds(&mut f);
+    f.rx.try_iter().for_each(drop);
+    on_target_changed(&mut f, "RandomRoll(1, 100)");
+    run_pressed(&mut f, "PetAttack()");
+    assert_eq!(
+        pet_wire(&f),
+        ["SetSelection 0x31", "RandomRoll", "PetAction 0x31"]
+    );
+}
+
+/// A possessed unit's spell goes to the attempt with the unit as its caster (`0x4bd35e`), whose
+/// attack pick (`0x6e4efb`, the unit as its actor at `0x6e4ef4`) signals its selection before the
+/// send; TryCast's tail then presses the bar's Attack (`0x6e51de` → `0x6131a0` → `0x4bd630`) at
+/// the guid the pick settled, after the cast.
+#[test]
+fn a_unit_casters_pick_signals_its_target_change_before_the_cast_and_the_order() {
+    const PUMMEL: u32 = 10887;
+    let mut f = frame(true);
+    with_factions(&mut f, FRIEND, &[]);
+    spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
+    with_pet(
+        &mut f,
+        true,
+        PUMMEL | (u32::from(benilla_protocol::messages::PET_ACT_ENABLED) << 24),
+    );
+    f.app.world_mut().insert_resource(crate::ui_action::Spells {
+        catalog: benilla_formats::SpellCatalog::from_displays(
+            [(
+                PUMMEL,
+                benilla_formats::SpellDisplay {
+                    name: "Pummel".into(),
+                    // `AttributesEx 0x200`: predicate `0x6e5200`, and the send's melee start.
+                    attributes_ex: 0x200,
+                    ..Default::default()
+                },
+            )]
+            .into(),
+        ),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    feeds(&mut f);
+    f.rx.try_iter().for_each(drop);
+    on_target_changed(&mut f, "RandomRoll(1, 100)");
+    run_pressed(&mut f, "CastPetAction(1)");
+    assert_eq!(
+        pet_wire(&f),
+        [
+            "SetSelection 0x31",
+            "RandomRoll",
+            "PetCastSpell 10887",
+            "PetAction 0x31"
+        ]
     );
 }
