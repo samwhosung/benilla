@@ -429,16 +429,16 @@ fn loot_master_list(candidates: Vec<u64>, loot: &mut LootState) {
     loot.set_master_candidates(candidates);
 }
 
-/// `OnItemPush 0x491a60`'s outermost gate (`0x491b56`/`0x491b61`): only our own push prints or
-/// animates. Another member's push takes the `0x491d9f` arm and prints `LOOT_ITEM` with their
-/// name, which is not built, so a foreign push is dropped. `showInChat` is a later gate
+/// `OnItemPush 0x491a60`'s arm (`0x491b56`/`0x491b61`): only our own push animates and its own
+/// lines; another member's takes the `0x491d9f` arm. `showInChat` is a later gate
 /// (`0x491bf3`/`0x491db1`), carried into [`LootState::push_receive`].
 fn is_our_push(p: &ItemPushResult, self_guid: &SelfGuid) -> bool {
     self_guid.0 == Some(p.player_guid)
 }
 
-/// `SMSG_ITEM_PUSH_RESULT`: queues our own push for its chat line and its bag-bar animation, at
-/// its packet when its record is `held`, else at the record's answer.
+/// `SMSG_ITEM_PUSH_RESULT`: queues our own push for its chat line and its bag-bar animation, and
+/// another member's for its line, at its packet when its record is `held`, else at the record's
+/// answer.
 fn item_push_result(
     p: ItemPushResult,
     self_guid: &SelfGuid,
@@ -451,6 +451,13 @@ fn item_push_result(
         p.item_entry, p.count, p.bag_slot, p.item_slot
     );
     if !is_our_push(&p, self_guid) {
+        let held = held(p.item_entry);
+        // Another member's: no line for an item pushed but not created (`0x491d9f`-`0x491dab`),
+        // or one not for the chat (`0x491db1`).
+        if (p.from_npc && !p.created) || !p.show_in_chat {
+            return;
+        }
+        loot.push_receive_other(&p, held);
         return;
     }
     tutorials.item_received(p.item_entry, p.bag_slot, p.item_slot);

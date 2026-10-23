@@ -435,6 +435,16 @@ impl LootState {
     /// Queues a push the net handler has already checked is ours, at its packet, or, when its
     /// record was not `held` there (`0x491a93`), keeps it for the record's answer.
     pub(crate) fn push_receive(&mut self, p: &ItemPushResult, held: bool) {
+        self.enqueue_receive(p, None, held);
+    }
+
+    /// Queues another group member's push, for its line alone, as [`Self::push_receive`] does
+    /// the active player's.
+    pub(crate) fn push_receive_other(&mut self, p: &ItemPushResult, held: bool) {
+        self.enqueue_receive(p, Some(p.player_guid), held);
+    }
+
+    fn enqueue_receive(&mut self, p: &ItemPushResult, owner: Option<u64>, held: bool) {
         let r = PendingReceive {
             created: p.created,
             entry: p.item_entry,
@@ -444,7 +454,7 @@ impl LootState {
             suffix_factor: p.suffix_factor,
             in_chat: p.show_in_chat,
             container: push_container(p.bag_slot, p.item_slot),
-            owner: None,
+            owner,
             tries: 0,
         };
         if held {
@@ -927,25 +937,33 @@ impl Candidates<'_> {
     }
 }
 
-/// `OnItemPush`'s self line (`0x491bfb`): the template read through `FrameScript_GetText`
-/// (`0x491c25`, `0x491c81`), created winning over pushed by an NPC over looted
-/// (`0x491c04`-`0x491c1b`), each with a `_MULTIPLE` form for a count above 1 (`jg`), filled with
-/// the item's link (`0x52adb0`, at `0x491c43`) and the count; `None`, for no line, when the
-/// strings lack it.
+/// `OnItemPush`'s line: the template read through `FrameScript_GetText`, filled with the item's
+/// link (`0x52adb0`) and the count, `_MULTIPLE` for a count above 1 by a signed compare (`jg`);
+/// `None`, for no line, when the strings lack it. The active player's own push (`0x491bfb`, read
+/// at `0x491c25` and `0x491c81`) takes created over pushed by an NPC over looted
+/// (`0x491c04`-`0x491c1b`); another member's (`0x491dbc`, read at `0x491dd5` and `0x491e2e`)
+/// takes `CREATED_ITEM` or `LOOT_ITEM`, with `owner_name`, their `GetUnitName`, first
+/// (`0x491dfe`, `0x491e5b`).
 fn receive_line(
     r: &PendingReceive,
     name: &str,
     quality: u32,
+    owner_name: Option<&str>,
     get: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
     use benilla_ui::strings::{fill, Arg};
-    let key = match (r.created, r.from_npc, r.count > 1) {
-        (true, _, false) => "LOOT_ITEM_CREATED_SELF",
-        (true, _, true) => "LOOT_ITEM_CREATED_SELF_MULTIPLE",
-        (false, true, false) => "LOOT_ITEM_PUSHED_SELF",
-        (false, true, true) => "LOOT_ITEM_PUSHED_SELF_MULTIPLE",
-        (false, false, false) => "LOOT_ITEM_SELF",
-        (false, false, true) => "LOOT_ITEM_SELF_MULTIPLE",
+    let multiple = r.count as i32 > 1;
+    let key = match (owner_name.is_some(), r.created, r.from_npc, multiple) {
+        (false, true, _, false) => "LOOT_ITEM_CREATED_SELF",
+        (false, true, _, true) => "LOOT_ITEM_CREATED_SELF_MULTIPLE",
+        (false, false, true, false) => "LOOT_ITEM_PUSHED_SELF",
+        (false, false, true, true) => "LOOT_ITEM_PUSHED_SELF_MULTIPLE",
+        (false, false, false, false) => "LOOT_ITEM_SELF",
+        (false, false, false, true) => "LOOT_ITEM_SELF_MULTIPLE",
+        (true, true, _, false) => "CREATED_ITEM",
+        (true, true, _, true) => "CREATED_ITEM_MULTIPLE",
+        (true, false, _, false) => "LOOT_ITEM",
+        (true, false, _, true) => "LOOT_ITEM_MULTIPLE",
     };
     let link = crate::ui_items::item_link_full(
         r.entry,
@@ -955,10 +973,12 @@ fn receive_line(
         name,
         quality,
     );
-    let text = fill(
-        &get(key)?,
-        &[Arg::S(&link), Arg::D(i64::from(r.count as i32))],
-    );
+    let count = Arg::D(i64::from(r.count as i32));
+    let args = match owner_name {
+        Some(owner) => vec![Arg::S(owner), Arg::S(&link), count],
+        None => vec![Arg::S(&link), count],
+    };
+    let text = fill(&get(key)?, &args);
     (!text.is_empty()).then_some(text)
 }
 
@@ -970,7 +990,7 @@ fn drain_receives(
     chat: &crate::ui_chat::ChatLog,
     script: &mut UiScript,
     rolls: RollCatalogs,
-    _owner: &dyn Fn(u64) -> Option<Option<String>>,
+    owner: &dyn Fn(u64) -> Option<Option<String>>,
 ) -> Vec<PendingReceive> {
     let mut still = Vec::new();
     for mut r in pending {
@@ -984,6 +1004,29 @@ fn drain_receives(
             .template(r.entry, 0, ask)
             .map(|t| (t.name.clone(), t.quality, t.display_info_id));
         match resolved {
+            Some((name, quality, display_id)) if r.owner.is_some() => {
+                // Another member's push: a pusher the client holds as a player (`0x491b2c`, mask
+                // 0x10), named by `GetUnitName` with its `UNKNOWNOBJECT` miss; no `ITEM_PUSH`.
+                let Some(owner) = r.owner.and_then(owner) else {
+                    continue;
+                };
+                let owner = owner.unwrap_or_else(|| script.unknown_object_text());
+                let line = r.in_chat.then(|| {
+                    receive_line(
+                        &r,
+                        &rolls.name(&name, r.random_property_id),
+                        quality,
+                        Some(&owner),
+                        &|key| benilla_ui::strings::global(script.lua(), key),
+                    )
+                });
+                if let Some(text) = line.flatten() {
+                    chat.push_event(crate::ui_chat::ChatEvent::text_only(
+                        crate::ui_chat::ChatEventKind::Loot,
+                        text,
+                    ));
+                }
+            }
             Some((name, quality, display_id)) => {
                 // Ungated by `in_chat`. `arg2` is the icon path the reference builds from the
                 // display record (`0x491baa`).
@@ -1005,6 +1048,7 @@ fn drain_receives(
                         &r,
                         &rolls.name(&name, r.random_property_id),
                         quality,
+                        None,
                         &|key| benilla_ui::strings::global(script.lua(), key),
                     )
                 });
@@ -1035,6 +1079,15 @@ struct LootSourceObjects<'w, 's> {
 }
 
 impl LootSourceObjects<'_, '_> {
+    /// A player the object manager holds (`0x468460`, typemask 0x10, `0x491b2c`).
+    fn player(&self, guid: u64) -> Option<&crate::net::ObjectStore> {
+        self.index
+            .as_ref()
+            .and_then(|index| index.0.get(&guid))
+            .and_then(|&e| self.stores.get(e).ok())
+            .filter(|s| s.0.object_type_mask().unwrap_or(0) & 0x10 != 0)
+    }
+
     fn is_unit(&self, guid: u64) -> bool {
         self.index
             .as_ref()
@@ -1102,6 +1155,8 @@ impl LootReads<'_, '_> {
             commands: &self.commands,
             chat: &self.chat,
             rolls: self.rolls(),
+            names: &self.names,
+            objects: &self.objects,
         }
     }
 }
@@ -1410,6 +1465,8 @@ struct PushInputs<'a> {
     commands: &'a NetCommands,
     chat: &'a crate::ui_chat::ChatLog,
     rolls: RollCatalogs<'a>,
+    names: &'a NameCache,
+    objects: &'a LootSourceObjects<'a, 'a>,
 }
 
 /// Fire `batch` as one turn ([`drain_receives`]); what still waits on its template comes back.
@@ -1430,7 +1487,14 @@ fn emit_pushes<P: bevy::ecs::system::SystemParam + 'static>(
             with.chat,
             script,
             with.rolls,
-            &|_| None,
+            &|guid| {
+                let store = with.objects.player(guid)?;
+                Some(
+                    with.names
+                        .resolve_unit(guid, Some(store), Ask::Event(with.commands))
+                        .map(str::to_string),
+                )
+            },
         ),
         None => batch,
     })
@@ -2683,7 +2747,7 @@ mod tests {
     /// [`receive_line`] from the install's strings.
     fn receive_text(r: &PendingReceive, name: &str, quality: u32) -> String {
         STRINGS.with(|s| {
-            receive_line(r, name, quality, &|key| {
+            receive_line(r, name, quality, None, &|key| {
                 benilla_ui::strings::global(s.lua(), key)
             })
             .expect("a template for every receive line")
