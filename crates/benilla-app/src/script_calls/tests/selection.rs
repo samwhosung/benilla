@@ -426,3 +426,82 @@ fn eight_nested_switches_fit_a_two_megabyte_stack() {
         .join()
         .expect("eight levels fit");
 }
+
+/// StartAttack's refusal arm (`0x5ecc37` `IsAttacking` → `0x5ecc48` StopAttack `0x5ecac0`): a
+/// switch from a swing to a friendly unit re-swings into a refused attack test (`0x606980` at
+/// `0x5ecc2e`), which stops again, so the wire reads stop, select, stop.
+#[test]
+fn a_switch_to_a_friend_while_swinging_stops_again() {
+    let mut f = frame(true);
+    with_factions(&mut f, FOE, &[]);
+    let world = f.app.world_mut();
+    let new = world.resource::<GuidIndex>().0[&NEW];
+    world
+        .get_mut::<ObjectStore>(new)
+        .unwrap()
+        .0
+        .merge(benilla_protocol::ObjectFields::from_pairs(&[(
+            TEMPLATE, FRIEND,
+        )]));
+    swinging_at_old(&mut f);
+    run(&mut f, r#"TargetUnit("party1")"#);
+    assert_eq!(selected(&f), Some(NEW));
+    assert_eq!(
+        attack_wire(&f),
+        ["AttackStop", "SetSelection 0x22", "AttackStop"]
+    );
+}
+
+/// StartAttack selects its target (`0x5ecca0`-`0x5eccaa` → `0x493540`) after the stand and before
+/// the swing: the attack a stealth opener defers to its `SMSG_SPELL_GO` (`0x6e8402` → `0x6131a0`
+/// → `0x5ecb70`) selects the GO's first hit, whatever is selected, then swings at it.
+#[test]
+fn a_go_deferred_attack_selects_its_hit_before_it_swings() {
+    const BACKSTAB: u32 = 53;
+    let mut f = frame(true);
+    spawn_mob(&mut f, &[]);
+    swinging_at_old(&mut f);
+    let world = f.app.world_mut();
+    let me = world.resource::<GuidIndex>().0[&ME];
+    world
+        .entity_mut(me)
+        .remove::<crate::creature_anim::Engaged>();
+    world.insert_resource(crate::ui_action::Spells {
+        catalog: benilla_formats::SpellCatalog::from_displays(
+            [(
+                BACKSTAB,
+                benilla_formats::SpellDisplay {
+                    name: "Backstab".into(),
+                    // `AttributesEx2` bit 20, the GO-deferred start's test (`0x6e83c0`).
+                    attributes_ex2: 0x0010_0000,
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        ),
+        forms: Default::default(),
+        ranges: Default::default(),
+        cast_times: Default::default(),
+        durations: Default::default(),
+        radii: Default::default(),
+    });
+    crate::net::handlers::dispatch(
+        world,
+        vec![benilla_protocol::SessionEvent::SpellGo {
+            caster: ME,
+            spell_id: BACKSTAB,
+            cast_flags: 0,
+            hits: vec![MOB],
+            misses: vec![],
+            target: Some(MOB),
+            go_target: None,
+            dest: None,
+            ammo_display_id: None,
+            item_caster: None,
+            unit_caster: ME,
+        }],
+    );
+    assert_eq!(selected(&f), Some(MOB));
+    assert_eq!(attack_wire(&f), ["SetSelection 0x31", "AttackSwing 0x31"]);
+}
