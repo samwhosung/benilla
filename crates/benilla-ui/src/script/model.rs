@@ -148,7 +148,8 @@ pub(crate) struct Model {
     /// A path's texel size, which an axis authored as 0 takes, one texel per unit, as the client's
     /// `GetWidth` (`0x770720`) and `GetHeight` (`0x770790`) do; `None` leaves it as authored.
     pub(crate) texture_size_probe: Option<TextureSizeProbe>,
-    /// A cursor picture's size.
+    /// The size of a picture the cursor code opens (`0x449610`), which `SetCursor`'s custom
+    /// cursor must have at 32 by 32 (`0x523cb9`); `None` loads none.
     pub(crate) cursor_size_probe: Option<TextureSizeProbe>,
     /// Whether a font path loads: `SetFont`'s 1 or nil, nil meaning a load failure (`0x79f345`,
     /// `0x79f361`, from `0x5c1ae0` in the `0x44d040` cache). Unlike `texture_probe`, `None` answers

@@ -78,8 +78,8 @@ fn decode_payload_cursor_rgba(
     assets: &mut benilla_assets::WorldAssets,
     path: &str,
 ) -> Option<Vec<u8>> {
-    // The dragged picture opens with the loose flag, as the cursor code's `0x449610` opens it.
-    let (w, h, rgba) = assets.decode_rgba(path, benilla_assets::LooseOpen::Index)?;
+    // The dragged picture opens as the cursor code's `0x449610` opens it: its `.blp` alone.
+    let (w, h, rgba) = assets.cursor_rgba(path)?;
     let mut out = box_downsample_32(w, h, &rgba);
     for a in out.iter_mut().skip(3).step_by(4) {
         *a = 0xFF;
@@ -172,12 +172,12 @@ pub(crate) fn pointer_visibility(hidden: bool, ours: &mut bool, visible: bool) -
 pub(crate) struct CustomCursorName(pub(crate) String);
 
 /// Decode the custom cursor `SetCursor` checked to be 32×32, as `0x523cdb` copies its texels
-/// unfiltered with their alpha; opened with the loose flag, as `0x523c86` opens it.
+/// unfiltered with their alpha; opened as `0x523c86` opens it, through `0x449610`.
 fn decode_custom_cursor_rgba(
     assets: &mut benilla_assets::WorldAssets,
     path: &str,
 ) -> Option<Vec<u8>> {
-    let (w, h, rgba) = assets.decode_rgba(path, benilla_assets::LooseOpen::Index)?;
+    let (w, h, rgba) = assets.cursor_rgba(path)?;
     (w == 32 && h == 32).then_some(rgba)
 }
 
@@ -826,7 +826,7 @@ mod tests {
     fn a_custom_set_cursor_shows_mode_41_with_its_path() {
         let mut app = App::new();
         let mut script = benilla_ui::script::UiScript::new().unwrap();
-        script.set_texture_size_probe(Box::new(|p| (p == "Custom\\Arrow").then_some((32, 32))));
+        script.set_cursor_size_probe(Box::new(|p| (p == "Custom\\Arrow").then_some((32, 32))));
         script.run(r#"SetCursor("Custom\\Arrow")"#).unwrap();
         app.insert_non_send_resource(script);
         app.insert_resource(crate::loading_screen::LoadingScreen::default());

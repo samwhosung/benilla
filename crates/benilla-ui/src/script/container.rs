@@ -409,7 +409,9 @@ impl super::UiScript {
         self.model_ref().custom_cursor_name.clone()
     }
 
-    /// Install the host's cursor picture size.
+    /// Install the host's size of a picture the cursor code opens (`0x449610`: the name's `.blp`,
+    /// decoded), which `SetCursor`'s custom cursor must have at 32 by 32; without one no custom
+    /// cursor loads.
     pub fn set_cursor_size_probe(&mut self, probe: Box<super::TextureSizeFn>) {
         self.model_mut().cursor_size_probe = Some(probe.into());
     }
@@ -479,7 +481,7 @@ fn custom_cursor(model: &mut super::Model, name: &str) -> bool {
         return true;
     }
     let size = model
-        .texture_size_probe
+        .cursor_size_probe
         .as_ref()
         .and_then(|probe| probe(name));
     if size != Some((32, 32)) {
@@ -1307,7 +1309,7 @@ mod tests {
     #[test]
     fn set_cursor_loads_any_other_name_as_a_32_by_32_texture() {
         let mut s = UiScript::new().unwrap();
-        s.set_texture_size_probe(Box::new(|path| match path {
+        s.set_cursor_size_probe(Box::new(|path| match path {
             "Interface\\AddOns\\Mine\\Sword" | "5" => Some((32, 32)),
             "Interface\\Icons\\Big" => Some((64, 64)),
             _ => None,
