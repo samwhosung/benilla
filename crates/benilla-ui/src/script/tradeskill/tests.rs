@@ -1443,42 +1443,38 @@ fn a_rebuild_counts_again_before_its_update() {
     s.set_trade_skill(None);
     s.rebuild_trade_skill(&mut |t| t.recount(&|_| 0));
     assert!(s.eval::<Option<Vec<u32>>>("return N").unwrap().is_none());
+}
 
-    /// Each profession getter that misses an item record waits on it, one wait per call, with the
-    /// callback `0x4fdc30`: the icon's item (`0x4fdb90`), the product's stats (`0x4fdf77`), a reagent
-    /// (`0x4ff6cd`) and each totem (`0x4ffac6`).
-    #[test]
-    fn a_getter_that_misses_a_record_waits_on_it_once_per_call() {
-        let mut s = UiScript::new().unwrap();
-        let mut st = two_recipe_state();
-        for r in &mut st.recipes {
-            r.reagents[0].name = None;
-            r.icon_pending = Some(r.product_item);
-            r.tools_pending = vec![5956];
-        }
-        s.set_trade_skill(Some(st));
-        s.run(
-            "GetTradeSkillReagentInfo(2, 1) GetTradeSkillReagentInfo(2, 1) GetTradeSkillIcon(2) \
-         GetTradeSkillTools(2) GetTradeSkillItemStats(3)",
-        )
+/// Each profession getter that misses an item record waits on it, one wait per call, with the
+/// callback `0x4fdc30`: the icon's item (`0x4fdb90`), the product's stats (`0x4fdf77`), a reagent
+/// (`0x4ff6cd`) and each totem (`0x4ffac6`). With the icons' records in flight the build holds the
+/// recipes alone, in add order (`0x4fcf34`).
+#[test]
+fn a_getter_that_misses_a_record_waits_on_it_once_per_call() {
+    let mut s = UiScript::new().unwrap();
+    let mut st = two_recipe_state();
+    for r in &mut st.recipes {
+        r.reagents[0].name = None;
+        r.icon_pending = Some(r.product_item);
+        r.tools_pending = vec![5956];
+    }
+    let (one, two) = (st.recipes[0].product_item, st.recipes[1].product_item);
+    s.set_trade_skill(Some(st));
+    s.run(
+        "GetTradeSkillReagentInfo(1, 1) GetTradeSkillReagentInfo(1, 1) GetTradeSkillIcon(1) \
+         GetTradeSkillTools(1) GetTradeSkillItemStats(2)",
+    )
+    .unwrap();
+    assert_eq!(
+        s.take_trade_skill_item_waits(),
+        [2589, 2589, one, 5956, two]
+    );
+    s.run("GetTradeSkillReagentInfo(3, 1) GetTradeSkillIcon(3)")
         .unwrap();
-        let (two, three) = (st_product(&s, 2), st_product(&s, 3));
-        assert_eq!(
-            s.take_trade_skill_item_waits(),
-            [2589, 2589, two, 5956, three]
-        );
-        s.run("GetTradeSkillReagentInfo(1, 1) GetTradeSkillIcon(1)")
-            .unwrap();
-        assert!(
-            s.take_trade_skill_item_waits().is_empty(),
-            "a header reads no record"
-        );
-    }
-
-    /// The product of the recipe at a row.
-    fn st_product(s: &UiScript, index: usize) -> u32 {
-        view::recipe_at(&s.model_ref(), index).map_or(0, |r| r.product_item)
-    }
+    assert!(
+        s.take_trade_skill_item_waits().is_empty(),
+        "past the rows, no record"
+    );
 }
 
 /// While a product's record is in flight the build counts it pending (`0xbde048`, `0x4fcd58`)
