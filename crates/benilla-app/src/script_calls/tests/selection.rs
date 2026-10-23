@@ -161,3 +161,97 @@ fn a_deselect_without_a_possession_leaves_the_pets_attack() {
         .resource::<crate::ui_pet::PetAttackLatch>()
         .up());
 }
+
+/// We swing at `OLD`, the selection, as the server echoed it.
+fn swinging_at_old(f: &mut Frame) {
+    let world = f.app.world_mut();
+    let me = world.resource::<GuidIndex>().0[&ME];
+    world
+        .entity_mut(me)
+        .insert(crate::creature_anim::Engaged(OLD));
+    feeds(f);
+    f.rx.try_iter().for_each(drop);
+}
+
+/// A frame whose `PLAYER_TARGET_CHANGED` handler runs `body`.
+fn on_target_changed(f: &mut Frame, body: &str) {
+    run(
+        f,
+        &format!(
+            r#"local r = CreateFrame("Frame")
+            r:RegisterEvent("PLAYER_TARGET_CHANGED")
+            r:SetScript("OnEvent", function() {body} end)"#
+        ),
+    );
+}
+
+/// The attack stops, selections, rolls and swings sent, in order.
+fn attack_wire(f: &Frame) -> Vec<String> {
+    f.rx.try_iter()
+        .filter_map(|c| match c {
+            ClientCommand::AttackStop => Some("AttackStop".to_string()),
+            ClientCommand::SetSelection { guid } => Some(format!("SetSelection {guid:#x}")),
+            ClientCommand::AttackSwing { guid } => Some(format!("AttackSwing {guid:#x}")),
+            ClientCommand::RandomRoll { .. } => Some("RandomRoll".to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `SetSelection` sends `CMSG_SET_SELECTION` (`0x493871`), signals `PLAYER_TARGET_CHANGED`
+/// (`0x49389c`), whose listeners run before the signal returns, then re-swings (`0x4938c8`): a
+/// handler's packet goes out between the selection and the swing.
+#[test]
+fn a_switch_while_swinging_sends_the_handlers_packet_before_the_swing() {
+    let mut f = frame(true);
+    swinging_at_old(&mut f);
+    on_target_changed(&mut f, "RandomRoll(1, 100)");
+    run(&mut f, r#"TargetUnit("party1")"#);
+    assert_eq!(
+        attack_wire(&f),
+        [
+            "AttackStop",
+            "SetSelection 0x22",
+            "RandomRoll",
+            "AttackSwing 0x22"
+        ]
+    );
+}
+
+/// A listener that retargets runs a whole `SetSelection` inside the first one's signal. The first
+/// one's re-swing then goes at the selection as it stands: `0x4938c3` pushes the selection's
+/// address, `0xb4e2d8`, which `StartAttack` reads after the listeners ran (`0x5ecbcd`). So both
+/// swings go at the unit the listener selected, and each selection signals its change once.
+#[test]
+fn a_retargeting_listener_nests_and_the_first_swing_goes_at_its_pick() {
+    let mut f = frame(true);
+    spawn_mob(&mut f, &[]);
+    swinging_at_old(&mut f);
+    record_events(&mut f);
+    on_target_changed(
+        &mut f,
+        "if not AGAIN then AGAIN = 1 TargetNearestEnemy() end",
+    );
+    run(&mut f, r#"TargetUnit("party1")"#);
+    assert_eq!(selected(&f), Some(MOB));
+    assert_eq!(
+        attack_wire(&f),
+        [
+            "AttackStop",
+            "SetSelection 0x22",
+            "AttackStop",
+            "SetSelection 0x31",
+            "AttackSwing 0x31",
+            "AttackSwing 0x31"
+        ]
+    );
+    let heard = events(&mut f);
+    assert_eq!(
+        heard
+            .iter()
+            .filter(|e| *e == "PLAYER_TARGET_CHANGED")
+            .count(),
+        2,
+        "{heard:?}"
+    );
+}
