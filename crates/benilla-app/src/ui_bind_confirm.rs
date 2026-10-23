@@ -92,6 +92,10 @@ impl PendingEquips {
     }
 
     /// The swaps parked on `entry`, by index, in the table's order (`0x5e1087`-`0x5e10ed`).
+    /// `0x5e1020` matches on the element's entry field `+0x18`, which a question's record holds
+    /// too (`0x5e0ee0`, beside the parked one's `0x5e0e1f`), so it replays and frees a standing
+    /// question on that entry as well; this walk takes the parked records alone, and a standing
+    /// question keeps its record for its dialog.
     fn parked_on(&self, entry: u32) -> Vec<(u32, ContainerMove)> {
         self.slots
             .iter()
@@ -221,9 +225,11 @@ fn wait_for(entry: u32, callback: RecordCallback, items: &Items, commands: &NetC
 }
 
 /// The equip callbacks whose records answered, run with the VM and the host lent, after the bag,
-/// doll and record feeds have pushed what the answer changed. `0x5e1020` walks the table: each swap
-/// parked on the entry replays when the record was found (`0x5e10c2`) and frees its record either
-/// way (`0x5e10cf`-`0x5e10e5`), a refusal leaving its items locked. `0x5e17a0` runs
+/// doll and record feeds have pushed what the answer changed. `0x5e1020` walks the whole table,
+/// every element whose entry field matches, a standing question's included: each replays when the
+/// record was found (`0x5e10c2`) and is freed either way (`0x5e10cf`-`0x5e10e5`), a refusal
+/// leaving its items locked. This replays and frees the swaps parked on the entry alone
+/// ([`PendingEquips::parked_on`]). `0x5e17a0` runs
 /// `AutoEquipCursorItem` again for a found record ([`UiScript::replay_auto_equip`]).
 pub(crate) fn replay_equip_records(
     mut vm: crate::script_calls::VmWith<(Res<'static, Items>, ResMut<'static, PendingEquips>)>,
