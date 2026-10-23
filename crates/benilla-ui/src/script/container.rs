@@ -647,7 +647,7 @@ fn arm_gift_wrap(model: &mut super::Model, bag: i64, slot: u32) {
 /// - a click on the held item's own slot cancels;
 /// - a whole stack placed anywhere else queues the move and clears the cursor; a swap lands the
 ///   displaced item in the source slot, never on the cursor (no `SetCursorItem`, `0x5e0c40`);
-/// - a split carry places onto an empty or same-item slot, and stays held over another item;
+/// - a split carry places onto any slot, the item it holds unread;
 /// - a vendor row buys into the slot, and an item off the bar is cleared.
 ///
 /// Returns what the binding owes past this segment: the item a pickup puts on the cursor
@@ -753,10 +753,9 @@ fn pickup_container_item(
                 .cloned()
                 .filter(|d| d.item_id != 0);
             match (held.count, dest) {
-                // A split carry cannot swap with a different item: it stays held.
-                (Some(_), Some(d)) if d.item_id != held.item_id => {}
-                // A split places and clears (`0x5e1210`, then `ClearCursor(0,1)` at `0x4f9e4f`):
-                // the grid hide and `CURSOR_UPDATE`, and no lock event.
+                // A split places and clears whatever the slot holds (`0x4f9e1c` → `0x5e1210`,
+                // then `ClearCursor(0,1)` at `0x4f9e4f`): the grid hide and `CURSOR_UPDATE`, and
+                // no lock event.
                 (Some(n), _) => {
                     queue_split(model, &held, bag, slot, n);
                     cursor::clear(model, cursor::Clear::KEEP_LOCK);
