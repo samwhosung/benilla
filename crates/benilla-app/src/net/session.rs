@@ -423,9 +423,9 @@ fn on_reputations(
     match ev {
         SessionEvent::Reputations { standings } => {
             reputations(standings, &mut b.reputations);
-            // The rebuild's sort signals with the player held (`0x4d5694` → `0x4d55de`), then the
-            // message's own (`0x4d5699`).
-            signal(1 + usize::from(self_facts(&b).is_some()), &mut lane);
+            // With the player held, the rebuild's two sorts signal (`0x4d5694` → `0x4d55d9` →
+            // `0x4d6457`, and `0x4d55de`), then the message's own (`0x4d5699`).
+            signal(1 + 2 * usize::from(self_facts(&b).is_some()), &mut lane);
         }
         SessionEvent::ForcedReactions { reactions } => {
             forced_reactions(reactions, &mut b.reputations);

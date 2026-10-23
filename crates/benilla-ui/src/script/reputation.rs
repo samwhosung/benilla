@@ -144,7 +144,8 @@ impl super::UiScript {
 
     /// The world-enter cascade's rebuild (`0x4909d3` calls `0x4d5430`): the player in the world,
     /// it re-lists the factions with every header expanded and "Inactive" collapsed (`0x4d5479`),
-    /// and its sort signals `UPDATE_FACTION` (`0x4d55de` → `0x4d5db0`).
+    /// and each of its two sorts signals `UPDATE_FACTION` (`0x4d55d9` → `0x4d6457`, `0x4d55de`;
+    /// `0x4d5dab`).
     pub(crate) fn reputation_enter_world(&mut self) {
         let state = {
             let mut model = self.model_mut();
@@ -152,6 +153,7 @@ impl super::UiScript {
             std::mem::take(&mut model.reputation)
         };
         self.set_reputation(state);
+        self.fire_event("UPDATE_FACTION", Vec::new());
         self.fire_event("UPDATE_FACTION", Vec::new());
     }
 
