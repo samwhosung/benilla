@@ -39,11 +39,12 @@ enum LogoutSignal {
     Refused,
 }
 
-/// The pending session exit and the signals owed to the UI. `quitting` is the one bit the wire
-/// lacks, as a quit is also `CMSG_LOGOUT_REQUEST`; every terminal edge clears it, so a cancelled
-/// quit cannot exit the process on a later logout.
+/// The pending session exit and the signals owed to the UI.
 #[derive(Resource, Default)]
 pub(crate) struct LogoutState {
+    /// The reference's `[session+0x1b1c]`, the one bit the wire lacks, as a quit is also
+    /// `CMSG_LOGOUT_REQUEST`. Only a request writes it (`0x5ab053`), so a cancel or a refusal
+    /// leaves it and the next request overwrites it.
     quitting: bool,
     /// The reference's `[session+0x1b1d]`: a request is out and unanswered. `0x5ab000` drops a
     /// second request silently while it is set, and the idle handler skips its thirty-minute leg
@@ -63,7 +64,6 @@ impl LogoutState {
         // Logged: the server's inputs (combat, resting, account level) are invisible from here.
         info!("logout: server answered reason={reason} instant={instant}");
         if reason != 0 {
-            self.quitting = false;
             // `0x5aaf21`: the error line, and the pending flag clears so the player can retry.
             self.pending = false;
             self.signals.push(LogoutSignal::Refused);
@@ -79,13 +79,23 @@ impl LogoutState {
         });
     }
 
-    /// `SMSG_LOGOUT_CANCEL_ACK`: fires `LOGOUT_CANCEL` on every ack. The reference (`0x5b4680`,
-    /// then `0x5aaf60`) fires it only while the pending byte is set (`0x5aaf6b`), and its own
-    /// `CancelLogout` clears that byte when it sends (`0x5aaf80`).
+    /// `SMSG_LOGOUT_CANCEL_ACK` (`0x5b4680`, then `0x5aaf60`). `CancelLogout` clears the pending
+    /// byte as it sends (`0x5aafc2`), so the ack of the player's own cancel fires nothing.
     pub(crate) fn apply_cancelled(&mut self) {
-        self.quitting = false;
-        self.pending = false;
-        self.signals.push(LogoutSignal::Cancelled);
+        self.call_off();
+    }
+
+    /// A world load (`0x401bc0`), which leaves the world first (`0x401bd4` → `0x5aae70(0)`).
+    pub(crate) fn apply_world_load(&mut self) {
+        self.call_off();
+    }
+
+    /// `LOGOUT_CANCEL` only while a request is pending (`0x5aaf63`-`0x5aaf6b`,
+    /// `0x5aae88`-`0x5aae90`), then the byte clears (`0x5aaf77`, `0x5aae9c`).
+    fn call_off(&mut self) {
+        if std::mem::take(&mut self.pending) {
+            self.signals.push(LogoutSignal::Cancelled);
+        }
     }
 }
 
@@ -154,13 +164,11 @@ impl SessionSteps<'_> {
         match request {
             SessionRequest::Logout => self.logout(false),
             SessionRequest::Quit => self.logout(true),
-            // `0x5aaf80`: `CMSG_LOGOUT_CANCEL` and the pending byte cleared (`0x5aafc2`). The
-            // stock dialogs' `OnHide` sends this on every early close, even after a cancel landed,
-            // so a stray cancel is normal. `quitting` clears here too, so a dead socket cannot
-            // leave a quit armed.
+            // `0x5aaf80`: `CMSG_LOGOUT_CANCEL` and the pending byte cleared (`0x5aafc2`); the quit
+            // byte stays. The stock dialogs' `OnHide` sends this on every early close, even after
+            // a cancel landed, so a stray cancel is normal.
             SessionRequest::CancelLogout => {
                 if let Some(logout) = self.logout.as_deref_mut() {
-                    logout.quitting = false;
                     logout.pending = false;
                 }
                 let _ = self.commands.0.send(ClientCommand::LogoutCancel);
@@ -220,11 +228,12 @@ impl SessionSteps<'_> {
         if logout.pending {
             return;
         }
-        logout.quitting = quit;
-        // No world session: a quit just exits, as the reference's glue-screen `Quit()` does, and
-        // a logout does nothing.
+        // No world session (`0x5ab02a`, before the byte): a quit just exits, as the reference's
+        // glue-screen `Quit()` does, and a logout does nothing.
+        if in_world {
+            logout.quitting = quit;
+        }
         if !in_world || self.commands.0.send(ClientCommand::Logout).is_err() {
-            logout.quitting = false;
             if quit {
                 info!("logout: quit with no world session — exiting");
                 self.exit_now();
@@ -255,8 +264,8 @@ fn exit_on_logout_complete(
     }
     // Answered: disarm, or the next character's first logout would be swallowed.
     logout.pending = false;
+    // `0x5aaecf`: the quit byte decides, and stays, as the process ends.
     if logout.quitting {
-        logout.quitting = false;
         info!("logout: world session ended — exiting");
         exit.write(AppExit::Success);
     }
@@ -290,7 +299,8 @@ mod net {
     pub(super) fn register(app: &mut App) {
         use SessionEventKind as K;
         app.net_handler(K::LogoutResponse, on_narration)
-            .net_handler(K::LogoutCancelled, on_narration);
+            .net_handler(K::LogoutCancelled, on_narration)
+            .net_handler(K::Worldport, on_narration);
     }
 
     fn on_narration(In(ev): In<SessionEvent>, mut logout: ResMut<LogoutState>) {
@@ -299,6 +309,9 @@ mod net {
                 logout.apply_response(reason, instant)
             }
             SessionEvent::LogoutCancelled => logout.apply_cancelled(),
+            // `SMSG_NEW_WORLD`, and `SMSG_LOGIN_VERIFY_WORLD` for another map (`0x401ea4`): both
+            // run the world load `0x401bc0`.
+            SessionEvent::Worldport { .. } => logout.apply_world_load(),
             _ => {}
         }
     }
