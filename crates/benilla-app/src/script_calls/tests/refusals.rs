@@ -220,6 +220,11 @@ fn a_party_verbs_own_refusal_shows_inside_its_call() {
     {
         let world = f.app.world_mut();
         let mut script = world.non_send_resource_mut::<UiScript>();
+        // The player's object is held (`0x48a460`), so the invite compares names.
+        script.set_unit_guids(&benilla_ui::script::UnitGuids {
+            player: ME,
+            ..Default::default()
+        });
         script.set_unit(
             "player",
             Some(benilla_ui::script::UnitState {
