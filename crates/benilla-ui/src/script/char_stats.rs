@@ -586,8 +586,15 @@ impl Model {
         }
     }
 
-    /// The active player's item at live-API id `slot`.
+    /// The active player's item at live-API id `slot`. The bank bands are the player list's
+    /// slots 39 to 68, which `GetItemInSlot` (`0x6228a0`) answers empty while no banker is open
+    /// (`0x6228ad`-`0x6228cf`, the banker guid `[0xbdd038]`), and every getter here reads through
+    /// it (`0x4c8449`, `0x4c8cd3`, `SetInventoryItem` at `0x53314e`).
     fn own_inv_slot(&self, slot: usize) -> Option<InvSlotView> {
+        let bank_band = BANK_INV_SLOTS.contains(&slot) || BANK_BAG_INV_SLOTS.contains(&slot);
+        if bank_band && self.bank.is_none() {
+            return None;
+        }
         if let Some(view) = self.bank_inv_slot(slot) {
             return Some(view);
         }
@@ -2076,6 +2083,8 @@ mod tests {
     #[test]
     fn get_inventory_item_count_forks_on_the_container_bit_and_the_slot() {
         let mut s = seated();
+        // The bank bands read through `GetItemInSlot`, open only at a banker.
+        s.set_bank(Some(crate::script::BankState::default()));
         let bag = |contents: Option<u32>| {
             Some(InvSlotView {
                 item_id: 4496,
@@ -2609,6 +2618,8 @@ mod tests {
     fn a_container_slot_seen_as_an_inventory_slot_keeps_its_field_duration() {
         use crate::script::container::{ContainerSlot, ContainerState};
         let mut s = seated();
+        // The bank bands read through `GetItemInSlot`, open only at a banker.
+        s.set_bank(Some(crate::script::BankState::default()));
         for (bag, live_id) in [(super::BANK_CONTAINER, 40), (super::KEYRING_CONTAINER, 82)] {
             let mut state = ContainerState {
                 num_slots: 24,

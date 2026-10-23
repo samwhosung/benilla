@@ -247,6 +247,8 @@ fn a_bag_items_price_scales_by_its_charges_and_loses_its_repair_cost() {
 #[test]
 fn the_merchant_prices_an_object_held_past_the_worn_slots() {
     let mut s = script();
+    // The bank bands read through `GetItemInSlot`, open only at a banker.
+    s.set_bank(Some(crate::script::BankState::default()));
     s.set_screen_size(800.0, 600.0);
     for (id, name, sell_price) in [(4380, "Ring", 50), (4381, "Gem", 7), (4382, "Shard", 9)] {
         s.set_item_template(

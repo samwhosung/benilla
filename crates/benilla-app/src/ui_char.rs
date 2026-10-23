@@ -1299,12 +1299,16 @@ mod tests {
     }
 
     /// The lock is the VM's, keyed by the guid this feed pushes: a lock moves no snapshot, and
-    /// `IsInventoryItemLocked` reads it on the bank bag's own guid.
+    /// `IsInventoryItemLocked` reads it on the bank bag's own guid, at a banker
+    /// (`GetItemInSlot`'s bank gate, `0x6228a0`).
     #[test]
     fn a_bank_bag_reads_the_lock_on_its_own_guid() {
         let mut app = world_with_bank_bag(Some(BAG));
         app.world_mut().run_system_once(feed_char).unwrap();
         let _ = seen(&mut app);
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .set_bank(Some(benilla_ui::script::BankState::default()));
         let locked = |app: &mut App| {
             app.world_mut()
                 .non_send_resource_mut::<UiScript>()

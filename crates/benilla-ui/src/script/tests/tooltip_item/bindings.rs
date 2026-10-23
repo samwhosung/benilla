@@ -878,6 +878,8 @@ fn locked_is_drawn_for_a_locked_object_and_sets_the_builder_flag() {
 #[test]
 fn bank_vault_items_keep_their_flags_and_expiry() {
     let mut s = script();
+    // The bank bands read through `GetItemInSlot`, open only at a banker.
+    s.set_bank(Some(crate::script::BankState::default()));
     s.set_screen_size(800.0, 600.0);
     s.run("ITEM_DURATION_HOURS = '[DURATION %d h]' LOCKED = '[LOCKED]'")
         .unwrap();

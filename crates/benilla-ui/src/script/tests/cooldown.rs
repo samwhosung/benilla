@@ -394,6 +394,8 @@ fn a_bag_slots_cooldown_query_asks_for_its_missing_record() {
 #[test]
 fn an_inventory_slots_tooltip_asks_for_its_missing_record() {
     let mut s = script();
+    // The bank bands read through `GetItemInSlot`, open only at a banker.
+    s.set_bank(Some(crate::script::BankState::default()));
     let mut inv: InventorySlots = Default::default();
     inv[0] = Some(InvSlotView {
         item_id: 2512,

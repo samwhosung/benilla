@@ -119,6 +119,8 @@ fn only_a_source_with_an_item_object_reads() {
 #[test]
 fn a_bank_vault_item_keeps_its_text_and_its_open_hint() {
     let mut s = script();
+    // The bank bands read through `GetItemInSlot`, open only at a banker.
+    s.set_bank(Some(crate::script::BankState::default()));
     s.set_screen_size(800.0, 600.0);
     s.set_item_template(
         9201,

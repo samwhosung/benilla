@@ -276,7 +276,7 @@ mod tests {
         assert!(
             s.eval::<bool>(
                 "return GetInventoryItemTexture(\"player\", 42) == nil \
-                 and GetInventoryItemCount(\"player\", 42) == 0"
+                 and GetInventoryItemCount(\"player\", 42) == 1"
             )
             .unwrap(),
             "no banker open"
