@@ -1486,3 +1486,126 @@ fn every_view_push_of_what_a_handler_writes_is_listed() {
     );
     assert!(stale.is_empty(), "stale rows: {stale:?}");
 }
+
+/// The lane firings that read what a handler writes as the frame left it, by lane, beside
+/// [`READS_FRAME_FINAL`]'s feeds: what a firing reads past the call host's own reads and the
+/// lanes' queues, the field watchers' callbacks among them (the notice lane's). A listener fired
+/// there reads it as the frame's last packet left it, not as its own did (`0x537ae5`). The list
+/// only shrinks: a read goes once a log versions it ([`crate::ui_unit::views`]), and a row that no
+/// longer matches its firing fails.
+#[rustfmt::skip]
+const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
+    // The watchers' callbacks: the drunk line's name, the quest log's slots, the skill line's race
+    // and class and the bonus bar's form off our live descriptor, and the aura watcher's join of
+    // the durations the duration packet writes (`0x4e4390`); the aura watcher's own store is the
+    // one its packet left.
+    ("field notices", &["names::NameCache", "net::ObjectStore", "ui_aura::AuraDurations"]),
+    // The views lane reads the stores and records it rewinds as of each packet; the names, the
+    // relations' stores and reputations, the selection, the guild and the bar's pet as the frame
+    // left them (#2217).
+    ("unit views", &["names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
+        "net::reputations::Reputations", "target::Selection", "ui_guild::GuildState",
+        "ui_pet::PetBar"]),
+    ("cast reports", &["items::Countdowns", "items::Items", "net::GuidIndex", "net::ObjectStore",
+        "ui_action::cast_lines::CastFailRedisplays"]),
+    ("item watchers", &["items::Countdowns", "items::Items", "names::NameCache", "net::GuidIndex",
+        "net::ObjectStore", "ui_trade::TradeSession"]),
+    ("equip errors", &["items::Countdowns", "items::Items", "net::GuidIndex", "net::ObjectStore"]),
+    ("auction house", &["items::Items", "names::NameCache", "net::SelfGuid",
+        "ui_auction::AuctionOpen"]),
+    ("loot", &["items::Countdowns", "items::Items", "names::NameCache", "net::GuidIndex",
+        "net::ObjectStore", "ui_loot::AutoLootByte", "ui_loot::LootLatch",
+        "ui_loot::LootMoveStart"]),
+    ("chat", &["go_templates::GameObjectTemplates", "items::Items", "names::NameCache",
+        "net::GuidIndex", "net::ObjectStore", "net::SelfGuid", "ui_chat::edit::ChannelState",
+        "world_state::WorldStates"]),
+];
+
+/// Every lane firing's read of what a handler writes is listed in [`LANE_READS_FRAME_FINAL`],
+/// found as [`every_view_push_of_what_a_handler_writes_is_listed`] finds a feed's.
+#[test]
+fn every_lane_reads_of_what_a_handler_writes_is_listed() {
+    use bevy::ecs::query::{ComponentAccessKind, FilteredAccess};
+    let mut app = headless_client();
+    let (components, resources) = {
+        let handlers = app.world().resource::<crate::net::handlers::NetHandlers>();
+        let mut components = BTreeSet::new();
+        let mut resources = BTreeSet::new();
+        for (_, access) in &handlers.accesses {
+            let access = access.combined_access();
+            if let Ok(kinds) = access.try_iter_component_access() {
+                components.extend(kinds.filter_map(|k| match k {
+                    ComponentAccessKind::Exclusive(id) => Some(id),
+                    _ => None,
+                }));
+            }
+            resources.extend(access.resource_writes());
+        }
+        (components, resources)
+    };
+    let world = app.world_mut();
+    let vm = world
+        .components()
+        .get_resource_id(TypeId::of::<benilla_ui::script::UiScript>());
+    let host: Vec<FilteredAccess> = {
+        use bevy::ecs::system::System;
+        let mut host = IntoSystem::into_system(|_: crate::script_calls::ScriptCallHost| {});
+        System::initialize(&mut host, world)
+            .filtered_accesses()
+            .to_vec()
+    };
+    if !name(world, vm.expect("the VM's resource")).contains("benilla_ui") {
+        eprintln!("skipped: this build carries no type names");
+        return;
+    }
+    let lane_queues: Vec<String> = lane_types()
+        .iter()
+        .filter_map(|t| world.components().get_resource_id(*t))
+        .map(|id| short_name(&name(world, id)))
+        .collect();
+    let lanes = world.resource::<super::Lanes>();
+    let mut found: Vec<(&str, BTreeSet<String>)> = Vec::new();
+    for (lane, access) in lanes.names().into_iter().zip(&lanes.1) {
+        let mut own: Vec<&FilteredAccess> = access.filtered_accesses().iter().collect();
+        for h in &host {
+            if let Some(i) = own.iter().position(|o| *o == h) {
+                own.remove(i);
+            }
+        }
+        let mut inputs = BTreeSet::new();
+        for access in own.iter().map(|o| o.access()) {
+            let read_c = components
+                .iter()
+                .filter(|&&id| access.has_component_read(id));
+            let read_r = resources.iter().filter(|&&id| access.has_resource_read(id));
+            for &id in read_c.chain(read_r) {
+                let n = name(world, id);
+                if Some(id) != vm && !n.contains("Messages<") {
+                    inputs.insert(short_name(&n));
+                }
+            }
+        }
+        inputs.retain(|n| !QUEUES_NOT_VIEWS.contains(&n.as_str()) && !lane_queues.contains(n));
+        found.push((lane, inputs));
+    }
+    let wrong: Vec<String> = found
+        .iter()
+        .filter(|(lane, inputs)| {
+            let listed = LANE_READS_FRAME_FINAL.iter().find(|(l, _)| l == lane);
+            let listed: BTreeSet<String> = listed
+                .map(|(_, i)| i.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_default();
+            listed != *inputs
+        })
+        .map(|(lane, inputs)| {
+            let inputs: Vec<String> = inputs.iter().map(|i| format!("{i:?}")).collect();
+            format!("({lane:?}, &[{}]),", inputs.join(", "))
+        })
+        .collect();
+    assert!(
+        wrong.is_empty(),
+        "these lanes' firings read state a handler writes as the frame left it: version it, or \
+         give each its row in LANE_READS_FRAME_FINAL as it stands:\n  {}",
+        wrong.join("\n  ")
+    );
+}
