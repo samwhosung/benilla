@@ -303,6 +303,7 @@ pub(crate) struct TargetPlugin;
 impl Plugin for TargetPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_cvar);
+        died::register(app);
         app.init_resource::<Selection>()
             .init_resource::<ClickConfig>()
             .init_resource::<AssistAttack>()
@@ -403,15 +404,8 @@ impl Plugin for TargetPlugin {
                     // run their bodies' `TargetNearestEnemy` and `AttackTarget` as script calls.
                     crate::ui_action::attack_nearest_probe,
                     flash::drive_flash,
-                    // The last-enemy stamp before the death handler's deselect, so a hostile that
-                    // dies selected is still remembered (the reference's `TargetLastEnemy` has no
-                    // liveness gate); the ring after both, off the frame's final selection.
-                    (
-                        scan::remember_last_enemy,
-                        died::on_unit_died,
-                        ring::update_ring,
-                    )
-                        .chain(),
+                    // The last-enemy stamp, then the ring off the frame's final selection.
+                    (scan::remember_last_enemy, ring::update_ring).chain(),
                 )
                     .chain()
                     .in_set(TargetUpdate)

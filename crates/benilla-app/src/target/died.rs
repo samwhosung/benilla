@@ -9,37 +9,53 @@
 //! - the dying unit's attack words zeroed (`0x605896`-`0x6058a8`): its target
 //!   ([`crate::creature_anim::Engaged`], `+0xc48`) and its stop in flight (`+0xc54`);
 //! - `PresentUnitDeath 0x625190` (`0x6058ae`), the death line, animation and sound, which the chat
-//!   log, the animation driver and the creature sounds play off the same edge;
+//!   log, the animation driver and the creature sounds play off the same edge, and for the active
+//!   player its tail, `SignalDeathState` (`0x6251cc` → `0x495850`), `PLAYER_DEAD` and the cursor
+//!   cleared ([`crate::death`]'s);
 //! - with a spell in flight (`0x6e3d30`) whose record's target (`0xceac60`, read through
 //!   `0x6e3d50`) is this unit, `CancelCast(1, 1, 0x65)` (`0x6058e0`);
 //! - when the unit is the selection (`0xb4e2d8`), `SetSelection(0, 0)` (`0x605901`) and then
 //!   `StopAutoRepeatSpell 0x6ea080` (`0x605906`);
 //! - the tail from `0x60590b`: the quest marker, the missiles, the effects, a sound, the auto-move
 //!   stop and `0x4931c0` on the unit's guid (`0x605950`).
+//!
+//! The health watcher runs it in the update packet that wrote the health (`0x6046f0` at
+//! `0x6047a3`): here at the packet's end, the update handler's edges written.
 
 use bevy::ecs::system::SystemState;
 use bevy::prelude::*;
 
 use benilla_protocol::messages::ObjectType;
+use benilla_protocol::{SessionEvent, SessionEventKind};
 
 use super::Selection;
 use crate::creature_anim::{AttackSeam, UnitEdit};
-use crate::net::{FieldChanged, ObjectStore, SelfPlayer};
+use crate::net::{FieldChanged, NetHandlerApp, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::ui_action::{FillArg, UiError, UiErrorKeys};
 
 /// What a groupmate's death shows: message `0x4c` (`0x5e9a0e`).
 const PLAYER_DIED: &str = "ERR_PLAYER_DIED_S";
 
+/// Registers the death handler on the update packet's end, after the update handler that writes
+/// its edges (`crate::net` builds first).
+pub(super) fn register(app: &mut App) {
+    app.net_handler(SessionEventKind::ObjectUpdateEnd, on_unit_died);
+}
+
 /// Each unit's death, in the order the edges came, each leg in its place: a deselect's
 /// `SetSelection` signals inside it ([`crate::script_calls::ScriptCallHost::engine_select`]), a
 /// release of the interaction latch closes its window there ([`crate::ui_session::release_cell`]),
 /// and our own death's quest-giver sweep asks there ([`crate::quest_markers::sweep_statuses`]),
 /// before the death goes on.
-pub(super) fn on_unit_died(
+fn on_unit_died(
+    In(ev): In<SessionEvent>,
     world: &mut World,
     edges: &mut SystemState<MessageReader<'static, 'static, FieldChanged>>,
 ) {
+    let SessionEvent::ObjectUpdateEnd = ev else {
+        return;
+    };
     let edges: Vec<FieldChanged> = edges
         .get_mut(world)
         .read()
@@ -51,8 +67,9 @@ pub(super) fn on_unit_died(
             .query_filtered::<Entity, With<SelfPlayer>>()
             .iter(world)
             .next();
+        let own = e.kind == ObjectType::Player && me == Some(e.entity);
         // `CGPlayer_C::OnDied 0x5e99b0`, for a player (`0x605882`).
-        if e.kind == ObjectType::Player && me == Some(e.entity) {
+        if own {
             // The active player's leg (`0x5e99d8`-`0x5e99e4` match), in its order.
             step(world, own_death_head, e);
             // `0x4931c0(0xb4e2d0, dl = 0)` (`0x5e9a51`): the latch, with the goodbye.
@@ -63,6 +80,11 @@ pub(super) fn on_unit_died(
             step(world, own_death_cast, e);
         } else if e.kind == ObjectType::Player {
             step(world, groupmate_died, e);
+        }
+        step(world, unit_attack_words, e);
+        // `PresentUnitDeath`'s tail for the active player (`0x6251c2`-`0x6251cc`).
+        if own {
+            crate::death::signal_death_state(world);
         }
         step(world, unit_died, e);
         // The tail's `0x4931c0` on the unit's guid (`0x605950`, `dl = 1`): no goodbye.
@@ -149,15 +171,19 @@ fn groupmate_died(In(e): In<FieldChanged>, d: Died) {
     }
 }
 
-/// Any unit's own legs: its attack words zeroed (`0x605896`-`0x6058a8`), a cast whose record names
-/// it cancelled (`0x6058e0`), and when it is the selection the deselect (`0x605901`), signalled in
-/// place, then the auto-repeat stop (`0x605906`).
+/// Any unit's attack words zeroed (`0x605896`-`0x6058a8`): its target and its stop in flight.
+fn unit_attack_words(In(e): In<FieldChanged>, mut seam: AttackSeam) {
+    seam.edits.push(UnitEdit::EndAttack(e.entity));
+    seam.clear_stop_word(e.entity);
+}
+
+/// Any unit's legs past `PresentUnitDeath`: a cast whose record names it cancelled (`0x6058e0`),
+/// and when it is the selection the deselect (`0x605901`), signalled in place, then the auto-repeat
+/// stop (`0x605906`).
 fn unit_died(In(e): In<FieldChanged>, mut vm: crate::script_calls::VmWith<Died<'static, 'static>>) {
     let me = vm.own().seam.me.single().ok();
     let selected = {
         let mut d = vm.own();
-        d.seam.edits.push(UnitEdit::EndAttack(e.entity));
-        d.seam.clear_stop_word(e.entity);
         let seam = &mut d.seam;
         let spells = seam.spells.as_deref();
         let mut core = seam.slots.core(&seam.net);
@@ -812,130 +838,6 @@ mod tests {
         assert_eq!(latched(&mut c), Some(MOB), "the old health was not above 0");
         c.edge(edge(20, u32::MAX));
         assert_eq!(latched(&mut c), None, "a fall to -1");
-    }
-
-    /// The death handler is exclusive, so bevy lists its pairs with every system no declared
-    /// order places against it with no component. What those systems meet of its legs' access
-    /// (each leg's declared access, the quest-giver sweep's, and the unit edits it applies after
-    /// each: every component a change writes) is a pure cache at most, which commutes: the
-    /// ambiguity ceiling's reason for these pairs. The latch's close cores are world functions
-    /// outside the model. An exclusive system shows bevy no access, so each one needs a declared
-    /// order against the handler.
-    #[test]
-    fn the_systems_unordered_against_the_death_handler_meet_it_only_on_a_pure_cache() {
-        use crate::game_plugins::schedule_tests::{
-            census, headless_client, type_names_available, SyncPoints,
-        };
-        use bevy::ecs::component::ComponentId;
-        use bevy::ecs::query::{Access, AccessConflicts};
-        use bevy::ecs::system::System;
-        use std::collections::{HashMap, HashSet};
-        let mut app = headless_client();
-        let mut handler = Access::new();
-        {
-            let world = app.world_mut();
-            fn leg<M>(
-                world: &mut World,
-                handler: &mut Access,
-                system: impl IntoSystem<In<FieldChanged>, (), M>,
-            ) {
-                let mut system = IntoSystem::into_system(system);
-                handler.extend(System::initialize(&mut system, world).combined_access());
-            }
-            leg(world, &mut handler, super::own_death_head);
-            leg(world, &mut handler, super::own_death_loot);
-            leg(world, &mut handler, super::own_death_cast);
-            leg(world, &mut handler, super::groupmate_died);
-            leg(world, &mut handler, super::unit_died);
-            handler.extend(&crate::quest_markers::sweep_access(world));
-            for edit in crate::creature_anim::UnitEdit::every(Entity::PLACEHOLDER) {
-                for t in edit.writes() {
-                    if let Some(id) = world.components().get_id(t) {
-                        handler.add_component_write(id);
-                    }
-                }
-            }
-        }
-        let accesses: HashMap<_, (Access, bool)> =
-            app.world_mut().schedule_scope(Update, |world, schedule| {
-                schedule.graph_mut().systems.initialize(world);
-                let graph = schedule.graph();
-                graph
-                    .systems
-                    .iter()
-                    .filter_map(|(k, system, _)| {
-                        let access = graph.systems.get(k)?.access.combined_access().clone();
-                        Some((k, (access, system.is_exclusive())))
-                    })
-                    .collect()
-            });
-        let c = census(&mut app, Update, SyncPoints::Declared);
-        if !type_names_available(&c) {
-            eprintln!("skipped: this build carries no type names");
-            return;
-        }
-        let (key, _) = c
-            .systems
-            .iter()
-            .find(|(_, s)| s.name.ends_with("::target::died::on_unit_died"))
-            .expect("the death handler is in Update");
-        let mut next: HashMap<_, Vec<_>> = HashMap::new();
-        let mut prev: HashMap<_, Vec<_>> = HashMap::new();
-        for (a, b) in &c.dependencies {
-            next.entry(*a).or_default().push(*b);
-            prev.entry(*b).or_default().push(*a);
-        }
-        let reach = |edges: &HashMap<_, Vec<_>>| {
-            let mut seen = HashSet::new();
-            let mut stack = vec![*key];
-            while let Some(n) = stack.pop() {
-                for m in edges.get(&n).into_iter().flatten() {
-                    if seen.insert(*m) {
-                        stack.push(*m);
-                    }
-                }
-            }
-            seen
-        };
-        let (after, before) = (reach(&next), reach(&prev));
-        let world = app.world();
-        let mut hazards = Vec::new();
-        for (k, (a, exclusive)) in &accesses {
-            if k == key || after.contains(k) || before.contains(k) {
-                continue;
-            }
-            if *exclusive {
-                hazards.push(format!("{}: exclusive, its access unknown", c.name(*k)));
-                continue;
-            }
-            if a.is_compatible(&handler) {
-                continue;
-            }
-            let met: Vec<String> = match a.get_conflicts(&handler) {
-                AccessConflicts::All => vec!["everything".to_string()],
-                AccessConflicts::Individual(ids) => ids
-                    .ones()
-                    .map(ComponentId::new)
-                    .filter(|id| !c.classes.caches.contains(id))
-                    .map(|id| {
-                        world
-                            .components()
-                            .get_name(id)
-                            .map_or_else(|| "?".to_string(), |n| n.to_string())
-                    })
-                    .collect(),
-            };
-            if !met.is_empty() {
-                hazards.push(format!("{}: {met:?}", c.name(*k)));
-            }
-        }
-        hazards.sort();
-        assert!(
-            hazards.is_empty(),
-            "these run in no declared order against the death handler and meet what it \
-             touches; order them:\n  {}",
-            hazards.join("\n  ")
-        );
     }
 
     /// `0x6058b3`-`0x6058e0`: a spell in flight (`0x6e3d30`) whose record target (`0x6e3d50`,

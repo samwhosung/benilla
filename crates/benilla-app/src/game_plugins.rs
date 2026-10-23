@@ -943,12 +943,6 @@ pub(crate) mod schedule_tests {
     ///   persisted-name load writes; `lanes::guard_tests` checks that it stays so, and that no
     ///   exclusive system is among them. Commands a firing defers, which the drain applies after
     ///   it, are outside that model;
-    /// - the death handler (`target::died::on_unit_died`), exclusive so each leg of a death runs
-    ///   in place with the world in hand (the latch's window close, `0x4931c0`), against the 103
-    ///   world systems no declared order places against it, which bevy lists with no component.
-    ///   What they meet of its legs' access and the unit edits it applies is a pure cache at
-    ///   most; `target::died`'s `the_systems_unordered_against_the_death_handler_meet_it_only_on_a_pure_cache`
-    ///   checks that it stays so. The latch's close cores are outside that model;
     /// - the minimap's draw (`minimap::emit_minimap`), which reads `QuestGiver`'s dialog statuses,
     ///   against `ui_panes::feed_character_panes`, which lends the call host, whose quest verbs
     ///   write that window's cell and panel latches and never a status.
@@ -956,7 +950,7 @@ pub(crate) mod schedule_tests {
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 1_880;
+    const UPDATE_ACTIONABLE_CEILING: usize = 1_780;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
@@ -1892,6 +1886,8 @@ pub(crate) mod schedule_tests {
           raised by the gesture it just made"),
         ("death/mod.rs", "feed_death", Because::MemoLatched,
          "`feed.vm: VmMemo<DeathAnnounced>`: a fresh memo makes the first snapshot an edge and re-announces a held offer, confirm and corpse range"),
+        ("death/mod.rs", "signal_death", Because::MemoLatched,
+         "a net handler's leg whose memo is `feed.vm`, a `VmMemo<DeathAnnounced>`: a death signalled before the interface is up marks only that VM's memo, and the interface's fresh VM reads `None`, so `feed_death` signals `PLAYER_DEAD` at its first sight of the body dead"),
         ("net/objects/update.rs", "on_update_end", Because::Deliberate,
          "a net handler whose take is the packet's own pass, the blocks its write pass recorded, documented at the line: it publishes nothing to the VM, whose `UNKNOWNOBJECT` text it reads only to name a party member's pet; its notices go to the gated field-notice firing"),
         ("screenshot.rs", "ask_for_captures", Because::FilledByVm,

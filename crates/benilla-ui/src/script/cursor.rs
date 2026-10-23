@@ -948,10 +948,11 @@ impl super::UiScript {
         take_cursor_item_for_sale(&mut self.model_mut())
     }
 
-    /// `ClearCursor()` from Rust, which the app calls on a right-click over empty world: both
-    /// reference legs there (`0x492c90`, `0x492d30`) call `ClearCursor(1, 1)` (`0x495190`).
+    /// `ClearCursor(1, 1)` (`0x495190`) from Rust, its events signalled as it runs, as an engine
+    /// caller's are: the right-click over empty world (`0x492c90`, `0x492d30`), our own death
+    /// (`0x495889`) and the app's other callers.
     pub fn clear_cursor_payload(&mut self) {
-        clear_cursor(&mut self.model_mut());
+        super::tick::verb(&self.lua, clear_cursor);
     }
 
     /// The world click router's object leg (`0x492ce0`): `ClearCursor(1, 1)` only while a preview
@@ -963,7 +964,7 @@ impl super::UiScript {
             Some(CursorPayload::Merchant(_) | CursorPayload::Action(_))
         );
         if preview {
-            clear_cursor(&mut self.model_mut());
+            self.clear_cursor_payload();
         }
     }
 

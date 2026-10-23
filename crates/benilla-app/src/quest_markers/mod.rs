@@ -520,16 +520,6 @@ pub(crate) fn sweep_statuses(world: &mut World) {
     }
 }
 
-/// [`sweep_statuses`]'s declared access, for the death handler's schedule guard.
-#[cfg(test)]
-pub(crate) fn sweep_access(world: &mut World) -> bevy::ecs::query::Access {
-    use bevy::ecs::system::System;
-    let mut sweep = IntoSystem::into_system(query::sweep_statuses);
-    System::initialize(&mut sweep, world)
-        .combined_access()
-        .clone()
-}
-
 impl Plugin for QuestMarkersPlugin {
     fn build(&self, app: &mut App) {
         // After the Net stage: a run between the drain's spawns and the self tag would see the

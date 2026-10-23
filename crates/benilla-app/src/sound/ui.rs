@@ -350,9 +350,7 @@ pub(super) fn plugin(app: &mut App) {
             Update,
             (
                 drain_ui_sounds,
-                // After the target stack, whose exclusive death handler moves the cursor's
-                // payload through its legs' signals.
-                play_item_gesture_sounds.after(crate::target::TargetUpdate),
+                play_item_gesture_sounds,
                 play_loot_pickup_sounds,
                 play_auto_equip_sounds,
             )

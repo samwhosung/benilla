@@ -920,8 +920,9 @@ pub(crate) struct LastEnemy(pub(crate) Option<u64>);
 
 /// Stamp [`LastEnemy`] behind the five-conjunct gate `0x49372f`–`0x493778`, on the object
 /// `SetSelection` found and lit (`0x4936f3`-`0x493701`, [`Selection::lit`]): one that streams in
-/// later under the selected guid was never selected, so it is never stamped. Runs before the death
-/// handler's deselect (`super::died`): a hostile that dies while selected stays remembered.
+/// later under the selected guid was never selected, so it is never stamped. A hostile selected
+/// alive was stamped the frame it was selected, so its death's deselect (`super::died`, in a later
+/// frame's packet) leaves it remembered.
 ///
 /// Deviation: sampled each frame, not stamped in `SetSelection`, so every selection writer is
 /// covered; a selected unit that turns hostile is remembered, where the reference's is not.
