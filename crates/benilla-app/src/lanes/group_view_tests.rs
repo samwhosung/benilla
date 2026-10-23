@@ -19,6 +19,8 @@ const BOAR: u64 = 0xF130_0000_0045_0002;
 const MATE: u64 = 0x22;
 /// The member's pet.
 const PET: u64 = 0xF140_0000_0000_0077;
+/// The pet that replaces it.
+const PET2: u64 = 0xF140_0000_0000_0078;
 /// A creature a member targets, typed as a unit so a chain may end on it.
 const ADD: u64 = 0xF130_0000_0046_0003;
 /// `OBJECT_FIELD_TYPE` and a unit's type mask (object and unit bits).
@@ -204,6 +206,66 @@ fn a_party_pet_created_mid_frame_does_not_exist_before_its_create() {
         ]),
     );
     assert_eq!(seen, ["UNIT_COMBAT:player:nil", "UNIT_COMBAT:player:1"]);
+}
+
+/// A member's pet replaced mid-frame reads as each packet left it: a listener before the swap
+/// reads the old pet through `partypet1`, which the member's `UNIT_FIELD_SUMMON` named then
+/// (`0x4e81d0`), though no view names it once the frame ends.
+#[test]
+fn a_party_pet_replaced_mid_frame_reads_the_old_pet_before_the_swap() {
+    let mut app = party_client();
+    let mut mate = vec![(benilla_protocol::field::FIELD_UNIT_HEALTH, 100)];
+    mate.extend(summons(PET));
+    frame(
+        &mut app,
+        crate::lanes::unit_view_tests::wire_packets(vec![vec![
+            created(MATE, EntityKind::Player, &mate),
+            created(
+                PET,
+                EntityKind::Unit,
+                &[(benilla_protocol::field::FIELD_UNIT_HEALTH, 10)],
+            ),
+        ]]),
+    );
+    seat_party(&mut app, PET);
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(r#"function Look(event, unit) return UnitHealth("partypet1") end"#)
+        .unwrap();
+    frame(&mut app, vec![]);
+    // The resolver's inputs as the feeds push them ahead of the drain: the frame's last pet.
+    let seat_new_pet = |world: &mut World| {
+        world
+            .non_send_resource_mut::<UiScript>()
+            .set_unit_guids(&UnitGuids {
+                player: ME,
+                target: WOLF,
+                party: [MATE, 0, 0, 0],
+                party_pets: [PET2, 0, 0, 0],
+                held: [(ME, 0), (WOLF, 0), (BOAR, 0), (MATE, 0), (PET2, 0)]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            });
+    };
+    let seen = frame_after(
+        &mut app,
+        seat_new_pet,
+        crate::lanes::unit_view_tests::wire_packets(vec![
+            vec![fall(1)],
+            vec![
+                SessionEvent::ObjectsRemoved(vec![PET]),
+                values(MATE, &summons(PET2)),
+                created(
+                    PET2,
+                    EntityKind::Unit,
+                    &[(benilla_protocol::field::FIELD_UNIT_HEALTH, 20)],
+                ),
+            ],
+            vec![fall(1)],
+        ]),
+    );
+    assert_eq!(seen, ["UNIT_COMBAT:player:10", "UNIT_COMBAT:player:20"]);
 }
 
 /// A record written past the log fails the rewind's check against the frame-start snapshot: here
