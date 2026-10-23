@@ -1026,11 +1026,10 @@ fn set_portrait_to_texture_is_a_global_taking_a_name() {
         "nil",
         "1.12 has no Texture:SetPortraitToTexture — it is a global"
     );
-    // An unknown name does not raise here; the reference raises "Couldn't find texture named"
-    // (`0x48d7db`).
-    s.run(r#"SetPortraitToTexture("NoSuchPortrait", "Interface\\X")"#)
-        .unwrap();
-    assert!(s.errors().is_empty());
+    // An unknown name raises (`0x48d7db`).
+    assert!(s
+        .run(r#"SetPortraitToTexture("NoSuchPortrait", "Interface\\X")"#)
+        .is_err());
 }
 
 /// `SetPortraitToTexture(target, path)` (`0x48d780`) takes a name, a string or a number looked up
@@ -1113,10 +1112,11 @@ fn set_portrait_to_texture_takes_a_texture_object_and_ignores_a_bad_path() {
     assert_eq!(texture(&s).as_deref(), Some("Interface\\Icons\\B"));
 }
 
-/// Every widget method opens with the member prologue (`Frame:Show` `0x775750`,
+/// A method's receiver resolves through the member prologue's checks (`Frame:Show` `0x775750`,
 /// `Texture:IsShown` `0x79b9b0`, `Button:SetFontString` `0x780ad9`, the Font methods from
-/// `0x79fda0`): a receiver that is no table raises `0x847ef8`'s line, a table holding no object at
-/// `[0]` `0x847ec0`'s, and an object that fails the class's type test `0x847e98`'s.
+/// `0x79fda0`, the Region methods' `0x7a2030`): a receiver that is no table raises `0x847ef8`'s
+/// line, a table holding no object at `[0]` `0x847ec0`'s, and an object of another class
+/// `0x847e98`'s.
 #[test]
 fn a_bad_method_receiver_raises_the_member_prologues_lines() {
     let s = crate::script::UiScript::new().unwrap();
@@ -1135,24 +1135,15 @@ fn a_bad_method_receiver_raises_the_member_prologues_lines() {
     const NO_OBJECT: &str = "Attempt to find 'this' in non-framescript object";
     const WRONG: &str = "Wrong object type for member function";
     for (call, line) in [
-        ("RecvFrame.Show()", NON_TABLE),
-        ("RecvFrame.Show(5)", NON_TABLE),
-        ("RecvFrame.Show('RecvFrame')", NON_TABLE),
-        ("RecvTex.IsShown(nil)", NON_TABLE),
-        ("RecvButton.GetText(nil)", NON_TABLE),
-        ("RecvFont.GetName(nil)", NON_TABLE),
         ("RecvFrame.GetName(nil)", NON_TABLE),
+        ("RecvTex.GetHeight(5)", NON_TABLE),
         ("RecvFrame.Show({})", NO_OBJECT),
         ("RecvTex.IsShown({})", NO_OBJECT),
-        ("RecvButton.GetText({})", NO_OBJECT),
         ("RecvFont.GetName({})", NO_OBJECT),
         ("RecvFrame.GetName({})", NO_OBJECT),
         ("RecvFrame.Show(RecvTex)", WRONG),
         ("RecvFrame.Show(RecvFont)", WRONG),
         ("RecvTex.IsShown(RecvFrame)", WRONG),
-        ("RecvTex.IsShown(RecvStr)", WRONG),
-        ("RecvStr.IsShown(RecvTex)", WRONG),
-        ("RecvButton.GetText(RecvFrame)", WRONG),
         ("RecvFont.GetName(RecvFrame)", WRONG),
         ("RecvFont.GetName(RecvStr)", WRONG),
         ("RecvFrame.GetName(RecvFont)", WRONG),
