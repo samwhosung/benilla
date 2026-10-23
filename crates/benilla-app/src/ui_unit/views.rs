@@ -274,7 +274,7 @@ pub(crate) struct UnitViews {
     /// The guids whose store or record the frame changed, of those some view reads.
     touched: HashSet<u64>,
     /// The guids some view reads: every unit a token can name, its target's targets through the
-    /// frame, the group's members and pets and the bar's pet.
+    /// frame, the group's members and pets and our pet.
     readable: Readable,
     /// The drain has fired the lane's start.
     started: bool,
@@ -573,7 +573,7 @@ impl Seats {
 }
 
 /// The guids some view reads as the drain begins: every unit the resolver's last inputs can name
-/// (`0x515970`), the target chains' ends among them, the seats, the bar's pet, and each group
+/// (`0x515970`), the target chains' ends among them, the seats, our pet, and each group
 /// member with every pet its descriptor or record names (`0x4e81d0`, `0x491960`).
 fn readable_guids<'a>(
     script: &UiScript,
@@ -865,8 +865,6 @@ pub(crate) struct ViewSources<'w, 's> {
     /// What the group tokens read beside the roster: the faction table and the area names.
     factions: Option<Res<'w, crate::target::Factions>>,
     areas: Option<Res<'w, crate::area::AreaTableRes>>,
-    /// The bar's pet, the `"pet"` token's unit.
-    pet: Option<Res<'w, crate::ui_pet::PetBar>>,
     auras: crate::ui_aura::AuraViews<'w>,
     start: Option<Res<'w, FrameStart>>,
 }
@@ -884,7 +882,7 @@ fn fire_unit_views(
         Res<'static, Selection>,
         RelationWorld<'static, 'static>,
         ResMut<'static, crate::ui_party::GroupState>,
-        // Inside the set: the call host holds some of what the views read, the pet bar among them.
+        // Inside the set: the call host holds some of what the views read.
         ViewSources<'static, 'static>,
     )>,
     mut log: ResMut<ViewLog>,
@@ -901,7 +899,6 @@ fn fire_unit_views(
             self_q,
             factions,
             areas,
-            pet,
             auras,
             start,
         } = &src;
@@ -929,7 +926,8 @@ fn fire_unit_views(
                 npc: npc_seat,
             };
             let live_store = |guid: u64| by_guid(guid).and_then(|e| all.get(e).ok());
-            let pet = pet.as_deref().map_or(0, |p| p.spells.pet_guid);
+            let me = self_q.iter().next().and_then(|(e, _)| all.get(e).ok());
+            let pet = crate::ui_unit::pet_token_guid(me);
             let readable = readable_guids(script, &seats, &group, pet, &live_store);
             views.rewind(entries, seats, readable, live, by_guid, &group.stats, start);
             views.started = true;
@@ -1046,7 +1044,6 @@ fn fire_unit_views(
             guild,
             factions: factions.as_deref(),
             areas: areas.as_deref().map(|a| &a.0),
-            pet: pet.as_deref(),
             auras,
             world: &world,
             ffa: &ffa,

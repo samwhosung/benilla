@@ -1203,16 +1203,14 @@ mod tests {
         let mut app = party_app();
         app.init_resource::<crate::target::Hovered>();
         let me = app.world_mut().resource::<GuidIndex>().0[&ME];
+        let mut fields = unit_fields(0x19, MOB, 6788);
+        fields.extend(guid_at(SUMMON, PET));
         *app.world_mut().get_mut::<ObjectStore>(me).unwrap() =
-            ObjectStore(ObjectFields::from_pairs(&unit_fields(0x19, MOB, 6788)));
+            ObjectStore(ObjectFields::from_pairs(&fields));
         stream(&mut app, MOB, &unit_fields(0x9, MEMBER, 589));
         stream(&mut app, MEMBER, &unit_fields(0x19, ADD, 11976));
         stream(&mut app, ADD, &unit_fields(0x9, ME, 770));
         stream(&mut app, PET, &unit_fields(0x9, MOB, 1));
-        app.world_mut()
-            .resource_mut::<crate::ui_pet::PetBar>()
-            .spells
-            .pet_guid = PET;
         let (mob, add) = {
             let index = &app.world().resource::<GuidIndex>().0;
             (index[&MOB], index[&ADD])

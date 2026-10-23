@@ -940,6 +940,7 @@ fn a_held_pet_reads_connected_and_its_stock_power_bar_shows_its_power() {
     // Kept alive for the run: a dropped receiver would fail the name query.
     std::mem::forget(rx);
     app.insert_resource(NetCommands(tx));
+    summoning(&mut app, 0x77, PET);
     let pet = app
         .world_mut()
         .spawn((
@@ -1030,6 +1031,7 @@ fn a_held_pet_names_its_templates_creature_type() {
     // Kept alive for the run: a dropped receiver would fail the name query.
     std::mem::forget(rx);
     app.insert_resource(NetCommands(tx));
+    summoning(&mut app, 0x77, PET);
     let pet = app
         .world_mut()
         .spawn((
@@ -1155,6 +1157,7 @@ fn a_pet_with_no_object_exists_and_is_not_visible() {
     // Kept alive for the run: a dropped receiver would fail the name query.
     std::mem::forget(rx);
     app.insert_resource(NetCommands(tx));
+    summoning(&mut app, 0x77, PET);
     app.insert_non_send_resource(benilla_ui::script::UiScript::new().unwrap());
 
     app.update();
@@ -1166,8 +1169,13 @@ fn a_pet_with_no_object_exists_and_is_not_visible() {
     assert_eq!(exists, Some(1.0), "the pet exists with no object");
     assert_eq!(visible, None, "and has none to see");
 
-    // The bar torn down: no pet at all.
-    app.world_mut().resource_mut::<PetBar>().spells.pet_guid = 0;
+    // The pet dismissed: our summon cleared, no pet at all.
+    let me = app.world().resource::<crate::net::GuidIndex>().0[&0x77];
+    app.world_mut()
+        .entity_mut(me)
+        .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+            (2, 0x19),
+        ])));
     app.update();
     let exists = app
         .world_mut()
@@ -1282,4 +1290,24 @@ fn a_rename_evicts_by_the_units_pet_number_for_any_unit() {
         .eval::<i64>("return RENAMED")
         .unwrap();
     assert_eq!(renamed, 1, "only our own pet's rename signals");
+}
+
+/// Us, held as `me` and summoning `pet`: `"pet"` names our `UNIT_FIELD_SUMMON` (`0x515a6e`).
+fn summoning(app: &mut bevy::prelude::App, me: u64, pet: u64) {
+    app.insert_resource(crate::net::SelfGuid(Some(me)));
+    let e = app
+        .world_mut()
+        .spawn((
+            crate::net::Guid(me),
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (2, 0x19),
+                (8, pet as u32),
+                (9, (pet >> 32) as u32),
+            ])),
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<crate::net::GuidIndex>()
+        .0
+        .insert(me, e);
 }

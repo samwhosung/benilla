@@ -679,6 +679,13 @@ pub(crate) fn player_token_guid(
     }
 }
 
+/// The guid `"pet"` names, off the active player's descriptor `me`: `UNIT_FIELD_CHARM`, else
+/// `UNIT_FIELD_SUMMON` (`0x515a5e`-`0x515a6e`), 0 for neither or no player (`0x515a58`). The pet
+/// bar's guid is not read: a charm with no bar is the pet, and a bar outliving its unit names none.
+pub(crate) fn pet_token_guid(me: Option<&ObjectStore>) -> u64 {
+    me.and_then(|s| s.0.unit_pet_guid()).unwrap_or(0)
+}
+
 /// The one unit-token resolver, the reference's `0x515970`: case-insensitive compares, then the
 /// object manager; a caller wanting a type tests the resolved unit. [`Selection`] is a parameter
 /// because [`crate::target::SelectCommit`] holds it as `ResMut`.
@@ -686,7 +693,6 @@ pub(crate) fn player_token_guid(
 pub(crate) struct UnitTokens<'w, 's> {
     /// `Option`, like those below: a UI-only harness lacks their plugins; a bare `Res` panics.
     index: Option<Res<'w, crate::net::GuidIndex>>,
-    pet: Option<Res<'w, crate::ui_pet::PetBar>>,
     hovered: Option<Res<'w, crate::target::Hovered>>,
     hovered_go: Option<Res<'w, crate::target::HoveredObject>>,
     interact: Option<Res<'w, crate::ui_session::InteractNpc>>,
@@ -742,8 +748,10 @@ impl UnitTokens<'_, '_> {
                 .as_ref()?
                 .mouseover(&self.hovered_go.as_deref().copied().unwrap_or_default())
                 .map(|(_, guid)| guid),
-            // Off the pet bar's cached guid, as the `"pet"` snapshot reads it.
-            UnitBase::Pet => Some(self.pet.as_ref()?.spells.pet_guid),
+            UnitBase::Pet => {
+                let (entity, _) = self.me()?;
+                Some(pet_token_guid(self.stores.get(entity).ok()))
+            }
             UnitBase::PartyPet(row) => self
                 .party_member(row)
                 .and_then(|member| self.pet_of(member, false)),

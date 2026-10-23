@@ -547,7 +547,6 @@ pub(crate) struct PartyBooths<'w, 's> {
     roster: Res<'w, crate::ui_party::GroupState>,
     index: Res<'w, crate::net::GuidIndex>,
     palettes: ResMut<'w, benilla_world::rig_palette::RigPalettes>,
-    pet_bar: Res<'w, crate::ui_pet::PetBar>,
     names: Res<'w, crate::names::NameCache>,
     /// What the UI drew last frame, read by `"targettarget"` and the loot source.
     panes: Res<'w, BoothPanes>,
@@ -1149,7 +1148,7 @@ fn sync_portraits(
             "pet" => {
                 let me = self_q.single().ok().and_then(|e| stores_q.get(e).ok());
                 let subject = pet_subject(
-                    pet_guid(me, &party.pet_bar),
+                    pet_guid(me),
                     |g| party.index.0.get(&g).copied(),
                     &party.roster,
                     &party.names,
@@ -1635,12 +1634,13 @@ struct Subject {
     unseen: Option<String>,
 }
 
-/// The guid `"pet"`'s portrait draws, off our descriptor `me`.
-fn pet_guid(_me: Option<&crate::net::ObjectStore>, bar: &crate::ui_pet::PetBar) -> u64 {
-    bar.spells.pet_guid
+/// The guid `"pet"`'s portrait draws, off our descriptor `me`: the unit the token names
+/// ([`crate::ui_unit::pet_token_guid`]).
+fn pet_guid(me: Option<&crate::net::ObjectStore>) -> u64 {
+    crate::ui_unit::pet_token_guid(me)
 }
 
-/// `"pet"`'s subject: the object of the pet bar's guid, or for a pet the object manager does not
+/// `"pet"`'s subject: the object of the pet's guid, or for a pet the object manager does not
 /// hold, what any such guid draws (`0x519fe6`, [`unseen_portrait`]): our own pet is in no group
 /// pet record (`0x496420`), so its portrait stays empty (`0x51a0ce`).
 fn pet_subject(

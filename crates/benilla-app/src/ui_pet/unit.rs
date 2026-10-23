@@ -1,5 +1,6 @@
-//! The `"pet"` unit token and the pet frame's events, keyed on [`PetBar`]'s pet guid: the client's
-//! `[0xb714a0]`, whose writer fires `UNIT_PET` (`0x4bc84f`).
+//! The `"pet"` unit token, the unit our charm, else our summon, names (`0x515a5e`-`0x515a6e`), and
+//! the pet frame's `UNIT_PET`, keyed on [`PetBar`]'s pet guid: the client's `[0xb714a0]`, whose
+//! writer fires it (`0x4bc84f`).
 
 use bevy::prelude::*;
 
@@ -19,15 +20,17 @@ use crate::query_cache::Ask;
 pub(crate) struct PetUnitMemory {
     /// The last snapshot pushed under `"pet"`.
     pushed: Option<UnitState>,
-    /// `UNIT_PET`'s trigger; `None` until the first feed, so a pet out at login announces once.
+    /// `UNIT_PET`'s trigger, the bar's guid; `None` until the first feed, so a pet out at login
+    /// announces once.
     guid: Option<u64>,
     /// The name cache's counter, which catches a `resolve` answer landing frames later.
     names_generation: gate::Watch,
 }
 
-/// Feed the `"pet"` token and the pet frame's events. The token follows the bar's guid, as
-/// `UNIT_PET` does (`SetPet`, `0x4bc7e0`), not our `UNIT_FIELD_SUMMON`, so a charmed unit has a
-/// frame. The reaction is 0: the pet frame reads none.
+/// Feed the `"pet"` token and the pet frame's events. The token is the unit our
+/// `UNIT_FIELD_CHARM`, else our `UNIT_FIELD_SUMMON`, names (`0x515a5e`-`0x515a6e`); `UNIT_PET`
+/// follows the bar's guid, whose writer signals it (`SetPet`, `0x4bc7e0`, `0x4bc84f`). The
+/// reaction is 0: the pet frame reads none.
 pub(crate) fn feed_pet_unit(
     mut vm: crate::script_calls::VmWith<(Res<'static, PetBar>, ResMut<'static, NameCache>)>,
     pet: PetUnit,
@@ -88,7 +91,7 @@ pub(crate) fn feed_pet_unit(
         if gate.skip() {
             return;
         }
-        let pet_guid = bar.spells.pet_guid;
+        let pet_guid = crate::ui_unit::pet_token_guid(pet.player_store());
         let object = |g: u64| pet.store(g);
         let no_group = crate::ui_party::GroupState::default();
         let src = PetSources {
@@ -137,11 +140,13 @@ pub(crate) fn feed_pet_unit(
             None => memory.pushed = None,
         }
 
-        // UNIT_PET("player") only on a pet guid change (`0x4bc84f`), not on a same-pet re-send.
-        if memory.guid != Some(pet_guid) {
+        // UNIT_PET("player") only on a change of the bar's guid (`0x4bc84f`), not on a same-pet
+        // re-send.
+        let bar_guid = bar.spells.pet_guid;
+        if memory.guid != Some(bar_guid) {
             gate.audit("feed_pet_unit", "the UNIT_PET edge");
-            memory.guid = Some(pet_guid);
-            debug!("ui_pet: UNIT_PET — pet is now {pet_guid:#x}");
+            memory.guid = Some(bar_guid);
+            debug!("ui_pet: UNIT_PET — the bar's pet is now {bar_guid:#x}");
             fires.post("UNIT_PET", vec![ScriptValue::Str("player".into())]);
         }
     })
@@ -163,8 +168,8 @@ pub(crate) struct PetSources<'a> {
     pub(crate) object: &'a dyn Fn(u64) -> Option<&'a ObjectStore>,
 }
 
-/// The `"pet"` snapshot of the bar's pet `pet_guid`, whose descriptor is `store`; `None` for no
-/// pet.
+/// The `"pet"` snapshot of `pet_guid`, the unit the token names, whose descriptor is `store`;
+/// `None` for no pet.
 pub(crate) fn pet_state(
     pet_guid: u64,
     store: Option<&ObjectStore>,

@@ -346,21 +346,16 @@ fn a_chain_end_reads_its_own_packets_health() {
     assert_eq!(seen, ["UNIT_COMBAT:player:50", "UNIT_COMBAT:player:40"]);
 }
 
-/// `"pet"` reads the bar's pet as each packet left it.
+/// `"pet"` reads our summon as each packet left it.
 #[test]
 fn the_pet_reads_its_own_packets_health() {
     let mut app = party_client();
-    app.world_mut()
-        .resource_mut::<crate::ui_pet::PetBar>()
-        .spells
-        .pet_guid = PET;
     frame(
         &mut app,
-        crate::lanes::unit_view_tests::wire_packets(vec![vec![created(
-            PET,
-            EntityKind::Unit,
-            &super::unit_view_tests::health(60),
-        )]]),
+        crate::lanes::unit_view_tests::wire_packets(vec![vec![
+            created(PET, EntityKind::Unit, &super::unit_view_tests::health(60)),
+            values(ME, &summons(PET)),
+        ]]),
     );
     app.world_mut()
         .non_send_resource_mut::<UiScript>()

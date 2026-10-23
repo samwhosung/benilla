@@ -635,7 +635,7 @@ fn feed_auras(
         memo.last = projection;
 
         let held = |guid: u64| index.0.get(&guid).and_then(|&e| stores.get(e).ok());
-        let pet_guid = units.pet.spells.pet_guid;
+        let pet_guid = crate::ui_unit::pet_token_guid(Some(store));
         // `UnitBuff`'s unit gate on a live unit, the player included, whom the gate tests as any
         // unit (`0x5195aa`-`0x5195f7`). The pet is ungated; the reference gates a pet too, but
         // `CanAssist`'s player-controlled arm (`0x60673e`-`0x60679f`, the controlling players' duel
@@ -818,12 +818,12 @@ impl PlayerAuraWatch<'_, '_> {
 pub(crate) struct AuraViews<'w> {
     spells: Option<Res<'w, Spells>>,
     mem: Option<Res<'w, AuraFeedMemory>>,
-    pet: Option<Res<'w, crate::ui_pet::PetBar>>,
 }
 
 impl AuraViews<'_> {
     /// `guid`'s list off `store`, its descriptor, else, when a group token names it
-    /// (`record_ok`), its roster record in `group`; `None` for a guid with neither.
+    /// (`record_ok`), its roster record in `group`; `None` for a guid with neither. `me` is our
+    /// own descriptor as of the same place.
     pub(crate) fn list(
         &self,
         guid: u64,
@@ -831,10 +831,11 @@ impl AuraViews<'_> {
         record_ok: bool,
         group: Option<&crate::ui_party::GroupState>,
         relations: &crate::target::RelationWorld,
+        me: Option<&ObjectStore>,
     ) -> Option<benilla_ui::script::UnitAuraList> {
         let raid = &self.mem.as_deref()?.raid;
         let catalog = self.spells.as_ref().map(|s| &s.catalog);
-        let pet_guid = self.pet.as_ref().map_or(0, |p| p.spells.pet_guid);
+        let pet_guid = crate::ui_unit::pet_token_guid(me);
         let (rel, me) = (relations.get(), relations.me());
         let buffs_visible = |guid: u64, unit: &ObjectStore| {
             guid == pet_guid || buffs_visible_on(&rel, &relations.unit_of(guid, unit), me.as_ref())

@@ -360,7 +360,7 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "ui_guild::GuildState", "ui_party::GroupState"]),
     ("::ui_unit::feed_unit_reach", &["Transform", "names::NameCache", "net::GuidIndex",
         "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations",
-        "ui_party::GroupState", "ui_pet::PetBar"]),
+        "ui_party::GroupState"]),
     // The chain ends' snapshots read their stores as of the drain's place (`ui_unit::views`); their
     // names, relations, raid marks and guild read as the frame left them.
     ("::ui_unit::held::feed_chain_units", &["names::NameCache", "net::GuidIndex",
@@ -442,8 +442,7 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::spell::targeting::feed_targeting_to_vm", &["names::NameCache", "net::GuidIndex",
         "net::ObjectStore", "net::UnitSpeeds", "net::motion::modes::UnitMoveModes",
         "net::motion::remote::RemoteMotion", "net::reputations::Reputations",
-        "spell::mods::SpellModifiers", "spell::targeting::SpellTargeting", "ui_party::GroupState",
-        "ui_pet::PetBar"]),
+        "spell::mods::SpellModifiers", "spell::targeting::SpellTargeting", "ui_party::GroupState"]),
     // The engine's selection writers signal in place (`0x493540`), reading the selection, the
     // attack and loot state and the stores as the frame left them.
     ("::target::track::follow_selection_object", &["creature_anim::AttackStopInFlight",
@@ -1538,13 +1537,13 @@ const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // (#2217); the aura watcher's own store is the one its packet left.
     ("field notices", &["names::NameCache", "net::ObjectStore", "ui_aura::AuraDurations"]),
     // The views lane reads the stores and records it rewinds as of each packet; the names, the
-    // relations' stores and reputations, the selection, the guild and the bar's pet as the frame
-    // left them (#2217).
+    // relations' stores and reputations, the selection and the guild as the frame left them
+    // (#2217).
     // The roster too: the members its party and raid tokens and readable guids come from, past
     // the records it rewinds, as the frame left it (#2217).
     ("unit views", &["names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
         "net::reputations::Reputations", "target::Selection", "ui_guild::GuildState",
-        "ui_party::GroupState", "ui_pet::PetBar"]),
+        "ui_party::GroupState"]),
     ("cast reports", &["items::Countdowns", "items::Items", "net::GuidIndex", "net::ObjectStore",
         "ui_action::cast_lines::CastFailRedisplays"]),
     ("item watchers", &["items::Countdowns", "items::Items", "names::NameCache", "net::GuidIndex",

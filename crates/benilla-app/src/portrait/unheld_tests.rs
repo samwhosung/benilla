@@ -95,14 +95,12 @@ fn our_pet_with_no_object_draws_nothing() {
 }
 
 /// `"pet"`'s portrait is the unit the token names: our `UNIT_FIELD_CHARM`, else our
-/// `UNIT_FIELD_SUMMON` (`0x515a5e`-`0x515a6e`), never the pet bar's guid; with no descriptor, or
-/// neither field, nobody.
+/// `UNIT_FIELD_SUMMON` (`0x515a5e`-`0x515a6e`); with no descriptor, or neither field, nobody.
 #[test]
 fn the_pet_portrait_follows_our_charm_else_our_summon() {
     use benilla_protocol::ObjectFields;
     const PET: u64 = 0xF140_0000_0700_002A;
     const THRALL: u64 = 0xF130_0000_0000_0055;
-    const BAR: u64 = 0xF140_0000_0700_002B;
     let me = |pairs: &[(u16, u64)]| {
         let fields: Vec<(u16, u32)> = pairs
             .iter()
@@ -110,14 +108,12 @@ fn the_pet_portrait_follows_our_charm_else_our_summon() {
             .collect();
         crate::net::ObjectStore(ObjectFields::from_pairs(&fields))
     };
-    let mut bar = crate::ui_pet::PetBar::default();
-    bar.spells.pet_guid = BAR;
-    assert_eq!(pet_guid(Some(&me(&[(8, PET)])), &bar), PET, "the summon");
+    assert_eq!(pet_guid(Some(&me(&[(8, PET)]))), PET, "the summon");
     assert_eq!(
-        pet_guid(Some(&me(&[(8, PET), (6, THRALL)])), &bar),
+        pet_guid(Some(&me(&[(8, PET), (6, THRALL)]))),
         THRALL,
         "the charm first"
     );
-    assert_eq!(pet_guid(Some(&me(&[])), &bar), 0);
-    assert_eq!(pet_guid(None, &bar), 0);
+    assert_eq!(pet_guid(Some(&me(&[]))), 0);
+    assert_eq!(pet_guid(None), 0);
 }

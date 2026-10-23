@@ -112,7 +112,6 @@ pub(super) struct Families<'a, 'w, 's> {
     pub(super) guild: &'a crate::ui_guild::GuildState,
     pub(super) factions: Option<&'a crate::target::Factions>,
     pub(super) areas: Option<&'a benilla_formats::AreaTableCatalog>,
-    pub(super) pet: Option<&'a crate::ui_pet::PetBar>,
     pub(super) auras: &'a crate::ui_aura::AuraViews<'w>,
     pub(super) world: &'a RelationWorld<'w, 's>,
     /// `UnitIsPVPFreeForAll` (`0x516540`) of a held unit as of here, by guid.
@@ -192,11 +191,13 @@ fn group_tokens(script: &mut UiScript, saved: &mut Saved, f: &Families) -> usize
     pushes
 }
 
-/// `"pet"`, the bar's pet (`[0xb714a0]`), when its descriptor moved.
+/// `"pet"`, the unit our charm, else our summon, names as of here (`0x515a5e`-`0x515a6e`), when
+/// our descriptor or its moved.
 fn pet_token(script: &mut UiScript, saved: &mut Saved, f: &Families) -> usize {
-    let Some(guid) = f.pet.map(|p| p.spells.pet_guid).filter(|&g| f.moved(g)) else {
+    let guid = crate::ui_unit::pet_token_guid(f.me.map(|(_, s)| s));
+    if !f.me.is_some_and(|(me, _)| f.moved(me)) && !f.moved(guid) {
         return 0;
-    };
+    }
     let src = crate::ui_pet::PetSources {
         names: f.names,
         commands: f.commands,
@@ -235,6 +236,7 @@ fn aura_lists(script: &mut UiScript, saved: &mut Saved, f: &Families) -> usize {
             f.grouped.contains(&guid),
             Some(f.group),
             f.world,
+            f.me.map(|(_, s)| s),
         );
         pushes += usize::from(saved.auras(script, guid, list));
     }

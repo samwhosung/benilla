@@ -551,7 +551,13 @@ mod tests {
                 );
             }
         }
-        let me = spawn(&mut app, ME, player(MOB, 900));
+        let mut mine = player(MOB, 900);
+        // `UNIT_FIELD_SUMMON`, the pet `"pet"` names (`0x515a6e`).
+        mine.0.merge(ObjectFields::from_pairs(&[
+            (8, MY_PET as u32),
+            (9, (MY_PET >> 32) as u32),
+        ]));
+        let me = spawn(&mut app, ME, mine);
         app.world_mut().entity_mut(me).insert(SelfPlayer);
         spawn(&mut app, A, player(BOSS, 800));
         spawn(&mut app, B, player(ADD, 700));
@@ -576,9 +582,7 @@ mod tests {
             guid: Some(MOB),
             ..Default::default()
         });
-        let mut bar = crate::ui_pet::PetBar::default();
-        bar.spells.pet_guid = MY_PET;
-        app.insert_resource(bar);
+        app.init_resource::<crate::ui_pet::PetBar>();
         app
     }
 
