@@ -391,8 +391,11 @@ pub(crate) struct Dispatch<'w, 's> {
     loot_cfg: Res<'w, crate::ui_loot::LootConfig>,
     /// Our player as the active mover (`0xc4da98`), which the loot legs' store asks.
     mover: Query<'w, 's, (), (With<SelfPlayer>, With<crate::net::ActiveMover>)>,
-    /// The re-swing latch's legs on the outgoing selection (`0x49365f`-`0x4936a3`).
+    /// The re-swing latch's legs on the outgoing selection (`0x49365f`-`0x4936a3`), and the
+    /// alive branch's `CanInteract` (`0x60c165`).
     relations: super::RelationWorld<'w, 's>,
+    /// The greeter `0x60c270`, which a live unit's click that neither interacts nor swings calls.
+    greeting: MessageWriter<'w, crate::sound::NpcGreetingRequest>,
 }
 
 /// What a leg does once its `SetAutoLoot` has applied, the sweep it may run included: the loot or
@@ -459,6 +462,13 @@ impl Dispatch<'_, '_> {
     fn self_store(&self) -> Option<&ObjectStore> {
         let (me, ..) = self.me()?;
         self.stores.get(me).ok().map(|(s, _)| s)
+    }
+
+    /// `PlayGreetingSound` (`0x60c270`) on the clicked unit; its gate is the player's
+    /// ([`crate::sound::NpcGreetingRequest`]).
+    fn greet(&mut self, entity: Entity) {
+        self.greeting
+            .write(crate::sound::NpcGreetingRequest { npc: entity });
     }
 
     /// Any `0x20ff` bit in our last streamed movement word: a direction, turn, pitch or fall.
@@ -1247,7 +1257,10 @@ fn interact(
             // clear `[0xb4b3e4]` (`0x5ecbaa`, `0x5ecbc0`).
             // The cursor's Attack classification is StartAttack's target test.
             if refused {
-                // refused: the selection stands, no swing, nothing said
+                // The dead and mounted returns fall to the greeter (`0x60c1a8`, `0x60c1bc` →
+                // `0x60c257` → `0x60c270`), whose own gate stops it for a dead player
+                // (`0x60c31d`); no swing, nothing said.
+                dispatch.greet(entity);
             } else if dispatch
                 .seam
                 .start_head(crate::creature_anim::StartTarget::Attackable)
@@ -1304,7 +1317,23 @@ fn interact(
         UnitBranch::Dead(DeadUnitLeg::Nothing) => {
             debug!("right-click unit {guid:#x}: dead fork took no leg — nothing sent");
         }
-        UnitBranch::Service => dispatch.talk(script, entity, guid, walk),
+        // `CanInteract` (`0x60c165`): the NPC-service ladder (`0x60c17c`); else the attack arm,
+        // whose `CanAttack` the cursor refused (`0x60c199`), falls to the greeter (`0x60c257`).
+        UnitBranch::Service => {
+            let interacts = match (dispatch.relations.me(), target) {
+                (Some(me), Some(store)) => dispatch
+                    .relations
+                    .get()
+                    .can_interact(&me, &dispatch.relations.unit_of(guid, store)),
+                _ => false,
+            };
+            if interacts {
+                dispatch.talk(script, entity, guid, walk);
+            } else {
+                debug!("right-click unit {guid:#x}: no interaction and no attack — the greeting");
+                dispatch.greet(entity);
+            }
+        }
     }
     None
 }
@@ -1699,7 +1728,8 @@ enum UnitBranch {
     Attack,
     /// The dead fork (`0x60bf75`) and its chosen leg; terminal in every variant.
     Dead(DeadUnitLeg),
-    /// The alive branch (`0x60c162`): `CanInteract`, then the NPC-service packet.
+    /// The alive branch (`0x60c162`) off the attack cursor: `CanInteract`, then the NPC-service
+    /// packet, else the greeting.
     Service,
 }
 
