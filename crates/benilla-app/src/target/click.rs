@@ -1892,6 +1892,7 @@ pub(crate) fn service_action(
 /// Drain the guid-scoped deselects ([`DeselectGuid`]). `ClearTarget()`, the last leg of the Esc
 /// chain (`UIParent.lua:1492`), is a script call and lands in call order
 /// ([`crate::script_calls`]).
+#[allow(clippy::type_complexity)] // a Bevy system's full input set
 pub(crate) fn clear_target_requests(
     mut vm: crate::script_calls::VmWith<(
         ResMut<'static, Selection>,

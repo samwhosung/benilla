@@ -54,9 +54,7 @@ fn follow(f: &mut Follow) -> Option<crate::script_calls::EngineSelect> {
         seam,
         engaged,
     } = f;
-    let Some(guid) = selection.guid else {
-        return None;
-    };
+    let guid = selection.guid?;
     let now = index.0.get(&guid).copied();
     let member = || {
         let held = |g: u64| {
