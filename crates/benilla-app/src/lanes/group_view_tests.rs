@@ -297,3 +297,46 @@ fn the_pet_reads_its_own_packets_health() {
     );
     assert_eq!(seen, ["UNIT_COMBAT:player:60", "UNIT_COMBAT:player:30"]);
 }
+
+/// The member a list names offline reads offline to that list's own `PARTY_MEMBERS_CHANGED`: the
+/// list writes each member's record and its online bit (`AddPartyMember`, `0x5e6c4a`) before it
+/// signals (`0x5e6c61`, `0x5e6c66`), and `UnitIsConnected` reads the record's bit for a member
+/// with no object (`0x517dd3`).
+#[test]
+fn a_lists_own_signal_reads_the_records_it_wrote() {
+    let mut app = party_client();
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"
+            Roster = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("PARTY_MEMBERS_CHANGED")
+            f:SetScript("OnEvent", function()
+                table.insert(Roster, tostring(UnitIsConnected("party1")))
+            end)
+            "#,
+        )
+        .unwrap();
+    frame(
+        &mut app,
+        vec![SessionEvent::GroupList {
+            group_type: 0,
+            own_flags: 0,
+            members: vec![GroupMemberEntry {
+                name: "Brisca".into(),
+                guid: MATE,
+                status: member_status::OFFLINE,
+                flags: 0,
+            }],
+            leader: ME,
+            loot: None,
+        }],
+    );
+    let heard = app
+        .world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .eval::<Vec<String>>("return Roster")
+        .unwrap();
+    assert_eq!(heard, ["nil"]);
+}
