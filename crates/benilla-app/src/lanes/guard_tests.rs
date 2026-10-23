@@ -361,6 +361,8 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_unit::feed_unit_reach", &["Transform", "names::NameCache", "net::GuidIndex",
         "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations",
         "ui_party::GroupState", "ui_pet::PetBar"]),
+    // The chain ends' snapshots read their stores as of the drain's place (`ui_unit::views`); their
+    // names, relations, raid marks and guild read as the frame left them.
     ("::ui_unit::held::feed_chain_units", &["names::NameCache", "net::GuidIndex",
         "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations",
         "ui_guild::GuildState", "ui_party::GroupState"]),
@@ -373,6 +375,9 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations"]),
     ("::ui_unit::feed_default_language", &["net::ObjectStore"]),
     ("::ui_unit::feed_known_languages", &["net::ObjectStore", "ui_action::PlayerActions"]),
+    // The party and raid tokens read the members' stores and records as of the drain's place
+    // (`ui_unit::views`); the roster `GetRaidRosterInfo` reads, the slots' presence edges and
+    // every snapshot's names, relations and roster read as the frame left them.
     ("::ui_party::feed::feed_party", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "net::SelfGuid", "net::reputations::Reputations", "ui_guild::GuildState",
         "ui_party::GroupState"]),
@@ -446,6 +451,9 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "spell::inflight::PendingCast", "spell::inflight::QueuedMeleeSpell",
         "spell::targeting::SpellTargeting", "target::Selection", "ui_loot::LootLatch",
         "ui_loot::LootState", "ui_party::GroupState", "ui_pet::PetAttackLatch"]),
+    // Each unit's list reads its store and record as of the drain's place (`ui_unit::views`), and
+    // the buff cache is rebuilt at each packet's watcher; the resolver's inputs, the unit gate's
+    // relations and the world entry's rebuild read as the frame left them.
     ("::ui_aura::feed_auras", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "net::SelfGuid", "net::reputations::Reputations", "target::Selection",
         "ui_action::PlayerActions", "ui_aura::AuraDurations", "ui_party::GroupState",
@@ -464,6 +472,8 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_pet::bar::feed_pet_bar", &["net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
         "ui_pet::PetAttackLatch", "ui_pet::PetBar"]),
     ("::ui_pet::bar::fire_pet_cooldown_events", &["ui_pet::PetBar"]),
+    // The pet's snapshot reads its store as of the drain's place (`ui_unit::views`); the bar's
+    // guid, its name and the `UNIT_PET` edge read as the frame left them.
     ("::ui_pet::unit::feed_pet_unit", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "net::SelfGuid", "ui_party::GroupState", "ui_pet::PetBar"]),
     ("::ui_pet::menu::feed_pet_menu", &["net::GuidIndex", "net::ObjectStore", "net::SelfGuid",

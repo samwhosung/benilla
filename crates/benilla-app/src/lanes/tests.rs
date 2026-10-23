@@ -616,6 +616,11 @@ fn the_roster_events_fire_at_their_packet() {
     app.world_mut().resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
     app.world_mut()
         .init_resource::<crate::ui_quest::QuestGiver>();
+    // What the views lane reads, which the members' records start.
+    app.world_mut().init_resource::<crate::net::Reputations>();
+    app.world_mut().init_resource::<crate::target::Selection>();
+    app.world_mut()
+        .init_resource::<crate::ui_guild::GuildState>();
     app.world_mut()
         .non_send_resource_mut::<benilla_ui::script::UiScript>()
         .run(

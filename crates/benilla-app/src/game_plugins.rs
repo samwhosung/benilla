@@ -1260,11 +1260,18 @@ pub(crate) mod schedule_tests {
     /// Why a VM holder in `Update` ordered before the tick may stay out of
     /// [`crate::ui_script::UiFeed`], keyed by a suffix of the system's full name, with the
     /// reason.
-    const OUTSIDE_THE_FEED_PHASE: &[(&str, &str)] = &[(
-        "::ui_chat::frames::tee_shown_lines",
-        "in the lanes' set after their drain (`lanes::UiLanes`, after `UiFeed` and before the \
-         tick), so the log files take the lines the verbs showed after the drain's own",
-    )];
+    const OUTSIDE_THE_FEED_PHASE: &[(&str, &str)] = &[
+        (
+            "::ui_chat::frames::tee_shown_lines",
+            "in the lanes' set after their drain (`lanes::UiLanes`, after `UiFeed` and before the \
+             tick), so the log files take the lines the verbs showed after the drain's own",
+        ),
+        (
+            "::ui_unit::views::mark_frame_start",
+            "a debug snapshot of what the frame starts from, ahead of the net stage by design: it \
+             reads the units the resolver's last inputs name and pushes nothing",
+        ),
+    ];
 
     /// The create's control restore (`player::regain_control_on_arrival`) is registered in the
     /// built client and ordered: after the self create it answers, before the controller and the

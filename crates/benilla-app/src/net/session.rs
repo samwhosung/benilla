@@ -314,6 +314,7 @@ fn on_worldport(
     } = ev
     {
         // Every streamed roster member is about to be purged; the reference deactivates each.
+        let before = view_log.as_ref().map(|_| group.stats.clone());
         crate::ui_party::net::roster_deactivated(
             &mut group,
             &b.index,
@@ -322,6 +323,10 @@ fn on_worldport(
             script.as_deref(),
             &b.net,
         );
+        let mut view_log = view_log;
+        if let (Some(log), Some(before)) = (view_log.as_deref_mut(), before) {
+            log.records(&before, &group.stats);
+        }
         log_teardown(view_log, &b);
         worldport(
             map_id,

@@ -790,6 +790,7 @@ fn deactivate(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
     let gone = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items).destroyed_run(guid);
     sc.item_lane.push(gone.unwrap_or_default());
     let held = |g: u64| sc.index.0.get(&g).and_then(|e| sc.stores.get(*e).ok());
+    let before = sc.group.stats.get(&guid).cloned();
     crate::ui_party::net::member_deactivated(
         guid,
         &mut sc.group,
@@ -799,6 +800,10 @@ fn deactivate(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
         script,
         &sc.net,
     );
+    // The record the snapshot wrote, for the views a listener reads.
+    if sc.group.stats.get(&guid) != before.as_ref() {
+        sc.view_log.record(guid, before);
+    }
 }
 
 /// `0x464920` past the deactivate: the object leaves the live table for the released one, its
