@@ -71,29 +71,109 @@ pub(crate) struct InvoiceNumbers {
     pub(crate) consignment: u32,
 }
 
-/// Parses an invoice body with the reference's `sscanf` formats, `%16I64X:%d:%d:%d:%d` for a
-/// seller and `%16I64X:%d:%d` for a buyer. Deviation: a wrong field count is no invoice, because
-/// the reference would read the missing fields uninitialised.
-pub(crate) fn parse_body(body: &str, seller: bool) -> Option<InvoiceNumbers> {
-    let fields: Vec<&str> = body.trim().split(':').map(str::trim).collect();
-    if fields.len() != if seller { 5 } else { 3 } {
-        return None;
+/// Reads an invoice body as `GetInboxInvoiceInfo` does: its outputs zeroed (`0x4af440`-`0x4af44f`),
+/// then `sscanf` (`0x73fb5d`) with `%16I64X:%d:%d:%d:%d` for a seller (`0x846418`, `0x4af471`) or
+/// `%16I64X:%d:%d` for a buyer (`0x846408`, `0x4af495`), whose count is never tested
+/// (`0x4af476`): the fields are read in order, and the first that fails leaves itself and the
+/// rest at 0.
+pub(crate) fn parse_body(body: &str, seller: bool) -> InvoiceNumbers {
+    let mut n = InvoiceNumbers::default();
+    let mut scan = Scan(body.as_bytes());
+    let _ = (|| -> Option<()> {
+        n.player_guid = scan.hex64(16)?;
+        scan.literal(b':')?;
+        n.bid = scan.decimal()?;
+        scan.literal(b':')?;
+        n.buyout = scan.decimal()?;
+        if seller {
+            scan.literal(b':')?;
+            n.deposit = scan.decimal()?;
+            scan.literal(b':')?;
+            n.consignment = scan.decimal()?;
+        }
+        Some(())
+    })();
+    n
+}
+
+/// The CRT's `_input` over the body's bytes, for the two conversions the invoice formats use.
+struct Scan<'a>(&'a [u8]);
+
+impl Scan<'_> {
+    fn peek(&self) -> Option<u8> {
+        self.0.first().copied()
     }
-    let player_guid = u64::from_str_radix(fields[0], 16).ok()?;
-    let bid = fields[1].parse().ok()?;
-    let buyout = fields[2].parse().ok()?;
-    let (deposit, consignment) = if seller {
-        (fields[3].parse().ok()?, fields[4].parse().ok()?)
-    } else {
-        (0, 0)
-    };
-    Some(InvoiceNumbers {
-        player_guid,
-        bid,
-        buyout,
-        deposit,
-        consignment,
-    })
+
+    fn bump(&mut self) {
+        self.0 = &self.0[1..];
+    }
+
+    /// A conversion first skips `isspace` bytes: space and `\t` to `\r`.
+    fn skip_space(&mut self) {
+        while self
+            .peek()
+            .is_some_and(|c| c == b' ' || (b'\t'..=b'\r').contains(&c))
+        {
+            self.bump();
+        }
+    }
+
+    /// A literal format byte matches the next input byte, with no space skipped; a mismatch ends
+    /// the scan.
+    fn literal(&mut self, c: u8) -> Option<()> {
+        (self.peek() == Some(c)).then(|| self.bump())
+    }
+
+    /// An optional sign, counted against `width`; `true` when it was `-`.
+    fn sign(&mut self, width: &mut usize) -> bool {
+        match self.peek() {
+            Some(c @ (b'-' | b'+')) => {
+                self.bump();
+                *width = width.saturating_sub(1);
+                c == b'-'
+            }
+            _ => false,
+        }
+    }
+
+    /// `%<width>I64X`: a sign, an optional `0x` or `0X` that the width does not count
+    /// (`0x745324`-`0x74537c`), then hex digits up to the width; none is a failed conversion. A
+    /// `-` negates.
+    fn hex64(&mut self, mut width: usize) -> Option<u64> {
+        self.skip_space();
+        let negative = self.sign(&mut width);
+        if self.peek() == Some(b'0') && matches!(self.0.get(1), Some(b'x' | b'X')) {
+            self.bump();
+            self.bump();
+        }
+        let mut n = 0u64;
+        let mut digits = 0;
+        while digits < width {
+            let Some(d) = self.peek().and_then(|c| char::from(c).to_digit(16)) else {
+                break;
+            };
+            n = n << 4 | u64::from(d);
+            self.bump();
+            digits += 1;
+        }
+        (digits > 0).then(|| if negative { n.wrapping_neg() } else { n })
+    }
+
+    /// `%d`: a sign, then decimal digits with no width, wrapping in 32 bits as the CRT's `long`
+    /// does; none is a failed conversion. The invoice reads the result as unsigned.
+    fn decimal(&mut self) -> Option<u32> {
+        self.skip_space();
+        let mut unbounded = usize::MAX;
+        let negative = self.sign(&mut unbounded);
+        let mut n = 0u32;
+        let mut digits = 0;
+        while let Some(d) = self.peek().and_then(|c| char::from(c).to_digit(10)) {
+            n = n.wrapping_mul(10).wrapping_add(d);
+            self.bump();
+            digits += 1;
+        }
+        (digits > 0).then(|| if negative { n.wrapping_neg() } else { n })
+    }
 }
 
 #[cfg(test)]
@@ -130,31 +210,63 @@ mod tests {
     /// Two bodies as the live server sends them.
     #[test]
     fn the_body_carries_hex_guid_then_the_money() {
-        let sold = parse_body("6C:10000:10000:25:500", true).expect("seller body");
+        let sold = parse_body("6C:10000:10000:25:500", true);
         assert_eq!(sold.player_guid, 0x6C, "hex, not decimal");
         assert_eq!((sold.bid, sold.buyout), (10000, 10000));
         assert_eq!((sold.deposit, sold.consignment), (25, 500));
-        // bid == buyout is how the window knows it was bought out rather than bid up.
-        assert_eq!(sold.bid, sold.buyout);
 
-        let won = parse_body("6C:10000:10000", false).expect("buyer body");
-        assert_eq!(won.player_guid, 0x6C);
+        let won = parse_body("6C:10000:10000", false);
+        assert_eq!((won.player_guid, won.bid, won.buyout), (0x6C, 10000, 10000));
         assert_eq!(
             (won.deposit, won.consignment),
             (0, 0),
             "not in a buyer body"
         );
 
-        // A body asked for as the other kind answers nothing.
-        assert_eq!(parse_body("6C:10000:10000", true), None);
-        assert_eq!(parse_body("6C:10000:10000:25:500", false), None);
+        // A body read as the other kind takes what the format reaches.
+        let short = parse_body("6C:10000:10000", true);
+        assert_eq!((short.bid, short.deposit, short.consignment), (10000, 0, 0));
+        let long = parse_body("6C:10000:10000:25:500", false);
+        assert_eq!((long.buyout, long.deposit), (10000, 0));
     }
 
     /// vmangos pads the guid to 16 with spaces (`AuctionHouseMgr.cpp:171`); the reference's
     /// `sscanf` skips them.
     #[test]
     fn a_space_padded_guid_still_parses() {
-        let b = parse_body("              6C:10000:10000", false).expect("padded");
+        let b = parse_body("              6C:10000:10000", false);
         assert_eq!(b.player_guid, 0x6C);
+    }
+
+    /// `sscanf`'s rules over the two conversions: space skipped before each, not before a literal;
+    /// `%16I64X` stops at 16 digits, so a 17th meets the `:`; `%d` takes a sign and wraps in 32 bits;
+    /// the first failure leaves the rest at 0.
+    #[test]
+    fn the_body_reads_as_sscanf_does() {
+        let n = |body: &str| {
+            let b = parse_body(body, true);
+            (b.player_guid, b.bid, b.buyout, b.deposit, b.consignment)
+        };
+        assert_eq!(n("42: 7:\t-1:+3: 4"), (0x42, 7, u32::MAX, 3, 4));
+        assert_eq!(
+            n("42 :7:8:9:10"),
+            (0x42, 0, 0, 0, 0),
+            "no space before a literal"
+        );
+        assert_eq!(
+            n("0000000000000000042:7:8:9:10"),
+            (0, 0, 0, 0, 0),
+            "16 digits, then a 17th where `:` must be"
+        );
+        assert_eq!(n("0x42:7:8:9:10"), (0x42, 7, 8, 9, 10), "a 0x prefix");
+        assert_eq!(
+            n("0X123456789ABCDEF0:7:8:9:10"),
+            (0x1234_5678_9ABC_DEF0, 7, 8, 9, 10),
+            "the prefix takes none of the 16"
+        );
+        assert_eq!(n("-1:4294967296:9:x:1"), (u64::MAX, 0, 9, 0, 0));
+        assert_eq!(n("42:7:8"), (0x42, 7, 8, 0, 0), "partial");
+        assert_eq!(n("garbage"), (0, 0, 0, 0, 0));
+        assert_eq!(n(""), (0, 0, 0, 0, 0));
     }
 }

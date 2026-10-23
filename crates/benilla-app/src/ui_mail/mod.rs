@@ -487,24 +487,27 @@ fn resolve_row(
             .or_else(|| listed.map(|l| l.text.clone()))
             .unwrap_or_else(|| entry.subject.clone()),
     };
-    let auction_invoice = auction
-        .filter(|a| matches!(a.result, auction_mail::WON | auction_mail::SOLD))
-        .and_then(|a| {
-            let seller = a.result == auction_mail::SOLD;
-            let n = invoice::parse_body(raw_body?, seller)?;
-            // An unresolved counterparty is the verb's one miss past the body (`0x4af4b7`-
-            // `0x4af4c1`), filled in when its name lands.
-            let player_name = names.resolve_player(n.player_guid, ask)?.to_string();
-            Some(benilla_ui::script::MailInvoice {
-                seller,
-                item_name: notice_item_name.unwrap_or_default(),
-                player_name,
-                bid: n.bid,
-                buyout: n.buyout,
-                deposit: n.deposit,
-                consignment: n.consignment,
-            })
-        });
+    // The subject parse keeps its triplet for a won or sold notice alone (`0x4acfc1`-`0x4acfdd`),
+    // and the invoice and `isInvoice` both need its item entry (`0x4af3e8`, `0x4af2eb`).
+    let invoice_notice = auction
+        .filter(|a| a.entry != 0 && matches!(a.result, auction_mail::WON | auction_mail::SOLD));
+    let auction_invoice = invoice_notice.and_then(|a| {
+        let seller = a.result == auction_mail::SOLD;
+        let n = invoice::parse_body(raw_body?, seller);
+        // An unresolved counterparty is the verb's one miss past the body (`0x4af4b7`-
+        // `0x4af4c1`), filled in when its name lands; a guid the body left 0 is null at once,
+        // asked of no one, as every cache's zero key is (`0x55f0a5`-`0x55f0ac`).
+        let player_name = names.resolve_player(n.player_guid, ask)?.to_string();
+        Some(benilla_ui::script::MailInvoice {
+            seller,
+            item_name: notice_item_name.unwrap_or_default(),
+            player_name,
+            bid: n.bid,
+            buyout: n.buyout,
+            deposit: n.deposit,
+            consignment: n.consignment,
+        })
+    });
 
     MailInboxRow {
         mail_id: entry.message_id,
@@ -529,9 +532,8 @@ fn resolve_row(
         body: letter_body(entry, raw_body, templates, macros),
         stationery_texture,
         // Won and sold notices only, not every auction mail: the reference's `isInvoice` reads
-        // what its subject parser persists for those two alone.
-        is_invoice: auction
-            .is_some_and(|a| matches!(a.result, auction_mail::WON | auction_mail::SOLD)),
+        // the item entry its subject parser persists for those two alone.
+        is_invoice: invoice_notice.is_some(),
         invoice: auction_invoice,
         item_id,
         item_random_property_id: item_roll,
