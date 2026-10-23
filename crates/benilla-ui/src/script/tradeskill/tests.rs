@@ -1480,3 +1480,23 @@ fn a_rebuild_counts_again_before_its_update() {
         view::recipe_at(&s.model_ref(), index).map_or(0, |r| r.product_item)
     }
 }
+
+/// While a product's record is in flight the build counts it pending (`0xbde048`, `0x4fcd58`)
+/// and leaves before its sort and its update (`0x4fcf34`): a rebuild then signals nothing.
+#[test]
+fn a_rebuild_with_a_product_in_flight_signals_nothing() {
+    let mut s = UiScript::new().unwrap();
+    let mut st = two_recipe_state();
+    st.recipes[1].icon_pending = Some(st.recipes[1].product_item);
+    s.set_trade_skill(Some(st));
+    s.run(
+        "N = 0 local f = CreateFrame('Frame') f:RegisterEvent('TRADE_SKILL_UPDATE') \
+         f:SetScript('OnEvent', function() N = N + 1 end)",
+    )
+    .unwrap();
+    s.rebuild_trade_skill(&mut |_| {});
+    assert_eq!(s.eval::<i64>("return N").unwrap(), 0);
+    s.set_trade_skill(Some(two_recipe_state()));
+    s.rebuild_trade_skill(&mut |_| {});
+    assert_eq!(s.eval::<i64>("return N").unwrap(), 1);
+}

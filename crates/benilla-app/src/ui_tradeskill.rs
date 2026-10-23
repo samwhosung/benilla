@@ -1267,6 +1267,81 @@ mod tests {
         assert_eq!(tail, ["Recipe 200", "Recipe 100", "Recipe 300"]);
     }
 
+    /// The open's build with a product's record in flight counts it pending and leaves before its
+    /// update (`0x4fcd58`, `0x4fcf34`), the show still signalled for the rows it holds
+    /// (`0x4fc98a`); the record's arrival runs the build's callback, which rebuilds with flag 1
+    /// once the pending count is 0 (`0x4fc8e0`-`0x4fc900`), and that rebuild signals the update.
+    #[test]
+    fn a_product_in_flight_holds_the_update_until_its_record_lands() {
+        const SILK: u32 = 4305;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        let mut actions = PlayerActions::default();
+        actions.spells.insert(3839);
+        actions.learned.push(3839);
+        let mut effect_item_type = [0; 3];
+        effect_item_type[0] = SILK;
+        let bolt = SpellDisplay {
+            name: "Bolt of Silk Cloth".into(),
+            attributes: SPELL_ATTR_IS_TRADESKILL,
+            effects: [SPELL_EFFECT_CREATE_ITEM, 0, 0],
+            effect_item_type,
+            ..Default::default()
+        };
+        app.init_resource::<TradeSkillOpen>()
+            .insert_resource(actions)
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<Items>()
+            .init_resource::<crate::spell::Cooldowns>()
+            .init_resource::<crate::ui_script::UiClock>()
+            .insert_resource(crate::net::NetCommands(tx))
+            .insert_resource(Spells {
+                catalog: benilla_formats::SpellCatalog::from_displays(
+                    [(3839, bolt)].into_iter().collect(),
+                ),
+                ..Spells::empty_for_tests()
+            })
+            .insert_resource(SkillLines {
+                catalog: benilla_formats::SkillLineCatalog::from_abilities([(
+                    3839,
+                    benilla_formats::SlaInfo {
+                        skill_id: 197,
+                        req_skill_value: 1,
+                        forward_spell_id: 0,
+                        trivial_low: 1,
+                        trivial_high: 2,
+                    },
+                )]),
+            });
+        app.world_mut()
+            .spawn((ObjectStore(Default::default()), SelfPlayer));
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                "HEARD = {} local f = CreateFrame('Frame') f:RegisterEvent('TRADE_SKILL_SHOW') \
+                 f:RegisterEvent('TRADE_SKILL_UPDATE') \
+                 f:SetScript('OnEvent', function() table.insert(HEARD, event) end)",
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        app.add_systems(Update, feed_trade_skill);
+        let heard = |app: &mut App| {
+            app.update();
+            app.world()
+                .non_send_resource::<UiScript>()
+                .eval::<Vec<String>>("local h = HEARD HEARD = {} return h")
+                .unwrap()
+        };
+        app.world_mut().resource_mut::<TradeSkillOpen>().line = Some(197);
+        assert_eq!(heard(&mut app), ["TRADE_SKILL_SHOW"]);
+        assert!(heard(&mut app).is_empty());
+        app.world_mut().resource_mut::<Items>().insert_template(
+            SILK,
+            Some(crate::items::test_template("Bolt of Silk Cloth")),
+        );
+        assert_eq!(heard(&mut app), ["TRADE_SKILL_UPDATE"]);
+    }
+
     /// A learn or an unlearn of a profession spell rebuilds the open list once per packet
     /// (`0x5e9d79`, `0x5ea165`), whether or not the list moved, a supersede once for each half
     /// (`0x5e6392`, `0x5e63a4`); another spell rebuilds nothing. A record a getter's call waited
