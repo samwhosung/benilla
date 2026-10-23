@@ -1058,6 +1058,8 @@ fn range_cell_on_real_data() {
 /// costs −1 (`0x6e3233`).
 #[test]
 fn the_power_tokens_print_the_cost_cells_numbers() {
+    // The cells fill the install's `GlobalStrings.lua`.
+    let _data = benilla_formats::wow_data_or_skip!();
     use benilla_formats::SpellDisplay;
     use benilla_protocol::messages::FIELD_PLAYER_SKILL_INFO_1_1;
     let mut spells = Spells::empty_for_tests();
@@ -1117,6 +1119,8 @@ fn the_power_tokens_print_the_cost_cells_numbers() {
 /// spell's own.
 #[test]
 fn a_weapon_spells_view_reads_the_wielded_weapons_skill() {
+    // The cells fill the install's `GlobalStrings.lua`.
+    let _data = benilla_formats::wow_data_or_skip!();
     use benilla_formats::SpellDisplay;
     use benilla_protocol::messages::FIELD_PLAYER_SKILL_INFO_1_1 as SKILLS;
     let mut spells = Spells::empty_for_tests();
