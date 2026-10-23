@@ -191,8 +191,8 @@ impl Pending {
 
 /// The guid a macro-expanded line's `$`-tokens expand against: a battleground system line's one
 /// guid (`0x49d961`, read at `0x49d967`), the addressee of any other (`0x49da60`, passed at
-/// `0x49daab`). The speaker's guid a monster say or yell carries first (`0x49d5dc`) is never
-/// passed on, so a line with no addressee has no subject.
+/// `0x49daab`). The speaker's guid a monster say or yell carries first (`0x49d5dc`) never reaches
+/// the expander, so a line with no addressee has no subject.
 fn macro_subject_guid(msg: &ChatMessage) -> u64 {
     use benilla_protocol::messages::{
         CHAT_MSG_BG_SYSTEM_ALLIANCE, CHAT_MSG_BG_SYSTEM_HORDE, CHAT_MSG_BG_SYSTEM_NEUTRAL,
@@ -1533,6 +1533,7 @@ fn fire_one(
                         names,
                         Ask::at(tries == 0, commands),
                         unit_names.get(),
+                        || script.unknown_object_text(),
                     );
                     let (text, clean) = crate::npc_text::substitute_checked(
                         &msg.text,

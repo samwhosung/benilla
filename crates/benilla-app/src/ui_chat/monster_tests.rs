@@ -101,8 +101,8 @@ fn monster(chat_type: u8, target_guid: u64, text: &str) -> ChatMessage {
 }
 
 /// The monster arm (`0x49da3d`) expands against the addressee alone (`0x49daab`-`0x49dabd`); the
-/// speaker's guid, read first for a say or a yell (`0x49d5dc`), is never passed on. With no
-/// addressee `$n` fails, and `0x49dacc`-`0x49dad0` drop the line.
+/// speaker's guid, read first for a say or a yell (`0x49d5dc`), never reaches the expander. With
+/// no addressee `$n` fails, and `0x49dacc`-`0x49dad0` drop the line.
 #[test]
 fn an_unaddressed_monster_line_that_names_its_subject_is_dropped() {
     let mut app = client();

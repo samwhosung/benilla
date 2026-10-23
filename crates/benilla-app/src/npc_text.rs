@@ -223,8 +223,10 @@ fn class_word(names: UnitNames<'_>, class: u8) -> String {
 /// The chat feed's [`Subject`] for any guid, resolved as the expander `0x506f70` resolves it: the
 /// unit the object manager holds (type mask 8, `0x506fad`), else the player-name cache's record
 /// (`0x506fcf`, `0x506fd4`), which the expansion only reads; the chat handler's own lookup with a
-/// callback asks for it (`0x49d9f5`, `0x49daea`), as `ask` says. A creature not streamed has no
-/// record there, and guid 0 no subject.
+/// callback asks for it (`0x49d9f5`, `0x49daea`), as `ask` says. A held unit is named by
+/// `GetUnitName` (`0x50710b` → `0x507124`, `0x609210`), which never fails: its miss is
+/// `unknown`, the `UNKNOWNOBJECT` text. A creature not streamed has no record in the name cache,
+/// and guid 0 no subject.
 pub(crate) fn subject_for_guid(
     guid: u64,
     index: &GuidIndex,
@@ -232,6 +234,7 @@ pub(crate) fn subject_for_guid(
     names: &NameCache,
     ask: Ask<'_>,
     unit_names: UnitNames<'_>,
+    unknown: impl FnOnce() -> String,
 ) -> Option<Subject> {
     if guid == 0 {
         return None;
@@ -243,7 +246,9 @@ pub(crate) fn subject_for_guid(
         .filter(|s| s.is_unit());
     if let Some(store) = store {
         return Some(Subject {
-            name: names.resolve_unit(guid, Some(store), ask)?.to_string(),
+            name: names
+                .resolve_unit(guid, Some(store), ask)
+                .map_or_else(unknown, str::to_string),
             race: race_word(unit_names, store.0.unit_race().unwrap_or(0)),
             class: class_word(unit_names, store.0.unit_class().unwrap_or(0)),
             gender: store.0.unit_gender().unwrap_or(0),
