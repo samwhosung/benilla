@@ -655,6 +655,39 @@ mod tests {
         );
     }
 
+    /// An item whose record is not cached reads 0 from every record getter (`0x5da2b3`,
+    /// `0x5d9f84`, `0x5d9fe5`, `0x5da045`), so an enchant's equip gate runs on class and subclass
+    /// 0 and refuses a weapon enchant (`0x495e22` → `0x496068`, reason `0x0a`): nothing binds and
+    /// the cursor drops. A spell with no gate binds the same item.
+    #[test]
+    fn an_enchant_on_an_uncached_item_gates_on_zeroed_class_fields() {
+        for gated in [true, false] {
+            let (mut app, rx) = item_targeting(false);
+            app.world_mut().insert_resource(crate::ui_action::Spells {
+                catalog: benilla_formats::SpellCatalog::from_displays(
+                    [(
+                        SPELL,
+                        benilla_formats::SpellDisplay {
+                            effects: [benilla_formats::SPELL_EFFECT_ENCHANT_ITEM, 0, 0],
+                            // A weapon enchant: class 2, any subclass but 0.
+                            equipped_item_class: if gated { 2 } else { -1 },
+                            equipped_item_subclass_mask: if gated { !1 } else { 0 },
+                            ..Default::default()
+                        },
+                    )]
+                    .into(),
+                ),
+                ..crate::ui_action::Spells::empty_for_tests()
+            });
+            let expected = if gated { (0, false) } else { (1, false) };
+            assert_eq!(
+                pick(&mut app, &rx, "PickupContainerItem(0, 1)"),
+                expected,
+                "gated {gated}"
+            );
+        }
+    }
+
     /// For an enchant effect `0x495d60` reads the item record's flags (`0x495df7`-`0x495e05`) and
     /// exits silently on `0x2000` (`0x495e07`, `0x495e0a`), ahead of the equip gate: no bind, no
     /// popup, no refusal, the cursor kept.
