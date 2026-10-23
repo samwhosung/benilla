@@ -58,8 +58,6 @@ pub(crate) struct PetAttack {
     entry: PetActionEntry,
     passed: Option<u64>,
     pet_guid: u64,
-    /// The view is on the unit we possess (`0x4bd420`), so the latch is raised.
-    pub(crate) possessing: bool,
 }
 
 /// Where a press goes once it has passed the dispatcher's gates (`0x4bd1d0`).
@@ -113,7 +111,8 @@ impl PetPress<'_, '_> {
         };
         let owed = self.pick_attack(&attack)?;
         owed.pay(&mut self.selection, &mut self.seam);
-        self.finish_attack(attack).map(PetStep::Order)
+        self.finish_attack(attack)
+            .map(|(send, _)| PetStep::Order(send))
     }
 
     /// [`Self::press_slot`]'s first half, up to the packet or the attempt. The attack validator
@@ -186,15 +185,23 @@ impl PetPress<'_, '_> {
     }
 
     /// Attack past its pick's signals: the validator's re-read and final gate (`0x6130c1`), the
-    /// possessed unit's latch (`0x4bd420`-`0x4bd42e`), and the packet at the target it settled.
-    pub(crate) fn finish_attack(&mut self, attack: PetAttack) -> Option<PetSend> {
+    /// possessed unit's latch (`0x4bd420`-`0x4bd42e`), and the packet at the target it settled,
+    /// with whether the latch was raised. Possession is read past the validator, as `0x4bd420`
+    /// reads it.
+    pub(crate) fn finish_attack(&mut self, attack: PetAttack) -> Option<(PetSend, bool)> {
         let target = self.settle_pick();
+        let possessing = possessing(
+            attack.pet_guid,
+            self.pet.store(attack.pet_guid),
+            self.pet.player_store(),
+            self.pet.self_guid.0,
+        );
         if !commit_press(
             &mut self.bar,
             self.seam.pet_latch.as_deref_mut(),
             attack.entry,
             target.is_none(),
-            attack.possessing,
+            possessing,
         ) {
             debug!(
                 "ui_pet: slot {} refused by the attack validator — no packet",
@@ -207,11 +214,12 @@ impl PetPress<'_, '_> {
             "ui_pet: press slot {} (attack) at {target_guid:#x}",
             attack.slot
         );
-        Some(PetSend {
+        let send = PetSend {
             pet_guid: attack.pet_guid,
             packed: attack.entry.packed,
             target_guid,
-        })
+        };
+        Some((send, possessing))
     }
 
     /// The second half of a press: its `CMSG_PET_ACTION`.
@@ -328,7 +336,6 @@ impl PetPress<'_, '_> {
                 entry,
                 passed,
                 pet_guid,
-                possessing,
             }));
         }
         latch_press(bar, seam.pet_latch.as_deref_mut(), entry, possessing);
