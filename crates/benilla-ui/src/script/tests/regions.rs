@@ -1033,6 +1033,149 @@ fn set_portrait_to_texture_is_a_global_taking_a_name() {
     assert!(s.errors().is_empty());
 }
 
+/// `SetPortraitToTexture(target, path)` (`0x48d780`) takes a name, a string or a number looked up
+/// as a global holding a Texture (`0x76c760` at `0x48d7bf`), or a Texture object (`lua_type` 5 at
+/// `0x48d7fa`). Each failure raises its own line (`0x842c98`, `0x842c58`, `0x842c1c`), a target
+/// that is neither naming `(null)`; a path that is no string or number returns with the texture
+/// left alone (`0x48d886`).
+#[test]
+fn set_portrait_to_texture_takes_a_texture_object_and_ignores_a_bad_path() {
+    let s = crate::script::UiScript::new().unwrap();
+    s.run(
+        r#"
+        PortHost = CreateFrame("Frame", "PortHost")
+        Port = PortHost:CreateTexture("PortHostPortrait", "ARTWORK")
+        PortStr = PortHost:CreateFontString("PortHostText")
+        PortAlias = Port
+        "#,
+    )
+    .unwrap();
+    let texture = |s: &UiScript| {
+        s.eval::<Option<String>>("return Port:GetTexture()")
+            .unwrap()
+    };
+    s.run(r#"SetPortraitToTexture(Port, "Interface\\Icons\\A")"#)
+        .unwrap();
+    assert_eq!(texture(&s).as_deref(), Some("Interface\\Icons\\A"));
+    for keep in [
+        "SetPortraitToTexture(Port, nil)",
+        "SetPortraitToTexture(Port)",
+        r#"SetPortraitToTexture("PortHostPortrait", {})"#,
+        r#"SetPortraitToTexture("PortHostPortrait", true)"#,
+    ] {
+        s.run(keep).unwrap();
+        assert_eq!(
+            texture(&s).as_deref(),
+            Some("Interface\\Icons\\A"),
+            "{keep}"
+        );
+    }
+    s.run("SetPortraitToTexture(Port, 5)").unwrap();
+    assert_eq!(texture(&s).as_deref(), Some("5"), "a number is its text");
+    // Any global that holds the texture, not only its published name.
+    s.run(r#"SetPortraitToTexture("PortAlias", "Interface\\Icons\\B")"#)
+        .unwrap();
+    assert_eq!(texture(&s).as_deref(), Some("Interface\\Icons\\B"));
+
+    for (call, line) in [
+        (
+            r#"SetPortraitToTexture("NoSuchPortrait", "X")"#,
+            "SetPortraitToTexture(): Couldn't find texture named 'NoSuchPortrait'",
+        ),
+        (
+            r#"SetPortraitToTexture("PortHost", "X")"#,
+            "SetPortraitToTexture(): Couldn't find texture named 'PortHost'",
+        ),
+        (
+            r#"SetPortraitToTexture(nil, "X")"#,
+            "SetPortraitToTexture(): Couldn't find texture named '(null)'",
+        ),
+        (
+            r#"SetPortraitToTexture(true, "X")"#,
+            "SetPortraitToTexture(): Couldn't find texture named '(null)'",
+        ),
+        (
+            r#"SetPortraitToTexture({}, "X")"#,
+            "SetPortraitToTexture(): Couldn't find 'this' in texture object",
+        ),
+        (
+            r#"SetPortraitToTexture(PortHost, "X")"#,
+            "SetPortraitToTexture(): Wrong object type, expected texture",
+        ),
+        (
+            r#"SetPortraitToTexture(PortStr, "X")"#,
+            "SetPortraitToTexture(): Wrong object type, expected texture",
+        ),
+    ] {
+        let err = s.run(call).unwrap_err().to_string();
+        assert!(err.contains(line), "{call}: {err}");
+    }
+    assert_eq!(texture(&s).as_deref(), Some("Interface\\Icons\\B"));
+}
+
+/// Every widget method opens with the member prologue (`Frame:Show` `0x775750`,
+/// `Texture:IsShown` `0x79b9b0`, `Button:SetFontString` `0x780ad9`, the Font methods from
+/// `0x79fda0`): a receiver that is no table raises `0x847ef8`'s line, a table holding no object at
+/// `[0]` `0x847ec0`'s, and an object that fails the class's type test `0x847e98`'s.
+#[test]
+fn a_bad_method_receiver_raises_the_member_prologues_lines() {
+    let s = crate::script::UiScript::new().unwrap();
+    s.run(
+        r#"
+        RecvFrame = CreateFrame("Frame", "RecvFrame")
+        RecvButton = CreateFrame("Button", "RecvButton")
+        RecvTex = RecvFrame:CreateTexture("RecvTex")
+        RecvStr = RecvFrame:CreateFontString("RecvStr")
+        RecvFont = CreateFont("RecvFont")
+        "#,
+    )
+    .unwrap();
+    const NON_TABLE: &str =
+        "Attempt to find 'this' in non-table object (used '.' instead of ':' ?)";
+    const NO_OBJECT: &str = "Attempt to find 'this' in non-framescript object";
+    const WRONG: &str = "Wrong object type for member function";
+    for (call, line) in [
+        ("RecvFrame.Show()", NON_TABLE),
+        ("RecvFrame.Show(5)", NON_TABLE),
+        ("RecvFrame.Show('RecvFrame')", NON_TABLE),
+        ("RecvTex.IsShown(nil)", NON_TABLE),
+        ("RecvButton.GetText(nil)", NON_TABLE),
+        ("RecvFont.GetName(nil)", NON_TABLE),
+        ("RecvFrame.GetName(nil)", NON_TABLE),
+        ("RecvFrame.Show({})", NO_OBJECT),
+        ("RecvTex.IsShown({})", NO_OBJECT),
+        ("RecvButton.GetText({})", NO_OBJECT),
+        ("RecvFont.GetName({})", NO_OBJECT),
+        ("RecvFrame.GetName({})", NO_OBJECT),
+        ("RecvFrame.Show(RecvTex)", WRONG),
+        ("RecvFrame.Show(RecvFont)", WRONG),
+        ("RecvTex.IsShown(RecvFrame)", WRONG),
+        ("RecvTex.IsShown(RecvStr)", WRONG),
+        ("RecvStr.IsShown(RecvTex)", WRONG),
+        ("RecvButton.GetText(RecvFrame)", WRONG),
+        ("RecvFont.GetName(RecvFrame)", WRONG),
+        ("RecvFont.GetName(RecvStr)", WRONG),
+        ("RecvFrame.GetName(RecvFont)", WRONG),
+    ] {
+        let err = s.run(call).unwrap_err().to_string();
+        assert!(err.contains(line), "{call}: {err}");
+    }
+    // The right receivers still answer, a method taken off one class's table included where the
+    // class admits it: a Button is a Frame, and the Region methods take any widget.
+    assert!(s
+        .eval::<bool>("RecvFrame.Show(RecvButton) return RecvButton:IsShown() == 1")
+        .unwrap());
+    assert_eq!(
+        s.eval::<String>("return RecvFrame.GetName(RecvTex)")
+            .unwrap(),
+        "RecvTex"
+    );
+    assert_eq!(
+        s.eval::<String>("return RecvFont:GetName()").unwrap(),
+        "RecvFont"
+    );
+}
+
 /// `Region:GetWidth`/`GetHeight` (`0x7a1e00`/`0x7a2030`) call the virtual size getters the rect
 /// resolver uses: a FontString's authored axis wins (`0x772930` skips the measure, `jp 0x77294a`),
 /// else its width is the unwrapped extent `GetStringWidth` reads (`0x772890`, `[fs+0xfc]`) and its

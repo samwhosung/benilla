@@ -588,6 +588,27 @@ mod tests {
         assert_eq!(tga_texture_size(b"BLP2"), None);
     }
 
+    /// `0x448450` hands a side of 16 or less to `GxTexCreate` (`0x58ac40` into `0x58ab10`), which
+    /// refuses a width or height below 8 (`0x58ab40`, `0x58ab4c`), so the load returns no texture
+    /// (`0x44a20b`): 0, 1, 2 and 4 texels make none, 8 does.
+    #[test]
+    fn a_side_below_eight_makes_no_texture() {
+        for (w, h) in [(0, 8), (8, 0), (1, 8), (8, 2), (4, 4), (4, 512), (512, 4)] {
+            assert_eq!(
+                tga_texture_size(&tga(2, w, h, 32, 0x28, &[])),
+                None,
+                "{w}x{h}"
+            );
+        }
+        for (w, h) in [(8, 8), (8, 512), (16, 8), (512, 512)] {
+            assert_eq!(
+                tga_texture_size(&tga(2, w, h, 32, 0x28, &[])),
+                Some((u32::from(w), u32::from(h))),
+                "{w}x{h}"
+            );
+        }
+    }
+
     /// The gate's prefix: nothing past `TGA_GATE_PREFIX` bytes changes the answer.
     #[test]
     fn the_gate_answers_the_same_for_its_prefix_as_for_the_file() {

@@ -409,6 +409,11 @@ impl super::UiScript {
         self.model_ref().custom_cursor_name.clone()
     }
 
+    /// Install the host's cursor picture size.
+    pub fn set_cursor_size_probe(&mut self, probe: Box<super::TextureSizeFn>) {
+        self.model_mut().cursor_size_probe = Some(probe.into());
+    }
+
     /// Drain the pending cursor write: `Some(mode)` a set, `Some(None)` a reset, `None` no call,
     /// which must leave the cursor as it was, so an armed spell keeps its cast cursor over a
     /// spellbook button.
@@ -1330,6 +1335,28 @@ mod tests {
         // A number is its text (`0x6f36b4`), a path like any other.
         assert_eq!(set(&s, "5"), Some(1));
         assert_eq!(s.custom_cursor_name(), "5");
+    }
+
+    /// `SetCursor`'s load is the cursor code's (`0x523c86` into `0x449610`), not
+    /// `TextureCreate`'s: its 32 by 32 test reads the cursor picture's probe, which opens only the
+    /// `.blp`, never the interface texture's, which would read a `.tga`.
+    #[test]
+    fn set_cursor_sizes_the_cursor_picture_not_the_interface_texture() {
+        let mut s = UiScript::new().unwrap();
+        s.set_texture_size_probe(Box::new(|_| Some((32, 32))));
+        s.set_cursor_size_probe(Box::new(|path| (path == "Mine\\Sword").then_some((32, 32))));
+        assert_eq!(
+            s.eval::<Option<i64>>(r#"return SetCursor("Mine\\Arrow")"#)
+                .unwrap(),
+            None,
+            "only a .tga: no cursor picture"
+        );
+        assert_eq!(s.ui_cursor(), None);
+        assert_eq!(
+            s.eval::<Option<i64>>(r#"return SetCursor("Mine\\Sword")"#)
+                .unwrap(),
+            Some(1)
+        );
     }
 
     fn backpack() -> ContainerState {
