@@ -750,3 +750,50 @@ fn an_interact_attack_with_the_cursor_up_binds_its_unit() {
         "cursor up: it binds, selects nothing, and swings on"
     );
 }
+
+/// `SetSelection`'s re-swing latch tests the outgoing selection for every writer (`0x49365f`-
+/// `0x4936a3`), the world click's included: switching off a dead selection while our attack is
+/// still engaged (the server's stop not yet in) latches no re-swing. The teardown's StopAttack
+/// (`0x493a08`) runs whatever the latch found, and sends while we attack (`0x5ecae4`).
+#[test]
+fn a_click_off_a_dead_selection_while_attacking_swings_at_nothing() {
+    let mut f = fix(false);
+    let world = f.app.world_mut();
+    let index = &world.resource::<GuidIndex>().0;
+    let (me, old) = (index[&ME], index[&OLD]);
+    world
+        .entity_mut(me)
+        .insert(crate::creature_anim::Engaged(OLD));
+    let mob = f.mob;
+    f.make_unit_with(old, &[(22, 0)]);
+    f.make_unit(mob);
+    f.app.world_mut().resource_mut::<PressPick>().cursor.kind = super::cursor_mode::CursorKind::Attack;
+    let over = f.over_the_mob();
+    f.click(over);
+    f.app
+        .world_mut()
+        .run_system_once(click::select_on_click)
+        .expect("the click runs");
+    let sent: Vec<_> = f
+        .rx
+        .try_iter()
+        .filter(|c| {
+            matches!(
+                c,
+                ClientCommand::AttackStop
+                    | ClientCommand::SetSelection { .. }
+                    | ClientCommand::AttackSwing { .. }
+            )
+        })
+        .collect();
+    assert!(
+        matches!(
+            sent.as_slice(),
+            [
+                ClientCommand::AttackStop,
+                ClientCommand::SetSelection { guid: MOB }
+            ]
+        ),
+        "{sent:?}"
+    );
+}
