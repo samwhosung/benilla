@@ -891,6 +891,7 @@ mod tests {
 
     const BEAST_TRAINING: u32 = 261;
     const ENCHANTING: u32 = 333;
+    const TAILORING: u32 = 197;
     const PET_WOLF: u32 = 208;
     const PET_GENERIC: u32 = 270;
     const WOLF_FAMILY: u32 = 1;
@@ -960,6 +961,7 @@ mod tests {
         let mut app = App::new();
         let mut actions = PlayerActions::default();
         actions.spells.extend(known.iter().copied());
+        actions.learned.extend(known.iter().copied());
         app.init_resource::<CraftOpen>()
             .insert_resource(actions)
             .init_resource::<crate::spell::SpellModifiers>()
@@ -1335,6 +1337,34 @@ mod tests {
             &[(F_XP, 25 | 50 << 16), (F_NEXT_XP, 3 << 16)],
         );
         assert_eq!(triple(&mut app), (Some("Enchanting".into()), 28, 53));
+    }
+
+    /// The display line is the line of the type's first spell (`0x4f6cb0`), the first the player
+    /// learned of its list (`0x5e9e0f` appends), not the lowest id.
+    #[test]
+    fn the_display_line_follows_the_first_spell_learned() {
+        let enchant = |name: &str| SpellDisplay {
+            name: name.into(),
+            cast_ui: 3,
+            ..Default::default()
+        };
+        let displays = vec![
+            (7418, enchant("Enchant Bracer - Minor Health")),
+            (7420, enchant("Enchant Chest - Minor Health")),
+        ];
+        let catalog = benilla_formats::SkillLineCatalog::from_abilities([
+            (7418, ability(ENCHANTING, 1, 70)),
+            (7420, ability(TAILORING, 1, 70)),
+        ])
+        .with_line_names([(ENCHANTING, "Enchanting"), (TAILORING, "Tailoring")]);
+        let mut app = craft_feed(displays, &[7420, 7418], catalog, 3, &[]);
+        app.update();
+        let name = app
+            .world()
+            .non_send_resource::<UiScript>()
+            .eval::<Option<String>>("return (GetCraftDisplaySkillLine())")
+            .unwrap();
+        assert_eq!(name.as_deref(), Some("Tailoring"));
     }
 
     /// The window's open runs the build (`0x4f6036` → `0x4f60c0`), whose tail signals

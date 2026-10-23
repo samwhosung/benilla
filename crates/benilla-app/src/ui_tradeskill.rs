@@ -1051,6 +1051,70 @@ mod tests {
         );
     }
 
+    /// The build refills the array from the line's list in learn order (`0x5e9d72` appends,
+    /// `0x4fcbb7` walks it), and the sort leaves the rows it ties where the CRT's `shortsort`
+    /// puts them (`0x4fd51f`, two hidden rows equal): with every group folded, the last learned
+    /// comes first past the shown header, whatever the ids.
+    #[test]
+    fn the_folded_rows_follow_the_learn_order() {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        let mut actions = PlayerActions::default();
+        let learned = [300, 100, 200];
+        actions.spells.extend(learned);
+        actions.learned.extend(learned);
+        let recipe = |id: u32| {
+            (
+                id,
+                SpellDisplay {
+                    name: format!("Recipe {id}"),
+                    attributes: SPELL_ATTR_IS_TRADESKILL,
+                    ..Default::default()
+                },
+            )
+        };
+        let sla = benilla_formats::SlaInfo {
+            skill_id: 197,
+            req_skill_value: 1,
+            forward_spell_id: 0,
+            trivial_low: 1,
+            trivial_high: 2,
+        };
+        app.init_resource::<TradeSkillOpen>()
+            .insert_resource(actions)
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<Items>()
+            .init_resource::<crate::spell::Cooldowns>()
+            .init_resource::<crate::ui_script::UiClock>()
+            .insert_resource(crate::net::NetCommands(tx))
+            .insert_resource(Spells {
+                catalog: benilla_formats::SpellCatalog::from_displays(
+                    learned.into_iter().map(recipe).collect(),
+                ),
+                ..Spells::empty_for_tests()
+            })
+            .insert_resource(SkillLines {
+                catalog: benilla_formats::SkillLineCatalog::from_abilities(
+                    learned.map(|id| (id, sla)),
+                ),
+            });
+        app.world_mut()
+            .spawn((ObjectStore(Default::default()), SelfPlayer));
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        app.add_systems(Update, feed_trade_skill);
+        app.world_mut().resource_mut::<TradeSkillOpen>().line = Some(197);
+        app.update();
+        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+        script.run("CollapseTradeSkillSubClass(0)").unwrap();
+        script.rebuild_trade_skill(&mut |_| {});
+        let tail = script
+            .eval::<Vec<String>>(
+                "local t = {} for i = 2, 4 do t[i - 1] = (GetTradeSkillInfo(i)) end return t",
+            )
+            .unwrap();
+        assert_eq!(tail, ["Recipe 200", "Recipe 100", "Recipe 300"]);
+    }
+
     /// The skill watches rebuild the open list, each at its place: the value watch on every run,
     /// after its skill-list rebuild and its line past the gate (`0x5de2a7`, `0x5de417`,
     /// `0x5de434`); the maximum's and permanent bonus's ahead of its skill-list rebuild

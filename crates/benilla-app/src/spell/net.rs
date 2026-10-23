@@ -1647,6 +1647,7 @@ mod tests {
 
     mod cooldown_sites;
     mod dispatch;
+    mod learned;
     mod openers;
 
     /// `SMSG_COOLDOWN_EVENT` (`0x6e9670`): the event moves the held record's one start, which the
