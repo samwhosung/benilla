@@ -129,7 +129,6 @@ impl Plugin for CombatLogPlugin {
             .net_handler(K::EnvironmentalDamageLog, on_environmental_damage_log)
             .net_handler(K::XpGain, on_xp_gain)
             .net_handler(K::ExplorationXp, on_exploration_xp)
-            .net_handler(K::LevelUp, on_level_up)
             .net_handler(K::PvpCredit, on_pvp_credit)
             // Written by the missile flight; declared here too, as registering is idempotent.
             .add_message::<MissileMiss>()
@@ -443,12 +442,6 @@ fn on_exploration_xp(
             &mut server_sounds,
             &l.log,
         );
-    }
-}
-
-fn on_level_up(In(ev): In<SessionEvent>, l: Sinks) {
-    if let SessionEvent::LevelUp(lv) = ev {
-        text::level_up(lv, &l.log);
     }
 }
 

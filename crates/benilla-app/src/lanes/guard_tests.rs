@@ -353,8 +353,8 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::minimap::blips::drive_blip_tooltip", &["items::Countdowns", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore"]),
     // The four tokens' snapshots read the stores as of the drain's place (`ui_unit::views`); the
-    // XP pair, the rest state, the level edge, the combo points, the bar toggles and the worn
-    // display read the live store, and every snapshot its names, relations, selection and group.
+    // XP pair, the rest state, the combo points, the bar toggles and the worn display read the
+    // live store, and every snapshot its names, relations, selection and group.
     ("::ui_unit::feed_units", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "net::SelfGuid", "net::reputations::Reputations", "target::Selection",
         "ui_guild::GuildState", "ui_party::GroupState"]),

@@ -93,8 +93,6 @@ struct UnitFeedMemo {
     last_xp: Option<(u32, u32)>,
     /// `(rest state, pool, PLAYER_FLAGS)`, pushed as one so no binding reads it half-updated.
     last_rest: Option<(u8, u32, u32)>,
-    /// Our last level; the first sighting is the login descriptor, not a ding.
-    last_level: Option<u32>,
     /// `(count, banked target)`, pushed as a pair because `GetComboPoints` reads both.
     last_combo: Option<(u8, u64)>,
     /// `(HIDE_HELM, HIDE_CLOAK)`, pushed on the edge only: the Options setter flips the VM's
@@ -1396,8 +1394,6 @@ fn feed_units(
     names: Res<NameCache>,
     commands: Res<NetCommands>,
     group: Res<crate::ui_party::GroupState>,
-    // Chat and the message-sound queue, for the rest and PvP lines.
-    sink: crate::ui_action::MessageSink,
     // The guild-identity cache is lazy: a miss sends `CMSG_GUILD_QUERY` through a shared read.
     guild: Res<crate::ui_guild::GuildState>,
     interact: Option<Res<crate::ui_session::InteractNpc>>,
@@ -1599,20 +1595,6 @@ fn feed_units(
             }
         }
 
-        // `PLAYER_LEVEL_UP` on any level change off the descriptor, demotions included (vmangos
-        // `GiveLevel` sends `SMSG_LEVELUP_INFO` for those too); the reference's trigger is
-        // untraced.
-        if let Some((store, _)) = self_q.iter().next() {
-            if let Some(level) = store.0.unit_level() {
-                let prev = memo.last_level.replace(level);
-                if prev.is_some_and(|p| level != p) {
-                    gate.audit("feed_units", "the level edge");
-                    let (info, talent_points) = sink.chat.take_level_up_gains(level).unzip();
-                    owed.level_up = Some((level, info, talent_points.unwrap_or(0)));
-                }
-            }
-        }
-
         // `PLAYER_FIELD_BYTES` byte 2, the four extra bars, on the edge: the reference never writes
         // the cell (its one access is the read at `0x4e768c`) or watches it (`0x468070`), and stock
         // reads it once, at `PLAYER_ENTERING_WORLD` (`UIParent.lua:364`), so this goes ahead of
@@ -1655,7 +1637,6 @@ fn feed_units(
             memo.entered_world = false;
             memo.last_xp = None;
             memo.last_rest = None;
-            memo.last_level = None;
             memo.last_combo = None;
             // Edge-only pushes: a stale memo would skip a new character whose values match it.
             memo.worn_hidden = None;
@@ -1734,9 +1715,6 @@ fn feed_units(
 /// The events [`feed_units`]' turn owes, fired after it in its order with the host lent.
 #[derive(Default)]
 struct OwedUnitEvents {
-    /// `PLAYER_LEVEL_UP`: the new level, the gains `SMSG_LEVELUP_INFO` carried and the talent
-    /// points.
-    level_up: Option<(u32, Option<benilla_protocol::messages::LevelUpInfo>, u32)>,
     /// `PLAYER_UNGHOST`, ahead of the arrival's cascade.
     unghost: bool,
     /// The world-enter cascade, with the bonus bar offset our form gives (`0x4e4fc0`).
@@ -1745,28 +1723,6 @@ struct OwedUnitEvents {
 
 impl OwedUnitEvents {
     fn fire(self, script: &mut UiScript) {
-        if let Some((level, info, talent_points)) = self.level_up {
-            // All nine, as the reference formats them (`%d` nine times) and
-            // `ChatFrame.lua:1283-1320` reads them; missing gains are zeros, since stock's
-            // `if ( argN > 0 )` raises on nil.
-            let gain = |f: fn(&benilla_protocol::messages::LevelUpInfo) -> i32| {
-                ScriptValue::Int(i64::from(info.as_ref().map_or(0, f)))
-            };
-            script.fire_event(
-                "PLAYER_LEVEL_UP",
-                vec![
-                    ScriptValue::Int(i64::from(level)),
-                    gain(|l| l.health),
-                    gain(|l| l.powers[0]),
-                    ScriptValue::Int(i64::from(talent_points)),
-                    gain(|l| l.stats[0]),
-                    gain(|l| l.stats[1]),
-                    gain(|l| l.stats[2]),
-                    gain(|l| l.stats[3]),
-                    gain(|l| l.stats[4]),
-                ],
-            );
-        }
         if self.unghost {
             script.fire_event("PLAYER_UNGHOST", vec![]);
         }

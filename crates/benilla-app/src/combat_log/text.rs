@@ -8,8 +8,8 @@
 use bevy::prelude::*;
 
 use benilla_protocol::messages::{
-    DamageShield, ExplorationXp, LevelUpInfo, PeriodicAuraLog, PeriodicTick, SpellDamageLog,
-    SpellLogMiss, XpGain,
+    DamageShield, ExplorationXp, PeriodicAuraLog, PeriodicTick, SpellDamageLog, SpellLogMiss,
+    XpGain,
 };
 
 use crate::combat_text::{
@@ -401,16 +401,6 @@ pub(super) fn exploration_xp(
             x.area_id
         ),
     }
-}
-
-/// `SMSG_LEVELUP_INFO`: the ding's chat lines. The talent-point arg is not on the wire; the client
-/// computes `(newLevel >= 10) ? 1 : 0` (`0x5e407c`). The ding's visual rides the
-/// `UNIT_FIELD_LEVEL` change watcher, not this packet.
-pub(super) fn level_up(l: LevelUpInfo, chat_log: &ChatLog) {
-    let talent_points = u32::from(l.level >= 10);
-    // Parked for `ui_unit`'s `PLAYER_LEVEL_UP`, whose args the stock `ChatFrame_OnEvent` prints;
-    // nothing here prints the block itself, or it shows twice.
-    chat_log.push_level_up_gains(&l, talent_points);
 }
 
 #[cfg(test)]

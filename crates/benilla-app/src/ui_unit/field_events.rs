@@ -192,6 +192,48 @@ fn fire_notices(
     fire_lane(&mut hosted_vm, &mut lane, &mut firing, until);
 }
 
+/// `PLAYER_LEVEL_UP` (`0x5e413e`, event `0xc7`), its nine values pushed as `%d`: the message's
+/// level, health and first power, 1 for a level of at least 10 (`0x5e407c`-`0x5e4081`), and its
+/// five stats, the arguments `ChatFrame.lua`'s level-up block prints.
+fn level_up(script: &mut UiScript, info: &benilla_protocol::messages::LevelUpInfo) {
+    let level = info.level as i32;
+    let int = |v: i32| ScriptValue::Int(i64::from(v));
+    let mut args = vec![
+        int(level),
+        int(info.health),
+        int(info.powers[0]),
+        int(i32::from(level >= 10)),
+    ];
+    args.extend(info.stats.iter().map(|&s| int(s)));
+    script.fire_event("PLAYER_LEVEL_UP", args);
+}
+
+/// `SMSG_LEVELUP_INFO`'s arm of the notice handler `0x5e38c0`. Only while the active player is
+/// held (`0x5e4054`-`0x5e4071`): each level tutorial the message's level reaches, in the arm's
+/// order (`0x5e4086`-`0x5e410e`), then `PLAYER_LEVEL_UP` (`0x5e413e`), at the packet's place among
+/// the other lanes. Nothing else signals the event: a level written to the descriptor does not.
+pub(super) fn on_level_up(
+    In(ev): In<benilla_protocol::SessionEvent>,
+    me: Query<(), With<crate::net::SelfPlayer>>,
+    mut lane: ResMut<NoticeLane>,
+) {
+    let benilla_protocol::SessionEvent::LevelUp(info) = ev else {
+        return;
+    };
+    if me.is_empty() {
+        return;
+    }
+    // The arm compares signed (`0x5e4089 jl`).
+    let level = info.level as i32;
+    lane.write_batch(
+        crate::tutorial::LEVEL_TRIGGERS
+            .iter()
+            .filter(|&&(threshold, _)| level >= threshold)
+            .map(|&(_, id)| FieldNotice::Tutorial { id }),
+    );
+    lane.write(FieldNotice::LevelUp(info));
+}
+
 /// Every notice waiting, fired alone, for a test that drives the notices without the chat lane.
 #[cfg(test)]
 pub(crate) fn fire_field_notices(
@@ -263,7 +305,9 @@ fn drunk(
 /// drain's gate, so a notice is fired or dropped the frame it is written, never left to age.
 pub(super) fn add_notice_lane(app: &mut App) {
     use crate::lanes::LaneApp;
+    use crate::net::handlers::NetHandlerApp;
     app.init_resource::<NoticeLane>()
+        .net_handler(benilla_protocol::SessionEventKind::LevelUp, on_level_up)
         .add_lane("field notices", peek, fire_notices, None)
         .add_systems(
             Update,
@@ -330,6 +374,7 @@ pub(crate) fn fire(
         }
         // `0x5ddffa`.
         FieldNotice::ComboPoints => script.fire_event("PLAYER_COMBO_POINTS", vec![]),
+        FieldNotice::LevelUp(info) => level_up(script, &info),
         // Fired by [`NoticeFiring::fire`], which holds the slots, the banks, the names, the form
         // table, the aura cache and the skill lines.
         FieldNotice::QuestLog

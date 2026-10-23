@@ -69,10 +69,13 @@ pub(crate) enum FieldNotice {
     /// The drunk watcher `0x5e2a90` on any player's `PLAYER_BYTES_3` byte 1: the byte's copy and
     /// its value now, from which the run signals and speaks (`crate::ui_unit::field_events`).
     Drunk { guid: u64, old: u8, new: u8 },
-    /// `FireTutorial(id, 0)` (`0x4b5390`) from a watcher on the active player: the number's
-    /// fire-once bit tested and set, then its `TutorialPopup` cue and `TUTORIAL_TRIGGER` at once,
-    /// in the watcher's order.
+    /// `FireTutorial(id, 0)` (`0x4b5390`) from a watcher on the active player, or the level-up
+    /// message's arm (`0x5e4092`-`0x5e410e`): the number's fire-once bit tested and set, then its
+    /// `TutorialPopup` cue and `TUTORIAL_TRIGGER` at once, in the caller's order.
     Tutorial { id: u32 },
+    /// `SMSG_LEVELUP_INFO`'s arm of the notice handler `0x5e38c0`: `PLAYER_LEVEL_UP` with the
+    /// message's level, health, first power, `level >= 10` and five stats (`0x5e413e`).
+    LevelUp(benilla_protocol::messages::LevelUpInfo),
     /// `OnShapeshiftFormChanged` (`0x5de010`) on the active player's form byte: after the usable
     /// refresh (`0x5de011`, the action feed's), `ACTIONBAR_UPDATE_STATE` and
     /// `CURRENT_SPELL_CAST_CHANGED` (`0x5de016` → `0x4b3250`), then the bonus bar's offset and

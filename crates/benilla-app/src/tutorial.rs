@@ -67,9 +67,10 @@ pub(crate) mod id {
     pub(crate) const KEYRINGS: u32 = 0x31;
 }
 
-/// The level-gated arm of the `SMSG_LEVELUP_INFO` handler (`0x5e38c0`): in the handler's own order,
-/// each fires when the new level is at least its threshold.
-const LEVEL_TRIGGERS: [(u32, u32); 8] = [
+/// The level-gated arm of the `SMSG_LEVELUP_INFO` handler (`0x5e38c0`, `0x5e4086`-`0x5e410e`): in
+/// the handler's own order, each fires when the message's level is at least its threshold
+/// (`crate::ui_unit::field_events`).
+pub(crate) const LEVEL_TRIGGERS: [(i32, u32); 8] = [
     (3, 0x16),  // Chatting
     (4, 0x0d),  // Trainers
     (4, 0x02),  // Cameras
@@ -298,12 +299,12 @@ impl TutorialState {
     }
 }
 
-/// The last-seen level and swimming state, for the edge-triggered `0x4b5390` sites polled here.
-/// The ghost, resting, PvP and rested tutorials ride their field watchers
-/// ([`crate::field_watch`]), the ghost's arrival leg the cascade ([`run_world_enter_cascade`]).
+/// The last-seen swimming state, for the edge-triggered `0x4b5390` site polled here. The ghost,
+/// resting, PvP and rested tutorials ride their field watchers ([`crate::field_watch`]), the
+/// ghost's arrival leg the cascade ([`run_world_enter_cascade`]), the level tutorials the
+/// level-up message (`crate::ui_unit::field_events`).
 #[derive(Default)]
 struct SelfWatch {
-    level: Option<u32>,
     swimming: Option<bool>,
 }
 
@@ -400,11 +401,9 @@ pub(crate) fn fire_published(
     );
 }
 
-/// The polled `0x4b5390` edge sites: the `SMSG_LEVELUP_INFO` arm on the level rising, and the
-/// mover entering water. Each fires on a change, never on the login descriptor; the bring-up
-/// resets the memory.
+/// The polled `0x4b5390` edge site: the mover entering water. It fires on a change, never at the
+/// login; the bring-up resets the memory.
 fn watch_self(
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
     player: Res<Player>,
     mut cascade: ResMut<WorldEnterCascade>,
     mut watch: Local<SelfWatch>,
@@ -412,20 +411,6 @@ fn watch_self(
 ) {
     if std::mem::take(&mut cascade.reset_watch) {
         *watch = SelfWatch::default();
-    }
-    // The first sight of each field arms silently.
-    if let Ok(store) = self_q.single() {
-        let level = store.0.unit_level();
-        if let (Some(prev), Some(new)) = (watch.level, level) {
-            if new > prev {
-                for (threshold, id) in LEVEL_TRIGGERS {
-                    if new >= threshold {
-                        asks.write(TutorialEvent::trigger(id));
-                    }
-                }
-            }
-        }
-        watch.level = level;
     }
     if let Some(prev) = watch.swimming {
         if !prev && player.swimming {

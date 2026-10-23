@@ -4,7 +4,7 @@
 use bevy::prelude::*;
 
 use benilla_protocol::messages::{
-    channel_notice, ChannelNoticeTail, ChatMessage, LevelUpInfo, MACRO_EXPANDED_TYPES,
+    channel_notice, ChannelNoticeTail, ChatMessage, MACRO_EXPANDED_TYPES,
 };
 
 use benilla_assets::{LockRecover, WorldAssets};
@@ -262,9 +262,6 @@ struct ChatQueue {
     /// How many player-name answers `pending` holds, so a line looks for a later one only then.
     answers: usize,
     broadcasts: Vec<super::broadcast::Broadcast>,
-    /// A level-up's gains for `ui_unit`'s `PLAYER_LEVEL_UP` fire, matched by level: the fire
-    /// follows a descriptor change and the gains a packet.
-    level_up_gains: Vec<(LevelUpInfo, u32)>,
 }
 
 /// One item in the lane, with its stamp ([`crate::lanes::stamp`]).
@@ -454,21 +451,6 @@ impl ChatLog {
     /// Take the parked broadcasts, leaving the queue empty.
     pub(crate) fn take_broadcasts(&self) -> Vec<super::broadcast::Broadcast> {
         std::mem::take(&mut self.q().broadcasts)
-    }
-
-    /// Park a level-up's gains for the `PLAYER_LEVEL_UP` fire.
-    pub(crate) fn push_level_up_gains(&self, info: &LevelUpInfo, talent_points: u32) {
-        self.q().level_up_gains.push((*info, talent_points));
-    }
-
-    /// Take the parked gains for `level`; with none (a GM's level write), the caller fires zeros.
-    pub(crate) fn take_level_up_gains(&self, level: u32) -> Option<(LevelUpInfo, u32)> {
-        let mut q = self.q();
-        let i = q
-            .level_up_gains
-            .iter()
-            .position(|(l, _)| l.level == level)?;
-        Some(q.level_up_gains.remove(i))
     }
 }
 
