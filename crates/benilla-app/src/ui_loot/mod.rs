@@ -244,8 +244,9 @@ enum Step {
     /// frame replaced the live cells.
     CopierEnd(Window),
     /// An inventory failure's tail (`0x5e3af3`-`0x5e3b20`): `LOOT_OPENED` again while a window
-    /// is open and the active player's auto-loot byte is set, read at the failure's place.
-    FailureTail,
+    /// is open (`0xb71b48`, as the failure's packet found it: `window_open`) and the active
+    /// player's auto-loot byte is set, read at the failure's place.
+    FailureTail { window_open: bool },
     /// The sweep a close with no VM owed a disenchant window with rows left (`0x48f264` →
     /// `0x4c1fa0`).
     Sweep,
@@ -658,9 +659,12 @@ impl LootState {
         })
     }
 
-    /// Owe an inventory failure's tail to the lane, behind its line and unlocks.
+    /// Owe an inventory failure's tail to the lane, behind its line and unlocks, with whether a
+    /// window is open at the failure's packet (`0x5e3aff`).
     pub(crate) fn owe_failure_tail(&mut self) {
-        self.queue(Step::FailureTail);
+        self.queue(Step::FailureTail {
+            window_open: self.window.source.is_some(),
+        });
     }
 
     /// Owe the hold's sweep to the lane, from a close with no VM at hand.
@@ -1330,8 +1334,8 @@ fn fire_step(vm: &mut LootVm, reads: &LootReads, step: Step) {
                 end_session_open(vm, w, replaced);
             }
         }
-        Step::FailureTail => vm.turn(|script, (steps, _)| {
-            let open = steps.loot.source().is_some() && steps.objects.player().is_some();
+        Step::FailureTail { window_open } => vm.turn(|script, (steps, _)| {
+            let open = window_open && steps.objects.player().is_some();
             if let (Some(script), true) = (script, open && steps.byte.0) {
                 script.fire_event("LOOT_OPENED", vec![]);
             }
