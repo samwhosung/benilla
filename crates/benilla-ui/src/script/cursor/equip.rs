@@ -264,6 +264,22 @@ mod tests {
         assert_eq!(s.eval::<i64>("return SIGNALS").unwrap(), 1);
     }
 
+    /// `AutoEquipCursorItem` never reads the split count `0xb4b40c` (`0x5e1480`-`0x5e1790`): a
+    /// held split stack of arrows equips like any whole one, sent and cleared with the unlock
+    /// (`0x5e1711`, `0x5e1763`).
+    #[test]
+    fn a_held_split_stack_equips_like_any_other() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        let mut arrows = bag(&[(1, 0x11, 6)]);
+        arrows.slots.get_mut(&1).unwrap().count = 200;
+        s.set_container(0, Some(arrows));
+        s.run("SplitContainerItem(0, 1, 50) AutoEquipCursorItem()")
+            .unwrap();
+        assert!(s.cursor_item().is_none(), "the split left the cursor");
+        assert_eq!(s.take_container_autoequips(), vec![(0, 1)]);
+    }
+
     /// A worn item goes back (`0x5e155a`), nothing sent.
     #[test]
     fn a_worn_item_goes_back() {
