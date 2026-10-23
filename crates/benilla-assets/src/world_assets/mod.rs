@@ -381,6 +381,21 @@ fn decode_blp_file(
     }
 }
 
+/// The files a tabard emblem cell reads, in order.
+fn emblem_names(path: &str) -> Vec<String> {
+    sprite_candidates(path).to_vec()
+}
+
+/// The pixels of a tabard emblem cell, read from the archives alone: the first of
+/// [`emblem_names`] that reads and decodes.
+fn emblem_rgba(chain: &Mutex<Chain>, path: &str) -> Option<(u32, u32, Vec<u8>)> {
+    let chain = chain.lock_recover();
+    emblem_names(path).into_iter().find_map(|name| {
+        let bytes = chain.read(&name).ok()?;
+        decode_by_name(&name, &bytes).ok()
+    })
+}
+
 /// The pixels of a portrait: the sink `0x525d30` formats `%s.blp` onto the name as written
 /// (`0x525e0f`, whatever it ends in) and reads it with the BLP reader `0x5a7b40` and flag 1
 /// (`0x525e37`), so no `.tga` is read and `Foo.tga` opens `Foo.tga.blp`.
@@ -843,7 +858,7 @@ impl WorldAssets {
             return cached;
         }
         let open = LooseOpen::Archives;
-        let loaded = decode_sprite(&self.chain, &self.loose, path, open).map(|(w, h, mut rgba)| {
+        let loaded = emblem_rgba(&self.chain, path).map(|(w, h, mut rgba)| {
             for px in rgba.as_chunks_mut::<4>().0 {
                 px[0] = 0xFF;
                 px[1] = 0xFF;
@@ -1673,6 +1688,21 @@ mod tests {
         assert_eq!(pic("Both.tga"), Some((32, 32, 6)), "Both.blp, not Both.tga");
         assert_eq!(pic("Both"), Some((32, 32, 6)));
         assert_eq!(pic("Fake"), None, "TGA bytes under a .blp name");
+    }
+
+    /// The emblem cell appends `.BLP` to its name (`0x50338a`, `0x83574c`) and reads that one file
+    /// with the BLP reader `0x5a7b40` and flag 0: no `.tga` of the same stem is read.
+    #[test]
+    fn an_emblem_cell_reads_only_its_blp() {
+        let stem = "Textures\\GuildEmblems\\Emblem_01_02_TU_U";
+        assert_eq!(
+            emblem_names(stem),
+            vec![format!("{}.blp", normalize_path(stem))]
+        );
+        let data = benilla_formats::wow_data_or_skip!();
+        let chain = Mutex::new(Chain::open(&data).expect("open the chain"));
+        let (w, h, _) = emblem_rgba(&chain, stem).expect("the emblem BLP decodes");
+        assert!(w > 0 && h > 0);
     }
 
     /// A 32-bit TGA with 8 alpha bits, `w` by `h`, that the decoder reads.
