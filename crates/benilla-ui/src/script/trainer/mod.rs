@@ -202,8 +202,9 @@ pub struct TrainerState {
 
 impl super::UiScript {
     /// Push the open trainer and finalize its rows, as a list (`0x4d7b3b`) and the state pass
-    /// `0x4d7d40` do, or clear it with `None`. A push builds the tree ([`build_groups`]) and keeps
-    /// only the collapsed groups that still exist, so a fold survives a content update.
+    /// `0x4d7d40` do, or clear it with `None`. The first push of a list builds the header array
+    /// ([`build_groups`]); a later one keeps it and regroups the rows under it ([`regroup`]). A
+    /// fold survives a content update.
     pub fn set_trainer(&mut self, state: Option<TrainerState>) {
         self.push_trainer(state, true);
     }
@@ -238,7 +239,12 @@ impl super::UiScript {
                 model.trainer_rows_fresh = false;
             }
             Some(mut s) => {
-                s.groups = build_groups(&s.services, s.trainer_type, &known_header);
+                // The header array is the list's (`0x4d7560`); a later push only regroups the rows
+                // under it, as a pass re-keys a row and keeps every header (`0x4d82b2`-`0x4d82c1`).
+                s.groups = match model.trainer.as_ref().filter(|_| !model.trainer_rows_fresh) {
+                    Some(listed) => regroup(&listed.groups, &s.services),
+                    None => build_groups(&s.services, s.trainer_type, &known_header),
+                };
                 let live: std::collections::HashSet<u32> = s.groups.iter().map(|g| g.key).collect();
                 model.trainer_collapsed.retain(|sl| live.contains(sl));
                 let model = &mut *model;
@@ -454,6 +460,39 @@ fn build_groups(
                 o => sign(o),
             }
         });
+    }
+    groups
+}
+
+/// `services` grouped under the list's header array `listed`, its order and its headers kept,
+/// a group whose rows all left among them: the state pass re-keys a row now known to -1 at type 1
+/// (`0x4d82b2`-`0x4d82c1`) and touches no header (`0xb73a14` is the builder's count). A key the
+/// array lacks, which no pass writes, gets a header at its end.
+fn regroup(listed: &[TrainerGroup], services: &[TrainerService]) -> Vec<TrainerGroup> {
+    let mut groups: Vec<TrainerGroup> = listed
+        .iter()
+        .map(|g| TrainerGroup {
+            services: Vec::new(),
+            ..g.clone()
+        })
+        .collect();
+    for (i, s) in services.iter().enumerate() {
+        if s.group_key == 0 {
+            continue;
+        }
+        let gi = match groups.iter().position(|g| g.key == s.group_key) {
+            Some(gi) => gi,
+            None => {
+                groups.push(TrainerGroup {
+                    key: s.group_key,
+                    name: s.group_name.clone(),
+                    line_name: s.line_name.clone(),
+                    services: Vec::new(),
+                });
+                groups.len() - 1
+            }
+        };
+        groups[gi].services.push(i);
     }
     groups
 }

@@ -1402,7 +1402,8 @@ fn a_mount_trainer_always_builds_the_known_group_first() {
         .unwrap()
         .is_none());
 
-    // A class trainer builds no such group.
+    // A class trainer's list builds no such group.
+    s.reset_trainer_list_state(0);
     s.set_trainer(Some(trainer()));
     assert_eq!(
         s.eval::<i64>("local n = function(...) return arg.n end return n(GetTrainerSkillLines())")
