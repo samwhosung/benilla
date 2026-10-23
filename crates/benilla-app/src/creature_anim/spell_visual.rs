@@ -691,32 +691,6 @@ fn launcher_shots(go: &SpellGoTargets, flags: u32, dead: impl Fn(Entity) -> bool
     let points = go.target_mask & 0x60 != 0;
     let per_unit = go.target_mask & 0x802 != 0 && (!points || flags & 0x1 != 0);
     let mut shots = LauncherShots::default();
-    if true {
-        let _ = (per_unit, &dead);
-        shots.targets = go
-            .hits
-            .iter()
-            .map(|&unit| MissileTarget {
-                unit,
-                miss: None,
-                reflect: 0,
-            })
-            .chain(go.misses.iter().map(|&(unit, code, _)| MissileTarget {
-                unit,
-                miss: Some(code),
-                reflect: 0,
-            }))
-            .collect();
-        if shots.targets.is_empty() {
-            if let Some(at) = go.dest {
-                shots.grounds.push(GroundShot {
-                    at,
-                    list: GroundList::Hits(Vec::new()),
-                });
-            }
-        }
-        return shots;
-    }
     let ground = |list: GroundList, shots: &mut LauncherShots| {
         if let (true, Some(at)) = (points, go.dest) {
             shots.grounds.push(GroundShot { at, list });
@@ -1099,8 +1073,8 @@ pub(super) fn route_cast_visuals(
             // No caster unit flies nothing (`0x6e8219`), nor does a spell with no visual row
             // (`0x6e8041`); the launcher needs the visual's field 6 or the wire's ammo
             // (`0x6e8a7f`, `0x6e8a88`).
-            let Some(stages) = stages.or(Some(Default::default())).filter(|s| {
-                true || s.missile_gate != 0 || go.ammo_display_id.is_some_and(|ammo| ammo != 0)
+            let Some(stages) = stages.filter(|s| {
+                s.missile_gate != 0 || go.ammo_display_id.is_some_and(|ammo| ammo != 0)
             }) else {
                 continue;
             };

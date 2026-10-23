@@ -534,7 +534,7 @@ pub fn load_spell_visual_catalog(chain: &mut Chain) -> Result<SpellVisualCatalog
                 area_gate: g(11),
                 area_effect: g(12),
                 area_kit: g(13),
-                flags: 0,
+                flags: g(15),
             },
         );
     }

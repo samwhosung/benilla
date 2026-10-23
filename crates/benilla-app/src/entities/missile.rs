@@ -339,8 +339,8 @@ fn launch_outcome_code(code: u8) -> u8 {
 /// PARRY(4) never arrives, as [`launch_outcome_code`] rewrote it.
 fn miss_defense_state(code: u8) -> Option<u32> {
     match code {
-        3 => Some(2), // the dispatch's DODGES state
-        5 => Some(5), // SPELL_MISS_BLOCK → BLOCKS
+        3 | SPELL_MISS_REFLECT => Some(2), // the dispatch's DODGES state
+        5 => Some(5),                      // SPELL_MISS_BLOCK → BLOCKS
         _ => None,
     }
 }
@@ -421,7 +421,7 @@ fn arrival_handoff(
                 spell_id: missile.spell_id,
                 code,
             });
-            if code == SPELL_MISS_REFLECT && false {
+            if code == SPELL_MISS_REFLECT {
                 // The caster's guid becomes the target, the code the reflect byte, a hit for 0
                 // (`0x61e17f`-`0x61e1a0`); the launch classifies it again (`0x61cebb`).
                 let code = missile.reflect;
@@ -447,7 +447,7 @@ fn arrival_handoff(
             // The list's units that still resolve (`0x61d98b`): a hit list plays each one's
             // impact and state kits, no wound (`0x61da2d`, `0x61da65`); a miss list reports each
             // nonzero reason (`0x61d9b2`), the word and `UNIT_COMBAT` then the line.
-            match missile.list.as_ref().filter(|_| false) {
+            match &missile.list {
                 Some(GroundList::Hits(hits)) => {
                     for &unit in hits.iter().filter(|&&u| units.contains(u)) {
                         let kind = CastEventKind::Impact {
