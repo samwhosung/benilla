@@ -225,6 +225,24 @@ fn a_record_write_the_log_missed_fails_the_rewind() {
     );
 }
 
+/// A record write after the lanes and before the next frame's snapshot needs no entry: the
+/// sandbox's (`/partytest off`, a sandboxed party call) runs in the drains of what the Lua asked,
+/// past the lanes, and the next frame's rewind starts from the roster it left.
+#[test]
+fn a_record_write_between_frames_needs_no_entry() {
+    let mut app = party_client();
+    let mut group = app
+        .world_mut()
+        .resource_mut::<crate::ui_party::GroupState>();
+    if let Some(record) = group.stats.get_mut(&MATE) {
+        record.max_hp = Some(90);
+    }
+    assert_eq!(
+        frame(&mut app, vec![hp(70), hp(40)]),
+        ["UNIT_HEALTH:party1:70", "UNIT_HEALTH:party1:40"]
+    );
+}
+
 /// The unit a `target` chain ends on reads as each packet left it: `party1target` resolves to
 /// the add (`0x515970`), whose health `UnitHealth` reads off its object at the call
 /// (`0x5174d0`).
