@@ -365,7 +365,7 @@ pub(crate) fn feed_reputation(
             || last_inputs.as_ref() != Some(&inputs)
             || last.is_none();
         if !moved {
-            script.apply_reputation_ops(ops);
+            script.push_reputation(None, ops);
             return;
         }
         *last_inputs = Some(inputs);
@@ -385,12 +385,12 @@ pub(crate) fn feed_reputation(
         entries.sort_by_key(|e| e.faction_id);
 
         let fresh = ReputationState { entries, watched };
-        if !script.reputation_matches(&fresh) {
-            script.set_reputation(fresh.clone());
-        }
-        *last = Some(fresh);
         // The messages' list ops, over the snapshot they wrote.
-        script.apply_reputation_ops(ops);
+        script.push_reputation(
+            (!script.reputation_matches(&fresh)).then(|| fresh.clone()),
+            ops,
+        );
+        *last = Some(fresh);
     })
 }
 

@@ -89,7 +89,7 @@ pub enum ReputationCall {
 }
 
 /// What a reputation message does to the list, in its handler's order; the app hands them over
-/// after the snapshot they ride on ([`super::UiScript::apply_reputation_ops`]).
+/// after the snapshot they ride on ([`super::UiScript::push_reputation`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReputationListOp {
     /// `SMSG_SET_FACTION_VISIBLE` listing a slot it made visible: the adder, then the sort
@@ -135,6 +135,19 @@ impl super::UiScript {
         model.reputation = state;
         if model.reputation_headers.is_empty() {
             rebuild(&mut model);
+        }
+    }
+
+    /// The feed's push: `state` when the snapshot moved, then the messages' list ops over it. A
+    /// push that builds the list drops the ops, all queued before its rebuild, which clears the
+    /// list first (`0x4d547f`-`0x4d5493`).
+    pub fn push_reputation(&mut self, state: Option<ReputationState>, ops: Vec<ReputationListOp>) {
+        let builds = state.is_some() && self.model_ref().reputation_headers.is_empty();
+        if let Some(state) = state {
+            self.set_reputation(state);
+        }
+        if !builds {
+            self.apply_reputation_ops(ops);
         }
     }
 
@@ -1276,6 +1289,39 @@ mod tests {
         }
         s.set_reputation(war);
         assert_eq!(tail(&s), before);
+    }
+
+    /// The first push builds the list, and the rebuild clears it first (`0x4d547f`-`0x4d5493`), so
+    /// the messages queued before it are gone: no sort of theirs reorders the folded rows under
+    /// Inactive (`0x4d5479`), whose ties the CRT's `qsort` moves (`0x4d5f02`).
+    #[test]
+    fn the_first_push_drops_the_list_ops_queued_before_it() {
+        let mut st = state();
+        for e in &mut st.entries {
+            if !e.is_header {
+                e.inactive = true;
+            }
+        }
+        let rows = |ops: Vec<ReputationListOp>| {
+            let mut s = UiScript::new().expect("VM");
+            s.push_reputation(Some(st.clone()), ops);
+            s.eval::<Vec<String>>(
+                "local t = {} for i = 1, 9 do t[i] = (GetFactionInfo(i)) or '-' end return t",
+            )
+            .unwrap()
+        };
+        let built = rows(Vec::new());
+        assert_eq!(
+            rows(vec![
+                ReputationListOp::Rebuild,
+                ReputationListOp::Visible(19),
+                ReputationListOp::Standing {
+                    listed: vec![],
+                    flags_moved: true
+                },
+            ]),
+            built
+        );
     }
 
     /// Each `SMSG_SET_FACTION_VISIBLE` adds its row and sorts (`0x4d5738`, `0x4d574a`), so two
