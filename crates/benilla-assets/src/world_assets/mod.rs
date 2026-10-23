@@ -381,13 +381,14 @@ fn decode_blp_file(
     }
 }
 
-/// The files a tabard emblem cell reads, in order.
+/// The files a tabard emblem cell reads: its name with `.BLP` appended (`0x50338a`, `0x83574c`),
+/// whatever it ends in, and nothing else.
 fn emblem_names(path: &str) -> Vec<String> {
-    sprite_candidates(path).to_vec()
+    vec![format!("{}.blp", normalize_path(path))]
 }
 
-/// The pixels of a tabard emblem cell, read from the archives alone: the first of
-/// [`emblem_names`] that reads and decodes.
+/// The pixels of a tabard emblem cell, read from the archives alone (`0x5a7b40` with flag 0) and
+/// decoded as a BLP ([`emblem_names`]).
 fn emblem_rgba(chain: &Mutex<Chain>, path: &str) -> Option<(u32, u32, Vec<u8>)> {
     let chain = chain.lock_recover();
     emblem_names(path).into_iter().find_map(|name| {
