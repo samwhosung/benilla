@@ -157,6 +157,16 @@ impl BindingsState {
     pub(crate) fn fired(&self, i: Input) -> bool {
         self.fired.contains(&i)
     }
+    /// Fire the one-shot `i` this frame, as a body's Lua call would.
+    #[cfg(test)]
+    pub(crate) fn fire_for_test(&mut self, i: Input) {
+        self.fired.push(i);
+    }
+    /// End the frame's one-shots.
+    #[cfg(test)]
+    pub(crate) fn clear_for_test(&mut self) {
+        self.fired.clear();
+    }
     /// Total amount for a one-shot this frame (0.0 when idle): the camera zoom's yards.
     pub(crate) fn amount(&self, i: Input) -> f32 {
         self.amounts

@@ -116,4 +116,65 @@ mod tests {
         );
         assert!(!rising, "direction reversed again");
     }
+
+    /// The flag reads `[player+0xc48]` as the frame leaves it (`0x607f60`): a swing a link of the
+    /// pass started, still queued, flashes, and one it ended, still applied, does not.
+    #[test]
+    fn the_flash_reads_the_attack_target_the_queued_edits_leave() {
+        use benilla_protocol::field::{FIELD_UNIT_FLAGS, FIELD_UNIT_HEALTH, FIELD_UNIT_MAXHEALTH};
+        use benilla_protocol::messages::ObjectType;
+        use benilla_protocol::ObjectFields;
+        use bevy::ecs::system::RunSystemOnce;
+
+        use crate::creature_anim::{UnitEdit, UnitEdits};
+        use crate::net::{Guid, GuidIndex, ObjectStore, SelfGuid};
+
+        const ME: u64 = 0x10;
+        const MOB: u64 = 0xF130_0000_0000_0042;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let world = app.world_mut();
+        world.resource_mut::<SelfGuid>().0 = Some(ME);
+        let unit = |kind, extra: &[(u16, u32)]| {
+            let mut pairs = vec![(FIELD_UNIT_HEALTH, 100), (FIELD_UNIT_MAXHEALTH, 100)];
+            pairs.extend_from_slice(extra);
+            ObjectStore(ObjectFields::from_pairs(&pairs).into_created(kind))
+        };
+        let me = world
+            .spawn((
+                SelfPlayer,
+                Guid(ME),
+                Transform::default(),
+                unit(ObjectType::Player, &[(2, 0x19), (FIELD_UNIT_FLAGS, 0x8)]),
+            ))
+            .id();
+        let mob = world
+            .spawn((
+                Guid(MOB),
+                Transform::default(),
+                unit(ObjectType::Unit, &[(2, 0x9)]),
+            ))
+            .id();
+        let mut index = world.resource_mut::<GuidIndex>();
+        index.0.insert(ME, me);
+        index.0.insert(MOB, mob);
+        *world.resource_mut::<Selection>() = Selection {
+            target: Some(mob),
+            guid: Some(MOB),
+            lit: Some(mob),
+            ..Default::default()
+        };
+        let flashing = |world: &mut World| {
+            world.run_system_once(drive_flash).expect("the flash runs");
+            world.resource::<CombatFlash>().unit
+        };
+        world.resource::<UnitEdits>().push(UnitEdit::StartAttack {
+            entity: me,
+            target: MOB,
+        });
+        assert_eq!(flashing(world), Some(mob), "a queued swing flashes");
+        crate::creature_anim::apply_unit_edits(world);
+        assert_eq!(flashing(world), Some(mob), "an applied one");
+        world.resource::<UnitEdits>().push(UnitEdit::EndAttack(me));
+        assert_eq!(flashing(world), None, "a queued end stops it");
+    }
 }

@@ -221,7 +221,7 @@ impl Died<'_, '_> {
 mod tests {
     use benilla_protocol::field::{FIELD_UNIT_FLAGS, FIELD_UNIT_HEALTH, FIELD_UNIT_MAXHEALTH};
     use benilla_protocol::messages::ObjectType;
-    use benilla_protocol::ObjectFields;
+    use benilla_protocol::{ObjectFields, SessionEvent};
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::*;
     use crossbeam_channel::Receiver;
@@ -368,10 +368,9 @@ mod tests {
                 .expect("the ladder runs on the built client");
         }
 
-        /// `unit`'s health falls from 100 to 0, and the handler runs.
+        /// `unit`'s health falls from 100 to 0 in an update packet, whose end runs the handler.
         fn dies(&mut self, entity: Entity, guid: u64, kind: ObjectType) {
-            let world = self.world();
-            world.write_message(FieldChanged {
+            self.edge(FieldChanged {
                 at: crate::lanes::stamp(),
                 entity,
                 guid,
@@ -380,11 +379,28 @@ mod tests {
                 old: 100,
                 new: 0,
             });
-            world
-                .run_system_once(super::on_unit_died)
-                .expect("the death handler runs on the built client");
-            // The pass's end, which applies the unit edits it queued.
-            crate::creature_anim::apply_unit_edits(world);
+        }
+
+        /// `edge` written by an update packet's notify pass, and the packet's end.
+        fn edge(&mut self, edge: FieldChanged) {
+            let world = self.world();
+            world.write_message(edge);
+            crate::net::handlers::dispatch(world, vec![SessionEvent::ObjectUpdateEnd]);
+        }
+
+        /// A values block on `guid`, one packet.
+        fn values(&mut self, guid: u64, pairs: &[(u16, u32)]) {
+            let block = SessionEvent::ObjectValues {
+                guid,
+                fields: ObjectFields::from_pairs(pairs),
+            };
+            crate::net::handlers::dispatch(self.world(), crate::net::wire([block]));
+        }
+
+        /// The world's VM, its `script` run.
+        fn lua(&mut self, script: &str) {
+            crate::script_calls::with_hosted_vm(self.world(), |s| s.expect("a VM").run(script))
+                .expect("the chunk runs");
         }
 
         fn sent(&self) -> Vec<ClientCommand> {
@@ -551,45 +567,105 @@ mod tests {
         );
     }
 
+    /// `PLAYER_FIELD_BYTES`, whose bit 0x8 the release timer reads (`[+0xe68]+0x1028`).
+    const BYTES: u16 = 1222;
+
+    /// A client whose session is live and whose VM records `GetReleaseTimeRemaining()` at each
+    /// `PLAYER_DEAD`.
+    fn dying_client() -> Client {
+        let mut c = client();
+        let world = c.world();
+        world.resource_mut::<crate::net::NetStatus>().connected = true;
+        world
+            .resource_mut::<Time<bevy::time::Real>>()
+            .update_with_duration(std::time::Duration::ZERO);
+        crate::script_calls::insert_test_vm(world);
+        c.lua(
+            r#"DEAD = {} local f = CreateFrame("Frame") f:RegisterEvent("PLAYER_DEAD")
+            f:SetScript("OnEvent", function() table.insert(DEAD, GetReleaseTimeRemaining()) end)"#,
+        );
+        c
+    }
+
+    /// What each `PLAYER_DEAD` read of the release timer.
+    fn dead_reads(c: &mut Client) -> Vec<f64> {
+        crate::script_calls::eval_in_vm(c.world(), "return DEAD")
+    }
+
     /// `0x5e99b0` arms the release timer at our own death by `PLAYER_FIELD_BYTES` bit 0x8 as it
     /// finds it (`[+0xe68]+0x1028`, `0x5e9a27`): now plus 360000 ms when set (`0x5e9a30` →
     /// `0x496250`), else no timer (`0x496280`), which `GetReleaseTimeRemaining` answers with -1
-    /// (`0x4962a0`). The bit moving after the death moves neither.
+    /// (`0x4962a0`). `PLAYER_DEAD` reads it so in the death's packet, and the bit moving after the
+    /// death moves neither.
     #[test]
     fn our_own_death_arms_the_release_timer_by_the_bit_it_finds() {
-        /// `PLAYER_FIELD_BYTES`.
-        const BYTES: u16 = 1222;
         for armed in [true, false] {
-            let mut c = client();
-            let me = c.me;
-            let world = c.world();
-            world.resource_mut::<crate::net::NetStatus>().connected = true;
-            crate::script_calls::insert_test_vm(world);
+            let mut c = dying_client();
             let bit = |set: bool| u32::from(set) * 0x8;
-            world
-                .get_mut::<ObjectStore>(me)
-                .unwrap()
-                .0
-                .merge(ObjectFields::from_pairs(&[
-                    (FIELD_UNIT_HEALTH, 0),
-                    (BYTES, bit(armed)),
-                ]));
-            c.dies(me, ME, ObjectType::Player);
-            let world = c.world();
-            world
-                .get_mut::<ObjectStore>(me)
-                .unwrap()
-                .0
-                .merge(ObjectFields::from_pairs(&[(BYTES, bit(!armed))]));
-            crate::death::run_feed_death_once(world);
+            c.values(ME, &[(FIELD_UNIT_HEALTH, 0), (BYTES, bit(armed))]);
+            c.values(ME, &[(BYTES, bit(!armed))]);
+            crate::death::run_feed_death_once(c.world());
             let left: f64 =
-                crate::script_calls::eval_in_vm(world, "return GetReleaseTimeRemaining()");
-            if armed {
-                assert!(left > 359.0, "armed: {left}");
-            } else {
-                assert_eq!(left, -1.0, "no timer");
+                crate::script_calls::eval_in_vm(c.world(), "return GetReleaseTimeRemaining()");
+            let at_death = dead_reads(&mut c);
+            assert_eq!(at_death.len(), 1, "armed {armed}: {at_death:?}");
+            for read in [left, at_death[0]] {
+                if armed {
+                    assert!(read > 359.0, "armed: {read}");
+                } else {
+                    assert_eq!(read, -1.0, "no timer");
+                }
             }
         }
+    }
+
+    /// Our own death's `PresentUnitDeath` (`0x6058ae`) ends in `SignalDeathState` for the active
+    /// player (`0x5fa6d0` at `0x6251c2`, `0x6251cc` → `0x495850`): `PLAYER_DEAD` inside the death's
+    /// packet, after `0x5e99b0` armed the timer, so its handlers read the whole window, and the
+    /// frame's feed signals it no second time. A second death past the first window reads a fresh
+    /// one.
+    #[test]
+    fn our_own_death_signals_player_dead_in_its_packet_over_the_timer_it_armed() {
+        let mut c = dying_client();
+        c.values(ME, &[(FIELD_UNIT_HEALTH, 0), (BYTES, 0x8)]);
+        let first = dead_reads(&mut c);
+        assert_eq!(first.len(), 1, "PLAYER_DEAD in the packet: {first:?}");
+        assert!(first[0] > 359.0, "the whole window: {first:?}");
+        crate::death::run_feed_death_once(c.world());
+        assert_eq!(
+            dead_reads(&mut c).len(),
+            1,
+            "the feed signals it no second time"
+        );
+
+        c.values(ME, &[(FIELD_UNIT_HEALTH, 100)]);
+        crate::death::run_feed_death_once(c.world());
+        c.world()
+            .resource_mut::<Time<bevy::time::Real>>()
+            .update_with_duration(std::time::Duration::from_secs(400));
+        c.values(ME, &[(FIELD_UNIT_HEALTH, 0)]);
+        let second = dead_reads(&mut c);
+        assert_eq!(second.len(), 2, "{second:?}");
+        assert!(second[1] > 359.0, "a fresh window: {second:?}");
+        crate::death::run_feed_death_once(c.world());
+        assert_eq!(dead_reads(&mut c).len(), 2);
+    }
+
+    /// `SignalDeathState` clears the cursor after `PLAYER_DEAD` (`ClearCursor(1, 1)`, `0x495889`
+    /// → `0x495190`): held coins go back, and `CURSOR_UPDATE` reads the cursor empty.
+    #[test]
+    fn our_own_death_clears_the_cursor_after_player_dead() {
+        let mut c = dying_client();
+        crate::script_calls::with_hosted_vm(c.world(), |s| s.expect("a VM").set_money(500));
+        c.lua(
+            r#"SEEN = {} local f = CreateFrame("Frame")
+            f:RegisterEvent("PLAYER_DEAD") f:RegisterEvent("CURSOR_UPDATE")
+            f:SetScript("OnEvent", function() table.insert(SEEN, event .. " " .. GetCursorMoney()) end)
+            PickupPlayerMoney(300) SEEN = {}"#,
+        );
+        c.values(ME, &[(FIELD_UNIT_HEALTH, 0)]);
+        let seen: Vec<String> = crate::script_calls::eval_in_vm(c.world(), "return SEEN");
+        assert_eq!(seen, ["PLAYER_DEAD 300", "CURSOR_UPDATE 0"]);
     }
 
     /// The guid the interaction latch holds.
@@ -607,20 +683,60 @@ mod tests {
             .collect()
     }
 
+    /// A VM that records the windows' closes, in the world.
+    fn spy_closes(c: &mut Client) {
+        let vm = crate::ui_script::sweep_test::spied_vm(&["MERCHANT_CLOSED", "TRADE_CLOSED"]);
+        c.world().insert_non_send_resource(vm);
+    }
+
     /// Our own death releases the latch with the goodbye (`0x4931c0(0xb4e2d0, 0)` at `0x5e9a51`;
-    /// the player who is dead hears none, `0x605f30`), closing the window.
+    /// the player who is dead hears none, `0x605f30`), closing the window. Another player's death,
+    /// a fall of our health that leaves some and a rise out of none release nothing.
     #[test]
     fn our_own_death_releases_the_latch_with_the_goodbye() {
+        const STRANGER: u64 = 0x31;
         let mut c = client();
-        let me = c.me;
+        let stranger = c
+            .world()
+            .spawn((
+                Guid(STRANGER),
+                ObjectStore(
+                    ObjectFields::from_pairs(&[
+                        (FIELD_UNIT_HEALTH, 100),
+                        (FIELD_UNIT_MAXHEALTH, 100),
+                    ])
+                    .into_created(ObjectType::Player),
+                ),
+            ))
+            .id();
+        c.world()
+            .resource_mut::<GuidIndex>()
+            .0
+            .insert(STRANGER, stranger);
+        spy_closes(&mut c);
         crate::ui_merchant::open_merchant(c.world(), MOB, Vec::new());
         vocals(&mut c);
-        c.dies(me, ME, ObjectType::Player);
+        c.values(STRANGER, &[(FIELD_UNIT_HEALTH, 0)]);
+        c.values(ME, &[(FIELD_UNIT_HEALTH, 20)]);
+        assert_eq!(
+            latched(&mut c),
+            Some(MOB),
+            "another player's death, a fall to 20"
+        );
+        assert!(crate::ui_script::sweep_test::seen_in(&c.app).is_empty());
+        c.values(ME, &[(FIELD_UNIT_HEALTH, 0)]);
         assert_eq!(latched(&mut c), None);
+        assert_eq!(
+            crate::ui_script::sweep_test::seen_in(&c.app),
+            ["MERCHANT_CLOSED"]
+        );
         assert_eq!(
             vocals(&mut c),
             [crate::ui_session::LatchVocal::Goodbye(MOB)]
         );
+        crate::ui_merchant::open_merchant(c.world(), MOB, Vec::new());
+        c.values(ME, &[(FIELD_UNIT_HEALTH, 50)]);
+        assert_eq!(latched(&mut c), Some(MOB), "a rise out of none");
     }
 
     /// The latched unit dying closes its window with no goodbye: the tail's `0x4931c0` on the
@@ -629,25 +745,51 @@ mod tests {
     #[test]
     fn the_latched_units_death_closes_its_window_without_a_goodbye() {
         let mut c = client();
-        let (mob, other) = (c.mob, c.other);
+        spy_closes(&mut c);
         crate::ui_merchant::open_merchant(c.world(), MOB, Vec::new());
         vocals(&mut c);
-        c.dies(other, OTHER, ObjectType::Unit);
+        c.values(OTHER, &[(FIELD_UNIT_HEALTH, 0)]);
         assert_eq!(latched(&mut c), Some(MOB), "another unit's death");
-        c.dies(mob, MOB, ObjectType::Unit);
+        c.values(MOB, &[(FIELD_UNIT_HEALTH, 0)]);
         assert_eq!(latched(&mut c), None);
+        assert_eq!(
+            crate::ui_script::sweep_test::seen_in(&c.app),
+            ["MERCHANT_CLOSED"]
+        );
         assert_eq!(vocals(&mut c), [], "dl = 1: the unit says no goodbye");
 
         const PARTNER: u64 = 0x77;
-        let partner = c.world().spawn(Guid(PARTNER)).id();
+        let partner = c
+            .world()
+            .spawn((
+                Guid(PARTNER),
+                ObjectStore(
+                    ObjectFields::from_pairs(&[
+                        (FIELD_UNIT_HEALTH, 100),
+                        (FIELD_UNIT_MAXHEALTH, 100),
+                    ])
+                    .into_created(ObjectType::Player),
+                ),
+            ))
+            .id();
+        c.world()
+            .resource_mut::<GuidIndex>()
+            .0
+            .insert(PARTNER, partner);
         let world = c.world();
         world
             .resource_mut::<crate::ui_trade::TradeSession>()
             .begin(PARTNER);
         crate::ui_trade::open_window(world);
         assert_eq!(latched(&mut c), Some(PARTNER));
-        c.dies(partner, PARTNER, ObjectType::Player);
+        vocals(&mut c);
+        c.values(PARTNER, &[(FIELD_UNIT_HEALTH, 0)]);
         assert_eq!(latched(&mut c), None, "the trade partner's death");
+        assert_eq!(
+            crate::ui_script::sweep_test::seen_in(&c.app),
+            ["MERCHANT_CLOSED", "TRADE_CLOSED"]
+        );
+        assert_eq!(vocals(&mut c), [], "the partner says no goodbye");
     }
 
     /// The health watcher compares signed (`0x604774 jg`, `0x604778 jle`): a rise out of a negative
@@ -666,17 +808,9 @@ mod tests {
             old,
             new,
         };
-        let world = c.world();
-        world.write_message(edge(0x8000_0000, 0));
-        world
-            .run_system_once(super::on_unit_died)
-            .expect("the death handler runs");
+        c.edge(edge(0x8000_0000, 0));
         assert_eq!(latched(&mut c), Some(MOB), "the old health was not above 0");
-        let world = c.world();
-        world.write_message(edge(20, u32::MAX));
-        world
-            .run_system_once(super::on_unit_died)
-            .expect("the death handler runs");
+        c.edge(edge(20, u32::MAX));
         assert_eq!(latched(&mut c), None, "a fall to -1");
     }
 

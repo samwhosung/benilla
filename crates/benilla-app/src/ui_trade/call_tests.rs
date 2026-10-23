@@ -599,6 +599,61 @@ fn a_drop_started_trade_folds_held_coins_with_one_money_signal() {
     assert_eq!(heard(&mut t), "", "the feed's money diff saw the fold");
 }
 
+/// The open leg sends before it clears the cursor: the coins' offer (`0x5d4500` at `0x4bf608`)
+/// ahead of `ClearCursor(1, 0)` (`0x4bf61c`), an item's placement (`0x5d4380` at `0x4bf6be`) ahead
+/// of `ClearCursor(0, 1)` (`0x4bf6ca`): nothing sends while the clear's `CURSOR_UPDATE` handler
+/// waits, and that handler's packet follows the send, ahead of the leg's own signals.
+#[test]
+fn a_drop_started_trade_sends_its_offer_before_it_clears_the_cursor() {
+    for pickup in ["PickupPlayerMoney(300)", "PickupContainerItem(0, 1)"] {
+        let mut t = client();
+        run(
+            &mut t,
+            r#"ORDER = "" local f = CreateFrame("Frame") f:RegisterEvent("CURSOR_UPDATE")
+            f:RegisterEvent("PLAYER_TRADE_MONEY") f:RegisterEvent("TRADE_SHOW")
+            f:SetScript("OnEvent", function()
+                if not ROLL then return end
+                ORDER = ORDER .. event .. " "
+                if event == "CURSOR_UPDATE" then RandomRoll(9, 9) end
+            end)"#,
+        );
+        run(&mut t, pickup);
+        run(&mut t, "ROLL = 1");
+        let _ = sent(&t);
+        t.app
+            .world_mut()
+            .resource_mut::<super::TradeSession>()
+            .initiate(BOB, true);
+        benilla_ui::script::census::take();
+        status(&mut t, TradeStatus::OpenWindow);
+        assert_eq!(
+            benilla_ui::script::census::take(),
+            Default::default(),
+            "{pickup}: nothing sends while the clear's handlers are held"
+        );
+        let order: Vec<&str> = sent(&t)
+            .iter()
+            .filter_map(|c| match c {
+                ClientCommand::SetTradeGold { .. } | ClientCommand::SetTradeItem { .. } => {
+                    Some("offer")
+                }
+                ClientCommand::RandomRoll { .. } => Some("roll"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(order, ["offer", "roll"], "{pickup}");
+        let heard_order: String = eval(&mut t, "return ORDER");
+        assert!(
+            heard_order.starts_with("CURSOR_UPDATE "),
+            "{pickup}: the clear's signal ahead of the leg's own: {heard_order}"
+        );
+        assert!(eval::<bool>(
+            &mut t,
+            "return CursorHasItem() == nil and GetCursorMoney() == 0"
+        ));
+    }
+}
+
 /// `CloseTrade` (`0x4bfdc0`) signals `PLAYER_TRADE_MONEY` while the done flag is 0, which every
 /// close leaves while the partner holds the latch: the release's inner run stores 0 over the
 /// `COMPLETE` arm's 1 (`0x4bf4fd`, `0x493363`).
