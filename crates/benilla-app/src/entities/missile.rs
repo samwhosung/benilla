@@ -10,8 +10,9 @@
 //! (`0x60c9b0`).
 //!
 //! The arrival deadline is fixed at GO: the launch (`0x61ceb0`) flies `distance / Speed` less the
-//! time queued, and a release already past it, as at melee range, shows only the impact. In flight
-//! the missile homes on the target's live attachment and arrives on time (`0x61e2a0`).
+//! time queued, at no more than 100 yd/s, and a release already past it, as at melee range, still
+//! flies, at 100 yd/s. In flight the missile homes on the target's live attachment and arrives on
+//! time (`0x61e2a0`).
 //!
 //! On arrival `0x61e1d0` picks an arm by whether the target guid still resolves, then by the hit
 //! bit `[missile+0x38] & 1`, set at the spawn (`0x60a4e8`) and by a reflection with no outcome
@@ -19,7 +20,8 @@
 //! - `0x61dc50`, a live target hit: wound, flinch and impact visual, no word; here
 //!   [`CastEventKind::Impact`].
 //! - `0x61dd50`, a live target missed: the outcome word, `UNIT_COMBAT` and chat, then the
-//!   disposition; here the defense clip and [`MissileMiss`]. A reflection (code 11) then turns
+//!   disposition; here [`MissileMiss`] and the Dodge clip, which a block and a deflection play
+//!   at launch instead, timed to the impact ([`launch_flight`]). A reflection (code 11) then turns
 //!   back at its caster (`0x61e17b`) with the outcome the GO carried after the code, relaunched
 //!   from where it is (`0x61ceb0`), and its second arrival takes these arms again at the caster.
 //! - `0x61d870`, no live target: plays on the caster, then walks the missile's guid list: a hit
@@ -136,6 +138,14 @@ pub(super) struct Missile {
     aim: Aim,
     /// The outcome a reflection turns back with (`+0x4c`, `0x61e188`); 0 is a hit.
     reflect: u8,
+    /// The outcome flags the launch set from the miss code (`+0x38`, [`launch_outcome`]).
+    outcome: u32,
+    /// A blocked or deflected miss's victim clip still to start, seconds from now, with its
+    /// [`DefenseAnim`] state (`+0x74`, `0x61d0be`).
+    reaction: Option<(f32, u32)>,
+    /// Where the flight is headed: the live aim of the last step (`+0x2c`), which a target that
+    /// stops resolving leaves it flying to.
+    last_aim: Vec3,
     /// The list a missile at a point carries and walks on arrival (`+0x5c`, `+0x6c`).
     list: Option<GroundList>,
     /// The speed the launch fitted (`+0x1c`, `0x61d0c3`), which a relaunch divides by.
@@ -322,55 +332,100 @@ pub(crate) struct MissileMiss {
     pub(crate) code: u8,
 }
 
-/// A travelling spell is deflected, never parried: the launch classifier `0x61d720`, called from
-/// the launch at `0x61cebb`, stores PARRY(4) back as DEFLECT(9) (`0x61d756`), so the word, the
-/// `UNIT_COMBAT` feed and the chat line all see 9. Every other code passes through.
-fn launch_outcome_code(code: u8) -> u8 {
-    if code == 4 {
-        9
-    } else {
-        code
-    }
-}
+/// `0x61d720`'s outcome flags (`+0x38`): MISSED, BLOCKED, RESISTED, DEFLECTED and REFLECTED.
+const MISSED: u32 = 0x8;
+const BLOCKED: u32 = 0x10;
+const RESISTED: u32 = 0x20;
+const DEFLECTED: u32 = 0x40;
+const REFLECTED: u32 = 0x80;
 
-/// The victim clip a missed arrival plays, as the melee `$CPP` dispatch's victim state
-/// ([`DefenseAnim`]): DODGE(3) plays Dodge (30), BLOCK(5) ShieldBlock (24), and a REFLECT(11)
-/// Dodge, its flag 0x80 being none of `0x58` (`0x61ddf7`, `0x61de4e`); any other code nothing.
-/// PARRY(4) never arrives, as [`launch_outcome_code`] rewrote it.
-fn miss_defense_state(code: u8) -> Option<u32> {
+/// The launch classifier `0x61d720` (called at `0x61cebb`): a miss code's outcome flag and the code
+/// it reports, through the jump table at `0x61d784`. MISS, DODGE and EVADE (1, 3, 6) miss, RESIST,
+/// IMMUNE and DEFLECT-by-immunity (2, 7, 8) resist, BLOCK (5) blocks, REFLECT (11) reflects, and
+/// PARRY (4) deflects and is stored back as DEFLECT (9, `0x61d756`), so the word, the
+/// `UNIT_COMBAT` feed and the chat line all see 9. Every other code sets nothing.
+fn launch_outcome(code: u8) -> (u8, u32) {
     match code {
-        3 | SPELL_MISS_REFLECT => Some(2), // the dispatch's DODGES state
-        5 => Some(5),                      // SPELL_MISS_BLOCK → BLOCKS
-        _ => None,
+        1 | 3 | 6 => (code, MISSED),
+        2 | 7 | 8 => (code, RESISTED),
+        4 => (9, DEFLECTED),
+        5 => (code, BLOCKED),
+        11 => (code, REFLECTED),
+        _ => (code, 0),
     }
 }
 
-/// `SPELL_MISS_REFLECT`, the code whose flag 0x80 (`0x61d720`) turns the missile back.
-const SPELL_MISS_REFLECT: u8 = 11;
+/// The [`DefenseAnim`] victim states: Dodge (30) and ShieldBlock (24), as the melee `$CPP`
+/// dispatch names them.
+const DODGES: u32 = 2;
+const BLOCKS: u32 = 5;
+
+/// A missed arrival plays Dodge (30) on its target unless the miss was a miss, a block or a
+/// deflection (`0x61ddf7 test 0x58`, `0x61de4e`): a resist or a reflection dodges, a dodge does
+/// not, and a block or deflection played its clip at launch ([`launch_flight`]).
+fn arrival_dodges(outcome: u32) -> bool {
+    outcome & (MISSED | BLOCKED | DEFLECTED) == 0
+}
 
 /// `0x80c854`: the speed a launch takes when its flight is already due, and the cap of a fitted
 /// one (`0x61d00b`, `0x61d0c3`).
 const DUE_SPEED: f32 = 100.0;
 
-/// The speed `0x61ceb0` fits for `distance` at `speed` after `queued` seconds since the GO: the
-/// flight's time left `t = distance / speed − queued` (`0x61cfda`-`0x61cff4`), then `distance / t`
-/// capped at 100 for `t > 0`, else 100 (`0x61cffa`-`0x61d018`).
-fn fitted_speed(distance: f32, speed: f32, queued: f32) -> f32 {
-    let t = distance / speed - queued;
-    if t > 0.0 {
-        (distance / t).min(DUE_SPEED)
+/// `0x61ceb0`'s flight from `from` to `to`: the time left `t = distance / speed − queued`
+/// (`0x61cfda`-`0x61cff4`), the speed refitted to `distance / t` capped at 100 for `t > 0`, else
+/// 100 with `t = 0` (`0x61cffa`-`0x61d018`), so a launch already due still flies. A blocked or
+/// deflected missile at a unit then has its target play ShieldBlock (24) or Dodge (30) timed so
+/// half the sequence has run at impact: at once when `t` less half its length is not positive,
+/// else that much later (`0x61d01b`-`0x61d0f5`).
+fn launch_flight(missile: &mut Missile, from: Vec3, to: Vec3, out: &mut ArrivalOut) {
+    let distance = from.distance(to);
+    let t = distance / missile.speed - missile.age;
+    let (speed, t) = if t > 0.0 {
+        ((distance / t).min(DUE_SPEED), t)
     } else {
-        DUE_SPEED
+        (DUE_SPEED, 0.0)
+    };
+    missile.speed = speed;
+    missile.arrive_in = distance / speed;
+    missile.last_aim = to;
+    missile.reaction = None;
+    let Aim::Unit { target, .. } = missile.aim else {
+        return;
+    };
+    if missile.outcome & (BLOCKED | DEFLECTED) == 0 {
+        return;
+    }
+    let (anim, state) = if missile.outcome & BLOCKED != 0 {
+        (24, BLOCKS)
+    } else {
+        (30, DODGES)
+    };
+    let length = out
+        .clips
+        .get(target)
+        .ok()
+        .and_then(|a| a.find(anim))
+        .map_or(0.0, |c| c.duration);
+    let lead = t - length / 2.0;
+    if lead > 0.0 {
+        missile.reaction = Some((lead, state));
+    } else {
+        out.defenses.write(DefenseAnim {
+            victim: target,
+            victim_state: state,
+        });
     }
 }
 
 /// Everything a landing projectile emits, as one system parameter: both missile systems sit at
 /// Bevy's 16-parameter ceiling.
 #[derive(bevy::ecs::system::SystemParam)]
-pub(super) struct ArrivalOut<'w> {
+pub(super) struct ArrivalOut<'w, 's> {
     impacts: MessageWriter<'w, CastEvent>,
     defenses: MessageWriter<'w, DefenseAnim>,
     words: MessageWriter<'w, MissileMiss>,
+    /// The units' sequences, whose lengths time a launch's victim clip.
+    clips: Query<'w, 's, &'static benilla_assets::ModelAnimations>,
 }
 
 /// The arrival hand-off, by the arms of the reference's per-tick dispatch `0x61e1d0` (module docs).
@@ -409,10 +464,10 @@ fn arrival_handoff(
             dest_tag,
             miss: Some(code),
         } => {
-            if let Some(victim_state) = miss_defense_state(code) {
+            if arrival_dodges(missile.outcome) {
                 out.defenses.write(DefenseAnim {
                     victim: target,
-                    victim_state,
+                    victim_state: DODGES,
                 });
             }
             out.words.write(MissileMiss {
@@ -421,21 +476,20 @@ fn arrival_handoff(
                 spell_id: missile.spell_id,
                 code,
             });
-            if code == SPELL_MISS_REFLECT {
+            if missile.outcome & REFLECTED != 0 {
                 // The caster's guid becomes the target, the code the reflect byte, a hit for 0
                 // (`0x61e17f`-`0x61e1a0`); the launch classifies it again (`0x61cebb`).
-                let code = missile.reflect;
+                let (code, outcome) = launch_outcome(missile.reflect);
+                missile.outcome = if missile.reflect == 0 { 0 } else { outcome };
                 missile.aim = Aim::Unit {
                     target: missile.caster,
                     dest_tag,
-                    miss: (code != 0).then(|| launch_outcome_code(code)),
+                    miss: (missile.reflect != 0).then_some(code),
                 };
                 let Some(to) = aim_point(missile.aim, units, joints) else {
                     return false; // the caster is gone
                 };
-                let distance = at.distance(to);
-                missile.speed = fitted_speed(distance, missile.speed, missile.age);
-                missile.arrive_in = distance / missile.speed;
+                launch_flight(missile, at, to, out);
                 return true;
             }
         }
@@ -477,8 +531,7 @@ fn arrival_handoff(
 }
 
 /// Launch one queued GO from `launch`: a missile per target and one per shot at the point, each
-/// flying `distance / speed − time queued` (`0x61ceb0`); one already past its deadline hands off
-/// at once, and flies on only when that turned it back.
+/// on [`launch_flight`]'s schedule (`0x61ceb0`).
 fn launch_go(
     go: &QueuedGo,
     launch: Vec3,
@@ -487,55 +540,49 @@ fn launch_go(
     joints: &Query<&GlobalTransform>,
     sounds: &mut MessageWriter<MissileSound>,
     out: &mut ArrivalOut,
-    play_seq: &mut crate::creature_anim::PlaySeq,
 ) {
     let unit_shots = go.spawn.targets.iter().map(|t| {
+        let (miss, outcome) = t.miss.map(launch_outcome).unzip();
         let aim = Aim::Unit {
             target: t.unit,
             dest_tag: go.spawn.dest_tag,
-            miss: t.miss.map(launch_outcome_code),
+            miss,
         };
-        (aim, t.reflect, None)
+        (aim, outcome.unwrap_or(0), t.reflect, None)
     });
     let ground_shots = go
         .spawn
         .grounds
         .iter()
-        .map(|g| (Aim::Ground(g.at), 0, Some(g.list.clone())));
-    for (aim_at, reflect, list) in unit_shots.chain(ground_shots) {
+        .map(|g| (Aim::Ground(g.at), 0, 0, Some(g.list.clone())));
+    for (aim_at, outcome, reflect, list) in unit_shots.chain(ground_shots) {
         let Some(aim) = aim_point(aim_at, units, joints) else {
             continue; // target already gone
         };
-        let distance = launch.distance(aim);
         let mut missile = Missile {
             spell_id: go.spawn.spell_id,
             caster: go.spawn.caster,
             aim: aim_at,
             reflect,
+            outcome,
+            reaction: None,
+            last_aim: aim,
             list,
-            speed: fitted_speed(distance, go.spawn.speed.max(f32::EPSILON), go.queued),
+            speed: go.spawn.speed.max(f32::EPSILON),
             age: go.queued,
             missile_sound: go.spawn.missile_sound,
             path: go.key.clone(),
-            arrive_in: distance / go.spawn.speed.max(f32::EPSILON) - go.queued,
+            arrive_in: 0.0,
             // An invisible flight has no parts to wait on.
             parts_spawned: go.key.is_none(),
             weapon_visual: go.spawn.weapon_visual,
         };
-        let from = if missile.arrive_in <= 0.0 {
-            if !arrival_handoff(&mut missile, aim, units, joints, out, play_seq) {
-                continue;
-            }
-            aim
-        } else {
-            launch
-        };
-        let to = aim_point(missile.aim, units, joints).unwrap_or(aim);
-        let dir = (to - from).normalize_or(-Vec3::Z);
+        launch_flight(&mut missile, launch, aim, out);
+        let dir = (aim - launch).normalize_or(-Vec3::Z);
         let entity = commands
             .spawn((
                 missile,
-                Transform::from_translation(from).with_rotation(missile_facing(dir)),
+                Transform::from_translation(launch).with_rotation(missile_facing(dir)),
                 Visibility::default(),
             ))
             .id();
@@ -544,7 +591,7 @@ fn launch_go(
             sounds.write(MissileSound::Start {
                 entity,
                 kit_sound,
-                pos: from,
+                pos: launch,
             });
         }
     }
@@ -572,7 +619,6 @@ pub(super) fn spawn_missiles(
     anim_data: Option<Res<AnimData>>,
     mut sounds: MessageWriter<MissileSound>,
     mut out: ArrivalOut,
-    mut play_seq: ResMut<crate::creature_anim::PlaySeq>,
 ) {
     let Some(mut fx) = fx else { return };
     // Resolve the model now, so it loads while the release animation plays.
@@ -609,7 +655,6 @@ pub(super) fn spawn_missiles(
                 &joints,
                 &mut sounds,
                 &mut out,
-                &mut play_seq,
             );
         } // else the caster is already gone
     }
@@ -633,7 +678,6 @@ pub(super) fn spawn_missiles(
                 &joints,
                 &mut sounds,
                 &mut out,
-                &mut play_seq,
             );
         }
     }
@@ -675,7 +719,6 @@ pub(super) fn spawn_missiles(
                 &joints,
                 &mut sounds,
                 &mut out,
-                &mut play_seq,
             );
         }
     }
@@ -752,14 +795,27 @@ pub(super) fn move_missiles(
     let dt = time.delta_secs();
     for (entity, mut missile, mut transform) in &mut missiles {
         missile.age += dt;
-        let Some(aim) = aim_point(missile.aim, &units, &joints) else {
-            // A unit target streamed out mid-flight: the reference's `0x61d870` plays on the
-            // caster and floats a word per guid from the missile's list (`0x61d9dc`, calling
-            // `0x607140`); not built, the flight ends silently.
-            sounds.write(MissileSound::Stop { entity });
-            commands.entity(entity).despawn();
-            continue;
+        // A blocked or deflected miss's victim clip, when its time comes (`0x61e30c`).
+        if let Some((left, victim_state)) = missile.reaction {
+            let left = left - dt;
+            missile.reaction = (left > 0.0).then_some((left, victim_state));
+            if let (true, Aim::Unit { target, .. }) = (left <= 0.0, missile.aim) {
+                out.defenses.write(DefenseAnim {
+                    victim: target,
+                    victim_state,
+                });
+            }
+        }
+        // A target that no longer resolves stops steering it (`0x61e2e9`): it flies on to where it
+        // was headed and lands with no target, on the caster (`0x61e24c` → `0x61d870`).
+        let aim = match aim_point(missile.aim, &units, &joints) {
+            Some(aim) => aim,
+            None => {
+                missile.aim = Aim::Ground(missile.last_aim);
+                missile.last_aim
+            }
         };
+        missile.last_aim = aim;
         let to_target = aim - transform.translation;
         if missile.arrive_in <= dt {
             transform.translation = aim;
