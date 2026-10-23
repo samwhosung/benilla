@@ -1271,6 +1271,21 @@ fn real_spell_catalog_reputation_columns() {
     assert_eq!(rows, [(6994, 369, 4)]);
 }
 
+/// `RequiredAuraVision` (column 172, `SpellRec+0x2b0`), the aura rows' vision test
+/// (`0x519873`): set on one 5875 row, 26869 Amorous, at 1.
+#[test]
+fn real_spell_catalog_required_aura_vision_column() {
+    let data = crate::wow_data_or_skip!();
+    let mut chain = crate::open_chain(&data).expect("open chain");
+    let cat = crate::load_spell_catalog(&mut chain).expect("Spell.dbc");
+    let rows: Vec<(u32, u32)> = cat
+        .iter()
+        .filter(|(_, d)| d.required_aura_vision != 0)
+        .map(|(id, d)| (id, d.required_aura_vision))
+        .collect();
+    assert_eq!(rows, [(26869, 1)]);
+}
+
 /// A chat language reaches its skill only through the spell whose `Effect_1` is
 /// `SPELL_EFFECT_LANGUAGE` (`0x4b2656`). On 5875, 813-817 all declare Common (7), so Demonic,
 /// Titan, Thalassian and Kalimag garble for everyone, and a language-to-spell map would resolve

@@ -177,6 +177,10 @@ pub struct SpellDisplay {
     pub min_faction_id: u32,
     /// `MinReputation` (column 171, `+0x2ac`): the rank that line requires, 0 Hated to 7 Exalted.
     pub min_reputation: u32,
+    /// `RequiredAuraVision` (column 172, `+0x2b0`): nonzero hides the aura on every unit's rows
+    /// unless bit `value - 1` of the active player's `PLAYER_FIELD_BYTES2` byte 1 is set
+    /// (`0x51989c`-`0x5198b8`); 26869 Amorous carries 1.
+    pub required_aura_vision: u32,
     /// `EffectBasePoints[3]` (columns 76-78, signed): each roll's floor; -1 on weapon damage.
     pub effect_base_points: [i32; 3],
     /// `EffectDieSides[3]` (columns 64-66, signed): with n dice, the value runs base + n to
@@ -289,6 +293,7 @@ impl Default for SpellDisplay {
             max_affected_targets: 0,
             min_faction_id: 0,
             min_reputation: 0,
+            required_aura_vision: 0,
             effect_base_points: [0; 3],
             effect_die_sides: [0; 3],
             effect_base_dice: [0; 3],
