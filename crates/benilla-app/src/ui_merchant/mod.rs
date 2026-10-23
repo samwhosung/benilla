@@ -685,8 +685,17 @@ fn feed_merchant(
         match (&*last, &fresh) {
             (None, Some(_)) => script.fire_event("MERCHANT_SHOW", vec![]),
             // A change while open: an item landed, or the list or stock moved. Neither event
-            // carries an argument (`SignalEvent` `0x4fad92`, `0x4facaa`).
-            (Some(_), Some(_)) => script.fire_event("MERCHANT_UPDATE", vec![]),
+            // carries an argument (`SignalEvent` `0x4fad92`, `0x4facaa`). The repair flag signals
+            // nothing: `CanMerchantRepair` reads it live (`0x4fba80` → `0x4fadb0`).
+            (Some(was), Some(now))
+                if MerchantState {
+                    can_repair: now.can_repair,
+                    ..was.clone()
+                } != *now =>
+            {
+                script.fire_event("MERCHANT_UPDATE", vec![]);
+            }
+            (Some(_), Some(_)) => {}
             // The core told the VM; a disconnect's clear tells it nothing.
             (Some(_), None) | (None, None) => {}
         }
