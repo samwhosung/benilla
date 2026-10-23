@@ -138,7 +138,7 @@ impl Plugin for CinematicPlugin {
                 Update,
                 // One chain in one frame, after the net drain and after `control` seats the
                 // camera: no follow-camera frame shows, and this pose is the last word on it.
-                (take_trigger, start_pending, drive)
+                (take_stop, take_trigger, start_pending, drive)
                     .chain()
                     .in_set(WorldStage::Input)
                     .after(PlayerControlSet),
@@ -268,6 +268,17 @@ fn load_catalog(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
         }
         // With no catalog every trigger falls through to the immediate ack.
         Err(e) => warn!("cinematic: tables failed to load: {e:#}"),
+    }
+}
+
+/// A posted `StopCinematic()` ([`crate::ui_logout::SessionPosts`]), at the chain's head.
+fn take_stop(
+    posts: Option<Res<crate::ui_logout::SessionPosts>>,
+    mut cine: ResMut<Cinematic>,
+    net: Option<Res<NetCommands>>,
+) {
+    if posts.is_some_and(|p| p.take_stop_cinematic()) {
+        stop(&mut cine, net.as_deref());
     }
 }
 
@@ -517,7 +528,7 @@ fn drive(
 
 /// ESC, or anything else asking for the skip: end the cinematic and ack it. On the wire a skip is
 /// a completion.
-pub(crate) fn stop(cine: &mut Cinematic, net: Option<&NetCommands>) {
+fn stop(cine: &mut Cinematic, net: Option<&NetCommands>) {
     if cine.playing.is_some() {
         // Something is on screen: [`drive`] pays at full black, as `StopCinematic` (`0x48f050`)
         // arms a 0.25 s fade-out with EndCinematic (`0x48f080`) as its completion.

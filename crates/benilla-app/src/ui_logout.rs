@@ -118,29 +118,19 @@ fn feed_logout(
 }
 
 /// What a session verb posts past its call, which nothing the script reads waits on: the process's
-/// exit, as `ForceQuit` posts the context's close (`0x48ab60` → `0x401560`), and the cinematic's
-/// stop, which schedules the end's fade (`0x48b970` → `0x48f050`). [`apply_session_posts`] takes
-/// them at the frame's drain.
+/// exit, as `ForceQuit` posts the context's close (`0x48ab60` → `0x401560`), which
+/// [`exit_on_logout_complete`] takes, and the cinematic's stop, which schedules the end's fade
+/// (`0x48b970` → `0x48f050`), which the cinematic's own chain takes at its head.
 #[derive(Resource, Default)]
 pub(crate) struct SessionPosts {
     exit: AtomicBool,
     stop_cinematic: AtomicBool,
 }
 
-/// Apply what the session verbs posted: the cinematic's stop, then the exit.
-fn apply_session_posts(
-    posts: Res<SessionPosts>,
-    cinematic: Option<ResMut<crate::cinematic::Cinematic>>,
-    net: Option<Res<NetCommands>>,
-    mut exit: MessageWriter<AppExit>,
-) {
-    if posts.stop_cinematic.swap(false, Ordering::Relaxed) {
-        if let Some(mut cinematic) = cinematic {
-            crate::cinematic::stop(&mut cinematic, net.as_deref());
-        }
-    }
-    if posts.exit.swap(false, Ordering::Relaxed) {
-        exit.write(AppExit::Success);
+impl SessionPosts {
+    /// Whether a `StopCinematic()` was posted since the last take.
+    pub(crate) fn take_stop_cinematic(&self) -> bool {
+        self.stop_cinematic.swap(false, Ordering::Relaxed)
     }
 }
 
@@ -249,12 +239,17 @@ impl SessionSteps<'_> {
     }
 }
 
-/// `SMSG_LOGOUT_COMPLETE` returns to character select, or ends the process for Exit Game.
+/// `SMSG_LOGOUT_COMPLETE` returns to character select, or ends the process for Exit Game; a
+/// posted exit ([`SessionPosts`]) ends it too.
 fn exit_on_logout_complete(
     mut logged_out: MessageReader<LoggedOutMessage>,
     mut logout: ResMut<LogoutState>,
+    posts: Res<SessionPosts>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    if posts.exit.swap(false, Ordering::Relaxed) {
+        exit.write(AppExit::Success);
+    }
     if logged_out.read().count() == 0 {
         return;
     }
@@ -278,8 +273,7 @@ impl Plugin for UiLogoutPlugin {
                 Update,
                 (
                     feed_logout.in_set(UiFeed),
-                    (apply_session_posts, exit_on_logout_complete)
-                        .in_set(crate::ui_script::UiDrain),
+                    exit_on_logout_complete.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }
