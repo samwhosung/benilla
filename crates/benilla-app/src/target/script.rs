@@ -465,9 +465,6 @@ mod tests {
                 None,
                 Some(ME),
             );
-        let mut bar = crate::ui_pet::PetBar::default();
-        bar.spells.pet_guid = PET;
-        world.insert_resource(bar);
 
         let run = |world: &mut World, lua: &str| {
             world

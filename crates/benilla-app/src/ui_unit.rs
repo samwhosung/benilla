@@ -2343,9 +2343,6 @@ mod tests {
                 distance: 5.0,
                 ..Default::default()
             });
-            let mut bar = crate::ui_pet::PetBar::default();
-            bar.spells.pet_guid = MY_PET;
-            app.insert_resource(bar);
             app
         }
 
@@ -2508,10 +2505,9 @@ mod tests {
             const CHARM: u16 = 6;
             let mut app = app();
             let me = app.world().resource::<GuidIndex>().0[&ME];
-            app.world_mut()
-                .resource_mut::<crate::ui_pet::PetBar>()
-                .spells
-                .pet_guid = A_PET;
+            let mut bar = crate::ui_pet::PetBar::default();
+            bar.spells.pet_guid = A_PET;
+            app.insert_resource(bar);
             assert_eq!(
                 guid_of(&mut app, "pet"),
                 Some(MY_PET),
