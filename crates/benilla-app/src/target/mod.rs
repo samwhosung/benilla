@@ -416,10 +416,12 @@ impl Plugin for TargetPlugin {
                     .after(WorldStage::Input),
             )
             // The selection's object, as the objects that streamed in and out applied and the
-            // active player is tagged, before any reader of the frame.
+            // active player is tagged, before any reader of the frame. Its teardown signals with
+            // the host lent, as a feed of the frame's packets.
             .add_systems(
                 Update,
                 track::follow_selection_object
+                    .in_set(crate::ui_script::UiFeed)
                     .after(WorldStage::Net)
                     .before(WorldStage::Input),
             )

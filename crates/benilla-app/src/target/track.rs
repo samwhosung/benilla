@@ -18,17 +18,44 @@ use super::Selection;
 /// `0x614a96`). A guid with no object has no deactivation: only an explicit teardown ends it, the
 /// roster's among them (`crate::ui_party::RosterRelease`), and the deselects.
 pub(crate) fn follow_selection_object(
-    mut selection: ResMut<Selection>,
-    index: Res<GuidIndex>,
-    group: Res<crate::ui_party::GroupState>,
-    stores: Query<&ObjectStore>,
-    self_guid: Res<SelfGuid>,
-    self_store: Query<&ObjectStore, With<SelfPlayer>>,
-    mut seam: crate::creature_anim::AttackSeam,
-    engaged: Query<(), (With<Engaged>, With<SelfPlayer>)>,
+    mut vm: crate::script_calls::VmWith<Follow<'static, 'static>>,
 ) {
+    let select = follow(&mut vm.own());
+    // The teardown signals inside it ([`crate::script_calls::ScriptCallHost::engine_select`]).
+    if let Some(select) = select {
+        vm.engine_select(select, |mut f, owed| {
+            owed.pay(&mut f.selection, &mut f.seam)
+        });
+    }
+}
+
+/// What following the selection's object reads and writes.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct Follow<'w, 's> {
+    selection: ResMut<'w, Selection>,
+    index: Res<'w, GuidIndex>,
+    group: Res<'w, crate::ui_party::GroupState>,
+    stores: Query<'w, 's, &'static ObjectStore>,
+    self_guid: Res<'w, SelfGuid>,
+    self_store: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
+    seam: crate::creature_anim::AttackSeam<'w, 's>,
+    engaged: Query<'w, 's, (), (With<Engaged>, With<SelfPlayer>)>,
+}
+
+/// [`follow_selection_object`]'s step: the teardown it ran, owing its signals.
+fn follow(f: &mut Follow) -> Option<crate::script_calls::EngineSelect> {
+    let Follow {
+        selection,
+        index,
+        group,
+        stores,
+        self_guid,
+        self_store,
+        seam,
+        engaged,
+    } = f;
     let Some(guid) = selection.guid else {
-        return;
+        return None;
     };
     let now = index.0.get(&guid).copied();
     let member = || {
@@ -46,18 +73,22 @@ pub(crate) fn follow_selection_object(
     };
     let ends = match selection.target {
         // Still the object the guid names.
-        Some(held) if now == Some(held) => return,
+        Some(held) if now == Some(held) => return None,
         // Its object deactivated, though the guid may name a fresh one already.
         Some(_) => !member(),
         // No object to deactivate.
         None => false,
     };
     if ends {
-        super::click::clear(&mut selection, &mut seam, !engaged.is_empty());
-    } else if selection.target != now {
+        let before = super::click::Standing::of(selection, seam);
+        let send = super::click::clear_owing(selection, seam, !engaged.is_empty());
+        return Some(before.owing(super::scan::Owed { send, swing: None }));
+    }
+    if selection.target != now {
         // The lit object went with its deactivation, and one that streams in under the guid is
         // not lit: only `SetSelection` lights (`0x493701`).
         selection.lit = None;
         selection.target = now;
     }
+    None
 }

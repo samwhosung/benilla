@@ -139,7 +139,35 @@ struct Signalled {
     mark: crate::ui_cast::ReportMark,
 }
 
+/// What an engine writer's `SetSelection` outside any call (a world click, a death's or a
+/// despawn's deselect) leaves for its signals ([`ScriptCallHost::engine_select`]): the selection
+/// and the pet's attack latch it found, and what its commit owes after its signals.
+pub(crate) struct EngineSelect {
+    pub(crate) before: Option<u64>,
+    pub(crate) latched: bool,
+    pub(crate) owed: crate::target::Owed,
+}
+
 impl ScriptCallHost<'_, '_> {
+    /// An engine writer's selection outside any call, signalled in place as an engine turn, as
+    /// `SetSelection` (`0x493540`) signals inside whatever runs it: the teardown's
+    /// `PET_BAR_UPDATE` (`0x4bd6b4`) before the store and the send, the change's signals before
+    /// the re-swing (`0x4938c8`), each point running its listeners there, and what they left
+    /// applied once the turn ends, with the host lent. The unit, action and pet feeds take the
+    /// change as heard.
+    pub(crate) fn engine_select(&mut self, script: &mut UiScript, select: EngineSelect) {
+        script.host_out(|script| {
+            let mut at = Signalled {
+                selected: select.before,
+                latched: select.latched,
+                mark: self.appliers.p2().p2().mark(),
+            };
+            self.settle_selection(script, &mut at, select.owed.into());
+            self.commit_views(script);
+        });
+        script.hosted(self, |_| ());
+    }
+
     /// Push the views a call left for the script's next line, and for the listeners at a signal
     /// point inside it.
     fn commit_views(&mut self, script: &mut UiScript) {
@@ -640,6 +668,25 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
                 }
             }
         });
+    }
+}
+
+impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
+    /// Signal an engine writer's selection, which it committed on `P` ([`EngineSelect`]), in place
+    /// with the host ([`ScriptCallHost::engine_select`]); with no VM or no host to lend, nothing
+    /// listens, and `pay` pays what it owes on `P`.
+    pub(crate) fn engine_select(
+        &mut self,
+        select: EngineSelect,
+        pay: impl FnOnce(SystemParamItem<'_, '_, P>, crate::target::Owed),
+    ) {
+        if let Some(script) = self.script.as_deref_mut() {
+            if let Some(host) = self.set.p1().as_mut() {
+                host.engine_select(script, select);
+                return;
+            }
+        }
+        pay(self.set.p0(), select.owed);
     }
 }
 

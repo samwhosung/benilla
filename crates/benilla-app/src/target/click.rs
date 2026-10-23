@@ -58,74 +58,107 @@ pub(super) struct PlateRightClick {
 /// stands up to here.
 pub(super) fn select_on_plate_click(
     mut plate: ResMut<crate::vplates::PlateClicks>,
-    press: Res<PressPick>,
-    mut selection: ResMut<Selection>,
-    mut seam: crate::creature_anim::AttackSeam,
-    mut front: super::front::SelectFront,
-    self_q: Query<(&Guid, Has<Engaged>), With<SelfPlayer>>,
-    mut greeting: MessageWriter<crate::sound::NpcGreetingRequest>,
     mut right_clicks: MessageWriter<PlateRightClick>,
-    units: Query<(&Guid, Option<&ObjectStore>)>,
-    relations: super::RelationWorld,
+    mut vm: crate::script_calls::VmWith<PlateSelect<'static, 'static>>,
 ) {
     let (left, right) = (
         std::mem::take(&mut plate.left),
         std::mem::take(&mut plate.right),
     );
-    let (self_guid, engaged) = self_q
-        .single()
-        .map(|(g, e)| (Some(g.0), e))
-        .unwrap_or((None, false));
     for entity in left {
-        let Ok((guid, store)) = units.get(entity) else {
-            continue; // the unit left between the click and this frame
+        let select = {
+            let mut c = vm.own();
+            let Ok((guid, store)) = c.units.get(entity) else {
+                continue; // the unit left between the click and this frame
+            };
+            let guid = guid.0;
+            let store = store.cloned();
+            // The greeting fires on the select, plate or body, before SetTarget (`0x60c270`).
+            c.greeting
+                .write(crate::sound::NpcGreetingRequest { npc: entity });
+            // `SelectTarget`'s returns: charmed, or the cursor's bind in the select's place.
+            if c.front.takes(entity, guid, c.seam.slots.targeting()) {
+                continue;
+            }
+            // Attack-classified only when the press was on this unit: a scripted click has no
+            // cursor.
+            let attack = c.press.attack() && c.press.hovered.target == Some(entity);
+            c.commit(entity, guid, store.as_ref(), attack).1
         };
-        // The greeting fires on the select, plate or body, before SetTarget (`0x60c270`).
-        greeting.write(crate::sound::NpcGreetingRequest { npc: entity });
-        // `SelectTarget`'s returns: charmed, or the cursor's bind in the select's place.
-        if front.takes(entity, guid.0, seam.slots.targeting()) {
-            continue;
+        vm.engine_select(select, |mut c, owed| {
+            owed.pay(&mut c.selection, &mut c.seam);
+        });
+    }
+    for entity in right {
+        let (selected, select) = {
+            let mut c = vm.own();
+            // The press pick must name it: a scripted click has no cursor to interact by.
+            if c.press.hovered.target != Some(entity) {
+                continue;
+            }
+            let Ok((guid, store)) = c.units.get(entity) else {
+                continue;
+            };
+            let guid = guid.0;
+            let store = store.cloned();
+            if c.front.takes(entity, guid, c.seam.slots.targeting()) {
+                (scan::CommitOutcome::default(), None)
+            } else {
+                let attack = c.press.attack();
+                let (out, select) = c.commit(entity, guid, store.as_ref(), attack);
+                (out, Some(select))
+            }
+        };
+        if let Some(select) = select {
+            vm.engine_select(select, |mut c, owed| {
+                owed.pay(&mut c.selection, &mut c.seam);
+            });
         }
-        // Attack-classified only when the press was on this unit: a scripted click has no cursor.
-        let attack = press.attack() && press.hovered.target == Some(entity);
-        let old_latches = scan::latches_on(&relations, selection.guid);
-        scan::commit(
-            &mut selection,
-            &mut seam,
+        right_clicks.write(PlateRightClick { selected });
+    }
+}
+
+/// What a plate click reads and writes.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct PlateSelect<'w, 's> {
+    press: Res<'w, PressPick>,
+    selection: ResMut<'w, Selection>,
+    seam: crate::creature_anim::AttackSeam<'w, 's>,
+    front: super::front::SelectFront<'w, 's>,
+    self_q: Query<'w, 's, (&'static Guid, Has<Engaged>), With<SelfPlayer>>,
+    greeting: MessageWriter<'w, crate::sound::NpcGreetingRequest>,
+    units: Query<'w, 's, (&'static Guid, Option<&'static ObjectStore>)>,
+    relations: super::RelationWorld<'w, 's>,
+}
+
+impl PlateSelect<'_, '_> {
+    /// `SetSelection` on the plate's unit, owing what follows its signals.
+    fn commit(
+        &mut self,
+        entity: Entity,
+        guid: u64,
+        store: Option<&ObjectStore>,
+        attack: bool,
+    ) -> (scan::CommitOutcome, crate::script_calls::EngineSelect) {
+        let (self_guid, engaged) = self
+            .self_q
+            .single()
+            .map(|(g, e)| (Some(g.0), e))
+            .unwrap_or((None, false));
+        let before = Standing::of(&self.selection, &self.seam);
+        let old_latches = scan::latches_on(&self.relations, self.selection.guid);
+        let (out, owed) = scan::commit_owing(
+            &mut self.selection,
+            &mut self.seam,
             Some(entity),
-            guid.0,
+            guid,
             store,
             engaged,
             self_guid,
             attack,
             old_latches,
         );
-    }
-    for entity in right {
-        // The press pick must name it: a scripted click has no cursor to interact by.
-        if press.hovered.target != Some(entity) {
-            continue;
-        }
-        let Ok((guid, store)) = units.get(entity) else {
-            continue;
-        };
-        let selected = if front.takes(entity, guid.0, seam.slots.targeting()) {
-            scan::CommitOutcome::default()
-        } else {
-            let old_latches = scan::latches_on(&relations, selection.guid);
-            scan::commit(
-                &mut selection,
-                &mut seam,
-                Some(entity),
-                guid.0,
-                store,
-                engaged,
-                self_guid,
-                press.attack(),
-                old_latches,
-            )
-        };
-        right_clicks.write(PlateRightClick { selected });
+        (out, before.owing(owed))
     }
 }
 
@@ -133,29 +166,72 @@ pub(super) fn select_on_plate_click(
 /// (the sky) with a payload held (`0x492d30`); the terrain leg deselects regardless (`0x5e03bb`).
 /// With the targeting cursor up, the object it picks binds instead and a terrain click its word
 /// can bind binds, while the rest still deselect. The press pick, since the hover is empty
-/// through a camera drag, as in the reference's freelook.
+/// through a camera drag, as in the reference's freelook. The selection's `SetSelection` signals
+/// inside the click ([`crate::script_calls::ScriptCallHost::engine_select`]).
 pub(super) fn select_on_click(
     mut clicks: MessageReader<WorldClick>,
-    inspect: Res<InspectMode>,
-    press: Res<PressPick>,
-    mut selection: ResMut<Selection>,
-    mut seam: crate::creature_anim::AttackSeam,
-    self_q: Query<(&Guid, Has<Engaged>), With<SelfPlayer>>,
-    payload_held: Res<crate::ui_script::CursorPayloadHeld>,
-    mut greeting: MessageWriter<crate::sound::NpcGreetingRequest>,
-    click_cfg: Res<ClickConfig>,
-    // Read at the commit, where the reference resolves it for `0x493540`'s `IsSelectable` gate.
-    stores: Query<&ObjectStore>,
-    relations: super::RelationWorld,
+    mut vm: crate::script_calls::VmWith<ClickSelect<'static, 'static>>,
 ) {
-    let (hovered, occlusion) = (press.hovered, press.occlusion);
     let clicked = clicks.read().last().is_some();
-    if !clicked || inspect.enabled {
+    if !clicked {
         return;
     }
+    let select = click_select(&mut vm.own());
+    if let Some(select) = select {
+        vm.engine_select(select, |mut c, owed| {
+            owed.pay(&mut c.selection, &mut c.seam)
+        });
+    }
+}
+
+/// What the world click reads and writes.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct ClickSelect<'w, 's> {
+    inspect: Res<'w, InspectMode>,
+    press: Res<'w, PressPick>,
+    selection: ResMut<'w, Selection>,
+    seam: crate::creature_anim::AttackSeam<'w, 's>,
+    self_q: Query<'w, 's, (&'static Guid, Has<Engaged>), With<SelfPlayer>>,
+    payload_held: Res<'w, crate::ui_script::CursorPayloadHeld>,
+    greeting: MessageWriter<'w, crate::sound::NpcGreetingRequest>,
+    click_cfg: Res<'w, ClickConfig>,
+    /// Read at the commit, where the reference resolves it for `0x493540`'s `IsSelectable` gate.
+    stores: Query<'w, 's, &'static ObjectStore>,
+    relations: super::RelationWorld<'w, 's>,
+}
+
+/// An engine writer's selection about to commit, as it stands: the guid and the pet's attack
+/// latch, for the signals of what the commit owes ([`crate::script_calls::EngineSelect`]).
+pub(super) struct Standing(Option<u64>, bool);
+
+impl Standing {
+    pub(super) fn of(selection: &Selection, seam: &crate::creature_anim::AttackSeam) -> Self {
+        Self(
+            selection.guid,
+            seam.pet_latch.as_deref().is_some_and(|l| l.up()),
+        )
+    }
+
+    /// The commit's signals, owing `owed` after them.
+    pub(super) fn owing(self, owed: scan::Owed) -> crate::script_calls::EngineSelect {
+        crate::script_calls::EngineSelect {
+            before: self.0,
+            latched: self.1,
+            owed,
+        }
+    }
+}
+
+/// [`select_on_click`]'s commit: what its `SetSelection` owes after its signals, or `None` when
+/// the click selected nothing.
+fn click_select(c: &mut ClickSelect) -> Option<crate::script_calls::EngineSelect> {
+    let (hovered, occlusion) = (c.press.hovered, c.press.occlusion);
+    if c.inspect.enabled {
+        return None;
+    }
     // The click router returns for a charmed player before anything (`0x481f98`), greeting included.
-    if seam.player_is_charmed() {
-        return;
+    if c.seam.player_is_charmed() {
+        return None;
     }
     // With the cursor up, an object the press picked takes the object leg (`0x4925d0` →
     // `SelectTarget 0x493540`), whose word test (`0x4935ca`) binds it in the select's place; the
@@ -166,46 +242,51 @@ pub(super) fn select_on_click(
     // returns 1; for any other word it signals (`0x6e615d`) and returns 0, and the click falls to
     // `OnWorldClick 0x5e0320`'s deselect (`0x5e03cf`). The nothing leg deselects as ever
     // (`0x492e5d`): neither tests the word.
-    let ground = seam.slots.targeting();
+    let ground = c.seam.slots.targeting();
     if ground.active() {
         let object_click = ground.wants(crate::spell::TargetingWants::GameObject)
-            && go_is_nearest(&hovered, &press.object);
+            && go_is_nearest(&hovered, &c.press.object);
         if object_click || hovered.corpse.is_some() || hovered.refused {
-            return;
+            return None;
         }
         if let Some(entity) = hovered.target {
-            greeting.write(crate::sound::NpcGreetingRequest { npc: entity });
-            return;
+            c.greeting
+                .write(crate::sound::NpcGreetingRequest { npc: entity });
+            return None;
         }
         if occlusion.point.is_some() {
             if ground.wants(crate::spell::TargetingWants::Location) {
-                return;
+                return None;
             }
-            seam.slots.core(&seam.net).reports.changed();
+            c.seam.slots.core(&c.seam.net).reports.changed();
         }
     }
-    let (self_guid, engaged) = self_q
+    let (self_guid, engaged) = c
+        .self_q
         .single()
         .map(|(g, e)| (Some(g.0), e))
         .unwrap_or((None, false));
-    match (hovered.target, hovered.guid) {
+    let before = Standing::of(&c.selection, &c.seam);
+    let owed = match (hovered.target, hovered.guid) {
         (Some(entity), Some(guid)) => {
             // The greeter `0x60c270` runs before SetTarget, so on the left-click select only; every
             // click fires it, so a re-click steps the variation.
-            greeting.write(crate::sound::NpcGreetingRequest { npc: entity });
+            c.greeting
+                .write(crate::sound::NpcGreetingRequest { npc: entity });
             // The cursor's Attack classification is `0x5ecb70`'s new-target validation.
-            let old_latches = scan::latches_on(&relations, selection.guid);
-            scan::commit(
-                &mut selection,
-                &mut seam,
+            let old_latches = scan::latches_on(&c.relations, c.selection.guid);
+            let (_, owed) = scan::commit_owing(
+                &mut c.selection,
+                &mut c.seam,
                 Some(entity),
                 guid,
-                stores.get(entity).ok(),
+                c.stores.get(entity).ok(),
                 engaged,
                 self_guid,
-                press.attack(),
+                c.press.attack(),
                 old_latches,
             );
+            owed
         }
         // Deselect, except on the sky with a payload held (reachable only over a GameObject, as a
         // payload's empty-world press is the drop's); `deselectOnClick` 0 keeps the target.
@@ -213,13 +294,20 @@ pub(super) fn select_on_click(
             // A corpse or a refused unit is an object hit, which never deselects: the down-edge
             // pick `0x481f00` still finds a `NOT_SELECTABLE` unit, and `0x493540` refuses it.
             if hovered.corpse.is_some() || hovered.refused {
-                return;
+                return None;
             }
-            if click_cfg.deselect_on_click && (!payload_held.0 || occlusion.distance.is_finite()) {
-                deselect(&mut selection, &mut seam, engaged);
+            if !(c.click_cfg.deselect_on_click
+                && (!c.payload_held.0 || occlusion.distance.is_finite()))
+            {
+                return None;
+            }
+            scan::Owed {
+                send: deselect_owing(&mut c.selection, &mut c.seam, engaged),
+                swing: None,
             }
         }
-    }
+    };
+    Some(before.owing(owed))
 }
 
 /// The service arms that are not a bare packet, bundled for the 16-param ceiling.
@@ -1805,14 +1893,27 @@ pub(crate) fn service_action(
 /// chain (`UIParent.lua:1492`), is a script call and lands in call order
 /// ([`crate::script_calls`]).
 pub(crate) fn clear_target_requests(
-    mut selection: ResMut<Selection>,
-    mut seam: crate::creature_anim::AttackSeam,
-    engaged: Query<(), (With<Engaged>, With<SelfPlayer>)>,
-    mut guid_asks: MessageReader<DeselectGuid>,
+    mut vm: crate::script_calls::VmWith<(
+        ResMut<'static, Selection>,
+        crate::creature_anim::AttackSeam<'static, 'static>,
+        Query<'static, 'static, (), (With<Engaged>, With<SelfPlayer>)>,
+        // In the set: the host's loot verbs write it.
+        MessageReader<'static, 'static, DeselectGuid>,
+    )>,
 ) {
-    if guid_asks.read().any(|ask| selection.guid == Some(ask.0)) {
-        clear(&mut selection, &mut seam, !engaged.is_empty());
-    }
+    let select = {
+        let (mut selection, mut seam, engaged, mut guid_asks) = vm.own();
+        if !guid_asks.read().any(|ask| selection.guid == Some(ask.0)) {
+            return;
+        }
+        let before = Standing::of(&selection, &seam);
+        let send = clear_owing(&mut selection, &mut seam, !engaged.is_empty());
+        before.owing(scan::Owed { send, swing: None })
+    };
+    // The teardown signals inside the deselect ([`crate::script_calls::ScriptCallHost::engine_select`]).
+    vm.engine_select(select, |(mut selection, mut seam, ..), owed| {
+        owed.pay(&mut selection, &mut seam);
+    });
 }
 
 /// The UI shutdown's own deselect (`0x490bdf` → `SetSelection(0, 0)`), ahead of its
@@ -1888,6 +1989,7 @@ pub(super) fn deselect_owing(
 /// `0x493910` with its send, which a despawn and a dead unit's loot close reach without
 /// `SetSelection`, so the last-target pair is left. A guid with no object is torn down alike. When
 /// `engaged`, melee stops too. Weapons stay drawn.
+#[cfg(test)]
 pub(super) fn clear(
     selection: &mut Selection,
     seam: &mut crate::creature_anim::AttackSeam,
@@ -1900,7 +2002,7 @@ pub(super) fn clear(
 
 /// [`clear`], owing its send when the teardown called a possessed unit off, whose
 /// `PET_BAR_UPDATE` (`0x4bd6b4`) listeners run before it ([`scan::OwedSend`]).
-fn clear_owing(
+pub(super) fn clear_owing(
     selection: &mut Selection,
     seam: &mut crate::creature_anim::AttackSeam,
     engaged: bool,
