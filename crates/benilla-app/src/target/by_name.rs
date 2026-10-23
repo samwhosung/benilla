@@ -604,11 +604,11 @@ const UNHELD_SELECT_SOUND: &str = "igCharacterSelect";
 
 /// A swing a selecting verb owes after `SetSelection`'s `PLAYER_TARGET_CHANGED` (`0x49389c`),
 /// whose listeners run first: the re-swing (`0x4938c8`), or the assist tail's swing at the unit
-/// it selected (`0x489bfc`-`0x489c02`, a copy of that guid).
+/// it selected (`0x489bfc`-`0x489c02`, a copy of that guid), when `assistAttack` is on then.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OwedSwing {
     Again(scan::OwedSwing),
-    At { guid: u64, engaged: bool },
+    Assist { guid: u64, engaged: bool },
 }
 
 /// What a selecting verb owes after its signals, for its caller to pay once their listeners ran
@@ -739,7 +739,12 @@ impl SelectCommit<'_, '_> {
                 });
                 owed.pay(&self.selection, &mut self.seam, now);
             }
-            OwedSwing::At { guid, engaged } => self.seam.start(guid, engaged),
+            OwedSwing::Assist { guid, engaged } => {
+                if self.assist_attack.0 {
+                    info!("assist: assistAttack is on -> opening the swing at {guid:#x}");
+                    self.seam.start(guid, engaged);
+                }
+            }
         }
     }
 
@@ -786,11 +791,11 @@ impl SelectCommit<'_, '_> {
             )
         })() == Some(true);
         self.select(guid);
-        // The second leg. `0x5ecb70`'s attackability test is the caller's here, so a friendly
-        // target is selected, not swung at.
-        if self.assist_attack.0 && attackable {
-            info!("assist ({how}): assistAttack is on -> opening the swing");
-            self.owe(OwedSwing::At { guid, engaged });
+        // The second leg, owed past the selection's signal: `assistAttack` is read after it
+        // (`0x489bd0`). `0x5ecb70`'s attackability test is the caller's here, so a friendly target
+        // is selected, not swung at.
+        if attackable {
+            self.owe(OwedSwing::Assist { guid, engaged });
         }
     }
 
@@ -868,6 +873,7 @@ impl SelectCommit<'_, '_> {
             return;
         }
         let me = self.me.single().ok();
+        let old_latches = scan::latches_on(&self.relations, self.selection.guid);
         let (outcome, owed) = scan::commit_owing(
             &mut self.selection,
             &mut self.seam,
@@ -877,6 +883,7 @@ impl SelectCommit<'_, '_> {
             me.is_some_and(|(_, _, engaged)| engaged),
             me.map(|(g, _, _)| g.0),
             false,
+            old_latches,
         );
         self.owe_all(owed);
         if outcome.changed {
@@ -896,6 +903,7 @@ impl SelectCommit<'_, '_> {
         let me = self.me.single().ok();
         // The re-swing's gate is `StartAttack`'s on the new target (`0x5ecc16`).
         let attackable = self.attackable(entity, guid);
+        let old_latches = scan::latches_on(&self.relations, self.selection.guid);
         let (_, owed) = scan::commit_owing(
             &mut self.selection,
             &mut self.seam,
@@ -905,6 +913,7 @@ impl SelectCommit<'_, '_> {
             me.is_some_and(|(_, _, engaged)| engaged),
             me.map(|(g, _, _)| g.0),
             attackable,
+            old_latches,
         );
         self.owe_all(owed);
     }

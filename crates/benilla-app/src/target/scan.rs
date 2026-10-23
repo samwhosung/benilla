@@ -461,12 +461,13 @@ pub(super) struct CommitOutcome {
 pub(crate) enum OwedSend {
     /// A switch to `guid`, whose object is `entity`.
     Select { entity: Option<Entity>, guid: u64 },
-    /// A clear.
+    /// A clear, whose send names the selection as the listeners left it.
     Deselect,
 }
 
 impl OwedSend {
-    /// The store, the light (`0x493701`) and the send.
+    /// The store and the light (`0x4936e2`, `0x493701`), over whatever a listener selected, and
+    /// the send.
     pub(crate) fn pay(self, selection: &mut Selection, seam: &crate::creature_anim::AttackSeam) {
         let guid = match self {
             OwedSend::Select { entity, guid } => {
@@ -475,7 +476,9 @@ impl OwedSend {
                 selection.lit = entity;
                 guid
             }
-            OwedSend::Deselect => 0,
+            // The clear's send reads the selection as it stands (`0x493a49`-`0x493a4f`): a
+            // listener's pick, or none.
+            OwedSend::Deselect => selection.guid.unwrap_or(0),
         };
         let _ = seam.net.0.send(ClientCommand::SetSelection { guid });
     }
@@ -561,10 +564,11 @@ impl OwedSwing {
 /// stored all the same (`0x4935c8` → `0x493605`), and neither `IsSelectable` nor the light runs.
 /// For a writer whose signal has no listeners to run first, the re-swing goes out here.
 ///
-/// The latch (`0x493637`) reduces to `engaged && had_old`: vmangos ends [`Engaged`] when the
-/// victim dies, before a TAB can land, so the old target's own legs change nothing seen.
-/// `engaged` is the server's echo, a round trip behind the reference's local lock, and the
-/// reference's second `CMSG_ATTACKSTOP` for an invalid new target is not sent here.
+/// Here the latch (`0x493637`) reduces to `engaged && had_old`: vmangos ends [`Engaged`] when the
+/// victim dies, before a click can land, so for a writer outside the script calls the old target's
+/// own legs are taken to pass. `engaged` is the server's echo, a round trip behind the reference's
+/// local lock, and the reference's second `CMSG_ATTACKSTOP` for an invalid new target is not sent
+/// here.
 pub(super) fn commit(
     selection: &mut Selection,
     seam: &mut crate::creature_anim::AttackSeam,
@@ -584,13 +588,15 @@ pub(super) fn commit(
         engaged,
         self_guid,
         new_attackable,
+        true,
     );
     owed.pay(selection, seam);
     out
 }
 
 /// [`commit`], owing what follows its signals ([`Owed`]), for a caller that runs their listeners
-/// in place before paying it.
+/// in place before paying it. `old_latches` is [`latches_on`] the selection as it stands, which a
+/// selection made at another's signal finds to be that one's pick.
 pub(super) fn commit_owing(
     selection: &mut Selection,
     seam: &mut crate::creature_anim::AttackSeam,
@@ -600,6 +606,7 @@ pub(super) fn commit_owing(
     engaged: bool,
     self_guid: Option<u64>,
     new_attackable: bool,
+    old_latches: bool,
 ) -> (CommitOutcome, Owed) {
     // `SelectTarget`'s charmed return (`0x49359c`) is ahead of everything, for every writer.
     if seam.player_is_charmed() {
@@ -638,10 +645,11 @@ pub(super) fn commit_owing(
         send.pay(selection, seam);
         None
     };
-    let swung = stop_and_repoint && new_attackable && self_guid != Some(guid);
     // The latch `[ebp-1]` was read before the store (`0x4936ac`); the rest of the test reads the
     // selection after the signal (`0x4938ae`).
-    let swing = stop_and_repoint.then_some(OwedSwing {
+    let latched = stop_and_repoint && old_latches;
+    let swung = latched && new_attackable && self_guid != Some(guid);
+    let swing = latched.then_some(OwedSwing {
         guid,
         attackable: new_attackable,
         engaged,
@@ -732,6 +740,7 @@ pub(super) fn cycle(
     if let Some(old) = selection.guid {
         history.push(old, now);
     }
+    let old_latches = latches_on(&scan.relations, selection.guid);
     let (out, owed) = commit_owing(
         selection,
         seam,
@@ -745,6 +754,7 @@ pub(super) fn cycle(
         // `CanAttack`'s < 4). A duelling friendly passes `CanAttack`'s duel arm, which reads no
         // reaction, so the reference's `Attack` would re-swing at it; here it gets none.
         side == ScanSide::Enemy,
+        old_latches,
     );
     if out.changed {
         history.push(guid, now);
@@ -879,6 +889,17 @@ impl AttackPick<'_, '_> {
                 .is_none_or(|(me, unit)| rel.reaction(&me, &unit) < 4)
         })
     }
+}
+
+/// The re-swing latch's legs on the outgoing selection `old` (`0x49365f`-`0x4936a3`), read before
+/// the new guid is stored: it resolves as a unit (`0x468460`, typemask 8), it has health or dynamic
+/// flag 0x20 (`0x49368d`-`0x4936a0`), and `CanAttack` (`0x606980`) allows it. The player's own legs
+/// (`0x60ecb0`, `0x605f30`, `0x49367d`) are [`commit_owing`]'s `engaged`.
+pub(super) fn latches_on(relations: &RelationWorld, old: Option<u64>) -> bool {
+    old.and_then(|guid| relations.unit_and_store(guid))
+        .is_some_and(|(unit, store)| {
+            attack_target_valid(&relations.get(), relations.me().as_ref(), &unit, store)
+        })
 }
 
 /// The final gate's target legs (`0x613152`–`0x613169`): alive, where a zero-health target passes

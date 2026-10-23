@@ -379,7 +379,9 @@ impl CallHost for ScriptCallHost<'_, '_> {
         // signals here, inside the call and under its input events, in its order: the release's
         // `PET_BAR_UPDATE` when it called a possessed unit off (`0x493a18` → `0x4bd6b4`), the
         // usable refresh (`0x493892`, `0x493a69`), then `PLAYER_TARGET_CHANGED` (`0x49389c`,
-        // `0x493a73`). The unit feed takes the change as heard.
+        // `0x493a73`). The unit feed takes the change as heard. After the teardown's point this
+        // reads what `pay_send` left: the call's own pick, stored over a listener's as `0x4936e2`
+        // stores it, or for a clear the listener's pick, which the reference signals as well.
         let selected_after = appliers.p0().selected();
         if selected_after != selected_before {
             script.seat_selection(appliers.p0().seated());

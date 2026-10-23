@@ -162,9 +162,21 @@ fn a_deselect_without_a_possession_leaves_the_pets_attack() {
         .up());
 }
 
-/// We swing at `OLD`, the selection, as the server echoed it.
+/// We swing at `OLD`, the selection, as the server echoed it. `OLD`, `NEW` and `MOB` stream as
+/// units (`OBJECT_FIELD_TYPE` 0x9), which the re-swing's latch looks the outgoing selection up as
+/// (`0x49365f`).
 fn swinging_at_old(f: &mut Frame) {
     let world = f.app.world_mut();
+    for guid in [OLD, NEW, MOB] {
+        let Some(&unit) = world.resource::<GuidIndex>().0.get(&guid) else {
+            continue;
+        };
+        world
+            .get_mut::<ObjectStore>(unit)
+            .unwrap()
+            .0
+            .merge(benilla_protocol::ObjectFields::from_pairs(&[(2, 0x9)]));
+    }
     let me = world.resource::<GuidIndex>().0[&ME];
     world
         .entity_mut(me)

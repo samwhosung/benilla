@@ -605,6 +605,13 @@ impl RelationWorld<'_, '_> {
         Some(self.unit_of(guid, store))
     }
 
+    /// [`Self::unit`] with the unit's descriptor.
+    pub(crate) fn unit_and_store(&self, guid: u64) -> Option<(RelUnit, &ObjectStore)> {
+        let entity = *self.index.as_ref()?.0.get(&guid)?;
+        let store = self.stores.get(entity).ok().filter(|s| s.is_unit())?;
+        Some((self.unit_of(guid, store), store))
+    }
+
     /// The active player, once its object has streamed and its guid is known.
     pub(crate) fn me(&self) -> Option<RelUnit> {
         let guid = self.me_guid()?;
