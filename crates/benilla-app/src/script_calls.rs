@@ -151,6 +151,15 @@ pub(crate) struct EngineSelect {
 }
 
 impl ScriptCallHost<'_, '_> {
+    /// Count the census's sends on this host's channel ([`benilla_ui::script::census`]).
+    #[cfg(test)]
+    fn census_probe(&self) {
+        if let Some(net) = self.census.as_deref() {
+            let sent = net.0.clone();
+            benilla_ui::script::census::probe(move || sent.len());
+        }
+    }
+
     /// An engine writer's selection outside any call, signalled in place as an engine turn, as
     /// `SetSelection` (`0x493540`) signals inside whatever runs it: the teardown's
     /// `PET_BAR_UPDATE` (`0x4bd6b4`) before the store and the send, the change's signals before
@@ -158,6 +167,8 @@ impl ScriptCallHost<'_, '_> {
     /// applied once the turn ends, with the host lent. The unit, action and pet feeds take the
     /// change as heard.
     pub(crate) fn engine_select(&mut self, script: &mut UiScript, select: EngineSelect) {
+        #[cfg(test)]
+        self.census_probe();
         script.host_out(|script| {
             let mut at = Signalled {
                 selected: select.before,
@@ -179,6 +190,8 @@ impl ScriptCallHost<'_, '_> {
         guid: u64,
         mark: crate::lanes::Mark,
     ) {
+        #[cfg(test)]
+        self.census_probe();
         script.host_out(|script| {
             let mut at = Signalled {
                 selected: self.appliers.p0().selected(),
@@ -383,10 +396,7 @@ impl ScriptCallHost<'_, '_> {
 impl CallHost for ScriptCallHost<'_, '_> {
     fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
         #[cfg(test)]
-        if let Some(net) = self.census.as_deref() {
-            let sent = net.0.clone();
-            benilla_ui::script::census::probe(move || sent.len());
-        }
+        self.census_probe();
         let appliers = &mut self.appliers;
         // The gate's answer for this call, made where the Lua verb ran: its casts start only if
         // tag 2 passed there. The ladder reads it while this call applies.
@@ -681,6 +691,7 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
     /// Lua it runs makes waits, as one made while the host applies a call does, and applies as the
     /// turn ends, with the host lent. With no VM `f` gets `None`; with no host what waited is
     /// dropped.
+    #[track_caller]
     pub(crate) fn turn<R>(
         &mut self,
         f: impl FnOnce(Option<&mut UiScript>, SystemParamItem<'_, '_, P>) -> R,
@@ -688,6 +699,10 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
         let Some(script) = self.script.as_deref_mut() else {
             return f(None, self.set.p0());
         };
+        #[cfg(test)]
+        if let Some(host) = self.set.p1().as_ref() {
+            host.census_probe();
+        }
         let r = script.host_out(|script| f(Some(script), self.set.p0()));
         match self.set.p1().as_mut() {
             Some(host) => script.hosted(host, |_| ()),
@@ -702,6 +717,7 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
     /// leaves its events in `fires`, which are signalled in order once it returns, with the host
     /// lent, so the calls their handlers make apply inside the verb. For a feed whose events end
     /// its pass, so its handlers read every push it made.
+    #[track_caller]
     pub(crate) fn feed(
         &mut self,
         f: impl FnOnce(Option<&mut UiScript>, SystemParamItem<'_, '_, P>, &mut Fires),

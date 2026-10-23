@@ -1,9 +1,11 @@
-//! The census of the sends a call's apply makes while a handler it signalled is held, for test
-//! builds. `SignalEvent` (`0x703e50`) runs every listener before the verb goes on, so a send made
-//! while one waits goes out ahead of the packets its handler sends in 1.12.1. Each such send is
-//! counted under its call's kind, from the first handler the apply held to the signal point that
-//! runs it ([`super::UiScript::signal_point`]) or the apply's return, for the engine half's tests
-//! to hold to an allowlist that only shrinks.
+//! The census of the sends a call's apply or an engine turn makes while a handler it signalled is
+//! held, for test builds. `SignalEvent` (`0x703e50`) runs every listener before the verb goes on,
+//! so a send made while one waits goes out ahead of the packets its handler sends in 1.12.1. Each
+//! such send is counted under its call's kind, or `turn@` and its turn's caller
+//! ([`super::UiScript::host_out`]), from the first handler held to the signal point that runs it
+//! ([`super::UiScript::signal_point`]) or the apply's or turn's end, for the engine half's tests to
+//! hold to an allowlist that only shrinks. With `BENILLA_SEND_CENSUS` naming a file, each count is
+//! also appended to it as `kind count`, a whole suite's survey.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -38,8 +40,24 @@ impl Census {
             let n = sent.saturating_sub(mark);
             if n > 0 {
                 *self.counts.entry(kind.clone()).or_default() += n;
+                survey(kind, n);
             }
         }
+    }
+}
+
+/// Append `kind n` to the file `BENILLA_SEND_CENSUS` names, if it names one.
+fn survey(kind: &str, n: usize) {
+    use std::io::Write;
+    let Some(path) = std::env::var_os("BENILLA_SEND_CENSUS") else {
+        return;
+    };
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "{kind} {n}");
     }
 }
 
@@ -64,6 +82,17 @@ impl Applying {
             .next()
             .unwrap_or_default()
             .to_string();
+        Self::kind(kind)
+    }
+
+    /// An engine turn called from `at`, counted as `turn@` and its file and line under `src/`.
+    pub(crate) fn turn(at: &std::panic::Location) -> Self {
+        let file = at.file();
+        let file = file.rsplit_once("src/").map_or(file, |(_, rest)| rest);
+        Self::kind(format!("turn@{file}:{}", at.line()))
+    }
+
+    fn kind(kind: String) -> Self {
         CENSUS.with(|c| c.borrow_mut().applying.push((kind, None)));
         Applying(())
     }
@@ -145,5 +174,32 @@ mod tests {
                 assert_eq!(counted, BTreeMap::from([("ClearTarget".to_string(), 1)]));
             }
         }
+    }
+
+    /// An engine turn's send made while a handler it signalled is held is counted under the
+    /// turn's caller.
+    #[test]
+    fn a_turns_send_made_while_a_handler_is_held_is_counted_under_its_caller() {
+        let mut s = UiScript::new().unwrap();
+        s.run(
+            r#"local f = CreateFrame("Frame")
+            f:RegisterEvent("PLAYER_TARGET_CHANGED")
+            f:SetScript("OnEvent", function() end)"#,
+        )
+        .unwrap();
+        let sent = Rc::new(Cell::new(0));
+        let probe = sent.clone();
+        super::probe(move || probe.get());
+        super::take();
+        let line = line!() + 1;
+        s.host_out(|s| {
+            s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+            sent.set(sent.get() + 1);
+        });
+        s.refuse_waiting();
+        assert_eq!(
+            super::take(),
+            BTreeMap::from([(format!("turn@script/census.rs:{line}"), 1)])
+        );
     }
 }

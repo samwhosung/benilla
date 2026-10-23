@@ -216,11 +216,15 @@ impl UiScript {
     /// and signals fire are held, and a call Lua `f` runs in place makes (a chunk) waits; the
     /// entry lends the host when the turn ends ([`Self::hosted`]), which runs and applies them in
     /// the order made, or runs the handlers and drops the calls with [`Self::refuse_waiting`] when
-    /// it has none to lend.
+    /// it has none to lend. A test build counts what it sends while a handler waits under its
+    /// caller ([`super::census`]).
+    #[track_caller]
     pub fn host_out<R>(&mut self, f: impl FnOnce(&mut UiScript) -> R) -> R {
         let lua = self.lua().clone();
         let _open = Open::new(slot(&lua));
         let _hold = Hold::new(slot(&lua), true);
+        #[cfg(any(test, feature = "test-support"))]
+        let _census = super::census::Applying::turn(std::panic::Location::caller());
         f(self)
     }
 
