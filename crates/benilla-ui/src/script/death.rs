@@ -98,6 +98,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // Whole seconds: the milliseconds left over 1000 by a signed, truncating divide
+    // (`0x48b5ae`-`0x48b5bd`); no timer is -1000 ms, so -1.
     g.set(
         "GetReleaseTimeRemaining",
         lua.create_function(|lua, ()| {
@@ -105,15 +107,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(model
                 .death
                 .release_remaining
-                .map_or(-1.0, |s| f64::from(s.max(0.0))))
+                .map_or(-1.0, |s| f64::from(s.max(0.0).trunc())))
         })?,
     )?;
 
+    // Whole seconds: the milliseconds left over 1000 by an unsigned divide, a floor
+    // (`0x48b5f0`-`0x48b5f7`).
     g.set(
         "GetCorpseRecoveryDelay",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(f64::from(model.death.recovery_delay.max(0.0).ceil()))
+            Ok(f64::from(model.death.recovery_delay.max(0.0).floor()))
         })?,
     )?;
 
