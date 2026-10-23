@@ -1198,16 +1198,20 @@ fn send_spell_cast(
                 // gets there.
                 if !engaged {
                     debug!("ui_action: cast {spell_id} initiates auto-attack at {guid:#x}");
-                    let stop_in_flight = stop_word.of(e);
+                    // The guid is the selection the attempt read, so StartAttack's select
+                    // (`0x5eccaa`) is the setter's dedup, but for an on-self swap (`0x4b4afa`),
+                    // whose select of the player is not made here. The cast it follows was sent
+                    // at that unit, past its own target checks.
                     crate::creature_anim::start_attack_local(
                         e,
                         guid,
                         engaged,
-                        stop_in_flight,
+                        crate::creature_anim::StartTarget::Attackable,
                         crate::creature_anim::StartGate::of(
                             ctx.rel.self_store,
                             ctx.self_control_lost,
                         ),
+                        stop_word,
                         auto_repeat,
                         sheath,
                         stand,

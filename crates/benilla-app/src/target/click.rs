@@ -1180,7 +1180,12 @@ fn interact(
                 // `0x5ecb70`'s body through the seam. A commit that stopped and re-swung left
                 // `[+0xc54]` set, so this swing goes out a second time (`0x5eccda`).
                 let engaged = me.is_some_and(|(_, _, e)| e);
-                dispatch.seam.start(guid, engaged || outcome.swung);
+                dispatch.seam.start(
+                    guid,
+                    engaged || outcome.swung,
+                    // The cursor's Attack classification is StartAttack's target test.
+                    crate::creature_anim::StartTarget::Attackable,
+                );
             }
         }
         UnitBranch::Dead(DeadUnitLeg::Loot) => {

@@ -277,7 +277,8 @@ fn an_assists_swing_follows_its_target_change_handlers() {
     let world = f.app.world_mut();
     world.resource_mut::<crate::target::AssistAttack>().0 = true;
     let old = world.resource::<GuidIndex>().0[&OLD];
-    // `UNIT_FIELD_TARGET`, the basis's target, is `NEW`.
+    // `UNIT_FIELD_TARGET`, the basis's target, is `NEW`, a unit StartAttack's lookup finds
+    // (`0x5ecbe6`, typemask 8).
     world
         .get_mut::<ObjectStore>(old)
         .unwrap()
@@ -286,6 +287,12 @@ fn an_assists_swing_follows_its_target_change_handlers() {
             (16, NEW as u32),
             (17, (NEW >> 32) as u32),
         ]));
+    let new = world.resource::<GuidIndex>().0[&NEW];
+    world
+        .get_mut::<ObjectStore>(new)
+        .unwrap()
+        .0
+        .merge(benilla_protocol::ObjectFields::from_pairs(&[(2, 0x9)]));
     feeds(&mut f);
     f.rx.try_iter().for_each(drop);
     on_target_changed(&mut f, "RandomRoll(1, 100)");

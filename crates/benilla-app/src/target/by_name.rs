@@ -24,6 +24,7 @@ use bevy::prelude::*;
 use benilla_protocol::guid;
 use benilla_ui::script::by_name::{resolve, Filter, Held, Kinds, Match, RosterEntry, Search};
 
+use crate::creature_anim::StartTarget;
 use crate::names::NameCache;
 use crate::net::{Guid, GuidIndex, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
@@ -603,12 +604,13 @@ pub(super) fn follow_requests(
 const UNHELD_SELECT_SOUND: &str = "igCharacterSelect";
 
 /// A swing a selecting verb owes after `SetSelection`'s `PLAYER_TARGET_CHANGED` (`0x49389c`),
-/// whose listeners run first: the re-swing (`0x4938c8`), or the assist tail's swing at the unit
-/// it selected (`0x489bfc`-`0x489c02`, a copy of that guid), when `assistAttack` is on then.
+/// whose listeners run first: the re-swing (`0x4938c8`), or the assist tail's StartAttack at the
+/// unit it selected (`0x489bfc`-`0x489c02`, a copy of that guid), when `assistAttack` is on then
+/// (`0x489bd0`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OwedSwing {
     Again(scan::OwedSwing),
-    Assist { guid: u64, engaged: bool },
+    Assist { guid: u64 },
 }
 
 /// What a selecting verb owes after its signals, for its caller to pay once their listeners ran
@@ -731,21 +733,45 @@ impl SelectCommit<'_, '_> {
     fn pay_one(&mut self, swing: OwedSwing) {
         match swing {
             OwedSwing::Again(owed) => {
-                let now = self.selection.guid.is_some_and(|guid| {
-                    self.index
-                        .0
-                        .get(&guid)
-                        .is_some_and(|&entity| self.attackable(entity, guid))
-                });
+                let now = self
+                    .selection
+                    .guid
+                    .map_or(StartTarget::Unheld, |guid| self.start_target(guid));
                 owed.pay(&self.selection, &mut self.seam, now);
             }
-            OwedSwing::Assist { guid, engaged } => {
+            OwedSwing::Assist { guid } => {
                 if self.assist_attack.0 {
                     info!("assist: assistAttack is on -> opening the swing at {guid:#x}");
-                    self.seam.start(guid, engaged);
+                    self.start_attack(guid);
                 }
             }
         }
+    }
+
+    /// What `StartAttack`'s target checks find of `guid` (`0x5ecbe6`-`0x5ecc35`): a unit the
+    /// object manager holds (typemask 8), then [`Self::attackable`].
+    fn start_target(&self, guid: u64) -> StartTarget {
+        match self.held_unit(guid) {
+            None => StartTarget::Unheld,
+            Some(entity) if self.attackable(entity, guid) => StartTarget::Attackable,
+            Some(_) => StartTarget::Refused,
+        }
+    }
+
+    /// StartAttack (`0x5ecb70`) at `guid`, its own select (`0x5ecca0`-`0x5eccaa` → `0x493540`)
+    /// between its checks and stand and its swing: [`Self::commit`], the setter's dedup for a guid
+    /// selected already, else the whole `SetSelection`, whose re-swing reaches StartAttack again
+    /// at the same guid and is deduped there.
+    pub(crate) fn start_attack(&mut self, guid: u64) {
+        let engaged = self.engaged();
+        let verdict = self.start_target(guid);
+        if !self.seam.start_head(engaged, verdict) {
+            return;
+        }
+        if let Some(entity) = self.held_unit(guid) {
+            self.commit(entity, guid);
+        }
+        self.seam.start_tail(guid, engaged);
     }
 
     /// `StartAttack`'s target legs (`0x5ecc16`, `0x5ecc2e`) on the held object `entity`, `guid`:
@@ -775,28 +801,12 @@ impl SelectCommit<'_, '_> {
             return;
         };
         info!("assist ({how}) -> the basis unit's target, guid {guid:#x}");
-        // `engaged` and attackability are read before the selection: `SetSelection` may re-point
-        // a swing we already had (`0x4938c8`), whose stop leaves `[+0xc54]` set, so `0x5ecb70`
-        // sends its swing again (`0x5eccda`); not yet fighting, the second leg opens a fresh
-        // swing. A guid with no object is never attackable, as `StartAttack` refuses it.
-        let me = self.me.single().ok();
-        let engaged = me.is_some_and(|(_, _, engaged)| engaged);
-        let attackable = (|| {
-            let entity = self.index.0.get(&guid).copied()?;
-            let target = self.relations.unit_of(guid, self.stores.get(entity).ok()?);
-            Some(
-                self.relations
-                    .get()
-                    .can_attack(&self.relations.me()?, &target),
-            )
-        })() == Some(true);
         self.select(guid);
         // The second leg, owed past the selection's signal: `assistAttack` is read after it
-        // (`0x489bd0`). `0x5ecb70`'s attackability test is the caller's here, so a friendly target
-        // is selected, not swung at.
-        if attackable {
-            self.owe(OwedSwing::Assist { guid, engaged });
-        }
+        // (`0x489bd0`), and StartAttack judges the unit itself, so a friendly one is selected
+        // and refused, which stops a running swing (`0x5ecc48`). A swing the select re-pointed
+        // (`0x4938c8`) left `[+0xc54]` set, so this one goes out again (`0x5eccda`).
+        self.owe(OwedSwing::Assist { guid });
     }
 
     /// Whether we are mid-swing, which a deselect stops.

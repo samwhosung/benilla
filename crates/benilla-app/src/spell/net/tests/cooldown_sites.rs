@@ -100,8 +100,7 @@ impl GoRig {
                       mut items: ResMut<crate::items::Items>,
                       spells: Res<Spells>,
                       mods: Res<crate::spell::SpellModifiers>,
-                      mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
-                      mut stand: MessageWriter<crate::player::StandStateRequest>,
+
                       edits: Res<crate::creature_anim::UnitEdits>| {
                     let net_commands = crate::net::NetCommands(tx.clone());
                     spell_go(
@@ -133,12 +132,8 @@ impl GoRig {
                             &mods,
                         ),
                         (
-                            &mut crate::spell::AutoRepeatActive::default(),
-                            &mut sheath,
-                            &mut stand,
                             &edits,
-                            (false, false),
-                            crate::creature_anim::StartGate::default(),
+                            false,
                             &mut crate::spell::CastCore {
                                 pending: &mut Default::default(),
                                 queued_melee: &mut Default::default(),

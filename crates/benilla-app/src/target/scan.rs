@@ -16,7 +16,7 @@ use benilla_protocol::{guid, EntityKind};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use crate::creature_anim::{Engaged, SwingMessage};
+use crate::creature_anim::{Engaged, StartTarget, SwingMessage};
 use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, GuidIndex, NetEntity, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
@@ -506,7 +506,7 @@ impl Owed {
         }
         if let Some(swing) = self.swing {
             // Nothing ran since the commit, so the selection is the guid it stored.
-            swing.pay(selection, seam, false);
+            swing.pay(selection, seam, StartTarget::Unheld);
         }
     }
 }
@@ -518,23 +518,23 @@ impl Owed {
 pub(crate) struct OwedSwing {
     /// The guid the commit selected.
     guid: u64,
-    /// Whether that guid passes `StartAttack`'s target legs (`0x5ecc16`, `0x5ecc2e`).
-    attackable: bool,
+    /// What `StartAttack`'s target checks find of it (`0x5ecbe6`-`0x5ecc35`).
+    verdict: StartTarget,
     engaged: bool,
     self_guid: Option<u64>,
 }
 
 impl OwedSwing {
     /// The re-swing: `StartAttack` at the selection as it stands now, since `0x4938c3` pushes the
-    /// selection's address, `0xb4e2d8`, which a listener of the signal may have moved. Nothing
-    /// selected (`0x5ecbef`) or our own guid (`0x4938ae`-`0x4938c1`) gets no swing; a unit a
-    /// listener selected swings when `attackable`, whether it passes `StartAttack`'s target legs
-    /// (`0x5ecc16`, `0x5ecc2e`).
+    /// selection's address, `0xb4e2d8`, which a listener of the signal may have moved. Our own
+    /// guid gets none (`0x4938ae`-`0x4938c1`), nothing selected finds no unit (`0x5ecbef`), and a
+    /// unit a listener selected is judged `now`. The swing goes out despite the lock, the stop
+    /// just set `[+0xc54]` (`0x5eccda`); a refused target stops again (`0x5ecc48`).
     pub(crate) fn pay(
         self,
         selection: &Selection,
         seam: &mut crate::creature_anim::AttackSeam,
-        attackable: bool,
+        now: StartTarget,
     ) {
         let Some(guid) = selection.guid else {
             return;
@@ -542,24 +542,16 @@ impl OwedSwing {
         if self.self_guid == Some(guid) {
             return;
         }
-        let swings = if guid == self.guid {
-            self.attackable
-        } else {
-            attackable
-        };
-        if swings {
-            // `0x4938c8`: the swing goes out despite the lock, the stop just set `[+0xc54]`
-            // (`0x5eccda`), and cancels auto-repeat (`0x6ea080`), unless StartAttack's gate
-            // returns first.
-            seam.start(guid, self.engaged);
-        }
+        let verdict = if guid == self.guid { self.verdict } else { now };
+        seam.start(guid, self.engaged, verdict);
     }
 }
 
 /// Commit a target through `SetSelection` (`0x493540`). A switch while attacking is stop, select,
 /// re-swing: StopAttack `0x5ecac0` (`0x493a08`) flags a stop in flight (`[player+0xc54]`),
 /// `CMSG_SET_SELECTION` goes out (`0x493857`), then unless the new target is us `Attack 0x5ecb70`
-/// swings past its already-attacking gate, or stops if `new_attackable` is false (`0x4938a1`).
+/// swings past its already-attacking gate, or stops again if `new_attackable` is false
+/// (`0x4938a1`, `0x5ecc48`).
 /// `entity` is the guid's object, which the select lights (`0x493701`); with none the guid is
 /// stored all the same (`0x4935c8` → `0x493605`), and neither `IsSelectable` nor the light runs.
 /// For a writer whose signal has no listeners to run first, the re-swing goes out here.
@@ -567,8 +559,7 @@ impl OwedSwing {
 /// Here the latch (`0x493637`) reduces to `engaged && had_old`: vmangos ends [`Engaged`] when the
 /// victim dies, before a click can land, so for a writer outside the script calls the old target's
 /// own legs are taken to pass. `engaged` is the server's echo, a round trip behind the reference's
-/// local lock, and the reference's second `CMSG_ATTACKSTOP` for an invalid new target is not sent
-/// here.
+/// local lock.
 pub(super) fn commit(
     selection: &mut Selection,
     seam: &mut crate::creature_anim::AttackSeam,
@@ -620,7 +611,8 @@ pub(super) fn commit_owing(
     if selection.guid == Some(guid) {
         return Default::default(); // the setter's dedup
     }
-    let had_old = selection.guid.is_some();
+    let old = selection.guid;
+    let had_old = old.is_some();
     // The last-target stamp (`0x49361d`-`0x493628`), past the two early outs.
     selection.last = selection.guid;
     if let Some(old) = selection.guid {
@@ -647,11 +639,16 @@ pub(super) fn commit_owing(
     };
     // The latch `[ebp-1]` was read before the store (`0x4936ac`); the rest of the test reads the
     // selection after the signal (`0x4938ae`).
-    let latched = stop_and_repoint && old_latches;
+    // `CanAttack` refuses the player itself (`0x4936a3`), whatever the writer knows of the rest.
+    let latched = stop_and_repoint && old_latches && old != self_guid;
     let swung = latched && new_attackable && self_guid != Some(guid);
     let swing = latched.then_some(OwedSwing {
         guid,
-        attackable: new_attackable,
+        verdict: match (entity, new_attackable) {
+            (None, _) => StartTarget::Unheld,
+            (Some(_), true) => StartTarget::Attackable,
+            (Some(_), false) => StartTarget::Refused,
+        },
         engaged,
         self_guid,
     });
@@ -1213,10 +1210,16 @@ mod tests {
         assert!(out.changed && !out.swung);
         assert_eq!(drain(&rx), ["stop", "select"]);
 
-        // Engaged switch onto an unattackable unit (vendor/corpse): stop, no swing at it.
-        let out = go(&mut world, 0xD, true, Some(1), false);
+        // Off ourselves the latch is off (`CanAttack` refuses us, `0x4936a3`): stop, select.
+        let out = go(&mut world, 0xC, true, Some(1), true);
         assert!(out.changed && !out.swung);
         assert_eq!(drain(&rx), ["stop", "select"]);
+
+        // Engaged switch onto an unattackable unit (vendor/corpse): stop, select, and StartAttack's
+        // refusal arm stops again (`0x5ecc37` → `0x5ecc48`), no swing at it.
+        let out = go(&mut world, 0xD, true, Some(1), false);
+        assert!(out.changed && !out.swung);
+        assert_eq!(drain(&rx), ["stop", "select", "stop"]);
 
         // Engaged first select, no old target: the latch is off, selection only.
         *world.resource_mut::<Selection>() = Selection::default();

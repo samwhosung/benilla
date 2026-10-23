@@ -106,15 +106,8 @@ pub(crate) struct Scene<'w, 's> {
     cast_events: MessageWriter<'w, CastEvent>,
     go_targets: MessageWriter<'w, SpellGoTargets>,
     go_lid: MessageWriter<'w, crate::go_anim::GoLidOpen>,
-    sheaths: MessageWriter<'w, crate::creature_anim::SheathRequest>,
-    /// `[0xb4b3e4]`, for the GO-deferred swing's gate.
-    own_control: Option<Res<'w, crate::player::OwnControlLost>>,
-    /// The stand-up the GO-deferred attack start asks (`0x5ecc9b`).
-    stand: MessageWriter<'w, crate::player::StandStateRequest>,
-    /// The auto-repeat clear and the precast's changes, applied after this handler.
+    /// The precast's changes, applied after this handler.
     edits: Res<'w, crate::creature_anim::UnitEdits>,
-    /// Our stop in flight (`[+0xc54]`), which the GO-deferred swing reads (`0x5eccda`).
-    stop_word: Res<'w, crate::creature_anim::AttackStopInFlight>,
 }
 
 /// `SMSG_INITIAL_SPELLS`, once at login, into the action store the UI feed reads.
@@ -300,7 +293,12 @@ fn on_spell_start(
     }
 }
 
-fn on_spell_go(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
+/// The GO, then its deferred auto-attack start (`0x6e8402` → `0x6131a0` → `0x5ecb70`): StartAttack
+/// with its own select (`0x5eccaa`), which selects the hit unit whatever is selected.
+fn on_spell_go(
+    In(ev): In<SessionEvent>,
+    mut set: ParamSet<((Lifecycle, Scene), crate::target::SelectCommit)>,
+) {
     if let SessionEvent::SpellGo {
         caster,
         spell_id,
@@ -315,66 +313,54 @@ fn on_spell_go(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
         unit_caster,
     } = ev
     {
-        let engaged = !sc.engaged_self.is_empty();
-        let stop_in_flight = l
-            .self_guid
-            .0
-            .and_then(|guid| l.index.0.get(&guid))
-            .is_some_and(|&me| sc.stop_word.of(me));
-        let own = l
-            .self_guid
-            .0
-            .and_then(|guid| l.index.0.get(&guid))
-            .and_then(|&entity| sc.stores.get(entity).ok());
-        let start_gate = crate::creature_anim::StartGate::of(
-            own,
-            sc.own_control.as_deref().is_some_and(|c| c.0),
-        );
-        spell_go(
-            caster,
-            spell_id,
-            cast_flags,
-            hits,
-            misses,
-            target,
-            go_target,
-            dest,
-            ammo_display_id,
-            item_caster,
-            unit_caster,
-            &mut sc.commands,
-            &l.index,
-            &sc.casting,
-            &mut sc.cast_events,
-            &mut sc.go_targets,
-            &l.self_guid,
-            &sc.stores,
-            &mut sc.go_lid,
-            &mut sc.loot_latch,
-            (
-                &mut l.cooldowns,
-                l.spells.as_deref(),
-                &mut sc.items,
-                &mut l.pet_bar,
-                &l.spell_mods,
-            ),
-            (
-                &mut l.auto_repeat,
-                &mut sc.sheaths,
-                &mut sc.stand,
-                &sc.edits,
-                (engaged, stop_in_flight),
-                start_gate,
-                &mut super::CastCore {
-                    pending: &mut l.pending,
-                    queued_melee: &mut l.queued_melee,
-                    ground: &mut l.ground,
-                    reports: &mut l.reports,
-                    net: &l.net,
-                },
-            ),
-            l.play_seq.next(),
-        );
+        let deferred = {
+            let (mut l, mut sc) = set.p0();
+            let engaged = !sc.engaged_self.is_empty();
+            spell_go(
+                caster,
+                spell_id,
+                cast_flags,
+                hits,
+                misses,
+                target,
+                go_target,
+                dest,
+                ammo_display_id,
+                item_caster,
+                unit_caster,
+                &mut sc.commands,
+                &l.index,
+                &sc.casting,
+                &mut sc.cast_events,
+                &mut sc.go_targets,
+                &l.self_guid,
+                &sc.stores,
+                &mut sc.go_lid,
+                &mut sc.loot_latch,
+                (
+                    &mut l.cooldowns,
+                    l.spells.as_deref(),
+                    &mut sc.items,
+                    &mut l.pet_bar,
+                    &l.spell_mods,
+                ),
+                (
+                    &sc.edits,
+                    engaged,
+                    &mut super::CastCore {
+                        pending: &mut l.pending,
+                        queued_melee: &mut l.queued_melee,
+                        ground: &mut l.ground,
+                        reports: &mut l.reports,
+                        net: &l.net,
+                    },
+                ),
+                l.play_seq.next(),
+            )
+        };
+        if let Some(guid) = deferred {
+            set.p1().start_attack(guid);
+        }
     }
 }
 
@@ -1129,20 +1115,11 @@ fn spell_go(
         &mut crate::ui_pet::PetBar,
         &crate::spell::SpellModifiers,
     ),
-    // The GO-deferred auto-attack start's writes (`0x6e83c0`), the attack lock it gates on
-    // (`Engaged`, the reference's `[player+0xc48]`) with the stop in flight StartAttack reads
-    // (`[+0xc54]`, `0x5eccda`), and StartAttack's own gate (`0x5ecbaa`, `0x5ecbc0`).
-    attack_ctx: (
-        &mut crate::spell::AutoRepeatActive,
-        &mut MessageWriter<crate::creature_anim::SheathRequest>,
-        &mut MessageWriter<crate::player::StandStateRequest>,
-        &crate::creature_anim::UnitEdits,
-        (bool, bool),
-        crate::creature_anim::StartGate,
-        &mut super::CastCore,
-    ),
+    // The precast edits, the attack lock the GO-deferred auto-attack start gates on (`Engaged`,
+    // the reference's `[player+0xc48]`, `0x6e83e7`), and the cast core.
+    attack_ctx: (&crate::creature_anim::UnitEdits, bool, &mut super::CastCore),
     seq: u64,
-) {
+) -> Option<u64> {
     debug!(
         "net: spell go {spell_id} by {caster:#x} ({} hit(s), {} miss(es), flags \
          {cast_flags:#x}, target {target:?}, go_target {go_target:?}, dest {dest:?}, \
@@ -1169,7 +1146,7 @@ fn spell_go(
     // A spell with no record does nothing (`0x6e7cd7 jl`, `0x6e7ce3 jg` and `0x6e7cf7 je`, all to
     // the end `0x6e8647`), ahead of the caster's lookup and every leg.
     let Some(display) = spells.and_then(|s| s.catalog.get(spell_id)) else {
-        return;
+        return None;
     };
     // A cast naming a GameObject goes to the GameObject animation driver, which opens the lid on
     // an open-lock cast, streamed caster or not.
@@ -1178,8 +1155,9 @@ fn spell_go(
     }
     // The item leg held the cooldown for its record ([`item_go_cooldown`]).
     let mut pended = false;
-    let (auto_repeat, sheath, stand, edits, (engaged, stop_in_flight), start_gate, core) =
-        attack_ctx;
+    let (edits, engaged, core) = attack_ctx;
+    // The guid the GO-deferred auto-attack starts at, for the caller to run StartAttack at.
+    let mut deferred = None;
     let now = Instant::now();
     // A chest becomes the loot target at this packet, not at the loot response: `HandleSpellGo
     // 0x6e7a70` reaches `0x6e831b call SetLootTarget 0x5ed5f0`, which writes `[player+0x1d28]` and
@@ -1221,23 +1199,12 @@ fn spell_go(
         // packet's target guid, never the nearest-hostile acquire, because that would attack
         // something the player never named. Gated on `[player+0xc48] == 0` (`0x6e83e7`).
         if display.initiates_auto_attack_at_go() && !engaged {
-            if let (Some(&me), Some(guid)) =
-                (index.0.get(&caster), hits.first().copied().or(target))
-            {
+            if let (true, Some(guid)) = (
+                index.0.contains_key(&caster),
+                hits.first().copied().or(target),
+            ) {
                 debug!("net: spell go {spell_id} — deferred auto-attack start at {guid:#x}");
-                crate::creature_anim::start_attack_local(
-                    me,
-                    guid,
-                    engaged,
-                    stop_in_flight,
-                    start_gate,
-                    auto_repeat,
-                    sheath,
-                    stand,
-                    edits,
-                    spells,
-                    core,
-                );
+                deferred = Some(guid);
             }
         }
 
@@ -1333,7 +1300,7 @@ fn spell_go(
                 seq,
             });
         }
-        return;
+        return deferred;
     };
     // Keyed by spell id, like the reap `0x614150(spellId, 0)`: a proc's GO must not clear another
     // spell's precast state.
@@ -1374,6 +1341,7 @@ fn spell_go(
             seq,
         });
     }
+    deferred
 }
 
 /// `SMSG_SPELL_FAILED_OTHER`: a cast was interrupted; ends the caster's `Casting` as [`spell_go`]
@@ -2290,8 +2258,7 @@ mod tests {
                           mut cooldowns: ResMut<Cooldowns>,
                           mut pet_bar: ResMut<crate::ui_pet::PetBar>,
                           mut items: ResMut<crate::items::Items>,
-                          mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
-                          mut stand: MessageWriter<crate::player::StandStateRequest>,
+
                           edits: Res<crate::creature_anim::UnitEdits>,
                           spells: Option<Res<Spells>>| {
                         let net_commands = crate::net::NetCommands(tx.clone());
@@ -2324,12 +2291,8 @@ mod tests {
                                 &crate::spell::SpellModifiers::default(),
                             ),
                             (
-                                &mut crate::spell::AutoRepeatActive::default(),
-                                &mut sheath,
-                                &mut stand,
                                 &edits,
-                                (false, false),
-                                crate::creature_anim::StartGate::default(),
+                                false,
                                 &mut crate::spell::CastCore {
                                     pending: &mut Default::default(),
                                     queued_melee: &mut Default::default(),
@@ -3223,8 +3186,7 @@ mod tests {
                       mut cooldowns: ResMut<Cooldowns>,
                       mut pet_bar: ResMut<crate::ui_pet::PetBar>,
                       mut items: ResMut<crate::items::Items>,
-                      mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
-                      mut stand: MessageWriter<crate::player::StandStateRequest>,
+
                       edits: Res<crate::creature_anim::UnitEdits>| {
                     let net_commands = crate::net::NetCommands(tx.clone());
                     spell_go(
@@ -3256,12 +3218,8 @@ mod tests {
                             &mods,
                         ),
                         (
-                            &mut crate::spell::AutoRepeatActive::default(),
-                            &mut sheath,
-                            &mut stand,
                             &edits,
-                            (false, false),
-                            crate::creature_anim::StartGate::default(),
+                            false,
                             &mut crate::spell::CastCore {
                                 pending: &mut Default::default(),
                                 queued_melee: &mut Default::default(),
@@ -3425,8 +3383,7 @@ mod tests {
                       mut cooldowns: ResMut<Cooldowns>,
                       mut pet_bar: ResMut<crate::ui_pet::PetBar>,
                       mut items: ResMut<crate::items::Items>,
-                      mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
-                      mut stand: MessageWriter<crate::player::StandStateRequest>,
+
                       edits: Res<crate::creature_anim::UnitEdits>| {
                     let net_commands = crate::net::NetCommands(tx.clone());
                     let spells = catalog_with(421, Default::default());
@@ -3459,12 +3416,8 @@ mod tests {
                             &crate::spell::SpellModifiers::default(),
                         ),
                         (
-                            &mut crate::spell::AutoRepeatActive::default(),
-                            &mut sheath,
-                            &mut stand,
                             &edits,
-                            (false, false),
-                            crate::creature_anim::StartGate::default(),
+                            false,
                             &mut crate::spell::CastCore {
                                 pending: &mut Default::default(),
                                 queued_melee: &mut Default::default(),
@@ -3721,7 +3674,7 @@ mod tests {
         assert!(errors.is_empty(), "…but the unlearn block does");
     }
     /// The GO-deferred auto-attack start (`0x6e83c0`):
-    /// - an Ex2 bit-20 spell's own GO swings at its first hit target (`0x6e83e9`);
+    /// - an Ex2 bit-20 spell's own GO leaves the start at its first hit target (`0x6e83e9`);
     /// - Serpent Sting carries Ex2 bit 17 (`DO_NOT_RESET_COMBAT_TIMERS`), not bit 20: no swing;
     /// - already swinging, nothing (`0x6e83e7`);
     /// - another caster's Backstab, nothing.
@@ -3730,7 +3683,7 @@ mod tests {
         use crate::combat_text::CombatTextSpawn;
         use crate::creature_anim::{Casting, Engaged};
         use crate::go_anim::GoLidOpen;
-        use crate::net::{ClientCommand, Guid, SelfPlayer};
+        use crate::net::{Guid, SelfPlayer};
         use bevy::ecs::system::RunSystemOnce;
 
         const BACKSTAB: u32 = 53;
@@ -3757,13 +3710,9 @@ mod tests {
             radii: Default::default(),
         };
 
-        // `caster` casts `spell_id`, landing on 20; `engaged` is our mirror of `[+0xc48]`, `gate`
-        // StartAttack's own. Returns every command the seam put on the wire.
-        let fire = |caster: u64,
-                    spell_id: u32,
-                    engaged: bool,
-                    gate: crate::creature_anim::StartGate|
-         -> Vec<ClientCommand> {
+        // `caster` casts `spell_id`, landing on 20; `engaged` is our mirror of `[+0xc48]`. Returns
+        // the guid the GO leaves StartAttack to run at.
+        let fire = |caster: u64, spell_id: u32, engaged: bool| -> Option<u64> {
             let mut app = App::new();
             app.add_message::<CastEvent>()
                 .add_message::<SpellGoTargets>()
@@ -3799,7 +3748,7 @@ mod tests {
             }
             app.world_mut().resource_mut::<SelfGuid>().0 = Some(10);
 
-            let (tx, rx) = crossbeam_channel::unbounded();
+            let (tx, _rx) = crossbeam_channel::unbounded();
             let spells = make_spells();
             app.world_mut()
                 .run_system_once(
@@ -3814,8 +3763,7 @@ mod tests {
                           mut cooldowns: ResMut<Cooldowns>,
                           mut pet_bar: ResMut<crate::ui_pet::PetBar>,
                           mut items: ResMut<crate::items::Items>,
-                          mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
-                          mut stand: MessageWriter<crate::player::StandStateRequest>,
+
                           edits: Res<crate::creature_anim::UnitEdits>| {
                         let net_commands = crate::net::NetCommands(tx.clone());
                         spell_go(
@@ -3848,12 +3796,8 @@ mod tests {
                                 &crate::spell::SpellModifiers::default(),
                             ),
                             (
-                                &mut crate::spell::AutoRepeatActive::default(),
-                                &mut sheath,
-                                &mut stand,
                                 &edits,
-                                (engaged, false),
-                                gate,
+                                engaged,
                                 &mut crate::spell::CastCore {
                                     pending: &mut Default::default(),
                                     queued_melee: &mut Default::default(),
@@ -3863,57 +3807,32 @@ mod tests {
                                 },
                             ),
                             1,
-                        );
+                        )
                     },
                 )
-                .unwrap();
-            crate::creature_anim::apply_unit_edits(app.world_mut());
-            rx.try_iter().collect()
+                .unwrap()
         };
 
-        let swings = |cmds: &[ClientCommand]| {
-            cmds.iter()
-                .filter_map(|c| match c {
-                    ClientCommand::AttackSwing { guid } => Some(*guid),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-        };
-
-        use crate::creature_anim::StartGate;
-        let open = StartGate::default();
         assert_eq!(
-            swings(&fire(10, BACKSTAB, false, open)),
-            vec![20],
+            fire(10, BACKSTAB, false),
+            Some(20),
             "a bit20 spell's own GO starts the swing at its first hit target"
         );
-        assert!(
-            swings(&fire(10, SERPENT_STING, false, open)).is_empty(),
+        assert_eq!(
+            fire(10, SERPENT_STING, false),
+            None,
             "Serpent Sting carries Ex2 bit 17, not bit 20 — it starts nothing"
         );
-        assert!(
-            swings(&fire(10, BACKSTAB, true, open)).is_empty(),
+        assert_eq!(
+            fire(10, BACKSTAB, true),
+            None,
             "already swinging: `0x6e83e7`'s attack-lock gate refuses"
         );
-        assert!(
-            swings(&fire(11, BACKSTAB, false, open)).is_empty(),
+        assert_eq!(
+            fire(11, BACKSTAB, false),
+            None,
             "somebody else's Backstab is not our attack-start"
         );
-        let pacified = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
-            46, 0x2_0000,
-        )]));
-        for (gate, why) in [
-            (StartGate::of(None, true), "without control (`0x5ecbc0`)"),
-            (
-                StartGate::of(Some(&pacified), false),
-                "pacified (`0x5ecbaa`)",
-            ),
-        ] {
-            assert!(
-                swings(&fire(10, BACKSTAB, false, gate)).is_empty(),
-                "StartAttack returns {why}"
-            );
-        }
     }
     /// The `modalNextSpell` chain (`HandleCastResult 0x6e7330`, `0x6e7408`-`0x6e74aa`):
     /// - a successful sting chains Auto Shot (`0x6e735a jne` past the report to `0x6e73eb`);
