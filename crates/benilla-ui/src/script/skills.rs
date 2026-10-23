@@ -15,7 +15,7 @@
 //! `RemoveSkillUp`, `CancelSkillUps` and every rebuild take back. Each point costs 0: the cost
 //! comes from `SkillCostsData.dbc` through `SkillLine.skillCostsID` (`0x6de110`), and that id is 0
 //! in every row, so no pending point ever uses the player's skill points, `AcceptSkillUps` finds
-//! nothing to send, and the points left (`GetAdjustedSkillPoints`) stay the points held.
+//! nothing to send, and `GetAdjustedSkillPoints` answers the points held.
 //! `stepCost` and `rankCost` are always nil, by the data: `SkillLine.skillCostsID` is 0 in every
 //! row and no line a player holds carries the step-cost flags.
 
@@ -466,13 +466,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetAdjustedSkillPoints() → 0 here; the reference answers `PLAYER_CHARACTER_POINTS2` less the
-    // cost of the points `AddSkillUp` has chosen (`0x4d3cb0`), 0 each (module doc). The stock pane
-    // reads it only under its
-    // `stepCost` and `rankCost` branches, which 1.12 data never opens.
+    // GetAdjustedSkillPoints() (`0x4d3cb0`): `PLAYER_CHARACTER_POINTS2` (`+0xe4c`, `0x4d3d09`) less
+    // the cost of the points `AddSkillUp` has chosen (`0xb731d0`, `0x4d3d0f`), 0 each (module
+    // doc), pushed as a signed dword; 0 with no player, which the points' default is.
     g.set(
         "GetAdjustedSkillPoints",
-        lua.create_function(|_, ()| Ok(0i64))?,
+        lua.create_function(|lua, ()| {
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            Ok(i64::from(model.talents.points.1 as i32))
+        })?,
     )?;
 
     // AbandonSkill(index): `CMSG_UNLEARN_SKILL` with the row's skill line inside the call, a header's
