@@ -424,7 +424,9 @@ fn a_lists_own_signal_reads_the_records_it_wrote() {
 /// A member's object arriving and leaving signals at its packet's place: `PARTY_MEMBER_ENABLE`
 /// from the player's post-init (`0x5dec35` → `0x4e85d0`, signalled at `0x4e86b6`) and
 /// `PARTY_MEMBER_DISABLE` from its release (`0x5e9aa0`, at `0x5e9b78`), each with the member's
-/// party slot, after the list ahead of it in the frame signalled (`0x5e6c66`).
+/// party slot, after the list ahead of it in the frame signalled (`0x5e6c66`). A worldport's purge
+/// frees the object without its release (`0x467800` → its destructor `0x5dd600`), whose roster
+/// search runs in mode 0 (`0x5dd6a0` → `0x4e85d0`) and signals nothing.
 #[test]
 fn a_members_object_signals_at_its_packet() {
     let mut app = party_client();
@@ -483,4 +485,23 @@ fn a_members_object_signals_at_its_packet() {
         heard(&mut app),
         ["PARTY_MEMBERS_CHANGED:nil", "PARTY_MEMBER_DISABLE:1"]
     );
+    frame(
+        &mut app,
+        crate::lanes::unit_view_tests::wire_packets(vec![vec![created(
+            MATE,
+            EntityKind::Player,
+            &[(benilla_protocol::field::FIELD_UNIT_HEALTH, 100)],
+        )]]),
+    );
+    assert_eq!(heard(&mut app), ["PARTY_MEMBER_ENABLE:1"]);
+    frame(
+        &mut app,
+        vec![SessionEvent::Worldport {
+            map_id: 1,
+            position: [0.0; 3],
+            orientation: 0.0,
+            needs_ack: false,
+        }],
+    );
+    assert_eq!(heard(&mut app), Vec::<String>::new());
 }
