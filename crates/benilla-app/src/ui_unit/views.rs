@@ -271,8 +271,11 @@ pub(crate) struct UnitViews {
     scratch: HashMap<u64, (Option<Entity>, Option<ObjectStore>)>,
     /// Every group record as of the drain's place, while the frame changed any.
     records: Option<HashMap<u64, PartyMemberStatsInfo>>,
-    /// The guids whose store or record the frame changed.
+    /// The guids whose store or record the frame changed, of those some view reads.
     touched: HashSet<u64>,
+    /// The guids some view reads: every unit a token can name, its target's targets through the
+    /// frame, the group's members and pets and the bar's pet.
+    readable: Readable,
     /// The drain has fired the lane's start.
     started: bool,
     /// The guids `"target"` and `"npc"` named as the drain began: a call during it that moves one
@@ -372,6 +375,7 @@ impl UnitViews {
         self.scratch.clear();
         self.records = None;
         self.touched.clear();
+        self.readable = Readable::default();
         self.started = false;
         self.saved = Default::default();
     }
@@ -568,15 +572,66 @@ impl Seats {
     }
 }
 
+/// The guids some view reads as the drain begins: every unit the resolver's last inputs can name
+/// (`0x515970`), the target chains' ends among them, the seats, the bar's pet, and each group
+/// member with every pet its descriptor or record names (`0x4e81d0`, `0x491960`).
+fn readable_guids<'a>(
+    script: &UiScript,
+    seats: &Seats,
+    group: &crate::ui_party::GroupState,
+    pet: u64,
+    live: &impl Fn(u64) -> Option<&'a ObjectStore>,
+) -> Readable {
+    let g = script.unit_guids_view();
+    let mut grouped: HashSet<u64> = (g.party.into_iter().chain(g.party_pets))
+        .chain(g.raid.iter().copied())
+        .chain(g.raid_pets.iter().copied())
+        .collect();
+    grouped.remove(&0);
+    let mut out: HashSet<u64> = [g.player, g.pet, g.target, g.mouseover, g.npc, pet]
+        .into_iter()
+        .chain(g.party)
+        .chain(g.party_pets)
+        .chain(g.raid.iter().copied())
+        .chain(g.raid_pets.iter().copied())
+        .chain(g.held.keys().copied())
+        .chain(g.held.values().copied())
+        .chain(
+            [seats.me, seats.target, seats.npc]
+                .into_iter()
+                .flatten()
+                .map(|(g, _)| g),
+        )
+        .collect();
+    for m in &group.members {
+        out.insert(m.guid);
+        out.extend(group.stats.get(&m.guid).and_then(|r| r.pet_guid));
+        out.extend(live(m.guid).and_then(|s| s.0.unit_pet_guid()));
+    }
+    out.remove(&0);
+    Readable { all: out, grouped }
+}
+
+/// The guids some view reads ([`readable_guids`]), and of them those a group token names, whose
+/// aura list a roster record stands in for (`0x519735`).
+#[derive(Default)]
+struct Readable {
+    all: HashSet<u64>,
+    grouped: HashSet<u64>,
+}
+
 /// One guid's store from `live` back to the frame's start, undoing `entries`' changes to it in
-/// reverse, checked against the frame-start snapshot `start` when given.
+/// reverse, checked against the frame-start snapshot `start` when given; with each unit its
+/// `UNIT_FIELD_TARGET` named on the way.
 fn undo_frame(
     guid: u64,
     live: Option<ObjectStore>,
     entries: &mut [Entry],
     start: Option<&FrameStart>,
-) -> Option<ObjectStore> {
+) -> (Option<ObjectStore>, Vec<u64>) {
+    let hop = |s: &Option<ObjectStore>| s.as_ref().and_then(|s| s.0.unit_target());
     let mut store = live;
+    let mut hops: Vec<u64> = hop(&store).into_iter().collect();
     // The store where the frame-start snapshot was taken, past the entries logged before it.
     let mark = start.map_or(0, |s| s.mark);
     let mut at_mark = None;
@@ -587,6 +642,7 @@ fn undo_frame(
         for (g, change) in entry.changes.iter_mut().rev() {
             if *g == guid {
                 change.undo(&mut store);
+                hops.extend(hop(&store));
             }
         }
     }
@@ -598,7 +654,7 @@ fn undo_frame(
              write the log missed"
         );
     }
-    store
+    (store, hops)
 }
 
 /// The group records from `live` back to the frame's start, undoing `entries`' record changes in
@@ -677,6 +733,7 @@ impl UnitViews {
         &mut self,
         mut entries: Vec<Entry>,
         seats: Seats,
+        mut readable: Readable,
         live: impl Fn(Entity) -> Option<ObjectStore>,
         by_guid: impl Fn(u64) -> Option<Entity>,
         live_records: &HashMap<u64, PartyMemberStatsInfo>,
@@ -706,9 +763,25 @@ impl UnitViews {
         stores.sort_unstable();
         stores.dedup();
         let mut scratch = HashMap::new();
+        // The target first: `"targettarget"` reads each unit its `UNIT_FIELD_TARGET` named during
+        // the frame.
+        if let Some((guid, entity)) = seats.target.filter(|(g, _)| stores.contains(g)) {
+            let (store, hops) = undo_frame(
+                guid,
+                entity.and_then(&live),
+                &mut entries,
+                start_for(guid, entity),
+            );
+            readable.all.extend(hops.into_iter().filter(|&g| g != 0));
+            scratch.insert(guid, (entity, store));
+        }
+        // Only a unit some view reads is rewound: what the others' entries hold drops unreplayed.
         for guid in stores {
+            if scratch.contains_key(&guid) || !readable.all.contains(&guid) {
+                continue;
+            }
             let entity = entity_of(guid);
-            let store = undo_frame(
+            let (store, _) = undo_frame(
                 guid,
                 entity.and_then(&live),
                 &mut entries,
@@ -731,10 +804,20 @@ impl UnitViews {
         let rewound =
             (records || checked_records).then(|| undo_records(live_records, &mut entries, start));
         self.records = rewound.filter(|_| records);
-        self.pending = entries.into_iter().collect();
+        self.pending = entries
+            .into_iter()
+            .filter_map(|mut entry| {
+                entry
+                    .changes
+                    .retain(|(g, c)| matches!(c, Change::Record(_)) || scratch.contains_key(g));
+                (!entry.changes.is_empty()).then_some(entry)
+            })
+            .collect();
+        touched.retain(|g| scratch.contains_key(g) || readable.all.contains(g));
         self.named = (seats.target.map(|(g, _)| g), seats.npc.map(|(g, _)| g));
         self.scratch = scratch;
         self.touched = touched;
+        self.readable = readable;
         #[cfg(test)]
         {
             self.starts_checked += checked.get();
@@ -832,7 +915,10 @@ fn fire_unit_views(
                 target: selection.guid.map(|g| (g, selection.target)),
                 npc: npc_seat,
             };
-            views.rewind(entries, seats, live, by_guid, &group.stats, start);
+            let live_store = |guid: u64| by_guid(guid).and_then(|e| all.get(e).ok());
+            let pet = pet.as_deref().map_or(0, |p| p.spells.pet_guid);
+            let readable = readable_guids(script, &seats, &group, pet, &live_store);
+            views.rewind(entries, seats, readable, live, by_guid, &group.stats, start);
             views.started = true;
         }
         let applied = views.apply(until);
@@ -853,21 +939,30 @@ fn fire_unit_views(
             views.finish(live_store, &group.stats);
             return;
         }
-        #[cfg(test)]
-        {
-            views.builds += 1;
-        }
         let dirty = if first {
             views.touched.clone()
         } else {
             applied
         };
+        // A gap whose entries no view reads builds nothing.
+        if dirty.is_empty() {
+            return;
+        }
+        #[cfg(test)]
+        {
+            views.builds += 1;
+        }
         // The records as of here stand in the roster while the views are built.
         let mut records = views.records.take();
         if let Some(records) = records.as_mut() {
             std::mem::swap(&mut group.bypass_change_detection().stats, records);
         }
-        let UnitViews { scratch, saved, .. } = &mut *views;
+        let UnitViews {
+            scratch,
+            saved,
+            readable,
+            ..
+        } = &mut *views;
         let scratch = &*scratch;
         let object =
             |guid: u64| scratch_as_of(scratch, guid, by_guid(guid).and_then(|e| all.get(e).ok()));
@@ -897,12 +992,25 @@ fn fire_unit_views(
             by_guid: &object,
         };
         let mut pushes = 0;
-        for (i, view) in token_views(&src, &stores).into_iter().enumerate() {
-            // `"player"` is pushed only while its descriptor exists, as the feed pushes it.
-            if frozen.contains(&TOKENS[i]) || (i == 0 && view.is_none()) {
-                continue;
+        // The four tokens when one of their units moved: ours, the target, its target, the NPC.
+        let hop = stores.target.and_then(|(s, _)| s.0.unit_target());
+        let tokens_moved = [
+            self_q.iter().next().map(|(_, g)| g.0),
+            selection.guid,
+            hop,
+            npc_seat.map(|(g, _)| g),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|g| dirty.contains(&g));
+        if tokens_moved {
+            for (i, view) in token_views(&src, &stores).into_iter().enumerate() {
+                // `"player"` is pushed only while its descriptor exists, as the feed pushes it.
+                if frozen.contains(&TOKENS[i]) || (i == 0 && view.is_none()) {
+                    continue;
+                }
+                pushes += usize::from(saved.token(script, TOKENS[i], view));
             }
-            pushes += usize::from(saved.token(script, TOKENS[i], view));
         }
         let held_units = held_units(&src, &stores);
         let rel = world.get();
@@ -911,6 +1019,7 @@ fn fire_unit_views(
         };
         let ctx = families::Families {
             dirty: &dirty,
+            grouped: &readable.grouped,
             object: &object,
             me: me.map(|(s, g)| (g, s)),
             live_me: self_q

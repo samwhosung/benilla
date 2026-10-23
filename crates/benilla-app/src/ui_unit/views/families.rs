@@ -97,6 +97,8 @@ impl Saved {
 pub(super) struct Families<'a, 'w, 's> {
     /// The guids whose store or record moved since the VM's views were built.
     pub(super) dirty: &'a HashSet<u64>,
+    /// The guids a group token names, whose roster record stands in for its object.
+    pub(super) grouped: &'a HashSet<u64>,
     /// The object manager's lookup (`0x468460`), as of here.
     pub(super) object: &'a dyn Fn(u64) -> Option<&'a ObjectStore>,
     /// Our guid and descriptor as of here, and as the frame left it.
@@ -161,19 +163,18 @@ fn group_tokens(script: &mut UiScript, saved: &mut Saved, f: &Families) -> usize
         *built_with = own_group.clone();
     }
     let mut pushes = 0;
-    let pet_moved = |script: &UiScript, token: &str, owner: u64, roster: Roster| {
+    let pet_moved = |owner: u64, roster: Roster| {
         f.moved(owner)
             || src
                 .group_pet_guid(owner, roster)
                 .is_some_and(|g| f.moved(g))
-            || script.unit_view(token).is_some_and(|s| f.moved(s.guid))
     };
     for (i, m) in f.group.party_slots().take(PARTY_TOKENS.len()).enumerate() {
         if all || f.moved(m.guid) {
             let view = Some(src.party_unit(m, &own_group));
             pushes += usize::from(saved.token(script, PARTY_TOKENS[i], view));
         }
-        if pet_moved(script, PARTY_PET_TOKENS[i], m.guid, Roster::Party) {
+        if pet_moved(m.guid, Roster::Party) {
             let view = src.group_pet(m.guid, Roster::Party);
             pushes += usize::from(saved.token(script, PARTY_PET_TOKENS[i], view));
         }
@@ -183,7 +184,7 @@ fn group_tokens(script: &mut UiScript, saved: &mut Saved, f: &Families) -> usize
             let view = src.raid_unit(guid, &own_group);
             pushes += usize::from(saved.token(script, RAID_TOKENS[i], view));
         }
-        if pet_moved(script, RAID_PET_TOKENS[i], guid, Roster::Raid) {
+        if pet_moved(guid, Roster::Raid) {
             let view = src.group_pet(guid, Roster::Raid);
             pushes += usize::from(saved.token(script, RAID_PET_TOKENS[i], view));
         }
@@ -224,31 +225,17 @@ fn chain_ends(script: &mut UiScript, saved: &mut Saved, f: &Families) -> usize {
 /// Each moved unit's aura list a token can reach, the player's among them: `UnitBuff("player")`
 /// walks the fields, not the buff cache (`0x51960f`).
 fn aura_lists(script: &mut UiScript, saved: &mut Saved, f: &Families) -> usize {
-    let guids = script.unit_guids_view();
     let mut pushes = 0;
     let mut dirty: Vec<u64> = f.dirty.iter().copied().filter(|&g| g != 0).collect();
     dirty.sort_unstable();
     for guid in dirty {
-        let record_ok = guids.party.contains(&guid)
-            || guids.party_pets.contains(&guid)
-            || guids.raid.contains(&guid)
-            || guids.raid_pets.contains(&guid);
-        let named = record_ok
-            || [
-                guids.player,
-                guids.pet,
-                guids.target,
-                guids.mouseover,
-                guids.npc,
-            ]
-            .contains(&guid)
-            || guids.held.contains_key(&guid);
-        if !named && script.unit_auras_view(guid).is_none() {
-            continue;
-        }
-        let list = f
-            .auras
-            .list(guid, (f.object)(guid), record_ok, Some(f.group), f.world);
+        let list = f.auras.list(
+            guid,
+            (f.object)(guid),
+            f.grouped.contains(&guid),
+            Some(f.group),
+            f.world,
+        );
         pushes += usize::from(saved.auras(script, guid, list));
     }
     pushes
