@@ -67,7 +67,7 @@ pub(crate) fn feed_pet_book(
         let Some(spells) = spells.as_deref() else {
             return;
         };
-        let now = Instant::now();
+        // Every read takes the frame's anchor, the instant its starts project from.
         let (anchor, ui_now) = (clock.anchor, clock.ui_now);
         let pet_store = index
             .0
@@ -97,7 +97,7 @@ pub(crate) fn feed_pet_book(
                 }
                 fresh
                     .slots
-                    .push(slot_view(entry, d, &bar, pet_store, now, anchor, ui_now));
+                    .push(slot_view(entry, d, &bar, pet_store, anchor, ui_now));
             }
             // `0x4b2fd0`'s re-sort, with the player book's own comparator.
             fresh.slots.sort_by_key(|s| {
@@ -139,7 +139,6 @@ fn slot_view(
     d: &SpellDisplay,
     bar: &PetBar,
     pet_store: Option<&ObjectStore>,
-    now: Instant,
     anchor: Instant,
     ui_now: f64,
 ) -> SpellSlotView {
@@ -157,7 +156,7 @@ fn slot_view(
         // The pet's own cooldown store, the one `GetPetActionCooldown` reads.
         cooldown: bar
             .cooldowns
-            .info(spell_id, 0, Some(d), now)
+            .info(spell_id, 0, Some(d), anchor)
             .ui_triple(anchor, ui_now),
         // Off the raw word; `0x4bdd65` also requires a `Spell.dbc` record, which every slot has.
         autocast: Some((entry.autocast_allowed(), entry.autocast_on())),

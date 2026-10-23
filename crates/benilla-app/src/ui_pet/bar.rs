@@ -1,8 +1,6 @@
 //! The pet action bar's feed: the ten packed words of the last `SMSG_PET_SPELLS`, which the
 //! server owns whole, rendered as ten `PetActionView`s each frame.
 
-use std::time::Instant;
-
 use bevy::prelude::*;
 
 use benilla_protocol::messages::{
@@ -188,7 +186,8 @@ pub(super) fn feed_pet_bar(
             return;
         };
         let memory = memory.get(script);
-        let now = Instant::now();
+        // Every read takes the frame's anchor, the instant its starts project from: one frame,
+        // one time, however long the frame runs.
         let (anchor, ui_now) = (clock.anchor, clock.ui_now);
         let has_bar = bar.has_bar();
         // An unstreamed pet is not usable (`0x4bd034`), and no slot shows active.
@@ -219,7 +218,7 @@ pub(super) fn feed_pet_bar(
                         .flatten();
                     let cooldown = display.and_then(|d| {
                         bar.cooldowns
-                            .info(entry.action(), 0, Some(d), now)
+                            .info(entry.action(), 0, Some(d), anchor)
                             .ui_triple(anchor, ui_now)
                     });
                     slot_view(
