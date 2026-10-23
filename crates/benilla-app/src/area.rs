@@ -105,9 +105,14 @@ fn elect_event(cache: &ZoneCache, next: &ZoneSignal) -> Option<&'static str> {
 }
 
 /// Resolves the texts and PvP info, pushes the zone caches, then fires the elected zone event and,
-/// independently, `MINIMAP_ZONE_CHANGED`.
+/// independently, `MINIMAP_ZONE_CHANGED`. The poll reports the active mover's position, else the
+/// active player's, and nothing with neither held (`0x5db937`, `0x5db956`, `0x5db95d`): after a
+/// worldport frees every object, the commit waits for our player's create. It runs on the tick
+/// after the tick's packets (category 6's drain `0x403620`, then category 5's `0x401ec0`), so it
+/// reads what the unit feed pushed of a player that arrived this frame.
 fn feed_zone_events(
     mut hosted_vm: crate::script_calls::HostedVm,
+    me: Query<(), (With<crate::net::SelfPlayer>, With<crate::net::ObjectStore>)>,
     world: benilla_world::world_point::WorldPoint,
     areas: Option<Res<AreaTableRes>>,
     factions: Option<Res<Factions>>,
@@ -127,6 +132,9 @@ fn feed_zone_events(
         let Some(areas) = areas else {
             return;
         };
+        if me.is_empty() {
+            return;
+        }
         let Some(leaf) = world.area() else { return };
         let Some(leaf_row) = areas.0.get(leaf) else {
             // An unknown id keeps the last state, as the resolver does for areaId 0.
@@ -296,7 +304,8 @@ impl Plugin for AreaPlugin {
                 Update,
                 // After the leaf authority: leaf, indoor bit and names must come from one frame,
                 // as in the client's single-pass resolve (`0x67e510`), or a stale leaf fires a
-                // spurious splash.
+                // spurious splash. After the unit feed too, by the sets: the commit's handlers read
+                // our template as the frame's packets left it.
                 feed_zone_events
                     .after(crate::ui_script::UiInput)
                     .after(benilla_world::terrain_stream::AreaAuthoritySet),
