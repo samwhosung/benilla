@@ -56,7 +56,7 @@ pub(crate) struct Reputations {
     slots: Arc<Slots>,
     pub(crate) forced: Vec<(u32, u32)>,
     /// What each message did to the pane's list, in arrival order, for the reputation feed to
-    /// hand the VM after the snapshot ([`benilla_ui::script::UiScript::apply_reputation_ops`]).
+    /// hand over after the snapshot ([`crate::ui_reputation::feed_reputation`]).
     pub(crate) list_ops: Vec<benilla_ui::script::ReputationListOp>,
 }
 
