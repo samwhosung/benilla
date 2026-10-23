@@ -1096,7 +1096,7 @@ mod tests {
     /// Beast Training's two groups: three line-261 abilities and one with no ability row, in
     /// group 0, whose line has no `SkillLine.dbc` row.
     fn two_groups() -> CraftState {
-        let mut row = |spell_id: u32, name: &str, group: u32| {
+        let row = |spell_id: u32, name: &str, group: u32| {
             let mut r = recipe(spell_id, name, CraftDifficulty::None, 0);
             r.group = group;
             r.skill_line = (group != 0).then(|| "Beast Training".to_string());
