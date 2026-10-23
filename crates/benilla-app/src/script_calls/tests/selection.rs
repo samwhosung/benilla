@@ -512,3 +512,167 @@ fn a_go_deferred_attack_selects_its_hit_before_it_swings() {
     assert_eq!(selected(&f), Some(MOB));
     assert_eq!(attack_wire(&f), ["SetSelection 0x31", "AttackSwing 0x31"]);
 }
+
+/// The wire a pick and what follows it send, in order: selections, rolls, Sinister Strike's casts
+/// and swings.
+fn pick_wire(f: &Frame) -> Vec<String> {
+    f.rx.try_iter()
+        .filter_map(|c| match c {
+            ClientCommand::SetSelection { guid } => Some(format!("SetSelection {guid:#x}")),
+            ClientCommand::RandomRoll { .. } => Some("RandomRoll".to_string()),
+            ClientCommand::CastSpell {
+                spell_id: SINISTER_STRIKE,
+                target,
+            } => Some(format!("CastSpell {:#x}", target.unwrap_or(0))),
+            ClientCommand::AttackSwing { guid } => Some(format!("AttackSwing {guid:#x}")),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `MOB` is named, as the unit feed names it to the VM.
+fn with_named_mob(f: &mut Frame) {
+    let world = f.app.world_mut();
+    world
+        .resource_mut::<crate::names::NameCache>()
+        .insert_player(MOB, "Red Affinity".into(), None);
+    world
+        .run_system_once(crate::ui_unit::feed_name_candidates)
+        .expect("the candidate feed runs as a one-shot system");
+}
+
+/// TryCast's attack pick (`0x6e4efb` → `0x612df0` → `0x493f60`) commits through `SetSelection`,
+/// which signals `PLAYER_TARGET_CHANGED` (`0x49389c`) before the attempt goes on to its send
+/// (`0x6e585a`): the listener reads the picked unit as `"target"`, finds the slot's cast not yet
+/// current (`IsCurrentAction`, `0x4e53a0`), and its packet goes out between the selection and the
+/// cast.
+#[test]
+fn a_strikes_pick_signals_its_target_change_before_the_cast() {
+    let mut f = frame(false);
+    spawn_mob(&mut f, &[]);
+    with_named_mob(&mut f);
+    with_strike(&mut f);
+    feeds(&mut f);
+    f.rx.try_iter().for_each(drop);
+    on_target_changed(
+        &mut f,
+        r#"SEEN = UnitName("target") .. "," .. tostring(IsCurrentAction(1)) RandomRoll(1, 100)"#,
+    );
+    run(&mut f, "UseAction(1)");
+    assert_eq!(
+        pick_wire(&f),
+        [
+            "SetSelection 0x31",
+            "RandomRoll",
+            "CastSpell 0x31",
+            "AttackSwing 0x31"
+        ]
+    );
+    assert_eq!(seen(&mut f), "Red Affinity,nil");
+}
+
+/// The Attack validator's pick (`0x6130b5` → `0x493f60` → `SetSelection`) signals
+/// `PLAYER_TARGET_CHANGED` (`0x49389c`) inside the validator, which re-reads the selection after it
+/// (`0x6130c1`) before `0x6131a0` swings (`0x5ecb70`): the listener's packet goes out between the
+/// selection and `CMSG_ATTACKSWING`, from `AttackTarget` and from the Attack slot alike.
+#[test]
+fn an_attacks_pick_signals_its_target_change_before_the_swing() {
+    for lua in ["AttackTarget()", "UseAction(1)"] {
+        let mut f = frame(true);
+        with_factions(&mut f, FRIEND, &[]);
+        spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
+        f.app
+            .world_mut()
+            .resource_mut::<crate::ui_action::PlayerActions>()
+            .buttons
+            .insert(
+                0,
+                ActionButton {
+                    slot: 0,
+                    action: crate::ui_action::SPELL_ATTACK,
+                    kind: ACTION_KIND_SPELL,
+                },
+            );
+        feeds(&mut f);
+        f.rx.try_iter().for_each(drop);
+        record_events(&mut f);
+        on_target_changed(&mut f, "RandomRoll(1, 100)");
+        run(&mut f, &format!("{lua} SEEN = table.concat(EVENTS, \",\")"));
+        assert_eq!(
+            pick_wire(&f),
+            ["SetSelection 0x31", "RandomRoll", "AttackSwing 0x31"],
+            "{lua}"
+        );
+        assert_eq!(seen(&mut f), "SPELL_UPDATE_USABLE,PLAYER_TARGET_CHANGED", "{lua}");
+        feeds(&mut f);
+        assert_eq!(events(&mut f).len(), 2, "{lua}: heard once, in the call");
+    }
+}
+
+/// The assist tail's StartAttack (`0x489c02` → `0x5ecb70`) selects its unit (`0x5eccaa` →
+/// `0x493540`): when a `PLAYER_TARGET_CHANGED` listener moved the selection off it, that select
+/// is a whole `SetSelection`, whose own signal (`0x49389c`) runs its listeners before the swing
+/// (`0x5eccfd`), inside the call, and the feeds signal it no second time.
+#[test]
+fn an_assists_own_select_signals_inside_the_call_after_a_listener_retargets() {
+    let mut f = frame(true);
+    let world = f.app.world_mut();
+    world.resource_mut::<crate::target::AssistAttack>().0 = true;
+    let old = world.resource::<GuidIndex>().0[&OLD];
+    // `OLD` targets `NEW`, and both are units StartAttack's lookup finds (`0x5ecbe6`).
+    world
+        .get_mut::<ObjectStore>(old)
+        .unwrap()
+        .0
+        .merge(benilla_protocol::ObjectFields::from_pairs(&[
+            (2, 0x9),
+            (16, NEW as u32),
+            (17, (NEW >> 32) as u32),
+        ]));
+    let new = world.resource::<GuidIndex>().0[&NEW];
+    world
+        .get_mut::<ObjectStore>(new)
+        .unwrap()
+        .0
+        .merge(benilla_protocol::ObjectFields::from_pairs(&[(2, 0x9)]));
+    feeds(&mut f);
+    f.rx.try_iter().for_each(drop);
+    record_events(&mut f);
+    on_target_changed(
+        &mut f,
+        "RandomRoll(1, 100) if not AGAIN then AGAIN = 1 TargetLastTarget() end",
+    );
+    run(
+        &mut f,
+        r#"AssistUnit("target") SEEN = table.concat(EVENTS, ",")"#,
+    );
+    assert_eq!(selected(&f), Some(NEW));
+    assert_eq!(
+        pick_wire(&f),
+        [
+            "SetSelection 0x22",
+            "RandomRoll",
+            "SetSelection 0x21",
+            "RandomRoll",
+            "SetSelection 0x22",
+            "RandomRoll",
+            "AttackSwing 0x22"
+        ]
+    );
+    let heard = seen(&mut f);
+    assert_eq!(
+        heard.matches("PLAYER_TARGET_CHANGED").count(),
+        3,
+        "{heard}"
+    );
+    feeds(&mut f);
+    let again = events(&mut f);
+    assert_eq!(
+        again
+            .iter()
+            .filter(|e| *e == "PLAYER_TARGET_CHANGED")
+            .count(),
+        3,
+        "heard in the call alone: {again:?}"
+    );
+}
