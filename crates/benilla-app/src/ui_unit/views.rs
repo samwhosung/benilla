@@ -112,15 +112,22 @@ pub(crate) struct ViewLog {
 
 impl ViewLog {
     fn change(&mut self, guid: u64, change: Change) {
+        self.open();
+        if let Some(entry) = self.entries.last_mut() {
+            entry.changes.push((guid, change));
+        }
+    }
+
+    /// Open the packet's entry, stamped here, ahead of what its handler raises before its first
+    /// write: a handler that signals after writes it logs later, as a group list signals after
+    /// its records (`0x5e6c4a`, then `0x5e6c66`), opens it at its start.
+    pub(crate) fn open(&mut self) {
         if !self.open {
             self.entries.push(Entry {
                 at: crate::lanes::stamp(),
                 changes: Vec::new(),
             });
             self.open = true;
-        }
-        if let Some(entry) = self.entries.last_mut() {
-            entry.changes.push((guid, change));
         }
     }
 
@@ -162,6 +169,9 @@ impl ViewLog {
 
     /// The packet is handled: the next change opens the next entry.
     pub(crate) fn close(&mut self) {
+        if self.open && self.entries.last().is_some_and(|e| e.changes.is_empty()) {
+            self.entries.pop();
+        }
         self.open = false;
     }
 

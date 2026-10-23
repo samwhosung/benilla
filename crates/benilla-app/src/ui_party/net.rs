@@ -165,9 +165,13 @@ struct RosterTeardown<'w, 's> {
 }
 
 impl RosterTeardown<'_, '_> {
-    /// The records as the packet found them, for [`Self::run`] to log what it changed.
-    fn before(&self, group: &GroupState) -> Option<HashMap<u64, PartyMemberStatsInfo>> {
-        self.log.is_some().then(|| group.stats.clone())
+    /// The records as the packet found them, for [`Self::run`] to log what it changed, with the
+    /// packet's entry opened ahead of its signals: a list writes each member's record
+    /// (`AddPartyMember`, `0x5e6c4a`) before it signals (`0x5e6c61`, `0x5e6c66`).
+    fn before(&mut self, group: &GroupState) -> Option<HashMap<u64, PartyMemberStatsInfo>> {
+        let log = self.log.as_deref_mut()?;
+        log.open();
+        Some(group.stats.clone())
     }
 
     /// The packet's end: the records it changed against `before` logged, then its teardowns.
