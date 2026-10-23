@@ -1390,15 +1390,19 @@ pub(crate) fn run_feed_chain_units_once(world: &mut World) {
         .expect("the chain feed runs as a one-shot system");
 }
 
+/// What [`feed_units`] reads that the call host also reaches: the selection and the relation
+/// inputs, and the bar and the attack latch the world entry's pet reset (`0x4bc6f0`) writes;
+/// `Option`, as a UI-only harness lacks the pet plugin.
+type UnitFeedShared = (
+    Res<'static, Selection>,
+    crate::target::RelationWorld<'static, 'static>,
+    Option<ResMut<'static, crate::ui_pet::PetBar>>,
+    Option<ResMut<'static, crate::ui_pet::PetAttackLatch>>,
+);
+
 fn feed_units(
     // What the host also reaches, read before the VM runs with the host lent.
-    mut vm: crate::script_calls::VmWith<(
-        Res<'static, Selection>,
-        crate::target::RelationWorld<'static, 'static>,
-        // The world entry's pet reset (`0x4bc6f0`); `Option`, as below.
-        Option<ResMut<'static, crate::ui_pet::PetBar>>,
-        Option<ResMut<'static, crate::ui_pet::PetAttackLatch>>,
-    )>,
+    mut vm: crate::script_calls::VmWith<UnitFeedShared>,
     tables: SnapshotTables,
 
     self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
