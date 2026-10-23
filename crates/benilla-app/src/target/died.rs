@@ -46,9 +46,17 @@ use crate::ui_action::{FillArg, UiError, UiErrorKeys};
 /// What a groupmate's death shows: message `0x4c` (`0x5e9a0e`).
 const PLAYER_DIED: &str = "ERR_PLAYER_DIED_S";
 
-/// The Lua the deaths' legs signalled, parked in the VM, each with its stamp, for the deaths lane.
+/// The Lua the deaths' legs signalled, parked in the VM, each with its stamp and the VM's session
+/// and key, for the deaths lane.
 #[derive(Resource, Default)]
-pub(crate) struct Deaths(VecDeque<(Stamp, u64)>);
+pub(crate) struct Deaths(VecDeque<(Stamp, u64, u64)>);
+
+/// The VM's end, a reload's or the session's: what its deaths parked goes with it.
+pub(crate) fn drop_parked_deaths(world: &mut World) {
+    if let Some(mut deaths) = world.get_resource_mut::<Deaths>() {
+        deaths.0.clear();
+    }
+}
 
 /// Registers the deaths on the update packet's end, after the update handler that writes their
 /// edges (`crate::net` builds first), and the lane that fires their signals.
@@ -82,24 +90,29 @@ fn on_unit_died(
 
 /// The deaths lane's head.
 fn peek_deaths(world: &World) -> Option<Stamp> {
-    world.get_resource::<Deaths>()?.0.front().map(|(at, _)| *at)
+    world
+        .get_resource::<Deaths>()?
+        .0
+        .front()
+        .map(|(at, ..)| *at)
 }
 
 /// Each leg's signals `until` admits, run as the firing of their stamp with the host lent; the
 /// lane stops after one whose firing stamped anything, so what it pushed fires next.
 fn fire_deaths(In(until): In<Until>, world: &mut World) {
     loop {
-        let Some((at, key)) = world
+        let Some((at, session, key)) = world
             .resource::<Deaths>()
             .0
             .front()
             .copied()
-            .filter(|(at, _)| until.admits(*at))
+            .filter(|(at, ..)| until.admits(*at))
         else {
             return;
         };
         world.resource_mut::<Deaths>().0.pop_front();
-        let ((), moved) = crate::lanes::firing(at, || crate::script_calls::run_parked(world, key));
+        let ((), moved) =
+            crate::lanes::firing(at, || crate::script_calls::run_parked(world, session, key));
         if moved {
             return;
         }
@@ -114,7 +127,7 @@ pub(crate) fn fire_deaths_lane(world: &mut World) {
         .resource::<Deaths>()
         .0
         .front()
-        .is_some_and(|(at, _)| Until::all().admits(*at))
+        .is_some_and(|(at, ..)| Until::all().admits(*at))
     {
         world
             .run_system_cached_with(fire_deaths, Until::all())
@@ -181,9 +194,12 @@ impl Parked {
         let Some((_, mark)) = &self.0 else {
             return;
         };
-        if let Some(key) = crate::script_calls::park_since(world, *mark) {
+        if let Some((session, key)) = crate::script_calls::park_since(world, *mark) {
             let at = crate::lanes::stamp();
-            world.resource_mut::<Deaths>().0.push_back((at, key));
+            world
+                .resource_mut::<Deaths>()
+                .0
+                .push_back((at, session, key));
         }
     }
 

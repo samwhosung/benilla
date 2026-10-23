@@ -140,7 +140,8 @@ pub(crate) fn death_lines(
     mut places: Option<ResMut<DeathLineAt>>,
 ) {
     for e in edges.read() {
-        if !(e.unit_field(benilla_protocol::field::FIELD_UNIT_HEALTH) && e.old > 0 && e.new == 0) {
+        // The health watcher's own edge, compared signed (`0x604774`, `0x604778`).
+        if !e.unit_died() {
             continue;
         }
         let at = places

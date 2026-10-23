@@ -825,24 +825,25 @@ pub(crate) fn defer_vm(world: &World) -> Option<(benilla_ui::script::Deferring, 
         .map(|vm| (vm.defer(), vm.waiting_mark()))
 }
 
-/// Park what the world's VM has held since `mark` ([`UiScript::park_since`]); its key, `None`
-/// with nothing held or no VM.
-pub(crate) fn park_since(world: &mut World, mark: usize) -> Option<u64> {
-    world
-        .get_non_send_resource_mut::<UiScript>()
-        .and_then(|mut vm| vm.park_since(mark))
+/// Park what the world's VM has held since `mark` ([`UiScript::park_since`]); the VM's session
+/// and the key, `None` with nothing held or no VM.
+pub(crate) fn park_since(world: &mut World, mark: usize) -> Option<(u64, u64)> {
+    let mut vm = world.get_non_send_resource_mut::<UiScript>()?;
+    let key = vm.park_since(mark)?;
+    Some((vm.session(), key))
 }
 
-/// Run what the world's VM parked under `key` ([`UiScript::run_parked`]), with the host lent.
-pub(crate) fn run_parked(world: &mut World, key: u64) {
-    fn run(In(key): In<u64>, mut vm: HostedVm) {
+/// Run what the world's VM parked under `key` ([`UiScript::run_parked`]), with the host lent,
+/// if it is still the VM of `session`: a replaced VM's keys count from 0 again in the next.
+pub(crate) fn run_parked(world: &mut World, session: u64, key: u64) {
+    fn run(In((session, key)): In<(u64, u64)>, mut vm: HostedVm) {
         vm.run(|script| {
-            if let Some(script) = script {
+            if let Some(script) = script.filter(|s| s.session() == session) {
                 script.run_parked(key);
             }
         });
     }
-    if let Err(err) = world.run_system_cached_with(run, key) {
+    if let Err(err) = world.run_system_cached_with(run, (session, key)) {
         debug!("script calls: parked signals did not run: {err}");
     }
 }

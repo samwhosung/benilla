@@ -55,6 +55,7 @@ pub(crate) use cursor_mode::{
 /// `GO_FLAG_LOCKED`, the bit the lock chain and the GameObject tooltip's "Locked" line read.
 pub(crate) use lock::GO_FLAG_LOCKED;
 // This frame's combat-flash verdict, for the ring's material and the nameplate colour gate.
+pub(crate) use died::drop_parked_deaths;
 #[cfg(test)]
 pub(crate) use died::Deaths;
 pub(crate) use flash::CombatFlash;
