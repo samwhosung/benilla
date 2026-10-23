@@ -33,7 +33,7 @@ pub struct AttackerState {
     pub melee_spell_id: u32,
     /// The first sub-damage block's school (0 physical to 6 arcane, `GetFirstSchoolInMask`), 0
     /// with no blocks; a non-physical swing takes the combat log's `…SCHOOL` wording.
-    pub school: u8,
+    pub school: u32,
 }
 
 impl AttackerState {
@@ -66,12 +66,12 @@ pub(super) fn read_attacker_state(r: &mut impl Read) -> io::Result<AttackerState
     let subs = read_u8(r)?;
     let mut absorb = 0u32;
     let mut resist = 0i32;
-    let mut school = 0u8;
+    let mut school = 0u32;
     for i in 0..subs {
         // The school comes from the first block; later blocks split off other schools.
         let block_school = read_u32_le(r)?;
         if i == 0 {
-            school = u8::try_from(block_school).unwrap_or(0);
+            school = u32::from(u8::try_from(block_school).unwrap_or(0));
         }
         let _damage_f = read_f32_le(r)?;
         let _damage = read_u32_le(r)?;

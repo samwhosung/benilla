@@ -310,7 +310,7 @@ fn attacker_state(
         hit_info: s.hit_info,
         victim_state: s.victim_state,
         damage: s.damage,
-        school: u32::from(s.school),
+        school: s.school,
         displayed: s.displayed(),
         seq,
     };

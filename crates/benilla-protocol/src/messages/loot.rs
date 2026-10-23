@@ -131,6 +131,9 @@ pub struct LootStartRoll {
     pub item_slot: u32,
     pub item_id: u32,
     pub random_property_id: u32,
+    /// The roll's other property word, which the client keeps at `+0x24` and links as the
+    /// item's fourth number (`0x61c16e`); vmangos sends 0.
+    pub suffix_factor: u32,
     /// How long the roll stays open, in ms (vmangos: `60_000`, `Group.cpp:67`).
     pub countdown_ms: u32,
 }
@@ -145,6 +148,9 @@ pub struct LootRoll {
     pub roller: u64,
     pub item_id: u32,
     pub random_property_id: u32,
+    /// The roll's other property word, which the client keeps at `+0x24` and links as the
+    /// item's fourth number (`0x61c16e`); vmangos sends 0.
+    pub suffix_factor: u32,
     pub roll_number: u8,
     pub roll_type: u8,
 }
@@ -174,6 +180,9 @@ pub struct LootRollWon {
     pub item_slot: u32,
     pub item_id: u32,
     pub random_property_id: u32,
+    /// The roll's other property word, which the client keeps at `+0x24` and links as the
+    /// item's fourth number (`0x61c16e`); vmangos sends 0.
+    pub suffix_factor: u32,
     pub winner: u64,
     /// The winning dice value, or 100 with Need when only one player may roll (`Group.cpp:1110`).
     pub roll_number: u8,
@@ -189,6 +198,9 @@ pub struct LootAllPassed {
     pub item_slot: u32,
     pub item_id: u32,
     pub random_property_id: u32,
+    /// The roll's other property word, which the client keeps at `+0x24` and links as the
+    /// item's fourth number (`0x61c16e`); vmangos sends 0.
+    pub suffix_factor: u32,
 }
 
 pub(super) fn read_loot_start_roll(r: &mut &[u8]) -> io::Result<LootStartRoll> {
@@ -203,6 +215,7 @@ pub(super) fn read_loot_start_roll(r: &mut &[u8]) -> io::Result<LootStartRoll> {
         item_slot,
         item_id,
         random_property_id,
+        suffix_factor: 0,
         countdown_ms,
     })
 }
@@ -222,6 +235,7 @@ pub(super) fn read_loot_roll(r: &mut &[u8]) -> io::Result<LootRoll> {
         roller,
         item_id,
         random_property_id,
+        suffix_factor: 0,
         roll_number,
         roll_type,
     })
@@ -241,6 +255,7 @@ pub(super) fn read_loot_roll_won(r: &mut &[u8]) -> io::Result<LootRollWon> {
         item_slot,
         item_id,
         random_property_id,
+        suffix_factor: 0,
         winner,
         roll_number,
         roll_type,
@@ -258,6 +273,7 @@ pub(super) fn read_loot_all_passed(r: &mut &[u8]) -> io::Result<LootAllPassed> {
         item_slot,
         item_id,
         random_property_id,
+        suffix_factor: 0,
     })
 }
 
@@ -477,6 +493,7 @@ mod tests {
                     item_slot: 1,
                     item_id: 17182,
                     random_property_id: 0,
+                    suffix_factor: 0,
                     countdown_ms: 60_000,
                 }
             ),
@@ -511,6 +528,7 @@ mod tests {
                 roller: 0xBB,
                 item_id: 17182,
                 random_property_id: 0,
+                suffix_factor: 0,
                 roll_number: 0,
                 roll_type: 0,
             }
@@ -558,6 +576,7 @@ mod tests {
                     item_slot: 1,
                     item_id: 17182,
                     random_property_id: 0,
+                    suffix_factor: 0,
                     winner: 0xBB,
                     roll_number: 84,
                     roll_type: roll_vote::NEED,
@@ -584,6 +603,7 @@ mod tests {
                     item_slot: 1,
                     item_id: 17182,
                     random_property_id: 7,
+                    suffix_factor: 0,
                 }
             ),
             other => panic!("expected LootAllPassed, got {}", other.name()),

@@ -10,6 +10,7 @@ fn item() -> RollItem {
         quality: 4,
         item_id: 17182,
         random_property_id: 862,
+        suffix_factor: 0,
         name: "Sulfuras of the Bear".into(),
     }
 }
@@ -53,6 +54,7 @@ fn announce(roll_number: u8, roll_type: u8) -> RollLine {
         roller: 1,
         item_id: 17182,
         random_property_id: 862,
+        suffix_factor: 0,
         roll_number,
         roll_type,
     })
@@ -64,6 +66,7 @@ fn won(roll_number: u8, roll_type: u8) -> RollLine {
         item_slot: 0,
         item_id: 17182,
         random_property_id: 862,
+        suffix_factor: 0,
         winner: 1,
         roll_number,
         roll_type,
@@ -158,6 +161,7 @@ fn a_result_line_reads_its_key_and_fills_the_pieces() {
         item_slot: 0,
         item_id: 17182,
         random_property_id: 862,
+        suffix_factor: 0,
     });
     assert_eq!(
         line(passed, None, false, false),

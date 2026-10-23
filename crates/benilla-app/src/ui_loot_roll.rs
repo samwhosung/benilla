@@ -438,6 +438,7 @@ struct RollItem {
     quality: u32,
     item_id: u32,
     random_property_id: u32,
+    suffix_factor: u32,
     name: String,
 }
 
@@ -454,10 +455,20 @@ fn render(
     get: &dyn Fn(&str) -> Option<String>,
 ) -> Option<Option<String>> {
     // Every line embeds the item link, so the template comes first.
-    let (looted_item, roll, roller) = match line {
-        RollLine::Announce(p) => (p.item_id, p.random_property_id, Some(p.roller)),
-        RollLine::Won(p) => (p.item_id, p.random_property_id, Some(p.winner)),
-        RollLine::AllPassed(p) => (p.item_id, p.random_property_id, None),
+    let (looted_item, roll, suffix_factor, roller) = match line {
+        RollLine::Announce(p) => (
+            p.item_id,
+            p.random_property_id,
+            p.suffix_factor,
+            Some(p.roller),
+        ),
+        RollLine::Won(p) => (
+            p.item_id,
+            p.random_property_id,
+            p.suffix_factor,
+            Some(p.winner),
+        ),
+        RollLine::AllPassed(p) => (p.item_id, p.random_property_id, p.suffix_factor, None),
     };
     let t = items.template(looted_item, 0, ask)?;
     // The link names the rolled drop, suffix included, as the roll frame does.
@@ -465,6 +476,7 @@ fn render(
         quality: t.quality,
         item_id: looted_item,
         random_property_id: roll,
+        suffix_factor,
         name: rolls.name(&t.name.clone(), roll),
     };
 
@@ -716,6 +728,7 @@ mod tests {
             item_slot: slot,
             item_id,
             random_property_id: 0,
+            suffix_factor: 0,
             countdown_ms: 60_000,
         }
     }
@@ -727,6 +740,7 @@ mod tests {
             roller,
             item_id: 17182,
             random_property_id: 0,
+            suffix_factor: 0,
             roll_number,
             roll_type,
         }
@@ -740,6 +754,7 @@ mod tests {
             quality: 4,
             item_id: 17182,
             random_property_id: 0,
+            suffix_factor: 0,
             name: "Sulfuras".into(),
         }
     }
@@ -888,6 +903,7 @@ mod tests {
             item_slot: 0,
             item_id: 17182,
             random_property_id: 0,
+            suffix_factor: 0,
             winner: 1,
             roll_number: 84,
             roll_type: roll_vote::NEED,
@@ -906,6 +922,7 @@ mod tests {
             item_slot: 0,
             item_id: 17182,
             random_property_id: 0,
+            suffix_factor: 0,
         };
         assert_eq!(
             line(&RollLine::AllPassed(passed), Some("Bob"), false, true),
@@ -939,6 +956,7 @@ mod tests {
             item_slot: 0,
             item_id: 17182,
             random_property_id: 0,
+            suffix_factor: 0,
             winner: 1,
             roll_number: 84,
             roll_type: roll_vote::NEED,
@@ -968,6 +986,7 @@ mod tests {
             item_slot: 0,
             item_id: 17182,
             random_property_id: 0,
+            suffix_factor: 0,
         };
         assert_eq!(
             line(&RollLine::AllPassed(passed), None, false, false),
@@ -1016,6 +1035,7 @@ mod tests {
             item_slot: 0,
             item_id: 17182,
             random_property_id: 0,
+            suffix_factor: 0,
             winner: 1,
             roll_number: 84,
             roll_type: roll_vote::NEED,
@@ -1029,6 +1049,7 @@ mod tests {
             item_slot: 1,
             item_id: 4306,
             random_property_id: 0,
+            suffix_factor: 0,
         });
         assert_eq!(r.cancelled, vec![1, 2]);
         assert!(r.active.is_empty());
@@ -1044,6 +1065,7 @@ mod tests {
             item_slot: 0,
             item_id: 17182,
             random_property_id: 0,
+            suffix_factor: 0,
             winner: 1,
             roll_number: 84,
             roll_type: roll_vote::NEED,
@@ -1311,6 +1333,7 @@ mod tests {
                 item_slot: 0,
                 item_id: ROLLED,
                 random_property_id: 0,
+                suffix_factor: 0,
             });
         // Even once the template lands, the roll it belonged to is gone.
         app.world_mut()
@@ -1348,6 +1371,7 @@ mod tests {
             item_slot: slot,
             item_id: ROLLED,
             random_property_id: 0,
+            suffix_factor: 0,
             winner: 1,
             roll_number: 84,
             roll_type: roll_vote::NEED,
@@ -1360,6 +1384,7 @@ mod tests {
             item_slot: slot,
             item_id: ROLLED,
             random_property_id: 0,
+            suffix_factor: 0,
         }
     }
 

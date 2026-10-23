@@ -12,7 +12,7 @@ fn swing(hit_info: u32, victim_state: u32, damage: u32, school: u8) -> AttackerS
         resist: 0,
         blocked: 0,
         melee_spell_id: 0,
-        school,
+        school: school.into(),
     }
 }
 

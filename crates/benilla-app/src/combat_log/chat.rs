@@ -145,7 +145,8 @@ pub(super) fn attacker_state(
     };
     let fills = Fills {
         spell: String::new(),
-        school: (s.school != 0).then_some(s.school),
+        // A school past the table has no name, and so no line (`school_word`).
+        school: (s.school != 0).then(|| u8::try_from(s.school).unwrap_or(u8::MAX)),
         amount: i64::from(s.damage),
         // Only a landed hit grows a trailer, and only here can it say GLANCING, CRUSHING or BLOCK:
         // of `0x628410`'s call sites, this one passes a real `blocked` and `HitInfo` (`0x629ee7`).
