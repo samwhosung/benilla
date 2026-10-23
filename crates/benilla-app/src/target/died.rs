@@ -756,8 +756,7 @@ mod tests {
         possessing_an_attacker(&mut c);
         let mob = c.mob;
         c.select(MOB, mob);
-        c.world()
-            .insert_non_send_resource(benilla_ui::script::UiScript::new().expect("a VM"));
+        crate::script_calls::insert_test_vm(c.world());
         crate::script_calls::with_hosted_vm(c.world(), |s| {
             s.expect("a VM").run(
                 r#"HEARD = {}
@@ -785,11 +784,7 @@ mod tests {
             .collect();
         assert_eq!(wire, ["PetStopAttack", "RandomRoll", "SetSelection 0x0"]);
         crate::ui_unit::run_feed_units_once(c.world());
-        let heard: Vec<String> = c
-            .world()
-            .non_send_resource::<benilla_ui::script::UiScript>()
-            .eval("return HEARD")
-            .unwrap();
+        let heard: Vec<String> = crate::script_calls::eval_in_vm(c.world(), "return HEARD");
         assert_eq!(heard, ["PET_BAR_UPDATE", "PLAYER_TARGET_CHANGED"]);
     }
 }

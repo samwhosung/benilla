@@ -728,6 +728,21 @@ pub(crate) fn with_hosted_vm<R>(
     r
 }
 
+/// A fresh VM in `world`, for a test of an engine entry outside the feeds.
+#[cfg(test)]
+pub(crate) fn insert_test_vm(world: &mut World) {
+    world.insert_non_send_resource(UiScript::new().expect("a VM"));
+}
+
+/// What the world's VM answers to `chunk`, for a test of an engine entry outside the feeds.
+#[cfg(test)]
+pub(crate) fn eval_in_vm<T: benilla_ui::mlua::FromLuaMulti>(world: &World, chunk: &str) -> T {
+    world
+        .non_send_resource::<UiScript>()
+        .eval(chunk)
+        .expect("the chunk runs")
+}
+
 /// Run `f` on `script`, a VM out of the world (the UI load runs on one, with the world in hand),
 /// with a host built off the world lent, as a system's would be, and apply what its calls queued
 /// after. A world without the appliers' state (a bare test world) lends none: the calls are
