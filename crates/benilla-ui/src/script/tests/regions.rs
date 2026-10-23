@@ -1886,3 +1886,142 @@ fn an_engine_vertex_colour_collapses_a_gradient() {
         "{color:?}"
     );
 }
+
+/// Four globals resolve argument 1 with the member prologue against the Texture id `[0xcf4cdc]`
+/// before reading another argument: `SetPortraitTexture` (`0x519f06`-`0x519faa`, the unit after
+/// at `0x519fb4`), `SetBagPortaitTexture` (`0x4fa4f9`, the slot after at `0x4fa585`),
+/// `SetInventoryPortaitTexture` (`0x4c9159`) and `SetTaxiMap` (`0x4dca67`, once its map has
+/// loaded). A FontString fails the test (its `IsA`, `0x773550`, answers the FontString and Region
+/// ids alone).
+#[test]
+fn the_texture_globals_refuse_a_non_texture_first() {
+    let mut s = crate::script::UiScript::new().unwrap();
+    s.run(
+        r#"
+        GlobHost = CreateFrame("Frame", "GlobHost")
+        GlobTex = GlobHost:CreateTexture("GlobTex")
+        GlobStr = GlobHost:CreateFontString("GlobStr")
+        "#,
+    )
+    .unwrap();
+    s.set_taxi(Some(TaxiUiState {
+        art: "Interface\\TaxiFrame\\TAXIMAP1".into(),
+        nodes: vec![],
+    }));
+    const NON_TABLE: &str =
+        "Attempt to find 'this' in non-table object (used '.' instead of ':' ?)";
+    const NO_OBJECT: &str = "Attempt to find 'this' in non-framescript object";
+    const WRONG: &str = "Wrong object type for member function";
+    for (call, line) in [
+        ("SetPortraitTexture(GlobStr, 'player')", WRONG),
+        ("SetPortraitTexture(GlobStr, nil)", WRONG),
+        ("SetPortraitTexture(GlobHost, 'player')", WRONG),
+        ("SetPortraitTexture({}, nil)", NO_OBJECT),
+        ("SetPortraitTexture(5, nil)", NON_TABLE),
+        (
+            "SetPortraitTexture(GlobTex, nil)",
+            "Usage: SetPortraitTexture(texture, \"unit\")",
+        ),
+        ("SetBagPortaitTexture(GlobStr, 1)", WRONG),
+        ("SetBagPortaitTexture(GlobStr, 'x')", WRONG),
+        ("SetBagPortaitTexture({}, 'x')", NO_OBJECT),
+        ("SetBagPortaitTexture(nil, 'x')", NON_TABLE),
+        (
+            "SetBagPortaitTexture(GlobTex, 'x')",
+            "Usage: SetBagPortaitTexture(texture, slot)",
+        ),
+        ("SetInventoryPortaitTexture(GlobStr, 'player', 1)", WRONG),
+        ("SetInventoryPortaitTexture(GlobStr, nil, 1)", WRONG),
+        ("SetTaxiMap(GlobStr)", WRONG),
+    ] {
+        let err = s.run(call).unwrap_err().to_string();
+        assert!(err.contains(line), "{call}: {err}");
+    }
+    s.run("SetPortraitTexture(GlobTex, 'player') SetBagPortaitTexture(GlobTex, 0)")
+        .unwrap();
+}
+
+/// `GameTooltip:AddFontStrings(left, right)` (`0x530c40`) reads arguments 2 and 3 in turn: a
+/// non-table raises the usage line (`0x85506c`), a table with no object `0x855034`'s, and an
+/// object that fails the FontString test `[0xcf2ccc]` (`0x530d2f`-`0x530d4d`) `0x854ff8`'s, each
+/// with the tooltip's name or `<unnamed>`.
+#[test]
+fn add_font_strings_takes_only_font_strings() {
+    let s = script();
+    s.run(
+        r#"
+        FsTip = CreateFrame("GameTooltip", "FsTip")
+        FsAnon = CreateFrame("GameTooltip")
+        FsLeft = FsTip:CreateFontString("FsLeft")
+        FsRight = FsTip:CreateFontString("FsRight")
+        FsTex = FsTip:CreateTexture("FsTex")
+        "#,
+    )
+    .unwrap();
+    for (call, line) in [
+        (
+            "FsTip:AddFontStrings(FsTex, FsRight)",
+            "FsTip:AddFontStrings(): Wrong object type, expected fontstring",
+        ),
+        (
+            "FsTip:AddFontStrings(FsLeft, FsTip)",
+            "FsTip:AddFontStrings(): Wrong object type, expected fontstring",
+        ),
+        (
+            "FsTip:AddFontStrings({}, FsRight)",
+            "FsTip:AddFontStrings(): Couldn't find 'this' in fontstring",
+        ),
+        (
+            "FsTip:AddFontStrings(FsLeft, 5)",
+            "Usage: FsTip:AddFontStrings(leftstring, rightstring)",
+        ),
+        (
+            "FsAnon:AddFontStrings(FsTex, FsRight)",
+            "<unnamed>:AddFontStrings(): Wrong object type, expected fontstring",
+        ),
+    ] {
+        let err = s.run(call).unwrap_err().to_string();
+        assert!(err.contains(line), "{call}: {err}");
+    }
+    s.run("FsTip:AddFontStrings(FsLeft, FsRight)").unwrap();
+}
+
+/// `GameTooltip:SetBuybackItem(slot)` (`0x536300`) tests its slot with `lua_isnumber` first
+/// (`0x536322`), raising `Usage: SetBuybackItem(slot)` (`0x855634`), and only then resolves its
+/// receiver with the member prologue (`0x536367`).
+#[test]
+fn set_buyback_item_reads_its_slot_before_its_receiver() {
+    let s = script();
+    s.run(
+        r#"
+        BbTip = CreateFrame("GameTooltip", "BbTip")
+        BbTex = BbTip:CreateTexture("BbTex")
+        "#,
+    )
+    .unwrap();
+    for (call, line) in [
+        ("BbTip:SetBuybackItem('x')", "Usage: SetBuybackItem(slot)"),
+        (
+            "BbTip.SetBuybackItem(nil, 'x')",
+            "Usage: SetBuybackItem(slot)",
+        ),
+        ("BbTip.SetBuybackItem()", "Usage: SetBuybackItem(slot)"),
+        (
+            "BbTip.SetBuybackItem(nil, 1)",
+            "Attempt to find 'this' in non-table object (used '.' instead of ':' ?)",
+        ),
+        (
+            "BbTip.SetBuybackItem({}, 1)",
+            "Attempt to find 'this' in non-framescript object",
+        ),
+        (
+            "BbTip.SetBuybackItem(BbTex, 1)",
+            "Wrong object type for member function",
+        ),
+    ] {
+        let err = s.run(call).unwrap_err().to_string();
+        assert!(err.contains(line), "{call}: {err}");
+    }
+    s.run("BbTip:SetBuybackItem('2') BbTip:SetBuybackItem(1)")
+        .unwrap();
+}
