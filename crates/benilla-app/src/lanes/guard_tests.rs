@@ -471,10 +471,10 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_pet::bar::feed_pet_bar", &["net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
         "ui_pet::PetAttackLatch", "ui_pet::PetBar"]),
     ("::ui_pet::bar::fire_pet_cooldown_events", &["ui_pet::PetBar"]),
-    // The pet's snapshot reads its store as of the drain's place (`ui_unit::views`); the bar's
-    // guid, its name and the `UNIT_PET` edge read as the frame left them.
+    // The pet's snapshot reads its store as of the drain's place (`ui_unit::views`); its name
+    // reads as the frame left it.
     ("::ui_pet::unit::feed_pet_unit", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
-        "net::SelfGuid", "ui_party::GroupState", "ui_pet::PetBar"]),
+        "net::SelfGuid", "ui_party::GroupState"]),
     ("::ui_pet::menu::feed_pet_menu", &["net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
         "ui_pet::PetBar"]),
     ("::ui_pet_book::feed_pet_book", &["net::GuidIndex", "net::ObjectStore", "ui_pet::PetBar"]),

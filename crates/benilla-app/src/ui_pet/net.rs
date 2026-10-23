@@ -48,12 +48,16 @@ fn on_spells(
     player: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
     mut bar: ResMut<PetBar>,
     mut latch: ResMut<super::PetAttackLatch>,
+    mut lane: ResMut<crate::field_watch::NoticeLane>,
 ) {
     if let SessionEvent::PetSpells(spells) = ev {
         // The pet list's category pad (`0x6e2b60` with the pet flag): op 11 alone.
         let pad = crate::spell::CategoryPad::for_list(true, player.iter().next());
         if pet_spells(*spells, catalog.as_deref(), mods.as_deref(), pad, &mut bar) {
             latch.0 = None;
+            // `SetPet`'s `UNIT_PET("player")` on a new guid (`0x4bc84f`), at the packet's place:
+            // the pet frame's `UnitExists("pet")` reads our summon field as this packet left it.
+            lane.write(crate::field_watch::FieldNotice::Player { id: 2 });
         }
     }
 }

@@ -549,6 +549,8 @@ fn global_event(id: u16) -> Option<&'static str> {
 /// signals with `"player"` ([`FieldNotice::Player`]).
 fn player_event(id: u16) -> Option<&'static str> {
     Some(match id {
+        // The pet bar's guid writer, on a change (`0x4bc84f`).
+        2 => "UNIT_PET",
         149 => "UNIT_RESISTANCES",
         186 => "UNIT_INVENTORY_CHANGED",
         189 => "PLAYER_XP_UPDATE",

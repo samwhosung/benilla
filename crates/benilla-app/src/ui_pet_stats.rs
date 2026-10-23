@@ -224,7 +224,6 @@ pub(crate) fn feed_pet_stats(
 mod tests {
     use super::*;
     use benilla_protocol::ObjectFields;
-    use benilla_ui::script::UiScript;
 
     const BYTES_0: u16 = 36;
     const BYTES_1: u16 = 138;
@@ -534,73 +533,16 @@ mod tests {
         assert!(s.food_types.is_empty());
     }
 
-    /// `UNIT_PET` must reach Lua with `HasPetUI()` already answering, as `PetTab_Update` reads it;
-    /// only a real schedule orders the feeds, so this runs one `app.update()` on a cold pet.
+    /// `UNIT_PET` must reach Lua with `HasPetUI()` already answering, as `PetTab_Update` reads it:
+    /// the bar's signal (`0x4bc84f`) waits on the notice lane, which fires once every feed has
+    /// pushed, this snapshot's included.
     #[test]
     fn unit_pet_reaches_lua_with_has_pet_ui_already_true() {
-        use crate::client_state::ClientState;
-        use crate::net::GuidIndex;
-        use crate::ui_pet::UiPetPlugin;
-
-        const PET_GUID: u64 = 0xf140_0000_0000_002a;
-
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
-            .insert_state(ClientState::InWorld)
-            .init_resource::<NameCache>()
-            .init_resource::<GuidIndex>()
-            .init_resource::<crate::target::Selection>()
-            .init_resource::<crate::net::SelfGuid>()
-            .init_resource::<crate::ui_script::UiClock>()
-            .init_resource::<crate::ui_action::UiErrorKeys>()
-            .init_resource::<crate::net::Reputations>()
-            .init_resource::<crate::spell::QueuedMeleeSpell>()
-            .init_resource::<crate::spell::AutoRepeatActive>()
-            .init_resource::<crate::creature_anim::UnitEdits>()
-            .add_message::<crate::player::StandStateRequest>()
-            .init_resource::<crate::ui_loot::LootState>()
-            .init_resource::<crate::ui_loot::LootLatch>()
-            .add_message::<crate::creature_anim::SheathRequest>()
-            .add_message::<crate::net::FieldChanged>()
-            .insert_resource(crate::net::NetCommands(tx))
-            .add_plugins((UiPetStatsPlugin, UiPetPlugin));
-
-        // The pet is in the world when the bar's guid lands: a cold summon.
-        let pet = app.world_mut().spawn(boar()).id();
-        app.world_mut()
-            .resource_mut::<GuidIndex>()
-            .0
-            .insert(PET_GUID, pet);
-        app.world_mut().resource_mut::<PetBar>().spells.pet_guid = PET_GUID;
-
-        // A frame standing in for the pet page records what `HasPetUI()` answers at dispatch.
-        let script = UiScript::new().unwrap();
-        script
-            .run(
-                r#"
-                BENILLA_SAW = "never fired"
-                local f = CreateFrame("Frame")
-                f:RegisterEvent("UNIT_PET")
-                f:SetScript("OnEvent", function()
-                    BENILLA_SAW = HasPetUI() and "has pet UI" or "no pet UI"
-                end)
-                "#,
-            )
-            .unwrap();
-        app.insert_non_send_resource(script);
-
-        app.update();
-
-        let saw: String = app
-            .world_mut()
-            .non_send_resource::<UiScript>()
-            .eval("return BENILLA_SAW")
-            .unwrap();
-        assert_eq!(
-            saw, "has pet UI",
-            "UNIT_PET must not reach Lua ahead of the snapshot its handlers read — unordered, \
-             this answered \"no pet UI\" and the Pet tab stayed down for the session"
-        );
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        assert!(crate::test_support::runs_before(
+            &mut app,
+            feed_pet_stats,
+            crate::lanes::fire_in_order
+        ));
     }
 }

@@ -113,6 +113,8 @@ impl Plugin for UiPetPlugin {
         net::register(app);
         app.init_resource::<PetBar>()
             .init_resource::<PetAttackLatch>()
+            // `SMSG_PET_SPELLS` writes its `UNIT_PET` there; the unit plugin fires the lane.
+            .init_resource::<crate::field_watch::NoticeLane>()
             .add_systems(
                 Update,
                 (

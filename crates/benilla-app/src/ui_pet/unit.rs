@@ -1,10 +1,10 @@
-//! The `"pet"` unit token, the unit our charm, else our summon, names (`0x515a5e`-`0x515a6e`), and
-//! the pet frame's `UNIT_PET`, keyed on [`PetBar`]'s pet guid: the client's `[0xb714a0]`, whose
-//! writer fires it (`0x4bc84f`).
+//! The `"pet"` unit token, the unit our charm, else our summon, names (`0x515a5e`-`0x515a6e`).
+//! Its `UNIT_PET`s are the bar writer's (`0x4bc84f`, `crate::ui_pet::net`, the world entry's
+//! reset) and our two guid fields' watch (`crate::field_watch`), each at its own place.
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{ScriptValue, UnitState};
+use benilla_ui::script::UnitState;
 
 use crate::creature_type::CreatureTypeSources;
 use crate::names::NameCache;
@@ -12,7 +12,7 @@ use crate::net::{NetCommands, ObjectStore};
 use crate::ui_script::gate;
 use crate::ui_unit::snapshot;
 
-use super::{PetBar, PetUnit};
+use super::PetUnit;
 use crate::query_cache::Ask;
 
 /// What the `"pet"` feed last pushed, for its edges.
@@ -20,19 +20,15 @@ use crate::query_cache::Ask;
 pub(crate) struct PetUnitMemory {
     /// The last snapshot pushed under `"pet"`.
     pushed: Option<UnitState>,
-    /// `UNIT_PET`'s trigger, the bar's guid; `None` until the first feed, so a pet out at login
-    /// announces once.
-    guid: Option<u64>,
     /// The name cache's counter, which catches a `resolve` answer landing frames later.
     names_generation: gate::Watch,
 }
 
-/// Feed the `"pet"` token and the pet frame's events. The token is the unit our
-/// `UNIT_FIELD_CHARM`, else our `UNIT_FIELD_SUMMON`, names (`0x515a5e`-`0x515a6e`); `UNIT_PET`
-/// follows the bar's guid, whose writer signals it (`SetPet`, `0x4bc7e0`, `0x4bc84f`). The
-/// reaction is 0: the pet frame reads none.
+/// Feed the `"pet"` token and the rename event. The token is the unit our `UNIT_FIELD_CHARM`,
+/// else our `UNIT_FIELD_SUMMON`, names (`0x515a5e`-`0x515a6e`). The reaction is 0: the pet frame
+/// reads none.
 pub(crate) fn feed_pet_unit(
-    mut vm: crate::script_calls::VmWith<(Res<'static, PetBar>, ResMut<'static, NameCache>)>,
+    mut vm: crate::script_calls::VmWith<ResMut<'static, NameCache>>,
     pet: PetUnit,
     changed_stores: Query<(), Changed<ObjectStore>>,
     mut removed_stores: RemovedComponents<ObjectStore>,
@@ -54,7 +50,7 @@ pub(crate) fn feed_pet_unit(
         .filter(|e| e.unit_field(UNIT_FIELD_PET_NAME_TIMESTAMP))
         .map(|e| e.guid)
         .collect();
-    vm.feed(|script, (bar, mut names), fires| {
+    vm.feed(|script, mut names, fires| {
         let Some(script) = script else {
             return;
         };
@@ -65,7 +61,6 @@ pub(crate) fn feed_pet_unit(
         }
         let (memory, vm_reset) = memory.get_reset(script);
         let names_moved = memory.names_generation.moved(names.generation());
-        let bar_changed = bar.is_changed();
         let stores_changed = !changed_stores.is_empty();
         let stores_removed = !removed_stores.is_empty();
         gate::trace(
@@ -73,19 +68,13 @@ pub(crate) fn feed_pet_unit(
             &[
                 ("vm_reset", vm_reset),
                 ("names", names_moved),
-                ("bar", bar_changed),
                 ("stores", stores_changed),
                 ("removed", stores_removed),
             ],
         );
         let group_changed = group.as_ref().is_some_and(|g| g.is_changed());
         let gate = gate::Gate::new(
-            vm_reset
-                || names_moved
-                || bar_changed
-                || stores_changed
-                || stores_removed
-                || group_changed,
+            vm_reset || names_moved || stores_changed || stores_removed || group_changed,
         );
         removed_stores.clear();
         if gate.skip() {
@@ -138,16 +127,6 @@ pub(crate) fn feed_pet_unit(
             // Pushing fires nothing: the pet's unit events are its field watches
             // (`crate::field_watch`), and the frame repaints a new pet on `UNIT_PET`.
             None => memory.pushed = None,
-        }
-
-        // UNIT_PET("player") only on a change of the bar's guid (`0x4bc84f`), not on a same-pet
-        // re-send.
-        let bar_guid = bar.spells.pet_guid;
-        if memory.guid != Some(bar_guid) {
-            gate.audit("feed_pet_unit", "the UNIT_PET edge");
-            memory.guid = Some(bar_guid);
-            debug!("ui_pet: UNIT_PET — the bar's pet is now {bar_guid:#x}");
-            fires.post("UNIT_PET", vec![ScriptValue::Str("player".into())]);
         }
     })
 }
@@ -311,26 +290,25 @@ mod tests {
 
     /// The `"pet"` snapshot is the unit the token names, our `UNIT_FIELD_SUMMON` here
     /// (`0x515a5e`-`0x515a6e`), not the bar's guid: with no bar the summon exists, and a bar
-    /// naming a unit we neither charm nor summon names no pet. `UNIT_PET` stays the bar's
-    /// (`0x4bc84f`).
+    /// naming a unit we neither charm nor summon names no pet. The feed signals no `UNIT_PET`:
+    /// the bar writer's and the field watch's are at their own places.
     #[test]
-    fn the_pet_snapshot_follows_our_summon_and_unit_pet_the_bar() {
+    fn the_pet_snapshot_follows_our_summon_not_the_bar() {
         let mut app = pet_app(PET, 0);
         app.update();
         assert_eq!(answer(&mut app, "return UnitExists('pet')"), Some(1.0));
-        assert_eq!(seen(&mut app), ["UNIT_PET"], "the first look announces");
+        assert_eq!(seen(&mut app), Vec::<String>::new());
 
         let mut app = pet_app(0, OTHER);
         app.update();
         assert_eq!(answer(&mut app, "return UnitExists('pet')"), None);
-        seen(&mut app);
         app.world_mut().resource_mut::<PetBar>().spells.pet_guid = PET;
         app.update();
-        assert_eq!(seen(&mut app), ["UNIT_PET"], "a new bar guid signals");
         assert_eq!(
             answer(&mut app, "return UnitExists('pet')"),
             None,
-            "and still names no pet"
+            "a new bar guid still names no pet"
         );
+        assert_eq!(seen(&mut app), Vec::<String>::new());
     }
 }
