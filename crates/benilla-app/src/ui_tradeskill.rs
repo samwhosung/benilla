@@ -692,13 +692,13 @@ fn feed_trade_skill(
         // The getters' item callbacks, kept by their calls; each record that landed rebuilds
         // (`0x4fdc30` → `0x4fdc3c`), and a refusal runs it with status 0, which does nothing
         // (`0x4fdc38`). The item cache holds them, so they outlive a VM.
-        engine.item_waits.extend(script.take_trade_skill_item_waits());
+        engine
+            .item_waits
+            .extend(script.take_trade_skill_item_waits());
         let arrivals = landed(&mut engine.item_waits, &items);
         // An open is the open line's change, which a `/reload` keeps (`[0xbde040]`): the new VM
         // takes the list with no event, as its world-enter init left it.
-        let opened = fresh
-            .as_ref()
-            .is_some_and(|f| engine.shown != Some(f.line));
+        let opened = fresh.as_ref().is_some_and(|f| engine.shown != Some(f.line));
         if fresh.is_some() || open.line.is_none() {
             engine.shown = fresh.as_ref().map(|f| f.line);
         }
@@ -742,7 +742,8 @@ fn feed_trade_skill(
         }
         // Each product record a build waited on runs its callback as it lands (`0x4fc8e0`),
         // which rebuilds with flag 1 once nothing is pending.
-        engine.build_waits
+        engine
+            .build_waits
             .extend(script.take_trade_skill_build_waits());
         let built = landed(&mut engine.build_waits, &items);
         for _ in 0..built {
@@ -2047,7 +2048,10 @@ mod tests {
     #[test]
     fn a_reload_keeps_the_book_open_unshown_until_a_rebuild() {
         let mut app = silk_book();
-        app.world_mut().resource_mut::<TradeSkillOpens>().0.push(3908);
+        app.world_mut()
+            .resource_mut::<TradeSkillOpens>()
+            .0
+            .push(3908);
         assert_eq!(heard(&mut app), ["TRADE_SKILL_SHOW"]);
         reload(&mut app);
         assert!(heard(&mut app).is_empty(), "no update, no show");
@@ -2079,7 +2083,10 @@ mod tests {
     fn an_opener_of_the_open_line_closes_the_book() {
         let mut app = silk_book();
         let open = |app: &mut App| {
-            app.world_mut().resource_mut::<TradeSkillOpens>().0.push(3908);
+            app.world_mut()
+                .resource_mut::<TradeSkillOpens>()
+                .0
+                .push(3908);
             heard(app)
         };
         assert_eq!(open(&mut app), ["TRADE_SKILL_SHOW"]);
@@ -2098,7 +2105,10 @@ mod tests {
     #[test]
     fn a_frame_without_our_player_keeps_the_book_open() {
         let mut app = silk_book();
-        app.world_mut().resource_mut::<TradeSkillOpens>().0.push(3908);
+        app.world_mut()
+            .resource_mut::<TradeSkillOpens>()
+            .0
+            .push(3908);
         assert_eq!(heard(&mut app), ["TRADE_SKILL_SHOW"]);
         let me = app
             .world_mut()
@@ -2110,6 +2120,9 @@ mod tests {
         app.world_mut()
             .spawn((ObjectStore(Default::default()), SelfPlayer));
         assert!(heard(&mut app).is_empty(), "no second open");
-        assert!(app.world().non_send_resource::<UiScript>().trade_skill_open());
+        assert!(app
+            .world()
+            .non_send_resource::<UiScript>()
+            .trade_skill_open());
     }
 }

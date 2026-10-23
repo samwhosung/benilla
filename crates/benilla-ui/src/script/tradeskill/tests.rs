@@ -1570,7 +1570,10 @@ fn the_world_enter_init_empties_the_list_until_a_rebuild() {
     more.recipes[0].num_available = 4;
     s.set_trade_skill(Some(more));
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 0);
-    assert!(heard::take(&s).is_empty(), "the init and the push signal nothing");
+    assert!(
+        heard::take(&s).is_empty(),
+        "the init and the push signal nothing"
+    );
     s.rebuild_trade_skill(&mut |_| {});
     assert_eq!(heard::take(&s), ["TRADE_SKILL_UPDATE 3"]);
 }
