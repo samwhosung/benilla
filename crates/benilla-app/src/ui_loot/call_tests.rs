@@ -796,3 +796,120 @@ fn a_close_and_the_next_response_in_one_frame_keep_their_order() {
         Some(LOCKBOX)
     );
 }
+
+/// A removal and the next response in one frame: the removal's `LOOT_SLOT_CLEARED` handlers run
+/// inside its own packet (`0x4c1f77`), before the response's copier clears the bind stash
+/// (`[0x847cec]`, `0x4c1df5`), so a `LootSlot` there takes the pending row (`0x4c2790(i, 1)`,
+/// `0x4c27c0`) and sends it.
+#[test]
+fn a_replaced_sessions_handlers_read_its_own_bind_stash() {
+    let mut l = client();
+    open(
+        &mut l,
+        CORPSE,
+        1,
+        0,
+        vec![row(0, FELSTRIKER), row(1, LINEN)],
+    );
+    click(&mut l, 1);
+    assert_eq!(seen(&mut l), "LOOT_OPENED,LOOT_BIND_CONFIRM:1");
+    let _ = sent(&l);
+    run(
+        &mut l,
+        r#"local f = CreateFrame("Frame")
+        f:RegisterEvent("LOOT_SLOT_CLEARED")
+        f:SetScript("OnEvent", function() LootSlot(1) end)"#,
+    );
+    packets(
+        &mut l,
+        vec![
+            SessionEvent::LootRemoved { slot: 1 },
+            SessionEvent::LootResponse {
+                guid: CORPSE,
+                loot_type: 1,
+                gold: 0,
+                items: vec![row(0, WOOL)],
+            },
+        ],
+    );
+    feed(&mut l);
+    assert_eq!(seen(&mut l), "LOOT_SLOT_CLEARED:2,LOOT_CLOSED,LOOT_OPENED");
+    assert!(
+        matches!(sent(&l)[..], [ClientCommand::AutostoreLootItem { slot: 0 }]),
+        "the old session's pending row"
+    );
+}
+
+/// A `CloseLoot` in a replaced session's `LOOT_SLOT_CLEARED` handler ends that session alone
+/// (`0x48f200`): the next response, a pickpocket window the server starts on a cold target
+/// (`0x5eb94b`), still waits on its rows' records and signals `LOOT_OPENED` at the last answer
+/// (`0x4c2ac0`, `0x4c2afc`).
+#[test]
+fn a_replaced_sessions_close_keeps_the_next_copiers_end() {
+    const UNCACHED: u32 = 40_000;
+    let mut l = client();
+    open(&mut l, CORPSE, 1, 0, vec![row(0, LINEN), row(1, WOOL)]);
+    let _ = (seen(&mut l), sent(&l));
+    run(
+        &mut l,
+        r#"local f = CreateFrame("Frame")
+        f:RegisterEvent("LOOT_SLOT_CLEARED")
+        f:SetScript("OnEvent", function() CloseLoot() end)"#,
+    );
+    packets(
+        &mut l,
+        vec![
+            SessionEvent::LootRemoved { slot: 0 },
+            SessionEvent::LootResponse {
+                guid: CORPSE,
+                loot_type: 2,
+                gold: 0,
+                items: vec![row(0, UNCACHED)],
+            },
+        ],
+    );
+    feed(&mut l);
+    assert_eq!(seen(&mut l), "LOOT_SLOT_CLEARED:1,LOOT_CLOSED");
+    assert!(
+        matches!(sent(&l)[..], [ClientCommand::LootRelease { guid: CORPSE }]),
+        "the old session's release"
+    );
+    let world = l.app.world_mut();
+    world
+        .resource_mut::<Items>()
+        .insert_template(UNCACHED, Some(crate::items::test_template("Silk Cloth")));
+    world.resource_scope(|world, mut loot: Mut<LootState>| {
+        loot.row_answered(world.resource::<Items>())
+    });
+    feed(&mut l);
+    assert_eq!(seen(&mut l), "LOOT_OPENED");
+}
+
+/// An inventory failure ends by signalling `LOOT_OPENED` again while a window is open
+/// (`0xb71b48`) and the auto-loot byte is set (`0x5e3aff`-`0x5e3b20`): a window whose copier
+/// waits on a row's record keeps the byte its interaction stored (`0x4c1ea6`, before the sweep's
+/// clear at `0x4c2219`). With the byte clear the failure signals no loot event.
+#[test]
+fn an_inventory_failure_signals_the_window_again_under_the_byte() {
+    for byte in [true, false] {
+        let mut l = client();
+        l.app.world_mut().resource_mut::<AutoLootByte>().0 = byte;
+        run(&mut l, "ERR_INV_FULL = 'ERR_INV_FULL'");
+        open(&mut l, CORPSE, 1, 0, vec![row(0, LINEN), row(1, 40_000)]);
+        assert_eq!(seen(&mut l), "", "the copier waits on its record");
+        packets(
+            &mut l,
+            vec![SessionEvent::InventoryFailure {
+                reason: 50,
+                required_level: None,
+                item_guid: 0,
+                item2_guid: 0,
+                bag_slot: 0,
+            }],
+        );
+        crate::lanes::fire_in_order(l.app.world_mut());
+        let seen = seen(&mut l);
+        assert!(seen.starts_with("UI_ERROR_MESSAGE"), "{seen}");
+        assert_eq!(seen.ends_with(",LOOT_OPENED"), byte, "byte {byte}: {seen}");
+    }
+}

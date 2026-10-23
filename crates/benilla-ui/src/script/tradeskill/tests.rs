@@ -1548,3 +1548,29 @@ fn the_item_stats_getter_waits_only_on_a_record_in_flight() {
         .unwrap();
     assert!(s.take_trade_skill_item_waits().is_empty());
 }
+
+/// The world-enter init (`0x4fc750`) zeroes the row and header counts and keeps the open line
+/// (`[0xbde040]`): the line still answers, the list is empty, a push builds nothing, and only a
+/// rebuild (`0x4fca20`) fills it again, with its `TRADE_SKILL_UPDATE` (`0x4fd164`).
+#[test]
+fn the_world_enter_init_empties_the_list_until_a_rebuild() {
+    use crate::script::tick::heard;
+    let mut s = UiScript::new().unwrap();
+    s.set_trade_skill(Some(two_recipe_state()));
+    assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 3);
+    s.reset_crafts_on_world_enter();
+    heard::listen(&s, &["TRADE_SKILL_UPDATE"], Some("GetNumTradeSkills()"));
+    assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 0);
+    assert_eq!(
+        s.eval::<String>("return (GetTradeSkillLine())").unwrap(),
+        "Tailoring"
+    );
+    assert_eq!(s.model_ref().open_professions().trade_skill, Some(197));
+    let mut more = two_recipe_state();
+    more.recipes[0].num_available = 4;
+    s.set_trade_skill(Some(more));
+    assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 0);
+    assert!(heard::take(&s).is_empty(), "the init and the push signal nothing");
+    s.rebuild_trade_skill(&mut |_| {});
+    assert_eq!(heard::take(&s), ["TRADE_SKILL_UPDATE 3"]);
+}

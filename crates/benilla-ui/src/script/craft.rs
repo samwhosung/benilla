@@ -870,10 +870,151 @@ mod tests {
         assert!(s
             .eval::<bool>("local _,_,t = GetCraftInfo(1) return t ~= 'header'")
             .unwrap());
-        // Expand and collapse do nothing.
-        s.run("ExpandCraftSkillLine(1) CollapseCraftSkillLine(1)")
-            .unwrap();
+        // One group builds no header (`0x4f65fb`), so no row folds.
+        assert!(s.run("CollapseCraftSkillLine(1)").is_err());
         assert_eq!(s.eval::<i64>("return GetNumCrafts()").unwrap(), 2);
+    }
+
+    /// Beast Training's two groups: three line-261 abilities and one with no ability row, in
+    /// group 0, whose line has no `SkillLine.dbc` row.
+    fn two_groups() -> CraftState {
+        let mut row = |spell_id: u32, name: &str, group: u32| {
+            let mut r = recipe(spell_id, name, CraftDifficulty::None, 0);
+            r.group = group;
+            r.skill_line = (group != 0).then(|| "Beast Training".to_string());
+            r
+        };
+        CraftState {
+            name: "Beast Training".into(),
+            display_line: None,
+            rank: 0,
+            max_rank: 0,
+            craft_type: CRAFT_TYPE_BEAST_TRAINING,
+            recipes: vec![
+                row(2649, "Growl", 261),
+                row(24604, "Furious Howl", 0),
+                row(1742, "Cower", 261),
+                row(4187, "Great Stamina", 261),
+            ],
+        }
+    }
+
+    /// The rows the stock window walks, `(name, type, isExpanded)` for each displayed index.
+    fn shown(s: &UiScript) -> Vec<(Option<String>, Option<String>, Option<i64>)> {
+        let n = s.eval::<i64>("return GetNumCrafts()").unwrap();
+        (1..=n)
+            .map(|i| {
+                s.eval(&format!("local n,_,t,_,e = GetCraftInfo({i}) return n,t,e"))
+                    .unwrap()
+            })
+            .collect()
+    }
+
+    /// Two groups build a header row each (`0x4f60c0`, spell id -1). A header skips the
+    /// comparator's group scan (`0x4f697d`, `0x4f6998`), so it keeps position 0 and sorts ahead of
+    /// every recipe; the recipes follow by their group's place in the name-sorted headers, then
+    /// name. A header answers `header` and its expanded flag (`0x4f6f38`, `0x4f6f4f`); one whose
+    /// line has no `SkillLine.dbc` row answers the failure tuple (`0x4f6f1a`), and a header holds
+    /// no recipe for the row verbs.
+    #[test]
+    fn two_groups_head_each_group_ahead_of_the_recipes() {
+        let mut s = UiScript::new().unwrap();
+        s.set_craft(Some(two_groups()));
+        let header = |name: Option<&str>| {
+            (
+                name.map(str::to_string),
+                name.map(|_| "header".to_string()),
+                name.map(|_| 1),
+            )
+        };
+        let rec = |name: &str| (Some(name.to_string()), Some("none".to_string()), None);
+        // The CRT's `shortsort` over the build's order (`0x73f772`): the tied headers swap, so the
+        // nameless line 0 heads the array and its recipe leads the shown ones.
+        assert_eq!(
+            shown(&s),
+            [
+                header(None),
+                header(Some("Beast Training")),
+                rec("Furious Howl"),
+                rec("Cower"),
+                rec("Great Stamina"),
+                rec("Growl"),
+            ]
+        );
+        let at = (1..=2)
+            .find(|i| {
+                s.eval::<bool>(&format!("return GetCraftInfo({i}) == 'Beast Training'"))
+                    .unwrap()
+            })
+            .unwrap();
+        assert_eq!(
+            s.eval::<String>(&format!("return GetCraftSkillLine({at})"))
+                .unwrap(),
+            "Beast Training"
+        );
+        assert!(s
+            .eval::<bool>(&format!("return GetCraftIcon({at}) == nil"))
+            .unwrap());
+        s.run(&format!("SelectCraft({at}) DoCraft({at})")).unwrap();
+        assert_eq!(s.eval::<i64>("return GetCraftSelectionIndex()").unwrap(), 0);
+        assert!(s.take_craft_dos().is_empty());
+        assert_eq!(s.arity(&format!("GetCraftInfo({at})")).unwrap(), 7);
+    }
+
+    /// `CollapseCraftSkillLine` clears its header's bit and `ExpandCraftSkillLine` sets it
+    /// (`0x4f7c71`, `0x4f7cf2`); each re-sorts and signals `CRAFT_UPDATE` in place (`0x4f6be0`). A
+    /// collapsed group's recipes leave the displayed count and sort past it (`0x4f673a`), its
+    /// header shows with a nil `isExpanded`; an index of 0 or below folds every group
+    /// (`0x4f7c47`, `0x4f7cc7`); a recipe row raises (`0x4f7c5d`). The open expands every group
+    /// (`0x4f602c`).
+    #[test]
+    fn the_fold_verbs_fold_a_header_and_every_group_at_zero() {
+        use crate::script::tick::heard;
+        let mut s = UiScript::new().unwrap();
+        // Two named lines, so the header sort never ties (`0x4f6b1e`): Beast Training heads row 1.
+        let mut st = two_groups();
+        st.recipes[1].group = 270;
+        st.recipes[1].skill_line = Some("Pet - Wolf".into());
+        s.set_craft(Some(st));
+        heard::listen(&s, &["CRAFT_UPDATE"], Some("GetNumCrafts()"));
+        let at = |s: &UiScript| {
+            (1..=2)
+                .find(|i| {
+                    s.eval::<bool>(&format!("return GetCraftInfo({i}) == 'Beast Training'"))
+                        .unwrap()
+                })
+                .unwrap()
+        };
+        assert_eq!(at(&s), 1);
+        s.run(&format!("CollapseCraftSkillLine({})", at(&s)))
+            .unwrap();
+        assert_eq!(heard::take(&s), ["CRAFT_UPDATE 3"]);
+        let rows = shown(&s);
+        assert!(
+            rows.contains(&(Some("Beast Training".into()), Some("header".into()), None)),
+            "{rows:?}"
+        );
+        assert_eq!(
+            rows[2],
+            (Some("Furious Howl".into()), Some("none".into()), None)
+        );
+        let err = s.run("CollapseCraftSkillLine(3)").unwrap_err().to_string();
+        assert!(
+            err.contains("Bad skill line in CollapseCraftSkillLine"),
+            "{err}"
+        );
+        assert!(heard::take(&s).is_empty());
+        s.run(&format!("ExpandCraftSkillLine({})", at(&s))).unwrap();
+        assert_eq!(heard::take(&s), ["CRAFT_UPDATE 6"]);
+        s.run("CollapseCraftSkillLine(0)").unwrap();
+        assert_eq!(heard::take(&s), ["CRAFT_UPDATE 2"]);
+        s.craft_opened();
+        assert_eq!(s.eval::<i64>("return GetNumCrafts()").unwrap(), 6);
+        s.run("CollapseCraftSkillLine(-1) ExpandCraftSkillLine(0)")
+            .unwrap();
+        assert_eq!(heard::take(&s), ["CRAFT_UPDATE 2", "CRAFT_UPDATE 6"]);
+        let err = s.run("ExpandCraftSkillLine('x')").unwrap_err().to_string();
+        assert!(err.contains("Usage: ExpandCraftSkillLine(index)"), "{err}");
     }
 
     /// `GetCraftButtonToken` (`0x4f6c90`) pushes the word at the open craft type (`0xbdcfb8`) in
