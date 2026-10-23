@@ -14,7 +14,7 @@ use super::{
 /// What `AutoEquipCursorItem` did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AutoEquip {
-    /// Nothing: no item held, a split carry (which stays held), or no item to put on the cursor.
+    /// Nothing: no item held, or no item to put on the cursor.
     None,
     /// An item from an equipment or equipped-bag slot, put back (`0x5e155a`).
     Back,
@@ -60,10 +60,10 @@ fn equip_asks(model: &Model, item: &CursorItem) -> bool {
 
 /// `AutoEquipCursorItem(suppress)` on the held item: an item from an equipment or equipped-bag
 /// slot, the 0-based slot below 0x17, goes back with `ClearCursor(1,1)` (`0x5e155a`, `0x5e1567`);
-/// any other whole stack, from a bag, the backpack, the bank, a bank bag slot or the keyring, is
-/// asked about when it binds on equip and `suppress` is clear, else sent (`0x5e1575`), the server
-/// picking the slot and swapping the displaced piece back (`ItemHandler.cpp:138-228`); a split
-/// stays held. The send tail clears with `ClearCursor(ebx,1)` (`0x5e1761`): a projectile loads by
+/// any other item, from a bag, the backpack, the bank, a bank bag slot or the keyring, is asked
+/// about when it binds on equip and `suppress` is clear, else sent (`0x5e1575`), the server
+/// picking the slot and swapping the displaced piece back (`ItemHandler.cpp:138-228`). A split
+/// carry is no exception: the call never reads the split count `0xb4b40c`. The send tail clears with `ClearCursor(ebx,1)` (`0x5e1761`): a projectile loads by
 /// entry with `CMSG_SET_AMMO` and stays in its bag, so its arm sets `ebx = 1` (`0x5e1704`,
 /// `0x5e1711`) and the item unlocks; every other arm keeps the lock for the server's answer
 /// (`0x5e1577`). Neither locks anything new.
@@ -73,7 +73,7 @@ pub(crate) fn auto_equip_held(model: &mut Model, suppress: bool) -> AutoEquip {
             clear_cursor(model);
             AutoEquip::Back
         }
-        Some(CursorPayload::Item(item)) if item.count.is_none() => {
+        Some(CursorPayload::Item(item)) => {
             let (bag, slot, guid) = (item.bag, item.slot, item.guid);
             if !suppress && equip_asks(model, item) {
                 return AutoEquip::Asked { bag, slot, guid };

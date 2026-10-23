@@ -969,10 +969,11 @@ mod tests {
     }
 
     /// From the doll, `AutoEquipCursorItem` puts the item back with `ClearCursor(1,1)`
-    /// (`0x5e1567`) and sends nothing; a split carry stays held.
+    /// (`0x5e1567`) and sends nothing; a split carry, whose count it never reads, is sent.
     #[test]
-    fn auto_equip_cursor_item_puts_a_worn_item_back_and_keeps_a_split_carry() {
+    fn auto_equip_cursor_item_puts_a_worn_item_back_and_sends_a_split_carry() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_inventory_slots(doll_slots());
 
         s.run("PickupInventoryItem(1)").unwrap();
@@ -985,10 +986,10 @@ mod tests {
         state.slots.get_mut(&1).unwrap().count = 5;
         s.set_container(0, Some(state));
         s.run("SplitContainerItem(0, 1, 2)").unwrap();
-        assert!(!auto_equip_cursor_item(&mut s.model_mut()));
+        assert!(auto_equip_cursor_item(&mut s.model_mut()));
         s.submit_filed_item_calls();
-        assert!(s.cursor_item().is_some(), "kept");
-        assert!(s.take_container_autoequips().is_empty());
+        assert!(s.cursor_item().is_none(), "sent");
+        assert_eq!(s.take_container_autoequips(), vec![(0, 1)]);
     }
 
     /// `UseInventoryItem` tests the worn item's lock in its call (`0x4c7af0` → `0x5d8d32`): a
