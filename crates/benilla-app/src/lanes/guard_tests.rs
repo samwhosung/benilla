@@ -688,6 +688,30 @@ fn lane_types() -> [TypeId; 11] {
     ]
 }
 
+/// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
+/// so another lane's read of the same type shows as the state it is.
+fn lane_queue_owners() -> [(&'static str, TypeId); 11] {
+    [
+        ("bag view", TypeId::of::<crate::ui_items::feed::BagView>()),
+        ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
+        (
+            "field notices",
+            TypeId::of::<crate::field_watch::NoticeLane>(),
+        ),
+        ("item watchers", TypeId::of::<crate::item_lane::ItemLane>()),
+        ("equip errors", TypeId::of::<crate::ui_items::EquipErrors>()),
+        ("loot", TypeId::of::<crate::ui_loot::LootState>()),
+        ("chat", TypeId::of::<crate::ui_chat::ChatLog>()),
+        ("cast reports", TypeId::of::<crate::ui_cast::CastReports>()),
+        (
+            "auction house",
+            TypeId::of::<crate::ui_auction::HouseLane>(),
+        ),
+        ("party", TypeId::of::<crate::ui_party::GroupState>()),
+        ("party", TypeId::of::<crate::ui_party::PartyLane>()),
+    ]
+}
+
 /// Whether `id` names a `Messages<T>` buffer, which a reader takes from through a read.
 fn is_messages(world: &World, id: ComponentId) -> bool {
     name(world, id).contains("Messages<")
@@ -1488,8 +1512,8 @@ fn every_view_push_of_what_a_handler_writes_is_listed() {
 }
 
 /// The lane firings that read what a handler writes as the frame left it, by lane, beside
-/// [`READS_FRAME_FINAL`]'s feeds: what a firing reads past the call host's own reads and the
-/// lanes' queues, the field watchers' callbacks among them (the notice lane's). A listener fired
+/// [`READS_FRAME_FINAL`]'s feeds: what a firing reads past the call host's own reads and its own
+/// lane's queues ([`lane_queue_owners`]), the field watchers' callbacks among them (the notice lane's). A listener fired
 /// there reads it as the frame's last packet left it, not as its own did (`0x537ae5`). The list
 /// only shrinks: a read goes once a log versions it ([`crate::ui_unit::views`]), and a row that no
 /// longer matches its firing fails.
@@ -1503,9 +1527,11 @@ const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // The views lane reads the stores and records it rewinds as of each packet; the names, the
     // relations' stores and reputations, the selection, the guild and the bar's pet as the frame
     // left them (#2217).
+    // The roster too: the members its party and raid tokens and readable guids come from, past
+    // the records it rewinds, as the frame left it (#2217).
     ("unit views", &["names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
         "net::reputations::Reputations", "target::Selection", "ui_guild::GuildState",
-        "ui_pet::PetBar"]),
+        "ui_party::GroupState", "ui_pet::PetBar"]),
     ("cast reports", &["items::Countdowns", "items::Items", "net::GuidIndex", "net::ObjectStore",
         "ui_action::cast_lines::CastFailRedisplays"]),
     ("item watchers", &["items::Countdowns", "items::Items", "names::NameCache", "net::GuidIndex",
@@ -1513,9 +1539,11 @@ const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("equip errors", &["items::Countdowns", "items::Items", "net::GuidIndex", "net::ObjectStore"]),
     ("auction house", &["items::Items", "names::NameCache", "net::SelfGuid",
         "ui_auction::AuctionOpen"]),
+    // The master-loot candidates placed and named off the raid roster's subgroups as the frame
+    // left it, not as the push's packet did (`0x61c550`, #2217).
     ("loot", &["items::Countdowns", "items::Items", "names::NameCache", "net::GuidIndex",
         "net::ObjectStore", "ui_loot::AutoLootByte", "ui_loot::LootLatch",
-        "ui_loot::LootMoveStart"]),
+        "ui_loot::LootMoveStart", "ui_party::GroupState"]),
     ("chat", &["go_templates::GameObjectTemplates", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "net::SelfGuid", "ui_chat::edit::ChannelState",
         "world_state::WorldStates"]),
@@ -1558,10 +1586,16 @@ fn every_lane_reads_of_what_a_handler_writes_is_listed() {
         eprintln!("skipped: this build carries no type names");
         return;
     }
-    let lane_queues: Vec<String> = lane_types()
+    let owners = lane_queue_owners();
+    assert_eq!(
+        owners.map(|(_, t)| t).into_iter().collect::<BTreeSet<_>>(),
+        lane_types().into_iter().collect::<BTreeSet<_>>(),
+        "every lane queue has its owning lane"
+    );
+    let lane_queues: Vec<(&str, String)> = owners
         .iter()
-        .filter_map(|t| world.components().get_resource_id(*t))
-        .map(|id| short_name(&name(world, id)))
+        .filter_map(|(lane, t)| Some((*lane, world.components().get_resource_id(*t)?)))
+        .map(|(lane, id)| (lane, short_name(&name(world, id))))
         .collect();
     let lanes = world.resource::<super::Lanes>();
     let mut found: Vec<(&str, BTreeSet<String>)> = Vec::new();
@@ -1585,7 +1619,10 @@ fn every_lane_reads_of_what_a_handler_writes_is_listed() {
                 }
             }
         }
-        inputs.retain(|n| !QUEUES_NOT_VIEWS.contains(&n.as_str()) && !lane_queues.contains(n));
+        inputs.retain(|n| {
+            !QUEUES_NOT_VIEWS.contains(&n.as_str())
+                && !lane_queues.iter().any(|(l, q)| *l == lane && q == n)
+        });
         found.push((lane, inputs));
     }
     let wrong: Vec<String> = found
