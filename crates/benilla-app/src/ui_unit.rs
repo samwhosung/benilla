@@ -95,6 +95,8 @@ struct UnitFeedMemo {
     last_rest: Option<(u8, u32, u32)>,
     /// `(count, banked target)`, pushed as a pair because `GetComboPoints` reads both.
     last_combo: Option<(u8, u64)>,
+    /// Our faction template's `(friend, enemy)` masks, as last pushed.
+    faction_masks: Option<Option<(u32, u32)>>,
     /// `(HIDE_HELM, HIDE_CLOAK)`, pushed on the edge only: the Options setter flips the VM's
     /// belief ahead of the server, and a per-frame push would snap it back.
     worn_hidden: Option<(bool, bool)>,
@@ -1606,6 +1608,25 @@ fn feed_units(
                 memo.action_bar_toggles = Some(toggles);
                 script.set_action_bar_toggles(toggles);
             }
+        }
+
+        // Our faction template's masks, which `GetZonePVPInfo` reads at the call
+        // (`0x48d5d6`-`0x48d613`), ahead of the world-enter events whose handlers colour the zone
+        // text; none with no player or no template row (`0x48d5bc`, `0x48d5fe`).
+        let faction_masks = self_q
+            .iter()
+            .next()
+            .and_then(|(store, _)| {
+                world
+                    .factions()?
+                    .catalog()
+                    .template(store.0.unit_faction_template()?)
+            })
+            .map(|t| (t.friend_group_mask, t.enemy_group_mask));
+        if memo.faction_masks != Some(faction_masks) {
+            gate.audit("feed_units", "the faction template's masks");
+            memo.faction_masks = Some(faction_masks);
+            script.set_player_faction_masks(faction_masks);
         }
 
         // The world-enter cascade's events once per world entry, after our descriptor lands and the

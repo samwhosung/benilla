@@ -400,7 +400,7 @@ pub use worldmap::{
 };
 pub use worldstate::WorldStateUiView;
 pub use worn_display::WornDisplay;
-pub use zone_text::ZoneTexts;
+pub use zone_text::{ZonePvp, ZoneTexts};
 
 use mlua::Lua;
 

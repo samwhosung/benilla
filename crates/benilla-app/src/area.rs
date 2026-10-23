@@ -31,13 +31,14 @@
 //! index, because the raw index can alias across adjacent buildings.
 //!
 //! `GetZonePVPInfo`'s type and faction show only on a PvP realm or in one of the six capitals
-//! (zone Flags `0x10`); elsewhere they are nil and the stock zone texts stay uncoloured.
+//! (zone Flags `0x10`); elsewhere they are nil and the stock zone texts stay uncoloured. The
+//! commit pushes the zone's row; the realm flag here and our faction template (`crate::ui_unit`)
+//! are pushed as they change, and the getter reads all three at the call (`0x48d540`).
 
 use bevy::prelude::*;
 
 use benilla_formats::{AreaTableCatalog, AreaTableRow};
 
-use crate::net::{ObjectStore, SelfPlayer};
 use crate::target::Factions;
 use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 
@@ -76,6 +77,8 @@ struct ZoneCache {
     /// The previous hit group (`[0x86860c]`, keyed as the module doc's deviation says).
     wmo_id: u32,
     wmo_group: u32,
+    /// The realm flag last pushed to this VM.
+    realm_pvp: Option<bool>,
 }
 
 /// One resolve's compare inputs.
@@ -108,15 +111,22 @@ fn feed_zone_events(
     world: benilla_world::world_point::WorldPoint,
     areas: Option<Res<AreaTableRes>>,
     factions: Option<Res<Factions>>,
-    self_store: Query<&ObjectStore, With<SelfPlayer>>,
     realm_pvp: Option<Res<RealmPvp>>,
     mut cache: Local<crate::ui_script::VmMemo<ZoneCache>>,
 ) {
     hosted_vm.run(|script| {
-        let (Some(script), Some(areas)) = (script, areas) else {
+        let Some(script) = script else {
             return;
         };
         let cache = cache.get(script);
+        let realm_pvp = realm_pvp.is_some_and(|r| r.0);
+        if cache.realm_pvp != Some(realm_pvp) {
+            cache.realm_pvp = Some(realm_pvp);
+            script.set_realm_pvp(realm_pvp);
+        }
+        let Some(areas) = areas else {
+            return;
+        };
         let Some(leaf) = world.area() else { return };
         let Some(leaf_row) = areas.0.get(leaf) else {
             // An unknown id keeps the last state, as the resolver does for areaId 0.
@@ -197,39 +207,19 @@ fn feed_zone_events(
             return;
         }
 
-        let zone_row = areas.0.get(zone);
-        let template = factions
-            .as_ref()
-            .zip(self_store.single().ok())
-            .and_then(|(f, store)| f.catalog().template(store.0.unit_faction_template()?))
-            .map(|t| (t.friend_group_mask, t.enemy_group_mask));
-        let realm_pvp = realm_pvp.is_some_and(|r| r.0);
-        let (ty, is_arena) = zone_pvp_info(realm_pvp, leaf_row, zone_row, template);
-        // factionName is FactionGroup.dbc's Name for the zone's mask bit.
-        let pvp = ty.map(|ty| {
-            let mask = zone_row.map_or(0, |r| r.faction_group_mask);
-            let name = factions
-                .as_ref()
-                .and_then(|f| f.catalog().faction_group_name(mask))
-                .unwrap_or("");
-            (ty, name)
-        });
-        let pvp_type = pvp.map_or("", |(ty, _)| ty);
-
         script.set_zone_texts(benilla_ui::script::ZoneTexts {
             zone: signal.zone_text.clone(),
             real_zone: real_zone_text,
             subzone: signal.subzone_text.clone(),
             minimap: minimap_text.clone(),
-            pvp_type: pvp.map(|(ty, _)| ty.to_string()),
-            pvp_faction: pvp_faction_text(pvp),
-            is_arena,
+            pvp_zone: zone_pvp(areas.0.get(zone), factions.as_deref()),
+            is_arena: leaf_row.flags & 0x80 != 0,
         });
 
         if let Some(event) = event {
             script.fire_event(event, vec![]);
             debug!(
-                "area: {event} → zone {:?} / sub {:?} ({pvp_type})",
+                "area: {event} → zone {:?} / sub {:?}",
                 signal.zone_text, signal.subzone_text
             );
         }
@@ -246,41 +236,24 @@ fn feed_zone_events(
     })
 }
 
-/// `GetZonePVPInfo`'s second value: with a type answered, the faction name is always a string,
-/// starting as the empty string (`0x48d633`, `0x882748`) and pushed by `lua_pushstring`
-/// (`0x48d68f`) whether or not a FactionGroup row supplied one; only the bail (`0x48d6b5`) pushes
-/// nil.
-fn pvp_faction_text(pvp: Option<(&str, &str)>) -> Option<String> {
-    pvp.map(|(_, faction)| faction.to_string())
-}
-
-/// `GetZonePVPInfo` (`0x48d540`) returns three values, `pvpType, factionName, isArena`; this gives
-/// the first and third, [`pvp_faction_text`] the second. isArena is the leaf's Flags `0x80`, read
-/// before any bail. The type is nil with no zone row, no faction template, or the display gate
-/// closed: it opens on a PvP realm ([`RealmPvp`]) or in a zone whose Flags carry `0x10`, the six
-/// capitals (`0x48d5c2`/`0x48d5cc`). Open, it is the zone's FactionGroupMask against the template's
-/// `(friend, enemy)` masks, "contested" when neither, never "arena".
-fn zone_pvp_info(
-    realm_pvp: bool,
-    leaf: &AreaTableRow,
+/// What `GetZonePVPInfo` (`0x48d540`) reads of the committed zone's row `zone`: the capital bit
+/// (Flags `0x10`, `0x48d5cc`), the `FactionGroupMask` (`+0x50`) and the faction name,
+/// `FactionGroup.dbc`'s for the mask, `""` when no row names one (`0x48d633`). `None` with no row
+/// (`0x48d5b4`).
+fn zone_pvp(
     zone: Option<&AreaTableRow>,
-    template: Option<(u32, u32)>,
-) -> (Option<&'static str>, bool) {
-    let is_arena = leaf.flags & 0x80 != 0;
-    let ty = zone
-        .filter(|z| realm_pvp || z.flags & 0x10 != 0)
-        .zip(template)
-        .map(|(z, (friend, enemy))| {
-            let mask = z.faction_group_mask;
-            if mask & friend != 0 {
-                "friendly"
-            } else if mask & enemy != 0 {
-                "hostile"
-            } else {
-                "contested"
-            }
-        });
-    (ty, is_arena)
+    factions: Option<&Factions>,
+) -> Option<benilla_ui::script::ZonePvp> {
+    let zone = zone?;
+    let mask = zone.faction_group_mask;
+    Some(benilla_ui::script::ZonePvp {
+        capital: zone.flags & 0x10 != 0,
+        faction_group_mask: mask,
+        faction_name: factions
+            .and_then(|f| f.catalog().faction_group_name(mask))
+            .unwrap_or("")
+            .to_string(),
+    })
 }
 
 /// `[0x88272c]`, the realm's PvP flag the display gate reads: the selected realm's
@@ -407,75 +380,22 @@ mod tests {
         }
     }
 
-    /// An Alliance player's template: friend Alliance (2), enemy Horde (4).
-    const ALLIANCE: Option<(u32, u32)> = Some((2, 4));
-
-    /// The display gate (`0x48d5c2`/`0x48d5cc`): a PvE realm outside a capital gets no type; a
-    /// capital's Flags `0x10` opens it there, and a PvP realm opens it everywhere.
+    /// The zone's row as the getter reads it: the capital bit, the mask and its faction name,
+    /// `""` for a mask no `FactionGroup` row names; no row, nothing to read.
     #[test]
-    fn the_pvp_type_shows_on_a_pvp_realm_or_in_a_capital() {
-        let elwynn = row(0x40, 2);
-        let stormwind = row(0x138, 2);
+    fn the_commit_pushes_the_zones_capital_bit_mask_and_faction_name() {
         let orgrimmar = row(0x138, 4);
         let stranglethorn = row(0x40, 0);
-        let pvp =
-            |realm_pvp, zone: &AreaTableRow| zone_pvp_info(realm_pvp, zone, Some(zone), ALLIANCE).0;
-
-        assert_eq!(pvp(false, &elwynn), None, "PvE realm, outside a capital");
         assert_eq!(
-            pvp(false, &stranglethorn),
-            None,
-            "PvE realm, ownerless zone"
+            zone_pvp(Some(&orgrimmar), None),
+            Some(benilla_ui::script::ZonePvp {
+                capital: true,
+                faction_group_mask: 4,
+                faction_name: String::new(),
+            })
         );
-        assert_eq!(
-            pvp(false, &stormwind),
-            Some("friendly"),
-            "PvE realm, own capital"
-        );
-        assert_eq!(
-            pvp(false, &orgrimmar),
-            Some("hostile"),
-            "PvE realm, enemy capital"
-        );
-
-        assert_eq!(pvp(true, &elwynn), Some("friendly"));
-        assert_eq!(pvp(true, &stranglethorn), Some("contested"));
-        assert_eq!(pvp(true, &orgrimmar), Some("hostile"));
-    }
-
-    /// An answered type always carries a faction string, `""` in an ownerless zone such as
-    /// Stranglethorn Vale (`0x48d633`); no type, no string (`0x48d6b5`).
-    #[test]
-    fn an_answered_type_carries_an_empty_faction_name_not_nil() {
-        assert_eq!(
-            pvp_faction_text(Some(("contested", ""))),
-            Some(String::new())
-        );
-        assert_eq!(
-            pvp_faction_text(Some(("friendly", "Alliance"))),
-            Some("Alliance".to_string())
-        );
-        assert_eq!(pvp_faction_text(None), None);
-    }
-
-    /// isArena is the leaf's `0x80`, read before any bail, so a closed gate keeps it.
-    #[test]
-    fn is_arena_survives_a_closed_gate() {
-        let battle_ring = row(0xd0, 0);
-        let stranglethorn = row(0x40, 0);
-        assert_eq!(
-            zone_pvp_info(false, &battle_ring, Some(&stranglethorn), ALLIANCE),
-            (None, true)
-        );
-        assert_eq!(
-            zone_pvp_info(true, &battle_ring, Some(&stranglethorn), ALLIANCE),
-            (Some("contested"), true)
-        );
-        assert_eq!(
-            zone_pvp_info(true, &battle_ring, Some(&stranglethorn), None),
-            (None, true),
-            "no faction template"
-        );
+        assert!(!zone_pvp(Some(&stranglethorn), None).unwrap().capital);
+        assert_eq!(zone_pvp(None, None), None);
     }
 
     /// A realm type with no row keeps what the last world entry stored.
@@ -487,15 +407,6 @@ mod tests {
         assert!(latched_realm_pvp(false, Some(true)));
     }
 
-    /// No zone row is a bail, not an ownerless zone.
-    #[test]
-    fn a_missing_zone_row_has_no_pvp_type() {
-        assert_eq!(
-            zone_pvp_info(true, &row(0, 0), None, ALLIANCE),
-            (None, false)
-        );
-    }
-
     /// On the install's AreaTable the gate opens in exactly the six capitals for a PvE realm.
     #[test]
     fn the_six_capitals_are_the_zones_a_pve_realm_colours() {
@@ -504,9 +415,8 @@ mod tests {
         let cat = benilla_formats::load_area_table_catalog(&mut chain).expect("AreaTable");
         let open: Vec<u32> = (0..=u32::from(u16::MAX))
             .filter(|&id| {
-                cat.get(id).is_some_and(|r| {
-                    r.zone_id == 0 && zone_pvp_info(false, r, Some(r), ALLIANCE).0.is_some()
-                })
+                cat.get(id)
+                    .is_some_and(|r| r.zone_id == 0 && zone_pvp(Some(r), None).unwrap().capital)
             })
             .collect();
         assert_eq!(open, [1497, 1519, 1537, 1637, 1638, 1657]);
@@ -552,7 +462,7 @@ mod tests {
     /// and the type follows a template that changes.
     #[test]
     fn the_zone_pvp_type_reads_our_template_at_the_call() {
-        use crate::net::{Guid, GuidIndex, NetCommands, SelfGuid, SelfPlayer};
+        use crate::net::{Guid, GuidIndex, NetCommands, ObjectStore, SelfGuid, SelfPlayer};
         use crate::target::relations::fixture::{factions, HUMAN, ORC};
         use benilla_protocol::messages::ObjectType;
         use benilla_protocol::ObjectFields;

@@ -17,21 +17,33 @@ fn text_of(s: &UiScript, fontstring: &str) -> String {
 }
 
 /// The zone caches the app pushes on an area change: the minimap line is the subzone, else the
-/// zone; an empty PvP word is nil, and an answered one carries its faction name, `""` included.
+/// zone. The PvP word comes of the zone's row on a PvP realm against an Alliance template (friend
+/// 2, enemy 4): `"friendly"` an Alliance zone, `"hostile"` a Horde one, `"contested"` an ownerless
+/// one, `""` no row, each answered one with its faction name, `""` included.
 fn area(zone: &str, sub: &str, pvp: &str, faction: &str) -> ZoneTexts {
-    let some = |t: &str| (!t.is_empty()).then(|| t.to_string());
+    let mask = match pvp {
+        "friendly" => Some(2),
+        "hostile" => Some(4),
+        "contested" => Some(0),
+        _ => None,
+    };
     ZoneTexts {
         zone: zone.into(),
         real_zone: zone.into(),
         subzone: sub.into(),
         minimap: if sub.is_empty() { zone } else { sub }.into(),
-        pvp_type: some(pvp),
-        pvp_faction: (!pvp.is_empty()).then(|| faction.to_string()),
+        pvp_zone: mask.map(|faction_group_mask| benilla_ui::script::ZonePvp {
+            capital: false,
+            faction_group_mask,
+            faction_name: faction.to_string(),
+        }),
         is_arena: false,
     }
 }
 
 fn set_area(s: &mut UiScript, zone: &str, sub: &str, pvp: &str, faction: &str) {
+    s.set_realm_pvp(true);
+    s.set_player_faction_masks(Some((2, 4)));
     s.set_zone_texts(area(zone, sub, pvp, faction));
 }
 

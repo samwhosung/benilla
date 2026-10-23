@@ -179,10 +179,15 @@ fn the_getters_answer_the_pushed_state_in_their_1_12_shapes() {
         real_zone: "Elwynn Forest".into(),
         subzone: "".into(),
         minimap: "Stormwind City".into(),
-        pvp_type: Some("friendly".into()),
-        pvp_faction: Some("Alliance".into()),
+        pvp_zone: Some(crate::script::ZonePvp {
+            capital: true,
+            faction_group_mask: 2,
+            faction_name: "Alliance".into(),
+        }),
         is_arena: true,
     });
+    // An Alliance template: friend Alliance (2), enemy Horde (4).
+    s.set_player_faction_masks(Some((2, 4)));
     s.set_game_time(21, 7);
     assert_eq!(
         s.eval::<(String, String, String, String)>(
@@ -219,8 +224,10 @@ fn the_getters_answer_the_pushed_state_in_their_1_12_shapes() {
     // An ownerless zone: the type is answered and the faction name is the empty string
     // (`0x48d633`, pushed at `0x48d68f`), not nil.
     s.set_zone_texts(crate::script::ZoneTexts {
-        pvp_type: Some("contested".into()),
-        pvp_faction: Some(String::new()),
+        pvp_zone: Some(crate::script::ZonePvp {
+            capital: true,
+            ..Default::default()
+        }),
         ..Default::default()
     });
     assert_eq!(s.arity("GetZonePVPInfo()").unwrap(), 3);
@@ -232,6 +239,51 @@ fn the_getters_answer_the_pushed_state_in_their_1_12_shapes() {
         .unwrap(),
         "contested|string:|nil"
     );
+}
+
+/// `GetZonePVPInfo`'s type at the call (`0x48d540`): the gate opens on a PvP realm (`0x88272c`) or
+/// in a capital (Flags `0x10`, `0x48d5cc`), and needs a zone row and a template (`0x48d5b4`,
+/// `0x48d5e1`); open, the zone's mask against the template's friend, then enemy, mask, else
+/// contested. Each read is the one pushed last, so a template or realm flag that lands after the
+/// zone's commit answers with no zone change.
+#[test]
+fn the_zone_pvp_type_reads_the_realm_and_the_template_at_the_call() {
+    let mut s = UiScript::new().unwrap();
+    let zone = |capital: bool, faction_group_mask: u32| crate::script::ZoneTexts {
+        pvp_zone: Some(crate::script::ZonePvp {
+            capital,
+            faction_group_mask,
+            faction_name: String::new(),
+        }),
+        ..Default::default()
+    };
+    let ty = |s: &UiScript| {
+        s.eval::<Option<String>>("return (GetZonePVPInfo())")
+            .unwrap()
+    };
+    // An Alliance player: friend 2, enemy 4.
+    s.set_player_faction_masks(Some((2, 4)));
+    for (capital, realm, mask, want) in [
+        (false, false, 2, None),
+        (true, false, 2, Some("friendly")),
+        (true, false, 4, Some("hostile")),
+        (false, true, 0, Some("contested")),
+        (false, true, 4, Some("hostile")),
+    ] {
+        s.set_zone_texts(zone(capital, mask));
+        s.set_realm_pvp(realm);
+        assert_eq!(
+            ty(&s).as_deref(),
+            want,
+            "capital {capital}, realm {realm}, mask {mask}"
+        );
+    }
+    s.set_player_faction_masks(None);
+    assert_eq!(ty(&s), None, "no template");
+    s.set_player_faction_masks(Some((4, 2)));
+    assert_eq!(ty(&s).as_deref(), Some("friendly"), "a Horde template");
+    s.set_zone_texts(Default::default());
+    assert_eq!(ty(&s), None, "no zone row");
 }
 
 /// The reference's handler slot starts empty (`[0x8722cc]` = -1 at `0x7039e0`), so

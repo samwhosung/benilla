@@ -2,6 +2,8 @@
 //! `GetMinimapZoneText` and `GetZonePVPInfo`: readers of the zone caches the host pushes on an
 //! area change, before it fires `MINIMAP_ZONE_CHANGED` or the `ZONE_CHANGED` family. The caches
 //! live in the [`Model`], out of an addon's reach, as the reference's live in the client's BSS.
+//! `GetZonePVPInfo` reads its zone's rows off the commit and, at the call, the realm's PvP flag
+//! and the active player's faction template, which the host pushes as they change.
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -18,20 +20,64 @@ pub struct ZoneTexts {
     pub subzone: String,
     /// `GetMinimapZoneText`: the subzone, else the zone.
     pub minimap: String,
-    /// `GetZonePVPInfo`'s type, `"friendly"`, `"hostile"` or `"contested"`; `None` when the
-    /// player, the zone or its faction template is missing, or on a PvE realm outside a capital.
-    pub pvp_type: Option<String>,
-    /// `GetZonePVPInfo`'s faction, `FactionGroup.dbc`'s name for the zone's mask bit, `""` when no
-    /// row names one (`0x48d633`); `None` only where `pvp_type` is `None` (`0x48d6b5`).
-    pub pvp_faction: Option<String>,
-    /// `GetZonePVPInfo`'s isArena: the leaf area's flag `0x80`, the free-for-all pit.
+    /// The `AreaTable.dbc` row of the zone the commit stored (`0xb4e314`), as `GetZonePVPInfo`
+    /// reads it; `None` for an id with no row (`0x48d5b4`).
+    pub pvp_zone: Option<ZonePvp>,
+    /// `GetZonePVPInfo`'s isArena: the leaf area's flag `0x80` (`0xb4e318`, `0x48d575`), the
+    /// free-for-all pit.
     pub is_arena: bool,
+}
+
+/// What `GetZonePVPInfo` reads of the zone's `AreaTable.dbc` row.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ZonePvp {
+    /// Flags `0x10`, the six capitals: the gate opens there on a PvE realm (`0x48d5cc`).
+    pub capital: bool,
+    /// `FactionGroupMask` (`+0x50`), tested against the template's masks (`0x48d604`-`0x48d613`).
+    pub faction_group_mask: u32,
+    /// `FactionGroup.dbc`'s name for the first row whose bit the mask holds and whose name is not
+    /// empty, else `""` (`0x48d633`-`0x48d684`).
+    pub faction_name: String,
+}
+
+/// `GetZonePVPInfo`'s first two values: nil with no zone row (`0x48d5b4`), no active player
+/// (`0x48d5bc`), the gate closed, neither the realm flag `0x88272c` nor the capital bit
+/// (`0x48d5c2`-`0x48d5d0`), or no template row (`0x48d5e1`-`0x48d5fe`). Open, `"friendly"` when
+/// the template's friend mask meets the zone's, else `"hostile"` when its enemy mask does, else
+/// `"contested"` (`0x48d607`-`0x48d61d`), with the zone's faction name.
+fn zone_pvp_type(
+    zone: Option<&ZonePvp>,
+    realm_pvp: bool,
+    template: Option<(u32, u32)>,
+) -> Option<(&'static str, &str)> {
+    let zone = zone.filter(|z| realm_pvp || z.capital)?;
+    let (friend, enemy) = template?;
+    let mask = zone.faction_group_mask;
+    let ty = if mask & friend != 0 {
+        "friendly"
+    } else if mask & enemy != 0 {
+        "hostile"
+    } else {
+        "contested"
+    };
+    Some((ty, &zone.faction_name))
 }
 
 impl super::UiScript {
     /// Push the zone caches; the caller fires the zone events after.
     pub fn set_zone_texts(&mut self, texts: ZoneTexts) {
         self.model_mut().zone = texts;
+    }
+
+    /// Push the realm's PvP flag, `0x88272c`, which `GetZonePVPInfo` reads at the call.
+    pub fn set_realm_pvp(&mut self, on: bool) {
+        self.model_mut().realm_pvp = on;
+    }
+
+    /// Push the active player's faction template masks, `(friend, enemy)`, `None` with no active
+    /// player or no template row: what `GetZonePVPInfo` reads at the call (`0x48d5d6`-`0x48d613`).
+    pub fn set_player_faction_masks(&mut self, masks: Option<(u32, u32)>) {
+        self.model_mut().player_faction_masks = masks;
     }
 }
 
@@ -63,13 +109,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let z = &model.zone;
-            let string = |s: &Option<String>| match s {
+            let pvp = zone_pvp_type(
+                z.pvp_zone.as_ref(),
+                model.realm_pvp,
+                model.player_faction_masks,
+            );
+            let string = |s: Option<&str>| match s {
                 Some(s) => lua.create_string(s).map(Value::String),
                 None => Ok(Value::Nil),
             };
             Ok(MultiValue::from_vec(vec![
-                string(&z.pvp_type)?,
-                string(&z.pvp_faction)?,
+                string(pvp.map(|(ty, _)| ty))?,
+                string(pvp.map(|(_, faction)| faction))?,
                 if z.is_arena {
                     Value::Number(1.0)
                 } else {

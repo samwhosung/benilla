@@ -466,6 +466,10 @@ pub(crate) struct Model {
     pub(crate) game_time: Option<(i32, i32)>,
     /// The zone caches the four zone-text getters and `GetZonePVPInfo` read.
     pub(crate) zone: super::ZoneTexts,
+    /// The realm's PvP flag `0x88272c` and the active player's faction template masks, which
+    /// `GetZonePVPInfo` reads at the call.
+    pub(crate) realm_pvp: bool,
+    pub(crate) player_faction_masks: Option<(u32, u32)>,
     /// The current map's `Map.dbc` `InstanceType`, all `IsInInstance()` reads; `None` for no row.
     pub(crate) instance_type: Option<u32>,
     /// `CanShowResetInstances()`, the reference's four-term predicate (`0x495c90`), app-computed.
@@ -1538,6 +1542,8 @@ impl Model {
             now: 0.0,
             game_time: None,
             zone: Default::default(),
+            realm_pvp: false,
+            player_faction_masks: None,
             instance_type: None,
             can_reset_instances: false,
             reset_instance_asks: 0,
