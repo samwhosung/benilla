@@ -353,7 +353,7 @@ pub(crate) use region::{
     load_blend_mode, load_texture_file, load_texture_name, load_xml_font_file,
     texture_name_verdict, FileLoad,
 };
-pub use reputation::{FactionEntry, ReputationCall, ReputationState};
+pub use reputation::{FactionEntry, ReputationCall, ReputationListOp, ReputationState};
 pub use session::SessionRequest;
 pub use shapeshift::ShapeshiftFormView;
 pub(crate) use simplehtml::{

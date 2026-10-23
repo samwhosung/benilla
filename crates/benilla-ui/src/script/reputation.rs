@@ -88,6 +88,20 @@ pub enum ReputationCall {
     Watch(i32),
 }
 
+/// What a reputation message does to the list, in its handler's order; the app hands them over
+/// after the snapshot they ride on ([`super::UiScript::apply_reputation_ops`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReputationListOp {
+    /// `SMSG_SET_FACTION_VISIBLE` listing a slot it made visible: the adder, then the sort
+    /// (`0x4d5738`, `0x4d574a`).
+    Visible(u32),
+    /// `SMSG_SET_FACTION_STANDING`: the adder for each slot it made visible, in its entries' order
+    /// (`0x4d5826`), then the sort when a slot's flag byte moved (`0x4d5876` → `0x4d58c8`).
+    Standing { listed: Vec<u32>, flags_moved: bool },
+    /// `SMSG_INITIALIZE_FACTIONS` with the player held: the rebuild (`0x4d5694`).
+    Rebuild,
+}
+
 /// One list entry (20 bytes in the reference, `0x4d5290`); `pub(crate)` only because
 /// [`super::model::Model`] stores them.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -140,6 +154,11 @@ impl super::UiScript {
         if added || moved {
             sort(&mut model);
         }
+    }
+
+    /// Apply the list's half of the reputation messages, in arrival order.
+    pub fn apply_reputation_ops(&mut self, ops: Vec<ReputationListOp>) {
+        let _ = ops;
     }
 
     /// The world-enter cascade's rebuild (`0x4909d3` calls `0x4d5430`): the player in the world,
@@ -1216,6 +1235,71 @@ mod tests {
         .unwrap();
         s.reputation_enter_world();
         assert_eq!(s.eval::<i64>("return N").unwrap(), 2);
+    }
+
+    /// `SMSG_SET_FACTION_ATWAR` writes the bit and sorts nothing (`0x4d56b0`), so the rows past
+    /// the shown ones stay where the last sort left them; a sort would move them, as the CRT's
+    /// `qsort` reorders rows its comparator ties (`0x4d5f02`).
+    #[test]
+    fn an_at_war_push_leaves_the_folded_rows_where_they_were() {
+        let mut s = seated();
+        s.run("CollapseFactionHeader(0)").unwrap();
+        let tail = |s: &UiScript| {
+            s.eval::<Vec<String>>(
+                "local t = {} for i = 1, 9 do t[i] = (GetFactionInfo(i)) or '-' end return t",
+            )
+            .unwrap()
+        };
+        let before = tail(&s);
+        let mut war = state();
+        for e in &mut war.entries {
+            if e.faction_id == 87 {
+                e.at_war = true;
+            }
+        }
+        s.set_reputation(war);
+        assert_eq!(tail(&s), before);
+    }
+
+    /// Each `SMSG_SET_FACTION_VISIBLE` adds its row and sorts (`0x4d5738`, `0x4d574a`), so two
+    /// in one frame sort twice, in their order. Emulated on the bytes' rules: with every header
+    /// folded, Ironforge then the Bloodsail Buccaneers leave Booty Bay, Ironforge, Stormwind,
+    /// Argent Dawn and the Bloodsail Buccaneers past the shown rows.
+    #[test]
+    fn each_visible_message_adds_and_sorts_in_its_order() {
+        let mut s = UiScript::new().expect("VM");
+        let mut st = state();
+        for e in &mut st.entries {
+            if e.faction_id == 47 || e.faction_id == 87 {
+                e.visible = false;
+            }
+        }
+        s.set_reputation(st);
+        s.run("CollapseFactionHeader(0)").unwrap();
+        s.set_reputation(state());
+        s.apply_reputation_ops(vec![
+            ReputationListOp::Visible(20),
+            ReputationListOp::Visible(0),
+        ]);
+        let all = s
+            .eval::<Vec<String>>(
+                "local t = {} for i = 1, 9 do t[i] = (GetFactionInfo(i)) or '-' end return t",
+            )
+            .unwrap();
+        assert_eq!(
+            all,
+            [
+                "Alliance",
+                "Steamwheedle Cartel",
+                "Other",
+                "Inactive",
+                "Booty Bay",
+                "Ironforge",
+                "Stormwind",
+                "Argent Dawn",
+                "Bloodsail Buccaneers",
+            ]
+        );
     }
 
     /// Deviation pinned: an index one past the last entry names faction 0, as one further does,
