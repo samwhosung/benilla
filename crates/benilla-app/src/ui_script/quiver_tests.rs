@@ -345,6 +345,7 @@ fn seat_a_buff(s: &mut UiScript, spell_id: u32, name: &str, icon: &str) {
         until_cancelled: true,
         channeled: false,
         raid_listed: false,
+        vision_hidden: false,
     }]);
     s.fire_event("PLAYER_AURAS_CHANGED", vec![]);
 }

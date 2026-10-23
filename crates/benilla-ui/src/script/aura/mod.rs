@@ -55,6 +55,11 @@ pub struct AuraState {
     /// Kept by a set `raidFilter`: a buff the player could cast (`0x4b3870`), a debuff whose
     /// dispel type a spell the player knows removes (`0x4b3920`). Read on a unit's list alone.
     pub raid_listed: bool,
+    /// Hidden by `IsAuraDisplayable`'s vision test (`0x51989c`-`0x5198b8`): the spell's
+    /// `RequiredAuraVision` names a bit the active player's `PLAYER_FIELD_BYTES2` byte 1 lacks.
+    /// `UnitBuff` and `UnitDebuff` skip it (`0x51966d`, `0x519a0c`); `GameTooltip:SetUnitBuff`
+    /// counts it, its own test reading no vision (`0x534df0`). Read on a unit's list alone.
+    pub vision_hidden: bool,
 }
 
 /// One unit's auras as the app pushes them ([`crate::script::UiScript::set_unit_auras`]): every
@@ -132,12 +137,13 @@ pub(crate) fn auras_of<'m>(
 }
 
 /// `UnitBuff`'s and `UnitDebuff`'s walk over `list`: the half the verb names, the buffs only
-/// through the unit gate ([`UnitAuraList::buffs_visible`]).
+/// through the unit gate ([`UnitAuraList::buffs_visible`]), past the vision test
+/// ([`AuraState::vision_hidden`]).
 fn listed(list: &UnitAuraList, helpful: bool) -> impl Iterator<Item = &AuraState> {
     let gate_open = !helpful || list.buffs_visible;
     list.auras
         .iter()
-        .filter(move |a| gate_open && a.helpful == helpful)
+        .filter(move |a| gate_open && a.helpful == helpful && !a.vision_hidden)
 }
 
 /// The `raidFilter` argument, read as a script flag with default 0 (`0x6f1c10` at `0x51958b`,
@@ -352,6 +358,7 @@ mod tests {
             until_cancelled: false,
             channeled: false,
             raid_listed: false,
+            vision_hidden: false,
         }
     }
 

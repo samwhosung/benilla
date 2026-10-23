@@ -248,6 +248,7 @@ fn unit_aura_state(catalog: Option<&SpellCatalog>, input: &AuraInput) -> AuraSta
         flags,
         level,
         raid_listed,
+        vision_hidden,
     } = input;
     let display = catalog.and_then(|cat| cat.get(spell_id));
     AuraState {
@@ -268,12 +269,13 @@ fn unit_aura_state(catalog: Option<&SpellCatalog>, input: &AuraInput) -> AuraSta
         until_cancelled: false,
         channeled: display.is_some_and(|d| d.attributes_ex & SPELL_ATTR_EX_IS_CHANNELED != 0),
         raid_listed,
+        vision_hidden,
     }
 }
 
 /// What one aura of a unit's list is built from: its slot, spell, stack count, `AURAFLAGS` nibble,
-/// `AURALEVELS` byte and `raidFilter` verdict ([`RaidFilter`]). A list is a pure function of these
-/// and the spell catalog.
+/// `AURALEVELS` byte, `raidFilter` verdict ([`RaidFilter`]) and vision verdict ([`vision_hides`]).
+/// A list is a pure function of these and the spell catalog.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct AuraInput {
     slot: u8,
@@ -282,6 +284,23 @@ struct AuraInput {
     flags: u8,
     level: u8,
     raid_listed: bool,
+    vision_hidden: bool,
+}
+
+/// `IsAuraDisplayable`'s vision test (`0x519873`-`0x5198b8`): a spell whose `RequiredAuraVision`
+/// is set shows only while the active player exists and bit `value - 1` of its
+/// `PLAYER_FIELD_BYTES2` byte 1 is set, the shift's count taken mod 32 and its low byte tested
+/// (`0x5198a8`-`0x5198b6`). `vision` is that byte, `None` with no active player (`0x51989a`). A
+/// spell the catalog lacks keeps the display filter's deviation and shows.
+fn vision_hides(catalog: Option<&SpellCatalog>, spell_id: u32, vision: Option<u8>) -> bool {
+    let need = catalog
+        .and_then(|c| c.get(spell_id))
+        .map_or(0, |d| d.required_aura_vision);
+    if need == 0 {
+        return false;
+    }
+    let bit = (1u32 << (need.wrapping_sub(1) & 31)) as u8;
+    vision.is_none_or(|v| v & bit == 0)
 }
 
 /// The list [`AuraInput`]s make.
@@ -295,11 +314,13 @@ fn aura_list(catalog: Option<&SpellCatalog>, inputs: &[AuraInput]) -> Vec<AuraSt
 /// A unit's auras as `UnitBuff 0x519500`, `UnitDebuff 0x5198f0` and the tooltip's
 /// `SetUnitBuff 0x534ac0` read them: ascending slot within each half, no durations, through the
 /// display filter, every one whatever the unit gate says ([`buffs_visible_on`]), which the list
-/// carries beside them, each with its `raidFilter` verdict.
+/// carries beside them, each with its `raidFilter` verdict and, against the active player's
+/// `vision`, the bindings' vision verdict ([`vision_hides`]).
 fn other_unit_inputs<'a>(
     store: &'a ObjectStore,
     catalog: Option<&'a SpellCatalog>,
     raid: &'a RaidFilter,
+    vision: Option<u8>,
 ) -> impl Iterator<Item = AuraInput> + 'a {
     store
         .0
@@ -312,18 +333,20 @@ fn other_unit_inputs<'a>(
             flags: a.flags,
             level: a.level,
             raid_listed: raid.keeps(catalog, a.slot, a.spell_id),
+            vision_hidden: vision_hides(catalog, a.spell_id, vision),
         })
 }
 
 /// A roster record's aura block as the two bindings' roster walk reads it (`0x519763`-`0x5197d2`,
-/// `0x519b53`-`0x519bc5`): ascending slot, the display filter alone (`0x51979f`, `0x519b8f`), no
-/// unit gate and no `AURAFLAGS`, which the record does not hold. The stack count is always 1
+/// `0x519b53`-`0x519bc5`): ascending slot, the display filter and its vision test (`0x51979f`,
+/// `0x519b8f`), no unit gate and no `AURAFLAGS`, which the record does not hold. The stack count is always 1
 /// (`0x51980f`, `0x519c2d`), nothing is cancelable, and the level is 0, what `SetUnitBuff` passes
 /// for a record (`0x534da8`).
 fn record_inputs<'a>(
     slots: impl Iterator<Item = (u8, u16)> + 'a,
     catalog: Option<&'a SpellCatalog>,
     raid: &'a RaidFilter,
+    vision: Option<u8>,
 ) -> impl Iterator<Item = AuraInput> + 'a {
     slots
         .map(|(slot, spell)| (slot, u32::from(spell)))
@@ -335,6 +358,7 @@ fn record_inputs<'a>(
             flags: 0,
             level: 0,
             raid_listed: raid.keeps(catalog, slot, spell_id),
+            vision_hidden: vision_hides(catalog, spell_id, vision),
         })
 }
 
@@ -664,6 +688,7 @@ fn feed_auras(
                 catalog,
                 catalog_moved,
                 raid: &mem.raid,
+                vision: Some(store.0.player_aura_vision()),
             },
         );
 
@@ -757,8 +782,10 @@ fn player_list(
                 ),
                 channeled: display
                     .is_some_and(|d| d.attributes_ex & SPELL_ATTR_EX_IS_CHANNELED != 0),
-                // No reader of the buff cache takes a `raidFilter`.
+                // No reader of the buff cache takes a `raidFilter`, nor runs the vision test
+                // (`0x4e4170`).
                 raid_listed: false,
+                vision_hidden: false,
             }
         })
         .collect()
@@ -819,7 +846,8 @@ pub(crate) struct AuraViews<'w> {
 
 impl AuraViews<'_> {
     /// `guid`'s list off `store`, its descriptor, else, when a group token names it
-    /// (`record_ok`), its roster record in `group`; `None` for a guid with neither.
+    /// (`record_ok`), its roster record in `group`; `None` for a guid with neither. `me` is our
+    /// own descriptor as of the same place, whose vision the list is read against.
     pub(crate) fn list(
         &self,
         guid: u64,
@@ -827,14 +855,25 @@ impl AuraViews<'_> {
         record_ok: bool,
         group: Option<&crate::ui_party::GroupState>,
         relations: &crate::target::RelationWorld,
+        me: Option<&ObjectStore>,
     ) -> Option<benilla_ui::script::UnitAuraList> {
         let raid = &self.mem.as_deref()?.raid;
         let catalog = self.spells.as_ref().map(|s| &s.catalog);
-        let (rel, me) = (relations.get(), relations.me());
+        let (rel, viewer) = (relations.get(), relations.me());
         let buffs_visible = |guid: u64, unit: &ObjectStore| {
-            buffs_visible_on(&rel, &relations.unit_of(guid, unit), me.as_ref())
+            buffs_visible_on(&rel, &relations.unit_of(guid, unit), viewer.as_ref())
         };
-        units::list_of(guid, store, record_ok, group, &buffs_visible, catalog, raid)
+        let vision = me.map(|s| s.0.player_aura_vision());
+        units::list_of(
+            guid,
+            store,
+            record_ok,
+            group,
+            &buffs_visible,
+            catalog,
+            raid,
+            vision,
+        )
     }
 }
 
@@ -909,7 +948,7 @@ mod tests {
     /// [`other_unit_inputs`] as the list.
     fn other_unit_auras(store: &ObjectStore, catalog: Option<&SpellCatalog>) -> Vec<AuraState> {
         let raid = RaidFilter::default();
-        let inputs: Vec<AuraInput> = other_unit_inputs(store, catalog, &raid).collect();
+        let inputs: Vec<AuraInput> = other_unit_inputs(store, catalog, &raid, None).collect();
         aura_list(catalog, &inputs)
     }
 
@@ -1305,7 +1344,8 @@ mod tests {
             (47 + 1, 1126),
             (95, 0x0000_0088),
         ]));
-        let inputs: Vec<AuraInput> = other_unit_inputs(&store, Some(&catalog), &raid).collect();
+        let inputs: Vec<AuraInput> =
+            other_unit_inputs(&store, Some(&catalog), &raid, None).collect();
         let list = aura_list(Some(&catalog), &inputs);
         assert_eq!(
             list.iter()

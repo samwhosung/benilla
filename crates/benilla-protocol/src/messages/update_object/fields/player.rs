@@ -547,6 +547,13 @@ impl ObjectFields {
     pub fn player_lifetime_dishonorable_kills(&self) -> Option<u32> {
         self.get_u32(FIELD_PLAYER_FIELD_LIFETIME_DISHONORABLE_KILLS)
     }
+    /// `PLAYER_FIELD_BYTES2` byte 1: the auras the player can see, bit `n - 1` for a spell whose
+    /// `RequiredAuraVision` is `n` (`0x5198b0`); vmangos sets bit 0 for Detect Amore
+    /// (`PLAYER_FIELD_BYTE2_DETECT_AMORE`, `Player.h:388`). 0 when the field is absent.
+    pub fn player_aura_vision(&self) -> u8 {
+        self.get_u32(FIELD_PLAYER_FIELD_BYTES2)
+            .map_or(0, |b| (b >> 8) as u8)
+    }
     /// `PLAYER_FIELD_BYTES2` byte 0 (private): progress through the current rank, 0-255
     /// (`HonorMgr.cpp:905-909`); a negative rank's `-255` scale wraps in the `uint8` cast.
     pub fn player_honor_rank_bar(&self) -> Option<u8> {

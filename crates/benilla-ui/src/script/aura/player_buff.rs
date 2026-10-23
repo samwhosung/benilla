@@ -207,6 +207,7 @@ mod tests {
             until_cancelled: false,
             channeled: false,
             raid_listed: false,
+            vision_hidden: false,
         }
     }
 

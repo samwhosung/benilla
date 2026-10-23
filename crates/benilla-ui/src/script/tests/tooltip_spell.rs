@@ -579,6 +579,64 @@ fn unit_buff_and_debuff_hover_render_the_aura_variant_without_remaining() {
     assert!(s.take_errors().is_empty());
 }
 
+/// An aura the vision test hides (`0x51989c`-`0x5198b8`) is skipped by `UnitBuff`, whose walk
+/// runs `IsAuraDisplayable` (`0x51966d`), and counted by `GameTooltip:SetUnitBuff`, whose own
+/// test reads no vision (`0x534df0`): index 1 is the next buff to the one, the hidden aura to the
+/// other.
+#[test]
+fn a_vision_hidden_aura_is_skipped_by_unit_buff_and_counted_by_the_tooltip() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_aura_tooltip(aura_key(26869), aura_view("Amorous", "In love."));
+    s.set_aura_tooltip(
+        aura_key(1126),
+        aura_view("Mark of the Wild", "Armor increased by 25."),
+    );
+    s.set_unit_guids(&crate::script::UnitGuids {
+        target: 7,
+        ..Default::default()
+    });
+    s.set_unit_auras(
+        7,
+        Some(
+            vec![
+                AuraState {
+                    spell_id: 26869,
+                    name: Some("Amorous".into()),
+                    icon: Some("Amorous".into()),
+                    helpful: true,
+                    vision_hidden: true,
+                    ..Default::default()
+                },
+                AuraState {
+                    spell_id: 1126,
+                    name: Some("Mark of the Wild".into()),
+                    icon: Some("MotW".into()),
+                    helpful: true,
+                    ..Default::default()
+                },
+            ]
+            .into(),
+        ),
+    );
+    s.run(
+        r#"
+        assert(UnitBuff("target", 1) == "MotW", "UnitBuff skips the hidden aura")
+        assert(UnitBuff("target", 2) == nil)
+        local a = CreateFrame("Button", "TF1"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        tt:SetOwner(a, "ANCHOR_BOTTOMRIGHT", 15, -25)
+        tt:SetUnitBuff("target", 1)
+        assert(TTTextLeft1:GetText() == "Amorous", "the tooltip counts it")
+        tt:SetOwner(a, "ANCHOR_BOTTOMRIGHT", 15, -25)
+        tt:SetUnitBuff("target", 2)
+        assert(TTTextLeft1:GetText() == "Mark of the Wild")
+    "#,
+    )
+    .unwrap();
+    assert!(s.take_errors().is_empty());
+}
+
 /// `SetPlayerBuff` takes a 1.12 cache position, the `GetPlayerBuff` family's index space:
 /// `BuffFrame.lua:105` passes that return straight in, and a surplus filter argument is ignored.
 /// After `SetOwner`'s clear, a position past the cache leaves no plate.

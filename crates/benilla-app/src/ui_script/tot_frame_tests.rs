@@ -107,6 +107,7 @@ fn debuff(spell_id: u32, name: &str, debuff_type: Option<&str>) -> AuraState {
         until_cancelled: false,
         channeled: false,
         raid_listed: false,
+        vision_hidden: false,
     }
 }
 

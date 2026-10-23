@@ -63,6 +63,8 @@ pub(super) struct Inputs<'g, 'a, H, V> {
     pub(super) catalog_moved: bool,
     /// Each aura's `raidFilter` verdict.
     pub(super) raid: &'a RaidFilter,
+    /// The active player's `PLAYER_FIELD_BYTES2` byte 1, the auras it can see (`0x5198b0`).
+    pub(super) vision: Option<u8>,
 }
 
 /// One guid's list, shared by every token naming it.
@@ -119,6 +121,7 @@ impl UnitAuras {
             catalog,
             catalog_moved,
             raid,
+            vision,
         } = inputs;
         self.frame += 1;
         if catalog_moved || catalog.is_some() != self.catalog_present {
@@ -147,7 +150,16 @@ impl UnitAuras {
                 g.held.insert(guid, next);
                 walk.push((next, false));
             }
-            self.refresh(guid, store, record_ok, group, &buffs_visible, catalog, raid);
+            self.refresh(
+                guid,
+                store,
+                record_ok,
+                group,
+                &buffs_visible,
+                catalog,
+                raid,
+                vision,
+            );
         }
         script.set_unit_guids(&g);
         self.guids = g;
@@ -183,6 +195,7 @@ impl UnitAuras {
     /// (`store`, the object manager's answer) with its unit gate, else, for a guid a group token
     /// names, the roster record's block, which has none (`0x519735`). A guid neither held nor a
     /// group token's gets no list, as `UnitBuff`'s roster walk finds nothing for it.
+    #[allow(clippy::too_many_arguments)] // the list's inputs, as the feed reads them
     fn refresh(
         &mut self,
         guid: u64,
@@ -192,6 +205,7 @@ impl UnitAuras {
         buffs_visible: &impl Fn(u64, &ObjectStore) -> bool,
         catalog: Option<&SpellCatalog>,
         raid: &RaidFilter,
+        vision: Option<u8>,
     ) {
         if self
             .by_guid
@@ -210,6 +224,7 @@ impl UnitAuras {
             buffs_visible,
             catalog,
             raid,
+            vision,
         ) else {
             return;
         };
@@ -260,15 +275,21 @@ fn list_inputs(
     buffs_visible: &impl Fn(u64, &ObjectStore) -> bool,
     catalog: Option<&SpellCatalog>,
     raid: &RaidFilter,
+    vision: Option<u8>,
 ) -> Option<bool> {
     match store {
         Some(store) => {
-            inputs.extend(other_unit_inputs(store, catalog, raid));
+            inputs.extend(other_unit_inputs(store, catalog, raid, vision));
             Some(buffs_visible(guid, store))
         }
         None if record_ok => {
             if let Some(group) = group {
-                inputs.extend(record_inputs(group.roster_aura_slots(guid), catalog, raid));
+                inputs.extend(record_inputs(
+                    group.roster_aura_slots(guid),
+                    catalog,
+                    raid,
+                    vision,
+                ));
             }
             Some(true)
         }
@@ -286,6 +307,7 @@ pub(super) fn list_of(
     buffs_visible: &impl Fn(u64, &ObjectStore) -> bool,
     catalog: Option<&SpellCatalog>,
     raid: &RaidFilter,
+    vision: Option<u8>,
 ) -> Option<UnitAuraList> {
     let mut inputs = Vec::new();
     let gate = list_inputs(
@@ -297,6 +319,7 @@ pub(super) fn list_of(
         buffs_visible,
         catalog,
         raid,
+        vision,
     )?;
     Some(UnitAuraList {
         auras: aura_list(catalog, &inputs),
