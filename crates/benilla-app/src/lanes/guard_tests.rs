@@ -544,9 +544,11 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_tradeskill::feed_trade_skill", &["items::Countdowns", "items::Items", "net::GuidIndex",
         "net::ObjectStore", "spell::cooldowns::Cooldowns", "ui_action::PlayerActions",
         "ui_tradeskill::TradeSkillOpen"]),
-    ("::ui_craft::feed_craft", &["items::Countdowns", "items::Items", "net::GuidIndex",
-        "net::ObjectStore", "spell::mods::SpellModifiers", "ui_action::PlayerActions",
-        "ui_craft::CraftOpen"]),
+    // Beast Training reads the pet off its bar and its family off the creature record as the frame
+    // left them (#2217).
+    ("::ui_craft::feed_craft", &["items::Countdowns", "items::Items", "names::NameCache",
+        "net::GuidIndex", "net::ObjectStore", "spell::mods::SpellModifiers",
+        "ui_action::PlayerActions", "ui_craft::CraftOpen", "ui_pet::PetBar"]),
     ("::ui_loot::feed_loot", &["items::Countdowns", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "ui_loot::AutoLootByte", "ui_loot::LootLatch",
         "ui_loot::LootState", "ui_party::GroupState"]),
@@ -669,7 +671,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 11] {
+fn lane_types() -> [TypeId; 12] {
     [
         TypeId::of::<crate::ui_items::feed::BagView>(),
         // The views lane: what each packet changed in the stores.
@@ -685,12 +687,14 @@ fn lane_types() -> [TypeId; 11] {
         // The party lane: the group's signal log and the lane's place in it.
         TypeId::of::<crate::ui_party::GroupState>(),
         TypeId::of::<crate::ui_party::PartyLane>(),
+        // The list rebuilds a learn, an unlearn or a pet's spells owe, stamped at their packets.
+        TypeId::of::<crate::ui_tradeskill::ListRebuilds>(),
     ]
 }
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 11] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 12] {
     [
         ("bag view", TypeId::of::<crate::ui_items::feed::BagView>()),
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
@@ -709,6 +713,10 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 11] {
         ),
         ("party", TypeId::of::<crate::ui_party::GroupState>()),
         ("party", TypeId::of::<crate::ui_party::PartyLane>()),
+        (
+            "list rebuilds",
+            TypeId::of::<crate::ui_tradeskill::ListRebuilds>(),
+        ),
     ]
 }
 
