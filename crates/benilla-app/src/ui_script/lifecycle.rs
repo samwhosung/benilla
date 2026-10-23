@@ -1201,6 +1201,54 @@ pub(crate) fn is_emote_token_line(line: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// The logout's `OnExit(InWorld)`: `0x490bd0` signals `PLAYER_LOGOUT` (`0x490c2a`) while the
+    /// world's state is whole, so its handler reads the auras and the chat windows as they stood;
+    /// the session's clears then run on that same state, before the glue VM replaces it.
+    #[test]
+    fn the_logout_clears_run_after_player_logout_and_on_the_world_vm() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        // The whole schedule, with no world loaded: a system missing what world entry inserts
+        // (the camera rig, the map) skips rather than panics.
+        app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
+            bevy::ecs::error::ignore,
+        ));
+        let notes: Rc<RefCell<Vec<String>>> = Rc::default();
+        let mut script = UiScript::new().expect("a VM");
+        script.set_tracking(Some(benilla_ui::script::TrackingState {
+            spell_id: 2580,
+            name: None,
+            icon: Some("TRACK".into()),
+            cancelable: false,
+        }));
+        let sink = notes.clone();
+        let note = script
+            .lua()
+            .create_function(move |_, text: String| {
+                sink.borrow_mut().push(text);
+                Ok(())
+            })
+            .expect("the note");
+        script.lua().globals().set("Note", note).expect("Note");
+        script
+            .run(
+                "for _, name in ipairs({'ChatFrame1', 'ChatFrame2'}) do \
+                     setglobal(name, { Clear = function() Note('clear') end }) \
+                 end \
+                 local f = CreateFrame('Frame') f:RegisterEvent('PLAYER_LOGOUT') \
+                 f:SetScript('OnEvent', function() \
+                     Note('logout ' .. tostring(GetTrackingTexture())) \
+                 end)",
+            )
+            .expect("the recorder installs");
+        app.insert_non_send_resource(script);
+        app.world_mut()
+            .run_schedule(OnExit(crate::client_state::ClientState::InWorld));
+        assert_eq!(*notes.borrow(), ["logout TRACK", "clear", "clear"]);
+    }
+
     /// The roster's stand-in `"player"` and the record `UnitRace`/`UnitClass` read carry the
     /// table's names at the install's locale, and the tokens beside them.
     #[test]

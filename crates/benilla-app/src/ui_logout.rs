@@ -342,6 +342,87 @@ mod tests {
         assert!(!app.world().resource::<LogoutState>().pending);
     }
 
+    /// The whole client, headless, in the world, with a VM and the write channel captured.
+    fn client() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        app.insert_resource(NetCommands(tx))
+            .insert_resource(SelfGuid(Some(0x4000_0000_0000_0009)));
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        (app, rx)
+    }
+
+    /// Run `chunk` with the host lent; what it sent of the logout's and the roll's packets.
+    fn sent_by(
+        app: &mut App,
+        rx: &crossbeam_channel::Receiver<ClientCommand>,
+        chunk: &str,
+    ) -> Vec<String> {
+        crate::script_calls::with_hosted_vm(app.world_mut(), |vm| {
+            vm.expect("a VM").run(chunk).expect("the chunk runs")
+        });
+        rx.try_iter()
+            .filter_map(|c| {
+                Some(match c {
+                    ClientCommand::RandomRoll { min, max } => format!("roll {min}-{max}"),
+                    ClientCommand::Logout => "logout".into(),
+                    ClientCommand::LogoutCancel => "cancel".into(),
+                    ClientCommand::ForceLogout => "force".into(),
+                    _ => return None,
+                })
+            })
+            .collect()
+    }
+
+    /// The session verbs send inside their calls (`0x5ab07c`, `0x5aafb9`), so a chunk's packets
+    /// go out in call order with every other verb's, and the pending byte a `Logout` sets
+    /// (`0x5ab05b`) silences the next line's (`0x5ab01a`).
+    #[test]
+    fn a_chunks_session_verbs_send_in_call_order_with_every_other_verb() {
+        let (mut app, rx) = client();
+        assert_eq!(
+            sent_by(
+                &mut app,
+                &rx,
+                "RandomRoll(1, 2) Logout() Logout() RandomRoll(3, 4) Quit() CancelLogout() \
+                 RandomRoll(5, 6) Quit()",
+            ),
+            ["roll 1-2", "logout", "roll 3-4", "cancel", "roll 5-6", "logout"]
+        );
+        let logout = app.world().resource::<LogoutState>();
+        assert!(logout.pending && logout.quitting, "the last Quit asked");
+    }
+
+    /// The `0x5ab000` bail: a second ask while the first is unanswered sends nothing, and
+    /// `ForceLogout` (`0x5aaff0`, `0x5ab000(0, 1)`) passes it, leaves the pending byte
+    /// (`0x5ab059`) and stores the quit byte as 0 (`0x5ab053`), so the completion that follows
+    /// ends the session and not the process.
+    #[test]
+    fn a_forced_logout_passes_the_bail_and_disarms_the_quit() {
+        let (mut app, rx) = client();
+        assert_eq!(sent_by(&mut app, &rx, "Quit()"), ["logout"]);
+        assert_eq!(
+            sent_by(&mut app, &rx, "Quit() Logout() ForceLogout()"),
+            ["force"]
+        );
+        let logout = app.world().resource::<LogoutState>();
+        assert!(logout.pending, "the forced request leaves the byte");
+        assert!(!logout.quitting, "and stores the quit byte as 0");
+        app.world_mut().write_message(LoggedOutMessage);
+        app.world_mut()
+            .run_system_once(exit_on_logout_complete)
+            .expect("complete");
+        assert!(!app.world().resource::<LogoutState>().pending);
+        assert!(
+            app.world_mut()
+                .resource_mut::<Messages<AppExit>>()
+                .drain()
+                .next()
+                .is_none(),
+            "a forced logout after a quit ends the session, not the process"
+        );
+    }
+
     #[test]
     fn a_cancel_disarms_a_pending_quit() {
         let mut s = LogoutState {

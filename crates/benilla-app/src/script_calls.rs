@@ -932,6 +932,7 @@ mod tests {
     mod census;
     mod refusals;
     mod selection;
+    mod systems;
 
     const ME: u64 = 0x10;
     /// The unit selected before the script runs.
