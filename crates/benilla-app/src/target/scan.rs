@@ -555,8 +555,11 @@ impl OwedSwing {
 /// `entity` is the guid's object, which the select lights (`0x493701`); with none the guid is
 /// stored all the same (`0x4935c8` → `0x493605`), and neither `IsSelectable` nor the light runs.
 /// For a writer whose signal has no listeners to run first, the re-swing goes out here.
-/// `old_latches` is [`latches_on`] the selection as it stands. `engaged` is the server's echo of
-/// the attack lock (`[+0xc48]`), which the reference clears at the same echo (`0x624e40`).
+/// `old_latches` is [`latches_on`] the selection as it stands. `engaged` is [`Engaged`], which
+/// only the server's `SMSG_ATTACKSTART` echo sets: a round trip behind the reference's lock,
+/// which StartAttack's send sets locally (`[+0xc48]`, `[+0xc50]` = 1, `0x5ecd51` → `0x47bf70`),
+/// so after a swing starts the latch reads it late. The reference clears it at the stop's echo
+/// (`0x624e40`).
 pub(super) fn commit(
     selection: &mut Selection,
     seam: &mut crate::creature_anim::AttackSeam,
