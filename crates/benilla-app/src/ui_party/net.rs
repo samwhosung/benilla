@@ -487,6 +487,8 @@ pub(crate) fn roster_deactivated(
     let held = |g: u64| index.0.get(&g).and_then(|e| stores.get(*e).ok());
     for guid in streamed {
         member_deactivated(guid, group, held(guid), held, names, script, net_commands);
+        // The release's `PARTY_MEMBER_DISABLE` (`0x5e9b78`).
+        group.member_object(guid, false);
     }
 }
 

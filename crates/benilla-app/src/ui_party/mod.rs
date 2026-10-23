@@ -225,6 +225,13 @@ pub(crate) enum GroupSignal {
     /// `0x48f420`, event `0x118`). Its partner `PARTY_INVITE_CANCEL` is `SMSG_GROUP_CANCEL`'s
     /// alone (`0x5e6784` → `0x48f440`), which vmangos never sends and benilla does not read.
     InviteRequest(String),
+    /// `PARTY_MEMBER_ENABLE` with the member's 1-based party slot: a party member's player object
+    /// created (`CGPlayer_C::PostInit`, `0x5dec35`) or brought back (`0x5deca1`), through
+    /// `0x4e85d0` mode 1 (`0x4e86b6`).
+    MemberEnabled(u8),
+    /// `PARTY_MEMBER_DISABLE` with the slot: its release (`0x5e9aa0`), after the record snapshot
+    /// `0x4e85d0` mode 0 returns the slot for (`0x5e9b78`).
+    MemberDisabled(u8),
     /// A list handler's line, shown in its place among the list's signals (`0x5e6c19`,
     /// `0x5e6cc1`, `0x5e6d37`, `0x4e87fa`'s setter lines, the raid roster's).
     Line(UiError),
@@ -629,6 +636,21 @@ impl GroupState {
     /// Log one event where its handler signals it, behind every signal before it.
     pub(super) fn signal(&mut self, signal: GroupSignal) {
         self.signals.push(signal);
+    }
+
+    /// A member's player object entering (`enabled`) or leaving the object manager: its
+    /// `PARTY_MEMBER_ENABLE` or `_DISABLE`, for a guid in a party slot (`0x4e85e5`-`0x4e8604`, the
+    /// four guids at `0xbc6f48`); any other signals nothing.
+    pub(crate) fn member_object(&mut self, guid: u64, enabled: bool) {
+        let Some(slot) = self.party_slots().position(|m| m.guid == guid) else {
+            return;
+        };
+        let slot = slot as u8 + 1;
+        self.signal(if enabled {
+            GroupSignal::MemberEnabled(slot)
+        } else {
+            GroupSignal::MemberDisabled(slot)
+        });
     }
 
     /// A list's line, shown where its handler shows it (`0x496720`), among its signals.

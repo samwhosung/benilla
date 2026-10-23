@@ -804,6 +804,10 @@ fn deactivate(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
     if sc.group.stats.get(&guid) != before.as_ref() {
         sc.view_log.record(guid, before);
     }
+    // The release's `PARTY_MEMBER_DISABLE` for a party slot's player (`0x5e9b78`).
+    if held(guid).is_some_and(|s| s.0.created_as() == Some(ObjectType::Player)) {
+        sc.group.member_object(guid, false);
+    }
 }
 
 /// `0x464920` past the deactivate: the object leaves the live table for the released one, its
@@ -1133,6 +1137,8 @@ fn create_hook(sc: &mut Scene, guid: u64, kind: Created, script: Option<&UiScrip
             sc.names.lookup_fields(guid, &fields, &sc.net);
             sc.field_notices
                 .write_batch(crate::field_watch::guild_tag(guid));
+            // `0x5dec35` → `0x4e85d0` mode 1: a party slot's `PARTY_MEMBER_ENABLE`.
+            sc.group.member_object(guid, true);
             if sc.self_guid.0 != Some(guid) {
                 compare_party_record(sc, guid, &fields, script);
             }
@@ -1164,6 +1170,8 @@ fn reactivated_end(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
         Some(ObjectType::Unit) => display_changed(sc, e, guid, &fields),
         Some(ObjectType::Player) => {
             display_changed(sc, e, guid, &fields);
+            // `0x5deca1` → `0x4e85d0` mode 1.
+            sc.group.member_object(guid, true);
             compare_party_record(sc, guid, &fields, script);
         }
         Some(ObjectType::GameObject) => sc.go_templates.request_at_create(guid, &fields, &sc.net),

@@ -27,9 +27,6 @@ use crate::query_cache::Ask;
 #[derive(Default)]
 pub(crate) struct FedParty {
     units: [Option<UnitState>; 4],
-    /// Each party slot's (member guid, object streamed) pair, the `PARTY_MEMBER_ENABLE`/`DISABLE`
-    /// edge; with the guid in it a new occupant is a roster edge, not an activation.
-    presence: [(u64, bool); 4],
     pushed_party: Option<PartyState>,
     /// The gate's counters: the name cache's landed generation (other feeds' per-frame resolves
     /// defeat its `is_changed`) and the area under us (our raid row's zone).
@@ -153,6 +150,16 @@ fn fire_signal(
         GroupSignal::LootMethodChanged => ("PARTY_LOOT_METHOD_CHANGED", vec![]),
         GroupSignal::RaidRosterUpdate => ("RAID_ROSTER_UPDATE", vec![]),
         GroupSignal::RaidTargetUpdate => ("RAID_TARGET_UPDATE", vec![]),
+        // With the 1-based slot as a number (`%d`, `0x835154`). Stock FrameXML ignores them
+        // (`PartyMemberFrame.lua:145` is commented out).
+        GroupSignal::MemberEnabled(slot) => (
+            "PARTY_MEMBER_ENABLE",
+            vec![ScriptValue::Int(i64::from(slot))],
+        ),
+        GroupSignal::MemberDisabled(slot) => (
+            "PARTY_MEMBER_DISABLE",
+            vec![ScriptValue::Int(i64::from(slot))],
+        ),
         // `0x5e6730` signals the event (`0x5e6747`), then shows `ERR_INVITED_TO_GROUP_S` (message
         // `0x3c`, `0x5e6752`), so the line follows the popup's handlers.
         GroupSignal::InviteRequest(inviter) => {
@@ -202,7 +209,7 @@ pub(crate) fn seed_reloaded_vm(world: &mut World, script: &mut UiScript) {
          mut seed: ResMut<ReloadSeed>| {
             let mut fed = FedParty::default();
             let ffa = free_for_all(&world, &view);
-            push_group(&view, &ffa, script, &mut fed, &gate::Gate::new(true), true);
+            push_group(&view, &ffa, script, &mut fed, &gate::Gate::new(true));
             seed.0 = Some((script.session(), view.group.signals.end()));
         },
         script,
@@ -419,7 +426,7 @@ pub(crate) fn feed_party(
         if gate.skip() {
             return;
         }
-        push_group(&view, &ffa, script, fed, &gate, vm_reset);
+        push_group(&view, &ffa, script, fed, &gate);
         let self_guid = self_q.iter().next().map(|(_, g, _)| g.0);
 
         // ── The group events ────────────────────────────────────────────────────
@@ -644,7 +651,6 @@ fn push_group(
     script: &mut UiScript,
     fed: &mut FedParty,
     gate: &gate::Gate,
-    vm_reset: bool,
 ) {
     let GroupView {
         tables,
@@ -763,26 +769,6 @@ fn push_group(
             gate.audit("feed_party", "a party-token snapshot");
             script.set_unit(token, snap.clone());
             fed.units[i] = snap;
-        }
-        // ── PARTY_MEMBER_ENABLE / PARTY_MEMBER_DISABLE ──────────────────────
-        //
-        // Fired as a slot's object enters (`0x4e86b6`) or leaves (`0x5e9b78`) the object
-        // manager, with the 1-based slot as a number (`%d`, `esi+1` at `0x4e869d`). Stock
-        // FrameXML ignores them (`PartyMemberFrame.lua:145` is commented out).
-        let presence = member.map_or((0, false), |m| (m.guid, index.0.contains_key(&m.guid)));
-        if fed.presence[i] != presence {
-            gate.audit("feed_party", "a party-slot presence edge");
-            // Only the same member's object crossing is an activation, and not on the first
-            // look after a VM reset, which would announce an arrival that never happened.
-            if !vm_reset && presence.0 != 0 && fed.presence[i].0 == presence.0 {
-                let event = if presence.1 {
-                    "PARTY_MEMBER_ENABLE"
-                } else {
-                    "PARTY_MEMBER_DISABLE"
-                };
-                script.fire_event(event, vec![ScriptValue::Int(i as i64 + 1)]);
-            }
-            fed.presence[i] = presence;
         }
     }
 
