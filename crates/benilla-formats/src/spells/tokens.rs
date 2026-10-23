@@ -470,6 +470,16 @@ fn token_value(
             let name = (ctx.home_area)()?;
             text(name.to_string(), 0.0)
         }
+        'c' | 'p' => {
+            // `507dde`/`507ded`: the cost or the per-second cost of the token's record, through
+            // the shared `"%d"` tail (`0x50804f`), signed and unscaled.
+            let v = if letter.eq_ignore_ascii_case(&'c') {
+                (ctx.power_cost)(d)
+            } else {
+                (ctx.power_per_second)(d)
+            };
+            text(v.to_string(), f64::from(v))
+        }
         'r' => {
             // `507d5b`: RangeIndex at or below 1 reads row 1, its maximum through op 5; no row is
             // 0.0. One decimal, and the plural keys on the ceiling (`507dbd`).
