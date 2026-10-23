@@ -735,6 +735,14 @@ fn feed_auras(
     })
 }
 
+/// [`feed_auras`] once, for a test that drives the feeds by hand.
+#[cfg(test)]
+pub(crate) fn run_feed_auras_once(world: &mut World) {
+    world
+        .run_system_cached(feed_auras)
+        .expect("the aura feed runs as a one-shot system");
+}
+
 /// How long before its aura a duration packet may arrive and still join it. The measured lead is
 /// one frame, about 50 ms, on a fresh apply; a recycled slot's stale stamp is seconds older.
 const DURATION_SLACK: f64 = 1.0;
