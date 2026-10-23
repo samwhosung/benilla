@@ -316,18 +316,26 @@ fn feed_gossip(
             return;
         }
         let mut fresh = snapshot(&state);
-        // Expand the greeting's `$N`/`$B`/`$G`/`$<n>w` macros client-side, as the reference does.
-        if let Some(greeting) = fresh.as_mut().map(|m| &mut m.greeting) {
-            let player = crate::npc_text::player_identity(&self_q, &names, unit_names.get());
-            *greeting = crate::npc_text::substitute(
-                greeting,
-                &crate::npc_text::MacroContext {
-                    subject: player.as_ref(),
-                    states: &states,
-                },
-            );
-        }
         let new_message = std::mem::replace(shown_message, state.generation) != state.generation;
+        // The greeting's `$N`/`$B`/`$G`/`$<n>w` macros expand once per message, at its draw: the
+        // reference writes the expanded text to `0xbbb678` there (`0x4e2274`, `0x4e229a`), which
+        // `GetGossipText` returns (`0x4e28c0`) until the next message draws.
+        if let Some(greeting) = fresh.as_mut().map(|m| &mut m.greeting) {
+            match shown.as_ref().filter(|_| !new_message) {
+                Some(drawn) => greeting.clone_from(&drawn.greeting),
+                None => {
+                    let player =
+                        crate::npc_text::player_identity(&self_q, &names, unit_names.get());
+                    *greeting = crate::npc_text::substitute(
+                        greeting,
+                        &crate::npc_text::MacroContext {
+                            subject: player.as_ref(),
+                            states: &states,
+                        },
+                    );
+                }
+            }
+        }
         if fresh != shown {
             script.set_gossip(fresh.clone());
         }
