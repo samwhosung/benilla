@@ -112,7 +112,7 @@ fn harness_with_wire() -> (App, crossbeam_channel::Receiver<crate::net::ClientCo
     (app, rx)
 }
 
-pub(super) fn latch(app: &App) -> Option<u64> {
+pub(crate) fn latch(app: &App) -> Option<u64> {
     app.world().resource::<InteractLatch>().guid()
 }
 
@@ -165,7 +165,7 @@ fn read_book(world: &mut World, npc: u64) {
 }
 
 /// Each window's open as its packet handler or click runs it, on `npc`.
-pub(super) fn open(app: &mut App, window: W, npc: u64) {
+pub(crate) fn open(app: &mut App, window: W, npc: u64) {
     let world = app.world_mut();
     match window {
         W::Trade => {

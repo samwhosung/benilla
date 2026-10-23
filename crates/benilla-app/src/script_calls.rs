@@ -1005,6 +1005,7 @@ mod tests {
 
     mod cast_reports;
     mod census;
+    mod closes;
     mod refusals;
     mod selection;
     mod systems;

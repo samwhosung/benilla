@@ -11,10 +11,10 @@ use crate::net::{ClientCommand, NetCommands};
 use crate::script_calls::with_hosted_vm;
 
 /// The registrar and the tabard vendor, a guild master: a unit's guid.
-const NPC: u64 = 0xF130_0000_0000_0042;
+pub(super) const NPC: u64 = 0xF130_0000_0000_0042;
 
 /// The whole client, headless, with a VM and the write channel captured.
-fn client() -> (App, Receiver<ClientCommand>) {
+pub(super) fn client() -> (App, Receiver<ClientCommand>) {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
@@ -23,7 +23,7 @@ fn client() -> (App, Receiver<ClientCommand>) {
 }
 
 /// Run `chunk` with the host lent, as a key's body runs.
-fn eval<T: FromLuaMulti>(app: &mut App, chunk: &str) -> T {
+pub(super) fn eval<T: FromLuaMulti>(app: &mut App, chunk: &str) -> T {
     with_hosted_vm(app.world_mut(), |vm| vm.expect("a VM").eval::<T>(chunk))
         .unwrap_or_else(|e| panic!("{chunk}: {e}"))
 }
@@ -107,7 +107,7 @@ fn add_friend_flags_the_friends_tutorial_before_its_packet() {
 
 /// A frame counting `event`'s fires in `N` and recording each in `SEQ`, whose handler also calls
 /// `close`, as a stock window's `OnHide` does.
-fn listen(app: &mut App, events: &[&str], close: &str) {
+pub(super) fn listen(app: &mut App, events: &[&str], close: &str) {
     let registers: String = events
         .iter()
         .map(|e| format!("f:RegisterEvent('{e}') "))

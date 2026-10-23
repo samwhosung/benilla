@@ -16,7 +16,7 @@ use benilla_world::schedule::WorldStage;
 
 mod latch;
 #[cfg(test)]
-mod latch_tests;
+pub(crate) mod latch_tests;
 mod release;
 #[cfg(test)]
 mod release_tests;
