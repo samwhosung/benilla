@@ -1098,6 +1098,11 @@ mod tests {
     }
 
     /// The keys of the error lines shown, each defined as its own key ([`record_reports`]).
+    /// The world points a probe line's drain reads ([`crate::ui_chat::drain_chat_input_once`]).
+    fn probe_line_world(world: &mut World) {
+        benilla_world::world_point::init_world_point_resources(world);
+    }
+
     fn errors(f: &Frame) -> Vec<String> {
         f.app
             .world()

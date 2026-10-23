@@ -109,7 +109,7 @@ fn a_probe_emote_lines_refusal_runs_its_listener_with_the_host_lent() {
             flags: crate::creature_anim::move_flags::FORWARD,
             ..Default::default()
         });
-    benilla_world::world_point::init_world_point_resources(world);
+    probe_line_world(world);
     world.insert_resource(crate::ui_chat::commands::SlashCommands::build(
         |name| match name {
             "EMOTE1_CMD1" => Some("/wave".to_string()),
