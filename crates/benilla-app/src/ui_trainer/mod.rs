@@ -621,6 +621,50 @@ pub(crate) fn feed_trainer(
             let player_skill =
                 |id: u32| crate::spell::spell_skill_value(store, Some(&skill_lines.catalog), id);
             let pet_skill = |_: u32| crate::spell::pet_skill_value(pet.map(|p| &p.0));
+            // `$c` and `$p` (`0x6e31b0`, `0x6e3300`) at the same caster's level and fields.
+            let mods = &*desc.spell_mods;
+            let player_cost = |d: &benilla_formats::SpellDisplay| {
+                store.map_or(-1, |s| {
+                    let lines = Some(&skill_lines.catalog);
+                    crate::spell::usable::power_cost(
+                        d,
+                        s,
+                        lines,
+                        mods,
+                        &mut crate::spell::Unrecorded,
+                    )
+                })
+            };
+            let player_per_second = |d: &benilla_formats::SpellDisplay| {
+                let level = crate::spell::SpellLevel::Player {
+                    me: store,
+                    skill_lines: Some(&skill_lines.catalog),
+                };
+                crate::spell::usable::per_second_cost(d, level, &mut crate::spell::Unrecorded)
+            };
+            let pet_level = |d: &benilla_formats::SpellDisplay| {
+                let skill = crate::spell::pet_skill_value(pet.map(|p| &p.0));
+                crate::spell::SpellLevel::Known(d.skill_level(skill))
+            };
+            let pet_cost = |d: &benilla_formats::SpellDisplay| {
+                pet.map_or(-1, |p| {
+                    let level = pet_level(d);
+                    crate::spell::usable::power_cost_at(
+                        d,
+                        &p.0,
+                        level,
+                        mods,
+                        &mut crate::spell::Unrecorded,
+                    )
+                })
+            };
+            let pet_per_second = |d: &benilla_formats::SpellDisplay| {
+                crate::spell::usable::per_second_cost(
+                    d,
+                    pet_level(d),
+                    &mut crate::spell::Unrecorded,
+                )
+            };
             let get = |key: &str| {
                 script
                     .lua()
@@ -635,7 +679,9 @@ pub(crate) fn feed_trainer(
                 ranges: Some(&spells.ranges),
                 skill: &player_skill,
                 lookup: &|id| spells.catalog.get(id),
-                mods: Some(&*desc.spell_mods),
+                mods: Some(mods),
+                power_cost: &player_cost,
+                power_per_second: &player_per_second,
                 unmodified_points: false,
                 gender: &|| gender,
                 home_area: &|| home_area,
@@ -644,6 +690,8 @@ pub(crate) fn feed_trainer(
             };
             let pet_ctx = TokenContext {
                 skill: &pet_skill,
+                power_cost: &pet_cost,
+                power_per_second: &pet_per_second,
                 ..ctx
             };
             // `UNIT_FIELD_SUMMON`'s unit (`0x4d9860`-`0x4d987d`), its book read only as the pet

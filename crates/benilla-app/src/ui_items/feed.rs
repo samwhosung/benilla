@@ -38,6 +38,32 @@ pub(crate) struct FeedMemory {
     enchant_deadlines: gate::Watch,
 }
 
+/// What the `$`-tokens read of the caster, the active player for an item's lines (the expander's
+/// pet argument is 0, `0x52da24`): its skill in a spell's line, the per-level terms' level
+/// (`TokenContext::skill`), and the cost `$c` and the per-second cost `$p` print.
+#[derive(Clone, Copy)]
+struct TokenCaster<'a> {
+    skill: &'a dyn Fn(u32) -> u32,
+    power_cost: &'a dyn Fn(&benilla_formats::SpellDisplay) -> i32,
+    power_per_second: &'a dyn Fn(&benilla_formats::SpellDisplay) -> i32,
+}
+
+#[cfg(test)]
+impl TokenCaster<'static> {
+    /// No player: every skill 0, no cost to read (`0x6e3233`), and the per-second cost at level 0.
+    const NONE: Self = Self {
+        skill: &|_| 0,
+        power_cost: &|_| -1,
+        power_per_second: &|d| {
+            crate::spell::usable::per_second_cost(
+                d,
+                crate::spell::SpellLevel::Known(0),
+                &mut crate::spell::Unrecorded,
+            )
+        },
+    };
+}
+
 /// A spell's `$`-substituted description, for item trigger and set-bonus lines. An empty one
 /// yields `None` and the caller drops the whole line, prefix included: the item builder
 /// (`0x52d8a0`) expands it (`0x5075f0`), tests the first byte (`0x52da29`) and on zero skips the
@@ -45,8 +71,7 @@ pub(crate) struct FeedMemory {
 fn spell_desc_text(
     spells: Option<&crate::ui_action::Spells>,
     id: u32,
-    // The player's skill in a spell's line, the `$`-tokens' level (`TokenContext::skill`).
-    skill: &dyn Fn(u32) -> u32,
+    caster: TokenCaster,
     home_area: Option<&str>,
     // The active player's `UNIT_FIELD_BYTES_0` byte 2, the `$g`/`$G` branch's input (`0x508214`).
     gender: &dyn Fn() -> u8,
@@ -63,9 +88,11 @@ fn spell_desc_text(
                 durations: &sp.durations,
                 radii: &sp.radii,
                 ranges: Some(&sp.ranges),
-                skill,
+                skill: caster.skill,
                 lookup: &|i| sp.catalog.get(i),
                 mods: mods.map(|m| m as &dyn benilla_formats::SpellMods),
+                power_cost: caster.power_cost,
+                power_per_second: caster.power_per_second,
                 unmodified_points: false,
                 gender,
                 home_area: &|| home_area,
@@ -129,7 +156,7 @@ fn template_view(
     t: &ItemInfo,
     spells: Option<&crate::ui_action::Spells>,
     mods: Option<&crate::spell::SpellModifiers>,
-    skill: &dyn Fn(u32) -> u32,
+    caster: TokenCaster,
     tables: ViewTables,
     home_area: Option<&str>,
     // The active player's gender byte, the trigger text's `$g`/`$G` branch (`0x508214`) and the
@@ -153,7 +180,7 @@ fn template_view(
             .and_then(|s| s.catalog.get(id))
             .map(|sd| sd.name.clone())
     };
-    let spell_text = |id: u32| spell_desc_text(spells, id, skill, home_area, gender, mods, get);
+    let spell_text = |id: u32| spell_desc_text(spells, id, caster, home_area, gender, mods, get);
     benilla_ui::script::ItemTemplateView {
         name: t.name.clone(),
         quality: t.quality,
@@ -381,6 +408,29 @@ pub(super) fn feed_item_sets(
         let spell_res = spells.as_deref();
         let skill_catalog = skill_lines.as_deref().map(|s| &s.catalog);
         let skill = |id| crate::spell::spell_skill_value(me, skill_catalog, id);
+        let power_cost = |d: &benilla_formats::SpellDisplay| {
+            me.map_or(-1, |s| {
+                crate::spell::usable::power_cost(
+                    d,
+                    s,
+                    skill_catalog,
+                    &spell_mods,
+                    &mut crate::spell::Unrecorded,
+                )
+            })
+        };
+        let power_per_second = |d: &benilla_formats::SpellDisplay| {
+            let level = crate::spell::SpellLevel::Player {
+                me,
+                skill_lines: skill_catalog,
+            };
+            crate::spell::usable::per_second_cost(d, level, &mut crate::spell::Unrecorded)
+        };
+        let caster = TokenCaster {
+            skill: &skill,
+            power_cost: &power_cost,
+            power_per_second: &power_per_second,
+        };
         let mut done: Vec<u32> = Vec::new();
         let mut push: Vec<(u32, benilla_ui::script::ItemSetView)> = Vec::new();
         // Its borrow of the VM ends before the push, which needs the VM mutably.
@@ -414,7 +464,7 @@ pub(super) fn feed_item_sets(
                         spell_desc_text(
                             spell_res,
                             spell,
-                            &skill,
+                            caster,
                             None,
                             &|| gender,
                             Some(&spell_mods),
@@ -590,6 +640,29 @@ pub(super) fn feed_item_stats(
         let spell_res = spells.as_deref();
         let skill_catalog = skill_lines.as_deref().map(|s| &s.catalog);
         let skill = |id| crate::spell::spell_skill_value(me, skill_catalog, id);
+        let power_cost = |d: &benilla_formats::SpellDisplay| {
+            me.map_or(-1, |s| {
+                crate::spell::usable::power_cost(
+                    d,
+                    s,
+                    skill_catalog,
+                    &spell_mods,
+                    &mut crate::spell::Unrecorded,
+                )
+            })
+        };
+        let power_per_second = |d: &benilla_formats::SpellDisplay| {
+            let level = crate::spell::SpellLevel::Player {
+                me,
+                skill_lines: skill_catalog,
+            };
+            crate::spell::usable::per_second_cost(d, level, &mut crate::spell::Unrecorded)
+        };
+        let caster = TokenCaster {
+            skill: &skill,
+            power_cost: &power_cost,
+            power_per_second: &power_per_second,
+        };
         let ready: Vec<u32> = pending
             .iter()
             .copied()
@@ -630,7 +703,7 @@ pub(super) fn feed_item_stats(
                         &t,
                         spell_res,
                         Some(&spell_mods),
-                        &skill,
+                        caster,
                         tables,
                         home_area,
                         &|| gender,
@@ -1699,7 +1772,7 @@ mod tests {
             &t,
             Some(&spells),
             None,
-            &|_| 0,
+            super::TokenCaster::NONE,
             Default::default(),
             None,
             &|| 0,
@@ -1725,7 +1798,16 @@ mod tests {
             ..Default::default()
         };
         let view = |t: &benilla_protocol::ItemInfo| {
-            let v = super::template_view(t, None, None, &|_| 0, tables, None, &|| 0, &|_| None);
+            let v = super::template_view(
+                t,
+                None,
+                None,
+                super::TokenCaster::NONE,
+                tables,
+                None,
+                &|| 0,
+                &|_| None,
+            );
             (v.area_name, v.map_name)
         };
         let mut t = crate::items::test_template("Scarab Coffer Key");
@@ -1893,7 +1975,7 @@ mod tests {
                 &t,
                 None,
                 None,
-                &|_| 0,
+                super::TokenCaster::NONE,
                 Default::default(),
                 None,
                 &move || gender,
@@ -2494,7 +2576,15 @@ mod tests {
                 "spell {id} has a name — which is exactly what must NOT leak into the tooltip"
             );
             assert_eq!(
-                super::spell_desc_text(Some(&spells), id, &|_| 0, None, &|| 0, None, &no_strings),
+                super::spell_desc_text(
+                    Some(&spells),
+                    id,
+                    super::TokenCaster::NONE,
+                    None,
+                    &|| 0,
+                    None,
+                    &no_strings
+                ),
                 None,
                 "spell {id} ({:?}) has no description, so the reference prints no trigger line",
                 d.name
@@ -2502,9 +2592,16 @@ mod tests {
         }
 
         // The control: Fireball (133), described, still yields its line.
-        let fireball =
-            super::spell_desc_text(Some(&spells), 133, &|_| 0, None, &|| 0, None, &no_strings)
-                .expect("a described spell still yields its line");
+        let fireball = super::spell_desc_text(
+            Some(&spells),
+            133,
+            super::TokenCaster::NONE,
+            None,
+            &|| 0,
+            None,
+            &no_strings,
+        )
+        .expect("a described spell still yields its line");
         assert!(
             fireball.contains("damage"),
             "expected the substituted Fireball description, got {fireball:?}"
@@ -2521,7 +2618,7 @@ mod tests {
             super::spell_desc_text(
                 Some(&spells),
                 587,
-                &|_| 0,
+                super::TokenCaster::NONE,
                 None,
                 &move || gender,
                 None,

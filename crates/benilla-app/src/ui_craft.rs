@@ -385,6 +385,24 @@ fn feed_craft(
                 },
                 lookup: &|id| spells.catalog.get(id),
                 mods: Some(&*spell_mods),
+                // `$c` and `$p` (`0x6e31b0`, `0x6e3300`) at the player's level and fields.
+                power_cost: &|d| {
+                    let lines = Some(&skill_lines.catalog);
+                    crate::spell::usable::power_cost(
+                        d,
+                        store,
+                        lines,
+                        &spell_mods,
+                        &mut crate::spell::Unrecorded,
+                    )
+                },
+                power_per_second: &|d| {
+                    let level = crate::spell::SpellLevel::Player {
+                        me: Some(store),
+                        skill_lines: Some(&skill_lines.catalog),
+                    };
+                    crate::spell::usable::per_second_cost(d, level, &mut crate::spell::Unrecorded)
+                },
                 unmodified_points: false,
                 gender: &|| store.0.unit_gender().unwrap_or(0),
                 home_area: &|| None,

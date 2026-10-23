@@ -477,6 +477,36 @@ fn expand(
         deps.borrow_mut().gender = true;
         vctx.store.and_then(|s| s.0.unit_gender()).unwrap_or(0)
     };
+    // `$c` and `$p` ask the caster the selector names (`0x507de0`, `0x507def`): the player's or
+    // the pet's level and fields; no caster costs −1 (`0x6e3233`) and has level 0 (`0x6e31a4`).
+    let pet_level = |t: &benilla_formats::SpellDisplay, pet| {
+        SpellLevel::Known(t.skill_level(crate::spell::pet_skill_value(pet)))
+    };
+    let power_cost = |t: &benilla_formats::SpellDisplay| match caster {
+        ViewCaster::Player => vctx.store.map_or(-1, |s| {
+            let reads: &mut dyn SpellReads = &mut *deps.borrow_mut();
+            usable::power_cost(t, s, vctx.skill_lines, vctx.spell_mods, reads)
+        }),
+        ViewCaster::Pet(pet) => pet.map_or(-1, |p| {
+            usable::power_cost_at(
+                t,
+                p,
+                pet_level(t, Some(p)),
+                vctx.spell_mods,
+                &mut Unrecorded,
+            )
+        }),
+    };
+    let power_per_second = |t: &benilla_formats::SpellDisplay| match caster {
+        ViewCaster::Player => {
+            let level = SpellLevel::Player {
+                me: vctx.store,
+                skill_lines: vctx.skill_lines,
+            };
+            usable::per_second_cost(t, level, &mut *deps.borrow_mut())
+        }
+        ViewCaster::Pet(pet) => usable::per_second_cost(t, pet_level(t, pet), &mut Unrecorded),
+    };
     let ctx = benilla_formats::TokenContext {
         durations: &spells.durations,
         radii: &spells.radii,
@@ -484,6 +514,8 @@ fn expand(
         skill: &skill,
         lookup: &lookup,
         mods: Some(vctx.spell_mods),
+        power_cost: &power_cost,
+        power_per_second: &power_per_second,
         unmodified_points,
         gender: &gender,
         home_area: &home_area,

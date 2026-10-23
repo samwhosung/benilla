@@ -50,6 +50,8 @@ fn with_text<R>(
         skill: &skill_of,
         lookup: &lookup,
         mods: None,
+        power_cost: &|_| -1,
+        power_per_second: &|_| 0,
         unmodified_points: false,
         gender: &|| 0,
         home_area: &|| home,

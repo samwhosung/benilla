@@ -1053,6 +1053,62 @@ fn range_cell_on_real_data() {
     assert_eq!(v.range, None, "the self row resolves max 0");
 }
 
+/// `$c` and `$p` in a description print the cost and the per-second cost the cost cell shows
+/// (`0x507de3` → `0x6e31b0`, `0x507df2` → `0x6e3300`), at the caster's own level: the player's
+/// skill in the line, never the expander's level, and record that read. A pet view with no pet
+/// costs −1 (`0x6e3233`).
+#[test]
+fn the_power_tokens_print_the_cost_cells_numbers() {
+    use benilla_formats::SpellDisplay;
+    use benilla_protocol::messages::FIELD_PLAYER_SKILL_INFO_1_1;
+    let mut spells = Spells::empty_for_tests();
+    spells.catalog = benilla_formats::SpellCatalog::from_displays(
+        [(
+            900_030,
+            SpellDisplay {
+                id: 900_030,
+                name: "Scaled".into(),
+                description: Some("Drains $c mana, then $p per second.".into()),
+                mana_cost: 10,
+                mana_cost_per_level: 3,
+                mana_per_second: 1,
+                mana_per_second_per_level: 1,
+                base_level: 5,
+                ..Default::default()
+            },
+        )]
+        .into(),
+    );
+    let mut objs = no_objects();
+    let objects = objs.get();
+    // Skill 75 in line 7: level 15.
+    let store = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+        (34, 60),
+        (FIELD_PLAYER_SKILL_INFO_1_1, 7),
+        (FIELD_PLAYER_SKILL_INFO_1_1 + 1, 75 | 300 << 16),
+    ]));
+    let mut t = TestCtx::new();
+    t.skill_lines = Some(benilla_formats::SkillLineCatalog::from_spell_lines([(
+        900_030, 7,
+    )]));
+    let (view, deps) = build_view(
+        900_030,
+        &spells,
+        &mut t.ctx_for(&objects, 0, None, Some(&store)),
+    )
+    .unwrap();
+    // 10 + (15 - 5) × 3 and 1 + (15 - 5).
+    assert_eq!(
+        Shown::of(&view).description,
+        "Drains 40 mana, then 11 per second."
+    );
+    assert_eq!(deps.skill_lines, [7]);
+    let v = spell_tooltip_view(900_030, &spells, &mut t.pet_ctx(&objects, Some(&store), None))
+        .unwrap();
+    // No pet: no cost to read, and level 0 for the per-second term, 1 + (0 - 5).
+    assert_eq!(v.description, "Drains -1 mana, then -4 per second.");
+}
+
 /// The range cell scales a ranged-slot spell's max by the player's ranged-slot item (`0x6e36aa`-
 /// `0x6e373a`) and drops a max of 0 (`0x52e9e2`-`0x52e9f0`): Arcane Shot (3044, `Attributes &
 /// 0x2`, row 114) reads "8-35 yd range" with a bow's 100 and nothing with Egan's Blaster's 0, and
