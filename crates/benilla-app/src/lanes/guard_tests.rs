@@ -457,8 +457,9 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "player::state::StandPending", "spell::cooldowns::Cooldowns", "spell::mods::SpellModifiers",
         "target::Selection", "ui_action::PlayerActions", "ui_action::state::ActionStateMemory",
         "ui_pet::PetBar"]),
-    ("::spell::targeting::feed_targeting_to_vm", &["names::NameCache", "net::GuidIndex",
-        "net::ObjectStore", "net::UnitSpeeds", "net::motion::modes::UnitMoveModes",
+    // The ranged-slot item scales a ranged spell's range, read as the frame left it (#2217).
+    ("::spell::targeting::feed_targeting_to_vm", &["items::Items", "names::NameCache",
+        "net::GuidIndex", "net::ObjectStore", "net::UnitSpeeds", "net::motion::modes::UnitMoveModes",
         "net::motion::remote::RemoteMotion", "net::reputations::Reputations",
         "spell::mods::SpellModifiers", "spell::targeting::SpellTargeting", "ui_party::GroupState"]),
     // The engine's selection writers signal in place (`0x493540`), reading the selection, the
@@ -601,6 +602,8 @@ const FILLED_THROUGH_A_READ: &[&str] = &[
 /// check here unseen.
 const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::ui_chat::edit::ChannelState",
+    // The creature families the cast send's pet learn rung reads (`0x60c7c0`).
+    "::ui_pet_stats::PetFamilyTables",
     "::AreaTableRes",
     "::DamageTextGates",
     "::EnvDamageTable",
