@@ -155,6 +155,9 @@ pub(crate) struct ScriptCallHost<'w, 's> {
             crate::ui_action::AttackPress<'w, 's>,
         ),
     >,
+    /// The channel the census counts sends on ([`benilla_ui::script::census`]).
+    #[cfg(test)]
+    census: Option<Res<'w, crate::net::NetCommands>>,
 }
 
 impl ScriptCallHost<'_, '_> {
@@ -167,6 +170,11 @@ impl ScriptCallHost<'_, '_> {
 
 impl CallHost for ScriptCallHost<'_, '_> {
     fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
+        #[cfg(test)]
+        if let Some(net) = self.census.as_deref() {
+            let sent = net.0.clone();
+            benilla_ui::script::census::probe(move || sent.len());
+        }
         let appliers = &mut self.appliers;
         // The gate's answer for this call, made where the Lua verb ran: its casts start only if
         // tag 2 passed there. The ladder reads it while this call applies.
@@ -570,6 +578,10 @@ pub(crate) fn bind_parked_picks(mut cursor: crate::spell::ScriptCursor) {
     cursor.bind_parked();
 }
 
+/// The census list ([`benilla_ui::script::census`]).
+#[cfg(test)]
+pub(crate) mod census;
+
 /// A host that applies each call with `apply`, for a harness that lends its own engine half.
 #[cfg(test)]
 pub(crate) struct FnHost<F>(pub(crate) F);
@@ -597,6 +609,7 @@ mod tests {
     use crossbeam_channel::Receiver;
 
     mod cast_reports;
+    mod census;
     mod selection;
 
     const ME: u64 = 0x10;

@@ -33,6 +33,8 @@ mod worldmap_arrow;
 mod button;
 mod calls;
 mod camera_view;
+#[cfg(any(test, feature = "test-support"))]
+pub mod census;
 mod channel;
 mod char_stats;
 pub mod chat_bubble;

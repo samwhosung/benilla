@@ -85,6 +85,20 @@ fn the_sweep_prints_the_money_line_once_per_session() {
     );
 }
 
+/// `CloseLoot` on a disenchant window sweeps it, and the sweep's money line waits for the host
+/// behind the rows' stores, where 1.12.1 runs its listeners first (`0x4c2170` → `0x49a870`, ahead
+/// of `0x4c2180`): on the census list ([`crate::script_calls::census::SENDS_AHEAD`]).
+#[test]
+fn a_sweep_sends_its_rows_ahead_of_its_held_money_line() {
+    let mut l = client();
+    note_money(&mut l);
+    open(&mut l, CORPSE, DISENCHANT, 500, vec![row(1, LINEN)]);
+    benilla_ui::script::census::take();
+    run(&mut l, "CloseLoot()");
+    assert_eq!(money_lines(&mut l), ["You loot 5 Silver"]);
+    crate::script_calls::census::shows_only("Loot");
+}
+
 /// A party member in the first party slot (`[0xbc6f48]`, `0x4c2030`) or a raid roster
 /// (`[0xb713e0]`, `0x4c203d`) skips the line; the coin request still goes. Alone, the next
 /// session prints it.

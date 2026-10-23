@@ -237,6 +237,8 @@ impl UiScript {
     /// nothing borrowed from the host across the point.
     pub fn signal_point(&mut self, host: &mut dyn CallHost) {
         let lua = self.lua().clone();
+        #[cfg(any(test, feature = "test-support"))]
+        super::census::point();
         lend(&lua, host, || {
             unheld(&lua, || super::calls::settle(&lua, self));
         });
