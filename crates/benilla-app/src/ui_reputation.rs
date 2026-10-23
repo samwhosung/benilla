@@ -338,16 +338,17 @@ pub(crate) fn feed_reputation(
     mut last_inputs: Local<crate::ui_script::VmMemo<ReputationInputs>>,
 ) {
     vm.turn(|script, mut reputations| {
-        // Taken unmarked, so the drain alone wakes no rebuild of the snapshot.
-        let ops = std::mem::take(&mut reputations.bypass_change_detection().list_ops);
         let Some(script) = script else {
             return;
         };
         let last = last.get(script);
         let last_inputs = last_inputs.get(script);
+        // Without the player or the catalog there is no snapshot, and the list ops wait for one.
         let (Ok(store), Some(factions_res)) = (self_store.single(), factions.as_ref()) else {
             return;
         };
+        // Taken unmarked, so the take alone wakes no rebuild of the snapshot.
+        let ops = std::mem::take(&mut reputations.bypass_change_detection().list_ops);
         let catalog = factions_res.catalog();
         let (race, class) = (
             store.0.unit_race().unwrap_or(0),
@@ -364,6 +365,7 @@ pub(crate) fn feed_reputation(
             || last_inputs.as_ref() != Some(&inputs)
             || last.is_none();
         if !moved {
+            script.apply_reputation_ops(ops);
             return;
         }
         *last_inputs = Some(inputs);
