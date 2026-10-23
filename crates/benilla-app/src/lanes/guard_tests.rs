@@ -333,6 +333,223 @@ const HOST_HELD_UNREAD: &[&str] = &[
     "::ui_tradeskill::TradeSkillOpens",
 ];
 
+/// The view pushes that read what a handler writes as the frame left it, not as each listener's
+/// packet did: each VM-holding feed of the `UiFeed` phase with the state the handlers write that
+/// it reads itself, past the call host's own reads. The reference's getters read the live object
+/// and caches at the listener's call (`UnitHealth` `0x5174d0`), and a handler runs whole before
+/// the next (`0x537ae5`), so a listener reads its own packet's state; a push here hands a lane's
+/// listener the frame's last. The list is the whole of that remaining work and only shrinks: a
+/// feed goes once a log versions what it reads ([`crate::ui_unit::views`]), a new one fails, and
+/// a row whose feed or inputs moved fails until it matches.
+#[rustfmt::skip]
+const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
+    ("::player::net::feed_player_skinned", &["player::net::SkinnedFeed"]),
+    ("::death::feed_death", &["Transform", "death::DeathNet", "items::Countdowns", "items::Items",
+        "names::NameCache", "net::GuidIndex", "net::NetStatus", "net::ObjectStore",
+        "net::SelfGuid"]),
+    ("::minimap::ping::drive_minimap_ping", &["minimap::ping::MinimapPing",
+        "ui_party::GroupState"]),
+    ("::minimap::feed_game_time", &["net::game_time::ServerTime"]),
+    ("::minimap::blips::drive_blip_tooltip", &["items::Countdowns", "names::NameCache",
+        "net::GuidIndex", "net::ObjectStore"]),
+    // The four tokens' snapshots read the stores as of the drain's place (`ui_unit::views`); the
+    // XP pair, the rest state, the level edge, the combo points, the bar toggles and the worn
+    // display read the live store, and every snapshot its names, relations, selection and group.
+    ("::ui_unit::feed_units", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
+        "net::SelfGuid", "net::reputations::Reputations", "target::Selection",
+        "ui_guild::GuildState", "ui_party::GroupState"]),
+    ("::ui_unit::feed_unit_reach", &["Transform", "names::NameCache", "net::GuidIndex",
+        "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations",
+        "ui_party::GroupState", "ui_pet::PetBar"]),
+    ("::ui_unit::held::feed_chain_units", &["names::NameCache", "net::GuidIndex",
+        "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations",
+        "ui_guild::GuildState", "ui_party::GroupState"]),
+    ("::ui_unit::held::feed_name_candidates", &["names::NameCache", "net::GuidIndex",
+        "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations",
+        "ui_guild::GuildState", "ui_party::GroupState"]),
+    ("::ui_unit::control_gate::feed_control_bypass", &["net::ObjectStore"]),
+    ("::ui_unit::feed_farsight_focus", &["net::ObjectStore"]),
+    ("::ui_unit::relations::feed_unit_relations", &["names::NameCache", "net::GuidIndex",
+        "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations"]),
+    ("::ui_unit::feed_default_language", &["net::ObjectStore"]),
+    ("::ui_unit::feed_known_languages", &["net::ObjectStore", "ui_action::PlayerActions"]),
+    ("::ui_party::feed::feed_party", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
+        "net::SelfGuid", "net::reputations::Reputations", "ui_guild::GuildState",
+        "ui_party::GroupState"]),
+    ("::ui_duel::feed_duel", &["names::NameCache", "ui_duel::DuelState"]),
+    ("::ui_binder::feed_binder", &["ui_binder::BinderState"]),
+    ("::ui_dialog_verbs::feed_dialog_verbs", &["ui_dialog_verbs::AreaSpiritHealer",
+        "ui_dialog_verbs::BattlefieldQueue", "ui_dialog_verbs::InstanceBoot",
+        "ui_dialog_verbs::PetUnlearnState"]),
+    ("::ui_dialog_verbs::feed_meeting_stone", &["names::NameCache",
+        "ui_dialog_verbs::MeetingStone"]),
+    ("::ui_battlefield_score::feed_battlefield_score", &["names::NameCache",
+        "ui_battlefield_score::BattlefieldScoreboard", "ui_dialog_verbs::BattlefieldQueue"]),
+    ("::ui_battlefield::reset_on_world_enter", &["ui_battlefield::Battlefield"]),
+    ("::ui_battlefield::feed_battlefield", &["names::NameCache", "ui_battlefield::Battlefield",
+        "ui_dialog_verbs::BattlefieldQueue"]),
+    ("::ui_battlefield_positions::feed_battlefield_positions", &["names::NameCache",
+        "net::GuidIndex", "net::SelfGuid", "ui_battlefield_positions::BattlefieldPositions",
+        "ui_dialog_verbs::BattlefieldQueue", "ui_party::GroupState"]),
+    ("::tutorial::feed_tutorials", &["items::Items", "net::ObjectStore"]),
+    ("::ui_summon::feed_summon", &["names::NameCache", "ui_summon::SummonState"]),
+    ("::ui_gm_ticket::feed_gm_ticket", &["ui_gm_ticket::GmTicketState"]),
+    ("::ui_instance::feed_instance", &["ui_instance::InstanceState"]),
+    ("::ui_billing::poll_play_time", &["net::SessionBilling"]),
+    ("::ui_logout::feed_logout", &["ui_logout::LogoutState"]),
+    ("::ui_social::feed::feed_social", &["names::NameCache", "ui_social::SocialState"]),
+    ("::ui_guild::feed::feed_guild", &["net::ObjectStore", "ui_guild::GuildLocal",
+        "ui_guild::GuildState"]),
+    ("::ui_petition::feed::feed_petition", &["names::NameCache", "net::ObjectStore",
+        "net::SelfGuid", "ui_petition::GuildRegistrarState", "ui_petition::PetitionRecords",
+        "ui_petition::PetitionState", "ui_session::latch::InteractLatch"]),
+    ("::ui_tooltip::drive_mouseover_tooltip", &["Transform", "go_anim::GoAnim",
+        "go_templates::GameObjectTemplates", "items::Countdowns", "items::Items",
+        "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
+        "net::reputations::Reputations", "ui_action::PlayerActions", "ui_guild::GuildState"]),
+    ("::ui_tooltip::spell_feed::feed_spell_tooltips", &["items::Countdowns", "items::Items",
+        "net::GuidIndex", "net::HomeBind", "net::ObjectStore", "net::UnitSpeeds",
+        "net::motion::modes::UnitMoveModes", "net::motion::remote::RemoteMotion",
+        "net::reputations::Reputations", "spell::mods::SpellModifiers",
+        "ui_action::PlayerActions"]),
+    ("::ui_char::feed_char", &["items::Countdowns", "items::Items", "names::NameCache",
+        "net::GuidIndex", "net::ObjectStore"]),
+    ("::ui_char::feed_skills", &["net::ObjectStore"]),
+    ("::ui_reputation::feed_reputation", &["net::ObjectStore", "net::reputations::Reputations"]),
+    ("::ui_inspect::feed_inspect", &["items::Items", "names::NameCache", "net::GuidIndex",
+        "net::ObjectStore", "net::SelfGuid", "target::Selection", "ui_party::GroupState"]),
+    ("::ui_honor::feed_honor", &["net::ObjectStore", "target::Selection", "ui_honor::InspectHonor",
+        "ui_party::GroupState"]),
+    ("::ui_dressup::feed_dressup", &["items::Items", "net::ObjectStore", "ui_guild::GuildState"]),
+    ("::ui_action::recount::recount_item_actions", &["items::Countdowns", "items::Items",
+        "net::GuidIndex", "net::ObjectStore"]),
+    ("::ui_action::feed::feed_actions", &["items::Countdowns", "items::Items", "net::GuidIndex",
+        "net::ObjectStore", "ui_action::PlayerActions", "ui_action::errors::MountErrors",
+        "ui_action::errors::PetTameFailures", "ui_action::errors::UiErrorTexts"]),
+    ("::ui_action::state::feed_action_state", &["Transform",
+        "creature_anim::sheath::CommittedSheath", "items::Countdowns", "items::Items",
+        "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
+        "net::UnitSpeeds", "net::game_time::ServerTime", "net::motion::modes::UnitMoveModes",
+        "net::motion::remote::RemoteMotion", "net::reputations::Reputations",
+        "player::state::StandPending", "spell::cooldowns::Cooldowns", "spell::mods::SpellModifiers",
+        "target::Selection", "ui_action::PlayerActions", "ui_action::state::ActionStateMemory",
+        "ui_pet::PetBar"]),
+    ("::spell::targeting::feed_targeting_to_vm", &["names::NameCache", "net::GuidIndex",
+        "net::ObjectStore", "net::UnitSpeeds", "net::motion::modes::UnitMoveModes",
+        "net::motion::remote::RemoteMotion", "net::reputations::Reputations",
+        "spell::mods::SpellModifiers", "spell::targeting::SpellTargeting", "ui_party::GroupState",
+        "ui_pet::PetBar"]),
+    ("::ui_aura::feed_auras", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
+        "net::SelfGuid", "net::reputations::Reputations", "target::Selection",
+        "ui_action::PlayerActions", "ui_aura::AuraDurations", "ui_party::GroupState",
+        "ui_pet::PetBar"]),
+    ("::ui_spellbook::feed_spellbook", &["items::Countdowns", "items::Items", "net::GuidIndex",
+        "net::ObjectStore", "spell::cooldowns::Cooldowns", "ui_action::PlayerActions",
+        "ui_spellbook::LearnedInTab"]),
+    ("::ui_macro::rebind_macro_spells", &["ui_action::PlayerActions"]),
+    ("::ui_macro::load_macros", &["ui_action::PlayerActions"]),
+    ("::ui_talent::feed_talents", &["net::ObjectStore", "ui_action::PlayerActions"]),
+    ("::ui_talent_wipe::feed_talent_wipe", &["ui_talent_wipe::TalentWipeState"]),
+    ("::ui_shapeshift::feed_shapeshift_bar", &["items::Countdowns", "items::Items",
+        "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
+        "net::reputations::Reputations", "spell::cooldowns::Cooldowns",
+        "spell::mods::SpellModifiers", "target::Selection", "ui_action::PlayerActions"]),
+    ("::ui_pet::bar::feed_pet_bar", &["net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
+        "ui_pet::PetAttackLatch", "ui_pet::PetBar"]),
+    ("::ui_pet::bar::fire_pet_cooldown_events", &["ui_pet::PetBar"]),
+    ("::ui_pet::unit::feed_pet_unit", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
+        "net::SelfGuid", "ui_party::GroupState", "ui_pet::PetBar"]),
+    ("::ui_pet::menu::feed_pet_menu", &["net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
+        "ui_pet::PetBar"]),
+    ("::ui_pet_book::feed_pet_book", &["net::GuidIndex", "net::ObjectStore", "ui_pet::PetBar"]),
+    ("::ui_pet_stats::feed_pet_stats", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
+        "net::SelfGuid", "ui_pet::PetBar"]),
+    ("::ui_cast::feed_cast_reports", &["items::Countdowns", "items::Items", "net::GuidIndex",
+        "net::ObjectStore", "spell::inflight::AutoRepeatActive", "spell::inflight::PendingCast",
+        "spell::inflight::QueuedMeleeSpell", "spell::targeting::SpellTargeting",
+        "ui_action::cast_lines::CastFailRedisplays"]),
+    ("::ui_mirror::feed_mirror_timers", &["ui_mirror::MirrorTimerFeed"]),
+    ("::ui_items::locks::apply_item_releases", &["items::Countdowns", "net::GuidIndex",
+        "net::ObjectStore", "ui_loot::LootState"]),
+    ("::ui_items::feed::feed_containers", &["items::Countdowns", "items::Items", "names::NameCache",
+        "net::GuidIndex", "net::ObjectStore", "spell::cooldowns::Cooldowns",
+        "ui_petition::PetitionRecords"]),
+    ("::ui_items::feed::feed_item_stats", &["items::Items", "net::HomeBind", "net::ObjectStore",
+        "spell::mods::SpellModifiers"]),
+    ("::ui_items::feed::feed_item_sets", &["items::Items", "net::ObjectStore",
+        "spell::mods::SpellModifiers"]),
+    ("::ui_items::feed::ask_item_build_lookups", &["items::Countdowns", "names::NameCache",
+        "net::GuidIndex", "net::ObjectStore", "ui_petition::PetitionRecords"]),
+    ("::ui_items::feed::feed_player_req", &["net::ObjectStore", "net::Proficiencies",
+        "net::reputations::Reputations", "ui_action::LearnedAbilities",
+        "ui_action::PlayerActions"]),
+    ("::ui_items::lock_openers::feed_lock_openers", &["items::Countdowns", "net::GuidIndex",
+        "net::ObjectStore", "ui_action::PlayerActions"]),
+    ("::ui_gossip::feed_gossip", &["items::Countdowns", "names::NameCache", "net::GuidIndex",
+        "net::ObjectStore", "ui_gossip::GossipState", "world_state::WorldStates"]),
+    ("::ui_merchant::feed_merchant", &["items::Countdowns", "items::Items", "names::NameCache",
+        "net::GuidIndex", "net::ObjectStore", "ui_merchant::MerchantErrors",
+        "ui_merchant::MerchantOpen", "ui_session::latch::InteractLatch"]),
+    ("::ui_merchant::feed_repair_costs", &["items::Countdowns", "items::Items", "names::NameCache",
+        "net::GuidIndex", "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations",
+        "ui_merchant::MerchantOpen"]),
+    ("::ui_auction::feed_auction", &["items::Items", "names::NameCache", "ui_auction::AuctionOpen",
+        "ui_session::latch::InteractLatch"]),
+    ("::ui_auction::reset_auction_on_world_enter", &["ui_auction::AuctionOpen"]),
+    ("::ui_bank::feed_bank", &["net::ObjectStore", "ui_bank::BankErrors", "ui_bank::BankOpen",
+        "ui_session::latch::InteractLatch"]),
+    ("::ui_mail::feed_mail", &["go_templates::GameObjectTemplates", "items::Countdowns",
+        "items::Items", "names::NameCache", "net::GuidIndex", "net::ObjectStore",
+        "ui_mail::MailOpen", "ui_mail::pending::MailPending", "ui_session::latch::InteractLatch",
+        "world_state::WorldStates"]),
+    ("::ui_mail::send_query_next_mail_time_on_enter", &["items::Items", "ui_mail::MailOpen",
+        "ui_mail::pending::MailPending"]),
+    ("::ui_trade::feed_trade", &["items::Countdowns", "items::Items", "names::NameCache",
+        "net::GuidIndex", "net::ObjectStore", "ui_session::latch::InteractLatch",
+        "ui_trade::TradeSession"]),
+    ("::ui_item_text::feed_item_text", &["go_templates::GameObjectTemplates", "items::Countdowns",
+        "items::Items", "names::NameCache", "net::GuidIndex", "net::ObjectStore",
+        "ui_item_text::ItemTextOpen", "ui_item_text::PageTexts", "ui_mail::MailOpen",
+        "world_state::WorldStates"]),
+    ("::ui_stable::feed_stable", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
+        "net::SelfGuid", "ui_pet::PetBar", "ui_session::latch::InteractLatch",
+        "ui_stable::StableErrors", "ui_stable::StableOpen"]),
+    ("::ui_tabard::feed_tabard", &["net::ObjectStore", "ui_guild::GuildState",
+        "ui_tabard::TabardOpen"]),
+    ("::ui_trainer::feed_trainer", &["items::Items", "names::NameCache", "net::GuidIndex",
+        "net::HomeBind", "net::ObjectStore", "spell::mods::SpellModifiers",
+        "ui_action::PlayerActions", "ui_pet::PetBar", "ui_session::latch::InteractLatch",
+        "ui_trainer::TrainerErrors", "ui_trainer::TrainerOpen"]),
+    ("::ui_taxi::feed_taxi", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
+        "net::SelfGuid", "net::reputations::Reputations", "ui_session::latch::InteractLatch",
+        "ui_taxi::TaxiState", "ui_taxi::routing::TaxiRouteCache"]),
+    ("::ui_taxi::feed_on_taxi", &["net::ObjectStore"]),
+    ("::ui_tradeskill::feed_trade_skill", &["items::Countdowns", "items::Items", "net::GuidIndex",
+        "net::ObjectStore", "spell::cooldowns::Cooldowns", "ui_action::PlayerActions",
+        "ui_tradeskill::TradeSkillOpen"]),
+    ("::ui_craft::feed_craft", &["items::Countdowns", "items::Items", "net::GuidIndex",
+        "net::ObjectStore", "spell::mods::SpellModifiers", "ui_action::PlayerActions",
+        "ui_craft::CraftOpen"]),
+    ("::ui_loot::feed_loot", &["items::Countdowns", "items::Items", "names::NameCache",
+        "net::GuidIndex", "net::ObjectStore", "ui_loot::AutoLootByte", "ui_loot::LootLatch",
+        "ui_loot::LootState", "ui_party::GroupState"]),
+    ("::ui_loot_roll::feed_loot_rolls", &["items::Items", "names::NameCache", "net::SelfGuid",
+        "ui_loot_roll::LootRolls"]),
+    ("::ui_quest::lines::feed_quest_lines", &["items::Items", "ui_quest::lines::QuestLines",
+        "ui_quest_log::QuestLog"]),
+    ("::ui_quest::feed_quest", &["go_templates::GameObjectTemplates", "items::Countdowns",
+        "items::Items", "names::NameCache", "net::GuidIndex", "net::ObjectStore",
+        "ui_quest::QuestGiver", "ui_session::latch::InteractLatch", "world_state::WorldStates"]),
+    ("::ui_quest_log::feed_quest_log", &["items::Countdowns", "names::NameCache", "net::GuidIndex",
+        "net::ObjectStore", "ui_quest::QuestGiver", "ui_quest::lines::QuestLines",
+        "ui_quest_log::QuestLog", "world_state::WorldStates"]),
+    ("::ui_quest_log::feed_server_clock", &["net::ServerWallClock"]),
+    ("::ui_quest_share::feed_quest_share", &["names::NameCache", "ui_quest_share::QuestShare"]),
+    ("::ui_chat::broadcast::feed_broadcasts", &["ui_chat::edit::ChannelState"]),
+    ("::ui_chat::channels::seed_channels", &["ui_chat::edit::ChannelState"]),
+    ("::ui_chat::feed::played_time_bridge", &["net::PlayedTimeAnswer"]),
+];
+
 /// The resources the handlers fill through a shared reference, which their declared access shows
 /// as a read: the error keys a refusal pushes and the tutorial banks a watcher fires. The lanes
 /// and the host's two other sinks (the message sounds and the unit edits, which raise no event)
@@ -1104,4 +1321,151 @@ fn the_systems_unordered_against_the_drain_meet_it_only_on_a_pure_cache() {
         "these run in no declared order against the drain and meet what it touches; order them:\n  {}",
         hazards.join("\n  ")
     );
+}
+
+/// The lane queues a view push reads as a queue, which [`READS_FRAME_FINAL`] does not count:
+/// what they hold fires from their own lanes.
+const QUEUES_NOT_VIEWS: &[&str] = &[
+    "field_watch::NoticeLane",
+    "item_lane::ItemLane",
+    "ui_chat::ChatLog",
+    "ui_cast::CastReports",
+    "ui_auction::net::HouseLane",
+    "ui_party::feed::PartyLane",
+    "ui_items::EquipErrors",
+    "ui_unit::views::ViewLog",
+    "ui_items::feed::BagView",
+];
+
+/// A type's name as [`READS_FRAME_FINAL`] spells it: the crate's own by its path in the crate, an
+/// engine type by its own name.
+fn short_name(full: &str) -> String {
+    match full.strip_prefix("benilla_app::") {
+        Some(rest) => rest.to_string(),
+        None => full.rsplit("::").next().unwrap_or(full).to_string(),
+    }
+}
+
+/// Every view push that reads what a handler writes has its row, whose inputs are exactly the
+/// handler-written state it reads: each component a handler writes and each resource one writes,
+/// past the VM, the message buffers and the lane queues. A feed's own reads are its declared
+/// access less the call host's, entry by entry, as every feed that lends the host holds all of
+/// the host's.
+#[test]
+fn every_view_push_of_what_a_handler_writes_is_listed() {
+    use bevy::ecs::query::{ComponentAccessKind, FilteredAccess};
+    use bevy::ecs::schedule::NodeId;
+    let mut app = headless_client();
+    let (components, resources) = {
+        let handlers = app.world().resource::<crate::net::handlers::NetHandlers>();
+        let mut components = BTreeSet::new();
+        let mut resources = BTreeSet::new();
+        for (_, access) in &handlers.accesses {
+            let access = access.combined_access();
+            if let Ok(kinds) = access.try_iter_component_access() {
+                components.extend(kinds.filter_map(|k| match k {
+                    ComponentAccessKind::Exclusive(id) => Some(id),
+                    _ => None,
+                }));
+            }
+            resources.extend(access.resource_writes());
+        }
+        (components, resources)
+    };
+    let (pushes, systems) = app.world_mut().schedule_scope(Update, |world, schedule| {
+        schedule.graph_mut().systems.initialize(world);
+        let vm = world
+            .components()
+            .get_resource_id(TypeId::of::<benilla_ui::script::UiScript>());
+        let host: Vec<FilteredAccess> = {
+            use bevy::ecs::system::System;
+            let mut host = IntoSystem::into_system(|_: crate::script_calls::ScriptCallHost| {});
+            System::initialize(&mut host, world)
+                .filtered_accesses()
+                .to_vec()
+        };
+        let input = |id: ComponentId| {
+            let n = name(world, id);
+            (Some(id) != vm && !n.contains("Messages<")).then(|| short_name(&n))
+        };
+        let graph = schedule.graph();
+        let mut pushes: HashMap<String, BTreeSet<String>> = HashMap::new();
+        let mut systems = BTreeSet::new();
+        for (key, system, _) in graph.systems.iter() {
+            let name = system.name().to_string();
+            systems.insert(name.clone());
+            if !in_feed(graph, NodeId::System(key)) || system.is_exclusive() {
+                continue;
+            }
+            let Some(with_access) = graph.systems.get(key) else {
+                continue;
+            };
+            if !vm.is_some_and(|vm| with_access.access.combined_access().has_resource_write(vm)) {
+                continue;
+            }
+            let mut own: Vec<&FilteredAccess> =
+                with_access.access.filtered_accesses().iter().collect();
+            for h in &host {
+                if let Some(i) = own.iter().position(|o| *o == h) {
+                    own.remove(i);
+                }
+            }
+            let mut inputs = BTreeSet::new();
+            for access in own.iter().map(|o| o.access()) {
+                let read_c = components
+                    .iter()
+                    .filter(|&&id| access.has_component_read(id));
+                let read_r = resources.iter().filter(|&&id| access.has_resource_read(id));
+                inputs.extend(read_c.chain(read_r).filter_map(|&id| input(id)));
+            }
+            inputs.retain(|n| !QUEUES_NOT_VIEWS.contains(&n.as_str()));
+            if !inputs.is_empty() {
+                pushes.insert(short_name(&name), inputs);
+            }
+        }
+        (pushes, systems)
+    });
+    if !systems.iter().any(|n| n.contains("benilla_app::")) {
+        eprintln!("skipped: this build carries no type names");
+        return;
+    }
+    let row = |system: &str| {
+        READS_FRAME_FINAL
+            .iter()
+            .find(|(s, _)| format!("::{system}").ends_with(s))
+    };
+    let mut wrong: Vec<String> = pushes
+        .iter()
+        .filter(|(system, inputs)| {
+            row(system).is_none_or(|(_, listed)| {
+                listed
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<BTreeSet<_>>()
+                    != **inputs
+            })
+        })
+        .map(|(system, inputs)| {
+            let inputs: Vec<String> = inputs.iter().map(|i| format!("{i:?}")).collect();
+            format!("(\"::{system}\", &[{}]),", inputs.join(", "))
+        })
+        .collect();
+    wrong.sort();
+    let stale: Vec<&str> = READS_FRAME_FINAL
+        .iter()
+        .filter(|(s, _)| {
+            !pushes
+                .keys()
+                .any(|system| format!("::{system}").ends_with(s))
+        })
+        .map(|(s, _)| *s)
+        .collect();
+    assert!(
+        wrong.is_empty(),
+        "these feeds push views off state a handler writes, read as the frame left it: version \
+         what they read through the views lane, or give each its row in READS_FRAME_FINAL as it \
+         stands:\n  {}",
+        wrong.join("\n  ")
+    );
+    assert!(stale.is_empty(), "stale rows: {stale:?}");
 }
