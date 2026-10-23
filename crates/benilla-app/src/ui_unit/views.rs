@@ -775,7 +775,7 @@ impl UnitViews {
         // pet (`"targettarget"`, `"partypet1"` before a swap), and a pet a member's earlier record
         // named; so each rewound store's names join the readable, and are rewound in turn.
         let mut queue: Vec<u64> = Vec::new();
-        let mut name = |g: u64, readable: &mut Readable, queue: &mut Vec<u64>| {
+        let name = |g: u64, readable: &mut Readable, queue: &mut Vec<u64>| {
             if g != 0 && readable.all.insert(g) && stores.binary_search(&g).is_ok() {
                 queue.push(g);
             }
