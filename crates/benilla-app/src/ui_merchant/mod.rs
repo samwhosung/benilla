@@ -1190,7 +1190,6 @@ mod tests {
     #[test]
     fn a_repair_flag_change_fires_no_merchant_update() {
         use benilla_protocol::field::FIELD_UNIT_NPC_FLAGS;
-        use bevy::ecs::system::RunSystemOnce;
         const VENDOR: u64 = 0xF130_0000_0000_0042;
 
         let mut app = crate::game_plugins::schedule_tests::headless_client();
@@ -1218,8 +1217,10 @@ mod tests {
             )
             .unwrap();
         app.insert_non_send_resource(script);
-        let mut feed = |app: &mut App| {
-            app.world_mut().run_system_once(feed_merchant).unwrap();
+        // One system across the frames, so its memory of the last push lasts.
+        let feed_id = app.world_mut().register_system(feed_merchant);
+        let feed = |app: &mut App| {
+            app.world_mut().run_system(feed_id).unwrap();
             let script = app.world_mut().non_send_resource_mut::<UiScript>();
             let seen = script.eval::<Vec<String>>("return SEEN").unwrap();
             script.run("SEEN = {}").unwrap();
