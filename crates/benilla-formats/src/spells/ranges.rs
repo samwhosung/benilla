@@ -75,11 +75,16 @@ impl UnitMotion {
 pub struct RangeUnit {
     /// `UNIT_FIELD_COMBATREACH`, `[[unit+0x110]+0x1f0]`.
     pub reach: f32,
-    /// `OBJECT_FIELD_TYPE` bit 4 (`0x6e3689`-`0x6e3695`). Only a unit target's read counts: the
-    /// ranged arm's bonus asks it of the target, and the melee arm's never does. The caster's
-    /// own is the gate of the `Attributes & 2` scale (`0x6e36b4`-`0x6e36bf`), which is not applied.
+    /// `OBJECT_FIELD_TYPE` bit 4 (`0x6e3689`-`0x6e3695`). The ranged arm's bonus asks it of the
+    /// unit target, the melee arm's never does, and the caster's own gates the ranged-slot scale
+    /// (`0x6e36b4`-`0x6e36bf`).
     pub player: bool,
     pub motion: UnitMotion,
+    /// The `RangedModRange` of the item in this unit's ranged slot, read only of the caster
+    /// (`0x6e36c1`-`0x6e3729`): the guid at inventory slot 17, its item object, and that entry's
+    /// item-cache record. `None` for an empty slot, an item not streamed, a record not cached, or
+    /// a unit with no inventory, which leaves the max alone.
+    pub ranged_mod_range: Option<f32>,
 }
 
 impl RangeUnit {
@@ -89,6 +94,7 @@ impl RangeUnit {
             reach,
             player: false,
             motion: UnitMotion::default(),
+            ranged_mod_range: None,
         }
     }
 }
@@ -121,9 +127,11 @@ pub struct RangeTargets {
 /// player. It comes after the melee floor and before the range modifier (op 5, `0x6e3746`), and
 /// the min never takes it. The on-next-swing short-circuit skips it.
 ///
-/// Not applied: for a player the `Attributes & 2` scale (`0x6e36aa`), `max *= RangedModRange ·
-/// 0.01` of the ranged-slot item, which a relic (range mod 0, InventoryType 28, admitted by
-/// `0x809200`) would zero, though no spell a relic class learns carries the bit.
+/// Then, for a spell with `Attributes & 0x2` cast by a player, the max is scaled by its ranged-slot
+/// item ([`RangeUnit::ranged_mod_range`]): `RangedModRange · 0.01f · max` on the x87, stored as an
+/// `f32` (`0x6e36aa`-`0x6e373a`). Every bow, gun, crossbow, wand and thrown weapon carries 100,
+/// which gives the max back; a relic or Egan's Blaster carries 0, which zeroes it. The min is
+/// untouched.
 pub fn min_max_range(
     spell: &crate::spells::SpellDisplay,
     row: Option<&SpellRange>,
@@ -149,16 +157,19 @@ pub fn min_max_range(
         if row.min == 0.0 && row.max == 0.0 {
             return None;
         }
-        let Some(target) = targets.target else {
-            return Some((row.min, row.max));
-        };
-        let pad = f64::from(caster.reach) + f64::from(target.reach);
-        let min = if row.min == 0.0 {
-            0.0
-        } else {
-            (pad + f64::from(row.min)) as f32
-        };
-        (min, (f64::from(row.max) + pad) as f32, Some(target))
+        match targets.target {
+            // No unit target: the row's pair, unpadded, on to the tail.
+            None => (row.min, row.max, None),
+            Some(target) => {
+                let pad = f64::from(caster.reach) + f64::from(target.reach);
+                let min = if row.min == 0.0 {
+                    0.0
+                } else {
+                    (pad + f64::from(row.min)) as f32
+                };
+                (min, (f64::from(row.max) + pad) as f32, Some(target))
+            }
+        }
     };
     let earns_bonus = |unit: &RangeUnit| {
         caster.motion.moves_at_run_speed()
@@ -170,8 +181,15 @@ pub fn min_max_range(
     } else {
         max
     };
+    // `fld [item+0x118]; fmul [0x8029d0]; fmul [max]; fstp`: the first product is exact at PC_53,
+    // the second rounds there and then to single, as the `f64` pair does.
     Some((min, max))
 }
+
+/// `Attributes & 0x2`, the ranged-slot spells the scale applies to (`0x6e36aa`).
+const ATTR_RANGED: u32 = 0x2;
+/// `[0x8029d0]`, the single-precision 0.01 the item's `RangedModRange` is multiplied by.
+const RANGED_MOD_SCALE: f32 = 0.01;
 
 /// Whether [`min_max_range`] reads the units it is not handed for this spell and row when it is
 /// passed no unit target, as the spell tooltip calls it (`push 0`, `0x52e9c2`): only the melee
@@ -184,6 +202,18 @@ pub fn min_max_range_reads_units(
     row: Option<&SpellRange>,
 ) -> bool {
     !spell.on_next_swing() && row.is_some_and(SpellRange::is_melee)
+}
+
+/// Whether [`min_max_range`] reads the caster's ranged-slot item for this spell and row: a spell
+/// with `Attributes & 0x2` whose row survives the arms, as the scale follows them (`0x6e36aa`).
+/// The on-next-swing short-circuit, the missing row and the self row return first.
+pub fn min_max_range_reads_ranged_slot(
+    spell: &crate::spells::SpellDisplay,
+    row: Option<&SpellRange>,
+) -> bool {
+    !spell.on_next_swing()
+        && spell.attributes & ATTR_RANGED != 0
+        && row.is_some_and(|r| r.is_melee() || r.min != 0.0 || r.max != 0.0)
 }
 
 /// `SpellRange.dbc`, by row id ([`crate::spells::SpellDisplay::range_index`]).
@@ -743,6 +773,49 @@ mod tests {
             min_max_range(&spell(2, 0x400), Some(&MELEE), runner(1.5), targets),
             Some((0.0, ON_NEXT_SWING_RANGE))
         );
+    }
+
+    /// The ranged-slot scale (`0x6e36aa`-`0x6e373a`): a player's `Attributes & 0x2` spell takes
+    /// `RangedModRange · 0.01f · max`, after the arms and the moving bonus, and the min stays. A
+    /// bow's 100 gives the max back in `f32`; Egan's Blaster's 0 zeroes it. Neither a spell
+    /// without the bit, a caster that is no player, nor an empty slot is scaled.
+    #[test]
+    fn a_players_ranged_spell_scales_its_max_by_the_ranged_slot_item() {
+        const AUTO_SHOT: SpellRange = SpellRange {
+            min: 8.0,
+            max: 35.0,
+            flags: 0,
+        };
+        let holding = |player, range_mod| RangeUnit {
+            player,
+            ranged_mod_range: range_mod,
+            ..RangeUnit::still(1.5)
+        };
+        let range = |attributes, caster, target: Option<RangeUnit>| {
+            let targets = RangeTargets {
+                target,
+                attack_target: None,
+            };
+            min_max_range(&spell(114, attributes), Some(&AUTO_SHOT), caster, targets).unwrap()
+        };
+        assert_eq!(range(0x2, holding(true, Some(100.0)), None), (8.0, 35.0));
+        assert_eq!(range(0x2, holding(true, Some(0.0)), None), (8.0, 0.0));
+        // The pad comes first: a target's reach is scaled with the row's max (`0x6e35d8`).
+        let target = Some(RangeUnit::still(1.5));
+        assert_eq!(range(0x2, holding(true, Some(50.0)), target), (11.0, 19.0));
+        assert_eq!(range(0x0, holding(true, Some(0.0)), None), (8.0, 35.0));
+        assert_eq!(range(0x2, holding(false, Some(0.0)), None), (8.0, 35.0));
+        assert_eq!(range(0x2, holding(true, None), None), (8.0, 35.0));
+        // After the moving bonus (`0x6e36a2` before `0x6e36aa`).
+        let running_target = Some(RangeUnit {
+            player: true,
+            ..runner(1.5)
+        });
+        let running_caster = RangeUnit {
+            ranged_mod_range: Some(0.0),
+            ..running_target.unwrap()
+        };
+        assert_eq!(range(0x2, running_caster, running_target), (11.0, 0.0));
     }
 
     /// Row 2 is the melee family, 114 Auto Shot's 8-35, 95 Charge's 8-25.

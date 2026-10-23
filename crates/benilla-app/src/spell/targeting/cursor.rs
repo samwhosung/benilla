@@ -42,10 +42,18 @@ fn range_call<'a>(
         spell,
         row: spells.ranges.get(spell.range_index)?,
         mods: &checks.spell_mods,
-        caster: checks
-            .range_units
-            .unit(caster)
-            .unwrap_or(RangeUnit::still(crate::spell::DEFAULT_REACH)),
+        caster: {
+            let unit = checks
+                .range_units
+                .unit(caster)
+                .unwrap_or(RangeUnit::still(crate::spell::DEFAULT_REACH));
+            // Only the active player has a ranged slot to scale by.
+            if checks.self_q.iter().next().map(|(e, _)| e) == Some(caster) {
+                checks.player_caster(unit)
+            } else {
+                unit
+            }
+        },
         attack_target: checks.range_units.attack_target(caster),
     })
 }

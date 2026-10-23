@@ -270,8 +270,9 @@ impl SpellModifiers {
         })
     }
 
-    /// `GetMinMaxRange` modifies only the maximum at its common tail, after the moving bonus
-    /// (`0x6e3648`-`0x6e36a2`, then op 5 at `0x6e3746`). The on-next-swing `Attributes & 0x404` arm
+    /// `GetMinMaxRange` modifies only the maximum at its common tail, after the moving bonus and
+    /// the ranged-slot scale (`0x6e3648`-`0x6e373a`, then op 5 at `0x6e3746`), so a range talent's
+    /// flat yards land on a max the scale zeroed. The on-next-swing `Attributes & 0x404` arm
     /// returns before that tail (`0x6e350f`).
     pub(crate) fn min_max_range(
         &self,

@@ -1053,6 +1053,37 @@ fn range_cell_on_real_data() {
     assert_eq!(v.range, None, "the self row resolves max 0");
 }
 
+/// The range cell scales a ranged-slot spell's max by the player's ranged-slot item (`0x6e36aa`-
+/// `0x6e373a`) and drops a max of 0 (`0x52e9e2`-`0x52e9f0`): Arcane Shot (3044, `Attributes &
+/// 0x2`, row 114) reads "8-35 yd range" with a bow's 100 and nothing with Egan's Blaster's 0, and
+/// records the read; Fireball (133), without the bit, keeps its 35 and records none.
+#[test]
+fn the_range_cell_scales_a_ranged_spell_by_the_ranged_slot_item() {
+    let Some(spells) = real_spells() else { return };
+    let mut t = TestCtx::new();
+    let mut objs = no_objects();
+    let objects = objs.get();
+    let store = empty_player();
+    let holding = |range_mod| benilla_formats::RangeUnit {
+        player: true,
+        ranged_mod_range: Some(range_mod),
+        ..benilla_formats::RangeUnit::still(1.5)
+    };
+    let view = |t: &mut TestCtx, id, range_mod| {
+        let mut ctx = t.ctx_for(&objects, 0, None, Some(&store));
+        ctx.range_caster = holding(range_mod);
+        build_view(id, &spells, &mut ctx).expect("a view")
+    };
+    let (bow, deps) = view(&mut t, 3044, 100.0);
+    assert_eq!(Shown::of(&bow).range.as_deref(), Some("8-35 yd range"));
+    assert!(deps.ranged_slot, "the cell read the ranged slot");
+    let (blaster, _) = view(&mut t, 3044, 0.0);
+    assert_eq!(Shown::of(&blaster).range, None, "a max of 0 has no cell");
+    let (fireball, deps) = view(&mut t, 133, 0.0);
+    assert_eq!(Shown::of(&fireball).range.as_deref(), Some("35 yd range"));
+    assert!(!deps.ranged_slot);
+}
+
 /// The required-item, chance-to-X and reagents lines on the real data.
 #[test]
 fn the_required_item_chance_and_reagent_lines_on_real_data() {

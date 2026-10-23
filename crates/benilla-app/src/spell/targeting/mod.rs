@@ -82,6 +82,8 @@ pub(crate) struct BindChecks<'w, 's> {
     /// The caster, a unit and the caster's auto-attack target (`[caster+0xc48]`, which
     /// `GetMinMaxRange` looks up) as the range compare reads them.
     range_units: super::RangeUnits<'w, 's>,
+    /// The item cache the range's ranged-slot scale reads ([`super::with_ranged_slot`]).
+    items: Option<Res<'w, crate::items::Items>>,
 }
 
 impl BindChecks<'_, '_> {
@@ -197,7 +199,7 @@ impl BindChecks<'_, '_> {
                 .range_units
                 .unit(unit)
                 .unwrap_or(benilla_formats::RangeUnit::still(super::DEFAULT_REACH)),
-            _ => self.range_units.caster(),
+            _ => self.player_caster(self.range_units.caster()),
         };
         super::cast_target::RangeInputs {
             self_pos: me
@@ -211,6 +213,23 @@ impl BindChecks<'_, '_> {
             caster,
             target: None,
         }
+    }
+
+    /// The active player as `GetMinMaxRange` reads it, its ranged-slot item included.
+    pub(super) fn player_caster(
+        &self,
+        unit: benilla_formats::RangeUnit,
+    ) -> benilla_formats::RangeUnit {
+        let me = self.self_q.iter().next().and_then(|(_, store)| store);
+        super::with_ranged_slot(
+            unit,
+            me.map(|s| &s.0),
+            |g| {
+                let e = *self.index.as_deref()?.0.get(&g)?;
+                self.stores.get(e).ok().map(|s| &s.0)
+            },
+            self.items.as_deref(),
+        )
     }
 
     fn refusal(&self, spell_id: u32, range: super::cast_target::RangeInputs) -> Option<u8> {

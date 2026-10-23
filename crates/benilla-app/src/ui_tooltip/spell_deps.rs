@@ -125,6 +125,9 @@ pub(super) struct Deps {
     /// The range cell's melee arm read the caster's and the auto-attack target's combat reach and
     /// motion; the ranged arm, given no target, reads neither.
     pub(super) range_units: bool,
+    /// The range cell scaled a ranged-slot spell's max by the player's ranged-slot item
+    /// (`0x6e36aa`-`0x6e373a`).
+    pub(super) ranged_slot: bool,
     /// The chance line read these percentages, a [`Chance`] bit each.
     pub(super) avoidance: u8,
     /// The equipped-item search read these equipment slots, a bit each.
@@ -177,6 +180,7 @@ impl Deps {
             || (changes.gender && self.gender)
             || (changes.form && self.form)
             || (changes.range_units && self.range_units)
+            || (changes.ranged_slot && self.ranged_slot)
             || changes.avoidance & self.avoidance != 0
             || changes.worn & self.worn != 0
             || (changes.disarm && self.disarm)
@@ -218,6 +222,8 @@ pub(super) struct Changes {
     pub(super) gender: bool,
     pub(super) form: bool,
     pub(super) range_units: bool,
+    /// The ranged-slot item's `RangedModRange` moved.
+    pub(super) ranged_slot: bool,
     /// A [`Chance`] bit each.
     pub(super) avoidance: u8,
     /// The equipment slots whose item moved in a way the search can tell, a bit each.
@@ -240,6 +246,7 @@ impl Changes {
             && !self.gender
             && !self.form
             && !self.range_units
+            && !self.ranged_slot
             && self.avoidance == 0
             && self.worn == 0
             && !self.disarm
@@ -296,6 +303,12 @@ impl RangeSeen {
     }
 }
 
+/// The caster's ranged-slot `RangedModRange` as a bit pattern, which the scale of a ranged-slot
+/// spell's max reads ([`benilla_formats::RangeUnit::ranged_mod_range`]).
+pub(super) fn ranged_slot_seen(caster: &RangeUnit) -> Option<u32> {
+    caster.ranged_mod_range.map(f32::to_bits)
+}
+
 /// The player-side inputs one frame saw, which the pushed views were built against.
 #[derive(Clone, PartialEq)]
 pub(super) struct Seen {
@@ -316,6 +329,8 @@ pub(super) struct Seen {
     avoidance: [Option<u32>; 4],
     /// The caster's and its auto-attack target's reach, and whether the moving bonus applies.
     range_units: RangeSeen,
+    /// The caster's ranged-slot item's `RangedModRange` ([`ranged_slot_seen`]).
+    ranged_slot: Option<u32>,
     /// The unit fields the cost, cast and cooldown cells read.
     unit: UnitFields,
     /// The wire standings, slot by slot, and the race and class whose base they ride on, which
@@ -329,6 +344,7 @@ impl Seen {
         player: Option<&ObjectStore>,
         home: Option<&str>,
         range_units: RangeSeen,
+        ranged_slot: Option<u32>,
         objects: &Objects,
         items: &Items,
     ) -> Self {
@@ -343,6 +359,7 @@ impl Seen {
             avoidance: Chance::ALL
                 .map(|which| player.and_then(|s| which.read(&s.0)).map(f32::to_bits)),
             range_units,
+            ranged_slot,
             unit: UnitFields::of(player),
             reputations: Vec::new(),
             race_class: player.map_or((0, 0), |s| {

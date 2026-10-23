@@ -319,12 +319,11 @@ pub(crate) struct ActionStates<'w, 's> {
     pet_bar: Option<Res<'w, crate::ui_pet::PetBar>>,
     actions: Res<'w, PlayerActions>,
     spells: Option<Res<'w, Spells>>,
-    // Macro bindings, spell mods, the range units, the control flag and the skill lines.
+    // Macro bindings, spell mods, the control flag and the skill lines. The range compare reads
+    // the caster and the target through the targeting's context.
     cast_state: (
         Res<'w, crate::ui_macro::MacroBoundSpells>,
         Res<'w, crate::spell::SpellModifiers>,
-        // The caster's and the target's reach and motion, which the range compare reads.
-        crate::spell::RangeUnits<'w, 's>,
         // `[0xb4b3e4]`, which the usable walk reads.
         Option<Res<'w, crate::player::OwnControlLost>>,
         // A profession opener's line (`0x6de040`), which the checked test reads, and the skill
@@ -459,7 +458,7 @@ impl ActionStates<'_, '_> {
         if trace_cd {
             memory.last_cd_trace = Some(now);
         }
-        let control_lost = self.cast_state.3.as_ref().is_some_and(|c| c.0);
+        let control_lost = self.cast_state.2.as_ref().is_some_and(|c| c.0);
         let selection = self.targeting.selection.guid;
         let self_guid = self.targeting.context().self_guid;
 
@@ -562,7 +561,7 @@ impl ActionStates<'_, '_> {
             ..
         } = &mut **memory;
         let memory = vm.get_leaving_reset(script);
-        let (bound, spell_mods, range_units, own_control, skill_lines) = &*cast_state;
+        let (bound, spell_mods, own_control, skill_lines) = &*cast_state;
         let skill_catalog = skill_lines.as_deref().map(|s| &s.catalog);
         let sub_classes = sub_classes.as_deref().map(|s| &s.0);
         let me = self_q.iter().next();
@@ -571,7 +570,6 @@ impl ActionStates<'_, '_> {
         let stacks = me
             .map(|(s, _)| stack_counts(&s.0, objects))
             .unwrap_or_default();
-        let caster = range_units.caster();
         let selection = &targeting.selection;
         let target = selection
             .guid
@@ -579,7 +577,8 @@ impl ActionStates<'_, '_> {
             .and_then(|e| units.get(e).ok());
         let cast_ctx = targeting.context();
         let range_leg = RangeLeg {
-            caster,
+            // The context's caster carries the ranged-slot item the scale reads.
+            caster: cast_ctx.range.caster,
             mods: spell_mods,
             cast_ctx: &cast_ctx,
             player: me.is_some(),

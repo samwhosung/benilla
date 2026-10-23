@@ -10,7 +10,7 @@ use bevy::prelude::*;
 
 use benilla_ui::script::{AuraKey, AuraTooltipView, KeyedArg, TextPart, TooltipText};
 
-use super::spell_deps::{Chance, Changes, Deps, RangeSeen, Reagents, Seen};
+use super::spell_deps::{ranged_slot_seen, Chance, Changes, Deps, RangeSeen, Reagents, Seen};
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
 use crate::query_cache::Ask;
@@ -152,6 +152,7 @@ pub(super) fn build_view(
             {
                 deps.borrow_mut().range_units = true;
             }
+            // The scale reads the player's ranged-slot item whenever a row survives the arms.
             // The call passes a null target (`0x52e9c2`): the auto-attack target is the melee arm's
             // own lookup, and the ranged arm, with no target, pads nothing.
             let targets = benilla_formats::RangeTargets {
@@ -811,17 +812,24 @@ pub(super) fn feed_spell_tooltips(
             .and_then(|id| area_names.as_deref()?.0.resolve(id as i32))
             .map(str::to_string);
         let self_store = self_q.single().ok();
-        let caster_unit = range_units.caster();
+        // The ranged-slot scale reads the active player's inventory slot 17 (`0x6e36c1`).
+        let caster_unit = crate::spell::with_ranged_slot(
+            range_units.caster(),
+            self_store.map(|s| &s.0),
+            |g| objects.object(g),
+            Some(&items),
+        );
         let attack_target = range_units.caster_attack_target();
         // What moved since the last frame, which each pushed view is checked against: the bind
         // point (Astral Recall's `$z`), the form, the skills, what the equipped-item search learns
         // of each equipment slot and the disarm flag, the level, cost bases and ranged attack time,
-        // the block, dodge, parry and crit percentages, and the two units the melee range cell
-        // reads.
+        // the block, dodge, parry and crit percentages, the two units the melee range cell reads,
+        // and the ranged-slot item a ranged spell's range scales by.
         let mut seen = Seen::of(
             self_store,
             home_area.as_deref(),
             RangeSeen::of(&caster_unit, attack_target.as_ref()),
+            ranged_slot_seen(&caster_unit),
             &objects,
             &items,
         );

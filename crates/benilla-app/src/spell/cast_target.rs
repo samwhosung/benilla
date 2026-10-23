@@ -355,6 +355,8 @@ pub(crate) struct CastTargeting<'w, 's> {
     /// The pet bar's unit's answer, which a unit caster's place rungs read; absent outside the
     /// world.
     bar_unit_outdoors: Option<Res<'w, crate::player::BarUnitOutdoors>>,
+    /// The item cache the range's ranged-slot scale reads ([`super::with_ranged_slot`]).
+    items: Option<Res<'w, crate::items::Items>>,
 }
 
 impl CastTargeting<'_, '_> {
@@ -487,7 +489,15 @@ impl CastTargeting<'_, '_> {
                 target_pos: target
                     .and_then(|e| self.transforms.get(e).ok())
                     .map(|t| t.translation),
-                caster: self.range_units.caster(),
+                caster: super::with_ranged_slot(
+                    self.range_units.caster(),
+                    self_store.map(|s| &s.0),
+                    |g| {
+                        let e = *self.index.as_deref()?.0.get(&g)?;
+                        self.stores.get(e).ok().map(|s| &s.0)
+                    },
+                    self.items.as_deref(),
+                ),
                 target: target.and_then(|e| self.range_units.unit(e)),
             },
             main_hand_item: self

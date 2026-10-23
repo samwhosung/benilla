@@ -47,6 +47,32 @@ pub(crate) fn unit_motion(
     }
 }
 
+/// `caster` with its ranged-slot item's `RangedModRange` as `GetMinMaxRange` reads it for a player
+/// (`0x6e36c1`-`0x6e3720`): the guid at inventory slot 17 (`[[caster+0x1d3c]+0x88]`), the item
+/// object it names (`0x468460`, typemask 2) and that entry's item-cache record, looked up without a
+/// callback (`0x55ba30`). `me` is the active player's descriptor, the one unit with an inventory.
+pub(crate) fn with_ranged_slot<'a>(
+    caster: RangeUnit,
+    me: Option<&benilla_protocol::ObjectFields>,
+    object: impl Fn(u64) -> Option<&'a benilla_protocol::ObjectFields>,
+    items: Option<&crate::items::Items>,
+) -> RangeUnit {
+    let ranged_mod_range = (|| {
+        let guid = me?
+            .player_inv_slot(crate::items::EQUIPMENT_SLOT_RANGED)
+            .filter(|&g| g != 0)?;
+        let item = object(guid).filter(|o| o.is_item())?;
+        let entry = item.object_entry()?;
+        items?
+            .template(entry, 0, crate::query_cache::Ask::Read)
+            .map(|t| t.ranged_mod_range)
+    })();
+    RangeUnit {
+        ranged_mod_range,
+        ..caster
+    }
+}
+
 /// What a unit's range inputs are read from: its descriptor, and the state its movement flags and
 /// speeds come from ([`unify`], [`UnitSpeeds`]).
 type UnitParts = (
@@ -88,6 +114,8 @@ impl RangeUnits<'_, '_> {
             reach: store.0.unit_combat_reach(),
             player: store.0.object_type() == Some(ObjectType::Player),
             motion: unit_motion(flags, speeds.map(|s| &s.0), spline),
+            // The item cache is the caller's: [`with_ranged_slot`] reads it.
+            ranged_mod_range: None,
         })
     }
 
@@ -363,5 +391,102 @@ mod tests {
         assert_eq!(refusal(true, false, 7.0), Some(0x59), "the mob stands");
         assert_eq!(refusal(false, true, 7.0), Some(0x59), "the caster stands");
         assert_eq!(refusal(false, false, 4.9), None, "the floor stands");
+    }
+
+    /// The send path's range compare scales a ranged-slot spell by the item in inventory slot 17
+    /// (`0x6e36c1`-`0x6e373a`): a hunter's Arcane Shot (`Attributes & 0x2`, row 114's 8-35) at 20
+    /// yards passes with a bow (`RangedModRange` 100) and is "Out of range." with Egan's Blaster
+    /// (0), whose max is 0. An empty slot, an item object not streamed and a record not cached
+    /// leave the max alone.
+    #[test]
+    fn the_press_scales_a_ranged_spell_by_the_ranged_slot_item() {
+        use super::super::cast_target::CastTargeting;
+        use benilla_formats::{SpellDisplay, SpellRange};
+        use bevy::ecs::system::RunSystemOnce;
+
+        const ME: u64 = 0xF130_0000_0000_0001;
+        const GUN: u64 = 0x4000_0000_0000_0077;
+        const ENTRY: u32 = 13289;
+        enum Slot {
+            Empty,
+            Unstreamed,
+            Uncached,
+            Item(f32),
+        }
+        let refusal = |slot: Slot| {
+            let mut world = World::new();
+            world.insert_resource(Player::with_move_flags(0));
+            world.init_resource::<crate::spell::AutoSelfCast>();
+            world.init_resource::<crate::items::Items>();
+            world.insert_resource(crate::net::Reputations::default());
+            world.insert_resource(crate::net::SelfGuid(Some(ME)));
+            world.insert_resource(GuidIndex::default());
+            let mut pairs = vec![(2u16, 0x19u32), (22, 100), (130, 1.5f32.to_bits())];
+            if !matches!(slot, Slot::Empty) {
+                // `PLAYER_FIELD_INV_SLOT_HEAD + 2 * 17`, the guid `[[caster+0x1d3c]+0x88]` reads.
+                pairs.extend([(486 + 34, GUN as u32), (486 + 35, (GUN >> 32) as u32)]);
+            }
+            let me = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&pairs));
+            world.spawn((
+                SelfPlayer,
+                Embodied,
+                UnitSpeeds(speeds()),
+                me,
+                Transform::default(),
+            ));
+            if !matches!(slot, Slot::Unstreamed | Slot::Empty) {
+                crate::items::test_spawn_item(
+                    &mut world,
+                    GUN,
+                    benilla_protocol::ObjectFields::from_pairs(&[(2, 0x3), (3, ENTRY)]),
+                    false,
+                );
+            }
+            if let Slot::Item(range_mod) = slot {
+                world.resource_mut::<crate::items::Items>().insert_template(
+                    ENTRY,
+                    Some(benilla_protocol::messages::ItemInfo {
+                        ranged_mod_range: range_mod,
+                        ..crate::items::test_template("Egan's Blaster")
+                    }),
+                );
+            }
+            let mob = world
+                .spawn((store(0x09, 0.0), Transform::from_xyz(20.0, 0.0, 0.0)))
+                .id();
+            world.insert_resource(crate::target::Selection {
+                target: Some(mob),
+                guid: Some(MOB),
+                ..Default::default()
+            });
+            let arcane_shot = SpellDisplay {
+                range_index: 114,
+                attributes: 0x2,
+                ..Default::default()
+            };
+            let row = SpellRange {
+                min: 8.0,
+                max: 35.0,
+                flags: 0,
+            };
+            world
+                .run_system_once(move |targeting: CastTargeting| {
+                    targeting.context().range.refusal(
+                        &arcane_shot,
+                        Some(&row),
+                        &crate::spell::SpellModifiers::default(),
+                    )
+                })
+                .expect("the context builds")
+        };
+        assert_eq!(refusal(Slot::Item(100.0)), None, "a bow");
+        assert_eq!(refusal(Slot::Item(0.0)), Some(0x59), "Egan's Blaster");
+        assert_eq!(refusal(Slot::Empty), None, "no ranged item");
+        assert_eq!(
+            refusal(Slot::Unstreamed),
+            None,
+            "an item object not streamed"
+        );
+        assert_eq!(refusal(Slot::Uncached), None, "a record not cached");
     }
 }

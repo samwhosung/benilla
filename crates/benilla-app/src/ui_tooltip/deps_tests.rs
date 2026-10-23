@@ -576,7 +576,8 @@ fn recorded_fields(layout: &Layout, inputs: Inputs, deps: &Deps) -> Vec<(u16, u3
 fn changes(before: &Mat, now: &Mat, objects: &Objects, items: &Items) -> Changes {
     let seen = |m: &Mat| {
         let range = RangeSeen::of(&m.caster, m.attack_target.as_ref());
-        Seen::of(Some(&m.store), m.home, range, objects, items).with_reputations(&m.reputations)
+        Seen::of(Some(&m.store), m.home, range, None, objects, items)
+            .with_reputations(&m.reputations)
     };
     seen(now)
         .changes_since(&seen(before))
@@ -1673,6 +1674,7 @@ fn the_seen_diff_names_each_input_it_saw_move() {
             Some(s),
             None,
             RangeSeen::of(&caster, attack),
+            None,
             &objects,
             &items,
         )
@@ -1749,12 +1751,42 @@ fn the_seen_diff_names_each_input_it_saw_move() {
         Some(&base),
         Some("Ironforge"),
         RangeSeen::default(),
+        None,
         &objects,
         &items,
     );
     assert!(bound.changes_since(&seen(&base)).home);
+    // The ranged-slot item's `RangedModRange`, which only a ranged spell's range cell reads.
+    let holding = |range_mod: Option<f32>| {
+        let caster = RangeUnit {
+            ranged_mod_range: range_mod,
+            ..RangeUnit::still(1.5)
+        };
+        let slot = super::spell_deps::ranged_slot_seen(&caster);
+        Seen::of(
+            Some(&base),
+            None,
+            RangeSeen::default(),
+            slot,
+            &objects,
+            &items,
+        )
+    };
+    let swapped = holding(Some(0.0)).changes_since(&holding(Some(100.0)));
+    assert!(
+        swapped.ranged_slot && !swapped.range_units,
+        "a swap moves the slot alone"
+    );
+    assert!(
+        holding(None)
+            .changes_since(&holding(Some(100.0)))
+            .ranged_slot
+    );
+    assert!(holding(Some(100.0))
+        .changes_since(&holding(Some(100.0)))
+        .is_empty());
     // A player going or coming moves every view, which read nothing of one that was not there.
-    let gone = Seen::of(None, None, RangeSeen::default(), &objects, &items);
+    let gone = Seen::of(None, None, RangeSeen::default(), None, &objects, &items);
     assert_eq!(gone.changes_since(&seen(&base)).worn, EQUIPMENT_MASK);
     assert!(gone.changes_since(&seen(&base)).everything);
     assert!(seen(&base).changes_since(&gone).everything);

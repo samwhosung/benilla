@@ -43,7 +43,7 @@ pub(crate) use mods::{
 };
 #[cfg(test)]
 pub(crate) use mods::{OP_COOLDOWN, OP_RANGE};
-pub(crate) use range_units::{RangeUnits, DEFAULT_REACH};
+pub(crate) use range_units::{with_ranged_slot, RangeUnits, DEFAULT_REACH};
 pub(crate) use reads::{SpellLevel, SpellReads, UnitField, Unrecorded};
 pub(crate) use report::{
     CastCore, CastSlots, CursorCancel, Held, REASON_ERROR, REASON_TARGETS_DEAD,
