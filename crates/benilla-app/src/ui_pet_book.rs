@@ -85,25 +85,25 @@ pub(crate) fn feed_pet_book(
             }),
             slots: Vec::new(),
         };
-        if bar.has_bar() {
-            for &entry in &bar.spells.spells {
-                let spell_id = entry.action();
-                let Some(d) = spells.catalog.get(spell_id) else {
-                    // `0x4b2f90`'s first gate: no `Spell.dbc` record, no book slot.
-                    continue;
-                };
-                if !d.in_pet_book() {
-                    continue;
-                }
-                fresh
-                    .slots
-                    .push(slot_view(entry, d, &bar, pet_store, anchor, ui_now));
+        // The book holds the last bar's spells with or without its guid: `HasPetSpells` counts it
+        // alone (`0x4b4416`), and only a packet empties it (`0x4bda15`, `0x4bdacf`).
+        for &entry in &bar.spells.spells {
+            let spell_id = entry.action();
+            let Some(d) = spells.catalog.get(spell_id) else {
+                // `0x4b2f90`'s first gate: no `Spell.dbc` record, no book slot.
+                continue;
+            };
+            if !d.in_pet_book() {
+                continue;
             }
-            // `0x4b2fd0`'s re-sort, with the player book's own comparator.
-            fresh.slots.sort_by_key(|s| {
-                crate::ui_spellbook::spell_sort_key_of(&s.name, s.rank.as_deref())
-            });
+            fresh
+                .slots
+                .push(slot_view(entry, d, &bar, pet_store, anchor, ui_now));
         }
+        // `0x4b2fd0`'s re-sort, with the player book's own comparator.
+        fresh
+            .slots
+            .sort_by_key(|s| crate::ui_spellbook::spell_sort_key_of(&s.name, s.rank.as_deref()));
 
         if fresh != memory.pushed {
             debug!("ui_pet_book: fed {} pet spell(s)", fresh.slots.len());
