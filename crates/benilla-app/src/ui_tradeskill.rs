@@ -409,8 +409,10 @@ pub(crate) fn register_rebuild_triggers(app: &mut App) {
                 .run_if(not(crate::ui_script::ingame_ui_up)),
         )
         .net_handler(K::SpellLearned, on_book_change)
-        .net_handler(K::SpellRemoved, on_book_change)
-        .net_handler(K::SpellSuperceded, on_book_change)
+        // Ahead of the book's own handlers, which take the spell out of the lists the unlearn
+        // tests it against.
+        .net_handler_ahead(K::SpellRemoved, on_book_change)
+        .net_handler_ahead(K::SpellSuperceded, on_book_change)
         .net_handler(K::PetSpells, on_pet_spells);
 }
 
@@ -488,6 +490,7 @@ fn fire_list_rebuilds(
 struct ListTriggers<'w> {
     spells: Option<Res<'w, Spells>>,
     skill_lines: Option<Res<'w, SkillLines>>,
+    actions: Option<Res<'w, PlayerActions>>,
     rebuilds: Option<ResMut<'w, ListRebuilds>>,
 }
 
@@ -507,21 +510,27 @@ impl ListTriggers<'_> {
     }
 
     /// `UnlearnSpell 0x5e9fe0` on a spell with a record (`0x5ea02a`): a profession spell with an
-    /// ability row (`0x5ea054`-`0x5ea07b`) rebuilds the profession list (`0x5ea165`), any other with
-    /// a `castUI` above 0 the craft list (`0x5ea17a`, `0x5ea240`).
+    /// ability row (`0x5ea054`-`0x5ea07b`) that its line's list holds (`0x5ea0fe`) rebuilds the
+    /// profession list (`0x5ea165`); any other with a `castUI` above 0 that its type's list holds
+    /// (`0x5ea1b8`, `0x5ea1c9`) the craft list (`0x5ea240`). A miss rebuilds nothing.
     fn unlearn(&mut self, spell_id: u32) {
         let Some(d) = self.spells.as_deref().and_then(|s| s.catalog.get(spell_id)) else {
             return;
+        };
+        let held = |order: fn(&PlayerActions) -> &Vec<u32>| {
+            self.actions
+                .as_deref()
+                .is_some_and(|a| order(a).contains(&spell_id))
         };
         if d.attributes & SPELL_ATTR_IS_TRADESKILL != 0 {
             let has_row = self
                 .skill_lines
                 .as_deref()
                 .is_some_and(|l| l.catalog.ability(spell_id).is_some());
-            if has_row {
+            if has_row && held(|a| &a.profession_order) {
                 self.push(ListRebuild::Trade);
             }
-        } else if (d.cast_ui as i32) > 0 {
+        } else if (d.cast_ui as i32) > 0 && held(|a| &a.craft_order) {
             self.push(ListRebuild::Craft);
         }
     }

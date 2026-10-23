@@ -395,7 +395,7 @@ fn feed_craft(
             // 0x10*type`), in learn order (`0x5e9e0f`), and never consults `SkillLineAbility` for
             // membership.
             let listed: Vec<u32> = actions
-                .profession_order
+                .craft_order
                 .iter()
                 .copied()
                 .filter(|&s| {
