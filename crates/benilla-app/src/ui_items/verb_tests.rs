@@ -481,6 +481,20 @@ fn the_bind_question_fires_inside_the_swap_ahead_of_the_bag_clicks_clear() {
     assert_eq!(h.sent(), Vec::<String>::new(), "nothing sent");
 }
 
+/// `CGItem::Use` signals `USE_BIND_CONFIRM` in place, inside the use (`0x5d9217`-`0x5d9222`,
+/// `SignalEvent(0x122)`), and returns: the chunk's next line has heard it.
+#[test]
+fn the_bind_on_use_question_fires_inside_the_use() {
+    let mut h = Bags::new();
+    h.run(
+        r#"HEARD = 0 local f = CreateFrame("Frame") f:RegisterEvent("USE_BIND_CONFIRM")
+        f:SetScript("OnEvent", function() HEARD = HEARD + 1 end)"#,
+    );
+    let heard: i64 = h.eval("UseContainerItem(0, 8) return HEARD");
+    assert_eq!(heard, 1);
+    assert_eq!(h.sent(), Vec::<String>::new(), "the use is parked");
+}
+
 /// `ConfirmBindOnUse` re-issues the parked use inside its call (`0x48d770` → `0x5d92c1`).
 #[test]
 fn the_bind_on_use_accept_uses_the_item_inside_its_call() {

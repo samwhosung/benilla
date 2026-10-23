@@ -195,6 +195,67 @@ mod tests {
         );
     }
 
+    /// The doll click (`0x4c7300`) and the bag worker's swap leg (`0x4c7d8d`, `0x4c7df5`) never
+    /// read the split count `0xb4b40c` (its only readers are `0x48988f`, `0x494bf8`, `0x4c7e0c`,
+    /// `0x4f9e1c` and `0x4fb792`): a held split goes through `SwapItem` from its source slot, the
+    /// whole stack moving.
+    #[test]
+    fn a_held_split_swaps_its_whole_stack() {
+        for (slot, place, dst_slot) in [
+            (1, "PickupInventoryItem(1)", 1),
+            (2, "PutItemInBag(20)", 20),
+        ] {
+            let mut s = vm(0, true);
+            let mut pack = backpack(0, true);
+            pack.slots.get_mut(&slot).unwrap().count = 5;
+            s.set_container(0, Some(pack));
+            s.run(&format!("SplitContainerItem(0, {slot}, 2)")).unwrap();
+            assert!(s.cursor_item().is_some_and(|i| i.count == Some(2)));
+            s.run(place).unwrap();
+            assert!(s.cursor_item().is_none(), "{place}: sent and cleared");
+            assert_eq!(
+                s.take_container_moves(),
+                vec![crate::script::ContainerMove {
+                    src_bag: 0,
+                    src_slot: slot,
+                    dst_bag: super::EQUIPMENT_BAG,
+                    dst_slot,
+                    count: None,
+                }],
+                "{place}: the whole stack"
+            );
+        }
+    }
+
+    /// The question reads the item cache, not the bag view (`0x5e0db1`, then `[rec+0x194]` at
+    /// `0x5e0e54`): a record the cache does not hold waits however the slot reads, and a held
+    /// record's bonding asks whatever the slot carries.
+    #[test]
+    fn the_swap_question_reads_the_record_cache() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.set_container(0, Some(backpack(0, true)));
+        s.set_inventory_slots(doll());
+        s.run("PickupContainerItem(0, 1) PickupInventoryItem(1)")
+            .unwrap();
+        assert!(s.cursor_item().is_some(), "no record cached: it waits");
+        assert!(s.take_container_moves().is_empty());
+
+        s.set_item_template(
+            871,
+            crate::script::ItemTemplateView {
+                bonding: 2,
+                ..Default::default()
+            },
+        );
+        s.run("PickupInventoryItem(1)").unwrap();
+        assert!(
+            s.cursor_item().is_some(),
+            "the record binds on equip: it asks"
+        );
+        assert!(s.take_container_moves().is_empty());
+    }
+
     /// With nothing to bind the same swaps send and clear (`0x5e0fe7`).
     #[test]
     fn an_unbound_swap_sends_and_clears() {

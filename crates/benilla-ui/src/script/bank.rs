@@ -164,7 +164,9 @@ mod tests {
     }
 
     /// The bank bags are inventory slots 64..=69, as the reference's bank reads them
-    /// (`BankFrame.lua:28`).
+    /// (`BankFrame.lua:28`), and read empty while no banker is open: the getters find the item
+    /// through `GetItemInSlot` (`0x4c8449`, `0x4c8cd3` into `0x6228a0`), which answers none for
+    /// the player's slots 39 to 68 then (`0x6228ad`-`0x6228cf`).
     #[test]
     fn bank_bag_slots_read_through_the_inventory_api() {
         let mut s = UiScript::new().unwrap();
@@ -182,6 +184,15 @@ mod tests {
             ..Default::default()
         });
         s.set_bank_bag_slots(bags);
+        assert!(
+            s.eval::<bool>(
+                "return GetInventoryItemTexture(\"player\", 64) == nil \
+                 and GetInventoryItemLink(\"player\", 64) == nil"
+            )
+            .unwrap(),
+            "no banker open"
+        );
+        s.set_bank(Some(BankState::default()));
 
         assert_eq!(
             s.eval::<i64>("return BankButtonIDToInvSlotID(5, 1)")
@@ -231,7 +242,8 @@ mod tests {
     }
 
     /// The reference paints the vault through the inventory API (`BankFrame.lua:35`) while the app
-    /// feeds it as container `-1`; if the two disagree the bank draws empty.
+    /// feeds it as container `-1`; if the two disagree the bank draws empty. With no banker open
+    /// it reads empty, as `GetItemInSlot` answers (`0x6228a0`).
     #[test]
     fn the_bank_band_reads_the_vault_through_the_inventory_api() {
         let mut s = UiScript::new().unwrap();
@@ -261,6 +273,15 @@ mod tests {
             s.eval::<i64>("return BankButtonIDToInvSlotID(3)").unwrap(),
             42
         );
+        assert!(
+            s.eval::<bool>(
+                "return GetInventoryItemTexture(\"player\", 42) == nil \
+                 and GetInventoryItemCount(\"player\", 42) == 0"
+            )
+            .unwrap(),
+            "no banker open"
+        );
+        s.set_bank(Some(BankState::default()));
         assert_eq!(
             s.eval::<String>("return GetInventoryItemTexture(\"player\", 42)")
                 .unwrap(),

@@ -485,6 +485,29 @@ mod tests {
         assert!(s.take_container_autoequips().is_empty(), "nothing held");
     }
 
+    /// `AutoEquipCursorItem` looks the record up in the item cache (`0x5e1603`) and reads its
+    /// bonding there (`0x5e163b`), whatever the bag view carries: no record cached waits, a
+    /// cached bind-on-equip record asks.
+    #[test]
+    fn the_auto_equip_question_reads_the_record_cache() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.set_container(0, Some(boe_bag(0, false)));
+        s.run("PickupContainerItem(0, 1) AutoEquipCursorItem()")
+            .unwrap();
+        assert!(s.cursor_item().is_some(), "no record cached: it waits");
+        assert!(s.take_container_autoequips().is_empty());
+        s.set_item_template(
+            871,
+            crate::script::ItemTemplateView {
+                bonding: 2,
+                ..Default::default()
+            },
+        );
+        s.run("AutoEquipCursorItem()").unwrap();
+        assert_eq!(s.take_container_equip_asks(), vec![(0, 1, 0x11)]);
+    }
+
     /// The question is the reference's three conjuncts: bonding 2 (no other value, no quality
     /// leg), not already bound, and an item the player can use (`0x5e15d6`-`0x5e1655`).
     #[test]
