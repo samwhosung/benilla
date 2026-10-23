@@ -1644,7 +1644,10 @@ fn feed_units(
                 // (`0x5deb60`): alive, `PLAYER_UNGHOST` (`0x5dea2a`), with no gate before it; a
                 // ghost's leg is its tutorial (`crate::tutorial`).
                 owed.unghost = arrived && store.0.player_flags() & 0x10 == 0;
-                owed.world_enter = true;
+                owed.world_enter = Some(crate::ui_action::bonus_bar_offset(
+                    Some(store),
+                    tables.spells.as_deref(),
+                ));
                 memo.entered_world = true;
             }
         } else if memo.entered_world {
@@ -1736,8 +1739,8 @@ struct OwedUnitEvents {
     level_up: Option<(u32, Option<benilla_protocol::messages::LevelUpInfo>, u32)>,
     /// `PLAYER_UNGHOST`, ahead of the arrival's cascade.
     unghost: bool,
-    /// The world-enter cascade.
-    world_enter: bool,
+    /// The world-enter cascade, with the bonus bar offset our form gives (`0x4e4fc0`).
+    world_enter: Option<u8>,
 }
 
 impl OwedUnitEvents {
@@ -1767,8 +1770,8 @@ impl OwedUnitEvents {
         if self.unghost {
             script.fire_event("PLAYER_UNGHOST", vec![]);
         }
-        if self.world_enter {
-            script.fire_world_enter();
+        if let Some(bonus_bar_offset) = self.world_enter {
+            script.fire_world_enter_with(bonus_bar_offset);
         }
     }
 }

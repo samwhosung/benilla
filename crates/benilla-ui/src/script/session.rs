@@ -66,18 +66,26 @@ impl super::UiScript {
         }
     }
 
+    /// [`Self::fire_world_enter_with`] at the bonus bar offset the VM holds, for a harness with no
+    /// player form to read.
+    pub fn fire_world_enter(&mut self) {
+        let offset = self.model_ref().bonus_bar_offset;
+        self.fire_world_enter_with(offset);
+    }
+
     /// The world-enter cascade's events (`0x4908c0`): a full collection
     /// (`FrameScriptCollectGarbage(1)`, `0x490946`), then `PLAYER_LOGIN` (270, `0x490959`) only if
     /// a load armed it (read at `0x49094b`, cleared at `0x49095e`), then `PLAYER_ENTERING_WORLD`
     /// (272, `0x49096a`) every time, then the minimap's zoom reseed
-    /// ([`Self::minimap_enter_world`]), the bags' `BAG_UPDATE`s ([`Self::bags_enter_world`]), the
-    /// quest log's rebuild and its `QUEST_LOG_UPDATE`
+    /// ([`Self::minimap_enter_world`]), the bonus bar's offset, `bonus_bar_offset`, from the
+    /// player's form and its `UPDATE_BONUS_ACTIONBAR`, the bags' `BAG_UPDATE`s
+    /// ([`Self::bags_enter_world`]), the quest log's rebuild and its `QUEST_LOG_UPDATE`
     /// ([`Self::quest_log_enter_world`]), the reputation list's rebuild and its `UPDATE_FACTION`
     /// ([`Self::reputation_enter_world`]) and the skill list's rebuild and its
     /// `SKILL_LINES_CHANGED` ([`Self::rebuild_skills`]). The cascade runs with the player object in
     /// the world, so its caller seats `"player"` first, and inside its own sound-suppression
     /// bracket (`0x4908d5` to `0x490a56`), so a handler's `PlaySound` is dropped.
-    pub fn fire_world_enter(&mut self) {
+    pub fn fire_world_enter_with(&mut self, bonus_bar_offset: u8) {
         let armed = std::mem::take(&mut self.model_mut().player_login_armed);
         self.push_sound_suppression();
         // `0x703bc0` with 1: the threshold set to 0 (`0x703bd6`), so the collection runs now.
@@ -87,10 +95,13 @@ impl super::UiScript {
         }
         self.fire_event("PLAYER_ENTERING_WORLD", Vec::new());
         // The calls after the signal, inside the bracket: the minimap initializer first
-        // (`0x49096f`), then among the rest the bag watchers' set-up (`0x49098d`), the quest log's
-        // (`0x4909a1`), the reputation rebuild (`0x4909d3`) and the skill list's (`0x4909f1` →
-        // `0x4d2c90`).
+        // (`0x49096f`), then among the rest the action bar's refresh (`0x490979` → `0x4e4f90` →
+        // `0x4e4fc0`), which sets the offset and signals whether or not it moved (`0x4e5018`), the
+        // bag watchers' set-up (`0x49098d`), the quest log's (`0x4909a1`), the reputation rebuild
+        // (`0x4909d3`) and the skill list's (`0x4909f1` → `0x4d2c90`).
         self.minimap_enter_world();
+        self.set_bonus_bar_offset(bonus_bar_offset);
+        self.fire_event("UPDATE_BONUS_ACTIONBAR", Vec::new());
         self.bags_enter_world();
         self.quest_log_enter_world();
         self.reputation_enter_world();
