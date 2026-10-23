@@ -918,8 +918,9 @@ mod tests {
         );
     }
 
+    /// A release already past its deadline still flies, at 100 yd/s (`0x61cffa`-`0x61d018`).
     #[test]
-    fn release_past_deadline_impacts_on_the_spot() {
+    fn a_release_past_its_deadline_flies_at_100_yards_a_second() {
         let mut app = app();
         let caster = caster(&mut app, Vec3::ZERO);
         // 2.4 units at speed 24 = a 0.1 s flight; the queue waits 0.2 s before the keyframe.
@@ -938,16 +939,15 @@ mod tests {
             pos: None,
         });
         step(&mut app, 0.016);
-        assert!(missiles(&mut app).is_empty(), "no flight entity");
-        let impacts: Vec<_> = app
-            .world_mut()
-            .resource_mut::<Messages<CastEvent>>()
-            .drain()
-            .filter(|e| matches!(e.kind, CastEventKind::Impact { .. }))
-            .collect();
-        assert_eq!(impacts.len(), 1, "the impact plays at release");
-        assert_eq!(impacts[0].entity, target);
-        assert_eq!(impacts[0].spell_id, 133);
+        let launched = missiles(&mut app);
+        assert_eq!(launched.len(), 1, "a flight, not an impact on the spot");
+        assert!(
+            (launched[0].0 - 2.4 / 100.0).abs() < 1e-5,
+            "2.4 yd at 100 yd/s: {}",
+            launched[0].0
+        );
+        let impacts = drain::<CastEvent>(&mut app).len();
+        assert_eq!(impacts, 0, "nothing lands at the release");
     }
 
     /// The location fallback (`0x6e8a50`'s empty-hit-array arm) flies exactly one projectile.
@@ -980,9 +980,9 @@ mod tests {
     /// `0x61d870` plays the kit on the caster with `extra` = the landing point.
     #[test]
     fn a_ground_arrival_hands_off_to_the_caster_with_the_landing_point() {
-        let mut app = app();
+        let mut app = flying_app();
         let caster = caster(&mut app, Vec3::ZERO);
-        // 2.4 units at speed 24 = a 0.1 s flight, parked 0.2 s → it arrives at the release.
+        // 2.4 units at speed 24 = a 0.1 s flight, parked 0.2 s → due, 0.024 s at 100 yd/s.
         let at = Vec3::new(2.4, 0.0, 0.0);
         let mut spawn = ground_go(caster, at);
         spawn.awaits_release = true;
@@ -997,6 +997,7 @@ mod tests {
             pos: None,
         });
         step(&mut app, 0.016);
+        step(&mut app, 0.05);
         assert!(missiles(&mut app).is_empty(), "no flight entity");
         let events: Vec<_> = app
             .world_mut()
@@ -1035,19 +1036,22 @@ mod tests {
         );
     }
 
-    /// The `0x61dd50` arm: a miss plays the victim's dodge or block clip, never the impact, and
-    /// floats its word over the target. A parry reads `DEFLECT`, rewritten at launch.
+    /// The `0x61dd50` arm: a miss never plays the impact and floats its word over the target. A
+    /// parry reads `DEFLECT`, rewritten at launch. The victim's clip follows the launch's flag
+    /// (`0x61d720`): a block plays ShieldBlock and a deflection Dodge at launch (`0x61d02e`), a
+    /// resist Dodge at arrival (`0x61ddf7`), and a miss or a dodge (flag 0x8) nothing.
     #[test]
     fn missed_arrival_words_the_target_deflects_a_parry_and_plays_dodge_or_block() {
         for (code, expect_state, expect_word) in [
-            (3u8, Some(2u32), "DODGE"),
-            (5, Some(5), "BLOCK"),
+            (3u8, None, "DODGE"),
+            (5, Some(5u32), "BLOCK"),
             (1, None, "MISS"),
-            (4, None, "DEFLECT"),
+            (4, Some(2), "DEFLECT"),
+            (2, Some(2), "RESIST"),
         ] {
-            let mut app = app();
+            let mut app = flying_app();
             let caster = caster(&mut app, Vec3::ZERO);
-            // 2.4 units at speed 24 = a 0.1 s flight; parked 0.2 s → arrival on the spot.
+            // 2.4 units at speed 24 = a 0.1 s flight; parked 0.2 s → due, so 0.024 s.
             let target = app
                 .world_mut()
                 .spawn(GlobalTransform::from_xyz(2.4, 0.0, 0.0))
@@ -1065,6 +1069,7 @@ mod tests {
                 pos: None,
             });
             step(&mut app, 0.016);
+            step(&mut app, 0.05);
             assert!(
                 missiles(&mut app).is_empty(),
                 "no flight entity (code {code})"
@@ -1225,7 +1230,7 @@ mod tests {
     /// list reports each unit with a nonzero reason (`0x61d9b2`), its code as the wire gave it.
     #[test]
     fn a_ground_arrival_walks_its_list() {
-        let mut app = app();
+        let mut app = flying_app();
         let caster = caster(&mut app, Vec3::ZERO);
         let [a, b, c, d] = [(); 4].map(|_| {
             app.world_mut()
@@ -1276,5 +1281,63 @@ mod tests {
             .map(|w| (w.anchor, w.caster, w.code))
             .collect();
         assert_eq!(words, [(c, caster, 4)], "the nonzero reason, unrewritten");
+    }
+
+    /// A deflected missile's Dodge waits so that, less half the clip, it starts as the missile
+    /// lands (`0x61d0b1`-`0x61d0be`), played when its time comes in flight (`0x61e30c`).
+    #[test]
+    fn a_deflected_missile_times_its_victims_clip_to_the_impact() {
+        let mut app = flying_app();
+        let caster = caster(&mut app, Vec3::ZERO);
+        let target = app
+            .world_mut()
+            .spawn(GlobalTransform::from_xyz(24.0, 0.0, 0.0))
+            .id();
+        let mut spawn = go(caster, target, false);
+        spawn.targets[0].miss = Some(4);
+        app.world_mut().write_message(spawn);
+        step(&mut app, 0.016); // launched: a 1.0 s flight, no clip length known
+        assert!(drain::<DefenseAnim>(&mut app).is_empty(), "not at launch");
+        step(&mut app, 0.5);
+        assert!(drain::<DefenseAnim>(&mut app).is_empty(), "not mid-flight");
+        step(&mut app, 0.5);
+        let clips: Vec<_> = drain::<DefenseAnim>(&mut app)
+            .into_iter()
+            .map(|d| (d.victim, d.victim_state))
+            .collect();
+        assert_eq!(clips, [(target, 2)], "Dodge as it lands, once");
+    }
+
+    /// A target that despawns mid-flight stops steering the missile, which lands where it was
+    /// headed with no target: the caster's area kit at that point (`0x61e24c` → `0x61d870`).
+    #[test]
+    fn a_missile_whose_target_despawns_lands_on_the_caster() {
+        let mut app = flying_app();
+        let caster = caster(&mut app, Vec3::ZERO);
+        let target = app
+            .world_mut()
+            .spawn(GlobalTransform::from_xyz(24.0, 0.0, 0.0))
+            .id();
+        app.world_mut().write_message(go(caster, target, false));
+        step(&mut app, 0.016);
+        step(&mut app, 0.25);
+        app.world_mut().despawn(target);
+        step(&mut app, 0.25);
+        assert_eq!(missiles(&mut app).len(), 1, "it flies on");
+        step(&mut app, 0.6);
+        assert!(missiles(&mut app).is_empty());
+        let events: Vec<_> = drain::<CastEvent>(&mut app)
+            .into_iter()
+            .map(|e| (e.entity, e.kind))
+            .collect();
+        assert_eq!(
+            events,
+            [(
+                caster,
+                CastEventKind::GroundImpact {
+                    pos: Vec3::new(24.0, 0.0, 0.0)
+                }
+            )]
+        );
     }
 }
