@@ -566,10 +566,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetCraftInfo(index) → craftName, craftSubSpellName, craftType, numAvailable, isExpanded,
     // trainingPointCost, requiredLevel (`Blizzard_CraftUI.lua:168`); a miss pushes the seven too.
-    // A header row answers its line's name, nil, `header`, 0, 1 while expanded or nil while
-    // collapsed (`0x4f6f4f` → `0x4f6b80`), 0, 0; a recipe's `isExpanded` is nil. The cost and the
-    // level are the app's, read off the pet bar's unit (`0xb714a0`) for the spell a pet-learn
-    // effect teaches (`0x4f6fe6`-`0x4f7093`).
+    // A header row answers its line's name, nil, `header`, 0, 1 while its mask bit by its place
+    // in the sorted header array is set or nil while clear (`0x4f6f4f` → `0x4f6b80`, `0x4f6bc1`),
+    // not the collapse word the recount stored before the sort, then 0, 0; a recipe's
+    // `isExpanded` is nil. The cost and the level are the app's, read off the pet bar's unit
+    // (`0xb714a0`) for the spell a pet-learn effect teaches (`0x4f6fe6`-`0x4f7093`).
     g.set(
         "GetCraftInfo",
         lua.create_function(|lua, index: Value| {
@@ -578,8 +579,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let header = index.checked_sub(1).and_then(|row| {
                 header_position(&model, row).and_then(|p| {
-                    let h = &model.craft_headers[p];
-                    h.name.clone().map(|n| (n, h.collapsed))
+                    let collapsed = model.craft_fold_mask & (1u32 << (p & 31)) == 0;
+                    model.craft_headers[p].name.clone().map(|n| (n, collapsed))
                 })
             });
             if let Some((name, collapsed)) = header {
