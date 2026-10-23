@@ -38,7 +38,7 @@ pub(super) enum Side {
     Region,
 }
 
-/// `Err` for a table that is no widget wrapper; `Ok(None)` for a wrapper whose widget is gone.
+/// `Err` for a table that holds no object; `Ok(None)` for an object that is no widget.
 fn side_of(lua: &Lua, this: &Table) -> mlua::Result<Option<Side>> {
     let id = decode_id(this)?;
     let model = lua.app_data_ref::<Model>().expect("model app_data");
@@ -127,19 +127,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         let shared = lua.create_function(move |lua, args: MultiValue| {
             // The receiver is argument 1, borrowed: a `Value::Table` clone would register a second
             // ref-thread reference on the hottest verbs.
+            // The member prologue (`0x7a2030`'s, as every method's): no table, no object at
+            // `[0]`, an object that is no widget, each its own line.
             let side = {
                 let Some(Value::Table(this)) = args.iter().next() else {
-                    return Err(mlua::Error::runtime(
-                        "expected a frame or region as the first argument",
-                    ));
+                    return Err(mlua::Error::runtime(super::object::ERR_NON_TABLE));
                 };
                 side_of(lua, this)?
             };
             match side {
                 Some(Side::Frame) => on_frame(lua, args),
                 Some(Side::Region) => on_region(lua, args),
-                // A wrapper whose widget is gone: one message, since its kind is unknown.
-                None => Err(mlua::Error::runtime("stale or invalid widget handle")),
+                None => Err(mlua::Error::runtime(super::object::ERR_WRONG_TYPE)),
             }
         })?;
         frame.set(name, shared.clone())?;

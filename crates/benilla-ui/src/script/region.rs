@@ -13,7 +13,8 @@ use super::{
 use crate::layout::{Anchor, Anchors, Len};
 use crate::widget::{RegionHandle, RegionKind};
 
-/// Resolve `self` (a region wrapper) to its live [`RegionHandle`].
+/// Resolve `self` (a region wrapper) to its live [`RegionHandle`]; an object that is no region
+/// fails the type test ([`super::object::ERR_WRONG_TYPE`]).
 pub(crate) fn region_handle_of(lua: &Lua, this: &Table) -> mlua::Result<RegionHandle> {
     let id = decode_id(this)?;
     let model = lua.app_data_ref::<Model>().expect("model app_data");
@@ -21,7 +22,7 @@ pub(crate) fn region_handle_of(lua: &Lua, this: &Table) -> mlua::Result<RegionHa
         .id_to_region
         .get(&id)
         .copied()
-        .ok_or_else(|| mlua::Error::runtime("stale or invalid region handle"))
+        .ok_or_else(|| mlua::Error::runtime(super::object::ERR_WRONG_TYPE))
 }
 
 /// The Texture object a widget's texture setter was handed, as the setters resolve it: a table
@@ -258,17 +259,14 @@ fn region_shown(model: &Model, rh: RegionHandle) -> bool {
 /// (`0x847ef8`), a table with no object at `[0]` (`0x847ec0`), and any object but a Texture, the
 /// `IsA` test against the Texture class token `[0xcf4cdc]` (`0x847e98`).
 pub(super) fn this_texture(lua: &Lua, this: &Value) -> mlua::Result<RegionHandle> {
+    use super::object::{ERR_NON_TABLE, ERR_NO_OBJECT, ERR_WRONG_TYPE};
     let Value::Table(t) = this else {
-        return Err(mlua::Error::runtime(
-            "Attempt to find 'this' in non-table object (used '.' instead of ':' ?)",
-        ));
+        return Err(mlua::Error::runtime(ERR_NON_TABLE));
     };
     if decode_id(t).is_err() {
-        return Err(mlua::Error::runtime(
-            "Attempt to find 'this' in non-framescript object",
-        ));
+        return Err(mlua::Error::runtime(ERR_NO_OBJECT));
     }
-    let wrong = || mlua::Error::runtime("Wrong object type for member function");
+    let wrong = || mlua::Error::runtime(ERR_WRONG_TYPE);
     let rh = region_handle_of(lua, t).map_err(|_| wrong())?;
     let model = lua.app_data_ref::<Model>().expect("model app_data");
     if model.arena.region(rh).map(|r| r.kind) != Some(RegionKind::Texture) {

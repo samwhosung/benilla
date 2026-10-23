@@ -132,7 +132,8 @@ fn the_six_look_alikes_are_not_shared() {
     }
 }
 
-/// The bridge resolves the receiver before either arm runs, and its error names the reason.
+/// The bridge resolves the receiver before either arm runs, with the member prologue's line for a
+/// table holding no object (`0x847ec0`, read at `0x7a2098` in `GetHeight`).
 #[test]
 fn a_non_widget_receiver_raises_and_names_the_reason() {
     let s = vm();
@@ -140,5 +141,8 @@ fn a_non_widget_receiver_raises_and_names_the_reason() {
         .eval::<f32>("return Host.GetHeight({})")
         .unwrap_err()
         .to_string();
-    assert!(err.contains("T[0] identity"), "unexpected error: {err}");
+    assert!(
+        err.contains("Attempt to find 'this' in non-framescript object"),
+        "unexpected error: {err}"
+    );
 }

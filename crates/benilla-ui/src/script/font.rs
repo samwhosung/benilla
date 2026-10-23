@@ -206,11 +206,15 @@ pub(super) fn id_of_table(model: &Model, t: &Table) -> Option<FontId> {
     }
 }
 
-/// The font `this` is, for a Font method's receiver.
+/// The font `this` is, for a Font method's receiver, with the member prologue's raises: no object
+/// at `[0]`, or one that is no Font (`0x79fda0`..`0x7a0e70`).
 fn id_of(lua: &Lua, this: &Table) -> mlua::Result<FontId> {
+    let id = super::object::decode_id(this)?;
     let model = lua.app_data_ref::<Model>().expect("model");
-    id_of_table(&model, this)
-        .ok_or_else(|| mlua::Error::runtime("not a font object (missing T[0] font identity)"))
+    model
+        .fonts
+        .of_handle(id)
+        .ok_or_else(|| mlua::Error::runtime(super::object::ERR_WRONG_TYPE))
 }
 
 /// Which font verb an argument error names.

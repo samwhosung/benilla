@@ -36,17 +36,25 @@ pub(super) fn id_to_lud(id: u32) -> LightUserData {
     LightUserData(id as usize as *mut c_void)
 }
 
-/// Read the id out of a wrapper table's `T[0]` lightuserdata (`0x701bd0` writes it).
+/// The member prologue's three lines for a bad receiver (`Frame:Show` `0x775750`,
+/// `Texture:IsShown` `0x79b9b0`, the Font methods from `0x79fda0`): no table (`0x847ef8`), a table
+/// with no object at `[0]` (`0x847ec0`), an object that fails the class's type test (`0x847e98`).
+pub(crate) const ERR_NON_TABLE: &str =
+    "Attempt to find 'this' in non-table object (used '.' instead of ':' ?)";
+pub(crate) const ERR_NO_OBJECT: &str = "Attempt to find 'this' in non-framescript object";
+pub(crate) const ERR_WRONG_TYPE: &str = "Wrong object type for member function";
+
+/// Read the id out of a wrapper table's `T[0]` lightuserdata (`0x701bd0` writes it); a table with
+/// none raises the member prologue's line for it ([`ERR_NO_OBJECT`]).
 pub(crate) fn decode_id(this: &Table) -> mlua::Result<u32> {
     match this.raw_get::<Value>(0)? {
         Value::LightUserData(l) => Ok(l.0 as usize as u32),
-        _ => Err(mlua::Error::runtime(
-            "not a benilla frame/region object (missing T[0] identity)",
-        )),
+        _ => Err(mlua::Error::runtime(ERR_NO_OBJECT)),
     }
 }
 
-/// Resolve `self` (a frame wrapper) to its live [`FrameHandle`].
+/// Resolve `self` (a frame wrapper) to its live [`FrameHandle`]; an object that is no frame fails
+/// the Frame type test ([`ERR_WRONG_TYPE`]).
 pub(super) fn frame_handle_of(lua: &Lua, this: &Table) -> mlua::Result<FrameHandle> {
     let id = decode_id(this)?;
     let model = lua.app_data_ref::<Model>().expect("model app_data");
@@ -54,7 +62,7 @@ pub(super) fn frame_handle_of(lua: &Lua, this: &Table) -> mlua::Result<FrameHand
         .id_to_frame
         .get(&id)
         .copied()
-        .ok_or_else(|| mlua::Error::runtime("stale or invalid frame handle"))
+        .ok_or_else(|| mlua::Error::runtime(ERR_WRONG_TYPE))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
