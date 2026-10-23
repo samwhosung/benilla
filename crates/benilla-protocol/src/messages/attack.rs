@@ -161,6 +161,17 @@ mod tests {
         b
     }
 
+    /// `0x625c60` stores sub-damage block 0's school dword at `rec+0x18` (`0x625cb1`), which the
+    /// swing's `UNIT_COMBAT` pushes whole (`0x4946fc`).
+    #[test]
+    fn a_swing_keeps_its_first_blocks_school_dword() {
+        let mut b = packet(30, 1, 0);
+        let at = 4 + 2 + 2 + 4 + 1; // the first block's school
+        b[at..at + 4].copy_from_slice(&0x0001_0004u32.to_le_bytes());
+        let s = read_attacker_state(&mut b.as_slice()).expect("parse");
+        assert_eq!(s.school, 0x0001_0004);
+    }
+
     #[test]
     fn a_swing_from_a_spell_that_did_not_land_is_not_displayed() {
         let with_id = |state: u32| {

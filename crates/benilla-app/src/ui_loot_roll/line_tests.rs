@@ -4,18 +4,18 @@ use benilla_protocol::messages::{roll_vote, LootAllPassed, LootRoll, LootRollWon
 
 use super::{format_line, RollItem, RollLine};
 
-/// The pieces of `|cffa335ee|Hitem:17182:0:862:0|h[Sulfuras of the Bear]|h|r`.
+/// The pieces of [`LINK`]: the roll's `+0x24` word is the link's fourth number (`0x61c16e`).
 fn item() -> RollItem {
     RollItem {
         quality: 4,
         item_id: 17182,
         random_property_id: 862,
-        suffix_factor: 0,
+        suffix_factor: 1234,
         name: "Sulfuras of the Bear".into(),
     }
 }
 
-const LINK: &str = "|cffa335ee|Hitem:17182:0:862:0|h[Sulfuras of the Bear]|h|r";
+const LINK: &str = "|cffa335ee|Hitem:17182:0:862:1234|h[Sulfuras of the Bear]|h|r";
 
 /// A string table whose every template names its key and lays out the holes in the order the
 /// reference pushes them: the roller's name first for a third-person line (`0x61c266`), the

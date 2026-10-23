@@ -172,3 +172,76 @@ fn a_creature_addressee_not_streamed_is_no_subject() {
     let mut app = client();
     assert!(heard(&mut app, monster(CHAT_MSG_MONSTER_SAY, PET, "Good $n.")).is_empty());
 }
+
+/// One frame of the chat lane with nothing new: what the interface heard.
+fn idle(app: &mut App) -> Vec<String> {
+    crate::lanes::fire_in_order(app.world_mut());
+    let s = app
+        .world_mut()
+        .non_send_resource_mut::<benilla_ui::script::UiScript>();
+    let out = s.eval::<Vec<String>>("return Heard").unwrap();
+    s.run("Heard = {}").unwrap();
+    out
+}
+
+/// A name answer landing in a packet, as the name handler writes it.
+fn named(app: &mut App, guid: u64, name: &str) {
+    app.world_mut()
+        .resource_mut::<crate::names::NameCache>()
+        .insert_player(guid, name.into(), None);
+    app.world()
+        .resource::<super::ChatLog>()
+        .answer_landed(crate::ui_chat::Answer::Player(guid));
+}
+
+/// A line whose subject's name the cache lacks waits in the name cache's callback list
+/// (`0x49daea` → `0x55f080`, `0x49ccc0`) until the name answers, however long that takes, and
+/// shows nothing before it: never its raw text.
+#[test]
+fn a_monster_line_holds_for_its_subjects_name_and_never_shows_raw() {
+    const LATE: u64 = 0x53;
+    let mut app = client();
+    let mut heard_any = heard(&mut app, monster(CHAT_MSG_MONSTER_SAY, LATE, "Hail, $n."));
+    for _ in 0..300 {
+        heard_any.extend(idle(&mut app));
+    }
+    assert!(heard_any.is_empty(), "{heard_any:?}");
+    named(&mut app, LATE, "Latecomer");
+    assert_eq!(idle(&mut app), ["CHAT_MSG_MONSTER_SAY:Hail, Latecomer."]);
+}
+
+/// A creature not streamed is never named by the player-name cache, so its line never shows.
+#[test]
+fn a_line_for_an_unseen_creature_never_shows() {
+    let mut app = client();
+    let mut heard_any = heard(&mut app, monster(CHAT_MSG_MONSTER_SAY, PET, "Good $n."));
+    for _ in 0..300 {
+        heard_any.extend(idle(&mut app));
+    }
+    assert!(heard_any.is_empty(), "{heard_any:?}");
+}
+
+/// At most [`super::feed::MAX_HELD_SUBJECT_LINES`] lines wait for a subject's name; past that
+/// the oldest is dropped.
+#[test]
+fn the_lines_held_for_a_subject_are_capped_oldest_first() {
+    const FIRST: u64 = 0x1000;
+    let max = super::feed::MAX_HELD_SUBJECT_LINES as u64;
+    let mut app = client();
+    for i in 0..=max {
+        assert!(heard(
+            &mut app,
+            monster(CHAT_MSG_MONSTER_SAY, FIRST + i, &format!("{i} $n"))
+        )
+        .is_empty());
+    }
+    for i in 0..=max {
+        named(&mut app, FIRST + i, "X");
+    }
+    let shown = idle(&mut app);
+    assert_eq!(shown.len() as u64, max);
+    assert_eq!(
+        shown[0], "CHAT_MSG_MONSTER_SAY:1 X",
+        "the first held is dropped"
+    );
+}

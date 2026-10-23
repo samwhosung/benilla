@@ -501,6 +501,51 @@ mod tests {
         }
     }
 
+    /// The two property words land where the client keeps them: in `SMSG_LOOT_START_ROLL`,
+    /// `SMSG_LOOT_ROLL` and `SMSG_LOOT_ROLL_WON` the first at `+0x24` and the second, the random
+    /// property, at `+0x20` (`0x61b3c7`, `0x61bff4`, `0x61b92b`); `SMSG_LOOT_ALL_PASSED` the other
+    /// way round (`0x61b597`, `0x61b59d`).
+    #[test]
+    fn the_roll_packets_keep_both_property_words() {
+        let head = |roller: Option<u64>| {
+            let mut b = 0xAAu64.to_le_bytes().to_vec();
+            b.extend_from_slice(&1u32.to_le_bytes());
+            if let Some(g) = roller {
+                b.extend_from_slice(&g.to_le_bytes());
+            }
+            b.extend_from_slice(&17182u32.to_le_bytes());
+            b.extend_from_slice(&0x1111u32.to_le_bytes());
+            b.extend_from_slice(&0x2222u32.to_le_bytes());
+            b
+        };
+        let mut start = head(None);
+        start.extend_from_slice(&60_000u32.to_le_bytes());
+        let mut roll = head(Some(0xBB));
+        roll.extend_from_slice(&[57, 2]);
+        let mut won = head(None);
+        won.extend_from_slice(&0xBBu64.to_le_bytes());
+        won.extend_from_slice(&[57, 2]);
+        let passed = head(None);
+        let words = |p: ServerPacket| match p {
+            ServerPacket::LootStartRoll(p) => (p.suffix_factor, p.random_property_id),
+            ServerPacket::LootRoll(p) => (p.suffix_factor, p.random_property_id),
+            ServerPacket::LootRollWon(p) => (p.suffix_factor, p.random_property_id),
+            ServerPacket::LootAllPassed(p) => (p.suffix_factor, p.random_property_id),
+            other => panic!("{}", other.name()),
+        };
+        for (op, body) in [
+            (opcode::SMSG_LOOT_START_ROLL, start),
+            (opcode::SMSG_LOOT_ROLL, roll),
+            (opcode::SMSG_LOOT_ROLL_WON, won),
+        ] {
+            assert_eq!(words(parse_server(op, &body).unwrap()), (0x1111, 0x2222));
+        }
+        assert_eq!(
+            words(parse_server(opcode::SMSG_LOOT_ALL_PASSED, &passed).unwrap()),
+            (0x2222, 0x1111)
+        );
+    }
+
     /// A Greed vote `(128, 2)` and a Greed roll `(1..=100, 2)` share their `roll_type`.
     #[test]
     fn loot_roll_decodes_and_disambiguates() {
