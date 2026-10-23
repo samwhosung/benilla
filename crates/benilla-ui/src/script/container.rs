@@ -1423,7 +1423,8 @@ mod tests {
     /// open: each resolves the bag through `0x4f93e0`, which tests the banker guid `[0xbdd038]`
     /// (`0x4f93e9`-`0x4f93f9`): `GetContainerNumSlots` (`0x4f960b`), the slot resolver behind
     /// the item verbs (`0x4f98d1`), `GetBagName` (`0x4fa720`) and `SetBagPortaitTexture`
-    /// (`0x4fa5d8`). The bank's own slots, container -1, are not gated.
+    /// (`0x4fa5d8`). The vault, container -1, keeps its size; its slots are gated one level
+    /// down ([`the_vault_reads_empty_until_the_bank_opens`]).
     #[test]
     fn a_bank_bag_is_no_bag_until_the_bank_opens() {
         use crate::script::{BankBagSlots, BankState, InvSlotView};
@@ -1485,6 +1486,53 @@ mod tests {
         assert!(portrait.is_some(), "the portrait is the bag's icon");
         s.run("PickupContainerItem(5, 1)").unwrap();
         assert!(s.cursor_item().is_some_and(|i| i.bag == 5 && i.slot == 1));
+    }
+
+    /// The vault's slots, container -1, are the player list's 39 to 62, which `GetItemInSlot`
+    /// (`0x6228a0`) answers empty while no banker is open (`0x6228ad`-`0x6228cf`, the list's
+    /// bank flag set at the player's construction, `0x5dd44d`). So every container verb reads an
+    /// empty vault slot then: the getters (`0x4f96d7`, `0x4f9974`), `SplitContainerItem`
+    /// (`0x4fa01e`), `UseContainerItem` past its clear (`0x4fa1a6`) and
+    /// `ShowContainerSellCursor` (`0x4fa4b6`); `PickupContainerItem` returns before it reads
+    /// the cursor (`0x4f9bc6`-`0x4f9bf0`), so a held item is not placed there either.
+    #[test]
+    fn the_vault_reads_empty_until_the_bank_opens() {
+        use crate::script::BankState;
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.set_container(-1, Some(backpack()));
+        let mut pack = backpack();
+        pack.slots.get_mut(&1).unwrap().guid = 0x20a;
+        s.set_container(0, Some(pack));
+        let read = |s: &UiScript| {
+            s.eval::<(Option<String>, Option<String>)>(
+                "return (GetContainerItemInfo(-1, 1)), GetContainerItemLink(-1, 1)",
+            )
+            .unwrap()
+        };
+        assert_eq!(read(&s), (None, None), "the bank is closed");
+        s.run("PickupContainerItem(-1, 1)").unwrap();
+        assert!(s.cursor_payload().is_none(), "nothing to pick up");
+        s.run("SplitContainerItem(-1, 1, 2)").unwrap();
+        assert!(s.cursor_payload().is_none(), "nothing to split");
+        s.run("UseContainerItem(-1, 1)").unwrap();
+        assert!(s.take_container_uses().is_empty(), "nothing to use");
+        s.run("ShowContainerSellCursor(-1, 1)").unwrap();
+        assert_eq!(s.model_ref().ui_cursor, None, "nothing to sell");
+        s.run("PickupContainerItem(0, 1) PickupContainerItem(-1, 2)")
+            .unwrap();
+        assert_eq!(s.cursor_item().map(|i| i.guid), Some(0x20a), "still held");
+        assert!(s.take_container_moves().is_empty(), "nothing placed");
+        s.run("ClearCursor()").unwrap();
+
+        s.set_bank(Some(BankState::default()));
+        let (texture, link) = read(&s);
+        assert!(texture.is_some() && link.is_some());
+        s.run("UseContainerItem(-1, 1)").unwrap();
+        assert_eq!(s.take_container_uses(), vec![(-1, 1)]);
+        s.unlock_item(0x10a);
+        s.run("PickupContainerItem(-1, 1)").unwrap();
+        assert!(s.cursor_item().is_some_and(|i| i.bag == -1 && i.slot == 1));
     }
 
     #[test]
@@ -1865,10 +1913,10 @@ mod tests {
         assert!(s.take_container_uses().is_empty(), "drained");
     }
 
-    /// The arm is `0x4fa0e0`'s, in its order, and its lock is taken in the call: a bank item
-    /// withdraws whether or not a banker is open (the bank flag, `0x4f98b3`), then an open banker
-    /// deposits ahead of an open vendor's sale; an item with no lock-taking fork (a plain use)
-    /// leaves it unlocked.
+    /// The arm is `0x4fa0e0`'s, in its order, and its lock is taken in the call: a vault item
+    /// withdraws (the bank flag, `0x4f98b3`), read only while a banker is open (`0x6228a0`), then
+    /// an open banker deposits ahead of an open vendor's sale; an item with no lock-taking fork (a
+    /// plain use) leaves it unlocked.
     #[test]
     fn use_container_item_takes_its_arm_and_the_arms_lock_in_the_call() {
         let mut s = UiScript::new().unwrap();
@@ -1888,11 +1936,6 @@ mod tests {
         assert_eq!(
             arm(&mut s, 0),
             (super::UseArm::Item(super::UseFork::Plain), false)
-        );
-        assert_eq!(
-            arm(&mut s, -1),
-            (super::UseArm::Withdraw, true),
-            "no banker open"
         );
         s.set_merchant(Some(super::super::MerchantState::default()));
         assert_eq!(arm(&mut s, 0), (super::UseArm::Sell, true));
