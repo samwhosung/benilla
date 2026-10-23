@@ -1188,13 +1188,17 @@ pub(crate) struct Model {
     /// The GM survey's tables and answer buffer.
     pub(crate) gm_survey: super::gm_survey::SurveyState,
 
-    /// The reputation pane's snapshot and the display tree built from it.
+    /// The reputation pane's snapshot.
     pub(crate) reputation: reputation::ReputationState,
-    pub(crate) reputation_groups: Vec<reputation::FactionGroup>,
+    /// The list entries (`0xb73258`) in the order the last sort left them, the added ones after.
+    pub(crate) reputation_rows: Vec<reputation::ListEntry>,
+    /// The displayed count (`0xb73764`).
+    pub(crate) reputation_visible: usize,
     /// Folded headers by key (a `Faction.dbc` id, 0 "Other", -1 "Inactive"): the mask `0x84a0a4`.
     pub(crate) reputation_collapsed: HashSet<i64>,
-    /// The header keys registered since the last rebuild (`0x4d5c20`), empty before the first.
-    pub(crate) reputation_headers: HashSet<i64>,
+    /// The header objects registered since the last rebuild (`0xb736c0`, `0x4d5c20`), in the order
+    /// the last sort left them; empty before the first.
+    pub(crate) reputation_headers: Vec<reputation::HeaderObject>,
     /// The selection as a faction id, a header's key included (`0xb73768`); 0 until set.
     pub(crate) reputation_selected: i64,
     /// Every faction with a reputation index under 64, by `Faction.dbc` id: the base for the
@@ -1863,9 +1867,10 @@ impl Model {
             unserved_sends: Vec::new(),
             gm_survey: Default::default(),
             reputation: reputation::ReputationState::default(),
-            reputation_groups: Vec::new(),
+            reputation_rows: Vec::new(),
+            reputation_visible: 0,
             reputation_collapsed: HashSet::new(),
-            reputation_headers: HashSet::new(),
+            reputation_headers: Vec::new(),
             reputation_selected: 0,
             faction_standings: HashMap::new(),
         }

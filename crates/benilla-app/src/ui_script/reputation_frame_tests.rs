@@ -300,8 +300,8 @@ fn the_scroll_offset_rebinds_the_fixed_row_slots() {
     load_page(&s);
     s.set_unit("player", Some(player(40)));
 
-    // One header over twenty children: 21 visible rows against 15 slots.
-    let mut entries = vec![header(469, 11, "Alliance")];
+    // One header over twenty children: 21 visible rows against 15 slots, each in a slot of its own.
+    let mut entries = vec![header(469, 30, "Alliance")];
     for i in 1..=20u32 {
         entries.push(entry(1000 + i, i, 469, &format!("Faction {i:02}")));
     }

@@ -1,21 +1,23 @@
 //! The reputation pane's twelve `ReputationFrame` globals: the app pushes a flat snapshot, and
-//! the engine groups, sorts and folds it as the reference does (`[0x4d5200, 0x4d6d80)`); every
-//! index the API takes or returns is 1-based into the visible rows. A row is a header by flag
-//! `0x08` (`0x4d5acb`), which emulators name `INVISIBLE_FORCED`, and files under its
-//! `Faction.dbc` `team`, or under `-1` while inactive (flag `0x20`); key `0` reads `FACTION_OTHER`
-//! and `-1` `FACTION_INACTIVE`. A childless header is not a row (`GetNumFactions`, `0xb73764`).
-//! Headers sort by name with the synthetic keys last, `0` first (`0x4d5dc0`); children sort by
-//! name (`0x4d5e70`).
+//! the engine keeps the list the reference does (`[0x4d5200, 0x4d6d80)`): its entries in add order,
+//! each sort (`0x4d5c40`) the CRT's `qsort` over the array as the last one left it. A row is a
+//! header by flag `0x08` (`0x4d5acb`), which emulators name `INVISIBLE_FORCED`, keyed by its own
+//! id; any other row files under its `Faction.dbc` `team`, or under `-1` while inactive (flag
+//! `0x20`), and adds its team's header after itself when none is listed (`0x4d5b87`). Key `0`
+//! reads `FACTION_OTHER` and `-1` `FACTION_INACTIVE`. Headers sort by child count, then by name
+//! with the synthetic keys last, `0` first (`0x4d5dc0`); rows by their header's place, a folded
+//! child after every other row, the header first, then by name (`0x4d5e70`). The displayed count
+//! (`0xb73764`, `GetNumFactions`) leaves out the folded children and the childless headers, which
+//! the sort puts after the displayed rows.
 //!
-//! Each verb resolves its index to the entry's faction id (`0x4d5fa0`), a header's included: its
-//! own id, or 0 and -1 for the two synthetic ones; an index past the visible rows names faction 0
-//! here. The reference bounds the index by the total entry count instead (`0xb73760`, `jbe` in
-//! `0x4d5fa0`, `jae` in `0x4d6400`), folded entries included, which this does not do yet. The
-//! selection holds such an id (`0xb73768`). The folds change at a rebuild (all open, Inactive
-//! folded, `0x4d5479`, `0x4d55d9`), at a header's registration (all open, `0x4d5c34`) and by the
-//! two fold verbs alone. The verbs that send do so inside their call ([`ReputationCall`]).
+//! Each verb resolves its 1-based index into the whole entry list, folded and hidden rows
+//! included, to the entry's faction id (`0x4d5fa0`), a header's included: its own id, or 0 and -1
+//! for the two synthetic ones. The selection holds such an id (`0xb73768`). The folds change at a
+//! rebuild (all open, Inactive folded, `0x4d5479`, `0x4d55d9`), at a header's registration (all
+//! open, `0x4d5c34`) and by the two fold verbs alone. The verbs that send do so inside their call
+//! ([`ReputationCall`]).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -24,8 +26,6 @@ use super::Model;
 
 /// The synthetic header key for factions the player moved to the inactive bucket.
 const KEY_INACTIVE: i64 = -1;
-/// The synthetic header key for factions with no parent, the "Other" bucket.
-const KEY_OTHER: i64 = 0;
 
 /// One reputation faction, resolved app-side from `Faction.dbc` and the player's wire slot.
 #[derive(Clone, Debug, PartialEq)]
@@ -88,47 +88,58 @@ pub enum ReputationCall {
     Watch(i32),
 }
 
-/// One header group; `pub(crate)` only because [`super::model::Model`] stores them.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct FactionGroup {
-    /// A `Faction.dbc` id, or [`KEY_OTHER`] or [`KEY_INACTIVE`].
+/// One list entry (20 bytes in the reference, `0x4d5290`); `pub(crate)` only because
+/// [`super::model::Model`] stores them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ListEntry {
+    /// The reputation slot (`+0`), -1 for the Inactive header and a header with no slot.
+    slot: i64,
+    /// The faction id (`+4`): a `Faction.dbc` id, or 0 or -1 for the synthetic headers.
+    faction: i64,
+    /// The header flag (`+8`).
+    header: bool,
+    /// Its header's place in the sorted header array (`+0xc`), written by the sort.
+    pos: usize,
+    /// The header key (`+0x10`): a header's own id, any other row's team.
     key: i64,
-    /// The header row's text; empty for the two synthetic keys, resolved against the VM's global
-    /// strings when read.
-    name: String,
-    /// Positions into [`ReputationState::entries`], sorted by [`collate`]d name.
-    entries: Vec<usize>,
 }
 
-/// One visible row: a header (its group index) or a faction bar (its position in
-/// [`ReputationState::entries`]).
-#[derive(Clone, Copy)]
-enum Row {
-    Header(usize),
-    Entry(usize),
+/// One header object (8 bytes, `0xb736c0`): its key and its child count.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct HeaderObject {
+    key: i64,
+    children: usize,
 }
 
 impl super::UiScript {
-    /// Push the reputation snapshot and regroup it. The folds stay, as no standing or flag message
-    /// writes the mask (`0x4d5760`, `0x4d56b0`, `0x4d5710`), unless the push lists a header key not
-    /// registered before: its registration opens every header (`0x4d5c34`), Inactive's included.
-    /// The first push into a VM is the rebuild's ([`Self::reputation_enter_world`]).
+    /// Push the reputation snapshot: a newly met faction is added (`0x4d5a70`), and the list sorted
+    /// when one was or a flag moved. No row leaves but at the rebuild. The folds stay, as no
+    /// standing or flag message writes the mask (`0x4d5760`, `0x4d56b0`, `0x4d5710`), unless an
+    /// added row registers a header: its registration opens every header (`0x4d5c34`), Inactive's
+    /// included. The first push into a VM is the rebuild's ([`Self::reputation_enter_world`]).
     pub fn set_reputation(&mut self, state: ReputationState) {
         let mut model = self.model_mut();
-        let keys = header_keys(&state.entries);
+        let old = std::mem::replace(&mut model.reputation, state);
         if model.reputation_headers.is_empty() {
-            // The rebuild: the mask all ones (`0x4d5479`), then the Inactive header added and
-            // folded (`0x4d55d9`).
-            model.reputation_headers = keys;
-            model.reputation_headers.insert(KEY_INACTIVE);
-            model.reputation_collapsed.clear();
-            model.reputation_collapsed.insert(KEY_INACTIVE);
-        } else if !keys.is_subset(&model.reputation_headers) {
-            model.reputation_headers.extend(keys);
-            model.reputation_collapsed.clear();
+            rebuild(&mut model);
+            return;
         }
-        model.reputation_groups = build_groups(&state.entries);
-        model.reputation = state;
+        // A met faction joins the list (`0x4d5738`, `0x4d5826`), and a flag the server moved
+        // re-sorts it (`0x4d5876` → `0x4d58c8`).
+        let flags = |e: &FactionEntry| (e.visible, e.at_war, e.is_header, e.inactive);
+        let moved = model.reputation.entries.iter().any(|e| {
+            old.entries
+                .iter()
+                .find(|o| o.faction_id == e.faction_id)
+                .is_none_or(|o| flags(o) != flags(e))
+        });
+        let mut added = false;
+        for e in &met(&model) {
+            added |= add(&mut model, e);
+        }
+        if added || moved {
+            sort(&mut model);
+        }
     }
 
     /// The world-enter cascade's rebuild (`0x4909d3` calls `0x4d5430`): the player in the world,
@@ -172,13 +183,12 @@ impl super::UiScript {
     pub fn set_faction_inactive(&mut self, rep_list_id: u32, inactive: bool) {
         {
             let mut model = self.model_mut();
-            let model = &mut *model;
             for e in model.reputation.entries.iter_mut() {
                 if e.rep_list_id == rep_list_id {
                     e.inactive = inactive;
                 }
             }
-            model.reputation_groups = build_groups(&model.reputation.entries);
+            sort(&mut model);
         }
         self.fire_event("UPDATE_FACTION", Vec::new());
     }
@@ -192,30 +202,6 @@ impl super::UiScript {
     }
 }
 
-fn header_key(e: &FactionEntry) -> i64 {
-    if e.inactive {
-        KEY_INACTIVE
-    } else {
-        i64::from(e.parent_id)
-    }
-}
-
-/// The header keys the listed rows register (`0x4d5b0d`-`0x4d5bdc`): a header row its own id, any
-/// other row its team's, inactive or not.
-fn header_keys(entries: &[FactionEntry]) -> HashSet<i64> {
-    entries
-        .iter()
-        .filter(|e| e.visible)
-        .map(|e| {
-            if e.is_header {
-                i64::from(e.faction_id)
-            } else {
-                i64::from(e.parent_id)
-            }
-        })
-        .collect()
-}
-
 /// The VM's text for a synthetic header key; the enUS literal in a bare test VM.
 fn synthetic_header(lua: &Lua, key: i64) -> String {
     let (global, fallback) = if key == KEY_INACTIVE {
@@ -227,83 +213,236 @@ fn synthetic_header(lua: &Lua, key: i64) -> String {
         .get::<String>(global)
         .unwrap_or_else(|_| fallback.into())
 }
-/// Case-insensitive name order, raw bytes breaking a tie: the client's `stricmp`.
-fn collate(a: &str, b: &str) -> std::cmp::Ordering {
-    a.to_lowercase()
-        .cmp(&b.to_lowercase())
-        .then_with(|| a.as_bytes().cmp(b.as_bytes()))
-}
 
-/// Build the header groups: the visible non-header rows by [`header_key`], sorted by name. A group
-/// is named by its pushed header row (the reference synthesizes a missing one, `0x4d5a70`), or left
-/// empty for a synthetic key; a childless header is no group, as the client's count drops it.
-fn build_groups(entries: &[FactionEntry]) -> Vec<FactionGroup> {
-    let name_of: HashMap<i64, &str> = entries
-        .iter()
-        .filter(|e| e.is_header)
-        .map(|e| (i64::from(e.faction_id), e.name.as_str()))
-        .collect();
-
-    let mut by_key: HashMap<i64, Vec<usize>> = HashMap::new();
-    for (i, e) in entries.iter().enumerate() {
-        if e.visible && !e.is_header {
-            by_key.entry(header_key(e)).or_default().push(i);
-        }
+/// The rebuild (`0x4d5430`): the list emptied (`0x4d5479`-`0x4d5493`), the met rows added from
+/// the last `Faction.dbc` row to the first, which is the faction ids descending (`0x4d5555`),
+/// then the Inactive header registered and added (`0x4d557b`-`0x4d55d4`), folded with its sort
+/// (`0x4d55d9`), and sorted again (`0x4d55de`).
+fn rebuild(model: &mut Model) {
+    model.reputation_rows.clear();
+    model.reputation_headers.clear();
+    for e in &met(model) {
+        add(model, e);
     }
-
-    let mut groups: Vec<FactionGroup> = by_key
-        .into_iter()
-        .map(|(key, mut children)| {
-            children.sort_by(|&a, &b| collate(&entries[a].name, &entries[b].name));
-            FactionGroup {
-                key,
-                name: name_of.get(&key).map_or(String::new(), |n| (*n).into()),
-                entries: children,
-            }
-        })
-        .collect();
-    groups.sort_by(|a, b| {
-        let synthetic = |k: i64| k <= KEY_OTHER;
-        match (synthetic(a.key), synthetic(b.key)) {
-            // Larger raw key first among the synthetics: 0 "Other" before -1 "Inactive".
-            (true, true) => b.key.cmp(&a.key),
-            (true, false) => std::cmp::Ordering::Greater,
-            (false, true) => std::cmp::Ordering::Less,
-            (false, false) => collate(&a.name, &b.name),
-        }
+    register(model, KEY_INACTIVE);
+    model.reputation_rows.push(ListEntry {
+        slot: -1,
+        faction: KEY_INACTIVE,
+        header: true,
+        pos: 0,
+        key: KEY_INACTIVE,
     });
-    groups
+    model.reputation_collapsed.insert(KEY_INACTIVE);
+    sort(model);
+    sort(model);
 }
 
-fn rows(model: &Model) -> Vec<Row> {
-    let mut out = Vec::new();
-    for (gi, g) in model.reputation_groups.iter().enumerate() {
-        out.push(Row::Header(gi));
-        if !model.reputation_collapsed.contains(&g.key) {
-            for &ei in &g.entries {
-                out.push(Row::Entry(ei));
+/// The met factions, visible in a slot below 64, in the order the rebuild walks `Faction.dbc`:
+/// from its last row to its first, the ids descending.
+fn met(model: &Model) -> Vec<FactionEntry> {
+    let mut met: Vec<FactionEntry> = model
+        .reputation
+        .entries
+        .iter()
+        .filter(|e| e.visible && e.rep_list_id < 64)
+        .cloned()
+        .collect();
+    met.sort_by_key(|e| std::cmp::Reverse(e.faction_id));
+    met
+}
+
+/// `0x4d5c20`: a header object for `key`, and every header unfolded (`0x4d5c34`).
+fn register(model: &mut Model, key: i64) {
+    model
+        .reputation_headers
+        .push(HeaderObject { key, children: 0 });
+    model.reputation_collapsed.clear();
+}
+
+/// The adder (`0x4d5a70`): nothing for a slot already listed (`0x4d5a93`); else the entry, and a
+/// header registered for a header row (`0x4d5b16`), or, for any other row whose team no header
+/// entry names (`0x4d5b6a`-`0x4d5b83`), its team's header after it, with the team's slot
+/// (`0x4d5b87`-`0x4d5bdc`).
+fn add(model: &mut Model, e: &FactionEntry) -> bool {
+    let slot = i64::from(e.rep_list_id);
+    if model.reputation_rows.iter().any(|r| r.slot == slot) {
+        return false;
+    }
+    let faction = i64::from(e.faction_id);
+    if e.is_header {
+        register(model, faction);
+        model.reputation_rows.push(ListEntry {
+            slot,
+            faction,
+            header: true,
+            pos: 0,
+            key: faction,
+        });
+        return true;
+    }
+    let team = i64::from(e.parent_id);
+    let listed = model
+        .reputation_rows
+        .iter()
+        .any(|r| r.header && r.faction == team);
+    model.reputation_rows.push(ListEntry {
+        slot,
+        faction,
+        header: false,
+        pos: 0,
+        key: team,
+    });
+    if !listed {
+        let team_slot = entry_of(model, team).map_or(-1, |t| i64::from(t.rep_list_id));
+        model.reputation_rows.push(ListEntry {
+            slot: team_slot,
+            faction: team,
+            header: true,
+            pos: 0,
+            key: team,
+        });
+        register(model, team);
+    }
+    true
+}
+
+/// The key a row counts under (`0x4d5c72`-`0x4d5c89`): -1 while its slot is inactive
+/// (`0x4d6210`), else its own.
+fn count_key(model: &Model, row: &ListEntry) -> i64 {
+    let inactive = u32::try_from(row.slot).ok().is_some_and(|slot| {
+        model
+            .reputation
+            .entries
+            .iter()
+            .any(|e| e.rep_list_id == slot && e.inactive)
+    });
+    if inactive {
+        KEY_INACTIVE
+    } else {
+        row.key
+    }
+}
+
+/// A faction's `Faction.dbc` name, `None` for one with no row: the two synthetic keys.
+fn row_name(model: &Model, faction: i64) -> Option<&str> {
+    (faction > 0).then(|| entry_of(model, faction).map_or("", |e| e.name.as_str()))
+}
+
+/// Whether the header at a sorted place is folded: a place below 32 whose fold is set
+/// (`0x4d5d49`-`0x4d5d68`).
+fn folded_at(model: &Model, pos: usize) -> bool {
+    pos < 32
+        && model
+            .reputation_headers
+            .get(pos)
+            .is_some_and(|h| model.reputation_collapsed.contains(&h.key))
+}
+
+/// The sort (`0x4d5c40`): each header's children counted (`0x4d5c60`-`0x4d5cba`), the headers
+/// sorted (`0x4d5cc9`), each row given its header's place and the displayed count taken down for a
+/// folded child and a childless header (`0x4d5cf0`-`0x4d5d94`), then the rows sorted
+/// (`0x4d5da3`), both by the CRT's `qsort`.
+fn sort(model: &mut Model) {
+    let mut headers = std::mem::take(&mut model.reputation_headers);
+    for h in &mut headers {
+        h.children = model
+            .reputation_rows
+            .iter()
+            .filter(|r| !r.header && count_key(model, r) == h.key)
+            .count();
+    }
+    crate::crt::qsort(&mut headers, |a, b| header_order(model, a, b));
+    model.reputation_headers = headers;
+    let mut rows = std::mem::take(&mut model.reputation_rows);
+    let mut visible = rows.len();
+    for r in &mut rows {
+        let key = count_key(model, r);
+        let Some(pos) = model.reputation_headers.iter().position(|h| h.key == key) else {
+            continue;
+        };
+        r.pos = pos;
+        if !r.header && folded_at(model, pos) {
+            visible -= 1;
+        }
+        if r.header && model.reputation_headers[pos].children == 0 {
+            visible -= 1;
+        }
+    }
+    crate::crt::qsort(&mut rows, |a, b| row_order(model, a, b));
+    model.reputation_rows = rows;
+    model.reputation_visible = visible;
+}
+
+/// `0x4d5dc0`: a header with children first, two without equal (`0x4d5e5b`); then two with
+/// `Faction.dbc` rows by name (`0x4d5e28`), one with a row first (`0x4d5e42`), and two without the
+/// larger key first (`0x4d5e34`).
+fn header_order(model: &Model, a: &HeaderObject, b: &HeaderObject) -> i32 {
+    match (a.children, b.children) {
+        (0, 0) => return 0,
+        (0, _) => return 1,
+        (_, 0) => return -1,
+        _ => {}
+    }
+    match (row_name(model, a.key), row_name(model, b.key)) {
+        (Some(x), Some(y)) => crate::crt::str_cmp_i(x, y),
+        (None, Some(_)) => 1,
+        (Some(_), None) => -1,
+        (None, None) => {
+            if a.key < b.key {
+                1
+            } else {
+                -1
             }
         }
     }
-    out
 }
 
-fn num_rows(model: &Model) -> usize {
-    rows(model).len()
-}
-
-/// The faction id of the entry at a 1-based index into the visible rows (`0x4d5fa0`): a bar's own,
-/// a header's key, and 0 past them. The reference's bound is the total entry count (`0xb73760`),
-/// which reaches the folded entries too; that is not modelled yet.
-fn faction_at(model: &Model, index: usize) -> i64 {
-    match index
-        .checked_sub(1)
-        .and_then(|n| rows(model).get(n).copied())
-    {
-        Some(Row::Header(gi)) => model.reputation_groups[gi].key,
-        Some(Row::Entry(ei)) => i64::from(model.reputation.entries[ei].faction_id),
-        None => 0,
+/// `0x4d5e70`: across places, a folded child after every row that is not one and two folded
+/// children equal (`0x4d5f02`), else the places ascending (`0x4d5ef4`); within a place, the
+/// header first (`0x4d5f81`), then two children by name (`0x4d5f70`), equal when either has no
+/// `Faction.dbc` row.
+fn row_order(model: &Model, a: &ListEntry, b: &ListEntry) -> i32 {
+    if a.pos != b.pos {
+        let folded = |r: &ListEntry| !r.header && folded_at(model, r.pos);
+        return match (folded(a), folded(b)) {
+            (true, true) => 0,
+            (true, false) => 1,
+            (false, true) => -1,
+            (false, false) => {
+                if a.pos >= b.pos {
+                    1
+                } else {
+                    -1
+                }
+            }
+        };
     }
+    if a.header || b.header {
+        return if a.header { -1 } else { 1 };
+    }
+    match (row_name(model, a.faction), row_name(model, b.faction)) {
+        (Some(x), Some(y)) => crate::crt::str_cmp_i(x, y),
+        _ => 0,
+    }
+}
+
+/// Whether `faction` is a registered header key, the header scan of `GetFactionInfo`
+/// (`0x4d6640`-`0x4d6649`).
+fn is_header_key(model: &Model, faction: i64) -> bool {
+    model.reputation_headers.iter().any(|h| h.key == faction)
+}
+
+/// The faction id of the entry at a 1-based index into the whole list (`0x4d5fa0`), 0 past it.
+///
+/// Deviation: the reference bounds the index with `jbe` against the entry count (`0xb73760`), so
+/// an index one past the last entry reads the pool entry after it, which only an earlier, longer
+/// list wrote, or uninitialised heap (`0x4d5310`, the rebuild resetting the count without
+/// clearing, `0x4d547f`); that stale read answers 0 here, as an index further on does.
+fn faction_at(model: &Model, index: usize) -> i64 {
+    index
+        .checked_sub(1)
+        .and_then(|n| model.reputation_rows.get(n))
+        .map_or(0, |r| r.faction)
 }
 
 /// A faction's pushed entry, its slot's: `None` for 0, -1 and a faction the push lacks.
@@ -323,25 +462,35 @@ fn slot_of(model: &Model, faction: i64) -> Option<u32> {
         .filter(|&slot| slot < 64)
 }
 
-/// Fold or unfold by 1-based visible index; `0` or any non-header index acts on every header, the
-/// reference's own fall-through (`0x4d6a50`, `0x4d6aa0`).
+/// `0x4d6400`: fold or unfold the header of the entry at a 1-based index into the whole list,
+/// found by the entry's key (`0x4d6425`-`0x4d6436`), then the sort; an index past the entries
+/// (`jae` at `0x4d6406`) or a row that is no header (`0x4d6413`) folds or unfolds every header
+/// (`0x4d6476`). A header key no header object holds changes nothing and sorts nothing
+/// (`0x4d6489`); `false` then.
 ///
 /// Deviation: the folds are keyed by header, not by the reference's mask positions, whose rebuild
 /// folds bit N-1 by registration index before the sort (`0x4d5d49`-`0x4d5d68`) and whose fold
 /// verbs search `0xb736c0` before `0x4d5c40` sorts it (`0x4d6400`), so Inactive opens at login
 /// whenever a childless header exists and inactivating a header's last child shows it expanded;
 /// that is a reference bug, and the folds follow the header the player clicked.
-fn set_collapsed(model: &mut Model, index: usize, collapse: bool) {
-    let one = index
+fn set_collapsed(model: &mut Model, index: usize, collapse: bool) -> bool {
+    let row = index
         .checked_sub(1)
-        .and_then(|n| rows(model).get(n).copied())
-        .and_then(|row| match row {
-            Row::Header(gi) => model.reputation_groups.get(gi).map(|g| g.key),
-            Row::Entry(_) => None,
-        });
-    let keys: Vec<i64> = match one {
-        Some(key) => vec![key],
-        None => model.reputation_groups.iter().map(|g| g.key).collect(),
+        .and_then(|n| model.reputation_rows.get(n))
+        .filter(|r| r.header)
+        .copied();
+    let keys: Vec<i64> = match row {
+        Some(r) => {
+            if !is_header_key(model, r.key) {
+                return false;
+            }
+            vec![r.key]
+        }
+        None if !collapse => {
+            model.reputation_collapsed.clear();
+            Vec::new()
+        }
+        None => model.reputation_headers.iter().map(|h| h.key).collect(),
     };
     for key in keys {
         if collapse {
@@ -350,6 +499,8 @@ fn set_collapsed(model: &mut Model, index: usize, collapse: bool) {
             model.reputation_collapsed.remove(&key);
         }
     }
+    sort(model);
+    true
 }
 
 /// `GetFactionInfo`'s miss (`0x4d5fa0`): eleven values, standingID 1, which the stock pane indexes
@@ -370,12 +521,12 @@ fn submit(lua: &Lua, call: ReputationCall) -> mlua::Result<()> {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // GetNumFactions() → the visible row count (0 before any push).
+    // GetNumFactions() → the displayed count (`0xb73764`, `0x4d64c6`), 0 before any push.
     g.set(
         "GetNumFactions",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(num_rows(&model) as i64)
+            Ok(model.reputation_visible as i64)
         })?,
     )?;
 
@@ -392,7 +543,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let index = binding_abi::index_arg(lua, index, "Usage: GetFactionInfo(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let faction = faction_at(&model, index);
-            let is_header = model.reputation_headers.contains(&faction);
+            let is_header = is_header_key(&model, faction);
             let collapsed = is_header && model.reputation_collapsed.contains(&faction);
             if let Some(e) = entry_of(&model, faction) {
                 return Ok(MultiValue::from_vec(vec![
@@ -412,19 +563,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if !is_header || faction < KEY_INACTIVE {
                 return Ok(unknown_faction());
             }
-            let own_name = model
-                .reputation_groups
-                .iter()
-                .find(|g| g.key == faction)
-                .map(|g| g.name.clone())
-                .unwrap_or_default();
             // The text is read off `_G`, whose `__index` may call any verb: no borrow.
             drop(model);
-            let name = if own_name.is_empty() {
-                synthetic_header(lua, faction)
-            } else {
-                own_name
-            };
+            let name = synthetic_header(lua, faction);
             Ok(MultiValue::from_vec(vec![
                 Value::String(lua.create_string(&name)?),
                 Value::String(lua.create_string("")?), // description
@@ -441,24 +582,22 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetSelectedFaction() → the position of the selected faction id among the visible rows, or 0
-    // (`0x4d6c07`-`0x4d6c30`), as `ReputationFrame.lua:146` tests.
+    // GetSelectedFaction() → the position of the selected faction id among the displayed rows,
+    // or 0 (`0x4d6c07`-`0x4d6c30`), as `ReputationFrame.lua:146` tests.
     g.set(
         "GetSelectedFaction",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let found = rows(&model).iter().position(|r| match r {
-                Row::Header(gi) => model.reputation_groups[*gi].key == model.reputation_selected,
-                Row::Entry(ei) => {
-                    i64::from(model.reputation.entries[*ei].faction_id) == model.reputation_selected
-                }
-            });
+            let shown = model.reputation_visible.min(model.reputation_rows.len());
+            let found = model.reputation_rows[..shown]
+                .iter()
+                .position(|r| r.faction == model.reputation_selected);
             Ok(found.map_or(0, |i| i as i64 + 1))
         })?,
     )?;
 
     // SetSelectedFaction(index): the faction id of the entry at the index, a header's included,
-    // and faction 0 past the rows (`0x4d6be7`, `0x4d6bec`).
+    // and faction 0 past the entries (`0x4d6be7`, `0x4d6bec`).
     g.set(
         "SetSelectedFaction",
         lua.create_function(|lua, index: Value| {
@@ -470,20 +609,22 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CollapseFactionHeader(index) / ExpandFactionHeader(index): a visible header index. Both fire
-    // `UPDATE_FACTION`, as the reference's do (`0x4d6a50`, `0x4d6aa0` → `0x4d6400` → `0x4d5c40`,
-    // fire site `0x4d5dab`): the stock header's `OnClick` only calls the binding
+    // CollapseFactionHeader(index) / ExpandFactionHeader(index): a header's index. Both fire
+    // `UPDATE_FACTION` from the sort, as the reference's do (`0x4d6a50`, `0x4d6aa0` → `0x4d6400`
+    // → `0x4d5c40`, fire site `0x4d5dab`): the stock header's `OnClick` only calls the binding
     // (`ReputationFrame.xml:9-15`), and the pane repaints on `UPDATE_FACTION` alone.
     g.set(
         "CollapseFactionHeader",
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: CollapseFactionHeader(index)` (`0x84a320`, `0x4d6a61`).
             let index = binding_abi::index_arg(lua, index, "Usage: CollapseFactionHeader(index)")?;
-            {
+            let sorted = {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                set_collapsed(&mut model, index, true);
+                set_collapsed(&mut model, index, true)
+            };
+            if sorted {
+                super::event::fire_global(lua, "UPDATE_FACTION", &[]);
             }
-            super::event::fire_global(lua, "UPDATE_FACTION", &[]);
             Ok(())
         })?,
     )?;
@@ -492,11 +633,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: ExpandFactionHeader(index)` (`0x84a344`, `0x4d6ab1`).
             let index = binding_abi::index_arg(lua, index, "Usage: ExpandFactionHeader(index)")?;
-            {
+            let sorted = {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                set_collapsed(&mut model, index, false);
+                set_collapsed(&mut model, index, false)
+            };
+            if sorted {
+                super::event::fire_global(lua, "UPDATE_FACTION", &[]);
             }
-            super::event::fire_global(lua, "UPDATE_FACTION", &[]);
             Ok(())
         })?,
     )?;
@@ -910,12 +1053,11 @@ mod tests {
         assert_eq!(s.eval::<i64>("return GetSelectedFaction()").unwrap(), 0);
         s.run("ExpandFactionHeader(1)").unwrap();
         assert_eq!(s.eval::<i64>("return GetSelectedFaction()").unwrap(), 3);
-        // A push that drops the faction keeps its id, which no row answers, until it is back.
-        let mut without = state();
-        without.entries.retain(|e| e.faction_id != 72);
-        s.set_reputation(without);
+        // A re-sort that folds the faction under Inactive keeps its id (`0x4d617b`), which no
+        // displayed row answers until it is active again.
+        s.set_faction_inactive(19, true);
         assert_eq!(s.eval::<i64>("return GetSelectedFaction()").unwrap(), 0);
-        s.set_reputation(state());
+        s.set_faction_inactive(19, false);
         assert_eq!(s.eval::<i64>("return GetSelectedFaction()").unwrap(), 3);
         assert!(s.errors().is_empty(), "{:#?}", s.errors());
     }
