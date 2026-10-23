@@ -50,6 +50,12 @@ pub(crate) struct LogoutState {
     /// second request silently while it is set, and the idle handler skips its thirty-minute leg
     /// on it (`0x482ef5`); `ForceLogout` (`0x5aaff0`) bypasses it and does not set it.
     pending: bool,
+    /// The reference's world handle `[session+0x1b18]`: set by the active player's arrival
+    /// (`0x5deb73`, `0x5aae70(1)`) after its world-enter cascade, zeroed by every leave of the
+    /// world (`0x5aae70(0)`, [`Self::apply_left_world`]). A request with none is dropped before
+    /// the quit byte (`0x5ab020`-`0x5ab02a`), so a `Logout()` on a worldport's loading screen sends
+    /// nothing.
+    world_handle: bool,
     signals: Vec<LogoutSignal>,
 }
 
@@ -89,7 +95,14 @@ impl LogoutState {
     /// (`0x5aaeb3` → `0x5aaf4f`, ahead of the teardown at `0x5aaeca`), and by a refused login
     /// (`0x5aad76` → `0x5aaf4f`). A completed logout that was not forced fires `LOGOUT_CANCEL`.
     pub(crate) fn apply_left_world(&mut self) {
+        self.world_handle = false;
         self.call_off();
+    }
+
+    /// The world handle seated, as a test of the verbs in the world needs it.
+    #[cfg(test)]
+    pub(crate) fn seat_world_handle_for_test(&mut self) {
+        self.world_handle = true;
     }
 
     /// `LOGOUT_CANCEL` only while a request is pending (`0x5aaf63`-`0x5aaf6b`,
@@ -209,8 +222,10 @@ impl SessionSteps<'_> {
         }
     }
 
+    /// The world handle (`0x5ab020`), with a world session to send on.
     fn in_world(&self) -> bool {
         self.self_guid.as_ref().is_some_and(|g| g.0.is_some())
+            && self.logout.as_deref().is_some_and(|l| l.world_handle)
     }
 
     fn exit_now(&self) {
@@ -290,9 +305,24 @@ impl Plugin for UiLogoutPlugin {
                     feed_logout
                         .in_set(UiFeed)
                         .before(crate::ui_script::sweep_on_worldport),
+                    // After the unit feed, which fires the arrival's world-enter cascade: the
+                    // handle is seated after it (`0x5deb60`, then `0x5deb73`).
+                    seat_world_handle
+                        .in_set(UiFeed)
+                        .after(crate::ui_unit::UnitFeed),
                     exit_on_logout_complete.in_set(crate::ui_script::UiDrain),
                 ),
             );
+    }
+}
+
+/// The active player's arrival (`0x5dea50`) seats the world handle (`0x5deb73`).
+fn seat_world_handle(
+    mut arrivals: MessageReader<crate::net::WorldEnterCascadeMessage>,
+    mut logout: ResMut<LogoutState>,
+) {
+    if arrivals.read().count() > 0 {
+        logout.world_handle = true;
     }
 }
 
@@ -351,6 +381,7 @@ mod tests {
             quitting: true,
             pending: true,
             signals: Vec::new(),
+            ..LogoutState::default()
         };
         s.apply_response(0, false);
         assert_eq!(s.signals, vec![LogoutSignal::Quiting], "a quit says so");
@@ -361,6 +392,7 @@ mod tests {
             quitting: true,
             pending: true,
             signals: Vec::new(),
+            ..LogoutState::default()
         };
         s.apply_response(1, false);
         assert_eq!(s.signals, vec![LogoutSignal::Refused]);
@@ -378,6 +410,9 @@ mod tests {
         let mut app = crate::game_plugins::schedule_tests::headless_client();
         app.insert_resource(NetCommands(tx))
             .insert_resource(SelfGuid(Some(0x4000_0000_0000_0009)));
+        app.world_mut()
+            .resource_mut::<LogoutState>()
+            .seat_world_handle_for_test();
         app.insert_non_send_resource(UiScript::new().unwrap());
         (app, rx)
     }
@@ -462,6 +497,7 @@ mod tests {
             quitting: true,
             pending: true,
             signals: Vec::new(),
+            ..LogoutState::default()
         };
         s.apply_cancelled();
         assert_eq!(s.signals, vec![LogoutSignal::Cancelled]);
@@ -511,6 +547,9 @@ mod tests {
             .clear();
         crate::net::handlers::dispatch(app.world_mut(), vec![port()]);
         assert!(app.world().resource::<LogoutState>().signals.is_empty());
+        app.world_mut()
+            .resource_mut::<LogoutState>()
+            .seat_world_handle_for_test();
         assert_eq!(sent_by(&mut app, &rx, "Logout()"), ["logout"]);
     }
 
@@ -582,6 +621,96 @@ mod tests {
         assert!(
             seen.contains(&sweep),
             "the feed is declared ahead of the sweep"
+        );
+    }
+
+    /// A world load zeroes the world handle (`0x401bd4` → `0x5aae70(0)`, stored at `0x5aae82`)
+    /// until the active player's arrival seats it again (`0x5deb73`): a `Logout()` on the
+    /// loading screen between is dropped before anything is stored (`0x5ab020`-`0x5ab02a`).
+    #[test]
+    fn a_logout_on_a_worldports_loading_screen_sends_nothing() {
+        let (mut app, rx) = client();
+        let port = SessionEvent::Worldport {
+            map_id: 1,
+            position: [0.0; 3],
+            orientation: 0.0,
+            needs_ack: true,
+        };
+        crate::net::handlers::dispatch(app.world_mut(), vec![port]);
+        assert_eq!(sent_by(&mut app, &rx, "Quit()"), Vec::<String>::new());
+        let logout = app.world().resource::<LogoutState>();
+        assert!(!logout.pending && !logout.quitting, "nothing stored");
+        app.world_mut()
+            .write_message(crate::net::WorldEnterCascadeMessage);
+        app.world_mut()
+            .run_system_once(seat_world_handle)
+            .expect("the arrival");
+        assert_eq!(sent_by(&mut app, &rx, "Logout()"), ["logout"]);
+    }
+
+    /// The logout through the real schedule, one frame at a time: `SMSG_LOGOUT_COMPLETE`'s leave
+    /// of the world fires `LOGOUT_CANCEL` in its packet's frame, on the world's interface
+    /// (`0x5aaeb3`); the teardown it then runs (`0x5aaeca` → `0x401ee0`) sweeps the world
+    /// (`PLAYER_LEAVING_WORLD`, `0x490b4d`) and shuts the interface (`PLAYER_LOGOUT`,
+    /// `0x490c2a`), which is the next frame's `OnExit(InWorld)`.
+    #[test]
+    fn a_completed_logout_cancels_then_leaves_then_logs_out_a_frame_later() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let (mut app, rx) = client();
+        app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
+            bevy::ecs::error::ignore,
+        ));
+        let (events, inbound) = crossbeam_channel::unbounded();
+        app.insert_resource(crate::net::NetEvents::for_test(inbound));
+        // The start-up frame first, which seats a VM of its own.
+        app.update();
+        app.insert_non_send_resource(UiScript::new().expect("a VM"));
+        app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
+        app.world_mut()
+            .resource_mut::<crate::ui_script::LeavingWorldArmed>()
+            .arm();
+        let notes: Rc<RefCell<Vec<String>>> = Rc::default();
+        {
+            let sink = notes.clone();
+            let script = app.world().non_send_resource::<UiScript>();
+            let note = script
+                .lua()
+                .create_function(move |_, text: String| {
+                    sink.borrow_mut().push(text);
+                    Ok(())
+                })
+                .expect("the note");
+            script.lua().globals().set("Note", note).expect("Note");
+            script
+                .run(
+                    "FRAME = 0 local f = CreateFrame('Frame') \
+                     f:RegisterEvent('LOGOUT_CANCEL') f:RegisterEvent('PLAYER_LEAVING_WORLD') \
+                     f:RegisterEvent('PLAYER_LOGOUT') \
+                     f:SetScript('OnEvent', function() Note(event .. ' ' .. FRAME) end)",
+                )
+                .expect("the recorder");
+        }
+        assert_eq!(sent_by(&mut app, &rx, "Logout()"), ["logout"]);
+        events
+            .send(SessionEvent::LoggedOut)
+            .expect("the inbound channel");
+        for frame in 1..=2 {
+            crate::script_calls::with_hosted_vm(app.world_mut(), |vm| {
+                vm.expect("a VM")
+                    .run(&format!("FRAME = {frame}"))
+                    .expect("FRAME")
+            });
+            app.update();
+        }
+        assert_eq!(
+            *notes.borrow(),
+            [
+                "LOGOUT_CANCEL 1",
+                "PLAYER_LEAVING_WORLD 2",
+                "PLAYER_LOGOUT 2"
+            ]
         );
     }
 

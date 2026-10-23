@@ -584,6 +584,9 @@ mod tests {
         let mut app = crate::game_plugins::schedule_tests::headless_client();
         app.insert_resource(NetCommands(tx))
             .insert_resource(crate::net::SelfGuid(Some(0x4000_0000_0000_0009)));
+        app.world_mut()
+            .resource_mut::<crate::ui_logout::LogoutState>()
+            .seat_world_handle_for_test();
         let (mut scratch, _) = world(idle_ms, &[]);
         let script = scratch
             .world_mut()
