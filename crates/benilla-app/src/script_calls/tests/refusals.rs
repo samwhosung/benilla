@@ -89,6 +89,59 @@ fn an_emote_refused_for_moving_shows_inside_its_call() {
     );
 }
 
+/// A probe's emote line runs `DoEmote`'s engine half (`0x5ef560`), its refusal shown inside it,
+/// with the host lent, as inside `DoEmote`'s call: the line's listener's call applies.
+#[test]
+fn a_probe_emote_lines_refusal_runs_its_listener_with_the_host_lent() {
+    const WAVE: u32 = 101;
+    const WAVE_EMOTE: u32 = 3;
+    let mut f = frame(true);
+    let world = f.app.world_mut();
+    world.insert_resource(crate::sound::EmoteSounds(
+        benilla_formats::EmoteSoundCatalog::default()
+            .with_text_emote("WAVE", WAVE, WAVE_EMOTE)
+            .with_row(WAVE_EMOTE, 0, 0x4000),
+    ));
+    let me = world.resource::<GuidIndex>().0[&ME];
+    world
+        .entity_mut(me)
+        .insert(crate::creature_anim::MovementState {
+            flags: crate::creature_anim::move_flags::FORWARD,
+            ..Default::default()
+        });
+    benilla_world::world_point::init_world_point_resources(world);
+    world.insert_resource(crate::ui_chat::commands::SlashCommands::build(
+        |name| match name {
+            "EMOTE1_CMD1" => Some("/wave".to_string()),
+            "EMOTE1_TOKEN" => Some("WAVE".to_string()),
+            _ => None,
+        },
+        |token| (token == "WAVE").then_some(WAVE),
+    ));
+    run(
+        &mut f,
+        r#"local roll = CreateFrame("Frame")
+        roll:RegisterEvent("UI_ERROR_MESSAGE")
+        roll:SetScript("OnEvent", function() RandomRoll(1, 100) end)"#,
+    );
+    f.rx.try_iter().for_each(drop);
+    let world = f.app.world_mut();
+    world
+        .non_send_resource_mut::<UiScript>()
+        .push_chat_input("/wave".into());
+    crate::ui_chat::drain_chat_input_once(world);
+    assert_eq!(errors(&f), ["ERR_NOEMOTEWHILERUNNING"]);
+    let wire: Vec<String> =
+        f.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::RandomRoll { .. } => Some("RandomRoll".to_string()),
+                ClientCommand::TextEmote { .. } => Some("TextEmote".to_string()),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(wire, ["RandomRoll"]);
+}
+
 /// `SetRaidTarget` on a unit it may not mark (`0x4bbfd2` → `0x496720`, message `0x1c5`), an enemy
 /// player, refuses inside the call.
 #[test]
