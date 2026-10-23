@@ -125,7 +125,20 @@ fn target() -> [f32; 4] {
 }
 
 /// Whether `LootFrame` is shown (after `LOOT_OPENED`), else the app-side loot session.
-fn window_open(script: &UiScript, loot: &LootState) -> bool {
+/// The loot window's source as the step reads it, taken outside the VM: the loot verbs write the
+/// state in the host, which the step's Lua runs with.
+struct LootView(Option<u64>);
+
+impl LootView {
+    fn source(&self) -> Option<u64> {
+        self.0
+    }
+}
+
+/// The loot latch's guid ([`LootLatch`]), taken as [`LootView`] is.
+struct LatchView(Option<u64>);
+
+fn window_open(script: &UiScript, loot: &LootView) -> bool {
     script
         .eval::<bool>("return LootFrame:IsShown() and 1 or nil")
         .unwrap_or_else(|_| loot.source().is_some())
@@ -178,7 +191,12 @@ fn chest_probe(
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    vm.turn(|script, (loot, latch)| {
+    // The step's Lua runs with the host lent, so the calls it makes apply inside their verbs.
+    let (loot, latch) = {
+        let (loot, latch) = vm.own();
+        (LootView(loot.source()), LatchView(latch.0))
+    };
+    vm.run(|script| {
         let Ok(driver) = self_q.single() else {
             return; // not in-world yet
         };

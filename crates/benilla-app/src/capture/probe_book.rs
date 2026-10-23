@@ -214,7 +214,10 @@ fn book_probe(
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    vm.turn(|script, mut reader| {
+    // The step's Lua runs with the host lent, so the calls it makes apply inside their verbs; the
+    // reader opens outside it, once it has run.
+    let mut open_pages = None;
+    vm.run(|script| {
         if self_player.is_empty() {
             return; // not in-world yet
         }
@@ -286,7 +289,7 @@ fn book_probe(
                         "PROBE_BOOK: opening the reader on {guid:#x} (the right-click's own \
                            route — `ItemTextOpen::read_pages`)"
                     );
-                    reader.read_pages(guid);
+                    open_pages = Some(guid);
                     probe.phase = Phase::WaitReady { since: now };
                 }
             }
@@ -342,5 +345,8 @@ fn book_probe(
                 });
             }
         }
-    })
+    });
+    if let Some(guid) = open_pages {
+        vm.own().read_pages(guid);
+    }
 }
