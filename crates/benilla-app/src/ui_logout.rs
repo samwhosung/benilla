@@ -501,6 +501,77 @@ mod tests {
         assert_eq!(sent_by(&mut app, &rx, "Logout()"), ["logout"]);
     }
 
+    /// `SMSG_LOGOUT_COMPLETE` (`0x5aaeb0`) leaves the world first (`0x5aaeb3` → `0x5aaf40` →
+    /// `0x5aae70(0)` at `0x5aaf4f`), so a completed logout that was not forced fires
+    /// `LOGOUT_CANCEL` (`0x5aae97`) while the world's interface still stands, ahead of the
+    /// teardown at `0x5aaeca`; a forced one (`0x5aaff0`) set no pending byte and fires none.
+    #[test]
+    fn a_completed_logout_leaves_the_world_with_a_cancel() {
+        let (mut app, rx) = client();
+        assert_eq!(sent_by(&mut app, &rx, "Logout()"), ["logout"]);
+        crate::net::handlers::dispatch(app.world_mut(), vec![SessionEvent::LoggedOut]);
+        let logout = app.world().resource::<LogoutState>();
+        assert!(!logout.pending);
+        assert_eq!(logout.signals, [LogoutSignal::Cancelled]);
+
+        let (mut app, rx) = client();
+        assert_eq!(sent_by(&mut app, &rx, "ForceLogout()"), ["force"]);
+        crate::net::handlers::dispatch(app.world_mut(), vec![SessionEvent::LoggedOut]);
+        assert!(app.world().resource::<LogoutState>().signals.is_empty());
+    }
+
+    /// `SMSG_CHARACTER_LOGIN_FAILED` (`0x5b45f0` → `0x5aad70`) leaves the world first
+    /// (`0x5aad76` → `0x5aaf40` → `0x5aae70(0)`), which calls off a pending logout.
+    #[test]
+    fn a_refused_login_calls_off_a_pending_logout() {
+        let (mut app, rx) = client();
+        assert_eq!(sent_by(&mut app, &rx, "Logout()"), ["logout"]);
+        crate::net::handlers::dispatch(
+            app.world_mut(),
+            vec![SessionEvent::CharacterLoginFailed { result: 1 }],
+        );
+        let logout = app.world().resource::<LogoutState>();
+        assert!(!logout.pending);
+        assert_eq!(logout.signals, [LogoutSignal::Cancelled]);
+    }
+
+    /// A worldport's `LOGOUT_CANCEL` fires ahead of its sweep's `PLAYER_LEAVING_WORLD`: the
+    /// world load marks the connection out of the world (`0x401bd4`) before it destroys the old
+    /// world, whose player destructor runs the sweep (`0x5dd543`).
+    #[test]
+    fn a_worldports_cancel_fires_ahead_of_its_sweep() {
+        use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoints};
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let update = census(&mut app, Update, SyncPoints::Declared);
+        if !type_names_available(&update) {
+            return;
+        }
+        let one = |suffix: &str| {
+            let mut hits = update
+                .systems
+                .iter()
+                .filter(|(_, s)| s.name.ends_with(suffix));
+            match (hits.next(), hits.next()) {
+                (Some((key, _)), None) => *key,
+                _ => panic!("exactly one `…{suffix}`"),
+            }
+        };
+        let (feed, sweep) = (one("ui_logout::feed_logout"), one("::sweep_on_worldport"));
+        let mut seen = std::collections::HashSet::new();
+        let mut stack = vec![feed];
+        while let Some(n) = stack.pop() {
+            for (a, b) in &update.dependencies {
+                if *a == n && seen.insert(*b) {
+                    stack.push(*b);
+                }
+            }
+        }
+        assert!(
+            seen.contains(&sweep),
+            "the feed is declared ahead of the sweep"
+        );
+    }
+
     /// `SMSG_LOGOUT_COMPLETE` through [`exit_on_logout_complete`]: whether the process exits.
     fn complete(app: &mut App) -> bool {
         app.world_mut().write_message(LoggedOutMessage);
