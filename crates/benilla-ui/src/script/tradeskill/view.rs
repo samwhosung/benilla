@@ -169,7 +169,8 @@ fn row_order(
     crate::crt::str_cmp_i(&ra.name, &rb.name)
 }
 
-/// The build (`0x4fca20`): the array refilled in add order, each recipe as pushed, then a header
+/// The build (`0x4fca20`): the array refilled with the recipes in the order the push holds them,
+/// the line's learn order (`0x5e9d72`, `0x4fcbb7`), then a header
 /// row per header (`0x4fd08c`-`0x4fd0f3`), then [`refilter`]. A recipe set that changed remakes
 /// the headers in the order the recipes name them (flag 1); one that did not keeps the header
 /// array as the last sort left it (flag 0).

@@ -137,7 +137,8 @@ pub struct TradeSkillState {
     /// (`0x4fdd40`); the recipes are banded on the raw value.
     pub rank: u32,
     pub max_rank: u32,
-    /// Unordered: the engine sorts them (`0x4fca20`), and Lua indexes the visible rows, not this.
+    /// In the line's learn order (`0x5e9d72`), which the build refills its array in before it
+    /// sorts (`0x4fca20`); Lua indexes the sorted array, not this.
     pub recipes: Vec<TradeSkillRecipe>,
 }
 

@@ -629,7 +629,13 @@ fn spell_book(
     for &spell_id in &spell_ids {
         list_opener(spell_id, spells, actions);
     }
-    actions.spells = spell_ids.into_iter().collect();
+    actions.spells.clear();
+    actions.learned.clear();
+    for spell_id in spell_ids {
+        if actions.spells.insert(spell_id) {
+            actions.learned.push(spell_id);
+        }
+    }
     actions.dirty = true;
     let now = Instant::now();
     for cd in &initial_cooldowns {
@@ -663,6 +669,7 @@ fn learned_spell(
 ) {
     debug!("net: learned spell {spell_id}");
     if actions.spells.insert(spell_id) {
+        actions.learned.push(spell_id);
         actions.dirty = true;
     }
     list_opener(spell_id, spells, actions);
@@ -732,6 +739,7 @@ fn removed_spell(
 ) {
     debug!("net: removed spell {spell_id}");
     if actions.spells.remove(&spell_id) {
+        actions.learned.retain(|&id| id != spell_id);
         actions.dirty = true;
     }
     // `UnlearnSpell 0x5e9fe0` does nothing for a spell with no record (`0x5ea02a`); otherwise it
@@ -769,8 +777,14 @@ fn superceded_spell(
     tab_flash: &mut LearnedInTab,
 ) {
     debug!("net: superceded spell {old_spell_id} -> {new_spell_id}");
-    actions.spells.remove(&old_spell_id);
-    actions.spells.insert(new_spell_id);
+    // The player's unlearn of the old rank, then its learn of the new one at the tail
+    // (`0x5e6392`, `0x5e63a4`).
+    if actions.spells.remove(&old_spell_id) {
+        actions.learned.retain(|&id| id != old_spell_id);
+    }
+    if actions.spells.insert(new_spell_id) {
+        actions.learned.push(new_spell_id);
+    }
     actions.superseded.push((old_spell_id, new_spell_id));
     actions.dirty = true;
     // `0x4b2f50` unlists the old rank and registers the new one at the tail; the player's own

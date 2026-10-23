@@ -420,8 +420,9 @@ fn feed_trade_skill(
                 .map(|l| l.name.clone())
                 .unwrap_or_else(|| format!("Skill {line}"));
             let now = (clock.anchor, clock.ui_now);
+            // The line's list in learn order (`0x5e9d72`), which the build walks (`0x4fcbb7`).
             let recipes: Vec<TradeSkillRecipe> = actions
-                .spells
+                .learned
                 .iter()
                 .filter(|&&s| {
                     spells
@@ -985,6 +986,7 @@ mod tests {
         let mut app = App::new();
         let mut actions = PlayerActions::default();
         actions.spells.insert(SPELL);
+        actions.learned.push(SPELL);
         let mooncloth = || SpellDisplay {
             name: "Mooncloth".into(),
             attributes: SPELL_ATTR_IS_TRADESKILL,

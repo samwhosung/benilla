@@ -394,9 +394,10 @@ fn feed_craft(
             };
             // Admission (`0x5e9c20`): known, not hidden (`Attributes & 0x20`), and `castUI` equal
             // to the craft type. The client walks its per-type list (`CGPlayer_C + 0x1cd0 +
-            // 0x10*type`) and never consults `SkillLineAbility` for membership.
+            // 0x10*type`), in learn order (`0x5e9e0f`), and never consults `SkillLineAbility` for
+            // membership.
             let listed: Vec<u32> = actions
-                .spells
+                .learned
                 .iter()
                 .copied()
                 .filter(|&s| {
@@ -765,6 +766,7 @@ mod tests {
         let mut app = App::new();
         let mut actions = PlayerActions::default();
         actions.spells.insert(SPELL);
+        actions.learned.push(SPELL);
         let mut items = Items::default();
         items.insert_template(DUST, Some(crate::items::test_template("Strange Dust")));
         items.insert_template(ROD, Some(crate::items::test_template("Runed Rod")));
