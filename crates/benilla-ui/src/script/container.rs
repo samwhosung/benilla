@@ -2485,11 +2485,23 @@ mod tests {
         );
         s.unlock_item(0x10a);
         s.run("SplitContainerItem(0, 1, 3)").unwrap();
+        // Onto a different item the split still goes and the cursor clears (`0x4f9e1c` →
+        // `0x5e1210`, `0x4f9e4f`).
         s.run("PickupContainerItem(0, 9)").unwrap();
-        let held = s.cursor_item().expect("kept — can't swap a partial stack");
-        assert_eq!(held.count, Some(3));
-        assert!(s.take_container_moves().is_empty());
+        assert!(s.cursor_item().is_none(), "sent and cleared");
+        assert_eq!(
+            s.take_container_moves(),
+            vec![ContainerMove {
+                src_bag: 0,
+                src_slot: 1,
+                dst_bag: 0,
+                dst_slot: 9,
+                count: Some(3),
+            }]
+        );
 
+        s.unlock_item(0x10a);
+        s.run("SplitContainerItem(0, 1, 3)").unwrap();
         s.run("PickupContainerItem(0, 7)").unwrap();
         assert!(s.cursor_item().is_none());
         assert_eq!(
