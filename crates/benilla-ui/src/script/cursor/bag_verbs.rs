@@ -166,28 +166,25 @@ fn place_held(model: &mut Model, dest: Dest, held: CursorItem) -> bool {
     if let Dest::Slot(live) = dest {
         let from_bag_slot = held.bag == EQUIPMENT_BAG && (20..=23).contains(&held.slot);
         if from_bag_slot || is_container(&held) {
-            // A swap (`0x5e0c40`). A split stack cannot swap and stays held: the reference splits
-            // only when storing.
-            if held.count.is_none() {
-                let occupant = usize::try_from(live)
-                    .ok()
-                    .and_then(|slot| model.inv_slot("player", slot))
-                    .map_or(0, |s| s.guid);
-                // `LockItem` on the occupant (`0x4c7d62`, `0x4c7dca`), then `SwapItem`
-                // (`0x4c7d8d`, `0x4c7df5`), whose send clears (`ClearCursor(0,1)`, `0x5e0fe7`)
-                // and whose question leaves the bag held; nothing clears after it.
-                lock_item(model, occupant);
-                super::swap::swap_and_file(
-                    model,
-                    ContainerMove {
-                        src_bag: held.bag,
-                        src_slot: held.slot,
-                        dst_bag: EQUIPMENT_BAG,
-                        dst_slot: live,
-                        count: None,
-                    },
-                );
-            }
+            // A swap: `LockItem` on the occupant (`0x4c7d62`, `0x4c7dca`), then `SwapItem`
+            // (`0x4c7d8d`, `0x4c7df5`), whose send clears (`ClearCursor(0,1)`, `0x5e0fe7`) and
+            // whose question leaves the bag held; nothing clears after it. Neither leg reads the
+            // split count, so a split carry swaps its whole stack.
+            let occupant = usize::try_from(live)
+                .ok()
+                .and_then(|slot| model.inv_slot("player", slot))
+                .map_or(0, |s| s.guid);
+            lock_item(model, occupant);
+            super::swap::swap_and_file(
+                model,
+                ContainerMove {
+                    src_bag: held.bag,
+                    src_slot: held.slot,
+                    dst_bag: EQUIPMENT_BAG,
+                    dst_slot: live,
+                    count: None,
+                },
+            );
             return true;
         }
     }

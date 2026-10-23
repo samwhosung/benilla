@@ -15,8 +15,8 @@ use super::{
 };
 
 /// `PickupInventoryItem(id)` (`0x4c7300`), the doll slot's click, on the bag click's model: a
-/// fitting whole item moves in and the cursor clears, with no hop; a split or a misfit stays
-/// held. Returns whether to repaint.
+/// fitting item goes through `SwapItem`, a split carry as its whole stack since the click never
+/// reads the split count; a misfit goes back or auto-equips. Returns whether to repaint.
 pub(super) fn pickup_inventory_item(lua: &Lua, id: u32) -> mlua::Result<bool> {
     // An armed item-targeting spell binds the item through `BindSpellTargetObject`, behind the
     // gate's tag 2.
@@ -134,10 +134,6 @@ pub(super) fn doll_click(model: &mut Model, id: u32, may_cast: bool) -> DollClic
                 .filter(|s| s.item_id != 0)
                 .map_or(0, |s| s.guid);
             if item_locked(model, occupant) {
-                return DollClick::Done(false);
-            }
-            // A split stays held, with no event: nothing changed.
-            if held.count.is_some() {
                 return DollClick::Done(false);
             }
             // A misfit (`0x5ea720` false): an equipped item, the 0-based slot below 0x13, goes back
@@ -707,24 +703,6 @@ mod tests {
                 count: None,
             }]
         );
-    }
-
-    #[test]
-    fn split_carry_refuses_to_equip() {
-        let mut s = UiScript::new().unwrap();
-        s.set_inventory_slots(doll_slots());
-        let mut state = one_fitting_bag_item();
-        state.slots.get_mut(&1).unwrap().count = 5;
-        s.set_container(0, Some(state));
-
-        s.run("SplitContainerItem(0, 1, 2)").unwrap();
-        let held = s.cursor_item().expect("a split carry");
-        assert_eq!(held.count, Some(2));
-
-        assert!(!pickup_inventory_item(&s.lua, 1).unwrap());
-        let held = s.cursor_item().expect("kept — can't equip a partial stack");
-        assert_eq!(held.count, Some(2));
-        assert!(s.take_container_moves().is_empty());
     }
 
     #[test]
