@@ -459,3 +459,43 @@ fn corpse_map_position_binding() {
     assert!((x - 0.25).abs() < 1e-6 && (y - 0.75).abs() < 1e-6);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
+
+/// Both timers answer whole seconds: the release timer truncates its milliseconds by a signed
+/// divide (`0x48b5ae`-`0x48b5bd`), the reclaim delay floors them by an unsigned one
+/// (`0x48b5f0`-`0x48b5f7`).
+#[test]
+fn the_death_timers_answer_whole_seconds() {
+    let mut s = UiScript::new().unwrap();
+    s.set_death(DeathUiState {
+        release_remaining: Some(299.7),
+        recovery_delay: 0.4,
+        ..Default::default()
+    });
+    assert_eq!(
+        s.eval::<f64>("return GetReleaseTimeRemaining()").unwrap(),
+        299.0
+    );
+    assert_eq!(
+        s.eval::<f64>("return GetCorpseRecoveryDelay()").unwrap(),
+        0.0
+    );
+    s.set_death(DeathUiState {
+        release_remaining: Some(0.4),
+        recovery_delay: 1.6,
+        ..Default::default()
+    });
+    assert_eq!(
+        s.eval::<f64>("return GetReleaseTimeRemaining()").unwrap(),
+        0.0
+    );
+    assert_eq!(
+        s.eval::<f64>("return GetCorpseRecoveryDelay()").unwrap(),
+        1.0
+    );
+    // No timer: `0x4962a0` answers -1000 ms, which the signed divide keeps as -1.
+    s.set_death(DeathUiState::default());
+    assert_eq!(
+        s.eval::<f64>("return GetReleaseTimeRemaining()").unwrap(),
+        -1.0
+    );
+}
