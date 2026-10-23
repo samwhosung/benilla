@@ -94,10 +94,11 @@ fn vendor_bodies_golden() {
         "CMSG_LIST_INVENTORY body"
     );
 
-    // CMSG_BUY_ITEM (vmangos Item.cpp:104-110): vendorGuid, item entry (not muid), count, unk1 (0).
+    // CMSG_BUY_ITEM (`0x5e1e90`): vendorGuid, item entry (not muid), count, and the trailing
+    // byte `BuyMerchantItem` passes as 1 (`0x4fb933`, written at `0x5e1ee8`-`0x5e1eef`).
     assert_eq!(
         messages::buy_item(0x1234_5678_9abc_def0, 2488, 1),
-        hx(concat!("f0debc9a78563412", "b8090000", "01", "00")),
+        hx(concat!("f0debc9a78563412", "b8090000", "01", "01")),
         "CMSG_BUY_ITEM body"
     );
 
