@@ -7,8 +7,8 @@ use crate::script::item_stats::item_link;
 use crate::script::Model;
 
 use super::view::{
-    build_groups, first_recipe_index, fold_target, inv_slot_token, num_rows, present_inv_slots,
-    recipe_at, rows, select, selected_visible_index, set_collapsed, Row,
+    first_recipe_index, fold_target, inv_slot_token, num_rows, present_inv_slots, recipe_at,
+    refilter, rows, select, selected_index, set_collapsed, Row,
 };
 
 /// The index of the two filter getters: `is-number` (raising the usage error), then `_ftol` minus
@@ -99,7 +99,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetNumTradeSkills(): the visible rows, headers included.
+    // GetNumTradeSkills() (`0x4fd800`): the displayed rows, headers included.
     g.set(
         "GetNumTradeSkills",
         lua.create_function(|lua, ()| {
@@ -236,6 +236,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(n) = index.checked_sub(1) else {
                 return Ok(miss());
             };
+            // Bounded by the full count (`0x4fd861`).
             let Some(row) = rows(&model).get(n).cloned() else {
                 return Ok(miss());
             };
@@ -280,8 +281,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let mut out = Vec::new();
-            if let Some(t) = model.trade_skill.as_ref() {
-                for grp in build_groups(&t.recipes) {
+            if model.trade_skill.is_some() {
+                for grp in &model.trade_skill_headers {
                     out.push(Value::String(lua.create_string(&grp.name)?));
                 }
             }
@@ -289,8 +290,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // Expand/CollapseTradeSkillSubClass(i): the group whose header is visible row i, every group
-    // for an i below 1 ([`fold_target`]); any other row raises the verb's own line.
+    // Expand/CollapseTradeSkillSubClass(i): the group whose header is row i, every group for an i
+    // below 1 ([`fold_target`]); any other row raises the verb's own line.
     g.set(
         "ExpandTradeSkillSubClass",
         lua.create_function(|lua, id: Value| {
@@ -436,7 +437,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SelectTradeSkill and GetTradeSkillSelectionIndex take and answer visible indices.
+    // SelectTradeSkill and GetTradeSkillSelectionIndex take and answer indices into the whole
+    // array (`0x4fc9b0`, `0x4fc9e0`).
     g.set(
         "SelectTradeSkill",
         lua.create_function(|lua, index: Value| {
@@ -451,7 +453,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetTradeSkillSelectionIndex",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(i64::from(selected_visible_index(&model)))
+            Ok(i64::from(selected_index(&model)))
         })?,
     )?;
 
@@ -525,11 +527,11 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             // 0 asks about the whole list, one past the end raises (`0x4ffe0e`, `0x84e738`).
             let n = filter_index(lua, index, "Usage: GetTradeSkillSubClassFilter(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let groups = model
-                .trade_skill
-                .as_ref()
-                .map(|t| build_groups(&t.recipes))
-                .unwrap_or_default();
+            let groups = if model.trade_skill.is_some() {
+                model.trade_skill_headers.clone()
+            } else {
+                Vec::new()
+            };
             let shown = |g: &super::view::TradeSkillGroup| {
                 !model.trade_skill_subclass_hidden.contains(&g.key)
             };
@@ -549,10 +551,11 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, args: (Option<Value>, Option<Value>, Option<Value>)| {
             let count = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model
-                    .trade_skill
-                    .as_ref()
-                    .map_or(0, |t| build_groups(&t.recipes).len())
+                if model.trade_skill.is_some() {
+                    model.trade_skill_headers.len()
+                } else {
+                    0
+                }
             };
             let names = SetFilterNames {
                 usage: "Usage: SetTradeSkillSubClassFilter(index [, on\\off, exclusive])",
@@ -637,9 +640,10 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// The filter and fold setters' tail (`0x4fd710`, `0x4fd730`, `0x4fd750`): the list rebuild, which
-/// the bindings derive on read, then `TRADE_SKILL_UPDATE` (`0x13a`) in place.
+/// The filter and fold setters' tail (`0x4fd710`, `0x4fd730`, `0x4fd750`): the recompute and its
+/// sorts over the array as it stands (`0x4fd180`), then `TRADE_SKILL_UPDATE` (`0x13a`) in place.
 fn raise_update(model: &mut Model) {
+    refilter(model);
     model.raise("TRADE_SKILL_UPDATE", Vec::new());
 }
 
@@ -660,13 +664,10 @@ fn set_subclass_filter(model: &mut Model, filter: SetFilter) {
     match filter {
         SetFilter::All => model.trade_skill_subclass_hidden.clear(),
         SetFilter::One { n, on, exclusive } => {
-            let Some(t) = model.trade_skill.as_ref() else {
+            if model.trade_skill.is_none() {
                 return;
-            };
-            let keys: Vec<(u32, u32)> = build_groups(&t.recipes)
-                .into_iter()
-                .map(|g| g.key)
-                .collect();
+            }
+            let keys: Vec<(u32, u32)> = model.trade_skill_headers.iter().map(|g| g.key).collect();
             let Some(&key) = keys.get(n) else {
                 return;
             };

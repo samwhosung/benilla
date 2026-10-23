@@ -1,5 +1,6 @@
-//! The visible rows the tradeskill API indexes: grouping, sorting and filtering the flat recipes
-//! (`0x4fca20`, `0x4fd180`).
+//! The tradeskill list the API indexes (`0x4fca20`, `0x4fd180`): the recipes and one header row
+//! per group in one array, which the CRT sort (`0x73f727`) orders with the displayed rows first,
+//! so a row a fold or a filter hides still answers at its index past the displayed count.
 
 use std::collections::HashMap;
 
@@ -78,126 +79,203 @@ pub(super) fn present_inv_slots(model: &Model) -> Vec<u32> {
     (0..24).filter(|b| accum & (1 << b) != 0).collect()
 }
 
-/// The recompute's row test (`0x4fd180`): the slot bits meet the shown mask (`0x84dd64`) and the
-/// group is not hidden.
-fn passes_filters(model: &Model, r: &TradeSkillRecipe) -> bool {
-    let key = r
-        .group
-        .as_ref()
-        .map_or((u32::MAX, u32::MAX), |(c, s, _)| (*c, *s));
-    !model.trade_skill_subclass_hidden.contains(&key)
-        && inv_slot_mask(r.product_inv_type) & model.trade_skill_invslot_mask != 0
-}
-
-/// One recipe group (`0x4fca20`), keyed by the product's `(ItemClass, ItemSubClass)` and rebuilt
-/// on every query.
+/// One header of the list (`0x4fca20`), keyed by the product's `(ItemClass, ItemSubClass)`.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(super) struct TradeSkillGroup {
+pub(crate) struct TradeSkillGroup {
     pub(super) key: (u32, u32),
     pub(super) name: String,
-    /// Positions into `TradeSkillState::recipes`, in display order.
-    entries: Vec<usize>,
 }
 
-/// An approximation of the reference's name compare, the case-insensitive `0x64a4c0`:
-/// case-insensitive, then raw bytes.
-fn collate(a: &str, b: &str) -> std::cmp::Ordering {
-    a.to_lowercase()
-        .cmp(&b.to_lowercase())
-        .then_with(|| a.cmp(b))
+/// The key of a recipe's group; a recipe whose product template is in flight files under an
+/// empty-named group keyed `u32::MAX`, which sorts last.
+fn group_key(r: &TradeSkillRecipe) -> (u32, u32) {
+    r.group
+        .as_ref()
+        .map_or((u32::MAX, u32::MAX), |(c, s, _)| (*c, *s))
 }
 
-/// The groups in display order (`0x4fca20`): by `ItemClass`, then name, never subclass id; each
-/// group's recipes by tier ascending, product ItemLevel (`row+0x14`) descending (`setl` at
-/// `0x4fd4e6`), then name (`0x4fd380`). A recipe with no group yet goes into an empty-named group
-/// keyed `u32::MAX`, which sorts last.
-pub(super) fn build_groups(recipes: &[TradeSkillRecipe]) -> Vec<TradeSkillGroup> {
-    let mut map: HashMap<(u32, u32), TradeSkillGroup> = HashMap::new();
-    for (i, r) in recipes.iter().enumerate() {
-        let (key, name) = match &r.group {
-            Some((class, subclass, name)) => ((*class, *subclass), name.clone()),
-            None => ((u32::MAX, u32::MAX), String::new()),
-        };
-        map.entry(key)
-            .or_insert_with(|| TradeSkillGroup {
+/// The groups in the order the recipes first name them, the order the build makes the headers in
+/// (`0x4fcd70`).
+fn groups_in_add_order(recipes: &[TradeSkillRecipe]) -> Vec<TradeSkillGroup> {
+    let mut out: Vec<TradeSkillGroup> = Vec::new();
+    for r in recipes {
+        let key = group_key(r);
+        if out.iter().all(|g| g.key != key) {
+            out.push(TradeSkillGroup {
                 key,
-                name,
-                entries: Vec::new(),
-            })
-            .entries
-            .push(i);
-    }
-    let mut groups: Vec<TradeSkillGroup> = map.into_values().collect();
-    for g in &mut groups {
-        g.entries.sort_by(|&a, &b| {
-            recipes[a]
-                .difficulty
-                .tier()
-                .cmp(&recipes[b].difficulty.tier())
-                .then_with(|| {
-                    recipes[b]
-                        .product_item_level
-                        .cmp(&recipes[a].product_item_level)
-                })
-                .then_with(|| collate(&recipes[a].name, &recipes[b].name))
-        });
-    }
-    groups.sort_by(|a, b| {
-        a.key
-            .0
-            .cmp(&b.key.0)
-            .then_with(|| collate(&a.name, &b.name))
-    });
-    groups
-}
-
-/// One visible row: a group header, or a recipe's position in `TradeSkillState::recipes`.
-#[derive(Clone)]
-pub(super) enum Row {
-    Header { key: (u32, u32), name: String },
-    Entry(usize),
-}
-
-/// The visible rows every Lua index is 1-based into: each group's header, then its recipes that
-/// pass the filters unless it is folded. A group the filters empty loses its header too; a merely
-/// folded one keeps it (`0x4fd180`).
-pub(super) fn rows(model: &Model) -> Vec<Row> {
-    let Some(t) = model.trade_skill.as_ref() else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for g in build_groups(&t.recipes) {
-        if model.trade_skill_subclass_hidden.contains(&g.key) {
-            continue;
-        }
-        let entries: Vec<usize> = g
-            .entries
-            .into_iter()
-            .filter(|&ei| passes_filters(model, &t.recipes[ei]))
-            .collect();
-        if entries.is_empty() {
-            continue;
-        }
-        let collapsed = model.trade_skill_collapsed.contains(&g.key);
-        out.push(Row::Header {
-            key: g.key,
-            name: g.name,
-        });
-        if !collapsed {
-            for ei in entries {
-                out.push(Row::Entry(ei));
-            }
+                name: r.group.as_ref().map_or(String::new(), |g| g.2.clone()),
+            });
         }
     }
     out
 }
 
-pub(super) fn num_rows(model: &Model) -> usize {
-    rows(model).len()
+/// `0x4fd540`: item class ascending (`setg` at `0x4fd639`), then, within a class, the subclass
+/// names case-blind (`0x4fd624`); 0 when either has no `ItemSubClass.dbc` name (`0x4fd630`).
+fn header_order(a: &TradeSkillGroup, b: &TradeSkillGroup) -> i32 {
+    if a.key.0 != b.key.0 {
+        return if a.key.0 > b.key.0 { 1 } else { -1 };
+    }
+    if a.name.is_empty() || b.name.is_empty() {
+        return 0;
+    }
+    crate::crt::str_cmp_i(&a.name, &b.name)
 }
 
-/// The recipe at a 1-based visible index; `None` on a header, so the per-recipe verbs and
-/// `SetTradeSkillItem` no-op there.
+/// One row of the array and its visible flag (`+0x1c`, written at `0x4fd295`).
+type Placed = (Row, bool);
+
+/// `0x4fd380` over two rows, `pos` their groups' positions in the sorted header array: the
+/// displayed rows first, two hidden ones equal (`0x4fd51f`); then the group's position, its header
+/// row first, two headers of one group 1 either way (`0x4fd506`); then the tier ascending, the
+/// product's item level descending (`setl` at `0x4fd4e6`) and the name case-blind (`0x4fd4d6`).
+fn row_order(
+    a: &Placed,
+    b: &Placed,
+    pos: &HashMap<(u32, u32), usize>,
+    recipes: &[TradeSkillRecipe],
+) -> i32 {
+    let key = |row: &Row| match row {
+        Row::Header { key, .. } => *key,
+        Row::Entry(i) => group_key(&recipes[*i]),
+    };
+    let place = |p: &Placed| (pos.get(&key(&p.0)).copied().unwrap_or(0), p.1);
+    let ((ai, av), (bi, bv)) = (place(a), place(b));
+    match (av, bv) {
+        (false, false) => return 0,
+        (false, true) => return 1,
+        (true, false) => return -1,
+        (true, true) => {}
+    }
+    if ai != bi {
+        return if bi < ai { 1 } else { -1 };
+    }
+    let (ra, rb) = match (&a.0, &b.0) {
+        (Row::Header { .. }, Row::Header { .. }) | (Row::Entry(_), Row::Header { .. }) => return 1,
+        (Row::Header { .. }, Row::Entry(_)) => return -1,
+        (Row::Entry(x), Row::Entry(y)) => (&recipes[*x], &recipes[*y]),
+    };
+    let (ta, tb) = (ra.difficulty.tier(), rb.difficulty.tier());
+    if ta != tb {
+        return if ta > tb { 1 } else { -1 };
+    }
+    if ra.product_item_level != rb.product_item_level {
+        return if ra.product_item_level < rb.product_item_level {
+            1
+        } else {
+            -1
+        };
+    }
+    crate::crt::str_cmp_i(&ra.name, &rb.name)
+}
+
+/// The build (`0x4fca20`): the array refilled in add order, each recipe as pushed, then a header
+/// row per header (`0x4fd08c`-`0x4fd0f3`), then [`refilter`]. A recipe set that changed remakes
+/// the headers in the order the recipes name them (flag 1); one that did not keeps the header
+/// array as the last sort left it (flag 0).
+pub(crate) fn build(model: &mut Model, remake_headers: bool) {
+    let Some(t) = model.trade_skill.as_ref() else {
+        model.trade_skill_rows.clear();
+        model.trade_skill_headers.clear();
+        model.trade_skill_visible = 0;
+        return;
+    };
+    let made = groups_in_add_order(&t.recipes);
+    let kept = !remake_headers
+        && made.len() == model.trade_skill_headers.len()
+        && made
+            .iter()
+            .all(|g| model.trade_skill_headers.iter().any(|h| h.key == g.key));
+    if !kept {
+        model.trade_skill_headers = made;
+    } else {
+        // The names come with this push; the order is the kept array's.
+        for h in &mut model.trade_skill_headers {
+            if let Some(g) = made.iter().find(|g| g.key == h.key) {
+                h.name = g.name.clone();
+            }
+        }
+    }
+    let mut rows: Vec<Row> = (0..t.recipes.len()).map(Row::Entry).collect();
+    rows.extend(model.trade_skill_headers.iter().map(|h| Row::Header {
+        key: h.key,
+        name: h.name.clone(),
+    }));
+    model.trade_skill_rows = rows;
+    refilter(model);
+}
+
+/// `0x4fd180`: each row's visible flag, the displayed count, and the sorts of the header array
+/// (`0x4fd540`) and of the rows as the last sort left them (`0x4fd380`), both by the CRT's
+/// `qsort` (`0x73f727`). A recipe shows when its slot bit meets the slot mask (`0x84dd64`) and its
+/// group is shown, holds a member that passes the slot mask and is not folded; a header row when
+/// its group is shown and holds such a member, so a folded group keeps its header (`0x4fd2f0`-
+/// `0x4fd31b`).
+pub(crate) fn refilter(model: &mut Model) {
+    let Some(t) = model.trade_skill.as_ref() else {
+        model.trade_skill_rows.clear();
+        model.trade_skill_headers.clear();
+        model.trade_skill_visible = 0;
+        return;
+    };
+    let mut headers = std::mem::take(&mut model.trade_skill_headers);
+    crate::crt::qsort(&mut headers, header_order);
+    let pos: HashMap<(u32, u32), usize> = headers
+        .iter()
+        .enumerate()
+        .map(|(i, h)| (h.key, i))
+        .collect();
+    let slot_passes = |r: &TradeSkillRecipe| {
+        inv_slot_mask(r.product_inv_type) & model.trade_skill_invslot_mask != 0
+    };
+    let mut members: HashMap<(u32, u32), usize> = HashMap::new();
+    for r in t.recipes.iter().filter(|r| slot_passes(r)) {
+        *members.entry(group_key(r)).or_default() += 1;
+    }
+    let shown = |key: &(u32, u32)| {
+        !model.trade_skill_subclass_hidden.contains(key) && members.get(key).is_some_and(|&n| n > 0)
+    };
+    let mut placed: Vec<Placed> = std::mem::take(&mut model.trade_skill_rows)
+        .into_iter()
+        .map(|row| {
+            let visible = match &row {
+                Row::Header { key, .. } => shown(key),
+                Row::Entry(i) => {
+                    let r = &t.recipes[*i];
+                    let key = group_key(r);
+                    slot_passes(r) && shown(&key) && !model.trade_skill_collapsed.contains(&key)
+                }
+            };
+            (row, visible)
+        })
+        .collect();
+    crate::crt::qsort(&mut placed, |a, b| row_order(a, b, &pos, &t.recipes));
+    let visible = placed.iter().filter(|p| p.1).count();
+    model.trade_skill_rows = placed.into_iter().map(|p| p.0).collect();
+    model.trade_skill_headers = headers;
+    model.trade_skill_visible = visible;
+}
+
+/// One row of the array: a group header, or a recipe's position in `TradeSkillState::recipes`.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Row {
+    Header { key: (u32, u32), name: String },
+    Entry(usize),
+}
+
+/// The whole array every Lua index is 1-based into, the displayed rows first; each verb bounds its
+/// index by the full count (`0xbde04c`, `0x4fd861`).
+pub(super) fn rows(model: &Model) -> &[Row] {
+    &model.trade_skill_rows
+}
+
+/// `GetNumTradeSkills` (`0x4fd800`): the displayed count (`0xbde054`).
+pub(super) fn num_rows(model: &Model) -> usize {
+    model.trade_skill_visible
+}
+
+/// The recipe at a 1-based index into the whole array; `None` on a header, so the per-recipe
+/// verbs and `SetTradeSkillItem` no-op there.
 pub(crate) fn recipe_at(model: &Model, index: usize) -> Option<&TradeSkillRecipe> {
     let n = index.checked_sub(1)?;
     match rows(model).get(n)? {
@@ -206,42 +284,45 @@ pub(crate) fn recipe_at(model: &Model, index: usize) -> Option<&TradeSkillRecipe
     }
 }
 
-/// `GetFirstTradeSkill`: the first recipe row's visible index, 0 when none.
+/// `GetFirstTradeSkill` (`0x5001c0`): the first displayed row with a spell id above 0, as an
+/// index, 0 when none (`0x5001d5`-`0x5001f6`).
 pub(super) fn first_recipe_index(model: &Model) -> u32 {
-    rows(model)
+    rows(model)[..num_rows(model)]
         .iter()
         .position(|r| matches!(r, Row::Entry(_)))
         .map_or(0, |p| (p + 1) as u32)
 }
 
-/// `GetTradeSkillSelectionIndex`: the selection's visible index, 0 when none or hidden. The
-/// selection is held as a flat recipe position, so a fold never moves it.
-pub(super) fn selected_visible_index(model: &Model) -> u32 {
-    let Some(pos) = model.trade_skill_selection.checked_sub(1) else {
+/// `GetTradeSkillSelectionIndex` (`0x4fd9f0` → `0x4fc9e0`): the selected spell's position among
+/// every row plus 1, 0 when no row holds it.
+pub(super) fn selected_index(model: &Model) -> u32 {
+    let spell = model.trade_skill_selected_spell;
+    if spell == 0 {
+        return 0;
+    }
+    let Some(t) = model.trade_skill.as_ref() else {
         return 0;
     };
     rows(model)
         .iter()
-        .position(|r| matches!(r, Row::Entry(ei) if *ei == pos as usize))
+        .position(|r| matches!(r, Row::Entry(ei) if t.recipes[*ei].spell_id == spell))
         .map_or(0, |p| (p + 1) as u32)
 }
 
-/// `SelectTradeSkill` (`0x4fc9b0`): holds the recipe at a visible index by its spell id
-/// (`0xbde044`), which survives a close and remaps across a re-push. A header row's id is -1 and
-/// stores 0 (`jg` at `0x4fc9c9`), as an index past the rows does, compared unsigned (`jae` at
+/// `SelectTradeSkill` (`0x4fc9b0`): holds the recipe at an index by its spell id (`0xbde044`),
+/// which survives a close and remaps across a re-push. A header row's id is -1 and stores 0 (`jg`
+/// at `0x4fc9c9`), as an index past the full count does, compared unsigned (`jae` at
 /// `0x4fc9b6`): both clear the selection. The stock Lua folds a header instead of selecting it
 /// (`Blizzard_TradeSkillUI.lua:184-192`).
 pub(super) fn select(model: &mut Model, index: u32) {
-    let entry = index
+    let spell = index
         .checked_sub(1)
         .and_then(|n| match rows(model).get(n as usize) {
-            Some(Row::Entry(ei)) => Some(*ei),
+            Some(Row::Entry(ei)) => model.trade_skill.as_ref()?.recipes.get(*ei),
             Some(Row::Header { .. }) | None => None,
-        });
-    model.trade_skill_selected_spell = entry
-        .and_then(|ei| model.trade_skill.as_ref()?.recipes.get(ei))
+        })
         .map_or(0, |r| r.spell_id);
-    model.trade_skill_selection = entry.map_or(0, |ei| (ei + 1) as u32);
+    model.trade_skill_selected_spell = spell;
 }
 
 /// What a fold verb's index names (`0x5000c0`, `0x500140`).
@@ -253,8 +334,9 @@ pub(super) enum Fold {
 }
 
 /// The fold verbs' target for an `_ftol`'d index: `index - 1` below 0 is every group (`jns` at
-/// `0x5000f5` and `0x500175`); otherwise the visible row there must be a header, whose group
-/// `0x4fd650` finds, and a recipe row or one past the rows is `None`, which the verbs raise.
+/// `0x5000f5` and `0x500175`); otherwise the row there, within the full count, must be a header,
+/// whose group `0x4fd650` finds, and a recipe row or one past the rows is `None`, which the verbs
+/// raise.
 pub(super) fn fold_target(model: &Model, index: i32) -> Option<Fold> {
     let Ok(n) = usize::try_from(index.wrapping_sub(1)) else {
         return Some(Fold::All);
@@ -273,15 +355,7 @@ pub(super) fn set_collapsed(model: &mut Model, target: Fold, collapse: bool) {
             model.trade_skill_collapsed.clear();
             return;
         }
-        Fold::All => {
-            let Some(t) = model.trade_skill.as_ref() else {
-                return;
-            };
-            build_groups(&t.recipes)
-                .into_iter()
-                .map(|g| g.key)
-                .collect()
-        }
+        Fold::All => model.trade_skill_headers.iter().map(|g| g.key).collect(),
         Fold::Group(key) => vec![key],
     };
     for k in targets {

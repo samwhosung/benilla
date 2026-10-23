@@ -397,12 +397,13 @@ fn selection_persists_across_collapse_and_a_regroup() {
     );
     s.run("ExpandTradeSkillSubClass(1)").unwrap();
 
-    // Folding its own group (row 7) hides it: the index reads 0, but the selection stays...
+    // Folding its own group (row 7) hides it: the index reads past the nine shown rows
+    // (`0x4fc9e0` walks them all), and the selection stays...
     s.run("CollapseTradeSkillSubClass(7)").unwrap();
     assert_eq!(
         s.eval::<i64>("return GetTradeSkillSelectionIndex()")
             .unwrap(),
-        0
+        10
     );
     // ...and comes back at row 8.
     s.run("ExpandTradeSkillSubClass(7)").unwrap();

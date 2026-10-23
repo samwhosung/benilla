@@ -2,19 +2,17 @@
 //! ([`UiScript::set_trade_skill`]) with recipes resolved from `Spell.dbc`, `SkillLineAbility.dbc`
 //! and bag counts, and drains the intents `DoTradeSkill` and `CloseTradeSkill` queue. The engine
 //! owns the grouped, filtered list (`0x4fca20`); every Lua index, `SetTradeSkillItem`'s included,
-//! is 1-based into its visible rows ([`recipe_at`]). The filter, fold, repeat and close verbs fire
-//! their events inside the call, as the reference's do.
+//! is 1-based into its whole sorted array, the displayed rows first ([`recipe_at`]). The filter,
+//! fold, repeat and close verbs fire their events inside the call, as the reference's do.
 
 use std::collections::HashSet;
 
 mod api;
 mod itemstats;
-mod view;
+pub(crate) mod view;
 
 #[cfg(test)]
 mod tests;
-
-use view::build_groups;
 
 pub(super) use api::install;
 pub(crate) use view::recipe_at;
@@ -143,23 +141,30 @@ impl super::UiScript {
                     model.trade_skill_selected_spell = 0;
                     model.trade_skill_last_line = s.line;
                 }
-                model.trade_skill_selection = (model.trade_skill_selected_spell != 0)
-                    .then(|| {
-                        s.recipes
-                            .iter()
-                            .position(|r| r.spell_id == model.trade_skill_selected_spell)
+                let live: HashSet<(u32, u32)> = s
+                    .recipes
+                    .iter()
+                    .map(|r| {
+                        r.group
+                            .as_ref()
+                            .map_or((u32::MAX, u32::MAX), |(c, sc, _)| (*c, *sc))
                     })
-                    .flatten()
-                    .map_or(0, |i| (i + 1) as u32);
-                let live: HashSet<(u32, u32)> = build_groups(&s.recipes)
-                    .into_iter()
-                    .map(|g| g.key)
                     .collect();
                 model.trade_skill_collapsed.retain(|k| live.contains(k));
                 model
                     .trade_skill_subclass_hidden
                     .retain(|k| live.contains(k));
+                // A changed recipe set remakes the headers, as a learn's or the open's build does
+                // (flag 1, `0x5e9d79`, `0x4fc985`).
+                let spells = |recipes: &[TradeSkillRecipe]| {
+                    recipes.iter().map(|r| r.spell_id).collect::<Vec<_>>()
+                };
+                let remake = model
+                    .trade_skill
+                    .as_ref()
+                    .is_none_or(|t| spells(&t.recipes) != spells(&s.recipes));
                 model.trade_skill = Some(s);
+                view::build(&mut model, remake);
             }
         }
     }
@@ -232,7 +237,7 @@ impl super::UiScript {
     pub fn reset_crafts_on_world_enter(&mut self) {
         let mut model = self.model_mut();
         model.trade_skill = None;
-        model.trade_skill_selection = 0;
+        view::build(&mut model, true);
         model.trade_skill_selected_spell = 0;
         model.trade_skill_last_line = 0;
         model.trade_skill_repeat_spell = 0;

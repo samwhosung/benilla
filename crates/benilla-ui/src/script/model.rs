@@ -862,8 +862,12 @@ pub(crate) struct Model {
     pub(crate) trade_skill_open: bool,
     /// `DoTradeSkill` calls, `(spell id, count)`.
     pub(crate) trade_skill_dos: Vec<(u32, u32)>,
-    /// The 1-based selection, 0 for none, carried across a re-push by the recipe's spell id.
-    pub(crate) trade_skill_selection: u32,
+    /// The row array as the last sort left it (`0xbddfc0`, full count `0xbde04c`), the displayed
+    /// rows first, and the displayed count (`0xbde054`).
+    pub(crate) trade_skill_rows: Vec<tradeskill::view::Row>,
+    pub(crate) trade_skill_visible: usize,
+    /// The header array as the last sort left it (`0xbde000`).
+    pub(crate) trade_skill_headers: Vec<tradeskill::view::TradeSkillGroup>,
     pub(crate) trade_skill_close: bool,
     /// Collapsed recipe groups by `(ItemClass, ItemSubClass)` (`0x55ba30`), kept across a re-push
     /// and a same-profession reopen like the mask `0x84dd68`; a profession switch resets them.
@@ -1685,7 +1689,9 @@ impl Model {
             trade_skill: None,
             trade_skill_open: false,
             trade_skill_dos: Vec::new(),
-            trade_skill_selection: 0,
+            trade_skill_rows: Vec::new(),
+            trade_skill_visible: 0,
+            trade_skill_headers: Vec::new(),
             trade_skill_close: false,
             trade_skill_collapsed: HashSet::new(),
             trade_skill_subclass_hidden: HashSet::new(),
