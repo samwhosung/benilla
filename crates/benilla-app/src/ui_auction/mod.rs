@@ -218,22 +218,6 @@ pub(crate) enum HouseEffect {
     /// A packet the handler sends at this point: a list request (`0x4cc4e0`, `0x4cc528`) or the
     /// placed bid's wave after its row's update (`0x4cc5dd`-`0x4cc60c`).
     Send(ClientCommand),
-    /// What a result does past its line, once the line's handlers have run.
-    AfterLine(AfterLine),
-}
-
-/// The rest of a success's result past its line: the reference shows the line first
-/// (`0x4cc4c7`, `0x4cc507`), so its `CHAT_MSG_SYSTEM` handlers read the house as it stood.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AfterLine {
-    /// Started: the owner request armed and sent at its saved offset (`0x4cc4d1`-`0x4cc4e0`).
-    Started,
-    /// A placed bid: its outbid pair removed, the bidder request, the browse row and the wave
-    /// (`0x4cc511`-`0x4cc60c`), with the packet's increment (`0x4cc502`).
-    BidPlaced {
-        auction_id: u32,
-        increment: Option<u32>,
-    },
 }
 
 /// A message an auction handler shows (`0x496720`): a refusal on the red `UIErrorsFrame`, or one of
