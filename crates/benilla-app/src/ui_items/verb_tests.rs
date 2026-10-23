@@ -498,6 +498,55 @@ fn the_bind_question_fires_inside_the_swap_ahead_of_the_bag_clicks_clear() {
     assert_eq!(h.sent(), Vec::<String>::new(), "nothing sent");
 }
 
+/// `PickupContainerItem` asks inside `SwapItem`, then clears with its own `ClearCursor(0,1)`
+/// past the call (`0x4f9eb8`). Through the stock FrameXML the clear's `CURSOR_UPDATE` hides
+/// `EQUIP_BIND` (`UIParent.lua:357-361`), whose `OnHide` calls `CancelPendingEquip` into
+/// `0x5e1be0`: the record is freed, both ends unlock (`0x5e1ca5`, `0x5e1d04`), nothing is sent and
+/// the cursor ends empty.
+#[test]
+fn the_bag_clicks_clear_cancels_its_bind_question_and_unlocks_both_ends() {
+    benilla_formats::wow_data_or_skip!();
+    let mut h = Bags::new();
+    h.script().set_screen_size(1024.0, 768.0);
+    for file in [
+        "Interface\\FrameXML\\GlobalStrings.lua",
+        "Interface\\FrameXML\\Fonts.xml",
+        "Interface\\FrameXML\\BasicControls.xml",
+        "Interface\\FrameXML\\LocaleProperties.lua",
+        "Interface\\FrameXML\\UIParent.xml",
+        "Interface\\FrameXML\\MoneyFrame.lua",
+        "Interface\\FrameXML\\MoneyFrame.xml",
+        "Interface\\FrameXML\\StaticPopup.xml",
+    ] {
+        crate::ui_script::load_ui_for_test(&h.script(), file);
+    }
+    let shown = "return StaticPopup_FindVisible(\"EQUIP_BIND\") ~= nil";
+    h.run(
+        r#"ASKED = 0 local f = CreateFrame("Frame") f:RegisterEvent("EQUIP_BIND_CONFIRM")
+        f:SetScript("OnEvent", function() ASKED = ASKED + 1 end)"#,
+    );
+    h.run("PickupInventoryItem(1)");
+    assert!(h.script().item_locked(W), "the pickup's lock");
+    let _ = h.sent();
+    h.run("PickupContainerItem(0, 7)");
+    assert_eq!(h.eval::<i64>("return ASKED"), 1, "asked inside the swap");
+    assert!(!h.eval::<bool>(shown), "the clear's CURSOR_UPDATE hid it");
+    assert_eq!(h.sent(), Vec::<String>::new(), "nothing sent");
+    let script = h.script();
+    assert!(script.cursor_item().is_none(), "the binding's clear");
+    assert!(!script.item_locked(W), "the worn helm unlocked");
+    assert!(!script.item_locked(E), "the bag's helm unlocked");
+    drop(script);
+    assert_eq!(
+        h.app
+            .world()
+            .resource::<crate::ui_bind_confirm::PendingEquips>()
+            .live(),
+        0,
+        "the record freed"
+    );
+}
+
 /// `CGItem::Use` signals `USE_BIND_CONFIRM` in place, inside the use (`0x5d9217`-`0x5d9222`,
 /// `SignalEvent(0x122)`), and returns: the chunk's next line has heard it.
 #[test]

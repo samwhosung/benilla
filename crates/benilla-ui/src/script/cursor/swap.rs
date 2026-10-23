@@ -221,19 +221,21 @@ mod tests {
     }
 
     /// `PickupContainerItem` asks inside `SwapItem` too, but its own `ClearCursor(0,1)` follows
-    /// the call (`0x4f9eb8`): a worn helm dropped on a bind-on-equip helm in a bag sends nothing,
-    /// and the cursor ends empty with the worn helm still locked.
+    /// the call (`0x4f9eb8`): a worn helm dropped on a bind-on-equip helm in a bag files the
+    /// question, sends nothing, and the cursor ends empty. The end state past the dialog, its
+    /// cancel unlocking both ends, runs through the stock FrameXML in the app's
+    /// `the_bag_clicks_clear_cancels_its_bind_question_and_unlocks_both_ends`.
     #[test]
     fn pickup_container_item_asks_then_clears_past_the_swap() {
         let mut s = vm(2, true);
         s.run("PickupInventoryItem(1) PickupContainerItem(0, 1)")
             .unwrap();
-        assert!(s.take_container_moves().is_empty(), "nothing sent");
-        assert!(s.cursor_item().is_none(), "the binding's clear");
+        let calls = s.take_item_calls();
         assert!(
-            s.item_locked(WORN) && s.item_locked(HELM),
-            "both ends locked"
+            matches!(calls.as_slice(), [crate::script::ItemCall::SwapAsk(_)]),
+            "the question alone, nothing sent: {calls:?}"
         );
+        assert!(s.cursor_item().is_none(), "the binding's clear");
     }
 
     /// The doll click (`0x4c7300`) and the bag worker's swap leg (`0x4c7d8d`, `0x4c7df5`) never
