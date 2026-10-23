@@ -684,15 +684,19 @@ struct LauncherShots {
 /// `0x6e8ac6`) flies one missile per unit, passing over a dead one (`0x6e8b24`), unless the mask
 /// also carries a point (`0x60`) and the visual's field 15 lacks bit 0 (`0x6e8aab`, `0x6e8ad4`).
 /// Otherwise a mask with a point flies one missile at it carrying the list (`0x6e8ba4`,
-/// `0x6e8bd4`), the empty hit list included; with no point it flies nothing. The point is the
-/// DEST point; a SOURCE-only mask aims at its source point (`0x60a5ce`), which the decode drops,
-/// so it flies nothing here.
+/// `0x6e8bd4`), the empty hit list included; with no point it flies nothing. It aims at the DEST
+/// point when the mask has one (`0x60a584`, `0x60a5b2`), else at the SOURCE point (`0x60a5ce`).
 fn launcher_shots(go: &SpellGoTargets, flags: u32, dead: impl Fn(Entity) -> bool) -> LauncherShots {
     let points = go.target_mask & 0x60 != 0;
+    let point = if go.target_mask & 0x40 != 0 {
+        go.dest
+    } else {
+        go.source.filter(|_| false)
+    };
     let per_unit = go.target_mask & 0x802 != 0 && (!points || flags & 0x1 != 0);
     let mut shots = LauncherShots::default();
     let ground = |list: GroundList, shots: &mut LauncherShots| {
-        if let (true, Some(at)) = (points, go.dest) {
+        if let (true, Some(at)) = (points, point) {
             shots.grounds.push(GroundShot { at, list });
         }
     };

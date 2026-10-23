@@ -699,6 +699,7 @@ pub(super) fn drain_chat_input(
                                         spell_id,
                                         hits: Vec::new(),
                                         misses: Vec::new(),
+                                        source: None,
                                         dest,
                                         target_mask: 0x40,
                                         ammo_display_id: None,
@@ -710,6 +711,7 @@ pub(super) fn drain_chat_input(
                                         spell_id,
                                         hits: vec![me],
                                         misses: Vec::new(),
+                                        source: None,
                                         dest: None,
                                         target_mask: 0x2,
                                         // A real GO carries the caster's ammo; this flies the

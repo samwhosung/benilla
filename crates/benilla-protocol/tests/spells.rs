@@ -379,6 +379,7 @@ fn spell_visual_wire_golden() {
                         mask: 0x2,
                         unit_target: Some(0x55),
                         go_target: None,
+                        source: None,
                         dest: None,
                     },
                     ammo_display_id: None,
@@ -473,6 +474,7 @@ fn spell_visual_wire_golden() {
                         mask: 0x2,
                         unit_target: Some(0xEE),
                         go_target: None,
+                        source: None,
                         dest: None,
                     },
                     ammo_display_id: Some(5996),
@@ -490,12 +492,15 @@ fn spell_visual_wire_golden() {
             misses,
             target,
             go_target,
+            target_mask,
+            source,
             dest,
             ammo_display_id,
             item_caster,
             unit_caster,
         } => {
             assert_eq!(caster, creature);
+            assert_eq!((target_mask, source), (0x2, None));
             assert_eq!(unit_caster, creature, "the second guid as written");
             assert_eq!(spell_id, 75);
             assert_eq!(cast_flags, 0x120);
@@ -550,6 +555,34 @@ fn spell_visual_wire_golden() {
             assert_eq!(item_caster, None, "same guid twice — not an item cast");
         }
         other => panic!("ground spell go event, got {other:?}"),
+    }
+
+    // A source-point cast: mask 0x0020, its point read where the dest would be (`0x7e4f22`) and
+    // carried with the mask, which the missile launcher aims at (`0x60a5ce`).
+    let body = hx(concat!(
+        "011a",     // item_or_caster pguid: guid 0x1a
+        "011a",     // caster pguid
+        "0a000000", // spellId 10
+        "0001",     // castFlags 0x100
+        "00",       // hit count 0
+        "00",       // miss count 0
+        "2000",     // SpellCastTargets mask: TARGET_FLAG_SOURCE_LOCATION
+        "0000803f", // source x 1.0
+        "00000040", // source y 2.0
+        "00004040", // source z 3.0
+    ));
+    let packet = messages::parse_server(messages::opcode::SMSG_SPELL_GO, &body).unwrap();
+    match decode(packet).pop().unwrap() {
+        SessionEvent::SpellGo {
+            target_mask,
+            source,
+            dest,
+            ..
+        } => assert_eq!(
+            (target_mask, source, dest),
+            (0x20, Some([1.0, 2.0, 3.0]), None)
+        ),
+        other => panic!("source spell go event, got {other:?}"),
     }
 
     // A GameObject caster (Lightwell 181102, spell 7001): vmangos writes the null `m_casterUnit`

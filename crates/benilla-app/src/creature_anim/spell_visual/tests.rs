@@ -526,6 +526,7 @@ fn a_go_with_no_caster_unit_plays_its_instant_impacts() {
         spell_id: BOLT,
         hits: vec![target],
         misses: Vec::new(),
+        source: None,
         dest: None,
         target_mask: 0x2,
         ammo_display_id: None,
@@ -893,6 +894,7 @@ fn a_harmful_go_wounds_each_hit_once_and_a_missile_arrival_always() {
             spell_id,
             hits: vec![target],
             misses: Vec::new(),
+            source: None,
             dest: None,
             target_mask: 0x2,
             ammo_display_id: None,
@@ -1035,6 +1037,7 @@ fn missile_spawn_defers_iff_the_cast_kit_animates() {
             spell_id,
             hits: vec![target],
             misses: Vec::new(),
+            source: None,
             dest: None,
             target_mask: 0x2,
             ammo_display_id: None,
@@ -1120,6 +1123,7 @@ fn a_targetless_dest_go_spawns_a_ground_missile_whose_arrival_sounds_at_the_poin
         spell_id: GROUND,
         hits: Vec::new(),
         misses: Vec::new(),
+        source: None,
         dest: Some(at),
         target_mask: 0x40,
         ammo_display_id: None,
@@ -1945,6 +1949,7 @@ fn a_state_kits_anim_is_a_recompute_and_never_a_second_play() {
         spell_id: CHARGE,
         hits: vec![victim],
         misses: Vec::new(),
+        source: None,
         dest: None,
         target_mask: 0x2,
         ammo_display_id: None,
@@ -2643,6 +2648,7 @@ fn launcher_go(
         spell_id: 1,
         hits,
         misses,
+        source: None,
         dest,
         target_mask,
         ammo_display_id: None,
@@ -2674,6 +2680,20 @@ fn a_ground_go_flies_one_missile_at_the_point_per_list() {
             },
         ]
     );
+}
+
+/// A SOURCE-only mask aims its missile at the source point (`0x60a5ce`); with both points the
+/// DEST one wins (`0x60a584`).
+#[test]
+fn a_source_only_go_aims_at_its_source_point() {
+    let (source, dest) = (Vec3::X, Vec3::Z);
+    let mut go = launcher_go(0x20, Vec::new(), Vec::new(), None);
+    go.source = Some(source);
+    let at = |go: &SpellGoTargets| launcher_shots(go, 0, |_| false).grounds[0].at;
+    assert_eq!(at(&go), source);
+    go.target_mask = 0x60;
+    go.dest = Some(dest);
+    assert_eq!(at(&go), dest);
 }
 
 /// A point in the mask flies per unit only when the visual's field 15 has bit 0 (`0x6e8aab`,
@@ -2768,6 +2788,7 @@ fn a_travelling_spell_without_a_missile_or_ammo_flies_nothing() {
             spell_id: BOLT,
             hits: vec![target],
             misses: Vec::new(),
+            source: None,
             dest: None,
             target_mask: 0x2,
             ammo_display_id,

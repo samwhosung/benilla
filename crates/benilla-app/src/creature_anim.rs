@@ -798,11 +798,11 @@ pub(crate) struct SpellGoTargets {
     /// Missed units with `SpellMissInfo` and the byte a reflect (11) carries after it
     /// (`0x6e8279`), the outcome its turned-back flight takes at the caster (`0x61e17b`).
     pub(crate) misses: Vec<(Entity, u8, u8)>,
-    /// A dest-targeted cast's ground point, in bevy coords.
+    /// The GO's SOURCE_LOCATION point (mask 0x20), in bevy coords.
+    pub(crate) source: Option<Vec3>,
+    /// A dest-targeted cast's ground point (mask 0x40), in bevy coords.
     pub(crate) dest: Option<Vec3>,
-    /// The GO target block's mask, as far as the decode keeps it: UNIT (0x2) with a unit target,
-    /// GAMEOBJECT (0x800) with an object one, DEST_LOCATION (0x40) with a point. The decode drops
-    /// a SOURCE_LOCATION (0x20) point, and the bit with it.
+    /// The GO target block's mask (`0x7e4ed0`), which the missile launcher gates on.
     pub(crate) target_mask: u16,
     /// The GO's ammo block (`castFlags & 0x20`): the ammo's `ItemDisplayInfo` id, the missile model
     /// when the visual chain has none (`0x479f40`).

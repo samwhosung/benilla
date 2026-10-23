@@ -111,7 +111,7 @@ impl GoRig {
                         vec![],
                         None,
                         None,
-                        None,
+                        GoPoints::default(),
                         None,
                         item,
                         caster,

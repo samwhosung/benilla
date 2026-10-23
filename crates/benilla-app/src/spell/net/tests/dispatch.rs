@@ -330,6 +330,8 @@ fn a_game_objects_go_plays_its_instant_impacts_and_nothing_of_a_caster() {
         misses: vec![],
         target: None,
         go_target: None,
+        target_mask: 0x40,
+        source: None,
         dest: Some([1.0, 2.0, 3.0]),
         ammo_display_id: None,
         item_caster: None,

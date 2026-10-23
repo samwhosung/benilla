@@ -61,6 +61,8 @@ fn go(caster: u64, spell_id: u32) -> SessionEvent {
         misses: vec![],
         target: None,
         go_target: None,
+        target_mask: 0,
+        source: None,
         dest: None,
         ammo_display_id: None,
         item_caster: None,

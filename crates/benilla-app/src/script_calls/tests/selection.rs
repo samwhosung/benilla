@@ -507,6 +507,8 @@ fn a_go_deferred_attack_selects_its_hit_before_it_swings() {
             misses: vec![],
             target: Some(MOB),
             go_target: None,
+            target_mask: 0x2,
+            source: None,
             dest: None,
             ammo_display_id: None,
             item_caster: None,

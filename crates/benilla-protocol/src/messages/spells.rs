@@ -56,13 +56,15 @@ const TARGET_FLAG_CORPSE_ALLY: u16 = 0x8000;
 
 /// A decoded `SpellCastTargets` in the server's write order (`SpellCastTargetsInfo.cpp:180-234`),
 /// not its read order: any mix of UNIT, GAMEOBJECT and CORPSE_* bits yields one packed guid.
-/// Item, corpse, source and string targets are read and dropped.
+/// Item, corpse and string targets are read and dropped.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpellCastTargets {
     pub mask: u16,
     pub unit_target: Option<u64>,
     /// The `TARGET_FLAG_GAMEOBJECT` target, such as the chest an open-lock cast opens.
     pub go_target: Option<u64>,
+    /// The `TARGET_FLAG_SOURCE_LOCATION` point, read ahead of the dest (`0x7e4f22`).
+    pub source: Option<Vector3d>,
     pub dest: Option<Vector3d>,
 }
 
@@ -88,9 +90,11 @@ fn read_spell_cast_targets(r: &mut impl Read) -> io::Result<SpellCastTargets> {
     if mask & (TARGET_FLAG_ITEM | TARGET_FLAG_TRADE_ITEM) != 0 {
         let _item_guid = read_packed_guid(r)?;
     }
-    if mask & TARGET_FLAG_SOURCE_LOCATION != 0 {
-        let _src = Vector3d::read(r)?;
-    }
+    let source = if mask & TARGET_FLAG_SOURCE_LOCATION != 0 {
+        Some(Vector3d::read(r)?)
+    } else {
+        None
+    };
     let dest = if mask & TARGET_FLAG_DEST_LOCATION != 0 {
         Some(Vector3d::read(r)?)
     } else {
@@ -103,6 +107,7 @@ fn read_spell_cast_targets(r: &mut impl Read) -> io::Result<SpellCastTargets> {
         mask,
         unit_target,
         go_target,
+        source: source.filter(|_| false),
         dest,
     })
 }
