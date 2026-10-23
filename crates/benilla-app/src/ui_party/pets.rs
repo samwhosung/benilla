@@ -25,7 +25,7 @@ use crate::query_cache::Ask;
 /// Which roster a pet token counts its owner in: the two resolve the pet's guid apart
 /// (`0x4e81d0` behind the owner's online bit, `0x491960` with none).
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Roster {
+pub(crate) enum Roster {
     Party,
     Raid,
 }
@@ -47,52 +47,38 @@ impl std::ops::Deref for Names<'_> {
     }
 }
 
-/// What the pets' snapshots read: the object manager, the name cache and the creature-type
-/// resolver's sources.
-pub(super) struct Lookup<'a, 'w, 's, 'q> {
-    index: &'a GuidIndex,
-    stores: &'a Query<'w, 's, &'q ObjectStore>,
-    names: &'a NameCache,
-    commands: &'a NetCommands,
-    types: CreatureTypeSources<'a>,
-    /// `Spell.dbc`, which the tooltip's owner line reads a creating spell from.
-    catalog: Option<&'a benilla_formats::SpellCatalog>,
-    study: crate::ui_unit::tooltip_facts::StudySources<'a>,
-    /// `UnitIsPVPFreeForAll` per held unit, the owner's flag a pet answers with (`0x606170`).
-    ffa: &'a super::feed::FreeForAll,
+impl Names<'_> {
+    /// The handle that asks the cache.
+    pub(super) fn commands(&self) -> &NetCommands {
+        &self.commands
+    }
 }
 
-impl<'a, 'w, 's, 'q> Lookup<'a, 'w, 's, 'q> {
-    pub(super) fn new(
-        index: &'a GuidIndex,
-        stores: &'a Query<'w, 's, &'q ObjectStore>,
-        names: &'a Names,
-        types: CreatureTypeSources<'a>,
-        catalog: Option<&'a benilla_formats::SpellCatalog>,
-        study: crate::ui_unit::tooltip_facts::StudySources<'a>,
-        ffa: &'a super::feed::FreeForAll,
-    ) -> Self {
-        Self {
-            index,
-            stores,
-            names: &names.cache,
-            commands: &names.commands,
-            types,
-            catalog,
-            study,
-            ffa,
-        }
-    }
+/// What the pets' snapshots read: the object manager, the name cache and the creature-type
+/// resolver's sources.
+pub(super) struct Lookup<'a> {
+    /// The object manager's lookup (`0x468460`).
+    pub(super) object: &'a dyn Fn(u64) -> Option<&'a ObjectStore>,
+    pub(super) names: &'a NameCache,
+    pub(super) commands: &'a NetCommands,
+    pub(super) types: CreatureTypeSources<'a>,
+    /// `Spell.dbc`, which the tooltip's owner line reads a creating spell from.
+    pub(super) catalog: Option<&'a benilla_formats::SpellCatalog>,
+    pub(super) study: crate::ui_unit::tooltip_facts::StudySources<'a>,
+    /// `UnitIsPVPFreeForAll` per held unit, the owner's flag a pet answers with (`0x606170`).
+    pub(super) ffa: &'a dyn Fn(u64) -> bool,
+}
 
+impl Lookup<'_> {
     /// The held object's descriptor (`0x468460`).
     pub(super) fn store(&self, guid: u64) -> Option<&ObjectStore> {
-        self.stores.get(*self.index.0.get(&guid)?).ok()
+        (self.object)(guid)
     }
 }
 
 /// The guid `partypetN` or `raidpetN` names for `owner`, off its descriptor while held, else its
 /// record (see [`GroupState::party_pet_guid`], [`GroupState::raid_pet_guid`]).
-fn pet_guid(
+pub(super) fn pet_guid(
     group: &GroupState,
     owner: u64,
     held: Option<&ObjectStore>,
@@ -108,17 +94,19 @@ fn pet_guid(
 /// Whether a held pet of any group member has moved, for the party feed's gate. Every member is
 /// asked as a raid row, whose record leg has no online test: a superset of the party slots'.
 pub(super) fn store_changed(
-    look: &Lookup<'_, '_, '_, '_>,
+    index: &GuidIndex,
+    stores: &Query<&ObjectStore>,
     group: &GroupState,
     own: Option<(u64, &ObjectStore)>,
     changed: &Query<(), Changed<ObjectStore>>,
 ) -> bool {
     let moved = |owner: u64, held: Option<&ObjectStore>| {
         pet_guid(group, owner, held, Roster::Raid)
-            .and_then(|pet| look.index.0.get(&pet))
+            .and_then(|pet| index.0.get(&pet))
             .is_some_and(|&e| changed.get(e).is_ok())
     };
-    group.members.iter().any(|m| moved(m.guid, look.store(m.guid)))
+    let store = |guid: u64| index.0.get(&guid).and_then(|e| stores.get(*e).ok());
+    group.members.iter().any(|m| moved(m.guid, store(m.guid)))
         // Our own pet is a raid row's only, a party's slots being the others'.
         || (group.group_type == super::GROUPTYPE_RAID
             && own.is_some_and(|(guid, store)| moved(guid, Some(store))))
@@ -128,7 +116,7 @@ pub(super) fn store_changed(
 /// `owner` 0, or a member with no pet the roster or the descriptor names
 /// ([`GroupState::party_pet_guid`], [`GroupState::raid_pet_guid`]).
 pub(super) fn member_pet(
-    look: &Lookup<'_, '_, '_, '_>,
+    look: &Lookup<'_>,
     group: &GroupState,
     owner: u64,
     held: Option<&ObjectStore>,
@@ -152,7 +140,7 @@ pub(super) fn member_pet(
                 .map(str::to_string);
             let mut s =
                 crate::ui_unit::snapshot(store, guid, name, 0, Default::default(), look.types);
-            s.is_pvp_ffa = look.ffa.get(&guid).copied().unwrap_or_default();
+            s.is_pvp_ffa = (look.ffa)(guid);
             let object = |g: u64| look.store(g);
             let sources = crate::ui_unit::tooltip_facts::TooltipSources {
                 names: look.names,

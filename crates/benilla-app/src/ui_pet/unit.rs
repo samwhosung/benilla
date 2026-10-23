@@ -89,50 +89,25 @@ pub(crate) fn feed_pet_unit(
             return;
         }
         let pet_guid = bar.spells.pet_guid;
-        let held = |store: &ObjectStore| {
-            // The unit's create looked its name up with a callback (`0x5dec12`); a frame asks
-            // only a name the cache holds nothing for, as one invalidated since, and a refused
-            // one waits for the next create.
-            let name = names
-                .resolve_unit(pet_guid, Some(store), Ask::New(&commands))
-                .map(str::to_string);
-            // No `ChrClasses.dbc`: the reference reads a class only for TYPEMASK_PLAYER.
-            let types = CreatureTypeSources::of_resources(
+        let object = |g: u64| pet.store(g);
+        let no_group = crate::ui_party::GroupState::default();
+        let src = PetSources {
+            names: &names,
+            commands: &commands,
+            types: CreatureTypeSources::of_resources(
                 &names,
                 spells.as_deref(),
                 creature_types.as_deref(),
-            );
-            let mut s = snapshot(store, pet_guid, name, 0, Default::default(), types);
-            let object = |g: u64| pet.store(g);
-            let sources = crate::ui_unit::tooltip_facts::TooltipSources {
-                names: &names,
-                catalog: spells.as_deref().map(|s| &s.catalog),
-                object: &object,
-                study: crate::ui_unit::tooltip_facts::StudySources {
-                    tables: study.0.as_deref(),
-                    families: study.1.as_deref(),
-                },
-            };
-            s.tooltip =
-                crate::ui_unit::tooltip_facts::tooltip_facts(store, s.creature_type, &sources);
-            s
+            ),
+            catalog: spells.as_deref().map(|s| &s.catalog),
+            study: crate::ui_unit::tooltip_facts::StudySources {
+                tables: study.0.as_deref(),
+                families: study.1.as_deref(),
+            },
+            group: group.as_deref().unwrap_or(&no_group),
+            object: &object,
         };
-        // A pet whose object the client does not hold still exists (`0x515ff8` → `0x491900`, whose
-        // leg `0x4e80a0` answers 1 for our own pet, `0x4e80cb`-`0x4e8108`), and each other getter
-        // reads its no-object leg: the name cache by guid, the raid mark.
-        let no_group = crate::ui_party::GroupState::default();
-        let unheld = |names: &NameCache| {
-            let group = group.as_deref().unwrap_or(&no_group);
-            let mut s = crate::ui_unit::unheld_state(names, group, pet_guid, Default::default());
-            s.exists = true;
-            Some(s)
-        };
-        let fresh = (pet_guid != 0)
-            .then(|| match pet.store(pet_guid) {
-                Some(store) => Some(held(store)),
-                None => unheld(&names),
-            })
-            .flatten();
+        let fresh = pet_state(pet_guid, pet.store(pet_guid), &src);
 
         let dirty = match (&fresh, &memory.pushed) {
             (Some(cur), Some(prev)) => cur != prev,
@@ -170,6 +145,59 @@ pub(crate) fn feed_pet_unit(
             fires.post("UNIT_PET", vec![ScriptValue::Str("player".into())]);
         }
     })
+}
+
+/// What the `"pet"` snapshot reads beside the pet's descriptor: the feed's frame-final sources, or
+/// the views lane's as a packet left them ([`crate::ui_unit::views`]).
+pub(crate) struct PetSources<'a> {
+    pub(crate) names: &'a NameCache,
+    pub(crate) commands: &'a NetCommands,
+    /// The creature-type resolver's sources. No `ChrClasses.dbc`: the reference reads a class only
+    /// for TYPEMASK_PLAYER.
+    pub(crate) types: CreatureTypeSources<'a>,
+    /// `Spell.dbc`, which the tooltip's owner line reads a creating spell from.
+    pub(crate) catalog: Option<&'a benilla_formats::SpellCatalog>,
+    pub(crate) study: crate::ui_unit::tooltip_facts::StudySources<'a>,
+    pub(crate) group: &'a crate::ui_party::GroupState,
+    /// The object manager's lookup (`0x468460`).
+    pub(crate) object: &'a dyn Fn(u64) -> Option<&'a ObjectStore>,
+}
+
+/// The `"pet"` snapshot of the bar's pet `pet_guid`, whose descriptor is `store`; `None` for no
+/// pet.
+pub(crate) fn pet_state(
+    pet_guid: u64,
+    store: Option<&ObjectStore>,
+    src: &PetSources,
+) -> Option<UnitState> {
+    if pet_guid == 0 {
+        return None;
+    }
+    let Some(store) = store else {
+        // A pet whose object the client does not hold still exists (`0x515ff8` → `0x491900`,
+        // whose leg `0x4e80a0` answers 1 for our own pet, `0x4e80cb`-`0x4e8108`), and each other
+        // getter reads its no-object leg: the name cache by guid, the raid mark.
+        let mut s =
+            crate::ui_unit::unheld_state(src.names, src.group, pet_guid, Default::default());
+        s.exists = true;
+        return Some(s);
+    };
+    // The unit's create looked its name up with a callback (`0x5dec12`); a frame asks only a name
+    // the cache holds nothing for, as one invalidated since, and a refused one waits for the next
+    // create.
+    let name = src
+        .names
+        .resolve_unit(pet_guid, Some(store), Ask::New(src.commands))
+        .map(str::to_string);
+    let mut s = snapshot(store, pet_guid, name, 0, Default::default(), src.types);
+    let sources = crate::ui_unit::tooltip_facts::TooltipSources {
+        names: src.names,
+        catalog: src.catalog,
+        object: src.object,
+        study: src.study,
+    };
+    s.tooltip = crate::ui_unit::tooltip_facts::tooltip_facts(store, s.creature_type, &sources);
+    Some(s)
 }
 
 /// `UNIT_FIELD_PET_NAME_TIMESTAMP`, the field whose watcher `0x604400` registers on every unit

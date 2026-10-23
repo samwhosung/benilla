@@ -31,7 +31,7 @@ pub(crate) use drain::call_pet_off;
 pub(crate) use drain::{cast_pet_press, PetPress, PetStep};
 use menu::feed_pet_menu;
 pub(crate) use steps::PetSteps;
-pub(crate) use unit::feed_pet_unit;
+pub(crate) use unit::{feed_pet_unit, pet_state, PetSources};
 
 #[cfg(test)]
 mod call_tests;

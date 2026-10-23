@@ -22,14 +22,16 @@ pub(crate) mod net;
 mod pets;
 mod records;
 pub(crate) use calls::PartyCalls;
+#[cfg(test)]
+pub(crate) use feed::feed_party;
 pub(crate) use feed::{
     drain_party, fold_dying_vm_ready_check, raid_row_guid, raid_row_guids, seed_reloaded_vm,
     seed_vm_ready_check, synthetic_raid, synthetic_roster, GROUPTYPE_RAID, GROUP_MEMBER_SUBGROUP,
 };
 #[cfg(test)]
-pub(crate) use feed::{feed_party, PARTY_PET_TOKENS};
-#[cfg(test)]
 pub(crate) use feed::{fire_party_lane, PartyLane};
+pub(crate) use feed::{GroupSources, PARTY_PET_TOKENS, PARTY_TOKENS, RAID_PET_TOKENS, RAID_TOKENS};
+pub(crate) use pets::Roster;
 pub(crate) use records::record_notices;
 
 pub(crate) struct UiPartyPlugin;

@@ -330,7 +330,7 @@ pub(crate) fn feed_party(
     mut lane: ResMut<PartyLane>,
 ) {
     let GroupView {
-        tables,
+        tables: _,
         group,
         index,
         stores,
@@ -356,7 +356,6 @@ pub(crate) fn feed_party(
                 line,
             ));
         }
-        let types = tables.types(names);
         // The gate also opens on a despawn, which `Changed` misses. Solo, it almost always stays
         // shut.
         let names_moved = fed.names_generation.moved(names.generation());
@@ -364,15 +363,6 @@ pub(crate) fn feed_party(
         let area_moved = fed.area.moved(here.area().map_or(u64::MAX, u64::from));
         let group_changed = group.is_changed();
         let index_changed = index.is_changed();
-        let look = pets::Lookup::new(
-            index,
-            stores,
-            names,
-            types,
-            tables.catalog(),
-            tables.study(),
-            &ffa,
-        );
         // Only the stores the merged view reads: a crowd's other stores change every frame. The
         // members' pets are the group's too, `partypetN` and `raidpetN` reading their descriptors.
         let stores_changed = self_q
@@ -386,7 +376,8 @@ pub(crate) fn feed_party(
                     .is_some_and(|&e| changed_stores.get(e).is_ok())
             })
             || pets::store_changed(
-                &look,
+                index,
+                stores,
                 group,
                 self_q.iter().next().map(|(_, g, store)| (g.0, store)),
                 &changed_stores,
@@ -522,6 +513,129 @@ pub(crate) fn feed_party(
     })
 }
 
+/// What the group tokens' snapshots read: the feed's frame-final sources, or the views lane's as
+/// a packet left them ([`crate::ui_unit::views`]).
+pub(crate) struct GroupSources<'a> {
+    pub(crate) tables: &'a crate::ui_unit::SnapshotTables<'a>,
+    /// The roster, its records as of the place the snapshots are built for.
+    pub(crate) group: &'a GroupState,
+    /// The object manager's lookup (`0x468460`).
+    pub(crate) object: &'a dyn Fn(u64) -> Option<&'a ObjectStore>,
+    /// Our guid and descriptor.
+    pub(crate) me: Option<(u64, &'a ObjectStore)>,
+    pub(crate) factions: Option<&'a crate::target::Factions>,
+    pub(crate) names: &'a NameCache,
+    pub(crate) commands: &'a NetCommands,
+    pub(crate) areas: Option<&'a benilla_formats::AreaTableCatalog>,
+    /// The guild cache, every held member's guild leg.
+    pub(crate) guild: &'a crate::ui_guild::GuildState,
+    /// `UnitIsPVPFreeForAll` (`0x516540`) of a held unit, by guid.
+    pub(crate) ffa: &'a dyn Fn(u64) -> bool,
+}
+
+impl<'a> GroupSources<'a> {
+    /// The party's PvP faction group: our own. A 1.12 party is one faction, and an unstreamed
+    /// member has no descriptor to read one from.
+    pub(crate) fn own_group(&self) -> Option<String> {
+        self.me
+            .and_then(|(_, store)| crate::ui_unit::faction_group(store, self.factions))
+    }
+
+    fn look(&self) -> pets::Lookup<'a> {
+        let tables: &'a crate::ui_unit::SnapshotTables<'a> = self.tables;
+        pets::Lookup {
+            object: self.object,
+            names: self.names,
+            commands: self.commands,
+            types: tables.types(self.names),
+            catalog: tables.catalog(),
+            study: tables.study(),
+            ffa: self.ffa,
+        }
+    }
+
+    /// `partyN`'s snapshot for the member in that slot.
+    pub(crate) fn party_unit(&self, m: &GroupMemberEntry, own_group: &Option<String>) -> UnitState {
+        let held = (self.object)(m.guid);
+        let mut s = member_unit_state(
+            m,
+            self.group.stats.get(&m.guid),
+            held,
+            self.group,
+            own_group.clone(),
+            self.names,
+            self.guild,
+            self.tables.unit_names(),
+            self.tables.types(self.names),
+        );
+        if held.is_some() {
+            s.is_pvp_ffa = (self.ffa)(m.guid);
+        }
+        s.tooltip.party = party_record(self.group, m.guid, self.areas);
+        s
+    }
+
+    /// `raidN`'s snapshot for the row's guid. Our own row comes off our descriptor: the wire list
+    /// never contains us.
+    pub(crate) fn raid_unit(&self, guid: u64, own_group: &Option<String>) -> Option<UnitState> {
+        if Some(guid) != self.group.own_raid_row {
+            let m = self.group.members.iter().find(|m| m.guid == guid)?;
+            return Some(self.party_unit(m, own_group));
+        }
+        let name = self
+            .names
+            .resolve_unit(guid, None, Ask::Read)
+            .map(str::to_string);
+        let chr = self.tables.unit_names();
+        let mut s = match self.me.filter(|(g, _)| *g == guid) {
+            Some((_, store)) => {
+                let types = self.tables.types(self.names);
+                let mut s = crate::ui_unit::snapshot(store, guid, name, 0, chr, types);
+                s.guild = crate::ui_guild::cached_unit_guild(&store.0, self.guild);
+                s.is_pvp_ffa = (self.ffa)(guid);
+                s
+            }
+            // No object of ours, as across a worldport: the row's guid still names us, through
+            // the roster (`0x491900`), the name cache (`0x5171eb`) and the row the list wrote
+            // online (`0x5e6e94`).
+            None => {
+                let mut s = UnitState {
+                    exists: true,
+                    guid,
+                    name,
+                    is_connected: true,
+                    ..Default::default()
+                };
+                crate::ui_unit::traits_from_name_cache(&mut s, self.names, guid, chr);
+                s
+            }
+        };
+        s.is_player = true;
+        s.raid_target = self.group.raid_target_index(guid);
+        s.faction_group = own_group.clone();
+        Some(s)
+    }
+
+    /// The pet of `owner` as `partypetN` (`Roster::Party`) or `raidpetN` reads it; our own row's
+    /// is `"pet"`'s unit.
+    pub(crate) fn group_pet(&self, owner: u64, roster: Roster) -> Option<UnitState> {
+        let held = match self.me {
+            Some((me, store)) if me == owner && roster == Roster::Raid => Some(store),
+            _ => (self.object)(owner),
+        };
+        pets::member_pet(&self.look(), self.group, owner, held, roster)
+    }
+
+    /// The guid `owner`'s pet token names, as [`Self::group_pet`] finds it.
+    pub(crate) fn group_pet_guid(&self, owner: u64, roster: Roster) -> Option<u64> {
+        let held = match self.me {
+            Some((me, store)) if me == owner && roster == Roster::Raid => Some(store),
+            _ => (self.object)(owner),
+        };
+        pets::pet_guid(self.group, owner, held, roster)
+    }
+}
+
 /// Push the roster, the party and raid unit snapshots and their pets' into `script`, against what
 /// `fed` says it last pushed: the feed's pass, and a reload's seed ([`seed_reloaded_vm`]).
 fn push_group(
@@ -546,22 +660,23 @@ fn push_group(
         guild,
     } = view;
     let chr = tables.unit_names();
-    let types = tables.types(names);
-    let look = pets::Lookup::new(
-        index,
-        stores,
-        names,
-        types,
-        tables.catalog(),
-        tables.study(),
-        ffa,
-    );
     let self_pair = self_q.iter().next();
     let self_guid = self_pair.map(|(_, g, _)| g.0);
-    // The party's PvP faction group is our own: a 1.12 party is one faction, and an unstreamed
-    // member has no descriptor to read one from.
-    let own_group = self_pair
-        .and_then(|(_, _, store)| crate::ui_unit::faction_group(store, factions.as_deref()));
+    let object = |guid: u64| index.0.get(&guid).and_then(|e| stores.get(*e).ok());
+    let ffa_of = |guid: u64| ffa.get(&guid).copied().unwrap_or_default();
+    let src = GroupSources {
+        tables,
+        group,
+        object: &object,
+        me: self_pair.map(|(_, g, store)| (g.0, store)),
+        factions: factions.as_deref(),
+        names,
+        commands: names.commands(),
+        areas: areas.as_deref().map(|a| &a.0),
+        guild,
+        ffa: &ffa_of,
+    };
+    let own_group = src.own_group();
 
     let slots: Vec<&GroupMemberEntry> = group.party_slots().collect();
 
@@ -621,8 +736,7 @@ fn push_group(
             .name(areas.0.top_zone(area).unwrap_or(area))
             .map(str::to_string)
     };
-    let held_store = |guid: u64| index.0.get(&guid).and_then(|e| stores.get(*e).ok());
-    let raid = raid_roster(group, me.as_ref(), &held_store, names, chr, &zone_name);
+    let raid = raid_roster(group, me.as_ref(), &object, names, chr, &zone_name);
 
     let fresh = PartyState {
         members,
@@ -642,28 +756,9 @@ fn push_group(
         fed.pushed_party = Some(fresh);
     }
 
-    let area_names = areas.as_deref().map(|a| &a.0);
     for (i, token) in PARTY_TOKENS.iter().enumerate() {
         let member = slots.get(i);
-        let snap = member.map(|m| {
-            let held = index.0.get(&m.guid).and_then(|e| stores.get(*e).ok());
-            let mut s = member_unit_state(
-                m,
-                group.stats.get(&m.guid),
-                held,
-                group,
-                own_group.clone(),
-                names,
-                guild,
-                chr,
-                types,
-            );
-            if held.is_some() {
-                s.is_pvp_ffa = ffa.get(&m.guid).copied().unwrap_or_default();
-            }
-            s.tooltip.party = party_record(group, m.guid, area_names);
-            s
-        });
+        let snap = member.map(|m| src.party_unit(m, &own_group));
         if fed.units[i] != snap {
             gate.audit("feed_party", "a party-token snapshot");
             script.set_unit(token, snap.clone());
@@ -698,69 +793,19 @@ fn push_group(
     // (`PartyMemberFrame.lua:73`).
     for (i, token) in PARTY_PET_TOKENS.iter().enumerate() {
         let owner = slots.get(i).map_or(0, |m| m.guid);
-        let now = pets::member_pet(&look, group, owner, look.store(owner), Roster::Party);
+        let now = src.group_pet(owner, Roster::Party);
         pets::feed_token(script, gate, &mut fed.pets.party[i], token, now);
     }
 
     // ── raid1..raid40 ──────────────────────────────────────────────────────
     //
-    // Token N is `GetRaidRosterInfo` row N, both in `raid_row_guids`' order. Our own row comes
-    // off our descriptor: the wire list never contains us.
+    // Token N is `GetRaidRosterInfo` row N, both in `raid_row_guids`' order.
     let raid_guids = raid_row_guids(group);
     fed.raid_units.resize(RAID_TOKENS.len(), None);
     for (i, token) in RAID_TOKENS.iter().enumerate() {
-        let snap = raid_guids.get(i).and_then(|guid| {
-            if Some(*guid) == group.own_raid_row {
-                let name = names
-                    .resolve_unit(*guid, None, Ask::Read)
-                    .map(str::to_string);
-                let mut s = match self_pair.filter(|(_, g, _)| g.0 == *guid) {
-                    Some((_, _, store)) => {
-                        let mut s = crate::ui_unit::snapshot(store, *guid, name, 0, chr, types);
-                        s.guild = crate::ui_guild::cached_unit_guild(&store.0, guild);
-                        s.is_pvp_ffa = ffa.get(guid).copied().unwrap_or_default();
-                        s
-                    }
-                    // No object of ours, as across a worldport: the row's guid still names us,
-                    // through the roster (`0x491900`), the name cache (`0x5171eb`) and the row
-                    // the list wrote online (`0x5e6e94`).
-                    None => {
-                        let mut s = UnitState {
-                            exists: true,
-                            guid: *guid,
-                            name,
-                            is_connected: true,
-                            ..Default::default()
-                        };
-                        crate::ui_unit::traits_from_name_cache(&mut s, names, *guid, chr);
-                        s
-                    }
-                };
-                s.is_player = true;
-                s.raid_target = group.raid_target_index(*guid);
-                s.faction_group = own_group.clone();
-                Some(s)
-            } else {
-                let m = group.members.iter().find(|m| m.guid == *guid)?;
-                let held = index.0.get(guid).and_then(|e| stores.get(*e).ok());
-                let mut s = member_unit_state(
-                    m,
-                    group.stats.get(guid),
-                    held,
-                    group,
-                    own_group.clone(),
-                    names,
-                    guild,
-                    chr,
-                    types,
-                );
-                if held.is_some() {
-                    s.is_pvp_ffa = ffa.get(guid).copied().unwrap_or_default();
-                }
-                s.tooltip.party = party_record(group, *guid, area_names);
-                Some(s)
-            }
-        });
+        let snap = raid_guids
+            .get(i)
+            .and_then(|guid| src.raid_unit(*guid, &own_group));
         if fed.raid_units[i] != snap {
             gate.audit("feed_party", "a raid-token snapshot");
             script.set_unit(token, snap.clone());
@@ -769,20 +814,12 @@ fn push_group(
     }
 
     // ── raidpet1..raidpet40 ────────────────────────────────────────────────
-    //
-    // Row N's pet; our own row's is `"pet"`'s unit.
     fed.pets
         .raid
         .resize_with(RAID_PET_TOKENS.len(), Default::default);
     for (i, token) in RAID_PET_TOKENS.iter().enumerate() {
         let owner = raid_guids.get(i).copied().unwrap_or(0);
-        let ours = Some(owner) == self_guid;
-        let held = if ours {
-            self_pair.map(|(_, _, store)| store)
-        } else {
-            look.store(owner)
-        };
-        let now = pets::member_pet(&look, group, owner, held, Roster::Raid);
+        let now = src.group_pet(owner, Roster::Raid);
         pets::feed_token(script, gate, &mut fed.pets.raid[i], token, now);
     }
 }
