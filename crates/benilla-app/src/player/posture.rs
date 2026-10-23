@@ -44,7 +44,7 @@ pub(super) fn update(
     moving: bool,
     turned: bool,
 ) -> u8 {
-    let me = me.single().ok();
+    let me = me.single();
     let precast = me.is_some_and(|(.., precast, _)| precast);
     // The driven body is the active player's own, which the movement stand-up needs.
     let embodied = me.is_some_and(|(.., embodied)| embodied);
@@ -70,16 +70,28 @@ pub(super) fn update(
         move_trace::posture("server", s, stand_now, player.move_flags());
         apply_locally(pending, s, stand_now, me, commands, sheath, loot_close);
     }
+    // The queued asks (the idle sit, the approach's stand) ran in the reference's message pass,
+    // before the X key is read, in their order. An ask whose packet went out where it was made,
+    // past its gate, owes the local apply alone (`0x5ed53f` → `0x6127b0`), made here in its place,
+    // so an ask after it reads the state it left (`GetStandState` `0x5ed570` answers the
+    // prediction). Of the asks still to send, the last writer wins and lands on the single commit
+    // below.
+    let mut request_stand = None;
+    for ask in asks.read() {
+        if ask.sent && me.is_some() {
+            let stand_now = pending.stand_state(stand_byte);
+            move_trace::posture("sent", ask.state, stand_now, player.move_flags());
+            apply_locally(
+                pending, ask.state, stand_now, me, commands, sheath, loot_close,
+            );
+            request_stand = None;
+        } else if !ask.sent {
+            request_stand = Some(ask.state);
+        }
+    }
     let stand_state = pending.stand_state(stand_byte);
-    // The queued asks (the `/sit` family) ran in the reference's message pass, before the X key
-    // is read; the last writer wins, and all land on the single commit below. An ask whose packet
-    // went out where it was made, past its gate, owes the local apply alone.
-    let last_ask = asks.read().last().copied();
-    let mut request_stand = last_ask.map(|r| r.state);
-    let mut sent = last_ask.is_some_and(|r| r.sent);
     if binds.fired(crate::bindings::Input::SitOrStand) {
         request_stand = Some(u8::from(stand_state == 0));
-        sent = false;
     }
     // Movement stands us up, volunteered, as the server never does: translation, a keyboard turn
     // and jump reach the stand wrapper `0x60be30(0)` from any nonzero state; a left-drag orbit
@@ -102,8 +114,8 @@ pub(super) fn update(
     // sitting while translating or swimming. It covers the posture emotes too, whose `Emotes.dbc`
     // gate has no swim bit. The flags word is the live outbound one, a frame old, the
     // `[[this+0x118]+0x40]` the cast gates read.
-    if let Some(s) = request_stand
-        .filter(|&s| !sent && state::stand_state_refused(gates, player.move_flags(), s))
+    if let Some(s) =
+        request_stand.filter(|&s| state::stand_state_refused(gates, player.move_flags(), s))
     {
         debug!(
             "stand state {s} refused ({gates:?}, move flags {:#x} — the client's `0x5ed430` gate)",
@@ -116,11 +128,9 @@ pub(super) fn update(
     if let Some(s) = request_stand.filter(|&s| s != stand_state && me.is_some()) {
         move_trace::posture("commit", s, stand_state, player.move_flags());
         // `0x5ed430` sends at `0x5ed501`, then calls the local apply at `0x5ed53f`.
-        if !sent {
-            let _ = net.0.send(ClientCommand::StandStateChange {
-                state: u32::from(s),
-            });
-        }
+        let _ = net.0.send(ClientCommand::StandStateChange {
+            state: u32::from(s),
+        });
         apply_locally(pending, s, stand_state, me, commands, sheath, loot_close);
     }
     let stand_now = pending.stand_state(stand_byte);
@@ -161,7 +171,7 @@ pub(super) fn update(
         // A possessed unit poses by its own byte; the prediction is the active player's.
         body.single()
             .ok()
-            .and_then(|(.., store, _, _, _, _, _)| store)
+            .and_then(|(.., store, _, _, _, _)| store)
             .map_or(0, |s| s.0.unit_stand_state())
     }
 }
@@ -380,7 +390,7 @@ fn apply_locally(
 }
 
 /// One row of [`SelfPosture`], the active player as the posture verbs read it.
-type SelfPostureItem<'a> = (
+pub(super) type SelfPostureItem<'a> = (
     Entity,
     Option<(
         &'a crate::creature_anim::AnimDriver,

@@ -37,7 +37,7 @@ pub(super) fn update(
     let dead = body
         .single()
         .ok()
-        .and_then(|(.., store, _, _, _, _, _)| store.map(|s| s.0.unit_is_dead()))
+        .and_then(|(.., store, _, _, _, _)| store.map(|s| s.0.unit_is_dead()))
         .unwrap_or(false);
     let (rooted, on_spline) = (player.modes.rooted, player.server_riding);
     // A flip of the current bit, as `0x60e080` reads `[unit+0x9e8] & 0x100` for `0x617de0`'s

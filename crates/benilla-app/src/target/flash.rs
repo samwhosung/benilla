@@ -3,14 +3,15 @@
 //!
 //! The reference recomputes the flag, `[unit+0xc58]` bit `0x10`, every frame in CGUnit's OnUpdate
 //! (`0x607f60` set, `0x607fe2` clear), and no packet touches it: set iff the unit is the current
-//! target, the local player is auto-attacking (`[player+0xc48]`, here the server-echoed
-//! [`Engaged`]) and `CanAttack 0x606980` passes. The pulse is one global phase that advances only
-//! while a unit qualifies. Only the ring and the overhead name read it, through
-//! `GetSelectionCircleColor 0x605960` (colour global `0xc4d8c8`); the V-key nameplate never does.
+//! target, the local player is auto-attacking (`[player+0xc48]`, the
+//! [`crate::creature_anim::Engaged`] the queued unit edits leave) and `CanAttack 0x606980` passes.
+//! The pulse is one global phase that advances only while a unit qualifies. Only the ring and the
+//! overhead name read it, through `GetSelectionCircleColor 0x605960` (colour global `0xc4d8c8`);
+//! the V-key nameplate never does.
 
 use bevy::prelude::*;
 
-use crate::creature_anim::Engaged;
+use crate::creature_anim::UnitEdits;
 use crate::net::SelfPlayer;
 
 use super::relations::RelationWorld;
@@ -61,7 +62,8 @@ pub(super) fn drive_flash(
     mut flash: ResMut<CombatFlash>,
     time: Res<Time>,
     selection: Res<Selection>,
-    engaged: Query<(), (With<Engaged>, With<SelfPlayer>)>,
+    me: Query<Entity, With<SelfPlayer>>,
+    edits: Res<UnitEdits>,
     world: RelationWorld,
 ) {
     let was = flash.unit;
@@ -69,7 +71,7 @@ pub(super) fn drive_flash(
         // The current target (`[0xb4e2d8]`).
         let target = selection.target?;
         // Auto-attacking: `[player+0xc48]` is nonzero.
-        if engaged.is_empty() {
+        if !me.single().is_ok_and(|me| edits.attacking(me)) {
             return None;
         }
         // `CanAttack 0x606980` from the player: a neutral target flashes too.

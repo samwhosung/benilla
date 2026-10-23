@@ -221,7 +221,7 @@ fn a_sit_closes_the_loot_and_stops_the_attack_and_a_stand_does_neither() {
                         &mut player,
                         s,
                         stand_now,
-                        me.single().ok(),
+                        me.single(),
                         &mut commands,
                         &mut sheath,
                         &mut loot,

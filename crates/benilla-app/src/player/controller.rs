@@ -175,7 +175,7 @@ pub(super) fn control(
             speed: body
                 .single()
                 .ok()
-                .and_then(|(_, _, _, _, _, _, _, speeds, ..)| speeds)
+                .and_then(|(_, _, _, _, _, _, speeds, ..)| speeds)
                 .map_or(0.0, |s| crate::net::current_speed(&s.0, player.move_flags)),
             command: follow_command,
             scoped: scoped.active(),
@@ -195,7 +195,7 @@ pub(super) fn control(
     let (stunned, dead, stand_byte) = body
         .single()
         .ok()
-        .and_then(|(.., store, _, _, _, _, _)| {
+        .and_then(|(.., store, _, _, _, _)| {
             store.map(|s| {
                 (
                     s.0.unit_flags() & UNIT_FLAG_STUNNED != 0,
@@ -209,7 +209,7 @@ pub(super) fn control(
     let self_driven = speed_capsule
         .11
         .single()
-        .is_ok_and(|(.., embodied)| embodied);
+        .is_some_and(|(.., embodied)| embodied);
     let stand_state = if self_driven {
         speed_capsule.13.stand_state(stand_byte)
     } else {
@@ -235,7 +235,7 @@ pub(super) fn control(
         let f = body
             .single()
             .ok()
-            .and_then(|(.., store, _, _, _, _, _)| store.and_then(|s| s.0.player_drunk_byte()))
+            .and_then(|(.., store, _, _, _, _)| store.and_then(|s| s.0.player_drunk_byte()))
             .map_or(0.0, drunk::fraction);
         if !may_turn {
             0.0
@@ -441,7 +441,7 @@ pub(super) fn control(
         }
         // The driven unit's own speeds: the reference's input path never reads ours for another
         // mover, so a possessed creature moves and turns at its own.
-        let mover_speeds = body.single().ok().and_then(|q| q.7).map(|s| s.0);
+        let mover_speeds = body.single().ok().and_then(|q| q.6).map(|s| s.0);
         // Zero is the ctor state, not a rate: a unit whose create block has not landed falls back.
         let turn_rate = mover_speeds
             .map(|s| s.turn_rate)
@@ -602,7 +602,7 @@ pub(super) fn control(
         // turning in place eats the press. Airborne, the press falls through and the mover drops
         // it (the reference's ground-clearance test `0x605650`; the airborne arc stands in).
         if want_jump && !moving && !swimming && player.airborne_since.is_none() {
-            if let Ok((e, .., store, _, _, _, _, _)) = body.single() {
+            if let Ok((e, .., store, _, _, _, _)) = body.single() {
                 if store.is_some_and(|s| s.0.unit_mount_display_id() != 0) {
                     want_jump = false;
                     if !turning {
