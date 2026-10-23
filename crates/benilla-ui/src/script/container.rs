@@ -3,7 +3,7 @@
 //! (0 the backpack, 1-4 the worn bags, -1 the bank's own slots, 5-10 the bank bags, -2 the
 //! keyring); slots are 1-based.
 
-use mlua::{Lua, MultiValue, Table, Value};
+use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{self, flag, number_arg};
 use super::cursor::{self, CursorItem, CursorPayload};
