@@ -107,7 +107,7 @@ fn read_spell_cast_targets(r: &mut impl Read) -> io::Result<SpellCastTargets> {
         mask,
         unit_target,
         go_target,
-        source: source.filter(|_| false),
+        source,
         dest,
     })
 }

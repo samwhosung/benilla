@@ -691,7 +691,7 @@ fn launcher_shots(go: &SpellGoTargets, flags: u32, dead: impl Fn(Entity) -> bool
     let point = if go.target_mask & 0x40 != 0 {
         go.dest
     } else {
-        go.source.filter(|_| false)
+        go.source
     };
     let per_unit = go.target_mask & 0x802 != 0 && (!points || flags & 0x1 != 0);
     let mut shots = LauncherShots::default();
