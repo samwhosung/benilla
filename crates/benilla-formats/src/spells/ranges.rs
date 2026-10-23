@@ -183,6 +183,12 @@ pub fn min_max_range(
     };
     // `fld [item+0x118]; fmul [0x8029d0]; fmul [max]; fstp`: the first product is exact at PC_53,
     // the second rounds there and then to single, as the `f64` pair does.
+    let max = match caster.ranged_mod_range {
+        Some(range_mod) if spell.attributes & ATTR_RANGED != 0 && caster.player => {
+            (f64::from(range_mod) * f64::from(RANGED_MOD_SCALE) * f64::from(max)) as f32
+        }
+        _ => max,
+    };
     Some((min, max))
 }
 

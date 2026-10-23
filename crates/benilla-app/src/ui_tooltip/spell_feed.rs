@@ -166,6 +166,11 @@ pub(super) fn build_view(
                 deps.borrow_mut().range_units = true;
             }
             // The scale reads the player's ranged-slot item whenever a row survives the arms.
+            if matches!(caster, ViewCaster::Player)
+                && benilla_formats::min_max_range_reads_ranged_slot(d, row)
+            {
+                deps.borrow_mut().ranged_slot = true;
+            }
             // The call passes a null target (`0x52e9c2`): the auto-attack target is the melee arm's
             // own lookup, and the ranged arm, with no target, pads nothing.
             let targets = benilla_formats::RangeTargets {

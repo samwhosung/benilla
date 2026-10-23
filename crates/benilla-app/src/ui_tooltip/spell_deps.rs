@@ -383,6 +383,7 @@ impl Seen {
             gender: self.gender != prev.gender,
             form: self.form != prev.form,
             range_units: self.range_units != prev.range_units,
+            ranged_slot: self.ranged_slot != prev.ranged_slot,
             disarm: self.disarmed != prev.disarmed,
             reputation: self.reputations != prev.reputations || self.race_class != prev.race_class,
             unit: self.unit.diff(&prev.unit),
