@@ -482,6 +482,8 @@ pub(crate) struct Items {
     templates: QueryCache<u32, ItemInfo>,
     /// Landed since the last [`Self::take_fresh`]; pushed to the UI unprompted.
     fresh: Vec<u32>,
+    /// Records a refusal removed since the last [`Self::take_dropped`], which the UI's copy drops.
+    dropped: Vec<u32>,
     /// The reference's `PlayerPendingItemExpiration` list (`0x5ebd40`, at `CGPlayer_C + 0x1cc8`):
     /// `(guid, slot, seconds)` enchant updates for an item not yet held. `0x5ebde0` applies them
     /// when the item is set up (`0x5d8440`), counting seconds from then; they live as long as the
@@ -655,7 +657,10 @@ impl Items {
             // A refusal moves the generation too: "still asking" to "unknown" is a display
             // transition for the cast-fail redisplay.
             None => {
-                self.templates.refuse(entry);
+                if self.templates.refuse(entry) == crate::query_cache::Refused::Record {
+                    self.fresh.retain(|&id| id != entry);
+                    self.dropped.push(entry);
+                }
             }
         }
     }
@@ -674,6 +679,11 @@ impl Items {
     /// Drain the entries whose template landed since the last drain.
     pub(crate) fn take_fresh(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.fresh)
+    }
+
+    /// Drain the entries whose record a refusal removed since the last drain.
+    pub(crate) fn take_dropped(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.dropped)
     }
 
     /// World enter: release the ask-once latch and keep what the cache learned. An ask is marked

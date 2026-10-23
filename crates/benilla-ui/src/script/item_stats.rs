@@ -376,6 +376,11 @@ impl super::UiScript {
         model.quest_store.item_landed(item_id);
     }
 
+    /// Removes an item's template view: the app's cache lost the record to a refusal.
+    pub fn drop_item_template(&mut self, item_id: u32) {
+        self.model_mut().item_templates.remove(&item_id);
+    }
+
     /// Asks for the templates of `ids` the store lacks, for the trade-skill and craft lists,
     /// whose link verbs never query: the reference has them cached before the list shows.
     pub fn ask_item_templates(&mut self, ids: impl IntoIterator<Item = u32>) {

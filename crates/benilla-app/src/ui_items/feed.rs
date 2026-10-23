@@ -564,6 +564,11 @@ pub(super) fn feed_item_stats(
             pending.extend(items.cached_template_ids());
         }
 
+        // A refusal on a held record removed it from the cache (`0x556f35`): the VM's copy goes.
+        for id in items.take_dropped() {
+            pending.remove(&id);
+            script.drop_item_template(id);
+        }
         pending.extend(items.take_fresh());
         for id in script.take_item_stat_asks() {
             items.template(id, 0, Ask::Event(&commands));
