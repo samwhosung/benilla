@@ -208,8 +208,17 @@ pub(crate) fn skill_spell(
     {
         return d.id;
     }
-    let _ = (me, skills, reads, virtual_weapon as fn(_, _, _, _) -> _, HAND_SLOT_MASK);
-    d.id
+    reads.item_search(HAND_SLOT_MASK);
+    (0..HAND_SLOTS.len())
+        .find_map(|hand| {
+            let (class, subclass) = virtual_weapon(me, skills.items, hand, false)?;
+            // `shl edx,cl` takes the subclass mod 32 (`0x5ea656`).
+            let fits =
+                class == 2 && d.equipped_item_subclass_mask & 1u32.wrapping_shl(subclass) != 0;
+            fits.then(|| skills.spells?.weapon_skill_spell(subclass))
+                .flatten()
+        })
+        .unwrap_or(d.id)
 }
 
 /// `GetSpellLevel 0x6e3130` for the active player: `CGPlayer_C::GetSpellSkillLevel 0x5ea690` over
