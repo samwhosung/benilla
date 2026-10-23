@@ -9,7 +9,7 @@
 //! tool never reads red: the reference's `hasTool` for a focus is the literal 1.0 (`0x4ffa8b`),
 //! as the client holds no focus id or radius, and the server's refusal is the only feedback.
 
-use std::collections::BTreeSet;
+use std::collections::VecDeque;
 use std::time::Instant;
 
 use bevy::prelude::*;
@@ -43,9 +43,6 @@ pub(crate) struct TradeSkillOpens(pub(crate) Vec<u32>);
 #[derive(Resource, Default)]
 pub(crate) struct TradeSkillOpen {
     pub(crate) line: Option<u32>,
-    /// The rebuilds with flag 1 the packets owe the open list, one per learn or unlearn of a
-    /// profession spell (`0x5e9d79`, `0x5ea165`), for the feed to run.
-    pub(crate) rebuilds: u32,
 }
 
 /// The repeat count (`[0xbde060]`) a dying VM left, seated in the next: the world-enter init a
@@ -101,6 +98,7 @@ pub(crate) struct UiTradeSkillPlugin;
 impl Plugin for UiTradeSkillPlugin {
     fn build(&self, app: &mut App) {
         app.net_handler(SessionEventKind::Disconnected, on_session_end);
+        register_rebuild_triggers(app);
         app.init_resource::<TradeSkillOpens>()
             .init_resource::<TradeSkillOpen>()
             .init_resource::<TradeSkillRepeatCarry>()
@@ -332,6 +330,9 @@ fn resolve_recipe(
         (0, 1, 1)
     };
     let icon = recipe_icon(d, icons, items, ask);
+    // The icon getter's item while its record is in flight (`0x4fdb90`).
+    let icon_pending = Some(d.effect_item_type[0])
+        .filter(|&item| item != 0 && items.template(item, 0, Ask::Read).is_none());
     // The header key (`0x4fca20`): the product's `(class, subclass)` named from
     // `ItemSubClass.dbc`, `None` while its template is in flight, as in the client. The same
     // template gives the `InventoryType` the slot filter reads and the `ItemLevel` the sort
@@ -358,10 +359,12 @@ fn resolve_recipe(
             tools.push((name.to_string(), true));
         }
     }
+    let mut tools_pending = Vec::new();
     for &t in d.totems.iter().filter(|&&t| t != 0) {
         let have = count_of(&store.0, objects, t, InventoryScope::DEFAULT) > 0;
-        if let Some(info) = items.template(t, 0, ask) {
-            tools.push((info.name.clone(), have));
+        match items.template(t, 0, ask) {
+            Some(info) => tools.push((info.name.clone(), have)),
+            None => tools_pending.push(t),
         }
     }
 
@@ -381,14 +384,173 @@ fn resolve_recipe(
         product_item_level,
         reagents,
         tools,
-        icon_pending: None,
-        tools_pending: Vec::new(),
+        icon_pending,
+        tools_pending,
     })
 }
 
-/// The packets that rebuild the open profession and craft lists, each a trigger at its handler.
+/// The packets that rebuild the open profession and craft lists, each at its handler's place on
+/// a lane of their own ([`ListRebuilds`]): a learn, an unlearn and a supersede's two halves
+/// (`0x5e9c20`, `0x5e9fe0`, `0x5e6392`, `0x5e63a4`), and `SMSG_PET_SPELLS` (`0x4bdafa`).
 pub(crate) fn register_rebuild_triggers(app: &mut App) {
-    let _ = app;
+    use crate::lanes::LaneApp;
+    use SessionEventKind as K;
+    app.init_resource::<ListRebuilds>()
+        .add_lane(
+            "list rebuilds",
+            |world| world.get_resource::<ListRebuilds>()?.peek(),
+            fire_list_rebuilds,
+            None,
+        )
+        .add_systems(
+            Update,
+            drop_list_rebuilds
+                .in_set(crate::ui_script::UiFeed)
+                .run_if(not(crate::ui_script::ingame_ui_up)),
+        )
+        .net_handler(K::SpellLearned, on_book_change)
+        .net_handler(K::SpellRemoved, on_book_change)
+        .net_handler(K::SpellSuperceded, on_book_change)
+        .net_handler(K::PetSpells, on_pet_spells);
+}
+
+/// Which list a packet rebuilds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ListRebuild {
+    /// The profession list, with flag 1 (`0x4fca20(1)`).
+    Trade,
+    /// The craft list (`0x4f60c0`).
+    Craft,
+}
+
+/// The rebuilds the handlers queue, each stamped as its handler queued it
+/// ([`crate::lanes::stamp`]), fired at their packets' places.
+#[derive(Resource, Default)]
+pub(crate) struct ListRebuilds(VecDeque<(crate::lanes::Stamp, ListRebuild)>);
+
+impl ListRebuilds {
+    /// Queue `rebuild` behind everything stamped before it.
+    fn push(&mut self, rebuild: ListRebuild) {
+        let stamp = crate::lanes::stamp();
+        let at = self.0.partition_point(|(s, _)| *s < stamp);
+        self.0.insert(at, (stamp, rebuild));
+    }
+
+    fn peek(&self) -> Option<crate::lanes::Stamp> {
+        self.0.front().map(|(s, _)| *s)
+    }
+}
+
+/// Fired or dropped the frame they land, never into a later interface.
+fn drop_list_rebuilds(mut rebuilds: ResMut<ListRebuilds>) {
+    rebuilds.0.clear();
+}
+
+/// The lane's `fire_until` ([`crate::lanes`]): each rebuild `until` admits, over the lists the
+/// feeds pushed this frame, its window's update signalled while the window is open
+/// (`0x4fd164`, `0x4f661a`); the lane stops after one whose firing stamped anything.
+fn fire_list_rebuilds(
+    In(until): In<crate::lanes::Until>,
+    mut vm: crate::script_calls::HostedVm,
+    mut rebuilds: ResMut<ListRebuilds>,
+) {
+    while let Some(stamp) = rebuilds.peek().filter(|&s| until.admits(s)) {
+        let Some((_, rebuild)) = rebuilds.0.pop_front() else {
+            return;
+        };
+        let ((), moved) = crate::lanes::firing(stamp, || {
+            vm.run(|script| {
+                let Some(script) = script else {
+                    return;
+                };
+                match rebuild {
+                    ListRebuild::Trade => script.rebuild_trade_skill(&mut |_| {}),
+                    ListRebuild::Craft => {
+                        if script.rebuild_craft(&mut |_| {}) {
+                            script.fire_event("CRAFT_UPDATE", vec![]);
+                        }
+                    }
+                }
+            })
+        });
+        if moved {
+            return;
+        }
+    }
+}
+
+/// The lists a book change rebuilds, by the spell's kind.
+#[derive(bevy::ecs::system::SystemParam)]
+struct ListTriggers<'w> {
+    spells: Option<Res<'w, Spells>>,
+    skill_lines: Option<Res<'w, SkillLines>>,
+    rebuilds: Option<ResMut<'w, ListRebuilds>>,
+}
+
+impl ListTriggers<'_> {
+    /// `LearnSpell 0x5e9c20` on a spell with a record (`0x5e9c88`): a profession spell
+    /// (`Attributes & 0x20`, `0x5e9c8e`) rebuilds the profession list (`0x5e9d79`), any other
+    /// with a `castUI` above 0 the craft list (`0x5e9d88`, `0x5e9e12`).
+    fn learn(&mut self, spell_id: u32) {
+        let Some(d) = self.spells.as_deref().and_then(|s| s.catalog.get(spell_id)) else {
+            return;
+        };
+        if d.attributes & SPELL_ATTR_IS_TRADESKILL != 0 {
+            self.push(ListRebuild::Trade);
+        } else if (d.cast_ui as i32) > 0 {
+            self.push(ListRebuild::Craft);
+        }
+    }
+
+    /// `UnlearnSpell 0x5e9fe0` on a spell with a record (`0x5ea02a`): a profession spell with an
+    /// ability row (`0x5ea054`-`0x5ea07b`) rebuilds the profession list (`0x5ea165`), any other with
+    /// a `castUI` above 0 the craft list (`0x5ea17a`, `0x5ea240`).
+    fn unlearn(&mut self, spell_id: u32) {
+        let Some(d) = self.spells.as_deref().and_then(|s| s.catalog.get(spell_id)) else {
+            return;
+        };
+        if d.attributes & SPELL_ATTR_IS_TRADESKILL != 0 {
+            let has_row = self
+                .skill_lines
+                .as_deref()
+                .is_some_and(|l| l.catalog.ability(spell_id).is_some());
+            if has_row {
+                self.push(ListRebuild::Trade);
+            }
+        } else if (d.cast_ui as i32) > 0 {
+            self.push(ListRebuild::Craft);
+        }
+    }
+
+    fn push(&mut self, rebuild: ListRebuild) {
+        if let Some(rebuilds) = self.rebuilds.as_deref_mut() {
+            rebuilds.push(rebuild);
+        }
+    }
+}
+
+/// A learn, an unlearn, or a supersede, which unlearns the old rank and learns the new one.
+fn on_book_change(In(ev): In<SessionEvent>, mut lists: ListTriggers) {
+    match ev {
+        SessionEvent::SpellLearned { spell_id } => lists.learn(spell_id),
+        SessionEvent::SpellRemoved { spell_id } => lists.unlearn(spell_id),
+        SessionEvent::SpellSuperceded {
+            old_spell_id,
+            new_spell_id,
+        } => {
+            lists.unlearn(old_spell_id);
+            lists.learn(new_spell_id);
+        }
+        _ => {}
+    }
+}
+
+/// `SMSG_PET_SPELLS` rebuilds the craft list on every arrival, the same book again included
+/// (`0x4bd990` → `0x4bdafa`).
+fn on_pet_spells(In(ev): In<SessionEvent>, mut lists: ListTriggers) {
+    if matches!(ev, SessionEvent::PetSpells(_)) {
+        lists.push(ListRebuild::Craft);
+    }
 }
 
 /// Build the book: the known recipes of the open line, banded against the current rank.
@@ -472,24 +634,11 @@ fn feed_trade_skill(
         // `CloseTradeSkill` closes the VM's window and signals `TRADE_SKILL_CLOSE` in the verb
         // (`0x4fc884`).
         let closed_in_place = !script.trade_skill_open();
-        // A learned or unlearned profession spell (`Attributes & 0x20`) rebuilds with flag 1
-        // (`0x5e9c8e` → `0x5e9d79`, `0x5ea165`), each its own rebuild.
-        let known: BTreeSet<u32> = spells.as_deref().map_or_else(BTreeSet::new, |spells| {
-            actions
-                .spells
-                .iter()
-                .copied()
-                .filter(|&s| {
-                    spells
-                        .catalog
-                        .get(s)
-                        .is_some_and(|d| d.attributes & SPELL_ATTR_IS_TRADESKILL != 0)
-                })
-                .collect()
-        });
-        let learns = known.symmetric_difference(&memo.known).count();
-        let missing = fresh.as_ref().map_or_else(BTreeSet::new, missing_templates);
-        let arrivals = memo.missing.difference(&missing).count();
+        // The getters' item callbacks, kept by their calls; each record that landed rebuilds
+        // (`0x4fdc30` → `0x4fdc3c`), and a refusal runs it with status 0, which does nothing
+        // (`0x4fdc38`).
+        memo.item_waits.extend(script.take_trade_skill_item_waits());
+        let arrivals = landed(&mut memo.item_waits, &items);
         let opened = match (&memo.state, &fresh) {
             (None, Some(_)) => true,
             (Some(l), Some(f)) => l.line != f.line,
@@ -520,19 +669,16 @@ fn feed_trade_skill(
                     fires.post("TRADE_SKILL_SHOW", vec![]);
                 }
             }
-            // Each learn's rebuild, and each arriving record's callback (`0x4fdc30` →
-            // `0x4fdc3c`), signals the update.
-            (Some(_), Some(_)) => {
-                for _ in 0..learns + arrivals {
-                    fires.post("TRADE_SKILL_UPDATE", vec![]);
-                }
-            }
             (Some(_), None) if !closed_in_place => fires.post("TRADE_SKILL_CLOSE", vec![]),
             _ => {}
         }
+        // Each landed record's rebuild signals the update; the packets' fire on their lane.
+        if fresh.is_some() {
+            for _ in 0..arrivals {
+                fires.post("TRADE_SKILL_UPDATE", vec![]);
+            }
+        }
         memo.state = fresh;
-        memo.known = known;
-        memo.missing = missing;
     })
 }
 
@@ -541,27 +687,21 @@ fn feed_trade_skill(
 struct TradeMemo {
     /// The state it last pushed.
     state: Option<TradeSkillState>,
-    /// The known profession spells.
-    known: BTreeSet<u32>,
-    /// The item records the list lacked.
-    missing: BTreeSet<u32>,
+    /// The item records the getters' calls wait on, one per call.
+    item_waits: Vec<u32>,
 }
 
-/// The item records a list's rows wait on: a product whose group is not named yet and a reagent
-/// with no name.
-fn missing_templates(t: &TradeSkillState) -> BTreeSet<u32> {
-    t.recipes
-        .iter()
-        .flat_map(|r| {
-            let product = (r.product_item != 0 && r.group.is_none()).then_some(r.product_item);
-            product.into_iter().chain(
-                r.reagents
-                    .iter()
-                    .filter(|re| re.name.is_none())
-                    .map(|re| re.item),
-            )
-        })
-        .collect()
+/// Spend the waits whose record answered: the count of those that brought one.
+pub(crate) fn landed(waits: &mut Vec<u32>, items: &Items) -> u32 {
+    let mut landed = 0;
+    waits.retain(|&entry| {
+        if !items.template_answered(entry) {
+            return true;
+        }
+        landed += u32::from(items.template(entry, 0, Ask::Read).is_some());
+        false
+    });
+    landed
 }
 
 /// Drain the Lua intents and feed the VM's repeat (`0x4fd7b0`) our own cast edges: `DoTradeSkill`
@@ -1199,7 +1339,8 @@ mod tests {
             )
             .unwrap();
         app.insert_non_send_resource(script);
-        app.add_systems(Update, feed_trade_skill);
+        app.add_systems(Update, feed_trade_skill.in_set(crate::ui_script::UiFeed))
+            .insert_resource(State::new(crate::client_state::ClientState::InWorld));
         register_rebuild_triggers(&mut app);
         let heard = |app: &mut App| {
             app.update();

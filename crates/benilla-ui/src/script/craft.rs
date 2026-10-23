@@ -487,12 +487,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 reagent_index,
                 "Usage: GetCraftReagentInfo(index, reagentIndex)",
             )?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let Some(reagent) = recipe(&model, index)
                 .and_then(|r| reagent_index.checked_sub(1).and_then(|n| r.reagents.get(n)))
+                .cloned()
             else {
                 return Ok(binding_abi::tuple(&[None; 4]));
             };
+            if reagent.name.is_none() {
+                // The miss asks with the callback `0x4f7710` (`0x4f75dd`).
+                model.craft_item_waits.push(reagent.item);
+            }
             Ok(MultiValue::from_vec(vec![
                 opt_str(lua, reagent.name.as_ref())?,
                 opt_str(lua, reagent.icon.as_ref())?,
@@ -509,13 +514,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: GetCraftSpellFocus(index)` (`0x84d4dc`, `0x4f78db`).
             let index = binding_abi::index_arg(lua, index, "Usage: GetCraftSpellFocus(index)")?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let Some(r) = recipe(&model, index) else {
+                return Ok(MultiValue::new());
+            };
+            let (tools, pending) = (r.tools.clone(), r.tools_pending.clone());
+            // Each totem in flight is asked with the callback `0x4f7710` (`0x4f79f2`).
+            model.craft_item_waits.extend(pending);
+            drop(model);
             let mut out = Vec::new();
-            if let Some(r) = recipe(&model, index) {
-                for (name, have) in &r.tools {
-                    out.push(Value::String(lua.create_string(name)?));
-                    out.push(binding_abi::flag(*have));
-                }
+            for (name, have) in &tools {
+                out.push(Value::String(lua.create_string(name)?));
+                out.push(binding_abi::flag(*have));
             }
             Ok(MultiValue::from_vec(out))
         })?,

@@ -162,6 +162,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(view) = model.item_templates.get(&product).cloned() else {
                 if product != 0 {
                     model.item_stat_asks.insert(product);
+                    // The ask carries the callback `0x4fdc30` (`0x4fdf77`).
+                    model.trade_skill_item_waits.push(product);
                 }
                 return Ok(MultiValue::new());
             };
@@ -316,8 +318,14 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: GetTradeSkillIcon(index)` (`0x84d3d0`, `0x4fdb11`).
             let index = binding_abi::index_arg(lua, index, "Usage: GetTradeSkillIcon(index)")?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            opt_str(lua, recipe_at(&model, index).and_then(|r| r.icon.as_ref()))
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let Some(r) = recipe_at(&model, index) else {
+                return Ok(Value::Nil);
+            };
+            let (icon, pending) = (r.icon.clone(), r.icon_pending);
+            // A record in flight is asked with the callback `0x4fdc30` (`0x4fdb90`).
+            model.trade_skill_item_waits.extend(pending);
+            opt_str(lua, icon.as_ref())
         })?,
     )?;
 
@@ -390,12 +398,17 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 reagent_index,
                 "Usage: GetTradeSkillReagentInfo(index, reagentIndex)",
             )?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let Some(reagent) = recipe_at(&model, index)
                 .and_then(|r| reagent_index.checked_sub(1).and_then(|n| r.reagents.get(n)))
+                .cloned()
             else {
                 return Ok(binding_abi::tuple(&[None; 4]));
             };
+            if reagent.name.is_none() {
+                // The miss asks with the callback `0x4fdc30` (`0x4ff6cd`).
+                model.trade_skill_item_waits.push(reagent.item);
+            }
             Ok(MultiValue::from_vec(vec![
                 opt_str(lua, reagent.name.as_ref())?,
                 opt_str(lua, reagent.icon.as_ref())?,
@@ -412,13 +425,18 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: GetTradeSkillTools(index)` (`0x84e668`, `0x4ff9ab`).
             let index = binding_abi::index_arg(lua, index, "Usage: GetTradeSkillTools(index)")?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let Some(r) = recipe_at(&model, index) else {
+                return Ok(MultiValue::new());
+            };
+            let (tools, pending) = (r.tools.clone(), r.tools_pending.clone());
+            // Each totem in flight is asked with the callback `0x4fdc30` (`0x4ffac6`).
+            model.trade_skill_item_waits.extend(pending);
+            drop(model);
             let mut out = Vec::new();
-            if let Some(r) = recipe_at(&model, index) {
-                for (name, have) in &r.tools {
-                    out.push(Value::String(lua.create_string(name)?));
-                    out.push(binding_abi::flag(*have));
-                }
+            for (name, have) in &tools {
+                out.push(Value::String(lua.create_string(name)?));
+                out.push(binding_abi::flag(*have));
             }
             Ok(MultiValue::from_vec(out))
         })?,

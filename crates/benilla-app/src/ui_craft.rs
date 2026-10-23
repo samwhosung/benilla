@@ -3,8 +3,6 @@
 //! description's `$` tokens resolve as a tooltip's do. An enchant is an item-targeted cast
 //! (`Targets = 0x10`) whose pick is the ordinary targeting cursor ([`crate::spell::targeting`]).
 
-use std::collections::BTreeSet;
-
 use bevy::prelude::*;
 
 use benilla_formats::{
@@ -34,9 +32,6 @@ use crate::ui_unit::UnitFeed;
 pub(crate) struct CraftOpen {
     pub(crate) line: Option<u32>,
     pub(crate) craft_type: u32,
-    /// The rebuilds the packets owe the open list, one per learn or unlearn of a craft spell
-    /// (`0x5e9e12`, `0x5ea240`) and per `SMSG_PET_SPELLS` (`0x4bdafa`), for the feed to run.
-    pub(crate) rebuilds: u32,
 }
 
 /// `EffectImplicitTargetA`/`B` 5, the pet (`0x4f632a`).
@@ -467,10 +462,12 @@ fn feed_craft(
                             tools.push((n.to_string(), true));
                         }
                     }
+                    let mut tools_pending = Vec::new();
                     for &t in d.totems.iter().filter(|&&t| t != 0) {
                         let have = count_of(&store.0, &objects, t, InventoryScope::DEFAULT) > 0;
-                        if let Some(info) = items.template(t, 0, ask) {
-                            tools.push((info.name.clone(), have));
+                        match items.template(t, 0, ask) {
+                            Some(info) => tools.push((info.name.clone(), have)),
+                            None => tools_pending.push(t),
                         }
                     }
                     let needs_item_target = matches!(
@@ -511,7 +508,7 @@ fn feed_craft(
                             .map(|l| l.name.clone()),
                         training_point_cost,
                         required_level,
-                        tools_pending: Vec::new(),
+                        tools_pending,
                     })
                 })
                 .collect();
@@ -529,29 +526,10 @@ fn feed_craft(
 
         // `CloseCraft` closes the VM's window and signals `CRAFT_CLOSE` in the verb (`0x4f5fef`).
         let closed_in_place = !script.craft_open();
-        // A learned or unlearned craft spell, any spell without `Attributes & 0x20` (`0x5e9c8e` →
-        // `0x5e9d83`), rebuilds the list (`0x5e9e12`, `0x5ea240`), each its own rebuild.
-        let known: BTreeSet<u32> = spells.as_deref().map_or_else(BTreeSet::new, |spells| {
-            actions
-                .spells
-                .iter()
-                .copied()
-                .filter(|&s| {
-                    spells.catalog.get(s).is_some_and(|d| {
-                        d.cast_ui != 0 && d.attributes & SPELL_ATTR_IS_TRADESKILL == 0
-                    })
-                })
-                .collect()
-        });
-        let learns = known.symmetric_difference(&memo.known).count();
-        // `SMSG_PET_SPELLS` rebuilds it (`0x4bd990` → `0x4bdafa`), read here as a new pet or book.
-        let pet_book = pet_reads.bar.as_deref().map(|bar| {
-            let book = bar.spells.spells.iter().map(|e| e.action()).collect();
-            (bar.spells.pet_guid, book)
-        });
-        let pet_rebuild = usize::from(pet_book != memo.pet_book);
-        let missing = fresh.as_ref().map_or_else(BTreeSet::new, missing_reagents);
-        let arrivals = memo.missing.difference(&missing).count();
+        // The getters' item callbacks, kept by their calls; each record that landed rebuilds
+        // (`0x4f7710` → `0x4f771a`), and a refusal runs it with status 0, which does nothing.
+        memo.item_waits.extend(script.take_craft_item_waits());
+        let arrivals = crate::ui_tradeskill::landed(&mut memo.item_waits, &items);
         let opened = match (&memo.state, &fresh) {
             (None, Some(_)) => true,
             (Some(l), Some(f)) => l.craft_type != f.craft_type || l.name != f.name,
@@ -576,23 +554,20 @@ fn feed_craft(
                 fires.post("CRAFT_UPDATE", vec![]);
                 fires.post("CRAFT_SHOW", vec![]);
             }
-            // Each learn's and pet book's rebuild, and each arriving record's callback
-            // (`0x4f7710`), signals the update.
-            (Some(_), Some(_)) => {
-                for _ in 0..learns + pet_rebuild + arrivals {
-                    fires.post("CRAFT_UPDATE", vec![]);
-                }
-            }
             (Some(_), None) if !closed_in_place => {
                 debug!("ui_craft: window closes");
                 fires.post("CRAFT_CLOSE", vec![]);
             }
             _ => {}
         }
+        // Each landed record's rebuild signals the update; the packets' fire on their lane
+        // (`crate::ui_tradeskill::register_rebuild_triggers`).
+        if fresh.is_some() {
+            for _ in 0..arrivals {
+                fires.post("CRAFT_UPDATE", vec![]);
+            }
+        }
         memo.state = fresh;
-        memo.known = known;
-        memo.pet_book = pet_book;
-        memo.missing = missing;
     })
 }
 
@@ -601,25 +576,8 @@ fn feed_craft(
 struct CraftMemo {
     /// The state it last pushed.
     state: Option<CraftState>,
-    /// The known craft spells.
-    known: BTreeSet<u32>,
-    /// The pet bar's guid and book.
-    pet_book: Option<(u64, Vec<u32>)>,
-    /// The reagent records the list lacked.
-    missing: BTreeSet<u32>,
-}
-
-/// The reagent records a list's rows wait on, those with no name.
-fn missing_reagents(c: &CraftState) -> BTreeSet<u32> {
-    c.recipes
-        .iter()
-        .flat_map(|r| {
-            r.reagents
-                .iter()
-                .filter(|re| re.name.is_none())
-                .map(|re| re.item)
-        })
-        .collect()
+    /// The item records the getters' calls wait on, one per call.
+    item_waits: Vec<u32>,
 }
 
 /// Drains the Lua intents. `DoCraft` goes down the cast ladder: an enchant's `Targets = 0x10` arms
@@ -1457,6 +1415,7 @@ mod tests {
         let catalog =
             benilla_formats::SkillLineCatalog::from_abilities([(7418, ability(ENCHANTING, 1, 70))]);
         let mut app = craft_feed(displays, &[7418], catalog, 3, &[]);
+        app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
         crate::ui_tradeskill::register_rebuild_triggers(&mut app);
         app.world()
             .non_send_resource::<UiScript>()

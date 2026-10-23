@@ -867,6 +867,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "equip errors",
             "field notices",
             "item watchers",
+            "list rebuilds",
             "loot",
             "party",
             "unit views"
