@@ -255,3 +255,32 @@ fn a_retargeting_listener_nests_and_the_first_swing_goes_at_its_pick() {
         "{heard:?}"
     );
 }
+
+/// With `assistAttack` on, the assist tail swings at the unit it selected (`0x489bfc`-`0x489c02`)
+/// after `SetSelection` returned, so after its `PLAYER_TARGET_CHANGED` listeners ran: a handler's
+/// packet goes out between the selection and the swing.
+#[test]
+fn an_assists_swing_follows_its_target_change_handlers() {
+    let mut f = frame(true);
+    let world = f.app.world_mut();
+    world.resource_mut::<crate::target::AssistAttack>().0 = true;
+    let old = world.resource::<GuidIndex>().0[&OLD];
+    // `UNIT_FIELD_TARGET`, the basis's target, is `NEW`.
+    world
+        .get_mut::<ObjectStore>(old)
+        .unwrap()
+        .0
+        .merge(benilla_protocol::ObjectFields::from_pairs(&[
+            (16, NEW as u32),
+            (17, (NEW >> 32) as u32),
+        ]));
+    feeds(&mut f);
+    f.rx.try_iter().for_each(drop);
+    on_target_changed(&mut f, "RandomRoll(1, 100)");
+    run(&mut f, r#"AssistUnit("target")"#);
+    assert_eq!(selected(&f), Some(NEW));
+    assert_eq!(
+        attack_wire(&f),
+        ["SetSelection 0x22", "RandomRoll", "AttackSwing 0x22"]
+    );
+}
