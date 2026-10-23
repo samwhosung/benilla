@@ -34,9 +34,7 @@ pub(in crate::ui_chat) fn apply(
             // `LeaveChannelByName` (`0x4a0000` → `0x49ee70`): a number names a confirmed slot or
             // the call does nothing. Only a leave clears the zone mask, the walk's own LEAVE
             // never; the slot frees on the server's `YOU_LEFT`.
-            let Some(name) = channels.channel_key(&name) else {
-                return None;
-            };
+            let name = channels.channel_key(&name)?;
             channels.note_zone_channel_left(&name);
             ClientCommand::LeaveChannel { name }
         }
