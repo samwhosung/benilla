@@ -124,10 +124,7 @@ fn close_taxi_map_closes_inside_the_call() {
         ]
     );
     assert!(app.world().resource::<TaxiState>().open.is_none());
-    // The latch's own release is the drain's (`0x4dc105`).
-    app.world_mut()
-        .run_system_once(super::drain_taxi)
-        .expect("the drain runs");
+    // The latch released inside the call (`0x4dc105`).
     assert_eq!(
         app.world()
             .resource::<crate::ui_session::InteractLatch>()
@@ -157,32 +154,6 @@ fn take_taxi_node_sends_inside_the_call() {
     assert!(
         sent[2].starts_with("ActivateTaxiExpress { guid: 17379390962022744217, total_cost: 160"),
         "{sent:?}"
-    );
-}
-
-/// `0x493310` closes the first window in its order whose cell holds the latched guid, the item
-/// text ahead of the taxi map: with a read's cell on the flight master's guid (`0x4e3364`, written
-/// ahead of its register), `CloseTaxiMap`'s release closes the reader, not the map again, so
-/// `TAXIMAP_CLOSED` fires once (`0x4dc105`).
-#[test]
-fn close_taxi_map_fires_once_when_a_window_ahead_holds_the_master() {
-    let data = benilla_formats::wow_data_or_skip!();
-    let (mut app, _rx) = client(&data);
-    app.world_mut()
-        .resource_mut::<crate::ui_item_text::ItemTextOpen>()
-        .open_letter(MASTER, 1);
-    let closed: String = eval(&mut app, "HEARD = '' CloseTaxiMap() return HEARD");
-    assert_eq!(closed, "TAXIMAP_CLOSED(nil) ");
-    // The release, the drain's, closes the reader.
-    app.world_mut()
-        .run_system_once(super::drain_taxi)
-        .expect("the drain runs");
-    app.world_mut().flush();
-    assert_eq!(
-        app.world()
-            .resource::<crate::ui_item_text::ItemTextOpen>()
-            .object(),
-        None
     );
 }
 

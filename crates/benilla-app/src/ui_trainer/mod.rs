@@ -1,6 +1,6 @@
 //! The trainer feed: [`TrainerOpen`] from `SMSG_TRAINER_LIST`, [`feed_trainer`] resolving it into
 //! Lua [`TrainerService`]s and firing the trainer events, and [`TrainerSteps`] sending the buys
-//! inside their calls; `CloseTrainer` sends nothing, and [`drain_trainer`] runs its close core. A
+//! and running `CloseTrainer`'s close core inside their calls. A
 //! bought row repaints through the re-evaluator ([`reeval`]), never through
 //! `SMSG_TRAINER_BUY_SUCCEEDED`, and a refusal goes only to the log.
 
@@ -14,8 +14,8 @@ use benilla_protocol::messages::{trainer_spell_state, TrainerSpell};
 use bevy::prelude::*;
 
 use benilla_ui::script::{
-    CallTail, TrainerAbilityReq, TrainerCall, TrainerService, TrainerServiceCategory,
-    TrainerSkillReq, TrainerState, TrainerTooltip, UiScript, TRAINER_GROUP_KNOWN,
+    TrainerAbilityReq, TrainerService, TrainerServiceCategory, TrainerSkillReq, TrainerState,
+    TrainerTooltip, UiScript, TRAINER_GROUP_KNOWN,
 };
 
 use crate::entities::ItemDisplays;
@@ -201,7 +201,6 @@ impl Plugin for UiTrainerPlugin {
                         .in_set(TrainerFeed)
                         .in_set(crate::ui_session::NpcWindowFeed)
                         .after(crate::ui_unit::UnitFeed),
-                    drain_trainer.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }
@@ -460,9 +459,11 @@ pub(crate) struct DescriptionReads<'w> {
 /// core's ([`close_core`]).
 #[allow(clippy::too_many_arguments)] // one Bevy system's full input set
 pub(crate) fn feed_trainer(
-    mut vm: crate::script_calls::VmWith<ReEvalInputs<'static, 'static>>,
-    // Writes the re-derived states, as `0x4d7d40` overwrites its own records.
-    mut open: ResMut<TrainerOpen>,
+    // The window it writes the re-derived states to, as `0x4d7d40` overwrites its own records.
+    mut vm: crate::script_calls::VmWith<(
+        ReEvalInputs<'static, 'static>,
+        ResMut<'static, TrainerOpen>,
+    )>,
     actions: Res<PlayerActions>,
     spells: Option<Res<Spells>>,
     skill_lines: Option<Res<SkillLines>>,
@@ -478,7 +479,7 @@ pub(crate) fn feed_trainer(
     mut closes: CoreCloses,
 ) {
     let mut extra_passes = 0;
-    vm.feed(|script, mut re_eval, fires| {
+    vm.feed(|script, (mut re_eval, mut open), fires| {
         let Some(script) = script else {
             return;
         };
@@ -811,7 +812,8 @@ pub(crate) fn feed_trainer(
     }
 }
 
-/// The trainer's cell `[0xb73a00]`; `CloseTrainer` (`0x4d8d50`) is the core with a zero guid.
+/// The trainer's cell `[0xb73a00]`; `CloseTrainer` (`0x4d8d50`) is the core with a zero guid, run
+/// inside its call ([`crate::script_calls::ScriptCallHost`]).
 impl LatchedWindow for TrainerOpen {
     const WINDOW: NpcWindow = NpcWindow::Trainer;
 
@@ -822,16 +824,13 @@ impl LatchedWindow for TrainerOpen {
     fn dispatched(world: &mut World) {
         close_core(world);
     }
-
-    fn take_close_verb(script: &mut UiScript) -> bool {
-        script.take_trainer_close()
-    }
 }
 
-/// The close core, `0x4d7440` with a zero guid: nothing with no trainer (`0x4d7459`, a zero guid
-/// against a zero cell), else `TRAINER_CLOSED` first (`0x4d7468`), then the latch release on the
-/// cell as it stands after the fire (`0x4d7474`) and the cell cleared (`0x4d747c`). The fire comes
-/// before the clear, so `OnHide`'s `CloseTrainer()` re-enters with the cell set.
+/// The close core, `0x4d7440` with a zero guid, as `0x493310` and the sweep enter it: nothing with
+/// no trainer (`0x4d7459`, a zero guid against a zero cell), else `TRAINER_CLOSED` first
+/// (`0x4d7468`), then the latch release on the cell as it stands after the fire (`0x4d7474`) and
+/// the cell cleared (`0x4d747c`). The fire comes before the clear, so `OnHide`'s `CloseTrainer()`
+/// re-enters with the cell set.
 pub(crate) fn close_core(world: &mut World) {
     if world.resource::<TrainerOpen>().trainer.is_none() {
         return;
@@ -870,50 +869,51 @@ pub(crate) fn open_trainer(
 /// ([`crate::script_calls::ScriptCallHost`]).
 #[derive(SystemParam)]
 pub(crate) struct TrainerSteps<'w, 's> {
+    /// Absent in a world with no trainer window, which closes nothing.
+    open: Option<ResMut<'w, TrainerOpen>>,
     net: Res<'w, NetCommands>,
     me: Query<'w, 's, &'static Guid, With<SelfPlayer>>,
 }
 
 impl TrainerSteps<'_, '_> {
-    /// Apply one trainer call; `OpenTrainer`'s close is left to the tail, where every
-    /// `CloseTrainer` goes.
-    pub(crate) fn apply(&mut self, call: TrainerCall) -> Option<CallTail> {
-        match call {
-            // The trainer's cell as the VM's open window holds it (`0x4d8a11`).
-            TrainerCall::Buy { trainer, spell_id } => {
-                debug!("ui_trainer: buy service (trainer {trainer:#x}, spell {spell_id})");
-                let _ = self
-                    .net
-                    .0
-                    .send(ClientCommand::TrainerBuySpell { trainer, spell_id });
-                None
-            }
-            // `TalkToTrainer` on the player's own guid (`0x5df680`), which the server answers
-            // with nothing for a player; all of it waits on the player (`0x4d8d24`).
-            TrainerCall::OpenOwn => {
-                let &Guid(trainer) = self.me.single().ok()?;
-                debug!(
-                    "ui_trainer: OpenTrainer closes the window and asks for the player's own list"
-                );
-                let _ = self.net.0.send(ClientCommand::TrainerList { trainer });
-                Some(Box::new(|script: &mut UiScript| {
-                    script.close_trainer_for_own_list()
-                }))
-            }
-        }
+    /// `BuyTrainerService`'s send, with the trainer's cell as the VM's open window holds it
+    /// (`0x4d8a11`).
+    pub(crate) fn buy(&mut self, trainer: u64, spell_id: u32) {
+        debug!("ui_trainer: buy service (trainer {trainer:#x}, spell {spell_id})");
+        let _ = self
+            .net
+            .0
+            .send(ClientCommand::TrainerBuySpell { trainer, spell_id });
     }
-}
 
-/// `CloseTrainer` runs the close core, which sends nothing; the core needs the latch, so it waits
-/// for the drain (Part of #2202). Every other trainer verb applies inside its call
-/// ([`TrainerSteps`]).
-fn drain_trainer(mut hosted_vm: crate::script_calls::HostedVm, mut world_commands: Commands) {
-    hosted_vm.run(|script| {
-        if script.is_some_and(|script| script.take_trainer_close()) {
-            debug!("ui_trainer: client-side close (no packet)");
-            crate::ui_session::queue(&mut world_commands, close_core);
-        }
-    })
+    /// The active player's guid, which `OpenTrainer` needs (`0x4d8d24`).
+    pub(crate) fn own_guid(&self) -> Option<u64> {
+        self.me.single().ok().map(|&Guid(g)| g)
+    }
+
+    /// The rest of `TalkToTrainer` on the player's own guid (`0x5df680`) after its close
+    /// (`0x5df6bb`): `CMSG_TRAINER_LIST` (`0x5df6fc`), which the server answers with nothing for
+    /// a player.
+    pub(crate) fn ask_own_list(&mut self, trainer: u64) {
+        debug!("ui_trainer: OpenTrainer asks for the player's own list");
+        let _ = self.net.0.send(ClientCommand::TrainerList { trainer });
+    }
+
+    /// The trainer's cell `[0xb73a00]`.
+    pub(crate) fn trainer(&self) -> Option<u64> {
+        self.open.as_deref().and_then(|o| o.trainer)
+    }
+
+    /// The close core's clear of the cell (`0x4d747c`), and the VM's window with it: whether a
+    /// trainer was stored.
+    pub(crate) fn clear_trainer(&mut self, script: &mut UiScript) -> bool {
+        let Some(open) = self.open.as_deref_mut().filter(|o| o.trainer.is_some()) else {
+            return false;
+        };
+        open.clear();
+        script.set_trainer(None);
+        true
+    }
 }
 
 mod law;

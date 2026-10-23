@@ -1,6 +1,6 @@
 //! The gossip window's app side: [`GossipState`] holds the menu and the NPC-text records,
 //! [`feed_gossip`] pushes the menu and fires its events, the selects apply in their calls over its
-//! slots ([`GossipVerbs`]), and [`drain_gossip`] runs `CloseGossip`'s teardown.
+//! slots ([`GossipVerbs`]), and so does `CloseGossip`'s close core.
 //! As in the reference's `0x4e2010`, a menu opens only once its greeting is drawn.
 
 use std::collections::HashMap;
@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use benilla_protocol::messages::{select_greeting, GossipOption, NpcTextBlock};
 use bevy::prelude::*;
 
-use benilla_ui::script::{GossipMenu, GossipOptionView, GossipQuestRow, UiScript};
+use benilla_ui::script::{GossipMenu, GossipOptionView, GossipQuestRow};
 
 use crate::names::NameCache;
 use crate::net::{Guid, NetCommands, ObjectStore, SelfPlayer};
@@ -38,9 +38,6 @@ pub(crate) struct GossipState {
     pending: bool,
     /// The messages latched so far, which the feed shows each of once.
     generation: u64,
-    /// The source whose close a call began, its cell zeroed there (`0x4e1fcc`): the latch
-    /// release and `GOSSIP_CLOSED` hold the whole world, so the drain runs them.
-    pub(crate) closing: Option<u64>,
 }
 
 impl GossipState {
@@ -143,7 +140,6 @@ impl GossipState {
         self.quests.clear();
         self.missing_text = false;
         self.pending = false;
-        self.closing = None;
     }
 
     /// The disconnect clear; NPC text is static per id, so the records stay.
@@ -161,7 +157,7 @@ mod verb_tests;
 #[cfg(test)]
 pub(crate) use net::gossip_menu as open_menu;
 
-/// The gossip window's handlers, feed and drain.
+/// The gossip window's handlers and feed.
 pub(crate) struct UiGossipPlugin;
 
 impl Plugin for UiGossipPlugin {
@@ -173,31 +169,24 @@ impl Plugin for UiGossipPlugin {
             .add_sweep_leg(SweepLeg::Gossip, close_core)
             .add_systems(
                 Update,
-                (
-                    feed_gossip
-                        .in_set(UiFeed)
-                        .in_set(crate::ui_session::NpcWindowFeed),
-                    drain_gossip.in_set(crate::ui_script::UiDrain),
-                ),
+                (feed_gossip
+                    .in_set(UiFeed)
+                    .in_set(crate::ui_session::NpcWindowFeed),),
             );
     }
 }
 
-/// The menu's cell `[0xbc3f58]`; `CloseGossip` (`0x4e2b20`) is the core with a zero guid.
+/// The menu's cell `[0xbc3f58]`; `CloseGossip` (`0x4e2b20`) is the core with a zero guid, run
+/// inside its call ([`crate::script_calls::ScriptCallHost`]).
 impl LatchedWindow for GossipState {
     const WINDOW: NpcWindow = NpcWindow::Gossip;
 
-    /// The cell, or the source a call zeroed it from until the drain's teardown.
     fn cell(&self) -> Option<u64> {
-        self.npc.or(self.closing)
+        self.npc
     }
 
     fn dispatched(world: &mut World) {
         close_core(world);
-    }
-
-    fn take_close_verb(script: &mut UiScript) -> bool {
-        script.take_gossip_close()
     }
 }
 
@@ -205,15 +194,10 @@ impl LatchedWindow for GossipState {
 /// against a zero cell), else the latch release (`0x4e1fc5`), the cell zeroed (`0x4e1fcc`), and
 /// `GOSSIP_CLOSED` (`0x4e1fdc`); the slots, the text and its latch stay, and their getters read
 /// them still. A menu still waiting on its text was latched at its open, so its close fires too.
-/// `SMSG_GOSSIP_COMPLETE` (`0x4e2824`), the missing-text path (`0x4e2197`) and the leave-world
-/// sweep's leg (`0x490ac1` → `0x4e1f60`) call it as it is; a `CloseGossip` call has zeroed the
-/// cell already ([`GossipState::closing`]).
+/// `SMSG_GOSSIP_COMPLETE` (`0x4e2824`), the missing-text path (`0x4e2197`), `0x493310` and the
+/// leave-world sweep's leg (`0x490ac1` → `0x4e1f60`) call it as it is.
 pub(crate) fn close_core(world: &mut World) {
-    let source = {
-        let mut state = world.resource_mut::<GossipState>();
-        state.closing.take().or(state.npc)
-    };
-    let Some(npc) = source else {
+    let Some(npc) = world.resource::<GossipState>().npc else {
         return;
     };
     crate::ui_session::release(world, npc);
@@ -348,23 +332,11 @@ fn feed_gossip(
     })
 }
 
-/// The rest of a `CloseGossip()` call's close core, which holds the whole world; the
-/// selects apply in their calls ([`verbs::GossipVerbs`]).
-fn drain_gossip(
-    mut vm: crate::script_calls::VmWith<Res<'static, GossipState>>,
-    mut world_commands: Commands,
-) {
-    let closed = vm.run(|script| script.is_some_and(|s| s.take_gossip_close()));
-    if closed || vm.own().closing.is_some() {
-        debug!("ui_gossip: client-side close (no packet)");
-        crate::ui_session::queue(&mut world_commands, close_core);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::net::ClientCommand;
+    use benilla_ui::script::UiScript;
     use bevy::ecs::system::RunSystemOnce;
 
     /// The one type in [`GOSSIP_ICON_TYPES`] with no art in the 1.12 install.
@@ -475,8 +447,8 @@ mod tests {
         f:SetScript("OnEvent", function() table.insert(SEEN, event) end)
     "#;
 
-    /// The real [`feed_gossip`] and [`drain_gossip`] over a VM, in plugin order; `prepare` seeds
-    /// the VM, and the receiver gets what the drain sent.
+    /// The real [`feed_gossip`] over a VM; `prepare` seeds the VM, and the receiver gets what
+    /// went out.
     fn feed_app(
         prepare: impl FnOnce(&mut UiScript),
     ) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
@@ -487,7 +459,7 @@ mod tests {
             .init_resource::<NameCache>()
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<crate::world_state::WorldStates>()
-            .add_systems(Update, (feed_gossip, drain_gossip).chain());
+            .add_systems(Update, feed_gossip);
         let mut script = UiScript::new().unwrap();
         prepare(&mut script);
         app.insert_non_send_resource(script);

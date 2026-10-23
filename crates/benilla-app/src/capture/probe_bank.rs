@@ -156,9 +156,8 @@ fn find_bank_slot(store: &ObjectStore, guid: u64) -> Option<u8> {
 fn bank_probe(
     time: ProbeClock,
     mut probe: ResMut<BankProbe>,
-    open: Res<BankOpen>,
     prices: Option<Res<BankPrices>>,
-    mut hosted_vm: crate::script_calls::HostedVm,
+    mut hosted_vm: crate::script_calls::VmWith<Res<'static, BankOpen>>,
     self_player: Query<(), With<SelfPlayer>>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     player: Res<Player>,
@@ -166,6 +165,7 @@ fn bank_probe(
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    let bank_open = hosted_vm.own().is_open();
     hosted_vm.run(|script| {
         if self_player.is_empty() {
             return; // not in-world yet
@@ -241,7 +241,7 @@ fn bank_probe(
                 }
             }
             Phase::Activating { sent_at } => {
-                if open.is_open() {
+                if bank_open {
                     info!(
                         "PROBE_BANK: PASS (2 activate) — BankOpen is_open (SMSG_SHOW_BANK \
                            landed)"

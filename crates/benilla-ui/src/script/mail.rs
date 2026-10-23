@@ -186,6 +186,8 @@ pub enum MailCall {
     },
     /// `SendMail` past its guards: `CMSG_SEND_MAIL` (`0x4aea6c`).
     Send(MailSendRequest),
+    /// `CloseMail()` (`0x4aded0`): the close core's ordinary arm, `0x4acd50` with `cl = 0`.
+    Close,
 }
 
 /// `0x4acdc0`'s clears: the attachment, whose lock it lifts (`0x495420`, firing an argless
@@ -278,11 +280,6 @@ impl super::UiScript {
     /// there is no change for the scripts.
     pub fn holds_mail(&self, state: &Option<MailState>) -> bool {
         self.model_ref().mail == *state
-    }
-
-    /// Take the `CloseMail` flag; 1.12 has no close opcode, so the app only ends its mail session.
-    pub fn take_mail_close(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().mail_close)
     }
 
     /// The reference's compose-tab reset (`0x4acdc0(1)`), run on mailbox open and a sent mail:
@@ -773,18 +770,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         )?;
     }
 
+    // CloseMail() (`0x4aded0`): the close core's ordinary arm, `0x4acd50` with `cl = 0`, inside
+    // the call; 1.12 has no close opcode.
     g.set(
         "CloseMail",
-        lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.mail_close = true;
-            // The close core zeroes the mailbox inside the verb (`0x4aded0` → `0x4acd8f`), so a
-            // mail verb later in the same chunk finds none.
-            if let Some(mail) = model.mail.as_mut() {
-                mail.open = false;
-            }
-            Ok(())
-        })?,
+        lua.create_function(|lua, ()| submit(lua, MailCall::Close))?,
     )?;
 
     g.set(
@@ -1743,7 +1733,7 @@ mod tests {
         assert!(err.contains("Usage: TakeInboxItem(index)"), "{err}");
 
         s.run("CloseMail()").unwrap();
-        assert!(s.take_mail_close());
+        assert_eq!(s.take_mail_calls().last(), Some(&MailCall::Close));
     }
 
     /// `SendMail` (`0x4ae800`): an empty recipient or subject returns (`0x4ae875`, `0x4ae8a9`)
@@ -1833,17 +1823,6 @@ mod tests {
         s.run("SendMail('Bob', 'Hi', 'b')").unwrap();
         assert!(s.take_ui_errors().is_empty());
         assert_eq!(sends(&mut s).map(|r| r.item_guid), Some(0x716));
-    }
-
-    /// `CloseMail` zeroes the mailbox inside the verb (`0x4aded0` → `0x4acd8f`): a mail verb
-    /// later in the same chunk finds none.
-    #[test]
-    fn close_mail_closes_before_the_next_verb() {
-        let mut s = kept();
-        s.set_mail(Some(state()));
-        s.run("CloseMail() CheckInbox()").unwrap();
-        assert!(s.take_mail_close());
-        assert!(!checks(&mut s));
     }
 
     /// Each row verb refuses a row the reference does not send for, and then takes no lock:

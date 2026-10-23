@@ -1,6 +1,6 @@
 //! The stable window's app side: [`StableOpen`] holds the `MSG_LIST_STABLED_PETS` rows, which the
 //! server sends unprompted for the gossip stable option, [`feed_stable`] pushes them, the stable
-//! verbs send inside their calls ([`StableSteps`]), and [`drain_stable`] runs the close.
+//! verbs, the close among them, act inside their calls ([`StableSteps`]).
 //!
 //! A row's family, and with it the icon and diet, is not on the wire: it comes from the creature
 //! query, so those fill in a frame or two after the name and level, as on a reference cache miss.
@@ -37,12 +37,9 @@ impl Plugin for UiStablePlugin {
             .add_sweep_leg(SweepLeg::Stable, close_core)
             .add_systems(
                 Update,
-                (
-                    feed_stable
-                        .in_set(UiFeed)
-                        .in_set(crate::ui_session::NpcWindowFeed),
-                    drain_stable.in_set(crate::ui_script::UiDrain),
-                ),
+                feed_stable
+                    .in_set(UiFeed)
+                    .in_set(crate::ui_session::NpcWindowFeed),
             );
     }
 }
@@ -78,7 +75,8 @@ impl StableOpen {
     }
 }
 
-/// The stable master's cell `[0xb72240]`; `ClosePetStables` (`0x4cae40`) is the core itself. The
+/// The stable master's cell `[0xb72240]`; `ClosePetStables` (`0x4cae40`) is the core itself, run
+/// inside its call ([`crate::script_calls::ScriptCallHost`]). The
 /// server also checks range on every verb (`CheckStableMaster`), failing with code 6, which shows
 /// nothing.
 impl LatchedWindow for StableOpen {
@@ -90,10 +88,6 @@ impl LatchedWindow for StableOpen {
 
     fn dispatched(world: &mut World) {
         close_core(world);
-    }
-
-    fn take_close_verb(script: &mut UiScript) -> bool {
-        script.take_stable_close()
     }
 }
 
@@ -328,12 +322,25 @@ fn show_refusals(
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct StableSteps<'w, 's> {
     /// The stored master; absent in a world with no stable window, which stores none.
-    open: Option<Res<'w, StableOpen>>,
+    open: Option<ResMut<'w, StableOpen>>,
     commands: Res<'w, NetCommands>,
     self_q: Query<'w, 's, &'static crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
 }
 
 impl StableSteps<'_, '_> {
+    /// The stable master's cell `[0xb72240]`.
+    pub(crate) fn master(&self) -> Option<u64> {
+        self.open.as_deref().and_then(|o| o.npc)
+    }
+
+    /// The close core's clear of the cell (`0x4cae29`), and the VM's window with it.
+    pub(crate) fn clear_master(&mut self, script: &mut UiScript) {
+        if let Some(open) = self.open.as_deref_mut() {
+            open.clear();
+        }
+        script.set_stable(None);
+    }
+
     /// One stable verb inside its call, sent with the stored master's guid `[0xb72240]`.
     /// `StablePet` and `BuyStableSlot` send only while one is stored (`0x4cae56`, `0x4cb0ae`); a
     /// drop and `UnstablePet` send without testing it, 0 when none (`0x4cb4e9`, `0x4cb57a`,
@@ -363,6 +370,8 @@ impl StableSteps<'_, '_> {
                 }
                 (master.unwrap_or(0), StableIntent::Unstable(pet_number))
             }
+            // The close core needs the latch, which the host lends beside this.
+            StableCall::Close => return,
         };
         debug!("ui_stable: {intent:?} (stable master {npc:#x})");
         let command = match intent {
@@ -373,17 +382,6 @@ impl StableSteps<'_, '_> {
         };
         let _ = self.commands.0.send(command);
     }
-}
-
-/// `ClosePetStables()`: the close core, which releases the interaction latch the world holds, so
-/// it stays latch-driven rather than inside its call; there is no close opcode.
-fn drain_stable(mut hosted_vm: crate::script_calls::HostedVm, mut world_commands: Commands) {
-    hosted_vm.run(|script| {
-        if script.is_some_and(|script| script.take_stable_close()) {
-            debug!("ui_stable: client-side close (no packet)");
-            crate::ui_session::queue(&mut world_commands, close_core);
-        }
-    })
 }
 
 /// Stable refusals as message keys: only `ERR_NOT_ENOUGH_MONEY`, `DisplayError(0x25)` in the

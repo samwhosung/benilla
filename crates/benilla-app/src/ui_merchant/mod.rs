@@ -1,8 +1,7 @@
 //! The merchant window's app side: [`MerchantOpen`] holds the `SMSG_LIST_INVENTORY` rows,
 //! [`feed_merchant`] pushes them with the buyback and repair rows, the purse and the refusals,
-//! [`feed_repair_costs`] the repair costs, [`MerchantSteps`] applies the verbs inside their calls,
-//! and [`drain_merchant`] takes the close and a held row's drop into a bag. A bag click sells
-//! through [`crate::ui_items`].
+//! [`feed_repair_costs`] the repair costs, and [`MerchantSteps`] applies the verbs, the close
+//! among them, inside their calls. A bag click sells through [`crate::ui_items`].
 
 use benilla_protocol::messages::{buy_result, sell_result, VendorItem};
 use benilla_world::interact::WorldRightPress;
@@ -135,7 +134,6 @@ impl Plugin for UiMerchantPlugin {
                         .in_set(UiFeed)
                         .after(crate::spell::group_relation::publish_group_roster)
                         .before(crate::ui_char::feed_char),
-                    drain_merchant.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }
@@ -509,15 +507,17 @@ struct RepairFeedMemo {
 
 /// Push each item's repair cost, and `GetRepairAllCost`'s total while a repairer is open.
 fn feed_repair_costs(
-    mut vm: crate::script_calls::VmWith<crate::target::RelationWorld<'static, 'static>>,
-    open: Res<MerchantOpen>,
+    mut vm: crate::script_calls::VmWith<(
+        crate::target::RelationWorld<'static, 'static>,
+        Res<'static, MerchantOpen>,
+    )>,
     mut inv: crate::items::Inventory,
     items: Res<Items>,
     units: Query<(&Guid, &ObjectStore), Without<SelfPlayer>>,
     tables: Option<Res<RepairTables>>,
     mut memo: Local<crate::ui_script::VmMemo<RepairFeedMemo>>,
 ) {
-    vm.turn(|script, relations| {
+    vm.turn(|script, (relations, open)| {
         let Some(script) = script else {
             return;
         };
@@ -609,8 +609,7 @@ fn snapshot(
 /// Push the merchant into the VM and fire its events on a change; show the refusals and push the
 /// purse. The close is the core's ([`close_core`]).
 fn feed_merchant(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    open: Res<MerchantOpen>,
+    mut vm: crate::script_calls::VmWith<Res<'static, MerchantOpen>>,
     objects: Objects,
     items: Res<Items>,
     icons: Option<Res<ItemDisplays>>,
@@ -624,7 +623,7 @@ fn feed_merchant(
     mut closes: CoreCloses,
     mut sink: crate::ui_action::MessageSink,
 ) {
-    hosted_vm.run(|script| {
+    vm.feed(|script, open, fires| {
         let Some(script) = script else {
             return;
         };
@@ -683,7 +682,7 @@ fn feed_merchant(
         }
         script.set_merchant(fresh.clone());
         match (&*last, &fresh) {
-            (None, Some(_)) => script.fire_event("MERCHANT_SHOW", vec![]),
+            (None, Some(_)) => fires.post("MERCHANT_SHOW", vec![]),
             // A change while open: an item landed, or the list or stock moved. Neither event
             // carries an argument (`SignalEvent` `0x4fad92`, `0x4facaa`). The repair flag signals
             // nothing: `CanMerchantRepair` reads it live (`0x4fba80` → `0x4fadb0`).
@@ -693,7 +692,7 @@ fn feed_merchant(
                     ..was.clone()
                 } != *now =>
             {
-                script.fire_event("MERCHANT_UPDATE", vec![]);
+                fires.post("MERCHANT_UPDATE", vec![]);
             }
             (Some(_), Some(_)) => {}
             // The core told the VM; a disconnect's clear tells it nothing.
@@ -703,7 +702,8 @@ fn feed_merchant(
     })
 }
 
-/// The vendor's cell `[0xbddfa0]`; `CloseMerchant` (`0x4fb120`) is the core itself.
+/// The vendor's cell `[0xbddfa0]`; `CloseMerchant` (`0x4fb120`) is the core itself, run inside
+/// its call ([`crate::script_calls::ScriptCallHost`]).
 impl LatchedWindow for MerchantOpen {
     const WINDOW: NpcWindow = NpcWindow::Merchant;
 
@@ -713,10 +713,6 @@ impl LatchedWindow for MerchantOpen {
 
     fn dispatched(world: &mut World) {
         close_core(world);
-    }
-
-    fn take_close_verb(script: &mut UiScript) -> bool {
-        script.take_merchant_close()
     }
 }
 
@@ -749,28 +745,13 @@ pub(crate) fn open_merchant(world: &mut World, vendor: u64, items: Vec<VendorIte
 /// The close core's tail (`0x4fadf0`, every close's): a vendor row held on the cursor, mode 5 with
 /// its entry stored (`0x4fae31`, `[0xb4b41c]` through `0x495170`), is cleared (`0x4fae4a` →
 /// `ClearCursor(1, 1)`), after `MERCHANT_CLOSED`.
-fn drop_held_vendor_row(script: &mut UiScript) {
+pub(crate) fn drop_held_vendor_row(script: &mut UiScript) {
     if matches!(
         script.held_cursor().payload(),
         Some(benilla_ui::script::CursorPayload::Merchant(_))
     ) {
         script.clear_cursor_payload();
     }
-}
-
-/// Drain `CloseMerchant`, which clears locally, as there is no close packet: the close core needs
-/// the latch (Part of #2202). Every other merchant verb applies inside its call
-/// ([`MerchantSteps`]).
-fn drain_merchant(mut hosted_vm: crate::script_calls::HostedVm, mut commands_q: Commands) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        if script.take_merchant_close() {
-            debug!("ui_merchant: client-side close (no packet)");
-            crate::ui_session::queue(&mut commands_q, close_core);
-        }
-    })
 }
 
 /// A right mouse-down in the world ends repair mode: the WorldFrame hook `0x492c20` resets the
@@ -1781,53 +1762,5 @@ mod tests {
             .resource_mut::<NameCache>()
             .insert_player(VENDOR, "Vendor".into(), None);
         assert!(tick(&mut app).is_empty(), "a landed name fires nothing");
-    }
-
-    /// Every merchant close runs the core `0x4fadf0`, whose tail clears a vendor row held on the
-    /// cursor (`0x4fae31`-`0x4fae4a`): `CloseMerchant` here, through the feed's close edge.
-    #[test]
-    fn closing_the_vendor_drops_a_held_vendor_row() {
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let mut app = App::new();
-        app.init_resource::<Items>()
-            .init_resource::<crate::net::GuidIndex>()
-            .init_resource::<MerchantOpen>()
-            .init_resource::<MerchantErrors>()
-            .init_resource::<NameCache>()
-            .init_resource::<crate::net::Reputations>()
-            .init_resource::<crate::ui_chat::ChatLog>()
-            .init_resource::<crate::sound::MessageSounds>()
-            .insert_resource(NetCommands(tx))
-            .add_systems(Update, (drain_merchant, feed_merchant).chain());
-        app.insert_non_send_resource(UiScript::new().unwrap());
-        app.world_mut()
-            .resource_mut::<MerchantOpen>()
-            .open(0xF130_0000_0000_0E1D, Vec::new());
-        app.update();
-        {
-            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
-            s.set_merchant(Some(benilla_ui::script::MerchantState {
-                items: vec![benilla_ui::script::MerchantItem {
-                    name: Some("Refreshing Spring Water".into()),
-                    price: 25,
-                    quantity: 5,
-                    num_available: -1,
-                    item_id: 159,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }));
-            s.run("PickupMerchantItem(1) CloseMerchant()").unwrap();
-            assert!(matches!(
-                s.cursor_payload(),
-                Some(benilla_ui::script::CursorPayload::Merchant(_))
-            ));
-        }
-        app.update();
-        assert!(app
-            .world()
-            .non_send_resource::<UiScript>()
-            .cursor_payload()
-            .is_none());
     }
 }

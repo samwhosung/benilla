@@ -1,8 +1,10 @@
-//! The bank window's app side: the open banker, the purchase row, the bank events and the Lua
-//! intents. The vault itself is descriptor fields that [`crate::ui_items`] feeds as containers
-//! `-1` and `5..=10`, and moves items in and out of on a right-click.
+//! The bank window's app side: the open banker, the purchase row, the bank events and the bank
+//! verbs' engine half ([`BankSteps`]). The vault itself is descriptor fields that
+//! [`crate::ui_items`] feeds as containers `-1` and `5..=10`, and moves items in and out of on a
+//! right-click.
 
 use benilla_protocol::messages::bank_slot_result;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use benilla_ui::script::{BankState, UiScript};
@@ -42,7 +44,8 @@ impl BankOpen {
     }
 }
 
-/// The banker's cell `[0xbdd038]`; `CloseBankFrame` (`0x4f87d0`) is the core with a zero guid.
+/// The banker's cell `[0xbdd038]`; `CloseBankFrame` (`0x4f87d0`) is the core with a zero guid,
+/// run inside its call ([`crate::script_calls::ScriptCallHost`]).
 impl LatchedWindow for BankOpen {
     const WINDOW: NpcWindow = NpcWindow::Bank;
 
@@ -53,16 +56,12 @@ impl LatchedWindow for BankOpen {
     fn dispatched(world: &mut World) {
         close_core(world);
     }
-
-    fn take_close_verb(script: &mut UiScript) -> bool {
-        script.take_bank_close()
-    }
 }
 
-/// The close core, `0x4f84d0` with a zero guid: `BANKFRAME_CLOSED` first and with no test of the
-/// cell (`0x4f84df`), so `CloseBankFrame()` on a closed bank fires it too; then the latch release
-/// on the cell as it stands after the fire (`0x4f84eb`), and the cell cleared (`0x4f84f2`). The
-/// fire comes before the clear, so `OnHide`'s `CloseBankFrame()` re-enters with the cell set.
+/// The close core, `0x4f84d0` with a zero guid, as `0x493310` enters it: `BANKFRAME_CLOSED` first
+/// and with no test of the cell (`0x4f84df`); then the latch release on the cell as it stands
+/// after the fire (`0x4f84eb`), and the cell cleared (`0x4f84f2`). The fire comes before the
+/// clear, so `OnHide`'s `CloseBankFrame()` re-enters with the cell set.
 pub(crate) fn close_core(world: &mut World) {
     crate::ui_session::fire(world, |script| {
         script.fire_event("BANKFRAME_CLOSED", vec![]);
@@ -101,12 +100,9 @@ impl Plugin for UiBankPlugin {
             .add_latched_window::<BankOpen>()
             .add_systems(
                 Update,
-                (
-                    feed_bank
-                        .in_set(UiFeed)
-                        .in_set(crate::ui_session::NpcWindowFeed),
-                    drain_bank.in_set(crate::ui_script::UiDrain),
-                ),
+                (feed_bank
+                    .in_set(UiFeed)
+                    .in_set(crate::ui_session::NpcWindowFeed),),
             );
     }
 }
@@ -127,8 +123,7 @@ fn bank_slot_error_key(result: u32) -> Option<&'static str> {
 /// `BANKFRAME_OPENED` has no arguments: the reference fires it bare (`0x4f8522`), and stock
 /// `BankFrame.lua:127` titles with `UnitName("npc")`.
 fn feed_bank(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    open: Res<BankOpen>,
+    mut vm: crate::script_calls::VmWith<Res<'static, BankOpen>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     prices: Option<Res<BankPrices>>,
     mut errors: ResMut<BankErrors>,
@@ -136,7 +131,8 @@ fn feed_bank(
     mut closes: CoreCloses,
     mut sink: crate::ui_action::MessageSink,
 ) {
-    hosted_vm.run(|script| {
+    let banker = vm.own().banker;
+    vm.run(|script| {
         let Some(script) = script else {
             return;
         };
@@ -155,7 +151,7 @@ fn feed_bank(
         let purchased = store
             .and_then(|s| s.0.player_bank_bag_slots_purchased())
             .unwrap_or(0);
-        let fresh = open.banker.map(|_| BankState {
+        let fresh = banker.map(|_| BankState {
             num_purchased: u32::from(purchased),
             next_cost: prices
                 .as_ref()
@@ -177,29 +173,79 @@ fn feed_bank(
     })
 }
 
-/// Drain the Lua intents: `PurchaseSlot()` sends the buy, `CloseBankFrame()` runs the core,
-/// sending nothing.
-fn drain_bank(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    open: Res<BankOpen>,
-    net: Res<NetCommands>,
-    mut commands: Commands,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
+/// The bank verbs' engine half, which the call host applies inside each call
+/// ([`crate::script_calls::ScriptCallHost`]): the banker's cell, and what `PurchaseSlot` reads and
+/// sends through.
+#[derive(SystemParam)]
+pub(crate) struct BankSteps<'w, 's> {
+    /// Absent in a world with no bank window, which drops the calls.
+    open: Option<ResMut<'w, BankOpen>>,
+    net: Res<'w, NetCommands>,
+    me: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
+    prices: Option<Res<'w, BankPrices>>,
+    /// The player-control flag `[0xb4b3e4]`, clear while control is lost.
+    control: Option<Res<'w, crate::player::OwnControlLost>>,
+    /// The interaction target `[0xb4e2d0]`, which the purchase names (`0x4f8785`).
+    latch: Option<Res<'w, crate::ui_session::InteractLatch>>,
+    sink: crate::ui_action::MessageSink<'w>,
+}
+
+impl BankSteps<'_, '_> {
+    /// The banker's cell `[0xbdd038]`.
+    pub(crate) fn banker(&self) -> Option<u64> {
+        self.open.as_deref().and_then(|o| o.banker)
+    }
+
+    /// The close core's clear of the cell (`0x4f84f2`), and the VM's purchase row with it:
+    /// whether a banker was stored.
+    pub(crate) fn clear_banker(&mut self, script: &mut UiScript) -> bool {
+        let Some(open) = self.open.as_deref_mut().filter(|o| o.is_open()) else {
+            return false;
+        };
+        open.clear();
+        script.set_bank(None);
+        true
+    }
+
+    /// `PurchaseSlot()` (`0x4f86b0`) inside its call: nothing without the active player
+    /// (`0x4f86d6`), control (`0x4f86e3`) or a banker (`0x4f86f4`), or with six slots bought
+    /// (`0x4f8703`); a purse below the next slot's price (`0x4f8690`, 0 with no row) shows
+    /// `ERR_BANKSLOT_INSUFFICIENT_FUNDS` (`0x4f8748`), else `CMSG_BUY_BANK_SLOT` goes out with the
+    /// interaction target (`0x4f8785`-`0x4f87a1`).
+    pub(crate) fn purchase(&mut self, script: &mut UiScript) {
+        let Some(store) = self.me.iter().next() else {
             return;
         };
-        if script.take_bank_purchase() {
-            if let Some(banker) = open.banker {
-                debug!("bank: purchase next bag slot at {banker:#x}");
-                let _ = net.0.send(ClientCommand::BuyBankSlot { guid: banker });
+        let lost = self.control.as_deref().is_some_and(|c| c.0);
+        if lost || self.banker().is_none() {
+            return;
+        }
+        let bought = store.0.player_bank_bag_slots_purchased().unwrap_or(0);
+        if bought >= 6 {
+            return;
+        }
+        let price = self
+            .prices
+            .as_ref()
+            .and_then(|p| p.0.next_slot_price(bought))
+            .unwrap_or(0);
+        if store.0.player_money().unwrap_or(0) < price {
+            let input = script.input_events();
+            if let Some(line) =
+                crate::ui_action::keyed_line(script, "ERR_BANKSLOT_INSUFFICIENT_FUNDS")
+            {
+                crate::ui_action::show_now(script, &mut self.sink, "ui_bank", line.under(input));
             }
+            return;
         }
-        if script.take_bank_close() {
-            debug!("bank: CloseBankFrame");
-            crate::ui_session::queue(&mut commands, close_core);
-        }
-    })
+        let guid = self
+            .latch
+            .as_deref()
+            .and_then(crate::ui_session::InteractLatch::guid)
+            .unwrap_or(0);
+        debug!("bank: purchase next bag slot at {guid:#x}");
+        let _ = self.net.0.send(ClientCommand::BuyBankSlot { guid });
+    }
 }
 
 #[cfg(test)]

@@ -95,16 +95,17 @@ pub enum StableCall {
     /// active player holds a charm or a summon, or is not held (`0x4caf4e`-`0x4caf88`), then sends
     /// the unstable request with the stored master's guid, 0 when none (`0x4caff7`-`0x4cb00c`).
     Unstable(u32),
+    /// `ClosePetStables()` (`0x4cae40`): the close core `0x4cae10`.
+    Close,
 }
 
-/// The window's own state beside the snapshot: the selection and the close flag.
+/// The window's own state beside the snapshot: the selection.
 #[derive(Clone, Debug)]
 pub(crate) struct StableModel {
     pub(crate) state: Option<StableState>,
     /// The selection as the client holds it (`[0xb72250]`): -1 the summoned pet, 0 nothing, else
     /// a pet number, so a pet no longer listed reads back as nothing (`0x4cb84c`).
     pub(crate) selected: i32,
-    pub(crate) close: bool,
     /// The summoned pet's creature-cache display while the client holds its unit: `[unit+0xb30]`
     /// is the unit's cache record (`0x60b131`), whose display `0x505a70` reads at `[rec+0x2c]`
     /// (`0x505a83`). Apart from the snapshot, whose changes fire the window's events.
@@ -118,7 +119,6 @@ impl Default for StableModel {
         Self {
             state: None,
             selected: 0,
-            close: false,
             live_pet_display: None,
         }
     }
@@ -147,9 +147,10 @@ impl super::UiScript {
     pub fn take_stable_intents(&mut self) -> Vec<StableIntent> {
         self.take_stable_calls()
             .into_iter()
-            .map(|call| match call {
-                StableCall::Request(intent) | StableCall::Drop(intent) => intent,
-                StableCall::Unstable(pet_number) => StableIntent::Unstable(pet_number),
+            .filter_map(|call| match call {
+                StableCall::Request(intent) | StableCall::Drop(intent) => Some(intent),
+                StableCall::Unstable(pet_number) => Some(StableIntent::Unstable(pet_number)),
+                StableCall::Close => None,
             })
             .collect()
     }
@@ -160,11 +161,6 @@ impl super::UiScript {
             super::ScriptCall::Stable(call) => Some(*call),
             _ => None,
         })
-    }
-
-    /// Whether `ClosePetStables()` was called since the last drain; no packet exists for it.
-    pub fn take_stable_close(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().stable.close)
     }
 
     /// `GetSelectedStablePet()`'s answer, translated from the held pet number: 0 the summoned
@@ -597,14 +593,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ClosePetStables() (`0x4cae40`): no packet exists; the close core releases the interaction
-    // latch, which the app holds, so it stays the app's to drain.
+    // ClosePetStables() (`0x4cae40`): no packet exists; the close core `0x4cae10` inside the
+    // call.
     g.set(
         "ClosePetStables",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.stable.close = true;
-            Ok(())
+            super::calls::submit(lua, super::ScriptCall::Stable(StableCall::Close))
         })?,
     )?;
 
@@ -890,14 +884,12 @@ mod tests {
     }
 
     #[test]
-    fn close_drains_and_leaves_the_cursor_alone() {
+    fn close_is_a_call_and_leaves_the_cursor_alone() {
         let mut s = UiScript::new().unwrap();
         s.keep_calls();
         open(&mut s);
-        assert!(!s.take_stable_close());
         s.eval::<()>("ClosePetStables()").unwrap();
-        assert!(s.take_stable_close());
-        assert!(!s.take_stable_close(), "drain clears");
+        assert_eq!(s.take_stable_calls(), [StableCall::Close]);
     }
 
     /// `0x4cb870` reads its frame argument as a table (`0x4cb89a`, else the usage at `0x848f78`).

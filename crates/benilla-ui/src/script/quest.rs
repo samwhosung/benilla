@@ -190,13 +190,6 @@ impl super::UiScript {
         model.quest = state;
     }
 
-    /// Whether `CloseQuest()` ran since the last take: its binding (`0x501a10`) calls only the
-    /// teardown `0x501130(0,1)`, which the app runs; a close core answers the call its own
-    /// `QUEST_FINISHED` raised through `OnHide`.
-    pub fn take_quest_close(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().quest_close)
-    }
-
     /// The quest calls a harness's VM kept ([`Self::keep_calls`]), in call order.
     pub fn take_quest_calls(&mut self) -> Vec<QuestCall> {
         self.take_calls_where(|call| match call {
@@ -531,13 +524,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // send is `MSG_QUEST_PUSH_RESULT` DECLINE for a player source.
     g.set(
         "CloseQuest",
-        lua.create_function(|lua, ()| {
-            submit(lua, QuestCall::Close)?;
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .quest_close = true;
-            Ok(())
-        })?,
+        lua.create_function(|lua, ()| submit(lua, QuestCall::Close))?,
     )?;
 
     // GetQuestBackgroundMaterial() → nil or a material name (`0x502230`).
@@ -1021,8 +1008,6 @@ mod tests {
             s.take_quest_calls(),
             vec![QuestCall::Decline, QuestCall::Close]
         );
-        assert!(s.take_quest_close());
-        assert!(!s.take_quest_close(), "taken");
     }
 
     /// `ConfirmAcceptQuest` is a call each time, held confirm or none (`0x5021b0`).

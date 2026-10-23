@@ -2,8 +2,8 @@
 //! call ([`crate::script_calls::ScriptCallHost`]): each verb's gates and its packet before the verb
 //! returns, as the reference's bindings send in their own bodies (`0x5012a0`, `0x501320`,
 //! `0x501380`, `0x5013f0`, `0x501560`, `0x5015b0`, `0x5021b0`, `0x4df070`, `0x4e1340`). A verb that
-//! closes the window zeroes its cell in the call and leaves the rest of the close core, which
-//! holds the whole world, to [`super::drain_quest`] ([`QuestGiver::closing`]).
+//! closes the window runs the teardown `0x501130` as far as its cell, and hands the host the rest,
+//! the latch's release and `QUEST_FINISHED`.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -26,8 +26,9 @@ pub(crate) struct QuestVerbs<'w, 's> {
 }
 
 impl QuestVerbs<'_, '_> {
-    /// Apply one quest call.
-    pub(crate) fn apply(&mut self, script: &mut UiScript, call: QuestCall) {
+    /// Apply one quest call: the source a teardown zeroed the cell of, whose release and
+    /// `QUEST_FINISHED` the host owes next ([`Self::teardown`]).
+    pub(crate) fn apply(&mut self, script: &mut UiScript, call: QuestCall) -> Option<u64> {
         let send = |net: &NetCommands, command| {
             let _ = net.0.send(command);
         };
@@ -40,22 +41,21 @@ impl QuestVerbs<'_, '_> {
             QuestCall::Abandon(slot) => send(&self.net, ClientCommand::QuestlogRemove { slot }),
             QuestCall::Push(quest) => send(&self.net, ClientCommand::PushQuestToParty { quest }),
             QuestCall::Select(select) => self.select(select),
-            QuestCall::Accept => self.accept(script),
-            QuestCall::Decline => self.decline(),
+            QuestCall::Accept => return self.accept(script),
+            QuestCall::Decline => return self.decline(),
             QuestCall::Complete => self.complete(),
             QuestCall::Reward(choice) => self.reward(script, choice),
-            QuestCall::Close => self.teardown(true),
+            QuestCall::Close => return self.teardown(true),
         }
+        None
     }
 
-    /// The teardown `0x501130(0, report)` as far as the call goes: nothing with the cell zero
+    /// The teardown `0x501130(0, report)` as far as its cell: nothing with the cell zero
     /// (`0x501149`); with `report`, a sharing player in view is sent `MSG_QUEST_PUSH_RESULT`
-    /// DECLINE (`0x501159`-`0x5011e0`); then the cell is zeroed (`0x501201`). The latch release
-    /// and `QUEST_FINISHED` hold the whole world, so they wait for the drain (`closing`).
-    fn teardown(&mut self, report: bool) {
-        let Some(source) = self.giver.as_deref().and_then(|g| g.npc) else {
-            return;
-        };
+    /// DECLINE (`0x501159`-`0x5011e0`); then the cell is zeroed (`0x501201`). The source, whose
+    /// latch release (`0x50120d`) and `QUEST_FINISHED` (`0x501217`) the host runs next.
+    fn teardown(&mut self, report: bool) -> Option<u64> {
+        let source = self.giver.as_deref().and_then(|g| g.npc)?;
         // The lookup resolves only a player (`0x50116a`, type mask `0x10`).
         let sharer = self
             .objects
@@ -70,9 +70,9 @@ impl QuestVerbs<'_, '_> {
             });
         }
         if let Some(giver) = self.giver.as_deref_mut() {
-            giver.npc = None;
-            giver.closing = Some(source);
+            giver.clear();
         }
+        Some(source)
     }
 
     /// `0x5012a0` and `0x501320` over the pools, whatever panel shows: the row, less one, at most
@@ -133,16 +133,14 @@ impl QuestVerbs<'_, '_> {
     /// and the latch clear (`0x5013b0`); then `CMSG_QUESTGIVER_ACCEPT_QUEST` to the cell, 0 once
     /// closed (`0x5013c0`), the latch (`0x5013c9`), the close `0x501130(0,0)` (`0x5013d3`) and the
     /// Quest Log tutorial (`0x5013df`).
-    fn accept(&mut self, script: &mut UiScript) {
+    fn accept(&mut self, script: &mut UiScript) -> Option<u64> {
         let player = self.objects.player().is_some();
-        let Some(giver) = self.giver.as_deref_mut() else {
-            return;
-        };
+        let giver = self.giver.as_deref_mut()?;
         let Some(QuestView::Detail(d)) = giver.view.as_ref() else {
-            return;
+            return None;
         };
         if !player || giver.acted {
-            return;
+            return None;
         }
         let (npc, quest) = (giver.npc.unwrap_or(0), d.quest_id);
         let _ = self
@@ -150,31 +148,28 @@ impl QuestVerbs<'_, '_> {
             .0
             .send(ClientCommand::QuestgiverAccept { npc, quest });
         giver.acted = true;
-        self.teardown(false);
+        let closed = self.teardown(false);
         script.queue_tutorial_trigger(crate::tutorial::id::QUEST_LOG);
+        closed
     }
 
     /// `DeclineQuest`'s fork `0x5013f0` ([`decline_leg`]); a re-open sets the latch (`0x501479`,
     /// `0x501549`).
-    fn decline(&mut self) {
-        let Some(npc) = self.giver.as_deref().and_then(|g| g.npc) else {
-            return;
-        };
+    fn decline(&mut self) -> Option<u64> {
+        let npc = self.giver.as_deref().and_then(|g| g.npc)?;
         // The source as `0x468460` finds it, its type mask and `UNIT_NPC_FLAGS`; `None` unseen.
         let source = self
             .objects
             .object(npc)
             .map(|f| (f.object_type_mask().unwrap_or(0), f.unit_npc_flags()));
         let player = self.objects.player().is_some();
-        let Some(giver) = self.giver.as_deref_mut() else {
-            return;
-        };
+        let giver = self.giver.as_deref_mut()?;
         let leg = decline_leg(giver.acted, giver.close_on_cancel, source, player);
         debug!("ui_quest: decline on {npc:#x} — {leg:?}");
         match leg {
             DeclineLeg::Nothing => {}
             // The teardown leaves the latch clear (`0x5014aa`).
-            DeclineLeg::Teardown => self.teardown(true),
+            DeclineLeg::Teardown => return self.teardown(true),
             DeclineLeg::GossipHello => {
                 let _ = self.net.0.send(ClientCommand::GossipHello { guid: npc });
                 giver.acted = true;
@@ -184,6 +179,7 @@ impl QuestVerbs<'_, '_> {
                 giver.acted = true;
             }
         }
+        None
     }
 
     /// `0x501560`: the progress panel (`[0xbe0818] == 2`), the latch clear (`0x501570`) and the

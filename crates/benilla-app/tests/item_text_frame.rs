@@ -431,7 +431,9 @@ fn a_quest_givers_gossip_displaces_the_open_reader() {
     assert!(s.eval::<bool>("return GossipFrame:IsShown()").unwrap());
 
     // The reverse order: reading the note over an open gossip ends the gossip session.
-    let _ = s.take_gossip_close();
+    let _ = s.take_calls_like(&benilla_ui::script::ScriptCall::Gossip(
+        benilla_ui::script::GossipCall::Close,
+    ));
     s.set_item_text(Some(letter()));
     s.fire_event("ITEM_TEXT_BEGIN", vec![]);
     s.fire_event("ITEM_TEXT_READY", vec![]);
@@ -442,7 +444,9 @@ fn a_quest_givers_gossip_displaces_the_open_reader() {
         "the reader replaces gossip the same way"
     );
     assert!(
-        s.take_gossip_close(),
+        s.take_calls_like(&benilla_ui::script::ScriptCall::Gossip(
+            benilla_ui::script::GossipCall::Close
+        )) > 0,
         "the displaced gossip's OnHide ended the gossip session (CloseGossip)"
     );
 }

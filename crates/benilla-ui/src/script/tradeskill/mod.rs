@@ -1,6 +1,6 @@
 //! The tradeskill bindings behind the stock `Blizzard_TradeSkillUI`: the app pushes a snapshot
 //! ([`UiScript::set_trade_skill`]) with recipes resolved from `Spell.dbc`, `SkillLineAbility.dbc`
-//! and bag counts, and drains the intents `DoTradeSkill` and `CloseTradeSkill` queue. The engine
+//! and bag counts, and applies the calls `DoTradeSkill` and `CloseTradeSkill` make. The engine
 //! owns the grouped, filtered list (`0x4fca20`); every Lua index, `SetTradeSkillItem`'s included,
 //! is 1-based into its whole sorted array, the displayed rows first ([`recipe_at`]). The filter,
 //! fold, repeat and close verbs fire their events inside the call, as the reference's do.
@@ -8,6 +8,21 @@
 use std::collections::HashSet;
 
 mod api;
+
+/// A profession window verb the host applies inside its call ([`super::ScriptCall::TradeSkill`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TradeSkillCall {
+    /// `DoTradeSkill(index, count)` past its gate (`0x500280`): the recipe's cast (`0x500314` →
+    /// `TryCastSpell 0x6e5a90`), `count` the clamped repeat it armed.
+    Do { spell_id: u32, count: u32 },
+    /// `CloseTradeSkill()` (`0x4fd7f0` → `0x4fc870`): the open marker `[0xbde040]` zeroed.
+    Close,
+}
+
+/// Hand `call` to the host, which applies it before this returns ([`super::calls::submit`]).
+fn submit(lua: &mlua::Lua, call: TradeSkillCall) -> mlua::Result<()> {
+    super::calls::submit(lua, super::ScriptCall::TradeSkill(call))
+}
 mod itemstats;
 pub(crate) mod view;
 
@@ -291,15 +306,23 @@ impl super::UiScript {
         self.model_ref().trade_skill_rows.len()
     }
 
-    /// Drains the `(spell id, count)` crafts `DoTradeSkill` queued; the app's repeat loop
-    /// (`0x4fd7b0`) sends one cast per item.
+    /// The `(spell id, count)` crafts `DoTradeSkill` handed a harness's VM ([`Self::keep_calls`]).
     pub fn take_trade_skill_dos(&mut self) -> Vec<(u32, u32)> {
-        std::mem::take(&mut self.model_mut().trade_skill_dos)
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::TradeSkill(TradeSkillCall::Do { spell_id, count }) => {
+                Some((*spell_id, *count))
+            }
+            _ => None,
+        })
     }
 
-    /// Whether `CloseTradeSkill` ran since the last drain; the close sends no packet.
-    pub fn take_trade_skill_close(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().trade_skill_close)
+    /// The `CloseTradeSkill` calls a harness's VM kept ([`Self::keep_calls`]).
+    pub fn take_trade_skill_closes(&mut self) -> usize {
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::TradeSkill(TradeSkillCall::Close) => Some(()),
+            _ => None,
+        })
+        .len()
     }
 
     /// Whether the VM holds the window open: `CloseTradeSkill` closes it in the verb, so a feed

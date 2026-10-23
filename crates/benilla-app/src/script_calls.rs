@@ -18,7 +18,12 @@
 use bevy::ecs::system::{SystemParam, SystemParamItem};
 use bevy::prelude::*;
 
-use benilla_ui::script::{CallHost, CallTail, PetitionCall, ScriptCall, TabardCall, UiScript};
+use benilla_ui::script::{
+    AuctionCall, BankCall, CallHost, CallTail, GossipCall, MailCall, MerchantCall, PetitionCall,
+    ScriptCall, StableCall, TabardCall, TaxiCall, TradeCall, TradeSkillCall, TrainerCall, UiScript,
+};
+
+mod windows;
 
 /// `DoEmote` (`0x5ef560`) in the reference's order: a posture emote's stand change to a state but 0
 /// runs its local apply's leave (`0x5f0790`), the loot close (`0x48f200` at `0x5f07d5`) then the
@@ -78,6 +83,17 @@ pub(crate) struct ScriptCallHost<'w, 's> {
                             crate::ui_logout::SessionSteps<'w>,
                             crate::tutorial::TutorialSteps<'w>,
                             crate::ui_session::LatchSteps<'w>,
+                        ),
+                    >,
+                    // The bank and the profession windows. A further window's applier joins this
+                    // set.
+                    ParamSet<
+                        'w,
+                        's,
+                        (
+                            crate::ui_bank::BankSteps<'w, 's>,
+                            crate::ui_tradeskill::TradeSkillSteps<'w>,
+                            crate::ui_craft::CraftSteps<'w>,
                         ),
                     >,
                 ),
@@ -572,11 +588,18 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::PickItem(pick) => popup = appliers.p1().pick_item(pick),
             ScriptCall::EnchantConfirm(answer) => popup = appliers.p1().confirm_enchant(answer),
             ScriptCall::Loot(call) => tail = appliers.p5().p1().apply(script, call),
+            ScriptCall::Auction(AuctionCall::Close) => self.close_auction(script, &mut at.mark),
             ScriptCall::Auction(call) => appliers.p4().p3().apply(script, call),
             ScriptCall::Social(call) => appliers.p4().p4().apply(script, call),
             ScriptCall::Party(request) => appliers.p4().p5().apply(script, request),
-            ScriptCall::Quest(call) => appliers.p5().p3().apply(script, call),
+            ScriptCall::Quest(call) => {
+                if let Some(giver) = appliers.p5().p3().apply(script, call) {
+                    self.finish_quest_teardown(script, &mut at.mark, giver);
+                }
+            }
+            ScriptCall::Gossip(GossipCall::Close) => self.close_gossip(script, &mut at.mark),
             ScriptCall::Gossip(call) => appliers.p5().p4().apply(script, call),
+            ScriptCall::Mail(MailCall::Close) => self.close_mail(script, &mut at.mark),
             ScriptCall::Mail(call) => appliers.p5().p2().apply(script, call),
             // The partner's slot 7 is the trade's, the bind the targeting cursor's.
             ScriptCall::Trade(
@@ -587,9 +610,20 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 let check = call == benilla_ui::script::TradeCall::TargetEnchant;
                 appliers.p1().trade_enchant(script, partner, check);
             }
+            ScriptCall::Trade(TradeCall::Close) => self.close_trade(script, &mut at.mark),
             ScriptCall::Trade(call) => tail = appliers.p4().p6().apply(call),
-            ScriptCall::Trainer(call) => tail = appliers.p5().p5().apply(call),
-            ScriptCall::Taxi(call) => tail = appliers.p5().p6().apply(call),
+            ScriptCall::Trainer(TrainerCall::Buy { trainer, spell_id }) => {
+                appliers.p5().p5().buy(trainer, spell_id);
+            }
+            ScriptCall::Trainer(TrainerCall::OpenOwn) => {
+                self.open_own_trainer(script, &mut at.mark);
+            }
+            ScriptCall::Trainer(TrainerCall::Close) => self.close_trainer(script, &mut at.mark),
+            ScriptCall::Taxi(TaxiCall::Close) => self.close_taxi(script, &mut at.mark),
+            ScriptCall::Taxi(call) => appliers.p5().p6().apply(call),
+            ScriptCall::Merchant(MerchantCall::Close) => {
+                self.close_merchant(script, &mut at.mark);
+            }
             ScriptCall::Merchant(call) => appliers.p5().p7().apply(script, call),
             ScriptCall::Guild(call) => appliers.p4().p7().p0().apply(script, call),
             ScriptCall::Petition(PetitionCall::CloseRegistrar) => tail = self.close_registrar(),
@@ -609,9 +643,17 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Skill(call) => appliers.p2().p3().p1().apply(call),
             ScriptCall::Reputation(call) => tail = appliers.p2().p3().p2().apply(script, call),
             ScriptCall::Pet(call) => appliers.p6().p1().apply(script, call),
+            ScriptCall::Stable(StableCall::Close) => self.close_stable(script, &mut at.mark),
             ScriptCall::Stable(call) => appliers.p6().p2().apply(call),
             ScriptCall::Session(request) => appliers.p2().p5().p0().apply(request),
             ScriptCall::Tutorial(call) => appliers.p2().p5().p1().apply(script, call),
+            ScriptCall::Bank(BankCall::Close) => self.close_bank(script, &mut at.mark),
+            ScriptCall::Bank(BankCall::Purchase) => appliers.p2().p6().p0().purchase(script),
+            ScriptCall::TradeSkill(TradeSkillCall::Do { spell_id, count }) => {
+                crate::ui_tradeskill::do_trade_skill(&mut appliers.p3(), spell_id, count);
+            }
+            ScriptCall::TradeSkill(TradeSkillCall::Close) => appliers.p2().p6().p1().close(),
+            ScriptCall::Craft(call) => appliers.p2().p6().p2().apply(call),
         }
         self.settle_selection(script, &mut at, owed);
         let appliers = &mut self.appliers;

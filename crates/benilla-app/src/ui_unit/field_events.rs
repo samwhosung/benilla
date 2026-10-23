@@ -38,9 +38,8 @@ pub(crate) struct NoticeFiring<'w, 's> {
     skill_lines: Option<Res<'w, crate::ui_spellbook::SkillLines>>,
     // The aura watcher's cache and the store its packet left.
     auras: crate::ui_aura::PlayerAuraWatch<'w, 's>,
-    // `SetPetGuid`'s trainer refresh reads the open trainer (`0x4bc860`-`0x4bc879`) and runs its
-    // close, which needs the latch, as a world turn after the notice.
-    trainer: Option<Res<'w, crate::ui_trainer::TrainerOpen>>,
+    // `SetPetGuid`'s trainer refresh, which reads the open trainer (`0x4bc860`-`0x4bc879`) and
+    // runs its close, which needs the latch: a world turn after the notice.
     commands: Commands<'w, 's>,
     // `SetPetGuid`'s unit lookup of the new guid (`0x4bc8e4`).
     index: Option<Res<'w, crate::net::GuidIndex>>,
@@ -118,8 +117,9 @@ impl NoticeFiring<'_, '_> {
     /// `SetPetGuid`'s signals in its order (`0x4bc847`-`0x4bc911`): on a change, `UNIT_PET`, then,
     /// with a pet trainer open and our player held, `TalkToTrainer` on it (`0x4bc8b2`), then, when
     /// the new guid resolves as a unit (`0x4bc8e4`) that `IsPlayerOrHunterPet` passes (`0x4bc8ef`),
-    /// `PET_UI_CLOSE` (`0x4bc907`); then `PET_BAR_UPDATE`. The trainer's close needs the latch, so
-    /// with one to refresh the rest runs as a world turn after this notice.
+    /// `PET_UI_CLOSE` (`0x4bc907`); then `PET_BAR_UPDATE`. The trainer's cell is the call host's
+    /// and its close needs the latch, so on a change the rest runs as a world turn after this
+    /// notice.
     fn pet_guid_set(&mut self, script: &mut UiScript, changed: bool, guid: u64) -> bool {
         if !changed {
             script.fire_event("PET_BAR_UPDATE", vec![]);
@@ -134,17 +134,15 @@ impl NoticeFiring<'_, '_> {
                 .and_then(|i| i.0.get(&guid))
                 .and_then(|&e| self.stores.get(e).ok())
                 .is_some_and(|unit| crate::ui_pet::is_player_or_hunter_pet(unit, guid, player));
-        let trainer = crate::ui_trainer::open_pet_trainer(self.trainer.as_deref())
-            .filter(|_| player.is_some());
-        let Some(trainer) = trainer else {
-            if closes {
-                script.fire_event("PET_UI_CLOSE", vec![]);
-            }
-            script.fire_event("PET_BAR_UPDATE", vec![]);
-            return false;
-        };
+        let player = player.is_some();
         self.commands.queue(move |world: &mut World| {
-            crate::ui_trainer::talk_to_trainer(world, trainer);
+            let trainer = crate::ui_trainer::open_pet_trainer(
+                world.get_resource::<crate::ui_trainer::TrainerOpen>(),
+            )
+            .filter(|_| player);
+            if let Some(trainer) = trainer {
+                crate::ui_trainer::talk_to_trainer(world, trainer);
+            }
             crate::ui_session::fire(world, |script| {
                 if closes {
                     script.fire_event("PET_UI_CLOSE", vec![]);

@@ -293,18 +293,6 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().trainer_item_waits)
     }
 
-    /// Whether `CloseTrainer` was called since the last drain; the close sends no packet.
-    pub fn take_trainer_close(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().trainer_close)
-    }
-
-    /// `OpenTrainer`'s close (`0x5df680` → `0x4d7440` with a zero guid), which the host asks for
-    /// once it has the player: the close core runs where every `CloseTrainer` does, as it needs
-    /// the latch (Part of #2202).
-    pub fn close_trainer_for_own_list(&mut self) {
-        self.model_mut().trainer_close = true;
-    }
-
     /// The trainer calls a harness's VM kept ([`Self::keep_calls`]), in call order.
     pub fn take_trainer_calls(&mut self) -> Vec<TrainerCall> {
         self.take_calls_where(|call| match call {
@@ -321,8 +309,11 @@ pub enum TrainerCall {
     /// the trainer's cell and the row's spell id (`0x4d8a11`-`0x4d8a26`).
     Buy { trainer: u64, spell_id: u32 },
     /// `OpenTrainer()` (`0x4d8cf0`): with a player (`0x4d8d24`), `TalkToTrainer` (`0x5df680`) on
-    /// the player's own guid, which closes the window and sends `CMSG_TRAINER_LIST`.
+    /// the player's own guid, which closes the window (`0x5df6bb`) and sends `CMSG_TRAINER_LIST`
+    /// (`0x5df6fc`).
     OpenOwn,
+    /// `CloseTrainer()` (`0x4d8d50`): the close core `0x4d7440` with a zero guid.
+    Close,
 }
 
 /// Hand `call` to the host, which applies it before this returns ([`super::calls::submit`]).
@@ -1257,15 +1248,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CloseTrainer(): sends no packet; the app runs the close core on the flag, as the core needs
-    // the latch (Part of #2202).
+    // CloseTrainer(): the close core, no packet, inside the call.
     g.set(
         "CloseTrainer",
-        lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.trainer_close = true;
-            Ok(())
-        })?,
+        lua.create_function(|lua, ()| submit(lua, TrainerCall::Close))?,
     )?;
 
     Ok(())

@@ -208,6 +208,14 @@ pub enum ScriptCall {
     /// A tutorial verb ([`super::TutorialCall`]): the bank's write and its packet inside the call
     /// (`0x4b59dc` → `0x4b54c0`).
     Tutorial(super::TutorialCall),
+    /// A bank verb ([`super::BankCall`]): `PurchaseSlot`'s refusal or packet, `CloseBankFrame`'s
+    /// close core, inside the call.
+    Bank(super::BankCall),
+    /// A profession window verb ([`super::TradeSkillCall`]): `DoTradeSkill`'s cast, the close's
+    /// marker, inside the call.
+    TradeSkill(super::TradeSkillCall),
+    /// The craft window's close ([`super::CraftCall`]): its marker, inside the call.
+    Craft(super::CraftCall),
 }
 
 /// The mode the four `TargetNearest*` shims hand the TAB cycler `0x493f60`, the only byte that
@@ -721,6 +729,11 @@ impl UiScript {
             .as_mut()
             .map(std::mem::take)
             .unwrap_or_default()
+    }
+
+    /// Take the kept calls equal to `call`, leaving the rest kept: how many there were.
+    pub fn take_calls_like(&mut self, call: &ScriptCall) -> usize {
+        self.take_calls_where(|kept| (kept == call).then_some(())).len()
     }
 
     /// Take the kept calls `pick` answers for, in call order, leaving the rest kept.

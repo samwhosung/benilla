@@ -987,33 +987,6 @@ mod tests {
         }
     }
 
-    /// A window the Lua closes hides before the frame paints: the drains that take a close
-    /// (`CloseGossip()` and its kin) queue it as a world command, which a sync point applies
-    /// ahead of the paint, so the frame the call is made never paints the window.
-    #[test]
-    fn a_window_the_lua_closes_is_hidden_before_the_paint() {
-        let mut app = headless_client();
-        if pass_order(&app).is_none() {
-            return;
-        }
-        let built = census(&mut app, Update, SyncPoints::Built);
-        let paint = one(&built, "::paint_script");
-        let late: Vec<&str> = [
-            "ui_gossip::drain_gossip",
-            "ui_merchant::drain_merchant",
-            "ui_trade::drain_trade",
-            "ui_bank::drain_bank",
-            "ui_quest::drain_quest",
-        ]
-        .into_iter()
-        .filter(|drain| !built.applies_before(one(&built, drain), paint))
-        .collect();
-        assert!(
-            late.is_empty(),
-            "drains whose closes apply after the paint: {late:?}"
-        );
-    }
-
     /// A follow the Lua asks (`FollowUnit`, `FollowByName`) starts the frame it is made: the
     /// request's reader runs after the drain that writes it.
     #[test]

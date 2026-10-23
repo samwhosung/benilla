@@ -115,7 +115,30 @@ impl AuctionVerbs<'_, '_> {
                     }
                 }
             }
+            // The driver promotes the column in the engine's stack with a session or without,
+            // as the drivers run with none (`0x4cd850`); a sort sends nothing.
+            AuctionCall::Sort { list, column } => {
+                if let Some(stack) = auction.sorts.0.get_mut(list) {
+                    stack.promote(column);
+                }
+            }
+            // The close core needs the latch, which the host lends beside this.
+            AuctionCall::Close => {}
         }
+    }
+
+    /// The auctioneer's cell `[0xb725f8]`.
+    pub(crate) fn auctioneer(&self) -> Option<u64> {
+        self.auction.as_deref().and_then(|a| a.auctioneer)
+    }
+
+    /// The close core's clear (`0x4cd613`-`0x4cd629`): the auctioneer, the house and the flags,
+    /// with the lists left standing, in the VM too.
+    pub(crate) fn clear_auctioneer(&mut self, script: &mut UiScript) {
+        if let Some(auction) = self.auction.as_deref_mut() {
+            auction.clear();
+        }
+        script.close_auction_session();
     }
 }
 

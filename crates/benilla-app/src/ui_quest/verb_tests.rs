@@ -98,14 +98,6 @@ impl Client {
             .map_err(|e| e.to_string())
     }
 
-    /// The questgiver window's drain, the frame's after the input pass.
-    pub(crate) fn drain(&mut self) {
-        self.app
-            .world_mut()
-            .run_system_cached(super::drain_quest)
-            .expect("the drain runs");
-    }
-
     /// `lua`'s string value, read with no host lent.
     pub(crate) fn eval(&self, lua: &str) -> String {
         self.app
@@ -249,8 +241,7 @@ fn each_questgiver_verb_is_on_the_wire_before_the_next_line() {
         c.open(view);
         c.run(&format!("{verb} RandomRoll(1, 100)")).unwrap();
         assert_eq!(c.sent(), [packet, ROLL.to_string()], "{verb}");
-        c.drain();
-        assert!(c.sent().is_empty(), "{verb}: nothing waits for the drain");
+        assert!(c.sent().is_empty(), "{verb}: nothing waits for a drain");
     }
 }
 
@@ -269,14 +260,12 @@ fn the_acted_latch_takes_one_verb_per_panel() {
     ] {
         c.open(view);
         c.run(&format!("{verb} {verb}")).unwrap();
-        c.drain();
         assert_eq!(c.sent().len(), 1, "{verb} twice sends once");
     }
     // A select latches the panel against the other verbs too.
     c.open(greeting());
     c.run("SelectAvailableQuest(1) SelectActiveQuest(1)")
         .unwrap();
-    c.drain();
     assert_eq!(c.sent().len(), 1);
 }
 
@@ -295,7 +284,6 @@ fn each_panel_verb_does_nothing_off_its_panel() {
     ] {
         c.open(view);
         c.run(verb).unwrap();
-        c.drain();
         assert!(c.sent().is_empty(), "{verb}");
     }
 }
@@ -308,7 +296,6 @@ fn the_reward_latch_comes_before_the_choice_range() {
     let mut c = Client::new(0);
     c.open(reward(2));
     c.run("GetQuestReward(2) GetQuestReward(5)").unwrap();
-    c.drain();
     assert_eq!(
         c.sent(),
         [format!(
@@ -321,7 +308,6 @@ fn the_reward_latch_comes_before_the_choice_range() {
         e.contains("Invalid reward choice in GetQuestReward([choice])"),
         "{e}"
     );
-    c.drain();
     assert!(c.sent().is_empty());
 }
 
@@ -412,7 +398,6 @@ fn decline_on(
         .resource_mut::<QuestGiver>()
         .close_on_cancel = close_on_cancel;
     c.run(lua).unwrap();
-    c.drain();
     let open = c.app.world().resource::<QuestGiver>().is_open();
     (c.sent(), open)
 }
@@ -554,7 +539,6 @@ fn the_pools_outlive_the_greeting_panel_and_the_window() {
 
     c.open(greeting());
     c.run("CloseQuest()").unwrap();
-    c.drain();
     c.sent();
     c.run("SelectActiveQuest(1)").unwrap();
     assert_eq!(c.sent(), ["QuestgiverComplete { npc: 0, quest: 5 }"]);
@@ -675,21 +659,19 @@ fn a_shared_quests_decline_zeroes_the_cell_before_the_next_line() {
     );
 }
 
-/// `CloseQuest` (`0x501a10` → `0x501130(0,1)`) zeroes the cell in its call too; the window's
-/// event teardown waits for the drain, and the panel verbs read the kind it leaves.
+/// `CloseQuest` (`0x501a10` → `0x501130(0,1)`) runs the teardown in its call too, and the panel
+/// verbs read the kind it leaves.
 #[test]
 fn close_quest_zeroes_the_cell_before_the_next_line() {
     let mut c = Client::new(0);
     c.open(detail());
     c.run("CloseQuest() AcceptQuest()").unwrap();
     assert_eq!(c.sent(), ["QuestgiverAccept { npc: 0, quest: 100 }"]);
-    c.drain();
     assert!(!c.app.world().resource::<QuestGiver>().is_open());
 
     let mut c = Client::new(0);
     c.open(progress());
     c.run("CloseQuest()").unwrap();
-    c.drain();
     c.sent();
     c.run("CompleteQuest()").unwrap();
     assert_eq!(c.sent(), ["QuestgiverRequestReward { npc: 0, quest: 100 }"]);

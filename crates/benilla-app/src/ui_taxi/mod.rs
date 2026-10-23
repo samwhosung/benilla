@@ -38,9 +38,6 @@ pub(crate) struct TaxiState {
     pub(crate) reply: Option<u32>,
     /// A first-visit learn (`SMSG_NEW_TAXI_PATH`) for [`feed_taxi`] to announce.
     pub(crate) discovered: bool,
-    /// The flight master a close inside `CloseTaxiMap`'s call cleared from the cell, whose latch
-    /// release waits for [`release_closed`].
-    pub(crate) released: Option<u64>,
     /// An open whose `TAXIMAP_OPENED` has yet to fire, and the Travel tutorial with it.
     pub(crate) opening: bool,
 }
@@ -66,12 +63,11 @@ impl TaxiState {
         self.reply = None;
         self.discovered = false;
         self.opening = false;
-        self.released = None;
     }
 }
 
 /// The flight master's cell `[0xbb4ab8]`; `CloseTaxiMap` (`0x4dcce0`) is the core itself, run
-/// inside its call ([`TaxiSteps`]), which leaves the latch's release to its verb here.
+/// inside its call ([`crate::script_calls::ScriptCallHost`]).
 impl LatchedWindow for TaxiState {
     const WINDOW: NpcWindow = NpcWindow::Taxi;
 
@@ -82,35 +78,6 @@ impl LatchedWindow for TaxiState {
     fn dispatched(world: &mut World) {
         close_core(world);
     }
-
-    fn take_close_verb(script: &mut UiScript) -> bool {
-        script.take_taxi_close()
-    }
-
-    fn close_verb(world: &mut World) {
-        release_closed(world);
-    }
-}
-
-/// The rest of a close `CloseTaxiMap` ran inside its call: `0x4931c0` on the flight master it
-/// cleared (`0x4dc105`), the goodbye and `0x493310`'s clear while the latch still names it, whose
-/// dispatch finds the cell already clear; then the feed starts over from closed.
-fn release_closed(world: &mut World) {
-    let Some(flightmaster) = world.resource_mut::<TaxiState>().released.take() else {
-        return;
-    };
-    crate::ui_session::release(world, flightmaster);
-    crate::ui_session::note_closed(world, NpcWindow::Taxi);
-}
-
-/// A `CloseTaxiMap` call's latch release ([`release_closed`]), outside any core's fire: the release
-/// needs the latch, which the call host holds only to read (Part of #2202).
-fn drain_taxi(mut hosted_vm: crate::script_calls::HostedVm, mut world_commands: Commands) {
-    hosted_vm.run(|script| {
-        if script.is_some_and(|script| script.take_taxi_close()) {
-            crate::ui_session::queue(&mut world_commands, release_closed);
-        }
-    })
 }
 
 /// The close core `0x4dc0f0`: with a map open, the latch release (`0x4dc105`), the cell cleared
@@ -165,8 +132,6 @@ pub(crate) fn open_map(world: &mut World, flightmaster: u64, nearest_node: u32, 
     if let Some(mut script) = world.get_non_send_resource_mut::<UiScript>() {
         script.reset_taxi_slots();
     }
-    // The register releases the latch itself, so a call's close owes it nothing more.
-    world.resource_mut::<TaxiState>().released = None;
     crate::ui_session::register(world, flightmaster);
     world
         .resource_mut::<TaxiState>()
@@ -372,7 +337,6 @@ impl Plugin for UiTaxiPlugin {
                         .in_set(crate::ui_session::NpcWindowFeed)
                         .after(crate::spell::group_relation::publish_group_roster),
                     feed_on_taxi.in_set(UiFeed),
-                    drain_taxi.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }

@@ -1,7 +1,7 @@
 //! The auction window's app side: [`net`] writes the wire into [`AuctionOpen`] and does in each
 //! handler what the reference's handler shows and signals, [`feed_auction`] pushes the pages into
-//! the VM and fires their events, the call host applies the verbs inside their calls
-//! ([`AuctionVerbs`]), and [`drain_auction`] follows the header clicks and the close verb.
+//! the VM and fires their events, and the call host applies the verbs inside their calls
+//! ([`AuctionVerbs`]), the header clicks and the close among them.
 //!
 //! The hello reply opens the window, not the click (`0x4cd570` fires `AUCTION_HOUSE_SHOW` inside
 //! the hello handler). Browse, Bids and Auctions are independent lists, as in the reference's
@@ -17,7 +17,7 @@
 use bevy::prelude::*;
 
 use benilla_protocol::messages::AuctionListEntry;
-use benilla_ui::auction_sort::{sort_column, AuctionSortStack};
+use benilla_ui::auction_sort::AuctionSortStack;
 use benilla_ui::script::{
     AuctionCategory, AuctionHighBidder, AuctionItemRow, AuctionListState, AuctionRowBid,
     AuctionState, AuctionSubCategory, UiScript, BIDDER, LIST, OWNER,
@@ -460,7 +460,8 @@ impl AuctionOpen {
     }
 }
 
-/// The auctioneer's cell `[0xb725f8]`; `CloseAuctionHouse` (`0x4ce160`) is the core itself.
+/// The auctioneer's cell `[0xb725f8]`; `CloseAuctionHouse` (`0x4ce160`) is the core itself, run
+/// inside its call ([`crate::script_calls::ScriptCallHost`]).
 impl LatchedWindow for AuctionOpen {
     const WINDOW: NpcWindow = NpcWindow::Auction;
 
@@ -470,10 +471,6 @@ impl LatchedWindow for AuctionOpen {
 
     fn dispatched(world: &mut World) {
         close_core(world);
-    }
-
-    fn take_close_verb(script: &mut UiScript) -> bool {
-        script.take_auction_close()
     }
 }
 
@@ -522,19 +519,14 @@ impl Plugin for UiAuctionPlugin {
             .add_sweep_leg(SweepLeg::Auction, close_core)
             .add_systems(
                 Update,
-                (
-                    // The feed before the input pass, and after `UnitFeed` so a row's tooltip reads
-                    // a landed template; the drain after the input pass so a header click or a
-                    // close lands the same frame.
-                    // Only with the interface up: a sale notice landing in the login burst would
-                    // otherwise be shown on the glue VM and lost.
-                    feed_auction
-                        .after(crate::ui_unit::UnitFeed)
-                        .in_set(UiFeed)
-                        .in_set(crate::ui_session::NpcWindowFeed)
-                        .run_if(crate::ui_script::ingame_ui_up),
-                    drain_auction.in_set(crate::ui_script::UiDrain),
-                ),
+                // The feed before the input pass, and after `UnitFeed` so a row's tooltip reads a
+                // landed template. Only with the interface up: a sale notice landing in the login
+                // burst would otherwise be shown on the glue VM and lost.
+                feed_auction
+                    .after(crate::ui_unit::UnitFeed)
+                    .in_set(UiFeed)
+                    .in_set(crate::ui_session::NpcWindowFeed)
+                    .run_if(crate::ui_script::ingame_ui_up),
             )
             .add_systems(
                 Update,
@@ -1003,28 +995,6 @@ fn feed_auction(
         if can_query != *last_can_query {
             script.set_auction_can_query(can_query);
             *last_can_query = can_query;
-        }
-    })
-}
-
-/// The header clicks into the app's copy of the stacks, and the close verb into its core; every
-/// other verb applies inside its call ([`AuctionVerbs`]).
-fn drain_auction(mut vm: VmWith<ResMut<'static, AuctionOpen>>, mut world_commands: Commands) {
-    vm.turn(|script, mut auction| {
-        let Some(script) = script else {
-            return;
-        };
-        // The VM sorted in the verb; the app's copy of the stacks follows each click, with a
-        // session or without, as the drivers run with none (`0x4cd850`). A sort sends nothing.
-        for (which, key) in script.take_auction_sorts() {
-            if let (Some(stack), Some(column)) = (auction.sorts.0.get_mut(which), sort_column(&key))
-            {
-                stack.promote(column);
-            }
-        }
-        // With no session a stray close finds no cell (`0x4cd5fb`).
-        if script.take_auction_close() && auction.auctioneer.is_some() {
-            crate::ui_session::queue(&mut world_commands, close_core);
         }
     })
 }

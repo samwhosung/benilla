@@ -610,8 +610,10 @@ fn on_pet_spells(In(ev): In<SessionEvent>, mut lists: ListTriggers) {
 
 /// Build the book: the known recipes of the open line, banded against the current rank.
 fn feed_trade_skill(
-    mut vm: crate::script_calls::VmWith<Res<'static, crate::spell::Cooldowns>>,
-    open: Res<TradeSkillOpen>,
+    mut vm: crate::script_calls::VmWith<(
+        Res<'static, crate::spell::Cooldowns>,
+        Res<'static, TradeSkillOpen>,
+    )>,
     actions: Res<PlayerActions>,
     spells: Option<Res<Spells>>,
     skill_lines: Option<Res<SkillLines>>,
@@ -626,7 +628,7 @@ fn feed_trade_skill(
     mut memo: Local<crate::ui_script::VmMemo<TradeMemo>>,
     mut engine: Local<TradeEngine>,
 ) {
-    vm.feed(|script, cooldowns, fires| {
+    vm.feed(|script, (cooldowns, open), fires| {
         let Some(script) = script else {
             return;
         };
@@ -798,29 +800,19 @@ pub(crate) fn landed(waits: &mut Vec<u32>, items: &Items) -> u32 {
     landed
 }
 
-/// Drain the Lua intents and feed the VM's repeat (`0x4fd7b0`) our own cast edges: `DoTradeSkill`
-/// arms it in the verb and casts through the one cast-send path, each GO recasts what the hook
-/// answers, and a failure disarms it.
+/// Feed the VM's repeat (`0x4fd7b0`) our own cast edges: `DoTradeSkill` arms it and casts inside
+/// its call ([`TradeSkillSteps`]), each GO recasts what the hook answers, and a failure disarms it.
 fn drain_trade_skill(
     mut vm: crate::script_calls::VmWith<(
         MessageReader<'static, 'static, CastEvent>,
         cast_target::CastTargeting<'static, 'static>,
         CastLadder<'static, 'static>,
     )>,
-    mut open: ResMut<TradeSkillOpen>,
 ) {
-    let edges = vm.turn(|script, (mut cast_events, targeting, mut ladder)| {
-        let Some(script) = script else {
+    let edges = vm.turn(|script, (mut cast_events, _, ladder)| {
+        if script.is_none() {
             return Vec::new();
-        };
-
-        // The verb reads the held list, not the open marker (`0x5002e1`, `0x5002e9`), so a recipe
-        // still held after a close casts (`0x500314`).
-        for (spell_id, count) in script.take_trade_skill_dos() {
-            debug!("ui_tradeskill: DoTradeSkill({spell_id}) ×{count}");
-            ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
         }
-
         let self_entity = ladder.self_player.single().ok().map(|(e, _)| e);
         cast_events
             .read()
@@ -847,11 +839,33 @@ fn drain_trade_skill(
             }
         });
     }
+}
 
-    if vm.run(|script| script.is_some_and(UiScript::take_trade_skill_close)) {
-        debug!("ui_tradeskill: client-side close (no packet)");
-        open.line = None;
+/// The profession window's verbs inside their calls ([`crate::script_calls::ScriptCallHost`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct TradeSkillSteps<'w> {
+    /// Absent in a world with no profession window, which drops the close.
+    open: Option<ResMut<'w, TradeSkillOpen>>,
+}
+
+impl TradeSkillSteps<'_> {
+    /// `CloseTradeSkill()` (`0x4fd7f0` → `0x4fc870`): the open marker `[0xbde040]` zeroed, no
+    /// packet.
+    pub(crate) fn close(&mut self) {
+        if let Some(open) = self.open.as_deref_mut() {
+            debug!("ui_tradeskill: client-side close (no packet)");
+            open.line = None;
+        }
     }
+}
+
+/// `DoTradeSkill(index, count)`'s cast (`0x500314` → `TryCastSpell 0x6e5a90`), inside its call.
+/// The verb reads the held list, not the open marker (`0x5002e1`, `0x5002e9`), so a recipe still
+/// held after a close casts.
+pub(crate) fn do_trade_skill(cast: &mut crate::spell::ScriptCast, spell_id: u32, count: u32) {
+    debug!("ui_tradeskill: DoTradeSkill({spell_id}) ×{count}");
+    let ctx = cast.targeting.context();
+    cast.ladder.send(spell_id, &ctx, CastCommit::Spell);
 }
 
 /// One of our own cast edges into the VM's repeat: every GO whose first guid is the player, not
@@ -1185,7 +1199,8 @@ mod tests {
             });
         app.world_mut()
             .spawn((ObjectStore(Default::default()), SelfPlayer));
-        let script = UiScript::new().unwrap();
+        let mut script = UiScript::new().unwrap();
+        script.keep_calls();
         script
             .run(
                 "CLOSES = 0 local f = CreateFrame('Frame') f:RegisterEvent('TRADE_SKILL_CLOSE') \
@@ -1203,10 +1218,10 @@ mod tests {
 
         app.world_mut().resource_mut::<TradeSkillOpen>().line = Some(197);
         app.update();
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .run("CloseTradeSkill()")
-            .unwrap();
+        crate::script_calls::with_hosted_vm(app.world_mut(), |vm| {
+            vm.expect("a VM").run("CloseTradeSkill()")
+        })
+        .unwrap();
         assert_eq!(closes(&app), 1, "the verb's own signal");
         app.world_mut().resource_mut::<TradeSkillOpen>().line = None;
         app.update();
@@ -1645,6 +1660,7 @@ mod tests {
     #[test]
     fn our_cast_edges_drive_the_vms_repeat() {
         let mut script = UiScript::new().unwrap();
+        script.keep_calls();
         script.set_trade_skill(Some(TradeSkillState {
             line: 197,
             line_name: "Tailoring".into(),
@@ -1791,10 +1807,11 @@ mod tests {
     #[test]
     fn a_craft_after_the_close_still_casts() {
         let (mut app, rx) = headless_tailor();
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .run("CloseTradeSkill() DoTradeSkill(2, 1)")
-            .unwrap();
+        crate::script_calls::with_hosted_vm(app.world_mut(), |vm| {
+            vm.expect("a VM")
+                .run("CloseTradeSkill() DoTradeSkill(2, 1)")
+        })
+        .unwrap();
         drain(&mut app);
         assert!(
             rx.try_iter().any(|c| matches!(
@@ -1811,14 +1828,12 @@ mod tests {
     #[test]
     fn each_recasts_handlers_read_the_count_its_edge_left() {
         let (mut app, _rx) = headless_tailor();
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .run(
+        crate::script_calls::with_hosted_vm(app.world_mut(), |vm| vm.expect("a VM").run(
                 "SEEN = '' local f = CreateFrame('Frame') \
                  f:RegisterEvent('UPDATE_TRADESKILL_RECAST') \
                  f:SetScript('OnEvent', function() SEEN = SEEN .. GetTradeskillRepeatCount() .. ' ' end) \
                  SelectTradeSkill(2) DoTradeSkill(2, 3)",
-            )
+            ))
             .unwrap();
         let me = app
             .world_mut()
@@ -1848,10 +1863,10 @@ mod tests {
     fn a_cancelled_cursor_disarms_the_batch() {
         use bevy::ecs::system::RunSystemOnce;
         let (mut app, _rx) = headless_tailor();
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .run("DoTradeSkill(2, 3)")
-            .unwrap();
+        crate::script_calls::with_hosted_vm(app.world_mut(), |vm| {
+            vm.expect("a VM").run("DoTradeSkill(2, 3)")
+        })
+        .unwrap();
         drain(&mut app);
         let repeat = |app: &App| {
             app.world()
@@ -1886,6 +1901,7 @@ mod tests {
         app.add_message::<crate::net::WorldEnterCascadeMessage>()
             .add_systems(Update, reset_crafts_on_world_enter);
         let mut script = UiScript::new().unwrap();
+        script.keep_calls();
         script.set_trade_skill(Some(TradeSkillState {
             line: 197,
             line_name: "Tailoring".into(),

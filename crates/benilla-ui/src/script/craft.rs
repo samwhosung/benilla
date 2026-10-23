@@ -361,6 +361,13 @@ impl CraftState {
     }
 }
 
+/// The craft window's close, which the host applies inside its call ([`super::ScriptCall::Craft`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CraftCall {
+    /// `CloseCraft()` (`0x4f6c00` → `0x4f5fe0`): the open marker `[0xbdcfb8]` zeroed.
+    Close,
+}
+
 impl super::UiScript {
     /// Push the open craft window's snapshot, or mark it closed with `None`, which keeps the
     /// list and selection as the reference's close does (`0x4f5fe0`). A push builds the rows
@@ -411,9 +418,13 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().craft_dos)
     }
 
-    /// Whether `CloseCraft` was called since the last drain; the close sends no packet.
-    pub fn take_craft_close(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().craft_close)
+    /// The `CloseCraft` calls a harness's VM kept ([`Self::keep_calls`]).
+    pub fn take_craft_closes(&mut self) -> usize {
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Craft(CraftCall::Close) => Some(()),
+            _ => None,
+        })
+        .len()
     }
 
     /// Whether the VM holds the window open: `CloseCraft` closes it in the verb, so a feed that
@@ -793,13 +804,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // CloseCraft() (`0x4f6c00` → `0x4f5fe0`): no packet. It zeroes the open marker alone
-    // (`[0xbdcfb8]`), so `GetNumCrafts` (`0x4f6e70`) still answers the held list, and signals
-    // `CRAFT_CLOSE` unconditionally (`0x4f5fef`); the flag tells the app to clear its state.
+    // (`[0xbdcfb8]`), the engine's inside the call, so `GetNumCrafts` (`0x4f6e70`) still answers
+    // the held list, and signals `CRAFT_CLOSE` unconditionally (`0x4f5fef`).
     g.set(
         "CloseCraft",
         lua.create_function(|lua, ()| {
+            super::calls::submit(lua, super::ScriptCall::Craft(CraftCall::Close))?;
             super::tick::verb(lua, |model| {
-                model.craft_close = true;
                 model.craft_open = false;
                 model.raise("CRAFT_CLOSE", Vec::new());
             });
@@ -975,6 +986,7 @@ mod tests {
     #[test]
     fn the_display_skill_line_answers_only_for_enchanting() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         let triple = |s: &UiScript| {
             s.eval::<(Option<String>, i64, i64)>("return GetCraftDisplaySkillLine()")
                 .unwrap()
@@ -1305,6 +1317,7 @@ mod tests {
     #[test]
     fn the_button_token_is_the_open_craft_types_word() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         let token = |s: &UiScript| {
             s.eval::<Option<String>>("return GetCraftButtonToken()")
                 .unwrap()
@@ -1443,12 +1456,12 @@ mod tests {
     #[test]
     fn a_close_keeps_the_list() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_craft(Some(state()));
         s.run("SelectCraft(1)").unwrap();
         let held = s.eval::<i64>("return GetNumCrafts()").unwrap();
         assert!(held > 0);
 
-        assert!(!s.take_craft_close());
         crate::script::tick::heard::listen(&s, &["CRAFT_CLOSE"], Some("GetNumCrafts()"));
         s.run("CloseCraft()").unwrap();
         assert_eq!(
@@ -1456,8 +1469,7 @@ mod tests {
             [format!("CRAFT_CLOSE {held}")]
         );
         assert!(!s.craft_open());
-        assert!(s.take_craft_close());
-        assert!(!s.take_craft_close(), "drained");
+        assert_eq!(s.take_craft_closes(), 1);
 
         s.set_craft(None);
         assert_eq!(s.eval::<i64>("return GetNumCrafts()").unwrap(), held);

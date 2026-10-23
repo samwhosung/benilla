@@ -1,5 +1,5 @@
 //! The bank bindings: the app pushes the open bank's snapshot ([`UiScript::set_bank`]), and
-//! `PurchaseSlot` and `CloseBankFrame` queue intents it drains.
+//! `PurchaseSlot` and `CloseBankFrame` hand the host their calls ([`BankCall`]).
 //!
 //! The vault is container `-1` (24 slots) and containers 5..=10 (the six bags), the reference's
 //! own ids (`BankFrame.lua:1-4`), so the container verbs work on it unchanged. The bag items
@@ -26,17 +26,23 @@ impl super::UiScript {
         self.model_mut().bank = state;
     }
 
-    /// Whether `PurchaseSlot()` was called since the last drain; the app sends
-    /// `CMSG_BUY_BANK_SLOT`. Success has no reply packet, only the `PLAYER_BYTES_2` byte-2 change
-    /// (`ItemHandler.cpp:934`).
-    pub fn take_bank_purchase(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().bank_purchase)
+    /// The bank calls a harness's VM kept ([`Self::keep_calls`]), in call order.
+    pub fn take_bank_calls(&mut self) -> Vec<BankCall> {
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Bank(call) => Some(*call),
+            _ => None,
+        })
     }
+}
 
-    /// Whether `CloseBankFrame()` was called since the last drain; no packet exists for it.
-    pub fn take_bank_close(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().bank_close)
-    }
+/// The bank's verbs the host applies inside their calls ([`super::ScriptCall::Bank`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BankCall {
+    /// `PurchaseSlot()` (`0x4f86b0`): its gates, its refusal and `CMSG_BUY_BANK_SLOT`. Success
+    /// has no reply packet, only the `PLAYER_BYTES_2` byte-2 change (`ItemHandler.cpp:934`).
+    Purchase,
+    /// `CloseBankFrame()` (`0x4f87d0`): the close core `0x4f84d0` with a zero guid.
+    Close,
 }
 
 /// Register the bank globals.
@@ -77,19 +83,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // PurchaseSlot(): the `CONFIRM_BUY_BANK_SLOT` popup's accept (`StaticPopup.lua:52`).
     g.set(
         "PurchaseSlot",
-        lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.bank_purchase = true;
-            Ok(())
+        lua.create_function(|lua, _: MultiValue| {
+            super::calls::submit(lua, super::ScriptCall::Bank(BankCall::Purchase))
         })?,
     )?;
 
     g.set(
         "CloseBankFrame",
-        lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.bank_close = true;
-            Ok(())
+        lua.create_function(|lua, _: MultiValue| {
+            super::calls::submit(lua, super::ScriptCall::Bank(BankCall::Close))
         })?,
     )?;
 
@@ -228,17 +230,15 @@ mod tests {
     }
 
     #[test]
-    fn purchase_and_close_flag_the_intents() {
+    fn purchase_and_close_are_calls() {
         let mut s = UiScript::new().unwrap();
-        assert!(!s.take_bank_purchase());
-        s.run("PurchaseSlot()").unwrap();
-        assert!(s.take_bank_purchase());
-        assert!(!s.take_bank_purchase(), "drained");
-
-        assert!(!s.take_bank_close());
-        s.run("CloseBankFrame()").unwrap();
-        assert!(s.take_bank_close());
-        assert!(!s.take_bank_close(), "drained");
+        s.keep_calls();
+        s.run("PurchaseSlot() CloseBankFrame()").unwrap();
+        assert_eq!(
+            s.take_bank_calls(),
+            [super::BankCall::Purchase, super::BankCall::Close]
+        );
+        assert!(s.take_bank_calls().is_empty());
     }
 
     /// The reference paints the vault through the inventory API (`BankFrame.lua:35`) while the app

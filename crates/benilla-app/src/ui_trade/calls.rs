@@ -114,8 +114,30 @@ impl TradeSteps<'_, '_> {
             TradeCall::TargetEnchant | TradeCall::ReplaceEnchant => {
                 debug!("ui_trade: {call:?} is the targeting cursor's, not the trade's");
             }
+            // The close core needs the latch, which the host lends beside this.
+            TradeCall::Close => {}
         }
         None
+    }
+
+    /// The partner's cell `[0xb71728]`, set only while the window is open.
+    pub(crate) fn partner_cell(&self) -> Option<u64> {
+        use crate::ui_session::LatchedWindow;
+        self.trade.as_deref().and_then(TradeSession::cell)
+    }
+
+    /// The close core's clear of the cell (`0x4bf516`), and the VM's window with it; both offers
+    /// stay for the handlers' getters, and for the next open to clear.
+    pub(crate) fn close_window(&mut self, script: &mut UiScript) {
+        if let Some(trade) = self.trade.as_deref_mut() {
+            trade.close_window();
+        }
+        script.close_trade_window();
+    }
+
+    /// The close core's last step, `CMSG_CANCEL_TRADE` open or not (`0x4bf527` → `0x5d4310`).
+    pub(crate) fn send_cancel(&mut self) {
+        let _ = self.net.0.send(ClientCommand::CancelTrade);
     }
 
     /// The partner's slot 7 as the trade bind and its clash check read it: `Some` with the record's

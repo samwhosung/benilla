@@ -266,10 +266,6 @@ fn close_gossip_zeroes_the_cell_and_keeps_the_slots() {
     c.run("CloseGossip()").unwrap();
     c.app
         .world_mut()
-        .run_system_cached(super::drain_gossip)
-        .expect("the drain runs");
-    c.app
-        .world_mut()
         .run_system_cached(super::feed_gossip)
         .expect("the feed runs");
     assert_eq!(

@@ -45,8 +45,14 @@ fn is_open(app: &App, window: W) -> bool {
     let world = app.world();
     match window {
         W::Trade => world.resource::<crate::ui_trade::TradeSession>().is_open(),
-        W::Gossip => world.resource::<crate::ui_gossip::GossipState>().npc.is_some(),
-        W::Quest => world.resource::<crate::ui_quest::QuestGiver>().npc.is_some(),
+        W::Gossip => world
+            .resource::<crate::ui_gossip::GossipState>()
+            .npc
+            .is_some(),
+        W::Quest => world
+            .resource::<crate::ui_quest::QuestGiver>()
+            .npc
+            .is_some(),
         W::Merchant => world
             .resource::<crate::ui_merchant::MerchantOpen>()
             .vendor
@@ -65,7 +71,10 @@ fn is_open(app: &App, window: W) -> bool {
             .resource::<crate::ui_auction::AuctionOpen>()
             .auctioneer
             .is_some(),
-        W::Stable => world.resource::<crate::ui_stable::StableOpen>().npc.is_some(),
+        W::Stable => world
+            .resource::<crate::ui_stable::StableOpen>()
+            .npc
+            .is_some(),
         _ => unreachable!("{window:?} is not closed here"),
     }
 }
@@ -89,8 +98,15 @@ fn each_close_verb_signals_twice_inside_its_call_while_latched() {
         );
         let times = if window == W::Quest { 1 } else { 2 };
         assert_eq!(n, times, "{window:?}");
-        assert_eq!(latch(&app), None, "{window:?}: the latch released inside the call");
-        assert!(!is_open(&app, window), "{window:?}: the cell cleared inside the call");
+        assert_eq!(
+            latch(&app),
+            None,
+            "{window:?}: the latch released inside the call"
+        );
+        assert!(
+            !is_open(&app, window),
+            "{window:?}: the cell cleared inside the call"
+        );
         let wire = sent(&rx);
         let expected: &[&str] = match window {
             // Each run of the core sends its cancel, open or not (`0x4bf527`).
@@ -110,10 +126,7 @@ fn a_close_listener_sends_ahead_of_the_core_rest() {
     open(&mut app, W::Trade, NPC);
     listen(&mut app, &["TRADE_CLOSED"], "RandomRoll(1, 2)");
     eval::<()>(&mut app, "CloseTrade()");
-    assert_eq!(
-        sent(&rx),
-        ["roll", "cancel trade", "roll", "cancel trade"]
-    );
+    assert_eq!(sent(&rx), ["roll", "cancel trade", "roll", "cancel trade"]);
 }
 
 /// The stock frames answer `*_CLOSED` with `HideUIPanel`, whose `OnHide` calls the close verb.
@@ -151,7 +164,11 @@ fn a_stock_on_hide_close_inside_the_fire_runs_as_the_reference() {
                 "{window:?}, walk-away {walk_away}"
             );
             assert_eq!(latch(&app), None);
-            assert!(app.world().non_send_resource::<UiScript>().errors().is_empty());
+            assert!(app
+                .world()
+                .non_send_resource::<UiScript>()
+                .errors()
+                .is_empty());
         }
     }
 }
@@ -175,6 +192,95 @@ fn the_profession_closes_zero_the_open_marker_inside_their_calls() {
             .line,
         None
     );
-    assert_eq!(app.world().resource::<crate::ui_craft::CraftOpen>().line, None);
+    assert_eq!(
+        app.world().resource::<crate::ui_craft::CraftOpen>().line,
+        None
+    );
     assert_eq!(sent(&rx), ["roll"]);
+}
+
+/// `CloseMail()` zeroes the mailbox inside its call (`0x4aded0` → `0x4acd8f`): a mail verb later
+/// in the same chunk finds none and sends nothing.
+#[test]
+fn close_mail_closes_before_the_next_verb() {
+    let (mut app, rx) = client();
+    open(&mut app, W::Mail, NPC);
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .set_mail(Some(benilla_ui::script::MailState {
+            inbox: Vec::new(),
+            open: true,
+        }));
+    eval::<()>(&mut app, "CloseMail() CheckInbox()");
+    let wire: Vec<_> = rx
+        .try_iter()
+        .filter(|c| matches!(c, ClientCommand::GetMailList { .. }))
+        .collect();
+    assert!(wire.is_empty(), "{wire:?}");
+}
+
+/// Every merchant close runs the core `0x4fadf0`, whose tail clears a vendor row held on the
+/// cursor (`0x4fae31`-`0x4fae4a`), inside `CloseMerchant()`'s call.
+#[test]
+fn close_merchant_drops_a_held_vendor_row_inside_its_call() {
+    let (mut app, _rx) = client();
+    open(&mut app, W::Merchant, NPC);
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .set_merchant(Some(benilla_ui::script::MerchantState {
+            items: vec![benilla_ui::script::MerchantItem {
+                name: Some("Refreshing Spring Water".into()),
+                price: 25,
+                quantity: 5,
+                num_available: -1,
+                item_id: 159,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+    let payload = |app: &App| app.world().non_send_resource::<UiScript>().cursor_payload();
+    eval::<()>(&mut app, "PickupMerchantItem(1)");
+    assert!(
+        matches!(
+            payload(&app),
+            Some(benilla_ui::script::CursorPayload::Merchant(_))
+        ),
+        "the row is on the cursor"
+    );
+    eval::<()>(&mut app, "CloseMerchant()");
+    assert!(payload(&app).is_none(), "the close's tail cleared it");
+}
+
+/// `OpenTrainer()` (`0x4d8cf0` → `TalkToTrainer 0x5df680`) closes the open window inside its call
+/// (`0x5df6bb`), its `TRAINER_CLOSED` listeners running ahead of `CMSG_TRAINER_LIST` for the
+/// player's own guid (`0x5df6fc`); with no player nothing happens at all (`0x4d8d24`).
+#[test]
+fn open_trainer_closes_the_window_before_it_asks_for_the_own_list() {
+    const ME: u64 = 0x10;
+    for with_player in [true, false] {
+        let (mut app, rx) = client();
+        if with_player {
+            app.world_mut()
+                .spawn((crate::net::Guid(ME), crate::net::SelfPlayer));
+        }
+        open(&mut app, W::Trainer, NPC);
+        listen(&mut app, &["TRAINER_CLOSED"], "RandomRoll(1, 2)");
+        eval::<()>(&mut app, "OpenTrainer()");
+        let wire: Vec<String> = rx
+            .try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::RandomRoll { .. } => Some("roll".to_string()),
+                ClientCommand::TrainerList { trainer } => Some(format!("list {trainer:#x}")),
+                _ => None,
+            })
+            .collect();
+        if with_player {
+            // Latched: the release re-enters the core, so two closes, each listener's roll first.
+            assert_eq!(wire, ["roll", "roll", "list 0x10"]);
+            assert!(!is_open(&app, W::Trainer));
+        } else {
+            assert!(wire.is_empty(), "{wire:?}");
+            assert!(is_open(&app, W::Trainer), "no player: nothing happens");
+        }
+    }
 }

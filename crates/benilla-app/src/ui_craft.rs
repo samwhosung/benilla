@@ -11,7 +11,9 @@ use benilla_formats::{
 };
 use benilla_protocol::messages::PLAYER_SKILL_SLOTS;
 use benilla_protocol::{SessionEvent, SessionEventKind};
-use benilla_ui::script::{CraftDifficulty, CraftReagent, CraftRecipe, CraftState, CraftTooltip};
+use benilla_ui::script::{
+    CraftCall, CraftDifficulty, CraftReagent, CraftRecipe, CraftState, CraftTooltip,
+};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
@@ -234,8 +236,7 @@ fn craft_tooltip(spell_id: u32, d: &benilla_formats::SpellDisplay) -> CraftToolt
 
 /// Builds the craft snapshot, `None` while the window is closed or the catalogs are not loaded.
 fn feed_craft(
-    mut vm: crate::script_calls::VmWith<PetReads<'static>>,
-    open: Res<CraftOpen>,
+    mut vm: crate::script_calls::VmWith<(PetReads<'static>, Res<'static, CraftOpen>)>,
     actions: Res<PlayerActions>,
     spells: Option<Res<Spells>>,
     spell_mods: Res<crate::spell::SpellModifiers>,
@@ -248,7 +249,7 @@ fn feed_craft(
     commands: Res<NetCommands>,
     mut memo: Local<crate::ui_script::VmMemo<CraftMemo>>,
 ) {
-    vm.feed(|script, pet_reads, fires| {
+    vm.feed(|script, (pet_reads, open), fires| {
         let Some(script) = script else {
             return;
         };
@@ -499,18 +500,19 @@ struct CraftMemo {
     item_waits: Vec<u32>,
 }
 
-/// Drains the Lua intents. `DoCraft` goes down the cast ladder: an enchant's `Targets = 0x10` arms
-/// the cursor's item half, a rod craft commits at once. `CloseCraft` closes the window, sends no
-/// packet and leaves an armed pick to the ordinary cancels (Escape, right-click, a new cast).
+/// Drains `DoCraft` down the cast ladder: an enchant's `Targets = 0x10` arms the cursor's item
+/// half, a rod craft commits at once. `CloseCraft` closes the window inside its call
+/// ([`CraftSteps`]), sends no packet and leaves an armed pick to the ordinary cancels (Escape,
+/// right-click, a new cast).
 fn drain_craft(
     mut vm: crate::script_calls::VmWith<(
         cast_target::CastTargeting<'static, 'static>,
         CastLadder<'static, 'static>,
+        Res<'static, CraftOpen>,
     )>,
-    mut open: ResMut<CraftOpen>,
     skill_lines: Option<Res<SkillLines>>,
 ) {
-    vm.turn(|script, (targeting, mut ladder)| {
+    vm.turn(|script, (targeting, mut ladder, open)| {
         let Some(script) = script else {
             return;
         };
@@ -523,11 +525,25 @@ fn drain_craft(
             debug!("ui_craft: DoCraft({spell_id})");
             ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
         }
-        if script.take_craft_close() {
+    })
+}
+
+/// The craft window's close inside its call ([`crate::script_calls::ScriptCallHost`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct CraftSteps<'w> {
+    /// Absent in a world with no craft window, which drops the call.
+    open: Option<ResMut<'w, CraftOpen>>,
+}
+
+impl CraftSteps<'_> {
+    /// `CloseCraft()` (`0x4f6c00` → `0x4f5fe0`): the open marker `[0xbdcfb8]` zeroed, no packet.
+    pub(crate) fn apply(&mut self, call: CraftCall) {
+        let CraftCall::Close = call;
+        if let Some(open) = self.open.as_deref_mut() {
             debug!("ui_craft: client-side close (no packet)");
             open.line = None;
         }
-    })
+    }
 }
 
 #[cfg(test)]
@@ -554,7 +570,8 @@ mod tests {
             });
         app.world_mut()
             .spawn((ObjectStore(Default::default()), SelfPlayer));
-        let script = UiScript::new().unwrap();
+        let mut script = UiScript::new().unwrap();
+        script.keep_calls();
         script
             .run(
                 "CLOSES = 0 local f = CreateFrame('Frame') f:RegisterEvent('CRAFT_CLOSE') \

@@ -249,12 +249,19 @@ fn closing_the_window_queues_the_cancel() {
     load_ui(&s);
     s.set_trade(Some(state()));
     s.fire_event("TRADE_SHOW", vec![]);
-    let _ = s.take_trade_close();
+    let _ = s.take_calls_like(&benilla_ui::script::ScriptCall::Trade(
+        benilla_ui::script::TradeCall::Close,
+    ));
 
     // The X hides the window, and its OnHide's `CloseTrade` queues the close.
     s.run("TradeFrameCloseButton:Click()").unwrap();
     assert!(!s.eval::<bool>("return TradeFrame:IsShown()").unwrap());
-    assert!(s.take_trade_close(), "closing queued the CloseTrade intent");
+    assert!(
+        s.take_calls_like(&benilla_ui::script::ScriptCall::Trade(
+            benilla_ui::script::TradeCall::Close
+        )) > 0,
+        "closing queued the CloseTrade intent"
+    );
     assert!(s.take_errors().is_empty());
 
     // A server-driven `TRADE_CLOSED` also hides it.

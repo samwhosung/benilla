@@ -6,6 +6,8 @@ use crate::script::binding_abi::{self, number_arg};
 use crate::script::item_stats::item_link;
 use crate::script::Model;
 
+use super::TradeSkillCall;
+
 use super::view::{
     first_recipe_index, fold_target, inv_slot_token, num_rows, present_inv_slots, recipe_at,
     refilter, rows, select, selected_index, set_collapsed, Row,
@@ -477,9 +479,10 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // DoTradeSkill(index, count): queues the recipe's spell for `count` crafts, which the app sends
-    // as one `CMSG_CAST_SPELL` each. More than one arms the repeat and signals
-    // `UPDATE_TRADESKILL_RECAST` before the first cast (`0x500307` → `0x4fd770`).
+    // DoTradeSkill(index, count) (`0x500280`): more than one arms the repeat and signals
+    // `UPDATE_TRADESKILL_RECAST` (`0x500307` → `0x4fd770`), then the host casts the recipe's
+    // spell inside the call (`0x500314`); the repeat's hook recasts the rest, one
+    // `CMSG_CAST_SPELL` each.
     g.set(
         "DoTradeSkill",
         lua.create_function(|lua, (index, count): (Value, Option<Value>)| {
@@ -494,12 +497,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             // (`0x6e4bc1`); the repeat is armed ahead of it (`0x500307`), so a refused call arms
             // it.
             let may_cast = crate::script::protected::gate(lua, crate::script::protected::Tag::CAST);
-            crate::script::tick::verb(lua, |model| {
-                let Some((spell_id, avail)) =
-                    recipe_at(model, index).map(|r| (r.spell_id, r.num_available))
-                else {
-                    return;
-                };
+            let cast = crate::script::tick::verb(lua, |model| {
+                let (spell_id, avail) =
+                    recipe_at(model, index).map(|r| (r.spell_id, r.num_available))?;
                 // The count, compared unsigned, clamps to numAvailable (`0x5002f5`-`0x5002fc`);
                 // above 1 it arms the repeat (`0x500301` → `0x4fd770`).
                 let n = (count as i32 as u32).min(avail);
@@ -508,23 +508,25 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                     model.trade_skill_repeat_count = n;
                     model.raise("UPDATE_TRADESKILL_RECAST", Vec::new());
                 }
-                if may_cast {
-                    model.trade_skill_dos.push((spell_id, n));
-                }
+                may_cast.then_some((spell_id, n))
             });
-            Ok(())
+            match cast {
+                Some((spell_id, count)) => super::submit(lua, TradeSkillCall::Do { spell_id, count }),
+                None => Ok(()),
+            }
         })?,
     )?;
 
     // CloseTradeSkill() (`0x4fd7f0` → `0x4fc870`): client-side only, no packet. It zeroes the
     // open marker alone (`[0xbde040]`), so `GetNumTradeSkills` (`0x4fd800`) still answers the
     // held list, disarms an armed repeat with its `UPDATE_TRADESKILL_RECAST` (`0x4fd790`), and
-    // signals `TRADE_SKILL_CLOSE` unconditionally (`0x4fc884`); the app clears its own state.
+    // signals `TRADE_SKILL_CLOSE` unconditionally (`0x4fc884`); the host zeroes the engine's
+    // marker inside the call.
     g.set(
         "CloseTradeSkill",
         lua.create_function(|lua, ()| {
+            super::submit(lua, TradeSkillCall::Close)?;
             crate::script::tick::verb(lua, |model| {
-                model.trade_skill_close = true;
                 model.trade_skill_open = false;
                 super::disarm_repeat(model);
                 model.raise("TRADE_SKILL_CLOSE", Vec::new());

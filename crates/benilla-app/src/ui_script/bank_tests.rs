@@ -18,8 +18,14 @@ fn empty_bag(name: &str, num_slots: u32) -> Option<ContainerState> {
 }
 
 /// [`BAG_UI`] carries the bank's whole chain, `BankFrame.xml` included; it needs client data.
+const BANK_CLOSE: benilla_ui::script::ScriptCall =
+    benilla_ui::script::ScriptCall::Bank(benilla_ui::script::BankCall::Close);
+const BANK_PURCHASE: benilla_ui::script::ScriptCall =
+    benilla_ui::script::ScriptCall::Bank(benilla_ui::script::BankCall::Purchase);
+
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for file in BAG_UI {
         load_xml(&s, file);
@@ -97,7 +103,7 @@ fn bankframe_closed_queues_close_closes_open_popouts_and_plays_the_close_kit() {
     s.set_bank(Some(BankState::default()));
     s.fire_event("BANKFRAME_OPENED", vec![ScriptValue::Str("Banker".into())]);
     let _ = s.take_sounds();
-    let _ = s.take_bank_close();
+    let _ = s.take_calls_like(&BANK_CLOSE);
 
     // A bank bag left open when the bank closes: what `CloseBankBagFrames` exists for.
     s.run("OpenBag(5)").unwrap();
@@ -116,7 +122,7 @@ fn bankframe_closed_queues_close_closes_open_popouts_and_plays_the_close_kit() {
         "closing the bank closes the bank bag it left open (CloseBankBagFrames)"
     );
     assert!(
-        s.take_bank_close(),
+        s.take_calls_like(&BANK_CLOSE) > 0,
         "OnHide queued CloseBankFrame() — the client-side close intent (no wire opcode)"
     );
     assert!(
@@ -342,15 +348,18 @@ fn purchase_flow_shows_popup_queues_the_intent_and_the_row_hides_when_full() {
         s.eval::<i64>("return BankFrame.nextSlotCost").unwrap(),
         100_000
     );
-    assert!(!s.take_bank_purchase(), "nothing queued until accept");
+    assert!(
+        s.take_calls_like(&BANK_PURCHASE) == 0,
+        "nothing queued until accept"
+    );
 
     s.run("StaticPopup1Button1:Click()").unwrap(); // Yes
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
     assert!(
-        s.take_bank_purchase(),
+        s.take_calls_like(&BANK_PURCHASE) > 0,
         "accepting the popup queued PurchaseSlot()'s intent"
     );
-    assert!(!s.take_bank_purchase(), "drained");
+    assert!(s.take_calls_like(&BANK_PURCHASE) == 0, "drained");
 
     // Six is full. A successful buy has no reply packet: `PLAYERBANKBAGSLOTS_CHANGED` repaints.
     s.set_bank(Some(BankState {

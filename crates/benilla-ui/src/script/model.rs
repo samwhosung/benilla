@@ -810,7 +810,6 @@ pub(crate) struct Model {
 
     /// The open gossip menu, and whether `CloseGossip` ran.
     pub(crate) gossip: Option<gossip::GossipMenu>,
-    pub(crate) gossip_close: bool,
 
     /// The open vendor's stock, the `BuyMerchantItem` calls and whether `CloseMerchant` ran.
     pub(crate) merchant: Option<merchant::MerchantState>,
@@ -821,7 +820,6 @@ pub(crate) struct Model {
     /// The buys a drop verb made of a held vendor row, into a slot or a bag, handed to the host as
     /// the verb returns ([`merchant::MerchantCall::BuyInSlot`], [`merchant::MerchantCall::BuyIntoBag`]).
     pub(crate) merchant_drops: Vec<merchant::MerchantCall>,
-    pub(crate) merchant_close: bool,
     /// Repair mode (`InRepairMode`).
     pub(crate) repair_mode: bool,
 
@@ -830,14 +828,11 @@ pub(crate) struct Model {
 
     /// The open bank's slot-purchase row and calls; its contents are bags -1 and 5..=10.
     pub(crate) bank: Option<bank::BankState>,
-    pub(crate) bank_purchase: bool,
-    pub(crate) bank_close: bool,
 
     /// The open trainer, its selection and close. The selection is a spell id, since filters,
     /// collapses and re-lists all move row numbers.
     pub(crate) trainer: Option<trainer::TrainerState>,
     pub(crate) trainer_selection: Option<u32>,
-    pub(crate) trainer_close: bool,
     /// The state filter `ds:0xb73a1c`: bit n set shows the services in state n.
     pub(crate) trainer_filter: u32,
     /// The item records the trainer getters' calls missed, one per call, until the app takes them.
@@ -867,7 +862,6 @@ pub(crate) struct Model {
     /// The open taxi map, whether a `CloseTaxiMap` call left the latch to release, and whether
     /// we ride.
     pub(crate) taxi: Option<taxi::TaxiUiState>,
-    pub(crate) taxi_close: bool,
     pub(crate) taxi_riding: bool,
 
     /// The tradeskill window's recipes, kept past a close as the reference's list (`[0xbde054]`)
@@ -875,8 +869,6 @@ pub(crate) struct Model {
     pub(crate) trade_skill: Option<tradeskill::TradeSkillState>,
     /// The window is open (`[0xbde040]`), which a close alone zeroes (`0x4fc870`).
     pub(crate) trade_skill_open: bool,
-    /// `DoTradeSkill` calls, `(spell id, count)`.
-    pub(crate) trade_skill_dos: Vec<(u32, u32)>,
     /// The row array as the last sort left it (`0xbddfc0`, full count `0xbde04c`), the displayed
     /// rows first, and the displayed count (`0xbde054`).
     pub(crate) trade_skill_rows: Vec<tradeskill::view::Row>,
@@ -886,7 +878,6 @@ pub(crate) struct Model {
     pub(crate) trade_skill_unbuilt: bool,
     /// The header array as the last sort left it (`0xbde000`).
     pub(crate) trade_skill_headers: Vec<tradeskill::view::TradeSkillGroup>,
-    pub(crate) trade_skill_close: bool,
     /// Collapsed recipe groups by `(ItemClass, ItemSubClass)` (`0x55ba30`), kept across a re-push
     /// and a same-profession reopen like the mask `0x84dd68`; a profession switch resets them.
     pub(crate) trade_skill_collapsed: HashSet<(u32, u32)>,
@@ -927,7 +918,6 @@ pub(crate) struct Model {
     /// The collapse mask (`0x84d0f0`), a clear bit a collapsed header by its array position; the
     /// open sets it to all ones (`0x4f602c`).
     pub(crate) craft_fold_mask: u32,
-    pub(crate) craft_close: bool,
 
     /// The open loot as the app pushed it; the verbs over it are script calls
     /// ([`loot::LootCall`]).
@@ -955,8 +945,6 @@ pub(crate) struct Model {
     /// the send's result (`0x4ad159`) or the compose reset (`0x4ace02`); `SendMail` returns while
     /// it is up (`0x4ae85e`).
     pub(crate) mail_send_pending: bool,
-    /// `CloseMail`, for the interaction latch's close.
-    pub(crate) mail_close: bool,
     /// The masked body the host answered the applying `GetInboxText` call with (`0x4af203`).
     pub(crate) mail_body_answer: Option<String>,
     pub(crate) mail_send_money: u32,
@@ -985,8 +973,6 @@ pub(crate) struct Model {
     /// The guids `GetAuctionItemInfo` missed in the name cache, each with the list whose callback
     /// it registers, for the app to ask (`0x4cf167`, `0x4cf1c8`).
     pub(crate) auction_name_asks: Vec<(u64, usize)>,
-    pub(crate) auction_sorts: Vec<(usize, String)>,
-    pub(crate) auction_close: bool,
     /// The sell slot's item, resolved to its guid when `StartAuction` fires.
     pub(crate) auction_sell_item: Option<cursor::CursorItem>,
 
@@ -1000,8 +986,6 @@ pub(crate) struct Model {
     /// The entries the item getters found filled and unnamed (`0x4c017f`, `0x4c0582`), for the
     /// host to ask the item cache for with the callback that signals `TRADE_UPDATE`.
     pub(crate) trade_record_asks: Vec<u32>,
-    /// `CloseTrade` was called: the interaction latch runs the close core.
-    pub(crate) trade_close: bool,
     /// The close core's done flag `[0xb71748]`, which `CloseTrade` tests (`0x4bfdc0`).
     pub(crate) trade_done: bool,
     /// The placements whose send the host has yet to answer, by the id their call carries
@@ -1019,7 +1003,6 @@ pub(crate) struct Model {
     pub(crate) quest: Option<quest::QuestState>,
     /// The item records `GetQuestItemInfo`'s calls missed, one per call, until the app takes them.
     pub(crate) quest_item_waits: Vec<u32>,
-    pub(crate) quest_close: bool,
     /// The levels of the last greeting's two pools (`0xbde690`, `0xbdfe60`), which outlive the
     /// panel until the next list fills them.
     pub(crate) quest_pool_levels: quest::PoolLevels,
@@ -1699,20 +1682,15 @@ impl Model {
             slider_drag: None,
             color_drag: None,
             gossip: None,
-            gossip_close: false,
             merchant: None,
             repair_all_cost: 0,
             repair_costs: Default::default(),
             merchant_drops: Vec::new(),
-            merchant_close: false,
             repair_mode: false,
             stable: Default::default(),
             bank: None,
-            bank_purchase: false,
-            bank_close: false,
             trainer: None,
             trainer_selection: None,
-            trainer_close: false,
             trainer_filter: 7,
             trainer_item_waits: Vec::new(),
             trade_skill_item_waits: Vec::new(),
@@ -1725,16 +1703,13 @@ impl Model {
             trainer_visible: 0,
             trainer_rows_fresh: false,
             taxi: None,
-            taxi_close: false,
             taxi_riding: false,
             trade_skill: None,
             trade_skill_open: false,
-            trade_skill_dos: Vec::new(),
             trade_skill_rows: Vec::new(),
             trade_skill_visible: 0,
             trade_skill_unbuilt: false,
             trade_skill_headers: Vec::new(),
-            trade_skill_close: false,
             trade_skill_collapsed: HashSet::new(),
             trade_skill_subclass_hidden: HashSet::new(),
             trade_skill_invslot_mask: u32::MAX,
@@ -1750,7 +1725,6 @@ impl Model {
             craft_visible: 0,
             craft_headers: Vec::new(),
             craft_fold_mask: u32::MAX,
-            craft_close: false,
             loot: None,
             loot_type: 0,
             loot_rolls: loot_roll::LootRollsState::default(),
@@ -1762,7 +1736,6 @@ impl Model {
             mail_list_stamp: None,
             mail_busy: false,
             mail_send_pending: false,
-            mail_close: false,
             mail_body_answer: None,
             mail_send_money: 0,
             mail_send_cod: 0,
@@ -1777,13 +1750,10 @@ impl Model {
             auction_selected: [0; 3],
             auction_can_query: true,
             auction_name_asks: Vec::new(),
-            auction_sorts: Vec::new(),
-            auction_close: false,
             auction_sell_item: None,
             trade: None,
             trade_window: false,
             trade_record_asks: Vec::new(),
-            trade_close: false,
             trade_done: false,
             trade_placing: std::collections::HashMap::new(),
             trade_place_seq: 0,
@@ -1791,7 +1761,6 @@ impl Model {
             quest: None,
             quest_item_waits: Vec::new(),
             quest_pool_levels: Default::default(),
-            quest_close: false,
             death: death::DeathUiState::default(),
             death_actions: Vec::new(),
             quest_log: quest_log::QuestLogState::default(),

@@ -559,7 +559,9 @@ fn merchant_switch_plays_close_then_open_and_queues_the_consumable_close() {
     s.set_merchant(Some(MerchantState::default()));
     s.fire_event("MERCHANT_SHOW", vec![]);
     let _ = s.take_sounds();
-    let _ = s.take_merchant_close();
+    let _ = s.take_calls_like(&benilla_ui::script::ScriptCall::Merchant(
+        benilla_ui::script::MerchantCall::Close,
+    ));
 
     s.set_merchant(Some(MerchantState::default()));
     s.fire_event("MERCHANT_CLOSED", vec![]);
@@ -574,7 +576,9 @@ fn merchant_switch_plays_close_then_open_and_queues_the_consumable_close() {
         "switching vendors plays the close then the open kit"
     );
     assert!(
-        s.take_merchant_close(),
+        s.take_calls_like(&benilla_ui::script::ScriptCall::Merchant(
+            benilla_ui::script::MerchantCall::Close
+        )) > 0,
         "the switch's MERCHANT_CLOSED queued a CloseMerchant intent — the feed must consume it so \
          the re-opened vendor is not cleared by the drain"
     );

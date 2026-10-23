@@ -143,11 +143,6 @@ impl super::UiScript {
         })
     }
 
-    /// Whether `CloseMerchant` was called since the last drain; the close sends no packet.
-    pub fn take_merchant_close(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().merchant_close)
-    }
-
     /// The 1-based buyback slots a harness's VM kept ([`Self::keep_calls`]) for `BuybackItem`.
     pub fn take_merchant_buybacks(&mut self) -> Vec<u32> {
         self.take_calls_where(|call| match call {
@@ -205,6 +200,8 @@ pub enum MerchantCall {
     /// `CMSG_BUY_ITEM_IN_SLOT` into the item in that bag slot, `None` the player's own for the
     /// backpack (`0x4c7c7d`), slot `0xFF` so the server picks, count 1.
     BuyIntoBag { bag_guid: Option<u64>, entry: u32 },
+    /// `CloseMerchant()` (`0x4fb120`): the close core `0x4fadf0`.
+    Close,
 }
 
 /// Hand `call` to the host, which applies it before this returns ([`super::calls::submit`]).
@@ -440,15 +437,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CloseMerchant(): sends no packet; the app runs the close core on the flag, as the core
-    // needs the latch (Part of #2202).
+    // CloseMerchant() (`0x4fb120`): the close core `0x4fadf0` inside the call; no packet.
     g.set(
         "CloseMerchant",
-        lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.merchant_close = true;
-            Ok(())
-        })?,
+        lua.create_function(|lua, ()| submit(lua, MerchantCall::Close))?,
     )?;
 
     g.set(
@@ -857,13 +849,12 @@ mod tests {
     }
 
     #[test]
-    fn close_merchant_flags_the_intent() {
+    fn close_merchant_is_a_call() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_merchant(Some(stock()));
-        assert!(!s.take_merchant_close());
         s.run("CloseMerchant()").unwrap();
-        assert!(s.take_merchant_close());
-        assert!(!s.take_merchant_close(), "drained");
+        assert_eq!(s.take_merchant_calls(), [super::MerchantCall::Close]);
     }
 
     /// The question-mark fallback and the buyback miss: a vendor row whose wire display has no

@@ -198,10 +198,6 @@ impl LatchedWindow for MailOpen {
     fn dispatched(world: &mut World) {
         close_core(world);
     }
-
-    fn take_close_verb(script: &mut UiScript) -> bool {
-        script.take_mail_close()
-    }
 }
 
 /// A mailbox use (`0x5f6820` → `0x4acd10`): the latch first, with no test of the cell
@@ -271,7 +267,6 @@ impl Plugin for UiMailPlugin {
                     // Feed, then drain after input, so each edge lands the same frame; the feed
                     // runs after `UnitFeed` so `SetInboxItem` reads the template.
                     feed_mail.after(crate::ui_unit::UnitFeed).in_set(UiFeed),
-                    drain_mail.in_set(crate::ui_script::UiDrain),
                     // The cascade's order: the time query, this, then the battlefield status.
                     send_query_next_mail_time_on_enter
                         .after(crate::net::send_query_time)
@@ -892,17 +887,6 @@ fn feed_mail(
         }
         if notify {
             script.fire_event("UPDATE_PENDING_MAIL", vec![]);
-        }
-    })
-}
-
-/// `CloseMail` into the close core, which sends nothing; every other mail verb applies inside its
-/// call ([`MailVerbs`]).
-fn drain_mail(mut hosted_vm: crate::script_calls::HostedVm, mut world_commands: Commands) {
-    hosted_vm.run(|script| {
-        // With no session a stray close still runs the core, which finds no cell (`0x4acd7c`).
-        if script.is_some_and(|script| script.take_mail_close()) {
-            crate::ui_session::queue(&mut world_commands, close_core);
         }
     })
 }

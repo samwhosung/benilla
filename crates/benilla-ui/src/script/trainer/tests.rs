@@ -414,6 +414,7 @@ fn buy_calls_with_an_available_services_spell_id_and_refuses_every_other_row() {
 #[test]
 fn selection_and_close_intents() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trainer(Some(trainer()));
     assert_eq!(
         s.eval::<i64>("return GetTrainerSelectionIndex()").unwrap(),
@@ -430,10 +431,8 @@ fn selection_and_close_intents() {
         0
     );
 
-    assert!(!s.take_trainer_close());
     s.run("CloseTrainer()").unwrap();
-    assert!(s.take_trainer_close());
-    assert!(!s.take_trainer_close(), "drained");
+    assert_eq!(s.take_trainer_calls(), [TrainerCall::Close]);
 }
 
 /// `IsTradeskillTrainer` tests type 2 (`0x4d8ea0`); `IsTalentTrainer` answers 1 with no trainer
@@ -867,10 +866,6 @@ fn open_trainer_calls_for_the_own_list() {
     s.keep_calls();
     s.run("OpenTrainer()").unwrap();
     assert_eq!(s.take_trainer_calls(), vec![TrainerCall::OpenOwn]);
-    assert!(
-        !s.take_trainer_close(),
-        "the close waits on the player, which the host sees"
-    );
 }
 
 /// `IsTrainerServiceSkillStep` (`0x4d9dd0`) and `GetTrainerServiceStepIncrease` (`0x4da030`).

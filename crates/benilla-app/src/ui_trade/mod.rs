@@ -507,7 +507,7 @@ impl TradeSession {
 }
 
 /// The partner's cell `[0xb71728]`, set only while the window is open; `CloseTrade` (`0x4bfdc0`)
-/// enters the core.
+/// enters the core inside its call ([`crate::script_calls::ScriptCallHost`]).
 impl LatchedWindow for TradeSession {
     const WINDOW: NpcWindow = NpcWindow::Trade;
 
@@ -517,10 +517,6 @@ impl LatchedWindow for TradeSession {
 
     fn dispatched(world: &mut World) {
         close_core(world);
-    }
-
-    fn take_close_verb(script: &mut UiScript) -> bool {
-        script.take_trade_close()
     }
 }
 
@@ -1326,23 +1322,16 @@ fn register_record_callbacks(script: &mut UiScript, items: &Items, commands: &Ne
     }
 }
 
-/// After the tick: `CloseTrade`'s close core, which the interaction latch runs (`0x4bfdd9` →
-/// `0x4bf4e0(0, 0)`), and the item getters' record callbacks ([`register_record_callbacks`]).
-/// Every other trade verb acts inside its call ([`TradeSteps`]).
+/// After the tick: the item getters' record callbacks ([`register_record_callbacks`]). Every
+/// trade verb acts inside its call ([`TradeSteps`]), `CloseTrade`'s close core among them.
 fn drain_trade(
     mut hosted: crate::script_calls::HostedVm,
-    mut world_commands: Commands,
     commands: Res<NetCommands>,
     items: Res<Items>,
 ) {
     hosted.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        register_record_callbacks(script, &items, &commands);
-        // The core's cancel goes out open or not (`0x4bf527`).
-        if script.take_trade_close() {
-            crate::ui_session::queue(&mut world_commands, close_core);
+        if let Some(script) = script {
+            register_record_callbacks(script, &items, &commands);
         }
     })
 }

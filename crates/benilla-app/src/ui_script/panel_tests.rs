@@ -179,11 +179,19 @@ fn shipped_gossip_frame_drives_end_to_end() {
     s.mouse_button(cx, cy, "LeftButton", true);
     s.mouse_button(cx, cy, "LeftButton", false);
     assert_eq!(s.take_gossip_selects(), vec![1]);
-    assert!(!s.take_gossip_close());
+    assert!(
+        s.take_calls_like(&benilla_ui::script::ScriptCall::Gossip(
+            benilla_ui::script::GossipCall::Close
+        )) == 0
+    );
 
     // The close button hides the window; its OnHide calls `CloseGossip()` (`GossipFrame.xml:455`).
     s.run("GossipFrameCloseButton:Click()").unwrap();
-    assert!(s.take_gossip_close());
+    assert!(
+        s.take_calls_like(&benilla_ui::script::ScriptCall::Gossip(
+            benilla_ui::script::GossipCall::Close
+        )) > 0
+    );
     assert!(!s.eval::<bool>("return GossipFrame:IsVisible()").unwrap());
     assert!(
         s.eval::<bool>("return GetLeftFrame() == nil").unwrap(),
@@ -577,8 +585,12 @@ fn displacing_an_npc_window_ends_the_displaced_session() {
     // The vendor holds the left slot; drain what opening it queued.
     s.set_merchant(Some(MerchantState::default()));
     s.fire_event("MERCHANT_SHOW", vec![]);
-    let _ = s.take_merchant_close();
-    let _ = s.take_gossip_close();
+    let _ = s.take_calls_like(&benilla_ui::script::ScriptCall::Merchant(
+        benilla_ui::script::MerchantCall::Close,
+    ));
+    let _ = s.take_calls_like(&benilla_ui::script::ScriptCall::Gossip(
+        benilla_ui::script::GossipCall::Close,
+    ));
 
     // Gossip replaces the vendor; its OnHide calls `CloseMerchant()` (`MerchantFrame.lua:51-52`).
     s.set_gossip(Some(GossipMenu {
@@ -589,7 +601,9 @@ fn displacing_an_npc_window_ends_the_displaced_session() {
     s.fire_event("GOSSIP_SHOW", vec![]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
     assert!(
-        s.take_merchant_close(),
+        s.take_calls_like(&benilla_ui::script::ScriptCall::Merchant(
+            benilla_ui::script::MerchantCall::Close
+        )) > 0,
         "gossip displacing the vendor ends the vendor session (OnHide → CloseMerchant)"
     );
 
@@ -598,7 +612,9 @@ fn displacing_an_npc_window_ends_the_displaced_session() {
     s.fire_event("MERCHANT_SHOW", vec![]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
     assert!(
-        s.take_gossip_close(),
+        s.take_calls_like(&benilla_ui::script::ScriptCall::Gossip(
+            benilla_ui::script::GossipCall::Close
+        )) > 0,
         "the vendor displacing gossip ends the gossip session (OnHide → CloseGossip)"
     );
 }

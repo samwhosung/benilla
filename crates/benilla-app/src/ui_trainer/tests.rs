@@ -1746,60 +1746,6 @@ fn the_group_header_keys_resolve_in_the_real_global_strings() {
     }
 }
 
-/// `OpenTrainer` (`0x4d8cf0`): the open window closes and `CMSG_TRAINER_LIST` goes out for the
-/// player's own guid (`TalkToTrainer`, `0x5df680`); with no player nothing happens at all
-/// (`0x4d8d24`), the open window included.
-#[test]
-fn open_trainer_closes_the_window_and_asks_for_the_players_own_list() {
-    use bevy::ecs::system::RunSystemOnce;
-    const ME: u64 = 0x10;
-    const TRAINER: u64 = 0xF130_0000_4500_0001;
-    let run = |with_player: bool| {
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let mut app = App::new();
-        app.insert_resource(NetCommands(tx))
-            .init_resource::<TrainerOpen>()
-            .add_systems(Update, drain_trainer);
-        app.insert_non_send_resource(UiScript::new().unwrap());
-        if with_player {
-            app.world_mut().spawn((Guid(ME), SelfPlayer));
-        }
-        app.world_mut()
-            .resource_mut::<TrainerOpen>()
-            .open(TRAINER, 0, Vec::new(), String::new());
-        let mut calls = {
-            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
-            script.keep_calls();
-            script.run("OpenTrainer()").unwrap();
-            script.take_trainer_calls()
-        };
-        let tails = app
-            .world_mut()
-            .run_system_once(move |mut steps: TrainerSteps| {
-                std::mem::take(&mut calls)
-                    .into_iter()
-                    .filter_map(|call| steps.apply(call))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap();
-        for tail in tails {
-            tail(&mut app.world_mut().non_send_resource_mut::<UiScript>());
-        }
-        app.update();
-        let open = app.world().resource::<TrainerOpen>().trainer;
-        (open, rx.try_iter().collect::<Vec<_>>())
-    };
-    let (open, sent) = run(true);
-    assert_eq!(open, None, "the window closes");
-    assert!(
-        matches!(sent.as_slice(), [ClientCommand::TrainerList { trainer }] if *trainer == ME),
-        "{sent:?}"
-    );
-    let (open, sent) = run(false);
-    assert_eq!(open, Some(TRAINER), "no player: nothing happens");
-    assert!(sent.is_empty(), "no player, no request: {sent:?}");
-}
-
 /// The stock window calls `GetTrainerServiceIcon` at `TRAINER_SHOW` and `TRAINER_UPDATE`, which
 /// looks the product up with a callback (`0x4d9096`); the frames between ask only what the cache
 /// holds nothing for. A refused product is asked by no frame, and again by the trainer's next list.

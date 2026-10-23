@@ -96,17 +96,6 @@ impl super::UiScript {
         self.model_mut().taxi_riding = riding;
     }
 
-    /// A `CloseTaxiMap` call closed the map; the latch's release waits for the app's drain
-    /// ([`Self::take_taxi_close`]).
-    pub fn note_taxi_closed(&mut self) {
-        self.model_mut().taxi_close = true;
-    }
-
-    /// Whether a `CloseTaxiMap` call closed the map since the last take.
-    pub fn take_taxi_close(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().taxi_close)
-    }
-
     /// The taxi calls a harness's VM kept ([`Self::keep_calls`]), in call order.
     pub fn take_taxi_calls(&mut self) -> Vec<TaxiCall> {
         self.take_calls_where(|call| match call {

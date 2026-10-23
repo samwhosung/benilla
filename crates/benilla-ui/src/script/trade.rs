@@ -112,6 +112,9 @@ pub enum TradeCall {
     TargetEnchant,
     /// `ReplaceTradeEnchant()` (`0x48d330`): the trade slot's bind `0x6e6900` with no check.
     ReplaceEnchant,
+    /// `CloseTrade()` past its money signal (`0x4bfdc0`): the close core `0x4bf4e0(0, 0)`
+    /// (`0x4bfdd9`).
+    Close,
 }
 
 /// Where the trade window's open leg put the held item of a trade started by dropping it
@@ -501,12 +504,6 @@ impl super::UiScript {
     /// each that is still unanswered.
     pub fn take_trade_record_asks(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().trade_record_asks)
-    }
-
-    /// Whether `CloseTrade`, the window's OnHide verb, was called since the last drain; the app
-    /// sends `CMSG_CANCEL_TRADE` and ends its session.
-    pub fn take_trade_close(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().trade_close)
     }
 }
 
@@ -1051,8 +1048,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| set_accept(lua, false))?,
     )?;
     // CloseTrade() (`0x4bfdc0`): `PLAYER_TRADE_MONEY` while the done flag `[0xb71748]` is 0
-    // (`0x4bfdc7`-`0x4bfdce`), then the close core `0x4bf4e0(0, 0)` (`0x4bfdd9`), which the
-    // interaction latch runs.
+    // (`0x4bfdc7`-`0x4bfdce`), then the close core `0x4bf4e0(0, 0)` (`0x4bfdd9`), inside the
+    // call.
     g.set(
         "CloseTrade",
         lua.create_function(|lua, ()| {
@@ -1060,9 +1057,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 if !model.trade_done {
                     model.raise("PLAYER_TRADE_MONEY", Vec::new());
                 }
-                model.trade_close = true;
             });
-            Ok(())
+            submit(lua, TradeCall::Close)
         })?,
     )?;
     // BeginTrade() and CancelTrade() (`0x48aa60`, `0x48aa70`): no arguments, no returns, no gate,
@@ -1612,19 +1608,18 @@ mod tests {
         );
 
         // `CloseTrade` signals `PLAYER_TRADE_MONEY` while the done flag is clear (`0x4bfdc7`),
-        // then leaves the close to the latch.
+        // then runs the close core (`0x4bfdd9`).
         crate::script::tick::heard::listen(&s, &["PLAYER_TRADE_MONEY"], None);
         s.run("CloseTrade()").unwrap();
         assert_eq!(crate::script::tick::heard::take(&s), ["PLAYER_TRADE_MONEY"]);
-        assert!(s.take_trade_close());
-        assert!(!s.take_trade_close(), "drained");
+        assert_eq!(s.take_trade_calls(), [TradeCall::Close]);
         s.set_trade_done(true);
         s.run("CloseTrade()").unwrap();
         assert!(
             crate::script::tick::heard::take(&s).is_empty(),
             "done: no signal"
         );
-        assert!(s.take_trade_close());
+        assert_eq!(s.take_trade_calls(), [TradeCall::Close]);
 
         // An offer is sent only when the purse covers it.
         s.set_money(20_000);

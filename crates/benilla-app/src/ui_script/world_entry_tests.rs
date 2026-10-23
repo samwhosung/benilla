@@ -1037,6 +1037,11 @@ fn a_reload_keeps_the_quest_folds_and_the_repeat() {
                 tools_pending: Vec::new(),
             }],
         }));
+    }
+    {
+        let mut script = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
+        // No engine behind this world: the cast is kept, the repeat armed in the verb.
+        script.keep_calls();
         script.run("DoTradeSkill(2, 3)").expect("arm the batch");
     }
     assert_eq!(visible(&mut world), 1);

@@ -120,6 +120,7 @@ fn row_kind(s: &mut UiScript, i: i64) -> (String, String) {
 #[test]
 fn grouped_visible_rows_ordered_by_class_then_name_tie_then_tier_then_name() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 0);
 
     s.set_trade_skill(Some(state()));
@@ -152,6 +153,7 @@ fn grouped_visible_rows_ordered_by_class_then_name_tie_then_tier_then_name() {
 #[test]
 fn collapse_hides_a_groups_entries_and_remaps_indices_incl_collapse_all() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(state()));
 
     // "Armor Kit" is header 4: its two recipes go, 10 -> 8, and it reports isExpanded nil.
@@ -182,6 +184,7 @@ fn collapse_hides_a_groups_entries_and_remaps_indices_incl_collapse_all() {
 #[test]
 fn pending_recipes_bucket_trailing_under_an_empty_header() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(state()));
 
     // Row 9 is the pending group's header.
@@ -203,6 +206,7 @@ fn pending_recipes_bucket_trailing_under_an_empty_header() {
 #[test]
 fn header_and_entry_tuple_shapes() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(state()));
 
     let (name, kind, avail, expanded) = s
@@ -229,6 +233,7 @@ fn header_and_entry_tuple_shapes() {
 #[test]
 fn do_trade_skill_and_getters_no_op_on_a_header_index() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(state()));
 
     // Row 1 is a header: every per-recipe getter reads nil, zero or empty.
@@ -272,6 +277,7 @@ fn do_trade_skill_and_getters_no_op_on_a_header_index() {
 #[test]
 fn select_trade_skill_on_a_header_or_past_the_rows_clears_the_selection() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(state()));
     let selected = |s: &UiScript| {
         s.eval::<i64>("return GetTradeSkillSelectionIndex()")
@@ -307,6 +313,7 @@ fn select_trade_skill_on_a_header_or_past_the_rows_clears_the_selection() {
 fn the_fold_verbs_raise_on_a_row_that_is_no_header_and_fold_every_group_below_one() {
     use crate::script::tick::heard;
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(state()));
     heard::listen(&s, &["TRADE_SKILL_UPDATE"], None);
     let err = |s: &UiScript, call: &str| {
@@ -357,6 +364,7 @@ fn the_fold_verbs_raise_on_a_row_that_is_no_header_and_fold_every_group_below_on
 #[test]
 fn get_trade_skill_sub_classes_returns_group_names_in_order() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     assert_eq!(
         s.arity("GetTradeSkillSubClasses()").unwrap(),
         0,
@@ -379,6 +387,7 @@ fn get_trade_skill_sub_classes_returns_group_names_in_order() {
 #[test]
 fn selection_persists_across_collapse_and_a_regroup() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(state()));
 
     // Select "Wind Cloak" ("Zephyr Cloak"'s only recipe, row 8).
@@ -439,6 +448,7 @@ fn selection_persists_across_collapse_and_a_regroup() {
 #[test]
 fn snapshot_feeds_the_api_tuples_through_the_visible_mapping() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(two_recipe_state()));
 
     assert_eq!(
@@ -498,6 +508,7 @@ fn snapshot_feeds_the_api_tuples_through_the_visible_mapping() {
 #[test]
 fn selection_persists_across_a_repush_by_spell_id() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(two_recipe_state()));
 
     // Bolt of Linen Cloth (spell 2963) is row 3.
@@ -532,6 +543,7 @@ fn selection_persists_across_a_repush_by_spell_id() {
 #[test]
 fn do_trade_skill_drains_spell_id_and_count() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(two_recipe_state()));
 
     // Row 3 = Bolt of Linen Cloth (spell 2963).
@@ -562,6 +574,7 @@ fn do_trade_skill_drains_spell_id_and_count() {
 #[test]
 fn do_trade_skill_arms_the_repeat_and_casts_only_inside_an_input_event() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(two_recipe_state()));
     s.run("SelectTradeSkill(3)").unwrap();
 
@@ -583,6 +596,7 @@ fn do_trade_skill_arms_the_repeat_and_casts_only_inside_an_input_event() {
 #[test]
 fn no_snapshot_shapes_unknown_line_and_nil_info() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     assert_eq!(
         s.eval::<(String, i64, i64)>("return GetTradeSkillLine()")
             .unwrap(),
@@ -637,6 +651,7 @@ fn no_snapshot_shapes_unknown_line_and_nil_info() {
 #[test]
 fn get_trade_skill_tools_multivalue_shape() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     let mut t = two_recipe_state();
     t.recipes[0].tools = vec![("Anvil".into(), true), ("Mining Pick".into(), false)];
     s.set_trade_skill(Some(t));
@@ -666,6 +681,7 @@ fn get_trade_skill_tools_multivalue_shape() {
 #[test]
 fn close_reopen_keeps_state_for_the_same_line_and_resets_on_a_switch() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(two_recipe_state()));
     s.run("SelectTradeSkill(2)").unwrap(); // Simple Robe, the tier-0 row
     s.run("CollapseTradeSkillSubClass(1)").unwrap();
@@ -674,10 +690,8 @@ fn close_reopen_keeps_state_for_the_same_line_and_resets_on_a_switch() {
     let selected = s
         .eval::<i64>("return GetTradeSkillSelectionIndex()")
         .unwrap();
-    assert!(!s.take_trade_skill_close());
     s.run("CloseTradeSkill()").unwrap();
-    assert!(s.take_trade_skill_close());
-    assert!(!s.take_trade_skill_close(), "drained");
+    assert_eq!(s.take_trade_skill_closes(), 1);
     assert!(!s.trade_skill_open());
 
     // `0x4fc870` zeroes only the open marker (`[0xbde040]`): `GetNumTradeSkills` (`0x4fd800`,
@@ -718,6 +732,7 @@ fn close_reopen_keeps_state_for_the_same_line_and_resets_on_a_switch() {
 #[test]
 fn subclass_filter_exclusive_narrows_list_but_not_vocabulary() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(state()));
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 10);
     assert_eq!(
@@ -765,6 +780,7 @@ fn subclass_filter_exclusive_narrows_list_but_not_vocabulary() {
 #[test]
 fn filter_getters_treat_a_non_positive_index_as_all_and_raise_past_the_end() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(state()));
     s.run("SetTradeSkillSubClassFilter(2, 1, 1)").unwrap();
     for idx in ["0", "-1", "-7.5", "0.5"] {
@@ -835,6 +851,7 @@ fn filter_getters_treat_a_non_positive_index_as_all_and_raise_past_the_end() {
 #[test]
 fn filter_setters_raise_on_a_bad_index_and_a_missing_on_off() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(state()));
     let err = |s: &UiScript, call: &str| {
         s.eval::<String>(&format!(
@@ -918,6 +935,7 @@ fn seed_slot_tokens(s: &mut UiScript) {
 #[test]
 fn invslot_filter_drops_recipes_and_emptied_groups() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     seed_slot_tokens(&mut s);
     let mut st = state();
     // Wind Cloak is the one Back product (16 → bit 14); everything else stays Robe/Chest.
@@ -958,6 +976,7 @@ fn invslot_filter_drops_recipes_and_emptied_groups() {
 #[test]
 fn inv_slot_names_are_read_with_the_model_free() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     let mut st = state();
     st.recipes
         .iter_mut()
@@ -985,6 +1004,7 @@ fn inv_slot_names_are_read_with_the_model_free() {
 #[test]
 fn one_hand_weapon_spans_both_hand_slots() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     seed_slot_tokens(&mut s);
     let mut st = two_recipe_state();
     st.recipes[0].product_inv_type = 13; // Bolt of Linen Cloth becomes a one-hand weapon
@@ -1015,6 +1035,7 @@ fn one_hand_weapon_spans_both_hand_slots() {
 fn filter_and_fold_mutators_signal_the_update_in_place() {
     use crate::script::tick::heard;
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(state()));
     heard::listen(&s, &["TRADE_SKILL_UPDATE"], Some("GetNumTradeSkills()"));
     let before = s.eval::<i64>("return GetNumTradeSkills()").unwrap();
@@ -1046,6 +1067,7 @@ fn filter_and_fold_mutators_signal_the_update_in_place() {
 fn the_repeat_and_the_close_signal_in_place() {
     use crate::script::tick::heard;
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(state()));
     s.run("SelectTradeSkill(2)").unwrap();
     heard::listen(
@@ -1079,6 +1101,7 @@ fn the_repeat_count_is_at_least_one_and_only_for_the_selected_recipe() {
     let count = |s: &UiScript| s.eval::<i64>("return GetTradeskillRepeatCount()").unwrap();
     assert_eq!(count(&s), 1, "no book");
     let mut s = s;
+    s.keep_calls();
     s.set_trade_skill(Some(state()));
     assert_eq!(count(&s), 1, "idle");
     s.run("DoTradeSkill(2, 3)").unwrap();
@@ -1094,6 +1117,7 @@ fn the_repeat_count_is_at_least_one_and_only_for_the_selected_recipe() {
 fn the_repeat_counts_down_on_our_casts_and_ends_silently() {
     use crate::script::tick::heard;
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(state()));
     s.run("SelectTradeSkill(2)").unwrap();
     heard::listen(
@@ -1153,6 +1177,7 @@ fn the_repeat_counts_down_on_our_casts_and_ends_silently() {
 #[test]
 fn same_tier_recipes_order_by_product_item_level_highest_first_before_name() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     let robe = |spell_id, name, difficulty, item_level| {
         let mut r = recipe(spell_id, name, difficulty, 1, Some((2, 1, "Cloth")));
         r.product_item_level = item_level;
@@ -1188,6 +1213,7 @@ fn same_tier_recipes_order_by_product_item_level_highest_first_before_name() {
 #[test]
 fn the_link_verbs_answer_the_clients_shapes() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(state()));
     // Row 2 is the first recipe, found by name since the visible order is the sorted one.
     let st = state();
@@ -1269,6 +1295,7 @@ fn the_link_verbs_answer_the_clients_shapes() {
 #[test]
 fn the_cooldown_left_is_read_off_the_clock_at_the_call() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     let mut state = two_recipe_state();
     // Started at 100 s on the GetTime clock, for an hour.
     state.recipes[0].cooldown = Some((100_000, 3_600_000, true));
@@ -1307,6 +1334,7 @@ fn the_cooldown_left_is_read_off_the_clock_at_the_call() {
 fn a_profession_openers_slot_is_current_while_its_window_is_open() {
     use crate::script::{ActionState, Profession};
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     let slot = |profession| ActionState {
         spell: Some(3908),
         profession: Some(profession),
@@ -1347,6 +1375,7 @@ fn a_profession_openers_slot_is_current_while_its_window_is_open() {
 #[test]
 fn a_folded_selection_answers_past_the_displayed_count() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(state()));
     s.run("SelectTradeSkill(8)").unwrap(); // Wind Cloak, Zephyr Cloak's only recipe
     s.run("CollapseTradeSkillSubClass(7)").unwrap();
@@ -1386,6 +1415,7 @@ fn a_folded_selection_answers_past_the_displayed_count() {
 #[test]
 fn hidden_rows_trail_in_the_order_the_crt_sort_leaves_them() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(two_recipe_state()));
     let names = |s: &UiScript| {
         s.eval::<Vec<String>>(
@@ -1430,6 +1460,7 @@ fn hidden_rows_trail_in_the_order_the_crt_sort_leaves_them() {
 #[test]
 fn a_rebuild_counts_again_before_its_update() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(two_recipe_state()));
     s.run(
         "N = nil local f = CreateFrame('Frame') f:RegisterEvent('TRADE_SKILL_UPDATE') \
@@ -1452,6 +1483,7 @@ fn a_rebuild_counts_again_before_its_update() {
 #[test]
 fn a_getter_that_misses_a_record_waits_on_it_once_per_call() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     let mut st = two_recipe_state();
     for r in &mut st.recipes {
         r.reagents[0].name = None;
@@ -1482,6 +1514,7 @@ fn a_getter_that_misses_a_record_waits_on_it_once_per_call() {
 #[test]
 fn a_rebuild_with_a_product_in_flight_signals_nothing() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     let mut st = two_recipe_state();
     st.recipes[1].icon_pending = Some(st.recipes[1].product_item);
     s.set_trade_skill(Some(st));
@@ -1503,6 +1536,7 @@ fn a_rebuild_with_a_product_in_flight_signals_nothing() {
 #[test]
 fn a_pending_rebuild_with_flag_1_loses_the_folds_and_filters() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(two_recipe_state()));
     s.run("CollapseTradeSkillSubClass(1) SetTradeSkillSubClassFilter(1, 0)")
         .unwrap();
@@ -1528,6 +1562,7 @@ fn leaving_the_world_zeroes_the_pending_count_and_entering_it_does_not() {
         st
     };
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(pending_state()));
     assert!(!s.trade_skill_open_build());
     s.reset_crafts_on_world_enter();
@@ -1543,6 +1578,7 @@ fn leaving_the_world_zeroes_the_pending_count_and_entering_it_does_not() {
 #[test]
 fn the_item_stats_getter_waits_only_on_a_record_in_flight() {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(two_recipe_state()));
     s.run("GetTradeSkillItemStats(2) GetTradeSkillItemStats(3)")
         .unwrap();
@@ -1556,6 +1592,7 @@ fn the_item_stats_getter_waits_only_on_a_record_in_flight() {
 fn the_world_enter_init_empties_the_list_until_a_rebuild() {
     use crate::script::tick::heard;
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_trade_skill(Some(two_recipe_state()));
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 3);
     s.reset_crafts_on_world_enter();

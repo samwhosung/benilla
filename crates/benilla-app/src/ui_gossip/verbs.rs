@@ -25,7 +25,19 @@ pub(crate) struct GossipVerbs<'w, 's> {
 }
 
 impl GossipVerbs<'_, '_> {
-    /// Apply one gossip call.
+    /// The menu's cell `[0xbc3f58]`.
+    pub(crate) fn npc(&self) -> Option<u64> {
+        self.state.as_deref().and_then(|s| s.npc)
+    }
+
+    /// The close core's zero of the cell (`0x4e1fcc`); the slots, the text and its latch stay.
+    pub(crate) fn clear_npc(&mut self) {
+        if let Some(state) = self.state.as_deref_mut() {
+            state.npc = None;
+        }
+    }
+
+    /// Apply one gossip call; the close is the host's ([`GossipCall::Close`]).
     pub(crate) fn apply(&mut self, script: &mut UiScript, call: GossipCall) {
         let player = self.objects.player().is_some();
         let Some(state) = self.state.as_mut() else {
@@ -34,13 +46,8 @@ impl GossipVerbs<'_, '_> {
         };
         let npc = state.npc.unwrap_or(0);
         match call {
-            GossipCall::Close => {
-                // `0x4e1fa0` with a zero guid as far as the call goes: the cell zeroed
-                // (`0x4e1fcc`); the release and `GOSSIP_CLOSED` follow at the drain.
-                if let Some(source) = state.npc.take() {
-                    state.closing = Some(source);
-                }
-            }
+            // The close core needs the latch, which the host lends beside this.
+            GossipCall::Close => {}
             GossipCall::Option { index, code } => {
                 // `0x4e2320`: refused while the greeting is pending (`0xbbb670`, `0x4e2335`), for a
                 // slot outside the 16 (`0x4e233d`, `0x4e2346`) or an unused one, whose index is -1

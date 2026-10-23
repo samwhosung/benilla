@@ -216,10 +216,6 @@ pub(crate) trait LatchedWindow: Resource + Sized {
     fn take_close_verb(_script: &mut UiScript) -> bool {
         false
     }
-    /// What the close verb does: its binding's call into the core.
-    fn close_verb(world: &mut World) {
-        Self::dispatched(world);
-    }
 }
 
 /// One registered window, type-erased for the dispatcher.
@@ -229,7 +225,6 @@ struct Entry {
     cell: fn(&World) -> Option<u64>,
     dispatched: fn(&mut World),
     take_close_verb: fn(&mut UiScript) -> bool,
-    close_verb: fn(&mut World),
 }
 
 /// The windows on the latch, in `0x493310`'s order.
@@ -253,7 +248,6 @@ impl LatchApp for App {
                 cell: |world| world.get_resource::<T>().and_then(T::cell),
                 dispatched: T::dispatched,
                 take_close_verb: T::take_close_verb,
-                close_verb: T::close_verb,
             });
             windows.0.sort_by_key(|e| e.window);
         }
@@ -399,7 +393,7 @@ pub(crate) fn fire(world: &mut World, f: impl FnOnce(&mut UiScript)) {
                 .get_non_send_resource_mut::<UiScript>()
                 .is_some_and(|mut s| (e.take_close_verb)(&mut s));
             if called {
-                (e.close_verb)(world);
+                (e.dispatched)(world);
             }
         }
     }

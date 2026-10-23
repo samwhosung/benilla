@@ -1,16 +1,16 @@
 //! The taxi verbs' engine half, which the call host applies inside each call
 //! ([`crate::script_calls::ScriptCallHost`]): `TakeTaxiNode` (`0x4dc8d0`) refuses or activates with
-//! the flight master's cell as it stands, and `CloseTaxiMap` (`0x4dcce0`) runs the close core
-//! `0x4dc0f0`, before the verb returns.
+//! the flight master's cell as it stands before the verb returns; `CloseTaxiMap` (`0x4dcce0`)
+//! runs the close core `0x4dc0f0` through the host, which lends the latch beside this.
 
-use benilla_ui::script::{CallTail, TaxiCall, UiScript};
+use benilla_ui::script::{TaxiCall, UiScript};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use super::{TaxiCatalogs, TaxiRouteCache, TaxiState};
 use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfPlayer};
 use crate::ui_action::{UiError, UiErrorKeys};
-use crate::ui_session::{InteractLatch, LatchedWindow};
+use crate::ui_session::LatchedWindow;
 
 /// The map, its slots and what the verbs send through.
 #[derive(SystemParam)]
@@ -22,57 +22,47 @@ pub(crate) struct TaxiSteps<'w, 's> {
     self_q: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
     net: Res<'w, NetCommands>,
     errors: Res<'w, UiErrorKeys>,
-    /// Read only: the release itself waits for the drain ([`super::release_closed`]).
-    latch: Option<Res<'w, InteractLatch>>,
-    ahead: AheadOfTaxi<'w>,
-}
-
-/// The cells `0x493310` tests ahead of the taxi map's (`0x493341`-`0x4933b6`), read only: trade,
-/// item text and merchant. Gossip and quest are left out: each writes a guid into its cell only
-/// just after its own register (`0x4e1fe9` → `0x4e1ff0`, `0x500d74` → `0x500d86`), which closes a
-/// latched map first, so neither holds the flight master's guid while the map is latched. The
-/// item text writes its cell at the read (`0x4e3364`) and registers only when the text arrives
-/// (`0x4e349a`).
-#[derive(SystemParam)]
-pub(crate) struct AheadOfTaxi<'w> {
-    trade: Option<Res<'w, crate::ui_trade::TradeSession>>,
-    item_text: Option<Res<'w, crate::ui_item_text::ItemTextOpen>>,
-    merchant: Option<Res<'w, crate::ui_merchant::MerchantOpen>>,
-}
-
-impl AheadOfTaxi<'_> {
-    /// Whether a window `0x493310` closes before the taxi map's holds `guid`.
-    fn hold(&self, guid: u64) -> bool {
-        fn holds<T: LatchedWindow>(w: &Option<Res<T>>, guid: u64) -> bool {
-            w.as_deref().and_then(T::cell) == Some(guid)
-        }
-        holds(&self.trade, guid) || holds(&self.item_text, guid) || holds(&self.merchant, guid)
-    }
 }
 
 impl TaxiSteps<'_, '_> {
-    /// Apply one taxi call; the close's VM half and its events are the tail's.
-    pub(crate) fn apply(&mut self, call: TaxiCall) -> Option<CallTail> {
+    /// Apply one taxi call; the close is the host's ([`TaxiCall::Close`]).
+    pub(crate) fn apply(&mut self, call: TaxiCall) {
         let (Some(state), Some(cache)) = (self.state.as_deref_mut(), self.cache.as_deref_mut())
         else {
             debug!("ui_taxi: no taxi map in this world; {call:?} dropped");
-            return None;
+            return;
         };
-        match call {
-            TaxiCall::Take(slot) => {
-                take(
-                    state,
-                    cache,
-                    self.catalogs.as_deref(),
-                    &self.self_q,
-                    &self.net,
-                    &self.errors,
-                    slot,
-                );
-                None
-            }
-            TaxiCall::Close => close(state, cache, self.latch.as_deref(), &self.ahead),
+        if let TaxiCall::Take(slot) = call {
+            take(
+                state,
+                cache,
+                self.catalogs.as_deref(),
+                &self.self_q,
+                &self.net,
+                &self.errors,
+                slot,
+            );
         }
+    }
+
+    /// The flight master's cell `[0xbb4ab8]`.
+    pub(crate) fn flightmaster(&self) -> Option<u64> {
+        self.state.as_deref().and_then(TaxiState::cell)
+    }
+
+    /// The close core past its release (`0x4dc0f0`): the cell cleared (`0x4dc113`) and each
+    /// slot's route freed (`0x4dc130`-`0x4dc145`). The slots stay, their fares 0 with no flight
+    /// master ([`UiScript::close_taxi`]).
+    pub(crate) fn clear_map(&mut self, script: &mut UiScript) {
+        if let Some(state) = self.state.as_deref_mut() {
+            state.clear();
+        }
+        if let Some(cache) = self.cache.as_deref_mut() {
+            for slot in &mut cache.slots {
+                slot.chain.clear();
+            }
+        }
+        script.close_taxi();
     }
 }
 
@@ -143,37 +133,4 @@ fn take(
             nodes: resolved.chain.clone(),
         });
     }
-}
-
-/// The close core `0x4dc0f0` inside `CloseTaxiMap`'s call: with a map open, the cell cleared
-/// (`0x4dc113`) and each slot's route freed (`0x4dc130`-`0x4dc145`), then `TAXIMAP_CLOSED`
-/// (`0x4dc15f`). While the latch names the flight master its release (`0x4dc105`) runs
-/// `0x493310`, which closes the first window in its order holding that guid: the taxi map itself
-/// when none ahead of it does, re-entering the core, so the event fires twice. The slots stay,
-/// their fares 0 with no flight master ([`UiScript::close_taxi`]). The latch's own release, the
-/// goodbye, its clear and a window ahead's close, is the drain's ([`super::release_closed`]), as
-/// it needs the latch (Part of #2202).
-fn close(
-    state: &mut TaxiState,
-    cache: &mut TaxiRouteCache,
-    latch: Option<&InteractLatch>,
-    ahead: &AheadOfTaxi,
-) -> Option<CallTail> {
-    let flightmaster = state.open.as_ref()?.flightmaster;
-    let reenters =
-        latch.and_then(InteractLatch::guid) == Some(flightmaster) && !ahead.hold(flightmaster);
-    let fires = if reenters { 2 } else { 1 };
-    state.clear();
-    state.released = Some(flightmaster);
-    for slot in &mut cache.slots {
-        slot.chain.clear();
-    }
-    debug!("ui_taxi: client-side close (no packet)");
-    Some(Box::new(move |script: &mut UiScript| {
-        script.close_taxi();
-        script.note_taxi_closed();
-        for _ in 0..fires {
-            script.fire_event("TAXIMAP_CLOSED", Vec::new());
-        }
-    }))
 }
