@@ -495,6 +495,27 @@ fn update_faction_fires_where_each_message_signals_it() {
     );
 }
 
+/// With the player held, the initialize message's rebuild sorts twice, each sort signalling: the
+/// Inactive header's fold (`0x4d55d9` → `0x4d6457` → `0x4d5dab`) and the sort after it
+/// (`0x4d55de`); then the message's own (`0x4d5699`).
+#[test]
+fn the_initialize_message_signals_both_rebuild_sorts_and_its_own() {
+    let mut app = synthetic_app();
+    let _ = notices(&mut app);
+    app.world_mut()
+        .run_system_cached_with(
+            on_reputations,
+            SessionEvent::Reputations {
+                standings: vec![(0, 0); 64],
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        notices(&mut app),
+        [update_faction(), update_faction(), update_faction()]
+    );
+}
+
 /// `SMSG_SET_FACTION_ATWAR` (`0x4d56b0`) copies bit `0x02` of its byte into the slot's at-war bit
 /// and touches no other bit (`0x4d56d9`-`0x4d56e9`).
 #[test]

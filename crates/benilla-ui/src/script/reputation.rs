@@ -1202,6 +1202,20 @@ mod tests {
         );
     }
 
+    /// The world-enter rebuild sorts twice, the Inactive header's fold (`0x4d55d9` → `0x4d6457`)
+    /// and the sort after it (`0x4d55de`), and each sort signals `UPDATE_FACTION` (`0x4d5dab`).
+    #[test]
+    fn the_world_enter_rebuild_signals_each_of_its_two_sorts() {
+        let mut s = seated();
+        s.run(
+            "N = 0 local f = CreateFrame('Frame') f:RegisterEvent('UPDATE_FACTION') \
+             f:SetScript('OnEvent', function() N = N + 1 end)",
+        )
+        .unwrap();
+        s.reputation_enter_world();
+        assert_eq!(s.eval::<i64>("return N").unwrap(), 2);
+    }
+
     /// Deviation pinned: an index one past the last entry names faction 0, as one further does,
     /// which the Other header answers.
     #[test]
