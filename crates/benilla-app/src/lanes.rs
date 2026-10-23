@@ -3,10 +3,10 @@
 //! handler whole (`0x537aa0`, `0x537ae5`), and a handler's events fire inside it, every listener
 //! before the signal returns (`0x703e50`, `0x703f50`). Here a handler queues what it raises on a
 //! lane, a producer's queue that stamps each item from one clock as it is pushed ([`stamp`]).
-//! Once every feed has pushed what the events' listeners read, as the reference writes a whole
-//! update block before its notify pass (`0x465277`), [`fire_in_order`] fires the lowest stamp
-//! across the lanes, so the events come out in the order their handlers raised them, whichever
-//! lane holds them.
+//! Once every feed has pushed what the events' listeners read, as the update handler writes every
+//! block of its packet before its notify pass (`0x465277`), [`fire_in_order`] fires the lowest
+//! stamp across the lanes, so the events come out in the order their handlers raised them,
+//! whichever lane holds them.
 //!
 //! An item pushed while another fires is stamped under it ([`firing`]) and fires straight after
 //! it, ahead of everything stamped before it, as a signal raised inside a listener runs to its

@@ -2,8 +2,9 @@
 //! ([`crate::field_watch`]): the notice lane, whose notices fire their callbacks' signals in the
 //! packets' order among the other lanes ([`crate::lanes`]), after every snapshot those events'
 //! handlers read is pushed ([`FieldEventPushes`]) and the unit tokens are seated
-//! ([`crate::ui_aura::AuraEvents`]), as the reference's notify pass follows a block's write passes
-//! (`0x465277` after `0x46520e`, `0x465222`).
+//! ([`crate::ui_aura::AuraEvents`]), as the update handler's notify pass follows its two write
+//! passes over every block of the packet (`0x465277` after `0x46520e`, `0x465222`). The unit
+//! tokens' views the drain then steps back to each packet's state ([`super::views`]).
 
 use bevy::prelude::*;
 
@@ -16,8 +17,8 @@ use crate::lanes::Until;
 /// The feeds that push what a field event's handlers read: the unit tokens' snapshots with the XP
 /// and rest values (`feed_units`), the group's and the pet's tokens, the pet's stats, the player's
 /// combat stats and inventory, the inspected unit's slots, the honor block and the watched
-/// faction. The lanes' drain runs after all of them, as the reference writes a whole block before
-/// its notify pass.
+/// faction. The lanes' drain runs after all of them, as the update handler writes every block of
+/// its packet before its notify pass (`0x46520e`, `0x465222`, then `0x46522d`).
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct FieldEventPushes;
 
