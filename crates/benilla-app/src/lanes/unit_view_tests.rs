@@ -37,6 +37,26 @@ fn wire(events: impl IntoIterator<Item = SessionEvent>) -> Vec<SessionEvent> {
         .collect()
 }
 
+/// Each of `packets` one packet: its events, then the update end when it holds a block.
+pub(super) fn wire_packets(packets: Vec<Vec<SessionEvent>>) -> Vec<SessionEvent> {
+    packets
+        .into_iter()
+        .flat_map(|events| {
+            let block = events.iter().any(|ev| {
+                matches!(
+                    ev,
+                    SessionEvent::ObjectCreate { .. }
+                        | SessionEvent::ObjectValues { .. }
+                        | SessionEvent::ObjectsRemoved(_)
+                )
+            });
+            events
+                .into_iter()
+                .chain(block.then_some(SessionEvent::ObjectUpdateEnd))
+        })
+        .collect()
+}
+
 /// A create block of `kind` whose fields are `pairs`, as the wire's whole descriptor.
 pub(super) fn created(guid: u64, kind: EntityKind, pairs: &[(u16, u32)]) -> SessionEvent {
     let as_type = match kind {

@@ -316,6 +316,8 @@ pub(crate) fn fire_in_order(world: &mut World) {
 #[cfg(test)]
 mod bag_tests;
 #[cfg(test)]
+mod group_view_tests;
+#[cfg(test)]
 mod guard_tests;
 #[cfg(test)]
 mod item_tests;
