@@ -138,7 +138,7 @@ pub(crate) struct GuildState {
 /// the unit and item feeds that read the guild cache beside the VM can share the call host: the
 /// sort chain, the shown order, the request deadline and the held invitation. Reset with the
 /// session, as [`GuildState`] is, and the sort and the deadline at each world entry
-/// ([`seed_vm_guild`]). The show-offline flag and the selection are the VM's
+/// ([`seed_vm_guild`]). The show-offline flag, the selection and the staged rank are the VM's
 /// ([`benilla_ui::script::GuildCells`]).
 #[derive(Resource, Default)]
 pub(crate) struct GuildLocal {
@@ -176,8 +176,8 @@ impl GuildLocal {
 #[derive(Resource, Default)]
 struct GuildCellsCarry(benilla_ui::script::GuildCells);
 
-/// Take the roster's show-offline flag and selection out of the dying VM, which a `/reload`'s VM
-/// gets back ([`seed_vm_guild`]).
+/// Take the roster's show-offline flag, selection and staged rank out of the dying VM, which a
+/// `/reload`'s VM gets back ([`seed_vm_guild`]).
 pub(crate) fn fold_dying_vm_guild(world: &mut World) {
     let Some(cells) = world
         .get_non_send_resource_mut::<UiScript>()
@@ -191,7 +191,7 @@ pub(crate) fn fold_dying_vm_guild(world: &mut World) {
 /// Seat a new in-game VM's roster state before its load runs. A `/reload` runs only the teardown
 /// and `UI_Init` (`0x495664`, `0x495669`), so its VM keeps the last one's cells. A world entry runs
 /// `InitGuildRoster` from `InitializeGame` (`0x48f5ea`), which zeroes the show-offline flag, the
-/// selection and the request deadline (`0x4d0a25`-`0x4d0a41`), the member, online and rank counts
+/// selection and the request deadline and unstages the rank (`0x4d0a25`-`0x4d0a41`), the member, online and rank counts
 /// (`0x4d0a13`-`0x4d0a1f`), and seeds the sort chain afresh (`0x4d0a50`). The message of the day
 /// and the info text it leaves.
 pub(crate) fn seed_vm_guild(world: &mut World, script: &mut UiScript, reload: bool) {

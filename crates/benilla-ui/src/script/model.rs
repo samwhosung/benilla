@@ -479,9 +479,8 @@ pub(crate) struct Model {
     pub(crate) lfg_comment: String,
     /// Guild roster, ranks, MOTD and info, sorted and filtered by the app, which holds the toggles.
     pub(crate) guild: guild::GuildState,
-    /// The rank editor's unsaved edits, apart from `guild` so a push cannot discard them.
-    pub(crate) guild_control: guild::GuildRankEdit,
-    /// The roster module's own cells, apart from `guild` so a push keeps them.
+    /// The roster module's own cells and the rank editor's unsaved edits, apart from `guild` so a
+    /// push keeps them.
     pub(crate) guild_cells: guild::GuildCells,
     /// The guilds `GetGuildInfo` missed, `(guild_id, guid)`, for the app to ask with a waiter.
     pub(crate) guild_info_asks: Vec<(u32, u64)>,
@@ -1522,7 +1521,6 @@ impl Model {
             lfg_slots: [0; 3],
             lfg_comment: String::new(),
             guild: guild::GuildState::default(),
-            guild_control: guild::GuildRankEdit::default(),
             guild_info_asks: Vec::new(),
             guild_cells: guild::GuildCells::default(),
             petition: petition::PetitionState::default(),

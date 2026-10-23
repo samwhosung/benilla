@@ -234,7 +234,7 @@ fn guild_flags_read_get_bool_or_default() {
         "GetGuildRosterShowOffline() == 1",
         true,
     );
-    let staged = || s.model_ref().guild_control.staged[0];
+    let staged = || s.model_ref().guild_cells.rank_control.staged[0];
     s.run("GuildControlSetRankFlag(1, true) GuildControlSetRankFlag(1)")
         .unwrap();
     assert!(!staged(), "no argument takes the default 0");
