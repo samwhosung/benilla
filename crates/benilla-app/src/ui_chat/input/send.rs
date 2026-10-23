@@ -19,6 +19,8 @@ pub(crate) struct ChatSender<'w, 's> {
     commands: Res<'w, NetCommands>,
     chat_log: Res<'w, super::super::feed::ChatLog>,
     errors: Res<'w, crate::ui_action::UiErrorKeys>,
+    /// Where a refusal shows inside the call (`0x496720`).
+    sink: crate::ui_action::MessageSink<'w>,
     /// The optimistic AFK mirror (`[0xb6e5cc]`) the AFK arm and the clear read and write; a world
     /// with no chat has none.
     mirror: Option<ResMut<'w, AfkMirror>>,
@@ -38,6 +40,15 @@ pub(crate) struct ChatSender<'w, 's> {
 }
 
 impl ChatSender<'_, '_> {
+    /// `DisplayError` (`0x496720`) inside the call, under its input events: a red line's
+    /// `UI_ERROR_MESSAGE`, or a chat line's `CHAT_MSG_SYSTEM`, in place.
+    fn refuse(&mut self, script: &mut UiScript, key: &'static str) {
+        let input = script.input_events();
+        if let Some(line) = crate::ui_action::keyed_line(script, key) {
+            crate::ui_action::show_now(script, &mut self.sink, "chat", line.under(input));
+        }
+    }
+
     /// A channel verb inside its call: a join's slot (`0x49ede8`-`0x49edf3`) and every verb's
     /// packet, the slots mirrored into the VM before the verb returns.
     pub(crate) fn channel(&mut self, script: &mut UiScript, cmd: ChannelCommand) {
@@ -108,7 +119,7 @@ impl ChatSender<'_, '_> {
         match group_gate(kind, script.chat_group()) {
             Ok(promoted) => kind = promoted,
             Err(key) => {
-                self.errors.push(crate::ui_action::UiError::key(key));
+                self.refuse(script, key);
                 return;
             }
         }
@@ -150,8 +161,7 @@ impl ChatSender<'_, '_> {
         // A dead or ghost player's line is refused (`0x49f592`-`0x49f5e4`, `0x605f30`) unless its
         // type is on the allowed chain (`0x49f5a3`-`0x49f5da`).
         if !dead_may_send(kind) && self.player().is_some_and(|s| s.0.is_dead_or_ghost()) {
-            self.errors
-                .push(crate::ui_action::UiError::key("ERR_CHAT_WHILE_DEAD"));
+            self.refuse(script, "ERR_CHAT_WHILE_DEAD");
             return;
         }
         // `AcknowledgeTutorial(0x16)` (`0x49f5fc`), for every type that gets past the dead check,
@@ -366,6 +376,7 @@ pub(crate) fn chat_world(script: UiScript) -> (World, crossbeam_channel::Receive
     let (tx, rx) = crossbeam_channel::unbounded();
     world.insert_resource(NetCommands(tx));
     world.init_resource::<super::super::feed::ChatLog>();
+    world.init_resource::<crate::sound::MessageSounds>();
     world.init_resource::<crate::ui_action::UiErrorKeys>();
     world.init_resource::<AfkMirror>();
     world.init_resource::<crate::net::GuidIndex>();

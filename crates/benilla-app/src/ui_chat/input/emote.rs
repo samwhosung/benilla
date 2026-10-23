@@ -29,7 +29,8 @@ pub(crate) struct EmoteDoer<'w, 's> {
     /// Our own auto-attack target, a gate of the local play.
     engaged: Query<'w, 's, (), (With<SelfPlayer>, With<crate::creature_anim::Engaged>)>,
     loot_kneel: Option<Res<'w, crate::ui_loot::LootKneel>>,
-    errors: Res<'w, crate::ui_action::UiErrorKeys>,
+    /// Where the moving refusal shows inside the call (`0x496720`).
+    sink: crate::ui_action::MessageSink<'w>,
     out: EmoteOut<'w, 's>,
     /// The target the emote names when its argument does not (`0xb4e2d8`).
     selection: Res<'w, crate::target::Selection>,
@@ -63,13 +64,17 @@ pub(crate) struct EmoteStep {
 impl EmoteDoer<'_, '_> {
     /// `DoEmote(token, target)` inside its call, up to its packet: a token with no `EmotesText`
     /// row does nothing (`0x49fda8`).
-    pub(crate) fn do_emote(&mut self, request: EmoteRequest) -> Option<EmoteStep> {
+    pub(crate) fn do_emote(
+        &mut self,
+        script: &mut benilla_ui::script::UiScript,
+        request: EmoteRequest,
+    ) -> Option<EmoteStep> {
         let text_id = self
             .emotes
             .as_deref()
             .and_then(|c| c.text_id(&request.token));
         match text_id {
-            Some(text_id) => self.emote(text_id, request.target),
+            Some(text_id) => self.emote(script, text_id, request.target),
             None => {
                 debug!(
                     "chat: DoEmote({:?}): no EmotesText row for that token",
@@ -82,7 +87,12 @@ impl EmoteDoer<'_, '_> {
 
     /// `0x5ef560` on text emote `text_id`: the gates in the client's order, then the stow, the
     /// posture or the play, up to the packet [`Self::finish`] sends. `arg` is the target argument.
-    pub(crate) fn emote(&mut self, text_id: u32, arg: Option<String>) -> Option<EmoteStep> {
+    pub(crate) fn emote(
+        &mut self,
+        script: &mut benilla_ui::script::UiScript,
+        text_id: u32,
+        arg: Option<String>,
+    ) -> Option<EmoteStep> {
         let (stand_state, flags) = self
             .player
             .single()
@@ -114,8 +124,10 @@ impl EmoteDoer<'_, '_> {
         };
         if gate == EmoteGate::Moving && controlled() {
             debug!("chat: emote {text_id} refused — moving (ERR_NOEMOTEWHILERUNNING)");
-            self.errors
-                .push(crate::ui_action::UiError::key("ERR_NOEMOTEWHILERUNNING"));
+            let input = script.input_events();
+            if let Some(line) = crate::ui_action::keyed_line(script, "ERR_NOEMOTEWHILERUNNING") {
+                crate::ui_action::show_now(script, &mut self.sink, "chat", line.under(input));
+            }
             return None;
         }
         let eligible = gate != EmoteGate::Suppressed;

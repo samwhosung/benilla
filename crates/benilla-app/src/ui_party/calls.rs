@@ -20,7 +20,6 @@ use super::GroupState;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, GuidIndex, NetCommands, ObjectStore};
 use crate::query_cache::Ask;
-use crate::ui_action::{UiError, UiErrorKeys};
 
 /// What a call leaves for the drain: the sandbox's echoes.
 #[derive(Resource, Default)]
@@ -47,7 +46,8 @@ pub(crate) struct PartyCalls<'w, 's> {
     index: Res<'w, GuidIndex>,
     stores: Query<'w, 's, &'static ObjectStore>,
     commands: Res<'w, NetCommands>,
-    errors: Res<'w, UiErrorKeys>,
+    /// Where a refusal shows inside the call (`0x496720`).
+    sink: crate::ui_action::MessageSink<'w>,
     relations: crate::target::RelationWorld<'w, 's>,
     /// `InviteByGuid`'s acknowledge (`0x5e949c`); a world with no tutorial state has none.
     tutorials: Option<Res<'w, crate::tutorial::Tutorials>>,
@@ -154,7 +154,17 @@ impl PartyCalls<'_, '_> {
                 };
                 match raid_target_mark(&self.group, guid, index, markable) {
                     RaidTargetMark::Invalid => {
-                        self.errors.push(UiError::key("ERR_INVALID_RAID_TARGET"));
+                        let input = script.input_events();
+                        if let Some(line) =
+                            crate::ui_action::keyed_line(script, "ERR_INVALID_RAID_TARGET")
+                        {
+                            crate::ui_action::show_now(
+                                script,
+                                &mut self.sink,
+                                "ui_party",
+                                line.under(input),
+                            );
+                        }
                     }
                     RaidTargetMark::Nothing => {}
                     RaidTargetMark::Send { icon, guid } if self.group.test => {

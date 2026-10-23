@@ -306,9 +306,9 @@ impl ScriptCallHost<'_, '_> {
     }
 
     /// A probe line's text emote, run as `DoEmote` runs it inside its call (`0x5ef560`).
-    pub(crate) fn emote(&mut self, text_id: u32, arg: Option<String>) {
+    pub(crate) fn emote(&mut self, script: &mut UiScript, text_id: u32, arg: Option<String>) {
         let appliers = &mut self.appliers;
-        emote_in_order!(appliers, appliers.p4().p2().emote(text_id, arg));
+        emote_in_order!(appliers, appliers.p4().p2().emote(script, text_id, arg));
     }
 }
 
@@ -414,7 +414,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::RandomRoll { min, max } => appliers.p4().p1().random_roll(min, max),
             ScriptCall::Channel(cmd) => appliers.p4().p1().channel(script, cmd),
             ScriptCall::DoEmote(request) => {
-                emote_in_order!(appliers, appliers.p4().p2().do_emote(request));
+                emote_in_order!(appliers, appliers.p4().p2().do_emote(script, request));
             }
             ScriptCall::Uninvite(name) => appliers.p4().p1().uninvite(name),
             ScriptCall::RequestTimePlayed => appliers.p4().p1().request_time_played(),

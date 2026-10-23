@@ -768,8 +768,10 @@ pub(super) fn drain_chat_input(
                 }
             }),
             LineWork::Emote { text_id, arg } => {
-                if let Some(host) = vm.parts().1.p1().as_mut() {
-                    host.emote(text_id, arg);
+                if let (Some(script), set) = vm.parts() {
+                    if let Some(host) = set.p1().as_mut() {
+                        host.emote(script, text_id, arg);
+                    }
                 }
             }
         }
