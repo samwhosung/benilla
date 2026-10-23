@@ -813,15 +813,15 @@ mod tests {
         assert_eq!(range(0x2, holding(false, Some(0.0)), None), (8.0, 35.0));
         assert_eq!(range(0x2, holding(true, None), None), (8.0, 35.0));
         // After the moving bonus (`0x6e36a2` before `0x6e36aa`).
-        let running_target = Some(RangeUnit {
+        let running = RangeUnit {
             player: true,
             ..runner(1.5)
-        });
+        };
         let running_caster = RangeUnit {
             ranged_mod_range: Some(0.0),
-            ..running_target.unwrap()
+            ..running
         };
-        assert_eq!(range(0x2, running_caster, running_target), (11.0, 0.0));
+        assert_eq!(range(0x2, running_caster, Some(running)), (11.0, 0.0));
     }
 
     /// Row 2 is the melee family, 114 Auto Shot's 8-35, 95 Charge's 8-25.
