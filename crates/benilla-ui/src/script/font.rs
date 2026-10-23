@@ -35,7 +35,7 @@ use super::{FontMask, FontObject, FontShadow, Model, RegionData};
 /// The shared metatable of every font-object handle.
 const REG_FONT_META: &str = "__benilla_font_meta";
 /// The font-object method table, which is the metatable's `__index`.
-const REG_FONT_METHODS: &str = "__benilla_font_methods";
+pub(super) const REG_FONT_METHODS: &str = "__benilla_font_methods";
 /// font id → handle, so `GameFontNormal == GameFontNormal` and a re-declared `<Font>` keeps identity.
 const REG_FONT_WRAPPERS: &str = "__benilla_font_wrappers";
 

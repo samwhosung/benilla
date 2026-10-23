@@ -65,6 +65,193 @@ pub(super) fn frame_handle_of(lua: &Lua, this: &Table) -> mlua::Result<FrameHand
         .ok_or_else(|| mlua::Error::runtime(ERR_WRONG_TYPE))
 }
 
+/// The class a method table's methods test their receiver against, the type id the reference's
+/// prologue hands the object's `IsA` slot (`call [eax+0x10]`, `0x775894`).
+#[derive(Clone, Copy)]
+enum Class {
+    /// Any frame: the `Frame` table (`[0xcf0c10]`).
+    Frame,
+    /// A frame whose kind's method chain reaches this table ([`kind_method_registries`]): a
+    /// `CheckButton` is a `Button` (`0x495ab0` answers each base's id), a `Button` no
+    /// `CheckButton`.
+    FrameKind(&'static str),
+    /// A region of this kind. A region's `IsA` answers its own id and the Region id alone
+    /// (`0x773550`, a FontString's: `[0xcf2ccc]`, `[0xcf0c3c]`), so a FontString fails the
+    /// Texture test (`[0xcf4cdc]`, `0x79b9b0`) and the Font test (`[0xcf4ea8]`, `0x79fda0`).
+    Region(crate::widget::RegionKind),
+    /// Any widget, frame or region: the Region id (`[0xcf0c3c]`).
+    Widget,
+    /// A Font object (`[0xcf4ea8]`).
+    Font,
+}
+
+impl Class {
+    fn admits(self, model: &Model, id: u32) -> bool {
+        match self {
+            Class::Frame => model.id_to_frame.contains_key(&id),
+            Class::FrameKind(table) => model
+                .id_to_frame
+                .get(&id)
+                .and_then(|&h| model.arena.frame(h))
+                .is_some_and(|f| kind_method_registries(Some(f.kind)).contains(&table)),
+            Class::Region(kind) => model
+                .id_to_region
+                .get(&id)
+                .and_then(|&rh| model.arena.region(rh))
+                .is_some_and(|r| r.kind == kind),
+            Class::Widget => {
+                model.id_to_frame.contains_key(&id) || model.id_to_region.contains_key(&id)
+            }
+            Class::Font => model.fonts.of_handle(id).is_some(),
+        }
+    }
+}
+
+/// The methods whose reference opens with no member prologue, so they keep their own order:
+/// `(table, name)`. Every other method of the tables [`guard_receivers`] reaches opens with it,
+/// read at each function the reference's pair tables name (`0x878ec0` and the rest).
+const NO_PROLOGUE: &[(&str, &str)] = &[
+    // No receiver read at all.
+    (super::minimap::REG_MINIMAP_METHODS, "GetZoomLevels"), // 0x4eebe0
+    (super::minimap::REG_MINIMAP_METHODS, "GetZoom"),       // 0x4eec20
+    (super::minimap::REG_MINIMAP_METHODS, "SetZoom"),       // 0x4eec60
+    (super::minimap::REG_MINIMAP_METHODS, "GetPingPosition"), // 0x4eefd0
+    (super::tabard::REG_TABARDMODEL_METHODS, "CanSaveTabardNow"), // 0x503910
+    // An argument is read first, and the prologue runs only after it passes.
+    (super::minimap::REG_MINIMAP_METHODS, "PingLocation"), // 0x4eeca0: 0x4eed0b, 0x4eed1f
+    (super::tooltip::REG_TOOLTIP_METHODS, "SetBuybackItem"), // 0x536300: 0x536322
+    (
+        super::messageframe::REG_SCROLLINGMESSAGEFRAME_METHODS,
+        "SetScrollFromBottom",
+    ), // 0x793070: 0x793078
+];
+
+/// Put the member prologue in front of every host method of every widget method table: a
+/// receiver that is no table (`0x847ef8`), holds no object (`0x847ec0`) or fails the table's
+/// [`Class`] (`0x847e98`) raises its line before the method converts an argument. Left as they
+/// are: the [`NO_PROLOGUE`] methods, and each of the Region table's names
+/// ([`super::REGION_MAP_METHODS`]), one function every widget table shares, which checks its own
+/// receiver ([`super::region_map::install`]). Runs once, after the last table is built.
+pub(super) fn guard_receivers(lua: &Lua) -> mlua::Result<()> {
+    use crate::widget::RegionKind;
+    let mut tables: Vec<(&'static str, Class)> = vec![
+        (REG_FRAME_METHODS, Class::Frame),
+        (super::REG_REGION_METHODS, Class::Widget),
+        (
+            super::REG_TEXTURE_METHODS,
+            Class::Region(RegionKind::Texture),
+        ),
+        (
+            super::REG_FONTSTRING_METHODS,
+            Class::Region(RegionKind::FontString),
+        ),
+        (super::REG_TITLE_METHODS, Class::Region(RegionKind::Title)),
+        (super::font::REG_FONT_METHODS, Class::Font),
+    ];
+    for kind in every_frame_kind() {
+        for &table in kind_method_registries(Some(kind)) {
+            if !tables.iter().any(|(t, _)| *t == table) {
+                tables.push((table, Class::FrameKind(table)));
+            }
+        }
+    }
+    let region: Table = lua.named_registry_value(super::REG_REGION_METHODS)?;
+    let shared: Vec<Value> = super::REGION_MAP_METHODS
+        .iter()
+        .map(|name| region.raw_get::<Value>(*name))
+        .collect::<mlua::Result<_>>()?;
+    for (key, class) in tables {
+        let Value::Table(methods) = lua.named_registry_value::<Value>(key)? else {
+            continue;
+        };
+        let entries: Vec<(Value, Value)> = methods
+            .pairs::<Value, Value>()
+            .collect::<mlua::Result<_>>()?;
+        for (name, method) in entries {
+            if shared.contains(&method) {
+                continue;
+            }
+            if let Value::String(n) = &name {
+                let n = n.to_string_lossy();
+                if NO_PROLOGUE.iter().any(|&(t, m)| t == key && m == n) {
+                    continue;
+                }
+            }
+            let Value::Function(method) = method else {
+                continue;
+            };
+            let guarded = lua.guard_receiver(&method, move |lua, receiver| match receiver {
+                mlua::Receiver::NotTable => Err(mlua::Error::runtime(ERR_NON_TABLE)),
+                mlua::Receiver::NoObject => Err(mlua::Error::runtime(ERR_NO_OBJECT)),
+                mlua::Receiver::Object(p) => {
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
+                    if class.admits(&model, p as u32) {
+                        Ok(())
+                    } else {
+                        Err(mlua::Error::runtime(ERR_WRONG_TYPE))
+                    }
+                }
+            })?;
+            if let Some(guarded) = guarded {
+                methods.raw_set(name, guarded)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Every frame kind, so [`guard_receivers`] reaches every kind's method tables. The match makes
+/// a new kind a compile error until it is listed here.
+fn every_frame_kind() -> [FrameKind; 20] {
+    let kinds = [
+        FrameKind::Frame,
+        FrameKind::WorldFrame,
+        FrameKind::Button,
+        FrameKind::LootButton,
+        FrameKind::CheckButton,
+        FrameKind::EditBox,
+        FrameKind::StatusBar,
+        FrameKind::Slider,
+        FrameKind::ScrollFrame,
+        FrameKind::Model,
+        FrameKind::PlayerModel,
+        FrameKind::DressUpModel,
+        FrameKind::TabardModel,
+        FrameKind::MessageFrame,
+        FrameKind::ScrollingMessageFrame,
+        FrameKind::ColorSelect,
+        FrameKind::SimpleHtml,
+        FrameKind::MovieFrame,
+        FrameKind::GameTooltip,
+        FrameKind::Minimap,
+    ];
+    for kind in kinds {
+        match kind {
+            FrameKind::Frame
+            | FrameKind::WorldFrame
+            | FrameKind::Button
+            | FrameKind::LootButton
+            | FrameKind::CheckButton
+            | FrameKind::EditBox
+            | FrameKind::StatusBar
+            | FrameKind::Slider
+            | FrameKind::ScrollFrame
+            | FrameKind::Model
+            | FrameKind::PlayerModel
+            | FrameKind::DressUpModel
+            | FrameKind::TabardModel
+            | FrameKind::MessageFrame
+            | FrameKind::ScrollingMessageFrame
+            | FrameKind::ColorSelect
+            | FrameKind::SimpleHtml
+            | FrameKind::MovieFrame
+            | FrameKind::GameTooltip
+            | FrameKind::Minimap => {}
+        }
+    }
+    kinds
+}
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // Wrapper cache (`0x701bd0`)
 // ─────────────────────────────────────────────────────────────────────────────────────────────

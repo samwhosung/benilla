@@ -993,6 +993,7 @@ mod tests {
         s.run(r#"b = CreateFrame("Button", "PlainB", UIParent)"#)
             .unwrap();
         let e = s.run("LB1.SetSlot(b, 1)").unwrap_err().to_string();
-        assert!(e.contains("not a LootButton"), "{e}");
+        // A Button fails the LootButton type test (`0x4c18ee`, `0x495ab0`).
+        assert!(e.contains("Wrong object type for member function"), "{e}");
     }
 }

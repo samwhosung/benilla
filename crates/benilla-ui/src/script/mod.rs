@@ -793,6 +793,7 @@ impl UiScript {
     pub fn new() -> mlua::Result<UiScript> {
         let lua = install_framescript(VmKind::InGame)?;
         install_in_game(&lua)?;
+        object::guard_receivers(&lua)?;
         Ok(Self::host(lua))
     }
 
@@ -804,6 +805,7 @@ impl UiScript {
     pub fn new_glue() -> mlua::Result<UiScript> {
         let lua = install_framescript(VmKind::Glue)?;
         glue::install(&lua)?;
+        object::guard_receivers(&lua)?;
         Ok(Self::host(lua))
     }
 
