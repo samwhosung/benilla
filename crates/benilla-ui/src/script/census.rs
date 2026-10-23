@@ -80,7 +80,15 @@ impl Drop for Applying {
 }
 
 /// A handler was held: the innermost apply's window opens, if it is not open.
-pub(crate) fn held() {}
+pub(crate) fn held() {
+    CENSUS.with(|c| {
+        let mut c = c.borrow_mut();
+        let sent = c.sent();
+        if let Some((_, mark)) = c.applying.last_mut() {
+            mark.get_or_insert(sent);
+        }
+    });
+}
 
 /// A signal point runs what the innermost apply held: its window closes.
 pub(crate) fn point() {
