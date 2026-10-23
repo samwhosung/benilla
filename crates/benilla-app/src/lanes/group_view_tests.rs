@@ -19,6 +19,11 @@ const BOAR: u64 = 0xF130_0000_0045_0002;
 const MATE: u64 = 0x22;
 /// The member's pet.
 const PET: u64 = 0xF140_0000_0000_0077;
+/// A creature a member targets, typed as a unit so a chain may end on it.
+const ADD: u64 = 0xF130_0000_0046_0003;
+/// `OBJECT_FIELD_TYPE` and a unit's type mask (object and unit bits).
+const OBJECT_TYPE: u16 = 2;
+const TYPE_UNIT: u32 = 0x9;
 /// `UNIT_FIELD_SUMMON`, the pet a member's descriptor names (`0x4e81d0`).
 const SUMMON: u16 = 8;
 
@@ -50,6 +55,11 @@ fn hp(cur: u16) -> SessionEvent {
 /// The resolver's seat: [`super::unit_view_tests::seat`]'s, with [`MATE`] as `party1` and `pet`
 /// as `partypet1`.
 fn seat_party(app: &mut App, pet: u64) {
+    seat_party_targeting(app, pet, 0);
+}
+
+/// [`seat_party`], with a held [`MATE`]'s target `target`.
+fn seat_party_targeting(app: &mut App, pet: u64, target: u64) {
     let mut held: std::collections::HashMap<u64, u64> =
         [(ME, 0), (WOLF, 0), (BOAR, 0)].into_iter().collect();
     if app
@@ -58,7 +68,7 @@ fn seat_party(app: &mut App, pet: u64) {
         .0
         .contains_key(&MATE)
     {
-        held.insert(MATE, 0);
+        held.insert(MATE, target);
     }
     if pet != 0 {
         held.insert(pet, 0);
@@ -75,9 +85,18 @@ fn seat_party(app: &mut App, pet: u64) {
         });
 }
 
-/// One frame: the packets, the unit and party feeds' pushes of the frame's state, then the lanes'
-/// drain; what the spy saw.
+/// One frame: the packets, the unit, party, pet and chain feeds' pushes of the frame's state,
+/// then the lanes' drain; what the spy saw.
 fn frame(app: &mut App, packets: Vec<SessionEvent>) -> Vec<String> {
+    frame_after(app, |_| {}, packets)
+}
+
+/// [`frame`], with `before` run on the world between the frame-start snapshot and the packets.
+fn frame_after(
+    app: &mut App,
+    before: impl FnOnce(&mut World),
+    packets: Vec<SessionEvent>,
+) -> Vec<String> {
     let world = app.world_mut();
     #[cfg(debug_assertions)]
     {
@@ -86,11 +105,16 @@ fn frame(app: &mut App, packets: Vec<SessionEvent>) -> Vec<String> {
             .run_system_once(crate::ui_unit::views::mark_frame_start)
             .unwrap();
     }
+    before(world);
     crate::net::handlers::dispatch(world, packets);
     crate::ui_unit::run_feed_units_once(world);
     world
         .run_system_cached(crate::ui_party::feed_party)
         .expect("the party feed runs");
+    world
+        .run_system_cached(crate::ui_pet::feed_pet_unit)
+        .expect("the pet feed runs");
+    crate::ui_unit::run_feed_chain_units_once(world);
     crate::lanes::fire_in_order(world);
     let s = world.non_send_resource_mut::<UiScript>();
     let out = s.eval::<Vec<String>>("return Seen").unwrap();
@@ -180,4 +204,96 @@ fn a_party_pet_created_mid_frame_does_not_exist_before_its_create() {
         ]),
     );
     assert_eq!(seen, ["UNIT_COMBAT:player:nil", "UNIT_COMBAT:player:1"]);
+}
+
+/// A record written past the log fails the rewind's check against the frame-start snapshot: here
+/// the member's maximum health, which no entry of the frame names.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "a write the log missed")]
+fn a_record_write_the_log_missed_fails_the_rewind() {
+    let mut app = party_client();
+    frame_after(
+        &mut app,
+        |world| {
+            let mut group = world.resource_mut::<crate::ui_party::GroupState>();
+            if let Some(record) = group.stats.get_mut(&MATE) {
+                record.max_hp = Some(90);
+            }
+        },
+        vec![hp(70), hp(40)],
+    );
+}
+
+/// The unit a `target` chain ends on reads as each packet left it: `party1target` resolves to
+/// the add (`0x515970`), whose health `UnitHealth` reads off its object at the call
+/// (`0x5174d0`).
+#[test]
+fn a_chain_end_reads_its_own_packets_health() {
+    let mut app = party_client();
+    frame(
+        &mut app,
+        crate::lanes::unit_view_tests::wire_packets(vec![
+            vec![created(
+                MATE,
+                EntityKind::Player,
+                &[(benilla_protocol::field::FIELD_UNIT_HEALTH, 100)],
+            )],
+            vec![created(
+                ADD,
+                EntityKind::Unit,
+                &[
+                    (OBJECT_TYPE, TYPE_UNIT),
+                    (benilla_protocol::field::FIELD_UNIT_HEALTH, 50),
+                ],
+            )],
+        ]),
+    );
+    seat_party_targeting(&mut app, 0, ADD);
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(r#"function Look(event, unit) return UnitHealth("party1target") end"#)
+        .unwrap();
+    frame(&mut app, vec![]);
+    let seen = frame(
+        &mut app,
+        crate::lanes::unit_view_tests::wire_packets(vec![
+            vec![fall(1)],
+            vec![values(ADD, &super::unit_view_tests::health(40))],
+            vec![fall(1)],
+        ]),
+    );
+    assert_eq!(seen, ["UNIT_COMBAT:player:50", "UNIT_COMBAT:player:40"]);
+}
+
+/// `"pet"` reads the bar's pet as each packet left it.
+#[test]
+fn the_pet_reads_its_own_packets_health() {
+    let mut app = party_client();
+    app.world_mut()
+        .resource_mut::<crate::ui_pet::PetBar>()
+        .spells
+        .pet_guid = PET;
+    frame(
+        &mut app,
+        crate::lanes::unit_view_tests::wire_packets(vec![vec![created(
+            PET,
+            EntityKind::Unit,
+            &super::unit_view_tests::health(60),
+        )]]),
+    );
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(r#"function Look(event, unit) return UnitHealth("pet") end"#)
+        .unwrap();
+    frame(&mut app, vec![]);
+    let seen = frame(
+        &mut app,
+        crate::lanes::unit_view_tests::wire_packets(vec![
+            vec![fall(1)],
+            vec![values(PET, &super::unit_view_tests::health(30))],
+            vec![fall(1)],
+        ]),
+    );
+    assert_eq!(seen, ["UNIT_COMBAT:player:60", "UNIT_COMBAT:player:30"]);
 }

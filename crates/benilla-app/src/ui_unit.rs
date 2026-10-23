@@ -1363,6 +1363,14 @@ pub(crate) fn run_feed_units_once(world: &mut World) {
         .expect("the unit events run as a one-shot system");
 }
 
+/// [`held::feed_chain_units`] once, for a test that drives the feeds by hand.
+#[cfg(test)]
+pub(crate) fn run_feed_chain_units_once(world: &mut World) {
+    world
+        .run_system_cached(held::feed_chain_units)
+        .expect("the chain feed runs as a one-shot system");
+}
+
 fn feed_units(
     // What the host also reaches, read before the VM runs with the host lent.
     mut vm: crate::script_calls::VmWith<(
