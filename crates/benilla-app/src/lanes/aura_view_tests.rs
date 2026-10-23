@@ -153,3 +153,31 @@ fn the_buff_cache_takes_each_packets_auras_in_turn() {
         "the returning buff behind the new one: {seen:?}"
     );
 }
+
+/// The aura watcher signals in its packet's notify pass among the bridge's `UNIT_AURA` watches,
+/// at the first field of its range the block visits (`0x4654a4` → `0x465570`). The first packet
+/// moves a spell id: the bridge's watch over the ids (id 41) and the watcher both run at that
+/// field, the bridge's first, as the player's post-init registers it (`0x5dec09` → `0x5fbb21` →
+/// `0x60c65c` → `0x51bbb0`) ahead of the arrival that registers the watcher (`0x5dec7b` →
+/// `0x5deb60` → `0x4908c0` → `0x4e4100`). The second moves only a stack count: the watcher runs
+/// at the ids' field it visits, the bridge's applications watch (id 107) at the count's.
+#[test]
+fn the_aura_watcher_signals_at_its_place_in_its_packet() {
+    let mut app = aura_client();
+    let seen = frame(
+        &mut app,
+        vec![
+            vec![values(ME, &aura(0, 100, 1))],
+            vec![values(ME, &aura(0, 100, 3))],
+        ],
+    );
+    assert_eq!(
+        seen,
+        [
+            "UNIT_AURA:player:1",
+            "PLAYER_AURAS_CHANGED:1",
+            "PLAYER_AURAS_CHANGED:3",
+            "UNIT_AURA:player:3"
+        ]
+    );
+}
