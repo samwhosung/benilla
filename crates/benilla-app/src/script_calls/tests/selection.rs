@@ -284,3 +284,37 @@ fn an_assists_swing_follows_its_target_change_handlers() {
         ["SetSelection 0x22", "RandomRoll", "AttackSwing 0x22"]
     );
 }
+
+/// The release's `PetStopAttack` signals `PET_BAR_UPDATE` (`0x4bd6b4`) inside the teardown
+/// (`0x493a18`), ahead of `CMSG_SET_SELECTION` (`0x493871` for a switch, `0x493a2a` for a clear),
+/// with the selection zeroed (`0x4939d3`): its listeners run there, so their packets go out ahead
+/// of the selection's.
+#[test]
+fn a_called_off_pets_bar_update_handlers_send_ahead_of_the_selection() {
+    for (lua, selected) in [
+        (r#"TargetUnit("party1")"#, "SetSelection 0x22"),
+        ("ClearTarget()", "SetSelection 0x0"),
+    ] {
+        let mut f = frame(true);
+        with_pet_attacking(&mut f, true);
+        feeds(&mut f);
+        f.rx.try_iter().for_each(drop);
+        run(
+            &mut f,
+            r#"local r = CreateFrame("Frame")
+            r:RegisterEvent("PET_BAR_UPDATE")
+            r:SetScript("OnEvent", function() RandomRoll(1, 100) end)"#,
+        );
+        run(&mut f, lua);
+        let wire: Vec<String> =
+            f.rx.try_iter()
+                .filter_map(|c| match c {
+                    ClientCommand::PetStopAttack { .. } => Some("PetStopAttack".to_string()),
+                    ClientCommand::SetSelection { guid } => Some(format!("SetSelection {guid:#x}")),
+                    ClientCommand::RandomRoll { .. } => Some("RandomRoll".to_string()),
+                    _ => None,
+                })
+                .collect();
+        assert_eq!(wire, ["PetStopAttack", "RandomRoll", selected], "{lua}");
+    }
+}
