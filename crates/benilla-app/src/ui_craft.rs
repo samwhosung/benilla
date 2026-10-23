@@ -7,7 +7,7 @@ use bevy::prelude::*;
 
 use benilla_formats::{
     SPELL_ATTR_IS_TRADESKILL, SPELL_EFFECT_CREATE_ITEM, SPELL_EFFECT_ENCHANT_ITEM,
-    SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY, SPELL_EFFECT_LEARN_SPELL,
+    SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY, SPELL_EFFECT_LEARN_PET_SPELL, SPELL_EFFECT_LEARN_SPELL,
 };
 use benilla_protocol::messages::PLAYER_SKILL_SLOTS;
 use benilla_protocol::{SessionEvent, SessionEventKind};
@@ -79,6 +79,9 @@ fn skill_total(store: &ObjectStore, skill_id: u32) -> i32 {
 struct PetUnit {
     guid: u64,
     lines: Option<[u32; 2]>,
+    /// `UNIT_FIELD_BYTES_0`'s race and class bytes (`+0x78`, `+0x79`).
+    race: u8,
+    class: u8,
 }
 
 /// What the craft rows read of the pet: the pet bar's guid (`0xb714a0`) and its spellbook
@@ -116,7 +119,12 @@ impl PetView<'_> {
             .and_then(|e| self.reads.names.as_deref()?.creature_record(e))
             .and_then(|r| self.reads.families.as_deref()?.families.get(r.pet_family))
             .map(|f| f.skill_lines);
-        Some(PetUnit { guid, lines })
+        Some(PetUnit {
+            guid,
+            lines,
+            race: fields.unit_race().unwrap_or(0),
+            class: fields.unit_class().unwrap_or(0),
+        })
     }
 
     /// `KnowsSpell` (`0x60c740`) for a unit that is not the active player: only the pet bar's
@@ -136,6 +144,60 @@ impl PetView<'_> {
                 .line_ability(line, spell)
                 .map(|row| (line, *row))
         })
+    }
+
+    /// `GetSpellRequiredLevel` (`0x60c840`): `None` without a spell record or an ability row,
+    /// else the spell's `spellLevel` (`+0x74`) raised to the `SkillRaceClassInfo` level
+    /// (`+0x14`) of the row's line for the unit's race and class, when one admits them
+    /// (`0x60c891`-`0x60c8a4`). No pet line has such a row.
+    fn required_level(&self, unit: &PetUnit, spell: u32, spells: &Spells) -> Option<i32> {
+        let d = spells.catalog.get(spell)?;
+        let (line, _) = self.ability(unit, spell)?;
+        let level = d.spell_level as i32;
+        Some(
+            match self
+                .skill_lines
+                .catalog
+                .race_class(line, unit.race, unit.class)
+            {
+                Some(rc) => level.max(rc.min_level as i32),
+                None => level,
+            },
+        )
+    }
+
+    /// `GetCraftInfo`'s training-point cost and required level (`0x4f6fe6`-`0x4f7093`), from the
+    /// pet bar's unit (`0xb714a0`): each effect slot that is `LEARN_SPELL` aimed at the pet
+    /// (`+0x148` 5) or `LEARN_PET_SPELL` (`0x4f702e`-`0x4f7037`) names a learned spell; its ability
+    /// row's `reqtrainpoints`, written only when found (`0x4f7049`), and its required level,
+    /// written only when `0x60c840` answers. The last such slot wins; no pet unit is 0 and 0.
+    fn cost_and_level(
+        &self,
+        d: &benilla_formats::SpellDisplay,
+        objects: &Objects,
+        spells: &Spells,
+    ) -> (u32, i32) {
+        let Some(unit) = self.unit(objects, self.bar_guid) else {
+            return (0, 0);
+        };
+        let (mut cost, mut level) = (0, 0);
+        for i in 0..3 {
+            let effect = d.effects[i];
+            let pet_learn = (effect == SPELL_EFFECT_LEARN_SPELL
+                && d.effect_implicit_target_a[i] == TARGET_PET)
+                || effect == SPELL_EFFECT_LEARN_PET_SPELL;
+            if !pet_learn {
+                continue;
+            }
+            let taught = d.effect_trigger_spell[i];
+            if let Some((_, row)) = self.ability(&unit, taught) {
+                cost = row.train_points;
+            }
+            if let Some(l) = self.required_level(&unit, taught, spells) {
+                level = l;
+            }
+        }
+        (cost, level)
     }
 
     /// `KnowsHigherRank` (`0x60c8d0`): a later rank down the unit's ability rows' supersede chain
@@ -410,6 +472,9 @@ fn feed_craft(
                         SPELL_EFFECT_ENCHANT_ITEM | SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY
                     );
                     let icon = craft_icon(d);
+                    let (training_point_cost, required_level) = pet
+                        .as_ref()
+                        .map_or((0, 0), |p| p.cost_and_level(d, &objects, spells));
                     Some(CraftRecipe {
                         spell_id: s,
                         name: d.name.clone(),
@@ -438,8 +503,8 @@ fn feed_craft(
                         skill_line: sla
                             .and_then(|a| skill_lines.catalog.line(a.skill_id))
                             .map(|l| l.name.clone()),
-                        training_point_cost: 0,
-                        required_level: 0,
+                        training_point_cost,
+                        required_level,
                     })
                 })
                 .collect();

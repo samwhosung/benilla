@@ -363,9 +363,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetCraftInfo(index) → craftName, craftSubSpellName, craftType, numAvailable, isExpanded,
     // trainingPointCost, requiredLevel (`Blizzard_CraftUI.lua:168`); a miss pushes the seven too.
-    // `isExpanded` is always nil. Not built: the cost and the level, which the reference reads off
-    // the pet bar's unit (`0xb714a0`) for the spell a pet-learn effect teaches (`0x4f6fe6`-
-    // `0x4f7093`); both answer 0, its answer with no pet.
+    // `isExpanded` is always nil. The cost and the level are the app's, read off the pet bar's
+    // unit (`0xb714a0`) for the spell a pet-learn effect teaches (`0x4f6fe6`-`0x4f7093`).
     g.set(
         "GetCraftInfo",
         lua.create_function(|lua, index: Value| {
@@ -390,8 +389,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Value::String(lua.create_string(r.difficulty.as_str())?),
                 Value::Integer(i64::from(r.num_available)),
                 Value::Nil,
-                Value::Integer(0),
-                Value::Integer(0),
+                Value::Integer(i64::from(r.training_point_cost)),
+                Value::Integer(i64::from(r.required_level)),
             ]))
         })?,
     )?;
