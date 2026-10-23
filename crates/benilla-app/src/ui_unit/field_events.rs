@@ -36,11 +36,17 @@ pub(crate) struct NoticeFiring<'w, 's> {
     // The skill value watch's line reads the line's name and race-class row (`0x5de2f2`,
     // `0x5de340`).
     skill_lines: Option<Res<'w, crate::ui_spellbook::SkillLines>>,
+    // The aura watcher's cache and the store its packet left.
+    auras: crate::ui_aura::PlayerAuraWatch<'w, 's>,
 }
 
 impl NoticeFiring<'_, '_> {
     /// One notice's signals.
     fn fire(&mut self, script: &mut UiScript, notice: FieldNotice) {
+        if notice == FieldNotice::PlayerAuras {
+            self.auras.run(script);
+            return;
+        }
         if notice == FieldNotice::QuestLog {
             if let Some(store) = self.me.iter().next() {
                 script.quest_log_changed(crate::ui_quest_log::slot_views(&store.0));
@@ -312,11 +318,12 @@ pub(crate) fn fire(
         // `0x5ddffa`.
         FieldNotice::ComboPoints => script.fire_event("PLAYER_COMBO_POINTS", vec![]),
         // Fired by [`NoticeFiring::fire`], which holds the slots, the banks, the names, the form
-        // table and the skill lines.
+        // table, the aura cache and the skill lines.
         FieldNotice::QuestLog
         | FieldNotice::Tutorial { .. }
         | FieldNotice::Drunk { .. }
         | FieldNotice::Shapeshift
+        | FieldNotice::PlayerAuras
         | FieldNotice::SkillLines
         | FieldNotice::SkillValue { .. } => {}
         FieldNotice::PvpPreference { on } => {

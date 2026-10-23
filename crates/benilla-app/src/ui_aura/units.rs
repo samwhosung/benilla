@@ -201,22 +201,17 @@ impl UnitAuras {
             return;
         }
         self.scratch.clear();
-        let gate = match store {
-            Some(store) => {
-                self.scratch.extend(other_unit_inputs(store, catalog, raid));
-                buffs_visible(guid, store)
-            }
-            None if record_ok => {
-                if let Some(group) = group {
-                    self.scratch.extend(record_inputs(
-                        group.roster_aura_slots(guid),
-                        catalog,
-                        raid,
-                    ));
-                }
-                true
-            }
-            None => return,
+        let Some(gate) = list_inputs(
+            &mut self.scratch,
+            guid,
+            store,
+            record_ok,
+            group,
+            buffs_visible,
+            catalog,
+            raid,
+        ) else {
+            return;
         };
         let build = |inputs: &[AuraInput]| UnitAuraList {
             auras: aura_list(catalog, inputs),
@@ -249,6 +244,64 @@ impl UnitAuras {
             }
         }
     }
+}
+
+/// What `guid`'s list is built from, into `inputs`, with its unit gate: the live unit's slots
+/// (`store`, the object manager's answer) with its gate, else, for a guid a group token names
+/// (`record_ok`), the roster record's block, which has none (`0x519735`). A guid neither held nor
+/// a group token's gets no list, as `UnitBuff`'s roster walk finds nothing for it.
+#[allow(clippy::too_many_arguments)] // the list's inputs, as the feed reads them
+fn list_inputs(
+    inputs: &mut Vec<AuraInput>,
+    guid: u64,
+    store: Option<&ObjectStore>,
+    record_ok: bool,
+    group: Option<&GroupState>,
+    buffs_visible: &impl Fn(u64, &ObjectStore) -> bool,
+    catalog: Option<&SpellCatalog>,
+    raid: &RaidFilter,
+) -> Option<bool> {
+    match store {
+        Some(store) => {
+            inputs.extend(other_unit_inputs(store, catalog, raid));
+            Some(buffs_visible(guid, store))
+        }
+        None if record_ok => {
+            if let Some(group) = group {
+                inputs.extend(record_inputs(group.roster_aura_slots(guid), catalog, raid));
+            }
+            Some(true)
+        }
+        None => None,
+    }
+}
+
+/// `guid`'s list off `store` and the record `group` holds, as [`UnitAuras::feed`] builds it.
+#[allow(clippy::too_many_arguments)] // the list's inputs, as the feed reads them
+pub(super) fn list_of(
+    guid: u64,
+    store: Option<&ObjectStore>,
+    record_ok: bool,
+    group: Option<&GroupState>,
+    buffs_visible: &impl Fn(u64, &ObjectStore) -> bool,
+    catalog: Option<&SpellCatalog>,
+    raid: &RaidFilter,
+) -> Option<UnitAuraList> {
+    let mut inputs = Vec::new();
+    let gate = list_inputs(
+        &mut inputs,
+        guid,
+        store,
+        record_ok,
+        group,
+        buffs_visible,
+        catalog,
+        raid,
+    )?;
+    Some(UnitAuraList {
+        auras: aura_list(catalog, &inputs),
+        buffs_visible: gate,
+    })
 }
 
 #[cfg(test)]
@@ -374,7 +427,7 @@ mod tests {
     }
 
     /// The player's slots list under its guid as any held unit's: `UnitBuff("player")` walks the
-    /// fields in slot order (`0x51960f`), where the buff cache keeps the order auras arrived in.
+    /// fields in slot order (`0x51960f`), not the buff cache's arrival order.
     #[test]
     fn the_player_token_reads_the_slots_in_slot_order() {
         let mut app = party_app();
@@ -400,15 +453,6 @@ mod tests {
             ],
         );
         assert_eq!(listed(&mut app, "player", false), [1126, 2457]);
-        let cache = &app
-            .world()
-            .resource::<super::super::PlayerAuraCache>()
-            .auras;
-        assert_eq!(
-            cache.iter().map(|c| c.spell_id).collect::<Vec<_>>(),
-            [2457, 1126],
-            "the cache keeps arrival order"
-        );
     }
 
     /// A set `raidFilter` counts the buffs the player could cast, off the books as they stand: a

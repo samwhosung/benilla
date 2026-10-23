@@ -85,6 +85,9 @@ pub(crate) enum FieldNotice {
     /// (`0x4d2fec`): the maximum's and the permanent bonus's watch `0x5de450` (`0x5de45c`) and the
     /// temporary bonus's `0x5de470` (`0x5de49a`).
     SkillLines,
+    /// `OnPlayerAurasChanged` (`0x4e4140`) on the active player's aura fields: the buff cache's
+    /// rebuild and its `PLAYER_AURAS_CHANGED` (`0x4e4170`, `0x4e437f`).
+    PlayerAuras,
     /// The skill value watch `0x5de180` past its gate (`0x5de20c`): the rebuild (`0x5de2a7`), then
     /// its line for the active player: `ERR_SKILL_GAINED_S` over an old value of 0 (`0x5de378`),
     /// else `ERR_SKILL_UP_SI` with the shown value (`0x5de417`). `old` is the value word's copy,
@@ -365,6 +368,13 @@ const GUILD_TIMESTAMP: (u16, u16) = (0x24, 4);
 /// The active player's own `CHARMEDBY` watch, `0x5de090` (`0x5dd9f4`): 8 bytes at the unit
 /// section's `+0x10`, refreshing its reaction (`0x5de0b5`).
 const CHARMED_BY: (u16, u16) = (0x10, 8);
+
+/// The active player's aura watch `0x4e4140`, registered at the world entry (`0x4e4100`, from
+/// `0x4908c0`): 0x138 bytes at the unit section's `+0xa4` (`0x4e4109`, `0x4e4115`), the aura ids,
+/// flags, levels and applications, on the object's own list behind the bridge's watches: the
+/// player's post-init registers those first (`0x5dec09` → `0x5fbb21` → `0x60c65c` → `0x51bbb0`),
+/// then arrives (`0x5dec7b` → `0x5deb60` → `0x4908c0`).
+const PLAYER_AURAS: (u16, u16) = (0xa4, 0x138);
 
 /// The active player's form watch `0x5de010`, `UNIT_FIELD_BYTES_1` byte 2, the unit section's
 /// `+0x212` (`0x5dda18`-`0x5dda21`), and its combo-count watch `0x5ddff0`, `PLAYER_FIELD_BYTES`
@@ -808,6 +818,9 @@ pub(crate) fn placed_values(
         }
         if let Some(at) = at(UNIT_SECTION, SHAPESHIFT_FORM, List::Object) {
             pass.push(at, FieldNotice::Shapeshift);
+        }
+        if let Some(at) = at(UNIT_SECTION, PLAYER_AURAS, List::Object) {
+            pass.push(at, FieldNotice::PlayerAuras);
         }
         if let Some(at) = at(PLAYER_SECTION, COMBO_POINTS, List::Object) {
             pass.push(at, FieldNotice::ComboPoints);
