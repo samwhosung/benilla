@@ -1562,6 +1562,102 @@ mod tests {
         assert_eq!(next.applied, 1);
     }
 
+    /// While a stretch is deferred, a handler fired is held even with a host lent, and a lend's
+    /// drain runs nothing; each leg's handlers park apart, and each parked run fires once, in
+    /// order, with the host lent.
+    #[test]
+    fn a_deferred_stretch_parks_each_legs_handlers_for_one_run() {
+        let mut s = UiScript::new().unwrap();
+        on(&s, "LOOT_OPENED", r#"ORDER = (ORDER or "") .. "opened ""#);
+        on(&s, "LOOT_CLOSED", r#"ORDER = (ORDER or "") .. "closed ""#);
+        let mut host = Nesting {
+            applied: Vec::new(),
+            inner: None,
+        };
+        let mark = s.waiting_mark();
+        let deferring = s.defer();
+        s.hosted(&mut host, |s| s.fire_event("LOOT_OPENED", vec![]));
+        assert_eq!(global::<Option<String>>(&s, "ORDER"), None, "held");
+        let first = s.park_since(mark).expect("the first leg's");
+        s.fire_event("LOOT_CLOSED", vec![]);
+        s.hosted(&mut host, |_| ());
+        assert_eq!(
+            global::<Option<String>>(&s, "ORDER"),
+            None,
+            "the drain refused"
+        );
+        let second = s.park_since(mark).expect("the second leg's");
+        assert_eq!(s.park_since(mark), None, "nothing since");
+        drop(deferring);
+        let lua = s.lua().clone();
+        assert!(!super::super::host::holding(&lua));
+        s.hosted(&mut host, |s| {
+            s.run_parked(first);
+            s.run_parked(first);
+        });
+        assert_eq!(global::<String>(&s, "ORDER"), "opened ", "once");
+        s.hosted(&mut host, |s| s.run_parked(second));
+        assert_eq!(global::<String>(&s, "ORDER"), "opened closed ");
+    }
+
+    /// A parked stretch puts back the lock bits and the cursor its writes changed, so what runs
+    /// before it reads them as they stood, and makes each write again in its place when it runs:
+    /// the clear's `CURSOR_UPDATE` reads the emptied cursor then.
+    #[test]
+    fn a_parked_stretch_rewinds_its_cursor_and_lock_writes_and_makes_them_again() {
+        use super::super::cursor::{CursorItem, CursorPayload};
+        const LOCKED: u64 = 0x200;
+        let mut s = UiScript::new().unwrap();
+        on(&s, "CURSOR_UPDATE", r#"SEEN = tostring(CursorHasItem())"#);
+        // A handler held ahead of the writes, so they wait behind it.
+        on(&s, "LOOT_OPENED", "OPENED = 1");
+        s.set_cursor_for_test(CursorPayload::Item(CursorItem {
+            item_class: None,
+            guid: 0x106,
+            bar_placeable: true,
+            consumable: false,
+            bag: 0,
+            slot: 1,
+            item_id: 117,
+            texture: None,
+            link: None,
+            count: None,
+            quality: None,
+            equip_slots: Vec::new(),
+        }));
+        let mark = s.waiting_mark();
+        let deferring = s.defer();
+        s.fire_event("LOOT_OPENED", vec![]);
+        s.lock_item(LOCKED);
+        s.clear_cursor_payload();
+        let key = s.park_since(mark).expect("parked");
+        drop(deferring);
+        assert!(!s.item_locked(LOCKED), "the lock put back");
+        assert!(s.cursor_payload().is_some(), "the cursor put back");
+        let mut host = Nesting {
+            applied: Vec::new(),
+            inner: None,
+        };
+        s.hosted(&mut host, |s| s.run_parked(key));
+        assert!(s.item_locked(LOCKED), "the lock made again");
+        assert!(s.cursor_payload().is_none(), "the clear made again");
+        assert_eq!(global::<String>(&s, "SEEN"), "nil");
+    }
+
+    /// The deferral's guard ends with a panic that unwinds through it: nothing is held after.
+    #[test]
+    fn a_panic_ends_the_deferral() {
+        let s = UiScript::new().unwrap();
+        let lua = s.lua().clone();
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _deferring = s.defer();
+            panic!("inside a deferred stretch");
+        }));
+        assert!(unwound.is_err());
+        assert!(!super::super::host::holding(&lua));
+        assert!(!super::super::host::open(&lua));
+    }
+
     /// A host whose `ClearTarget` panics; its other calls signal `PLAYER_TARGET_CHANGED`, stop at a
     /// signal point, catch what unwinds out of it, and note whether it did and how the slot stood
     /// after: whether the host was free and handlers held.

@@ -56,6 +56,11 @@ fn award(app: &mut App, victim: u64, total: u32, kill: bool) {
 
 /// `guid` drops from alive to dead; what lines the death watcher then parks, by key.
 fn dies(app: &mut App, guid: u64) -> Vec<String> {
+    health_moves(app, guid, 40, 0)
+}
+
+/// `guid`'s health moves from `old` to `new`; what lines the death watcher then parks, by key.
+fn health_moves(app: &mut App, guid: u64, old: u32, new: u32) -> Vec<String> {
     let entity = app.world().resource::<GuidIndex>().0[&guid];
     app.world_mut().write_message(crate::net::FieldChanged {
         at: crate::lanes::stamp(),
@@ -63,8 +68,8 @@ fn dies(app: &mut App, guid: u64) -> Vec<String> {
         guid,
         kind: ObjectType::Unit,
         index: FIELD_UNIT_HEALTH,
-        old: 40,
-        new: 0,
+        old,
+        new,
     });
     app.world_mut().run_system_once(death_lines).unwrap();
     app.world()
@@ -105,5 +110,23 @@ fn a_kill_that_awards_experience_prints_no_death_line() {
         death(&|app| award(app, OTHER, 60, true)),
         ["UNITDIESOTHER"],
         "another unit's award"
+    );
+}
+
+/// The death line rides the health watcher's own edge, compared signed (`0x604774 jg`,
+/// `0x604778 jle`, then `0x6047a3` → `0x605860` → `0x62c160`): a fall to a negative health
+/// prints it, and a rise out of a negative one to 0 does not.
+#[test]
+fn the_death_line_reads_health_signed() {
+    let mut app = world();
+    assert_eq!(
+        health_moves(&mut app, MOB, 40, u32::MAX),
+        ["UNITDIESOTHER"],
+        "a fall to -1"
+    );
+    let mut app = world();
+    assert!(
+        health_moves(&mut app, MOB, 0x8000_0000, 0).is_empty(),
+        "the old health was not above 0"
     );
 }

@@ -852,6 +852,67 @@ mod tests {
         assert_eq!(order, ["SetSelection 0", "DuelAccepted"]);
     }
 
+    /// A death's signals parked on a VM that has since been replaced (a reload, the session's
+    /// end, the entry load's) run nothing on the new one, whose own parked keys count from 0
+    /// again.
+    #[test]
+    fn a_deaths_signals_parked_on_a_replaced_vm_run_nothing_on_the_next() {
+        let mut c = client();
+        let mob = c.mob;
+        c.select(MOB, mob);
+        crate::script_calls::insert_test_vm(c.world());
+        c.lua(
+            r#"HEARD = 0 local f = CreateFrame("Frame") f:RegisterEvent("PLAYER_TARGET_CHANGED")
+            f:SetScript("OnEvent", function() HEARD = HEARD + 1 end)"#,
+        );
+        // The death's legs run, their signals parked on this VM and left on the lane.
+        let world = c.world();
+        world.write_message(FieldChanged {
+            at: crate::lanes::stamp(),
+            entity: mob,
+            guid: MOB,
+            kind: ObjectType::Unit,
+            index: FIELD_UNIT_HEALTH,
+            old: 100,
+            new: 0,
+        });
+        crate::net::handlers::dispatch(world, vec![SessionEvent::ObjectUpdateEnd]);
+        assert_eq!(world.resource::<Selection>().guid, None, "the legs ran");
+        crate::script_calls::insert_test_vm(world);
+        crate::script_calls::with_hosted_vm(world, |s| {
+            let s = s.expect("a VM");
+            s.run(
+                r#"HEARD = 0 local f = CreateFrame("Frame") f:RegisterEvent("LOOT_OPENED")
+                f:SetScript("OnEvent", function() HEARD = HEARD + 1 end)"#,
+            )
+            .expect("the listener is in");
+            // The new VM parks its own first stretch, under the key the old one's took.
+            let mark = s.waiting_mark();
+            let deferring = s.defer();
+            s.fire_event("LOOT_OPENED", vec![]);
+            assert!(s.park_since(mark).is_some());
+            drop(deferring);
+        });
+        super::fire_deaths_lane(c.world());
+        let heard: i64 = crate::script_calls::eval_in_vm(c.world(), "return HEARD");
+        assert_eq!(
+            heard, 0,
+            "the stale signals ran the new VM's parked stretch"
+        );
+    }
+
+    /// The death's legs reserve the death line's place in the net drain, and the line's watcher
+    /// takes it in the same frame: the watcher runs after the drain in the real schedule.
+    #[test]
+    fn the_death_line_watcher_runs_after_the_net_drain() {
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        assert!(crate::test_support::runs_before(
+            &mut app,
+            crate::net::apply_net_updates,
+            crate::ui_chat::combat::watch::death_lines,
+        ));
+    }
+
     /// The guid the interaction latch holds.
     fn latched(c: &mut Client) -> Option<u64> {
         c.world()
