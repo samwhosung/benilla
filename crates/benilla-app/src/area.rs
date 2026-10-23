@@ -254,7 +254,8 @@ fn pvp_faction_text(pvp: Option<(&str, &str)>) -> Option<String> {
     pvp.map(|(_, faction)| faction.to_string())
 }
 
-/// `GetZonePVPInfo` (`0x48d540`): `(pvpType, isArena)`. isArena is the leaf's Flags `0x80`, read
+/// `GetZonePVPInfo` (`0x48d540`) returns three values, `pvpType, factionName, isArena`; this gives
+/// the first and third, [`pvp_faction_text`] the second. isArena is the leaf's Flags `0x80`, read
 /// before any bail. The type is nil with no zone row, no faction template, or the display gate
 /// closed: it opens on a PvP realm ([`RealmPvp`]) or in a zone whose Flags carry `0x10`, the six
 /// capitals (`0x48d5c2`/`0x48d5cc`). Open, it is the zone's FactionGroupMask against the template's
