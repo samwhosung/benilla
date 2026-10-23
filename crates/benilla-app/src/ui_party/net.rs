@@ -469,7 +469,10 @@ pub(crate) fn member_deactivated<'a>(
 }
 
 /// [`member_deactivated`] for every streamed roster member: a cross-map transfer's teardown, where
-/// the reference destroys each object and runs the hook on each.
+/// the reference frees each object without its release (`0x467700` → `0x467800`), and the player's
+/// destructor runs the same roster search in mode 0 (`0x5dd600`, at `0x5dd6a0` → `0x4e85d0`): the
+/// record built (`0x4e8630`) and the stats asked, with no `PARTY_MEMBER_DISABLE`, which only the
+/// release signals (`0x5e9b78`).
 pub(crate) fn roster_deactivated(
     group: &mut GroupState,
     index: &GuidIndex,
@@ -487,8 +490,6 @@ pub(crate) fn roster_deactivated(
     let held = |g: u64| index.0.get(&g).and_then(|e| stores.get(*e).ok());
     for guid in streamed {
         member_deactivated(guid, group, held(guid), held, names, script, net_commands);
-        // The release's `PARTY_MEMBER_DISABLE` (`0x5e9b78`).
-        group.member_object(guid, false);
     }
 }
 

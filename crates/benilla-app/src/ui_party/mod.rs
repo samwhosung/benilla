@@ -638,7 +638,7 @@ impl GroupState {
         self.signals.push(signal);
     }
 
-    /// A member's player object entering (`enabled`) or leaving the object manager: its
+    /// A member's player object entering the object manager (`enabled`) or released from it: its
     /// `PARTY_MEMBER_ENABLE` or `_DISABLE`, for a guid in a party slot (`0x4e85e5`-`0x4e8604`, the
     /// four guids at `0xbc6f48`); any other signals nothing.
     pub(crate) fn member_object(&mut self, guid: u64, enabled: bool) {

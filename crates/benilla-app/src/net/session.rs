@@ -313,7 +313,8 @@ fn on_worldport(
         needs_ack,
     } = ev
     {
-        // Every streamed roster member is about to be purged; the reference deactivates each.
+        // Every streamed roster member is about to be freed, and each one's destructor runs the
+        // roster hook (`0x5dd6a0` → `0x4e85d0` mode 0).
         let before = view_log.as_ref().map(|_| group.stats.clone());
         crate::ui_party::net::roster_deactivated(
             &mut group,
