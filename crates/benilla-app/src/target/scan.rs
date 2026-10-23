@@ -555,11 +555,8 @@ impl OwedSwing {
 /// `entity` is the guid's object, which the select lights (`0x493701`); with none the guid is
 /// stored all the same (`0x4935c8` → `0x493605`), and neither `IsSelectable` nor the light runs.
 /// For a writer whose signal has no listeners to run first, the re-swing goes out here.
-///
-/// Here the latch (`0x493637`) reduces to `engaged && had_old`: vmangos ends [`Engaged`] when the
-/// victim dies, before a click can land, so for a writer outside the script calls the old target's
-/// own legs are taken to pass. `engaged` is the server's echo, a round trip behind the reference's
-/// local lock.
+/// `old_latches` is [`latches_on`] the selection as it stands. `engaged` is the server's echo of
+/// the attack lock (`[+0xc48]`), which the reference clears at the same echo (`0x624e40`).
 pub(super) fn commit(
     selection: &mut Selection,
     seam: &mut crate::creature_anim::AttackSeam,
@@ -569,6 +566,7 @@ pub(super) fn commit(
     engaged: bool,
     self_guid: Option<u64>,
     new_attackable: bool,
+    old_latches: bool,
 ) -> CommitOutcome {
     let (out, owed) = commit_owing(
         selection,
@@ -579,7 +577,7 @@ pub(super) fn commit(
         engaged,
         self_guid,
         new_attackable,
-        true,
+        old_latches,
     );
     owed.pay(selection, seam);
     out
@@ -1055,6 +1053,7 @@ pub(super) fn auto_acquire(
             false,
             Some(my_guid.0),
             false,
+            false,
         );
     }
 }
@@ -1100,6 +1099,7 @@ mod tests {
                         engaged,
                         self_guid,
                         attackable,
+                        true,
                     )
                 },
             )

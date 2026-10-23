@@ -66,6 +66,7 @@ pub(super) fn select_on_plate_click(
     mut greeting: MessageWriter<crate::sound::NpcGreetingRequest>,
     mut right_clicks: MessageWriter<PlateRightClick>,
     units: Query<(&Guid, Option<&ObjectStore>)>,
+    relations: super::RelationWorld,
 ) {
     let (left, right) = (
         std::mem::take(&mut plate.left),
@@ -87,6 +88,7 @@ pub(super) fn select_on_plate_click(
         }
         // Attack-classified only when the press was on this unit: a scripted click has no cursor.
         let attack = press.attack() && press.hovered.target == Some(entity);
+        let old_latches = scan::latches_on(&relations, selection.guid);
         scan::commit(
             &mut selection,
             &mut seam,
@@ -96,6 +98,7 @@ pub(super) fn select_on_plate_click(
             engaged,
             self_guid,
             attack,
+            old_latches,
         );
     }
     for entity in right {
@@ -109,6 +112,7 @@ pub(super) fn select_on_plate_click(
         let selected = if front.takes(entity, guid.0, seam.slots.targeting()) {
             scan::CommitOutcome::default()
         } else {
+            let old_latches = scan::latches_on(&relations, selection.guid);
             scan::commit(
                 &mut selection,
                 &mut seam,
@@ -118,6 +122,7 @@ pub(super) fn select_on_plate_click(
                 engaged,
                 self_guid,
                 press.attack(),
+                old_latches,
             )
         };
         right_clicks.write(PlateRightClick { selected });
@@ -141,6 +146,7 @@ pub(super) fn select_on_click(
     click_cfg: Res<ClickConfig>,
     // Read at the commit, where the reference resolves it for `0x493540`'s `IsSelectable` gate.
     stores: Query<&ObjectStore>,
+    relations: super::RelationWorld,
 ) {
     let (hovered, occlusion) = (press.hovered, press.occlusion);
     let clicked = clicks.read().last().is_some();
@@ -188,6 +194,7 @@ pub(super) fn select_on_click(
             // click fires it, so a re-click steps the variation.
             greeting.write(crate::sound::NpcGreetingRequest { npc: entity });
             // The cursor's Attack classification is `0x5ecb70`'s new-target validation.
+            let old_latches = scan::latches_on(&relations, selection.guid);
             scan::commit(
                 &mut selection,
                 &mut seam,
@@ -197,6 +204,7 @@ pub(super) fn select_on_click(
                 engaged,
                 self_guid,
                 press.attack(),
+                old_latches,
             );
         }
         // Deselect, except on the sky with a payload held (reachable only over a GameObject, as a
@@ -308,6 +316,8 @@ pub(crate) struct Dispatch<'w, 's> {
     loot_cfg: Res<'w, crate::ui_loot::LootConfig>,
     /// Our player as the active mover (`0xc4da98`), which the loot legs' store asks.
     mover: Query<'w, 's, (), (With<SelfPlayer>, With<crate::net::ActiveMover>)>,
+    /// The re-swing latch's legs on the outgoing selection (`0x49365f`-`0x4936a3`).
+    relations: super::RelationWorld<'w, 's>,
 }
 
 /// What a leg does once its `SetAutoLoot` has applied, the sweep it may run included: the loot or
@@ -1112,6 +1122,7 @@ fn interact(
         );
     }
     let me = dispatch.me();
+    let relations = &dispatch.relations;
     // A mid-combat click on a vendor or corpse switches and stops, never swings (`0x5ecb70`); the
     // sword, not the fork, as the re-swing also needs the player's own legs.
     // Deref'd only where it commits: a leg that does not select leaves the change tick alone.
@@ -1123,6 +1134,7 @@ fn interact(
         if front.takes(entity, guid, seam.slots.targeting()) {
             return scan::CommitOutcome::default();
         }
+        let old_latches = scan::latches_on(relations, selection.guid);
         scan::commit(
             selection,
             seam,
@@ -1132,6 +1144,7 @@ fn interact(
             me.is_some_and(|(_, _, e)| e),
             me.map(|(_, g, _)| g),
             press.attack(),
+            old_latches,
         )
     };
     let mut outcome = match &mut select {
@@ -2401,6 +2414,7 @@ mod tests {
             world.init_resource::<crate::ui_script::CursorPayloadHeld>();
             world.init_resource::<crate::spell::SpellTargeting>();
             world.init_resource::<ClickConfig>();
+            world.init_resource::<crate::net::Reputations>();
             world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
             world.init_resource::<Messages<crate::player::StandStateRequest>>();
             world.init_resource::<Messages<crate::sound::NpcGreetingRequest>>();
@@ -3208,7 +3222,15 @@ mod tests {
     fn an_interaction_switching_targets_mid_combat_stops_selects_and_swings() {
         const OLD: u64 = 0xF130_0000_0000_0111;
         let (mut world, wolf, rx) = wolf_world();
-        let old = world.spawn((Guid(OLD), store(&[(F_HEALTH, 100)]))).id();
+        // A live unit (`OBJECT_FIELD_TYPE` 0x9), as the re-swing's latch looks the outgoing
+        // selection up (`0x49365f`).
+        let old = world
+            .spawn((Guid(OLD), store(&[(2, 0x9), (F_HEALTH, 100)])))
+            .id();
+        world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(OLD, old);
         {
             let mut selection = world.resource_mut::<Selection>();
             selection.guid = Some(OLD);
