@@ -461,13 +461,15 @@ fn a_switch_to_a_friend_while_swinging_stops_again() {
 
 /// StartAttack selects its target (`0x5ecca0`-`0x5eccaa` → `0x493540`) after the stand and before
 /// the swing: the attack a stealth opener defers to its `SMSG_SPELL_GO` (`0x6e8402` → `0x6131a0`
-/// → `0x5ecb70`) selects the GO's first hit, whatever is selected, then swings at it.
+/// → `0x5ecb70`) selects the GO's first hit, whatever is selected, and its `PLAYER_TARGET_CHANGED`
+/// (`0x49389c`) runs its listeners before the swing (`0x5ecd3c`).
 #[test]
 fn a_go_deferred_attack_selects_its_hit_before_it_swings() {
     const BACKSTAB: u32 = 53;
     let mut f = frame(true);
     spawn_mob(&mut f, &[]);
     swinging_at_old(&mut f);
+    on_target_changed(&mut f, "RandomRoll(1, 100)");
     let world = f.app.world_mut();
     let me = world.resource::<GuidIndex>().0[&ME];
     world
@@ -510,7 +512,10 @@ fn a_go_deferred_attack_selects_its_hit_before_it_swings() {
         }],
     );
     assert_eq!(selected(&f), Some(MOB));
-    assert_eq!(attack_wire(&f), ["SetSelection 0x31", "AttackSwing 0x31"]);
+    assert_eq!(
+        attack_wire(&f),
+        ["SetSelection 0x31", "RandomRoll", "AttackSwing 0x31"]
+    );
 }
 
 /// The wire a pick and what follows it send, in order: selections, rolls, Sinister Strike's casts
