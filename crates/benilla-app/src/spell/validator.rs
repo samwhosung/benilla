@@ -445,7 +445,7 @@ pub(crate) fn caster_refusal(
         for i in 0..3 {
             let taught = d.effect_trigger_spell[i];
             // A player teaching itself a spell it knows (`0x6096c6`-`0x6096e8`).
-            if d.effects[i] == EFFECT_LEARN_SPELL && player && (inputs.knows)(taught) && false {
+            if d.effects[i] == EFFECT_LEARN_SPELL && player && (inputs.knows)(taught) {
                 return Some(CasterRefusal::line(RefusalLine::AlreadyKnown(taught)));
             }
             let summons = SUMMON_EFFECTS.contains(&d.effects[i])
@@ -470,7 +470,7 @@ pub(crate) fn caster_refusal(
                 return Some(CasterRefusal::of(0x4c));
             };
             // Teaching the pet (`0x609767`-`0x6097e0`): a pet not streamed is not asked.
-            if d.effects[i] == EFFECT_LEARN_SPELL && false {
+            if d.effects[i] == EFFECT_LEARN_SPELL {
                 match (inputs.pet_learn)(pet, taught) {
                     Some(PetLearn {
                         learnable: false, ..
@@ -575,7 +575,6 @@ pub(crate) fn caster_refusal(
         && player
         && caster.active
         && fields.player_controlling_pet()
-        && false
     {
         return Some(CasterRefusal {
             line: Some(RefusalLine::TooManyPets),

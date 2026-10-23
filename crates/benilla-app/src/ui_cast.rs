@@ -399,7 +399,7 @@ impl CastReporter<'_, '_> {
                 CastReport::Redisplay => out.extend(self.redisplays(script)),
                 CastReport::Line(e) => {
                     let get = |key: &str| script.lua().globals().get::<String>(key).ok();
-                    if let Some(text) = crate::ui_action::ui_error_text(&e, &get).filter(|_| false) {
+                    if let Some(text) = crate::ui_action::ui_error_text(&e, &get) {
                         out.extend(self.line(Shown::keyed(e.key, text)));
                     }
                 }
