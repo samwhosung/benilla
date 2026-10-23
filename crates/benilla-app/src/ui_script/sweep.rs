@@ -17,8 +17,7 @@
 //! in the reference's call order. The calls benilla has nothing for: the field-watch
 //! unregistrations (`0x490aad`, `0x490ab7`, `0x490acb`, `0x490ae4`, `0x490af3`, and the tail of
 //! `0x490ada`'s leg), frees of caches it does not hold (the minimap's points of interest
-//! `0x490a99`, the durability alert `0x490aa8`, the trade skill's item callbacks `0x490ae9`, the
-//! battlefield list `0x490b20`, the minigame `0x490b34`), the sound band's reset (`0x490b3e` →
+//! `0x490a99`, the durability alert `0x490aa8`, the battlefield list `0x490b20`, the minigame `0x490b34`), the sound band's reset (`0x490b3e` →
 //! `0x72a450`, `[0xcf06e4]`), the pending-chat latch (`0x490a9e`), an empty stub (`0x490b43`), six
 //! bare `ret`s, and past the event the camera's detach (`0x490b52`-`0x490b5a`, `0x4841a0` →
 //! `0x50d0f0(0)`).
@@ -85,6 +84,8 @@ pub(crate) enum SweepLeg {
     Merchant,
     /// `0x490adf` → `0x4bf220` → `0x5d4310`.
     Trade,
+    /// `0x490ae9` → `0x4fc780` → `0x4fc890`: the profession list's item waits cancelled.
+    TradeSkill,
     /// `0x490afd` → `0x4d47d0`.
     Duel,
     /// `0x490b02` → `0x4f5830` → `0x4f58a0`.
@@ -208,6 +209,7 @@ fn sweep_schedule() -> Schedule {
                 SweepLeg::Trainer,
                 SweepLeg::Merchant,
                 SweepLeg::Trade,
+                SweepLeg::TradeSkill,
                 SweepLeg::Duel,
                 SweepLeg::Tabard,
                 SweepLeg::Registrar,

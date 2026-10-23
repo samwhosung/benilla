@@ -29,6 +29,7 @@ use crate::query_cache::Ask;
 use crate::spell::{cast_target, CastCommit, CastLadder};
 use crate::ui_action::{PlayerActions, Spells};
 use crate::ui_items::{count_of, item_icon, InventoryScope};
+use crate::ui_script::{SweepApp, SweepLeg};
 use crate::ui_spellbook::SkillLines;
 use crate::ui_unit::UnitFeed;
 use benilla_assets::{AssetSet, LockRecover, WorldAssets};
@@ -99,6 +100,7 @@ impl Plugin for UiTradeSkillPlugin {
     fn build(&self, app: &mut App) {
         app.net_handler(SessionEventKind::Disconnected, on_session_end);
         register_rebuild_triggers(app);
+        app.add_sweep_leg(SweepLeg::TradeSkill, cancel_trade_skill_waits);
         app.init_resource::<TradeSkillOpens>()
             .init_resource::<TradeSkillOpen>()
             .init_resource::<TradeSkillRepeatCarry>()
@@ -387,6 +389,13 @@ fn resolve_recipe(
         icon_pending,
         tools_pending,
     })
+}
+
+/// The leave-world sweep's leg (`0x490ae9` → `0x4fc780`): the pending count zeroed.
+fn cancel_trade_skill_waits(script: Option<NonSendMut<UiScript>>) {
+    if let Some(mut script) = script {
+        script.trade_skill_cancel_waits();
+    }
 }
 
 /// The packets that rebuild the open profession and craft lists, each at its handler's place on

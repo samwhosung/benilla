@@ -176,7 +176,9 @@ fn row_order(
 /// array as the last sort left it (flag 0). With a product's record in flight the pass leaves
 /// before the header rows and the sort (`0x4fcd58`, `0x4fcf34`): the array holds the recipes in
 /// add order alone, its full count theirs (`0x4fcba4`), the shown count as the last sort left it,
-/// and `false` says no update follows.
+/// and `false` says no update follows. A set flag has reset the subclass and fold masks first
+/// (`0x4fcae2`, `0x4fcae8`) and restores the saved flags only past that exit (`0x4fcf3a`), so
+/// such a pass loses the folds and the filters.
 pub(crate) fn build(model: &mut Model, remake_headers: bool) -> bool {
     let Some(t) = model.trade_skill.as_ref() else {
         model.trade_skill_rows.clear();
@@ -186,6 +188,10 @@ pub(crate) fn build(model: &mut Model, remake_headers: bool) -> bool {
     };
     if t.recipes.iter().any(|r| r.icon_pending.is_some()) {
         model.trade_skill_rows = (0..t.recipes.len()).map(Row::Entry).collect();
+        if remake_headers {
+            model.trade_skill_collapsed.clear();
+            model.trade_skill_subclass_hidden.clear();
+        }
         return false;
     }
     let made = groups_in_add_order(&t.recipes);

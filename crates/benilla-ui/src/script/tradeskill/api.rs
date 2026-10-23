@@ -155,15 +155,17 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                     Row::Header { .. } => None,
                     Row::Entry(ei) => model.trade_skill.as_ref().map(|t| &t.recipes[ei]),
                 })
-                .map(|r| r.product_item);
-            let Some(product) = product else {
+                .map(|r| (r.product_item, r.icon_pending == Some(r.product_item)));
+            let Some((product, in_flight)) = product else {
                 return Ok(MultiValue::new());
             };
             let Some(view) = model.item_templates.get(&product).cloned() else {
                 if product != 0 {
                     model.item_stat_asks.insert(product);
-                    // The ask carries the callback `0x4fdc30` (`0x4fdf77`).
-                    model.trade_skill_item_waits.push(product);
+                    // The item cache's miss waits with the callback `0x4fdc30` (`0x4fdf77`).
+                    if in_flight {
+                        model.trade_skill_item_waits.push(product);
+                    }
                 }
                 return Ok(MultiValue::new());
             };
