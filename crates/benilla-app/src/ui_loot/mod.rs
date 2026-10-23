@@ -69,6 +69,8 @@ struct PendingReceive {
     /// (`0x491bf3`), so a silent push still animates.
     in_chat: bool,
     container: i64,
+    /// Another group member's push, by guid; `None` for the active player's own.
+    owner: Option<u64>,
     /// The frames it has waited on its template.
     tries: u16,
 }
@@ -442,6 +444,7 @@ impl LootState {
             suffix_factor: p.suffix_factor,
             in_chat: p.show_in_chat,
             container: push_container(p.bag_slot, p.item_slot),
+            owner: None,
             tries: 0,
         };
         if held {
@@ -967,6 +970,7 @@ fn drain_receives(
     chat: &crate::ui_chat::ChatLog,
     script: &mut UiScript,
     rolls: RollCatalogs,
+    _owner: &dyn Fn(u64) -> Option<Option<String>>,
 ) -> Vec<PendingReceive> {
     let mut still = Vec::new();
     for mut r in pending {
@@ -1426,6 +1430,7 @@ fn emit_pushes<P: bevy::ecs::system::SystemParam + 'static>(
             with.chat,
             script,
             with.rolls,
+            &|_| None,
         ),
         None => batch,
     })

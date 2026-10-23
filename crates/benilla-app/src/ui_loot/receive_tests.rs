@@ -65,6 +65,7 @@ fn an_item_received_line_reads_the_installs_strings() {
             props: None,
             enchants: None,
         },
+        &|_| None,
     );
     assert!(left.is_empty());
     let link = "|cffffffff|Hitem:2589:0:0:0|h[Linen Cloth]|h|r";
