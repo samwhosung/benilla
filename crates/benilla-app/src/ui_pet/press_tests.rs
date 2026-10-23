@@ -176,6 +176,7 @@ pub(super) fn rig(
         bar.spells.bar[i] = PetActionEntry::from(spell_id | (u32::from(PET_ACT_ENABLED) << 24));
     }
     world.insert_non_send_resource(listening_vm());
+    world.init_resource::<super::PetBarFeed>();
     // The order the plugin gives them: the feeds that push a pet cooldown, then the flush.
     let mut feed = Schedule::default();
     feed.add_systems(

@@ -80,12 +80,27 @@ impl super::UiScript {
     /// ([`Self::minimap_enter_world`]), the bonus bar's offset, `bonus_bar_offset`, from the
     /// player's form and its `UPDATE_BONUS_ACTIONBAR`, the bags' `BAG_UPDATE`s
     /// ([`Self::bags_enter_world`]), the quest log's rebuild and its `QUEST_LOG_UPDATE`
-    /// ([`Self::quest_log_enter_world`]), the reputation list's rebuild and its `UPDATE_FACTION`
+    /// ([`Self::quest_log_enter_world`]), the pet bar's reset ([`Self::drop_pet_bar`],
+    /// [`Self::fire_pet_bar_dropped`]), the reputation list's rebuild and its `UPDATE_FACTION`
     /// ([`Self::reputation_enter_world`]) and the skill list's rebuild and its
     /// `SKILL_LINES_CHANGED` ([`Self::rebuild_skills`]). The cascade runs with the player object in
     /// the world, so its caller seats `"player"` first, and inside its own sound-suppression
     /// bracket (`0x4908d5` to `0x490a56`), so a handler's `PlaySound` is dropped.
+    ///
+    /// The pet bar here is the VM's own: a caller that holds the bar's guid runs the cascade in
+    /// its three parts, [`Self::fire_world_enter_head`], the reset on both sides, then
+    /// [`Self::fire_world_enter_tail`].
     pub fn fire_world_enter_with(&mut self, bonus_bar_offset: u8) {
+        self.fire_world_enter_head(bonus_bar_offset);
+        let dropped = self.drop_pet_bar();
+        self.fire_pet_bar_dropped(dropped);
+        self.fire_world_enter_tail();
+    }
+
+    /// The cascade up to the pet bar's reset (`0x4909c9`): the bracket opened, the collection,
+    /// `PLAYER_LOGIN` if armed, `PLAYER_ENTERING_WORLD` and the calls after it through the quest
+    /// log's (`0x4909a1`). [`Self::fire_world_enter_tail`] closes it.
+    pub fn fire_world_enter_head(&mut self, bonus_bar_offset: u8) {
         let armed = std::mem::take(&mut self.model_mut().player_login_armed);
         self.push_sound_suppression();
         // `0x703bc0` with 1: the threshold set to 0 (`0x703bd6`), so the collection runs now.
@@ -97,13 +112,17 @@ impl super::UiScript {
         // The calls after the signal, inside the bracket: the minimap initializer first
         // (`0x49096f`), then among the rest the action bar's refresh (`0x490979` → `0x4e4f90` →
         // `0x4e4fc0`), which sets the offset and signals whether or not it moved (`0x4e5018`), the
-        // bag watchers' set-up (`0x49098d`), the quest log's (`0x4909a1`), the reputation rebuild
-        // (`0x4909d3`) and the skill list's (`0x4909f1` → `0x4d2c90`).
+        // bag watchers' set-up (`0x49098d`) and the quest log's (`0x4909a1`).
         self.minimap_enter_world();
         self.set_bonus_bar_offset(bonus_bar_offset);
         self.fire_event("UPDATE_BONUS_ACTIONBAR", Vec::new());
         self.bags_enter_world();
         self.quest_log_enter_world();
+    }
+
+    /// The cascade after the pet bar's reset: the reputation rebuild (`0x4909d3`) and the skill
+    /// list's (`0x4909f1` → `0x4d2c90`), then the bracket closed (`0x490a56`).
+    pub fn fire_world_enter_tail(&mut self) {
         self.reputation_enter_world();
         self.rebuild_skills();
         self.pop_sound_suppression();

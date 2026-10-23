@@ -28,6 +28,42 @@ pub(super) struct PetBarMemory {
     cooldowns: Vec<Option<(i64, u32, bool)>>,
 }
 
+/// [`feed_pet_bar`]'s memory per VM, a resource so the world entry's reset ([`drop_bar`]) records
+/// what it pushed and the feed does not push or signal it again.
+#[derive(Resource, Default)]
+pub(crate) struct PetBarFeed(crate::ui_script::VmMemo<PetBarMemory>);
+
+/// The world entry's `SetPetGuid(0, 0)` (`0x4bc6f0` → `0x4bc7e0` at `0x4bc6fd`): the guid and the
+/// expiry cleared (`0x4bc822`, `0x4bc836`), the attack latch lowered on a change (`0x4bc8ce`), one
+/// more bar signal (`0x4bc90c`), and the VM given the bar gone, as [`feed_pet_bar`] would push it.
+/// Whether the guid changed, for `UNIT_PET` (`0x4bc84f`); the caller signals both.
+pub(crate) fn drop_bar(
+    script: &mut benilla_ui::script::UiScript,
+    bar: &mut PetBar,
+    latch: &mut super::PetAttackLatch,
+    feed: Option<&mut PetBarFeed>,
+) -> bool {
+    let changed = bar.has_bar();
+    let signals = bar.bar_signals.wrapping_add(1);
+    bar.clear();
+    bar.bar_signals = signals;
+    if changed {
+        latch.0 = None;
+    }
+    script.drop_pet_bar();
+    // What the feed's own push of a cleared bar records: no slots, not usable, nothing to lift.
+    let Some(feed) = feed else {
+        return changed;
+    };
+    *feed.0.get(script) = PetBarMemory {
+        pushed: Some((signals, false, false, false)),
+        slots: Vec::new(),
+        state: Some(bar.spells.state),
+        cooldowns: Vec::new(),
+    };
+    changed
+}
+
 /// A command token's `(name, texture)` pair, both global names (`PetActionBarFrame.lua:98-104`):
 /// keys from `GlobalStrings.lua:3029-3032`, textures from `PetActionBarFrame.lua:6-12`.
 pub(super) fn command_token(action: u32) -> Option<(&'static str, &'static str)> {
@@ -179,13 +215,13 @@ pub(super) fn feed_pet_bar(
     spells: Option<Res<Spells>>,
     clock: Res<crate::ui_script::UiClock>,
     pet: PetUnit,
-    mut memory: Local<crate::ui_script::VmMemo<PetBarMemory>>,
+    mut memory: ResMut<PetBarFeed>,
 ) {
     vm.feed(|script, (bar, latch), fires| {
         let Some(script) = script else {
             return;
         };
-        let memory = memory.get(script);
+        let memory = memory.0.get(script);
         // Every read takes the frame's anchor, the instant its starts project from: one frame,
         // one time, however long the frame runs.
         let (anchor, ui_now) = (clock.anchor, clock.ui_now);

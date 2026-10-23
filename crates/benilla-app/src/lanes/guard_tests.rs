@@ -354,10 +354,12 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::GuidIndex", "net::ObjectStore"]),
     // The four tokens' snapshots read the stores as of the drain's place (`ui_unit::views`); the
     // XP pair, the rest state, the combo points, the bar toggles and the worn display read the
-    // live store, and every snapshot its names, relations, selection and group.
+    // live store, and every snapshot its names, relations, selection and group; the world entry's
+    // pet reset reads the bar's guid and the attack latch as the frame left them.
     ("::ui_unit::feed_units", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "net::SelfGuid", "net::reputations::Reputations", "target::Selection",
-        "ui_guild::GuildState", "ui_party::GroupState"]),
+        "ui_guild::GuildState", "ui_party::GroupState", "ui_pet::PetAttackLatch",
+        "ui_pet::PetBar"]),
     ("::ui_unit::feed_unit_reach", &["Transform", "names::NameCache", "net::GuidIndex",
         "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations",
         "ui_party::GroupState"]),

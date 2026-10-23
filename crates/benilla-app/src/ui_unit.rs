@@ -145,11 +145,13 @@ impl Plugin for UiUnitPlugin {
         .add_systems(
             Update,
             (
-                // After the seats the world-enter cascade's handlers read.
+                // After the seats the world-enter cascade's handlers read, the pet's among them:
+                // its pet reset signals `UNIT_PET` (`0x4bc84f`), whose handlers ask `HasPetUI()`.
                 feed_units
                     .in_set(field_events::FieldEventPushes)
                     .in_set(UnitSnapshots)
-                    .after(WorldEnterSeats),
+                    .after(WorldEnterSeats)
+                    .after(crate::ui_pet_stats::PetSnapshot),
                 // After the snapshots its handlers read, and ahead of the action feed's events:
                 // `SetPlayerControl` stores the flag (`0x4958ea`) and signals its event
                 // (`0x4958f7`, `0x49590b`) before the usable refresh (`0x4958fc`, `0x495910`).
@@ -1393,6 +1395,9 @@ fn feed_units(
     mut vm: crate::script_calls::VmWith<(
         Res<'static, Selection>,
         crate::target::RelationWorld<'static, 'static>,
+        // The world entry's pet reset (`0x4bc6f0`); `Option`, as below.
+        Option<ResMut<'static, crate::ui_pet::PetBar>>,
+        Option<ResMut<'static, crate::ui_pet::PetAttackLatch>>,
     )>,
     tables: SnapshotTables,
 
@@ -1411,12 +1416,13 @@ fn feed_units(
     // Our player's create since this feed last ran: an arrival (`0x5dea50`), which a `/reload`'s
     // cascade lacks. The feed runs only with an interface up, so an arrival before one waits.
     arrivals: Query<(), Added<SelfPlayer>>,
+    pet_bar_feed: Option<ResMut<crate::ui_pet::PetBarFeed>>,
 ) {
     let arrived = !arrivals.is_empty();
     // The pushes are an engine turn, as they read the relation inputs a call can write; the
     // events they owe fire after it with the host lent, so a call their handlers make applies
     // inside the verb.
-    let owed = vm.turn(|script, (selection, world)| {
+    let owed = vm.turn(|script, (selection, world, _, _)| {
         let selection_changed = selection.is_changed();
         let selection = *selection;
         let mut owed = OwedUnitEvents::default();
@@ -1656,10 +1662,14 @@ fn feed_units(
                 // (`0x5deb60`): alive, `PLAYER_UNGHOST` (`0x5dea2a`), with no gate before it; a
                 // ghost's leg is its tutorial (`crate::tutorial`).
                 owed.unghost = arrived && store.0.player_flags() & 0x10 == 0;
-                owed.world_enter = Some(crate::ui_action::bonus_bar_offset(
-                    Some(store),
-                    tables.spells.as_deref(),
-                ));
+                owed.world_enter = Some(WorldEnter {
+                    bonus_bar_offset: crate::ui_action::bonus_bar_offset(
+                        Some(store),
+                        tables.spells.as_deref(),
+                    ),
+                    // `0x4bc721`-`0x4bc736`: our charm, else our summon, nonzero.
+                    ask_pet: store.0.unit_pet_guid().is_some(),
+                });
                 memo.entered_world = true;
             }
         } else if memo.entered_world {
@@ -1735,9 +1745,44 @@ fn feed_units(
         }
         owed
     });
+    let world_enter = vm.run(|script| {
+        let script = script?;
+        if owed.unghost {
+            script.fire_event("PLAYER_UNGHOST", vec![]);
+        }
+        let enter = owed.world_enter?;
+        script.fire_world_enter_head(enter.bonus_bar_offset);
+        Some(enter)
+    });
+    let Some(enter) = world_enter else {
+        return;
+    };
+    // `0x4909c9` → `0x4bc6f0`: `SetPetGuid(0, 0)` as an engine turn on the bar and the VM, its
+    // signals, then `CMSG_REQUEST_PET_INFO` (`0x4bc738`), then the cascade's rest.
+    let mut pet_bar_feed = pet_bar_feed;
+    let dropped = vm.turn(|script, (_, _, bar, latch)| {
+        let script = script?;
+        Some(match (bar, latch) {
+            (Some(mut bar), Some(mut latch)) => {
+                crate::ui_pet::drop_bar(script, &mut bar, &mut latch, pet_bar_feed.as_deref_mut())
+            }
+            _ => script.drop_pet_bar(),
+        })
+    });
+    let Some(dropped) = dropped else {
+        return;
+    };
     vm.run(|script| {
         if let Some(script) = script {
-            owed.fire(script);
+            script.fire_pet_bar_dropped(dropped);
+        }
+    });
+    if enter.ask_pet {
+        let _ = commands.0.send(crate::net::ClientCommand::RequestPetInfo);
+    }
+    vm.run(|script| {
+        if let Some(script) = script {
+            script.fire_world_enter_tail();
         }
     });
 }
@@ -1747,19 +1792,17 @@ fn feed_units(
 struct OwedUnitEvents {
     /// `PLAYER_UNGHOST`, ahead of the arrival's cascade.
     unghost: bool,
-    /// The world-enter cascade, with the bonus bar offset our form gives (`0x4e4fc0`).
-    world_enter: Option<u8>,
+    /// The world-enter cascade.
+    world_enter: Option<WorldEnter>,
 }
 
-impl OwedUnitEvents {
-    fn fire(self, script: &mut UiScript) {
-        if self.unghost {
-            script.fire_event("PLAYER_UNGHOST", vec![]);
-        }
-        if let Some(bonus_bar_offset) = self.world_enter {
-            script.fire_world_enter_with(bonus_bar_offset);
-        }
-    }
+/// What the world-enter cascade reads of our player at its start.
+#[derive(Clone, Copy)]
+struct WorldEnter {
+    /// The bonus bar offset our form gives (`0x4e4fc0`).
+    bonus_bar_offset: u8,
+    /// Whether the pet reset asks for the bar again (`0x4bc738`).
+    ask_pet: bool,
 }
 
 /// The event [`feed_units`]' pushes owe for a selection change no script call made (a world

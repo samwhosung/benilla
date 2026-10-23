@@ -248,6 +248,26 @@ impl super::UiScript {
             .collect();
     }
 
+    /// `SetPetGuid(0, 0)`'s VM half (`0x4bc6fd` → `0x4bc7e0`), the world entry's pet reset: no
+    /// bar, no expiry, the state word as a cleared bar pushes it. Whether a bar was showing, the
+    /// guid's change its `UNIT_PET` signals on. A caller that holds the guid pushes the same.
+    pub fn drop_pet_bar(&mut self) -> bool {
+        let dropped = self.model_ref().pet_bar.has_bar;
+        self.set_pet_expiry(None);
+        self.set_pet_state(0);
+        self.set_pet_actions(false, false, false, Vec::new());
+        dropped
+    }
+
+    /// `SetPetGuid`'s signals: `UNIT_PET("player")` when the guid changed (`0x4bc84f`), then
+    /// `PET_BAR_UPDATE` every time (`0x4bc90c`).
+    pub fn fire_pet_bar_dropped(&mut self, changed: bool) {
+        if changed {
+            self.fire_event("UNIT_PET", vec![super::ScriptValue::Str("player".into())]);
+        }
+        self.fire_event("PET_BAR_UPDATE", Vec::new());
+    }
+
     /// Push the pet's state word (`[0xb71468]`), as `SMSG_PET_SPELLS` and the app's latches leave
     /// it.
     pub fn set_pet_state(&mut self, state: u32) {

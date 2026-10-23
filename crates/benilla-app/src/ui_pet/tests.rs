@@ -778,6 +778,7 @@ fn a_cooldown_alone_is_pushed_with_no_event_from_the_bar_feed() {
         })
         .insert_resource(bar)
         .init_resource::<PetAttackLatch>()
+        .init_resource::<super::PetBarFeed>()
         .add_systems(Update, super::bar::feed_pet_bar);
     let script = benilla_ui::script::UiScript::new().unwrap();
     script

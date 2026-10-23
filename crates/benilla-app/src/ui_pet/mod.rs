@@ -15,7 +15,7 @@ use crate::ui_action::CooldownEvents;
 use crate::ui_unit::UnitFeed;
 
 mod bar;
-pub(crate) use bar::active_aura_press;
+pub(crate) use bar::{active_aura_press, drop_bar, PetBarFeed};
 mod drain;
 mod menu;
 mod net;
@@ -48,6 +48,7 @@ mod usable_tests;
 /// between them.
 #[cfg(test)]
 pub(crate) fn pet_bar_feed(world: &mut World) -> bevy::ecs::system::SystemId {
+    world.init_resource::<bar::PetBarFeed>();
     world.register_system(feed_pet_bar)
 }
 
@@ -113,6 +114,7 @@ impl Plugin for UiPetPlugin {
         net::register(app);
         app.init_resource::<PetBar>()
             .init_resource::<PetAttackLatch>()
+            .init_resource::<bar::PetBarFeed>()
             // `SMSG_PET_SPELLS` writes its `UNIT_PET` there; the unit plugin fires the lane.
             .init_resource::<crate::field_watch::NoticeLane>()
             .add_systems(
