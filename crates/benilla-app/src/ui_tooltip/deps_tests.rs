@@ -315,6 +315,22 @@ struct Params {
     family: u32,
 }
 
+/// A race and class whose spells a `SpellFamilyName` names (vmangos `SharedDefines.h`): mage,
+/// warrior, warlock, priest, druid, rogue, hunter, paladin, shaman; any other is a human warrior.
+fn family_race_class(family: u32) -> (u8, u8) {
+    match family {
+        3 => (1, 8),
+        5 => (1, 9),
+        6 => (1, 5),
+        7 => (4, 11),
+        8 => (1, 4),
+        9 => (3, 3),
+        10 => (1, 2),
+        11 => (2, 7),
+        _ => (1, 1),
+    }
+}
+
 /// The fixed shape of the scenarios.
 struct Layout {
     /// The skill lines any spell belongs to, ascending; bit `i` of [`Inputs::lines`].
@@ -421,9 +437,11 @@ fn mat(layout: &Layout, inputs: Inputs, p: Params) -> Mat {
     if inputs.disarm {
         pairs.push((46, 0x0020_0000));
     }
-    if inputs.gender {
-        pairs.push((36, 1 << 16));
-    }
+    // `UNIT_FIELD_BYTES_0`: a race and the class of the spell's family, which index its skill line
+    // (`0x6de040`), and the gender input.
+    let (race, class) = family_race_class(p.family);
+    let gender = if inputs.gender { 1 << 16 } else { 0 };
+    pairs.push((36, u32::from(race) | u32::from(class) << 8 | gender));
     let form = if inputs.form { p.form } else { 0 };
     if form != 0 {
         pairs.push((138, u32::from(form) << 16));
@@ -536,8 +554,8 @@ const WHOLE: u32 = u32::MAX;
 
 /// The player fields a view's records watch in the scenario `inputs` makes, each with the bits
 /// watched: the ones a poke is covered by. The gender and the form are byte 2 of fields 36 and
-/// 138, the disarm flag bit 21 of 46, the standings' race and class bytes 0 and 1 of 36; every
-/// other record watches its fields whole.
+/// 138, the disarm flag bit 21 of 46, the race and class bytes 0 and 1 of 36 that the standings
+/// and the skill lines are read through; every other record watches its fields whole.
 fn recorded_fields(layout: &Layout, inputs: Inputs, deps: &Deps) -> Vec<(u16, u32)> {
     let mut fields: Vec<(u16, u32)> = UNIT_FIELD_INDICES
         .iter()
@@ -550,6 +568,7 @@ fn recorded_fields(layout: &Layout, inputs: Inputs, deps: &Deps) -> Vec<(u16, u3
         (deps.form, 138, 0x00ff_0000),
         (deps.disarm, 46, 0x0020_0000),
         (deps.reputation, 36, 0x0000_ffff),
+        (!deps.skill_lines.is_empty(), 36, 0x0000_ffff),
         (deps.range_units, 130, WHOLE),
     ] {
         if read {

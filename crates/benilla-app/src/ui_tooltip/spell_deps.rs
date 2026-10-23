@@ -145,6 +145,7 @@ pub(super) struct Deps {
     /// its text cross-references, for the ones the caster's class family owns.
     pub(super) mod_bits: u64,
     /// The skill lines read, through the view's own spell and each one its text cross-references.
+    /// Each was found through the player's race and class (`0x6de040`), which a read of one reads.
     pub(super) skill_lines: Vec<u32>,
     /// The item entries the tools and reagents lines list, whose carried counts and names the
     /// lines read.
@@ -185,6 +186,7 @@ impl Deps {
             || changes.worn & self.worn != 0
             || (changes.disarm && self.disarm)
             || (changes.reputation && self.reputation)
+            || (changes.race_class && !self.skill_lines.is_empty())
             || changes.unit & self.unit != 0
             || changes.mod_bits & self.mod_bits != 0
             || self
@@ -231,6 +233,8 @@ pub(super) struct Changes {
     pub(super) disarm: bool,
     /// A reputation standing moved.
     pub(super) reputation: bool,
+    /// The player's race or class moved, which index a spell's skill line (`0x6de040`).
+    pub(super) race_class: bool,
     /// A [`UnitField`] bit each.
     pub(super) unit: u16,
     /// The `SpellFamilyFlags` bits with a changed modifier cell.
@@ -251,6 +255,7 @@ impl Changes {
             && self.worn == 0
             && !self.disarm
             && !self.reputation
+            && !self.race_class
             && self.unit == 0
             && self.mod_bits == 0
             && self.skill_lines.is_empty()
@@ -386,6 +391,7 @@ impl Seen {
             ranged_slot: self.ranged_slot != prev.ranged_slot,
             disarm: self.disarmed != prev.disarmed,
             reputation: self.reputations != prev.reputations || self.race_class != prev.race_class,
+            race_class: self.race_class != prev.race_class,
             unit: self.unit.diff(&prev.unit),
             ..Changes::default()
         };

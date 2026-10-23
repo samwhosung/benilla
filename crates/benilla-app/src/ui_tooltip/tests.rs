@@ -389,6 +389,7 @@ fn battle_shout_description_scales_by_the_skill_level() {
     for (level, skill, ap) in [(1, 5, 15), (11, 55, 20), (60, 300, 20), (60, 5, 15)] {
         let store = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
             (34, level),
+            (36, 1 | 1 << 8), // a human warrior, whose rows index Battle Shout's line
             (FIELD_PLAYER_SKILL_INFO_1_1, line),
             (FIELD_PLAYER_SKILL_INFO_1_1 + 1, skill | 300 << 16),
         ]));
