@@ -23,6 +23,9 @@ pub enum Swap {
     /// and the record asked with the callback `0x5e1020` (`0x5e0d9c`-`0x5e0e2e`), nothing sent
     /// and the item still held.
     Waits { mv: ContainerMove, entry: u32 },
+    /// The bag at the move's other end has no object: the call exits past the send and its
+    /// clear (`0x5e0d23`, `0x5e0d32` → `0x5e0fec`), nothing sent and the item still held.
+    NoBag(ContainerMove),
 }
 
 /// An equipment position of the player's own list, the side a swap equips into (`0x5e0c9a`-
@@ -33,34 +36,70 @@ fn equip_position(bag: i64, slot: u32) -> bool {
         && ((1..=23).contains(&slot) || super::bag_verbs::BANK_BAG_INV_SLOTS.contains(&slot))
 }
 
-/// The item at the move's other end when exactly one end is an equipment position: the one the
-/// swap would equip (`0x5e0ce1`-`0x5e0d69`). None when both or neither end is one, or the other
-/// end holds no item object, and the move goes out unasked (`0x5e0eee`).
-fn equipped_by(model: &Model, mv: &ContainerMove) -> Option<EquipFacts> {
+/// What `SwapItem` finds at the move's other end when exactly one end is an equipment position.
+enum OtherEnd {
+    /// Both or neither end is one, or the other end's slot holds no item object: the move goes
+    /// out unasked (`0x5e0ce7`, `0x5e0cf6`, `0x5e0d6d` → `0x5e0eee`).
+    Unasked,
+    /// The other end's bag has no object (`0x5e0d23`) or no slot list (`0x5e0d32`): the call
+    /// exits past the send and its clear (`0x5e0fec`).
+    NoBag,
+    /// The item the swap would equip (`0x5e0d64`).
+    Item(EquipFacts),
+}
+
+/// Whether container `bag` has an object for `SwapItem`'s lookup by its guid (`0x5e0d1a`): the
+/// active player's own list for the player's slots, the backpack, the vault and the keyring, the
+/// bag item in the container's inventory slot (`ContainerIDToInventoryID`'s two bands) for bags
+/// 1-10.
+fn bag_object(model: &Model, bag: i64) -> bool {
+    match bag {
+        EQUIPMENT_BAG | -2..=0 => true,
+        1..=10 => {
+            let live = if bag <= 4 { bag + 19 } else { bag + 59 };
+            model
+                .player_slot_object(live as usize)
+                .is_some_and(|v| v.guid != 0)
+        }
+        _ => false,
+    }
+}
+
+/// The move's other end when exactly one end is an equipment position (`0x5e0ce1`-`0x5e0d69`).
+fn other_end(model: &Model, mv: &ContainerMove) -> OtherEnd {
     let (bag, slot) = match (
         equip_position(mv.src_bag, mv.src_slot),
         equip_position(mv.dst_bag, mv.dst_slot),
     ) {
         (true, false) => (mv.dst_bag, mv.dst_slot),
         (false, true) => (mv.src_bag, mv.src_slot),
-        _ => return None,
+        _ => return OtherEnd::Unasked,
     };
+    if !bag_object(model, bag) {
+        return OtherEnd::NoBag;
+    }
     model
         .containers
         .get(&bag)
         .and_then(|c| c.slots.get(&slot))
         .filter(|s| s.item_id != 0 && s.guid != 0)
-        .map(EquipFacts::of_slot)
+        .map_or(OtherEnd::Unasked, |s| {
+            OtherEnd::Item(EquipFacts::of_slot(s))
+        })
 }
 
 /// `SwapItem(mv, confirm)` (`0x5e0c40`): the question on the item the move would equip, unless
 /// `confirm` (the accept's re-issue, `0x5e1c46`) skips it; else the send and its clear.
 pub(crate) fn swap_items(model: &mut Model, mv: ContainerMove, confirm: bool) -> Swap {
-    let question = equipped_by(model, &mv).map(|item| equip_question(model, item, confirm));
+    let question = match other_end(model, &mv) {
+        OtherEnd::NoBag => return Swap::NoBag(mv),
+        OtherEnd::Unasked => Question::Send,
+        OtherEnd::Item(item) => equip_question(model, item, confirm),
+    };
     match question {
-        Some(Question::Ask) => Swap::Asked(mv),
-        Some(Question::Wait(entry)) => Swap::Waits { mv, entry },
-        Some(Question::Send) | None => {
+        Question::Ask => Swap::Asked(mv),
+        Question::Wait(entry) => Swap::Waits { mv, entry },
+        Question::Send => {
             clear(model, Clear::KEEP_LOCK);
             Swap::Sent(mv)
         }
@@ -75,6 +114,7 @@ pub(crate) fn swap_and_file(model: &mut Model, mv: ContainerMove) {
         Swap::Sent(mv) => ItemCall::Move(mv),
         Swap::Asked(mv) => ItemCall::SwapAsk(mv),
         Swap::Waits { mv, entry } => ItemCall::SwapWait { mv, entry },
+        Swap::NoBag(_) => return,
     };
     model.item_calls.push(call);
 }
