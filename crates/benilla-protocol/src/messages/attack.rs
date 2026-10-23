@@ -31,8 +31,8 @@ pub struct AttackerState {
     /// `meleeSpellId` (`rec+0xac`), nonzero for an on-next-swing ability such as Heroic Strike; the
     /// reference only ever compares it to zero (`0x625e40`, `0x6246ca`).
     pub melee_spell_id: u32,
-    /// The first sub-damage block's school (0 physical to 6 arcane, `GetFirstSchoolInMask`), 0
-    /// with no blocks; a non-physical swing takes the combat log's `…SCHOOL` wording.
+    /// The first sub-damage block's school dword (`rec+0x18`, `0x625cb1`; vmangos 0 physical to 6
+    /// arcane), 0 with no blocks; a non-physical swing takes the combat log's `…SCHOOL` wording.
     pub school: u32,
 }
 
@@ -71,7 +71,7 @@ pub(super) fn read_attacker_state(r: &mut impl Read) -> io::Result<AttackerState
         // The school comes from the first block; later blocks split off other schools.
         let block_school = read_u32_le(r)?;
         if i == 0 {
-            school = u32::from(u8::try_from(block_school).unwrap_or(0));
+            school = block_school;
         }
         let _damage_f = read_f32_le(r)?;
         let _damage = read_u32_le(r)?;
