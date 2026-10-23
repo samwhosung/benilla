@@ -378,6 +378,35 @@ fn the_pet_reads_its_own_packets_health() {
     assert_eq!(seen, ["UNIT_COMBAT:player:60", "UNIT_COMBAT:player:30"]);
 }
 
+/// `"pet"` resolves off our own descriptor at the call (`0x515a5e`-`0x515a6e`): a listener ahead
+/// of the packet that writes our `UNIT_FIELD_SUMMON` reads no pet, one after it the new pet.
+#[test]
+fn the_pet_is_the_summon_our_descriptor_names_as_each_packet_left_it() {
+    let mut app = party_client();
+    frame(
+        &mut app,
+        crate::lanes::unit_view_tests::wire_packets(vec![vec![created(
+            PET,
+            EntityKind::Unit,
+            &super::unit_view_tests::health(60),
+        )]]),
+    );
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(r#"function Look(event, unit) return UnitHealth("pet") end"#)
+        .unwrap();
+    frame(&mut app, vec![]);
+    let seen = frame(
+        &mut app,
+        crate::lanes::unit_view_tests::wire_packets(vec![
+            vec![fall(1)],
+            vec![values(ME, &summons(PET))],
+            vec![fall(1)],
+        ]),
+    );
+    assert_eq!(seen, ["UNIT_COMBAT:player:0", "UNIT_COMBAT:player:60"]);
+}
+
 /// The member a list names offline reads offline to that list's own `PARTY_MEMBERS_CHANGED`: the
 /// list writes each member's record and its online bit (`AddPartyMember`, `0x5e6c4a`) before it
 /// signals (`0x5e6c61`, `0x5e6c66`), and `UnitIsConnected` reads the record's bit for a member

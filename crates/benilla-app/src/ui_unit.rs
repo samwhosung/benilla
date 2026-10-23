@@ -2460,6 +2460,39 @@ mod tests {
             assert_eq!(guid_of(&mut app, &token), Some(MOB));
         }
 
+        /// `"pet"` is our `UNIT_FIELD_CHARM`, else our `UNIT_FIELD_SUMMON` (`0x515a5e`-`0x515a6e`),
+        /// read off our descriptor at the call: the pet bar's guid names nothing, a charm takes
+        /// the summon's place, and with both zero the token is nobody (`0x5159d3`).
+        #[test]
+        fn the_pet_base_is_our_charm_else_our_summon() {
+            const CHARM: u16 = 6;
+            let mut app = app();
+            let me = app.world().resource::<GuidIndex>().0[&ME];
+            app.world_mut()
+                .resource_mut::<crate::ui_pet::PetBar>()
+                .spells
+                .pet_guid = A_PET;
+            assert_eq!(
+                guid_of(&mut app, "pet"),
+                Some(MY_PET),
+                "the summon, not the bar"
+            );
+            assert_eq!(guid_of(&mut app, "pettarget"), Some(MOB));
+
+            let mut charmed = fields(PLAYER, MY_PET, MOB);
+            charmed.0.merge(ObjectFields::from_pairs(&[
+                (CHARM, LONELY as u32),
+                (CHARM + 1, (LONELY >> 32) as u32),
+            ]));
+            app.world_mut().entity_mut(me).insert(charmed);
+            assert_eq!(guid_of(&mut app, "pet"), Some(LONELY), "the charm first");
+
+            app.world_mut()
+                .entity_mut(me)
+                .insert(fields(PLAYER, 0, MOB));
+            assert_eq!(guid_of(&mut app, "pet"), None, "neither names nobody");
+        }
+
         /// A number wraps in 32 bits as the reference's inline parse does (`0x515af4`): 2^32 + 1
         /// is row 1, and digits stop at the first letter.
         #[test]

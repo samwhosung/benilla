@@ -1376,6 +1376,52 @@ mod tests {
         }
     }
 
+    /// Every world entry, a `/reload`'s included, refreshes the bonus bar after the entering
+    /// event (`0x490979` → `0x4e4f90` → `0x4e4fc0`): the offset set from our form, 0 with none,
+    /// then `UPDATE_BONUS_ACTIONBAR` whether or not the offset moved (`0x4e5018`).
+    #[test]
+    fn every_world_entry_signals_the_bonus_bar_after_entering() {
+        const BYTES_1: u16 = 138;
+        let spy = r#"SEEN = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("PLAYER_ENTERING_WORLD")
+            f:RegisterEvent("UPDATE_BONUS_ACTIONBAR")
+            f:SetScript("OnEvent", function()
+                if event == "UPDATE_BONUS_ACTIONBAR" then
+                    table.insert(SEEN, event .. " " .. GetBonusBarOffset())
+                else
+                    table.insert(SEEN, event)
+                end
+            end)"#;
+        let mut spells = crate::ui_action::Spells::empty_for_tests();
+        spells.forms.insert(
+            1,
+            benilla_formats::ShapeshiftForm {
+                bonus_bar: 1,
+                ..Default::default()
+            },
+        );
+        for (form, offset) in [(0u32, 0), (1, 1)] {
+            let (mut app, _) = feed_world(&[(BYTES_1, form << 16)], spy);
+            app.world_mut().insert_resource(crate::ui_action::Spells {
+                forms: spells.forms.clone(),
+                ..crate::ui_action::Spells::empty_for_tests()
+            });
+            app.add_systems(Update, super::super::feed_units);
+            app.update();
+            let heard = [
+                "PLAYER_ENTERING_WORLD".to_string(),
+                format!("UPDATE_BONUS_ACTIONBAR {offset}"),
+            ];
+            assert_eq!(seen(&mut app), heard, "form {form}: the login");
+            let reloaded = UiScript::new().unwrap();
+            reloaded.run(spy).unwrap();
+            app.insert_non_send_resource(reloaded);
+            app.update();
+            assert_eq!(seen(&mut app), heard, "form {form}: the reload");
+        }
+    }
+
     /// `PLAYER_ENTERING_WORLD`'s handler reads the honor block, since the schedule pushes it ahead
     /// of the unit feed that fires the cascade: `HonorFrame_Update(1)` reads the weekly values
     /// only then (`HonorFrame.lua:10-11`).

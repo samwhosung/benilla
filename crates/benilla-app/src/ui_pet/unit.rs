@@ -228,3 +228,104 @@ fn watch_name_timestamp(
         .unit_owner(benilla_protocol::OwnerFallback::SummonedBy)
         == pet.self_guid.0
 }
+
+#[cfg(test)]
+mod tests {
+    use benilla_protocol::ObjectFields;
+    use benilla_ui::script::UiScript;
+    use bevy::prelude::*;
+
+    use super::super::{PetBar, PetSpells};
+    use crate::net::{Guid, GuidIndex, NetCommands, ObjectStore, SelfGuid};
+
+    const ME: u64 = 0x77;
+    const PET: u64 = 0xF140_0000_0000_002A;
+    const OTHER: u64 = 0xF140_0000_0000_002B;
+    /// `UNIT_FIELD_SUMMON`, a two-field guid.
+    const SUMMON: u16 = 8;
+
+    /// The feed with us held, summoning `summon`, and the bar caching `bar`; a spy on `UNIT_PET`.
+    fn pet_app(summon: u64, bar: u64) -> App {
+        let mut app = App::new();
+        app.add_message::<crate::net::FieldChanged>()
+            .init_resource::<GuidIndex>()
+            .insert_resource(SelfGuid(Some(ME)))
+            .init_resource::<crate::names::NameCache>()
+            .insert_resource(PetBar {
+                spells: PetSpells {
+                    pet_guid: bar,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .add_systems(Update, super::feed_pet_unit);
+        let (tx, rx) = crossbeam_channel::unbounded();
+        // Kept alive for the run: a dropped receiver would fail the name query.
+        std::mem::forget(rx);
+        app.insert_resource(NetCommands(tx));
+        let me = app
+            .world_mut()
+            .spawn((
+                Guid(ME),
+                ObjectStore(ObjectFields::from_pairs(&[
+                    (2, 0x19),
+                    (SUMMON, summon as u32),
+                    (SUMMON + 1, (summon >> 32) as u32),
+                ])),
+            ))
+            .id();
+        app.world_mut().resource_mut::<GuidIndex>().0.insert(ME, me);
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                r#"
+                SEEN = {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("UNIT_PET")
+                f:SetScript("OnEvent", function() table.insert(SEEN, event) end)
+            "#,
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        app
+    }
+
+    fn answer(app: &mut App, lua: &str) -> Option<f64> {
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .eval::<Option<f64>>(lua)
+            .unwrap()
+    }
+
+    fn seen(app: &mut App) -> Vec<String> {
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .eval::<Vec<String>>("local s = SEEN SEEN = {} return s")
+            .unwrap()
+    }
+
+    /// The `"pet"` snapshot is the unit the token names, our `UNIT_FIELD_SUMMON` here
+    /// (`0x515a5e`-`0x515a6e`), not the bar's guid: with no bar the summon exists, and a bar
+    /// naming a unit we neither charm nor summon names no pet. `UNIT_PET` stays the bar's
+    /// (`0x4bc84f`).
+    #[test]
+    fn the_pet_snapshot_follows_our_summon_and_unit_pet_the_bar() {
+        let mut app = pet_app(PET, 0);
+        app.update();
+        assert_eq!(answer(&mut app, "return UnitExists('pet')"), Some(1.0));
+        assert_eq!(seen(&mut app), ["UNIT_PET"], "the first look announces");
+
+        let mut app = pet_app(0, OTHER);
+        app.update();
+        assert_eq!(answer(&mut app, "return UnitExists('pet')"), None);
+        seen(&mut app);
+        app.world_mut().resource_mut::<PetBar>().spells.pet_guid = PET;
+        app.update();
+        assert_eq!(seen(&mut app), ["UNIT_PET"], "a new bar guid signals");
+        assert_eq!(
+            answer(&mut app, "return UnitExists('pet')"),
+            None,
+            "and still names no pet"
+        );
+    }
+}

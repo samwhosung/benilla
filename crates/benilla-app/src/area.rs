@@ -545,4 +545,60 @@ mod tests {
             "no named group rows — query B leaves the nulled subzone alone"
         );
     }
+
+    /// `GetZonePVPInfo` (`0x48d540`) reads, at the call, the zone the last commit stored
+    /// (`0xb4e314`) and the active player's faction template (`0x48d5b4`-`0x48d5fe`): a capital
+    /// entered before our template arrives answers once it is there, with no zone change between,
+    /// and the type follows a template that changes.
+    #[test]
+    fn the_zone_pvp_type_reads_our_template_at_the_call() {
+        use crate::net::{Guid, GuidIndex, NetCommands, SelfGuid, SelfPlayer};
+        use crate::target::relations::fixture::{factions, HUMAN, ORC};
+        use benilla_protocol::messages::ObjectType;
+        use benilla_protocol::ObjectFields;
+        use benilla_ui::script::UiScript;
+        const ME: u64 = 0x7;
+        const ORGRIMMAR: u32 = 1637;
+        /// `UNIT_FIELD_FACTIONTEMPLATE`.
+        const TEMPLATE: u16 = 35;
+
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let world = app.world_mut();
+        benilla_world::world_point::init_world_point_resources(world);
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        world.insert_resource(NetCommands(tx));
+        world.resource_mut::<SelfGuid>().0 = Some(ME);
+        world.insert_resource(factions());
+        world.insert_resource(AreaTableRes(AreaTableCatalog::from_rows(vec![(
+            ORGRIMMAR,
+            AreaTableRow {
+                name: "Orgrimmar".into(),
+                ..row(0x138, 4)
+            },
+        )])));
+        world.insert_resource(benilla_world::terrain_stream::CurrentArea(Some(ORGRIMMAR)));
+        world.insert_non_send_resource(UiScript::new().unwrap());
+        let store = |template: Option<u32>| {
+            let pairs: Vec<(u16, u32)> = template.map(|t| (TEMPLATE, t)).into_iter().collect();
+            ObjectStore(ObjectFields::from_pairs(&pairs).into_created(ObjectType::Player))
+        };
+        let me = world.spawn((SelfPlayer, Guid(ME), store(None))).id();
+        world.resource_mut::<GuidIndex>().0.insert(ME, me);
+        let pvp = |app: &mut App| {
+            let world = app.world_mut();
+            crate::ui_unit::run_feed_units_once(world);
+            world.run_system_cached(feed_zone_events).unwrap();
+            world
+                .non_send_resource::<UiScript>()
+                .eval::<(Option<String>, Option<String>)>(
+                    "local t, f = GetZonePVPInfo() return t, f",
+                )
+                .unwrap()
+        };
+        assert_eq!(pvp(&mut app), (None, None), "no template: nil");
+        app.world_mut().entity_mut(me).insert(store(Some(ORC)));
+        assert_eq!(pvp(&mut app).0.as_deref(), Some("friendly"));
+        app.world_mut().entity_mut(me).insert(store(Some(HUMAN)));
+        assert_eq!(pvp(&mut app).0.as_deref(), Some("hostile"));
+    }
 }

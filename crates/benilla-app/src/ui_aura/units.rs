@@ -747,6 +747,211 @@ mod tests {
         assert!(listed(&mut app, "partypet1", false).is_empty());
     }
 
+    // == The pet token ==
+
+    /// `OBJECT_FIELD_TYPE`, and the player's and a unit's type masks.
+    const OBJECT_TYPE: u16 = 2;
+    const TYPE_PLAYER: u32 = 0x19;
+    const TYPE_UNIT: u32 = 0x9;
+    /// `UNIT_FIELD_CHARM`, `UNIT_FIELD_CHARMEDBY` and `UNIT_FIELD_CREATEDBY`, two-field guids.
+    const CHARM: u16 = 6;
+    const CHARMEDBY: u16 = 10;
+    const CREATEDBY: u16 = 14;
+    /// `UNIT_FLAG_PLAYER_CONTROLLED`, which players and their pets carry.
+    const PLAYER_CONTROLLED: u32 = 0x8;
+    /// A unit we charm.
+    const THRALL: u64 = 0xF130_0000_0000_0055;
+
+    /// `field` and the next one holding `guid`.
+    fn guid_at(field: u16, guid: u64) -> [(u16, u32); 2] {
+        [(field, guid as u32), (field + 1, (guid >> 32) as u32)]
+    }
+
+    /// Our descriptor replaced by these fields.
+    fn seat_me(app: &mut App, fields: &[(u16, u32)]) {
+        let me = app.world().resource::<GuidIndex>().0[&ME];
+        app.world_mut()
+            .entity_mut(me)
+            .insert(ObjectStore(ObjectFields::from_pairs(fields)));
+    }
+
+    /// The pet bar's cached guid (`[0xb714a0]`).
+    fn bar(app: &mut App, guid: u64) {
+        app.world_mut()
+            .resource_mut::<crate::ui_pet::PetBar>()
+            .spells
+            .pet_guid = guid;
+    }
+
+    /// `"pet"` names our `UNIT_FIELD_CHARM`, else our `UNIT_FIELD_SUMMON`, off our own descriptor
+    /// (`0x515a5e`-`0x515a6e`), never the pet bar's guid: its list is that unit's, a bar naming
+    /// another unit changes nothing, and with neither field the token names nobody.
+    #[test]
+    fn the_pet_token_lists_our_charm_else_our_summon_not_the_bar() {
+        let mut app = party_app();
+        let open = (FLAGS, 0x0800_0000);
+        stream(&mut app, PET, &[open, (AURA, 1126), (AURAFLAGS, 0x9)]);
+        stream(&mut app, THRALL, &[open, (AURA, 21562), (AURAFLAGS, 0x9)]);
+        bar(&mut app, THRALL);
+        seat_me(&mut app, &guid_at(SUMMON, PET));
+        app.update();
+        assert_eq!(listed(&mut app, "pet", false), [1126], "the summon");
+
+        bar(&mut app, PET);
+        let mut both = guid_at(SUMMON, PET).to_vec();
+        both.extend(guid_at(CHARM, THRALL));
+        seat_me(&mut app, &both);
+        app.update();
+        assert_eq!(listed(&mut app, "pet", false), [21562], "the charm first");
+
+        seat_me(&mut app, &[]);
+        app.update();
+        assert!(
+            listed(&mut app, "pet", false).is_empty(),
+            "no charm and no summon name nobody, whatever the bar holds"
+        );
+    }
+
+    /// The pet's buffs pass `UnitBuff`'s unit gate as any unit's (`0x5195aa`-`0x5195f7`): our own
+    /// pet passes `CanAssist` (`0x6066f0`), and while our `UNIT_FIELD_CHARMEDBY` is set
+    /// (`0x5195eb`-`0x5195f7`) its buffs are nil. `UnitDebuff` has no gate.
+    #[test]
+    fn the_pets_buffs_close_while_we_are_charmed() {
+        let mut app = party_app();
+        stream(
+            &mut app,
+            PET,
+            &[
+                (OBJECT_TYPE, TYPE_UNIT),
+                (FLAGS, PLAYER_CONTROLLED),
+                guid_at(CREATEDBY, ME)[0],
+                guid_at(CREATEDBY, ME)[1],
+                (AURA, 1126),
+                (AURA + 33, 589),
+                (AURAFLAGS, 0x9),
+                (AURAFLAGS + 4, 0x80),
+            ],
+        );
+        bar(&mut app, PET);
+        let me = |charmer: u64| {
+            let mut f = vec![(OBJECT_TYPE, TYPE_PLAYER), (FLAGS, PLAYER_CONTROLLED)];
+            f.extend(guid_at(SUMMON, PET));
+            f.extend(guid_at(CHARMEDBY, charmer));
+            f
+        };
+        seat_me(&mut app, &me(0));
+        app.update();
+        assert_eq!(
+            listed(&mut app, "pet", false),
+            [1126],
+            "we assist our own pet"
+        );
+        assert_eq!(listed(&mut app, "pet", true), [589]);
+
+        seat_me(&mut app, &me(THRALL));
+        app.update();
+        assert!(
+            listed(&mut app, "pet", false).is_empty(),
+            "charmed, we list nobody's buffs, our pet's included"
+        );
+        assert_eq!(listed(&mut app, "pet", true), [589], "the debuffs stay");
+    }
+
+    // == The vision test ==
+
+    /// `PLAYER_FIELD_BYTES2`, whose byte 1 holds the auras the player can see (`+0x10c1`).
+    const BYTES2: u16 = 1260;
+    /// 26869 Amorous, whose `RequiredAuraVision` is 1, and an aura with none.
+    const AMOROUS: u32 = 26869;
+
+    /// A catalog of Amorous, needing vision 1, and Power Word: Fortitude, needing none.
+    fn vision_catalog(app: &mut App) {
+        let row = |id: u32, required_aura_vision: u32| {
+            (
+                id,
+                benilla_formats::SpellDisplay {
+                    id,
+                    icon: Some(format!("Spell_{id}")),
+                    required_aura_vision,
+                    ..Default::default()
+                },
+            )
+        };
+        app.world_mut().insert_resource(crate::ui_action::Spells {
+            catalog: benilla_formats::SpellCatalog::from_displays(
+                [row(AMOROUS, 1), row(1243, 0)].into(),
+            ),
+            ..crate::ui_action::Spells::empty_for_tests()
+        });
+    }
+
+    /// `IsAuraDisplayable` (`0x519860`) hides an aura whose `RequiredAuraVision` is set unless
+    /// bit `value - 1` of the active player's `PLAYER_FIELD_BYTES2` byte 1 is (`0x51989c`-
+    /// `0x5198b8`), on every unit's rows, the player's own included (`0x51966d`); the record walk
+    /// runs it too (`0x51979f`). The player's buff bar does not (`0x4e4170`).
+    #[test]
+    fn an_aura_needing_vision_shows_only_while_the_player_has_it() {
+        let mut app = party_app();
+        vision_catalog(&mut app);
+        let open = (FLAGS, 0x0800_0000);
+        stream(
+            &mut app,
+            MEMBER,
+            &[open, (AURA, AMOROUS), (AURA + 1, 1243), (AURAFLAGS, 0x99)],
+        );
+        let me = |vision: u32| {
+            [
+                open,
+                (AURA, AMOROUS),
+                (AURAFLAGS, 0x9),
+                (BYTES2, vision << 8),
+            ]
+        };
+        seat_me(&mut app, &me(0));
+        app.update();
+        assert_eq!(listed(&mut app, "party1", false), [1243], "Amorous hidden");
+        assert!(listed(&mut app, "player", false).is_empty(), "on us too");
+        let bar_shows = |app: &mut App| {
+            app.world_mut()
+                .non_send_resource::<UiScript>()
+                .eval::<i64>(r#"return (GetPlayerBuff(0, "HELPFUL"))"#)
+                .unwrap()
+        };
+        assert_eq!(bar_shows(&mut app), 0, "the buff bar runs no vision test");
+
+        // Bit 0 of byte 1 is vision 1 (Detect Amore).
+        seat_me(&mut app, &me(1));
+        app.update();
+        assert_eq!(
+            listed(&mut app, "party1", false),
+            [i64::from(AMOROUS), 1243]
+        );
+        assert_eq!(listed(&mut app, "player", false), [i64::from(AMOROUS)]);
+        // Bit 1 alone is another vision.
+        seat_me(&mut app, &me(2));
+        app.update();
+        assert_eq!(listed(&mut app, "party1", false), [1243]);
+    }
+
+    /// A member out of view reads its record's block, which the vision test filters as well
+    /// (`0x51979f`).
+    #[test]
+    fn a_records_aura_needing_vision_is_hidden_without_it() {
+        let mut app = party_app();
+        vision_catalog(&mut app);
+        stats(
+            &mut app,
+            true,
+            PartyMemberStatsInfo {
+                status: Some(member_status::ONLINE),
+                auras: Some(vec![(0, AMOROUS as u16), (1, 1243)]),
+                ..Default::default()
+            },
+        );
+        app.update();
+        assert_eq!(listed(&mut app, "party1", false), [1243]);
+    }
+
     // == The raid tokens ==
 
     /// In our subgroup, so `party1` and `raid1`.

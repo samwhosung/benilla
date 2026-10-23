@@ -565,3 +565,81 @@ fn our_deaths_list_signals_before_its_line_and_player_dead_after() {
         .collect();
     assert_eq!(ours, ["PLAYER_TARGET_CHANGED", "death line", "PLAYER_DEAD"]);
 }
+
+/// A spy on the level-up's events, each with its arguments, into the client's `Seen`.
+fn spy_level_up(app: &mut App) {
+    app.world()
+        .resource::<crate::tutorial::Tutorials>()
+        .lock()
+        .apply_flags(&[0u8; 32]);
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("PLAYER_LEVEL_UP")
+            f:RegisterEvent("TUTORIAL_TRIGGER")
+            f:SetScript("OnEvent", function()
+                local args = {}
+                for _, v in ipairs({arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9}) do
+                    table.insert(args, tostring(v))
+                end
+                table.insert(Seen, event .. ":" .. table.concat(args, ","))
+            end)
+            "#,
+        )
+        .unwrap();
+}
+
+/// `SMSG_LEVELUP_INFO`'s arm of the notice handler `0x5e38c0`, while the active player exists
+/// (`0x5e4071`): the level tutorials the message's level reaches (`0x5e4086`-`0x5e410e`), then
+/// `PLAYER_LEVEL_UP` with the packet's level, health, first power, `level >= 10` and five stats
+/// (`0x5e413e`), each at its packet's place among the other lanes.
+#[test]
+fn the_level_up_message_signals_its_tutorials_then_player_level_up_at_its_packet() {
+    let mut app = client();
+    spy_level_up(&mut app);
+    let ding = SessionEvent::LevelUp(benilla_protocol::messages::LevelUpInfo {
+        level: 10,
+        health: 20,
+        powers: [15, 0, 0, 0, 0],
+        stats: [1, 2, 3, 4, -5],
+    });
+    let seen = frame(&mut app, vec![fall(1), ding, fall(1)]);
+    // Each published id is the tutorial's own plus one (`0x4b5390`).
+    let tutorial = |id: u32| format!("TUTORIAL_TRIGGER:{}", id + 1);
+    let mut want = vec!["UNIT_COMBAT:player:100".to_string()];
+    want.extend([0x16, 0x0d, 0x02, 0x26, 0x15, 0x25, 0x20, 0x0c].map(tutorial));
+    want.push("PLAYER_LEVEL_UP:10,20,15,1,1,2,3,4,-5".into());
+    want.push("UNIT_COMBAT:player:100".into());
+    assert_eq!(seen, want);
+
+    // Below 10 no talent point, and only the tutorials the level reaches, each once.
+    let ding = SessionEvent::LevelUp(benilla_protocol::messages::LevelUpInfo {
+        level: 4,
+        health: 9,
+        powers: [0; 5],
+        stats: [0; 5],
+    });
+    assert_eq!(
+        frame(&mut app, vec![ding]),
+        ["PLAYER_LEVEL_UP:4,9,0,0,0,0,0,0,0"],
+        "the tutorials fire once"
+    );
+}
+
+/// A level written to our descriptor signals no `PLAYER_LEVEL_UP`: the event's one source is the
+/// message (`0x5e413e`), so a GM's level change or a demotion with no `SMSG_LEVELUP_INFO` is
+/// silent.
+#[test]
+fn a_descriptor_level_change_alone_signals_no_level_up() {
+    const LEVEL: u16 = 34;
+    let mut app = client();
+    spy_level_up(&mut app);
+    frame(&mut app, vec![values(ME, &[(LEVEL, 10)])]);
+    let seen = frame(&mut app, vec![values(ME, &[(LEVEL, 11)])]);
+    assert!(
+        !seen.iter().any(|e| e.starts_with("PLAYER_LEVEL_UP")),
+        "{seen:?}"
+    );
+}

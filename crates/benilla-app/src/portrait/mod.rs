@@ -1147,8 +1147,9 @@ fn sync_portraits(
                 })
                 .flatten(),
             "pet" => {
+                let me = self_q.single().ok().and_then(|e| stores_q.get(e).ok());
                 let subject = pet_subject(
-                    party.pet_bar.spells.pet_guid,
+                    pet_guid(me, &party.pet_bar),
                     |g| party.index.0.get(&g).copied(),
                     &party.roster,
                     &party.names,
@@ -1632,6 +1633,11 @@ struct Subject {
     entity: Option<Entity>,
     occupant: Option<u64>,
     unseen: Option<String>,
+}
+
+/// The guid `"pet"`'s portrait draws, off our descriptor `me`.
+fn pet_guid(_me: Option<&crate::net::ObjectStore>, bar: &crate::ui_pet::PetBar) -> u64 {
+    bar.spells.pet_guid
 }
 
 /// `"pet"`'s subject: the object of the pet bar's guid, or for a pet the object manager does not
