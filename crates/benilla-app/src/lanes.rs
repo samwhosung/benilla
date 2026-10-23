@@ -297,6 +297,8 @@ mod guard_tests;
 mod item_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod unit_view_tests;
 
 #[cfg(test)]
 mod unit_tests {

@@ -1,0 +1,218 @@
+//! What a listener reads of a unit, as the packets before it left it. One packet's handler runs
+//! whole before the next (`0x537aa0` calls it at `0x537ae5`, `0x5384d0` takes them in order), its
+//! watchers fire inside it (`0x465570` → `0x4655dc`), and the getters read the live object:
+//! `UnitHealth` `[obj+0x110]+0x40` (`0x5174d0`, at `0x517553`), `UnitMana` the power its type
+//! byte picks (`0x517670`, at `0x5176fc`). So each listener reads its own packet's value, however
+//! many packets the frame holds.
+
+use benilla_protocol::field::{FIELD_UNIT_HEALTH, FIELD_UNIT_MAXHEALTH};
+use benilla_protocol::messages::{EnvironmentalDamageLog, ObjectType};
+use benilla_protocol::{EntityKind, ObjectFields, SessionEvent};
+use benilla_ui::script::{UiScript, UnitGuids};
+use bevy::prelude::*;
+
+const ME: u64 = 0x7;
+const WOLF: u64 = 0xF130_0000_0044_0001;
+const BOAR: u64 = 0xF130_0000_0045_0002;
+/// `UNIT_FIELD_POWER1`, mana, which `UnitMana` reads for power type 0 (`0x5176fc`).
+const MANA: u16 = 23;
+/// `UNIT_FIELD_MAXPOWER1`.
+const MAX_MANA: u16 = 29;
+/// `UNIT_FIELD_TARGET`, the hop `"targettarget"` makes; no watch of the bridge covers it.
+const TARGET: u16 = 16;
+
+/// `events` one packet each: every update block closed as its own packet.
+fn wire(events: impl IntoIterator<Item = SessionEvent>) -> Vec<SessionEvent> {
+    events
+        .into_iter()
+        .flat_map(|ev| {
+            let block = matches!(
+                ev,
+                SessionEvent::ObjectCreate { .. }
+                    | SessionEvent::ObjectValues { .. }
+                    | SessionEvent::ObjectsRemoved(_)
+            );
+            std::iter::once(ev).chain(block.then_some(SessionEvent::ObjectUpdateEnd))
+        })
+        .collect()
+}
+
+/// A create block of `kind` whose fields are `pairs`, as the wire's whole descriptor.
+pub(super) fn created(guid: u64, kind: EntityKind, pairs: &[(u16, u32)]) -> SessionEvent {
+    let as_type = match kind {
+        EntityKind::Player => ObjectType::Player,
+        _ => ObjectType::Unit,
+    };
+    SessionEvent::ObjectCreate {
+        guid,
+        kind,
+        display_id: None,
+        position: [0.0; 3],
+        orientation: 0.0,
+        scale: 1.0,
+        speeds: None,
+        mover: None,
+        transport_progress: None,
+        transport: None,
+        spline: None,
+        fields: ObjectFields::from_pairs(pairs).into_created(as_type),
+    }
+}
+
+pub(super) fn values(guid: u64, pairs: &[(u16, u32)]) -> SessionEvent {
+    SessionEvent::ObjectValues {
+        guid,
+        fields: ObjectFields::from_pairs(pairs),
+    }
+}
+
+/// `UNIT_FIELD_TARGET` naming `guid`.
+pub(super) fn targets(guid: u64) -> [(u16, u32); 2] {
+    [(TARGET, guid as u32), (TARGET + 1, (guid >> 32) as u32)]
+}
+
+/// A fall that hurts us: its `UNIT_COMBAT` `WOUND` on `"player"` (`0x624f83`), queued in the chat
+/// drain at its packet, an event of another lane between two update packets.
+pub(super) fn fall(damage: u32) -> SessionEvent {
+    SessionEvent::EnvironmentalDamageLog(EnvironmentalDamageLog {
+        victim: ME,
+        damage_type: 2,
+        damage,
+        absorb: 0,
+        resist: 0,
+    })
+}
+
+/// The health in `UNIT_FIELD_HEALTH`.
+pub(super) fn health(n: u32) -> [(u16, u32); 1] {
+    [(FIELD_UNIT_HEALTH, n)]
+}
+
+/// The client in the world as [`ME`], 100 health and 100 mana, targeting [`WOLF`] (100 health),
+/// with [`BOAR`] (50 health) beside it; a VM whose spy records `UNIT_HEALTH`, `UNIT_MANA` and
+/// `UNIT_COMBAT`, each with its token and what `Look(event, token)` reads as it fires.
+pub(super) fn client() -> App {
+    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetCommands(tx));
+    let world = app.world_mut();
+    world.resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
+    let script = UiScript::new().unwrap();
+    script
+        .run(
+            r#"
+            Seen = {}
+            function Look(event, unit)
+                if event == "UNIT_MANA" then return UnitMana(unit) end
+                return UnitHealth(unit)
+            end
+            local f = CreateFrame("Frame")
+            for _, e in ipairs({"UNIT_HEALTH", "UNIT_MANA", "UNIT_COMBAT"}) do
+                f:RegisterEvent(e)
+            end
+            f:SetScript("OnEvent", function()
+                table.insert(Seen, event .. ":" .. arg1 .. ":" .. tostring(Look(event, arg1)))
+            end)
+            "#,
+        )
+        .unwrap();
+    world.insert_non_send_resource(script);
+    let mob = |hp: u32| [(FIELD_UNIT_HEALTH, hp), (FIELD_UNIT_MAXHEALTH, 100)];
+    frame(
+        &mut app,
+        vec![
+            created(
+                ME,
+                EntityKind::Player,
+                &[
+                    (FIELD_UNIT_HEALTH, 100),
+                    (FIELD_UNIT_MAXHEALTH, 100),
+                    (MANA, 100),
+                    (MAX_MANA, 100),
+                ],
+            ),
+            created(WOLF, EntityKind::Unit, &mob(100)),
+            created(BOAR, EntityKind::Unit, &mob(50)),
+        ],
+    );
+    let world = app.world_mut();
+    // Our create tagged as ours, as the net stage's pass does (`net::apply`).
+    let me = world.resource::<crate::net::GuidIndex>().0[&ME];
+    world.entity_mut(me).insert(crate::net::SelfPlayer);
+    let wolf = world.resource::<crate::net::GuidIndex>().0[&WOLF];
+    *world.resource_mut::<crate::target::Selection>() = crate::target::Selection {
+        target: Some(wolf),
+        guid: Some(WOLF),
+        ..Default::default()
+    };
+    seat(&mut app, 0);
+    frame(&mut app, vec![]);
+    app
+}
+
+/// The resolver's seat: us, the wolf as `"target"`, and the wolf's target `tot`.
+pub(super) fn seat(app: &mut App, tot: u64) {
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .set_unit_guids(&UnitGuids {
+            player: ME,
+            target: WOLF,
+            held: [(ME, 0), (WOLF, tot), (BOAR, 0)].into_iter().collect(),
+            ..Default::default()
+        });
+}
+
+/// One frame: the packets through the handler table, the unit feed's push of the frame's state,
+/// then the lanes' drain; what the spy saw.
+pub(super) fn frame(app: &mut App, packets: Vec<SessionEvent>) -> Vec<String> {
+    let world = app.world_mut();
+    crate::net::handlers::dispatch(world, wire(packets));
+    crate::ui_unit::run_feed_units_once(world);
+    crate::lanes::fire_in_order(world);
+    let s = world.non_send_resource_mut::<UiScript>();
+    let out = s.eval::<Vec<String>>("return Seen").unwrap();
+    s.run("Seen = {}").unwrap();
+    let errors = s.errors();
+    assert!(errors.is_empty(), "script errors: {errors:?}");
+    out
+}
+
+/// Two health packets for the target in one frame: each `UNIT_HEALTH` listener reads its own
+/// packet's value (`0x5174d0` reads the live object), not the frame's last.
+#[test]
+fn each_unit_health_listener_reads_its_own_packets_target_health() {
+    let mut app = client();
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![values(WOLF, &health(70)), values(WOLF, &health(40))]
+        ),
+        ["UNIT_HEALTH:target:70", "UNIT_HEALTH:target:40"]
+    );
+}
+
+/// A combat-log `UNIT_COMBAT` raised ahead of the update packet that writes the hit reads the
+/// health before it: the combat-log handler runs whole first (`0x624f83`), and the health write
+/// comes in the later packet.
+#[test]
+fn a_unit_combat_ahead_of_its_update_reads_the_health_before_the_hit() {
+    let mut app = client();
+    assert_eq!(
+        frame(&mut app, vec![fall(30), values(ME, &health(70))]),
+        ["UNIT_COMBAT:player:100", "UNIT_HEALTH:player:70"]
+    );
+}
+
+/// Two power packets for the player in one frame: each `UNIT_MANA` listener reads its own
+/// packet's mana (`0x517670`, `[+0x44 + type*4]` at `0x5176fc`).
+#[test]
+fn each_unit_mana_listener_reads_its_own_packets_mana() {
+    let mut app = client();
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![values(ME, &[(MANA, 70)]), values(ME, &[(MANA, 40)])]
+        ),
+        ["UNIT_MANA:player:70", "UNIT_MANA:player:40"]
+    );
+}
