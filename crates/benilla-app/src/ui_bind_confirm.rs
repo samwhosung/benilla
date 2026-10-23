@@ -202,8 +202,9 @@ impl BindGate<'_> {
             pending.bag_index, pending.slot
         );
         self.on_use.0 = Some(pending);
-        // Queued for the next tick; `CURSOR_UPDATE` does not hide `USE_BIND`.
-        script.queue_event("USE_BIND_CONFIRM", vec![]);
+        // In place, inside the use: `CGItem::Use` stamps both guids, signals event 0x122 and
+        // returns (`0x5d91fa`-`0x5d9222`).
+        script.fire_event("USE_BIND_CONFIRM", vec![]);
     }
 }
 
