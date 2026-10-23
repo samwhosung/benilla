@@ -154,7 +154,7 @@ struct Lane {
     name: &'static str,
     peek: fn(&World) -> Option<Stamp>,
     fire: SystemId<In<Until>>,
-    begin: Option<fn(&mut World)>,
+    begin: Option<fn(&World)>,
 }
 
 /// Every lane, in registration order.
@@ -174,6 +174,11 @@ impl Lanes {
     }
 }
 
+/// What runs once after each drain, however it ended: a lane's firing that stopped early leaves
+/// state no read outside the drain may see.
+#[derive(Resource, Default)]
+struct DrainEnds(Vec<fn(&mut World)>);
+
 /// The drain's place: after every feed in [`crate::ui_script::UiFeed`] has pushed, and before
 /// the tick ([`crate::ui_script::UiInput`]).
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -188,8 +193,11 @@ pub(crate) trait LaneApp {
         name: &'static str,
         peek: fn(&World) -> Option<Stamp>,
         fire: impl IntoSystem<In<Until>, (), M> + 'static,
-        begin: Option<fn(&mut World)>,
+        begin: Option<fn(&World)>,
     ) -> &mut Self;
+
+    /// Run `end` once after each drain, whether it fired every item or stopped.
+    fn add_drain_end(&mut self, end: fn(&mut World)) -> &mut Self;
 }
 
 impl LaneApp for App {
@@ -198,7 +206,7 @@ impl LaneApp for App {
         name: &'static str,
         peek: fn(&World) -> Option<Stamp>,
         fire: impl IntoSystem<In<Until>, (), M> + 'static,
-        begin: Option<fn(&mut World)>,
+        begin: Option<fn(&World)>,
     ) -> &mut Self {
         if self.world().get_resource::<Lanes>().is_none() {
             self.init_resource::<Lanes>()
@@ -240,6 +248,12 @@ impl LaneApp for App {
             fire,
             begin,
         });
+        self
+    }
+
+    fn add_drain_end(&mut self, end: fn(&mut World)) -> &mut Self {
+        self.init_resource::<DrainEnds>();
+        self.world_mut().resource_mut::<DrainEnds>().0.push(end);
         self
     }
 }
@@ -290,6 +304,13 @@ pub(crate) fn fire_in_order(world: &mut World) {
         }
     }
     world.insert_resource(lanes);
+    let ends = world
+        .get_resource::<DrainEnds>()
+        .map(|e| e.0.clone())
+        .unwrap_or_default();
+    for end in ends {
+        end(world);
+    }
 }
 
 #[cfg(test)]

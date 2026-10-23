@@ -165,7 +165,24 @@ pub(super) fn seat(app: &mut App, tot: u64) {
 /// One frame: the packets through the handler table, the unit feed's push of the frame's state,
 /// then the lanes' drain; what the spy saw.
 pub(super) fn frame(app: &mut App, packets: Vec<SessionEvent>) -> Vec<String> {
+    frame_after(app, |_| {}, packets)
+}
+
+/// [`frame`], with `before` run on the world between the frame-start snapshot and the packets.
+pub(super) fn frame_after(
+    app: &mut App,
+    before: impl FnOnce(&mut World),
+    packets: Vec<SessionEvent>,
+) -> Vec<String> {
     let world = app.world_mut();
+    #[cfg(debug_assertions)]
+    {
+        use bevy::ecs::system::RunSystemOnce;
+        world
+            .run_system_once(crate::ui_unit::views::mark_frame_start)
+            .unwrap();
+    }
+    before(world);
     crate::net::handlers::dispatch(world, wire(packets));
     crate::ui_unit::run_feed_units_once(world);
     crate::lanes::fire_in_order(world);
@@ -334,4 +351,92 @@ fn a_frame_whose_events_follow_every_write_pushes_no_old_view() {
     );
     let (builds, pushes, _) = lane_counts(&mut app);
     assert_eq!((builds, pushes), (0, 0));
+}
+
+/// A store written past the log fails the rewind's check against the frame-start snapshot: here
+/// the target's `MAXHEALTH`, a field no entry of the frame names.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "a write the log missed")]
+fn a_write_the_log_missed_fails_the_rewind() {
+    let mut app = client();
+    frame_after(
+        &mut app,
+        |world| {
+            let wolf = world.resource::<crate::net::GuidIndex>().0[&WOLF];
+            let mut store = world.get_mut::<crate::net::ObjectStore>(wolf).unwrap();
+            store
+                .0
+                .merge(ObjectFields::from_pairs(&[(FIELD_UNIT_MAXHEALTH, 90)]));
+        },
+        vec![values(WOLF, &health(70))],
+    );
+}
+
+/// A worldport drops every streamed object without an update block (`SMSG_NEW_WORLD`): logged as
+/// the stores it takes, the rewind of the target the frame creates again lands on the store the
+/// frame started from.
+#[test]
+fn a_worldport_is_logged_as_the_stores_it_takes() {
+    let mut app = client();
+    lane_counts(&mut app);
+    app.world_mut()
+        .resource_mut::<crate::ui_unit::views::UnitViews>()
+        .starts_checked = 0;
+    frame(
+        &mut app,
+        vec![
+            SessionEvent::Worldport {
+                map_id: 1,
+                position: [0.0; 3],
+                orientation: 0.0,
+                needs_ack: false,
+            },
+            created(WOLF, EntityKind::Unit, &health(60)),
+        ],
+    );
+    let views = app.world().resource::<crate::ui_unit::views::UnitViews>();
+    #[cfg(debug_assertions)]
+    assert_eq!(
+        views.starts_checked, 1,
+        "the target, checked against the snapshot"
+    );
+    assert!(!views.holds(WOLF), "and read live again");
+}
+
+/// A lane that fires nothing, which stops the drain at its item.
+#[derive(Resource, Default)]
+struct Stuck(Option<crate::lanes::Stamp>);
+
+fn fire_stuck(In(_): In<crate::lanes::Until>) {}
+
+/// A drain that stops before the views lane has replayed its entries leaves no rewound store
+/// behind: the next frame's feed reads the live store, and the next drain puts the feed's views
+/// back, so the target reads the health its last packet wrote.
+#[test]
+fn a_drain_that_stops_early_leaves_no_rewound_store() {
+    use crate::lanes::LaneApp;
+    let mut app = client();
+    app.init_resource::<Stuck>().add_lane(
+        "stuck",
+        |world| world.get_resource::<Stuck>()?.0,
+        fire_stuck,
+        None,
+    );
+    let stopped = frame_after(
+        &mut app,
+        |world| world.resource_mut::<Stuck>().0 = Some(crate::lanes::stamp()),
+        vec![values(WOLF, &health(70))],
+    );
+    assert!(stopped.is_empty(), "the drain stopped at the stuck item");
+    let views = app.world().resource::<crate::ui_unit::views::UnitViews>();
+    assert!(!views.holds(WOLF), "the stop left nothing rewound");
+    app.world_mut().resource_mut::<Stuck>().0 = None;
+    assert_eq!(frame(&mut app, vec![]), ["UNIT_HEALTH:target:70"]);
+    let health = app
+        .world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .eval::<f64>("return UnitHealth('target')")
+        .unwrap();
+    assert_eq!(health, 70.0);
 }

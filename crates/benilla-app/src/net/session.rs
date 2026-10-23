@@ -205,8 +205,14 @@ fn on_connected(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
     }
 }
 
-fn on_logged_out(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
+fn on_logged_out(
+    In(ev): In<SessionEvent>,
+    mut e: Edges,
+    mut b: Bridge,
+    view_log: Option<ResMut<crate::ui_unit::views::ViewLog>>,
+) {
     if let SessionEvent::LoggedOut = ev {
+        log_teardown(view_log, &b);
         logged_out(
             &mut b.commands,
             &mut b.index,
@@ -229,8 +235,10 @@ fn on_disconnected(
     mut e: Edges,
     mut b: Bridge,
     mut released: ResMut<super::objects::Released>,
+    view_log: Option<ResMut<crate::ui_unit::views::ViewLog>>,
 ) {
     if let SessionEvent::Disconnected { reason, end } = ev {
+        log_teardown(view_log, &b);
         // The same teardown as `on_logged_out`'s.
         b.reputations.tear_down();
         // Leaving the world frees the released objects with the live ones (`0x467700`).
@@ -248,6 +256,14 @@ fn on_disconnected(
             &mut e.transfer,
             &mut e.disconnects,
         );
+    }
+}
+
+/// The world left at once: the stores the teardown takes, logged for the views a listener reads
+/// ([`crate::ui_unit::views::ViewLog::torn_down`]).
+fn log_teardown(view_log: Option<ResMut<crate::ui_unit::views::ViewLog>>, b: &Bridge) {
+    if let Some(mut log) = view_log {
+        log.torn_down(&b.index, |e| b.stores.get(e).ok());
     }
 }
 
@@ -288,6 +304,7 @@ fn on_worldport(
     mut group: ResMut<crate::ui_party::GroupState>,
     script: Option<NonSend<benilla_ui::script::UiScript>>,
     mut released: ResMut<super::objects::Released>,
+    view_log: Option<ResMut<crate::ui_unit::views::ViewLog>>,
 ) {
     if let SessionEvent::Worldport {
         map_id,
@@ -305,6 +322,7 @@ fn on_worldport(
             script.as_deref(),
             &b.net,
         );
+        log_teardown(view_log, &b);
         worldport(
             map_id,
             position,

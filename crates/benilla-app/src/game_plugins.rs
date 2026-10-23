@@ -1350,6 +1350,8 @@ pub(crate) mod schedule_tests {
          "no self returns before anything changes, and a question open on an NPC needs a self that interacted; the leash is re-tested every frame"),
         ("::ui_session::latch::watch_interaction_range",
          "no self returns before anything changes, and a latch needs a self that interacted; the leash is re-tested every frame"),
+        ("::ui_unit::views::mark_frame_start",
+         "a debug snapshot of what the frame starts from, ahead of the net stage by design and with no change detection: a self the frame tags is in no snapshot, and the views' check skips it"),
     ];
 
     /// Every `Update` system that names `SelfPlayer` (reads it, or filters on it) is ordered after

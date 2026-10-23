@@ -80,6 +80,9 @@ pub(crate) struct ViewLog {
     entries: Vec<Entry>,
     /// The last entry is the packet still being handled.
     open: bool,
+    /// How many times the entries were taken or dropped: a frame-start snapshot holds for the
+    /// entries it saw ([`FrameStart`]).
+    epoch: u64,
 }
 
 impl ViewLog {
@@ -113,6 +116,79 @@ impl ViewLog {
     pub(crate) fn close(&mut self) {
         self.open = false;
     }
+
+    /// The world left at once (a worldport, a disconnect, a logout): every unit the object manager
+    /// holds is logged as its store stands, a destroy for each the teardown takes. For one it
+    /// keeps, the entry holds the store unchanged, which undoing and replaying leaves as it is.
+    pub(crate) fn torn_down<'a>(
+        &mut self,
+        index: &GuidIndex,
+        store: impl Fn(Entity) -> Option<&'a ObjectStore>,
+    ) {
+        for (&guid, &e) in &index.0 {
+            if !benilla_protocol::guid::is_item(guid) {
+                self.replaced(guid, store(e).cloned());
+            }
+        }
+        self.close();
+    }
+
+    /// The frame's entries, taken for the replay.
+    fn take(&mut self) -> Vec<Entry> {
+        self.close();
+        self.epoch += 1;
+        std::mem::take(&mut self.entries)
+    }
+}
+
+/// Each store a token names as the frame began, with the entity it was read from, and how many
+/// entries the log held then (`mark`), for the check that the rewind lands on it: a write the log
+/// missed makes it land elsewhere. Taken ahead of the net stage, in debug builds.
+#[derive(Resource, Default)]
+pub(crate) struct FrameStart {
+    epoch: u64,
+    mark: usize,
+    stores: HashMap<u64, (Option<Entity>, Option<ObjectStore>)>,
+}
+
+/// [`FrameStart`]'s snapshot, of the stores the lane's rewind starts from.
+#[cfg(debug_assertions)]
+pub(crate) fn mark_frame_start(
+    log: Res<ViewLog>,
+    mut start: ResMut<FrameStart>,
+    selection: Option<Res<Selection>>,
+    interact: Option<Res<crate::ui_session::InteractNpc>>,
+    index: Option<Res<GuidIndex>>,
+    all: Query<&ObjectStore>,
+    me: Query<(Entity, &Guid), With<SelfPlayer>>,
+) {
+    let store = |e: Option<Entity>| e.and_then(|e| all.get(e).ok()).cloned();
+    let mut stores = HashMap::new();
+    if let Some((e, g)) = me.iter().next() {
+        stores.insert(g.0, (Some(e), store(Some(e))));
+    }
+    if let Some((guid, entity)) = selection.as_deref().and_then(|s| Some((s.guid?, s.target))) {
+        let target = store(entity);
+        let hop = target
+            .as_ref()
+            .and_then(|s| s.0.unit_target())
+            .filter(|&g| g != 0);
+        stores.insert(guid, (entity, target));
+        if let Some(hop) = hop {
+            let e = index.as_deref().and_then(|i| i.0.get(&hop).copied());
+            stores.entry(hop).or_insert_with(|| (e, store(e)));
+        }
+    }
+    if let Some((guid, entity)) = interact.as_deref().and_then(|i| Some((i.1?, i.0))) {
+        stores
+            .entry(guid)
+            .or_insert_with(|| (entity, store(entity)));
+    }
+    *start = FrameStart {
+        epoch: log.epoch,
+        mark: log.entries.len(),
+        stores,
+    };
 }
 
 /// The views lane: the stores the tokens name as of the drain's place, and what it has pushed.
@@ -143,6 +219,9 @@ pub(crate) struct UnitViews {
     /// The views pushed, for the tests.
     #[cfg(test)]
     pub(crate) pushes: usize,
+    /// The stores the rewind checked against the frame-start snapshot, for the tests.
+    #[cfg(test)]
+    pub(crate) starts_checked: usize,
 }
 
 impl UnitViews {
@@ -174,11 +253,12 @@ impl UnitViews {
     }
 
     /// The drain's end for this lane: every store is back to the live one.
-    fn finish(&mut self, live: impl Fn(Entity) -> Option<ObjectStore>) {
-        for (guid, (entity, store)) in self.scratch.drain() {
-            let now = entity.and_then(&live);
+    #[cfg_attr(not(debug_assertions), allow(unused_variables))]
+    fn finish<'a>(&mut self, live: impl Fn(Entity) -> Option<&'a ObjectStore>) {
+        #[cfg(debug_assertions)]
+        for (guid, (entity, store)) in &self.scratch {
             debug_assert!(
-                same_reads(store.as_ref(), now.as_ref()),
+                same_reads(store.as_ref(), entity.and_then(&live)),
                 "views: {guid:#x} replayed to a store the live one is not"
             );
             #[cfg(test)]
@@ -186,6 +266,7 @@ impl UnitViews {
                 self.checked += 1;
             }
         }
+        self.scratch.clear();
         self.pending.clear();
         self.started = false;
         self.shown = None;
@@ -321,22 +402,24 @@ pub(super) fn add_unit_views_lane(app: &mut App) {
     use crate::lanes::LaneApp;
     app.init_resource::<ViewLog>()
         .init_resource::<UnitViews>()
-        .add_lane(
-            "unit views",
-            peek,
-            fire_unit_views,
-            Some(|world| {
-                if let Some(mut views) = world.get_resource_mut::<UnitViews>() {
-                    views.begin();
-                }
-            }),
-        )
+        .init_resource::<FrameStart>()
+        .add_lane("unit views", peek, fire_unit_views, None)
+        .add_drain_end(|world| {
+            if let Some(mut views) = world.get_resource_mut::<UnitViews>() {
+                views.end_drain();
+            }
+        })
         .add_systems(
             Update,
             drop_unit_views
                 .in_set(crate::ui_script::UiFeed)
                 .run_if(not(crate::ui_script::ingame_ui_up)),
         );
+    #[cfg(debug_assertions)]
+    app.add_systems(
+        Update,
+        mark_frame_start.before(benilla_world::schedule::WorldStage::Net),
+    );
 }
 
 /// The lane's head: its start while the frame logged anything, then its next entry.
@@ -354,13 +437,18 @@ fn peek(world: &World) -> Option<Stamp> {
 /// What the packets wrote while no in-game interface is up, taken unreplayed: there is no VM to
 /// read it.
 fn drop_unit_views(mut log: ResMut<ViewLog>, mut views: ResMut<UnitViews>) {
-    log.entries.clear();
-    log.close();
+    log.take();
     views.clear();
 }
 
 /// The units the tokens name as the drain begins, each by guid with the entity its live store is
 /// read from: `"player"`, `"target"` and `"npc"`.
+///
+/// Deviation: each getter resolves its token at the call (`UnitHealth` calls `0x515970` at
+/// `0x517511`), so a listener for an earlier packet reads the unit the token named then. Here
+/// `"target"` and `"npc"` name the frame's last selection and interaction through the drain, and
+/// a token a call moves during it is left to that call's own seat; a later piece versions the
+/// selection and the interaction, and this goes.
 struct Seats {
     me: Option<(u64, Option<Entity>)>,
     target: Option<(u64, Option<Entity>)>,
@@ -373,11 +461,18 @@ fn undo_frame(
     guid: u64,
     live: Option<ObjectStore>,
     entries: &mut [Entry],
+    start: Option<&FrameStart>,
 ) -> (Option<ObjectStore>, Vec<u64>) {
     let hop = |s: &Option<ObjectStore>| s.as_ref().and_then(|s| s.0.unit_target());
     let mut store = live;
     let mut hops: Vec<u64> = hop(&store).into_iter().collect();
-    for entry in entries.iter_mut().rev() {
+    // The store where the frame-start snapshot was taken, past the entries logged before it.
+    let mark = start.map_or(0, |s| s.mark);
+    let mut at_mark = None;
+    for (i, entry) in entries.iter_mut().enumerate().rev() {
+        if start.is_some() && i + 1 == mark {
+            at_mark = Some(store.clone());
+        }
         for (g, change) in entry.changes.iter_mut().rev() {
             if *g == guid {
                 change.undo(&mut store);
@@ -385,12 +480,22 @@ fn undo_frame(
             }
         }
     }
+    if let Some((entity, snapshot)) = start.and_then(|s| s.stores.get(&guid)) {
+        let at_mark = at_mark.unwrap_or_else(|| store.clone());
+        debug_assert!(
+            same_reads(at_mark.as_ref(), snapshot.as_ref()),
+            "views: {guid:#x} ({entity:?}) rewound to a store the frame did not start from: a \
+             write the log missed"
+        );
+    }
     (store, hops)
 }
 
 impl UnitViews {
-    /// A drain begins: one that ended before replaying all it took leaves the VM unknown.
-    fn begin(&mut self) {
+    /// The drain's end, however it ended: one that stopped before this lane replayed all it took
+    /// leaves no rewound store for a later read, and the VM unknown, so the next start pushes
+    /// every token.
+    fn end_drain(&mut self) {
         if self.started {
             self.stale = true;
             self.clear();
@@ -406,7 +511,17 @@ impl UnitViews {
         seats: Seats,
         live: impl Fn(Entity) -> Option<ObjectStore>,
         by_guid: impl Fn(u64) -> Option<Entity>,
+        start: Option<&FrameStart>,
     ) {
+        // The snapshot is checked against for each guid read from the entity it was taken from.
+        #[cfg(test)]
+        let checked = std::cell::Cell::new(0);
+        let start_for = |guid: u64, entity: Option<Entity>| {
+            let start = start.filter(|s| s.stores.get(&guid).is_some_and(|(e, _)| *e == entity));
+            #[cfg(test)]
+            checked.set(checked.get() + usize::from(start.is_some()));
+            start
+        };
         let touched: HashSet<u64> = entries
             .iter()
             .flat_map(|e| e.changes.iter().map(|(g, _)| *g))
@@ -414,7 +529,12 @@ impl UnitViews {
         let mut hops = Vec::new();
         let mut scratch = HashMap::new();
         if let Some((guid, entity)) = seats.target {
-            let (store, seen) = undo_frame(guid, entity.and_then(&live), &mut entries);
+            let (store, seen) = undo_frame(
+                guid,
+                entity.and_then(&live),
+                &mut entries,
+                start_for(guid, entity),
+            );
             hops = seen;
             if touched.contains(&guid) {
                 scratch.insert(guid, (entity, store));
@@ -426,9 +546,16 @@ impl UnitViews {
                 .map(|g| (g, by_guid(g))),
         );
         for (guid, entity) in others {
-            if touched.contains(&guid) && !scratch.contains_key(&guid) {
-                let (store, _) = undo_frame(guid, entity.and_then(&live), &mut entries);
-                scratch.insert(guid, (entity, store));
+            if scratch.contains_key(&guid) {
+                continue;
+            }
+            // An untouched store is not rewound, but is checked against the snapshot all the same.
+            let check = start_for(guid, entity);
+            if touched.contains(&guid) || check.is_some() {
+                let (store, _) = undo_frame(guid, entity.and_then(&live), &mut entries, check);
+                if touched.contains(&guid) {
+                    scratch.insert(guid, (entity, store));
+                }
             }
         }
         self.pending = entries
@@ -440,6 +567,10 @@ impl UnitViews {
             .collect();
         self.named = (seats.target.map(|(g, _)| g), seats.npc.map(|(g, _)| g));
         self.scratch = scratch;
+        #[cfg(test)]
+        {
+            self.starts_checked += checked.get();
+        }
     }
 }
 
@@ -467,33 +598,36 @@ fn fire_unit_views(
     interact: Option<Res<crate::ui_session::InteractNpc>>,
     all: Query<&ObjectStore>,
     self_q: Query<(Entity, &ObjectStore, &Guid), With<SelfPlayer>>,
+    #[cfg_attr(not(debug_assertions), allow(unused_variables))] start: Option<Res<FrameStart>>,
 ) {
     vm.turn(|script, (mut views, mut feed, selection, world)| {
         let live = |e: Entity| all.get(e).ok().cloned();
         let by_guid = |guid: u64| index.as_ref().and_then(|i| i.0.get(&guid).copied());
         let npc_seat = interact.as_deref().and_then(|i| Some((i.1?, i.0)));
         let Some(script) = script else {
-            log.entries.clear();
-            log.close();
+            log.take();
             views.clear();
             return;
         };
         let first = !views.started;
         if first {
-            log.close();
-            let entries = std::mem::take(&mut log.entries);
+            #[cfg(debug_assertions)]
+            let start = start.as_deref().filter(|s| s.epoch == log.epoch);
+            #[cfg(not(debug_assertions))]
+            let start = None;
+            let entries = log.take();
             let seats = Seats {
                 me: self_q.iter().next().map(|(e, _, g)| (g.0, Some(e))),
                 target: selection.guid.map(|g| (g, selection.target)),
                 npc: npc_seat,
             };
-            views.rewind(entries, seats, live, by_guid);
+            views.rewind(entries, seats, live, by_guid, start);
             views.started = true;
         }
         views.apply(until);
         let last = views.pending.is_empty();
         if first && last && !views.stale {
-            views.finish(live);
+            views.finish(|e| all.get(e).ok());
             return;
         }
         let stale = std::mem::take(&mut views.stale);
@@ -569,7 +703,7 @@ fn fire_unit_views(
         }
         views.shown = Some(shown);
         if last {
-            views.finish(live);
+            views.finish(|e| all.get(e).ok());
         }
     });
 }

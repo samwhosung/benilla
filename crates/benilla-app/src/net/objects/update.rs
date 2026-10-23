@@ -451,10 +451,11 @@ fn write_logged(
     moved
 }
 
-/// A held object leaving the live table: the store it takes, logged for a guid a token names,
-/// whose view the frame's earlier listeners read off it.
+/// A held object leaving the live table: the store it takes, logged for any unit, as one a token
+/// names now or named earlier in the frame (the target's target before it changed) reads it in
+/// the frame's earlier listeners.
 fn log_destroy(sc: &mut Scene, guid: u64) {
-    if guid::is_item(guid) || !token_named(sc, guid) {
+    if guid::is_item(guid) {
         return;
     }
     let Some(&e) = sc.index.0.get(&guid) else {
@@ -464,20 +465,6 @@ fn log_destroy(sc: &mut Scene, guid: u64) {
     if before.is_some() {
         sc.view_log.replaced(guid, before);
     }
-}
-
-/// Whether `guid` is a unit the view tokens name: ourselves, the selection, its target or the
-/// interaction NPC.
-fn token_named(sc: &Scene, guid: u64) -> bool {
-    let selection = sc.selection.as_deref();
-    let target_of = selection
-        .and_then(|s| s.target)
-        .and_then(|e| sc.stores.get(e).ok())
-        .and_then(|s| s.0.unit_target());
-    sc.self_guid.0 == Some(guid)
-        || selection.and_then(|s| s.guid) == Some(guid)
-        || target_of == Some(guid)
-        || sc.interact.as_deref().and_then(|i| i.1) == Some(guid)
 }
 
 /// A values block (`0x467160`): written into a held object, or one it brings back; a guid the
