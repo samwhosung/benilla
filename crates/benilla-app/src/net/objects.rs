@@ -163,7 +163,8 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             // The callbacks the lookups that missed registered, in the order they asked
             // (`0x55ba30`, the dedupe flag 0): each item's set-up (`0x5d8390`) and entry change's
             // (`0x5d96b0`), the loot window's rows (`0x4c2ac0`) and pushes (`0x491ee0`), the trade
-            // getters' (`0x4c0340`) and the ammo getters' (`0x4c84f0`).
+            // getters' (`0x4c0340`), the ammo getters' (`0x4c84f0`), and the parked swaps'
+            // (`0x5e1020`) and auto-equips' (`0x5e17a0`).
             let callbacks = sc.items.take_callbacks(entry);
             // An answer an item of ours waited on changes what the bag view shows of it.
             if answered
@@ -225,6 +226,9 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
                             })
                     }
                     Cb::Trade | Cb::Ammo => {}
+                    // The equip callbacks run with the VM, after the feeds push the answer
+                    // ([`crate::ui_bind_confirm::replay_equip_records`]).
+                    Cb::Swap | Cb::AutoEquip => sc.items.run_with_vm(entry, callback, answered),
                 }
             }
             // The combat log's callback for its held lines (`0x6294b0`), which writes each one

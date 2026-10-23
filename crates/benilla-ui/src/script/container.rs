@@ -601,6 +601,11 @@ fn use_equip_arm(
             cursor::lock_item(model, guid);
         }
     });
+    // A record still in flight parks the equip on it (`0x5e160c`), which the use's own fork
+    // test reads cached, so only a view behind the cache reaches this.
+    if let cursor::equip::AutoEquip::Waits { entry } = step {
+        super::item_calls::submit(lua, super::ItemCall::AutoEquipWait { entry })?;
+    }
     // An item the verb refused (in the trade window) sends nothing, but still locks (`0x4fa418`).
     if matches!(
         step,
@@ -753,22 +758,30 @@ fn pickup_container_item(
                 // A split places and clears (`0x5e1210`, then `ClearCursor(0,1)` at `0x4f9e4f`):
                 // the grid hide and `CURSOR_UPDATE`, and no lock event.
                 (Some(n), _) => {
-                    queue_move(model, &held, bag, slot, Some(n));
+                    queue_split(model, &held, bag, slot, n);
                     cursor::clear(model, cursor::Clear::KEEP_LOCK);
                 }
-                // A whole stack locks the destination's item first (`0x4f9e85`; an empty slot's
-                // zero guid signals nothing, `0x4953ed`), then the swap send clears
-                // (`ClearCursor(0,1)` at `0x5e0fe7`: the grid hide, `CURSOR_UPDATE`) and the
-                // binding clears again (`0x4f9eb8`), a second `CURSOR_UPDATE` on the empty cursor.
-                // The source keeps its lock in both: the clears pass no unlock.
                 // A locked occupant refuses the whole stack, the payload kept (`0x4f9e76`); the
                 // split arm above never reads it.
                 (None, Some(d)) if cursor::item_locked(model, d.guid) => {}
+                // A whole stack locks the destination's item first (`0x4f9e85`; an empty slot's
+                // zero guid signals nothing, `0x4953ed`), then goes through `SwapItem`
+                // (`0x4f9eac`), whose send clears (`ClearCursor(0,1)` at `0x5e0fe7`) and whose
+                // question leaves the item held; the binding clears after it either way
+                // (`0x4f9eb8`), past the call.
                 (None, dest) => {
-                    queue_move(model, &held, bag, slot, None);
                     cursor::lock_item(model, dest.map_or(0, |d| d.guid));
-                    cursor::clear(model, cursor::Clear::KEEP_LOCK);
-                    cursor::clear(model, cursor::Clear::KEEP_LOCK);
+                    cursor::swap::swap_and_file(
+                        model,
+                        ContainerMove {
+                            src_bag: held.bag,
+                            src_slot: held.slot,
+                            dst_bag: bag,
+                            dst_slot: slot,
+                            count: None,
+                        },
+                    );
+                    return ContainerClick::Swapped;
                 }
             }
             ContainerClick::Done
@@ -805,26 +818,24 @@ fn pickup_container_item(
 enum ContainerClick {
     /// Done inside the segment.
     Done,
+    /// A whole stack went through `SwapItem`; the binding's own `ClearCursor(0,1)` follows the
+    /// call (`0x4f9eb8`), so its `CURSOR_UPDATE` comes after any bind question the swap raised,
+    /// whose dialog that signal hides (`UIParent.lua:357-361`).
+    Swapped,
     /// The item a pickup puts on the cursor.
     PickUp(CursorItem),
     /// The armed item-targeting spell's pick (`0x4f9c54`), a call for the host.
     Pick(cursor::ItemPick),
 }
 
-/// Queue one move, the shared tail of every clearing branch above.
-fn queue_move(
-    model: &mut super::Model,
-    held: &CursorItem,
-    dst_bag: i64,
-    dst_slot: u32,
-    count: Option<u32>,
-) {
+/// Queue a split's placement (`0x5e1210`), which asks no question.
+fn queue_split(model: &mut super::Model, held: &CursorItem, dst_bag: i64, dst_slot: u32, n: u32) {
     model.item_calls.push(ItemCall::Move(ContainerMove {
         src_bag: held.bag,
         src_slot: held.slot,
         dst_bag,
         dst_slot,
-        count,
+        count: Some(n),
     }));
 }
 
@@ -1146,6 +1157,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             super::item_calls::submit_item_calls(lua)?;
             match click {
                 ContainerClick::Done => {}
+                ContainerClick::Swapped => super::tick::verb(lua, |model| {
+                    cursor::clear(model, cursor::Clear::KEEP_LOCK);
+                }),
                 ContainerClick::PickUp(item) => cursor::pick_up_item(lua, item),
                 ContainerClick::Pick(pick) => {
                     super::calls::submit(lua, super::ScriptCall::PickItem(pick))?
@@ -1971,6 +1985,8 @@ mod tests {
                     item_id: 871,
                     count: 1,
                     item_class: Some(0),
+                    // Cached, as the equip fork reads the record.
+                    quality: Some(1),
                     use_fork: fork,
                     equip_slots: vec![1],
                     ..Default::default()

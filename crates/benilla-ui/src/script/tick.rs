@@ -12,8 +12,7 @@ impl UiScript {
     /// that tick's `OnUpdate` pass: the host's lane ([`Model::pending_events`]), for a producer
     /// outside any Lua verb. A drain runs a step behind its input, so firing at once would
     /// overtake events the host already queued. A Lua verb's own events never wait here: they
-    /// fire inside it ([`verb`]), so the soulbind confirm for an item placed into a worn slot
-    /// follows that placement's `CURSOR_UPDATE`, whose handler hides it (`UIParent.lua:357-361`).
+    /// fire inside it ([`verb`]).
     pub fn queue_event(&mut self, event: &str, args: Vec<ScriptValue>) {
         self.model_mut()
             .pending_events

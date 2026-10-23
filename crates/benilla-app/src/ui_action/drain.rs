@@ -407,6 +407,9 @@ pub(crate) fn use_action(
                         script,
                         crate::ui_bind_confirm::PendingEquip::AutoEquip { bag, slot, guid },
                     ),
+                    benilla_ui::script::AutoEquip::Waits { entry } => {
+                        gate.await_auto_equip(entry, &ladder.items, &ladder.commands);
+                    }
                     benilla_ui::script::AutoEquip::Back | benilla_ui::script::AutoEquip::None => {}
                 }
             } else {

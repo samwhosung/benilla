@@ -6,36 +6,54 @@
 //! There is no confirm packet: `EquipPendingItem(index)` re-runs the original action with the
 //! suppress flag set, and `CancelPendingEquip(index)` sends nothing and drops the record. The
 //! dialogs are `exclusive`, so a new question hides the standing one, whose `OnHide` cancels it.
+//! The two equip arms ask in the VM, where the item is held ([`benilla_ui::script::Swap`],
+//! [`benilla_ui::script::AutoEquip`]); the app files their records, signals their dialogs inside
+//! the call, and parks a move whose item record is not cached until the record answers.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use benilla_ui::script::{ScriptValue, UiScript};
+use benilla_ui::script::{ContainerMove, ScriptValue, UiScript};
 
-use crate::items::{Enchants, Items};
-use crate::net::Objects;
+use crate::items::{Enchants, Items, RecordCallback};
+use crate::net::{NetCommands, Objects};
 use crate::query_cache::Ask;
 
-/// The equip arms' `item_template.bonding` (vmangos `ItemPrototype.h` `ItemBondingType`).
-pub(crate) const BIND_WHEN_EQUIPPED: u32 = benilla_ui::script::BIND_WHEN_EQUIPPED;
-/// The use arm's value (`0x5d91d6`).
+/// The use arm's `item_template.bonding` (`0x5d91d6`; vmangos `ItemPrototype.h`
+/// `ItemBondingType`). The equip arms' value is the VM's ([`benilla_ui::script::BIND_WHEN_EQUIPPED`]).
 pub(crate) const BIND_WHEN_USE: u32 = 3;
 
 /// One deferred action, stored as its own coordinates rather than a built packet: accept re-runs
 /// the same sender with `suppress` set, so a slot that changed under the dialog is re-judged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PendingEquip {
-    /// `EQUIP_BIND_CONFIRM`, in Lua space so the re-issue goes back through the move's own sender,
-    /// which re-derives the wire pair.
+    /// `EQUIP_BIND_CONFIRM`, in Lua space so the re-issue goes back through `SwapItem`, which
+    /// re-derives the wire pair. `parked` is the entry a swap waits on with no question asked,
+    /// its record not cached (`0x5e0dbe`), which the record's arrival replays (`0x5e1020`); an
+    /// answer to its index works on it all the same (`0x5e1be0`).
     Swap {
         src_bag: i64,
         src_slot: u32,
         dst_bag: i64,
         dst_slot: u32,
+        parked: Option<u32>,
     },
     /// `AUTOEQUIP_BIND_CONFIRM`, in Lua space, where the accept re-issues the pick-up and
     /// auto-equip from the slot as it stands (`0x5e1c23`). The guid is the item the cancel unlocks.
     AutoEquip { bag: i64, slot: u32, guid: u64 },
+}
+
+impl PendingEquip {
+    /// A swap's record from its move, parked on `parked` or asked.
+    pub(crate) fn swap(mv: &ContainerMove, parked: Option<u32>) -> Self {
+        PendingEquip::Swap {
+            src_bag: mv.src_bag,
+            src_slot: mv.src_slot,
+            dst_bag: mv.dst_bag,
+            dst_slot: mv.dst_slot,
+            parked,
+        }
+    }
 }
 
 /// The client's pending-equip array (`0xc4c290`-`0xc4c29c`, stride `0x20`), allocated by
@@ -72,6 +90,33 @@ impl PendingEquips {
     pub(crate) fn live(&self) -> usize {
         self.slots.iter().flatten().count()
     }
+
+    /// The swaps parked on `entry`, by index, in the table's order (`0x5e1087`-`0x5e10ed`).
+    fn parked_on(&self, entry: u32) -> Vec<(u32, ContainerMove)> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, rec)| match *rec {
+                Some(PendingEquip::Swap {
+                    src_bag,
+                    src_slot,
+                    dst_bag,
+                    dst_slot,
+                    parked: Some(e),
+                }) if e == entry => Some((
+                    u32::try_from(i).ok()?,
+                    ContainerMove {
+                        src_bag,
+                        src_slot,
+                        dst_bag,
+                        dst_slot,
+                        count: None,
+                    },
+                )),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 /// The use arm's pending state, one cell with no index and no cancel verb: the reference stamps
@@ -96,34 +141,6 @@ pub(crate) struct BindGate<'w> {
 }
 
 impl BindGate<'_> {
-    /// Whether this swap must ask first: not already bound (`0x5da2c0`), `bonding == 2` and
-    /// equippable (`0x5ea930`). `item_guid` is the item that would bind (the swap's non-equip
-    /// side); an unknown item or uncached template fails open, as the reference's cache-hit
-    /// conjunct does. The auto-equip arm asks in the VM, where the item is held
-    /// ([`benilla_ui::script::AutoEquip::Asked`]).
-    pub(crate) fn equip_binds(
-        &self,
-        script: &UiScript,
-        objects: &Objects,
-        items: &Items,
-        item_guid: u64,
-    ) -> bool {
-        let Some(fields) = objects.object(item_guid) else {
-            return false;
-        };
-        let Some(entry) = fields.object_entry() else {
-            return false;
-        };
-        let flags = crate::items::record_flags(items, entry, item_guid);
-        if crate::items::already_bound(fields, flags, self.enchants.as_deref()) {
-            return false;
-        }
-        let Some(t) = items.template(entry, item_guid, Ask::Read) else {
-            return false;
-        };
-        t.bonding == BIND_WHEN_EQUIPPED && script.item_usable(entry)
-    }
-
     /// The use arm's predicate: `[0x5d91d3, 0x5d91f2)` holds exactly three branches to the cast,
     /// `bonding == 3`, not already bound (`0x5da2c0`) and `suppress == 0`. There is no can-use
     /// (`0x5ea930`) leg: that failure exits `0x5d8d00` before the bind arm.
@@ -143,7 +160,8 @@ impl BindGate<'_> {
             .is_some_and(|t| t.bonding == BIND_WHEN_USE)
     }
 
-    /// Files a deferred equip and raises its dialog. The two equip arms differ only in the event
+    /// Files a deferred equip and raises its dialog in place, inside the call that asked
+    /// (`0x5e0ee4`, `0x5e16c6`). The two equip arms differ only in the event
     /// (`UIParent.lua:324-339`, where each hides the other's dialog first).
     pub(crate) fn defer_equip(&mut self, script: &mut UiScript, rec: PendingEquip) {
         let index = self.equips.add(rec);
@@ -152,10 +170,28 @@ impl BindGate<'_> {
             PendingEquip::AutoEquip { .. } => "AUTOEQUIP_BIND_CONFIRM",
         };
         debug!("ui_bind_confirm: {event} index {index} for {rec:?}");
-        // Queued, not fired: the triggering action has already queued its `CURSOR_UPDATE`, which
-        // hides both equip dialogs (`UIParent.lua:357-361`). Fired now, the question would come
-        // first and be cancelled on the next tick.
-        script.queue_event(event, vec![ScriptValue::Int(i64::from(index))]);
+        script.fire_event(event, vec![ScriptValue::Int(i64::from(index))]);
+    }
+
+    /// `SwapItem` on an uncached record (`0x5e0dbe`-`0x5e0e2e`): the move takes a record in the
+    /// table, signalling nothing, and the lookup asked the record with the callback `0x5e1020`.
+    pub(crate) fn park_swap(
+        &mut self,
+        mv: &ContainerMove,
+        entry: u32,
+        items: &Items,
+        commands: &NetCommands,
+    ) {
+        let index = self.equips.add(PendingEquip::swap(mv, Some(entry)));
+        debug!("ui_bind_confirm: swap {mv:?} parked at {index} on record {entry}");
+        wait_for(entry, RecordCallback::Swap, items, commands);
+    }
+
+    /// `AutoEquipCursorItem` on an uncached record: the lookup asked it with the callback
+    /// `0x5e17a0` (`0x5e15f4`-`0x5e1603`), nothing filed.
+    pub(crate) fn await_auto_equip(&mut self, entry: u32, items: &Items, commands: &NetCommands) {
+        debug!("ui_bind_confirm: auto-equip waits on record {entry}");
+        wait_for(entry, RecordCallback::AutoEquip, items, commands);
     }
 
     /// Files the deferred use and raises `USE_BIND`, with no argument: a second deferred use
@@ -166,7 +202,76 @@ impl BindGate<'_> {
             pending.bag_index, pending.slot
         );
         self.on_use.0 = Some(pending);
-        // Queued like the equip arms, though `CURSOR_UPDATE` does not hide `USE_BIND`.
+        // Queued for the next tick; `CURSOR_UPDATE` does not hide `USE_BIND`.
         script.queue_event("USE_BIND_CONFIRM", vec![]);
+    }
+}
+
+/// The lookup's miss (`0x55ba30`): ask the record with the callback, which its answer runs. A
+/// record the cache already answered, which the VM's view had not caught up with, runs it now
+/// rather than wait for an answer that has come.
+fn wait_for(entry: u32, callback: RecordCallback, items: &Items, commands: &NetCommands) {
+    if items.template_answered(entry) {
+        items.run_with_vm(entry, callback, items.template_known(entry));
+        return;
+    }
+    items.wait(entry, callback);
+    let _ = items.template(entry, 0, Ask::Event(commands));
+}
+
+/// The equip callbacks whose records answered, run with the VM and the host lent, after the bag
+/// and doll feeds have pushed what the answer changed. `0x5e1020` walks the table: each swap
+/// parked on the entry replays when the record was found (`0x5e10c2`) and frees its record either
+/// way (`0x5e10cf`-`0x5e10e5`), a refusal leaving its items locked. `0x5e17a0` runs
+/// `AutoEquipCursorItem` again for a found record ([`UiScript::replay_auto_equip`]).
+pub(crate) fn replay_equip_records(
+    mut vm: crate::script_calls::VmWith<(ResMut<'static, Items>, ResMut<'static, PendingEquips>)>,
+) {
+    let ran = vm.own().0.take_vm_callbacks();
+    for (entry, callback, found) in ran {
+        match callback {
+            RecordCallback::AutoEquip if found => vm.run(|script| {
+                if let Some(Err(e)) = script.map(|s| s.replay_auto_equip(entry)) {
+                    debug!("ui_bind_confirm: auto-equip replay on {entry} raised: {e}");
+                }
+            }),
+            RecordCallback::Swap => {
+                let parked = vm.own().1.parked_on(entry);
+                for (index, mv) in parked {
+                    if found {
+                        vm.run(|script| {
+                            if let Some(Err(e)) = script.map(|s| s.replay_swap(mv)) {
+                                debug!("ui_bind_confirm: swap replay on {entry} raised: {e}");
+                            }
+                        });
+                    }
+                    vm.own().1.take(index);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The replays read the VM's views, so they run after the bag feed has pushed the answer.
+    #[test]
+    fn the_equip_replays_run_after_the_bag_feed() {
+        let app = crate::game_plugins::schedule_tests::headless_client();
+        let order = &app.world().resource::<crate::vm_pass::PassOrder>().0;
+        if !order.iter().any(|n| n.contains("benilla_app::")) {
+            eprintln!("skipped: this build carries no type names");
+            return;
+        }
+        let at = |name: &str| {
+            order
+                .iter()
+                .position(|n| n.ends_with(name))
+                .unwrap_or_else(|| panic!("`{name}` is in the pass"))
+        };
+        assert!(
+            at("::ui_items::feed::feed_containers") < at("::ui_bind_confirm::replay_equip_records")
+        );
     }
 }

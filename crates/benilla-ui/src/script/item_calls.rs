@@ -12,11 +12,18 @@ use super::{BagAutoStore, ContainerMove, Model, PendingEquipAnswer, ScriptCall};
 /// One item verb's send or answer past its binding's checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ItemCall {
-    /// A whole stack's swap or a split from the held item's source onto a slot, through the
-    /// bind-on-equip deferral `0x5e0c40`: `PickupContainerItem`'s (`0x4f9e43`, `0x4f9eac`), the
-    /// doll click's (`0x4c78c8`), `EquipCursorItem`'s (`0x489757`) and the bag worker's
-    /// (`0x4c7d8d`, `0x4c7df5`).
+    /// A split from the held item's source onto a slot (`0x5e1210`, `PickupContainerItem`'s
+    /// `0x4f9e43`), or a whole stack's swap that `SwapItem` (`0x5e0c40`) sends past its question:
+    /// `PickupContainerItem`'s (`0x4f9eac`), the doll click's (`0x4c78be`), `EquipCursorItem`'s
+    /// (`0x489757`), the bag worker's (`0x4c7d8d`, `0x4c7df5`) and the accept's (`0x5e1c46`).
     Move(ContainerMove),
+    /// `SwapItem`'s bind question (`0x5e0ee4`): the record filed and `EQUIP_BIND_CONFIRM`
+    /// signalled with its index, the item still held.
+    SwapAsk(ContainerMove),
+    /// `SwapItem` on an item whose record is not cached (`0x5e0dbe`): the move parked in the
+    /// pending-equip table and the record asked with the callback `0x5e1020`, which replays it
+    /// ([`super::UiScript::replay_swap`]).
+    SwapWait { mv: ContainerMove, entry: u32 },
     /// The bag worker's store or split into a bag (`0x4c7e2e`, `0x4c7e49`).
     AutoStore(BagAutoStore),
     /// The armed gift wrap's send (`0x4f9db3`): the paper's Lua `(bag, slot)`, then the target's.
@@ -37,6 +44,10 @@ pub enum ItemCall {
     /// `AutoEquipCursorItem`'s bind question (`0x5e16c6`): the record and its event, filed with
     /// the item held.
     EquipAsk { bag: i64, slot: u32, guid: u64 },
+    /// `AutoEquipCursorItem` on an item whose record is not cached: the record asked with the
+    /// callback `0x5e17a0` (`0x5e15f4`-`0x5e1603`), which runs the call again
+    /// ([`super::UiScript::replay_auto_equip`]).
+    AutoEquipWait { entry: u32 },
     /// `DeleteCursorItem`'s destroy (`0x489854`), a 0 count being the whole stack.
     Destroy { bag: i64, slot: u32, count: u32 },
     /// `EquipPendingItem` (`0x4898f0`) or `CancelPendingEquip` (`0x489960`), into `0x5e1be0`.

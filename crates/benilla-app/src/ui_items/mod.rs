@@ -1065,6 +1065,10 @@ impl Plugin for UiItemsPlugin {
                         .in_set(crate::ui_unit::WorldEnterSeats)
                         .before(crate::ui_cast::feed_cast_reports),
                     feed_item_sets.in_set(UnitFeed),
+                    // The equip callbacks an item record's answer ran, drained with the Lua's
+                    // asks, after the bag feed (and the doll's, ahead of it) has pushed what the
+                    // answer changed.
+                    crate::ui_bind_confirm::replay_equip_records.in_set(crate::ui_script::UiDrain),
                     ask_item_build_lookups.in_set(UnitFeed),
                     // The roll table, pushed whole once per VM, before the first hover.
                     feed_random_properties.in_set(UnitFeed),

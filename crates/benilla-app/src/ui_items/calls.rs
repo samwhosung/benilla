@@ -45,9 +45,16 @@ impl ItemSteps<'_, '_> {
         } = self;
         let store = self_q.iter().next();
         match call {
-            ItemCall::Move(mv) => {
-                send_container_move(script, gate, objects, items, net, store, mv, false);
+            ItemCall::Move(mv) => send_container_move(net, mv),
+            // `SwapItem`'s question (`0x5e0ee4`), its dialog up inside the call.
+            ItemCall::SwapAsk(mv) => {
+                gate.defer_equip(
+                    script,
+                    crate::ui_bind_confirm::PendingEquip::swap(&mv, None),
+                );
             }
+            ItemCall::SwapWait { mv, entry } => gate.park_swap(&mv, entry, items, net),
+            ItemCall::AutoEquipWait { entry } => gate.await_auto_equip(entry, items, net),
             // The destination is a bag, not a slot (`0x4c7c00` into `0x5e12e0`):
             // `CMSG_AUTOSTORE_BAG_ITEM` names `(srcbag, srcslot, dstbag)` and the server picks the
             // slot. A split carry sends `CMSG_SPLIT_ITEM` instead (`0x5e1210`, the fork on
@@ -222,6 +229,7 @@ fn answer_pending_equip(
                 src_slot,
                 dst_bag,
                 dst_slot,
+                ..
             } => [at(src_bag, src_slot), at(dst_bag, dst_slot)],
             PendingEquip::AutoEquip { guid, .. } => [Some(guid), None],
         };
@@ -231,28 +239,25 @@ fn answer_pending_equip(
         return;
     }
     match rec {
+        // The accept re-issues `SwapItem` confirmed (`0x5e1c46`): it sends, and its clear
+        // (`0x5e0fe7`) drops whatever the cursor holds then, keeping the locks.
         PendingEquip::Swap {
             src_bag,
             src_slot,
             dst_bag,
             dst_slot,
+            ..
         } => {
-            send_container_move(
-                script,
-                gate,
-                objects,
-                items,
-                net,
-                store,
-                benilla_ui::script::ContainerMove {
-                    src_bag,
-                    src_slot,
-                    dst_bag,
-                    dst_slot,
-                    count: None,
-                },
-                true,
-            );
+            let mv = benilla_ui::script::ContainerMove {
+                src_bag,
+                src_slot,
+                dst_bag,
+                dst_slot,
+                count: None,
+            };
+            if let benilla_ui::script::Swap::Sent(mv) = script.swap_items(mv, true) {
+                send_container_move(net, mv);
+            }
         }
         // The accept re-issues the pick-up and auto-equip from the slot as it stands (`0x5e1c23`
         // into `0x5e1840`, `suppress` set): `SetCursorItem`'s clear drops and unlocks the held

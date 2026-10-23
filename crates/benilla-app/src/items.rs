@@ -492,6 +492,9 @@ pub(crate) struct Items {
     /// dedupe for the dedupe flag 0, `dbcache/callbacks#callback-order`). A getter registers one
     /// from a lookup, so the list is locked like the in-flight asks and registering takes `&self`.
     callbacks: std::sync::Mutex<Vec<(u32, RecordCallback)>>,
+    /// The callbacks an answer ran that need the VM, `(entry, callback, found)` in the order
+    /// they ran: the equip replays ([`crate::ui_bind_confirm::replay_equip_records`]).
+    vm_callbacks: std::sync::Mutex<Vec<(u32, RecordCallback, bool)>>,
 }
 
 /// A callback an item record's lookup registered, which the record's answer runs.
@@ -510,6 +513,10 @@ pub(crate) enum RecordCallback {
     Trade,
     /// An ammo-slot getter call (`0x4c83bc`, `0x4c89cf` with `0x4c84f0`), one per call.
     Ammo,
+    /// A swap parked on its record (`0x5e0db1` with `0x5e1020`).
+    Swap,
+    /// An auto-equip waiting on its record (`0x5e1603` with `0x5e17a0`).
+    AutoEquip,
 }
 
 impl Items {
@@ -538,6 +545,22 @@ impl Items {
             !hit
         });
         taken
+    }
+
+    /// Run `callback` for the record of `entry`, answered (`found`) or refused, with the VM.
+    pub(crate) fn run_with_vm(&self, entry: u32, callback: RecordCallback, found: bool) {
+        self.vm_callbacks
+            .lock_recover()
+            .push((entry, callback, found));
+    }
+
+    /// The callbacks [`Self::run_with_vm`] queued, in order, spent.
+    pub(crate) fn take_vm_callbacks(&mut self) -> Vec<(u32, RecordCallback, bool)> {
+        std::mem::take(
+            self.vm_callbacks
+                .get_mut()
+                .unwrap_or_else(|e| e.into_inner()),
+        )
     }
 
     /// An entry change asked for the record of `entry` with the callback `0x5d96b0`.

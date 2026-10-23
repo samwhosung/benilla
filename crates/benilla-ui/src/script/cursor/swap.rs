@@ -1,4 +1,100 @@
-//! `SwapItem` (`0x5e0c40`), the whole-stack swap every placing verb sends through.
+//! `SwapItem` (`0x5e0c40`), the whole-stack swap every placing verb sends through: the doll click,
+//! `PickupContainerItem`, `EquipCursorItem`, the bag worker and the bind-confirm accept. It asks
+//! the bind-on-equip question, or parks the move on an uncached record, before it sends, and only
+//! the send clears the cursor (`0x5e0fe7`): a question or a wait leaves the item held.
+
+use crate::script::container::ContainerMove;
+use crate::script::tick::verb;
+use crate::script::{ItemCall, Model};
+
+use super::equip::{equip_question, EquipFacts, Question};
+use super::{clear, Clear, EQUIPMENT_BAG};
+
+/// What `SwapItem` did with a whole-stack move.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Swap {
+    /// No question: the move goes out and the cursor clears with `ClearCursor(0,1)` (`0x5e0fe7`),
+    /// the moved items keeping their locks for the server's answer.
+    Sent(ContainerMove),
+    /// The item the move would equip binds on equip: `EQUIP_BIND_CONFIRM` (`0x5e0ee4`), then the
+    /// exit past the clear (`0x5e0eec` → `0x5e0f63`), the item still held.
+    Asked(ContainerMove),
+    /// The record of the item the move would equip, `entry`, is not cached: the move is parked
+    /// and the record asked with the callback `0x5e1020` (`0x5e0d9c`-`0x5e0e2e`), nothing sent
+    /// and the item still held.
+    Waits { mv: ContainerMove, entry: u32 },
+}
+
+/// An equipment position of the player's own list, the side a swap equips into (`0x5e0c9a`-
+/// `0x5e0cd5`): 0-based slots 0 to 22 (the doll and the equipped bags) and 63 to 68 (the bank bag
+/// slots).
+fn equip_position(bag: i64, slot: u32) -> bool {
+    bag == EQUIPMENT_BAG
+        && ((1..=23).contains(&slot) || super::bag_verbs::BANK_BAG_INV_SLOTS.contains(&slot))
+}
+
+/// The item at the move's other end when exactly one end is an equipment position: the one the
+/// swap would equip (`0x5e0ce1`-`0x5e0d69`). None when both or neither end is one, or the other
+/// end holds no item object, and the move goes out unasked (`0x5e0eee`).
+fn equipped_by(model: &Model, mv: &ContainerMove) -> Option<EquipFacts> {
+    let (bag, slot) = match (
+        equip_position(mv.src_bag, mv.src_slot),
+        equip_position(mv.dst_bag, mv.dst_slot),
+    ) {
+        (true, false) => (mv.dst_bag, mv.dst_slot),
+        (false, true) => (mv.src_bag, mv.src_slot),
+        _ => return None,
+    };
+    model
+        .containers
+        .get(&bag)
+        .and_then(|c| c.slots.get(&slot))
+        .filter(|s| s.item_id != 0 && s.guid != 0)
+        .map(EquipFacts::of_slot)
+}
+
+/// `SwapItem(mv, confirm)` (`0x5e0c40`): the question on the item the move would equip, unless
+/// `confirm` (the accept's re-issue, `0x5e1c46`) skips it; else the send and its clear.
+pub(crate) fn swap_items(model: &mut Model, mv: ContainerMove, confirm: bool) -> Swap {
+    let question = equipped_by(model, &mv).map(|item| equip_question(model, item, confirm));
+    match question {
+        Some(Question::Ask) => Swap::Asked(mv),
+        Some(Question::Wait(entry)) => Swap::Waits { mv, entry },
+        Some(Question::Send) | None => {
+            clear(model, Clear::KEEP_LOCK);
+            Swap::Sent(mv)
+        }
+    }
+}
+
+/// [`swap_items`] with the question asked, filing what it did for the host: the send
+/// ([`ItemCall::Move`]), the question ([`ItemCall::SwapAsk`]) or the wait
+/// ([`ItemCall::SwapWait`]).
+pub(crate) fn swap_and_file(model: &mut Model, mv: ContainerMove) {
+    let call = match swap_items(model, mv, false) {
+        Swap::Sent(mv) => ItemCall::Move(mv),
+        Swap::Asked(mv) => ItemCall::SwapAsk(mv),
+        Swap::Waits { mv, entry } => ItemCall::SwapWait { mv, entry },
+    };
+    model.item_calls.push(call);
+}
+
+impl crate::script::UiScript {
+    /// `SwapItem` from the host: the bind-confirm accept re-issues the parked move with `confirm`
+    /// set (`0x5e1c46`), so it sends and clears whatever the cursor holds then. The host sends
+    /// what comes back.
+    pub fn swap_items(&mut self, mv: ContainerMove, confirm: bool) -> Swap {
+        verb(&self.lua, |model| swap_items(model, mv, confirm))
+    }
+
+    /// The callback `0x5e1020` for a move parked on its record: with the record found
+    /// (`0x5e1099`-`0x5e10a0`) `SwapItem` runs again unconfirmed (`0x5e10c2`), its send, question
+    /// or wait applied through the host. The host frees the parked entry after.
+    pub fn replay_swap(&mut self, mv: ContainerMove) -> mlua::Result<()> {
+        verb(&self.lua, |model| swap_and_file(model, mv));
+        crate::script::item_calls::submit_item_calls(&self.lua)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -120,5 +216,34 @@ mod tests {
             assert_eq!(s.cursor_item().map(|i| i.guid), Some(HELM), "{place}");
             assert!(s.take_container_moves().is_empty(), "{place}");
         }
+    }
+
+    /// The record's callback (`0x5e1020`) replays the parked swap unconfirmed (`0x5e10c2`) once
+    /// the view holds the record: an unbound helm now sends and clears; the accept's re-issue
+    /// (`0x5e1c46`) sends a bind-on-equip one without asking.
+    #[test]
+    fn the_replay_and_the_accept_run_swap_item_again() {
+        let mv = crate::script::ContainerMove {
+            src_bag: 0,
+            src_slot: 1,
+            dst_bag: super::EQUIPMENT_BAG,
+            dst_slot: 1,
+            count: None,
+        };
+        let mut s = vm(0, false);
+        s.run("PickupContainerItem(0, 1) PickupInventoryItem(1)")
+            .unwrap();
+        assert!(s.take_container_moves().is_empty(), "parked");
+        s.set_container(0, Some(backpack(0, true)));
+        s.replay_swap(mv.clone()).unwrap();
+        assert_eq!(s.take_container_moves(), vec![mv.clone()], "sent");
+        assert!(s.cursor_item().is_none(), "and cleared");
+
+        let mut s = vm(2, true);
+        s.run("PickupContainerItem(0, 1) PickupInventoryItem(1)")
+            .unwrap();
+        assert!(s.cursor_item().is_some(), "asked");
+        assert_eq!(s.swap_items(mv.clone(), true), super::Swap::Sent(mv));
+        assert!(s.cursor_item().is_none(), "the accept's send clears");
     }
 }
