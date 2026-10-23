@@ -1844,14 +1844,26 @@ pub(super) fn deselect(
     seam: &mut crate::creature_anim::AttackSeam,
     engaged: bool,
 ) {
+    if let Some(send) = deselect_owing(selection, seam, engaged) {
+        send.pay(selection, seam);
+    }
+}
+
+/// [`deselect`], owing its send when the teardown signalled ([`scan::OwedSend`]), for a caller
+/// that runs the signal's listeners in place first.
+pub(super) fn deselect_owing(
+    selection: &mut Selection,
+    seam: &mut crate::creature_anim::AttackSeam,
+    engaged: bool,
+) -> Option<scan::OwedSend> {
     // Charmed returns before the guid test (`0x49359c`), so a deselect is refused too.
     if seam.player_is_charmed() {
-        return;
+        return None;
     }
     if selection.guid.is_some() {
         selection.last = selection.guid;
     }
-    clear(selection, seam, engaged);
+    clear_owing(selection, seam, engaged)
 }
 
 /// Drop the target and send `CMSG_SET_SELECTION` 0 (a no-op with none, `0x493937`): the teardown
@@ -1863,17 +1875,31 @@ pub(super) fn clear(
     seam: &mut crate::creature_anim::AttackSeam,
     engaged: bool,
 ) {
-    if let Some(old) = selection.guid.take() {
-        selection.target = None;
-        selection.lit = None;
-        // The teardown `0x493910` closes the old target's loot, then stops our attack
-        // (`0x493a08 call 0x5ecac0`, which also un-queues an on-next-swing strike), calls a
-        // possessed unit off (`0x493a0f`-`0x493a18`), then sends (`0x493a2a`).
-        seam.close_loot_on(old);
-        seam.stop(engaged);
-        seam.call_pet_off();
-        let _ = seam.net.0.send(ClientCommand::SetSelection { guid: 0 });
+    if let Some(send) = clear_owing(selection, seam, engaged) {
+        send.pay(selection, seam);
     }
+}
+
+/// [`clear`], owing its send when the teardown called a possessed unit off, whose
+/// `PET_BAR_UPDATE` (`0x4bd6b4`) listeners run before it ([`scan::OwedSend`]).
+fn clear_owing(
+    selection: &mut Selection,
+    seam: &mut crate::creature_anim::AttackSeam,
+    engaged: bool,
+) -> Option<scan::OwedSend> {
+    let old = selection.guid.take()?;
+    selection.target = None;
+    selection.lit = None;
+    // The teardown `0x493910` closes the old target's loot, then stops our attack
+    // (`0x493a08 call 0x5ecac0`, which also un-queues an on-next-swing strike), calls a
+    // possessed unit off (`0x493a0f`-`0x493a18`), then sends (`0x493a2a`).
+    seam.close_loot_on(old);
+    seam.stop(engaged);
+    if seam.call_pet_off() {
+        return Some(scan::OwedSend::Deselect);
+    }
+    let _ = seam.net.0.send(ClientCommand::SetSelection { guid: 0 });
+    None
 }
 
 #[cfg(test)]

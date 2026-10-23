@@ -602,6 +602,44 @@ pub(super) fn follow_requests(
 /// The cue `SetSelection` plays for a guid whose object it does not find (`0x843328`).
 const UNHELD_SELECT_SOUND: &str = "igCharacterSelect";
 
+/// A swing a selecting verb owes after `SetSelection`'s `PLAYER_TARGET_CHANGED` (`0x49389c`),
+/// whose listeners run first: the re-swing (`0x4938c8`), or the assist tail's swing at the unit
+/// it selected (`0x489bfc`-`0x489c02`, a copy of that guid).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OwedSwing {
+    Again(scan::OwedSwing),
+    At { guid: u64, engaged: bool },
+}
+
+/// What a selecting verb owes after its signals, for its caller to pay once their listeners ran
+/// ([`SelectCommit::owing`]): the send after the teardown's `PET_BAR_UPDATE`, then the swings after
+/// `PLAYER_TARGET_CHANGED`, in the order owed.
+#[must_use]
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct SelectDebt {
+    send: Option<scan::OwedSend>,
+    swings: Vec<OwedSwing>,
+}
+
+impl SelectDebt {
+    /// The send owed after the teardown's signal.
+    pub(crate) fn take_send(&mut self) -> Option<scan::OwedSend> {
+        self.send.take()
+    }
+
+    /// Whether swings are owed after the selection's signal.
+    pub(crate) fn owes_swings(&self) -> bool {
+        !self.swings.is_empty()
+    }
+}
+
+/// Where [`SelectCommit`] keeps what its verb owes while [`SelectCommit::owing`] runs.
+#[derive(Default)]
+pub(super) struct Owing {
+    on: bool,
+    debt: SelectDebt,
+}
+
 /// Everything [`scan::commit`], the one `SetSelection` path, needs.
 #[derive(SystemParam)]
 #[allow(clippy::type_complexity)] // one bundled param, the app's convention for big query sets
@@ -631,9 +669,90 @@ pub(crate) struct SelectCommit<'w, 's> {
     group: Option<Res<'w, crate::ui_party::GroupState>>,
     /// The 2D cues `PlaySoundByName` (`0x458030`) plays, absent in a harness without sound.
     sounds: Option<Res<'w, crate::sound::MessageSounds>>,
+    /// What the verb owes while [`Self::owing`] runs.
+    owing: Local<'s, Owing>,
 }
 
 impl SelectCommit<'_, '_> {
+    /// Run `f`, keeping what its selections owe after their signals in place of sending it, for a
+    /// caller that runs the signals' listeners first and then pays it ([`Self::pay_send`],
+    /// [`Self::pay`]).
+    pub(super) fn owing(&mut self, f: impl FnOnce(&mut Self)) -> SelectDebt {
+        self.owing.on = true;
+        f(self);
+        self.owing.on = false;
+        std::mem::take(&mut self.owing.debt)
+    }
+
+    /// Owe what a commit owes while [`Self::owing`] runs; pay it now otherwise.
+    pub(super) fn owe_all(&mut self, owed: scan::Owed) {
+        if let Some(send) = owed.send {
+            self.owe_send(send);
+        }
+        if let Some(swing) = owed.swing {
+            self.owe(OwedSwing::Again(swing));
+        }
+    }
+
+    /// Owe `send` while [`Self::owing`] runs; send it now otherwise.
+    fn owe_send(&mut self, send: scan::OwedSend) {
+        if self.owing.on {
+            debug_assert!(self.owing.debt.send.is_none(), "one selection per verb");
+            self.owing.debt.send = Some(send);
+        } else {
+            self.pay_send(send);
+        }
+    }
+
+    /// Owe `swing` while [`Self::owing`] runs; send it now otherwise.
+    fn owe(&mut self, swing: OwedSwing) {
+        if self.owing.on {
+            self.owing.debt.swings.push(swing);
+        } else {
+            self.pay_one(swing);
+        }
+    }
+
+    /// Store and send the selection the teardown's signal held back.
+    pub(crate) fn pay_send(&mut self, send: scan::OwedSend) {
+        send.pay(&mut self.selection, &self.seam);
+    }
+
+    /// Pay what `debt` still owes, in order, now that the signals' listeners have run.
+    pub(crate) fn pay(&mut self, debt: SelectDebt) {
+        if let Some(send) = debt.send {
+            self.pay_send(send);
+        }
+        for swing in debt.swings {
+            self.pay_one(swing);
+        }
+    }
+
+    fn pay_one(&mut self, swing: OwedSwing) {
+        match swing {
+            OwedSwing::Again(owed) => {
+                let now = self.selection.guid.is_some_and(|guid| {
+                    self.index
+                        .0
+                        .get(&guid)
+                        .is_some_and(|&entity| self.attackable(entity, guid))
+                });
+                owed.pay(&self.selection, &mut self.seam, now);
+            }
+            OwedSwing::At { guid, engaged } => self.seam.start(guid, engaged),
+        }
+    }
+
+    /// `StartAttack`'s target legs (`0x5ecc16`, `0x5ecc2e`) on the held object `entity`, `guid`:
+    /// alive, then `CanAttack`, so a body is switched to and never swung at.
+    fn attackable(&self, entity: Entity, guid: u64) -> bool {
+        self.stores.get(entity).ok().is_some_and(|store| {
+            let unit = self.relations.unit_of(guid, store);
+            let rel = self.relations.get();
+            scan::attack_target_valid(&rel, self.relations.me().as_ref(), &unit, store)
+        })
+    }
+
     /// The shared assist tail (`0x489bb2`-`0x489c07`, byte-identical in `AssistByName` at
     /// `0x489cae`-`0x489d07`): select the basis unit's `UNIT_FIELD_TARGET` through `0x489a40`
     /// ([`Self::select`]), so a party member out of range is selected by guid. A basis targeting
@@ -671,7 +790,7 @@ impl SelectCommit<'_, '_> {
         // target is selected, not swung at.
         if self.assist_attack.0 && attackable {
             info!("assist ({how}): assistAttack is on -> opening the swing");
-            self.seam.start(guid, engaged);
+            self.owe(OwedSwing::At { guid, engaged });
         }
     }
 
@@ -683,7 +802,11 @@ impl SelectCommit<'_, '_> {
     /// Deselect (`0x493540(0,0)`), a no-op with nothing selected; see [`super::click::clear`].
     pub(super) fn clear(&mut self) {
         let engaged = self.engaged();
-        super::click::deselect(&mut self.selection, &mut self.seam, engaged);
+        if let Some(send) =
+            super::click::deselect_owing(&mut self.selection, &mut self.seam, engaged)
+        {
+            self.owe_send(send);
+        }
     }
 
     /// `0x48f3a0`'s select on a looted object, which tests `TYPEMASK_UNIT` first (`0x48f3af`).
@@ -745,7 +868,7 @@ impl SelectCommit<'_, '_> {
             return;
         }
         let me = self.me.single().ok();
-        let outcome = scan::commit(
+        let (outcome, owed) = scan::commit_owing(
             &mut self.selection,
             &mut self.seam,
             None,
@@ -755,6 +878,7 @@ impl SelectCommit<'_, '_> {
             me.map(|(g, _, _)| g.0),
             false,
         );
+        self.owe_all(owed);
         if outcome.changed {
             if let Some(sounds) = &self.sounds {
                 sounds.push_cue(UNHELD_SELECT_SOUND);
@@ -770,14 +894,9 @@ impl SelectCommit<'_, '_> {
             return;
         }
         let me = self.me.single().ok();
-        // The re-swing's gate is `StartAttack`'s on the new target (`0x5ecc16`): alive, then
-        // `CanAttack`, so a body is switched to and never swung at.
-        let attackable = self.stores.get(entity).ok().is_some_and(|store| {
-            let unit = self.relations.unit_of(guid, store);
-            let rel = self.relations.get();
-            scan::attack_target_valid(&rel, self.relations.me().as_ref(), &unit, store)
-        });
-        scan::commit(
+        // The re-swing's gate is `StartAttack`'s on the new target (`0x5ecc16`).
+        let attackable = self.attackable(entity, guid);
+        let (_, owed) = scan::commit_owing(
             &mut self.selection,
             &mut self.seam,
             Some(entity),
@@ -787,6 +906,7 @@ impl SelectCommit<'_, '_> {
             me.map(|(g, _, _)| g.0),
             attackable,
         );
+        self.owe_all(owed);
     }
 }
 

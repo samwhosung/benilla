@@ -452,12 +452,114 @@ pub(super) struct CommitOutcome {
     pub(super) swung: bool,
 }
 
+/// The `CMSG_SET_SELECTION` a selection's teardown owes when it called a possessed unit off
+/// (`0x493a18`): `PetStopAttack` signals `PET_BAR_UPDATE` (`0x4bd6b4`) with the pair zeroed
+/// (`0x4939d3`), and its listeners run before the store (`0x4936e2`) and the send (`0x493871`), or
+/// a clear's send (`0x493a2a`).
+#[must_use]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OwedSend {
+    /// A switch to `guid`, whose object is `entity`.
+    Select { entity: Option<Entity>, guid: u64 },
+    /// A clear.
+    Deselect,
+}
+
+impl OwedSend {
+    /// The store, the light (`0x493701`) and the send.
+    pub(crate) fn pay(self, selection: &mut Selection, seam: &crate::creature_anim::AttackSeam) {
+        let guid = match self {
+            OwedSend::Select { entity, guid } => {
+                selection.target = entity;
+                selection.guid = Some(guid);
+                selection.lit = entity;
+                guid
+            }
+            OwedSend::Deselect => 0,
+        };
+        let _ = seam.net.0.send(ClientCommand::SetSelection { guid });
+    }
+}
+
+/// What a [`commit_owing`] owes after its signals, for a caller that runs their listeners in place
+/// first: the send after the teardown's `PET_BAR_UPDATE`, then the re-swing after
+/// `PLAYER_TARGET_CHANGED`.
+#[must_use]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Owed {
+    pub(crate) send: Option<OwedSend>,
+    pub(crate) swing: Option<OwedSwing>,
+}
+
+impl Owed {
+    /// Pay both now, for a writer whose signals have no listeners to run first.
+    pub(crate) fn pay(
+        self,
+        selection: &mut Selection,
+        seam: &mut crate::creature_anim::AttackSeam,
+    ) {
+        if let Some(send) = self.send {
+            send.pay(selection, seam);
+        }
+        if let Some(swing) = self.swing {
+            // Nothing ran since the commit, so the selection is the guid it stored.
+            swing.pay(selection, seam, false);
+        }
+    }
+}
+
+/// The re-swing a [`commit_owing`] owes (`0x4938a1`-`0x4938c8`), paid after `SetSelection`'s
+/// `PLAYER_TARGET_CHANGED` (`0x49389c`), whose listeners run first.
+#[must_use]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OwedSwing {
+    /// The guid the commit selected.
+    guid: u64,
+    /// Whether that guid passes `StartAttack`'s target legs (`0x5ecc16`, `0x5ecc2e`).
+    attackable: bool,
+    engaged: bool,
+    self_guid: Option<u64>,
+}
+
+impl OwedSwing {
+    /// The re-swing: `StartAttack` at the selection as it stands now, since `0x4938c3` pushes the
+    /// selection's address, `0xb4e2d8`, which a listener of the signal may have moved. Nothing
+    /// selected (`0x5ecbef`) or our own guid (`0x4938ae`-`0x4938c1`) gets no swing; a unit a
+    /// listener selected swings when `attackable`, whether it passes `StartAttack`'s target legs
+    /// (`0x5ecc16`, `0x5ecc2e`).
+    pub(crate) fn pay(
+        self,
+        selection: &Selection,
+        seam: &mut crate::creature_anim::AttackSeam,
+        attackable: bool,
+    ) {
+        let Some(guid) = selection.guid else {
+            return;
+        };
+        if self.self_guid == Some(guid) {
+            return;
+        }
+        let swings = if guid == self.guid {
+            self.attackable
+        } else {
+            attackable
+        };
+        if swings {
+            // `0x4938c8`: the swing goes out despite the lock, the stop just set `[+0xc54]`
+            // (`0x5eccda`), and cancels auto-repeat (`0x6ea080`), unless StartAttack's gate
+            // returns first.
+            seam.start(guid, self.engaged);
+        }
+    }
+}
+
 /// Commit a target through `SetSelection` (`0x493540`). A switch while attacking is stop, select,
 /// re-swing: StopAttack `0x5ecac0` (`0x493a08`) flags a stop in flight (`[player+0xc54]`),
 /// `CMSG_SET_SELECTION` goes out (`0x493857`), then unless the new target is us `Attack 0x5ecb70`
 /// swings past its already-attacking gate, or stops if `new_attackable` is false (`0x4938a1`).
 /// `entity` is the guid's object, which the select lights (`0x493701`); with none the guid is
 /// stored all the same (`0x4935c8` → `0x493605`), and neither `IsSelectable` nor the light runs.
+/// For a writer whose signal has no listeners to run first, the re-swing goes out here.
 ///
 /// The latch (`0x493637`) reduces to `engaged && had_old`: vmangos ends [`Engaged`] when the
 /// victim dies, before a TAB can land, so the old target's own legs change nothing seen.
@@ -473,17 +575,43 @@ pub(super) fn commit(
     self_guid: Option<u64>,
     new_attackable: bool,
 ) -> CommitOutcome {
+    let (out, owed) = commit_owing(
+        selection,
+        seam,
+        entity,
+        guid,
+        target_store,
+        engaged,
+        self_guid,
+        new_attackable,
+    );
+    owed.pay(selection, seam);
+    out
+}
+
+/// [`commit`], owing what follows its signals ([`Owed`]), for a caller that runs their listeners
+/// in place before paying it.
+pub(super) fn commit_owing(
+    selection: &mut Selection,
+    seam: &mut crate::creature_anim::AttackSeam,
+    entity: Option<Entity>,
+    guid: u64,
+    target_store: Option<&ObjectStore>,
+    engaged: bool,
+    self_guid: Option<u64>,
+    new_attackable: bool,
+) -> (CommitOutcome, Owed) {
     // `SelectTarget`'s charmed return (`0x49359c`) is ahead of everything, for every writer.
     if seam.player_is_charmed() {
-        return CommitOutcome::default();
+        return Default::default();
     }
     // `IsSelectable`, before the dedup (`0x4935ec`–`0x4935f3`): a non-selectable unit is a complete
     // no-op that keeps the current target, for every selection writer.
     if !super::relations::is_selectable(target_store, self_guid) {
-        return CommitOutcome::default();
+        return Default::default();
     }
     if selection.guid == Some(guid) {
-        return CommitOutcome::default(); // the setter's dedup
+        return Default::default(); // the setter's dedup
     }
     let had_old = selection.guid.is_some();
     // The last-target stamp (`0x49361d`-`0x493628`), past the two early outs.
@@ -492,34 +620,45 @@ pub(super) fn commit(
         // The old target's teardown (`0x4936cc` → `0x493910`) closes its loot first.
         seam.close_loot_on(old);
     }
-    selection.target = entity;
-    selection.guid = Some(guid);
-    selection.lit = entity;
     let stop_and_repoint = engaged && had_old;
     if stop_and_repoint {
         // `0x493a08`: the real StopAttack, which also un-queues a next-swing strike (`0x6e6f30`).
         seam.stop(engaged);
     }
-    if had_old {
-        // `0x493a0f`-`0x493a18`: the release calls a possessed unit off after its StopAttack.
-        seam.call_pet_off();
-    }
-    let _ = seam.net.0.send(ClientCommand::SetSelection { guid });
+    // `0x493a0f`-`0x493a18`: the release calls a possessed unit off after its StopAttack, with the
+    // pair zeroed (`0x4939d3`); the store and the send wait for its signal's listeners.
+    let called_off = had_old && seam.call_pet_off();
+    let send = OwedSend::Select { entity, guid };
+    let send = if called_off {
+        selection.target = None;
+        selection.guid = None;
+        selection.lit = None;
+        Some(send)
+    } else {
+        send.pay(selection, seam);
+        None
+    };
     let swung = stop_and_repoint && new_attackable && self_guid != Some(guid);
-    if swung {
-        // `0x4938c8`: the swing goes out despite the lock, the stop just set `[+0xc54]`
-        // (`0x5eccda`), and cancels auto-repeat (`0x6ea080`), unless StartAttack's gate returns
-        // first.
-        seam.start(guid, engaged);
-    }
-    CommitOutcome {
-        changed: true,
-        swung,
-    }
+    // The latch `[ebp-1]` was read before the store (`0x4936ac`); the rest of the test reads the
+    // selection after the signal (`0x4938ae`).
+    let swing = stop_and_repoint.then_some(OwedSwing {
+        guid,
+        attackable: new_attackable,
+        engaged,
+        self_guid,
+    });
+    (
+        CommitOutcome {
+            changed: true,
+            swung,
+        },
+        Owed { send, swing },
+    )
 }
 
 /// One press on either side, as every `TargetNearest*` shim shares `0x493f60`: score the live
-/// world, pool by tier, walk the history forward or back, and [`commit`].
+/// world, pool by tier, walk the history forward or back, and [`commit_owing`]; what its commit
+/// owes, for the caller to pay once the signals' listeners ran.
 pub(super) fn cycle(
     side: ScanSide,
     reverse: bool,
@@ -530,7 +669,7 @@ pub(super) fn cycle(
     seam: &mut crate::creature_anim::AttackSeam,
     front: &mut super::front::SelectFront,
     engaged: bool,
-) {
+) -> Owed {
     history.enter(side);
     history.prune(now);
     let trace = tab_trace_on();
@@ -546,7 +685,7 @@ pub(super) fn cycle(
         if trace {
             info!("tab-trace: no candidates — target unchanged");
         }
-        return;
+        return Owed::default();
     }
     let pool = select_pool(&cands);
     if trace {
@@ -570,7 +709,7 @@ pub(super) fn cycle(
         Some(i) => (pool[i].entity, pool[i].guid, false),
         None => {
             let Some((i, wrapped)) = pick_forward(&pool, &visited, selection.guid) else {
-                return;
+                return Owed::default();
             };
             (pool[i].entity, pool[i].guid, wrapped)
         }
@@ -584,7 +723,7 @@ pub(super) fn cycle(
             history.visited.clear();
         }
         history.push(guid, now);
-        return;
+        return Owed::default();
     }
     if wrapped {
         history.visited.clear();
@@ -593,7 +732,7 @@ pub(super) fn cycle(
     if let Some(old) = selection.guid {
         history.push(old, now);
     }
-    let out = commit(
+    let (out, owed) = commit_owing(
         selection,
         seam,
         Some(entity),
@@ -624,6 +763,7 @@ pub(super) fn cycle(
             }
         );
     }
+    owed
 }
 
 /// The target half of the attack validator `0x612df0` (`0x61305d`–`0x613198`), shared by the
@@ -686,7 +826,7 @@ impl AttackPick<'_, '_> {
             }
         } else if may_pick {
             let engaged = self.engaged();
-            cycle(
+            let owed = cycle(
                 ScanSide::Enemy,
                 false,
                 self.time.elapsed_secs_f64(),
@@ -697,6 +837,7 @@ impl AttackPick<'_, '_> {
                 &mut self.front,
                 engaged,
             );
+            owed.pay(selection, seam);
         }
         let Some(guid) = selection.guid else {
             debug!("attack: nothing to attack (ERR_NO_ATTACK_TARGET)");

@@ -76,8 +76,9 @@ pub(crate) use scan::{AttackNearestRequest, AttackPick, CreatureTypes};
 pub(crate) use by_name::{
     assistable_alive, AssistRequest, Candidacy, NameSearch, PlayerLookup, TargetByNameRequest,
 };
-// The one SetSelection path, for the loot response's select (`0x48f3a0`).
-pub(crate) use by_name::SelectCommit;
+// The one SetSelection path, for the loot response's select (`0x48f3a0`), and what a selecting
+// call owes after its signals.
+pub(crate) use by_name::{SelectCommit, SelectDebt};
 // The selector's colour and the faction catalog it and the model read.
 #[cfg(test)]
 pub(crate) use ring::{ring_variant, PlayerPath, SelectorInput};

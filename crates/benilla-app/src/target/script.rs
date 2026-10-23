@@ -5,7 +5,7 @@ use bevy::prelude::*;
 
 use benilla_ui::script::SelectionRequest;
 
-use super::by_name::{self, ByNameScan, SelectCommit};
+use super::by_name::{self, ByNameScan, SelectCommit, SelectDebt};
 use super::scan;
 
 /// Everything the selection calls read and write.
@@ -58,88 +58,102 @@ impl ScriptSelect<'_, '_> {
     /// reference's helper `0x489a40` ([`SelectCommit::select`]): a held unit or a party or raid
     /// member or pet is committed, a member out of range by guid, and anything else is a no-op,
     /// never a deselect.
-    pub(crate) fn select(&mut self, request: SelectionRequest) {
-        match request {
+    pub(crate) fn select(&mut self, request: SelectionRequest) -> SelectDebt {
+        let (tokens, last_enemy, errors, by_name) =
+            (&self.tokens, &self.last_enemy, &self.errors, &self.by_name);
+        self.commit.owing(|commit| match request {
             // `0x489a08 call 0x515970(token)`, then `0x489a16 call 0x489a40`.
             SelectionRequest::Unit(token) => {
-                if let Some(guid) = self.tokens.guid(&token, &self.commit.selection) {
-                    self.commit.select(guid);
+                if let Some(guid) = tokens.guid(&token, &commit.selection) {
+                    commit.select(guid);
                 }
             }
             // `0x489ba9 call 0x515940(token)`, then the shared tail; a token that names no unit
             // the object manager holds shows message `0xb8` (`0x489c0e`).
-            SelectionRequest::Assist(token) => {
-                match self.tokens.resolve(&token, &self.commit.selection) {
-                    Some((basis, _)) => self.commit.assist(basis, "AssistUnit"),
-                    None => self
-                        .errors
-                        .push(crate::ui_action::UiError::key("ERR_GENERIC_NO_TARGET")),
-                }
-            }
+            SelectionRequest::Assist(token) => match tokens.resolve(&token, &commit.selection) {
+                Some((basis, _)) => commit.assist(basis, "AssistUnit"),
+                None => errors.push(crate::ui_action::UiError::key("ERR_GENERIC_NO_TARGET")),
+            },
             // `0x489c40`, the stock `/assist <name>`: a player name, else the selection.
             SelectionRequest::AssistByName(name) => {
-                by_name::assist_named(
-                    &self.by_name,
-                    &mut self.commit,
-                    &self.errors,
-                    &name,
-                    "AssistByName",
-                );
+                by_name::assist_named(by_name, commit, errors, &name, "AssistByName");
             }
             // `0x489b45` → `0x489a40`. Empty memory is a no-op (the shim `0x489b40` tests nothing),
             // unlike `TargetLastTarget 0x489b00`, which reaches `0x493540(0,0)` and deselects; a
             // memory `0x489a40` passes over stays, as nothing clears it.
-            SelectionRequest::LastEnemy => match self.last_enemy.0 {
+            SelectionRequest::LastEnemy => match last_enemy.0 {
                 Some(guid) => {
-                    if !self.commit.select(guid) {
+                    if !commit.select(guid) {
                         info!("TargetLastEnemy: {guid:#x} is no longer streamed; target untouched");
                     }
                 }
                 None => info!("TargetLastEnemy: nothing hostile has been targeted yet; no-op"),
             },
-        }
+        })
     }
 
     /// `TargetByName(name, exactMatch)` (`0x489d60`), the stock `/target`.
-    pub(crate) fn target_by_name(&mut self, name: &str, exact: bool) {
-        by_name::target_named(&self.by_name, &mut self.commit, &self.errors, name, exact);
+    pub(crate) fn target_by_name(&mut self, name: &str, exact: bool) -> SelectDebt {
+        let (by_name, errors) = (&self.by_name, &self.errors);
+        self.commit
+            .owing(|commit| by_name::target_named(by_name, commit, errors, name, exact))
     }
 
     /// `TargetNearest*([reverse])` (`0x489a80`/`0x489aa0`/`0x489ac0`/`0x489ae0` →
     /// `0x493f60(reverse, mode)`), one cycle of the cycler the TAB key runs.
-    pub(crate) fn target_nearest(&mut self, mode: benilla_ui::script::NearestMode, reverse: bool) {
+    pub(crate) fn target_nearest(
+        &mut self,
+        mode: benilla_ui::script::NearestMode,
+        reverse: bool,
+    ) -> SelectDebt {
         let engaged = self.commit.engaged();
-        scan::cycle(
-            scan::ScanSide::of(mode),
-            reverse,
-            self.time.elapsed_secs_f64(),
-            &self.scan,
-            &mut self.history,
-            &mut self.commit.selection,
-            &mut self.commit.seam,
-            &mut self.commit.front,
-            engaged,
-        );
+        let now = self.time.elapsed_secs_f64();
+        let (scan, history) = (&self.scan, &mut self.history);
+        self.commit.owing(|commit| {
+            let owed = scan::cycle(
+                scan::ScanSide::of(mode),
+                reverse,
+                now,
+                scan,
+                history,
+                &mut commit.selection,
+                &mut commit.seam,
+                &mut commit.front,
+                engaged,
+            );
+            commit.owe_all(owed);
+        })
     }
 
     /// `TargetLastTarget()` (`0x489b00`): a held last-target pair goes to `0x489a40` as a stack
     /// copy, so a streamed unit, or a party member out of range, is committed (which stamps the
     /// outgoing target, swapping the two), and any other unstreamed guid is a no-op; an empty pair
     /// deselects through `0x493540(0,0)` (`0x489b2d`).
-    pub(crate) fn target_last_target(&mut self) {
-        match self.commit.selection.last {
+    pub(crate) fn target_last_target(&mut self) -> SelectDebt {
+        self.commit.owing(|commit| match commit.selection.last {
             Some(guid) => {
-                if !self.commit.select(guid) {
+                if !commit.select(guid) {
                     info!("TargetLastTarget: {guid:#x} is no longer streamed; no-op");
                 }
             }
-            None => self.commit.clear(),
-        }
+            None => commit.clear(),
+        })
+    }
+
+    /// Store and send the selection a call's teardown held back, now that its signal's listeners
+    /// have run.
+    pub(crate) fn pay_send(&mut self, send: super::scan::OwedSend) {
+        self.commit.pay_send(send);
+    }
+
+    /// Pay what a selecting call still owes, now that its signals' listeners have run.
+    pub(crate) fn pay(&mut self, debt: SelectDebt) {
+        self.commit.pay(debt);
     }
 
     /// `ClearTarget()` (`0x489ff0`): deselect whatever the calls before it left selected.
-    pub(crate) fn clear_target(&mut self) {
-        self.commit.clear();
+    pub(crate) fn clear_target(&mut self) -> SelectDebt {
+        self.commit.owing(|commit| commit.clear())
     }
 }
 
@@ -232,7 +246,8 @@ mod tests {
                 .run_system_once(
                     |mut script: NonSendMut<UiScript>, mut select: ScriptSelect| {
                         for request in script.take_selection_requests() {
-                            select.select(request);
+                            let debt = select.select(request);
+                            select.pay(debt);
                         }
                     },
                 )
@@ -350,7 +365,8 @@ mod tests {
                 .run_system_once(
                     |mut script: NonSendMut<UiScript>, mut select: ScriptSelect| {
                         for request in script.take_selection_requests() {
-                            select.select(request);
+                            let debt = select.select(request);
+                            select.pay(debt);
                         }
                     },
                 )
@@ -451,7 +467,8 @@ mod tests {
                 .run_system_once(
                     |mut script: NonSendMut<UiScript>, mut select: ScriptSelect| {
                         for request in script.take_selection_requests() {
-                            select.select(request);
+                            let debt = select.select(request);
+                            select.pay(debt);
                         }
                     },
                 )
@@ -563,7 +580,8 @@ mod tests {
                 .run_system_once(
                     |mut script: NonSendMut<UiScript>, mut select: ScriptSelect| {
                         for request in script.take_selection_requests() {
-                            select.select(request);
+                            let debt = select.select(request);
+                            select.pay(debt);
                         }
                     },
                 )
@@ -633,7 +651,8 @@ mod tests {
             .run_system_once(
                 |mut script: NonSendMut<UiScript>, mut select: ScriptSelect| {
                     for request in script.take_selection_requests() {
-                        select.select(request);
+                        let debt = select.select(request);
+                        select.pay(debt);
                     }
                 },
             )
