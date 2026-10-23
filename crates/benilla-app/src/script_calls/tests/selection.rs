@@ -318,3 +318,99 @@ fn a_called_off_pets_bar_update_handlers_send_ahead_of_the_selection() {
         assert_eq!(wire, ["PetStopAttack", "RandomRoll", selected], "{lua}");
     }
 }
+
+/// The re-swing's latch tests the outgoing selection (`0x49365f`-`0x4936a3`): it resolves as a
+/// unit, it is alive, and `CanAttack` (`0x606980`) allows it. In a selection a listener makes at
+/// the first one's signal, the outgoing selection is the first one's pick: a friendly `party1`
+/// latches no swing there, so only the first selection's re-swing goes out, at the listener's pick.
+#[test]
+fn a_nested_switch_off_a_friend_latches_no_swing_of_its_own() {
+    let mut f = frame(true);
+    with_factions(&mut f, FOE, &[]);
+    let world = f.app.world_mut();
+    let new = world.resource::<GuidIndex>().0[&NEW];
+    world
+        .get_mut::<ObjectStore>(new)
+        .unwrap()
+        .0
+        .merge(benilla_protocol::ObjectFields::from_pairs(&[(
+            TEMPLATE, FRIEND,
+        )]));
+    spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
+    swinging_at_old(&mut f);
+    on_target_changed(
+        &mut f,
+        "if not AGAIN then AGAIN = 1 TargetNearestEnemy() end",
+    );
+    run(&mut f, r#"TargetUnit("party1")"#);
+    assert_eq!(selected(&f), Some(MOB));
+    assert_eq!(
+        attack_wire(&f),
+        [
+            "AttackStop",
+            "SetSelection 0x22",
+            "AttackStop",
+            "SetSelection 0x31",
+            "AttackSwing 0x31"
+        ]
+    );
+}
+
+/// A clear's send reads the selection as it stands after the teardown's `PET_BAR_UPDATE`
+/// (`0x493a49`-`0x493a4f`, `0xb4e2d8`): a listener that selects there leaves that unit selected,
+/// and the clear sends it again.
+#[test]
+fn a_clear_sends_the_unit_a_pet_bar_update_listener_selected() {
+    let mut f = frame(true);
+    with_pet_attacking(&mut f, true);
+    feeds(&mut f);
+    f.rx.try_iter().for_each(drop);
+    run(
+        &mut f,
+        r#"local r = CreateFrame("Frame")
+        r:RegisterEvent("PET_BAR_UPDATE")
+        r:SetScript("OnEvent", function()
+            if not ONCE then ONCE = 1 TargetUnit("party1") end
+        end)"#,
+    );
+    run(&mut f, "ClearTarget()");
+    assert_eq!(selected(&f), Some(NEW));
+    assert_eq!(
+        stops_and_selections(&f),
+        ["PetStopAttack", "SetSelection 0x22", "SetSelection 0x22"]
+    );
+}
+
+/// Selections nested at their signals through the whole host, each a level of applies on the
+/// Rust stack, reach the bound of eight (`MAX_NESTING`) on a 2 MB thread, and the ninth raises.
+#[test]
+fn eight_nested_switches_fit_a_two_megabyte_stack() {
+    std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(|| {
+            let mut f = frame(true);
+            spawn_mob(&mut f, &[]);
+            swinging_at_old(&mut f);
+            on_target_changed(
+                &mut f,
+                r#"ODD = not ODD
+                if ODD then TargetNearestEnemy() else TargetUnit("party1") end"#,
+            );
+            run(&mut f, r#"TargetUnit("party1")"#);
+            let selections =
+                f.rx.try_iter()
+                    .filter(|c| matches!(c, ClientCommand::SetSelection { .. }))
+                    .count();
+            assert_eq!(selections, 8);
+            let errors = f
+                .app
+                .world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .take_errors();
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            assert!(errors[0].contains("nested too deep"), "{errors:?}");
+        })
+        .expect("the thread starts")
+        .join()
+        .expect("eight levels fit");
+}
