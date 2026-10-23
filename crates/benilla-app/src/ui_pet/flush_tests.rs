@@ -87,13 +87,25 @@ impl Rig {
             .record_count()
     }
 
-    /// Whether the pet's list still holds a record that has run out.
-    fn elapsed_pending(&self) -> bool {
+    /// Whether the pet's list still holds a record that has run out by `at`.
+    fn elapsed_pending(&self, at: Instant) -> bool {
         self.app
             .world()
             .resource::<PetBar>()
             .cooldowns
-            .sweep_pending(Instant::now())
+            .sweep_pending(at)
+    }
+
+    /// The frame's clock pair stepped to `ahead` past the wall clock, as the UI step re-anchors it
+    /// each frame: every record armed so far is then `ahead` older, however long the run took.
+    fn step_clock(&mut self, ahead: Duration) {
+        let mut clock = self
+            .app
+            .world_mut()
+            .resource_mut::<crate::ui_script::UiClock>();
+        let anchor = Instant::now() + ahead;
+        clock.ui_now += anchor.duration_since(clock.anchor).as_secs_f64();
+        clock.anchor = anchor;
     }
 }
 
@@ -306,7 +318,7 @@ fn a_natural_expiry_fires_nothing() {
     assert_eq!(rig.frame(), FLUSH);
     assert!(rig.cooldown(1).1 > 0.0, "running");
 
-    std::thread::sleep(Duration::from_millis(80));
+    rig.step_clock(Duration::from_millis(80));
 
     assert!(
         rig.frame().is_empty(),
@@ -518,11 +530,12 @@ fn an_insert_leaves_the_pets_list_its_live_records_alone() {
         rig.press(1);
     }
     let_the_gcds_run_out();
-    assert!(rig.elapsed_pending(), "the forty GCDs have run out");
+    let pressed = Instant::now();
+    assert!(rig.elapsed_pending(pressed), "the forty GCDs have run out");
 
     rig.press(1);
 
-    assert!(!rig.elapsed_pending(), "the insert dropped them");
+    assert!(!rig.elapsed_pending(pressed), "the insert dropped them");
     assert_eq!(
         rig.record_count(),
         3,
@@ -553,7 +566,8 @@ fn an_inserts_prune_fires_only_the_inserts_own_flush() {
     assert_eq!(rig.frame(), FLUSH, "the presses' own flush");
     let held = rig.generation();
     let_the_gcds_run_out();
-    assert!(rig.elapsed_pending());
+    let pressed = Instant::now();
+    assert!(rig.elapsed_pending(pressed));
 
     // Growl has no GCD pair: nothing is armed, so nothing is dropped or flushed.
     rig.press(2);
@@ -564,7 +578,7 @@ fn an_inserts_prune_fires_only_the_inserts_own_flush() {
     assert_eq!(rig.generation(), held);
 
     rig.press(1);
-    assert!(!rig.elapsed_pending(), "the insert dropped the five");
+    assert!(!rig.elapsed_pending(pressed), "the insert dropped the five");
     assert_eq!(rig.frame(), FLUSH, "the insert's flush, once");
     assert_eq!(
         rig.generation(),
@@ -601,10 +615,11 @@ fn an_insert_changes_no_bar_read_of_the_records_that_stay() {
         "the parked record shows disabled: {parked_read:?}"
     );
     let_the_gcds_run_out();
-    assert!(rig.elapsed_pending());
+    let pressed = Instant::now();
+    assert!(rig.elapsed_pending(pressed));
 
     rig.press(1);
-    assert!(!rig.elapsed_pending(), "the insert pruned");
+    assert!(!rig.elapsed_pending(pressed), "the insert pruned");
     rig.frame();
 
     assert_eq!(
