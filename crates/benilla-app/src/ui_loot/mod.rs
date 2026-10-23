@@ -1004,7 +1004,7 @@ fn drain_receives(
             .template(r.entry, 0, ask)
             .map(|t| (t.name.clone(), t.quality, t.display_info_id));
         match resolved {
-            Some((name, quality, display_id)) if r.owner.is_some() => {
+            Some((name, quality, _)) if r.owner.is_some() => {
                 // Another member's push: a pusher the client holds as a player (`0x491b2c`, mask
                 // 0x10), named by `GetUnitName` with its `UNKNOWNOBJECT` miss; no `ITEM_PUSH`.
                 let Some(owner) = r.owner.and_then(owner) else {
