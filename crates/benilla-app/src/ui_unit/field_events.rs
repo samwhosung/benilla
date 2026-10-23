@@ -1590,4 +1590,75 @@ mod tests {
             assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
         }
     }
+
+    /// The cascade's pet step (`0x4909c9` → `0x4bc6f0`), after the bonus bar and before the
+    /// reputation rebuild: `SetPetGuid(0, 0)` (`0x4bc6fd`), whose change signals
+    /// `UNIT_PET("player")` (`0x4bc84f`) and which always signals `PET_BAR_UPDATE` (`0x4bc90c`),
+    /// then `CMSG_REQUEST_PET_INFO` (`0x4bc738`) when our charm, else our summon, is set
+    /// (`0x4bc721`-`0x4bc736`). Each handler reads the bar already gone. A `/reload` with a pet up
+    /// takes the change too: the guid outlives the interface.
+    #[test]
+    fn the_world_entry_drops_the_pet_bar_and_asks_for_it_again() {
+        use crate::net::ClientCommand;
+        /// `UNIT_FIELD_SUMMON`.
+        const SUMMON: u16 = 8;
+        let spy = r#"SEEN = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("UPDATE_BONUS_ACTIONBAR")
+            f:RegisterEvent("UNIT_PET")
+            f:RegisterEvent("PET_BAR_UPDATE")
+            f:RegisterEvent("UPDATE_FACTION")
+            f:SetScript("OnEvent", function()
+                table.insert(SEEN, event .. " " .. tostring(arg1) .. " " .. tostring(PetHasActionBar()))
+            end)"#;
+        for summoned in [true, false] {
+            let pairs: Vec<(u16, u32)> = if summoned {
+                vec![(SUMMON, PET as u32), (SUMMON + 1, (PET >> 32) as u32)]
+            } else {
+                vec![]
+            };
+            let (mut app, _) = feed_world(&pairs, spy);
+            let (tx, rx) = crossbeam_channel::unbounded();
+            app.insert_resource(crate::net::NetCommands(tx));
+            app.init_resource::<crate::ui_pet::PetBar>()
+                .init_resource::<crate::ui_pet::PetAttackLatch>();
+            if summoned {
+                app.world_mut()
+                    .resource_mut::<crate::ui_pet::PetBar>()
+                    .spells
+                    .pet_guid = PET;
+                app.world_mut()
+                    .resource_mut::<crate::ui_pet::PetAttackLatch>()
+                    .0 = Some(PET);
+            }
+            app.add_systems(Update, super::super::feed_units);
+            app.update();
+            let mut heard = vec!["UPDATE_BONUS_ACTIONBAR nil nil"];
+            if summoned {
+                heard.push("UNIT_PET player nil");
+            }
+            heard.extend([
+                "PET_BAR_UPDATE nil nil",
+                "UPDATE_FACTION nil nil",
+                "UPDATE_FACTION nil nil",
+            ]);
+            assert_eq!(seen(&mut app), heard, "summoned {summoned}");
+            assert_eq!(
+                app.world()
+                    .resource::<crate::ui_pet::PetBar>()
+                    .spells
+                    .pet_guid,
+                0
+            );
+            assert_eq!(
+                app.world().resource::<crate::ui_pet::PetAttackLatch>().0,
+                None
+            );
+            let asked = rx
+                .try_iter()
+                .filter(|c| matches!(c, ClientCommand::RequestPetInfo))
+                .count();
+            assert_eq!(asked, usize::from(summoned), "summoned {summoned}");
+        }
+    }
 }

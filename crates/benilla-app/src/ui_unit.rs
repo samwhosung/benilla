@@ -1371,6 +1371,15 @@ pub(crate) fn run_feed_units_once(world: &mut World) {
         .expect("the unit events run as a one-shot system");
 }
 
+/// Whether the unit feed runs before `system` in `app`'s `Update`, for a reader of its pushes.
+#[cfg(test)]
+pub(crate) fn feed_units_runs_before<M>(
+    app: &mut App,
+    system: impl bevy::ecs::system::IntoSystem<(), (), M>,
+) -> bool {
+    crate::test_support::runs_before(app, feed_units, system)
+}
+
 /// [`held::feed_chain_units`] once, for a test that drives the feeds by hand.
 #[cfg(test)]
 pub(crate) fn run_feed_chain_units_once(world: &mut World) {

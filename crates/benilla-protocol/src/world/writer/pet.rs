@@ -88,6 +88,12 @@ impl WorldWriter {
         )
     }
 
+    /// `CMSG_REQUEST_PET_INFO`, empty: the world entry's pet reset (`0x4bc6f0`) asks for the bar
+    /// it just cleared when our charm or summon field is set.
+    pub fn request_pet_info(&mut self) -> Result<()> {
+        self.send(opcode::CMSG_REQUEST_PET_INFO, &[])
+    }
+
     /// `CMSG_PET_UNLEARN`: `ConfirmPetUnlearn()`, carrying the latched trainer guid.
     pub fn pet_unlearn(&mut self, trainer: u64) -> Result<()> {
         self.send(opcode::CMSG_PET_UNLEARN, &messages::pet_unlearn(trainer))

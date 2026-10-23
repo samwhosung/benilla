@@ -529,3 +529,45 @@ fn a_members_object_signals_at_its_packet() {
     );
     assert_eq!(heard(&mut app), Vec::<String>::new());
 }
+
+/// The summon in two packets of one frame, as vmangos sends it: `SMSG_PET_SPELLS` first, whose
+/// bar write signals `UNIT_PET("player")` (`0x4bc84f`) while our `UNIT_FIELD_SUMMON` is still 0,
+/// then the update that writes it, whose watch signals `UNIT_PET` again (`0x51bbb0`, event table
+/// slot 2). The stock pet frame's `UnitExists("pet")` (`PetFrame.lua:21`) reads no pet at the
+/// first and the pet at the second.
+#[test]
+fn a_summon_signals_unit_pet_at_the_bar_and_again_at_our_summon_field() {
+    let mut app = party_client();
+    frame(
+        &mut app,
+        crate::lanes::unit_view_tests::wire_packets(vec![vec![created(
+            PET,
+            EntityKind::Unit,
+            &super::unit_view_tests::health(60),
+        )]]),
+    );
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("UNIT_PET")
+            f:SetScript("OnEvent", function()
+                table.insert(Seen, event .. ":" .. arg1 .. ":" .. tostring(UnitExists("pet")))
+            end)
+            "#,
+        )
+        .unwrap();
+    let bar = SessionEvent::PetSpells(Box::new(benilla_protocol::messages::PetSpells {
+        pet_guid: PET,
+        ..Default::default()
+    }));
+    let seen = frame(
+        &mut app,
+        crate::lanes::unit_view_tests::wire_packets(vec![
+            vec![bar],
+            vec![values(ME, &summons(PET))],
+        ]),
+    );
+    assert_eq!(seen, ["UNIT_PET:player:nil", "UNIT_PET:player:1"]);
+}

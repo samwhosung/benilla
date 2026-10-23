@@ -336,6 +336,9 @@ pub const CMSG_PET_ABANDON: u16 = 0x0176; // 374
 /// Rename the pet (`PetRename`, `0x4be4e0`). One-shot: the server clears `UNIT_FLAG_PET_RENAME`
 /// on success (`PetHandler.cpp:302-345`); a refusal is [`SMSG_PET_NAME_INVALID`].
 pub const CMSG_PET_RENAME: u16 = 0x0177; // 375
+/// Ask the server to resend our pet's or charm's bar, empty body (`0x4bc738`); answered by
+/// `SMSG_PET_SPELLS` (`MiscHandler.cpp:1168`).
+pub const CMSG_REQUEST_PET_INFO: u16 = 0x0279; // 633
 
 /// The ask-once GameObject template lookup, shaped like `CMSG_CREATURE_QUERY`.
 pub const CMSG_GAMEOBJECT_QUERY: u16 = 0x005E; // 94

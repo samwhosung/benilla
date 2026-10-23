@@ -511,4 +511,83 @@ mod tests {
         app.world_mut().entity_mut(me).insert(store(Some(HUMAN)));
         assert_eq!(pvp(&mut app).0.as_deref(), Some("hostile"));
     }
+
+    /// A worldport frees our player with every object (`0x467700`) and its create comes after the
+    /// load. The zone poll reports only the active mover's, else the active player's, position
+    /// (`0x5db937`, `0x5db956`), and runs on the tick's category 5 after the category 6 packet
+    /// drain (`0x401ec0`, `0x403620`), so the commit `0x494780` waits for our player and follows
+    /// its arrival. A capital entered on a PvE realm answers its type inside the new area's event.
+    #[test]
+    fn a_worldport_commits_the_zone_once_our_player_is_back() {
+        use crate::net::{Guid, GuidIndex, NetCommands, ObjectStore, SelfGuid, SelfPlayer};
+        use crate::target::relations::fixture::{factions, ORC};
+        use benilla_protocol::messages::ObjectType;
+        use benilla_protocol::ObjectFields;
+        use benilla_ui::script::UiScript;
+        const ME: u64 = 0x7;
+        const ORGRIMMAR: u32 = 1637;
+        /// `UNIT_FIELD_FACTIONTEMPLATE`.
+        const TEMPLATE: u16 = 35;
+
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let world = app.world_mut();
+        benilla_world::world_point::init_world_point_resources(world);
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        world.insert_resource(NetCommands(tx));
+        world.resource_mut::<SelfGuid>().0 = Some(ME);
+        world.insert_resource(factions());
+        world.insert_resource(AreaTableRes(AreaTableCatalog::from_rows(vec![(
+            ORGRIMMAR,
+            AreaTableRow {
+                name: "Orgrimmar".into(),
+                ..row(0x138, 4)
+            },
+        )])));
+        // The body is at the port's destination before our player's create arrives.
+        world.insert_resource(benilla_world::terrain_stream::CurrentArea(Some(ORGRIMMAR)));
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                r#"
+                Seen = {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+                f:SetScript("OnEvent", function()
+                    table.insert(Seen, tostring((GetZonePVPInfo())))
+                end)
+                "#,
+            )
+            .unwrap();
+        world.insert_non_send_resource(script);
+        let frame = |app: &mut App| {
+            let world = app.world_mut();
+            crate::ui_unit::run_feed_units_once(world);
+            world.run_system_cached(feed_zone_events).unwrap();
+            let s = world.non_send_resource::<UiScript>();
+            let seen = s.eval::<Vec<String>>("return Seen").unwrap();
+            s.run("Seen = {}").unwrap();
+            seen
+        };
+        assert_eq!(
+            frame(&mut app),
+            Vec::<String>::new(),
+            "no player, no commit"
+        );
+        let store = ObjectStore(
+            ObjectFields::from_pairs(&[(TEMPLATE, ORC)]).into_created(ObjectType::Player),
+        );
+        let me = app.world_mut().spawn((SelfPlayer, Guid(ME), store)).id();
+        app.world_mut().resource_mut::<GuidIndex>().0.insert(ME, me);
+        assert_eq!(frame(&mut app), ["friendly"]);
+    }
+
+    /// The commit reads what the unit feed pushed of a player that arrived this frame.
+    #[test]
+    fn the_zone_commit_runs_after_the_unit_feed() {
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        assert!(crate::ui_unit::feed_units_runs_before(
+            &mut app,
+            feed_zone_events
+        ));
+    }
 }

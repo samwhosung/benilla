@@ -1173,6 +1173,8 @@ pub(crate) enum ClientCommand {
         spell_id: u32,
         enabled: bool,
     },
+    /// `CMSG_REQUEST_PET_INFO`: the world entry's ask for the pet bar it cleared (`0x4bc738`).
+    RequestPetInfo,
     /// `CMSG_PET_ABANDON`: the menu's Abandon only. Dismiss (`PetDismiss 0x4be4d0`) is a
     /// [`Self::PetAction`] with word `0x07000003`. Answered by a zero-guid `SMSG_PET_SPELLS`.
     PetAbandon {

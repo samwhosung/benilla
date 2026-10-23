@@ -309,6 +309,22 @@ mod frame_tests {
         assert_eq!(&wire[second_at + 6..], &[9; 8]);
     }
 
+    /// An empty body is the size word 4, the opcode alone (`0x4bc738`): `CMSG_REQUEST_PET_INFO`.
+    #[test]
+    fn an_empty_body_is_its_header_alone() {
+        let traffic = LinkTraffic::new();
+        let mut wire = Vec::new();
+        send_packet(
+            &mut wire,
+            None,
+            &traffic,
+            crate::messages::opcode::CMSG_REQUEST_PET_INFO,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(wire, [0x00, 0x04, 0x79, 0x02, 0x00, 0x00]);
+    }
+
     /// The three-byte form carries 23 bits; a bigger packet has no header, so it is refused.
     #[test]
     fn a_packet_past_23_bits_of_size_is_refused() {
