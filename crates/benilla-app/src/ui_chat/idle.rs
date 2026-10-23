@@ -19,9 +19,10 @@ use bevy::time::Real;
 use super::away::{afk_line, push_system, AfkMirror};
 use super::feed::ChatLog;
 
-/// `[0xcf0bc8]`, the last-input stamp: elapsed real time on the clock (`0x42c010`) both its one
-/// writer (`0x42d7bb`) and the handler (`0x482ebe`) read. Process-global, zero at start and never
-/// reset, not even at world entry, so a client untouched from launch is idle at five minutes.
+/// `[0xcf0bc8]`, the last-input stamp: elapsed real time on the clock (`0x42c010`) that stamps each
+/// queued input (`0x42d7bb`) and the handler (`0x482ebe`) reads; its seven writers are listed at
+/// [`stamp_input`]. Process-global, zero at start and never reset, not even at world entry, so a
+/// client untouched from launch is idle at five minutes.
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub(crate) struct LastInput(Duration);
 
