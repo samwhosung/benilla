@@ -200,6 +200,21 @@ pub(super) fn guard_receivers(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
+/// The member prologue for a [`NO_PROLOGUE`] method that runs it late, after its own argument
+/// checks: `this` must be a table holding a frame of a kind whose method chain reaches `table`.
+pub(crate) fn receiver_in(lua: &Lua, this: &Value, table: &'static str) -> mlua::Result<Table> {
+    let Value::Table(t) = this else {
+        return Err(mlua::Error::runtime(ERR_NON_TABLE));
+    };
+    let id = decode_id(t)?;
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    if Class::FrameKind(table).admits(&model, id) {
+        Ok(t.clone())
+    } else {
+        Err(mlua::Error::runtime(ERR_WRONG_TYPE))
+    }
+}
+
 /// Every frame kind, so [`guard_receivers`] reaches every kind's method tables. The match makes
 /// a new kind a compile error until it is listed here.
 fn every_frame_kind() -> [FrameKind; 20] {
