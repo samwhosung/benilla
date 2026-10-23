@@ -1071,33 +1071,47 @@ mod tests {
         );
     }
 
-    /// What an engine turn left runs in the order it was made: a handler fired before a waiting
-    /// call reads the state before it, one fired after it the state after.
+    /// What an engine turn left runs in the order it was made: a call made ahead of its handlers
+    /// applies first, and each handler reads the state the ones before it left.
     #[test]
     fn a_turns_handlers_and_waiting_calls_run_in_the_order_made() {
         let mut s = UiScript::new().unwrap();
         listen(&s, "First", "LOOT_OPENED", "1");
         listen(&s, "Second", "LOOT_CLOSED", "2");
         s.host_out(|s| {
-            s.fire_event("LOOT_OPENED", vec![]);
             s.run(r#"TargetUnit("player")"#).unwrap();
+            s.fire_event("LOOT_OPENED", vec![]);
             s.fire_event("LOOT_CLOSED", vec![]);
         });
         let mut host = Stamping::default();
         s.hosted(&mut host, |_| ());
-        // The first handler's call applies inside it, then the waiting one, then the second's.
+        // The waiting call applies, then the first handler's inside it, then the second's.
         assert_eq!(
             global::<Option<String>>(&s, "ORDER").as_deref(),
-            Some("1:1 2:3 ")
+            Some("1:2 2:3 ")
         );
         assert_eq!(
             host.applied,
             vec![
-                ScriptCall::ClearTarget,
                 select("player"),
+                ScriptCall::ClearTarget,
                 ScriptCall::ClearTarget
             ]
         );
+    }
+
+    /// Lua run in place behind a handler a turn held would run ahead of it, where `SignalEvent`
+    /// (`0x703e50`) ran the handler first: the in-place runner refuses it.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "no held signal waiting")]
+    fn a_chunk_run_in_place_behind_a_held_signal_is_refused() {
+        let mut s = UiScript::new().unwrap();
+        listen(&s, "First", "LOOT_OPENED", "1");
+        s.host_out(|s| {
+            s.fire_event("LOOT_OPENED", vec![]);
+            let _ = s.run(r#"TargetUnit("player")"#);
+        });
     }
 
     /// With no host to lend after the turn, its handlers still run, as it ends: the calls they
@@ -1341,26 +1355,6 @@ mod tests {
         assert_eq!(s.item_locks(), vec![2]);
     }
 
-    /// Lua the turn runs in place reads the locks as they are then, and its own unlock waits in
-    /// order behind the held signal before it: `ClearCursor` (`0x495190`) on a held item unlocks
-    /// it (`0x4951d9`) after the turn's first unlock signalled, so that signal's handler, run once
-    /// the host is back, still reads the cursor's item locked.
-    #[test]
-    fn a_chunks_unlock_waits_behind_the_held_signal_before_it() {
-        let mut s = UiScript::new().unwrap();
-        watch_locks(&s);
-        s.seed_item_locks([1, 2]);
-        s.set_cursor_for_test(super::super::cursor::CursorPayload::Item(held_item(2)));
-        s.host_out(|s| {
-            s.unlock_item(1);
-            s.run("ClearCursor()").unwrap();
-        });
-        s.hosted(&mut Stamping::default(), |_| ());
-        // The chunk's own handler ran in place, then the held one.
-        assert_eq!(global::<String>(&s, "SEEN"), "00 01 ");
-        assert_eq!(s.item_locks(), Vec::<u64>::new());
-    }
-
     /// The tag a test host notes a call by.
     fn tag(call: &ScriptCall) -> &'static str {
         match call {
@@ -1433,7 +1427,7 @@ mod tests {
         assert_eq!(s.refuse_waiting(), 0, "nothing waits");
     }
 
-    /// A host whose first apply signals `LOOT_OPENED` and runs `TargetLastEnemy()` in place, both
+    /// A host whose first apply runs `TargetLastEnemy()` in place and signals `LOOT_OPENED`, both
     /// of which wait for the host, then stops at a signal point, notes its next step and signals
     /// `LOOT_CLOSED`.
     struct Ahead {
@@ -1444,8 +1438,8 @@ mod tests {
         fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
             note(script, tag(&call));
             if std::mem::take(&mut self.first) {
-                script.fire_event("LOOT_OPENED", vec![]);
                 script.run("TargetLastEnemy()").unwrap();
+                script.fire_event("LOOT_OPENED", vec![]);
                 script.signal_point(self);
                 note(script, "next");
                 script.fire_event("LOOT_CLOSED", vec![]);
@@ -1454,8 +1448,8 @@ mod tests {
         }
     }
 
-    /// What the apply held before a signal point (a signal's handlers, a call Lua run in place
-    /// made) runs at the point, in the order made; what it signals after the point waits for the
+    /// What the apply held before a signal point (a call Lua run in place made, a signal's
+    /// handlers) runs at the point, in the order made; what it signals after the point waits for the
     /// apply to return.
     #[test]
     fn what_the_apply_held_before_a_point_runs_at_it() {
@@ -1467,7 +1461,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             global::<String>(&s, "ORDER"),
-            "select opened last next closed "
+            "select last opened next closed "
         );
     }
 
