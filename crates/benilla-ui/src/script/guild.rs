@@ -1050,3 +1050,58 @@ mod tests {
         assert!(member_at(&roster, -1).is_none(), "negative");
     }
 }
+
+#[cfg(test)]
+mod reload_tests {
+    use super::*;
+
+    /// The staged rank `0x84966c` and its flags `0x849670` are set by `GuildControlSetRank`
+    /// (`0x4d1fd7` → `0x4d1080`) and reset to -1 only by `InitGuildRoster` (`0x4d0a37`), whose one
+    /// caller is `InitializeGame` (`0x48f5ea`): a `/reload`'s VM, seated with the last one's cells,
+    /// keeps the rank picked and its staged checkboxes.
+    #[test]
+    fn the_staged_rank_rides_the_cells_a_reload_keeps() {
+        let guild = || GuildState {
+            in_guild: true,
+            ranks: vec![
+                GuildRankInfo {
+                    name: "Master".into(),
+                    rights: 0xF_FFFF,
+                },
+                GuildRankInfo {
+                    name: "Officer".into(),
+                    rights: 0x3,
+                },
+            ],
+            ..Default::default()
+        };
+        let mut old = crate::script::UiScript::new().unwrap();
+        old.set_guild(guild());
+        old.run("GuildControlSetRank(2) GuildControlSetRankFlag(1, false)")
+            .unwrap();
+        let cells = old.take_guild_cells();
+
+        let mut new = crate::script::UiScript::new().unwrap();
+        new.keep_calls();
+        new.set_guild(guild());
+        new.seed_guild_cells(cells);
+        assert_eq!(
+            new.eval::<(Option<i64>, Option<i64>, Option<i64>)>(
+                "local a, b, c = GuildControlGetRankFlags() return a, b, c"
+            )
+            .unwrap(),
+            (Some(1), Some(1), None),
+            "rank 2's live rights"
+        );
+        new.run("GuildControlSaveRank('Officer')").unwrap();
+        assert_eq!(
+            new.take_guild_calls(),
+            [GuildCall::SaveRank {
+                rank_index: 1,
+                rights: 0x2,
+                name: "Officer".into(),
+            }],
+            "the staged untick of flag 1 survives"
+        );
+    }
+}

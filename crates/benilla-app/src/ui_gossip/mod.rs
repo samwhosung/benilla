@@ -737,6 +737,41 @@ mod tests {
         );
     }
 
+    /// The greeting's macros expand once per message, as `0x4e2010` writes the expanded text to
+    /// `0xbbb678` at its draw (`0x4e2274`, `0x4e229a`) and `GetGossipText` returns that buffer
+    /// (`0x4e28c0`): a later change to the player's name leaves it until the next message.
+    #[test]
+    fn the_greeting_expands_once_per_message() {
+        const ME: u64 = 0x10;
+        let (mut app, _rx) = feed_app(|s| s.run(RECORDER).unwrap());
+        app.world_mut().spawn((
+            SelfPlayer,
+            Guid(ME),
+            ObjectStore(benilla_protocol::ObjectFields::default()),
+        ));
+        let named = |app: &mut App, name: &str| {
+            app.world_mut()
+                .resource_mut::<NameCache>()
+                .insert_player(ME, name.into(), None);
+        };
+        named(&mut app, "Ann");
+        let menu = |app: &mut App| {
+            let mut st = state(app);
+            st.remember_record(50, record("Well met, $N."));
+            st.open_menu(GUARD, 50, option("Goodbye"), Vec::new(), 0);
+        };
+        menu(&mut app);
+        assert_eq!(tick(&mut app).1, "Well met, Ann.");
+        named(&mut app, "Bea");
+        assert_eq!(
+            tick(&mut app).1,
+            "Well met, Ann.",
+            "held until the next message"
+        );
+        menu(&mut app);
+        assert_eq!(tick(&mut app).1, "Well met, Bea.");
+    }
+
     #[test]
     fn revisit_opens_immediately_from_the_cache() {
         let mut state = GossipState::default();

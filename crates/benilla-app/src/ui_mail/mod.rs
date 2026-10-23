@@ -1629,6 +1629,51 @@ mod tests {
         );
     }
 
+    /// An invoice whose item the cache does not hold names it "": `0x5d8b00` clears its buffer
+    /// first (`0x5d8b25`) and `0x4af360` never tests it. Only a counterparty name the lookup
+    /// cannot answer (`0x4af4b7`-`0x4af4c1`) is the miss.
+    #[test]
+    fn an_invoice_names_an_uncached_item_as_empty() {
+        let states = crate::world_state::WorldStates::default();
+        let items = Items::default();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut bodies = QueryCache::default();
+        bodies.insert(99, "0000000000000042:500:0".into());
+        let mut e = entry(1, None, 0, 30.0);
+        (e.message_type, e.sender_id) = (mail_message_type::AUCTION, Some(1));
+        (e.subject, e.item_text_id) = ("2589:0:1".into(), 99);
+        let row = |names: &NameCache| {
+            resolve_row(
+                &e,
+                &bodies,
+                None,
+                &items,
+                None,
+                None,
+                None,
+                RowCatalogs::default(),
+                names,
+                Ask::New(&commands),
+                crate::items::RollCatalogs::NONE,
+                &no_macros(&states),
+                &no_strings,
+            )
+        };
+        let mut names = NameCache::default();
+        assert!(row(&names).invoice.is_none(), "the buyer's name is out");
+        names.insert_player(0x42, "Bob".into(), None);
+        let invoice = row(&names).invoice.expect("the invoice, its item out");
+        assert_eq!(
+            (
+                invoice.item_name.as_str(),
+                invoice.player_name.as_str(),
+                invoice.bid
+            ),
+            ("", "Bob", 500)
+        );
+    }
+
     #[test]
     fn resolve_row_reads_the_item_and_body_caches() {
         let states = crate::world_state::WorldStates::default();

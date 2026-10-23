@@ -1183,6 +1183,63 @@ mod tests {
         ));
     }
 
+    /// `MERCHANT_UPDATE` (317) has its producers alone, the buyback rebuild, the stock update and
+    /// the item records (`0x4faca5`, `0x4faea0`, `0x4faeb2`, `0x4fb110`, `0x4fb570`), and
+    /// `CanMerchantRepair` reads the vendor's flag live (`0x4fba80` → `0x4fadb0`): a flip of the
+    /// repair flag answers there and fires nothing.
+    #[test]
+    fn a_repair_flag_change_fires_no_merchant_update() {
+        use benilla_protocol::field::FIELD_UNIT_NPC_FLAGS;
+        use bevy::ecs::system::RunSystemOnce;
+        const VENDOR: u64 = 0xF130_0000_0000_0042;
+
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut open = MerchantOpen::default();
+        open.open(VENDOR, Vec::new());
+        app.insert_resource(open);
+        let vendor = app
+            .world_mut()
+            .spawn((
+                Guid(VENDOR),
+                ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
+                    FIELD_UNIT_NPC_FLAGS,
+                    NPC_FLAG_REPAIR,
+                )])),
+            ))
+            .id();
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                r#"SEEN = {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("MERCHANT_SHOW")
+                f:RegisterEvent("MERCHANT_UPDATE")
+                f:SetScript("OnEvent", function() table.insert(SEEN, event) end)"#,
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        let mut feed = |app: &mut App| {
+            app.world_mut().run_system_once(feed_merchant).unwrap();
+            let script = app.world_mut().non_send_resource_mut::<UiScript>();
+            let seen = script.eval::<Vec<String>>("return SEEN").unwrap();
+            script.run("SEEN = {}").unwrap();
+            let can = script
+                .eval::<bool>("return CanMerchantRepair() == 1")
+                .unwrap();
+            (seen, can)
+        };
+        assert_eq!(feed(&mut app), (vec!["MERCHANT_SHOW".to_string()], true));
+        app.world_mut()
+            .get_mut::<ObjectStore>(vendor)
+            .unwrap()
+            .0
+            .merge(benilla_protocol::ObjectFields::from_pairs(&[(
+                FIELD_UNIT_NPC_FLAGS,
+                0,
+            )]));
+        assert_eq!(feed(&mut app), (Vec::new(), false));
+    }
+
     /// `RepairAllItems` prices only the equipped slots for its purse test (`0x4fc026`–`0x4fc063`,
     /// `0x4fc08e`): the sword worn and over the purse is refused with `ERR_NOT_ENOUGH_MONEY` and
     /// no send; the same sword in the backpack, which `GetRepairAllCost` would count, leaves a worn

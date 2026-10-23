@@ -360,6 +360,50 @@ fn the_level_bounds_take_the_low_byte() {
     }
 }
 
+/// The search text is `is-number-or-string` then `tostring`, else "" (`0x4ce9cd`-`0x4ce9e7`), so
+/// a number searches as its text.
+#[test]
+fn the_search_text_takes_a_number_as_its_text() {
+    for (arg, name) in [
+        ("123", "123"),
+        ("2.5", "2.5"),
+        ("'silk'", "silk"),
+        ("{}", ""),
+    ] {
+        let mut h = House::new(0);
+        h.run(&format!("QueryAuctionItems({arg})"));
+        let sent = h.sent();
+        assert!(
+            matches!(&sent[..], [ClientCommand::AuctionListItems { searched_name, .. }] if searched_name == name),
+            "{arg}: {sent:?}"
+        );
+    }
+}
+
+/// `usable` is a number's `_ftol` low byte, anything else 0 (`0x4ceb47`-`0x4ceb6f`, sent as a byte
+/// at `0x4cec32`), so `true` asks for every item; `quality` is any number's `_ftol`, anything else
+/// -1 (`0x4ceb72`-`0x4ceb96`), so a negative is sent as its 32-bit pattern.
+#[test]
+fn usable_and_quality_read_as_numbers() {
+    for (usable_arg, quality_arg, wire) in [
+        ("true", "nil", (0, u32::MAX)),
+        ("1", "'2'", (1, 2)),
+        ("258", "-3", (2, (-3i32) as u32)),
+        ("'1'", "2.9", (1, 2)),
+        ("nil", "'x'", (0, u32::MAX)),
+    ] {
+        let mut h = House::new(0);
+        h.run(&format!(
+            r#"QueryAuctionItems("silk", nil, nil, nil, nil, nil, nil, {usable_arg}, {quality_arg})"#
+        ));
+        let sent = h.sent();
+        assert!(
+            matches!(&sent[..], [ClientCommand::AuctionListItems { usable, quality, .. }] if (*usable, *quality) == wire),
+            "{usable_arg}, {quality_arg}: {sent:?}"
+        );
+    }
+}
+
 /// `StartAuction` sends and then clears the sell slot inside the call (`0x4ce925`, `0x4ce92a`):
 /// `NEW_AUCTION_UPDATE` has fired by the next line, and a second call finds the slot empty.
 #[test]
@@ -449,5 +493,79 @@ fn a_damaged_items_start_is_refused_inside_the_call() {
         h.eval::<i64>("return table.getn(HEARD)"),
         0,
         "the slot stays"
+    );
+}
+
+impl House {
+    /// `ev` through its handler, then the lanes' drain, as a frame's poll and drain run them.
+    fn handle(&mut self, ev: benilla_protocol::SessionEvent) {
+        let world = self.app.world_mut();
+        crate::net::handlers::dispatch(world, vec![ev]);
+        crate::lanes::fire_in_order(world);
+    }
+
+    /// From here on, each `CHAT_MSG_SYSTEM` line runs `lua` with the host lent.
+    fn on_chat_line(&mut self, lua: &str) {
+        self.run(&format!(
+            r#"ERR_AUCTION_STARTED = "ERR_AUCTION_STARTED"
+            ERR_AUCTION_BID_PLACED = "ERR_AUCTION_BID_PLACED"
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("CHAT_MSG_SYSTEM")
+            f:SetScript("OnEvent", function() {lua} end)"#
+        ));
+    }
+}
+
+/// A started auction shows its line before it arms the owner request and reads its saved offset
+/// (`0x4cc4c7`, then `0x4cc4d1`-`0x4cc4e0`): the line's handler finds the hello's arming, sends
+/// page 2 and saves its offset, and the result's request then goes at that offset.
+#[test]
+fn a_started_auctions_line_runs_before_its_owner_request() {
+    let mut h = House::new(0);
+    h.on_chat_line("GetOwnerAuctionItems(2)");
+    h.handle(benilla_protocol::SessionEvent::AuctionCommandResult {
+        auction_id: 9,
+        action: benilla_protocol::messages::auction_action::STARTED,
+        error: 0,
+        tail: benilla_protocol::messages::AuctionCommandTail::Empty,
+    });
+    let page = ClientCommand::AuctionListOwnerItems {
+        auctioneer: AUCTIONEER,
+        list_from: 100,
+    };
+    assert_eq!(text(h.sent()), text([page.clone(), page]));
+}
+
+/// A placed bid shows its line before it removes its outbid pair, arms the bidder request and
+/// sends it (`0x4cc507`, then `0x4cc517`-`0x4cc528`), and before the wave: the line's handler
+/// sends page 2 with the pair still listed, and the result's request follows at that offset.
+#[test]
+fn a_placed_bids_line_runs_before_its_bidder_request() {
+    let mut h = House::new(1_000_000);
+    h.house().outbid_append(1, 7);
+    h.house().outbid_append(1, 9);
+    h.house().last_bid = 600;
+    h.on_chat_line("GetBidderAuctionItems(2)");
+    h.handle(benilla_protocol::SessionEvent::AuctionCommandResult {
+        auction_id: 7,
+        action: benilla_protocol::messages::auction_action::BID_PLACED,
+        error: 0,
+        tail: benilla_protocol::messages::AuctionCommandTail::BidPlaced { new_min_outbid: 30 },
+    });
+    assert_eq!(
+        text(h.sent()),
+        text([
+            ClientCommand::AuctionListBidderItems {
+                auctioneer: AUCTIONEER,
+                list_from: 100,
+                auction_ids: vec![7, 9],
+            },
+            ClientCommand::AuctionListBidderItems {
+                auctioneer: AUCTIONEER,
+                list_from: 100,
+                auction_ids: vec![9],
+            },
+            ClientCommand::Emote { emote: 3 },
+        ])
     );
 }

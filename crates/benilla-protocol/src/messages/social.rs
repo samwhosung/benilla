@@ -460,6 +460,75 @@ mod tests {
         assert_eq!(who.entries[0].level, 5);
     }
 
+    fn who_record(body: &mut Vec<u8>, name: &[u8], guild: &[u8], level: u32) {
+        body.extend_from_slice(name);
+        body.push(0);
+        body.extend_from_slice(guild);
+        body.push(0);
+        for v in [level, 1, 1, 12] {
+            body.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+
+    /// `0x5adf60` reads the name and guild with `GetCString` at `0x30` and `0x60` (`0x5adff0`,
+    /// `0x5adffd`): 47 and 95 bytes fit with their NUL; one more reads `""` and poisons the store,
+    /// so the record's dwords and every later record read empty, and each is still kept.
+    #[test]
+    fn who_strings_read_at_their_capacities() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&3u32.to_le_bytes());
+        body.extend_from_slice(&3u32.to_le_bytes());
+        who_record(&mut body, &[b'a'; 47], &[b'g'; 95], 10);
+        who_record(&mut body, b"Bob", &[b'g'; 96], 20);
+        who_record(&mut body, b"Cid", b"", 30);
+        let who = read_who(&mut &body[..]).unwrap();
+        assert_eq!(who.entries.len(), 3);
+        assert_eq!(who.entries[0].name.len(), 47);
+        assert_eq!(who.entries[0].guild.len(), 95);
+        assert_eq!(who.entries[0].level, 10);
+        let poisoned = WhoEntry {
+            name: "Bob".into(),
+            ..WhoEntry::default()
+        };
+        assert_eq!(who.entries[1..], [poisoned, WhoEntry::default()]);
+
+        let mut body = Vec::new();
+        body.extend_from_slice(&1u32.to_le_bytes());
+        body.extend_from_slice(&1u32.to_le_bytes());
+        who_record(&mut body, &[b'a'; 48], b"", 10);
+        let who = read_who(&mut &body[..]).unwrap();
+        assert_eq!(who.entries, [WhoEntry::default()], "a 48-byte name");
+    }
+
+    /// A short `SMSG_WHO` keeps every record up to its count, as the loop reads on through a
+    /// poisoned store (`0x5ae045`-`0x5ae0c6`): the cut record keeps what it read and the rest
+    /// are empty, up to the 50 the list keeps (`0x5adf87`).
+    #[test]
+    fn a_short_who_answer_keeps_its_rows() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&80u32.to_le_bytes());
+        body.extend_from_slice(&80u32.to_le_bytes());
+        who_record(&mut body, b"Ann", b"G", 7);
+        who_record(&mut body, b"Ben", b"H", 8);
+        body.truncate(body.len() - 6);
+        let who = read_who(&mut &body[..]).unwrap();
+        assert_eq!((who.displayed, who.total), (80, 80));
+        assert_eq!(who.entries.len(), 50);
+        assert_eq!(who.entries[0].level, 7);
+        let cut = &who.entries[1];
+        assert_eq!(
+            (
+                cut.name.as_str(),
+                cut.guild.as_str(),
+                cut.level,
+                cut.class,
+                cut.race
+            ),
+            ("Ben", "H", 8, 1, 0)
+        );
+        assert!(who.entries[2..].iter().all(|e| *e == WhoEntry::default()));
+    }
+
     #[test]
     fn who_request_body_is_byte_exact() {
         let request = WhoRequest {
