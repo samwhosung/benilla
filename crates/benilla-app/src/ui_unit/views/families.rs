@@ -236,7 +236,6 @@ fn aura_lists(script: &mut UiScript, saved: &mut Saved, f: &Families) -> usize {
             f.grouped.contains(&guid),
             Some(f.group),
             f.world,
-            f.me.map(|(_, s)| s),
         );
         pushes += usize::from(saved.auras(script, guid, list));
     }

@@ -636,14 +636,11 @@ fn feed_auras(
 
         let held = |guid: u64| index.0.get(&guid).and_then(|&e| stores.get(e).ok());
         let pet_guid = crate::ui_unit::pet_token_guid(Some(store));
-        // `UnitBuff`'s unit gate on a live unit, the player included, whom the gate tests as any
-        // unit (`0x5195aa`-`0x5195f7`). The pet is ungated; the reference gates a pet too, but
-        // `CanAssist`'s player-controlled arm (`0x60673e`-`0x60679f`, the controlling players' duel
-        // and FFA-PvP state) passes for your own pet, leaving only the charm, selectable and
-        // reaction clauses to hide its buffs.
+        // `UnitBuff`'s unit gate on a live unit, the player and the pet included, whom the gate
+        // tests as any unit (`0x5195aa`-`0x5195f7`).
         let (rel, me) = (relations.get(), relations.me());
         let buffs_visible = |guid: u64, unit: &ObjectStore| {
-            guid == pet_guid || buffs_visible_on(&rel, &relations.unit_of(guid, unit), me.as_ref())
+            buffs_visible_on(&rel, &relations.unit_of(guid, unit), me.as_ref())
         };
         let target_guid = units.selection.guid.unwrap_or(0);
         // The resolver reads the published pair `[0xb4e2c8]` (`0x515bb6`, `0x515bdb`), not the
@@ -822,8 +819,7 @@ pub(crate) struct AuraViews<'w> {
 
 impl AuraViews<'_> {
     /// `guid`'s list off `store`, its descriptor, else, when a group token names it
-    /// (`record_ok`), its roster record in `group`; `None` for a guid with neither. `me` is our
-    /// own descriptor as of the same place.
+    /// (`record_ok`), its roster record in `group`; `None` for a guid with neither.
     pub(crate) fn list(
         &self,
         guid: u64,
@@ -831,14 +827,12 @@ impl AuraViews<'_> {
         record_ok: bool,
         group: Option<&crate::ui_party::GroupState>,
         relations: &crate::target::RelationWorld,
-        me: Option<&ObjectStore>,
     ) -> Option<benilla_ui::script::UnitAuraList> {
         let raid = &self.mem.as_deref()?.raid;
         let catalog = self.spells.as_ref().map(|s| &s.catalog);
-        let pet_guid = crate::ui_unit::pet_token_guid(me);
         let (rel, me) = (relations.get(), relations.me());
         let buffs_visible = |guid: u64, unit: &ObjectStore| {
-            guid == pet_guid || buffs_visible_on(&rel, &relations.unit_of(guid, unit), me.as_ref())
+            buffs_visible_on(&rel, &relations.unit_of(guid, unit), me.as_ref())
         };
         units::list_of(guid, store, record_ok, group, &buffs_visible, catalog, raid)
     }
