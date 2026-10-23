@@ -415,6 +415,21 @@ mod unit_tests {
         assert_eq!(drain(&mut app), ["a", "b", "c", "d", "e"]);
     }
 
+    /// Two lanes holding one stamp fire in lane order, the first lane's item then the second's,
+    /// and the drain goes on to the next stamp: a tie never stalls it.
+    #[test]
+    fn equal_heads_fire_in_lane_order_and_the_drain_goes_on() {
+        let mut app = app(&[]);
+        let w = app.world_mut();
+        let tie = stamp();
+        w.resource_mut::<Toy<0>>().0.push((tie, "a"));
+        w.resource_mut::<Toy<1>>().0.push((tie, "b"));
+        push::<1>(w, "c");
+        push::<0>(w, "d");
+        assert_eq!(drain(&mut app), ["a", "b", "c", "d"]);
+        assert_eq!(drain(&mut app), Vec::<&str>::new(), "nothing left behind");
+    }
+
     /// A signal raised inside a listener runs to its end before the outer signal returns
     /// (`0x703e50`): an item pushed while another fires fires straight after it, ahead of the
     /// older items of either lane, and one pushed by that one straight after it in turn.
