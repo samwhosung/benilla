@@ -460,3 +460,31 @@ fn a_drain_that_stops_early_leaves_no_rewound_store() {
         .unwrap();
     assert_eq!(health, 70.0);
 }
+
+/// Updates to units no view reads, between events, build nothing: the lane rewinds only a unit a
+/// token can name, and a gap whose entries name none is no build.
+#[test]
+fn updates_to_units_no_view_reads_build_nothing() {
+    const FAR: [u64; 3] = [
+        0xF130_0000_0050_0001,
+        0xF130_0000_0050_0002,
+        0xF130_0000_0050_0003,
+    ];
+    let mut app = client();
+    let mob = |hp: u32| [(FIELD_UNIT_HEALTH, hp), (FIELD_UNIT_MAXHEALTH, 100)];
+    frame(
+        &mut app,
+        FAR.iter()
+            .map(|&g| created(g, EntityKind::Unit, &mob(100)))
+            .collect(),
+    );
+    lane_counts(&mut app);
+    let mut packets = vec![fall(1)];
+    for (i, &g) in FAR.iter().enumerate() {
+        packets.push(values(g, &health(90 - i as u32)));
+        packets.push(fall(1));
+    }
+    frame(&mut app, packets);
+    let (builds, pushes, _) = lane_counts(&mut app);
+    assert_eq!((builds, pushes), (0, 0));
+}
