@@ -864,3 +864,34 @@ fn a_unit_casters_pick_signals_its_target_change_before_the_cast_and_the_order()
         ]
     );
 }
+
+/// A queued on-next-swing strike in the in-flight slot, Heroic Strike's.
+fn queue_strike(f: &mut Frame) {
+    let world = f.app.world_mut();
+    world
+        .resource_mut::<crate::spell::QueuedMeleeSpell>()
+        .arm(78);
+    world
+        .resource_mut::<crate::spell::PendingCast>()
+        .fill_record();
+}
+
+/// A deselect while swinging runs StopAttack in its teardown (`0x493a08`), whose next-swing
+/// cancel (`0x5ecb63` → `0x6e6f30`) reports the strike's stop there, ahead of the release's
+/// `PLAYER_TARGET_CHANGED` (`0x493a73`).
+#[test]
+fn a_teardowns_strike_cancel_reports_before_the_target_change() {
+    let mut f = frame(true);
+    swinging_at_old(&mut f);
+    queue_strike(&mut f);
+    run(
+        &mut f,
+        r#"ORDER = {}
+        local r = CreateFrame("Frame")
+        r:RegisterEvent("SPELLCAST_STOP")
+        r:RegisterEvent("PLAYER_TARGET_CHANGED")
+        r:SetScript("OnEvent", function() table.insert(ORDER, event) end)"#,
+    );
+    run(&mut f, r#"ClearTarget() SEEN = table.concat(ORDER, ",")"#);
+    assert_eq!(seen(&mut f), "SPELLCAST_STOP,PLAYER_TARGET_CHANGED");
+}

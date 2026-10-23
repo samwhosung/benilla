@@ -862,3 +862,47 @@ fn a_world_click_signals_its_target_change_before_the_re_swing() {
         .unwrap();
     assert_eq!(heard, 1, "heard in the click alone");
 }
+
+/// A world click off every object deselects (`0x5e03cf`): its teardown's StopAttack
+/// (`0x493a08`) cancels a queued strike (`0x5ecb63` → `0x6e6f30`), whose stop the click reports
+/// in place, ahead of the release's `PLAYER_TARGET_CHANGED` (`0x493a73`).
+#[test]
+fn a_world_click_deselects_reporting_its_strike_cancel_first() {
+    let mut f = fix(false);
+    let world = f.app.world_mut();
+    let me = world.resource::<GuidIndex>().0[&ME];
+    world
+        .entity_mut(me)
+        .insert(crate::creature_anim::Engaged(OLD));
+    world
+        .resource_mut::<crate::spell::QueuedMeleeSpell>()
+        .arm(78);
+    world
+        .resource_mut::<crate::spell::PendingCast>()
+        .fill_record();
+    world.insert_non_send_resource(benilla_ui::script::UiScript::new().expect("a VM"));
+    crate::script_calls::with_hosted_vm(world, |s| {
+        s.expect("a VM").run(
+            r#"ORDER = {}
+            local r = CreateFrame("Frame")
+            r:RegisterEvent("SPELLCAST_STOP")
+            r:RegisterEvent("PLAYER_TARGET_CHANGED")
+            r:SetScript("OnEvent", function() table.insert(ORDER, event) end)"#,
+        )
+    })
+    .expect("the listener is in");
+    f.click(Hovered::default());
+    let world = f.app.world_mut();
+    world
+        .run_system_once(click::select_on_click)
+        .expect("the click runs");
+    crate::ui_cast::signal_reports(world);
+    assert_eq!(f.selected(), None);
+    let order: String = f
+        .app
+        .world()
+        .non_send_resource::<benilla_ui::script::UiScript>()
+        .eval(r#"return table.concat(ORDER, ",")"#)
+        .unwrap();
+    assert_eq!(order, "SPELLCAST_STOP,PLAYER_TARGET_CHANGED");
+}
