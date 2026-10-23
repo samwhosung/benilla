@@ -1277,15 +1277,18 @@ fn feed_trade(
             // something on the partner moves what the cursor holds into the offer (`0x5d3f80`).
             if trade.opens_with_held() {
                 if let Some(offer) = script.trade_open_money() {
-                    // Coins (`0x4bf5fe`-`0x4bf644`): `0x5d4500` sends the new offer, the cache of
-                    // our money `[0xb71740]` takes it (`0x4bf62b`), and `PLAYER_TRADE_MONEY`,
-                    // `PLAYER_MONEY` and `TRADE_SHOW` fire once each, then the leg returns.
-                    trade.fold_held_coins(offer);
+                    // Coins (`0x4bf5fe`-`0x4bf644`): `0x5d4500` sends the new offer, then the
+                    // cursor clears (`0x4bf61c`), the cache of our money `[0xb71740]` takes it
+                    // (`0x4bf62b`), and `PLAYER_TRADE_MONEY`, `PLAYER_MONEY` and `TRADE_SHOW` fire
+                    // once each, then the leg returns.
                     trade.send_edit(&commands, ClientCommand::SetTradeGold { copper: offer });
+                    script.trade_open_money_clear();
+                    trade.fold_held_coins(offer);
                     script.fire_event("PLAYER_TRADE_MONEY", vec![]);
                     script.fire_event("PLAYER_MONEY", vec![]);
                 } else if let Some(held) = script.trade_open_item() {
-                    // An item (`0x4bf652`-`0x4bf6fa`): its send's answer is not read (`0x4bf6be`).
+                    // An item (`0x4bf652`-`0x4bf6fa`): its send's answer is not read (`0x4bf6be`),
+                    // then the cursor clears and the slot is stored (`0x4bf6ca`-`0x4bf6fa`).
                     let _ = trade.send_placement(
                         &commands,
                         &objects,
@@ -1295,6 +1298,7 @@ fn feed_trade(
                         held.bag,
                         held.bag_slot,
                     );
+                    script.trade_open_item_store(&held);
                 }
             }
             script.fire_event("TRADE_SHOW", vec![]);
