@@ -1197,6 +1197,15 @@ mod tests {
     }
 }
 
+/// Run the death feed once on `world`, for a test of what it pushes.
+#[cfg(test)]
+pub(crate) fn run_feed_death_once(world: &mut World) {
+    use bevy::ecs::system::RunSystemOnce;
+    world
+        .run_system_once(feed_death)
+        .expect("the death feed runs");
+}
+
 /// The body's VM events between the last `(dead, ghost)` seen, if any, and this one.
 fn fire_vm_edges(script: &mut UiScript, prev: Option<(bool, bool)>, dead: bool, ghost: bool) {
     match (prev, dead, ghost) {

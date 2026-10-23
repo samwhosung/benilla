@@ -546,13 +546,14 @@ mod tests {
         assert_eq!(asked(&mut app), 1, "a light sweep re-asks");
         assert_eq!(held(&app), Some(5), "…and does NOT tear the marker down");
 
-        // Death, the `>0 → ≤0` edge, is a light sweep (`0x6046f0`).
+        // Death's light sweep is the death handler's, in place (`0x5e99b0` at `0x5e9a61`): the
+        // `>0 → ≤0` edge asks nothing here.
         set_self(
             &mut app,
             &[(FIELD_LEVEL, 5), (FIELD_HEALTH, 0), (FIELD_FACTION, 1)],
         );
-        assert_eq!(asked(&mut app), 1, "death re-asks");
-        assert_eq!(held(&app), Some(5), "…and is still a light sweep");
+        assert_eq!(asked(&mut app), 0, "death is not the poll's");
+        assert_eq!(held(&app), Some(5), "…and tears nothing down");
 
         // Revive, the `≤0 → >0` edge, is the full sweep.
         set_self(
@@ -1044,7 +1045,6 @@ mod tests {
         assert_eq!(asked(&mut app), 0, "then quiet");
 
         for (label, field, value) in [
-            ("death", FIELD_HEALTH, 0u32), // the alive bit, not the raw value
             ("PLAYER_FLAGS", FIELD_PLAYER_FLAGS, 0x10),
             ("money", FIELD_COINAGE, 900),
             ("a skill rank", FIELD_SKILL_1_1 + 1, 80 | (300 << 16)),

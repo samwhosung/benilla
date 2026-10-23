@@ -395,6 +395,132 @@ mod tests {
         }
     }
 
+    /// Our own death runs `0x5e99b0`'s list in its order (`0x5e9a41`-`0x5e9a6c`): the target
+    /// cleared, whose `PLAYER_TARGET_CHANGED` runs its listeners there (`0x5e9a45`); the
+    /// interaction latch released with its window's close (`0x4931c0(0xb4e2d0, 0)` at `0x5e9a51` →
+    /// `0x493310`); the loot closed with its release (`0x5e9a5c`); the quest givers asked again
+    /// (`0x5eb070` at `0x5e9a61`); then the cast cancelled (`0x5e9a6c`).
+    #[test]
+    fn our_own_death_runs_its_list_in_order() {
+        const VENDOR: u64 = 0xF130_0000_0000_0050;
+        const GIVER: u64 = 0xF130_0000_0000_0051;
+        let mut c = client();
+        let (me, mob) = (c.me, c.mob);
+        c.select(MOB, mob);
+        c.cast(FIREBALL);
+        let world = c.world();
+        world
+            .resource_mut::<crate::ui_loot::LootState>()
+            .open(OTHER, 1, 0, Vec::new());
+        // A quest giver (`UNIT_NPC_FLAGS` 0x2) whose reaction toward us reads Neutral.
+        let giver = world
+            .spawn((
+                Guid(GIVER),
+                crate::net::NetEntity {
+                    kind: benilla_protocol::EntityKind::Unit,
+                    display_id: None,
+                    scale: 1.0,
+                },
+                Transform::default(),
+                ObjectStore(
+                    ObjectFields::from_pairs(&[
+                        (FIELD_UNIT_HEALTH, 100),
+                        (FIELD_UNIT_MAXHEALTH, 100),
+                        (benilla_protocol::field::FIELD_UNIT_NPC_FLAGS, 0x2),
+                    ])
+                    .into_created(ObjectType::Unit),
+                ),
+            ))
+            .id();
+        world.resource_mut::<GuidIndex>().0.insert(GIVER, giver);
+        crate::ui_merchant::open_merchant(world, VENDOR, Vec::new());
+        world.insert_non_send_resource(benilla_ui::script::UiScript::new().expect("a VM"));
+        crate::script_calls::with_hosted_vm(world, |s| {
+            s.expect("a VM").run(
+                r#"local f = CreateFrame("Frame")
+                f:RegisterEvent("PLAYER_TARGET_CHANGED")
+                f:RegisterEvent("MERCHANT_CLOSED")
+                f:SetScript("OnEvent", function()
+                    if event == "PLAYER_TARGET_CHANGED" then RandomRoll(1, 1) else RandomRoll(2, 2) end
+                end)"#,
+            )
+        })
+        .expect("the listener is in");
+        c.sent();
+        c.world()
+            .get_mut::<ObjectStore>(me)
+            .unwrap()
+            .0
+            .merge(ObjectFields::from_pairs(&[(FIELD_UNIT_HEALTH, 0)]));
+        c.dies(me, ME, ObjectType::Player);
+        let sent: Vec<String> = c
+            .sent()
+            .iter()
+            .filter_map(|s| match s {
+                ClientCommand::SetSelection { guid } => Some(format!("SetSelection {guid:#x}")),
+                ClientCommand::RandomRoll { min, .. } => Some(format!("RandomRoll {min}")),
+                ClientCommand::LootRelease { .. } => Some("LootRelease".to_string()),
+                ClientCommand::QuestgiverStatusQuery { npc } if *npc == GIVER => {
+                    Some("QuestgiverStatusQuery".to_string())
+                }
+                ClientCommand::CancelCast { .. } => Some("CancelCast".to_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            sent,
+            [
+                "SetSelection 0x0",
+                "RandomRoll 1",
+                "RandomRoll 2",
+                "LootRelease",
+                "QuestgiverStatusQuery",
+                "CancelCast"
+            ]
+        );
+    }
+
+    /// `0x5e99b0` arms the release timer at our own death by `PLAYER_FIELD_BYTES` bit 0x8 as it
+    /// finds it (`[+0xe68]+0x1028`, `0x5e9a27`): now plus 360000 ms when set (`0x5e9a30` →
+    /// `0x496250`), else no timer (`0x496280`), which `GetReleaseTimeRemaining` answers with -1
+    /// (`0x4962a0`). The bit moving after the death moves neither.
+    #[test]
+    fn our_own_death_arms_the_release_timer_by_the_bit_it_finds() {
+        /// `PLAYER_FIELD_BYTES`.
+        const BYTES: u16 = 1222;
+        for armed in [true, false] {
+            let mut c = client();
+            let me = c.me;
+            let world = c.world();
+            world.resource_mut::<crate::net::NetStatus>().connected = true;
+            world.insert_non_send_resource(benilla_ui::script::UiScript::new().expect("a VM"));
+            let bit = |set: bool| u32::from(set) * 0x8;
+            world
+                .get_mut::<ObjectStore>(me)
+                .unwrap()
+                .0
+                .merge(ObjectFields::from_pairs(&[
+                    (FIELD_UNIT_HEALTH, 0),
+                    (BYTES, bit(armed)),
+                ]));
+            c.dies(me, ME, ObjectType::Player);
+            let world = c.world();
+            world
+                .get_mut::<ObjectStore>(me)
+                .unwrap()
+                .0
+                .merge(ObjectFields::from_pairs(&[(BYTES, bit(!armed))]));
+            crate::death::run_feed_death_once(world);
+            let left: f64 =
+                crate::script_calls::eval_in_vm(world, "return GetReleaseTimeRemaining()");
+            if armed {
+                assert!(left > 359.0, "armed: {left}");
+            } else {
+                assert_eq!(left, -1.0, "no timer");
+            }
+        }
+    }
+
     /// `0x6058b3`-`0x6058e0`: a spell in flight (`0x6e3d30`) whose record target (`0x6e3d50`,
     /// `0xceac60`) is the dying unit is cancelled with `0x6e4940(1, 1, 0x65)`: `CMSG_CANCEL_CAST`,
     /// the pop, and `SPELLCAST_FAILED` for the player's record. Another unit's death leaves it,
