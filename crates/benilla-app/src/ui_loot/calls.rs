@@ -45,6 +45,9 @@ pub(super) enum Then {
     /// The sweep after its `LOOT_BIND_CONFIRM` for `row` (`0x4c21dc` on): the stash, the rows
     /// after it, and its end, with the sweep's flag.
     SweepRest { row: u32, flag: bool },
+    /// The sweep's rows and end after its money line's `CHAT_MSG_MONEY` (`0x4c2170` →
+    /// `AddChatLine 0x49a870`, then `0x4c2180`), with the sweep's flag.
+    SweepRows { flag: bool },
     /// The coin click after its `LOOT_SLOT_CLEARED` (`0x4c286a`-`0x4c287c`): the close with
     /// release when nothing is left.
     CloseIfEmpty,
@@ -326,7 +329,8 @@ impl LootSteps<'_, '_> {
     /// cell, -1 included (`0x4c1ff4`): the coin request, sent while the loot target is held
     /// (`0x4c1ffc` → `0x5ea8c6`), and once a session for money above 0 (`0x4c2008`, `0x4c2015`)
     /// the money line, which a party (`0x4c2030`) or a raid (`0x4c203d`) skips, added in place
-    /// (`0x4c2170` → `AddChatLine 0x49a870`). Its early coin (`0x4c201b`-`0x4c2020`) is not played
+    /// (`0x4c2170` → `AddChatLine 0x49a870`), whose listeners run before the rows
+    /// ([`Then::SweepRows`]). Its early coin (`0x4c201b`-`0x4c2020`) is not played
     /// (`crate::sound`'s money module). Then the rows.
     pub(super) fn sweep(&mut self, script: &mut UiScript, flag: bool) {
         if self.loot.records_pending(&self.items) {
@@ -349,6 +353,8 @@ impl LootSteps<'_, '_> {
                     money_line(script, window.gold),
                 );
                 self.chat.show_now(script, &line);
+                self.loot.then.push(Then::SweepRows { flag });
+                return;
             }
         }
         self.sweep_rows(script, 1, false, flag);
@@ -406,6 +412,7 @@ impl LootSteps<'_, '_> {
                 self.loot.pending_bind_confirm = Some(row); // `0x4c21dc`
                 self.sweep_rows(script, row + 1, true, flag);
             }
+            Then::SweepRows { flag } => self.sweep_rows(script, 1, false, flag),
             Then::CloseIfEmpty => {
                 if !self.loot.has_contents(&self.objects) {
                     self.end_window(script, false);
