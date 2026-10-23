@@ -38,6 +38,7 @@ pub(crate) use reputations::Reputations;
 pub(crate) use apply::apply_net_updates;
 pub(crate) use apply::enter_world_on_self_create;
 use apply::tag_self_player;
+pub(crate) use apply::HeldPackets;
 #[cfg(test)]
 pub(crate) use game_time::GameTime;
 pub(crate) use game_time::{clock_tick, ServerTime};
@@ -106,6 +107,7 @@ impl Plugin for NetPlugin {
             .init_resource::<crate::go_templates::GameObjectTemplates>()
             .init_resource::<crate::items::Items>()
             .init_resource::<crate::world_state::WorldStates>()
+            .init_resource::<HeldPackets>()
             .add_message::<TeleportMessage>()
             .add_message::<FieldChanged>()
             .add_message::<AuraFieldsChanged>()

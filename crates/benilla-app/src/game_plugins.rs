@@ -1887,7 +1887,7 @@ pub(crate) mod schedule_tests {
         ("death/mod.rs", "feed_death", Because::MemoLatched,
          "`feed.vm: VmMemo<DeathAnnounced>`: a fresh memo makes the first snapshot an edge and re-announces a held offer, confirm and corpse range"),
         ("death/mod.rs", "signal_death", Because::MemoLatched,
-         "a net handler's leg whose memo is `feed.vm`, a `VmMemo<DeathAnnounced>`: a death signalled before the interface is up marks only that VM's memo, and the interface's fresh VM reads `None`, so `feed_death` signals `PLAYER_DEAD` at its first sight of the body dead"),
+         "a leg of the deaths lane, whose drain runs only with the interface up (`ingame_ui_up`), and whose memo is `feed.vm`, a `VmMemo<DeathAnnounced>`: a fresh VM reads `None`, so `feed_death` signals `PLAYER_DEAD` at its first sight of the body dead"),
         ("net/objects/update.rs", "on_update_end", Because::Deliberate,
          "a net handler whose take is the packet's own pass, the blocks its write pass recorded, documented at the line: it publishes nothing to the VM, whose `UNKNOWNOBJECT` text it reads only to name a party member's pet; its notices go to the gated field-notice firing"),
         ("screenshot.rs", "ask_for_captures", Because::FilledByVm,

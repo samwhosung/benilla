@@ -55,6 +55,8 @@ pub(crate) use cursor_mode::{
 /// `GO_FLAG_LOCKED`, the bit the lock chain and the GameObject tooltip's "Locked" line read.
 pub(crate) use lock::GO_FLAG_LOCKED;
 // This frame's combat-flash verdict, for the ring's material and the nameplate colour gate.
+#[cfg(test)]
+pub(crate) use died::Deaths;
 pub(crate) use flash::CombatFlash;
 // The discount `0x612b80` the repair cost and the taxi fare take off their DBC prices.
 pub(crate) use price_discount::vendor_price_discount;

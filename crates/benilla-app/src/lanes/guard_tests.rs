@@ -610,6 +610,9 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::Reputations",
     "::SelfGuid",
     "::OwnControlLost",
+    // The update handler's field edges, which the packet's end reads to queue its deaths on the
+    // deaths lane.
+    "Messages<benilla_app::net::FieldChanged>",
     "::Player",
     "::player::state::StandPending",
     "::BarUnitOutdoors",
@@ -671,7 +674,7 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-fn lane_types() -> [TypeId; 12] {
+fn lane_types() -> [TypeId; 13] {
     [
         TypeId::of::<crate::ui_items::feed::BagView>(),
         // The views lane: what each packet changed in the stores.
@@ -689,12 +692,14 @@ fn lane_types() -> [TypeId; 12] {
         TypeId::of::<crate::ui_party::PartyLane>(),
         // The list rebuilds a learn, an unlearn or a pet's spells owe, stamped at their packets.
         TypeId::of::<crate::ui_tradeskill::ListRebuilds>(),
+        // The deaths lane: each packet's deaths, stamped at its end.
+        TypeId::of::<crate::target::Deaths>(),
     ]
 }
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 12] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 13] {
     [
         ("bag view", TypeId::of::<crate::ui_items::feed::BagView>()),
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
@@ -717,6 +722,7 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 12] {
             "list rebuilds",
             TypeId::of::<crate::ui_tradeskill::ListRebuilds>(),
         ),
+        ("deaths", TypeId::of::<crate::target::Deaths>()),
     ]
 }
 
@@ -872,6 +878,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "bag view",
             "cast reports",
             "chat",
+            "deaths",
             "equip errors",
             "field notices",
             "item watchers",

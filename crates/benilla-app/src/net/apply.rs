@@ -3,6 +3,8 @@
 //! streamed entity, and [`enter_world_on_self_create`] runs what its create starts. Nothing is
 //! applied here: every packet's handler lives with its subsystem.
 
+use std::collections::VecDeque;
+
 use benilla_protocol::SessionEvent;
 use bevy::prelude::*;
 
@@ -17,12 +19,45 @@ mod world_enter_tests;
 
 // ── The per-frame bridge systems ─────────────────────────────────────────────────────────────────
 
+/// The packets a frame's dispatch left for the next ([`HeldPackets::hold`]).
+#[derive(Resource, Default)]
+pub(crate) struct HeldPackets {
+    rest: VecDeque<SessionEvent>,
+    hold: bool,
+}
+
+impl HeldPackets {
+    /// End this frame's dispatch after the event running now: a unit's death, whose legs run on
+    /// the deaths lane after the frame's feeds (`crate::target`'s `died`), so they send ahead of
+    /// the next packets' handlers, as in packet order.
+    ///
+    /// Deviation: the packets after a death wait a frame, where the reference's poll runs every
+    /// queued packet (`0x5384d0`) with the death inside its own (`0x6047a3`).
+    pub(crate) fn hold(&mut self) {
+        self.hold = true;
+    }
+}
+
 /// Runs this frame's events through the handler table ([`super::handlers`]) in wire order, each
 /// handler's commands applied before the next, before anything else in
-/// [`benilla_world::schedule::WorldStage::Net`] runs.
+/// [`benilla_world::schedule::WorldStage::Net`] runs: those the last frame held first, then the
+/// channel's, up to a hold ([`HeldPackets::hold`]).
 pub(crate) fn apply_net_updates(world: &mut World) {
-    let events: Vec<SessionEvent> = world.resource::<NetEvents>().0.try_iter().collect();
-    super::handlers::dispatch(world, events);
+    let mut events = world
+        .get_resource_mut::<HeldPackets>()
+        .map(|mut held| std::mem::take(&mut held.rest))
+        .unwrap_or_default();
+    events.extend(world.resource::<NetEvents>().0.try_iter());
+    while let Some(ev) = events.pop_front() {
+        super::handlers::dispatch(world, vec![ev]);
+        let Some(mut held) = world.get_resource_mut::<HeldPackets>() else {
+            continue;
+        };
+        if std::mem::take(&mut held.hold) {
+            held.rest = events;
+            return;
+        }
+    }
 }
 
 /// Tags our own streamed entity with [`SelfPlayer`] by matching [`Guid`] against [`SelfGuid`].
