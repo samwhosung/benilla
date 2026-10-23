@@ -141,10 +141,12 @@ struct Signalled {
 
 /// What an engine writer's `SetSelection` outside any call (a world click, a death's or a
 /// despawn's deselect) leaves for its signals ([`ScriptCallHost::engine_select`]): the selection
-/// and the pet's attack latch it found, and what its commit owes after its signals.
+/// and the pet's attack latch it found, the clock as it began, so the cast reports its teardown
+/// made are its own, and what its commit owes after its signals.
 pub(crate) struct EngineSelect {
     pub(crate) before: Option<u64>,
     pub(crate) latched: bool,
+    pub(crate) mark: crate::lanes::Mark,
     pub(crate) owed: crate::target::Owed,
 }
 
@@ -160,7 +162,7 @@ impl ScriptCallHost<'_, '_> {
             let mut at = Signalled {
                 selected: select.before,
                 latched: select.latched,
-                mark: self.appliers.p2().p2().mark(),
+                mark: self.appliers.p2().p2().mark_at(select.mark),
             };
             self.settle_selection(script, &mut at, select.owed.into());
             self.commit_views(script);
@@ -187,11 +189,20 @@ impl ScriptCallHost<'_, '_> {
     /// signalled behind its signals, as its tail would, and all of it runs here, in place
     /// ([`UiScript::signal_point`]).
     fn at_point(&mut self, script: &mut UiScript, mark: &mut crate::ui_cast::ReportMark) {
+        self.signal_reports(script, mark);
+        self.commit_views(script);
+        script.signal_point(self);
+    }
+
+    /// The reports the call made since `mark` signalled now, ahead of whatever it signals next:
+    /// a selection's teardown runs StopAttack (`0x493a08`), whose next-swing cancel
+    /// (`0x5ecb63` → `0x6e6f30`) reports there, ahead of the teardown's `PET_BAR_UPDATE`
+    /// (`0x493a18`) and the change's `PLAYER_TARGET_CHANGED`; TryCast's cancel reports ahead of
+    /// its pick (`0x6e4d71`, `0x6e4efb`).
+    fn signal_reports(&mut self, script: &mut UiScript, mark: &mut crate::ui_cast::ReportMark) {
         let ready = self.appliers.p2().p2().ready_since(script, *mark);
         crate::ui_cast::fire(script, ready);
         *mark = self.appliers.p2().p2().mark();
-        self.commit_views(script);
-        script.signal_point(self);
     }
 
     /// What `SetSelection` (`0x493540`) signals for a selection this call moved since `at` last
@@ -201,11 +212,12 @@ impl ScriptCallHost<'_, '_> {
     /// listeners and the script's next line. The unit feed takes the change as heard. Whether
     /// it signalled.
     fn signal_selection(&mut self, script: &mut UiScript, at: &mut Signalled) -> bool {
-        let appliers = &mut self.appliers;
-        let selected = appliers.p0().selected();
+        let selected = self.appliers.p0().selected();
         if selected == at.selected {
             return false;
         }
+        self.signal_reports(script, &mut at.mark);
+        let appliers = &mut self.appliers;
         script.seat_selection(appliers.p0().seated());
         if at.latched && !appliers.p6().p1().attack_latched() {
             script.lower_pet_attack();
@@ -235,8 +247,9 @@ impl ScriptCallHost<'_, '_> {
     ) {
         loop {
             if let Some(send) = owed.take_send() {
-                // `PetStopAttack` lowered the latch and signals with the selection zeroed
-                // (`0x4bd6ae`, `0x4939d3`).
+                // The teardown's StopAttack reported first (`0x493a08`); `PetStopAttack` lowered
+                // the latch and signals with the selection zeroed (`0x4bd6ae`, `0x4939d3`).
+                self.signal_reports(script, &mut at.mark);
                 script.lower_pet_attack();
                 script.fire_event("PET_BAR_UPDATE", vec![]);
                 at.latched = false;

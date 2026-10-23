@@ -428,6 +428,12 @@ impl CallReports<'_, '_> {
         ReportMark(self.ui_errors.len(), crate::lanes::mark())
     }
 
+    /// A mark at the clock's `at`, for an engine writer that marked where its step began: the
+    /// cast reports it made since then are its own, and it raises no refusal keys.
+    pub(crate) fn mark_at(&self, at: crate::lanes::Mark) -> ReportMark {
+        ReportMark(self.ui_errors.len(), at)
+    }
+
     /// The reports queued since `mark`, taken off their queues and readied.
     pub(crate) fn ready_since(&mut self, script: &UiScript, mark: ReportMark) -> Vec<Ready> {
         let ReportMark(errors, reports) = mark;

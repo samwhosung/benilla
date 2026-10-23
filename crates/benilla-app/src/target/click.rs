@@ -192,15 +192,17 @@ pub(super) struct ClickSelect<'w, 's> {
     relations: super::RelationWorld<'w, 's>,
 }
 
-/// An engine writer's selection about to commit, as it stands: the guid and the pet's attack
-/// latch, for the signals of what the commit owes ([`crate::script_calls::EngineSelect`]).
-pub(super) struct Standing(Option<u64>, bool);
+/// An engine writer's selection about to commit, as it stands: the guid, the pet's attack latch
+/// and the clock, for the signals of what the commit owes, and the reports its teardown makes
+/// ([`crate::script_calls::EngineSelect`]).
+pub(super) struct Standing(Option<u64>, bool, crate::lanes::Mark);
 
 impl Standing {
     pub(super) fn of(selection: &Selection, seam: &crate::creature_anim::AttackSeam) -> Self {
         Self(
             selection.guid,
             seam.pet_latch.as_deref().is_some_and(|l| l.up()),
+            crate::lanes::mark(),
         )
     }
 
@@ -209,6 +211,7 @@ impl Standing {
         crate::script_calls::EngineSelect {
             before: self.0,
             latched: self.1,
+            mark: self.2,
             owed,
         }
     }
