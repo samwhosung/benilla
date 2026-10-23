@@ -1011,3 +1011,94 @@ mod fullscreen_scale_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod receiver_tests {
+    use crate::script::UiScript;
+    use mlua::{MultiValue, Table, Value};
+
+    /// The registry table that holds a reference method table's methods, by its address.
+    fn registry_key(table: &str) -> &'static str {
+        use crate::script as s;
+        match table {
+            "0x878ec0" => s::REG_FRAME_METHODS,
+            "0x87c9b8" => s::REG_REGION_METHODS,
+            "0x87c128" => s::REG_TEXTURE_METHODS,
+            "0x87c1d8" => s::REG_FONTSTRING_METHODS,
+            "0x87c7c8" => s::font::REG_FONT_METHODS,
+            "0x879d00" => s::button::REG_BUTTON_METHODS,
+            "0x87bf74" => s::button::REG_CHECKBUTTON_METHODS,
+            "0x847ce4" => s::loot::REG_LOOTBUTTON_METHODS,
+            "0x87bb68" => s::editbox::REG_EDITBOX_METHODS,
+            "0x87b010" => s::statusbar::REG_STATUSBAR_METHODS,
+            "0x87b260" => s::slider::REG_SLIDER_METHODS,
+            "0x87b3c0" => s::scrollframe::REG_SCROLLFRAME_METHODS,
+            "0x87b5c0" => s::messageframe::REG_SCROLLINGMESSAGEFRAME_METHODS,
+            "0x87b960" => s::messageframe::REG_MESSAGEFRAME_METHODS,
+            "0x87ba80" => s::simplehtml::REG_SIMPLEHTML_METHODS,
+            "0x87abb0" => s::colorselect::REG_COLORSELECT_METHODS,
+            "0x87ab4c" => s::movieframe::REG_MOVIEFRAME_METHODS,
+            "0x878948" => s::modelframe::REG_MODEL_METHODS,
+            "0x84f1fc" => s::modelframe::REG_PLAYERMODEL_METHODS,
+            "0x84f190" => s::dressup::REG_DRESSUPMODEL_METHODS,
+            "0x84ee40" => s::tabard::REG_TABARDMODEL_METHODS,
+            "0x854198" => s::tooltip::REG_TOOLTIP_METHODS,
+            "0x84c538" => s::minimap::REG_MINIMAP_METHODS,
+            other => panic!("no registry table for the reference's method table {other}"),
+        }
+    }
+
+    /// The eight methods whose reference opens with no member prologue, by table and name: the
+    /// Minimap's four getters and setter (`0x4eebe0`, `0x4eec20`, `0x4eec60`, `0x4eefd0`),
+    /// `CanSaveTabardNow` (`0x503910`), and three that read an argument first, `PingLocation`
+    /// (`0x4eeca0`), `SetBuybackItem` (`0x536300`) and `SetScrollFromBottom` (`0x793070`).
+    const NO_PROLOGUE: [(&str, &str); 8] = [
+        ("0x84c538", "GetZoomLevels"),
+        ("0x84c538", "GetZoom"),
+        ("0x84c538", "SetZoom"),
+        ("0x84c538", "GetPingPosition"),
+        ("0x84c538", "PingLocation"),
+        ("0x84ee40", "CanSaveTabardNow"),
+        ("0x854198", "SetBuybackItem"),
+        ("0x87b5c0", "SetScrollFromBottom"),
+    ];
+
+    /// Every widget method of `reference/bindings.tsv` is in its table and, called with no
+    /// receiver, raises the member prologue's first line (`0x847ef8`) before anything else; the
+    /// eight without a prologue raise something else or nothing. A method that is missing, or one
+    /// the receiver check passed over, fails by name.
+    #[test]
+    fn every_reference_widget_method_opens_with_the_prologue() {
+        let s = UiScript::new().unwrap();
+        let lua = s.lua();
+        let tsv = concat!(env!("CARGO_MANIFEST_DIR"), "/../../reference/bindings.tsv");
+        let text = std::fs::read_to_string(tsv).expect("reference/bindings.tsv");
+        let mut failures = Vec::new();
+        let mut checked = 0;
+        for line in text.lines().skip(1) {
+            let f: Vec<&str> = line.split('\t').collect();
+            if f.get(4) != Some(&"widget") {
+                continue;
+            }
+            let (name, table) = (f[0], f[3]);
+            let methods: Table = lua.named_registry_value(registry_key(table)).unwrap();
+            let Ok(Value::Function(method)) = methods.raw_get::<Value>(name) else {
+                failures.push(format!("{table} {name}: not in its table"));
+                continue;
+            };
+            checked += 1;
+            let raised = method
+                .call::<MultiValue>(())
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            let prologue = raised.contains(super::ERR_NON_TABLE);
+            let excepted = NO_PROLOGUE.contains(&(table, name));
+            if prologue == excepted {
+                failures.push(format!("{table} {name}: raised {raised:?}"));
+            }
+        }
+        assert!(checked > 450, "only {checked} methods checked");
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+}
