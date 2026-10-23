@@ -81,12 +81,14 @@ pub(crate) struct PlayerActions {
     /// The known spells (`SMSG_INITIAL_SPELLS` and the learns since), the reference's known-spell
     /// bits `0xb710fc` (`0x4b2603`): a set, which keeps no learn order.
     pub spells: BTreeSet<u32>,
-    /// The known spells in learn order: the login list in wire order (`0x5dea8b`-`0x5deab9`
-    /// replays it through `LearnSpell 0x5e9c20`), each learn appended, each unlearn taken out with
-    /// the rest closing up. The profession lines' lists (`CGPlayer_C + 0x1c74`, appended at
-    /// `0x5e9d72`, closed up at `0x5ea123`) and the craft types' (`+0x1cd0`, `0x5e9e0f`) hold
-    /// their spells in this order.
-    pub learned: Vec<u32>,
+    /// The order the profession lines' lists hold their spells (`CGPlayer_C + 0x1c74`): the login
+    /// list in wire order (`0x5dea8b`-`0x5deab9` replays it through `LearnSpell 0x5e9c20`), each
+    /// learn appended with no duplicate check (`0x5e9d72`), an unlearn taking out the last copy
+    /// with the rest closing up (`0x5ea0fe`, `0x5ea123`).
+    pub profession_order: Vec<u32>,
+    /// The order the craft types' lists hold theirs (`+0x1cd0`): a learn appends a spell the list
+    /// lacks (`0x5e9db3`, `0x5e9e0f`), an unlearn takes out its first copy (`0x5ea1b8`).
+    pub craft_order: Vec<u32>,
     /// `[0xb700b0]`: the known spells whose `Effect[0]` is `SPELL_EFFECT_OPEN_LOCK`, in learn
     /// order. The login list enters in wire order (`0x5dea8b`-`0x5deab9`), each learn appends at
     /// the tail with no duplicate check (`0x4b2665`-`0x4b2689`), and an unlearn removes the last

@@ -1496,3 +1496,55 @@ fn a_rebuild_with_a_product_in_flight_signals_nothing() {
     s.rebuild_trade_skill(&mut |_| {});
     assert_eq!(s.eval::<i64>("return N").unwrap(), 1);
 }
+
+/// A rebuild with flag 1 resets the subclass and fold masks first (`0x4fcae2`, `0x4fcae8`) and
+/// restores the saved flags only past the pending exit (`0x4fcf3a`), so with a product in flight
+/// the folds and the filters are lost.
+#[test]
+fn a_pending_rebuild_with_flag_1_loses_the_folds_and_filters() {
+    let mut s = UiScript::new().unwrap();
+    s.set_trade_skill(Some(two_recipe_state()));
+    s.run("CollapseTradeSkillSubClass(1) SetTradeSkillSubClassFilter(1, 0)")
+        .unwrap();
+    assert!(!s.model_ref().trade_skill_collapsed.is_empty());
+    let mut st = two_recipe_state();
+    st.recipes[0].icon_pending = Some(st.recipes[0].product_item);
+    s.set_trade_skill(Some(st));
+    assert!(!s.rebuild_trade_skill_with(true, &mut |_| {}));
+    assert!(s.model_ref().trade_skill_collapsed.is_empty());
+    assert!(s.model_ref().trade_skill_subclass_hidden.is_empty());
+}
+
+/// The cancel on leaving the world zeroes the pending count (`0x4fc8cb`), so the next landed
+/// record rebuilds at once (`0x4fc8f1` → `0x4fc8fb`); the world-enter init leaves it
+/// (`0x4fc750`).
+#[test]
+fn leaving_the_world_zeroes_the_pending_count_and_entering_it_does_not() {
+    let pending_state = || {
+        let mut st = two_recipe_state();
+        for r in &mut st.recipes {
+            r.icon_pending = Some(r.product_item);
+        }
+        st
+    };
+    let mut s = UiScript::new().unwrap();
+    s.set_trade_skill(Some(pending_state()));
+    assert!(!s.trade_skill_open_build());
+    s.reset_crafts_on_world_enter();
+    assert!(!s.trade_skill_record_landed(), "two pending, one landed");
+    s.set_trade_skill(Some(pending_state()));
+    assert!(!s.trade_skill_open_build());
+    s.trade_skill_cancel_waits();
+    assert!(s.trade_skill_record_landed());
+}
+
+/// `GetTradeSkillItemStats` waits only on a record the item cache lacks (`0x4fdf77`): a product
+/// the app holds asks for none, though the getter's own view of it is not filled yet.
+#[test]
+fn the_item_stats_getter_waits_only_on_a_record_in_flight() {
+    let mut s = UiScript::new().unwrap();
+    s.set_trade_skill(Some(two_recipe_state()));
+    s.run("GetTradeSkillItemStats(2) GetTradeSkillItemStats(3)")
+        .unwrap();
+    assert!(s.take_trade_skill_item_waits().is_empty());
+}

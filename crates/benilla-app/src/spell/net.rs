@@ -630,10 +630,10 @@ fn spell_book(
         list_opener(spell_id, spells, actions);
     }
     actions.spells.clear();
-    actions.learned.clear();
+    actions.profession_order.clear();
     for spell_id in spell_ids {
         if actions.spells.insert(spell_id) {
-            actions.learned.push(spell_id);
+            actions.profession_order.push(spell_id);
         }
     }
     actions.dirty = true;
@@ -669,7 +669,7 @@ fn learned_spell(
 ) {
     debug!("net: learned spell {spell_id}");
     if actions.spells.insert(spell_id) {
-        actions.learned.push(spell_id);
+        actions.profession_order.push(spell_id);
         actions.dirty = true;
     }
     list_opener(spell_id, spells, actions);
@@ -739,7 +739,7 @@ fn removed_spell(
 ) {
     debug!("net: removed spell {spell_id}");
     if actions.spells.remove(&spell_id) {
-        actions.learned.retain(|&id| id != spell_id);
+        actions.profession_order.retain(|&id| id != spell_id);
         actions.dirty = true;
     }
     // `UnlearnSpell 0x5e9fe0` does nothing for a spell with no record (`0x5ea02a`); otherwise it
@@ -780,10 +780,10 @@ fn superceded_spell(
     // The player's unlearn of the old rank, then its learn of the new one at the tail
     // (`0x5e6392`, `0x5e63a4`).
     if actions.spells.remove(&old_spell_id) {
-        actions.learned.retain(|&id| id != old_spell_id);
+        actions.profession_order.retain(|&id| id != old_spell_id);
     }
     if actions.spells.insert(new_spell_id) {
-        actions.learned.push(new_spell_id);
+        actions.profession_order.push(new_spell_id);
     }
     actions.superseded.push((old_spell_id, new_spell_id));
     actions.dirty = true;

@@ -1,5 +1,5 @@
-//! The known spells in learn order ([`PlayerActions::learned`]): the order the profession lines'
-//! and the craft types' lists keep (`0x5e9d72`, `0x5e9e0f`), which the lists' builds walk.
+//! The orders the profession lines' and the craft types' lists keep
+//! ([`PlayerActions::profession_order`], [`PlayerActions::craft_order`]), which their builds walk.
 
 use super::*;
 
@@ -17,6 +17,41 @@ fn spells() -> Spells {
             .collect(),
     );
     spells
+}
+
+/// The profession lists' order takes every learn, a known spell's again included, as
+/// `LearnSpell 0x5e9c20` checks for none (`0x5e9d72`; the replay `0x5deaac`, `0x5e61c0`,
+/// `0x5e63a4`), and an unlearn takes out the last copy (`0x5ea0fe`); the craft lists' order adds
+/// a spell it lacks (`0x5e9db3`) and an unlearn takes out the first (`0x5ea1b8`).
+#[test]
+fn the_list_orders_keep_their_learn_order() {
+    let spells = spells();
+    let mut actions = PlayerActions::default();
+    spell_book(
+        vec![A, B, A],
+        vec![],
+        &mut actions,
+        &mut Cooldowns::default(),
+        (
+            Some(&spells),
+            &crate::items::Items::default(),
+            &crate::spell::SpellModifiers::default(),
+            crate::spell::CategoryPad::for_list(false, None),
+        ),
+    );
+    assert_eq!(actions.profession_order, [A, B, A]);
+    assert_eq!(actions.craft_order, [A, B]);
+    let errors = UiErrorKeys::default();
+    let mut tab = LearnedInTab::default();
+    learned_spell(B, &mut actions, Some(&spells), &errors, &mut tab);
+    assert_eq!(actions.profession_order, [A, B, A, B]);
+    assert_eq!(actions.craft_order, [A, B]);
+    removed_spell(A, &mut actions, Some(&spells), &errors);
+    assert_eq!(actions.profession_order, [A, B, B]);
+    assert_eq!(actions.craft_order, [B]);
+    superceded_spell(B, A, &mut actions, Some(&spells), &errors, &mut tab);
+    assert_eq!(actions.profession_order, [A, B, A]);
+    assert_eq!(actions.craft_order, [A]);
 }
 
 /// The login list keeps its wire order (`0x5dea8b`-`0x5deab9`); a learn appends (`0x5e9d72`); an
@@ -38,13 +73,13 @@ fn the_known_spells_keep_their_learn_order() {
             crate::spell::CategoryPad::for_list(false, None),
         ),
     );
-    assert_eq!(actions.learned, [A, B, C]);
+    assert_eq!(actions.profession_order, [A, B, C]);
     let errors = UiErrorKeys::default();
     let mut tab = LearnedInTab::default();
     learned_spell(D, &mut actions, Some(&spells), &errors, &mut tab);
-    assert_eq!(actions.learned, [A, B, C, D]);
+    assert_eq!(actions.profession_order, [A, B, C, D]);
     removed_spell(B, &mut actions, Some(&spells), &errors);
-    assert_eq!(actions.learned, [A, C, D]);
+    assert_eq!(actions.profession_order, [A, C, D]);
     superceded_spell(A, B, &mut actions, Some(&spells), &errors, &mut tab);
-    assert_eq!(actions.learned, [C, D, B]);
+    assert_eq!(actions.profession_order, [C, D, B]);
 }

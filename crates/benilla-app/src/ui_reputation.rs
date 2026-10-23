@@ -829,6 +829,33 @@ mod tests {
             "no template"
         );
     }
+
+    /// The messages' list ops wait for a snapshot to apply to: with no faction catalog yet the
+    /// feed keeps them, and takes them once it pushes.
+    #[test]
+    fn the_list_ops_wait_for_the_snapshot_they_apply_to() {
+        use benilla_formats::FactionCatalog;
+        use benilla_ui::script::ReputationListOp;
+        let mut app = App::new();
+        app.init_resource::<Reputations>()
+            .add_systems(Update, feed_reputation);
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        app.world_mut()
+            .spawn((SelfPlayer, ObjectStore(Default::default())));
+        let queued = |app: &App| app.world().resource::<Reputations>().list_ops.len();
+        app.world_mut()
+            .resource_mut::<Reputations>()
+            .list_ops
+            .push(ReputationListOp::Visible(3));
+        app.update();
+        assert_eq!(queued(&app), 1, "no catalog: nothing to apply them to");
+        app.insert_resource(Factions::from_catalog(FactionCatalog::from_rows(
+            Default::default(),
+            Default::default(),
+        )));
+        app.update();
+        assert_eq!(queued(&app), 0);
+    }
 }
 
 #[cfg(test)]

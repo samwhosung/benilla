@@ -395,7 +395,7 @@ fn feed_craft(
             // 0x10*type`), in learn order (`0x5e9e0f`), and never consults `SkillLineAbility` for
             // membership.
             let listed: Vec<u32> = actions
-                .learned
+                .profession_order
                 .iter()
                 .copied()
                 .filter(|&s| {
@@ -728,7 +728,8 @@ mod tests {
         let mut app = App::new();
         let mut actions = PlayerActions::default();
         actions.spells.insert(SPELL);
-        actions.learned.push(SPELL);
+        actions.profession_order.push(SPELL);
+        actions.craft_order.push(SPELL);
         let mut items = Items::default();
         items.insert_template(DUST, Some(crate::items::test_template("Strange Dust")));
         items.insert_template(ROD, Some(crate::items::test_template("Runed Rod")));
@@ -925,7 +926,8 @@ mod tests {
         let mut app = App::new();
         let mut actions = PlayerActions::default();
         actions.spells.extend(known.iter().copied());
-        actions.learned.extend(known.iter().copied());
+        actions.profession_order.extend(known.iter().copied());
+        actions.craft_order.extend(known.iter().copied());
         app.init_resource::<CraftOpen>()
             .insert_resource(actions)
             .init_resource::<crate::spell::SpellModifiers>()
@@ -1394,24 +1396,34 @@ mod tests {
     #[test]
     fn each_packet_and_each_waited_record_signals_one_update() {
         const DUST: u32 = 10_940;
-        let displays = vec![(
-            7418,
-            SpellDisplay {
-                name: "Enchant Bracer - Minor Health".into(),
-                cast_ui: 3,
-                reagents: [
-                    (DUST, 1),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                ],
-                ..Default::default()
-            },
-        )];
+        let displays = vec![
+            (
+                7418,
+                SpellDisplay {
+                    name: "Enchant Bracer - Minor Health".into(),
+                    cast_ui: 3,
+                    reagents: [
+                        (DUST, 1),
+                        (0, 0),
+                        (0, 0),
+                        (0, 0),
+                        (0, 0),
+                        (0, 0),
+                        (0, 0),
+                        (0, 0),
+                    ],
+                    ..Default::default()
+                },
+            ),
+            (
+                7420,
+                SpellDisplay {
+                    name: "Enchant Chest - Minor Health".into(),
+                    cast_ui: 3,
+                    ..Default::default()
+                },
+            ),
+        ];
         let catalog =
             benilla_formats::SkillLineCatalog::from_abilities([(7418, ability(ENCHANTING, 1, 70))]);
         let mut app = craft_feed(displays, &[7418], catalog, 3, &[]);
@@ -1444,6 +1456,12 @@ mod tests {
             ],
         );
         assert_eq!(heard(&mut app), ["CRAFT_UPDATE", "CRAFT_UPDATE"]);
+        // An unlearn the type's list does not hold skips the rebuild (`0x5ea1c9`).
+        crate::net::handlers::dispatch(
+            app.world_mut(),
+            vec![SessionEvent::SpellRemoved { spell_id: 7420 }],
+        );
+        assert!(heard(&mut app).is_empty());
         app.world()
             .non_send_resource::<UiScript>()
             .run("GetCraftReagentInfo(1, 1) GetCraftReagentInfo(1, 1)")

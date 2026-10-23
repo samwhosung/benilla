@@ -263,6 +263,9 @@ impl super::UiScript {
         model.trade_skill_pending == 0
     }
 
+    /// The cancel `0x4fc890` on leaving the world (`0x490ae9` → `0x4fc780`).
+    pub fn trade_skill_cancel_waits(&mut self) {}
+
     /// The records the builds waited on since the last take, one per miss.
     pub fn take_trade_skill_build_waits(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().trade_skill_build_waits)

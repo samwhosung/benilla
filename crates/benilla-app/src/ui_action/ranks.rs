@@ -93,7 +93,8 @@ mod tests {
         app.insert_resource(PlayerActions {
             buttons: buttons.iter().map(|b| (b.slot, *b)).collect(),
             spells: spells.iter().copied().collect(),
-            learned: spells.to_vec(),
+            profession_order: spells.to_vec(),
+            craft_order: spells.to_vec(),
             openers: Vec::new(),
             superseded: Vec::new(),
             unlearned: Vec::new(),

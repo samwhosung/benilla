@@ -598,7 +598,7 @@ fn feed_trade_skill(
             let now = (clock.anchor, clock.ui_now);
             // The line's list in learn order (`0x5e9d72`), which the build walks (`0x4fcbb7`).
             let recipes: Vec<TradeSkillRecipe> = actions
-                .learned
+                .profession_order
                 .iter()
                 .filter(|&&s| {
                     spells
@@ -1158,7 +1158,7 @@ mod tests {
         let mut app = App::new();
         let mut actions = PlayerActions::default();
         actions.spells.insert(SPELL);
-        actions.learned.push(SPELL);
+        actions.profession_order.push(SPELL);
         let mooncloth = || SpellDisplay {
             name: "Mooncloth".into(),
             attributes: SPELL_ATTR_IS_TRADESKILL,
@@ -1236,7 +1236,7 @@ mod tests {
         let mut actions = PlayerActions::default();
         let learned = [300, 100, 200];
         actions.spells.extend(learned);
-        actions.learned.extend(learned);
+        actions.profession_order.extend(learned);
         let recipe = |id: u32| {
             (
                 id,
@@ -1300,7 +1300,7 @@ mod tests {
         let mut app = App::new();
         let mut actions = PlayerActions::default();
         actions.spells.insert(3839);
-        actions.learned.push(3839);
+        actions.profession_order.push(3839);
         let mut effect_item_type = [0; 3];
         effect_item_type[0] = SILK;
         let bolt = SpellDisplay {
@@ -1385,7 +1385,7 @@ mod tests {
         let mut app = App::new();
         let mut actions = PlayerActions::default();
         actions.spells.extend([2963, 3915]);
-        actions.learned.extend([2963, 3915]);
+        actions.profession_order.extend([2963, 3915]);
         let bolt = || SpellDisplay {
             name: "Bolt of Linen Cloth".into(),
             attributes: SPELL_ATTR_IS_TRADESKILL,
@@ -1469,6 +1469,13 @@ mod tests {
             heard(&mut app),
             ["TRADE_SKILL_UPDATE", "TRADE_SKILL_UPDATE"]
         );
+        // An unlearn the line's list does not hold finds nothing (`0x5ea0fe`) and skips the
+        // rebuild (`0x5ea165`).
+        dispatch(
+            &mut app,
+            vec![SessionEvent::SpellRemoved { spell_id: 2964 }],
+        );
+        assert!(heard(&mut app).is_empty());
         app.world()
             .non_send_resource::<UiScript>()
             .run("GetTradeSkillReagentInfo(2, 1) GetTradeSkillReagentInfo(2, 1)")
