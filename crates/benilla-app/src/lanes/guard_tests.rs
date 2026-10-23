@@ -439,6 +439,13 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::motion::remote::RemoteMotion", "net::reputations::Reputations",
         "spell::mods::SpellModifiers", "spell::targeting::SpellTargeting", "ui_party::GroupState",
         "ui_pet::PetBar"]),
+    // The engine's selection writers signal in place (`0x493540`), reading the selection, the
+    // attack and loot state and the stores as the frame left them.
+    ("::target::track::follow_selection_object", &["creature_anim::AttackStopInFlight",
+        "net::GuidIndex", "net::ObjectStore", "net::SelfGuid", "spell::inflight::AutoRepeatActive",
+        "spell::inflight::PendingCast", "spell::inflight::QueuedMeleeSpell",
+        "spell::targeting::SpellTargeting", "target::Selection", "ui_loot::LootLatch",
+        "ui_loot::LootState", "ui_party::GroupState", "ui_pet::PetAttackLatch"]),
     ("::ui_aura::feed_auras", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "net::SelfGuid", "net::reputations::Reputations", "target::Selection",
         "ui_action::PlayerActions", "ui_aura::AuraDurations", "ui_party::GroupState",
