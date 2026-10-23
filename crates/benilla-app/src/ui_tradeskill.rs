@@ -392,10 +392,12 @@ fn resolve_recipe(
 }
 
 /// The leave-world sweep's leg (`0x490ae9` → `0x4fc780`): the pending count zeroed.
-fn cancel_trade_skill_waits(script: Option<NonSendMut<UiScript>>) {
-    if let Some(mut script) = script {
-        script.trade_skill_cancel_waits();
-    }
+fn cancel_trade_skill_waits(mut vm: crate::script_calls::HostedVm) {
+    vm.run(|script| {
+        if let Some(script) = script {
+            script.trade_skill_cancel_waits();
+        }
+    });
 }
 
 /// The packets that rebuild the open profession and craft lists, each at its handler's place on
