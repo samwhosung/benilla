@@ -66,6 +66,8 @@ fn slot(guid: u64, item_id: u32, count: u32) -> ContainerSlot {
         count,
         texture: Some("Interface\\Icons\\INV_Misc_QuestionMark".into()),
         link: Some(format!("|cffffffff|Hitem:{item_id}:0:0:0|h[Thing]|h|r")),
+        // The record cached.
+        quality: Some(1),
         ..Default::default()
     }
 }
@@ -449,6 +451,34 @@ fn the_bind_answers_act_inside_their_calls() {
         "the cancel unlocked the item before the next line"
     );
     assert_eq!(h.sent(), Vec::<String>::new(), "a cancel sends nothing");
+}
+
+/// The bind question fires inside the swap's call (`0x5e0ee4`). The doll click's `SwapItem`
+/// leaves past its clear (`0x5e0eec` → `0x5e0f63`), so the event's handler reads the helm still
+/// held and no `CURSOR_UPDATE` follows; `PickupContainerItem`'s own `ClearCursor(0,1)` follows its
+/// swap (`0x4f9eb8`), so a worn helm dropped on the bind-on-equip helm hears `CURSOR_UPDATE` after
+/// the question, which the stock dialog takes as its cancel (`UIParent.lua:357-361`).
+#[test]
+fn the_bind_question_fires_inside_the_swap_ahead_of_the_bag_clicks_clear() {
+    let listen = r#"SEEN = {} local f = CreateFrame("Frame")
+        f:RegisterEvent("EQUIP_BIND_CONFIRM") f:RegisterEvent("CURSOR_UPDATE")
+        f:SetScript("OnEvent", function()
+            table.insert(SEEN, event .. (CursorHasItem() and 1 or 0)) end)"#;
+    let mut h = Bags::new();
+    h.run(listen);
+    let seen: String = h.eval(
+        "PickupContainerItem(0, 7) SEEN = {} PickupInventoryItem(1) return table.concat(SEEN, ' ')",
+    );
+    assert_eq!(seen, "EQUIP_BIND_CONFIRM1", "the doll click");
+    assert_eq!(h.sent(), Vec::<String>::new(), "nothing sent");
+
+    let mut h = Bags::new();
+    h.run(listen);
+    let seen: String = h.eval(
+        "PickupInventoryItem(1) SEEN = {} PickupContainerItem(0, 7) return table.concat(SEEN, ' ')",
+    );
+    assert_eq!(seen, "EQUIP_BIND_CONFIRM1 CURSOR_UPDATE0", "the bag click");
+    assert_eq!(h.sent(), Vec::<String>::new(), "nothing sent");
 }
 
 /// `ConfirmBindOnUse` re-issues the parked use inside its call (`0x48d770` → `0x5d92c1`).

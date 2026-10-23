@@ -343,6 +343,21 @@ mod tests {
         assert_eq!(s.take_container_equip_asks(), vec![(0, 1, 0x11)]);
     }
 
+    /// The held item's record is not cached: `AutoEquipCursorItem` asks it with the callback
+    /// `0x5e17a0` and returns (`0x5e160c`), nothing sent and the item still held.
+    #[test]
+    fn an_uncached_item_waits_for_its_record_held() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        let mut pending = boe_bag(0, false);
+        pending.slots.get_mut(&1).unwrap().quality = None;
+        s.set_container(0, Some(pending));
+        s.run("PickupContainerItem(0, 1) AutoEquipCursorItem()")
+            .unwrap();
+        assert_eq!(s.cursor_item().map(|i| i.guid), Some(0x11), "still held");
+        assert!(s.take_container_autoequips().is_empty(), "nothing is sent");
+    }
+
     /// The question is the reference's three conjuncts: bonding 2 (no other value, no quality
     /// leg), not already bound, and an item the player can use (`0x5e15d6`-`0x5e1655`).
     #[test]

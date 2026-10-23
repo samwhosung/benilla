@@ -18,6 +18,7 @@ mod drag;
 pub(crate) mod equip;
 pub(crate) mod money;
 pub(super) mod pet;
+pub(crate) mod swap;
 
 pub(crate) use bar::{clear_macro_slots, place_action};
 pub(crate) use drag::{
