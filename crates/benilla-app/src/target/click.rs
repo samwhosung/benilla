@@ -2544,6 +2544,7 @@ mod tests {
         world.insert_resource(NetCommands(tx));
         world.init_resource::<Messages<WorldRightClick>>();
         world.init_resource::<Messages<PlateRightClick>>();
+        world.init_resource::<Messages<crate::sound::NpcGreetingRequest>>();
         world.init_resource::<PressPick>();
         world.init_resource::<Selection>();
         world.init_resource::<crate::spell::SpellTargeting>();
@@ -3689,6 +3690,96 @@ mod tests {
                 .any(|c| matches!(c, ClientCommand::AttackSwing { .. })),
             "the mounted gate skips StartAttack too"
         );
+    }
+
+    /// The greetings the clicks asked for since the last look.
+    fn greeted(world: &mut World) -> Vec<Entity> {
+        world
+            .resource_mut::<Messages<crate::sound::NpcGreetingRequest>>()
+            .drain()
+            .map(|r| r.npc)
+            .collect()
+    }
+
+    /// The mounted return of the attack arm (`0x60c1bc`) falls to the greeter (`0x60c257` →
+    /// `0x60c270`), which plays when both sides are at least neutral.
+    #[test]
+    fn a_mounted_attack_click_greets_the_unit() {
+        const F_MOUNT: u16 = benilla_protocol::field::FIELD_UNIT_MOUNTDISPLAYID;
+        let (mut world, _vendor, _rx) = walking_world(Vec3::new(14.0, 0.0, 0.0), true);
+        let me = world
+            .query_filtered::<Entity, With<SelfPlayer>>()
+            .single(&world)
+            .unwrap();
+        world.entity_mut(me).insert(store(&[
+            (F_HEALTH, 100),
+            (F_MAXHEALTH, 100),
+            (F_MOUNT, 14_337),
+        ]));
+        let wolf = world
+            .spawn((
+                Guid(WOLF),
+                store(&[(F_HEALTH, 100), (F_MAXHEALTH, 100)]),
+                Transform::from_xyz(0.0, 0.0, -2.0),
+            ))
+            .id();
+        *world.resource_mut::<PressPick>() = PressPick {
+            hovered: Hovered {
+                target: Some(wolf),
+                guid: Some(WOLF),
+                distance: 2.0,
+                ..Hovered::default()
+            },
+            attack_fork: cursor_mode::AttackFork(true),
+            ..PressPick::default()
+        };
+        greeted(&mut world);
+        world
+            .resource_mut::<Messages<WorldRightClick>>()
+            .write(WorldRightClick);
+        world.run_system_once(act_on_right_click).unwrap();
+        assert_eq!(greeted(&mut world), vec![wolf]);
+    }
+
+    /// A live unit `CanInteract` refuses (no NPC flags, `0x606845`) and the cursor does not attack
+    /// takes the attack arm, whose `CanAttack` refusal falls to the greeter (`0x60c199` →
+    /// `0x60c257` → `0x60c270`): the greeting, and no service asked.
+    #[test]
+    fn a_click_on_a_unit_with_no_service_greets_it_and_asks_nothing() {
+        let (mut world, _vendor, rx) = walking_world(Vec3::new(14.0, 0.0, 0.0), true);
+        let guard = world
+            .spawn((
+                Guid(WOLF),
+                store(&[(F_HEALTH, 100), (F_MAXHEALTH, 100)]),
+                Transform::from_xyz(0.0, 0.0, -2.0),
+            ))
+            .id();
+        world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(WOLF, guard);
+        *world.resource_mut::<PressPick>() = PressPick {
+            hovered: Hovered {
+                target: Some(guard),
+                guid: Some(WOLF),
+                distance: 2.0,
+                ..Hovered::default()
+            },
+            ..PressPick::default()
+        };
+        greeted(&mut world);
+        let _ = rx.try_iter().count();
+        world
+            .resource_mut::<Messages<WorldRightClick>>()
+            .write(WorldRightClick);
+        world.run_system_once(act_on_right_click).unwrap();
+        assert_eq!(greeted(&mut world), vec![guard]);
+        let sent: Vec<String> = rx
+            .try_iter()
+            .filter(|c| !matches!(c, ClientCommand::SetSelection { .. }))
+            .map(|c| format!("{c:?}"))
+            .collect();
+        assert!(sent.is_empty(), "{sent:?}");
     }
 
     /// The melee row's 80 yd leash (`0x60e652`) refuses with `ERR_AUTOFOLLOW_TOO_FAR` (`0x61110c`);
