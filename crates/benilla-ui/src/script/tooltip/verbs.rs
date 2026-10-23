@@ -4,7 +4,6 @@ use mlua::{Lua, Table, Value, Variadic};
 
 use crate::script::binding_abi::{self, optional_string, string_arg};
 use crate::script::object::frame_handle_of;
-use crate::script::region::region_handle_of;
 use crate::script::Model;
 use crate::widget::{KindState, TooltipAnchor};
 
@@ -206,9 +205,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // pair and raise the line limit by one (`0x529940`), keeping the caller's fonts.
     m.set(
         "AddFontStrings",
-        lua.create_function(|lua, (this, left, right): (Table, Table, Table)| {
-            let lh = region_handle_of(lua, &left)?;
-            let rh = region_handle_of(lua, &right)?;
+        lua.create_function(|lua, (this, left, right): (Table, Value, Value)| {
+            let lh = font_string_arg(lua, &this, &left)?;
+            let rh = font_string_arg(lua, &this, &right)?;
             super::add_font_strings(lua, &this, lh, rh)
         })?,
     )?;
@@ -258,4 +257,38 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
 
     lua.set_named_registry_value(REG_TOOLTIP_METHODS, m)?;
     Ok(())
+}
+
+/// One of `AddFontStrings`' two strings (`0x530cf6`-`0x530d4d`, arguments 2 then 3): a non-table
+/// raises the usage line (`0x85506c`), a table with no object `0x855034`'s, and an object that
+/// fails the FontString test `[0xcf2ccc]` `0x854ff8`'s, each naming the tooltip or `<unnamed>`.
+fn font_string_arg(
+    lua: &Lua,
+    this: &Table,
+    arg: &Value,
+) -> mlua::Result<crate::widget::RegionHandle> {
+    let who = binding_abi::name_of(lua, this);
+    let Value::Table(t) = arg else {
+        return Err(mlua::Error::runtime(format!(
+            "Usage: {who}:AddFontStrings(leftstring, rightstring)"
+        )));
+    };
+    let Ok(id) = crate::script::object::decode_id(t) else {
+        return Err(mlua::Error::runtime(format!(
+            "{who}:AddFontStrings(): Couldn't find 'this' in fontstring"
+        )));
+    };
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    model
+        .id_to_region
+        .get(&id)
+        .copied()
+        .filter(|&rh| {
+            model.arena.region(rh).map(|r| r.kind) == Some(crate::widget::RegionKind::FontString)
+        })
+        .ok_or_else(|| {
+            mlua::Error::runtime(format!(
+                "{who}:AddFontStrings(): Wrong object type, expected fontstring"
+            ))
+        })
 }
