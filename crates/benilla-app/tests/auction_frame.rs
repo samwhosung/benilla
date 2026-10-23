@@ -716,7 +716,7 @@ fn search_reads_the_filters_and_nothing_queries_before_it() {
         Some(4),
         "Armor is item class 4, not menu row 1"
     );
-    assert!(query.usable_only);
+    assert_eq!(query.usable, 1, "the check button's 1");
     assert_eq!(query.list_from, 0);
     assert!(s.errors().is_empty(), "clean search: {:?}", s.errors());
 }

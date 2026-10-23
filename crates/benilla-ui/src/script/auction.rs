@@ -220,12 +220,16 @@ pub struct AuctionQuery {
     pub inv_type: Option<u32>,
     pub class: Option<u32>,
     pub sub_class: Option<u32>,
-    /// A minimum quality, not an equality; `None` = no filter (the dropdown's All, -1).
-    pub quality: Option<u32>,
+    /// A minimum quality, not an equality, as the wire takes it: the argument's `_ftol`, a
+    /// negative's 32-bit pattern, `u32::MAX` (-1, the dropdown's All) for a non-number
+    /// (`0x4ceb72`-`0x4ceb96`).
+    pub quality: u32,
     /// The wire's item offset: the page argument's `_ftol` times 50 in 32 bits, 0 for a
     /// non-number (`0x4ceb28`-`0x4ceb44`).
     pub list_from: u32,
-    pub usable_only: bool,
+    /// The usable-only byte: the argument's `_ftol` low byte, 0 for a non-number
+    /// (`0x4ceb47`-`0x4ceb6f`, sent at `0x4cec32`).
+    pub usable: u8,
 }
 
 /// `StartAuction`'s send (`0x4ce8c5`-`0x4ce925`): the sell slot's item as the attach stored it.
@@ -1174,21 +1178,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "QueryAuctionItems",
         lua.create_function(|lua, args: MultiValue| {
             let a: Vec<Value> = args.into_iter().collect();
-            let name = match a.first() {
-                Some(Value::String(s)) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
-                _ => String::new(),
-            };
-            let truthy = |i: usize| {
-                !matches!(
-                    a.get(i),
-                    None | Some(Value::Nil) | Some(Value::Boolean(false))
-                )
-            };
-            // qualityIndex arrives as the dropdown's value: -1 for All, else the quality itself.
-            let quality = match a.get(8) {
-                Some(Value::Integer(n)) if *n >= 0 => u32::try_from(*n).ok(),
-                Some(Value::Number(n)) if *n >= 0.0 => Some(*n as u32),
-                _ => None,
+            // `is-number-or-string` then `tostring`, a number as its text, else ""
+            // (`0x4ce9cd`-`0x4ce9e7`).
+            let name = a
+                .first()
+                .and_then(|v| binding_abi::optional_string(lua, v))
+                .unwrap_or_default();
+            // A number's `_ftol`, numeric strings included, for `usable` and `quality`.
+            let number = |i: usize| {
+                a.get(i)
+                    .cloned()
+                    .and_then(|v| binding_abi::is_number(lua, v))
+                    .map(binding_abi::ftol)
             };
             // A menu position: a number's `_ftol` less one, compared unsigned, so 0 and a
             // negative fall out of range (`0x4cea62`-`0x4cea6b`).
@@ -1217,9 +1218,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     inv_type,
                     class,
                     sub_class,
-                    quality,
+                    // Any number's `_ftol`, a negative too, else -1, the wire's "any"
+                    // (`0x4ceb72`-`0x4ceb96`).
+                    quality: number(8).map_or(u32::MAX, |n| n as u32),
                     list_from: list_offset(lua, a.get(6).cloned()),
-                    usable_only: truthy(7),
+                    // A number's `_ftol` low byte, else 0, so `true` is 0 (`0x4ceb47`-`0x4ceb6f`).
+                    usable: number(7).map_or(0, |n| n as u8),
                 }
             };
             submit(lua, AuctionCall::Query(query))

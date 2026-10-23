@@ -145,8 +145,8 @@ fn send_query(
         // Already ids: the binding maps menu positions as `0x4ce980` does.
         main_category: q.class.unwrap_or(auction_filter::ANY),
         sub_category: q.sub_class.unwrap_or(auction_filter::ANY),
-        quality: q.quality.unwrap_or(auction_filter::ANY),
-        usable: u8::from(q.usable_only),
+        quality: q.quality,
+        usable: q.usable,
     });
     auction.query_gate = Some(now + QUERY_THROTTLE_SECS);
     auction.wire.browse_sent += 1;
