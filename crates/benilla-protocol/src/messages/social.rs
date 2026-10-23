@@ -4,7 +4,7 @@
 
 use std::io::{self, Read};
 
-use crate::wire::{capacity_hint, read_cstring, read_u32_le, read_u64_le, read_u8};
+use crate::wire::{capacity_hint, read_cstring_capped, read_u32_le, read_u64_le, read_u8};
 
 /// `SMSG_FRIEND_STATUS`'s result byte, vmangos `FriendsResult` (`SocialMgr.h:81-110`). The client
 /// (`0x5acab0`) prints each result's `ERR_*` string to the chat frame, not the red error line.
@@ -175,30 +175,62 @@ pub struct WhoResults {
     pub displayed: u32,
     /// The full match count when over 49, else equal to [`Self::displayed`].
     pub total: u32,
-    /// In server order.
+    /// In server order, one per record to [`Self::displayed`], those past a cut or poisoned read
+    /// empty and kept to 50 ([`read_who`]).
     pub entries: Vec<WhoEntry>,
 }
 
-/// Read `SMSG_WHO` (vmangos `WhoListClientQueryTask`, client `0x5adde0`): two `u32` counts, then
-/// `{name, guild, level, class, race, zone}` per entry. 1.12 has no trailing party-status `u32`.
-pub fn read_who(r: &mut impl Read) -> io::Result<WhoResults> {
+/// The records `OnWhoList` keeps (`0x5adf87`-`0x5adf92`, the array's `0x1f40` bytes at
+/// `0x5ae045`).
+const WHO_KEPT: usize = 50;
+
+/// Read `SMSG_WHO` as `OnWhoList` (`0x5adf60`) reads it: two `u32` counts, then
+/// `{name, guild, level, class, race, zone}` per record, the name and the guild through
+/// `GetCString` at `0x30` and `0x60` (`0x5adff0`, `0x5adffd`). 1.12 has no trailing party-status
+/// `u32`. A string with no NUL inside its capacity or before the end reads `""` and poisons the
+/// store, and every read after it fails, a dword staying the 0 it was zeroed to
+/// (`0x5ae013`-`0x5ae03d`); the loop still runs to the count (`0x5ae0c1`), so a short or poisoned
+/// answer keeps its records, those past the cut empty. The empty tail is kept to the 50 the list
+/// holds; the chat exit, the only reader of more, takes at most 3 (`0x5adfc1`).
+pub fn read_who(r: &mut &[u8]) -> io::Result<WhoResults> {
     let displayed = read_u32_le(r)?;
     let total = read_u32_le(r)?;
-    let mut entries = Vec::with_capacity(capacity_hint(displayed, 64));
+    let mut entries = Vec::with_capacity(capacity_hint(displayed, WHO_KEPT));
     for _ in 0..displayed {
+        if r.is_empty() && entries.len() >= WHO_KEPT {
+            break;
+        }
         entries.push(WhoEntry {
-            name: read_cstring(r)?,
-            guild: read_cstring(r)?,
-            level: read_u32_le(r)?,
-            class: read_u32_le(r)?,
-            race: read_u32_le(r)?,
-            zone: read_u32_le(r)?,
+            name: who_string(r, 0x30),
+            guild: who_string(r, 0x60),
+            level: who_dword(r),
+            class: who_dword(r),
+            race: who_dword(r),
+            zone: who_dword(r),
         });
     }
     Ok(WhoResults {
         displayed,
         total,
         entries,
+    })
+}
+
+/// `GetCString` (`0x4191b0`) at `capacity`; a miss empties the store, as its poisoned cursor fails
+/// every later read.
+fn who_string(r: &mut &[u8], capacity: usize) -> String {
+    read_cstring_capped(r, capacity).unwrap_or_else(|| {
+        *r = &[];
+        String::new()
+    })
+}
+
+/// A dword (`0x418e30`): short of four bytes it reads 0 and empties the store, a failed read
+/// poisoning it.
+fn who_dword(r: &mut &[u8]) -> u32 {
+    read_u32_le(r).unwrap_or_else(|_| {
+        *r = &[];
+        0
     })
 }
 
