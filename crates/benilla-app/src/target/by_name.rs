@@ -604,13 +604,14 @@ pub(super) fn follow_requests(
 const UNHELD_SELECT_SOUND: &str = "igCharacterSelect";
 
 /// A swing a selecting verb owes after `SetSelection`'s `PLAYER_TARGET_CHANGED` (`0x49389c`),
-/// whose listeners run first: the re-swing (`0x4938c8`), or the assist tail's StartAttack at the
+/// whose listeners run first: the re-swing (`0x4938c8`), the assist tail's StartAttack at the
 /// unit it selected (`0x489bfc`-`0x489c02`, a copy of that guid), when `assistAttack` is on then
-/// (`0x489bd0`).
+/// (`0x489bd0`), or the rest of a StartAttack past its own select (`0x5eccaf` on).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OwedSwing {
     Again(scan::OwedSwing),
     Assist { guid: u64 },
+    Tail { guid: u64, engaged: bool },
 }
 
 /// What a selecting verb owes after its signals, for its caller to pay once their listeners ran
@@ -621,6 +622,15 @@ enum OwedSwing {
 pub(crate) struct SelectDebt {
     send: Option<scan::OwedSend>,
     swings: Vec<OwedSwing>,
+}
+
+impl From<scan::Owed> for SelectDebt {
+    fn from(owed: scan::Owed) -> Self {
+        Self {
+            send: owed.send,
+            swings: owed.swing.map(OwedSwing::Again).into_iter().collect(),
+        }
+    }
 }
 
 impl SelectDebt {
@@ -720,13 +730,34 @@ impl SelectCommit<'_, '_> {
         send.pay(&mut self.selection, &self.seam);
     }
 
-    /// Pay what `debt` still owes, in order, now that the signals' listeners have run.
-    pub(crate) fn pay(&mut self, debt: SelectDebt) {
+    /// Pay what `debt` still owes, in order, now that the signals' listeners have run, up to a
+    /// payment whose own select moved the selection (StartAttack's, `0x5eccaa`): what that one
+    /// owes, ahead of the rest, for the caller to run its signals' listeners first and pay again.
+    /// A payment that moved nothing has nothing to signal, and what it owes is paid in place.
+    pub(crate) fn pay(&mut self, debt: SelectDebt) -> SelectDebt {
         if let Some(send) = debt.send {
             self.pay_send(send);
         }
-        for swing in debt.swings {
-            self.pay_one(swing);
+        let mut swings: std::collections::VecDeque<OwedSwing> = debt.swings.into();
+        while let Some(swing) = swings.pop_front() {
+            let before = self.selection.guid;
+            let mut owed = self.owing(|commit| commit.pay_one(swing));
+            if owed.send.is_some() || self.selection.guid != before {
+                owed.swings.extend(swings);
+                return owed;
+            }
+            for swing in owed.swings.into_iter().rev() {
+                swings.push_front(swing);
+            }
+        }
+        SelectDebt::default()
+    }
+
+    /// Pay all of `debt` now, for a writer whose signals have no listeners to run first.
+    #[cfg(test)]
+    pub(crate) fn pay_now(&mut self, mut debt: SelectDebt) {
+        while debt != SelectDebt::default() {
+            debt = self.pay(debt);
         }
     }
 
@@ -745,6 +776,7 @@ impl SelectCommit<'_, '_> {
                     self.start_attack(guid);
                 }
             }
+            OwedSwing::Tail { guid, engaged } => self.seam.start_tail(guid, engaged),
         }
     }
 
@@ -761,7 +793,8 @@ impl SelectCommit<'_, '_> {
     /// StartAttack (`0x5ecb70`) at `guid`, its own select (`0x5ecca0`-`0x5eccaa` → `0x493540`)
     /// between its checks and stand and its swing: [`Self::commit`], the setter's dedup for a guid
     /// selected already, else the whole `SetSelection`, whose re-swing reaches StartAttack again
-    /// at the same guid and is deduped there.
+    /// at the same guid and is deduped there. The rest is owed past that select's signals while
+    /// [`Self::owing`] runs.
     pub(crate) fn start_attack(&mut self, guid: u64) {
         let engaged = self.engaged();
         let verdict = self.start_target(guid);
@@ -771,7 +804,7 @@ impl SelectCommit<'_, '_> {
         if let Some(entity) = self.held_unit(guid) {
             self.commit(entity, guid);
         }
-        self.seam.start_tail(guid, engaged);
+        self.owe(OwedSwing::Tail { guid, engaged });
     }
 
     /// `StartAttack`'s target legs (`0x5ecc16`, `0x5ecc2e`) on the held object `entity`, `guid`:

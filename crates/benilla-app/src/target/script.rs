@@ -146,9 +146,16 @@ impl ScriptSelect<'_, '_> {
         self.commit.pay_send(send);
     }
 
-    /// Pay what a selecting call still owes, now that its signals' listeners have run.
-    pub(crate) fn pay(&mut self, debt: SelectDebt) {
-        self.commit.pay(debt);
+    /// Pay what a selecting call still owes, now that its signals' listeners have run, up to a
+    /// payment that selected again ([`SelectCommit::pay`]): what that one owes.
+    pub(crate) fn pay(&mut self, debt: SelectDebt) -> SelectDebt {
+        self.commit.pay(debt)
+    }
+
+    /// Pay all of `debt` now ([`SelectCommit::pay_now`]).
+    #[cfg(test)]
+    pub(crate) fn pay_now(&mut self, debt: SelectDebt) {
+        self.commit.pay_now(debt);
     }
 
     /// `ClearTarget()` (`0x489ff0`): deselect whatever the calls before it left selected.
@@ -247,7 +254,7 @@ mod tests {
                     |mut script: NonSendMut<UiScript>, mut select: ScriptSelect| {
                         for request in script.take_selection_requests() {
                             let debt = select.select(request);
-                            select.pay(debt);
+                            select.pay_now(debt);
                         }
                     },
                 )
@@ -366,7 +373,7 @@ mod tests {
                     |mut script: NonSendMut<UiScript>, mut select: ScriptSelect| {
                         for request in script.take_selection_requests() {
                             let debt = select.select(request);
-                            select.pay(debt);
+                            select.pay_now(debt);
                         }
                     },
                 )
@@ -468,7 +475,7 @@ mod tests {
                     |mut script: NonSendMut<UiScript>, mut select: ScriptSelect| {
                         for request in script.take_selection_requests() {
                             let debt = select.select(request);
-                            select.pay(debt);
+                            select.pay_now(debt);
                         }
                     },
                 )
@@ -581,7 +588,7 @@ mod tests {
                     |mut script: NonSendMut<UiScript>, mut select: ScriptSelect| {
                         for request in script.take_selection_requests() {
                             let debt = select.select(request);
-                            select.pay(debt);
+                            select.pay_now(debt);
                         }
                     },
                 )
@@ -652,7 +659,7 @@ mod tests {
                 |mut script: NonSendMut<UiScript>, mut select: ScriptSelect| {
                     for request in script.take_selection_requests() {
                         let debt = select.select(request);
-                        select.pay(debt);
+                        select.pay_now(debt);
                     }
                 },
             )

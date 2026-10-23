@@ -20,19 +20,6 @@ use bevy::prelude::*;
 
 use benilla_ui::script::{CallHost, CallTail, ScriptCall, UiScript};
 
-/// The player's Attack (`0x6131a0`) in the reference's order: the validator's `SelectTarget`s bind a
-/// unit to a standing targeting cursor's cast inside the validator, so that cast is sent before the
-/// swing the validated target gets.
-macro_rules! attack_in_order {
-    ($appliers:expr, $may_pick:expr) => {{
-        let target = $appliers.p7().validate_attack($may_pick);
-        $appliers.p1().bind_parked();
-        if let Some(guid) = target {
-            $appliers.p7().start_attack(guid);
-        }
-    }};
-}
-
 /// `DoEmote` (`0x5ef560`) in the reference's order: a posture emote's stand change to a state but 0
 /// runs its local apply's leave (`0x5f0790`), the loot close (`0x48f200` at `0x5f07d5`) then the
 /// attack stop (`0x5ecac0` at `0x5f07e7`), ahead of the emote's `CMSG_TEXT_EMOTE`.
@@ -44,23 +31,6 @@ macro_rules! emote_in_order {
                 $appliers.p7().stop_for_stand();
             }
             $appliers.p4().p2().finish(step);
-        }
-    }};
-}
-
-/// The pet bar's Attack (`0x4bd40d`) runs the same validator, so a cast it binds to a standing
-/// targeting cursor goes out ahead of the `CMSG_PET_ACTION` it validated. A spell press the bar
-/// hands to the attempt (`0x4bd385`) casts through the ladder instead.
-macro_rules! pet_in_order {
-    ($appliers:expr, $begin:ident($arg:expr)) => {{
-        let step = $appliers.p6().p0().$begin($arg);
-        $appliers.p1().bind_parked();
-        match step {
-            Some(crate::ui_pet::PetStep::Order(send)) => $appliers.p6().p0().finish_press(send),
-            Some(crate::ui_pet::PetStep::Cast(cast)) => {
-                crate::ui_pet::cast_pet_press(&mut $appliers.p3(), cast)
-            }
-            None => {}
         }
     }};
 }
@@ -160,6 +130,15 @@ pub(crate) struct ScriptCallHost<'w, 's> {
     census: Option<Res<'w, crate::net::NetCommands>>,
 }
 
+/// What a call's apply carries across its signal points about the selection: the guid its last
+/// signal told the listeners of, the pet's attack latch as it stood then (the selection's release
+/// can lower it, `0x493a18`), and the reports signalled so far.
+struct Signalled {
+    selected: Option<u64>,
+    latched: bool,
+    mark: crate::ui_cast::ReportMark,
+}
+
 impl ScriptCallHost<'_, '_> {
     /// Push the views a call left for the script's next line, and for the listeners at a signal
     /// point inside it.
@@ -187,6 +166,145 @@ impl ScriptCallHost<'_, '_> {
         script.signal_point(self);
     }
 
+    /// What `SetSelection` (`0x493540`) signals for a selection this call moved since `at` last
+    /// signalled, in its order: the release's `PET_BAR_UPDATE` when it called a possessed unit off
+    /// (`0x493a18` → `0x4bd6b4`), the usable refresh (`0x493892`, `0x493a69`), then
+    /// `PLAYER_TARGET_CHANGED` (`0x49389c`, `0x493a73`), with `"target"` seated for the
+    /// listeners and the script's next line. The unit feed takes the change as heard. Whether
+    /// it signalled.
+    fn signal_selection(&mut self, script: &mut UiScript, at: &mut Signalled) -> bool {
+        let appliers = &mut self.appliers;
+        let selected = appliers.p0().selected();
+        if selected == at.selected {
+            return false;
+        }
+        script.seat_selection(appliers.p0().seated());
+        if at.latched && !appliers.p6().p1().attack_latched() {
+            script.lower_pet_attack();
+            script.fire_event("PET_BAR_UPDATE", vec![]);
+        }
+        if let Some(states) = appliers.p2().p4().as_mut() {
+            states.usable_refresh(script).fire(script);
+        }
+        script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+        script.announce_selection(selected);
+        at.selected = selected;
+        at.latched = appliers.p6().p1().attack_latched();
+        true
+    }
+
+    /// A selection's `SetSelection` from its signals on, `owed` being what its commit owes after
+    /// them: the teardown's `PET_BAR_UPDATE` (`0x4bd6b4`) runs its listeners before the store and
+    /// the send (`0x4936e2`, `0x493871`), the change's signals run theirs before the re-swing
+    /// (`0x4938c8`), and a payment that selects again (StartAttack's own select, `0x5eccaa`)
+    /// signals in turn before what it owes. A selection a listener makes at a point signals
+    /// itself, nested, so each point moves the mark to the selection as the listeners left it.
+    fn settle_selection(
+        &mut self,
+        script: &mut UiScript,
+        at: &mut Signalled,
+        mut owed: crate::target::SelectDebt,
+    ) {
+        loop {
+            if let Some(send) = owed.take_send() {
+                // `PetStopAttack` lowered the latch and signals with the selection zeroed
+                // (`0x4bd6ae`, `0x4939d3`).
+                script.lower_pet_attack();
+                script.fire_event("PET_BAR_UPDATE", vec![]);
+                at.latched = false;
+                script.seat_selection(self.appliers.p0().seated());
+                self.at_point(script, &mut at.mark);
+                // The store over a listener's pick (`0x4936e2`), or for a clear the send of the
+                // listener's pick, and either signals after (`0x49389c`, `0x493a73`), so the
+                // mark stays the selection the call found.
+                self.appliers.p0().pay_send(send);
+            }
+            let signalled = self.signal_selection(script, at);
+            if !signalled && !owed.owes_swings() {
+                return;
+            }
+            // `SetSelection` returns, or goes on to its re-swing, once its listeners ran. The
+            // re-swing pushes the selection's address (`0x4938c3`), so it goes at a listener's
+            // pick; StartAttack reads it after them (`0x5ecbcd`).
+            self.at_point(script, &mut at.mark);
+            self.listened(at);
+            if !owed.owes_swings() {
+                return;
+            }
+            owed = self.appliers.p0().pay(owed);
+        }
+    }
+
+    /// After a point: what its listeners selected they signalled themselves.
+    fn listened(&mut self, at: &mut Signalled) {
+        at.selected = self.appliers.p0().selected();
+        at.latched = self.appliers.p6().p1().attack_latched();
+    }
+
+    /// The player's Attack (`0x6131a0`): the validator (`0x6131aa` → `0x612df0`), whose pick's
+    /// `SetSelection` signals inside it, before the re-read (`0x6130c1`) and the final gate; then
+    /// the toggle at the target it settled. Its `SelectTarget`s bind a unit to a standing
+    /// targeting cursor's cast inside the validator, so that cast is sent ahead of the swing.
+    fn attack(&mut self, script: &mut UiScript, at: &mut Signalled, may_pick: bool) {
+        let Some(owed) = self.appliers.p7().pick_attack(may_pick) else {
+            return;
+        };
+        self.settle_selection(script, at, owed.into());
+        let target = self.appliers.p7().settle_attack();
+        self.appliers.p1().bind_parked();
+        if let Some(guid) = target {
+            self.appliers.p7().start_attack(guid);
+        }
+    }
+
+    /// A pet bar press past its dispatcher's gates (`0x4bd1d0`): Attack's validator (`0x4bd40d`)
+    /// signals its pick's selection in place, ahead of its latch (`0x4bd42e`) and its
+    /// `CMSG_PET_ACTION` (`0x4bd4a4`), and a cast the validator binds to a standing targeting
+    /// cursor goes out ahead of the packet. A spell press the bar hands to the attempt
+    /// (`0x4bd385`) casts through the ladder instead.
+    fn pet_step(
+        &mut self,
+        script: &mut UiScript,
+        at: &mut Signalled,
+        step: Option<crate::ui_pet::PetStep>,
+    ) {
+        use crate::ui_pet::PetStep;
+        let step = match step {
+            Some(PetStep::Attack(attack)) => {
+                let Some(owed) = self.appliers.p6().p0().pick_attack(&attack) else {
+                    return;
+                };
+                self.settle_selection(script, at, owed.into());
+                self.appliers
+                    .p6()
+                    .p0()
+                    .finish_attack(attack)
+                    .map(PetStep::Order)
+            }
+            step => step,
+        };
+        let appliers = &mut self.appliers;
+        appliers.p1().bind_parked();
+        match step {
+            Some(PetStep::Order(send)) => appliers.p6().p0().finish_press(send),
+            Some(PetStep::Cast(cast)) => crate::ui_pet::cast_pet_press(&mut appliers.p3(), cast),
+            Some(PetStep::Attack(_)) | None => {}
+        }
+    }
+
+    /// TryCast's attack pick with a unit as its actor (`0x6e4efb`, `0x6e4ef4`), its selection
+    /// signalled in place: the guid the attempt or the tail's attack goes on at.
+    fn unit_pick(
+        &mut self,
+        script: &mut UiScript,
+        at: &mut Signalled,
+        press: crate::spell::UnitPress,
+    ) -> Option<u64> {
+        let owed = self.appliers.p6().p0().pick_for_unit_cast(press)?;
+        self.settle_selection(script, at, owed.into());
+        self.appliers.p6().p0().settle_pick()
+    }
+
     /// A probe line's text emote, run as `DoEmote` runs it inside its call (`0x5ef560`).
     pub(crate) fn emote(&mut self, text_id: u32, arg: Option<String>) {
         let appliers = &mut self.appliers;
@@ -205,10 +323,11 @@ impl CallHost for ScriptCallHost<'_, '_> {
         // The gate's answer for this call, made where the Lua verb ran: its casts start only if
         // tag 2 passed there. The ladder reads it while this call applies.
         let outer_permit = appliers.p3().ladder.permit(call.may_cast());
-        let selected_before = appliers.p0().selected();
-        // The pet's attack latch, which the selection's release can lower (`0x493a18`).
-        let mut latched_before = appliers.p6().p1().attack_latched();
-        let mut report_mark = appliers.p2().p2().mark();
+        let mut at = Signalled {
+            selected: appliers.p0().selected(),
+            latched: appliers.p6().p1().attack_latched(),
+            mark: appliers.p2().p2().mark(),
+        };
         let mut tail: Option<CallTail> = None;
         // The confirm popup an item pick or a Yes raised, signalled with the call's reports.
         let mut popup = None;
@@ -224,7 +343,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             }
             ScriptCall::TargetLastTarget { .. } => owed = appliers.p0().target_last_target(),
             ScriptCall::ClearTarget => owed = appliers.p0().clear_target(),
-            ScriptCall::AttackTarget { may_pick, .. } => attack_in_order!(appliers, may_pick),
+            ScriptCall::AttackTarget { may_pick, .. } => self.attack(script, &mut at, may_pick),
             ScriptCall::SpellTargetUnit(token) => appliers.p1().spell_target_unit(&token),
             ScriptCall::SpellStopTargeting => appliers.p1().stop_targeting(),
             ScriptCall::SpellStopCasting => appliers.p2().p0().stop_casting(),
@@ -240,7 +359,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 match crate::ui_action::use_action(&mut appliers.p4().p0(), script, press) {
                     // The Attack slot is a cast, so the gate's tag 4 (the pick) is asked only
                     // after tag 2 passed, and so passes as well.
-                    crate::ui_action::UseOutcome::Attack => attack_in_order!(appliers, true),
+                    crate::ui_action::UseOutcome::Attack => self.attack(script, &mut at, true),
                     crate::ui_action::UseOutcome::Macro(id) => {
                         tail = Some(Box::new(move |script: &mut UiScript| {
                             if !crate::ui_macro::run_macro(script, id) {
@@ -283,8 +402,14 @@ impl CallHost for ScriptCallHost<'_, '_> {
                     }
                 }
             }
-            ScriptCall::PetAction(slot) => pet_in_order!(appliers, begin_slot(slot)),
-            ScriptCall::PetOrder(packed) => pet_in_order!(appliers, begin_order(packed)),
+            ScriptCall::PetAction(slot) => {
+                let step = appliers.p6().p0().begin_slot(slot);
+                self.pet_step(script, &mut at, step);
+            }
+            ScriptCall::PetOrder(packed) => {
+                let step = appliers.p6().p0().begin_order(packed);
+                self.pet_step(script, &mut at, step);
+            }
             ScriptCall::SendChat(send) => appliers.p4().p1().send_chat(script, send),
             ScriptCall::RandomRoll { min, max } => appliers.p4().p1().random_roll(min, max),
             ScriptCall::Channel(cmd) => appliers.p4().p1().channel(script, cmd),
@@ -325,38 +450,32 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Pet(call) => appliers.p6().p1().apply(script, call),
             ScriptCall::Stable(call) => appliers.p6().p2().apply(call),
         }
-        if let Some(send) = owed.take_send() {
-            // The teardown called a possessed unit off: `PetStopAttack` lowered the latch and
-            // signals `PET_BAR_UPDATE` (`0x4bd6ae`, `0x4bd6b4`) with the selection zeroed
-            // (`0x4939d3`), and its listeners run here, before the store and the send.
-            script.lower_pet_attack();
-            script.fire_event("PET_BAR_UPDATE", vec![]);
-            latched_before = false;
-            script.seat_selection(appliers.p0().seated());
-            self.at_point(script, &mut report_mark);
-            self.appliers.p0().pay_send(send);
-        }
+        self.settle_selection(script, &mut at, owed);
         let appliers = &mut self.appliers;
         // A selection this call made with the targeting cursor up was handed to the cast
         // (`SelectTarget`, `0x4935d5`) and is bound now, before the next call reads either.
         appliers.p1().bind_parked();
-        // TryCast's attack pick can move the selection mid-cast (`0x6e4efb`), so a press held
-        // there is picked and resumed before the next call reads the selection.
+        // TryCast's attack pick (`0x6e4efb`) can move the selection mid-cast, and its
+        // `SetSelection` signals there, before the attempt goes on to its send (`0x6e585a`), so a
+        // press held there is picked, its selection signalled in place, and resumed.
         if let Some(held) = appliers.p3().ladder.take_held() {
             // A held press passed tag 2 to be held, so the pick's tag 4 passes as well.
             match held.unit {
                 None => {
-                    if appliers.p7().pick_for_cast(held) {
-                        let mut cast = appliers.p3();
-                        let ctx = cast.targeting.context();
-                        cast.ladder.resume_after_pick(held, &ctx);
+                    if let Some(owed) = self.appliers.p7().pick_for_cast(held) {
+                        self.settle_selection(script, &mut at, owed.into());
+                        if self.appliers.p7().settle_attack().is_some() {
+                            let mut cast = self.appliers.p3();
+                            let ctx = cast.targeting.context();
+                            cast.ladder.resume_after_pick(held, &ctx);
+                        }
                     }
                 }
                 // The pet bar's unit as the pick's actor (`0x6e4ef4`), which settles the guid the
                 // attempt goes on with (`0x6e4ef7`).
                 Some(press) => {
-                    if let Some(guid) = appliers.p6().p0().pick_for_unit_cast(press) {
-                        let mut cast = appliers.p3();
+                    if let Some(guid) = self.unit_pick(script, &mut at, press) {
+                        let mut cast = self.appliers.p3();
                         if let Some(ctx) =
                             cast.targeting.context_for_caster(press.caster, Some(guid))
                         {
@@ -366,47 +485,31 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 }
             }
         }
-        // A unit caster's send owes its attack tail (`0x6e51de` → `0x6131a0`), which presses the
-        // pet bar's Attack before the attempt returns.
-        if let Some(owed) = appliers.p3().ladder.take_unit_attack() {
-            pet_in_order!(appliers, begin_attack_from_cast(owed));
+        // A unit caster's send owes its attack tail (`0x6e51de` → `0x6131a0`): its validator with
+        // the unit as the actor (`0x6131aa`), whose pick signals in place, then for the bar's unit
+        // the bar's Attack (`0x613217`) before the attempt returns.
+        if let Some((caster, guid)) = self.appliers.p3().ladder.take_unit_attack() {
+            let press = crate::spell::UnitPress {
+                caster,
+                target: Some(guid),
+            };
+            if let Some(guid) = self.unit_pick(script, &mut at, press) {
+                let step = self.appliers.p6().p0().attack_from_cast(caster, guid);
+                self.pet_step(script, &mut at, step);
+            }
         }
+        let appliers = &mut self.appliers;
         // Whatever casts next is the caller's: the engine's own, which asks no gate, or the call
         // whose signal point this call applied at.
         appliers.p3().ladder.permit(outer_permit);
-        // The selection the call committed (`SetSelection 0x493540`, inside every selecting
-        // verb) is `"target"` for the script's next line, and what `SetSelection` signals it
-        // signals here, inside the call and under its input events, in its order: the release's
-        // `PET_BAR_UPDATE` when it called a possessed unit off (`0x493a18` → `0x4bd6b4`), the
-        // usable refresh (`0x493892`, `0x493a69`), then `PLAYER_TARGET_CHANGED` (`0x49389c`,
-        // `0x493a73`). The unit feed takes the change as heard. After the teardown's point this
-        // reads what `pay_send` left: the call's own pick, stored over a listener's as `0x4936e2`
-        // stores it, or for a clear the listener's pick, which the reference signals as well.
-        let selected_after = appliers.p0().selected();
-        if selected_after != selected_before {
-            script.seat_selection(appliers.p0().seated());
-            if latched_before && !appliers.p6().p1().attack_latched() {
-                script.lower_pet_attack();
-                script.fire_event("PET_BAR_UPDATE", vec![]);
-            }
-            if let Some(states) = appliers.p2().p4().as_mut() {
-                states.usable_refresh(script).fire(script);
-            }
-            script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
-            script.announce_selection(selected_after);
-        }
-        if owed.owes_swings() {
-            // `SetSelection` goes on to its re-swing (`0x4938c8`) once `PLAYER_TARGET_CHANGED`'s
-            // listeners have run (`0x49389c`): they run here, so their packets go out ahead of the
-            // swing, and a call they make nests.
-            self.at_point(script, &mut report_mark);
-            self.appliers.p0().pay(owed);
-        }
+        // A selection the call moved with no signal of its own yet is signalled as the call
+        // returns, inside it and under its input events.
+        self.signal_selection(script, &mut at);
         // The reports the call made, in its order: a refusal's `UI_ERROR_MESSAGE` and its
         // `SPELLCAST_FAILED` (`ReportCastFailure 0x6e1a00` inside `TryCast 0x6e4b60`), a cancel's
         // event, `CURRENT_SPELL_CAST_CHANGED` at each of the attempt's signals, and the item gate's
         // confirm (`0x495d60`), all signalled below as the call returns, under its input events.
-        let ready = self.appliers.p2().p2().ready_since(script, report_mark);
+        let ready = self.appliers.p2().p2().ready_since(script, at.mark);
         self.commit_views(script);
         if ready.is_empty() && popup.is_none() {
             return tail;

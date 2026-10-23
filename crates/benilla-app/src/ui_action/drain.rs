@@ -82,16 +82,9 @@ impl AttackPress<'_, '_> {
     /// (`0x5ecb70`). Only the start cancels auto-repeat (`0x5ecd8c`), so stopping melee leaves
     /// Auto Shot running.
     pub(crate) fn attack_target(&mut self, may_pick: bool) {
-        if let Some(guid) = self.validate_attack(may_pick) {
+        if let Some(guid) = self.validate(None, may_pick) {
             self.start_attack(guid);
         }
-    }
-
-    /// [`Self::attack_target`]'s first half, the validator `0x612df0`. Its `SelectTarget` calls
-    /// (`0x613100`, `0x4941e6`) may hand a unit to the targeting cursor, which binds it before the
-    /// swing below goes out, so a caller that owns the cursor binds between the two halves.
-    pub(crate) fn validate_attack(&mut self, may_pick: bool) -> Option<u64> {
-        self.validate(None, may_pick)
     }
 
     /// [`Self::attack_target`]'s second half, the toggle at the validated target.
@@ -115,16 +108,47 @@ impl AttackPress<'_, '_> {
         self.seam.stop(engaged);
     }
 
+    /// The validator `0x612df0` up to its selection's re-read, for the call host, which runs the
+    /// listeners of the selection its pick commits in place before [`Self::settle_attack`]: the
+    /// actor checks, then the pick ([`crate::target::AttackPick::pick`]), what its commit owes;
+    /// `None` once an actor check refused. Its `SelectTarget` calls (`0x613100`, `0x4941e6`) may
+    /// hand a unit to the targeting cursor, which binds it before the swing goes out, so a caller
+    /// that owns the cursor binds between the halves.
+    pub(crate) fn pick_attack(&mut self, may_pick: bool) -> Option<crate::target::Owed> {
+        self.begin_validate(None, may_pick)
+    }
+
     /// TryCast's attack pick (`0x6e4efb`) for a spell press held there
-    /// ([`crate::spell::HeldForPick`]): the validator alone, with no swing after it. Whether the
-    /// cast goes on, at the unit the pick left selected.
-    pub(crate) fn pick_for_cast(&mut self, held: crate::spell::HeldCast) -> bool {
+    /// ([`crate::spell::HeldForPick`]), [`Self::pick_attack`] with the caster as the candidate
+    /// for a self-cast press (`0x4e610e`): the validator alone, with no swing after it. The cast
+    /// goes on, at the unit the pick left selected, when [`Self::settle_attack`] passes.
+    pub(crate) fn pick_for_cast(
+        &mut self,
+        held: crate::spell::HeldCast,
+    ) -> Option<crate::target::Owed> {
         let caster = self.pick.player().1.filter(|_| held.on_self);
-        self.validate(caster, true).is_some()
+        self.begin_validate(caster, true)
+    }
+
+    /// The validator's second half (`0x6130c1` on): the selection as the pick's listeners left
+    /// it, through the final gate.
+    pub(crate) fn settle_attack(&mut self) -> Option<u64> {
+        self.pick.settle(&self.selection, &self.ui_errors)
     }
 
     /// The attack validator `0x612df0`: its actor checks, then its target pick.
     fn validate(&mut self, passed: Option<u64>, may_pick: bool) -> Option<u64> {
+        let owed = self.begin_validate(passed, may_pick)?;
+        owed.pay(&mut self.selection, &mut self.seam);
+        self.settle_attack()
+    }
+
+    /// The validator up to its selection's re-read: the actor checks (phase A), then the pick.
+    fn begin_validate(
+        &mut self,
+        passed: Option<u64>,
+        may_pick: bool,
+    ) -> Option<crate::target::Owed> {
         let Self {
             pick,
             selection,
@@ -135,7 +159,7 @@ impl AttackPress<'_, '_> {
         if attack_actor_refusal(me, my_guid, ui_errors) {
             return None;
         }
-        pick.target(passed, may_pick, selection, seam, ui_errors)
+        Some(pick.pick(passed, may_pick, selection, seam))
     }
 }
 

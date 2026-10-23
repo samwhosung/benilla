@@ -35,7 +35,7 @@ impl PetGcdsOwed {
 /// The attack a unit caster's send owes: TryCast's tail calls `StartAttack 0x6131a0` on the caster
 /// at its target (`0x6e51c9`-`0x6e51de`) for a spell that starts melee from its send, unless the
 /// caster is attacking already (`0x60ecb0`). Its caller, which holds the pet bar, applies it
-/// before the next call reads anything ([`crate::ui_pet::PetPress::begin_attack_from_cast`]).
+/// before the next call reads anything ([`crate::ui_pet::PetPress::attack_from_cast`]).
 /// The caster and the target.
 #[derive(Resource, Default)]
 pub(crate) struct UnitAttackOwed(pub(super) Option<(u64, u64)>);
