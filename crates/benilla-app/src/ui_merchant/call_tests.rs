@@ -225,3 +225,43 @@ fn a_held_rows_drop_buys_into_its_slot_inside_the_call() {
     );
     assert_eq!(sent[3], "RandomRoll { min: 3, max: 4 }");
 }
+
+/// A held vendor row dropped on a bank bag's slot buys into that bag (`0x4f9f32`): the slot's
+/// list is the bag's own, so `CMSG_BUY_ITEM_IN_SLOT` names the bag's guid, read from
+/// `PLAYER_FIELD_BANK_BAG_SLOT_1`, and the 0-based slot.
+#[test]
+fn a_held_rows_drop_on_a_bank_bag_slot_buys_into_that_bag() {
+    /// The bag in the first bank bag slot, container 5.
+    const BANK_BAG: u64 = 0x4000_0000_0000_0b01;
+    /// `PLAYER_FIELD_BANK_BAG_SLOT_1`'s low word.
+    const BANK_BAG_SLOT_1: u16 = 612;
+    let (mut app, rx) = client();
+    {
+        let world = app.world_mut();
+        let mut q = world.query_filtered::<&mut ObjectStore, With<SelfPlayer>>();
+        let mut store = q.single_mut(world).expect("the player");
+        store.0.merge(ObjectFields::from_pairs(&[
+            (BANK_BAG_SLOT_1, BANK_BAG as u32),
+            (BANK_BAG_SLOT_1 + 1, (BANK_BAG >> 32) as u32),
+        ]));
+        let mut script = world.non_send_resource_mut::<UiScript>();
+        script.set_bank(Some(benilla_ui::script::BankState::default()));
+        script.set_container(
+            5,
+            Some(ContainerState {
+                num_slots: 8,
+                ..Default::default()
+            }),
+        );
+    }
+    let _ = sent(&rx);
+    run(&mut app, "PickupMerchantItem(1) PickupContainerItem(5, 2)");
+    let sent = sent(&rx);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(
+        sent[0].starts_with(&format!(
+            "BuyItemInSlot {{ vendor: {VENDOR}, entry: 159, bag_guid: {BANK_BAG}, bag_slot: 1"
+        )),
+        "{sent:?}"
+    );
+}
