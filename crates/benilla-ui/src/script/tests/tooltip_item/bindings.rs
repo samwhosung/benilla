@@ -445,6 +445,8 @@ fn ts_recipe(spell_id: u32, name: &str, group: (u32, u32, &str)) -> TradeSkillRe
             have: 1,
         }],
         tools: vec![],
+        icon_pending: None,
+        tools_pending: Vec::new(),
     }
 }
 

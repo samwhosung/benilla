@@ -31,6 +31,8 @@ fn recipe(
             have: 10,
         }],
         tools: vec![("Anvil".into(), true)],
+        icon_pending: None,
+        tools_pending: Vec::new(),
     }
 }
 
@@ -1441,4 +1443,40 @@ fn a_rebuild_counts_again_before_its_update() {
     s.set_trade_skill(None);
     s.rebuild_trade_skill(&mut |t| t.recount(&|_| 0));
     assert!(s.eval::<Option<Vec<u32>>>("return N").unwrap().is_none());
+
+    /// Each profession getter that misses an item record waits on it, one wait per call, with the
+    /// callback `0x4fdc30`: the icon's item (`0x4fdb90`), the product's stats (`0x4fdf77`), a reagent
+    /// (`0x4ff6cd`) and each totem (`0x4ffac6`).
+    #[test]
+    fn a_getter_that_misses_a_record_waits_on_it_once_per_call() {
+        let mut s = UiScript::new().unwrap();
+        let mut st = two_recipe_state();
+        for r in &mut st.recipes {
+            r.reagents[0].name = None;
+            r.icon_pending = Some(r.product_item);
+            r.tools_pending = vec![5956];
+        }
+        s.set_trade_skill(Some(st));
+        s.run(
+            "GetTradeSkillReagentInfo(2, 1) GetTradeSkillReagentInfo(2, 1) GetTradeSkillIcon(2) \
+         GetTradeSkillTools(2) GetTradeSkillItemStats(3)",
+        )
+        .unwrap();
+        let (two, three) = (st_product(&s, 2), st_product(&s, 3));
+        assert_eq!(
+            s.take_trade_skill_item_waits(),
+            [2589, 2589, two, 5956, three]
+        );
+        s.run("GetTradeSkillReagentInfo(1, 1) GetTradeSkillIcon(1)")
+            .unwrap();
+        assert!(
+            s.take_trade_skill_item_waits().is_empty(),
+            "a header reads no record"
+        );
+    }
+
+    /// The product of the recipe at a row.
+    fn st_product(s: &UiScript, index: usize) -> u32 {
+        view::recipe_at(&s.model_ref(), index).map_or(0, |r| r.product_item)
+    }
 }

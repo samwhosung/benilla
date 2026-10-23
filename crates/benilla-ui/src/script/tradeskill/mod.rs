@@ -105,8 +105,11 @@ pub struct TradeSkillRecipe {
     pub difficulty: TradeSkillDifficulty,
     /// The least `have / need` over the reagents, reported as `numAvailable`.
     pub num_available: u32,
-    /// The product's icon, else the spell's; `None` while neither has arrived.
+    /// The icon of `EffectItemType[0]`'s item (`0x4fdae0`), `None` on any miss.
     pub icon: Option<String>,
+    /// That item, while its template is in flight: `GetTradeSkillIcon` waits on it with the
+    /// callback `0x4fdc30` (`0x4fdb90`).
+    pub icon_pending: Option<u32>,
     pub min_made: u32,
     pub max_made: u32,
     /// The recipe spell's cooldown as `(start_ms on the GetTime clock, duration_ms, enabled)`,
@@ -125,6 +128,9 @@ pub struct TradeSkillRecipe {
     pub reagents: Vec<TradeSkillReagent>,
     /// The Requirements line's `(tool name, have)` pairs.
     pub tools: Vec<(String, bool)>,
+    /// The totems whose templates are in flight: `GetTradeSkillTools` waits on each with the
+    /// callback `0x4fdc30` (`0x4ffac6`).
+    pub tools_pending: Vec<u32>,
 }
 
 /// One open tradeskill window, pushed whole by the app.
@@ -212,6 +218,11 @@ impl super::UiScript {
         if open {
             self.fire_event("TRADE_SKILL_UPDATE", Vec::new());
         }
+    }
+
+    /// The item records the getters' calls missed since the last take, one per call.
+    pub fn take_trade_skill_item_waits(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.model_mut().trade_skill_item_waits)
     }
 
     /// The rows the list holds, headers included: the full count (`0xbde04c`) that

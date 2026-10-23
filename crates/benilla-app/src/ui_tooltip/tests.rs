@@ -1665,6 +1665,7 @@ fn the_feed_pushes_the_spells_the_vm_holds_before_a_hover() {
             skill_line: None,
             training_point_cost: 0,
             required_level: 0,
+            tools_pending: Vec::new(),
         }],
     }));
     // We target a mob that targets party1, whose list the VM holds by guid.

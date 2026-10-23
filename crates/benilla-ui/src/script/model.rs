@@ -838,6 +838,12 @@ pub(crate) struct Model {
     pub(crate) trainer_filter: u32,
     /// The item records the trainer getters' calls missed, one per call, until the app takes them.
     pub(crate) trainer_item_waits: Vec<u32>,
+    /// The item records the profession getters' calls missed, one per call, each waiting with the
+    /// callback `0x4fdc30` (`0x4fdb90`, `0x4fdf77`, `0x4ff6cd`, `0x4ffac6`).
+    pub(crate) trade_skill_item_waits: Vec<u32>,
+    /// The item records the craft getters' calls missed, one per call, each waiting with the
+    /// callback `0x4f7710` (`0x4f75dd`, `0x4f79f2`).
+    pub(crate) craft_item_waits: Vec<u32>,
     /// Collapsed skill-line ids, kept across a re-push and cleared when the trainer closes.
     pub(crate) trainer_collapsed: HashSet<u32>,
     /// The skill-line filter `ds:0xb73a20`: bit n set shows header group n, every bit on a list.
@@ -1682,6 +1688,8 @@ impl Model {
             trainer_close: false,
             trainer_filter: 7,
             trainer_item_waits: Vec::new(),
+            trade_skill_item_waits: Vec::new(),
+            craft_item_waits: Vec::new(),
             trainer_collapsed: HashSet::new(),
             trainer_line_filter: u32::MAX,
             trainer_rows: Vec::new(),

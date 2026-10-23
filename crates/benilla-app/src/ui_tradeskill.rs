@@ -43,6 +43,9 @@ pub(crate) struct TradeSkillOpens(pub(crate) Vec<u32>);
 #[derive(Resource, Default)]
 pub(crate) struct TradeSkillOpen {
     pub(crate) line: Option<u32>,
+    /// The rebuilds with flag 1 the packets owe the open list, one per learn or unlearn of a
+    /// profession spell (`0x5e9d79`, `0x5ea165`), for the feed to run.
+    pub(crate) rebuilds: u32,
 }
 
 /// The repeat count (`[0xbde060]`) a dying VM left, seated in the next: the world-enter init a
@@ -378,7 +381,14 @@ fn resolve_recipe(
         product_item_level,
         reagents,
         tools,
+        icon_pending: None,
+        tools_pending: Vec::new(),
     })
+}
+
+/// The packets that rebuild the open profession and craft lists, each a trigger at its handler.
+pub(crate) fn register_rebuild_triggers(app: &mut App) {
+    let _ = app;
 }
 
 /// Build the book: the known recipes of the open line, banded against the current rank.
@@ -1117,6 +1127,124 @@ mod tests {
         assert_eq!(tail, ["Recipe 200", "Recipe 100", "Recipe 300"]);
     }
 
+    /// A learn or an unlearn of a profession spell rebuilds the open list once per packet
+    /// (`0x5e9d79`, `0x5ea165`), whether or not the list moved, a supersede once for each half
+    /// (`0x5e6392`, `0x5e63a4`); another spell rebuilds nothing. A record a getter's call waited
+    /// on rebuilds it once per call (`0x4fdc30` → `0x4fdc3c`).
+    #[test]
+    fn each_packet_and_each_waited_record_signals_one_update() {
+        const LINEN: u32 = 2589;
+        const REAGENTS_LINEN: [(u32, u32); 8] = [
+            (LINEN, 2),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+        ];
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        let mut actions = PlayerActions::default();
+        actions.spells.extend([2963, 3915]);
+        actions.learned.extend([2963, 3915]);
+        let bolt = || SpellDisplay {
+            name: "Bolt of Linen Cloth".into(),
+            attributes: SPELL_ATTR_IS_TRADESKILL,
+            reagents: REAGENTS_LINEN,
+            ..Default::default()
+        };
+        let sla = benilla_formats::SlaInfo {
+            skill_id: 197,
+            req_skill_value: 1,
+            forward_spell_id: 0,
+            trivial_low: 1,
+            trivial_high: 2,
+        };
+        app.init_resource::<TradeSkillOpen>()
+            .init_resource::<crate::ui_craft::CraftOpen>()
+            .insert_resource(actions)
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<Items>()
+            .init_resource::<crate::spell::Cooldowns>()
+            .init_resource::<crate::ui_script::UiClock>()
+            .insert_resource(crate::net::NetCommands(tx))
+            .insert_resource(Spells {
+                catalog: benilla_formats::SpellCatalog::from_displays(
+                    [
+                        (2963, bolt()),
+                        (2964, bolt()),
+                        (3915, SpellDisplay::default()),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+                ..Spells::empty_for_tests()
+            })
+            .insert_resource(SkillLines {
+                catalog: benilla_formats::SkillLineCatalog::from_abilities([
+                    (2963, sla),
+                    (2964, sla),
+                ]),
+            });
+        app.world_mut()
+            .spawn((ObjectStore(Default::default()), SelfPlayer));
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                "HEARD = {} local f = CreateFrame('Frame') f:RegisterEvent('TRADE_SKILL_SHOW') \
+                 f:RegisterEvent('TRADE_SKILL_UPDATE') \
+                 f:SetScript('OnEvent', function() table.insert(HEARD, event) end)",
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        app.add_systems(Update, feed_trade_skill);
+        register_rebuild_triggers(&mut app);
+        let heard = |app: &mut App| {
+            app.update();
+            app.world()
+                .non_send_resource::<UiScript>()
+                .eval::<Vec<String>>("local h = HEARD HEARD = {} return h")
+                .unwrap()
+        };
+        app.world_mut().resource_mut::<TradeSkillOpen>().line = Some(197);
+        assert_eq!(heard(&mut app), ["TRADE_SKILL_UPDATE", "TRADE_SKILL_SHOW"]);
+        let dispatch =
+            |app: &mut App, events| crate::net::handlers::dispatch(app.world_mut(), events);
+        dispatch(
+            &mut app,
+            vec![
+                SessionEvent::SpellLearned { spell_id: 2963 },
+                SessionEvent::SpellLearned { spell_id: 3915 },
+            ],
+        );
+        assert_eq!(heard(&mut app), ["TRADE_SKILL_UPDATE"]);
+        dispatch(
+            &mut app,
+            vec![SessionEvent::SpellSuperceded {
+                old_spell_id: 2963,
+                new_spell_id: 2964,
+            }],
+        );
+        assert_eq!(
+            heard(&mut app),
+            ["TRADE_SKILL_UPDATE", "TRADE_SKILL_UPDATE"]
+        );
+        app.world()
+            .non_send_resource::<UiScript>()
+            .run("GetTradeSkillReagentInfo(2, 1) GetTradeSkillReagentInfo(2, 1)")
+            .unwrap();
+        assert!(heard(&mut app).is_empty());
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(LINEN, Some(crate::items::test_template("Linen Cloth")));
+        assert_eq!(
+            heard(&mut app),
+            ["TRADE_SKILL_UPDATE", "TRADE_SKILL_UPDATE"]
+        );
+    }
+
     /// The skill watches rebuild the open list, each at its place: the value watch on every run,
     /// after its skill-list rebuild and its line past the gate (`0x5de2a7`, `0x5de417`,
     /// `0x5de434`); the maximum's and permanent bonus's ahead of its skill-list rebuild
@@ -1220,6 +1348,8 @@ mod tests {
                 product_item_level: 0,
                 reagents: vec![],
                 tools: vec![],
+                icon_pending: None,
+                tools_pending: Vec::new(),
             }],
         }));
         script
@@ -1324,6 +1454,8 @@ mod tests {
                 product_item_level: 0,
                 reagents: vec![],
                 tools: vec![],
+                icon_pending: None,
+                tools_pending: Vec::new(),
             }],
         }));
         world.insert_non_send_resource(script);
@@ -1457,6 +1589,8 @@ mod tests {
                 product_item_level: 0,
                 reagents: vec![],
                 tools: vec![],
+                icon_pending: None,
+                tools_pending: Vec::new(),
             }],
         }));
         script

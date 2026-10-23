@@ -72,6 +72,8 @@ fn recipe(
             have: 5,
         }],
         tools: vec![("Anvil".into(), true)],
+        icon_pending: None,
+        tools_pending: Vec::new(),
     }
 }
 
@@ -539,6 +541,7 @@ fn a_hovered_or_selected_craft_row_paints_its_label_white() {
         skill_line: None,
         training_point_cost: 0,
         required_level: 0,
+        tools_pending: Vec::new(),
     };
     s.set_craft(Some(CraftState {
         name: "Enchanting".into(),

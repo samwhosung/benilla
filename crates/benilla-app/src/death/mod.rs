@@ -874,6 +874,8 @@ mod tests {
                 product_item_level: 0,
                 reagents: vec![],
                 tools: vec![],
+                icon_pending: None,
+                tools_pending: Vec::new(),
             }],
         }));
         script

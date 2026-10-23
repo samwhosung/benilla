@@ -694,6 +694,8 @@ mod tests {
             product_item_level: 0,
             reagents: Vec::new(),
             tools: Vec::new(),
+            icon_pending: None,
+            tools_pending: Vec::new(),
         }
     }
 

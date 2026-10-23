@@ -34,6 +34,9 @@ use crate::ui_unit::UnitFeed;
 pub(crate) struct CraftOpen {
     pub(crate) line: Option<u32>,
     pub(crate) craft_type: u32,
+    /// The rebuilds the packets owe the open list, one per learn or unlearn of a craft spell
+    /// (`0x5e9e12`, `0x5ea240`) and per `SMSG_PET_SPELLS` (`0x4bdafa`), for the feed to run.
+    pub(crate) rebuilds: u32,
 }
 
 /// `EffectImplicitTargetA`/`B` 5, the pet (`0x4f632a`).
@@ -508,6 +511,7 @@ fn feed_craft(
                             .map(|l| l.name.clone()),
                         training_point_cost,
                         required_level,
+                        tools_pending: Vec::new(),
                     })
                 })
                 .collect();
@@ -1423,5 +1427,72 @@ mod tests {
             "trivial",
             "pushed, silently"
         );
+    }
+
+    /// `SMSG_PET_SPELLS` rebuilds the list on every arrival (`0x4bd990` → `0x4bdafa`), a book
+    /// resent unchanged included; a learn or an unlearn of a craft spell rebuilds it once per packet
+    /// (`0x5e9e12`, `0x5ea240`), whether or not the list moved; a record a getter's call waited on
+    /// rebuilds it once per call (`0x4f7710`).
+    #[test]
+    fn each_packet_and_each_waited_record_signals_one_update() {
+        const DUST: u32 = 10_940;
+        let displays = vec![(
+            7418,
+            SpellDisplay {
+                name: "Enchant Bracer - Minor Health".into(),
+                cast_ui: 3,
+                reagents: [
+                    (DUST, 1),
+                    (0, 0),
+                    (0, 0),
+                    (0, 0),
+                    (0, 0),
+                    (0, 0),
+                    (0, 0),
+                    (0, 0),
+                ],
+                ..Default::default()
+            },
+        )];
+        let catalog =
+            benilla_formats::SkillLineCatalog::from_abilities([(7418, ability(ENCHANTING, 1, 70))]);
+        let mut app = craft_feed(displays, &[7418], catalog, 3, &[]);
+        crate::ui_tradeskill::register_rebuild_triggers(&mut app);
+        app.world()
+            .non_send_resource::<UiScript>()
+            .run(
+                "HEARD = {} local f = CreateFrame('Frame') f:RegisterEvent('CRAFT_SHOW') \
+                 f:RegisterEvent('CRAFT_UPDATE') \
+                 f:SetScript('OnEvent', function() table.insert(HEARD, event) end)",
+            )
+            .unwrap();
+        let heard = |app: &mut App| {
+            app.update();
+            app.world()
+                .non_send_resource::<UiScript>()
+                .eval::<Vec<String>>("local h = HEARD HEARD = {} return h")
+                .unwrap()
+        };
+        assert_eq!(heard(&mut app), ["CRAFT_UPDATE", "CRAFT_SHOW"]);
+        let pet_spells = || SessionEvent::PetSpells(Box::default());
+        crate::net::handlers::dispatch(app.world_mut(), vec![pet_spells(), pet_spells()]);
+        assert_eq!(heard(&mut app), ["CRAFT_UPDATE", "CRAFT_UPDATE"]);
+        crate::net::handlers::dispatch(
+            app.world_mut(),
+            vec![
+                SessionEvent::SpellLearned { spell_id: 7418 },
+                SessionEvent::SpellRemoved { spell_id: 7418 },
+            ],
+        );
+        assert_eq!(heard(&mut app), ["CRAFT_UPDATE", "CRAFT_UPDATE"]);
+        app.world()
+            .non_send_resource::<UiScript>()
+            .run("GetCraftReagentInfo(1, 1) GetCraftReagentInfo(1, 1)")
+            .unwrap();
+        assert!(heard(&mut app).is_empty());
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(DUST, Some(crate::items::test_template("Strange Dust")));
+        assert_eq!(heard(&mut app), ["CRAFT_UPDATE", "CRAFT_UPDATE"]);
     }
 }

@@ -129,6 +129,9 @@ pub struct CraftRecipe {
     pub training_point_cost: u32,
     /// `GetCraftInfo`'s seventh value, the pet level the learned spell needs (`0x4f7088`).
     pub required_level: i32,
+    /// The totems whose templates are in flight: `GetCraftSpellFocus` waits on each with the
+    /// callback `0x4f7710` (`0x4f79f2`).
+    pub tools_pending: Vec<u32>,
 }
 
 /// The open craft window, pushed whole by the app.
@@ -236,6 +239,11 @@ impl super::UiScript {
             }
         }
         model.craft_open
+    }
+
+    /// The item records the getters' calls missed since the last take, one per call.
+    pub fn take_craft_item_waits(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.model_mut().craft_item_waits)
     }
 
     /// Drain the spell ids `DoCraft` queued, one per call, with no count.
@@ -643,6 +651,7 @@ mod tests {
             skill_line: None,
             training_point_cost: 0,
             required_level: 0,
+            tools_pending: Vec::new(),
         }
     }
 
@@ -1034,6 +1043,7 @@ mod tests {
             skill_line: None,
             training_point_cost: 0,
             required_level: 0,
+            tools_pending: Vec::new(),
         };
         // Shuffled on purpose.
         let recipes = vec![
@@ -1147,6 +1157,29 @@ mod tests {
             s.arity("GetCraftItemLink(1)").unwrap(),
             0,
             "a non-Enchanting craft answers zero values"
+        );
+    }
+
+    /// `GetCraftReagentInfo` waits on a reagent whose record is in flight (`0x4f75dd`) and
+    /// `GetCraftSpellFocus` on each such totem (`0x4f79f2`), one wait per call, each with the
+    /// callback `0x4f7710` that rebuilds the list when the record lands.
+    #[test]
+    fn a_getter_that_misses_a_record_waits_on_it_once_per_call() {
+        let mut s = UiScript::new().unwrap();
+        let mut st = state();
+        for r in &mut st.recipes {
+            r.reagents[0].name = None;
+            r.tools_pending = vec![5060];
+        }
+        s.set_craft(Some(st));
+        s.run("GetCraftReagentInfo(1, 1) GetCraftReagentInfo(1, 1) GetCraftSpellFocus(1)")
+            .unwrap();
+        assert_eq!(s.take_craft_item_waits(), [10940, 10940, 5060]);
+        s.run("GetCraftReagentInfo(1, 2) GetCraftReagentInfo(9, 1)")
+            .unwrap();
+        assert!(
+            s.take_craft_item_waits().is_empty(),
+            "a miss of the row reads no record"
         );
     }
 }

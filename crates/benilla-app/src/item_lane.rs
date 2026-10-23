@@ -429,6 +429,8 @@ mod tests {
                 product_item_level: 5,
                 reagents: Vec::new(),
                 tools: Vec::new(),
+                icon_pending: None,
+                tools_pending: Vec::new(),
             }],
         }));
         script.set_craft(Some(CraftState {
@@ -453,6 +455,7 @@ mod tests {
                 skill_line: None,
                 training_point_cost: 0,
                 required_level: 0,
+                tools_pending: Vec::new(),
             }],
         }));
         script

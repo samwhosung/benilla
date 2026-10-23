@@ -1207,6 +1207,7 @@ fn set_craft_spell_selects_the_builder_like_the_trainer_hover_does() {
         skill_line: None,
         training_point_cost: 0,
         required_level: 0,
+        tools_pending: Vec::new(),
     };
     s.set_craft(Some(CraftState {
         name: "Enchanting".into(),
@@ -1455,6 +1456,7 @@ fn craft_recipe(spell_id: u32, name: &str, tooltip: CraftTooltip) -> CraftRecipe
         skill_line: None,
         training_point_cost: 0,
         required_level: 0,
+        tools_pending: Vec::new(),
     }
 }
 
