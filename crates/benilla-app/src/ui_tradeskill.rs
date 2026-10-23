@@ -464,7 +464,11 @@ fn fire_list_rebuilds(
                     return;
                 };
                 match rebuild {
-                    ListRebuild::Trade => script.rebuild_trade_skill(&mut |_| {}),
+                    ListRebuild::Trade => {
+                        if script.rebuild_trade_skill_with(true, &mut |_| {}) {
+                            script.fire_event("TRADE_SKILL_UPDATE", vec![]);
+                        }
+                    }
                     ListRebuild::Craft => {
                         if script.rebuild_craft(&mut |_| {}) {
                             script.fire_event("CRAFT_UPDATE", vec![]);
@@ -662,9 +666,11 @@ fn feed_trade_skill(
                     f.recipes.len(),
                     f.recipes.first().and_then(|r| r.group.clone())
                 );
-                // The open's build signals the update (`0x4fc985` → `0x4fd164`), then the show
-                // while the list holds a row (`0x4fc98a`-`0x4fc999`).
-                fires.post("TRADE_SKILL_UPDATE", vec![]);
+                // The open's build signals the update when nothing is pending (`0x4fc985` →
+                // `0x4fd164`), then the show while the list holds a row (`0x4fc98a`-`0x4fc999`).
+                if script.trade_skill_open_build() {
+                    fires.post("TRADE_SKILL_UPDATE", vec![]);
+                }
                 if script.trade_skill_full_count() > 0 {
                     fires.post("TRADE_SKILL_SHOW", vec![]);
                 }
@@ -675,6 +681,20 @@ fn feed_trade_skill(
         // Each landed record's rebuild signals the update; the packets' fire on their lane.
         if fresh.is_some() {
             for _ in 0..arrivals {
+                if script.rebuild_trade_skill_with(false, &mut |_| {}) {
+                    fires.post("TRADE_SKILL_UPDATE", vec![]);
+                }
+            }
+        }
+        // Each product record a build waited on runs its callback as it lands (`0x4fc8e0`),
+        // which rebuilds with flag 1 once nothing is pending.
+        memo.build_waits
+            .extend(script.take_trade_skill_build_waits());
+        let built = landed(&mut memo.build_waits, &items);
+        for _ in 0..built {
+            if script.trade_skill_record_landed()
+                && script.rebuild_trade_skill_with(true, &mut |_| {})
+            {
                 fires.post("TRADE_SKILL_UPDATE", vec![]);
             }
         }
@@ -689,6 +709,8 @@ struct TradeMemo {
     state: Option<TradeSkillState>,
     /// The item records the getters' calls wait on, one per call.
     item_waits: Vec<u32>,
+    /// The product records the builds wait on, one per miss.
+    build_waits: Vec<u32>,
 }
 
 /// Spend the waits whose record answered: the count of those that brought one.

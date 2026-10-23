@@ -173,14 +173,21 @@ fn row_order(
 /// the line's learn order (`0x5e9d72`, `0x4fcbb7`), then a header
 /// row per header (`0x4fd08c`-`0x4fd0f3`), then [`refilter`]. A recipe set that changed remakes
 /// the headers in the order the recipes name them (flag 1); one that did not keeps the header
-/// array as the last sort left it (flag 0).
-pub(crate) fn build(model: &mut Model, remake_headers: bool) {
+/// array as the last sort left it (flag 0). With a product's record in flight the pass leaves
+/// before the header rows and the sort (`0x4fcd58`, `0x4fcf34`): the array holds the recipes in
+/// add order alone, its full count theirs (`0x4fcba4`), the shown count as the last sort left it,
+/// and `false` says no update follows.
+pub(crate) fn build(model: &mut Model, remake_headers: bool) -> bool {
     let Some(t) = model.trade_skill.as_ref() else {
         model.trade_skill_rows.clear();
         model.trade_skill_headers.clear();
         model.trade_skill_visible = 0;
-        return;
+        return true;
     };
+    if t.recipes.iter().any(|r| r.icon_pending.is_some()) {
+        model.trade_skill_rows = (0..t.recipes.len()).map(Row::Entry).collect();
+        return false;
+    }
     let made = groups_in_add_order(&t.recipes);
     let kept = !remake_headers
         && made.len() == model.trade_skill_headers.len()
@@ -204,6 +211,7 @@ pub(crate) fn build(model: &mut Model, remake_headers: bool) {
     }));
     model.trade_skill_rows = rows;
     refilter(model);
+    true
 }
 
 /// `0x4fd180`: each row's visible flag, the displayed count, and the sorts of the header array

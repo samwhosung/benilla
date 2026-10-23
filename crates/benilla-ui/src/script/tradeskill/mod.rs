@@ -11,6 +11,19 @@ mod api;
 mod itemstats;
 pub(crate) mod view;
 
+/// A build's lookups (`0x4fcd4d`): the pending count started again (`0x4fc8cb`) and taken up by
+/// each product whose record is in flight (`0x4fcd58`), each waited on with the callback
+/// `0x4fc8e0`, which no cancel removes (`0x4fc890`).
+fn note_build(model: &mut super::Model) {
+    let misses: Vec<u32> = model
+        .trade_skill
+        .as_ref()
+        .map(|t| t.recipes.iter().filter_map(|r| r.icon_pending).collect())
+        .unwrap_or_default();
+    model.trade_skill_pending = misses.len() as u32;
+    model.trade_skill_build_waits.extend(misses);
+}
+
 impl TradeSkillState {
     /// Each reagent's carried count from `count` (`0x622130`) and each recipe's makeable count
     /// from them (`0x4fcce0`-`0x4fcf19`).
@@ -200,24 +213,59 @@ impl super::UiScript {
 
     /// A rebuild with flag 0 (`0x4fca20(0)`), as the bag, item and skill watchers run one on each
     /// of their runs (`0x4f8e65`, `0x4f8f6d`, `0x4f917c`, `0x5d85be`, `0x5d8788`, `0x5d94d1`,
-    /// `0x5dee70`, `0x5de434`, `0x5de457`): while the window is open, the state read again where
-    /// `refresh` brings the watcher's change in, the array refilled in add order and sorted, then
-    /// `TRADE_SKILL_UPDATE` (`0x4fd164`), whether or not anything changed. A closed window builds
-    /// nothing (`0x4fcaee`).
+    /// `0x5dee70`, `0x5de434`, `0x5de457`), then `TRADE_SKILL_UPDATE` (`0x4fd164`) when it
+    /// signals one ([`Self::rebuild_trade_skill_with`]).
     pub fn rebuild_trade_skill(&mut self, refresh: &mut dyn FnMut(&mut TradeSkillState)) {
-        let open = {
-            let mut model = self.model_mut();
-            if model.trade_skill_open {
-                if let Some(t) = model.trade_skill.as_mut() {
-                    refresh(t);
-                }
-                view::build(&mut model, false);
-            }
-            model.trade_skill_open
-        };
-        if open {
+        if self.rebuild_trade_skill_with(false, refresh) {
             self.fire_event("TRADE_SKILL_UPDATE", Vec::new());
         }
+    }
+
+    /// A rebuild with `remake` as its flag (`0x4fca20`): while the window is open, the state read
+    /// again where `refresh` brings the caller's change in, the array refilled in add order and
+    /// sorted, its products' records in flight counted pending (`0xbde048`) and waited on with
+    /// the callback `0x4fc8e0` (`0x4fcd32`). Whether its `TRADE_SKILL_UPDATE` follows: an open
+    /// window with nothing pending, whether or not anything changed (`0x4fcf34`, `0x4fd164`). A
+    /// closed window builds nothing (`0x4fcaee`).
+    pub fn rebuild_trade_skill_with(
+        &mut self,
+        remake: bool,
+        refresh: &mut dyn FnMut(&mut TradeSkillState),
+    ) -> bool {
+        let mut model = self.model_mut();
+        if !model.trade_skill_open {
+            return false;
+        }
+        if let Some(t) = model.trade_skill.as_mut() {
+            refresh(t);
+        }
+        let complete = view::build(&mut model, remake);
+        note_build(&mut model);
+        complete
+    }
+
+    /// The open's build (`0x4fc985` → `0x4fca20(1)`) over the list the push made: its products'
+    /// records in flight counted and waited on as any build's. Whether its update follows.
+    pub fn trade_skill_open_build(&mut self) -> bool {
+        let mut model = self.model_mut();
+        note_build(&mut model);
+        model.trade_skill_pending == 0
+    }
+
+    /// The callback `0x4fc8e0` on a record a build waited on, answered: the pending count down by
+    /// one when above 0 (`0x4fc8f3`), and whether a rebuild with flag 1 follows, at 0 (`0x4fc8f9`,
+    /// `0x4fc900`).
+    pub fn trade_skill_record_landed(&mut self) -> bool {
+        let mut model = self.model_mut();
+        if model.trade_skill_pending > 0 {
+            model.trade_skill_pending -= 1;
+        }
+        model.trade_skill_pending == 0
+    }
+
+    /// The records the builds waited on since the last take, one per miss.
+    pub fn take_trade_skill_build_waits(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.model_mut().trade_skill_build_waits)
     }
 
     /// The item records the getters' calls missed since the last take, one per call.
