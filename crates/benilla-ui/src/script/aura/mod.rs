@@ -200,6 +200,11 @@ impl super::UiScript {
         }
     }
 
+    /// A unit's aura list by guid, as [`Self::set_unit_auras`] left it.
+    pub fn unit_auras_view(&self, guid: u64) -> Option<UnitAuraList> {
+        self.model_ref().unit_auras.get(&guid).cloned()
+    }
+
     /// Drop every aura list, the player's with the rest: the session's end.
     pub fn clear_auras(&mut self) {
         let mut model = self.model_mut();

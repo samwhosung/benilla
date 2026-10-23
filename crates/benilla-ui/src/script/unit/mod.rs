@@ -399,6 +399,21 @@ impl super::UiScript {
         }
     }
 
+    /// The snapshot pushed under `token` itself, as [`Self::set_unit`] left it.
+    pub fn unit_view(&self, token: &str) -> Option<UnitState> {
+        self.model_ref().pushed_unit(token).cloned()
+    }
+
+    /// The snapshot pushed for `guid`, as [`Self::set_unit_by_guid`] left it.
+    pub fn unit_view_by_guid(&self, guid: u64) -> Option<UnitState> {
+        self.model_ref().units_by_guid.get(&guid).cloned()
+    }
+
+    /// The unit-token resolver's inputs as last pushed ([`Self::set_unit_guids`]).
+    pub fn unit_guids_view(&self) -> UnitGuids {
+        self.model_ref().unit_guids.clone()
+    }
+
     /// The guids the chains a script can spell end on ([`UnitGuids::chain_ends`]), each once: the
     /// units whose snapshots [`Self::set_unit_by_guid`] serves.
     pub fn chain_end_guids(&self) -> Vec<u64> {
