@@ -239,9 +239,9 @@ mod tests {
     }
 
     /// The doll click (`0x4c7300`) and the bag worker's swap leg (`0x4c7d8d`, `0x4c7df5`) never
-    /// read the split count `0xb4b40c` (its only readers are `0x48988f`, `0x494bf8`, `0x4c7e0c`,
-    /// `0x4f9e1c` and `0x4fb792`): a held split goes through `SwapItem` from its source slot, the
-    /// whole stack moving.
+    /// read the split count `0xb4b40c` (its only readers are `0x48988f`, `0x4c7e0c`, `0x4f9e1c`
+    /// and `0x4fb792`; `SetCursorItem` writes it at `0x494bf8`): a held split goes through
+    /// `SwapItem` from its source slot, the whole stack moving.
     #[test]
     fn a_held_split_swaps_its_whole_stack() {
         for (slot, place, dst_slot) in [
