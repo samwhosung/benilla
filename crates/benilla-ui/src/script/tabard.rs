@@ -39,11 +39,14 @@ pub struct TabardHost {
     pub save_pending: bool,
 }
 
-/// The designer's verb the host applies inside its call ([`super::ScriptCall::Tabard`]).
+/// The designer's verbs the host applies inside their calls ([`super::ScriptCall::Tabard`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabardCall {
     /// `Save()` (`0x502bd0`): the five values, for the checks and the send (`0x5e03f0`).
     Save([i32; 5]),
+    /// `CloseTabardCreation()` (`0x4f5900`): the close core `0x4f58a0`, its latch release, its
+    /// cell and its `CLOSE_TABARD_FRAME` (`0x4f58f8`).
+    Close,
 }
 
 impl super::UiScript {
@@ -63,13 +66,6 @@ impl super::UiScript {
             super::ScriptCall::Tabard(call) => Some(*call),
             _ => None,
         })
-    }
-
-    /// Take the `CloseTabardCreation()` calls made since the last take: the close core needs the
-    /// interaction latch, which a core answers when its own `CLOSE_TABARD_FRAME` raised the call
-    /// through `OnHide`.
-    pub fn take_tabard_close(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().tabard_close)
     }
 }
 
@@ -333,15 +329,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|_, ()| Ok(i64::from(TABARD_CREATION_COST)))?,
     )?;
     // `0x4f5900`, no packet: the close core (`0x4f58a0`) and its `CLOSE_TABARD_FRAME`, gated on a
-    // stored vendor; it needs the interaction latch, so it stays latch-driven, and the event
-    // signals after the verb, where the reference's signals inside it (`0x4f58f8`).
+    // stored vendor, inside the call.
     g.set(
         "CloseTabardCreation",
         lua.create_function(|lua, _: mlua::MultiValue| {
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .tabard_close = true;
-            Ok(())
+            super::calls::submit(lua, super::ScriptCall::Tabard(TabardCall::Close))
         })?,
     )?;
     Ok(())
@@ -529,7 +521,7 @@ mod tests {
     }
 
     #[test]
-    fn can_save_is_one_or_nil_over_the_three_conjuncts_and_save_and_close_queue_intents() {
+    fn can_save_is_one_or_nil_over_the_three_conjuncts_and_save_and_close_are_calls() {
         let mut s = vm();
         s.set_tabard_host(TabardHost {
             guild_record: None,
@@ -562,8 +554,10 @@ mod tests {
         s.run("t:InitializeTabardColors() t:Save() CloseTabardCreation()")
             .unwrap();
         let calls = s.take_tabard_calls();
-        assert!(matches!(calls[..], [TabardCall::Save(_)]), "{calls:?}");
-        assert!(s.take_tabard_close());
-        assert!(s.take_tabard_calls().is_empty() && !s.take_tabard_close());
+        assert!(
+            matches!(calls[..], [TabardCall::Save(_), TabardCall::Close]),
+            "{calls:?}"
+        );
+        assert!(s.take_tabard_calls().is_empty());
     }
 }

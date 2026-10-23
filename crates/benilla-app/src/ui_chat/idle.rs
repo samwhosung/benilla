@@ -139,15 +139,16 @@ pub(crate) fn idle_handler(
     mut vm: crate::script_calls::VmWith<(
         MessageWriter<'static, crate::player::StandStateRequest>,
         ResMut<'static, AfkMirror>,
+        // The pending byte, which the host's logout writes inside its call.
+        Res<'static, crate::ui_logout::LogoutState>,
     )>,
     self_q: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
     chat: Res<ChatLog>,
     commands: Res<crate::net::NetCommands>,
     follow: Res<crate::player::FollowState>,
     approach: Res<crate::player::Approach>,
-    logout: Res<crate::ui_logout::LogoutState>,
 ) {
-    vm.turn(|script, (mut stand, mut mirror)| {
+    vm.turn(|script, (mut stand, mut mirror, logout)| {
         let idle = time.elapsed().saturating_sub(last.0);
         if idle < AUTO_AFK_AFTER {
             return;
@@ -210,8 +211,10 @@ pub(crate) fn idle_handler(
             if let Some(line) = strings("IDLE_MESSAGE") {
                 push_system(&chat, line);
             }
-            // `0x5ab000` with the game menu's arguments; `crate::ui_logout` owns the rest.
-            script.queue_session_request(benilla_ui::script::SessionRequest::Logout);
+            // `0x5ab000` with the game menu's arguments, applied as the turn ends.
+            if let Err(e) = script.session_call(benilla_ui::script::SessionRequest::Logout) {
+                warn!("idle: the camp's logout was refused: {e}");
+            }
         }
     })
 }
@@ -574,6 +577,27 @@ mod tests {
         app.world().resource::<ChatLog>().pending_lines()
     }
 
+    /// [`world`] in the whole client, headless, whose call host applies the camp's `Logout`
+    /// inside its call as the handler's turn ends; our player is in the world.
+    fn hosted(idle_ms: u64) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        app.insert_resource(NetCommands(tx))
+            .insert_resource(crate::net::SelfGuid(Some(0x4000_0000_0000_0009)));
+        let (mut scratch, _) = world(idle_ms, &[]);
+        let script = scratch
+            .world_mut()
+            .remove_non_send_resource::<benilla_ui::script::UiScript>()
+            .expect("the scratch world's VM");
+        app.world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(Duration::from_millis(idle_ms));
+        app.world_mut()
+            .spawn((SelfPlayer, ObjectStore(ObjectFields::from_pairs(&[]))));
+        app.insert_non_send_resource(script);
+        (app, rx)
+    }
+
     /// The sit is a [`crate::player::StandStateRequest`]; the mark, the `/afk` line and packet.
     #[test]
     fn five_minutes_idle_sits_you_down_and_marks_you_afk() {
@@ -610,10 +634,11 @@ mod tests {
         assert!(rx.try_iter().next().is_none());
     }
 
-    /// `0x5ab000` is the game menu's Logout: a session request and nothing else.
+    /// `0x5ab000` is the game menu's Logout: the request, sent as the handler's turn ends, and
+    /// nothing else.
     #[test]
     fn thirty_minutes_idle_camps_instead_of_marking_afk() {
-        let (mut app, rx) = world(1_800_000, &[]);
+        let (mut app, rx) = hosted(1_800_000);
         app.world_mut().run_system_once(idle_handler).unwrap();
 
         assert_eq!(
@@ -631,13 +656,17 @@ mod tests {
             !app.world().resource::<AfkMirror>().is_afk(),
             "the camp leg pointedly does NOT mark AFK"
         );
-        assert!(rx.try_iter().next().is_none(), "and sends no chat packet");
         assert!(
-            app.world_mut()
-                .non_send_resource_mut::<benilla_ui::script::UiScript>()
-                .take_session_requests()
-                == vec![benilla_ui::script::SessionRequest::Logout],
+            matches!(
+                rx.try_iter().collect::<Vec<_>>()[..],
+                [ClientCommand::Logout]
+            ),
+            "the request, and no chat packet"
         );
+        assert!(app
+            .world()
+            .resource::<crate::ui_logout::LogoutState>()
+            .pending());
         assert!(app
             .world_mut()
             .resource_mut::<bevy::ecs::message::Messages<crate::player::StandStateRequest>>()
@@ -647,26 +676,15 @@ mod tests {
     }
 
     /// `0x482ef5`: the leg, line and request, is skipped while the logout it asked for is pending,
-    /// and arms again once a cancel clears the byte (`0x5aaf80`). The pending byte is the real
-    /// drain's, run after the handler as the app orders it and before it as well, so the gate
-    /// holds whichever frame the byte is set in.
+    /// and arms again once a cancel clears the byte (`0x5aaf80`). The byte is set inside the
+    /// request's call (`0x5ab05b`), so the gate holds from the next frame.
     #[test]
     fn thirty_minutes_idle_prints_and_asks_once_per_logout() {
-        use benilla_ui::script::{SessionRequest, UiScript};
-
-        for idle_first in [true, false] {
-            let (mut app, rx) = world(1_800_000, &[]);
-            app.init_resource::<crate::ui_script::ReloadUiPending>()
-                .init_resource::<crate::cinematic::Cinematic>()
-                .add_message::<AppExit>()
-                .insert_resource(crate::net::SelfGuid(Some(0x4000_0000_0000_0009)));
+        {
+            let (mut app, rx) = hosted(1_800_000);
             // One schedule for every frame, so any state a system keeps between frames persists.
             let mut schedule = Schedule::default();
-            if idle_first {
-                schedule.add_systems((idle_handler, crate::ui_logout::drain_logout).chain());
-            } else {
-                schedule.add_systems((crate::ui_logout::drain_logout, idle_handler).chain());
-            }
+            schedule.add_systems(idle_handler);
             let mut frame = |app: &mut App| schedule.run(app.world_mut());
             let requests = |rx: &crossbeam_channel::Receiver<ClientCommand>| {
                 rx.try_iter()
@@ -680,18 +698,15 @@ mod tests {
             assert_eq!(
                 lines(&app).len(),
                 1,
-                "one IDLE_MESSAGE for sixty frames while the request is pending (idle first: \
-                 {idle_first})"
+                "one IDLE_MESSAGE for sixty frames while the request is pending"
             );
             assert_eq!(requests(&rx), 1, "and one CMSG_LOGOUT_REQUEST");
 
             // The CAMP dialog's cancel: `CancelLogout` clears the byte, and idle continues.
-            app.world_mut()
-                .non_send_resource_mut::<UiScript>()
-                .queue_session_request(SessionRequest::CancelLogout);
-            app.world_mut()
-                .run_system_once(crate::ui_logout::drain_logout)
-                .unwrap();
+            crate::script_calls::with_hosted_vm(app.world_mut(), |vm| {
+                vm.expect("a VM").run("CancelLogout()")
+            })
+            .expect("the cancel runs");
             assert!(!app
                 .world()
                 .resource::<crate::ui_logout::LogoutState>()

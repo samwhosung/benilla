@@ -6,6 +6,7 @@
 //! them.
 
 use crate::query_cache::Ask;
+use benilla_ui::script::SessionRequest;
 use bevy::prelude::*;
 
 /// The channel verbs' slot writes and packets.
@@ -728,15 +729,11 @@ pub(super) fn drain_chat_input(
                         .ok()
                         .filter(|t| !t.is_empty())
                 }),
-                // `SlashCmdList["LOGOUT"]` is `Logout()`, the game menu's route: `crate::ui_logout`
-                // sends the request and narrates the answer with the CAMP countdown.
-                ParsedChat::Logout => {
-                    script.queue_session_request(benilla_ui::script::SessionRequest::Logout)
-                }
-                // `Quit()`, the game menu Exit button's queue, countdown and confirmation.
-                ParsedChat::Quit => {
-                    script.queue_session_request(benilla_ui::script::SessionRequest::Quit)
-                }
+                // `SlashCmdList["LOGOUT"]` is `Logout()` and `SlashCmdList["QUIT"]` is `Quit()`,
+                // the game menu's routes: the call sends the request as the turn ends, and
+                // `crate::ui_logout` narrates the answer with the CAMP or QUIT countdown.
+                ParsedChat::Logout => session(script, SessionRequest::Logout),
+                ParsedChat::Quit => session(script, SessionRequest::Quit),
                 // Deferred to the world, since a command is `fn(&mut World, &str)`; its lines go to
                 // the log, never to chat ([`crate::console::run`]).
                 ParsedChat::Console { line } => {
@@ -848,6 +845,13 @@ impl LineLua {
 
 /// `/chattest`: one synthetic line of every renderable form (kinds, flags, the language header,
 /// channel prefixes, notices, item and player links) through the real event pipeline.
+/// A slash command's session verb, as its `SlashCmdList` handler calls it.
+fn session(script: &mut benilla_ui::script::UiScript, request: SessionRequest) {
+    if let Err(e) = script.session_call(request) {
+        warn!("chat: {request:?} was refused: {e}");
+    }
+}
+
 fn chattest_battery(log: &super::feed::ChatLog, get: &dyn Fn(&str) -> Option<String>) {
     use super::event::{ChatEvent, ChatEventKind as K};
     let player = |kind: K, text: &str, sender: &str| {

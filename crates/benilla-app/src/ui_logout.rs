@@ -13,7 +13,10 @@
 //! the stock dialogs hang off (`UIParent.lua:304-315`). Quit is a logout that exits the process on
 //! completion; the QUIT dialog has an "Exit now" button and CAMP has none.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use benilla_ui::script::SessionRequest;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use crate::net::{ClientCommand, LoggedOutMessage, NetCommands, SelfGuid};
@@ -89,15 +92,18 @@ impl LogoutState {
 /// Fire the signals in wire order: the events the stock CAMP and QUIT dialogs hang off, and the
 /// refusal line.
 fn feed_logout(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut logout: ResMut<LogoutState>,
+    mut vm: crate::script_calls::VmWith<ResMut<'static, LogoutState>>,
     mut sink: crate::ui_action::MessageSink,
 ) {
-    hosted_vm.run(|script| {
+    let signals = std::mem::take(&mut vm.own().signals);
+    if signals.is_empty() {
+        return;
+    }
+    vm.run(|script| {
         let Some(script) = script else {
             return;
         };
-        for signal in std::mem::take(&mut logout.signals) {
+        for signal in signals {
             match signal {
                 LogoutSignal::Camping => script.fire_event("PLAYER_CAMPING", Vec::new()),
                 LogoutSignal::Quiting => script.fire_event("PLAYER_QUITING", Vec::new()),
@@ -111,79 +117,136 @@ fn feed_logout(
     })
 }
 
-/// Turn the Lua intents into packets; a forced quit, or a quit with no world session, exits.
-pub(crate) fn drain_logout(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut logout: ResMut<LogoutState>,
-    self_guid: Res<SelfGuid>,
-    commands: Res<NetCommands>,
+/// What a session verb posts past its call, which nothing the script reads waits on: the process's
+/// exit, as `ForceQuit` posts the context's close (`0x48ab60` → `0x401560`), and the cinematic's
+/// stop, which schedules the end's fade (`0x48b970` → `0x48f050`). [`apply_session_posts`] takes
+/// them at the frame's drain.
+#[derive(Resource, Default)]
+pub(crate) struct SessionPosts {
+    exit: AtomicBool,
+    stop_cinematic: AtomicBool,
+}
+
+/// Apply what the session verbs posted: the cinematic's stop, then the exit.
+fn apply_session_posts(
+    posts: Res<SessionPosts>,
+    cinematic: Option<ResMut<crate::cinematic::Cinematic>>,
+    net: Option<Res<NetCommands>>,
     mut exit: MessageWriter<AppExit>,
-    mut reload: ResMut<crate::ui_script::ReloadUiPending>,
-    mut cinematic: ResMut<crate::cinematic::Cinematic>,
 ) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        for request in script.take_session_requests() {
-            match request {
-                SessionRequest::Logout | SessionRequest::Quit => {
-                    // `0x5ab000` bails silently while a request is pending, before the quit byte is
-                    // stored (`0x5ab053`), so a second ask cannot turn a camp into a quit.
-                    if logout.pending {
-                        continue;
-                    }
-                    logout.quitting = request == SessionRequest::Quit;
-                    // No world session: a quit just exits, as the reference's glue-screen `Quit()`
-                    // does, and a logout does nothing.
-                    if self_guid.0.is_none() || commands.0.send(ClientCommand::Logout).is_err() {
-                        if logout.quitting {
-                            info!("logout: quit with no world session — exiting");
-                            exit.write(AppExit::Success);
-                        } else {
-                            warn!("logout: no world session — logout dropped");
-                            logout.quitting = false;
-                        }
-                    } else {
-                        logout.pending = true;
-                        // Logged: instant or timed is the server's call.
-                        info!(
-                            "logout: requested (quitting={}) — awaiting SMSG_LOGOUT_RESPONSE",
-                            logout.quitting
-                        );
-                    }
-                }
-                SessionRequest::CancelLogout => {
-                    // The stock dialogs' `OnHide` sends this on every early close, even after a
-                    // cancel landed, so a stray cancel is normal. `quitting` clears here, not on
-                    // the ack, so a dead socket cannot leave a quit armed.
+    if posts.stop_cinematic.swap(false, Ordering::Relaxed) {
+        if let Some(mut cinematic) = cinematic {
+            crate::cinematic::stop(&mut cinematic, net.as_deref());
+        }
+    }
+    if posts.exit.swap(false, Ordering::Relaxed) {
+        exit.write(AppExit::Success);
+    }
+}
+
+/// The session verbs' engine half ([`crate::script_calls::ScriptCallHost`]): each sends its
+/// packet and sets its latch before the verb returns, as the reference's bindings call into
+/// `ClientConnection` inside the call (`0x489390`, `0x4893b0`, `0x48ab40`, `0x48ab50`), and posts
+/// what the frame applies after ([`SessionPosts`]).
+#[derive(SystemParam)]
+pub(crate) struct SessionSteps<'w> {
+    /// Absent in a harness with no logout state, which drops the logout verbs.
+    logout: Option<ResMut<'w, LogoutState>>,
+    self_guid: Option<Res<'w, SelfGuid>>,
+    commands: Res<'w, NetCommands>,
+    reload: Option<ResMut<'w, crate::ui_script::ReloadUiPending>>,
+    posts: Option<Res<'w, SessionPosts>>,
+}
+
+impl SessionSteps<'_> {
+    /// Apply `request` inside its verb.
+    pub(crate) fn apply(&mut self, request: SessionRequest) {
+        match request {
+            SessionRequest::Logout => self.logout(false),
+            SessionRequest::Quit => self.logout(true),
+            // `0x5aaf80`: `CMSG_LOGOUT_CANCEL` and the pending byte cleared (`0x5aafc2`). The
+            // stock dialogs' `OnHide` sends this on every early close, even after a cancel landed,
+            // so a stray cancel is normal. `quitting` clears here too, so a dead socket cannot
+            // leave a quit armed.
+            SessionRequest::CancelLogout => {
+                if let Some(logout) = self.logout.as_deref_mut() {
                     logout.quitting = false;
                     logout.pending = false;
-                    let _ = commands.0.send(ClientCommand::LogoutCancel);
                 }
-                SessionRequest::ForceQuit => {
-                    info!("logout: force quit");
-                    exit.write(AppExit::Success);
-                }
-                // `CMSG_PLAYER_LOGOUT`, only with a world session: `0x5aaff0` calls `0x5ab000` with
-                // force 1, which skips the pending bail and does not set the latch.
-                SessionRequest::ForceLogout => {
-                    if self_guid.0.is_some() {
-                        info!("logout: forced");
-                        let _ = commands.0.send(ClientCommand::ForceLogout);
+                let _ = self.commands.0.send(ClientCommand::LogoutCancel);
+            }
+            // `0x401560(0)`: the process ends, with no server round trip.
+            SessionRequest::ForceQuit => {
+                info!("logout: force quit");
+                self.exit_now();
+            }
+            // `0x5aaff0` is `0x5ab000(0, 1)`: only with a world session (`0x5ab020`), past the
+            // pending bail (`0x5ab018`); it stores the quit byte as 0 (`0x5ab053`) and leaves the
+            // pending byte (`0x5ab059`), then sends `CMSG_PLAYER_LOGOUT` (`0x5ab07c`).
+            SessionRequest::ForceLogout => {
+                if self.in_world() {
+                    info!("logout: forced");
+                    if let Some(logout) = self.logout.as_deref_mut() {
+                        logout.quitting = false;
                     }
+                    let _ = self.commands.0.send(ClientCommand::ForceLogout);
                 }
-                // The rebuild is `ui_script::run_pending_reload`'s, at the top of the next frame.
-                SessionRequest::ReloadUi => reload.0 = true,
-                // Esc out of a cinematic: the reference's `StopCinematic` has no binding and no
-                // native caller, as `CinematicFrame.xml:37-44`'s `OnKeyDown` is the whole skip
-                // path.
-                SessionRequest::StopCinematic => {
-                    crate::cinematic::stop(&mut cinematic, Some(&commands));
+            }
+            // `0x4884d0` sets `0xb4b3f4`; the rebuild is `ui_script::run_pending_reload`'s, at the
+            // top of the next frame, outside any call.
+            SessionRequest::ReloadUi => {
+                if let Some(reload) = self.reload.as_deref_mut() {
+                    reload.0 = true;
+                }
+            }
+            // Esc out of a cinematic: the reference's `StopCinematic` has no binding and no
+            // native caller, as `CinematicFrame.xml:37-44`'s `OnKeyDown` is the whole skip path.
+            SessionRequest::StopCinematic => {
+                if let Some(posts) = &self.posts {
+                    posts.stop_cinematic.store(true, Ordering::Relaxed);
                 }
             }
         }
-    })
+    }
+
+    fn in_world(&self) -> bool {
+        self.self_guid.as_ref().is_some_and(|g| g.0.is_some())
+    }
+
+    fn exit_now(&self) {
+        if let Some(posts) = &self.posts {
+            posts.exit.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// `0x5ab000(quit, 0)`: silent while a request is pending (`0x5ab01a`), before the quit byte
+    /// is stored (`0x5ab053`), so a second ask cannot turn a camp into a quit; then the byte, the
+    /// pending byte (`0x5ab05b`) and `CMSG_LOGOUT_REQUEST` (`0x5ab07c`).
+    fn logout(&mut self, quit: bool) {
+        let in_world = self.in_world();
+        let Some(logout) = self.logout.as_deref_mut() else {
+            return;
+        };
+        if logout.pending {
+            return;
+        }
+        logout.quitting = quit;
+        // No world session: a quit just exits, as the reference's glue-screen `Quit()` does, and
+        // a logout does nothing.
+        if !in_world || self.commands.0.send(ClientCommand::Logout).is_err() {
+            logout.quitting = false;
+            if quit {
+                info!("logout: quit with no world session — exiting");
+                self.exit_now();
+            } else {
+                warn!("logout: no world session — logout dropped");
+            }
+            return;
+        }
+        logout.pending = true;
+        // Logged: instant or timed is the server's call.
+        info!("logout: requested (quitting={quit}) — awaiting SMSG_LOGOUT_RESPONSE");
+    }
 }
 
 /// `SMSG_LOGOUT_COMPLETE` returns to character select, or ends the process for Exit Game.
@@ -209,17 +272,16 @@ pub struct UiLogoutPlugin;
 impl Plugin for UiLogoutPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
-        app.init_resource::<LogoutState>().add_systems(
-            Update,
-            (
-                feed_logout.in_set(UiFeed),
-                // After the idle handler, which reads the pending byte: its request is drained
-                // and the byte set in the frame it was asked, as `0x5ab05b` sets it in the call.
-                (drain_logout, exit_on_logout_complete)
-                    .in_set(crate::ui_script::UiDrain)
-                    .after(crate::ui_chat::idle::idle_handler),
-            ),
-        );
+        app.init_resource::<LogoutState>()
+            .init_resource::<SessionPosts>()
+            .add_systems(
+                Update,
+                (
+                    feed_logout.in_set(UiFeed),
+                    (apply_session_posts, exit_on_logout_complete)
+                        .in_set(crate::ui_script::UiDrain),
+                ),
+            );
     }
 }
 
@@ -286,60 +348,6 @@ mod tests {
             "the refusal arm clears the pending byte — otherwise a logout refused in combat \
              would never be retryable"
         );
-    }
-
-    /// Driven through [`drain_logout`], where the `0x5ab000` bail lives.
-    #[test]
-    fn a_second_logout_while_one_is_pending_is_silent() {
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let mut app = App::new();
-        app.init_resource::<LogoutState>()
-            .init_resource::<crate::ui_script::ReloadUiPending>()
-            .init_resource::<crate::cinematic::Cinematic>()
-            .add_message::<AppExit>()
-            .add_message::<LoggedOutMessage>()
-            .insert_resource(SelfGuid(Some(0x4000_0000_0000_0009)))
-            .insert_resource(NetCommands(tx));
-        app.insert_non_send_resource(UiScript::new().unwrap());
-
-        let ask = |app: &mut App, request| {
-            app.world_mut()
-                .non_send_resource_mut::<UiScript>()
-                .queue_session_request(request);
-            app.world_mut()
-                .run_system_once(drain_logout)
-                .expect("drain");
-        };
-        let sent = |rx: &crossbeam_channel::Receiver<ClientCommand>| rx.try_iter().count();
-
-        ask(&mut app, SessionRequest::Logout);
-        assert_eq!(sent(&rx), 1, "the first ask goes out");
-        assert!(app.world().resource::<LogoutState>().pending);
-
-        // A second ask while the first is unanswered, as a double-clicked Logout makes.
-        for _ in 0..60 {
-            ask(&mut app, SessionRequest::Logout);
-        }
-        assert_eq!(sent(&rx), 0, "and not one more packet, nor any error line");
-
-        // `ForceLogout` bypasses the bail and does not set the latch (`0x5aaff0`, force 1).
-        ask(&mut app, SessionRequest::ForceLogout);
-        assert_eq!(sent(&rx), 1, "the forced flavour is the escape hatch");
-
-        // A cancel disarms, and the next ask is heard again.
-        ask(&mut app, SessionRequest::CancelLogout);
-        assert_eq!(sent(&rx), 1, "CMSG_LOGOUT_CANCEL");
-        assert!(!app.world().resource::<LogoutState>().pending);
-        ask(&mut app, SessionRequest::Logout);
-        assert_eq!(sent(&rx), 1);
-
-        // So does the completion.
-        app.world_mut().resource_mut::<LogoutState>().pending = true;
-        app.world_mut().write_message(LoggedOutMessage);
-        app.world_mut()
-            .run_system_once(exit_on_logout_complete)
-            .expect("complete");
-        assert!(!app.world().resource::<LogoutState>().pending);
     }
 
     /// The whole client, headless, in the world, with a VM and the write channel captured.

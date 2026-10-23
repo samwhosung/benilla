@@ -7,7 +7,7 @@
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{ActionSlot, ScriptValue, UiScript, UnitState};
+use benilla_ui::script::{ActionSlot, ScriptValue, UnitState};
 
 use crate::ui_unit::UnitFeed;
 use benilla_world::schedule::WorldStage;
@@ -230,9 +230,9 @@ pub(crate) fn run_or_warn(script: &benilla_ui::script::UiScript, chunk: &str) {
 }
 
 /// The reference's `uiScale` CVar, which the VM makes `UIParent`'s own scale
-/// ([`UiScript::set_ui_scale`]): the screen root stays 768 units tall, so `uiScale = 768/screenH`
-/// is pixel-perfect inside `UIParent`, and a frame outside it is not scaled. Tests pin the
-/// `Default` 1.0.
+/// ([`benilla_ui::script::UiScript::set_ui_scale`]): the screen root stays 768 units tall, so
+/// `uiScale = 768/screenH` is pixel-perfect inside `UIParent`, and a frame outside it is not
+/// scaled. Tests pin the `Default` 1.0.
 #[derive(Resource)]
 pub(crate) struct UiScaleCvar(pub(crate) f32);
 
@@ -302,9 +302,13 @@ fn console_reload_ui(world: &mut World, _args: &str) -> Vec<String> {
     if let Some(mut rebuild) = world.get_resource_mut::<glue::GlueRebuild>() {
         rebuild.request();
     }
-    if let Some(mut script) = world.get_non_send_resource_mut::<UiScript>() {
-        script.queue_session_request(benilla_ui::script::SessionRequest::ReloadUi);
-    }
+    crate::script_calls::with_hosted_vm(world, |script| {
+        if let Some(Err(e)) =
+            script.map(|s| s.session_call(benilla_ui::script::SessionRequest::ReloadUi))
+        {
+            debug!("console: reloadUI with no interface to reload: {e}");
+        }
+    });
     Vec::new()
 }
 

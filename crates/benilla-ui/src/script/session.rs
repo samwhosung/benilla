@@ -1,46 +1,57 @@
 //! The session verbs: the game menu's Logout and Exit Game, their dialogs' answers, `ReloadUI`
-//! and the cinematic pair. Each queues a [`SessionRequest`] the app turns into a packet or an
-//! exit; the server decides whether a logout is instant or a 20-second countdown. Beside them,
-//! the world-enter cascade's two events and the `PLAYER_LOGIN` arm a UI load sets.
+//! and the cinematic pair. Each hands its [`SessionRequest`] to the call host, which sends the
+//! packet, sets the latch or ends the process before the verb returns, as the reference's do
+//! (`Logout` `0x489390` → `0x5ab000`); the server decides whether a logout is instant or a
+//! 20-second countdown. Beside them, the world-enter cascade's two events and the `PLAYER_LOGIN`
+//! arm a UI load sets.
 
 use mlua::Lua;
 
 use super::Model;
 
-/// A session intent queued by a Lua call, drained by the app.
+/// A session verb, which the call host applies inside the call ([`super::ScriptCall::Session`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionRequest {
-    /// `Logout()`: `CMSG_LOGOUT_REQUEST` (`0x5ab000`), back to character select.
+    /// `Logout()` (`0x489390`): `0x5ab000(0, 0)`, `CMSG_LOGOUT_REQUEST`, back to character select.
     Logout,
-    /// `Quit()`: the same request, then the process ends once the logout completes.
+    /// `Quit()` (`0x4893b0`): `0x5ab000(1, 0)`, the same request, then the process ends once the
+    /// logout completes.
     Quit,
-    /// `CancelLogout()`: `CMSG_LOGOUT_CANCEL`; the server's ack fires `LOGOUT_CANCEL`.
+    /// `CancelLogout()` (`0x48ab40` → `0x5aaf80`): `CMSG_LOGOUT_CANCEL`, and the pending latch
+    /// clears.
     CancelLogout,
-    /// `ForceQuit()`: end the process now, with no server round trip.
+    /// `ForceQuit()` (`0x48ab60` → `0x401560(0)`): end the process now, with no server round
+    /// trip.
     ForceQuit,
-    /// `ForceLogout()` (`0x48ab50`): an empty `CMSG_PLAYER_LOGOUT` (`0x4A`), bypassing the
-    /// pending-logout latch, and nothing without a live in-world session (`0x5ab020`).
+    /// `ForceLogout()` (`0x48ab50` → `0x5aaff0`): `0x5ab000(0, 1)`, an empty `CMSG_PLAYER_LOGOUT`
+    /// (`0x4A`), bypassing the pending-logout latch, and nothing without a live in-world session
+    /// (`0x5ab020`).
     ForceLogout,
     /// `ReloadUI()` (`0x4884d0`) only sets `0xb4b3f4`; the next frame's `0x495590` tears the VM
-    /// down and rebuilds it, so it is never destroyed mid-call. The app's drain, outside any call,
-    /// is the same guard.
+    /// down and rebuilds it, so it is never destroyed mid-call.
     ReloadUi,
-    /// `StopCinematic()` (`0x48b970`), the only skip: no native caller and no binding, so ESC
-    /// reaches it only through `CinematicFrame`'s `OnKeyDown`; playback therefore waits for the
-    /// in-game UI.
+    /// `StopCinematic()` (`0x48b970` → `0x48f050`), the only skip: no native caller and no
+    /// binding, so ESC reaches it only through `CinematicFrame`'s `OnKeyDown`; playback therefore
+    /// waits for the in-game UI.
     StopCinematic,
 }
 
 impl super::UiScript {
-    /// Drain the session intents queued since the last call.
-    pub fn take_session_requests(&mut self) -> Vec<SessionRequest> {
-        std::mem::take(&mut self.model_mut().session_requests)
+    /// Hand `request` to the call host, as its Lua verb does: `/logout`, `/camp`, `/quit` and
+    /// `/reload`, which benilla parses in Rust rather than through `SlashCmdList`, and the
+    /// engine's own calls (the idle handler's `0x5ab000`, the console's reload), take this route.
+    /// What the call raises, a call made with no host lent among it, is the error.
+    pub fn session_call(&mut self, request: SessionRequest) -> mlua::Result<()> {
+        let lua = self.lua().clone();
+        super::calls::submit(&lua, super::ScriptCall::Session(request))
     }
 
-    /// Queue an intent from the app: `/logout`, `/camp`, `/quit` and `/reload`, which benilla
-    /// parses in Rust rather than through `SlashCmdList`, take their Lua verbs' route this way.
-    pub fn queue_session_request(&mut self, request: SessionRequest) {
-        self.model_mut().session_requests.push(request);
+    /// The session calls a harness VM kept ([`Self::keep_calls`]), in call order.
+    pub fn take_session_requests(&mut self) -> Vec<SessionRequest> {
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Session(request) => Some(*request),
+            _ => None,
+        })
     }
 
     /// Arm `PLAYER_LOGIN`, the UI load's last step: `UI_Init` sets the one-shot `[0xb4e260]` at
@@ -152,9 +163,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 {
                     return Ok(());
                 }
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.session_requests.push(request);
-                Ok(())
+                super::calls::submit(lua, super::ScriptCall::Session(request))
             })?,
         )?;
     }

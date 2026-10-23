@@ -18,7 +18,7 @@
 use bevy::ecs::system::{SystemParam, SystemParamItem};
 use bevy::prelude::*;
 
-use benilla_ui::script::{CallHost, CallTail, ScriptCall, UiScript};
+use benilla_ui::script::{CallHost, CallTail, PetitionCall, ScriptCall, TabardCall, UiScript};
 
 /// `DoEmote` (`0x5ef560`) in the reference's order: a posture emote's stand change to a state but 0
 /// runs its local apply's leave (`0x5f0790`), the loot close (`0x48f200` at `0x5f07d5`) then the
@@ -46,7 +46,7 @@ pub(crate) struct ScriptCallHost<'w, 's> {
             crate::target::ScriptSelect<'w, 's>,
             crate::spell::ScriptCursor<'w, 's>,
             // The cast's own state: its cancel, the view the VM reads after each call, and the
-            // reports the call made; and the character panel's verbs.
+            // reports the call made; the character panel's verbs; and the session's.
             ParamSet<
                 'w,
                 's,
@@ -68,6 +68,18 @@ pub(crate) struct ScriptCallHost<'w, 's> {
                     // The action slots' states, whose usable refresh a selection change runs
                     // inside its call; absent in a harness without the action feed's inputs.
                     Option<crate::ui_action::ActionStates<'w, 's>>,
+                    // The session's: the logout and the reload, the tutorial banks, and the
+                    // interaction latch the NPC windows' close cores release. A further
+                    // session-wide applier joins this set.
+                    ParamSet<
+                        'w,
+                        's,
+                        (
+                            crate::ui_logout::SessionSteps<'w>,
+                            crate::tutorial::TutorialSteps<'w>,
+                            crate::ui_session::LatchSteps<'w>,
+                        ),
+                    >,
                 ),
             >,
             crate::spell::ScriptCast<'w, 's>,
@@ -386,6 +398,56 @@ impl ScriptCallHost<'_, '_> {
         self.appliers.p6().p0().settle_pick()
     }
 
+    /// The registrar's close core `0x4f5010` inside its call: with a registrar open, the latch
+    /// release (`0x4f5024`), which re-enters the core while the registrar holds the latch, then
+    /// the cell cleared (`0x4f502b`) and `GUILD_REGISTRAR_CLOSED` (`0x4f503a`), its signal once
+    /// per run of the core, as the call's tail.
+    fn close_registrar(&mut self) -> Option<CallTail> {
+        use crate::ui_session::NpcWindow;
+        let npc = self.appliers.p4().p7().p1().registrar_npc()?;
+        let reenters = self.appliers.p2().p5().p2().release(npc);
+        self.appliers.p4().p7().p1().clear_registrar();
+        let runs = 1 + usize::from(reenters);
+        let mut set = self.appliers.p2();
+        let mut session = set.p5();
+        let latch = session.p2();
+        for _ in 0..runs {
+            latch.note_closed(NpcWindow::Registrar);
+        }
+        Some(Box::new(move |script: &mut UiScript| {
+            for _ in 0..runs {
+                script.fire_event("GUILD_REGISTRAR_CLOSED", vec![]);
+            }
+        }))
+    }
+
+    /// The designer's close core `0x4f58a0` inside `CloseTabardCreation`'s call: with a vendor
+    /// stored, the latch release (`0x4f58da`), which re-enters the core while the designer holds
+    /// the latch, then the cell cleared (`0x4f58df`) and `CLOSE_TABARD_FRAME` (`0x4f58f8`), once
+    /// per run of the core, as the call's tail; an open not yet told goes first, as the reference
+    /// fired it at the open.
+    fn close_tabard(&mut self) -> Option<CallTail> {
+        use crate::ui_session::NpcWindow;
+        let vendor = self.appliers.p4().p7().p2().vendor()?;
+        let reenters = self.appliers.p2().p5().p2().release(vendor);
+        let opened = self.appliers.p4().p7().p2().clear_vendor();
+        let runs = 1 + usize::from(reenters);
+        let mut set = self.appliers.p2();
+        let mut session = set.p5();
+        let latch = session.p2();
+        for _ in 0..runs {
+            latch.note_closed(NpcWindow::Tabard);
+        }
+        Some(Box::new(move |script: &mut UiScript| {
+            if opened {
+                script.fire_event("OPEN_TABARD_FRAME", vec![]);
+            }
+            for _ in 0..runs {
+                script.fire_event("CLOSE_TABARD_FRAME", vec![]);
+            }
+        }))
+    }
+
     /// A probe line's text emote, run as `DoEmote` runs it inside its call (`0x5ef560`).
     pub(crate) fn emote(&mut self, script: &mut UiScript, text_id: u32, arg: Option<String>) {
         let appliers = &mut self.appliers;
@@ -530,13 +592,26 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Taxi(call) => tail = appliers.p5().p6().apply(call),
             ScriptCall::Merchant(call) => appliers.p5().p7().apply(script, call),
             ScriptCall::Guild(call) => appliers.p4().p7().p0().apply(script, call),
+            ScriptCall::Petition(PetitionCall::CloseRegistrar) => tail = self.close_registrar(),
+            // The designer's opener, then the registrar's close core (`0x4f5355` → `0x4f5010`).
+            ScriptCall::Petition(PetitionCall::TabardInfo) => {
+                appliers
+                    .p4()
+                    .p7()
+                    .p1()
+                    .apply(script, PetitionCall::TabardInfo);
+                tail = self.close_registrar();
+            }
             ScriptCall::Petition(call) => tail = appliers.p4().p7().p1().apply(script, call),
+            ScriptCall::Tabard(TabardCall::Close) => tail = self.close_tabard(),
             ScriptCall::Tabard(call) => appliers.p4().p7().p2().apply(script, call),
             ScriptCall::Talent(call) => appliers.p2().p3().p0().apply(script, call),
             ScriptCall::Skill(call) => appliers.p2().p3().p1().apply(call),
             ScriptCall::Reputation(call) => tail = appliers.p2().p3().p2().apply(script, call),
             ScriptCall::Pet(call) => appliers.p6().p1().apply(script, call),
             ScriptCall::Stable(call) => appliers.p6().p2().apply(call),
+            ScriptCall::Session(request) => appliers.p2().p5().p0().apply(request),
+            ScriptCall::Tutorial(call) => appliers.p2().p5().p1().apply(script, call),
         }
         self.settle_selection(script, &mut at, owed);
         let appliers = &mut self.appliers;

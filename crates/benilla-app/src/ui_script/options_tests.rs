@@ -1,7 +1,7 @@
 //! Benilla's options window (`OptionsFrame.xml`): the shell, the search and scroll, and every
 //! page's rows against the real CVar set, the saved option globals and the API rows.
 
-use benilla_ui::script::{QuadContent, SoundRequest, UiScript, WornDisplay};
+use benilla_ui::script::{QuadContent, SoundRequest, TutorialCall, UiScript, WornDisplay};
 
 /// The options window and the game menu over the manifest slice they need.
 fn harness() -> UiScript {
@@ -3111,13 +3111,16 @@ fn show_tutorials_reads_the_bank_and_writes_through_clear_and_reset() {
     );
 
     let _ = s.take_cvar_changes();
-    let _ = s.take_tutorial_clears();
-    let _ = s.take_tutorial_resets();
+    s.keep_calls();
+    let _ = s.take_tutorial_calls();
 
     s.run("BenillaOptionsFrameContainerBodyInterfaceRowShowTutorialsCheck:Click()")
         .unwrap();
-    assert_eq!(s.take_tutorial_clears(), 1, "off clears the bank");
-    assert_eq!(s.take_tutorial_resets(), 0);
+    assert_eq!(
+        s.take_tutorial_calls(),
+        [TutorialCall::Clear],
+        "off clears the bank"
+    );
     assert!(
         s.take_cvar_changes().is_empty(),
         "there is no tutorial CVar in 1.12 — the row must not invent one"
@@ -3140,8 +3143,11 @@ fn show_tutorials_reads_the_bank_and_writes_through_clear_and_reset() {
 
     s.run("BenillaOptionsFrameContainerBodyInterfaceRowShowTutorialsCheck:Click()")
         .unwrap();
-    assert_eq!(s.take_tutorial_resets(), 1, "on resets the bank");
-    assert_eq!(s.take_tutorial_clears(), 0);
+    assert_eq!(
+        s.take_tutorial_calls(),
+        [TutorialCall::Reset],
+        "on resets the bank"
+    );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
@@ -3155,15 +3161,15 @@ fn a_no_op_write_does_not_re_arm_the_tutorials() {
     s.run("ShowUIPanel(BenillaOptionsFrame)").unwrap();
     s.run("BenillaOptionsFrameCategoryListRowInterface:Click()")
         .unwrap();
-    let _ = s.take_tutorial_clears();
-    let _ = s.take_tutorial_resets();
+    s.keep_calls();
+    let _ = s.take_tutorial_calls();
 
     // Defaults writes "1" over a row that already reads "1".
     s.run("BenillaOptionsFrameContainerDefaults:Click()")
         .unwrap();
     assert_eq!(
-        (s.take_tutorial_resets(), s.take_tutorial_clears()),
-        (0, 0),
+        s.take_tutorial_calls(),
+        [],
         "the guard held: no bank write for a value that had not moved"
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());

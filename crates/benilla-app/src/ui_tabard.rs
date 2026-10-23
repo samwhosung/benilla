@@ -73,10 +73,6 @@ impl LatchedWindow for TabardOpen {
     fn dispatched(world: &mut World) {
         close_core(world);
     }
-
-    fn take_close_verb(script: &mut UiScript) -> bool {
-        script.take_tabard_close()
-    }
 }
 
 /// `MSG_TABARDVENDOR_ACTIVATE` in (`0x5e70c0` → `0x4f5840`): the opener writes the cell first
@@ -89,9 +85,11 @@ pub(crate) fn open_tabard(world: &mut World, vendor: u64) {
     world.resource_mut::<TabardOpen>().open_event = true;
 }
 
-/// The close core `0x4f58a0`: with a vendor stored, the preview ends (`0x5e0830`), the latch is
-/// released (`0x4f58da`), the cell cleared, then `CLOSE_TABARD_FRAME` (`0x4f58f8`). An open not
-/// yet told goes first, as the reference fired it at the open.
+/// The close core `0x4f58a0` as `0x493310` and the leave-world sweep enter it: with a vendor
+/// stored, the preview ends (`0x5e0830`), the latch is released (`0x4f58da`), the cell cleared,
+/// then `CLOSE_TABARD_FRAME` (`0x4f58f8`). An open not yet told goes first, as the reference fired
+/// it at the open. `CloseTabardCreation` runs it inside its call
+/// ([`crate::script_calls::ScriptCallHost`]).
 pub(crate) fn close_core(world: &mut World) {
     let Some(vendor) = world.resource::<TabardOpen>().vendor else {
         return;
@@ -219,16 +217,6 @@ fn feed_tabard(
     }
 }
 
-/// `CloseTabardCreation` into its close core, which needs the interaction latch; `Save` applies
-/// inside its call ([`TabardSteps`]).
-fn drain_tabard(mut hosted_vm: crate::script_calls::HostedVm, mut world_commands: Commands) {
-    hosted_vm.run(|script| {
-        if script.is_some_and(|script| script.take_tabard_close()) {
-            crate::ui_session::queue(&mut world_commands, close_core);
-        }
-    })
-}
-
 /// The designer's latch and what its save reads and sends through: the engine half of the tabard
 /// calls ([`crate::script_calls::ScriptCallHost`]).
 #[derive(SystemParam)]
@@ -242,10 +230,28 @@ pub(crate) struct TabardSteps<'w, 's> {
 }
 
 impl TabardSteps<'_, '_> {
+    /// The designer's cell `[0xbdcee8]`, which its close core tests (`0x4f58a0`-`0x4f58ab`).
+    pub(crate) fn vendor(&self) -> Option<u64> {
+        self.open.as_deref().and_then(TabardOpen::npc)
+    }
+
+    /// The close core's clear of the cell (`0x4f58df`-`0x4f58e9`), after its release: whether an
+    /// open was still to be told.
+    pub(crate) fn clear_vendor(&mut self) -> bool {
+        let Some(open) = self.open.as_deref_mut() else {
+            return false;
+        };
+        open.vendor = None;
+        std::mem::take(&mut open.open_event)
+    }
+
     /// `Save()` (`0x502bd0` → `0x5e03f0`) inside its call: the checks, whose refusal shows its
     /// line there, else the send, the latch and `TABARD_SAVE_PENDING` (`0x5e05eb`-`0x5e05fc`).
+    /// `CloseTabardCreation`'s core needs the latch, so the host runs it.
     pub(crate) fn apply(&mut self, script: &mut UiScript, call: TabardCall) {
-        let TabardCall::Save(design) = call;
+        let TabardCall::Save(design) = call else {
+            return;
+        };
         let (Some(open), Some(guilds)) = (self.open.as_deref_mut(), self.guilds.as_deref()) else {
             debug!("ui_tabard: no designer in this world; {call:?} dropped");
             return;
@@ -351,7 +357,6 @@ impl Plugin for TabardUiPlugin {
                     feed_tabard
                         .in_set(UiFeed)
                         .in_set(crate::ui_session::NpcWindowFeed),
-                    drain_tabard.in_set(crate::ui_script::UiDrain),
                 ),
             );
     }
@@ -486,7 +491,7 @@ mod tests {
 
     /// `Save` (`0x502bd0` → `0x5e03f0`) runs the checks, sends `MSG_SAVE_GUILD_EMBLEM`, sets the
     /// latch and signals `TABARD_SAVE_PENDING` before it returns (`0x5e05eb`-`0x5e05fc`), and a
-    /// refusal shows its line there; the drain after it sends nothing more.
+    /// refusal shows its line there.
     #[test]
     fn a_save_checks_sends_and_signals_inside_its_call() {
         use crate::net::{ClientCommand, NetCommands, ObjectStore};
@@ -539,7 +544,6 @@ mod tests {
             )
             .expect("the designer seeds");
         world.insert_non_send_resource(script);
-        let drain = world.register_system(drain_tabard);
         let run = |app: &mut App, lua: &str| {
             with_hosted_vm(app.world_mut(), |vm| vm.expect("a VM").run(lua))
                 .expect("the chunk runs");
@@ -563,8 +567,6 @@ mod tests {
             )]
         );
         assert!(app.world().resource::<TabardOpen>().save_pending);
-        app.world_mut().run_system(drain).expect("the drain runs");
-        assert!(sent(&rx).is_empty(), "sent once");
 
         // The purse below the price: the client's own `ERR_NOT_ENOUGH_MONEY`, in the call.
         app.world_mut().resource_mut::<TabardOpen>().save_pending = false;

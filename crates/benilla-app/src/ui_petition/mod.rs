@@ -117,14 +117,12 @@ impl LatchedWindow for GuildRegistrarState {
     fn dispatched(world: &mut World) {
         close_core(world);
     }
-
-    fn take_close_verb(script: &mut benilla_ui::script::UiScript) -> bool {
-        script.take_registrar_close()
-    }
 }
 
-/// The close core `0x4f5010`: with a registrar open, the latch release (`0x4f5024`), the cell
-/// cleared, then `GUILD_REGISTRAR_CLOSED` (`0x4f503a`).
+/// The close core `0x4f5010` as `0x493310` and the leave-world sweep enter it: with a registrar
+/// open, the latch release (`0x4f5024`), the cell cleared, then `GUILD_REGISTRAR_CLOSED`
+/// (`0x4f503a`). `CloseGuildRegistrar` and `GetTabardInfo` run it inside their calls
+/// ([`crate::script_calls::ScriptCallHost`]).
 pub(crate) fn close_core(world: &mut World) {
     let Some(npc) = world.resource::<GuildRegistrarState>().npc() else {
         return;
@@ -379,12 +377,9 @@ impl Plugin for UiPetitionPlugin {
             )
             .add_systems(
                 Update,
-                (
-                    feed::feed_petition
-                        .in_set(UiFeed)
-                        .in_set(crate::ui_session::NpcWindowFeed),
-                    feed::drain_petition.in_set(crate::ui_script::UiDrain),
-                ),
+                (feed::feed_petition
+                    .in_set(UiFeed)
+                    .in_set(crate::ui_session::NpcWindowFeed),),
             );
     }
 }

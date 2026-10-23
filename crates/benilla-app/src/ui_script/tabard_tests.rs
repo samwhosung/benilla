@@ -127,7 +127,7 @@ fn the_open_event_seeds_the_design_paints_the_cells_and_shows_the_window() {
     s.run("TabardFrameCancelButton:Click()").unwrap();
     s.resolve();
     assert!(!s.eval::<bool>("return TabardFrame:IsVisible()").unwrap());
-    assert!(s.take_tabard_close());
+    assert_eq!(s.take_tabard_calls(), vec![TabardCall::Close]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 

@@ -21,9 +21,8 @@ const CHARTER: u64 = 0x4000_0000_0000_0099;
 struct Charter {
     app: App,
     rx: Receiver<ClientCommand>,
-    /// The charter feed and drain, registered once so their memories persist.
+    /// The charter feed, registered once so its memories persist.
     feed: SystemId,
-    drain: SystemId,
 }
 
 /// The whole client, headless, with a VM that records the charter's events and lines.
@@ -53,13 +52,7 @@ fn client() -> Charter {
         .expect("the recorder installs");
     app.world_mut().insert_non_send_resource(script);
     let feed = app.world_mut().register_system(super::feed::feed_petition);
-    let drain = app.world_mut().register_system(super::feed::drain_petition);
-    Charter {
-        app,
-        rx,
-        feed,
-        drain,
-    }
+    Charter { app, rx, feed }
 }
 
 /// Another player's charter offered to us, its record landed, and the feed's show.
@@ -88,11 +81,9 @@ fn offered(c: &mut Charter) {
     assert_eq!(heard(c), "PETITION_SHOW(nil) ");
 }
 
-/// The drain and the feed, as a frame runs them.
+/// The feed, as a frame runs it.
 fn frame(c: &mut Charter) {
-    let (drain, feed) = (c.drain, c.feed);
-    c.app.world_mut().flush();
-    c.app.world_mut().run_system(drain).expect("the drain runs");
+    let feed = c.feed;
     c.app.world_mut().flush();
     c.app.world_mut().run_system(feed).expect("the feed runs");
 }

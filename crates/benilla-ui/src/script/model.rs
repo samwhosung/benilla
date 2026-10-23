@@ -6,7 +6,7 @@ use crate::widget::{FrameHandle, RegionHandle, WidgetArena};
 use super::{
     auction, backdrop, bank, camera_view, char_stats, chat_window, colorselect, container, craft,
     cursor, death, duel, follow, gossip, guild, item_calls, item_text, loot, loot_roll, macros,
-    mail, merchant, parse_unit_token, party, petition, pvp, quest, quest_log, reputation, session,
+    mail, merchant, parse_unit_token, party, petition, pvp, quest, quest_log, reputation,
     simplehtml, skills, slider, social, spellbook, stable, taxi, trade, tradeskill, trainer,
     weapon_enchant, ActionSlot, AuraState, FontObject, ItemTemplateView, MusicRequest,
     PlayerReqState, RegionData, ScriptValue, SoundRequest, UnitBase, UnitState, UnitTokenParse,
@@ -495,8 +495,6 @@ pub(crate) struct Model {
     pub(crate) guild_info_asks: Vec<(u32, u64)>,
     /// The charter price and open petition, names resolved from caches as the reference does.
     pub(crate) petition: petition::PetitionState,
-    /// `CloseGuildRegistrar` was called: the interaction latch runs the close core.
-    pub(crate) registrar_close: bool,
     /// Per chat window from `ChatFrame1`, the tint, alpha and font size its tab menu can change.
     pub(crate) chat_window_looks: [chat_window::ChatWindowLook; chat_window::NUM_CHAT_WINDOWS],
     /// 0-based windows whose look Lua changed, the persist cue.
@@ -536,8 +534,6 @@ pub(crate) struct Model {
     /// `SetView`, `SaveView`, `ResetView`, `NextView`, `PrevView` and `FlipCameraYaw` calls; the
     /// views reach Lua only as CVars, `cameraView` and `camera{Distance,Pitch,Yaw}{,A..D}`.
     pub(crate) camera_view_requests: Vec<camera_view::CameraViewRequest>,
-    /// `Logout`, `Quit`, `CancelLogout`, `ForceQuit` calls; Lua sees the countdown only as events.
-    pub(crate) session_requests: Vec<session::SessionRequest>,
     /// The glue core's slots and request queue; empty in an in-game VM.
     pub(crate) glue: super::glue_core::GlueCore,
     /// `PLAYER_LOGIN`'s one-shot, the reference's `[0xb4e260]`: armed by the UI load, spent by
@@ -728,12 +724,8 @@ pub(crate) struct Model {
     pub(crate) meeting_stone_status_text: Option<String>,
     /// Acknowledged tutorials, `None` before `SMSG_TUTORIAL_FLAGS`; all `TutorialsEnabled()` reads.
     pub(crate) tutorial_bank: Option<Vec<u8>>,
-    /// `FlagTutorial(n)` calls, 0-based and in range.
-    pub(crate) tutorial_flag_requests: Vec<u32>,
     /// `TriggerTutorial(id, 0)` asks the engine made (the quest log's turn-in test), 0-based.
     pub(crate) tutorial_triggers: Vec<u32>,
-    pub(crate) tutorial_clears: u32,
-    pub(crate) tutorial_resets: u32,
 
     /// The stance bar's forms, in bar order.
     pub(crate) shapeshift_forms: Vec<super::shapeshift::StoredShapeshiftForm>,
@@ -1187,8 +1179,6 @@ pub(crate) struct Model {
     pub(crate) tabard_designs: HashMap<crate::widget::FrameHandle, [i32; 5]>,
     pub(crate) tabard_preview: Option<[i32; 5]>,
     pub(crate) tabard_host: super::tabard::TabardHost,
-    /// `CloseTabardCreation` was called: the interaction latch runs the close core.
-    pub(crate) tabard_close: bool,
     /// The `WorldFrame` type's one-shot record: true once the first is made.
     pub(crate) world_frame_made: bool,
     /// Set while the XML loader's `CreateFrame` call builds a frame: the creation half only, so
@@ -1569,7 +1559,6 @@ impl Model {
             guild_info_asks: Vec::new(),
             guild_cells: guild::GuildCells::default(),
             petition: petition::PetitionState::default(),
-            registrar_close: false,
             // Per window, as the stock dock differs: 1 and 2 are the dock, the rest undocked.
             chat_window_looks: std::array::from_fn(chat_window::ChatWindowLook::stock),
             chat_window_changes: HashSet::new(),
@@ -1591,7 +1580,6 @@ impl Model {
             duel_requests: Vec::new(),
             follow_requests: Vec::new(),
             camera_view_requests: Vec::new(),
-            session_requests: Vec::new(),
             glue: Default::default(),
             player_login_armed: false,
             pvp_toggles: 0,
@@ -1671,10 +1659,7 @@ impl Model {
             meeting_stone_area: 0,
             meeting_stone_status_text: None,
             tutorial_bank: None,
-            tutorial_flag_requests: Vec::new(),
             tutorial_triggers: Vec::new(),
-            tutorial_clears: 0,
-            tutorial_resets: 0,
             shapeshift_forms: Vec::new(),
             pet_bar: super::pet::PetBarState::default(),
             player_control: true,
@@ -1896,7 +1881,6 @@ impl Model {
             tabard_designs: HashMap::new(),
             tabard_preview: None,
             tabard_host: Default::default(),
-            tabard_close: false,
             world_frame_made: false,
             xml_creating: false,
             unit_reach: HashMap::new(),

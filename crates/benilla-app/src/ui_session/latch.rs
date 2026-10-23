@@ -14,15 +14,18 @@
 //!
 //! The cores fire their events into the VM as they run, so a close lands ahead of the open that
 //! caused it; a window's feed fires its opens and updates and starts over from closed after each
-//! core run ([`InteractLatch::closes`]). A handler that calls its window's close verb, as stock
+//! core run ([`LatchCloses`]). A handler that calls its window's close verb, as stock
 //! `HideUIPanel` → `OnHide` does, re-enters that core in the reference before the fire returns;
-//! [`fire`] runs such a call before going on, as a core that fires before it clears its cell
-//! (trainer, bank, auction) is re-entered with the cell still set.
+//! a close verb whose core runs inside its call does so through the host ([`LatchSteps`]), and
+//! [`fire`] runs a latch-driven one before going on, as a core that fires before it clears its
+//! cell (trainer, bank, auction) is re-entered with the cell still set.
 //!
 //! The NPC's voice rides the same two calls ([`LatchVocal`]): `0x4930d0` greets a different
 //! non-player unit it latches, and `0x4931c0` says goodbye to the unit it releases, unless its
 //! caller's `dl` is set. A swap releases with `dl` set, and the watchdog and the leave-world sweep
 //! call `0x493310` directly, so neither says goodbye.
+
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bevy::prelude::*;
 
@@ -104,8 +107,6 @@ const MAX_REENTRY: u32 = 8;
 #[derive(Resource, Default)]
 pub(crate) struct InteractLatch {
     guid: Option<u64>,
-    /// Per window, how many times its core cleared its cell.
-    closes: [u64; NpcWindow::ALL.len()],
     /// [`fire`]'s nesting, against a handler that re-closes forever.
     depth: u32,
 }
@@ -116,16 +117,27 @@ impl InteractLatch {
         self.guid
     }
 
-    /// How many times `window`'s close core has cleared its cell: the core told the VM, so a feed
-    /// that sees this move forgets what it last announced and starts over from closed.
-    pub(crate) fn closes(&self, window: NpcWindow) -> u64 {
-        self.closes[window.index()]
-    }
-
     /// Latch `guid` with no close, for a test that seats a window directly.
     #[cfg(test)]
     pub(crate) fn latch_for_test(&mut self, guid: u64) {
         self.guid = Some(guid);
+    }
+}
+
+/// Per window, how many times its close core cleared its cell: the core told the VM, so a feed
+/// that sees the count move forgets what it last announced and starts over from closed. Shared
+/// through `&self`, so a core run inside a script call counts while the feeds that read it hold
+/// the host too.
+#[derive(Resource, Default)]
+pub(crate) struct LatchCloses([AtomicU64; NpcWindow::ALL.len()]);
+
+impl LatchCloses {
+    fn count(&self, window: NpcWindow) -> u64 {
+        self.0[window.index()].load(Ordering::Relaxed)
+    }
+
+    fn note(&self, window: NpcWindow) {
+        self.0[window.index()].fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -134,7 +146,7 @@ impl InteractLatch {
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct CoreCloses<'w, 's> {
     /// Absent in a harness with no window on the latch.
-    latch: Option<Res<'w, InteractLatch>>,
+    closes: Option<Res<'w, LatchCloses>>,
     seen: crate::ui_script::WindowMemo<'w, 's, u64>,
 }
 
@@ -142,8 +154,50 @@ impl CoreCloses<'_, '_> {
     /// Whether `window`'s core cleared its cell since this feed last asked: what the feed last
     /// announced is gone, and it starts over from closed.
     pub(crate) fn since_last(&mut self, script: &UiScript, window: NpcWindow) -> bool {
-        let now = self.latch.as_ref().map_or(0, |l| l.closes(window));
+        let now = self.closes.as_ref().map_or(0, |c| c.count(window));
         std::mem::replace(self.seen.get(script), now) != now
+    }
+}
+
+/// The latch inside a script call: the engine half a close verb's core reaches it by
+/// ([`crate::script_calls::ScriptCallHost`]), so the release, the latch's clear and the core's
+/// signal all happen before the verb returns, as `0x4931c0` and `0x493310` run inside the core
+/// that calls them.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct LatchSteps<'w> {
+    /// Absent in a harness with no window on the latch.
+    latch: Option<ResMut<'w, InteractLatch>>,
+    closes: Option<Res<'w, LatchCloses>>,
+    vocal: Option<ResMut<'w, Messages<LatchVocal>>>,
+}
+
+impl LatchSteps<'_> {
+    /// `0x4931c0(cell, dl = 0)` from a window's close core: while the latch names `cell`, the
+    /// goodbye (`0x493210`), then `0x493310`, which clears the latch (`0x49334b`) and closes the
+    /// first window in its order whose cell holds the guid: the caller's own, whose core then
+    /// re-enters while its cell is still set, so its signal fires twice. Whether it re-enters. No
+    /// other cell holds a latched guid: every opener registers before it writes its cell
+    /// ([`register`] closes the holder first), and the two that write first, the designer's and
+    /// the item text's, are closed by that register, or hold an item's or an object's guid.
+    pub(crate) fn release(&mut self, cell: u64) -> bool {
+        let Some(latch) = self.latch.as_deref_mut() else {
+            return false;
+        };
+        if latch.guid != Some(cell) {
+            return false;
+        }
+        if let Some(vocal) = self.vocal.as_deref_mut() {
+            vocal.write(LatchVocal::Goodbye(cell));
+        }
+        latch.guid = None;
+        true
+    }
+
+    /// A core cleared `window`'s cell: its feed starts over from closed.
+    pub(crate) fn note_closed(&self, window: NpcWindow) {
+        if let Some(closes) = self.closes.as_deref() {
+            closes.note(window);
+        }
     }
 }
 
@@ -155,8 +209,11 @@ pub(crate) trait LatchedWindow: Resource + Sized {
     fn cell(&self) -> Option<u64>;
     /// The close core as `0x493310` enters it.
     fn dispatched(world: &mut World);
-    /// Take the window's Lua close verb, if a handler called it.
-    fn take_close_verb(script: &mut UiScript) -> bool;
+    /// Take the window's Lua close verb, if a handler called it and the verb left the core for
+    /// the latch; a close verb whose core runs inside its call ([`LatchSteps`]) leaves none.
+    fn take_close_verb(_script: &mut UiScript) -> bool {
+        false
+    }
     /// What the close verb does: its binding's call into the core.
     fn close_verb(world: &mut World) {
         Self::dispatched(world);
@@ -186,6 +243,7 @@ impl LatchApp for App {
     fn add_latched_window<T: LatchedWindow>(&mut self) -> &mut Self {
         let world = self.world_mut();
         world.init_resource::<InteractLatch>();
+        world.init_resource::<LatchCloses>();
         let mut windows = world.get_resource_or_init::<LatchedWindows>();
         if windows.0.iter().all(|e| e.window != T::WINDOW) {
             windows.0.push(Entry {
@@ -282,8 +340,7 @@ pub(crate) fn dispatch(world: &mut World) {
 
 /// A core cleared `window`'s cell: its feed starts over from closed.
 pub(crate) fn note_closed(world: &mut World, window: NpcWindow) {
-    world.init_resource::<InteractLatch>();
-    world.resource_mut::<InteractLatch>().closes[window.index()] += 1;
+    world.get_resource_or_init::<LatchCloses>().note(window);
 }
 
 /// Run `f` on the VM, if one is mounted, with no event: a core's own pushes. The host is lent all

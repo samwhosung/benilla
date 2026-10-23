@@ -158,7 +158,23 @@ const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "::ui_instance::InstanceState",
         "the instance state",
     ),
-    (Row::Queue, "::ui_logout::LogoutState", "the logout state"),
+    (
+        Row::HostHeld,
+        "::ui_logout::LogoutState",
+        "the logout state, which `feed_logout` fires from; the session verbs, acting in their \
+         calls, hold it in the host",
+    ),
+    (
+        Row::Queue,
+        "::ui_logout::SessionPosts",
+        "the exit and the cinematic stop a session verb posts, which nothing the script reads \
+         waits on",
+    ),
+    (
+        Row::Queue,
+        "::ui_session::latch::LatchCloses",
+        "the close counts each window's core adds to, which every latched window's feed compares",
+    ),
     (Row::Queue, "::ui_loot_roll::LootRolls", "the loot rolls"),
     (
         Row::Queue,
@@ -409,7 +425,7 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "ui_guild::GuildState"]),
     ("::ui_petition::feed::feed_petition", &["names::NameCache", "net::ObjectStore",
         "net::SelfGuid", "ui_petition::GuildRegistrarState", "ui_petition::PetitionRecords",
-        "ui_petition::PetitionState", "ui_session::latch::InteractLatch"]),
+        "ui_petition::PetitionState"]),
     ("::ui_tooltip::drive_mouseover_tooltip", &["Transform", "go_anim::GoAnim",
         "go_templates::GameObjectTemplates", "items::Countdowns", "items::Items",
         "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
@@ -507,40 +523,36 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "net::ObjectStore", "ui_gossip::GossipState", "world_state::WorldStates"]),
     ("::ui_merchant::feed_merchant", &["items::Countdowns", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "ui_merchant::MerchantErrors",
-        "ui_merchant::MerchantOpen", "ui_session::latch::InteractLatch"]),
+        "ui_merchant::MerchantOpen"]),
     ("::ui_merchant::feed_repair_costs", &["items::Countdowns", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations",
         "ui_merchant::MerchantOpen"]),
-    ("::ui_auction::feed_auction", &["items::Items", "names::NameCache", "ui_auction::AuctionOpen",
-        "ui_session::latch::InteractLatch"]),
+    ("::ui_auction::feed_auction", &["items::Items", "names::NameCache",
+        "ui_auction::AuctionOpen"]),
     ("::ui_auction::reset_auction_on_world_enter", &["ui_auction::AuctionOpen"]),
-    ("::ui_bank::feed_bank", &["net::ObjectStore", "ui_bank::BankErrors", "ui_bank::BankOpen",
-        "ui_session::latch::InteractLatch"]),
+    ("::ui_bank::feed_bank", &["net::ObjectStore", "ui_bank::BankErrors", "ui_bank::BankOpen"]),
     ("::ui_mail::feed_mail", &["go_templates::GameObjectTemplates", "items::Countdowns",
         "items::Items", "names::NameCache", "net::GuidIndex", "net::ObjectStore",
-        "ui_mail::MailOpen", "ui_mail::pending::MailPending", "ui_session::latch::InteractLatch",
-        "world_state::WorldStates"]),
+        "ui_mail::MailOpen", "ui_mail::pending::MailPending", "world_state::WorldStates"]),
     ("::ui_mail::send_query_next_mail_time_on_enter", &["items::Items", "ui_mail::MailOpen",
         "ui_mail::pending::MailPending"]),
     ("::ui_trade::feed_trade", &["items::Countdowns", "items::Items", "names::NameCache",
-        "net::GuidIndex", "net::ObjectStore", "ui_session::latch::InteractLatch",
-        "ui_trade::TradeSession"]),
+        "net::GuidIndex", "net::ObjectStore", "ui_trade::TradeSession"]),
     ("::ui_item_text::feed_item_text", &["go_templates::GameObjectTemplates", "items::Countdowns",
         "items::Items", "names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "ui_item_text::ItemTextOpen", "ui_item_text::PageTexts", "ui_mail::MailOpen",
         "world_state::WorldStates"]),
     ("::ui_stable::feed_stable", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
-        "net::SelfGuid", "ui_pet::PetBar", "ui_session::latch::InteractLatch",
-        "ui_stable::StableErrors", "ui_stable::StableOpen"]),
+        "net::SelfGuid", "ui_pet::PetBar", "ui_stable::StableErrors", "ui_stable::StableOpen"]),
     ("::ui_tabard::feed_tabard", &["net::ObjectStore", "ui_guild::GuildState",
         "ui_tabard::TabardOpen"]),
     ("::ui_trainer::feed_trainer", &["items::Items", "names::NameCache", "net::GuidIndex",
         "net::HomeBind", "net::ObjectStore", "spell::mods::SpellModifiers",
-        "ui_action::PlayerActions", "ui_pet::PetBar", "ui_session::latch::InteractLatch",
-        "ui_trainer::TrainerErrors", "ui_trainer::TrainerOpen"]),
+        "ui_action::PlayerActions", "ui_pet::PetBar", "ui_trainer::TrainerErrors",
+        "ui_trainer::TrainerOpen"]),
     ("::ui_taxi::feed_taxi", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
-        "net::SelfGuid", "net::reputations::Reputations", "ui_session::latch::InteractLatch",
-        "ui_taxi::TaxiState", "ui_taxi::routing::TaxiRouteCache"]),
+        "net::SelfGuid", "net::reputations::Reputations", "ui_taxi::TaxiState",
+        "ui_taxi::routing::TaxiRouteCache"]),
     ("::ui_taxi::feed_on_taxi", &["net::ObjectStore"]),
     ("::ui_tradeskill::feed_trade_skill", &["items::Countdowns", "items::Items", "net::GuidIndex",
         "net::ObjectStore", "spell::cooldowns::Cooldowns", "ui_action::PlayerActions",
@@ -559,7 +571,7 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "ui_quest_log::QuestLog"]),
     ("::ui_quest::feed_quest", &["go_templates::GameObjectTemplates", "items::Countdowns",
         "items::Items", "names::NameCache", "net::GuidIndex", "net::ObjectStore",
-        "ui_quest::QuestGiver", "ui_session::latch::InteractLatch", "world_state::WorldStates"]),
+        "ui_quest::QuestGiver", "world_state::WorldStates"]),
     ("::ui_quest_log::feed_quest_log", &["items::Countdowns", "names::NameCache", "net::GuidIndex",
         "net::ObjectStore", "ui_quest::QuestGiver", "ui_quest::lines::QuestLines",
         "ui_quest_log::QuestLog", "world_state::WorldStates"]),
@@ -571,11 +583,15 @@ const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
 ];
 
 /// The resources the handlers fill through a shared reference, which their declared access shows
-/// as a read: the error keys a refusal pushes and the tutorial banks a watcher fires. The lanes
-/// and the host's two other sinks (the message sounds and the unit edits, which raise no event)
-/// are not queues here.
-const FILLED_THROUGH_A_READ: &[&str] =
-    &["::ui_action::errors::UiErrorKeys", "::tutorial::Tutorials"];
+/// as a read: the error keys a refusal pushes, the tutorial banks a watcher fires, the close
+/// counts a window's core adds to and what a session verb posts. The lanes and the host's two
+/// other sinks (the message sounds and the unit edits, which raise no event) are not queues here.
+const FILLED_THROUGH_A_READ: &[&str] = &[
+    "::ui_action::errors::UiErrorKeys",
+    "::tutorial::Tutorials",
+    "::ui_session::latch::LatchCloses",
+    "::ui_logout::SessionPosts",
+];
 
 /// Every other resource a handler reads and does not write: state, tables and caches it
 /// consults, none of them a queue a feed takes. A new one fails until it is placed here or in
@@ -638,7 +654,6 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::LogPeriodicSpells",
     "::GuildMemberNotify",
     "::ui_guild::GuildState",
-    "::GuildRegistrarState",
     "::PetitionRecords",
     "::ui_petition::PetitionState",
     "::ItemSubClasses",
@@ -647,11 +662,9 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::MailOpen",
     "::Stationery",
     "::MerchantOpen",
-    // The repair discounts and the taxi graph the host's merchant and taxi verbs consult, and
-    // the latch the taxi close reads to count its events.
+    // The repair discounts and the taxi graph the host's merchant and taxi verbs consult.
     "::RepairTables",
     "::TaxiCatalogs",
-    "::InteractLatch",
     "::PetBar",
     "::ui_stable::StableOpen",
     "::QuestLog",

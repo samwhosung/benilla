@@ -202,6 +202,12 @@ pub enum ScriptCall {
     /// A stable request past its binding's checks ([`super::StableCall`]): its packet inside the
     /// call.
     Stable(super::StableCall),
+    /// A session verb ([`super::SessionRequest`]): the logout's request, its cancel, the quit,
+    /// the reload's flag and the cinematic's stop, inside the call (`0x489390` → `0x5ab000`).
+    Session(super::SessionRequest),
+    /// A tutorial verb ([`super::TutorialCall`]): the bank's write and its packet inside the call
+    /// (`0x4b59dc` → `0x4b54c0`).
+    Tutorial(super::TutorialCall),
 }
 
 /// The mode the four `TargetNearest*` shims hand the TAB cycler `0x493f60`, the only byte that

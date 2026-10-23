@@ -61,8 +61,11 @@ enum Edge {
 /// Build the snapshot, push it, show the packets' lines, and fire the four events on their edges.
 #[allow(clippy::too_many_arguments)] // the feed's inputs, each read once
 pub(super) fn feed_petition(
-    mut vm: VmWith<ResMut<'static, PetitionState>>,
-    registrar: Res<GuildRegistrarState>,
+    // The registrar beside the charter: the host's close core clears its cell inside a call.
+    mut vm: VmWith<(
+        ResMut<'static, PetitionState>,
+        Res<'static, GuildRegistrarState>,
+    )>,
     records: Res<PetitionRecords>,
     names: Res<NameCache>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
@@ -76,7 +79,7 @@ pub(super) fn feed_petition(
 ) {
     // Shown before the snapshot, so a refusal lands the same frame as its state change; a key the
     // VM's `GlobalStrings.lua` lacks shows nothing, as in the reference.
-    let composed = std::mem::take(&mut vm.own().lines);
+    let composed = std::mem::take(&mut vm.own().0.lines);
     if !composed.is_empty() {
         vm.run(|script| {
             let Some(script) = script else {
@@ -89,7 +92,7 @@ pub(super) fn feed_petition(
     }
 
     let mut registrar_shown = false;
-    let (edge, deferred) = vm.turn(|script, mut petition| {
+    let (edge, deferred) = vm.turn(|script, (mut petition, registrar)| {
         let Some(script) = script else {
             return (Edge::None, None);
         };
@@ -212,13 +215,13 @@ pub(super) fn feed_petition(
     // `OnHide`, whose `ClosePetition()` applies in its call, finds nothing to close or decline;
     // the next charter, if any, is set after it (`0x4f403b`).
     if matches!(edge, Edge::Closed | Edge::Switch) {
-        let held = vm.own().open.take();
+        let held = vm.own().0.open.take();
         vm.run(|s| {
             if let Some(s) = s {
                 s.fire_event("PETITION_CLOSED", vec![]);
             }
         });
-        vm.own().open = held;
+        vm.own().0.open = held;
         vm.run(|s| {
             if let (Some(s), Some(now)) = (s, deferred) {
                 s.set_petition(now);
@@ -241,17 +244,4 @@ pub(super) fn shown(
 ) -> Option<crate::ui_action::Shown> {
     crate::ui_action::ui_error_text(e, &|key| script.lua().globals().get::<String>(key).ok())
         .map(|text| crate::ui_action::Shown::keyed(e.key, text))
-}
-
-/// `CloseGuildRegistrar()` into its close core, which needs the interaction latch; every other
-/// charter verb applies inside its call ([`super::PetitionSteps`]).
-pub(super) fn drain_petition(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut world_commands: Commands,
-) {
-    hosted_vm.run(|script| {
-        if script.is_some_and(|script| script.take_registrar_close()) {
-            crate::ui_session::queue(&mut world_commands, super::close_core);
-        }
-    })
 }

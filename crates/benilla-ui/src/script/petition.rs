@@ -70,8 +70,11 @@ pub enum PetitionCall {
     /// `GetTabardInfo()` (`0x4f5300`), not a getter: with a player, `MSG_TABARDVENDOR_ACTIVATE`
     /// for the registrar's guid unless the designer is already open on that guid, or the
     /// `ERR_EMBLEMERROR_NOTABARDGEOSET` refusal while the player's display id is not its native
-    /// one (`0x5e00e0`); then the registrar closes (`0x4f5355` → `0x4f5010`).
+    /// one (`0x5e00e0`); then the registrar's close core (`0x4f5355` → `0x4f5010`).
     TabardInfo,
+    /// `CloseGuildRegistrar()` (`0x4f5220`): the registrar's close core `0x4f5010`, its latch
+    /// release, its cell and its `GUILD_REGISTRAR_CLOSED` (`0x4f503a`).
+    CloseRegistrar,
     /// `SignPetition([n])`: a wire byte defaulting to 1, not 0 (`0x4f46d9`); vmangos skips it.
     Sign(i8),
     /// `OfferPetition()`: the host resolves the current target (`CGGameUI`'s selection pair, not
@@ -105,13 +108,6 @@ impl super::UiScript {
     /// The close's last step (`0x4f4078`): the record goes.
     pub fn drop_petition_record(&mut self) {
         self.model_mut().petition.record = None;
-    }
-
-    /// Take the `CloseGuildRegistrar()` calls made since the last take: the close core needs the
-    /// interaction latch, which a core answers when its own `GUILD_REGISTRAR_CLOSED` raised the
-    /// call through `OnHide`.
-    pub fn take_registrar_close(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().registrar_close)
     }
 
     /// The charter calls a harness VM kept ([`Self::keep_calls`]), in call order.
@@ -253,36 +249,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── The verbs ────────────────────────────────────────────────────────────────────────────
-    // The five that carry nothing, registered in the reference's table order; none touches the
+    // The six that carry nothing, registered in the reference's table order; none touches the
     // snapshot, which the server owns. `GetTabardInfo`'s stock caller is commented out
     // (`GuildRegistrarFrame.xml:190`).
     let call = |call: PetitionCall| lua.create_function(move |lua, ()| submit(lua, call.clone()));
     g.set("TurnInGuildCharter", call(PetitionCall::TurnIn)?)?;
-    // CloseGuildRegistrar() (`0x4f5010`) is the close core, which needs the interaction latch, so
-    // it stays latch-driven ([`UiScript::take_registrar_close`]) and its `GUILD_REGISTRAR_CLOSED`
-    // signals after the verb, where the reference's signals inside it (`0x4f503a`).
-    g.set(
-        "CloseGuildRegistrar",
-        lua.create_function(|lua, ()| {
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .registrar_close = true;
-            Ok(())
-        })?,
-    )?;
-    // GetTabardInfo() (`0x4f5300`): the activate inside the call, then the registrar's close core
-    // (`0x4f5355` → `0x4f5010`), latch-driven as `CloseGuildRegistrar` is, so its signal comes
-    // after the verb, not inside it (`0x4f503a`).
-    g.set(
-        "GetTabardInfo",
-        lua.create_function(|lua, ()| {
-            submit(lua, PetitionCall::TabardInfo)?;
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .registrar_close = true;
-            Ok(())
-        })?,
-    )?;
+    g.set("CloseGuildRegistrar", call(PetitionCall::CloseRegistrar)?)?;
+    g.set("GetTabardInfo", call(PetitionCall::TabardInfo)?)?;
     g.set("OfferPetition", call(PetitionCall::Offer)?)?;
     g.set("ClosePetition", call(PetitionCall::Close)?)?;
 
@@ -692,8 +665,8 @@ mod tests {
         assert_eq!(bought(&mut s, &long), PetitionCall::Buy(long.clone()));
     }
 
-    /// `GetTabardInfo()` pushes nothing (`0x4f535f`), hands the host the designer's opener and
-    /// leaves the registrar's close to the latch (`0x4f5355`).
+    /// `GetTabardInfo()` pushes nothing (`0x4f535f`) and hands the host one call: the designer's
+    /// opener, then the registrar's close core (`0x4f5355`).
     #[test]
     fn get_tabard_info_is_a_call_with_no_returns() {
         let mut s = UiScript::new().unwrap();
@@ -704,7 +677,7 @@ mod tests {
             0
         );
         assert_eq!(s.take_petition_calls(), vec![PetitionCall::TabardInfo]);
-        assert!(s.take_registrar_close());
-        assert!(!s.take_registrar_close(), "taken");
+        s.run("CloseGuildRegistrar()").unwrap();
+        assert_eq!(s.take_petition_calls(), vec![PetitionCall::CloseRegistrar]);
     }
 }

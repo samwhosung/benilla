@@ -23,7 +23,8 @@ mod release_tests;
 
 pub(crate) use latch::{
     dispatch, fire, note_closed, queue, register, release, release_cell, release_latch,
-    with_script, CoreCloses, InteractLatch, LatchApp, LatchVocal, LatchedWindow, NpcWindow,
+    with_script, CoreCloses, InteractLatch, LatchApp, LatchCloses, LatchSteps, LatchVocal,
+    LatchedWindow, NpcWindow,
 };
 pub(crate) use release::form_bars_interaction;
 
@@ -35,6 +36,7 @@ impl Plugin for UiSessionPlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(Update, NpcWindowFeed.after(crate::ui_unit::UnitFeed));
         app.init_resource::<InteractLatch>()
+            .init_resource::<LatchCloses>()
             .add_message::<LatchVocal>()
             .init_resource::<InteractNpc>()
             .net_handler(

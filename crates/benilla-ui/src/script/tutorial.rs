@@ -1,7 +1,9 @@
 //! The four tutorial verbs, registered at `0x846b04`. The banks are the app's: it pushes the
-//! acknowledged bank for `TutorialsEnabled` and drains the writes. `ClearTutorials()` sets every
-//! bit of both banks and sends `CMSG_TUTORIAL_CLEAR`; `ResetTutorials()` clears them and sends
-//! `CMSG_TUTORIAL_RESET`. None of the three writers returns a value.
+//! acknowledged bank for `TutorialsEnabled`, and each writer hands its [`TutorialCall`] to the call
+//! host, which writes the banks and sends before the verb returns. `FlagTutorial(n)` acknowledges
+//! (`0x4b59dc` → `0x4b54c0`); `ClearTutorials()` sets every bit of both banks and sends
+//! `CMSG_TUTORIAL_CLEAR` (`0x4b5a00` → `0x4b55c0`); `ResetTutorials()` clears them and sends
+//! `CMSG_TUTORIAL_RESET` (`0x4b5a10` → `0x4b5660`). None of the three writers returns a value.
 
 use mlua::{Lua, Value};
 
@@ -11,21 +13,30 @@ use super::Model;
 /// `FlagTutorial`'s bound, `0 ≤ n − 1 < 0x32`: the fifty tutorials `GlobalStrings.lua` names.
 const TUTORIAL_IDS: i32 = 0x32;
 
+/// A tutorial writer, which the call host applies inside the call
+/// ([`super::ScriptCall::Tutorial`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TutorialCall {
+    /// `FlagTutorial(n)`: `AcknowledgeTutorial 0x4b54c0` on the 0-based id `n − 1`.
+    Flag(u32),
+    /// `ClearTutorials()`: `ClearAllTutorials 0x4b55c0`.
+    Clear,
+    /// `ResetTutorials()`: `ResetAllTutorials 0x4b5660`.
+    Reset,
+}
+
 impl super::UiScript {
     /// The acknowledged bank's bytes, `None` before `SMSG_TUTORIAL_FLAGS`.
     pub fn set_tutorial_bank(&mut self, bank: Option<Vec<u8>>) {
         self.model_mut().tutorial_bank = bank;
     }
 
-    /// `FlagTutorial(n)` calls since the last drain, as 0-based ids (`n − 1`).
-    pub fn take_tutorial_flag_requests(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().tutorial_flag_requests)
-    }
-
-    /// An acknowledge the engine made inside a script call (`AcknowledgeTutorial 0x4b54c0`), as a
-    /// 0-based id, drained with the `FlagTutorial` writes ([`Self::take_tutorial_flag_requests`]).
-    pub fn queue_tutorial_acknowledge(&mut self, id: u32) {
-        self.model_mut().tutorial_flag_requests.push(id);
+    /// The tutorial calls a harness VM kept ([`Self::keep_calls`]), in call order.
+    pub fn take_tutorial_calls(&mut self) -> Vec<TutorialCall> {
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::Tutorial(call) => Some(*call),
+            _ => None,
+        })
     }
 
     /// A `TriggerTutorial(id, 0)` (`0x4b5390`) the engine makes beside a script, as a 0-based id,
@@ -39,16 +50,11 @@ impl super::UiScript {
     pub fn take_tutorial_triggers(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().tutorial_triggers)
     }
+}
 
-    /// `ClearTutorials()` calls since the last drain.
-    pub fn take_tutorial_clears(&mut self) -> u32 {
-        std::mem::take(&mut self.model_mut().tutorial_clears)
-    }
-
-    /// `ResetTutorials()` calls since the last drain.
-    pub fn take_tutorial_resets(&mut self) -> u32 {
-        std::mem::take(&mut self.model_mut().tutorial_resets)
-    }
+/// Hand `call` to the host, which applies it before the verb returns.
+fn submit(lua: &Lua, call: TutorialCall) -> mlua::Result<()> {
+    super::calls::submit(lua, super::ScriptCall::Tutorial(call))
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -78,28 +84,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if !(0..TUTORIAL_IDS).contains(&id) {
                 return Ok(());
             }
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.tutorial_flag_requests.push(id as u32);
-            Ok(())
+            submit(lua, TutorialCall::Flag(id as u32))
         })?,
     )?;
 
     g.set(
         "ClearTutorials",
-        lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.tutorial_clears += 1;
-            Ok(())
-        })?,
+        lua.create_function(|lua, ()| submit(lua, TutorialCall::Clear))?,
     )?;
 
     g.set(
         "ResetTutorials",
-        lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.tutorial_resets += 1;
-            Ok(())
-        })?,
+        lua.create_function(|lua, ()| submit(lua, TutorialCall::Reset))?,
     )?;
 
     Ok(())
@@ -136,15 +132,17 @@ mod tests {
 
     #[test]
     fn flag_tutorial_takes_a_one_based_number_and_bails_silently_off_the_fifty() {
+        use super::TutorialCall::{Clear, Flag, Reset};
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.run("FlagTutorial(1) FlagTutorial(50) FlagTutorial('42') FlagTutorial(7.9) FlagTutorial(0) FlagTutorial(51) FlagTutorial(-3)")
             .unwrap();
         assert_eq!(
-            s.take_tutorial_flag_requests(),
-            vec![0, 49, 41, 6],
+            s.take_tutorial_calls(),
+            vec![Flag(0), Flag(49), Flag(41), Flag(6)],
             "0-based, truncated toward zero, 0/51/−3 dropped"
         );
-        assert!(s.take_tutorial_flag_requests().is_empty(), "drained");
+        assert!(s.take_tutorial_calls().is_empty(), "drained");
         for call in ["FlagTutorial()", "FlagTutorial(nil)", "FlagTutorial({})"] {
             let err = s.run(call).unwrap_err().to_string();
             assert!(
@@ -154,8 +152,6 @@ mod tests {
         }
         s.run("ClearTutorials() ClearTutorials() ResetTutorials()")
             .unwrap();
-        assert_eq!(s.take_tutorial_clears(), 2);
-        assert_eq!(s.take_tutorial_resets(), 1);
-        assert_eq!(s.take_tutorial_clears(), 0);
+        assert_eq!(s.take_tutorial_calls(), vec![Clear, Clear, Reset]);
     }
 }

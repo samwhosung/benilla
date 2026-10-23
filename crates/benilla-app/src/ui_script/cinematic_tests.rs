@@ -9,6 +9,7 @@ use super::test_ui::load_ui as load_xml;
 /// The cinematic frame over `UIParent`, whose `ShowUIPanel` its `CINEMATIC_START` arm calls.
 fn ui_with_the_cinematic_frame() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");

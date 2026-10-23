@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{ScriptValue, UiScript};
+use benilla_ui::script::{ScriptValue, TutorialCall, UiScript};
 
 use crate::client_state::ClientState;
 use crate::net::{ClientCommand, EnteredWorldMessage, NetCommands, ObjectStore, SelfPlayer};
@@ -420,27 +420,40 @@ fn watch_self(
     watch.swimming = Some(player.swimming);
 }
 
-/// After the script tick: the four verbs' writes, then every send.
-pub(crate) fn drain_tutorials(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    tutorials: Res<Tutorials>,
-    commands: Res<NetCommands>,
-) {
-    hosted_vm.run(|script| {
-        let mut tutorials = tutorials.lock();
-        if let Some(script) = script {
-            for id in script.take_tutorial_flag_requests() {
-                tutorials.acknowledge(id);
+/// After the script tick: every send the engine's own acknowledges owe ([`TutorialEvent`]).
+pub(crate) fn drain_tutorials(tutorials: Res<Tutorials>, commands: Res<NetCommands>) {
+    tutorials.lock().flush(&commands);
+}
+
+/// The tutorial verbs' engine half ([`crate::script_calls::ScriptCallHost`]): each writes the banks
+/// and sends before the verb returns, and the VM's bank reads the write on the verb's next line,
+/// as `TutorialsEnabled` (`0x4b5960`) reads the bank the call wrote.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct TutorialSteps<'w> {
+    /// Absent in a harness with no tutorial state, which drops the calls.
+    tutorials: Option<Res<'w, Tutorials>>,
+    commands: Res<'w, NetCommands>,
+}
+
+impl TutorialSteps<'_> {
+    /// `FlagTutorial`'s `0x4b54c0` (`0x4b59dc`), `ClearTutorials`'s `0x4b55c0` (`0x4b5a00`) or
+    /// `ResetTutorials`'s `0x4b5660` (`0x4b5a10`), its packet sent with any owed before it.
+    pub(crate) fn apply(&mut self, script: &mut UiScript, call: TutorialCall) {
+        let Some(tutorials) = self.tutorials.as_deref() else {
+            return;
+        };
+        let bank = {
+            let mut state = tutorials.lock();
+            match call {
+                TutorialCall::Flag(id) => state.acknowledge(id),
+                TutorialCall::Clear => state.clear(),
+                TutorialCall::Reset => state.reset(),
             }
-            for _ in 0..script.take_tutorial_clears() {
-                tutorials.clear();
-            }
-            for _ in 0..script.take_tutorial_resets() {
-                tutorials.reset();
-            }
-        }
-        tutorials.flush(&commands);
-    })
+            state.flush(&self.commands);
+            state.acknowledged.clone()
+        };
+        script.set_tutorial_bank(bank);
+    }
 }
 
 /// The world-enter bring-up: the banks zeroed, then the bank captured during the login handshake

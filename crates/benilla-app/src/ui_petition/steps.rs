@@ -20,7 +20,7 @@ pub(crate) struct PetitionSteps<'w, 's> {
     /// drops the calls.
     petition: Option<ResMut<'w, PetitionState>>,
     records: Option<Res<'w, PetitionRecords>>,
-    registrar: Option<Res<'w, GuildRegistrarState>>,
+    registrar: Option<ResMut<'w, GuildRegistrarState>>,
     /// The designer `GetTabardInfo`'s opener tests (`0x5e00e6`).
     tabard: Option<Res<'w, crate::ui_tabard::TabardOpen>>,
     names: Res<'w, NameCache>,
@@ -34,6 +34,18 @@ pub(crate) struct PetitionSteps<'w, 's> {
 }
 
 impl PetitionSteps<'_, '_> {
+    /// The registrar's cell `[0xbdceb0]`, which its close core tests (`0x4f5010`-`0x4f501b`).
+    pub(crate) fn registrar_npc(&self) -> Option<u64> {
+        self.registrar.as_deref().and_then(GuildRegistrarState::npc)
+    }
+
+    /// The close core's clear of the cell (`0x4f502b`-`0x4f5030`), after its release.
+    pub(crate) fn clear_registrar(&mut self) {
+        if let Some(registrar) = self.registrar.as_deref_mut() {
+            registrar.clear();
+        }
+    }
+
     /// Apply `call` inside its verb; `ClosePetition`'s record drop is the tail, after the held
     /// `PETITION_CLOSED` handlers.
     pub(crate) fn apply(&mut self, script: &mut UiScript, call: PetitionCall) -> Option<CallTail> {
@@ -76,8 +88,7 @@ impl PetitionSteps<'_, '_> {
                     None => self.show(script, lines::no_charter_line()),
                 }
             }
-            // The opener inside the call; the registrar's close that follows is the latch's
-            // ([`benilla_ui::script::UiScript::take_registrar_close`]).
+            // The opener inside the call; the host runs the registrar's close core after it.
             PetitionCall::TabardInfo => {
                 let designer = self.tabard.as_ref().and_then(|t| t.npc()).unwrap_or(0);
                 let refusal = self.self_q.iter().next().and_then(|store| {
@@ -108,6 +119,9 @@ impl PetitionSteps<'_, '_> {
                     None => send(&self.net, ClientCommand::PetitionRename { item, name }),
                 }
             }
+            // The registrar's close core needs the latch: the host runs it
+            // ([`crate::script_calls::ScriptCallHost`]).
+            PetitionCall::CloseRegistrar => {}
             PetitionCall::Close => {
                 let petition = self.petition.as_deref_mut().expect("checked above");
                 petition.open_item()?; // `0x4f3f7c`: nothing open, no event
