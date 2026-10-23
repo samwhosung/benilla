@@ -114,6 +114,19 @@ const DESTROYED_EFFECTS: [u32; 10] = [50, 74, 87, 88, 89, 90, 104, 105, 106, 107
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub(crate) struct XpAwarded;
 
+/// Each death line's place, by its health edge's stamp: where `PresentUnitDeath` (`0x6058ae` →
+/// `0x62c160`) comes in the death's legs, between `0x5e99b0`'s list and `PLAYER_DEAD`, which the
+/// death handler takes (`crate::target`'s `died`). A line with none goes under its edge.
+#[derive(Resource, Default)]
+pub(crate) struct DeathLineAt(std::collections::HashMap<crate::lanes::Stamp, crate::lanes::Stamp>);
+
+impl DeathLineAt {
+    /// The line of the death at health edge `edge` goes at `line`.
+    pub(crate) fn place(&mut self, edge: crate::lanes::Stamp, line: crate::lanes::Stamp) {
+        self.0.insert(edge, line);
+    }
+}
+
 /// The unit-death line (`0x625190` → `0x62c160`), off the `UNIT_FIELD_HEALTH` edge as the
 /// reference's watcher `0x6046f0` takes it (alive to dead at `0x6047a3`); a unit that streams in
 /// dead prints nothing, and neither does one an XP award named ([`XpAwarded`]).
@@ -124,11 +137,16 @@ pub(crate) fn death_lines(
     mut edges: MessageReader<FieldChanged>,
     poses: Query<&Transform>,
     log: Res<ChatLog>,
+    mut places: Option<ResMut<DeathLineAt>>,
 ) {
     for e in edges.read() {
         if !(e.unit_field(benilla_protocol::field::FIELD_UNIT_HEALTH) && e.old > 0 && e.new == 0) {
             continue;
         }
+        let at = places
+            .as_mut()
+            .and_then(|p| p.0.remove(&e.at))
+            .unwrap_or(e.at);
         if awarded.contains(e.entity) {
             continue;
         }
@@ -150,7 +168,7 @@ pub(crate) fn death_lines(
             (_, false) => super::UNITDIES,
         };
         queue_one(
-            e.at,
+            at,
             &log,
             &ctx,
             &poses,
@@ -161,6 +179,10 @@ pub(crate) fn death_lines(
             Fills::default(),
             None,
         );
+    }
+    // A death the line skips, or one no line reads, leaves no place behind.
+    if let Some(places) = places.as_mut() {
+        places.0.clear();
     }
 }
 

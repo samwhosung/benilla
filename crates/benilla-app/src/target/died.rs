@@ -20,18 +20,17 @@
 //!   stop and `0x4931c0` on the unit's guid (`0x605950`).
 //!
 //! The health watcher runs it inside the update packet that wrote the health (`0x6046f0` at
-//! `0x6047a3`), so its legs and their events come in packet order among every other packet's.
-//! Here the packet's end queues each death on the deaths lane ([`crate::lanes`]), stamped there:
-//! it fires among the other lanes' items in stamp order, its listeners reading the unit views as
-//! of its packet, and its sends going out where it fires, ahead of the next packets', which wait
-//! for the next frame ([`crate::net::HeldPackets`]).
-//!
-//! Deviation: stamped at the packet's end, not at its health edge inside the notify pass
-//! (`0x46522d`), so what the packet's notify pass raises past the edge, the death line
-//! (`0x62c160`) among it, fires ahead of the legs, where in 1.12.1 `0x5e99b0`'s list runs first.
+//! `0x6047a3`). Here the packet's end runs each death's legs in place, so their state and their
+//! sends come in packet order, and parks the Lua each leg signals ([`crate::script_calls::defer_vm`]) on the
+//! deaths lane, stamped under the health edge's stamp: they fire in stamp order among the other
+//! lanes' items, ahead of what the packet raised after the edge, their listeners reading the unit
+//! views as of the packet. The death line takes the place between `0x5e99b0`'s list and
+//! `PLAYER_DEAD` the legs leave it ([`crate::ui_chat::combat::watch::DeathLineAt`]). A listener reads other state
+//! as the frame's packets left it, which #2217 is about.
 
 use std::collections::VecDeque;
 
+use bevy::ecs::system::SystemState;
 use bevy::prelude::*;
 
 use benilla_protocol::messages::ObjectType;
@@ -47,37 +46,37 @@ use crate::ui_action::{FillArg, UiError, UiErrorKeys};
 /// What a groupmate's death shows: message `0x4c` (`0x5e9a0e`).
 const PLAYER_DIED: &str = "ERR_PLAYER_DIED_S";
 
-/// The deaths the update packets queued, each with its stamp, for the deaths lane.
+/// The Lua the deaths' legs signalled, parked in the VM, each with its stamp, for the deaths lane.
 #[derive(Resource, Default)]
-pub(crate) struct Deaths(VecDeque<(Stamp, FieldChanged)>);
+pub(crate) struct Deaths(VecDeque<(Stamp, u64)>);
 
-/// Registers the queue on the update packet's end, after the update handler that writes its edges
-/// (`crate::net` builds first), and the lane that fires it.
+/// Registers the deaths on the update packet's end, after the update handler that writes their
+/// edges (`crate::net` builds first), and the lane that fires their signals.
 pub(super) fn register(app: &mut App) {
     use crate::lanes::LaneApp;
     app.init_resource::<Deaths>()
-        .net_handler(SessionEventKind::ObjectUpdateEnd, queue_deaths)
+        .net_handler(SessionEventKind::ObjectUpdateEnd, on_unit_died)
         .add_lane("deaths", peek_deaths, fire_deaths, None);
 }
 
-/// The packet's deaths, in its edges' order, queued at its end; a packet with one holds the
-/// packets after it for the next frame.
-fn queue_deaths(
+/// The packet's deaths, in its edges' order, each run in place.
+fn on_unit_died(
     In(ev): In<SessionEvent>,
-    mut edges: MessageReader<FieldChanged>,
-    mut deaths: ResMut<Deaths>,
-    mut held: ResMut<crate::net::HeldPackets>,
+    world: &mut World,
+    edges: &mut SystemState<MessageReader<'static, 'static, FieldChanged>>,
 ) {
     let SessionEvent::ObjectUpdateEnd = ev else {
         return;
     };
-    let mut any = false;
-    for e in edges.read().filter(|e| e.unit_died()) {
-        deaths.0.push_back((crate::lanes::stamp(), *e));
-        any = true;
-    }
-    if any {
-        held.hold();
+    let edges: Vec<FieldChanged> = edges
+        .get_mut(world)
+        .read()
+        .filter(|e| e.unit_died())
+        .copied()
+        .collect();
+    for e in edges {
+        // What the legs stamp nests under the edge, ahead of what the packet raised after it.
+        crate::lanes::firing(e.at, || die(world, e));
     }
 }
 
@@ -86,11 +85,11 @@ fn peek_deaths(world: &World) -> Option<Stamp> {
     world.get_resource::<Deaths>()?.0.front().map(|(at, _)| *at)
 }
 
-/// Each death `until` admits, its legs run as the firing of its stamp; the lane stops after a
-/// death whose legs stamped anything, so what they pushed fires next.
+/// Each leg's signals `until` admits, run as the firing of their stamp with the host lent; the
+/// lane stops after one whose firing stamped anything, so what it pushed fires next.
 fn fire_deaths(In(until): In<Until>, world: &mut World) {
     loop {
-        let Some((at, e)) = world
+        let Some((at, key)) = world
             .resource::<Deaths>()
             .0
             .front()
@@ -100,14 +99,15 @@ fn fire_deaths(In(until): In<Until>, world: &mut World) {
             return;
         };
         world.resource_mut::<Deaths>().0.pop_front();
-        let ((), moved) = crate::lanes::firing(at, || die(world, e));
+        let ((), moved) = crate::lanes::firing(at, || crate::script_calls::run_parked(world, key));
         if moved {
             return;
         }
     }
 }
 
-/// Every death queued, fired alone, for a test that drives the deaths without the other lanes.
+/// Every death's signals queued, fired alone, for a test that drives the deaths without the
+/// other lanes.
 #[cfg(test)]
 pub(crate) fn fire_deaths_lane(world: &mut World) {
     while world
@@ -125,34 +125,77 @@ pub(crate) fn fire_deaths_lane(world: &mut World) {
 /// One unit's death, each leg in its place: a deselect's `SetSelection` signals inside it
 /// ([`crate::script_calls::ScriptCallHost::engine_select`]), a release of the interaction latch
 /// closes its window there ([`crate::ui_session::release_cell`]), and our own death's quest-giver
-/// sweep asks there ([`crate::quest_markers::sweep_statuses`]), before the death goes on.
+/// sweep asks there ([`crate::quest_markers::sweep_statuses`]), before the death goes on. What
+/// each leg signals is parked behind it ([`Parked`]).
 fn die(world: &mut World, e: FieldChanged) {
     let me = world
         .query_filtered::<Entity, With<SelfPlayer>>()
         .iter(world)
         .next();
     let own = e.kind == ObjectType::Player && me == Some(e.entity);
+    let mut parked = Parked::new(world);
     // `CGPlayer_C::OnDied 0x5e99b0`, for a player (`0x605882`).
     if own {
         // The active player's leg (`0x5e99d8`-`0x5e99e4` match), in its order.
-        step(world, own_death_head, e);
+        parked.step(world, own_death_head, e);
         // `0x4931c0(0xb4e2d0, dl = 0)` (`0x5e9a51`): the latch, with the goodbye.
-        crate::ui_session::release_latch(world, true);
-        step(world, own_death_loot, e);
+        parked.leg(world, |world| crate::ui_session::release_latch(world, true));
+        parked.step(world, own_death_loot, e);
         // `0x5eb070` (`0x5e9a61`): the quest givers swept.
-        crate::quest_markers::sweep_statuses(world);
-        step(world, own_death_cast, e);
+        parked.leg(world, crate::quest_markers::sweep_statuses);
+        parked.step(world, own_death_cast, e);
     } else if e.kind == ObjectType::Player {
-        step(world, groupmate_died, e);
+        parked.step(world, groupmate_died, e);
     }
-    step(world, unit_attack_words, e);
-    // `PresentUnitDeath`'s tail for the active player (`0x6251c2`-`0x6251cc`).
+    parked.step(world, unit_attack_words, e);
+    // `PresentUnitDeath` (`0x6058ae`): the death line's place (`0x62c160`), then for the active
+    // player its tail (`0x6251c2`-`0x6251cc`).
+    let line = crate::lanes::stamp();
+    if let Some(mut at) = world.get_resource_mut::<crate::ui_chat::combat::watch::DeathLineAt>() {
+        at.place(e.at, line);
+    }
     if own {
-        crate::death::signal_death_state(world);
+        parked.leg(world, crate::death::signal_death_state);
     }
-    step(world, unit_died, e);
+    parked.step(world, unit_died, e);
     // The tail's `0x4931c0` on the unit's guid (`0x605950`, `dl = 1`): no goodbye.
-    crate::ui_session::release_cell(world, e.guid, false);
+    parked.leg(world, |world| {
+        crate::ui_session::release_cell(world, e.guid, false)
+    });
+    drop(parked);
+}
+
+/// A death's deferred stretch on the world's VM: each leg's signals held as it runs and parked
+/// behind it on the deaths lane, at a stamp taken as it ends, after what it pushed onto the other
+/// lanes. With no VM nothing signals.
+struct Parked(Option<(benilla_ui::script::Deferring, usize)>);
+
+impl Parked {
+    fn new(world: &World) -> Self {
+        Self(crate::script_calls::defer_vm(world))
+    }
+
+    /// Run `leg`, then park what it signalled.
+    fn leg(&mut self, world: &mut World, leg: impl FnOnce(&mut World)) {
+        leg(world);
+        let Some((_, mark)) = &self.0 else {
+            return;
+        };
+        if let Some(key) = crate::script_calls::park_since(world, *mark) {
+            let at = crate::lanes::stamp();
+            world.resource_mut::<Deaths>().0.push_back((at, key));
+        }
+    }
+
+    /// [`step`] as a leg.
+    fn step<M: 'static>(
+        &mut self,
+        world: &mut World,
+        leg: impl IntoSystem<In<FieldChanged>, (), M> + 'static,
+        e: FieldChanged,
+    ) {
+        self.leg(world, |world| step(world, leg, e));
+    }
 }
 
 /// Run one leg of a death on `e` in place, its unit edits applied as it returns.

@@ -610,9 +610,6 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::Reputations",
     "::SelfGuid",
     "::OwnControlLost",
-    // The update handler's field edges, which the packet's end reads to queue its deaths on the
-    // deaths lane.
-    "Messages<benilla_app::net::FieldChanged>",
     "::Player",
     "::player::state::StandPending",
     "::BarUnitOutdoors",
@@ -692,7 +689,7 @@ fn lane_types() -> [TypeId; 13] {
         TypeId::of::<crate::ui_party::PartyLane>(),
         // The list rebuilds a learn, an unlearn or a pet's spells owe, stamped at their packets.
         TypeId::of::<crate::ui_tradeskill::ListRebuilds>(),
-        // The deaths lane: each packet's deaths, stamped at its end.
+        // The deaths lane: the signals each death's legs parked, stamped under its health edge.
         TypeId::of::<crate::target::Deaths>(),
     ]
 }

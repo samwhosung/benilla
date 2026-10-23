@@ -247,6 +247,7 @@ impl Plugin for UiChatPlugin {
 /// welcome. Ahead of each drain the held lines' age pass is queued ([`ChatLog::begin_frame`]).
 pub(crate) fn add_chat_lane(app: &mut App) {
     use crate::lanes::LaneApp;
+    app.init_resource::<combat::watch::DeathLineAt>();
     app.init_resource::<ChatLog>().add_lane(
         "chat",
         |world| world.get_resource::<ChatLog>()?.peek(),

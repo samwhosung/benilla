@@ -50,6 +50,9 @@ struct HostSlot {
     /// An engine step that cannot lend the host is running (an engine turn, or a call's apply) and
     /// no Lua it ran since: a handler fired now is held for the host ([`holding`]).
     hold: Cell<bool>,
+    /// The deferred stretches running now ([`UiScript::defer`]): while any is, every handler fired
+    /// is held and nothing that waits runs, a lend's included.
+    defer: Cell<u32>,
 }
 
 /// Install the empty slot at the VM's birth, a fork's included: every verb asks it
@@ -178,7 +181,8 @@ pub(crate) fn with_host<R>(lua: &Lua, f: impl FnOnce(&mut dyn CallHost) -> R) ->
 
 /// Whether a host is lent and in the slot, so a call submitted now applies at once.
 pub(crate) fn free(lua: &Lua) -> bool {
-    slot(lua).host.get().is_some()
+    let slot = slot(lua);
+    slot.host.get().is_some() && slot.defer.get() == 0
 }
 
 /// Whether a call made now is the host's: a lend or an engine turn is running.
@@ -191,10 +195,35 @@ pub(crate) fn open(lua: &Lua) -> bool {
 /// make its calls wait past the verb that made them, where the reference applies them inside it.
 pub(crate) fn holding(lua: &Lua) -> bool {
     let slot = slot(lua);
-    slot.hold.get() && slot.host.get().is_none()
+    (slot.hold.get() && slot.host.get().is_none()) || slot.defer.get() > 0
+}
+
+/// A deferred stretch, while it lives ([`UiScript::defer`]).
+pub struct Deferring(Lua);
+
+impl Drop for Deferring {
+    fn drop(&mut self) {
+        let slot = slot(&self.0);
+        slot.defer.set(slot.defer.get() - 1);
+        slot.open.set(slot.open.get() - 1);
+    }
 }
 
 impl UiScript {
+    /// Defer what fires while the guard lives: an engine step that does its work in place but
+    /// whose signals the app runs later, in their packet's place among the other packets' events
+    /// ([`Self::park_since`]). Every handler fired meanwhile is held, a lend runs nothing that
+    /// waits, and the host counts as open, so a call made meanwhile waits too.
+    pub fn defer(&self) -> Deferring {
+        let lua = self.lua().clone();
+        {
+            let slot = slot(&lua);
+            slot.defer.set(slot.defer.get() + 1);
+            slot.open.set(slot.open.get() + 1);
+        }
+        Deferring(lua)
+    }
+
     /// Run `f` with `host` lent to the VM: each script call a verb makes meanwhile applies before
     /// the verb returns, in call order, through [`CallHost::apply`], as the reference's verbs do.
     /// What an engine turn of this entry left ([`Self::host_out`]) applies first, each call under

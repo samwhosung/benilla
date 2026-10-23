@@ -817,6 +817,36 @@ pub(crate) fn insert_test_vm(world: &mut World) {
     world.insert_non_send_resource(UiScript::new().expect("a VM"));
 }
 
+/// Defer what the world's VM fires while the guard lives ([`UiScript::defer`]), with the mark to
+/// park it from ([`park_since`]); `None` with no VM.
+pub(crate) fn defer_vm(world: &World) -> Option<(benilla_ui::script::Deferring, usize)> {
+    world
+        .get_non_send_resource::<UiScript>()
+        .map(|vm| (vm.defer(), vm.waiting_mark()))
+}
+
+/// Park what the world's VM has held since `mark` ([`UiScript::park_since`]); its key, `None`
+/// with nothing held or no VM.
+pub(crate) fn park_since(world: &mut World, mark: usize) -> Option<u64> {
+    world
+        .get_non_send_resource_mut::<UiScript>()
+        .and_then(|mut vm| vm.park_since(mark))
+}
+
+/// Run what the world's VM parked under `key` ([`UiScript::run_parked`]), with the host lent.
+pub(crate) fn run_parked(world: &mut World, key: u64) {
+    fn run(In(key): In<u64>, mut vm: HostedVm) {
+        vm.run(|script| {
+            if let Some(script) = script {
+                script.run_parked(key);
+            }
+        });
+    }
+    if let Err(err) = world.run_system_cached_with(run, key) {
+        debug!("script calls: parked signals did not run: {err}");
+    }
+}
+
 /// What the world's VM answers to `chunk`, for a test of an engine entry outside the feeds.
 #[cfg(test)]
 pub(crate) fn eval_in_vm<T: benilla_ui::mlua::FromLuaMulti>(world: &World, chunk: &str) -> T {

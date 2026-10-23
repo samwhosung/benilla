@@ -361,6 +361,12 @@ fn take_waiting(lua: &Lua) -> VecDeque<Waiting> {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let model = &mut *model;
     let batch = std::mem::take(&mut model.script_calls);
+    rewind_waiting(model, &batch);
+    batch.into()
+}
+
+/// Put back, last first, the lock bits and the cursor `batch`'s writes changed.
+fn rewind_waiting(model: &mut Model, batch: &[Waiting]) {
     for item in batch.iter().rev() {
         match item {
             Waiting::Lock { guid, was, .. } => {
@@ -374,7 +380,6 @@ fn take_waiting(lua: &Lua) -> VecDeque<Waiting> {
             Waiting::Lua { .. } | Waiting::Call(_) => {}
         }
     }
-    batch.into()
 }
 
 /// Make a lock write that waited, in its place.
@@ -652,6 +657,40 @@ pub(crate) fn refuse_waiting(lua: &Lua) -> usize {
 }
 
 impl UiScript {
+    /// How much waits for the host now: the mark a deferred stretch parks from
+    /// ([`Self::park_since`]).
+    pub fn waiting_mark(&self) -> usize {
+        self.model_ref().script_calls.len()
+    }
+
+    /// Park what has waited since `mark`, a deferred stretch's held handlers and writes
+    /// ([`Self::defer`]), with the lock bits and the cursor its writes changed put back, so what
+    /// runs before it reads them as they stood; the key [`Self::run_parked`] runs it by, `None`
+    /// when nothing waited.
+    pub fn park_since(&mut self, mark: usize) -> Option<u64> {
+        let mut model = self.model_mut();
+        let model = &mut *model;
+        if model.script_calls.len() <= mark {
+            return None;
+        }
+        let parked = model.script_calls.split_off(mark);
+        rewind_waiting(model, &parked);
+        let key = model.next_parked;
+        model.next_parked += 1;
+        model.parked.insert(key, parked);
+        Some(key)
+    }
+
+    /// Run what [`Self::park_since`] parked under `key`, behind what waits now, each write made
+    /// again in its place, with the host lent; a key this VM never parked runs nothing.
+    pub fn run_parked(&mut self, key: u64) {
+        let Some(parked) = self.model_mut().parked.remove(&key) else {
+            return;
+        };
+        self.model_mut().script_calls.extend(parked);
+        drain(self.lua());
+    }
+
     /// Raise `message` in the verb of the call the host is applying, as that verb returns: the
     /// reference's verb raises in its own body (`lua_error`, through `0x6f4940`), after what it did
     /// before, which stands. A verb that returned while its call waited for the host reports it as

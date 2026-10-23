@@ -290,7 +290,7 @@ pub use guild::{
     GuildCall, GuildCells, GuildMemberInfo, GuildRankEdit, GuildRankInfo, GuildState, LastOnline,
     UnitGuild, MAX_RANKS, MIN_RANKS, RANK_RIGHT_BITS,
 };
-pub use host::{CallHost, CallTail};
+pub use host::{CallHost, CallTail, Deferring};
 pub use input_verbs::{BindingInput, FiredInput, HeldInput};
 pub use item_calls::ItemCall;
 pub use lfg::LfgDungeon;
