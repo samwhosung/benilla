@@ -140,20 +140,41 @@ enum Phase {
     Done,
 }
 
+/// The inbox as the step reads it, taken outside the VM: the mail verbs write the session in the
+/// host, which the step's Lua runs with.
+struct Inbox {
+    mails: Vec<MailListEntry>,
+    /// The bodies the rows' `item_text_id`s have, as the cache holds them.
+    bodies: std::collections::HashMap<u32, String>,
+}
+
+impl Inbox {
+    fn of(mail: &MailOpen) -> Self {
+        Inbox {
+            mails: mail.mails.clone(),
+            bodies: mail
+                .mails
+                .iter()
+                .filter_map(|e| Some((e.item_text_id, mail.bodies.get(e.item_text_id)?.clone())))
+                .collect(),
+        }
+    }
+}
+
 /// The first row matching `pred`, by its stable `message_id`.
-fn find_by(mail: &MailOpen, pred: impl Fn(&MailListEntry) -> bool) -> Option<u32> {
+fn find_by(mail: &Inbox, pred: impl Fn(&MailListEntry) -> bool) -> Option<u32> {
     mail.mails.iter().find(|e| pred(e)).map(|e| e.message_id)
 }
 
 /// The 1-based display index a `message_id` currently sits at, `None` once it is gone.
-fn index_of(mail: &MailOpen, mail_id: u32) -> Option<u32> {
+fn index_of(mail: &Inbox, mail_id: u32) -> Option<u32> {
     mail.mails
         .iter()
         .position(|e| e.message_id == mail_id)
         .map(|i| i as u32 + 1)
 }
 
-fn entry_of(mail: &MailOpen, mail_id: u32) -> Option<&MailListEntry> {
+fn entry_of(mail: &Inbox, mail_id: u32) -> Option<&MailListEntry> {
     mail.mails.iter().find(|e| e.message_id == mail_id)
 }
 
@@ -175,8 +196,8 @@ fn mail_probe(
     time: ProbeClock,
     mut probe: ResMut<MailProbe>,
     mut windows: Commands,
-    // The session is the call host's too ([`crate::ui_mail::MailVerbs`]): the probe's verbs apply
-    // as its turn ends.
+    // The session is the call host's too ([`crate::ui_mail::MailVerbs`]), so it is read outside
+    // the VM.
     mut vm: crate::script_calls::VmWith<Res<'static, MailOpen>>,
     self_player: Query<(), With<SelfPlayer>>,
     player: Res<Player>,
@@ -184,7 +205,9 @@ fn mail_probe(
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    vm.turn(|script, mail| {
+    // The step's Lua runs with the host lent, so the calls it makes apply inside their verbs.
+    let mail = Inbox::of(&vm.own());
+    vm.run(|script| {
         if self_player.is_empty() {
             return; // not in-world yet
         }
@@ -356,7 +379,7 @@ fn mail_probe(
                 };
                 let landed = entry_of(&mail, letter_id).and_then(|e| {
                     (e.item_text_id != 0)
-                        .then(|| mail.bodies.get(e.item_text_id).cloned())
+                        .then(|| mail.bodies.get(&e.item_text_id).cloned())
                         .flatten()
                         .map(|body| (body, e.checked & CHECKED_READ != 0))
                 });

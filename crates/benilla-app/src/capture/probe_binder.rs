@@ -179,13 +179,29 @@ fn vm_bind_location(script: &UiScript) -> String {
         .unwrap_or_default()
 }
 
+/// The gossip menu as the step reads it, taken outside the VM: the gossip verbs write the state
+/// in the host, which the step's Lua runs with.
+struct Menu {
+    npc: Option<u64>,
+    options: Vec<benilla_protocol::messages::GossipOption>,
+}
+
+impl Menu {
+    fn of(gossip: &GossipState) -> Self {
+        Menu {
+            npc: gossip.npc,
+            options: gossip.options.clone(),
+        }
+    }
+}
+
 fn binder_probe(
     time: ProbeClock,
     mut probe: ResMut<BinderProbe>,
     binder: Res<BinderState>,
     mut home: ResMut<HomeBind>,
     areas: Option<Res<AreaTableRes>>,
-    // The gossip slots wait outside the VM's turn: the gossip verbs write them in the host.
+    // The gossip slots, read outside the VM: the gossip verbs write them in the host.
     mut vm: crate::script_calls::VmWith<Res<'static, GossipState>>,
     self_player: Query<(), With<SelfPlayer>>,
     player: Res<Player>,
@@ -193,7 +209,9 @@ fn binder_probe(
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    vm.turn(|script, gossip| {
+    // The step's Lua runs with the host lent, so the calls it makes apply inside their verbs.
+    let gossip = Menu::of(&vm.own());
+    vm.run(|script| {
         if self_player.is_empty() {
             return; // not in-world yet
         }
@@ -436,7 +454,7 @@ fn binder_probe(
 /// Steps 3 and 4: the bind row's icon, then the click. Sets `probe.phase` on every path.
 fn assert_icon_and_select(
     probe: &mut BinderProbe,
-    gossip: &GossipState,
+    gossip: &Menu,
     script: &UiScript,
     net: &NetCommands,
     innkeeper: u64,

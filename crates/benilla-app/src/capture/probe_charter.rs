@@ -323,13 +323,29 @@ fn probe_guild_name(prefix: &str) -> String {
     format!("{prefix} {secs:08}")
 }
 
+/// The gossip menu as the step reads it, taken outside the VM: the gossip verbs write the state
+/// in the host, which the step's Lua runs with.
+struct Menu {
+    npc: Option<u64>,
+    options: Vec<benilla_protocol::messages::GossipOption>,
+}
+
+impl Menu {
+    fn of(gossip: &GossipState) -> Self {
+        Menu {
+            npc: gossip.npc,
+            options: gossip.options.clone(),
+        }
+    }
+}
+
 fn charter_probe(
     time: ProbeClock,
     mut probe: ResMut<CharterProbe>,
     registrar: Res<GuildRegistrarState>,
     objects: Objects,
     items: Res<Items>,
-    // The gossip slots wait outside the VM's turn: the gossip verbs write them in the host.
+    // The gossip slots, read outside the VM: the gossip verbs write them in the host.
     mut vm: crate::script_calls::VmWith<Res<'static, GossipState>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     player: Res<Player>,
@@ -337,7 +353,9 @@ fn charter_probe(
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    vm.turn(|script, gossip| {
+    // The step's Lua runs with the host lent, so the calls it makes apply inside their verbs.
+    let gossip = Menu::of(&vm.own());
+    vm.run(|script| {
         let Ok(store) = self_q.single() else {
             return; // not in-world yet
         };
@@ -1067,7 +1085,7 @@ fn hop(probe: &mut CharterProbe, net: &NetCommands, now: f64) {
 /// select by the row's wire index, never its list position. Sets `probe.phase` on every path.
 fn assert_icon_and_select(
     probe: &mut CharterProbe,
-    gossip: &GossipState,
+    gossip: &Menu,
     script: &UiScript,
     net: &NetCommands,
     npc: u64,
