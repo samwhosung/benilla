@@ -209,16 +209,18 @@ mod tests {
         channels.claim_slot("GuildRecruitment - City", GUILD_RECRUITMENT);
         let (tx, rx) = crossbeam_channel::unbounded();
 
-        super::super::input::apply_channel_command(
+        let packet = super::super::input::apply_channel_command(
             benilla_ui::script::ChannelCommand::Leave {
                 name: "GuildRecruitment - City".into(),
             },
             &mut channels,
             &mut script,
-            &crate::net::NetCommands(tx),
             &super::super::ChatLog::default(),
-            &crate::ui_action::UiErrorKeys::default(),
+            &mut |_, key| panic!("a leave refuses nothing: {key}"),
         );
+        if let Some(packet) = packet {
+            let _ = tx.send(packet);
+        }
 
         assert!(
             matches!(rx.try_recv(), Ok(crate::net::ClientCommand::LeaveChannel { name }) if name == "GuildRecruitment - City"),

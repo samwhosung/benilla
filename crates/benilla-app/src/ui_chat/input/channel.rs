@@ -6,24 +6,27 @@ use benilla_ui::script::{ChannelCommand, UiScript};
 
 use super::super::edit::ChannelState;
 use super::super::feed::ChatLog;
-use crate::net::{ClientCommand, NetCommands};
+use crate::net::ClientCommand;
 
-/// Apply one queued channel verb: its slot writes and its packet, or its chat line.
+/// Apply one queued channel verb: its slot writes and its chat line, and the packet it sends
+/// after them, for the caller to send. `refuse` shows a refusal by its key inside the call.
 pub(in crate::ui_chat) fn apply(
     cmd: ChannelCommand,
     channels: &mut ChannelState,
     script: &mut UiScript,
-    commands: &NetCommands,
     chat_log: &ChatLog,
-    errors: &crate::ui_action::UiErrorKeys,
-) {
+    refuse: &mut dyn FnMut(&mut UiScript, &'static str),
+) -> Option<ClientCommand> {
     use ChannelCommand as C;
     let cmd = match cmd {
         C::Join { name, password, id } => {
             // The join body takes the slot before it builds the packet (`0x49edf3`), and sends
-            // whether or not one was free (`0x49ee02`).
-            if channels.claim_or_refuse(&name, id, errors).is_some() {
+            // whether or not one was free (`0x49ee02`). With ten taken the claim shows
+            // `DisplayError(0x199)` inside it (`0x49b9c5`), a chat row.
+            if channels.claim_slot(&name, id).is_some() {
                 channels.mirror_into(script);
+            } else {
+                refuse(script, "ERR_TOO_MANY_CHAT_CHANNELS");
             }
             ClientCommand::JoinChannel { name, password }
         }
@@ -32,7 +35,7 @@ pub(in crate::ui_chat) fn apply(
             // the call does nothing. Only a leave clears the zone mask, the walk's own LEAVE
             // never; the slot frees on the server's `YOU_LEFT`.
             let Some(name) = channels.channel_key(&name) else {
-                return;
+                return None;
             };
             channels.note_zone_channel_left(&name);
             ClientCommand::LeaveChannel { name }
@@ -41,19 +44,16 @@ pub(in crate::ui_chat) fn apply(
             // The line is added inside the verb (`0x4a02c0` → `0x49a870`), so a handler has run
             // by the verb's next line.
             chat_log.show_now(script, &list_channels(channels));
-            return;
+            return None;
         }
         admin => {
             // The admin verbs pass argument 1 through `ParseChannelKey` (`0x4a014f`, `0x4a03df`,
             // `0x4a04f5`); a number naming no confirmed slot ends the call before the packet
             // (`0x4a015a`, `0x4a03ea`, `0x4a0500`).
-            let Some(cmd) = admin_command(admin, |key| channels.channel_key(key)) else {
-                return;
-            };
-            cmd
+            admin_command(admin, |key| channels.channel_key(key))?
         }
     };
-    let _ = commands.0.send(cmd);
+    Some(cmd)
 }
 
 /// `ListChannels` (`0x4a01c0`): `"[%d. %s] "` (`0x844c94`) for each slot in state 0

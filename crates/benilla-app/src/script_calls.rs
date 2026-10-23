@@ -440,7 +440,16 @@ impl CallHost for ScriptCallHost<'_, '_> {
             }
             ScriptCall::SendChat(send) => appliers.p4().p1().send_chat(script, send),
             ScriptCall::RandomRoll { min, max } => appliers.p4().p1().random_roll(min, max),
-            ScriptCall::Channel(cmd) => appliers.p4().p1().channel(script, cmd),
+            ScriptCall::Channel(cmd) => {
+                if let Some((packet, refused)) = appliers.p4().p1().channel(script, cmd) {
+                    // The join's refusal runs its listeners inside the claim (`0x49b9c5`),
+                    // before the body sends (`0x49ee02`).
+                    if refused {
+                        self.at_point(script, &mut at.mark);
+                    }
+                    self.appliers.p4().p1().send_channel(packet);
+                }
+            }
             ScriptCall::DoEmote(request) => {
                 emote_in_order!(appliers, appliers.p4().p2().do_emote(script, request));
             }

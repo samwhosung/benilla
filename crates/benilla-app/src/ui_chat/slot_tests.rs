@@ -60,14 +60,17 @@ impl Verbs {
     }
 
     fn apply(&mut self, cmd: ChannelCommand) {
-        super::input::apply_channel_command(
+        let errors = &self.errors;
+        let packet = super::input::apply_channel_command(
             cmd,
             &mut self.channels,
             &mut self.script,
-            &self.commands,
             &self.log,
-            &self.errors,
+            &mut |_, key| errors.push(crate::ui_action::UiError::key(key)),
         );
+        if let Some(packet) = packet {
+            let _ = self.commands.0.send(packet);
+        }
     }
 
     fn sent(&self) -> Vec<ClientCommand> {
@@ -301,19 +304,26 @@ fn a_join_takes_a_pending_slot_inside_the_call() {
     for i in 3..=10 {
         super::run_chat(&mut world, &format!("JoinChannelByName('Chan{i}')")).expect("joins");
     }
-    super::run_chat(&mut world, "JoinChannelByName('Eleventh')").expect("the join runs");
+    super::run_chat(
+        &mut world,
+        r#"ERR_TOO_MANY_CHAT_CHANNELS = "too many"
+        local tap = CreateFrame("Frame")
+        tap:RegisterEvent("CHAT_MSG_SYSTEM")
+        tap:SetScript("OnEvent", function() SHOWN = arg1 end)"#,
+    )
+    .expect("the tap is in");
+    super::run_chat(&mut world, "JoinChannelByName('Eleventh') SEEN = SHOWN")
+        .expect("the join runs");
     assert_eq!(
         eval::<i64>(&world, "return GetChannelName('Eleventh')"),
         0,
         "ten slots taken: no slot"
     );
-    let keys: Vec<&str> = world
-        .resource::<crate::ui_action::UiErrorKeys>()
-        .take()
-        .into_iter()
-        .map(|e| e.key)
-        .collect();
-    assert_eq!(keys, ["ERR_TOO_MANY_CHAT_CHANNELS"]);
+    assert_eq!(
+        eval::<String>(&world, "return SEEN"),
+        "too many",
+        "shown inside the join"
+    );
 }
 
 /// The cascade's join goes through the join body (`0x49eb55` → `0x49eb70`): its slot is taken
