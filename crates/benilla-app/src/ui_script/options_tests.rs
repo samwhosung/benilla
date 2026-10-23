@@ -685,6 +685,8 @@ fn combat_harness() -> UiScript {
 fn interface_harness() -> UiScript {
     let mut s = audio_harness();
     s.set_screen_size(1024.0, 768.0);
+    // No host: the tutorial row's calls are kept for the tests to read, not applied.
+    s.keep_calls();
     harness_with(
         s,
         &[
@@ -3111,7 +3113,6 @@ fn show_tutorials_reads_the_bank_and_writes_through_clear_and_reset() {
     );
 
     let _ = s.take_cvar_changes();
-    s.keep_calls();
     let _ = s.take_tutorial_calls();
 
     s.run("BenillaOptionsFrameContainerBodyInterfaceRowShowTutorialsCheck:Click()")
@@ -3161,7 +3162,6 @@ fn a_no_op_write_does_not_re_arm_the_tutorials() {
     s.run("ShowUIPanel(BenillaOptionsFrame)").unwrap();
     s.run("BenillaOptionsFrameCategoryListRowInterface:Click()")
         .unwrap();
-    s.keep_calls();
     let _ = s.take_tutorial_calls();
 
     // Defaults writes "1" over a row that already reads "1".
