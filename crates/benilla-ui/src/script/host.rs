@@ -107,6 +107,17 @@ impl Drop for Hold<'_> {
 /// with no handler held meanwhile: the handlers it fires run inside it, as its own lines read
 /// what they did. Only an engine step's own signals are held.
 pub(crate) fn unheld<R>(lua: &Lua, f: impl FnOnce() -> R) -> R {
+    // Lua run in place ahead of a held handler would run before it, out of the order made: such
+    // Lua runs between turns, or in a turn before it signals ([`UiScript::host_out`]).
+    debug_assert!(
+        !super::calls::signal_waiting(lua),
+        "Lua runs in place only with no held signal waiting"
+    );
+    in_place(lua, f)
+}
+
+/// [`unheld`] without its check, for the settle that runs what waits ([`UiScript::signal_point`]).
+fn in_place<R>(lua: &Lua, f: impl FnOnce() -> R) -> R {
     let _hold = Hold::new(slot(lua), false);
     f()
 }
@@ -245,7 +256,7 @@ impl UiScript {
         #[cfg(any(test, feature = "test-support"))]
         super::census::point();
         lend(&lua, host, || {
-            unheld(&lua, || super::calls::settle(&lua, self));
+            in_place(&lua, || super::calls::settle(&lua, self));
         });
     }
 

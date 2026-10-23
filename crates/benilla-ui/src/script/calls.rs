@@ -341,6 +341,15 @@ pub(crate) fn hold(lua: &Lua, held: Held) {
     super::census::held();
 }
 
+/// Whether a handler an engine step held waits for the host ([`Waiting::Lua`]).
+pub(crate) fn signal_waiting(lua: &Lua) -> bool {
+    lua.app_data_ref::<Model>()
+        .expect("model app_data")
+        .script_calls
+        .iter()
+        .any(|item| matches!(item, Waiting::Lua { .. }))
+}
+
 /// Take what waits, with the lock bits and the cursor its writes changed put back, last first:
 /// each item then runs against the locks and the cursor as they stood when it was made, and each
 /// write is made again in its place ([`Waiting::Lock`], [`Waiting::Cursor`], a held segment's
