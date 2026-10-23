@@ -178,7 +178,9 @@ impl LatchSteps<'_> {
     /// re-enters while its cell is still set, so its signal fires twice. Whether it re-enters. No
     /// other cell holds a latched guid: every opener registers before it writes its cell
     /// ([`register`] closes the holder first), and the two that write first, the designer's and
-    /// the item text's, are closed by that register, or hold an item's or an object's guid.
+    /// the item text's, are closed by that register, or hold an item's or an object's guid. Every
+    /// walk checks it in a debug build ([`debug_assert_one_holder`]), as this cannot read the
+    /// other windows' cells beside the host.
     pub(crate) fn release(&mut self, cell: u64) -> bool {
         let Some(latch) = self.latch.as_deref_mut() else {
             return false;
@@ -276,7 +278,8 @@ pub(crate) fn register(world: &mut World, guid: u64) {
     world.init_resource::<InteractLatch>();
     let before = world.resource::<InteractLatch>().guid;
     if before.is_some() {
-        dispatch(world);
+        // The designer and the book write their cell first, so one may hold the guid it replaces.
+        walk(world, 1);
     }
     world.resource_mut::<InteractLatch>().guid = Some(guid);
     if guid != 0 && before != Some(guid) {
@@ -324,6 +327,11 @@ fn say(world: &mut World, vocal: LatchVocal) {
 /// cell holds the old guid. The watchdog (`0x493305`) and the leave-world sweep (`0x490b5f`)
 /// call it, and so does every core that finds its own guid latched.
 pub(crate) fn dispatch(world: &mut World) {
+    walk(world, 0);
+}
+
+/// [`dispatch`], then the check that at most `left` windows still hold the guid it released.
+fn walk(world: &mut World, left: usize) {
     let Some(guid) = world
         .get_resource_mut::<InteractLatch>()
         .and_then(|mut l| l.guid.take())
@@ -335,6 +343,25 @@ pub(crate) fn dispatch(world: &mut World) {
         .find(|e| (e.cell)(world) == Some(guid))
     {
         (e.dispatched)(world);
+    }
+    debug_assert_one_holder(world, guid, left);
+}
+
+/// What [`LatchSteps::release`] rests on, checked where every window's cell is readable: one
+/// window's cell at most holds a latched guid, so a core that releases the latch without
+/// `0x493310`'s walk strands no other window. After a walk closed the first holder, no cell holds
+/// the released guid but, inside an open, the opener's own when it wrote its cell first.
+fn debug_assert_one_holder(world: &World, guid: u64, left: usize) {
+    if cfg!(debug_assertions) {
+        let holders: Vec<NpcWindow> = entries(world)
+            .into_iter()
+            .filter(|e| (e.cell)(world) == Some(guid))
+            .map(|e| e.window)
+            .collect();
+        debug_assert!(
+            holders.len() <= left,
+            "windows {holders:?} still hold the released guid {guid:#x}"
+        );
     }
 }
 

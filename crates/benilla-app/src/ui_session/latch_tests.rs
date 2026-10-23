@@ -586,3 +586,18 @@ fn a_walk_away_says_no_goodbye() {
         );
     }
 }
+
+/// A window that writes its cell on a latched guid without registering leaves two holders, so a
+/// close verb releasing the latch inside its call (`LatchSteps::release`, which skips
+/// `0x493310`'s walk) would strand the other: the next walk's check trips in a debug build.
+#[test]
+#[should_panic(expected = "still hold the released guid")]
+fn a_second_holder_of_a_latched_guid_trips_the_walks_check() {
+    let mut app = harness();
+    let world = app.world_mut();
+    crate::ui_gossip::open_menu(world, NPC, 0, Vec::new(), Vec::new());
+    world
+        .resource_mut::<GuildRegistrarState>()
+        .open_for_test(NPC);
+    dispatch(world);
+}
