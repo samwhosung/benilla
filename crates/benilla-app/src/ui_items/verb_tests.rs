@@ -532,11 +532,12 @@ fn the_bag_clicks_clear_cancels_its_bind_question_and_unlocks_both_ends() {
     assert_eq!(h.eval::<i64>("return ASKED"), 1, "asked inside the swap");
     assert!(!h.eval::<bool>(shown), "the clear's CURSOR_UPDATE hid it");
     assert_eq!(h.sent(), Vec::<String>::new(), "nothing sent");
-    let script = h.script();
-    assert!(script.cursor_item().is_none(), "the binding's clear");
-    assert!(!script.item_locked(W), "the worn helm unlocked");
-    assert!(!script.item_locked(E), "the bag's helm unlocked");
-    drop(script);
+    {
+        let script = h.script();
+        assert!(script.cursor_item().is_none(), "the binding's clear");
+        assert!(!script.item_locked(W), "the worn helm unlocked");
+        assert!(!script.item_locked(E), "the bag's helm unlocked");
+    }
     assert_eq!(
         h.app
             .world()
