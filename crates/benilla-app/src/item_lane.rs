@@ -452,6 +452,7 @@ mod tests {
                 tools: Vec::new(),
                 tooltip: CraftTooltip::Spell(7418),
                 spell_level: 1,
+                group: 0,
                 skill_line: None,
                 training_point_cost: 0,
                 required_level: 0,

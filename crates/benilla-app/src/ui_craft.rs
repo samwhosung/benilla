@@ -503,6 +503,7 @@ fn feed_craft(
                         // `spellLevel` at `+0x74` (column 29), not `baseLevel` (column 28).
                         spell_level: d.spell_level,
                         // The group key is the ability row's line (`0x4f61b1`), 0 with none.
+                        group: sla.map_or(0, |a| a.skill_id),
                         skill_line: sla
                             .and_then(|a| skill_lines.catalog.line(a.skill_id))
                             .map(|l| l.name.clone()),

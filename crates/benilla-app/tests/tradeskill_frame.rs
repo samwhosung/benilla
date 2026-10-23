@@ -538,6 +538,7 @@ fn a_hovered_or_selected_craft_row_paints_its_label_white() {
         tools: vec![],
         tooltip: CraftTooltip::Spell(spell_id),
         spell_level: 0,
+        group: 0,
         skill_line: None,
         training_point_cost: 0,
         required_level: 0,

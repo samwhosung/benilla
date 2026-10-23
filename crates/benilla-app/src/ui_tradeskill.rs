@@ -88,6 +88,13 @@ pub(crate) fn reset_crafts_on_world_enter(
     })
 }
 
+/// The craft init's type write (`0x4f5ee0` zeroes `[0xbdcfb8]`) on each cascade.
+pub(crate) fn close_craft_on_world_enter(
+    _cascades: MessageReader<crate::net::WorldEnterCascadeMessage>,
+    _craft_open: ResMut<crate::ui_craft::CraftOpen>,
+) {
+}
+
 /// `SpellFocusObject.dbc`, the names on a "Requires: Anvil" line.
 #[derive(Resource)]
 pub(crate) struct SpellFocus {

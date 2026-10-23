@@ -1662,6 +1662,7 @@ fn the_feed_pushes_the_spells_the_vm_holds_before_a_hover() {
             reagents: vec![],
             tools: vec![],
             spell_level: 0,
+            group: 0,
             skill_line: None,
             training_point_cost: 0,
             required_level: 0,

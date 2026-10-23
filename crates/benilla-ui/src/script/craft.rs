@@ -122,8 +122,11 @@ pub struct CraftRecipe {
     /// `Spell.dbc` `spellLevel` (`+0x74`), the Beast Training comparator's rank key. The
     /// `requiredLevel` return reads the learned spell's instead (`0x4f705f` → `0x60c840`).
     pub spell_level: u32,
-    /// The name of the recipe's group key, the skill line of the spell's ability (row `+0x04`,
-    /// `0x4f61b1`), for `GetCraftSkillLine`; `None` when `SkillLine.dbc` has no such row.
+    /// The recipe's group key (row `+0x04`): the skill line of the spell's ability (`0x4f61b1`),
+    /// 0 with none (`0x4f61b6`).
+    pub group: u32,
+    /// The name of [`Self::group`], for `GetCraftSkillLine` and the header row; `None` when
+    /// `SkillLine.dbc` has no such row.
     pub skill_line: Option<String>,
     /// `GetCraftInfo`'s sixth value, the training-point cost (`0x4f7078`).
     pub training_point_cost: u32,
@@ -225,6 +228,9 @@ impl super::UiScript {
             }
         }
     }
+
+    /// The open's resets (`0x4f601c`-`0x4f602c`).
+    pub fn craft_opened(&mut self) {}
 
     /// A rebuild of the craft list (`0x4f60c0`), as the bag and item watchers run one on each of
     /// their runs: while a craft window is open, the state read again where `refresh` brings the
@@ -658,6 +664,7 @@ mod tests {
             }],
             tools: vec![("Runed Copper Rod".into(), true)],
             spell_level: 0,
+            group: 0,
             skill_line: None,
             training_point_cost: 0,
             required_level: 0,
@@ -1050,6 +1057,7 @@ mod tests {
             reagents: vec![],
             tools: vec![],
             spell_level: level,
+            group: 0,
             skill_line: None,
             training_point_cost: 0,
             required_level: 0,
