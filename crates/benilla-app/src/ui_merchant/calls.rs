@@ -116,8 +116,9 @@ impl MerchantSteps<'_, '_> {
                     count: 1,
                 });
             }
-            // The container's guid names the slot: the player's for the player's own array
-            // (`BAG_PLAYER_INVENTORY`), the bag's for a real bag; the count is the fixed 1.
+            // The slot's list names the container (`0x4f9f32`): the player's guid for the
+            // player's own array (`BAG_PLAYER_INVENTORY`), the bag's for an equipped or a bank
+            // bag; the count is the fixed 1.
             MerchantCall::BuyInSlot { bag, slot, entry } => {
                 let (Some(vendor), Some((store, guid))) = (open.vendor, me_pair) else {
                     return;
@@ -130,6 +131,10 @@ impl MerchantSteps<'_, '_> {
                 };
                 let bag_guid = if bag_index == BAG_PLAYER_INVENTORY {
                     Some(guid.0)
+                } else if let Some(bank_bag) =
+                    bag_index.checked_sub(crate::ui_items::BANK_BAG_SLOT_FIRST)
+                {
+                    store.0.player_bank_bag_slot(bank_bag).filter(|g| *g != 0)
                 } else {
                     store.0.player_inv_slot(bag_index).filter(|g| *g != 0)
                 };

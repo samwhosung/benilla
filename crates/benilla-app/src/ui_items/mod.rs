@@ -55,7 +55,7 @@ pub(super) const BANK_SLOTS: u8 = 24;
 pub(super) const BANK_SLOT_FIRST: u8 = 39;
 /// The first bank-bag slot (vmangos `BANK_SLOT_BAG_START`); as with an equipped bag, a bank bag's
 /// slot number is its wire bag byte.
-pub(super) const BANK_BAG_SLOT_FIRST: u8 = 63;
+pub(crate) const BANK_BAG_SLOT_FIRST: u8 = 63;
 /// Bank bag count (live-API bag ids [`BANK_BAG_ID_FIRST`]..=10).
 pub(super) const BANK_BAGS: u8 = 6;
 /// `BANK_CONTAINER` (`BankFrame.lua:1`).
