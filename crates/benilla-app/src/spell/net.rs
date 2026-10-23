@@ -1145,9 +1145,7 @@ fn spell_go(
     let (cooldowns, spells, items, pet_bar, spell_mods) = cooldown_ctx;
     // A spell with no record does nothing (`0x6e7cd7 jl`, `0x6e7ce3 jg` and `0x6e7cf7 je`, all to
     // the end `0x6e8647`), ahead of the caster's lookup and every leg.
-    let Some(display) = spells.and_then(|s| s.catalog.get(spell_id)) else {
-        return None;
-    };
+    let display = spells.and_then(|s| s.catalog.get(spell_id))?;
     // A cast naming a GameObject goes to the GameObject animation driver, which opens the lid on
     // an open-lock cast, streamed caster or not.
     if let Some(go_guid) = go_target {
