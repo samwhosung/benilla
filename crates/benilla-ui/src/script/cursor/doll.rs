@@ -1379,6 +1379,33 @@ mod tests {
         assert_eq!(s.take_container_autoequips(), vec![(EQUIPMENT_BAG, 64)]);
     }
 
+    /// `AutoEquipCursorItem` finds the held item by its guid (`0x5e15b2`), not through
+    /// `GetItemInSlot`'s bank gate: a bank bag held from its slot still equips after the banker
+    /// closes.
+    #[test]
+    fn a_bank_bag_held_past_the_bankers_close_still_auto_equips() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.set_bank(Some(Default::default()));
+        let mut bank_bags: crate::script::BankBagSlots = Default::default();
+        bank_bags[0] = Some(InvSlotView {
+            item_id: 4500,
+            guid: 0x112,
+            inventory_type: Some(18),
+            equip_slots: vec![20, 21, 22, 23],
+            ..Default::default()
+        });
+        s.set_bank_bag_slots(bank_bags);
+        s.seat_item_records();
+        s.run("PickupBagFromSlot(64)").unwrap();
+        assert_eq!(s.cursor_item().map(|i| i.guid), Some(0x112));
+        s.set_bank(None);
+        assert!(auto_equip_cursor_item(&mut s.model_mut()));
+        s.submit_filed_item_calls();
+        assert_eq!(s.take_container_autoequips(), vec![(EQUIPMENT_BAG, 64)]);
+        assert!(s.cursor_item().is_none());
+    }
+
     /// `UseInventoryItem` reaches the dispatcher too (`0x4c7af0`), so a worn trinket meets its
     /// requirement and control gates (`0x5d8e0e`, `0x5d8eaa`); a bypass spell passes the latter.
     #[test]
