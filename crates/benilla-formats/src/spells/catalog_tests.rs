@@ -18,12 +18,12 @@ fn real_learn_spell_hop_resolves_the_taught_ability() {
             "learn wrapper {wrapper} teaches ability {ability}"
         );
         assert_eq!(
-            skills.spell_to_line(wrapper),
+            skills.first_line(wrapper),
             None,
             "the wrapper {wrapper} is not itself in SkillLineAbility (the bug's root)"
         );
         assert_eq!(
-            skills.spell_to_line(ability),
+            skills.first_line(ability),
             Some(line),
             "the taught ability {ability} groups under skill line {line}"
         );
@@ -1317,7 +1317,7 @@ fn the_language_declaring_spells_cover_nine_of_thirteen_languages() {
     // The fourteenth, "Lesser Draconic (Language)", declares Draconic (11) but has no
     // `SkillLineAbility` row, so the gate's second hop dead-ends and Draconic always garbles.
     assert_eq!(spells.declared_language(25674), Some(11));
-    assert_eq!(skills.spell_to_line(25674), None);
+    assert_eq!(skills.first_line(25674), None);
 
     assert_eq!(
         spells.declared_languages().count(),
@@ -1332,7 +1332,7 @@ fn the_language_declaring_spells_cover_nine_of_thirteen_languages() {
         );
         // The second hop the garble gate walks: spell -> SkillLineAbility -> SkillLine.dbc id.
         assert_eq!(
-            skills.spell_to_line(spell),
+            skills.first_line(spell),
             Some(line),
             "spell {spell} -> skill line"
         );
@@ -1341,7 +1341,7 @@ fn the_language_declaring_spells_cover_nine_of_thirteen_languages() {
     // Both hops walked, only the eight player languages can ever be understood.
     let understandable: std::collections::BTreeSet<u32> = spells
         .declared_languages()
-        .filter(|(spell, _)| skills.spell_to_line(*spell).is_some())
+        .filter(|(spell, _)| skills.first_line(*spell).is_some())
         .map(|(_, l)| l)
         .collect();
     assert_eq!(

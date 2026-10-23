@@ -227,6 +227,9 @@ fn train_error_log_line(code: u32) -> &'static str {
 pub(super) struct ReqBooks<'a> {
     pub(super) player: &'a BTreeSet<u32>,
     pub(super) pet: Option<&'a BTreeSet<u32>>,
+    /// The player's race and class, which index the taught spell's line (`0x60c920` →
+    /// `0x6de040`).
+    pub(super) race_class: (u8, u8),
 }
 
 /// Resolve one wire [`TrainerSpell`] into the Lua [`TrainerService`]; `books` colour each
@@ -295,7 +298,7 @@ fn resolve_service(
         trainer_type,
         cat,
         spells,
-        skill_lines,
+        skill_lines.map(|c| (c, books.race_class)),
         get,
     );
     if group_key == 0 && skill_lines.is_some() {
@@ -720,6 +723,7 @@ pub(crate) fn feed_trainer(
                 &ReqBooks {
                     player: &actions.spells,
                     pet: pet_book.as_ref(),
+                    race_class: store.map_or((0, 0), |s| s.race_class()),
                 },
                 icons.as_deref(),
                 &items,

@@ -176,13 +176,15 @@ fn open_trade_skill(
     mut craft_open: ResMut<crate::ui_craft::CraftOpen>,
     skill_lines: Option<Res<SkillLines>>,
     spells: Option<Res<Spells>>,
+    self_store: Query<&ObjectStore, With<SelfPlayer>>,
 ) {
+    let (race, class) = self_store.single().map_or((0, 0), |s| s.race_class());
     for spell_id in opens.0.drain(..) {
         let Some(skill_lines) = skill_lines.as_deref() else {
             warn!("ui_tradeskill: opener {spell_id} before SkillLineAbility loaded — dropped");
             continue;
         };
-        let Some(line) = skill_lines.catalog.spell_to_line(spell_id) else {
+        let Some(line) = skill_lines.catalog.spell_to_line(spell_id, race, class) else {
             warn!("ui_tradeskill: opener {spell_id} has no SkillLineAbility row — dropped");
             continue;
         };
@@ -256,8 +258,9 @@ pub(crate) fn reband(
     };
     let rank = skill_value(store, t.line);
     (t.rank, t.max_rank) = skill_rank(store, t.line);
+    let (race, class) = store.race_class();
     for r in &mut t.recipes {
-        if let Some(sla) = skill_lines.catalog.ability(r.spell_id) {
+        if let Some(sla) = skill_lines.catalog.ability(r.spell_id, race, class) {
             r.difficulty = difficulty(rank, sla.trivial_low, sla.trivial_high);
         }
     }
@@ -319,7 +322,8 @@ fn resolve_recipe(
     (anchor, ui_now): (Instant, f64),
 ) -> Option<TradeSkillRecipe> {
     let d = spells.catalog.get(spell_id)?;
-    let sla = skill_lines.catalog.ability(spell_id)?;
+    let (race, class) = store.race_class();
+    let sla = skill_lines.catalog.ability(spell_id, race, class)?;
 
     // Reagents: `(entry, need)` pairs off `Spell.dbc`; have is the mask-0 count (`0x622130`, `0x4fccfc`).
     let mut reagents = Vec::new();
@@ -522,14 +526,16 @@ fn fire_list_rebuilds(
 
 /// The lists a book change rebuilds, by the spell's kind.
 #[derive(bevy::ecs::system::SystemParam)]
-struct ListTriggers<'w> {
+struct ListTriggers<'w, 's> {
+    /// The player, whose race and class index the ability row (`0x5ea054`).
+    self_store: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
     spells: Option<Res<'w, Spells>>,
     skill_lines: Option<Res<'w, SkillLines>>,
     actions: Option<Res<'w, PlayerActions>>,
     rebuilds: Option<ResMut<'w, ListRebuilds>>,
 }
 
-impl ListTriggers<'_> {
+impl ListTriggers<'_, '_> {
     /// `LearnSpell 0x5e9c20` on a spell with a record (`0x5e9c88`): a profession spell
     /// (`Attributes & 0x20`, `0x5e9c8e`) rebuilds the profession list (`0x5e9d79`), any other
     /// with a `castUI` above 0 the craft list (`0x5e9d88`, `0x5e9e12`).
@@ -558,10 +564,11 @@ impl ListTriggers<'_> {
                 .is_some_and(|a| order(a).contains(&spell_id))
         };
         if d.attributes & SPELL_ATTR_IS_TRADESKILL != 0 {
+            let (race, class) = self.self_store.single().map_or((0, 0), |s| s.race_class());
             let has_row = self
                 .skill_lines
                 .as_deref()
-                .is_some_and(|l| l.catalog.ability(spell_id).is_some());
+                .is_some_and(|l| l.catalog.ability(spell_id, race, class).is_some());
             if has_row && held(|a| &a.profession_order) {
                 self.push(ListRebuild::Trade);
             }
@@ -635,6 +642,7 @@ fn feed_trade_skill(
             let store = self_store.single().ok()?;
             let rank = skill_value(store, line);
             let (line_rank, max_rank) = skill_rank(store, line);
+            let (race, class) = store.race_class();
             let line_name = skill_lines
                 .catalog
                 .line(line)
@@ -650,7 +658,7 @@ fn feed_trade_skill(
                         .catalog
                         .get(s)
                         .is_some_and(|d| d.attributes & SPELL_ATTR_IS_TRADESKILL != 0)
-                        && skill_lines.catalog.spell_to_line(s) == Some(line)
+                        && skill_lines.catalog.spell_to_line(s, race, class) == Some(line)
                 })
                 .filter_map(|&s| {
                     resolve_recipe(

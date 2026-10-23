@@ -187,7 +187,8 @@ fn display_line(
     skill_lines: &SkillLines,
     store: &ObjectStore,
 ) -> Option<(String, u32, u32)> {
-    let line = skill_lines.catalog.ability(first?)?.skill_id;
+    let (race, class) = store.race_class();
+    let line = skill_lines.catalog.ability(first?, race, class)?.skill_id;
     if line == 0 {
         return None;
     }
@@ -333,7 +334,8 @@ fn feed_craft(
                 .filter_map(|&s| {
                     let d = spells.catalog.get(s)?;
                     // A spell with no ability row keeps its row, in group 0 (`0x4f61b6`).
-                    let sla = skill_lines.catalog.ability(s);
+                    let (race, class) = store.race_class();
+                    let sla = skill_lines.catalog.ability(s, race, class);
                     let mut reagents = Vec::new();
                     let mut num_available = u32::MAX;
                     for &(entry, need) in d.reagents.iter().filter(|&&(e, n)| e != 0 && n != 0) {

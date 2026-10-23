@@ -62,16 +62,20 @@ fn a_profession_opener_names_its_window() {
         ..Default::default()
     };
     assert_eq!(
-        profession(7411, &opener(3), Some(&lines)),
+        profession(7411, &opener(3), Some(&lines), (1, 1)),
         Some(Profession::Craft(3))
     );
     assert_eq!(
-        profession(3908, &opener(0), Some(&lines)),
+        profession(3908, &opener(0), Some(&lines), (1, 1)),
         Some(Profession::TradeSkill(197))
     );
-    assert_eq!(profession(3908, &opener(0), None), None, "no rows loaded");
     assert_eq!(
-        profession(133, &SpellDisplay::default(), Some(&lines)),
+        profession(3908, &opener(0), None, (1, 1)),
+        None,
+        "no rows loaded"
+    );
+    assert_eq!(
+        profession(133, &SpellDisplay::default(), Some(&lines), (1, 1)),
         None
     );
 }

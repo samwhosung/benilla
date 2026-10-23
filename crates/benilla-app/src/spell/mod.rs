@@ -240,7 +240,8 @@ pub(crate) fn player_spell_level(
         skills.spells.and_then(|c| c.get(id))
     };
     let Some(record) = record else { return 0 };
-    let Some(line) = skills.lines.and_then(|c| c.spell_to_line(id)) else {
+    let (race, class) = store.race_class();
+    let Some(line) = skills.lines.and_then(|c| c.spell_to_line(id, race, class)) else {
         return 0;
     };
     reads.skill_line(line);
@@ -256,7 +257,8 @@ pub(crate) fn spell_skill_value(
     skill_lines: Option<&benilla_formats::SkillLineCatalog>,
     spell_id: u32,
 ) -> u32 {
-    let Some(line) = skill_lines.and_then(|c| c.spell_to_line(spell_id)) else {
+    let (race, class) = me.map_or((0, 0), |s| s.race_class());
+    let Some(line) = skill_lines.and_then(|c| c.spell_to_line(spell_id, race, class)) else {
         return 0;
     };
     skill_line_value(me, line)
@@ -411,6 +413,42 @@ mod tests {
     /// own (10). An off hand fits when the main hand does not, a disarmed main hand is skipped,
     /// and an item-targeted spell, a hand of the wrong class and an uncached record keep the
     /// spell's own line.
+    #[test]
+    fn a_spells_level_reads_the_line_its_casters_race_indexes() {
+        use benilla_formats::{SkillLineCatalog, SpellDisplay};
+        use benilla_protocol::messages::FIELD_PLAYER_SKILL_INFO_1_1 as SKILLS;
+        // `UNIT_FIELD_BYTES_0`: race, then class.
+        const FIELD_UNIT_BYTES_0: u16 = 36;
+        const HUMAN_LINE: u32 = 26;
+        const ORC_LINE: u32 = 256;
+        let d = SpellDisplay {
+            id: 900_200,
+            max_level: 60,
+            ..Default::default()
+        };
+        // `0x5ea6c8` hands `0x6de040` the player's race and class: a human's row and an orc's.
+        let lines = SkillLineCatalog::from_spell_lines([])
+            .with_race_class_flags([(HUMAN_LINE, 0), (ORC_LINE, 0)])
+            .with_race_ability_rows([(900_200, HUMAN_LINE, 0x1, 0), (900_200, ORC_LINE, 0x2, 0)]);
+        let level = |race: u32| {
+            let store = crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (FIELD_UNIT_BYTES_0, race | 1 << 8),
+                (SKILLS, HUMAN_LINE),
+                (SKILLS + 1, 50 | 300 << 16),
+                (SKILLS + 3, ORC_LINE),
+                (SKILLS + 4, 100 | 300 << 16),
+            ]));
+            let skills = PlayerSkills {
+                lines: Some(&lines),
+                ..Default::default()
+            };
+            player_spell_level(Some(&store), skills, &d, &mut Unrecorded)
+        };
+        assert_eq!(level(1), 10, "a human reads its own row's line, 50");
+        assert_eq!(level(2), 20, "an orc reads its own, 100");
+        assert_eq!(level(3), 0, "a dwarf has no row");
+    }
+
     #[test]
     fn a_weapon_spell_scales_with_the_wielded_weapons_skill() {
         use benilla_formats::{SkillLineCatalog, SpellCatalog, SpellDisplay};

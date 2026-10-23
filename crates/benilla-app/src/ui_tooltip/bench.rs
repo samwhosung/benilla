@@ -61,7 +61,7 @@ fn feed_cost_per_invalidation() {
     ids.extend(others.iter().step_by(stride).take(n - class));
     let mut lines: Vec<u32> = ids
         .iter()
-        .filter_map(|&id| skill_lines.spell_to_line(id))
+        .filter_map(|&id| skill_lines.first_line(id))
         .collect();
     lines.sort_unstable();
     lines.dedup();

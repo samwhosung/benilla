@@ -611,7 +611,7 @@ impl Rig {
         let displays = || ids.iter().filter_map(|&id| spells.catalog.get(id));
         let lines: BTreeSet<u32> = ids
             .iter()
-            .filter_map(|&id| skill_lines.spell_to_line(id))
+            .filter_map(|&id| skill_lines.first_line(id))
             .collect();
         assert!(
             lines.len() <= 128,

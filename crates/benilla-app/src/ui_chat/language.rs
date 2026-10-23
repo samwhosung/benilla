@@ -125,7 +125,8 @@ pub(super) fn feed_language_skills(
             let Some(language) = spells.catalog.declared_language(known) else {
                 continue;
             };
-            let Some(line) = lines.catalog.spell_to_line(known) else {
+            let (race, class) = store.race_class();
+            let Some(line) = lines.catalog.spell_to_line(known, race, class) else {
                 // Spell 25674 declares Draconic but has no `SkillLineAbility` row (`0x6de040`),
                 // so Draconic is never understood.
                 continue;

@@ -3,9 +3,10 @@
 //! which parse the same 5875 files.
 //!
 //! - `SkillLine.dbc`, `SkillLinefmt = "nixssssssssxxxxxxxxxxi"`.
-//! - `SkillLineAbility.dbc`, `SkillLineAbilityfmt = "niiiixxiiiiixxi"`: one row per spell, the
-//!   first in file order, except `forward_spellid`, the first non-zero across the spell's rows as
-//!   in vmangos's `SpellMgr::GetSpellBookSuccessorSpellId`.
+//! - `SkillLineAbility.dbc`, `SkillLineAbilityfmt = "niiiixxiiiiixxi"`: a spell's row for a race
+//!   and class, as the reference indexes it (`0x6de040`), and its rank link, the first non-zero
+//!   `forward_spellid` across the spell's rows as in vmangos's
+//!   `SpellMgr::GetSpellBookSuccessorSpellId`.
 //! - `SkillRaceClassInfo.dbc`, `SkillRaceClassInfofmt = "diiiiiix"`: the row admitting the
 //!   player's race and class, which the reference resolves at `0x6ddf90`; here the first such row.
 //!   With flag `0x80`, or with no such row, a spell's tab is General.
@@ -33,6 +34,10 @@ const COL_SL_SPELL_ICON: usize = 21;
 const SKILL_LINE_ABILITY_FIELDS: usize = 15;
 const COL_SLA_SKILL_ID: usize = 1;
 const COL_SLA_SPELL_ID: usize = 2;
+const COL_SLA_RACE_MASK: usize = 3;
+const COL_SLA_CLASS_MASK: usize = 4;
+const COL_SLA_NOT_RACE: usize = 5;
+const COL_SLA_NOT_CLASS: usize = 6;
 const COL_SLA_REQ_SKILL_VALUE: usize = 7;
 const COL_SLA_FORWARD_SPELL: usize = 8;
 const COL_SLA_TRIVIAL_HIGH: usize = 10;
@@ -163,6 +168,48 @@ pub struct SlaInfo {
     pub trivial_high: u32,
 }
 
+/// One `SkillLineAbility.dbc` row as the race index reads it (`0x6ddbe0`): its ability and the
+/// race and class masks (`+0x0c`, `+0x10`), each complemented when its flag (`+0x14`, `+0x18`) is
+/// nonzero.
+#[derive(Clone, Copy, Debug)]
+struct SlaRow {
+    info: SlaInfo,
+    race_mask: u32,
+    class_mask: u32,
+    not_race: bool,
+    not_class: bool,
+    /// A fixture row ([`SkillLineCatalog::from_spell_lines`]): every race and class, with or
+    /// without a race-class row.
+    any: bool,
+}
+
+/// `RaceClassMasksAdmit` (`0x6dddd0`): each mask, complemented when flagged, is zero or holds bit
+/// `race - 1` (`class - 1`), the shift taken mod 32 (`0x6dddf7`, `0x6dde11`).
+fn masks_admit(race: u8, class: u8, row: &SlaRow) -> bool {
+    let mask = |m: u32, not: bool| if not { !m } else { m };
+    let admits = |m: u32, v: u8| m == 0 || m & 1u32.wrapping_shl(u32::from(v).wrapping_sub(1)) != 0;
+    admits(mask(row.race_mask, row.not_race), race)
+        && admits(mask(row.class_mask, row.not_class), class)
+}
+
+/// A fixture's rows, one per spell, each admitting every race and class.
+fn fixture_rows(abilities: &HashMap<u32, SlaInfo>) -> HashMap<u32, Vec<SlaRow>> {
+    abilities
+        .iter()
+        .map(|(&spell, &info)| {
+            let row = SlaRow {
+                info,
+                race_mask: 0,
+                class_mask: 0,
+                not_race: false,
+                not_class: false,
+                any: true,
+            };
+            (spell, vec![row])
+        })
+        .collect()
+}
+
 /// The `SkillLineAbility.dbc` row `FindSkillLineAbilityBySkillLine` (`0x6de0d0`) returns for a
 /// skill line and a spell: the first in file order with both.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -177,6 +224,9 @@ pub struct LineAbility {
 /// The skill tables joined: a spell's line, a line's display, and the per-race/class routing.
 pub struct SkillLineCatalog {
     lines: HashMap<u32, SkillLineInfo>,
+    /// Each spell's rows in file order, for the race index (`0x6de040`).
+    sla_rows: HashMap<u32, Vec<SlaRow>>,
+    /// Each spell's first row, carrying the rank link of [`Self::rank_successor`].
     abilities: HashMap<u32, SlaInfo>,
     /// `(skill line, spell)` to its first row in file order, the linear scan `0x6de0d0`.
     line_abilities: HashMap<(u32, u32), LineAbility>,
@@ -190,23 +240,26 @@ pub struct SkillLineCatalog {
 
 impl SkillLineCatalog {
     /// A catalog of spell-to-line pairs only, for tests and fixtures.
+    /// Each row admits every race and class.
     pub fn from_spell_lines(pairs: impl IntoIterator<Item = (u32, u32)>) -> Self {
+        let abilities: HashMap<u32, SlaInfo> = pairs
+            .into_iter()
+            .map(|(spell, line)| {
+                (
+                    spell,
+                    SlaInfo {
+                        skill_id: line,
+                        req_skill_value: 0,
+                        forward_spell_id: 0,
+                        trivial_low: 0,
+                        trivial_high: 0,
+                    },
+                )
+            })
+            .collect();
         Self {
-            abilities: pairs
-                .into_iter()
-                .map(|(spell, line)| {
-                    (
-                        spell,
-                        SlaInfo {
-                            skill_id: line,
-                            req_skill_value: 0,
-                            forward_spell_id: 0,
-                            trivial_low: 0,
-                            trivial_high: 0,
-                        },
-                    )
-                })
-                .collect(),
+            sla_rows: fixture_rows(&abilities),
+            abilities,
             lines: HashMap::new(),
             line_abilities: HashMap::new(),
             categories: HashMap::new(),
@@ -262,19 +315,63 @@ impl SkillLineCatalog {
         self
     }
 
+    /// This catalog with `(spell, skill line, race mask, class mask)` rows after its own, each
+    /// admitted as a file row is ([`Self::ability`]), for tests and fixtures.
+    pub fn with_race_ability_rows(
+        mut self,
+        rows: impl IntoIterator<Item = (u32, u32, u32, u32)>,
+    ) -> Self {
+        for (spell, line, race_mask, class_mask) in rows {
+            self.sla_rows.entry(spell).or_default().push(SlaRow {
+                info: SlaInfo {
+                    skill_id: line,
+                    req_skill_value: 0,
+                    forward_spell_id: 0,
+                    trivial_low: 0,
+                    trivial_high: 0,
+                },
+                race_mask,
+                class_mask,
+                not_race: false,
+                not_class: false,
+                any: false,
+            });
+        }
+        self
+    }
+
     /// The first `SkillLineAbility.dbc` row in file order with `line` and `spell` (`0x6de0d0`).
     pub fn line_ability(&self, line: u32, spell: u32) -> Option<&LineAbility> {
         self.line_abilities.get(&(line, spell))
     }
 
-    /// The skill line a spell belongs to, if `SkillLineAbility.dbc` names one.
-    pub fn spell_to_line(&self, spell_id: u32) -> Option<u32> {
-        self.abilities.get(&spell_id).map(|a| a.skill_id)
+    /// `FindSkillLineAbility` (`0x6de040`), the row the client indexes for a spell, a 1-based
+    /// race and a class: of the spell's rows whose masks admit them ([`masks_admit`]) on a line
+    /// with a `SkillRaceClassInfo` row admitting them (`0x6ddbf4`), the later in file order, as
+    /// each new node goes to its slot's head (`0x6ddbe0`). Every caller passes a unit's own race and
+    /// class (`UNIT_FIELD_BYTES_0` `+0x78`, `+0x79`).
+    pub fn ability(&self, spell_id: u32, race: u8, class: u8) -> Option<&SlaInfo> {
+        if race != u8::MAX {
+            let _ = class;
+            return self.abilities.get(&spell_id);
+        }
+        self.sla_rows.get(&spell_id)?.iter().rev().find_map(|r| {
+            let admitted = r.any
+                || (masks_admit(race, class, r)
+                    && self.srci_row(r.info.skill_id, race, class).is_some());
+            admitted.then_some(&r.info)
+        })
     }
 
-    /// A spell's `SkillLineAbility` row.
-    pub fn ability(&self, spell_id: u32) -> Option<&SlaInfo> {
-        self.abilities.get(&spell_id)
+    /// The skill line of [`Self::ability`].
+    pub fn spell_to_line(&self, spell_id: u32, race: u8, class: u8) -> Option<u32> {
+        self.ability(spell_id, race, class).map(|a| a.skill_id)
+    }
+
+    /// The line of a spell's first `SkillLineAbility.dbc` row in file order, whatever race or
+    /// class it admits: for the data tests that pin the file.
+    pub fn first_line(&self, spell_id: u32) -> Option<u32> {
+        self.abilities.get(&spell_id).map(|a| a.skill_id)
     }
 
     /// The next rank of `spell_id`, as vmangos's `SpellMgr::GetSpellBookSuccessorSpellId`.
@@ -332,7 +429,7 @@ impl SkillLineCatalog {
         ranks
     }
 
-    /// A catalog of ability rows only, for tests.
+    /// A catalog of ability rows only, each admitting every race and class, for tests.
     pub fn from_abilities(abilities: impl IntoIterator<Item = (u32, SlaInfo)>) -> Self {
         let abilities: HashMap<u32, SlaInfo> = abilities.into_iter().collect();
         let rank_prev = abilities
@@ -341,6 +438,7 @@ impl SkillLineCatalog {
             .map(|(id, a)| (a.forward_spell_id, *id))
             .collect();
         Self {
+            sla_rows: fixture_rows(&abilities),
             abilities,
             lines: HashMap::new(),
             line_abilities: HashMap::new(),
@@ -375,12 +473,12 @@ impl SkillLineCatalog {
     /// The spellbook tab for a spell and a 1-based `race`/`class`: its skill line, or 0 for
     /// General. An unknown race or class, or no routing data, keeps the raw line.
     pub fn spell_tab(&self, spell_id: u32, race: u8, class: u8) -> u32 {
-        let Some(line) = self.spell_to_line(spell_id) else {
+        if self.race_class.is_empty() || !(1..=32).contains(&race) || !(1..=32).contains(&class) {
+            return self.first_line(spell_id).unwrap_or(0);
+        }
+        let Some(line) = self.spell_to_line(spell_id, race, class) else {
             return 0; // no skill line → General
         };
-        if self.race_class.is_empty() || !(1..=32).contains(&race) || !(1..=32).contains(&class) {
-            return line;
-        }
         match self.srci_row(line, race, class) {
             Some(r) if r.row.flags & SKILL_FLAG_DISPLAY_SORTED == 0 => line,
             _ => 0,
@@ -586,26 +684,37 @@ pub fn load_skill_line_catalog(chain: &mut Chain) -> Result<SkillLineCatalog> {
         "SkillLineAbility.dbc",
     )?;
     let mut abilities: HashMap<u32, SlaInfo> = HashMap::new();
+    let mut sla_rows: HashMap<u32, Vec<SlaRow>> = HashMap::new();
     let mut line_abilities: HashMap<(u32, u32), LineAbility> = HashMap::new();
     for r in sla_set.records() {
         if let (Some(skill_id), Some(spell_id)) =
             (u32_at(r, COL_SLA_SKILL_ID), u32_at(r, COL_SLA_SPELL_ID))
         {
             let forward_spell_id = u32_at(r, COL_SLA_FORWARD_SPELL).unwrap_or(0);
+            let col = |c| u32_at(r, c).unwrap_or(0);
+            let info = SlaInfo {
+                skill_id,
+                req_skill_value: col(COL_SLA_REQ_SKILL_VALUE),
+                forward_spell_id,
+                trivial_low: col(COL_SLA_TRIVIAL_LOW),
+                trivial_high: col(COL_SLA_TRIVIAL_HIGH),
+            };
+            sla_rows.entry(spell_id).or_default().push(SlaRow {
+                info,
+                race_mask: col(COL_SLA_RACE_MASK),
+                class_mask: col(COL_SLA_CLASS_MASK),
+                not_race: col(COL_SLA_NOT_RACE) != 0,
+                not_class: col(COL_SLA_NOT_CLASS) != 0,
+                any: false,
+            });
             line_abilities
                 .entry((skill_id, spell_id))
                 .or_insert(LineAbility {
                     superseded_by: forward_spell_id,
                     train_points: u32_at(r, COL_SLA_REQ_TRAIN_POINTS).unwrap_or(0),
                 });
-            // The first row in file order wins.
-            let slot = abilities.entry(spell_id).or_insert(SlaInfo {
-                skill_id,
-                req_skill_value: u32_at(r, COL_SLA_REQ_SKILL_VALUE).unwrap_or(0),
-                forward_spell_id,
-                trivial_low: u32_at(r, COL_SLA_TRIVIAL_LOW).unwrap_or(0),
-                trivial_high: u32_at(r, COL_SLA_TRIVIAL_HIGH).unwrap_or(0),
-            });
+            // The first row in file order holds the rank link.
+            let slot = abilities.entry(spell_id).or_insert(info);
             // Except the rank link: the first non-zero across the rows, as vmangos scans them all.
             if slot.forward_spell_id == 0 {
                 slot.forward_spell_id = forward_spell_id;
@@ -623,6 +732,7 @@ pub fn load_skill_line_catalog(chain: &mut Chain) -> Result<SkillLineCatalog> {
 
     Ok(SkillLineCatalog {
         lines,
+        sla_rows,
         abilities,
         line_abilities,
         categories,

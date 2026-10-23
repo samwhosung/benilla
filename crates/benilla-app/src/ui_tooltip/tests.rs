@@ -380,9 +380,7 @@ fn battle_shout_description_scales_by_the_skill_level() {
         radii: benilla_formats::load_spell_radii(&mut chain).expect("radii"),
     };
     let skill_lines = benilla_formats::load_skill_line_catalog(&mut chain).expect("skill lines");
-    let line = skill_lines
-        .spell_to_line(6673)
-        .expect("Battle Shout's line");
+    let line = skill_lines.first_line(6673).expect("Battle Shout's line");
     let mut t = TestCtx::new();
     t.skill_lines = Some(skill_lines);
     let mut objs = no_objects();

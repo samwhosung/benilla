@@ -86,6 +86,7 @@ fn resolve_service(
             &ReqBooks {
                 player: known,
                 pet: None,
+                race_class: (1, 1),
             },
             None,
             &deps.items,
@@ -121,6 +122,7 @@ fn snap(open: &TrainerOpen, spells: &SpellCatalog) -> Option<TrainerState> {
             &ReqBooks {
                 player: &BTreeSet::new(),
                 pet: None,
+                race_class: (1, 1),
             },
             None,
             &deps.items,
@@ -954,6 +956,7 @@ fn service_description_on_real_data_reads_astral_recalls_bind_area() {
             &ReqBooks {
                 player: &BTreeSet::new(),
                 pet: None,
+                race_class: (1, 1),
             },
             None,
             &deps.items,
@@ -1869,7 +1872,11 @@ fn resolve_with_pet(
             0,
             spells,
             skill_lines,
-            &ReqBooks { player, pet },
+            &ReqBooks {
+                player,
+                pet,
+                race_class: (1, 1),
+            },
             None,
             &deps.items,
             Ask::New(&deps.commands),

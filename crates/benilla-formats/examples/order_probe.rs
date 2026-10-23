@@ -32,7 +32,7 @@ fn main() -> anyhow::Result<()> {
                 continue;
             }
             hits += 1;
-            let line = skills.spell_to_line(spell).unwrap_or(0);
+            let line = skills.first_line(spell).unwrap_or(0);
             let hidden = d.attributes & benilla_formats::SPELL_ATTR_IS_TRADESKILL != 0;
             println!(
                 "  {spell:>6} line={line:<5} attr20={} lvl={:<3} {} ({})",

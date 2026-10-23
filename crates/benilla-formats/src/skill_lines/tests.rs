@@ -15,22 +15,20 @@ fn real_skill_line_catalog_resolves_known_spells() {
     );
 
     // Fireball (133) -> the Fire line (SKILL_FIRE = 8).
-    let fire_line = cat.spell_to_line(133).expect("Fireball has a skill line");
+    let fire_line = cat.first_line(133).expect("Fireball has a skill line");
     assert_eq!(fire_line, 8);
     let fire = cat.line(fire_line).expect("the Fire line resolves");
     assert_eq!(fire.name, "Fire");
     assert!(fire.icon.is_some(), "the Fire tab has an icon");
 
     // Frost Armor (168) -> the Frost line (SKILL_FROST = 6).
-    let frost_line = cat
-        .spell_to_line(168)
-        .expect("Frost Armor has a skill line");
+    let frost_line = cat.first_line(168).expect("Frost Armor has a skill line");
     assert_eq!(frost_line, 6);
     let frost = cat.line(frost_line).expect("the Frost line resolves");
     assert_eq!(frost.name, "Frost");
     assert!(frost.icon.is_some(), "the Frost tab has an icon");
 
-    assert_eq!(cat.spell_to_line(0), None);
+    assert_eq!(cat.first_line(0), None);
 
     // Column 12: a profession's own flavour sentence, the weapon lines' shared one.
     let smithing = cat.line(164).expect("Blacksmithing resolves");
@@ -58,7 +56,7 @@ fn real_spell_tab_collapses_general_by_race_and_class() {
 
     // Charge, Heroic Strike and Rend on Arms (26), Battle Shout on Fury (256).
     for (id, line) in [(100u32, 26u32), (78, 26), (772, 26), (6673, 256)] {
-        assert_eq!(cat.spell_to_line(id), Some(line));
+        assert_eq!(cat.first_line(id), Some(line));
         assert_eq!(
             cat.spell_tab(id, HUMAN, WARRIOR),
             line,
@@ -67,7 +65,7 @@ fn real_spell_tab_collapses_general_by_race_and_class() {
     }
 
     // Perception, on line 754 `Racial - Human`.
-    assert_eq!(cat.spell_to_line(20600), Some(754));
+    assert_eq!(cat.first_line(20600), Some(754));
     assert_eq!(
         cat.spell_tab(20600, HUMAN, WARRIOR),
         0,
@@ -75,7 +73,7 @@ fn real_spell_tab_collapses_general_by_race_and_class() {
     );
 
     // A warrior has no Fire row; a mage's has no sort flag.
-    assert_eq!(cat.spell_to_line(133), Some(8));
+    assert_eq!(cat.first_line(133), Some(8));
     assert_eq!(
         cat.spell_tab(133, HUMAN, WARRIOR),
         0,
@@ -161,7 +159,7 @@ fn real_skill_line_ability_reads_requirement_and_trivial_ranks() {
         (2538, 185, 1, 45, 85),
         (3920, 202, 1, 30, 60),
     ] {
-        let sla = cat.ability(spell).expect("recipe has an SLA row");
+        let sla = cat.ability(spell, 1, 1).expect("recipe has an SLA row");
         assert_eq!(
             (
                 sla.skill_id,
@@ -176,7 +174,7 @@ fn real_skill_line_ability_reads_requirement_and_trivial_ranks() {
 
     // The Tailoring and Enchanting openers carry zero trivial ranks.
     for (spell, line) in [(3908u32, 197u32), (7411, 333)] {
-        let sla = cat.ability(spell).expect("opener has an SLA row");
+        let sla = cat.ability(spell, 1, 1).expect("opener has an SLA row");
         assert_eq!(
             (sla.skill_id, sla.trivial_low, sla.trivial_high),
             (line, 0, 0)
@@ -362,4 +360,65 @@ fn a_higher_rank_is_known_only_forward_along_the_chain() {
         !cat.higher_rank_known(99, &known(&[10, 11, 12])),
         "an unchained spell has no chain"
     );
+}
+
+/// `0x6de040` indexes a spell's rows by race and class, the later admitted row in file order
+/// winning (`0x6ddbe0`): Basic Campfire's first row is Survival (142), but the Cooking (185) row
+/// after it is the one a human warrior's client finds.
+#[test]
+fn real_spell_line_is_the_later_row_admitted_for_the_race_and_class() {
+    let data = crate::wow_data_or_skip!();
+    let mut chain = crate::open_chain(&data).expect("open chain");
+    let cat = load_skill_line_catalog(&mut chain).expect("load skill lines");
+    assert_eq!(cat.first_line(818), Some(142));
+    assert_eq!(cat.spell_to_line(818, 1, 1), Some(185));
+    // A warrior has no Fire race-class row, so its client indexes no row for Fireball.
+    assert_eq!(cat.spell_to_line(133, 1, 1), None);
+    assert_eq!(cat.spell_to_line(133, 1, 8), Some(8));
+}
+
+/// A row admits a race and class through its masks, each complemented when its flag is set
+/// (`0x6dddd0`), on a line whose `SkillRaceClassInfo` row admits them (`0x6ddbf4`); of two, the
+/// later row wins.
+#[test]
+fn a_spells_line_reads_its_admitted_rows_by_race_and_class() {
+    let info = |skill_id| SlaInfo {
+        skill_id,
+        req_skill_value: 0,
+        forward_spell_id: 0,
+        trivial_low: 0,
+        trivial_high: 0,
+    };
+    let row = |line, race_mask, class_mask, not_race| SlaRow {
+        info: info(line),
+        race_mask,
+        class_mask,
+        not_race,
+        not_class: false,
+        any: false,
+    };
+    const SPELL: u32 = 7;
+    let mut cat = SkillLineCatalog::from_spell_lines([]).with_race_class_flags([(10, 0), (20, 0)]);
+    // Line 30 has no race-class row: its row never indexes.
+    cat.sla_rows.insert(
+        SPELL,
+        vec![
+            row(10, 0, 0, false),
+            // Every race but the human (bit 0), complemented.
+            row(20, 0x1, 0, true),
+            row(30, 0, 0, false),
+        ],
+    );
+    assert_eq!(
+        cat.spell_to_line(SPELL, 1, 1),
+        Some(10),
+        "the human skips row 20"
+    );
+    assert_eq!(
+        cat.spell_to_line(SPELL, 2, 1),
+        Some(20),
+        "the later admitted row"
+    );
+    // The index holds only CharBaseInfo's race and class pairs (`0x6ddb6a`), never race 0.
+    assert_eq!(cat.spell_to_line(SPELL, 0, 1), None);
 }

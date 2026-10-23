@@ -215,7 +215,8 @@ pub(super) fn service_group(
     trainer_type: u32,
     category: TrainerServiceCategory,
     spells: &SpellCatalog,
-    skill_lines: Option<&SkillLineCatalog>,
+    // With the player's race and class, which index the line.
+    skill_lines: Option<(&SkillLineCatalog, (u8, u8))>,
     // The VM's own `GlobalStrings.lua`, for the header labels.
     get: &dyn Fn(&str) -> Option<String>,
 ) -> (u32, String) {
@@ -236,13 +237,13 @@ pub(super) fn service_group(
         );
     }
     let line = skill_lines
-        .and_then(|c| c.spell_to_line(taught))
+        .and_then(|(c, (race, class))| c.spell_to_line(taught, race, class))
         .unwrap_or(0);
     if line == 0 {
         return (0, String::new());
     }
     let name = skill_lines
-        .and_then(|c| c.line(line))
+        .and_then(|(c, _)| c.line(line))
         .map(|l| l.name.clone())
         .unwrap_or_else(|| format!("Skill {line}"));
     (line, name)

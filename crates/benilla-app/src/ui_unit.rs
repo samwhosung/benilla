@@ -239,6 +239,7 @@ pub(crate) fn known_languages(
     known: impl IntoIterator<Item = u32>,
     spells: &benilla_formats::SpellCatalog,
     skill_lines: Option<&benilla_formats::SkillLineCatalog>,
+    (race, class): (u8, u8),
     has_skill_line: impl Fn(u32) -> bool,
     languages: &benilla_formats::Languages,
 ) -> Vec<String> {
@@ -254,7 +255,7 @@ pub(crate) fn known_languages(
             declared.get(id).is_some_and(|spells| {
                 spells.iter().any(|&spell| {
                     skill_lines
-                        .and_then(|sl| sl.spell_to_line(spell))
+                        .and_then(|sl| sl.spell_to_line(spell, race, class))
                         .is_some_and(&has_skill_line)
                 })
             })
@@ -302,6 +303,7 @@ fn feed_known_languages(
             actions.spells.iter().copied(),
             &spells.catalog,
             skill_lines.as_deref().map(|s| &s.catalog),
+            store.map_or((0, 0), |s| s.race_class()),
             has_skill_line,
             &languages.0,
         );

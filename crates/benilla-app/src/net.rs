@@ -253,6 +253,15 @@ pub(crate) struct ObjectStore(pub(crate) ObjectFields);
 impl ObjectStore {
     /// The object manager's unit lookup (`0x468460`, `ecx = 8`): a unit or a player, which share
     /// the unit block; a game object, corpse or item is not one.
+    /// `UNIT_FIELD_BYTES_0`'s race and class bytes (`+0x78`, `+0x79`), 0 while unstreamed: what
+    /// `FindSkillLineAbility` (`0x6de040`) indexes a unit's spells by.
+    pub(crate) fn race_class(&self) -> (u8, u8) {
+        (
+            self.0.unit_race().unwrap_or(0),
+            self.0.unit_class().unwrap_or(0),
+        )
+    }
+
     pub(crate) fn is_unit(&self) -> bool {
         use benilla_protocol::messages::ObjectType;
         matches!(

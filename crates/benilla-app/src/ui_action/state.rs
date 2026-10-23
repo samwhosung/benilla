@@ -180,6 +180,7 @@ fn profession(
     spell_id: u32,
     d: &benilla_formats::SpellDisplay,
     skill_lines: Option<&crate::ui_spellbook::SkillLines>,
+    (race, class): (u8, u8),
 ) -> Option<benilla_ui::script::Profession> {
     use benilla_ui::script::Profession;
     if d.effects[0] != benilla_formats::SPELL_EFFECT_TRADE_SKILL {
@@ -187,7 +188,7 @@ fn profession(
     }
     match u32::try_from(d.effect_misc_value[0]).unwrap_or(0) {
         0 => skill_lines
-            .and_then(|s| s.catalog.spell_to_line(spell_id))
+            .and_then(|s| s.catalog.spell_to_line(spell_id, race, class))
             .map(Profession::TradeSkill),
         craft => Some(Profession::Craft(craft)),
     }
@@ -660,7 +661,9 @@ impl ActionStates<'_, '_> {
                     // granted by another spell lights the check but not the icon.
                     st.spell = Some(button.action);
                     st.form = d.shapeshift_form;
-                    st.profession = profession(button.action, d, skill_lines.as_deref());
+                    let race_class = me.map_or((0, 0), |(store, _)| store.race_class());
+                    st.profession =
+                        profession(button.action, d, skill_lines.as_deref(), race_class);
                     // The usable walk (`0x6e3d60`); only its power gate sets `notEnoughMana`.
                     if let (Some((store, _)), Some(sp)) = (me, spells.as_deref()) {
                         let ctx = usable::UsableCtx {
