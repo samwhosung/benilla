@@ -343,6 +343,19 @@ impl super::UiScript {
         })
     }
 
+    /// A possessed unit's Attack latch raised (`0x4bd42e`): the Attack token lit on it, as the bar
+    /// paints it (`0x4bdf01`-`0x4bdf22`), for the `PET_BAR_UPDATE` the host signals (`0x4bd438`).
+    pub fn raise_pet_attack(&mut self) {
+        let bar = &mut self.model_mut().pet_bar;
+        for slot in bar.slots.iter_mut().filter(|s| s.view.is_token) {
+            let kind = ((slot.view.packed >> 24) & 0x3F) as u8;
+            if kind == PET_ACT_COMMAND && slot.view.packed & 0xFFFF == PET_COMMAND_ATTACK {
+                slot.view.attack_active = true;
+            }
+        }
+        repaint_tokens(bar);
+    }
+
     /// `PetStopAttack`'s repaint (`0x4bd6ae`-`0x4bd6b4`): the attack latch down on every slot and
     /// the command tokens relit from the state word, for the `PET_BAR_UPDATE` the host signals.
     pub fn lower_pet_attack(&mut self) {

@@ -303,11 +303,17 @@ impl ScriptCallHost<'_, '_> {
                     return;
                 };
                 self.settle_selection(script, at, owed.into());
-                self.appliers
-                    .p6()
-                    .p0()
-                    .finish_attack(attack)
-                    .map(PetStep::Order)
+                let possessing = attack.possessing;
+                let send = self.appliers.p6().p0().finish_attack(attack);
+                if possessing && send.is_some() {
+                    // The latch (`0x4bd42e`) signals `PET_BAR_UPDATE` (`0x4bd438`), whose
+                    // listeners run before the order goes (`0x4bd4a4`).
+                    script.raise_pet_attack();
+                    script.fire_event("PET_BAR_UPDATE", vec![]);
+                    self.at_point(script, &mut at.mark);
+                    self.listened(at);
+                }
+                send.map(PetStep::Order)
             }
             step => step,
         };

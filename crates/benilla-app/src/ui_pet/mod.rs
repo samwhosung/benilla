@@ -44,6 +44,13 @@ mod tests;
 #[cfg(test)]
 mod usable_tests;
 
+/// The bar's feed as a system a test outside the pet module runs pass by pass, its memory kept
+/// between them.
+#[cfg(test)]
+pub(crate) fn pet_bar_feed(world: &mut World) -> bevy::ecs::system::SystemId {
+    world.register_system(feed_pet_bar)
+}
+
 /// The pet action bar's state. A zero `spells.pet_guid` means no bar: the teardown packet carries
 /// only that guid.
 #[derive(Resource, Default)]

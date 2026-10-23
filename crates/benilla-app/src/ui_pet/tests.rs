@@ -324,11 +324,11 @@ fn a_press_latches_the_state_the_server_never_echoes() {
     );
 }
 
-/// The reaction and Stay/Follow presses signal in the VM's verb (`0x4bc956`, `0x4bc979`), so the
-/// app's mirror of the latch signals nothing; only the possessed Attack latch, behind the
-/// validator this side runs, still signals from here (`0x4bd438`).
+/// The reaction and Stay/Follow presses signal in the VM's verb (`0x4bc956`, `0x4bc979`), and the
+/// possessed Attack latch in the call host (`0x4bd438`), so the app's mirror of the latch signals
+/// nothing.
 #[test]
-fn only_the_possessed_attack_press_signals_from_the_app() {
+fn no_press_signals_from_the_apps_latch() {
     let mut bar = PetBar {
         spells: state(PET_COMMAND_FOLLOW, PET_REACT_DEFENSIVE),
         ..Default::default()
@@ -369,15 +369,13 @@ fn only_the_possessed_attack_press_signals_from_the_app() {
         packed(PET_COMMAND_ATTACK, PET_ACT_COMMAND),
         false,
     );
-    assert_eq!(signals(&bar), before, "none of these signals from the app");
-
     latch_press(
         &mut bar,
         Some(&mut latch),
         packed(PET_COMMAND_ATTACK, PET_ACT_COMMAND),
         true,
     );
-    assert_ne!(signals(&bar), before);
+    assert_eq!(signals(&bar), before, "none of these signals from the app");
 }
 
 /// The latch's possession gate is `0x4bd420`.

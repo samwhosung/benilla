@@ -780,6 +780,12 @@ fn a_possessed_attacks_latch_signals_its_bar_before_the_order() {
     spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
     with_pet(&mut f, true, attack);
     feeds(&mut f);
+    // The bar as its feed paints it, Attack a command token.
+    let bar_feed = crate::ui_pet::pet_bar_feed(f.app.world_mut());
+    f.app
+        .world_mut()
+        .run_system(bar_feed)
+        .expect("the feed runs");
     f.rx.try_iter().for_each(drop);
     run(
         &mut f,
@@ -803,7 +809,10 @@ fn a_possessed_attacks_latch_signals_its_bar_before_the_order() {
         eval::<bool>(&mut f, "return LIT == 1"),
         "the latch lit Attack"
     );
-    feeds(&mut f);
+    f.app
+        .world_mut()
+        .run_system(bar_feed)
+        .expect("the feed runs");
     assert_eq!(
         eval::<i64>(&mut f, "return HEARD"),
         1,

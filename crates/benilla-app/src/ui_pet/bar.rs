@@ -235,9 +235,8 @@ pub(super) fn feed_pet_bar(
             Vec::new()
         };
 
-        // `bar_signals` in the key repaints a signal that moved nothing (`SetPet`'s `0x4bc90c`, the
-        // possessed Attack latch's `0x4bd438`); the cooldown triples are keyed apart, since they
-        // carry no `PET_BAR_UPDATE`.
+        // `bar_signals` in the key repaints a signal that moved nothing (`SetPet`'s `0x4bc90c`);
+        // the cooldown triples are keyed apart, since they carry no `PET_BAR_UPDATE`.
         let cooldowns: Vec<Option<(i64, u32, bool)>> = fresh.iter().map(|s| s.cooldown).collect();
         let content: Vec<PetActionView> = fresh
             .iter()
@@ -255,9 +254,9 @@ pub(super) fn feed_pet_bar(
         let held = script.pet_action_views();
         let key = (bar.bar_signals, has_bar, usable, pickup_allowed);
         let key_changed = memory.pushed.as_ref() != Some(&key);
-        // A signal from this side (`SMSG_PET_SPELLS` through `SetPet`, `0x4bc90c`, or the possessed
-        // Attack latch) is the whole bar's source moving, even with equal values: it overwrites the
-        // VM whole, so a latch the VM made and this side refused to send cannot outlive the packet.
+        // A signal from this side (`SMSG_PET_SPELLS` through `SetPet`, `0x4bc90c`) is the whole
+        // bar's source moving, even with equal values: it overwrites the VM whole, so a latch the
+        // VM made and this side refused to send cannot outlive the packet.
         let resignalled = memory.pushed.map(|k| k.0) != Some(bar.bar_signals);
         let resized =
             resignalled || memory.slots.len() != content.len() || held.len() != content.len();

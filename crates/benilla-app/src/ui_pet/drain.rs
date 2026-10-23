@@ -58,7 +58,8 @@ pub(crate) struct PetAttack {
     entry: PetActionEntry,
     passed: Option<u64>,
     pet_guid: u64,
-    possessing: bool,
+    /// The view is on the unit we possess (`0x4bd420`), so the latch is raised.
+    pub(crate) possessing: bool,
 }
 
 /// Where a press goes once it has passed the dispatcher's gates (`0x4bd1d0`).
@@ -497,8 +498,8 @@ pub(super) fn commit_press(
 /// (`action <= 1` at `0x4bd3b1`), set bits 8-15 and keep byte 0 and bit 27, which only the server
 /// writes (`0x4bc96f`). Both are the VM's latch mirrored: the verb wrote the word and signalled
 /// `PET_BAR_UPDATE` in place (`0x4bc956`, `0x4bc979`). Attack raises a possessed unit's attack
-/// latch instead (`0x4bd42e`), behind the validator only this side runs, so its signal
-/// (`0x4bd438`) is the feed's.
+/// latch instead (`0x4bd42e`), behind the validator only this side runs; the call host signals it
+/// (`0x4bd438`) before the send.
 pub(super) fn latch_press(
     bar: &mut PetBar,
     latch: Option<&mut PetAttackLatch>,
@@ -515,11 +516,10 @@ pub(super) fn latch_press(
         benilla_protocol::messages::PET_ACT_COMMAND
             if action == PET_COMMAND_ATTACK && possessing =>
         {
-            // `0x4bd42e` signals too; an ordinary pet never gets here.
+            // An ordinary pet never gets here.
             if let Some(latch) = latch {
                 latch.0 = Some(bar.spells.pet_guid);
             }
-            bar.bar_signals = bar.bar_signals.wrapping_add(1);
         }
         benilla_protocol::messages::PET_ACT_REACTION => {
             bar.spells.state = (bar.spells.state & 0xFFFF_FF00) | action;
