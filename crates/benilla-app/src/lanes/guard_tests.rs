@@ -350,7 +350,6 @@ const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::ui_chat::edit::ChannelState",
     "::AreaTableRes",
     "::DamageTextGates",
-    "::AttackStopInFlight",
     "::EnvDamageTable",
     "::SpellVisuals",
     "::Creatures",
