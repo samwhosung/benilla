@@ -1133,11 +1133,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let reagent_index = binding_abi::index_arg(lua, reagent_index, LINE)?;
                 let found = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    let Some(c) = &model.craft else {
-                        return Ok(());
-                    };
-                    let Some(recipe) = craft_index.checked_sub(1).and_then(|i| c.recipes.get(i))
-                    else {
+                    let Some(recipe) = crate::script::craft::recipe(&model, craft_index) else {
                         return Ok(());
                     };
                     reagent_index

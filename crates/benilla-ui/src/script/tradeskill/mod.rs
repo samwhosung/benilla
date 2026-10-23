@@ -360,6 +360,7 @@ impl super::UiScript {
         model.craft = None;
         model.craft_open = false;
         model.craft_selection = 0;
+        super::craft::build(&mut model);
     }
 
     /// Seat the repeat count a previous VM left (`[0xbde060]`), which the world-enter init keeps

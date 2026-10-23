@@ -551,7 +551,9 @@ fn feed_craft(
         match (&memo.state, &fresh) {
             (_, Some(f)) if opened => {
                 debug!("ui_craft: window opens — {} recipe(s)", f.recipes.len());
-                // The open's build signals the update (`0x4f661a`), then the show.
+                // The open's resets and build (`0x4f601c`-`0x4f6036`), whose tail signals the
+                // update (`0x4f661a`), then the show (`0x4f6040`).
+                script.craft_opened();
                 fires.post("CRAFT_UPDATE", vec![]);
                 fires.post("CRAFT_SHOW", vec![]);
             }

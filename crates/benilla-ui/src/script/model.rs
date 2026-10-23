@@ -917,8 +917,18 @@ pub(crate) struct Model {
     pub(crate) craft_open: bool,
     /// `DoCraft` spell ids; no count, as the 1.12 CraftFrame has no Create All.
     pub(crate) craft_dos: Vec<u32>,
-    /// The 1-based selection, 0 for none, carried across a re-push by the recipe's spell id.
+    /// The selected spell id (`0xbdcfbc`), 0 for none, which a header or an index past the rows
+    /// stores (`0x4f6050`); the index answers by finding its row (`0x4f6080`).
     pub(crate) craft_selection: u32,
+    /// The row array as the last sort left it (`0xbdcf78`, full count `0xbdcfc0`), the displayed
+    /// rows first, and the displayed count (`0xbdcfc8`).
+    pub(crate) craft_rows: Vec<craft::Row>,
+    pub(crate) craft_visible: usize,
+    /// The header array as the last sort left it (`0xbdcf88`, count `0xbdcfc4`).
+    pub(crate) craft_headers: Vec<craft::Header>,
+    /// The collapse mask (`0x84d0f0`), a clear bit a collapsed header by its array position; the
+    /// open sets it to all ones (`0x4f602c`).
+    pub(crate) craft_fold_mask: u32,
     pub(crate) craft_close: bool,
 
     /// The open loot as the app pushed it; the verbs over it are script calls
@@ -1736,6 +1746,10 @@ impl Model {
             craft_open: false,
             craft_dos: Vec::new(),
             craft_selection: 0,
+            craft_rows: Vec::new(),
+            craft_visible: 0,
+            craft_headers: Vec::new(),
+            craft_fold_mask: u32::MAX,
             craft_close: false,
             loot: None,
             loot_type: 0,

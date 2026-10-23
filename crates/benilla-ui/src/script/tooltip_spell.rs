@@ -1007,8 +1007,8 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
     // GameTooltip:SetCraftSpell(craftIndex): the craft detail icon's hover
     // (`Blizzard_CraftUI.xml:566`). `SetCraftSpell 0x533e90` hands a shared builder the subject the
-    // app resolved from the recipe's own effects (`CraftRecipe::tooltip`). `craftIndex` is a plain
-    // recipe position: the craft list has no headers.
+    // app resolved from the recipe's own effects (`CraftRecipe::tooltip`). `craftIndex` is 1-based
+    // into the craft rows, where a header holds no recipe.
     m.set(
         "SetCraftSpell",
         lua.create_function(|lua, (this, craft_index): (Table, Value)| {
@@ -1017,10 +1017,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 binding_abi::index_arg(lua, craft_index, "Invalid craft in SetCraftSpell(index)")?;
             let subject = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                let Some(c) = &model.craft else {
-                    return Ok(());
-                };
-                match craft_index.checked_sub(1).and_then(|i| c.recipes.get(i)) {
+                match super::craft::recipe(&model, craft_index) {
                     Some(r) => r.tooltip.clone(),
                     None => return Ok(()),
                 }
