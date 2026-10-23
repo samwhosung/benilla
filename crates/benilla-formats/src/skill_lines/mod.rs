@@ -351,10 +351,6 @@ impl SkillLineCatalog {
     /// each new node goes to its slot's head (`0x6ddbe0`). Every caller passes a unit's own race and
     /// class (`UNIT_FIELD_BYTES_0` `+0x78`, `+0x79`).
     pub fn ability(&self, spell_id: u32, race: u8, class: u8) -> Option<&SlaInfo> {
-        if race != u8::MAX {
-            let _ = class;
-            return self.abilities.get(&spell_id);
-        }
         self.sla_rows.get(&spell_id)?.iter().rev().find_map(|r| {
             let admitted = r.any
                 || (masks_admit(race, class, r)
