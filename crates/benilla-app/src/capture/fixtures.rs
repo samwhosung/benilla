@@ -2,6 +2,7 @@
 
 use super::*;
 use benilla_protocol::messages::trainer_spell_state;
+use benilla_ui::script::UiScript;
 
 /// The `vplates` fixture's wolf, the reference screenshot's subject (vmangos `creature_template`
 /// 69 "Timber Wolf": level 2, faction template 32, display 604), at the scenario's look point.
@@ -116,7 +117,11 @@ pub(super) fn seed_ui_fixture(
     mut trainer: ResMut<crate::ui_trainer::TrainerOpen>,
     icons: Option<Res<crate::entities::ItemDisplays>>,
 ) {
-    vm.turn(|mut script, parts| {
+    let icons = icons.as_deref();
+    // The seed's Lua (its pushes, chunks and hovers) runs once the turn's world writes are in,
+    // with the host lent: what it fires runs in place, and what it calls applies inside the verb.
+    let mut lua: Option<Box<dyn FnOnce(&mut UiScript) + '_>> = None;
+    vm.turn(|script, parts| {
         let (mut merchant, mut loot, mut names, mut selection, mut player, store, rest) = parts;
         let (mut actions, mut bank, mut exit, mut loading, mut gossip, mut quest) = rest;
         let (mut items, mut index, mut home_bind) = store;
@@ -268,14 +273,14 @@ pub(super) fn seed_ui_fixture(
                 merchant.open(NPC_GUID, rows);
                 // The usable gate's player half, by hand: with no SelfPlayer in capture,
                 // `feed_player_req` never runs to overwrite it. A level-12 human warrior.
-                if let Some(s) = script.as_mut() {
+                lua = Some(Box::new(move |s: &mut UiScript| {
                     s.set_player_req_state(benilla_ui::script::PlayerReqState {
                         level: 12,
                         class_id: 1,
                         race_id: 1,
                         ..Default::default()
                     });
-                }
+                }));
             }
             UiFixture::Trainer(list) => {
                 // The seed's rows are the wire list: its copper costs, level gates and the states
@@ -302,21 +307,6 @@ pub(super) fn seed_ui_fixture(
                     }),
                 );
                 home_bind.0 = Some(seed.bind);
-                let Some(script) = script.as_mut() else {
-                    return;
-                };
-                // The window's title and portrait read `UnitName("npc")`; no session seats it here.
-                script.set_unit(
-                    "npc",
-                    Some(benilla_ui::script::UnitState {
-                        exists: true,
-                        name: Some(seed.name.into()),
-                        level: 12,
-                        ..Default::default()
-                    }),
-                );
-                // A purse large enough for every cost above, so the money frame renders white.
-                script.set_money(10_000);
                 let services: Vec<TrainerSpell> = seed
                     .rows
                     .iter()
@@ -333,6 +323,21 @@ pub(super) fn seed_ui_fixture(
                     })
                     .collect();
                 trainer.open(NPC_GUID, seed.trainer_type, services, seed.greeting.into());
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    // The window's title and portrait read `UnitName("npc")`; no session seats it
+                    // here.
+                    script.set_unit(
+                        "npc",
+                        Some(benilla_ui::script::UnitState {
+                            exists: true,
+                            name: Some(seed.name.into()),
+                            level: 12,
+                            ..Default::default()
+                        }),
+                    );
+                    // A purse large enough for every cost above, so the money frame renders white.
+                    script.set_money(10_000);
+                }));
             }
             UiFixture::Gossip => {
                 names.insert_creature(
@@ -482,19 +487,18 @@ pub(super) fn seed_ui_fixture(
                 // Opens bank bag 1 once its container feed lands (`GetContainerNumSlots(5) > 0`);
                 // `BankFrameBag1`'s `GetID()` is 5, the container id its handler passes to
                 // `ToggleBag`.
-                if let Some(s) = script.as_mut() {
-                    if let Err(e) = s.run(
-                        "BankFrame:SetScript(\"OnUpdate\", function()\n\
-                             if not benillaBankPopoutDone and GetContainerNumSlots(5) > 0 then\n\
-                                 benillaBankPopoutDone = 1\n\
-                                 this = getglobal(\"BankFrameBag1\")\n\
-                                 BankFrameItemButtonBag_OnClick(\"LeftButton\")\n\
-                             end\n\
-                         end)",
-                    ) {
+                let popout = "BankFrame:SetScript(\"OnUpdate\", function()\n\
+                         if not benillaBankPopoutDone and GetContainerNumSlots(5) > 0 then\n\
+                             benillaBankPopoutDone = 1\n\
+                             this = getglobal(\"BankFrameBag1\")\n\
+                             BankFrameItemButtonBag_OnClick(\"LeftButton\")\n\
+                         end\n\
+                     end)";
+                lua = Some(Box::new(move |s: &mut UiScript| {
+                    if let Err(e) = s.run(popout) {
                         warn!("capture: ui-bank popout hook failed: {e}");
                     }
-                }
+                }));
             }
             UiFixture::Quest => {
                 names.insert_creature(
@@ -744,11 +748,11 @@ pub(super) fn seed_ui_fixture(
                 ));
 
                 // The L binding's path; the feed pushes over the settle window.
-                if let Some(s) = script.as_mut() {
+                lua = Some(Box::new(move |s: &mut UiScript| {
                     if let Err(e) = s.run("ToggleQuestLog()") {
                         warn!("capture: ui-questlog seed failed to open the log: {e}");
                     }
-                }
+                }));
             }
             UiFixture::Loot => {
                 items.insert_template(90_117, Some(template("Chipped Boar Tusk", 0)));
@@ -778,201 +782,195 @@ pub(super) fn seed_ui_fixture(
                 );
             }
             UiFixture::Bag => {
-                let Some(script) = script else {
-                    return;
-                };
-                seed_bag_window(script, icons.as_deref());
-                seed_equipped_bags(script, icons.as_deref());
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    seed_bag_window(script, icons);
+                    seed_equipped_bags(script, icons);
+                }));
             }
             UiFixture::Cooldown => {
-                let Some(script) = script else {
-                    return;
-                };
-                seed_cooldown_filmstrip(script, icons.as_deref());
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    seed_cooldown_filmstrip(script, icons);
+                }));
             }
             UiFixture::CooldownShine => {
-                let Some(script) = script else {
-                    return;
-                };
-                seed_cooldown_filmstrip(script, icons.as_deref());
-                // The pet bar's autocast shine, raised by hand, as no pet is fed.
-                if let Err(e) = script.run(
-                    "PetActionBarFrame:Show()\n\
-                     for i = 1, 4 do\n\
-                         local b = getglobal(\"PetActionButton\"..i)\n\
-                         if b then b:Show(); getglobal(b:GetName()..\"AutoCast\"):Show() end\n\
-                     end",
-                ) {
-                    warn!("capture: ui-cooldown-shine failed to raise the autocast shine: {e}");
-                }
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    seed_cooldown_filmstrip(script, icons);
+                    // The pet bar's autocast shine, raised by hand, as no pet is fed.
+                    if let Err(e) = script.run(
+                        "PetActionBarFrame:Show()\n\
+                         for i = 1, 4 do\n\
+                             local b = getglobal(\"PetActionButton\"..i)\n\
+                             if b then b:Show(); getglobal(b:GetName()..\"AutoCast\"):Show() end\n\
+                         end",
+                    ) {
+                        warn!("capture: ui-cooldown-shine failed to raise the autocast shine: {e}");
+                    }
+                }));
             }
             UiFixture::WorldMap => {
-                let Some(script) = script else {
-                    return;
-                };
                 // At the default origin the player is off every zone rect and the arrow hides, so
                 // park it at the scenario's Northshire spot.
                 player.pos = benilla_assets::coords::wow_to_bevy(scenario.eye);
-                // Alternating explore bits, so about half of each zone's overlays reveal.
-                script.set_world_map_explored(vec![0x5555_5555; 64]);
-                // The Elwynn zone map: continent 2, zone 10 in the alphabetical zone list.
-                if let Err(e) = script.run("ToggleWorldMap(); SetMapZoom(2, 10)") {
-                    warn!("capture: ui-worldmap seed failed to open the map: {e}");
-                }
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    // Alternating explore bits, so about half of each zone's overlays reveal.
+                    script.set_world_map_explored(vec![0x5555_5555; 64]);
+                    // The Elwynn zone map: continent 2, zone 10 in the alphabetical zone list.
+                    if let Err(e) = script.run("ToggleWorldMap(); SetMapZoom(2, 10)") {
+                        warn!("capture: ui-worldmap seed failed to open the map: {e}");
+                    }
+                }));
             }
             UiFixture::PartyInvite => {
-                let Some(script) = script else {
-                    return;
-                };
-                // Raised through the real `StaticPopupDialogs` entry, as a real invite is.
-                if let Err(e) = script.run(r#"StaticPopup_Show("PARTY_INVITE", "Brisca")"#) {
-                    warn!("capture: ui-partyinvite seed failed to raise the dialog: {e}");
-                }
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    // Raised through the real `StaticPopupDialogs` entry, as a real invite is.
+                    if let Err(e) = script.run(r#"StaticPopup_Show("PARTY_INVITE", "Brisca")"#) {
+                        warn!("capture: ui-partyinvite seed failed to raise the dialog: {e}");
+                    }
+                }));
             }
             UiFixture::Tooltip => {
-                let Some(script) = script else {
-                    return;
-                };
-                seed_bag_window(script, icons.as_deref());
-                // The hovered shield's full template and a player under its level requirement:
-                // quality name, bind, slot and type, armor and block, stats, durability, a red
-                // requirement, a long green Use: line that wraps, a charges line after it, and the
-                // flavor text.
-                script.set_player_req_state(benilla_ui::script::PlayerReqState {
-                    level: 12,
-                    class_id: 1,
-                    race_id: 1,
-                    skills: Default::default(),
-                    ..Default::default()
-                });
-                script.set_item_template(
-                    2362,
-                    benilla_ui::script::ItemTemplateView {
-                        name: "Small Shield".into(),
-                        quality: 2,
-                        class: 4,
-                        subclass: 6,
-                        inventory_type: 14,
-                        bonding: 2,
-                        stats: vec![(7, 3)],
-                        armor: 85,
-                        block: 4,
-                        max_durability: 45,
-                        required_level: 20,
-                        spell_lines: vec![benilla_ui::script::ItemSpellLine {
-                            trigger: 0,
-                            spell_id: 72,
-                            text: "Restores 243 health over 21 sec.  Must remain seated while \
-                                   eating."
-                                .into(),
-                            charges: 1,
-                            block: 0,
-                            recipe: None,
-                        }],
-                        description: "A stout little shield of Northshire pine.".into(),
-                        sell_price: 152,
-                        item_set: 161,
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    seed_bag_window(script, icons);
+                    // The hovered shield's full template and a player under its level requirement:
+                    // quality name, bind, slot and type, armor and block, stats, durability, a red
+                    // requirement, a long green Use: line that wraps, a charges line after it, and
+                    // the flavor text.
+                    script.set_player_req_state(benilla_ui::script::PlayerReqState {
+                        level: 12,
+                        class_id: 1,
+                        race_id: 1,
+                        skills: Default::default(),
                         ..Default::default()
-                    },
-                );
-                // The item-set block (`0x52b650`), Defias Leather with one of 5 equipped: the gold
-                // "(1/5)" header, the member ladder, a green (2) bonus and a gray (4) one.
-                let mut inv: benilla_ui::script::InventorySlots = Default::default();
-                inv[4] = Some(benilla_ui::script::InvSlotView {
-                    durability: None,
-                    item_id: 6303,
-                    ..Default::default()
-                });
-                script.set_inventory_slots(inv);
-                script.set_item_set(
-                    161,
-                    benilla_ui::script::ItemSetView {
-                        name: "Defias Leather".into(),
-                        members: vec![
-                            (6303, Some("Defias Mark".into())),
-                            (6304, Some("Defias Belt".into())),
-                            (6305, Some("Defias Gloves".into())),
-                            (6306, Some("Defias Trousers".into())),
-                            (6307, Some("Defias Boots".into())),
-                        ],
-                        bonuses: vec![
-                            (2, "Increases movement speed slightly.".into()),
-                            (
-                                4,
-                                "Immune to Defias Pillager and Defias Looter spells.".into(),
-                            ),
-                        ],
+                    });
+                    script.set_item_template(
+                        2362,
+                        benilla_ui::script::ItemTemplateView {
+                            name: "Small Shield".into(),
+                            quality: 2,
+                            class: 4,
+                            subclass: 6,
+                            inventory_type: 14,
+                            bonding: 2,
+                            stats: vec![(7, 3)],
+                            armor: 85,
+                            block: 4,
+                            max_durability: 45,
+                            required_level: 20,
+                            spell_lines: vec![benilla_ui::script::ItemSpellLine {
+                                trigger: 0,
+                                spell_id: 72,
+                                text: "Restores 243 health over 21 sec.  Must remain seated while \
+                                       eating."
+                                    .into(),
+                                charges: 1,
+                                block: 0,
+                                recipe: None,
+                            }],
+                            description: "A stout little shield of Northshire pine.".into(),
+                            sell_price: 152,
+                            item_set: 161,
+                            ..Default::default()
+                        },
+                    );
+                    // The item-set block (`0x52b650`), Defias Leather with one of 5 equipped: the
+                    // gold "(1/5)" header, the member ladder, a green (2) bonus and a gray (4) one.
+                    let mut inv: benilla_ui::script::InventorySlots = Default::default();
+                    inv[4] = Some(benilla_ui::script::InvSlotView {
+                        durability: None,
+                        item_id: 6303,
                         ..Default::default()
-                    },
-                );
-                // Opens the tooltip over the top-left button (`Item16`, game slot 1, the Small
-                // Shield) through the hover's OnEnter path. `IsBagOpen` names the backpack's
-                // window, as the twelve `ContainerFrame`s are recycled across containers.
-                if let Err(e) = script.run(
-                    "local i = IsBagOpen(0)\n\
-                     if i then\n\
-                         local button = getglobal(\"ContainerFrame\"..i..\"Item16\")\n\
-                         ContainerFrameItemButton_OnEnter(button)\n\
-                     end",
-                ) {
-                    warn!("capture: ui-tooltip seed failed to open the tooltip: {e}");
-                }
+                    });
+                    script.set_inventory_slots(inv);
+                    script.set_item_set(
+                        161,
+                        benilla_ui::script::ItemSetView {
+                            name: "Defias Leather".into(),
+                            members: vec![
+                                (6303, Some("Defias Mark".into())),
+                                (6304, Some("Defias Belt".into())),
+                                (6305, Some("Defias Gloves".into())),
+                                (6306, Some("Defias Trousers".into())),
+                                (6307, Some("Defias Boots".into())),
+                            ],
+                            bonuses: vec![
+                                (2, "Increases movement speed slightly.".into()),
+                                (
+                                    4,
+                                    "Immune to Defias Pillager and Defias Looter spells.".into(),
+                                ),
+                            ],
+                            ..Default::default()
+                        },
+                    );
+                    // Opens the tooltip over the top-left button (`Item16`, game slot 1, the Small
+                    // Shield) through the hover's OnEnter path. `IsBagOpen` names the backpack's
+                    // window, as the twelve `ContainerFrame`s are recycled across containers.
+                    if let Err(e) = script.run(
+                        "local i = IsBagOpen(0)\n\
+                         if i then\n\
+                             local button = getglobal(\"ContainerFrame\"..i..\"Item16\")\n\
+                             ContainerFrameItemButton_OnEnter(button)\n\
+                         end",
+                    ) {
+                        warn!("capture: ui-tooltip seed failed to open the tooltip: {e}");
+                    }
+                }));
             }
             UiFixture::TooltipWorld => {
-                let Some(script) = script else {
-                    return;
-                };
-                // A PvP-flagged friendly guard under the cursor, pushed as the mouseover feed does,
-                // then the call `drive_mouseover_tooltip` makes. The subject is the placement, the
-                // `GameTooltip_SetDefaultAnchor` corner (`GameTooltip.lua:73-77`).
-                script.set_unit(
-                    "mouseover",
-                    Some(benilla_ui::script::UnitState {
-                        exists: true,
-                        // A unit is found by its guid; the builder hides for guid 0 (`0x52a04e`).
-                        guid: 0xF130_0000_0044_0001,
-                        name: Some("Stormwind Guard".into()),
-                        health: 38,
-                        max_health: 50,
-                        level: 25,
-                        reaction: 5,
-                        creature_type_name: Some("Humanoid".into()),
-                        // The faction-name line, white, between level and PvP.
-                        faction_name: Some("Stormwind".into()),
-                        pvp: true,
-                        ..Default::default()
-                    }),
-                );
-                if !script.world_tooltip_unit("mouseover") {
-                    warn!("capture: ui-tooltip-world seed failed to open the tooltip");
-                }
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    // A PvP-flagged friendly guard under the cursor, pushed as the mouseover feed
+                    // does, then the call `drive_mouseover_tooltip` makes. The subject is the
+                    // placement, the `GameTooltip_SetDefaultAnchor` corner
+                    // (`GameTooltip.lua:73-77`).
+                    script.set_unit(
+                        "mouseover",
+                        Some(benilla_ui::script::UnitState {
+                            exists: true,
+                            // A unit is found by its guid; the builder hides for guid 0
+                            // (`0x52a04e`).
+                            guid: 0xF130_0000_0044_0001,
+                            name: Some("Stormwind Guard".into()),
+                            health: 38,
+                            max_health: 50,
+                            level: 25,
+                            reaction: 5,
+                            creature_type_name: Some("Humanoid".into()),
+                            // The faction-name line, white, between level and PvP.
+                            faction_name: Some("Stormwind".into()),
+                            pvp: true,
+                            ..Default::default()
+                        }),
+                    );
+                    if !script.world_tooltip_unit("mouseover") {
+                        warn!("capture: ui-tooltip-world seed failed to open the tooltip");
+                    }
+                }));
             }
             UiFixture::TooltipRank => {
-                let Some(script) = script else {
-                    return;
-                };
-                // A ranked player under the cursor, pushed as the mouseover feed does, then the
-                // call `drive_mouseover_tooltip` makes: the title is `0x609370`'s rank leg over the
-                // name, "Sergeant Bob".
-                script.set_unit(
-                    "mouseover",
-                    Some(benilla_ui::script::UnitState {
-                        exists: true,
-                        guid: 0x0000_0000_0000_0B0B,
-                        is_player: true,
-                        name: Some("Bob".into()),
-                        level: 60,
-                        reaction: 5,
-                        pvp: true,
-                        pvp_rank: 7,
-                        pvp_team: 1,
-                        sex: 2,
-                        ..Default::default()
-                    }),
-                );
-                if !script.world_tooltip_unit("mouseover") {
-                    warn!("capture: ui-tooltip-rank seed failed to open the tooltip");
-                }
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    // A ranked player under the cursor, pushed as the mouseover feed does, then the
+                    // call `drive_mouseover_tooltip` makes: the title is `0x609370`'s rank leg over
+                    // the name, "Sergeant Bob".
+                    script.set_unit(
+                        "mouseover",
+                        Some(benilla_ui::script::UnitState {
+                            exists: true,
+                            guid: 0x0000_0000_0000_0B0B,
+                            is_player: true,
+                            name: Some("Bob".into()),
+                            level: 60,
+                            reaction: 5,
+                            pvp: true,
+                            pvp_rank: 7,
+                            pvp_team: 1,
+                            sex: 2,
+                            ..Default::default()
+                        }),
+                    );
+                    if !script.world_tooltip_unit("mouseover") {
+                        warn!("capture: ui-tooltip-rank seed failed to open the tooltip");
+                    }
+                }));
             }
             UiFixture::Character => {
                 // A synthetic self player carrying the full stat block, which the `ui_char` feed
@@ -1081,11 +1079,11 @@ pub(super) fn seed_ui_fixture(
                 ));
 
                 // The C binding's path; the feed pushes over the settle window.
-                if let Some(s) = script.as_mut() {
+                lua = Some(Box::new(move |s: &mut UiScript| {
                     if let Err(e) = s.run("ToggleCharacter(\"PaperDollFrame\")") {
                         warn!("capture: ui-char seed failed to open the window: {e}");
                     }
-                }
+                }));
             }
             UiFixture::VPlates => {
                 use benilla_protocol::messages::ObjectFields;
@@ -1146,126 +1144,123 @@ pub(super) fn seed_ui_fixture(
                     ))
                     .id();
                 // As the V binding does, so FrameXML's replay at `PLAYER_ENTERING_WORLD` agrees.
-                set_enemy_plates(script.as_deref(), true);
-                // The wolf is the target, so its plate draws lit with the target ring: indexed under
-                // its guid, the object the selection's tracker keeps, and lit as `SetSelection`
-                // lights its object (`0x493701`).
+                lua = Some(Box::new(|script: &mut UiScript| {
+                    set_enemy_plates(Some(script), true)
+                }));
+                // The wolf is the target, so its plate draws lit with the target ring: indexed
+                // under its guid, the object the selection's tracker keeps, and lit as
+                // `SetSelection` lights its object (`0x493701`).
                 index.0.insert(WOLF_GUID, wolf);
                 selection.target = Some(wolf);
                 selection.guid = Some(WOLF_GUID);
                 selection.lit = Some(wolf);
             }
             UiFixture::Options => {
-                let Some(script) = script else {
-                    return;
-                };
-                // Opened through the live panel path, with Controls selected by its OnShow.
-                if let Err(e) = script.run("ShowUIPanel(BenillaOptionsFrame)") {
-                    warn!("capture: ui-options seed failed to open the window: {e}");
-                }
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    // Opened through the live panel path, with Controls selected by its OnShow.
+                    if let Err(e) = script.run("ShowUIPanel(BenillaOptionsFrame)") {
+                        warn!("capture: ui-options seed failed to open the window: {e}");
+                    }
+                }));
             }
             UiFixture::OptionsAudio => {
-                let Some(script) = script else {
-                    return;
-                };
-                // The Audio page: the real CVar set first, so the rows read real values, then the
-                // live open and select paths.
-                script.register_cvars(crate::cvars::registered_pairs());
-                if let Err(e) = script.run(
-                    "ShowUIPanel(BenillaOptionsFrame); \
-                     BenillaOptionsFrameCategoryListRowAudio:Click()",
-                ) {
-                    warn!("capture: ui-options-audio seed failed: {e}");
-                }
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    // The Audio page: the real CVar set first, so the rows read real values, then
+                    // the live open and select paths.
+                    script.register_cvars(crate::cvars::registered_pairs());
+                    if let Err(e) = script.run(
+                        "ShowUIPanel(BenillaOptionsFrame); \
+                         BenillaOptionsFrameCategoryListRowAudio:Click()",
+                    ) {
+                        warn!("capture: ui-options-audio seed failed: {e}");
+                    }
+                }));
             }
             UiFixture::OptionsGraphics => {
-                let Some(script) = script else {
-                    return;
-                };
-                // The Graphics page, as the Audio fixture.
-                script.register_cvars(crate::cvars::registered_pairs());
-                if let Err(e) = script.run(
-                    "ShowUIPanel(BenillaOptionsFrame); \
-                                BenillaOptionsFrameCategoryListRowGraphics:Click()",
-                ) {
-                    warn!("capture: ui-options-graphics seed failed: {e}");
-                }
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    // The Graphics page, as the Audio fixture.
+                    script.register_cvars(crate::cvars::registered_pairs());
+                    if let Err(e) = script.run(
+                        "ShowUIPanel(BenillaOptionsFrame); \
+                                    BenillaOptionsFrameCategoryListRowGraphics:Click()",
+                    ) {
+                        warn!("capture: ui-options-graphics seed failed: {e}");
+                    }
+                }));
             }
             UiFixture::OptionsChat => {
-                let Some(script) = script else {
-                    return;
-                };
-                // The Chat page, as the Audio fixture. Its Remove Chat Hover Delay row reads a
-                // saved variable `ChatFrame.xml` declares, so it paints unchecked, the shipped "0".
-                script.register_cvars(crate::cvars::registered_pairs());
-                if let Err(e) = script.run(
-                    "ShowUIPanel(BenillaOptionsFrame); \
-                     BenillaOptionsFrameCategoryListRowChat:Click()",
-                ) {
-                    warn!("capture: ui-options-chat seed failed: {e}");
-                }
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    // The Chat page, as the Audio fixture. Its Remove Chat Hover Delay row reads a
+                    // saved variable `ChatFrame.xml` declares, so it paints unchecked, the shipped
+                    // "0".
+                    script.register_cvars(crate::cvars::registered_pairs());
+                    if let Err(e) = script.run(
+                        "ShowUIPanel(BenillaOptionsFrame); \
+                         BenillaOptionsFrameCategoryListRowChat:Click()",
+                    ) {
+                        warn!("capture: ui-options-chat seed failed: {e}");
+                    }
+                }));
             }
             UiFixture::ColorPicker => {
-                let Some(script) = script else {
-                    return;
-                };
-                // An addon's usual opening: set the colour, ask for opacity, show the window. The
-                // colour puts both markers off their defaults, so a mirrored axis shows.
-                if let Err(e) = script.run(
-                    "ColorPickerFrame.hasOpacity = 1; ColorPickerFrame.opacity = 0.3; \
-                     ColorPickerFrame:SetColorRGB(0.15, 0.55, 0.75); \
-                     ShowUIPanel(ColorPickerFrame)",
-                ) {
-                    warn!("capture: ui-color-picker seed failed: {e}");
-                }
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    // An addon's usual opening: set the colour, ask for opacity, show the window.
+                    // The colour puts both markers off their defaults, so a mirrored axis shows.
+                    if let Err(e) = script.run(
+                        "ColorPickerFrame.hasOpacity = 1; ColorPickerFrame.opacity = 0.3; \
+                         ColorPickerFrame:SetColorRGB(0.15, 0.55, 0.75); \
+                         ShowUIPanel(ColorPickerFrame)",
+                    ) {
+                        warn!("capture: ui-color-picker seed failed: {e}");
+                    }
+                }));
             }
             UiFixture::OptionsDropdownList => {
-                let Some(script) = script else {
-                    return;
-                };
-                // The Camera Following Style list open. Its width lands inside the opening click:
-                // `UIDropDownMenu_Refresh` sizes buttons from `normalText:GetWidth() + 60`
-                // (`UIDropDownMenu.lua:405`), which the engine answers in the same call.
-                script.register_cvars(crate::cvars::registered_pairs());
-                if let Err(e) = script.run(
-                    "ShowUIPanel(BenillaOptionsFrame); \
-                     BenillaOptionsFrameCategoryListRowControls:Click(); \
-                     BenillaOptionsFrameContainerBodyControlsRowCameraFollowStyleDropdownButton\
-                     :Click()",
-                ) {
-                    warn!("capture: ui-options-dropdown seed failed: {e}");
-                }
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    // The Camera Following Style list open. Its width lands inside the opening
+                    // click: `UIDropDownMenu_Refresh` sizes buttons from
+                    // `normalText:GetWidth() + 60` (`UIDropDownMenu.lua:405`), which the engine
+                    // answers in the same call.
+                    script.register_cvars(crate::cvars::registered_pairs());
+                    if let Err(e) = script.run(
+                        "ShowUIPanel(BenillaOptionsFrame); \
+                         BenillaOptionsFrameCategoryListRowControls:Click(); \
+                         BenillaOptionsFrameContainerBodyControlsRowCameraFollowStyleDropdownButton\
+                         :Click()",
+                    ) {
+                        warn!("capture: ui-options-dropdown seed failed: {e}");
+                    }
+                }));
             }
             UiFixture::KeyBindings => {
-                let Some(script) = script else {
-                    return;
-                };
-                // The Keybindings page over the commands the load registered: the real CVar set
-                // first, then the live open path, with Movement expanded to show a header row and
-                // the default bindings.
-                script.register_cvars(crate::cvars::registered_pairs());
-                if let Err(e) = script.run(
-                    "ShowUIPanel(BenillaOptionsFrame); \
-                     BenillaOptionsFrameCategoryListRowKeybindings:Click(); \
-                     BenillaKeyBindings_ExpandSection(1, true); BenillaKeyBindingsPage_Update()",
-                ) {
-                    warn!("capture: ui-keybindings seed failed: {e}");
-                }
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    // The Keybindings page over the commands the load registered: the real CVar set
+                    // first, then the live open path, with Movement expanded to show a header row
+                    // and the default bindings.
+                    script.register_cvars(crate::cvars::registered_pairs());
+                    if let Err(e) = script.run(
+                        "ShowUIPanel(BenillaOptionsFrame); \
+                         BenillaOptionsFrameCategoryListRowKeybindings:Click(); \
+                         BenillaKeyBindings_ExpandSection(1, true); \
+                         BenillaKeyBindingsPage_Update()",
+                    ) {
+                        warn!("capture: ui-keybindings seed failed: {e}");
+                    }
+                }));
             }
             UiFixture::OptionsSearch => {
-                let Some(script) = script else {
-                    return;
-                };
-                // Mid-search: "volume" gathers the four volume sliders under the Audio head. The
-                // box is focused, so the caret shows at the text's end.
-                script.register_cvars(crate::cvars::registered_pairs());
-                if let Err(e) = script.run(
-                    "ShowUIPanel(BenillaOptionsFrame); \
-                     BenillaOptionsFrameSearchBox:SetText(\"volume\"); \
-                     BenillaOptionsFrameSearchBox:SetFocus()",
-                ) {
-                    warn!("capture: ui-options-search seed failed: {e}");
-                }
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    // Mid-search: "volume" gathers the four volume sliders under the Audio head.
+                    // The box is focused, so the caret shows at the text's end.
+                    script.register_cvars(crate::cvars::registered_pairs());
+                    if let Err(e) = script.run(
+                        "ShowUIPanel(BenillaOptionsFrame); \
+                         BenillaOptionsFrameSearchBox:SetText(\"volume\"); \
+                         BenillaOptionsFrameSearchBox:SetFocus()",
+                    ) {
+                        warn!("capture: ui-options-search seed failed: {e}");
+                    }
+                }));
             }
             UiFixture::SpellBook => {
                 // A human warrior who also knows two cross-class spells. The book resolves through
@@ -1296,9 +1291,6 @@ pub(super) fn seed_ui_fixture(
                 let mut sword = template("Militia Shortsword", 2);
                 sword.display_info_id = DISP_SWORD;
                 items.insert_template(93_011, Some(sword));
-                let Some(script) = script.as_mut() else {
-                    return;
-                };
                 actions.spells.extend([
                     // The auto-attack shows the equipped sword's icon, not the placeholder of spell
                     // 6603, in General (no skill line).
@@ -1319,14 +1311,13 @@ pub(super) fn seed_ui_fixture(
                     9078, // Cloth proficiency
                 ]);
                 // The P binding's path; the feed pushes over the settle window.
-                if let Err(e) = script.run("ToggleSpellBook(BOOKTYPE_SPELL)") {
-                    warn!("capture: ui-spellbook seed failed to open the book: {e}");
-                }
+                lua = Some(Box::new(|script: &mut UiScript| {
+                    if let Err(e) = script.run("ToggleSpellBook(BOOKTYPE_SPELL)") {
+                        warn!("capture: ui-spellbook seed failed to open the book: {e}");
+                    }
+                }));
             }
             UiFixture::Macro | UiFixture::MacroPopup => {
-                let Some(script) = script.as_mut() else {
-                    return;
-                };
                 // Made through the live `CreateMacro` path, so `UPDATE_MACROS` reaches the window
                 // as a player's edit does; icons index `SpellIcon.dbc`. The bodies: a plain
                 // `/cast`, a multi-line macro, and a `/script` line the bar's bound-spell resolve
@@ -1355,118 +1346,112 @@ pub(super) fn seed_ui_fixture(
                 if fixture == UiFixture::MacroPopup {
                     seed.push_str("MacroEditButton:Click()\n");
                 }
-                if let Err(e) = script.run(&seed) {
-                    warn!("capture: ui-macro seed failed: {e}");
-                }
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    if let Err(e) = script.run(&seed) {
+                        warn!("capture: ui-macro seed failed: {e}");
+                    }
+                }));
             }
             UiFixture::Social => {
                 // Nothing to seed: an empty friends list opens the same frames a full one does.
-                let Some(script) = script.as_mut() else {
-                    return;
-                };
-                if let Err(e) = script.run("ToggleFriendsFrame(1)") {
-                    warn!("capture: ui-social seed failed to open the pane: {e}");
-                }
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    if let Err(e) = script.run("ToggleFriendsFrame(1)") {
+                        warn!("capture: ui-social seed failed to open the pane: {e}");
+                    }
+                }));
             }
             UiFixture::ChatEdit => {
-                let Some(script) = script.as_mut() else {
-                    return;
-                };
-                // Say and yell lines behind the open edit box, opened through the live path;
-                // `chat_edit_live` then drives the header and the `15 + headerWidth` insets as
-                // in-game.
-                for (text, r, g, b) in [
-                    ("[One] says: testing the box", 1.0, 1.0, 1.0),
-                    ("[One] says: a second line to stack", 1.0, 1.0, 1.0),
-                    ("[One] yells: FUU", 1.0, 64.0 / 255.0, 64.0 / 255.0),
-                ] {
-                    script.add_chat_message("ChatFrame1", text, r, g, b);
-                }
-                script.focus_editbox("ChatFrameEditBox");
-                // A draft with "northshire" selected: the gray selection highlight (`0xFF606060`)
-                // under the glyphs and the caret at its end. The tab and window tint follow the
-                // cursor in `FCF_OnUpdate`, so a fixed-reveal OnUpdate pins them; it calls
-                // `PanelTemplates_TabResize` every frame until the label's measure lands.
-                if let Err(e) = script.run(
-                    "ChatFrameEditBox:SetText(\"hello northshire\")\n\
-                     ChatFrameEditBox:HighlightText(6, 16)\n\
-                     ChatFrame1:SetScript('OnUpdate', function()\n\
-                         PanelTemplates_TabResize(10, ChatFrame1Tab)\n\
-                         ChatFrame1Tab:SetAlpha(1.0)\n\
-                         FCF_SetWindowAlpha(ChatFrame1, 0.25, 1)\n\
-                     end)",
-                ) {
-                    warn!("capture: ui-chatedit seed failed: {e}");
-                }
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    // Say and yell lines behind the open edit box, opened through the live path;
+                    // `chat_edit_live` then drives the header and the `15 + headerWidth` insets as
+                    // in-game.
+                    for (text, r, g, b) in [
+                        ("[One] says: testing the box", 1.0, 1.0, 1.0),
+                        ("[One] says: a second line to stack", 1.0, 1.0, 1.0),
+                        ("[One] yells: FUU", 1.0, 64.0 / 255.0, 64.0 / 255.0),
+                    ] {
+                        script.add_chat_message("ChatFrame1", text, r, g, b);
+                    }
+                    script.focus_editbox("ChatFrameEditBox");
+                    // A draft with "northshire" selected: the gray selection highlight
+                    // (`0xFF606060`) under the glyphs and the caret at its end. The tab and window
+                    // tint follow the cursor in `FCF_OnUpdate`, so a fixed-reveal OnUpdate pins
+                    // them; it calls `PanelTemplates_TabResize` every frame until the label's
+                    // measure lands.
+                    if let Err(e) = script.run(
+                        "ChatFrameEditBox:SetText(\"hello northshire\")\n\
+                         ChatFrameEditBox:HighlightText(6, 16)\n\
+                         ChatFrame1:SetScript('OnUpdate', function()\n\
+                             PanelTemplates_TabResize(10, ChatFrame1Tab)\n\
+                             ChatFrame1Tab:SetAlpha(1.0)\n\
+                             FCF_SetWindowAlpha(ChatFrame1, 0.25, 1)\n\
+                         end)",
+                    ) {
+                        warn!("capture: ui-chatedit seed failed: {e}");
+                    }
+                }));
             }
             UiFixture::ChatTabHover => {
-                let Some(script) = script.as_mut() else {
-                    return;
-                };
-                // Lines for content, the Combat Log selected, and the cursor on the General tab: an
-                // unselected tab's hover. A capture can hover, as the OS cursor only reaches the VM
-                // on a non-synthetic run, so a fed `mouse_move` stands.
-                for (text, r, g, b) in [
-                    ("[One] says: hello northshire", 1.0, 1.0, 1.0),
-                    ("[One] says: a second line to stack", 1.0, 1.0, 1.0),
-                ] {
-                    script.add_chat_message("ChatFrame1", text, r, g, b);
-                }
-                // `$WOW_TABHOVER` picks one of five dock states for an A/B:
-                //   1 (default)  Combat Log selected, hovering General
-                //   3            General selected, hovering Combat Log
-                //   2            Combat Log selected, hovering Combat Log (the selected tab)
-                //   0            revealed, hovering neither tab (no glow)
-                //   9            cursor off the dock (bare scene, the baseline)
-                let mode = std::env::var("WOW_TABHOVER").unwrap_or_else(|_| "1".into());
-                let select = if mode == "3" { 1 } else { 2 };
-                if let Err(e) = script.run(&format!("FCF_SelectDockFrame(ChatFrame{select})")) {
-                    warn!("capture: ui-chat-tabhover select failed: {e}");
-                }
-                script.resolve();
-                // Each in the root's units the cursor is fed in: the frame's own times its scale.
-                let expr = match mode.as_str() {
-                    "2" | "3" => {
-                        "local x, y = ChatFrame2Tab:GetCenter() \
-                            local k = ChatFrame2Tab:GetEffectiveScale() return x * k, y * k"
+                lua = Some(Box::new(move |script: &mut UiScript| {
+                    // Lines for content, the Combat Log selected, and the cursor on the General
+                    // tab: an unselected tab's hover. A capture can hover, as the OS cursor only
+                    // reaches the VM on a non-synthetic run, so a fed `mouse_move` stands.
+                    for (text, r, g, b) in [
+                        ("[One] says: hello northshire", 1.0, 1.0, 1.0),
+                        ("[One] says: a second line to stack", 1.0, 1.0, 1.0),
+                    ] {
+                        script.add_chat_message("ChatFrame1", text, r, g, b);
                     }
-                    "0" => {
-                        "local k = ChatFrame2:GetEffectiveScale() \
-                            return (ChatFrame2:GetLeft() + ChatFrame2:GetRight()) / 2 * k, \
-                            (ChatFrame2:GetBottom() + ChatFrame2:GetTop()) / 2 * k"
+                    // `$WOW_TABHOVER` picks one of five dock states for an A/B:
+                    //   1 (default)  Combat Log selected, hovering General
+                    //   3            General selected, hovering Combat Log
+                    //   2            Combat Log selected, hovering Combat Log (the selected tab)
+                    //   0            revealed, hovering neither tab (no glow)
+                    //   9            cursor off the dock (bare scene, the baseline)
+                    let mode = std::env::var("WOW_TABHOVER").unwrap_or_else(|_| "1".into());
+                    let select = if mode == "3" { 1 } else { 2 };
+                    if let Err(e) = script.run(&format!("FCF_SelectDockFrame(ChatFrame{select})")) {
+                        warn!("capture: ui-chat-tabhover select failed: {e}");
                     }
-                    // 9: park far away, so the dock conceals itself.
-                    "9" => "return 2000, 2000",
-                    _ => {
-                        "local x, y = ChatFrame1Tab:GetCenter() \
-                            local k = ChatFrame1Tab:GetEffectiveScale() return x * k, y * k"
-                    }
-                };
-                let centre: Result<(f32, f32), _> = script.eval(expr);
-                match centre {
-                    Ok((x, y)) => {
-                        script.mouse_move(x, y);
-                        // Settle the reveal ramp without waiting on the app's own frames.
-                        for _ in 0..40 {
-                            if let Err(e) = script.run("FCF_OnUpdate(0.05)") {
-                                warn!("capture: ui-chat-tabhover pump failed: {e}");
-                                break;
-                            }
-                            script.resolve();
+                    script.resolve();
+                    // Each in the root's units the cursor is fed in: the frame's own times its
+                    // scale.
+                    let expr = match mode.as_str() {
+                        "2" | "3" => {
+                            "local x, y = ChatFrame2Tab:GetCenter() \
+                                local k = ChatFrame2Tab:GetEffectiveScale() return x * k, y * k"
                         }
+                        "0" => {
+                            "local k = ChatFrame2:GetEffectiveScale() \
+                                return (ChatFrame2:GetLeft() + ChatFrame2:GetRight()) / 2 * k, \
+                                (ChatFrame2:GetBottom() + ChatFrame2:GetTop()) / 2 * k"
+                        }
+                        // 9: park far away, so the dock conceals itself.
+                        "9" => "return 2000, 2000",
+                        _ => {
+                            "local x, y = ChatFrame1Tab:GetCenter() \
+                                local k = ChatFrame1Tab:GetEffectiveScale() return x * k, y * k"
+                        }
+                    };
+                    let centre: Result<(f32, f32), _> = script.eval(expr);
+                    match centre {
+                        Ok((x, y)) => {
+                            script.mouse_move(x, y);
+                            // Settle the reveal ramp without waiting on the app's own frames.
+                            for _ in 0..40 {
+                                if let Err(e) = script.run("FCF_OnUpdate(0.05)") {
+                                    warn!("capture: ui-chat-tabhover pump failed: {e}");
+                                    break;
+                                }
+                                script.resolve();
+                            }
+                        }
+                        Err(e) => warn!("capture: ui-chat-tabhover centre failed: {e}"),
                     }
-                    Err(e) => warn!("capture: ui-chat-tabhover centre failed: {e}"),
-                }
+                }));
             }
             UiFixture::NameWater => {
                 use benilla_protocol::messages::ObjectFields;
-                // The subject is an NPC's overhead name, and `UnitNameNPC` defaults to "0"; set
-                // through Lua as a player would, so the sync drains it into `NameConfig`.
-                if let Some(script) = script.as_deref_mut() {
-                    if let Err(e) = script.run("SetCVar(\"UnitNameNPC\", \"1\")") {
-                        warn!("capture: name fixture could not enable UnitNameNPC: {e}");
-                    }
-                }
                 // The self player at the eye; the name colour is its reaction to the wolf.
                 const SELF_GUID: u64 = 0x51;
                 names.insert_player(SELF_GUID, "Benilla".into(), None);
@@ -1517,8 +1502,16 @@ pub(super) fn seed_ui_fixture(
                     },
                     Visibility::default(),
                 ));
-                // A plated unit draws no floating name, so enemy plates go off.
-                set_enemy_plates(script.as_deref(), false);
+                lua = Some(Box::new(|script: &mut UiScript| {
+                    // The subject is an NPC's overhead name, and `UnitNameNPC` defaults to "0";
+                    // set through Lua as a player would, so the sync drains it into
+                    // `NameConfig`.
+                    if let Err(e) = script.run("SetCVar(\"UnitNameNPC\", \"1\")") {
+                        warn!("capture: name fixture could not enable UnitNameNPC: {e}");
+                    }
+                    // A plated unit draws no floating name, so enemy plates go off.
+                    set_enemy_plates(Some(script), false);
+                }));
             }
             UiFixture::NameRank => {
                 use benilla_protocol::messages::ObjectFields;
@@ -1563,7 +1556,9 @@ pub(super) fn seed_ui_fixture(
                     Visibility::default(),
                 ));
                 // A plated unit draws no floating name, so enemy plates go off.
-                set_enemy_plates(script.as_deref(), false);
+                lua = Some(Box::new(|script: &mut UiScript| {
+                    set_enemy_plates(Some(script), false)
+                }));
             }
             // The lighting matrix: one spawn with a streamed entity's component set, anonymous and
             // with plates off, so no glyph rides over the body.
@@ -1607,10 +1602,19 @@ pub(super) fn seed_ui_fixture(
                         ));
                     }
                 }
-                set_enemy_plates(script.as_deref(), false);
+                lua = Some(Box::new(|script: &mut UiScript| {
+                    set_enemy_plates(Some(script), false)
+                }));
             }
         }
-    })
+    });
+    if let Some(lua) = lua {
+        vm.run(|script| {
+            if let Some(script) = script {
+                lua(script);
+            }
+        });
+    }
 }
 
 /// The `GetTime()` the cooldown filmstrip pins the VM's session clock at, seconds. Large, as
