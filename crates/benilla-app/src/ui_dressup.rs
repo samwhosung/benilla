@@ -157,6 +157,20 @@ impl DressUpRoom {
         }
     }
 
+    /// One frame's verbs in call order, then the records that landed for the try-ons still
+    /// waiting. Returns the `ERR_NOT_EQUIPPABLE` count to show.
+    fn step(
+        &mut self,
+        intents: impl IntoIterator<Item = DressUpIntent>,
+        items: &Items,
+        commands: &NetCommands,
+    ) -> u32 {
+        for intent in intents {
+            self.apply(intent);
+        }
+        self.resolve_pending(items, commands)
+    }
+
     /// An id the server never answers stays pending, and its slot shows the player's own gear. A
     /// try-on's first resolve is its lookup; the later ones read. Returns how many resolved items
     /// are not equippable, each an `ERR_NOT_EQUIPPABLE` to show ([`not_equippable`]).
@@ -237,22 +251,18 @@ fn feed_dressup(
         let Some(script) = script else {
             return;
         };
-        for intent in script.take_dressup_intents() {
-            room.apply(intent);
-        }
+        let mut intents = script.take_dressup_intents();
         // The room empties when neither the dressing room nor the auction house's
         // `AuctionDressUpFrame` is shown, read off the frames (the stock files carry no hook of
-        // ours). The reference's widget keeps its state while hidden, but `DressUpItem` re-issues
-        // `SetUnit("player")` on a hidden frame, so the kept state is never seen.
-        if room.open
-            && !script.frame_visible("DressUpFrame")
-            && !script.frame_visible("AuctionDressUpFrame")
-        {
-            room.apply(DressUpIntent::Close);
+        // ours), and a verb on a hidden pane does nothing (`0x504596`). The reference's widget
+        // keeps its state while hidden, but `DressUpItem` re-issues `SetUnit("player")` on a
+        // hidden frame, so the kept state is never seen.
+        if !script.frame_visible("DressUpFrame") && !script.frame_visible("AuctionDressUpFrame") {
+            intents = vec![DressUpIntent::Close];
         }
         // The refusal shows as its record lands: at once when cached, else from the cache's
         // callback (`0x504ba0`).
-        let refused = room.resolve_pending(&items, &commands);
+        let refused = room.step(intents, &items, &commands);
         let lines = (0..refused)
             .filter_map(|_| crate::ui_action::keyed_line(script, "ERR_NOT_EQUIPPABLE"))
             .collect::<Vec<_>>();
