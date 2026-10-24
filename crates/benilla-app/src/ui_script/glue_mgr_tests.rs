@@ -188,6 +188,132 @@ fn a_logon_refusal_opens_its_result_and_ends_the_logon() {
     }
 }
 
+/// The grid seed `0x12345678` builds.
+const GRID: [u8; 10] = [6, 3, 2, 1, 9, 8, 7, 0, 4, 5];
+
+/// A logon whose challenge asked for a PIN, past the frame that showed the keypad.
+fn at_the_keypad() -> GlueMgr {
+    let mut m = fresh();
+    m.login("a".into(), "b".into());
+    settle(&mut m);
+    m.on_stage(LoginStage::Connecting, true);
+    m.tick();
+    settle(&mut m);
+    m.on_stage(LoginStage::Pin { grid: GRID }, true);
+    m.tick();
+    settle(&mut m);
+    m
+}
+
+/// A PIN challenge reports logon state 7 (`0x5b1cd7`): its `CANCEL` dialog, then the arm
+/// (`0x46bac3`) closes it, fires `PLAYER_ENTER_PIN` with the grid and stores state 8, which shows
+/// nothing more (`0x46ba7c`).
+#[test]
+fn a_pin_challenge_shows_the_keypad_its_grid() {
+    let mut m = fresh();
+    m.login("a".into(), "b".into());
+    settle(&mut m);
+    m.on_stage(LoginStage::Connecting, true);
+    m.tick();
+    settle(&mut m);
+    m.outbox.clear();
+    m.on_stage(LoginStage::Pin { grid: GRID }, true);
+    m.tick();
+    settle(&mut m);
+    assert_eq!(
+        m.outbox,
+        [
+            open("CANCEL", Some("LOGIN_STATE_PIN")),
+            Outgoing::Close,
+            Outgoing::EnterPin(GRID),
+        ]
+    );
+    assert_eq!(m.cells.state, LOGIN_PIN_WAIT);
+    m.outbox.clear();
+    m.tick();
+    settle(&mut m);
+    assert!(m.outbox.is_empty(), "{:?}", m.outbox);
+    assert_eq!(m.state, ScreenState::Logon);
+}
+
+/// `PINEntered`'s tail (`0x46b0c0`): the `CANCEL` dialog with no text, then the keys on to the
+/// logon, which reports state 9 (`0x5b31cc`), shown on the next frame.
+#[test]
+fn pin_entered_sends_the_keys_on() {
+    let mut m = at_the_keypad();
+    m.outbox.clear();
+    m.call(GlueCall::PinEntered(benilla_ui::script::GluePin {
+        positions: vec![2, 9, 4, 7],
+    }));
+    settle(&mut m);
+    assert_eq!(m.outbox, [open("CANCEL", None)]);
+    assert!(
+        matches!(
+            m.park_out.as_slice(),
+            [ParkRequest::Realm(RealmRequest::Pin { positions, .. })] if positions == &[2, 9, 4, 7]
+        ),
+        "{:?}",
+        m.park_out
+    );
+    m.outbox.clear();
+    m.tick();
+    settle(&mut m);
+    assert_eq!(
+        m.outbox,
+        [open("CANCEL", Some("LOGIN_STATE_CHECKINGVERSIONS"))]
+    );
+}
+
+/// The proof's refusal of a logon with a PIN counts in the logon object (`0x5b2d0d`): the PIN text
+/// twice, then the call text from the third (`0x5b2d19`-`0x5b2d23`); a refusal with no PIN is the
+/// plain text and counts nothing (`0x5b2d00`); a success zeroes the count (`0x5b2e1f`).
+#[test]
+fn refused_pins_count_to_the_call_text() {
+    let mut m = fresh();
+    let attempt = |m: &mut GlueMgr, pin: bool, refusal: Option<LoginRefusal>| {
+        m.state = ScreenState::Idle;
+        m.login("a".into(), "b".into());
+        settle(m);
+        m.on_stage(LoginStage::Connecting, true);
+        if pin {
+            m.on_stage(LoginStage::Pin { grid: GRID }, true);
+        }
+        m.outbox.clear();
+        match refusal {
+            Some(r) => m.on_failed(&failed(Some(r))),
+            None => m.on_logon_done(),
+        }
+        m.tick();
+        settle(m);
+        std::mem::take(&mut m.outbox)
+    };
+    let proof = || Some(LoginRefusal::LogonProof(0x04));
+    for key in [
+        "LOGIN_UNKNOWN_ACCOUNT_PIN",
+        "LOGIN_UNKNOWN_ACCOUNT_PIN",
+        "LOGIN_UNKNOWN_ACCOUNT_CALL",
+        "LOGIN_UNKNOWN_ACCOUNT_CALL",
+    ] {
+        assert_eq!(attempt(&mut m, true, proof()), [open("OKAY", Some(key))]);
+    }
+    assert_eq!(
+        attempt(&mut m, false, proof()),
+        [open("OKAY", Some("LOGIN_UNKNOWN_ACCOUNT"))],
+        "no PIN this attempt"
+    );
+    assert_eq!(
+        attempt(&mut m, true, Some(LoginRefusal::LogonProof(0x05))),
+        [open("OKAY", Some("LOGIN_UNKNOWN_ACCOUNT_CALL"))],
+        "5 shares 4's arm"
+    );
+    attempt(&mut m, true, None);
+    assert_eq!(
+        attempt(&mut m, true, proof()),
+        [open("OKAY", Some("LOGIN_UNKNOWN_ACCOUNT_PIN"))],
+        "a success zeroed the count"
+    );
+}
+
 /// One realm, `name`, as realmd lists it.
 fn realm(name: &str) -> RealmInfo {
     RealmInfo {

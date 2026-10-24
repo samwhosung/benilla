@@ -865,3 +865,95 @@ fn a_refused_login_returns_to_character_select_on_the_same_link() {
     ));
     assert_eq!(world.authentications(), 1);
 }
+
+/// The grid of the next PIN prompt, skipping the other stages; a failure fails the test.
+fn next_pin(events: &crossbeam_channel::Receiver<SessionEvent>) -> [u8; 10] {
+    loop {
+        match events.recv_timeout(WAIT).expect("the cycle went quiet") {
+            SessionEvent::LoginStage {
+                stage: benilla_protocol::LoginStage::Pin { grid },
+            } => return grid,
+            SessionEvent::LoginStage { .. } => continue,
+            other => panic!("expected the PIN prompt, got {other:?}"),
+        }
+    }
+}
+
+/// A PIN challenge stops the logon at the keypad (logon state 7, `0x5b1cd7`) until the keys come
+/// (`PINEntered` → `0x5b3120`); the proof they make logs in.
+#[test]
+fn a_pin_logon_waits_for_the_keys_then_proves_them() {
+    let (realmd, _) = fake::servers_with_pin(|world| vec![FakeRealm::new(REALM, world)]);
+    let cycles = fake::spawn_cycles();
+    fake::login(&cycles, &realmd.addr);
+    let grid = next_pin(&cycles.events);
+    assert_eq!(realmd.logons(), 0, "no proof before the keys");
+    cycles
+        .realm
+        .send(RealmRequest::Pin {
+            positions: fake::press(&grid, fake::PIN),
+            generation: 0,
+        })
+        .unwrap();
+    let (realms, failed) = next_list(&cycles.events);
+    assert!(!failed);
+    assert_eq!(realms[0].name, REALM);
+    assert_eq!(realmd.logons(), 1);
+}
+
+/// Keys from an attempt a Cancel has ended answer nothing; the Cancel itself (`0x5b3320`) ends
+/// the wait, and the next login asks again.
+#[test]
+fn a_cancel_at_the_keypad_ends_the_logon() {
+    let (realmd, _) = fake::servers_with_pin(|world| vec![FakeRealm::new(REALM, world)]);
+    let cycles = fake::spawn_cycles();
+    fake::login(&cycles, &realmd.addr);
+    let grid = next_pin(&cycles.events);
+    cycles
+        .realm
+        .send(RealmRequest::Pin {
+            positions: fake::press(&grid, fake::PIN),
+            generation: 7,
+        })
+        .unwrap();
+    cycles
+        .abandon
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    cycles.realm.send(RealmRequest::Close).unwrap();
+    fake::login(&cycles, &realmd.addr);
+    let grid = next_pin(&cycles.events);
+    assert_eq!(realmd.logons(), 0, "the stale keys proved nothing");
+    cycles
+        .realm
+        .send(RealmRequest::Pin {
+            positions: fake::press(&grid, fake::PIN),
+            generation: 1,
+        })
+        .unwrap();
+    assert!(!next_list(&cycles.events).1);
+    assert_eq!(realmd.logons(), 1);
+}
+
+/// The re-dial of a closed link presses the PIN the logon proved on its own challenge's grid, so
+/// a PIN account's list refreshes as any other's does.
+#[test]
+fn a_redial_presses_the_kept_pin_on_its_new_grid() {
+    let (realmd, _) = fake::servers_with_pin(|world| vec![FakeRealm::new(REALM, world)]);
+    let cycles = fake::spawn_cycles();
+    fake::login(&cycles, &realmd.addr);
+    let grid = next_pin(&cycles.events);
+    cycles
+        .realm
+        .send(RealmRequest::Pin {
+            positions: fake::press(&grid, fake::PIN),
+            generation: 0,
+        })
+        .unwrap();
+    assert!(!next_list(&cycles.events).1);
+    realmd.drop_links();
+    cycles.realm.send(RealmRequest::Refresh).unwrap();
+    let (realms, failed) = next_list(&cycles.events);
+    assert!(!failed, "the re-dial answers");
+    assert_eq!(realms[0].name, REALM);
+    assert_eq!(realmd.logons(), 2);
+}

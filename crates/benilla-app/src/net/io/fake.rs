@@ -26,6 +26,9 @@ use crate::net::{CharRequest, ClientCommand, ParkRequest, ParkSender, RealmReque
 pub(crate) const USER: &str = "empty";
 pub(crate) const PASS: &str = "secret";
 const SALT: [u8; 32] = [0x5a; 32];
+/// The PIN a realmd of [`servers_with_pin`] asks [`USER`] for.
+pub(crate) const PIN: u32 = 2590;
+const PIN_SALT: [u8; 16] = [0x6b; 16];
 /// Every wait in the tests: long enough for a loaded machine, short of a hung gate.
 pub(crate) const WAIT: Duration = Duration::from_secs(20);
 
@@ -99,6 +102,11 @@ pub(crate) struct Realmd {
 impl Realmd {
     /// Listen on loopback; each session key goes to `keys`, for the world server's header cipher.
     pub(crate) fn start(realms: Vec<FakeRealm>, keys: Sender<Key>) -> Realmd {
+        Self::start_with(realms, keys, false)
+    }
+
+    /// [`Self::start`], asking for [`PIN`] when `pin`.
+    fn start_with(realms: Vec<FakeRealm>, keys: Sender<Key>, pin: bool) -> Realmd {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let logons = Arc::new(AtomicUsize::new(0));
@@ -117,7 +125,7 @@ impl Realmd {
                 let (l, n, o) = (l.clone(), n.clone(), o.clone());
                 thread::spawn(move || {
                     o.fetch_add(1, Ordering::SeqCst);
-                    serve_realmd(s, &realms, &keys, &l, &n);
+                    serve_realmd(s, &realms, &keys, &l, &n, pin);
                     o.fetch_sub(1, Ordering::SeqCst);
                 });
             }
@@ -154,13 +162,38 @@ impl Realmd {
     }
 }
 
-/// One realmd connection: the logon, then the realm list for every request until EOF.
+/// vmangos's `AuthSocket::VerifyPinData` (`AuthSocket.cpp:1204`): `pin` pressed on the grid
+/// `seed` builds, as ASCII positions, under `SHA1(client salt ‖ SHA1(server salt ‖ text))`.
+fn pin_verifies(seed: u32, pin: u32, data: &[u8]) -> bool {
+    let mut grid: Vec<u8> = (0..10).collect();
+    let mut remapped = Vec::new();
+    let mut s = seed;
+    for i in (1..=10u32).rev() {
+        let r = (s % i) as usize;
+        s /= i;
+        remapped.push(grid.remove(r));
+    }
+    let text: Vec<u8> = pin
+        .to_string()
+        .bytes()
+        .map(|b| remapped.iter().position(|&g| g == b - b'0').unwrap() as u8 + 0x30)
+        .collect();
+    sha1(&[&data[..16], &sha1(&[&PIN_SALT, &text])]) == data[16..36]
+}
+
+/// The grid seeds the PIN realmd sends, one per challenge, so each logon's grid differs.
+static PIN_SEEDS: AtomicU64 = AtomicU64::new(0x1234_5678);
+
+/// One realmd connection: the logon, then the realm list for every request until EOF. With `pin`
+/// the challenge asks for [`PIN`] as vmangos does for a PIN-locked account (`AuthSocket.cpp:509`-
+/// `519`), and a proof whose PIN does not verify is refused `0x04` (`:854`).
 fn serve_realmd(
     mut s: TcpStream,
     realms: &[FakeRealm],
     keys: &Sender<Key>,
     logons: &AtomicUsize,
     lists: &AtomicUsize,
+    pin: bool,
 ) {
     let n = BigUint::from_bytes_le(&LARGE_SAFE_PRIME_LITTLE_ENDIAN);
     let g = BigUint::from(GENERATOR);
@@ -194,15 +227,33 @@ fn serve_realmd(
     reply.extend_from_slice(&LARGE_SAFE_PRIME_LITTLE_ENDIAN);
     reply.extend_from_slice(&SALT);
     reply.extend_from_slice(&[0u8; 16]); // crc_salt
-    reply.push(0); // security_flag
+    let seed = PIN_SEEDS.fetch_add(0x0101_0101, Ordering::SeqCst) as u32;
+    if pin {
+        reply.push(1); // security_flag: PIN
+        reply.extend_from_slice(&seed.to_le_bytes());
+        reply.extend_from_slice(&PIN_SALT);
+    } else {
+        reply.push(0); // security_flag
+    }
     if s.write_all(&reply).is_err() {
         return;
     }
 
-    // CMD_AUTH_LOGON_PROOF_Client: opcode, A, M1, crc_hash, key count, security flag.
+    // CMD_AUTH_LOGON_PROOF_Client: opcode, A, M1, crc_hash, key count, security flag, and with a
+    // PIN its salt and hash.
     let mut proof = [0u8; 75];
     if s.read_exact(&mut proof).is_err() {
         return;
+    }
+    if pin {
+        let mut data = [0u8; 36];
+        if s.read_exact(&mut data).is_err() {
+            return;
+        }
+        if proof[74] != 1 || !pin_verifies(seed, PIN, &data) {
+            let _ = s.write_all(&[0x01, 0x04]);
+            return;
+        }
     }
     let (a_pub, m1) = (&proof[1..33], &proof[33..53]);
     let u = BigUint::from_bytes_le(&sha1(&[a_pub, &b_pub]));
@@ -779,6 +830,23 @@ pub(crate) fn servers(realms: impl FnOnce(&str) -> Vec<FakeRealm>) -> (Realmd, W
     let (keys_tx, keys_rx) = crossbeam_channel::unbounded();
     let sent = world(world_listener, keys_rx);
     (Realmd::start(realms(&addr), keys_tx), sent)
+}
+
+/// [`servers`] whose realmd asks for [`PIN`].
+pub(crate) fn servers_with_pin(realms: impl FnOnce(&str) -> Vec<FakeRealm>) -> (Realmd, World) {
+    let world_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = world_listener.local_addr().unwrap().to_string();
+    let (keys_tx, keys_rx) = crossbeam_channel::unbounded();
+    let sent = world(world_listener, keys_rx);
+    (Realmd::start_with(realms(&addr), keys_tx, true), sent)
+}
+
+/// The keys a player presses for `pin` on `grid`.
+pub(crate) fn press(grid: &[u8; 10], pin: u32) -> Vec<u8> {
+    pin.to_string()
+        .bytes()
+        .map(|b| grid.iter().position(|&g| g == b - b'0').unwrap() as u8)
+        .collect()
 }
 
 /// An address nothing answers on: a port bound and released.
