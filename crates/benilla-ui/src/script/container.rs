@@ -859,9 +859,6 @@ fn container_key(
     Ok((slot >= 1).then_some((i64::from(bag), slot as u32)))
 }
 
-/// Register the container verbs as bare globals, as `reference/lua_globals.tsv` lists them;
-/// `C_Container` is a later client's namespace, and an addon that finds it assumes that client.
-
 /// The item cooldown query's lookup of a record the mirror lacks, inside the call: the callback
 /// `0x6e2f70`, deduped, with the active player as the owner id (`0x6e2eef`-`0x6e2f0d`).
 pub(super) fn ask_cooldown_record(lua: &Lua, entry: u32) -> mlua::Result<()> {
@@ -872,6 +869,9 @@ pub(super) fn ask_cooldown_record(lua: &Lua, entry: u32) -> mlua::Result<()> {
         .player;
     super::calls::ask(lua, super::RecordAsk::CooldownItem { entry, owner })
 }
+
+/// Register the container verbs as bare globals, as `reference/lua_globals.tsv` lists them;
+/// `C_Container` is a later client's namespace, and an addon that finds it assumes that client.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // ContainerIDToInventoryID(containerID) (`0x4f94e0`): `id - 1`, then +20 below 4 else +60, so
     // the keyring -2 → 17, the backpack 0 → 19, bags 1-4 → 20-23 and bank bags 5-10 → 64-69, with
