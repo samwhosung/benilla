@@ -1141,6 +1141,7 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use crossbeam_channel::Receiver;
 
+    mod asks;
     mod cast_reports;
     mod census;
     mod closes;
