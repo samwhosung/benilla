@@ -2199,7 +2199,10 @@ fn the_state_pass_runs_once_per_trigger_and_per_callback() {
     assert_eq!(tick(&mut app), ["TRAINER_UPDATE", "TRAINER_UPDATE"]);
     assert!(tick(&mut app).is_empty());
 
-    run_getters(&mut app, "for i = 1, 2 do GetTrainerServiceIcon(i) end GetTrainerServiceIcon(2)");
+    run_getters(
+        &mut app,
+        "for i = 1, 2 do GetTrainerServiceIcon(i) end GetTrainerServiceIcon(2)",
+    );
     assert!(tick(&mut app).is_empty(), "the record is still out");
     app.world_mut()
         .resource_mut::<Items>()

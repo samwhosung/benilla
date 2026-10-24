@@ -116,7 +116,11 @@ fn the_summoner_getter_asks_a_missed_name_inside_its_call() {
         .resource_mut::<crate::names::NameCache>()
         .insert_player(0x2a, String::new(), None);
     eval::<()>(&mut app, "GetSummonConfirmSummoner()");
-    assert_eq!(sent(&rx), ["name 0x2a"], "the call after the refusal asks again");
+    assert_eq!(
+        sent(&rx),
+        ["name 0x2a"],
+        "the call after the refusal asks again"
+    );
 }
 
 /// `GetBattlefieldPosition` on a teammate the name cache lacks looks the name up with the
@@ -143,7 +147,11 @@ fn a_battlefield_position_asks_a_missed_name_inside_its_call() {
         .resource_mut::<crate::names::NameCache>()
         .insert_player(0x31, String::new(), None);
     eval::<()>(&mut app, "GetBattlefieldPosition(1)");
-    assert_eq!(sent(&rx), ["name 0x31"], "the call after the refusal asks again");
+    assert_eq!(
+        sent(&rx),
+        ["name 0x31"],
+        "the call after the refusal asks again"
+    );
 }
 
 /// The ammo slot's texture and quality getters look a record the cache lacks up with the
@@ -212,7 +220,14 @@ fn the_cooldown_queries_ask_a_missed_record_inside_their_calls() {
     );
     assert_eq!(
         sent(&rx),
-        ["item 6948", "roll 1", "item 5976", "roll 3", "item 2589", "roll 5"]
+        [
+            "item 6948",
+            "roll 1",
+            "item 5976",
+            "roll 3",
+            "item 2589",
+            "roll 5"
+        ]
     );
     let cooldowns = app.world().resource::<crate::spell::Cooldowns>();
     for entry in [6948, 5976, 2589] {
@@ -250,7 +265,9 @@ fn the_trainer_getters_ask_a_missed_record_inside_their_calls() {
     );
     assert_eq!(sent(&rx), ["item 2589", "roll 1", "item 2590"]);
     assert_eq!(
-        app.world().resource::<crate::ui_trainer::TrainerOpen>().item_waits,
+        app.world()
+            .resource::<crate::ui_trainer::TrainerOpen>()
+            .item_waits,
         [2589, 2590, 2589],
         "a callback per call"
     );
@@ -286,7 +303,9 @@ fn get_quest_item_info_asks_a_missed_record_inside_its_call() {
 /// The item query goes out inside the call, once while it is in flight.
 #[test]
 fn the_craft_getters_ask_a_missed_record_inside_their_calls() {
-    use benilla_ui::script::{CraftDifficulty, CraftReagent, CraftRecipe, CraftState, CraftTooltip};
+    use benilla_ui::script::{
+        CraftDifficulty, CraftReagent, CraftRecipe, CraftState, CraftTooltip,
+    };
     let (mut app, rx) = client();
     vm(&mut app).set_craft(Some(CraftState {
         name: "Enchanting".into(),
