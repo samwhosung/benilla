@@ -648,7 +648,7 @@ mod tests {
                     let target = world.spawn(fx::caster(reach)).id();
                     index.insert(ATTACK_TARGET, target);
                 }
-                world.insert_resource(crate::net::GuidIndex(index));
+                world.insert_resource(crate::net::GuidIndex(index.into_iter().collect()));
                 world.resource_mut::<SpellTargeting>().enter(
                     spell,
                     crate::spell::CastCommit::Spell,
@@ -734,7 +734,7 @@ mod tests {
             let pet = world
                 .spawn((Transform::from_xyz(pet_at, 0.0, 0.0), fx::caster(pet_reach)))
                 .id();
-            world.insert_resource(crate::net::GuidIndex(HashMap::from([(PET, pet)])));
+            world.insert_resource(crate::net::GuidIndex([(PET, pet)].into_iter().collect()));
             world.resource_mut::<SpellTargeting>().enter(
                 spell,
                 crate::spell::CastCommit::Pet { caster: PET },

@@ -10,8 +10,9 @@ use super::super::calls::{submit, ScriptCall};
 use super::super::protected::select_may_cast;
 use super::super::Model;
 use super::{
-    check_unit_token, classification_word, grey_band, level_is_hidden, read_unit, unit_is_grey,
-    unit_predicate, unknownobject, with_unit, PlayerRecord, SelectionRequest,
+    check_unit_token, classification_word, grey_band, level_is_hidden_at, object_predicate,
+    read_object, unit_is_grey, unit_predicate, unknownobject, with_object, with_unit, PlayerRecord,
+    SelectionRequest,
 };
 
 /// The `"player"` fast path of `UnitName`, `UnitRace`, `UnitClass` and `UnitSex`, never
@@ -83,11 +84,11 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             name,
             lua.create_function(move |lua, token: Value| {
                 let token = Some(crate::script::binding_abi::string_arg(lua, token, usage)?);
-                let hit = with_unit(lua, &token, false, |u| {
+                let hit = with_object(lua, &token, false, |_, o| {
                     if by_player {
-                        u.tapped_by_player
+                        o.tapped_by_player()
                     } else {
-                        u.tapped
+                        o.tapped()
                     }
                 })?;
                 Ok(flag(hit))
@@ -107,7 +108,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             // A token with no snapshot is GUID 0, the reference's `0:0`.
             let (by_flag, guid) = token
                 .as_deref()
-                .and_then(|t| read_unit(lua, t, |u| (u.group_leader, u.guid)))
+                .and_then(|t| read_object(lua, t, |u, o| (o.group_leader(), u.guid)))
                 .unwrap_or((false, 0));
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(flag(by_flag || guid == model.party.leader_guid))
@@ -164,7 +165,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 token,
                 r#"Usage: UnitHealth("unit")"#,
             )?);
-            with_unit(lua, &token, 0i64, |u| i64::from(u.health))
+            with_object(lua, &token, 0i64, |_, o| i64::from(o.health()))
         })?,
     )?;
 
@@ -176,7 +177,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 token,
                 r#"Usage: UnitHealthMax("unit")"#,
             )?);
-            with_unit(lua, &token, 0i64, |u| i64::from(u.max_health))
+            with_object(lua, &token, 0i64, |_, o| i64::from(o.max_health()))
         })?,
     )?;
 
@@ -199,13 +200,10 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 .player_req
                 .level;
             let Some((hidden, level, has_object, guid)) = token.as_deref().and_then(|t| {
-                read_unit(lua, t, |u| {
-                    (
-                        level_is_hidden(u, player_level),
-                        u.level,
-                        u.has_object,
-                        u.guid,
-                    )
+                read_object(lua, t, |u, o| {
+                    let level = o.level();
+                    let hidden = level_is_hidden_at(u, level, player_level);
+                    (hidden, level, u.has_object, u.guid)
                 })
             }) else {
                 return Ok(0i64);
@@ -217,7 +215,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(0);
             }
             // The drunk leg needs the unit's object and the active player (`0x518096`).
-            let drunk = read_unit(lua, "player", |p| p.drunk).unwrap_or(0);
+            let drunk = read_object(lua, "player", |_, p| p.drunk()).unwrap_or(0);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let me = model.unit_guids.player;
             let attackable = || {
@@ -265,8 +263,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 .expect("model app_data")
                 .player_req
                 .level;
-            unit_predicate(lua, &token, |u| {
-                u.has_object && !u.is_player && unit_is_grey(player_level, u.level)
+            object_predicate(lua, &token, |u, o| {
+                u.has_object && !u.is_player && unit_is_grey(player_level, o.level())
             })
         })?,
     )?;
@@ -290,7 +288,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 token,
                 r#"Usage: UnitIsDead("unit")"#,
             )?);
-            unit_predicate(lua, &token, |u| u.dead)
+            object_predicate(lua, &token, |_, o| o.dead())
         })?,
     )?;
 
@@ -303,7 +301,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 token,
                 r#"Usage: UnitIsGhost("unit")"#,
             )?);
-            unit_predicate(lua, &token, |u| u.ghost)
+            object_predicate(lua, &token, |_, o| o.ghost())
         })?,
     )?;
     g.set(
@@ -314,7 +312,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 token,
                 r#"Usage: UnitIsDeadOrGhost("unit")"#,
             )?);
-            unit_predicate(lua, &token, |u| u.dead || u.ghost)
+            object_predicate(lua, &token, |_, o| o.dead() || o.ghost())
         })?,
     )?;
 
@@ -336,7 +334,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 .player_req
                 .level;
             Ok(flag(unit.is_some_and(|t| {
-                read_unit(lua, &t, |u| super::is_civilian_kill(u, player_level)) == Some(true)
+                read_object(lua, &t, |u, o| super::civilian_kill_of(u, o, player_level))
+                    == Some(true)
             })))
         })?,
     )?;
@@ -347,7 +346,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         "UnitPlayerControlled",
         lua.create_function(|lua, unit: Option<String>| {
             Ok(flag(unit.is_some_and(|t| {
-                read_unit(lua, &t, |u| u.player_controlled) == Some(true)
+                read_object(lua, &t, |_, o| o.player_controlled()) == Some(true)
             })))
         })?,
     )?;
@@ -365,7 +364,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, token: Option<String>| {
             // No `lua_isstring` gate, so nil answers nil; an unrecognised token still raises in
             // the resolver (`0x515940`).
-            unit_predicate(lua, &token, |u| u.flags & 0x40 != 0)
+            object_predicate(lua, &token, |_, o| o.flags() & 0x40 != 0)
         })?,
     )?;
 
@@ -416,7 +415,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 token,
                 "Usage: UnitAffectingCombat(\"unit\")",
             )?;
-            let hot = with_unit(lua, &Some(token), false, |u| u.exists && u.in_combat)?;
+            let hot = with_object(lua, &Some(token), false, |u, o| u.exists && o.in_combat())?;
             Ok(flag(hot))
         })?,
     )?;
@@ -445,7 +444,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 check_unit_token(&token)?;
                 let Some((exists, guid, owner)) = token
                     .as_deref()
-                    .and_then(|t| read_unit(lua, t, |u| (u.exists, u.guid, u.owner)))
+                    .and_then(|t| read_object(lua, t, |u, o| (u.exists, u.guid, o.owner())))
                 else {
                     return Ok(Value::Nil);
                 };
@@ -704,7 +703,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             // `{2, 3, 1, 6}` unchecked (`0x808be4`), so an unset record answers 2 there too.
             let sex = match player_record_arm(lua, &token, |r| r.sex) {
                 Some(sex) => sex,
-                None => with_unit(lua, &token, 0u8, |u| u.sex)?,
+                None => with_object(lua, &token, 0u8, |_, o| o.sex())?,
             };
             Ok(Value::Integer(i64::from(if sex == 0 { 2 } else { sex })))
         })?,
@@ -756,7 +755,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 token,
                 r#"Usage: UnitPowerType("unit")"#,
             )?);
-            let ty = with_unit(lua, &token, 0u8, |u| u.power_type)?;
+            let ty = with_object(lua, &token, 0u8, |_, o| o.power_type())?;
             Ok(i64::from(ty))
         })?,
     )?;
@@ -771,7 +770,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 token,
                 r#"Usage: UnitMana("unit")"#,
             )?);
-            with_unit(lua, &token, 0i64, |u| i64::from(u.power))
+            with_object(lua, &token, 0i64, |_, o| i64::from(o.power()))
         })?,
     )?;
     g.set(
@@ -782,7 +781,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 token,
                 r#"Usage: UnitManaMax("unit")"#,
             )?);
-            with_unit(lua, &token, 0i64, |u| i64::from(u.max_power))
+            with_object(lua, &token, 0i64, |_, o| i64::from(o.max_power()))
         })?,
     )?;
 
@@ -828,7 +827,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "UnitIsCharmed",
         lua.create_function(|lua, token: Option<String>| {
-            unit_predicate(lua, &token, |u| u.charmed)
+            object_predicate(lua, &token, |_, o| o.charmed())
         })?,
     )?;
 

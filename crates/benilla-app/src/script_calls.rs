@@ -149,11 +149,22 @@ pub(crate) struct UnitLive<'w, 's> {
 }
 
 impl UnitLive<'_, '_> {
-    /// The object held under `guid`, as of here.
-    fn object(&self, guid: u64) -> Option<benilla_ui::script::UnitObject> {
-        let entity = *self.index.as_deref()?.0.get(&guid)?;
-        let store = self.stores.get(entity).ok()?;
-        Some(crate::ui_unit::unit_object(store))
+    /// Hand `read` the object held under `guid`, as of here; whether one was held.
+    fn read(
+        &self,
+        guid: u64,
+        read: &mut dyn FnMut(&dyn benilla_ui::script::UnitObjectRead),
+    ) -> bool {
+        let Some(store) = self
+            .index
+            .as_deref()
+            .and_then(|i| i.0.get(&guid))
+            .and_then(|&e| self.stores.get(e).ok())
+        else {
+            return false;
+        };
+        read(&crate::ui_unit::StoreObject(store));
+        true
     }
 }
 
@@ -539,8 +550,12 @@ impl ScriptCallHost<'_, '_> {
 }
 
 impl CallHost for ScriptCallHost<'_, '_> {
-    fn unit_object(&mut self, guid: u64) -> Option<benilla_ui::script::UnitObject> {
-        self.appliers.units().object(guid)
+    fn read_unit_object(
+        &mut self,
+        guid: u64,
+        read: &mut dyn FnMut(&dyn benilla_ui::script::UnitObjectRead),
+    ) -> bool {
+        self.appliers.units().read(guid, read)
     }
 
     fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
@@ -1709,6 +1724,21 @@ mod tests {
         let exists =
             eval::<Option<i64>>(&mut f, r#"ClearTarget() return UnitExists("targettarget")"#);
         assert_eq!(exists, None, "no target, so no target of target");
+    }
+
+    /// `TargetUnit` then `UnitHealth("target")` in one chunk reads the new target's object: the
+    /// verb commits through `SetSelection` (`0x4899d0` → `0x493540`), which stores the guid
+    /// (`0x4936e2`) before it returns, and the getter resolves it and reads the object's health
+    /// (`0x5174d0`, `+0x40` at `0x517553`), though no snapshot of the unit was ever pushed.
+    #[test]
+    fn a_unit_targeted_in_the_chunk_reads_its_object() {
+        let mut f = frame(false);
+        let health = eval::<i64>(
+            &mut f,
+            r#"TargetUnit("party1") return UnitHealth("target")"#,
+        );
+        assert_eq!(selected(&f), Some(NEW));
+        assert_eq!(health, 100, "the object's health, not an empty seat's");
     }
 
     /// `TargetNearestEnemy` (`0x489a80` → `0x493f60(0, 1)`) commits through `SetSelection` before

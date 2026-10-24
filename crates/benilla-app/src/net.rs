@@ -610,7 +610,7 @@ impl LoginAbandon {
 /// Guid to entity for every kind, items included, like the reference's one `ClntObjMgr` index.
 /// Written only by `net::objects`.
 #[derive(Resource, Default)]
-pub(crate) struct GuidIndex(pub(crate) HashMap<u64, Entity>);
+pub(crate) struct GuidIndex(pub(crate) bevy::platform::collections::HashMap<u64, Entity>);
 
 /// The streamed objects, whatever the kind, with their descriptor stores, our own player, and an
 /// item's countdown cells. Read-only. The by-guid lookups are `ClntObjMgrObjectPtr` (`0x468460`).

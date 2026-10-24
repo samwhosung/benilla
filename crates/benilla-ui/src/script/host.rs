@@ -29,12 +29,17 @@ pub trait CallHost {
     /// lines) is returned as the tail.
     fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail>;
 
-    /// The unit object the engine holds under `guid`, as a getter reads it now: its descriptor's
-    /// own fields, as of the place the getter runs (`UnitHealth` reads the object, `0x5174d0`).
-    /// `None` when it holds no unit object there, and from a host that reads none.
-    fn unit_object(&mut self, guid: u64) -> Option<super::UnitObject> {
-        let _ = guid;
-        None
+    /// Hand `read` the unit object the engine holds under `guid`, as a getter reads it now: its
+    /// descriptor's own fields, each derived as it is asked for, as of the place the getter runs
+    /// (`UnitHealth` reads the object, `0x5174d0`). Whether there was one to hand: `false` when it
+    /// holds no object there, and from a host that reads none. `read` runs no Lua.
+    fn read_unit_object(
+        &mut self,
+        guid: u64,
+        read: &mut dyn FnMut(&dyn super::UnitObjectRead),
+    ) -> bool {
+        let _ = (guid, read);
+        false
     }
 }
 
@@ -182,6 +187,26 @@ pub(crate) fn with_host<R>(lua: &Lua, f: impl FnOnce(&mut dyn CallHost) -> R) ->
     let host = slot.host.take()?;
     let _back = PutBack { slot, host };
     let _hold = Hold::new(self::slot(lua), true);
+    // SAFETY: the pointer came out of the slot, so by its invariant it is valid, and this is the
+    // only `&mut` made from it until it goes back.
+    Some(f(unsafe { &mut *host.as_ptr() }))
+}
+
+/// [`with_host`] for a read that runs no Lua and signals nothing, so no handler can fire to be
+/// held: the host comes out of the slot and goes back under the one borrow of it.
+pub(crate) fn read_host<R>(lua: &Lua, f: impl FnOnce(&mut dyn CallHost) -> R) -> Option<R> {
+    struct PutBack<'a> {
+        slot: &'a HostSlot,
+        host: NonNull<dyn CallHost + 'static>,
+    }
+    impl Drop for PutBack<'_> {
+        fn drop(&mut self) {
+            self.slot.host.set(Some(self.host));
+        }
+    }
+    let slot = slot(lua);
+    let host = slot.host.take()?;
+    let _back = PutBack { slot: &slot, host };
     // SAFETY: the pointer came out of the slot, so by its invariant it is valid, and this is the
     // only `&mut` made from it until it goes back.
     Some(f(unsafe { &mut *host.as_ptr() }))

@@ -96,31 +96,7 @@ fn raid_storm_cost() {
             end)
         end"#,
     );
-    let members: Vec<u64> = (0..39).map(|i| 0x100 + i).collect();
-    let roster = SessionEvent::GroupList {
-        group_type: crate::ui_party::GROUPTYPE_RAID,
-        own_flags: 0,
-        members: members
-            .iter()
-            .enumerate()
-            .map(|(i, &guid)| GroupMemberEntry {
-                name: format!("M{guid:x}"),
-                guid,
-                status: 1,
-                flags: ((i + 1) / 5) as u8,
-            })
-            .collect(),
-        leader: ME,
-        loot: None,
-    };
-    let mob = [(FIELD_UNIT_HEALTH, 100), (FIELD_UNIT_MAXHEALTH, 100)];
-    let mut setup = vec![vec![roster]];
-    setup.extend(
-        members
-            .iter()
-            .map(|&g| vec![created(g, EntityKind::Player, &mob)]),
-    );
-    c.frame(setup);
+    let members = raid(&mut c);
     let units: Vec<u64> = std::iter::once(ME).chain(members.iter().copied()).collect();
     let storm = |frame: u32| {
         (0..3u32)
@@ -158,4 +134,74 @@ fn raid_storm_cost() {
         "local n = 0 for i = 1, 40 do if UnitHealth('raid' .. i) > 0 then n = n + 1 end end return n",
     );
     eprintln!("raid units with health: {heard}");
+}
+
+/// Our raid of 39 others, each held at 100 of 100 health; their guids.
+fn raid(c: &mut Client) -> Vec<u64> {
+    let members: Vec<u64> = (0..39).map(|i| 0x100 + i).collect();
+    let roster = SessionEvent::GroupList {
+        group_type: crate::ui_party::GROUPTYPE_RAID,
+        own_flags: 0,
+        members: members
+            .iter()
+            .enumerate()
+            .map(|(i, &guid)| GroupMemberEntry {
+                name: format!("M{guid:x}"),
+                guid,
+                status: 1,
+                flags: ((i + 1) / 5) as u8,
+            })
+            .collect(),
+        leader: ME,
+        loot: None,
+    };
+    let mob = [(FIELD_UNIT_HEALTH, 100), (FIELD_UNIT_MAXHEALTH, 100)];
+    let mut setup = vec![vec![roster]];
+    setup.extend(
+        members
+            .iter()
+            .map(|&g| vec![created(g, EntityKind::Player, &mob)]),
+    );
+    c.frame(setup);
+    members
+}
+
+/// The `Unit*` getters' per-call cost with the host lent: 10k `UnitHealth` calls over `raid1..40`.
+///
+/// Run with `cargo nextest run -p benilla-app --lib unit_getter_cost --run-ignored only
+/// --no-capture`.
+#[test]
+#[ignore = "a timing, not a check"]
+fn unit_getter_cost() {
+    let mut c = client("");
+    raid(&mut c);
+    c.frame(vec![]);
+    let chunk = r#"
+        local tokens = {}
+        for i = 1, 40 do tokens[i] = "raid" .. i end
+        local sum = 0
+        for n = 1, 10000 do sum = sum + UnitHealth(tokens[math.mod(n, 40) + 1]) end
+        return sum"#;
+    let mut median = |live: bool| {
+        let mut times = Vec::new();
+        for _ in 0..50 {
+            let t = std::time::Instant::now();
+            let sum: i64 = if live {
+                crate::script_calls::with_hosted_vm(c.app.world_mut(), |s| {
+                    s.expect("a VM").eval(chunk).expect("runs")
+                })
+            } else {
+                crate::script_calls::eval_in_vm(c.app.world(), chunk)
+            };
+            times.push(t.elapsed().as_secs_f64() * 1000.0);
+            assert_eq!(sum, 10000 * 100);
+        }
+        times.sort_by(f64::total_cmp);
+        times[times.len() / 2]
+    };
+    let (live, snapshot) = (median(true), median(false));
+    eprintln!(
+        "unit getters: 10k UnitHealth calls, median {live:.3} ms with the host lent, {snapshot:.3} ms \
+         off the snapshots alone"
+    );
 }

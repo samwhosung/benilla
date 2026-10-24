@@ -9,8 +9,8 @@ use bevy::prelude::*;
 use benilla_formats::{ChrClasses, ChrRaces, Reaction};
 use benilla_protocol::messages::ObjectType;
 use benilla_ui::script::{
-    parse_unit_token, ScriptValue, UiScript, UnitBase, UnitObject, UnitState, UnitTokenParse,
-    WornDisplay,
+    parse_unit_token, ScriptValue, UiScript, UnitBase, UnitObject, UnitObjectRead, UnitState,
+    UnitTokenParse, WornDisplay,
 };
 
 use crate::creature_type::CreatureTypeSources;
@@ -1031,73 +1031,137 @@ pub(crate) fn snapshot(
 }
 
 /// What a unit's descriptor alone answers ([`UnitObject`]), read off `store` with no table or
-/// cache: the snapshot's fields of it, and what the getters read off the object as they run.
+/// cache: the snapshot's fields of it.
 pub(crate) fn unit_object(store: &ObjectStore) -> UnitObject {
-    let power_type = store.0.unit_power_type();
-    UnitObject {
-        // The UI getters: `UNIT_DYNFLAG_DEAD` (feign death) zeroes `UnitHealth` (`0x5174d0`) and
-        // `UnitMana` (`0x517670`) but not the maxima, so its edge fires the reference's pair
-        // (`0x6004c5`, `0x6004f0`); the power getters divide rage by 10 and happiness by 1000.
-        health: store.0.unit_shown_health().unwrap_or(0),
-        max_health: store.0.unit_max_health().unwrap_or(0),
-        level: store.0.unit_level().unwrap_or(0),
-        power_type,
-        power: store.0.unit_shown_power(power_type).unwrap_or(0),
-        max_power: store.0.unit_shown_max_power(power_type).unwrap_or(0),
-        // `UnitIsDead` (`0x517ac0`): health ≤ 0 or the dead-looking flag.
-        dead: store.0.unit_reads_dead(),
-        // `PLAYER_FLAGS` bit `0x10`; a ghost's health is 1, so `dead` is false for it.
-        ghost: store.0.player_is_ghost(),
-        // `UnitIsCharmed` (`0x516cf0`): `UNIT_FIELD_CHARMEDBY != 0`.
-        charmed: store.0.unit_charmed_by().is_some(),
-        // `UNIT_DYNAMIC_FLAGS` bits `0x4`/`0x8`; a unit with no descriptor reads `false`.
-        tapped: store.0.unit_tapped(),
-        tapped_by_player: store.0.unit_tapped_by_player(),
-        // `UnitIsPartyLeader`'s descriptor leg; a creature has no PLAYER block and reads absent.
-        group_leader: store.0.player_is_group_leader(),
-        // The raw dword `PLAYER_FLAGS_CHANGED` fires on; 0 on a creature, as in the reference.
-        player_flags: store.0.player_flags(),
-        // Gender byte 0 male, 1 female, on `UnitSex`'s scale: 2 male, 3 female, 0 unknown (nil).
-        sex: match store.0.unit_gender() {
+    UnitObject::read(&StoreObject(store))
+}
+
+/// A held unit's descriptor as the getters read it ([`UnitObjectRead`]): each field derived as it
+/// is asked for, the one derivation a snapshot's build takes too ([`unit_object`]).
+pub(crate) struct StoreObject<'a>(pub(crate) &'a ObjectStore);
+
+impl UnitObjectRead for StoreObject<'_> {
+    // The UI getters: `UNIT_DYNFLAG_DEAD` (feign death) zeroes `UnitHealth` (`0x5174d0`) and
+    // `UnitMana` (`0x517670`) but not the maxima, so its edge fires the reference's pair
+    // (`0x6004c5`, `0x6004f0`); the power getters divide rage by 10 and happiness by 1000.
+    fn health(&self) -> u32 {
+        self.0 .0.unit_shown_health().unwrap_or(0)
+    }
+    fn max_health(&self) -> u32 {
+        self.0 .0.unit_max_health().unwrap_or(0)
+    }
+    fn level(&self) -> u32 {
+        self.0 .0.unit_level().unwrap_or(0)
+    }
+    fn power_type(&self) -> u8 {
+        self.0 .0.unit_power_type()
+    }
+    fn power(&self) -> u32 {
+        let f = &self.0 .0;
+        f.unit_shown_power(f.unit_power_type()).unwrap_or(0)
+    }
+    fn max_power(&self) -> u32 {
+        let f = &self.0 .0;
+        f.unit_shown_max_power(f.unit_power_type()).unwrap_or(0)
+    }
+    /// `UnitIsDead` (`0x517ac0`): health ≤ 0 or the dead-looking flag.
+    fn dead(&self) -> bool {
+        self.0 .0.unit_reads_dead()
+    }
+    /// `PLAYER_FLAGS` bit `0x10`; a ghost's health is 1, so `dead` is false for it.
+    fn ghost(&self) -> bool {
+        self.0 .0.player_is_ghost()
+    }
+    /// `UnitIsCharmed` (`0x516cf0`): `UNIT_FIELD_CHARMEDBY != 0`.
+    fn charmed(&self) -> bool {
+        self.0 .0.unit_charmed_by().is_some()
+    }
+    /// `UNIT_DYNAMIC_FLAGS` bits `0x4`/`0x8`; a unit with no descriptor reads `false`.
+    fn tapped(&self) -> bool {
+        self.0 .0.unit_tapped()
+    }
+    fn tapped_by_player(&self) -> bool {
+        self.0 .0.unit_tapped_by_player()
+    }
+    /// `UnitIsPartyLeader`'s descriptor leg; a creature has no PLAYER block and reads absent.
+    fn group_leader(&self) -> bool {
+        self.0 .0.player_is_group_leader()
+    }
+    /// The raw dword `PLAYER_FLAGS_CHANGED` fires on; 0 on a creature, as in the reference.
+    fn player_flags(&self) -> u32 {
+        self.0 .0.player_flags()
+    }
+    fn flags(&self) -> u32 {
+        self.0 .0.unit_flags()
+    }
+    /// The whole dword: the reference's watch is a memcmp over it, not a bit test.
+    fn dynamic_flags(&self) -> u32 {
+        self.0 .0.unit_dynamic_flags()
+    }
+    fn owner(&self) -> u64 {
+        let f = &self.0 .0;
+        f.unit_summoned_by()
+            .or_else(|| f.unit_charmed_by())
+            .or_else(|| f.unit_created_by())
+            .unwrap_or(0)
+    }
+    /// `UNIT_FIELD_FLAGS` PvP `0x1000` (vmangos `UnitDefines.h`).
+    fn pvp(&self) -> bool {
+        self.0 .0.unit_flags() & 0x1000 != 0
+    }
+    /// `UNIT_FIELD_FLAGS` Skinnable `0x04000000` (vmangos `UnitDefines.h`).
+    fn skinnable(&self) -> bool {
+        self.0 .0.unit_flags() & 0x0400_0000 != 0
+    }
+    /// `UnitPlayerControlled`: bit `0x8`, set by pets and charmed creatures as well as players.
+    fn player_controlled(&self) -> bool {
+        self.0 .0.unit_flags() & 0x8 != 0
+    }
+    /// `UnitAffectingCombat` (`0x517e10`): bit 19, the one combat bit for every token.
+    fn in_combat(&self) -> bool {
+        self.0 .0.unit_flags() & crate::player::UNIT_FLAG_IN_COMBAT != 0
+    }
+    /// The honor rank, `PLAYER_BYTES_3` byte 3 (0..=18), public for every player in view.
+    fn pvp_rank(&self) -> u8 {
+        self.0 .0.player_pvp_rank().unwrap_or(0)
+    }
+    /// `PLAYER_BYTES_3` byte 2, the city-protector title (`PVP_MEDAL<n>`), unset by vmangos.
+    fn pvp_medal(&self) -> u8 {
+        self.0 .0.player_pvp_medal().unwrap_or(0)
+    }
+    /// The quest-log window, off a player alone: `IsUnitOnQuest` looks the guid up with
+    /// TYPEMASK_PLAYER (`0x4dfe97`) before it reads `[obj+0xe68]`.
+    fn quest_log(&self) -> [[u32; 3]; 20] {
+        if matches!(self.0 .0.object_type(), Some(ObjectType::Player)) {
+            self.0 .0.player_quest_log_window()
+        } else {
+            Default::default()
+        }
+    }
+    /// `PLAYER_GUILDID`, the cache key of `GetGuildInfo` (`0x4c93a9`).
+    fn guild_id(&self) -> u32 {
+        self.0 .0.player_guild_id()
+    }
+    /// `PLAYER_BYTES_3` byte 1; a creature has no PLAYER block and reads 0.
+    fn drunk(&self) -> u8 {
+        self.0 .0.player_drunk_byte().unwrap_or(0)
+    }
+    /// Gender byte 0 male, 1 female, on `UnitSex`'s scale: 2 male, 3 female, 0 unknown (nil).
+    fn sex(&self) -> u8 {
+        match self.0 .0.unit_gender() {
             Some(0) => 2,
             Some(1) => 3,
             _ => 0,
-        },
-        // `UNIT_FIELD_FLAGS` PvP `0x1000` and Skinnable `0x04000000` (vmangos `UnitDefines.h`).
-        pvp: store.0.unit_flags() & 0x1000 != 0,
-        skinnable: store.0.unit_flags() & 0x0400_0000 != 0,
-        // `UnitPlayerControlled`: bit `0x8`, set by pets and charmed creatures as well as players.
-        player_controlled: store.0.unit_flags() & 0x8 != 0,
-        flags: store.0.unit_flags(),
-        // The whole dword: the reference's watch is a memcmp over it, not a bit test.
-        dynamic_flags: store.0.unit_dynamic_flags(),
-        owner: store
-            .0
-            .unit_summoned_by()
-            .or_else(|| store.0.unit_charmed_by())
-            .or_else(|| store.0.unit_created_by())
-            .unwrap_or(0),
-        // `UnitAffectingCombat` (`0x517e10`): bit 19, the one combat bit for every token.
-        in_combat: store.0.unit_flags() & crate::player::UNIT_FLAG_IN_COMBAT != 0,
-        // The honor rank, `PLAYER_BYTES_3` byte 3 (0..=18), public for every player in view.
-        pvp_rank: store.0.player_pvp_rank().unwrap_or(0),
-        // `PLAYER_BYTES_3` byte 2, the city-protector title (`PVP_MEDAL<n>`), unset by vmangos.
-        pvp_medal: store.0.player_pvp_medal().unwrap_or(0),
-        // The quest-log window, off a player alone: `IsUnitOnQuest` looks the guid up with
-        // TYPEMASK_PLAYER (`0x4dfe97`) before it reads `[obj+0xe68]`.
-        quest_log: if matches!(store.0.object_type(), Some(ObjectType::Player)) {
-            store.0.player_quest_log_window()
-        } else {
-            Default::default()
-        },
-        // `PLAYER_GUILDID`, the cache key of `GetGuildInfo` (`0x4c93a9`).
-        guild_id: store.0.player_guild_id(),
-        // `PLAYER_BYTES_3` byte 1; a creature has no PLAYER block and reads 0.
-        drunk: store.0.player_drunk_byte().unwrap_or(0),
-        // What the stat getters read of any unit but the active player (`0x515940`, then the
-        // object's fields), and the SUMMONEDBY their summon gate compares (`0x519272`).
-        combat: crate::ui_char::unit_combat_stats(store),
-        summoned_by: store.0.unit_summoned_by().unwrap_or(0),
+        }
+    }
+    /// What the stat getters read of any unit but the active player (`0x515940`, then the
+    /// object's fields).
+    fn combat(&self) -> benilla_ui::script::UnitCombatStats {
+        crate::ui_char::unit_combat_stats(self.0)
+    }
+    /// The SUMMONEDBY the stat getters' summon gate compares (`0x519272`).
+    fn summoned_by(&self) -> u64 {
+        self.0 .0.unit_summoned_by().unwrap_or(0)
     }
 }
 
