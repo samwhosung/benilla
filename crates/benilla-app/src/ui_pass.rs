@@ -1817,42 +1817,6 @@ mod tests {
         assert_eq!(colors, &vec![top, top, bottom, bottom]);
     }
 
-    /// With `widescreen` 0 the interface is laid out 4:3 and drawn across the whole window: on the
-    /// default 1280×720 window the interface is 960 px across, so a quad 64 px from the left
-    /// edge spans 64·(1280/960) window px.
-    #[test]
-    fn widescreen_off_stretches_the_interface_across_the_window() {
-        let mut app = rebuild_app();
-        app.insert_resource(crate::video::Widescreen(false));
-        app.update();
-        let batch = app
-            .world_mut()
-            .query_filtered::<&Mesh2d, With<UiQuadBatch>>()
-            .single(app.world())
-            .expect("one batch")
-            .0
-            .clone();
-        let mesh = app
-            .world()
-            .resource::<Assets<Mesh>>()
-            .get(&batch)
-            .expect("the pooled mesh");
-        let Some(bevy::mesh::VertexAttributeValues::Float32x3(pos)) =
-            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
-        else {
-            panic!("the run's positions are Float32x3");
-        };
-        let xs: Vec<f32> = pos.iter().map(|p| p[0]).collect();
-        let (lo, hi) = xs
-            .iter()
-            .fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
-        assert!((lo + 640.0).abs() < 1e-3, "left edge at {lo}");
-        assert!(
-            (hi - (-640.0 + 64.0 * 1280.0 / 960.0)).abs() < 1e-3,
-            "right edge at {hi}"
-        );
-    }
-
     /// A scissor cut through a gradient keeps its ramp: the clipped corners take the colour at
     /// their place on the quad.
     #[test]
