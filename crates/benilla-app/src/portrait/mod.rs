@@ -782,7 +782,7 @@ impl Plugin for PortraitPlugin {
                     test_bake::sync_test_portraits,
                     // Before the bakes: a frame that leaves the world files nothing it then keeps.
                     clear_portrait_caches,
-                    // The portrait list's marks and its drain (`0x524cd0`), the world render's.
+                    // The portrait list's marks and its drain (`0x524cd0`), the world render's:
                     drain::mark_portraits,
                     drain::drain_portraits,
                     sync_portraits,
@@ -1010,17 +1010,25 @@ fn test_mode(cached: &mut Option<bool>) -> bool {
 #[derive(Component, Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct ModelRevision(pub(crate) u32);
 
-/// Bump [`ModelRevision`] for every unit one of its producers fired on this frame.
+/// Bump [`ModelRevision`] for every unit one of its producers fired on this frame, and mark the
+/// portrait of each the sheath clip's key moved (`0x5ffbbe`, [`drain`]).
 fn bump_model_revision(
     mut commands: Commands,
     mut swaps: MessageReader<crate::creature_anim::SheathSwapMessage>,
     glows: Query<&benilla_world::model_fade::ParentModel, Added<crate::entities::ItemGlowAttached>>,
     revs: Query<&ModelRevision>,
+    guids: Query<&crate::net::Guid>,
+    mut marks: ResMut<PortraitMarks>,
 ) {
     let mut bumped = <bevy::platform::collections::HashSet<Entity>>::default();
     let units = swaps
         .read()
         .map(|m| m.entity)
+        .inspect(|unit| {
+            if let Ok(guid) = guids.get(*unit) {
+                marks.mark(guid.0);
+            }
+        })
         // A glow's root is chained to its wearer, the unit that gained geometry.
         .chain(glows.iter().map(|p| p.0));
     for unit in units {

@@ -9,7 +9,17 @@ use bevy::prelude::*;
 
 use crate::entities::{DressKey, Equipment, VisualAttached};
 use crate::field_watch::{id, FieldNotice, NoticeLane};
-use crate::net::{Guid, GuidIndex, NetEntity};
+use crate::net::{Guid, GuidIndex, ObjectStore};
+
+/// `TYPEMASK_UNIT`, the mask the drain's lookup passes (`0x524d2f`).
+const UNIT: u32 = 0x8;
+/// `TYPEMASK_PLAYER`.
+const PLAYER: u32 = 0x10;
+
+/// Whether `store`'s `OBJECT_FIELD_TYPE` carries `mask`.
+fn is(store: &ObjectStore, mask: u32) -> bool {
+    store.0.object_type_mask().is_some_and(|m| m & mask != 0)
+}
 
 /// The pending list (`0xc0cdd0`, head `0xc0cdd4`), head first. A mark links a GUID the list does
 /// not hold at the head (`0x524eab`-`0x524ecd`) and leaves one it holds where it is (`0x524e39`);
@@ -45,33 +55,34 @@ impl PortraitMarks {
 /// - a player's worn look ([`Equipment`]): a visible item (`0x5df119`), the helm and cloak flags
 ///   (`0x5eea22`), the guild tabard and the designer's preview (`0x5e08c9`, `0x5e081e`);
 /// - a player's weapons and their enchants ([`DressKey`], `0x5df119`, `0x5eeda9`), but not a
-///   weapon's model finishing its load, nor the body's display, which the build marks;
-/// - the sheath clip's `$SHL`/`$SHR` key (`0x5ffbbe`).
+///   weapon's model finishing its load, nor the body's display, which the build marks.
+///
+/// The sheath clip's `$SHL`/`$SHR` key (`0x5ffbbe`) marks from `bump_model_revision`, the key's
+/// other reader.
 #[allow(clippy::type_complexity)]
 pub(super) fn mark_portraits(
     mut marks: ResMut<PortraitMarks>,
-    built: Query<(&Guid, &NetEntity), Added<VisualAttached>>,
-    worn: Query<&Guid, Changed<Equipment>>,
-    armed: Query<(Entity, &Guid, &NetEntity, &DressKey), Changed<DressKey>>,
+    built: Query<(&Guid, &ObjectStore), Added<VisualAttached>>,
+    worn: Query<(&Guid, &ObjectStore), Changed<Equipment>>,
+    armed: Query<(Entity, &Guid, &ObjectStore, &DressKey), Changed<DressKey>>,
     mut dropped: RemovedComponents<DressKey>,
-    guids: Query<&Guid>,
-    mut swaps: MessageReader<crate::creature_anim::SheathSwapMessage>,
     mut weapons: Local<HashMap<Entity, DressKey>>,
 ) {
-    use benilla_protocol::EntityKind;
-    for (guid, net) in &built {
-        if matches!(net.kind, EntityKind::Unit | EntityKind::Player) {
+    for (guid, store) in &built {
+        if is(store, UNIT) {
             marks.mark(guid.0);
         }
     }
-    for guid in &worn {
-        marks.mark(guid.0);
+    for (guid, store) in &worn {
+        if is(store, PLAYER) {
+            marks.mark(guid.0);
+        }
     }
     for gone in dropped.read() {
         weapons.remove(&gone);
     }
-    for (entity, guid, net, dress) in &armed {
-        if net.kind != EntityKind::Player {
+    for (entity, guid, store, dress) in &armed {
+        if !is(store, PLAYER) {
             continue;
         }
         let held = DressKey {
@@ -80,11 +91,6 @@ pub(super) fn mark_portraits(
             ..*dress
         };
         if weapons.insert(entity, held) != Some(held) {
-            marks.mark(guid.0);
-        }
-    }
-    for swap in swaps.read() {
-        if let Ok(guid) = guids.get(swap.entity) {
             marks.mark(guid.0);
         }
     }
@@ -99,10 +105,9 @@ pub(super) fn mark_portraits(
 pub(super) fn drain_portraits(
     mut marks: ResMut<PortraitMarks>,
     index: Res<GuidIndex>,
-    units: Query<(&NetEntity, Has<VisualAttached>)>,
+    units: Query<(&ObjectStore, Has<VisualAttached>)>,
     mut lane: ResMut<NoticeLane>,
 ) {
-    use benilla_protocol::EntityKind;
     if marks.0.is_empty() {
         return;
     }
@@ -112,9 +117,7 @@ pub(super) fn drain_portraits(
             .0
             .get(&guid)
             .and_then(|e| units.get(*e).ok())
-            .is_some_and(|(net, built)| {
-                matches!(net.kind, EntityKind::Unit | EntityKind::Player) && !built
-            });
+            .is_some_and(|(store, built)| is(store, UNIT) && !built);
         if !loading {
             lane.write_batch([
                 FieldNotice::Signal {
@@ -134,7 +137,7 @@ pub(super) fn drain_portraits(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use benilla_protocol::EntityKind;
+    use benilla_protocol::{EntityKind, ObjectFields};
     use bevy::ecs::system::RunSystemOnce;
 
     const A: u64 = 0x0000_0000_0000_0011;
@@ -147,20 +150,29 @@ mod tests {
             .init_resource::<NoticeLane>()
             .init_resource::<GuidIndex>()
             .add_message::<crate::creature_anim::SheathSwapMessage>()
-            .add_systems(Update, (mark_portraits, drain_portraits).chain());
+            .add_systems(
+                Update,
+                (
+                    super::super::bump_model_revision,
+                    mark_portraits,
+                    drain_portraits,
+                )
+                    .chain(),
+            );
         app
     }
 
     fn unit(app: &mut App, guid: u64, kind: EntityKind) -> Entity {
+        let mask = if kind == EntityKind::Player {
+            0x19
+        } else {
+            0x9
+        };
         let e = app
             .world_mut()
             .spawn((
                 Guid(guid),
-                NetEntity {
-                    kind,
-                    display_id: Some(49),
-                    scale: 1.0,
-                },
+                ObjectStore(ObjectFields::from_pairs(&[(2, mask)])),
             ))
             .id();
         app.world_mut()
